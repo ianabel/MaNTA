@@ -4,7 +4,7 @@
 #include <sunlinsol/sunlinsol_band.h>  /* access to band SUNLinearSolver       */
 #include <sundials/sundials_types.h>   /* definition of type realtype          */
 
-#include "systemLS.hpp"
+#include "SystemSolver.hpp"
 #include "gridStructures.hpp"
 
 int main()
@@ -60,5 +60,5 @@ int main()
 	const double delta_t = 0.009;
 
 	const Grid grid(lBound, uBound, nCells);
-	systemLS system(grid, polyCount, nCells, delta_t, f, tau, c, kappa, DirichletBCs);
+	SystemSolver system(grid, polyCount, nCells, delta_t, f, tau, c, kappa, DirichletBCs);
 }

@@ -2,7 +2,7 @@
 #include <sundials/sundials_types.h>
 
 #include "SunLinSolWrapper.hpp"
-#include "systemLS.hpp"
+#include "SystemSolver.hpp"
 
 #define LSWrapper( ls ) reinterpret_cast<SunLinSolWrapper*>( LS->content )
 

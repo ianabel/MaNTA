@@ -13,24 +13,28 @@ using MatrixWrapper = Eigen::Map<Matrix>;
 using Vector = Eigen::Matrix<realtype,Eigen::Dynamic,1>;
 using VectorWrapper = Eigen::Map<Vector>;
 
-class systemLS
+class SystemSolver
 {
 public:
-	systemLS(Grid const& Grid, unsigned int polyNum, unsigned int N_cells, double Dt, Fn const& rhs, Fn const& Tau, Fn const& c, Fn const& kappa, BoundaryConditions const& boundary );
-	~systemLS();
+	SystemSolver(Grid const& Grid, unsigned int polyNum, unsigned int N_cells, double Dt, Fn const& rhs, Fn const& Tau, Fn const& c, Fn const& kappa, BoundaryConditions const& boundary );
+	~SystemSolver                 ();
 
 	void initialiseMatrices();
-	void setCoefficients(N_Vector U, N_Vector Q);
-	void solve(double c);
-	void returnSunVectors(N_Vector Jv);
+	void buildCellwiseRHS(N_Vector const& g );
+	void updateABBDForJacSolve(std::vector< Eigen::FullPivLU< Eigen::MatrixXd > >& tempABBD) const;
+
+	//Solves the Jy = -G equation
+	void solveJacEq(double const alpha, N_Vector const& g);
 private:
 
 	Grid grid;
 	std::vector< Eigen::FullPivLU< Eigen::MatrixXd > > ABBDSolvers;
 	Eigen::MatrixXd K_global;
 	Eigen::VectorXd L_global;
+	Eigen::VectorXd g3_global;
 	std::vector< Eigen::MatrixXd > CG_cellwise;
 	std::vector< Eigen::VectorXd > RF_cellwise;
+	std::vector< Eigen::VectorXd > g1g2_cellwise;
 	std::vector< Eigen::MatrixXd > QU_0_cellwise;
 	std::vector< Eigen::MatrixXd > E_cellwise;
 

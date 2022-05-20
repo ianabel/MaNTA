@@ -3,7 +3,7 @@
 #include <sundials/sundials_linearsolver.h>
 #include <sundials/sundials_types.h>
 
-#include "systemLS.hpp"
+#include "SystemSolver.hpp"
 
 class SunLinSolWrapper
 {
@@ -15,7 +15,7 @@ public:
 	int Solve( SUNMatrix A, N_Vector x, N_Vector b );
 
 private:
-	systemLS* solver;
+	SystemSolver* solver;
 };
 
 struct _generic_SUNLinearSolver_Ops LSOps {

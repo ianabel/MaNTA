@@ -1,4 +1,4 @@
-#include "systemLS.hpp"
+#include "SystemSolver.hpp"
 #include <sundials/sundials_linearsolver.h> /* Generic Liner Solver Interface */
 #include <sundials/sundials_types.h>        /* defs of realtype, sunindextype  */
 #include <Eigen/Core>
@@ -6,36 +6,12 @@
 
 #include "gridStructures.hpp"
 
-systemLS::systemLS(Grid const& Grid, unsigned int polyNum, unsigned int N_cells, double Dt, Fn const& rhs, Fn const& Tau, Fn const& c, Fn const& kappa, BoundaryConditions const& boundary )
+SystemSolver::SystemSolver(Grid const& Grid, unsigned int polyNum, unsigned int N_cells, double Dt, Fn const& rhs, Fn const& Tau, Fn const& c, Fn const& kappa, BoundaryConditions const& boundary )
 	: grid(Grid), k(polyNum), nCells(N_cells), dt(Dt), RHS(rhs), tau(Tau), c_fn(c), kappa_fn(kappa), u(grid,k), q(grid,k), dudt(grid,k), BCs(boundary)
 {
 }
 
-void systemLS::setCoefficients(N_Vector YY, N_Vector YP)
-{
-	if( N_VGetLength(YY) != 2*nCells*(k+1) || N_VGetLength(YP) != 2*nCells*(k+1) )
-		throw std::invalid_argument( "Sundials Vecotor does not match grid size \n" );
-
-	VectorWrapper yyVec( N_VGetArrayPointer( YY ), N_VGetLength( YY ) );
-	VectorWrapper ypVec( N_VGetArrayPointer( YP ), N_VGetLength( YP ) );
-
-	u.coeffs.clear(); q.coeffs.clear(), dudt.coeffs.clear();
-	Eigen::VectorXd uCoeffs(k+1), qCoeffs(k+1), dudtCoeffs(k+1);
-	for(int i=0 ; i<nCells; i++)
-	{
-		for(int j=0 ; j<k+1 ; ++j)
-		{
-			uCoeffs(j) = yyVec(i*(k+1) + j);
-			qCoeffs(j) = yyVec((i+nCells)*(k+1) + j);
-			dudtCoeffs(j) = ypVec(i*(k+1) + j);;
-		}
-		u.coeffs.emplace(grid.gridCells[i], uCoeffs);
-		q.coeffs.emplace(grid.gridCells[i], qCoeffs);
-	}
-
-}
-
-void systemLS::initialiseMatrices()
+void SystemSolver::initialiseMatrices()
 {
 	// These are temporary working space
 	// Matrices we need per cell
@@ -57,12 +33,17 @@ void systemLS::initialiseMatrices()
 		u.MassMatrix( I, A, kappa_inv );
 		// B_ij = ( phi_i, phi_j' )
 		u.DerivativeMatrix( I, B );
-		// D_ij = -(c phi_j, phi_i') + < w, tau u >
+		// D1_ij = -(c phi_j, phi_i') + < w, tau u > 
+		// D2_ij = ( phi_j, phi_i )
+		// D=D1+D2
 		u.DerivativeMatrix( I, D, c_fn );
+		Eigen::MatrixXd D2( k + 1, k + 1 );
+		u.MassMatrix( I, D2);
 		// As DerivativeMatrix gives the weighted product (c phi_i, phi_j')
 		// we flip the sign and the indices on D.
 		D *= -1.0;
 		D.transposeInPlace();
+		D+=D2;
 
 		// Now do all the boundary terms
 		for ( Eigen::Index i=0; i<k+1;i++ )
@@ -134,7 +115,6 @@ void systemLS::initialiseMatrices()
 
 		// To store the RHS
 		RF_cellwise[ i ].resize( 2*k + 2 );
-
 
 		// R is composed of parts of the values of 
 		// u on the total domain boundary
@@ -212,51 +192,60 @@ void systemLS::initialiseMatrices()
 	}
 }
 
-void systemLS::solve(double c)
+void SystemSolver::buildCellwiseRHS(N_Vector const& g)
+{
+	if( N_VGetLength(g) != 2*nCells*(k+1) + nCells + 1)
+		throw std::invalid_argument( "Sundials Vecotor does not match grid size \n" );
+
+	VectorWrapper gVec( N_VGetArrayPointer( g ), N_VGetLength( g ) );
+
+	Eigen::VectorXd g1g2Coeffs(2*k+2);
+	for(int i=0; i<nCells; i++)
+	{
+		for(int j=0; j<k+1; j++)
+		{
+			g1g2Coeffs[j] = gVec[i*(k+1) + j];
+			g1g2Coeffs[k+1+j] = gVec[nCells*(k+1) + i*(k+1) + j];
+		}
+		g1g2_cellwise[ i ] = g1g2Coeffs;
+	}
+
+	//g3 Global vector for [C G H][Q U Gamma]^T = g3
+	int j = 0;
+	for(int i = 2*nCells*(k+1); i < 2*nCells*(k+1) + nCells + 1; i++)
+	{
+		g3_global[j] = gVec[i];
+		j++;
+	}
+
+
+}
+
+void SystemSolver::updateABBDForJacSolve(std::vector< Eigen::FullPivLU< Eigen::MatrixXd > >& tempABBD) const
+{
+
+}
+
+void SystemSolver::solveJacEq(double const alpha, N_Vector const& g)
 {
 	//-------------Under development----------
-
-
 	Eigen::VectorXd Lambda( nCells + 1 );
-	// So, here's the guts of the timestepping.
-	// or, if dt < 0, just solve the static problem ignoring the d/dt
-	/*
-	if ( dt < 0 )
-	{
 
-		// Construct the RHS of K Lambda = F
-		Eigen::VectorXd F( N_cells + 1 );
-		F = L_global;
-		for ( unsigned int i=0; i < N_cells; i++ )
-			F.block<2,1>( i, 0 ) += CG_cellwise[ i ] * ( ABBDSolvers[ i ].solve( RF_cellwise[ i ] ) );
+	//To Do update D matrix at each timestep to include alpha*X
 
-		Eigen::FullPivLU< Eigen::MatrixXd > lu( K_global );
-		Lambda = lu.solve( F );
-		// Now fill in q & u cellwise.
-		for ( unsigned int i=0; i < N_cells; i++ )
-		{
-			Interval const& I = Grid[ i ];
-			Eigen::VectorXd QU( 2*( k + 1 ) );
-			QU = ABBDSolvers[ i ].solve( RF_cellwise[ i ] ) + QU_0_cellwise[ i ] * Lambda.block<2,1>( i, 0 );
-			q.coeffs[ I ] = QU.block( 0, 0, k + 1, 1 );
-			u.coeffs[ I ] = QU.block( k + 1, 0, k + 1, 1 );
-		}
-		return;
-	}
-	
-
-	// If we are doing the time dependent problem, we update F in RF_cellwise to include the last timestep.
+	// Assemble RHS g into cellwise form and solve for QU_F block
+	buildCellwiseRHS(g);
 	std::vector< Eigen::VectorXd > QU_f( nCells );
 	for ( unsigned int i = 0; i < nCells; i++ )
 	{
-		Eigen::VectorXd RF = RF_cellwise[ i ];
-		RF.block( k + 1, 0, k + 1, 1 ) += ( 2.0/dt ) * u.coeffs[ grid.gridCells[ i ] ] + dudt.coeffs[ grid.gridCells[ i ] ];
-		QU_f[ i ] = ABBDSolvers[ i ].solve( RF );
+		Eigen::VectorXd g1g2 = g1g2_cellwise[ i ];
+		g1g2.block( k + 1, 0, k + 1, 1 ) += ( 2.0/dt ) * u.coeffs[ grid.gridCells[ i ] ] + dudt.coeffs[ grid.gridCells[ i ] ];
+		QU_f[ i ] = ABBDSolvers[ i ].solve( g1g2 );
 	}
 
 	// Construct the RHS of K Lambda = F
-	Eigen::VectorXd F( N_cells + 1 );
-	F = L_global;
+	Eigen::VectorXd F( nCells + 1 );
+	F = g3_global;
 	for ( unsigned int i=0; i < N_cells; i++ )
 		F.block<2,1>( i, 0 ) += CG_cellwise[ i ] * QU_f[ i ];
 
@@ -299,11 +288,10 @@ void systemLS::solve(double c)
 	
 	t += dt;
 	u_of_t[ t ] = std::make_pair( u.coeffs, dudt.coeffs );
-	*/
 }
 
 
-void systemLS::returnSunVectors(N_Vector Jv)
+void SystemSolver::returnSunVectors(N_Vector Jv)
 {
 
 }
