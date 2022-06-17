@@ -22,11 +22,15 @@ public:
 		x_u = I.x_u;
 	};
 
+	friend bool operator<( Interval const& I,  Interval const& J )
+	{
+		return I.x_l < J.x_l;
+	}
+
 	double x_l,x_u;
 	bool contains( double x ) const { return ( x_l <= x ) && ( x <= x_u );};
 	double h() const { return ( x_u - x_l );};
 };
-
 class Grid
 {
 public:
@@ -218,6 +222,5 @@ struct BoundaryConditions {
 	double UpperBound;
 	bool isLBoundDirichlet;
 	bool isUBoundDirichlet;
-	Fn g_D,g_N;
+	std::function<double( double )> g_D,g_N;
 };
-

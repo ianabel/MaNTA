@@ -17,14 +17,29 @@ class SystemSolver
 {
 public:
 	SystemSolver(Grid const& Grid, unsigned int polyNum, unsigned int N_cells, double Dt, Fn const& rhs, Fn const& Tau, Fn const& c, Fn const& kappa, BoundaryConditions const& boundary );
-	~SystemSolver                 ();
+	~SystemSolver() = default;
 
+	//Initialises u, q and lambda to satisfy residual equation at t=0
+	void setInitialConditions(std::function< double (double)> u_0);
+
+	//Builds initial matrices
 	void initialiseMatrices();
-	void buildCellwiseRHS(N_Vector const& g );
-	void updateABBDForJacSolve(std::vector< Eigen::FullPivLU< Eigen::MatrixXd > >& tempABBD) const;
+
+	// Takes n vector and parses it into the RHS of a Jacobian equation
+	void buildCellwiseRHSforJac(N_Vector const& g );
+
+	//Creates the ABBDX cellwise matrices used at each Jacobian iteration
+	void updateABBDForJacSolve(std::vector< Eigen::FullPivLU< Eigen::MatrixXd > >& tempABBDBlocks, double const alpha);
 
 	//Solves the Jy = -G equation
-	void solveJacEq(double const alpha, N_Vector const& g);
+	void solveJacEq(double const alpha, N_Vector const& g, N_Vector& delY);
+
+	//Residual Function
+	void resFunction(realtype tres, N_Vector uu, N_Vector up, N_Vector resval,
+            void *user_data);
+
+	// Returnable n_vector for sundials linear solver
+	void updateDelYForSundials(DGApprox delU, DGApprox delQ, Eigen::VectorXd delLambda, N_Vector& delY);
 private:
 
 	Grid grid;
@@ -42,6 +57,7 @@ private:
 	double t;
 	unsigned int const k; 		//polynomial degree per cell
 	unsigned int const nCells;	//Total cell count
+	bool initialised = false;
 
 	Fn RHS; //Forcing function
 	Fn c_fn,kappa_fn, tau; // convection velocity and diffusivity

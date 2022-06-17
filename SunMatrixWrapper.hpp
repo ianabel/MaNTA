@@ -33,3 +33,12 @@ struct _generic_SUNMatrix_Ops MatOps {
 	.matvec = nullptr,
 	.space = nullptr
 };
+
+SUNMatrix SunMatrix()
+{
+	SUNMatrix mat = SUNMatNewEmpty();
+	mat->content = new SunMatrixWrapper();
+	mat->ops = &MatOps;
+	return mat;
+
+}

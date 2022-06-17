@@ -6,6 +6,7 @@
 
 #include "SystemSolver.hpp"
 #include "gridStructures.hpp"
+#include "SunLinSolWrapper.hpp"
 
 int main()
 {
@@ -61,4 +62,19 @@ int main()
 
 	const Grid grid(lBound, uBound, nCells);
 	SystemSolver system(grid, polyCount, nCells, delta_t, f, tau, c, kappa, DirichletBCs);
+
+	//To Do:
+	//Check initial condition satisfies residual equation
+	system.initialiseMatrices();
+	double a = 5.0;
+	double b = 4.0; 
+	std::function<double( double )> u_0 = [=]( double y ){ return ::exp( -b*( y - a )*( y - a ) ); };
+	system.setInitialConditions(u_0);
+
+	
+	//To Do: 
+	//set up sundials enviornment LS+mat
+	//Build residual equaiton system
+	
+
 }
