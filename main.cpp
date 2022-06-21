@@ -7,6 +7,7 @@
 #include "SystemSolver.hpp"
 #include "gridStructures.hpp"
 #include "SunLinSolWrapper.hpp"
+#include "SunMatrixWrapper.hpp"
 
 int main()
 {
@@ -15,7 +16,7 @@ int main()
 	const sunindextype nCells = 50;		//Total number of cells
 	N_Vector u = NULL;				//vector for storing solution
 	SUNLinearSolver LS = NULL;		//linear solver memory structure
-	void *arkode_mem   = NULL;		//ARKODE memory structure
+	void *IDA_mem   = NULL;		//IDA memory structure
 	const double lBound = 0, uBound = 10;	//Spacial bounds
 
 	std::function<double( double )> g_D = [ = ]( double x ) {
@@ -71,10 +72,12 @@ int main()
 	std::function<double( double )> u_0 = [=]( double y ){ return ::exp( -b*( y - a )*( y - a ) ); };
 	system.setInitialConditions(u_0);
 
-	
 	//To Do: 
 	//set up sundials enviornment LS+mat
 	//Build residual equaiton system
-	
 
+	SUNMatrix sunMat = SunMatrixNew();
+	LS = SunLinSolWrapper::SunLinSol(system);
+
+	//IDASetLinearSolver(IDA_mem, LS, sunMat); 
 }

@@ -26,7 +26,12 @@ public:
 	void initialiseMatrices();
 
 	// Takes n vector and parses it into the RHS of a Jacobian equation
-	void buildCellwiseRHSforJac(N_Vector const& g );
+	void sundialsToDGVecConversion(N_Vector const& g, std::vector< Eigen::VectorXd >& g1g2_cellwise, Eigen::VectorXd& g3_global);
+
+	void sundialsToDGVecConversion(N_Vector& delY, std::vector< Eigen::VectorXd >& UQLamCellwise);
+
+	// Returnable n_vector for sundials linear solver
+	void DGtoSundialsVecConversion(DGApprox delU, DGApprox delQ, Eigen::VectorXd delLambda, N_Vector& delY);
 
 	//Creates the ABBDX cellwise matrices used at each Jacobian iteration
 	void updateABBDForJacSolve(std::vector< Eigen::FullPivLU< Eigen::MatrixXd > >& tempABBDBlocks, double const alpha);
@@ -35,21 +40,19 @@ public:
 	void solveJacEq(double const alpha, N_Vector const& g, N_Vector& delY);
 
 	//Residual Function
-	void resFunction(realtype tres, N_Vector uu, N_Vector up, N_Vector resval,
+	int residual(realtype tres, N_Vector uu, N_Vector up, N_Vector resval,
             void *user_data);
 
-	// Returnable n_vector for sundials linear solver
-	void updateDelYForSundials(DGApprox delU, DGApprox delQ, Eigen::VectorXd delLambda, N_Vector& delY);
 private:
 
 	Grid grid;
+	std::vector< Eigen::MatrixXd > ABCBDECGHMats;
+	std::vector< Eigen::MatrixXd > XMats;
 	std::vector< Eigen::FullPivLU< Eigen::MatrixXd > > ABBDSolvers;
-	Eigen::MatrixXd K_global;
-	Eigen::VectorXd L_global;
-	Eigen::VectorXd g3_global;
+	Eigen::MatrixXd K_global{};
+	Eigen::VectorXd L_global{};
 	std::vector< Eigen::MatrixXd > CG_cellwise;
 	std::vector< Eigen::VectorXd > RF_cellwise;
-	std::vector< Eigen::VectorXd > g1g2_cellwise;
 	std::vector< Eigen::MatrixXd > QU_0_cellwise;
 	std::vector< Eigen::MatrixXd > E_cellwise;
 

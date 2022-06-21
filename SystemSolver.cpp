@@ -134,7 +134,6 @@ void SystemSolver::initialiseMatrices()
 			}
 		}
 
-
 		// Construct per-cell Matrix solutions
 		// ( A  -B^T )^-1 [ C^T ]
 		// ( B    D  )    [ E   ]
@@ -222,12 +221,39 @@ void SystemSolver::initialiseMatrices()
 		if ( I.x_u == BCs.UpperBound && /* is b.d. Neumann at upper boundary */ !BCs.isUBoundDirichlet )
 			L_global( i + 1 ) += BCs.g_N( BCs.UpperBound );
 
+		//Now build the matrices used in the residual equation. These are largely similar as those for the Jac solve but no inversion is required
+		//First we solve for the Q and U resuduals
+		// [R_q]       ( A -B^T C^T ) [q]       [R]   ( 0  0  0 ) [  0  ]
+		// [R_u]   =   ( B   D   E  ) [u]   -   [F] + ( 0  X  0 ) [du/dt]
+		// [R_Lam]     ( C   G   H  ) [Lam]     [L]   ( 0  0  0 ) [  0  ]
+
+		Eigen::MatrixXd ABCBCECGH(2*(k+1) + 2, 2*(k+1) + 2);
+		ABCBCECGH.block( 0, 0, 2*k+2, 2*k+2 ) = ABBD;
+		ABCBCECGH.block( 0, 2*k+2, 2*k+2, 2) = CE_vec;
+		ABCBCECGH.block( 2*k+2, 0, 2, k+1) = C;
+		ABCBCECGH.block( 2*k+2, k+1, 2, k+1) = G;
+		ABCBCECGH.block( 2*k+2, 2*k+2, 2, 2) = H;
+
+		Eigen::MatrixXd X( k + 1, k + 1 );
+		u.MassMatrix( I, X);
+
+		Eigen::MatrixXd CGH(2, 2*k+2 + 2);
+		CGH.block( 0, 0, 2, k+1) = C;
+		CGH.block( 0, k+1, 2, k+1) = G;
+		CGH.block( 0, 2*k+2, 2, 2) = H;
+
+		ABCBDECGHMats.emplace_back(ABCBCECGH);
+		XMats.emplace_back(X);
 	}
 	initialised = true;
 }
 
-void SystemSolver::buildCellwiseRHSforJac(N_Vector const& g)
+void SystemSolver::sundialsToDGVecConversion(N_Vector const& g, std::vector< Eigen::VectorXd >& g1g2_cell, Eigen::VectorXd& g3_globe)
 {
+	//g is split into 3 parts, each part corresponding to rows of the glodabl matrix. g1g2 refers to the q and u rows. 
+	//Here data is parsed into eigen vectors of coefficients, 1 for each cell. g3 refers to the lambda row which will 
+	//be stored as a single eigen vector of lambdas at every boundary
+
 	if( N_VGetLength(g) != 2*nCells*(k+1) + nCells + 1)
 		throw std::invalid_argument( "Sundials Vecotor does not match size \n" );
 
@@ -241,19 +267,36 @@ void SystemSolver::buildCellwiseRHSforJac(N_Vector const& g)
 			g1g2Coeffs[j] = gVec[i*(k+1) + j];
 			g1g2Coeffs[k+1+j] = gVec[nCells*(k+1) + i*(k+1) + j];
 		}
-		g1g2_cellwise[ i ] = g1g2Coeffs; //?Missing the nCellth entry maybe??
+		g1g2_cell[ i ] = g1g2Coeffs; //?Missing the nCellth entry maybe??
 	}
 
 	//g3 Global vector for [C G H][Q U Gamma]^T = g3
 	int j = 0;
 	for(int i = 2*nCells*(k+1); i < 2*nCells*(k+1) + nCells + 1; i++)
 	{
-		g3_global[j] = gVec[i];
+		g3_globe[j] = gVec[i];
 		j++;
 	}
 }
 
-void SystemSolver::updateDelYForSundials(DGApprox delU, DGApprox delQ, Eigen::VectorXd delLambda, N_Vector& delY)
+void SystemSolver::sundialsToDGVecConversion( N_Vector& Y, std::vector< Eigen::VectorXd >& QULamCellwise)
+{
+	std::vector< Eigen::VectorXd > QUCellwise;
+	Eigen::VectorXd LamGlobe;
+	sundialsToDGVecConversion(Y, QUCellwise, LamGlobe);
+
+	Eigen::VectorXd QULam(2*k+2 + 2);
+	for(int i=0; i<nCells; i++)
+	{
+		QULam.setZero();
+		QULam.block(0,0,2*k+2,1) = QUCellwise[i];
+		QULam[2*k+2] = LamGlobe[2*i];
+		QULam[2*k+2] = LamGlobe[2*i+1]; //?make sure this parses correctly?
+		QULamCellwise[i] = QULam;
+	}
+}
+
+void SystemSolver::DGtoSundialsVecConversion(DGApprox delU, DGApprox delQ, Eigen::VectorXd delLambda, N_Vector& delY)
 {
 	if (N_VGetLength(delY) != 2*nCells*(k+1) + nCells + 1)
 		throw std::invalid_argument( "Sundials Vecotor does not match size \n" );
@@ -271,7 +314,6 @@ void SystemSolver::updateDelYForSundials(DGApprox delU, DGApprox delQ, Eigen::Ve
 			delYVec[i*(k+1)+j] = uCellCoeffs[j];
 			delYVec[nCells*(k+1) + i*(k+1)+j] = qCellCoeffs[j];
 		}
-
 	}
 
 	for(int i=0; i<nCells+1; i++)
@@ -300,16 +342,17 @@ void SystemSolver::updateABBDForJacSolve(std::vector< Eigen::FullPivLU< Eigen::M
 
 void SystemSolver::solveJacEq(double const alpha, N_Vector const& g, N_Vector& delY)
 {
-	//-------------Under development----------
 	Eigen::VectorXd delLambda( nCells + 1 );
 	DGApprox delU(grid,k), delQ(grid,k);
+	std::vector< Eigen::VectorXd > g1g2_cellwise;
+	Eigen::VectorXd g3_global{};
 
 	//assemble temp cellwise ABBD blocks
 	std::vector< Eigen::FullPivLU< Eigen::MatrixXd > > tempABBDBlocks{};
 	updateABBDForJacSolve(tempABBDBlocks, alpha);
 
 	// Assemble RHS g into cellwise form and solve for QU_F block
-	buildCellwiseRHSforJac(g);
+	sundialsToDGVecConversion(g, g1g2_cellwise, g3_global);
 	std::vector< Eigen::VectorXd > QU_f( nCells );
 	for ( unsigned int i = 0; i < nCells; i++ )
 	{
@@ -367,4 +410,47 @@ void SystemSolver::solveJacEq(double const alpha, N_Vector const& g, N_Vector& d
 	t += dt;
 	u_of_t[ t ] = std::make_pair( u.coeffs, dudt.coeffs );
 	*/
+}
+
+int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data)
+{
+	DGApprox ResQ(grid,k), ResU(grid,k);
+
+	std::vector<Eigen::VectorXd> QULamCellwise{};		// 2(k+1)+2
+	std::vector<Eigen::VectorXd> oUDotoCellwise{};		// 2(k+1)
+	std::vector<Eigen::VectorXd> ResCellwise{};	// 2(k+1)
+
+	sundialsToDGVecConversion(Y, QULamCellwise);
+	sundialsToDGVecConversion(dydt, oUDotoCellwise); //?Should be all zeros except for u, possibly set in ID, make sure this is right?
+
+	Eigen::VectorXd resQGlobal((k+1)*nCells), resUGlobal((k+1)*nCells), resLamGlobal(nCells+1);
+
+	for ( unsigned int i = 0; i < nCells; i++ )
+	{
+		Eigen::VectorXd cellResidual(2*(k+1)+2);
+		Eigen::MatrixXd oXoMat(2*(k+1) + 2, 2*(k+1) + 2);
+		oXoMat.setZero();
+		oXoMat.block(k+1, k+1, k+1, k+1) = XMats[i];
+		Eigen::VectorXd RFL(2*(k+1)+2);
+		RFL.setZero();
+		RFL.block(0,0,2*k+2,1) = RF_cellwise[i];
+		RFL[2*k+2] = L_global[i]; RFL[2*k+3] = L_global[i+1];
+
+		cellResidual = ABCBDECGHMats[i]*QULamCellwise[i] + oXoMat*oUDotoCellwise[i] - RFL;
+		
+		for(int j =0; j<k+1; j++)
+		{
+			resQGlobal[i*(k+1)+j] = cellResidual[j];
+			resUGlobal[nCells*(k+1) + i*(k+1)+j] = cellResidual[k+1 + j];
+		}
+		resLamGlobal[i] = cellResidual[2*k+2];
+		if(i=nCells-1) resLamGlobal[nCells] = cellResidual[2*k+3];
+	}
+
+	VectorWrapper resVec( N_VGetArrayPointer( resval ), N_VGetLength( resval ) ); //?make sure this writes into the same memore and doesn't copy
+	resVec.block(0,0,nCells*(k+1),1) = resQGlobal;
+	resVec.block(nCells*(k+1),0,nCells*(k+1),1) = resUGlobal;
+	resVec.block(2*nCells*(k+1),0,nCells+1,1) = resLamGlobal;
+
+	return 0;
 }
