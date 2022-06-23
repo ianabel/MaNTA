@@ -10,7 +10,7 @@ SUNDIALS_INC=/home/mylo_linux/MCTrans-original/Sundials_practice/sundials/includ
 SUNDIALS_LIB=/home/mylo_linux/MCTrans-original/Sundials_practice/sundials/lib
 
 SUNFLAGS=-I$(SUNDIALS_INC) -L$(SUNDIALS_LIB) -Wl,-rpath=$(SUNDIALS_LIB) 
-SUN_LINK_FLAGS = -lsundials_arkode -lsundials_nvecserial -lsundials_sunlinsoldense
+SUN_LINK_FLAGS = -lsundials_arkode -lsundials_nvecserial -lsundials_sunlinsoldense 
 
 EIGENFLAGS= -I/home/mylo_linux/OpenSPackages/eigen/eigen-3.4.0
 EIG_LINK_FLAGS=-Wl,--no-as-needed -lpthread -lm -ldl

@@ -11,13 +11,17 @@
 
 int main()
 {
-	//Defining constants
 	const sunindextype polyCount = 3;		//Polynomial degree of each cell
-	const sunindextype nCells = 50;		//Total number of cells
-	N_Vector u = NULL;				//vector for storing solution
-	SUNLinearSolver LS = NULL;		//linear solver memory structure
-	void *IDA_mem   = NULL;		//IDA memory structure
+	const sunindextype nCells = 50;			//Total number of cells
+	SUNLinearSolver LS = NULL;				//linear solver memory structure
+	void *IDA_mem   = NULL;					//IDA memory structure
 	const double lBound = 0, uBound = 10;	//Spacial bounds
+
+	N_Vector Y = NULL;				//vector for storing solution
+	N_Vector dYdt = NULL;			//vector for storing time derivative of solution
+	N_Vector constraints = NULL;	//vector for storing constraints
+	N_Vector id = NULL;				//vector for storing id (which elements are algebraic or differentiable)
+	N_Vector res = NULL;			//vector for storing residual
 
 	std::function<double( double )> g_D = [ = ]( double x ) {
 		if ( x == lBound ) {
@@ -76,8 +80,19 @@ int main()
 	//set up sundials enviornment LS+mat
 	//Build residual equaiton system
 
+	UserData *data = new UserData();
+	//?figure out what to put in this and initialise?
+
+	// Set global solution vector lengths. 
+	const sunindextype global_length = nCells*(k+1) + nCells+1;
+
+	// Choose zero-based (C-style) indexing.
+	const sunindextype index_base = 0;
+
 	SUNMatrix sunMat = SunMatrixNew();
 	LS = SunLinSolWrapper::SunLinSol(system);
 
-	//IDASetLinearSolver(IDA_mem, LS, sunMat); 
+	IDASetLinearSolver(IDA_mem, LS, sunMat); 
+
+	delete data;
 }

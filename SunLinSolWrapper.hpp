@@ -30,4 +30,6 @@ private:
 	double alpha;
 };
 
+struct UserData {};
+
 
