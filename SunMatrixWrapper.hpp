@@ -35,7 +35,7 @@ struct _generic_SUNMatrix_Ops MatOps {
 	.scaleaddi = nullptr,
 	.matvecsetup = nullptr,
 	.matvec = nullptr,
-	.space = nullptr
+	.space = nullptr,
 };
 
 SUNMatrix SunMatrixNew()

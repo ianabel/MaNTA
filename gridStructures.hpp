@@ -42,6 +42,8 @@ public:
 		gridCells.emplace_back(lBound + (nCells-1)*cellLength, uBound);
 	}
 
+	Grid(const Grid& grid) = default; 
+
 	std::vector<Interval> gridCells;
 };
 
@@ -207,6 +209,14 @@ class DGApprox
 					auto F = [ & ]( double x ) { return w( x )*Basis.Evaluate( I, i, x ) * Basis.Prime( I, j, x ); };
 					D( i, j ) = integrator.integrate( F, I.x_l, I.x_u );
 				}
+		}
+
+		void zeroCoeffs() {
+			for ( auto [interval, vec] : coeffs )
+			{
+				for(int i = 0; i<vec.size(); i++)
+					vec[i] = 0.0;
+			}
 		}
 
 		unsigned int k;

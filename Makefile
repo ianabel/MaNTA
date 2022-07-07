@@ -1,16 +1,16 @@
 
-SOURCES = main.cpp SystemSolver.cpp SunLinSolWrapper.cpp
-HEADERS = gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp SystemSolver.hpp
+SOURCES = main.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp
+HEADERS = gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp SystemSolver.hpp ErrorChecker.cpp
 OBJECTS = $(patsubst %.cpp,%.o,$(SOURCES))
 
 %.o: %.cpp Makefile $(HEADERS)
-	$(CXX) -c $(CXXFLAGS) -o $@ $<
+	$(CXX) -c $(CXXFLAGS) -g -O0 -o $@ $<
 
 SUNDIALS_INC=/home/mylo_linux/MCTrans-original/Sundials_practice/sundials/include
 SUNDIALS_LIB=/home/mylo_linux/MCTrans-original/Sundials_practice/sundials/lib
 
 SUNFLAGS=-I$(SUNDIALS_INC) -L$(SUNDIALS_LIB) -Wl,-rpath=$(SUNDIALS_LIB) 
-SUN_LINK_FLAGS = -lsundials_arkode -lsundials_nvecserial -lsundials_sunlinsoldense 
+SUN_LINK_FLAGS = -lsundials_ida -lsundials_nvecserial 
 
 EIGENFLAGS= -I/home/mylo_linux/OpenSPackages/eigen/eigen-3.4.0
 EIG_LINK_FLAGS=-Wl,--no-as-needed -lpthread -lm -ldl

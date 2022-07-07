@@ -1,8 +1,19 @@
 #include "SunLinSolWrapper.hpp"
+#include <ida/ida.h>                   /* prototypes for IDA fcts., consts.    */
+#include <nvector/nvector_serial.h>    /* access to serial N_Vector            */
+#include <sunmatrix/sunmatrix_band.h>  /* access to band SUNMatrix             */
+#include <sunlinsol/sunlinsol_band.h>  /* access to band SUNLinearSolver       */
+#include <sundials/sundials_types.h>   /* definition of type realtype          */
 
 int SunLinSolWrapper::Solve( SUNMatrix A, N_Vector x, N_Vector b )
 {
-	solver.solveJacEq(alpha, b, x);
+	realtype cj = 1.0;
+	N_Vector *curY = new N_Vector(N_VNew_Serial(2*solver.nCells*(solver.k+1) + solver.nCells + 1));
+	IDAGetCurrentCj(IDA_mem, &cj);
+	solver.setAlpha(cj);
+	solver.solveJacEq( b, x);
+	IDAGetCurrentY(IDA_mem, curY);
+	delete curY; 
 	return 0;
 }
 
@@ -64,10 +75,10 @@ struct _generic_SUNLinearSolver_Ops LSOps =
 	.free = SunLinSolWrapper::LSfree,
 };
 
-SUNLinearSolver SunLinSolWrapper::SunLinSol(SystemSolver& solver)
+SUNLinearSolver SunLinSolWrapper::SunLinSol(SystemSolver& solver, void *mem )
 {
 	SUNLinearSolver LS = SUNLinSolNewEmpty();
-	LS->content = new SunLinSolWrapper(solver);
+	LS->content = new SunLinSolWrapper(solver, mem);
 	LS->ops = &LSOps;
 	return LS;
 }
