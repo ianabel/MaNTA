@@ -4,6 +4,7 @@
 #include <Eigen/Core>
 #include <Eigen/Dense>
 #include <fstream>
+#include <iostream>
 
 #include "gridStructures.hpp"
 
@@ -14,7 +15,7 @@ SystemSolver::SystemSolver(Grid const& Grid, unsigned int polyNum, unsigned int 
 
 void SystemSolver::setInitialConditions( std::function< double ( double )> u_0 , N_Vector Y , N_Vector dYdt) 
 {
-	// Someone should have initialised us, but still...
+	// Someone should have initialised this, but still...
 	if ( !initialised )
 		initialiseMatrices();
 
@@ -26,11 +27,23 @@ void SystemSolver::setInitialConditions( std::function< double ( double )> u_0 ,
 		Interval I = grid.gridCells[ i ];
 		Eigen::MatrixXd M_hr( 2*k + 1, 2*k + 1 );
 		u_0_hr.DerivativeMatrix( I, M_hr );
-		q.coeffs[ I ] = -( M_hr * u_0_hr.coeffs[ I ] ).block( 0, 0, k + 1, 1 );
+		q.coeffs[ I ] = -( M_hr * u_0_hr.coeffs[ I ] ).block( 0, 0, k + 1, 1 ); //To Do:kappa will have to be added here
 	}
 
-	for ( unsigned int i=0; i < nCells; i++ )
+	//Solve for Lambda with Lam = (C^T)^-1*[ -A*Q + B^T*U +R ]
+	Eigen::VectorXd Lambda( nCells + 1 );
+	Eigen::Vector2d lamCell;
+		for ( unsigned int i=0; i < nCells; i++ )
 	{
+		Interval I = grid.gridCells[ i ];
+		auto cTInv = Eigen::FullPivLU< Eigen::MatrixXd >(C_cellwise[i].transpose());
+		lamCell = cTInv.solve( -A_cellwise[i]*q.coeffs[I] + B_cellwise[i].transpose()*u.coeffs[I] + RF_cellwise[i].block(0,0,k+1,1));
+		Lambda[i] = lamCell[0];
+
+		dudt.coeffs[I] = Eigen::FullPivLU< Eigen::MatrixXd >(XMats[i]).solve( -B_cellwise[i]*q.coeffs[I] - D_cellwise[i]*u.coeffs[I] - E_cellwise[i]*lamCell + RF_cellwise[ i ].block( k + 1, 0, k + 1, 1 ) );
+
+
+		/*
 		Interval I = grid.gridCells[ i ];
 		Eigen::MatrixXd M( k + 1, k + 1 );
 		u.DerivativeMatrix( I, M );
@@ -41,37 +54,45 @@ void SystemSolver::setInitialConditions( std::function< double ( double )> u_0 ,
 		dudt.coeffs[ I ] = 
 			RF_cellwise[ i ].block( k + 1, 0, k + 1, 1 ) 
 			- M * q.coeffs[ I ] + M2.transpose() * u.coeffs[ I ];
- 
+
 		// Then componentwise add f_i and the boundary terms
 		for ( unsigned int j=0; j < k + 1; ++j )
 		{
 			// Finally minus < (cu)^ . n, w > (but because of the 'n', this leads to
 			//  + <eval at lower bound> - <eval at upper bound>
 			dudt.coeffs[ I ]( j ) +=
-				+ ( c_fn( I.x_l )*u_0( I.x_l ) )*u.Basis.phi( I, j )( I.x_l )
-				- ( c_fn( I.x_u )*u_0( I.x_u ) )*u.Basis.phi( I, j )( I.x_u );
-		}
-	}
+				+ ( c_fn( I.x_l ))*u_0( I.x_l )*u.Basis.phi( I, j )( I.x_l )
+				- ( c_fn( I.x_u ))*u_0( I.x_u )*u.Basis.phi( I, j )( I.x_u );
+				//+ ( c_fn( I.x_l ) - tau(I.x_l))*u_0( I.x_l )*u.Basis.phi( I, j )( I.x_l )
+				//- ( c_fn( I.x_u ) - tau(I.x_u))*u_0( I.x_u )*u.Basis.phi( I, j )( I.x_u );
+		}*/
+		/*
+		Eigen::Vector2d cellLam;
+		cellLam[0] = u_0(I.x_l); cellLam[1] = u_0(I.x_u);
+		dudt.coeffs[ I ] += E_cellwise[i]*cellLam;
+		*/
+		//std::cerr << dudt.coeffs[I] << std::endl << std::endl;
+	} 
 
+	Lambda(nCells) = lamCell[1];
+
+	//std::cerr << std::endl;
 	//Solve Lambda from u,q and dudt
+	/*
 	Eigen::VectorXd Lambda( nCells + 1 );
-	Eigen::VectorXd L(2), lamCellwise(2);
 	for ( unsigned int i=0; i < nCells; i++ )
 	{
 		Interval I = grid.gridCells[ i ];
-
-		Eigen::VectorXd L(2);
-		L[0] = L_global[i]; L[0] = L_global[i+1];
-
-		lamCellwise = Eigen::FullPivLU<Eigen::MatrixXd>( H_cellwise[i] ).solve(L - G_cellwise[i]*u.coeffs[I] - C_cellwise[i]*q.coeffs[I]); 
-		Lambda[i] = lamCellwise[0];
+		Lambda[i] = u_0( I.x_l );
 	}
-	Lambda[nCells] = lamCellwise[1];
+	Lambda[nCells] = u_0( grid.upperBound );
+	*/
+	//std::cerr << Lambda << std::endl << std::endl;
 
 
 	DGtoSundialsVecConversion(q, u, Lambda, Y); //To do, initialise lambda from QU
-	DGApprox zero = q;
-	zero.zeroCoeffs();
+	DGApprox zero{grid,k};
+
 	DGtoSundialsVecConversion(zero, dudt, Eigen::VectorXd::Zero(nCells+1), dYdt);
 }
 
@@ -119,6 +140,9 @@ void SystemSolver::initialiseMatrices()
 			}
 		}
 
+		A_cellwise.emplace_back(A);
+		B_cellwise.emplace_back(B);
+		D_cellwise.emplace_back(D);
 
 		Eigen::MatrixXd ABBD( 2*k + 2, 2*k + 2 );
 		ABBD.block( 0, 0, k+1, k+1 ) = A;
@@ -248,9 +272,9 @@ void SystemSolver::initialiseMatrices()
 
 		//Now build the matrices used in the residual equation. These are largely similar as those for the Jac solve but no inversion is required
 		//First we solve for the Q and U resuduals
-		// [R_q]       ( A -B^T C^T ) [q]       [R]   ( 0  0  0 ) [  0  ]
-		// [R_u]   =   ( B   D   E  ) [u]   -   [F] + ( 0  X  0 ) [du/dt]
-		// [R_Lam]     ( C   G   H  ) [Lam]     [L]   ( 0  0  0 ) [  0  ]
+		// [R_1]       ( A -B^T C^T ) [q]       [R]   ( 0  0  0 ) [  0  ]
+		// [R_2]   =   ( B   D   E  ) [u]   -   [F] + ( 0  X  0 ) [du/dt]
+		// [R_3]     ( C   G   H  ) [Lam]     [L]   ( 0  0  0 ) [  0  ]
 
 		Eigen::MatrixXd ABCBCECGH(2*(k+1) + 2, 2*(k+1) + 2);
 		ABCBCECGH.block( 0, 0, 2*k+2, 2*k+2 ) = ABBD;
@@ -275,6 +299,8 @@ void SystemSolver::clearCellwiseVecs()
 	CG_cellwise.clear();
 	RF_cellwise.clear();
 	QU_0_cellwise.clear();
+	A_cellwise.clear();
+	B_cellwise.clear();
 	E_cellwise.clear();
 	C_cellwise.clear();
 	G_cellwise.clear();
@@ -310,6 +336,35 @@ void SystemSolver::sundialsToDGVecConversion(N_Vector const& g, std::vector< Eig
 	for(int i = 2*nCells*(k+1); i < 2*nCells*(k+1) + nCells + 1; i++)
 	{
 		g3_globe[j] = gVec[i];
+		j++;
+	}
+}
+
+void SystemSolver::sundialsToDGVecConversion(N_Vector const& Y, DGApprox& U, DGApprox& Q, Eigen::VectorXd& lam)
+{
+	//g is split into 3 parts, each part corresponding to rows of the glodabl matrix. g1g2 refers to the q and u rows. 
+	//Here data is parsed into eigen vectors of coefficients, 1 for each cell. g3 refers to the lambda row which will 
+	//be stored as a single eigen vector of lambdas at every boundary
+
+	if( N_VGetLength(Y) != 2*nCells*(k+1) + nCells + 1)
+		throw std::invalid_argument( "Sundials Vecotor does not match size \n" );
+
+	VectorWrapper yVec( N_VGetArrayPointer( Y ), N_VGetLength( Y ) ); 
+
+	for(int i=0; i<nCells; i++)
+	{
+		Interval const& I = grid.gridCells[ i ];
+		for(int j=0; j<k+1; j++)
+		{
+			Q.coeffs[I][j] = yVec[i*(k+1) + j];
+			U.coeffs[I][j] = yVec[nCells*(k+1) + i*(k+1) + j];
+		}
+	}
+	
+	int j = 0;
+	for(int i = 2*nCells*(k+1); i < 2*nCells*(k+1) + nCells + 1; i++)
+	{
+		lam[j] = yVec[i];
 		j++;
 	}
 }
@@ -350,6 +405,7 @@ void SystemSolver::DGtoSundialsVecConversion(DGApprox delQ, DGApprox delU, Eigen
 			delYVec[i*(k+1)+j] = qCellCoeffs[j];
 			delYVec[nCells*(k+1) + i*(k+1)+j] = uCellCoeffs[j];
 		}
+		//std::cerr << qCellCoeffs << std::endl << std::endl;
 	}
 
 	for(int i=0; i<nCells+1; i++)
@@ -402,7 +458,7 @@ void SystemSolver::solveJacEq(N_Vector const& g, N_Vector& delY)
 	std::vector< Eigen::FullPivLU< Eigen::MatrixXd > > ABBDXSolvers{};
 	updateABBDForJacSolve(ABBDXSolvers, alpha);
 
-	// Assemble RHS g into cellwise form and solve for QU_F block
+	// Assemble RHS g into cellwise form and solve for QU blocks
 	sundialsToDGVecConversion(g, g1g2_cellwise, g3_global);
 	std::vector< Eigen::VectorXd > QU_f( nCells );
 	std::vector< Eigen::MatrixXd > QU_0( nCells );
@@ -416,12 +472,8 @@ void SystemSolver::solveJacEq(N_Vector const& g, N_Vector& delY)
 		//g1g2.block( k + 1, 0, k + 1, 1 ) += ( 2.0/dt ) * u.coeffs[ grid.gridCells[ i ] ]; 
 		QU_f[ i ] =  ABBDXSolvers[ i ].solve( g1g2 );
 
-		//std::cerr << "QU_f =  " << QU_f[i] << std::endl << std::endl;
-
 		//QU_0
 		Eigen::MatrixXd CE = CEBlocks[ i ];
-
-		//std::cout << CE << std::endl;
 		QU_0[ i ] = ABBDXSolvers[ i ].solve( CE );
 
 		Eigen::Matrix2d K_cell = H_cellwise[i] - CG_cellwise[ i ] * QU_0[i];
@@ -434,7 +486,7 @@ void SystemSolver::solveJacEq(N_Vector const& g, N_Vector& delY)
 	Eigen::VectorXd F( nCells + 1 );
 	F = g3_global;
 	for ( unsigned int i=0; i < nCells; i++ )
-		F.block<2,1>( i, 0 ) += CG_cellwise[ i ] * QU_f[ i ];//?maybe subtraction?
+		F.block<2,1>( i, 0 ) -= CG_cellwise[ i ] * QU_f[ i ];
 
 	Eigen::FullPivLU< Eigen::MatrixXd > lu( K_global );
 	delLambda = lu.solve( F );
@@ -443,13 +495,16 @@ void SystemSolver::solveJacEq(N_Vector const& g, N_Vector& delY)
 	for ( unsigned int i=0; i < nCells; i++ )
 	{
 		Interval const& I = grid.gridCells[ i ];
-		Eigen::VectorXd QU( 2*( k + 1 ) );
-		QU = QU_f[ i ] + QU_0[ i ] * delLambda.block<2,1>( i, 0 );
-		delQ.coeffs[ I ] = QU.block( 0, 0, k + 1, 1 );
-		delU.coeffs[ I ] = QU.block( k + 1, 0, k + 1, 1 );
+		Eigen::VectorXd delQU( 2*( k + 1 ) );
+		delQU = QU_f[ i ] + QU_0[ i ] * delLambda.block<2,1>( i, 0 );
+		delQ.coeffs[ I ] = delQU.block( 0, 0, k + 1, 1 );
+		delU.coeffs[ I ] = delQU.block( k + 1, 0, k + 1, 1 );
 	}
 
 	DGtoSundialsVecConversion(delQ, delU, delLambda, delY);
+
+	VectorWrapper vec( N_VGetArrayPointer( delY ), N_VGetLength( delY ) ); 
+	std::cerr << vec << std::endl << std::endl;
 
 	// Finally Compute dudt (this allows us to do cubic spline fitting to find u(t) for t in between gridpoints)
 	/*
@@ -481,7 +536,7 @@ void SystemSolver::solveJacEq(N_Vector const& g, N_Vector& delY)
 	u_of_t[ t ] = std::make_pair( u.coeffs, dudt.coeffs );
 	*/
 }
-
+/*
 int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data)
 {
 	
@@ -493,10 +548,12 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 
 	std::vector<Eigen::VectorXd> QULamCellwise{};		// 2(k+1)+2
 	std::vector<Eigen::VectorXd> oUDotoCellwise{};		// 2(k+1)
-	std::vector<Eigen::VectorXd> ResCellwise{};	// 2(k+1)
+	std::vector<Eigen::VectorXd> ResCellwise{};			// 2(k+1)
 
 	system->sundialsToDGVecConversion(Y, QULamCellwise);
 	system->sundialsToDGVecConversion(dydt, oUDotoCellwise); //?Should be all zeros except for u, possibly set in ID, make sure this is right?
+
+	//system->print(std::cout, 0.0, 10);
 
 	Eigen::VectorXd resQGlobal((k+1)*nCells), resUGlobal((k+1)*nCells), resLamGlobal(nCells+1);
 
@@ -512,6 +569,7 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 		RFL[2*k+2] = system->L_global[i]; RFL[2*k+3] = system->L_global[i+1];
 
 		cellResidual = system->ABCBDECGHMats[i]*QULamCellwise[i] + oXoMat*oUDotoCellwise[i] - RFL;
+		//std::cerr << oUDotoCellwise[i] << std::endl << std::endl;
 		
 		for(int j =0; j<k+1; j++)
 		{
@@ -519,25 +577,90 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 			resUGlobal[i*(k+1)+j] = cellResidual[k+1 + j];
 		}
 		resLamGlobal[i] = cellResidual[2*k+2];
-		if(i=nCells-1) resLamGlobal[nCells] = cellResidual[2*k+3];
+		if(i==nCells-1) resLamGlobal[nCells] = cellResidual[2*k+3];
+
+		//std::cerr << QULamCellwise[i] << std::endl << std::endl << oUDotoCellwise[i] << std::endl << std::endl << cellResidual << std::endl << std::endl;
 	}
 
+
+
+
 	VectorWrapper resVec( N_VGetArrayPointer( resval ), N_VGetLength( resval ) ); //?make sure this writes into the same memore and doesn't copy
+
 	resVec.block(0,0,nCells*(k+1),1) = resQGlobal;
 	resVec.block(nCells*(k+1),0,nCells*(k+1),1) = resUGlobal;
 	resVec.block(2*nCells*(k+1),0,nCells+1,1) = resLamGlobal;
+	
+	tres = resVec.norm();
+
+	VectorWrapper Vec( N_VGetArrayPointer( dydt ), N_VGetLength( dydt ) ); //?make sure this writes into the same memore and doesn't copy
+	//std::cerr << Vec << std::endl << std::endl << tres << std::endl << std::endl;
+
+	return 0;
+}
+*/
+int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data)
+{
+	
+	auto system = static_cast<UserData*>(user_data)->system;
+	auto k = system->k;
+	auto grid(system->grid);
+	auto nCells = system->nCells;
+	auto c_fn = system->getcfn();
+	DGApprox ResQ(grid,k), ResU(grid,k);
+
+	std::vector<Eigen::VectorXd> QULamCellwise{};		// 2(k+1)+2
+	std::vector<Eigen::VectorXd> oUDotoCellwise{};		// 2(k+1)
+	std::vector<Eigen::VectorXd> ResCellwise{};			// 2(k+1)
+
+	DGApprox tempU(grid, k), tempQ(grid, k), tempdudt(grid, k), temp0(grid, k);
+	Eigen::VectorXd tempLam(nCells+1), tempZeroVec(nCells+1), res3(nCells+1);
+	DGApprox res1(grid, k), res2(grid, k);
+
+	system->sundialsToDGVecConversion(Y, tempU, tempQ, tempLam);
+	system->sundialsToDGVecConversion(dydt, tempdudt, temp0, tempZeroVec); //?Should be all zeros except for?
+
+	for ( unsigned int i=0; i < nCells; i++ )
+	{
+		Interval I = grid.gridCells[ i ];
+		Eigen::Vector2d lamCell;
+		lamCell[0] = tempLam[i]; lamCell[1] = tempLam[i+1];
+
+		//Res1 = A*Q - B^T*U + C^T*Lam - R
+		res1.coeffs[ I ] = system->A_cellwise[i]*tempQ.coeffs[I] - system->B_cellwise[i].transpose()*tempU.coeffs[I] + system->C_cellwise[i].transpose()*lamCell - system->RF_cellwise[i].block(0,0,k+1,1);
+
+		//Res2 = B*Q + D*U + X*Udot + E*Lam - F
+		res2.coeffs[I] =  system->B_cellwise[i]*tempQ.coeffs[I] + system->D_cellwise[i]*tempU.coeffs[I] + system->XMats[i]*tempdudt.coeffs[I] + system->E_cellwise[i]*lamCell - system->RF_cellwise[ i ].block( k + 1, 0, k + 1, 1 );
+		/*
+		Eigen::Vector2d res3Cell, Lcell;
+		Lcell[0] = system->L_global[i]; Lcell[1] = system->L_global[i+1];
+		res3Cell = system->C_cellwise[i]*tempQ.coeffs[I] + system->G_cellwise[i]*tempU.coeffs[I] + system->H_cellwise[i]*lamCell - Lcell;
+		res3[i] = res3Cell[0]; res3[i+1] = res3Cell[1];
+		*/
+	} 
+	//std::cerr << res3 << std::endl << std::endl;
+
+	tempLam.setZero(); //?Do not keep this in the code?
+	
+	VectorWrapper Vec( N_VGetArrayPointer( Y ), N_VGetLength( Y ) );
+	VectorWrapper resVec( N_VGetArrayPointer( resval ), N_VGetLength( resval ) );
+	system->DGtoSundialsVecConversion(res1, res2, tempLam, resval);
+	//resVec.setZero();
+	//std::cerr << Vec << std::endl << std::endl;
+	std::cerr << resVec.norm() << std::endl << std::endl;
 
 	return 0;
 }
 
-void SystemSolver::print( std::ofstream& out, double t, int nOut )
+
+void SystemSolver::print( std::ostream& out, double t, int nOut )
 {
-			out << "# t = " << t << std::endl;
-		for ( int i=0; i<nOut; ++i )
-		{
-			double x = BCs.LowerBound + ( BCs.UpperBound - BCs.LowerBound ) * ( static_cast<double>( i )/( nOut ) );
-			out << x << "\t" << EvalCoeffs( u.Basis, u.coeffs, x ) << "\t" << EvalCoeffs( u.Basis, q.coeffs, x ) << std::endl;
-		}
+	out << "# t = " << t << std::endl;
+	for ( int i=0; i<nOut; ++i )
+	{
+		double x = BCs.LowerBound + ( BCs.UpperBound - BCs.LowerBound ) * ( static_cast<double>( i )/( nOut ) );
+		out << x << "\t" << EvalCoeffs( u.Basis, u.coeffs, x ) << "\t" << EvalCoeffs( u.Basis, dudt.coeffs, x ) << "\t" << EvalCoeffs( u.Basis, q.coeffs, x ) << std::endl;
+	}
 }
 
 double SystemSolver::EvalCoeffs( LegendreBasis & B, Coeff_t cs, double x )

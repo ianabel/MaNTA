@@ -35,6 +35,7 @@ class Grid
 {
 public:
 	Grid(double lBound, double uBound, int nCells)
+		: upperBound(uBound), lowerBound(lBound)
 	{
 		double cellLength = abs(uBound-lBound)/static_cast<double>(nCells);
 		for(int i = 0; i < nCells - 1; i++)
@@ -45,6 +46,7 @@ public:
 	Grid(const Grid& grid) = default; 
 
 	std::vector<Interval> gridCells;
+	double upperBound, lowerBound;
 };
 
 class LegendreBasis

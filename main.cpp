@@ -18,19 +18,19 @@ int EmptyJac(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SU
 int main()
 {
 	const sunindextype k = 3;		//Polynomial degree of each cell
-	const sunindextype nCells = 4;			//Total number of cells
+	const sunindextype nCells = 40;			//Total number of cells
 	SUNLinearSolver LS = NULL;				//linear solver memory structure
 	void *IDA_mem   = NULL;					//IDA memory structure
 	const double lBound = 0.0, uBound = 10;	//Spacial bounds
 	int retval, iout;
-	int nOut = 10;
+	int nOut = 40;
 
 	N_Vector Y = NULL;				//vector for storing solution
 	N_Vector dYdt = NULL;			//vector for storing time derivative of solution
 	N_Vector constraints = NULL;	//vector for storing constraints
 	N_Vector id = NULL;				//vector for storing id (which elements are algebraic or differentiable)
 	N_Vector res = NULL;			//vector for storing residual
-	realtype rtol = 1.0e-5, atol = 1.0e-3, t0 = 0.0, t1 = 0.01, tout, tret;; //?rtol is 0.0 in examples?
+	realtype rtol = 1.0e-2, atol = 1.0e-2, t0 = 0.0, t1 = 0.01, tout, tret;; //?rtol is 0.0 in examples?
 
 	std::function<double( double )> g_D = [ = ]( double x ) {
 		if ( x == lBound ) {
@@ -147,13 +147,18 @@ int main()
 	int err = IDASetLinearSolver(IDA_mem, LS, sunMat); 
 	IDASetJacFn(IDA_mem, EmptyJac);
 
-	//?Currently don't call IDACalcIC but might come in useful. Defo for transport calculations?
+	VectorWrapper Vec( N_VGetArrayPointer( Y ), N_VGetLength( Y ) ); //?make sure this writes into the same memore and doesn't copy
+	std::cerr << Vec << std::endl << std::endl;
+	
+	IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, 0.01);
+
+	
 	std::ofstream out( "u_t.plot" );
 	system.print(out, t0, nOut);
 
 	for (tout = t1, iout = 1; iout <= 11; iout++, tout *= 2.0) 
 	{
-		
+		std::cerr << tout << std::endl;
 		retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
 		if(ErrorChecker::check_retval(&retval, "IDASolve", 1))
 			return -1;

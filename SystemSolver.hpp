@@ -32,7 +32,7 @@ public:
 
 	// Takes n vector and parses it into the RHS of a Jacobian equation
 	void sundialsToDGVecConversion(N_Vector const& g, std::vector< Eigen::VectorXd >& g1g2_cellwise, Eigen::VectorXd& g3_global);
-
+	void sundialsToDGVecConversion(N_Vector const& Y, DGApprox& U, DGApprox& Q, Eigen::VectorXd& lam);
 	void sundialsToDGVecConversion(N_Vector& delY, std::vector< Eigen::VectorXd >& UQLamCellwise);
 
 	// Returnable n_vector for sundials linear solver
@@ -50,10 +50,12 @@ public:
 	void setAlpha(double const a) {alpha = a;}
 
 	//print current output for u and q to output file
-	void print( std::ofstream& out, double t, int nOut  );
+	void print( std::ostream& out, double t, int nOut  );
 
 	//Find the profiles from the coefficients
 	double EvalCoeffs( LegendreBasis & B, Coeff_t cs, double x );
+
+	Fn getcfn() {return c_fn;}
 
 	Grid grid;
 	unsigned int const k; 		//polynomial degree per cell
@@ -68,6 +70,9 @@ public:
 	std::vector< Eigen::MatrixXd > CG_cellwise;
 	std::vector< Eigen::VectorXd > RF_cellwise;
 	std::vector< Eigen::MatrixXd > QU_0_cellwise;
+	std::vector< Eigen::MatrixXd > A_cellwise;
+	std::vector< Eigen::MatrixXd > B_cellwise;
+	std::vector< Eigen::MatrixXd > D_cellwise;
 	std::vector< Eigen::MatrixXd > E_cellwise;
 	std::vector< Eigen::MatrixXd > C_cellwise, G_cellwise;
 	std::vector< Eigen::MatrixXd > H_cellwise;

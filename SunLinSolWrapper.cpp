@@ -8,11 +8,19 @@
 int SunLinSolWrapper::Solve( SUNMatrix A, N_Vector x, N_Vector b )
 {
 	realtype cj = 1.0;
-	N_Vector *curY = new N_Vector(N_VNew_Serial(2*solver.nCells*(solver.k+1) + solver.nCells + 1));
+	N_Vector curY = NULL;
+	curY = N_VNew_Serial(2*solver.nCells*(solver.k+1) + solver.nCells + 1);
+	IDAGetCurrentY(IDA_mem, &curY);
 	IDAGetCurrentCj(IDA_mem, &cj);
 	solver.setAlpha(cj);
+
+	if(curY)
+	{
+		VectorWrapper vec( N_VGetArrayPointer( curY ), N_VGetLength( curY ) );
+		std::cerr << vec << std::endl << std::endl;
+	}
+
 	solver.solveJacEq( b, x);
-	IDAGetCurrentY(IDA_mem, curY);
 	delete curY; 
 	return 0;
 }

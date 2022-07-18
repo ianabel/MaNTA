@@ -23,3 +23,6 @@ solver: $(OBJECTS) $(HEADERS) Makefile
 
 clean: 
 	rm -f solver $(OBJECTS)
+
+IDAexample: 
+	$(CXX) $(CXXFLAGS) -g -o idaex resources/IDA_example.c $(LINK_FLAGS)
