@@ -23,14 +23,15 @@ int main()
 	void *IDA_mem   = NULL;					//IDA memory structure
 	const double lBound = 0.0, uBound = 10;	//Spacial bounds
 	int retval, iout;
-	int nOut = 40;
+	int nOut = 500;
 
 	N_Vector Y = NULL;				//vector for storing solution
 	N_Vector dYdt = NULL;			//vector for storing time derivative of solution
 	N_Vector constraints = NULL;	//vector for storing constraints
 	N_Vector id = NULL;				//vector for storing id (which elements are algebraic or differentiable)
 	N_Vector res = NULL;			//vector for storing residual
-	realtype rtol = 1.0e-2, atol = 1.0e-2, t0 = 0.0, t1 = 0.01, tout, tret;; //?rtol is 0.0 in examples?
+	const double delta_t = 0.001;
+	realtype rtol = 1.0e-2, atol = 1.0e-2, t0 = 0.0, t1 = delta_t, tout, tret;; //?rtol is 0.0 in examples?
 
 	std::function<double( double )> g_D = [ = ]( double x ) {
 		if ( x == lBound ) {
@@ -54,8 +55,8 @@ int main()
 		throw std::logic_error( "Boundary condition function being eval'd not on boundary ?!" );
 	};
 
-	const double c_const = 0;
-	const double kappa_const = 1;
+	const double c_const = 0.0;
+	const double kappa_const = 1.0;
 	std::function<double( double )> f = [ = ]( double x ){ 
 		return 0.0;
 		// return 2.0 * ( 2.0 * x*x*x*x - 7.0 * x*x + 2.0 ) * ::exp( -x*x ); 
@@ -72,7 +73,6 @@ int main()
 	DirichletBCs.g_D = g_D;
 	DirichletBCs.g_N = g_N;
 
-	const double delta_t = 0.009;
 
 	const Grid grid(lBound, uBound, nCells);
 	SystemSolver system(grid, k, nCells, delta_t, f, tau, c, kappa, DirichletBCs);
@@ -117,6 +117,7 @@ int main()
 		return -1;
 	realtype tRes;
 	residual(tRes,Y, dYdt, res, data);
+	//system.solveNonIDA(Y, dYdt, delta_t);
 
 	//impose constraints for nonnegative u solution values
 	constraints = N_VClone(Y);
@@ -150,20 +151,25 @@ int main()
 	VectorWrapper Vec( N_VGetArrayPointer( Y ), N_VGetLength( Y ) ); //?make sure this writes into the same memore and doesn't copy
 	std::cerr << Vec << std::endl << std::endl;
 	
-	IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, 0.01);
-
+	IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
+	//IDASetMaxOrd(IDA_mem, 1);
 	
 	std::ofstream out( "u_t.plot" );
 	system.print(out, t0, nOut);
 
-	for (tout = t1, iout = 1; iout <= 11; iout++, tout *= 2.0) 
+	for (tout = t1, iout = 1; iout <= 500; iout++, tout += delta_t) 
 	{
 		std::cerr << tout << std::endl;
+		/*
+		system.solveNonIDA(Y, dYdt, delta_t);
+		*/
 		retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
 		if(ErrorChecker::check_retval(&retval, "IDASolve", 1))
 			return -1;
-
-		system.print(out, tout, nOut);
+			Eigen::VectorXd lam(nCells+1);
+		system.sundialsToDGVecConversion(Y, system.u, system.q, lam);
+		//std::cerr << Vec << std::endl << std::endl;
+		if(iout%100 == 0) system.print(out, tout, nOut);
 	}
 
 	delete data;
