@@ -32,9 +32,7 @@ void SystemSolver::setInitialConditions( std::function< double ( double )> u_0 ,
 
 	//Solve for Lambda with Lam = (H^T)^-1*[ -C*Q - G^T*U + L ] 
 	Eigen::VectorXd Lambda2( nCells + 1 ), Lambda( nCells + 1 ), CqGuL_global(nCells+1);
-	Eigen::MatrixXd H_global(nCells+1,nCells+1);
 	CqGuL_global.setZero();
-	H_global.setZero();
 	for ( unsigned int i=0; i < nCells; i++ )
 	{
 		Interval I = grid.gridCells[ i ];
@@ -44,11 +42,10 @@ void SystemSolver::setInitialConditions( std::function< double ( double )> u_0 ,
 		Eigen::Vector2d CqGuL;
 		CqGuL = Lcell - C_cellwise[i]*q.coeffs[I] - G_cellwise[i]*u.coeffs[I];
 		CqGuL_global.block(i,0,2,1) += CqGuL;
-		H_global.block(i,i,2,2) += H_cellwise[i];
 	} 
-	auto HInv = Eigen::FullPivLU< Eigen::MatrixXd >(H_global);
-	Lambda = HInv.solve(CqGuL_global);
+	Lambda = H_global.solve(CqGuL_global);
 
+	//Solver For dudt with dudt = X^-1( -B*Q - D*U - E*Lam + F )
 	Eigen::Vector2d lamCell;
 	for ( unsigned int i=0; i < nCells; i++ )
 	{
@@ -57,33 +54,10 @@ void SystemSolver::setInitialConditions( std::function< double ( double )> u_0 ,
 		lamCell[0] = Lambda[i]; lamCell[1] = Lambda[i+1];
 
 		dudt.coeffs[I] = Eigen::FullPivLU< Eigen::MatrixXd >(XMats[i]).solve( -B_cellwise[i]*q.coeffs[I] - D_cellwise[i]*u.coeffs[I] - E_cellwise[i]*lamCell + RF_cellwise[ i ].block( k + 1, 0, k + 1, 1 ) );
-		auto xInv = Eigen::FullPivLU< Eigen::MatrixXd >(XMats[i]);
-		for(int j=0; j<k+1; j++)
-		{
-			//std::cerr << xInv.solve(-B_cellwise[i]*q.coeffs[I])[j] << "	" << xInv.solve(- D_cellwise[i]*u.coeffs[I])[j] << "	" <<  xInv.solve(- E_cellwise[i]*lamCell)[j] << "	" << std::endl;
-			//std::cerr << HInv.solve(Lcell)[i] << "	" << HInv.solve(- system->C_cellwise[i]*tempQ.coeffs[I])[i] << "	" << HInv.solve(- system->G_cellwise[i]*tempU.coeffs[I])[i] << std::endl;
-		}
-
-		Lambda2[i] = u_0( I.x_l );
 	}
-
-	Lambda2[nCells] = u_0( grid.upperBound );
-
-	//std::cerr << std::endl;
-	//Solve Lambda from u,q and dudt
-
 	
-	for ( unsigned int i=0; i < nCells; i++ )
-	{
-		std::cerr << Lambda[i] << "	" << Lambda2[i] << std::endl;
-	}
-	std::cerr <<  std::endl;
-	
-
-
-	DGtoSundialsVecConversion(q, u, Lambda2, Y); //To do, initialise lambda from QU
+	DGtoSundialsVecConversion(q, u, Lambda, Y);
 	DGApprox zero{grid,k};
-
 	DGtoSundialsVecConversion(zero, dudt, Eigen::VectorXd::Zero(nCells+1), dYdt);
 }
 
@@ -97,6 +71,8 @@ void SystemSolver::initialiseMatrices()
 	// Two endpoints per cell
 	Eigen::MatrixXd C( 2, k + 1 );
 	Eigen::MatrixXd E( k + 1, 2 );
+	Eigen::MatrixXd HGlobalMat( nCells+1, nCells+1 );
+	HGlobalMat.setZero();
 	K_global.resize( nCells + 1, nCells + 1 );
 	K_global.setZero();
 	L_global.resize( nCells + 1 );
@@ -140,8 +116,6 @@ void SystemSolver::initialiseMatrices()
 		ABBD.block( k+1, 0, k+1, k+1 ) = B;
 		ABBD.block( 0, k+1, k+1, k+1 ) = -B.transpose();
 		ABBD.block( k+1, k+1, k+1, k+1 ) = D;
-
-		//std::cerr << ABBD << std::endl << std::endl;
 
 		// 2*( k + 1) is normally only medium-sized (10 - 20)
 		// so just do a full LU factorization to solve 
@@ -253,6 +227,7 @@ void SystemSolver::initialiseMatrices()
 				H( 1, 1 ) = H( 1, 0 ) = H( 0, 1 ) = 0.0;
 
 		H_cellwise.emplace_back(H);
+		HGlobalMat.block(i,i,2,2) += H;
 
 		// Finally fill L
 		if ( I.x_l == BCs.LowerBound && /* is b.d. Neumann at lower boundary */ !BCs.isLBoundDirichlet )
@@ -275,20 +250,18 @@ void SystemSolver::initialiseMatrices()
 
 		Eigen::MatrixXd X( k + 1, k + 1 );
 		u.MassMatrix( I, X);
-		ABCBDECGHMats.emplace_back(ABCBCECGH);
 		XMats.emplace_back(X);
 	}
+	H_global = static_cast<Eigen::FullPivLU< Eigen::MatrixXd >>(HGlobalMat);
 	initialised = true;
 }
 
 void SystemSolver::clearCellwiseVecs()
 {
-	ABCBDECGHMats.clear();
 	XMats.clear();
 	ABBDBlocks.clear();
 	CG_cellwise.clear();
 	RF_cellwise.clear();
-	QU_0_cellwise.clear();
 	A_cellwise.clear();
 	B_cellwise.clear();
 	E_cellwise.clear();
@@ -318,7 +291,7 @@ void SystemSolver::sundialsToDGVecConversion(N_Vector const& g, std::vector< Eig
 			g1g2Coeffs[j] = gVec[i*(k+1) + j];
 			g1g2Coeffs[k+1+j] = gVec[nCells*(k+1) + i*(k+1) + j];
 		}
-		g1g2_cell.emplace_back(g1g2Coeffs); //?Missing the nCellth entry maybe??
+		g1g2_cell.emplace_back(g1g2Coeffs);
 	}
 
 	//g3 Global vector for [C G H][Q U Gamma]^T = g3
@@ -395,7 +368,6 @@ void SystemSolver::DGtoSundialsVecConversion(DGApprox delQ, DGApprox delU, Eigen
 			delYVec[i*(k+1)+j] = qCellCoeffs[j];
 			delYVec[nCells*(k+1) + i*(k+1)+j] = uCellCoeffs[j];
 		}
-		//std::cerr << qCellCoeffs << std::endl << std::endl;
 	}
 
 	for(int i=0; i<nCells+1; i++)
@@ -434,7 +406,6 @@ void SystemSolver::updateABBDForJacSolve(std::vector< Eigen::FullPivLU< Eigen::M
 		auto ABBDX = ABBDBlocks[i];
 		ABBDX.block( k+1, k+1, k+1, k+1 ) += X;
 		ABBDXsolvers.emplace_back(ABBDX);
-		//std::cerr << "ABBDX =  " << ABBDX << std::endl << std::endl;
 	}
 }
 
@@ -460,8 +431,7 @@ void SystemSolver::solveJacEq(N_Vector const& g, N_Vector& delY)
 
 		//QU_f
 		Eigen::VectorXd g1g2 = g1g2_cellwise[ i ];
-		//std::cerr << "g1g2 =  " << g1g2 << std::endl << std::endl;
-		//g1g2.block( k + 1, 0, k + 1, 1 ) += ( 2.0/dt ) * u.coeffs[ grid.gridCells[ i ] ]; 
+
 		QU_f[ i ] =  ABBDXSolvers[ i ].solve( g1g2 );
 
 		//QU_0
@@ -488,46 +458,12 @@ void SystemSolver::solveJacEq(N_Vector const& g, N_Vector& delY)
 	{
 		Interval const& I = grid.gridCells[ i ];
 		Eigen::VectorXd delQU( 2*( k + 1 ) );
-		//std::cerr << QU_0[ i ] * delLambda.block<2,1>( i, 0 ) << std::endl << std::endl;
 		delQU = QU_f[ i ] - QU_0[ i ] * delLambda.block<2,1>( i, 0 );
 		delQ.coeffs[ I ] = delQU.block( 0, 0, k + 1, 1 );
 		delU.coeffs[ I ] = delQU.block( k + 1, 0, k + 1, 1 );
 	}
 
 	DGtoSundialsVecConversion(delQ, delU, delLambda, delY);
-
-	//VectorWrapper vec( N_VGetArrayPointer( delY ), N_VGetLength( delY ) ); 
-	//std::cerr << vec << std::endl << std::endl;
-
-	// Finally Compute dudt (this allows us to do cubic spline fitting to find u(t) for t in between gridpoints)
-	/*
-	for ( unsigned int i=0; i < nCells; i++ )
-	{
-		Interval I = grid.gridCells[ i ];
-		Eigen::MatrixXd M( k + 1, k + 1 );
-		u.DerivativeMatrix( I, M );
-		Eigen::MatrixXd M2( k + 1, k + 1 );
-		u.DerivativeMatrix( I, M2, c_fn );
-		// Work out du/dt at t=0 by direct evaluation of (29)
-		// First (c u + q, w')
-		dudt.coeffs[ I ] = 
-			RF_cellwise[ i ].block( k + 1, 0, k + 1, 1 ) 
-			- M * q.coeffs[ I ] + M2.transpose() * u.coeffs[ I ];
-
-		// Then componentwise add f_i and the boundary terms
-		for ( unsigned int j=0; j < k + 1; ++j )
-		{
-			// Finally minus < (cu)^ . n, w > (but because of the 'n', this leads to
-			//  + <eval at lower bound> - <eval at upper bound>
-			dudt.coeffs[ I ]( j ) +=
-				+ c_fn( I.x_l )*Lambda[ i ]*u.Basis.phi( I, j )( I.x_l )
-				- c_fn( I.x_u )*Lambda[ i + 1 ]*u.Basis.phi( I, j )( I.x_u );
-		}
-	}
-	
-	t += dt;
-	u_of_t[ t ] = std::make_pair( u.coeffs, dudt.coeffs );
-	*/
 }
 
 void SystemSolver::solveNonIDA(N_Vector Y, N_Vector dYdt, double dt)
@@ -552,8 +488,6 @@ void SystemSolver::solveNonIDA(N_Vector Y, N_Vector dYdt, double dt)
 		RF.block( k + 1, 0, k + 1, 1 ) += (1/dt)*u.coeffs[ I ];
 		QU_f[ i ] = ABBDXSolvers[i].solve( RF );
 
-		//std::cerr << QU_f[i] << std::endl << std::endl;
-
 		//QU_0
 		Eigen::MatrixXd CE = CEBlocks[ i ];
 		QU_0[ i ] = ABBDXSolvers[i].solve( CE );
@@ -572,8 +506,6 @@ void SystemSolver::solveNonIDA(N_Vector Y, N_Vector dYdt, double dt)
 
 	Eigen::FullPivLU< Eigen::MatrixXd > lu( K_global );
 	tempLam = lu.solve( F );
-	//std::cerr << tempLam << std::endl << std::endl;
-
 
 	for ( unsigned int i=0; i < nCells; i++ )
 	{
@@ -585,24 +517,7 @@ void SystemSolver::solveNonIDA(N_Vector Y, N_Vector dYdt, double dt)
 		u.coeffs[ I ] = QU.block( k + 1, 0, k + 1, 1 );
 	}
 
-
 	DGtoSundialsVecConversion(q, u, tempLam, Y);
-	/*
-	// Now find del u and del q to eventually find del Y
-	for ( unsigned int i=0; i < nCells; i++ )
-	{
-		Interval const& I = grid.gridCells[ i ];
-		Eigen::VectorXd QU( 2*( k + 1 ) );
-		delQU = QU_f[ i ] + QU_0[ i ] * delLambda.block<2,1>( i, 0 );
-		delQ.coeffs[ I ] = delQU.block( 0, 0, k + 1, 1 );
-		delU.coeffs[ I ] = delQU.block( k + 1, 0, k + 1, 1 );
-	}
-
-	DGtoSundialsVecConversion(delQ, delU, delLambda, delY);
-
-	VectorWrapper vec( N_VGetArrayPointer( delY ), N_VGetLength( delY ) ); 
-	*/
-	print(std::cout, dt, 10);
 }
 
 int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data)
@@ -612,26 +527,17 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 	auto grid(system->grid);
 	auto nCells = system->nCells;
 	auto c_fn = system->getcfn();
-	DGApprox ResQ(grid,k), ResU(grid,k);
-
-	//system->print(std::cout, 0, 20);
-
-	std::vector<Eigen::VectorXd> QULamCellwise{};		// 2(k+1)+2
-	std::vector<Eigen::VectorXd> oUDotoCellwise{};		// 2(k+1)
-	std::vector<Eigen::VectorXd> ResCellwise{};			// 2(k+1)
 
 	DGApprox tempU(grid, k), tempQ(grid, k), tempdudt(grid, k), temp0(grid, k);
 	Eigen::VectorXd tempLam(nCells+1), tempZeroVec(nCells+1), res3(nCells+1);
 	DGApprox res1(grid, k), res2(grid, k);
 
 	system->sundialsToDGVecConversion(Y, tempU, tempQ, tempLam);
-	system->sundialsToDGVecConversion(dydt, tempdudt, temp0, tempZeroVec); //?Should be all zeros except for?
+	system->sundialsToDGVecConversion(dydt, tempdudt, temp0, tempZeroVec); 
 
 	//Solve for Lambda with Lam = (H^T)^-1*[ -C*Q - G^T*U + L ] 
 	Eigen::VectorXd Lambda( nCells + 1 ), CqGuL_global(nCells+1);
-	Eigen::MatrixXd H_global(nCells+1,nCells+1); //?Make this a method variable defined at initialisation?
 	CqGuL_global.setZero();
-	H_global.setZero();
 	for ( unsigned int i=0; i < nCells; i++ )
 	{
 		Interval I = grid.gridCells[ i ];
@@ -641,14 +547,11 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 		Eigen::Vector2d CqGuL;
 		CqGuL = Lcell - system->C_cellwise[i]*tempQ.coeffs[I] - system->G_cellwise[i]*tempU.coeffs[I];
 		CqGuL_global.block(i,0,2,1) += CqGuL;
-		H_global.block(i,i,2,2) += system->H_cellwise[i];
 	} 
-	auto HInv = Eigen::FullPivLU< Eigen::MatrixXd >(H_global);
-	Lambda = HInv.solve(CqGuL_global);
+	Lambda = system->H_global.solve(CqGuL_global);
 
 	for ( unsigned int i=0; i < nCells; i++ )
 	{
-		
 		Interval I = grid.gridCells[ i ];
 		Eigen::Vector2d lamCell;
 		lamCell[0] = Lambda[i]; lamCell[1] = Lambda[i+1];
@@ -656,53 +559,14 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 		//Res1 = A*Q - B^T*U + C^T*Lam - R
 		// length = k+1
 		res1.coeffs[ I ] = system->A_cellwise[i]*tempQ.coeffs[I] - system->B_cellwise[i].transpose()*tempU.coeffs[I] + system->C_cellwise[i].transpose()*lamCell - system->RF_cellwise[i].block(0,0,k+1,1);
-		//Res2 = B*Q + D*U + X*Udot + E*Lam - F
-		//length = k+1
-		//res2.coeffs[I] =  system->B_cellwise[i]*tempQ.coeffs[I] + system->D_cellwise[i]*tempU.coeffs[I] + system->XMats[i]*tempdudt.coeffs[I] + system->E_cellwise[i]*lamCell - system->RF_cellwise[ i ].block( k + 1, 0, k + 1, 1 );
-		
-		res2.coeffs[ I ] = system->B_cellwise[i]*tempQ.coeffs[I] + system->D_cellwise[i]*tempU.coeffs[I] + system->E_cellwise[i]*lamCell - system->RF_cellwise[ i ].block( k + 1, 0, k + 1, 1 );
 
-		for(int j=0; j<k+1; j++)
-		{
-			//std::cerr << tempdudt.coeffs[I][j] << "	" << res2.coeffs[I][j] << std::endl;
-			//std::cerr << xInv.solve(-system->B_cellwise[i]*tempQ.coeffs[I])[j] << "	" << xInv.solve(- system->D_cellwise[i]*tempU.coeffs[I])[j] << "	" <<  xInv.solve(- system->E_cellwise[i]*lamCell)[j] << std::endl;
-		}
-		//std::cerr << std::endl;
-		res2.coeffs[I] += tempdudt.coeffs[I];
-		
-		//Res3 = C*Q + G*U + H*Lam - L
-		//length = 2
-		/*
-		Eigen::Vector2d res3Cell, Lcell;
-		Lcell[0] = system->L_global[i]; Lcell[1] = system->L_global[i+1];
-
-		res3Cell = system->C_cellwise[i]*tempQ.coeffs[I] + system->G_cellwise[i]*tempU.coeffs[I] + system->H_cellwise[i]*lamCell - Lcell;
-		//res3[i] = res3Cell[0]; 
-		res3[i+1] = res3Cell[1];
-
-		auto HInv = Eigen::FullPivLU< Eigen::MatrixXd > (system->H_cellwise[i]);
-		res3Cell = HInv.solve(Lcell - system->C_cellwise[i]*tempQ.coeffs[I] - system->G_cellwise[i]*tempU.coeffs[I]);
-
-		
-		res3[i] += res3Cell[0]/2;
-		res3[i+1] = res3Cell[1]/2;
-		*/
+		//Res2 = B*Q + D*U + X*Udot + E*Lam - F		
+		// length = k+1
+		res2.coeffs[ I ] = system->B_cellwise[i]*tempQ.coeffs[I] + system->D_cellwise[i]*tempU.coeffs[I] + system->E_cellwise[i]*lamCell - system->RF_cellwise[ i ].block( k + 1, 0, k + 1, 1 ) + tempdudt.coeffs[I];;
 	} 
-	//res3[nCells] = 0.0;
-	//res3 = tempLam - Lambda;
-	res3.setZero();
+	res3.setZero();	
 	
-	for(int j=0; j<nCells; j++)
-	{
-		//std::cerr << tempLam[j] << "	" << Lambda[j] << "	" << res3[j] << std::endl;
-	}
-	
-	
-	VectorWrapper Vec( N_VGetArrayPointer( dydt ), N_VGetLength( dydt ) );
-	VectorWrapper resVec( N_VGetArrayPointer( resval ), N_VGetLength( resval ) );
 	system->DGtoSundialsVecConversion(res1, res2, res3, resval);
-	//std::cerr << resVec << std::endl << std::endl;
-	std::cerr << resVec.norm() << std::endl << std::endl;
 	return 0;
 }
 

@@ -64,21 +64,14 @@ public:
 	unsigned int const k; 		//polynomial degree per cell
 	unsigned int const nCells;	//Total cell count
 	
-	std::vector< Eigen::MatrixXd > ABCBDECGHMats;
 	std::vector< Eigen::MatrixXd > XMats;
 	std::vector< Eigen::MatrixXd > ABBDBlocks;
 	std::vector< Eigen::MatrixXd > CEBlocks;
 	Eigen::MatrixXd K_global{};
 	Eigen::VectorXd L_global{};
-	std::vector< Eigen::MatrixXd > CG_cellwise;
-	std::vector< Eigen::VectorXd > RF_cellwise;
-	std::vector< Eigen::MatrixXd > QU_0_cellwise;
-	std::vector< Eigen::MatrixXd > A_cellwise;
-	std::vector< Eigen::MatrixXd > B_cellwise;
-	std::vector< Eigen::MatrixXd > D_cellwise;
-	std::vector< Eigen::MatrixXd > E_cellwise;
-	std::vector< Eigen::MatrixXd > C_cellwise, G_cellwise;
-	std::vector< Eigen::MatrixXd > H_cellwise;
+	Eigen::FullPivLU< Eigen::MatrixXd > H_global{};
+	std::vector< Eigen::MatrixXd > CG_cellwise, RF_cellwise;
+	std::vector< Eigen::MatrixXd > A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise; //?Point the dublicated matrices to the same place?
 
 	DGApprox u,q, dudt;
 private:

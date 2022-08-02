@@ -17,6 +17,7 @@ int EmptyJac(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SU
 
 int main()
 {
+	//---------------------------Variable assiments-------------------------------
 	const sunindextype k = 3;		//Polynomial degree of each cell
 	const sunindextype nCells = 30;			//Total number of cells
 	SUNLinearSolver LS = NULL;				//linear solver memory structure
@@ -31,9 +32,11 @@ int main()
 	N_Vector id = NULL;				//vector for storing id (which elements are algebraic or differentiable)
 	N_Vector res = NULL;			//vector for storing residual
 	const double delta_t = 0.001;
-	realtype rtol = 1.0e-5, atol = 1.0e-5, t0 = 0.0, t1 = delta_t, tFinal = 0.5, deltatPrint = 0.1, tout, tret;; //?rtol is 0.0 in examples?
+	realtype rtol = 1.0e-5, atol = 1.0e-5, t0 = 0.0, t1 = delta_t, tFinal = 0.5, deltatPrint = 0.1, tout, tret;; 
 	double totalSteps = tFinal/delta_t;
 	int stepsPerPrint = floor(totalSteps*(deltatPrint/tFinal));
+
+	//-------------------------------------System Design----------------------------------------------
 
 	std::function<double( double )> g_D = [ = ]( double x ) {
 		if ( x == lBound ) {
@@ -91,6 +94,8 @@ int main()
 	retval = IDASetUserData(IDA_mem, data);
 	if(ErrorChecker::check_retval(&retval, "IDASetUserData", 1)) return(1);
 
+	//-----------------------------Initial conditions-------------------------------
+
 	system.initialiseMatrices();
 	double a = 5.0;
 	double b = 4.0; 
@@ -111,14 +116,11 @@ int main()
 	if(ErrorChecker::check_retval((void *)res, "N_VClone", 0))
 		return -1;
 	realtype tRes;
-	residual(tRes,Y, dYdt, res, data); //You gotta initialise the res vec
 
-	//impose constraints for nonnegative u solution values
+	//No constraints are imposed as negative coefficients may allow for a better fit across a cell
 	constraints = N_VClone(Y);
 	if(ErrorChecker::check_retval((void *)constraints, "N_VClone", 0))
 		return -1;
-	VectorWrapper constraintsVec( N_VGetArrayPointer( constraints ), N_VGetLength( constraints ) );
-	//for(int i=nCells*(k+1); i < 2*nCells*(k+1) + 2; i++) constraintsVec[i] = 1.0; //u and lambda variables are positive
 
 	//Specify only u as differential
 	id = N_VClone(Y);
@@ -171,7 +173,9 @@ int main()
 
 int EmptyJac(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3)
 {
-	static_cast<UserData*>(user_data)->system->setAlpha(cj);
+	//This function is purely superficial
+	//Sundials looks for a Jacobian, but our Jacobian equation is solved without computing the jacobian. 
+	//So we pass a fake one to sundials to prevent an error
 	return 0;
 }
 
