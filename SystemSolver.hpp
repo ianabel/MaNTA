@@ -39,7 +39,7 @@ public:
 	void DGtoSundialsVecConversion(DGApprox delU, DGApprox delQ, Eigen::VectorXd delLambda, N_Vector& delY);
 
 	// Set the q and u coefficients at each time step
-	void updateUandQ(N_Vector const& Y);
+	void updateCoeffs(N_Vector const& Y, N_Vector const& dYdt);
 
 	//Creates the ABBDX cellwise matrices used at each Jacobian iteration
 	void updateABBDForJacSolve(std::vector< Eigen::FullPivLU< Eigen::MatrixXd > >& tempABBDBlocks, double const alpha);

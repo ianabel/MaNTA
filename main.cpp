@@ -18,12 +18,12 @@ int EmptyJac(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SU
 int main()
 {
 	const sunindextype k = 3;		//Polynomial degree of each cell
-	const sunindextype nCells = 40;			//Total number of cells
+	const sunindextype nCells = 30;			//Total number of cells
 	SUNLinearSolver LS = NULL;				//linear solver memory structure
 	void *IDA_mem   = NULL;					//IDA memory structure
 	const double lBound = 0.0, uBound = 10;	//Spacial bounds
 	int retval, iout;
-	int nOut = 500;
+	int nOut = 100;
 
 	N_Vector Y = NULL;				//vector for storing solution
 	N_Vector dYdt = NULL;			//vector for storing time derivative of solution
@@ -31,7 +31,9 @@ int main()
 	N_Vector id = NULL;				//vector for storing id (which elements are algebraic or differentiable)
 	N_Vector res = NULL;			//vector for storing residual
 	const double delta_t = 0.001;
-	realtype rtol = 1.0e-2, atol = 1.0e-2, t0 = 0.0, t1 = delta_t, tout, tret;; //?rtol is 0.0 in examples?
+	realtype rtol = 1.0e-5, atol = 1.0e-5, t0 = 0.0, t1 = delta_t, tFinal = 0.5, deltatPrint = 0.1, tout, tret;; //?rtol is 0.0 in examples?
+	double totalSteps = tFinal/delta_t;
+	int stepsPerPrint = floor(totalSteps*(deltatPrint/tFinal));
 
 	std::function<double( double )> g_D = [ = ]( double x ) {
 		if ( x == lBound ) {
@@ -89,87 +91,79 @@ int main()
 	retval = IDASetUserData(IDA_mem, data);
 	if(ErrorChecker::check_retval(&retval, "IDASetUserData", 1)) return(1);
 
-	//To Do:
-	//Check initial condition satisfies residual equation
 	system.initialiseMatrices();
 	double a = 5.0;
 	double b = 4.0; 
 	std::function<double( double )> u_0 = [=]( double y ){ return ::exp( -b*( y - a )*( y - a ) ); };
 
+	//Set original vector lengths
 	Y = N_VNew_Serial(2*nCells*(k+1) + nCells + 1);
 	if(ErrorChecker::check_retval((void *)Y, "N_VNew_Serial", 0)) return(1);
 	dYdt = N_VClone(Y);
 	if(ErrorChecker::check_retval((void *)dYdt, "N_VClone", 0)) return(1);
 
+	//Initialise Y and dYdt
 	system.setInitialConditions(u_0, Y, dYdt);
 
-	// Set global solution vector lengths. 
-	//const sunindextype global_length = nCells*(k+1) + nCells+1; ?delete?
-
-	// Choose zero-based (C-style) indexing.
-	// const sunindextype index_base = 0; ?delete?
-
-	/* Allocate and initialize N-vectors. */
-	//Already initilised Y and dYdt
+	// ----------------- Allocate and initialize all other sun-vectors. -------------
 
 	res = N_VClone(Y);
 	if(ErrorChecker::check_retval((void *)res, "N_VClone", 0))
 		return -1;
 	realtype tRes;
-	residual(tRes,Y, dYdt, res, data);
-	//system.solveNonIDA(Y, dYdt, delta_t);
+	residual(tRes,Y, dYdt, res, data); //You gotta initialise the res vec
 
 	//impose constraints for nonnegative u solution values
 	constraints = N_VClone(Y);
 	if(ErrorChecker::check_retval((void *)constraints, "N_VClone", 0))
 		return -1;
 	VectorWrapper constraintsVec( N_VGetArrayPointer( constraints ), N_VGetLength( constraints ) );
-	for(int i=nCells*(k+1); i < 2*nCells*(k+1) + 2; i++) constraintsVec[i] = 1.0; //u and lambda variables are positive
+	//for(int i=nCells*(k+1); i < 2*nCells*(k+1) + 2; i++) constraintsVec[i] = 1.0; //u and lambda variables are positive
 
+	//Specify only u as differential
 	id = N_VClone(Y);
 	if(ErrorChecker::check_retval((void *)id, "N_VClone", 0))
 		return -1;
 	realtype* idVal = N_VGetArrayPointer(id);
-	for(int i=nCells*(k+1); i < 2*nCells*(k+1); i++) idVal[i] = 1.0; // u valuables are the only differential variables
-
-	/* Set which components are algebraic or differential */
+	for(int i=0; i < nCells*(k+1); i++) idVal[i] = 0.0;
+	for(int i=nCells*(k+1); i < 2*nCells*(k+1); i++) idVal[i] = 1.0;
+	for(int i=2*nCells*(k+1); i < 2*nCells*(k+1)+nCells+1; i++) idVal[i] = 0.0;
 	retval = IDASetId(IDA_mem, id);
 	if(ErrorChecker::check_retval(&retval, "IDASetId", 1)) return(1);
 
+	//Initialise IDA 
 	retval = IDAInit(IDA_mem, residual, t0, Y, dYdt); 
 	if(ErrorChecker::check_retval(&retval, "IDAInit", 1)) return(1);
 
+	//Set tolerances
 	retval = IDASStolerances(IDA_mem, rtol, atol);
 	if(ErrorChecker::check_retval(&retval, "IDASStolerances", 1)) return(1);
 
+	//--------------set up user-built objects------------------
+
+	//Use empty SunMatrix Object
 	SUNMatrix sunMat = SunMatrixNew();
 	LS = SunLinSolWrapper::SunLinSol(system, IDA_mem);
  
 	int err = IDASetLinearSolver(IDA_mem, LS, sunMat); 
 	IDASetJacFn(IDA_mem, EmptyJac);
-
-	VectorWrapper Vec( N_VGetArrayPointer( Y ), N_VGetLength( Y ) ); //?make sure this writes into the same memore and doesn't copy
-	std::cerr << Vec << std::endl << std::endl;
 	
+	//------------------------------Solve------------------------------
+
+	//Update initial solution to be within tolerance of the residual equation
 	IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
-	//IDASetMaxOrd(IDA_mem, 1);
 	
 	std::ofstream out( "u_t.plot" );
 	system.print(out, t0, nOut);
 
-	for (tout = t1, iout = 1; iout <= 500; iout++, tout += delta_t) 
+	for (tout = t1, iout = 1; iout <= totalSteps; iout++, tout += delta_t) 
 	{
-		std::cerr << tout << std::endl;
-		/*
-		system.solveNonIDA(Y, dYdt, delta_t);
-		*/
 		retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
 		if(ErrorChecker::check_retval(&retval, "IDASolve", 1))
 			return -1;
 			Eigen::VectorXd lam(nCells+1);
-		system.sundialsToDGVecConversion(Y, system.u, system.q, lam);
-		//std::cerr << Vec << std::endl << std::endl;
-		if(iout%100 == 0) system.print(out, tout, nOut);
+		system.updateCoeffs(Y, dYdt);
+		if(iout%stepsPerPrint == 0) system.print(out, tout, nOut);
 	}
 
 	delete data;
