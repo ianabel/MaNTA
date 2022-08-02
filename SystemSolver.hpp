@@ -31,12 +31,11 @@ public:
 	void clearCellwiseVecs();
 
 	// Takes n vector and parses it into the RHS of a Jacobian equation
-	void sundialsToDGVecConversion(N_Vector const& g, std::vector< Eigen::VectorXd >& g1g2_cellwise, Eigen::VectorXd& g3_global);
-	void sundialsToDGVecConversion(N_Vector const& Y, DGApprox& U, DGApprox& Q, Eigen::VectorXd& lam);
-	void sundialsToDGVecConversion(N_Vector& delY, std::vector< Eigen::VectorXd >& UQLamCellwise);
+	void sundialsToDGVecConversion(N_Vector const& g, std::vector< Eigen::VectorXd >& g1g2_cellwise);
+	void sundialsToDGVecConversion(N_Vector const& Y, DGApprox& U, DGApprox& Q);
 
 	// Returnable n_vector for sundials linear solver
-	void DGtoSundialsVecConversion(DGApprox delU, DGApprox delQ, Eigen::VectorXd delLambda, N_Vector& delY);
+	void DGtoSundialsVecConversion(DGApprox delU, DGApprox delQ, N_Vector& delY);
 
 	// Set the q and u coefficients at each time step
 	void updateCoeffs(N_Vector const& Y, N_Vector const& dYdt);

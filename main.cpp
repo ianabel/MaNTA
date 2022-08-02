@@ -102,7 +102,7 @@ int main()
 	std::function<double( double )> u_0 = [=]( double y ){ return ::exp( -b*( y - a )*( y - a ) ); };
 
 	//Set original vector lengths
-	Y = N_VNew_Serial(2*nCells*(k+1) + nCells + 1);
+	Y = N_VNew_Serial(2*nCells*(k+1));
 	if(ErrorChecker::check_retval((void *)Y, "N_VNew_Serial", 0)) return(1);
 	dYdt = N_VClone(Y);
 	if(ErrorChecker::check_retval((void *)dYdt, "N_VClone", 0)) return(1);
@@ -129,7 +129,6 @@ int main()
 	realtype* idVal = N_VGetArrayPointer(id);
 	for(int i=0; i < nCells*(k+1); i++) idVal[i] = 0.0;
 	for(int i=nCells*(k+1); i < 2*nCells*(k+1); i++) idVal[i] = 1.0;
-	for(int i=2*nCells*(k+1); i < 2*nCells*(k+1)+nCells+1; i++) idVal[i] = 0.0;
 	retval = IDASetId(IDA_mem, id);
 	if(ErrorChecker::check_retval(&retval, "IDASetId", 1)) return(1);
 

@@ -56,9 +56,9 @@ void SystemSolver::setInitialConditions( std::function< double ( double )> u_0 ,
 		dudt.coeffs[I] = Eigen::FullPivLU< Eigen::MatrixXd >(XMats[i]).solve( -B_cellwise[i]*q.coeffs[I] - D_cellwise[i]*u.coeffs[I] - E_cellwise[i]*lamCell + RF_cellwise[ i ].block( k + 1, 0, k + 1, 1 ) );
 	}
 	
-	DGtoSundialsVecConversion(q, u, Lambda, Y);
+	DGtoSundialsVecConversion(q, u, Y);
 	DGApprox zero{grid,k};
-	DGtoSundialsVecConversion(zero, dudt, Eigen::VectorXd::Zero(nCells+1), dYdt);
+	DGtoSundialsVecConversion(zero, dudt, dYdt);
 }
 
 void SystemSolver::initialiseMatrices()
@@ -270,15 +270,11 @@ void SystemSolver::clearCellwiseVecs()
 	H_cellwise.clear();
 }
 
-void SystemSolver::sundialsToDGVecConversion(N_Vector const& g, std::vector< Eigen::VectorXd >& g1g2_cell, Eigen::VectorXd& g3_globe)
+void SystemSolver::sundialsToDGVecConversion(N_Vector const& g, std::vector< Eigen::VectorXd >& g1g2_cell)
 {
-	//g is split into 3 parts, each part corresponding to rows of the glodabl matrix. g1g2 refers to the q and u rows. 
-	//Here data is parsed into eigen vectors of coefficients, 1 for each cell. g3 refers to the lambda row which will 
-	//be stored as a single eigen vector of lambdas at every boundary
 	g1g2_cell.clear();
-	g3_globe.resize(nCells + 1);
 
-	if( N_VGetLength(g) != 2*nCells*(k+1) + nCells + 1)
+	if( N_VGetLength(g) != 2*nCells*(k+1))
 		throw std::invalid_argument( "Sundials Vecotor does not match size \n" );
 
 	VectorWrapper gVec( N_VGetArrayPointer( g ), N_VGetLength( g ) ); 
@@ -293,23 +289,11 @@ void SystemSolver::sundialsToDGVecConversion(N_Vector const& g, std::vector< Eig
 		}
 		g1g2_cell.emplace_back(g1g2Coeffs);
 	}
-
-	//g3 Global vector for [C G H][Q U Gamma]^T = g3
-	int j = 0;
-	for(int i = 2*nCells*(k+1); i < 2*nCells*(k+1) + nCells + 1; i++)
-	{
-		g3_globe[j] = gVec[i];
-		j++;
-	}
 }
 
-void SystemSolver::sundialsToDGVecConversion(N_Vector const& Y, DGApprox& U, DGApprox& Q, Eigen::VectorXd& lam)
+void SystemSolver::sundialsToDGVecConversion(N_Vector const& Y, DGApprox& U, DGApprox& Q)
 {
-	//g is split into 3 parts, each part corresponding to rows of the glodabl matrix. g1g2 refers to the q and u rows. 
-	//Here data is parsed into eigen vectors of coefficients, 1 for each cell. g3 refers to the lambda row which will 
-	//be stored as a single eigen vector of lambdas at every boundary
-
-	if( N_VGetLength(Y) != 2*nCells*(k+1) + nCells + 1)
+	if( N_VGetLength(Y) != 2*nCells*(k+1))
 		throw std::invalid_argument( "Sundials Vecotor does not match size \n" );
 
 	VectorWrapper yVec( N_VGetArrayPointer( Y ), N_VGetLength( Y ) ); 
@@ -323,36 +307,11 @@ void SystemSolver::sundialsToDGVecConversion(N_Vector const& Y, DGApprox& U, DGA
 			U.coeffs[I][j] = yVec[nCells*(k+1) + i*(k+1) + j];
 		}
 	}
-	
-	int j = 0;
-	for(int i = 2*nCells*(k+1); i < 2*nCells*(k+1) + nCells + 1; i++)
-	{
-		lam[j] = yVec[i];
-		j++;
-	}
 }
 
-void SystemSolver::sundialsToDGVecConversion( N_Vector& Y, std::vector< Eigen::VectorXd >& QULamCellwise)
+void SystemSolver::DGtoSundialsVecConversion(DGApprox delQ, DGApprox delU, N_Vector& delY)
 {
-	QULamCellwise.clear();
-	std::vector< Eigen::VectorXd > QUCellwise;
-	Eigen::VectorXd LamGlobe;
-	sundialsToDGVecConversion(Y, QUCellwise, LamGlobe);
-
-	Eigen::VectorXd QULam(2*k+2 + 2);
-	for(int i=0; i<nCells; i++)
-	{
-		QULam.setZero();
-		QULam.block(0,0,2*k+2,1) = QUCellwise[i];
-		QULam[2*k+2] = LamGlobe[i];
-		QULam[2*k+3] = LamGlobe[i+1];
-		QULamCellwise.emplace_back(QULam);
-	}
-}
-
-void SystemSolver::DGtoSundialsVecConversion(DGApprox delQ, DGApprox delU, Eigen::VectorXd delLambda, N_Vector& delY)
-{
-	if (N_VGetLength(delY) != 2*nCells*(k+1) + nCells + 1)
+	if (N_VGetLength(delY) != 2*nCells*(k+1))
 		throw std::invalid_argument( "Sundials Vecotor does not match size \n" );
 
 	VectorWrapper delYVec( N_VGetArrayPointer( delY ), N_VGetLength( delY ) );
@@ -368,11 +327,6 @@ void SystemSolver::DGtoSundialsVecConversion(DGApprox delQ, DGApprox delU, Eigen
 			delYVec[i*(k+1)+j] = qCellCoeffs[j];
 			delYVec[nCells*(k+1) + i*(k+1)+j] = uCellCoeffs[j];
 		}
-	}
-
-	for(int i=0; i<nCells+1; i++)
-	{
-		delYVec[2*nCells*(k+1) + i] = delLambda[i];
 	}
 }
 
@@ -414,7 +368,6 @@ void SystemSolver::solveJacEq(N_Vector const& g, N_Vector& delY)
 	Eigen::VectorXd delLambda( nCells + 1 );
 	DGApprox delU(grid,k), delQ(grid,k);
 	std::vector< Eigen::VectorXd > g1g2_cellwise;
-	Eigen::VectorXd g3_global{};
 	K_global.setZero();
 
 	//assemble temp cellwise ABBD blocks
@@ -422,7 +375,7 @@ void SystemSolver::solveJacEq(N_Vector const& g, N_Vector& delY)
 	updateABBDForJacSolve(ABBDXSolvers, alpha);
 
 	// Assemble RHS g into cellwise form and solve for QU blocks
-	sundialsToDGVecConversion(g, g1g2_cellwise, g3_global);
+	sundialsToDGVecConversion(g, g1g2_cellwise);
 	std::vector< Eigen::VectorXd > QU_f( nCells );
 	std::vector< Eigen::MatrixXd > QU_0( nCells );
 	for ( unsigned int i = 0; i < nCells; i++ )
@@ -446,7 +399,7 @@ void SystemSolver::solveJacEq(N_Vector const& g, N_Vector& delY)
 
 	// Construct the RHS of K Lambda = F
 	Eigen::VectorXd F( nCells + 1 );
-	F = g3_global;
+	F.setZero();
 	for ( unsigned int i=0; i < nCells; i++ )
 		F.block<2,1>( i, 0 ) -= CG_cellwise[ i ] * QU_f[ i ];
 
@@ -463,14 +416,14 @@ void SystemSolver::solveJacEq(N_Vector const& g, N_Vector& delY)
 		delU.coeffs[ I ] = delQU.block( k + 1, 0, k + 1, 1 );
 	}
 
-	DGtoSundialsVecConversion(delQ, delU, delLambda, delY);
+	DGtoSundialsVecConversion(delQ, delU, delY);
 }
 
 void SystemSolver::solveNonIDA(N_Vector Y, N_Vector dYdt, double dt)
 {
 	std::vector< Eigen::VectorXd > QU_cellwise;
 	Eigen::VectorXd tempLam(nCells+1);
-	sundialsToDGVecConversion(Y, u, q, tempLam);
+	sundialsToDGVecConversion(Y, u, q);
 	K_global.setZero();
 
 	std::vector< Eigen::FullPivLU< Eigen::MatrixXd > > ABBDXSolvers{};
@@ -517,7 +470,7 @@ void SystemSolver::solveNonIDA(N_Vector Y, N_Vector dYdt, double dt)
 		u.coeffs[ I ] = QU.block( k + 1, 0, k + 1, 1 );
 	}
 
-	DGtoSundialsVecConversion(q, u, tempLam, Y);
+	DGtoSundialsVecConversion(q, u, Y);
 }
 
 int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data)
@@ -529,11 +482,10 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 	auto c_fn = system->getcfn();
 
 	DGApprox tempU(grid, k), tempQ(grid, k), tempdudt(grid, k), temp0(grid, k);
-	Eigen::VectorXd tempLam(nCells+1), tempZeroVec(nCells+1), res3(nCells+1);
 	DGApprox res1(grid, k), res2(grid, k);
 
-	system->sundialsToDGVecConversion(Y, tempU, tempQ, tempLam);
-	system->sundialsToDGVecConversion(dydt, tempdudt, temp0, tempZeroVec); 
+	system->sundialsToDGVecConversion(Y, tempU, tempQ);
+	system->sundialsToDGVecConversion(dydt, tempdudt, temp0); 
 
 	//Solve for Lambda with Lam = (H^T)^-1*[ -C*Q - G^T*U + L ] 
 	Eigen::VectorXd Lambda( nCells + 1 ), CqGuL_global(nCells+1);
@@ -564,9 +516,8 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 		// length = k+1
 		res2.coeffs[ I ] = system->B_cellwise[i]*tempQ.coeffs[I] + system->D_cellwise[i]*tempU.coeffs[I] + system->E_cellwise[i]*lamCell - system->RF_cellwise[ i ].block( k + 1, 0, k + 1, 1 ) + tempdudt.coeffs[I];;
 	} 
-	res3.setZero();	
 	
-	system->DGtoSundialsVecConversion(res1, res2, res3, resval);
+	system->DGtoSundialsVecConversion(res1, res2, resval);
 	return 0;
 }
 
