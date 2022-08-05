@@ -19,7 +19,7 @@ int main()
 {
 	//---------------------------Variable assiments-------------------------------
 	const sunindextype k = 3;		//Polynomial degree of each cell
-	const sunindextype nCells = 30;			//Total number of cells
+	const sunindextype nCells = 60;			//Total number of cells
 	SUNLinearSolver LS = NULL;				//linear solver memory structure
 	void *IDA_mem   = NULL;					//IDA memory structure
 	const double lBound = 0.0, uBound = 10;	//Spacial bounds
@@ -110,6 +110,8 @@ int main()
 	//Initialise Y and dYdt
 	system.setInitialConditions(u_0, Y, dYdt);
 
+	VectorWrapper yVec( N_VGetArrayPointer( Y ), N_VGetLength( Y ) ); 
+
 	// ----------------- Allocate and initialize all other sun-vectors. -------------
 
 	res = N_VClone(Y);
@@ -127,8 +129,14 @@ int main()
 	if(ErrorChecker::check_retval((void *)id, "N_VClone", 0))
 		return -1;
 	realtype* idVal = N_VGetArrayPointer(id);
-	for(int i=0; i < nCells*(k+1); i++) idVal[i] = 0.0;
-	for(int i=nCells*(k+1); i < 2*nCells*(k+1); i++) idVal[i] = 1.0;
+	for(int i=0; i < nCells; i++)
+	{
+		for(int j=0; j<k+1; j++)
+		{
+			idVal[i*2*(k+1)+k+1+j] = 1.0;//U vals
+			idVal[i*2*(k+1)+j] = 0.0;//Q vals
+		}
+	}
 	retval = IDASetId(IDA_mem, id);
 	if(ErrorChecker::check_retval(&retval, "IDASetId", 1)) return(1);
 
@@ -160,11 +168,12 @@ int main()
 	for (tout = t1, iout = 1; iout <= totalSteps; iout++, tout += delta_t) 
 	{
 		retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
-		if(ErrorChecker::check_retval(&retval, "IDASolve", 1))
+		if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
 			return -1;
-			Eigen::VectorXd lam(nCells+1);
-		system.updateCoeffs(Y, dYdt);
-		if(iout%stepsPerPrint == 0) system.print(out, tout, nOut);
+		if(iout%stepsPerPrint == 0)
+		{
+			system.print(out, tout, nOut);
+		}
 	}
 
 	delete data;

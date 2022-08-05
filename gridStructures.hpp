@@ -1,4 +1,6 @@
 #pragma once
+#include <sundials/sundials_linearsolver.h> /* Generic Liner Solver Interface */
+#include <sundials/sundials_types.h>        /* defs of realtype, sunindextype  */
 
 #include <map>
 #include <memory>
@@ -104,32 +106,31 @@ class DGApprox
 		DGApprox( Grid const& grid, unsigned int Order )
 		{
 			k = Order;
-			Eigen::VectorXd v( k + 1 );
-			v.setZero();
-			for ( auto const& I : grid.gridCells )
-				coeffs.emplace( I, v );
 		};
 
 		DGApprox( Grid const& grid, unsigned int Order, std::function<double( double )> const& F )
 		{
 			k = Order;
-			Eigen::VectorXd v( k + 1 );
-			for ( auto const& I : grid.gridCells )
+			std::vector<double> vec(k+1, 0.0);
+			Eigen::Map<Eigen::VectorXd> v(&vec[0], k+1);
 			{
-				v.setZero();
-				// Interpolate onto k legendre polynomials
-				for ( Eigen::Index i=0; i<= k; i++ )
+				for ( auto const& I : grid.gridCells )
 				{
-					v( i ) = CellProduct( I, F, Basis.phi( I, i ) );
+					v.setZero();
+					// Interpolate onto k legendre polynomials
+					for ( Eigen::Index i=0; i<= k; i++ )
+					{
+						v( i ) = CellProduct( I, F, Basis.phi( I, i ) );
+					}
+					coeffs.emplace_back( I, v);
 				}
-				coeffs.emplace( I, v );
 			}
 		};
 
 		DGApprox& operator=( std::function<double( double )> const & f )
 		{
 			Eigen::VectorXd v( k + 1 );
-			for ( auto const& pair : coeffs )
+			for ( auto pair : coeffs )
 			{
 				Interval const& I = pair.first;
 				v.setZero();
@@ -138,11 +139,11 @@ class DGApprox
 				{
 					v( i ) = CellProduct( I, f, Basis.phi( I, i ) );
 				}
-				coeffs[ I ] = v;
+				pair.second = v;
 			}
 			return *this;
 		}
-		
+	
 		double operator()( double x ) {
 			for ( auto const & I : coeffs )
 			{
@@ -214,15 +215,15 @@ class DGApprox
 		}
 
 		void zeroCoeffs() {
-			for ( auto [interval, vec] : coeffs )
+			for ( auto pair : coeffs )
 			{
-				for(int i = 0; i<vec.size(); i++)
-					vec[i] = 0.0;
+				for(int i = 0; i<pair.second.size(); i++)
+					pair.second[i] = 0.0;
 			}
 		}
 
 		unsigned int k;
-		std::map< Interval, Eigen::VectorXd > coeffs;
+		std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>> coeffs;
 		LegendreBasis Basis;
 	private:
 		boost::math::quadrature::gauss<double, 30> integrator;

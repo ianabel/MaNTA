@@ -14,7 +14,7 @@ using Matrix = Eigen::Matrix<realtype,Eigen::Dynamic,Eigen::Dynamic>;
 using MatrixWrapper = Eigen::Map<Matrix>;
 using Vector = Eigen::Matrix<realtype,Eigen::Dynamic,1>;
 using VectorWrapper = Eigen::Map<Vector>;
-typedef std::map<Interval, Eigen::VectorXd> Coeff_t;
+typedef std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>> Coeff_t;
 
 class SystemSolver
 {
@@ -23,7 +23,7 @@ public:
 	~SystemSolver() = default;
 
 	//Initialises u, q and lambda to satisfy residual equation at t=0
-	void setInitialConditions(std::function< double (double)> u_0, N_Vector Y , N_Vector dYdt);
+	void setInitialConditions(std::function< double (double)> u_0, N_Vector& Y , N_Vector& dYdt);
 
 	//Builds initial matrices
 	void initialiseMatrices();
@@ -37,6 +37,10 @@ public:
 	// Returnable n_vector for sundials linear solver
 	void DGtoSundialsVecConversion(DGApprox delU, DGApprox delQ, N_Vector& delY);
 
+	//Points coeefficients to sundials vector so no copying needs to occur
+	void mapDGtoSundials(DGApprox& q, DGApprox& u, N_Vector& Y);
+	void mapDGtoSundials(DGApprox& u, N_Vector& Y);
+
 	// Set the q and u coefficients at each time step
 	void updateCoeffs(N_Vector const& Y, N_Vector const& dYdt);
 
@@ -47,7 +51,7 @@ public:
 	void solveJacEq(N_Vector const& g, N_Vector& delY);
 
 	//Testing function, solving without IDA but using Sundials interface, Backward Euler used
-	void solveNonIDA(N_Vector Y, N_Vector dYdt, double dt);
+	void solveNonIDA(N_Vector& Y, N_Vector& dYdt, double dt);
 
 	void setAlpha(double const a) {alpha = a;}
 
