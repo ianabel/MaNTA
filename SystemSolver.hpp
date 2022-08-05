@@ -40,6 +40,7 @@ public:
 	//Points coeefficients to sundials vector so no copying needs to occur
 	void mapDGtoSundials(DGApprox& q, DGApprox& u, N_Vector& Y);
 	void mapDGtoSundials(DGApprox& u, N_Vector& Y);
+	void mapDGtoSundials(std::vector< Eigen::Map<Eigen::VectorXd> >& QU_cell, N_Vector const& Y);
 
 	// Set the q and u coefficients at each time step
 	void updateCoeffs(N_Vector const& Y, N_Vector const& dYdt);

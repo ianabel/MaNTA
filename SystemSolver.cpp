@@ -279,27 +279,33 @@ void SystemSolver::mapDGtoSundials(DGApprox& q, DGApprox& u, N_Vector& Y)
 
 	for(int i=0; i<nCells; i++)
 	{
-		VectorWrapper qVec( N_VGetArrayPointer( Y )+i*(2*k+2), k+1 ); 
-		VectorWrapper uVec( N_VGetArrayPointer( Y )+(i)*(2*k+2)+k+1, k+1 ); 
-
-		u.coeffs.emplace_back( grid.gridCells[ i ], uVec);
-		q.coeffs.emplace_back( grid.gridCells[ i ], qVec);
+		q.coeffs.emplace_back( grid.gridCells[ i ], VectorWrapper( N_VGetArrayPointer( Y )+i*(2*k+2), k+1 ));
+		u.coeffs.emplace_back( grid.gridCells[ i ], VectorWrapper( N_VGetArrayPointer( Y )+(i)*(2*k+2)+k+1, k+1 ));
 	}
 }
 
 void SystemSolver::mapDGtoSundials(DGApprox& u, N_Vector& Y)
 {
 	//Assumes you still have the qu stucture of the Y vector but only writes in u values and sets all other values to zero
-
 	if( N_VGetLength(Y) != 2*nCells*(k+1))
 		throw std::invalid_argument( "Sundials Vector does not match size \n" );
 
 	for(int i=0; i<nCells; i++)
 	{
 		VectorWrapper emptyVec( N_VGetArrayPointer( Y )+i*(2*k+2), k+1 ); 
-		VectorWrapper uVec( N_VGetArrayPointer( Y )+i*(2*k+2)+k+1, k+1 ); 
-		u.coeffs.emplace_back( grid.gridCells[ i ], uVec);
+		u.coeffs.emplace_back( grid.gridCells[ i ], VectorWrapper ( N_VGetArrayPointer( Y )+i*(2*k+2)+k+1, k+1 ));
 		emptyVec.setZero();
+	}
+}
+
+void SystemSolver::mapDGtoSundials(std::vector< Eigen::Map<Eigen::VectorXd> >& QU_cell, N_Vector const& Y)
+{
+	if( N_VGetLength(Y) != 2*nCells*(k+1))
+		throw std::invalid_argument( "Sundials Vector does not match size \n" );
+
+	for(int i=0; i<nCells; i++)
+	{
+		QU_cell.emplace_back( VectorWrapper( N_VGetArrayPointer( Y )+i*(2*k+2), 2*k+2 ) );
 	}
 }
 
@@ -362,24 +368,6 @@ void SystemSolver::DGtoSundialsVecConversion(DGApprox delQ, DGApprox delU, N_Vec
 	}
 }
 
-void SystemSolver::updateCoeffs(N_Vector const& Y, N_Vector const& dYdt)
-{
-	VectorWrapper yVec( N_VGetArrayPointer( Y ), N_VGetLength( Y ) );
-	VectorWrapper dydtVec( N_VGetArrayPointer( dYdt ), N_VGetLength( dYdt ) );
-
-
-	for(int i=0; i<nCells; i++)
-	{
-		Interval const& I( grid.gridCells[ i ] );
-		for(int j=0; j<k+1; j++)
-		{
-			q.coeffs[ i ].second[j] = yVec[i*(k+1) + j];
-			u.coeffs[ i ].second[j] = yVec[nCells*(k+1) + i*(k+1) + j];
-			dudt.coeffs[ i ].second[j] = dydtVec[nCells*(k+1) + i*(k+1) + j];
-		}
-	}
-}
-
 void SystemSolver::updateABBDForJacSolve(std::vector< Eigen::FullPivLU< Eigen::MatrixXd > >& ABBDXsolvers, double const alpha)
 {
 	std::function<double( double )> alphaF = [ = ]( double x ){ return alpha;};
@@ -399,7 +387,7 @@ void SystemSolver::solveJacEq(N_Vector const& g, N_Vector& delY)
 {
 	Eigen::VectorXd delLambda( nCells + 1 );
 	DGApprox delU(grid,k), delQ(grid,k);
-	std::vector< Eigen::VectorXd > g1g2_cellwise;
+	std::vector< Eigen::Map<Eigen::VectorXd> > g1g2_cellwise;
 	K_global.setZero();
 
 	mapDGtoSundials(delQ, delU, delY);
@@ -409,7 +397,7 @@ void SystemSolver::solveJacEq(N_Vector const& g, N_Vector& delY)
 	updateABBDForJacSolve(ABBDXSolvers, alpha);
 
 	// Assemble RHS g into cellwise form and solve for QU blocks
-	sundialsToDGVecConversion(g, g1g2_cellwise);
+	mapDGtoSundials(g1g2_cellwise, g);
 	std::vector< Eigen::VectorXd > QU_f( nCells );
 	std::vector< Eigen::MatrixXd > QU_0( nCells );
 	for ( unsigned int i = 0; i < nCells; i++ )
