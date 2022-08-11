@@ -8,87 +8,43 @@
 #include <fstream>
 
 #include "gridStructures.hpp"
+#include "Variable.hpp"
 
-typedef std::function<double( double )> Fn;
-using Matrix = Eigen::Matrix<realtype,Eigen::Dynamic,Eigen::Dynamic>;
-using MatrixWrapper = Eigen::Map<Matrix>;
-using Vector = Eigen::Matrix<realtype,Eigen::Dynamic,1>;
-using VectorWrapper = Eigen::Map<Vector>;
-typedef std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>> Coeff_t;
 
 class SystemSolver
 {
+/*This is essentially the encapsulation class of all the different variable. 
+Any method here that is replicated in the variable class just calls the variable method for all variables in the system
+*/
 public:
-	SystemSolver(Grid const& Grid, unsigned int polyNum, unsigned int N_cells, double Dt, Fn const& rhs, Fn const& Tau, Fn const& c, Fn const& kappa, BoundaryConditions const& boundary );
+	SystemSolver(std::shared_ptr<Grid> Grid, unsigned int polyNum, unsigned int N_cells, unsigned int N_Vars, double Dt, Fn const& rhs, 
+					Fn const& Tau, Fn const& c, BoundaryConditions const& boundary );
 	~SystemSolver() = default;
 
-	//Initialises u, q and lambda to satisfy residual equation at t=0
-	void setInitialConditions(std::function< double (double)> u_0, N_Vector& Y , N_Vector& dYdt);
-
-	//Builds initial matrices
+	//Functions that just do the stated thing but for every variable
+	void initialiseVariables(std::function< double (double)> u_0, N_Vector Y, N_Vector dYdt);
 	void initialiseMatrices();
-	
-	void clearCellwiseVecs();
-
-	// Takes n vector and parses it into the RHS of a Jacobian equation
-	void sundialsToDGVecConversion(N_Vector const& g, std::vector< Eigen::VectorXd >& g1g2_cellwise);
-	void sundialsToDGVecConversion(N_Vector const& Y, DGApprox& U, DGApprox& Q);
-
-	// Returnable n_vector for sundials linear solver
-	void DGtoSundialsVecConversion(DGApprox delU, DGApprox delQ, N_Vector& delY);
-
-	//Points coeefficients to sundials vector so no copying needs to occur
-	void mapDGtoSundials(DGApprox& q, DGApprox& u, N_Vector& Y);
-	void mapDGtoSundials(DGApprox& u, N_Vector& Y);
-	void mapDGtoSundials(std::vector< Eigen::Map<Eigen::VectorXd> >& QU_cell, N_Vector const& Y);
-
-	// Set the q and u coefficients at each time step
-	void updateCoeffs(N_Vector const& Y, N_Vector const& dYdt);
-
-	//Creates the ABBDX cellwise matrices used at each Jacobian iteration
-	void updateABBDForJacSolve(std::vector< Eigen::FullPivLU< Eigen::MatrixXd > >& tempABBDBlocks, double const alpha);
+	void setAlpha(double const a);
 
 	//Solves the Jy = -G equation
-	void solveJacEq(N_Vector const& g, N_Vector& delY);
+	void solveJacEq(N_Vector const& G, N_Vector& delY);
 
-	//Testing function, solving without IDA but using Sundials interface, Backward Euler used
-	void solveNonIDA(N_Vector& Y, N_Vector& dYdt, double dt);
+	//Initialises kappa as identity
+	void initialiseKappa(double kappaConst);
 
-	void setAlpha(double const a) {alpha = a;}
+	void print(double t, int nOut);
 
-	//print current output for u and q to output file
-	void print( std::ostream& out, double t, int nOut  );
+	int getPolyNum() const {return k;}
+	int getCellCount() const {return nCells;}
+	int getVariableCount() const {return nVars;}
 
-	//Find the profiles from the coefficients
-	double EvalCoeffs( LegendreBasis & B, Coeff_t cs, double x );
-
-	Fn getcfn() {return c_fn;}
-
-	Grid grid;
-	unsigned int const k; 		//polynomial degree per cell
-	unsigned int const nCells;	//Total cell count
-	
-	std::vector< Eigen::MatrixXd > XMats;
-	std::vector< Eigen::MatrixXd > ABBDBlocks;
-	std::vector< Eigen::MatrixXd > CEBlocks;
-	Eigen::MatrixXd K_global{};
-	Eigen::VectorXd L_global{};
-	Eigen::FullPivLU< Eigen::MatrixXd > H_global{};
-	std::vector< Eigen::MatrixXd > CG_cellwise, RF_cellwise;
-	std::vector< Eigen::MatrixXd > A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise; //?Point the dublicated matrices to the same place?
-
-	DGApprox u,q, dudt;
+	std::map<int, Variable> variables;
+	std::vector<std::vector<Fn>> Kappa; //Length nVars x nVars. stored as a vector of row vectors
 private:
-
 	double dt;
 	double t;
-	bool initialised = false;
-	double alpha = 1.0;
-
-	Fn RHS; //Forcing function
-	Fn c_fn,kappa_fn, tau; // convection velocity and diffusivity
-	BoundaryConditions BCs;
-	//std::map< double, std::pair< Coeff_t, Coeff_t > > u_of_t;
+	bool initialised = false, firstPrint = true;
+	int nVars, nCells, k;
 };
 
 struct UserData {

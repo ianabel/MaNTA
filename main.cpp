@@ -7,6 +7,7 @@
 #include <fstream>
 
 #include "SystemSolver.hpp"
+#include "Variable.hpp"
 #include "gridStructures.hpp"
 #include "SunLinSolWrapper.hpp"
 #include "SunMatrixWrapper.hpp"
@@ -20,6 +21,7 @@ int main()
 	//---------------------------Variable assiments-------------------------------
 	const sunindextype k = 3;		//Polynomial degree of each cell
 	const sunindextype nCells = 60;			//Total number of cells
+	const sunindextype nVariables = 2;			//Total number of cells
 	SUNLinearSolver LS = NULL;				//linear solver memory structure
 	void *IDA_mem   = NULL;					//IDA memory structure
 	const double lBound = 0.0, uBound = 10;	//Spacial bounds
@@ -79,8 +81,8 @@ int main()
 	DirichletBCs.g_N = g_N;
 
 
-	const Grid grid(lBound, uBound, nCells);
-	SystemSolver system(grid, k, nCells, delta_t, f, tau, c, kappa, DirichletBCs);
+	std::shared_ptr<Grid> grid = std::make_shared<Grid>(lBound, uBound, nCells);
+	SystemSolver system(grid, k, nCells, nVariables, delta_t, f, tau, c, DirichletBCs);
 
 	IDA_mem = IDACreate();
 	if(ErrorChecker::check_retval((void *)IDA_mem, "IDACreate", 0)) return(1);
@@ -96,21 +98,23 @@ int main()
 
 	//-----------------------------Initial conditions-------------------------------
 
+	system.initialiseKappa(kappa_const);
 	system.initialiseMatrices();
 	double a = 5.0;
 	double b = 4.0; 
 	std::function<double( double )> u_0 = [=]( double y ){ return ::exp( -b*( y - a )*( y - a ) ); };
 
 	//Set original vector lengths
-	Y = N_VNew_Serial(2*nCells*(k+1));
+	Y = N_VNew_Serial(nVariables*2*nCells*(k+1));
 	if(ErrorChecker::check_retval((void *)Y, "N_VNew_Serial", 0)) return(1);
 	dYdt = N_VClone(Y);
 	if(ErrorChecker::check_retval((void *)dYdt, "N_VClone", 0)) return(1);
 
 	//Initialise Y and dYdt
-	system.setInitialConditions(u_0, Y, dYdt);
+	system.initialiseVariables(u_0, Y, dYdt);
 
 	VectorWrapper yVec( N_VGetArrayPointer( Y ), N_VGetLength( Y ) ); 
+	//std::cerr << yVec << std::endl << std::endl;
 
 	// ----------------- Allocate and initialize all other sun-vectors. -------------
 
@@ -129,7 +133,7 @@ int main()
 	if(ErrorChecker::check_retval((void *)id, "N_VClone", 0))
 		return -1;
 	realtype* idVal = N_VGetArrayPointer(id);
-	for(int i=0; i < nCells; i++)
+	for(int i=0; i < nVariables * nCells; i++)
 	{
 		for(int j=0; j<k+1; j++)
 		{
@@ -162,9 +166,7 @@ int main()
 	//Update initial solution to be within tolerance of the residual equation
 	IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
 	
-	std::ofstream out( "u_t.plot" );
-	system.print(out, t0, nOut);
-
+	system.print(t0, nOut);
 	for (tout = t1, iout = 1; iout <= totalSteps; iout++, tout += delta_t) 
 	{
 		retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
@@ -172,7 +174,8 @@ int main()
 			return -1;
 		if(iout%stepsPerPrint == 0)
 		{
-			system.print(out, tout, nOut);
+			system.print(tout, nOut);
+			//std::cerr << tout << std::endl << yVec << std::endl << std::endl; 
 		}
 	}
 
