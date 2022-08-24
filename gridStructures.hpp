@@ -103,18 +103,18 @@ class DGApprox
 	public:
 		typedef std::vector<Interval> Mesh;
 		~DGApprox() {};
-		DGApprox( std::shared_ptr<Grid> grid, unsigned int Order )
+		DGApprox( Grid const& grid, unsigned int Order )
 		{
 			k = Order;
 		};
 
-		DGApprox( std::shared_ptr<Grid> grid, unsigned int Order, std::function<double( double )> const& F )
+		DGApprox( Grid const& grid, unsigned int Order, std::function<double( double )> const& F )
 		{
 			k = Order;
 			std::vector<double> vec(k+1, 0.0);
 			Eigen::Map<Eigen::VectorXd> v(&vec[0], k+1);
 			{
-				for ( auto const& I : grid->gridCells )
+				for ( auto const& I : grid.gridCells )
 				{
 					v.setZero();
 					// Interpolate onto k legendre polynomials
@@ -230,7 +230,8 @@ class DGApprox
 
 };
 
-struct BoundaryConditions {
+class BoundaryConditions {
+public:
 	double LowerBound;
 	double UpperBound;
 	bool isLBoundDirichlet;

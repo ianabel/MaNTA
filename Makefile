@@ -1,7 +1,9 @@
 
-SOURCES = main.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp Variable.cpp
-HEADERS = gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp SystemSolver.hpp ErrorChecker.hpp Variable.hpp
+SOURCES = main.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp  Solver.cpp ErrorTester.cpp 
+ERRSOURCES = TestMain.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp  Solver.cpp ErrorTester.cpp 
+HEADERS = gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp SystemSolver.hpp ErrorChecker.hpp ErrorTester.hpp 
 OBJECTS = $(patsubst %.cpp,%.o,$(SOURCES))
+ERROBJECTS = $(patsubst %.cpp,%.o,$(ERRSOURCES))
 
 %.o: %.cpp Makefile $(HEADERS)
 	$(CXX) -c $(CXXFLAGS) -g -O0 -o $@ $<
@@ -21,8 +23,11 @@ LINK_FLAGS=$(SUN_LINK_FLAGS) $(EIG_LINK_FLAGS)
 solver: $(OBJECTS) $(HEADERS) Makefile
 	$(CXX) $(CXXFLAGS) -g -o solver $(OBJECTS) $(LINK_FLAGS)
 
+ErrorAnalysis: $(ERROBJECTS) $(HEADERS) Makefile
+	$(CXX) $(CXXFLAGS) -g -o errortest $(ERROBJECTS) $(LINK_FLAGS)
+
 clean: 
-	rm -f solver $(OBJECTS)
+	rm -f solver $(OBJECTS) $(ERROBJECTS)
 
 IDAexample: 
 	$(CXX) $(CXXFLAGS) -g -o idaex resources/IDA_example.c $(LINK_FLAGS)
