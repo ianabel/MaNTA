@@ -14,12 +14,12 @@ using Matrix = Eigen::Matrix<realtype,Eigen::Dynamic,Eigen::Dynamic>;
 using MatrixWrapper = Eigen::Map<Matrix>;
 using Vector = Eigen::Matrix<realtype,Eigen::Dynamic,1>;
 using VectorWrapper = Eigen::Map<Vector>;
-typedef std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>> Coeff_t;
+typedef std::vector<std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>>> Coeff_t;
 
 class SystemSolver
 {
 public:
-	SystemSolver(Grid const& Grid, unsigned int polyNum, unsigned int N_cells, double Dt, Fn const& rhs, Fn const& Tau, Fn const& c, Fn const& kappa);
+	SystemSolver(Grid const& Grid, unsigned int polyNum, unsigned int N_cells, unsigned int N_Variables, double Dt, Fn const& rhs, Fn const& Tau, Fn const& c, Eigen::MatrixXd kappaMat);
 	~SystemSolver() = default;
 
 	//Initialises u, q and lambda to satisfy residual equation at t=0
@@ -30,17 +30,10 @@ public:
 	
 	void clearCellwiseVecs();
 
-	// Takes n vector and parses it into the RHS of a Jacobian equation
-	void sundialsToDGVecConversion(N_Vector const& g, std::vector< Eigen::VectorXd >& g1g2_cellwise);
-	void sundialsToDGVecConversion(N_Vector const& Y, DGApprox& U, DGApprox& Q);
-
-	// Returnable n_vector for sundials linear solver
-	void DGtoSundialsVecConversion(DGApprox delU, DGApprox delQ, N_Vector& delY);
-
 	//Points coeefficients to sundials vector so no copying needs to occur
 	void mapDGtoSundials(DGApprox& q, DGApprox& u, realtype* Y);
 	void mapDGtoSundials(DGApprox& u, realtype* Y);
-	void mapDGtoSundials(std::vector< Eigen::Map<Eigen::VectorXd> >& QU_cell, realtype* const& Y);
+	void mapDGtoSundials(std::vector< Eigen::VectorXd >& QU_cell, realtype* const& Y);
 
 	// Set the q and u coefficients at each time step
 	void updateCoeffs(N_Vector const& Y, N_Vector const& dYdt);
@@ -52,22 +45,27 @@ public:
 	void solveJacEq(N_Vector const& g, N_Vector& delY);
 
 	//Testing function, solving without IDA but using Sundials interface, Backward Euler used
-	void solveNonIDA(N_Vector& Y, N_Vector& dYdt, double dt);
+	//No longer works, and no point maintaining consistently
+	//void solveNonIDA(N_Vector& Y, N_Vector& dYdt, double dt);
 
 	void setAlpha(double const a) {alpha = a;}
 
 	//print current output for u and q to output file
-	void print( std::ostream& out, double t, int nOut  );
+	void print( std::ostream& out, double t, int nOut, int var );
 
 	//Find the profiles from the coefficients
-	double EvalCoeffs( LegendreBasis & B, Coeff_t cs, double x );
+	double EvalCoeffs( LegendreBasis & B, Coeff_t cs, double x, int var );
 
-	Fn getcfn() {return c_fn;}
+	Fn getcfn() const {return c_fn;}
+	double getdt() const {return dt;}
 
 	void setBoundaryConditions(BoundaryConditions* BC) {BCs.reset(BC);}
+	void setKappaInv(Eigen::MatrixXd kappa);
+
 	Grid grid;
 	unsigned int const k; 		//polynomial degree per cell
 	unsigned int const nCells;	//Total cell count
+	int nVar;					//Total number of variables
 	
 	std::vector< Eigen::MatrixXd > XMats;
 	std::vector< Eigen::MatrixXd > ABBDBlocks;
@@ -89,7 +87,8 @@ private:
 
 	Fn RHS; //Forcing function
 	Fn c_fn,kappa_fn, tau; // convection velocity and diffusivity
-	//std::map< double, std::pair< Coeff_t, Coeff_t > > u_of_t;
+
+	Eigen::MatrixXd kappaInv;
 };
 
 struct UserData {

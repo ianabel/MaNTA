@@ -108,44 +108,53 @@ class DGApprox
 			k = Order;
 		};
 
-		DGApprox( Grid const& grid, unsigned int Order, std::function<double( double )> const& F )
+		DGApprox( Grid const& grid, unsigned int Order, unsigned int nVariables, std::function<double( double )> const& F )
 		{
 			k = Order;
-			std::vector<double> vec(k+1, 0.0);
-			Eigen::Map<Eigen::VectorXd> v(&vec[0], k+1);
+			for(int var=0; var<nVariables; var++)
 			{
-				for ( auto const& I : grid.gridCells )
+				std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>> varCoeffs;
+				std::vector<double> vec(k+1, 0.0);
+				Eigen::Map<Eigen::VectorXd> v(&vec[0], k+1);
 				{
-					v.setZero();
-					// Interpolate onto k legendre polynomials
-					for ( Eigen::Index i=0; i<= k; i++ )
+					for ( auto const& I : grid.gridCells )
 					{
-						v( i ) = CellProduct( I, F, Basis.phi( I, i ) );
+						v.setZero();
+						// Interpolate onto k legendre polynomials
+						for ( Eigen::Index i=0; i<= k; i++ )
+						{
+							v( i ) = CellProduct( I, F, Basis.phi( I, i ) );
+						}
+						varCoeffs.emplace_back( I, v);
 					}
-					coeffs.emplace_back( I, v);
 				}
+				coeffs.emplace_back(varCoeffs);
 			}
 		};
 
 		DGApprox& operator=( std::function<double( double )> const & f )
 		{
 			Eigen::VectorXd v( k + 1 );
-			for ( auto pair : coeffs )
+			for(int var=0; var<coeffs.size(); var++)
 			{
-				Interval const& I = pair.first;
-				v.setZero();
-				// Interpolate onto k legendre polynomials
-				for ( Eigen::Index i=0; i<= k; i++ )
+				for ( auto pair : coeffs[var] )
 				{
-					v( i ) = CellProduct( I, f, Basis.phi( I, i ) );
+					Interval const& I = pair.first;
+					v.setZero();
+					// Interpolate onto k legendre polynomials
+					for ( Eigen::Index i=0; i<= k; i++ )
+					{
+						v( i ) = CellProduct( I, f, Basis.phi( I, i ) );
+					}
+					pair.second = v;
 				}
-				pair.second = v;
 			}
 			return *this;
 		}
 	
-		double operator()( double x ) {
-			for ( auto const & I : coeffs )
+		double operator()( double x, int var ) {
+			if(var>coeffs.size()) std::logic_error( "Out of bounds" );
+			for ( auto const & I : coeffs[var] )
 			{
 				if (  I.first.contains( x ) )
 					return Basis.Evaluate( I.first, I.second, x );
@@ -215,15 +224,30 @@ class DGApprox
 		}
 
 		void zeroCoeffs() {
-			for ( auto pair : coeffs )
+			for(int var=0; var<coeffs.size(); var++)
 			{
-				for(int i = 0; i<pair.second.size(); i++)
-					pair.second[i] = 0.0;
+				for ( auto pair : coeffs[var] )
+				{
+					for(int i = 0; i<pair.second.size(); i++)
+						pair.second[i] = 0.0;
+				}
 			}
 		}
 
+		// To be only used as an R value. Do not write to this vector as it produces a copy of the values
+		// Also avoid using it if possible as copying is slow
+		Eigen::VectorXd multiVarCoeffs( int i )
+		{
+			Eigen::VectorXd coeffsLong(coeffs.size()*(k+1));
+			for(int var = 0; var<coeffs.size(); var++)
+			{
+				coeffsLong.block(var*(k+1),0,k+1,1) = coeffs[var][i].second;
+			}
+			return coeffsLong;
+		}
+
 		unsigned int k;
-		std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>> coeffs;
+		std::vector< std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>>> coeffs; //[var][interval]
 		LegendreBasis Basis;
 	private:
 		boost::math::quadrature::gauss<double, 30> integrator;

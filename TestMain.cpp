@@ -17,8 +17,8 @@ int main()
 	const double lBound = 0.0, uBound = 10;	//Spacial bounds
 	const double L = uBound - lBound;
 	int nOut = 20;
-	double tFinal = 0.1, delta_t = 0.001;
-	realtype rtol = 1.0e-5, atol = 1.0e-5;
+	double tFinal = 0.1, delta_t = 0.01;
+	realtype rtol = 1.0e-10, atol = 1.0e-10;
 
 	const double c_const = 0.0;
 	const double kappa_const = 1.0;

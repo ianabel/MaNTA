@@ -15,7 +15,7 @@
 int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data);
 int EmptyJac(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3);
 
-void runSolver( SystemSolver& system, const sunindextype k, const sunindextype nCells, int nOut, double tFinal, realtype rtol, realtype atol, Fn u_0, double lBound, double uBound, bool printToFile = true)
+void runSolver( SystemSolver& system, const sunindextype k, const sunindextype nCells, const sunindextype nVar, int nOut, double tFinal, realtype rtol, realtype atol, Fn u_0, double lBound, double uBound, bool printToFile = true)
 {
 	//---------------------------Variable assiments-------------------------------
 	SUNLinearSolver LS = NULL;				//linear solver memory structure
@@ -27,7 +27,7 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 	N_Vector constraints = NULL;	//vector for storing constraints
 	N_Vector id = NULL;				//vector for storing id (which elements are algebraic or differentiable)
 	N_Vector res = NULL;			//vector for storing residual
-	const double delta_t = 0.001;
+	double delta_t = system.getdt();
 	realtype t0 = 0.0, t1 = delta_t, deltatPrint = 0.1, tout, tret;; 
 	double totalSteps = tFinal/delta_t;
 	int stepsPerPrint = floor(totalSteps*(deltatPrint/tFinal));
@@ -84,7 +84,7 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 	system.initialiseMatrices();
 
 	//Set original vector lengths
-	Y = N_VNew_Serial(2*nCells*(k+1));
+	Y = N_VNew_Serial(nVar*2*nCells*(k+1));
 	if(ErrorChecker::check_retval((void *)Y, "N_VNew_Serial", 0))
 		throw std::runtime_error("Sundials Initialization Error");
 	
@@ -114,12 +114,15 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 	if(ErrorChecker::check_retval((void *)id, "N_VClone", 0))
 		std::runtime_error("Sundials initialization Error, run in debug to find");
 	realtype* idVal = N_VGetArrayPointer(id);
-	for(int i=0; i < nCells; i++)
+	for(int var = 0; var < nVar; var++)
 	{
-		for(int j=0; j<k+1; j++)
+	for(int i=0; i < nCells; i++)
 		{
-			idVal[i*2*(k+1)+k+1+j] = 1.0;//U vals
-			idVal[i*2*(k+1)+j] = 0.0;//Q vals
+			for(int j=0; j<k+1; j++)
+			{
+				idVal[var*nCells*2*(k+1) + i*2*(k+1)+j] = 0.0;//Q vals
+				idVal[var*nCells*2*(k+1) + i*2*(k+1)+k+1+j] = 1.0;//U vals
+			}
 		}
 	}
 	retval = IDASetId(IDA_mem, id);
@@ -149,19 +152,21 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 
 	//Update initial solution to be within tolerance of the residual equation
 	IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
+
 	
 	std::ofstream out( "u_t.plot" );
-	if(printToFile) system.print(out, t0, nOut);
+	if(printToFile) system.print(out, t0, nOut, 2);
 
 	for (tout = t1, iout = 1; iout <= totalSteps; iout++, tout += delta_t) 
 	{
+		std::cout << tout << std::endl;
 		retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
 		if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
 			throw std::runtime_error("IDASolve could not complete");
 
 		if( printToFile && iout%stepsPerPrint == 0)
 		{
-			system.print(out, tout, nOut);
+			system.print(out, tout, nOut, 2);
 		}
 	}
 
@@ -176,12 +181,3 @@ int EmptyJac(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SU
 	return 0;
 }
 
-double EvalCoeffs( LegendreBasis & B, Coeff_t cs, double x )
-{
-	for ( auto const & pair : cs )
-	{
-		if ( pair.first.contains( x ) )
-			return B.Evaluate( pair.first, pair.second, x );
-	}
-	return std::nan( "" );
-}
