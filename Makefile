@@ -8,8 +8,8 @@ ERROBJECTS = $(patsubst %.cpp,%.o,$(ERRSOURCES))
 %.o: %.cpp Makefile $(HEADERS)
 	$(CXX) -c $(CXXFLAGS) -g -O0 -o $@ $<
 
-SUNDIALS_INC=/home/mylo_linux/MCTrans-original/Sundials_practice/sundials/include
-SUNDIALS_LIB=/home/mylo_linux/MCTrans-original/Sundials_practice/sundials/lib
+SUNDIALS_INC=/home/mylo_linux/MCTrans-original/MCTrans/sundials/include
+SUNDIALS_LIB=/home/mylo_linux/MCTrans-original/MCTrans/sundials/lib
 
 SUNFLAGS=-I$(SUNDIALS_INC) -L$(SUNDIALS_LIB) -Wl,-rpath=$(SUNDIALS_LIB) 
 SUN_LINK_FLAGS = -lsundials_ida -lsundials_nvecserial 

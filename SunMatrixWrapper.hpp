@@ -3,10 +3,10 @@
 #include <sundials/sundials_matrix.h> /* Generic Liner Solver Interface */
 #include <sundials/sundials_types.h>        /* defs of realtype, sunindextype  */
 
-//this sun matrix template is purposely empty. It provides nothing to the linear solver.
+//this sun matrix template is empty by design. It provides nothing to the linear solver.
 //All matrix data is stored within the coefficients of the DGApprox objects
 //This is provided to the LS so that sundials doesn't assume a matrixless solver which would require an iterative solver.
-//We can solve the system exactly so not iteration is required.
+//We solve the jacobian equation of the system exactly so no iteration is required to generate an approximate Jacobian.
 class SunMatrixWrapper
 {
 public:
@@ -38,9 +38,9 @@ struct _generic_SUNMatrix_Ops MatOps {
 	.space = nullptr,
 };
 
-SUNMatrix SunMatrixNew()
+SUNMatrix SunMatrixNew(SUNContext ctx)
 {
-	SUNMatrix mat = SUNMatNewEmpty();
+	SUNMatrix mat = SUNMatNewEmpty(ctx);
 	mat->content = new SunMatrixWrapper();
 	mat->ops = &MatOps;
 	return mat;

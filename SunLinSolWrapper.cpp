@@ -72,9 +72,9 @@ struct _generic_SUNLinearSolver_Ops LSOps =
 	.free = SunLinSolWrapper::LSfree,
 };
 
-SUNLinearSolver SunLinSolWrapper::SunLinSol(SystemSolver& solver, void *mem )
+SUNLinearSolver SunLinSolWrapper::SunLinSol(SystemSolver& solver, void *mem, SUNContext ctx )
 {
-	SUNLinearSolver LS = SUNLinSolNewEmpty();
+	SUNLinearSolver LS = SUNLinSolNewEmpty(ctx);
 	LS->content = new SunLinSolWrapper(solver, mem);
 	LS->ops = &LSOps;
 	return LS;

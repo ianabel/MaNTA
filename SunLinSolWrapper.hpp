@@ -22,7 +22,7 @@ public:
 	static int LSsetup(SUNLinearSolver LS, SUNMatrix M );
 	static int LSsolve(SUNLinearSolver LS, SUNMatrix M, N_Vector x, N_Vector b, realtype);
 	static int LSfree(SUNLinearSolver LS);
-	static SUNLinearSolver SunLinSol(SystemSolver& solver, void *mem );
+	static SUNLinearSolver SunLinSol(SystemSolver& solver, void *mem, SUNContext ctx );
 
 private:
 	SystemSolver solver;

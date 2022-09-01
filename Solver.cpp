@@ -64,7 +64,10 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 	DirichletBCs->g_N = g_N;
 	system.setBoundaryConditions(DirichletBCs.get());
 
-	IDA_mem = IDACreate();
+	SUNContext ctx;
+    retval = SUNContext_Create(nullptr, &ctx);
+
+	IDA_mem = IDACreate(ctx);
 	if(ErrorChecker::check_retval((void *)IDA_mem, "IDACreate", 0)) 
 		throw std::runtime_error("Sundials Initialization Error");
 
@@ -84,7 +87,7 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 	system.initialiseMatrices();
 
 	//Set original vector lengths
-	Y = N_VNew_Serial(nVar*2*nCells*(k+1));
+	Y = N_VNew_Serial(nVar*2*nCells*(k+1), ctx);
 	if(ErrorChecker::check_retval((void *)Y, "N_VNew_Serial", 0))
 		throw std::runtime_error("Sundials Initialization Error");
 	
@@ -142,8 +145,8 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 	//--------------set up user-built objects------------------
 
 	//Use empty SunMatrix Object
-	SUNMatrix sunMat = SunMatrixNew();
-	LS = SunLinSolWrapper::SunLinSol(system, IDA_mem);
+	SUNMatrix sunMat = SunMatrixNew(ctx);
+	LS = SunLinSolWrapper::SunLinSol(system, IDA_mem, ctx);
  
 	int err = IDASetLinearSolver(IDA_mem, LS, sunMat); 
 	IDASetJacFn(IDA_mem, EmptyJac);
