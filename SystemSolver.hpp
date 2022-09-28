@@ -8,22 +8,16 @@
 #include <fstream>
 
 #include "gridStructures.hpp"
-
-typedef std::function<double( double )> Fn;
-using Matrix = Eigen::Matrix<realtype,Eigen::Dynamic,Eigen::Dynamic>;
-using MatrixWrapper = Eigen::Map<Matrix>;
-using Vector = Eigen::Matrix<realtype,Eigen::Dynamic,1>;
-using VectorWrapper = Eigen::Map<Vector>;
-typedef std::vector<std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>>> Coeff_t;
+#include "DiffusionObj.hpp"
 
 class SystemSolver
 {
 public:
-	SystemSolver(Grid const& Grid, unsigned int polyNum, unsigned int N_cells, unsigned int N_Variables, double Dt, Fn const& rhs, Fn const& Tau, Fn const& c, Eigen::MatrixXd kappaMat);
+	SystemSolver(Grid const& Grid, unsigned int polyNum, unsigned int N_cells, unsigned int N_Variables, double Dt, Fn const& rhs, Fn const& Tau, Fn const& c);
 	~SystemSolver() = default;
 
 	//Initialises u, q and lambda to satisfy residual equation at t=0
-	void setInitialConditions(std::function< double (double)> u_0, N_Vector& Y , N_Vector& dYdt);
+	void setInitialConditions(std::function< double (double)> u_0, std::function< double ( double )> gradu_0, std::function< double ( double )> sigma_0, N_Vector& Y, N_Vector& dYdt );
 
 	//Builds initial matrices
 	void initialiseMatrices();
@@ -31,15 +25,16 @@ public:
 	void clearCellwiseVecs();
 
 	//Points coeefficients to sundials vector so no copying needs to occur
-	void mapDGtoSundials(DGApprox& q, DGApprox& u, realtype* Y);
+	void mapDGtoSundials(DGApprox& sigma, DGApprox& q, DGApprox& u, Eigen::Map<Eigen::VectorXd>& lam, realtype* Y);
 	void mapDGtoSundials(DGApprox& u, realtype* Y);
-	void mapDGtoSundials(std::vector< Eigen::VectorXd >& QU_cell, realtype* const& Y);
+	void mapDGtoSundials(std::vector< Eigen::Map<Eigen::VectorXd > >& SQU_cell, Eigen::Map<Eigen::VectorXd>& lam, realtype* const& Y);
 
-	// Set the q and u coefficients at each time step
-	void updateCoeffs(N_Vector const& Y, N_Vector const& dYdt);
+	void resetCoeffs();
 
-	//Creates the ABBDX cellwise matrices used at each Jacobian iteration
-	void updateABBDForJacSolve(std::vector< Eigen::FullPivLU< Eigen::MatrixXd > >& tempABBDBlocks, double const alpha);
+	//Creates the MX cellwise matrices used at each Jacobian iteration
+	//Factorization of these matrices is done here
+	//?TO DO: the values of the non-linear matrices will be added in this function?
+	void updateMForJacSolve(std::vector< Eigen::FullPivLU< Eigen::MatrixXd > >& tempABBDBlocks, double const alpha, DGApprox& delQ, DGApprox& delU);
 
 	//Solves the Jy = -G equation
 	void solveJacEq(N_Vector const& g, N_Vector& delY);
@@ -58,9 +53,12 @@ public:
 
 	Fn getcfn() const {return c_fn;}
 	double getdt() const {return dt;}
+	void setDiffobj(std::shared_ptr<DiffusionObj> diffObj_) {diffObj = diffObj_;}
+	std::shared_ptr<DiffusionObj> getDiffObj();
+
 
 	void setBoundaryConditions(BoundaryConditions* BC) {BCs.reset(BC);}
-	void setKappaInv(Eigen::MatrixXd kappa);
+	void updateBoundaryConditions(double t);
 
 	Grid grid;
 	unsigned int const k; 		//polynomial degree per cell
@@ -68,15 +66,17 @@ public:
 	int nVar;					//Total number of variables
 	
 	std::vector< Eigen::MatrixXd > XMats;
-	std::vector< Eigen::MatrixXd > ABBDBlocks;
+	std::vector< Eigen::MatrixXd > MBlocks;
 	std::vector< Eigen::MatrixXd > CEBlocks;
 	Eigen::MatrixXd K_global{};
 	Eigen::VectorXd L_global{};
+	Eigen::MatrixXd H_global_mat{};
 	Eigen::FullPivLU< Eigen::MatrixXd > H_global{};
 	std::vector< Eigen::MatrixXd > CG_cellwise, RF_cellwise;
 	std::vector< Eigen::MatrixXd > A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise; //?Point the dublicated matrices to the same place?
 
-	DGApprox u,q, dudt;
+	DGApprox u, q, sig, dudt, dqdt, dsigdt;
+	std::optional<Eigen::Map<Eigen::VectorXd>> lambda, dlamdt;
 	std::shared_ptr<BoundaryConditions> BCs;
 private:
 
@@ -88,7 +88,7 @@ private:
 	Fn RHS; //Forcing function
 	Fn c_fn,kappa_fn, tau; // convection velocity and diffusivity
 
-	Eigen::MatrixXd kappaInv;
+	std::shared_ptr<DiffusionObj> diffObj;
 };
 
 struct UserData {

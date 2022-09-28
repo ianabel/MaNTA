@@ -10,6 +10,11 @@
 #include <cmath>
 #include <vector>
 
+typedef std::function<double( double )> Fn;
+using Matrix = Eigen::Matrix<realtype,Eigen::Dynamic,Eigen::Dynamic>;
+using MatrixWrapper = Eigen::Map<Matrix>;
+using Vector = Eigen::Matrix<realtype,Eigen::Dynamic,1>;
+using VectorWrapper = Eigen::Map<Vector>;
 class Interval
 {
 public:
@@ -33,6 +38,8 @@ public:
 	bool contains( double x ) const { return ( x_l <= x ) && ( x <= x_u );};
 	double h() const { return ( x_u - x_l );};
 };
+
+typedef std::vector<std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>>> Coeff_t;
 class Grid
 {
 public:
@@ -108,6 +115,11 @@ class DGApprox
 			k = Order;
 		};
 
+		DGApprox( unsigned int Order )
+		{
+			k = Order;
+		};
+
 		DGApprox( Grid const& grid, unsigned int Order, unsigned int nVariables, std::function<double( double )> const& F )
 		{
 			k = Order;
@@ -150,6 +162,35 @@ class DGApprox
 				}
 			}
 			return *this;
+		}
+
+		void sum( DGApprox& A, DGApprox& B)
+		{
+			Eigen::VectorXd v( k + 1 );
+			for(int var=0; var<coeffs.size(); var++)
+			{
+				for ( int i = 0; i < coeffs[var].size() ; i++ )
+				{
+					coeffs[var][i].second = A.coeffs[var][i].second + B.coeffs[var][i].second;
+				}
+			}
+		}
+
+		void setToFunc(std::function<double( double )> const & f, int var)
+		{
+			//Equivalent to operator= above but implemented for 1 variable
+			Eigen::VectorXd v( k + 1 );
+			for ( auto pair : coeffs[var] )
+			{
+				Interval const& I = pair.first;
+				v.setZero();
+				// Interpolate onto k legendre polynomials
+				for ( Eigen::Index i=0; i<= k; i++ )
+				{
+					v( i ) = CellProduct( I, f, Basis.phi( I, i ) );
+				}
+				pair.second = v;
+			}
 		}
 	
 		double operator()( double x, int var ) {
@@ -208,7 +249,7 @@ class DGApprox
 		void DerivativeMatrix( Interval const& I, Eigen::MatrixXd &D ) {
 			for ( Eigen::Index i = 0 ; i < D.rows(); i++ )
 				for ( Eigen::Index j = 0 ; j < D.cols(); j++ )
-				{	
+				{
 					auto F = [ & ]( double x ) { return Basis.Evaluate( I, i, x ) * Basis.Prime( I, j, x ); };
 					D( i, j ) = integrator.integrate( F, I.x_l, I.x_u );
 				}
@@ -246,8 +287,31 @@ class DGApprox
 			return coeffsLong;
 		}
 
+		void setCoeffsToArrayMem(double arrayPtr[], const int nVar, const int nCells, const Grid& grid)
+		{
+			std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>> cellCoeffs;
+			for(int var = 0; var < nVar; var++)
+			{
+				for(int i=0; i<nCells; i++)
+				{
+					cellCoeffs.emplace_back( grid.gridCells[ i ], VectorWrapper( arrayPtr + var*(k+1) + i*nVar*(k+1), k+1 ));
+				}
+				coeffs.push_back(cellCoeffs);
+				cellCoeffs.clear();
+			}
+		}
+
+		void printCoeffs(int var)
+		{
+			for(int i = 0; i < coeffs[var].size(); i++)
+			{
+				std::cerr << coeffs[var][i].second << std::endl;
+			}
+			std::cerr << std::endl;
+		}
+
 		unsigned int k;
-		std::vector< std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>>> coeffs; //[var][interval]
+		std::vector< std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>>> coeffs; // [var][interval]
 		LegendreBasis Basis;
 	private:
 		boost::math::quadrature::gauss<double, 30> integrator;
@@ -260,5 +324,5 @@ public:
 	double UpperBound;
 	bool isLBoundDirichlet;
 	bool isUBoundDirichlet;
-	std::function<double( double )> g_D,g_N;
+	std::function<double( double, double )> g_D,g_N;
 };
