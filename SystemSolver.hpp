@@ -37,7 +37,7 @@ public:
 	void updateMForJacSolve(std::vector< Eigen::FullPivLU< Eigen::MatrixXd > >& tempABBDBlocks, double const alpha, DGApprox& delQ, DGApprox& delU);
 
 	//Solves the Jy = -G equation
-	void solveJacEq(N_Vector const& g, N_Vector& delY);
+	void solveJacEq(N_Vector& g, N_Vector& delY);
 
 	//Testing function, solving without IDA but using Sundials interface, Backward Euler used
 	//No longer works, and no point maintaining consistently
@@ -47,6 +47,7 @@ public:
 
 	//print current output for u and q to output file
 	void print( std::ostream& out, double t, int nOut, int var );
+	void print( std::ostream& out, double t, int nOut, int var, N_Vector& tempY  );
 
 	//Find the profiles from the coefficients
 	double EvalCoeffs( LegendreBasis & B, Coeff_t cs, double x, int var );

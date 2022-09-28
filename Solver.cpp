@@ -28,7 +28,7 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 	N_Vector id = NULL;				//vector for storing id (which elements are algebraic or differentiable)
 	N_Vector res = NULL;			//vector for storing residual
 	double delta_t = system.getdt();
-	realtype t0 = 0.0, t1 = delta_t, deltatPrint = 0.1, tout, tret;; 
+	realtype t0 = 0.0, t1 = delta_t, deltatPrint = 60.0, tout, tret;; 
 	double totalSteps = tFinal/delta_t;
 	int stepsPerPrint = floor(totalSteps*(deltatPrint/tFinal));
 
@@ -51,11 +51,12 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 			return 0.0;
 		} else if ( x == uBound ) {
 			// ( q + c u ) . n  b @ x = 1.0
-			return ( double )std::nan( "" );
+			return 0.0;
 		}
 		throw std::logic_error( "Boundary condition function being eval'd not on boundary ?!" );
 	};
 
+	/*
 	auto DirichletBCs = std::make_shared<BoundaryConditions>();
 	DirichletBCs->UpperBound = uBound;
 	DirichletBCs->isLBoundDirichlet = true;
@@ -63,6 +64,15 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 	DirichletBCs->g_D = g_D;
 	DirichletBCs->g_N = g_N;
 	system.setBoundaryConditions(DirichletBCs.get());
+	*/
+
+	auto NeumannBCs = std::make_shared<BoundaryConditions>();
+	NeumannBCs->UpperBound = uBound;
+	NeumannBCs->isLBoundDirichlet = false;
+	NeumannBCs->isUBoundDirichlet = false;
+	NeumannBCs->g_D = g_D;
+	NeumannBCs->g_N = g_N;
+	system.setBoundaryConditions(NeumannBCs.get());
 
 	SUNContext ctx;
     retval = SUNContext_Create(nullptr, &ctx);
@@ -162,6 +172,7 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 		system.print(out0, t0, nOut, 0);
 		if(nVar > 1) system.print(out1, t0, nOut, 1);
 	}
+	
 	//Update initial solution to be within tolerance of the residual equation
 	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
 	if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
