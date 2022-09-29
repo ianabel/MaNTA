@@ -39,10 +39,6 @@ public:
 	//Solves the Jy = -G equation
 	void solveJacEq(N_Vector& g, N_Vector& delY);
 
-	//Testing function, solving without IDA but using Sundials interface, Backward Euler used
-	//No longer works, and no point maintaining consistently
-	//void solveNonIDA(N_Vector& Y, N_Vector& dYdt, double dt);
-
 	void setAlpha(double const a) {alpha = a;}
 
 	//print current output for u and q to output file

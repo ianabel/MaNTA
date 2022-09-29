@@ -9,20 +9,20 @@ void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj);
 int main()
 {
 	//---------------------------Variable assiments-------------------------------
-	const sunindextype k = 2;		//Polynomial degree of each cell
+	const sunindextype k = 3;		//Polynomial degree of each cell
 	const sunindextype nCells = 37;			//Total number of cells
 	const sunindextype nVar = 1;
 	const double lBound = 0.0, uBound = 10;	//Spacial bounds
 	int nOut = 300;
-	double tFinal = 300.0, delta_t = 60.0;
+	double tFinal = 30.0, delta_t = 5.0;
 	realtype rtol = 1.0e-5, atol = 1.0e-5;
 
 	const double c_const = 0.0;
 	const double kappa0 = 1.0;
 	std::function<double( double )> f = [ = ]( double x ){ 
-		return 0.0;
+		//return 0.0;
 		// return 2.0 * ( 2.0 * x*x*x*x - 7.0 * x*x + 2.0 ) * ::exp( -x*x ); 
-		//return (-1*kappa0/4)*(::exp(-0.75*(x-5)*(x-5)) * (73.0 + 3.0*x*(x-10)) + ::exp(-0.25 * (x-5)*(x-5)) * (23 + x*(x-10)));
+		return (-1*kappa0/4)*(::exp(-0.75*(x-5)*(x-5)) * (73.0 + 3.0*x*(x-10)) + ::exp(-0.25 * (x-5)*(x-5)) * (23 + x*(x-10))); // For non-linear manufactured solution case, some error from diricelet BCs
 	};
 	std::function<double( double )> c = [ = ]( double x ){ return c_const;};
 	std::function<double( double )> tau = [ & ]( double x ){ return ( ::fabs( c( x ) ) + kappa0/2.0 );};
@@ -32,8 +32,8 @@ int main()
 	double beta = 1.0;
 	std::function<double( double )> u_0 = [=]( double y ){ return (a/::sqrt(M_PI))*::exp( -b*( y - a )*( y - a ) ); };
 	std::function<double( double )> gradu_0 = [=]( double y ){ return -2*b*(a/::sqrt(M_PI))*(y - 5)*::exp( -b*( y - a )*( y - a ) ); };
-	std::function<double( double )> sigma_0 = [=]( double y ){ return gradu_0(y); };
-	//std::function<double( double )> sigma_0 = [=]( double y ){ return -1*kappa0*(1.0 + u_0(y)*u_0(y))*gradu_0(y); };
+	//std::function<double( double )> sigma_0 = [=]( double y ){ return gradu_0(y); };
+	std::function<double( double )> sigma_0 = [=]( double y ){ return -1*kappa0*(1.0 + u_0(y)*u_0(y))*gradu_0(y); };
 
 	const Grid grid(lBound, uBound, nCells);
 	SystemSolver system(grid, k, nCells, nVar, delta_t, f, tau, c);
@@ -122,7 +122,7 @@ void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 }
 */
 
-/*
+//single variable non-linear case
 void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 {
 	auto nVar = diffobj->nVar;
@@ -147,8 +147,10 @@ void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 
 	diffobj->deluKappaFuncs[0].push_back(dkappa0du0);
 }
-*/
 
+
+/*
+//Single variable linear case
 void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 {
 	auto nVar = diffobj->nVar;
@@ -173,3 +175,4 @@ void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 
 	diffobj->deluKappaFuncs[0].push_back(dkappa0du0);
 }
+*/
