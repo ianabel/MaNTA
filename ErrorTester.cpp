@@ -26,10 +26,10 @@ void ErrorTester::H1SemiNorm(int k, int nCells, int nVar, SystemSolver& system)
 	if(H1vals.size() != nVar) H1vals.resize(nVar);
 
 	int nOut = (k+1)*nCells;
-	double H1snorm = 0.0;
 	double h = (xMax - xMin)/nOut;
 	for(int var = 0; var < nVar; var++)
 	{
+		double H1snorm = 0.0;
 		for ( int i=1; i<nOut-1; ++i )
 		{
 			double x = xMin + ( xMax - xMin ) * ( static_cast<double>( i )/( nOut ) );
@@ -38,7 +38,6 @@ void ErrorTester::H1SemiNorm(int k, int nCells, int nVar, SystemSolver& system)
 			H1snorm += (qNum - qAna)*(qNum - qAna)*h;
 		}
 		H1snorm = ::sqrt(H1snorm);
-		H1vals[var].emplace(nOut, H1snorm);
+		H1vals[var].emplace((k+1)*nCells,  H1snorm);
 	}
-
 }

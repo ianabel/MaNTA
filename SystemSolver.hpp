@@ -9,6 +9,7 @@
 
 #include "gridStructures.hpp"
 #include "DiffusionObj.hpp"
+#include "SourceObj.hpp"
 
 class SystemSolver
 {
@@ -50,8 +51,12 @@ public:
 
 	Fn getcfn() const {return c_fn;}
 	double getdt() const {return dt;}
+
 	void setDiffobj(std::shared_ptr<DiffusionObj> diffObj_) {diffObj = diffObj_;}
 	std::shared_ptr<DiffusionObj> getDiffObj();
+
+	void setSourceobj(std::shared_ptr<SourceObj> sourceObj_) {sourceObj = sourceObj_;}
+	std::shared_ptr<SourceObj> getSourceObj();
 
 
 	void setBoundaryConditions(BoundaryConditions* BC) {BCs.reset(BC);}
@@ -86,6 +91,7 @@ private:
 	Fn c_fn,kappa_fn, tau; // convection velocity and diffusivity
 
 	std::shared_ptr<DiffusionObj> diffObj;
+	std::shared_ptr<SourceObj> sourceObj;
 };
 
 struct UserData {

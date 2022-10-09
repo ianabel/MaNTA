@@ -5,35 +5,66 @@
 
 void runSolver( SystemSolver& system, const sunindextype k, const sunindextype nCells, const sunindextype nVar, int nOut, double tFinal, realtype rtol, realtype atol, Fn gradu_0, Fn u_0, Fn sigma_0, double lBound, double uBound, bool printToFile = true);
 void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj);
+void buildSourceObj(std::shared_ptr<SourceObj> sourceobj);
 
 int main()
 {
 	//---------------------------Variable assiments-------------------------------
 	const sunindextype k = 3;		//Polynomial degree of each cell
-	const sunindextype nCells = 37;			//Total number of cells
+	const sunindextype nCells = 201;			//Total number of cells
 	const sunindextype nVar = 1;
-	const double lBound = 0.0, uBound = 10;	//Spacial bounds
+	const double lBound = 0.0, uBound = 10.0;	//Spacial bounds
+	double L = uBound - lBound;
 	int nOut = 300;
-	double tFinal = 30.0, delta_t = 5.0;
-	realtype rtol = 1.0e-5, atol = 1.0e-5;
+	double tFinal = 1.001, delta_t = 0.2;
+	realtype rtol = 1.0e-10, atol = 1.0e-10;
 
 	const double c_const = 0.0;
-	const double kappa0 = 1.0;
 	std::function<double( double )> f = [ = ]( double x ){ 
-		//return 0.0;
+		return 0.0;
 		// return 2.0 * ( 2.0 * x*x*x*x - 7.0 * x*x + 2.0 ) * ::exp( -x*x ); 
-		return (-1*kappa0/4)*(::exp(-0.75*(x-5)*(x-5)) * (73.0 + 3.0*x*(x-10)) + ::exp(-0.25 * (x-5)*(x-5)) * (23 + x*(x-10))); // For non-linear manufactured solution case, some error from diricelet BCs
+		//return (-1*kappa0/4)*(::exp(-0.75*(x-5)*(x-5)) * (73.0 + 3.0*x*(x-10)) + ::exp(-0.25 * (x-5)*(x-5)) * (23 + x*(x-10))); // For non-linear manufactured solution case, some error from diricelet BCs
 	};
 	std::function<double( double )> c = [ = ]( double x ){ return c_const;};
-	std::function<double( double )> tau = [ & ]( double x ){ return ( ::fabs( c( x ) ) + kappa0/2.0 );};
+	std::function<double( double )> tau = [ & ]( double x ){ return ( 1.2 );};
 
 	double a = 5.0;
-	double b = 1.0; 
+	double b = 4.0; 
 	double beta = 1.0;
-	std::function<double( double )> u_0 = [=]( double y ){ return (a/::sqrt(M_PI))*::exp( -b*( y - a )*( y - a ) ); };
-	std::function<double( double )> gradu_0 = [=]( double y ){ return -2*b*(a/::sqrt(M_PI))*(y - 5)*::exp( -b*( y - a )*( y - a ) ); };
-	//std::function<double( double )> sigma_0 = [=]( double y ){ return gradu_0(y); };
-	std::function<double( double )> sigma_0 = [=]( double y ){ return -1*kappa0*(1.0 + u_0(y)*u_0(y))*gradu_0(y); };
+	auto xi = [ ]( double q_ )
+	{
+		if( ::abs(q_) > 0.5) return 10*::pow( ::abs(q_) - 0.5, 0.5) + 1.0;
+		else return 1.0;
+	};
+	
+	std::function<double( double )> u_0 = [=]( double y ){ return ::exp( -b*( y - a )*( y - a ) ); }; //gaussian
+	//std::function<double( double )> u_0 = [=]( double y ){ return 1/(::cosh(10*y)*::cosh(10*y)); }; //Fisher example
+	//std::function<double( double )> u_0 = [=]( double y ){ return -0.125*(::pow(::cosh(::sqrt(1.0/48.0)*y),-2.0) - 2.0*::tanh(::sqrt(1.0/48.0)*y) - 2.0); }; //Fisher example - exact sol
+	//std::function<double( double )> u_0 = [=]( double y ){ return 0.5*(1.0 + ::cos(M_PI*y)); }; //constant u_0
+	//std::function<double( double )> u_0 = [=]( double y ){ return 1.0 - 2.0/(1 + ::exp(100*(1-y))); }; //shestakov
+	//std::function<double( double )> u_0 = [=]( double y ){	return 1.0-y;}; //PTransp u_0
+	//std::function<double( double )> u_0 = [=]( double y ){	return 1.0;}; //PTransp u_0
+	//std::function<double( double )> u_0 = [=]( double y ){ return 1; }; //0 u_0
+
+	std::function<double( double )> gradu_0 = [=]( double y ){ return -2.0*b*(y - a)*::exp( -b*( y - a )*( y - a ) ); }; //gaussian
+	//std::function<double( double )> gradu_0 = [=]( double y ){ return -20*::tanh(10*y)/(::cosh(10*y)*::cosh(10*y)); }; //Fisher Example
+	//std::function<double( double )> gradu_0 = [=]( double y ){ return (1.0+::tanh(::sqrt(1.0/48.0)*y))/((::pow(::cosh(::sqrt(1.0/48.0)*y),2.0))*16.0*::sqrt(3.0)); }; //Fisher Example - exact Sol
+	//std::function<double( double )> gradu_0 = [=]( double y ){ return -200*::exp(100*(1-y))/((1 + ::exp(100*(1-y)))*(1 + ::exp(100*(1-y)))); }; //constant u_0
+	//std::function<double( double )> gradu_0 = [=]( double y ){ return -0.5*M_PI*::sin(M_PI*y); }; //constant u_0
+	//std::function<double( double )> gradu_0 = [=]( double y ){ return 0.0; }; //PTransp u_0
+	//std::function<double( double )> gradu_0 = [=]( double y ){ return 0; }; //0 u_0
+	
+	//std::function<double( double )> sigma_0 = [=]( double y ){ return -1.0*gradu_0(y); }; //linear case
+	//std::function<double( double )> sigma_0 = [=]( double y ){ return -1.0*y*xi(gradu_0(y))*gradu_0(y); }; //PTransp case
+	//std::function<double( double )> sigma_0 = [=]( double y ){ return -1.0*gradu_0(y); }; //Fisher case
+	std::function<double( double )> sigma_0 = [=]( double y ){ return -1.0*(2.0 + u_0(y)*u_0(y))*gradu_0(y); };
+	/*std::function<double( double )> sigma_0 = [=]( double y )
+	{
+		//if(::pow(::abs(gradu_0(y) / u_0(y)),2)*gradu_0(y) > 100.0) return -100.0;
+		//if(::pow(::abs(gradu_0(y) / u_0(y)),2)*gradu_0(y) < -100.0) return 100.0;
+		double u_ = std::max(0.1, u_0(y));
+		return -1*::pow(::abs(gradu_0(y) / u_),2)*gradu_0(y); 
+	};*/ //Shestakov case
 
 	const Grid grid(lBound, uBound, nCells);
 	SystemSolver system(grid, k, nCells, nVar, delta_t, f, tau, c);
@@ -42,137 +73,9 @@ int main()
 	buildDiffusionObj(diffobj);
 	system.setDiffobj(diffobj);
 
+	auto sourceobj = std::make_shared< SourceObj >(k, nVar);
+	buildSourceObj(sourceobj);
+	system.setSourceobj(sourceobj);
+
 	runSolver(system, k, nCells, nVar, nOut, tFinal, rtol, atol, gradu_0, u_0, sigma_0, lBound, uBound);
 }
-
-//This is user input. Eventually this will be put in an input file format, but for now its hard coded.
-/*
-void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
-{
-	auto nVar = diffobj->nVar;
-	if(nVar != 2) throw std::runtime_error("check your kappa build, you did it wrong.");
-
-	diffobj->clear();
-	double kappa_const = 1.0;
-
-	std::function<double( double, DGApprox, DGApprox )> kappa0 = [ = ]( double x, DGApprox q, DGApprox u ){ return (7/4)*q(x,0) - (::sqrt(3)/4)*q(x,1);};
-	std::function<double( double, DGApprox, DGApprox )> kappa1 = [ = ]( double x, DGApprox q, DGApprox u ){ return -(::sqrt(3)/4)*q(x,0) + (7/4)*q(x,1);};
-	diffobj->kappaFuncs.push_back(kappa0);
-	diffobj->kappaFuncs.push_back(kappa1);
-
-	std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return (7/4);};
-	std::function<double( double, DGApprox, DGApprox )> dkappa0dq1 = [ = ]( double x, DGApprox q, DGApprox u ){ return -(::sqrt(3)/4);};
-	std::function<double( double, DGApprox, DGApprox )> dkappa1dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return -(::sqrt(3)/4);};
-	std::function<double( double, DGApprox, DGApprox )> dkappa1dq1 = [ = ]( double x, DGApprox q, DGApprox u ){ return (7/4);};
-
-	std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dkappa0du1 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dkappa1du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dkappa1du1 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
-
-	diffobj->delqKappaFuncs.resize(nVar);
-	diffobj->deluKappaFuncs.resize(nVar);
-
-	diffobj->delqKappaFuncs[0].push_back(dkappa0dq0);
-	diffobj->delqKappaFuncs[0].push_back(dkappa0dq1);
-	diffobj->delqKappaFuncs[1].push_back(dkappa1dq0);
-	diffobj->delqKappaFuncs[1].push_back(dkappa1dq1);
-
-	diffobj->deluKappaFuncs[0].push_back(dkappa0du0);
-	diffobj->deluKappaFuncs[0].push_back(dkappa0du1);
-	diffobj->deluKappaFuncs[1].push_back(dkappa1du0);
-	diffobj->deluKappaFuncs[1].push_back(dkappa1du1);
-}
-
-void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
-{
-	auto nVar = diffobj->nVar;
-	if(nVar != 2) throw std::runtime_error("check your kappa build, you did it wrong.");
-
-	diffobj->clear();
-	double kappa_const = 1.0;
-
-	std::function<double( double, DGApprox, DGApprox )> kappa0 = [ = ]( double x, DGApprox q, DGApprox u ){ return (5-::abs(x-5))*q(x,0);};
-	std::function<double( double, DGApprox, DGApprox )> kappa1 = [ = ]( double x, DGApprox q, DGApprox u ){ return (5-::abs(x-5))*q(x,1);};
-	diffobj->kappaFuncs.push_back(kappa0);
-	diffobj->kappaFuncs.push_back(kappa1);
-
-	std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return (5-::abs(x-5));};
-	std::function<double( double, DGApprox, DGApprox )> dkappa0dq1 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dkappa1dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dkappa1dq1 = [ = ]( double x, DGApprox q, DGApprox u ){ return (5-::abs(x-5));};
-
-	std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dkappa0du1 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dkappa1du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dkappa1du1 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
-
-	diffobj->delqKappaFuncs.resize(nVar);
-	diffobj->deluKappaFuncs.resize(nVar);
-
-	diffobj->delqKappaFuncs[0].push_back(dkappa0dq0);
-	diffobj->delqKappaFuncs[0].push_back(dkappa0dq1);
-	diffobj->delqKappaFuncs[1].push_back(dkappa1dq0);
-	diffobj->delqKappaFuncs[1].push_back(dkappa1dq1);
-
-	diffobj->deluKappaFuncs[0].push_back(dkappa0du0);
-	diffobj->deluKappaFuncs[0].push_back(dkappa0du1);
-	diffobj->deluKappaFuncs[1].push_back(dkappa1du0);
-	diffobj->deluKappaFuncs[1].push_back(dkappa1du1);
-}
-*/
-
-//single variable non-linear case
-void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
-{
-	auto nVar = diffobj->nVar;
-	if(nVar != 1) throw std::runtime_error("check your kappa build, you did it wrong.");
-
-	diffobj->clear();
-	double beta = 1.0;
-
-	std::function<double( double, DGApprox, DGApprox )> kappa0 = [ = ]( double x, DGApprox q, DGApprox u ){ return  beta*(1.0 + u(x,0)*u(x,0))*q(x,0);};
-	diffobj->kappaFuncs.push_back(kappa0);
-
-	std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*(1 + u(x,0)*u(x,0));};
-	//std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 2*beta;};
-
-	std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 2*beta*u(x,0)*q(x,0);};
-	//std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
-
-	diffobj->delqKappaFuncs.resize(nVar);
-	diffobj->deluKappaFuncs.resize(nVar);
-
-	diffobj->delqKappaFuncs[0].push_back(dkappa0dq0);
-
-	diffobj->deluKappaFuncs[0].push_back(dkappa0du0);
-}
-
-
-/*
-//Single variable linear case
-void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
-{
-	auto nVar = diffobj->nVar;
-	if(nVar != 1) throw std::runtime_error("check your kappa build, you did it wrong.");
-
-	diffobj->clear();
-	double beta = 1.0;
-
-	std::function<double( double, DGApprox, DGApprox )> kappa0 = [ = ]( double x, DGApprox q, DGApprox u ){ return  1.0*q(x,0);};
-	diffobj->kappaFuncs.push_back(kappa0);
-
-	std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 1.0;};
-	//std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 2*beta;};
-
-	std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
-	//std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
-
-	diffobj->delqKappaFuncs.resize(nVar);
-	diffobj->deluKappaFuncs.resize(nVar);
-
-	diffobj->delqKappaFuncs[0].push_back(dkappa0dq0);
-
-	diffobj->deluKappaFuncs[0].push_back(dkappa0du0);
-}
-*/

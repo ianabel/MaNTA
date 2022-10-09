@@ -4,14 +4,6 @@ DiffusionObj::DiffusionObj(int k_, int nVar_)
 	: k(k_), nVar(nVar_)
 {}
 
-void DiffusionObj::kappaMat(Eigen::MatrixXd& kappaMat, int var, DGApprox q, DGApprox u, Interval I)
-{
-	// kappaMat = ( phi_j*kappa, phi_i )
-	kappaMat.setZero();
-	std::function< double (double)> kappaFunc = [ = ]( double x ){ return kappaFuncs[var](x, q, u);};
-	u.MassMatrix( I, kappaMat, kappaFunc );
-}
-
 
 void DiffusionObj::NLqMat(Eigen::MatrixXd& NLq, DGApprox q, DGApprox u, Interval I)
 {

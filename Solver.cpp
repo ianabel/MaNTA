@@ -34,18 +34,20 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 
 	//-------------------------------------System Design----------------------------------------------
 
-	std::function<double( double, double )> g_D = [ = ]( double x, double t ) {
+	std::function<double( double, double )> g_D_ = [ = ]( double x, double t ) {
 		if ( x == lBound ) {
 			// u(0.0) == a
 			return 0.0;
 		} else if ( x == uBound ) {
 			// u(1.0) == a
+			//if(t<0.99999) return 1.0 - t;
+			//else return 0.00001;
 			return 0.0;
 		}
 		throw std::logic_error( "Boundary condition function being eval'd not on boundary ?!" );
 	};
 
-	std::function<double( double, double )> g_N = [ = ]( double x, double t ) {
+	std::function<double( double, double )> g_N_ = [ = ]( double x, double t ) {
 		if ( x == lBound ) {
 			// ( q + c u ) . n  a @ x = 0.0
 			return 0.0;
@@ -57,11 +59,12 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 	};
 
 	auto DirichletBCs = std::make_shared<BoundaryConditions>();
+	DirichletBCs->LowerBound = lBound;
 	DirichletBCs->UpperBound = uBound;
 	DirichletBCs->isLBoundDirichlet = true;
 	DirichletBCs->isUBoundDirichlet = true;
-	DirichletBCs->g_D = g_D;
-	DirichletBCs->g_N = g_N;
+	DirichletBCs->g_D = g_D_;
+	DirichletBCs->g_N = g_N_;
 	system.setBoundaryConditions(DirichletBCs.get());
 
 	SUNContext ctx;
@@ -163,12 +166,20 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 		if(nVar > 1) system.print(out1, t0, nOut, 1);
 	}
 	
+
 	//Update initial solution to be within tolerance of the residual equation
 	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
 	if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
 	{
 		system.print(out0, t0, nOut, 0);
+		if(nVar > 1) system.print(out1, t0, nOut, 1);
 		throw std::runtime_error("IDACalcIC could not complete");
+	}
+
+	if(printToFile)
+	{
+		system.print(out0, t0, nOut, 0);
+		if(nVar > 1) system.print(out1, t0, nOut, 1);
 	}
 
 	for (tout = t1, iout = 1; iout <= totalSteps; iout++, tout += delta_t) 
@@ -178,14 +189,12 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 		if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
 		{
 			system.print(out0, t0, nOut, 0);
+			if(nVar > 1) system.print(out1, t0, nOut, 1);
 			throw std::runtime_error("IDASolve could not complete");
 		}
 
-		if( printToFile && iout%stepsPerPrint == 0)
-		{
-			system.print(out0, tout, nOut, 0);
-			if(nVar > 1) system.print(out1, tout, nOut, 1);
-		}
+		system.print(out0, tout, nOut, 0);
+		if(nVar > 1) system.print(out1, tout, nOut, 1);
 	}
 
 	delete data, IDA_mem;

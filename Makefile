@@ -1,7 +1,7 @@
 
-SOURCES = main.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp  Solver.cpp DiffusionObj.cpp
-ERRSOURCES = TestMain.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp  Solver.cpp ErrorTester.cpp DiffusionObj.cpp
-HEADERS = gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp SystemSolver.hpp ErrorChecker.hpp ErrorTester.hpp DiffusionObj.hpp
+SOURCES = main.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp  Solver.cpp DiffusionObj.cpp SourceObj.cpp BuildNonLinObjects.cpp 
+ERRSOURCES = TestMain.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp  Solver.cpp ErrorTester.cpp DiffusionObj.cpp SourceObj.cpp BuildNonLinObjects.cpp 
+HEADERS = gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp SystemSolver.hpp ErrorChecker.hpp ErrorTester.hpp DiffusionObj.hpp SourceObj.hpp
 OBJECTS = $(patsubst %.cpp,%.o,$(SOURCES))
 ERROBJECTS = $(patsubst %.cpp,%.o,$(ERRSOURCES))
 

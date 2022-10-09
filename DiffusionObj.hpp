@@ -10,7 +10,6 @@ public:
 	DiffusionObj(int k_, int nVar_);
 	~DiffusionObj() = default;
 
-	void kappaMat(Eigen::MatrixXd& kappaMat, int var, DGApprox q, DGApprox u, Interval I);
 	std::function<double (double, DGApprox, DGApprox)> getKappaFunc(int var) {return kappaFuncs[var];}
 
 	//Big nVar*(k+1) matrices used in the Jac equation
