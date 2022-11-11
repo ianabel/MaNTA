@@ -32,10 +32,6 @@ void SystemSolver::setInitialConditions( std::function< double ( double )> u_0, 
 	u = u_0;
 	q = gradu_0;
 	sig = sigma_0;
-	/*
-	std::function< double (double) > kappaFunc = [ = ]( double x ) { return getDiffObj()->getKappaFunc(0)( x, q, u); };
-	dqdt = kappaFunc;
-	*/
 
 	double dx = ::abs(BCs->UpperBound - BCs->LowerBound)/nCells;
 	for(int var = 0; var < nVar; var++)
@@ -55,25 +51,6 @@ void SystemSolver::setInitialConditions( std::function< double ( double )> u_0, 
 		lambda.value()[var*(nCells+1) + nCells] += u.Basis.Evaluate(I_f, u.coeffs[var][nCells-1].second, BCs->UpperBound)/2.0;
 	}
 	
-	/*
-	Eigen::VectorXd CsGuL_global(nVar*(nCells+1));
-	CsGuL_global.setZero();
-	for ( unsigned int i=0; i < nCells; i++ )
-	{
-		Interval I = grid.gridCells[ i ];
-		Eigen::VectorXd LVarCell(2);
-		Eigen::VectorXd CsGuLVarCell(2);
-		CsGuLVarCell.setZero();
-		LVarCell.setZero();
-		for(int var = 0; var < nVar; var++)
-		{
-			LVarCell = L_global.block<2,1>(var*(nCells+1) + i,0);
-			CsGuLVarCell = LVarCell - C_cellwise[i].block(var*2,var*(k+1),2,k+1)*sig.coeffs[ var ][ i ].second - G_cellwise[i].block(var*2,var*(k+1),2,k+1)*u.coeffs[ var ][ i ].second;
-			CsGuL_global.block(var*(nCells + 1) + i, 0, 2, 1) += CsGuLVarCell;
-		}
-	}
-	lambda.value() = H_global.solve(CsGuL_global);
-	*/
 	for(int var = 0; var < nVar; var++)
 	{
 		//Solver For dudt with dudt = X^-1( -B*Sig - D*U - E*Lam + F )
@@ -92,66 +69,6 @@ void SystemSolver::setInitialConditions( std::function< double ( double )> u_0, 
 			lamCell[0] = lambda.value()[var*(nCells+1) + i]; lamCell[1] = lambda.value()[var*(nCells+1) + i+1];
 			//dudt.coeffs[ var ][ i ].second.setZero();		
 			dudt.coeffs[ var ][ i ].second = -B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*sig.coeffs[ var ][ i ].second - D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*u.coeffs[ var ][ i ].second - E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell + RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ) - F_cellwise;
-		}
-
-		//??-------Clean up-------
-		/*
-		for ( unsigned int i=0; i < nCells; i++ )
-		{
-			Interval I = grid.gridCells[ i ];
-			Eigen::MatrixXd M( k + 1, k + 1 );
-			u.DerivativeMatrix( I, M );
-			Eigen::MatrixXd M2( k + 1, k + 1 );
-			u.DerivativeMatrix( I, M2, c_fn );
-			// Work out du/dt at t=0 by direct evaluation of (29)
-			// First (c u + q, w')
-			dudt.coeffs[ var ][ i ].second = 
-				RF_cellwise[ i ].block( k + 1, 0, k + 1, 1 ) 
-				- M * sig.coeffs[ var ][ i ].second + M2.transpose() * u.coeffs[ var ][ i ].second;
-
-			// Then componentwise add f_i and the boundary terms
-			for ( unsigned int j=0; j < k + 1; ++j )
-			{
-				// Finally minus < (cu)^ . n, w > (but because of the 'n', this leads to
-				//  + <eval at lower bound> - <eval at upper bound>
-				dudt.coeffs[var][ i ].second( j ) +=
-					+ ( c_fn( I.x_l )*u_0( I.x_l ) )*u.Basis.phi( I, j )( I.x_l )
-					- ( c_fn( I.x_u )*u_0( I.x_u ) )*u.Basis.phi( I, j )( I.x_u );
-			}
-
-		}
-		*/
-		}
-
-	// Differentiate dudt_0 to get dqdt_0 because dx & dt commute
-	for(int var = 0; var < nVar; var++)
-	{
-		for ( unsigned int i=0; i < nCells; i++ )
-		{
-			Interval I = grid.gridCells[ i ];
-			Eigen::MatrixXd M_hr( k + 1, k + 1 );
-			dudt.DerivativeMatrix( I, M_hr );
-			dqdt.coeffs[ var ][ i ].second.setZero();
-			//dqdt.coeffs[ var ][ i ].second = ( M_hr * dudt.coeffs[ var ][ i ].second ).block( 0, 0, k + 1, 1 );
-		}
-	}
-
-	//this assues dkappadt = 0
-	for ( unsigned int i=0; i < nCells; i++ )
-	{
-		Interval I = grid.gridCells[ i ];
-		Eigen::MatrixXd NLq(nVar*(k+1), nVar*(k+1));
-		Eigen::MatrixXd NLu(nVar*(k+1), nVar*(k+1));
-		diffObj->NLqMat( NLq, q, u, I);
-		diffObj->NLuMat( NLu, q, u, I);
-
-		for(int vari = 0; vari < nVar; vari++)
-		{
-			for(int varj = 0; varj < nVar; varj++)
-			{
-				//dsigdt.coeffs[ vari ][ i ].second -= NLu.block(vari*(k+1), varj*(k+1), k+1, k+1)*dudt.coeffs[varj][i].second + NLq.block(vari*(k+1), varj*(k+1), k+1, k+1)*dqdt.coeffs[varj][i].second;
-				dsigdt.coeffs[ vari ][ i ].second.setZero();
-			}
 		}
 	}
 }
@@ -279,9 +196,9 @@ void SystemSolver::initialiseMatrices()
 			}
 
 			// Construct per-cell Matrix solutions
-			// ( A   NLu   NLq )^-1 [  0  ]
 			// ( 0    A    B^T )    [ C^T ]
 			// ( B    0     D )     [  E  ]
+			// ( A   NLu   NLq )^-1 [  0  ]
 			// These are the homogeneous solution, that depend on lambda
 			C.block(var*2,var*(k+1),2,k+1) = Cvar;
 			E.block(var*(k+1),var*2,k+1,2) = Evar;
@@ -572,11 +489,11 @@ void SystemSolver::updateMForJacSolve(std::vector< Eigen::FullPivLU< Eigen::Matr
 
 		//Fq Matrix
 		sourceObj->setdFdqMat( Fq, newQ, newU, I);
-		//MX.block( nVar*(k+1), nVar*(k+1), nVar*(k+1), nVar*(k+1) ) += Fq;
+		MX.block( nVar*(k+1), nVar*(k+1), nVar*(k+1), nVar*(k+1) ) += Fq;
 
 		//Fu Matrix
 		sourceObj->setdFdqMat( Fu, newQ, newU, I);
-		//MX.block( nVar*(k+1), nVar*(k+1), nVar*(k+1), nVar*(k+1) ) += Fu;
+		MX.block( nVar*(k+1), nVar*(k+1), nVar*(k+1), nVar*(k+1) ) += Fu;
 
 		MXsolvers.emplace_back(MX);
 	}
@@ -611,7 +528,6 @@ void SystemSolver::solveJacEq(N_Vector& g, N_Vector& delY)
 		Eigen::VectorXd g1g2g3 = g1g2g3_cellwise[ i ];
 
 		SQU_f[ i ] = factorisedM[ i ].solve( g1g2g3 );
-		//std::cerr << g1g2g3 << std::endl << std::endl;
 
 		//SQU_0
 		Eigen::MatrixXd CE = CEBlocks[ i ];
@@ -662,9 +578,6 @@ void SystemSolver::solveJacEq(N_Vector& g, N_Vector& delY)
 			delU.coeffs[ var ][ i ].second =   delSQU.block( 2*nVar*(k + 1) + var*(k+1), 0, k + 1, 1 );
 		}
 	}
-	//delSig.printCoeffs(0);
-	//delSig.printCoeffs(1);
-	//std::cerr << delSig.variableDifference() << std::endl << std::endl;
 }
 
 int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data)

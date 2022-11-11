@@ -61,8 +61,8 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 	auto DirichletBCs = std::make_shared<BoundaryConditions>();
 	DirichletBCs->LowerBound = lBound;
 	DirichletBCs->UpperBound = uBound;
-	DirichletBCs->isLBoundDirichlet = false;
-	DirichletBCs->isUBoundDirichlet = false;
+	DirichletBCs->isLBoundDirichlet = true;
+	DirichletBCs->isUBoundDirichlet = true;
 	DirichletBCs->g_D = g_D_;
 	DirichletBCs->g_N = g_N_;
 	system.setBoundaryConditions(DirichletBCs);

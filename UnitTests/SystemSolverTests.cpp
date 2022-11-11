@@ -120,11 +120,11 @@ BOOST_AUTO_TEST_CASE( SysSolver_Core_functional_test)
 	data->system = &system;
 
 	residual(tres, Y, dYdt, resval, data);
-	BOOST_TEST( system.resNorm == 4.9841996051198381 );
+	BOOST_TEST( system.resNorm == 0.94789405732734555  );
 
 	yVec.setZero();
 	system.solveJacEq(resval, Y);
-	BOOST_TEST( yVec.norm() == 1.2420106057992257 );
+	BOOST_TEST( yVec.norm() == 0.68233124381752031 );
 
 	
 	delete data;
