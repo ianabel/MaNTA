@@ -58,8 +58,10 @@ public:
 	void setSourceobj(std::shared_ptr<SourceObj> sourceObj_) {sourceObj = sourceObj_;}
 	std::shared_ptr<SourceObj> getSourceObj();
 
+	void setTesting(bool t) {testing = t;}
+	bool isTesting() const {return testing;}
 
-	void setBoundaryConditions(BoundaryConditions* BC) {BCs.reset(BC);}
+	void setBoundaryConditions(std::shared_ptr<BoundaryConditions> BC) {BCs = BC;}
 	void updateBoundaryConditions(double t);
 
 	Grid grid;
@@ -80,12 +82,15 @@ public:
 	DGApprox u, q, sig, dudt, dqdt, dsigdt;
 	std::optional<Eigen::Map<Eigen::VectorXd>> lambda, dlamdt;
 	std::shared_ptr<BoundaryConditions> BCs;
+	int total_steps = 0.0;
+	double resNorm = 0.0; //Exclusively for unit testing purposes
 private:
 
 	double dt;
 	double t;
 	bool initialised = false;
 	double alpha = 1.0;
+	bool testing = false;
 
 	Fn RHS; //Forcing function
 	Fn c_fn,kappa_fn, tau; // convection velocity and diffusivity

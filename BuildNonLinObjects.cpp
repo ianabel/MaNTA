@@ -81,6 +81,45 @@ void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 */
 
 //2 variable non-linear case
+void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
+{
+	auto nVar = diffobj->nVar;
+	if(nVar != 2) throw std::runtime_error("check your kappa build, you did it wrong.");
+
+	diffobj->clear();
+	double beta = 1.0;
+
+	std::function<double( double, DGApprox, DGApprox )> kappa0 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*(1.0 + u(x,0)*u(x,1))*q(x,0);};
+	std::function<double( double, DGApprox, DGApprox )> kappa1 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*(1.0 + u(x,1)*u(x,0))*q(x,1);};
+	diffobj->kappaFuncs.push_back(kappa0);
+	diffobj->kappaFuncs.push_back(kappa1);
+
+	std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*(1.0 + u(x,0)*u(x,1));};
+	std::function<double( double, DGApprox, DGApprox )> dkappa0dq1 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox )> dkappa1dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox )> dkappa1dq1 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*(1.0 + u(x,1)*u(x,0));};
+
+	std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*u(x,1)*q(x,0);};
+	std::function<double( double, DGApprox, DGApprox )> dkappa0du1 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*u(x,0)*q(x,0);};
+	std::function<double( double, DGApprox, DGApprox )> dkappa1du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*u(x,1)*q(x,1);};
+	std::function<double( double, DGApprox, DGApprox )> dkappa1du1 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*u(x,0)*q(x,1);};
+
+	diffobj->delqKappaFuncs.resize(nVar);
+	diffobj->deluKappaFuncs.resize(nVar);
+
+	diffobj->delqKappaFuncs[0].push_back(dkappa0dq0);
+	diffobj->delqKappaFuncs[0].push_back(dkappa0dq1);
+	diffobj->delqKappaFuncs[1].push_back(dkappa1dq0);
+	diffobj->delqKappaFuncs[1].push_back(dkappa1dq1);
+
+	diffobj->deluKappaFuncs[0].push_back(dkappa0du0);
+	diffobj->deluKappaFuncs[0].push_back(dkappa0du1);
+	diffobj->deluKappaFuncs[1].push_back(dkappa1du0);
+	diffobj->deluKappaFuncs[1].push_back(dkappa1du1);
+}
+
+
+//2-Dimensional Linear
 /*
 void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 {
@@ -90,20 +129,20 @@ void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 	diffobj->clear();
 	double beta = 1.0;
 
-	std::function<double( double, DGApprox, DGApprox )> kappa0 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*(1.0 + u(x,0)*u(x,0))*q(x,0);};
-	std::function<double( double, DGApprox, DGApprox )> kappa1 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*(1.0 + u(x,1)*u(x,1))*q(x,1);};
+	std::function<double( double, DGApprox, DGApprox )> kappa0 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*q(x,0);};
+	std::function<double( double, DGApprox, DGApprox )> kappa1 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*q(x,1);};
 	diffobj->kappaFuncs.push_back(kappa0);
 	diffobj->kappaFuncs.push_back(kappa1);
 
-	std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*(1 + u(x,0)*u(x,0));};
+	std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta;};
 	std::function<double( double, DGApprox, DGApprox )> dkappa0dq1 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
 	std::function<double( double, DGApprox, DGApprox )> dkappa1dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dkappa1dq1 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*(1 + u(x,1)*u(x,1));};
+	std::function<double( double, DGApprox, DGApprox )> dkappa1dq1 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta;};
 
-	std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 2*beta*u(x,0)*q(x,0);};
+	std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
 	std::function<double( double, DGApprox, DGApprox )> dkappa0du1 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
 	std::function<double( double, DGApprox, DGApprox )> dkappa1du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dkappa1du1 = [ = ]( double x, DGApprox q, DGApprox u ){ return 2*beta*u(x,1)*q(x,1);};
+	std::function<double( double, DGApprox, DGApprox )> dkappa1du1 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
 
 	diffobj->delqKappaFuncs.resize(nVar);
 	diffobj->deluKappaFuncs.resize(nVar);
@@ -121,6 +160,7 @@ void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 */
 
 //1 Variable non-linear
+/*
 void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 {
 	auto nVar = diffobj->nVar;
@@ -129,12 +169,12 @@ void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 	diffobj->clear();
 	double beta = 1.0;
 
-	std::function<double( double, DGApprox, DGApprox )> kappa0 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*(2.0 + u(x,0)*u(x,0))*q(x,0);};
+	std::function<double( double, DGApprox, DGApprox )> kappa0 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*(1.0 + ::pow(u(x,0),5))*q(x,0);};
 	diffobj->kappaFuncs.push_back(kappa0);
 
-	std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*(2.0 + u(x,0)*u(x,0));};
+	std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return beta*(1.0 + ::pow(u(x,0),5));};
 
-	std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 2*beta*u(x,0)*q(x,0);};
+	std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 5*beta*::pow(u(x,0),4)*q(x,0);};
 
 	diffobj->delqKappaFuncs.resize(nVar);
 	diffobj->deluKappaFuncs.resize(nVar);
@@ -143,9 +183,10 @@ void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 
 	diffobj->deluKappaFuncs[0].push_back(dkappa0du0);
 }
+*/
 
-//PTransp
 /*
+//PTransp
 void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 {
 	auto nVar = diffobj->nVar;
@@ -188,6 +229,7 @@ void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 	diffobj->deluKappaFuncs[0].push_back(dkappa0du0);
 }
 */
+
 
 
 //Shestakov case
@@ -245,10 +287,10 @@ void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 
 	diffobj->clear();
 
-	std::function<double( double, DGApprox, DGApprox )> kappa0 = [ = ]( double x, DGApprox q, DGApprox u ){ return  1.0*q(x,0);};
+	std::function<double( double, DGApprox, DGApprox )> kappa0 = [ = ]( double x, DGApprox q, DGApprox u ){ return  0.1*q(x,0);};
 	diffobj->kappaFuncs.push_back(kappa0);
 
-	std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 1.0;};
+	std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.1;};
 	//std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 2*beta;};
 
 	std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
@@ -300,6 +342,8 @@ void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 */
 
 
+// 1D sourceless
+/*
 void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 {
 	auto nVar = sourceobj->nVar;
@@ -324,9 +368,8 @@ void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 
 	sourceobj->dFduFuncs[0].push_back(dF_0du_0);
 }
-
-
-//Fisher's Equation
+*/
+//1D Fisher's Equation
 /*
 void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 {
@@ -353,6 +396,46 @@ void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 	sourceobj->dFduFuncs[0].push_back(dF_0du_0);
 }
 */
+
+//2D Fisher's Equation
+void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
+{
+	auto nVar = sourceobj->nVar;
+	if(nVar != 2) throw std::runtime_error("check your source build, you did it wrong.");
+
+	sourceobj->clear();
+	double beta = 1.0;
+
+	std::function<double( double, DGApprox, DGApprox )> F_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return  -u(x,0)*beta*(1.0-u(x,0));};
+	std::function<double( double, DGApprox, DGApprox )> F_1 = [ = ]( double x, DGApprox q, DGApprox u ){ return  -2.0*u(x,1)*beta*(1.0-u(x,1));};
+	sourceobj->sourceFuncs.push_back(F_0);
+	sourceobj->sourceFuncs.push_back(F_1);
+
+	std::function<double( double, DGApprox, DGApprox )> dF_0dq_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox )> dF_0dq_1 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox )> dF_1dq_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox )> dF_1dq_1 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+	//std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 2*beta;};
+
+	std::function<double( double, DGApprox, DGApprox )> dF_0du_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return -beta + 2.0*beta*u(x,0);};
+	std::function<double( double, DGApprox, DGApprox )> dF_0du_1 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox )> dF_1du_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox )> dF_1du_1 = [ = ]( double x, DGApprox q, DGApprox u ){ return -2.0*beta + 4.0*beta*u(x,1);};
+	//std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+
+	sourceobj->dFdqFuncs.resize(nVar);
+	sourceobj->dFduFuncs.resize(nVar);
+
+	sourceobj->dFdqFuncs[0].push_back(dF_0dq_0);
+	sourceobj->dFdqFuncs[0].push_back(dF_0dq_1);
+	sourceobj->dFdqFuncs[1].push_back(dF_1dq_0);
+	sourceobj->dFdqFuncs[1].push_back(dF_1dq_1);
+
+	sourceobj->dFduFuncs[0].push_back(dF_0du_0);
+	sourceobj->dFduFuncs[0].push_back(dF_0du_1);
+	sourceobj->dFduFuncs[1].push_back(dF_1du_0);
+	sourceobj->dFduFuncs[1].push_back(dF_1du_1);
+}
 
 //Fisher's Equation - exact sol
 /*

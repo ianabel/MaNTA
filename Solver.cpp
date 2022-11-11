@@ -27,7 +27,7 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 	N_Vector constraints = NULL;	//vector for storing constraints
 	N_Vector id = NULL;				//vector for storing id (which elements are algebraic or differentiable)
 	N_Vector res = NULL;			//vector for storing residual
-	double delta_t = system.getdt();
+	double delta_t = system.getdt()/100;
 	realtype t0 = 0.0, t1 = delta_t, deltatPrint = system.getdt(), tout, tret;; 
 	double totalSteps = tFinal/delta_t;
 	int stepsPerPrint = floor(totalSteps*(deltatPrint/tFinal));
@@ -61,11 +61,11 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 	auto DirichletBCs = std::make_shared<BoundaryConditions>();
 	DirichletBCs->LowerBound = lBound;
 	DirichletBCs->UpperBound = uBound;
-	DirichletBCs->isLBoundDirichlet = true;
-	DirichletBCs->isUBoundDirichlet = true;
+	DirichletBCs->isLBoundDirichlet = false;
+	DirichletBCs->isUBoundDirichlet = false;
 	DirichletBCs->g_D = g_D_;
 	DirichletBCs->g_N = g_N_;
-	system.setBoundaryConditions(DirichletBCs.get());
+	system.setBoundaryConditions(DirichletBCs);
 
 	SUNContext ctx;
     retval = SUNContext_Create(nullptr, &ctx);
@@ -98,7 +98,7 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 	if(ErrorChecker::check_retval((void *)dYdt, "N_VClone", 0))
 		throw std::runtime_error("Sundials Initialization Error");
 	VectorWrapper yVec( N_VGetArrayPointer( Y ), N_VGetLength( Y ) ); 
-	VectorWrapper dydtVec( N_VGetArrayPointer( Y ), N_VGetLength( Y ) ); 
+	VectorWrapper dydtVec( N_VGetArrayPointer( dYdt ), N_VGetLength( dYdt ) ); 
 	yVec.setZero();
 	dydtVec.setZero();
 
@@ -193,10 +193,14 @@ void runSolver( SystemSolver& system, const sunindextype k, const sunindextype n
 			throw std::runtime_error("IDASolve could not complete");
 		}
 
-		system.print(out0, tout, nOut, 0);
-		if(nVar > 1) system.print(out1, tout, nOut, 1);
+		if(iout%100 == 0)
+		{
+			system.print(out0, tout, nOut, 0);
+			if(nVar > 1) system.print(out1, tout, nOut, 1);
+		}
 	}
 
+	std::cerr << "Total number of steps taken = " << system.total_steps << std::endl;
 	delete data, IDA_mem;
 }
 

@@ -310,6 +310,33 @@ class DGApprox
 			std::cerr << std::endl;
 		}
 
+		//This isn't a relevent value or an actual norm. It is just a testing function to show variation in DGApproxs which sould be identicle 
+		double variableDifference()
+		{
+			double norm = 0.0;
+			for ( int i = 0; i < coeffs[0].size() ; i++ )
+			{
+				norm += (coeffs[0][i].second - coeffs[1][i].second).norm()/std::min(coeffs[0][i].second.norm(), coeffs[1][i].second.norm());
+			}
+			return norm;
+		}
+
+		double maxCoeff()
+		{
+			double coeff = 0.0;
+			for(int var=0; var<coeffs.size(); var++)
+			{
+				for ( auto pair : coeffs[var] )
+				{
+					for(int i = 0; i<pair.second.size(); i++)
+					{
+						if(::abs(coeff) < ::abs(pair.second[i])) coeff = pair.second[i];
+					}
+				}
+			}
+			return coeff;
+		}
+
 		unsigned int k;
 		std::vector< std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>>> coeffs; // [var][interval]
 		LegendreBasis Basis;

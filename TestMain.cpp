@@ -16,13 +16,13 @@ void buildSourceObj(std::shared_ptr<SourceObj> sourceobj);
 int main()
 {
 	//---------------------------Variable assiments-------------------------------
-	const sunindextype k = 3;		//Polynomial degree of each cell
-	const sunindextype nVar = 2;
-	const double lBound = 0.0, uBound = 1.0;	//Spacial bounds
+	sunindextype k = 3;		//Polynomial degree of each cell
+	const sunindextype nVar = 1;
+	const double lBound = 0.0, uBound = 10.0;	//Spacial bounds
 	const double L = uBound - lBound;
 	int nOut = 300;
-	double tFinal = 3.0, delta_t = 1.0;
-	realtype rtol = 1.0e-6, atol = 1.0e-6;
+	double tFinal = 1.0, delta_t = 0.05;
+	realtype rtol = 1.0e-10, atol = 1.0e-10;
 
 	const double c_const = 0.0;
 	const double kappa_const = 1.0;
@@ -40,12 +40,12 @@ int main()
 	double beta = 1.0;
 	std::function<double( double )> u_0 = [=]( double y ){ return ::exp( -b*( y - a )*( y - a ) ); };
 	std::function<double( double )> gradu_0 = [=]( double y ){ return -2*a*(y - 5)*::exp( -b*( y - a )*( y - a ) ); };
-	//std::function<double( double, double )> uExact = [=]( double y, double t ){ return ::exp( -b*( y - a )*( y - a )/(1+4*b*t) )/( ::sqrt(4*b + 1/t)*::sqrt(t) ); };
-	//std::function<double( double, double )> qExact = [=]( double y, double t ){ return ::exp( -b*( y - a )*( y - a )/(1 + 4*b*t) )*(a - y)/( ::sqrt(4*b + 1/t)*::sqrt(t)*(1 + 4*b*t) ); };
+	std::function<double( double, double )> uExact = [=]( double y, double t ){ return ::exp( -b*( y - a )*( y - a )/(1+4*b*t) )/( ::sqrt(4*b + 1/t)*::sqrt(t) ); };
+	std::function<double( double, double )> qExact = [=]( double y, double t ){ return ::exp( -b*( y - a )*( y - a )/(1 + 4*b*t) )*(a - y)/( ::sqrt(4*b + 1/t)*::sqrt(t)*(1 + 4*b*t) ); };
 	
 	//std::function<double( double )> u_0 = [=]( double y ){ return ::exp( -b*( y - a )*( y - a ) ); }; //gaussian
 	//std::function<double( double )> gradu_0 = [=]( double y ){ return (1.0+::tanh(::sqrt(1.0/48.0)*y))/((::pow(::cosh(::sqrt(1.0/48.0)*y),2.0))*16.0*::sqrt(3.0)); }; //Fisher Example - exact Sol
-	//std::function<double( double )> sigma_0 = [=]( double y ){ return -1.0*gradu_0(y); }; //Fisher case
+	std::function<double( double )> sigma_0 = [=]( double y ){ return -1.0*((1.0+u_0(y)*u_0(y))*gradu_0(y) + 0.1*gradu_0(y)); }; //Fisher case
 
 	//std::function<double( double )> u_0 = [=]( double y ){ return -0.125*(::pow(::cosh(::sqrt(1.0/48.0)*y),-2.0) - 2.0*::tanh(::sqrt(1.0/48.0)*y) - 2.0); }; //Fisher example - exact sol
 	//std::function<double( double )> gradu_0 = [=]( double y ){ return -2*b*(y - a)*::exp( -b*( y - a )*( y - a ) ); }; //gaussian
@@ -75,7 +75,8 @@ int main()
 	ErrorTester errorTest(uExact, qExact, tFinal);
 	errorTest.setBounds(lBound, uBound);
 
-	for(int nCells = 10; nCells<=20; nCells+=10)
+	int nCells = 30;
+	for(k = 1; k<7; k++)
 	{
 		const Grid grid(lBound, uBound, nCells);
 		SystemSolver system(grid, k, nCells, nVar, delta_t, f, tau, c);
@@ -95,7 +96,7 @@ int main()
 		errorTest.H1SemiNorm(k, nCells, nVar, system);
 		std::cout << nCells << std::endl;
 
-		std::ofstream out0( "u_t_0_" + std::to_string(nCells) + ".plot" );
+		std::ofstream out0( "u_t_0_" + std::to_string(k) + ".plot" );
 		std::ofstream out1( "u_t_1_" + std::to_string(nCells) + ".plot" );
 		system.print(out0, tFinal, nOut, 0);
 	}
