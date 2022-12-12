@@ -10,14 +10,17 @@
 #include "gridStructures.hpp"
 #include "DiffusionObj.hpp"
 #include "SourceObj.hpp"
+#include "InitialConditionLibrary.hpp"
 
 class SystemSolver
 {
 public:
 	SystemSolver(Grid const& Grid, unsigned int polyNum, unsigned int N_cells, unsigned int N_Variables, double Dt, Fn const& rhs, Fn const& Tau, Fn const& c);
+	SystemSolver(std::string const& inputFile);
 	~SystemSolver() = default;
 
 	//Initialises u, q and lambda to satisfy residual equation at t=0
+	void setInitialConditions(N_Vector& Y, N_Vector& dYdt );
 	void setInitialConditions(std::function< double (double)> u_0, std::function< double ( double )> gradu_0, std::function< double ( double )> sigma_0, N_Vector& Y, N_Vector& dYdt );
 
 	//Builds initial matrices
@@ -65,8 +68,8 @@ public:
 	void updateBoundaryConditions(double t);
 
 	Grid grid;
-	unsigned int const k; 		//polynomial degree per cell
-	unsigned int const nCells;	//Total cell count
+	unsigned int k; 		//polynomial degree per cell
+	unsigned int nCells;	//Total cell count
 	int nVar;					//Total number of variables
 	
 	std::vector< Eigen::MatrixXd > XMats;
@@ -92,11 +95,15 @@ private:
 	double alpha = 1.0;
 	bool testing = false;
 
-	Fn RHS; //Forcing function
-	Fn c_fn,kappa_fn, tau; // convection velocity and diffusivity
+	//??To Be fixed - c and RHS can go. Tau needs to be user input, eventually will be come x dependent 
+	Fn RHS = [ = ]( double x ){ return 0.0;};
+	Fn c_fn = [ = ]( double x ){ return 0.0;};
+	Fn tau = [ = ]( double x ){ return 0.5;};
 
 	std::shared_ptr<DiffusionObj> diffObj;
 	std::shared_ptr<SourceObj> sourceObj;
+
+	InitialConditionLibrary initConditionLibrary;
 };
 
 struct UserData {

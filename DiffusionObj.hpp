@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Eigen/Core>
+#include <string>
 
 #include "gridStructures.hpp"
 
@@ -8,6 +9,7 @@ class DiffusionObj
 {
 public:
 	DiffusionObj(int k_, int nVar_);
+	DiffusionObj(int k_, int nVar_, std::string diffCase);
 	~DiffusionObj() = default;
 
 	std::function<double (double, DGApprox, DGApprox)> getKappaFunc(int var) {return kappaFuncs[var];}
@@ -26,4 +28,12 @@ public:
 	std::vector<std::function<double (double, DGApprox, DGApprox)>> kappaFuncs;
 	std::vector<std::vector<std::function<double (double, DGApprox, DGApprox)>>> delqKappaFuncs, deluKappaFuncs; //[kappa_variable][q/u_varible]
 	int k, nVar;
+
+private:
+	/*
+	Each function here duilds a different diffusion function
+	To build new functions first build out the function you want with the correct number of variables
+	then inculde the case in the if statements in the constructor of this class so that input files can call your case
+	*/
+	void buildSingleVariableLinearTest();
 };

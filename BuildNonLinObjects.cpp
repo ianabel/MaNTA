@@ -81,6 +81,7 @@ void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 */
 
 //2 variable non-linear case
+/*
 void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 {
 	auto nVar = diffobj->nVar;
@@ -117,7 +118,7 @@ void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 	diffobj->deluKappaFuncs[1].push_back(dkappa1du0);
 	diffobj->deluKappaFuncs[1].push_back(dkappa1du1);
 }
-
+*/
 
 //2-Dimensional Linear
 /*
@@ -279,7 +280,6 @@ void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 */
 
 //Single variable linear case
-/*
 void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 {
 	auto nVar = diffobj->nVar;
@@ -287,10 +287,10 @@ void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 
 	diffobj->clear();
 
-	std::function<double( double, DGApprox, DGApprox )> kappa0 = [ = ]( double x, DGApprox q, DGApprox u ){ return  0.1*q(x,0);};
+	std::function<double( double, DGApprox, DGApprox )> kappa0 = [ = ]( double x, DGApprox q, DGApprox u ){ return  1.0*q(x,0);};
 	diffobj->kappaFuncs.push_back(kappa0);
 
-	std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.1;};
+	std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 1.0;};
 	//std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 2*beta;};
 
 	std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
@@ -303,7 +303,7 @@ void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 
 	diffobj->deluKappaFuncs[0].push_back(dkappa0du0);
 }
-*/
+
 
 //----------------------Source Obects----------------
 //Sourceless case - 2 channel
@@ -343,7 +343,6 @@ void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 
 
 // 1D sourceless
-/*
 void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 {
 	auto nVar = sourceobj->nVar;
@@ -368,7 +367,7 @@ void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 
 	sourceobj->dFduFuncs[0].push_back(dF_0du_0);
 }
-*/
+
 //1D Fisher's Equation
 /*
 void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
@@ -398,6 +397,7 @@ void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 */
 
 //2D Fisher's Equation
+/*
 void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 {
 	auto nVar = sourceobj->nVar;
@@ -436,6 +436,7 @@ void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 	sourceobj->dFduFuncs[1].push_back(dF_1du_0);
 	sourceobj->dFduFuncs[1].push_back(dF_1du_1);
 }
+*/
 
 //Fisher's Equation - exact sol
 /*

@@ -43,6 +43,7 @@ typedef std::vector<std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd
 class Grid
 {
 public:
+	Grid() = default;
 	Grid(double lBound, double uBound, int nCells)
 		: upperBound(uBound), lowerBound(lBound)
 	{
@@ -110,6 +111,7 @@ class DGApprox
 	public:
 		typedef std::vector<Interval> Mesh;
 		~DGApprox() {};
+		DGApprox() = default;
 		DGApprox( Grid const& grid, unsigned int Order )
 		{
 			k = Order;

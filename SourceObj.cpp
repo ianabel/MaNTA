@@ -4,6 +4,14 @@ SourceObj::SourceObj(int k_, int nVar_)
 	: k(k_), nVar(nVar_)
 {}
 
+SourceObj::SourceObj(int k_, int nVar_, std::string diffCase)
+	: k(k_), nVar(nVar_)
+{
+	if(diffCase == "1dLinearTest") buildSingleVariableLinearTest();
+
+	else throw std::logic_error( "Diffusion Case provided does not exist" );
+}
+
 void SourceObj::setdFdqMat(Eigen::MatrixXd& dFdqMatrix, DGApprox q, DGApprox u, Interval I)
 {
 //	[ dF_1dq1    dF_1dq2    dF_1dq3 ]
@@ -60,3 +68,29 @@ void SourceObj::clear()
 	dFdqFuncs.clear();
 	dFdqFuncs.clear();
 }
+
+//---------------Reaction cases-------------------
+void SourceObj::buildSingleVariableLinearTest()
+{
+	auto nVar = 1;
+
+	clear();
+	double beta = 1.0;
+
+	std::function<double( double, DGApprox, DGApprox )> F_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return  0.0;};
+	sourceFuncs.push_back(F_0);
+
+	std::function<double( double, DGApprox, DGApprox )> dF_0dq_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+	//std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 2*beta;};
+
+	std::function<double( double, DGApprox, DGApprox )> dF_0du_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+	//std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+
+	dFdqFuncs.resize(nVar);
+	dFduFuncs.resize(nVar);
+
+	dFdqFuncs[0].push_back(dF_0dq_0);
+	dFduFuncs[0].push_back(dF_0du_0);
+}
+
+

@@ -3,14 +3,120 @@
 #include <sundials/sundials_types.h>        /* defs of realtype, sunindextype  */
 #include <Eigen/Core>
 #include <Eigen/Dense>
+#include <toml.hpp>
 #include <fstream>
 #include <iostream>
+#include <string>
 
 #include "gridStructures.hpp"
+#include "DiffusionObj.hpp"
+#include "SourceObj.hpp"
+#include "InitialConditionLibrary.hpp"
 
 SystemSolver::SystemSolver(Grid const& Grid, unsigned int polyNum, unsigned int N_cells, unsigned int N_Variables, double Dt, Fn const& rhs, Fn const& Tau, Fn const& c)
 	: grid(Grid), k(polyNum), nCells(N_cells), nVar(N_Variables), dt(Dt), RHS(rhs), tau(Tau), c_fn(c), sig(grid,k), q(grid,k), u(grid,k), dudt(grid,k), dqdt(grid,k), dsigdt(grid,k), BCs (nullptr)
 {
+}
+
+SystemSolver::SystemSolver(std::string const& inputFile)
+{
+	const auto configFile = toml::parse( inputFile );
+	const auto config = toml::find<toml::value>( configFile, "configuration" );
+
+	//Solver parameters
+	double lBound, uBound;
+
+	auto polyDegree = toml::find(config, "Polynomial_degree");
+	if( !config.count("Polynomial_degree") == 1 ) throw std::invalid_argument( "Polynomial_degree unspecified or specified more than once" );
+	else if( !polyDegree.is_integer() ) throw std::invalid_argument( "Polynomial_degree must be specified as an integer" );
+	else k = polyDegree.as_integer();
+
+	auto numberOfCells = toml::find(config, "Grid_size");
+	if( !config.count("Grid_size") == 1 ) throw std::invalid_argument( "Grid_size unspecified or specified more than once" );
+	if( !numberOfCells.is_integer() ) throw std::invalid_argument( "Grid_size must be specified as an integer" );
+	else nCells = numberOfCells.as_integer();
+
+	auto numberOfVariables = toml::find(config, "Number_of_channels");
+	if( !config.count("Number_of_channels") == 1 ) throw std::invalid_argument( "Number_of_channels unspecified or specified more than once" );
+	if( !numberOfVariables.is_integer() ) throw std::invalid_argument( "Number_of_channels must be specified as an integer" );
+	else nVar = numberOfVariables.as_integer();
+
+	//Initial Conditions
+	if ( config.count( "Initial_condition" ) != 1 )
+		throw std::invalid_argument( "[error] Initial_condition must be specified once in the [configuration] block" );
+	std::string initCondition = config.at( "Initial_condition" ).as_string();
+
+	// Non-linear inputs
+	// Diffusion
+	if ( config.count( "Diffusion_case" ) != 1 )
+		throw std::invalid_argument( "[error] Diffusion_case must be specified once in the [configuration] block" );
+	std::string diffusionCase = config.at( "Diffusion_case" ).as_string();
+	auto diffobj = std::make_shared< DiffusionObj >(k, nVar, diffusionCase);
+	// Reaction
+	if ( config.count( "Reaction_case" ) != 1 )
+		throw std::invalid_argument( "[error] Reaction_case must be specified once in the [configuration] block" );
+	std::string reactionCase = config.at( "Reaction_case" ).as_string();
+	auto sourceobj = std::make_shared< SourceObj >(k, nVar, reactionCase);
+
+	initConditionLibrary.set(initCondition, diffusionCase);
+
+	auto lowerBoundary = toml::find(config, "Lower_boundary");
+	if( !config.count("Lower_boundary") == 1 ) throw std::invalid_argument( "Lower_boundary unspecified or specified more than once" );
+	else if( lowerBoundary.is_integer() ) lBound = static_cast<double>(lowerBoundary.as_floating());
+	else if( lowerBoundary.is_floating() ) lBound = static_cast<double>(lowerBoundary.as_floating());
+	else throw std::invalid_argument( "Lower_boundary specified incorrrectly" );
+
+	auto upperBoundary = toml::find(config, "Upper_boundary");
+	if( !config.count("Upper_boundary") == 1 ) throw std::invalid_argument( "Upper_boundary unspecified or specified more than once" );
+	else if( upperBoundary.is_integer() ) uBound = static_cast<double>(upperBoundary.as_floating());
+	else if( upperBoundary.is_floating() ) uBound = static_cast<double>(upperBoundary.as_floating());
+	else throw std::invalid_argument( "Upper_boundary specified incorrrectly" );
+
+	grid = Grid(lBound, uBound, nCells);
+
+	sig.k = k; q.k = k; u.k = k;
+	dudt.k = k; dqdt.k = k; dsigdt.k = k;
+
+	//---------Boundary Conditions---------------
+	std::function<double( double, double )> g_D_ = [ = ]( double x, double t ) {
+		if ( x == lBound ) {
+			// u(0.0) == a
+			return 0.0;
+		} else if ( x == uBound ) {
+			// u(1.0) == a
+			//if(t<0.99999) return 1.0 - t;
+			//else return 0.00001;
+			return 0.0;
+		}
+		throw std::logic_error( "Boundary condition function being eval'd not on boundary ?!" );
+	};
+
+	std::function<double( double, double )> g_N_ = [ = ]( double x, double t ) {
+		if ( x == lBound ) {
+			// ( q + c u ) . n  a @ x = 0.0
+			return 0.0;
+		} else if ( x == uBound ) {
+			// ( q + c u ) . n  b @ x = 1.0
+			return 0.0;
+		}
+		throw std::logic_error( "Boundary condition function being eval'd not on boundary ?!" );
+	};
+
+	auto DirichletBCs = std::make_shared<BoundaryConditions>();
+	DirichletBCs->LowerBound = lBound;
+	DirichletBCs->UpperBound = uBound;
+	DirichletBCs->isLBoundDirichlet = true;
+	DirichletBCs->isUBoundDirichlet = true;
+	DirichletBCs->g_D = g_D_;
+	DirichletBCs->g_N = g_N_;
+	setBoundaryConditions(DirichletBCs);
+	setDiffobj(diffobj);
+	setSourceobj(sourceobj);
+}
+
+void SystemSolver::setInitialConditions( N_Vector& Y , N_Vector& dYdt )
+{
+	setInitialConditions(initConditionLibrary.getuInitial(), initConditionLibrary.getqInitial(), initConditionLibrary.getSigInitial(), Y, dYdt);
 }
 
 void SystemSolver::setInitialConditions( std::function< double ( double )> u_0, std::function< double ( double )> gradu_0, std::function< double ( double )> sigma_0, N_Vector& Y , N_Vector& dYdt ) 
@@ -33,6 +139,7 @@ void SystemSolver::setInitialConditions( std::function< double ( double )> u_0, 
 	q = gradu_0;
 	sig = sigma_0;
 
+	/*
 	double dx = ::abs(BCs->UpperBound - BCs->LowerBound)/nCells;
 	for(int var = 0; var < nVar; var++)
 	{
@@ -50,7 +157,26 @@ void SystemSolver::setInitialConditions( std::function< double ( double )> u_0, 
 		Interval I_f = grid.gridCells[ nCells-1 ];
 		lambda.value()[var*(nCells+1) + nCells] += u.Basis.Evaluate(I_f, u.coeffs[var][nCells-1].second, BCs->UpperBound)/2.0;
 	}
-	
+	*/
+
+	Eigen::VectorXd CsGuL_global(nVar*(nCells+1));
+	CsGuL_global.setZero();
+	for ( unsigned int i=0; i < nCells; i++ )
+	{
+		Interval I = grid.gridCells[ i ];
+		Eigen::VectorXd LVarCell(2);
+		Eigen::VectorXd CsGuLVarCell(2);
+		CsGuLVarCell.setZero();
+		LVarCell.setZero();
+		for(int var = 0; var < nVar; var++)
+		{
+			LVarCell = L_global.block<2,1>(var*(nCells+1) + i,0);
+			CsGuLVarCell = LVarCell - C_cellwise[i].block(var*2,var*(k+1),2,k+1)*sig.coeffs[ var ][ i ].second - G_cellwise[i].block(var*2,var*(k+1),2,k+1)*u.coeffs[ var ][ i ].second;
+			CsGuL_global.block(var*(nCells + 1) + i, 0, 2, 1) += CsGuLVarCell;
+		}
+	}
+	lambda.value() = H_global.solve(CsGuL_global);
+
 	for(int var = 0; var < nVar; var++)
 	{
 		//Solver For dudt with dudt = X^-1( -B*Sig - D*U - E*Lam + F )
@@ -482,10 +608,12 @@ void SystemSolver::updateMForJacSolve(std::vector< Eigen::FullPivLU< Eigen::Matr
 		//NLq Matrix
 		diffObj->NLqMat( NLq, newQ, newU, I);
 		MX.block( 2*nVar*(k+1), nVar*(k+1), nVar*(k+1), nVar*(k+1)) = NLq;
+		std::cerr << NLq << std::endl << std::endl;
 
 		//NLu Matrix
 		diffObj->NLuMat( NLu, newQ, newU, I);
 		MX.block( 2*nVar*(k+1),2* nVar*(k+1), nVar*(k+1), nVar*(k+1)) = NLu;
+		std::cerr << NLu << std::endl << std::endl;
 
 		//Fq Matrix
 		sourceObj->setdFdqMat( Fq, newQ, newU, I);
@@ -667,6 +795,7 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 			res2.coeffs[ var ][ i ].second += F_cellwise;
 
  			res3.coeffs[ var ][ i ].second = tempSig.coeffs[ var ][ i ].second + kappa_cellwise;
+			std::cerr << kappa_cellwise << std::endl << std::endl;
 		}
 	}
 
@@ -676,11 +805,12 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 	//res2.printCoeffs(1);
 	//res3.printCoeffs(0);
 	//res3.printCoeffs(1);
-	//std::cerr << tempdLamdt << std::endl << std::endl;
+	//std::cerr << lam << std::endl << std::endl;
 	//std::cerr << res4 << std::endl << std::endl;
 	//res4.setZero();
 	//tempdudt.printCoeffs(0);
 	//tempdudt.printCoeffs(1);
+	tempSig.printCoeffs(0);
 
 	VectorWrapper Vec( N_VGetArrayPointer( resval ), N_VGetLength( resval ) );
 	VectorWrapper yVec( N_VGetArrayPointer( Y ), N_VGetLength( Y ) );

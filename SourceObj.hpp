@@ -8,6 +8,7 @@ class SourceObj
 {
 public:
 	SourceObj(int k_, int nVar_);
+	SourceObj(int k_, int nVar_, std::string diffCase);
 	~SourceObj() = default;
 
 	std::function<double (double, DGApprox, DGApprox)> getSourceFunc(int var) {return sourceFuncs[var];}
@@ -26,4 +27,12 @@ public:
 	std::vector<std::function<double (double, DGApprox, DGApprox)>> sourceFuncs;
 	std::vector<std::vector<std::function<double (double, DGApprox, DGApprox)>>> dFdqFuncs, dFduFuncs; //[F_variable][q/u_varible]
 	int k, nVar; 
+
+private:
+	/*
+	Each function here duilds a different diffusion function
+	To build new functions first build out the function you want with the correct number of variables
+	then inculde the case in the if statements in the constructor of this class so that input files can call your case
+	*/
+	void buildSingleVariableLinearTest();
 };
