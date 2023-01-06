@@ -9,7 +9,7 @@ ERROBJECTS = $(patsubst %.cpp,%.o,$(ERRSOURCES))
 TESTOBJECTS = $(patsubst %.cpp,%.o,$(TESTSOURCES))
 
 %.o: %.cpp Makefile $(HEADERS)
-	$(CXX) -c $(CXXFLAGS) -g -O0 -o $@ $<
+	$(CXX) -c $(CXXFLAGS) -g -O3 -o $@ $<
 
 SUNDIALS_INC=/home/mylo_linux/MCTrans-original/MCTrans/sundials/include
 SUNDIALS_LIB=/home/mylo_linux/MCTrans-original/MCTrans/sundials/lib

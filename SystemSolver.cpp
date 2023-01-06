@@ -105,11 +105,28 @@ SystemSolver::SystemSolver(std::string const& inputFile)
 	auto DirichletBCs = std::make_shared<BoundaryConditions>();
 	DirichletBCs->LowerBound = lBound;
 	DirichletBCs->UpperBound = uBound;
-	DirichletBCs->isLBoundDirichlet = true;
-	DirichletBCs->isUBoundDirichlet = true;
+
+	if ( config.count( "LB_Type" ) != 1 )
+		throw std::invalid_argument( "[error] LB_Type must be specified once in the [configuration] block" );
+	std::string LBoundary_Condition = config.at( "LB_Type" ).as_string();
+	if (LBoundary_Condition == "Dirichlet") DirichletBCs->isLBoundDirichlet = true;
+	else if(LBoundary_Condition == "VonNeumann") DirichletBCs->isLBoundDirichlet = false;
+	else throw std::invalid_argument( "LB_type specified incorrrectly" );
+
+	if ( config.count( "UB_Type" ) != 1 )
+		throw std::invalid_argument( "[error] UB_Type must be specified once in the [configuration] block" );
+	std::string UBoundary_Condition = config.at( "UB_Type" ).as_string();
+	if (UBoundary_Condition == "Dirichlet") DirichletBCs->isUBoundDirichlet = true;
+	else if(UBoundary_Condition == "VonNeumann") DirichletBCs->isUBoundDirichlet = false;
+	else throw std::invalid_argument( "UB_type specified incorrrectly" );
+
 	DirichletBCs->g_D = g_D_;
 	DirichletBCs->g_N = g_N_;
 	setBoundaryConditions(DirichletBCs);
+
+	//-------------End of Boundary conditions
+
+
 	setDiffobj(diffobj);
 	setSourceobj(sourceobj);
 }
