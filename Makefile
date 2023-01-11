@@ -37,11 +37,12 @@ debug: $(OBJECTS) $(HEADERS) Makefile
 ErrorAnalysis: $(ERROBJECTS) $(HEADERS) Makefile
 	$(CXX) $(CXXFLAGS) -g -o errortest $(ERROBJECTS) $(LINK_FLAGS)
 
-unit_test_suite: $(TEST_SOURCES) $(TESTOBJECTS) $(HEADERS) Makefile
+unit_tests: $(TEST_SOURCES) $(TESTOBJECTS) $(HEADERS) Makefile
 	$(CXX) $(CXXFLAGS) -g -o unit_test_suite $(TEST_SOURCES) $(TESTOBJECTS) $(LINK_FLAGS)
+	./unit_test_suite
 
 clean: 
 	rm -f solver unit_test_suite errortest dbsolver $(OBJECTS) $(ERROBJECTS) $(TESTOBJECTS)
 
-regression: solver
+regression_tests: solver
 	cd UnitTests; ./CheckRegressionTests.sh

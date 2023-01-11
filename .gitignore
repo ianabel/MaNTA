@@ -1,4 +1,5 @@
 solver
+unit_test_suite
 /*.conf
 /*.report
 /*.plot
