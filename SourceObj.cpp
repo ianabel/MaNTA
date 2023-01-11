@@ -8,8 +8,9 @@ SourceObj::SourceObj(int k_, int nVar_, std::string diffCase)
 	: k(k_), nVar(nVar_)
 {
 	if(diffCase == "1dLinearTest") buildSingleVariableLinearTest();
+	else if(diffCase == "3VarNoSource") build3VariableLinearTest();
 
-	else throw std::logic_error( "Diffusion Case provided does not exist" );
+	else throw std::logic_error( "Source Case provided does not exist" );
 }
 
 void SourceObj::setdFdqMat(Eigen::MatrixXd& dFdqMatrix, DGApprox q, DGApprox u, Interval I)
@@ -93,4 +94,45 @@ void SourceObj::buildSingleVariableLinearTest()
 	dFduFuncs[0].push_back(dF_0du_0);
 }
 
+void SourceObj::build3VariableLinearTest()
+{
+	if(nVar != 3) throw std::runtime_error("check your source build, you did it wrong.");
 
+	clear();
+	double beta = 1.0;
+
+	std::function<double( double, DGApprox, DGApprox )> F_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return  0.0;};
+	sourceFuncs.push_back(F_0);
+	sourceFuncs.push_back(F_0);
+	sourceFuncs.push_back(F_0);
+
+	std::function<double( double, DGApprox, DGApprox )> dF_0dq_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+	//std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 2*beta;};
+
+	std::function<double( double, DGApprox, DGApprox )> dF_0du_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+	//std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+
+	dFdqFuncs.resize(nVar);
+	dFduFuncs.resize(nVar);
+
+	dFdqFuncs[0].push_back(dF_0dq_0);
+	dFdqFuncs[0].push_back(dF_0dq_0);
+	dFdqFuncs[0].push_back(dF_0dq_0);
+	dFdqFuncs[1].push_back(dF_0dq_0);
+	dFdqFuncs[1].push_back(dF_0dq_0);
+	dFdqFuncs[1].push_back(dF_0dq_0);
+	dFdqFuncs[2].push_back(dF_0dq_0);
+	dFdqFuncs[2].push_back(dF_0dq_0);
+	dFdqFuncs[2].push_back(dF_0dq_0);
+
+
+	dFduFuncs[0].push_back(dF_0du_0);
+	dFduFuncs[0].push_back(dF_0du_0);
+	dFduFuncs[0].push_back(dF_0du_0);
+	dFduFuncs[1].push_back(dF_0du_0);
+	dFduFuncs[1].push_back(dF_0du_0);
+	dFduFuncs[1].push_back(dF_0du_0);
+	dFduFuncs[2].push_back(dF_0du_0);
+	dFduFuncs[2].push_back(dF_0du_0);
+	dFduFuncs[2].push_back(dF_0du_0);
+}

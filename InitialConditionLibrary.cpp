@@ -17,5 +17,6 @@ Fn InitialConditionLibrary::getuInitial()
 Fn InitialConditionLibrary::getSigInitial()
 {
 	if(diffusionCase == "1dLinearTest") return std::function<double( double )> { [=]( double y ){ return -1.0*getqInitial()(y); } };
+	if(diffusionCase == "3VarLinearTest") return std::function<double( double )> { [=]( double y ){ return -1.1*getqInitial()(y); } };
 	else throw std::logic_error( "Diffusion Case provided does not exist" );
 }

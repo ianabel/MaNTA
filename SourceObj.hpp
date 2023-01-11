@@ -35,4 +35,5 @@ private:
 	then inculde the case in the if statements in the constructor of this class so that input files can call your case
 	*/
 	void buildSingleVariableLinearTest();
+	void build3VariableLinearTest();
 };

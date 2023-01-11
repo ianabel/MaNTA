@@ -223,14 +223,23 @@ void runSolver( SystemSolver& system, std::string const& inputFile )
 	double tFinal;
 	realtype rtol, atol;
 	int nCells = system.nCells, nVar = system.nVar, k = system.k;
-	bool printToFile = true; //??To be removed
+	bool printToFile = true;
+	realtype t0 = 0.0, t1, tout, tret;
 
-	double delta_t = 10e-3;
-	realtype t0 = 0.0, t1 = delta_t, deltatPrint, tout, tret;
 
 	//--------------------------------------Read File---------------------------------------
 	const auto configFile = toml::parse( inputFile );
 	const auto config = toml::find<toml::value>( configFile, "configuration" );
+
+	realtype deltatPrint;
+	auto printdt = toml::find(config, "delta_t");
+	if( !config.count("delta_t") == 1 ) throw std::invalid_argument( "delta_t unspecified or specified more than once" );
+	else if( printdt.is_integer() ) deltatPrint = static_cast<double>(printdt.as_floating());
+	else if( printdt.is_floating() ) deltatPrint = static_cast<double>(printdt.as_floating());
+	else throw std::invalid_argument( "delta_t specified incorrrectly" );
+
+	double delta_t = deltatPrint*0.5;
+	t1 = delta_t;
 
 	auto tEnd = toml::find(config, "t_final");
 	if( !config.count("t_final") == 1 ) throw std::invalid_argument( "tEnd unspecified or specified more than once" );
@@ -238,13 +247,15 @@ void runSolver( SystemSolver& system, std::string const& inputFile )
 	else if( tEnd.is_floating() ) tFinal = static_cast<double>(tEnd.as_floating());
 	else throw std::invalid_argument( "tEnd specified incorrrectly" );
 	double totalSteps = tFinal/delta_t;
-
-	auto printdt = toml::find(config, "delta_t");
-	if( !config.count("delta_t") == 1 ) throw std::invalid_argument( "delta_t unspecified or specified more than once" );
-	else if( printdt.is_integer() ) deltatPrint = static_cast<double>(printdt.as_floating());
-	else if( printdt.is_floating() ) deltatPrint = static_cast<double>(printdt.as_floating());
-	else throw std::invalid_argument( "delta_t specified incorrrectly" );
 	int stepsPerPrint = floor(totalSteps*(deltatPrint/tFinal));
+
+	//If dt is set to greater than tf, just print tf
+	if(tFinal<deltatPrint)
+	{
+		t1=tFinal;
+		stepsPerPrint = 1;
+		totalSteps = 1;
+	}
 
 	auto relTol = toml::find(config, "Relative_tolerance");
 	if( !config.count("Relative_tolerance") == 1 ) rtol = 1.0e-5;
@@ -345,18 +356,15 @@ void runSolver( SystemSolver& system, std::string const& inputFile )
 	IDASetJacFn(IDA_mem, EmptyJac);
 	
 	//------------------------------Solve------------------------------
-	std::ofstream out0( "u_t_0.plot" );
+	std::ofstream out0( inputFile.substr(0, inputFile.rfind(".")) + ".plot" );
 	std::ofstream out1( "u_t_1.plot" );
 
-
-	
 	if(printToFile)
 	{
 		system.print(out0, t0, nOut, 0);
 		if(nVar > 1) system.print(out1, t0, nOut, 1);
 	}
 	
-
 	//Update initial solution to be within tolerance of the residual equation
 	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
 	if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
@@ -366,19 +374,14 @@ void runSolver( SystemSolver& system, std::string const& inputFile )
 		throw std::runtime_error("IDACalcIC could not complete");
 	}
 
-	if(printToFile)
-	{
-		system.print(out0, t0, nOut, 0);
-		if(nVar > 1) system.print(out1, t0, nOut, 1);
-	}
-
+	//Solving Loop
 	for (tout = t1, iout = 1; iout <= totalSteps; iout++, tout += delta_t) 
 	{
-		std::cout << tout - delta_t << std::endl;
+		if(iout%stepsPerPrint)std::cout << tout - delta_t << std::endl;
 		retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
 		if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
 		{
-			system.print(out0, t0, nOut, 0);
+			system.print(out0, tout, nOut, 0);
 			if(nVar > 1) system.print(out1, t0, nOut, 1);
 			throw std::runtime_error("IDASolve could not complete");
 		}
@@ -389,7 +392,6 @@ void runSolver( SystemSolver& system, std::string const& inputFile )
 			if(nVar > 1) system.print(out1, tout, nOut, 1);
 		}
 	}
-
 	std::cerr << "Total number of steps taken = " << system.total_steps << std::endl;
 	delete data, IDA_mem;
 }

@@ -9,7 +9,7 @@ ERROBJECTS = $(patsubst %.cpp,%.o,$(ERRSOURCES))
 TESTOBJECTS = $(patsubst %.cpp,%.o,$(TESTSOURCES))
 
 %.o: %.cpp Makefile $(HEADERS)
-	$(CXX) -c $(CXXFLAGS) -g -O3 -o $@ $<
+	$(CXX) -c $(CXXFLAGS) -g -O0 -o $@ $<
 
 SUNDIALS_INC=/home/mylo_linux/MCTrans-original/MCTrans/sundials/include
 SUNDIALS_LIB=/home/mylo_linux/MCTrans-original/MCTrans/sundials/lib
@@ -42,3 +42,6 @@ unit_test_suite: $(TEST_SOURCES) $(TESTOBJECTS) $(HEADERS) Makefile
 
 clean: 
 	rm -f solver unit_test_suite errortest dbsolver $(OBJECTS) $(ERROBJECTS) $(TESTOBJECTS)
+
+regression: solver
+	cd UnitTests; ./CheckRegressionTests.sh

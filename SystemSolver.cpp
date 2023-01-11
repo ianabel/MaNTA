@@ -156,7 +156,6 @@ void SystemSolver::setInitialConditions( std::function< double ( double )> u_0, 
 	q = gradu_0;
 	sig = sigma_0;
 
-	/*
 	double dx = ::abs(BCs->UpperBound - BCs->LowerBound)/nCells;
 	for(int var = 0; var < nVar; var++)
 	{
@@ -174,8 +173,8 @@ void SystemSolver::setInitialConditions( std::function< double ( double )> u_0, 
 		Interval I_f = grid.gridCells[ nCells-1 ];
 		lambda.value()[var*(nCells+1) + nCells] += u.Basis.Evaluate(I_f, u.coeffs[var][nCells-1].second, BCs->UpperBound)/2.0;
 	}
-	*/
 
+	/*
 	Eigen::VectorXd CsGuL_global(nVar*(nCells+1));
 	CsGuL_global.setZero();
 	for ( unsigned int i=0; i < nCells; i++ )
@@ -193,6 +192,7 @@ void SystemSolver::setInitialConditions( std::function< double ( double )> u_0, 
 		}
 	}
 	lambda.value() = H_global.solve(CsGuL_global);
+	*/
 
 	for(int var = 0; var < nVar; var++)
 	{
@@ -625,12 +625,10 @@ void SystemSolver::updateMForJacSolve(std::vector< Eigen::FullPivLU< Eigen::Matr
 		//NLq Matrix
 		diffObj->NLqMat( NLq, newQ, newU, I);
 		MX.block( 2*nVar*(k+1), nVar*(k+1), nVar*(k+1), nVar*(k+1)) = NLq;
-		std::cerr << NLq << std::endl << std::endl;
 
 		//NLu Matrix
 		diffObj->NLuMat( NLu, newQ, newU, I);
 		MX.block( 2*nVar*(k+1),2* nVar*(k+1), nVar*(k+1), nVar*(k+1)) = NLu;
-		std::cerr << NLu << std::endl << std::endl;
 
 		//Fq Matrix
 		sourceObj->setdFdqMat( Fq, newQ, newU, I);
@@ -703,7 +701,6 @@ void SystemSolver::solveJacEq(N_Vector& g, N_Vector& delY)
 
 	Eigen::FullPivLU< Eigen::MatrixXd > lu( K_global );
 	delLambda = lu.solve( F );
-	//std::cerr << F << std::endl << std::endl;
 
 	// Now find del sigma, del q and del u to eventually find del Y
 	for ( unsigned int i=0; i < nCells; i++ )
@@ -774,7 +771,6 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 	for(int j = 0; j<nCells; j++)
 	{
 		Interval I = grid.gridCells[ j ];
-		//std::cerr << tempLambda[j] << "	" << res4[j]  << "	" << tempU(I.x_l, 0) << "	" << tempSig(I.x_l, 0)<< std::endl << std::endl;
 	}
 
 	for ( unsigned int i=0; i < nCells; i++ )
@@ -812,7 +808,6 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 			res2.coeffs[ var ][ i ].second += F_cellwise;
 
  			res3.coeffs[ var ][ i ].second = tempSig.coeffs[ var ][ i ].second + kappa_cellwise;
-			std::cerr << kappa_cellwise << std::endl << std::endl;
 		}
 	}
 
@@ -827,12 +822,12 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 	//res4.setZero();
 	//tempdudt.printCoeffs(0);
 	//tempdudt.printCoeffs(1);
-	tempSig.printCoeffs(0);
+	//tempSig.printCoeffs(0);
 
 	VectorWrapper Vec( N_VGetArrayPointer( resval ), N_VGetLength( resval ) );
 	VectorWrapper yVec( N_VGetArrayPointer( Y ), N_VGetLength( Y ) );
 	VectorWrapper ypVec( N_VGetArrayPointer( dydt ), N_VGetLength( dydt ) );
-	std::cerr << Vec.norm() << "	" << "	" << Vec.maxCoeff() << "	" << Vec.minCoeff() << "	" << yVec.maxCoeff() << "	" << yVec.minCoeff() << "	" << ypVec.maxCoeff() << "	" << ypVec.minCoeff() << "	" << tres << std::endl << std::endl;
+	std::cerr << Vec.norm() << "	" << "	" << Vec.maxCoeff() << "	" << Vec.minCoeff() << "	" << tres << std::endl << std::endl;
 
 
 	std::ofstream out( "trial.plot" );
@@ -843,7 +838,6 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 		VectorWrapper residualVec( N_VGetArrayPointer( resval ), N_VGetLength( resval ) );
 		system->resNorm = residualVec.norm();
 	}
-	//std::cerr << res3.variableDifference() << std::endl << std::endl;
 
 	return 0;
 }
@@ -897,3 +891,4 @@ std::shared_ptr<SourceObj> SystemSolver::getSourceObj()
 	if(sourceObj) return sourceObj;
 	else return nullptr;
 }
+
