@@ -36,4 +36,5 @@ private:
 	*/
 	void buildSingleVariableLinearTest();
 	void build3VariableLinearTest();
+	void build1DFisherSource();
 };
