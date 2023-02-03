@@ -94,6 +94,7 @@ private:
 	bool initialised = false;
 	double alpha = 1.0;
 	bool testing = false;
+	bool highGridBoundary = true;
 
 	//??To Be fixed - c and RHS can go. Tau needs to be user input, eventually will be come x dependent 
 	Fn RHS = [ = ]( double x ){ return 0.0;};

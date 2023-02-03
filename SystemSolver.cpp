@@ -31,10 +31,23 @@ SystemSolver::SystemSolver(std::string const& inputFile)
 	else if( !polyDegree.is_integer() ) throw std::invalid_argument( "Polynomial_degree must be specified as an integer" );
 	else k = polyDegree.as_integer();
 
+	if ( config.count( "High_Grid_Boundary" ) != 1 ) highGridBoundary = false;
+	else
+	{
+		std::string denseEdges = config.at( "High_Grid_Boundary" ).as_string();
+		if (denseEdges == "true") highGridBoundary = true;
+		else if(denseEdges == "false") highGridBoundary = false;
+		else throw std::invalid_argument( "high_Grid_Boundary specified incorrrectly" );
+	}
+
 	auto numberOfCells = toml::find(config, "Grid_size");
 	if( !config.count("Grid_size") == 1 ) throw std::invalid_argument( "Grid_size unspecified or specified more than once" );
 	if( !numberOfCells.is_integer() ) throw std::invalid_argument( "Grid_size must be specified as an integer" );
 	else nCells = numberOfCells.as_integer();
+
+	if(nCells<4 && highGridBoundary)
+		throw std::invalid_argument( "Grid size must exceed 4 cells in order to implemet dense boundaries" );
+	if(highGridBoundary) nCells += 8;
 
 	auto numberOfVariables = toml::find(config, "Number_of_channels");
 	if( !config.count("Number_of_channels") == 1 ) throw std::invalid_argument( "Number_of_channels unspecified or specified more than once" );
@@ -72,7 +85,7 @@ SystemSolver::SystemSolver(std::string const& inputFile)
 	else if( upperBoundary.is_floating() ) uBound = static_cast<double>(upperBoundary.as_floating());
 	else throw std::invalid_argument( "Upper_boundary specified incorrrectly" );
 
-	grid = Grid(lBound, uBound, nCells);
+	grid = Grid(lBound, uBound, nCells, highGridBoundary);
 
 	sig.k = k; q.k = k; u.k = k;
 	dudt.k = k; dqdt.k = k; dsigdt.k = k;

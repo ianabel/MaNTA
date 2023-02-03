@@ -53,6 +53,35 @@ public:
 		gridCells.emplace_back(lBound + (nCells-1)*cellLength, uBound);
 	}
 
+	Grid(double lBound, double uBound, int nCells, bool highGridBoundary)
+		: upperBound(uBound), lowerBound(lBound)
+	{
+		if(!highGridBoundary)
+		{
+			double cellLength = abs(uBound-lBound)/static_cast<double>(nCells);
+			for(int i = 0; i < nCells - 1; i++)
+				gridCells.emplace_back(lBound + i*cellLength, lBound + (i+1)*cellLength);
+			gridCells.emplace_back(lBound + (nCells-1)*cellLength, uBound);
+		}
+		else
+		{
+			double sCellLength = abs(uBound-lBound)/static_cast<double>(nCells-8)/4.0;
+			double mCellLength = abs(uBound-lBound)/static_cast<double>(nCells-8)/2.0;
+			double lCellLength = abs(uBound-lBound)/static_cast<double>(nCells-8);
+			for(int i = 0; i < 4; i++)
+				gridCells.emplace_back(lBound + i*sCellLength, lBound + (i+1)*sCellLength);
+			for(int i = 0; i < 2; i++)
+				gridCells.emplace_back(lBound + (i+2)*mCellLength, lBound + (i+3)*mCellLength);
+			for(int i = 0; i < nCells-12; i++)
+				gridCells.emplace_back(lBound + (i+2)*lCellLength, lBound + (i+3)*lCellLength);
+			for(int i = 0; i < 2; i++)
+				gridCells.emplace_back(lBound + (i+2*(nCells-8)-4)*mCellLength, lBound + (i+2*(nCells-8)-3)*mCellLength);
+			for(int i = 0; i < 3; i++)
+				gridCells.emplace_back(lBound + (i+4*(nCells-8)-4)*sCellLength, lBound + (i+4*(nCells-8)-3)*sCellLength);
+			gridCells.emplace_back(lBound + (4*(nCells-8)-1)*sCellLength, uBound);
+		}
+	}
+
 	Grid(const Grid& grid) = default; 
 
 	std::vector<Interval> gridCells;
