@@ -7,9 +7,10 @@ SourceObj::SourceObj(int k_, int nVar_)
 SourceObj::SourceObj(int k_, int nVar_, std::string reactionCase)
 	: k(k_), nVar(nVar_)
 {
-	if(reactionCase == "1dLinearTest") buildSingleVariableLinearTest();
-	else if(reactionCase == "3VarNoSource") build3VariableLinearTest();
+	if(reactionCase == "1DSourceless") buildSingleVariableLinearTest();
+	else if(reactionCase == "3DSourceless") build3VariableLinearTest();
 	else if(reactionCase == "1DFisher") build1DFisherSource();
+	else if(reactionCase == "1DConstSource") build1DConstSource();
 
 	else throw std::logic_error( "Source Case provided does not exist" );
 }
@@ -154,6 +155,34 @@ void SourceObj::build1DFisherSource()
 
 	dFdqFuncs.resize(nVar);
 	dFduFuncs.resize(nVar);
+	dFdqFuncs[0].push_back(dF_0dq_0);
+	dFduFuncs[0].push_back(dF_0du_0);
+}
+
+void SourceObj::build1DConstSource()
+{
+	auto nVar = 1;
+
+	clear();
+	double beta = 1.0;
+
+	std::function<double( double, DGApprox, DGApprox )> F_0 = [ = ]( double x, DGApprox q, DGApprox u )
+	{
+		return -1.0;
+	//	if(x>0.5) return  -2.0;
+	//	else return 0.0;
+	};
+	sourceFuncs.push_back(F_0);
+
+	std::function<double( double, DGApprox, DGApprox )> dF_0dq_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+	//std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 2*beta;};
+
+	std::function<double( double, DGApprox, DGApprox )> dF_0du_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+	//std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+
+	dFdqFuncs.resize(nVar);
+	dFduFuncs.resize(nVar);
+
 	dFdqFuncs[0].push_back(dF_0dq_0);
 	dFduFuncs[0].push_back(dF_0du_0);
 }

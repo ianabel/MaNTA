@@ -8,8 +8,9 @@ DiffusionObj::DiffusionObj(int k_, int nVar_)
 DiffusionObj::DiffusionObj(int k_, int nVar_, std::string diffCase)
 	: k(k_), nVar(nVar_)
 {
-	if(diffCase == "1dLinearTest") buildSingleVariableLinearTest();
+	if(diffCase == "1DLinearTest") buildSingleVariableLinearTest();
 	else if(diffCase == "3VarLinearTest") build3VariableLinearTest();
+	else if(diffCase == "1DCriticalDiffusion") build1DCritDiff();
 
 	else throw std::logic_error( "Diffusion Case provided does not exist" );
 }
@@ -163,4 +164,40 @@ void DiffusionObj::build3VariableLinearTest()
 	deluKappaFuncs[2].push_back(dkappa2du0);
 	deluKappaFuncs[2].push_back(dkappa2du1);
 	deluKappaFuncs[2].push_back(dkappa2du2);
+}
+
+void DiffusionObj::build1DCritDiff()
+{
+	//This is recreating the critical diffusion model used in "On 1D diffusion problems with a gradient-dependent diffusion coefficient" by Jardin et al
+	if(nVar != 1) throw std::runtime_error("check your kappa build, you did it wrong.");
+	clear();
+	double beta = 1.0;
+	double alpha = 0.5;
+	double kap = 10;
+	double qc = 0.5;
+	double xi_o = 1.0;
+
+	auto xi = [ ]( double q_ )
+	{
+		if( ::abs(q_) > 0.5) return 10*::pow( ::abs(q_) - 0.5, 0.5) + 1.0;
+		else return 1.0;
+	};
+
+	auto dxidq = [ ]( double q_ )
+	{
+		if( ::abs(q_) > 0.5) 
+		{
+			return 5.0*q_/(::abs(q_)*::pow( ::abs(q_) - 0.5, 0.5));
+		}
+		else return 0.0;
+	};
+
+	std::function<double( double, DGApprox, DGApprox )> kappa0 = [ = ]( double x, DGApprox q, DGApprox u ){ return  x*xi(q(x,0))*q(x,0);};
+	kappaFuncs.push_back(kappa0);
+	std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return x*xi(q(x,0)) + x*q(x,0)*dxidq(q(x,0));};
+	std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+	delqKappaFuncs.resize(nVar);
+	deluKappaFuncs.resize(nVar);
+	delqKappaFuncs[0].push_back(dkappa0dq0);
+	deluKappaFuncs[0].push_back(dkappa0du0);
 }

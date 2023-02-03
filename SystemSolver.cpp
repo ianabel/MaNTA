@@ -80,7 +80,8 @@ SystemSolver::SystemSolver(std::string const& inputFile)
 	//---------Boundary Conditions---------------
 	std::function<double( double, double )> g_D_ = [ = ]( double x, double t ) {
 		if ( x == lBound ) {
-			// u(0.0) == a
+			//if(t>0.5) return 0.5;
+			//else return 1.0-t;
 			return 0.0;
 		} else if ( x == uBound ) {
 			// u(1.0) == a
@@ -159,8 +160,6 @@ void SystemSolver::setInitialConditions( std::function< double ( double )> u_0, 
 	double dx = ::abs(BCs->UpperBound - BCs->LowerBound)/nCells;
 	for(int var = 0; var < nVar; var++)
 	{
-		Interval I_0 = grid.gridCells[ 0 ];
-		lambda.value()[var*(nCells+1)] += u.Basis.Evaluate(I_0, u.coeffs[var][0].second, BCs->LowerBound)/2;
 		for ( unsigned int i=0; i < nCells; i++ )
 		{
 			Interval I = grid.gridCells[ i ];
@@ -170,10 +169,10 @@ void SystemSolver::setInitialConditions( std::function< double ( double )> u_0, 
 			dlamdt.value()[var*(nCells+1) + i] += dudt.Basis.Evaluate(I, dudt.coeffs[var][i].second, BCs->LowerBound + i*(dx))/2;
 			dlamdt.value()[var*(nCells+1) + i+1] += dudt.Basis.Evaluate(I, dudt .coeffs[var][i].second, BCs->LowerBound + (i+1)*(dx))/2;
 		}
-		Interval I_f = grid.gridCells[ nCells-1 ];
-		lambda.value()[var*(nCells+1) + nCells] += u.Basis.Evaluate(I_f, u.coeffs[var][nCells-1].second, BCs->UpperBound)/2.0;
+		lambda.value()[var*(nCells+1)] = BCs->g_D(grid.lowerBound, static_cast<double>(0.0));
+		lambda.value()[var*(nCells+1) + nCells] = BCs->g_D(grid.upperBound, static_cast<double>(0.0));
 	}
-
+	
 	/*
 	Eigen::VectorXd CsGuL_global(nVar*(nCells+1));
 	CsGuL_global.setZero();
@@ -628,15 +627,15 @@ void SystemSolver::updateMForJacSolve(std::vector< Eigen::FullPivLU< Eigen::Matr
 
 		//NLu Matrix
 		diffObj->NLuMat( NLu, newQ, newU, I);
-		MX.block( 2*nVar*(k+1),2* nVar*(k+1), nVar*(k+1), nVar*(k+1)) = NLu;
+		MX.block( 2*nVar*(k+1), 2*nVar*(k+1), nVar*(k+1), nVar*(k+1)) = NLu;
 
 		//Fq Matrix
 		sourceObj->setdFdqMat( Fq, newQ, newU, I);
-		MX.block( nVar*(k+1), nVar*(k+1), nVar*(k+1), nVar*(k+1) ) += Fq;
+		MX.block( nVar*(k+1), nVar*(k+1), nVar*(k+1), nVar*(k+1) ) = Fq;
 
 		//Fu Matrix
-		sourceObj->setdFdqMat( Fu, newQ, newU, I);
-		MX.block( nVar*(k+1), nVar*(k+1), nVar*(k+1), nVar*(k+1) ) += Fu;
+		sourceObj->setdFduMat( Fu, newQ, newU, I);
+		MX.block( nVar*(k+1), 2*nVar*(k+1), nVar*(k+1), nVar*(k+1) ) += Fu;
 
 		MXsolvers.emplace_back(MX);
 	}
@@ -766,6 +765,8 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 		}
 	}
 	lam = system->H_global.solve( CsGuL_global );
+	if(system->BCs->isLBoundDirichlet) lam[0] = system->BCs->g_D(system->grid.lowerBound, static_cast<double>(tres));
+	if(system->BCs->isUBoundDirichlet) lam[nCells] = system->BCs->g_D(system->grid.upperBound, static_cast<double>(tres));
 	res4 = -tempLambda + lam;
 
 	for(int j = 0; j<nCells; j++)
@@ -806,7 +807,6 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 			res1.coeffs[ var ][ i ].second = -system->A_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempQ.coeffs[var][i].second - system->B_cellwise[i].transpose().block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second + system->C_cellwise[i].transpose().block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0) - system->RF_cellwise[ i ].block( var*(k+1), 0, k + 1, 1 );
 			res2.coeffs[ var ][ i ].second = system->B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempSig.coeffs[ var ][ i ].second + system->D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second + system->E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0) - system->RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ) + tempdudt.coeffs[ var ][ i ].second;
 			res2.coeffs[ var ][ i ].second += F_cellwise;
-
  			res3.coeffs[ var ][ i ].second = tempSig.coeffs[ var ][ i ].second + kappa_cellwise;
 		}
 	}
@@ -818,6 +818,7 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 	//res3.printCoeffs(0);
 	//res3.printCoeffs(1);
 	//std::cerr << lam << std::endl << std::endl;
+	//std::cerr << tempLambda << std::endl << std::endl;
 	//std::cerr << res4 << std::endl << std::endl;
 	//res4.setZero();
 	//tempdudt.printCoeffs(0);
@@ -828,11 +829,8 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 	VectorWrapper yVec( N_VGetArrayPointer( Y ), N_VGetLength( Y ) );
 	VectorWrapper ypVec( N_VGetArrayPointer( dydt ), N_VGetLength( dydt ) );
 	std::cerr << Vec.norm() << "	" << "	" << Vec.maxCoeff() << "	" << Vec.minCoeff() << "	" << tres << std::endl << std::endl;
-
-
-	std::ofstream out( "trial.plot" );
-	system->print(out, 0.0, 200, 0, dydt);
 	system->total_steps++;
+
 	if(system->isTesting())
 	{	
 		VectorWrapper residualVec( N_VGetArrayPointer( resval ), N_VGetLength( resval ) );
@@ -864,7 +862,7 @@ void SystemSolver::print( std::ostream& out, double t, int nOut, int var, N_Vect
 	out << "# t = " << t << std::endl;
 	for ( int i=0; i<nOut; ++i )
 	{
-		double x = BCs->LowerBound + ( BCs->UpperBound - BCs->LowerBound ) * ( static_cast<double>( i )/( nOut ) );
+		double x = BCs->LowerBound + ( BCs->UpperBound - BCs->LowerBound ) * ( static_cast<double>( i )/( nOut-1 ) );
 		out << x << "\t" << EvalCoeffs( U.Basis, U.coeffs, x, var ) << "\t" << EvalCoeffs( U.Basis, Q.coeffs, x, var ) << "\t" << EvalCoeffs( U.Basis, Sig.coeffs, x, var ) << std::endl;
 	}
 	out << std::endl;
