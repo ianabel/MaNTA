@@ -858,7 +858,7 @@ void SystemSolver::print( std::ostream& out, double t, int nOut, int var )
 	out << "# t = " << t << std::endl;
 	for ( int i=0; i<nOut; ++i )
 	{
-		double x = BCs->LowerBound + ( BCs->UpperBound - BCs->LowerBound ) * ( static_cast<double>( i )/( nOut ) );
+		double x = BCs->LowerBound + ( BCs->UpperBound - BCs->LowerBound ) * ( static_cast<double>( i )/( nOut-1 ) );
 		out << x << "\t" << EvalCoeffs( u.Basis, u.coeffs, x, var ) << "\t" << EvalCoeffs( u.Basis, q.coeffs, x, var ) << "\t" << EvalCoeffs( u.Basis, sig.coeffs, x, var ) << "\t" << EvalCoeffs( u.Basis, dudt.coeffs, x, var ) << "\t" << EvalCoeffs( u.Basis, dqdt.coeffs, x, var ) << "\t" << EvalCoeffs( u.Basis, dsigdt.coeffs, x, var ) << std::endl;
 	}
 	out << std::endl;
