@@ -195,6 +195,26 @@ class DGApprox
 			return *this;
 		}
 
+		DGApprox& operator=( std::function<double( double, int )> const & f )
+		{
+			Eigen::VectorXd v( k + 1 );
+			for(int var=0; var<coeffs.size(); var++)
+			{
+				for ( auto pair : coeffs[var] )
+				{
+					Interval const& I = pair.first;
+					v.setZero();
+					// Interpolate onto k legendre polynomials
+					for ( Eigen::Index i=0; i<= k; i++ )
+					{
+						v( i ) = CellProduct( I, f, Basis.phi( I, i ), var );
+					}
+					pair.second = v;
+				}
+			}
+			return *this;
+		}
+
 		void sum( DGApprox& A, DGApprox& B)
 		{
 			Eigen::VectorXd v( k + 1 );
@@ -240,6 +260,12 @@ class DGApprox
 			return integrator.integrate( u, I.x_l, I.x_u );
 		};
 
+		double CellProduct( Interval const& I, std::function< double( double, int )> f, std::function< double( double )> g, int var )
+		{
+			auto u = [ & ]( double x ){ return f( x, var )*g( x );};
+			return integrator.integrate( u, I.x_l, I.x_u );
+		};
+
 		double EdgeProduct( Interval const& I, std::function< double( double )> f, std::function< double( double )> g )
 		{
 			return f( I.x_l )*g( I.x_l ) + f( I.x_u )*g( I.x_u );
@@ -256,6 +282,15 @@ class DGApprox
 				for ( Eigen::Index j = 0 ; j < u.cols(); j++ )
 				{
 					auto F = [ & ]( double x ) { return w( x ) * Basis.Evaluate( I, i, x ) * Basis.Evaluate( I, j, x ); };
+					u( i, j ) = integrator.integrate( F, I.x_l, I.x_u );
+				}
+		};
+
+		void MassMatrix( Interval const& I, Eigen::MatrixXd &u, std::function< double( double, int )> const& w, int var ) {
+			for ( Eigen::Index i = 0 ; i < u.rows(); i++ )
+				for ( Eigen::Index j = 0 ; j < u.cols(); j++ )
+				{
+					auto F = [ & ]( double x ) { return w( x, var ) * Basis.Evaluate( I, i, x ) * Basis.Evaluate( I, j, x ); };
 					u( i, j ) = integrator.integrate( F, I.x_l, I.x_u );
 				}
 		};

@@ -87,9 +87,9 @@ BOOST_AUTO_TEST_CASE( SysSolver_Core_functional_test)
 
 	double a = 5.0;
 	double b = 4.0;
-	std::function<double( double )> u_0 = [=]( double y ){ return ::exp( -b*( y - a )*( y - a ) ); }; //gaussian
-	std::function<double( double )> gradu_0 = [=]( double y ){ return -2.0*b*(y - a)*::exp( -b*( y - a )*( y - a ) ); }; //gaussian
-	std::function<double( double )> sigma_0 = [=]( double y ){ return -1.0*(1.0+u_0(y)*u_0(y))*gradu_0(y) ; };
+	std::function<double( double, int )> u_0 = [=]( double y, int var ){ return ::exp( -b*( y - a )*( y - a ) ); }; //gaussian
+	std::function<double( double, int )> gradu_0 = [=]( double y, int var ){ return -2.0*b*(y - a)*::exp( -b*( y - a )*( y - a ) ); }; //gaussian
+	std::function<double( double, int )> sigma_0 = [=]( double y, int var ){ return -1.0*(1.0+u_0(y,0)*u_0(y,0))*gradu_0(y,0) ; };
 
 	N_Vector Y = NULL, dYdt = NULL, resval = NULL;
 	SUNContext ctx;

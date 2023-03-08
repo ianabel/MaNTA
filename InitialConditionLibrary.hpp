@@ -3,8 +3,6 @@
 #include <string>
 #include <functional>
 
-typedef std::function<double( double )> Fn;
-
 class InitialConditionLibrary
 {
 public:
@@ -16,9 +14,9 @@ public:
 		diffusionCase = diffCase;
 	}
 
-	Fn getqInitial();
-	Fn getuInitial();
-	Fn getSigInitial();
+	std::function<double( double, int )> getqInitial();
+	std::function<double( double, int )> getuInitial();
+	std::function<double( double, int )> getSigInitial();
 
 private:
 	std::string initialCondition = "", diffusionCase = "";

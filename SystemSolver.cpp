@@ -138,7 +138,7 @@ SystemSolver::SystemSolver(std::string const& inputFile)
 	DirichletBCs->g_N = g_N_;
 	setBoundaryConditions(DirichletBCs);
 
-	//-------------End of Boundary conditions
+	//-------------End of Boundary conditions------------------------------------
 
 
 	setDiffobj(diffobj);
@@ -150,7 +150,7 @@ void SystemSolver::setInitialConditions( N_Vector& Y , N_Vector& dYdt )
 	setInitialConditions(initConditionLibrary.getuInitial(), initConditionLibrary.getqInitial(), initConditionLibrary.getSigInitial(), Y, dYdt);
 }
 
-void SystemSolver::setInitialConditions( std::function< double ( double )> u_0, std::function< double ( double )> gradu_0, std::function< double ( double )> sigma_0, N_Vector& Y , N_Vector& dYdt ) 
+void SystemSolver::setInitialConditions( std::function< double ( double, int )> u_0, std::function< double ( double, int )> gradu_0, std::function< double ( double, int )> sigma_0, N_Vector& Y , N_Vector& dYdt ) 
 {
 	if ( !initialised )
 		initialiseMatrices();
@@ -258,7 +258,9 @@ void SystemSolver::initialiseMatrices()
 	{
 		A.setZero();
 		B.setZero();
+		C.setZero();
 		D.setZero();
+		E.setZero();
 		Interval const& I( grid.gridCells[ i ] );
 		for(int var=0; var<nVar; var++)
 		{
@@ -266,7 +268,7 @@ void SystemSolver::initialiseMatrices()
 			Bvar.setZero();
 			Dvar.setZero();
 			// A_ij = ( phi_j, phi_i )
-			u.MassMatrix( I, Avar );
+			u.MassMatrix( I, Avar, a_fn, var );
 			// B_ij = ( phi_i, phi_j' )
 			u.DerivativeMatrix( I, Bvar );
 			// D_ij = -(c phi_j, phi_i') + < w, tau u > 
@@ -358,6 +360,7 @@ void SystemSolver::initialiseMatrices()
 			C.block(var*2,var*(k+1),2,k+1) = Cvar;
 			E.block(var*(k+1),var*2,k+1,2) = Evar;
 		}
+		
 		CE_vec.block( 0, 0, nVar*(k + 1), nVar*2 ) = C.transpose();
 		CE_vec.block( nVar*(k+1), 0, nVar*(k + 1), nVar*2 ) = E;
 		CE_vec.block( 2*nVar*(k+1), 0, nVar*(k + 1), nVar*2 ).setZero();
@@ -759,7 +762,6 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 	VectorWrapper resVec( N_VGetArrayPointer( resval ), N_VGetLength( resval ) );
 	resVec.setZero();
 
-
 	//Solve for Lambda with Lam = (H^T)^-1*[ -C*Sig - G*U + L ] 
 	Eigen::VectorXd CsGuL_global(nVar*(nCells+1));
 	CsGuL_global.setZero();
@@ -826,6 +828,7 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 
 	//res1.printCoeffs(0);
 	//res1.printCoeffs(1);
+	//res1.printCoeffs(2);
 	//res2.printCoeffs(0);
 	//res2.printCoeffs(1);
 	//res3.printCoeffs(0);
