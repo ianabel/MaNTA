@@ -8,6 +8,7 @@
 class DiffusionObj
 {
 public:
+	DiffusionObj() {};
 	DiffusionObj(int k_, int nVar_);
 	DiffusionObj(int k_, int nVar_, std::string diffCase);
 	~DiffusionObj() = default;
@@ -36,6 +37,7 @@ private:
 	then inculde the case in the if statements in the constructor of this class so that input files can call your case
 	*/
 	void buildSingleVariableLinearTest();
+	void build2DLinear();
 	void build3VariableLinearTest();
 	void build1DCritDiff();
 	void buildCylinderPlasmaConstDensity();

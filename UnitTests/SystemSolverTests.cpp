@@ -51,12 +51,12 @@ void buildTestSourceObj(std::shared_ptr<SourceObj> sourceobj)
 	std::function<double( double, DGApprox, DGApprox )> dF_0du_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
 	//std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
 
-	sourceobj->dFdqFuncs.resize(nVar);
-	sourceobj->dFduFuncs.resize(nVar);
+	sourceobj->delqSourceFuncs.resize(nVar);
+	sourceobj->deluSourceFuncs.resize(nVar);
 
-	sourceobj->dFdqFuncs[0].push_back(dF_0dq_0);
+	sourceobj->delqSourceFuncs[0].push_back(dF_0dq_0);
 
-	sourceobj->dFduFuncs[0].push_back(dF_0du_0);
+	sourceobj->deluSourceFuncs[0].push_back(dF_0du_0);
 }
 
 BOOST_AUTO_TEST_SUITE( functiontal_test_suite, * boost::unit_test::tolerance( 1e-6 ) )

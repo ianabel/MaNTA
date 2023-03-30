@@ -13,6 +13,8 @@
 #include "SourceObj.hpp"
 #include "InitialConditionLibrary.hpp"
 
+void makePlasmaCase(std::string const& plasmaCase, std::shared_ptr<Plasma>& plasmaPtr);
+
 SystemSolver::SystemSolver(Grid const& Grid, unsigned int polyNum, unsigned int N_cells, unsigned int N_Variables, double Dt, Fn const& rhs, Fn const& Tau, Fn const& c)
 	: grid(Grid), k(polyNum), nCells(N_cells), nVar(N_Variables), dt(Dt), RHS(rhs), tau(Tau), c_fn(c), sig(grid,k), q(grid,k), u(grid,k), dudt(grid,k), dqdt(grid,k), dsigdt(grid,k), BCs (nullptr)
 {
@@ -59,20 +61,39 @@ SystemSolver::SystemSolver(std::string const& inputFile)
 		throw std::invalid_argument( "[error] Initial_condition must be specified once in the [configuration] block" );
 	std::string initCondition = config.at( "Initial_condition" ).as_string();
 
-	// Non-linear inputs
-	// Diffusion
-	if ( config.count( "Diffusion_case" ) != 1 )
-		throw std::invalid_argument( "[error] Diffusion_case must be specified once in the [configuration] block" );
-	std::string diffusionCase = config.at( "Diffusion_case" ).as_string();
-	auto diffobj = std::make_shared< DiffusionObj >(k, nVar, diffusionCase);
-	// Reaction
-	if ( config.count( "Reaction_case" ) != 1 )
-		throw std::invalid_argument( "[error] Reaction_case must be specified once in the [configuration] block" );
-	std::string reactionCase = config.at( "Reaction_case" ).as_string();
-	auto sourceobj = std::make_shared< SourceObj >(k, nVar, reactionCase);
+	if( config.count( "Plasma_case" ) == 0 )
+	{
+		//??TO DO: Obseletize this code and replace with plasma cases??
+		// Non-linear inputs
+		// Diffusion
+		if ( config.count( "Diffusion_case" ) != 1 )
+			throw std::invalid_argument( "[error] Diffusion_case must be specified once in the [configuration] block" );
+		std::string diffusionCase = config.at( "Diffusion_case" ).as_string();
+		auto diffobj = std::make_shared< DiffusionObj >(k, nVar, diffusionCase);
+		// Reaction
+		if ( config.count( "Reaction_case" ) != 1 )
+			throw std::invalid_argument( "[error] Reaction_case must be specified once in the [configuration] block" );
+		std::string reactionCase = config.at( "Reaction_case" ).as_string();
+		auto sourceobj = std::make_shared< SourceObj >(k, nVar, reactionCase);
 
-	initConditionLibrary.set(initCondition, diffusionCase);
+		initConditionLibrary.set(initCondition, diffusionCase);
 
+		setDiffobj(diffobj);
+		setSourceobj(sourceobj);
+	}
+	else if( config.count( "Plasma_case" ) == 1 )
+	{
+		std::string plasmaCase = config.at( "Plasma_case" ).as_string();
+		makePlasmaCase(plasmaCase, plasma);
+		plasma->constructPlasma();
+
+		setDiffobj(plasma->diffObj);
+		setSourceobj(plasma->sourceObj);
+
+		initConditionLibrary.set(initCondition);
+	}
+
+	//---------Boundary Conditions---------------
 	auto lowerBoundary = toml::find(config, "Lower_boundary");
 	if( !config.count("Lower_boundary") == 1 ) throw std::invalid_argument( "Lower_boundary unspecified or specified more than once" );
 	else if( lowerBoundary.is_integer() ) lBound = static_cast<double>(lowerBoundary.as_floating());
@@ -90,7 +111,6 @@ SystemSolver::SystemSolver(std::string const& inputFile)
 	sig.k = k; q.k = k; u.k = k;
 	dudt.k = k; dqdt.k = k; dsigdt.k = k;
 
-	//---------Boundary Conditions---------------
 	std::function<double( double, double )> g_D_ = [ = ]( double x, double t ) {
 		if ( x == lBound ) {
 			//if(t>0.5) return 0.5;
@@ -139,15 +159,11 @@ SystemSolver::SystemSolver(std::string const& inputFile)
 	setBoundaryConditions(DirichletBCs);
 
 	//-------------End of Boundary conditions------------------------------------
-
-
-	setDiffobj(diffobj);
-	setSourceobj(sourceobj);
 }
 
 void SystemSolver::setInitialConditions( N_Vector& Y , N_Vector& dYdt )
 {
-	setInitialConditions(initConditionLibrary.getuInitial(), initConditionLibrary.getqInitial(), initConditionLibrary.getSigInitial(), Y, dYdt);
+	setInitialConditions(initConditionLibrary.getuInitial(), initConditionLibrary.getqInitial(), initConditionLibrary.getSigInitial(plasma, q, u), Y, dYdt);
 }
 
 void SystemSolver::setInitialConditions( std::function< double ( double, int )> u_0, std::function< double ( double, int )> gradu_0, std::function< double ( double, int )> sigma_0, N_Vector& Y , N_Vector& dYdt ) 
@@ -168,7 +184,10 @@ void SystemSolver::setInitialConditions( std::function< double ( double, int )> 
 
 	u = u_0;
 	q = gradu_0;
-	sig = sigma_0;
+
+	//??TO DO: remove sigma from initial condition library all together
+	if(plasma){ sig = [ = ]( double R, int var ){return -1.0*plasma->getVariable(var).kappaFunc(R,q,u);}; }
+	else sig = sigma_0;
 
 	double dx = ::abs(BCs->UpperBound - BCs->LowerBound)/nCells;
 	for(int var = 0; var < nVar; var++)
@@ -214,12 +233,13 @@ void SystemSolver::setInitialConditions( std::function< double ( double, int )> 
 		{
 			Interval I = grid.gridCells[ i ];
 
-			std::function< double (double) > sourceFunc = [ = ]( double x ) { return getSourceObj()->getSourceFunc(var)( x, q, q); };
+			std::function< double (double) > sourceFunc = [ = ]( double x ) { return getSourceObj()->getSourceFunc(var)( x, q, u); };
 			//Evaluate Source Function
 			Eigen::VectorXd F_cellwise(k+1);
+			F_cellwise.setZero();
 			for ( Eigen::Index j = 0; j < k+1; j++ )
 				F_cellwise( j ) = u.CellProduct( I, sourceFunc, u.Basis.phi( I, j ) );
-
+			
 			auto cTInv = Eigen::FullPivLU< Eigen::MatrixXd >(C_cellwise[i].transpose());
 			lamCell[0] = lambda.value()[var*(nCells+1) + i]; lamCell[1] = lambda.value()[var*(nCells+1) + i+1];
 			//dudt.coeffs[ var ][ i ].second.setZero();		
@@ -820,8 +840,9 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 				F_cellwise( j ) = tempU.CellProduct( I, sourceFunc, tempU.Basis.phi( I, j%(k+1) ) );
 
 			res1.coeffs[ var ][ i ].second = -system->A_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempQ.coeffs[var][i].second - system->B_cellwise[i].transpose().block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second + system->C_cellwise[i].transpose().block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0) - system->RF_cellwise[ i ].block( var*(k+1), 0, k + 1, 1 );
-			res2.coeffs[ var ][ i ].second = system->B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempSig.coeffs[ var ][ i ].second + system->D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second + system->E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0) - system->RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ) + tempdudt.coeffs[ var ][ i ].second;
-			res2.coeffs[ var ][ i ].second += F_cellwise;
+			//res2.coeffs[ var ][ i ].second = system->B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempSig.coeffs[ var ][ i ].second + system->D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second + system->E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0) - system->RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ) + tempdudt.coeffs[ var ][ i ].second;
+			//res2.coeffs[ var ][ i ].second += F_cellwise;
+			res2.coeffs[ var ][ i ].second = system->B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempSig.coeffs[ var ][ i ].second + system->D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second + system->E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0) - system->RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ) + F_cellwise + tempdudt.coeffs[ var ][ i ].second;
  			res3.coeffs[ var ][ i ].second = tempSig.coeffs[ var ][ i ].second + kappa_cellwise;
 		}
 	}

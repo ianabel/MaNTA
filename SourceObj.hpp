@@ -7,6 +7,7 @@
 class SourceObj
 {
 public:
+	SourceObj() {};
 	SourceObj(int k_, int nVar_);
 	SourceObj(int k_, int nVar_, std::string diffCase);
 	~SourceObj() = default;
@@ -25,7 +26,7 @@ public:
 
 	//kept public for ease of assignment
 	std::vector<std::function<double (double, DGApprox, DGApprox)>> sourceFuncs;
-	std::vector<std::vector<std::function<double (double, DGApprox, DGApprox)>>> dFdqFuncs, dFduFuncs; //[F_variable][q/u_varible]
+	std::vector<std::vector<std::function<double (double, DGApprox, DGApprox)>>> delqSourceFuncs, deluSourceFuncs; //[Source_variable][q/u_varible]
 	int k, nVar; 
 
 private:
@@ -35,7 +36,9 @@ private:
 	then inculde the case in the if statements in the constructor of this class so that input files can call your case
 	*/
 	void buildSingleVariableLinearTest();
+	void build2DSourceless();
 	void build3VariableLinearTest();
 	void build1DFisherSource();
 	void build1DConstSource();
+	void buildCylinderPlasmaConstDensitySource();
 };

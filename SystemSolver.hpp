@@ -11,6 +11,7 @@
 #include "DiffusionObj.hpp"
 #include "SourceObj.hpp"
 #include "InitialConditionLibrary.hpp"
+#include "Plasma_cases/Plasma.hpp"
 
 class SystemSolver
 {
@@ -55,10 +56,10 @@ public:
 	Fn getcfn() const {return c_fn;}
 	double getdt() const {return dt;}
 
-	void setDiffobj(std::shared_ptr<DiffusionObj> diffObj_) {diffObj = diffObj_;}
+	void setDiffobj(std::shared_ptr<DiffusionObj> diffObj_) {diffObj = diffObj_; diffObj->k = k;}
 	std::shared_ptr<DiffusionObj> getDiffObj();
 
-	void setSourceobj(std::shared_ptr<SourceObj> sourceObj_) {sourceObj = sourceObj_;}
+	void setSourceobj(std::shared_ptr<SourceObj> sourceObj_) {sourceObj = sourceObj_; sourceObj->k = k;}
 	std::shared_ptr<SourceObj> getSourceObj();
 
 	void setTesting(bool t) {testing = t;}
@@ -106,6 +107,7 @@ private:
 
 	std::shared_ptr<DiffusionObj> diffObj;
 	std::shared_ptr<SourceObj> sourceObj;
+	std::shared_ptr<Plasma> plasma;
 
 	InitialConditionLibrary initConditionLibrary;
 };

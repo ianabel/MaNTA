@@ -1,5 +1,6 @@
 #include "DiffusionObj.hpp"
 #include <boost/functional/hash.hpp>
+#include "Constants.hpp"
 
 DiffusionObj::DiffusionObj(int k_, int nVar_)
 	: k(k_), nVar(nVar_)
@@ -9,9 +10,10 @@ DiffusionObj::DiffusionObj(int k_, int nVar_, std::string diffCase)
 	: k(k_), nVar(nVar_)
 {
 	if(diffCase == "1DLinearTest") buildSingleVariableLinearTest();
+	else if(diffCase == "2DLinear") build2DLinear();
 	else if(diffCase == "3VarLinearTest") build3VariableLinearTest();
 	else if(diffCase == "1DCriticalDiffusion") build1DCritDiff();
-	else if(diffCase == "CylinderPlasmaConstDensity") build1DCritDiff();
+	else if(diffCase == "CylinderPlasmaConstDensity") buildCylinderPlasmaConstDensity();
 
 	else throw std::logic_error( "Diffusion Case provided does not exist" );
 }
@@ -96,6 +98,52 @@ void DiffusionObj::buildSingleVariableLinearTest()
 
 	delqKappaFuncs[0].push_back(dkappa0dq0);
 	deluKappaFuncs[0].push_back(dkappa0du0);
+}
+
+void DiffusionObj::build2DLinear()
+{
+	//Label variables to corespond to specific channels
+	int P = 0;
+	int omega = 1;
+
+	auto nVar = 2;
+	delqKappaFuncs.resize(nVar);
+	deluKappaFuncs.resize(nVar);
+
+	clear();
+	std::function<double( double, DGApprox, DGApprox )> kappaP = [ = ]( double R, DGApprox q, DGApprox u ){ return q(R,P);};
+	std::function<double( double, DGApprox, DGApprox )> kappaOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return q(R,omega);};
+	kappaFuncs.push_back(kappaP);
+	kappaFuncs.push_back(kappaOmega);
+
+	//----------dk/du--------------
+
+	std::function<double( double, DGApprox, DGApprox )> dkappaPdP = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0 ;};
+	std::function<double( double, DGApprox, DGApprox )> dkappaPdOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
+
+	deluKappaFuncs[0].push_back(dkappaPdP);
+	deluKappaFuncs[0].push_back(dkappaPdOmega);
+
+	std::function<double( double, DGApprox, DGApprox )> dkappaOmegadP = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox )> dkappaOmegadOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
+
+	deluKappaFuncs[1].push_back(dkappaOmegadP);
+	deluKappaFuncs[1].push_back(dkappaOmegadOmega);
+
+	
+	//-----------dk/dq---------------------
+
+	std::function<double( double, DGApprox, DGApprox )> dkappaPddP = [ = ]( double R, DGApprox q, DGApprox u ){ return 1.0;};
+	std::function<double( double, DGApprox, DGApprox )> dkappaPddOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
+
+	delqKappaFuncs[0].push_back(dkappaPddP);
+	delqKappaFuncs[0].push_back(dkappaPddOmega);
+
+	std::function<double( double, DGApprox, DGApprox )> dkappaOmegaddP = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox )> dkappaOmegaddOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return 1.0;};
+
+	delqKappaFuncs[1].push_back(dkappaOmegaddP);
+	delqKappaFuncs[1].push_back(dkappaOmegaddOmega);
 }
 
 void DiffusionObj::build3VariableLinearTest()
@@ -205,6 +253,10 @@ void DiffusionObj::build1DCritDiff()
 
 void DiffusionObj::buildCylinderPlasmaConstDensity()
 {
+	//Constants
+	double n = 1.0;
+	double Te = 30;
+
 	//Label variables to corespond to specific channels
 	int P = 0;
 	int omega = 1;
@@ -215,38 +267,47 @@ void DiffusionObj::buildCylinderPlasmaConstDensity()
 
 	clear();
 	double beta = 1.0;
-	double c2 = 1.0;
 
-	std::function<double( double, DGApprox, DGApprox )> kappaP = [ = ]( double x, DGApprox q, DGApprox u ){ return (2.0*beta/3.0)*x*x*x*u(x,P)*q(x,P);};
-	std::function<double( double, DGApprox, DGApprox )> kappaOmega = [ = ]( double x, DGApprox q, DGApprox u ){ return (c2*3/10)*x*x*u(x,P)/u(x,omega);};
+	auto lambda = [n, Te](){
+		if(Te<50) return 23.4 - 1.15*::log(n) + 3.45*::log(Te);
+		else return 25.3 - 1.15*::log(n) + 2.3*::log(Te);
+	};
+	std::function<double (double)> tau = [ = ](double Ps){
+		return 3.0e9/lambda()*::sqrt(mi/(2*mp))*::pow(Ps,3/2)/::pow(n,5/2);
+	};
+	std::function<double (double)> dtaudP = [ = ](double Ps){return 4.5e9/lambda()*::sqrt(mi/(2*mp))*::pow(Ps,1/2)/::pow(n,5/2);};
+
+	std::function<double( double, DGApprox, DGApprox )> kappaP = [ = ]( double R, DGApprox q, DGApprox u ){ return beta*R*u(R,P)*q(R,P)/tau(u(R,P));};
+	std::function<double( double, DGApprox, DGApprox )> kappaOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return 3.0/10.0*R*R*u(R,P)*q(R,omega)/tau(u(R,P));};
 	kappaFuncs.push_back(kappaP);
 	kappaFuncs.push_back(kappaOmega);
 
-	//-----------dk/dq---------------------
-
-	std::function<double( double, DGApprox, DGApprox )> dkappaPddP = [ = ]( double x, DGApprox q, DGApprox u ){ return (2.0*beta/3.0)*x*x*x*u(x,P);};
-	std::function<double( double, DGApprox, DGApprox )> dkappaPddOmega = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
-
-	delqKappaFuncs[0].push_back(dkappaPddP);
-	delqKappaFuncs[0].push_back(dkappaPddOmega);
-
-	std::function<double( double, DGApprox, DGApprox )> dkappaOmegaddP = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dkappaOmegaddOmega = [ = ]( double x, DGApprox q, DGApprox u ){ return 1.0;};
-
-	delqKappaFuncs[1].push_back(dkappaOmegaddP);
-	delqKappaFuncs[1].push_back(dkappaOmegaddOmega);
-
 	//----------dk/du--------------
 
-	std::function<double( double, DGApprox, DGApprox )> dkappaPdP = [ = ]( double x, DGApprox q, DGApprox u ){ return (2.0*beta/3.0)*x*x*x*q(x,P);};
-	std::function<double( double, DGApprox, DGApprox )> dkappaPdOmega = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox )> dkappaPdP = [ = ]( double R, DGApprox q, DGApprox u ){ return beta*R*q(R,P)/tau(u(R,P)) - beta*R*u(R,P)*q(R,P)/(tau(u(R,P))*tau(u(R,P)))*dtaudP(u(R,P)) ;};
+	std::function<double( double, DGApprox, DGApprox )> dkappaPdOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
 
 	deluKappaFuncs[0].push_back(dkappaPdP);
 	deluKappaFuncs[0].push_back(dkappaPdOmega);
 
-	std::function<double( double, DGApprox, DGApprox )> dkappaOmegadP = [ = ]( double x, DGApprox q, DGApprox u ){ return (c2*3/10)*x*x/u(x,omega);};
-	std::function<double( double, DGApprox, DGApprox )> dkappaOmegadOmega = [ = ]( double x, DGApprox q, DGApprox u ){ return -(c2*3/10)*x*x*u(x,P)/(u(x,omega)*u(x,omega));};
+	std::function<double( double, DGApprox, DGApprox )> dkappaOmegadP = [ = ]( double R, DGApprox q, DGApprox u ){ return 3.0/10.0*R*R*q(R,omega)/tau(u(R,P)) - 3.0/10.0*R*R*u(R,P)*q(R,omega)/(tau(u(R,P))*tau(u(R,P)))*dtaudP(u(R,P));};
+	std::function<double( double, DGApprox, DGApprox )> dkappaOmegadOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
 
 	deluKappaFuncs[1].push_back(dkappaOmegadP);
 	deluKappaFuncs[1].push_back(dkappaOmegadOmega);
+
+	
+	//-----------dk/dq---------------------
+
+	std::function<double( double, DGApprox, DGApprox )> dkappaPddP = [ = ]( double R, DGApprox q, DGApprox u ){ return beta*R*u(R,P)/tau(u(R,P));};
+	std::function<double( double, DGApprox, DGApprox )> dkappaPddOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
+
+	delqKappaFuncs[0].push_back(dkappaPddP);
+	delqKappaFuncs[0].push_back(dkappaPddOmega);
+
+	std::function<double( double, DGApprox, DGApprox )> dkappaOmegaddP = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox )> dkappaOmegaddOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return 3.0/10.0*R*R*u(R,P)/tau(u(R,P));};
+
+	delqKappaFuncs[1].push_back(dkappaOmegaddP);
+	delqKappaFuncs[1].push_back(dkappaOmegaddOmega);
 }

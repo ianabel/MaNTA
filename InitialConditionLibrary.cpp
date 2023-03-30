@@ -1,4 +1,5 @@
 #include "InitialConditionLibrary.hpp"
+#include "Plasma_cases/Plasma.hpp"
 #include <cmath>
 #include <stdexcept>
 
@@ -32,9 +33,19 @@ std::function<double( double, int )> InitialConditionLibrary::getuInitial()
 	else throw std::logic_error( "Initial Condition provided does not exist" );
 }
 
-std::function<double( double, int )> InitialConditionLibrary::getSigInitial()
+std::function<double( double, int )> InitialConditionLibrary::getSigInitial( std::shared_ptr<Plasma> plasma, DGApprox& q, DGApprox& u )
 {
-	if(diffusionCase == "1DLinearTest") return std::function<double( double, int )> { [=]( double y, int var ){ return -1.0*getqInitial()(y, var); } };
+	if(plasma)
+	{
+		std::function<double( double, int )> sig_0 = [ = ]( double R, int var )
+		{
+			return -1.0*plasma->getVariable(var).kappaFunc(R,q,u);
+		};
+		return sig_0;
+	}
+
+	//??TO DO: everything from here on out should be removed along with the functions in diffObj and sourceObj
+	if(diffusionCase == "1DLinearTest" || diffusionCase == "2DLinear") return std::function<double( double, int )> { [=]( double y, int var ){ return -1.0*getqInitial()(y, var); } };
 	if(diffusionCase == "3VarLinearTest") return std::function<double( double, int )> { [=]( double y, int var ){ return -1.1*getqInitial()(y, var); } };
 	if(diffusionCase == "1DCriticalDiffusion")
 	{
@@ -45,12 +56,24 @@ std::function<double( double, int )> InitialConditionLibrary::getSigInitial()
 		};
 		return std::function<double( double, int )> { [=]( double y, int var ){ return -1.0*y*xi(getqInitial()(y, var))*getqInitial()(y, var); } };
 	}
-	/*
 	if(diffusionCase == "CylinderPlasmaConstDensity")
 	{
-		//P = 0, Omega = 1
-		if()
+		//Label variables to corespond to specific channels
+		int P = 0;
+		int omega = 1;
+		auto nVar = 2;
+		double beta = 1.0;
+
+		std::function<double (double)> tau = [ = ](double Ps){return 1.0;};
+		std::function<double (double)> dtaudP = [ = ](double Ps){return 0.0;};
+
+		std::function<double( double, int )> sig_0 = [ = ]( double R, int var )
+		{
+			if(var=P) return -beta*R*getuInitial()(R,P)*getqInitial()(R,P)/tau(getuInitial()(R,P));
+			else if(var=omega) return -3.0/10.0*R*R*getuInitial()(R,P)*getqInitial()(R,omega)/tau(getuInitial()(R,P));
+			else throw std::logic_error( "function not defined for given channel" );
+		};
+		return sig_0;
 	}
-	*/
 	else throw std::logic_error( "Diffusion Case provided does not exist" );
 }

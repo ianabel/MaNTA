@@ -326,18 +326,18 @@ void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 	std::function<double( double, DGApprox, DGApprox )> dF_0du_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
 	//std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
 
-	sourceobj->dFdqFuncs.resize(nVar);
-	sourceobj->dFduFuncs.resize(nVar);
+	sourceobj->delqSourceFuncs.resize(nVar);
+	sourceobj->deluSourceFuncs.resize(nVar);
 
-	sourceobj->dFdqFuncs[0].push_back(dF_0dq_0);
-	sourceobj->dFdqFuncs[0].push_back(dF_0dq_0);
-	sourceobj->dFdqFuncs[1].push_back(dF_0dq_0);
-	sourceobj->dFdqFuncs[1].push_back(dF_0dq_0);
+	sourceobj->delqSourceFuncs[0].push_back(dF_0dq_0);
+	sourceobj->delqSourceFuncs[0].push_back(dF_0dq_0);
+	sourceobj->delqSourceFuncs[1].push_back(dF_0dq_0);
+	sourceobj->delqSourceFuncs[1].push_back(dF_0dq_0);
 
-	sourceobj->dFduFuncs[0].push_back(dF_0du_0);
-	sourceobj->dFduFuncs[0].push_back(dF_0du_0);
-	sourceobj->dFduFuncs[1].push_back(dF_0du_0);
-	sourceobj->dFduFuncs[1].push_back(dF_0du_0);
+	sourceobj->deluSourceFuncs[0].push_back(dF_0du_0);
+	sourceobj->deluSourceFuncs[0].push_back(dF_0du_0);
+	sourceobj->deluSourceFuncs[1].push_back(dF_0du_0);
+	sourceobj->deluSourceFuncs[1].push_back(dF_0du_0);
 }
 */
 
@@ -360,12 +360,12 @@ void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 	std::function<double( double, DGApprox, DGApprox )> dF_0du_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
 	//std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
 
-	sourceobj->dFdqFuncs.resize(nVar);
-	sourceobj->dFduFuncs.resize(nVar);
+	sourceobj->delqSourceFuncs.resize(nVar);
+	sourceobj->deluSourceFuncs.resize(nVar);
 
-	sourceobj->dFdqFuncs[0].push_back(dF_0dq_0);
+	sourceobj->delqSourceFuncs[0].push_back(dF_0dq_0);
 
-	sourceobj->dFduFuncs[0].push_back(dF_0du_0);
+	sourceobj->deluSourceFuncs[0].push_back(dF_0du_0);
 }
 
 //1D Fisher's Equation
@@ -387,12 +387,12 @@ void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 	std::function<double( double, DGApprox, DGApprox )> dF_0du_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return -beta + 2.0*beta*u(x,0);};
 	//std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
 
-	sourceobj->dFdqFuncs.resize(nVar);
-	sourceobj->dFduFuncs.resize(nVar);
+	sourceobj->delqSourceFuncs.resize(nVar);
+	sourceobj->deluSourceFuncs.resize(nVar);
 
-	sourceobj->dFdqFuncs[0].push_back(dF_0dq_0);
+	sourceobj->delqSourceFuncs[0].push_back(dF_0dq_0);
 
-	sourceobj->dFduFuncs[0].push_back(dF_0du_0);
+	sourceobj->deluSourceFuncs[0].push_back(dF_0du_0);
 }
 */
 
@@ -423,18 +423,18 @@ void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 	std::function<double( double, DGApprox, DGApprox )> dF_1du_1 = [ = ]( double x, DGApprox q, DGApprox u ){ return -2.0*beta + 4.0*beta*u(x,1);};
 	//std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
 
-	sourceobj->dFdqFuncs.resize(nVar);
-	sourceobj->dFduFuncs.resize(nVar);
+	sourceobj->delqSourceFuncs.resize(nVar);
+	sourceobj->deluSourceFuncs.resize(nVar);
 
-	sourceobj->dFdqFuncs[0].push_back(dF_0dq_0);
-	sourceobj->dFdqFuncs[0].push_back(dF_0dq_1);
-	sourceobj->dFdqFuncs[1].push_back(dF_1dq_0);
-	sourceobj->dFdqFuncs[1].push_back(dF_1dq_1);
+	sourceobj->delqSourceFuncs[0].push_back(dF_0dq_0);
+	sourceobj->delqSourceFuncs[0].push_back(dF_0dq_1);
+	sourceobj->delqSourceFuncs[1].push_back(dF_1dq_0);
+	sourceobj->delqSourceFuncs[1].push_back(dF_1dq_1);
 
-	sourceobj->dFduFuncs[0].push_back(dF_0du_0);
-	sourceobj->dFduFuncs[0].push_back(dF_0du_1);
-	sourceobj->dFduFuncs[1].push_back(dF_1du_0);
-	sourceobj->dFduFuncs[1].push_back(dF_1du_1);
+	sourceobj->deluSourceFuncs[0].push_back(dF_0du_0);
+	sourceobj->deluSourceFuncs[0].push_back(dF_0du_1);
+	sourceobj->deluSourceFuncs[1].push_back(dF_1du_0);
+	sourceobj->deluSourceFuncs[1].push_back(dF_1du_1);
 }
 */
 
@@ -456,12 +456,12 @@ void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 	std::function<double( double, DGApprox, DGApprox )> dF_0du_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return -0.5 + 2.0*u(x,0);};
 	//std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
 
-	sourceobj->dFdqFuncs.resize(nVar);
-	sourceobj->dFduFuncs.resize(nVar);
+	sourceobj->delqSourceFuncs.resize(nVar);
+	sourceobj->deluSourceFuncs.resize(nVar);
 
-	sourceobj->dFdqFuncs[0].push_back(dF_0dq_0);
+	sourceobj->delqSourceFuncs[0].push_back(dF_0dq_0);
 
-	sourceobj->dFduFuncs[0].push_back(dF_0du_0);
+	sourceobj->deluSourceFuncs[0].push_back(dF_0du_0);
 }
 */
 
@@ -484,11 +484,11 @@ void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 	std::function<double( double, DGApprox, DGApprox )> dF_0du_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
 	//std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
 
-	sourceobj->dFdqFuncs.resize(nVar);
-	sourceobj->dFduFuncs.resize(nVar);
+	sourceobj->delqSourceFuncs.resize(nVar);
+	sourceobj->deluSourceFuncs.resize(nVar);
 
-	sourceobj->dFdqFuncs[0].push_back(dF_0dq_0);
+	sourceobj->delqSourceFuncs[0].push_back(dF_0dq_0);
 
-	sourceobj->dFduFuncs[0].push_back(dF_0du_0);
+	sourceobj->deluSourceFuncs[0].push_back(dF_0du_0);
 }
 */
