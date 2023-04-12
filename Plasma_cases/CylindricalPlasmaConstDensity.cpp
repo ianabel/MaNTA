@@ -30,7 +30,7 @@ void CylindricalPlasmaConstDensity::setSources()
 	auto& P_ion = variables.at("P_ion");
 	auto& omega = variables.at("omega");
 
-	std::function<double( double, DGApprox, DGApprox )> sourceP_ion = [ = ]( double R, DGApprox q, DGApprox u ){ return -gamma*R*R*u(R,P_ion.index)*q(R,omega.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R);};
+	std::function<double( double, DGApprox, DGApprox )> sourceP_ion = [ = ]( double R, DGApprox q, DGApprox u ){ return -3.0/(10.0*Om*Om)*R*R*u(R,P_ion.index)*q(R,omega.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R);};
 	std::function<double( double, DGApprox, DGApprox )> sourceOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return  -I_r(R);};
 
 	P_ion.setSourceFunc(sourceP_ion);
@@ -83,7 +83,7 @@ void CylindricalPlasmaConstDensity::setdudSources()
 	auto& omega = variables.at("omega");
 
 	//----------------P_ion----------------------
-	std::function<double( double, DGApprox, DGApprox )> dS_PdP = [ = ]( double R, DGApprox q, DGApprox u ){ return -gamma*R*R*q(R,omega.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R) + gamma*R*R*u(R,P_ion.index)*q(R,omega.index)*q(R,omega.index)/(tauI(u(R,P_ion.index),R)*tauI(u(R,P_ion.index),R))*dtauIdP(u(R,P_ion.index),R) ;};
+	std::function<double( double, DGApprox, DGApprox )> dS_PdP = [ = ]( double R, DGApprox q, DGApprox u ){ return -3.0/(10.0*Om*Om)*R*R*q(R,omega.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R) + 3.0/(10.0*Om*Om)*R*R*u(R,P_ion.index)*q(R,omega.index)*q(R,omega.index)/(tauI(u(R,P_ion.index),R)*tauI(u(R,P_ion.index),R))*dtauIdP(u(R,P_ion.index),R) ;};
 	std::function<double( double, DGApprox, DGApprox )> dS_Pdomega = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
 
 
@@ -105,7 +105,7 @@ void CylindricalPlasmaConstDensity::setdqdSources()
 
 	//----------------P_ion----------------------
 	std::function<double( double, DGApprox, DGApprox )> dS_PddP = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dS_Pddomega = [ = ]( double R, DGApprox q, DGApprox u ){ return -2*gamma*R*R*u(R,P_ion.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R);};
+	std::function<double( double, DGApprox, DGApprox )> dS_Pddomega = [ = ]( double R, DGApprox q, DGApprox u ){ return -2*3.0/(10.0*Om*Om)*R*R*u(R,P_ion.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R);};
 
 	P_ion.addDelqSourceFunc(P_ion.index, dS_PddP);
 	P_ion.addDelqSourceFunc(omega.index, dS_Pddomega);
