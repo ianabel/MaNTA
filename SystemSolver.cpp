@@ -92,6 +92,7 @@ SystemSolver::SystemSolver(std::string const& inputFile)
 
 		initConditionLibrary.set(initCondition);
 	}
+	seta_fns();
 
 	//---------Boundary Conditions---------------
 	auto lowerBoundary = toml::find(config, "Lower_boundary");
@@ -163,7 +164,7 @@ SystemSolver::SystemSolver(std::string const& inputFile)
 
 void SystemSolver::setInitialConditions( N_Vector& Y , N_Vector& dYdt )
 {
-	setInitialConditions(initConditionLibrary.getuInitial(), initConditionLibrary.getqInitial(), initConditionLibrary.getSigInitial(plasma, q, u), Y, dYdt);
+	setInitialConditions(initConditionLibrary.getuInitial(), initConditionLibrary.getqInitial(), initConditionLibrary.getSigInitial(), Y, dYdt);
 }
 
 void SystemSolver::setInitialConditions( std::function< double ( double, int )> u_0, std::function< double ( double, int )> gradu_0, std::function< double ( double, int )> sigma_0, N_Vector& Y , N_Vector& dYdt ) 
@@ -248,6 +249,25 @@ void SystemSolver::setInitialConditions( std::function< double ( double, int )> 
 	}
 }
 
+void SystemSolver::seta_fns()
+{
+	if(plasma)
+	{
+		for(int var = 0; var < nVar; var++)
+		{
+			a_fn.push_back(plasma->getVariable(var).a_fn);
+		}
+	}
+	//TO DO: this is to be retired
+	else
+	{
+		for(int var = 0; var < nVar; var++)
+		{
+			a_fn.push_back([ = ]( double R ){ return 1.0;});
+		}
+	}
+}
+
 void SystemSolver::initialiseMatrices()
 {
 	// These are temporary working space
@@ -288,7 +308,7 @@ void SystemSolver::initialiseMatrices()
 			Bvar.setZero();
 			Dvar.setZero();
 			// A_ij = ( phi_j, phi_i )
-			u.MassMatrix( I, Avar, a_fn, var );
+			u.MassMatrix( I, Avar, a_fn[var]);
 			// B_ij = ( phi_i, phi_j' )
 			u.DerivativeMatrix( I, Bvar );
 			// D_ij = -(c phi_j, phi_i') + < w, tau u > 
@@ -673,6 +693,9 @@ void SystemSolver::updateMForJacSolve(std::vector< Eigen::FullPivLU< Eigen::Matr
 		sourceObj->setdFduMat( Fu, newQ, newU, I);
 		MX.block( nVar*(k+1), 2*nVar*(k+1), nVar*(k+1), nVar*(k+1) ) += Fu;
 
+		//if(i==0) std::cerr << MX << std::endl << std::endl;
+		//if(i==0)std::cerr << MX.inverse() << std::endl << std::endl;
+
 		MXsolvers.emplace_back(MX);
 	}
 }
@@ -707,14 +730,19 @@ void SystemSolver::solveJacEq(N_Vector& g, N_Vector& delY)
 
 		SQU_f[ i ] = factorisedM[ i ].solve( g1g2g3 );
 
+
 		//SQU_0
 		Eigen::MatrixXd CE = CEBlocks[ i ];
 		SQU_0[ i ] = factorisedM[ i ].solve( CE );
+		//std::cerr << SQU_0[i] << std::endl << std::endl;
+		//std::cerr << CE << std::endl << std::endl;
+
 
 		Eigen::MatrixXd K_cell(nVar*2,nVar*2);
 		K_cell.setZero();
 		K_cell = H_cellwise[i] - CG_cellwise[ i ] * SQU_0[i];
 
+		//std::cerr << SQU_f[i] << std::endl << std::endl;
 		//K
 		for(int var = 0; var < nVar; var++)
 		{
@@ -736,6 +764,7 @@ void SystemSolver::solveJacEq(N_Vector& g, N_Vector& delY)
 
 	Eigen::FullPivLU< Eigen::MatrixXd > lu( K_global );
 	delLambda = lu.solve( F );
+	//std::cerr << delLambda << std::endl << std::endl;
 
 	// Now find del sigma, del q and del u to eventually find del Y
 	for ( unsigned int i=0; i < nCells; i++ )
@@ -755,6 +784,9 @@ void SystemSolver::solveJacEq(N_Vector& g, N_Vector& delY)
 			delU.coeffs[ var ][ i ].second =   delSQU.block( 2*nVar*(k + 1) + var*(k+1), 0, k + 1, 1 );
 		}
 	}
+	//delSig.printCoeffs(1);
+	//delU.printCoeffs(1);
+	//delQ.printCoeffs(1);
 }
 
 int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data)
@@ -840,8 +872,6 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 				F_cellwise( j ) = tempU.CellProduct( I, sourceFunc, tempU.Basis.phi( I, j%(k+1) ) );
 
 			res1.coeffs[ var ][ i ].second = -system->A_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempQ.coeffs[var][i].second - system->B_cellwise[i].transpose().block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second + system->C_cellwise[i].transpose().block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0) - system->RF_cellwise[ i ].block( var*(k+1), 0, k + 1, 1 );
-			//res2.coeffs[ var ][ i ].second = system->B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempSig.coeffs[ var ][ i ].second + system->D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second + system->E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0) - system->RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ) + tempdudt.coeffs[ var ][ i ].second;
-			//res2.coeffs[ var ][ i ].second += F_cellwise;
 			res2.coeffs[ var ][ i ].second = system->B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempSig.coeffs[ var ][ i ].second + system->D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second + system->E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0) - system->RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ) + F_cellwise + tempdudt.coeffs[ var ][ i ].second;
  			res3.coeffs[ var ][ i ].second = tempSig.coeffs[ var ][ i ].second + kappa_cellwise;
 		}
@@ -858,9 +888,12 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 	//std::cerr << tempLambda << std::endl << std::endl;
 	//std::cerr << res4 << std::endl << std::endl;
 	//res4.setZero();
-	//tempdudt.printCoeffs(0);
-	//tempdudt.printCoeffs(1);
+	//tempQ.printCoeffs(0);
+	//tempQ.printCoeffs(1);
 	//tempSig.printCoeffs(0);
+	//tempSig.printCoeffs(1);
+	//system->print(std::cout,0.0,11,0 );
+	//system->print(std::cout,0.0,11,1 );
 
 	VectorWrapper Vec( N_VGetArrayPointer( resval ), N_VGetLength( resval ) );
 	VectorWrapper yVec( N_VGetArrayPointer( Y ), N_VGetLength( Y ) );

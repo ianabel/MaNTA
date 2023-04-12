@@ -255,9 +255,9 @@ class DGApprox
 			throw std::logic_error( "Out of bounds" );
 		};
 
-		double operator()( double x,  Variable var ) {
-			if(var.index>coeffs.size()) std::logic_error( "Out of bounds" );
-			for ( auto const & I : coeffs[var.index] )
+		double operator()( double x,  Variable* var ) {
+			if(var->index>coeffs.size()) std::logic_error( "Out of bounds" );
+			for ( auto const & I : coeffs[var->index] )
 			{
 				if (  I.first.contains( x ) )
 					return Basis.Evaluate( I.first, I.second, x );

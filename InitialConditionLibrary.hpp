@@ -22,7 +22,7 @@ public:
 
 	std::function<double( double, int )> getqInitial();
 	std::function<double( double, int )> getuInitial();
-	std::function<double( double, int )> getSigInitial(std::shared_ptr<Plasma> plasma, DGApprox& q, DGApprox& u);
+	std::function<double( double, int )> getSigInitial();
 
 private:
 	std::string initialCondition = "", diffusionCase = "";

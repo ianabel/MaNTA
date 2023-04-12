@@ -13,6 +13,7 @@ void Plasma::constructPlasma()
 	pickVariables();
 	for(auto& var : variables) { var.second.resize(variables.size());}
 
+	seta_fns();
 	setKappas();
 	setSources();
 	setdqdKappas();

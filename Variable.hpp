@@ -15,6 +15,7 @@ public:
 	~Variable() = default;
 
 	void setVarMap(std::map<std::string, Variable> vars ){variables.reset(&vars);}
+	void setKappaFunc(std::function<double (double)> a_fn_){a_fn = a_fn_;}
 	void setKappaFunc(std::function<double (double, DGApprox, DGApprox)> kappa){kappaFunc = kappa;}
 	void setSourceFunc(std::function<double (double, DGApprox, DGApprox)> source){sourceFunc = source;}
 
@@ -29,6 +30,7 @@ public:
 	const std::string name;
 	const int index;
 
+	std::function<double (double)> a_fn;
 	std::function<double (double, DGApprox, DGApprox)> kappaFunc;
 	std::function<double (double, DGApprox, DGApprox)> sourceFunc;
 	std::shared_ptr<std::map<std::string, Variable>> variables = nullptr;

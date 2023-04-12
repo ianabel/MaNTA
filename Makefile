@@ -2,17 +2,17 @@
 PLASMA_CASES_CPP = Plasma_cases/Plasma.cpp Plasma_cases/CylindricalPlasmaConstDensity.cpp
 PLASMA_CASES_HPP = Plasma_cases/Plasma.hpp Plasma_cases/CylindricalPlasmaConstDensity.hpp
 
-SOURCES = MTS.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp  Solver.cpp DiffusionObj.cpp SourceObj.cpp BuildNonLinObjects.cpp InitialConditionLibrary.cpp Variable.cpp  $(PLASMA_CASES_CPP)
+SOURCES = MTS.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp  Solver.cpp DiffusionObj.cpp SourceObj.cpp BuildNonLinObjects.cpp InitialConditionLibrary.cpp Variable.cpp  $(PLASMA_CASES_CPP) Constants.cpp
 ERRSOURCES = TestMain.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp  Solver.cpp ErrorTester.cpp DiffusionObj.cpp SourceObj.cpp BuildNonLinObjects.cpp InitialConditionLibrary.cpp
-TEST_SOURCES = UnitTests/SystemSolverTests.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp  Solver.cpp DiffusionObj.cpp SourceObj.cpp BuildNonLinObjects.cpp InitialConditionLibrary.cpp Variable.cpp  $(PLASMA_CASES_CPP)
+TEST_SOURCES = UnitTests/SystemSolverTests.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp  Solver.cpp DiffusionObj.cpp SourceObj.cpp BuildNonLinObjects.cpp InitialConditionLibrary.cpp Variable.cpp  $(PLASMA_CASES_CPP) Constants.cpp
 
-HEADERS = gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp InitialConditionLibrary.hpp SystemSolver.hpp ErrorChecker.hpp ErrorTester.hpp DiffusionObj.hpp SourceObj.hpp Variable.hpp  $(PLASMA_CASES_HPP)
+HEADERS = gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp InitialConditionLibrary.hpp SystemSolver.hpp ErrorChecker.hpp ErrorTester.hpp DiffusionObj.hpp SourceObj.hpp Variable.hpp  $(PLASMA_CASES_HPP) Constants.hpp
 OBJECTS = $(patsubst %.cpp,%.o,$(SOURCES))
 ERROBJECTS = $(patsubst %.cpp,%.o,$(ERRSOURCES))
 TESTOBJECTS = $(patsubst %.cpp,%.o,$(TESTSOURCES))
 
 %.o: %.cpp Makefile $(HEADERS)
-	$(CXX) -c $(CXXFLAGS) -g -O0 -o $@ $<
+	$(CXX) -c $(CXXFLAGS) -g -O3 -o $@ $<
 
 SUNDIALS_INC=/home/mylo_linux/MCTrans-original/MCTrans/sundials/include
 SUNDIALS_LIB=/home/mylo_linux/MCTrans-original/MCTrans/sundials/lib

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../Constants.hpp"
 #include "../DiffusionObj.hpp"
 #include "../SourceObj.hpp"
 #include "../Variable.hpp"
@@ -46,6 +47,10 @@ protected:
 	//Once correctly made the whole thing should work fine
 
 	virtual void pickVariables() {};	//adds the required variables from the list of possible variables
+
+	//a_fn sits in front of the time derivative term of the diffusion equation.
+	//It cannot contain any dependence on any u or qs nor can it contain time dependence.
+	virtual void seta_fns() {};
 
 	virtual void setKappas() {};
 	virtual void setdudKappas() {};

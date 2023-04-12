@@ -1,5 +1,6 @@
 #include "InitialConditionLibrary.hpp"
 #include "Plasma_cases/Plasma.hpp"
+#include "Constants.hpp"
 #include <cmath>
 #include <stdexcept>
 
@@ -12,7 +13,7 @@ std::function<double( double, int )> InitialConditionLibrary::getqInitial()
 	else if(initialCondition == "Const") return std::function<double( double, int )> { [=]( double y, int var ){ return 0.0; } };
 	if(initialCondition == "Test") return std::function<double( double, int )> { [=]( double y, int var )
 	{
-		if(var == 0) return -2.0*4.0*(y - 5.0)*::exp( -4.0*( y - 5.0 )*( y - 5.0 ) );
+		if(var == 0) return 40*3.0e16*eV_J(-2.0*4.0*(y - 5.0)*::exp( -4.0*( y - 5.0 )*( y - 5.0 ) ));
 		else return 0.0;
 	}};
 	else throw std::logic_error( "Initial Condition provided does not exist" );
@@ -24,26 +25,17 @@ std::function<double( double, int )> InitialConditionLibrary::getuInitial()
 	else if(initialCondition == "Sech2") return std::function<double( double, int )> { [=]( double y, int var ){ return 1.0/(::cosh(10.0*y)*::cosh(10.0*y)); } };
 	else if(initialCondition == "Sech2_2") return std::function<double( double, int )> { [=]( double y, int var ){ return 1.0/(::cosh(3.0*y)*::cosh(3.0*y)) - 1.0/(::cosh(3.0)*::cosh(3.0)); } };
 	else if(initialCondition == "Linear") return std::function<double( double, int )> { [=]( double y, int var ){ return 1.0 - 1.0*y; } };
-	else if(initialCondition == "Const") return std::function<double( double, int )> { [=]( double y, int var ){ return 0.5; } };
+	else if(initialCondition == "Const") return std::function<double( double, int )> { [=]( double y, int var ){ return 0.0; } };
 	if(initialCondition == "Test") return std::function<double( double, int )>{ [=]( double y, int var )
 	{
-		if(var == 0) return ::exp( -4.0*( y - 5.0 )*( y - 5.0 ) );
-		else return 0.5; }
+		if(var == 0) return 40*3.0e16*eV_J(::exp( -4.0*( y - 5.0 )*( y - 5.0 ) ));
+		else return 1.0e-10; }
 	};
 	else throw std::logic_error( "Initial Condition provided does not exist" );
 }
 
-std::function<double( double, int )> InitialConditionLibrary::getSigInitial( std::shared_ptr<Plasma> plasma, DGApprox& q, DGApprox& u )
+std::function<double( double, int )> InitialConditionLibrary::getSigInitial()
 {
-	if(plasma)
-	{
-		std::function<double( double, int )> sig_0 = [ = ]( double R, int var )
-		{
-			return -1.0*plasma->getVariable(var).kappaFunc(R,q,u);
-		};
-		return sig_0;
-	}
-
 	//??TO DO: everything from here on out should be removed along with the functions in diffObj and sourceObj
 	if(diffusionCase == "1DLinearTest" || diffusionCase == "2DLinear") return std::function<double( double, int )> { [=]( double y, int var ){ return -1.0*getqInitial()(y, var); } };
 	if(diffusionCase == "3VarLinearTest") return std::function<double( double, int )> { [=]( double y, int var ){ return -1.1*getqInitial()(y, var); } };
@@ -75,5 +67,6 @@ std::function<double( double, int )> InitialConditionLibrary::getSigInitial( std
 		};
 		return sig_0;
 	}
-	else throw std::logic_error( "Diffusion Case provided does not exist" );
+	else return std::function<double( double, int )> { [=]( double y, int var ){ return -1.0*getqInitial()(y, var); } };
+	//else throw std::logic_error( "Diffusion Case provided does not exist" );
 }

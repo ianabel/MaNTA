@@ -24,6 +24,9 @@ public:
 	void setInitialConditions(N_Vector& Y, N_Vector& dYdt );
 	void setInitialConditions(std::function< double ( double, int )> u_0, std::function< double ( double, int )> gradu_0, std::function< double ( double, int )> sigma_0, N_Vector& Y, N_Vector& dYdt );
 
+	//Initialize the a_fns
+	void seta_fns();
+
 	//Builds initial matrices
 	void initialiseMatrices();
 	
@@ -103,7 +106,7 @@ private:
 	Fn tau = [ = ]( double x ){ return 0.5;};
 
 	//a_fn in the channel dependent term that multiplies the time derivateive. i.e. a_fn*du/dt
-	std::function<double( double, int )> a_fn = [ = ]( double x, int var ){ return 1.0;}; 
+	std::vector<std::function<double( double )>> a_fn;
 
 	std::shared_ptr<DiffusionObj> diffObj;
 	std::shared_ptr<SourceObj> sourceObj;
