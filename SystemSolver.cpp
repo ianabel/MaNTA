@@ -116,12 +116,12 @@ SystemSolver::SystemSolver(std::string const& inputFile)
 		if ( x == lBound ) {
 			//if(t>0.5) return 0.5;
 			//else return 1.0-t;
-			return 0.0;
+			return 10.0;
 		} else if ( x == uBound ) {
 			// u(1.0) == a
 			//if(t<0.99999) return 1.0 - t;
 			//else return 0.00001;
-			return 0.0;
+			return 10.0;
 		}
 		throw std::logic_error( "Boundary condition function being eval'd not on boundary ?!" );
 	};
@@ -244,7 +244,7 @@ void SystemSolver::setInitialConditions( std::function< double ( double, int )> 
 			auto cTInv = Eigen::FullPivLU< Eigen::MatrixXd >(C_cellwise[i].transpose());
 			lamCell[0] = lambda.value()[var*(nCells+1) + i]; lamCell[1] = lambda.value()[var*(nCells+1) + i+1];
 			//dudt.coeffs[ var ][ i ].second.setZero();		
-			dudt.coeffs[ var ][ i ].second = -B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*sig.coeffs[ var ][ i ].second - D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*u.coeffs[ var ][ i ].second - E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell + RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ) - F_cellwise;
+			dudt.coeffs[ var ][ i ].second = XMats[i].block(var*(k+1), var*(k+1), k+1, k+1).inverse()*(-B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*sig.coeffs[ var ][ i ].second - D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*u.coeffs[ var ][ i ].second - E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell + RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ) - F_cellwise);
 		}
 	}
 }
@@ -308,7 +308,7 @@ void SystemSolver::initialiseMatrices()
 			Bvar.setZero();
 			Dvar.setZero();
 			// A_ij = ( phi_j, phi_i )
-			u.MassMatrix( I, Avar, a_fn[var]);
+			u.MassMatrix( I, Avar);
 			// B_ij = ( phi_i, phi_j' )
 			u.DerivativeMatrix( I, Bvar );
 			// D_ij = -(c phi_j, phi_i') + < w, tau u > 
@@ -436,7 +436,7 @@ void SystemSolver::initialiseMatrices()
 			for ( Eigen::Index j = 0; j < nVar*(k+1); j++ )
 			{
 				// < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 ) 
-				RF_cellwise[ i ]( j ) += -u.Basis.phi( I, j%k+1 )( I.x_u ) * ( +1 ) * BCs->g_D( I.x_u, 0.0 );
+				RF_cellwise[ i ]( j ) += -u.Basis.phi( I, j%(k+1) )( I.x_u ) * ( +1 ) * BCs->g_D( I.x_u, 0.0 );
 				RF_cellwise[ i ]( nVar*(k + 1) + j ) -= u.Basis.phi( I, j%(k+1) )( I.x_u ) * (  c_fn( I.x_u ) - tau( I.x_u ) ) * BCs->g_D( I.x_u, 0.0 );
 			}
 		}
@@ -506,7 +506,7 @@ void SystemSolver::initialiseMatrices()
 		for(int var = 0; var < nVar; var++)
 		{
 			Eigen::MatrixXd Xvar( k + 1, k + 1 );
-			u.MassMatrix( I, Xvar);
+			u.MassMatrix( I, Xvar, a_fn[var]);
 			X.block(var*(k+1), var*(k+1), k+1, k+1) = Xvar;
 		}
 		XMats.emplace_back(X);
@@ -609,7 +609,7 @@ void SystemSolver::updateBoundaryConditions(double t)
 			for ( Eigen::Index j = 0; j < nVar*(k+1); j++ )
 			{
 				// < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 ) 
-				RF_cellwise[ i ]( j ) += -u.Basis.phi( I, j%k+1 )( I.x_u ) * ( +1 ) * BCs->g_D( I.x_u, t );
+				RF_cellwise[ i ]( j ) += -u.Basis.phi( I, j%(k+1) )( I.x_u ) * ( +1 ) * BCs->g_D( I.x_u, t );
 				RF_cellwise[ i ]( nVar*(k + 1) + j ) -= u.Basis.phi( I, j%(k+1) )( I.x_u ) * (  c_fn( I.x_u ) - tau( I.x_u ) ) * BCs->g_D( I.x_u, t );
 			}
 		}
@@ -639,8 +639,6 @@ void SystemSolver::resetCoeffs()
 
 void SystemSolver::updateMForJacSolve(std::vector< Eigen::FullPivLU< Eigen::MatrixXd > >& MXsolvers, double const alpha, DGApprox& delQ, DGApprox& delU)
 {
-	std::function<double( double )> alphaF = [ = ]( double x ){ return alpha;};
-
 	MXsolvers.clear();
 	DGApprox newU(grid, k), newQ(grid, k);
 	double qMemBlock[nVar*nCells*(k+1)], uMemBlock[nVar*nCells*(k+1)]; //??need to assign memory block as DGAs don't own memory
@@ -670,6 +668,7 @@ void SystemSolver::updateMForJacSolve(std::vector< Eigen::FullPivLU< Eigen::Matr
 		//X matrix
 		for(int var = 0; var < nVar; var++)
 		{
+		std::function<double( double )> alphaF = [ = ]( double x ){ return alpha*a_fn[var](x);};
 			Eigen::MatrixXd Xsubmat( (k + 1), (k + 1) );
 			Xsubmat.setZero();
 			u.MassMatrix( I, Xsubmat, alphaF);
@@ -832,8 +831,13 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 		}
 	}
 	lam = system->H_global.solve( CsGuL_global );
-	if(system->BCs->isLBoundDirichlet) lam[0] = system->BCs->g_D(system->grid.lowerBound, static_cast<double>(tres));
-	if(system->BCs->isUBoundDirichlet) lam[nCells] = system->BCs->g_D(system->grid.upperBound, static_cast<double>(tres));
+	for(int var = 0; var < nVar; var++)
+	{
+		if(system->BCs->isLBoundDirichlet) lam[var*(nCells+1)] = system->BCs->g_D(system->grid.lowerBound, static_cast<double>(tres));
+		if(system->BCs->isLBoundDirichlet) tempLambda[var*(nCells+1)] = system->BCs->g_D(system->grid.lowerBound, static_cast<double>(tres));
+		if(system->BCs->isUBoundDirichlet) lam[nCells+var*(nCells+1)] = system->BCs->g_D(system->grid.upperBound, static_cast<double>(tres));
+		if(system->BCs->isUBoundDirichlet) tempLambda[nCells+var*(nCells+1)] = system->BCs->g_D(system->grid.upperBound, static_cast<double>(tres));
+	}
 	res4 = -tempLambda + lam;
 
 	for(int j = 0; j<nCells; j++)
@@ -845,12 +849,10 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 	{
 		Interval I = grid.gridCells[ i ];
 		Eigen::VectorXd lamCell(2*nVar);
-		Eigen::VectorXd multiVarR(nVar*(k+1));
 
 		for(int var = 0; var < nVar; var++)
 		{
 			lamCell[2*var] = tempLambda[var*(nCells+1) + i]; lamCell[2*var + 1] = tempLambda[var*(nCells+1) + i+1];
-			multiVarR.block(var*(k+1), 0, k+1, 1) = system->RF_cellwise[i].block(var*(k+1),0,k+1,1);
 		}
 
 		//length = nVar*(k+1)
@@ -872,33 +874,42 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 				F_cellwise( j ) = tempU.CellProduct( I, sourceFunc, tempU.Basis.phi( I, j%(k+1) ) );
 
 			res1.coeffs[ var ][ i ].second = -system->A_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempQ.coeffs[var][i].second - system->B_cellwise[i].transpose().block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second + system->C_cellwise[i].transpose().block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0) - system->RF_cellwise[ i ].block( var*(k+1), 0, k + 1, 1 );
-			res2.coeffs[ var ][ i ].second = system->B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempSig.coeffs[ var ][ i ].second + system->D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second + system->E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0) - system->RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ) + F_cellwise + tempdudt.coeffs[ var ][ i ].second;
- 			res3.coeffs[ var ][ i ].second = tempSig.coeffs[ var ][ i ].second + kappa_cellwise;
+			res2.coeffs[ var ][ i ].second = system->B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempSig.coeffs[ var ][ i ].second + system->D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second + system->E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0) - system->RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ) + F_cellwise + system->XMats[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempdudt.coeffs[ var ][ i ].second;
+			res3.coeffs[ var ][ i ].second = tempSig.coeffs[ var ][ i ].second + kappa_cellwise;
 		}
 	}
 
 	//res1.printCoeffs(0);
 	//res1.printCoeffs(1);
-	//res1.printCoeffs(2);
+	//if(system->nVar > 2) res1.printCoeffs(2);
 	//res2.printCoeffs(0);
 	//res2.printCoeffs(1);
+	//res2.printCoeffs(2);
 	//res3.printCoeffs(0);
 	//res3.printCoeffs(1);
-	//std::cerr << lam << std::endl << std::endl;
-	//std::cerr << tempLambda << std::endl << std::endl;
-	//std::cerr << res4 << std::endl << std::endl;
-	//res4.setZero();
+	//res3.printCoeffs(2);
+	//tempU.printCoeffs(0);
 	//tempQ.printCoeffs(0);
 	//tempQ.printCoeffs(1);
 	//tempSig.printCoeffs(0);
 	//tempSig.printCoeffs(1);
+	//std::cerr << lam << std::endl << std::endl;
+	//std::cerr << tempLambda << std::endl << std::endl;
+	//std::cerr << res4 << std::endl << std::endl;
 	//system->print(std::cout,0.0,11,0 );
 	//system->print(std::cout,0.0,11,1 );
 
 	VectorWrapper Vec( N_VGetArrayPointer( resval ), N_VGetLength( resval ) );
 	VectorWrapper yVec( N_VGetArrayPointer( Y ), N_VGetLength( Y ) );
 	VectorWrapper ypVec( N_VGetArrayPointer( dydt ), N_VGetLength( dydt ) );
-	std::cerr << Vec.norm() << "	" << "	" << Vec.maxCoeff() << "	" << Vec.minCoeff() << "	" << tres << std::endl << std::endl;
+
+	//for(int i = 0; i<Vec.size(); i++)
+	//{
+		//if(::abs(yVec[i]) < 1.0e-10 && ::abs(Vec[i]) < 1.0e-1) Vec[i] = 0.0;
+	//}
+
+	Eigen::Index maxloc, minloc;
+	std::cerr << Vec.norm() << "	" << "	" << Vec.maxCoeff(&maxloc) << "	" << Vec.minCoeff(&minloc) << "	" << yVec[maxloc] << "	" << yVec[minloc] << "	" << tres << std::endl << std::endl;
 	system->total_steps++;
 
 	if(system->isTesting())
@@ -906,6 +917,10 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 		VectorWrapper residualVec( N_VGetArrayPointer( resval ), N_VGetLength( resval ) );
 		system->resNorm = residualVec.norm();
 	}
+
+	std::ofstream file;
+	file.open("time.txt", std::ofstream::app);
+	file << tres << std::endl << std::endl;
 
 	return 0;
 }

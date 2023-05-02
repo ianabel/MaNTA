@@ -13,7 +13,8 @@ std::function<double( double, int )> InitialConditionLibrary::getqInitial()
 	else if(initialCondition == "Const") return std::function<double( double, int )> { [=]( double y, int var ){ return 0.0; } };
 	if(initialCondition == "Test") return std::function<double( double, int )> { [=]( double y, int var )
 	{
-		if(var == 0) return 40*3.0e16*eV_J(-2.0*4.0*(y - 5.0)*::exp( -4.0*( y - 5.0 )*( y - 5.0 ) ));
+		//if(var == 0) return 3.0e16*eV_J(-2.0*400.0*(y - 0.5)*::exp( -400.0*( y - 0.5 )*( y - 0.5 ) ));
+		if(var == 0) return 0.0;
 		else return 0.0;
 	}};
 	else throw std::logic_error( "Initial Condition provided does not exist" );
@@ -25,11 +26,12 @@ std::function<double( double, int )> InitialConditionLibrary::getuInitial()
 	else if(initialCondition == "Sech2") return std::function<double( double, int )> { [=]( double y, int var ){ return 1.0/(::cosh(10.0*y)*::cosh(10.0*y)); } };
 	else if(initialCondition == "Sech2_2") return std::function<double( double, int )> { [=]( double y, int var ){ return 1.0/(::cosh(3.0*y)*::cosh(3.0*y)) - 1.0/(::cosh(3.0)*::cosh(3.0)); } };
 	else if(initialCondition == "Linear") return std::function<double( double, int )> { [=]( double y, int var ){ return 1.0 - 1.0*y; } };
-	else if(initialCondition == "Const") return std::function<double( double, int )> { [=]( double y, int var ){ return 0.0; } };
+	else if(initialCondition == "Const") return std::function<double( double, int )> { [=]( double y, int var ){ return 10.0; } };
 	if(initialCondition == "Test") return std::function<double( double, int )>{ [=]( double y, int var )
 	{
-		if(var == 0) return 40*3.0e16*eV_J(::exp( -4.0*( y - 5.0 )*( y - 5.0 ) ));
-		else return 1.0e-10; }
+		if(var == 0) return 3.0e19*eV_J(1.0);
+		//if(var == 0) return 3.0e18*eV_J(-5.0*(y-0.3)*(y-0.7));
+		else return 1.0; }
 	};
 	else throw std::logic_error( "Initial Condition provided does not exist" );
 }

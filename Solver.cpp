@@ -354,27 +354,35 @@ void runSolver( SystemSolver& system, std::string const& inputFile )
  
 	int err = IDASetLinearSolver(IDA_mem, LS, sunMat); 
 	IDASetJacFn(IDA_mem, EmptyJac);
+
+	IDASetMaxNonlinIters(IDA_mem, 10);
 	
 	//------------------------------Solve------------------------------
 	std::ofstream out0( inputFile.substr(0, inputFile.rfind(".")) + ".plot" );
-	std::ofstream out1( "u_t_1.plot" );
+	std::ofstream out1( "Te.plot" );
+	std::ofstream out2( "omega.plot" );
 
 	if(printToFile)
 	{
 		system.print(out0, t0, nOut, 0);
 		if(nVar > 1) system.print(out1, t0, nOut, 1);
+		if(nVar > 2) system.print(out2, t0, nOut, 1);
 	}
 	
+	IDASetMaxNumSteps(IDA_mem, 30000);
 	//Update initial solution to be within tolerance of the residual equation
 	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
 	if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
 	{
 		system.print(out0, t0, nOut, 0);
 		if(nVar > 1) system.print(out1, t0, nOut, 1);
+		if(nVar > 2) system.print(out2, t0, nOut, 1);
 		throw std::runtime_error("IDACalcIC could not complete");
 	}
 
 	//Solving Loop
+	std::ofstream file;
+	file.open("time.txt");
 	for (tout = t1, iout = 1; iout <= totalSteps; iout++, tout += delta_t) 
 	{
 		if(iout%stepsPerPrint)std::cout << tout - delta_t << std::endl;
@@ -383,6 +391,7 @@ void runSolver( SystemSolver& system, std::string const& inputFile )
 		{
 			system.print(out0, tout, nOut, 0);
 			if(nVar > 1) system.print(out1, t0, nOut, 1);
+			if(nVar > 2) system.print(out2, t0, nOut, 1);
 			throw std::runtime_error("IDASolve could not complete");
 		}
 
@@ -390,6 +399,7 @@ void runSolver( SystemSolver& system, std::string const& inputFile )
 		{
 			system.print(out0, tout, nOut, 0);
 			if(nVar > 1) system.print(out1, tout, nOut, 1);
+			if(nVar > 2) system.print(out2, t0, nOut, 1);
 		}
 	}
 	std::cerr << "Total number of steps taken = " << system.total_steps << std::endl;

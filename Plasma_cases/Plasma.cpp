@@ -1,10 +1,12 @@
 #include "Plasma.hpp"
 #include "../Variable.hpp"
 #include "CylindricalPlasmaConstDensity.hpp"
+#include "Cylinder3Var.hpp"
 
 void makePlasmaCase(std::string const& plasmaCase, std::shared_ptr<Plasma>& plasma)
 {
 	if(plasmaCase == "CylindricalPlasmaConstDensity") plasma = std::make_shared<CylindricalPlasmaConstDensity>();
+	else if(plasmaCase == "Cylinder3Var") plasma = std::make_shared<Cylinder3Var>();
 	else throw std::runtime_error("Plasma Case does not exist");
 }
 

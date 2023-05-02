@@ -27,9 +27,9 @@ private:
 	double tauI(double Pi, double R);
 	double dtauIdP(double Pi, double R);
 	double lambda(double R);
-	double n(double R) {return 3.0e17;}
+	double n(double R) {return 3.0e19;}
 	double J(double R){return mi*n(R)*R*R;}
-	double I_r(double R){ return 1.0e-1*(-1.0*R*R+10.0*R-21.0)/4.0;} //Amperes
+	double I_r(double R){ return 4.5e-1;} //Amperes
 	double beta(double R){return 4.0/(3.0*Om*Om*mi*n(R));}
 
 	//Constants
