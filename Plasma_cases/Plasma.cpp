@@ -39,7 +39,7 @@ void Plasma::addVariable(std::string name)
 	//The core solver will only ever use the index values
 }
 
-Variable Plasma::getVariable(int index) const
+Variable& Plasma::getVariable(int index)
 {
 	//inefficient search O(n), but n will never be very big so its grand
 	for(auto& var : variables)
@@ -47,6 +47,11 @@ Variable Plasma::getVariable(int index) const
 		if(var.second.index == index) return var.second;
 	}
 	throw std::runtime_error("Attempt to call variable which does not exist.");
+}
+
+Variable& Plasma::getVariable(std::string name)
+{
+	return variables.at(name);
 }
 
 void Plasma::makeDiffObj()

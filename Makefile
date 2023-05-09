@@ -2,11 +2,11 @@
 PLASMA_CASES_CPP = Plasma_cases/Plasma.cpp Plasma_cases/CylindricalPlasmaConstDensity.cpp Plasma_cases/Cylinder3Var.cpp
 PLASMA_CASES_HPP = Plasma_cases/Plasma.hpp Plasma_cases/CylindricalPlasmaConstDensity.hpp Plasma_cases/Cylinder3Var.hpp
 
-SOURCES = MTS.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp  Solver.cpp DiffusionObj.cpp SourceObj.cpp BuildNonLinObjects.cpp InitialConditionLibrary.cpp Variable.cpp  $(PLASMA_CASES_CPP) Constants.cpp
+SOURCES = MTS.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp  Solver.cpp DiffusionObj.cpp SourceObj.cpp BuildNonLinObjects.cpp InitialConditionLibrary.cpp Variable.cpp  $(PLASMA_CASES_CPP) Constants.cpp Diagnostic.cpp
 ERRSOURCES = TestMain.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp  Solver.cpp ErrorTester.cpp DiffusionObj.cpp SourceObj.cpp BuildNonLinObjects.cpp InitialConditionLibrary.cpp
-TEST_SOURCES = UnitTests/SystemSolverTests.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp  Solver.cpp DiffusionObj.cpp SourceObj.cpp BuildNonLinObjects.cpp InitialConditionLibrary.cpp Variable.cpp  $(PLASMA_CASES_CPP) Constants.cpp
+TEST_SOURCES = UnitTests/SystemSolverTests.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp  Solver.cpp DiffusionObj.cpp SourceObj.cpp BuildNonLinObjects.cpp InitialConditionLibrary.cpp Variable.cpp  $(PLASMA_CASES_CPP) Constants.cpp Diagnostic.cpp
 
-HEADERS = gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp InitialConditionLibrary.hpp SystemSolver.hpp ErrorChecker.hpp ErrorTester.hpp DiffusionObj.hpp SourceObj.hpp Variable.hpp  $(PLASMA_CASES_HPP) Constants.hpp
+HEADERS = gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp InitialConditionLibrary.hpp SystemSolver.hpp ErrorChecker.hpp ErrorTester.hpp DiffusionObj.hpp SourceObj.hpp Variable.hpp  $(PLASMA_CASES_HPP) Constants.hpp Diagnostic.hpp
 OBJECTS = $(patsubst %.cpp,%.o,$(SOURCES))
 ERROBJECTS = $(patsubst %.cpp,%.o,$(ERRSOURCES))
 TESTOBJECTS = $(patsubst %.cpp,%.o,$(TESTSOURCES))

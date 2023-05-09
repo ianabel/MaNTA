@@ -4,13 +4,14 @@
 #include <sunmatrix/sunmatrix_band.h>  /* access to band SUNMatrix             */
 #include <sunlinsol/sunlinsol_band.h>  /* access to band SUNLinearSolver       */
 #include <sundials/sundials_types.h>   /* definition of type realtype          */
+#include <memory>
 
 int SunLinSolWrapper::Solve( SUNMatrix A, N_Vector x, N_Vector b )
 {
 	realtype cj = 1.0;
 	IDAGetCurrentCj(IDA_mem, &cj);
-	solver.setAlpha(cj);
-	solver.solveJacEq( b, x);
+	solver->setAlpha(cj);
+	solver->solveJacEq( b, x);
 	return 0;
 }
 
@@ -72,7 +73,7 @@ struct _generic_SUNLinearSolver_Ops LSOps =
 	.free = SunLinSolWrapper::LSfree,
 };
 
-SUNLinearSolver SunLinSolWrapper::SunLinSol(SystemSolver& solver, void *mem, SUNContext ctx )
+SUNLinearSolver SunLinSolWrapper::SunLinSol(std::shared_ptr<SystemSolver> solver, void *mem, SUNContext ctx )
 {
 	SUNLinearSolver LS = SUNLinSolNewEmpty(ctx);
 	LS->content = new SunLinSolWrapper(solver, mem);

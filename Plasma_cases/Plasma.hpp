@@ -26,7 +26,7 @@ public:
 
 	std::map<std::string, Variable> variables;
 
-	//Function called after derived class constructor finishes to make sure you have built a viable plasma class
+	//??TO DO: Function called after derived class constructor finishes to make sure you have built a viable plasma class
 	void checkReady();
 
 	//Function to call all virtual functions once overriding from derived class has kicked in
@@ -34,7 +34,8 @@ public:
 	void constructPlasma();
 
 	//Searches variable by index. Index is set in the order variables are added in Plasma constructor
-	Variable getVariable(int index) const;
+	Variable& getVariable(int index);
+	Variable& getVariable(std::string name);
 protected:
 	void addVariable(std::string name);
 

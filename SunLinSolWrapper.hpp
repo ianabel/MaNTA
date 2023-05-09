@@ -2,13 +2,14 @@
 
 #include <sundials/sundials_linearsolver.h>
 #include <sundials/sundials_types.h>
+#include <memory>
 
 #include "SystemSolver.hpp"
 
 class SunLinSolWrapper
 {
 public:
-	SunLinSolWrapper(SystemSolver& sysSolver, void* mem)
+	SunLinSolWrapper(std::shared_ptr<SystemSolver> sysSolver, void* mem)
 		: solver(sysSolver), IDA_mem(mem) {}
 	~SunLinSolWrapper() = default;
 
@@ -22,10 +23,10 @@ public:
 	static int LSsetup(SUNLinearSolver LS, SUNMatrix M );
 	static int LSsolve(SUNLinearSolver LS, SUNMatrix M, N_Vector x, N_Vector b, realtype);
 	static int LSfree(SUNLinearSolver LS);
-	static SUNLinearSolver SunLinSol(SystemSolver& solver, void *mem, SUNContext ctx );
+	static SUNLinearSolver SunLinSol(std::shared_ptr<SystemSolver> solver, void *mem, SUNContext ctx );
 
 private:
-	SystemSolver solver;
+	std::shared_ptr<SystemSolver> solver;
 	void *IDA_mem   = NULL;
 };
 

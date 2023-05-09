@@ -36,7 +36,7 @@ void CylindricalPlasmaConstDensity::setSources()
 	{
 		//std::cerr << -3.0/(10.0*Om*Om)*R*R*R*u(R,P_ion.index)*q(R,omega.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R) << std::endl << std::endl;
 		return -3.0/(10.0*Om*Om)*R*R*R*u(R,P_ion.index)*q(R,omega.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R);};
-	std::function<double( double, DGApprox, DGApprox )> sourceOmega = [ = ]( double R, DGApprox q, DGApprox u ){ if(R>0.34 && R<0.66)return -I_r(R)*R*R*B_mid; else return 0.0; };
+	std::function<double( double, DGApprox, DGApprox )> sourceOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return -I_r(R)*R*R*B_mid; };
 
 	P_ion.setSourceFunc(sourceP_ion);
 	omega.setSourceFunc(sourceOmega);

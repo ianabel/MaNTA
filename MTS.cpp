@@ -7,7 +7,7 @@
 
 #include "SystemSolver.hpp"
 
-void runSolver(SystemSolver& system, std::string const& inputFile);
+void runSolver(std::shared_ptr<SystemSolver> system, std::string const& inputFile);
 
 int main( int argc, char** argv )
 {
@@ -21,6 +21,6 @@ int main( int argc, char** argv )
 		return 1;
 	}
 
-	SystemSolver system(fname);
+	std::shared_ptr<SystemSolver> system = std::make_shared<SystemSolver>(fname);
 	runSolver(system, fname);
 }

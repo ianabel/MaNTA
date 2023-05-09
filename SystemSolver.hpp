@@ -6,6 +6,7 @@
 #include <Eigen/Dense>
 
 #include <fstream>
+#include <memory>
 
 #include "gridStructures.hpp"
 #include "DiffusionObj.hpp"
@@ -89,6 +90,7 @@ public:
 	DGApprox u, q, sig, dudt, dqdt, dsigdt;
 	std::optional<Eigen::Map<Eigen::VectorXd>> lambda, dlamdt;
 	std::shared_ptr<BoundaryConditions> BCs;
+	std::shared_ptr<Plasma> plasma;
 	int total_steps = 0.0;
 	double resNorm = 0.0; //Exclusively for unit testing purposes
 private:
@@ -110,11 +112,10 @@ private:
 
 	std::shared_ptr<DiffusionObj> diffObj;
 	std::shared_ptr<SourceObj> sourceObj;
-	std::shared_ptr<Plasma> plasma;
 
 	InitialConditionLibrary initConditionLibrary;
 };
 
 struct UserData {
-	SystemSolver* system;
+	std::shared_ptr<SystemSolver> system;
 };
