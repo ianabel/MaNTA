@@ -142,8 +142,8 @@ double CylindricalPlasmaConstDensity::dtauIdP(double Pi, double R)
 double CylindricalPlasmaConstDensity::lambda(double R)
 {
 	//std::cerr << 23.4 - 1.15*::log10(n) + 3.45*::log10(J_eV(Te)) << "	" << J_eV(Te) << std::endl << std::endl;
-
-	if(Te<eV_J(50.0)) return 23.4 - 1.15*::log10(n(R)*1.0e-6) + 3.45*::log10(J_eV(Te));
-	else return 25.3 - 1.15*::log10(n(R)*1.0e-6) + 2.3*::log10(J_eV(Te));
+	return 15.0;
+	//if(Te<eV_J(50.0)) return 23.4 - 1.15*::log10(n(R)*1.0e-6) + 3.45*::log10(J_eV(Te));
+	//else return 25.3 - 1.15*::log10(n(R)*1.0e-6) + 2.3*::log10(J_eV(Te));
 	//return 18.4-1.15*::log10(n)+2.3*::log10(J_eV(Te));
 }

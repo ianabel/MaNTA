@@ -190,7 +190,7 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 		if(nVar > 2) system->print(out2, t0, nOut, 2);
 	}
 	
-	IDASetMaxNumSteps(IDA_mem, 30000);
+	IDASetMaxNumSteps(IDA_mem, 50);
 	//Update initial solution to be within tolerance of the residual equation
 	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
 	if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
@@ -211,7 +211,7 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 	resfile1.open("res1.txt");
 
 	std::ofstream diagnostics;
-	diagnostics.open("diagnostics");
+	diagnostics.open("diagnostics.txt");
 
 	//Solving Loop
 	for (tout = t1, iout = 1; iout <= totalSteps; iout++, tout += delta_t) 

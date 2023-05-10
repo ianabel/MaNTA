@@ -43,7 +43,7 @@ private:
 
 	double n(double R) {return 3.0e19;}
 	double J(double R){return mi*n(R)*R*R;}
-	double I_r(double R){ return 2.0e-1;} //Amperes
+	double I_r(double R){ return 3.5e-1;} //Amperes
 	double beta(double R){return 4.0/(3.0*Om*Om*mi*n(R));}
 
 	//Constants

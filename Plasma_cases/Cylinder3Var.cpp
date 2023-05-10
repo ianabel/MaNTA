@@ -28,7 +28,7 @@ void Cylinder3Var::setKappas()
 	auto& omega = variables.at("omega");
 
 	P_ion.kappaFunc = [ = ]( double R, DGApprox q, DGApprox u ){ return (2.0/3.0)*2.0/(Om*Om*mi*n(R))*R*u(R,P_ion.index)*q(R,P_ion.index)/tauI(u(R,P_ion.index),R);};
-	P_e.kappaFunc = [ = ]( double R, DGApprox q, DGApprox u ){ return (2.0/3.0)*4.66/(Om*Om*me*n(R))*R*u(R,P_e.index)*q(R,P_e.index)/tauE(u(R,P_e.index),R);};
+	P_e.kappaFunc = [ = ]( double R, DGApprox q, DGApprox u ){  return (2.0/3.0)*4.66/(Om*Om*me*n(R))*R*u(R,P_e.index)*q(R,P_e.index)/tauE(u(R,P_e.index),R);};
 	omega.kappaFunc = [ = ]( double R, DGApprox q, DGApprox u ){ return 3.0/10.0*R*R*R*u(R,P_ion.index)*q(R,omega.index)/(Om*Om*tauI(u(R,P_ion.index),R));};
 }
 
@@ -38,8 +38,8 @@ void Cylinder3Var::setSources()
 	auto& P_e = variables.at("P_e");
 	auto& omega = variables.at("omega");
 
-	std::function<double( double, DGApprox, DGApprox )> sourceP_ion = [ = ]( double R, DGApprox q, DGApprox u ){ return -3.0/(10.0*Om*Om)*R*R*u(R,P_ion.index)*q(R,omega.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R) - Ci(u(R,P_ion.index), u(R,P_e.index), R);};
-	std::function<double( double, DGApprox, DGApprox )> sourceP_e = [ = ]( double R, DGApprox q, DGApprox u ){ return -Ce(u(R,P_ion.index), u(R,P_e.index), R);};
+	std::function<double( double, DGApprox, DGApprox )> sourceP_ion = [ = ]( double R, DGApprox q, DGApprox u ){ return -3.0/(10.0*Om*Om)*R*R*R*u(R,P_ion.index)*q(R,omega.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R) - R*Ci(u(R,P_ion.index), u(R,P_e.index), R);};
+	std::function<double( double, DGApprox, DGApprox )> sourceP_e = [ = ]( double R, DGApprox q, DGApprox u ){ return -R*Ce(u(R,P_ion.index), u(R,P_e.index), R);};
 	std::function<double( double, DGApprox, DGApprox )> sourceOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return  -I_r(R)*R*R*B_mid;};
 
 	P_ion.setSourceFunc(sourceP_ion);
@@ -54,7 +54,7 @@ void Cylinder3Var::setdudKappas()
 	auto& omega = variables.at("omega");
 
 	//----------------P_ion----------------------
-	std::function<double( double, DGApprox, DGApprox )> dkappaPidPi = [ = ]( double R, DGApprox q, DGApprox u ){ return (2.0/3.0)*2.0/(Om*Om*mi*n(R))*q(R,P_ion.index)/tauI(u(R,P_ion.index),R) - (2.0/3.0)*2.0/(Om*Om*mi*n(R))*u(R,P_ion.index)*q(R,P_ion.index)/(tauI(u(R,P_ion.index),R)*tauI(u(R,P_ion.index),R))*dtauIdP_i(u(R,P_ion.index),R) ;};
+	std::function<double( double, DGApprox, DGApprox )> dkappaPidPi = [ = ]( double R, DGApprox q, DGApprox u ){ return (2.0/3.0)*2.0/(Om*Om*mi*n(R))*R*q(R,P_ion.index)/tauI(u(R,P_ion.index),R) - (2.0/3.0)*2.0/(Om*Om*mi*n(R))*R*u(R,P_ion.index)*q(R,P_ion.index)/(tauI(u(R,P_ion.index),R)*tauI(u(R,P_ion.index),R))*dtauIdP_i(u(R,P_ion.index),R) ;};
 	std::function<double( double, DGApprox, DGApprox )> dkappaPidPe = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
 	std::function<double( double, DGApprox, DGApprox )> dkappaPidOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
 
@@ -64,7 +64,7 @@ void Cylinder3Var::setdudKappas()
 
 	//----------------P_e----------------------
 	std::function<double( double, DGApprox, DGApprox )> dkappaPedPi = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dkappaPedPe = [ = ]( double R, DGApprox q, DGApprox u ){ return (2.0/3.0)*4.66/(Om*Om*mi*n(R))*q(R,P_e.index)/tauE(u(R,P_e.index),R) - (2.0/3.0)*4.66/(Om*Om*mi*n(R))*u(R,P_e.index)*q(R,P_e.index)/(tauE(u(R,P_e.index),R)*tauE(u(R,P_e.index),R))*dtauEdP_e(u(R,P_e.index),R) ;};
+	std::function<double( double, DGApprox, DGApprox )> dkappaPedPe = [ = ]( double R, DGApprox q, DGApprox u ){ return (2.0/3.0)*4.66/(Om*Om*mi*n(R))*R*q(R,P_e.index)/tauE(u(R,P_e.index),R) - (2.0/3.0)*4.66/(Om*Om*mi*n(R))*R*u(R,P_e.index)*q(R,P_e.index)/(tauE(u(R,P_e.index),R)*tauE(u(R,P_e.index),R))*dtauEdP_e(u(R,P_e.index),R) ;};
 	std::function<double( double, DGApprox, DGApprox )> dkappaPedOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
 
 	P_e.addDeluKappaFunc(P_ion.index, dkappaPedPi);
@@ -73,7 +73,7 @@ void Cylinder3Var::setdudKappas()
 
 
 	//----------------omega----------------------
-	std::function<double( double, DGApprox, DGApprox )> dkappaOmegadPi = [ = ]( double R, DGApprox q, DGApprox u ){ return 3.0/10.0*R*R*q(R,omega.index)/(J(R)*Om*Om*tauI(u(R,P_ion.index),R)) - 3.0/10.0*R*R*u(R,P_ion.index)*q(R,omega.index)/(J(R)*Om*Om*tauI(u(R,P_ion.index),R)*tauI(u(R,P_ion.index),R))*dtauIdP_i(u(R,P_ion.index),R);};
+	std::function<double( double, DGApprox, DGApprox )> dkappaOmegadPi = [ = ]( double R, DGApprox q, DGApprox u ){ return (3.0/10.0*R*R*R*q(R,omega.index)/(Om*Om))*(1/tauI(u(R,P_ion.index),R) - u(R,P_ion.index)*dtauIdP_i(u(R,P_ion.index),R)/(tauI(u(R,P_ion.index),R)*tauI(u(R,P_ion.index),R)));};
 	std::function<double( double, DGApprox, DGApprox )> dkappaOmegadPe = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
 	std::function<double( double, DGApprox, DGApprox )> dkappaOmegadOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
 
@@ -89,7 +89,7 @@ void Cylinder3Var::setdqdKappas()
 	auto& omega = variables.at("omega");
 
 	//----------------P_ion----------------------
-	std::function<double( double, DGApprox, DGApprox )> dkappaPiddPi = [ = ]( double R, DGApprox q, DGApprox u ){ return (2.0/3.0)*2.0/(Om*Om*mi*n(R))*u(R,P_ion.index)/tauI(u(R,P_ion.index),R);};
+	std::function<double( double, DGApprox, DGApprox )> dkappaPiddPi = [ = ]( double R, DGApprox q, DGApprox u ){ return (2.0/3.0)*2.0/(Om*Om*mi*n(R))*R*u(R,P_ion.index)/tauI(u(R,P_ion.index),R);};
 	std::function<double( double, DGApprox, DGApprox )> dkappaPiddPe = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
 	std::function<double( double, DGApprox, DGApprox )> dkappaPiddOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
 
@@ -99,7 +99,7 @@ void Cylinder3Var::setdqdKappas()
 
 	//----------------P_e----------------------
 	std::function<double( double, DGApprox, DGApprox )> dkappaPeddPi = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dkappaPeddPe = [ = ]( double R, DGApprox q, DGApprox u ){ return (2.0/3.0)*4.66/(Om*Om*mi*n(R))*u(R,P_e.index)/tauE(u(R,P_ion.index),R);};
+	std::function<double( double, DGApprox, DGApprox )> dkappaPeddPe = [ = ]( double R, DGApprox q, DGApprox u ){ return (2.0/3.0)*4.66/(Om*Om*mi*n(R))*R*u(R,P_e.index)/tauE(u(R,P_ion.index),R);};
 	std::function<double( double, DGApprox, DGApprox )> dkappaPeddOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
 
 	P_e.addDelqKappaFunc(P_ion.index, dkappaPeddPi);
@@ -110,7 +110,7 @@ void Cylinder3Var::setdqdKappas()
 	//----------------omega----------------------
 	std::function<double( double, DGApprox, DGApprox )> dkappaOmegaddPi = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
 	std::function<double( double, DGApprox, DGApprox )> dkappaOmegaddPe  = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dkappaOmegaddOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return 3.0/10.0*R*R*u(R,P_ion.index)/(J(R)*Om*Om*tauI(u(R,P_ion.index),R));};
+	std::function<double( double, DGApprox, DGApprox )> dkappaOmegaddOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return 3.0/10.0*R*R*R*u(R,P_ion.index)/(Om*Om*tauI(u(R,P_ion.index),R));};
 
 	omega.addDelqKappaFunc(P_ion.index, dkappaOmegaddPi);
 	omega.addDelqKappaFunc(P_e.index, dkappaOmegaddPe);
@@ -124,8 +124,8 @@ void Cylinder3Var::setdudSources()
 	auto& omega = variables.at("omega");
 
 	//----------------P_ion----------------------
-	std::function<double( double, DGApprox, DGApprox )> dS_PidPi = [ = ]( double R, DGApprox q, DGApprox u ){ return -3.0/(10.0*Om*Om)*R*R*q(R,omega.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R) + 3.0/(10.0*Om*Om)*R*R*u(R,P_ion.index)*q(R,omega.index)*q(R,omega.index)/(tauI(u(R,P_ion.index),R)*tauI(u(R,P_ion.index),R))*dtauIdP_i(u(R,P_ion.index),R) - dCidPi(u(R,P_ion.index),u(R,P_e.index),R);};
-	std::function<double( double, DGApprox, DGApprox )> dS_PidPe = [ = ]( double R, DGApprox q, DGApprox u ){ return -dCidPe(u(R,P_ion.index),u(R,P_e.index),R);};
+	std::function<double( double, DGApprox, DGApprox )> dS_PidPi = [ = ]( double R, DGApprox q, DGApprox u ){ return -3.0/(10.0*Om*Om)*R*R*R*q(R,omega.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R) + 3.0/(10.0*Om*Om)*R*R*R*u(R,P_ion.index)*q(R,omega.index)*q(R,omega.index)/(tauI(u(R,P_ion.index),R)*tauI(u(R,P_ion.index),R))*dtauIdP_i(u(R,P_ion.index),R) - R*dCidPi(u(R,P_ion.index),u(R,P_e.index),R);};
+	std::function<double( double, DGApprox, DGApprox )> dS_PidPe = [ = ]( double R, DGApprox q, DGApprox u ){ return -R*dCidPe(u(R,P_ion.index),u(R,P_e.index),R);};
 	std::function<double( double, DGApprox, DGApprox )> dS_Pidomega = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
 
 
@@ -134,8 +134,8 @@ void Cylinder3Var::setdudSources()
 	P_ion.addDeluSourceFunc(omega.index, dS_Pidomega);
 
 	//----------------P_e----------------------
-	std::function<double( double, DGApprox, DGApprox )> dS_PedPi = [ = ]( double R, DGApprox q, DGApprox u ){ return -dCedPi(u(R,P_ion.index),u(R,P_e.index),R);};
-	std::function<double( double, DGApprox, DGApprox )> dS_PedPe = [ = ]( double R, DGApprox q, DGApprox u ){ return -dCedPe(u(R,P_ion.index),u(R,P_e.index),R);};
+	std::function<double( double, DGApprox, DGApprox )> dS_PedPi = [ = ]( double R, DGApprox q, DGApprox u ){ return -R*dCedPi(u(R,P_ion.index),u(R,P_e.index),R);};
+	std::function<double( double, DGApprox, DGApprox )> dS_PedPe = [ = ]( double R, DGApprox q, DGApprox u ){ return -R*dCedPe(u(R,P_ion.index),u(R,P_e.index),R);};
 	std::function<double( double, DGApprox, DGApprox )> dS_Pedomega = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
 
 
@@ -162,7 +162,7 @@ void Cylinder3Var::setdqdSources()
 	//----------------P_ion----------------------
 	std::function<double( double, DGApprox, DGApprox )> dS_PiddPi = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
 	std::function<double( double, DGApprox, DGApprox )> dS_PiddPe = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dS_Piddomega = [ = ]( double R, DGApprox q, DGApprox u ){ return -2*3.0/(10.0*Om*Om)*R*R*u(R,P_ion.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R);};
+	std::function<double( double, DGApprox, DGApprox )> dS_Piddomega = [ = ]( double R, DGApprox q, DGApprox u ){ return -2*3.0/(10.0*Om*Om)*R*R*R*u(R,P_ion.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R);};
 
 	P_ion.addDelqSourceFunc(P_ion.index, dS_PiddPi);
 	P_ion.addDelqSourceFunc(P_e.index, dS_PiddPe);
@@ -204,8 +204,8 @@ double Cylinder3Var::dtauIdP_i(double Pi, double R)
 
 double Cylinder3Var::lambda(double R)
 {
-	return 23.4 - 1.15*::log10(n(R)) + 3.45*::log10(40);
-
+	return 15.0;
+	//return 23.4 - 1.15*::log10(n(R)) + 3.45*::log10(40);
 	//return 18.4-1.15*::log10(n)+2.3*::log10(J_eV(Te));
 }
 
@@ -226,38 +226,35 @@ double Cylinder3Var::dtauEdP_e(double Pe, double R)
 
 double Cylinder3Var::nu(double Pi, double Pe, double R)
 {
-	return 0.0;
 	double alpha = ::pow(2,5/2)*::sqrt(M_PI)*::pow(e_charge,4)*n(R)*n(R)*::sqrt(mi*me)*lambda(R);
 	return alpha/n(R)*::pow(mi*Pe+me*Pi, -3.0/2.0);
 }
 
 double Cylinder3Var::dnudPi(double Pi, double Pe,  double R)
 {
-	return 0.0;
 	double alpha = ::pow(2,5/2)*::sqrt(M_PI)*::pow(e_charge,4)*n(R)*n(R)*::sqrt(mi*me)*lambda(R);
 	return 1.5*alpha*me/n(R)*::pow(mi*Pe+me*Pi, -5.0/2.0);
 }
 
 double Cylinder3Var::dnudPe(double Pi, double Pe,  double R)
 {
-	return 0.0;
 	double alpha = ::pow(2,5/2)*::sqrt(M_PI)*::pow(e_charge,4)*n(R)*n(R)*::sqrt(mi*me)*lambda(R);
 	return 1.5*alpha*mi/n(R)*::pow(mi*Pe+me*Pi, -5.0/2.0);
 }
 
 double Cylinder3Var::Ce(double Pi, double Pe, double R)
 {
-	return R*nu(Pi, Pe, R)*(Pi-Pe)/n(R);
+	return nu(Pi, Pe, R)*(Pi-Pe)/n(R);
 }
 
 double Cylinder3Var::dCedPe(double Pi, double Pe, double R)
 {
-	return -R*nu(Pi,Pe,R)/n(R) + R*dnudPe(Pi,Pe,R)*(Pi-Pe)/n(R);
+	return -nu(Pi,Pe,R)/n(R) + dnudPe(Pi,Pe,R)*(Pi-Pe)/n(R);
 }
 
 double Cylinder3Var::dCedPi(double Pi, double Pe, double R)
 {
-	return R*nu(Pi,Pe,R)/n(R) + R*dnudPi(Pi,Pe,R)*(Pi-Pe)/n(R);
+	return nu(Pi,Pe,R)/n(R) + dnudPi(Pi,Pe,R)*(Pi-Pe)/n(R);
 }
 
 double Cylinder3Var::Ci(double Pi, double Pe, double R)
