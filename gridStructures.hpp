@@ -364,6 +364,11 @@ class DGApprox
 			return coeffsLong;
 		}
 
+		//This is only to be used for temporary DGAs, for longer lived DGAs please create a sundials vector
+		//DGAs don't own their own memory. Usually they will just be assigned memory blocks within sundials vectors.
+		//In the case that a DGA is created without any sundials vector ever being made we need to assign a memory block
+		//This just sets the arrayPtr (which you should make sure is the right size to hold all your coefficients) as the holding place for the data
+		//Note: if the assigned arrayptr memory block goes out of scope you will have a memory leak and you'll get undefined behaviour
 		void setCoeffsToArrayMem(double arrayPtr[], const int nVar, const int nCells, const Grid& grid)
 		{
 			std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>> cellCoeffs;

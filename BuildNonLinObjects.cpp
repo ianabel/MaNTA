@@ -280,6 +280,7 @@ void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 */
 
 //Single variable linear case
+/*
 void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 {
 	auto nVar = diffobj->nVar;
@@ -303,6 +304,7 @@ void buildDiffusionObj(std::shared_ptr<DiffusionObj> diffobj)
 
 	diffobj->deluKappaFuncs[0].push_back(dkappa0du0);
 }
+*/
 
 
 //----------------------Source Obects----------------
@@ -343,6 +345,7 @@ void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 
 
 // 1D sourceless
+/*
 void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 {
 	auto nVar = sourceobj->nVar;
@@ -367,6 +370,7 @@ void buildSourceObj(std::shared_ptr<SourceObj> sourceobj)
 
 	sourceobj->deluSourceFuncs[0].push_back(dF_0du_0);
 }
+*/
 
 //1D Fisher's Equation
 /*

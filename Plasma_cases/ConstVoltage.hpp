@@ -3,11 +3,11 @@
 #include "Plasma.hpp"
 #include "../Variable.hpp"
 
-class Cylinder3Var : public Plasma
+class ConstVoltage : public Plasma
 {
 public:
-	Cylinder3Var() {};
-	~Cylinder3Var() = default;
+	ConstVoltage() {};
+	~ConstVoltage() = default;
 private:
 	//-----Over ride functions-----
 	//These functions must be built for every derived plasma class
@@ -25,6 +25,7 @@ private:
 	void setdsigdSources() override;
 	//-----------------------------
 
+	double J(double R){return mi*n(R)*R*R;}
 	double tauI(double Pi, double R);
 	double dtauIdP_i(double Pi, double R);
 	double tauE(double Pi, double R);
@@ -42,9 +43,12 @@ private:
 	double dCidPe(double Pi, double Pe, double R);
 	double dCidPi(double Pi, double Pe, double R);
 
-	double n(double R) {return 3.0e18;}
-	double J(double R){return mi*n(R)*R*R;}
-	double I_r(double R){ return 5.0e-3;} //Amperes
+	double n(double R) const {return 3.0e18;}
+	double Jr(DGApprox sigma, double R) const;
+	double I_r(double R) const { return 5.0e-3;} //Amperes
+	double L_i(double R) const;
+
+	double EvalCoeffs( LegendreBasis & B, Coeff_t cs, double x, int var ) const;
 
 	//Constants
 	const double B_mid = 0.3; //Tesla

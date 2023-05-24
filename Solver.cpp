@@ -157,8 +157,32 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 	absTolVec = N_VClone(Y);
 	if(ErrorChecker::check_retval((void *)absTolVec, "N_VClone", 0))
 		std::runtime_error("Sundials initialization Error, run in debug to find");
-	VectorWrapper absTolVals( N_VGetArrayPointer( absTolVec ), nVar*3*nCells*(k+1) + nVar*(nCells+1) );
-	absTolVals.setConstant(atol);
+	VectorWrapper absTolVals( N_VGetArrayPointer( absTolVec ), N_VGetLength( absTolVec ) );
+	absTolVals.setZero();
+
+	DGApprox tolSig(system->grid, k), tolQ(system->grid, k), tolU(system->grid, k);
+	double memBlock[nVar*(nCells+1)];
+	Eigen::Map<Eigen::VectorXd> tolLambda(memBlock, nVar*(nCells+1));
+	system->mapDGtoSundials(tolSig, tolQ, tolU, tolLambda, N_VGetArrayPointer( absTolVec ));
+	double dx = (system->grid.upperBound - system->grid.lowerBound)/nCells;
+
+	for(int i = 0; i<nCells ; i++)
+	{
+		tolU.coeffs[0][i].second.setConstant(1.0);
+		if(nVar > 1) tolU.coeffs[1][i].second.setConstant(1.0);
+		if(nVar > 2) tolU.coeffs[2][i].second.setConstant(1000.0);
+		tolQ.coeffs[0][i].second.setConstant(1.0/dx);
+		if(nVar > 1) tolQ.coeffs[1][i].second.setConstant(1.0/dx);
+		if(nVar > 2) tolQ.coeffs[2][i].second.setConstant(1000.0/dx);
+		tolSig.coeffs[0][i].second.setConstant(1.0*dx/delta_t);
+		if(nVar > 1) tolSig.coeffs[1][i].second.setConstant(1.0*dx/delta_t);
+		if(nVar > 2) tolSig.coeffs[2][i].second.setConstant(1000.0*dx/delta_t);
+	}
+	for(int i = 0; i<nVar*(nCells+1); i++)
+	{
+		if(i<2*(nCells+1)) tolLambda[i] = 1.0;
+		else tolLambda[i] = 1000.0;
+	}
 
 	retval = IDASVtolerances(IDA_mem, rtol, absTolVec);
 	if(ErrorChecker::check_retval(&retval, "IDASVtolerances", 1)) 
@@ -190,7 +214,8 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 		if(nVar > 2) system->print(out2, t0, nOut, 2);
 	}
 	
-	IDASetMaxNumSteps(IDA_mem, 50);
+	IDASetMaxNumSteps(IDA_mem, 50000);
+
 	//Update initial solution to be within tolerance of the residual equation
 	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
 	if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
@@ -201,17 +226,38 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 		throw std::runtime_error("IDACalcIC could not complete");
 	}
 
+	N_Vector dydtWRMS;
+	N_Vector Weights;
+	dydtWRMS = N_VClone(Y);
+	Weights = N_VClone(Y);
+	VectorWrapper dydtWRMSvec( N_VGetArrayPointer( dydtWRMS ), N_VGetLength( dydtWRMS ) );
+	VectorWrapper Weightsvec( N_VGetArrayPointer( Weights ), N_VGetLength( Weights ) );
+	Weightsvec.setZero();
+
+	for(int i = 0; i<dydtWRMSvec.size(); i++)
+	{
+		Weightsvec[i] = 1.0/(rtol*yVec[i] + absTolVals[i]);
+		dydtWRMSvec[i] = Weightsvec[i]*dydtVec[i];
+	}
+	std::ofstream dydtfile;
+	dydtfile.open("dydtfile.txt");
+
+
 	//??To Do: remove these when done with them
 	std::ofstream file;
 	file.open("time.txt");
 
 	std::ofstream resfile0;
 	std::ofstream resfile1;
+	std::ofstream resfile4;
 	resfile0.open("res0.txt");
 	resfile1.open("res1.txt");
+	resfile1.open("res4.txt");
 
 	std::ofstream diagnostics;
 	diagnostics.open("diagnostics.txt");
+
+	IDASetMinStep(IDA_mem, 1.0e-6);
 
 	//Solving Loop
 	for (tout = t1, iout = 1; iout <= totalSteps; iout++, tout += delta_t) 
@@ -228,9 +274,14 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 
 		if(iout%stepsPerPrint == 0)
 		{
-			system->print(out0, tout, nOut, 0);
-			if(nVar > 1) system->print(out1, tout, nOut, 1);
-			if(nVar > 2) system->print(out2, t0, nOut, 2);
+			N_Vector resval;
+			resval = N_VClone(Y);
+			VectorWrapper resVec( N_VGetArrayPointer( resval ), N_VGetLength( Y ) ); 
+			resVec.setZero();
+			residual(tout, Y, dYdt, resval, data);
+			system->print(out0, tout, nOut, 0, Y, resval);
+			if(nVar > 1) system->print(out1, tout, nOut, 1, Y, resval);
+			if(nVar > 2) system->print(out2, t0, nOut, 2, Y, resval);
 
 			//Print Diagnostics
 			diagnostics << tout << "	" << diagnostic.Voltage() << std::endl;

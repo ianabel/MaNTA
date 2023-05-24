@@ -13,6 +13,7 @@
 Base class for all plasma properties
 When building a Plasma you must build all of the derived classes
 All functions of  base plasma do not need to be touched
+DO NO BUILD CASE SPECFIC TOOLS HERE!!!
 */
 
 class Plasma
@@ -60,6 +61,7 @@ protected:
 	virtual void setSources() {};
 	virtual void setdudSources() {};
 	virtual void setdqdSources() {};
+	virtual void setdsigdSources() {};
 	//-------------------------------------------
 
 	//Any new variables must be added here to work for a derived plasma
@@ -72,6 +74,7 @@ protected:
 		"P_ion",
 		"P_e",
 		"P_s",
-		"omega"
+		"omega",
+		"velocity"
 	};
 };

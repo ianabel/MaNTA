@@ -28,5 +28,6 @@ private:
 	void setSources() override;
 	void setdudSources() override;
 	void setdqdSources() override;
+	void setdsigdSources() override;
 	//-----------------------------
 };

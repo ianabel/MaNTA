@@ -43,7 +43,7 @@ public:
 	//Creates the MX cellwise matrices used at each Jacobian iteration
 	//Factorization of these matrices is done here
 	//?TO DO: the values of the non-linear matrices will be added in this function?
-	void updateMForJacSolve(std::vector< Eigen::FullPivLU< Eigen::MatrixXd > >& tempABBDBlocks, double const alpha, DGApprox& delQ, DGApprox& delU);
+	void updateMForJacSolve(std::vector< Eigen::FullPivLU< Eigen::MatrixXd > >& tempABBDBlocks, double const alpha, DGApprox& delSig, DGApprox& delQ, DGApprox& delU);
 
 	//Solves the Jy = -G equation
 	void solveJacEq(N_Vector& g, N_Vector& delY);
@@ -53,6 +53,7 @@ public:
 	//print current output for u and q to output file
 	void print( std::ostream& out, double t, int nOut, int var );
 	void print( std::ostream& out, double t, int nOut, int var, N_Vector& tempY  );
+	void print( std::ostream& out, double t, int nOut, int var, N_Vector& tempY, N_Vector& tempRes );
 
 	//Find the profiles from the coefficients
 	double EvalCoeffs( LegendreBasis & B, Coeff_t cs, double x, int var );

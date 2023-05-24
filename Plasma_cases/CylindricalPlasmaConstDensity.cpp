@@ -32,11 +32,11 @@ void CylindricalPlasmaConstDensity::setSources()
 	auto& P_ion = variables.at("P_ion");
 	auto& omega = variables.at("omega");
 
-	std::function<double( double, DGApprox, DGApprox )> sourceP_ion = [ = ]( double R, DGApprox q, DGApprox u )
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> sourceP_ion = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u )
 	{
 		//std::cerr << -3.0/(10.0*Om*Om)*R*R*R*u(R,P_ion.index)*q(R,omega.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R) << std::endl << std::endl;
 		return -3.0/(10.0*Om*Om)*R*R*R*u(R,P_ion.index)*q(R,omega.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R);};
-	std::function<double( double, DGApprox, DGApprox )> sourceOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return -I_r(R)*R*R*B_mid; };
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> sourceOmega = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return -I_r(R)*R*R*B_mid; };
 
 	P_ion.setSourceFunc(sourceP_ion);
 	omega.setSourceFunc(sourceOmega);
@@ -88,16 +88,16 @@ void CylindricalPlasmaConstDensity::setdudSources()
 	auto& omega = variables.at("omega");
 
 	//----------------P_ion----------------------
-	std::function<double( double, DGApprox, DGApprox )> dS_PdP = [ = ]( double R, DGApprox q, DGApprox u ){ return -3.0/(10.0*Om*Om)*R*R*R*q(R,omega.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R) + 3.0/(10.0*Om*Om)*R*R*R*u(R,P_ion.index)*q(R,omega.index)*q(R,omega.index)/(tauI(u(R,P_ion.index),R)*tauI(u(R,P_ion.index),R))*dtauIdP(u(R,P_ion.index),R) ;};
-	std::function<double( double, DGApprox, DGApprox )> dS_Pdomega = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> dS_PdP = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return -3.0/(10.0*Om*Om)*R*R*R*q(R,omega.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R) + 3.0/(10.0*Om*Om)*R*R*R*u(R,P_ion.index)*q(R,omega.index)*q(R,omega.index)/(tauI(u(R,P_ion.index),R)*tauI(u(R,P_ion.index),R))*dtauIdP(u(R,P_ion.index),R) ;};
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> dS_Pdomega = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return 0.0;};
 
 
 	P_ion.addDeluSourceFunc(P_ion.index, dS_PdP);
 	P_ion.addDeluSourceFunc(omega.index, dS_Pdomega);
 
 	//----------------omega----------------------
-	std::function<double( double, DGApprox, DGApprox )> dS_omegadP = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dS_omegadomega = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> dS_omegadP = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> dS_omegadomega = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return 0.0;};
 
 	omega.addDeluSourceFunc(P_ion.index, dS_omegadP);
 	omega.addDeluSourceFunc(omega.index, dS_omegadomega);
@@ -109,18 +109,38 @@ void CylindricalPlasmaConstDensity::setdqdSources()
 	auto& omega = variables.at("omega");
 
 	//----------------P_ion----------------------
-	std::function<double( double, DGApprox, DGApprox )> dS_PddP = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dS_Pddomega = [ = ]( double R, DGApprox q, DGApprox u ){ return -2*3.0/(10.0*Om*Om)*R*R*R*u(R,P_ion.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R);};
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> dS_PddP = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> dS_Pddomega = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return -2*3.0/(10.0*Om*Om)*R*R*R*u(R,P_ion.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R);};
 
 	P_ion.addDelqSourceFunc(P_ion.index, dS_PddP);
 	P_ion.addDelqSourceFunc(omega.index, dS_Pddomega);
 
 	//----------------omega----------------------
-	std::function<double( double, DGApprox, DGApprox )> dS_omegaddP = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox )> dS_omegaddomega = [ = ]( double R, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> dS_omegaddP = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> dS_omegaddomega = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return 0.0;};
 
 	omega.addDelqSourceFunc(P_ion.index, dS_omegaddP);
 	omega.addDelqSourceFunc(omega.index, dS_omegaddomega);
+}
+
+void CylindricalPlasmaConstDensity::setdsigdSources()
+{
+	auto& P_ion = variables.at("P_ion");
+	auto& omega = variables.at("omega");
+
+	//----------------P_ion----------------------
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> dS_Pdsig_P = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> dS_Pdsig_omega = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return 0.0;};
+
+	P_ion.addDelsigSourceFunc(P_ion.index, dS_Pdsig_P);
+	P_ion.addDelsigSourceFunc(omega.index, dS_Pdsig_omega);
+
+	//----------------omega----------------------
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> dS_omegadsig_P = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> dS_omegadsig_omega = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return 0.0;};
+
+	omega.addDelsigSourceFunc(P_ion.index, dS_omegadsig_P);
+	omega.addDelsigSourceFunc(omega.index, dS_omegadsig_omega);
 }
 
 double CylindricalPlasmaConstDensity::tauI(double Pi, double R)

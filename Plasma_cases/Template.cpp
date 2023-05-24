@@ -133,3 +133,8 @@ void PlasmaTemplate::setdqdSources()
 	*/
 }
 
+void PlasmaTemplate::setdsigdSources()
+{
+	//You can figure this one out
+}
+

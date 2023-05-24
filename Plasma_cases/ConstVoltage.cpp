@@ -1,16 +1,16 @@
-#include "Cylinder3Var.hpp"
+#include "ConstVoltage.hpp"
 #include "../Constants.hpp"
 
 #include <math.h>
 
-void Cylinder3Var::pickVariables()
+void ConstVoltage::pickVariables()
 {
 	addVariable("P_ion");
 	addVariable("P_e");
 	addVariable("omega");
 }
 
-void Cylinder3Var::seta_fns()
+void ConstVoltage::seta_fns()
 {
 	auto& P_ion = variables.at("P_ion");
 	auto& P_e = variables.at("P_e");
@@ -21,7 +21,7 @@ void Cylinder3Var::seta_fns()
 	omega.a_fn = [ = ]( double R ){ return J(R)*R;};
 }
 
-void Cylinder3Var::setKappas()
+void ConstVoltage::setKappas()
 {
 	auto& P_ion = variables.at("P_ion");
 	auto& P_e = variables.at("P_e");
@@ -32,7 +32,7 @@ void Cylinder3Var::setKappas()
 	omega.kappaFunc = [ = ]( double R, DGApprox q, DGApprox u ){ return 3.0/10.0*R*R*R*u(R,P_ion.index)*q(R,omega.index)/(Om_i*Om_i*tauI(u(R,P_ion.index),R));};
 }
 
-void Cylinder3Var::setSources()
+void ConstVoltage::setSources()
 {
 	auto& P_ion = variables.at("P_ion");
 	auto& P_e = variables.at("P_e");
@@ -40,14 +40,14 @@ void Cylinder3Var::setSources()
 
 	std::function<double( double, DGApprox, DGApprox, DGApprox )> sourceP_ion = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return -3.0/(10.0*Om_i*Om_i)*R*R*R*u(R,P_ion.index)*q(R,omega.index)*q(R,omega.index)/tauI(u(R,P_ion.index),R) - R*Ci(u(R,P_ion.index), u(R,P_e.index), R);};
 	std::function<double( double, DGApprox, DGApprox, DGApprox )> sourceP_e = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return -R*Ce(u(R,P_ion.index), u(R,P_e.index), R);};
-	std::function<double( double, DGApprox, DGApprox, DGApprox )> sourceOmega = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return  -I_r(R)*R*R*B_mid;};
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> sourceOmega = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return -Jr(sig,R)*R*R*B_mid;};
 
 	P_ion.setSourceFunc(sourceP_ion);
 	P_e.setSourceFunc(sourceP_e);
 	omega.setSourceFunc(sourceOmega);
 }
 
-void Cylinder3Var::setdudKappas()
+void ConstVoltage::setdudKappas()
 {
 	auto& P_ion = variables.at("P_ion");
 	auto& P_e = variables.at("P_e");
@@ -82,7 +82,7 @@ void Cylinder3Var::setdudKappas()
 	omega.addDeluKappaFunc(omega.index, dkappaOmegadOmega);
 }
 
-void Cylinder3Var::setdqdKappas()
+void ConstVoltage::setdqdKappas()
 {
 	auto& P_ion = variables.at("P_ion");
 	auto& P_e = variables.at("P_e");
@@ -117,7 +117,7 @@ void Cylinder3Var::setdqdKappas()
 	omega.addDelqKappaFunc(omega.index, dkappaOmegaddOmega);
 }
 
-void Cylinder3Var::setdudSources()
+void ConstVoltage::setdudSources()
 {
 	auto& P_ion = variables.at("P_ion");
 	auto& P_e = variables.at("P_e");
@@ -153,7 +153,7 @@ void Cylinder3Var::setdudSources()
 	omega.addDeluSourceFunc(omega.index, dS_omegadomega);
 }
 
-void Cylinder3Var::setdqdSources()
+void ConstVoltage::setdqdSources()
 {
 	auto& P_ion = variables.at("P_ion");
 	auto& P_e = variables.at("P_e");
@@ -187,7 +187,7 @@ void Cylinder3Var::setdqdSources()
 	omega.addDelqSourceFunc(omega.index, dS_omegaddomega);
 }
 
-void Cylinder3Var::setdsigdSources()
+void ConstVoltage::setdsigdSources()
 {
 	auto& P_ion = variables.at("P_ion");
 	auto& P_e = variables.at("P_e");
@@ -214,14 +214,14 @@ void Cylinder3Var::setdsigdSources()
 	//----------------omega----------------------
 	std::function<double( double, DGApprox, DGApprox, DGApprox )> dS_omegadsig_Pi = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return 0.0;};
 	std::function<double( double, DGApprox, DGApprox, DGApprox )> dS_omegadsig_Pe = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return 0.0;};
-	std::function<double( double, DGApprox, DGApprox, DGApprox )> dS_omegadsig_omega = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> dS_omegadsig_omega = [ = ]( double R, DGApprox sig, DGApprox q, DGApprox u ){ return -L_i(R)*R*R*B_mid;};
 
 	omega.addDelsigSourceFunc(P_ion.index, dS_omegadsig_Pi);
 	omega.addDelsigSourceFunc(P_e.index, dS_omegadsig_Pe);
 	omega.addDelsigSourceFunc(omega.index, dS_omegadsig_omega);
 }
 
-double Cylinder3Var::tauI(double Pi, double R)
+double ConstVoltage::tauI(double Pi, double R)
 {
  	if(Pi>0)return 3.44e11*(1.0/::pow(n(R),5.0/2.0))*(::pow(J_eV(Pi),3.0/2.0))*(1.0/lambda(R))*(::sqrt(mi/me));
 	else return 3.44e11*(1.0/::pow(n(R),5.0/2.0))*(::pow(n(R),3.0/2.0))*(1.0/lambda(R))*(::sqrt(mi/me)); //if we have a negative temp just treat it as 1eV
@@ -229,21 +229,21 @@ double Cylinder3Var::tauI(double Pi, double R)
 	//return 3.0e9/lambda()*::sqrt(mi/(2*mp))*::pow(Pi,3/2)/::pow(n,5/2);
 }
 
-double Cylinder3Var::dtauIdP_i(double Pi, double R)
+double ConstVoltage::dtauIdP_i(double Pi, double R)
 {
 	if(Pi>0)return (3.0/2.0)*3.44e11*(1.0/::pow(n(R),5.0/2.0))*(::pow(J_eV(Pi),1.0/2.0))*(1.0/lambda(R))*(::sqrt(mi/me));
 	else return (3.0/2.0)*3.44e11*(1.0/::pow(n(R),5.0/2.0))*(::pow(n(R),1.0/2.0))*(1.0/lambda(R))*(::sqrt(mi/me));
 	//return 4.5e9/lambda()*::sqrt(mi/(2*mp))*::pow(Pi,1/2)/::pow(n,5/2);
 }
 
-double Cylinder3Var::lambda(double R)
+double ConstVoltage::lambda(double R)
 {
 	return 15.0;
 	//return 23.4 - 1.15*::log10(n(R)) + 3.45*::log10(40);
 	//return 18.4-1.15*::log10(n)+2.3*::log10(J_eV(Te));
 }
 
-double Cylinder3Var::tauE(double Pe, double R)
+double ConstVoltage::tauE(double Pe, double R)
 {
  	if(Pe>0)return 3.44e11*(1.0/::pow(n(R),5.0/2.0))*(::pow(J_eV(Pe),3.0/2.0))*(1.0/lambda(R));
 	else return 3.44e11*(1.0/::pow(n(R),5.0/2.0))*(::pow(n(R),3.0/2.0))*(1.0/lambda(R)); //if we have a negative temp just treat it as 1eV
@@ -251,14 +251,14 @@ double Cylinder3Var::tauE(double Pe, double R)
 	//return 3.0e9/lambda()*::sqrt(mi/(2*mp))*::pow(Pi,3/2)/::pow(n,5/2);
 }
 
-double Cylinder3Var::dtauEdP_e(double Pe, double R)
+double ConstVoltage::dtauEdP_e(double Pe, double R)
 {
 	if(Pe>0)return (3.0/2.0)*3.44e11*(1.0/::pow(n(R),5.0/2.0))*(::pow(J_eV(Pe),1.0/2.0))*(1.0/lambda(R));
 	else return (3.0/2.0)*3.44e11*(1.0/::pow(n(R),5.0/2.0))*(::pow(n(R),1.0/2.0))*(1.0/lambda(R));
 	//return 4.5e9/lambda()*::sqrt(mi/(2*mp))*::pow(Pi,1/2)/::pow(n,5/2);
 }
 
-double Cylinder3Var::nu(double Pi, double Pe, double R)
+double ConstVoltage::nu(double Pi, double Pe, double R)
 {
 	//double alpha = ::pow(e_charge*e_charge/(2*M_PI*eps_0*me),2)*n(R)*lambda(R);
 	//return alpha/n(R)*::pow(mi*Pe+me*Pi, -3.0/2.0);
@@ -266,7 +266,7 @@ double Cylinder3Var::nu(double Pi, double Pe, double R)
 	return 3.44e-11*::pow(n(R),5.0/2.0)*lambda(R)/::pow(J_eV(Pe),3/2);
 }
 
-double Cylinder3Var::dnudPi(double Pi, double Pe,  double R)
+double ConstVoltage::dnudPi(double Pi, double Pe,  double R)
 {
 	//double alpha = ::pow(e_charge*e_charge/(2*M_PI*eps_0*me),2)*n(R)*lambda(R);
 	//return 1.5*alpha*me/n(R)*::pow(mi*Pe+me*Pi, -5.0/2.0);
@@ -274,7 +274,7 @@ double Cylinder3Var::dnudPi(double Pi, double Pe,  double R)
 	return 0.0;
 }
 
-double Cylinder3Var::dnudPe(double Pi, double Pe,  double R)
+double ConstVoltage::dnudPe(double Pi, double Pe,  double R)
 {
 	//double alpha = ::pow(e_charge*e_charge/(2*M_PI*eps_0*me),2)*n(R)*lambda(R);
 	//return 1.5*alpha*mi/n(R)*::pow(mi*Pe+me*Pi, -5.0/2.0);
@@ -282,32 +282,65 @@ double Cylinder3Var::dnudPe(double Pi, double Pe,  double R)
 	return -(5/2)*3.44e-11*::pow(n(R),5.0/2.0)*lambda(R)/::pow(J_eV(Pe),5/2);
 }
 
-double Cylinder3Var::Ce(double Pi, double Pe, double R)
+double ConstVoltage::Ce(double Pi, double Pe, double R)
 {
 	return nu(Pi, Pe, R)*(Pi-Pe)/n(R);
 }
 
-double Cylinder3Var::dCedPe(double Pi, double Pe, double R)
+double ConstVoltage::dCedPe(double Pi, double Pe, double R)
 {
 	return -nu(Pi,Pe,R)/n(R) + dnudPe(Pi,Pe,R)*(Pi-Pe)/n(R);
 }
 
-double Cylinder3Var::dCedPi(double Pi, double Pe, double R)
+double ConstVoltage::dCedPi(double Pi, double Pe, double R)
 {
 	return nu(Pi,Pe,R)/n(R) + dnudPi(Pi,Pe,R)*(Pi-Pe)/n(R);
 }
 
-double Cylinder3Var::Ci(double Pi, double Pe, double R)
+double ConstVoltage::Ci(double Pi, double Pe, double R)
 {
 	return -Ce(Pi, Pe, R);
 }
 
-double Cylinder3Var::dCidPe(double Pi, double Pe, double R)
+double ConstVoltage::dCidPe(double Pi, double Pe, double R)
 {
 	return -dCedPe(Pi, Pe, R);
 }
 
-double Cylinder3Var::dCidPi(double Pi, double Pe, double R)
+double ConstVoltage::dCidPi(double Pi, double Pe, double R)
 {
 	return -dCedPi(Pi, Pe, R);
+}
+
+double ConstVoltage::L_i(double R) const
+{
+	return mi*n(R)*B_mid*10e8;
+}
+
+double ConstVoltage::Jr(DGApprox sigma, double R) const
+{
+	auto& omega = variables.at("omega");
+	double Jr = 0.0;
+
+	for(auto cell : sigma.coeffs[omega.index])
+	{
+		double dx = ( cell.first.x_u - cell.first.x_l ) /( 29 );
+		for ( int i=0; i<29; ++i )
+		{
+			//Uses a simple parallelogram rule
+			double x = cell.first.x_l + ( cell.first.x_u - cell.first.x_l ) * ( static_cast<double>( i )/( 29 ) ) + 0.5*dx;
+			Jr += L_i(R)*EvalCoeffs( sigma.Basis, sigma.coeffs, x, omega.index );
+		}
+	}
+	return Jr;
+}
+
+double ConstVoltage::EvalCoeffs( LegendreBasis & B, Coeff_t cs, double x, int var ) const
+{
+		for ( auto const & pair : cs[var] )
+	{
+		if ( pair.first.contains( x ) )
+			return B.Evaluate( pair.first, pair.second, x );
+	}
+	return std::nan( "" );
 }

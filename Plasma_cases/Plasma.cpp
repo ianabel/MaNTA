@@ -2,11 +2,15 @@
 #include "../Variable.hpp"
 #include "CylindricalPlasmaConstDensity.hpp"
 #include "Cylinder3Var.hpp"
+#include "pouseille.hpp"
+#include "ConstVoltage.hpp"
 
 void makePlasmaCase(std::string const& plasmaCase, std::shared_ptr<Plasma>& plasma)
 {
 	if(plasmaCase == "CylindricalPlasmaConstDensity") plasma = std::make_shared<CylindricalPlasmaConstDensity>();
 	else if(plasmaCase == "Cylinder3Var") plasma = std::make_shared<Cylinder3Var>();
+	else if(plasmaCase == "pouseille") plasma = std::make_shared<Pouseille>();
+	else if(plasmaCase == "ConstVoltage") plasma = std::make_shared<ConstVoltage>();
 	else throw std::runtime_error("Plasma Case does not exist");
 }
 
@@ -20,6 +24,7 @@ void Plasma::constructPlasma()
 	setSources();
 	setdqdKappas();
 	setdudKappas();
+	setdsigdSources();
 	setdqdSources();
 	setdudSources();
 
@@ -83,6 +88,7 @@ void Plasma::makeSourceObj()
 	int numVar = variables.size();
 
 	sourceObj->nVar = numVar;
+	sourceObj->delsigSourceFuncs.resize(numVar);
 	sourceObj->delqSourceFuncs.resize(numVar);
 	sourceObj->deluSourceFuncs.resize(numVar);
 	sourceObj->clear();
@@ -96,6 +102,7 @@ void Plasma::makeSourceObj()
 		{
 			sourceObj->deluSourceFuncs[i].push_back(rowVariable.deluSourceFuncs[j]);
 			sourceObj->delqSourceFuncs[i].push_back(rowVariable.delqSourceFuncs[j]);
+			sourceObj->delsigSourceFuncs[i].push_back(rowVariable.delsigSourceFuncs[j]);
 		}
 	}
 }

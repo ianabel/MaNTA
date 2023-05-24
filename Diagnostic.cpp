@@ -2,6 +2,7 @@
 
 double Diagnostic::Voltage() const
 {
+	double B_mid = 0.3;
 	//Calculates the approximate integral of omega over the domain
 	int omegaIndex;
 	try 
@@ -17,7 +18,7 @@ double Diagnostic::Voltage() const
 	{
 		//Uses a simple parallelogram rule
 		double x = system->BCs->LowerBound + ( system->BCs->UpperBound - system->BCs->LowerBound ) * ( static_cast<double>( i )/( 199 ) ) + 0.5*dx;
-		voltage += system->EvalCoeffs( system->u.Basis, system->u.coeffs, x, omegaIndex )*dx;
+		voltage += B_mid*x*system->EvalCoeffs( system->u.Basis, system->u.coeffs, x, omegaIndex )*dx;
 	}
 	return voltage;
 }
