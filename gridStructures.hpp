@@ -10,6 +10,7 @@
 #include <boost/math/quadrature/gauss.hpp>
 #include <cmath>
 #include <vector>
+#include <iostream>
 
 typedef std::function<double( double )> Fn;
 using Matrix = Eigen::Matrix<realtype,Eigen::Dynamic,Eigen::Dynamic>;

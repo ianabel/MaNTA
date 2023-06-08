@@ -273,9 +273,9 @@ void DiffusionObj::buildCylinderPlasmaConstDensity()
 		else return 25.3 - 1.15*::log(n) + 2.3*::log(Te);
 	};
 	std::function<double (double)> tau = [ = ](double Ps){
-		return 3.0e9/lambda()*::sqrt(mi/(2*mp))*::pow(Ps,3/2)/::pow(n,5/2);
+		return 3.0e9/lambda()*::sqrt(ionMass/(2*protonMass))*::pow(Ps,3/2)/::pow(n,5/2);
 	};
-	std::function<double (double)> dtaudP = [ = ](double Ps){return 4.5e9/lambda()*::sqrt(mi/(2*mp))*::pow(Ps,1/2)/::pow(n,5/2);};
+	std::function<double (double)> dtaudP = [ = ](double Ps){return 4.5e9/lambda()*::sqrt(ionMass/(2*protonMass))*::pow(Ps,1/2)/::pow(n,5/2);};
 
 	std::function<double( double, DGApprox, DGApprox )> kappaP = [ = ]( double R, DGApprox q, DGApprox u ){ return beta*R*u(R,P)*q(R,P)/tau(u(R,P));};
 	std::function<double( double, DGApprox, DGApprox )> kappaOmega = [ = ]( double R, DGApprox q, DGApprox u ){ return 3.0/10.0*R*R*u(R,P)*q(R,omega)/tau(u(R,P));};

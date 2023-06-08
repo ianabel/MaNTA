@@ -25,7 +25,7 @@ private:
 	void setdsigdSources() override;
 	//-----------------------------
 
-	double J(double R){return mi*n(R)*R*R;}
+	double J(double R){return ionMass*n(R)*R*R;}
 	double tauI(double Pi, double R);
 	double dtauIdP_i(double Pi, double R);
 	double tauE(double Pi, double R);
@@ -52,6 +52,6 @@ private:
 
 	//Constants
 	const double B_mid = 0.3; //Tesla
-	const double Om_i = e_charge*B_mid/mi;
-	const double Om_e = e_charge*B_mid/me;
+	const double Om_i = e_charge*B_mid/ionMass;
+	const double Om_e = e_charge*B_mid/electronMass;
 };

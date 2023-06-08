@@ -43,11 +43,11 @@ private:
 	double dCidPi(double Pi, double Pe, double R);
 
 	double n(double R) {return 3.0e18;}
-	double J(double R){return mi*n(R)*R*R;}
-	double I_r(double R){ return 5.0e-3;} //Amperes
+	double J(double R){return ionMass*n(R)*R*R;}
+	double I_r(double R); //Amperes
 
 	//Constants
 	const double B_mid = 0.3; //Tesla
-	const double Om_i = e_charge*B_mid/mi;
-	const double Om_e = e_charge*B_mid/me;
+	const double Om_i = e_charge*B_mid/ionMass;
+	const double Om_e = e_charge*B_mid/electronMass;
 };
