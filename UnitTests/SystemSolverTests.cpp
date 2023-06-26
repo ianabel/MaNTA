@@ -42,13 +42,13 @@ void buildTestSourceObj(std::shared_ptr<SourceObj> sourceobj)
 	sourceobj->clear();
 	double beta = 1.0;
 
-	std::function<double( double, DGApprox, DGApprox )> F_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return  0.0;};
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> F_0 = [ = ]( double x, DGApprox sig, DGApprox q, DGApprox u ){ return  0.0;};
 	sourceobj->sourceFuncs.push_back(F_0);
 
-	std::function<double( double, DGApprox, DGApprox )> dF_0dq_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> dF_0dq_0 = [ = ]( double x, DGApprox sig, DGApprox q, DGApprox u ){ return 0.0;};
 	//std::function<double( double, DGApprox, DGApprox )> dkappa0dq0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 2*beta;};
 
-	std::function<double( double, DGApprox, DGApprox )> dF_0du_0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
+	std::function<double( double, DGApprox, DGApprox, DGApprox )> dF_0du_0 = [ = ]( double x, DGApprox sig, DGApprox q, DGApprox u ){ return 0.0;};
 	//std::function<double( double, DGApprox, DGApprox )> dkappa0du0 = [ = ]( double x, DGApprox q, DGApprox u ){ return 0.0;};
 
 	sourceobj->delqSourceFuncs.resize(nVar);
@@ -74,16 +74,16 @@ BOOST_AUTO_TEST_CASE( SysSolver_Core_functional_test)
 	std::function<double( double )> f = [ = ]( double x ){ return 0.0; };
 
 	const Grid grid(lBound, uBound, nCells);
-	SystemSolver system(grid, k, nCells, nVar, delta_t, f, tau, c);
-	system.setTesting(true);
+	std::shared_ptr<SystemSolver> system = std::make_shared<SystemSolver>(grid, k, nCells, nVar, delta_t, f, tau, c);
+	system->setTesting(true);
 
 	auto diffobj = std::make_shared< DiffusionObj >(k, nVar);
 	buildTestDiffObj(diffobj);
-	system.setDiffobj(diffobj);
+	system->setDiffobj(diffobj);
 
 	auto sourceobj = std::make_shared< SourceObj >(k, nVar);
 	buildTestSourceObj(sourceobj);
-	system.setSourceobj(sourceobj);
+	system->setSourceobj(sourceobj);
 
 	double a = 5.0;
 	double b = 4.0;
@@ -110,20 +110,20 @@ BOOST_AUTO_TEST_CASE( SysSolver_Core_functional_test)
 	DirichletBCs->isUBoundDirichlet = true;
 	DirichletBCs->g_D = g_D_;
 	DirichletBCs->g_N = g_D_;
-	system.setBoundaryConditions(DirichletBCs);
+	system->setBoundaryConditions(DirichletBCs);
 
-	system.setInitialConditions(u_0, gradu_0, sigma_0, Y, dYdt);
+	system->setInitialConditions(u_0, gradu_0, sigma_0, Y, dYdt);
 
 	BOOST_TEST( yVec.norm() == 2.7441072546887524 );
 
 	UserData *data = new UserData();
-	data->system = &system;
+	data->system = system;
 
 	residual(tres, Y, dYdt, resval, data);
-	BOOST_TEST( system.resNorm == 0.94789405732734555  );
+	BOOST_TEST( system->resNorm == 0.94789405732734555  );
 
 	yVec.setZero();
-	system.solveJacEq(resval, Y);
+	system->solveJacEq(resval, Y);
 	BOOST_TEST( yVec.norm() == 0.68233124381752031 );
 
 	

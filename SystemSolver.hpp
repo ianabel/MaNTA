@@ -73,6 +73,8 @@ public:
 	void setBoundaryConditions(std::shared_ptr<BoundaryConditions> BC) {BCs = BC;}
 	void updateBoundaryConditions(double t);
 
+	Vector resEval(std::vector<VectorWrapper> resTerms);
+
 	Grid grid;
 	unsigned int k; 		//polynomial degree per cell
 	unsigned int nCells;	//Total cell count

@@ -314,5 +314,5 @@ double Cylinder3Var::dCidPi(double Pi, double Pe, double R)
 
 double Cylinder3Var::I_r(double R)
 {
-	return 4.0e-3;
+	return 2.0e-2;
 }

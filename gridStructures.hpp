@@ -434,5 +434,5 @@ public:
 	double UpperBound;
 	bool isLBoundDirichlet;
 	bool isUBoundDirichlet;
-	std::function<double( double, double )> g_D,g_N;
+	std::function<double( double, double, int )> g_D,g_N;
 };

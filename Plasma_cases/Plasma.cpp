@@ -4,6 +4,7 @@
 #include "Cylinder3Var.hpp"
 #include "pouseille.hpp"
 #include "ConstVoltage.hpp"
+#include "CMFXparallellosses.hpp"
 
 void makePlasmaCase(std::string const& plasmaCase, std::shared_ptr<Plasma>& plasma)
 {
@@ -11,6 +12,7 @@ void makePlasmaCase(std::string const& plasmaCase, std::shared_ptr<Plasma>& plas
 	else if(plasmaCase == "Cylinder3Var") plasma = std::make_shared<Cylinder3Var>();
 	else if(plasmaCase == "pouseille") plasma = std::make_shared<Pouseille>();
 	else if(plasmaCase == "ConstVoltage") plasma = std::make_shared<ConstVoltage>();
+	else if(plasmaCase == "CMFXparallellosses") plasma = std::make_shared<CMFXparallellosses>();
 	else throw std::runtime_error("Plasma Case does not exist");
 }
 
