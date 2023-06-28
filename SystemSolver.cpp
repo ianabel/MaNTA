@@ -118,13 +118,13 @@ SystemSolver::SystemSolver(std::string const& inputFile)
 			//if(t>0.5) return 0.5;
 			//else return 1.0-t;
 			if( var == 2) return 10000.0;
-			else return 10.0;
+			else return 30.0;
 		} else if ( x == uBound ) {
 			// u(1.0) == a
 			//if(t<0.99999) return 1.0 - t;
 			//else return 0.00001;
 			if( var == 2) return 10000.0;
-			else return 10.0;
+			else return 30.0;
 		}
 		throw std::logic_error( "Boundary condition function being eval'd not on boundary ?!" );
 	};
@@ -248,7 +248,6 @@ void SystemSolver::setInitialConditions( std::function< double ( double, int )> 
 			lamCell[0] = lambda.value()[var*(nCells+1) + i]; lamCell[1] = lambda.value()[var*(nCells+1) + i+1];
 			//dudt.coeffs[ var ][ i ].second.setZero();
 			dudt.coeffs[ var ][ i ].second = XMats[i].block(var*(k+1), var*(k+1), k+1, k+1).inverse()*(-B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*sig.coeffs[ var ][ i ].second - D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*u.coeffs[ var ][ i ].second - E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell + RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ) - S_cellwise);
-			if(var==2) std::cerr << -B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*sig.coeffs[ var ][ i ].second - D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*u.coeffs[ var ][ i ].second - E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell + RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ) - S_cellwise << std::endl << (XMats[i].block(var*(k+1), var*(k+1), k+1, k+1)*dudt.coeffs[ var ][ i ].second) << std::endl << std::endl;
 		}
 	}
 }
@@ -918,23 +917,25 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 			for ( Eigen::Index j = 0; j < k+1; j++ )
 				S_cellwise( j ) = tempU.CellProduct( I, sourceFunc, tempU.Basis.phi( I, j%(k+1) ) );
 
-			//res1.coeffs[ var ][ i ].second = -system->A_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempQ.coeffs[var][i].second - system->B_cellwise[i].transpose().block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second + system->C_cellwise[i].transpose().block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0) - system->RF_cellwise[ i ].block( var*(k+1), 0, k + 1, 1 );
-			//res2.coeffs[ var ][ i ].second = system->B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempSig.coeffs[ var ][ i ].second + system->D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second + system->E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0) - system->RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ) + S_cellwise + system->XMats[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempdudt.coeffs[ var ][ i ].second;
-			//res3.coeffs[ var ][ i ].second = tempSig.coeffs[ var ][ i ].second + kappa_cellwise;
-			res1.coeffs[ var ][ i ].second = system->resEval({(-1.0)*system->A_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempQ.coeffs[var][i].second, (-1.0)*system->B_cellwise[i].transpose().block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second, system->C_cellwise[i].transpose().block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0), - system->RF_cellwise[ i ].block( var*(k+1), 0, k + 1, 1 )});
-			res2.coeffs[ var ][ i ].second = system->resEval({system->B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempSig.coeffs[ var ][ i ].second, system->D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second, system->E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0), - system->RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ), S_cellwise, system->XMats[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempdudt.coeffs[ var ][ i ].second});
-			res3.coeffs[ var ][ i ].second = system->resEval({tempSig.coeffs[ var ][ i ].second, kappa_cellwise});
-			if(var==2) std::cerr << (system->B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempSig.coeffs[ var ][ i ].second)[0] << "	" << (system->D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second)[0] << "	" << (system->E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0))[0] << "	"  <<system->RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, 1, 1 ) << "	" << S_cellwise[0] << "	" << (system->XMats[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempdudt.coeffs[ var ][ i ].second)[0] << std::endl << std::endl;
+			res1.coeffs[ var ][ i ].second = -system->A_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempQ.coeffs[var][i].second - system->B_cellwise[i].transpose().block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second + system->C_cellwise[i].transpose().block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0) - system->RF_cellwise[ i ].block( var*(k+1), 0, k + 1, 1 );
+			res2.coeffs[ var ][ i ].second = system->B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempSig.coeffs[ var ][ i ].second + system->D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second + system->E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0) - system->RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ) + S_cellwise + system->XMats[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempdudt.coeffs[ var ][ i ].second;
+			res3.coeffs[ var ][ i ].second = tempSig.coeffs[ var ][ i ].second + kappa_cellwise;
+			//res1.coeffs[ var ][ i ].second = system->resEval({(-1.0)*system->A_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempQ.coeffs[var][i].second, (-1.0)*system->B_cellwise[i].transpose().block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second, system->C_cellwise[i].transpose().block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0), - system->RF_cellwise[ i ].block( var*(k+1), 0, k + 1, 1 )});
+			//res2.coeffs[ var ][ i ].second = system->resEval({system->B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempSig.coeffs[ var ][ i ].second, system->D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempU.coeffs[ var ][ i ].second, system->E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell.block<2,1>(var*2,0), - system->RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ), S_cellwise, system->XMats[i].block(var*(k+1), var*(k+1), k+1, k+1)*tempdudt.coeffs[ var ][ i ].second});
+			//res3.coeffs[ var ][ i ].second = system->resEval({tempSig.coeffs[ var ][ i ].second, kappa_cellwise});
+			//if(var == 2) std::cerr << S_cellwise << std::endl << std::endl;
 		}
 	}
+
+	//system->print(std::cerr, tres, 21, 0);
 
 	VectorWrapper Vec( N_VGetArrayPointer( resval ), N_VGetLength( resval ) );
 	VectorWrapper yVec( N_VGetArrayPointer( Y ), N_VGetLength( Y ) );
 	VectorWrapper ypVec( N_VGetArrayPointer( dydt ), N_VGetLength( dydt ) );
 
-	res2.printCoeffs(0);
-	res2.printCoeffs(1);
-	res2.printCoeffs(2);
+	//res1.printCoeffs(0);
+	//res1.printCoeffs(1);
+	//res1.printCoeffs(2);
 
 	//std::cerr << res4 << std::endl << std::endl;
 

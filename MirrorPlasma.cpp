@@ -18,7 +18,7 @@ MirrorPlasma::MirrorPlasma()
 	Zeff = 1.5;
 	plasmaLength = 0.5;
 	parallelFudgeFactor = 1.0;
-	density = 5.5e19;
+	density = 1.6e19;
 }
 
 double MirrorPlasma::ParallelElectronPastukhovLossRate(double chi_e, double Te, double R) const
@@ -137,8 +137,9 @@ double MirrorPlasma::ParallelIonHeatLoss(double Te, double Ti, double omega, dou
 
 	// Energy loss per particle is ~ Chi_i + T_i
 	double chi_i = Chi_i(Te, Ti, omega, R);
-	double loss = ParallelIonPastukhovLossRate( chi_i, Te, Ti, R ) * ( Ti ) * ( ::fabs( chi_i )  + 1.0 );
-	return loss;
+	double loss = ParallelIonPastukhovLossRate( chi_i, Te, Ti, R );
+	double heatloss = loss* ( Ti ) * ( ::fabs( chi_i )  + 1.0 );
+	return heatloss;
 }
 
 double MirrorPlasma::ElectronCollisionTime( double Te, double R) const
@@ -414,7 +415,8 @@ double MirrorPlasma::Transition(double x, double L, double U) const
 double MirrorPlasma::machNumber(double R, double Te, double omega) const
 {
 	//std::cerr << omega*R/::sqrt(ionSpecies.Charge*Te/ionMass) << std::endl;
-	return omega*R/::sqrt(ionSpecies.Charge*Te/ionMass);
+	double M = omega*R/::sqrt(ionSpecies.Charge*Te/ionMass);
+	return M;
 }
 
 double MirrorPlasma::electronDensity(double R) const

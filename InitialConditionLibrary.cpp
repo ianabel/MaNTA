@@ -30,7 +30,7 @@ std::function<double( double, int )> InitialConditionLibrary::getuInitial()
 	else if(initialCondition == "Linear") return std::function<double( double, int )> { [=]( double y, int var ){ return 1.0 - 1.0*y; } };
 	else if(initialCondition == "Const") return std::function<double( double, int )> { [=]( double y, int var ){ 
 			if( var == 2) return 10000.0;
-			else return 10.0; } };
+			else return 30.0; } };
 	else if(initialCondition == "Zero") return std::function<double( double, int )> { [=]( double y, int var ){ return 0.0; } };
 	else if(initialCondition == "Step") return std::function<double( double, int )> { [=]( double y, int var ){ if(y < 0.5) return 0.0; else return 10.0; } };
 	if(initialCondition == "Test") return std::function<double( double, int )>{ [=]( double y, int var )
