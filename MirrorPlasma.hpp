@@ -48,6 +48,7 @@ public:
 	double delTi_ParallelIonParticleLoss(double Te, double Ti, double omega, double R);
 	double delTi_ParallelIonHeatLoss(double Te, double Ti, double omega, double R);
 	double delTi_Chi_i(double Te, double Ti, double omega, double R);
+	double delTi_absChi_i(double Te, double Ti, double omega, double R);
 	double delTi_ParallelElectronParticleLoss() {return 0.0;};
 	double delTi_ParallelElectronHeatLoss() {return 0.0;};
 	double delTi_MachNumber() {return 0.0;}
@@ -56,6 +57,7 @@ public:
 	double delTe_ParallelIonParticleLoss(double Te, double Ti, double omega, double R);
 	double delTe_ParallelIonHeatLoss(double Te, double Ti, double omega, double R);
 	double delTe_Chi_i(double Te, double Ti, double omega, double R);
+	double delTe_absChi_i(double Te, double Ti, double omega, double R);
 	double delTe_ParallelElectronParticleLoss(double Te, double Ti, double omega, double R);
 	double delTe_ParallelElectronHeatLoss(double Te, double Ti, double omega, double R);
 	double delTe_MachNumber(double Te, double Ti, double omega, double R);
@@ -64,6 +66,7 @@ public:
 	double delOmega_ParallelIonParticleLoss(double Te, double Ti, double omega, double R);
 	double delOmega_ParallelIonHeatLoss(double Te, double Ti, double omega, double R);
 	double delOmega_Chi_i(double Te, double Ti, double omega, double R);
+	double delOmega_absChi_i(double Te, double Ti, double omega, double R);
 	double delOmega_ParallelElectronParticleLoss(double Te, double Ti, double omega, double R) {return 0.0;}
 	double delOmega_ParallelElectronHeatLoss(double Te, double Ti, double omega, double R) {return 0.0;}
 	double delOmega_MachNumber(double Te, double Ti, double omega, double R);
