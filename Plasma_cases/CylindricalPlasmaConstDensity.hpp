@@ -29,12 +29,12 @@ private:
 	double dtauIdP(double Pi, double R);
 	double lambda(double R);
 	double n(double R) {return 3.0e18;}
-	double J(double R){return mi*n(R)*R*R;}
+	double J(double R){return ionMass*n(R)*R*R;}
 	double I_r(double R){ return 4.5e-3;} //Amperes
-	double beta(double R){return 4.0/(3.0*Om*Om*mi*n(R));}
+	double beta(double R){return 4.0/(3.0*Om*Om*ionMass*n(R));}
 
 	//Constants
 	const double Te = eV_J(40.0);
 	const double B_mid = 0.3; //Tesla
-	const double Om = e_charge*B_mid/mi;
+	const double Om = e_charge*B_mid/ionMass;
 };

@@ -270,9 +270,9 @@ void SourceObj::buildCylinderPlasmaConstDensitySource()
 		else return 25.3 - 1.15*::log(n) + 2.3*::log(Te);
 	};
 	std::function<double (double)> tau = [ = ](double Ps){
-		return 3.0e9/lambda()*::sqrt(mi/(2*mp))*::pow(Ps,3/2)/::pow(n,5/2);
+		return 3.0e9/lambda()*::sqrt(ionMass/(2*protonMass))*::pow(Ps,3/2)/::pow(n,5/2);
 	};
-	std::function<double (double)> dtaudP = [ = ](double Ps){return 4.5e9/lambda()*::sqrt(mi/(2*mp))*::pow(Ps,1/2)/::pow(n,5/2);};
+	std::function<double (double)> dtaudP = [ = ](double Ps){return 4.5e9/lambda()*::sqrt(ionMass/(2*protonMass))*::pow(Ps,1/2)/::pow(n,5/2);};
 
 	std::function<double( double, DGApprox, DGApprox, DGApprox )> S_P = [ = ]( double R,DGApprox sig, DGApprox q, DGApprox u ){ return -gamma*R*R*R*u(R,P)*q(R,omega)*q(R,omega)/tau(u(R,P));};
 	std::function<double( double, DGApprox, DGApprox, DGApprox )> S_omega = [ = ]( double R,DGApprox sig, DGApprox q, DGApprox u ){ return  -I_r;};

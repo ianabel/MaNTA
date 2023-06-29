@@ -10,6 +10,7 @@
 #include <boost/math/quadrature/gauss.hpp>
 #include <cmath>
 #include <vector>
+#include <iostream>
 
 typedef std::function<double( double )> Fn;
 using Matrix = Eigen::Matrix<realtype,Eigen::Dynamic,Eigen::Dynamic>;
@@ -433,5 +434,5 @@ public:
 	double UpperBound;
 	bool isLBoundDirichlet;
 	bool isUBoundDirichlet;
-	std::function<double( double, double )> g_D,g_N;
+	std::function<double( double, double, int )> g_D,g_N;
 };
