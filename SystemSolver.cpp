@@ -30,7 +30,7 @@ SystemSolver::SystemSolver(std::string const& inputFile)
 	double lBound, uBound;
 
 	auto polyDegree = toml::find(config, "Polynomial_degree");
-	if( !config.count("Polynomial_degree") == 1 ) throw std::invalid_argument( "Polynomial_degree unspecified or specified more than once" );
+	if( config.count("Polynomial_degree") != 1 ) throw std::invalid_argument( "Polynomial_degree unspecified or specified more than once" );
 	else if( !polyDegree.is_integer() ) throw std::invalid_argument( "Polynomial_degree must be specified as an integer" );
 	else k = polyDegree.as_integer();
 
@@ -44,7 +44,7 @@ SystemSolver::SystemSolver(std::string const& inputFile)
 	}
 
 	auto numberOfCells = toml::find(config, "Grid_size");
-	if( !config.count("Grid_size") == 1 ) throw std::invalid_argument( "Grid_size unspecified or specified more than once" );
+	if( config.count("Grid_size") != 1 ) throw std::invalid_argument( "Grid_size unspecified or specified more than once" );
 	if( !numberOfCells.is_integer() ) throw std::invalid_argument( "Grid_size must be specified as an integer" );
 	else nCells = numberOfCells.as_integer();
 
@@ -53,7 +53,7 @@ SystemSolver::SystemSolver(std::string const& inputFile)
 	if(highGridBoundary) nCells += 8;
 
 	auto numberOfVariables = toml::find(config, "Number_of_channels");
-	if( !config.count("Number_of_channels") == 1 ) throw std::invalid_argument( "Number_of_channels unspecified or specified more than once" );
+	if( config.count("Number_of_channels") != 1 ) throw std::invalid_argument( "Number_of_channels unspecified or specified more than once" );
 	if( !numberOfVariables.is_integer() ) throw std::invalid_argument( "Number_of_channels must be specified as an integer" );
 	else nVar = numberOfVariables.as_integer();
 
@@ -97,13 +97,13 @@ SystemSolver::SystemSolver(std::string const& inputFile)
 
 	//---------Boundary Conditions---------------
 	auto lowerBoundary = toml::find(config, "Lower_boundary");
-	if( !config.count("Lower_boundary") == 1 ) throw std::invalid_argument( "Lower_boundary unspecified or specified more than once" );
+	if( config.count("Lower_boundary") != 1 ) throw std::invalid_argument( "Lower_boundary unspecified or specified more than once" );
 	else if( lowerBoundary.is_integer() ) lBound = static_cast<double>(lowerBoundary.as_floating());
 	else if( lowerBoundary.is_floating() ) lBound = static_cast<double>(lowerBoundary.as_floating());
 	else throw std::invalid_argument( "Lower_boundary specified incorrrectly" );
 
 	auto upperBoundary = toml::find(config, "Upper_boundary");
-	if( !config.count("Upper_boundary") == 1 ) throw std::invalid_argument( "Upper_boundary unspecified or specified more than once" );
+	if( config.count("Upper_boundary") != 1 ) throw std::invalid_argument( "Upper_boundary unspecified or specified more than once" );
 	else if( upperBoundary.is_integer() ) uBound = static_cast<double>(upperBoundary.as_floating());
 	else if( upperBoundary.is_floating() ) uBound = static_cast<double>(upperBoundary.as_floating());
 	else throw std::invalid_argument( "Upper_boundary specified incorrrectly" );
