@@ -325,13 +325,13 @@ double MirrorPlasma::LogLambdaIon(double Ti) const
 double MirrorPlasma::delTi_ParallelIonParticleLoss(double Te, double Ti, double omega, double R)
 {
 	double chi_i = Chi_i(Te, Ti, omega, R);
-	return ParallelIonParticleLoss(Te, Ti, omega, R)*(delTi_Chi_i(Te, Ti, omega, R) - (1/IonCollisionTime(Ti, R))*delTi_IonCollisionTime(Ti, R) - (1/chi_i)*delTi_Chi_i(Te, Ti, omega, R));
+	return ParallelIonParticleLoss(Te, Ti, omega, R)*((-1.0)*delTi_Chi_i(Te, Ti, omega, R) - (1/IonCollisionTime(Ti, R))*delTi_IonCollisionTime(Ti, R) - (1/chi_i)*delTi_Chi_i(Te, Ti, omega, R));
 }
 
 double MirrorPlasma::delTi_ParallelIonHeatLoss(double Te, double Ti, double omega, double R)
 {
 	double chi_i = Chi_i(Te, Ti, omega, R);
-	return delTi_ParallelIonParticleLoss(Te, Ti, omega, R)*Ti*(chi_i + 1) + ParallelIonParticleLoss(Te, Ti, omega, R)*(chi_i + 1.0) + ParallelIonParticleLoss(Te, Ti, omega, R)*Ti*delTi_Chi_i(Te, Ti, omega, R);
+	return delTi_ParallelIonParticleLoss(Te, Ti, omega, R)*Ti*(::fabs(chi_i) + 1) + ParallelIonParticleLoss(Te, Ti, omega, R)*(::fabs(chi_i) + 1.0) + ParallelIonParticleLoss(Te, Ti, omega, R)*Ti*delTi_absChi_i(Te, Ti, omega, R);
 }
 
 double MirrorPlasma::delTi_Chi_i(double Te, double Ti, double omega, double R)
@@ -340,16 +340,22 @@ double MirrorPlasma::delTi_Chi_i(double Te, double Ti, double omega, double R)
 	return -chi_i/Ti;
 }
 
+double MirrorPlasma::delTi_absChi_i(double Te, double Ti, double omega, double R)
+{
+	double chi_i = Chi_i(Te, Ti, omega, R);
+	return chi_i/::fabs(chi_i)*delTi_Chi_i(Te, Ti, omega, R);
+}
+
 double MirrorPlasma::delTe_ParallelIonParticleLoss(double Te, double Ti, double omega, double R)
 {
 	double chi_i = Chi_i(Te, Ti, omega, R);
-	return ParallelIonParticleLoss(Te, Ti, omega, R)*(delTe_Chi_i(Te, Ti, omega, R) - (1/chi_i)*delTe_Chi_i(Te, Ti, omega, R));
+	return ParallelIonParticleLoss(Te, Ti, omega, R)*((-1.0)*delTe_Chi_i(Te, Ti, omega, R) - (1/chi_i)*delTe_Chi_i(Te, Ti, omega, R));
 }
 
 double MirrorPlasma::delTe_ParallelIonHeatLoss(double Te, double Ti, double omega, double R)
 {
 	double chi_i = Chi_i(Te, Ti, omega, R);
-	return delTe_ParallelIonParticleLoss(Te, Ti, omega, R)*Ti*(chi_i + 1) + ParallelIonParticleLoss(Te, Ti, omega, R)*Ti*delTe_Chi_i(Te, Ti, omega, R);
+	return delTe_ParallelIonParticleLoss(Te, Ti, omega, R)*Ti*(::fabs(chi_i) + 1) + ParallelIonParticleLoss(Te, Ti, omega, R)*Ti*delTe_absChi_i(Te, Ti, omega, R);
 }
 
 double MirrorPlasma::delTe_Chi_i(double Te, double Ti, double omega, double R)
@@ -357,6 +363,12 @@ double MirrorPlasma::delTe_Chi_i(double Te, double Ti, double omega, double R)
 	double chi_i = Chi_i(Te, Ti, omega, R);
 	double R_m = mirrorRatio;
 	return chi_i/Te + delTe_MachNumber(Ti,Te,omega,R)*machNumber(R, Te, omega)*(1-1/R_m)*Te/Ti;
+}
+
+double MirrorPlasma::delTe_absChi_i(double Te, double Ti, double omega, double R)
+{
+	double chi_i = Chi_i(Te, Ti, omega, R);
+	return chi_i/::fabs(chi_i)*delTe_Chi_i(Te, Ti, omega, R);
 }
 
 double MirrorPlasma::delTe_ParallelElectronParticleLoss(double Te, double Ti, double omega, double R)
@@ -378,19 +390,25 @@ double MirrorPlasma::delTe_MachNumber(double Te, double Ti, double omega, double
 double MirrorPlasma::delOmega_ParallelIonParticleLoss(double Te, double Ti, double omega, double R)
 {
 	double chi_i = Chi_i(Te, Ti, omega, R);
-	return ParallelIonParticleLoss(Te, Ti, omega, R)*(delOmega_Chi_i(Te, Ti, omega, R) - (1/chi_i)*delOmega_Chi_i(Te, Ti, omega, R));
+	return ParallelIonParticleLoss(Te, Ti, omega, R)*((-1.0)*delOmega_Chi_i(Te, Ti, omega, R) - (1/chi_i)*delOmega_Chi_i(Te, Ti, omega, R));
 }
 
 double MirrorPlasma::delOmega_ParallelIonHeatLoss(double Te, double Ti, double omega, double R)
 {
 	double chi_i = Chi_i(Te, Ti, omega, R);
-	return delOmega_ParallelIonParticleLoss(Te, Ti, omega, R)*Ti*(chi_i + 1) + ParallelIonParticleLoss(Te, Ti, omega, R)*Ti*delOmega_Chi_i(Te, Ti, omega, R);
+	return delOmega_ParallelIonParticleLoss(Te, Ti, omega, R)*Ti*(::fabs(chi_i) + 1) + ParallelIonParticleLoss(Te, Ti, omega, R)*Ti*delOmega_absChi_i(Te, Ti, omega, R);
 }
 
 double MirrorPlasma::delOmega_Chi_i(double Te, double Ti, double omega, double R)
 {
 	double R_m = mirrorRatio;
 	return delOmega_MachNumber(Te, Ti, omega, R)*machNumber(R, Te, omega)*(1.0-1.0/R_m)*(Te/Ti);
+}
+
+double MirrorPlasma::delOmega_absChi_i(double Te, double Ti, double omega, double R)
+{
+	double chi_i = Chi_i(Te, Ti, omega, R);
+	return chi_i/::fabs(chi_i)*delOmega_Chi_i(Te, Ti, omega, R);
 }
 
 double MirrorPlasma::delOmega_MachNumber(double Te, double Ti, double omega, double R)

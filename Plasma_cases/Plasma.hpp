@@ -20,7 +20,7 @@ class Plasma
 {
 public:
 	Plasma() {};
-	~Plasma() {};
+	virtual ~Plasma() {};
 
 	std::shared_ptr<DiffusionObj> diffObj;
 	std::shared_ptr<SourceObj> sourceObj;

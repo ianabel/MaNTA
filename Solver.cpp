@@ -45,7 +45,7 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 
 	realtype deltatPrint;
 	auto printdt = toml::find(config, "delta_t");
-	if( !config.count("delta_t") == 1 ) throw std::invalid_argument( "delta_t unspecified or specified more than once" );
+	if( config.count("delta_t") != 1 ) throw std::invalid_argument( "delta_t unspecified or specified more than once" );
 	else if( printdt.is_integer() ) deltatPrint = static_cast<double>(printdt.as_floating());
 	else if( printdt.is_floating() ) deltatPrint = static_cast<double>(printdt.as_floating());
 	else throw std::invalid_argument( "delta_t specified incorrrectly" );
@@ -54,7 +54,7 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 	t1 = delta_t;
 
 	auto tEnd = toml::find(config, "t_final");
-	if( !config.count("t_final") == 1 ) throw std::invalid_argument( "tEnd unspecified or specified more than once" );
+	if( config.count("t_final") != 1 ) throw std::invalid_argument( "tEnd unspecified or specified more than once" );
 	else if( tEnd.is_integer() ) tFinal = static_cast<double>(tEnd.as_floating());
 	else if( tEnd.is_floating() ) tFinal = static_cast<double>(tEnd.as_floating());
 	else throw std::invalid_argument( "tEnd specified incorrrectly" );
@@ -70,13 +70,13 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 	}
 
 	auto relTol = toml::find(config, "Relative_tolerance");
-	if( !config.count("Relative_tolerance") == 1 ) rtol = 1.0e-5;
+	if( config.count("Relative_tolerance") != 1 ) rtol = 1.0e-5;
 	else if( relTol.is_integer() ) rtol = static_cast<double>(relTol.as_floating());
 	else if( relTol.is_floating() ) rtol = static_cast<double>(relTol.as_floating());
 	else throw std::invalid_argument( "relative_tolerance specified incorrrectly" );
 
 	auto absTol = toml::find(config, "Absolute_tolerance");
-	if( !config.count("Absolute_tolerance") == 1 ) atol = 1.0e-5;
+	if( config.count("Absolute_tolerance") != 1 ) atol = 1.0e-5;
 	else if( absTol.is_integer() ) atol = static_cast<double>(absTol.as_floating());
 	else if( absTol.is_floating() ) atol = static_cast<double>(absTol.as_floating());
 	else throw std::invalid_argument( "Absolute_tolerance specified incorrrectly" );
@@ -287,8 +287,11 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 			diagnostics << tout << "	" << diagnostic.Voltage() << std::endl;
 		}
 	}
+
 	std::cerr << "Total number of steps taken = " << system->total_steps << std::endl;
-	delete data, IDA_mem;
+
+	IDAFree( &IDA_mem );
+	delete data;
 }
 
 int EmptyJac(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3)

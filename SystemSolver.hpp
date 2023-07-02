@@ -7,6 +7,7 @@
 
 #include <fstream>
 #include <memory>
+#include <optional>
 
 #include "gridStructures.hpp"
 #include "DiffusionObj.hpp"
