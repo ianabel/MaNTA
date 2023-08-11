@@ -30,7 +30,7 @@ public:
 	void resize(int size);
 
 	const std::string name;
-	const int index;
+	const size_t index;
 
 	std::function<double (double)> a_fn;
 	std::function<double (double, DGApprox, DGApprox)> kappaFunc;

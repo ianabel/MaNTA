@@ -190,7 +190,7 @@ void SystemSolver::setInitialConditions( std::function< double ( double, int )> 
 	q = gradu_0;
 
 	//??TO DO: remove sigma from initial condition library all together
-	if(plasma){ sig = [ = ]( double R, int var ){return -1.0*plasma->getVariable(var).kappaFunc(R,q,u);}; }
+	if(plasma){ sig = [ =, this ]( double R, int var ){return -1.0*plasma->getVariable(var).kappaFunc(R,q,u);}; }
 	else sig = sigma_0;
 
 	double dx = ::abs(BCs->UpperBound - BCs->LowerBound)/nCells;

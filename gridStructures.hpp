@@ -50,7 +50,7 @@ public:
 		: upperBound(uBound), lowerBound(lBound)
 	{
 		double cellLength = abs(uBound-lBound)/static_cast<double>(nCells);
-		for(int i = 0; i < nCells - 1; i++)
+		for ( int i = 0; i < nCells - 1; i++)
 			gridCells.emplace_back(lBound + i*cellLength, lBound + (i+1)*cellLength);
 		gridCells.emplace_back(lBound + (nCells-1)*cellLength, uBound);
 	}
@@ -61,7 +61,7 @@ public:
 		if(!highGridBoundary)
 		{
 			double cellLength = abs(uBound-lBound)/static_cast<double>(nCells);
-			for(int i = 0; i < nCells - 1; i++)
+			for ( int i = 0; i < nCells - 1; i++)
 				gridCells.emplace_back(lBound + i*cellLength, lBound + (i+1)*cellLength);
 			gridCells.emplace_back(lBound + (nCells-1)*cellLength, uBound);
 		}
@@ -70,15 +70,15 @@ public:
 			double sCellLength = abs(uBound-lBound)/static_cast<double>(nCells-8)/4.0;
 			double mCellLength = abs(uBound-lBound)/static_cast<double>(nCells-8)/2.0;
 			double lCellLength = abs(uBound-lBound)/static_cast<double>(nCells-8);
-			for(int i = 0; i < 4; i++)
+			for ( unsigned int i = 0; i < 4; i++)
 				gridCells.emplace_back(lBound + i*sCellLength, lBound + (i+1)*sCellLength);
-			for(int i = 0; i < 2; i++)
+			for ( unsigned int i = 0; i < 2; i++)
 				gridCells.emplace_back(lBound + (i+2)*mCellLength, lBound + (i+3)*mCellLength);
-			for(int i = 0; i < nCells-12; i++)
+			for ( int i = 0; i < nCells-12; i++)
 				gridCells.emplace_back(lBound + (i+2)*lCellLength, lBound + (i+3)*lCellLength);
-			for(int i = 0; i < 2; i++)
+			for ( unsigned int i = 0; i < 2; i++)
 				gridCells.emplace_back(lBound + (i+2*(nCells-8)-4)*mCellLength, lBound + (i+2*(nCells-8)-3)*mCellLength);
-			for(int i = 0; i < 3; i++)
+			for ( unsigned int i = 0; i < 3; i++)
 				gridCells.emplace_back(lBound + (i+4*(nCells-8)-4)*sCellLength, lBound + (i+4*(nCells-8)-3)*sCellLength);
 			gridCells.emplace_back(lBound + (4*(nCells-8)-1)*sCellLength, uBound);
 		}
@@ -156,7 +156,7 @@ class DGApprox
 		DGApprox( Grid const& grid, unsigned int Order, unsigned int nVariables, std::function<double( double )> const& F )
 		{
 			k = Order;
-			for(int var=0; var<nVariables; var++)
+			for ( unsigned int var=0; var < nVariables; var++)
 			{
 				std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>> varCoeffs;
 				std::vector<double> vec(k+1, 0.0);
@@ -180,7 +180,7 @@ class DGApprox
 		DGApprox& operator=( std::function<double( double )> const & f )
 		{
 			Eigen::VectorXd v( k + 1 );
-			for(int var=0; var<coeffs.size(); var++)
+			for ( unsigned int var=0; var < coeffs.size(); var++)
 			{
 				for ( auto pair : coeffs[var] )
 				{
@@ -200,7 +200,7 @@ class DGApprox
 		DGApprox& operator=( std::function<double( double, int )> const & f )
 		{
 			Eigen::VectorXd v( k + 1 );
-			for(int var=0; var<coeffs.size(); var++)
+			for (  unsigned int var=0; var < coeffs.size(); var++)
 			{
 				for ( auto pair : coeffs[var] )
 				{
@@ -220,9 +220,9 @@ class DGApprox
 		void sum( DGApprox& A, DGApprox& B)
 		{
 			Eigen::VectorXd v( k + 1 );
-			for(int var=0; var<coeffs.size(); var++)
+			for (  unsigned int var=0; var < coeffs.size(); var++)
 			{
-				for ( int i = 0; i < coeffs[var].size() ; i++ )
+				for ( unsigned int i = 0; i < coeffs[var].size() ; i++ )
 				{
 					coeffs[var][i].second = A.coeffs[var][i].second + B.coeffs[var][i].second;
 				}
@@ -247,7 +247,7 @@ class DGApprox
 		}
 	
 		double operator()( double x, int var ) {
-			if(var>coeffs.size()) std::logic_error( "Out of bounds" );
+			if( var > coeffs.size() ) std::logic_error( "Out of bounds" );
 			for ( auto const & I : coeffs[var] )
 			{
 				if (  I.first.contains( x ) )
@@ -257,7 +257,7 @@ class DGApprox
 		};
 
 		double operator()( double x,  Variable* var ) {
-			if(var->index>coeffs.size()) std::logic_error( "Out of bounds" );
+			if(var->index > coeffs.size()) std::logic_error( "Out of bounds" );
 			for ( auto const & I : coeffs[var->index] )
 			{
 				if (  I.first.contains( x ) )
@@ -343,11 +343,11 @@ class DGApprox
 		}
 
 		void zeroCoeffs() {
-			for(int var=0; var<coeffs.size(); var++)
+			for ( unsigned int var=0; var < coeffs.size(); var++)
 			{
 				for ( auto pair : coeffs[var] )
 				{
-					for(int i = 0; i<pair.second.size(); i++)
+					for ( unsigned int i = 0; i<pair.second.size(); i++)
 						pair.second[i] = 0.0;
 				}
 			}
@@ -358,7 +358,7 @@ class DGApprox
 		Eigen::VectorXd multiVarCoeffs( int i )
 		{
 			Eigen::VectorXd coeffsLong(coeffs.size()*(k+1));
-			for(int var = 0; var<coeffs.size(); var++)
+			for (  unsigned int var = 0; var < coeffs.size(); var++)
 			{
 				coeffsLong.block(var*(k+1),0,k+1,1) = coeffs[var][i].second;
 			}
@@ -370,12 +370,12 @@ class DGApprox
 		//In the case that a DGA is created without any sundials vector ever being made we need to assign a memory block
 		//This just sets the arrayPtr (which you should make sure is the right size to hold all your coefficients) as the holding place for the data
 		//Note: if the assigned arrayptr memory block goes out of scope you will have a memory leak and you'll get undefined behaviour
-		void setCoeffsToArrayMem(double arrayPtr[], const int nVar, const int nCells, const Grid& grid)
+		void setCoeffsToArrayMem(double arrayPtr[], const unsigned int nVar, const int nCells, const Grid& grid)
 		{
 			std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>> cellCoeffs;
-			for(int var = 0; var < nVar; var++)
+			for ( unsigned int var = 0; var < nVar; var++)
 			{
-				for(int i=0; i<nCells; i++)
+				for ( int i=0; i<nCells; i++)
 				{
 					cellCoeffs.emplace_back( grid.gridCells[ i ], VectorWrapper( arrayPtr + var*(k+1) + i*nVar*(k+1), k+1 ));
 				}
@@ -386,7 +386,7 @@ class DGApprox
 
 		void printCoeffs(int var)
 		{
-			for(int i = 0; i < coeffs[var].size(); i++)
+			for ( unsigned int i = 0; i < coeffs[var].size(); i++)
 			{
 				std::cerr << coeffs[var][i].second << std::endl;
 			}
@@ -397,7 +397,7 @@ class DGApprox
 		double variableDifference()
 		{
 			double norm = 0.0;
-			for ( int i = 0; i < coeffs[0].size() ; i++ )
+			for ( unsigned int i = 0; i < coeffs[0].size() ; i++ )
 			{
 				norm += (coeffs[0][i].second - coeffs[1][i].second).norm()/std::min(coeffs[0][i].second.norm(), coeffs[1][i].second.norm());
 			}
@@ -407,11 +407,11 @@ class DGApprox
 		double maxCoeff()
 		{
 			double coeff = 0.0;
-			for(int var=0; var<coeffs.size(); var++)
+			for (  unsigned int var=0; var < coeffs.size(); var++)
 			{
 				for ( auto pair : coeffs[var] )
 				{
-					for(int i = 0; i<pair.second.size(); i++)
+					for ( unsigned int i = 0; i<pair.second.size(); i++)
 					{
 						if(::abs(coeff) < ::abs(pair.second[i])) coeff = pair.second[i];
 					}

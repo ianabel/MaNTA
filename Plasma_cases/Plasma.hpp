@@ -66,15 +66,5 @@ protected:
 
 	//Any new variables must be added here to work for a derived plasma
 	//Derived plasmas do not need to use every variable
-	static const std::list<std::string> possibleVars
-	{
-		"n_ion",
-		"n_e",
-		"n_s",
-		"P_ion",
-		"P_e",
-		"P_s",
-		"omega",
-		"velocity"
-	};
+	static const std::list<std::string> possibleVars;
 };

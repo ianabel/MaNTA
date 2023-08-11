@@ -6,6 +6,9 @@
 #include "ConstVoltage.hpp"
 #include "CMFXparallellosses.hpp"
 
+// Update with new variables
+const std::list<std::string> Plasma::possibleVars { "n_ion", "n_e", "n_s", "P_ion", "P_e", "P_s", "omega", "velocity" };
+
 void makePlasmaCase(std::string const& plasmaCase, std::shared_ptr<Plasma>& plasma)
 {
 	if(plasmaCase == "CylindricalPlasmaConstDensity") plasma = std::make_shared<CylindricalPlasmaConstDensity>();
