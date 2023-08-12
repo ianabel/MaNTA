@@ -1,7 +1,6 @@
 #pragma once
 #include <sundials/sundials_linearsolver.h> /* Generic Liner Solver Interface */
 #include <sundials/sundials_types.h>        /* defs of realtype, sunindextype  */
-#include "Variable.hpp"
 
 #include <map>
 #include <memory>
@@ -42,28 +41,47 @@ public:
 };
 
 typedef std::vector<std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>>> Coeff_t;
+
 class Grid
 {
 public:
+	using Index = size_t;
+	using Position = double;
 	Grid() = default;
-	Grid(double lBound, double uBound, int nCells)
+	Grid(Position lBound, Position uBound, Index nCells)
 		: upperBound(uBound), lowerBound(lBound)
 	{
-		double cellLength = abs(uBound-lBound)/static_cast<double>(nCells);
+		// Users eh?
+		if ( uBound < lBound ) 
+			std::swap( uBound, lBound );
+
+		if ( uBound - lBound < 1e-14 )
+			throw std::invalid_argument( "uBound and lBound too close for representation by double" );
+
+		if ( nCells == 0 )
+			throw std::invalid_argument( "Strictly positive number of cells required to construct grid." );
+
+		Position cellLength = (uBound - lBound)/static_cast<double>(nCells);
 		for ( int i = 0; i < nCells - 1; i++)
 			gridCells.emplace_back(lBound + i*cellLength, lBound + (i+1)*cellLength);
 		gridCells.emplace_back(lBound + (nCells-1)*cellLength, uBound);
+		
+		if ( gridCells.size() != nCells )
+			throw std::runtime_error( "Unable to construct grid." );
 	}
 
-	Grid(double lBound, double uBound, int nCells, bool highGridBoundary)
+	Grid(Position lBound, Position uBound, Index nCells, bool highGridBoundary)
 		: upperBound(uBound), lowerBound(lBound)
 	{
 		if(!highGridBoundary)
 		{
-			double cellLength = abs(uBound-lBound)/static_cast<double>(nCells);
+			Position cellLength = abs(uBound-lBound)/static_cast<double>(nCells);
 			for ( int i = 0; i < nCells - 1; i++)
 				gridCells.emplace_back(lBound + i*cellLength, lBound + (i+1)*cellLength);
 			gridCells.emplace_back(lBound + (nCells-1)*cellLength, uBound);
+
+			if ( gridCells.size() != nCells )
+				throw std::runtime_error( "Unable to construct grid." );
 		}
 		else
 		{
@@ -84,8 +102,13 @@ public:
 		}
 	}
 
-	Grid(const Grid& grid) = default; 
+	Grid(const Grid& grid) = default;
 
+	Index getNCells() const { return gridCells.size(); };
+
+	std::vector<Interval> const& getCells() const { return gridCells; };
+
+private:
 	std::vector<Interval> gridCells;
 	double upperBound, lowerBound;
 };
@@ -140,100 +163,61 @@ class LegendreBasis
 class DGApprox 
 {
 	public:
-		typedef std::vector<Interval> Mesh;
-		~DGApprox() {};
-		DGApprox() = default;
+		using Position = double;
+
+		DGApprox() = delete;
+		DGApprox( const DGApprox & ) = delete;
+
+		~DGApprox() = default;
+
 		DGApprox( Grid const& grid, unsigned int Order )
+			: k( Order ), coeffs()
 		{
-			k = Order;
+			coeffs.reserve( grid.getNCells() );
 		};
 
-		DGApprox( unsigned int Order )
-		{
-			k = Order;
-		};
+		DGApprox( unsigned int Order ) : k( Order ), coeffs() { };
 
-		DGApprox( Grid const& grid, unsigned int Order, unsigned int nVariables, std::function<double( double )> const& F )
+		DGApprox( Grid const& grid, unsigned int Order, std::function<double( double )> const& F )
 		{
 			k = Order;
-			for ( unsigned int var=0; var < nVariables; var++)
+			ownsData = true;
+
+			ValueData.resize( ( k + 1 ) * grid.getNCells() );
+
+			auto & cells = grid.getCells();
+			Grid::Index nCells = grid.getNCells();
+			for ( Grid::Index i = 0; i < nCells; ++i )
 			{
-				std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>> varCoeffs;
-				std::vector<double> vec(k+1, 0.0);
-				Eigen::Map<Eigen::VectorXd> v(&vec[0], k+1);
+				auto const & I = cells[ i ];
+				Eigen::Map< Eigen::VectorXd > v( ValueData.data() + i * ( k + 1 ), k + 1 );
+				// Interpolate onto k legendre polynomials
+				for ( Eigen::Index j=0; j<= k; j++ )
 				{
-					for ( auto const& I : grid.gridCells )
-					{
-						v.setZero();
-						// Interpolate onto k legendre polynomials
-						for ( Eigen::Index i=0; i<= k; i++ )
-						{
-							v( i ) = CellProduct( I, F, Basis.phi( I, i ) );
-						}
-						varCoeffs.emplace_back( I, v);
-					}
+					v( j ) = CellProduct( I, F, Basis.phi( I, j ) );
 				}
-				coeffs.emplace_back(varCoeffs);
+				coeffs.emplace_back( I, v );
 			}
 		};
+
+		DGApprox( Grid const& grid, unsigned int Order, double* block_data, size_t stride )
+		{
+			k = Order;
+			Grid::Index nCells = grid.getNCells();
+			coeffs.clear();
+			coeffs.reserve( nCells );
+			auto const& cells = grid.getCells();
+			for ( Grid::Index i = 0; i < nCells; ++i )
+			{
+				VectorWrapper v( block_data + i*stride, k + 1 );
+				coeffs.emplace_back( cells[ i ], v );
+			}
+		}
 
 		DGApprox& operator=( std::function<double( double )> const & f )
 		{
 			Eigen::VectorXd v( k + 1 );
-			for ( unsigned int var=0; var < coeffs.size(); var++)
-			{
-				for ( auto pair : coeffs[var] )
-				{
-					Interval const& I = pair.first;
-					v.setZero();
-					// Interpolate onto k legendre polynomials
-					for ( Eigen::Index i=0; i<= k; i++ )
-					{
-						v( i ) = CellProduct( I, f, Basis.phi( I, i ) );
-					}
-					pair.second = v;
-				}
-			}
-			return *this;
-		}
-
-		DGApprox& operator=( std::function<double( double, int )> const & f )
-		{
-			Eigen::VectorXd v( k + 1 );
-			for (  unsigned int var=0; var < coeffs.size(); var++)
-			{
-				for ( auto pair : coeffs[var] )
-				{
-					Interval const& I = pair.first;
-					v.setZero();
-					// Interpolate onto k legendre polynomials
-					for ( Eigen::Index i=0; i<= k; i++ )
-					{
-						v( i ) = CellProduct( I, f, Basis.phi( I, i ), var );
-					}
-					pair.second = v;
-				}
-			}
-			return *this;
-		}
-
-		void sum( DGApprox& A, DGApprox& B)
-		{
-			Eigen::VectorXd v( k + 1 );
-			for (  unsigned int var=0; var < coeffs.size(); var++)
-			{
-				for ( unsigned int i = 0; i < coeffs[var].size() ; i++ )
-				{
-					coeffs[var][i].second = A.coeffs[var][i].second + B.coeffs[var][i].second;
-				}
-			}
-		}
-
-		void setToFunc(std::function<double( double )> const & f, int var)
-		{
-			//Equivalent to operator= above but implemented for 1 variable
-			Eigen::VectorXd v( k + 1 );
-			for ( auto pair : coeffs[var] )
+			for ( auto pair : coeffs )
 			{
 				Interval const& I = pair.first;
 				v.setZero();
@@ -244,41 +228,33 @@ class DGApprox
 				}
 				pair.second = v;
 			}
+			return *this;
 		}
-	
-		double operator()( double x, int var ) {
-			if( var > coeffs.size() ) std::logic_error( "Out of bounds" );
-			for ( auto const & I : coeffs[var] )
+
+		void sum( DGApprox& A, DGApprox& B)
+		{
+			for ( unsigned int i = 0; i < coeffs.size() ; i++ )
+			{
+				coeffs[i].second = A.coeffs[i].second + B.coeffs[i].second;
+			}
+		}
+
+		double operator()( Position x ) {
+			for ( auto const & I : coeffs )
 			{
 				if (  I.first.contains( x ) )
 					return Basis.Evaluate( I.first, I.second, x );
 			}
-			throw std::logic_error( "Out of bounds" );
+			throw std::logic_error( "Evaluation outside of grid" );
 		};
 
-		double operator()( double x,  Variable* var ) {
-			if(var->index > coeffs.size()) std::logic_error( "Out of bounds" );
-			for ( auto const & I : coeffs[var->index] )
-			{
-				if (  I.first.contains( x ) )
-					return Basis.Evaluate( I.first, I.second, x );
-			}
-			throw std::logic_error( "Out of bounds" );
-		};
-		
-		double CellProduct( Interval const& I, std::function< double( double )> f, std::function< double( double )> g )
+		static double CellProduct( Interval const& I, std::function< double( double )> f, std::function< double( double )> g )
 		{
 			auto u = [ & ]( double x ){ return f( x )*g( x );};
 			return integrator.integrate( u, I.x_l, I.x_u );
 		};
 
-		double CellProduct( Interval const& I, std::function< double( double, int )> f, std::function< double( double )> g, int var )
-		{
-			auto u = [ & ]( double x ){ return f( x, var )*g( x );};
-			return integrator.integrate( u, I.x_l, I.x_u );
-		};
-
-		double EdgeProduct( Interval const& I, std::function< double( double )> f, std::function< double( double )> g )
+		static double EdgeProduct( Interval const& I, std::function< double( double )> f, std::function< double( double )> g )
 		{
 			return f( I.x_l )*g( I.x_l ) + f( I.x_u )*g( I.x_u );
 		};
@@ -287,7 +263,6 @@ class DGApprox
 			// The unweighted mass matrix is the identity.
 			u.setIdentity();
 		};
-
 
 		void MassMatrix( Interval const& I, Eigen::MatrixXd &u, std::function< double( double )> const& w ) {
 			for ( Eigen::Index i = 0 ; i < u.rows(); i++ )
@@ -343,28 +318,11 @@ class DGApprox
 		}
 
 		void zeroCoeffs() {
-			for ( unsigned int var=0; var < coeffs.size(); var++)
-			{
-				for ( auto pair : coeffs[var] )
-				{
-					for ( unsigned int i = 0; i<pair.second.size(); i++)
-						pair.second[i] = 0.0;
-				}
-			}
+			for ( auto pair : coeffs )
+				pair.second = Eigen::VectorXd::Zero( pair.second.size() );
 		}
 
-		// To be only used as an R value. Do not write to this vector as it produces a copy of the values
-		// Also avoid using it if possible as copying is slow
-		Eigen::VectorXd multiVarCoeffs( int i )
-		{
-			Eigen::VectorXd coeffsLong(coeffs.size()*(k+1));
-			for (  unsigned int var = 0; var < coeffs.size(); var++)
-			{
-				coeffsLong.block(var*(k+1),0,k+1,1) = coeffs[var][i].second;
-			}
-			return coeffsLong;
-		}
-
+		/*
 		//This is only to be used for temporary DGAs, for longer lived DGAs please create a sundials vector
 		//DGAs don't own their own memory. Usually they will just be assigned memory blocks within sundials vectors.
 		//In the case that a DGA is created without any sundials vector ever being made we need to assign a memory block
@@ -383,48 +341,35 @@ class DGApprox
 				cellCoeffs.clear();
 			}
 		}
+		*/
 
-		void printCoeffs(int var)
+		void printCoeffs()
 		{
-			for ( unsigned int i = 0; i < coeffs[var].size(); i++)
+			for ( auto const& x : coeffs )
 			{
-				std::cerr << coeffs[var][i].second << std::endl;
+				std::cerr << x.second << std::endl;
 			}
 			std::cerr << std::endl;
-		}
-
-		//This isn't a relevent value or an actual norm. It is just a testing function to show variation in DGApproxs which sould be identicle 
-		double variableDifference()
-		{
-			double norm = 0.0;
-			for ( unsigned int i = 0; i < coeffs[0].size() ; i++ )
-			{
-				norm += (coeffs[0][i].second - coeffs[1][i].second).norm()/std::min(coeffs[0][i].second.norm(), coeffs[1][i].second.norm());
-			}
-			return norm;
 		}
 
 		double maxCoeff()
 		{
 			double coeff = 0.0;
-			for (  unsigned int var=0; var < coeffs.size(); var++)
+			for ( auto pair : coeffs )
 			{
-				for ( auto pair : coeffs[var] )
-				{
-					for ( unsigned int i = 0; i<pair.second.size(); i++)
-					{
-						if(::abs(coeff) < ::abs(pair.second[i])) coeff = pair.second[i];
-					}
-				}
+				if( ::abs(coeff) < ::abs( pair.second.maxCoeff() ) )
+					coeff = pair.second.maxCoeff();
 			}
 			return coeff;
 		}
 
-		unsigned int k;
-		std::vector< std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>>> coeffs; // [var][interval]
-		LegendreBasis Basis;
 	private:
-		boost::math::quadrature::gauss<double, 30> integrator;
+		unsigned int k;
+		std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd> > > coeffs;
+		std::vector<double> ValueData;
+		bool ownsData = false;
+		static LegendreBasis Basis;
+		static boost::math::quadrature::gauss<double, 30> integrator;
 
 };
 

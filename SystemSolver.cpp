@@ -9,168 +9,14 @@
 #include <string>
 
 #include "gridStructures.hpp"
-#include "DiffusionObj.hpp"
-#include "SourceObj.hpp"
-#include "InitialConditionLibrary.hpp"
 
-void makePlasmaCase(std::string const& plasmaCase, std::shared_ptr<Plasma>& plasmaPtr);
-
-SystemSolver::SystemSolver(Grid const& Grid, unsigned int polyNum, unsigned int N_cells, unsigned int N_Variables, double Dt, Fn const& rhs, Fn const& Tau, Fn const& c)
-	: grid(Grid), k(polyNum), nCells(N_cells), nVar(N_Variables), dt(Dt), RHS(rhs), tau(Tau), c_fn(c), sig(grid,k), q(grid,k), u(grid,k), dudt(grid,k), dqdt(grid,k), dsigdt(grid,k), BCs (nullptr)
+SystemSolver::SystemSolver(Grid const& Grid, unsigned int polyNum, double Dt, TransportSystem *transpSystem )
+	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), dt(Dt), problem( transpSystem )
 {
-	seta_fns();
-}
-
-SystemSolver::SystemSolver(std::string const& inputFile)
-{
-	const auto configFile = toml::parse( inputFile );
-	const auto config = toml::find<toml::value>( configFile, "configuration" );
-
-	//Solver parameters
-	double lBound, uBound;
-
-	auto polyDegree = toml::find(config, "Polynomial_degree");
-	if( config.count("Polynomial_degree") != 1 ) throw std::invalid_argument( "Polynomial_degree unspecified or specified more than once" );
-	else if( !polyDegree.is_integer() ) throw std::invalid_argument( "Polynomial_degree must be specified as an integer" );
-	else k = polyDegree.as_integer();
-
-	if ( config.count( "High_Grid_Boundary" ) != 1 ) highGridBoundary = false;
-	else
-	{
-		std::string denseEdges = config.at( "High_Grid_Boundary" ).as_string();
-		if (denseEdges == "true") highGridBoundary = true;
-		else if(denseEdges == "false") highGridBoundary = false;
-		else throw std::invalid_argument( "high_Grid_Boundary specified incorrrectly" );
-	}
-
-	auto numberOfCells = toml::find(config, "Grid_size");
-	if( config.count("Grid_size") != 1 ) throw std::invalid_argument( "Grid_size unspecified or specified more than once" );
-	if( !numberOfCells.is_integer() ) throw std::invalid_argument( "Grid_size must be specified as an integer" );
-	else nCells = numberOfCells.as_integer();
-
-	if(nCells<4 && highGridBoundary)
-		throw std::invalid_argument( "Grid size must exceed 4 cells in order to implemet dense boundaries" );
-	if(highGridBoundary) nCells += 8;
-
-	auto numberOfVariables = toml::find(config, "Number_of_channels");
-	if( config.count("Number_of_channels") != 1 ) throw std::invalid_argument( "Number_of_channels unspecified or specified more than once" );
-	if( !numberOfVariables.is_integer() ) throw std::invalid_argument( "Number_of_channels must be specified as an integer" );
-	else nVar = numberOfVariables.as_integer();
-
-	//Initial Conditions
-	if ( config.count( "Initial_condition" ) != 1 )
-		throw std::invalid_argument( "[error] Initial_condition must be specified once in the [configuration] block" );
-	std::string initCondition = config.at( "Initial_condition" ).as_string();
-
-	if( config.count( "Plasma_case" ) == 0 )
-	{
-		//??TO DO: Obseletize this code and replace with plasma cases??
-		// Non-linear inputs
-		// Diffusion
-		if ( config.count( "Diffusion_case" ) != 1 )
-			throw std::invalid_argument( "[error] Diffusion_case must be specified once in the [configuration] block" );
-		std::string diffusionCase = config.at( "Diffusion_case" ).as_string();
-		auto diffobj = std::make_shared< DiffusionObj >(k, nVar, diffusionCase);
-		// Reaction
-		if ( config.count( "Reaction_case" ) != 1 )
-			throw std::invalid_argument( "[error] Reaction_case must be specified once in the [configuration] block" );
-		std::string reactionCase = config.at( "Reaction_case" ).as_string();
-		auto sourceobj = std::make_shared< SourceObj >(k, nVar, reactionCase);
-
-		initConditionLibrary.set(initCondition, diffusionCase);
-
-		setDiffobj(diffobj);
-		setSourceobj(sourceobj);
-	}
-	else if( config.count( "Plasma_case" ) == 1 )
-	{
-		std::string plasmaCase = config.at( "Plasma_case" ).as_string();
-		makePlasmaCase(plasmaCase, plasma);
-		plasma->constructPlasma();
-
-		setDiffobj(plasma->diffObj);
-		setSourceobj(plasma->sourceObj);
-
-		initConditionLibrary.set(initCondition);
-	}
-	seta_fns();
-
-	//---------Boundary Conditions---------------
-	auto lowerBoundary = toml::find(config, "Lower_boundary");
-	if( config.count("Lower_boundary") != 1 ) throw std::invalid_argument( "Lower_boundary unspecified or specified more than once" );
-	else if( lowerBoundary.is_integer() ) lBound = static_cast<double>(lowerBoundary.as_floating());
-	else if( lowerBoundary.is_floating() ) lBound = static_cast<double>(lowerBoundary.as_floating());
-	else throw std::invalid_argument( "Lower_boundary specified incorrrectly" );
-
-	auto upperBoundary = toml::find(config, "Upper_boundary");
-	if( config.count("Upper_boundary") != 1 ) throw std::invalid_argument( "Upper_boundary unspecified or specified more than once" );
-	else if( upperBoundary.is_integer() ) uBound = static_cast<double>(upperBoundary.as_floating());
-	else if( upperBoundary.is_floating() ) uBound = static_cast<double>(upperBoundary.as_floating());
-	else throw std::invalid_argument( "Upper_boundary specified incorrrectly" );
-
-	grid = Grid(lBound, uBound, nCells, highGridBoundary);
-
-	sig.k = k; q.k = k; u.k = k;
-	dudt.k = k; dqdt.k = k; dsigdt.k = k;
-
-	std::function<double( double, double, int )> g_D_ = [ = ]( double x, double t, int var ) {
-		if ( x == lBound ) {
-			//if(t>0.5) return 0.5;
-			//else return 1.0-t;
-			if( var == 2) return 10000.0;
-			else return 30.0;
-		} else if ( x == uBound ) {
-			// u(1.0) == a
-			//if(t<0.99999) return 1.0 - t;
-			//else return 0.00001;
-			if( var == 2) return 10000.0;
-			else return 30.0;
-		}
-		throw std::logic_error( "Boundary condition function being eval'd not on boundary ?!" );
-	};
-
-	std::function<double( double, double, int )> g_N_ = [ = ]( double x, double t, int var ) {
-		if ( x == lBound ) {
-			// ( q + c u ) . n  a @ x = 0.0
-			return 0.0;
-		} else if ( x == uBound ) {
-			// ( q + c u ) . n  b @ x = 1.0
-			return 0.0;
-		}
-		throw std::logic_error( "Boundary condition function being eval'd not on boundary ?!" );
-	};
-
-	auto DirichletBCs = std::make_shared<BoundaryConditions>();
-	DirichletBCs->LowerBound = lBound;
-	DirichletBCs->UpperBound = uBound;
-
-	if ( config.count( "LB_Type" ) != 1 )
-		throw std::invalid_argument( "[error] LB_Type must be specified once in the [configuration] block" );
-	std::string LBoundary_Condition = config.at( "LB_Type" ).as_string();
-	if (LBoundary_Condition == "Dirichlet") DirichletBCs->isLBoundDirichlet = true;
-	else if(LBoundary_Condition == "VonNeumann") DirichletBCs->isLBoundDirichlet = false;
-	else throw std::invalid_argument( "LB_type specified incorrrectly" );
-
-	if ( config.count( "UB_Type" ) != 1 )
-		throw std::invalid_argument( "[error] UB_Type must be specified once in the [configuration] block" );
-	std::string UBoundary_Condition = config.at( "UB_Type" ).as_string();
-	if (UBoundary_Condition == "Dirichlet") DirichletBCs->isUBoundDirichlet = true;
-	else if(UBoundary_Condition == "VonNeumann") DirichletBCs->isUBoundDirichlet = false;
-	else throw std::invalid_argument( "UB_type specified incorrrectly" );
-
-	DirichletBCs->g_D = g_D_;
-	DirichletBCs->g_N = g_N_;
-	setBoundaryConditions(DirichletBCs);
-
-	//-------------End of Boundary conditions------------------------------------
+	nVar = transpSystem->getNVars();
 }
 
 void SystemSolver::setInitialConditions( N_Vector& Y , N_Vector& dYdt )
-{
-	setInitialConditions(initConditionLibrary.getuInitial(), initConditionLibrary.getqInitial(), initConditionLibrary.getSigInitial(), Y, dYdt);
-}
-
-void SystemSolver::setInitialConditions( std::function< double ( double, int )> u_0, std::function< double ( double, int )> gradu_0, std::function< double ( double, int )> sigma_0, N_Vector& Y , N_Vector& dYdt ) 
 {
 	if ( !initialised )
 		initialiseMatrices();
@@ -186,8 +32,10 @@ void SystemSolver::setInitialConditions( std::function< double ( double, int )> 
 
 	resetCoeffs();
 
-	u = u_0;
-	q = gradu_0;
+	for ( Index i=0; i < nVars; i++ ) {
+		u = u_0;
+		q = gradu_0;
+	}
 
 	//??TO DO: remove sigma from initial condition library all together
 	if(plasma){ sig = [ =, this ]( double R, int var ){return -1.0*plasma->getVariable(var).kappaFunc(R,q,u);}; }
@@ -538,41 +386,31 @@ void SystemSolver::clearCellwiseVecs()
 	H_cellwise.clear();
 }
 
-void SystemSolver::mapDGtoSundials(DGApprox& sigma, DGApprox& q, DGApprox& u, Eigen::Map<Eigen::VectorXd>& lam, realtype* Y)
-{
-	std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>> cellSigCoeffs, cellQCoeffs, cellUCoeffs;
+// Memory Layout for a sundials Y is, if i indexes the components of u / q / sigma
+// Y = [ sigma[ cell0, i=0 ], ..., sigma[ cell0, i= nVar - 1], q[ cell0, i = 0 ], ..., q[ cell0, i = nVar-1 ], u[ cell0, i = 0 ], .. u[ cell0, i = nVar - 1], sigma[ cell1, i=0 ], .... , u[ cellN-1, i = nVar - 1 ], Lambda[ cell0, i=0 ],.. ]
 
+void SystemSolver::mapDGtoSundials(DGVector& sigma, DGVector& q, DGVector& u, Eigen::Map<Eigen::VectorXd>& lam, realtype* Y)
+{
+	sigma.clear(); sigma.reserve( nVar );
+	q.clear();     q.reserve( nVar );
+	u.clear();     u.reserve( nVar );
 	for(int var = 0; var < nVar; var++)
 	{
-		for(int i=0; i<nCells; i++)
-		{
-			cellSigCoeffs.emplace_back( grid.gridCells[ i ], VectorWrapper( Y +                var*(k+1) + i*3*nVar*(k+1), k+1 ));
-			cellQCoeffs.emplace_back( grid.gridCells[ i ],   VectorWrapper( Y + nVar*(k+1)   + var*(k+1) + i*3*nVar*(k+1), k+1 ));
-			cellUCoeffs.emplace_back( grid.gridCells[ i ],   VectorWrapper( Y + 2*nVar*(k+1) + var*(k+1) + i*3*nVar*(k+1), k+1 ));
-		}
-		sigma.coeffs.push_back(cellSigCoeffs);
-		q.coeffs.push_back(cellQCoeffs);
-		u.coeffs.push_back(cellUCoeffs);
-		cellSigCoeffs.clear();
-		cellQCoeffs.clear();
-		cellUCoeffs.clear();
+		sigma[ var ].emplace_back( grid, k, ( Y +                var*(k+1) ), 3*nVar*( k+1 ) );
+		q[ var ]    .emplace_back( grid, k, ( Y +   nVar*(k+1) + var*(k+1) ), 3*nVar*( k+1 ) );
+		u[ var ]    .emplace_back( grid, k, ( Y + 2*nVar*(k+1) + var*(k+1) ), 3*nVar*( k+1 ) );
 
 		new (&lam) VectorWrapper( Y + nVar*(nCells)*(3*k+3), nVar*(nCells+1) );
 	}
 }
 
-void SystemSolver::mapDGtoSundials(DGApprox& u, realtype* Y)
+void SystemSolver::mapDGtoSundials(DGVector& u, realtype* Y)
 {
-	std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>> cellUCoeffs;
 
+	u.clear(); u.reserve( nVar );
 	for(int var = 0; var < nVar; var++)
 	{
-		for(int i=0; i<nCells; i++)
-		{
-			cellUCoeffs.emplace_back( grid.gridCells[ i ], VectorWrapper( Y + 2*nVar*(k+1) + var*(k+1) + i*3*nVar*(k+1), k+1 ));  
-		}
-		u.coeffs.push_back(cellUCoeffs);
-		cellUCoeffs.clear();
+		u.emplace_back( grid, Y + 2*nVar*( k + 1 ) + var * ( k + 1 ) , 3*nVar*( k+1 ) );
 	}
 }
 
@@ -882,10 +720,14 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 	lam = system->H_global.solve( CsGuL_global );
 	for(int var = 0; var < nVar; var++)
 	{
-		if(system->BCs->isLBoundDirichlet) lam[var*(nCells+1)] = system->BCs->g_D(system->grid.lowerBound, static_cast<double>(tres), var);
-		if(system->BCs->isLBoundDirichlet) tempLambda[var*(nCells+1)] = system->BCs->g_D(system->grid.lowerBound, static_cast<double>(tres), var);
-		if(system->BCs->isUBoundDirichlet) lam[nCells+var*(nCells+1)] = system->BCs->g_D(system->grid.upperBound, static_cast<double>(tres), var);
-		if(system->BCs->isUBoundDirichlet) tempLambda[nCells+var*(nCells+1)] = system->BCs->g_D(system->grid.upperBound, static_cast<double>(tres), var);
+		if( problem->isLowerBoundaryDirichlet( var ) ) {
+			lam[var*(nCells+1)]        = problem->LowerBoundary( var, static_cast<double>(tres) );
+			tempLambda[var*(nCells+1)] = problem->LowerBoundary( var, static_cast<double>(tres) );
+		}
+		if( problem->isUpperBoundaryDirichlet( var ) ) {
+			lam[nCells+var*(nCells+1)]        = problem->UpperBoundary( var, static_cast<double>(tres) );
+			tempLambda[nCells+var*(nCells+1)] = problem->UpperBoundary( var, static_cast<double>(tres) );
+		}
 	}
 	res4 = -tempLambda + lam;
 
@@ -902,7 +744,7 @@ int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *us
 		//length = nVar*(k+1)
 		for(int var = 0; var < nVar; var++)
 		{
-			std::function< double (double) > kappaFunc = [ = ]( double x ) { return system->getDiffObj()->getKappaFunc(var)( x, tempQ, tempU); };
+			std::function< double (double) > kappaFunc = [ = ]( double x ) { return problem->SigmaFn( var, tempU, tempQ, x, 0 ); };
 			std::function< double (double) > sourceFunc = [ = ]( double x ) { return system->getSourceObj()->getSourceFunc(var)( x, tempSig, tempQ, tempU); };
 
 			//Evaluate Diffusion Function
