@@ -15,6 +15,7 @@
 class SystemSolver
 {
 public:
+	using Matrix = Eigen::MatrixXd;
 
 	SystemSolver(Grid const& Grid, unsigned int polyNum, double Dt, TransportSystem *pProblem );
 
@@ -24,7 +25,6 @@ public:
 
 	//Initialises u, q and lambda to satisfy residual equation at t=0
 	void setInitialConditions(N_Vector& Y, N_Vector& dYdt );
-	void setInitialConditions(std::function< double ( double, int )> u_0, std::function< double ( double, int )> gradu_0, std::function< double ( double, int )> sigma_0, N_Vector& Y, N_Vector& dYdt );
 
 	//Initialize the a_fns
 	void seta_fns();
@@ -44,7 +44,7 @@ public:
 	//Creates the MX cellwise matrices used at each Jacobian iteration
 	//Factorization of these matrices is done here
 	//?TO DO: the values of the non-linear matrices will be added in this function?
-	void updateMForJacSolve(std::vector< Eigen::FullPivLU< Eigen::MatrixXd > >& tempABBDBlocks, double const alpha, DGApprox& delSig, DGApprox& delQ, DGApprox& delU);
+	void updateMForJacSolve(std::vector< Eigen::FullPivLU< Matrix > >& tempABBDBlocks, double const alpha, DGApprox& delSig, DGApprox& delQ, DGApprox& delU);
 
 	//Solves the Jy = -G equation
 	void solveJacEq(N_Vector& g, N_Vector& delY);
@@ -74,19 +74,23 @@ private:
 	unsigned int nCells;	//Total cell count
 	int nVar;					//Total number of variables
 	
-	std::vector< Eigen::MatrixXd > XMats;
-	std::vector< Eigen::MatrixXd > MBlocks;
-	std::vector< Eigen::MatrixXd > CEBlocks;
-	Eigen::MatrixXd K_global{};
+	std::vector< Matrix > XMats;
+	std::vector< Matrix > MBlocks;
+	std::vector< Matrix > CEBlocks;
+	Matrix K_global{};
 	Eigen::VectorXd L_global{};
-	Eigen::MatrixXd H_global_mat{};
-	Eigen::FullPivLU< Eigen::MatrixXd > H_global{};
-	std::vector< Eigen::MatrixXd > CG_cellwise, RF_cellwise;
-	std::vector< Eigen::MatrixXd > A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise; //?Point the dublicated matrices to the same place?
+	Matrix H_global_mat{};
+	Eigen::FullPivLU< Matrix > H_global{};
+	std::vector< Matrix > CG_cellwise, RF_cellwise;
+	std::vector< Matrix > A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise; //?Point the dublicated matrices to the same place?
 
 	using DGVector = std::vector<DGApprox>;
 	DGVector u, q, sig, dudt, dqdt, dsigdt;
 	std::optional<Eigen::Map<Eigen::VectorXd>> lambda, dlamdt;
+
+	void NLqMat( Matrix &, DGVector const&, DGVector const& );
+	void NLuMat( Matrix &, DGVector const&, DGVector const& );
+
 	std::shared_ptr<BoundaryConditions> BCs;
 	int total_steps = 0;
 	double resNorm = 0.0; //Exclusively for unit testing purposes

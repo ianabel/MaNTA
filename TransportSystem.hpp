@@ -33,6 +33,15 @@ class TransportSystem {
 	virtual Value SigmaFn( Index i, const ValueVector &u, const ValueVector &q, Position x, Time t ) = 0;
 	virtual Value Sources( Index i, const ValueVector &u, const ValueVector &q, Position x, Time t ) = 0;
 
+	// We need derivatives of the flux functions
+	virtual Value dSigmaFn_du( Index i, ValueVector&, const ValueVector &u, const ValueVector &q, Position x, Time t ) = 0;
+	virtual Value dSigmaFn_dq( Index i, ValueVector&, const ValueVector &u, const ValueVector &q, Position x, Time t ) = 0;
+
+	// and for the sources
+	virtual Value dSources_du( Index i, ValueVector&, const ValueVector &u, const ValueVector &q, Position x, Time t ) = 0;
+	virtual Value dSources_dq( Index i, ValueVector&, const ValueVector &u, const ValueVector &q, Position x, Time t ) = 0;
+	virtual Value dSources_dsigma( Index i, ValueVector&, const ValueVector &u, const ValueVector &q, Position x, Time t ) = 0;
+
 	// and initial conditions for u & q
 	virtual Value      InitialValue( Index i, Position x ) const = 0;
 	virtual Value InitialDerivative( Index i, Position x ) const = 0;

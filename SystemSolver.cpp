@@ -556,11 +556,11 @@ void SystemSolver::updateMForJacSolve(std::vector< Eigen::FullPivLU< Eigen::Matr
 		MX.block( nVar*(k+1), 2*nVar*(k+1), nVar*(k+1), nVar*(k+1) ) += X;
 
 		//NLq Matrix
-		diffObj->NLqMat( NLq, newQ, newU, I);
+		NLqMat( NLq, newQ, newU, I);
 		MX.block( 2*nVar*(k+1), nVar*(k+1), nVar*(k+1), nVar*(k+1)) = NLq;
 
 		//NLu Matrix
-		diffObj->NLuMat( NLu, newQ, newU, I);
+		NLuMat( NLu, newQ, newU, I);
 		MX.block( 2*nVar*(k+1), 2*nVar*(k+1), nVar*(k+1), nVar*(k+1)) = NLu;
 
 		//S_sig Matrix
@@ -870,17 +870,5 @@ double SystemSolver::EvalCoeffs( LegendreBasis & B, Coeff_t cs, double x, int va
 			return B.Evaluate( pair.first, pair.second, x );
 	}
 	return std::nan( "" );
-}
-
-std::shared_ptr<DiffusionObj> SystemSolver::getDiffObj()
-{
-	if(diffObj) return diffObj;
-	else return nullptr;
-}
-
-std::shared_ptr<SourceObj> SystemSolver::getSourceObj()
-{
-	if(sourceObj) return sourceObj;
-	else return nullptr;
 }
 

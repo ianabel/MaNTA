@@ -170,15 +170,13 @@ class DGApprox
 
 		~DGApprox() = default;
 
-		DGApprox( Grid const& grid, unsigned int Order )
-			: k( Order ), coeffs()
+		DGApprox( Grid const& _grid, unsigned int Order )
+			: grid( _grid ),k( Order ), coeffs()
 		{
 			coeffs.reserve( grid.getNCells() );
 		};
 
-		DGApprox( unsigned int Order ) : k( Order ), coeffs() { };
-
-		DGApprox( Grid const& grid, unsigned int Order, std::function<double( double )> const& F )
+		DGApprox( Grid const& _grid, unsigned int Order, std::function<double( double )> const& F ) : grid( _grid )
 		{
 			k = Order;
 			ownsData = true;
@@ -200,7 +198,7 @@ class DGApprox
 			}
 		};
 
-		DGApprox( Grid const& grid, unsigned int Order, double* block_data, size_t stride )
+		DGApprox( Grid const& _grid, unsigned int Order, double* block_data, size_t stride ) : grid( _grid )
 		{
 			k = Order;
 			Grid::Index nCells = grid.getNCells();
@@ -231,12 +229,26 @@ class DGApprox
 			return *this;
 		}
 
+		/*
 		void sum( DGApprox& A, DGApprox& B)
 		{
 			for ( unsigned int i = 0; i < coeffs.size() ; i++ )
 			{
 				coeffs[i].second = A.coeffs[i].second + B.coeffs[i].second;
 			}
+		}
+		*/
+
+		DGApprox & operator+=( DGApprox const& other )
+		{
+			if ( grid != other.grid ) 
+				throw std::invalid_argument( "Cannot add two DGApprox's on different grids" );
+			for ( unsigned int i=0; i < coeffs.size(); ++i )
+			{
+				// std::assert( coeffs[ i ].first == other.coeffs[ i ].first );
+				coeffs[ i ].second += other.coeffs[ i ].second;
+			}
+
 		}
 
 		double operator()( Position x ) {
@@ -246,6 +258,10 @@ class DGApprox
 					return Basis.Evaluate( I.first, I.second, x );
 			}
 			throw std::logic_error( "Evaluation outside of grid" );
+		};
+
+		double operator()( Position x, Interval const& I ) {
+			return Basis.Evaluate( I.first, I.second, x );
 		};
 
 		static double CellProduct( Interval const& I, std::function< double( double )> f, std::function< double( double )> g )
@@ -363,7 +379,12 @@ class DGApprox
 			return coeff;
 		}
 
+		using Integrator = boost::math::quadrature::gauss<double, 30>;
+
+		static const Integrator& Integrator() { return integrator; };
+		static const LegendreBasis& Basis() { return Basis;};
 	private:
+		const Grid& grid;
 		unsigned int k;
 		std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd> > > coeffs;
 		std::vector<double> ValueData;
