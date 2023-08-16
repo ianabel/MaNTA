@@ -2,6 +2,8 @@
 #include <sundials/sundials_linearsolver.h> /* Generic Liner Solver Interface */
 #include <sundials/sundials_types.h>        /* defs of realtype, sunindextype  */
 
+#include "Types.hpp"
+
 #include <Eigen/Core>
 #include <Eigen/Dense>
 
@@ -11,6 +13,7 @@
 
 #include "gridStructures.hpp"
 #include "TransportSystem.hpp"
+
 
 class SystemSolver
 {
@@ -84,16 +87,17 @@ private:
 	std::vector< Matrix > CG_cellwise, RF_cellwise;
 	std::vector< Matrix > A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise; //?Point the dublicated matrices to the same place?
 
+	/*
 	using DGVector = std::vector<DGApprox>;
 	DGVector u, q, sig, dudt, dqdt, dsigdt;
 	std::optional<Eigen::Map<Eigen::VectorXd>> lambda, dlamdt;
+	*/
 
 	DGSoln y, dydt;
 
 	void NLqMat( Matrix &, DGVector const&, DGVector const& );
 	void NLuMat( Matrix &, DGVector const&, DGVector const& );
 
-	std::shared_ptr<BoundaryConditions> BCs;
 	int total_steps = 0;
 	double resNorm = 0.0; //Exclusively for unit testing purposes
 
@@ -105,6 +109,8 @@ private:
 
 	double alpha = 1.0;
 	bool testing = false;
+
+	// Why do we need to know? Surely everything is encoded in the construction of the Grid, which is done elsewhere?
 	bool highGridBoundary = true;
 
 	// Hide all physics-specific info in here

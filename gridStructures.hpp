@@ -11,11 +11,10 @@
 #include <vector>
 #include <iostream>
 
+#include "Types.hpp"
+
 typedef std::function<double( double )> Fn;
-using Matrix = Eigen::Matrix<realtype,Eigen::Dynamic,Eigen::Dynamic>;
-using MatrixWrapper = Eigen::Map<Matrix>;
-using Vector = Eigen::Matrix<realtype,Eigen::Dynamic,1>;
-using VectorWrapper = Eigen::Map<Vector>;
+
 class Interval
 {
 public:
@@ -40,7 +39,7 @@ public:
 	double h() const { return ( x_u - x_l );};
 };
 
-typedef std::vector<std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd >>>> Coeff_t;
+typedef std::vector< std::pair< Interval, VectorWrapper > > Coeff_t;
 
 class Grid
 {
@@ -111,8 +110,8 @@ public:
 
 	std::vector<Interval> const& getCells() const { return gridCells; };
 
-	Interval& operator[]( Eigen::Index i ) { return gridCells[ i ]; };
-	Interval const& operator[]( Eigen::Index i ) const { return gridCells[ i ]; };
+	Interval& operator[]( Index i ) { return gridCells[ i ]; };
+	Interval const& operator[]( Index i ) const { return gridCells[ i ]; };
 
 private:
 	std::vector<Interval> gridCells;
@@ -125,12 +124,12 @@ class LegendreBasis
 		LegendreBasis() {};
 		~LegendreBasis() {};
 
-		static double Evaluate( Interval const & I, Eigen::Index i, double x )
+		static double Evaluate( Interval const & I, Index i, double x )
 		{
 			return ::sqrt( ( 2* i + 1 )/( I.h() ) ) * std::legendre( i, 2*( x - I.x_l )/I.h() - 1.0 );
 		};
 
-		static double Prime(  Interval const & I, Eigen::Index i, double x )
+		static double Prime(  Interval const & I, Index i, double x )
 		{
 			if ( i == 0 )
 				return 0.0;
@@ -141,19 +140,19 @@ class LegendreBasis
 		static double Evaluate( Interval const & I, Eigen::VectorXd const& vCoeffs, double x )
 		{
 			double result = 0.0;
-			for ( Eigen::Index i=0; i<vCoeffs.size(); ++i )
+			for ( Index i=0; i<vCoeffs.size(); ++i )
 				result += vCoeffs( i ) * Evaluate( I, i, x );
 			return result;
 		};
 
-		static std::function<double( double )> phi( Interval const& I, Eigen::Index i )
+		static std::function<double( double )> phi( Interval const& I, Index i )
 		{
 			return [=]( double x ){ 
 				return ::sqrt( ( 2* i + 1 )/( I.h() ) ) * std::legendre( i, 2*( x - I.x_l )/I.h() - 1.0 );
 			};
 		}
 
-		static std::function<double( double )> phiPrime( Interval const& I, Eigen::Index i )
+		static std::function<double( double )> phiPrime( Interval const& I, Index i )
 		{
 			if ( i == 0 )
 				return []( double ){ return 0.0; };
@@ -194,9 +193,9 @@ class DGApprox
 			for ( Grid::Index i = 0; i < nCells; ++i )
 			{
 				auto const & I = cells[ i ];
-				Eigen::Map< Eigen::VectorXd > v( ValueData.data() + i * ( k + 1 ), k + 1 );
+				VectorWrapper v( ValueData.data() + i * ( k + 1 ), k + 1 );
 				// Interpolate onto k legendre polynomials
-				for ( Eigen::Index j=0; j<= k; j++ )
+				for ( Index j=0; j<= k; j++ )
 				{
 					v( j ) = CellProduct( I, F, Basis.phi( I, j ) );
 				}
@@ -226,7 +225,7 @@ class DGApprox
 				Interval const& I = pair.first;
 				v.setZero();
 				// Interpolate onto k legendre polynomials
-				for ( Eigen::Index i=0; i<= k; i++ )
+				for ( Index i=0; i<= k; i++ )
 				{
 					v( i ) = CellProduct( I, f, Basis.phi( I, i ) );
 				}
@@ -287,8 +286,8 @@ class DGApprox
 		};
 
 		void MassMatrix( Interval const& I, Eigen::MatrixXd &u, std::function< double( double )> const& w ) {
-			for ( Eigen::Index i = 0 ; i < u.rows(); i++ )
-				for ( Eigen::Index j = 0 ; j < u.cols(); j++ )
+			for ( Index i = 0 ; i < u.rows(); i++ )
+				for ( Index j = 0 ; j < u.cols(); j++ )
 				{
 					auto F = [ & ]( double x ) { return w( x ) * Basis.Evaluate( I, i, x ) * Basis.Evaluate( I, j, x ); };
 					u( i, j ) = integrator.integrate( F, I.x_l, I.x_u );
@@ -296,8 +295,8 @@ class DGApprox
 		};
 
 		void MassMatrix( Interval const& I, Eigen::MatrixXd &u, std::function< double( double, int )> const& w, int var ) {
-			for ( Eigen::Index i = 0 ; i < u.rows(); i++ )
-				for ( Eigen::Index j = 0 ; j < u.cols(); j++ )
+			for ( Index i = 0 ; i < u.rows(); i++ )
+				for ( Index j = 0 ; j < u.cols(); j++ )
 				{
 					auto F = [ & ]( double x ) { return w( x, var ) * Basis.Evaluate( I, i, x ) * Basis.Evaluate( I, j, x ); };
 					u( i, j ) = integrator.integrate( F, I.x_l, I.x_u );
@@ -312,8 +311,8 @@ class DGApprox
 		Eigen::MatrixXd MassMatrix( Interval const& I, std::function<double( double )> const&w )
 		{
 			Eigen::MatrixXd u ( k + 1, k + 1 );
-			for ( Eigen::Index i = 0 ; i < u.rows(); i++ )
-				for ( Eigen::Index j = 0 ; j < u.cols(); j++ )
+			for ( Index i = 0 ; i < u.rows(); i++ )
+				for ( Index j = 0 ; j < u.cols(); j++ )
 				{
 					auto F = [ & ]( double x ) { return w( x ) * Basis.Evaluate( I, i, x ) * Basis.Evaluate( I, j, x ); };
 					u( i, j ) = integrator.integrate( F, I.x_l, I.x_u );
@@ -322,8 +321,8 @@ class DGApprox
 		}
 
 		void DerivativeMatrix( Interval const& I, Eigen::MatrixXd &D ) {
-			for ( Eigen::Index i = 0 ; i < D.rows(); i++ )
-				for ( Eigen::Index j = 0 ; j < D.cols(); j++ )
+			for ( Index i = 0 ; i < D.rows(); i++ )
+				for ( Index j = 0 ; j < D.cols(); j++ )
 				{
 					auto F = [ & ]( double x ) { return Basis.Evaluate( I, i, x ) * Basis.Prime( I, j, x ); };
 					D( i, j ) = integrator.integrate( F, I.x_l, I.x_u );
@@ -331,8 +330,8 @@ class DGApprox
 		}
 
 		void DerivativeMatrix( Interval const& I, Eigen::MatrixXd &D, std::function<double ( double )> const& w ) {
-			for ( Eigen::Index i = 0 ; i < D.rows(); i++ )
-				for ( Eigen::Index j = 0 ; j < D.cols(); j++ )
+			for ( Index i = 0 ; i < D.rows(); i++ )
+				for ( Index j = 0 ; j < D.cols(); j++ )
 				{	
 					auto F = [ & ]( double x ) { return w( x )*Basis.Evaluate( I, i, x ) * Basis.Prime( I, j, x ); };
 					D( i, j ) = integrator.integrate( F, I.x_l, I.x_u );
@@ -392,7 +391,7 @@ class DGApprox
 	private:
 		const Grid& grid;
 		unsigned int k;
-		std::vector< std::pair< Interval, Eigen::Map<Eigen::VectorXd> > > coeffs;
+		std::vector< std::pair< Interval, VectorWrapper > > coeffs;
 		std::vector<double> ValueData;
 		bool ownsData = false;
 		static LegendreBasis Basis;
@@ -402,6 +401,7 @@ class DGApprox
 
 };
 
+/*
 class BoundaryConditions {
 public:
 	double LowerBound;
@@ -410,3 +410,4 @@ public:
 	bool isUBoundDirichlet;
 	std::function<double( double, double, int )> g_D,g_N;
 };
+*/

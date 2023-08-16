@@ -1,6 +1,8 @@
 #ifndef DGSOLN_HPP
 #define DGSOLN_HPP
 
+#include "Types.hpp"
+
 class DGSoln {
 
 	DGSoln( Index n_var, Grid const& _grid, Index Order ) : nVars( n_var ), grid( _grid ),k( Order ),lambda( nullptr )
@@ -10,7 +12,7 @@ class DGSoln {
 
 	DGSoln( Index n_var, Grid const& _grid, Index Order, double[] memory ) : nVars( n_var ), grid( _grid ),k( Order ),lambda( nullptr )
 	{
-
+		Map( memory );
 	};
 
 	virtual ~DGSoln() = default;
@@ -19,7 +21,9 @@ class DGSoln {
 
 	size_t getMemSize() const { 
 		// 3 = u + q + sigma
-		return grid.getNCells() * nVars * ( k + 1 ) * 3;
+		// nCells + 1 for lambda because we store values at both ends
+		return grid.getNCells() * nVars * ( k + 1 ) * 3 + 
+		        ( grid.getNCells() + 1 ) * nVars;
 	};
 	
 	void Map( double[] Y ) {
@@ -74,7 +78,7 @@ class DGSoln {
 		}
 	};
 
-	//
+	// Sets lambda = average of u either side of the boundary
 	void EvaluateLambda() {
 		Index nCells = grid.getNCells();
 		for ( Index var = 0; var < nVars; ++iVar ) {
@@ -98,7 +102,9 @@ class DGSoln {
 		}
 	};
 
-	void AssignSigma
+	void AssignSigma( std::function< Value( Index, const Values &, const Values &, Position, Time )> sigmaFn ) {
+
+	}
 
 	void setZero() {
 		for ( Index i = 0; i < nVars; ++i ) {
@@ -113,7 +119,7 @@ class DGSoln {
 		const Index nVars;
 		const Grid& grid;
 		const Index k;
-		std::vector<DGApprox> u,q,sigma;
-		std::vector<Eigen::Map< Eigen::VectorXd > > lambda;
+		std::vector< DGApprox > u,q,sigma;
+		std::vector< VectorWrapper > lambda;
 };
 #endif // DGSOLN_HPP

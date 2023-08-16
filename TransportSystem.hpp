@@ -1,6 +1,8 @@
 #ifndef TRANSPORTSYSTEM_HPP
 #define TRANSPORTSYSTEM_HPP
 
+#include "Types.hpp"
+
 /*
 	Pure interface class
 	defines a problem in the form
@@ -10,43 +12,37 @@
  */
 
 class TransportSystem {
-	using Index = size_t;
-	using Value = double;
+	using 
+	public:
+		virtual ~TransportSystem() = default;
 
-	using Position = double;
-	using Time = double;
-	using ValueVector = std::vector<double>;
+		Index getNumVars() const { return nVars; };
 
-	explicit TransportSystem( Index nVariables ) : nVars( nVariables ) {};
-	virtual ~TransportSystem() = default;
+		// Function for passing boundary conditions to the solver
+		virtual Value  LowerBoundary( Index i, Time t ) const = 0;
+		virtual Value  UpperBoundary( Index i, Time t ) const = 0;
 
-	Index getNumVars() const { return nVars; };
-		
-	// Function for passing boundary conditions to the solver
-	virtual Value  LowerBoundary( Index i, Time t ) const = 0;
-	virtual Value  UpperBoundary( Index i, Time t ) const = 0;
+		virtual bool isLowerBoundaryDirichlet( Index i ) const = 0;
+		virtual bool isUpperBoundaryDirichlet( Index i ) const = 0;
 
-	virtual bool isLowerBoundaryDirichlet( Index i ) const = 0;
-	virtual bool isUpperBoundaryDirichlet( Index i ) const = 0;
-		
-	// The same for the flux and source functions -- the vectors have length nVars
-	virtual Value SigmaFn( Index i, const ValueVector &u, const ValueVector &q, Position x, Time t ) = 0;
-	virtual Value Sources( Index i, const ValueVector &u, const ValueVector &q, Position x, Time t ) = 0;
+		// The same for the flux and source functions -- the vectors have length nVars
+		virtual Value SigmaFn( Index i, const Values &u, const Values &q, Position x, Time t ) = 0;
+		virtual Value Sources( Index i, const Values &u, const Values &q, Position x, Time t ) = 0;
 
-	// We need derivatives of the flux functions
-	virtual Value dSigmaFn_du( Index i, ValueVector&, const ValueVector &u, const ValueVector &q, Position x, Time t ) = 0;
-	virtual Value dSigmaFn_dq( Index i, ValueVector&, const ValueVector &u, const ValueVector &q, Position x, Time t ) = 0;
+		// We need derivatives of the flux functions
+		virtual Value dSigmaFn_du( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
+		virtual Value dSigmaFn_dq( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
 
-	// and for the sources
-	virtual Value dSources_du( Index i, ValueVector&, const ValueVector &u, const ValueVector &q, Position x, Time t ) = 0;
-	virtual Value dSources_dq( Index i, ValueVector&, const ValueVector &u, const ValueVector &q, Position x, Time t ) = 0;
-	virtual Value dSources_dsigma( Index i, ValueVector&, const ValueVector &u, const ValueVector &q, Position x, Time t ) = 0;
+		// and for the sources
+		virtual Value dSources_du( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
+		virtual Value dSources_dq( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
+		virtual Value dSources_dsigma( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
 
-	// and initial conditions for u & q
-	virtual Value      InitialValue( Index i, Position x ) const = 0;
-	virtual Value InitialDerivative( Index i, Position x ) const = 0;
-		
-	private:
+		// and initial conditions for u & q
+		virtual Value      InitialValue( Index i, Position x ) const = 0;
+		virtual Value InitialDerivative( Index i, Position x ) const = 0;
+
+	protected:
 		Index nVars;
 
 };
