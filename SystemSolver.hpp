@@ -88,6 +88,8 @@ private:
 	DGVector u, q, sig, dudt, dqdt, dsigdt;
 	std::optional<Eigen::Map<Eigen::VectorXd>> lambda, dlamdt;
 
+	DGSoln y, dydt;
+
 	void NLqMat( Matrix &, DGVector const&, DGVector const& );
 	void NLuMat( Matrix &, DGVector const&, DGVector const& );
 
@@ -97,7 +99,10 @@ private:
 
 	double dt;
 	double t;
+
+	// Really we should do init in the constructor and not need this flag. TODO
 	bool initialised = false;
+
 	double alpha = 1.0;
 	bool testing = false;
 	bool highGridBoundary = true;

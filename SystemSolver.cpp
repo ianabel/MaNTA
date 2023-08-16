@@ -14,48 +14,38 @@ SystemSolver::SystemSolver(Grid const& Grid, unsigned int polyNum, double Dt, Tr
 	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), dt(Dt), problem( transpSystem )
 {
 	nVar = transpSystem->getNVars();
+	initialiseMatrices();
+	initialised = true;
 }
 
 void SystemSolver::setInitialConditions( N_Vector& Y , N_Vector& dYdt )
 {
-	if ( !initialised )
-		initialiseMatrices();
 
+	/*
 	if(!lambda.has_value())
 	{
 		double memBlock[nVar*(nCells+1)];
 		lambda = VectorWrapper(memBlock, nVar*(nCells+1));
 		dlamdt = VectorWrapper(memBlock, nVar*(nCells+1));
 	}
+
 	mapDGtoSundials( sig, q, u, lambda.value(), N_VGetArrayPointer( Y ));
 	mapDGtoSundials( dsigdt, dqdt, dudt, dlamdt.value(), N_VGetArrayPointer( dYdt ));
+	*/
+
+	y.   Map( N_VGetArrayPointer( Y ) );
+	dydt.Map( N_VGetArrayPointer( dYdt ) );
 
 	resetCoeffs();
 
-	for ( Index i=0; i < nVars; i++ ) {
-		u = u_0;
-		q = gradu_0;
-	}
+	y.AssignU( problem->InitialValue );
+	y.AssignQ( problem->InitialDerivative );
 
-	//??TO DO: remove sigma from initial condition library all together
-	if(plasma){ sig = [ =, this ]( double R, int var ){return -1.0*plasma->getVariable(var).kappaFunc(R,q,u);}; }
-	else sig = sigma_0;
+	y.EvaluateLambda();
 
-	double dx = ::abs(BCs->UpperBound - BCs->LowerBound)/nCells;
-	for(int var = 0; var < nVar; var++)
-	{
-		for ( unsigned int i=0; i < nCells; i++ )
-		{
-			Interval I = grid.gridCells[ i ];
-			lambda.value()[var*(nCells+1) + i] += u.Basis.Evaluate(I, u.coeffs[var][i].second, BCs->LowerBound + i*(dx))/2;
-			lambda.value()[var*(nCells+1) + i+1] += u.Basis.Evaluate(I, u.coeffs[var][i].second, BCs->LowerBound + (i+1)*(dx))/2;
+	
 
-			dlamdt.value()[var*(nCells+1) + i] += dudt.Basis.Evaluate(I, dudt.coeffs[var][i].second, BCs->LowerBound + i*(dx))/2;
-			dlamdt.value()[var*(nCells+1) + i+1] += dudt.Basis.Evaluate(I, dudt .coeffs[var][i].second, BCs->LowerBound + (i+1)*(dx))/2;
-		}
-		lambda.value()[var*(nCells+1)] = BCs->g_D(grid.lowerBound, static_cast<double>(0.0),var);
-		lambda.value()[var*(nCells+1) + nCells] = BCs->g_D(grid.upperBound, static_cast<double>(0.0),var);
-	}
+	
 	
 	/*
 	Eigen::VectorXd CsGuL_global(nVar*(nCells+1));

@@ -106,7 +106,13 @@ public:
 
 	Index getNCells() const { return gridCells.size(); };
 
+	double lowerBoundary() const { return lowerBound; };
+	double upperBoundary() const { return upperBound; };
+
 	std::vector<Interval> const& getCells() const { return gridCells; };
+
+	Interval& operator[]( Eigen::Index i ) { return gridCells[ i ]; };
+	Interval const& operator[]( Eigen::Index i ) const { return gridCells[ i ]; };
 
 private:
 	std::vector<Interval> gridCells;
@@ -119,12 +125,12 @@ class LegendreBasis
 		LegendreBasis() {};
 		~LegendreBasis() {};
 
-		double Evaluate( Interval const & I, Eigen::Index i, double x )
+		static double Evaluate( Interval const & I, Eigen::Index i, double x )
 		{
 			return ::sqrt( ( 2* i + 1 )/( I.h() ) ) * std::legendre( i, 2*( x - I.x_l )/I.h() - 1.0 );
 		};
 
-		double Prime(  Interval const & I, Eigen::Index i, double x )
+		static double Prime(  Interval const & I, Eigen::Index i, double x )
 		{
 			if ( i == 0 )
 				return 0.0;
@@ -132,7 +138,7 @@ class LegendreBasis
 			return ::sqrt( ( 2* i + 1 )/( I.h() ) ) * ( 2*i/I.h() ) *( 1.0/( y*y-1.0 ) )*( y*std::legendre( i, y ) - std::legendre( i-1,y ) );
 		};
 
-		double Evaluate( Interval const & I, Eigen::VectorXd const& vCoeffs, double x )
+		static double Evaluate( Interval const & I, Eigen::VectorXd const& vCoeffs, double x )
 		{
 			double result = 0.0;
 			for ( Eigen::Index i=0; i<vCoeffs.size(); ++i )
@@ -140,14 +146,14 @@ class LegendreBasis
 			return result;
 		};
 
-		std::function<double( double )> phi( Interval const& I, Eigen::Index i )
+		static std::function<double( double )> phi( Interval const& I, Eigen::Index i )
 		{
 			return [=]( double x ){ 
 				return ::sqrt( ( 2* i + 1 )/( I.h() ) ) * std::legendre( i, 2*( x - I.x_l )/I.h() - 1.0 );
 			};
 		}
 
-		std::function<double( double )> phiPrime( Interval const& I, Eigen::Index i )
+		static std::function<double( double )> phiPrime( Interval const& I, Eigen::Index i )
 		{
 			if ( i == 0 )
 				return []( double ){ return 0.0; };
@@ -391,6 +397,8 @@ class DGApprox
 		bool ownsData = false;
 		static LegendreBasis Basis;
 		static boost::math::quadrature::gauss<double, 30> integrator;
+
+		friend class DGSoln;
 
 };
 
