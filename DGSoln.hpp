@@ -104,6 +104,33 @@ class DGSoln {
 
 	void AssignSigma( std::function< Value( Index, const Values &, const Values &, Position, Time )> sigmaFn ) {
 
+		auto const& x_vals = DGApprox::Integrator().abscissa();
+		auto const& x_wgts = DGApprox::Integrator().weights();
+		const size_t n_abscissa = x_vals.size();
+
+		for ( Index var = 0; var < nVars; ++var ) {
+			for( auto const& coeffPair : sigma[ var ].coeffs ) {
+				Interval const & coeffPair.first;
+				std::vector<double> sigmaFn( nVar );
+				coeffPair.second.setZero();
+				for ( size_t i=0; i < n_abscissa; ++i ) {
+					// Pull the loop over the gaussian integration points
+					// outside so we can evaluate u, q, sigmaFn once and store the values
+
+					std::vector<double> u_vals( nVar ), q_vals( nVar );
+
+					for ( size_t j = 0 ; j < nVar; ++j ) {
+						u_vals( j ) = u[ j ]( x_vals( i ), I );
+						q_vals( j ) = q[ j ]( x_vals( i ), I );
+					}
+
+					double sigmaValue = sigmaFn( var, u_vals, q_vals, x_vals( i ) );
+
+					for ( Index j = 0; j < k + 1; ++j ) 
+						coeffPair.second[ j ] += x_wgts( i ) * sigmaValue * DGApprox::Basis().Evaluate( I, j, x_vals( i ) );
+				}
+			}
+		}
 	}
 
 	void setZero() {

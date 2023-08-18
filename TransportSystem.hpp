@@ -27,7 +27,7 @@ class TransportSystem {
 
 		// The same for the flux and source functions -- the vectors have length nVars
 		virtual Value SigmaFn( Index i, const Values &u, const Values &q, Position x, Time t ) = 0;
-		virtual Value Sources( Index i, const Values &u, const Values &q, Position x, Time t ) = 0;
+		virtual Value Sources( Index i, const Values &u, const Values &q, const Values& sigma, Position x, Time t ) = 0;
 
 		// We need derivatives of the flux functions
 		virtual Value dSigmaFn_du( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;

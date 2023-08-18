@@ -43,10 +43,8 @@ void SystemSolver::setInitialConditions( N_Vector& Y , N_Vector& dYdt )
 
 	y.EvaluateLambda();
 
-	
+	y.AssignSigma( problem->SigmaFn );
 
-	
-	
 	/*
 	Eigen::VectorXd CsGuL_global(nVar*(nCells+1));
 	CsGuL_global.setZero();
@@ -73,20 +71,58 @@ void SystemSolver::setInitialConditions( N_Vector& Y , N_Vector& dYdt )
 		Eigen::Vector2d lamCell;
 		for ( unsigned int i=0; i < nCells; i++ )
 		{
-			Interval I = grid.gridCells[ i ];
+			Interval I = grid[ i ];
 
-			std::function< double (double) > sourceFunc = [ = ]( double x ) { return getSourceObj()->getSourceFunc(var)( x, sig, q, u); };
 			//Evaluate Source Function
 			Eigen::VectorXd S_cellwise(k+1);
 			S_cellwise.setZero();
-			for ( Eigen::Index j = 0; j < k+1; j++ )
-				S_cellwise( j ) = u.CellProduct( I, sourceFunc, u.Basis.phi( I, j ) );
+
+			auto const& x_vals = DGApprox::Integrator().abscissa();
+			auto const& x_wgts = DGApprox::Integrator().weights();
+			const size_t n_abscissa = x_vals.size();
+
+			S_cellwise.setZero();
+			for ( size_t i=0; i < n_abscissa; ++i ) {
+				std::vector<double> u_vals( nVar ), q_vals( nVar ), sigma_vals( nVar );
+				for ( size_t j = 0 ; j < nVar; ++j ) {
+					u_vals( j ) = u[ j ]( x_vals( i ), I );
+					q_vals( j ) = q[ j ]( x_vals( i ), I );
+					sigma_vals( j ) = sigma[ j ]( x_vals( i ), I );
+				}
+				double sourceVal = problem->Sources( var, u_vals, q_vals, sigma_vals, x_vals( i ), 0 );
+				for ( Eigen::Index j = 0; j < k+1; j++ )
+					S_cellwise( j ) += x_wgts( i ) * sourceVal * LegendreBasis::Phi( I, j )( x_vals( i ) );
+			}
 			
 			auto cTInv = Eigen::FullPivLU< Eigen::MatrixXd >(C_cellwise[i].transpose());
 			lamCell[0] = lambda.value()[var*(nCells+1) + i]; lamCell[1] = lambda.value()[var*(nCells+1) + i+1];
 			//dudt.coeffs[ var ][ i ].second.setZero();
-			dudt.coeffs[ var ][ i ].second = XMats[i].block(var*(k+1), var*(k+1), k+1, k+1).inverse()*(-B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*sig.coeffs[ var ][ i ].second - D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*u.coeffs[ var ][ i ].second - E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell + RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ) - S_cellwise);
+			auto const& sigma_vec = y.sigma[ var ].coeffs[ i ].second;
+			auto const& u_vec     = y.u[ var ]    .coeffs[ i ].second;
+			dydt.u[ var ].coeffs[ i ].second = 
+				XMats[i].block(var*(k+1), var*(k+1), k+1, k+1).inverse()*(
+						- B_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*sigma_vec
+						- D_cellwise[i].block(var*(k+1), var*(k+1), k+1, k+1)*u_vec
+						- E_cellwise[i].block(var*(k+1), var*2, k+1, 2)*lamCell
+						+ RF_cellwise[ i ].block( nVar*(k + 1) + var*(k+1), 0, k + 1, 1 ) - S_cellwise);
+			dydt.q[ var ].coeffs[ i ].second = 
+				<cellwise derivative matrix> * dydt.u[ var ].coeffs[ i ].second;
 		}
+		auto dSigmaFn_dt = [ problem, &dydt ]( Index i, const Values &u, const Values &q, Position x, Time t ) {
+			Values dSigma_du_vals( nVars );
+			Values dSigma_dq_vals( nVars );
+
+			problem->dSigmaFn_du( i, dSigmaFn_du_vals, u, q, x, t );
+			problem->dSigmaFn_dq( i, dSigmaFn_du_vals, u, q, x, t );
+
+			double sigmaDot = 0;
+			for ( Index j=0; j < nVars; ++j ) {
+				sigmaDot += dydt.u[ j ]( x ) * dSigmaFn_du_vals( j ) + dydt.q[ j ]( x ) * dSigma_dq_vals( j );
+			}
+
+			return sigmaDot;
+		};
+		dydt.AssignSigma( dSigmaFn_dt );
 	}
 }
 
