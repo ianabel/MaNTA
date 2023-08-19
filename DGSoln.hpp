@@ -55,6 +55,8 @@ class DGSoln {
 		{
 			if ( nVars != other.getNumVars() )
 				throw std::invalid_argument( "Cannot add two DGSoln's with different numbers of variables" );
+			if ( grid != other.grid )
+				throw std::invalid_argument( "Cannot add two DGSoln's with different grids" );
 			for ( Index i=0; i < nVars; ++i )
 			{
 				u_[ i ] += other.u_[ i ];
@@ -64,6 +66,7 @@ class DGSoln {
 
 				lambda_[ i ] += other.lambda_[ i ];
 			}
+			return *this;
 		}
 
 		void AssignU( std::function< double( Index, double ) > u_fn ) {
@@ -107,17 +110,28 @@ class DGSoln {
 						// Pull the loop over the gaussian integration points
 						// outside so we can evaluate u, q, sigmaFn once and store the values
 
-						std::vector<double> u_vals( nVars ), q_vals( nVars );
+						// Abscissa only stores positive points, so we have to double up manually
 
-						for ( size_t j = 0 ; j < nVars; ++j ) {
-							u_vals[ j ] = u_[ j ]( x_vals[ i ], I );
-							q_vals[ j ] = q_[ j ]( x_vals[ i ], I );
+						std::vector<double> u_vals1( nVars ), q_vals1( nVars );
+						std::vector<double> u_vals2( nVars ), q_vals2( nVars );
+
+						double y_plus  = I.x_l + ( 1 + x_vals[ i ] ) * I.h()/2.0;
+						double y_minus = I.x_l + ( 1 - x_vals[ i ] ) * I.h()/2.0;
+						double wgt = x_wgts[ i ]*( I.h()/2.0 );
+						for ( Index j = 0 ; j < nVars; ++j ) {
+							u_vals1[ j ] = u_[ j ]( y_plus, I );
+							q_vals1[ j ] = q_[ j ]( y_plus, I );
+							u_vals2[ j ] = u_[ j ]( y_minus, I );
+							q_vals2[ j ] = q_[ j ]( y_minus, I );
 						}
 
-						double sigmaValue = sigmaFn( var, u_vals, q_vals, x_vals[ i ], 0.0 );
+						double sigma_plus  = sigmaFn( var, u_vals1, q_vals1, y_plus,  0.0 );
+						double sigma_minus = sigmaFn( var, u_vals2, q_vals2, y_minus, 0.0 );
 
-						for ( Index j = 0; j < k + 1; ++j ) 
-							coeffPair.second[ j ] += x_wgts[ i ] * sigmaValue * LegendreBasis::Evaluate( I, j, x_vals[ i ] );
+						for ( Index j = 0; j < k + 1; ++j ) {
+							coeffPair.second[ j ] += wgt * sigma_plus  * LegendreBasis::Evaluate( I, j, y_plus  );
+							coeffPair.second[ j ] += wgt * sigma_minus * LegendreBasis::Evaluate( I, j, y_minus );
+						}
 					}
 				}
 			}

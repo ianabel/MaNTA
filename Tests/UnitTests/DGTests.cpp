@@ -240,23 +240,65 @@ BOOST_AUTO_TEST_SUITE( dg_soln_tests, * boost::unit_test::tolerance( 1e-6 ) )
 
 BOOST_AUTO_TEST_CASE( dg_soln_construction )
 {
-	Grid testGrid( 0.0, 1.0, 4 );
+	Grid testGrid( 0.0, 1.0, 5 );
+	// Use higher-order elements to allow for accurate representation of q / sigma
+	Index k = 5;
 
-	DGSoln single_var_linear( 1, testGrid, 1 );
+	DGSoln single_var( 1, testGrid, k );
 
-	BOOST_TEST( single_var_linear.getDoF() == testGrid.getNCells() * 7 + 1 );
+	BOOST_TEST( single_var.getDoF() == testGrid.getNCells() * ( 3*( k+1 ) + 1 ) + 1 );
+
+	double *mem = new double[ single_var.getDoF() ];
+
+	single_var.Map( mem );
+
+	single_var.AssignU( []( Index, double x ){ return x; } );
+
+	BOOST_TEST( single_var.u( 0 )( 0.1 ) == 0.1 );
+	BOOST_TEST( single_var.u( 0 )( 0.7 ) == 0.7 );
+
+	single_var.AssignQ( []( Index, double x ){ return ::cos( x ); } );
+
+	BOOST_TEST( single_var.q( 0 )( 0.1 ) == ::cos( 0.1 ) );
+	BOOST_TEST( single_var.q( 0 )( 0.7 ) == ::cos( 0.7 ) );
+
+	single_var.EvaluateLambda();
+
+	BOOST_TEST( single_var.lambda( 0 )( 0 ) == 0.0 );
+	BOOST_TEST( single_var.lambda( 0 )( 1 ) == 0.2 );
+	BOOST_TEST( single_var.lambda( 0 )( 2 ) == 0.4 );
+	BOOST_TEST( single_var.lambda( 0 )( 3 ) == 0.6 );
+	BOOST_TEST( single_var.lambda( 0 )( 4 ) == 0.8 );
+	BOOST_TEST( single_var.lambda( 0 )( 5 ) == 1.0 );
+
+	single_var.AssignSigma( []( Index, const Values& uV, const Values& qV, Position x, Time ) {
+		return uV[ 0 ] * ( 1.0 - qV[ 0 ]*qV[ 0 ] );
+	} );
+
+	BOOST_TEST( single_var.sigma( 0 )( 0.1 ) == 0.1 * ( ::sin( 0.1 )*::sin( 0.1 ) ) );
+	BOOST_TEST( single_var.sigma( 0 )( 0.5 ) == 0.5 * ( ::sin( 0.5 )*::sin( 0.5 ) ) );
+	BOOST_TEST( single_var.sigma( 0 )( 0.7 ) == 0.7 * ( ::sin( 0.7 )*::sin( 0.7 ) ) );
+
+	double *mem2 = new double[ single_var.getDoF() ];
+	DGSoln other_var( 1, testGrid, k, mem2 );
+
+	other_var.AssignU( []( Index, double x ){ return x; } );
+	other_var.AssignQ( []( Index, double ){ return 1.0; } );
+	other_var.EvaluateLambda();
+
+	other_var.AssignSigma( []( Index, const Values& uV, const Values& qV, Position x, Time ) {
+		return 1.0 - uV[ 0 ] * uV[ 0 ];
+	} );
+
+	single_var += other_var;
+
+	BOOST_TEST( single_var.u( 0 )( 0.1 ) == 0.2 );
+	BOOST_TEST( single_var.u( 0 )( 0.7 ) == 1.4 );
+	BOOST_TEST( single_var.q( 0 )( 0.1 ) == 1.0 + ::cos( 0.1 ) );
+	BOOST_TEST( single_var.q( 0 )( 0.7 ) == 1.0 + ::cos( 0.7 ) );
 
 }
 
-BOOST_AUTO_TEST_CASE( dg_soln_assign_sigma )
-{
-	BOOST_TEST( true );
-}
-
-BOOST_AUTO_TEST_CASE( dg_soln_sum )
-{
-	BOOST_TEST( true );
-}
 
 BOOST_AUTO_TEST_SUITE_END()
 

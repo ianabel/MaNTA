@@ -64,7 +64,7 @@ public:
 			throw std::invalid_argument( "Strictly positive number of cells required to construct grid." );
 
 		Position cellLength = (upperBound - lowerBound)/static_cast<double>(nCells);
-		for ( int i = 0; i < nCells - 1; i++)
+		for ( Index i = 0; i < nCells - 1; i++)
 			gridCells.emplace_back(lowerBound + i*cellLength, lowerBound + (i+1)*cellLength);
 		gridCells.emplace_back(lowerBound + (nCells-1)*cellLength, upperBound);
 		
@@ -78,7 +78,7 @@ public:
 		if(!highGridBoundary)
 		{
 			Position cellLength = abs(uBound-lBound)/static_cast<double>(nCells);
-			for ( int i = 0; i < nCells - 1; i++)
+			for ( Index i = 0; i < nCells - 1; i++)
 				gridCells.emplace_back(lBound + i*cellLength, lBound + (i+1)*cellLength);
 			gridCells.emplace_back(lBound + (nCells-1)*cellLength, uBound);
 
@@ -94,7 +94,7 @@ public:
 				gridCells.emplace_back(lBound + i*sCellLength, lBound + (i+1)*sCellLength);
 			for ( unsigned int i = 0; i < 2; i++)
 				gridCells.emplace_back(lBound + (i+2)*mCellLength, lBound + (i+3)*mCellLength);
-			for ( int i = 0; i < nCells-12; i++)
+			for ( Index i = 0; i < nCells-12; i++)
 				gridCells.emplace_back(lBound + (i+2)*lCellLength, lBound + (i+3)*lCellLength);
 			for ( unsigned int i = 0; i < 2; i++)
 				gridCells.emplace_back(lBound + (i+2*(nCells-8)-4)*mCellLength, lBound + (i+2*(nCells-8)-3)*mCellLength);
@@ -456,13 +456,5 @@ class DGApprox
 
 };
 
-/*
-class BoundaryConditions {
-public:
-	double LowerBound;
-	double UpperBound;
-	bool isLBoundDirichlet;
-	bool isUBoundDirichlet;
-	std::function<double( double, double, int )> g_D,g_N;
-};
-*/
+DGApprox::IntegratorType DGApprox::integrator;
+
