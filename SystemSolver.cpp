@@ -21,18 +21,6 @@ SystemSolver::SystemSolver(Grid const& Grid, unsigned int polyNum, double Dt, Tr
 void SystemSolver::setInitialConditions( N_Vector& Y , N_Vector& dYdt )
 {
 
-	/*
-	if(!lambda.has_value())
-	{
-		double memBlock[nVar*(nCells+1)];
-		lambda = VectorWrapper(memBlock, nVar*(nCells+1));
-		dlamdt = VectorWrapper(memBlock, nVar*(nCells+1));
-	}
-
-	mapDGtoSundials( sig, q, u, lambda.value(), N_VGetArrayPointer( Y ));
-	mapDGtoSundials( dsigdt, dqdt, dudt, dlamdt.value(), N_VGetArrayPointer( dYdt ));
-	*/
-
 	y.   Map( N_VGetArrayPointer( Y ) );
 	dydt.Map( N_VGetArrayPointer( dYdt ) );
 
@@ -43,27 +31,9 @@ void SystemSolver::setInitialConditions( N_Vector& Y , N_Vector& dYdt )
 
 	y.EvaluateLambda();
 
-	y.AssignSigma( problem->SigmaFn );
+	ApplyBCs(y); // If dirichlet, overwrite with those boundary conditions
 
-	/*
-	Eigen::VectorXd CsGuL_global(nVar*(nCells+1));
-	CsGuL_global.setZero();
-	for ( unsigned int i=0; i < nCells; i++ )
-	{
-		Interval I = grid.gridCells[ i ];
-		Eigen::VectorXd LVarCell(2);
-		Eigen::VectorXd CsGuLVarCell(2);
-		CsGuLVarCell.setZero();
-		LVarCell.setZero();
-		for(int var = 0; var < nVar; var++)
-		{
-			LVarCell = L_global.block<2,1>(var*(nCells+1) + i,0);
-			CsGuLVarCell = LVarCell - C_cellwise[i].block(var*2,var*(k+1),2,k+1)*sig.coeffs[ var ][ i ].second - G_cellwise[i].block(var*2,var*(k+1),2,k+1)*u.coeffs[ var ][ i ].second;
-			CsGuL_global.block(var*(nCells + 1) + i, 0, 2, 1) += CsGuLVarCell;
-		}
-	}
-	lambda.value() = H_global.solve(CsGuL_global);
-	*/
+	y.AssignSigma( problem->SigmaFn );
 
 	for(int var = 0; var < nVar; var++)
 	{
@@ -123,6 +93,20 @@ void SystemSolver::setInitialConditions( N_Vector& Y , N_Vector& dYdt )
 			return sigmaDot;
 		};
 		dydt.AssignSigma( dSigmaFn_dt );
+	}
+}
+
+void ApplyBCs( DGSoln &Y )
+{
+	for ( Index i=0; i < nVars; ++i )
+	{
+		if ( problem->isLowerBoundaryDirichlet( var ) ) {
+			Y.lambda( i )( 0 ) = problem->LowerBoundary( var, 0 );
+		}
+
+		if ( problem->isUpperBoundaryDirichlet( var ) ) {
+			Y.lambda( i )( grid.getNCells() ) = problem->UpperBoundary( var, 0 );
+		}
 	}
 }
 

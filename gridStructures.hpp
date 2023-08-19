@@ -34,12 +34,15 @@ public:
 		return I.x_l < J.x_l;
 	}
 
+	friend bool operator==( Interval const& I, Interval const& J )
+	{
+		return ( I.x_l == J.x_l ) && ( I.x_u == J.x_u );
+	}
+
 	double x_l,x_u;
 	bool contains( double x ) const { return ( x_l <= x ) && ( x <= x_u );};
 	double h() const { return ( x_u - x_l );};
 };
-
-typedef std::vector< std::pair< Interval, VectorWrapper > > Coeff_t;
 
 class Grid
 {
@@ -51,19 +54,19 @@ public:
 		: upperBound(uBound), lowerBound(lBound)
 	{
 		// Users eh?
-		if ( uBound < lBound ) 
-			std::swap( uBound, lBound );
+		if ( upperBound < lowerBound ) 
+			std::swap( upperBound, lowerBound );
 
-		if ( uBound - lBound < 1e-14 )
+		if ( upperBound - lowerBound < 1e-14 )
 			throw std::invalid_argument( "uBound and lBound too close for representation by double" );
 
 		if ( nCells == 0 )
 			throw std::invalid_argument( "Strictly positive number of cells required to construct grid." );
 
-		Position cellLength = (uBound - lBound)/static_cast<double>(nCells);
+		Position cellLength = (upperBound - lowerBound)/static_cast<double>(nCells);
 		for ( int i = 0; i < nCells - 1; i++)
-			gridCells.emplace_back(lBound + i*cellLength, lBound + (i+1)*cellLength);
-		gridCells.emplace_back(lBound + (nCells-1)*cellLength, uBound);
+			gridCells.emplace_back(lowerBound + i*cellLength, lowerBound + (i+1)*cellLength);
+		gridCells.emplace_back(lowerBound + (nCells-1)*cellLength, upperBound);
 		
 		if ( gridCells.size() != nCells )
 			throw std::runtime_error( "Unable to construct grid." );
@@ -113,10 +116,21 @@ public:
 	Interval& operator[]( Index i ) { return gridCells[ i ]; };
 	Interval const& operator[]( Index i ) const { return gridCells[ i ]; };
 
+	friend bool operator==( const Grid & a, const Grid & b )
+	{
+		return ( ( a.upperBound == b.upperBound ) && ( a.lowerBound == b.lowerBound ) && ( a.gridCells == b.gridCells ) );
+	};
+	friend bool operator!=( const Grid& a, const Grid & b ) 
+	{
+		return !( a == b );
+	};
 private:
 	std::vector<Interval> gridCells;
 	double upperBound, lowerBound;
+
 };
+
+
 
 class LegendreBasis
 {
@@ -133,7 +147,14 @@ class LegendreBasis
 		{
 			if ( i == 0 )
 				return 0.0;
+
 			double y = 2*( x - I.x_l )/I.h() - 1.0;
+
+			if ( y == 1.0 )
+				return i*( i + 1.0 )/2.0;
+			if ( y == -1.0 )
+				return ( i % 2 == 0 ? i*( i + 1.0 )/2.0 : - i*( i + 1.0 )/2.0 );
+
 			return ::sqrt( ( 2* i + 1 )/( I.h() ) ) * ( 2*i/I.h() ) *( 1.0/( y*y-1.0 ) )*( y*std::legendre( i, y ) - std::legendre( i-1,y ) );
 		};
 
@@ -159,6 +180,12 @@ class LegendreBasis
 
 			return [=]( double x ){
 				double y = 2*( x - I.x_l )/I.h() - 1.0;
+
+				if ( y == 1.0 )
+					return i*( i + 1.0 )/2.0;
+				if ( y == -1.0 )
+					return ( i % 2 == 0 ? i*( i + 1.0 )/2.0 : - i*( i + 1.0 )/2.0 );
+
 				return ::sqrt( ( 2* i + 1 )/( I.h() ) ) * ( 2*i/I.h() ) *( 1.0/( y*y-1.0 ) )*( y*std::legendre( i, y ) - std::legendre( i-1,y ) );
 			};
 		}
@@ -171,12 +198,13 @@ class DGApprox
 		using Position = double;
 
 		DGApprox() = delete;
-		DGApprox( const DGApprox & ) = delete;
+		DGApprox( const DGApprox &other ) = default; // Allow copy-construction (the copy will reference the same data as the original, unless the original owned its data in which case a deep copy is done)
+		DGApprox( DGApprox && ) = default;
 
 		~DGApprox() = default;
 
 		DGApprox( Grid const& _grid, unsigned int Order )
-			: grid( _grid ),k( Order ), coeffs()
+			: grid( _grid ),k( Order ), coeffs(), ownsData( false )
 		{
 			coeffs.reserve( grid.getNCells() );
 		};
@@ -217,22 +245,39 @@ class DGApprox
 			}
 		}
 
+		void Map( double* block_data, size_t stride )
+		{
+			Grid::Index nCells = grid.getNCells();
+			coeffs.clear();
+			coeffs.reserve( nCells );
+			if ( stride < k + 1 )
+				throw std::invalid_argument( "stride too short, memory corrption guaranteed." );
+			auto const& cells = grid.getCells();
+			for ( Grid::Index i = 0; i < nCells; ++i )
+			{
+				VectorWrapper v( block_data + i*stride, k + 1 );
+				coeffs.emplace_back( cells[ i ], v );
+			}
+		}
+
 		DGApprox& operator=( std::function<double( double )> const & f )
 		{
-			Eigen::VectorXd v( k + 1 );
+			// check for data ownership
 			for ( auto pair : coeffs )
 			{
 				Interval const& I = pair.first;
-				v.setZero();
+				pair.second.setZero();
+				// assert( pair.second.size == k + 1);
 				// Interpolate onto k legendre polynomials
 				for ( Index i=0; i<= k; i++ )
 				{
-					v( i ) = CellProduct( I, f, Basis.phi( I, i ) );
+					pair.second( i ) = CellProduct( I, f, Basis.phi( I, i ) );
 				}
-				pair.second = v;
 			}
 			return *this;
 		}
+
+		size_t getDoF() const { return ( k + 1 ) * grid.getNCells(); };
 
 		/*
 		void sum( DGApprox& A, DGApprox& B)
@@ -246,14 +291,14 @@ class DGApprox
 
 		DGApprox & operator+=( DGApprox const& other )
 		{
-			if ( grid != other.grid ) 
+			if ( grid != other.grid )
 				throw std::invalid_argument( "Cannot add two DGApprox's on different grids" );
 			for ( unsigned int i=0; i < coeffs.size(); ++i )
 			{
 				// std::assert( coeffs[ i ].first == other.coeffs[ i ].first );
 				coeffs[ i ].second += other.coeffs[ i ].second;
 			}
-
+			return *this;
 		}
 
 		double operator()( Position x ) {
@@ -266,7 +311,14 @@ class DGApprox
 		};
 
 		double operator()( Position x, Interval const& I ) {
-			return Basis.Evaluate( I.first, I.second, x );
+			if ( !I.contains( x ) ) 
+				throw std::invalid_argument( "Evaluate(x, I) requires x to be in the interval I" );
+			auto it = std::find_if ( coeffs.begin(), coeffs.end(), [I]( std::pair<Interval,VectorWrapper> p ) { return ( p.first == I ); } );
+			if ( it == coeffs.end() )
+				throw std::logic_error( "Interval I not part of the grid" );
+			else
+				return Basis.Evaluate( it->first, it->second, x );
+
 		};
 
 		static double CellProduct( Interval const& I, std::function< double( double )> f, std::function< double( double )> g )
@@ -280,12 +332,12 @@ class DGApprox
 			return f( I.x_l )*g( I.x_l ) + f( I.x_u )*g( I.x_u );
 		};
 
-		void MassMatrix( Interval const& I, Eigen::MatrixXd &u ) {
+		static void MassMatrix( Interval const& I, Eigen::MatrixXd &u ) {
 			// The unweighted mass matrix is the identity.
 			u.setIdentity();
 		};
 
-		void MassMatrix( Interval const& I, Eigen::MatrixXd &u, std::function< double( double )> const& w ) {
+		static void MassMatrix( Interval const& I, Eigen::MatrixXd &u, std::function< double( double )> const& w ) {
 			for ( Index i = 0 ; i < u.rows(); i++ )
 				for ( Index j = 0 ; j < u.cols(); j++ )
 				{
@@ -294,7 +346,7 @@ class DGApprox
 				}
 		};
 
-		void MassMatrix( Interval const& I, Eigen::MatrixXd &u, std::function< double( double, int )> const& w, int var ) {
+		static void MassMatrix( Interval const& I, Eigen::MatrixXd &u, std::function< double( double, int )> const& w, int var ) {
 			for ( Index i = 0 ; i < u.rows(); i++ )
 				for ( Index j = 0 ; j < u.cols(); j++ )
 				{
@@ -320,7 +372,7 @@ class DGApprox
 			return u;
 		}
 
-		void DerivativeMatrix( Interval const& I, Eigen::MatrixXd &D ) {
+		static void DerivativeMatrix( Interval const& I, Eigen::MatrixXd &D ) {
 			for ( Index i = 0 ; i < D.rows(); i++ )
 				for ( Index j = 0 ; j < D.cols(); j++ )
 				{
@@ -329,7 +381,7 @@ class DGApprox
 				}
 		}
 
-		void DerivativeMatrix( Interval const& I, Eigen::MatrixXd &D, std::function<double ( double )> const& w ) {
+		static void DerivativeMatrix( Interval const& I, Eigen::MatrixXd &D, std::function<double ( double )> const& w ) {
 			for ( Index i = 0 ; i < D.rows(); i++ )
 				for ( Index j = 0 ; j < D.cols(); j++ )
 				{	
@@ -384,18 +436,21 @@ class DGApprox
 			return coeff;
 		}
 
-		using Integrator = boost::math::quadrature::gauss<double, 30>;
+		using IntegratorType = boost::math::quadrature::gauss<double, 30>;
+		using Coeff_t = std::vector< std::pair< Interval, VectorWrapper > >;
 
-		static const Integrator& Integrator() { return integrator; };
-		static const LegendreBasis& Basis() { return Basis;};
+		static const IntegratorType& Integrator() { return integrator; };
+
+		unsigned int getOrder() { return k;};
+		Coeff_t const& getCoeffs() { return coeffs; };
 	private:
 		const Grid& grid;
 		unsigned int k;
-		std::vector< std::pair< Interval, VectorWrapper > > coeffs;
+		Coeff_t coeffs;
 		std::vector<double> ValueData;
 		bool ownsData = false;
 		static LegendreBasis Basis;
-		static boost::math::quadrature::gauss<double, 30> integrator;
+		static IntegratorType integrator;
 
 		friend class DGSoln;
 
