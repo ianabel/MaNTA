@@ -1,12 +1,17 @@
 
-all: DGTests.suite
+
+all: UnitTests
+.PHONY: all clean
 
 DEBUG = on
 
 include Makefile.config
 
-
-%.suite: %.cpp ../../ Makefile
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
+TEST_SOURCES = DGTests.cpp 
 
 
+UnitTests: main.cpp $(TEST_SOURCES) Makefile
+	$(CXX) $(CXXFLAGS) -o $@ main.cpp $(TEST_SOURCES) $(LDFLAGS)
+
+clean:
+	rm -f $(TEST_OBJECTS) UnitTests

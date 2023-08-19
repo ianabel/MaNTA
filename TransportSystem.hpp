@@ -12,7 +12,6 @@
  */
 
 class TransportSystem {
-	using 
 	public:
 		virtual ~TransportSystem() = default;
 

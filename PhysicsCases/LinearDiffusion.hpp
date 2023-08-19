@@ -14,22 +14,25 @@ class LinearDiffusion : public TransportSystem {
 		explicit LinearDiffusion( toml::value const& config );
 
 		// You must provide implementations of both, these are your boundary condition functions
-		Value  Dirichlet_g( Index, Position, Time );
-		Value vonNeumann_g( Index, Position, Time ); 
+		Value LowerBoundary( Index, Position, Time ) override;
+		Value UpperBoundary( Index, Position, Time ) override;
+
+		bool isLowerBoundaryDirichlet( Index ) override;
+		bool isUpperBoundaryDirichlet( Index ) override;
 
 		// The guts of the physics problem (these are non-const as they
 		// are allowed to alter internal state such as to store computations
 		// for future calls)
-		Value SigmaFn( Index, const ValueVector &, const ValueVector &, Position, Time );
-		Value Sources( Index, const ValueVector &, const ValueVector &, Position, Time );
+		Value SigmaFn( Index, const ValueVector &, const ValueVector &, Position, Time ) override;
+		Value Sources( Index, const ValueVector &, const ValueVector &, Position, Time ) override;
 
 		// Finally one has to provide initial conditions for u & q
-		Value      InitialValue( Index, Position x );
-		Value InitialDerivative( Index, Position x );
+		Value      InitialValue( Index, Position x ) override;
+		Value InitialDerivative( Index, Position x ) override;
 
 private:
 	// Put class-specific data here
-	double kappa, InitialWidth, InitialHeight;
+	double kappa, InitialWidth, InitialHeight, Centre;
 
 	// Without this (and the implementation line in LinearDiffusion.cpp)
 	// ManTA won't know how to relate the string 'LinearDiffusion' to the class.
