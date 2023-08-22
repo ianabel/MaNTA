@@ -13,7 +13,6 @@
 #include "SunLinSolWrapper.hpp"
 #include "SunMatrixWrapper.hpp"
 #include "ErrorChecker.hpp"
-#include "Diagnostic.hpp"
 
 int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data);
 int EmptyJac(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3);
@@ -199,8 +198,10 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 
 	IDASetMaxNonlinIters(IDA_mem, 10);
 
+	/*
 	//Attach Diagnostics
 	Diagnostic diagnostic(system, system->plasma);
+	*/
 	
 	//------------------------------Solve------------------------------
 	std::ofstream out0( inputFile.substr(0, inputFile.rfind(".")) + ".plot" );
