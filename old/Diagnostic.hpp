@@ -1,6 +1,5 @@
 #pragma once
 #include <memory>
-#include "Plasma_cases/Plasma.hpp"
 #include "SystemSolver.hpp"
 
 /*

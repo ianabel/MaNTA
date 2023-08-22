@@ -51,9 +51,28 @@ class DGSoln {
 		VectorWrapper &      lambda( Index i )       { return lambda_[ i ]; };
 		VectorWrapper const& lambda( Index i ) const { return lambda_[ i ]; };
 
+		// Deep copy of the data in other to the memory we are 
+		// wrapping
+		void copy( DGSoln const& other )
+		{
+			if ( nVars != other.nVars )
+				throw std::invalid_argument( "Cannot add two DGSoln's with different numbers of variables" );
+			if ( grid != other.grid )
+				throw std::invalid_argument( "Cannot add two DGSoln's with different grids" );
+			for ( Index i=0; i < nVars; ++i )
+			{
+				u_[ i ].copy( other.u_[ i ] );
+				q_[ i ].copy( other.q_[ i ] );
+
+				sigma_[ i ].copy( other.sigma_[ i ] );
+
+				lambda_[ i ] = other.lambda_[ i ];
+			}
+		}
+
 		DGSoln& operator+=( DGSoln const& other )
 		{
-			if ( nVars != other.getNumVars() )
+			if ( nVars != other.nVars )
 				throw std::invalid_argument( "Cannot add two DGSoln's with different numbers of variables" );
 			if ( grid != other.grid )
 				throw std::invalid_argument( "Cannot add two DGSoln's with different grids" );
@@ -137,7 +156,7 @@ class DGSoln {
 			}
 		}
 
-		void setZero() {
+		void zeroCoeffs() {
 			for ( Index i = 0; i < nVars; ++i ) {
 				u_[ i ].zeroCoeffs();
 				q_[ i ].zeroCoeffs();

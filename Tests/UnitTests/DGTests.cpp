@@ -85,15 +85,7 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction )
 {
 	Grid testGrid( 0.0, 1.0, 4 );
 	double a = 2.0;
-	DGApprox constructedLinear( testGrid, 1, [=]( double x ){ return a*x; } );
-	BOOST_TEST( constructedLinear.getCoeffs().size() == testGrid.getNCells() );
-	BOOST_TEST( constructedLinear.getDoF() == testGrid.getNCells() * 2 );
-	BOOST_TEST( constructedLinear( 0.1 ) == a*0.1 );
-	BOOST_TEST( constructedLinear( 0.7 ) == a*0.7 );
-	BOOST_TEST( constructedLinear( 0.1, testGrid[ 0 ] ) == a * 0.1 );
-	BOOST_TEST( constructedLinear( 0.7, testGrid[ 2 ] ) == a * 0.7 );
-
-	DGApprox linear( testGrid, 1 );
+		DGApprox linear( testGrid, 1 );
 
 	auto const& cref = linear.getCoeffs();
 	BOOST_TEST( cref.size() == 0 );
@@ -119,6 +111,20 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction )
 	BOOST_TEST( linear( 0.1 ) == a*0.1 );
 	BOOST_TEST( linear( 0.7 ) == a*0.7 );
 
+	double *extraMem = new double[ linear.getDoF() ];
+	DGApprox constructedLinear( testGrid, 1, extraMem, 2 );
+
+	// Check copy
+	BOOST_CHECK_NO_THROW( constructedLinear.copy( linear ) );
+	BOOST_TEST( constructedLinear.getCoeffs().size() == testGrid.getNCells() );
+	BOOST_TEST( constructedLinear.getDoF() == testGrid.getNCells() * 2 );
+	BOOST_TEST( constructedLinear( 0.1 ) == a*0.1 );
+	BOOST_TEST( constructedLinear( 0.7 ) == a*0.7 );
+	BOOST_TEST( constructedLinear( 0.1, testGrid[ 0 ] ) == a * 0.1 );
+	BOOST_TEST( constructedLinear( 0.7, testGrid[ 2 ] ) == a * 0.7 );
+
+
+	// Another window on mem
 	DGApprox constructedData( testGrid, 1, mem, 2 );
 
 	BOOST_TEST( constructedData( 0.1 ) == a*0.1 );
@@ -128,7 +134,7 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction )
 	// += operator testing.
 	constructedData = [ = ]( double x ){ return ( a/2.0 )*x; };
 
-	// check we overwrote teh data we thought we were using
+	// check we overwrote the data we thought we were using
 	BOOST_TEST( v( 0 ) == ( a/4.0 ) * ( 0.25*0.25 ) / ::sqrt( 0.25 ) );
 	BOOST_TEST( v( 2 ) == ( a/4.0 ) * ( 0.5*0.5 - 0.25*0.25 ) / ::sqrt( 0.25 ) );
 	BOOST_TEST( v( 4 ) == ( a/4.0 ) * ( 0.75*0.75 - 0.5*0.5 ) / ::sqrt( 0.25 ) );
@@ -295,6 +301,16 @@ BOOST_AUTO_TEST_CASE( dg_soln_construction )
 	BOOST_TEST( single_var.u( 0 )( 0.7 ) == 1.4 );
 	BOOST_TEST( single_var.q( 0 )( 0.1 ) == 1.0 + ::cos( 0.1 ) );
 	BOOST_TEST( single_var.q( 0 )( 0.7 ) == 1.0 + ::cos( 0.7 ) );
+
+	BOOST_TEST( other_var.u( 0 )( 0.42 ) == 0.42 );
+	BOOST_TEST( other_var.q( 0 )( 0.42 ) == 1.0 );
+
+	BOOST_CHECK_NO_THROW( other_var.copy( single_var ) );
+
+	BOOST_TEST( other_var.u( 0 )( 0.1 ) == 0.2 );
+	BOOST_TEST( other_var.u( 0 )( 0.7 ) == 1.4 );
+	BOOST_TEST( other_var.q( 0 )( 0.1 ) == 1.0 + ::cos( 0.1 ) );
+	BOOST_TEST( other_var.q( 0 )( 0.7 ) == 1.0 + ::cos( 0.7 ) );
 
 }
 

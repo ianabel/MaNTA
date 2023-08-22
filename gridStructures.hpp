@@ -192,7 +192,7 @@ class LegendreBasis
 
 };
 
-class DGApprox 
+class DGApprox
 {
 	public:
 		using Position = double;
@@ -204,11 +204,12 @@ class DGApprox
 		~DGApprox() = default;
 
 		DGApprox( Grid const& _grid, unsigned int Order )
-			: grid( _grid ),k( Order ), coeffs(), ownsData( false )
+			: grid( _grid ),k( Order ), coeffs()
 		{
 			coeffs.reserve( grid.getNCells() );
 		};
 
+		/*
 		DGApprox( Grid const& _grid, unsigned int Order, std::function<double( double )> const& F ) : grid( _grid )
 		{
 			k = Order;
@@ -230,6 +231,7 @@ class DGApprox
 				coeffs.emplace_back( I, v );
 			}
 		};
+		*/
 
 		DGApprox( Grid const& _grid, unsigned int Order, double* block_data, size_t stride ) : grid( _grid )
 		{
@@ -258,6 +260,18 @@ class DGApprox
 				VectorWrapper v( block_data + i*stride, k + 1 );
 				coeffs.emplace_back( cells[ i ], v );
 			}
+		}
+
+		// Do a copy from other's memory into ours
+		void copy( DGApprox const& other )
+		{
+			if ( grid != other.grid )
+				throw std::invalid_argument( "To use copy, construct from the same grid." );
+			if ( k != other.k )
+				throw std::invalid_argument( "Cannot change order of polynomial approximation via copy()." );
+			
+			coeffs = other.coeffs;
+
 		}
 
 		DGApprox& operator=( std::function<double( double )> const & f )
@@ -301,7 +315,7 @@ class DGApprox
 			return *this;
 		}
 
-		double operator()( Position x ) {
+		double operator()( Position x ) const {
 			for ( auto const & I : coeffs )
 			{
 				if (  I.first.contains( x ) )
@@ -310,7 +324,7 @@ class DGApprox
 			throw std::logic_error( "Evaluation outside of grid" );
 		};
 
-		double operator()( Position x, Interval const& I ) {
+		double operator()( Position x, Interval const& I ) const {
 			if ( !I.contains( x ) ) 
 				throw std::invalid_argument( "Evaluate(x, I) requires x to be in the interval I" );
 			auto it = std::find_if ( coeffs.begin(), coeffs.end(), [I]( std::pair<Interval,VectorWrapper> p ) { return ( p.first == I ); } );
@@ -443,12 +457,12 @@ class DGApprox
 
 		unsigned int getOrder() { return k;};
 		Coeff_t const& getCoeffs() { return coeffs; };
+		std::pair< Interval, VectorWrapper > & getCoeff( Index i ) { return coeffs[ i ]; };
+		std::pair< Interval, VectorWrapper > const& getCoeff( Index i ) const { return coeffs[ i ]; };
 	private:
 		const Grid& grid;
 		unsigned int k;
 		Coeff_t coeffs;
-		std::vector<double> ValueData;
-		bool ownsData = false;
 		static LegendreBasis Basis;
 		static IntegratorType integrator;
 

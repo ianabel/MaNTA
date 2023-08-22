@@ -28,14 +28,17 @@ class TransportSystem {
 		virtual Value SigmaFn( Index i, const Values &u, const Values &q, Position x, Time t ) = 0;
 		virtual Value Sources( Index i, const Values &u, const Values &q, const Values& sigma, Position x, Time t ) = 0;
 
+		// This determines the a_i functions. Only one with a default option, but can be overriden
+		virtual Value aFn( Index i, Position x ) { return 1.0; };
+
 		// We need derivatives of the flux functions
-		virtual Value dSigmaFn_du( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
-		virtual Value dSigmaFn_dq( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
+		virtual void dSigmaFn_du( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
+		virtual void dSigmaFn_dq( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
 
 		// and for the sources
-		virtual Value dSources_du( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
-		virtual Value dSources_dq( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
-		virtual Value dSources_dsigma( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
+		virtual void dSources_du( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
+		virtual void dSources_dq( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
+		virtual void dSources_dsigma( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
 
 		// and initial conditions for u & q
 		virtual Value      InitialValue( Index i, Position x ) const = 0;
