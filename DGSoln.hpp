@@ -3,6 +3,7 @@
 
 #include "Types.hpp"
 #include <functional>
+#include <cassert>
 
 class DGSoln {
 	public:
@@ -157,6 +158,10 @@ class DGSoln {
 		}
 
 		void zeroCoeffs() {
+			Index nInitialised = u_.size();
+			assert( nInitialised == 0 || nInitialised == nVars ); 
+			if ( nInitialised == 0 )
+				return;
 			for ( Index i = 0; i < nVars; ++i ) {
 				u_[ i ].zeroCoeffs();
 				q_[ i ].zeroCoeffs();

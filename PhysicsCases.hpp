@@ -6,6 +6,7 @@
 #include <string>
 #include <utility>
 
+#include <toml.hpp>
 #include "TransportSystem.hpp"
 
 template<typename T> TransportSystem* createTransportSystem( toml::value const& config ) { return new T( config ); }

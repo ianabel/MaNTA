@@ -7,13 +7,13 @@ DEBUG = on
 
 include Makefile.config
 
-TEST_SOURCES = DGTests.cpp
+TEST_SOURCES = DGTests.cpp SystemSolverTests.cpp
 
-CXXFLAGS += -I../../
+CXXFLAGS += -I../../ -DTEST
 
-REQUIRED_OBJECTS = 
+REQUIRED_OBJECTS = ../../DGStatic.o ../../SystemSolver.o ../../Matrices.o
 
-UnitTests: main.cpp $(TEST_SOURCES) Makefile
+UnitTests: main.cpp $(TEST_SOURCES) $(REQUIRED_OBJECTS) Makefile
 	$(CXX) $(CXXFLAGS) -o $@ main.cpp $(TEST_SOURCES) $(REQUIRED_OBJECTS) $(LDFLAGS)
 
 clean:

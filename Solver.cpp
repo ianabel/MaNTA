@@ -8,6 +8,7 @@
 #include <fstream>
 #include <memory>
 
+#include "Types.hpp"
 #include "SystemSolver.hpp"
 #include "gridStructures.hpp"
 #include "SunLinSolWrapper.hpp"
@@ -17,7 +18,7 @@
 int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data);
 int EmptyJac(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3);
 
-void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFile )
+void SystemSolver::runSolver( std::string inputFile )
 {
 	//---------------------------Variable assiments-------------------------------
 	SUNLinearSolver LS = NULL;				//linear solver memory structure
@@ -32,12 +33,12 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 	N_Vector absTolVec = NULL;		//vector for storing absolute tolerances
 	int nOut = 301;
 	double tFinal;
-	realtype rtol, atol;
-	int nCells = system->nCells, nVar = system->nVar, k = system->k;
+	realtype rtol;
 	bool printToFile = true;
 	realtype t0 = 0.0, t1, tout, tret;
 
 
+	// TODO: Move all config parsing into a separate function and just make some of these member functions
 	//--------------------------------------Read File---------------------------------------
 	const auto configFile = toml::parse( inputFile );
 	const auto config = toml::find<toml::value>( configFile, "configuration" );
@@ -74,11 +75,14 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 	else if( relTol.is_floating() ) rtol = static_cast<double>(relTol.as_floating());
 	else throw std::invalid_argument( "relative_tolerance specified incorrrectly" );
 
+	/*
+	realtype atol;
 	auto absTol = toml::find(config, "Absolute_tolerance");
 	if( config.count("Absolute_tolerance") != 1 ) atol = 1.0e-5;
 	else if( absTol.is_integer() ) atol = static_cast<double>(absTol.as_floating());
 	else if( absTol.is_floating() ) atol = static_cast<double>(absTol.as_floating());
 	else throw std::invalid_argument( "Absolute_tolerance specified incorrrectly" );
+	*/
 	//-------------------------------------System Design----------------------------------------------
 	SUNContext ctx;
     retval = SUNContext_Create(nullptr, &ctx);
@@ -87,23 +91,16 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 	if(ErrorChecker::check_retval((void *)IDA_mem, "IDACreate", 0)) 
 		throw std::runtime_error("Sundials Initialization Error");
 
-	UserData *data = new UserData();
-	if(ErrorChecker::check_retval((void *)data, "malloc", 2))
-		throw std::runtime_error("Sundials Initialization Error");
-
-
-	data = (UserData*) malloc(sizeof *data);
-	data->system = system;
-	retval = IDASetUserData(IDA_mem, data);
+	retval = IDASetUserData(IDA_mem, static_cast<void*>( this ) );
 	if(ErrorChecker::check_retval(&retval, "IDASetUserData", 1))
 		throw std::runtime_error("Sundials Initialization Error");
 
 	//-----------------------------Initial conditions-------------------------------
 
-	system->initialiseMatrices();
+	initialiseMatrices();
 
 	//Set original vector lengths
-	Y = N_VNew_Serial(nVar*3*nCells*(k+1) + nVar*(nCells+1), ctx);
+	Y = N_VNew_Serial(nVars*3*nCells*(k+1) + nVars*(nCells+1), ctx);
 	if(ErrorChecker::check_retval((void *)Y, "N_VNew_Serial", 0))
 		throw std::runtime_error("Sundials Initialization Error");
 	
@@ -116,14 +113,14 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 	dydtVec.setZero();
 
 	//Initialise Y and dYdt
-	system->setInitialConditions(Y, dYdt);
+	setInitialConditions(Y, dYdt);
 	
 	// ----------------- Allocate and initialize all other sun-vectors. -------------
 
 	res = N_VClone(Y);
 	if(ErrorChecker::check_retval((void *)res, "N_VClone", 0))
 		std::runtime_error("Sundials initialization Error, run in debug to find");
-	realtype tRes;
+	// realtype tRes;
 
 	//No constraints are imposed as negative coefficients may allow for a better fit across a cell
 	constraints = N_VClone(Y);
@@ -134,13 +131,13 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 	id = N_VClone(Y);
 	if(ErrorChecker::check_retval((void *)id, "N_VClone", 0))
 		std::runtime_error("Sundials initialization Error, run in debug to find");
-	VectorWrapper idVals( N_VGetArrayPointer( id ), nVar*3*nCells*(k+1) + nVar*(nCells+1) );
+	VectorWrapper idVals( N_VGetArrayPointer( id ), nVars*3*nCells*(k+1) + nVars*(nCells+1) );
 	idVals.setZero();
-	for(int i=0; i < nCells; i++)
+	for(Index i=0; i < nCells; i++)
 	{
-		for(int j=0; j< nVar*(k+1); j++)
+		for(Index j=0; j< nVars*(k+1); j++)
 		{
-			idVals[ i*3*nVar*(k+1) + 2*nVar*(k+1) + j ] = 1.0;//U vals
+			idVals[ i*3*nVars*(k+1) + 2*nVars*(k+1) + j ] = 1.0;//U vals
 		}
 	}
 	retval = IDASetId(IDA_mem, id);
@@ -159,28 +156,19 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 	VectorWrapper absTolVals( N_VGetArrayPointer( absTolVec ), N_VGetLength( absTolVec ) );
 	absTolVals.setZero();
 
-	DGApprox tolSig(system->grid, k), tolQ(system->grid, k), tolU(system->grid, k);
-	double memBlock[nVar*(nCells+1)];
-	Eigen::Map<Eigen::VectorXd> tolLambda(memBlock, nVar*(nCells+1));
-	system->mapDGtoSundials(tolSig, tolQ, tolU, tolLambda, N_VGetArrayPointer( absTolVec ));
-	double dx = (system->grid.upperBound - system->grid.lowerBound)/nCells;
+	DGSoln tolerances( nVars, grid, k );
+	tolerances.Map( N_VGetArrayPointer( absTolVec ) );
+	double dx = (grid.upperBoundary() - grid.lowerBoundary())/nCells;
 
-	for(int i = 0; i<nCells ; i++)
+	// TODO: re-add user tolerance interface
+	for( Index i = 0; i < nCells; ++i )
 	{
-		tolU.coeffs[0][i].second.setConstant(1.0);
-		if(nVar > 1) tolU.coeffs[1][i].second.setConstant(1.0);
-		if(nVar > 2) tolU.coeffs[2][i].second.setConstant(1000.0);
-		tolQ.coeffs[0][i].second.setConstant(1.0/dx);
-		if(nVar > 1) tolQ.coeffs[1][i].second.setConstant(1.0/dx);
-		if(nVar > 2) tolQ.coeffs[2][i].second.setConstant(1000.0/dx);
-		tolSig.coeffs[0][i].second.setConstant(1.0*dx/delta_t);
-		if(nVar > 1) tolSig.coeffs[1][i].second.setConstant(1.0*dx/delta_t);
-		if(nVar > 2) tolSig.coeffs[2][i].second.setConstant(1000.0*dx/delta_t);
-	}
-	for(int i = 0; i<nVar*(nCells+1); i++)
-	{
-		if(i<2*(nCells+1)) tolLambda[i] = 1.0;
-		else tolLambda[i] = 1000.0;
+		for ( Index v = 0; v < nVars; ++v ) {
+			tolerances.u( v ).getCoeff( i ).second.setConstant(1.0);
+			tolerances.q( v ).getCoeff( i ).second.setConstant(1.0/dx);
+			tolerances.sigma( v ).getCoeff( i ).second.setConstant(1.0 * dx/delta_t );
+			tolerances.lambda( v ).setConstant( 1.0 );
+		}
 	}
 
 	retval = IDASVtolerances(IDA_mem, rtol, absTolVec);
@@ -189,11 +177,16 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 
 	//--------------set up user-built objects------------------
 
-	//Use empty SunMatrix Object
+	// Use empty SunMatrix Object
 	SUNMatrix sunMat = SunMatrixNew(ctx);
-	LS = SunLinSolWrapper::SunLinSol(system, IDA_mem, ctx);
+
+	// The only linear solver wrapper ever constructed from this object so we can give it a pointer to 'this' and
+	// it won't hold it beyond the lifetime of this function call.
+	LS = SunLinSolWrapper::SunLinSol(this, IDA_mem, ctx);
  
-	int err = IDASetLinearSolver(IDA_mem, LS, sunMat); 
+	if ( IDASetLinearSolver(IDA_mem, LS, sunMat) != SUNLS_SUCCESS )
+		std::runtime_error("Error in IDASetLinearSolver");
+
 	IDASetJacFn(IDA_mem, EmptyJac);
 
 	IDASetMaxNonlinIters(IDA_mem, 10);
@@ -210,9 +203,9 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 
 	if(printToFile)
 	{
-		system->print(out0, t0, nOut, 0);
-		if(nVar > 1) system->print(out1, t0, nOut, 1);
-		if(nVar > 2) system->print(out2, t0, nOut, 2);
+		print(out0, t0, nOut, 0);
+		if(nVars > 1) print(out1, t0, nOut, 1);
+		if(nVars > 2) print(out2, t0, nOut, 2);
 	}
 	
 	IDASetMaxNumSteps(IDA_mem, 50000);
@@ -221,9 +214,9 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
 	if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
 	{
-		system->print(out0, t0, nOut, 0);
-		if(nVar > 1) system->print(out1, t0, nOut, 1);
-		if(nVar > 2) system->print(out2, t0, nOut, 2);
+		print(out0, t0, nOut, 0);
+		if(nVars > 1) print(out1, t0, nOut, 1);
+		if(nVars > 2) print(out2, t0, nOut, 2);
 		throw std::runtime_error("IDACalcIC could not complete");
 	}
 
@@ -267,9 +260,9 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 		retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
 		if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
 		{
-			system->print(out0, tout, nOut, 0);
-			if(nVar > 1) system->print(out1, t0, nOut, 1);
-			if(nVar > 2) system->print(out2, t0, nOut, 2);
+			print(out0, tout, nOut, 0);
+			if(nVars > 1) print(out1, t0, nOut, 1);
+			if(nVars > 2) print(out2, t0, nOut, 2);
 			throw std::runtime_error("IDASolve could not complete");
 		}
 
@@ -279,20 +272,30 @@ void runSolver( std::shared_ptr<SystemSolver> system, std::string const& inputFi
 			resval = N_VClone(Y);
 			VectorWrapper resVec( N_VGetArrayPointer( resval ), N_VGetLength( Y ) ); 
 			resVec.setZero();
-			residual(tout, Y, dYdt, resval, data);
-			system->print(out0, tout, nOut, 0, Y, resval);
-			if(nVar > 1) system->print(out1, tout, nOut, 1, Y, resval);
-			if(nVar > 2) system->print(out2, t0, nOut, 2, Y, resval);
+			residual(tout, Y, dYdt, resval, this );
+			print(out0, tout, nOut, 0, Y, resval);
+			if(nVars > 1) print(out1, tout, nOut, 1, Y, resval);
+			if(nVars > 2) print(out2, t0, nOut, 2, Y, resval);
 
-			//Print Diagnostics
-			diagnostics << tout << "	" << diagnostic.Voltage() << std::endl;
+			// Diagnostics go here
 		}
 	}
 
-	std::cerr << "Total number of steps taken = " << system->total_steps << std::endl;
+	std::cerr << "Total number of steps taken = " << total_steps << std::endl;
 
 	IDAFree( &IDA_mem );
-	delete data;
+
+	// No SunLinSol wrapper classes exist beyond this point, so we are safe in using raw pointers to construct them.
+	SUNLinSolFree( LS );
+	
+	// Free the raw data buffers allocated by SUNDIALS
+	N_VDestroy( Y );
+	N_VDestroy( dYdt );
+	N_VDestroy( constraints );
+	N_VDestroy( id );
+	N_VDestroy( res );
+	N_VDestroy( absTolVec );
+
 }
 
 int EmptyJac(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3)
@@ -302,4 +305,5 @@ int EmptyJac(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SU
 	//So we pass a fake one to sundials to prevent an error
 	return 0;
 }
+
 

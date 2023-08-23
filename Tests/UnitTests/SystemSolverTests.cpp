@@ -1,6 +1,7 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include "Types.hpp"
 #include <toml.hpp>
 #include "SystemSolver.hpp"
 #include "TestDiffusion.hpp"
@@ -8,25 +9,28 @@
 using namespace toml::literals::toml_literals;
 
 // raw string literal (`R"(...)"` is useful for this purpose)
-const toml::value config_snipper = u8R"(
-    title = "this is TOML literal"
-    [table]
-    key = "value"
+const toml::value config_snippet = u8R"(
+    [DiffusionProblem]
+	 Kappa = 1.0
 )"_toml;
 
-BOOST_AUTO_TEST_SUITE( diffusionproblem_suite, * boost::unit_test::tolerance( 1e-6 ) )
+BOOST_AUTO_TEST_SUITE( system_solver_test_suite, * boost::unit_test::tolerance( 1e-6 ) )
 
-BOOST_AUTO_TEST_CASE( construct_diffusion_problem )
+BOOST_AUTO_TEST_CASE( systemsolver_init_tests )
 {
-	std::map<std::string, double> parameters{
-		{ "CentralCellField", 1.0 }
-	};
-	
-	MirrorPlasma *pSamplePlasma = nullptr;
+	Grid testGrid( 0.0, 1.0, 4 );
+	Index k = 1; // Start piecewise linear
+	SystemSolver *system = nullptr;
+	double dt = 0.1;
 
-	BOOST_REQUIRE_NO_THROW( pSamplePlasma = new MirrorPlasma( parameters, "Hydrogen", false, false, false, false, false, false, "", "", "" ) );
+	TestDiffusion problem( config_snippet );
 
-	BOOST_TEST( pSamplePlasma->CentralCellFieldStrength == 1.0 );
+	BOOST_CHECK_NO_THROW( system = new SystemSolver( testGrid, k, dt, &problem ) );
+
+	system->resetCoeffs();
+
+	BOOST_TEST( system->k == k );
+
 
 }
 

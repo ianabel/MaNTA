@@ -15,6 +15,11 @@
 #include "TransportSystem.hpp"
 #include "DGSoln.hpp"
 
+#ifdef TEST
+namespace system_solver_test_suite {
+	struct systemsolver_init_tests;
+};
+#endif
 
 class SystemSolver
 {
@@ -64,11 +69,16 @@ public:
 	
 	void mapDGtoSundials( std::vector< VectorWrapper >& SQU_cell, VectorWrapper& lam, realtype* const& Y) const;
 
+	static SystemSolver* ConstructFromConfig( std::string fname );
+	
+	// Initialise 
+	void runSolver( std::string );
+
 private:
 	Grid grid;
-	const unsigned int k; 		//polynomial degree per cell
-	const unsigned int nCells;	//Total cell count
-	const unsigned int nVars;					//Total number of variables
+	unsigned int k; 		//polynomial degree per cell
+	unsigned int nCells;	//Total cell count
+	unsigned int nVars;					//Total number of variables
 	
 	std::vector< Matrix > XMats;
 	std::vector< Matrix > MBlocks;
@@ -77,8 +87,10 @@ private:
 	Eigen::VectorXd L_global{};
 	Matrix H_global_mat{};
 	Eigen::FullPivLU< Matrix > H_global{};
-	std::vector< Matrix > CG_cellwise, RF_cellwise;
-	std::vector< Matrix > A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise; //?Point the dublicated matrices to the same place?
+	std::vector< Vector > RF_cellwise;
+	std::vector< Matrix > CG_cellwise;
+	std::vector< Matrix > A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise; 
+	//?Point the duplicated matrices to the same place?
 
 	DGSoln y, dydt;
 
@@ -113,8 +125,9 @@ private:
 	static double tau( double x ) { return 0.5; };
 
 	friend int residual( realtype, N_Vector, N_Vector, N_Vector, void * );
+	
+#ifdef TEST
+	friend struct system_solver_test_suite::systemsolver_init_tests;
+#endif
 };
 
-struct UserData {
-	std::shared_ptr<SystemSolver> system;
-};

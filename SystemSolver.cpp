@@ -170,7 +170,7 @@ void SystemSolver::initialiseMatrices()
 			Bvar.setZero();
 			Dvar.setZero();
 			// A_ij = ( phi_j, phi_i )
-			DGApprox::MassMatrix( I, Avar);
+			DGApprox::MassMatrix( I, Avar );
 			// B_ij = ( phi_i, phi_j' )
 			DGApprox::DerivativeMatrix( I, Bvar );
 
@@ -266,11 +266,16 @@ void SystemSolver::initialiseMatrices()
 		E_cellwise.emplace_back(E);
 
 		// To store the RHS
-		RF_cellwise.emplace_back(Eigen::VectorXd(nVars*2*(k+1)));
+		// HOW DID THIS EVER WORK 
+		// type of RF_cellwise was std::vector< Eigen::MatrixXd >
+		// RF_cellwise.emplace_back(Eigen::VectorXd(nVars*2*(k+1)));
+
+		RF_cellwise.emplace_back( nVars * 2 * ( k + 1 ) );
 
 		// R is composed of parts of the values of 
 		// u on the total domain boundary
 		// don't need to do RHS terms here, those are now in 'Sources'
+		// (should we double check that RF_cellwise[ i ] == RF_cellwise.back()?
 		RF_cellwise[ i ].setZero();
 
 		for(Index var = 0; var < nVars; var++)
@@ -317,7 +322,7 @@ void SystemSolver::initialiseMatrices()
 		}
 
 		//[ C 0 G ]
-		CG_cellwise.emplace_back(Eigen::MatrixXd(2*nVars, 3*nVars*(k+1) ));
+		CG_cellwise.emplace_back(2 * nVars, 3*nVars*(k+1));
 		CG_cellwise[i].setZero();
 		CG_cellwise[ i ].block( 0, 0, 2*nVars, nVars*(k + 1) ) = C;
 		CG_cellwise[ i ].block( 0, nVars*(k + 1), 2*nVars, nVars*(k + 1) ).setZero();
@@ -652,7 +657,7 @@ void SystemSolver::solveJacEq(N_Vector& g, N_Vector& delY)
 
 int residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval, void *user_data)
 {
-	auto system = static_cast<UserData*>(user_data)->system;
+	auto system = reinterpret_cast<SystemSolver*>( user_data );
 	auto k = system->k;
 	auto grid(system->grid);
 	auto nCells = system->nCells;
@@ -833,6 +838,19 @@ void SystemSolver::print( std::ostream& out, double t, int nOut, int var, N_Vect
 	{
 		double x = static_cast<double>( i )*delta_x;
 		out << x << "\t" << tmp_y.u( var )( x ) << "\t" << tmp_y.q( var )( x ) << "\t" << tmp_y.sigma( var )( x )  << "\t" << res.u( var )( x ) << "\t" << res.q( var )( x ) << "\t" << res.sigma( var )( x ) << std::endl;
+	}
+	out << std::endl;
+}
+
+void SystemSolver::print( std::ostream& out, double t, int nOut, int var )
+{
+
+	out << "# t = " << t << std::endl;
+	double delta_x = grid.lowerBoundary() + ( grid.upperBoundary() - grid.lowerBoundary() ) * ( 1.0/( nOut - 1.0 ) );
+	for ( int i=0; i<nOut; ++i )
+	{
+		double x = static_cast<double>( i )*delta_x;
+		out << x << "\t" << y.u( var )( x ) << "\t" << y.q( var )( x ) << "\t" << y.sigma( var )( x ) << std::endl;
 	}
 	out << std::endl;
 }

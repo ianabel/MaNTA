@@ -146,7 +146,7 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction )
 	BOOST_TEST( constructedLinear( 0.1 ) == 1.5*a*0.1 );
 	BOOST_TEST( constructedLinear( 0.7 ) == 1.5*a*0.7 );
 
-	delete mem;
+	delete[] mem;
 	// Interleaved data test
 	mem = new double[ linear.getDoF() * 2 ];
 	linear.Map( mem, 4 );
@@ -175,7 +175,7 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction )
 	BOOST_TEST( v( 10 ) == ( a/4.0 ) * ( 0.75*0.75 - 0.5*0.5 ) / ::sqrt( 0.25 ) );
 	BOOST_TEST( v( 14 ) == ( a/4.0 ) * ( 1*1 - 0.75*0.75 ) / ::sqrt( 0.25 ) );
 
-	delete mem;
+	delete[] mem;
 
 }
 

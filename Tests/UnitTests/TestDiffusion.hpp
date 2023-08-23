@@ -8,11 +8,11 @@
 	enable testing of construction of a SystemSolver
  */
 
-class LinearDiffusion : public TransportSystem {
+class TestDiffusion : public TransportSystem {
 	public:
 		// Must provide a constructor that constructs from a toml configuration snippet
 		// you can ignore it, or read problem-dependent parameters from the configuration file
-		explicit LinearDiffusion( toml::value const& config ){
+		explicit TestDiffusion( toml::value const& config ){
 			// Always set nVars in a derived constructor
 			nVars = 1;
 
@@ -33,28 +33,53 @@ class LinearDiffusion : public TransportSystem {
 		};
 
 		// You must provide implementations of both, these are your boundary condition functions
-		Value LowerBoundary( Index, Position, Time ) override { return 0.0;};
-		Value UpperBoundary( Index, Position, Time ) override { return 0.0;};
+		Value LowerBoundary( Index, Time ) const override { return 0.0;};
+		Value UpperBoundary( Index, Time ) const override { return 0.0;};
 
-		bool isLowerBoundaryDirichlet( Index ) override { return true;};
-		bool isUpperBoundaryDirichlet( Index ) override { return true;};
+		bool isLowerBoundaryDirichlet( Index ) const override { return true;};
+		bool isUpperBoundaryDirichlet( Index ) const override { return true;};
 
 		// The guts of the physics problem (these are non-const as they
 		// are allowed to alter internal state such as to store computations
 		// for future calls)
-		Value SigmaFn( Index, const ValueVector &, const ValueVector &q, Position, Time ) override {
+		Value SigmaFn( Index, const Values&, const Values&q, Position, Time ) override {
 			return kappa * q[ 0 ];
 		};
-		Value Sources( Index, const ValueVector &, const ValueVector &, Position, Time ) override {
+		Value Sources( Index, const Values&, const Values&, const Values&, Position, Time ) override {
 			return 0.0;
 		};
 
+		void dSigmaFn_dq( Index, Values& v, const Values&, const Values&, Position, Time ) override
+		{
+			v[ 0 ] = kappa;
+		};
+
+		void dSigmaFn_du( Index, Values& v, const Values&, const Values&, Position, Time ) override
+		{
+			v[ 0 ] = 0.0;
+		};
+
+		void dSources_du( Index, Values&v , const Values &, const Values &, Position, Time ) override
+		{
+			v[ 0 ] = 0.0;
+		};
+
+		void dSources_dq( Index, Values&v , const Values &, const Values &, Position, Time ) override
+		{
+			v[ 0 ] = 0.0;
+		};
+
+		void dSources_dsigma( Index, Values&v , const Values &, const Values &, Position, Time ) override 
+		{
+			v[ 0 ] = 0.0;
+		};
+
 		// Finally one has to provide initial conditions for u & q
-		Value      InitialValue( Index, Position x ) override {
+		Value      InitialValue( Index, Position x ) const override {
 			double y = ( x - Centre )/InitialWidth;
 			return InitialHeight * ::exp( -y*y );
 		};
-		Value InitialDerivative( Index, Position x ) override {
+		Value InitialDerivative( Index, Position x ) const override {
 			double y = ( x - Centre )/InitialWidth;
 			return InitialHeight * ( -2.0 * y ) * ::exp( -y*y ) * ( 1.0/InitialWidth );
 		};

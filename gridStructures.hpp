@@ -469,6 +469,3 @@ class DGApprox
 		friend class DGSoln;
 
 };
-
-DGApprox::IntegratorType DGApprox::integrator;
-
