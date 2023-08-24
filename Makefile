@@ -10,11 +10,16 @@ SOURCES = MTS.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp Solver.
 HEADERS = gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp SystemSolver.hpp ErrorChecker.hpp ErrorTester.hpp TransportSystem.hpp PhysicsCases.hpp DGSoln.hpp
 OBJECTS = $(patsubst %.cpp,%.o,$(SOURCES))
 
-%.o: %.cpp Makefile $(HEADERS)
-	$(CXX) -c $(CXXFLAGS) -g -O3 -o $@ $<
+PHYSICS_SOURCES = $(wildcard PhysicsCases/*.cpp)
+PHYSICS_OBJECTS = $(patsubst %.cpp,%.o,$(PHYSICS_SOURCES))
 
-solver: $(OBJECTS) $(HEADERS) Makefile
-	$(CXX) $(CXXFLAGS) -g -o solver $(OBJECTS) $(LDFLAGS)
+CXXFLAGS += -I.
+
+%.o: %.cpp Makefile $(HEADERS)
+	$(CXX) -c $(CXXFLAGS) -o $@ $<
+
+solver: $(OBJECTS) $(PHYSICS_OBJECTS) $(HEADERS) Makefile
+	$(CXX) $(CXXFLAGS) -g -o solver $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
 
 #unit_tests: $(TEST_SOURCES) $(TESTOBJECTS) $(HEADERS) Makefile
 #	$(CXX) $(CXXFLAGS) -g -o unit_test_suite $(TEST_SOURCES) $(TESTOBJECTS) $(LDFLAGS)

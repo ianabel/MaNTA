@@ -92,7 +92,18 @@ int main( int argc, char** argv )
 
 	// Convert string to TransportSystem* instance
 
-	TransportSystem *pProblem = PhysicsCases::InstantiateProblem( "LinearDiffusion", config );
+	TransportSystem *pProblem = PhysicsCases::InstantiateProblem( Problem, configFile );
+
+	if ( pProblem == nullptr )
+	{
+		std::cerr << " Could not instantiate a physics model for TransportSystem = " << Problem << std::endl;
+		std::cerr << " Available physics models include: " << std::endl;
+		for ( auto pair : *PhysicsCases::map ) {
+			std::cerr << '\t' << pair.first << std::endl;
+		}
+		std::cerr << std::endl;
+		return 1;
+	}
 
 	system = std::make_shared<SystemSolver>( grid, k, dt, pProblem );
 

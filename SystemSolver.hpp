@@ -83,10 +83,10 @@ private:
 	std::vector< Matrix > XMats;
 	std::vector< Matrix > MBlocks;
 	std::vector< Matrix > CEBlocks;
-	Matrix K_global{};
-	Eigen::VectorXd L_global{};
-	Matrix H_global_mat{};
-	Eigen::FullPivLU< Matrix > H_global{};
+	Matrix K_global;
+	Eigen::VectorXd L_global;
+	Matrix H_global_mat;
+	Eigen::FullPivLU< Matrix > H_global;
 	std::vector< Vector > RF_cellwise;
 	std::vector< Matrix > CG_cellwise;
 	std::vector< Matrix > A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise; 

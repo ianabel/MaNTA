@@ -6,6 +6,7 @@
 #include <string>
 #include <utility>
 
+#include "Types.hpp"
 #include <toml.hpp>
 #include "TransportSystem.hpp"
 
@@ -35,7 +36,7 @@ struct PhysicsCases {
 			return map; 
 		}
 
-	private:
+	public:
 		static map_type * map;
 };
 

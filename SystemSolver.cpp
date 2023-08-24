@@ -266,10 +266,6 @@ void SystemSolver::initialiseMatrices()
 		E_cellwise.emplace_back(E);
 
 		// To store the RHS
-		// HOW DID THIS EVER WORK 
-		// type of RF_cellwise was std::vector< Eigen::MatrixXd >
-		// RF_cellwise.emplace_back(Eigen::VectorXd(nVars*2*(k+1)));
-
 		RF_cellwise.emplace_back( nVars * 2 * ( k + 1 ) );
 
 		// R is composed of parts of the values of 
@@ -372,7 +368,8 @@ void SystemSolver::initialiseMatrices()
 		}
 		XMats.emplace_back(X);
 	}
-	H_global = static_cast<Eigen::FullPivLU< Eigen::MatrixXd >>(HGlobalMat);
+	// Factorise the global H matrix
+	H_global.compute( HGlobalMat );
 	H_global_mat = HGlobalMat;
 	initialised = true;
 }
@@ -853,5 +850,6 @@ void SystemSolver::print( std::ostream& out, double t, int nOut, int var )
 		out << x << "\t" << y.u( var )( x ) << "\t" << y.q( var )( x ) << "\t" << y.sigma( var )( x ) << std::endl;
 	}
 	out << std::endl;
+	out << std::endl; // Two blank lines needed to make gnuplot happy
 }
 
