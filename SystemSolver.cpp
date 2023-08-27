@@ -643,13 +643,6 @@ void SystemSolver::solveJacEq(N_Vector& g, N_Vector& delY)
 		}
 	}
 
-	//std::ofstream dyfile;
-	//dyfile.open("dyfile.txt");
-	//print(dyfile, 0.0, 200, 0, delY);
-	//delSig.printCoeffs(0);
-	//delU.printCoeffs(0);
-	//delQ.printCoeffs(0);
-	//std::cerr << delLambda << std::endl << std::endl;
 }
 
 int residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval, void *user_data)
@@ -824,18 +817,21 @@ int residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval, void *us
 	return 0;
 }
 
-void SystemSolver::print( std::ostream& out, double t, int nOut, int var, N_Vector& tempY, N_Vector& tempRes )
+void SystemSolver::print( std::ostream& out, double t, int nOut, N_Vector const & tempY )
 {
 	DGSoln tmp_y( nVars, grid, k, N_VGetArrayPointer( tempY ) );
-	DGSoln res( nVars, grid, k, N_VGetArrayPointer( tempRes ) );
 
 	out << "# t = " << t << std::endl;
-	double delta_x = grid.lowerBoundary() + ( grid.upperBoundary() - grid.lowerBoundary() ) * ( 1.0/( nOut - 1.0 ) );
+	double delta_x = ( grid.upperBoundary() - grid.lowerBoundary() ) * ( 1.0/( nOut - 1.0 ) );
 	for ( int i=0; i<nOut; ++i )
 	{
-		double x = static_cast<double>( i )*delta_x;
-		out << x << "\t" << tmp_y.u( var )( x ) << "\t" << tmp_y.q( var )( x ) << "\t" << tmp_y.sigma( var )( x )  << "\t" << res.u( var )( x ) << "\t" << res.q( var )( x ) << "\t" << res.sigma( var )( x ) << std::endl;
+		double x = static_cast<double>( i )*delta_x + grid.lowerBoundary();
+		out << x;
+		for ( Index v = 0; v < nVars; ++v )
+			out << "\t" << tmp_y.u( v )( x ) << "\t" << tmp_y.q( v )( x ) << "\t" << tmp_y.sigma( v )( x );
+		out << std::endl;
 	}
+	out << std::endl;
 	out << std::endl;
 }
 
@@ -843,13 +839,29 @@ void SystemSolver::print( std::ostream& out, double t, int nOut, int var )
 {
 
 	out << "# t = " << t << std::endl;
-	double delta_x = grid.lowerBoundary() + ( grid.upperBoundary() - grid.lowerBoundary() ) * ( 1.0/( nOut - 1.0 ) );
+	double delta_x = ( grid.upperBoundary() - grid.lowerBoundary() ) * ( 1.0/( nOut - 1.0 ) );
 	for ( int i=0; i<nOut; ++i )
 	{
-		double x = static_cast<double>( i )*delta_x;
+		double x = static_cast<double>( i )*delta_x + grid.lowerBoundary();
 		out << x << "\t" << y.u( var )( x ) << "\t" << y.q( var )( x ) << "\t" << y.sigma( var )( x ) << std::endl;
 	}
 	out << std::endl;
 	out << std::endl; // Two blank lines needed to make gnuplot happy
 }
 
+void SystemSolver::print( std::ostream& out, double t, int nOut )
+{
+
+	out << "# t = " << t << std::endl;
+	double delta_x = ( grid.upperBoundary() - grid.lowerBoundary() ) * ( 1.0/( nOut - 1.0 ) );
+	for ( int i=0; i<nOut; ++i )
+	{
+		double x = static_cast<double>( i )*delta_x + grid.lowerBoundary();
+		out << x;
+		for ( Index v = 0; v < nVars; ++v )
+			out << "\t" << y.u( v )( x ) << "\t" << y.q( v )( x ) << "\t" << y.sigma( v )( x );
+		out << std::endl;
+	}
+	out << std::endl;
+	out << std::endl; // Two blank lines needed to make gnuplot happy
+}

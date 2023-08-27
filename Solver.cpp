@@ -197,16 +197,17 @@ void SystemSolver::runSolver( std::string inputFile )
 	*/
 	
 	//------------------------------Solve------------------------------
-	std::ofstream out0( inputFile.substr(0, inputFile.rfind(".")) + ".plot" );
-	std::ofstream out1( "Te.plot" );
-	std::ofstream out2( "omega.plot" );
+	std::ofstream out0( inputFile.substr(0, inputFile.rfind(".")) + ".dat" );
+
+	out0 << "# Time indexes blocks. " << std::endl;
+	out0 << "# Columns Headings: " << std::endl;
+	out0 << "# x";
+	for ( Index v = 0; v < nVars; ++v )
+		out0 << "\t" << "var" << v << " u" << "\t" <<  "var" << v << " q" << "\t" <<  "var" << v << " sigma";
+	out0 << std::endl;
 
 	if(printToFile)
-	{
 		print(out0, t0, nOut, 0);
-		if(nVars > 1) print(out1, t0, nOut, 1);
-		if(nVars > 2) print(out2, t0, nOut, 2);
-	}
 	
 	IDASetMaxNumSteps(IDA_mem, 50000);
 
@@ -215,8 +216,6 @@ void SystemSolver::runSolver( std::string inputFile )
 	if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
 	{
 		print(out0, t0, nOut, 0);
-		if(nVars > 1) print(out1, t0, nOut, 1);
-		if(nVars > 2) print(out2, t0, nOut, 2);
 		throw std::runtime_error("IDACalcIC could not complete");
 	}
 
@@ -233,23 +232,6 @@ void SystemSolver::runSolver( std::string inputFile )
 		Weightsvec[i] = 1.0/(rtol*yVec[i] + absTolVals[i]);
 		dydtWRMSvec[i] = Weightsvec[i]*dydtVec[i];
 	}
-	std::ofstream dydtfile;
-	dydtfile.open("dydtfile.txt");
-
-
-	//??To Do: remove these when done with them
-	std::ofstream file;
-	file.open("time.txt");
-
-	std::ofstream resfile0;
-	std::ofstream resfile1;
-	std::ofstream resfile4;
-	resfile0.open("res0.txt");
-	resfile1.open("res1.txt");
-	resfile1.open("res4.txt");
-
-	std::ofstream diagnostics;
-	diagnostics.open("diagnostics.txt");
 
 	IDASetMinStep(IDA_mem, 1.0e-6);
 
@@ -260,22 +242,13 @@ void SystemSolver::runSolver( std::string inputFile )
 		retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
 		if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
 		{
-			print(out0, tout, nOut, 0);
-			if(nVars > 1) print(out1, t0, nOut, 1);
-			if(nVars > 2) print(out2, t0, nOut, 2);
+			print(out0, tret, nOut, 0);
 			throw std::runtime_error("IDASolve could not complete");
 		}
 
 		if(iout%stepsPerPrint == 0)
 		{
-			N_Vector resval;
-			resval = N_VClone(Y);
-			VectorWrapper resVec( N_VGetArrayPointer( resval ), N_VGetLength( Y ) ); 
-			resVec.setZero();
-			residual(tout, Y, dYdt, resval, this );
-			print(out0, tout, nOut, 0, Y, resval);
-			if(nVars > 1) print(out1, tout, nOut, 1, Y, resval);
-			if(nVars > 2) print(out2, t0, nOut, 2, Y, resval);
+			print(out0, tout, nOut, Y );
 
 			// Diagnostics go here
 		}

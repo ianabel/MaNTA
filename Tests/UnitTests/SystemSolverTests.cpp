@@ -6,6 +6,10 @@
 #include "SystemSolver.hpp"
 #include "TestDiffusion.hpp"
 
+#include <nvector/nvector_serial.h>    /* access to serial N_Vector            */
+#include <sundials/sundials_linearsolver.h> /* Generic Liner Solver Interface */
+#include <sundials/sundials_types.h>        /* defs of realtype, sunindextype  */
+
 using namespace toml::literals::toml_literals;
 
 // raw string literal (`R"(...)"` is useful for this purpose)
@@ -87,6 +91,53 @@ BOOST_AUTO_TEST_CASE( systemsolver_init_tests )
 	        RootThree, 0.0;
 	BOOST_TEST(  ( system->E_cellwise[ 3 ] - ref ).norm() < 1e-9 );
 
+	// Should check k > 1 here
+
+	// Initial conditions
+	SUNContext ctx;
+	SUNContext_Create(nullptr, &ctx);
+
+	N_Vector y0,y0_dot;
+
+	y0 = N_VNew_Serial(3*4*(2) + 1*(4+1), ctx);
+	y0_dot = N_VClone( y0 );
+	system->setInitialConditions( y0, y0_dot );
+
+
 }
+
+BOOST_AUTO_TEST_CASE( systemsolver_matrix_tests )
+{
+	Grid testGrid( 0.0, 1.0, 4 );
+	Index k = 1; // Start piecewise linear
+	SystemSolver *system = nullptr;
+	double dt = 0.1;
+
+	TestDiffusion problem( config_snippet );
+
+	BOOST_CHECK_NO_THROW( system = new SystemSolver( testGrid, k, dt, &problem ) );
+
+	system->resetCoeffs();
+
+	SUNContext ctx;
+	SUNContext_Create(nullptr, &ctx);
+
+	N_Vector y0,y0_dot;
+
+	y0 = N_VNew_Serial(3*4*(2) + 1*(4+1), ctx);
+	y0_dot = N_VClone( y0 );
+	system->setInitialConditions( y0, y0_dot );
+
+	Matrix NLMat( k + 1, k + 1 );
+
+	for ( Index i = 0; i < 4; ++i ) {
+		system->NLqMat( NLMat, system->y, testGrid[ i ] );
+		BOOST_TEST(  ( NLMat - Matrix::Identity( k + 1, k + 1 ) ).norm() < 1e-9 );
+		system->NLuMat( NLMat, system->y, testGrid[ i ] );
+		BOOST_TEST(  ( NLMat - Matrix::Zero( k + 1, k + 1 ) ).norm() < 1e-9 );
+	}
+
+}
+
 
 BOOST_AUTO_TEST_SUITE_END()

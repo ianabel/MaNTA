@@ -46,7 +46,7 @@ bool LinearDiffusion::isUpperBoundaryDirichlet( Index ) const { return true; };
 
 Value LinearDiffusion::SigmaFn( Index, const Values &, const Values & q, Position, Time )
 {
-	return -kappa * q[ 0 ];
+	return kappa * q[ 0 ];
 }
 
 Value LinearDiffusion::Sources( Index, const Values &, const Values &, const Values &, Position, Time )
@@ -56,7 +56,7 @@ Value LinearDiffusion::Sources( Index, const Values &, const Values &, const Val
 
 void LinearDiffusion::dSigmaFn_dq( Index, Values& v, const Values&, const Values&, Position, Time )
 {
-	v[ 0 ] = -kappa;
+	v[ 0 ] = kappa;
 };
 
 void LinearDiffusion::dSigmaFn_du( Index, Values& v, const Values&, const Values&, Position, Time )

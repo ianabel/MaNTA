@@ -18,6 +18,7 @@
 #ifdef TEST
 namespace system_solver_test_suite {
 	struct systemsolver_init_tests;
+	struct systemsolver_matrix_tests;
 };
 #endif
 
@@ -55,8 +56,11 @@ public:
 
 	//print current output for u and q to output file
 	void print( std::ostream& out, double t, int nOut, int var );
-	void print( std::ostream& out, double t, int nOut, int var, N_Vector& tempY  );
-	void print( std::ostream& out, double t, int nOut, int var, N_Vector& tempY, N_Vector& tempRes );
+	
+	void print( std::ostream& out, double t, int nOut );
+	void print( std::ostream& out, double t, int nOut, N_Vector const & tempY );
+
+
 
 	double getdt() const {return dt;}
 
@@ -128,6 +132,7 @@ private:
 	
 #ifdef TEST
 	friend struct system_solver_test_suite::systemsolver_init_tests;
+	friend struct system_solver_test_suite::systemsolver_matrix_tests;
 #endif
 };
 
