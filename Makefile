@@ -21,14 +21,16 @@ CXXFLAGS += -I.
 solver: $(OBJECTS) $(PHYSICS_OBJECTS) $(HEADERS) Makefile
 	$(CXX) $(CXXFLAGS) -g -o solver $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
 
-#unit_tests: $(TEST_SOURCES) $(TESTOBJECTS) $(HEADERS) Makefile
-#	$(CXX) $(CXXFLAGS) -g -o unit_test_suite $(TEST_SOURCES) $(TESTOBJECTS) $(LDFLAGS)
-#	./unit_test_suite
+Tests/UnitTests/UnitTests: solver
+	make -C Tests/UnitTests all
 
-clean: 
-	rm -f solver unit_test_suite errortest dbsolver $(OBJECTS) $(ERROBJECTS) $(TESTOBJECTS)
+test: solver Tests/UnitTests/UnitTests
+	Tests/UnitTests/UnitTests
+
+clean:
+	rm -f solver unit_test_suite errortest dbsolver $(OBJECTS) $(ERROBJECTS) $(TESTOBJECTS) $(PHYSICS_OBJECTS)
 
 regression_tests: solver
-	cd UnitTests; ./CheckRegressionTests.sh
+	cd Tests/RegressionTests; ./CheckRegressionTests.sh
 
-.PHONY: clean regression_tests unit_tests 
+.PHONY: clean test regression_tests
