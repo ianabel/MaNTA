@@ -57,7 +57,7 @@ void SystemSolver::setInitialConditions( N_Vector& Y , N_Vector& dYdt )
 
 			S_cellwise.setZero();
 			for ( size_t i=0; i < n_abscissa; ++i ) {
-				std::vector<double> u_vals( nVars ), q_vals( nVars ), sigma_vals( nVars );
+				Vector u_vals( nVars ), q_vals( nVars ), sigma_vals( nVars );
 				double x_val = I.x_l + ( 1 + x_vals[ i ] ) * I.h()/2.0;
 				double wgt = x_wgts[ i ]*( I.h()/2.0 );
 				for ( size_t j = 0 ; j < nVars; ++j ) {
@@ -71,7 +71,7 @@ void SystemSolver::setInitialConditions( N_Vector& Y , N_Vector& dYdt )
 			}
 			// And for the other half of the abscissas
 			for ( size_t i=0; i < n_abscissa; ++i ) {
-				std::vector<double> u_vals( nVars ), q_vals( nVars ), sigma_vals( nVars );
+				Values u_vals( nVars ), q_vals( nVars ), sigma_vals( nVars );
 				double x_val = I.x_l + ( 1 - x_vals[ i ] ) * I.h()/2.0;
 				double wgt = x_wgts[ i ]*( I.h()/2.0 );
 				for ( size_t j = 0 ; j < nVars; ++j ) {
@@ -724,7 +724,7 @@ int residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval, void *us
 		for(Index var = 0; var < nVars; var++)
 		{
 			std::function< double (double) > kappaFunc = [ =,&temp,&system ]( double x ) {
-				std::vector<double> u_vals( nVars ),q_vals( nVars );
+				Values u_vals( nVars ),q_vals( nVars );
 				for ( Index iv=0; iv < nVars; ++iv )
 				{
 					u_vals[ iv ] = temp.u( iv )( x );
@@ -734,7 +734,7 @@ int residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval, void *us
 			};
 
 			std::function< double (double) > sourceFunc = [ =,&temp,&system ]( double x ) {
-				std::vector<double> u_vals( nVars ),q_vals( nVars ),sigma_vals( nVars );
+				Values u_vals( nVars ),q_vals( nVars ),sigma_vals( nVars );
 				for ( Index iv=0; iv < nVars; ++iv )
 				{
 					u_vals[ iv ] = temp.u( iv )( x );

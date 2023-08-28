@@ -75,14 +75,13 @@ void SystemSolver::runSolver( std::string inputFile )
 	else if( relTol.is_floating() ) rtol = static_cast<double>(relTol.as_floating());
 	else throw std::invalid_argument( "relative_tolerance specified incorrrectly" );
 
-	/*
 	realtype atol;
 	auto absTol = toml::find(config, "Absolute_tolerance");
-	if( config.count("Absolute_tolerance") != 1 ) atol = 1.0e-5;
+	if( config.count("Absolute_tolerance") != 1 ) atol = 1.0e-2;
 	else if( absTol.is_integer() ) atol = static_cast<double>(absTol.as_floating());
 	else if( absTol.is_floating() ) atol = static_cast<double>(absTol.as_floating());
 	else throw std::invalid_argument( "Absolute_tolerance specified incorrrectly" );
-	*/
+	
 	//-------------------------------------System Design----------------------------------------------
 	SUNContext ctx;
     retval = SUNContext_Create(nullptr, &ctx);
@@ -164,10 +163,10 @@ void SystemSolver::runSolver( std::string inputFile )
 	for( Index i = 0; i < nCells; ++i )
 	{
 		for ( Index v = 0; v < nVars; ++v ) {
-			tolerances.u( v ).getCoeff( i ).second.setConstant(1.0);
-			tolerances.q( v ).getCoeff( i ).second.setConstant(1.0/dx);
-			tolerances.sigma( v ).getCoeff( i ).second.setConstant(1.0 * dx/delta_t );
-			tolerances.lambda( v ).setConstant( 1.0 );
+			tolerances.u( v ).getCoeff( i ).second.setConstant(atol);
+			tolerances.q( v ).getCoeff( i ).second.setConstant(atol/dx);
+			tolerances.sigma( v ).getCoeff( i ).second.setConstant( atol * dx/delta_t );
+			tolerances.lambda( v ).setConstant( atol );
 		}
 	}
 
@@ -238,17 +237,21 @@ void SystemSolver::runSolver( std::string inputFile )
 	//Solving Loop
 	for (tout = t1, iout = 1; iout <= totalSteps; iout++, tout += delta_t) 
 	{
-		if(iout%stepsPerPrint)std::cout << tout - delta_t << std::endl;
+		if(iout%stepsPerPrint)
+			std::cout << "target time " << tout;
 		retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
 		if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
 		{
 			print(out0, tret, nOut, 0);
 			throw std::runtime_error("IDASolve could not complete");
 		}
+		if(iout%stepsPerPrint)
+			std::cout << "\t time after timestepping " << tret << std::endl;
+
 
 		if(iout%stepsPerPrint == 0)
 		{
-			print(out0, tout, nOut, Y );
+			print(out0, tret, nOut, Y );
 
 			// Diagnostics go here
 		}

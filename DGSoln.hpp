@@ -132,8 +132,8 @@ class DGSoln {
 
 						// Abscissa only stores positive points, so we have to double up manually
 
-						std::vector<double> u_vals1( nVars ), q_vals1( nVars );
-						std::vector<double> u_vals2( nVars ), q_vals2( nVars );
+						Values u_vals1( nVars ), q_vals1( nVars );
+						Values u_vals2( nVars ), q_vals2( nVars );
 
 						double y_plus  = I.x_l + ( 1 + x_vals[ i ] ) * I.h()/2.0;
 						double y_minus = I.x_l + ( 1 - x_vals[ i ] ) * I.h()/2.0;

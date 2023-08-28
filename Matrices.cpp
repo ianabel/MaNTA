@@ -49,8 +49,8 @@ void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX
 
 	for ( Index XVar = 0; XVar < nVars; XVar++ )
 	{
-		std::vector<double> dX_dZ_vals1( nVars );
-		std::vector<double> dX_dZ_vals2( nVars );
+		Values dX_dZ_vals1( nVars );
+		Values dX_dZ_vals2( nVars );
 		for ( size_t i=0; i < n_abscissa; ++i ) {
 			// Pull the loop over the gaussian integration points
 			// outside so we can evaluate u, q, dX_dZ once and store the values
@@ -58,8 +58,8 @@ void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX
 			// All for loops inside here can be parallelised as they all
 			// write to separate entries in mat
 			
-			std::vector<double> u_vals1( nVars ), q_vals1( nVars );
-			std::vector<double> u_vals2( nVars ), q_vals2( nVars );
+			Values u_vals1( nVars ), q_vals1( nVars );
+			Values u_vals2( nVars ), q_vals2( nVars );
 
 			double wgt = x_wgts[ i ]*( I.h()/2.0 );
 
