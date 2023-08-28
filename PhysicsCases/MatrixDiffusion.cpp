@@ -24,8 +24,16 @@ MatrixDiffusion::MatrixDiffusion( toml::value const& config )
 	InitialWidth  = toml::find_or( DiffConfig, "InitialWidth", 0.2 );
 	Centre =        toml::find_or( DiffConfig, "Centre", 0.0 );
 
+	std::vector<double> InitialHeight_v = toml::find< std::vector<double> >( DiffConfig, "InitialHeights" );
+
+	if ( InitialHeight_v.size() != nVars )
+		throw std::invalid_argument( "Initial height vector must have 'nVars' elements" );
+
+	InitialHeights.resize( nVars );
+	for ( Index i=0; i < nVars; ++i )
+		InitialHeights[ i ] = InitialHeight_v[ i ];
+
 	Kappa = Matrix::Identity( nVars, nVars );
-	InitialHeights = Vector::Constant( nVars, 1.0 );
 
 }
 
