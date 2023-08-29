@@ -63,7 +63,6 @@ private:
     bool isTestProblem;
 
     static dual2nd TestDirichlet(dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R);
-    static TestSolVec TestSols;
 
     REGISTER_PHYSICS_HEADER(Autodiff3VarCyl)
 };

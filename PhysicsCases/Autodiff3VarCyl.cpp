@@ -27,11 +27,11 @@ Autodiff3VarCyl::Autodiff3VarCyl(toml::value const &config)
     double nL = toml::find_or(InternalConfig, "nL", 3e18);
     double nR = toml::find_or(InternalConfig, "nR", 4e18);
 
-    double peL = toml::find_or(InternalConfig, "peL", 2); // keV
-    double peR = toml::find_or(InternalConfig, "peR", 2); // keV
+    double peL = toml::find_or(InternalConfig, "peL", 2e3 * 3e18);   // J
+    double peR = toml::find_or(InternalConfig, "peR", 2.1e3 * 3e18); // J
 
-    double piL = toml::find_or(InternalConfig, "piL", 2); // keV
-    double piR = toml::find_or(InternalConfig, "piR", 2); // keV
+    double piL = toml::find_or(InternalConfig, "piL", 2e3 * 3e18);   // J
+    double piR = toml::find_or(InternalConfig, "piR", 2.1e3 * 3e18); // J
 
     uR << nR, peR, piR;
     uL << nL, peL, piL;
@@ -170,7 +170,9 @@ double Autodiff3VarCyl::TestSource(Index i, Position x, Time t)
     }
     Values ugrad = gradient(sigmaVec[i], wrt(u), at(u, q, x, t));
     Values qgrad = gradient(sigmaVec[i], wrt(q), at(u, q, x, t));
-    double uxd = 0.0;
+    dual xdual = x;
+    Values xgrad = gradient(sigmaVec[i], wrt(xdual), at(u, q, xdual, t));
+    double uxd = xgrad(0);
 
     for (Index j = 0; j < nVars; j++)
     {
@@ -195,26 +197,28 @@ dual2nd Autodiff3VarCyl::TestDirichlet(dual2nd x, dual2nd t, double u_R, double 
     return u;
 }
 
+// Problem specific stuff
+
 const double B_mid = 0.3; // Tesla
 const double Om_i = e_charge * B_mid / ionMass;
 const double Om_e = e_charge * B_mid / electronMass;
 const double lambda = 15.0;
 
-double tau_i(Value n, Value Pi)
-{
-    if (Pi > 0)
-        return 3.44e11 * (1.0 / ::pow(n, 5.0 / 2.0)) * (::pow(J_eV(Pi), 3.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass));
-    else
-        return 3.44e11 * (1.0 / ::pow(n, 5.0 / 2.0)) * (::pow(n, 3.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass)); // if we have a negative temp just treat it as 1eV
-}
+// double tau_i(Value n, Value Pi)
+// {
+//     if (Pi > 0)
+//         return 3.44e11 * (1.0 / ::pow(n, 5.0 / 2.0)) * (::pow(J_eV(Pi), 3.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass));
+//     else
+//         return 3.44e11 * (1.0 / ::pow(n, 5.0 / 2.0)) * (::pow(n, 3.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass)); // if we have a negative temp just treat it as 1eV
+// }
 
-double tau_e(Value n, Value Pe)
-{
-    if (Pe > 0)
-        return (3.0 / 2.0) * 3.44e11 * (1.0 / ::pow(n, 5.0 / 2.0)) * (::pow(J_eV(Pe), 1.0 / 2.0)) * (1.0 / lambda);
-    else
-        return (3.0 / 2.0) * 3.44e11 * (1.0 / ::pow(n, 5.0 / 2.0)) * (::pow(n, 1.0 / 2.0)) * (1.0 / lambda);
-}
+// double tau_e(Value n, Value Pe)
+// {
+//     if (Pe > 0)
+//         return (3.0 / 2.0) * 3.44e11 * (::pow(n, 5.0 / 2.0)) * (::pow(J_eV(Pe), 1.0 / 2.0)) * (1.0 / lambda);
+//     else
+//         return (3.0 / 2.0) * 3.44e11 * (::pow(n, 5.0 / 2.0)) * (::pow(n, 1.0 / 2.0)) * (1.0 / lambda);
+// }
 
 double nu(double n, double Pe)
 {
@@ -234,31 +238,44 @@ double Ci(double n, double Pi, double Pe)
     return -Ce(n, Pi, Pe);
 }
 
+double tau_i(Value n, Value Pi)
+{
+    if (Pi > 0)
+        return ::sqrt(2) * 3.44e11 * (1.0 / ::pow(n, 5.0 / 2.0)) * (::pow(J_eV(Pi), 3.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass));
+    else
+        return 3.44e11 * (1.0 / n) * (::pow(n, 3.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass)); // if we have a negative temp just treat it as 1eV
+}
+
+double tau_e(Value n, Value Pe)
+{
+    if (Pe > 0)
+        return (3.0 / 2.0) * 3.44e11 * (1.0 / ::pow(n, 5.0 / 2.0)) * (::pow(J_eV(Pe), 3.0 / 2.0)) * (1.0 / lambda);
+    else
+        return (3.0 / 2.0) * 3.44e11 * (1.0 / ::pow(n, 5.0 / 2.0)) * (::pow(n, 1.0 / 2.0)) * (1.0 / lambda);
+}
+
 sigmaFn Gamma = [](VectorXdual u, VectorXdual q, dual x, double t)
 {
-    // maybe add a factor of sqrt x if x = r^2/2
-    dual R = sqrt(2.0 * x);
-    dual G = R * R * 2. / 3. * u(1) / (electronMass * Om_e * Om_e * tau_e(u(0).val, u(1).val)) * ((-q(1) / 2 + q(2) / u(1)) - 3 / 2 * q(0) / u(0));
+    dual G = 2 * x * u(1) / (electronMass * Om_e * Om_e * tau_e(u(0).val, u(1).val)) * ((q(1) / 2 - q(2)) / u(1) + 3. / 2. * q(0) / u(0));
     return G;
 };
 
 sigmaFn qi = [](VectorXdual u, VectorXdual q, dual x, double t)
 {
-    dual sigma = Gamma(u, q, x, t);
-    dual R = sqrt(2. * x);
+    dual G = Gamma(u, q, x, t);
     dual kappa = 2. * u(2) / (ionMass * Om_i * Om_i * tau_i(u(0).val, u(2).val));
-    dual Q = R * (2. / 3.) * ((5. / 2.) * u(2) / u(0) * sigma + kappa * R * q(2));
+    dual qri = -kappa * q(2) / u(0) * (q(2) / u(2) - q(0) / u(0));
+    dual Q = (2. / 3.) * ((5. / 2.) * u(2) / u(0) * G + 2 * x * qri);
     return Q;
 };
 sigmaFn qe = [](VectorXdual u, VectorXdual q, dual x, double t)
 {
-    dual sigma = Gamma(u, q, x, t);
-    dual R = sqrt(2. * x);
+    dual G = Gamma(u, q, x, t);
     dual kappa = 4.66 * u(1) / (electronMass * Om_e * Om_e * tau_e(u(0).val, u(1).val));
-    dual Q = R * (2. / 3.) * (5. / 2. * u(1) / u(0) * sigma + kappa * R * q(1));
+    dual qre = -kappa * u(1) / u(0) * (q(1) / u(1) - q(0) / u(0)) + (3. / 2.) * (u(1)) / (u(0) * electronMass * Om_e * Om_e * tau_e(u(0).val, u(1).val)) * (q(2) + q(1));
+    dual Q = (2. / 3.) * (5. / 2. * u(1) / u(0) * G + 2 * x * qre);
     return Q;
 };
-
 sigmaFnArray Autodiff3VarCyl::sigmaVec = {Gamma, qi, qe};
 
 SourceFn Sn = [](VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
@@ -269,15 +286,21 @@ SourceFn Sn = [](VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double
 // look at ion and electron sources again -- they should be opposite
 SourceFn Spi = [](VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    dual R = sqrt(2 * x);
-    dual S = (2 / 3) * (5 / 2 * q(2) * R * q(2) / (u(0) * ionMass * Om_i)) - R * Ci(u(2).val, u(0).val, R.val);
+    dual R = sqrt(2. * x);
+
+    dual G = Gamma(u, q, x, t) / (2. * x);
+    dual V = G / u(0);
+    dual S = 2. / 3. * sqrt(2. * x) * V * q(2) - R * Ci(u(2).val, u(0).val, R.val);
 
     return S;
 };
 SourceFn Spe = [](VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    dual R = sqrt(2 * x);
-    dual S = (2 / 3) * (5 / 2 * q(1) * R * q(1) / (u(0) * ionMass * Om_i)) - R * Ce(u(2).val, u(0).val, R.val);
+    dual R = sqrt(2. * x);
+
+    dual G = Gamma(u, q, x, t) / (2. * x);
+    dual V = G / u(0);
+    dual S = 2. / 3. * sqrt(2. * x) * V * q(1) - R * Ce(u(2).val, u(0).val, R.val);
     return S;
 };
 
