@@ -24,8 +24,8 @@ FishersEquation::FishersEquation( toml::value const& config )
 
 	C = toml::find_or( InternalConfig, "C", 1.0 );
 
-	x_l = -5.0;
-	x_u =  5.0;
+	x_l = -10.0;
+	x_u =  10.0;
 
 	c = -5.0/::sqrt( 6.0 );
 }

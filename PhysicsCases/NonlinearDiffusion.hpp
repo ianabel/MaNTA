@@ -4,11 +4,15 @@
 #include "PhysicsCases.hpp"
 
 /*
- * Manufactured solutions for the nonlinear equation
+ * Exact solutions for the nonlinear equation
  * 
- * du    d  n  du
- * -- - -- u   -- = S( x )
- * dt   dx     dx
+ * du    d         du
+ * -- - -- D( u )  -- = 0
+ * dt   dx         dx
+ *
+ * for D = ( n/2 ) u^n * ( 1 - u^n/( n + 1 ) ) ;
+ * u = ( 1 - x/sqrt( t ) )^( 1/n ) on [ 0,1 ]
+ * meant to be initialised at t=1
  */
 
 // Always inherit from TransportSystem
@@ -44,7 +48,9 @@ class NonlinearDiffusion : public TransportSystem {
 
 private:
 	// Put class-specific data here
-	double InitialWidth, InitialHeight, Centre;
+	double n;
+
+	Value ExactSolution( Position, Time ) const;
 
 	// Without this (and the implementation line in NonlinearDiffusion.cpp)
 	// ManTA won't know how to relate the string 'NonlinearDiffusion' to the class.
