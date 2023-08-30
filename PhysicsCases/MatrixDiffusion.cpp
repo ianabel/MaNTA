@@ -26,7 +26,7 @@ MatrixDiffusion::MatrixDiffusion( toml::value const& config )
 
 	std::vector<double> InitialHeight_v = toml::find< std::vector<double> >( DiffConfig, "InitialHeights" );
 
-	if ( InitialHeight_v.size() != nVars )
+	if ( static_cast<Index>( InitialHeight_v.size() ) != nVars )
 		throw std::invalid_argument( "Initial height vector must have 'nVars' elements" );
 
 	InitialHeights.resize( nVars );
