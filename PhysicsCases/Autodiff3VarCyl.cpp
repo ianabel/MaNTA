@@ -27,11 +27,11 @@ Autodiff3VarCyl::Autodiff3VarCyl(toml::value const &config)
     double nL = toml::find_or(InternalConfig, "nL", 3e18);
     double nR = toml::find_or(InternalConfig, "nR", 4e18);
 
-    double peL = toml::find_or(InternalConfig, "peL", 2e3 * 3e18);   // J
-    double peR = toml::find_or(InternalConfig, "peR", 2.1e3 * 3e18); // J
+    double peL = toml::find_or(InternalConfig, "peL", 2e3 * 3e18 * e_charge);   // J
+    double peR = toml::find_or(InternalConfig, "peR", 2.1e3 * 3e18 * e_charge); // J
 
-    double piL = toml::find_or(InternalConfig, "piL", 2e3 * 3e18);   // J
-    double piR = toml::find_or(InternalConfig, "piR", 2.1e3 * 3e18); // J
+    double piL = toml::find_or(InternalConfig, "piL", 2e3 * 3e18 * e_charge);   // J
+    double piR = toml::find_or(InternalConfig, "piR", 2.1e3 * 3e18 * e_charge); // J
 
     uR << nR, peR, piR;
     uL << nL, peL, piL;
@@ -220,63 +220,65 @@ const double lambda = 15.0;
 //         return (3.0 / 2.0) * 3.44e11 * (::pow(n, 5.0 / 2.0)) * (::pow(n, 1.0 / 2.0)) * (1.0 / lambda);
 // }
 
-double nu(double n, double Pe)
+dual nu(dual n, dual Pe)
 {
     // double alpha = ::pow(e_charge*e_charge/(2*M_PI*eps_0*me),2)*n(R)*lambda(R);
     // return alpha/n(R)*::pow(mi*Pe+me*Pi, -3.0/2.0);
     // std::cerr << 3.44e-11*::pow(n(R),5.0/2.0)*lambda(R)/::pow(J_eV(Pe),3/2) << std::endl << std::endl;
-    return 3.44e-11 * ::pow(n, 5.0 / 2.0) * lambda / ::pow(J_eV(Pe), 3 / 2);
+    return 3.44e-11 * pow(n, 5.0 / 2.0) * lambda / pow(Pe / e_charge, 3 / 2);
 }
 
-double Ce(double n, double Pi, double Pe)
+dual Ce(dual n, dual Pi, dual Pe)
 {
     return nu(n, Pe) * (Pi - Pe) / n;
 }
 
-double Ci(double n, double Pi, double Pe)
+dual Ci(dual n, dual Pi, dual Pe)
 {
     return -Ce(n, Pi, Pe);
 }
 
-double tau_i(Value n, Value Pi)
+dual tau_i(dual n, dual Pi)
 {
     if (Pi > 0)
-        return ::sqrt(2) * 3.44e11 * (1.0 / ::pow(n, 5.0 / 2.0)) * (::pow(J_eV(Pi), 3.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass));
+        return ::sqrt(2) * 3.44e11 * (1.0 / pow(n, 5.0 / 2.0)) * (pow(Pi / e_charge, 3.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass));
     else
-        return 3.44e11 * (1.0 / n) * (::pow(n, 3.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass)); // if we have a negative temp just treat it as 1eV
+        return ::sqrt(2) * 3.44e11 * (1.0 / n) * (pow(n, 5.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass)); // if we have a negative temp just treat it as 1eV
 }
 
-double tau_e(Value n, Value Pe)
+dual tau_e(dual n, dual Pe)
 {
     if (Pe > 0)
-        return (3.0 / 2.0) * 3.44e11 * (1.0 / ::pow(n, 5.0 / 2.0)) * (::pow(J_eV(Pe), 3.0 / 2.0)) * (1.0 / lambda);
+        return 3.44e11 * (1.0 / pow(n, 5.0 / 2.0)) * (pow(Pe / e_charge, 3.0 / 2.0)) * (1.0 / lambda);
     else
-        return (3.0 / 2.0) * 3.44e11 * (1.0 / ::pow(n, 5.0 / 2.0)) * (::pow(n, 1.0 / 2.0)) * (1.0 / lambda);
+        return 3.44e11 * (1.0 / pow(n, 5.0 / 2.0)) * (pow(n, 3.0 / 2.0)) * (1.0 / lambda);
 }
 
 sigmaFn Gamma = [](VectorXdual u, VectorXdual q, dual x, double t)
 {
-    dual G = 2 * x * u(1) / (electronMass * Om_e * Om_e * tau_e(u(0).val, u(1).val)) * ((q(1) / 2 - q(2)) / u(1) + 3. / 2. * q(0) / u(0));
+    // maybe add a factor of sqrt x if x = r^2/2
+
+    dual G = 2 * x * u(1) / (electronMass * Om_e * Om_e * tau_e(u(0), u(1))) * ((q(1) / 2 - q(2)) / u(1) + 3. / 2. * q(0) / u(0));
     return G;
 };
 
 sigmaFn qi = [](VectorXdual u, VectorXdual q, dual x, double t)
 {
     dual G = Gamma(u, q, x, t);
-    dual kappa = 2. * u(2) / (ionMass * Om_i * Om_i * tau_i(u(0).val, u(2).val));
-    dual qri = -kappa * q(2) / u(0) * (q(2) / u(2) - q(0) / u(0));
-    dual Q = (2. / 3.) * ((5. / 2.) * u(2) / u(0) * G + 2 * x * qri);
+    dual kappa = 2. * u(2) / (ionMass * Om_i * Om_i * tau_i(u(0), u(2)));
+    dual qri = -kappa * u(2) / u(0) * (q(2) / u(2) - q(0) / u(0));
+    dual Q = (2. / 3.) * ((5. / 2.) * u(2) / u(0) * G + 2. * x * qri);
     return Q;
 };
 sigmaFn qe = [](VectorXdual u, VectorXdual q, dual x, double t)
 {
     dual G = Gamma(u, q, x, t);
-    dual kappa = 4.66 * u(1) / (electronMass * Om_e * Om_e * tau_e(u(0).val, u(1).val));
-    dual qre = -kappa * u(1) / u(0) * (q(1) / u(1) - q(0) / u(0)) + (3. / 2.) * (u(1)) / (u(0) * electronMass * Om_e * Om_e * tau_e(u(0).val, u(1).val)) * (q(2) + q(1));
-    dual Q = (2. / 3.) * (5. / 2. * u(1) / u(0) * G + 2 * x * qre);
+    dual kappa = 4.66 * u(1) / (electronMass * Om_e * Om_e * tau_e(u(0), u(1)));
+    dual qre = -kappa * u(1) / u(0) * (q(1) / u(1) - q(0) / u(0)) + (3. / 2.) * u(1) / (u(0) * electronMass * Om_e * Om_e * tau_e(u(0), u(1))) * (q(2) + q(1));
+    dual Q = (2. / 3.) * (5. / 2. * u(1) / u(0) * G + (2. * x) * qre);
     return Q;
 };
-sigmaFnArray Autodiff3VarCyl::sigmaVec = {Gamma, qi, qe};
+sigmaFnArray Autodiff3VarCyl::sigmaVec = {Gamma, qe, qi};
 
 SourceFn Sn = [](VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
@@ -286,22 +288,17 @@ SourceFn Sn = [](VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double
 // look at ion and electron sources again -- they should be opposite
 SourceFn Spi = [](VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    dual R = sqrt(2. * x);
-
     dual G = Gamma(u, q, x, t) / (2. * x);
     dual V = G / u(0);
-    dual S = 2. / 3. * sqrt(2. * x) * V * q(2) - R * Ci(u(2).val, u(0).val, R.val);
-
+    dual S = 2. / 3. * sqrt(2. * x) * V * q(2);
     return S;
 };
 SourceFn Spe = [](VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    dual R = sqrt(2. * x);
-
     dual G = Gamma(u, q, x, t) / (2. * x);
     dual V = G / u(0);
-    dual S = 2. / 3. * sqrt(2. * x) * V * q(1) - R * Ce(u(2).val, u(0).val, R.val);
+    dual S = 2. / 3. * sqrt(2. * x) * V * q(1);
     return S;
 };
 
-SourceFnArray Autodiff3VarCyl::SourceVec = {Sn, Spi, Spe};
+SourceFnArray Autodiff3VarCyl::SourceVec = {Sn, Spe, Spi};
