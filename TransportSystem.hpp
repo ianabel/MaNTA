@@ -11,42 +11,42 @@
 
  */
 
-class TransportSystem {
-	public:
-		virtual ~TransportSystem() = default;
+class TransportSystem
+{
+public:
+	virtual ~TransportSystem() = default;
 
-		Index getNumVars() const { return nVars; };
+	Index getNumVars() const { return nVars; };
 
-		// Function for passing boundary conditions to the solver
-		virtual Value  LowerBoundary( Index i, Time t ) const = 0;
-		virtual Value  UpperBoundary( Index i, Time t ) const = 0;
+	// Function for passing boundary conditions to the solver
+	virtual Value LowerBoundary(Index i, Time t) const = 0;
+	virtual Value UpperBoundary(Index i, Time t) const = 0;
 
-		virtual bool isLowerBoundaryDirichlet( Index i ) const = 0;
-		virtual bool isUpperBoundaryDirichlet( Index i ) const = 0;
+	virtual bool isLowerBoundaryDirichlet(Index i) const = 0;
+	virtual bool isUpperBoundaryDirichlet(Index i) const = 0;
 
-		// The same for the flux and source functions -- the vectors have length nVars
-		virtual Value SigmaFn( Index i, const Values &u, const Values &q, Position x, Time t ) = 0;
-		virtual Value Sources( Index i, const Values &u, const Values &q, const Values& sigma, Position x, Time t ) = 0;
+	// The same for the flux and source functions -- the vectors have length nVars
+	virtual Value SigmaFn(Index i, const Values &u, const Values &q, Position x, Time t) = 0;
+	virtual Value Sources(Index i, const Values &u, const Values &q, const Values &sigma, Position x, Time t) = 0;
 
-		// This determines the a_i functions. Only one with a default option, but can be overriden
-		virtual Value aFn( Index i, Position x ) { return 1.0; };
+	// This determines the a_i functions. Only one with a default option, but can be overriden
+	virtual Value aFn(Index i, Position x) { return 1.0; };
 
-		// We need derivatives of the flux functions
-		virtual void dSigmaFn_du( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
-		virtual void dSigmaFn_dq( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
+	// We need derivatives of the flux functions
+	virtual void dSigmaFn_du(Index i, Values &, const Values &u, const Values &q, Position x, Time t) = 0;
+	virtual void dSigmaFn_dq(Index i, Values &, const Values &u, const Values &q, Position x, Time t) = 0;
 
-		// and for the sources
-		virtual void dSources_du( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
-		virtual void dSources_dq( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
-		virtual void dSources_dsigma( Index i, Values&, const Values &u, const Values &q, Position x, Time t ) = 0;
+	// and for the sources
+	virtual void dSources_du(Index i, Values &, const Values &u, const Values &q, Position x, Time t) = 0;
+	virtual void dSources_dq(Index i, Values &, const Values &u, const Values &q, Position x, Time t) = 0;
+	virtual void dSources_dsigma(Index i, Values &, const Values &u, const Values &q, Position x, Time t) = 0;
 
-		// and initial conditions for u & q
-		virtual Value      InitialValue( Index i, Position x ) const = 0;
-		virtual Value InitialDerivative( Index i, Position x ) const = 0;
+	// and initial conditions for u & q
+	virtual Value InitialValue(Index i, Position x) const = 0;
+	virtual Value InitialDerivative(Index i, Position x) const = 0;
 
-	protected:
-		Index nVars;
-
+protected:
+	Index nVars;
 };
 
 #endif // TRANSPORTSYSTEM_HPP
