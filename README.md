@@ -14,11 +14,11 @@ To compile and use MaNTA you will need a system with the following
  - A C++20 compliant C++ compiler (tested on g++ 13 and clang++ 16).
  - The Boost C++ Template Library
  - The TOML11 library
- - The SUNDIALS library, Version 6.0.0 or newer -- **SUNDIALS v5.8.0 is no longer supported, please upgrade from 5.x.y to 6.0.0 or newer**
+ - The SUNDIALS library, Version 6.0.0 or newer
  - NETCDF C and NETCDF C++ 4.3 or newer (depends upon netcdf C interface 4.6.0 or newer)
  - The Autodiff C++ library
 
-Precise dependencies have not been exhaustively tested, but . Running on Windows requires the installation of [Windows Subsystem for Linux](https://docs.microsoft.com/en-us/windows/wsl/install) (WSL) 
+Precise dependencies have not been exhaustively tested, bug reports are welcome. Running on Windows requires the installation of [Windows Subsystem for Linux](https://docs.microsoft.com/en-us/windows/wsl/install) (WSL) 
 and proceeding as for linux.
 
 MacOS has yet to be tested.
