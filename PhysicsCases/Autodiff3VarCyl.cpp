@@ -10,9 +10,6 @@ Autodiff3VarCyl::Autodiff3VarCyl(toml::value const &config)
 {
     nVars = 3;
 
-    uR(nVars);
-    uL(nVars);
-
     if (config.count("Autodiff3VarCyl") != 1)
         throw std::invalid_argument("There should be a [Autodiff3VarCyl] section if you are using the Autodiff3VarCyl physics model.");
 
@@ -24,17 +21,22 @@ Autodiff3VarCyl::Autodiff3VarCyl(toml::value const &config)
     isUpperDirichlet = toml::find_or(InternalConfig, "isUpperDirichlet", true);
     isLowerDirichlet = toml::find_or(InternalConfig, "isLowerDirichlet", true);
 
+    isTestProblem = toml::find_or(InternalConfig, "isTestProblem", false);
+
     double nL = toml::find_or(InternalConfig, "nL", 3e18);
     double nR = toml::find_or(InternalConfig, "nR", 4e18);
 
-    double peL = toml::find_or(InternalConfig, "peL", 2e3 * 3e18 * e_charge);   // J
-    double peR = toml::find_or(InternalConfig, "peR", 2.1e3 * 3e18 * e_charge); // J
+    double peL = toml::find_or(InternalConfig, "peL", 1e3 * 3e18 * e_charge); // J
+    double peR = toml::find_or(InternalConfig, "peR", 1e3 * 4e18 * e_charge); // J
 
-    double piL = toml::find_or(InternalConfig, "piL", 2e3 * 3e18 * e_charge);   // J
-    double piR = toml::find_or(InternalConfig, "piR", 2.1e3 * 3e18 * e_charge); // J
-
-    uR << nR, peR, piR;
-    uL << nL, peL, piL;
+    double piL = toml::find_or(InternalConfig, "piL", 1e3 * 3e18 * e_charge); // J
+    double piR = toml::find_or(InternalConfig, "piR", 1e3 * 4e18 * e_charge); // J
+    Values upperValues(nVars);
+    Values lowerValues(nVars);
+    upperValues << nR, peR, piR;
+    lowerValues << nL, peL, piL;
+    uR = upperValues;
+    uL = lowerValues;
 }
 
 Value Autodiff3VarCyl::LowerBoundary(Index i, Time t) const { return uL(i); }
@@ -136,7 +138,7 @@ Value Autodiff3VarCyl::InitialDerivative(Index i, Position x) const
     {
         dual2nd pos = x;
         dual2nd t = 0.0;
-        double deriv = derivative(TestDirichlet, wrt(pos), at(x, t, UpperBoundary(i, 0.0), LowerBoundary(i, 0.0), xL, xR));
+        double deriv = derivative(TestDirichlet, wrt(pos), at(pos, t, UpperBoundary(i, 0.0), LowerBoundary(i, 0.0), xL, xR));
         return deriv;
     }
     else
@@ -148,26 +150,32 @@ double Autodiff3VarCyl::TestSource(Index i, Position x, Time t)
 {
     dual2nd T = t;
     dual2nd pos = x;
-
-    double ut = derivative(TestDirichlet, wrt(T), at(x, T, UpperBoundary(i, t), LowerBoundary(i, t), xL, xR));
-
+    double u_R = UpperBoundary(i, t);
+    double u_L = LowerBoundary(i, t);
+    double ut = derivative(TestDirichlet, wrt(T), at(pos, T, u_R, u_L, xL, xR));
     VectorXdual q(nVars);
     VectorXdual u(nVars);
+
     VectorXdual dq(nVars);
     VectorXdual sigma(nVars);
 
     for (Index j = 0; j < nVars; j++)
     {
-        auto [q0, q1, q2] = derivatives(TestDirichlet, wrt(pos, pos), at(x, T, UpperBoundary(i, t), LowerBoundary(i, t), xL, xR));
+        double u_R = UpperBoundary(j, t);
+        double u_L = LowerBoundary(j, t);
+
+        auto [q0, q1, q2] = derivatives(TestDirichlet, wrt(pos, pos), at(pos, T, u_R, u_L, xL, xR));
 
         u(j) = q0;
         q(j) = q1;
         dq(j) = q2;
     }
+
     for (Index j = 0; j < nVars; j++)
     {
         sigma(j) = sigmaVec[j](u, q, x, t);
     }
+
     Values ugrad = gradient(sigmaVec[i], wrt(u), at(u, q, x, t));
     Values qgrad = gradient(sigmaVec[i], wrt(q), at(u, q, x, t));
     dual xdual = x;
@@ -178,7 +186,8 @@ double Autodiff3VarCyl::TestSource(Index i, Position x, Time t)
     {
         uxd += ugrad(j) * q(j).val + qgrad(j) * dq(j).val;
     }
-    double St = ut + uxd - SourceVec[i](u, q, sigma, x, t).val;
+    double S = SourceVec[i](u, q, sigma, x, t).val;
+    double St = ut + uxd - S;
 
     return St;
 }
@@ -204,27 +213,8 @@ const double Om_i = e_charge * B_mid / ionMass;
 const double Om_e = e_charge * B_mid / electronMass;
 const double lambda = 15.0;
 
-// double tau_i(Value n, Value Pi)
-// {
-//     if (Pi > 0)
-//         return 3.44e11 * (1.0 / ::pow(n, 5.0 / 2.0)) * (::pow(J_eV(Pi), 3.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass));
-//     else
-//         return 3.44e11 * (1.0 / ::pow(n, 5.0 / 2.0)) * (::pow(n, 3.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass)); // if we have a negative temp just treat it as 1eV
-// }
-
-// double tau_e(Value n, Value Pe)
-// {
-//     if (Pe > 0)
-//         return (3.0 / 2.0) * 3.44e11 * (::pow(n, 5.0 / 2.0)) * (::pow(J_eV(Pe), 1.0 / 2.0)) * (1.0 / lambda);
-//     else
-//         return (3.0 / 2.0) * 3.44e11 * (::pow(n, 5.0 / 2.0)) * (::pow(n, 1.0 / 2.0)) * (1.0 / lambda);
-// }
-
 dual nu(dual n, dual Pe)
 {
-    // double alpha = ::pow(e_charge*e_charge/(2*M_PI*eps_0*me),2)*n(R)*lambda(R);
-    // return alpha/n(R)*::pow(mi*Pe+me*Pi, -3.0/2.0);
-    // std::cerr << 3.44e-11*::pow(n(R),5.0/2.0)*lambda(R)/::pow(J_eV(Pe),3/2) << std::endl << std::endl;
     return 3.44e-11 * pow(n, 5.0 / 2.0) * lambda / pow(Pe / e_charge, 3 / 2);
 }
 
@@ -238,20 +228,22 @@ dual Ci(dual n, dual Pi, dual Pe)
     return -Ce(n, Pi, Pe);
 }
 
-dual tau_i(dual n, dual Pi)
-{
-    if (Pi > 0)
-        return ::sqrt(2) * 3.44e11 * (1.0 / pow(n, 5.0 / 2.0)) * (pow(Pi / e_charge, 3.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass));
-    else
-        return ::sqrt(2) * 3.44e11 * (1.0 / n) * (pow(n, 5.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass)); // if we have a negative temp just treat it as 1eV
-}
-
 dual tau_e(dual n, dual Pe)
 {
     if (Pe > 0)
         return 3.44e11 * (1.0 / pow(n, 5.0 / 2.0)) * (pow(Pe / e_charge, 3.0 / 2.0)) * (1.0 / lambda);
     else
         return 3.44e11 * (1.0 / pow(n, 5.0 / 2.0)) * (pow(n, 3.0 / 2.0)) * (1.0 / lambda);
+}
+
+dual tau_i(dual n, dual Pi)
+{
+    if (Pi > 0)
+        return ::sqrt(2.) * tau_e(n, Pi) * (::sqrt(ionMass / electronMass));
+    //::sqrt(2) * 3.44e11 * (1.0 / pow(n, 5.0 / 2.0)) * (pow(Pi / e_charge, 3.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass));
+    else
+        return ::sqrt(2) *
+               3.44e11 * (1.0 / n) * (pow(n, 5.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass)); // if we have a negative temp just treat it as 1eV
 }
 
 sigmaFn Gamma = [](VectorXdual u, VectorXdual q, dual x, double t)
@@ -267,7 +259,7 @@ sigmaFn qi = [](VectorXdual u, VectorXdual q, dual x, double t)
     dual G = Gamma(u, q, x, t);
     dual kappa = 2. * u(2) / (ionMass * Om_i * Om_i * tau_i(u(0), u(2)));
     dual qri = -kappa * u(2) / u(0) * (q(2) / u(2) - q(0) / u(0));
-    dual Q = (2. / 3.) * ((5. / 2.) * u(2) / u(0) * G + 2. * x * qri);
+    dual Q = (2. / 3.) * ((5. / 2.) * u(2) / u(0) * G + (2. * x) * qri);
     return Q;
 };
 sigmaFn qe = [](VectorXdual u, VectorXdual q, dual x, double t)
