@@ -196,7 +196,8 @@ void SystemSolver::runSolver( std::string inputFile )
 	*/
 	
 	//------------------------------Solve------------------------------
-	std::ofstream out0( inputFile.substr(0, inputFile.rfind(".")) + ".dat" );
+	std::string baseName = inputFile.substr(0, inputFile.rfind("."));
+	std::ofstream out0( baseName + ".dat" );
 
 	out0 << "# Time indexes blocks. " << std::endl;
 	out0 << "# Columns Headings: " << std::endl;

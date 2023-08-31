@@ -129,6 +129,8 @@ private:
 	static double tau( double x ) { return 0.5; };
 
 	friend int residual( realtype, N_Vector, N_Vector, N_Vector, void * );
+
+	void initialiseNetCDF( std::string const& fname );
 	
 #ifdef TEST
 	friend struct system_solver_test_suite::systemsolver_init_tests;
