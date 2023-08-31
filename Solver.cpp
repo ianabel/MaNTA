@@ -206,7 +206,7 @@ void SystemSolver::runSolver( std::string inputFile )
 	out0 << std::endl;
 
 	if(printToFile)
-		print(out0, t0, nOut, 0);
+		print(out0, t0, nOut );
 	
 	IDASetMaxNumSteps(IDA_mem, 50000);
 
@@ -214,7 +214,7 @@ void SystemSolver::runSolver( std::string inputFile )
 	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
 	if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
 	{
-		print(out0, t0, nOut, 0);
+		print(out0, t0, nOut );
 		throw std::runtime_error("IDACalcIC could not complete");
 	}
 
@@ -242,7 +242,7 @@ void SystemSolver::runSolver( std::string inputFile )
 		retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
 		if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
 		{
-			print(out0, tret, nOut, 0);
+			print(out0, tret, nOut );
 			throw std::runtime_error("IDASolve could not complete");
 		}
 		if(iout%stepsPerPrint)

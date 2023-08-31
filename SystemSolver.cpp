@@ -835,6 +835,7 @@ void SystemSolver::print( std::ostream& out, double t, int nOut, N_Vector const 
 	out << std::endl;
 }
 
+/*
 void SystemSolver::print( std::ostream& out, double t, int nOut, int var )
 {
 
@@ -848,6 +849,7 @@ void SystemSolver::print( std::ostream& out, double t, int nOut, int var )
 	out << std::endl;
 	out << std::endl; // Two blank lines needed to make gnuplot happy
 }
+*/
 
 void SystemSolver::print( std::ostream& out, double t, int nOut )
 {
