@@ -27,6 +27,8 @@ LinearDiffusion::LinearDiffusion( toml::value const& config )
 	InitialHeight = toml::find_or( DiffConfig, "InitialHeight", 1.0 );
 	Centre =        toml::find_or( DiffConfig, "Centre", 0.5 );
 
+	lowerNeumann = toml::find_or( DiffConfig, "LowerNeumann", false );
+
 }
 
 // Dirichlet Boundary Conditon
@@ -40,7 +42,7 @@ Value LinearDiffusion::UpperBoundary( Index, Time ) const
 	return 0.0;
 }
 
-bool LinearDiffusion::isLowerBoundaryDirichlet( Index ) const { return true; };
+bool LinearDiffusion::isLowerBoundaryDirichlet( Index ) const { return !lowerNeumann; };
 bool LinearDiffusion::isUpperBoundaryDirichlet( Index ) const { return true; };
 
 
