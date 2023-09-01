@@ -239,8 +239,10 @@ dual tau_e(dual n, dual Pe)
 dual tau_i(dual n, dual Pi)
 {
     if (Pi > 0)
-        return ::sqrt(2.) * tau_e(n, Pi) * (::sqrt(ionMass / electronMass));
-    //::sqrt(2) * 3.44e11 * (1.0 / pow(n, 5.0 / 2.0)) * (pow(Pi / e_charge, 3.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass));
+
+        // return ::sqrt(2.) * tau_e(n, Pi) * (::sqrt(ionMass / electronMass));
+        return ::sqrt(2) * 3.44e11 * (1.0 / pow(n, 5.0 / 2.0)) * (pow(Pi / e_charge, 3.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass));
+
     else
         return ::sqrt(2) *
                3.44e11 * (1.0 / n) * (pow(n, 5.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass)); // if we have a negative temp just treat it as 1eV
