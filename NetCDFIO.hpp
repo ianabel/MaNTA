@@ -21,14 +21,21 @@ class NetCDFIO
 
 		void AddTimeSeries( std::string name, std::string description, std::string units, double initialValue );
 
+		template<typename T> void AddVariable( std::string name, std::string description, std::string units, T const& initialValue );
+
 		size_t AddTimeSlice( double T );
+
 		void AppendToTimeSeries( std::string const& name, double value, size_t tIndex );
+		template<typename T> void AppendToVariable( std::string const& name, T const& var , size_t tIndex );
 
 	private:
 		std::string filename;
+		std::vector<double> gridpoints;
 		netCDF::NcFile data_file;
 		netCDF::NcDim TimeDim;
 		netCDF::NcVar TimeVar;
+		netCDF::NcDim SpaceDim;
+		netCDF::NcVar SpaceVar;
 };
 
 

@@ -1,6 +1,6 @@
 
 #include "NetCDFIO.hpp"
-#include "MirrorPlasma.hpp"
+#include "SystemSolver.hpp"
 
 // Code for NetCDF interface
 //
@@ -79,72 +79,66 @@ void NetCDFIO::AppendToTimeSeries( std::string const& name, double value, size_t
 	variable.putVar( v, value );
 }
 
-void NetCDFIO::SetOutputGrid( std::vector<double> const& gridpoints )
+template<typename T> void NetCDFIO::AppendToVariable( std::string const& name, T const& var, size_t tIndex )
 {
+	NcVar variable = data_file.getVar( name );
+	std::vector<double> gridValues;
+	gridValues.resize( gridpoints.size() );
+	for ( size_t i = 0; i < gridpoints.size(); ++i )
+		gridValues[ i ] = var( gridpoints[ i ] );
+
+	variable.putVar( {tIndex,0}, {1,gridpoints.size()}, gridValues.data() );
+}
+
+void NetCDFIO::SetOutputGrid( std::vector<double> const& gridpoints_ )
+{
+	gridpoints = gridpoints_;
 	SpaceDim = data_file.addDim( "x", gridpoints.size() );
 	SpaceVar = data_file.addVar( "x", netCDF::NcDouble(), SpaceDim );
+}
 
+template<typename T> void NetCDFIO::AddVariable( std::string name, std::string description, std::string units, T const& initialValue )
+{
+	NcVar newvar = data_file.addVar( name, netCDF::NcDouble(), {TimeDim, SpaceDim} );
+	newvar.putAtt( "description", description );
+	if ( units != "" )
+		newvar.putAtt( "units", units );
+	std::vector<double> gridValues;
+	gridValues.resize( gridpoints.size() );
+	for ( size_t i = 0; i < gridpoints.size(); ++i )
+		gridValues[ i ] = initialValue( gridpoints[ i ] );
+
+	newvar.putVar( {0,0}, {1,gridpoints.size()}, gridValues.data() );
 }
 
 
 // SystemSolver routines that use NetCDFIO
 
-void SystemSolver::InitialiseNetCDF( std::String const& NetcdfOutputFile )
+void SystemSolver::initialiseNetCDF( std::string const& NetcdfOutputFile, size_t nOut )
 {
 	nc_output.Open( NetcdfOutputFile );
-	nc_output.AddScalarVariable( "R_min","Innermost plasma radius", "m", PlasmaInnerRadius() );
-	nc_output.AddScalarVariable( "R_max","Outermost plasma radius", "m", PlasmaOuterRadius() );
-	nc_output.AddScalarVariable( "R_plasma","Plasma radius on centreline", "m", PlasmaCentralRadius() );
-	nc_output.AddScalarVariable( "IonDensity","Density of bulk ion species in the central cell", "10^20 m^-3", IonDensity );
-	nc_output.AddScalarVariable( "ElectronDensity","Density of electrons in the central cell", "10^20 m^-3", ElectronDensity );
-	nc_output.AddScalarVariable( "MirrorRatio","Ratio of Minimum to Maximum B along a field line", "", MirrorRatio );
+	std::vector<double> gridpoints( nOut );
+	std::ranges::generate( gridpoints, [ i=0,this,nOut ](){
+		double delta_x = ( grid.upperBoundary() - grid.lowerBoundary() ) * ( 1.0/( nOut - 1.0 ) );
+		return static_cast<double>( i )*delta_x + grid.lowerBoundary();
+	} );
 
-	// Time Dependent Variables
-	nc_output.AddTimeSeries( "Voltage", "Voltage drop across the plasma","V", ImposedVoltage );
-	nc_output.AddTimeSeries( "AmbipolarPhi", "Parallel phi drop","V", AmbipolarPhi() );
-	nc_output.AddTimeSeries( "MachNumber", "Plasma velocity divided by Sqrt(T_e/m_i)", "", MachNumber );
-	nc_output.AddTimeSeries( "IonTemperature", "Temperature of the bulk ion species", "keV", IonTemperature );
-	nc_output.AddTimeSeries( "ElectronTemperature", "Temperature of the bulk ion species", "keV", ElectronTemperature );
-
-	nc_output.AddTimeSeries( "Current", "Radial current through the plasma","A", RadialCurrent() );
-	nc_output.AddTimeSeries( "ViscousTorque", "Viscous Torque","", ViscousTorque() );
-	nc_output.AddTimeSeries( "ParAngMomLoss", "Parallel Angular Momentum Loss","", ParallelAngularMomentumLossRate() );
-
-	nc_output.AddTimeSeries( "ViscousHeating", "Viscous Heating","W/m^3", ViscousHeating() );
-	nc_output.AddTimeSeries( "ParIonHeatLoss", "Parallel Ion Heat Loss","W/m^3", ParallelIonHeatLoss() );
-	nc_output.AddTimeSeries( "ParElecHeatLoss", "Parallel Electron Heat Loss","W/m^3", ParallelElectronHeatLoss() );
-	nc_output.AddTimeSeries( "PerpHeatLoss", "Perp Ion Heat Loss","W/m^3", ClassicalIonHeatLoss() );
-
-
+	nc_output.SetOutputGrid( gridpoints );
+	// Add diagnostic hooks
+	
+	for ( Index i=0; i<nVars; ++i ) {
+		auto initial_v = [this,i]( Position x ) { return problem->InitialValue( i, x ); };
+		nc_output.AddVariable( problem->getVariableName( i ), problem->getVariableDescription( i ), problem->getVariableUnits( i ), initial_v );
+	}
 }
 
-void MirrorPlasma::WriteTimeslice( double tNew )
+void SystemSolver::WriteTimeslice( double tNew )
 {
-	if ( !isTimeDependent )
-		return;
+	size_t tIndex = nc_output.AddTimeSlice( tNew );
 
-	if ( NetcdfOutputFile == "" )
-		return;
-
-	int tIndex = nc_output.AddTimeSlice( tNew );
-	if ( ::fabs( tNew - time ) > 1e-6 )
-	{
-		std::cerr << "Irregularity in output times" << std::endl;
+	for ( Index i=0; i<nVars; ++i ) {
+		nc_output.AppendToVariable( problem->getVariableName( i ), y.u( i ), tIndex );
 	}
-	nc_output.AppendToTimeSeries( "Voltage", ImposedVoltage, tIndex );
-	nc_output.AppendToTimeSeries( "AmbipolarPhi", AmbipolarPhi(), tIndex );
-	nc_output.AppendToTimeSeries( "MachNumber", MachNumber, tIndex );
-	nc_output.AppendToTimeSeries( "IonTemperature", IonTemperature, tIndex );
-	nc_output.AppendToTimeSeries( "ElectronTemperature", ElectronTemperature, tIndex );
-
-	nc_output.AppendToTimeSeries( "Current", RadialCurrent(), tIndex );
-	nc_output.AppendToTimeSeries( "ViscousTorque", ViscousTorque(), tIndex );
-	nc_output.AppendToTimeSeries( "ParAngMomLoss", ParallelAngularMomentumLossRate(), tIndex );
-
-	nc_output.AppendToTimeSeries( "ViscousHeating", ViscousHeating(), tIndex );
-	nc_output.AppendToTimeSeries( "ParIonHeatLoss", ParallelIonHeatLoss(), tIndex );
-	nc_output.AppendToTimeSeries( "ParElecHeatLoss", ParallelElectronHeatLoss(), tIndex );
-	nc_output.AppendToTimeSeries( "PerpHeatLoss", ClassicalIonHeatLoss(), tIndex );
 
 }
 

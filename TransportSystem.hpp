@@ -44,6 +44,18 @@ class TransportSystem {
 		virtual Value      InitialValue( Index i, Position x ) const = 0;
 		virtual Value InitialDerivative( Index i, Position x ) const = 0;
 
+		virtual std::string getVariableName( Index i ) {
+			return std::string( "Var" ) + std::to_string( i );
+		}
+
+		virtual std::string getVariableDescription( Index i ) {
+			return std::string( "Variable " ) + std::to_string( i );
+		}
+
+		virtual std::string getVariableUnits( Index i ) {
+			return std::string( "" );
+		}
+
 	protected:
 		Index nVars;
 

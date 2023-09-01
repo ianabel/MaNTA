@@ -14,6 +14,7 @@
 #include "gridStructures.hpp"
 #include "TransportSystem.hpp"
 #include "DGSoln.hpp"
+#include "NetCDFIO.hpp"
 
 #ifdef TEST
 namespace system_solver_test_suite {
@@ -130,7 +131,9 @@ private:
 
 	friend int residual( realtype, N_Vector, N_Vector, N_Vector, void * );
 
-	void initialiseNetCDF( std::string const& fname );
+	NetCDFIO nc_output;
+	void initialiseNetCDF( std::string const& fname, size_t nOut );
+	void WriteTimeslice( double tNew );
 	
 #ifdef TEST
 	friend struct system_solver_test_suite::systemsolver_init_tests;
