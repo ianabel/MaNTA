@@ -9,8 +9,8 @@
 class SunLinSolWrapper
 {
 public:
-	SunLinSolWrapper( SystemSolver *sysSolver, void* mem)
-		: solver(sysSolver), IDA_mem(mem) {}
+	SunLinSolWrapper( SystemSolver *sysSolver )
+		: solver(sysSolver) {}
 	~SunLinSolWrapper() = default;
 
 	int Setup( SUNMatrix M );  
@@ -27,7 +27,6 @@ public:
 
 private:
 	SystemSolver *solver;
-	void *IDA_mem   = NULL;
 };
 
 

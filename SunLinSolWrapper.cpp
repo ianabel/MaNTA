@@ -8,9 +8,6 @@
 
 int SunLinSolWrapper::Solve( SUNMatrix A, N_Vector x, N_Vector b )
 {
-	//realtype cj = 1.0;
-	//IDAGetCurrentCj(IDA_mem, &cj);
-	//solver->setAlpha(cj);
 	solver->solveJacEq( b, x);
 	return 0;
 }
@@ -76,7 +73,7 @@ struct _generic_SUNLinearSolver_Ops LSOps =
 SUNLinearSolver SunLinSolWrapper::SunLinSol( SystemSolver* solver, void *mem, SUNContext ctx )
 {
 	SUNLinearSolver LS = SUNLinSolNewEmpty(ctx);
-	LS->content = new SunLinSolWrapper(solver, mem);
+	LS->content = new SunLinSolWrapper(solver);
 	LS->ops = &LSOps;
 	return LS;
 }
