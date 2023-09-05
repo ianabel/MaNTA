@@ -8,9 +8,9 @@
 
 int SunLinSolWrapper::Solve( SUNMatrix A, N_Vector x, N_Vector b )
 {
-	realtype cj = 1.0;
-	IDAGetCurrentCj(IDA_mem, &cj);
-	solver->setAlpha(cj);
+	//realtype cj = 1.0;
+	//IDAGetCurrentCj(IDA_mem, &cj);
+	//solver->setAlpha(cj);
 	solver->solveJacEq( b, x);
 	return 0;
 }

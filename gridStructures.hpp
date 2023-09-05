@@ -158,7 +158,7 @@ class LegendreBasis
 			return ::sqrt( ( 2* i + 1 )/( I.h() ) ) * ( 2*i/I.h() ) *( 1.0/( y*y-1.0 ) )*( y*std::legendre( i, y ) - std::legendre( i-1,y ) );
 		};
 
-		static double Evaluate( Interval const & I, Eigen::VectorXd const& vCoeffs, double x )
+		static double Evaluate( Interval const & I, const VectorRef& vCoeffs, double x )
 		{
 			double result = 0.0;
 			for ( Index i=0; i<vCoeffs.size(); ++i )
@@ -346,12 +346,12 @@ class DGApprox
 			return f( I.x_l )*g( I.x_l ) + f( I.x_u )*g( I.x_u );
 		};
 
-		static void MassMatrix( Interval const& I, Eigen::MatrixXd &u ) {
+		static void MassMatrix( Interval const& I, MatrixRef u ) {
 			// The unweighted mass matrix is the identity.
 			u.setIdentity();
 		};
 
-		static void MassMatrix( Interval const& I, Eigen::MatrixXd &u, std::function< double( double )> const& w ) {
+		static void MassMatrix( Interval const& I, MatrixRef u, std::function< double( double )> const& w ) {
 			for ( Index i = 0 ; i < u.rows(); i++ )
 				for ( Index j = 0 ; j < u.cols(); j++ )
 				{
@@ -360,7 +360,7 @@ class DGApprox
 				}
 		};
 
-		static void MassMatrix( Interval const& I, Eigen::MatrixXd &u, std::function< double( double, int )> const& w, int var ) {
+		static void MassMatrix( Interval const& I, MatrixRef u, std::function< double( double, int )> const& w, int var ) {
 			for ( Index i = 0 ; i < u.rows(); i++ )
 				for ( Index j = 0 ; j < u.cols(); j++ )
 				{
@@ -369,14 +369,14 @@ class DGApprox
 				}
 		};
 
-		Eigen::MatrixXd MassMatrix( Interval const& I )
+		Matrix MassMatrix( Interval const& I )
 		{
-			return Eigen::MatrixXd::Identity( k + 1, k + 1 );
+			return Matrix::Identity( k + 1, k + 1 );
 		}
 
-		Eigen::MatrixXd MassMatrix( Interval const& I, std::function<double( double )> const&w )
+		Matrix MassMatrix( Interval const& I, std::function<double( double )> const&w )
 		{
-			Eigen::MatrixXd u ( k + 1, k + 1 );
+			Matrix u ( k + 1, k + 1 );
 			for ( Index i = 0 ; i < u.rows(); i++ )
 				for ( Index j = 0 ; j < u.cols(); j++ )
 				{
@@ -386,7 +386,7 @@ class DGApprox
 			return u;
 		}
 
-		static void DerivativeMatrix( Interval const& I, Eigen::MatrixXd &D ) {
+		static void DerivativeMatrix( Interval const& I, MatrixRef D ) {
 			for ( Index i = 0 ; i < D.rows(); i++ )
 				for ( Index j = 0 ; j < D.cols(); j++ )
 				{
@@ -395,7 +395,7 @@ class DGApprox
 				}
 		}
 
-		static void DerivativeMatrix( Interval const& I, Eigen::MatrixXd &D, std::function<double ( double )> const& w ) {
+		static void DerivativeMatrix( Interval const& I, MatrixRef D, std::function<double ( double )> const& w ) {
 			for ( Index i = 0 ; i < D.rows(); i++ )
 				for ( Index j = 0 ; j < D.cols(); j++ )
 				{	
@@ -406,7 +406,7 @@ class DGApprox
 
 		void zeroCoeffs() {
 			for ( auto pair : coeffs )
-				pair.second = Eigen::VectorXd::Zero( pair.second.size() );
+				pair.second = Vector::Zero( pair.second.size() );
 		}
 
 		/*

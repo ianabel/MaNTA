@@ -10,6 +10,10 @@ using Value = double;
 
 using Vector = Eigen::Matrix<double,Eigen::Dynamic,1>;
 using Matrix = Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic>;
+
+using MatrixRef = Eigen::Ref<Matrix>;
+using VectorRef = Eigen::Ref<Vector>;
+
 using MatrixWrapper = Eigen::Map<Matrix>;
 using VectorWrapper = Eigen::Map<Vector>;
 

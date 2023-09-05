@@ -19,6 +19,7 @@
 #ifdef TEST
 namespace system_solver_test_suite {
 	struct systemsolver_init_tests;
+	struct systemsolver_multichannel_init_tests;
 	struct systemsolver_matrix_tests;
 };
 #endif
@@ -56,11 +57,8 @@ public:
 	void setAlpha(double const a) {alpha = a;}
 
 	//print current output for u and q to output file
-	void print( std::ostream& out, double t, int nOut, int var );
-	
 	void print( std::ostream& out, double t, int nOut );
 	void print( std::ostream& out, double t, int nOut, N_Vector const & tempY );
-
 
 
 	double getdt() const {return dt;}
@@ -78,6 +76,8 @@ public:
 	
 	// Initialise 
 	void runSolver( std::string );
+
+	void SetTime( double tt ) { t = tt; };
 
 private:
 	Grid grid;
@@ -137,6 +137,7 @@ private:
 	
 #ifdef TEST
 	friend struct system_solver_test_suite::systemsolver_init_tests;
+	friend struct system_solver_test_suite::systemsolver_multichannel_init_tests;
 	friend struct system_solver_test_suite::systemsolver_matrix_tests;
 #endif
 };

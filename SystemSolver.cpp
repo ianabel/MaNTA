@@ -492,15 +492,15 @@ void SystemSolver::updateMForJacSolve(std::vector< Eigen::FullPivLU< Eigen::Matr
 		Eigen::MatrixXd MX(3*nVars*(k+1),3*nVars*(k+1));
 		MX.setZero();
 		MX = MBlocks[i];
+
 		//X matrix
+
 		for( Index var = 0; var < nVars; var++ )
 		{
 			std::function<double( double )> alphaF = [ =,this ]( double x ){ return alpha*problem->aFn(var, x);};
-			Eigen::MatrixXd Xsubmat( (k + 1), (k + 1) );
-			Xsubmat.setZero();
-			DGApprox::MassMatrix( I, Xsubmat, alphaF);
-			X.block(var*(k+1), var*(k+1), k+1, k+1) = Xsubmat;
+			DGApprox::MassMatrix( I, X.block(var*(k+1), var*(k+1), k+1, k+1), alphaF);
 		}
+
 		MX.block( nVars*(k+1), 2*nVars*(k+1), nVars*(k+1), nVars*(k+1) ) += X;
 
 		//NLq Matrix
@@ -526,8 +526,9 @@ void SystemSolver::updateMForJacSolve(std::vector< Eigen::FullPivLU< Eigen::Matr
 		//if(i==0) std::cerr << MX << std::endl << std::endl;
 		//if(i==0)std::cerr << MX.inverse() << std::endl << std::endl;
 
-		MXsolvers.emplace_back(MX);
+		MXsolvers[ i ].compute(MX);
 	}
+	delete[] mem;
 }
 
 void SystemSolver::mapDGtoSundials( std::vector< VectorWrapper >& SQU_cell, VectorWrapper& lam, realtype* const& Y) const
@@ -559,7 +560,7 @@ void SystemSolver::solveJacEq(N_Vector& g, N_Vector& delY)
 	K_global.setZero();
 
 	//assemble temp cellwise M blocks
-	std::vector< Eigen::FullPivLU< Eigen::MatrixXd > > factorisedM{};
+	std::vector< Eigen::FullPivLU< Eigen::MatrixXd > > factorisedM( grid.getNCells() );
 	updateMForJacSolve(factorisedM, alpha, del_y );
 
 	// Assemble RHS g into cellwise form and solve for SQU blocks

@@ -34,7 +34,6 @@ void SystemSolver::runSolver( std::string inputFile )
 	int nOut = 301;
 	double tFinal;
 	realtype rtol;
-	bool printToFile = true;
 	realtype t0 = 0.0, t1, tout, tret;
 
 
@@ -206,8 +205,10 @@ void SystemSolver::runSolver( std::string inputFile )
 		out0 << "\t" << "var" << v << " u" << "\t" <<  "var" << v << " q" << "\t" <<  "var" << v << " sigma";
 	out0 << std::endl;
 
-	if(printToFile)
-		print(out0, t0, nOut );
+	print(out0, t0, nOut );
+	
+	initialiseNetCDF( baseName + ".nc", nOut );
+	WriteTimeslice( t0 );
 	
 	IDASetMaxNumSteps(IDA_mem, 50000);
 
@@ -215,7 +216,6 @@ void SystemSolver::runSolver( std::string inputFile )
 	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
 	if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
 	{
-		print(out0, t0, nOut );
 		throw std::runtime_error("IDACalcIC could not complete");
 	}
 
@@ -235,6 +235,8 @@ void SystemSolver::runSolver( std::string inputFile )
 
 	IDASetMinStep(IDA_mem, 1.0e-6);
 
+	t = t0;
+
 	//Solving Loop
 	for (tout = t1, iout = 1; iout <= totalSteps; iout++, tout += delta_t) 
 	{
@@ -244,6 +246,7 @@ void SystemSolver::runSolver( std::string inputFile )
 		if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
 		{
 			print(out0, tret, nOut );
+			WriteTimeslice( tret );
 			throw std::runtime_error("IDASolve could not complete");
 		}
 		if(iout%stepsPerPrint)
@@ -253,12 +256,17 @@ void SystemSolver::runSolver( std::string inputFile )
 		if(iout%stepsPerPrint == 0)
 		{
 			print(out0, tret, nOut, Y );
+			WriteTimeslice( tret );
 
 			// Diagnostics go here
 		}
 	}
 
 	std::cerr << "Total number of steps taken = " << total_steps << std::endl;
+
+	out0.close();
+	nc_output.Close();
+	
 
 	IDAFree( &IDA_mem );
 
@@ -277,9 +285,11 @@ void SystemSolver::runSolver( std::string inputFile )
 
 int EmptyJac(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3)
 {
-	//This function is purely superficial
-	//Sundials looks for a Jacobian, but our Jacobian equation is solved without computing the jacobian. 
-	//So we pass a fake one to sundials to prevent an error
+	// Sundials looks for a Jacobian, but our Jacobian equation is solved without computing the jacobian. 
+	// We use this function to capture t and cj for the solve.
+	auto System = reinterpret_cast<SystemSolver*>( user_data );
+	System->SetTime( tt );
+	System->setAlpha( cj );
 	return 0;
 }
 
