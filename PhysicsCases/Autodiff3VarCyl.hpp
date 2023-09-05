@@ -64,6 +64,12 @@ private:
 
     static dual2nd TestDirichlet(dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R);
 
+    // normalizations
+    const Value n0 = 3e18;
+    const Value T0 = 1.6e-19 * 1e2;
+    const Value p0 = n0 * T0;
+    const Value L = 1;
+
     REGISTER_PHYSICS_HEADER(Autodiff3VarCyl)
 };
 #endif

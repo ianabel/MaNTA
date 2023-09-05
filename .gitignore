@@ -3,6 +3,7 @@ unit_test_suite
 /*.conf
 /*.report
 /*.plot
+/*.dat
 Makefile.local
 *.o
 toml11/

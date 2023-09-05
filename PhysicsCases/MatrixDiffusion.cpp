@@ -1,6 +1,5 @@
 
 #include "MatrixDiffusion.hpp"
-
 /*
 	Implementation of the Matrix Diffusion case
  */
