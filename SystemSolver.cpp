@@ -492,15 +492,15 @@ void SystemSolver::updateMForJacSolve(std::vector< Eigen::FullPivLU< Eigen::Matr
 		Eigen::MatrixXd MX(3*nVars*(k+1),3*nVars*(k+1));
 		MX.setZero();
 		MX = MBlocks[i];
+
 		//X matrix
+
 		for( Index var = 0; var < nVars; var++ )
 		{
 			std::function<double( double )> alphaF = [ =,this ]( double x ){ return alpha*problem->aFn(var, x);};
-			Eigen::MatrixXd Xsubmat( (k + 1), (k + 1) );
-			Xsubmat.setZero();
-			DGApprox::MassMatrix( I, Xsubmat, alphaF);
-			X.block(var*(k+1), var*(k+1), k+1, k+1) = Xsubmat;
+			DGApprox::MassMatrix( I, X.block(var*(k+1), var*(k+1), k+1, k+1), alphaF);
 		}
+
 		MX.block( nVars*(k+1), 2*nVars*(k+1), nVars*(k+1), nVars*(k+1) ) += X;
 
 		//NLq Matrix

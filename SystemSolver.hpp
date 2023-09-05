@@ -18,6 +18,7 @@
 #ifdef TEST
 namespace system_solver_test_suite {
 	struct systemsolver_init_tests;
+	struct systemsolver_multichannel_init_tests;
 	struct systemsolver_matrix_tests;
 };
 #endif
@@ -132,6 +133,7 @@ private:
 	
 #ifdef TEST
 	friend struct system_solver_test_suite::systemsolver_init_tests;
+	friend struct system_solver_test_suite::systemsolver_multichannel_init_tests;
 	friend struct system_solver_test_suite::systemsolver_matrix_tests;
 #endif
 };

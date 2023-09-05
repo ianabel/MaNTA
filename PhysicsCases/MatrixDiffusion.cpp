@@ -20,14 +20,16 @@ MatrixDiffusion::MatrixDiffusion(toml::value const &config)
 
 	auto const &DiffConfig = config.at("DiffusionProblem");
 
-	nVars = toml::find_or(DiffConfig, "nVars", 1.0);
+	nVars = toml::find_or(DiffConfig, "nVars", 1 );
 	InitialWidth = toml::find_or(DiffConfig, "InitialWidth", 0.2);
 	Centre = toml::find_or(DiffConfig, "Centre", 0.0);
 
 	std::vector<double> InitialHeight_v = toml::find<std::vector<double>>(DiffConfig, "InitialHeights");
 
 	if (static_cast<Index>(InitialHeight_v.size()) != nVars)
-		throw std::invalid_argument("Initial height vector must have 'nVars' elements");
+	{
+		throw std::invalid_argument("Initial height vector must have " + std::to_string( nVars ) + " elements");
+	}
 
 	InitialHeights.resize(nVars);
 	for (Index i = 0; i < nVars; ++i)
@@ -52,12 +54,9 @@ bool MatrixDiffusion::isUpperBoundaryDirichlet(Index) const { return true; };
 
 Value MatrixDiffusion::SigmaFn(Index i, const Values &, const Values &q, Position, Time)
 {
-	double sigma = 0;
+	auto sigma = Kappa * q;
 
-	for (Index j = 0; j < nVars; j++)
-		sigma += Kappa(i, j) * q[j];
-
-	return sigma;
+	return sigma( i );
 }
 
 Value MatrixDiffusion::Sources(Index, const Values &, const Values &, const Values &, Position, Time)
