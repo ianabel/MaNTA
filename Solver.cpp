@@ -234,6 +234,8 @@ void SystemSolver::runSolver( std::string inputFile )
 
 	IDASetMinStep(IDA_mem, 1.0e-6);
 
+	t = t0;
+
 	//Solving Loop
 	for (tout = t1, iout = 1; iout <= totalSteps; iout++, tout += delta_t) 
 	{
@@ -276,9 +278,11 @@ void SystemSolver::runSolver( std::string inputFile )
 
 int EmptyJac(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3)
 {
-	//This function is purely superficial
-	//Sundials looks for a Jacobian, but our Jacobian equation is solved without computing the jacobian. 
-	//So we pass a fake one to sundials to prevent an error
+	// Sundials looks for a Jacobian, but our Jacobian equation is solved without computing the jacobian. 
+	// We use this function to capture t and cj for the solve.
+	auto System = reinterpret_cast<SystemSolver*>( user_data );
+	System->SetTime( tt );
+	System->setAlpha( cj );
 	return 0;
 }
 

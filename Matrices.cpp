@@ -83,9 +83,9 @@ void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX
 				{
 					for ( Index l=0; l < k + 1; ++l )
 					{
-						mat( XVar * nVars + j, ZVar * nVars + l ) +=
+						mat( XVar * ( k + 1 ) + j, ZVar * ( k + 1 ) + l ) +=
 							wgt * dX_dZ_vals1[ ZVar ] * LegendreBasis::Evaluate( I, j, y_plus ) * LegendreBasis::Evaluate( I, l, y_plus );
-						mat( XVar * nVars + j, ZVar * nVars + l ) +=
+						mat( XVar * ( k + 1 ) + j, ZVar * ( k + 1 ) + l ) +=
 							wgt * dX_dZ_vals2[ ZVar ] * LegendreBasis::Evaluate( I, j, y_minus ) * LegendreBasis::Evaluate( I, l, y_minus );
 					}
 				}

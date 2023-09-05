@@ -79,6 +79,8 @@ public:
 	// Initialise 
 	void runSolver( std::string );
 
+	void SetTime( double tt ) { t = tt; };
+
 private:
 	Grid grid;
 	unsigned int k; 		//polynomial degree per cell
