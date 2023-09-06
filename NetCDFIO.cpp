@@ -95,6 +95,7 @@ void NetCDFIO::SetOutputGrid( std::vector<double> const& gridpoints_ )
 	gridpoints = gridpoints_;
 	SpaceDim = data_file.addDim( "x", gridpoints.size() );
 	SpaceVar = data_file.addVar( "x", netCDF::NcDouble(), SpaceDim );
+	SpaceVar.putVar( {0}, {gridpoints.size()}, gridpoints.data() );
 }
 
 template<typename T> void NetCDFIO::AddVariable( std::string name, std::string description, std::string units, T const& initialValue )
@@ -118,9 +119,10 @@ void SystemSolver::initialiseNetCDF( std::string const& NetcdfOutputFile, size_t
 {
 	nc_output.Open( NetcdfOutputFile );
 	std::vector<double> gridpoints( nOut );
-	std::ranges::generate( gridpoints, [ i=0,this,nOut ](){
+	std::ranges::generate( gridpoints, [ this,nOut ](){
+		static int i = 0;
 		double delta_x = ( grid.upperBoundary() - grid.lowerBoundary() ) * ( 1.0/( nOut - 1.0 ) );
-		return static_cast<double>( i )*delta_x + grid.lowerBoundary();
+		return static_cast<double>( i++ )*delta_x + grid.lowerBoundary();
 	} );
 
 	nc_output.SetOutputGrid( gridpoints );
