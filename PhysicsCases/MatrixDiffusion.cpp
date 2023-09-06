@@ -19,22 +19,25 @@ MatrixDiffusion::MatrixDiffusion(toml::value const &config)
 
 	auto const &DiffConfig = config.at("DiffusionProblem");
 
-	nVars = toml::find_or(DiffConfig, "nVars", 1 );
+	nVars = toml::find_or(DiffConfig, "nVars", 1);
 	InitialWidth = toml::find_or(DiffConfig, "InitialWidth", 0.2);
 	Centre = toml::find_or(DiffConfig, "Centre", 0.0);
 
 	std::vector<double> InitialHeight_v = toml::find<std::vector<double>>(DiffConfig, "InitialHeights");
+	std::vector<double> Kappa_v = toml::find<std::vector<double>>(DiffConfig, "Kappa");
+
+	Kappa = MatrixWrapper(Kappa_v.data(), nVars * nVars, nVars);
 
 	if (static_cast<Index>(InitialHeight_v.size()) != nVars)
 	{
-		throw std::invalid_argument("Initial height vector must have " + std::to_string( nVars ) + " elements");
+		throw std::invalid_argument("Initial height vector must have " + std::to_string(nVars) + " elements");
 	}
 
 	InitialHeights.resize(nVars);
 	for (Index i = 0; i < nVars; ++i)
 		InitialHeights[i] = InitialHeight_v[i];
 
-	Kappa = Matrix::Identity(nVars, nVars);
+	//	Kappa = Matrix::Identity(nVars, nVars);
 }
 
 // Dirichlet Boundary Conditon
@@ -55,7 +58,7 @@ Value MatrixDiffusion::SigmaFn(Index i, const Values &, const Values &q, Positio
 {
 	auto sigma = Kappa * q;
 
-	return sigma( i );
+	return sigma(i);
 }
 
 Value MatrixDiffusion::Sources(Index, const Values &, const Values &, const Values &, Position, Time)
