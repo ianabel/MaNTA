@@ -10,6 +10,7 @@ toml11/
 sundials/
 resources/
 .vscode/
+Config/
 plotter.gnu
 -O0
 -O3

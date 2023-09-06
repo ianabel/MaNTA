@@ -6,12 +6,25 @@ header_format = "# {0}\t{1} {2}\t{3} {4}\t{5} {6}"
 time_format = "# t = {}"
 data_format = "{}\t"
 
+def solution_FISHER(x,t):
+    c = 5.0/np.sqrt(6.0)
+    z = x-c*t
+    C = 1.0
+    S = 1.0 + C * np.exp( z / np.sqrt( 6.0 ) )
+    return 1.0 / ( S * S )
+
+def solution_NonLinear(x,t):
+    n = 2
+    eta = x/np.sqrt(1+t)
+    eta[eta>=1.0]=0.0
+    return np.power(1-eta,1/n)
+
 def main():
-    with open("MatrixDiffusion.dat",'rt') as data:
+    with open("./Config/NonlinearDiffusion.dat",'rt') as data:
         count = 0
         time = 0
         index = 0
-        nVars = 3
+        nVars = 1
         headings = ""
         line_begin = False
         u = np.ndarray(shape=(301,nVars))
@@ -35,7 +48,6 @@ def main():
 
             elif count > 3:
                 if(line.startswith("#")):
-
                     U = np.vstack((U,np.expand_dims(u,0)))
                     Q = np.vstack((Q,np.expand_dims(q,0)))
                     Sigma = np.vstack((Sigma,np.expand_dims(sigma,0)))
@@ -50,7 +62,6 @@ def main():
                 elif(line_begin):
                     l = parse.parse(data_format_n,line)
                     x[index] = float(l[0])
-                    
                     for i in range(0,nVars):
                         u[index,i] = float(l[3*i+1])
                         q[index,i] = float(l[3*i+2])
@@ -58,9 +69,13 @@ def main():
                     index += 1
         ind = -1
         print(U.shape)
+        [X,T] = np.meshgrid(x,t)
+        SOL = solution_NonLinear(X,T)
+
         plt.figure()
         for i in range(0,nVars):
             plt.plot(x,U[ind,:,i])
+            plt.plot(x,SOL[ind,:])
         plt.show()
 
         plt.figure()
@@ -76,6 +91,7 @@ def main():
             plt.plot(x,Sigma[ind,:,i])
         plt.show()
 
+        data.close()
         
 
 if __name__ == "__main__":

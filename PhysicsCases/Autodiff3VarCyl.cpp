@@ -194,14 +194,14 @@ double Autodiff3VarCyl::TestSource(Index i, Position x, Time t)
 
 dual2nd Autodiff3VarCyl::TestDirichlet(dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R)
 {
-    double k = 0.5;
+    double k = 5 * 1 / 0.025;
 
     dual2nd a = (asinh(u_L) - asinh(u_R)) / (x_L - x_R);
     dual2nd b = (asinh(u_L) - x_L / x_R * asinh(u_R)) / (a * (x_L / x_R - 1));
     dual2nd c = (M_PI / 2 - 3 * M_PI / 2) / (x_L - x_R);
     dual2nd d = (M_PI / 2 - x_L / x_R * (3 * M_PI / 2)) / (c * (x_L / x_R - 1));
 
-    dual2nd u = sinh(a * (x - b)) - cos(c * (x - d)) * u_L * exp(-k * t) * exp(-0.5 * x * x);
+    dual2nd u = sinh(a * (x - b)) - cos(c * (x - d)) * exp(-k * t) * exp(-0.5 * x * x);
 
     return u;
 }
@@ -325,7 +325,6 @@ SourceFn Spi_hat = [](VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, d
     dual G = Gamma_hat(u, q, x, t) / (2. * x);
     dual V = G / u(0) * L / (p0);
     dual S = 2. / 3. * sqrt(2. * x) * V * q(2);
-    S = 0;
     return S;
 };
 SourceFn Spe = [](VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
@@ -341,7 +340,6 @@ SourceFn Spe_hat = [](VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, d
     dual V = G / u(0) * L / (p0);
 
     dual S = 2. / 3. * sqrt(2. * x) * V * q(1);
-    S = 0;
     return S;
 };
 

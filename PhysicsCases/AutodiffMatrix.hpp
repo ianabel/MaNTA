@@ -18,10 +18,10 @@ typedef std::vector<SourceFn> SourceFnArray;
 typedef std::function<dual2nd(dual2nd x, dual2nd t)> Solution;
 using TestSolVec = std::vector<Solution>;
 
-class Autodiff3VarCyl : public TransportSystem
+class AutodiffMatrix : public TransportSystem
 {
 public:
-    explicit Autodiff3VarCyl(toml::value const &config);
+    explicit AutodiffMatrix(toml::value const &config);
     //  Function for passing boundary conditions to the solver
     Value LowerBoundary(Index i, Time t) const override;
     Value UpperBoundary(Index i, Time t) const override;
@@ -65,11 +65,7 @@ private:
     static dual2nd TestDirichlet(dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R);
 
     // normalizations
-    const Value n0 = 3e18;
-    const Value T0 = 1.6e-19 * 1e3;
-    const Value p0 = n0 * T0;
-    const Value L = 1;
-
-    REGISTER_PHYSICS_HEADER(Autodiff3VarCyl)
+    Matrix Kappa;
+    REGISTER_PHYSICS_HEADER(AutodiffMatrix)
 };
 #endif
