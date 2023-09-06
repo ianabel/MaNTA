@@ -128,6 +128,8 @@ void SystemSolver::initialiseNetCDF( std::string const& NetcdfOutputFile, size_t
 	nc_output.SetOutputGrid( gridpoints );
 	// Add diagnostic hooks
 	
+	nc_output.AddScalarVariable( "nVariables", "Number of independent variables", "", static_cast<double>( nVars ) );
+	
 	for ( Index i=0; i<nVars; ++i ) {
 		auto initial_v = [this,i]( Position x ) { return problem->InitialValue( i, x ); };
 		nc_output.AddVariable( problem->getVariableName( i ), problem->getVariableDescription( i ), problem->getVariableUnits( i ), initial_v );
