@@ -20,7 +20,7 @@ def solution_NonLinear(x,t):
     return np.power(1-eta,1/n)
 
 def main():
-    with open("./Config/MatrixDiffusion.dat",'rt') as data:
+    with open("./Config/AutodiffTransportSystem.dat",'rt') as data:
         count = 0
         time = 0
         index = 0
@@ -75,14 +75,14 @@ def main():
         plt.figure()
         for i in range(0,nVars):
             plt.plot(x,U[ind,:,i])
-            plt.plot(x,SOL[ind,:])
+          #  plt.plot(x,SOL[ind,:])
         plt.show()
 
         plt.figure()
-
+        ax = plt.axes()
         for i in range(0,nVars):
-            plt.plot(x,Q[ind,:,i])
-
+            ax.plot(x,Q[ind,:,i],label=str(i))
+        ax.legend()
         plt.show()
 
         plt.figure()

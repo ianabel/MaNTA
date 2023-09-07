@@ -208,7 +208,6 @@ dual2nd AutodiffMatrix::TestDirichlet(dual2nd x, dual2nd t, double u_R, double u
 }
 // Problem specific stuff
 Matrix Kappa = Matrix::Identity(3, 3);
-
 sigmaFn F1 = [](VectorXdual u, VectorXdual q, dual x, double t)
 {
     // maybe add a factor of sqrt x if x = r^2/2

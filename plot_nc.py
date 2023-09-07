@@ -6,19 +6,12 @@ import matplotlib.pyplot as plt
 
 def main():
 
-    data = xr.open_dataset("MatrixDiffusion.nc")
-    x = np.linspace(-1,1,301)
-    print(data)
-    # data = Dataset("LinearDiffusion.nc","r",format="NETCDF4")
-    # t = data.dimensions["t"]
-    # x = data.dimensions["x"]
-    # nVars = 1
-    # Var = data.variables["Var0"]
-    # t = data["t"]
-    # print(data)
-    # y = Var[-1,:]
+    data = xr.open_dataset("./Config/AutodiffTransportSystem.nc")
+    x = data["x"]
+    t = data["t"]
+
     plt.figure()
-    plt.plot(x,data["Var0"][0,:])
+    plt.contourf(x,t,data["Var0"])
     plt.show()
     data.close()
 

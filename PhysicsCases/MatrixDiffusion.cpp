@@ -26,7 +26,7 @@ MatrixDiffusion::MatrixDiffusion(toml::value const &config)
 	std::vector<double> InitialHeight_v = toml::find<std::vector<double>>(DiffConfig, "InitialHeights");
 	std::vector<double> Kappa_v = toml::find<std::vector<double>>(DiffConfig, "Kappa");
 
-	Kappa = MatrixWrapper(Kappa_v.data(), nVars * nVars, nVars);
+	Kappa = MatrixWrapper(Kappa_v.data(), nVars, nVars);
 
 	if (static_cast<Index>(InitialHeight_v.size()) != nVars)
 	{
