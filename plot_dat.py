@@ -36,7 +36,6 @@ def main():
         x = np.ndarray(shape=(301))
         t =[]
         data_format_n=data_format*nVars*3+data_format.strip("\t")+"\n"
-        print(data_format_n)
         for line in data:
             count += 1
             # headers = 
@@ -67,29 +66,58 @@ def main():
                         q[index,i] = float(l[3*i+2])
                         sigma[index,i] = float(l[3*i+3].strip("\n"))
                     index += 1
+
+        U = np.vstack((U,np.expand_dims(u,0)))
+        Q = np.vstack((Q,np.expand_dims(q,0)))
+        Sigma = np.vstack((Sigma,np.expand_dims(sigma,0)))
         ind = -1
-        print(U.shape)
-        [X,T] = np.meshgrid(x,t)
-        SOL = solution_NonLinear(X,T)
-
-        plt.figure()
         for i in range(0,nVars):
-            plt.plot(x,U[ind,:,i])
-          #  plt.plot(x,SOL[ind,:])
-        plt.show()
+            plt.figure()
+            ax = plt.axes()
+            
+            ax.plot(x,Sigma[2,:,i],label = "t=0")
+            ax.plot(x,Sigma[3,:,i],label = "one time step")
+            # ax.plot(x,Sigma[4,:,0],label = "two")
+            # ax.plot(x,Sigma[5,:,0],label = "three")
+            ax.plot(x,Sigma[-1,:,i],label = "end")
+            ax.legend()
+            plt.show()
+        
 
-        plt.figure()
-        ax = plt.axes()
-        for i in range(0,nVars):
-            ax.plot(x,Q[ind,:,i],label=str(i))
-        ax.legend()
-        plt.show()
+            plt.figure()
+            plt.plot(x,Q[2,:,i])
+            plt.plot(x,Q[3,:,i])
+            plt.show()
+            plt.figure()
+            plt.plot(x,U[2,:,i])
+            plt.plot(x,U[3,:,i])
+            plt.plot(x,U[-1,:,i])
+            plt.show()
+            plt.figure()
 
-        plt.figure()
+      
+     
+      #  [X,T] = np.meshgrid(x,t)
+        # SOL = solution_NonLinear(X,T)
 
-        for i in range(0,nVars):
-            plt.plot(x,Sigma[ind,:,i])
-        plt.show()
+        # plt.figure()
+        # for i in range(0,nVars):
+        #     plt.plot(x,U[ind,:,i])
+        #   #  plt.plot(x,SOL[ind,:])
+        # plt.show()
+
+        # plt.figure()
+        # ax = plt.axes()
+        # for i in range(0,nVars):
+        #     ax.plot(x,Q[ind,:,i],label=str(i))
+        # ax.legend()
+        # plt.show()
+
+        # plt.figure()
+
+        # for i in range(0,nVars):
+        #     plt.plot(x,Sigma[ind,:,i])
+        # plt.show()
 
         data.close()
         
@@ -99,3 +127,5 @@ if __name__ == "__main__":
 
 
 
+
+# %%

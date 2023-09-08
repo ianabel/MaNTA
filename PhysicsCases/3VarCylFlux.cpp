@@ -1,5 +1,6 @@
 #include "3VarCylFlux.hpp"
 #include "Constants.hpp"
+#include <iostream>
 
 REGISTER_FLUX_IMPL(ThreeVarCylFlux);
 
@@ -48,9 +49,9 @@ dual Ci(dual n, dual Pi, dual Pe)
 dual tau_e(dual n, dual Pe)
 {
     if (Pe > 0)
-        return 3.44e11 * (1.0 / pow(n, 5.0 / 2.0)) * (pow(Pe / e_charge, 3.0 / 2.0)) * (1.0 / lambda);
+        return (1.0 / pow(n, 5.0 / 2.0)) * (pow(Pe, 3.0 / 2.0));
     else
-        return 3.44e11 * (1.0 / pow(n, 5.0 / 2.0)) * (pow(n, 3.0 / 2.0)) * (1.0 / lambda);
+        return (1.0 / n);
 }
 
 dual tau_i(dual n, dual Pi)
@@ -58,11 +59,13 @@ dual tau_i(dual n, dual Pi)
     if (Pi > 0)
 
         // return ::sqrt(2.) * tau_e(n, Pi) * (::sqrt(ionMass / electronMass));
-        return ::sqrt(2) * 3.44e11 * (1.0 / pow(n, 5.0 / 2.0)) * (pow(Pi / e_charge, 3.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass));
+        return ::sqrt(2) * (1.0 / pow(n, 5.0 / 2.0)) * (pow(Pi, 3.0 / 2.0));
 
     else
-        return ::sqrt(2) *
-               3.44e11 * (1.0 / n) * (pow(n, 5.0 / 2.0)) * (1.0 / lambda) * (::sqrt(ionMass / electronMass)); // if we have a negative temp just treat it as 1eV
+    {
+
+        return ::sqrt(2) * 1.0 / (n); // if we have a negative temp just treat it as 1eV
+    }
 }
 const dual Gamma0 = p0 / (electronMass * Om_e * Om_e * tau_e(n0, p0));
 const dual V0 = Gamma0 / n0;
@@ -72,20 +75,21 @@ dual ThreeVarCylFlux::Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
     // maybe add a factor of sqrt x if x = r^2/2
 
-    dual G = 2 * x * u(1) * ((q(1) / 2 - q(2)) / u(1) + 3. / 2. * q(0) / u(0));
+    dual G = 2 * x * u(1) / tau_e(u(0), u(1)) * ((q(1) / 2 - q(2)) / u(1) + 3. / 2. * q(0) / u(0));
     return G;
 };
 dual ThreeVarCylFlux::qi_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
+
     dual G = Gamma_hat(u, q, x, t);
-    dual qri = -2. * sqrt(electronMass / ionMass) * u(2) * u(2) / u(0) * (q(2) / u(2) - q(0) / u(0));
+    dual qri = ::sqrt(electronMass / ionMass) * 1.0 / tau_i(u(0), u(2)) * -2. * u(2) * u(2) / u(0) * (q(2) / u(2) - q(0) / u(0));
     dual Q = (2. / 3.) * ((5. / 2.) * u(2) / u(0) * G + (2. * x) * qri);
     return Q;
 };
 dual ThreeVarCylFlux::qe_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
     dual G = Gamma_hat(u, q, x, t);
-    dual qre = -4.66 * u(1) * u(1) / u(0) * (q(1) / u(1) - q(0) / u(0)) + (3. / 2.) * u(1) / u(0) * (q(2) + q(1));
+    dual qre = 1.0 / tau_e(u(0), u(1)) * (-4.66 * u(1) * u(1) / u(0) * (q(1) / u(1) - q(0) / u(0)) + (3. / 2.) * u(1) / u(0) * (q(2) + q(1)));
     dual Q = (2. / 3.) * (5. / 2. * u(1) / u(0) * G + (2. * x) * qre);
     return Q;
 };
@@ -99,14 +103,14 @@ dual ThreeVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
 dual ThreeVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
     dual G = Gamma_hat(u, q, x, t) / (2. * x);
-    dual V = G / u(0) * L / (p0);
+    dual V = G / u(0); //* L / (p0);
     dual S = 2. / 3. * sqrt(2. * x) * V * q(2);
     return S;
 };
 dual ThreeVarCylFlux::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
     dual G = Gamma_hat(u, q, x, t) / (2. * x);
-    dual V = G / u(0) * L / (p0);
+    dual V = G / u(0); //* L / (p0);
 
     dual S = 2. / 3. * sqrt(2. * x) * V * q(1);
     return S;

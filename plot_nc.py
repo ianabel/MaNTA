@@ -11,7 +11,8 @@ def main():
     t = data["t"]
 
     plt.figure()
-    plt.contourf(x,t,data["Var0"])
+    plt.plot(x,data["Var0"][0,:])
+ #   plt.contourf(x,t,data["Var0"])
     plt.show()
     data.close()
 

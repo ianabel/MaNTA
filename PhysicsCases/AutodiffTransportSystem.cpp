@@ -8,13 +8,12 @@ REGISTER_PHYSICS_IMPL(AutodiffTransportSystem);
 
 AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config)
 {
-    nVars = 3;
 
     if (config.count("AutodiffTransportSystem") != 1)
         throw std::invalid_argument("There should be a [AutodiffTransportSystem] section if you are using the AutodiffTransportSystem physics model.");
 
     auto const &InternalConfig = config.at("AutodiffTransportSystem");
-
+    nVars = toml::find_or(InternalConfig, "nVars", 2);
     // if (config.count("FluxType") != 1)
     //     throw std::invalid_argument("FluxType needs to specified exactly once in Autodiff configuration section");
 
@@ -40,20 +39,10 @@ AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config)
     isLowerDirichlet = toml::find_or(InternalConfig, "isLowerDirichlet", true);
 
     isTestProblem = toml::find_or(InternalConfig, "isTestProblem", false);
-    double nL = toml::find_or(InternalConfig, "nL", 1.5);
-    double nR = toml::find_or(InternalConfig, "nR", 1.0);
-
-    double peL = toml::find_or(InternalConfig, "peL", 1.5); // J
-    double peR = toml::find_or(InternalConfig, "peR", 1.0); // J
-
-    double piL = toml::find_or(InternalConfig, "piL", 1.5); // J
-    double piR = toml::find_or(InternalConfig, "piR", 1.0); // J
-    Values upperValues(nVars);
-    Values lowerValues(nVars);
-    upperValues << nR, peR, piR;
-    lowerValues << nL, peL, piL;
-    uR = upperValues;
-    uL = lowerValues;
+    std::vector<double> uL_v = toml::find<std::vector<double>>(InternalConfig, "uL");
+    std::vector<double> uR_v = toml::find<std::vector<double>>(InternalConfig, "uR");
+    uR = VectorWrapper(uR_v.data(), nVars);
+    uL = VectorWrapper(uL_v.data(), nVars);
 }
 
 Value AutodiffTransportSystem::LowerBoundary(Index i, Time t) const { return uL(i); }
@@ -82,14 +71,18 @@ Value AutodiffTransportSystem::Sources(Index i, const Values &u, const Values &q
     VectorXdual sw(sigma);
     Value S = fluxObject->source[i](uw, qw, sw, x, t).val;
 
-    if (isTestProblem)
-        S += TestSource(i, x, t);
+    // if (isTestProblem)
+    //     S += TestSource(i, x, t);
     return S;
 }
 
 // We need derivatives of the flux functions
 void AutodiffTransportSystem::dSigmaFn_du(Index i, Values &grad, const Values &u, const Values &q, Position x, Time t)
 {
+    if (u[0] < 0 || u[1] < 0 || u[2] < 0)
+    {
+        std::cout << u << std::endl;
+    }
     VectorXdual uw(u);
     VectorXdual qw(q);
 
@@ -213,12 +206,14 @@ dual2nd AutodiffTransportSystem::TestDirichlet(dual2nd x, dual2nd t, double u_R,
 {
     double k = 5 / 0.025;
 
+    dual2nd Center = 0.5 * (x_R + x_L);
+
     dual2nd a = (asinh(u_L) - asinh(u_R)) / (x_L - x_R);
     dual2nd b = (asinh(u_L) - x_L / x_R * asinh(u_R)) / (a * (x_L / x_R - 1));
     dual2nd c = (M_PI / 2 - 3 * M_PI / 2) / (x_L - x_R);
     dual2nd d = (M_PI / 2 - x_L / x_R * (3 * M_PI / 2)) / (c * (x_L / x_R - 1));
 
-    dual2nd u = sinh(a * (x - b)) - cos(c * (x - d)) * u_L * exp(-k * t) * exp(-0.5 * x * x);
+    dual2nd u = sinh(a * (x - b)) - cos(c * (x - d)) * exp(-k * t) * exp(-0.5 * (x - Center) * (x - Center));
 
     //  dual2nd u = -cos(c * (x - d)) * exp(-k * t) * exp(-0.5 * x * x);
     return u;
