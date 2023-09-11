@@ -89,13 +89,13 @@ dual ThreeVarCylFlux::Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
     // maybe add a factor of sqrt x if x = r^2/2
 
-    dual G = 2 * x * u(1) / tau_e(u(0), u(1)) * ((q(1) / 2 - q(2)) / u(1) + 3. / 2. * q(0) / u(0));
+    dual G = 2 * x * u(1) / tau_e(u(0), u(1)) * ((q(1) / 2 - q(2)) / u(1) - 3. / 2. * q(0) / u(0));
 
     if (G != G)
         return 0;
 
     else
-        return G;
+        return -G;
 };
 dual ThreeVarCylFlux::qi_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
@@ -147,14 +147,14 @@ dual ThreeVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
 // look at ion and electron sources again -- they should be opposite
 dual ThreeVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    dual G = Gamma_hat(u, q, x, t) / (2. * x);
+    dual G = -Gamma_hat(u, q, x, t) / (2. * x);
     dual V = G / u(0); //* L / (p0);
     dual S = 2. / 3. * sqrt(2. * x) * V * q(2);
     return S;
 };
 dual ThreeVarCylFlux::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    dual G = Gamma_hat(u, q, x, t) / (2. * x);
+    dual G = -Gamma_hat(u, q, x, t) / (2. * x);
     dual V = G / u(0); //* L / (p0);
 
     dual S = 2. / 3. * sqrt(2. * x) * V * q(1);

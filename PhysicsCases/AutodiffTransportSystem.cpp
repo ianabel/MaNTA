@@ -226,7 +226,7 @@ double AutodiffTransportSystem::TestSource(Index i, Position x, Time t)
 dual2nd AutodiffTransportSystem::TestDirichlet(Index i, dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R)
 {
     double k = 0.5;
-
+    double shape = 5 * (x_R - x_L);
     dual2nd Center = 0.5 * (x_R + x_L);
 
     dual2nd a = (asinh(u_L) - asinh(u_R)) / (x_L - x_R);
@@ -234,7 +234,7 @@ dual2nd AutodiffTransportSystem::TestDirichlet(Index i, dual2nd x, dual2nd t, do
     dual2nd c = (M_PI / 2 - 3 * M_PI / 2) / (x_L - x_R);
     dual2nd d = (M_PI / 2 - x_L / x_R * (3 * M_PI / 2)) / (c * (x_L / x_R - 1));
 
-    dual2nd u = sinh(a * (x - b)) - cos(c * (x - d)) * InitialHeights[i] * exp(-k * t) * exp(-0.5 * (x - Center) * (x - Center));
+    dual2nd u = sinh(a * (x - b)) - cos(c * (x - d)) * InitialHeights[i] * exp(-k * t) * exp(-1 / shape * (x - Center) * (x - Center));
 
     //  dual2nd u = -cos(c * (x - d)) * exp(-k * t) * exp(-0.5 * x * x);
     return u;
