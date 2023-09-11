@@ -244,10 +244,11 @@ dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t, 
 {
     dual2nd u = 0;
     dual2nd C = 0.5 * (x_R + x_L);
+    double shape = 10 / (x_R - x_L) * ::log(10);
     switch (InitialProfile)
     {
     case Gaussian:
-        u = InitialHeights[i] * exp(-(x - C) * (x - C));
+        u = u_L + InitialHeights[i] * (exp(-(x - C) * (x - C) * shape) - exp(-(x_L - C) * (x_L - C) * shape));
         break;
     case Dirichlet:
         u = TestDirichlet(i, x, t, u_R, u_L, x_L, x_R);
