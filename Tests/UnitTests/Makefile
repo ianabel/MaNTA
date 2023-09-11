@@ -3,8 +3,6 @@
 all: UnitTests
 .PHONY: all clean
 
-DEBUG = on
-
 include Makefile.config
 
 TEST_SOURCES = DGTests.cpp SystemSolverTests.cpp AutodiffTest.cpp
