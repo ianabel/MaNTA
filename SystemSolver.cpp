@@ -36,7 +36,7 @@ void SystemSolver::setInitialConditions( N_Vector& Y , N_Vector& dYdt )
 
 	ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
 
-	auto sigma_wrapper = std::bind_front( &TransportSystem::SigmaFn, problem );
+	auto sigma_wrapper = [ this ]( Index i, const Values &u, const Values &q, Position x, Time t ) { return -problem->SigmaFn( i, u, q, x, t ); };
 	y.AssignSigma( sigma_wrapper );
 
 	for( Index var = 0; var < nVars; var++)
