@@ -9,10 +9,9 @@ struct ThreeVarCylFlux : FluxObject
 
 private:
     double InitialWidth, Centre;
-    static Matrix Kappa;
     Vector InitialHeights;
-
-    static dual Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t);
+    static dual
+    Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t);
     static dual qe_hat(VectorXdual u, VectorXdual q, dual x, double t);
     static dual qi_hat(VectorXdual u, VectorXdual q, dual x, double t);
     static dual Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t);

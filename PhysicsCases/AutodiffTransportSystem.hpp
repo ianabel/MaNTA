@@ -49,7 +49,11 @@ private:
 
     bool isTestProblem;
 
-    static dual2nd TestDirichlet(dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R);
+    static Vector InitialHeights;
+
+    static dual2nd TestDirichlet(Index i, dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R);
+
+    static dual2nd InitialFunction(Index i, dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R);
 
     REGISTER_PHYSICS_HEADER(AutodiffTransportSystem)
 };

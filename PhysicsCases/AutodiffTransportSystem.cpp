@@ -41,9 +41,13 @@ AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config)
     isTestProblem = toml::find_or(InternalConfig, "isTestProblem", false);
     std::vector<double> uL_v = toml::find<std::vector<double>>(InternalConfig, "uL");
     std::vector<double> uR_v = toml::find<std::vector<double>>(InternalConfig, "uR");
+    std::vector<double> InitialHeights_v = toml::find<std::vector<double>>(InternalConfig, "InitialHeights");
     uR = VectorWrapper(uR_v.data(), nVars);
     uL = VectorWrapper(uL_v.data(), nVars);
+    InitialHeights = VectorWrapper(InitialHeights_v.data(), nVars);
 }
+
+Vector AutodiffTransportSystem::InitialHeights;
 
 Value AutodiffTransportSystem::LowerBoundary(Index i, Time t) const { return uL(i); }
 
@@ -71,18 +75,14 @@ Value AutodiffTransportSystem::Sources(Index i, const Values &u, const Values &q
     VectorXdual sw(sigma);
     Value S = fluxObject->source[i](uw, qw, sw, x, t).val;
 
-    // if (isTestProblem)
-    //     S += TestSource(i, x, t);
+    if (isTestProblem)
+        S += TestSource(i, x, t);
     return S;
 }
 
 // We need derivatives of the flux functions
 void AutodiffTransportSystem::dSigmaFn_du(Index i, Values &grad, const Values &u, const Values &q, Position x, Time t)
 {
-    if (u[0] < 0 || u[1] < 0 || u[2] < 0)
-    {
-        std::cout << u << std::endl;
-    }
     VectorXdual uw(u);
     VectorXdual qw(q);
 
@@ -134,7 +134,7 @@ Value AutodiffTransportSystem::InitialValue(Index i, Position x) const
 {
     if (isTestProblem)
     {
-        double sol = TestDirichlet(x, 0.0, UpperBoundary(i, 0.0), LowerBoundary(i, 0.0), xL, xR).val.val;
+        double sol = TestDirichlet(i, x, 0.0, UpperBoundary(i, 0.0), LowerBoundary(i, 0.0), xL, xR).val.val;
         return sol; // TestSols[i](x, 0)(0).val;
     }
 
@@ -148,7 +148,7 @@ Value AutodiffTransportSystem::InitialDerivative(Index i, Position x) const
     {
         dual2nd pos = x;
         dual2nd t = 0.0;
-        double deriv = derivative(TestDirichlet, wrt(pos), at(pos, t, UpperBoundary(i, 0.0), LowerBoundary(i, 0.0), xL, xR));
+        double deriv = derivative(TestDirichlet, wrt(pos), at(i, pos, t, UpperBoundary(i, 0.0), LowerBoundary(i, 0.0), xL, xR));
         return deriv;
     }
     else
@@ -162,7 +162,7 @@ double AutodiffTransportSystem::TestSource(Index i, Position x, Time t)
     dual2nd pos = x;
     double u_R = UpperBoundary(i, t);
     double u_L = LowerBoundary(i, t);
-    double ut = derivative(TestDirichlet, wrt(T), at(pos, T, u_R, u_L, xL, xR));
+    double ut = derivative(TestDirichlet, wrt(T), at(i, pos, T, u_R, u_L, xL, xR));
     VectorXdual q(nVars);
     VectorXdual u(nVars);
 
@@ -174,7 +174,7 @@ double AutodiffTransportSystem::TestSource(Index i, Position x, Time t)
         double u_R = UpperBoundary(j, t);
         double u_L = LowerBoundary(j, t);
 
-        auto [q0, q1, q2] = derivatives(TestDirichlet, wrt(pos, pos), at(pos, T, u_R, u_L, xL, xR));
+        auto [q0, q1, q2] = derivatives(TestDirichlet, wrt(pos, pos), at(i, pos, T, u_R, u_L, xL, xR));
 
         u(j) = q0;
         q(j) = q1;
@@ -196,15 +196,16 @@ double AutodiffTransportSystem::TestSource(Index i, Position x, Time t)
     {
         uxd += ugrad(j) * q(j).val + qgrad(j) * dq(j).val;
     }
+
     double S = fluxObject->source[i](u, q, sigma, x, t).val;
-    double St = ut + uxd - S;
+    double St = ut - uxd - S;
 
     return St;
 }
 
-dual2nd AutodiffTransportSystem::TestDirichlet(dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R)
+dual2nd AutodiffTransportSystem::TestDirichlet(Index i, dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R)
 {
-    double k = 5 / 0.025;
+    double k = 0.5;
 
     dual2nd Center = 0.5 * (x_R + x_L);
 
@@ -213,8 +214,13 @@ dual2nd AutodiffTransportSystem::TestDirichlet(dual2nd x, dual2nd t, double u_R,
     dual2nd c = (M_PI / 2 - 3 * M_PI / 2) / (x_L - x_R);
     dual2nd d = (M_PI / 2 - x_L / x_R * (3 * M_PI / 2)) / (c * (x_L / x_R - 1));
 
-    dual2nd u = sinh(a * (x - b)) - cos(c * (x - d)) * exp(-k * t) * exp(-0.5 * (x - Center) * (x - Center));
+    dual2nd u = sinh(a * (x - b)) - cos(c * (x - d)) * InitialHeights[i] * exp(-k * t) * exp(-0.5 * (x - Center) * (x - Center));
 
     //  dual2nd u = -cos(c * (x - d)) * exp(-k * t) * exp(-0.5 * x * x);
     return u;
+}
+
+dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R)
+{
+    return dual2nd();
 }
