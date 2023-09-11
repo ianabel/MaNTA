@@ -9,6 +9,10 @@ struct ThreeVarCylFlux : FluxObject
 
 private:
     double InitialWidth, Centre;
+
+    std::map<std::string, int> ParticleSources = {{"None", 0}, {"Gaussian", 1}};
+    static int ParticleSource;
+    static double sourceStrength;
     Vector InitialHeights;
     static dual
     Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t);

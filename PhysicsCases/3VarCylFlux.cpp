@@ -4,6 +4,12 @@
 
 REGISTER_FLUX_IMPL(ThreeVarCylFlux);
 
+enum
+{
+    None = 0,
+    Gaussian = 1,
+};
+
 ThreeVarCylFlux::ThreeVarCylFlux(toml::value const &config, Index nVars)
 {
 
@@ -11,7 +17,12 @@ ThreeVarCylFlux::ThreeVarCylFlux(toml::value const &config, Index nVars)
     if (config.count("3VarCylFlux") != 1)
         throw std::invalid_argument("There should be a [3VarCylFlux] section if you are using the 3VarCylFlux physics model.");
 
-    //   auto const &DiffConfig = config.at("3VarCylFlux");
+    auto const &DiffConfig = config.at("3VarCylFlux");
+
+    std::string profile = toml::find_or(DiffConfig, "SourceType", "None");
+    ParticleSource = ParticleSources[profile];
+
+    sourceStrength = toml::find_or(DiffConfig, "SourceStrength", 0.0);
 
     sigma.insert(std::pair<Index, sigmaptr>(0, &Gamma_hat));
     sigma.insert(std::pair<Index, sigmaptr>(1, &qe_hat));
@@ -21,6 +32,9 @@ ThreeVarCylFlux::ThreeVarCylFlux(toml::value const &config, Index nVars)
     source.insert(std::pair<Index, sourceptr>(1, &Spe_hat));
     source.insert(std::pair<Index, sourceptr>(2, &Spi_hat));
 };
+
+int ThreeVarCylFlux::ParticleSource;
+double ThreeVarCylFlux::sourceStrength;
 
 const double B_mid = 0.3; // Tesla
 const double Om_i = e_charge * B_mid / ionMass;
@@ -81,7 +95,7 @@ dual ThreeVarCylFlux::Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t)
         return 0;
 
     else
-        return -G;
+        return G;
 };
 dual ThreeVarCylFlux::qi_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
@@ -95,7 +109,7 @@ dual ThreeVarCylFlux::qi_hat(VectorXdual u, VectorXdual q, dual x, double t)
     }
     else
 
-        return -Q;
+        return Q;
 };
 dual ThreeVarCylFlux::qe_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
@@ -110,25 +124,37 @@ dual ThreeVarCylFlux::qe_hat(VectorXdual u, VectorXdual q, dual x, double t)
     }
     else
 
-        return -Q;
+        return Q;
 };
 
 dual ThreeVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    return 0;
+    dual S = 0;
+    dual Center = 0.5;
+    switch (ParticleSource)
+    {
+    case None:
+        break;
+    case Gaussian:
+        S = sourceStrength * exp(-(x - Center) * (x - Center));
+        break;
+    default:
+        break;
+    }
+    return S;
 };
 
 // look at ion and electron sources again -- they should be opposite
 dual ThreeVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    dual G = -Gamma_hat(u, q, x, t) / (2. * x);
+    dual G = Gamma_hat(u, q, x, t) / (2. * x);
     dual V = G / u(0); //* L / (p0);
     dual S = 2. / 3. * sqrt(2. * x) * V * q(2);
     return S;
 };
 dual ThreeVarCylFlux::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    dual G = -Gamma_hat(u, q, x, t) / (2. * x);
+    dual G = Gamma_hat(u, q, x, t) / (2. * x);
     dual V = G / u(0); //* L / (p0);
 
     dual S = 2. / 3. * sqrt(2. * x) * V * q(1);

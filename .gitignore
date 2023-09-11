@@ -3,14 +3,15 @@ unit_test_suite
 /*.conf
 /*.report
 /*.plot
-/*.dat
+*.dat
+*.nc
 Makefile.local
 *.o
 toml11/
 sundials/
 resources/
 .vscode/
-Config/
+
 plotter.gnu
 -O0
 -O3

@@ -49,6 +49,9 @@ private:
 
     bool isTestProblem;
 
+    static int InitialProfile;
+    std::map<std::string, int> InitialProfiles = {{"Gaussian", 0}, {"Dirichlet", 1}};
+
     static Vector InitialHeights;
 
     static dual2nd TestDirichlet(Index i, dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R);

@@ -6,6 +6,12 @@ using namespace autodiff;
 
 REGISTER_PHYSICS_IMPL(AutodiffTransportSystem);
 
+enum
+{
+    Gaussian = 0,
+    Dirichlet = 1,
+};
+
 AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config)
 {
 
@@ -39,15 +45,24 @@ AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config)
     isLowerDirichlet = toml::find_or(InternalConfig, "isLowerDirichlet", true);
 
     isTestProblem = toml::find_or(InternalConfig, "isTestProblem", false);
+
+    std::vector<double> InitialHeights_v = toml::find<std::vector<double>>(InternalConfig, "InitialHeights");
+    InitialHeights = VectorWrapper(InitialHeights_v.data(), nVars);
+    if (!isTestProblem)
+    {
+        std::string profile = toml::find_or(InternalConfig, "InitialProfile", "Dirichlet");
+        InitialProfile = InitialProfiles[profile];
+    }
+
     std::vector<double> uL_v = toml::find<std::vector<double>>(InternalConfig, "uL");
     std::vector<double> uR_v = toml::find<std::vector<double>>(InternalConfig, "uR");
-    std::vector<double> InitialHeights_v = toml::find<std::vector<double>>(InternalConfig, "InitialHeights");
     uR = VectorWrapper(uR_v.data(), nVars);
     uL = VectorWrapper(uL_v.data(), nVars);
-    InitialHeights = VectorWrapper(InitialHeights_v.data(), nVars);
 }
 
 Vector AutodiffTransportSystem::InitialHeights;
+
+int AutodiffTransportSystem::InitialProfile;
 
 Value AutodiffTransportSystem::LowerBoundary(Index i, Time t) const { return uL(i); }
 
@@ -139,7 +154,9 @@ Value AutodiffTransportSystem::InitialValue(Index i, Position x) const
     }
 
     else
-        return 0;
+    {
+        return InitialFunction(i, x, 0.0, UpperBoundary(i, 0.0), LowerBoundary(i, 0.0), xL, xR).val.val;
+    }
 }
 Value AutodiffTransportSystem::InitialDerivative(Index i, Position x) const
 {
@@ -153,7 +170,10 @@ Value AutodiffTransportSystem::InitialDerivative(Index i, Position x) const
     }
     else
     {
-        return 0;
+        dual2nd pos = x;
+        dual2nd t = 0.0;
+        double deriv = derivative(InitialFunction, wrt(pos), at(i, pos, t, UpperBoundary(i, 0.0), LowerBoundary(i, 0.0), xL, xR));
+        return deriv;
     }
 }
 double AutodiffTransportSystem::TestSource(Index i, Position x, Time t)
@@ -198,7 +218,7 @@ double AutodiffTransportSystem::TestSource(Index i, Position x, Time t)
     }
 
     double S = fluxObject->source[i](u, q, sigma, x, t).val;
-    double St = ut - uxd - S;
+    double St = ut + uxd - S;
 
     return St;
 }
@@ -222,5 +242,18 @@ dual2nd AutodiffTransportSystem::TestDirichlet(Index i, dual2nd x, dual2nd t, do
 
 dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R)
 {
-    return dual2nd();
+    dual2nd u = 0;
+    dual2nd C = 0.5 * (x_R + x_L);
+    switch (InitialProfile)
+    {
+    case Gaussian:
+        u = InitialHeights[i] * exp(-(x - C) * (x - C));
+        break;
+    case Dirichlet:
+        u = TestDirichlet(i, x, t, u_R, u_L, x_L, x_R);
+        break;
+    default:
+        break;
+    };
+    return u;
 }
