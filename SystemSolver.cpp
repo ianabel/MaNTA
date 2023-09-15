@@ -870,8 +870,18 @@ void SystemSolver::print(std::ostream &out, double t, int nOut)
 	{
 		double x = static_cast<double>(i) * delta_x + grid.lowerBoundary();
 		out << x;
+		Vector uVals(nVars), qVals(nVars), sigmaVals(nVars);
 		for (Index v = 0; v < nVars; ++v)
+		{
+			uVals(v) = y.u(v)(x);
+			qVals(v) = y.q(v)(x);
+			sigmaVals(v) = y.sigma(v)(x);
+		}
+		for (Index v = 0; v < nVars; ++v)
+		{
 			out << "\t" << y.u(v)(x) << "\t" << y.q(v)(x) << "\t" << y.sigma(v)(x);
+			out << "\t" << problem->Sources(v, uVals, qVals, sigmaVals, x, t);
+		}
 		out << std::endl;
 	}
 	out << std::endl;
