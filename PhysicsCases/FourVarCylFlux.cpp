@@ -37,19 +37,23 @@ FourVarCylFlux::FourVarCylFlux(toml::value const &config, Index nVars)
 
 int FourVarCylFlux::ParticleSource;
 double FourVarCylFlux::sourceStrength;
-const dual n0 = 3e20;
-const dual T0 = e_charge * 10e3;
+const dual n0 = 3e18;
+const dual T0 = e_charge * 1000;
 const dual p0 = n0 * T0;
 
 const dual Gamma0 = p0 / (electronMass * Om_e * Om_e * tau_e(n0, p0));
 const dual V0 = Gamma0 / n0;
 const Value L = 1;
+const dual taue0 = tau_e(n0, p0);
+const dual taui0 = tau_i(n0, p0);
+const dual E0 = 1e6;
+const dual h0 = ionMass * n0 * E0 / B_mid;
 
 dual FourVarCylFlux::Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
     // maybe add a factor of sqrt x if x = r^2/2
 
-    dual G = 2 * x * u(1) / tau_e(u(0), u(1)) * ((q(1) / 2 - q(2)) / u(1) - 3. / 2. * q(0) / u(0));
+    dual G = 2 * x * u(1) / tau_hat(u(0), u(1)) * ((q(1) / 2 - q(2)) / u(1) - 3. / 2. * q(0) / u(0));
 
     if (G != G)
         return 0;
@@ -60,7 +64,7 @@ dual FourVarCylFlux::Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t)
 dual FourVarCylFlux::qi_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
     dual G = Gamma_hat(u, q, x, t);
-    dual qri = ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_e(u(0), u(2))) * 2. * u(2) * u(2) / u(0) * (q(2) / u(2) - q(0) / u(0));
+    dual qri = ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(2))) * 2. * u(2) * u(2) / u(0) * (q(2) / u(2) - q(0) / u(0));
     dual Q = (2. / 3.) * (5. / 2. * u(2) / u(0) * G + (2. * x) * qri);
     if (Q != Q)
     {
@@ -74,7 +78,7 @@ dual FourVarCylFlux::qi_hat(VectorXdual u, VectorXdual q, dual x, double t)
 dual FourVarCylFlux::hi_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
     dual G = Gamma_hat(u, q, x, t);
-    dual ghi = ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_e(u(0), u(2))) * 3. / 10. * u(3) * u(2) / u(1) * (q(3) / u(3) - q(0) / u(0));
+    dual ghi = ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(2))) * 3. / 10. * u(3) * u(2) / u(1) * (q(3) / u(3) - q(0) / u(0));
     dual H = u(3) * G / u(0) + sqrt(2. * x) * ghi;
     if (H != H)
     {
@@ -88,7 +92,7 @@ dual FourVarCylFlux::hi_hat(VectorXdual u, VectorXdual q, dual x, double t)
 dual FourVarCylFlux::qe_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
     dual G = Gamma_hat(u, q, x, t);
-    dual qre = 1.0 / tau_e(u(0), u(1)) * (4.66 * u(1) * u(1) / u(0) * (q(1) / u(1) - q(0) / u(0)) - (3. / 2.) * u(1) / u(0) * (q(2) + q(1)));
+    dual qre = 1.0 / tau_hat(u(0), u(1)) * (4.66 * u(1) * u(1) / u(0) * (q(1) / u(1) - q(0) / u(0)) - (3. / 2.) * u(1) / u(0) * (q(2) + q(1)));
 
     dual Q = (2. / 3.) * (5. / 2. * u(1) / u(0) * G + (2. * x) * qre);
     if (Q != Q)
@@ -121,16 +125,21 @@ dual FourVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
 // look at ion and electron sources again -- they should be opposite
 dual FourVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
+    dual coef = (E0 / B_mid) * (E0 / B_mid) / (V0 * Om_i * Om_i * taui0);
     dual G = -Gamma_hat(u, q, x, t) / (2. * x);
     dual V = G / u(0); //* L / (p0);
-    dual S = 2. / 3. * sqrt(2. * x) * V * q(2) + 2. / 3. * Ci(u(0), u(2), u(1));
+    dual dV = u(3) / u(0) * (q(3) / u(3) - q(0) / u(0));
+    dual Svis = coef * 3. / 10. * u(2) * 1 / tau_hat(u(0), u(2)) * dV * dV;
+    dual col = 2. / 3. * Ci(u(0), u(2), u(1));
+    dual S = 2. / 3. * sqrt(2. * x) * V * q(2) + col + 2. / 3. * Svis;
     return S;
 }
 dual FourVarCylFlux::Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
     dual G = -Gamma_hat(u, q, x, t) / (2. * x);
     dual V = G / u(0);
-    dual S = 1. / sqrt(2. * x) * (V * u(3) - 1);
+    dual coef = -e_charge * B_mid * B_mid / (ionMass * E0);
+    dual S = 1. / sqrt(2. * x) * (V * u(3) - coef / sqrt(2. * x));
     return S;
 };
 dual FourVarCylFlux::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)

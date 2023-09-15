@@ -19,13 +19,14 @@ double J_eV(double T_J);
 constexpr double referenceTemperature = 1000 * e_charge;
 constexpr double referenceDensity = 1e20;
 
-const double B_mid = 10.0; // Tesla
-const double Om_i = e_charge * B_mid / ionMass;
-const double Om_e = e_charge * B_mid / electronMass;
+constexpr double B_mid = 0.1; // Tesla
+constexpr double Om_i = e_charge * B_mid / ionMass;
+constexpr double Om_e = e_charge * B_mid / electronMass;
 
 dual nu(dual n, dual Pe);
 dual tau_e(dual n, dual Pe);
 dual tau_i(dual n, dual Pi);
+dual tau_hat(dual n, dual P);
 dual Ce(dual n, dual Pi, dual Pe);
 
 dual Ci(dual n, dual Pi, dual Pe);
