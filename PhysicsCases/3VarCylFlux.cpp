@@ -52,7 +52,9 @@ dual ThreeVarCylFlux::Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t)
     dual G = 2 * x * u(1) / tau_hat(u(0), u(1)) * ((q(1) / 2 - q(2)) / u(1) - 3. / 2. * q(0) / u(0));
 
     if (G != G)
+    {
         return 0;
+    }
 
     else
         return -G;
