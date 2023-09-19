@@ -20,11 +20,11 @@ def solution_NonLinear(x,t):
     return np.power(1-eta,1/n)
 
 def main():
-    with open("./Config/4VarCyl.dat",'rt') as data:
+    with open("./Config/3VarCyl.dat",'rt') as data:
         count = 0
         time = 0
         index = 0
-        nVars = 4
+        nVars = 3
         headings = ""
         line_begin = False
         u = np.ndarray(shape=(301,nVars))
@@ -35,7 +35,7 @@ def main():
         Sigma = np.ndarray(shape=(1,301,nVars))
         x = np.ndarray(shape=(301))
         t =[]
-        data_format_n=data_format*nVars*3+data_format.strip("\t")+"\n"
+        data_format_n=data_format*nVars*4+data_format.strip("\t")+"\n"
         for line in data:
             count += 1
             # headers = 
@@ -62,9 +62,9 @@ def main():
                     l = parse.parse(data_format_n,line)
                     x[index] = float(l[0])
                     for i in range(0,nVars):
-                        u[index,i] = float(l[3*i+1])
-                        q[index,i] = float(l[3*i+2])
-                        sigma[index,i] = float(l[3*i+3].strip("\n"))
+                        u[index,i] = float(l[4*i+1])
+                        q[index,i] = float(l[4*i+2])
+                        sigma[index,i] = float(l[4*i+3].strip("\n"))
                     index += 1
 
         U = np.vstack((U,np.expand_dims(u,0)))
