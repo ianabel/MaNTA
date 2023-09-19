@@ -20,11 +20,11 @@ def solution_NonLinear(x,t):
     return np.power(1-eta,1/n)
 
 def main():
-    with open("./Config/3VarCyl.dat",'rt') as data:
+    with open("./Config/LinearDiffusion.dat",'rt') as data:
         count = 0
         time = 0
         index = 0
-        nVars = 3
+        nVars = 1
         headings = ""
         line_begin = False
         u = np.ndarray(shape=(301,nVars))

@@ -92,23 +92,30 @@ void NetCDFIO::AppendToVariable(std::string const &name, T const &var, size_t tI
 }
 
 template <typename T>
-void NetCDFIO::AppendToGroup(std::string const &name, size_t tIndex, const std::initializer_list<T> &vars)
+void NetCDFIO::AppendToGroup(std::string const &name, size_t tIndex, const std::initializer_list<std::pair<std::string, T>> &vars)
 {
 
 	std::vector<double> gridValues;
 	gridValues.resize(gridpoints.size());
 
 	NcGroup group = data_file.getGroup(name);
-	size_t i = 0;
-	for (auto &var : group.getVars())
+	for (auto &var : vars)
 	{
+		for (size_t i = 0; i < gridpoints.size(); ++i)
+			gridValues[i] = var.second(gridpoints[i]);
 
-		for (size_t j = 0; j < gridpoints.size(); ++j)
-			gridValues[j] = vars.begin()[i](gridpoints[j]);
-
-		var.second.putVar({tIndex, 0}, {1, gridpoints.size()}, gridValues.data());
-		i++;
+		group.getVar(var.first).putVar({tIndex, 0}, {1, gridpoints.size()}, gridValues.data());
 	}
+	// auto var = vars.begin();
+	// for (auto &groupvar : group.getVars())
+	// {
+
+	// 	for (size_t j = 0; j < gridpoints.size(); ++j)
+	// 		gridValues[j] = (*var)(gridpoints[j]);
+
+	// 	groupvar.second.putVar({tIndex, 0}, {1, gridpoints.size()}, gridValues.data());
+	// 	++var;
+	// }
 }
 
 void NetCDFIO::SetOutputGrid(std::vector<double> const &gridpoints_)
@@ -192,7 +199,7 @@ void SystemSolver::WriteTimeslice(double tNew)
 
 	for (Index i = 0; i < nVars; ++i)
 	{
-		nc_output.AppendToGroup(problem->getVariableName(i), tIndex, {y.u(i), y.q(i), y.sigma(i)});
+		nc_output.AppendToGroup<DGApprox>(problem->getVariableName(i), tIndex, {{"u", y.u(i)}, {"q", y.q(i)}, {"sigma", y.sigma(i)}});
 		// nc_output.AppendToVariable(problem->getVariableName(i), y.u(i), tIndex);
 	}
 }

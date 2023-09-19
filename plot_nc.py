@@ -10,9 +10,19 @@ def main():
     data = Dataset('./Config/LinearDiffusion.nc')#xr.open_dataset("./Config/LinearDiffusion.nc")
     Vars = data.groups
     for Var in Vars:
+        plt.figure()
+        plt.plot(data.groups[Var].variables["u"][0,:])
+        plt.plot(data.groups[Var].variables["u"][-1,:])
+        plt.show()
         
         plt.figure()
         plt.plot(data.groups[Var].variables["q"][0,:])
+        plt.plot(data.groups[Var].variables["q"][-1,:])
+        plt.show()
+
+        plt.figure()
+        plt.plot(data.groups[Var].variables["sigma"][0,:])
+        plt.plot(data.groups[Var].variables["sigma"][-1,:])
         plt.show()
 
 #     plt.figure()

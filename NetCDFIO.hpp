@@ -35,7 +35,7 @@ public:
 	void AppendToVariable(std::string const &name, T const &var, size_t tIndex);
 
 	template <typename T>
-	void AppendToGroup(std::string const &name, size_t tIndex, const std::initializer_list<T> &vars);
+	void AppendToGroup(std::string const &name, size_t tIndex, const std::initializer_list<std::pair<std::string, T>> &vars);
 
 private:
 	std::string filename;
