@@ -106,16 +106,6 @@ void NetCDFIO::AppendToGroup(std::string const &name, size_t tIndex, const std::
 
 		group.getVar(var.first).putVar({tIndex, 0}, {1, gridpoints.size()}, gridValues.data());
 	}
-	// auto var = vars.begin();
-	// for (auto &groupvar : group.getVars())
-	// {
-
-	// 	for (size_t j = 0; j < gridpoints.size(); ++j)
-	// 		gridValues[j] = (*var)(gridpoints[j]);
-
-	// 	groupvar.second.putVar({tIndex, 0}, {1, gridpoints.size()}, gridValues.data());
-	// 	++var;
-	// }
 }
 
 void NetCDFIO::SetOutputGrid(std::vector<double> const &gridpoints_)

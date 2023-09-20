@@ -40,8 +40,8 @@ dual tau_hat(dual n, dual P)
 
 dual Ce(dual n, dual Pi, dual Pe)
 {
-    dual c = 2 * ionMass * Om_i * Om_i;
-    return c * (Pi - Pe) / tau_e(n, Pe);
+    dual c = 3 * electronMass / ionMass;
+    return c * (Pi - Pe) / tau_hat(n, Pe);
 }
 
 dual Ci(dual n, dual Pi, dual Pe)

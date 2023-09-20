@@ -129,7 +129,7 @@ dual FourVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
     dual V = G / u(0); //* L / (p0);
     dual dV = u(3) / u(0) * (q(3) / u(3) - q(0) / u(0));
     dual Svis = coef * 3. / 10. * u(2) * 1 / tau_hat(u(0), u(2)) * dV * dV;
-    dual col = 2. / 3. * Ci(u(0), u(2), u(1));
+    dual col = 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
     dual S = 2. / 3. * sqrt(2. * x) * V * q(2) + col - 2. / 3. * Svis;
     return S;
 }
@@ -139,6 +139,7 @@ dual FourVarCylFlux::Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
     dual V = G / u(0);
     dual coef = e_charge * B_mid * B_mid / (ionMass * E0);
     dual S = 1. / sqrt(2. * x) * (V * u(3) - coef);
+
     return S;
 };
 dual FourVarCylFlux::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
@@ -146,7 +147,7 @@ dual FourVarCylFlux::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
     dual G = -Gamma_hat(u, q, x, t) / (2. * x);
     dual V = G / u(0); //* L / (p0);
 
-    dual S = 2. / 3. * sqrt(2. * x) * V * q(1) + 2. / 3. * Ce(u(0), u(2), u(1));
+    dual S = 2. / 3. * sqrt(2. * x) * V * q(1) + 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
 
     return S;
 };

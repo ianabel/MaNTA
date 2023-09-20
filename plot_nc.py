@@ -7,7 +7,7 @@ from netCDF4 import Dataset
 
 def main():
 
-    data = Dataset('./Config/LinearDiffusion.nc')#xr.open_dataset("./Config/LinearDiffusion.nc")
+    data = Dataset('./Config/3VarCyl.nc')#xr.open_dataset("./Config/LinearDiffusion.nc")
     Vars = data.groups
     for Var in Vars:
         plt.figure()
@@ -24,6 +24,7 @@ def main():
         plt.plot(data.groups[Var].variables["sigma"][0,:])
         plt.plot(data.groups[Var].variables["sigma"][-1,:])
         plt.show()
+
 
 #     plt.figure()
 #     ax = plt.axes()
