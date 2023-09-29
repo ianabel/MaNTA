@@ -10,6 +10,12 @@ enum
     Gaussian = 1,
 };
 
+template <typename T>
+int sgn(T val)
+{
+    return (T(0) < val) - (val < T(0));
+}
+
 ThreeVarCylFlux::ThreeVarCylFlux(toml::value const &config, Index nVars)
 {
 
@@ -51,29 +57,34 @@ dual ThreeVarCylFlux::Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
     // maybe add a factor of sqrt x if x = r^2/2
 
-    dual G = 2 * x * u(1) / tau_hat(u(0), u(1)) * ((q(1) / 2 - q(2)) / u(1) - 3. / 2. * q(0) / u(0));
+    dual G = 2. * x * u(1) / tau_hat(u(0), u(1)) * ((-q(1) / 2. + q(2)) / u(1) + 3. / 2. * q(0) / u(0));
 
     if (G != G)
     {
-        return 0;
+        return 0.0;
     }
 
     else
-        return -G;
+        return G;
 };
 dual ThreeVarCylFlux::qi_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
-    dual G = Gamma_hat(u, q, x, t);
-    dual qri = ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(2))) * 2. * u(2) * u(2) / u(0) * (q(2) / u(2) - q(0) / u(0));
-    dual Q = (2. / 3.) * (5. / 2. * u(2) / u(0) * G + (2. * x) * qri);
-    if (Q != Q)
-    {
+    dual dT = q(2) / u(2) - q(0) / u(0);
 
-        return 0;
+    dual G = Gamma_hat(u, q, x, t);
+    dual qri = ::sqrt(ionMass / (2. * electronMass)) * 1.0 / tau_hat(u(0), u(2)) * 2. * u(2) * u(2) / u(0) * dT;
+    dual Q = (2. / 3.) * (5. / 2. * u(2) / u(0) * G + (2. * x) * qri);
+    if ((Q != Q))
+    {
+        //  std::cout << Q << std::endl;
+        return 0.0;
     }
     else
-
+    {
+        // std::cout << sgn(q(2).val) << std::endl;
         return Q;
+    }
+    // return 0.0;
 };
 dual ThreeVarCylFlux::qe_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
@@ -83,8 +94,7 @@ dual ThreeVarCylFlux::qe_hat(VectorXdual u, VectorXdual q, dual x, double t)
     dual Q = (2. / 3.) * (5. / 2. * u(1) / u(0) * G + (2. * x) * qre);
     if (Q != Q)
     {
-
-        return 0;
+        return 0.0;
     }
     else
 
@@ -93,14 +103,14 @@ dual ThreeVarCylFlux::qe_hat(VectorXdual u, VectorXdual q, dual x, double t)
 
 dual ThreeVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    dual S = 0;
+    dual S = 0.0;
     dual Center = 0.5;
     switch (ParticleSource)
     {
     case None:
         break;
     case Gaussian:
-        S = sourceStrength * exp(-(x - Center) * (x - Center));
+        S = -sourceStrength * exp(-40.0 * (x - Center) * (x - Center));
         break;
     default:
         break;
@@ -111,17 +121,34 @@ dual ThreeVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
 // look at ion and electron sources again -- they should be opposite
 dual ThreeVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    dual G = -Gamma_hat(u, q, x, t) / (2. * x);
+    dual G = Gamma_hat(u, q, x, t) / (2. * x);
     dual V = G / u(0); //* L / (p0);
-    dual S = 2. / 3. * sqrt(2. * x) * V * q(2) + 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
-    return S;
+    dual S = 2. / 3. * sqrt(2. * x) * V * q(2) - 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
+
+    if (S != S)
+    {
+        return 0.0;
+    }
+    else
+    {
+        return S + Sn_hat(u, q, sigma, x, t);
+    }
+    // return 0.0;
 };
 dual ThreeVarCylFlux::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    dual G = -Gamma_hat(u, q, x, t) / (2. * x);
+    dual G = Gamma_hat(u, q, x, t) / (2. * x);
     dual V = G / u(0); //* L / (p0);
 
-    dual S = 2. / 3. * sqrt(2. * x) * V * q(1) + 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual S = 2. / 3. * sqrt(2. * x) * V * q(1) - 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
 
-    return S;
+    if (S != S)
+    {
+        return 0.0;
+    }
+    else
+    {
+        return S;
+    }
+    // return 0.0;
 };

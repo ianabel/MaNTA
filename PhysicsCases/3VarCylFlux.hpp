@@ -3,8 +3,9 @@
 #ifndef THREEVARCYLFLUX
 #define THREEVARCYLFLUX
 
-struct ThreeVarCylFlux : FluxObject
+class ThreeVarCylFlux : public FluxObject
 {
+public:
     ThreeVarCylFlux(toml::value const &config, Index nVars);
 
 private:

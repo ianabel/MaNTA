@@ -10,9 +10,9 @@
 
 #include "gridStructures.hpp"
 
-SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, TransportSystem *transpSystem)
+SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, TransportSystem *transpSystem)
 	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), y(nVars, grid, k), dydt(nVars, grid, k),
-	  dt(Dt), problem(transpSystem)
+	  dt(Dt), problem(transpSystem), tauc(tau)
 {
 	initialiseMatrices();
 	initialised = true;
@@ -246,7 +246,7 @@ void SystemSolver::initialiseMatrices()
 					Cvar(0, i) = 0;
 					Evar(i, 0) = 0;
 				}
-
+				// should this be is upper boundary dirichlet?
 				if (I.x_u == grid.upperBoundary() && problem->isLowerBoundaryDirichlet(var))
 				{
 					Cvar(1, i) = 0;

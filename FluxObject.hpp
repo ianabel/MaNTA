@@ -7,7 +7,7 @@
 
 using namespace autodiff;
 
-struct FluxObject
+class FluxObject
 {
 public:
     virtual ~FluxObject() {}

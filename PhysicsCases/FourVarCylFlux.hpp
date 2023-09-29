@@ -3,8 +3,9 @@
 #ifndef FOURVARCYLFLUX
 #define FOURVARCYLFLUX
 
-struct FourVarCylFlux : FluxObject
+class FourVarCylFlux : public FluxObject
 {
+public:
     FourVarCylFlux(toml::value const &config, Index nVars);
 
 private:
