@@ -127,7 +127,7 @@ private:
 	TransportSystem *problem = nullptr;
 
 	// Tau
-	static double tau( double x ) { return 0.5; };
+	double tau( double x ) { return 0.5; };
 
 	friend int residual( realtype, N_Vector, N_Vector, N_Vector, void * );
 
