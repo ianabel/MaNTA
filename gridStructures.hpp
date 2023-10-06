@@ -316,6 +316,12 @@ class DGApprox
 		}
 
 		double operator()( Position x ) const {
+			constexpr double eps = 1e-15;
+			if ( x < grid.lowerBoundary() && ::fabs( x - grid.lowerBoundary() ) < eps )
+				x = grid.lowerBoundary();
+			else if (  x > grid.upperBoundary() && ::fabs( x - grid.upperBoundary() ) < eps )
+				x = grid.upperBoundary();
+
 			for ( auto const & I : coeffs )
 			{
 				if (  I.first.contains( x ) )

@@ -240,8 +240,6 @@ void SystemSolver::runSolver( std::string inputFile )
 	//Solving Loop
 	for (tout = t1, iout = 1; iout <= totalSteps; iout++, tout += delta_t) 
 	{
-		if(iout%stepsPerPrint)
-			std::cout << "target time " << tout;
 		retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
 		if(ErrorChecker::check_retval(&retval, "IDASolve", 1)) 
 		{
@@ -249,12 +247,11 @@ void SystemSolver::runSolver( std::string inputFile )
 			WriteTimeslice( tret );
 			throw std::runtime_error("IDASolve could not complete");
 		}
-		if(iout%stepsPerPrint)
-			std::cout << "\t time after timestepping " << tret << std::endl;
 
 
 		if(iout%stepsPerPrint == 0)
 		{
+			std::cout << "Writing output at " << tret << std::endl;
 			print(out0, tret, nOut, Y );
 			WriteTimeslice( tret );
 
