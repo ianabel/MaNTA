@@ -23,14 +23,14 @@ Autodiff3VarCyl::Autodiff3VarCyl(toml::value const &config)
 
     isTestProblem = toml::find_or(InternalConfig, "isTestProblem", false);
 
-    double nL = toml::find_or(InternalConfig, "nL", 3e18);
-    double nR = toml::find_or(InternalConfig, "nR", 4e18);
+    double nL = toml::find_or(InternalConfig, "nL", 3e18 / n0);
+    double nR = toml::find_or(InternalConfig, "nR", 4e18 / n0);
 
-    double peL = toml::find_or(InternalConfig, "peL", 1e3 * 3e18 * e_charge); // J
-    double peR = toml::find_or(InternalConfig, "peR", 1e3 * 4e18 * e_charge); // J
+    double peL = toml::find_or(InternalConfig, "peL", (1e3 * 3e18 * e_charge) / p0); // J
+    double peR = toml::find_or(InternalConfig, "peR", (1e3 * 4e18 * e_charge) / p0); // J
 
-    double piL = toml::find_or(InternalConfig, "piL", 1e3 * 3e18 * e_charge); // J
-    double piR = toml::find_or(InternalConfig, "piR", 1e3 * 4e18 * e_charge); // J
+    double piL = toml::find_or(InternalConfig, "piL", (1e3 * 3e18 * e_charge) / p0); // J
+    double piR = toml::find_or(InternalConfig, "piR", (1e3 * 4e18 * e_charge) / p0); // J
     Values upperValues(nVars);
     Values lowerValues(nVars);
     upperValues << nR, peR, piR;
@@ -194,14 +194,14 @@ double Autodiff3VarCyl::TestSource(Index i, Position x, Time t)
 
 dual2nd Autodiff3VarCyl::TestDirichlet(dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R)
 {
-    double k = 0.5;
+    double k = 5 * 1 / 0.025;
 
     dual2nd a = (asinh(u_L) - asinh(u_R)) / (x_L - x_R);
     dual2nd b = (asinh(u_L) - x_L / x_R * asinh(u_R)) / (a * (x_L / x_R - 1));
     dual2nd c = (M_PI / 2 - 3 * M_PI / 2) / (x_L - x_R);
     dual2nd d = (M_PI / 2 - x_L / x_R * (3 * M_PI / 2)) / (c * (x_L / x_R - 1));
 
-    dual2nd u = sinh(a * (x - b)) - cos(c * (x - d)) * u_L * exp(-k * t) * exp(-0.5 * x * x);
+    dual2nd u = sinh(a * (x - b)) - cos(c * (x - d)) * exp(-k * t) * exp(-0.5 * x * x);
 
     return u;
 }
@@ -256,11 +256,26 @@ sigmaFn Gamma = [](VectorXdual u, VectorXdual q, dual x, double t)
     return G;
 };
 
+sigmaFn Gamma_hat = [](VectorXdual u, VectorXdual q, dual x, double t)
+{
+    // maybe add a factor of sqrt x if x = r^2/2
+
+    dual G = 2 * x * u(1) * ((q(1) / 2 - q(2)) / u(1) + 3. / 2. * q(0) / u(0));
+    return G;
+};
+
 sigmaFn qi = [](VectorXdual u, VectorXdual q, dual x, double t)
 {
     dual G = Gamma(u, q, x, t);
     dual kappa = 2. * u(2) / (ionMass * Om_i * Om_i * tau_i(u(0), u(2)));
     dual qri = -kappa * u(2) / u(0) * (q(2) / u(2) - q(0) / u(0));
+    dual Q = (2. / 3.) * ((5. / 2.) * u(2) / u(0) * G + (2. * x) * qri);
+    return Q;
+};
+sigmaFn qi_hat = [](VectorXdual u, VectorXdual q, dual x, double t)
+{
+    dual G = Gamma_hat(u, q, x, t);
+    dual qri = -2. * sqrt(electronMass / ionMass) * u(2) * u(2) / u(0) * (q(2) / u(2) - q(0) / u(0));
     dual Q = (2. / 3.) * ((5. / 2.) * u(2) / u(0) * G + (2. * x) * qri);
     return Q;
 };
@@ -272,18 +287,43 @@ sigmaFn qe = [](VectorXdual u, VectorXdual q, dual x, double t)
     dual Q = (2. / 3.) * (5. / 2. * u(1) / u(0) * G + (2. * x) * qre);
     return Q;
 };
-sigmaFnArray Autodiff3VarCyl::sigmaVec = {Gamma, qe, qi};
+sigmaFn qe_hat = [](VectorXdual u, VectorXdual q, dual x, double t)
+{
+    dual G = Gamma_hat(u, q, x, t);
+    dual qre = -4.66 * u(1) * u(1) / u(0) * (q(1) / u(1) - q(0) / u(0)) + (3. / 2.) * u(1) / u(0) * (q(2) + q(1));
+    dual Q = (2. / 3.) * (5. / 2. * u(1) / u(0) * G + (2. * x) * qre);
+    return Q;
+};
+sigmaFnArray Autodiff3VarCyl::sigmaVec = {Gamma_hat, qe_hat, qi_hat};
 
 SourceFn Sn = [](VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
     return 0;
 };
+SourceFn Sn_hat = [](VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
+{
+    return 0;
+};
+
+const dual n0 = 3e18;
+const dual T0 = e_charge * 1e3;
+const dual p0 = n0 * T0;
+const dual Gamma0 = p0 / (electronMass * Om_e * Om_e * tau_e(n0, p0));
+const dual V0 = Gamma0 / n0;
+const Value L = 1;
 
 // look at ion and electron sources again -- they should be opposite
 SourceFn Spi = [](VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
     dual G = Gamma(u, q, x, t) / (2. * x);
     dual V = G / u(0);
+    dual S = 2. / 3. * sqrt(2. * x) * V * q(2);
+    return S;
+};
+SourceFn Spi_hat = [](VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
+{
+    dual G = Gamma_hat(u, q, x, t) / (2. * x);
+    dual V = G / u(0) * L / (p0);
     dual S = 2. / 3. * sqrt(2. * x) * V * q(2);
     return S;
 };
@@ -294,5 +334,13 @@ SourceFn Spe = [](VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, doubl
     dual S = 2. / 3. * sqrt(2. * x) * V * q(1);
     return S;
 };
+SourceFn Spe_hat = [](VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
+{
+    dual G = Gamma_hat(u, q, x, t) / (2. * x);
+    dual V = G / u(0) * L / (p0);
 
-SourceFnArray Autodiff3VarCyl::SourceVec = {Sn, Spe, Spi};
+    dual S = 2. / 3. * sqrt(2. * x) * V * q(1);
+    return S;
+};
+
+SourceFnArray Autodiff3VarCyl::SourceVec = {Sn_hat, Spe_hat, Spi_hat};
