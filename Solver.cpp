@@ -172,7 +172,6 @@ void SystemSolver::runSolver(std::string inputFile)
 	DGSoln tolerances(nVars, grid, k);
 	tolerances.Map(N_VGetArrayPointer(absTolVec));
 	double dx = (grid.upperBoundary() - grid.lowerBoundary()) / nCells;
-
 	// TODO: re-add user tolerance interface
 	for (Index i = 0; i < nCells; ++i)
 	{
@@ -254,7 +253,7 @@ void SystemSolver::runSolver(std::string inputFile)
 		dydtWRMSvec[i] = Weightsvec[i] * dydtVec[i];
 	}
 
-	IDASetMinStep(IDA_mem, 1.0e-6);
+	IDASetMinStep(IDA_mem, 1e-7);
 
 	t = t0;
 
@@ -266,6 +265,8 @@ void SystemSolver::runSolver(std::string inputFile)
 		{
 			print(out0, tret, nOut);
 			WriteTimeslice(tret);
+			nc_output.Close();
+
 			throw std::runtime_error("IDASolve could not complete");
 		}
 

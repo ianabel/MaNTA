@@ -10,6 +10,7 @@ Makefile.local
 toml11/
 sundials/
 resources/
+figs/
 .vscode/
 
 plotter.gnu

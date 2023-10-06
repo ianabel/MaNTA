@@ -10,6 +10,8 @@ enum
 {
     Gaussian = 0,
     Dirichlet = 1,
+    Cosine = 2,
+    Uniform = 3,
 };
 
 AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config)
@@ -252,6 +254,11 @@ dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t, 
         break;
     case Dirichlet:
         u = TestDirichlet(i, x, t, u_R, u_L, x_L, x_R);
+        break;
+    case Cosine:
+        break;
+    case Uniform:
+        u = u_L;
         break;
     default:
         break;

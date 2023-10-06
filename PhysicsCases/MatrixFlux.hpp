@@ -3,9 +3,9 @@
 
 #include "AutodiffFlux.hpp"
 
-struct MatrixFlux : FluxObject
+class MatrixFlux : public FluxObject
 {
-
+public:
     MatrixFlux(toml::value const &config, Index nVars);
 
 private:

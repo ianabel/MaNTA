@@ -10,9 +10,9 @@
 
 #include "gridStructures.hpp"
 
-SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, TransportSystem *transpSystem)
+SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, TransportSystem *transpSystem)
 	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), y(nVars, grid, k), dydt(nVars, grid, k),
-	  dt(Dt), problem(transpSystem)
+	  dt(Dt), problem(transpSystem), tauc(tau)
 {
 	initialiseMatrices();
 	initialised = true;
@@ -246,7 +246,7 @@ void SystemSolver::initialiseMatrices()
 					Cvar(0, i) = 0;
 					Evar(i, 0) = 0;
 				}
-
+				// should this be is upper boundary dirichlet?
 				if (I.x_u == grid.upperBoundary() && problem->isLowerBoundaryDirichlet(var))
 				{
 					Cvar(1, i) = 0;
@@ -528,7 +528,7 @@ void SystemSolver::updateMForJacSolve(std::vector<Eigen::FullPivLU<Eigen::Matrix
 		// S_q Matrix
 		dSourcedq_Mat(Sq, newY, I);
 		MX.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = Sq;
-
+		// why is this in here twice?
 		// S_u Matrix
 		dSourcedu_Mat(Su, newY, I);
 		MX.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += Su;
@@ -837,8 +837,18 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
 	{
 		double x = static_cast<double>(i) * delta_x + grid.lowerBoundary();
 		out << x;
+		Vector uVals(nVars), qVals(nVars), sigmaVals(nVars);
 		for (Index v = 0; v < nVars; ++v)
+		{
+			uVals(v) = tmp_y.u(v)(x);
+			qVals(v) = tmp_y.q(v)(x);
+			sigmaVals(v) = tmp_y.sigma(v)(x);
+		}
+		for (Index v = 0; v < nVars; ++v)
+		{
 			out << "\t" << tmp_y.u(v)(x) << "\t" << tmp_y.q(v)(x) << "\t" << tmp_y.sigma(v)(x);
+			out << "\t" << problem->Sources(v, uVals, qVals, sigmaVals, x, t);
+		}
 		out << std::endl;
 	}
 	out << std::endl;

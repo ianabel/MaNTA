@@ -20,11 +20,11 @@ def solution_NonLinear(x,t):
     return np.power(1-eta,1/n)
 
 def main():
-    with open("./Config/4VarCyl.dat",'rt') as data:
+    with open("./Config/3VarCyl.dat",'rt') as data:
         count = 0
         time = 0
         index = 0
-        nVars = 4
+        nVars = 3
         headings = ""
         line_begin = False
         u = np.ndarray(shape=(301,nVars))
@@ -32,10 +32,13 @@ def main():
         q =  np.ndarray(shape=(301,nVars))
         Q = np.ndarray(shape =(1,301,nVars))
         sigma = np.ndarray(shape=(301,nVars))
+        
         Sigma = np.ndarray(shape=(1,301,nVars))
+        s = np.ndarray(shape=(301,nVars))
+        Source = np.ndarray(shape=(1,301,nVars))
         x = np.ndarray(shape=(301))
         t =[]
-        data_format_n=data_format*nVars*3+data_format.strip("\t")+"\n"
+        data_format_n=data_format*nVars*4+data_format.strip("\t")+"\n"
         for line in data:
             count += 1
             # headers = 
@@ -50,6 +53,7 @@ def main():
                     U = np.vstack((U,np.expand_dims(u,0)))
                     Q = np.vstack((Q,np.expand_dims(q,0)))
                     Sigma = np.vstack((Sigma,np.expand_dims(sigma,0)))
+                    Source = np.vstack((Source,np.expand_dims(s,0)))
                     line_begin = True
                     index = 0
                     time = parse.parse(time_format,line)
@@ -59,41 +63,54 @@ def main():
                    
                       
                 elif(line_begin):
+                  
                     l = parse.parse(data_format_n,line)
                     x[index] = float(l[0])
                     for i in range(0,nVars):
-                        u[index,i] = float(l[3*i+1])
-                        q[index,i] = float(l[3*i+2])
-                        sigma[index,i] = float(l[3*i+3].strip("\n"))
+                        u[index,i] = float(l[4*i+1])
+                        q[index,i] = float(l[4*i+2])
+                        sigma[index,i] = float(l[4*i+3])
+                        s[index,i] = float(l[4*i+4].strip("\n"))
                     index += 1
 
         U = np.vstack((U,np.expand_dims(u,0)))
         Q = np.vstack((Q,np.expand_dims(q,0)))
         Sigma = np.vstack((Sigma,np.expand_dims(sigma,0)))
+        Source = np.vstack((Source,np.expand_dims(s,0)))
         ind = -1
         for i in range(0,nVars):
             plt.figure()
             ax = plt.axes()
             
             ax.plot(x,Sigma[2,:,i],label = "t=0")
-            ax.plot(x,Sigma[3,:,i],label = "one time step")
+          #  ax.plot(x,Sigma[3,:,i],label = "one time step")
             # ax.plot(x,Sigma[4,:,0],label = "two")
             # ax.plot(x,Sigma[5,:,0],label = "three")
             ax.plot(x,Sigma[-1,:,i],label = "end")
             ax.legend()
+            plt.title(str(i) + " sigma")
+            plt.figure()
+            ax1 = plt.axes()
+            ax1.plot(x,Source[2,:,i],label = "t=0")
+           # ax.plot(x,Source[3,:,i],label = "one time step")
+            # ax.plot(x,Source[4,:,0],label = "two")
+            # ax.plot(x,Source[5,:,0],label = "three")
+            ax1.plot(x,Source[-1,:,i],label = "end")
+            ax1.legend()
+            plt.title(str(i) + " source")
             plt.show()
         
 
             plt.figure()
             plt.plot(x,Q[2,:,i])
-            plt.plot(x,Q[3,:,i])
+            plt.plot(x,Q[-1,:,i])
             plt.show()
-            plt.figure()
+            # plt.figure()
             plt.plot(x,U[2,:,i])
             plt.plot(x,U[3,:,i])
             plt.plot(x,U[-1,:,i])
-            plt.show()
-            plt.figure()
+            # plt.show()
+            # plt.figure()
 
       
      
