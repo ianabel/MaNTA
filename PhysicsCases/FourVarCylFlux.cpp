@@ -37,7 +37,7 @@ FourVarCylFlux::FourVarCylFlux(toml::value const &config, Index nVars)
 
 int FourVarCylFlux::ParticleSource;
 double FourVarCylFlux::sourceStrength;
-const dual n0 = 3e18;
+const dual n0 = 3e19;
 const dual T0 = e_charge * 1000;
 const dual p0 = n0 * T0;
 
@@ -107,13 +107,13 @@ dual FourVarCylFlux::qe_hat(VectorXdual u, VectorXdual q, dual x, double t)
 dual FourVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
     dual S = 0.0;
-    dual Center = 0.6;
+    dual Center = 0.25;
     switch (ParticleSource)
     {
     case None:
         break;
     case Gaussian:
-        S = -sourceStrength * exp(-40.0 * (x - Center) * (x - Center));
+        S = -sourceStrength * exp(-200.0 * (x - Center) * (x - Center));
         break;
     default:
         break;
@@ -128,7 +128,7 @@ dual FourVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
     dual G = Gamma_hat(u, q, x, t) / (2. * x);
     dual V = G / u(0); //* L / (p0);
     dual dV = u(3) / u(0) * (q(3) / u(3) - q(0) / u(0));
-    dual Svis = coef * 3. / 10. * u(2) * 1 / tau_hat(u(0), u(2)) * dV * dV;
+    dual Svis = 2. * x * coef * 3. / 10. * u(2) * 1 / tau_hat(u(0), u(2)) * dV * dV;
     dual col = -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
     dual S = 2. / 3. * sqrt(2. * x) * V * q(2) + col - 2. / 3. * Svis;
     return S;
@@ -138,7 +138,7 @@ dual FourVarCylFlux::Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
     dual G = Gamma_hat(u, q, x, t) / (2. * x);
     dual V = G / u(0);
     dual coef = e_charge * B_mid * B_mid / (ionMass * E0);
-    dual S = 1. / sqrt(2. * x) * (V * u(3) - 0.05 * coef);
+    dual S = 1. / sqrt(2. * x) * (V * u(3) - 0.1 * coef);
 
     return S;
 };

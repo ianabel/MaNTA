@@ -6,13 +6,14 @@ import numpy as np
 
 def main():
 
-    data = Dataset('./Config/4VarCyl.nc')#xr.open_dataset("./Config/LinearDiffusion.nc")
+    data = Dataset('./Config/3VarCyl.nc')#xr.open_dataset("./Config/LinearDiffusion.nc")
     Vars = data.groups
     # plt.figure()
     # plt.plot(data.groups["Var2"].variables["sigma"][5,:])
     # plt.show()
     t = data.variables["t"]
     x = data.variables["x"] 
+    r = np.sqrt(2*np.array(x))
     
     for Var in Vars:
         plt.figure()
@@ -31,12 +32,13 @@ def main():
     plt.figure()
     ax = plt.axes()
 
-    ax.plot(x[:],data.groups["Var0"].variables["u"][-1,:],label = "n")
-    ax.plot(x[:],data.groups["Var1"].variables["u"][-1,:],label = "Pe")
-    ax.plot(x[:],data.groups["Var2"].variables["u"][-1,:],label = "Pi")
-    ax.plot(x[:],data.groups["Var3"].variables["u"][-1,:],label = "h")
+    ax.plot(r,data.groups["Var0"].variables["u"][-1,:],label = r"$\hat{n}$")
+    ax.plot(r,data.groups["Var1"].variables["u"][-1,:],label = r"$\hat{p}_e$")
+    ax.plot(r,data.groups["Var2"].variables["u"][-1,:],label = r"$\hat{p}_i$")
+ #   ax.plot(r,data.groups["Var3"].variables["u"][-1,:],label = r"$\hat{h}_i$")
+    
     ax.legend()
-
+    plt.xlabel(r"$\hat{r}$")
     n = np.array(data.groups["Var0"].variables["u"])
     Gamma = -np.array(data.groups["Var0"].variables["sigma"])
     Vr = Gamma/n

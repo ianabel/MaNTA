@@ -528,7 +528,7 @@ void SystemSolver::updateMForJacSolve(std::vector<Eigen::FullPivLU<Eigen::Matrix
 		// S_q Matrix
 		dSourcedq_Mat(Sq, newY, I);
 		MX.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = Sq;
-
+		// why is this in here twice?
 		// S_u Matrix
 		dSourcedu_Mat(Su, newY, I);
 		MX.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += Su;

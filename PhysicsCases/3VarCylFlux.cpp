@@ -110,7 +110,7 @@ dual ThreeVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
     case None:
         break;
     case Gaussian:
-        S = -sourceStrength * exp(-40.0 * (x - Center) * (x - Center));
+        S = -sourceStrength * exp(-100.0 * (x - Center) * (x - Center));
         break;
     default:
         break;
@@ -131,7 +131,7 @@ dual ThreeVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, d
     }
     else
     {
-        return S + Sn_hat(u, q, sigma, x, t);
+        return S + 0.1 * Sn_hat(u, q, sigma, x, t);
     }
     // return 0.0;
 };
