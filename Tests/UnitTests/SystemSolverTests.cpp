@@ -31,10 +31,11 @@ BOOST_AUTO_TEST_CASE(systemsolver_init_tests)
 	Index k = 1; // Start piecewise linear
 	SystemSolver *system = nullptr;
 	double dt = 0.1;
+	double tau = 0.5;
 
 	TestDiffusion problem(config_snippet);
 
-	BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, dt, &problem));
+	BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, dt, tau, &problem));
 
 	system->resetCoeffs();
 
@@ -120,11 +121,12 @@ BOOST_AUTO_TEST_CASE(systemsolver_multichannel_init_tests)
 	Grid testGrid(0.0, 1.0, 4);
 	Index k = 1; // Start piecewise linear
 	SystemSolver *system = nullptr;
+	double tau = 0.5;
 	double dt = 0.1;
 
 	MatrixDiffusion problem(config_snippet_2);
 
-	BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, dt, &problem));
+	BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, dt, tau, &problem));
 
 	system->resetCoeffs();
 
@@ -203,12 +205,14 @@ BOOST_AUTO_TEST_CASE(systemsolver_matrix_tests)
 {
 	Grid testGrid(0.0, 1.0, 4);
 	Index k = 1; // Start piecewise linear
+
 	SystemSolver *system = nullptr;
 	double dt = 0.1;
+	double tau = 0.5;
 
 	TestDiffusion problem(config_snippet);
 
-	BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, dt, &problem));
+	BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, dt, tau, &problem));
 
 	system->resetCoeffs();
 
@@ -234,7 +238,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_matrix_tests)
 	delete system;
 	MatrixDiffusion problem2(config_snippet_2);
 
-	BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, dt, &problem2));
+	BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, dt, tau, &problem2));
 
 	N_VDestroy(y0);
 	N_VDestroy(y0_dot);

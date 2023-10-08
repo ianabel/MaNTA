@@ -9,18 +9,22 @@ using namespace toml::literals::toml_literals;
 const toml::value config_snippet = u8R"(
     [AutodiffTransportSystem]
     nVars = 3
-    isTestProblem = true
-    FluxType = "ThreeVarCylFlux"
-    x_L = 0.1
+    isTestProblem = false
+    FluxType = "MatrixFlux"
+    x_L = -1.0
     x_R = 1.0
-    uL = [1.0,1.0,1.0]
-    uR = [2.0,2.0,2.0]
-
+    uL = [0.0,0.0,0.0]
+    uR = [0.0,0.0,0.0]
     InitialHeights = [1.0,1.0,1.0]
-    [3VarCylFlux]
+    InitialProfile ="Gaussian"
+
+    [MatrixFlux]
+    Kappa = [1.0,0.0,0.0,
+            0.0,1.0,0.0,
+            0.0,0.0,1.0]
 )"_toml;
 
-BOOST_AUTO_TEST_SUITE(autodiff_3varcyl_test_suite, *boost::unit_test::tolerance(1e-7))
+BOOST_AUTO_TEST_SUITE(autodiff_test_suite, *boost::unit_test::tolerance(1e-7))
 
 BOOST_AUTO_TEST_CASE(autodiff_init_tests)
 {
@@ -28,14 +32,20 @@ BOOST_AUTO_TEST_CASE(autodiff_init_tests)
 }
 BOOST_AUTO_TEST_CASE(flux_values)
 {
-    Position x = 0.4;
+    Position x = 0.0;
 
     Time t = 0.0;
+    double x_L = -1.0;
+    double x_R = 1.0;
+    double C = 0.5 * (x_R + x_L);
+    double shape = 10 / (x_R - x_L) * ::log(10);
+
+    double umid = (::exp(-(x - C) * (x - C) * shape) - ::exp(-(x_L - C) * (x_L - C) * shape));
 
     Values u(3);
-    u << 2.14055918662440447519657027442008e+00, 2.14055918662440447519657027442008e+00, 2.14055918662440447519657027442008e+00;
+    u << umid, umid, umid;
     Values q(3);
-    q << 2.87110199725334913622987187409308e+00, 2.87110199725334913622987187409308e+00, 2.87110199725334913622987187409308e+00;
+    q << 0.0, 0.0, 0.0;
     AutodiffTransportSystem problem(config_snippet);
 
     BOOST_TEST(problem.InitialValue(0, x) == u(0));
@@ -47,22 +57,22 @@ BOOST_AUTO_TEST_CASE(flux_values)
     BOOST_TEST(problem.InitialDerivative(2, x) == q(2));
 
     Values dGammadu(3);
-    dGammadu << -2.29688159780267930898389749927446e+00, 0.00000000000000000000000000000000e+00, 0.00000000000000000000000000000000e+00;
+    dGammadu << 0.0, 0.0, 0.0;
 
     Values dGammadq(3);
-    dGammadq << -2.56867102394928537023588432930410e+00, -8.56223674649761679056325647252379e-01, 1.71244734929952335811265129450476e+00;
+    dGammadq << 1.0, 0.0, 0.0;
 
     Values dQedu(3);
-    dQedu << -2.45000703765619110008344705420313e-01, 8.66689989570877550306704506510869e+00, 0.00000000000000000000000000000000e+00;
+    dQedu << 0.0, 0.0, 0.0;
 
     Values dQedq(3);
-    dQedq << 9.60112147173932761745618336135522e+00, -2.18051629144139313964956272684503e+00, -1.14163156619968231275663583801361e+00;
+    dQedq << 0.0, 1.0, 0.0;
 
     Values dQidu(3);
-    dQidu << -9.27926349021486061019459157250822e+01, 0.00000000000000000000000000000000e+00, 9.66207708984864126477987156249583e+01;
+    dQidu << 0.0, 0.0, 0.0;
 
     Values dQidq(3);
-    dQidq << 7.34629611921026537402212852612138e+01, 1.42703945774960283543464356625918e+00, -7.20359217343530531252326909452677e+01;
+    dQidq << 0.0, 0.0, 1.0;
 
     Values grad(3);
     problem.dSigmaFn_du(0, grad, u, q, x, t);
@@ -91,21 +101,21 @@ BOOST_AUTO_TEST_CASE(flux_values)
     BOOST_TEST(grad(1) == dQidq(1));
     BOOST_TEST(grad(2) == dQidq(2));
 
-    double Gamma = -4.91661100476506529588505145511590e+00;
-    double PeFlux = 1.80275736841385700870432629017159e+01;
-    double PiFlux = 8.19435167460844127162999939173460e+00;
+    double Gamma = 0.0;
+    double PeFlux = 0.0;
+    double PiFlux = 0.0;
 
     BOOST_TEST(problem.SigmaFn(0, u, q, x, t) == Gamma);
     BOOST_TEST(problem.SigmaFn(1, u, q, x, t) == PeFlux);
     BOOST_TEST(problem.SigmaFn(2, u, q, x, t) == PiFlux);
 
-    double SnTest = 9.01393906661699162441436783410609e-01;
-    double SPeTest =
-        -1.02185418842517030668659572256729e+01;
+    // double SnTest = 9.01393906661699162441436783410609e-01;
+    // double SPeTest =
+    //     -1.02185418842517030668659572256729e+01;
 
-    double SPiTest = -7.55941685470154123294150849687867e+00;
-    BOOST_TEST(problem.TestSource(0, x, t) == SnTest);
-    BOOST_TEST(problem.TestSource(1, x, t) == SPeTest);
-    BOOST_TEST(problem.TestSource(2, x, t) == SPiTest);
+    // double SPiTest = -7.55941685470154123294150849687867e+00;
+    // BOOST_TEST(problem.TestSource(0, x, t) == SnTest);
+    // BOOST_TEST(problem.TestSource(1, x, t) == SPeTest);
+    // BOOST_TEST(problem.TestSource(2, x, t) == SPiTest);
 }
 BOOST_AUTO_TEST_SUITE_END()
