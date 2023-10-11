@@ -79,6 +79,8 @@ public:
 	void SetTime(double tt) { t = tt; };
 	void SetTau(double tau) { tauc = tau; };
 
+	void setJacEvalY( N_Vector & );
+
 private:
 	Grid grid;
 	unsigned int k;		 // polynomial degree per cell
@@ -98,6 +100,8 @@ private:
 	//?Point the duplicated matrices to the same place?
 
 	DGSoln y, dydt;
+
+	DGSoln yJac;
 
 	void NLqMat(Matrix &, DGSoln const &, Interval);
 	void NLuMat(Matrix &, DGSoln const &, Interval);

@@ -11,7 +11,7 @@
 #include "gridStructures.hpp"
 
 SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, TransportSystem *transpSystem)
-	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), y(nVars, grid, k), dydt(nVars, grid, k),
+	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), y(nVars, grid, k), dydt(nVars, grid, k), yJac(nVars, grid, k),
 	  dt(Dt), problem(transpSystem), tauc(tau)
 {
 	initialiseMatrices();
@@ -554,6 +554,15 @@ void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorW
 	}
 
 	new (&lam) VectorWrapper(Y + nVars * (nCells) * (3 * k + 3), nVars * (nCells + 1));
+}
+
+void SystemSolver::setJacEvalY( N_Vector & yy )
+{
+	DGSoln yyMap( nVars, grid, k );
+	assert(static_cast<size_t>(N_VGetLength(yy)) == yyMap.getDoF());
+	yyMap.Map( N_VGetArrayPointer( yy ) );
+
+	yJac.copy( yyMap ); // Deep copy -- yyMap only aliases the N_Vector, this copies the data
 }
 
 void SystemSolver::solveJacEq(N_Vector &g, N_Vector &delY)

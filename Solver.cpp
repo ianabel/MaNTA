@@ -16,7 +16,7 @@
 #include "ErrorChecker.hpp"
 
 int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data);
-int EmptyJac(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3);
+int JacSetup(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3);
 
 void SystemSolver::runSolver(std::string inputFile)
 {
@@ -200,7 +200,7 @@ void SystemSolver::runSolver(std::string inputFile)
 	if (IDASetLinearSolver(IDA_mem, LS, sunMat) != SUNLS_SUCCESS)
 		std::runtime_error("Error in IDASetLinearSolver");
 
-	IDASetJacFn(IDA_mem, EmptyJac);
+	IDASetJacFn(IDA_mem, JacSetup);
 
 	IDASetMaxNonlinIters(IDA_mem, 10);
 
@@ -299,12 +299,17 @@ void SystemSolver::runSolver(std::string inputFile)
 	N_VDestroy(absTolVec);
 }
 
-int EmptyJac(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3)
+/* 
+ * SUNDIALS Calls this function to recompute the local Jacobian
+ * This is the function that should set the point at which the sub-matrices for the Jacobian solve are evaluated
+ */
+int JacSetup(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3)
 {
 	// Sundials looks for a Jacobian, but our Jacobian equation is solved without computing the jacobian.
 	// We use this function to capture t and cj for the solve.
 	auto System = reinterpret_cast<SystemSolver *>(user_data);
 	System->SetTime(tt);
 	System->setAlpha(cj);
+	System->setJacEvalY( yy );
 	return 0;
 }
