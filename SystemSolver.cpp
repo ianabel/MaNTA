@@ -469,17 +469,12 @@ void SystemSolver::resetCoeffs()
 	dydt.zeroCoeffs();
 }
 
-void SystemSolver::updateMForJacSolve(std::vector<Eigen::FullPivLU<Eigen::MatrixXd>> &MXsolvers, double alpha, DGSoln const &delta)
+void SystemSolver::updateMForJacSolve(std::vector<Eigen::FullPivLU<Eigen::MatrixXd>> &MXsolvers, double alpha, DGSoln const & )
 {
 	MXsolvers.clear();
 
-	DGSoln newY(nVars, grid, k);
-	double *mem = new double[newY.getDoF()];
-	newY.Map(mem);
-
-	// We want to base our matrix off the current guess -- y + delta
-	newY.copy(y);
-	newY += delta;
+	// We know where the jacobian is to be evaluated -- yJac
+	
 
 	Eigen::MatrixXd X(nVars * (k + 1), nVars * (k + 1));
 	Eigen::MatrixXd NLq(nVars * (k + 1), nVars * (k + 1));
@@ -514,35 +509,33 @@ void SystemSolver::updateMForJacSolve(std::vector<Eigen::FullPivLU<Eigen::Matrix
 		MX.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += X;
 
 		// NLq Matrix
-		NLqMat(NLq, newY, I);
+		NLqMat(NLq, yJac, I);
 		MX.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLq;
 
 		// NLu Matrix
-		NLuMat(NLu, newY, I);
+		NLuMat(NLu, yJac, I);
 		MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLu;
 
 		// S_sig Matrix
-		dSourcedsigma_Mat(Ssig, newY, I);
+		dSourcedsigma_Mat(Ssig, yJac, I);
 		MX.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = Ssig;
 
 		// S_q Matrix
-		dSourcedq_Mat(Sq, newY, I);
+		dSourcedq_Mat(Sq, yJac, I);
 		MX.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = Sq;
-		// why is this in here twice?
+		
 		// S_u Matrix
-		dSourcedu_Mat(Su, newY, I);
+		dSourcedu_Mat(Su, yJac, I);
 		MX.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += Su;
 
+		/*
 		// S_u Matrix
-		dSourcedu_Mat(Su, newY, I);
+		dSourcedu_Mat(Su, yJac, I);
 		MX.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += Su;
-
-		// if(i==0) std::cerr << MX << std::endl << std::endl;
-		// if(i==0)std::cerr << MX.inverse() << std::endl << std::endl;
+		*/
 
 		MXsolvers.emplace_back(MX);
 	}
-	delete[] mem;
 }
 
 void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorWrapper &lam, realtype *const &Y) const
