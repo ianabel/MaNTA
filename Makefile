@@ -24,17 +24,17 @@ CXXFLAGS += -I.
 $(SOLVER): $(OBJECTS) $(PHYSICS_OBJECTS) $(HEADERS) Makefile
 	$(CXX) $(CXXFLAGS) -g -o $(SOLVER) $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
 
-Tests/UnitTests/UnitTests: $(SOLVER) 
-	make -C Tests/UnitTests all
+Tests/UnitTests/UnitTests: $(SOLVER)
+	$(MAKE) -C Tests/UnitTests all
 
 test: $(SOLVER) Tests/UnitTests/UnitTests
 	Tests/UnitTests/UnitTests
 
 clean:
-	make -C Tests/UnitTests clean
+	$(MAKE) -C Tests/UnitTests clean
 	rm -f $(SOLVER) $(OBJECTS) $(ERROBJECTS) $(TESTOBJECTS) $(PHYSICS_OBJECTS)
 
 regression_tests: $(SOLVER)
-	make -C Tests/RegressionTests
+	$(MAKE) -C Tests/RegressionTests
 
 .PHONY: clean test regression_tests
