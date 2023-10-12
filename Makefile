@@ -2,6 +2,8 @@
 
 all: test
 
+export
+
 include Makefile.config
 
 SOURCES = MTS.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp Solver.cpp Matrices.cpp DGStatic.cpp PhysicsCases.cpp NetCDFIO.cpp AutodiffFlux.cpp
@@ -32,7 +34,7 @@ clean:
 	make -C Tests/UnitTests clean
 	rm -f $(SOLVER) $(OBJECTS) $(ERROBJECTS) $(TESTOBJECTS) $(PHYSICS_OBJECTS)
 
-regression_tests: solver
-	cd Tests/RegressionTests; ./CheckRegressionTests.sh
+regression_tests: $(SOLVER)
+	make -C Tests/RegressionTests
 
 .PHONY: clean test regression_tests

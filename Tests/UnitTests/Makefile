@@ -3,8 +3,6 @@
 all: UnitTests
 .PHONY: all clean
 
-include Makefile.config
-
 TEST_SOURCES = DGTests.cpp SystemSolverTests.cpp AutodiffTest.cpp
 
 CXXFLAGS += -I../../ -DTEST

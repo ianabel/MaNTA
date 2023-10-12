@@ -1,13 +1,12 @@
 #!/bin/bash
 
-MTS=../../solver
-
+MANTA=../../$SOLVER
 
 function fileout_test_case {
 	local INPUT="$CASE.conf"
 	local OUTPUT="$CASE.dat"
 	local REF="$CASE.ref.dat"
-	$MTS $INPUT >/dev/null 2>/dev/null;
+	$MANTA $INPUT >/dev/null 2>/dev/null;
 	
 	if diff -q $OUTPUT $REF >/dev/null;
 	then
