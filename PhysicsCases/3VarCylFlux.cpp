@@ -19,7 +19,6 @@ int sgn(T val)
 ThreeVarCylFlux::ThreeVarCylFlux(toml::value const &config, Index nVars)
 {
 
-    nVars = nVars;
     if (config.count("3VarCylFlux") != 1)
         throw std::invalid_argument("There should be a [3VarCylFlux] section if you are using the 3VarCylFlux physics model.");
 

@@ -9,8 +9,6 @@ public:
     ThreeVarCylFlux(toml::value const &config, Index nVars);
 
 private:
-    double InitialWidth, Centre;
-
     std::map<std::string, int> ParticleSources = {{"None", 0}, {"Gaussian", 1}};
     static int ParticleSource;
     static double sourceStrength;

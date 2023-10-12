@@ -1,11 +1,12 @@
 
 
-all: solver 
+all: test
 
 include Makefile.config
 
 SOURCES = MTS.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp Solver.cpp Matrices.cpp DGStatic.cpp PhysicsCases.cpp NetCDFIO.cpp AutodiffFlux.cpp
 
+SOLVER = MaNTA
 
 HEADERS = gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp SystemSolver.hpp ErrorChecker.hpp ErrorTester.hpp TransportSystem.hpp PhysicsCases.hpp DGSoln.hpp AutodiffFlux.hpp
 OBJECTS = $(patsubst %.cpp,%.o,$(SOURCES))
@@ -18,17 +19,18 @@ CXXFLAGS += -I.
 %.o: %.cpp Makefile $(HEADERS)
 	$(CXX) -c $(CXXFLAGS) -o $@ $<
 
-solver: $(OBJECTS) $(PHYSICS_OBJECTS) $(HEADERS) Makefile
-	$(CXX) $(CXXFLAGS) -g -o solver $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
+$(SOLVER): $(OBJECTS) $(PHYSICS_OBJECTS) $(HEADERS) Makefile
+	$(CXX) $(CXXFLAGS) -g -o $(SOLVER) $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
 
-Tests/UnitTests/UnitTests: solver
+Tests/UnitTests/UnitTests: $(SOLVER) 
 	make -C Tests/UnitTests all
 
-test: solver Tests/UnitTests/UnitTests
+test: $(SOLVER) Tests/UnitTests/UnitTests
 	Tests/UnitTests/UnitTests
 
 clean:
-	rm -f solver unit_test_suite errortest dbsolver $(OBJECTS) $(ERROBJECTS) $(TESTOBJECTS) $(PHYSICS_OBJECTS)
+	make -C Tests/UnitTests clean
+	rm -f $(SOLVER) $(OBJECTS) $(ERROBJECTS) $(TESTOBJECTS) $(PHYSICS_OBJECTS)
 
 regression_tests: solver
 	cd Tests/RegressionTests; ./CheckRegressionTests.sh

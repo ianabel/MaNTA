@@ -9,7 +9,6 @@ public:
     MatrixFlux(toml::value const &config, Index nVars);
 
 private:
-    double InitialWidth, Centre;
     static Matrix Kappa;
     Vector InitialHeights;
 

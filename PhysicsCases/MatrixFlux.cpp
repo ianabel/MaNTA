@@ -5,7 +5,6 @@ REGISTER_FLUX_IMPL(MatrixFlux);
 
 MatrixFlux::MatrixFlux(toml::value const &config, Index nVars)
 {
-    nVars = nVars;
     if (config.count("MatrixFlux") != 1)
         throw std::invalid_argument("There should be a [MatrixFlux] section if you are using the MatrixFlux physics model.");
 

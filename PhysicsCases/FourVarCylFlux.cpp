@@ -12,8 +12,6 @@ enum
 
 FourVarCylFlux::FourVarCylFlux(toml::value const &config, Index nVars)
 {
-
-    nVars = nVars;
     if (config.count("4VarCylFlux") != 1)
         throw std::invalid_argument("There should be a [4VarCylFlux] section if you are using the 4VarCylFlux physics model.");
 
@@ -60,6 +58,7 @@ dual FourVarCylFlux::Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t)
     else
         return -G;
 };
+
 dual FourVarCylFlux::qi_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
     dual G = Gamma_hat(u, q, x, t);
