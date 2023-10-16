@@ -32,7 +32,9 @@ public:
 
 	// This has been moved elsewhere, SystemSolver should be constructed after the parsing is done.
 	// SystemSolver(std::string const& inputFile);
-	~SystemSolver() = default;
+	~SystemSolver() {
+		delete yJacMem;
+	};
 
 	// Initialises u, q and lambda to satisfy residual equation at t=0
 	void setInitialConditions(N_Vector &Y, N_Vector &dYdt);
@@ -48,8 +50,7 @@ public:
 
 	// Creates the MX cellwise matrices used at each Jacobian iteration
 	// Factorization of these matrices is done here
-	//?TO DO: the values of the non-linear matrices will be added in this function?
-	void updateMForJacSolve(std::vector<Eigen::FullPivLU<Eigen::MatrixXd>> &MXsolvers, double alpha, DGSoln const &delta);
+	void updateMatricesForJacSolve();
 
 	// Solves the Jy = -G equation
 	void solveJacEq(N_Vector &g, N_Vector &delY);
@@ -87,21 +88,25 @@ private:
 	unsigned int nCells; // Total cell count
 	unsigned int nVars;	 // Total number of variables
 
+	using EigenCellwiseSolver = Eigen::PartialPivLU<Matrix>;
+	using EigenGlobalSolver = Eigen::PartialPivLU<Matrix>;
 	std::vector<Matrix> XMats;
 	std::vector<Matrix> MBlocks;
 	std::vector<Matrix> CEBlocks;
 	Matrix K_global;
-	Eigen::VectorXd L_global;
+	Vector L_global;
 	Matrix H_global_mat;
 	Eigen::FullPivLU<Matrix> H_global;
 	std::vector<Vector> RF_cellwise;
 	std::vector<Matrix> CG_cellwise;
 	std::vector<Matrix> A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise;
 	//?Point the duplicated matrices to the same place?
+	std::vector<EigenCellwiseSolver> MXSolvers;
 
-	DGSoln y, dydt;
+	DGSoln y, dydt; // memory owned by SUNDIALS
 
-	DGSoln yJac;
+	double *yJacMem = nullptr;
+	DGSoln yJac; // memory owned by us
 
 	void NLqMat(Matrix &, DGSoln const &, Interval);
 	void NLuMat(Matrix &, DGSoln const &, Interval);

@@ -1,5 +1,6 @@
 
 #include "LD2.hpp"
+#include <iostream>
 
 /*
 	Implementation of the Linear Diffusion case
@@ -28,6 +29,7 @@ LD2::LD2( toml::value const& config )
 	Centre =        toml::find_or( DiffConfig, "Centre", 0.0 );
 
 	t0 = InitialWidth * InitialWidth / ( 4.0 * kappa );
+	std::cerr << "t0 = " << t0 << std::endl;
 
 }
 

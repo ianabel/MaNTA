@@ -11,9 +11,11 @@
 #include "gridStructures.hpp"
 
 SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, TransportSystem *transpSystem)
-	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), y(nVars, grid, k), dydt(nVars, grid, k), yJac(nVars, grid, k),
+	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), MXSolvers( Grid.getNCells() ), y(nVars, grid, k), dydt(nVars, grid, k), yJac(nVars, grid, k),
 	  dt(Dt), problem(transpSystem), tauc(tau)
 {
+	yJacMem = new double[ yJac.getDoF() ];
+	yJac.Map( yJacMem );
 	initialiseMatrices();
 	initialised = true;
 }
@@ -469,12 +471,13 @@ void SystemSolver::resetCoeffs()
 	dydt.zeroCoeffs();
 }
 
-void SystemSolver::updateMForJacSolve(std::vector<Eigen::FullPivLU<Eigen::MatrixXd>> &MXsolvers, double alpha, DGSoln const & )
+// TODO: Recompute the LU decomp at each invocation, but
+// don't reallocate the memory (i.e. don't clear MXSolvers, just recompute)
+void SystemSolver::updateMatricesForJacSolve()
 {
-	MXsolvers.clear();
+	MXSolvers.clear();
 
 	// We know where the jacobian is to be evaluated -- yJac
-	
 
 	Eigen::MatrixXd X(nVars * (k + 1), nVars * (k + 1));
 	Eigen::MatrixXd NLq(nVars * (k + 1), nVars * (k + 1));
@@ -494,15 +497,13 @@ void SystemSolver::updateMForJacSolve(std::vector<Eigen::FullPivLU<Eigen::Matrix
 
 		Interval const &I(grid[i]);
 		Eigen::MatrixXd MX(3 * nVars * (k + 1), 3 * nVars * (k + 1));
-		MX.setZero();
 		MX = MBlocks[i];
+
 		// X matrix
 		for (Index var = 0; var < nVars; var++)
 		{
-			std::function<double(double)> alphaF = [=, this](double x)
-			{ return alpha * problem->aFn(var, x); };
+			std::function<double(double)> alphaF = [=, this](double x) { return alpha * problem->aFn(var, x); };
 			Eigen::MatrixXd Xsubmat((k + 1), (k + 1));
-			Xsubmat.setZero();
 			DGApprox::MassMatrix(I, Xsubmat, alphaF);
 			X.block(var * (k + 1), var * (k + 1), k + 1, k + 1) = Xsubmat;
 		}
@@ -528,13 +529,7 @@ void SystemSolver::updateMForJacSolve(std::vector<Eigen::FullPivLU<Eigen::Matrix
 		dSourcedu_Mat(Su, yJac, I);
 		MX.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += Su;
 
-		/*
-		// S_u Matrix
-		dSourcedu_Mat(Su, yJac, I);
-		MX.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += Su;
-		*/
-
-		MXsolvers.emplace_back(MX);
+		MXSolvers.emplace_back(MX);
 	}
 }
 
@@ -558,6 +553,8 @@ void SystemSolver::setJacEvalY( N_Vector & yy )
 	yJac.copy( yyMap ); // Deep copy -- yyMap only aliases the N_Vector, this copies the data
 }
 
+// This is called repeatedly, *possibly with the same jacobian*
+// don't do any matrix re-assembly here
 void SystemSolver::solveJacEq(N_Vector &g, N_Vector &delY)
 {
 	// DGsoln object that will map the data from delY
@@ -575,10 +572,6 @@ void SystemSolver::solveJacEq(N_Vector &g, N_Vector &delY)
 
 	K_global.setZero();
 
-	// assemble temp cellwise M blocks
-	std::vector<Eigen::FullPivLU<Eigen::MatrixXd>> factorisedM{};
-	updateMForJacSolve(factorisedM, alpha, del_y);
-
 	// Assemble RHS g into cellwise form and solve for SQU blocks
 	mapDGtoSundials(g1g2g3_cellwise, g4, N_VGetArrayPointer(g));
 
@@ -591,11 +584,11 @@ void SystemSolver::solveJacEq(N_Vector &g, N_Vector &delY)
 		// SQU_f
 		Eigen::VectorXd g1g2g3 = g1g2g3_cellwise[i];
 
-		SQU_f[i] = factorisedM[i].solve(g1g2g3);
+		SQU_f[i] = MXSolvers[i].solve(g1g2g3);
 
 		// SQU_0
 		Eigen::MatrixXd CE = CEBlocks[i];
-		SQU_0[i] = factorisedM[i].solve(CE);
+		SQU_0[i] = MXSolvers[i].solve(CE);
 		// std::cerr << SQU_0[i] << std::endl << std::endl;
 		// std::cerr << CE << std::endl << std::endl;
 
@@ -624,11 +617,11 @@ void SystemSolver::solveJacEq(N_Vector &g, N_Vector &delY)
 	}
 
 	// Factorise the global matrix ( size n_cells * n_variables )
-	Eigen::FullPivLU<Eigen::MatrixXd> lu(K_global);
+	EigenGlobalSolver globalKSolver(K_global);
 	// This solves for the lambdas of all variables at once (drop it in the memory sundials reserved for it)
 	Index LambdaOffset = nVars * nCells * (k + 1) * 3;
 
-	delYVec.segment(LambdaOffset, nVars * (nCells + 1)) = lu.solve(F);
+	delYVec.segment(LambdaOffset, nVars * (nCells + 1)) = globalKSolver.solve(F);
 
 	// Now find del sigma, del q and del u to eventually find del Y
 	for (Index i = 0; i < nCells; i++)

@@ -308,8 +308,10 @@ int JacSetup(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SU
 	// Sundials looks for a Jacobian, but our Jacobian equation is solved without computing the jacobian.
 	// We use this function to capture t and cj for the solve.
 	auto System = reinterpret_cast<SystemSolver *>(user_data);
-	System->SetTime(tt);
-	System->setAlpha(cj);
+	System->SetTime( tt );
+	System->setAlpha( cj );
 	System->setJacEvalY( yy );
+	System->updateBoundaryConditions( tt );
+	System->updateMatricesForJacSolve();
 	return 0;
 }
