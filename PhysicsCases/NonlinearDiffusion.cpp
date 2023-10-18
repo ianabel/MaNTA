@@ -15,14 +15,17 @@ NonlinearDiffusion::NonlinearDiffusion( toml::value const& config )
 
 	// Construst your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
-	// here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 
 	if ( config.count( "DiffusionProblem" ) != 1 ) {
 		n = 2;
+		t0 = 1.1;
 	} else {
 		auto const& DiffConfig = config.at( "DiffusionProblem" );
 		n = toml::find_or( DiffConfig, "n", 2 );
+		t0 = toml::find_or( DiffConfig, "t0", 1.1 );
+
 	}
+
 
 }
 
@@ -35,7 +38,7 @@ Value NonlinearDiffusion::LowerBoundary( Index, Time ) const
 // Exact solution at x = 1
 Value NonlinearDiffusion::UpperBoundary( Index, Time t ) const
 {
-	return ExactSolution( 1, 1 + t );
+	return ExactSolution( 1, t0 + t );
 }
 
 bool NonlinearDiffusion::isLowerBoundaryDirichlet( Index ) const { return true; };
@@ -92,17 +95,17 @@ void NonlinearDiffusion::dSources_dsigma( Index, Values&v , const Values &, cons
 // Initialise at t=1
 Value NonlinearDiffusion::InitialValue( Index, Position x ) const
 {
-	return ExactSolution( x, 0.0 );
+	return ExactSolution( x, t0 );
 }
 
 Value NonlinearDiffusion::InitialDerivative( Index, Position x ) const
 {
-	return ExactSolution( x, 0.0 ) / ( n*( x - 1.0 ) );
+	return ExactSolution( x, t0 ) / ( n*( x/::sqrt( t0 ) - 1.0 ) );
 }
 
 Value NonlinearDiffusion::ExactSolution( Position x, Time t ) const
 {
-	double eta = x/::sqrt( 1 + t );
+	double eta = x/::sqrt( t );
 	if ( eta >= 1.0 )
 		return 0.0;
 	return ::pow( 1.0 - eta, 1.0/n );

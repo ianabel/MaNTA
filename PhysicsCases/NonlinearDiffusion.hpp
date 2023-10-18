@@ -49,7 +49,7 @@ public:
 
 private:
 	// Put class-specific data here
-	double n;
+	double n,t0;
 
 	Value ExactSolution(Position, Time) const;
 

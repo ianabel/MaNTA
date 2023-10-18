@@ -91,34 +91,24 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 					S_cellwise(j) += wgt * sourceVal * LegendreBasis::Evaluate(I, j, x_val);
 			}
 
-			auto cTInv = Eigen::FullPivLU<Eigen::MatrixXd>(C_cellwise[i].transpose());
 			lamCell[0] = y.lambda(var)[i];
-			lamCell[1] = y.lambda(var)[i];
+			lamCell[1] = y.lambda(var)[i+1];
 			// dudt.coeffs[ var ][ i ].second.setZero();
 			auto const &sigma_vec = y.sigma(var).getCoeff(i).second;
 			auto const &u_vec = y.u(var).getCoeff(i).second;
 			dydt.u(var).getCoeff(i).second =
-				XMats[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1).inverse() * (-B_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * sigma_vec - D_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * u_vec - E_cellwise[i].block(var * (k + 1), var * 2, k + 1, 2) * lamCell + RF_cellwise[i].block(nVars * (k + 1) + var * (k + 1), 0, k + 1, 1) - S_cellwise);
-			dydt.q(var).getCoeff(i).second.setZero();
+				XMats[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1).inverse() * 
+				(
+				 - B_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * sigma_vec 
+				 - D_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * u_vec 
+				 - E_cellwise[i].block(var * (k + 1), var * 2, k + 1, 2) * lamCell 
+				 + RF_cellwise[i].block(nVars * (k + 1) + var * (k + 1), 0, k + 1, 1) 
+				 - S_cellwise
+				 );
 			// <cellwise derivative matrix> * dydt.u( var ).getCoeff( i ).second;
 		}
-		auto dSigmaFn_dt = [this](Index i, const Values &U, const Values &Q, Position x, Time t)
-		{
-			Values dSigma_du_vals(nVars);
-			Values dSigma_dq_vals(nVars);
-
-			problem->dSigmaFn_du(i, dSigma_du_vals, U, Q, x, t);
-			problem->dSigmaFn_dq(i, dSigma_dq_vals, U, Q, x, t);
-
-			double sigmaDot = 0;
-			for (Index j = 0; j < nVars; ++j)
-			{
-				sigmaDot += U[j] * dSigma_du_vals[j] + Q[j] * dSigma_dq_vals[j];
-			}
-
-			return sigmaDot;
-		};
-		dydt.AssignSigma(dSigmaFn_dt);
+		dydt.q(var).zeroCoeffs();
+		dydt.sigma(var).zeroCoeffs();
 	}
 }
 
@@ -371,8 +361,7 @@ void SystemSolver::initialiseMatrices()
 		for (Index var = 0; var < nVars; var++)
 		{
 			Eigen::MatrixXd Xvar(k + 1, k + 1);
-			DGApprox::MassMatrix(I, Xvar, [this, var](double x)
-								 { return problem->aFn(var, x); });
+			DGApprox::MassMatrix(I, Xvar, [this, var](double x) { return problem->aFn(var, x); });
 			X.block(var * (k + 1), var * (k + 1), k + 1, k + 1) = Xvar;
 		}
 		XMats.emplace_back(X);
@@ -629,6 +618,7 @@ void SystemSolver::solveJacEq(N_Vector &g, N_Vector &delY)
 		// Interval const& I = grid[ i ];
 		Vector delSQU(3 * nVars * (k + 1));
 
+		/*
 		// Reorganise the data from variable-major to cell-major
 		Vector delLambdaCell(2 * nVars);
 
@@ -636,12 +626,11 @@ void SystemSolver::solveJacEq(N_Vector &g, N_Vector &delY)
 		{
 			delLambdaCell.block<2, 1>(2 * var, 0) = delYVec.segment(LambdaOffset + var * (nCells + 1) + i, 2);
 		}
+		*/
 
-		/*
 		// Try mapping the memory by using the magic runes (future update)
 		Eigen::Map< Vector, Eigen::Unaligned, Eigen::Stride< Eigen::Dynamic, 0 > >
 			delLambdaCell( delYVec.data() + LambdaOffset + i, 2 * nVars, Eigen::Stride< Eigen::Dynamic, 0 >( nCells + 1, 0 ) );
-			*/
 
 		delSQU = SQU_f[i] - SQU_0[i] * delLambdaCell;
 		for (Index var = 0; var < nVars; var++)
@@ -657,7 +646,7 @@ int residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval, void *us
 {
 	auto system = reinterpret_cast<SystemSolver *>(user_data);
 	auto k = system->k;
-	auto grid(system->grid);
+	auto const & grid = system->grid;
 	auto nCells = system->nCells;
 	auto nVars = system->nVars;
 

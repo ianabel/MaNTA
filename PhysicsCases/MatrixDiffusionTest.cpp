@@ -20,8 +20,9 @@ MatrixDiffusionTest::MatrixDiffusionTest(toml::value const &config)
 
 	auto const &DiffConfig = config.at("DiffusionProblem");
 
-	nVars = toml::find_or(DiffConfig, "nVars", 1 );
+	nVars = toml::find_or(DiffConfig, "nVars", 2 );
 	Centre = toml::find_or(DiffConfig, "Centre", 0.0);
+	alpha = toml::find_or(DiffConfig, "alpha", 0.0);
 
 	std::vector<double> InitialHeight_v = toml::find<std::vector<double>>(DiffConfig, "InitialHeights");
 
@@ -34,15 +35,13 @@ MatrixDiffusionTest::MatrixDiffusionTest(toml::value const &config)
 	for (Index i = 0; i < nVars; ++i)
 		InitialHeights[i] = InitialHeight_v[i];
 
-	Kappa = Matrix::Zero(nVars, nVars);
-	Kappa( 0, 0 ) = 1.0; Kappa( 0, 1 ) = 0.2;
-	Kappa( 1, 0 ) = 0.2; Kappa( 1, 1 ) = 1.0;
+	Kappa = Matrix::Identity(nVars, nVars);
 }
 
 // Dirichlet Boundary Conditon
-Value MatrixDiffusionTest::LowerBoundary(Index, Time) const
+Value MatrixDiffusionTest::LowerBoundary(Index i, Time t) const
 {
-	return 0.0;
+	return InitialHeights[i] * ::exp( -( t*M_PI_2*M_PI_2 ) );
 }
 
 Value MatrixDiffusionTest::UpperBoundary(Index, Time) const

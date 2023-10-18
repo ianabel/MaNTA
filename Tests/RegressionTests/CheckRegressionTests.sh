@@ -2,6 +2,8 @@
 
 MANTA=../../$SOLVER
 
+echo "Testing Reference Runs"
+
 function fileout_test_case {
 	local INPUT="$CASE.conf"
 	local OUTPUT="$CASE.dat"

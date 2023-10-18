@@ -120,10 +120,6 @@ void SystemSolver::runSolver(std::string inputFile)
 	dYdt = N_VClone(Y);
 	if (ErrorChecker::check_retval((void *)dYdt, "N_VClone", 0))
 		throw std::runtime_error("Sundials Initialization Error");
-	VectorWrapper yVec(N_VGetArrayPointer(Y), N_VGetLength(Y));
-	VectorWrapper dydtVec(N_VGetArrayPointer(dYdt), N_VGetLength(dYdt));
-	yVec.setZero();
-	dydtVec.setZero();
 
 	// Initialise Y and dYdt
 	setInitialConditions(Y, dYdt);
@@ -144,15 +140,14 @@ void SystemSolver::runSolver(std::string inputFile)
 	id = N_VClone(Y);
 	if (ErrorChecker::check_retval((void *)id, "N_VClone", 0))
 		std::runtime_error("Sundials initialization Error, run in debug to find");
-	VectorWrapper idVals(N_VGetArrayPointer(id), nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1));
-	idVals.setZero();
-	for (Index i = 0; i < nCells; i++)
-	{
-		for (Index j = 0; j < nVars * (k + 1); j++)
-		{
-			idVals[i * 3 * nVars * (k + 1) + 2 * nVars * (k + 1) + j] = 1.0; // U vals
-		}
-	}
+
+	DGSoln isDifferential( nVars, grid, k );
+	isDifferential.Map( N_VGetArrayPointer( id ) );
+	isDifferential.zeroCoeffs();
+	for ( Index v = 0; v < nVars; ++v )
+		for ( Index i = 0; i < nCells; ++i )
+			isDifferential.u( v ).getCoeff( i ).second.Constant( k + 1, 1.0 );
+	
 	retval = IDASetId(IDA_mem, id);
 	if (ErrorChecker::check_retval(&retval, "IDASetId", 1))
 		std::runtime_error("Sundials initialization Error, run in debug to find");
@@ -210,6 +205,14 @@ void SystemSolver::runSolver(std::string inputFile)
 	*/
 
 	//------------------------------Solve------------------------------
+	// Update initial solution to be within tolerance of the residual equation
+	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
+	if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
+	{
+		throw std::runtime_error("IDACalcIC could not complete");
+	}
+
+	// Initialise text output and write out initial condition massaged by CalcIC
 	std::string baseName = inputFile.substr(0, inputFile.rfind("."));
 	std::ofstream out0(baseName + ".dat");
 
@@ -218,40 +221,27 @@ void SystemSolver::runSolver(std::string inputFile)
 	out0 << "# x";
 	for (Index v = 0; v < nVars; ++v)
 		out0 << "\t"
-			 << "var" << v << " u"
-			 << "\t"
-			 << "var" << v << " q"
-			 << "\t"
-			 << "var" << v << " sigma";
+			 << "var" << v << " u" << "\t"
+			 << "var" << v << " q" << "\t"
+			 << "var" << v << " sigma" << "\t"
+			 << "var" << v << " source" ;
 	out0 << std::endl;
 
 	print(out0, t0, nOut);
 
+	std::ofstream dydt_out(baseName + ".dydt.dat");
+
+	print( dydt_out, t0, nOut, dYdt );
+	dydt_out.close();
+
 	initialiseNetCDF(baseName + ".nc", nOut);
 	WriteTimeslice(t0);
 
+	out0.close(); return;
+
+	//
+
 	IDASetMaxNumSteps(IDA_mem, 50000);
-
-	// Update initial solution to be within tolerance of the residual equation
-	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
-	if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
-	{
-		throw std::runtime_error("IDACalcIC could not complete");
-	}
-
-	N_Vector dydtWRMS;
-	N_Vector Weights;
-	dydtWRMS = N_VClone(Y);
-	Weights = N_VClone(Y);
-	VectorWrapper dydtWRMSvec(N_VGetArrayPointer(dydtWRMS), N_VGetLength(dydtWRMS));
-	VectorWrapper Weightsvec(N_VGetArrayPointer(Weights), N_VGetLength(Weights));
-	Weightsvec.setZero();
-
-	for (int i = 0; i < dydtWRMSvec.size(); i++)
-	{
-		Weightsvec[i] = 1.0 / (rtol * yVec[i] + absTolVals[i]);
-		dydtWRMSvec[i] = Weightsvec[i] * dydtVec[i];
-	}
 
 	IDASetMinStep(IDA_mem, 1e-7);
 

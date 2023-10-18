@@ -41,7 +41,7 @@ class MatrixDiffusionTest : public TransportSystem {
 
 private:
 	// Put class-specific data here
-	double Centre;
+	double Centre,alpha;
 	Matrix Kappa;
 	Vector InitialHeights;
 
