@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.9.1)
+set(LIBRARY_OUTPUT_PATH  ${CMAKE_BINARY_DIR}/lib)
+set(SOURCES 3VarCylFlux.hpp AutodiffTransportSystem.hpp Constants.cpp FishersEquation.cpp FourVarCylFlux.cpp LD2.cpp LinearDiffusion.cpp MatrixDiffusion.cpp MatrixDiffusionTest.cpp MatrixFlux.cpp NonlinearDiffusion.cpp)
+set(Headers 3VarCylFlux.hpp AutodiffTransportSystem.hpp Constants.hpp FishersEquation.hpp FourVarCylFlux.hpp LD2.hpp LinearDiffusion.hpp MatrixDiffusion.hpp MatrixDiffusionTest.hpp MatrixFlux.hpp NonlinearDiffusion.hpp)
+add_library(PhysicsCases SHARED ${SOURCES})
+target_include_directories(PhysicsCases PUBLIC ${CMAKE_SOURCE_DIR})

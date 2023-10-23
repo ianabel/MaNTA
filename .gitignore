@@ -14,3 +14,9 @@ resources/
 figs/
 runs/
 .vscode/
+build/
+MaNTa
+
+plotter.gnu
+-O0
+-O3
