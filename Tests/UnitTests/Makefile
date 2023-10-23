@@ -4,12 +4,13 @@ all: UnitTests
 .PHONY: all clean
 
 TEST_SOURCES = DGTests.cpp SystemSolverTests.cpp AutodiffTest.cpp
+TEST_HEADERS = TestDiffusion.hpp
 
 CXXFLAGS += -I../../ -DTEST
 
 REQUIRED_OBJECTS = ../../DGStatic.o ../../SystemSolver.o ../../Matrices.o ../../NetCDFIO.o ../../PhysicsCases/AutodiffTransportSystem.o ../../PhysicsCases/MatrixFlux.o  ../../PhysicsCases.o ../../PhysicsCases/MatrixDiffusion.o ../../AutodiffFlux.o ../../PhysicsCases/Constants.o
 
-UnitTests: main.cpp $(TEST_SOURCES) $(REQUIRED_OBJECTS) Makefile
+UnitTests: main.cpp $(TEST_SOURCES) $(TEST_HEADERS) $(REQUIRED_OBJECTS) Makefile
 	$(CXX) $(CXXFLAGS) -o $@ main.cpp $(TEST_SOURCES) $(REQUIRED_OBJECTS) $(LDFLAGS)
 
 clean:

@@ -1,5 +1,5 @@
-solver
-unit_test_suite
+MaNTA
+Tests/UnitTests/UnitTests
 /*.conf
 /*.report
 /*.plot

@@ -37,4 +37,4 @@ clean:
 regression_tests: $(SOLVER)
 	$(MAKE) -C Tests/RegressionTests
 
-.PHONY: clean test regression_tests
+.PHONY: clean test regression_tests Tests/UnitTests/UnitTests

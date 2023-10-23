@@ -1,19 +1,19 @@
-#ifndef MATRIXDIFFUSIONTEST_HPP
-#define MATRIXDIFFUSIONTEST_HPP
+#ifndef LDMMS_HPP
+#define LDMMS_HPP
 
 #include "PhysicsCases.hpp"
 
 /*
-	Matrix Diffusion Test Case, showcasing how to write a physics case that is compiled
+	Linear Diffusion Test Case, showcasing how to write a physics case that is compiled
 	at the same time as the 
  */
 
 // Always inherit from TransportSystem
-class MatrixDiffusionTest : public TransportSystem {
+class LDMMS : public TransportSystem {
 	public:
 		// Must provide a constructor that constructs from a toml configuration snippet
 		// you can ignore it, or read problem-dependent parameters from the configuration file
-		explicit MatrixDiffusionTest( toml::value const& config );
+		explicit LDMMS( toml::value const& config );
 
 		// You must provide implementations of both, these are your boundary condition functions
 		Value LowerBoundary( Index, Time ) const override;
@@ -41,14 +41,13 @@ class MatrixDiffusionTest : public TransportSystem {
 
 private:
 	// Put class-specific data here
-	double Centre,alpha;
-	double Lambda1,Lambda2,a1,a2;
-	Matrix Kappa;
-	Vector InitialHeights;
+	double kappa, InitialWidth, InitialHeight, Centre;
+	double t0;
+	Value ExactSolution( Position, Time ) const;
 
-	// Without this (and the implementation line in MatrixDiffusionTest.cpp)
-	// ManTA won't know how to relate the string 'MatrixDiffusionTest' to the class.
-	REGISTER_PHYSICS_HEADER( MatrixDiffusionTest )
+	// Without this (and the implementation line in LDMMS.cpp)
+	// ManTA won't know how to relate the string 'LDMMS' to the class.
+	REGISTER_PHYSICS_HEADER( LDMMS )
 };
 
-#endif // MATRIXDIFFUSIONTEST_HPP
+#endif // LDMMS_HPP

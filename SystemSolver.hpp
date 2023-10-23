@@ -53,7 +53,7 @@ public:
 	void updateMatricesForJacSolve();
 
 	// Solves the Jy = -G equation
-	void solveJacEq(N_Vector &g, N_Vector &delY);
+	void solveJacEq(N_Vector g, N_Vector delY);
 
 	void setAlpha(double const a) { alpha = a; }
 
@@ -81,6 +81,7 @@ public:
 	void SetTau(double tau) { tauc = tau; };
 
 	void setJacEvalY( N_Vector & );
+	int residual(realtype, N_Vector, N_Vector, N_Vector );
 
 private:
 	Grid grid;
@@ -89,7 +90,7 @@ private:
 	unsigned int nVars;	 // Total number of variables
 
 	using EigenCellwiseSolver = Eigen::PartialPivLU<Matrix>;
-	using EigenGlobalSolver = Eigen::PartialPivLU<Matrix>;
+	using EigenGlobalSolver = Eigen::FullPivLU<Matrix>;
 	std::vector<Matrix> XMats;
 	std::vector<Matrix> MBlocks;
 	std::vector<Matrix> CEBlocks;
@@ -139,11 +140,13 @@ private:
 	double tauc;
 	double tau(double x) const { return tauc; };
 
-	friend int residual(realtype, N_Vector, N_Vector, N_Vector, void *);
 
 	NetCDFIO nc_output;
 	void initialiseNetCDF(std::string const &fname, size_t nOut);
 	void WriteTimeslice(double tNew);
+
+	size_t S_DOF, U_DOF, Q_DOF, SQU_DOF;
+
 
 #ifdef TEST
 	friend struct system_solver_test_suite::systemsolver_init_tests;

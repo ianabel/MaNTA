@@ -15,7 +15,7 @@
 #include "SunMatrixWrapper.hpp"
 #include "ErrorChecker.hpp"
 
-int residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data);
+int static_residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data);
 int JacSetup(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3);
 
 void SystemSolver::runSolver(std::string inputFile)
@@ -153,7 +153,7 @@ void SystemSolver::runSolver(std::string inputFile)
 		std::runtime_error("Sundials initialization Error, run in debug to find");
 
 	// Initialise IDA
-	retval = IDAInit(IDA_mem, residual, t0, Y, dYdt);
+	retval = IDAInit(IDA_mem, static_residual, t0, Y, dYdt);
 	if (ErrorChecker::check_retval(&retval, "IDAInit", 1))
 		std::runtime_error("Sundials initialization Error, run in debug to find");
 
@@ -230,14 +230,16 @@ void SystemSolver::runSolver(std::string inputFile)
 	print(out0, t0, nOut);
 
 	std::ofstream dydt_out(baseName + ".dydt.dat");
+	std::ofstream res_out(baseName + ".res.dat");
 
 	print( dydt_out, t0, nOut, dYdt );
-	dydt_out.close();
+
+	residual( t0, Y, dYdt, res );
+
+	res_out << "Residual l_inf norm at t = " << t0 << " is " << N_VMaxNorm( res ) << std::endl;
 
 	initialiseNetCDF(baseName + ".nc", nOut);
 	WriteTimeslice(t0);
-
-	out0.close(); return;
 
 	//
 
@@ -254,6 +256,7 @@ void SystemSolver::runSolver(std::string inputFile)
 		if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
 		{
 			print(out0, tret, nOut);
+			print( dydt_out, t0, nOut, dYdt );
 			WriteTimeslice(tret);
 			nc_output.Close();
 
@@ -263,7 +266,11 @@ void SystemSolver::runSolver(std::string inputFile)
 		if (iout % stepsPerPrint == 0)
 		{
 			std::cout << "Writing output at " << tret << std::endl;
-			print(out0, tret, nOut, Y );
+			print( out0, tret, nOut, Y );
+			print( dydt_out, tret, nOut, dYdt );
+			residual( tret, Y, dYdt, res );
+
+			res_out << "Residual l_inf norm at t = " << tret << " is " << N_VMaxNorm( res ) << " ; L1 Norm is " << N_VL1Norm( res ) << std::endl;
 			WriteTimeslice( tret );
 
 			// Diagnostics go here
@@ -273,6 +280,7 @@ void SystemSolver::runSolver(std::string inputFile)
 	std::cerr << "Total number of steps taken = " << total_steps << std::endl;
 
 	out0.close();
+	dydt_out.close();
 	nc_output.Close();
 
 	IDAFree(&IDA_mem);

@@ -18,6 +18,7 @@ using namespace toml::literals::toml_literals;
 const toml::value config_snippet = u8R"(
     [DiffusionProblem]
 	 Kappa = 1.0
+	 Centre = 0.0
 )"_toml;
 
 BOOST_TEST_DONT_PRINT_LOG_VALUE(Grid);
@@ -34,6 +35,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_init_tests)
 	double tau = 0.5;
 
 	TestDiffusion problem(config_snippet);
+	BOOST_TEST( problem.Centre == 0.0 );
 
 	BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, dt, tau, &problem));
 
@@ -42,6 +44,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_init_tests)
 	BOOST_TEST(system->k == k);
 	BOOST_TEST(system->grid == testGrid);
 	BOOST_TEST(system->nVars == 1);
+
 
 	BOOST_TEST((system->A_cellwise[0] - Matrix::Identity(k + 1, k + 1)).norm() < 1e-9);
 	BOOST_TEST((system->A_cellwise[1] - Matrix::Identity(k + 1, k + 1)).norm() < 1e-9);
@@ -105,7 +108,17 @@ BOOST_AUTO_TEST_CASE(systemsolver_init_tests)
 	y0 = N_VNew_Serial(3 * 4 * (2) + 1 * (4 + 1), ctx);
 	y0_dot = N_VClone(y0);
 	system->setInitialConditions(y0, y0_dot);
+	// Check y0 & y0dot
+	
+	DGSoln yMap( system->nVars, testGrid, k, N_VGetArrayPointer( y0 ) );
+	Vector lambdaRef( 5 );
+	// Values of exp( -25x^2 ) at 0/0.25/0.5/0.75/1.0
+	lambdaRef << 1.0, ::cos( M_PI/8 ), ::cos( M_PI/4 ), ::cos( 3*M_PI/8 ), 0.0;
+	BOOST_TEST( ( yMap.lambda( 0 ) - lambdaRef ).norm() < 0.025 );
 }
+
+
+
 
 const toml::value config_snippet_2 = u8R"(
 [DiffusionProblem]

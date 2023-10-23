@@ -25,16 +25,15 @@ class TestDiffusion : public TransportSystem {
 
 			auto const& DiffConfig = config.at( "DiffusionProblem" );
 
-			kappa =         toml::find_or( DiffConfig, "Kappa", 1.0 );
-			InitialWidth  = toml::find_or( DiffConfig, "InitialWidth", 0.2 );
-			InitialHeight = toml::find_or( DiffConfig, "InitialHeight", 1.0 );
-			Centre =        toml::find_or( DiffConfig, "Centre", 0.5 );
+			kappa  =         toml::find_or( DiffConfig, "Kappa", 1.0 );
+			Centre =         toml::find_or( DiffConfig, "Centre", 0.5 );
+			InitialHeight = 1.0;
 
 		};
 
 		// You must provide implementations of both, these are your boundary condition functions
-		Value LowerBoundary( Index, Time ) const override { return 0.0;};
-		Value UpperBoundary( Index, Time ) const override { return 0.0;};
+		Value LowerBoundary( Index, Time t ) const override { return ExactSolution( 0.0, t );};
+		Value UpperBoundary( Index, Time t ) const override { return ExactSolution( 1.0, t );};
 
 		bool isLowerBoundaryDirichlet( Index ) const override { return true;};
 		bool isUpperBoundaryDirichlet( Index ) const override { return true;};
@@ -75,18 +74,21 @@ class TestDiffusion : public TransportSystem {
 		};
 
 		// Finally one has to provide initial conditions for u & q
-		Value      InitialValue( Index, Position x ) const override {
-			double y = ( x - Centre )/InitialWidth;
-			return InitialHeight * ::exp( -y*y );
+		Value InitialValue( Index, Position x ) const override {
+			double y = ( x - Centre );
+			return InitialHeight * ::cos( y* M_PI_2 );
 		};
 		Value InitialDerivative( Index, Position x ) const override {
-			double y = ( x - Centre )/InitialWidth;
-			return InitialHeight * ( -2.0 * y ) * ::exp( -y*y ) * ( 1.0/InitialWidth );
+			double y = ( x - Centre );
+			return -M_PI_2 * InitialHeight * ::sin( y*M_PI_2 );
 		};
+		Value ExactSolution( Position x, Time t ) const
+		{
+			return InitialValue( 0, x ) * ::exp( -( t*M_PI_2*M_PI_2 ) );
+		}
 
-private:
 	// Put class-specific data here
-	double kappa, InitialWidth, InitialHeight, Centre;
+	double kappa, InitialHeight, Centre;
 
 	// Doesn't include class registration, this is header-only for internal testing
 };

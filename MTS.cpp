@@ -102,7 +102,7 @@ int main(int argc, char **argv)
 
 	Grid grid(lBound, uBound, nCells, highGridBoundary);
 
-	double tau = toml::find_or(config, "tau", 0.5);
+	double tau = toml::find_or(config, "tau", 0.75);
 
 	double dt = toml::find_or(config, "dt", 1.e-3);
 
