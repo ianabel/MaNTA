@@ -7,12 +7,10 @@ Tests/UnitTests/UnitTests
 *.nc
 Makefile.local
 *.o
+*.so
 toml11/
 sundials/
 resources/
 figs/
+runs/
 .vscode/
-
-plotter.gnu
--O0
--O3

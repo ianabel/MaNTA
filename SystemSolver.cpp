@@ -541,9 +541,17 @@ void SystemSolver::setJacEvalY( N_Vector & yy )
 	yJac.copy( yyMap ); // Deep copy -- yyMap only aliases the N_Vector, this copies the data
 }
 
-// This is called repeatedly, *possibly with the same jacobian*
-// don't do any matrix re-assembly here
+// Over-arching Jacobian function. If there's no coupled B-field solve, or auxiliar variables, then just do the 
+// HDG Jacobian solve
 void SystemSolver::solveJacEq(N_Vector g, N_Vector delY)
+{
+	solveHDGJac( g, delY );
+}
+
+// Solve the HDG part of the Jacobian
+// NB: This is called repeatedly, *possibly with the same jacobian*
+// don't do any matrix re-assembly here
+void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
 {
 	// DGsoln object that will map the data from delY
 	DGSoln del_y(nVars, grid, k);

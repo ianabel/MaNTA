@@ -42,10 +42,12 @@ def ld_soln( x, t ):
     t0 = 0.01
     return np.sqrt(t0/(t+t0)) * np.exp( -x*x/(4*(t+t0)));
 
-print("Testing Analytiv Solutions")
+print("Testing Analytic Solutions")
 
 run_manta( "ld.conf" )
 test_soln( "ld.nc", ld_soln, 1e-3 )
+os.unlink( "ld.dat" )
+os.unlink( "ld.nc" )
 
 def nonlin_soln( x, t ):
     t0 = 1.1
@@ -55,6 +57,8 @@ def nonlin_soln( x, t ):
 
 run_manta( "nonlin.conf" )
 test_soln( "nonlin.nc", nonlin_soln, 1e-3 )
+os.unlink( "nonlin.dat" )
+os.unlink( "nonlin.nc" )
 
 print("All Tests Passed")
 sys.exit(0)

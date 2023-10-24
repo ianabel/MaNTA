@@ -10,20 +10,11 @@
 #include "SystemSolver.hpp"
 #include "PhysicsCases.hpp"
 
-void runSolver(std::shared_ptr<SystemSolver> system, std::string const &inputFile);
+void LoadFromFile( std::string const& );
 
-int main(int argc, char **argv)
+int runManta( std::string const& fname )
 {
 	// std::cerr.precision(17);
-	std::string fname("mts.conf");
-	if (argc == 2)
-		fname = argv[1];
-	if (argc > 2)
-	{
-		std::cerr << "Usage: MTS++ ConfigFile.conf" << std::endl;
-		return 1;
-	}
-
 	std::filesystem::path config_file_path(fname);
 	if (!std::filesystem::exists(config_file_path))
 	{
@@ -105,6 +96,10 @@ int main(int argc, char **argv)
 	double tau = toml::find_or(config, "tau", 0.75);
 
 	double dt = toml::find_or(config, "dt", 1.e-3);
+
+	if ( config.count( "LibraryFile" ) == 1 ) {
+		LoadFromFile( config.at( "LibraryFile" ).as_string() );
+	}
 
 	if (config.count("TransportSystem") != 1)
 		throw std::invalid_argument("TransportSystem needs to specified exactly once in the general configuration section");

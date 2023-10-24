@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+#
+
+import sys
+
+filename = ""
+
+if len(sys.argv) == 2:
+    filename = sys.argv[1]
+elif len(sys.argv) == 1:
+    filename = "MaNTA.conf"
+else:
+    print("Usage: PyMaNTA <configuration file>")
+    sys.exit()
+
+import MaNTA
+import toml
+
+Config = toml.load( filename )
+
+conf = Config.get("configuration")
+if conf == None:
+    print("Missing [configuration] section in " + filename)
+    sys.exit(1)
+else
+    py_import_str = conf.get("PythonModule")
+    if py_import_str != None:
+        # Load the module
+
+MaNTA.run( filename )
+
+

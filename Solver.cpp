@@ -229,14 +229,14 @@ void SystemSolver::runSolver(std::string inputFile)
 
 	print(out0, t0, nOut);
 
-	std::ofstream dydt_out(baseName + ".dydt.dat");
-	std::ofstream res_out(baseName + ".res.dat");
+	// std::ofstream dydt_out(baseName + ".dydt.dat");
+	// std::ofstream res_out(baseName + ".res.dat");
 
-	print( dydt_out, t0, nOut, dYdt );
+	// print( dydt_out, t0, nOut, dYdt );
 
-	residual( t0, Y, dYdt, res );
+	// residual( t0, Y, dYdt, res );
 
-	res_out << "Residual l_inf norm at t = " << t0 << " is " << N_VMaxNorm( res ) << std::endl;
+	// res_out << "Residual l_inf norm at t = " << t0 << " is " << N_VMaxNorm( res ) << std::endl;
 
 	initialiseNetCDF(baseName + ".nc", nOut);
 	WriteTimeslice(t0);
@@ -256,7 +256,7 @@ void SystemSolver::runSolver(std::string inputFile)
 		if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
 		{
 			print(out0, tret, nOut);
-			print( dydt_out, t0, nOut, dYdt );
+			// print( dydt_out, t0, nOut, dYdt );
 			WriteTimeslice(tret);
 			nc_output.Close();
 
@@ -267,10 +267,9 @@ void SystemSolver::runSolver(std::string inputFile)
 		{
 			std::cout << "Writing output at " << tret << std::endl;
 			print( out0, tret, nOut, Y );
-			print( dydt_out, tret, nOut, dYdt );
-			residual( tret, Y, dYdt, res );
-
-			res_out << "Residual l_inf norm at t = " << tret << " is " << N_VMaxNorm( res ) << " ; L1 Norm is " << N_VL1Norm( res ) << std::endl;
+			// print( dydt_out, tret, nOut, dYdt );
+			// residual( tret, Y, dYdt, res );
+			// res_out << "Residual l_inf norm at t = " << tret << " is " << N_VMaxNorm( res ) << " ; L1 Norm is " << N_VL1Norm( res ) << std::endl;
 			WriteTimeslice( tret );
 
 			// Diagnostics go here
@@ -280,7 +279,7 @@ void SystemSolver::runSolver(std::string inputFile)
 	std::cerr << "Total number of steps taken = " << total_steps << std::endl;
 
 	out0.close();
-	dydt_out.close();
+	// dydt_out.close();
 	nc_output.Close();
 
 	IDAFree(&IDA_mem);

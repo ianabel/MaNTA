@@ -54,6 +54,7 @@ public:
 
 	// Solves the Jy = -G equation
 	void solveJacEq(N_Vector g, N_Vector delY);
+	void solveHDGJac(N_Vector g, N_Vector delY);
 
 	void setAlpha(double const a) { alpha = a; }
 
