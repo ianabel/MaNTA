@@ -1,7 +1,7 @@
 #ifndef LINEARDIFFUSION_HPP
 #define LINEARDIFFUSION_HPP
 
-#include "PhysicsCases.hpp"
+#include "../PhysicsCases.hpp"
 
 /*
  * Exact solutions for the nonlinear equation

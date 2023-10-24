@@ -1,54 +1,85 @@
-cmake_minimum_required(VERSION 3.0.0)
+cmake_minimum_required(VERSION 3.12)
 project(MaNTA VERSION 0.1.0)
 
 set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -Wall -Wno-parentheses -Werror -Wno-error=unused-variable -pedantic")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/..)
 
 set(SOURCES MTS.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp Solver.cpp Matrices.cpp DGStatic.cpp PhysicsCases.cpp NetCDFIO.cpp AutodiffFlux.cpp)
 set(HEADERS gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp SystemSolver.hpp ErrorChecker.hpp ErrorTester.hpp TransportSystem.hpp PhysicsCases.hpp DGSoln.hpp AutodiffFlux.hpp)
-add_executable(MaNTa ${SOURCES})
 
-add_subdirectory(PhysicsCases/)
+set(PHYSICS_SOURCES 3VarCylFlux.cpp AutodiffTransportSystem.cpp Constants.cpp FishersEquation.cpp FourVarCylFlux.cpp LD2.cpp LinearDiffusion.cpp MatrixDiffusion.cpp MatrixDiffusionTest.cpp MatrixFlux.cpp NonlinearDiffusion.cpp)
+set(PHYSICS_HEADERS 3VarCylFlux.hpp AutodiffTransportSystem.hpp Constants.hpp FishersEquation.hpp FourVarCylFlux.hpp LD2.hpp LinearDiffusion.hpp MatrixDiffusion.hpp MatrixDiffusionTest.hpp MatrixFlux.hpp NonlinearDiffusion.hpp)
+
+foreach(case IN LISTS PHYSICS_SOURCES)
+    list(APPEND SOURCES PhysicsCases/${case})
+endforeach()
+
+foreach(case IN LISTS PHYSICS_HEADERS)
+    list(APPEND HEADERS PhysicsCases/${case})
+endforeach()
 
 option(MaNTa_BUILD_UNIT_TESTS "Build MaNTa unit tests." on)
+set(AUTODIFF_DIR "/home/eatocco/packages/autodiff")
 
-set(AUTODIFF_DIR "/home/eatocco/autodiff")
-set(SUNDIALS_INCLUDE_DIR "/home/eatocco/sundials/lib/")
-set(SUNDIALS_LIB_DIR "/home/eatocco/sundials/lib/lib")
-set(EIGEN_DIR "/usr/include/eigen3")
-
-list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
-list(APPEND CMAKE_PREFIX_PATH "/usr/")
-
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
 find_package(Boost REQUIRED)
+find_package(SUNDIALS MODULE)
+find_package(NetCDF MODULE)
+find_package(autodiff CONFIG PATHS ${AUTODIFF_DIR})
+find_package(Eigen3 CONFIG)
 
+add_executable(MaNTa ${SOURCES} ${HEADERS})
 
 add_subdirectory(toml11/)
 
 target_link_libraries(MaNTa toml11)
 
-include_directories(${SUNDIALS_INCLUDE_DIR})
-find_library(SUNDIALS_LIB SUNDIALS PATHS ${SUNDIALS_LIB_DIR})
-message(STATUS "MY_CAMERA_LIBRARY: " ${SUNDIALS_LIB})
-target_link_libraries(MaNTa ${SUNDIALS_LIB})
-
-include_directories(${EIGEN_DIR})
-#target_link_libraries(MaNTa Eigen)
-
-include_directories(${AUTODIFF_DIR})
-link_directories(MaNTa INTERFACE ${AUTODIFF_DIR}/lib)
-
-include_directories("/usr/include")
-target_link_libraries(MaNTa netcdf)
-
 if(Boost_FOUND)
     message("Boost Found")
-    include_directories(${Boost_INCLUDE_DIRS})
+    target_include_directories(MaNTa PRIVATE ${Boost_INCLUDE_DIRS})
     target_link_libraries(MaNTa ${Boost_LIBRARIES})
 elseif(NOT Boost_FOUND)
-    error("Boost Not Found")
+    message("Boost Not Found")
 endif()
+
+if(autodiff_FOUND)
+    message("autodiff Found")
+    target_include_directories(MaNTa PRIVATE ${autodiff_DIR}/../../../include)
+    target_link_libraries(MaNTa ${autodiff_LIBRARIES})
+elseif(NOT autodiff_FOUND)
+    message("autodiff Not Found")
+endif()
+
+
+if(SUNDIALS_FOUND)
+    message("SUNDIALS Found")
+    target_include_directories(MaNTa PRIVATE "${SUNDIALS_INCLUDE_DIRS}")
+    target_link_libraries(MaNTa ${SUNDIALS_LIBRARIES})
+elseif(NOT SUNDIALS_FOUND)
+    message("SUNDIALS Not Found")
+endif()
+
+if(Eigen3_FOUND)
+    message("Eigen3 Found")
+    target_include_directories(MaNTa PRIVATE ${EIGEN3_INCLUDE_DIR})
+    target_link_libraries(MaNTa ${EIGEN3_LIBRARIES})
+elseif(NOT Eigen3_FOUND)
+    message("Eigen Not Found")
+endif()
+
+if(NetCDF_FOUND)
+    message("NetCDF Found")
+    message("${NetCDF_LIBRARIES}")
+    list(APPEND NetCDF_LIBRARIES "netcdf_c++4")
+    target_include_directories(MaNTa PRIVATE ${NetCDF_INCLUDE_DIRS})
+    target_link_libraries(MaNTa ${NetCDF_LIBRARIES})
+elseif(NOT NetCDF_FOUND)
+    message("NetCDF Not Found")
+endif()
+
+
+
 
 
 

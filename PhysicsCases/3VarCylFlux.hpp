@@ -1,4 +1,4 @@
-#include "AutodiffFlux.hpp"
+#include "../AutodiffFlux.hpp"
 
 #ifndef THREEVARCYLFLUX
 #define THREEVARCYLFLUX

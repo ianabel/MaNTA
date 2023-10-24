@@ -1,4 +1,4 @@
-#include "AutodiffFlux.hpp"
+#include "../AutodiffFlux.hpp"
 
 #ifndef FOURVARCYLFLUX
 #define FOURVARCYLFLUX

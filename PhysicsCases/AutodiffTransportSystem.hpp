@@ -1,8 +1,8 @@
 #ifndef AUTODIFFTRANSPORTSYSTEM_HPP
 #define AUTODIFFTRANSPORTSYSTEM_HPP
 
-#include "PhysicsCases.hpp"
-#include "AutodiffFlux.hpp"
+#include "../PhysicsCases.hpp"
+#include "../AutodiffFlux.hpp"
 #include <autodiff/forward/dual.hpp>
 #include <autodiff/forward/dual/eigen.hpp>
 

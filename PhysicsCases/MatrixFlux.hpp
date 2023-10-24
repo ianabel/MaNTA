@@ -1,7 +1,7 @@
 #ifndef MATRIXFLUX
 #define MATRIXFLUX
 
-#include "AutodiffFlux.hpp"
+#include "../AutodiffFlux.hpp"
 
 class MatrixFlux : public FluxObject
 {
