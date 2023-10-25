@@ -40,6 +40,25 @@ FourVarCylFlux::FourVarCylFlux(toml::value const &config, Index nVars)
     taue0 = tau_e(n0, p0);
     taui0 = tau_i(n0, p0);
     h0 = ionMass * n0 * E0 / Bmid;
+    sourceCenter = toml::find_or(DiffConfig, "SourceCenter", 0.25);
+    sourceWidth = toml::find_or(DiffConfig, "SourceWidth", 0.01);
+
+    // reference values
+    n0 = toml::find_or(DiffConfig, "n0", 3e19);
+    T0 = e_charge * toml::find_or(DiffConfig, "T0", 1e3);
+    Bmid = toml::find_or(DiffConfig, "Bmid", 1.0);
+    E0 = toml::find_or(DiffConfig, "E0", 1e5);
+    L = toml::find_or(DiffConfig, "L", 1.0);
+    J0 = toml::find_or(DiffConfig, "J0", 0.01);
+
+    p0 = n0 * T0;
+
+    Gamma0 = p0 / (electronMass * Om_e(Bmid) * Om_e(Bmid) * tau_e(n0, p0));
+    V0 = Gamma0 / n0;
+
+    taue0 = tau_e(n0, p0);
+    taui0 = tau_i(n0, p0);
+    h0 = ionMass * n0 * E0 / Bmid;
 
     sigma.insert(std::pair<Index, sigmaptr>(0, &Gamma_hat));
     sigma.insert(std::pair<Index, sigmaptr>(1, &qe_hat));
@@ -54,6 +73,23 @@ FourVarCylFlux::FourVarCylFlux(toml::value const &config, Index nVars)
 
 int FourVarCylFlux::ParticleSource;
 double FourVarCylFlux::sourceStrength;
+dual FourVarCylFlux::sourceCenter;
+dual FourVarCylFlux::sourceWidth;
+
+// reference values
+dual FourVarCylFlux::n0;
+dual FourVarCylFlux::T0;
+dual FourVarCylFlux::Bmid;
+dual FourVarCylFlux::J0;
+Value FourVarCylFlux::L;
+
+dual FourVarCylFlux::E0;
+dual FourVarCylFlux::p0;
+dual FourVarCylFlux::Gamma0;
+dual FourVarCylFlux::V0;
+dual FourVarCylFlux::taue0;
+dual FourVarCylFlux::taui0;
+dual FourVarCylFlux::h0;
 dual FourVarCylFlux::sourceCenter;
 dual FourVarCylFlux::sourceWidth;
 
@@ -137,6 +173,7 @@ dual FourVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
         break;
     case Gaussian:
         S = -sourceStrength * exp(-1 / sourceWidth * (x - sourceCenter) * (x - sourceCenter));
+        S = -sourceStrength * exp(-1 / sourceWidth * (x - sourceCenter) * (x - sourceCenter));
         break;
     default:
         break;
@@ -148,8 +185,8 @@ dual FourVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
 dual FourVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
     dual coef = (E0 / Bmid) * (E0 / Bmid) / (V0 * Om_i(Bmid) * Om_i(Bmid) * taui0);
-    // dual G = Gamma_hat(u, q, x, t) / (2. * x);
-    // dual V = G / u(0); //* L / (p0);
+    dual G = Gamma_hat(u, q, x, t) / (2. * x);
+    dual V = G / u(0); //* L / (p0);
     dual dV = u(3) / u(0) * (q(3) / u(3) - q(0) / u(0));
     dual Svis = (2. * x) * coef * 3. / 10. * u(2) * 1 / tau_hat(u(0), u(2)) * dV * dV;
     // dual col = -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
@@ -160,6 +197,8 @@ dual FourVarCylFlux::Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
 {
     dual G = Gamma_hat(u, q, x, t) / (2. * x);
     dual V = G / u(0);
+    dual coef = e_charge * Bmid * Bmid / (ionMass * E0);
+    dual S = 1. / sqrt(2. * x) * (V * u(3) - J0 * coef);
     dual coef = e_charge * Bmid * Bmid / (ionMass * E0);
     dual S = 1. / sqrt(2. * x) * (V * u(3) - J0 * coef);
 

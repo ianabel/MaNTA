@@ -43,6 +43,21 @@ ThreeVarCylFlux::ThreeVarCylFlux(toml::value const &config, Index nVars)
 
     taue0 = tau_e(n0, p0);
     taui0 = tau_i(n0, p0);
+    sourceCenter = toml::find_or(DiffConfig, "SourceCenter", 0.25);
+    sourceWidth = toml::find_or(DiffConfig, "SourceWidth", 0.01);
+
+    // reference values
+    n0 = toml::find_or(DiffConfig, "n0", 3e19);
+    T0 = toml::find_or(DiffConfig, "T0", e_charge * 1e3);
+    Bmid = toml::find_or(DiffConfig, "Bmid", 1.0);
+    L = toml::find_or(DiffConfig, "L", 1.0);
+    p0 = n0 * T0;
+
+    Gamma0 = p0 / (electronMass * Om_e(Bmid) * Om_e(Bmid) * tau_e(n0, p0));
+    V0 = Gamma0 / n0;
+
+    taue0 = tau_e(n0, p0);
+    taui0 = tau_i(n0, p0);
 
     sigma.insert(std::pair<Index, sigmaptr>(0, &Gamma_hat));
     sigma.insert(std::pair<Index, sigmaptr>(1, &qe_hat));
@@ -55,6 +70,20 @@ ThreeVarCylFlux::ThreeVarCylFlux(toml::value const &config, Index nVars)
 
 int ThreeVarCylFlux::ParticleSource;
 double ThreeVarCylFlux::sourceStrength;
+dual ThreeVarCylFlux::sourceCenter;
+dual ThreeVarCylFlux::sourceWidth;
+
+// reference values
+dual ThreeVarCylFlux::n0;
+dual ThreeVarCylFlux::T0;
+dual ThreeVarCylFlux::Bmid;
+Value ThreeVarCylFlux::L;
+
+dual ThreeVarCylFlux::p0;
+dual ThreeVarCylFlux::Gamma0;
+dual ThreeVarCylFlux::V0;
+dual ThreeVarCylFlux::taue0;
+dual ThreeVarCylFlux::taui0;
 dual ThreeVarCylFlux::sourceCenter;
 dual ThreeVarCylFlux::sourceWidth;
 
@@ -127,6 +156,7 @@ dual ThreeVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
         break;
     case Gaussian:
         S = -sourceStrength * exp(-1 / sourceWidth * (x - sourceCenter) * (x - sourceCenter));
+        S = -sourceStrength * exp(-1 / sourceWidth * (x - sourceCenter) * (x - sourceCenter));
         break;
     default:
         break;
@@ -147,7 +177,7 @@ dual ThreeVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, d
     }
     else
     {
-        return S + 2.0 * Sn_hat(u, q, sigma, x, t);
+        return S + Sn_hat(u, q, sigma, x, t);
     }
     // return 0.0;
 };
