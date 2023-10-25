@@ -30,6 +30,16 @@ dual tau_i(dual n, dual Pi)
     }
 }
 
+dual Om_i(dual B)
+{
+    return e_charge * B / ionMass;
+}
+
+dual Om_e(dual B)
+{
+    return e_charge * B / electronMass;
+}
+
 dual tau_hat(dual n, dual P)
 {
     if (P > 0)
