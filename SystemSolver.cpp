@@ -621,6 +621,17 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
 
 	delYVec.segment(LambdaOffset, nVars * (nCells + 1)) = globalKSolver.solve(F);
 
+	/*
+	 * We really should do something here.
+	// If the BCs are Dirichlet, enforce that (Y + delY).lambda( v )[0,N] are the right values
+	for ( Index i=0; i < nVars; i++ ) {
+		if ( problem->isLowerBoundaryDirichlet( i ) )
+			del_y.lambda( i )[ 0 ] = problem->LowerBoundary( i, t ) - y.lambda( i )[ 0 ];
+		if ( problem->isUpperBoundaryDirichlet( i ) )
+			del_y.lambda( i )[ nCells ] = problem->UpperBoundary( i, t ) - y.lambda( i )[ nCells ];
+	}
+	*/
+
 	// Now find del sigma, del q and del u to eventually find del Y
 	for (Index i = 0; i < nCells; i++)
 	{
@@ -675,10 +686,11 @@ int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector re
 		// C_cellwise * sigma_cellwise
 		for ( Index var = 0; var < nVars; var++ )
 		{
-			res.lambda( var ).segment( i, 2 ) +=
+			res.lambda( var ).segment<2>( i ) +=
 				C_cellwise[ i ].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.sigma( var ).getCoeff( i ).second
 				+ G_cellwise[ i ].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.u( var ).getCoeff( i ).second
-				+ H_cellwise[ i ].block( 2 * var, 2* var, 2, 2 ) * Y_h.lambda( var ).segment( i, 2 );
+				+ H_cellwise[ i ].block( 2 * var, 2* var, 2, 2 ) * Y_h.lambda( var ).segment<2>( i )
+				- L_global.segment<2>( var * ( nCells + 1 ) );
 		}
 	}
 

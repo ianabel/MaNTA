@@ -21,7 +21,7 @@ function fileout_test_case {
 }
 
 STDOUT_CASES=()
-FILEOUT_CASES=(LinearDiffusion)
+FILEOUT_CASES=(LinearDiffusion MatTest MatTestAlpha)
 
 for CASE in ${FILEOUT_CASES[@]}; do
 	if fileout_test_case;

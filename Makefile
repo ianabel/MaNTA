@@ -2,6 +2,8 @@
 
 all: test
 
+PHYSICS_DEBUG=on
+
 export
 
 include Makefile.config

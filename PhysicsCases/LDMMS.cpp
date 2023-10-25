@@ -36,12 +36,12 @@ LDMMS::LDMMS( toml::value const& config )
 // Dirichlet Boundary Conditon
 Value LDMMS::LowerBoundary( Index, Time t ) const
 {
-	return ExactSolution( 0.0, t );
+	return 0.0;
 }
 
 Value LDMMS::UpperBoundary( Index, Time t ) const
 {
-	return ExactSolution( 1.0, t );
+	return 0.0;
 }
 
 bool LDMMS::isLowerBoundaryDirichlet( Index ) const { return true; };
@@ -53,9 +53,10 @@ Value LDMMS::SigmaFn( Index, const Values &, const Values & q, Position, Time )
 	return kappa * q[ 0 ];
 }
 
-Value LDMMS::Sources( Index, const Values &, const Values &, const Values &, Position, Time )
+// forcing such that u -> cos(pi*x/2) => f(x) = -kappa * u'' = kappa * (pi^2/4) cos(pi*x/2) 
+Value LDMMS::Sources( Index, const Values &, const Values &, const Values &, Position x, Time )
 {
-	return 0.0;
+	return kappa * ( M_PI_2 * M_PI_2 * ::cos( M_PI_2*x ) );
 }
 
 void LDMMS::dSigmaFn_dq( Index, Values& v, const Values&, const Values&, Position, Time )
@@ -92,18 +93,13 @@ void LDMMS::dSources_dsigma( Index, Values&v , const Values &, const Values &, P
 Value LDMMS::InitialValue( Index, Position x ) const
 {
 	double y = (x - Centre);
-	return InitialHeight * ::cos( M_PI_2 * y );
+	return ::exp( -25*y*y );
 }
 
 Value LDMMS::InitialDerivative( Index, Position x ) const
 {
 	double y = (x - Centre);
-	return -1.0 * M_PI_2 * InitialHeight * ::sin( M_PI_2 * y );
+	return -50*y*::exp( -25*y*y );
 }
 
-
-Value LDMMS::ExactSolution( Position x, Time t ) const
-{
-	return InitialValue( 0, x ) * ::exp( -( t*M_PI_2*M_PI_2 ) );
-}
 

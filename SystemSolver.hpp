@@ -52,8 +52,9 @@ public:
 	// Factorization of these matrices is done here
 	void updateMatricesForJacSolve();
 
-	// Solves the Jy = -G equation
+	// Solves the Jy = g equation
 	void solveJacEq(N_Vector g, N_Vector delY);
+	// Solves the HDG part of Jy = g
 	void solveHDGJac(N_Vector g, N_Vector delY);
 
 	void setAlpha(double const a) { alpha = a; }
@@ -83,6 +84,8 @@ public:
 
 	void setJacEvalY( N_Vector & );
 	int residual(realtype, N_Vector, N_Vector, N_Vector );
+
+	void setPhysicsDebug( bool x ) { physics_debug = x; };
 
 private:
 	Grid grid;
@@ -148,6 +151,7 @@ private:
 
 	size_t S_DOF, U_DOF, Q_DOF, SQU_DOF;
 
+	bool physics_debug = false;
 
 #ifdef TEST
 	friend struct system_solver_test_suite::systemsolver_init_tests;

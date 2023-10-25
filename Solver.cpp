@@ -23,7 +23,7 @@ void SystemSolver::runSolver(std::string inputFile)
 	//---------------------------Variable assiments-------------------------------
 	SUNLinearSolver LS = NULL; // linear solver memory structure
 	void *IDA_mem = NULL;	   // IDA memory structure
-	int retval, iout;
+	int retval;
 
 	N_Vector Y = NULL;			 // vector for storing solution
 	N_Vector dYdt = NULL;		 // vector for storing time derivative of solution
@@ -32,28 +32,24 @@ void SystemSolver::runSolver(std::string inputFile)
 	N_Vector res = NULL;		 // vector for storing residual
 	N_Vector absTolVec = NULL;	 // vector for storing absolute tolerances
 	int nOut = 301;
-	double tFinal;
+	double tFinal,delta_t;
 	realtype rtol;
-	realtype t0 = 0.0, t1, tout, tret;
+	realtype t0 = 0.0, tout, tret;
 
 	// TODO: Move all config parsing into a separate function and just make some of these member functions
 	//--------------------------------------Read File---------------------------------------
 	const auto configFile = toml::parse(inputFile);
 	const auto config = toml::find<toml::value>(configFile, "configuration");
 
-	realtype deltatPrint;
 	auto printdt = toml::find(config, "delta_t");
 	if (config.count("delta_t") != 1)
 		throw std::invalid_argument("delta_t unspecified or specified more than once");
 	else if (printdt.is_integer())
-		deltatPrint = static_cast<double>(printdt.as_floating());
+		delta_t = static_cast<double>(printdt.as_integer());
 	else if (printdt.is_floating())
-		deltatPrint = static_cast<double>(printdt.as_floating());
+		delta_t = static_cast<double>(printdt.as_floating());
 	else
-		throw std::invalid_argument("delta_t specified incorrrectly");
-
-	double delta_t = deltatPrint * 0.5;
-	t1 = delta_t;
+		throw std::invalid_argument("delta_t has non-numeric type");
 
 	auto tEnd = toml::find(config, "t_final");
 	if (config.count("t_final") != 1)
@@ -64,16 +60,6 @@ void SystemSolver::runSolver(std::string inputFile)
 		tFinal = static_cast<double>(tEnd.as_floating());
 	else
 		throw std::invalid_argument("tEnd specified incorrrectly");
-	double totalSteps = tFinal / delta_t;
-	int stepsPerPrint = floor(totalSteps * (deltatPrint / tFinal));
-
-	// If dt is set to greater than tf, just print tf
-	if (tFinal < deltatPrint)
-	{
-		t1 = tFinal;
-		stepsPerPrint = 1;
-		totalSteps = 1;
-	}
 
 	auto relTol = toml::find(config, "Relative_tolerance");
 	if (config.count("Relative_tolerance") != 1)
@@ -179,6 +165,10 @@ void SystemSolver::runSolver(std::string inputFile)
 		}
 	}
 
+	// Steady-state stopping conditions
+	realtype dydt_rel_tol = 1e-3;
+	realtype dydt_abs_tol = atol;
+
 	retval = IDASVtolerances(IDA_mem, rtol, absTolVec);
 	if (ErrorChecker::check_retval(&retval, "IDASVtolerances", 1))
 		std::runtime_error("Sundials initialization Error, run in debug to find");
@@ -229,14 +219,17 @@ void SystemSolver::runSolver(std::string inputFile)
 
 	print(out0, t0, nOut);
 
-	// std::ofstream dydt_out(baseName + ".dydt.dat");
-	// std::ofstream res_out(baseName + ".res.dat");
+	std::ofstream dydt_out,res_out;
+	if ( physics_debug ) {
+		dydt_out.open(baseName + ".dydt.dat");
+		res_out.open(baseName + ".res.dat");
 
-	// print( dydt_out, t0, nOut, dYdt );
+		print( dydt_out, t0, nOut, dYdt );
 
-	// residual( t0, Y, dYdt, res );
+		residual( t0, Y, dYdt, res );
 
-	// res_out << "Residual l_inf norm at t = " << t0 << " is " << N_VMaxNorm( res ) << std::endl;
+		res_out << "Residual l_inf norm at t = " << t0 << " is " << N_VMaxNorm( res ) << std::endl;
+	}
 
 	initialiseNetCDF(baseName + ".nc", nOut);
 	WriteTimeslice(t0);
@@ -248,38 +241,61 @@ void SystemSolver::runSolver(std::string inputFile)
 	IDASetMinStep(IDA_mem, 1e-7);
 
 	t = t0;
+	tout = t0;
 
 	// Solving Loop
-	for (tout = t1, iout = 1; iout <= totalSteps; iout++, tout += delta_t)
-	{
+	 while ( tret < tFinal ) {
+		tout += delta_t;
+		if ( tout > tFinal )
+			tout = tFinal; // Never ask for results beyond tFinal
 		retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
 		if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
 		{
+			// try to emit final data
 			print(out0, tret, nOut);
-			// print( dydt_out, t0, nOut, dYdt );
+			if ( physics_debug ) print( dydt_out, tret, nOut, dYdt );
 			WriteTimeslice(tret);
+			out0.close();
 			nc_output.Close();
 
 			throw std::runtime_error("IDASolve could not complete");
 		}
 
-		if (iout % stepsPerPrint == 0)
-		{
-			std::cout << "Writing output at " << tret << std::endl;
-			print( out0, tret, nOut, Y );
-			// print( dydt_out, tret, nOut, dYdt );
-			// residual( tret, Y, dYdt, res );
-			// res_out << "Residual l_inf norm at t = " << tret << " is " << N_VMaxNorm( res ) << " ; L1 Norm is " << N_VL1Norm( res ) << std::endl;
-			WriteTimeslice( tret );
-
-			// Diagnostics go here
+		std::cout << "Writing output at " << tret << std::endl;
+		print( out0, tret, nOut, Y );
+		if ( physics_debug ) {
+			print( dydt_out, tret, nOut, dYdt );
+			residual( tret, Y, dYdt, res );
+			res_out << "Residual l_inf norm at t = " << tret << " is " << N_VMaxNorm( res ) << " ; L1 Norm is " << N_VL1Norm( res ) << std::endl;
 		}
-	}
+		WriteTimeslice( tret );
 
+		// Check if steady-state is achieved (test the lambda points)
+		realtype dydt_norm = 0.0;
+		for ( Index i = 0; i < nCells; i++ )
+			for ( Index v=0; v < nVars; v++ )
+			{
+				realtype xi = dydt.lambda( v )[ i ] * delta_t;
+				realtype wi = 1.0 / ( y.lambda( v )[ i ] * dydt_rel_tol + dydt_abs_tol );
+				dydt_norm += xi*xi*wi*wi;
+			}
+		dydt_norm = sqrt( dydt_norm );
+		if ( physics_debug )
+			std::cerr << " dy/dt norm inferred from lambdas is " << dydt_norm << std::endl;
+		if ( dydt_norm < 1.0 )
+		{
+			std::cout << "Steady State achieved at time t = " << tret << std::endl;
+		}
+
+		// Diagnostics go here
+	}
 	std::cerr << "Total number of steps taken = " << total_steps << std::endl;
 
 	out0.close();
-	// dydt_out.close();
+	if ( physics_debug ) {
+		dydt_out.close();
+		res_out.close();
+	}
 	nc_output.Close();
 
 	IDAFree(&IDA_mem);
