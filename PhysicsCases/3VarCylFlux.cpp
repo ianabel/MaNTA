@@ -33,7 +33,7 @@ ThreeVarCylFlux::ThreeVarCylFlux(toml::value const &config, Index nVars)
 
     // reference values
     n0 = toml::find_or(DiffConfig, "n0", 3e19);
-    T0 = toml::find_or(DiffConfig, "T0", e_charge * 1e3);
+    T0 = e_charge * toml::find_or(DiffConfig, "T0", 1e3);
     Bmid = toml::find_or(DiffConfig, "Bmid", 1.0);
     L = toml::find_or(DiffConfig, "L", 1.0);
     p0 = n0 * T0;
