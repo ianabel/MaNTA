@@ -22,10 +22,22 @@ conf = Config.get("configuration")
 if conf == None:
     print("Missing [configuration] section in " + filename)
     sys.exit(1)
-else
-    py_import_str = conf.get("PythonModule")
-    if py_import_str != None:
-        # Load the module
+
+
+
+import importlib.util
+
+if "PythonModuleName" in conf:
+    mod_name = conf["PythonModuleName"]
+    if "PythonModulePath" in conf:
+        mod_path = conf["PythonModuleFile"]
+    else:
+        print("Must specify a module path if you specify a python module to use")
+        sys.exit(1);
+    mod_spec = importlib.util.spec_from_file_location( mod_name, mod_path )
+    module_handle = importlib.util.module_from_spec( mod_spec )
+    module_handle.registerTransportSystems()
+
 
 MaNTA.run( filename )
 
