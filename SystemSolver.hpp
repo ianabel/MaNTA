@@ -79,8 +79,9 @@ public:
 	// Initialise
 	void runSolver(std::string);
 
-	void SetTime(double tt) { t = tt; };
-	void SetTau(double tau) { tauc = tau; };
+	void setJacTime(double tt) { jt = tt; };
+	void setTime(double tt) { t = tt; };
+	void setTau(double tau) { tauc = tau; };
 
 	void setJacEvalY( N_Vector & );
 	int residual(realtype, N_Vector, N_Vector, N_Vector );
@@ -126,7 +127,7 @@ private:
 	double resNorm = 0.0; // Exclusively for unit testing purposes
 
 	double dt;
-	double t;
+	double t,jt;
 
 	// Really we should do init in the constructor and not need this flag. TODO
 	bool initialised = false;
