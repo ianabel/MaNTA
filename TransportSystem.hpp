@@ -64,6 +64,7 @@ public:
 
 protected:
 	Index nVars;
+	Index nScalars = 0;
 };
 
 #endif // TRANSPORTSYSTEM_HPP

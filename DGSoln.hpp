@@ -20,8 +20,9 @@ public:
 	{
 		// 3 = u + q + sigma
 		// nCells + 1 for lambda because we store values at both ends
+		// and we are carrying nScalar scalar variables
 		return grid.getNCells() * nVars * (k + 1) * 3 +
-			   (grid.getNCells() + 1) * nVars;
+		         (grid.getNCells() + 1) * nVars + nScalars;
 	};
 
 	void Map(double *Y)
@@ -189,15 +190,18 @@ public:
 			sigma_[i].zeroCoeffs();
 			lambda_[i].setZero();
 		}
+		mu.setZero();
 	}
 
 private:
 	const Index nVars;
 	const Grid &grid;
 	const Index k;
+	const Indes nScalar;
 	std::vector<DGApprox> u_;
 	std::vector<DGApprox> q_;
 	std::vector<DGApprox> sigma_;
 	std::vector<VectorWrapper> lambda_;
+	VectorWrapper mu_;
 };
 #endif // DGSOLN_HPP
