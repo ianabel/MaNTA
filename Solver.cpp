@@ -285,11 +285,20 @@ void SystemSolver::runSolver(std::string inputFile)
 		if ( dydt_norm < 1.0 )
 		{
 			std::cout << "Steady State achieved at time t = " << tret << std::endl;
+			break;
 		}
 
 		// Diagnostics go here
 	}
-	std::cerr << "Total number of steps taken = " << total_steps << std::endl;
+	
+	long int nsteps,nresevals,njacevals;
+	IDAGetNumSteps( IDA_mem, &nsteps );
+	IDAGetNumResEvals( IDA_mem, &nresevals );
+	IDAGetNumLinSolvSetups( IDA_mem, &njacevals );
+
+	std::cerr << "Total Number of Timesteps             :" << nsteps << std::endl;
+	std::cerr << "Total Number of Residual Evaluations  :" << nresevals << std::endl;
+	std::cerr << "Total Number of Jacobian Computations :" << njacevals << std::endl;
 
 	out0.close();
 	if ( physics_debug ) {
