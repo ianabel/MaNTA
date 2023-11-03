@@ -34,7 +34,10 @@ test: $(SOLVER) Tests/UnitTests/UnitTests
 
 PYTHON_NAME=MaNTA
 PYTHON_OUTPUT=$(PYTHON_NAME)$(shell python3-config --extension-suffix)
-$(PYTHON_OUTPUT): $(OBJECTS) $(PHYSICS_OBJECTS)
+
+python: $(PYTHON_OUTPUT)
+
+$(PYTHON_OUTPUT): $(OBJECTS) $(PHYSICS_OBJECTS) Python.cpp PyTransportSystem.hpp
 	$(CXX) $(CXXFLAGS) $(shell python3 -m pybind11 --includes) -shared -fPIC -o $@ Python.cpp $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
 
 clean:
@@ -44,4 +47,4 @@ clean:
 regression_tests: $(SOLVER)
 	$(MAKE) -C Tests/RegressionTests
 
-.PHONY: clean test regression_tests Tests/UnitTests/UnitTests
+.PHONY: clean test regression_tests Tests/UnitTests/UnitTests python
