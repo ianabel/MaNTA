@@ -244,7 +244,7 @@ void SystemSolver::initialiseMatrices()
 					Evar(i, 0) = 0;
 				}
 				// should this be is upper boundary dirichlet?
-				if (I.x_u == grid.upperBoundary() && problem->isLowerBoundaryDirichlet(var))
+				if (I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(var))
 				{
 					Cvar(1, i) = 0;
 					Evar(i, 1) = 0;
@@ -472,6 +472,7 @@ void SystemSolver::resetCoeffs()
 // don't reallocate the memory (i.e. don't clear MXSolvers, just recompute)
 void SystemSolver::updateMatricesForJacSolve()
 {
+	updateBoundaryConditions( jt );
 	// We know where the jacobian is to be evaluated -- yJac
 	for (unsigned int i = 0; i < nCells; i++)
 	{

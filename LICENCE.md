@@ -1,4 +1,4 @@
-Copyright 2021-2022 Ian G. Abel, Nick R. Schwartz, Myles Kelly
+Copyright 2022-2023 Ian G. Abel, Myles Kelly, Edward Tocco
 
 Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
 
