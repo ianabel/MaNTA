@@ -10,7 +10,7 @@ import scipy.interpolate
 import scipy.optimize
 
 class PlasmaClass:
-    def __init__( self, ncFileManta, ncFileEq ):
+    def __init__( self, ncFileManta, ncFileEq, tIndex = -1 ):
         MantaData = Dataset(ncFileManta, "r", format="NETCDF4")
         EqData = Dataset(ncFileEq, "r", format="NETCDF4")
 		  self.R = np.array( EqData.variables["R"] )
@@ -23,6 +23,24 @@ class PlasmaClass:
 		    self.phi0 = None
 		  EqData.close()
 		  
+		  # For the moment assume just a two species (4 variable) run
+		  # and pull the last time index
+		  self.PsiVals = np.array( MantaData.variables["Psi"] )
+		  self.N_data = np.array( MantaData.group["n"].variable["u"][tIndex,:] )
+		  self.P_data = []
+		  self.P_data.insert( 0, MantaData.group["Pe"].variable["u"][tIndex,:] )
+		  self.P_data.insert( 1, MantaData.group["Pi"].variable["u"][tIndex,:] )
+
+		  self.m = [ ElectronMass, IonMass ]
+		  self.Z = [ -1, 1 ]
+
+		  self.Omega_Data = np.array( MantaData.group["Omega"].variable["u"][tIndex,:] )
+
+		  self.omega = scipy.interpolate.Akima1DInterpolator( self.PsiVals, self.Omega_Data )
+		  self.N_interpolant = [ scipy.interpolate.Akima1DInterpolator( self.PsiVals, self.N_data ), scipy.interpolate.Akima1DInterpolator( self.PsiVals, self.N_data ) ]
+		  self.P_interpolant = [ scipy.interpolate.Akima1DInterpolator( self.PsiVals, self.P_data[0] ), scipy.interpolate.Akima1DInterpolator( self.PsiVals, self.P_data[1] ) ]
+
+
 
 	def calcPhi0( self, i, j ):
 		# If we read in phi0, assume it was kosher
@@ -37,17 +55,23 @@ class PlasmaClass:
 		rhoApprox = np.zeros( (self.nSpecies) )
 
 		for k in range(Ndata.size):
-			Ndata[k] = self.N[k](psi)
-			Tdata[k] = self.T[k](psi)
+			Ndata[k] = self.N(k, psi)
+			Tdata[k] = self.T(k, psi)
 			rhoApprox[k] = self.Z[k] * Ndata[k] * np.exp( self.m[k] * omega**2 * Rval**2/ (2*Tdata[k]) )
 
 		qn_func = (lambda phi,rho = rhoApprox,Z = self.Z,T = Tdata : np.sum( rhoApprox * np.exp( -Z * phi0 / T ) ) )
 		phi0 = scipy.optimize.root_scalar( qn_func, method='secant', x0 = 0.0, x1 = 0.5 )
 		return phi0
+	
+	def N( self, s, psi ):
+		return self.N_interpolant[ s ]( psi )
+
+	def T( self, s, psi ):
+		return self.P_interpolant[ s ]( psi ) / self.N_interpolant[ s ]( psi )
 
 
 
-# Assume Plamsa.N[i] and Plasma.T[i] are scipy interpolants
+# Assume Plamsa.N and Plasma.T are functions taking (species index, psi)
 # Plasma.Psi is a 2D array
 # Plasma.R / Plasma.Z are 1D arrays 
 
@@ -64,9 +88,9 @@ for i in range(Plasma.R.size):
 		omega = Plasma.omega(psiVal)
 		OmegaData[i,j] = omega
 		for s in range(Plasma.nSpecies):
-			T = Plasma.T[s](psiVal)
+			T = Plasma.T(s,psiVal)
 			TemperatureData[i,j,s] = T
-			DensityData[i,j,s] = Plasma.N[s] * np.exp( Plasma.m[s] * omega**2 * Plasma.R[i]**2 / (2.0 * T) - Plasma.Z[s] * phi0 / T )
+			DensityData[i,j,s] = Plasma.N(s,psi) * np.exp( Plasma.m[s] * omega**2 * Plasma.R[i]**2 / (2.0 * T) - Plasma.Z[s] * phi0 / T )
 
 outFile = Dataset(outputFileName, "w", format="NETCDF4")
 
