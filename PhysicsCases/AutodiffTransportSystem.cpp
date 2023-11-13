@@ -66,9 +66,9 @@ Vector AutodiffTransportSystem::InitialHeights;
 
 int AutodiffTransportSystem::InitialProfile;
 
-Value AutodiffTransportSystem::LowerBoundary(Index i, Time t) const { return uL(i); }
+Value AutodiffTransportSystem::LowerBoundary(Index i, Time t) const { return InitialFunction(i, xL, 0.0, uR(i), uL(i), xL, xR).val.val; }
 
-Value AutodiffTransportSystem::UpperBoundary(Index i, Time t) const { return uR(i); }
+Value AutodiffTransportSystem::UpperBoundary(Index i, Time t) const { return InitialFunction(i, xR, 0.0, uR(i), uL(i), xL, xR).val.val; }
 
 bool AutodiffTransportSystem::isLowerBoundaryDirichlet(Index i) const { return isLowerDirichlet; }
 
@@ -244,9 +244,10 @@ dual2nd AutodiffTransportSystem::TestDirichlet(Index i, dual2nd x, dual2nd t, do
 
 dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R)
 {
+    dual2nd c, d;
     dual2nd u = 0;
-    dual2nd C = 0.5 * (x_R + x_L);
-    double shape = 10 / (x_R - x_L) * ::log(10);
+    dual2nd C = pow(0.5 * (x_R + x_L), 2) / 2;
+    double shape = 100; // 10 / (x_R - x_L) * ::log(10);
     switch (InitialProfile)
     {
     case Gaussian:
@@ -256,6 +257,12 @@ dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t, 
         u = TestDirichlet(i, x, t, u_R, u_L, x_L, x_R);
         break;
     case Cosine:
+
+        c = (M_PI / 2 - 3 * M_PI / 2) / (x_L - x_R);
+        d = (M_PI / 2 - x_L / x_R * (3 * M_PI / 2)) / (c * (x_L / x_R - 1));
+
+        u = u_L - cos(c * (x - d)) * InitialHeights[i] * exp(-shape * (x - C) * (x - C));
+
         break;
     case Uniform:
         u = u_L;

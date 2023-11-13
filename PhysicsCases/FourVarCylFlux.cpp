@@ -148,12 +148,12 @@ dual FourVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
 dual FourVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
     dual coef = (E0 / Bmid) * (E0 / Bmid) / (V0 * Om_i(Bmid) * Om_i(Bmid) * taui0);
-    dual G = Gamma_hat(u, q, x, t) / (2. * x);
-    dual V = G / u(0); //* L / (p0);
+    // dual G = Gamma_hat(u, q, x, t) / (2. * x);
+    // dual V = G / u(0); //* L / (p0);
     dual dV = u(3) / u(0) * (q(3) / u(3) - q(0) / u(0));
-    dual Svis = 2. * x * coef * 3. / 10. * u(2) * 1 / tau_hat(u(0), u(2)) * dV * dV;
-    dual col = -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
-    dual S = 2. / 3. * sqrt(2. * x) * V * q(2) + col - 2. / 3. * Svis;
+    dual Svis = (2. * x) * coef * 3. / 10. * u(2) * 1 / tau_hat(u(0), u(2)) * dV * dV;
+    // dual col = -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual S = /* 2. / 3. * sqrt(2. * x) * V * q(2) + col*/ -2. / 3. * Svis;
     return S;
 }
 dual FourVarCylFlux::Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
@@ -167,10 +167,10 @@ dual FourVarCylFlux::Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
 };
 dual FourVarCylFlux::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    dual G = Gamma_hat(u, q, x, t) / (2. * x);
-    dual V = G / u(0); //* L / (p0);
+    // dual G = Gamma_hat(u, q, x, t) / (2. * x);
+    //  dual V = G / u(0); //* L / (p0);
 
-    dual S = 2. / 3. * sqrt(2. * x) * V * q(1) - 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual S = 0; // /*2. / 3. * sqrt(2. * x) * V * q(1) */ -2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
 
     return S;
 };

@@ -137,9 +137,9 @@ dual ThreeVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
 // look at ion and electron sources again -- they should be opposite
 dual ThreeVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    dual G = Gamma_hat(u, q, x, t) / (2. * x);
+    dual G = Gamma_hat(u, q, x, t);
     dual V = G / u(0); //* L / (p0);
-    dual S = 2. / 3. * sqrt(2. * x) * V * q(2) - 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual S = V * q(2) - 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
 
     if (S != S)
     {
@@ -147,16 +147,16 @@ dual ThreeVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, d
     }
     else
     {
-        return S + Sn_hat(u, q, sigma, x, t);
+        return S + 1.5 * Sn_hat(u, q, sigma, x, t);
     }
     // return 0.0;
 };
 dual ThreeVarCylFlux::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    dual G = Gamma_hat(u, q, x, t) / (2. * x);
+    dual G = Gamma_hat(u, q, x, t);
     dual V = G / u(0); //* L / (p0);
 
-    dual S = 2. / 3. * sqrt(2. * x) * V * q(1) - 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual S = V * q(1) - 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
 
     if (S != S)
     {
