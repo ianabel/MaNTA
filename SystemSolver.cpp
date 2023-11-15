@@ -676,7 +676,7 @@ int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector re
 	DGSoln dYdt_h(nVars, grid, k, N_VGetArrayPointer(dYdt));
 	DGSoln res(nVars, grid, k, N_VGetArrayPointer(resval));
 
-	VectorWrapper resVec( N_VGetArrayPointer( resval ), N_VGetLocalLength( resval ) );
+	VectorWrapper resVec( N_VGetArrayPointer( resval ), N_VGetLength( resval ) );
 
 	resVec.setZero();
 

@@ -210,15 +210,10 @@ void SystemSolver::runSolver(std::string inputFile)
 	out0 << "# Columns Headings: " << std::endl;
 	out0 << "# x";
 	for (Index v = 0; v < nVars; ++v)
-		out0 << "\t"
-			 << "var" << v << " u" << "\t"
-			 << "var" << v << " q" << "\t"
-			 << "var" << v << " sigma" << "\t"
-			 << "var" << v << " source" ;
+		out0 << "\t" << "var" << v << " u" << "\t" << "var" << v << " q" << "\t" << "var" << v << " sigma" << "\t" << "var" << v << " source";
 	out0 << std::endl;
 
 	print(out0, t0, nOut);
-
 	std::ofstream dydt_out,res_out;
 	if ( physics_debug ) {
 		dydt_out.open(baseName + ".dydt.dat");
@@ -242,6 +237,12 @@ void SystemSolver::runSolver(std::string inputFile)
 
 	t = t0;
 	tout = t0;
+	tret = t0;
+
+	if ( t0 > tFinal ) {
+		std::cerr << "Initial time t = " << t0 << " is after the end of the simulation at t = " << tFinal << std::endl;
+		throw std::runtime_error( "Simulation ends before it begins." );
+	}
 
 	// Solving Loop
 	 while ( tret < tFinal ) {
