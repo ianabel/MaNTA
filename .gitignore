@@ -4,6 +4,7 @@ Tests/UnitTests/UnitTests
 /*.report
 /*.plot
 *.dat
+!*.ref.dat
 *.nc
 Makefile.local
 *.o
