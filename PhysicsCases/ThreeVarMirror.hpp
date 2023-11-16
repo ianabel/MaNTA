@@ -38,8 +38,7 @@ private:
 
     static double Rmin;
     static double Rmax;
-
-    static double psi(double x, double t);
+    static double psi(double R);
     static double V(double R);
     static double Vprime(double R);
     static double B(double x, double t);

@@ -83,7 +83,7 @@ dual ThreeVarMirror::Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t)
     // maybe add a factor of sqrt x if x = r^2/2
     double Rval = R(x.val, t);
     double Vpval = Vprime(Rval);
-    double coef = Rval * Rval * Vpval * Vpval * Bmid.val * Bmid.val;
+    double coef = Rval * Rval * Vpval * Vpval;
     dual G = coef * u(1) / tau_hat(u(0), u(1)) * ((-q(1) / 2. + q(2)) / u(1) + 3. / 2. * q(0) / u(0));
 
     if (G != G)
@@ -99,12 +99,12 @@ dual ThreeVarMirror::qi_hat(VectorXdual u, VectorXdual q, dual x, double t)
 
     double Rval = R(x.val, t);
     double Vpval = Vprime(Rval);
-    double coef = Rval * Rval * Vpval * Vpval * Bmid.val * Bmid.val;
+    double coef = Rval * Rval * Vpval * Vpval;
     dual dT = q(2) / u(2) - q(0) / u(0);
 
-    dual G = Gamma_hat(u, q, x, t);
+    // dual G = Gamma_hat(u, q, x, t);`
     dual qri = ::sqrt(ionMass / (2. * electronMass)) * 1.0 / tau_hat(u(0), u(2)) * 2. * u(2) * u(2) / u(0) * dT;
-    dual Q = (2. / 3.) * (5. / 2. * u(2) / u(0) * G + coef * qri);
+    dual Q = (2. / 3.) * coef * qri;
     if ((Q != Q))
     {
         //  std::cout << Q << std::endl;
@@ -122,11 +122,11 @@ dual ThreeVarMirror::qe_hat(VectorXdual u, VectorXdual q, dual x, double t)
 
     double Rval = R(x.val, t);
     double Vpval = Vprime(Rval);
-    double coef = Rval * Rval * Vpval * Vpval * Bmid.val * Bmid.val;
-    dual G = Gamma_hat(u, q, x, t);
+    double coef = Rval * Rval * Vpval * Vpval;
+    // dual G = Gamma_hat(u, q, x, t);
     dual qre = 1.0 / tau_hat(u(0), u(1)) * (4.66 * u(1) * u(1) / u(0) * (q(1) / u(1) - q(0) / u(0)) - (3. / 2.) * u(1) / u(0) * (q(2) + q(1)));
 
-    dual Q = (2. / 3.) * (5. / 2. * u(1) / u(0) * G + coef * qre);
+    dual Q = (2. / 3.) * coef * qre;
     if (Q != Q)
     {
         return 0.0;
@@ -155,12 +155,12 @@ dual ThreeVarMirror::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
 // look at ion and electron sources again -- they should be opposite
 dual ThreeVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    double Rval = R(x.val, t);
-    double Vpval = Vprime(Rval);
-    double coef = Vpval * Rval;
-    dual G = Gamma_hat(u, q, x, t); // / (coef);
-    dual V = G / u(0);              //* L / (p0);
-    dual S = V * q(2) - 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
+    // double Rval = R(x.val, t);
+    // double Vpval = Vprime(Rval);
+    // double coef = Vpval * Rval;
+    // dual G = Gamma_hat(u, q, x, t); // / (coef);
+    // dual V = G / u(0);              //* L / (p0);
+    dual S = -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
 
     if (S != S)
     {
@@ -168,20 +168,20 @@ dual ThreeVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
     }
     else
     {
-        return S + 5.0 * Sn_hat(u, q, sigma, x, t);
+        return S + (1.1 + u(2) / u(0)) * Sn_hat(u, q, sigma, x, t);
     }
     // return 0.0;
 }
 
 dual ThreeVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    double Rval = R(x.val, t);
-    double Vpval = Vprime(Rval);
-    double coef = Vpval * Rval;
-    dual G = Gamma_hat(u, q, x, t); // (coef);
-    dual V = G / u(0);              //* L / (p0);
+    // double Rval = R(x.val, t);
+    // double Vpval = Vprime(Rval);
+    // double coef = Vpval * Rval;
+    // dual G = Gamma_hat(u, q, x, t); // (coef);
+    // dual V = G / u(0);              //* L / (p0);
 
-    dual S = V * q(1) - 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual S = -2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
 
     if (S != S)
     {
@@ -189,12 +189,12 @@ dual ThreeVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
     }
     else
     {
-        return S;
+        return S + u(1) / u(0) * Sn_hat(u, q, sigma, x, t);
     }
     // return 0.0;
 };
 
-double ThreeVarMirror::psi(double x, double t)
+double ThreeVarMirror::psi(double R)
 {
     return double();
 }
@@ -204,11 +204,11 @@ double ThreeVarMirror::V(double R)
 }
 double ThreeVarMirror::Vprime(double R)
 {
-    return 2 * M_PI * L / Bmid.val * (1 - 0.75 * R);
+    return 2 * M_PI / ((1 - 0.5 * R));
 }
 double ThreeVarMirror::B(double x, double t)
 {
-    return Bmid.val * (1 - 0.75 * R(x, t)); // / R(x, t);
+    return Bmid.val * (1 - 0.5 * R(x, t)); // / R(x, t);
 }
 
 double ThreeVarMirror::R(double x, double t)
@@ -224,7 +224,7 @@ double ThreeVarMirror::R(double x, double t)
     double factor = 2;
     bool is_rising = true;
     auto getPair = [](double x, double R)
-    { return V(R) - x; };
+    { return V(R) - x; }; // change to V(R(psi))
 
     auto func = std::bind_front(getPair, x);
     eps_tolerance<double> tol(get_digits);

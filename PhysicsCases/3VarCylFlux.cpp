@@ -147,7 +147,7 @@ dual ThreeVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, d
     }
     else
     {
-        return S + 1.5 * Sn_hat(u, q, sigma, x, t);
+        return S + 2.0 * Sn_hat(u, q, sigma, x, t);
     }
     // return 0.0;
 };
