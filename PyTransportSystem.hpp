@@ -18,22 +18,39 @@ class PyTransportSystem : public TransportSystem
 	// are allowed to alter internal state such as to store computations
 	// for future calls)
 	Value SigmaFn( Index i, const Values &u, const Values &q, Position x, Time t ) override {
-		PYBIND11_OVERRIDE_PURE( Value, SigmaFn, TransportSystem, i, u, q, x, t );
+		PYBIND11_OVERRIDE_PURE( Value, TransportSystem, SigmaFn, i, u, q, x, t );
 	};
 	Value Sources( Index i, const Values &u, const Values &q, const Values &sigma, Position x, Time t ) override {
-		PYBIND11_OVERRIDE_PURE( Value, Sources, TransportSystem, i, u, q, sigma, x, t );
+		PYBIND11_OVERRIDE_PURE( Value, TransportSystem, Sources, i, u, q, sigma, x, t );
 	};
-	void dSigmaFn_du( Index, Values &, const Values &, const Values &, Position, Time ) override;
-	void dSigmaFn_dq( Index, Values &, const Values &, const Values &, Position, Time ) override;
+	void dSigmaFn_du( Index i, Values &out, const Values &u, const Values &q, Position x, Time t ) override {
+		PYBIND11_OVERRIDE_PURE( void, TransportSystem, dSigmaFn_du, i, out, u, q, x, t );
+	};
+	
+	void dSigmaFn_dq( Index i, Values &out, const Values &u, const Values &q, Position x, Time t ) override {
+		PYBIND11_OVERRIDE_PURE( void, TransportSystem, dSigmaFn_dq, i, out, u, q, x, t );
+	};
 
-	void dSources_du( Index, Values&v , const Values &, const Values &, Position, Time ) override;
-	void dSources_dq( Index, Values&v , const Values &, const Values &, Position, Time ) override;
-	void dSources_dsigma( Index, Values&v , const Values &, const Values &, Position, Time ) override;
+	void dSources_du( Index i, Values &v, const Values &u, const Values &q, Position x, Time t ) override {
+		PYBIND11_OVERRIDE_PURE( void, TransportSystem, dSources_du, i, v, u, q, x, t );
+	};
+
+	void dSources_dq( Index i, Values &v, const Values &u, const Values &q, Position x, Time t ) override {
+		PYBIND11_OVERRIDE_PURE( void, TransportSystem, dSources_dq, i, v, u, q, x, t );
+	};
+
+	void dSources_dsigma( Index i, Values &v, const Values &u, const Values &q, Position x, Time t ) override {
+		PYBIND11_OVERRIDE_PURE( void, TransportSystem, dSources_dsigma, i, v, u, q, x, t );
+	};
 
 	// Finally one has to provide initial conditions for u & q
-	Value      InitialValue( Index, Position ) const override;
-	Value InitialDerivative( Index, Position ) const override;
-};
+	Value InitialValue( Index i, Position x ) const override {
+		PYBIND11_OVERRIDE_PURE( Value, TransportSystem, InitialValue, i, x );
+	};
 
+	Value InitialDerivative( Index i, Position x ) const override {
+		PYBIND11_OVERRIDE_PURE( Value, TransportSystem, InitialDerivative, i, x );
+	};
+};
 
 #endif // PYTRANSPORTSYSTEM_HPP

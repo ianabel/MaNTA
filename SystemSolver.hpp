@@ -123,7 +123,6 @@ private:
 
 	void DerivativeSubMatrix(Matrix &mat, void (TransportSystem::*dX_dZ)(Index, Values &, const Values &, const Values &, Position, double), DGSoln const &Y, Interval I);
 
-	int total_steps = 0;
 	double resNorm = 0.0; // Exclusively for unit testing purposes
 
 	double dt;
