@@ -36,9 +36,9 @@ Value LDTest::SigmaFn(Index, const Values &, const Values &q, Position x, Time)
 	return kappa * q[0];
 }
 
-Value LDTest::Sources(Index, const Values &, const Values &, const Values &, Position, Time)
+Value LDTest::Sources(Index, const Values &, const Values &, const Values &, Position x, Time)
 {
-	return 0.0;
+	return ::exp( -25.0*x*x );
 }
 
 void LDTest::dSigmaFn_dq(Index, Values &v, const Values &, const Values &, Position, Time)
