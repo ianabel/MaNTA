@@ -41,7 +41,7 @@ class LDTest : public TransportSystem {
 
 private:
 	// Put class-specific data here
-	double kappa, EdgeValue, Centre;
+	double kappa, EdgeValue;
 
 	// Without this (and the implementation line in LDTest.cpp)
 	// ManTA won't know how to relate the string 'LDTest' to the class.

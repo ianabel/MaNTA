@@ -13,6 +13,7 @@ LDTest::LDTest(toml::value const &config)
 	// Always set nVars in a derived constructor
 	nVars = 1;
 
+	auto const& DiffConfig = config.at( "DiffusionProblem" );
 	kappa = toml::find_or(DiffConfig, "Kappa", 1.0);
 }
 
@@ -27,7 +28,7 @@ Value LDTest::UpperBoundary(Index, Time) const
 	return EdgeValue;
 }
 
-bool LDTest::isLowerBoundaryDirichlet(Index) const { return !lowerNeumann; };
+bool LDTest::isLowerBoundaryDirichlet(Index) const { return true; };
 bool LDTest::isUpperBoundaryDirichlet(Index) const { return true; };
 
 Value LDTest::SigmaFn(Index, const Values &, const Values &q, Position x, Time)
