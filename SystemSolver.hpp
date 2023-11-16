@@ -29,6 +29,7 @@ class SystemSolver
 {
 public:
 	SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, TransportSystem *pProblem);
+	SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, double SteadyStateTol, TransportSystem *pProblem);
 
 	// This has been moved elsewhere, SystemSolver should be constructed after the parsing is done.
 	// SystemSolver(std::string const& inputFile);
@@ -151,6 +152,8 @@ private:
 
 	size_t S_DOF, U_DOF, Q_DOF, SQU_DOF;
 
+	bool TerminateOnSteadyState = false;
+	double steady_state_tol = 1e-3;
 	bool physics_debug = false;
 
 #ifdef TEST

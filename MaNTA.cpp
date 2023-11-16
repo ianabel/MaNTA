@@ -122,7 +122,13 @@ int runManta( std::string const& fname )
 		return 1;
 	}
 
-	system = std::make_shared<SystemSolver>(grid, k, dt, tau, pProblem);
+	if ( config.count( "SteadyStateTolerance" ) == 1 ) {
+		double sst = toml::find<double>( config, "SteadyStateTolerance" );
+		std::cout << "Running until steady state achieved (variation below "<<sst << "or end time reached." << std::endl;
+		system = std::make_shared<SystemSolver>(grid, k, dt, tau, sst, pProblem);
+	} else {
+		system = std::make_shared<SystemSolver>(grid, k, dt, tau, pProblem);
+	}
 
 	// TODO: stop parsing the config file again inside this function
 	system->runSolver(fname);
