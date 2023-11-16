@@ -166,7 +166,7 @@ void SystemSolver::runSolver(std::string inputFile)
 	}
 
 	// Steady-state stopping conditions
-	realtype dydt_rel_tol = 1e-3;
+	realtype dydt_rel_tol = steady_state_tol;
 	realtype dydt_abs_tol = atol;
 
 	retval = IDASVtolerances(IDA_mem, rtol, absTolVec);
@@ -272,21 +272,23 @@ void SystemSolver::runSolver(std::string inputFile)
 		WriteTimeslice( tret );
 
 		// Check if steady-state is achieved (test the lambda points)
-		realtype dydt_norm = 0.0;
-		for ( Index i = 0; i < nCells; i++ )
-			for ( Index v=0; v < nVars; v++ )
+		if (  TerminateOnSteadyState ) {
+			realtype dydt_norm = 0.0;
+			for ( Index i = 0; i < nCells; i++ )
+				for ( Index v=0; v < nVars; v++ )
+				{
+					realtype xi = dydt.lambda( v )[ i ] * delta_t;
+					realtype wi = 1.0 / ( y.lambda( v )[ i ] * dydt_rel_tol + dydt_abs_tol );
+					dydt_norm += xi*xi*wi*wi;
+				}
+			dydt_norm = sqrt( dydt_norm );
+			if ( physics_debug )
+				std::cerr << " dy/dt norm inferred from lambdas is " << dydt_norm << std::endl;
+			if ( dydt_norm < 1.0 )
 			{
-				realtype xi = dydt.lambda( v )[ i ] * delta_t;
-				realtype wi = 1.0 / ( y.lambda( v )[ i ] * dydt_rel_tol + dydt_abs_tol );
-				dydt_norm += xi*xi*wi*wi;
+				std::cout << "Steady State achieved at time t = " << tret << std::endl;
+				break;
 			}
-		dydt_norm = sqrt( dydt_norm );
-		if ( physics_debug )
-			std::cerr << " dy/dt norm inferred from lambdas is " << dydt_norm << std::endl;
-		if ( dydt_norm < 1.0 )
-		{
-			std::cout << "Steady State achieved at time t = " << tret << std::endl;
-			break;
 		}
 
 		// Diagnostics go here

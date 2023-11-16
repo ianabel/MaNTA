@@ -15,6 +15,7 @@ LDTest::LDTest(toml::value const &config)
 
 	auto const& DiffConfig = config.at( "DiffusionProblem" );
 	kappa = toml::find_or(DiffConfig, "Kappa", 1.0);
+	EdgeValue = 0.3;
 }
 
 // Dirichlet Boundary Conditon

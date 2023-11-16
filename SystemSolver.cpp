@@ -11,6 +11,14 @@
 
 #include "gridStructures.hpp"
 
+SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, double sst, TransportSystem *transpSystem)
+	: SystemSolver( Grid, polyNum, Dt, tau, transpSystem )
+{
+	steady_state_tol = sst;
+	TerminateOnSteadyState = true;
+}
+
+
 SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, TransportSystem *transpSystem)
 	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), MXSolvers( Grid.getNCells() ), y(nVars, grid, k), dydt(nVars, grid, k), yJac(nVars, grid, k),
 	  dt(Dt), problem(transpSystem), tauc(tau)
