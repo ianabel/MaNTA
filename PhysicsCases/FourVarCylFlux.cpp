@@ -90,23 +90,6 @@ dual FourVarCylFlux::V0;
 dual FourVarCylFlux::taue0;
 dual FourVarCylFlux::taui0;
 dual FourVarCylFlux::h0;
-dual FourVarCylFlux::sourceCenter;
-dual FourVarCylFlux::sourceWidth;
-
-// reference values
-dual FourVarCylFlux::n0;
-dual FourVarCylFlux::T0;
-dual FourVarCylFlux::Bmid;
-dual FourVarCylFlux::J0;
-Value FourVarCylFlux::L;
-
-dual FourVarCylFlux::E0;
-dual FourVarCylFlux::p0;
-dual FourVarCylFlux::Gamma0;
-dual FourVarCylFlux::V0;
-dual FourVarCylFlux::taue0;
-dual FourVarCylFlux::taui0;
-dual FourVarCylFlux::h0;
 
 dual FourVarCylFlux::Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
@@ -189,16 +172,14 @@ dual FourVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
     dual V = G / u(0); //* L / (p0);
     dual dV = u(3) / u(0) * (q(3) / u(3) - q(0) / u(0));
     dual Svis = (2. * x) * coef * 3. / 10. * u(2) * 1 / tau_hat(u(0), u(2)) * dV * dV;
-    // dual col = -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
-    dual S = /* 2. / 3. * sqrt(2. * x) * V * q(2) + col*/ -2. / 3. * Svis;
+    dual col = -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual S = 2. / 3. * sqrt(2. * x) * V * q(2) + col - 2. / 3. * Svis;
     return S;
 }
 dual FourVarCylFlux::Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
     dual G = Gamma_hat(u, q, x, t) / (2. * x);
     dual V = G / u(0);
-    dual coef = e_charge * Bmid * Bmid / (ionMass * E0);
-    dual S = 1. / sqrt(2. * x) * (V * u(3) - J0 * coef);
     dual coef = e_charge * Bmid * Bmid / (ionMass * E0);
     dual S = 1. / sqrt(2. * x) * (V * u(3) - J0 * coef);
 

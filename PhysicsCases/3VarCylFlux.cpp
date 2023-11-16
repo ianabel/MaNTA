@@ -84,20 +84,6 @@ dual ThreeVarCylFlux::Gamma0;
 dual ThreeVarCylFlux::V0;
 dual ThreeVarCylFlux::taue0;
 dual ThreeVarCylFlux::taui0;
-dual ThreeVarCylFlux::sourceCenter;
-dual ThreeVarCylFlux::sourceWidth;
-
-// reference values
-dual ThreeVarCylFlux::n0;
-dual ThreeVarCylFlux::T0;
-dual ThreeVarCylFlux::Bmid;
-Value ThreeVarCylFlux::L;
-
-dual ThreeVarCylFlux::p0;
-dual ThreeVarCylFlux::Gamma0;
-dual ThreeVarCylFlux::V0;
-dual ThreeVarCylFlux::taue0;
-dual ThreeVarCylFlux::taui0;
 
 dual ThreeVarCylFlux::Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
