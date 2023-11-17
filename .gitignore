@@ -16,3 +16,4 @@ figs/
 runs/
 .vscode/
 python/__pycache__/
+build/
