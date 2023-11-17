@@ -12,6 +12,7 @@ enum
     Dirichlet = 1,
     Cosine = 2,
     Uniform = 3,
+    Linear = 4,
 };
 
 AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config)
@@ -52,19 +53,24 @@ AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config)
     InitialHeights = VectorWrapper(InitialHeights_v.data(), nVars);
     if (!isTestProblem)
     {
-        std::string profile = toml::find_or(InternalConfig, "InitialProfile", "Dirichlet");
-        InitialProfile = InitialProfiles[profile];
+        std::vector<std::string> profile = toml::find<std::vector<std::string>>(InternalConfig, "InitialProfile");
+
+        for (auto &p : profile)
+        {
+            InitialProfile.push_back(InitialProfiles[p]);
+        }
     }
 
     std::vector<double> uL_v = toml::find<std::vector<double>>(InternalConfig, "uL");
     std::vector<double> uR_v = toml::find<std::vector<double>>(InternalConfig, "uR");
+
     uR = VectorWrapper(uR_v.data(), nVars);
     uL = VectorWrapper(uL_v.data(), nVars);
 }
 
 Vector AutodiffTransportSystem::InitialHeights;
 
-int AutodiffTransportSystem::InitialProfile;
+std::vector<int> AutodiffTransportSystem::InitialProfile;
 
 Value AutodiffTransportSystem::LowerBoundary(Index i, Time t) const { return InitialFunction(i, xL, 0.0, uR(i), uL(i), xL, xR).val.val; }
 
@@ -244,11 +250,12 @@ dual2nd AutodiffTransportSystem::TestDirichlet(Index i, dual2nd x, dual2nd t, do
 
 dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R)
 {
-    dual2nd c, d;
+    dual2nd a, b, c, d;
     dual2nd u = 0;
-    dual2nd C = pow(0.5 * (x_R + x_L), 2) / 2;
-    double shape = 100; // 10 / (x_R - x_L) * ::log(10);
-    switch (InitialProfile)
+    dual2nd C = 0.5 * (x_R + x_L);
+    double m = (u_L - u_R) / (x_L - x_R);
+    double shape = 10; // 10 / (x_R - x_L) * ::log(10);
+    switch (InitialProfile[i])
     {
     case Gaussian:
         u = u_L + InitialHeights[i] * (exp(-(x - C) * (x - C) * shape) - exp(-(x_L - C) * (x_L - C) * shape));
@@ -257,15 +264,25 @@ dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t, 
         u = TestDirichlet(i, x, t, u_R, u_L, x_L, x_R);
         break;
     case Cosine:
-
+        a = (asinh(u_L) - asinh(u_R)) / (x_L - x_R);
+        b = (asinh(u_L) - x_L / x_R * asinh(u_R)) / (a * (x_L / x_R - 1));
         c = (M_PI / 2 - 3 * M_PI / 2) / (x_L - x_R);
         d = (M_PI / 2 - x_L / x_R * (3 * M_PI / 2)) / (c * (x_L / x_R - 1));
-
-        u = u_L - cos(c * (x - d)) * InitialHeights[i] * exp(-shape * (x - C) * (x - C));
+        if (u_L == u_R)
+        {
+            u = u_L - cos(c * (x - d)) * InitialHeights[i] * exp(-shape * (x - C) * (x - C));
+        }
+        else
+        {
+            u = sinh(a * (x - b)) - cos(c * (x - d)) * InitialHeights[i] * exp(-shape * (x - C) * (x - C));
+        }
 
         break;
     case Uniform:
         u = u_L;
+        break;
+    case Linear:
+        u = u_L + m * (x - x_L);
         break;
     default:
         break;

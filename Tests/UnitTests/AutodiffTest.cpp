@@ -17,7 +17,7 @@ const toml::value config_snippet = u8R"(
     uL = [0.0,0.0,0.0]
     uR = [0.0,0.0,0.0]
     InitialHeights = [1.0,1.0,1.0]
-    InitialProfile ="Gaussian"
+    InitialProfile =["Gaussian","Gaussian","Gaussian"]
 
     [MatrixFlux]
     Kappa = [1.0,0.0,0.0,
@@ -35,7 +35,7 @@ x_R = 3.14
 uL = [0.05,0.0025,0.0025]
 uR = [0.05,0.0025,0.0025]
 InitialHeights = [0.5,0.25,0.25]
-InitialProfile ="Uniform"
+InitialProfile =["Uniform","Uniform","Uniform"]
 
 [3VarMirror]
 SourceType = "Gaussian"
