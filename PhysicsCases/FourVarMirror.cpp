@@ -130,7 +130,7 @@ dual FourVarMirror::qi_hat(VectorXdual u, VectorXdual q, dual x, double t)
     dual G = Gamma_hat(u, q, x, t);
     dual qri = ::sqrt(ionMass / (2 * electronMass)) * 1.0 / tau_hat(u(0), u(2)) * 2. * u(2) * u(2) / u(0) * (q(2) / u(2) - q(0) / u(0));
     dual potflux = 0.5 * G * u(3) * u(3) / (Rval * Rval * u(0) * u(0));
-    dual Q = (2. / 3.) * (coef * qri + potflux + 5. / 2. * u(2) / u(0) * G);
+    dual Q = (2. / 3.) * (coef * qri + potflux); // + 5. / 2. * u(2) / u(0) * G);
     if ((Q != Q))
     {
         //  std::cout << Q << std::endl;
@@ -152,7 +152,7 @@ dual FourVarMirror::qe_hat(VectorXdual u, VectorXdual q, dual x, double t)
     dual G = Gamma_hat(u, q, x, t);
     dual qre = 1.0 / tau_hat(u(0), u(1)) * (4.66 * u(1) * u(1) / u(0) * (q(1) / u(1) - q(0) / u(0)) - (3. / 2.) * u(1) / u(0) * (q(2) + q(1)));
 
-    dual Q = (2. / 3.) * (coef * qre + 5. / 2. * u(1) / u(0) * G + coef * qre);
+    dual Q = (2. / 3.) * (coef * qre); // + 5. / 2. * u(1) / u(0) * G + coef * qre);
     if (Q != Q)
     {
         return 0.0;
@@ -170,7 +170,7 @@ dual FourVarMirror::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual
     case None:
         break;
     case Gaussian:
-        S = -sourceStrength * exp(-1 / sourceWidth * (x - sourceCenter) * (x - sourceCenter));
+        S = sourceStrength * exp(-1 / sourceWidth * (x - sourceCenter) * (x - sourceCenter));
         break;
     default:
         break;
@@ -181,27 +181,28 @@ dual FourVarMirror::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual
 dual FourVarMirror::Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
     double Rval = R(x.val, t);
-    dual coef = L / (h0 * V0);
-    dual S = tanh(3 * t) * -(J0 / Rval) * coef * B(x.val, t) * Rval * Rval;
-
+    // dual coef = L / (h0 * V0);
+    // dual S = tanh(3 * t) * -(J0 / Rval) * coef * B(x.val, t) * Rval * Rval;
+    dual S = 0.0;
     return S - u(3) / (u(0) * Rval * Rval) * Sn_hat(u, q, sigma, x, t);
 };
 
 // look at ion and electron sources again -- they should be opposite
 dual FourVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    double Rval = R(x.val, t);
-    double Vpval = Vprime(Rval);
-    double Bval = B(x.val, t);
+    // double Rval = R(x.val, t);
+    // double Vpval = Vprime(Rval);
+    // double Bval = B(x.val, t);
 
-    dual dV = u(3) / u(0) * (q(3) / u(3) - q(0) / u(0) - 1 / (M_PI * Rval * Rval));
-    dual Svis = -hi_hat(u, q, x, t) * dV;
-    dual G = Gamma_hat(u, q, x, t); // / (coef);
-    dual V = G / u(0);              //* L / (p0);
+    // // dual dV = u(3) / u(0) * (q(3) / u(3) - q(0) / u(0) - 1 / (M_PI * Rval * Rval));
+    // // dual Svis = -hi_hat(u, q, x, t) * dV;
+    // dual G = Gamma_hat(u, q, x, t); // / (coef);
+    // dual V = G / u(0);              //* L / (p0);
 
-    dual Ppot = -0.5 * u(3) * u(3) / (Rval * Rval * u(0) * u(0)) * Sn_hat(u, q, sigma, x, t);
-    // dual S = -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0) + 2. / 3. * Svis + Ppot;
-    dual S = V * q(2) - 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0) + 2. / 3. * Svis + Ppot;
+    // dual Ppot = -0.5 * u(3) * u(3) / (Rval * Rval * u(0) * u(0)) * Sn_hat(u, q, sigma, x, t);
+    //  dual S = -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0) + 2. / 3. * Svis + Ppot;
+    ///*V * q(2)*/ -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0); //+ 2. / 3. * Svis + Ppot;
+    dual S = 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
 
     if (S != S)
     {
@@ -216,14 +217,15 @@ dual FourVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
 
 dual FourVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    double Rval = R(x.val, t);
-    double Vpval = Vprime(Rval);
-    double coef = Vpval * Rval;
-    dual G = Gamma_hat(u, q, x, t); // (coef);
-    dual V = G / u(0);              //* L / (p0);
+    // double Rval = R(x.val, t);
+    // double Vpval = Vprime(Rval);
+    // double coef = Vpval * Rval;
+    // dual G = Gamma_hat(u, q, x, t); // (coef);
+    // dual V = G / u(0);              //* L / (p0);
 
     // dual S = -2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
-    dual S = V * q(1) - 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
+    ///*V * q(1)*/ -2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual S = 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
 
     if (S != S)
     {

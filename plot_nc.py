@@ -39,7 +39,7 @@ def main():
     ax.plot(r,data.groups["Var2"].variables["u"][-1,:],label = r"$\hat{p}_i$")
  
     #ax.plot(r,Ti[-1,:],label = r"$\hat{T}_i$")
-    ax.plot(r,data.groups["Var3"].variables["u"][-1,:],label = r"$\hat{h}_i$")
+   # ax.plot(r,data.groups["Var3"].variables["u"][-1,:],label = r"$\hat{h}_i$")
    
 
     

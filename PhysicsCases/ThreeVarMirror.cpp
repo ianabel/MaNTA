@@ -160,7 +160,7 @@ dual ThreeVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
     // double coef = Vpval * Rval;
     // dual G = Gamma_hat(u, q, x, t); // / (coef);
     // dual V = G / u(0);              //* L / (p0);
-    dual S = -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual S = 0.0; //-2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
 
     if (S != S)
     {
@@ -181,7 +181,8 @@ dual ThreeVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
     // dual G = Gamma_hat(u, q, x, t); // (coef);
     // dual V = G / u(0);              //* L / (p0);
 
-    dual S = -2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual S = 0.0;
+    //-2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
 
     if (S != S)
     {
@@ -204,11 +205,11 @@ double ThreeVarMirror::V(double R)
 }
 double ThreeVarMirror::Vprime(double R)
 {
-    return 2 * M_PI / ((1 - 0.5 * R));
+    return 2 * M_PI; /// ((1 - 0.5 * R));
 }
 double ThreeVarMirror::B(double x, double t)
 {
-    return Bmid.val * (1 - 0.5 * R(x, t)); // / R(x, t);
+    return Bmid.val; //* (1 - 0.5 * R(x, t)); // / R(x, t);
 }
 
 double ThreeVarMirror::R(double x, double t)

@@ -141,8 +141,7 @@ dual ThreeVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
     case None:
         break;
     case Gaussian:
-        S = -sourceStrength * exp(-1 / sourceWidth * (x - sourceCenter) * (x - sourceCenter));
-        S = -sourceStrength * exp(-1 / sourceWidth * (x - sourceCenter) * (x - sourceCenter));
+        S = sourceStrength * exp(-1 / sourceWidth * (x - sourceCenter) * (x - sourceCenter));
         break;
     default:
         break;
@@ -153,9 +152,9 @@ dual ThreeVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
 // look at ion and electron sources again -- they should be opposite
 dual ThreeVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    dual G = Gamma_hat(u, q, x, t);
-    dual V = G / u(0); //* L / (p0);
-    dual S = V * q(2) - 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
+    // dual G = -Gamma_hat(u, q, x, t);
+    // dual V = G / u(0); //* L / (p0);
+    dual S = 0.0; // V * q(2) + 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
 
     if (S != S)
     {
@@ -169,10 +168,10 @@ dual ThreeVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, d
 };
 dual ThreeVarCylFlux::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    dual G = Gamma_hat(u, q, x, t);
-    dual V = G / u(0); //* L / (p0);
+    // dual G = -Gamma_hat(u, q, x, t);
+    // dual V = G / u(0); //* L / (p0);
 
-    dual S = V * q(1) - 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual S = 0.0; // V * q(1) + 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
 
     if (S != S)
     {

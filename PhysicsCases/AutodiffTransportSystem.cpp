@@ -250,7 +250,7 @@ dual2nd AutodiffTransportSystem::TestDirichlet(Index i, dual2nd x, dual2nd t, do
 
 dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R)
 {
-    dual2nd c, d;
+    dual2nd a, b, c, d;
     dual2nd u = 0;
     dual2nd C = 0.5 * (x_R + x_L);
     double m = (u_L - u_R) / (x_L - x_R);
@@ -264,11 +264,18 @@ dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t, 
         u = TestDirichlet(i, x, t, u_R, u_L, x_L, x_R);
         break;
     case Cosine:
-
+        a = (asinh(u_L) - asinh(u_R)) / (x_L - x_R);
+        b = (asinh(u_L) - x_L / x_R * asinh(u_R)) / (a * (x_L / x_R - 1));
         c = (M_PI / 2 - 3 * M_PI / 2) / (x_L - x_R);
         d = (M_PI / 2 - x_L / x_R * (3 * M_PI / 2)) / (c * (x_L / x_R - 1));
-
-        u = u_L - cos(c * (x - d)) * InitialHeights[i] * exp(-shape * (x - C) * (x - C));
+        if (u_L == u_R)
+        {
+            u = u_L - cos(c * (x - d)) * InitialHeights[i] * exp(-shape * (x - C) * (x - C));
+        }
+        else
+        {
+            u = sinh(a * (x - b)) - cos(c * (x - d)) * InitialHeights[i] * exp(-shape * (x - C) * (x - C));
+        }
 
         break;
     case Uniform:
