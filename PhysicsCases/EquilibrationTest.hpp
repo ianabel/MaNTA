@@ -1,5 +1,5 @@
-#ifndef LDTEST_HPP
-#define LDTEST_HPP
+#ifndef EQTEST_HPP
+#define EQTEST_HPP
 
 #include "PhysicsCases.hpp"
 
@@ -9,11 +9,11 @@
  */
 
 // Always inherit from TransportSystem
-class LDTest : public TransportSystem {
+class EquilibrationTest : public TransportSystem {
 	public:
 		// Must provide a constructor that constructs from a toml configuration snippet
 		// you can ignore it, or read problem-dependent parameters from the configuration file
-		explicit LDTest( toml::value const& config );
+		explicit EquilibrationTest( toml::value const& config );
 
 		// You must provide implementations of both, these are your boundary condition functions
 		Value LowerBoundary( Index, Time ) const override;
@@ -41,10 +41,11 @@ class LDTest : public TransportSystem {
 
 private:
 	// Put class-specific data here
-	double kappa, EdgeValue;
+	double kappa1, kappa2, S1, S2, Q, EdgeValue;
 
-	// Without this (and the implementation line in LDTest.cpp)
-	// ManTA won't know how to relate the string 'LDTest' to the class.
-	REGISTER_PHYSICS_HEADER( LDTest )
+	// Without this (and the implementation line in EquilibrationTest.cpp)
+	// ManTA won't know how to relate the string 'EquilibrationTest' to the class.
+	REGISTER_PHYSICS_HEADER( EquilibrationTest )
 };
-#endif // LDTEST_HPP
+
+#endif // LINEARDIFFUSION_HPP
