@@ -203,7 +203,7 @@ dual FourVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     //  dual S = -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0) + 2. / 3. * Svis + Ppot;
     ///*V * q(2)*/ -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0); //+ 2. / 3. * Svis + Ppot;
     // dual S = 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
-	 dual S = 0.0;
+    dual S = 0.0;
 
     if (S != S)
     {
@@ -227,7 +227,7 @@ dual FourVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     // dual S = -2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
     ///*V * q(1)*/ -2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
     // dual S = 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
-	 dual S = 0.0;
+    dual S = 0.0;
 
     if (S != S)
     {
