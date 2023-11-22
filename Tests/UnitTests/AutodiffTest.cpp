@@ -58,7 +58,7 @@ BOOST_AUTO_TEST_CASE(flux_values)
     double x_L = -1.0;
     double x_R = 1.0;
     double C = 0.5 * (x_R + x_L);
-    double shape = 10 / (x_R - x_L) * ::log(10);
+    double shape = 10;
 
     double umid = (::exp(-(x - C) * (x - C) * shape) - ::exp(-(x_L - C) * (x_L - C) * shape));
 
