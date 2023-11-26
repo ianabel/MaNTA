@@ -40,7 +40,8 @@ private:
     static dual Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t);
     static dual Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t);
 
-    static double phi0(VectorXdual u, VectorXdual q, dual x, double t);
+    static dual phi0(VectorXdual u, VectorXdual q, dual x, double t);
+    static dual dphi0dV(VectorXdual u, VectorXdual q, dual x, double t);
 
     static double Rmin;
     static double Rmax;

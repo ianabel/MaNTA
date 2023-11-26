@@ -127,10 +127,9 @@ dual FourVarMirror::qi_hat(VectorXdual u, VectorXdual q, dual x, double t)
     double Rval = R(x.val, t);
     double Vpval = Vprime(Rval);
     double coef = Rval * Rval * Vpval * Vpval;
-    dual G = Gamma_hat(u, q, x, t);
+    // dual G = Gamma_hat(u, q, x, t);
     dual qri = ::sqrt(ionMass / (2 * electronMass)) * 1.0 / tau_hat(u(0), u(2)) * 2. * u(2) * u(2) / u(0) * (q(2) / u(2) - q(0) / u(0));
-    dual potflux = 0.5 * G * u(3) * u(3) / (Rval * Rval * u(0) * u(0));
-    dual Q = (2. / 3.) * (coef * qri + potflux); // + 5. / 2. * u(2) / u(0) * G);
+    dual Q = (2. / 3.) * (coef * qri); // + 5. / 2. * u(2) / u(0) * G);
     if ((Q != Q))
     {
         //  std::cout << Q << std::endl;
@@ -181,29 +180,32 @@ dual FourVarMirror::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual
 dual FourVarMirror::Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
     double Rval = R(x.val, t);
-    // dual coef = L / (h0 * V0);
-    // dual S = tanh(3 * t) * -(J0 / Rval) * coef * B(x.val, t) * Rval * Rval;
-    dual S = 0.0;
-    return S - u(3) / (u(0) * Rval * Rval) * Sn_hat(u, q, sigma, x, t);
+    dual coef = L / (h0 * V0);
+    dual S = tanh(3 * t) * (J0 / Rval) * coef * B(x.val, t) * Rval * Rval;
+    return S; // + u(3) / (u(0) * Rval * Rval) * Sn_hat(u, q, sigma, x, t);
 };
 
 // look at ion and electron sources again -- they should be opposite
 dual FourVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    // double Rval = R(x.val, t);
-    // double Vpval = Vprime(Rval);
-    // double Bval = B(x.val, t);
+    double Rval = R(x.val, t);
+    double Vpval = Vprime(Rval);
+    double Bval = B(x.val, t);
+    double coef = Rval * Rval * Vpval * Vpval;
 
-    // // dual dV = u(3) / u(0) * (q(3) / u(3) - q(0) / u(0) - 1 / (M_PI * Rval * Rval));
-    // // dual Svis = -hi_hat(u, q, x, t) * dV;
-    // dual G = Gamma_hat(u, q, x, t); // / (coef);
-    // dual V = G / u(0);              //* L / (p0);
+    dual dV = u(3) / u(0) * (q(3) / u(3) - q(0) / u(0) - 1 / (M_PI * Rval * Rval));
+    dual ghi = coef * ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(2))) * 3. / 10. * u(3) * u(2) / u(1) * (q(3) / u(3) - q(0) / u(0) - 1 / (M_PI * Rval * Rval));
+    dual Pvis = ghi * coef / Vpval * dV;
 
+    dual G = -Gamma_hat(u, q, x, t); // / (coef);
+    dual Ppot = -G * Vpval * dphi0dV(u, q, x, t) + u(3) * u(3) / (Rval * Rval * Rval * u(0) * u(0) * Bval) * G;
+
+    dual Pcol = Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
     // dual Ppot = -0.5 * u(3) * u(3) / (Rval * Rval * u(0) * u(0)) * Sn_hat(u, q, sigma, x, t);
     //  dual S = -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0) + 2. / 3. * Svis + Ppot;
     ///*V * q(2)*/ -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0); //+ 2. / 3. * Svis + Ppot;
     // dual S = 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
-	 dual S = 0.0;
+    dual S = 2. / 3. * (Ppot + Pcol + Pvis);
 
     if (S != S)
     {
@@ -226,8 +228,8 @@ dual FourVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
 
     // dual S = -2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
     ///*V * q(1)*/ -2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
-    // dual S = 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
-	 dual S = 0.0;
+    dual Pcol = 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual S = Pcol;
 
     if (S != S)
     {
@@ -240,6 +242,28 @@ dual FourVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     // return 0.0;
 };
 
+dual FourVarMirror::phi0(VectorXdual u, VectorXdual q, dual x, double t)
+{
+    double Rval = R(x.val, t);
+    dual phi0 = u(3) * u(3) / (u(2) * u(0) * Rval * Rval) * 1 / (1 / u(2) + 1 / u(1));
+    return phi0;
+}
+
+dual FourVarMirror::dphi0dV(VectorXdual u, VectorXdual q, dual x, double t)
+{
+    dual dphi0dV = 0;
+    auto dphi0du = gradient(phi0, wrt(u), at(u, q, x, t));
+    auto qi = q.begin();
+    for (auto &dphi0i : dphi0du)
+    {
+        dphi0dV += *qi + dphi0i;
+        ++qi;
+    }
+
+    //  dual dphi0dV = (q.val * dphi0du).sum();
+    return dphi0dV;
+}
+
 double FourVarMirror::psi(double R)
 {
     return double();
@@ -250,11 +274,11 @@ double FourVarMirror::V(double R)
 }
 double FourVarMirror::Vprime(double R)
 {
-    return 2 * M_PI / ((1 - 0.2 * R));
+    return 2 * M_PI / ((1 - 0.9 * R));
 }
 double FourVarMirror::B(double x, double t)
 {
-    return Bmid.val * (1 - 0.2 * R(x, t)); // / R(x, t);
+    return Bmid.val * (1 - 0.9 * R(x, t)); // / R(x, t);
 }
 
 double FourVarMirror::R(double x, double t)
