@@ -244,6 +244,10 @@ void SystemSolver::runSolver(std::string inputFile)
 		throw std::runtime_error( "Simulation ends before it begins." );
 	}
 
+	long int nresevals = 0;
+	IDAGetNumResEvals( IDA_mem, &nresevals );
+	std::cerr << "Number of Residual Evaluations due to IDACalcIC " << nresevals << std::endl;
+
 	// Solving Loop
 	 while ( tret < tFinal ) {
 		tout += delta_t;
@@ -294,7 +298,7 @@ void SystemSolver::runSolver(std::string inputFile)
 		// Diagnostics go here
 	}
 	
-	long int nsteps,nresevals,njacevals;
+	long int nsteps,njacevals;
 	IDAGetNumSteps( IDA_mem, &nsteps );
 	IDAGetNumResEvals( IDA_mem, &nresevals );
 	IDAGetNumLinSolvSetups( IDA_mem, &njacevals );

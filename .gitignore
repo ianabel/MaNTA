@@ -6,6 +6,7 @@ Tests/UnitTests/UnitTests
 *.dat
 !*.ref.dat
 *.nc
+!*.ref.nc
 Makefile.local
 *.o
 *.so

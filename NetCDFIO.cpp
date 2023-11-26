@@ -177,9 +177,9 @@ void SystemSolver::initialiseNetCDF(std::string const &NetcdfOutputFile, size_t 
 		// auto initial_d = [this, i](Position x)
 		// { return problem->InitialDerivative(i, x); };
 		nc_output.AddGroup(problem->getVariableName(i), problem->getVariableDescription(i), gridpoints);
-		nc_output.AddVariable(problem->getVariableName(i), "u", problem->getVariableDescription(i), problem->getVariableUnits(i), y.u(i));
-		nc_output.AddVariable(problem->getVariableName(i), "q", problem->getVariableDescription(i), problem->getVariableUnits(i), y.q(i));
-		nc_output.AddVariable(problem->getVariableName(i), "sigma", problem->getVariableDescription(i), problem->getVariableUnits(i), y.sigma(i));
+		nc_output.AddVariable(problem->getVariableName(i), "u", "Value", problem->getVariableUnits(i), y.u(i));
+		nc_output.AddVariable(problem->getVariableName(i), "q", "Derivative", problem->getVariableUnits(i), y.q(i));
+		nc_output.AddVariable(problem->getVariableName(i), "sigma", "Flux", problem->getVariableUnits(i), y.sigma(i));
 	}
 }
 

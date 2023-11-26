@@ -476,8 +476,6 @@ void SystemSolver::resetCoeffs()
 	dydt.zeroCoeffs();
 }
 
-// TODO: Recompute the LU decomp at each invocation, but
-// don't reallocate the memory (i.e. don't clear MXSolvers, just recompute)
 void SystemSolver::updateMatricesForJacSolve()
 {
 	updateBoundaryConditions( jt );
@@ -516,15 +514,15 @@ void SystemSolver::updateMatricesForJacSolve()
 
 		// S_sig Matrix
 		dSourcedsigma_Mat(Ssig, yJac, I);
-		MX.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = Ssig;
+		MX.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Ssig;
 
 		// S_q Matrix
 		dSourcedq_Mat(Sq, yJac, I);
-		MX.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = Sq;
+		MX.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Sq;
 		
 		// S_u Matrix
 		dSourcedu_Mat(Su, yJac, I);
-		MX.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += Su;
+		MX.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
 
 		MXSolvers[ i ].compute(MX);
 	}
