@@ -181,7 +181,7 @@ dual FourVarMirror::Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
 {
     double Rval = R(x.val, t);
     dual coef = L / (h0 * V0);
-    dual S = tanh(3 * t) * (J0 / Rval) * coef * B(x.val, t) * Rval * Rval;
+    dual S = tanh(10 * t) * (J0 / Rval) * coef * B(x.val, t) * Rval * Rval;
     return S; // + u(3) / (u(0) * Rval * Rval) * Sn_hat(u, q, sigma, x, t);
 };
 
@@ -191,16 +191,17 @@ dual FourVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     double Rval = R(x.val, t);
     double Vpval = Vprime(Rval);
     double Bval = B(x.val, t);
-    double coef = Rval * Rval * Vpval * Vpval;
+    double coef = Rval * Rval * Vpval;
 
-    dual dV = u(3) / u(0) * (q(3) / u(3) - q(0) / u(0) - 1 / (M_PI * Rval * Rval));
-    dual ghi = coef * ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(2))) * 3. / 10. * u(3) * u(2) / u(1) * (q(3) / u(3) - q(0) / u(0) - 1 / (M_PI * Rval * Rval));
-    dual Pvis = ghi * coef / Vpval * dV;
+    dual dV = coef * u(3) / u(0) * (q(3) / u(3) - q(0) / u(0) - 1 / (M_PI * Rval * Rval));
+    dual ghi = ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(2))) * 3. / 10. * u(2);
+    dual Pvis = ghi * dV * dV;
 
     dual G = -Gamma_hat(u, q, x, t); // / (coef);
-    dual Ppot = -G * Vpval * dphi0dV(u, q, x, t) + u(3) * u(3) / (Rval * Rval * Rval * u(0) * u(0) * Bval) * G;
-
+    dual Ppot = -G * dphi0dV(u, q, x, t) + u(3) * u(3) / (pow(Rval, 4) * u(0) * u(0) * M_PI) * G;
+    // u(3) * u(3) / (Rval * u(0) * u(0)) * G
     dual Pcol = Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
+
     // dual Ppot = -0.5 * u(3) * u(3) / (Rval * Rval * u(0) * u(0)) * Sn_hat(u, q, sigma, x, t);
     //  dual S = -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0) + 2. / 3. * Svis + Ppot;
     ///*V * q(2)*/ -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0); //+ 2. / 3. * Svis + Ppot;
@@ -213,7 +214,7 @@ dual FourVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     }
     else
     {
-        return S + u(2) / u(0) * Sn_hat(u, q, sigma, x, t);
+        return S; //- tanh(100 * t) * 1000 * Sn_hat(u, q, sigma, x, t);
     }
     // return 0.0;
 }
@@ -237,7 +238,7 @@ dual FourVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     }
     else
     {
-        return S + u(1) / u(0) * Sn_hat(u, q, sigma, x, t);
+        return S; //+ u(1) / u(0) * Sn_hat(u, q, sigma, x, t);
     }
     // return 0.0;
 };
@@ -245,13 +246,14 @@ dual FourVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
 dual FourVarMirror::phi0(VectorXdual u, VectorXdual q, dual x, double t)
 {
     double Rval = R(x.val, t);
-    dual phi0 = u(3) * u(3) / (u(2) * u(0) * Rval * Rval) * 1 / (1 / u(2) + 1 / u(1));
+    dual phi0 = u(3) * u(3) / (u(2) * u(0) * u(0) * Rval * Rval) * 1 / (1 / u(2) + 1 / u(1));
     return phi0;
 }
 
 dual FourVarMirror::dphi0dV(VectorXdual u, VectorXdual q, dual x, double t)
 {
-    dual dphi0dV = 0;
+    dual Rval = R(x.val, t);
+    dual dphi0dV = -phi0(u, q, x, t) / (M_PI * Rval * Rval);
     auto dphi0du = gradient(phi0, wrt(u), at(u, q, x, t));
     auto qi = q.begin();
     for (auto &dphi0i : dphi0du)
@@ -274,15 +276,16 @@ double FourVarMirror::V(double R)
 }
 double FourVarMirror::Vprime(double R)
 {
-    return 2 * M_PI / ((1 - 0.9 * R));
+    return 2 * M_PI / ((1 - 1.1 * R));
 }
 double FourVarMirror::B(double x, double t)
 {
-    return Bmid.val * (1 - 0.9 * R(x, t)); // / R(x, t);
+    return Bmid.val * (1 - 1.1 * R(x, t)); // / R(x, t);
 }
 
 double FourVarMirror::R(double x, double t)
 {
+    // return sqrt(x / (M_PI * L));
     using boost::math::tools::bracket_and_solve_root;
     using boost::math::tools::eps_tolerance;
     double guess = 0.5;                                     // Rough guess is to divide the exponent by three.

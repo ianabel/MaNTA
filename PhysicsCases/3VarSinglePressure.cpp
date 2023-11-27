@@ -186,25 +186,23 @@ dual ThreeVarSinglePressure ::Shi_hat(VectorXdual u, VectorXdual q, VectorXdual 
 // look at ion and electron sources again -- they should be opposite
 dual ThreeVarSinglePressure ::Sp_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    // double Rval = R(x.val, t);
-    // double Vpval = Vprime(Rval);
-    // double Bval = B(x.val, t);
-    // double coef = Rval * Rval * Vpval * Vpval;
+    double Rval = R(x.val, t);
+    double Vpval = Vprime(Rval);
+    double Bval = B(x.val, t);
+    double coef = Rval * Rval * Vpval * Vpval;
 
-    // dual dV = u(2) / u(0) * (q(2) / u(2) - q(0) / u(0) - 1 / (M_PI * Rval * Rval));
-    // dual ghi = coef * ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(1))) * 3. / 10. * u(2) * u(1) / u(1) * (q(2) / u(2) - q(0) / u(0) - 1 / (M_PI * Rval * Rval));
-    // dual Pvis = ghi * coef / Vpval * dV;
+    dual dV = u(2) / u(0) * (q(2) / u(2) - q(0) / u(0) - 1 / (M_PI * Rval * Rval));
+    dual ghi = coef * ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(1))) * 3. / 10. * u(2) * u(1) / u(1) * (q(2) / u(2) - q(0) / u(0) - 1 / (M_PI * Rval * Rval));
+    dual Pvis = ghi * coef / Vpval * dV;
 
-    // dual G = -Gamma_hat(u, q, x, t); // / (coef);
-    // dual Ppot = -G * Vpval * dphi0dV(u, q, x, t) + u(2) * u(2) / (Rval * Rval * Rval * u(0) * u(0) * Bval) * G;
-
-    // dual Pcol = 0.0; // Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual G = -Gamma_hat(u, q, x, t); // / (coef);
+    dual Ppot = -G * Vpval * dphi0dV(u, q, x, t) + u(2) * u(2) / (Rval * Rval * Rval * u(0) * u(0) * Bval) * G;
+    // dual Ppot = 0;
+    // Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
     // // dual Ppot = -0.5 * u(3) * u(3) / (Rval * Rval * u(0) * u(0)) * Sn_hat(u, q, sigma, x, t);
     // //  dual S = -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0) + 2. / 3. * Svis + Ppot;
     // ///*V * q(2)*/ -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0); //+ 2. / 3. * Svis + Ppot;
     // // dual S = 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
-    dual Pvis = 0.0;
-    dual Ppot = 0.0;
     dual S = 1. / 3. * (Ppot + Pvis);
 
     if (S != S)
