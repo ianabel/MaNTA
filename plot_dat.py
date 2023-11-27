@@ -20,7 +20,7 @@ def solution_NonLinear(x,t):
     return np.power(1-eta,1/n)
 
 def main():
-    with open("./Config/3VarCyl.dat",'rt') as data:
+    with open("./Config/3VarSinglePressure.dat",'rt') as data:
         count = 0
         time = 0
         index = 0
@@ -78,6 +78,7 @@ def main():
         Sigma = np.vstack((Sigma,np.expand_dims(sigma,0)))
         Source = np.vstack((Source,np.expand_dims(s,0)))
         ind = -1
+        x = np.sqrt(x/np.pi)
         for i in range(0,nVars):
             plt.figure()
             ax = plt.axes()

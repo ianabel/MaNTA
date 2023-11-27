@@ -6,15 +6,15 @@ import numpy as np
 
 def main():
 
-    data = Dataset('./Config/3VarCyl.nc')#xr.open_dataset("./Config/LinearDiffusion.nc")
+    data = Dataset('./Config/3VarSinglePressure.nc')#xr.open_dataset("./Config/LinearDiffusion.nc")
     Vars = data.groups
     # plt.figure()
     # plt.plot(data.groups["Var2"].variables["sigma"][5,:])
     # plt.show()
     t = data.variables["t"]
     x = data.variables["x"] 
-    r = np.sqrt(2*np.array(x))
-    
+    r = np.sqrt(np.array(x)/np.pi)
+    #r = np.sqrt(np.array(x)*2)
     for Var in Vars:
         plt.figure()
         for k in range(0,len(t),int(len(t)-1)):
@@ -31,25 +31,33 @@ def main():
 
     plt.figure()
     ax = plt.axes()
-
+    n = np.array(data.groups["Var0"].variables["u"])
+    p_i = np.array(data.groups["Var2"].variables["u"])
+    Ti = np.divide(p_i,n)
     ax.plot(r,data.groups["Var0"].variables["u"][-1,:],label = r"$\hat{n}$")
-    ax.plot(r,data.groups["Var1"].variables["u"][-1,:],label = r"$\hat{p}_e$")
-    ax.plot(r,data.groups["Var2"].variables["u"][-1,:],label = r"$\hat{p}_i$")
- #   ax.plot(r,data.groups["Var3"].variables["u"][-1,:],label = r"$\hat{h}_i$")
+    ax.plot(r,data.groups["Var1"].variables["u"][-1,:],label = r"$\hat{p}$")
+    ax.plot(r,data.groups["Var2"].variables["u"][-1,:],label = r"$\hat{h}_i$")
+ 
+    ax.plot(r,Ti[-1,:],label = r"$\hat{T}_i$")
+   # ax.plot(r,data.groups["Var3"].variables["u"][-1,:],label = r"$\hat{h}_i$")
+   
+
     
     ax.legend()
     plt.xlabel(r"$\hat{r}$")
-    n = np.array(data.groups["Var0"].variables["u"])
-    Gamma = -np.array(data.groups["Var0"].variables["sigma"])
+    
+    Gamma = np.array(data.groups["Var0"].variables["sigma"])
     Vr = Gamma/n
     gradPe = np.array(data.groups["Var1"].variables["q"])
     gradPi = np.array(data.groups["Var2"].variables["q"])
     heating = gradPe*Vr
     heatingi = gradPi*Vr
     plt.figure()
-    plt.plot(x[:],heating[-1,:])
-    plt.plot(x[:],heatingi[-1,:])
+    plt.plot(x[:],Vr[-1,:])
+    plt.plot(x[:],Vr[-1,:])
     plt.show()
+
+   
     # plt.show()
     # for Var in Vars:
     #     plt.figure()

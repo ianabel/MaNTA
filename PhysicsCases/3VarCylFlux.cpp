@@ -28,6 +28,36 @@ ThreeVarCylFlux::ThreeVarCylFlux(toml::value const &config, Index nVars)
     ParticleSource = ParticleSources[profile];
 
     sourceStrength = toml::find_or(DiffConfig, "SourceStrength", 0.0);
+    sourceCenter = toml::find_or(DiffConfig, "SourceCenter", 0.25);
+    sourceWidth = toml::find_or(DiffConfig, "SourceWidth", 0.01);
+
+    // reference values
+    n0 = toml::find_or(DiffConfig, "n0", 3e19);
+    T0 = e_charge * toml::find_or(DiffConfig, "T0", 1e3);
+    Bmid = toml::find_or(DiffConfig, "Bmid", 1.0);
+    L = toml::find_or(DiffConfig, "L", 1.0);
+    p0 = n0 * T0;
+
+    Gamma0 = p0 / (electronMass * Om_e(Bmid) * Om_e(Bmid) * tau_e(n0, p0));
+    V0 = Gamma0 / n0;
+
+    taue0 = tau_e(n0, p0);
+    taui0 = tau_i(n0, p0);
+    sourceCenter = toml::find_or(DiffConfig, "SourceCenter", 0.25);
+    sourceWidth = toml::find_or(DiffConfig, "SourceWidth", 0.01);
+
+    // reference values
+    n0 = toml::find_or(DiffConfig, "n0", 3e19);
+    T0 = toml::find_or(DiffConfig, "T0", e_charge * 1e3);
+    Bmid = toml::find_or(DiffConfig, "Bmid", 1.0);
+    L = toml::find_or(DiffConfig, "L", 1.0);
+    p0 = n0 * T0;
+
+    Gamma0 = p0 / (electronMass * Om_e(Bmid) * Om_e(Bmid) * tau_e(n0, p0));
+    V0 = Gamma0 / n0;
+
+    taue0 = tau_e(n0, p0);
+    taui0 = tau_i(n0, p0);
 
     sigma.insert(std::pair<Index, sigmaptr>(0, &Gamma_hat));
     sigma.insert(std::pair<Index, sigmaptr>(1, &qe_hat));
@@ -40,17 +70,20 @@ ThreeVarCylFlux::ThreeVarCylFlux(toml::value const &config, Index nVars)
 
 int ThreeVarCylFlux::ParticleSource;
 double ThreeVarCylFlux::sourceStrength;
+dual ThreeVarCylFlux::sourceCenter;
+dual ThreeVarCylFlux::sourceWidth;
 
-const dual n0 = 3e20;
-const dual T0 = e_charge * 10e3;
-const dual p0 = n0 * T0;
+// reference values
+dual ThreeVarCylFlux::n0;
+dual ThreeVarCylFlux::T0;
+dual ThreeVarCylFlux::Bmid;
+Value ThreeVarCylFlux::L;
 
-const dual Gamma0 = p0 / (electronMass * Om_e * Om_e * tau_e(n0, p0));
-const dual V0 = Gamma0 / n0;
-
-const dual taue0 = tau_e(n0, p0);
-const dual taui0 = tau_i(n0, p0);
-const Value L = 1;
+dual ThreeVarCylFlux::p0;
+dual ThreeVarCylFlux::Gamma0;
+dual ThreeVarCylFlux::V0;
+dual ThreeVarCylFlux::taue0;
+dual ThreeVarCylFlux::taui0;
 
 dual ThreeVarCylFlux::Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
@@ -103,13 +136,12 @@ dual ThreeVarCylFlux::qe_hat(VectorXdual u, VectorXdual q, dual x, double t)
 dual ThreeVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
     dual S = 0.0;
-    dual Center = 0.5;
     switch (ParticleSource)
     {
     case None:
         break;
     case Gaussian:
-        S = -sourceStrength * exp(-100.0 * (x - Center) * (x - Center));
+        S = sourceStrength * exp(-1 / sourceWidth * (x - sourceCenter) * (x - sourceCenter));
         break;
     default:
         break;
@@ -120,9 +152,9 @@ dual ThreeVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
 // look at ion and electron sources again -- they should be opposite
 dual ThreeVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    dual G = Gamma_hat(u, q, x, t) / (2. * x);
-    dual V = G / u(0); //* L / (p0);
-    dual S = 2. / 3. * sqrt(2. * x) * V * q(2) - 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
+    // dual G = -Gamma_hat(u, q, x, t);
+    // dual V = G / u(0); //* L / (p0);
+    dual S = 0.0; // V * q(2) + 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
 
     if (S != S)
     {
@@ -130,16 +162,16 @@ dual ThreeVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, d
     }
     else
     {
-        return S + 0.1 * Sn_hat(u, q, sigma, x, t);
+        return S + Sn_hat(u, q, sigma, x, t);
     }
     // return 0.0;
 };
 dual ThreeVarCylFlux::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    dual G = Gamma_hat(u, q, x, t) / (2. * x);
-    dual V = G / u(0); //* L / (p0);
+    // dual G = -Gamma_hat(u, q, x, t);
+    // dual V = G / u(0); //* L / (p0);
 
-    dual S = 2. / 3. * sqrt(2. * x) * V * q(1) - 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual S = 0.0; // V * q(1) + 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
 
     if (S != S)
     {

@@ -29,6 +29,7 @@ class SystemSolver
 {
 public:
 	SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, TransportSystem *pProblem);
+	SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, double SteadyStateTol, TransportSystem *pProblem);
 
 	// This has been moved elsewhere, SystemSolver should be constructed after the parsing is done.
 	// SystemSolver(std::string const& inputFile);
@@ -123,7 +124,6 @@ private:
 
 	void DerivativeSubMatrix(Matrix &mat, void (TransportSystem::*dX_dZ)(Index, Values &, const Values &, const Values &, Position, double), DGSoln const &Y, Interval I);
 
-	int total_steps = 0;
 	double resNorm = 0.0; // Exclusively for unit testing purposes
 
 	double dt;
@@ -152,6 +152,8 @@ private:
 
 	size_t S_DOF, U_DOF, Q_DOF, SQU_DOF;
 
+	bool TerminateOnSteadyState = false;
+	double steady_state_tol = 1e-3;
 	bool physics_debug = false;
 
 #ifdef TEST

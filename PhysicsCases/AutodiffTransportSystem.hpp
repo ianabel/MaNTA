@@ -49,8 +49,8 @@ private:
 
     bool isTestProblem;
 
-    static int InitialProfile;
-    std::map<std::string, int> InitialProfiles = {{"Gaussian", 0}, {"Dirichlet", 1}, {"Cosine", 2}, {"Uniform", 3}};
+    static std::vector<int> InitialProfile;
+    std::map<std::string, int> InitialProfiles = {{"Gaussian", 0}, {"Dirichlet", 1}, {"Cosine", 2}, {"Uniform", 3}, {"Linear", 4}};
 
     static Vector InitialHeights;
 

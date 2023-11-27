@@ -11,6 +11,14 @@
 
 #include "gridStructures.hpp"
 
+SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, double sst, TransportSystem *transpSystem)
+	: SystemSolver( Grid, polyNum, Dt, tau, transpSystem )
+{
+	steady_state_tol = sst;
+	TerminateOnSteadyState = true;
+}
+
+
 SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, TransportSystem *transpSystem)
 	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), MXSolvers( Grid.getNCells() ), y(nVars, grid, k), dydt(nVars, grid, k), yJac(nVars, grid, k),
 	  dt(Dt), problem(transpSystem), tauc(tau)
@@ -468,8 +476,6 @@ void SystemSolver::resetCoeffs()
 	dydt.zeroCoeffs();
 }
 
-// TODO: Recompute the LU decomp at each invocation, but
-// don't reallocate the memory (i.e. don't clear MXSolvers, just recompute)
 void SystemSolver::updateMatricesForJacSolve()
 {
 	updateBoundaryConditions( jt );
@@ -508,15 +514,15 @@ void SystemSolver::updateMatricesForJacSolve()
 
 		// S_sig Matrix
 		dSourcedsigma_Mat(Ssig, yJac, I);
-		MX.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = Ssig;
+		MX.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Ssig;
 
 		// S_q Matrix
 		dSourcedq_Mat(Sq, yJac, I);
-		MX.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = Sq;
+		MX.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Sq;
 		
 		// S_u Matrix
 		dSourcedu_Mat(Su, yJac, I);
-		MX.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += Su;
+		MX.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
 
 		MXSolvers[ i ].compute(MX);
 	}
@@ -676,7 +682,7 @@ int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector re
 	DGSoln dYdt_h(nVars, grid, k, N_VGetArrayPointer(dYdt));
 	DGSoln res(nVars, grid, k, N_VGetArrayPointer(resval));
 
-	VectorWrapper resVec( N_VGetArrayPointer( resval ), N_VGetLocalLength( resval ) );
+	VectorWrapper resVec( N_VGetArrayPointer( resval ), N_VGetLength( resval ) );
 
 	resVec.setZero();
 
@@ -752,13 +758,11 @@ int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector re
 				-A_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.q(var).getCoeff(i).second - B_cellwise[i].transpose().block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.u(var).getCoeff(i).second + C_cellwise[i].transpose().block(var * (k + 1), var * 2, k + 1, 2) * lambda - RF_cellwise[i].block(var * (k + 1), 0, k + 1, 1);
 
 			res.q(var).getCoeff(i).second =
-				B_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.sigma(var).getCoeff(i).second + D_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.u(var).getCoeff(i).second + E_cellwise[i].block(var * (k + 1), var * 2, k + 1, 2) * lambda - RF_cellwise[i].block(nVars * (k + 1) + var * (k + 1), 0, k + 1, 1) + S_cellwise + XMats[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * dYdt_h.u(var).getCoeff(i).second;
+				B_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.sigma(var).getCoeff(i).second + D_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.u(var).getCoeff(i).second + E_cellwise[i].block(var * (k + 1), var * 2, k + 1, 2) * lambda - RF_cellwise[i].block(nVars * (k + 1) + var * (k + 1), 0, k + 1, 1) - S_cellwise + XMats[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * dYdt_h.u(var).getCoeff(i).second;
 
 			res.u(var).getCoeff(i).second = Y_h.sigma(var).getCoeff(i).second + kappa_cellwise;
 		}
 	}
-
-	total_steps++;
 
 	return 0;
 }

@@ -20,16 +20,11 @@ else:
 nc_root = Dataset(filename, "r", format="NETCDF4")
 t_var = nc_root.variables["t"]
 
-Var = nc_root.variables["Var0"]
+Var = nc_root.groups["Var0"].variables["u"]
 
 x_var = nc_root.variables["x"]
 
-t0 = 0.2*0.2/4.0;
-def gauss_pulse( x, t ):
-	return np.sqrt(t0/(t+t0)) * np.exp( -x*x/(4*(t+t0)));
-
 plt.plot( x_var[:], Var[time_idx,:])
-plt.plot( x_var[:], gauss_pulse( x_var[:], t_var[time_idx]) )
 plt.show()
 
 

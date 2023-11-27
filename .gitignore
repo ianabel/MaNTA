@@ -4,7 +4,9 @@ Tests/UnitTests/UnitTests
 /*.report
 /*.plot
 *.dat
+!*.ref.dat
 *.nc
+!*.ref.nc
 Makefile.local
 *.o
 *.so
@@ -14,3 +16,6 @@ resources/
 figs/
 runs/
 .vscode/
+python/__pycache__/
+build/
+python/__pycache__/

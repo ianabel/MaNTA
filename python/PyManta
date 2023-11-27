@@ -29,10 +29,10 @@ import importlib.util
 
 if "PythonModuleName" in conf:
     mod_name = conf["PythonModuleName"]
-    if "PythonModulePath" in conf:
+    if "PythonModuleFile" in conf:
         mod_path = conf["PythonModuleFile"]
     else:
-        print("Must specify a module path if you specify a python module to use")
+        print("Must specify a file containing a python module if you specify a python module to use")
         sys.exit(1);
     mod_spec = importlib.util.spec_from_file_location( mod_name, mod_path )
     module_handle = importlib.util.module_from_spec( mod_spec )
