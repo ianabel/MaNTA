@@ -6,7 +6,7 @@ import numpy as np
 
 def main():
 
-    data = Dataset('./Config/4VarMirror.nc')#xr.open_dataset("./Config/LinearDiffusion.nc")
+    data = Dataset('./Config/3VarSinglePressure.nc')#xr.open_dataset("./Config/LinearDiffusion.nc")
     Vars = data.groups
     # plt.figure()
     # plt.plot(data.groups["Var2"].variables["sigma"][5,:])
@@ -35,10 +35,10 @@ def main():
     p_i = np.array(data.groups["Var2"].variables["u"])
     Ti = np.divide(p_i,n)
     ax.plot(r,data.groups["Var0"].variables["u"][-1,:],label = r"$\hat{n}$")
-    ax.plot(r,data.groups["Var1"].variables["u"][-1,:],label = r"$\hat{p}_e$")
-    ax.plot(r,data.groups["Var2"].variables["u"][-1,:],label = r"$\hat{p}_i$")
+    ax.plot(r,data.groups["Var1"].variables["u"][-1,:],label = r"$\hat{p}$")
+    ax.plot(r,data.groups["Var2"].variables["u"][-1,:],label = r"$\hat{h}_i$")
  
-    #ax.plot(r,Ti[-1,:],label = r"$\hat{T}_i$")
+    ax.plot(r,Ti[-1,:],label = r"$\hat{T}_i$")
    # ax.plot(r,data.groups["Var3"].variables["u"][-1,:],label = r"$\hat{h}_i$")
    
 
