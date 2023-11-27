@@ -204,11 +204,12 @@ double ThreeVarMirror::V(double R)
 }
 double ThreeVarMirror::Vprime(double R)
 {
-    return 2 * M_PI / ((1 - 0.5 * R));
+    return 2 * M_PI / exp(-2 * R * R);
 }
 double ThreeVarMirror::B(double x, double t)
 {
-    return Bmid.val * (1 - 0.5 * R(x, t)); // / R(x, t);
+    double Rval = R(x, t);
+    return Bmid.val * exp(-2 * Rval * Rval); // / R(x, t);
 }
 
 double ThreeVarMirror::R(double x, double t)

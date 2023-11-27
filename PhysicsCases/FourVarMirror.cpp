@@ -182,7 +182,7 @@ dual FourVarMirror::Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     double Rval = R(x.val, t);
     dual coef = L / (h0 * V0);
     dual S = tanh(10 * t) * (J0 / Rval) * coef * B(x.val, t) * Rval * Rval;
-    return S; // + u(3) / (u(0) * Rval * Rval) * Sn_hat(u, q, sigma, x, t);
+    return S; // 100 * Sn_hat(u, q, sigma, x, t); //+ u(3) / (u(0) * Rval * Rval) * Sn_hat(u, q, sigma, x, t);
 };
 
 // look at ion and electron sources again -- they should be opposite
@@ -197,9 +197,11 @@ dual FourVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     dual ghi = ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(2))) * 3. / 10. * u(2);
     dual Pvis = ghi * dV * dV;
 
-    dual G = -Gamma_hat(u, q, x, t); // / (coef);
-    dual Ppot = -G * dphi0dV(u, q, x, t) + u(3) * u(3) / (pow(Rval, 4) * u(0) * u(0) * M_PI) * G;
-    // u(3) * u(3) / (Rval * u(0) * u(0)) * G
+    // dual G = -Gamma_hat(u, q, x, t); // / (coef);
+    // dual Ppot = -G * dphi0dV(u, q, x, t) + u(3) * u(3) / (pow(Rval, 4) * u(0) * u(0) * M_PI) * G;
+    dual Ppot = 0.0;
+    //    dual Pvis = 0.0;
+    //  u(3) * u(3) / (Rval * u(0) * u(0)) * G
     dual Pcol = Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
 
     // dual Ppot = -0.5 * u(3) * u(3) / (Rval * Rval * u(0) * u(0)) * Sn_hat(u, q, sigma, x, t);
@@ -212,9 +214,10 @@ dual FourVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     {
         return 0.0;
     }
+
     else
     {
-        return S; //- tanh(100 * t) * 1000 * Sn_hat(u, q, sigma, x, t);
+        return S; //+ 10 * Sn_hat(u, q, sigma, x, t); //+ ::pow(ionMass / electronMass, 1. / 2.) * u(2) / u(0) * Sn_hat(u, q, sigma, x, t);
     }
     // return 0.0;
 }
@@ -276,11 +279,13 @@ double FourVarMirror::V(double R)
 }
 double FourVarMirror::Vprime(double R)
 {
-    return 2 * M_PI / ((1 - 1.1 * R));
+    return 2 * M_PI / (exp(-2 * R * R));
 }
 double FourVarMirror::B(double x, double t)
 {
-    return Bmid.val * (1 - 1.1 * R(x, t)); // / R(x, t);
+    double Rval = R(x, t);
+    return Bmid.val * exp(-2 * Rval * Rval);
+    ///(1 / R(x, t)); // / R(x, t);
 }
 
 double FourVarMirror::R(double x, double t)

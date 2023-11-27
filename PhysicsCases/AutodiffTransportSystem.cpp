@@ -127,7 +127,7 @@ void AutodiffTransportSystem::dSources_du(Index i, Values &grad, const Values &u
     VectorXdual qw(q);
     VectorXdual sw(nVars);
     for (int j = 0; j < nVars; j++)
-        sw(j) = fluxObject->sigma[i](uw, qw, x, t);
+        sw(j) = fluxObject->sigma[j](uw, qw, x, t);
 
     grad = gradient(fluxObject->source[i], wrt(uw), at(uw, qw, sw, x, t));
 }
@@ -137,7 +137,7 @@ void AutodiffTransportSystem::dSources_dq(Index i, Values &grad, const Values &u
     VectorXdual qw(q);
     VectorXdual sw(nVars);
     for (int j = 0; j < nVars; j++)
-        sw(j) = fluxObject->sigma[i](uw, qw, x, t);
+        sw(j) = fluxObject->sigma[j](uw, qw, x, t);
 
     grad = gradient(fluxObject->source[i], wrt(qw), at(uw, qw, sw, x, t));
 }
@@ -147,7 +147,7 @@ void AutodiffTransportSystem::dSources_dsigma(Index i, Values &grad, const Value
     VectorXdual qw(q);
     VectorXdual sw(nVars);
     for (int j = 0; j < nVars; j++)
-        sw(j) = fluxObject->sigma[i](uw, qw, x, t);
+        sw(j) = fluxObject->sigma[j](uw, qw, x, t);
 
     grad = gradient(fluxObject->source[i], wrt(sw), at(uw, qw, sw, x, t));
 }
