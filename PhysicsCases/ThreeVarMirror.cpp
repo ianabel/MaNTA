@@ -35,6 +35,10 @@ ThreeVarMirror::ThreeVarMirror(toml::value const &config, Index nVars)
     Rmin = toml::find_or(DiffConfig, "Rmin", 0.1);
     Rmax = toml::find_or(DiffConfig, "Rmax", 1.0);
 
+    M0 = toml::find_or(DiffConfig, "M0", 6.72);
+
+    useConstantOmega = toml::find_or(DiffConfig, "useConstantOmega", false);
+
     // reference values
     n0 = toml::find_or(DiffConfig, "n0", 3e19);
     T0 = e_charge * toml::find_or(DiffConfig, "T0", 1e3);
@@ -76,6 +80,8 @@ dual ThreeVarMirror::taui0;
 
 double ThreeVarMirror::Rmin;
 double ThreeVarMirror::Rmax;
+dual ThreeVarMirror::M0;
+bool ThreeVarMirror::useConstantOmega;
 
 dual ThreeVarMirror::Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t)
 {
@@ -139,6 +145,7 @@ dual ThreeVarMirror::qe_hat(VectorXdual u, VectorXdual q, dual x, double t)
 dual ThreeVarMirror::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
     dual S = 0.0;
+    dual Sfus = L * n0 / V0 * RDT(u(0), u(1)) * u(0) * u(0);
     switch (ParticleSource)
     {
     case None:
@@ -149,26 +156,38 @@ dual ThreeVarMirror::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     default:
         break;
     }
-    return S;
+    return S - Sfus;
 };
 
-// look at ion and electron sources again -- they should be opposite
 dual ThreeVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    // double Rval = R(x.val, t);
-    // double Vpval = Vprime(Rval);
-    // double coef = Vpval * Rval;
-    // dual G = Gamma_hat(u, q, x, t); // / (coef);
-    // dual V = G / u(0);              //* L / (p0);
-    dual S = 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual Ppot = 0;
+    dual Pvis = 0;
+    if (useConstantOmega)
+    {
+        double Rval = R(x.val, t);
+        double Vpval = Vprime(Rval);
+        double Bval = B(x.val, t);
+        double coef = Vpval * Vpval * Rval * Rval * Rval * Rval;
+
+        dual dV = domegadV(x, t);
+        dual ghi = ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(2))) * 3. / 10. * u(2);
+        Pvis = ghi * coef * dV * dV;
+
+        dual G = -sigma(0); // / (coef);
+        Ppot = -G * dphi0dV(u, q, x, t) + pow(omega(Rval, t), 2) / M_PI * G;
+    }
+    dual Pcol = 0.0; // Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual S = 2. / 3. * (Ppot + Pcol + Pvis);
 
     if (S != S)
     {
         return 0.0;
     }
+
     else
     {
-        return S + 4.0 * Sn_hat(u, q, sigma, x, t);
+        return S; //+ 10 * Sn_hat(u, q, sigma, x, t); //+ ::pow(ionMass / electronMass, 1. / 2.) * u(2) / u(0) * Sn_hat(u, q, sigma, x, t);
     }
     // return 0.0;
 }
@@ -181,7 +200,19 @@ dual ThreeVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
     // dual G = Gamma_hat(u, q, x, t); // (coef);
     // dual V = G / u(0);              //* L / (p0);
 
-    dual S = 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
+    // dual S = -2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
+    ///*V * q(1)*/ -2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
+    // dual Pcol = 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
+    //
+
+    dual Pbrem = (-5.34e3 * pow(u(0), 1.5) * pow(u(1), 0.5)) * L / (p0 * V0);
+    dual Ealpha = e_charge * 3.5e6;
+    dual Sfus = n0 * n0 * RDT(u(0), u(1)) * u(0) * u(0);
+    dual Pfus = L / (p0 * V0) * Sfus * Ealpha;
+    // // dual Pfus = 0;
+    // dual Pbrem = 0;
+    dual Pcol = 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual S = Pcol + Pfus + Pbrem;
 
     if (S != S)
     {
@@ -193,6 +224,46 @@ dual ThreeVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
     }
     // return 0.0;
 };
+dual ThreeVarMirror::omega(dual R, double t)
+{
+    dual shape = 10.0;
+    dual C = 0.5 * (Rmin + Rmax);
+    dual c = (M_PI / 2 - 3 * M_PI / 2) / (Rmin - Rmax);
+    dual d = (M_PI / 2 - Rmin / Rmax * (3 * M_PI / 2)) / (c * (Rmin / Rmax - 1));
+    dual coef = -M0 / (C * cos(c * (C - d)));
+    return -tanh(10 * t) * cos(c * (R - d)) * coef * exp(-shape * (R - C) * (R - C));
+}
+
+double ThreeVarMirror::domegadV(dual x, double t)
+{
+    dual Rval = R(x.val, t);
+    double Bval = B(x.val, t);
+    double Vpval = Vprime(Rval.val);
+    double domegadR = derivative(omega, wrt(Rval), at(Rval, t));
+    return domegadR / (Vpval * Rval.val * Bval);
+}
+
+dual ThreeVarMirror::phi0(VectorXdual u, VectorXdual q, dual x, double t)
+{
+    dual Rval = R(x.val, t);
+    dual phi0 = pow(omega(Rval, t), 2) * Rval * Rval / (2 * u(2)) * 1 / (1 / u(2) + 1 / u(1));
+    return phi0;
+}
+dual ThreeVarMirror::dphi0dV(VectorXdual u, VectorXdual q, dual x, double t)
+{
+    dual Rval = R(x.val, t);
+    dual dphi0dV = derivative(phi0, wrt(Rval), at(u, q, x, t)) / (2 * M_PI * Rval);
+    auto dphi0du = gradient(phi0, wrt(u), at(u, q, x, t));
+    auto qi = q.begin();
+    for (auto &dphi0i : dphi0du)
+    {
+        dphi0dV += *qi * dphi0i;
+        ++qi;
+    }
+
+    //  dual dphi0dV = (q.val * dphi0du).sum();
+    return dphi0dV;
+}
 
 double ThreeVarMirror::psi(double R)
 {

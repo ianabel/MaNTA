@@ -63,3 +63,9 @@ dual RT(dual n, dual Pe)
 {
     return dual();
 }
+
+dual RDT(dual n, dual Pe)
+{
+    dual T = Pe / n;
+    return 1e-6 * 3.68e-12 * pow(T, -2. / 3.) * exp(-19.94 * pow(T, -1. / 3.));
+}

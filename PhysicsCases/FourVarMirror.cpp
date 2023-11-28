@@ -164,6 +164,7 @@ dual FourVarMirror::qe_hat(VectorXdual u, VectorXdual q, dual x, double t)
 dual FourVarMirror::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
     dual S = 0.0;
+    dual Sfus = L * n0 / V0 * RDT(u(0), u(1)) * u(0) * u(0);
     switch (ParticleSource)
     {
     case None:
@@ -174,14 +175,14 @@ dual FourVarMirror::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual
     default:
         break;
     }
-    return S;
+    return (S - Sfus);
 };
 
 dual FourVarMirror::Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
     double Rval = R(x.val, t);
     dual coef = L / (h0 * V0);
-    dual S = tanh(10 * t) * (J0 / Rval) * coef * B(x.val, t) * Rval * Rval;
+    dual S = tanh(100 * t) * (J0 / Rval) * coef * B(x.val, t) * Rval * Rval;
     return S; // 100 * Sn_hat(u, q, sigma, x, t); //+ u(3) / (u(0) * Rval * Rval) * Sn_hat(u, q, sigma, x, t);
 };
 
@@ -233,7 +234,13 @@ dual FourVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     // dual S = -2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
     ///*V * q(1)*/ -2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
     dual Pcol = 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
-    dual S = Pcol;
+    dual Ealpha = e_charge * 3.5e6;
+
+    dual Pbrem = 1 / 100 * (-5.34e3 * pow(u(0), 1.5) * pow(u(1), 0.5)) * L / (p0 * V0);
+    dual Sfus = n0 * n0 * RDT(u(0), u(1)) * u(0) * u(0);
+    dual Pfus = L / (p0 * V0) * Sfus * Ealpha;
+
+    dual S = Pcol + Pfus + Pbrem;
 
     if (S != S)
     {
@@ -249,7 +256,7 @@ dual FourVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
 dual FourVarMirror::phi0(VectorXdual u, VectorXdual q, dual x, double t)
 {
     double Rval = R(x.val, t);
-    dual phi0 = u(3) * u(3) / (u(2) * u(0) * u(0) * Rval * Rval) * 1 / (1 / u(2) + 1 / u(1));
+    dual phi0 = u(3) * u(3) / (2 * u(2) * u(0) * u(0) * Rval * Rval) * 1 / (1 / u(2) + 1 / u(1));
     return phi0;
 }
 

@@ -36,8 +36,16 @@ private:
     static dual Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t);
     static dual Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t);
 
+    static dual omega(dual R, double t);
+    static double domegadV(dual x, double t);
+    static bool useConstantOmega;
+
+    static dual phi0(VectorXdual u, VectorXdual q, dual x, double t);
+    static dual dphi0dV(VectorXdual u, VectorXdual q, dual x, double t);
+
     static double Rmin;
     static double Rmax;
+    static dual M0;
     static double psi(double R);
     static double V(double R);
     static double Vprime(double R);

@@ -31,3 +31,4 @@ dual Ce(dual n, dual Pi, dual Pe);
 
 dual Ci(dual n, dual Pi, dual Pe);
 dual RT(dual n, dual Pe);
+dual RDT(dual n, dual Pe);
