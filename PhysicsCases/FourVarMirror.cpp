@@ -197,11 +197,11 @@ dual FourVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     dual ghi = ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(2))) * 3. / 10. * u(2);
     dual Pvis = ghi * dV * dV;
 
-    // dual G = -Gamma_hat(u, q, x, t); // / (coef);
-    // dual Ppot = -G * dphi0dV(u, q, x, t) + u(3) * u(3) / (pow(Rval, 4) * u(0) * u(0) * M_PI) * G;
-    dual Ppot = 0.0;
-    //    dual Pvis = 0.0;
-    //  u(3) * u(3) / (Rval * u(0) * u(0)) * G
+    dual G = -sigma(0); // / (coef);
+    dual Ppot = -G * dphi0dV(u, q, x, t) + u(3) * u(3) / (pow(Rval, 4) * u(0) * u(0) * M_PI) * G;
+    // dual Ppot = 0.0;
+    //      dual Pvis = 0.0;
+    //    u(3) * u(3) / (Rval * u(0) * u(0)) * G
     dual Pcol = Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
 
     // dual Ppot = -0.5 * u(3) * u(3) / (Rval * Rval * u(0) * u(0)) * Sn_hat(u, q, sigma, x, t);
