@@ -230,7 +230,7 @@ dual ThreeVarMirror::omega(dual R, double t)
     dual C = 0.5 * (Rmin + Rmax);
     dual c = (M_PI / 2 - 3 * M_PI / 2) / (Rmin - Rmax);
     dual d = (M_PI / 2 - Rmin / Rmax * (3 * M_PI / 2)) / (c * (Rmin / Rmax - 1));
-    dual coef = -M0 / (C * cos(c * (C - d)));
+    dual coef = -0.7 * M0 / (C * cos(c * (C - d)));
     return -tanh(10 * t) * cos(c * (R - d)) * coef * exp(-shape * (R - C) * (R - C));
 }
 
