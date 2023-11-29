@@ -4,7 +4,6 @@
 #include <sundials/sundials_types.h>        /* defs of realtype, sunindextype  */
 #include <Eigen/Core>
 
-
 using Index = Eigen::Index;
 using Value = double;
 

@@ -37,30 +37,33 @@ Value EquilibrationTest::UpperBoundary(Index, Time) const
 bool EquilibrationTest::isLowerBoundaryDirichlet(Index) const { return true; };
 bool EquilibrationTest::isUpperBoundaryDirichlet(Index) const { return true; };
 
-Value EquilibrationTest::SigmaFn(Index i, const Values &, const Values &q, Position x, Time)
+Value EquilibrationTest::SigmaFn(Index i, const State &s, Position x, Time)
 {
 	if ( i == 0 ) {
-		return kappa1 * q[ 0 ];
+		return kappa1 * s.Derivative[ 0 ];
 	} else if ( i == 1 ) {
-		return kappa2 * q[ 1 ];
+		return kappa2 * s.Derivative[ 1 ];
 	} else {
 		throw std::runtime_error( "Index out of bounds" );
 	}
 }
 
-Value EquilibrationTest::Sources(Index i, const Values &u, const Values &, const Values &, Position x, Time)
+Value EquilibrationTest::Sources(Index i, const State &s, Position x, Time)
 {
 	double Gaussian = ::exp( -25*x*x );
+	double u0,u1;
+	u0 = s.Variable[ 0 ];
+	u1 = s.Variable[ 1 ];
 	if ( i == 0 ) {
-		return S1*Gaussian + Q*( u[ 0 ] - u[ 1 ] );
+		return S1*Gaussian - Q*( u0 - u1 );
 	} else if ( i == 1 ) {
-		return S2*Gaussian + Q*( u[ 1 ] - u[ 0 ] );
+		return S2*Gaussian - Q*( u1 - u0 );
 	} else {
 		throw std::runtime_error( "Index out of bounds" );
 	}
 }
 
-void EquilibrationTest::dSigmaFn_dq(Index i, Values &v, const Values &, const Values &, Position, Time)
+void EquilibrationTest::dSigmaFn_dq(Index i, Values &v, const State &, Position, Time)
 {
 	if ( i == 0 ) {
 		v[ 0 ] = kappa1;
@@ -73,39 +76,36 @@ void EquilibrationTest::dSigmaFn_dq(Index i, Values &v, const Values &, const Va
 	}
 };
 
-void EquilibrationTest::dSigmaFn_du(Index, Values &v, const Values &, const Values &, Position, Time)
+void EquilibrationTest::dSigmaFn_du(Index, Values &v, const State &, Position, Time)
 {
 	v[0] = 0.0;
 	v[ 1 ] = 0.0;
 };
 
-void EquilibrationTest::dSources_du(Index i, Values &v, const Values &, const Values &, Position, Time)
+void EquilibrationTest::dSources_du(Index i, Values &v, const State &, Position, Time)
 {
 	if ( i == 0 ) {
-		v[ 0 ] = Q;
-		v[ 1 ] = -Q;
-	} else if ( i == 1 ) {
 		v[ 0 ] = -Q;
 		v[ 1 ] = Q;
+	} else if ( i == 1 ) {
+		v[ 0 ] = Q;
+		v[ 1 ] = -Q;
 	} else {
 		throw std::runtime_error( "Index out of bounds" );
 	}
 };
 
-void EquilibrationTest::dSources_dq(Index, Values &v, const Values &, const Values &, Position, Time)
+void EquilibrationTest::dSources_dq(Index, Values &v, const State &, Position, Time)
 {
 	v[0] = 0.0;
 	v[ 1 ] = 0.0;
 };
 
-void EquilibrationTest::dSources_dsigma(Index, Values &v, const Values &, const Values &, Position, Time)
+void EquilibrationTest::dSources_dsigma(Index, Values &v, const State &, Position, Time)
 {
 	v[0] = 0.0;
 	v[1] = 0.0;
 };
-
-// We don't need the index variables as nVars is 1, so the index argument should
-// always be 0
 
 Value EquilibrationTest::InitialValue(Index, Position) const
 {

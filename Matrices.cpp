@@ -32,7 +32,7 @@ void SystemSolver::NLuMat( Matrix& NLu, DGSoln const& Y, Interval I ) {
 //
 // where X is a sigma function or a source function and Z is one of u, q, or sigma.
  
-void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX_dZ )( Index, Values&, const Values&, const Values&, Position, double ), DGSoln const& Y, Interval I )
+void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX_dZ )( Index, Values&, const State&, Position, double ), DGSoln const& Y, Interval I )
 {
 	auto const& x_vals = DGApprox::Integrator().abscissa();
 	auto const& x_wgts = DGApprox::Integrator().weights();
@@ -58,24 +58,15 @@ void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX
 			// All for loops inside here can be parallelised as they all
 			// write to separate entries in mat
 			
-			Values u_vals1( nVars ), q_vals1( nVars );
-			Values u_vals2( nVars ), q_vals2( nVars );
-
 			double wgt = x_wgts[ i ]*( I.h()/2.0 );
 
 			double y_plus  = I.x_l + ( 1.0 + x_vals[ i ] )*( I.h()/2.0 );
 			double y_minus = I.x_l + ( 1.0 - x_vals[ i ] )*( I.h()/2.0 );
 
-			for ( size_t j = 0 ; j < nVars; ++j )
-			{
-				u_vals1[ j ] = Y.u( j )( y_plus, I );
-				q_vals1[ j ] = Y.q( j )( y_plus, I );
-				u_vals2[ j ] = Y.u( j )( y_minus, I );
-				q_vals2[ j ] = Y.q( j )( y_minus, I );
-			}
+			State Y_plus = Y.eval( y_plus ), Y_minus = Y.eval( y_minus );
 
-			( problem->*dX_dZ )( XVar, dX_dZ_vals1, u_vals1, q_vals1, y_plus, 0.0 );
-			( problem->*dX_dZ )( XVar, dX_dZ_vals2, u_vals2, q_vals2, y_minus, 0.0 );
+			( problem->*dX_dZ )( XVar, dX_dZ_vals1, Y_plus, y_plus, 0.0 );
+			( problem->*dX_dZ )( XVar, dX_dZ_vals2, Y_plus, y_minus, 0.0 );
 
 			for(Index ZVar = 0; ZVar < nVars; ZVar++)
 			{

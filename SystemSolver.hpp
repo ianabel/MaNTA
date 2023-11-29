@@ -122,7 +122,7 @@ private:
 	void dSourcedq_Mat(Matrix &, DGSoln const &, Interval);
 	void dSourcedsigma_Mat(Matrix &, DGSoln const &, Interval);
 
-	void DerivativeSubMatrix(Matrix &mat, void (TransportSystem::*dX_dZ)(Index, Values &, const Values &, const Values &, Position, double), DGSoln const &Y, Interval I);
+	void DerivativeSubMatrix(Matrix &mat, void (TransportSystem::*dX_dZ)(Index, Values &, const State &, Position, Time), DGSoln const &Y, Interval I);
 
 	double resNorm = 0.0; // Exclusively for unit testing purposes
 

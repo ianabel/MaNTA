@@ -51,8 +51,8 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
 	ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
 
-	auto sigma_wrapper = [this](Index i, const Values &u, const Values &q, Position x, Time t)
-	{ return -problem->SigmaFn(i, u, q, x, t); };
+	auto sigma_wrapper = [this](Index i, const State &s, Position x, Time t)
+	{ return -problem->SigmaFn(i, s, x, t); };
 	y.AssignSigma(sigma_wrapper);
 
 	for (Index var = 0; var < nVars; var++)
@@ -74,32 +74,22 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 			S_cellwise.setZero();
 			for (size_t i = 0; i < n_abscissa; ++i)
 			{
-				Vector u_vals(nVars), q_vals(nVars), sigma_vals(nVars);
 				double x_val = I.x_l + (1 + x_vals[i]) * I.h() / 2.0;
 				double wgt = x_wgts[i] * (I.h() / 2.0);
-				for (size_t j = 0; j < nVars; ++j)
-				{
-					u_vals[j] = y.u(j)(x_val, I);
-					q_vals[j] = y.q(j)(x_val, I);
-					sigma_vals[j] = y.sigma(j)(x_val, I);
-				}
-				double sourceVal = problem->Sources(var, u_vals, q_vals, sigma_vals, x_val, 0);
+				
+				State s = y.eval( x_val );
+				double sourceVal = problem->Sources(var, s, x_val, 0);
 				for (Eigen::Index j = 0; j < k + 1; j++)
 					S_cellwise(j) += wgt * sourceVal * LegendreBasis::Evaluate(I, j, x_val);
 			}
 			// And for the other half of the abscissas
 			for (size_t i = 0; i < n_abscissa; ++i)
 			{
-				Values u_vals(nVars), q_vals(nVars), sigma_vals(nVars);
 				double x_val = I.x_l + (1 - x_vals[i]) * I.h() / 2.0;
 				double wgt = x_wgts[i] * (I.h() / 2.0);
-				for (size_t j = 0; j < nVars; ++j)
-				{
-					u_vals[j] = y.u(j)(x_val, I);
-					q_vals[j] = y.q(j)(x_val, I);
-					sigma_vals[j] = y.sigma(j)(x_val, I);
-				}
-				double sourceVal = problem->Sources(var, u_vals, q_vals, sigma_vals, x_val, 0);
+
+				State s = y.eval( x_val );
+				double sourceVal = problem->Sources(var, s, x_val, 0);
 				for (Eigen::Index j = 0; j < k + 1; j++)
 					S_cellwise(j) += wgt * sourceVal * LegendreBasis::Evaluate(I, j, x_val);
 			}
@@ -719,25 +709,14 @@ int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector re
 		{
 			std::function<double(double)> kappaFunc = [=, this, &Y_h](double x)
 			{
-				Values u_vals(nVars), q_vals(nVars);
-				for (Index iv = 0; iv < nVars; ++iv)
-				{
-					u_vals[iv] = Y_h.u(iv)(x);
-					q_vals[iv] = Y_h.q(iv)(x);
-				}
-				return problem->SigmaFn(var, u_vals, q_vals, x, tres);
+				State s = Y_h.eval( x );
+				return problem->SigmaFn(var, s, x, tres);
 			};
 
 			std::function<double(double)> sourceFunc = [=, this, &Y_h](double x)
 			{
-				Values u_vals(nVars), q_vals(nVars), sigma_vals(nVars);
-				for (Index iv = 0; iv < nVars; ++iv)
-				{
-					u_vals[iv] = Y_h.u(iv)(x);
-					q_vals[iv] = Y_h.q(iv)(x);
-					sigma_vals[iv] = Y_h.sigma(iv)(x);
-				}
-				return problem->Sources(var, u_vals, q_vals, sigma_vals, x, tres);
+				State s = Y_h.eval( x );
+				return problem->Sources(var, s, x, tres);
 			};
 
 			// Evaluate Diffusion Function
@@ -764,6 +743,10 @@ int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector re
 		}
 	}
 
+	for ( Index j = 0; j < problem->getNumScalars(); j++ ) {
+		res.Scalar( j ) = problem->ScalarG( j, Y_h, tres );
+	}
+
 	return 0;
 }
 
@@ -777,17 +760,11 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
 	{
 		double x = static_cast<double>(i) * delta_x + grid.lowerBoundary();
 		out << x;
-		Vector uVals(nVars), qVals(nVars), sigmaVals(nVars);
+		State s = tmp_y.eval( x );
 		for (Index v = 0; v < nVars; ++v)
 		{
-			uVals(v) = tmp_y.u(v)(x);
-			qVals(v) = tmp_y.q(v)(x);
-			sigmaVals(v) = tmp_y.sigma(v)(x);
-		}
-		for (Index v = 0; v < nVars; ++v)
-		{
-			out << "\t" << tmp_y.u(v)(x) << "\t" << tmp_y.q(v)(x) << "\t" << tmp_y.sigma(v)(x);
-			out << "\t" << problem->Sources(v, uVals, qVals, sigmaVals, x, t);
+			out << "\t" << s.Variable[ v ] << "\t" << s.Derivative[ v ] << "\t" << s.Flux[ v ];
+			out << "\t" << problem->Sources(v, s, x, t);
 		}
 		out << std::endl;
 	}
@@ -820,15 +797,10 @@ void SystemSolver::print(std::ostream &out, double t, int nOut)
 	{
 		double x = static_cast<double>(i) * delta_x + grid.lowerBoundary();
 		out << x;
-		Vector uVals( nVars ), qVals( nVars ), sigmaVals( nVars );
+		State s = y.eval( x );
 		for ( Index v = 0; v < nVars; ++v ) {
-			uVals( v ) = y.u( v )( x );
-			qVals( v ) = y.q( v )( x );
-			sigmaVals( v ) = y.sigma( v )( x );
-		}
-		for ( Index v = 0; v < nVars; ++v ) {
-			out << "\t" << y.u( v )( x ) << "\t" << y.q( v )( x ) << "\t" << y.sigma( v )( x );
-			out << "\t" << problem->Sources( v, uVals, qVals, sigmaVals, x, t );
+			out << "\t" << s.Variable[ v ] << "\t" << s.Derivative[ v ] << "\t" << s.Flux[ v ];
+			out << "\t" << problem->Sources( v, s, x, t );
 		}
 		out << std::endl;
 	}
