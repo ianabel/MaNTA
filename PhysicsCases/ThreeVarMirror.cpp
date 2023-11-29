@@ -177,7 +177,7 @@ dual ThreeVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
         dual G = -sigma(0); // / (coef);
         Ppot = -G * dphi0dV(u, q, x, t) + pow(omega(Rval, t), 2) / M_PI * G;
     }
-    dual Pcol = 0.0; // Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual Pcol = Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
     dual S = 2. / 3. * (Ppot + Pcol + Pvis);
 
     if (S != S)
@@ -237,7 +237,7 @@ dual ThreeVarMirror::omega(dual R, double t)
 double ThreeVarMirror::domegadV(dual x, double t)
 {
     dual Rval = R(x.val, t);
-    double Bval = B(x.val, t);
+    double Bval = B(x.val, t) / Bmid.val;
     double Vpval = Vprime(Rval.val);
     double domegadR = derivative(omega, wrt(Rval), at(Rval, t));
     return domegadR / (Vpval * Rval.val * Bval);
@@ -275,12 +275,12 @@ double ThreeVarMirror::V(double R)
 }
 double ThreeVarMirror::Vprime(double R)
 {
-    return 2 * M_PI / exp(-2 * R * R);
+    return 2 * M_PI; // / exp(-2 * R * R);
 }
 double ThreeVarMirror::B(double x, double t)
 {
     double Rval = R(x, t);
-    return Bmid.val * exp(-2 * Rval * Rval); // / R(x, t);
+    return Bmid.val; //* exp(-2 * Rval * Rval); // / R(x, t);
 }
 
 double ThreeVarMirror::R(double x, double t)

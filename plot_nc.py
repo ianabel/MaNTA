@@ -34,17 +34,18 @@ def main():
     ax = plt.axes()
     n = np.array(data.groups["Var0"].variables["u"])
     p_i = np.array(data.groups["Var2"].variables["u"])
-  #  h_i = np.array(data.groups["Var3"].variables["u"]);
-     # w = np.sqrt(np.divide(h_i,r*r*n))
+
     Ti = np.divide(p_i,n)
 
     ax.plot(r,data.groups["Var0"].variables["u"][-1,:],label = r"$\hat{n}$")
     ax.plot(r,data.groups["Var1"].variables["u"][-1,:],label = r"$\hat{p}_e$")
     ax.plot(r,data.groups["Var2"].variables["u"][-1,:],label = r"$\hat{p}_i$")
-  #  ax.plot(r,data.groups["Var3"].variables["u"][-1,:],label = r"$\hat{h}_i$")
     ax.plot(r,Ti[-1,:],label = r"$\hat{T}_i$")
-   # ax.plot(r,r*w[-1,:],label=r"$\hat{R}\hat{\omega}_i$")
-   # ax.plot(r,data.groups["Var3"].variables["u"][-1,:],label = r"$\hat{h}_i$")
+
+    # h_i = np.array(data.groups["Var3"].variables["u"])
+    # w = np.sqrt(np.divide(h_i,r*r*n))
+    # ax.plot(r,r*w[-1,:],label=r"$\hat{R}\hat{\omega}_i$")
+    # ax.plot(r,data.groups["Var3"].variables["u"][-1,:],label = r"$\hat{h}_i$")
    
 
     

@@ -156,7 +156,6 @@ dual FourVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
         break;
     case Gaussian:
         S = -sourceStrength * exp(-1 / sourceWidth * (x - sourceCenter) * (x - sourceCenter));
-        S = -sourceStrength * exp(-1 / sourceWidth * (x - sourceCenter) * (x - sourceCenter));
         break;
     default:
         break;
