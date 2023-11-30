@@ -49,6 +49,7 @@ FourVarMirror::FourVarMirror(toml::value const &config, Index nVars)
     omega0 = 1 / L * sqrt(T0 / ionMass);
     taue0 = tau_e(n0, p0);
     taui0 = tau_i(n0, p0);
+
     h0 = ionMass * n0 * L * L * omega0;
 
     sigma.insert(std::pair<Index, sigmaptr>(0, &Gamma_hat));
@@ -93,7 +94,7 @@ dual FourVarMirror::Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t)
     double Rval = R(x.val, t);
     double Vpval = Vprime(Rval);
     double coef = Rval * Rval * Vpval * Vpval;
-    dual G = coef * u(1) / tau_hat(u(0), u(1)) * ((-q(1) / 2. + q(2)) / u(1) + 3. / 2. * q(0) / u(0));
+    dual G = coef * u(1) / (tau_hat(u(0), u(1)) * lambda_hat(u(0), u(1), n0, p0)) * ((-q(1) / 2. + q(2)) / u(1) + 3. / 2. * q(0) / u(0));
 
     if (G != G)
     {
@@ -111,7 +112,7 @@ dual FourVarMirror::hi_hat(VectorXdual u, VectorXdual q, dual x, double t)
     double coef = Rval * Rval * Vpval * Vpval;
     dual G = Gamma_hat(u, q, x, t);
     dual dV = u(3) / u(0) * (q(3) / u(3) - q(0) / u(0) - 1 / (M_PI * Rval * Rval));
-    dual ghi = ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(2))) * 3. / 10. * u(2) * dV;
+    dual ghi = ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(2)) * lambda_hat(u(0), u(1), n0, p0)) * 3. / 10. * u(2) * dV;
     dual H = u(3) * G / u(0) + coef * ghi;
     if (H != H)
     {
@@ -129,7 +130,7 @@ dual FourVarMirror::qi_hat(VectorXdual u, VectorXdual q, dual x, double t)
     double Vpval = Vprime(Rval);
     double coef = Rval * Rval * Vpval * Vpval;
     // dual G = Gamma_hat(u, q, x, t);
-    dual qri = ::sqrt(ionMass / (2 * electronMass)) * 1.0 / tau_hat(u(0), u(2)) * 2. * u(2) * u(2) / u(0) * (q(2) / u(2) - q(0) / u(0));
+    dual qri = ::sqrt(ionMass / (2 * electronMass)) * 1.0 / (tau_hat(u(0), u(2)) * lambda_hat(u(0), u(1), n0, p0)) * 2. * u(2) * u(2) / u(0) * (q(2) / u(2) - q(0) / u(0));
     dual Q = (2. / 3.) * (coef * qri); // + 5. / 2. * u(2) / u(0) * G);
     if ((Q != Q))
     {
@@ -196,7 +197,7 @@ dual FourVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     double coef = Rval * Rval * Vpval;
 
     dual dV = coef * u(3) / u(0) * (q(3) / u(3) - q(0) / u(0) - 1 / (M_PI * Rval * Rval));
-    dual ghi = ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(2))) * 3. / 10. * u(2);
+    dual ghi = ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(2)) * lambda_hat(u(0), u(1), n0, p0)) * 3. / 10. * u(2);
     dual Pvis = ghi * dV * dV;
 
     dual G = -sigma(0); // / (coef);
