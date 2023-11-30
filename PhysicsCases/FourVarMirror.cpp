@@ -31,6 +31,8 @@ FourVarMirror::FourVarMirror(toml::value const &config, Index nVars)
     sourceCenter = toml::find_or(DiffConfig, "SourceCenter", 0.25);
     sourceWidth = toml::find_or(DiffConfig, "SourceWidth", 0.01);
 
+    includeParallelLosses = toml::find_or(DiffConfig, "includeParallelLosses", false);
+
     Rmin = toml::find_or(DiffConfig, "Rmin", 0.1);
     Rmax = toml::find_or(DiffConfig, "Rmax", 1.0);
 
@@ -38,6 +40,8 @@ FourVarMirror::FourVarMirror(toml::value const &config, Index nVars)
     n0 = toml::find_or(DiffConfig, "n0", 3e19);
     T0 = e_charge * toml::find_or(DiffConfig, "T0", 1e3);
     Bmid = toml::find_or(DiffConfig, "Bmid", 1.0);
+    double Rm = toml::find_or(DiffConfig, "Rm", 3.3);
+    Bmax = Bmid.val * Rm;
     //   E0 = toml::find_or(DiffConfig, "E0", 1e5);
     L = toml::find_or(DiffConfig, "L", 1.0);
     J0 = toml::find_or(DiffConfig, "J0", 0.01);
@@ -67,11 +71,12 @@ int FourVarMirror::ParticleSource;
 double FourVarMirror::sourceStrength;
 dual FourVarMirror::sourceCenter;
 dual FourVarMirror::sourceWidth;
-
+bool FourVarMirror::includeParallelLosses;
 // reference values
 dual FourVarMirror::n0;
 dual FourVarMirror::T0;
 dual FourVarMirror::Bmid;
+double FourVarMirror::Bmax;
 dual FourVarMirror::J0;
 Value FourVarMirror::L;
 
@@ -166,7 +171,16 @@ dual FourVarMirror::qe_hat(VectorXdual u, VectorXdual q, dual x, double t)
 dual FourVarMirror::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
     dual S = 0.0;
+    dual Spast = 0.0;
     dual Sfus = L * n0 / V0 * RDT(u(0), u(1)) * u(0) * u(0);
+    if (includeParallelLosses)
+    {
+        dual Rm = Bmax / B(x.val, t);
+        dual Xe = Chi_e(u, q, x, t); // phi0(u, q, x, t) * u(0) / u(1) * (1 - 1 / Rm);
+        dual coef = L / (taue0 * V0);
+        dual loss = PastukhovLoss(u(0), u(1), Xe, Rm);
+        Spast = coef * loss;
+    }
     switch (ParticleSource)
     {
     case None:
@@ -177,15 +191,22 @@ dual FourVarMirror::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual
     default:
         break;
     }
-    return (S - tanh(100 * t) * Sfus);
+    return (S - Sfus + Spast);
 };
 
 dual FourVarMirror::Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
+    dual Spast = 0.0;
+    if (includeParallelLosses)
+    {
+        dual Rm = Bmax / B(x.val, t);
+        dual Xi = Chi_i(u, q, x, t);
+        Spast = L / (taui0 * V0) * 0.5 * PastukhovLoss(u(0), u(2), Xi, Rm) * u(3) / u(0);
+    }
     double Rval = R(x.val, t);
     dual coef = L / (h0 * V0);
-    dual S = tanh(1000 * t) * (J0 / Rval) * coef * B(x.val, t) * Rval * Rval;
-    return S; // 100 * Sn_hat(u, q, sigma, x, t); //+ u(3) / (u(0) * Rval * Rval) * Sn_hat(u, q, sigma, x, t);
+    dual S = (J0 / Rval) * coef * B(x.val, t) * Rval * Rval;
+    return S + Spast; // 100 * Sn_hat(u, q, sigma, x, t); //+ u(3) / (u(0) * Rval * Rval) * Sn_hat(u, q, sigma, x, t);
 };
 
 // look at ion and electron sources again -- they should be opposite
@@ -195,6 +216,17 @@ dual FourVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     double Vpval = Vprime(Rval);
     double Bval = B(x.val, t);
     double coef = Rval * Rval * Vpval;
+
+    dual Ppast = 0.0;
+
+    if (includeParallelLosses)
+    {
+
+        dual Rm = Bmax / B(x.val, t);
+        dual Xi = Chi_i(u, q, x, t);
+        dual Spast = L / (taui0 * V0) * 0.5 * PastukhovLoss(u(0), u(2), Xi, Rm);
+        Ppast = (u(2) / u(0) + Xi) * Spast;
+    }
 
     dual dV = coef * u(3) / u(0) * (q(3) / u(3) - q(0) / u(0) - 1 / (M_PI * Rval * Rval));
     dual ghi = ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(2)) * lambda_hat(u(0), u(1), n0, p0)) * 3. / 10. * u(2);
@@ -211,7 +243,7 @@ dual FourVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     //  dual S = -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0) + 2. / 3. * Svis + Ppot;
     ///*V * q(2)*/ -2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0); //+ 2. / 3. * Svis + Ppot;
     // dual S = 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
-    dual S = 2. / 3. * (Ppot + Pcol + Pvis);
+    dual S = 2. / 3. * (Ppot + Pcol + Pvis + Ppast);
 
     if (S != S)
     {
@@ -235,14 +267,29 @@ dual FourVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
 
     // dual S = -2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
     ///*V * q(1)*/ -2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
-    dual Pcol = 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
-    dual Ealpha = e_charge * 3.5e6;
+    dual Pfus = 0.0;
+    dual Pbrem = 0.0;
+    dual Ppast = 0.0;
+    dual Rm = Bmax / B(x.val, t);
+    if (includeParallelLosses)
+    {
+        dual Xe = Chi_e(u, q, x, t); // phi0(u, q, x, t) * u(0) / u(1) * (1 - 1 / Rm);
+        dual Spast = L / (taue0 * V0) * PastukhovLoss(u(0), u(1), Xe, Rm);
+        Ppast = (u(1) / u(0) + Xe) * Spast;
+    }
 
-    dual Pbrem = (-5.34e3 * pow(u(0), 1.5) * pow(u(1), 0.5)) * L / (p0 * V0);
-    dual Sfus = n0 * n0 * RDT(u(0), u(1)) * u(0) * u(0);
-    dual Pfus = L / (p0 * V0) * Sfus * Ealpha;
+    //
+    dual n = u(0) * n0;
+    dual T = u(1) / u(0) * T0;
+    dual TeV = T / (e_charge);
+    Pbrem = -1e6 * 1.69e-32 * (n * n) * 1e-12 * sqrt(TeV); //(-5.34e3 * pow(n / 1e20, 2) * pow(TkeV, 0.5)) * L / (p0 * V0);
 
-    dual S = Pcol + (Pfus + Pbrem);
+    dual R = 3.68e-12 * pow(TeV / 1000, -2. / 3.) * exp(-19.94 * pow(TeV / 1000, -1. / 3.));
+    // 1e-6 * n0 * n0 * R * u(0) * u(0);
+    Pfus = sqrt(1 - 1 / Rm) * 1e6 * 5.6e-13 * n * n * 1e-12 * R; // n *n * 5.6e-13
+
+    dual Pcol = Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
+    dual S = 2. / 3. * (Pcol + Ppast + L / (p0 * V0) * (Pfus + Pbrem));
 
     if (S != S)
     {
@@ -258,7 +305,11 @@ dual FourVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
 dual FourVarMirror::phi0(VectorXdual u, VectorXdual q, dual x, double t)
 {
     double Rval = R(x.val, t);
-    dual phi0 = u(3) * u(3) / (2 * u(2) * u(0) * u(0) * Rval * Rval) * 1 / (1 / u(2) + 1 / u(1));
+    dual Rm = Bmax / Bmid.val;
+    dual Romega = u(3) / (u(0));
+    dual tau = u(2) / u(0);
+    dual phi0 = 1 / (1 + tau) * (1 / Rm - 1) * Romega * Romega / 2;
+    // dual phi0 = u(3) * u(3) / (2 * u(2) * u(0) * u(0) * Rval * Rval) * 1 / (1 / u(2) + 1 / u(1));
     return phi0;
 }
 
@@ -278,6 +329,28 @@ dual FourVarMirror::dphi0dV(VectorXdual u, VectorXdual q, dual x, double t)
     return dphi0dV;
 }
 
+dual FourVarMirror::Chi_e(VectorXdual u, VectorXdual q, dual x, double t)
+{
+    dual Rval = R(x.val, t);
+    dual Rm = Bmax / B(x.val, t);
+    dual tau = u(2) / u(1);
+    dual Romega = u(3) / u(0);
+    dual M2 = pow(Romega, 2) * u(0) / u(1);
+
+    return 0.5 * (1 - 1 / Rm) * M2 * 1 / (tau + 1);
+}
+dual FourVarMirror::Chi_i(VectorXdual u, VectorXdual q, dual x, double t)
+{
+
+    dual Rval = R(x.val, t);
+    dual Rm = Bmax / B(x.val, t);
+    dual tau = u(2) / u(1);
+    dual Romega = u(3) / (u(0));
+    dual M2 = pow(Romega, 2) * u(0) / u(1);
+
+    return 0.5 * tau / (1 + tau) * (1 - 1 / Rm) * M2;
+}
+
 double FourVarMirror::psi(double R)
 {
     return double();
@@ -288,12 +361,12 @@ double FourVarMirror::V(double R)
 }
 double FourVarMirror::Vprime(double R)
 {
-    return 2 * M_PI / (exp(-0.5 * R * R));
+    return 2 * M_PI; /// (exp(-0.5 * R * R));
 }
 double FourVarMirror::B(double x, double t)
 {
     double Rval = R(x, t);
-    return Bmid.val * exp(-0.5 * Rval * Rval);
+    return Bmid.val; //* exp(-0.5 * Rval * Rval);
     ///(1 / R(x, t)); // / R(x, t);
 }
 

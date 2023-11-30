@@ -49,23 +49,23 @@ def main():
     ax2.plot(r,Ti[-1,:],label = r"$\hat{T}_i$")
     ax2.legend()
     plt.xlabel(r"$\hat{r}$")
-    M0 = 23.5
+    M0 = 16.0
     shape = 10.0
     Rmin = 0.5
-    Rmax = 1.0
+    Rmax = 1.1
     omegaOffset = 4.0
     u_L = omegaOffset
     u_R = (omegaOffset * Rmin / Rmax);
     a = (np.arcsinh(u_L) - np.arcsinh(u_R)) / (Rmin - Rmax)
     b = (np.arcsinh(u_L) - Rmin / Rmax * np.arcsinh(u_R)) / (a * (Rmin / Rmax - 1))
 
-    shape = 10.0;
+    shape = 10.0
     C = 0.5 * (Rmin + Rmax);
-    c = (np.pi / 2 - 3 * np.pi / 2) / (Rmin - Rmax);
+    c = (np.pi / 2 - 3 * np.pi / 2) / (Rmin - Rmax)
     d = (np.pi / 2 - Rmin / Rmax * (3 * np.pi / 2)) / (c * (Rmin / Rmax - 1))
     coef = (omegaOffset - M0 / C) * 1 / np.cos(c * (C - d))
 
-    omega = np.sinh(a * (r - b)) - np.cos(c * (r - d)) * coef * np.exp(-shape * (r - C) * (r - C))
+    omega = np.sinh(a * (r - b)) - np.cos(c * (r - d)) * coef #* np.exp(-shape * (r - C) * (r - C))
    
     M = r*omega/np.sqrt(Te)
     plt.figure()
@@ -93,11 +93,19 @@ def main():
     plt.figure()
     v = r*omega*w0
     ax5 = plt.axes()
-    ax5.plot(r,v, label=r"$v_\theta$")
+    ax5.plot(r,omega*w0, label=r"$v_\theta$")
     ax5.legend()
 
-    print(Te[-1,0])
-    print(Te[-1,-1])
+    n = np.squeeze(n[-1,:])*1e20
+    TeV = np.squeeze(Te[-1,:]*1000)
+    Pbrem = -1e6 * 1.69e-32 * (n * n) * 1e-12 * np.sqrt(TeV)
+    sv = 3.68e-12 * np.power(TeV / 1000, -2. / 3.) * np.exp(-19.94 * np.power(TeV / 1000, -1. / 3.))
+    Pfus = np.sqrt(1 - 1 / Rm)* 1e6*  5.6e-13 * n * n * 1e-12 * sv
+    Ltot = 2
+    Pbremtot = 2*np.pi*Ltot*np.trapz(r*Pbrem,r)
+    Pfustot = 2*np.pi*Ltot*np.trapz(r*Pfus,r)
+    print(Pbremtot)
+    print(Pfustot)
 
 
     # h_i = np.array(data.groups["Var3"].variables["u"])

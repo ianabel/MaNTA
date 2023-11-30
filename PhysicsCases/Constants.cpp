@@ -6,7 +6,7 @@ double J_eV(double T_J) { return T_J / 1.60218e-19; }
 dual lambda(dual n, dual Pe)
 {
     dual Te = Pe / n * 1 / e_charge;
-    return 24 - log(sqrt(n * 1e-6) / Te); // 18.4 - 1.15 * log10(n) + 2.3 * log10(1 / e_charge * Pe / n);
+    return 23.0 - log(sqrt(n * 1e-6) / Te); // 18.4 - 1.15 * log10(n) + 2.3 * log10(1 / e_charge * Pe / n);
 }
 
 dual lambda_hat(dual nhat, dual Pehat, dual n0, dual Pe0)

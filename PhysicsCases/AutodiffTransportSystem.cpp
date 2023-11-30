@@ -254,7 +254,7 @@ dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t, 
     dual2nd u = 0;
     dual2nd C = 0.5 * (x_R + x_L);
     double m = (u_L - u_R) / (x_L - x_R);
-    double shape = 10; // 10 / (x_R - x_L) * ::log(10);
+    double shape = 1; // 10 / (x_R - x_L) * ::log(10);
     switch (InitialProfile[i])
     {
     case Gaussian:
