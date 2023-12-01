@@ -690,7 +690,6 @@ int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector re
 
 	// residual.lambda = C*sigma + G*u + H*lambda - L 
 
-	#pragma omp parallel for
 	for ( Index i = 0; i < nCells; i++ )
 	{
 		// C_cellwise * sigma_cellwise
