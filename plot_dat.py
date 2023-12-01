@@ -50,14 +50,15 @@ def main():
 
             elif count > 3:
                 if(line.startswith("#")):
-                    U = np.vstack((U,np.expand_dims(u,0)))
-                    Q = np.vstack((Q,np.expand_dims(q,0)))
-                    Sigma = np.vstack((Sigma,np.expand_dims(sigma,0)))
-                    Source = np.vstack((Source,np.expand_dims(s,0)))
-                    line_begin = True
-                    index = 0
-                    time = parse.parse(time_format,line)
-                    t.append(float(time[0].strip("\n")))
+                    if (line[2] != "L"):
+                        U = np.vstack((U,np.expand_dims(u,0)))
+                        Q = np.vstack((Q,np.expand_dims(q,0)))
+                        Sigma = np.vstack((Sigma,np.expand_dims(sigma,0)))
+                        Source = np.vstack((Source,np.expand_dims(s,0)))
+                        line_begin = True
+                        index = 0
+                        time = parse.parse(time_format,line)
+                        t.append(float(time[0].strip("\n")))
                 elif(line == "\n"):
                     line_begin = False
                    

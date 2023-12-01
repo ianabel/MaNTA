@@ -49,13 +49,13 @@ def main():
     ax2.plot(r,Ti[-1,:],label = r"$\hat{T}_i$")
     ax2.legend()
     plt.xlabel(r"$\hat{r}$")
-    M0 = 16.0
+    M0 = 20.0
     shape = 10.0
     Rmin = 0.5
-    Rmax = 1.1
-    omegaOffset = 4.0
+    Rmax = 1.0
+    omegaOffset = 3.0
     u_L = omegaOffset
-    u_R = (omegaOffset * Rmin / Rmax);
+    u_R = (omegaOffset * Rmin / Rmax)
     a = (np.arcsinh(u_L) - np.arcsinh(u_R)) / (Rmin - Rmax)
     b = (np.arcsinh(u_L) - Rmin / Rmax * np.arcsinh(u_R)) / (a * (Rmin / Rmax - 1))
 
@@ -65,8 +65,12 @@ def main():
     d = (np.pi / 2 - Rmin / Rmax * (3 * np.pi / 2)) / (c * (Rmin / Rmax - 1))
     coef = (omegaOffset - M0 / C) * 1 / np.cos(c * (C - d))
 
+
+    #h_i = np.array(data.groups["Var3"].variables["u"])
+    #omega = h_i/(n*r*r)#np.sinh(a * (r - b)) - np.cos(c * (r - d)) * coef #* np.exp(-shape * (r - C) * (r - C))
+    #omega = np.squeeze(omega[-1,:])
     omega = np.sinh(a * (r - b)) - np.cos(c * (r - d)) * coef #* np.exp(-shape * (r - C) * (r - C))
-   
+
     M = r*omega/np.sqrt(Te)
     plt.figure()
     ax3 = plt.axes()
@@ -79,6 +83,8 @@ def main():
     Rm = 3.3
     tau = p_i / p_e
     M2 = r * r * omega*omega * n/p_e
+
+    phi0 =  1 / (1 + tau) * (1 / Rm - 1) * r*r*omega * omega / 2;
 
     Xe=  0.5 * (1 - 1 / Rm) * M2 * 1 / (tau + 1)
 
@@ -93,7 +99,8 @@ def main():
     plt.figure()
     v = r*omega*w0
     ax5 = plt.axes()
-    ax5.plot(r,omega*w0, label=r"$v_\theta$")
+    ax5.plot(r,omega, label=r"$\omega$")
+    ax5.plot(r,phi0[-1,:],label=r"$\phi_0$")
     ax5.legend()
 
     n = np.squeeze(n[-1,:])*1e20
@@ -107,6 +114,35 @@ def main():
     print(Pbremtot)
     print(Pfustot)
 
+    Sigma = 2;
+    tau_hat = (1.0 / np.power(n/1e20, 5.0 / 2.0)) * (np.power(p_e, 3.0 / 2.0))
+    electronMass = 9.1094e-31
+    ionMass = 1.6726e-27
+    protonMass = 1.6726e-27
+    e_charge = 1.60217663e-19
+    T0 = 1e3*e_charge
+    n0 = 1e20
+    p0= n0*T0
+
+
+    Bmid = 4.5
+    Om_e = e_charge*Bmid/electronMass
+    lam = 23.0 - np.log(np.sqrt(n0 * 1e-6) / (T0/e_charge))
+    taue0 = 3.44e11 * (1.0 / np.power(n0, 5.0 / 2.0)) * (np.power(p0 / e_charge, 3.0 / 2.0)) * 1 / lam
+    Gamma0 = p0 / (electronMass * Om_e * Om_e * taue0)
+    V0 = Gamma0 / n0
+    L = 1
+    n= n/1e20
+    print(lam)
+    print(V0)
+    print(taue0)
+    Spast = (-2 * n * Sigma / np.sqrt(np.pi) * 1 / tau_hat * 1 / np.log(Sigma * Rm) * np.exp(-Xe) / Xe)
+    Spasttot = 2*np.pi*Ltot*np.trapz(r*np.squeeze(n0*V0/L*L/(taue0*V0)*Spast[-1,:]),r)
+    Ppaste = Te*(1+Xe)*Spast
+    print(Spasttot)
+    plt.figure()
+    ax6 = plt.axes()
+    ax6.plot(r,Spast[-1,:])
 
     # h_i = np.array(data.groups["Var3"].variables["u"])
     # w = np.sqrt(np.divide(h_i,r*r*n))

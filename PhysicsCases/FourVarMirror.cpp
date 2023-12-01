@@ -172,7 +172,12 @@ dual FourVarMirror::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual
 {
     dual S = 0.0;
     dual Spast = 0.0;
-    dual Sfus = L * n0 / V0 * RDT(u(0), u(1)) * u(0) * u(0);
+    dual n = u(0) * n0;
+    dual T = u(1) / u(0) * T0;
+    dual TeV = T / (e_charge);
+
+    dual R = 1e-6 * 3.68e-12 * pow(TeV / 1000, -2. / 3.) * exp(-19.94 * pow(TeV / 1000, -1. / 3.));
+    dual Sfus = L / (n0 * V0) * R * n * n;
     if (includeParallelLosses)
     {
         dual Rm = Bmax / B(x.val, t);
@@ -191,7 +196,7 @@ dual FourVarMirror::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual
     default:
         break;
     }
-    return (S - Sfus + Spast);
+    return (S - tanh(10 * t) * Sfus + Spast);
 };
 
 dual FourVarMirror::Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
@@ -306,7 +311,7 @@ dual FourVarMirror::phi0(VectorXdual u, VectorXdual q, dual x, double t)
 {
     double Rval = R(x.val, t);
     dual Rm = Bmax / Bmid.val;
-    dual Romega = u(3) / (u(0));
+    dual Romega = u(3) / (u(0) * Rval);
     dual tau = u(2) / u(0);
     dual phi0 = 1 / (1 + tau) * (1 / Rm - 1) * Romega * Romega / 2;
     // dual phi0 = u(3) * u(3) / (2 * u(2) * u(0) * u(0) * Rval * Rval) * 1 / (1 / u(2) + 1 / u(1));
@@ -334,7 +339,7 @@ dual FourVarMirror::Chi_e(VectorXdual u, VectorXdual q, dual x, double t)
     dual Rval = R(x.val, t);
     dual Rm = Bmax / B(x.val, t);
     dual tau = u(2) / u(1);
-    dual Romega = u(3) / u(0);
+    dual Romega = u(3) / (u(0) * Rval);
     dual M2 = pow(Romega, 2) * u(0) / u(1);
 
     return 0.5 * (1 - 1 / Rm) * M2 * 1 / (tau + 1);
@@ -345,7 +350,7 @@ dual FourVarMirror::Chi_i(VectorXdual u, VectorXdual q, dual x, double t)
     dual Rval = R(x.val, t);
     dual Rm = Bmax / B(x.val, t);
     dual tau = u(2) / u(1);
-    dual Romega = u(3) / (u(0));
+    dual Romega = u(3) / (u(0) * Rval);
     dual M2 = pow(Romega, 2) * u(0) / u(1);
 
     return 0.5 * tau / (1 + tau) * (1 - 1 / Rm) * M2;

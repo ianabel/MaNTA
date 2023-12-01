@@ -153,20 +153,23 @@ dual ThreeVarMirror::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
 {
     dual S = 0.0;
     dual Spast = 0.0;
+    dual Sfus = 0.0;
     dual n = u(0) * n0;
-    dual T = u(1) / u(0) * T0;
+    dual T = u(2) / u(0) * T0;
     dual TeV = T / (e_charge);
 
     dual R = 1e-6 * 3.68e-12 * pow(TeV / 1000, -2. / 3.) * exp(-19.94 * pow(TeV / 1000, -1. / 3.));
-    dual Sfus = L / (n0 * V0) * R * n * n;
-    //    dual Xi = Chi_i(u,q,x,t); phi0(u, q, x, t) * u(0) / u(2);
+    Sfus = L / (n0 * V0) * R * n * n;
     if (includeParallelLosses)
     {
         dual Rm = Bmax / B(x.val, t);
         dual Xe = Chi_e(u, q, x, t); // phi0(u, q, x, t) * u(0) / u(1) * (1 - 1 / Rm);
-        dual coef = L / (taue0 * V0);
-        dual loss = PastukhovLoss(u(0), u(1), Xe, Rm);
-        Spast = coef * loss;
+                                     // dual Xi = Chi_e(u, q, x, t);
+        dual c1 = L / (taue0 * V0);
+        dual l1 = 1 / ::sqrt(2) * PastukhovLoss(u(0), u(1), Xe, Rm);
+        // dual c2 = L / (taui0 * V0);
+        // dual l2 = PastukhovLoss(u(0), u(2), Xe, Rm);
+        Spast = c1 * l1; //+ c2 * l2;
     }
     switch (ParticleSource)
     {
@@ -193,22 +196,23 @@ dual ThreeVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
         dual Rm = Bmax / B(x.val, t);
         dual Xi = Chi_i(u, q, x, t);
         dual Spast = L / (taui0 * V0) * 0.5 * PastukhovLoss(u(0), u(2), Xi, Rm);
-        Ppast = (u(2) / u(0) + Xi) * Spast;
+        Ppast = u(2) / u(0) * (1 + Xi) * Spast;
     }
 
     if (useConstantOmega)
     {
         double Rval = R(x.val, t);
         double Vpval = Vprime(Rval);
-        double Bval = B(x.val, t);
         double coef = Vpval * Vpval * Rval * Rval * Rval * Rval;
 
         dual dV = domegadV(x, t);
         dual ghi = ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(2)) * lambda_hat(u(0), u(1), n0, p0)) * 3. / 10. * u(2);
-        Pvis = ghi * coef * dV * dV;
+        Pvis = ghi * dV * dV * coef;
 
-        dual G = -sigma(0); // / (coef);
-        Ppot = -G * dphi0dV(u, q, x, t) + pow(omega(Rval, t), 2) / M_PI * G;
+        dual G = -sigma(0); //-Gamma_hat(u, q, x, t);
+        // sigma(0);
+        //  Gamma_hat(u, q, x, t); // sigma(0); // / (coef);
+        Ppot = -G * dphi0dV(u, q, x, t) + 0.5 * pow(omega(Rval, t), 2) / M_PI * G;
     }
     dual Pcol = Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
     dual S = 2. / 3. * (Ppot + Pcol + Pvis + Ppast);
@@ -243,8 +247,8 @@ dual ThreeVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
     if (includeParallelLosses)
     {
         dual Xe = Chi_e(u, q, x, t); // phi0(u, q, x, t) * u(0) / u(1) * (1 - 1 / Rm);
-        dual Spast = L / (taue0 * V0) * PastukhovLoss(u(0), u(1), Xe, Rm);
-        Ppast = (u(1) / u(0) + Xe) * Spast;
+        dual Spast = 1 / ::sqrt(2) * L / (taue0 * V0) * PastukhovLoss(u(0), u(1), Xe, Rm);
+        Ppast = u(1) / u(0) * (1 + Xe) * Spast;
     }
 
     //
@@ -252,8 +256,11 @@ dual ThreeVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
     dual T = u(1) / u(0) * T0;
     dual TeV = T / (e_charge);
     Pbrem = -1e6 * 1.69e-32 * (n * n) * 1e-12 * sqrt(TeV); //(-5.34e3 * pow(n / 1e20, 2) * pow(TkeV, 0.5)) * L / (p0 * V0);
+    dual TikeV = u(2) / u(0) / 1000 * T0 / e_charge;
+    if (TikeV > 25)
+        TikeV = 25;
 
-    dual R = 3.68e-12 * pow(TeV / 1000, -2. / 3.) * exp(-19.94 * pow(TeV / 1000, -1. / 3.));
+    dual R = 3.68e-12 * pow(TikeV, -2. / 3.) * exp(-19.94 * pow(TikeV, -1. / 3.));
     // 1e-6 * n0 * n0 * R * u(0) * u(0);
     Pfus = sqrt(1 - 1 / Rm) * 1e6 * 5.6e-13 * n * n * 1e-12 * R; // n *n * 5.6e-13
 
