@@ -50,7 +50,7 @@ public:
 	using Index = size_t;
 	using Position = double;
 	Grid() = default;
-	Grid(Position lBound, Position uBound, Index nCells)
+	Grid(Position lBound, Position uBound, Index nCells, bool highGridBoundary = false)
 		: upperBound(uBound), lowerBound(lBound)
 	{
 		// Users eh?
@@ -63,18 +63,6 @@ public:
 		if ( nCells == 0 )
 			throw std::invalid_argument( "Strictly positive number of cells required to construct grid." );
 
-		Position cellLength = (upperBound - lowerBound)/static_cast<double>(nCells);
-		for ( Index i = 0; i < nCells - 1; i++)
-			gridCells.emplace_back(lowerBound + i*cellLength, lowerBound + (i+1)*cellLength);
-		gridCells.emplace_back(lowerBound + (nCells-1)*cellLength, upperBound);
-		
-		if ( gridCells.size() != nCells )
-			throw std::runtime_error( "Unable to construct grid." );
-	}
-
-	Grid(Position lBound, Position uBound, Index nCells, bool highGridBoundary)
-		: upperBound(uBound), lowerBound(lBound)
-	{
 		if(!highGridBoundary)
 		{
 			Position cellLength = abs(uBound-lBound)/static_cast<double>(nCells);
@@ -87,21 +75,28 @@ public:
 		}
 		else
 		{
-			double sCellLength = abs(uBound-lBound)/static_cast<double>(nCells-8)/4.0;
-			double mCellLength = abs(uBound-lBound)/static_cast<double>(nCells-8)/2.0;
-			double lCellLength = abs(uBound-lBound)/static_cast<double>(nCells-8);
-			for ( unsigned int i = 0; i < 4; i++)
-				gridCells.emplace_back(lBound + i*sCellLength, lBound + (i+1)*sCellLength);
-			for ( unsigned int i = 0; i < 2; i++)
-				gridCells.emplace_back(lBound + (i+2)*mCellLength, lBound + (i+3)*mCellLength);
-			for ( Index i = 0; i < nCells-12; i++)
-				gridCells.emplace_back(lBound + (i+2)*lCellLength, lBound + (i+3)*lCellLength);
-			for ( unsigned int i = 0; i < 2; i++)
-				gridCells.emplace_back(lBound + (i+2*(nCells-8)-4)*mCellLength, lBound + (i+2*(nCells-8)-3)*mCellLength);
-			for ( unsigned int i = 0; i < 3; i++)
-				gridCells.emplace_back(lBound + (i+4*(nCells-8)-4)*sCellLength, lBound + (i+4*(nCells-8)-3)*sCellLength);
-			gridCells.emplace_back(lBound + (4*(nCells-8)-1)*sCellLength, uBound);
+			// [ 15 % ] [ 70 % ] [ 15 % ] with 1/3rd of the cells each
+			double lBoundaryFraction = 0.15;
+			double uBoundaryFraction = 0.15;
+			double lBoundaryLayer = ( upperBound - lowerBound ) * ( lBoundaryFraction )       + lowerBound;
+			double uBoundaryLayer = ( upperBound - lowerBound ) * ( 1.0 - uBoundaryFraction ) + lowerBound;
+
+			unsigned int BoundaryCells = nCells/3;
+			unsigned int BulkCells = nCells - 2*BoundaryCells;
+
+			double lBoundaryLayerCellLength = ( lBoundaryLayer - lowerBound )/static_cast<double>( BoundaryCells );
+			double bulkCellLength = ( uBoundaryLayer - lBoundaryLayer )/static_cast<double>( BulkCells );
+			double uBoundaryLayerCellLength = ( upperBound - uBoundaryLayer )/static_cast<double>( BoundaryCells );
+
+			for ( Index i = 0; i < BoundaryCells; i++)
+				gridCells.emplace_back( lowerBound + i*lBoundaryLayerCellLength, lowerBound + (i+1)*lBoundaryLayerCellLength );
+			for ( Index i = 0; i < BulkCells; i++)
+				gridCells.emplace_back( lBoundaryLayer + i*bulkCellLength, lBoundaryLayer + ( i + 1 )*bulkCellLength );
+			for ( Index i = 0; i < BoundaryCells; i++)
+				gridCells.emplace_back( uBoundaryLayer + i * uBoundaryLayerCellLength, uBoundaryLayer + ( i + 1 ) * uBoundaryLayerCellLength );
 		}
+		if ( gridCells.size() != nCells )
+			throw std::runtime_error( "Unable to construct grid." );
 	}
 
 	Grid(const Grid& grid) = default;
