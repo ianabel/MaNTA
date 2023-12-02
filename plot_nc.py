@@ -6,6 +6,14 @@ import numpy as np
 
 def main():
 
+    electronMass = 9.1094e-31
+    ionMass = 1.6726e-27
+    protonMass = 1.6726e-27
+    e_charge = 1.60217663e-19
+    T0 = 1e3*e_charge
+    n0 = 1e20
+    p0= n0*T0
+
     data = Dataset('./Config/3VarMirror.nc')#xr.open_dataset("./Config/LinearDiffusion.nc")
     Vars = data.groups
     # plt.figure()
@@ -15,18 +23,18 @@ def main():
     x = data.variables["x"] 
     r = np.sqrt(np.array(x)/np.pi)
     #r = np.sqrt(np.array(x)*2)
-    for Var in Vars:
-        plt.figure()
-        for k in range(0,len(t),int(len(t)-1)):
-            plt.plot(x[:],data.groups[Var].variables["sigma"][k,:])
-        plt.title("sigma" + Var)
-        plt.show()
-        plt.figure()
-        for k in range(0,len(t),int(len(t)-1)):
-            plt.plot(x[:],data.groups[Var].variables["q"][k,:])
-            plt.plot(x[:],data.groups[Var].variables["u"][k,:])
-        plt.title("q" + Var)
-        plt.show()
+    # for Var in Vars:
+    #     plt.figure()
+    #     for k in range(0,len(t),int(len(t)-1)):
+    #         plt.plot(x[:],data.groups[Var].variables["sigma"][k,:])
+    #     plt.title("sigma" + Var)
+    #     plt.show()
+    #     plt.figure()
+    #     for k in range(0,len(t),int(len(t)-1)):
+    #         plt.plot(x[:],data.groups[Var].variables["q"][k,:])
+    #         plt.plot(x[:],data.groups[Var].variables["u"][k,:])
+    #     plt.title("q" + Var)
+    #     plt.show()
 
     
 
@@ -39,6 +47,7 @@ def main():
     Te = np.divide(p_e,n)
 
     ax.plot(r,data.groups["Var0"].variables["u"][-1,:],label = r"$\hat{n}$")
+   # ax.plot(r,data.groups["Var3"].variables["u"][-1,:],label = r"$\hat{h}$")
     ax.legend()
     plt.xlabel(r"$\hat{r}$")
     plt.figure()
@@ -49,11 +58,11 @@ def main():
     ax2.plot(r,Ti[-1,:],label = r"$\hat{T}_i$")
     ax2.legend()
     plt.xlabel(r"$\hat{r}$")
-    M0 = 20.0
+    M0 = 28.7
     shape = 10.0
     Rmin = 0.5
     Rmax = 1.0
-    omegaOffset = 3.0
+    omegaOffset = 2.5
     u_L = omegaOffset
     u_R = (omegaOffset * Rmin / Rmax)
     a = (np.arcsinh(u_L) - np.arcsinh(u_R)) / (Rmin - Rmax)
@@ -63,21 +72,22 @@ def main():
     C = 0.5 * (Rmin + Rmax);
     c = (np.pi / 2 - 3 * np.pi / 2) / (Rmin - Rmax)
     d = (np.pi / 2 - Rmin / Rmax * (3 * np.pi / 2)) / (c * (Rmin / Rmax - 1))
-    coef = (omegaOffset - M0 / C) * 1 / np.cos(c * (C - d))
+    coef = M0/C#(omegaOffset - M0 / C) * 1 / np.cos(c * (C - d))
 
 
-    #h_i = np.array(data.groups["Var3"].variables["u"])
-    #omega = h_i/(n*r*r)#np.sinh(a * (r - b)) - np.cos(c * (r - d)) * coef #* np.exp(-shape * (r - C) * (r - C))
-    #omega = np.squeeze(omega[-1,:])
+    # h_i = np.array(data.groups["Var3"].variables["u"])
+    # omega = h_i/(n*r*r)#np.sinh(a * (r - b)) - np.cos(c * (r - d)) * coef #* np.exp(-shape * (r - C) * (r - C))
+    # omega = np.squeeze(omega[-1,:])
     omega = np.sinh(a * (r - b)) - np.cos(c * (r - d)) * coef #* np.exp(-shape * (r - C) * (r - C))
-
+    w0 = np.sqrt(e_charge*1000/ionMass)
     M = r*omega/np.sqrt(Te)
+    v = r*omega*w0
     plt.figure()
     ax3 = plt.axes()
-    ax3.plot(r,M[-1,:],label =r"$M$")
+    ax3.plot(r,v,label =r"$v_\theta$")
     ax3.legend()
     plt.xlabel(r"$\hat{r}$")
-    plt.ylabel(r"M")
+    plt.ylabel(r"v")
 
 
     Rm = 3.3
@@ -86,63 +96,65 @@ def main():
 
     phi0 =  1 / (1 + tau) * (1 / Rm - 1) * r*r*omega * omega / 2;
 
-    Xe=  0.5 * (1 - 1 / Rm) * M2 * 1 / (tau + 1)
+    Xe =  0.5 * (1 - 1 / Rm) * M2 * 1 / (tau + 1)
+    Xi = 0.5 * tau / (1 + tau) * (1 - 1 / Rm) * M2
+    # plt.figure()
+    # ax4 = plt.axes()
+    # ax4.plot(r,Xe[-1,:], label=r"$\Xi_e$")
+    # ax4.legend()
 
-    plt.figure()
-    ax4 = plt.axes()
-    ax4.plot(r,Xe[-1,:], label=r"$\Xi_e$")
-    ax4.legend()
-    e = 1.6e-19
-    amu = 1.66e-27
-    mi = 2*amu
-    w0 = np.sqrt(e*1000/mi)
-    plt.figure()
-    v = r*omega*w0
-    ax5 = plt.axes()
-    ax5.plot(r,omega, label=r"$\omega$")
-    ax5.plot(r,phi0[-1,:],label=r"$\phi_0$")
-    ax5.legend()
+    # plt.figure()
+    
+    # ax5 = plt.axes()
+    # ax5.plot(r,omega, label=r"$\omega$")
+    # ax5.plot(r,phi0[-1,:],label=r"$\phi_0$")
+    # ax5.legend()
 
     n = np.squeeze(n[-1,:])*1e20
     TeV = np.squeeze(Te[-1,:]*1000)
-    Pbrem = -1e6 * 1.69e-32 * (n * n) * 1e-12 * np.sqrt(TeV)
+    Pbrem = -2*1e6 * 1.69e-32 * (n * n) * 1e-12 * np.sqrt(TeV)
     sv = 3.68e-12 * np.power(TeV / 1000, -2. / 3.) * np.exp(-19.94 * np.power(TeV / 1000, -1. / 3.))
     Pfus = np.sqrt(1 - 1 / Rm)* 1e6*  5.6e-13 * n * n * 1e-12 * sv
     Ltot = 2
     Pbremtot = 2*np.pi*Ltot*np.trapz(r*Pbrem,r)
-    Pfustot = 2*np.pi*Ltot*np.trapz(r*Pfus,r)
-    print(Pbremtot)
-    print(Pfustot)
+    Pfustot = 0.25*2*np.pi*Ltot*np.trapz(r*Pfus,r)
 
-    Sigma = 2;
+    Sigma = 2
     tau_hat = (1.0 / np.power(n/1e20, 5.0 / 2.0)) * (np.power(p_e, 3.0 / 2.0))
-    electronMass = 9.1094e-31
-    ionMass = 1.6726e-27
-    protonMass = 1.6726e-27
-    e_charge = 1.60217663e-19
-    T0 = 1e3*e_charge
-    n0 = 1e20
-    p0= n0*T0
+  
 
 
     Bmid = 4.5
     Om_e = e_charge*Bmid/electronMass
     lam = 23.0 - np.log(np.sqrt(n0 * 1e-6) / (T0/e_charge))
     taue0 = 3.44e11 * (1.0 / np.power(n0, 5.0 / 2.0)) * (np.power(p0 / e_charge, 3.0 / 2.0)) * 1 / lam
+    taui0 = np.sqrt(2)*np.sqrt(ionMass/electronMass)*taue0
     Gamma0 = p0 / (electronMass * Om_e * Om_e * taue0)
     V0 = Gamma0 / n0
     L = 1
     n= n/1e20
-    print(lam)
-    print(V0)
-    print(taue0)
     Spast = (-2 * n * Sigma / np.sqrt(np.pi) * 1 / tau_hat * 1 / np.log(Sigma * Rm) * np.exp(-Xe) / Xe)
     Spasttot = 2*np.pi*Ltot*np.trapz(r*np.squeeze(n0*V0/L*L/(taue0*V0)*Spast[-1,:]),r)
-    Ppaste = Te*(1+Xe)*Spast
-    print(Spasttot)
-    plt.figure()
-    ax6 = plt.axes()
-    ax6.plot(r,Spast[-1,:])
+    Ppaste = p0*V0/L*L/(taue0*V0)*Te*(1+Xe)*Spast
+    Ppasti = p0*V0/L*Ti*(1+Xi)*Spast
+    Ppastetot = 2*np.pi*Ltot*np.trapz(r*np.squeeze(Ppaste[-1,:]),r)
+
+    Ppasti = p0*V0/L*L/(taui0*V0)*Ti*(1+Xi)*Spast
+    Ppastitot = 2*np.pi*Ltot*np.trapz(r*np.squeeze(Ppasti[-1,:]),r)
+    V = np.sqrt(T0/ionMass)*Bmid*np.trapz(r,omega*r*r)
+    Te = np.squeeze(Te[-1,:])
+    rm = r[np.squeeze(Te)==np.max(Te)]
+    M = np.squeeze(M[-1,:])
+    Mmid = np.squeeze(M[r==rm])
+
+    print("Total bremsstrahlung power: ",Pbremtot)
+    print("Total alpha power: ",Pfustot)
+    print("Total parallel particle losses", Spasttot)
+    print("Total parallel power losses: ",Ppastetot+Ppastitot)
+    print("Total potential drop: ",V)
+    print("Central Mach number: ", Mmid)
+    
+    #ax6.plot(r,Spast[-1,:])
 
     # h_i = np.array(data.groups["Var3"].variables["u"])
     # w = np.sqrt(np.divide(h_i,r*r*n))
@@ -205,10 +217,10 @@ def main():
 #     plt.show()
 
 
-    plt.figure()
-    #plt.plot(x,data["Var0"][0,:])
-    plt.contourf(x[:],t[:],data.groups["Var1"].variables["u"][:,:])
-    plt.show()
+    # plt.figure()
+    # #plt.plot(x,data["Var0"][0,:])
+    # plt.contourf(x[:],t[:],data.groups["Var1"].variables["u"][:,:])
+    # plt.show()
     
 #     # plt.figure()
 #     # for i in range( int(length/10)):

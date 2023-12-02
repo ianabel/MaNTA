@@ -173,7 +173,7 @@ dual FourVarMirror::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual
     dual S = 0.0;
     dual Spast = 0.0;
     dual n = u(0) * n0;
-    dual T = u(1) / u(0) * T0;
+    dual T = u(2) / u(0) * T0;
     dual TeV = T / (e_charge);
 
     dual R = 1e-6 * 3.68e-12 * pow(TeV / 1000, -2. / 3.) * exp(-19.94 * pow(TeV / 1000, -1. / 3.));
@@ -196,7 +196,7 @@ dual FourVarMirror::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual
     default:
         break;
     }
-    return (S - tanh(10 * t) * Sfus + Spast);
+    return (S - Sfus + Spast);
 };
 
 dual FourVarMirror::Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
@@ -210,7 +210,9 @@ dual FourVarMirror::Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     }
     double Rval = R(x.val, t);
     dual coef = L / (h0 * V0);
-    dual S = (J0 / Rval) * coef * B(x.val, t) * Rval * Rval;
+    double c = 0.5 * (Rmin + Rmax);
+    dual g = tanh(1000 * t) * exp(-15 * (Rval - c) * (Rval - c));
+    dual S = (J0 * g / Rval) * coef * B(x.val, t) * Rval * Rval;
     return S + Spast; // 100 * Sn_hat(u, q, sigma, x, t); //+ u(3) / (u(0) * Rval * Rval) * Sn_hat(u, q, sigma, x, t);
 };
 
@@ -230,7 +232,7 @@ dual FourVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
         dual Rm = Bmax / B(x.val, t);
         dual Xi = Chi_i(u, q, x, t);
         dual Spast = L / (taui0 * V0) * 0.5 * PastukhovLoss(u(0), u(2), Xi, Rm);
-        Ppast = (u(2) / u(0) + Xi) * Spast;
+        Ppast = u(2) / u(0) * (1 + Xi) * Spast;
     }
 
     dual dV = coef * u(3) / u(0) * (q(3) / u(3) - q(0) / u(0) - 1 / (M_PI * Rval * Rval));
@@ -238,7 +240,7 @@ dual FourVarMirror::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     dual Pvis = ghi * dV * dV;
 
     dual G = -sigma(0); // / (coef);
-    dual Ppot = -G * dphi0dV(u, q, x, t) + u(3) * u(3) / (pow(Rval, 4) * u(0) * u(0) * M_PI) * G;
+    dual Ppot = -G * dphi0dV(u, q, x, t) + 0.5 * u(3) * u(3) / (pow(Rval, 4) * u(0) * u(0) * M_PI) * G;
     // dual Ppot = 0.0;
     //      dual Pvis = 0.0;
     //    u(3) * u(3) / (Rval * u(0) * u(0)) * G
@@ -280,7 +282,7 @@ dual FourVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     {
         dual Xe = Chi_e(u, q, x, t); // phi0(u, q, x, t) * u(0) / u(1) * (1 - 1 / Rm);
         dual Spast = L / (taue0 * V0) * PastukhovLoss(u(0), u(1), Xe, Rm);
-        Ppast = (u(1) / u(0) + Xe) * Spast;
+        Ppast = u(1) / u(0) * (1 + Xe) * Spast;
     }
 
     //
@@ -288,8 +290,11 @@ dual FourVarMirror::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dua
     dual T = u(1) / u(0) * T0;
     dual TeV = T / (e_charge);
     Pbrem = -1e6 * 1.69e-32 * (n * n) * 1e-12 * sqrt(TeV); //(-5.34e3 * pow(n / 1e20, 2) * pow(TkeV, 0.5)) * L / (p0 * V0);
+    dual TikeV = u(2) / u(0) / 1000 * T0 / e_charge;
+    if (TikeV > 25)
+        TikeV = 25;
 
-    dual R = 3.68e-12 * pow(TeV / 1000, -2. / 3.) * exp(-19.94 * pow(TeV / 1000, -1. / 3.));
+    dual R = 3.68e-12 * pow(TikeV, -2. / 3.) * exp(-19.94 * pow(TikeV, -1. / 3.));
     // 1e-6 * n0 * n0 * R * u(0) * u(0);
     Pfus = sqrt(1 - 1 / Rm) * 1e6 * 5.6e-13 * n * n * 1e-12 * R; // n *n * 5.6e-13
 
@@ -321,7 +326,7 @@ dual FourVarMirror::phi0(VectorXdual u, VectorXdual q, dual x, double t)
 dual FourVarMirror::dphi0dV(VectorXdual u, VectorXdual q, dual x, double t)
 {
     dual Rval = R(x.val, t);
-    dual dphi0dV = -phi0(u, q, x, t) / (M_PI * Rval * Rval);
+    dual dphi0dV = -2 * phi0(u, q, x, t) / (M_PI * Rval * Rval * Rval);
     auto dphi0du = gradient(phi0, wrt(u), at(u, q, x, t));
     auto qi = q.begin();
     for (auto &dphi0i : dphi0du)
