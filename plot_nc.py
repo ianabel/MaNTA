@@ -5,7 +5,9 @@ from netCDF4 import Dataset
 import numpy as np
 
 def main():
-
+    plt.rcParams.update({
+        'font.family': 'serif',
+    })
     electronMass = 9.1094e-31
     ionMass = 1.6726e-27
     protonMass = 1.6726e-27
@@ -58,17 +60,17 @@ def main():
     ax2.plot(r,Ti[-1,:],label = r"$\hat{T}_i$")
     ax2.legend()
     plt.xlabel(r"$\hat{r}$")
-    M0 = 28.7
+    M0 = 26.0
     shape = 10.0
     Rmin = 0.5
     Rmax = 1.0
-    omegaOffset = 2.5
+    omegaOffset = 5.0
     u_L = omegaOffset
     u_R = (omegaOffset * Rmin / Rmax)
     a = (np.arcsinh(u_L) - np.arcsinh(u_R)) / (Rmin - Rmax)
     b = (np.arcsinh(u_L) - Rmin / Rmax * np.arcsinh(u_R)) / (a * (Rmin / Rmax - 1))
 
-    shape = 10.0
+    shape = 20.0
     C = 0.5 * (Rmin + Rmax);
     c = (np.pi / 2 - 3 * np.pi / 2) / (Rmin - Rmax)
     d = (np.pi / 2 - Rmin / Rmax * (3 * np.pi / 2)) / (c * (Rmin / Rmax - 1))
@@ -78,7 +80,7 @@ def main():
     # h_i = np.array(data.groups["Var3"].variables["u"])
     # omega = h_i/(n*r*r)#np.sinh(a * (r - b)) - np.cos(c * (r - d)) * coef #* np.exp(-shape * (r - C) * (r - C))
     # omega = np.squeeze(omega[-1,:])
-    omega = np.sinh(a * (r - b)) - np.cos(c * (r - d)) * coef #* np.exp(-shape * (r - C) * (r - C))
+    omega = np.sinh(a * (r - b)) - np.cos(c * (r - d)) * coef* np.exp(-shape * (r - C) * (r - C))
     w0 = np.sqrt(e_charge*1000/ionMass)
     M = r*omega/np.sqrt(Te)
     v = r*omega*w0
@@ -87,7 +89,7 @@ def main():
     ax3.plot(r,v,label =r"$v_\theta$")
     ax3.legend()
     plt.xlabel(r"$\hat{r}$")
-    plt.ylabel(r"v")
+    plt.ylabel(r"$v_\theta (m/s)$")
 
 
     Rm = 3.3
@@ -146,13 +148,46 @@ def main():
     rm = r[np.squeeze(Te)==np.max(Te)]
     M = np.squeeze(M[-1,:])
     Mmid = np.squeeze(M[r==rm])
+    Tiev = Ti[-1,:]*T0/e_charge
+    Teev = Te*T0/e_charge
+    Temid = np.squeeze(Teev[r==rm])
+    Timid = np.squeeze(Tiev[r==rm])
 
+
+
+    Vp = 2*np.pi
+    c2 = r*r*Vp 
+    
+    domegadR = c2*(a*np.cosh(a*(r-b)) + coef*(c*np.sin(c*(r-d))*np.exp(-shape * (r - C) * (r - C))+np.cos(c*(r-d))*2*shape*(r-C)*np.exp(-shape * (r - C) * (r - C))))
+    domegadV = domegadR/(2*Vp*r)
+    Pvis = np.sqrt(ionMass/electronMass)*1/np.sqrt(2)*1/tau_hat[-1,:]* 3. / 10. * p_i[-1,:]*domegadV*domegadV
+
+    Pvis = p0*V0/L*np.squeeze(Pvis)
+    plt.figure()
+    plt.plot(r,Pvis)
+    Pvistot = 2*np.pi*Ltot*np.trapz(r*Pvis,r)
+    
     print("Total bremsstrahlung power: ",Pbremtot)
     print("Total alpha power: ",Pfustot)
     print("Total parallel particle losses", Spasttot)
     print("Total parallel power losses: ",Ppastetot+Ppastitot)
     print("Total potential drop: ",V)
     print("Central Mach number: ", Mmid)
+    print("Total viscous heating: ", Pvistot)
+    print("Central ion temp", Timid)
+    print("Central electron temp", Temid)
+
+    sourceStrength = 4500.0
+    sourceCenter =  2.0
+    sourceWidth = 0.6
+    Sn = n0*V0/L*sourceStrength * np.exp(-1 / sourceWidth * (np.array(x) - sourceCenter) * (np.array(x) - sourceCenter))
+    plt.figure()
+    plt.plot(r,Sn)
+
+    Sntot = 2*np.pi*Ltot*np.trapz(r*Sn,r)
+    print("Particle Source",Sntot)
+    plt.xlabel(r"$\hat{r}$")
+    plt.ylabel(r"$S_n (m^{-3}s^{-1})$")
     
     #ax6.plot(r,Spast[-1,:])
 
