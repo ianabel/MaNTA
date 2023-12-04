@@ -38,44 +38,44 @@ bool AdjointPoster::isLowerBoundaryDirichlet( Index ) const { return false; };
 bool AdjointPoster::isUpperBoundaryDirichlet( Index ) const { return true; };
 
 
-Value AdjointPoster::SigmaFn( Index, const Values &uV, const Values & qV, Position, Time )
+Value AdjointPoster::SigmaFn( Index, const State &s, Position, Time )
 {
-	double u = uV[ 0 ],q = qV[ 0 ];
+	double u = s.Variable[ 0 ],q = s.Derivative[ 0 ];
 
 	double NonlinearKappa = a / ::pow( u, 1.5 );
 	return NonlinearKappa * q;
 }
 
-Value AdjointPoster::Sources( Index, const Values &uV, const Values &, const Values &, Position x, Time )
+Value AdjointPoster::Sources( Index, const State &, Position x, Time )
 {
 	double y = ( x - SourceCentre );
 	return T_s*::exp( -y*y/SourceWidth );
 }
 
-void AdjointPoster::dSigmaFn_dq( Index, Values& v, const Values& uV, const Values&, Position, Time )
+void AdjointPoster::dSigmaFn_dq( Index, Values& v, const State &s, Position, Time )
 {
-	double u = uV[ 0 ];
+	double u = s.Variable[ 0 ];
 	double NonlinearKappa = a / ::pow( u, 1.5 );
 	v[ 0 ] = NonlinearKappa;
 };
 
-void AdjointPoster::dSigmaFn_du( Index, Values& v, const Values& uV, const Values& qV, Position, Time )
+void AdjointPoster::dSigmaFn_du( Index, Values& v, const State& s, Position, Time )
 {
-	double u = uV[ 0 ], q = qV[ 0 ];
+	double u = s.Variable[ 0 ], q = s.Derivative[ 0 ];
 	v[ 0 ] = -( 3.0/2.0 )*( a / ::pow( u, 2.5 ) )*q;
 };
 
-void AdjointPoster::dSources_du( Index, Values&v , const Values &, const Values &, Position x, Time )
+void AdjointPoster::dSources_du( Index, Values &v, const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void AdjointPoster::dSources_dq( Index, Values&v , const Values &, const Values &, Position, Time )
+void AdjointPoster::dSources_dq( Index, Values &v, const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void AdjointPoster::dSources_dsigma( Index, Values&v , const Values &, const Values &, Position, Time )
+void AdjointPoster::dSources_dsigma( Index, Values &v, const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
