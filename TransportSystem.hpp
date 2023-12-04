@@ -54,10 +54,9 @@ public:
 		return 0.0;
 	}
 
-	virtual void ScalarGPrime( Index i, Values &v, const DGSoln &soln, Time t ) {
+	virtual void ScalarGPrime( Index i, State &v, const DGSoln &soln, Time t ) {
 		if ( nScalars != 0 )
 			throw std::logic_error( "nScalars > 0 but no scalar G provided" );
-		v.setZero();
 	}
 
 	virtual std::string getVariableName(Index i)
