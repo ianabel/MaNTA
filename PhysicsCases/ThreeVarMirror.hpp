@@ -56,7 +56,7 @@ private:
     static double B(double x, double t);
     static double Bmax;
 
-    const double Zi = 1;
+    // const double Zi = 1;
 
     REGISTER_FLUX_HEADER(ThreeVarMirror)
 };

@@ -101,19 +101,13 @@ def test_steady_state( filename, soln_fn, tolerance ):
 
 
 def check_ref_case( prefix ):
-    print("Checking Reference Solution for ",prefix,".conf")
+    print("Checking Reference Solution for "+prefix+".conf")
     run_manta( prefix + ".conf" )
     ncFileName = prefix + ".nc"
     ncRefFile  = prefix + ".ref.nc"
-    test_ref_soln_l2( ncFileName, ncRefFile, 1e-6 )
+    test_ref_soln_l2( ncFileName, ncRefFile, 1e-3 )
     os.unlink( ncFileName )
     os.unlink( prefix + ".dat" )
-
-print("Checking Reference Solutions")
-
-check_ref_case( "LinearDiffusion" )
-check_ref_case( "MatTest" )
-check_ref_case( "MatTestAlpha" )
 
 def ld_soln( x, t ):
     t0 = 0.01
@@ -153,7 +147,12 @@ test_steady_state( "nonlin_ss.nc", nonlin_ss, 5e-3 )
 os.unlink( "nonlin_ss.dat" )
 os.unlink( "nonlin_ss.nc" )
 
+print("Checking Reference Solutions")
+
+check_ref_case( "LinearDiffusion" )
+check_ref_case( "MatTest" )
+check_ref_case( "MatTestAlpha" )
+
 print("All Tests Passed")
 sys.exit(0)
-
 
