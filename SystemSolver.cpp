@@ -20,7 +20,7 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, do
 
 
 SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, TransportSystem *transpSystem)
-	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), MXSolvers( Grid.getNCells() ), y(nVars, grid, k), dydt(nVars, grid, k), yJac(nVars, grid, k),
+	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars( transpSystem->getNumScalars() ), MXSolvers( Grid.getNCells() ), y(nVars, grid, k), dydt(nVars, grid, k), yJac(nVars, grid, k),
 	  dt(Dt), problem(transpSystem), tauc(tau)
 {
 	yJacMem = new double[ yJac.getDoF() ];
@@ -551,10 +551,10 @@ void SystemSolver::solveJacEq(N_Vector g, N_Vector delY)
 void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
 {
 	// DGsoln object that will map the data from delY
-	DGSoln del_y(nVars, grid, k);
+	DGSoln del_y(nVars, grid, k, nScalars );
 #ifdef DEBUG
 	// Provide view on g for debugging
-	DGSoln gMap( nVars, grid, k );
+	DGSoln gMap( nVars, grid, k, nScalars );
 	assert(static_cast<size_t>(N_VGetLength(g)) == gMap.getDoF());
 	gMap.Map( N_VGetArrayPointer( g ) );
 #endif
@@ -675,6 +675,12 @@ int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector re
 	VectorWrapper resVec( N_VGetArrayPointer( resval ), N_VGetLength( resval ) );
 
 	resVec.setZero();
+
+	// residual.Scalar( x ) = problem->ScalarG( ... )
+	for ( Index i = 0; i < nScalars; ++i )
+	{
+		res.Scalar( i ) = problem->ScalarG( i, Y_h, tres );
+	}
 
 	// residual.lambda = C*sigma + G*u + H*lambda - L 
 

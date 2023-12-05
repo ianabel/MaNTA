@@ -1,5 +1,5 @@
 
-#include "GCT.hpp"
+#include "GlobalConstraintTest.hpp"
 
 #include <boost/math/quadrature/gauss_kronrod.hpp>
 
@@ -96,9 +96,19 @@ Value GCT::InitialDerivative( Index, Position ) const
 	return 0.0;
 }
 
-Value ScalarG( Index i, const DGSoln& soln, Time t )
+Value GCT::ScalarG( Index i, const DGSoln& soln, Time t )
 {
 	// J = Int_0^1 u
-	return boost::math::quadrature::gauss_kronrod<double, 61>::integrate( soln.u( 0 ), 0, 1, 0 );
+	// So G is J - Int_0^1 u 
+	return soln.Scalar( 0 ) - boost::math::quadrature::gauss_kronrod<double, 15>::integrate( soln.u( 0 ), 0, 1 );
+}
+
+// Provides Int_I ( delta G / delta {u,q,sigma} * p(x) )
+void GCT::ScalarGPrime( Index i, State &v, const DGSoln &soln, std::function<double( double )> p, Interval I, Time t )
+{
+	// For our problem delta G/delta u = -1 ; dG/dJ = 1; and all other derivatives vanish
+	new ( &v ) State( 1, 1 ); // reinit and zero
+	v.Variable[ 0 ] = -1.0 * boost::math::quadrature::gauss_kronrod<double, 15>::integrate( p, I.x_l, I.x_u );
+	v.Scalars[ 0 ] = 1.0; // Scalar derivatives are plain derivatives.
 }
 

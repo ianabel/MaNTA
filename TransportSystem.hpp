@@ -12,6 +12,7 @@
 
  */
 
+
 class TransportSystem
 {
 public:
@@ -54,7 +55,7 @@ public:
 		return 0.0;
 	}
 
-	virtual void ScalarGPrime( Index i, State &v, const DGSoln &soln, Time t ) {
+	virtual void ScalarGPrime( Index i, State &v, const DGSoln &soln, std::function<double( double )> p, Interval I, Time t ) {
 		if ( nScalars != 0 )
 			throw std::logic_error( "nScalars > 0 but no scalar G provided" );
 	}

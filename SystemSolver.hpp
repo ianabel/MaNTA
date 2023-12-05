@@ -94,6 +94,7 @@ private:
 	unsigned int k;		 // polynomial degree per cell
 	unsigned int nCells; // Total cell count
 	unsigned int nVars;	 // Total number of variables
+	unsigned int nScalars;	 // Total number of variables
 
 	using EigenCellwiseSolver = Eigen::PartialPivLU<Matrix>;
 	using EigenGlobalSolver = Eigen::FullPivLU<Matrix>;

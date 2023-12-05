@@ -44,7 +44,7 @@ class GCT : public TransportSystem {
 		// This problem has Scalars...
 
 		virtual Value ScalarG( Index i, const DGSoln& soln, Time t ) override;
-		virtual void ScalarGPrime( Index i, State &v, const DGSoln &soln, Time t ) override;
+		virtual void ScalarGPrime( Index i, State &v, const DGSoln &soln, std::function<double( double )> p, Interval I, Time t ) override;
 
 
 private:
