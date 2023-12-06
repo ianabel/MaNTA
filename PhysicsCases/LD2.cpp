@@ -48,37 +48,37 @@ bool LD2::isLowerBoundaryDirichlet( Index ) const { return true; };
 bool LD2::isUpperBoundaryDirichlet( Index ) const { return true; };
 
 
-Value LD2::SigmaFn( Index, const Values &, const Values & q, Position, Time )
+Value LD2::SigmaFn( Index, const State &s, Position, Time )
 {
-	return kappa * q[ 0 ];
+	return kappa * s.Derivative[ 0 ];
 }
 
-Value LD2::Sources( Index, const Values &, const Values &, const Values &, Position, Time )
+Value LD2::Sources( Index, const State &, Position, Time )
 {
 	return 0.0;
 }
 
-void LD2::dSigmaFn_dq( Index, Values& v, const Values&, const Values&, Position, Time )
+void LD2::dSigmaFn_dq( Index, Values& v, const State &, Position, Time )
 {
 	v[ 0 ] = kappa;
 };
 
-void LD2::dSigmaFn_du( Index, Values& v, const Values&, const Values&, Position, Time )
+void LD2::dSigmaFn_du( Index, Values& v, const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void LD2::dSources_du( Index, Values&v , const Values &, const Values &, Position, Time )
+void LD2::dSources_du( Index, Values&v , const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void LD2::dSources_dq( Index, Values&v , const Values &, const Values &, Position, Time )
+void LD2::dSources_dq( Index, Values&v , const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void LD2::dSources_dsigma( Index, Values&v , const Values &, const Values &, Position, Time )
+void LD2::dSources_dsigma( Index, Values&v , const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };

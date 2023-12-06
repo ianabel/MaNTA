@@ -44,38 +44,37 @@ Value LinearDiffusion::UpperBoundary(Index, Time) const
 bool LinearDiffusion::isLowerBoundaryDirichlet(Index) const { return !lowerNeumann; };
 bool LinearDiffusion::isUpperBoundaryDirichlet(Index) const { return true; };
 
-Value LinearDiffusion::SigmaFn(Index, const Values &, const Values &q, Position x, Time)
+Value LinearDiffusion::SigmaFn(Index, const State &s, Position x, Time)
 {
-
-	return kappa * q[0];
+	return kappa * s.Derivative[0];
 }
 
-Value LinearDiffusion::Sources(Index, const Values &, const Values &, const Values &, Position, Time)
+Value LinearDiffusion::Sources(Index, const State &, Position, Time)
 {
 	return 0.0;
 }
 
-void LinearDiffusion::dSigmaFn_dq(Index, Values &v, const Values &, const Values &, Position, Time)
+void LinearDiffusion::dSigmaFn_dq(Index, Values &v, const State &, Position, Time)
 {
 	v[0] = kappa;
 };
 
-void LinearDiffusion::dSigmaFn_du(Index, Values &v, const Values &, const Values &, Position, Time)
+void LinearDiffusion::dSigmaFn_du(Index, Values &v, const State &, Position, Time)
 {
 	v[0] = 0.0;
 };
 
-void LinearDiffusion::dSources_du(Index, Values &v, const Values &, const Values &, Position, Time)
+void LinearDiffusion::dSources_du(Index, Values &v, const State &, Position, Time)
 {
 	v[0] = 0.0;
 };
 
-void LinearDiffusion::dSources_dq(Index, Values &v, const Values &, const Values &, Position, Time)
+void LinearDiffusion::dSources_dq(Index, Values &v, const State &, Position, Time)
 {
 	v[0] = 0.0;
 };
 
-void LinearDiffusion::dSources_dsigma(Index, Values &v, const Values &, const Values &, Position, Time)
+void LinearDiffusion::dSources_dsigma(Index, Values &v, const State &, Position, Time)
 {
 	v[0] = 0.0;
 };
