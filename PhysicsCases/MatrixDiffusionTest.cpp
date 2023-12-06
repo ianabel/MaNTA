@@ -80,7 +80,8 @@ bool MatrixDiffusionTest::isUpperBoundaryDirichlet(Index) const { return true; }
 
 Value MatrixDiffusionTest::SigmaFn(Index i, const State &s, Position, Time)
 {
-	auto sigma = Kappa * s.Derivative[ 0 ];
+	Eigen::Map<const Vector> qVec( s.Derivative.data(), s.Derivative.size() );
+	auto sigma = Kappa * qVec;
 
 	return sigma( i );
 }
