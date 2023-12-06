@@ -106,7 +106,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 				 - D_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * u_vec 
 				 - E_cellwise[i].block(var * (k + 1), var * 2, k + 1, 2) * lamCell 
 				 + RF_cellwise[i].block(nVars * (k + 1) + var * (k + 1), 0, k + 1, 1) 
-				 - S_cellwise
+				 + S_cellwise
 				 );
 			// <cellwise derivative matrix> * dydt.u( var ).getCoeff( i ).second;
 		}
@@ -630,6 +630,8 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
 	*/
 
 	// Now find del sigma, del q and del u to eventually find del Y
+	// this can be done in parallel over each cell
+	// #pragma omp parallel for
 	for (Index i = 0; i < nCells; i++)
 	{
 		Vector delSQU(nVars * SQU_DOF);
@@ -697,7 +699,7 @@ int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector re
 		}
 	}
 
-
+	// #pragma omp parallel for
 	for (Index i = 0; i < nCells; i++)
 	{
 		Interval I = grid[i];
@@ -761,6 +763,14 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
 	DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY));
 
 	out << "# t = " << t << std::endl;
+	for ( Index v = 0; v < nVars; ++v )
+	{
+		out << "# Lambda (" << v << ") = ";
+		for ( Index i = 0; i < nCells; ++i )
+			out << tmp_y.lambda( v )[ i ] << ", ";
+		out << tmp_y.lambda( v )[ nCells ] << std::endl;
+	}
+
 	double delta_x = (grid.upperBoundary() - grid.lowerBoundary()) * (1.0 / (nOut - 1.0));
 	for (int i = 0; i < nOut; ++i)
 	{
@@ -778,26 +788,18 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
 	out << std::endl;
 }
 
-/*
-void SystemSolver::print( std::ostream& out, double t, int nOut, int var )
-{
-
-	out << "# t = " << t << std::endl;
-	double delta_x = ( grid.upperBoundary() - grid.lowerBoundary() ) * ( 1.0/( nOut - 1.0 ) );
-	for ( int i=0; i<nOut; ++i )
-	{
-		double x = static_cast<double>( i )*delta_x + grid.lowerBoundary();
-		out << x << "\t" << y.u( var )( x ) << "\t" << y.q( var )( x ) << "\t" << y.sigma( var )( x ) << std::endl;
-	}
-	out << std::endl;
-	out << std::endl; // Two blank lines needed to make gnuplot happy
-}
-*/
-
 void SystemSolver::print(std::ostream &out, double t, int nOut)
 {
 
 	out << "# t = " << t << std::endl;
+	for ( Index v = 0; v < nVars; ++v )
+	{
+		out << "# Lambda (" << v << ") = ";
+		for ( Index i = 0; i < nCells; ++i )
+			out << y.lambda( v )[ i ] << ", ";
+		out << y.lambda( v )[ nCells ] << std::endl;
+	}
+
 	double delta_x = (grid.upperBoundary() - grid.lowerBoundary()) * (1.0 / (nOut - 1.0));
 	for (int i = 0; i < nOut; ++i)
 	{

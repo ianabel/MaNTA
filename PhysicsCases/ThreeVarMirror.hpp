@@ -36,12 +36,27 @@ private:
     static dual Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t);
     static dual Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t);
 
+    static dual omega(dual R, double t);
+    static double domegadV(dual x, double t);
+    static dual omegaOffset;
+    static bool useConstantOmega;
+    static bool includeParallelLosses;
+
+    static dual phi0(VectorXdual u, VectorXdual q, dual x, double t);
+    static dual dphi0dV(VectorXdual u, VectorXdual q, dual x, double t);
+    static dual Chi_e(VectorXdual u, VectorXdual q, dual x, double t);
+    static dual Chi_i(VectorXdual u, VectorXdual q, dual x, double t);
+
     static double Rmin;
     static double Rmax;
+    static dual M0;
     static double psi(double R);
     static double V(double R);
     static double Vprime(double R);
     static double B(double x, double t);
+    static double Bmax;
+
+    // const double Zi = 1;
 
     REGISTER_FLUX_HEADER(ThreeVarMirror)
 };

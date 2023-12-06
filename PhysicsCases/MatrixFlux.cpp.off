@@ -48,15 +48,15 @@ dual MatrixFlux::F3(VectorXdual u, VectorXdual q, dual x, double t)
 
 dual MatrixFlux::S1(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    return 0.0;
+    return u(0) + q(0) + sigma(0);
 };
 
 // look at ion and electron sources again -- they should be opposite
 dual MatrixFlux::S2(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    return 100 * (u(2) - u(1));
+    return u(1) + q(1) + sigma(1);
 };
 dual MatrixFlux::S3(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
 {
-    return -100 * (u(2) - u(1));
+    return u(2) + q(2) + sigma(2);
 };

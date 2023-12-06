@@ -129,6 +129,78 @@ BOOST_AUTO_TEST_CASE(flux_values)
     BOOST_TEST(problem.SigmaFn(1, u, q, x, t) == PeFlux);
     BOOST_TEST(problem.SigmaFn(2, u, q, x, t) == PiFlux);
 
+    Values dS1du(3);
+    dS1du << 1.0, 0.0, 0.0;
+
+    Values dS1dq(3);
+    dS1dq << 1.0, 0.0, 0.0;
+
+    Values dS1dsigma(3);
+    dS1dsigma << 1.0, 0.0, 0.0;
+
+    problem.dSources_du(0, grad, u, q, x, t);
+    BOOST_TEST(grad(0) == dS1du(0));
+    BOOST_TEST(grad(1) == dS1du(1));
+    BOOST_TEST(grad(2) == dS1du(2));
+
+    problem.dSources_dq(0, grad, u, q, x, t);
+    BOOST_TEST(grad(0) == dS1dq(0));
+    BOOST_TEST(grad(1) == dS1dq(1));
+    BOOST_TEST(grad(2) == dS1dq(2));
+
+    problem.dSources_dsigma(0, grad, u, q, x, t);
+    BOOST_TEST(grad(0) == dS1dsigma(0));
+    BOOST_TEST(grad(1) == dS1dsigma(1));
+    BOOST_TEST(grad(2) == dS1dsigma(2));
+
+    Values dS2du(3);
+    dS2du << 0.0, 1.0, 0.0;
+
+    Values dS2dq(3);
+    dS2dq << 0.0, 1.0, 0.0;
+
+    Values dS2dsigma(3);
+    dS2dsigma << 0.0, 1.0, 0.0;
+
+    problem.dSources_du(1, grad, u, q, x, t);
+    BOOST_TEST(grad(0) == dS2du(0));
+    BOOST_TEST(grad(1) == dS2du(1));
+    BOOST_TEST(grad(2) == dS2du(2));
+
+    problem.dSources_dq(1, grad, u, q, x, t);
+    BOOST_TEST(grad(0) == dS2dq(0));
+    BOOST_TEST(grad(1) == dS2dq(1));
+    BOOST_TEST(grad(2) == dS2dq(2));
+
+    problem.dSources_dsigma(1, grad, u, q, x, t);
+    BOOST_TEST(grad(0) == dS2dsigma(0));
+    BOOST_TEST(grad(1) == dS2dsigma(1));
+    BOOST_TEST(grad(2) == dS2dsigma(2));
+
+    Values dS3du(3);
+    dS3du << 0.0, 0.0, 1.0;
+
+    Values dS3dq(3);
+    dS3dq << 0.0, 0.0, 1.0;
+
+    Values dS3dsigma(3);
+    dS3dsigma << 0.0, 0.0, 1.0;
+
+    problem.dSources_du(2, grad, u, q, x, t);
+    BOOST_TEST(grad(0) == dS3du(0));
+    BOOST_TEST(grad(1) == dS3du(1));
+    BOOST_TEST(grad(2) == dS3du(2));
+
+    problem.dSources_dq(2, grad, u, q, x, t);
+    BOOST_TEST(grad(0) == dS3dq(0));
+    BOOST_TEST(grad(1) == dS3dq(1));
+    BOOST_TEST(grad(2) == dS3dq(2));
+
+    problem.dSources_dsigma(2, grad, u, q, x, t);
+    BOOST_TEST(grad(0) == dS3dsigma(0));
+    BOOST_TEST(grad(1) == dS3dsigma(1));
+    BOOST_TEST(grad(2) == dS3dsigma(2));
+
     // double SnTest = 9.01393906661699162441436783410609e-01;
     // double SPeTest =
     //     -1.02185418842517030668659572256729e+01;

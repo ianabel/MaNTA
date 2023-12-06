@@ -7,6 +7,7 @@
 #include <iostream>
 #include <fstream>
 #include <memory>
+#include <filesystem>
 
 #include "Types.hpp"
 #include "SystemSolver.hpp"
@@ -194,16 +195,9 @@ void SystemSolver::runSolver(std::string inputFile)
 	Diagnostic diagnostic(system, system->plasma);
 	*/
 
-	//------------------------------Solve------------------------------
-	// Update initial solution to be within tolerance of the residual equation
-	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
-	if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
-	{
-		throw std::runtime_error("IDACalcIC could not complete");
-	}
-
 	// Initialise text output and write out initial condition massaged by CalcIC
-	std::string baseName = inputFile.substr(0, inputFile.rfind("."));
+	std::filesystem::path inputFilePath( inputFile );
+	std::string baseName = inputFilePath.stem();
 	std::ofstream out0(baseName + ".dat");
 
 	out0 << "# Time indexes blocks. " << std::endl;
@@ -213,17 +207,40 @@ void SystemSolver::runSolver(std::string inputFile)
 		out0 << "\t" << "var" << v << " u" << "\t" << "var" << v << " q" << "\t" << "var" << v << " sigma" << "\t" << "var" << v << " source";
 	out0 << std::endl;
 
-	print(out0, t0, nOut);
 	std::ofstream dydt_out,res_out;
+
 	if ( physics_debug ) {
 		dydt_out.open(baseName + ".dydt.dat");
+		dydt_out << "# dydt before CalcIC" << std::endl;
+		print( dydt_out, t0, nOut, dYdt );
 		res_out.open(baseName + ".res.dat");
+		residual( t0, Y, dYdt, res );
+		res_out << "# Residual l_inf norm at t = " << t0 << " (pre-calcIC) is " << N_VMaxNorm( res ) << std::endl;
+		print( res_out, t0, nOut, res );
+	}
 
+	//------------------------------Solve------------------------------
+	// Update initial solution to be within tolerance of the residual equation
+	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
+	if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
+	{
+		throw std::runtime_error("IDACalcIC could not complete");
+	}
+
+	long int nresevals = 0;
+	IDAGetNumResEvals( IDA_mem, &nresevals );
+	std::cerr << "Number of Residual Evaluations due to IDACalcIC " << nresevals << std::endl;
+
+
+	print(out0, t0, nOut);
+	if ( physics_debug ) {
+
+		dydt_out << "# After CalcIC " << std::endl;
 		print( dydt_out, t0, nOut, dYdt );
 
 		residual( t0, Y, dYdt, res );
 
-		res_out << "Residual l_inf norm at t = " << t0 << " is " << N_VMaxNorm( res ) << std::endl;
+		res_out << "# Residual l_inf norm at t = " << t0 << " (post-CalcIC) is " << N_VMaxNorm( res ) << std::endl;
 	}
 
 	initialiseNetCDF(baseName + ".nc", nOut);
@@ -243,10 +260,6 @@ void SystemSolver::runSolver(std::string inputFile)
 		std::cerr << "Initial time t = " << t0 << " is after the end of the simulation at t = " << tFinal << std::endl;
 		throw std::runtime_error( "Simulation ends before it begins." );
 	}
-
-	long int nresevals = 0;
-	IDAGetNumResEvals( IDA_mem, &nresevals );
-	std::cerr << "Number of Residual Evaluations due to IDACalcIC " << nresevals << std::endl;
 
 	// Solving Loop
 	 while ( tret < tFinal ) {
@@ -271,7 +284,7 @@ void SystemSolver::runSolver(std::string inputFile)
 		if ( physics_debug ) {
 			print( dydt_out, tret, nOut, dYdt );
 			residual( tret, Y, dYdt, res );
-			res_out << "Residual l_inf norm at t = " << tret << " is " << N_VMaxNorm( res ) << " ; L1 Norm is " << N_VL1Norm( res ) << std::endl;
+			res_out << "# Residual l_inf norm at t = " << tret << " is " << N_VMaxNorm( res ) << " ; L1 Norm is " << N_VL1Norm( res ) << std::endl;
 		}
 		WriteTimeslice( tret );
 
