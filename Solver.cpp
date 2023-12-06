@@ -7,6 +7,7 @@
 #include <iostream>
 #include <fstream>
 #include <memory>
+#include <filesystem>
 
 #include "Types.hpp"
 #include "SystemSolver.hpp"
@@ -195,7 +196,8 @@ void SystemSolver::runSolver(std::string inputFile)
 	*/
 
 	// Initialise text output and write out initial condition massaged by CalcIC
-	std::string baseName = inputFile.substr(0, inputFile.rfind("."));
+	std::filesystem::path inputFilePath( inputFile );
+	std::string baseName = inputFilePath.stem();
 	std::ofstream out0(baseName + ".dat");
 
 	out0 << "# Time indexes blocks. " << std::endl;
