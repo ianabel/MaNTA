@@ -542,6 +542,13 @@ void SystemSolver::setJacEvalY( N_Vector & yy )
 // HDG Jacobian solve
 void SystemSolver::solveJacEq(N_Vector g, N_Vector delY)
 {
+	// allocate temporary working space for gauss elimination of scalars.
+	N_Vector d = N_VClone( delY );
+	N_Vector e[ nScalars ];
+	for ( int i=0; i < nScalars; ++i )
+		e[ i ] = N_VClone( delY );
+
+
 	solveHDGJac( g, delY );
 }
 
