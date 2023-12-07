@@ -54,7 +54,7 @@ public:
 		: upperBound(uBound), lowerBound(lBound)
 	{
 		// Users eh?
-		if ( upperBound < lowerBound ) 
+		if ( upperBound < lowerBound )
 			std::swap( upperBound, lowerBound );
 
 		if ( upperBound - lowerBound < 1e-14 )
@@ -65,10 +65,10 @@ public:
 
 		if(!highGridBoundary)
 		{
-			Position cellLength = abs(uBound-lBound)/static_cast<double>(nCells);
+			Position cellLength = abs(upperBound-lowerBound)/static_cast<double>(nCells);
 			for ( Index i = 0; i < nCells - 1; i++)
-				gridCells.emplace_back(lBound + i*cellLength, lBound + (i+1)*cellLength);
-			gridCells.emplace_back(lBound + (nCells-1)*cellLength, uBound);
+				gridCells.emplace_back(lowerBound + i*cellLength, lowerBound + (i+1)*cellLength);
+			gridCells.emplace_back(lowerBound + (nCells-1)*cellLength, upperBound);
 
 			if ( gridCells.size() != nCells )
 				throw std::runtime_error( "Unable to construct grid." );
