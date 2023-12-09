@@ -15,8 +15,8 @@ Note e * B^-1 * w is an outer product giving a N_HDG x N_HDG matrix
 
 Woodbury tells us that the solution to this is
 
-x = g - [ e * ( B + e * w )^-1 * w ] * g
+x = g - [ e * ( B + w * e )^-1 * w ] * g
 
-But B + e * w is a N_scalar x N_scalar matrix which one can just invert directly.
+But B + w * e is a N_scalar x N_scalar matrix which one can just invert directly.
 
 Thus we need ( 1 + N_scalar ) operations of A^-1. 

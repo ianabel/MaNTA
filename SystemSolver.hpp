@@ -108,6 +108,11 @@ private:
 	std::vector<Vector> RF_cellwise;
 	std::vector<Matrix> CG_cellwise;
 	std::vector<Matrix> A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise;
+
+	std::vector<Matrix> V_cellwise;
+	std::vector<Matrix> W_cellwise;
+	Matrix N_global; // Scalar-scalar coupling matrix
+
 	//?Point the duplicated matrices to the same place?
 	std::vector<EigenCellwiseSolver> MXSolvers;
 

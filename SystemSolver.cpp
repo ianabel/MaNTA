@@ -370,6 +370,9 @@ void SystemSolver::initialiseMatrices()
 		XMats.emplace_back(X);
 
 		MXSolvers.emplace_back( nVars * SQU_DOF );
+
+		// Just resize and zero the V matrix
+		V_cellwise.emplace_back( nVars * nCells * U_DOF, nScalars );
 	}
 	// Factorise the global H matrix
 	H_global.compute(HGlobalMat);
@@ -390,6 +393,7 @@ void SystemSolver::clearCellwiseVecs()
 	C_cellwise.clear();
 	G_cellwise.clear();
 	H_cellwise.clear();
+	V_cellwise.clear();
 }
 
 // Memory Layout for a sundials Y is, if i indexes the components of u / q / sigma
@@ -515,6 +519,13 @@ void SystemSolver::updateMatricesForJacSolve()
 		MX.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
 
 		MXSolvers[ i ].compute(MX);
+
+
+		// Construct the (nVars * U_DOF) x N_Scalar matrix v which
+		// contains the effect of the scalars on the main variables
+		
+
+
 	}
 }
 
@@ -540,16 +551,61 @@ void SystemSolver::setJacEvalY( N_Vector & yy )
 
 // Over-arching Jacobian function. If there's no coupled B-field solve, or auxiliar variables, then just do the 
 // HDG Jacobian solve
-void SystemSolver::solveJacEq(N_Vector g, N_Vector delY)
+void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 {
-	// allocate temporary working space for gauss elimination of scalars.
-	N_Vector d = N_VClone( delY );
-	N_Vector e[ nScalars ];
-	for ( int i=0; i < nScalars; ++i )
-		e[ i ] = N_VClone( delY );
+	if ( nScalars > 0 ) {
+		// allocate temporary working space for gauss elimination of scalars.
+		N_Vector d = N_VClone( delY );
+		N_Vector *e = new N_Vector[ nScalars ];
+		for ( Index i=0; i < nScalars; ++i )
+			e[ i ] = N_VClone( delY );
+		N_Vector g = N_VClone( delY );
 
+		// Let A be the HDG linear operator solved in solveHDGJac
 
-	solveHDGJac( g, delY );
+		// First solve A d = res_g ;
+		solveHDGJac( res_g, d );
+
+		// Now A e = v ; Do as a loop over nScalars
+		for ( Index i = 0; i < nScalars; ++i ) {
+			N_Vector v_tmp_nv = N_VClone( delY );
+			N_VConst( 0.0, v_tmp_nv );
+			DGSoln v_tmp(nVars, grid, k, N_VGetArrayPointer( v_tmp_nv ), nScalars );
+			for ( Index var = 0; var < nVars; ++var )
+				for ( Index j = 0; j < nCells; ++j )
+					v_tmp.u( var ).getCoeff( j ).second = V_cellwise[ j ].col( i ).segment( var * U_DOF, U_DOF );
+
+			solveHDGJac( e[ i ], v_tmp_nv );
+		}
+		DGSoln del_y(nVars, grid, k, N_VGetArrayPointer( delY ), nScalars );
+		Vector tmp_N = N_global * del_y.Scalars();
+		N_VLinearCombination( nScalars, tmp_N.data(), e, g ); // g = Sum_i tmp_N[i]*e[i]
+		N_VLinearSum( 1.0, g, 1.0, d, g ); // g += d;
+
+		// Load w into i N_Vectors
+		N_Vector *w = new N_Vector[ nScalars ];
+
+		// TODO
+		Vector wDotg( nScalars );
+		for ( Index i = 0; i < nScalars; ++i ) {
+			wDotg[ i ] = N_VDotProd( w[ i ], g );
+		}
+		Matrix wTe( nScalars, nScalars );
+		for ( Index i = 0; i < nScalars; ++i )
+			for ( Index j = 0; j < nScalars; ++j )
+				wTe( i, j ) = N_VDotProd( w[ i ], e[ j ] );
+
+		Matrix Nwe = N_global + wTe;
+		Vector NweInv_w_g = -1 * Nwe.inverse() * wDotg; // Uses PartialPivLU internally, never really does inverse
+		N_VScale( 1.0, g, delY ); // set delY = g
+		N_VLinearCombination( nScalars, NweInv_w_g.data(), e, delY ); // final answer
+
+		delete[] e;
+		delete[] w;
+
+	} else {
+		solveHDGJac( res_g, delY );
+	}
 }
 
 // Solve the HDG part of the Jacobian

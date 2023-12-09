@@ -57,7 +57,12 @@ public:
 
 	virtual void ScalarGPrime( Index i, State &v, const DGSoln &soln, std::function<double( double )> p, Interval I, Time t ) {
 		if ( nScalars != 0 )
-			throw std::logic_error( "nScalars > 0 but no scalar G provided" );
+			throw std::logic_error( "nScalars > 0 but no scalar G derivative provided" );
+	}
+	
+	virtual void dSources_dScalars( Index i, Values &, const State &, Position, Time ) {
+		if ( nScalars != 0 )
+			throw std::logic_error( "nScalars > 0 but no coupling function provided" );
 	}
 
 	virtual std::string getVariableName(Index i)
