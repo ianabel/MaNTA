@@ -48,6 +48,12 @@ public:
 	virtual Value InitialValue(Index i, Position x) const = 0;
 	virtual Value InitialDerivative(Index i, Position x) const = 0;
 
+	virtual Value InitialScalarValue( Index s ) const {
+		if ( nScalars != 0 )
+			throw std::logic_error( "nScalars > 0 but no initial value provided" );
+		return 0.0;
+	}
+
 	// Scalar functions
 	virtual Value ScalarG( Index, const DGSoln&, Time ) {
 		if ( nScalars != 0 )

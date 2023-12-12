@@ -79,6 +79,9 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
 	y.EvaluateLambda();
 
+	for ( Index s = 0; s < nScalars; ++s )
+		y.Scalar( s ) = problem->InitialScalarValue( s );
+
 	ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
 
 	auto sigma_wrapper = [this](Index i, const State &s, Position x, Time t)
@@ -668,6 +671,17 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 		Vector NweInv_w_g = -1 * Nwe.inverse() * wDotg; // Uses PartialPivLU internally, never really does inverse
 		N_VLinearCombination( nScalars, NweInv_w_g.data(), e, delY ); // Set delY = - [ e  ( N + w^T e )^-1  w ]  g
 		N_VLinearSum( 1.0, delY, 1.0, g, delY ); // delY += g; so delY = g - (....), which is the final answer
+
+		// Finally, set the components of delY related to the change of the scalars
+		DGSoln del_y(nVars, grid, k, N_VGetArrayPointer( delY ), nScalars );
+
+		del_y.Scalars() = Values::Zero( nScalars );
+
+		Vector del_y_scalars( nScalars );
+		for ( Index i = 0; i < nScalars; ++i )
+			del_y_scalars( i ) = res_g_map.Scalar( i ) - N_VDotProd( w[ i ], delY );
+
+		del_y.Scalars() = N_global.inverse() * del_y_scalars;
 
 		for ( Index i = 0; i < nScalars; ++i )
 			N_VDestroy( e[ i ] );

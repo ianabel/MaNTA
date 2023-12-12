@@ -81,6 +81,7 @@ public:
 	double& Scalar( Index j ) { return mu_[ j ]; };
 
 	VectorWrapper const & Scalars() const { return mu_; };
+	VectorWrapper & Scalars() { return mu_; };
 
 	State eval( double x ) const {
 		State out;
