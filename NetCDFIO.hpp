@@ -1,6 +1,11 @@
 #ifndef NETCDFIO_HPP
 #define NETCDFIO_HPP
+
 #include <netcdf>
+#include <string>
+#include <vector>
+#include <utility>
+
 /*
  *
  * Class for storing plasma details in a NetCDF file.

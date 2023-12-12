@@ -2,6 +2,8 @@
 #define TRANSPORTSYSTEM_HPP
 
 #include "Types.hpp"
+#include "DGSoln.hpp"
+#include "NetCDFIO.hpp"
 
 /*
 	Pure interface class
@@ -58,6 +60,20 @@ public:
 	virtual std::string getVariableUnits(Index i)
 	{
 		return std::string("");
+	}
+
+	// Hooks for adding extra NetCDF outputs
+	virtual void initialiseDiagnostics( NetCDFIO & ) {
+		return;
+	}
+
+	// Parameters are ( solution, time, netcdf output object, time index )
+	virtual void writeDiagnostics( DGSoln const&, double, NetCDFIO &, size_t ) {
+		return;
+	}
+
+	virtual void finaliseDiagnostics( NetCDFIO & ) {
+		return;
 	}
 
 	std::map<int, std::string> subVars = {{0, "u"}, {1, "q"}, {2, "sigma"}, {3, "S"}};
