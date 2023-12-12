@@ -242,14 +242,12 @@ void SystemSolver::runSolver(std::string inputFile)
 		res_out << "# Residual l_inf norm at t = " << t0 << " (post-CalcIC) is " << N_VMaxNorm( res ) << std::endl;
 	}
 
+	// This also writes the t0 timeslice
 	initialiseNetCDF(baseName + ".nc", nOut);
-	WriteTimeslice(t0);
-
-	//
 
 	IDASetMaxNumSteps(IDA_mem, 50000);
 
-	IDASetMinStep(IDA_mem, 1e-7);
+	IDASetMinStep(IDA_mem, 1e-8);
 
 	t = t0;
 	tout = t0;
