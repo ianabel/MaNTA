@@ -2,6 +2,7 @@
 #include <sundials/sundials_nvector.h>
 #include <sundials/sundials_linearsolver.h> /* Generic Liner Solver Interface */
 #include <sundials/sundials_types.h>		/* defs of realtype, sunindextype  */
+#include <nvector/nvector_serial.h>	  /* access to serial N_Vector            */
 #include <Eigen/Core>
 #include <Eigen/Dense>
 #include <toml.hpp>
@@ -20,17 +21,46 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, do
 
 
 SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, TransportSystem *transpSystem)
-	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars( transpSystem->getNumScalars() ), MXSolvers( Grid.getNCells() ), y(nVars, grid, k), dydt(nVars, grid, k), yJac(nVars, grid, k),
+	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars( transpSystem->getNumScalars() ), MXSolvers( Grid.getNCells() ), y( nVars, grid, k, nScalars ), dydt( nVars, grid, k, nScalars ), yJac( nVars, grid, k, nScalars ),
 	  dt(Dt), problem(transpSystem), tauc(tau)
 {
+	if ( SUNContext_Create(nullptr, &ctx) < 0 )
+		throw std::runtime_error( "Unable to allocate SUNDIALS Context, aborting." );
 	yJacMem = new double[ yJac.getDoF() ];
 	yJac.Map( yJacMem );
 	S_DOF = k + 1;
 	U_DOF = k + 1;
 	Q_DOF = k + 1;
 	SQU_DOF = U_DOF + Q_DOF + S_DOF;
+	if ( nScalars > 0 ) {
+		v = new N_Vector[ nScalars ];
+		w = new N_Vector[ nScalars ];
+		for ( Index i = 0; i < nScalars; ++i )
+		{
+			v[ i ] = N_VNew_Serial( y.getDoF(), ctx );
+			w[ i ] = N_VNew_Serial( y.getDoF(), ctx );
+		}
+	} else {
+		v = nullptr;
+		w = nullptr;
+	}
 	initialiseMatrices();
 	initialised = true;
+}
+
+SystemSolver::~SystemSolver()
+{
+	delete yJacMem;
+	if ( nScalars > 0 ) {
+		for ( Index i = 0; i < nScalars; ++i )
+		{
+			N_VDestroy( v[ i ] );
+			N_VDestroy( w[ i ] );
+		}
+		delete[] v;
+		delete[] w;
+	}
+	SUNContext_Free( &ctx );
 }
 
 void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
@@ -371,12 +401,20 @@ void SystemSolver::initialiseMatrices()
 
 		MXSolvers.emplace_back( nVars * SQU_DOF );
 
-		// Just resize and zero the V matrix
-		V_cellwise.emplace_back( nVars * nCells * U_DOF, nScalars );
 	}
 	// Factorise the global H matrix
 	H_global.compute(HGlobalMat);
 	H_global_mat = HGlobalMat;
+
+	// Just zero v & w
+	for ( Index i = 0; i < nScalars; ++i ) {
+		N_VConst( 0.0, v[ i ] );
+		N_VConst( 0.0, w[ i ] );
+	}
+
+	// and zeros for N_global
+	N_global = Matrix::Zero( nScalars, nScalars );
+
 	initialised = true;
 
 }
@@ -393,7 +431,6 @@ void SystemSolver::clearCellwiseVecs()
 	C_cellwise.clear();
 	G_cellwise.clear();
 	H_cellwise.clear();
-	V_cellwise.clear();
 }
 
 // Memory Layout for a sundials Y is, if i indexes the components of u / q / sigma
@@ -520,13 +557,54 @@ void SystemSolver::updateMatricesForJacSolve()
 
 		MXSolvers[ i ].compute(MX);
 
-
-		// Construct the (nVars * U_DOF) x N_Scalar matrix v which
-		// contains the effect of the scalars on the main variables
-		
-
-
 	}
+
+	// Construct the N_HDG_DOF x N_Scalar matrix v which
+	// contains the effect of the scalars on the main variables (through the sources. nothing else is allowed to depend on scalars)
+
+	std::vector<DGSoln> v_map;
+	for ( Index i = 0; i < nScalars; ++i )
+		v_map.emplace_back( nVars, grid, k, N_VGetArrayPointer( v[ i ] ), nScalars );
+
+	for ( Index i = 0; i < nCells; ++i )
+	{
+		Matrix v_tmp( nVars * U_DOF, nScalars );
+		dSources_dScalars_Mat( v_tmp, yJac, grid[ i ] );
+		for ( Index j = 0; j < nScalars; ++j ) 
+			for ( Index v = 0; v < nVars; ++v )
+				v_map[ j ].q( v ).getCoeff( i ).second = v_tmp.block( v * U_DOF, j, U_DOF, 1 );
+	}
+	v_map.clear();
+
+	// Construct N_Scalar x N_HDG_DOF matrix w which contains the Jacobian
+	// of the scalars with respect to the other variables
+	// also construct the scalar-scalar coupling matrix N
+
+	std::vector<DGSoln> w_map;
+	for ( Index i = 0; i < nScalars; ++i )
+		w_map.emplace_back( nVars, grid, k, N_VGetArrayPointer( w[ i ] ), nScalars );
+
+	for ( Index i = 0; i < nCells; ++i )
+	{
+		Interval const& I( grid[ i ] );
+		for ( Index j = 0; j < nScalars; ++j ) {
+			State s( nVars, nScalars );
+			for ( Index l = 0; l < k + 1; ++l ) {
+				problem->ScalarGPrime( j, s, yJac, [=]( double x ){ return LegendreBasis::Evaluate( I, l, x ); }, I, jt );
+				for ( Index v = 0; v < nVars; ++v ) {
+					w_map[ j ].sigma( v ).getCoeff( i ).second( l ) = s.Flux[ v ];
+					w_map[ j ].q( v ).getCoeff( i ).second( l ) = s.Derivative[ v ];
+					w_map[ j ].u( v ).getCoeff( i ).second( l ) = s.Variable[ v ];
+				}
+				if ( l == 0 && i == 0 ) {
+					/* dG_i/d(Scalar_j) should vanish for  i!=j and doesn't depend on test function, so we can just do this once  */
+					N_global( j, j ) = s.Scalars[ j ];
+				}
+			}
+		}
+	}
+	w_map.clear();
+
 }
 
 void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorWrapper &lam, realtype *const &Y) const
@@ -542,7 +620,7 @@ void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorW
 
 void SystemSolver::setJacEvalY( N_Vector & yy )
 {
-	DGSoln yyMap( nVars, grid, k );
+	DGSoln yyMap( nVars, grid, k, nScalars );
 	assert(static_cast<size_t>(N_VGetLength(yy)) == yyMap.getDoF());
 	yyMap.Map( N_VGetArrayPointer( yy ) );
 
@@ -554,6 +632,7 @@ void SystemSolver::setJacEvalY( N_Vector & yy )
 void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 {
 	if ( nScalars > 0 ) {
+		// TODO: move temporaries into private variables of the class and allocate/destroy once
 		// allocate temporary working space for gauss elimination of scalars.
 		N_Vector d = N_VClone( delY );
 		N_Vector *e = new N_Vector[ nScalars ];
@@ -568,24 +647,14 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 
 		// Now A e = v ; Do as a loop over nScalars
 		for ( Index i = 0; i < nScalars; ++i ) {
-			N_Vector v_tmp_nv = N_VClone( delY );
-			N_VConst( 0.0, v_tmp_nv );
-			DGSoln v_tmp(nVars, grid, k, N_VGetArrayPointer( v_tmp_nv ), nScalars );
-			for ( Index var = 0; var < nVars; ++var )
-				for ( Index j = 0; j < nCells; ++j )
-					v_tmp.u( var ).getCoeff( j ).second = V_cellwise[ j ].col( i ).segment( var * U_DOF, U_DOF );
-
-			solveHDGJac( e[ i ], v_tmp_nv );
+			solveHDGJac( e[ i ], v[ i ] );
 		}
-		DGSoln del_y(nVars, grid, k, N_VGetArrayPointer( delY ), nScalars );
-		Vector tmp_N = N_global * del_y.Scalars();
+
+		DGSoln res_g_map(nVars, grid, k, N_VGetArrayPointer( res_g ), nScalars );
+		Vector tmp_N = N_global.inverse() * res_g_map.Scalars();
 		N_VLinearCombination( nScalars, tmp_N.data(), e, g ); // g = Sum_i tmp_N[i]*e[i]
 		N_VLinearSum( 1.0, g, 1.0, d, g ); // g += d;
 
-		// Load w into i N_Vectors
-		N_Vector *w = new N_Vector[ nScalars ];
-
-		// TODO
 		Vector wDotg( nScalars );
 		for ( Index i = 0; i < nScalars; ++i ) {
 			wDotg[ i ] = N_VDotProd( w[ i ], g );
@@ -597,11 +666,14 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 
 		Matrix Nwe = N_global + wTe;
 		Vector NweInv_w_g = -1 * Nwe.inverse() * wDotg; // Uses PartialPivLU internally, never really does inverse
-		N_VScale( 1.0, g, delY ); // set delY = g
-		N_VLinearCombination( nScalars, NweInv_w_g.data(), e, delY ); // final answer
+		N_VLinearCombination( nScalars, NweInv_w_g.data(), e, delY ); // Set delY = - [ e  ( N + w^T e )^-1  w ]  g
+		N_VLinearSum( 1.0, delY, 1.0, g, delY ); // delY += g; so delY = g - (....), which is the final answer
 
+		for ( Index i = 0; i < nScalars; ++i )
+			N_VDestroy( e[ i ] );
+		N_VDestroy( d );
+		N_VDestroy( g );
 		delete[] e;
-		delete[] w;
 
 	} else {
 		solveHDGJac( res_g, delY );
@@ -733,9 +805,9 @@ int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector re
 {
 	updateBoundaryConditions(tres);
 
-	DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y));
-	DGSoln dYdt_h(nVars, grid, k, N_VGetArrayPointer(dYdt));
-	DGSoln res(nVars, grid, k, N_VGetArrayPointer(resval));
+	DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y), nScalars );
+	DGSoln dYdt_h(nVars, grid, k, N_VGetArrayPointer(dYdt), nScalars );
+	DGSoln res(nVars, grid, k, N_VGetArrayPointer(resval), nScalars );
 
 	VectorWrapper resVec( N_VGetArrayPointer( resval ), N_VGetLength( resval ) );
 
@@ -823,7 +895,7 @@ int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector re
 
 void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &tempY)
 {
-	DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY));
+	DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY), nScalars );
 
 	out << "# t = " << t << std::endl;
 	for ( Index v = 0; v < nVars; ++v )
@@ -832,6 +904,13 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
 		for ( Index i = 0; i < nCells; ++i )
 			out << tmp_y.lambda( v )[ i ] << ", ";
 		out << tmp_y.lambda( v )[ nCells ] << std::endl;
+	}
+
+	if ( nScalars > 0 ) {
+		out << "# Scalars : ";
+		for ( Index i = 0; i < nScalars - 1; ++i )
+			out << y.Scalar( i ) << ", ";
+		out << y.Scalar( nScalars - 1 ) << std::endl;
 	}
 
 	double delta_x = (grid.upperBoundary() - grid.lowerBoundary()) * (1.0 / (nOut - 1.0));
@@ -861,6 +940,13 @@ void SystemSolver::print(std::ostream &out, double t, int nOut)
 		for ( Index i = 0; i < nCells; ++i )
 			out << y.lambda( v )[ i ] << ", ";
 		out << y.lambda( v )[ nCells ] << std::endl;
+	}
+
+	if ( nScalars > 0 ) {
+		out << "# Scalars : ";
+		for ( Index i = 0; i < nScalars - 1; ++i )
+			out << y.Scalar( i ) << ", ";
+		out << y.Scalar( nScalars - 1 ) << std::endl;
 	}
 
 	double delta_x = (grid.upperBoundary() - grid.lowerBoundary()) * (1.0 / (nOut - 1.0));

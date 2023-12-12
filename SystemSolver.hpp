@@ -30,12 +30,8 @@ class SystemSolver
 public:
 	SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, TransportSystem *pProblem);
 	SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, double SteadyStateTol, TransportSystem *pProblem);
-
-	// This has been moved elsewhere, SystemSolver should be constructed after the parsing is done.
-	// SystemSolver(std::string const& inputFile);
-	~SystemSolver() {
-		delete yJacMem;
-	};
+	SystemSolver( const SystemSolver& ) = delete; // Best practice to define this as deleted. We can't copy this class.
+	~SystemSolver();
 
 	// Initialises u, q and lambda to satisfy residual equation at t=0
 	void setInitialConditions(N_Vector &Y, N_Vector &dYdt);
@@ -109,7 +105,9 @@ private:
 	std::vector<Matrix> CG_cellwise;
 	std::vector<Matrix> A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise;
 
-	std::vector<Matrix> V_cellwise;
+	SUNContext ctx;
+	N_Vector *v,*w;
+
 	std::vector<Matrix> W_cellwise;
 	Matrix N_global; // Scalar-scalar coupling matrix
 
@@ -129,6 +127,8 @@ private:
 	void dSourcedsigma_Mat(Matrix &, DGSoln const &, Interval);
 
 	void DerivativeSubMatrix(Matrix &mat, void (TransportSystem::*dX_dZ)(Index, Values &, const State &, Position, Time), DGSoln const &Y, Interval I);
+
+	void dSources_dScalars_Mat( Matrix &, DGSoln const&, Interval );
 
 	double resNorm = 0.0; // Exclusively for unit testing purposes
 

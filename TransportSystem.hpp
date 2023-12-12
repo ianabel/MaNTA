@@ -49,18 +49,18 @@ public:
 	virtual Value InitialDerivative(Index i, Position x) const = 0;
 
 	// Scalar functions
-	virtual Value ScalarG( Index i, const DGSoln& soln, Time t ) {
+	virtual Value ScalarG( Index, const DGSoln&, Time ) {
 		if ( nScalars != 0 )
 			throw std::logic_error( "nScalars > 0 but no scalar G provided" );
 		return 0.0;
 	}
 
-	virtual void ScalarGPrime( Index i, State &v, const DGSoln &soln, std::function<double( double )> p, Interval I, Time t ) {
+	virtual void ScalarGPrime( Index, State &, const DGSoln &, std::function<double( double )>, Interval, Time ) {
 		if ( nScalars != 0 )
 			throw std::logic_error( "nScalars > 0 but no scalar G derivative provided" );
 	}
 	
-	virtual void dSources_dScalars( Index i, Values &, const State &, Position, Time ) {
+	virtual void dSources_dScalars( Index, Values &, const State &, Position, Time ) {
 		if ( nScalars != 0 )
 			throw std::logic_error( "nScalars > 0 but no coupling function provided" );
 	}
