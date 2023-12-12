@@ -61,7 +61,7 @@ def main():
     ax2.legend()
     plt.xlabel(r"$\hat{r}$")
     M0 = 26.0
-    shape = 10.0
+    shape = 20.0
     Rmin = 0.5
     Rmax = 1.0
     omegaOffset = 5.0
@@ -158,8 +158,8 @@ def main():
     Vp = 2*np.pi
     c2 = r*r*Vp 
     
-    domegadR = c2*(a*np.cosh(a*(r-b)) + coef*(c*np.sin(c*(r-d))*np.exp(-shape * (r - C) * (r - C))+np.cos(c*(r-d))*2*shape*(r-C)*np.exp(-shape * (r - C) * (r - C))))
-    domegadV = domegadR/(2*Vp*r)
+    domegadR = (a*np.cosh(a*(r-b)) + coef*(c*np.sin(c*(r-d))*np.exp(-shape * (r - C) * (r - C))+np.cos(c*(r-d))*2*shape*(r-C)*np.exp(-shape * (r - C) * (r - C))))
+    domegadV = c2*domegadR/(Vp*r)
     Pvis = np.sqrt(ionMass/electronMass)*1/np.sqrt(2)*1/tau_hat[-1,:]* 3. / 10. * p_i[-1,:]*domegadV*domegadV
 
     Pvis = p0*V0/L*np.squeeze(Pvis)

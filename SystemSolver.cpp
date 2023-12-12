@@ -780,7 +780,7 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
 
 	// Now find del sigma, del q and del u to eventually find del Y
 	// this can be done in parallel over each cell
-	// #pragma omp parallel for
+	#pragma omp parallel for
 	for (Index i = 0; i < nCells; i++)
 	{
 		Vector delSQU(nVars * SQU_DOF);
@@ -848,7 +848,7 @@ int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector re
 		}
 	}
 
-	// #pragma omp parallel for
+	#pragma omp parallel for
 	for (Index i = 0; i < nCells; i++)
 	{
 		Interval I = grid[i];

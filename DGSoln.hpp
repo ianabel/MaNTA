@@ -2,6 +2,7 @@
 #define DGSOLN_HPP
 
 #include "Types.hpp"
+#include "gridStructures.hpp"
 #include <functional>
 #include <cassert>
 

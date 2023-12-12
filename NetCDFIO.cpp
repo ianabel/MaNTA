@@ -181,6 +181,8 @@ void SystemSolver::initialiseNetCDF(std::string const &NetcdfOutputFile, size_t 
 		nc_output.AddVariable(problem->getVariableName(i), "q", "Derivative", problem->getVariableUnits(i), y.q(i));
 		nc_output.AddVariable(problem->getVariableName(i), "sigma", "Flux", problem->getVariableUnits(i), y.sigma(i));
 	}
+
+	problem->initialiseDiagnostics( nc_output );
 }
 
 void SystemSolver::WriteTimeslice(double tNew)
@@ -190,6 +192,9 @@ void SystemSolver::WriteTimeslice(double tNew)
 	for (Index i = 0; i < nVars; ++i)
 	{
 		nc_output.AppendToGroup<DGApprox>(problem->getVariableName(i), tIndex, {{"u", y.u(i)}, {"q", y.q(i)}, {"sigma", y.sigma(i)}});
-		// nc_output.AppendToVariable(problem->getVariableName(i), y.u(i), tIndex);
 	}
+
+	problem->writeDiagnostics( y, tNew, nc_output, tIndex );
 }
+
+

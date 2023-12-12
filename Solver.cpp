@@ -319,6 +319,7 @@ void SystemSolver::runSolver(std::string inputFile)
 	std::cerr << "Total Number of Residual Evaluations  :" << nresevals << std::endl;
 	std::cerr << "Total Number of Jacobian Computations :" << njacevals << std::endl;
 
+	problem->finaliseDiagnostics( nc_output );
 	out0.close();
 	if ( physics_debug ) {
 		dydt_out.close();

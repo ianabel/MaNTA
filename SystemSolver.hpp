@@ -160,7 +160,11 @@ private:
 
 	bool TerminateOnSteadyState = false;
 	double steady_state_tol = 1e-3;
+#ifdef PHYSICS_DEBUG
+	bool physics_debug = true;
+#else
 	bool physics_debug = false;
+#endif
 
 #ifdef TEST
 	friend struct system_solver_test_suite::systemsolver_init_tests;
