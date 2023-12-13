@@ -49,6 +49,8 @@ int SunLinSolWrapper::LSsolve(SUNLinearSolver LS, SUNMatrix M, N_Vector x, N_Vec
 int SunLinSolWrapper::LSfree(SUNLinearSolver LS)
 {
 	delete LSWrapper( LS );
+	LS->ops = nullptr;
+	SUNLinSolFreeEmpty( LS );
 	return SUNLS_SUCCESS;
 }
 

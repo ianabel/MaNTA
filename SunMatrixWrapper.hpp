@@ -1,4 +1,5 @@
-#pragma once
+#ifndef SUNMATRIXWRAPPER_HPP
+#define SUNMATRIXWRAPPER_HPP
 
 #include <sundials/sundials_matrix.h> /* Generic Liner Solver Interface */
 #include <sundials/sundials_types.h>        /* defs of realtype, sunindextype  */
@@ -20,15 +21,22 @@ SUNMatrix_ID MatGetID( SUNMatrix mat)
 	return SUNMATRIX_CUSTOM;
 }
 
-int MatZero( SUNMatrix mat)
+int MatZero( SUNMatrix mat )
 {
 	return 0;
+}
+
+void MatDestroy( SUNMatrix mat  )
+{
+	delete reinterpret_cast<SunMatrixWrapper*>( mat->content );
+	mat->ops = nullptr;
+	SUNMatFreeEmpty( mat );
 }
 
 struct _generic_SUNMatrix_Ops MatOps {
 	.getid = MatGetID,
 	.clone = nullptr,
-	.destroy = nullptr,
+	.destroy = MatDestroy,
 	.zero = MatZero,
 	.copy = nullptr,
 	.scaleadd = nullptr,
@@ -44,5 +52,7 @@ SUNMatrix SunMatrixNew(SUNContext ctx)
 	mat->content = new SunMatrixWrapper();
 	mat->ops = &MatOps;
 	return mat;
-
 }
+
+
+#endif // SUNMATRIXWRAPPER_HPP
