@@ -120,23 +120,23 @@ Value ScalarTestLD3::InitialValue(Index, Position x) const
 
 Value ScalarTestLD3::InitialDerivative(Index, Position x) const
 {
-	return -( beta * std::numbers::pi / 2.0 )*std::cos( std::numbers::pi * x / 2.0 );
+	return -( beta * std::numbers::pi / 2.0 )*std::sin( std::numbers::pi * x / 2.0 );
 }
 
 Value ScalarTestLD3::ScalarG( Index, const DGSoln & y, Time )
 {
 	// J = sigma(x = +1) - sigma(x = -1)
 
-	return y.sigma( 0 )( 1 ) - y.sigma( 0 )( -1 );
+	return y.Scalar( 0 ) - ( y.sigma( 0 )( 1 ) - y.sigma( 0 )( -1 ) );
 }
 
 void ScalarTestLD3::ScalarGPrime( Index, State &s, const DGSoln &y, std::function<double( double )> P, Interval I, Time )
 {
 	s.Flux[ 0 ] = 0.0;
-	if ( abs( I.x_u - 1 ) < 1e-10 )
-		s.Flux[ 0 ] += P( I.x_u );
-	if ( abs( I.x_l + 1 ) < 1e-10 )
+	if ( abs( I.x_u - 1 ) < 1e-8 )
 		s.Flux[ 0 ] -= P( I.x_u );
+	if ( abs( I.x_l + 1 ) < 1e-8 )
+		s.Flux[ 0 ] += P( I.x_l );
 	s.Derivative[ 0 ] = 0.0;
 	s.Variable[ 0 ] = 0.0;
 	s.Scalars[ 0 ] = 1.0;
@@ -150,7 +150,7 @@ void ScalarTestLD3::dSources_dScalars( Index, Values &v, const State &, Position
 Value ScalarTestLD3::InitialScalarValue( Index s ) const
 {
 	// Our job to make sure this is consistent!
-	return kappa * ( InitialDerivative( 0, 1 ) - InitialDerivative( 0, -1 ) );
+	return -kappa * ( InitialDerivative( 0, 1 ) - InitialDerivative( 0, -1 ) );
 }
 
 void ScalarTestLD3::initialiseDiagnostics( NetCDFIO &nc )
