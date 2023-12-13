@@ -34,7 +34,7 @@ public:
 	// This has been moved elsewhere, SystemSolver should be constructed after the parsing is done.
 	// SystemSolver(std::string const& inputFile);
 	~SystemSolver() {
-		delete yJacMem;
+		delete[] yJacMem;
 	};
 
 	// Initialises u, q and lambda to satisfy residual equation at t=0
