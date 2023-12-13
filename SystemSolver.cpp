@@ -50,7 +50,7 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, do
 
 SystemSolver::~SystemSolver()
 {
-	delete yJacMem;
+	delete[] yJacMem;
 	if ( nScalars > 0 ) {
 		for ( Index i = 0; i < nScalars; ++i )
 		{

@@ -149,7 +149,7 @@ void SystemSolver::runSolver(std::string inputFile)
 
 	DGSoln tolerances( nVars, grid, k, nScalars );
 	tolerances.Map(N_VGetArrayPointer(absTolVec));
-	double dx = (grid.upperBoundary() - grid.lowerBoundary()) / nCells;
+	double dx = (grid.upperBoundary() - grid.lowerBoundary()) / ( k * nCells );
 	// TODO: re-add user tolerance interface
 	for (Index i = 0; i < nCells; ++i)
 	{
@@ -216,6 +216,8 @@ void SystemSolver::runSolver(std::string inputFile)
 		residual( t0, Y, dYdt, res );
 		res_out << "# Residual l_inf norm at t = " << t0 << " (pre-calcIC) is " << N_VMaxNorm( res ) << std::endl;
 		print( res_out, t0, nOut, res );
+		out0 << "# t = " << t0 << " (pre-calcIC) " << std::endl;
+		print( out0, t0, nOut );
 	}
 
 	//------------------------------Solve------------------------------

@@ -92,5 +92,5 @@ Value LinearDiffusion::InitialValue(Index, Position x) const
 Value LinearDiffusion::InitialDerivative(Index, Position x) const
 {
 	double y = (x - Centre) / InitialWidth;
-	return -InitialHeight * (-2.0 * y) * ::exp(-y * y) * (1.0 / InitialWidth);
+	return -InitialHeight * (2.0 * y) * ::exp(-y * y) * (1.0 / InitialWidth);
 }
