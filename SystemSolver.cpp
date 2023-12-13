@@ -923,8 +923,8 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
 	if ( nScalars > 0 ) {
 		out << "# Scalars : ";
 		for ( Index i = 0; i < nScalars - 1; ++i )
-			out << y.Scalar( i ) << ", ";
-		out << y.Scalar( nScalars - 1 ) << std::endl;
+			out << tmp_y.Scalar( i ) << ", ";
+		out << tmp_y.Scalar( nScalars - 1 ) << std::endl;
 	}
 
 	double delta_x = (grid.upperBoundary() - grid.lowerBoundary()) * (1.0 / (nOut - 1.0));

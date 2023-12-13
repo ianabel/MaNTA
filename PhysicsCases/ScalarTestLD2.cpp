@@ -3,8 +3,23 @@
 #include <boost/math/quadrature/gauss_kronrod.hpp>
 
 /*
-	Implementation of the Linear Diffusion case
- */
+	Linear Diffusion test case with a coupled scalar.
+
+	du         d^2 u
+	-- - Kappa ----- = J S( x )
+	dt          dx^2
+
+	where
+
+       /1
+	J = |  u( x, t ) dx
+       /0
+
+	and 
+
+	S( x ) = beta*( 1 - x/alpha ) for  0 <= x <= alpha and 0 otherwise.
+
+ */  
 
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(ScalarTestLD2);
@@ -113,9 +128,9 @@ Value ScalarTestLD2::ScalarG( Index, const DGSoln & y, Time )
 
 void ScalarTestLD2::ScalarGPrime( Index, State &s, const DGSoln &y, std::function<double( double )> P, Interval I, Time )
 {
-	s.Flux[ 0 ] = -boost::math::quadrature::gauss_kronrod<double, 31>::integrate( P, I.x_l, I.x_u );
+	s.Variable[ 0 ] = -boost::math::quadrature::gauss_kronrod<double, 31>::integrate( P, I.x_l, I.x_u );
 	s.Derivative[ 0 ] = 0.0;
-	s.Variable[ 0 ] = 0.0;
+	s.Flux[ 0 ] = 0.0;
 	s.Scalars[ 0 ] = 1.0;
 }
 
