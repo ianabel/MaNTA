@@ -16,6 +16,11 @@
 #include "SunMatrixWrapper.hpp"
 #include "ErrorChecker.hpp"
 
+// Unadvertised, but in the library
+extern "C" {
+	int IDAEwtSet( N_Vector, N_Vector, void* );
+}
+
 int static_residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data);
 int JacSetup(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3);
 
@@ -189,11 +194,6 @@ void SystemSolver::runSolver(std::string inputFile)
 
 	IDASetMaxNonlinIters(IDA_mem, 10);
 
-	/*
-	//Attach Diagnostics
-	Diagnostic diagnostic(system, system->plasma);
-	*/
-
 	// Initialise text output and write out initial condition massaged by CalcIC
 	std::filesystem::path inputFilePath( inputFile );
 	std::string baseName = inputFilePath.stem();
@@ -208,13 +208,17 @@ void SystemSolver::runSolver(std::string inputFile)
 
 	std::ofstream dydt_out,res_out;
 
+	N_Vector wgt;
+
 	if ( physics_debug ) {
+		wgt = N_VClone( res );
 		dydt_out.open(baseName + ".dydt.dat");
 		dydt_out << "# dydt before CalcIC" << std::endl;
 		print( dydt_out, t0, nOut, dYdt );
 		res_out.open(baseName + ".res.dat");
 		residual( t0, Y, dYdt, res );
-		res_out << "# Residual l_inf norm at t = " << t0 << " (pre-calcIC) is " << N_VMaxNorm( res ) << std::endl;
+		IDAEwtSet( Y, wgt, IDA_mem );
+		res_out << "# Residual norm at t = " << t0 << " (pre-calcIC) is " << N_VWrmsNorm( res, wgt ) << std::endl;
 		print( res_out, t0, nOut, res );
 		out0 << "# t = " << t0 << " (pre-calcIC) " << std::endl;
 		print( out0, t0, nOut );
@@ -241,7 +245,9 @@ void SystemSolver::runSolver(std::string inputFile)
 
 		residual( t0, Y, dYdt, res );
 
-		res_out << "# Residual l_inf norm at t = " << t0 << " (post-CalcIC) is " << N_VMaxNorm( res ) << std::endl;
+		IDAEwtSet( Y, wgt, IDA_mem );
+
+		res_out << "# Residual norm at t = " << t0 << " (post-CalcIC) is " << N_VWrmsNorm( res, wgt ) << std::endl;
 	}
 
 	// This also writes the t0 timeslice
@@ -249,7 +255,8 @@ void SystemSolver::runSolver(std::string inputFile)
 
 	IDASetMaxNumSteps(IDA_mem, 50000);
 
-	IDASetMinStep(IDA_mem, 1e-8);
+	double step_min = 1e-7;
+	IDASetMinStep(IDA_mem, step_min);
 
 	t = t0;
 	tout = t0;
@@ -261,7 +268,7 @@ void SystemSolver::runSolver(std::string inputFile)
 	}
 
 	// Solving Loop
-	 while ( tret < tFinal ) {
+	while ( tFinal - tret > step_min ) {
 		tout += delta_t;
 		if ( tout > tFinal )
 			tout = tFinal; // Never ask for results beyond tFinal
@@ -283,7 +290,8 @@ void SystemSolver::runSolver(std::string inputFile)
 		if ( physics_debug ) {
 			print( dydt_out, tret, nOut, dYdt );
 			residual( tret, Y, dYdt, res );
-			res_out << "# Residual l_inf norm at t = " << tret << " is " << N_VMaxNorm( res ) << " ; L1 Norm is " << N_VL1Norm( res ) << std::endl;
+			IDAEwtSet( Y, wgt, IDA_mem );
+			res_out << "# Residual norm at t = " << tret << " is " << N_VWrmsNorm( res, wgt ) << std::endl;
 		}
 		WriteTimeslice( tret );
 
@@ -327,18 +335,28 @@ void SystemSolver::runSolver(std::string inputFile)
 	}
 	nc_output.Close();
 
-	IDAFree(&IDA_mem);
-
 	// No SunLinSol wrapper classes exist beyond this point, so we are safe in using raw pointers to construct them.
 	SUNLinSolFree(LS);
 
+	MatDestroy( sunMat );
+
+	IDAFree(&IDA_mem);
+
 	// Free the raw data buffers allocated by SUNDIALS
+
+	if ( physics_debug )
+		N_VDestroy( wgt );
+
 	N_VDestroy(Y);
 	N_VDestroy(dYdt);
 	N_VDestroy(constraints);
 	N_VDestroy(id);
 	N_VDestroy(res);
 	N_VDestroy(absTolVec);
+
+	SUNContext_Free( &ctx );
+
+	nc_output.Close();
 }
 
 /* 
