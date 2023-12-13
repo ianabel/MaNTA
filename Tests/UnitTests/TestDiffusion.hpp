@@ -41,34 +41,34 @@ class TestDiffusion : public TransportSystem {
 		// The guts of the physics problem (these are non-const as they
 		// are allowed to alter internal state such as to store computations
 		// for future calls)
-		Value SigmaFn( Index, const Values&, const Values&q, Position, Time ) override {
-			return kappa * q[ 0 ];
+		Value SigmaFn( Index, const State &s, Position, Time ) override {
+			return kappa * s.Derivative[ 0 ];
 		};
-		Value Sources( Index, const Values&, const Values&, const Values&, Position, Time ) override {
+		Value Sources( Index, const State&, Position, Time ) override {
 			return 0.0;
 		};
 
-		void dSigmaFn_dq( Index, Values& v, const Values&, const Values&, Position, Time ) override
+		void dSigmaFn_dq( Index, Values& v, const State &, Position, Time ) override
 		{
 			v[ 0 ] = kappa;
 		};
 
-		void dSigmaFn_du( Index, Values& v, const Values&, const Values&, Position, Time ) override
+		void dSigmaFn_du( Index, Values& v, const State&, Position, Time ) override
 		{
 			v[ 0 ] = 0.0;
 		};
 
-		void dSources_du( Index, Values&v , const Values &, const Values &, Position, Time ) override
+		void dSources_du( Index, Values&v , const State &, Position, Time ) override
 		{
 			v[ 0 ] = 0.0;
 		};
 
-		void dSources_dq( Index, Values&v , const Values &, const Values &, Position, Time ) override
+		void dSources_dq( Index, Values&v , const State &, Position, Time ) override
 		{
 			v[ 0 ] = 0.0;
 		};
 
-		void dSources_dsigma( Index, Values&v , const Values &, const Values &, Position, Time ) override 
+		void dSources_dsigma( Index, Values&v , const State &, Position, Time ) override 
 		{
 			v[ 0 ] = 0.0;
 		};

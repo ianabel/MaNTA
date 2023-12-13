@@ -25,15 +25,15 @@ class LDTest : public TransportSystem {
 		// The guts of the physics problem (these are non-const as they
 		// are allowed to alter internal state such as to store computations
 		// for future calls)
-		Value SigmaFn( Index, const Values &, const Values &, Position, Time ) override;
-		Value Sources( Index, const Values &, const Values &, const Values &, Position, Time ) override;
+		Value SigmaFn( Index, const State &, Position, Time ) override;
+		Value Sources( Index, const State &, Position, Time ) override;
 
-		void dSigmaFn_du( Index, Values &, const Values &, const Values &, Position, Time ) override;
-		void dSigmaFn_dq( Index, Values &, const Values &, const Values &, Position, Time ) override;
+		void dSigmaFn_du( Index, Values &, const State &, Position, Time ) override;
+		void dSigmaFn_dq( Index, Values &, const State &, Position, Time ) override;
 
-		void dSources_du( Index, Values&v , const Values &, const Values &, Position, Time ) override;
-		void dSources_dq( Index, Values&v , const Values &, const Values &, Position, Time ) override;
-		void dSources_dsigma( Index, Values&v , const Values &, const Values &, Position, Time ) override;
+		void dSources_du( Index, Values&v , const State &, Position, Time ) override;
+		void dSources_dq( Index, Values&v , const State &, Position, Time ) override;
+		void dSources_dsigma( Index, Values&v , const State &, Position, Time ) override;
 
 		// Finally one has to provide initial conditions for u & q
 		Value      InitialValue( Index, Position ) const override;

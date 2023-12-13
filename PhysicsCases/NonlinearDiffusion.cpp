@@ -45,44 +45,44 @@ bool NonlinearDiffusion::isLowerBoundaryDirichlet( Index ) const { return true; 
 bool NonlinearDiffusion::isUpperBoundaryDirichlet( Index ) const { return true; };
 
 
-Value NonlinearDiffusion::SigmaFn( Index, const Values &uV, const Values & qV, Position, Time )
+Value NonlinearDiffusion::SigmaFn( Index, const State &s, Position, Time )
 {
-	double u = uV[ 0 ],q = qV[ 0 ];
+	double u = s.Variable[ 0 ],q = s.Derivative[ 0 ];
 
 	double NonlinearKappa = ( n/2.0 )*::pow( u, n )*( 1.0 - ::pow( u, n )/( n + 1.0 ) );
 	return NonlinearKappa * q;
 }
 
-Value NonlinearDiffusion::Sources( Index, const Values &, const Values &, const Values &, Position, Time )
+Value NonlinearDiffusion::Sources( Index, const State &, Position, Time )
 {
 	return 0.0;
 }
 
-void NonlinearDiffusion::dSigmaFn_dq( Index, Values& v, const Values& uV, const Values&, Position, Time )
+void NonlinearDiffusion::dSigmaFn_dq( Index, Values& v, const State& s, Position, Time )
 {
-	double u = uV[ 0 ];
+	double u = s.Variable[ 0 ];
 	double NonlinearKappa = ( n/2.0 )*::pow( u, n )*( 1.0 - ::pow( u, n )/( n + 1.0 ) );
 
 	v[ 0 ] = NonlinearKappa;
 };
 
-void NonlinearDiffusion::dSigmaFn_du( Index, Values& v, const Values& uV, const Values& qV, Position, Time )
+void NonlinearDiffusion::dSigmaFn_du( Index, Values& v, const State& s, Position, Time )
 {
-	double u = uV[ 0 ], q = qV[ 0 ];
+	double u = s.Variable[ 0 ], q = s.Derivative[ 0 ];
 	v[ 0 ] = ( ( n*n )/( 2.0*( n + 1.0 ) ) ) * ::pow( u, n - 1.0 ) * ( 1 + n - 2*::pow( u, n ) ) * q;
 };
 
-void NonlinearDiffusion::dSources_du( Index, Values&v , const Values &, const Values &, Position, Time )
+void NonlinearDiffusion::dSources_du( Index, Values&v , const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void NonlinearDiffusion::dSources_dq( Index, Values&v , const Values &, const Values &, Position, Time )
+void NonlinearDiffusion::dSources_dq( Index, Values&v , const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void NonlinearDiffusion::dSources_dsigma( Index, Values&v , const Values &, const Values &, Position, Time )
+void NonlinearDiffusion::dSources_dsigma( Index, Values&v , const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };

@@ -48,38 +48,38 @@ bool LDMMS::isLowerBoundaryDirichlet( Index ) const { return true; };
 bool LDMMS::isUpperBoundaryDirichlet( Index ) const { return true; };
 
 
-Value LDMMS::SigmaFn( Index, const Values &, const Values & q, Position, Time )
+Value LDMMS::SigmaFn( Index, const State & s, Position, Time )
 {
-	return kappa * q[ 0 ];
+	return kappa * s.Derivative[ 0 ];
 }
 
 // forcing such that u -> cos(pi*x/2) => f(x) = -kappa * u'' = kappa * (pi^2/4) cos(pi*x/2) 
-Value LDMMS::Sources( Index, const Values &, const Values &, const Values &, Position x, Time )
+Value LDMMS::Sources( Index, const State &, Position x, Time )
 {
 	return kappa * ( M_PI_2 * M_PI_2 * ::cos( M_PI_2*x ) );
 }
 
-void LDMMS::dSigmaFn_dq( Index, Values& v, const Values&, const Values&, Position, Time )
+void LDMMS::dSigmaFn_dq( Index, Values& v, const State&, Position, Time )
 {
 	v[ 0 ] = kappa;
 };
 
-void LDMMS::dSigmaFn_du( Index, Values& v, const Values&, const Values&, Position, Time )
+void LDMMS::dSigmaFn_du( Index, Values& v, const State&, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void LDMMS::dSources_du( Index, Values&v , const Values &, const Values &, Position, Time )
+void LDMMS::dSources_du( Index, Values&v , const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void LDMMS::dSources_dq( Index, Values&v , const Values &, const Values &, Position, Time )
+void LDMMS::dSources_dq( Index, Values&v , const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void LDMMS::dSources_dsigma( Index, Values&v , const Values &, const Values &, Position, Time )
+void LDMMS::dSources_dsigma( Index, Values&v , const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };

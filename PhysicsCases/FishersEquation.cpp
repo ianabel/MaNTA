@@ -45,39 +45,39 @@ bool FishersEquation::isLowerBoundaryDirichlet( Index ) const { return true; };
 bool FishersEquation::isUpperBoundaryDirichlet( Index ) const { return true; };
 
 
-Value FishersEquation::SigmaFn( Index, const Values &, const Values & q, Position, Time )
+Value FishersEquation::SigmaFn( Index, const State &s, Position, Time )
 {
-	return q[ 0 ];
+	return s.Derivative[ 0 ];
 }
 
-Value FishersEquation::Sources( Index, const Values & u, const Values &, const Values &, Position, Time )
+Value FishersEquation::Sources( Index, const State & s, Position, Time )
 {
-	double uVal = u[ 0 ];
+	double uVal = s.Variable[ 0 ];
 	return uVal * ( 1.0 - uVal );
 }
 
-void FishersEquation::dSigmaFn_dq( Index, Values& v, const Values&, const Values&, Position, Time )
+void FishersEquation::dSigmaFn_dq( Index, Values& v, const State &, Position, Time )
 {
 	v[ 0 ] = 1.0;
 };
 
-void FishersEquation::dSigmaFn_du( Index, Values& v, const Values&, const Values&, Position, Time )
+void FishersEquation::dSigmaFn_du( Index, Values& v, const State&, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void FishersEquation::dSources_du( Index, Values&v , const Values & u, const Values &, Position, Time )
+void FishersEquation::dSources_du( Index, Values&v , const State &s, Position, Time )
 {
-	double uVal = u[ 0 ];
+	double uVal = s.Variable[ 0 ];
 	v[ 0 ] = 1.0 - 2.0*uVal;
 };
 
-void FishersEquation::dSources_dq( Index, Values&v , const Values &, const Values &, Position, Time )
+void FishersEquation::dSources_dq( Index, Values&v , const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void FishersEquation::dSources_dsigma( Index, Values&v , const Values &, const Values &, Position, Time )
+void FishersEquation::dSources_dsigma( Index, Values&v , const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
