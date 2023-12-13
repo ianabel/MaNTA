@@ -3,10 +3,10 @@
 # if you are following the guide in the README
 
 # Uncomment to use clang instead of g++
-CXX = clang++
+CXX = g++
 
 # Uncomment for debug information
-#DEBUG = on
+DEBUG = on
 #CXXFLAGS = -DFPEXCEPT #-DSUNDIALS_DEBUG
 
 SUNDIALS_DIR=/home/ian/projects/sundials/install
