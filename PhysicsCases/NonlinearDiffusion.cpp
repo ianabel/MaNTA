@@ -8,7 +8,7 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL( NonlinearDiffusion );
 
-NonlinearDiffusion::NonlinearDiffusion( toml::value const& config )
+NonlinearDiffusion::NonlinearDiffusion( toml::value const& config, Grid const& )
 {
 	// Always set nVars in a derived constructor
 	nVars = 1;

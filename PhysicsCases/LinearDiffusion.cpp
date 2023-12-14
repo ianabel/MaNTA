@@ -8,7 +8,7 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(LinearDiffusion);
 
-LinearDiffusion::LinearDiffusion(toml::value const &config)
+LinearDiffusion::LinearDiffusion(toml::value const &config, Grid const& )
 {
 	// Always set nVars in a derived constructor
 	nVars = 1;

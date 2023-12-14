@@ -8,7 +8,7 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(LDTest);
 
-LDTest::LDTest(toml::value const &config)
+LDTest::LDTest(toml::value const &config, Grid const& )
 {
 	// Always set nVars in a derived constructor
 	nVars = 1;

@@ -137,7 +137,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_multichannel_init_tests)
 	double tau = 0.5;
 	double dt = 0.1;
 
-	MatrixDiffusion problem(config_snippet_2);
+	MatrixDiffusion problem(config_snippet_2,testGrid);
 
 	BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, dt, tau, &problem));
 
@@ -249,7 +249,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_matrix_tests)
 	}
 
 	delete system;
-	MatrixDiffusion problem2(config_snippet_2);
+	MatrixDiffusion problem2(config_snippet_2,testGrid);
 
 	BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, dt, tau, &problem2));
 

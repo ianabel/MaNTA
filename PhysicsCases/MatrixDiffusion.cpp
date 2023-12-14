@@ -7,7 +7,7 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(MatrixDiffusion);
 
-MatrixDiffusion::MatrixDiffusion(toml::value const &config)
+MatrixDiffusion::MatrixDiffusion( toml::value const &config, Grid const& )
 {
 
 	// Construst your problem from user-specified config

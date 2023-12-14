@@ -9,7 +9,7 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL( LDMMS );
 
-LDMMS::LDMMS( toml::value const& config )
+LDMMS::LDMMS( toml::value const& config, Grid const& )
 {
 	// Always set nVars in a derived constructor
 	nVars = 1;

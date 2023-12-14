@@ -8,7 +8,7 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL( NonlinDiffTest );
 
-NonlinDiffTest::NonlinDiffTest( toml::value const& config )
+NonlinDiffTest::NonlinDiffTest( toml::value const& config, Grid const& )
 {
 	// Always set nVars in a derived constructor
 	nVars = 1;

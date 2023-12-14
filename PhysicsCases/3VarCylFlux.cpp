@@ -2,7 +2,7 @@
 #include "Constants.hpp"
 #include <iostream>
 
-REGISTER_FLUX_IMPL(ThreeVarCylFlux);
+REGISTER_PHYSICS_IMPL(ThreeVarCylFlux);
 
 enum
 {
@@ -13,11 +13,19 @@ enum
 template <typename T>
 int sgn(T val)
 {
-    return (T(0) < val) - (val < T(0));
+	if( val > static_cast<T>(0) )
+		return 1;
+	else if ( val < static_cast<T>(0) )
+		return -1;
+	else
+		return 0;
 }
 
-ThreeVarCylFlux::ThreeVarCylFlux(toml::value const &config, Index nVars)
+ThreeVarCylFlux::ThreeVarCylFlux( toml::value const &config, Grid const& grid )
+	: AutodiffTransportSystem( config, grid )
 {
+	nVars = 3;
+	nScalars = 0;
 
     if (config.count("3VarCylFlux") != 1)
         throw std::invalid_argument("There should be a [3VarCylFlux] section if you are using the 3VarCylFlux physics model.");
@@ -59,83 +67,92 @@ ThreeVarCylFlux::ThreeVarCylFlux(toml::value const &config, Index nVars)
     taue0 = tau_e(n0, p0);
     taui0 = tau_i(n0, p0);
 
-    sigma.insert(std::pair<Index, sigmaptr>(0, &Gamma_hat));
-    sigma.insert(std::pair<Index, sigmaptr>(1, &qe_hat));
-    sigma.insert(std::pair<Index, sigmaptr>(2, &qi_hat));
-
-    source.insert(std::pair<Index, sourceptr>(0, &Sn_hat));
-    source.insert(std::pair<Index, sourceptr>(1, &Spe_hat));
-    source.insert(std::pair<Index, sourceptr>(2, &Spi_hat));
 };
 
-int ThreeVarCylFlux::ParticleSource;
-double ThreeVarCylFlux::sourceStrength;
-dual ThreeVarCylFlux::sourceCenter;
-dual ThreeVarCylFlux::sourceWidth;
+enum Channel : Index {
+	Density = 0,
+	ElectronEnergy = 1,
+	IonEnergy = 2,
+};
 
-// reference values
-dual ThreeVarCylFlux::n0;
-dual ThreeVarCylFlux::T0;
-dual ThreeVarCylFlux::Bmid;
-Value ThreeVarCylFlux::L;
+Real ThreeVarCylFlux::Flux( Index i, RealVector u, RealVector q, Position x, Time t )
+{
+	Channel c = static_cast<Channel>(i);
+	switch(c) {
+		case Density:
+			return Gamma_hat( u, q, x, t );
+			break;
+		case ElectronEnergy:
+			return qe_hat( u, q, x, t );
+			break;
+		case IonEnergy:
+			return qi_hat( u, q, x, t );
+			break;
+		default:
+			throw std::runtime_error("Request for flux for undefined variable!");
+	}
+}
 
-dual ThreeVarCylFlux::p0;
-dual ThreeVarCylFlux::Gamma0;
-dual ThreeVarCylFlux::V0;
-dual ThreeVarCylFlux::taue0;
-dual ThreeVarCylFlux::taui0;
+Real ThreeVarCylFlux::Source( Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t )
+{
+	Channel c = static_cast<Channel>(i);
+	switch(c) {
+		case Density:
+			return Sn_hat( u, q, sigma, x, t );
+			break;
+		case ElectronEnergy:
+			return Spe_hat( u, q, sigma, x, t );
+			break;
+		case IonEnergy:
+			return Spi_hat( u, q, sigma, x, t );
+			break;
+		default:
+			throw std::runtime_error("Request for source for undefined variable!");
+	}
+}
 
-dual ThreeVarCylFlux::Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t)
+Real ThreeVarCylFlux::Gamma_hat(RealVector u, RealVector q, Position x, Time t)
 {
     // maybe add a factor of sqrt x if x = r^2/2
 
-    dual G = 2. * x * u(1) / tau_hat(u(0), u(1)) * ((-q(1) / 2. + q(2)) / u(1) + 3. / 2. * q(0) / u(0));
+    Real G = 2. * x * u(1) / tau_hat(u(0), u(1)) * ((-q(1) / 2. + q(2)) / u(1) + 3. / 2. * q(0) / u(0));
 
-    if (G != G)
-    {
-        return 0.0;
-    }
-
+    if ( !std::isfinite( G.val ) )
+        throw std::runtime_error("Particle flux generated Inf or NaN");
     else
         return G;
 };
-dual ThreeVarCylFlux::qi_hat(VectorXdual u, VectorXdual q, dual x, double t)
+
+Real ThreeVarCylFlux::qi_hat(RealVector u, RealVector q, Position x, Time t)
 {
-    dual dT = q(2) / u(2) - q(0) / u(0);
+    Real dT = q(2) / u(2) - q(0) / u(0);
 
-    dual G = Gamma_hat(u, q, x, t);
-    dual qri = ::sqrt(ionMass / (2. * electronMass)) * 1.0 / tau_hat(u(0), u(2)) * 2. * u(2) * u(2) / u(0) * dT;
-    dual Q = (2. / 3.) * (5. / 2. * u(2) / u(0) * G + (2. * x) * qri);
-    if ((Q != Q))
-    {
-        //  std::cout << Q << std::endl;
-        return 0.0;
-    }
+    Real G = Gamma_hat(u, q, x, t);
+    Real qri = ::sqrt(ionMass / (2. * electronMass)) * 1.0 / tau_hat(u(0), u(2)) * 2. * u(2) * u(2) / u(0) * dT;
+    Real Q = (2. / 3.) * (5. / 2. * u(2) / u(0) * G + (2. * x) * qri);
+
+	 if( !std::isfinite( Q.val ) )
+        throw std::runtime_error("Ion energy flux generated Inf or NaN");
     else
-    {
-        // std::cout << sgn(q(2).val) << std::endl;
-        return Q;
-    }
-    // return 0.0;
-};
-dual ThreeVarCylFlux::qe_hat(VectorXdual u, VectorXdual q, dual x, double t)
-{
-    dual G = Gamma_hat(u, q, x, t);
-    dual qre = 1.0 / tau_hat(u(0), u(1)) * (4.66 * u(1) * u(1) / u(0) * (q(1) / u(1) - q(0) / u(0)) - (3. / 2.) * u(1) / u(0) * (q(2) + q(1)));
-
-    dual Q = (2. / 3.) * (5. / 2. * u(1) / u(0) * G + (2. * x) * qre);
-    if (Q != Q)
-    {
-        return 0.0;
-    }
-    else
-
         return Q;
 };
 
-dual ThreeVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
+Real ThreeVarCylFlux::qe_hat(RealVector u, RealVector q, Position x, Time t)
 {
-    dual S = 0.0;
+    Real G = Gamma_hat(u, q, x, t);
+    Real qre = 1.0 / tau_hat(u(0), u(1)) * (4.66 * u(1) * u(1) / u(0) * (q(1) / u(1) - q(0) / u(0)) - (3. / 2.) * u(1) / u(0) * (q(2) + q(1)));
+
+    Real Q = (2. / 3.) * (5. / 2. * u(1) / u(0) * G + (2. * x) * qre);
+
+	 if( !std::isfinite( Q.val ) )
+        throw std::runtime_error("Electron energy flux generated Inf or NaN");
+    else
+        return Q;
+};
+
+Real ThreeVarCylFlux::Sn_hat(RealVector u, RealVector q, RealVector sigma, Position x, double t)
+{
+    Real S = 0.0;
     switch (ParticleSource)
     {
     case None:
@@ -150,28 +167,22 @@ dual ThreeVarCylFlux::Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, du
 };
 
 // look at ion and electron sources again -- they should be opposite
-dual ThreeVarCylFlux::Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
+Real ThreeVarCylFlux::Spi_hat(RealVector u, RealVector q, RealVector sigma, Position x, double t)
 {
-    // dual G = -Gamma_hat(u, q, x, t);
-    // dual V = G / u(0); //* L / (p0);
-    dual S = 0.0; // V * q(2) + 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
+    // Real G = -Gamma_hat(u, q, x, t);
+    // Real V = G / u(0); //* L / (p0);
+    Real S = 0.0; // V * q(2) + 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
 
-    if (S != S)
-    {
-        return 0.0;
-    }
-    else
-    {
-        return S + Sn_hat(u, q, sigma, x, t);
-    }
+    return S + Sn_hat(u, q, sigma, x, t);
     // return 0.0;
 };
-dual ThreeVarCylFlux::Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t)
-{
-    // dual G = -Gamma_hat(u, q, x, t);
-    // dual V = G / u(0); //* L / (p0);
 
-    dual S = 0.0; // V * q(1) + 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
+Real ThreeVarCylFlux::Spe_hat(RealVector u, RealVector q, RealVector sigma, Position x, double t)
+{
+    // Real G = -Gamma_hat(u, q, x, t);
+    // Real V = G / u(0); //* L / (p0);
+
+    Real S = 0.0; // V * q(1) + 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
 
     if (S != S)
     {

@@ -104,15 +104,15 @@ int runManta( std::string const& fname )
 	if (config.count("TransportSystem") != 1)
 		throw std::invalid_argument("TransportSystem needs to specified exactly once in the general configuration section");
 
-	std::string Problem = config.at("TransportSystem").as_string();
+	std::string ProblemName = config.at("TransportSystem").as_string();
 
 	// Convert string to TransportSystem* instance
 
-	TransportSystem *pProblem = PhysicsCases::InstantiateProblem(Problem, configFile);
+	TransportSystem *pProblem = PhysicsCases::InstantiateProblem( ProblemName, configFile, grid );
 
 	if (pProblem == nullptr)
 	{
-		std::cerr << " Could not instantiate a physics model for TransportSystem = " << Problem << std::endl;
+		std::cerr << " Could not instantiate a physics model for TransportSystem = " << ProblemName << std::endl;
 		std::cerr << " Available physics models include: " << std::endl;
 		for (auto pair : *PhysicsCases::map)
 		{

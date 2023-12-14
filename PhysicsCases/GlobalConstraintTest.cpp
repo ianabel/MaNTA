@@ -13,7 +13,7 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL( GCT );
 
-GCT::GCT( toml::value const& config )
+GCT::GCT( toml::value const& config, Grid const& )
 {
 	// Always set nVars in a derived constructor
 	nVars = 1;

@@ -9,7 +9,7 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL( VonNeumannTest );
 
-VonNeumannTest::VonNeumannTest( toml::value const& config )
+VonNeumannTest::VonNeumannTest( toml::value const& config, Grid const& )
 {
 	// Always set nVars in a derived constructor
 	nVars = 1;

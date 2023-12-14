@@ -30,7 +30,7 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(ScalarTestLD3);
 
-ScalarTestLD3::ScalarTestLD3(toml::value const &config)
+ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const&)
 {
 	// Always set nVars in a derived constructor
 	nVars = 1;

@@ -15,7 +15,7 @@ void LoadFromFile( std::string const& filename )
 		std::cerr << "\t" << dlerror() << std::endl;
 		return;
 	}
-	using allocatorType = TransportSystem*( toml::value const& );
+	using allocatorType = TransportSystem*( toml::value const&, Grid const& );
 	allocatorType *creator = reinterpret_cast<allocatorType*>( dlsym( handle, "createTransportSystem" ) );
 	using classnameFn = std::string(void);
 	classnameFn* pGCN = reinterpret_cast<classnameFn*>( dlsym( handle, "getClassName" ) );

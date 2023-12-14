@@ -21,7 +21,7 @@ class AdjointPoster : public TransportSystem
 public:
 	// Must provide a constructor that constructs from a toml configuration snippet
 	// you can ignore it, or read problem-dependent parameters from the configuration file
-	explicit AdjointPoster(toml::value const &config);
+	explicit AdjointPoster(toml::value const &config, Grid const & );
 
 	// You must provide implementations of both, these are your boundary condition functions
 	Value LowerBoundary(Index, Time) const override;

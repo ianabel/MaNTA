@@ -8,7 +8,7 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(EquilibrationTest);
 
-EquilibrationTest::EquilibrationTest(toml::value const &config)
+EquilibrationTest::EquilibrationTest(toml::value const &config, Grid const& )
 {
 	// Always set nVars in a derived constructor
 	nVars = 2;
