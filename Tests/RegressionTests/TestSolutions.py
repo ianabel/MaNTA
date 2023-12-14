@@ -99,6 +99,13 @@ def test_steady_state( filename, soln_fn, tolerance ):
         print("Error - L_2 norm ", l2norm, " at t = ",t_var[t_idx]," is greater than ",tolerance)
         sys.exit( 1 )
 
+def cleanup( prefix ):
+    os.unlink( prefix + ".nc" )
+    os.unlink( prefix + ".dat" )
+    if ( os.path.exists( prefix + ".res.dat" ) ):
+       os.unlink( prefix + ".res.dat" )
+    if ( os.path.exists( prefix + ".dydt.dat" ) ):
+       os.unlink( prefix + ".dydt.dat" )
 
 def check_ref_case( prefix ):
     print("Checking Reference Solution for "+prefix+".conf")
@@ -106,9 +113,8 @@ def check_ref_case( prefix ):
     ncFileName = prefix + ".nc"
     ncRefFile  = prefix + ".ref.nc"
     test_ref_soln_l2( ncFileName, ncRefFile, 1e-3 )
-    os.unlink( ncFileName )
-    os.unlink( prefix + ".dat" )
-
+    cleanup( prefix )
+    
 def ld_soln( x, t ):
     t0 = 0.01
     return np.sqrt(t0/(t+t0)) * np.exp( -x*x/(4*(t+t0)));
@@ -117,8 +123,7 @@ print("Testing Analytic Solutions")
 
 run_manta( "ld.conf" )
 test_analytic_soln( "ld.nc", ld_soln, 5e-3 )
-os.unlink( "ld.dat" )
-os.unlink( "ld.nc" )
+cleanup( "ld" )
 
 def nonlin_soln( x, t ):
     t0 = 1.1
@@ -128,8 +133,7 @@ def nonlin_soln( x, t ):
 
 run_manta( "nonlin.conf" )
 test_analytic_soln( "nonlin.nc", nonlin_soln, 5e-3 )
-os.unlink( "nonlin.dat" )
-os.unlink( "nonlin.nc" )
+cleanup( "nonlin" )
 
 def nonlin_ss( x ):
     a = 6.0
@@ -144,8 +148,7 @@ def nonlin_ss( x ):
 
 run_manta( "nonlin_ss.conf" )
 test_steady_state( "nonlin_ss.nc", nonlin_ss, 5e-3 )
-os.unlink( "nonlin_ss.dat" )
-os.unlink( "nonlin_ss.nc" )
+cleanup( "nonlin_ss" )
 
 print("Checking Reference Solutions")
 
