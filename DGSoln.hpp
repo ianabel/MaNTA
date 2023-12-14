@@ -19,8 +19,8 @@ class State {
 			Scalars.resize( ns, 0.0 );
 		}
 
-		std::vector<double> Variable,Derivative,Flux;
-		std::vector<double> Scalars;
+		Vector Variable,Derivative,Flux;
+		Vector Scalars;
 };
 
 class DGSoln
@@ -85,14 +85,14 @@ public:
 	VectorWrapper & Scalars() { return mu_; };
 
 	State eval( double x ) const {
-		State out;
+		State out( nVars, nScalars );
 		for ( Index i = 0; i < nVars; ++i ) {
-			out.Variable.emplace_back( u_[ i ]( x ) );
-			out.Derivative.emplace_back( q_[ i ]( x ) );
-			out.Flux.emplace_back( sigma_[ i ]( x ) );
+			out.Variable[i] = u_[i]( x );
+			out.Derivative[i] =  q_[i]( x );
+			out.Flux[i] = sigma_[i]( x );
 		}
 		for ( Index i = 0; i < nScalars; ++i ) {
-			out.Scalars.emplace_back( mu_[ i ] );
+			out.Scalars[i] = mu_[i];
 		}
 		return out;
 	}
