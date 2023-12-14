@@ -13,12 +13,14 @@
 
  */
 
+
 class TransportSystem
 {
 public:
 	virtual ~TransportSystem() = default;
 
 	Index getNumVars() const { return nVars; };
+	Index getNumScalars() const { return nScalars; };
 
 	// Function for passing boundary conditions to the solver
 	virtual Value LowerBoundary(Index i, Time t) const = 0;
@@ -28,28 +30,56 @@ public:
 	virtual bool isUpperBoundaryDirichlet(Index i) const = 0;
 
 	// The same for the flux and source functions -- the vectors have length nVars
-	virtual Value SigmaFn(Index i, const Values &u, const Values &q, Position x, Time t) = 0;
-	virtual Value Sources(Index i, const Values &u, const Values &q, const Values &sigma, Position x, Time t) = 0;
+	virtual Value SigmaFn(Index i, const State &s, Position x, Time t) = 0;
+	virtual Value Sources(Index i, const State &s, Position x, Time t) = 0;
 
 	// This determines the a_i functions. Only one with a default option, but can be overriden
 	virtual Value aFn(Index i, Position x) { return 1.0; };
 
 	// We need derivatives of the flux functions
-	virtual void dSigmaFn_du(Index i, Values &, const Values &u, const Values &q, Position x, Time t) = 0;
-	virtual void dSigmaFn_dq(Index i, Values &, const Values &u, const Values &q, Position x, Time t) = 0;
+	virtual void dSigmaFn_du(Index i, Values &, const State &s, Position x, Time t) = 0;
+	virtual void dSigmaFn_dq(Index i, Values &, const State &s, Position x, Time t) = 0;
 
 	// and for the sources
-	virtual void dSources_du(Index i, Values &, const Values &u, const Values &q, Position x, Time t) = 0;
-	virtual void dSources_dq(Index i, Values &, const Values &u, const Values &q, Position x, Time t) = 0;
-	virtual void dSources_dsigma(Index i, Values &, const Values &u, const Values &q, Position x, Time t) = 0;
+	virtual void dSources_du(Index i, Values &, const State &, Position x, Time t) = 0;
+	virtual void dSources_dq(Index i, Values &, const State &, Position x, Time t) = 0;
+	virtual void dSources_dsigma(Index i, Values &, const State &, Position x, Time t) = 0;
 
 	// and initial conditions for u & q
 	virtual Value InitialValue(Index i, Position x) const = 0;
 	virtual Value InitialDerivative(Index i, Position x) const = 0;
 
+	virtual Value InitialScalarValue( Index s ) const {
+		if ( nScalars != 0 )
+			throw std::logic_error( "nScalars > 0 but no initial value provided" );
+		return 0.0;
+	}
+
+	// Scalar functions
+	virtual Value ScalarG( Index, const DGSoln&, Time ) {
+		if ( nScalars != 0 )
+			throw std::logic_error( "nScalars > 0 but no scalar G provided" );
+		return 0.0;
+	}
+
+	virtual void ScalarGPrime( Index, State &, const DGSoln &, std::function<double( double )>, Interval, Time ) {
+		if ( nScalars != 0 )
+			throw std::logic_error( "nScalars > 0 but no scalar G derivative provided" );
+	}
+	
+	virtual void dSources_dScalars( Index, Values &, const State &, Position, Time ) {
+		if ( nScalars != 0 )
+			throw std::logic_error( "nScalars > 0 but no coupling function provided" );
+	}
+
 	virtual std::string getVariableName(Index i)
 	{
 		return std::string("Var") + std::to_string(i);
+	}
+
+	virtual std::string getScalarName(Index i)
+	{
+		return std::string("Scalar") + std::to_string(i);
 	}
 
 	virtual std::string getVariableDescription(Index i)
@@ -57,7 +87,17 @@ public:
 		return std::string("Variable ") + std::to_string(i);
 	}
 
+	virtual std::string getScalarDescription(Index i)
+	{
+		return std::string("Scalar ") + std::to_string(i);
+	}
+
 	virtual std::string getVariableUnits(Index i)
+	{
+		return std::string("");
+	}
+
+	virtual std::string getScalarUnits(Index i)
 	{
 		return std::string("");
 	}
@@ -80,6 +120,7 @@ public:
 
 protected:
 	Index nVars;
+	Index nScalars = 0;
 };
 
 #endif // TRANSPORTSYSTEM_HPP

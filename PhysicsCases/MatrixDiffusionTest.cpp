@@ -78,40 +78,41 @@ Value MatrixDiffusionTest::UpperBoundary(Index, Time) const
 bool MatrixDiffusionTest::isLowerBoundaryDirichlet(Index) const { return true; };
 bool MatrixDiffusionTest::isUpperBoundaryDirichlet(Index) const { return true; };
 
-Value MatrixDiffusionTest::SigmaFn(Index i, const Values &, const Values &q, Position, Time)
+Value MatrixDiffusionTest::SigmaFn(Index i, const State &s, Position, Time)
 {
-	auto sigma = Kappa * q;
+	Eigen::Map<const Vector> qVec( s.Derivative.data(), s.Derivative.size() );
+	auto sigma = Kappa * qVec;
 
 	return sigma( i );
 }
 
-Value MatrixDiffusionTest::Sources(Index, const Values &, const Values &, const Values &, Position, Time)
+Value MatrixDiffusionTest::Sources(Index, const State &, Position, Time)
 {
 	return 0.0;
 }
 
-void MatrixDiffusionTest::dSigmaFn_dq(Index i, Values &v, const Values &, const Values &, Position, Time)
+void MatrixDiffusionTest::dSigmaFn_dq(Index i, Values &v, const State &, Position, Time)
 {
 	for (Index j = 0; j < nVars; ++j)
 		v[j] = Kappa(i, j);
 };
 
-void MatrixDiffusionTest::dSigmaFn_du(Index, Values &v, const Values &, const Values &, Position, Time)
+void MatrixDiffusionTest::dSigmaFn_du(Index, Values &v, const State &, Position, Time)
 {
 	v = Vector::Zero(nVars);
 };
 
-void MatrixDiffusionTest::dSources_du(Index, Values &v, const Values &, const Values &, Position, Time)
+void MatrixDiffusionTest::dSources_du(Index, Values &v, const State &, Position, Time)
 {
 	v = Vector::Zero(nVars);
 };
 
-void MatrixDiffusionTest::dSources_dq(Index, Values &v, const Values &, const Values &, Position, Time)
+void MatrixDiffusionTest::dSources_dq(Index, Values &v, const State &, Position, Time)
 {
 	v = Vector::Zero(nVars);
 };
 
-void MatrixDiffusionTest::dSources_dsigma(Index, Values &v, const Values &, const Values &, Position, Time)
+void MatrixDiffusionTest::dSources_dsigma(Index, Values &v, const State &, Position, Time)
 {
 	v = Vector::Zero(nVars);
 };

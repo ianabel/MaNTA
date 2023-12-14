@@ -48,37 +48,37 @@ bool VonNeumannTest::isLowerBoundaryDirichlet( Index ) const { return true; };
 bool VonNeumannTest::isUpperBoundaryDirichlet( Index ) const { return true; };
 
 
-Value VonNeumannTest::SigmaFn( Index, const Values &, const Values & q, Position, Time )
+Value VonNeumannTest::SigmaFn( Index, const State &s, Position, Time )
 {
-	return kappa * q[ 0 ];
+	return kappa * s.Derivative[ 0 ];
 }
 
-Value VonNeumannTest::Sources( Index, const Values &, const Values &, const Values &, Position, Time )
+Value VonNeumannTest::Sources( Index, const State &, Position, Time )
 {
 	return 0.0;
 }
 
-void VonNeumannTest::dSigmaFn_dq( Index, Values& v, const Values&, const Values&, Position, Time )
+void VonNeumannTest::dSigmaFn_dq( Index, Values& v, const State&, Position, Time )
 {
 	v[ 0 ] = kappa;
 };
 
-void VonNeumannTest::dSigmaFn_du( Index, Values& v, const Values&, const Values&, Position, Time )
+void VonNeumannTest::dSigmaFn_du( Index, Values& v, const State&, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void VonNeumannTest::dSources_du( Index, Values&v , const Values &, const Values &, Position, Time )
+void VonNeumannTest::dSources_du( Index, Values&v , const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void VonNeumannTest::dSources_dq( Index, Values&v , const Values &, const Values &, Position, Time )
+void VonNeumannTest::dSources_dq( Index, Values&v , const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void VonNeumannTest::dSources_dsigma( Index, Values&v , const Values &, const Values &, Position, Time )
+void VonNeumannTest::dSources_dsigma( Index, Values&v , const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };

@@ -89,8 +89,6 @@ void SystemSolver::runSolver(std::string inputFile)
 		throw std::invalid_argument("Absolute_tolerance specified incorrrectly");
 
 	//-------------------------------------System Design----------------------------------------------
-	SUNContext ctx;
-	retval = SUNContext_Create(nullptr, &ctx);
 
 	IDA_mem = IDACreate(ctx);
 	if (ErrorChecker::check_retval((void *)IDA_mem, "IDACreate", 0))
@@ -102,10 +100,8 @@ void SystemSolver::runSolver(std::string inputFile)
 
 	//-----------------------------Initial conditions-------------------------------
 
-	initialiseMatrices();
-
 	// Set original vector lengths
-	Y = N_VNew_Serial(nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1), ctx);
+	Y = N_VNew_Serial(nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars, ctx);
 	if (ErrorChecker::check_retval((void *)Y, "N_VNew_Serial", 0))
 		throw std::runtime_error("Sundials Initialization Error");
 
@@ -133,7 +129,7 @@ void SystemSolver::runSolver(std::string inputFile)
 	if (ErrorChecker::check_retval((void *)id, "N_VClone", 0))
 		std::runtime_error("Sundials initialization Error, run in debug to find");
 
-	DGSoln isDifferential( nVars, grid, k );
+	DGSoln isDifferential( nVars, grid, k, nScalars );
 	isDifferential.Map( N_VGetArrayPointer( id ) );
 	isDifferential.zeroCoeffs();
 	for ( Index v = 0; v < nVars; ++v )
@@ -156,7 +152,7 @@ void SystemSolver::runSolver(std::string inputFile)
 	VectorWrapper absTolVals(N_VGetArrayPointer(absTolVec), N_VGetLength(absTolVec));
 	absTolVals.setZero();
 
-	DGSoln tolerances(nVars, grid, k);
+	DGSoln tolerances( nVars, grid, k, nScalars );
 	tolerances.Map(N_VGetArrayPointer(absTolVec));
 	double dx = (grid.upperBoundary() - grid.lowerBoundary()) / ( k * nCells );
 	// TODO: re-add user tolerance interface
@@ -170,6 +166,9 @@ void SystemSolver::runSolver(std::string inputFile)
 			tolerances.lambda(v).setConstant(atol);
 		}
 	}
+
+	for ( Index i = 0; i < nScalars; ++i )
+		tolerances.Scalar( i ) = atol;
 
 	// Steady-state stopping conditions
 	realtype dydt_rel_tol = steady_state_tol;
@@ -251,10 +250,8 @@ void SystemSolver::runSolver(std::string inputFile)
 		res_out << "# Residual norm at t = " << t0 << " (post-CalcIC) is " << N_VWrmsNorm( res, wgt ) << std::endl;
 	}
 
+	// This also writes the t0 timeslice
 	initialiseNetCDF(baseName + ".nc", nOut);
-	WriteTimeslice(t0);
-
-	//
 
 	IDASetMaxNumSteps(IDA_mem, 50000);
 

@@ -6,12 +6,29 @@
 #include <functional>
 #include <cassert>
 
+#include "gridStructures.hpp"
+
+
+class State {
+	public:
+		State() = default;
+		explicit State( Index nv, Index ns = 0 ) {
+			Variable.resize( nv );
+			Derivative.resize( nv );
+			Flux.resize( nv );
+			Scalars.resize( ns );
+		}
+
+		Vector Variable,Derivative,Flux;
+		Vector Scalars;
+};
+
 class DGSoln
 {
 public:
-	DGSoln(Index n_var, Grid const &_grid, Index Order) : nVars(n_var), grid(_grid), k(Order){};
+	DGSoln(Index n_var, Grid const &_grid, Index Order, Index Scalars = 0) : nVars(n_var), grid(_grid), k(Order), nScalars( Scalars ), mu_( nullptr, 0 ) {};
 
-	DGSoln(Index n_var, Grid const &_grid, Index Order, double *memory) : nVars(n_var), grid(_grid), k(Order) { Map(memory); };
+	DGSoln(Index n_var, Grid const &_grid, Index Order, double *memory, Index Scalars = 0) : nVars(n_var), grid(_grid), k(Order), nScalars( Scalars ), mu_( nullptr, 0 ) { Map(memory); };
 
 	virtual ~DGSoln() = default;
 
@@ -21,8 +38,9 @@ public:
 	{
 		// 3 = u + q + sigma
 		// nCells + 1 for lambda because we store values at both ends
+		// and we are carrying nScalar scalar variables
 		return grid.getNCells() * nVars * (k + 1) * 3 +
-			   (grid.getNCells() + 1) * nVars;
+		         (grid.getNCells() + 1) * nVars + nScalars;
 	};
 
 	void Map(double *Y)
@@ -44,6 +62,7 @@ public:
 
 			lambda_.emplace_back(Y + nVars * (nCells) * (3 * k + 3) + var * (nCells + 1), (nCells + 1));
 		}
+		new ( &mu_ ) VectorWrapper( Y + nVars * nCells * ( 3 * k + 3 ) + nVars * ( nCells + 1 ), nScalars );
 	};
 
 	// Accessors, both const & non-const
@@ -58,6 +77,25 @@ public:
 
 	VectorWrapper &lambda(Index i) { return lambda_[i]; };
 	VectorWrapper const &lambda(Index i) const { return lambda_[i]; };
+
+	double Scalar( Index j ) const { return mu_[ j ]; };
+	double& Scalar( Index j ) { return mu_[ j ]; };
+
+	VectorWrapper const & Scalars() const { return mu_; };
+	VectorWrapper & Scalars() { return mu_; };
+
+	State eval( double x ) const {
+		State out( nVars, nScalars );
+		for ( Index i = 0; i < nVars; ++i ) {
+			out.Variable[i] = u_[i]( x );
+			out.Derivative[i] =  q_[i]( x );
+			out.Flux[i] = sigma_[i]( x );
+		}
+		for ( Index i = 0; i < nScalars; ++i ) {
+			out.Scalars[i] = mu_[i];
+		}
+		return out;
+	}
 
 	// Deep copy of the data in other to the memory we are
 	// wrapping
@@ -130,9 +168,8 @@ public:
 		}
 	};
 
-	void AssignSigma(std::function<Value(Index, const Values &, const Values &, Position, Time)> sigmaFn)
+	void AssignSigma(std::function<Value(Index, const State &, Position, Time)> sigmaFn)
 	{
-
 		auto const &x_vals = DGApprox::Integrator().abscissa();
 		auto const &x_wgts = DGApprox::Integrator().weights();
 		const size_t n_abscissa = x_vals.size();
@@ -150,22 +187,21 @@ public:
 
 					// Abscissa only stores positive points, so we have to double up manually
 
-					Values u_vals1(nVars), q_vals1(nVars);
-					Values u_vals2(nVars), q_vals2(nVars);
+					State v1( nVars, nScalars ),v2( nVars, nScalars );
 
 					double y_plus = I.x_l + (1 + x_vals[i]) * I.h() / 2.0;
 					double y_minus = I.x_l + (1 - x_vals[i]) * I.h() / 2.0;
 					double wgt = x_wgts[i] * (I.h() / 2.0);
 					for (Index j = 0; j < nVars; ++j)
 					{
-						u_vals1[j] = u_[j](y_plus, I);
-						q_vals1[j] = q_[j](y_plus, I);
-						u_vals2[j] = u_[j](y_minus, I);
-						q_vals2[j] = q_[j](y_minus, I);
+						v1.Variable[j]   = u_[j](y_plus, I);
+						v1.Derivative[j] = q_[j](y_plus, I);
+						v2.Variable[j] = u_[j](y_minus, I);
+						v2.Derivative[j] = q_[j](y_minus, I);
 					}
 
-					double sigma_plus = sigmaFn(var, u_vals1, q_vals1, y_plus, 0.0);
-					double sigma_minus = sigmaFn(var, u_vals2, q_vals2, y_minus, 0.0);
+					double sigma_plus = sigmaFn(var, v1, y_plus, 0.0);
+					double sigma_minus = sigmaFn(var, v2, y_minus, 0.0);
 
 					for (Index j = 0; j < k + 1; ++j)
 					{
@@ -190,15 +226,21 @@ public:
 			sigma_[i].zeroCoeffs();
 			lambda_[i].setZero();
 		}
+		mu_.setZero();
 	}
 
 private:
 	const Index nVars;
 	const Grid &grid;
 	const Index k;
+	const Index nScalars;
 	std::vector<DGApprox> u_;
 	std::vector<DGApprox> q_;
 	std::vector<DGApprox> sigma_;
 	std::vector<VectorWrapper> lambda_;
+	VectorWrapper mu_;
 };
+
+
+
 #endif // DGSOLN_HPP

@@ -18,17 +18,17 @@ public:
     bool isUpperBoundaryDirichlet(Index i) const override;
 
     // The same for the flux and source functions -- the vectors have length nVars
-    Value SigmaFn(Index i, const Values &u, const Values &q, Position x, Time t) override;
-    Value Sources(Index i, const Values &u, const Values &q, const Values &sigma, Position x, Time t) override;
+    Value SigmaFn(Index i, const State &, Position x, Time t) override;
+    Value Sources(Index i, const State &, Position x, Time t) override;
 
     // We need derivatives of the flux functions
-    void dSigmaFn_du(Index i, Values &, const Values &u, const Values &q, Position x, Time t) override;
-    void dSigmaFn_dq(Index i, Values &, const Values &u, const Values &q, Position x, Time t) override;
+    void dSigmaFn_du(Index i, Values &, const State &, Position x, Time t) override;
+    void dSigmaFn_dq(Index i, Values &, const State &, Position x, Time t) override;
 
     // and for the sources
-    void dSources_du(Index i, Values &, const Values &u, const Values &q, Position x, Time t) override;
-    void dSources_dq(Index i, Values &, const Values &u, const Values &q, Position x, Time t) override;
-    void dSources_dsigma(Index i, Values &, const Values &u, const Values &q, Position x, Time t) override;
+    void dSources_du(Index i, Values &, const State &, Position x, Time t) override;
+    void dSources_dq(Index i, Values &, const State &, Position x, Time t) override;
+    void dSources_dsigma(Index i, Values &, const State &, Position x, Time t) override;
 
     // and initial conditions for u & q
     Value InitialValue(Index i, Position x) const override;

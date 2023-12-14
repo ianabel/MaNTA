@@ -82,20 +82,21 @@ bool AutodiffTransportSystem::isUpperBoundaryDirichlet(Index i) const { return i
 
 // The same for the flux and source functions -- the vectors have length nVars
 
-Value AutodiffTransportSystem::SigmaFn(Index i, const Values &u, const Values &q, Position x, Time t)
+Value AutodiffTransportSystem::SigmaFn(Index i, const State &s, Position x, Time t)
 {
-    VectorXdual uw(u);
-    VectorXdual qw(q);
+    VectorXdual uw(s.Variable);
+    VectorXdual qw(s.Derivative);
 
     Value sigma = fluxObject->sigma[i](uw, qw, x, t).val;
     return sigma;
 }
-Value AutodiffTransportSystem::Sources(Index i, const Values &u, const Values &q, const Values &sigma, Position x, Time t)
+Value AutodiffTransportSystem::Sources(Index i, const State &s, Position x, Time t)
 {
 
-    VectorXdual uw(u);
-    VectorXdual qw(q);
-    VectorXdual sw(sigma);
+    VectorXdual uw(s.Variable);
+    VectorXdual qw(s.Derivative);
+    VectorXdual sw(s.Flux);
+
     Value S = fluxObject->source[i](uw, qw, sw, x, t).val;
 
     if (isTestProblem)
@@ -104,50 +105,45 @@ Value AutodiffTransportSystem::Sources(Index i, const Values &u, const Values &q
 }
 
 // We need derivatives of the flux functions
-void AutodiffTransportSystem::dSigmaFn_du(Index i, Values &grad, const Values &u, const Values &q, Position x, Time t)
+void AutodiffTransportSystem::dSigmaFn_du(Index i, Values &grad, const State &s, Position x, Time t)
 {
-    VectorXdual uw(u);
-    VectorXdual qw(q);
+    VectorXdual uw(s.Variable);
+    VectorXdual qw(s.Derivative);
 
     grad = gradient(fluxObject->sigma[i], wrt(uw), at(uw, qw, x, t));
 }
-void AutodiffTransportSystem::dSigmaFn_dq(Index i, Values &grad, const Values &u, const Values &q, Position x, Time t)
+
+void AutodiffTransportSystem::dSigmaFn_dq(Index i, Values &grad, const State &s, Position x, Time t)
 {
 
-    VectorXdual uw(u);
-    VectorXdual qw(q);
+    VectorXdual uw(s.Variable);
+    VectorXdual qw(s.Derivative);
 
     grad = gradient(fluxObject->sigma[i], wrt(qw), at(uw, qw, x, t));
 }
 
 // and for the sources
-void AutodiffTransportSystem::dSources_du(Index i, Values &grad, const Values &u, const Values &q, Position x, Time t)
+void AutodiffTransportSystem::dSources_du(Index i, Values &grad, const State &s, Position x, Time t)
 {
-    VectorXdual uw(u);
-    VectorXdual qw(q);
-    VectorXdual sw(nVars);
-    for (int j = 0; j < nVars; j++)
-        sw(j) = fluxObject->sigma[j](uw, qw, x, t);
+    VectorXdual uw(s.Variable);
+    VectorXdual qw(s.Derivative);
+    VectorXdual sw(s.Flux);
 
     grad = gradient(fluxObject->source[i], wrt(uw), at(uw, qw, sw, x, t));
 }
-void AutodiffTransportSystem::dSources_dq(Index i, Values &grad, const Values &u, const Values &q, Position x, Time t)
+void AutodiffTransportSystem::dSources_dq(Index i, Values &grad, const State &s, Position x, Time t)
 {
-    VectorXdual uw(u);
-    VectorXdual qw(q);
-    VectorXdual sw(nVars);
-    for (int j = 0; j < nVars; j++)
-        sw(j) = fluxObject->sigma[j](uw, qw, x, t);
+    VectorXdual uw(s.Variable);
+    VectorXdual qw(s.Derivative);
+    VectorXdual sw(s.Flux);
 
     grad = gradient(fluxObject->source[i], wrt(qw), at(uw, qw, sw, x, t));
 }
-void AutodiffTransportSystem::dSources_dsigma(Index i, Values &grad, const Values &u, const Values &q, Position x, Time t)
+void AutodiffTransportSystem::dSources_dsigma(Index i, Values &grad, const State &s, Position x, Time t)
 {
-    VectorXdual uw(u);
-    VectorXdual qw(q);
-    VectorXdual sw(nVars);
-    for (int j = 0; j < nVars; j++)
-        sw(j) = fluxObject->sigma[j](uw, qw, x, t);
+    VectorXdual uw(s.Variable);
+    VectorXdual qw(s.Derivative);
+    VectorXdual sw(s.Flux);
 
     grad = gradient(fluxObject->source[i], wrt(sw), at(uw, qw, sw, x, t));
 }

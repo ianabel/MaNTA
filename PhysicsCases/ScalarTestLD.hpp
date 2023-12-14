@@ -1,19 +1,18 @@
-#ifndef LINEARDIFFUSION_HPP
-#define LINEARDIFFUSION_HPP
+#ifndef SCALARTESTLD_HPP
+#define SCALARTESTLD_HPP
 
 #include "PhysicsCases.hpp"
 
 /*
-	Linear Diffusion Test Case, showcasing how to write a physics case that is compiled
-	at the same time as the 
+	Linear Diffusion Test Case with a trivial scalar
  */
 
 // Always inherit from TransportSystem
-class FishersEquation : public TransportSystem {
+class ScalarTestLD : public TransportSystem {
 	public:
 		// Must provide a constructor that constructs from a toml configuration snippet
 		// you can ignore it, or read problem-dependent parameters from the configuration file
-		explicit FishersEquation( toml::value const& config );
+		explicit ScalarTestLD( toml::value const& config );
 
 		// You must provide implementations of both, these are your boundary condition functions
 		Value LowerBoundary( Index, Time ) const override;
@@ -35,15 +34,23 @@ class FishersEquation : public TransportSystem {
 		void dSources_dq( Index, Values&v , const State &, Position, Time ) override;
 		void dSources_dsigma( Index, Values&v , const State &, Position, Time ) override;
 
+
+		virtual Value ScalarG( Index, const DGSoln& , Time ) override;
+		virtual void ScalarGPrime( Index, State &, const DGSoln &, std::function<double( double )>, Interval, Time ) override;
+		virtual void dSources_dScalars( Index, Values &, const State &, Position, Time ) override;
+
 		// Finally one has to provide initial conditions for u & q
 		Value      InitialValue( Index, Position ) const override;
 		Value InitialDerivative( Index, Position ) const override;
 
 private:
-	double C,c,x_l,x_u;
-	double AblowitzWaveSolution( double s ) const;
+	// Put class-specific data here
+	double kappa, InitialWidth, InitialHeight, Centre;
+	bool lowerNeumann;
 
-	REGISTER_PHYSICS_HEADER( FishersEquation )
+	// Without this (and the implementation line in ScalarTestLD.cpp)
+	// ManTA won't know how to relate the string 'ScalarTestLD' to the class.
+	REGISTER_PHYSICS_HEADER( ScalarTestLD )
 };
 
-#endif // LINEARDIFFUSION_HPP
+#endif // SCALARTESTLD_HPP
