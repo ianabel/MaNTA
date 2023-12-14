@@ -13,10 +13,10 @@ class State {
 	public:
 		State() = default;
 		explicit State( Index nv, Index ns = 0 ) {
-			Variable.resize( nv, 0.0 );
-			Derivative.resize( nv, 0.0 );
-			Flux.resize( nv, 0.0 );
-			Scalars.resize( ns, 0.0 );
+			Variable.resize( nv );
+			Derivative.resize( nv );
+			Flux.resize( nv );
+			Scalars.resize( ns );
 		}
 
 		Vector Variable,Derivative,Flux;

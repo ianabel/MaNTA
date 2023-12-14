@@ -62,19 +62,18 @@ BOOST_AUTO_TEST_CASE(flux_values)
 
     double umid = (::exp(-(x - C) * (x - C) * shape) - ::exp(-(x_L - C) * (x_L - C) * shape));
 
-    Values u(3);
-    u << umid, umid, umid;
-    Values q(3);
-    q << 0.0, 0.0, 0.0;
+    State s( 3, 0 );
+    s.Variable << umid, umid, umid;
+    s.Derivative << 0.0, 0.0, 0.0;
     AutodiffTransportSystem problem(config_snippet);
 
     // BOOST_TEST(problem.InitialValue(0, x) == u(0));
     // BOOST_TEST(problem.InitialValue(1, x) == u(1));
     // BOOST_TEST(problem.InitialValue(2, x) == u(2));
 
-    BOOST_TEST(problem.InitialDerivative(0, x) == q(0));
-    BOOST_TEST(problem.InitialDerivative(1, x) == q(1));
-    BOOST_TEST(problem.InitialDerivative(2, x) == q(2));
+    BOOST_TEST(problem.InitialDerivative(0, x) == s.Derivative(0));
+    BOOST_TEST(problem.InitialDerivative(1, x) == s.Derivative(1));
+    BOOST_TEST(problem.InitialDerivative(2, x) == s.Derivative(2));
 
     Values dGammadu(3);
     dGammadu << 0.0, 0.0, 0.0;
@@ -95,28 +94,28 @@ BOOST_AUTO_TEST_CASE(flux_values)
     dQidq << 0.0, 0.0, 1.0;
 
     Values grad(3);
-    problem.dSigmaFn_du(0, grad, u, q, x, t);
+    problem.dSigmaFn_du(0, grad, s, x, t);
     BOOST_TEST(grad(0) == dGammadu(0));
     BOOST_TEST(grad(1) == dGammadu(1));
     BOOST_TEST(grad(2) == dGammadu(2));
-    problem.dSigmaFn_du(1, grad, u, q, x, t);
+    problem.dSigmaFn_du(1, grad, s, x, t);
     BOOST_TEST(grad(0) == dQedu(0));
     BOOST_TEST(grad(1) == dQedu(1));
     BOOST_TEST(grad(2) == dQedu(2));
-    problem.dSigmaFn_du(2, grad, u, q, x, t);
+    problem.dSigmaFn_du(2, grad, s, x, t);
     BOOST_TEST(grad(0) == dQidu(0));
     BOOST_TEST(grad(1) == dQidu(1));
     BOOST_TEST(grad(2) == dQidu(2));
 
-    problem.dSigmaFn_dq(0, grad, u, q, x, t);
+    problem.dSigmaFn_dq(0, grad, s, x, t);
     BOOST_TEST(grad(0) == dGammadq(0));
     BOOST_TEST(grad(1) == dGammadq(1));
     BOOST_TEST(grad(2) == dGammadq(2));
-    problem.dSigmaFn_dq(1, grad, u, q, x, t);
+    problem.dSigmaFn_dq(1, grad, s, x, t);
     BOOST_TEST(grad(0) == dQedq(0));
     BOOST_TEST(grad(1) == dQedq(1));
     BOOST_TEST(grad(2) == dQedq(2));
-    problem.dSigmaFn_dq(2, grad, u, q, x, t);
+    problem.dSigmaFn_dq(2, grad, s, x, t);
     BOOST_TEST(grad(0) == dQidq(0));
     BOOST_TEST(grad(1) == dQidq(1));
     BOOST_TEST(grad(2) == dQidq(2));
@@ -125,9 +124,9 @@ BOOST_AUTO_TEST_CASE(flux_values)
     double PeFlux = 0.0;
     double PiFlux = 0.0;
 
-    BOOST_TEST(problem.SigmaFn(0, u, q, x, t) == Gamma);
-    BOOST_TEST(problem.SigmaFn(1, u, q, x, t) == PeFlux);
-    BOOST_TEST(problem.SigmaFn(2, u, q, x, t) == PiFlux);
+    BOOST_TEST(problem.SigmaFn(0, s, x, t) == Gamma);
+    BOOST_TEST(problem.SigmaFn(1, s, x, t) == PeFlux);
+    BOOST_TEST(problem.SigmaFn(2, s, x, t) == PiFlux);
 
     Values dS1du(3);
     dS1du << 1.0, 0.0, 0.0;
@@ -138,17 +137,17 @@ BOOST_AUTO_TEST_CASE(flux_values)
     Values dS1dsigma(3);
     dS1dsigma << 1.0, 0.0, 0.0;
 
-    problem.dSources_du(0, grad, u, q, x, t);
+    problem.dSources_du(0, grad, s, x, t);
     BOOST_TEST(grad(0) == dS1du(0));
     BOOST_TEST(grad(1) == dS1du(1));
     BOOST_TEST(grad(2) == dS1du(2));
 
-    problem.dSources_dq(0, grad, u, q, x, t);
+    problem.dSources_dq(0, grad, s, x, t);
     BOOST_TEST(grad(0) == dS1dq(0));
     BOOST_TEST(grad(1) == dS1dq(1));
     BOOST_TEST(grad(2) == dS1dq(2));
 
-    problem.dSources_dsigma(0, grad, u, q, x, t);
+    problem.dSources_dsigma(0, grad, s, x, t);
     BOOST_TEST(grad(0) == dS1dsigma(0));
     BOOST_TEST(grad(1) == dS1dsigma(1));
     BOOST_TEST(grad(2) == dS1dsigma(2));
@@ -162,17 +161,17 @@ BOOST_AUTO_TEST_CASE(flux_values)
     Values dS2dsigma(3);
     dS2dsigma << 0.0, 1.0, 0.0;
 
-    problem.dSources_du(1, grad, u, q, x, t);
+    problem.dSources_du(1, grad, s, x, t);
     BOOST_TEST(grad(0) == dS2du(0));
     BOOST_TEST(grad(1) == dS2du(1));
     BOOST_TEST(grad(2) == dS2du(2));
 
-    problem.dSources_dq(1, grad, u, q, x, t);
+    problem.dSources_dq(1, grad, s, x, t);
     BOOST_TEST(grad(0) == dS2dq(0));
     BOOST_TEST(grad(1) == dS2dq(1));
     BOOST_TEST(grad(2) == dS2dq(2));
 
-    problem.dSources_dsigma(1, grad, u, q, x, t);
+    problem.dSources_dsigma(1, grad, s, x, t);
     BOOST_TEST(grad(0) == dS2dsigma(0));
     BOOST_TEST(grad(1) == dS2dsigma(1));
     BOOST_TEST(grad(2) == dS2dsigma(2));
@@ -186,17 +185,17 @@ BOOST_AUTO_TEST_CASE(flux_values)
     Values dS3dsigma(3);
     dS3dsigma << 0.0, 0.0, 1.0;
 
-    problem.dSources_du(2, grad, u, q, x, t);
+    problem.dSources_du(2, grad, s, x, t);
     BOOST_TEST(grad(0) == dS3du(0));
     BOOST_TEST(grad(1) == dS3du(1));
     BOOST_TEST(grad(2) == dS3du(2));
 
-    problem.dSources_dq(2, grad, u, q, x, t);
+    problem.dSources_dq(2, grad, s, x, t);
     BOOST_TEST(grad(0) == dS3dq(0));
     BOOST_TEST(grad(1) == dS3dq(1));
     BOOST_TEST(grad(2) == dS3dq(2));
 
-    problem.dSources_dsigma(2, grad, u, q, x, t);
+    problem.dSources_dsigma(2, grad, s, x, t);
     BOOST_TEST(grad(0) == dS3dsigma(0));
     BOOST_TEST(grad(1) == dS3dsigma(1));
     BOOST_TEST(grad(2) == dS3dsigma(2));
