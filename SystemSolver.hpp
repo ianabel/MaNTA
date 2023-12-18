@@ -1,6 +1,9 @@
-#pragma once
+#ifndef SYSTEMSOLVER_HPP
+#define SYSTEMSOLVER_HPP
+
 #include <sundials/sundials_linearsolver.h> /* Generic Liner Solver Interface */
 #include <sundials/sundials_types.h>		/* defs of realtype, sunindextype  */
+#include <filesystem>
 
 #include "Types.hpp"
 
@@ -28,10 +31,41 @@ namespace system_solver_test_suite
 class SystemSolver
 {
 public:
-	SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, TransportSystem *pProblem);
-	SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, double SteadyStateTol, TransportSystem *pProblem);
+	SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *pProblem);
 	SystemSolver( const SystemSolver& ) = delete; // Best practice to define this as deleted. We can't copy this class.
 	~SystemSolver();
+
+	void setOutputCadence( double Dt ) { 
+		if( Dt < 0 )
+			throw std::logic_error("Output cadence cannot be negative.");
+		dt = Dt;
+	};
+	void setInitialTimestep( double Dt0 ) { dt0 = Dt0; };
+	void setInitialTime( double T ) { t0 = T; };
+	void setSteadyStateTolerance( double ss_tol ) {
+		if( ss_tol <= 0 )
+			throw std::logic_error("Tolerance for steady-state termination cannot be zero or negative.");
+		steady_state_tol = ss_tol;
+		TerminateOnSteadyState = true;
+	};
+	void setNOutput( int nO ) { 
+		if( nO <= 0 )
+			throw std::logic_error("Number of output grid points cannot be zero or negative.");
+		nOut = nO;
+	};
+	void setMinStepSize( double dt_min ) { 
+		if( dt_min <= 0 )
+			throw std::logic_error("Minimum delta t cannot be zero or negative.");
+		min_step_size = dt_min; 
+	};
+
+	void setTolerances( double a, double r ) {
+		if( (a <= 0) || (r <= 0) )
+			throw std::logic_error("Cannot set tolerance to non-positive value");
+		atol = a;
+		rtol = r;
+	};
+
 
 	// Initialises u, q and lambda to satisfy residual equation at t=0
 	void setInitialConditions(N_Vector &Y, N_Vector &dYdt);
@@ -74,16 +108,16 @@ public:
 	static SystemSolver *ConstructFromConfig(std::string fname);
 
 	// Initialise
-	void runSolver(std::string);
+	void runSolver( double );
 
 	void setJacTime(double tt) { jt = tt; };
 	void setTime(double tt) { t = tt; };
 	void setTau(double tau) { tauc = tau; };
 
+	void setInputFile( std::string const& fn ) { inputFilePath = fn; };
+
 	void setJacEvalY( N_Vector & );
 	int residual(realtype, N_Vector, N_Vector, N_Vector );
-
-	void setPhysicsDebug( bool x ) { physics_debug = x; };
 
 private:
 	Grid grid;
@@ -133,7 +167,7 @@ private:
 	double resNorm = 0.0; // Exclusively for unit testing purposes
 
 	double dt;
-	double t,jt;
+	double t0,t,jt;
 
 	// Really we should do init in the constructor and not need this flag. TODO
 	bool initialised = false;
@@ -151,6 +185,7 @@ private:
 	double tauc;
 	double tau(double x) const { return tauc; };
 
+	double atol,rtol;
 
 	NetCDFIO nc_output;
 	void initialiseNetCDF(std::string const &fname, size_t nOut);
@@ -161,9 +196,9 @@ private:
 	bool TerminateOnSteadyState = false;
 	double steady_state_tol = 1e-3;
 #ifdef PHYSICS_DEBUG
-	bool physics_debug = true;
+	constexpr static bool physics_debug = true;
 #else
-	bool physics_debug = false;
+	constexpr static bool physics_debug = false;
 #endif
 
 #ifdef TEST
@@ -171,4 +206,12 @@ private:
 	friend struct system_solver_test_suite::systemsolver_multichannel_init_tests;
 	friend struct system_solver_test_suite::systemsolver_matrix_tests;
 #endif
+
+	std::filesystem::path inputFilePath;
+	double dt0; // initial dt for CalcIC
+	int nOut;
+	double min_step_size;
+
 };
+
+#endif // SYSTEMSOLVER_HPP

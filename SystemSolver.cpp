@@ -12,17 +12,9 @@
 
 #include "gridStructures.hpp"
 
-SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, double sst, TransportSystem *transpSystem)
-	: SystemSolver( Grid, polyNum, Dt, tau, transpSystem )
-{
-	steady_state_tol = sst;
-	TerminateOnSteadyState = true;
-}
 
-
-SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, TransportSystem *transpSystem)
-	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars( transpSystem->getNumScalars() ), MXSolvers( Grid.getNCells() ), y( nVars, grid, k, nScalars ), dydt( nVars, grid, k, nScalars ), yJac( nVars, grid, k, nScalars ),
-	  dt(Dt), problem(transpSystem), tauc(tau)
+SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *transpSystem)
+	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars( transpSystem->getNumScalars() ), MXSolvers( Grid.getNCells() ), y( nVars, grid, k, nScalars ), dydt( nVars, grid, k, nScalars ), yJac( nVars, grid, k, nScalars ), problem(transpSystem)
 {
 	if ( SUNContext_Create(nullptr, &ctx) < 0 )
 		throw std::runtime_error( "Unable to allocate SUNDIALS Context, aborting." );
@@ -44,8 +36,7 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, do
 		v = nullptr;
 		w = nullptr;
 	}
-	initialiseMatrices();
-	initialised = true;
+	initialised = false; // Need to know tau to call this
 }
 
 SystemSolver::~SystemSolver()
@@ -65,7 +56,7 @@ SystemSolver::~SystemSolver()
 
 void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 {
-
+	t = t0;
 	y.Map(N_VGetArrayPointer(Y));
 	dydt.Map(N_VGetArrayPointer(dYdt));
 
@@ -111,7 +102,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 				double wgt = x_wgts[i] * (I.h() / 2.0);
 				
 				State s = y.eval( x_val );
-				double sourceVal = problem->Sources(var, s, x_val, 0);
+				double sourceVal = problem->Sources(var, s, x_val, t);
 				for (Eigen::Index j = 0; j < k + 1; j++)
 					S_cellwise(j) += wgt * sourceVal * LegendreBasis::Evaluate(I, j, x_val);
 			}
@@ -122,7 +113,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 				double wgt = x_wgts[i] * (I.h() / 2.0);
 
 				State s = y.eval( x_val );
-				double sourceVal = problem->Sources(var, s, x_val, 0);
+				double sourceVal = problem->Sources(var, s, x_val, t);
 				for (Eigen::Index j = 0; j < k + 1; j++)
 					S_cellwise(j) += wgt * sourceVal * LegendreBasis::Evaluate(I, j, x_val);
 			}
@@ -154,12 +145,12 @@ void SystemSolver::ApplyDirichletBCs(DGSoln &Y)
 	{
 		if (problem->isLowerBoundaryDirichlet(i))
 		{
-			Y.lambda(i)(0) = problem->LowerBoundary(i, 0);
+			Y.lambda(i)(0) = problem->LowerBoundary(i, t);
 		}
 
 		if (problem->isUpperBoundaryDirichlet(i))
 		{
-			Y.lambda(i)(grid.getNCells()) = problem->UpperBoundary(i, 0);
+			Y.lambda(i)(grid.getNCells()) = problem->UpperBoundary(i, t);
 		}
 	}
 }
