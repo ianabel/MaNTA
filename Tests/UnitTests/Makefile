@@ -8,7 +8,7 @@ TEST_HEADERS = TestDiffusion.hpp
 
 CXXFLAGS += -I../../ -DTEST
 
-REQUIRED_OBJECTS = ../../DGStatic.o ../../SystemSolver.o ../../Matrices.o ../../NetCDFIO.o ../../PhysicsCases/AutodiffTransportSystem.o ../../PhysicsCases.o ../../PhysicsCases/MatrixDiffusion.o ../../PhysicsCases/Constants.o ../../PhysicsCases/ThreeVarMirror.o
+REQUIRED_OBJECTS = ../../DGStatic.o ../../SystemSolver.o ../../Matrices.o ../../NetCDFIO.o ../../PhysicsCases/AutodiffTransportSystem.o ../../PhysicsCases.o ../../PhysicsCases/MatrixDiffusion.o
 
 UnitTests: main.cpp $(TEST_SOURCES) $(TEST_HEADERS) $(REQUIRED_OBJECTS) Makefile
 	$(CXX) $(CXXFLAGS) -o $@ main.cpp $(TEST_SOURCES) $(REQUIRED_OBJECTS) $(LDFLAGS)
