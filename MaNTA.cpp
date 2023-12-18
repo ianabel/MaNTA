@@ -12,6 +12,59 @@
 
 void LoadFromFile( std::string const& );
 
+double getFloatWithDefault( std::string const& name, toml::value const& config, double defaultValue )
+{
+	auto confCount = config.count(name);
+	if ( confCount == 0 )
+		return defaultValue;
+	else if ( confCount > 1 )
+		throw std::invalid_argument(name + " was multiply specified." );
+
+	auto configElement = toml::find(config, name);
+
+	if (configElement.is_integer())
+		return static_cast<double>(configElement.as_floating());
+	else if (configElement.is_floating())
+		return static_cast<double>(configElement.as_floating());
+	else
+		throw std::invalid_argument(name + " specified incorrrectly");
+	return 0.0;
+}
+
+double getFloat( std::string const& name, toml::value const& config )
+{
+	auto confCount = config.count(name);
+	if ( confCount == 0 )
+		throw std::invalid_argument(name + " was not specified." );
+	else if ( confCount > 1 )
+		throw std::invalid_argument(name + " was multioply specified." );
+
+	auto configElement = toml::find(config, name);
+	if (configElement.is_integer())
+		return static_cast<double>(configElement.as_floating());
+	else if (configElement.is_floating())
+		return static_cast<double>(configElement.as_floating());
+	else
+		throw std::invalid_argument(name + " specified incorrrectly");
+	return 0.0;
+}
+
+int getIntWithDefault( std::string const& name, toml::value const& config, int defaultValue )
+{
+	auto confCount = config.count(name);
+	if ( confCount == 0 )
+		return defaultValue;
+	else if ( confCount > 1 )
+		throw std::invalid_argument(name + " was multioply specified." );
+
+	auto configElement = toml::find(config, name);
+	if (configElement.is_integer())
+		return static_cast<int>(configElement.as_integer());
+	else
+		throw std::invalid_argument(name + " specified incorrrectly");
+	return 0;
+}
+
 int runManta( std::string const& fname )
 {
 	// std::cerr.precision(17);
@@ -93,9 +146,16 @@ int runManta( std::string const& fname )
 
 	Grid grid(lBound, uBound, nCells, highGridBoundary);
 
-	double tau = toml::find_or(config, "tau", 0.75);
+	double tau = getFloatWithDefault("tau",config,1.0);
+	double delta_t = getFloat("delta_t",config);
+	double tFinal = getFloat("t_final",config);
+	double rtol = getFloatWithDefault("Relative_tolerance",config,1e-3);
+	double atol = getFloatWithDefault("Absolute_tolerance",config,1e-2);
 
-	double dt = toml::find_or(config, "dt", 1.e-3);
+	double dt_min = getFloatWithDefault("MinStepSize",config,1e-7);
+
+
+	int nOutput = getIntWithDefault("OutputPoints",config,301);
 
 	if ( config.count( "LibraryFile" ) == 1 ) {
 		LoadFromFile( config.at( "LibraryFile" ).as_string() );
@@ -122,16 +182,22 @@ int runManta( std::string const& fname )
 		return 1;
 	}
 
+	system = std::make_shared<SystemSolver>(grid, k, pProblem);
+
+	system->setOutputCadence( delta_t );
+	system->setTolerances( atol, rtol );
+	system->setTau( tau );
+	system->setInputFile( fname );
+
+	system->setNOutput( nOutput );
+	system->setMinStepSize( dt_min );
+
 	if ( config.count( "SteadyStateTolerance" ) == 1 ) {
 		double sst = toml::find<double>( config, "SteadyStateTolerance" );
 		std::cout << "Running until steady state achieved (variation below "<<sst << "or end time reached." << std::endl;
-		system = std::make_shared<SystemSolver>(grid, k, dt, tau, sst, pProblem);
-	} else {
-		system = std::make_shared<SystemSolver>(grid, k, dt, tau, pProblem);
 	}
 
-	// TODO: stop parsing the config file again inside this function
-	system->runSolver(fname);
+	system->runSolver( tFinal );
 
 	// For compiled-in TransportSystems we have the type information and
 	// this will call the correct inherited destructor
@@ -139,3 +205,4 @@ int runManta( std::string const& fname )
 
 	return 0;
 }
+

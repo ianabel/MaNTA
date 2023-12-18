@@ -12,17 +12,9 @@
 
 #include "gridStructures.hpp"
 
-SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, double sst, TransportSystem *transpSystem)
-	: SystemSolver( Grid, polyNum, Dt, tau, transpSystem )
-{
-	steady_state_tol = sst;
-	TerminateOnSteadyState = true;
-}
 
-
-SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, double tau, TransportSystem *transpSystem)
-	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars( transpSystem->getNumScalars() ), MXSolvers( Grid.getNCells() ), y( nVars, grid, k, nScalars ), dydt( nVars, grid, k, nScalars ), yJac( nVars, grid, k, nScalars ),
-	  dt(Dt), problem(transpSystem), tauc(tau)
+SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *transpSystem)
+	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars( transpSystem->getNumScalars() ), MXSolvers( Grid.getNCells() ), y( nVars, grid, k, nScalars ), dydt( nVars, grid, k, nScalars ), yJac( nVars, grid, k, nScalars ), problem(transpSystem)
 {
 	if ( SUNContext_Create(nullptr, &ctx) < 0 )
 		throw std::runtime_error( "Unable to allocate SUNDIALS Context, aborting." );
@@ -44,8 +36,7 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, double Dt, do
 		v = nullptr;
 		w = nullptr;
 	}
-	initialiseMatrices();
-	initialised = true;
+	initialised = false; // Need to know tau to call this
 }
 
 SystemSolver::~SystemSolver()

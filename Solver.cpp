@@ -7,7 +7,6 @@
 #include <iostream>
 #include <fstream>
 #include <memory>
-#include <filesystem>
 
 #include "Types.hpp"
 #include "SystemSolver.hpp"
@@ -24,7 +23,7 @@ extern "C" {
 int static_residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data);
 int JacSetup(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3);
 
-void SystemSolver::runSolver(std::string inputFile)
+void SystemSolver::runSolver( double tFinal )
 {
 	//---------------------------Variable assiments-------------------------------
 	SUNLinearSolver LS = NULL; // linear solver memory structure
@@ -37,56 +36,11 @@ void SystemSolver::runSolver(std::string inputFile)
 	N_Vector id = NULL;			 // vector for storing id (which elements are algebraic or differentiable)
 	N_Vector res = NULL;		 // vector for storing residual
 	N_Vector absTolVec = NULL;	 // vector for storing absolute tolerances
-	int nOut = 301;
-	double tFinal,delta_t;
-	realtype rtol;
+	double delta_t = dt;
 	realtype t0 = 0.0, tout, tret;
 
-	// TODO: Move all config parsing into a separate function and just make some of these member functions
-	//--------------------------------------Read File---------------------------------------
-	const auto configFile = toml::parse(inputFile);
-	const auto config = toml::find<toml::value>(configFile, "configuration");
-
-	auto printdt = toml::find(config, "delta_t");
-	if (config.count("delta_t") != 1)
-		throw std::invalid_argument("delta_t unspecified or specified more than once");
-	else if (printdt.is_integer())
-		delta_t = static_cast<double>(printdt.as_integer());
-	else if (printdt.is_floating())
-		delta_t = static_cast<double>(printdt.as_floating());
-	else
-		throw std::invalid_argument("delta_t has non-numeric type");
-
-	auto tEnd = toml::find(config, "t_final");
-	if (config.count("t_final") != 1)
-		throw std::invalid_argument("tEnd unspecified or specified more than once");
-	else if (tEnd.is_integer())
-		tFinal = static_cast<double>(tEnd.as_floating());
-	else if (tEnd.is_floating())
-		tFinal = static_cast<double>(tEnd.as_floating());
-	else
-		throw std::invalid_argument("tEnd specified incorrrectly");
-
-	auto relTol = toml::find(config, "Relative_tolerance");
-	if (config.count("Relative_tolerance") != 1)
-		rtol = 1.0e-5;
-	else if (relTol.is_integer())
-		rtol = static_cast<double>(relTol.as_floating());
-	else if (relTol.is_floating())
-		rtol = static_cast<double>(relTol.as_floating());
-	else
-		throw std::invalid_argument("relative_tolerance specified incorrrectly");
-
-	realtype atol;
-	auto absTol = toml::find(config, "Absolute_tolerance");
-	if (config.count("Absolute_tolerance") != 1)
-		atol = 1.0e-2;
-	else if (absTol.is_integer())
-		atol = static_cast<double>(absTol.as_floating());
-	else if (absTol.is_floating())
-		atol = static_cast<double>(absTol.as_floating());
-	else
-		throw std::invalid_argument("Absolute_tolerance specified incorrrectly");
+	if( !initialised )
+		initialiseMatrices();
 
 	//-------------------------------------System Design----------------------------------------------
 
@@ -195,7 +149,6 @@ void SystemSolver::runSolver(std::string inputFile)
 	IDASetMaxNonlinIters(IDA_mem, 10);
 
 	// Initialise text output and write out initial condition massaged by CalcIC
-	std::filesystem::path inputFilePath( inputFile );
 	std::string baseName = inputFilePath.stem();
 	std::ofstream out0(baseName + ".dat");
 
@@ -255,12 +208,12 @@ void SystemSolver::runSolver(std::string inputFile)
 
 	IDASetMaxNumSteps(IDA_mem, 50000);
 
-	double step_min = 1e-7;
-	IDASetMinStep(IDA_mem, step_min);
+	IDASetMinStep(IDA_mem, min_step_size);
 
 	t = t0;
 	tout = t0;
 	tret = t0;
+	delta_t = dt;
 
 	if ( t0 > tFinal ) {
 		std::cerr << "Initial time t = " << t0 << " is after the end of the simulation at t = " << tFinal << std::endl;
@@ -268,7 +221,7 @@ void SystemSolver::runSolver(std::string inputFile)
 	}
 
 	// Solving Loop
-	while ( tFinal - tret > step_min ) {
+	while ( tFinal - tret > min_step_size ) {
 		tout += delta_t;
 		if ( tout > tFinal )
 			tout = tFinal; // Never ask for results beyond tFinal
