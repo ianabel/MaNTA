@@ -56,7 +56,7 @@ SystemSolver::~SystemSolver()
 
 void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 {
-
+	t = t0;
 	y.Map(N_VGetArrayPointer(Y));
 	dydt.Map(N_VGetArrayPointer(dYdt));
 
@@ -102,7 +102,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 				double wgt = x_wgts[i] * (I.h() / 2.0);
 				
 				State s = y.eval( x_val );
-				double sourceVal = problem->Sources(var, s, x_val, 0);
+				double sourceVal = problem->Sources(var, s, x_val, t);
 				for (Eigen::Index j = 0; j < k + 1; j++)
 					S_cellwise(j) += wgt * sourceVal * LegendreBasis::Evaluate(I, j, x_val);
 			}
@@ -113,7 +113,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 				double wgt = x_wgts[i] * (I.h() / 2.0);
 
 				State s = y.eval( x_val );
-				double sourceVal = problem->Sources(var, s, x_val, 0);
+				double sourceVal = problem->Sources(var, s, x_val, t);
 				for (Eigen::Index j = 0; j < k + 1; j++)
 					S_cellwise(j) += wgt * sourceVal * LegendreBasis::Evaluate(I, j, x_val);
 			}
@@ -145,12 +145,12 @@ void SystemSolver::ApplyDirichletBCs(DGSoln &Y)
 	{
 		if (problem->isLowerBoundaryDirichlet(i))
 		{
-			Y.lambda(i)(0) = problem->LowerBoundary(i, 0);
+			Y.lambda(i)(0) = problem->LowerBoundary(i, t);
 		}
 
 		if (problem->isUpperBoundaryDirichlet(i))
 		{
-			Y.lambda(i)(grid.getNCells()) = problem->UpperBoundary(i, 0);
+			Y.lambda(i)(grid.getNCells()) = problem->UpperBoundary(i, t);
 		}
 	}
 }

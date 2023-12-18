@@ -37,7 +37,7 @@ void SystemSolver::runSolver( double tFinal )
 	N_Vector res = NULL;		 // vector for storing residual
 	N_Vector absTolVec = NULL;	 // vector for storing absolute tolerances
 	double delta_t = dt;
-	realtype t0 = 0.0, tout, tret;
+	realtype tout, tret;
 
 	if( !initialised )
 		initialiseMatrices();

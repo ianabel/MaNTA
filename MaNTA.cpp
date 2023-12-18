@@ -148,6 +148,7 @@ int runManta( std::string const& fname )
 
 	double tau = getFloatWithDefault("tau",config,1.0);
 	double delta_t = getFloat("delta_t",config);
+	double tZero = getFloatWithDefault("t_initial",config,0.0);
 	double tFinal = getFloat("t_final",config);
 	double rtol = getFloatWithDefault("Relative_tolerance",config,1e-3);
 	double atol = getFloatWithDefault("Absolute_tolerance",config,1e-2);
@@ -187,6 +188,7 @@ int runManta( std::string const& fname )
 	system->setOutputCadence( delta_t );
 	system->setTolerances( atol, rtol );
 	system->setTau( tau );
+	system->setInitialTime( tZero );
 	system->setInputFile( fname );
 
 	system->setNOutput( nOutput );

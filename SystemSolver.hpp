@@ -41,7 +41,7 @@ public:
 		dt = Dt;
 	};
 	void setInitialTimestep( double Dt0 ) { dt0 = Dt0; };
-	void setInitialTime( double t0 );
+	void setInitialTime( double T ) { t0 = T; };
 	void setSteadyStateTolerance( double ss_tol ) {
 		if( ss_tol <= 0 )
 			throw std::logic_error("Tolerance for steady-state termination cannot be zero or negative.");
@@ -167,7 +167,7 @@ private:
 	double resNorm = 0.0; // Exclusively for unit testing purposes
 
 	double dt;
-	double t,jt;
+	double t0,t,jt;
 
 	// Really we should do init in the constructor and not need this flag. TODO
 	bool initialised = false;
