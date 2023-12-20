@@ -221,24 +221,23 @@ void SystemSolver::initialiseMatrices()
 
 		Eigen::MatrixXd M(3 * nVars * (k + 1), 3 * nVars * (k + 1));
 		M.setZero();
+
 		// row1
-		M.block(0, 0, nVars * (k + 1), nVars * (k + 1)).setZero();
-		M.block(0, nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = -A;
-		M.block(0, 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = -B.transpose();
+		M.block(0,                   0, nVars * (k + 1), nVars * (k + 1)) = A;
+		M.block(0,     nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)).setZero(); // NLq added at Jac step
+		M.block(0, 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)).setZero(); // NLu added at Jac step
 
 		// row2
-		M.block(nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) = B;
-		M.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)).setZero();
-		M.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = D; // X added at Jac step
+		M.block(nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)).setZero();
+		M.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = -A;
+		M.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = -B.transpose();
 
 		// row3
-		M.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) = A;
-		M.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)).setZero();	   // NLq added at Jac step
-		M.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)).setZero(); // NLu added at Jac step
+		M.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) = B;
+		M.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)).setZero();
+		M.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = D; // X added at Jac step
 
-		// 2*( k + 1) is normally only medium-sized (10 - 20)
-		// so just do a full LU factorization to solve
-		// ?Now this is nVars*3*(k+1) so maybe this should be changed?
+		// TODO: Consider factorization here (is M sparse enough to warrant a sparse implementation?)
 		MBlocks.emplace_back(M);
 
 		Eigen::MatrixXd CE_vec(3 * nVars * (k + 1), 2 * nVars);
@@ -274,17 +273,17 @@ void SystemSolver::initialiseMatrices()
 			}
 
 			// Construct per-cell Matrix solutions
-			// ( 0    A    B^T )    [ C^T ]
-			// ( B    0     D )     [  E  ]
 			// ( A   NLu   NLq )^-1 [  0  ]
+			// ( 0    A    B^T )    [ C^T ]
+			// ( B    0     D  )    [  E  ]
 			// These are the homogeneous solution, that depend on lambda
 			C.block(var * 2, var * (k + 1), 2, k + 1) = Cvar;
 			E.block(var * (k + 1), var * 2, k + 1, 2) = Evar;
 		}
 
-		CE_vec.block(0, 0, nVars * (k + 1), nVars * 2) = C.transpose();
-		CE_vec.block(nVars * (k + 1), 0, nVars * (k + 1), nVars * 2) = E;
-		CE_vec.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * 2).setZero();
+		CE_vec.block( 0,                   0, nVars * (k + 1), nVars * 2).setZero();
+		CE_vec.block( nVars * (k + 1),     0, nVars * (k + 1), nVars * 2) = C.transpose();
+		CE_vec.block( 2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * 2) = E;
 		CEBlocks.emplace_back(CE_vec);
 
 		C_cellwise.emplace_back(C);
@@ -527,27 +526,27 @@ void SystemSolver::updateMatricesForJacSolve()
 			DGApprox::MassMatrix(I, Xsubmat, alphaF);
 			X.block(var * (k + 1), var * (k + 1), k + 1, k + 1) = Xsubmat;
 		}
-		MX.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += X;
+		MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += X;
 
 		// NLq Matrix
 		NLqMat(NLq, yJac, I);
-		MX.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLq;
+		MX.block(0, nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLq;
 
 		// NLu Matrix
 		NLuMat(NLu, yJac, I);
-		MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLu;
+		MX.block(0, 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLu;
 
 		// S_sig Matrix
 		dSourcedsigma_Mat(Ssig, yJac, I);
-		MX.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Ssig;
+		MX.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) -= Ssig;
 
 		// S_q Matrix
 		dSourcedq_Mat(Sq, yJac, I);
-		MX.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Sq;
+		MX.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Sq;
 		
 		// S_u Matrix
 		dSourcedu_Mat(Su, yJac, I);
-		MX.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
+		MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
 
 		MXSolvers[ i ].compute(MX);
 
@@ -566,7 +565,7 @@ void SystemSolver::updateMatricesForJacSolve()
 		dSources_dScalars_Mat( v_tmp, yJac, grid[ i ] );
 		for ( Index j = 0; j < nScalars; ++j ) 
 			for ( Index v = 0; v < nVars; ++v )
-				v_map[ j ].q( v ).getCoeff( i ).second = v_tmp.block( v * U_DOF, j, U_DOF, 1 );
+				v_map[ j ].u( v ).getCoeff( i ).second = v_tmp.block( v * U_DOF, j, U_DOF, 1 );
 	}
 	v_map.clear();
 
@@ -818,13 +817,7 @@ int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector re
 
 	resVec.setZero();
 
-	// residual.Scalar( x ) = problem->ScalarG( ... )
-	for ( Index i = 0; i < nScalars; ++i )
-	{
-		res.Scalar( i ) = problem->ScalarG( i, Y_h, tres );
-	}
-
-	// residual.lambda = C*sigma + G*u + H*lambda - L 
+	// residual.lambda = C*sigma + G*u + H*lambda - L
 
 	for ( Index i = 0; i < nCells; i++ )
 	{
@@ -881,18 +874,32 @@ int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector re
 
 			auto const& lambda = lamCell.segment<2>( 2*var );
 
-			res.sigma(var).getCoeff(i).second =
-				-A_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.q(var).getCoeff(i).second - B_cellwise[i].transpose().block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.u(var).getCoeff(i).second + C_cellwise[i].transpose().block(var * (k + 1), var * 2, k + 1, 2) * lambda - RF_cellwise[i].block(var * (k + 1), 0, k + 1, 1);
+			// We should normalise the components of the residual such that the `sigma' component of res
+			// has tolerances that are the same as `sigma' itself.
+			//
+			// For sigma and q, just make the 'sigma-determinitive' equation the sigma component and the same for q.
+			// as these equations are proportional to the variables themselves, we are done
+
+			res.sigma(var).getCoeff(i).second = Y_h.sigma(var).getCoeff(i).second + kappa_cellwise;
 
 			res.q(var).getCoeff(i).second =
+				-A_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.q(var).getCoeff(i).second - B_cellwise[i].transpose().block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.u(var).getCoeff(i).second + C_cellwise[i].transpose().block(var * (k + 1), var * 2, k + 1, 2) * lambda - RF_cellwise[i].block(var * (k + 1), 0, k + 1, 1);
+			
+
+			// For the 'u' component of the residual, we also have a factor of d/dt. Thus we should multiply this equation by some frequency estimate. 
+			// For the moment we leave it as it is.
+			res.u(var).getCoeff(i).second =
 				B_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.sigma(var).getCoeff(i).second + D_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.u(var).getCoeff(i).second + E_cellwise[i].block(var * (k + 1), var * 2, k + 1, 2) * lambda - RF_cellwise[i].block(nVars * (k + 1) + var * (k + 1), 0, k + 1, 1) - S_cellwise + XMats[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * dYdt_h.u(var).getCoeff(i).second;
 
-			res.u(var).getCoeff(i).second = Y_h.sigma(var).getCoeff(i).second + kappa_cellwise;
 		}
 	}
 
-	for ( Index j = 0; j < problem->getNumScalars(); j++ ) {
-		res.Scalar( j ) = problem->ScalarG( j, Y_h, tres );
+	// For the scalars, we multiply by sqrt(N_HDG) to avoid the scalars being
+	// ignored relative to the error in the spatially-varying quantities as
+	// the number of spatial degrees of freedom increase.
+
+	for ( Index j = 0; j < nScalars; j++ ) {
+		res.Scalar( j ) = std::sqrt(SQU_DOF * nCells) * problem->ScalarG( j, Y_h, tres );
 	}
 
 	return 0;
