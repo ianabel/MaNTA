@@ -59,8 +59,8 @@ public:
 		min_step_size = dt_min; 
 	};
 
-	void setTolerances( double a, double r ) {
-		if( (a <= 0) || (r <= 0) )
+	void setTolerances( std::vector<double> a, double r ) {
+		if( r <= 0 )
 			throw std::logic_error("Cannot set tolerance to non-positive value");
 		atol = a;
 		rtol = r;
@@ -185,7 +185,8 @@ private:
 	double tauc;
 	double tau(double x) const { return tauc; };
 
-	double atol,rtol;
+	double rtol;
+	std::vector<double> atol;
 
 	NetCDFIO nc_output;
 	void initialiseNetCDF(std::string const &fname, size_t nOut);

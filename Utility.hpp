@@ -41,4 +41,10 @@ Interpolant&& LoadFunctionFromFile( std::string const& fname, std::string const&
 	return Interpolant( std::move(x_vals), std::move(f_vals) );
 }
 
+/*
+class StandardProfile {
+	enum 
+}
+*/
+
 #endif // UTILITY_HPP

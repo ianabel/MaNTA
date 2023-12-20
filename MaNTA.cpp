@@ -151,7 +151,26 @@ int runManta( std::string const& fname )
 	double tZero = getFloatWithDefault("t_initial",config,0.0);
 	double tFinal = getFloat("t_final",config);
 	double rtol = getFloatWithDefault("Relative_tolerance",config,1e-3);
-	double atol = getFloatWithDefault("Absolute_tolerance",config,1e-2);
+
+	std::vector<double> absTol;
+
+	if( config.count("Absolute_tolerance") == 1 ) {
+		auto atol_toml = toml::find( config, "Absolute_tolerance" );
+		if( atol_toml.is_array() )
+			absTol = toml::get< std::vector<double> >( atol_toml );
+		else {
+			absTol.resize(1);
+			if( atol_toml.is_integer() )
+				absTol[0] = static_cast<double>( toml::get<int>( atol_toml ) );
+			else
+				absTol[0] = toml::get<double>( atol_toml );
+		}
+	} else if ( config.count("Absolute_tolerance") == 0 ) {
+		absTol.resize(1);
+		absTol[0] = 1e-2;
+	} else {
+		throw std::invalid_argument("Absolute_tolerance was specified more than once");
+	}
 
 	double dt_min = getFloatWithDefault("MinStepSize",config,1e-7);
 
@@ -186,7 +205,7 @@ int runManta( std::string const& fname )
 	system = std::make_shared<SystemSolver>(grid, k, pProblem);
 
 	system->setOutputCadence( delta_t );
-	system->setTolerances( atol, rtol );
+	system->setTolerances( absTol, rtol );
 	system->setTau( tau );
 	system->setInitialTime( tZero );
 	system->setInputFile( fname );

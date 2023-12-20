@@ -108,25 +108,33 @@ void SystemSolver::runSolver( double tFinal )
 
 	DGSoln tolerances( nVars, grid, k, nScalars );
 	tolerances.Map(N_VGetArrayPointer(absTolVec));
-	double dx = (grid.upperBoundary() - grid.lowerBoundary()) / ( k * nCells );
-	// TODO: re-add user tolerance interface
 	for (Index i = 0; i < nCells; ++i)
 	{
 		for (Index v = 0; v < nVars; ++v)
 		{
-			tolerances.u(v).getCoeff(i).second.setConstant(atol);
-			tolerances.q(v).getCoeff(i).second.setConstant(atol / dx);
-			tolerances.sigma(v).getCoeff(i).second.setConstant(atol * dx / delta_t);
-			tolerances.lambda(v).setConstant(atol);
+			double absTolU,absTolQ,absTolSigma;
+			if( atol.size() == 1 ) {
+				absTolU = atol[0];
+				absTolQ = atol[0];
+				absTolSigma = atol[0];
+			} else if ( atol.size() == nVars ) {
+				absTolU = atol[v];
+				absTolQ = atol[v];
+				absTolSigma = atol[v];
+			}
+			tolerances.u(v).getCoeff(i).second.setConstant(absTolU);
+			tolerances.q(v).getCoeff(i).second.setConstant(absTolQ);
+			tolerances.sigma(v).getCoeff(i).second.setConstant(absTolSigma);
+			tolerances.lambda(v).setConstant(absTolU);
 		}
 	}
 
 	for ( Index i = 0; i < nScalars; ++i )
-		tolerances.Scalar( i ) = atol;
+		tolerances.Scalar( i ) = atol[0];
 
 	// Steady-state stopping conditions
 	realtype dydt_rel_tol = steady_state_tol;
-	realtype dydt_abs_tol = atol;
+	realtype dydt_abs_tol = 1e-2;
 
 	retval = IDASVtolerances(IDA_mem, rtol, absTolVec);
 	if (ErrorChecker::check_retval(&retval, "IDASVtolerances", 1))
@@ -201,6 +209,7 @@ void SystemSolver::runSolver( double tFinal )
 		IDAEwtSet( Y, wgt, IDA_mem );
 
 		res_out << "# Residual norm at t = " << t0 << " (post-CalcIC) is " << N_VWrmsNorm( res, wgt ) << std::endl;
+		print( res_out, t0, nOut, res );
 	}
 
 	// This also writes the t0 timeslice
