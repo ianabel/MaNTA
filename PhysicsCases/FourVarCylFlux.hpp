@@ -1,45 +1,48 @@
-#include "AutodiffFlux.hpp"
-
 #ifndef FOURVARCYLFLUX
 #define FOURVARCYLFLUX
 
-class FourVarCylFlux : public FluxObject
+#include "AutodiffTransportSystem.hpp"
+
+class FourVarCylFlux : public AutodiffTransportSystem
 {
 public:
-    FourVarCylFlux(toml::value const &config, Index nVars);
+    FourVarCylFlux(toml::value const &, Grid const& );
 
 private:
+	 Real Flux( Index, RealVector, RealVector, Position, Time ) override;
+	 Real Source( Index, RealVector, RealVector, RealVector, Position, Time ) override;
+
     std::map<std::string, int> ParticleSources = {{"None", 0}, {"Gaussian", 1}};
-    static int ParticleSource;
-    static double sourceStrength;
+    int ParticleSource;
+    double sourceStrength;
     Vector InitialHeights;
-    static dual sourceWidth;
-    static dual sourceCenter;
+    Real sourceWidth;
+    Real sourceCenter;
 
     // reference values
-    static dual n0;
-    static dual Bmid;
-    static dual T0;
-    static dual E0;
-    static dual J0;
-    static Value L;
-    static dual p0;
-    static dual V0;
-    static dual Gamma0;
-    static dual taue0;
-    static dual taui0;
-    static dual h0;
+    Real n0;
+    Real Bmid;
+    Real T0;
+    Real E0;
+    Real J0;
+    Value L;
+    Real p0;
+    Real V0;
+    Real Gamma0;
+    Real taue0;
+    Real taui0;
+    Real h0;
 
-    static dual Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t);
-    static dual qe_hat(VectorXdual u, VectorXdual q, dual x, double t);
-    static dual qi_hat(VectorXdual u, VectorXdual q, dual x, double t);
-    static dual hi_hat(VectorXdual u, VectorXdual q, dual x, double t);
-    static dual Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t);
-    static dual Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t);
-    static dual Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t);
-    static dual Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t);
+    Real Gamma_hat(RealVector u, RealVector q, Real x, double t);
+    Real qe_hat(RealVector u, RealVector q, Real x, double t);
+    Real qi_hat(RealVector u, RealVector q, Real x, double t);
+    Real hi_hat(RealVector u, RealVector q, Real x, double t);
+    Real Sn_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t);
+    Real Spe_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t);
+    Real Spi_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t);
+    Real Shi_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t);
 
-    REGISTER_FLUX_HEADER(FourVarCylFlux)
+    REGISTER_PHYSICS_HEADER(FourVarCylFlux)
 };
 
 #endif

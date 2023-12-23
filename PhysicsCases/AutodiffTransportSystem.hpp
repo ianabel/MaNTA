@@ -11,7 +11,7 @@ using RealVector = autodiff::VectorXdual;
 class AutodiffTransportSystem : public TransportSystem
 {
 public:
-    explicit AutodiffTransportSystem( toml::value const &config, Grid const& );
+    explicit AutodiffTransportSystem( toml::value const &config, Grid const&, Index nVars, Index nScalars );
 
     //  Function for passing boundary conditions to the solver
     virtual Value LowerBoundary(Index i, Time t) const override { return InitialFunction(i, xL, 0.0, uR(i), uL(i), xL, xR).val.val; };

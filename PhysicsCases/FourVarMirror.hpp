@@ -1,62 +1,65 @@
-#include "AutodiffFlux.hpp"
-
 #ifndef FOURVARMirror
 #define FOURVARMirror
 
-class FourVarMirror : public FluxObject
+#include "AutodiffTransportSystem.hpp"
+
+class FourVarMirror : public AutodiffTransportSystem
 {
 public:
-    FourVarMirror(toml::value const &config, Index nVars);
+    FourVarMirror(toml::value const &, Grid const& );
 
 private:
+	 Real Flux( Index, RealVector, RealVector, Position, Time ) override;
+	 Real Source( Index, RealVector, RealVector, RealVector, Position, Time ) override;
+
     std::map<std::string, int> ParticleSources = {{"None", 0}, {"Gaussian", 1}};
-    static int ParticleSource;
-    static double sourceStrength;
+    int ParticleSource;
+    double sourceStrength;
     Vector InitialHeights;
-    static dual sourceWidth;
-    static dual sourceCenter;
+    Real sourceWidth;
+    Real sourceCenter;
 
     // reference values
-    static dual n0;
-    static dual Bmid;
-    static dual T0;
-    static dual E0;
-    static dual J0;
-    static Value L;
-    static dual p0;
-    static dual V0;
-    static dual Gamma0;
-    static dual taue0;
-    static dual taui0;
-    static dual h0;
-    static dual omega0;
+    Real n0;
+    Real Bmid;
+    Real T0;
+    Real E0;
+    Real J0;
+    Value L;
+    Real p0;
+    Real V0;
+    Real Gamma0;
+    Real taue0;
+    Real taui0;
+    Real h0;
+    Real omega0;
 
-    static dual Gamma_hat(VectorXdual u, VectorXdual q, dual x, double t);
-    static dual qe_hat(VectorXdual u, VectorXdual q, dual x, double t);
-    static dual qi_hat(VectorXdual u, VectorXdual q, dual x, double t);
-    static dual hi_hat(VectorXdual u, VectorXdual q, dual x, double t);
-    static dual Sn_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t);
-    static dual Spe_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t);
-    static dual Spi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t);
-    static dual Shi_hat(VectorXdual u, VectorXdual q, VectorXdual sigma, dual x, double t);
+    Real Gamma_hat(RealVector u, RealVector q, Real x, double t);
+    Real qe_hat(RealVector u, RealVector q, Real x, double t);
+    Real qi_hat(RealVector u, RealVector q, Real x, double t);
+    Real hi_hat(RealVector u, RealVector q, Real x, double t);
+    Real Sn_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t);
+    Real Spe_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t);
+    Real Spi_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t);
+    Real Shi_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t);
 
-    static dual phi0(VectorXdual u, VectorXdual q, dual x, double t);
-    static dual dphi0dV(VectorXdual u, VectorXdual q, dual x, double t);
-    static dual Chi_e(VectorXdual u, VectorXdual q, dual x, double t);
-    static dual Chi_i(VectorXdual u, VectorXdual q, dual x, double t);
-    static bool includeParallelLosses;
+    Real phi0(RealVector u, RealVector q, Real x, double t);
+    Real dphi0dV(RealVector u, RealVector q, Real x, double t);
+    Real Chi_e(RealVector u, RealVector q, Real x, double t);
+    Real Chi_i(RealVector u, RealVector q, Real x, double t);
+    bool includeParallelLosses;
 
-    static double Rmin;
-    static double Rmax;
+    double Rmin;
+    double Rmax;
 
-    static double R(double x, double t);
-    static double psi(double R);
-    static double V(double R);
-    static double Vprime(double R);
-    static double B(double x, double t);
-    static double Bmax;
+    double R(double x, double t);
+    double psi(double R);
+    double V(double R);
+    double Vprime(double R);
+    double B(double x, double t);
+    double Bmax;
 
-    REGISTER_FLUX_HEADER(FourVarMirror)
+    REGISTER_PHYSICS_HEADER(FourVarMirror)
 };
 
 #endif

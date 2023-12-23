@@ -56,7 +56,7 @@ dual tau_hat(dual n, dual P)
     if (P > 0)
         return (1.0 / pow(n, 5.0 / 2.0)) * (pow(P, 3.0 / 2.0));
     else
-        return 1.0 / n;
+		throw std::logic_error( "Negative pressure encountered inside calculation.");
 }
 
 dual Ce(dual n, dual Pi, dual Pe)

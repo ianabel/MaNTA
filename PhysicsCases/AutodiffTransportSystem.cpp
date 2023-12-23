@@ -13,8 +13,11 @@ enum
     Linear = 4,
 };
 
-AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config, Grid const& grid )
+AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config, Grid const& grid, Index nV, Index nS )
 {
+	nVars = nV;
+	nScalars = nS;
+
     if (config.count("AutodiffTransportSystem") != 1)
         throw std::invalid_argument("There should be a [AutodiffTransportSystem] section if you are using the AutodiffTransportSystem physics model.");
 
@@ -117,6 +120,7 @@ Value AutodiffTransportSystem::InitialValue(Index i, Position x) const
 {
 	return InitialFunction(i, x, 0.0, UpperBoundary(i, 0.0), LowerBoundary(i, 0.0), xL, xR).val.val;
 }
+
 Value AutodiffTransportSystem::InitialDerivative(Index i, Position x) const
 {
 	dual2nd pos = x;

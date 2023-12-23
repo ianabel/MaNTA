@@ -102,13 +102,7 @@ int runManta( std::string const& fname )
 		highGridBoundary = false;
 	else
 	{
-		std::string denseEdges = config.at("High_Grid_Boundary").as_string();
-		if (denseEdges == "true")
-			highGridBoundary = true;
-		else if (denseEdges == "false")
-			highGridBoundary = false;
-		else
-			throw std::invalid_argument("high_Grid_Boundary specified incorrrectly");
+		highGridBoundary = config.at("High_Grid_Boundary").as_boolean();
 	}
 
 	auto numberOfCells = toml::find(config, "Grid_size");

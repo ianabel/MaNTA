@@ -1,36 +1,19 @@
-#include "3VarCylFlux.hpp"
+#include "ThreeVarCylinder.hpp"
 #include "Constants.hpp"
 #include <iostream>
 
-REGISTER_PHYSICS_IMPL(ThreeVarCylFlux);
+REGISTER_PHYSICS_IMPL(ThreeVarCylinder);
 
-enum
+
+std::map<std::string, SourceType> ParticleSources = {{"None", None}, {"Gaussian", Gaussian}};
+
+ThreeVarCylinder::ThreeVarCylinder( toml::value const &config, Grid const& grid )
+	: AutodiffTransportSystem( config, grid, 3, 0 ) // Configure a blank autodiff system with three variables and no scalars
 {
-    None = 0,
-    Gaussian = 1,
-};
+    if (config.count("ThreeVarCylinder") != 1)
+        throw std::invalid_argument("There should be a [ThreeVarCylinder] section if you are using the 3VarCylinder physics model.");
 
-template <typename T>
-int sgn(T val)
-{
-	if( val > static_cast<T>(0) )
-		return 1;
-	else if ( val < static_cast<T>(0) )
-		return -1;
-	else
-		return 0;
-}
-
-ThreeVarCylFlux::ThreeVarCylFlux( toml::value const &config, Grid const& grid )
-	: AutodiffTransportSystem( config, grid )
-{
-	nVars = 3;
-	nScalars = 0;
-
-    if (config.count("3VarCylFlux") != 1)
-        throw std::invalid_argument("There should be a [3VarCylFlux] section if you are using the 3VarCylFlux physics model.");
-
-    auto const &DiffConfig = config.at("3VarCylFlux");
+    auto const &DiffConfig = config.at("ThreeVarCylinder");
 
     std::string profile = toml::find_or(DiffConfig, "SourceType", "None");
     ParticleSource = ParticleSources[profile];
@@ -51,8 +34,6 @@ ThreeVarCylFlux::ThreeVarCylFlux( toml::value const &config, Grid const& grid )
 
     taue0 = tau_e(n0, p0);
     taui0 = tau_i(n0, p0);
-    sourceCenter = toml::find_or(DiffConfig, "SourceCenter", 0.25);
-    sourceWidth = toml::find_or(DiffConfig, "SourceWidth", 0.01);
 
     // reference values
     n0 = toml::find_or(DiffConfig, "n0", 3e19);
@@ -75,7 +56,7 @@ enum Channel : Index {
 	IonEnergy = 2,
 };
 
-Real ThreeVarCylFlux::Flux( Index i, RealVector u, RealVector q, Position x, Time t )
+Real ThreeVarCylinder::Flux( Index i, RealVector u, RealVector q, Position x, Time t )
 {
 	Channel c = static_cast<Channel>(i);
 	switch(c) {
@@ -93,7 +74,7 @@ Real ThreeVarCylFlux::Flux( Index i, RealVector u, RealVector q, Position x, Tim
 	}
 }
 
-Real ThreeVarCylFlux::Source( Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t )
+Real ThreeVarCylinder::Source( Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t )
 {
 	Channel c = static_cast<Channel>(i);
 	switch(c) {
@@ -111,7 +92,7 @@ Real ThreeVarCylFlux::Source( Index i, RealVector u, RealVector q, RealVector si
 	}
 }
 
-Real ThreeVarCylFlux::Gamma_hat(RealVector u, RealVector q, Position x, Time t)
+Real ThreeVarCylinder::Gamma_hat(RealVector u, RealVector q, Position x, Time t)
 {
     // maybe add a factor of sqrt x if x = r^2/2
 
@@ -123,7 +104,7 @@ Real ThreeVarCylFlux::Gamma_hat(RealVector u, RealVector q, Position x, Time t)
         return G;
 };
 
-Real ThreeVarCylFlux::qi_hat(RealVector u, RealVector q, Position x, Time t)
+Real ThreeVarCylinder::qi_hat(RealVector u, RealVector q, Position x, Time t)
 {
     Real dT = q(2) / u(2) - q(0) / u(0);
 
@@ -137,7 +118,7 @@ Real ThreeVarCylFlux::qi_hat(RealVector u, RealVector q, Position x, Time t)
         return Q;
 };
 
-Real ThreeVarCylFlux::qe_hat(RealVector u, RealVector q, Position x, Time t)
+Real ThreeVarCylinder::qe_hat(RealVector u, RealVector q, Position x, Time t)
 {
     Real G = Gamma_hat(u, q, x, t);
     Real qre = 1.0 / tau_hat(u(0), u(1)) * (4.66 * u(1) * u(1) / u(0) * (q(1) / u(1) - q(0) / u(0)) - (3. / 2.) * u(1) / u(0) * (q(2) + q(1)));
@@ -150,16 +131,15 @@ Real ThreeVarCylFlux::qe_hat(RealVector u, RealVector q, Position x, Time t)
         return Q;
 };
 
-Real ThreeVarCylFlux::Sn_hat(RealVector u, RealVector q, RealVector sigma, Position x, double t)
+Real ThreeVarCylinder::Sn_hat(RealVector u, RealVector q, RealVector sigma, Position x, double t)
 {
     Real S = 0.0;
     switch (ParticleSource)
     {
-    case None:
-        break;
     case Gaussian:
         S = sourceStrength * exp(-1 / sourceWidth * (x - sourceCenter) * (x - sourceCenter));
         break;
+    case None:
     default:
         break;
     }
@@ -167,17 +147,15 @@ Real ThreeVarCylFlux::Sn_hat(RealVector u, RealVector q, RealVector sigma, Posit
 };
 
 // look at ion and electron sources again -- they should be opposite
-Real ThreeVarCylFlux::Spi_hat(RealVector u, RealVector q, RealVector sigma, Position x, double t)
+Real ThreeVarCylinder::Spi_hat(RealVector u, RealVector q, RealVector sigma, Position x, double t)
 {
-    // Real G = -Gamma_hat(u, q, x, t);
-    // Real V = G / u(0); //* L / (p0);
-    Real S = 0.0; // V * q(2) + 2. / 3. * Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
+    Real S = 0.0; 
 
     return S + Sn_hat(u, q, sigma, x, t);
     // return 0.0;
 };
 
-Real ThreeVarCylFlux::Spe_hat(RealVector u, RealVector q, RealVector sigma, Position x, double t)
+Real ThreeVarCylinder::Spe_hat(RealVector u, RealVector q, RealVector sigma, Position x, double t)
 {
     // Real G = -Gamma_hat(u, q, x, t);
     // Real V = G / u(0); //* L / (p0);
@@ -194,3 +172,5 @@ Real ThreeVarCylFlux::Spe_hat(RealVector u, RealVector q, RealVector sigma, Posi
     }
     // return 0.0;
 };
+
+
