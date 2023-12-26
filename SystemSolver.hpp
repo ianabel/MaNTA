@@ -3,6 +3,7 @@
 
 #include <sundials/sundials_linearsolver.h> /* Generic Liner Solver Interface */
 #include <sundials/sundials_types.h>		/* defs of realtype, sunindextype  */
+#include <nvector/nvector_serial.h>
 #include <filesystem>
 
 #include "Types.hpp"
