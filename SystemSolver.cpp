@@ -702,7 +702,8 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 		for (Index i = 0; i < nScalars; ++i)
 			del_y_scalars(i) = res_g_map.Scalar(i) - N_VDotProd(w[i], delY);
 
-		del_y.Scalars() = N_global.inverse() * del_y_scalars;
+		// factor of sqrt( SQU_DOF * nCells ) because we rescaled the residual function
+		del_y.Scalars() = (1.0 / std::sqrt(SQU_DOF * nCells)) * N_global.inverse() * del_y_scalars;
 
 		for (Index i = 0; i < nScalars; ++i)
 			N_VDestroy(e[i]);
