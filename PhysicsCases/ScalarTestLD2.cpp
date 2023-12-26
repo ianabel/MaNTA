@@ -15,11 +15,30 @@
 	J = |  u( x, t ) dx
        /0
 
-	and 
+	and
 
 	S( x ) = beta*( 1 - x/alpha ) for  0 <= x <= alpha and 0 otherwise.
 
- */  
+ */
+
+ /*
+	Steady state solution as computed by mathematica
+
+	u(x) = u(1) + (alpha*beta/2)*J*(1-x) + J H[alpha-x] * beta (x - alpha)^3 / (6 alpha)
+
+=	with H[x] the Heaviside function.
+
+	J = (24 u(1) )/( 24 - 6 alpha beta + alpha^3 beta )
+	
+	and so for u(1) = .1, beta = 10, alpha = 0.2:
+
+	u(x) = 0.1 + J*(1-x) + (x>0.2) ? 0 : (25 J/3) * (x - 0.2)^3
+
+	and
+
+	J = 0.198675
+
+	*/
 
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(ScalarTestLD2);

@@ -93,7 +93,7 @@ Value ScalarTestLD::InitialValue(Index, Position x) const
 Value ScalarTestLD::InitialDerivative(Index, Position x) const
 {
 	double y = (x - Centre) / InitialWidth;
-	return -InitialHeight * (-2.0 * y) * ::exp(-y * y) * (1.0 / InitialWidth);
+	return InitialHeight * (-2.0 * y) * ::exp(-y * y) * (1.0 / InitialWidth);
 }
 
 Value ScalarTestLD::ScalarG( Index, const DGSoln & y, Time )
