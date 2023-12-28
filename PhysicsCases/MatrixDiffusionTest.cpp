@@ -52,8 +52,6 @@ MatrixDiffusionTest::MatrixDiffusionTest( toml::value const &config, Grid const&
 	a1 = ( InitialHeights[ 0 ] + InitialHeights[ 1 ] )/( 2.0 );
 	a2 = ( InitialHeights[ 0 ] - InitialHeights[ 1 ] )/( 2.0 );
 
-	std::cerr << "Lambda1 = " <<  Lambda1 << " ; Lambda2 = " << Lambda2 << std::endl;
-	std::cerr << "a1 = " << a1 << " a2 = " << a2 << std::endl;
 }
 
 // Dirichlet Boundary Conditon
@@ -64,7 +62,7 @@ Value MatrixDiffusionTest::LowerBoundary(Index i, Time t) const
 	else if ( i == 1 )
 		return a1 * ::exp( -( t*Lambda1*M_PI_2*M_PI_2 ) ) - a2 * ::exp( -( t*Lambda2*M_PI_2*M_PI_2 ) );
 	else {
-		std::cerr <<"WAARGH" << std::endl;
+		throw std::runtime_error("i > nVars in LowerBoundary");
 		return 0.0;
 	}
 }

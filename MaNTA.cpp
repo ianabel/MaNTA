@@ -67,7 +67,6 @@ int getIntWithDefault( std::string const& name, toml::value const& config, int d
 
 int runManta( std::string const& fname )
 {
-	// std::cerr.precision(17);
 	std::filesystem::path config_file_path(fname);
 	if (!std::filesystem::exists(config_file_path))
 	{

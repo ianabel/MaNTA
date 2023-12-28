@@ -11,7 +11,7 @@ import scipy
 
 manta_file = "../../" + os.environ["SOLVER"]
 def run_manta( config_file ):
-    code = os.system( manta_file + " " + config_file + " 2>/dev/null >/dev/null" )
+    code = os.system( manta_file + " " + config_file + " >/dev/null" )
     if( code != 0 ):
         print("Failed to run test simulation with configuration in " + config_file)
         sys.exit(code)

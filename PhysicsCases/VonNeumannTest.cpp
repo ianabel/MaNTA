@@ -29,7 +29,6 @@ VonNeumannTest::VonNeumannTest( toml::value const& config, Grid const& )
 	Centre =        toml::find_or( DiffConfig, "Centre", 0.0 );
 
 	t0 = InitialWidth * InitialWidth / ( 4.0 * kappa );
-	std::cerr << "t0 = " << t0 << std::endl;
 
 }
 

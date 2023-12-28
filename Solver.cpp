@@ -197,7 +197,10 @@ void SystemSolver::runSolver( double tFinal )
 
 	long int nresevals = 0;
 	IDAGetNumResEvals( IDA_mem, &nresevals );
-	std::cerr << "Number of Residual Evaluations due to IDACalcIC " << nresevals << std::endl;
+	std::cout << "Number of Residual Evaluations due to IDACalcIC " << nresevals << std::endl;
+
+	if( nresevals > 10 )
+		std::cerr << " IDACalcIC required " << nresevals << " residual evaluations. Check settings in " << inputFilePath << std::endl;
 
 
 	print(out0, t0, nOut);
@@ -227,7 +230,7 @@ void SystemSolver::runSolver( double tFinal )
 	delta_t = dt;
 
 	if ( t0 > tFinal ) {
-		std::cerr << "Initial time t = " << t0 << " is after the end of the simulation at t = " << tFinal << std::endl;
+		std::cout << "Initial time t = " << t0 << " is after the end of the simulation at t = " << tFinal << std::endl;
 		throw std::runtime_error( "Simulation ends before it begins." );
 	}
 
@@ -271,7 +274,7 @@ void SystemSolver::runSolver( double tFinal )
 				}
 			dydt_norm = sqrt( dydt_norm );
 			if ( physics_debug )
-				std::cerr << " dy/dt norm inferred from lambdas is " << dydt_norm << std::endl;
+				std::cout << " dy/dt norm inferred from lambdas is " << dydt_norm << std::endl;
 			if ( dydt_norm < 1.0 )
 			{
 				std::cout << "Steady State achieved at time t = " << tret << std::endl;
@@ -287,9 +290,9 @@ void SystemSolver::runSolver( double tFinal )
 	IDAGetNumResEvals( IDA_mem, &nresevals );
 	IDAGetNumLinSolvSetups( IDA_mem, &njacevals );
 
-	std::cerr << "Total Number of Timesteps             :" << nsteps << std::endl;
-	std::cerr << "Total Number of Residual Evaluations  :" << nresevals << std::endl;
-	std::cerr << "Total Number of Jacobian Computations :" << njacevals << std::endl;
+	std::cout << "Total Number of Timesteps             :" << nsteps << std::endl;
+	std::cout << "Total Number of Residual Evaluations  :" << nresevals << std::endl;
+	std::cout << "Total Number of Jacobian Computations :" << njacevals << std::endl;
 
 	problem->finaliseDiagnostics( nc_output );
 	out0.close();

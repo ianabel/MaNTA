@@ -968,7 +968,6 @@ void SystemSolver::print(std::ostream &out, double t, int nOut)
 		State s = y.eval( x );
 		for ( Index v = 0; v < nVars; ++v ) {
 			out << "\t" << s.Variable[ v ] << "\t" << s.Derivative[ v ] << "\t" << s.Flux[ v ];
-			out << "\t" << problem->Sources( v, s, x, t );
 		}
 		out << std::endl;
 	}
