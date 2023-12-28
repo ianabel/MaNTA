@@ -23,11 +23,11 @@ public:
 	Index getNumScalars() const { return nScalars; };
 
 	// Function for passing boundary conditions to the solver
-	virtual Value LowerBoundary(Index i, Time t) const = 0;
-	virtual Value UpperBoundary(Index i, Time t) const = 0;
+	virtual Value LowerBoundary(Index i, Time t) const { return uL[i];};
+	virtual Value UpperBoundary(Index i, Time t) const { return uR[i];};
 
-	virtual bool isLowerBoundaryDirichlet(Index i) const = 0;
-	virtual bool isUpperBoundaryDirichlet(Index i) const = 0;
+	virtual bool isLowerBoundaryDirichlet(Index i) const { return isLowerDirichlet; };
+	virtual bool isUpperBoundaryDirichlet(Index i) const { return isUpperDirichlet; };
 
 	// The same for the flux and source functions -- the vectors have length nVars
 	virtual Value SigmaFn(Index i, const State &s, Position x, Time t) = 0;
@@ -121,6 +121,8 @@ public:
 protected:
 	Index nVars;
 	Index nScalars = 0;
+	std::vector<Value> uL,uR;
+	bool isUpperDirichlet,isLowerDirichlet;
 };
 
 #endif // TRANSPORTSYSTEM_HPP

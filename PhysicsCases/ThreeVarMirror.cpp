@@ -213,34 +213,20 @@ Real ThreeVarMirror::Spi_hat(RealVector u, RealVector q, RealVector sigma, Real 
         Real G = sigma(0); //-Gamma_hat(u, q, x, t);
         // sigma(0);
         //  Gamma_hat(u, q, x, t); // sigma(0); // / (coef);
-        Ppot = -G * dphi0dV(u, q, x, t) + 0.5 * pow(omega(Rval, t), 2) / M_PI * G;
+        Ppot = -G * dphi0dV(u, q, x, t) + 0.5 * (pow(omega(Rval, t), 2) / M_PI) * G;
     }
     Real Pcol = Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
-    Real S = 2. / 3. * (Ppot + Pcol + Pvis + Ppast);
+    Real S = (2. / 3.) * (Ppot + Pcol + Pvis + Ppast);
 
     if (S != S)
-    {
-        return 0.0;
-    }
-
+		 throw std::logic_error("Error compution ion heating sources");
     else
-    {
         return S; //+ 10 * Sn_hat(u, q, sigma, x, t); //+ ::pow(ionMass / electronMass, 1. / 2.) * u(2) / u(0) * Sn_hat(u, q, sigma, x, t);
-    }
     // return 0.0;
 }
 
 Real ThreeVarMirror::Spe_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t)
 {
-    // double Rval = R(x.val, t);
-    // double Vpval = Vprime(Rval);
-    // double coef = Vpval * Rval;
-    // Real G = Gamma_hat(u, q, x, t); // (coef);
-    // Real V = G / u(0);              //* L / (p0);
-
-    // Real S = -2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
-    ///*V * q(1)*/ -2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
-    // Real Pcol = 2. / 3. * Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
     Real Pfus = 0.0;
     Real Pbrem = 0.0;
     Real Ppast = 0.0;
@@ -269,37 +255,17 @@ Real ThreeVarMirror::Spe_hat(RealVector u, RealVector q, RealVector sigma, Real 
     Real S = 2. / 3. * (Pcol + Ppast + L / (p0 * V0) * (Pfus + Pbrem));
 
     if (S != S)
-    {
-        return 0.0;
-    }
+		 throw std::logic_error("Error computing the electron heating sources");
     else
-    {
         return S; //+ u(1) / u(0) * Sn_hat(u, q, sigma, x, t);
-    }
     // return 0.0;
 };
 
 Real ThreeVarMirror::omega(Real R, double t)
 {
-    double u_L = omegaOffset.val;
-    double u_R = (omegaOffset.val * Rmin / Rmax);
-    Real a = (asinh(u_L) - asinh(u_R)) / (Rmin - Rmax);
-    Real b = (asinh(u_L) - Rmin / Rmax * asinh(u_R)) / (a * (Rmin / Rmax - 1));
-
-    Real shape = 20.0;
-    Real C = 0.5 * (Rmin + Rmax);
-    Real c = (M_PI / 2 - 3 * M_PI / 2) / (Rmin - Rmax);
-    Real d = (M_PI / 2 - Rmin / Rmax * (3 * M_PI / 2)) / (c * (Rmin / Rmax - 1));
-    // Real coef = (omegaOffset - M0 / C) * 1 / cos(c * (C - d));
-    Real coef = M0 / C;
-    if (omegaOffset == 0.0)
-    {
-        return omegaOffset - cos(c * (R - d)) * coef * exp(-shape * (R - C) * (R - C));
-    }
-    else
-    {
-        return sinh(a * (R - b)) - cos(c * (R - d)) * coef * exp(-shape * (R - C) * (R - C));
-    }
+	double Rmid = (Rmin + Rmax) / 2.0;
+	double omegaMax = M0.val / Rmid;
+	return omegaOffset + (omegaMax - omegaOffset) * cos( M_PI * (R-Rmid) / (Rmax - Rmin) );
 }
 
 double ThreeVarMirror::domegadV(Real x, double t)

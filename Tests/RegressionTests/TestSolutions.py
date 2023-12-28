@@ -155,7 +155,12 @@ print("Checking Reference Solutions")
 check_ref_case( "LinearDiffusion" )
 check_ref_case( "MatTest" )
 check_ref_case( "MatTestAlpha" )
+check_ref_case( "ADTest" )
+check_ref_case( "Nonlin2" )
 
+
+print("\n\n----------------")
 print("All Tests Passed")
+print("----------------\n\n")
 sys.exit(0)
 

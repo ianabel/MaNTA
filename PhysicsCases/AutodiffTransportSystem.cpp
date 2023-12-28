@@ -18,32 +18,29 @@ AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config, Grid
 	nVars = nV;
 	nScalars = nS;
 
-    if (config.count("AutodiffTransportSystem") != 1)
-        throw std::invalid_argument("There should be a [AutodiffTransportSystem] section if you are using the AutodiffTransportSystem physics model.");
+	if (config.count("AutodiffTransportSystem") == 1) {
 
-    auto const &InternalConfig = config.at("AutodiffTransportSystem");
+		auto const &InternalConfig = config.at("AutodiffTransportSystem");
 
-    xL = grid.lowerBoundary();
-    xR = grid.upperBoundary();
+		isUpperDirichlet = toml::find_or(InternalConfig, "isUpperDirichlet", true);
+		isLowerDirichlet = toml::find_or(InternalConfig, "isLowerDirichlet", true);
 
-    isUpperDirichlet = toml::find_or(InternalConfig, "isUpperDirichlet", true);
-    isLowerDirichlet = toml::find_or(InternalConfig, "isLowerDirichlet", true);
+		xR = grid.lowerBoundary();
+		xL = grid.upperBoundary();
 
-    std::vector<double> InitialHeights_v = toml::find<std::vector<double>>(InternalConfig, "InitialHeights");
-    InitialHeights = VectorWrapper(InitialHeights_v.data(), nVars);
+		std::vector<double> InitialHeights_v = toml::find<std::vector<double>>(InternalConfig, "InitialHeights");
+		InitialHeights = VectorWrapper(InitialHeights_v.data(), nVars);
 
-	 std::vector<std::string> profile = toml::find<std::vector<std::string>>(InternalConfig, "InitialProfile");
+		std::vector<std::string> profile = toml::find<std::vector<std::string>>(InternalConfig, "InitialProfile");
 
-	 for (auto &p : profile)
-	 {
-		 InitialProfile.push_back(InitialProfiles[p]);
-	 }
+		for (auto &p : profile)
+		{
+			InitialProfile.push_back(InitialProfiles[p]);
+		}
 
-    std::vector<double> uL_v = toml::find<std::vector<double>>(InternalConfig, "uL");
-    std::vector<double> uR_v = toml::find<std::vector<double>>(InternalConfig, "uR");
-
-    uR = VectorWrapper(uR_v.data(), nVars);
-    uL = VectorWrapper(uL_v.data(), nVars);
+		uL = toml::find<std::vector<double>>(InternalConfig, "uL");
+		uR = toml::find<std::vector<double>>(InternalConfig, "uR");
+	}
 }
 
 Vector AutodiffTransportSystem::InitialHeights;
@@ -133,31 +130,19 @@ dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t, 
 {
     dual2nd a, b, c, d;
     dual2nd u = 0;
-    dual2nd C = 0.5 * (x_R + x_L);
+    dual2nd xMid = 0.5 * (x_R + x_L);
     double m = (u_L - u_R) / (x_L - x_R);
     double shape = 5; // 10 / (x_R - x_L) * ::log(10);
     switch (InitialProfile[i])
     {
     case Gaussian:
-        u = u_L + InitialHeights[i] * (exp(-(x - C) * (x - C) * shape) - exp(-(x_L - C) * (x_L - C) * shape));
+        u = u_L + InitialHeights[i] * (exp(-(x - xMid) * (x - xMid) * shape) - exp(-(x_L - xMid) * (x_L - xMid) * shape));
         break;
     case Dirichlet:
 		  u = u_L;
         break;
     case Cosine:
-        a = (asinh(u_L) - asinh(u_R)) / (x_L - x_R);
-        b = (asinh(u_L) - x_L / x_R * asinh(u_R)) / (a * (x_L / x_R - 1));
-        c = (M_PI / 2 - 3 * M_PI / 2) / (x_L - x_R);
-        d = (M_PI / 2 - x_L / x_R * (3 * M_PI / 2)) / (c * (x_L / x_R - 1));
-        if (u_L == u_R)
-        {
-            u = u_L - cos(c * (x - d)) * InitialHeights[i] * exp(-shape * (x - C) * (x - C));
-        }
-        else
-        {
-            u = sinh(a * (x - b)) - cos(c * (x - d)) * InitialHeights[i] * exp(-shape * (x - C) * (x - C));
-        }
-
+		  u = u_L + m * (x - x_L) + InitialHeights[i] * cos( M_PI * (x - xMid )/(x_R - x_L) );
         break;
     case Uniform:
         u = u_L;

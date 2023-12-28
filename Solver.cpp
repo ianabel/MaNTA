@@ -112,20 +112,22 @@ void SystemSolver::runSolver( double tFinal )
 	{
 		for (Index v = 0; v < nVars; ++v)
 		{
-			double absTolU,absTolQ,absTolSigma;
 			if( atol.size() == 1 ) {
-				absTolU = atol[0];
-				absTolQ = atol[0];
-				absTolSigma = atol[0];
+				double absTol = atol[0];
+				tolerances.u(v).getCoeff(i).second.setConstant(absTol);
+				tolerances.q(v).getCoeff(i).second.setConstant(absTol);
+				tolerances.sigma(v).getCoeff(i).second.setConstant(absTol);
+				tolerances.lambda(v).setConstant(absTol);
 			} else if ( atol.size() == nVars ) {
+				double absTolU,absTolQ,absTolSigma;
 				absTolU = atol[v];
 				absTolQ = atol[v];
 				absTolSigma = atol[v];
+				tolerances.u(v).getCoeff(i).second.setConstant(absTolU);
+				tolerances.q(v).getCoeff(i).second.setConstant(absTolQ);
+				tolerances.sigma(v).getCoeff(i).second.setConstant(absTolSigma);
+				tolerances.lambda(v).setConstant(absTolU);
 			}
-			tolerances.u(v).getCoeff(i).second.setConstant(absTolU);
-			tolerances.q(v).getCoeff(i).second.setConstant(absTolQ);
-			tolerances.sigma(v).getCoeff(i).second.setConstant(absTolSigma);
-			tolerances.lambda(v).setConstant(absTolU);
 		}
 	}
 
