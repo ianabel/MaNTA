@@ -66,6 +66,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 	auto initial_u = std::bind_front(&TransportSystem::InitialValue, problem);
 	auto initial_q = std::bind_front(&TransportSystem::InitialDerivative, problem);
 	y.AssignU(initial_u);
+	// TODO: Change to just taking the numerical derivative ?
 	y.AssignQ(initial_q);
 
 	y.EvaluateLambda(tauc);
