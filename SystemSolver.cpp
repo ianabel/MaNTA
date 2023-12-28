@@ -68,7 +68,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 	y.AssignU(initial_u);
 	y.AssignQ(initial_q);
 
-	y.EvaluateLambda();
+	y.EvaluateLambda(tauc);
 
 	for ( Index s = 0; s < nScalars; ++s )
 		y.Scalar( s ) = problem->InitialScalarValue( s );
