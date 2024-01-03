@@ -42,7 +42,13 @@ private:
     Real Spi_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t);
     Real Shi_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t);
 
-    REGISTER_PHYSICS_HEADER(FourVarCylFlux)
+	 enum Channel : Index {
+		 Density = 0,
+		 ElectronEnergy = 1,
+		 IonEnergy = 2,
+		 AngularMomentum = 3
+	 };
+	 REGISTER_PHYSICS_HEADER(FourVarCylFlux)
 };
 
 #endif
