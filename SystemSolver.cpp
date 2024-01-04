@@ -906,7 +906,7 @@ int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector re
 	return 0;
 }
 
-void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &tempY)
+void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &tempY, bool printSources )
 {
 	DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY), nScalars );
 
@@ -935,6 +935,8 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
 		for (Index v = 0; v < nVars; ++v)
 		{
 			out << "\t" << s.Variable[ v ] << "\t" << s.Derivative[ v ] << "\t" << s.Flux[ v ];
+			if ( printSources )
+				out << "\t" << problem->Sources( v, s, x, t );
 		}
 		out << std::endl;
 	}
@@ -942,7 +944,7 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
 	out << std::endl;
 }
 
-void SystemSolver::print(std::ostream &out, double t, int nOut)
+void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSources )
 {
 
 	out << "# t = " << t << std::endl;
@@ -969,6 +971,8 @@ void SystemSolver::print(std::ostream &out, double t, int nOut)
 		State s = y.eval( x );
 		for ( Index v = 0; v < nVars; ++v ) {
 			out << "\t" << s.Variable[ v ] << "\t" << s.Derivative[ v ] << "\t" << s.Flux[ v ];
+			if ( printSources )
+				out << "\t" << problem->Sources( v, s, x, t );
 		}
 		out << std::endl;
 	}

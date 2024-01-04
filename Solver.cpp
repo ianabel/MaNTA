@@ -184,7 +184,7 @@ void SystemSolver::runSolver( double tFinal )
 		res_out << "# Residual norm at t = " << t0 << " (pre-calcIC) is " << N_VWrmsNorm( res, wgt ) << std::endl;
 		print( res_out, t0, nOut, res );
 		out0 << "# t = " << t0 << " (pre-calcIC) " << std::endl;
-		print( out0, t0, nOut );
+		print( out0, t0, nOut, true );
 	}
 
 	//------------------------------Solve------------------------------
@@ -203,7 +203,7 @@ void SystemSolver::runSolver( double tFinal )
 		std::cerr << " IDACalcIC required " << nresevals << " residual evaluations. Check settings in " << inputFilePath << std::endl;
 
 
-	print(out0, t0, nOut);
+	print(out0, t0, nOut, true );
 	if ( physics_debug ) {
 
 		dydt_out << "# After CalcIC " << std::endl;
@@ -243,7 +243,7 @@ void SystemSolver::runSolver( double tFinal )
 		if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
 		{
 			// try to emit final data
-			print(out0, tret, nOut);
+			print( out0, tret, nOut, true );
 			if ( physics_debug ) print( dydt_out, tret, nOut, dYdt );
 			WriteTimeslice(tret);
 			out0.close();
@@ -253,7 +253,7 @@ void SystemSolver::runSolver( double tFinal )
 		}
 
 		std::cout << "Writing output at " << tret << std::endl;
-		print( out0, tret, nOut, Y );
+		print( out0, tret, nOut, Y, true );
 		if ( physics_debug ) {
 			print( dydt_out, tret, nOut, dYdt );
 			residual( tret, Y, dYdt, res );

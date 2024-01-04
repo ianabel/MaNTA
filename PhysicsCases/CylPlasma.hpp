@@ -3,6 +3,10 @@
 
 #include "AutodiffTransportSystem.hpp"
 
+/*
+	Ground-up reimplementation of a collisional cylindrical plasma, with a single ion species
+ */ 
+
 enum ParticleSourceType
 {
     None = 0,
@@ -26,18 +30,6 @@ private:
 	 double Centre;
 
     // reference values
-    Real n0;
-    Real Bmid;
-    Real T0;
-	 Real Omega0;
-    Value L;
-    Real p0;
-    Real V0;
-    Real Gamma0;
-    Real taue0;
-    Real taui0;
-
-    Vector InitialHeights;
     Real Gamma_hat(RealVector u, RealVector q, Position x, Time t);
     Real qe_hat(RealVector u, RealVector q, Position x, Time t);
     Real qi_hat(RealVector u, RealVector q, Position x, Time t);

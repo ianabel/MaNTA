@@ -53,23 +53,16 @@ ThreeVarMirror::ThreeVarMirror( toml::value const &config, Grid const& grid )
 
 };
 
-enum Channel : Index {
-	Density = 0,
-	ElectronEnergy = 1,
-	IonEnergy = 2,
-};
-
 Real ThreeVarMirror::Flux( Index i, RealVector u, RealVector q, Position x, Time t )
 {
-	Channel c = static_cast<Channel>(i);
-	switch(c) {
-		case Density:
+	switch( Channel( i ) ) {
+		case Channel::Density:
 			return Gamma_hat( u, q, x, t );
 			break;
-		case ElectronEnergy:
+		case Channel::ElectronEnergy:
 			return qe_hat( u, q, x, t );
 			break;
-		case IonEnergy:
+		case Channel::IonEnergy:
 			return qi_hat( u, q, x, t );
 			break;
 		default:
@@ -79,15 +72,14 @@ Real ThreeVarMirror::Flux( Index i, RealVector u, RealVector q, Position x, Time
 
 Real ThreeVarMirror::Source( Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t )
 {
-	Channel c = static_cast<Channel>(i);
-	switch(c) {
-		case Density:
+	switch( Channel( i ) ) {
+		case Channel::Density:
 			return Sn_hat( u, q, sigma, x, t );
 			break;
-		case ElectronEnergy:
+		case Channel::ElectronEnergy:
 			return Spe_hat( u, q, sigma, x, t );
 			break;
-		case IonEnergy:
+		case Channel::IonEnergy:
 			return Spi_hat( u, q, sigma, x, t );
 			break;
 		default:
