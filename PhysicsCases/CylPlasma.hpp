@@ -48,7 +48,8 @@ class StraightMagneticField
 	private:
 		double L_z = 1.0;
 		double B_z = 1.0;
-}
+};
+
 
 class CylPlasma : public AutodiffTransportSystem
 {
@@ -58,14 +59,14 @@ class CylPlasma : public AutodiffTransportSystem
 
 	private:
 
-		enum class Channel : Index {
+		enum Channel : Index {
 			Density = 0,
 			ElectronEnergy = 1,
 			IonEnergy = 2,
 			AngularMomentum = 3
 		};
 
-		enum class ParticleSourceType
+		enum ParticleSourceType
 		{
 			None = 0,
 			Gaussian = 1,
@@ -80,29 +81,31 @@ class CylPlasma : public AutodiffTransportSystem
 		double Centre;
 
 		// Reference Values
-		constexpr double ElectronMass = 9.1094e-31; // Electron Mass, kg
-		constexpr double IonMass = 1.6726e-27;      // Ion Mass ( = proton mass) kg
-		constexpr double ElementaryCharge = 1.60217663e-19; // Coulombs
-		constexpr double VacuumPermittivity = 8.8541878128e-12;
+		constexpr static double ElectronMass = 9.1094e-31; // Electron Mass, kg
+		constexpr static double IonMass = 1.6726e-27;      // Ion Mass ( = proton mass) kg
+		constexpr static double ElementaryCharge = 1.60217663e-19; // Coulombs
+		constexpr static double VacuumPermittivity = 8.8541878128e-12;
 
-		constexpr double n0 = 1.e20, n0cgs = n0/1.e6;
-		constexpr double eV = 1.6e-19; // One electron volt in Joules
-		constexpr double T0 = 1000.0 * eV, T0eV = T0 / eV;
+		constexpr static double n0 = 1.e20, n0cgs = n0/1.e6;
+		constexpr static double eV = 1.6e-19; // One electron volt in Joules
+		constexpr static double T0 = 1000.0 * eV, T0eV = T0 / eV;
 
-		Real Gamma(RealVector u, RealVector q, Position x, Time t);
-		Real qe(RealVector u, RealVector q, Position x, Time t);
-		Real qi(RealVector u, RealVector q, Position x, Time t);
-		Real pi(RealVector u, RealVector q, Position x, Time t);
-		Real Sn(RealVector u, RealVector q, RealVector sigma, Position x, Time t);
-		Real Spe(RealVector u, RealVector q, RealVector sigma, Position x, Time t);
-		Real Spi(RealVector u, RealVector q, RealVector sigma, Position x, Time t);
-		Real Somega(RealVector u, RealVector q, RealVector sigma, Position x, Time t);
+		Real Gamma(RealVector u, RealVector q, Position x, Time t) const;
+		Real qe(RealVector u, RealVector q, Position x, Time t) const;
+		Real qi(RealVector u, RealVector q, Position x, Time t) const;
+		Real Pi(RealVector u, RealVector q, Position x, Time t) const;
+		Real Sn(RealVector u, RealVector q, RealVector sigma, Position x, Time t) const;
+		Real Spe(RealVector u, RealVector q, RealVector sigma, Position x, Time t) const;
+		Real Spi(RealVector u, RealVector q, RealVector sigma, Position x, Time t) const;
+		Real Somega(RealVector u, RealVector q, RealVector sigma, Position x, Time t) const;
 
 		// Underlying functions
 		Real LogLambda_ii( Real, Real ) const;
 		Real LogLambda_ei( Real, Real ) const;
 		Real ElectronCollisionTime( Real, Real ) const;
 		Real IonCollisionTime( Real, Real ) const;
+		double ReferenceElectronCollisionTime() const;
+		double ReferenceIonCollisionTime() const;
 
 		StraightMagneticField *B;
 
