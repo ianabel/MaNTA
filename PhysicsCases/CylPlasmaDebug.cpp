@@ -1,59 +1,59 @@
-#include "CylPlasma.hpp"
+#include "CylPlasmaDebug.hpp"
 #include "Constants.hpp"
 #include <iostream>
 
-REGISTER_PHYSICS_IMPL(CylPlasma);
+REGISTER_PHYSICS_IMPL(CylPlasmaDebug);
 
-CylPlasma::CylPlasma( toml::value const &config, Grid const& grid )
-	: AutodiffTransportSystem( config, grid, 4, 0 )
+CylPlasmaDebug::CylPlasmaDebug( toml::value const &config, Grid const& grid )
+	: AutodiffTransportSystem( config, grid, 2, 0 )
 {
-    if (config.count("CylPlasma") != 1) {
-		throw std::invalid_argument("There should be a [CylPlasma] section if you are using the Cylindrical Plasma physics model.");
-	}
-
 	B = new StraightMagneticField();
 	ParticleSourceStrength = 1.0;
 	jRadial = 0.1;
 
 };
 
-Real CylPlasma::Flux( Index i, RealVector u, RealVector q, Position x, Time t )
+Real CylPlasmaDebug::Flux( Index i, RealVector u, RealVector q, Position x, Time t )
 {
 	Channel c = static_cast<Channel>(i);
 	switch(c) {
 		case Channel::Density:
 			return Gamma( u, q, x, t );
 			break;
-		case Channel::ElectronEnergy:
-			return qe( u, q, x, t );
-			break;
 		case Channel::IonEnergy:
 			return qi( u, q, x, t );
+			break;
+			/*
+		case Channel::ElectronEnergy:
+			return qe( u, q, x, t );
 			break;
 		case Channel::AngularMomentum:
 			return Pi( u, q, x, t );
 			break;
+			*/
 		default:
 			throw std::runtime_error("Request for flux for undefined variable!");
 	}
 }
 
-Real CylPlasma::Source( Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t )
+Real CylPlasmaDebug::Source( Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t )
 {
 	Channel c = static_cast<Channel>(i);
 	switch(c) {
 		case Channel::Density:
 			return Sn( u, q, sigma, x, t );
 			break;
-		case Channel::ElectronEnergy:
-			return Spe( u, q, sigma, x, t );
-			break;
 		case Channel::IonEnergy:
 			return Spi( u, q, sigma, x, t );
+			break;
+			/*
+		case Channel::ElectronEnergy:
+			return Spe( u, q, sigma, x, t );
 			break;
 		case Channel::AngularMomentum:
 			return Somega( u, q, sigma, x, t );
 			break;
+			*/
 		default:
 			throw std::runtime_error("Request for source for undefined variable!");
 	}
@@ -69,45 +69,45 @@ Normalisation:
 
 // This is c_s / ( Omega_i * a )
 // = sqrt( T0 / mi ) / ( e B0 / mi ) =  [ sqrt( T0 mi ) / ( e B0 ) ] / a
-inline double CylPlasma::RhoStarRef() const
+inline double CylPlasmaDebug::RhoStarRef() const
 {
 	return sqrt( T0 * IonMass ) / ( ElementaryCharge * B0 * a );
 }
 
 // Return this normalised to log Lambda at n0,T0
-inline Real CylPlasma::LogLambda_ei( Real, Real ) const
+inline Real CylPlasmaDebug::LogLambda_ei( Real, Real ) const
 {
 	return 1.0; // really needs to know Ti as well
 }
 
 // Return this normalised to log Lambda at n0,T0
-inline Real CylPlasma::LogLambda_ii( Real ni, Real Ti ) const
+inline Real CylPlasmaDebug::LogLambda_ii( Real ni, Real Ti ) const
 {
 	return 1.0; // 
 }
 
 // Return tau_ei (Helander & Sigmar notation ) normalised to tau_ei( n0, T0 )
 // This is equal to tau_e as used in Braginskii
-inline Real CylPlasma::ElectronCollisionTime( Real ne, Real Te ) const
+inline Real CylPlasmaDebug::ElectronCollisionTime( Real ne, Real Te ) const
 {
 	return pow( Te, 1.5 )/( ne * LogLambda_ei( ne, Te ) );
 }
 
 // Return the actual value in SI units
-inline double CylPlasma::ReferenceElectronCollisionTime() const
+inline double CylPlasmaDebug::ReferenceElectronCollisionTime() const
 {
 	double LogLambdaRef = 24.0 - log( n0 )/2.0 + log( T0 ); // 24 - ln( n^1/2 T^-1 ) from NRL pg 34
 	return 12.0 * pow( M_PI, 1.5 ) * sqrt( ElectronMass ) * pow( T0, 1.5 ) * VacuumPermittivity * VacuumPermittivity / ( sqrt( 2 ) * n0 * pow( ElementaryCharge, 4 ) * LogLambdaRef );
 }
 // Return sqrt(2) * tau_ii (Helander & Sigmar notation ) normalised to tau_ii( n0, T0 )
 // This is equal to tau_i as used in Braginskii
-inline Real CylPlasma::IonCollisionTime( Real ni, Real Ti ) const
+inline Real CylPlasmaDebug::IonCollisionTime( Real ni, Real Ti ) const
 {
 	return pow( Ti, 1.5 )/( ni * LogLambda_ii( ni, Ti ) );
 }
 
 // Return the actual value in SI units
-inline double CylPlasma::ReferenceIonCollisionTime() const
+inline double CylPlasmaDebug::ReferenceIonCollisionTime() const
 {
 	double LogLambdaRef = 23.0 - log( 2.0 ) - log( n0 )/2.0 + log( T0 ) * 1.5; // 23 - ln( (2n)^1/2 T^-3/2 ) from NRL pg 34
 	return 12.0 * pow( M_PI, 1.5 ) * sqrt( IonMass ) * pow( T0, 1.5 ) * VacuumPermittivity * VacuumPermittivity / ( n0 * pow( ElementaryCharge, 4 ) * LogLambdaRef );
@@ -117,8 +117,9 @@ inline double CylPlasma::ReferenceIonCollisionTime() const
 // This function returns V' * Gamma_e, and Gamma_i = Gamma_e
 // c.f Helander & Sigmar -- Gamma_e = (n_e T_e / (m_e Omega_e^2 tau_e))*( (p_e' + p_i')/p_e - (3/2)(T_e'/T_e)
 // Define lengths so R_ref = 1
-Real CylPlasma::Gamma(RealVector u, RealVector q, double V, double t) const
+Real CylPlasmaDebug::Gamma(RealVector u, RealVector q, double V, double t) const
 {
+	/*
 	Real n = u( Channel::Density ), p_e = ( 2./3. )*u( Channel::ElectronEnergy );
 	Real Te = p_e/n;
 	Real nPrime = q( Channel::Density ), p_e_prime = ( 2./3. ) * q( Channel::ElectronEnergy ), p_i_prime = ( 2./3. ) * q( Channel::IonEnergy );
@@ -127,6 +128,24 @@ Real CylPlasma::Gamma(RealVector u, RealVector q, double V, double t) const
 	double R = B->R_V( V );
 	double GeometricFactor = ( B->VPrime( V ) * R ); // |grad psi| = R B , cancel the B with the B in Omega_e
 	Real Gamma = GeometricFactor * GeometricFactor * ( p_e / ElectronCollisionTime( n, Te ) ) * ( ( p_e_prime + p_i_prime )/p_e - ( 3./2. )*( Te_prime / Te ) );
+	*/
+
+	// Next tier of debug, T_i = T_e
+	Real n = u( Channel::Density ), p = ( 2./3. )*u( Channel::IonEnergy );
+	Real T = p/n;
+	Real nPrime = q( Channel::Density ), p_prime = ( 2./3. ) * q( Channel::IonEnergy );
+	Real T_prime = ( p_prime - nPrime * T )/n;
+
+	double R = B->R_V( V );
+	double GeometricFactor = ( B->VPrime( V ) * R ); // |grad psi| = R B , cancel the B with the B in Omega_e
+	Real Gamma = GeometricFactor * GeometricFactor * ( p / ElectronCollisionTime( n, T ) ) * ( (2.0 * p_prime)/p - ( 3./2. )*( T_prime / T ) );
+	/*
+	// For debug, we're just doing flat 1keV T_i & T_e everywhere
+	double R = B->R_V( V );
+	double GeometricFactor = ( B->VPrime( V ) * R ); // |grad psi| = R B , cancel the B with the B in Omega_e
+	Real n = u( Channel::Density ), nPrime = q( Channel::Density );
+	Real Gamma = GeometricFactor * GeometricFactor * ( n / ElectronCollisionTime( n, 1.0 ) ) * ( 2.0 * nPrime / n );
+	*/
 
 	if( std::isfinite( Gamma.val ) )
 		return Gamma;
@@ -141,7 +160,7 @@ Real CylPlasma::Gamma(RealVector u, RealVector q, double V, double t) const
 
 	( n_i T_i / m_i Omega_i^2 tau_i ) * ( m_e Omega_e_ref^2 tau_e_ref / n0 T0 ) = sqrt( m_i/2m_e ) * p_i / tau_i
 */
-Real CylPlasma::qi(RealVector u, RealVector q, double V, double t) const
+Real CylPlasmaDebug::qi(RealVector u, RealVector q, double V, double t) const
 {
 	Real n = u( Channel::Density ), p_i = ( 2./3. )*u( Channel::IonEnergy );
 	Real Ti = p_i/n;
@@ -162,7 +181,7 @@ Real CylPlasma::qi(RealVector u, RealVector q, double V, double t) const
    Following Helander & Sigmar, we have
    V' q_e = n_e T_e * V'^2 B^2 R^2 * ( T_e / m_e Omega_e^2 tau_e ) * ( 4.66 T_e'/T_e - (3/2) * (p_e'+p_i')/p_e ) 
  */
-Real CylPlasma::qe(RealVector u, RealVector q, double V, double t) const
+Real CylPlasmaDebug::qe(RealVector u, RealVector q, double V, double t) const
 {
 	Real n = u( Channel::Density ), p_e = ( 2./3. )*u( Channel::ElectronEnergy );
 	Real Te = p_e/n;
@@ -191,7 +210,7 @@ Real CylPlasma::qe(RealVector u, RealVector q, double V, double t) const
    with c_s0 = sqrt( T0/mi )
    
  */
-Real CylPlasma::Pi(RealVector u, RealVector q, double V, double t) const
+Real CylPlasmaDebug::Pi(RealVector u, RealVector q, double V, double t) const
 {
 	Real n = u( Channel::Density ), Ti = (2./3.)*u( Channel::IonEnergy ) / n;
 	// dOmega dV = L'/J - J' L / J^2 ; L = angular momentum / J = moment of Inertia
@@ -210,7 +229,7 @@ Real CylPlasma::Pi(RealVector u, RealVector q, double V, double t) const
 /*
    Returns V' pi_cl_i
  */
-Real CylPlasma::IonClassicalAngularMomentumFlux( Position V, Real n, Real Ti, Real dOmegadV, double t ) const
+Real CylPlasmaDebug::IonClassicalAngularMomentumFlux( Position V, Real n, Real Ti, Real dOmegadV, double t ) const
 {
 	double R = B->R_V( V );
 	double GeometricFactor = ( B->VPrime( V ) * R * R ); // |grad psi| = R B , cancel the B with the B in Omega_e, leaving (V'R)^2
@@ -221,7 +240,7 @@ Real CylPlasma::IonClassicalAngularMomentumFlux( Position V, Real n, Real Ti, Re
 		throw std::logic_error( "Non-finite value computed for the ion momentum flux at x = " + std::to_string( V ) + " and t = " + std::to_string( t ) );
 }
 
-Real CylPlasma::Sn(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
+Real CylPlasmaDebug::Sn(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
 {
 	// Some broad cosine source 
 	double R_min = B->R_V( xL );
@@ -239,8 +258,21 @@ Real CylPlasma::Sn(RealVector u, RealVector q, RealVector sigma, Position V, dou
  *
  * where Q_i is the collisional heating
  */
-Real CylPlasma::Spi(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
+Real CylPlasmaDebug::Spi(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
 {
+
+	double R_min = B->R_V( xL );
+	double R_max = B->R_V( xR );
+	double R = B->R_V( V );
+	double R_mid = (R_min + R_max)/2.0;
+	if( R < R_min + 0.25*( R_max - R_min ) )
+		return 0.0;
+	if( R > R_max - 0.25*( R_max - R_min ) )
+		return 0.0;
+
+	Real HeatSource = 50.0 * cos( 2.0 * pi * ( R - R_mid )/(R_max - R_min) );
+	return HeatSource;
+	/*
 	Real n = u( Channel::Density ), p_e = (2./3.)*u( Channel::ElectronEnergy ), p_i = (2./3.)*u( Channel::IonEnergy );
 	Real Ti = p_i/n;
 	// pi * d omega / d psi = (V'pi)*(d omega / d V)
@@ -258,6 +290,7 @@ Real CylPlasma::Spi(RealVector u, RealVector q, RealVector sigma, Position V, do
 	Real EnergyExchange = IonElectronEnergyExchange( n, p_e, p_i, V, t );
 
 	return ViscousHeating + PotentialHeating + EnergyExchange;
+	*/
 }
 
 /*
@@ -272,7 +305,7 @@ Real CylPlasma::Spi(RealVector u, RealVector q, RealVector sigma, Position V, do
    Q_i = 3 * (p_e - p_i) / (tau_e) * (m_e/m_i) / (rho_s/R_ref)^2
 
  */
-Real CylPlasma::IonElectronEnergyExchange( Real n, Real pe, Real pi, Position V, double t ) const
+Real CylPlasmaDebug::IonElectronEnergyExchange( Real n, Real pe, Real pi, Position V, double t ) const
 {
 	Real Te = pe/n;
 	double RhoStar = RhoStarRef();
@@ -284,7 +317,7 @@ Real CylPlasma::IonElectronEnergyExchange( Real n, Real pe, Real pi, Position V,
 }
 
 
-Real CylPlasma::Spe(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
+Real CylPlasmaDebug::Spe(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
 {
 	Real n = u( Channel::Density ), p_e = (2./3.)*u( Channel::ElectronEnergy ), p_i = (2./3.)*u( Channel::IonEnergy );
 	Real EnergyExchange = -IonElectronEnergyExchange( n, p_e, p_i, V, t );
@@ -292,7 +325,7 @@ Real CylPlasma::Spe(RealVector u, RealVector q, RealVector sigma, Position V, do
 };
 
 // Source of angular momentum -- this is just imposed J x B torque (we can account for the particle source being a sink later).
-Real CylPlasma::Somega(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
+Real CylPlasmaDebug::Somega(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
 {
 	// J x B torque
 	double R = B->R_V( V );

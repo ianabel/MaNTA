@@ -36,7 +36,15 @@ private:
 	virtual Real Source( Index, RealVector, RealVector, RealVector, Position, Time ) = 0;
 
 	static std::vector<int> InitialProfile;
-	std::map<std::string, int> InitialProfiles = {{"Gaussian", 0}, {"Dirichlet", 1}, {"Cosine", 2}, {"Uniform", 3}, {"Linear", 4}};
+	enum ProfileType
+	{
+		Gaussian,
+		Cosine,
+		CosineSquared,
+		Uniform,
+		Linear,
+	};
+	std::map<std::string, int> InitialProfiles = {{"Gaussian", Gaussian}, {"Cosine", Cosine}, {"CosineSquared",CosineSquared}, {"Uniform", Uniform}, {"Linear", Linear}};
 
 	static Vector InitialHeights;
 

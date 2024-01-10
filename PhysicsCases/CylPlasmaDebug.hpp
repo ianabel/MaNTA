@@ -1,5 +1,5 @@
-#ifndef CYLPLASMA
-#define CYLPLASMA
+#ifndef CYLPLASMA_DEBUG
+#define CYLPLASMA_DEBUG
 
 #include "AutodiffTransportSystem.hpp"
 
@@ -51,18 +51,18 @@ class StraightMagneticField
 };
 
 
-class CylPlasma : public AutodiffTransportSystem
+class CylPlasmaDebug : public AutodiffTransportSystem
 {
 	public:
-		CylPlasma(toml::value const &config, Grid const& grid );
-		virtual ~CylPlasma() { delete B; };
+		CylPlasmaDebug(toml::value const &config, Grid const& grid );
+		virtual ~CylPlasmaDebug() { delete B; };
 
 	private:
 
 		enum Channel : Index {
 			Density = 0,
-			ElectronEnergy = 1,
-			IonEnergy = 2,
+			IonEnergy = 1,
+			ElectronEnergy = 2,
 			AngularMomentum = 3
 		};
 
@@ -114,7 +114,7 @@ class CylPlasma : public AutodiffTransportSystem
 
 		StraightMagneticField *B;
 
-		REGISTER_PHYSICS_HEADER(CylPlasma)
+		REGISTER_PHYSICS_HEADER(CylPlasmaDebug)
 };
 
 #endif

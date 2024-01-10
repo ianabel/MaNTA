@@ -40,10 +40,10 @@ class StraightMagneticField
 			return 2*pi*L_z/B_z;
 		};
 		double R( double Psi ) {
-			return sqrt( 2*Psi/B_z );
+			return std::sqrt( 2*Psi/B_z );
 		};
 		double R_V( double V ) {
-			return sqrt( V / ( pi * L_z ) );
+			return std::sqrt( V / ( pi * L_z ) );
 		};
 	private:
 		double L_z = 1.0;
