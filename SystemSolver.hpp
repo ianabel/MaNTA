@@ -92,8 +92,8 @@ public:
 	void setAlpha(double const a) { alpha = a; }
 
 	// print current output for u and q to output file
-	void print(std::ostream &out, double t, int nOut);
-	void print(std::ostream &out, double t, int nOut, N_Vector const &tempY);
+	void print(std::ostream &out, double t, int nOut, bool printSources = false );
+	void print(std::ostream &out, double t, int nOut, N_Vector const &tempY, bool printSources = false );
 
 	double getdt() const { return dt; }
 

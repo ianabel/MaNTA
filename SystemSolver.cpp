@@ -67,9 +67,10 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 	auto initial_u = std::bind_front(&TransportSystem::InitialValue, problem);
 	auto initial_q = std::bind_front(&TransportSystem::InitialDerivative, problem);
 	y.AssignU(initial_u);
+	// TODO: Change to just taking the numerical derivative ?
 	y.AssignQ(initial_q);
 
-	y.EvaluateLambda();
+	y.EvaluateLambda(tauc);
 
 	for ( Index s = 0; s < nScalars; ++s )
 		y.Scalar( s ) = problem->InitialScalarValue( s );
@@ -912,7 +913,7 @@ int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector re
 	return 0;
 }
 
-void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &tempY)
+void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &tempY, bool printSources )
 {
 	DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY), nScalars );
 
@@ -941,7 +942,8 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
 		for (Index v = 0; v < nVars; ++v)
 		{
 			out << "\t" << s.Variable[ v ] << "\t" << s.Derivative[ v ] << "\t" << s.Flux[ v ];
-			out << "\t" << problem->Sources(v, s, x, t);
+			if ( printSources )
+				out << "\t" << problem->Sources( v, s, x, t );
 		}
 		out << std::endl;
 	}
@@ -949,7 +951,7 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
 	out << std::endl;
 }
 
-void SystemSolver::print(std::ostream &out, double t, int nOut)
+void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSources )
 {
 
 	out << "# t = " << t << std::endl;
@@ -976,7 +978,8 @@ void SystemSolver::print(std::ostream &out, double t, int nOut)
 		State s = y.eval( x );
 		for ( Index v = 0; v < nVars; ++v ) {
 			out << "\t" << s.Variable[ v ] << "\t" << s.Derivative[ v ] << "\t" << s.Flux[ v ];
-			out << "\t" << problem->Sources( v, s, x, t );
+			if ( printSources )
+				out << "\t" << problem->Sources( v, s, x, t );
 		}
 		out << std::endl;
 	}

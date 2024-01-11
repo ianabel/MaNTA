@@ -150,7 +150,7 @@ public:
 		}
 	};
 
-	// Sets lambda = average of u either side of the boundary
+	// Sets lambda = {{u}} + (1/(2*tau))*[[q.n]]
 	void EvaluateLambda()
 	{
 		Index nCells = grid.getNCells();
@@ -167,6 +167,28 @@ public:
 			lambda_[var](nCells) = LegendreBasis::Evaluate(grid[nCells - 1], u_[var].coeffs[nCells - 1].second, grid.upperBoundary());
 		}
 	};
+
+	// Sets lambda = {{u}} + (1/(2*tau))*[[q.n]]
+	void EvaluateLambda(double tau)
+	{
+		Index nCells = grid.getNCells();
+		for (Index var = 0; var < nVars; ++var)
+		{
+			for (Index i = 0; i < nCells; ++i)
+			{
+				Interval const &I = grid[i];
+				lambda_[var](i) += LegendreBasis::Evaluate(I, u_[var].coeffs[i].second, I.x_l) / 2.0;
+				lambda_[var](i + 1) += LegendreBasis::Evaluate(I, u_[var].coeffs[i].second, I.x_u) / 2.0;
+
+				lambda_[var](i)     += LegendreBasis::Evaluate(I, q_[var].coeffs[i].second, I.x_l) / (2.0*tau);
+				lambda_[var](i + 1) -= LegendreBasis::Evaluate(I, q_[var].coeffs[i].second, I.x_u) / (2.0*tau);
+			}
+			// Just set boundaries to the trace value of u. BCs are someone else's job
+			lambda_[var](0) = LegendreBasis::Evaluate(grid[0], u_[var].coeffs[0].second, grid.lowerBoundary());
+			lambda_[var](nCells) = LegendreBasis::Evaluate(grid[nCells - 1], u_[var].coeffs[nCells - 1].second, grid.upperBoundary());
+		}
+	};
+
 
 	void AssignSigma(std::function<Value(Index, const State &, Position, Time)> sigmaFn)
 	{

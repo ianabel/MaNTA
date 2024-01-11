@@ -45,7 +45,13 @@ private:
     Real Spe_hat(RealVector u, RealVector q, RealVector sigma, Position x, Time t);
     Real Spi_hat(RealVector u, RealVector q, RealVector sigma, Position x, Time t);
 
-    REGISTER_PHYSICS_HEADER(ThreeVarCylinder)
+
+	 enum Channel : Index {
+		 Density = 0,
+		 ElectronEnergy = 1,
+		 IonEnergy = 2,
+	 };
+	 REGISTER_PHYSICS_HEADER(ThreeVarCylinder)
 };
 
 #endif

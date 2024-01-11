@@ -112,20 +112,22 @@ void SystemSolver::runSolver( double tFinal )
 	{
 		for (Index v = 0; v < nVars; ++v)
 		{
-			double absTolU,absTolQ,absTolSigma;
 			if( atol.size() == 1 ) {
-				absTolU = atol[0];
-				absTolQ = atol[0];
-				absTolSigma = atol[0];
+				double absTol = atol[0];
+				tolerances.u(v).getCoeff(i).second.setConstant(absTol);
+				tolerances.q(v).getCoeff(i).second.setConstant(absTol);
+				tolerances.sigma(v).getCoeff(i).second.setConstant(absTol);
+				tolerances.lambda(v).setConstant(absTol);
 			} else if ( atol.size() == nVars ) {
+				double absTolU,absTolQ,absTolSigma;
 				absTolU = atol[v];
 				absTolQ = atol[v];
 				absTolSigma = atol[v];
+				tolerances.u(v).getCoeff(i).second.setConstant(absTolU);
+				tolerances.q(v).getCoeff(i).second.setConstant(absTolQ);
+				tolerances.sigma(v).getCoeff(i).second.setConstant(absTolSigma);
+				tolerances.lambda(v).setConstant(absTolU);
 			}
-			tolerances.u(v).getCoeff(i).second.setConstant(absTolU);
-			tolerances.q(v).getCoeff(i).second.setConstant(absTolQ);
-			tolerances.sigma(v).getCoeff(i).second.setConstant(absTolSigma);
-			tolerances.lambda(v).setConstant(absTolU);
 		}
 	}
 
@@ -182,7 +184,7 @@ void SystemSolver::runSolver( double tFinal )
 		res_out << "# Residual norm at t = " << t0 << " (pre-calcIC) is " << N_VWrmsNorm( res, wgt ) << std::endl;
 		print( res_out, t0, nOut, res );
 		out0 << "# t = " << t0 << " (pre-calcIC) " << std::endl;
-		print( out0, t0, nOut );
+		print( out0, t0, nOut, true );
 	}
 
 	//------------------------------Solve------------------------------
@@ -195,10 +197,13 @@ void SystemSolver::runSolver( double tFinal )
 
 	long int nresevals = 0;
 	IDAGetNumResEvals( IDA_mem, &nresevals );
-	std::cerr << "Number of Residual Evaluations due to IDACalcIC " << nresevals << std::endl;
+	std::cout << "Number of Residual Evaluations due to IDACalcIC " << nresevals << std::endl;
+
+	if( nresevals > 10 )
+		std::cerr << " IDACalcIC required " << nresevals << " residual evaluations. Check settings in " << inputFilePath << std::endl;
 
 
-	print(out0, t0, nOut);
+	print(out0, t0, nOut, true );
 	if ( physics_debug ) {
 
 		dydt_out << "# After CalcIC " << std::endl;
@@ -225,7 +230,7 @@ void SystemSolver::runSolver( double tFinal )
 	delta_t = dt;
 
 	if ( t0 > tFinal ) {
-		std::cerr << "Initial time t = " << t0 << " is after the end of the simulation at t = " << tFinal << std::endl;
+		std::cout << "Initial time t = " << t0 << " is after the end of the simulation at t = " << tFinal << std::endl;
 		throw std::runtime_error( "Simulation ends before it begins." );
 	}
 
@@ -238,7 +243,7 @@ void SystemSolver::runSolver( double tFinal )
 		if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
 		{
 			// try to emit final data
-			print(out0, tret, nOut);
+			print( out0, tret, nOut, true );
 			if ( physics_debug ) print( dydt_out, tret, nOut, dYdt );
 			WriteTimeslice(tret);
 			out0.close();
@@ -248,7 +253,7 @@ void SystemSolver::runSolver( double tFinal )
 		}
 
 		std::cout << "Writing output at " << tret << std::endl;
-		print( out0, tret, nOut, Y );
+		print( out0, tret, nOut, Y, true );
 		if ( physics_debug ) {
 			print( dydt_out, tret, nOut, dYdt );
 			residual( tret, Y, dYdt, res );
@@ -270,7 +275,7 @@ void SystemSolver::runSolver( double tFinal )
 				}
 			dydt_norm = sqrt( dydt_norm );
 			if ( physics_debug )
-				std::cerr << " dy/dt norm inferred from lambdas is " << dydt_norm << std::endl;
+				std::cout << " dy/dt norm inferred from lambdas is " << dydt_norm << std::endl;
 			if ( dydt_norm < 1.0 )
 			{
 				std::cout << "Steady State achieved at time t = " << tret << std::endl;
@@ -286,9 +291,9 @@ void SystemSolver::runSolver( double tFinal )
 	IDAGetNumResEvals( IDA_mem, &nresevals );
 	IDAGetNumLinSolvSetups( IDA_mem, &njacevals );
 
-	std::cerr << "Total Number of Timesteps             :" << nsteps << std::endl;
-	std::cerr << "Total Number of Residual Evaluations  :" << nresevals << std::endl;
-	std::cerr << "Total Number of Jacobian Computations :" << njacevals << std::endl;
+	std::cout << "Total Number of Timesteps             :" << nsteps << std::endl;
+	std::cout << "Total Number of Residual Evaluations  :" << nresevals << std::endl;
+	std::cout << "Total Number of Jacobian Computations :" << njacevals << std::endl;
 
 	problem->finaliseDiagnostics( nc_output );
 	out0.close();

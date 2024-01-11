@@ -1,4 +1,6 @@
 
+#include <ranges>
+
 #include "NetCDFIO.hpp"
 #include "SystemSolver.hpp"
 
@@ -155,27 +157,49 @@ void NetCDFIO::AddGroup(std::string name, std::string description, std::vector<d
 
 // SystemSolver routines that use NetCDFIO
 
+void NetCDFIO::StoreGridInfo( const Grid& grid, unsigned int k )
+{
+	std::vector<double> CellBoundaries( grid.getNCells() + 1 );
+	CellBoundaries[ 0 ] = grid.lowerBoundary();
+	for ( Grid::Index i = 0; i < grid.getNCells(); ++i )
+		CellBoundaries[ i + 1 ] = grid[ i ].x_u;
+	NcGroup gridGroup = data_file.addGroup( "Grid" );
+	gridGroup.putAtt( "Description", "Information about the underlying grid used for the simulation" );
+	std::vector<int> indexes( CellBoundaries.size() );
+	int n = 0;
+	std::ranges::generate( indexes, [&n]() mutable { return n++; } );
+	NcDim indexDim = gridGroup.addDim( "Index", CellBoundaries.size() );
+	NcVar indexVar = gridGroup.addVar( "Index", netCDF::NcInt(), indexDim );
+	indexVar.putVar({0}, {indexes.size()}, indexes.data());
+	NcVar cellBoundaries = gridGroup.addVar("CellBoundaries", netCDF::NcDouble(), indexDim );
+	cellBoundaries.putVar({0}, {CellBoundaries.size()}, CellBoundaries.data());
+
+	NcVar order = gridGroup.addVar( "PolyOrder", netCDF::NcInt() );
+	order.putAtt( "Description", "Order of Polynomials used in HDG representation" );
+	order.putVar( &k );
+
+}
+
 void SystemSolver::initialiseNetCDF(std::string const &NetcdfOutputFile, size_t nOut)
 {
 	nc_output.Open(NetcdfOutputFile);
 	std::vector<double> gridpoints(nOut);
-	std::ranges::generate(gridpoints, [this, nOut]()
-						  {
+	std::ranges::generate(gridpoints, [this, nOut]() {
 		static int i = 0;
 		double delta_x = ( grid.upperBoundary() - grid.lowerBoundary() ) * ( 1.0/( nOut - 1.0 ) );
-		return static_cast<double>( i++ )*delta_x + grid.lowerBoundary(); });
+		return static_cast<double>( i++ )*delta_x + grid.lowerBoundary(); 
+		});
 
 	nc_output.SetOutputGrid(gridpoints);
-	// Add diagnostic hooks
+
+	nc_output.StoreGridInfo( grid, k );
+
+
 
 	nc_output.AddScalarVariable("nVariables", "Number of independent variables", "", static_cast<double>(nVars));
 
 	for (Index i = 0; i < nVars; ++i)
 	{
-		// auto initial_v = [this, i](Position x)
-		// { return problem->InitialValue(i, x); };
-		// auto initial_d = [this, i](Position x)
-		// { return problem->InitialDerivative(i, x); };
 		nc_output.AddGroup(problem->getVariableName(i), problem->getVariableDescription(i), gridpoints);
 		nc_output.AddVariable(problem->getVariableName(i), "u", "Value", problem->getVariableUnits(i), y.u(i));
 		nc_output.AddVariable(problem->getVariableName(i), "q", "Derivative", problem->getVariableUnits(i), y.q(i));

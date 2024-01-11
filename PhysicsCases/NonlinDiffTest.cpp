@@ -98,7 +98,7 @@ Value NonlinDiffTest::InitialValue( Index, Position x ) const
 
 Value NonlinDiffTest::InitialDerivative( Index, Position x ) const
 {
-	return ExactSolution( x, t0 ) / ( n*( x/::sqrt( t0 ) - 1.0 ) );
+	return ExactSolution( x, t0 ) / ( n*( x - ::sqrt( t0 ) ) );
 }
 
 Value NonlinDiffTest::ExactSolution( Position x, Time t ) const

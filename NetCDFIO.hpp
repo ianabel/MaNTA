@@ -6,9 +6,10 @@
 #include <vector>
 #include <utility>
 
+#include "gridStructures.hpp"
+
 /*
- *
- * Class for storing plasma details in a NetCDF file.
+ * Class for storing MaNTA run details in a NetCDF file.
  */
 
 class NetCDFIO
@@ -41,6 +42,8 @@ public:
 
 	template <typename T>
 	void AppendToGroup(std::string const &name, size_t tIndex, const std::initializer_list<std::pair<std::string, T>> &vars);
+
+	void StoreGridInfo( const Grid&, unsigned int );
 
 private:
 	std::string filename;

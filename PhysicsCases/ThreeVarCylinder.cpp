@@ -50,11 +50,6 @@ ThreeVarCylinder::ThreeVarCylinder( toml::value const &config, Grid const& grid 
 
 };
 
-enum Channel : Index {
-	Density = 0,
-	ElectronEnergy = 1,
-	IonEnergy = 2,
-};
 
 Real ThreeVarCylinder::Flux( Index i, RealVector u, RealVector q, Position x, Time t )
 {
