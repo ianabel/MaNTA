@@ -3,15 +3,98 @@
 #include <iostream>
 
 REGISTER_PHYSICS_IMPL(CylPlasmaDebug);
+const double n_mid = 0.5;
+const double n_edge = 0.05;
+const double T_mid = 0.2,T_edge = 0.1;
 
 CylPlasmaDebug::CylPlasmaDebug( toml::value const &config, Grid const& grid )
-	: AutodiffTransportSystem( config, grid, 2, 0 )
+	: AutodiffTransportSystem( config, grid, 3, 0 )
 {
 	B = new StraightMagneticField();
 	ParticleSourceStrength = 1.0;
 	jRadial = 0.1;
 
+	xL = grid.lowerBoundary();
+	xR = grid.upperBoundary();
+
+	isLowerDirichlet = true;
+	isUpperDirichlet = true;
+
+	uL.resize( 3 );
+	uR.resize( 3 );
+	uL[ Channel::Density ] = n_edge;
+	uR[ Channel::Density ] = n_edge;
+	uL[ Channel::IonEnergy ] = ( 3./2. ) * n_edge * T_edge;
+	uR[ Channel::IonEnergy ] = ( 3./2. ) * n_edge * T_edge;
+	uL[ Channel::ElectronEnergy ] = ( 3./2. ) * n_edge * T_edge;
+	uR[ Channel::ElectronEnergy ] = ( 3./2. ) * n_edge * T_edge;
+
 };
+
+Value CylPlasmaDebug::InitialValue( Index i, Position V ) const
+{
+	double R_min = B->R_V( xL );
+	double R_max = B->R_V( xR );
+	double R = B->R_V( V );
+	double R_mid = (R_min + R_max)/2.0;
+	double n = n_edge + ( n_mid - n_edge ) * std::cos( pi * ( R-R_mid )/( R_max - R_min ) );
+	double T = T_edge + ( T_mid - T_edge ) * std::cos( pi * ( R-R_mid )/( R_max - R_min ) );
+
+	Channel c = static_cast<Channel>(i);
+	switch(c) {
+		case Channel::Density:
+			return n;
+			break;
+		case Channel::IonEnergy:
+		case Channel::ElectronEnergy:
+			return ( 3./2. )*n*T;
+			break;
+			/*
+		case Channel::ElectronEnergy:
+			return qe( u, q, x, t );
+			break;
+		case Channel::AngularMomentum:
+			return Pi( u, q, x, t );
+			break;
+			*/
+		default:
+			throw std::runtime_error("Request for initial value for undefined variable!");
+	}
+}
+
+Value CylPlasmaDebug::InitialDerivative( Index i, Position V ) const
+{
+	double R_min = B->R_V( xL );
+	double R_max = B->R_V( xR );
+	double R = B->R_V( V );
+	double R_mid = (R_min + R_max)/2.0;
+	double n = n_edge + ( n_mid - n_edge ) * std::cos( pi * ( R-R_mid )/( R_max - R_min ) );
+	double T = T_edge + ( T_mid - T_edge ) * std::cos( pi * ( R-R_mid )/( R_max - R_min ) );
+	double nPrime = -( pi/( R_max-R_min ) ) * ( n_mid - n_edge ) * std::sin( pi * ( R-R_mid )/( R_max - R_min ) );
+	double TPrime = -( pi/( R_max-R_min ) ) * ( T_mid - T_edge ) * std::sin( pi * ( R-R_mid )/( R_max - R_min ) );
+	double dRdV = 1. / (2.0 * pi * R);
+
+	Channel c = static_cast<Channel>(i);
+	switch(c) {
+		case Channel::Density:
+			return nPrime * dRdV;
+			break;
+		case Channel::IonEnergy:
+		case Channel::ElectronEnergy:
+			return ( 3./2. )*( nPrime*T + n*TPrime ) * dRdV;
+			break;
+			/*
+		case Channel::ElectronEnergy:
+			return qe( u, q, x, t );
+			break;
+		case Channel::AngularMomentum:
+			return Pi( u, q, x, t );
+			break;
+			*/
+		default:
+			throw std::runtime_error("Request for initial value for undefined variable!");
+	}
+}
 
 Real CylPlasmaDebug::Flux( Index i, RealVector u, RealVector q, Position x, Time t )
 {
@@ -23,10 +106,10 @@ Real CylPlasmaDebug::Flux( Index i, RealVector u, RealVector q, Position x, Time
 		case Channel::IonEnergy:
 			return qi( u, q, x, t );
 			break;
-			/*
 		case Channel::ElectronEnergy:
 			return qe( u, q, x, t );
 			break;
+			/*
 		case Channel::AngularMomentum:
 			return Pi( u, q, x, t );
 			break;
@@ -46,10 +129,10 @@ Real CylPlasmaDebug::Source( Index i, RealVector u, RealVector q, RealVector sig
 		case Channel::IonEnergy:
 			return Spi( u, q, sigma, x, t );
 			break;
-			/*
 		case Channel::ElectronEnergy:
 			return Spe( u, q, sigma, x, t );
 			break;
+			/*
 		case Channel::AngularMomentum:
 			return Somega( u, q, sigma, x, t );
 			break;
@@ -119,7 +202,6 @@ inline double CylPlasmaDebug::ReferenceIonCollisionTime() const
 // Define lengths so R_ref = 1
 Real CylPlasmaDebug::Gamma(RealVector u, RealVector q, double V, double t) const
 {
-	/*
 	Real n = u( Channel::Density ), p_e = ( 2./3. )*u( Channel::ElectronEnergy );
 	Real Te = p_e/n;
 	Real nPrime = q( Channel::Density ), p_e_prime = ( 2./3. ) * q( Channel::ElectronEnergy ), p_i_prime = ( 2./3. ) * q( Channel::IonEnergy );
@@ -128,24 +210,7 @@ Real CylPlasmaDebug::Gamma(RealVector u, RealVector q, double V, double t) const
 	double R = B->R_V( V );
 	double GeometricFactor = ( B->VPrime( V ) * R ); // |grad psi| = R B , cancel the B with the B in Omega_e
 	Real Gamma = GeometricFactor * GeometricFactor * ( p_e / ElectronCollisionTime( n, Te ) ) * ( ( p_e_prime + p_i_prime )/p_e - ( 3./2. )*( Te_prime / Te ) );
-	*/
-
-	// Next tier of debug, T_i = T_e
-	Real n = u( Channel::Density ), p = ( 2./3. )*u( Channel::IonEnergy );
-	Real T = p/n;
-	Real nPrime = q( Channel::Density ), p_prime = ( 2./3. ) * q( Channel::IonEnergy );
-	Real T_prime = ( p_prime - nPrime * T )/n;
-
-	double R = B->R_V( V );
-	double GeometricFactor = ( B->VPrime( V ) * R ); // |grad psi| = R B , cancel the B with the B in Omega_e
-	Real Gamma = GeometricFactor * GeometricFactor * ( p / ElectronCollisionTime( n, T ) ) * ( (2.0 * p_prime)/p - ( 3./2. )*( T_prime / T ) );
-	/*
-	// For debug, we're just doing flat 1keV T_i & T_e everywhere
-	double R = B->R_V( V );
-	double GeometricFactor = ( B->VPrime( V ) * R ); // |grad psi| = R B , cancel the B with the B in Omega_e
-	Real n = u( Channel::Density ), nPrime = q( Channel::Density );
-	Real Gamma = GeometricFactor * GeometricFactor * ( n / ElectronCollisionTime( n, 1.0 ) ) * ( 2.0 * nPrime / n );
-	*/
+	
 
 	if( std::isfinite( Gamma.val ) )
 		return Gamma;
@@ -242,13 +307,8 @@ Real CylPlasmaDebug::IonClassicalAngularMomentumFlux( Position V, Real n, Real T
 
 Real CylPlasmaDebug::Sn(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
 {
-	// Some broad cosine source 
-	double R_min = B->R_V( xL );
-	double R_max = B->R_V( xR );
-	double R = B->R_V( V );
-	double R_mid = (R_min + R_max)/2.0;
-	Real Sn = 0.5 * cos( pi * (R-R_mid)/(R_max-R_min) );
-	return Sn;
+	// See what happens with a uniform source
+	return 10.0;
 };
 
 /*
@@ -271,7 +331,10 @@ Real CylPlasmaDebug::Spi(RealVector u, RealVector q, RealVector sigma, Position 
 		return 0.0;
 
 	Real HeatSource = 50.0 * cos( 2.0 * pi * ( R - R_mid )/(R_max - R_min) );
-	return HeatSource;
+	
+	Real n = u( Channel::Density ), p_e = (2./3.)*u( Channel::ElectronEnergy ), p_i = (2./3.)*u( Channel::IonEnergy );
+	Real EnergyExchange = IonElectronEnergyExchange( n, p_e, p_i, V, t );
+	return HeatSource + EnergyExchange;
 	/*
 	Real n = u( Channel::Density ), p_e = (2./3.)*u( Channel::ElectronEnergy ), p_i = (2./3.)*u( Channel::IonEnergy );
 	Real Ti = p_i/n;
@@ -309,7 +372,9 @@ Real CylPlasmaDebug::IonElectronEnergyExchange( Real n, Real pe, Real pi, Positi
 {
 	Real Te = pe/n;
 	double RhoStar = RhoStarRef();
-	Real IonHeating = ( 3.0 * ( pe - pi ) / ElectronCollisionTime( n, Te) ) * ( ElectronMass / IonMass ) / ( RhoStar * RhoStar );
+	Real pDiff = pe - pi;
+	Real IonHeating = ( pDiff / ElectronCollisionTime( n, Te) ) * ( (3.0/(RhoStar*RhoStar)) * (ElectronMass / IonMass) );
+
 	if( std::isfinite( IonHeating.val ) )
 		return IonHeating;
 	else

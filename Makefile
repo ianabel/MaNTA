@@ -42,7 +42,7 @@ $(PYTHON_OUTPUT): $(OBJECTS) $(PHYSICS_OBJECTS) Python.cpp PyTransportSystem.hpp
 
 clean:
 	$(MAKE) -C Tests/UnitTests clean
-	rm -f $(SOLVER) $(OBJECTS) $(ERROBJECTS) $(TESTOBJECTS) $(PHYSICS_OBJECTS) $(PYTHON_OUTPUT)
+	rm -f $(SOLVER) main.o $(OBJECTS) $(ERROBJECTS) $(TESTOBJECTS) $(PHYSICS_OBJECTS) $(PYTHON_OUTPUT)
 
 regression_tests: $(SOLVER)
 	$(MAKE) -C Tests/RegressionTests

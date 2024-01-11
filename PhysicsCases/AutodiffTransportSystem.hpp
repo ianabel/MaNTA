@@ -35,8 +35,7 @@ private:
 	virtual Real Flux( Index, RealVector, RealVector, Position, Time ) = 0;
 	virtual Real Source( Index, RealVector, RealVector, RealVector, Position, Time ) = 0;
 
-	static std::vector<int> InitialProfile;
-	enum ProfileType
+	enum class ProfileType
 	{
 		Gaussian,
 		Cosine,
@@ -44,14 +43,16 @@ private:
 		Uniform,
 		Linear,
 	};
-	std::map<std::string, int> InitialProfiles = {{"Gaussian", Gaussian}, {"Cosine", Cosine}, {"CosineSquared",CosineSquared}, {"Uniform", Uniform}, {"Linear", Linear}};
+	std::vector<ProfileType> InitialProfile;
+	
+	std::map<std::string, ProfileType> InitialProfiles = {{"Gaussian", ProfileType::Gaussian}, {"Cosine", ProfileType::Cosine}, {"CosineSquared",ProfileType::CosineSquared}, {"Uniform", ProfileType::Uniform}, {"Linear", ProfileType::Linear}};
 
-	static Vector InitialHeights;
+	Vector InitialHeights;
 
 
-	static autodiff::dual2nd DirichletIC(Index i, autodiff::dual2nd x, autodiff::dual2nd t, double u_R, double u_L, double x_L, double x_R);
+	autodiff::dual2nd DirichletIC(Index i, autodiff::dual2nd x, autodiff::dual2nd t, double u_R, double u_L, double x_L, double x_R) const;
 
-	static autodiff::dual2nd InitialFunction(Index i, autodiff::dual2nd x, autodiff::dual2nd t, double u_R, double u_L, double x_L, double x_R);
+	autodiff::dual2nd InitialFunction(Index i, autodiff::dual2nd x, autodiff::dual2nd t, double u_R, double u_L, double x_L, double x_R) const;
 
 };
 #endif
