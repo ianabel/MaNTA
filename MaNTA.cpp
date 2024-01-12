@@ -114,8 +114,6 @@ int runManta( std::string const& fname )
 
 	if (nCells < 4 && highGridBoundary)
 		throw std::invalid_argument("Grid size must exceed 4 cells in order to implemet dense boundaries");
-	if (highGridBoundary)
-		nCells += 8;
 
 	auto lowerBoundary = toml::find(config, "Lower_boundary");
 	if (config.count("Lower_boundary") != 1)

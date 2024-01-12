@@ -252,7 +252,9 @@ void SystemSolver::runSolver( double tFinal )
 			throw std::runtime_error("IDASolve could not complete");
 		}
 
-		std::cout << "Writing output at " << tret << std::endl;
+		long int nstep_tmp;
+		IDAGetNumSteps( IDA_mem, &nstep_tmp );
+		std::cout << "Writing output at " << tret << " ( " << nstep_tmp << " timesteps )" << std::endl;
 		print( out0, tret, nOut, Y, true );
 		if ( physics_debug ) {
 			print( dydt_out, tret, nOut, dYdt );

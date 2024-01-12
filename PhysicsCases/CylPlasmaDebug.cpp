@@ -50,9 +50,6 @@ Value CylPlasmaDebug::InitialValue( Index i, Position V ) const
 			return ( 3./2. )*n*T;
 			break;
 			/*
-		case Channel::ElectronEnergy:
-			return qe( u, q, x, t );
-			break;
 		case Channel::AngularMomentum:
 			return Pi( u, q, x, t );
 			break;
