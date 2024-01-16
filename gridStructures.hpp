@@ -75,13 +75,13 @@ public:
 		}
 		else
 		{
-			// [ 15 % ] [ 70 % ] [ 15 % ] with 1/3rd of the cells each
-			double lBoundaryFraction = 0.15;
-			double uBoundaryFraction = 0.15;
+			// [ 10 % ] [ 80 % ] [ 10 % ] with 40% in each boundary and 20% in the middle
+			double lBoundaryFraction = 0.1;
+			double uBoundaryFraction = 0.1;
 			double lBoundaryLayer = ( upperBound - lowerBound ) * ( lBoundaryFraction )       + lowerBound;
 			double uBoundaryLayer = ( upperBound - lowerBound ) * ( 1.0 - uBoundaryFraction ) + lowerBound;
 
-			unsigned int BoundaryCells = nCells/3;
+			unsigned int BoundaryCells = 2 * nCells / 5;
 			unsigned int BulkCells = nCells - 2*BoundaryCells;
 
 			double lBoundaryLayerCellLength = ( lBoundaryLayer - lowerBound )/static_cast<double>( BoundaryCells );

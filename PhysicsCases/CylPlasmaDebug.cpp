@@ -5,7 +5,7 @@
 REGISTER_PHYSICS_IMPL(CylPlasmaDebug);
 const double n_mid = 0.25;
 const double n_edge = 0.05;
-const double T_mid = 0.2,T_edge = 0.1;
+const double T_mid = 0.4,T_edge = 0.2;
 
 const double omega_edge = 0.1,omega_mid = 1.0;
 
@@ -14,7 +14,7 @@ CylPlasmaDebug::CylPlasmaDebug( toml::value const &config, Grid const& grid )
 {
 	B = new StraightMagneticField();
 	ParticleSourceStrength = 1.0;
-	jRadial = -4.0;
+	jRadial = -100.0;
 
 	xL = grid.lowerBoundary();
 	xR = grid.upperBoundary();
@@ -307,11 +307,7 @@ Real CylPlasmaDebug::IonClassicalAngularMomentumFlux( Position V, Real n, Real T
 Real CylPlasmaDebug::Sn(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
 {
 	// See what happens with a uniform source
-	double R = B->R_V( V );
-	if( R > 0.3 && R < 0.6 )
-		return 10.0;
-	else
-		return 0.0;
+	return 10.0;
 };
 
 /*

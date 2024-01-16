@@ -820,7 +820,12 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
 int static_residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval, void *user_data)
 {
 	auto system = reinterpret_cast<SystemSolver *>(user_data);
-	return system->residual( tres, Y, dYdt, resval );
+	try {
+		return system->residual( tres, Y, dYdt, resval );
+	} catch ( std::exception &e ) {
+		std::cout << "Caught exception : " << e.what() << " ; Retrying. " << std::endl;
+		return 1;
+	}
 }
 
 int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval )
