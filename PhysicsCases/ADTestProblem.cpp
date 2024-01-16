@@ -9,10 +9,10 @@ REGISTER_PHYSICS_IMPL(ADTestProblem);
 ADTestProblem::ADTestProblem( toml::value const &config, Grid const& grid )
 	: AutodiffTransportSystem( config, grid, 1, 0 ) // Configure a blank autodiff system with three variables and no scalars
 {
-    if (config.count("ADTestProblem") != 1)
-        throw std::invalid_argument("There should be a [ADTestProblem] section if you are using the 3VarCylinder physics model.");
+	if (config.count("ADTestProblem") != 1) {
+		throw std::invalid_argument("There should be a [ADTestProblem] section if you are using the 3VarCylinder physics model.");
+	}
 
-    auto const &DiffConfig = config.at("ADTestProblem");
 	T_s = 50;
 	a = 6.0;
 	SourceWidth = 0.02;

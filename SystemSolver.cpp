@@ -61,15 +61,32 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 	dydt.Map(N_VGetArrayPointer(dYdt));
 
 	resetCoeffs();
+	if( !initialised )
+		throw std::logic_error("setInitialConditions can only be called after initialising the matrices");
 
 	// slightly minging syntax. blame C++
 	auto initial_u = std::bind_front(&TransportSystem::InitialValue, problem);
 	auto initial_q = std::bind_front(&TransportSystem::InitialDerivative, problem);
 	y.AssignU(initial_u);
-	// TODO: Change to just taking the numerical derivative ?
 	y.AssignQ(initial_q);
 
-	y.EvaluateLambda(tauc);
+	y.EvaluateLambda();
+	// y.EvaluateLambda( tauc );
+
+	/*
+	for ( Index i = 0; i < nCells; i++ )
+	{
+		for ( Index var = 0; var < nVars; var++ )
+		{
+			y.q( var ).getCoeff( i ).second = A_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1).inverse() * (
+					 - B_cellwise[i].transpose().block(var * (k + 1), var * (k + 1), k + 1, k + 1) * y.u(var).getCoeff(i).second
+					 + C_cellwise[i].transpose().block(var * (k + 1), var * 2, k + 1, 2) * y.lambda(var).segment<2>( i )
+					 - RF_cellwise[i].block(var * (k + 1), 0, k + 1, 1)
+					);
+		}
+	}
+	*/
+
 
 	for ( Index s = 0; s < nScalars; ++s )
 		y.Scalar( s ) = problem->InitialScalarValue( s );

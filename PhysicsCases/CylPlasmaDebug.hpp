@@ -88,6 +88,7 @@ class CylPlasmaDebug : public AutodiffTransportSystem
 		StraightMagneticField *B;
 
 
+		double R_Lower,R_Upper;
 
 		REGISTER_PHYSICS_HEADER(CylPlasmaDebug)
 };

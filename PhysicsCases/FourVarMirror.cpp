@@ -236,7 +236,7 @@ Real FourVarMirror::Spi_hat(RealVector u, RealVector q, RealVector sigma, Real x
 {
     double Rval = R(x.val, t);
     double Vpval = Vprime(Rval);
-    double Bval = B(x.val, t);
+    // double Bval = B(x.val, t);
     double coef = Rval * Rval * Vpval;
 
     Real Ppast = 0.0;
@@ -393,7 +393,7 @@ double FourVarMirror::Vprime(double R)
 }
 double FourVarMirror::B(double x, double t)
 {
-    double Rval = R(x, t);
+    // double Rval = R(x, t);
     return Bmid.val; //* exp(-0.5 * Rval * Rval);
     ///(1 / R(x, t)); // / R(x, t);
 }
@@ -404,8 +404,8 @@ double FourVarMirror::R(double x, double t)
     using boost::math::tools::bracket_and_solve_root;
     using boost::math::tools::eps_tolerance;
     double guess = 0.5;                                     // Rough guess is to divide the exponent by three.
-    double min = Rmin;                                      // Minimum possible value is half our guess.
-    double max = Rmax;                                      // Maximum possible value is twice our guess.
+    // double min = Rmin;                                      // Minimum possible value is half our guess.
+    // double max = Rmax;                                      // Maximum possible value is twice our guess.
     const int digits = std::numeric_limits<double>::digits; // Maximum possible binary digits accuracy for type T.
     int get_digits = static_cast<int>(digits * 0.6);        // Accuracy doubles with each step, so stop when we have
                                                             // just over half the digits correct.
