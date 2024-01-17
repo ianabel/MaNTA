@@ -32,7 +32,7 @@ public:
 	template <typename T>
 	void AddVariable(std::string groupName, std::string name, std::string description, std::string units, T const &initialValue);
 
-	void AddGroup(std::string name, std::string description, std::vector<double> const &gridpoints_);
+	void AddGroup(std::string name, std::string description);
 
 	size_t AddTimeSlice(double T);
 

@@ -36,6 +36,22 @@ MirrorPlasmaDebug::MirrorPlasmaDebug( toml::value const &config, Grid const& gri
 	uL[ Channel::AngularMomentum ] = omega_edge * n_edge * R_Lower * R_Lower;
 	uR[ Channel::AngularMomentum ] = omega_edge * n_edge * R_Upper * R_Upper;
 
+	if( config.count("MirrorPlasma") == 1 ) {
+		auto const& InternalConfig = config.at( "MirrorPlasma" );
+		double nEdge = toml::find_or( InternalConfig, "nEdge", n_edge );
+		double TEdge = toml::find_or( InternalConfig, "TEdge", T_edge );
+		double omegaEdge = toml::find_or( InternalConfig, "omegaEdge", omega_edge );
+		uL[ Channel::Density ] = nEdge;
+		uR[ Channel::Density ] = nEdge;
+		uL[ Channel::IonEnergy ] = ( 3./2. ) * nEdge * TEdge;
+		uR[ Channel::IonEnergy ] = ( 3./2. ) * nEdge * TEdge;
+		uL[ Channel::ElectronEnergy ] = ( 3./2. ) * nEdge * TEdge;
+		uR[ Channel::ElectronEnergy ] = ( 3./2. ) * nEdge * TEdge;
+		uL[ Channel::AngularMomentum ] = omegaEdge * nEdge * R_Lower * R_Lower;
+		uR[ Channel::AngularMomentum ] = omegaEdge * nEdge * R_Upper * R_Upper;
+		jRadial = -toml::find_or( InternalConfig, "jRadial", 4.0 ); 
+		ParticleSourceStrength = toml::find_or( InternalConfig, "ParticleSource", 10.0 );
+	}
 
 };
 
@@ -57,8 +73,10 @@ Value MirrorPlasmaDebug::InitialValue( Index i, Position V ) const
 			return n;
 			break;
 		case Channel::IonEnergy:
-		case Channel::ElectronEnergy:
 			return ( 3./2. )*n*T;
+			break;
+		case Channel::ElectronEnergy:
+			return ( 3. / 2. ) * n_edge * T_edge;
 			break;
 		case Channel::AngularMomentum:
 			return omega * n * R * R;
@@ -88,8 +106,10 @@ Value MirrorPlasmaDebug::InitialDerivative( Index i, Position V ) const
 			return nPrime * dRdV;
 			break;
 		case Channel::IonEnergy:
-		case Channel::ElectronEnergy:
 			return ( 3./2. )*( nPrime*T + n*TPrime ) * dRdV;
+			break;
+		case Channel::ElectronEnergy:
+			return 0.0;
 			break;
 		case Channel::AngularMomentum:
 			return ( omegaPrime * n * R * R + omega * nPrime * R * R + 2 * omega * n * R ) * dRdV;
@@ -308,9 +328,11 @@ Real MirrorPlasmaDebug::Sn(RealVector u, RealVector q, RealVector sigma, Positio
 {
 	// See what happens with a uniform source
 	double R = B->R_V( V );
+	double R_lim_l = R_Lower + (R_Upper - R_Lower)*0.2;
+	double R_lim_u = R_Upper - (R_Upper - R_Lower)*0.2;
 	double Source;
-	if( R > 0.3 && R < 0.6 )
-		Source = 10.0;
+	if( R > R_lim_l && R < R_lim_u )
+		Source = ParticleSourceStrength;
 	else
 		Source = 0.0;
 
@@ -346,16 +368,23 @@ Real MirrorPlasmaDebug::Spi(RealVector u, RealVector q, RealVector sigma, Positi
 
 	Real Heating = ViscousHeating + PotentialHeating + EnergyExchange;
 
-	Real Chi_i = CentrifugalPotential( V, omega, Ti, Te );
-	Real ParticleEnergy = Ti*( 1.0 + Chi_i );
-	Real ParallelLosses = ParticleEnergy * IonPastukhovLossRate( V, Chi_i, n, Ti );
+	Real Xi = Xi_i( V, omega, Ti, Te );
+	Real ParticleEnergy = Ti*( 1.0 + Xi );
+	Real ParallelLosses = ParticleEnergy * IonPastukhovLossRate( V, Xi, n, Ti );
 
 	return Heating - ParallelLosses;
 }
 
-Real MirrorPlasmaDebug::Chi_i( Position V, Real omega, Real Ti, Real Te )
+// Energy normalisation is T0
+inline Real MirrorPlasmaDebug::Xi_i( Position V, Real omega, Real Ti, Real Te ) const
 {
+	return CentrifugalPotential( V, omega, Ti, Te ) * Ti;
+}
 
+
+inline Real MirrorPlasmaDebug::Xi_e( Position V, Real omega, Real Ti, Real Te ) const
+{
+	return CentrifugalPotential( V, omega, Ti, Te ) * Te;
 }
 
 /*
@@ -396,9 +425,9 @@ Real MirrorPlasmaDebug::Spe(RealVector u, RealVector q, RealVector sigma, Positi
 	Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
 	Real omega = u( Channel::AngularMomentum ) / J;
 
-	Real Chi_e = -CentrifugalPotential( V, omega, Ti, Te );
-	Real ParticleEnergy = Te*( 1.0 + Chi_e );
-	Real ParallelLosses = ParticleEnergy * ElectronPastukhovLossRate( V, Chi_e, n, Te );
+	Real Xi = Xi_e( V, omega, Ti, Te );
+	Real ParticleEnergy = Te*( 1.0 + Xi );
+	Real ParallelLosses = ParticleEnergy * ElectronPastukhovLossRate( V, Xi, n, Te );
 
 	return Heating - ParallelLosses;
 };
@@ -408,16 +437,29 @@ Real MirrorPlasmaDebug::Somega(RealVector u, RealVector q, RealVector sigma, Pos
 {
 	// J x B torque
 	double R = B->R_V( V );
-    return - jRadial * R * B->Bz_R(R);
+	double JxB = - jRadial * R * B->Bz_R(R);
+
+	Real n = u( Channel::Density ), p_e = (2./3.)*u( Channel::ElectronEnergy ), p_i = (2./3.)*u( Channel::IonEnergy );
+	Real Te = p_e/n, Ti = p_i/n;
+	Real L = u( Channel::AngularMomentum );
+	Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
+	Real omega = L / J;
+
+	// Neglect electron momentum
+	Real Xi = Xi_i( V, omega, Ti, Te );
+	Real AngularMomentumPerParticle = L/n;
+	Real ParallelLosses = AngularMomentumPerParticle * IonPastukhovLossRate( V, Xi, n, Te );
+
+   return JxB - ParallelLosses;
 };
 
-Real MirrorPlasmaDebug::ElectronPastukhovLossRate( double V, Real Chi_e, Real n, Real Te ) const
+Real MirrorPlasmaDebug::ElectronPastukhovLossRate( double V, Real Xi_e, Real n, Real Te ) const
 {
 	double MirrorRatio = B->MirrorRatio( V );
 	Real tau_ee = ElectronCollisionTime( n, Te );
 	double Sigma = 2.0; // = 1 + Z_eff ; Include collisions with ions and impurities as well as self-collisions
 
-	Real PastukhovFactor = ( exp( -Chi_e ) / Chi_e );
+	Real PastukhovFactor = ( exp( -Xi_e ) / Xi_e );
 	// Cap loss rates
 	if( PastukhovFactor.val > 1.0 )
 		PastukhovFactor.val = 1.0;
@@ -428,7 +470,7 @@ Real MirrorPlasmaDebug::ElectronPastukhovLossRate( double V, Real Chi_e, Real n,
 	return LossRate;
 }
 
-Real MirrorPlasmaDebug::IonPastukhovLossRate( double V, Real Chi_i, Real n, Real Ti ) const
+Real MirrorPlasmaDebug::IonPastukhovLossRate( double V, Real Xi_i, Real n, Real Ti ) const
 {
 	// For consistency, the integral in Pastukhov's paper is 1.0, as the
 	// entire theory is an expansion in M^2 >> 1
@@ -436,7 +478,7 @@ Real MirrorPlasmaDebug::IonPastukhovLossRate( double V, Real Chi_i, Real n, Real
 	Real tau_ii = IonCollisionTime( n, Ti );
 	double Sigma = 1.0; // Just ion-ion collisions
 
-	Real PastukhovFactor = ( exp( - Chi_i ) / Chi_i );
+	Real PastukhovFactor = ( exp( - Xi_i ) / Xi_i );
 	// Cap loss rates
 	if( PastukhovFactor.val > 1.0 )
 		PastukhovFactor.val = 1.0;
@@ -449,12 +491,46 @@ Real MirrorPlasmaDebug::IonPastukhovLossRate( double V, Real Chi_i, Real n, Real
 	return LossRate;
 }
 
+// Returns (1/(1 + Tau))*(1-1/R_m)*(M^2)
 Real MirrorPlasmaDebug::CentrifugalPotential( double V, Real omega, Real Ti, Real Te ) const
 {
 	double MirrorRatio = B->MirrorRatio( V );
 	double R = B->R_V( V );
 	Real tau = Ti/Te;
 	Real MachNumber = omega * R / sqrt( Te ); // omega is normalised to c_s0 / a
-	Real Potential = -( 0.5/tau ) * ( 1.0 - 1.0 / MirrorRatio ) * MachNumber * MachNumber / ( 1.0 / tau + 1.0 );
+	Real Potential = -( 1.0/( 1.0 + tau ) ) * ( 1.0 - 1.0 / MirrorRatio ) * MachNumber * MachNumber / 2.0;
 	return Potential;
+}
+
+// omega & n are callables
+template<typename T1,typename T2> double MirrorPlasmaDebug::Voltage( T1& L_phi, T2& n )
+{
+	auto integrator = boost::math::quadrature::gauss<double, 15>();	
+	auto integrand = [this,&L_phi,&n]( double V ) {
+		double R = B->R_V(V);
+		return L_phi( V )/( n( V ) * R * R * B->VPrime(V) );
+	};
+	double cs0 = std::sqrt( T0 / IonMass );
+	return cs0 * integrator.integrate( integrand, xL, xR );
+}
+
+void MirrorPlasmaDebug::initialiseDiagnostics( NetCDFIO & nc )
+{
+	// Add diagnostics here
+	auto initialL = [this](double V){ return InitialValue( Channel::AngularMomentum, V ); };
+	auto initialn = [this](double V){ return InitialValue( Channel::Density, V ); };
+
+	double initialVoltage = Voltage( initialL, initialn ); 
+	nc.AddTimeSeries("Voltage","Total voltage drop across the plasma","Volts", initialVoltage );
+	nc.AddGroup("Heating","Separated heating sources");
+	// TODO: Put the AddVariable stuff here for the heating.
+}
+
+void MirrorPlasmaDebug::writeDiagnostics( DGSoln const& y, Time t, NetCDFIO &nc, size_t tIndex )
+{
+	auto L = [&y]( double V ) { return y.u( Channel::AngularMomentum )( V ); };
+	auto n = [&y]( double V ) { return y.u( Channel::Density )( V ); };
+	double voltage = Voltage( L, n );
+	nc.AppendToTimeSeries( "Voltage", voltage, tIndex );
+	// Add the appends for the heating stuff
 }

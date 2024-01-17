@@ -6,6 +6,8 @@
 using std::numbers::pi;
 
 // Magnetic field
+// All of these values are returned in SI units
+// (we may later introduce a B0 & R0, but these are 1T & 1m for now)
 class StraightMagneticField
 {
 	public:

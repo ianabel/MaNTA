@@ -149,7 +149,7 @@ void NetCDFIO::AddVariable(std::string groupName, std::string name, std::string 
 	newvar.putVar({0, 0}, {1, gridpoints.size()}, gridValues.data());
 }
 
-void NetCDFIO::AddGroup(std::string name, std::string description, std::vector<double> const &gridpoints_)
+void NetCDFIO::AddGroup(std::string name, std::string description)
 {
 	NcGroup newgroup = data_file.addGroup(name);
 	newgroup.putAtt("description", description);
@@ -200,7 +200,7 @@ void SystemSolver::initialiseNetCDF(std::string const &NetcdfOutputFile, size_t 
 
 	for (Index i = 0; i < nVars; ++i)
 	{
-		nc_output.AddGroup(problem->getVariableName(i), problem->getVariableDescription(i), gridpoints);
+		nc_output.AddGroup(problem->getVariableName(i), problem->getVariableDescription(i));
 		nc_output.AddVariable(problem->getVariableName(i), "u", "Value", problem->getVariableUnits(i), y.u(i));
 		nc_output.AddVariable(problem->getVariableName(i), "q", "Derivative", problem->getVariableUnits(i), y.q(i));
 		nc_output.AddVariable(problem->getVariableName(i), "sigma", "Flux", problem->getVariableUnits(i), y.sigma(i));

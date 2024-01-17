@@ -87,11 +87,18 @@ class MirrorPlasmaDebug : public AutodiffTransportSystem
 
 		StraightMagneticField *B;
 
-		Real ElectronPastukhovLossRate( double V, Real Chi_e, Real n, Real Te ) const;
-		Real IonPastukhovLossRate( double V, Real Chi_i, Real n, Real Ti ) const;
+		Real ElectronPastukhovLossRate( double V, Real Xi_e, Real n, Real Te ) const;
+		Real IonPastukhovLossRate( double V, Real Xi_i, Real n, Real Ti ) const;
 		Real CentrifugalPotential( double V, Real omega, Real Ti, Real Te ) const;
 
+		Real Xi_i( Position V, Real omega, Real Ti, Real Te ) const;
+		Real Xi_e( Position V, Real omega, Real Ti, Real Te ) const;
 		double R_Lower,R_Upper;
+
+
+		template<typename T1,typename T2> double Voltage( T1& L_phi, T2& n );
+		void initialiseDiagnostics( NetCDFIO & nc ) override;
+		void writeDiagnostics( DGSoln const& y, Time t, NetCDFIO &nc, size_t tIndex ) override;
 
 		REGISTER_PHYSICS_HEADER(MirrorPlasmaDebug)
 };
