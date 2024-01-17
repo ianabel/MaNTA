@@ -1,20 +1,20 @@
-#include "CylPlasmaDebug.hpp"
+#include "MirrorPlasmaDebug.hpp"
 #include "Constants.hpp"
 #include <iostream>
 
-REGISTER_PHYSICS_IMPL(CylPlasmaDebug);
+REGISTER_PHYSICS_IMPL(MirrorPlasmaDebug);
 const double n_mid = 0.25;
 const double n_edge = 0.05;
-const double T_mid = 0.4,T_edge = 0.1;
+const double T_mid = 0.2,T_edge = 0.1;
 
 const double omega_edge = 0.1,omega_mid = 1.0;
 
-CylPlasmaDebug::CylPlasmaDebug( toml::value const &config, Grid const& grid )
+MirrorPlasmaDebug::MirrorPlasmaDebug( toml::value const &config, Grid const& grid )
 	: AutodiffTransportSystem( config, grid, 4, 0 )
 {
 	B = new StraightMagneticField();
 	ParticleSourceStrength = 1.0;
-	jRadial = -52.0;
+	jRadial = -4.0;
 
 	xL = grid.lowerBoundary();
 	xR = grid.upperBoundary();
@@ -39,7 +39,7 @@ CylPlasmaDebug::CylPlasmaDebug( toml::value const &config, Grid const& grid )
 
 };
 
-Value CylPlasmaDebug::InitialValue( Index i, Position V ) const
+Value MirrorPlasmaDebug::InitialValue( Index i, Position V ) const
 {
 	double R_min = B->R_V( xL );
 	double R_max = B->R_V( xR );
@@ -68,7 +68,7 @@ Value CylPlasmaDebug::InitialValue( Index i, Position V ) const
 	}
 }
 
-Value CylPlasmaDebug::InitialDerivative( Index i, Position V ) const
+Value MirrorPlasmaDebug::InitialDerivative( Index i, Position V ) const
 {
 	double R_min = B->R_V( xL );
 	double R_max = B->R_V( xR );
@@ -99,7 +99,7 @@ Value CylPlasmaDebug::InitialDerivative( Index i, Position V ) const
 	}
 }
 
-Real CylPlasmaDebug::Flux( Index i, RealVector u, RealVector q, Position x, Time t )
+Real MirrorPlasmaDebug::Flux( Index i, RealVector u, RealVector q, Position x, Time t )
 {
 	Channel c = static_cast<Channel>(i);
 	switch(c) {
@@ -120,7 +120,7 @@ Real CylPlasmaDebug::Flux( Index i, RealVector u, RealVector q, Position x, Time
 	}
 }
 
-Real CylPlasmaDebug::Source( Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t )
+Real MirrorPlasmaDebug::Source( Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t )
 {
 	Channel c = static_cast<Channel>(i);
 	switch(c) {
@@ -151,45 +151,45 @@ Normalisation:
 
 // This is c_s / ( Omega_i * a )
 // = sqrt( T0 / mi ) / ( e B0 / mi ) =  [ sqrt( T0 mi ) / ( e B0 ) ] / a
-inline double CylPlasmaDebug::RhoStarRef() const
+inline double MirrorPlasmaDebug::RhoStarRef() const
 {
 	return sqrt( T0 * IonMass ) / ( ElementaryCharge * B0 * a );
 }
 
 // Return this normalised to log Lambda at n0,T0
-inline Real CylPlasmaDebug::LogLambda_ei( Real, Real ) const
+inline Real MirrorPlasmaDebug::LogLambda_ei( Real, Real ) const
 {
 	return 1.0; // really needs to know Ti as well
 }
 
 // Return this normalised to log Lambda at n0,T0
-inline Real CylPlasmaDebug::LogLambda_ii( Real ni, Real Ti ) const
+inline Real MirrorPlasmaDebug::LogLambda_ii( Real ni, Real Ti ) const
 {
 	return 1.0; // 
 }
 
 // Return tau_ei (Helander & Sigmar notation ) normalised to tau_ei( n0, T0 )
 // This is equal to tau_e as used in Braginskii
-inline Real CylPlasmaDebug::ElectronCollisionTime( Real ne, Real Te ) const
+inline Real MirrorPlasmaDebug::ElectronCollisionTime( Real ne, Real Te ) const
 {
 	return pow( Te, 1.5 )/( ne * LogLambda_ei( ne, Te ) );
 }
 
 // Return the actual value in SI units
-inline double CylPlasmaDebug::ReferenceElectronCollisionTime() const
+inline double MirrorPlasmaDebug::ReferenceElectronCollisionTime() const
 {
 	double LogLambdaRef = 24.0 - log( n0 )/2.0 + log( T0 ); // 24 - ln( n^1/2 T^-1 ) from NRL pg 34
 	return 12.0 * pow( M_PI, 1.5 ) * sqrt( ElectronMass ) * pow( T0, 1.5 ) * VacuumPermittivity * VacuumPermittivity / ( sqrt( 2 ) * n0 * pow( ElementaryCharge, 4 ) * LogLambdaRef );
 }
 // Return sqrt(2) * tau_ii (Helander & Sigmar notation ) normalised to tau_ii( n0, T0 )
 // This is equal to tau_i as used in Braginskii
-inline Real CylPlasmaDebug::IonCollisionTime( Real ni, Real Ti ) const
+inline Real MirrorPlasmaDebug::IonCollisionTime( Real ni, Real Ti ) const
 {
 	return pow( Ti, 1.5 )/( ni * LogLambda_ii( ni, Ti ) );
 }
 
 // Return the actual value in SI units
-inline double CylPlasmaDebug::ReferenceIonCollisionTime() const
+inline double MirrorPlasmaDebug::ReferenceIonCollisionTime() const
 {
 	double LogLambdaRef = 23.0 - log( 2.0 ) - log( n0 )/2.0 + log( T0 ) * 1.5; // 23 - ln( (2n)^1/2 T^-3/2 ) from NRL pg 34
 	return 12.0 * pow( M_PI, 1.5 ) * sqrt( IonMass ) * pow( T0, 1.5 ) * VacuumPermittivity * VacuumPermittivity / ( n0 * pow( ElementaryCharge, 4 ) * LogLambdaRef );
@@ -199,7 +199,7 @@ inline double CylPlasmaDebug::ReferenceIonCollisionTime() const
 // This function returns V' * Gamma_e, and Gamma_i = Gamma_e
 // c.f Helander & Sigmar -- Gamma_e = (n_e T_e / (m_e Omega_e^2 tau_e))*( (p_e' + p_i')/p_e - (3/2)(T_e'/T_e)
 // Define lengths so R_ref = 1
-Real CylPlasmaDebug::Gamma(RealVector u, RealVector q, double V, double t) const
+Real MirrorPlasmaDebug::Gamma(RealVector u, RealVector q, double V, double t) const
 {
 	Real n = u( Channel::Density ), p_e = ( 2./3. )*u( Channel::ElectronEnergy );
 	Real Te = p_e/n;
@@ -224,7 +224,7 @@ Real CylPlasmaDebug::Gamma(RealVector u, RealVector q, double V, double t) const
 
 	( n_i T_i / m_i Omega_i^2 tau_i ) * ( m_e Omega_e_ref^2 tau_e_ref / n0 T0 ) = sqrt( m_i/2m_e ) * p_i / tau_i
 */
-Real CylPlasmaDebug::qi(RealVector u, RealVector q, double V, double t) const
+Real MirrorPlasmaDebug::qi(RealVector u, RealVector q, double V, double t) const
 {
 	Real n = u( Channel::Density ), p_i = ( 2./3. )*u( Channel::IonEnergy );
 	Real Ti = p_i/n;
@@ -245,7 +245,7 @@ Real CylPlasmaDebug::qi(RealVector u, RealVector q, double V, double t) const
    Following Helander & Sigmar, we have
    V' q_e = n_e T_e * V'^2 B^2 R^2 * ( T_e / m_e Omega_e^2 tau_e ) * ( 4.66 T_e'/T_e - (3/2) * (p_e'+p_i')/p_e ) 
  */
-Real CylPlasmaDebug::qe(RealVector u, RealVector q, double V, double t) const
+Real MirrorPlasmaDebug::qe(RealVector u, RealVector q, double V, double t) const
 {
 	Real n = u( Channel::Density ), p_e = ( 2./3. )*u( Channel::ElectronEnergy );
 	Real Te = p_e/n;
@@ -274,7 +274,7 @@ Real CylPlasmaDebug::qe(RealVector u, RealVector q, double V, double t) const
    with c_s0 = sqrt( T0/mi )
    
  */
-Real CylPlasmaDebug::Pi(RealVector u, RealVector q, double V, double t) const
+Real MirrorPlasmaDebug::Pi(RealVector u, RealVector q, double V, double t) const
 {
 	Real n = u( Channel::Density ), Ti = (2./3.)*u( Channel::IonEnergy ) / n;
 	// dOmega dV = L'/J - J' L / J^2 ; L = angular momentum / J = moment of Inertia
@@ -293,7 +293,7 @@ Real CylPlasmaDebug::Pi(RealVector u, RealVector q, double V, double t) const
 /*
    Returns V' pi_cl_i
  */
-Real CylPlasmaDebug::IonClassicalAngularMomentumFlux( Position V, Real n, Real Ti, Real dOmegadV, double t ) const
+Real MirrorPlasmaDebug::IonClassicalAngularMomentumFlux( Position V, Real n, Real Ti, Real dOmegadV, double t ) const
 {
 	double R = B->R_V( V );
 	double GeometricFactor = ( B->VPrime( V ) * R * R ); // |grad psi| = R B , cancel the B with the B in Omega_e, leaving (V'R)^2
@@ -304,10 +304,18 @@ Real CylPlasmaDebug::IonClassicalAngularMomentumFlux( Position V, Real n, Real T
 		throw std::logic_error( "Non-finite value computed for the ion momentum flux at x = " + std::to_string( V ) + " and t = " + std::to_string( t ) );
 }
 
-Real CylPlasmaDebug::Sn(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
+Real MirrorPlasmaDebug::Sn(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
 {
 	// See what happens with a uniform source
-	return 10.0;
+	double R = B->R_V( V );
+	double Source;
+	if( R > 0.3 && R < 0.6 )
+		Source = 10.0;
+	else
+		Source = 0.0;
+
+	double ParallelLosses = 0.0;
+	return Source + ParallelLosses;
 };
 
 /*
@@ -317,9 +325,10 @@ Real CylPlasmaDebug::Sn(RealVector u, RealVector q, RealVector sigma, Position V
  *
  * where Q_i is the collisional heating
  */
-Real CylPlasmaDebug::Spi(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
+Real MirrorPlasmaDebug::Spi(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
 {
 	Real n = u( Channel::Density ), p_e = (2./3.)*u( Channel::ElectronEnergy ), p_i = (2./3.)*u( Channel::IonEnergy );
+	Real Te = p_e/n;
 	Real Ti = p_i/n;
 	// pi * d omega / d psi = (V'pi)*(d omega / d V)
 	double R = B->R_V( V );
@@ -336,7 +345,17 @@ Real CylPlasmaDebug::Spi(RealVector u, RealVector q, RealVector sigma, Position 
 	Real EnergyExchange = IonElectronEnergyExchange( n, p_e, p_i, V, t );
 
 	Real Heating = ViscousHeating + PotentialHeating + EnergyExchange;
-	return Heating;
+
+	Real Chi_i = CentrifugalPotential( V, omega, Ti, Te );
+	Real ParticleEnergy = Ti*( 1.0 + Chi_i );
+	Real ParallelLosses = ParticleEnergy * IonPastukhovLossRate( V, Chi_i, n, Ti );
+
+	return Heating - ParallelLosses;
+}
+
+Real MirrorPlasmaDebug::Chi_i( Position V, Real omega, Real Ti, Real Te )
+{
+
 }
 
 /*
@@ -351,7 +370,7 @@ Real CylPlasmaDebug::Spi(RealVector u, RealVector q, RealVector sigma, Position 
    Q_i = 3 * (p_e - p_i) / (tau_e) * (m_e/m_i) / (rho_s/R_ref)^2
 
  */
-Real CylPlasmaDebug::IonElectronEnergyExchange( Real n, Real pe, Real pi, Position V, double t ) const
+Real MirrorPlasmaDebug::IonElectronEnergyExchange( Real n, Real pe, Real pi, Position V, double t ) const
 {
 	Real Te = pe/n;
 	double RhoStar = RhoStarRef();
@@ -365,17 +384,77 @@ Real CylPlasmaDebug::IonElectronEnergyExchange( Real n, Real pe, Real pi, Positi
 }
 
 
-Real CylPlasmaDebug::Spe(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
+Real MirrorPlasmaDebug::Spe(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
 {
 	Real n = u( Channel::Density ), p_e = (2./3.)*u( Channel::ElectronEnergy ), p_i = (2./3.)*u( Channel::IonEnergy );
+	Real Te = p_e/n, Ti = p_i/n;
 	Real EnergyExchange = -IonElectronEnergyExchange( n, p_e, p_i, V, t );
-	return EnergyExchange;
+
+	Real Heating = EnergyExchange;
+
+	double R = B->R_V( V );
+	Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
+	Real omega = u( Channel::AngularMomentum ) / J;
+
+	Real Chi_e = -CentrifugalPotential( V, omega, Ti, Te );
+	Real ParticleEnergy = Te*( 1.0 + Chi_e );
+	Real ParallelLosses = ParticleEnergy * ElectronPastukhovLossRate( V, Chi_e, n, Te );
+
+	return Heating - ParallelLosses;
 };
 
 // Source of angular momentum -- this is just imposed J x B torque (we can account for the particle source being a sink later).
-Real CylPlasmaDebug::Somega(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
+Real MirrorPlasmaDebug::Somega(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
 {
 	// J x B torque
 	double R = B->R_V( V );
     return - jRadial * R * B->Bz_R(R);
 };
+
+Real MirrorPlasmaDebug::ElectronPastukhovLossRate( double V, Real Chi_e, Real n, Real Te ) const
+{
+	double MirrorRatio = B->MirrorRatio( V );
+	Real tau_ee = ElectronCollisionTime( n, Te );
+	double Sigma = 2.0; // = 1 + Z_eff ; Include collisions with ions and impurities as well as self-collisions
+
+	Real PastukhovFactor = ( exp( -Chi_e ) / Chi_e );
+	// Cap loss rates
+	if( PastukhovFactor.val > 1.0 )
+		PastukhovFactor.val = 1.0;
+	// If the loss becomes a gain, flatten at zero
+	if( PastukhovFactor.val < 0.0 )
+		return 0.0;
+	Real LossRate = ( M_2_SQRTPI / tau_ee ) * Sigma * n * ( 1.0 / log( MirrorRatio * Sigma ) ) * PastukhovFactor;
+	return LossRate;
+}
+
+Real MirrorPlasmaDebug::IonPastukhovLossRate( double V, Real Chi_i, Real n, Real Ti ) const
+{
+	// For consistency, the integral in Pastukhov's paper is 1.0, as the
+	// entire theory is an expansion in M^2 >> 1
+	double MirrorRatio = B->MirrorRatio( V );
+	Real tau_ii = IonCollisionTime( n, Ti );
+	double Sigma = 1.0; // Just ion-ion collisions
+
+	Real PastukhovFactor = ( exp( - Chi_i ) / Chi_i );
+	// Cap loss rates
+	if( PastukhovFactor.val > 1.0 )
+		PastukhovFactor.val = 1.0;
+	// If the loss becomes a gain, flatten at zero
+	if( PastukhovFactor.val < 0.0 )
+		return 0.0;
+
+	Real LossRate = ( M_2_SQRTPI / tau_ii ) * Sigma * n * ( 1.0 / log( MirrorRatio * Sigma ) ) * PastukhovFactor;
+
+	return LossRate;
+}
+
+Real MirrorPlasmaDebug::CentrifugalPotential( double V, Real omega, Real Ti, Real Te ) const
+{
+	double MirrorRatio = B->MirrorRatio( V );
+	double R = B->R_V( V );
+	Real tau = Ti/Te;
+	Real MachNumber = omega * R / sqrt( Te ); // omega is normalised to c_s0 / a
+	Real Potential = -( 0.5/tau ) * ( 1.0 - 1.0 / MirrorRatio ) * MachNumber * MachNumber / ( 1.0 / tau + 1.0 );
+	return Potential;
+}

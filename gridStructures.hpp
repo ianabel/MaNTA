@@ -15,6 +15,10 @@
 
 typedef std::function<double( double )> Fn;
 
+
+#include <numbers>
+using std::numbers::pi;
+
 class Interval
 {
 public:
@@ -75,25 +79,39 @@ public:
 		}
 		else
 		{
-			// [ 10 % ] [ 80 % ] [ 10 % ] with 40% in each boundary and 20% in the middle
-			double lBoundaryFraction = 0.1;
-			double uBoundaryFraction = 0.1;
-			double lBoundaryLayer = ( upperBound - lowerBound ) * ( lBoundaryFraction )       + lowerBound;
-			double uBoundaryLayer = ( upperBound - lowerBound ) * ( 1.0 - uBoundaryFraction ) + lowerBound;
+			// [ 20 % ] [ 60 % ] [ 20 % ] with 1/3rd cells in each
+			double lBoundaryFraction = 0.2;
+			double uBoundaryFraction = 0.2;
+			double lBoundaryWidth = ( upperBound - lowerBound ) * ( lBoundaryFraction );
+			double uBoundaryWidth = ( upperBound - lowerBound ) * ( uBoundaryFraction );
+			double lBoundaryLayer = lowerBound + lBoundaryWidth;
+			double uBoundaryLayer = upperBound - uBoundaryWidth;
 
-			unsigned int BoundaryCells = 2 * nCells / 5;
+			unsigned int BoundaryCells = nCells / 3;
 			unsigned int BulkCells = nCells - 2*BoundaryCells;
 
-			double lBoundaryLayerCellLength = ( lBoundaryLayer - lowerBound )/static_cast<double>( BoundaryCells );
 			double bulkCellLength = ( uBoundaryLayer - lBoundaryLayer )/static_cast<double>( BulkCells );
-			double uBoundaryLayerCellLength = ( upperBound - uBoundaryLayer )/static_cast<double>( BoundaryCells );
 
+			// Chebyshev Locations for edge nodes
 			for ( Index i = 0; i < BoundaryCells; i++)
-				gridCells.emplace_back( lowerBound + i*lBoundaryLayerCellLength, lowerBound + (i+1)*lBoundaryLayerCellLength );
+			{
+				double cellLeft = lBoundaryLayer - lBoundaryWidth * cos( (pi * i)/(2.0 * BoundaryCells - 1.0 ) );
+				double cellRight = lBoundaryLayer - lBoundaryWidth * cos( (pi * ( i + 1 ) )/(2.0 * BoundaryCells - 1.0 ) );
+				if( i == BoundaryCells - 1 )
+					cellRight = lBoundaryLayer;
+				gridCells.emplace_back( cellLeft, cellRight );
+			}
 			for ( Index i = 0; i < BulkCells; i++)
 				gridCells.emplace_back( lBoundaryLayer + i*bulkCellLength, lBoundaryLayer + ( i + 1 )*bulkCellLength );
 			for ( Index i = 0; i < BoundaryCells; i++)
-				gridCells.emplace_back( uBoundaryLayer + i * uBoundaryLayerCellLength, uBoundaryLayer + ( i + 1 ) * uBoundaryLayerCellLength );
+			{
+				double cellLeft = uBoundaryLayer + uBoundaryWidth * cos( pi * ( BoundaryCells - i ) / (2.0 * BoundaryCells - 1.0 ) );
+				double cellRight = uBoundaryLayer + uBoundaryWidth * cos( pi * ( BoundaryCells - i - 1 ) / (2.0 * BoundaryCells - 1.0 ) );
+				if( i == 0 )
+					cellLeft = uBoundaryLayer;
+
+				gridCells.emplace_back( cellLeft, cellRight );
+			}
 		}
 		if ( gridCells.size() != nCells )
 			throw std::runtime_error( "Unable to construct grid." );

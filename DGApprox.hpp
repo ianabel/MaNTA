@@ -277,7 +277,7 @@ template<typename BasisType> class DGApprox
 			return coeff;
 		}
 
-		using IntegratorType = boost::math::quadrature::gauss<double, 30>;
+		using IntegratorType = boost::math::quadrature::gauss<double, 15>;
 		using Coeff_t = std::vector< std::pair< Interval, VectorWrapper > >;
 
 		static const IntegratorType& Integrator() { return integrator; };

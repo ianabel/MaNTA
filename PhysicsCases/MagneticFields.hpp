@@ -28,6 +28,9 @@ class StraightMagneticField
 		double R_V( double V ) {
 			return sqrt( V / ( pi * L_z ) );
 		};
+		double MirrorRatio( double ) {
+			return 3.0;
+		};
 	private:
 		double L_z = 1.0;
 		double B_z = 1.0;
