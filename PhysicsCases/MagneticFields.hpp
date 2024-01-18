@@ -3,8 +3,12 @@
 
 #include <numbers>
 #include <cmath>
+#include <netcdf>
+#include <string>
+#include <vector>
+#include <boost/math/interpolators/cardinal_cubic_b_spline.hpp>
 using std::numbers::pi;
-
+using spline = boost::math::interpolators::cardinal_cubic_b_spline<double>;
 // Magnetic field
 // All of these values are returned in SI units
 // (we may later introduce a B0 & R0, but these are 1T & 1m for now)
@@ -48,6 +52,32 @@ private:
 
 class CylindricalMagneticField
 {
+public:
+	CylindricalMagneticField(const std::string &file);
+	~CylindricalMagneticField();
+
+	double Bz_R(double R);
+	double V(double Psi);
+	double Psi(double R);
+	double Psi_V(double V);
+	double VPrime(double V);
+	double R(double Psi);
+	double R_V(double V);
+	double MirrorRatio(double V);
+
+private:
+	double L_z = 1.0;
+	double h;
+
+	std::string filename;
+	std::vector<double> gridpoints;
+	netCDF::NcFile data_file;
+	size_t nPoints;
+	netCDF::NcDim R_dim;
+	std::vector<double> R_var;
+	std::vector<double> Bz_var;
+	std::vector<double> Psi_var;
+	std::vector<double> Rm_var;
 };
 
 #endif // MAGNETICFIELDS_HPP
