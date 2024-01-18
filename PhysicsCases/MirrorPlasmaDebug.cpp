@@ -375,16 +375,16 @@ Real MirrorPlasmaDebug::Spi(RealVector u, RealVector q, RealVector sigma, Positi
 	return Heating - ParallelLosses;
 }
 
-// Energy normalisation is T0
+// Energy normalisation is T0, but these return Xi_s / T_s as that is what enters the 
+// Pastukhov factor
 inline Real MirrorPlasmaDebug::Xi_i( Position V, Real omega, Real Ti, Real Te ) const
 {
-	return CentrifugalPotential( V, omega, Ti, Te ) * Ti;
+	return CentrifugalPotential( V, omega, Ti, Te );
 }
-
 
 inline Real MirrorPlasmaDebug::Xi_e( Position V, Real omega, Real Ti, Real Te ) const
 {
-	return CentrifugalPotential( V, omega, Ti, Te ) * Te;
+	return CentrifugalPotential( V, omega, Ti, Te );
 }
 
 /*
@@ -466,7 +466,8 @@ Real MirrorPlasmaDebug::ElectronPastukhovLossRate( double V, Real Xi_e, Real n, 
 	// If the loss becomes a gain, flatten at zero
 	if( PastukhovFactor.val < 0.0 )
 		return 0.0;
-	Real LossRate = ( M_2_SQRTPI / tau_ee ) * Sigma * n * ( 1.0 / log( MirrorRatio * Sigma ) ) * PastukhovFactor;
+	double Normalization = ( IonMass / ElectronMass ) * (1.0/(RhoStarRef()*RhoStarRef()));
+	Real LossRate = ( M_2_SQRTPI / tau_ee ) * Normalization * Sigma * n * ( 1.0 / log( MirrorRatio * Sigma ) ) * PastukhovFactor;
 	return LossRate;
 }
 
@@ -486,7 +487,8 @@ Real MirrorPlasmaDebug::IonPastukhovLossRate( double V, Real Xi_i, Real n, Real 
 	if( PastukhovFactor.val < 0.0 )
 		return 0.0;
 
-	Real LossRate = ( M_2_SQRTPI / tau_ii ) * Sigma * n * ( 1.0 / log( MirrorRatio * Sigma ) ) * PastukhovFactor;
+	double Normalization = sqrt( IonMass / ElectronMass ) * (1.0/(RhoStarRef()*RhoStarRef()));
+	Real LossRate = ( M_2_SQRTPI / tau_ii ) * Normalisation  * Sigma * n * ( 1.0 / log( MirrorRatio * Sigma ) ) * PastukhovFactor;
 
 	return LossRate;
 }
