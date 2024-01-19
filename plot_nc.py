@@ -16,7 +16,7 @@ def main():
     n0 = 1e20
     p0= n0*T0
 
-    data = Dataset('./Config/3VarMirror.nc')#xr.open_dataset("./Config/LinearDiffusion.nc")
+    data = Dataset('./MirrorPlasmaDebug.nc')#xr.open_dataset("./Config/LinearDiffusion.nc")
     Vars = data.groups
     # plt.figure()
     # plt.plot(data.groups["Var2"].variables["sigma"][5,:])
