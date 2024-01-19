@@ -73,10 +73,8 @@ Value MirrorPlasmaDebug::InitialValue( Index i, Position V ) const
 			return n;
 			break;
 		case Channel::IonEnergy:
-			return ( 3./2. )*n*T;
-			break;
 		case Channel::ElectronEnergy:
-			return ( 3. / 2. ) * n_edge * T_edge;
+			return ( 3./2. )*n*T;
 			break;
 		case Channel::AngularMomentum:
 			return omega * n * R * R;
@@ -106,10 +104,8 @@ Value MirrorPlasmaDebug::InitialDerivative( Index i, Position V ) const
 			return nPrime * dRdV;
 			break;
 		case Channel::IonEnergy:
-			return ( 3./2. )*( nPrime*T + n*TPrime ) * dRdV;
-			break;
 		case Channel::ElectronEnergy:
-			return 0.0;
+			return ( 3./2. )*( nPrime*T + n*TPrime ) * dRdV;
 			break;
 		case Channel::AngularMomentum:
 			return ( omegaPrime * n * R * R + omega * nPrime * R * R + 2 * omega * n * R ) * dRdV;
@@ -299,10 +295,13 @@ Real MirrorPlasmaDebug::Pi(RealVector u, RealVector q, double V, double t) const
 	Real n = u( Channel::Density ), Ti = (2./3.)*u( Channel::IonEnergy ) / n;
 	// dOmega dV = L'/J - J' L / J^2 ; L = angular momentum / J = moment of Inertia
 	double R = B->R_V( V );
+
 	Real J = n * R * R; // Normalisation includes the m_i
-	Real L = u( Channel::AngularMomentum );
 	Real nPrime = q( Channel::Density );
-	Real JPrime = R * R * nPrime;
+	double dRdV = 1. / (2.0 * pi * R);
+	Real JPrime = R * R * nPrime + 2.0 * dRdV * R * n;
+
+	Real L = u( Channel::AngularMomentum );
 	Real LPrime = q( Channel::AngularMomentum );
 	Real dOmegadV = LPrime / J - JPrime * L / (J * J);
 	Real omega = L/J;
@@ -327,17 +326,8 @@ Real MirrorPlasmaDebug::IonClassicalAngularMomentumFlux( Position V, Real n, Rea
 Real MirrorPlasmaDebug::Sn(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
 {
 	// See what happens with a uniform source
-	double R = B->R_V( V );
-	double R_lim_l = R_Lower + (R_Upper - R_Lower)*0.2;
-	double R_lim_u = R_Upper - (R_Upper - R_Lower)*0.2;
-	double Source;
-	if( R > R_lim_l && R < R_lim_u )
-		Source = ParticleSourceStrength;
-	else
-		Source = 0.0;
-
 	double ParallelLosses = 0.0;
-	return Source + ParallelLosses;
+	return ParticleSourceStrength + ParallelLosses;
 };
 
 /*
@@ -357,7 +347,8 @@ Real MirrorPlasmaDebug::Spi(RealVector u, RealVector q, RealVector sigma, Positi
 	Real J = n * R * R; // Normalisation includes the m_i
 	Real L = u( Channel::AngularMomentum );
 	Real nPrime = q( Channel::Density );
-	Real JPrime = R * R * nPrime;
+	double dRdV = 1. / (2.0 * pi * R);
+	Real JPrime = R * R * nPrime + 2.0 * dRdV * R * n;
 	Real LPrime = q( Channel::AngularMomentum );
 	Real dOmegadV = LPrime / J - JPrime * L / (J * J);
 	Real omega = L/J;
@@ -375,16 +366,16 @@ Real MirrorPlasmaDebug::Spi(RealVector u, RealVector q, RealVector sigma, Positi
 	return Heating - ParallelLosses;
 }
 
-// Energy normalisation is T0
+// Energy normalisation is T0, but these return Xi_s / T_s as that is what enters the 
+// Pastukhov factor
 inline Real MirrorPlasmaDebug::Xi_i( Position V, Real omega, Real Ti, Real Te ) const
 {
-	return CentrifugalPotential( V, omega, Ti, Te ) * Ti;
+	return CentrifugalPotential( V, omega, Ti, Te );
 }
-
 
 inline Real MirrorPlasmaDebug::Xi_e( Position V, Real omega, Real Ti, Real Te ) const
 {
-	return CentrifugalPotential( V, omega, Ti, Te ) * Te;
+	return CentrifugalPotential( V, omega, Ti, Te );
 }
 
 /*
@@ -466,7 +457,8 @@ Real MirrorPlasmaDebug::ElectronPastukhovLossRate( double V, Real Xi_e, Real n, 
 	// If the loss becomes a gain, flatten at zero
 	if( PastukhovFactor.val < 0.0 )
 		return 0.0;
-	Real LossRate = ( M_2_SQRTPI / tau_ee ) * Sigma * n * ( 1.0 / log( MirrorRatio * Sigma ) ) * PastukhovFactor;
+	double Normalization = ( IonMass / ElectronMass ) * (1.0/(RhoStarRef()*RhoStarRef()));
+	Real LossRate = ( M_2_SQRTPI / tau_ee ) * Normalization * Sigma * n * ( 1.0 / log( MirrorRatio * Sigma ) ) * PastukhovFactor;
 	return LossRate;
 }
 
@@ -486,7 +478,8 @@ Real MirrorPlasmaDebug::IonPastukhovLossRate( double V, Real Xi_i, Real n, Real 
 	if( PastukhovFactor.val < 0.0 )
 		return 0.0;
 
-	Real LossRate = ( M_2_SQRTPI / tau_ii ) * Sigma * n * ( 1.0 / log( MirrorRatio * Sigma ) ) * PastukhovFactor;
+	double Normalization = sqrt( IonMass / ElectronMass ) * (1.0/(RhoStarRef()*RhoStarRef()));
+	Real LossRate = ( M_2_SQRTPI / tau_ii ) * Normalisation  * Sigma * n * ( 1.0 / log( MirrorRatio * Sigma ) ) * PastukhovFactor;
 
 	return LossRate;
 }
