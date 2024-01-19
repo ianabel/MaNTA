@@ -72,7 +72,7 @@ private:
 	std::string filename;
 	std::vector<double> gridpoints;
 	netCDF::NcFile data_file;
-	size_t nPoints;
+	int nPoints;
 	netCDF::NcDim R_dim;
 	std::vector<double> R_var;
 	std::vector<double> Bz_var;

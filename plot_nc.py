@@ -43,8 +43,10 @@ def main():
     plt.figure()
     ax = plt.axes()
     n = np.array(data.groups["Var0"].variables["u"])
-    p_i = np.array(data.groups["Var2"].variables["u"])
-    p_e  = np.array(data.groups["Var1"].variables["u"])
+    p_i = 2./3.*np.array(data.groups["Var2"].variables["u"])
+    p_e  = 2./3.*np.array(data.groups["Var1"].variables["u"])
+    omega = np.array(data.groups["Var3"].variables["u"])/(n*r*r)
+    omega = omega[-1,:]
     Ti = np.divide(p_i,n)
     Te = np.divide(p_e,n)
 
@@ -62,8 +64,8 @@ def main():
     plt.xlabel(r"$\hat{r}$")
     M0 = 26.0
     shape = 20.0
-    Rmin = 0.5
-    Rmax = 1.0
+    Rmin = 0.2
+    Rmax = 0.7
     omegaOffset = 5.0
     u_L = omegaOffset
     u_R = (omegaOffset * Rmin / Rmax)
@@ -80,7 +82,7 @@ def main():
     # h_i = np.array(data.groups["Var3"].variables["u"])
     # omega = h_i/(n*r*r)#np.sinh(a * (r - b)) - np.cos(c * (r - d)) * coef #* np.exp(-shape * (r - C) * (r - C))
     # omega = np.squeeze(omega[-1,:])
-    omega = np.sinh(a * (r - b)) - np.cos(c * (r - d)) * coef* np.exp(-shape * (r - C) * (r - C))
+    #omega = np.sinh(a * (r - b)) - np.cos(c * (r - d)) * coef* np.exp(-shape * (r - C) * (r - C))
     w0 = np.sqrt(e_charge*1000/ionMass)
     M = r*omega/np.sqrt(Te)
     v = r*omega*w0
@@ -162,9 +164,8 @@ def main():
     domegadV = c2*domegadR/(Vp*r)
     Pvis = np.sqrt(ionMass/electronMass)*1/np.sqrt(2)*1/tau_hat[-1,:]* 3. / 10. * p_i[-1,:]*domegadV*domegadV
 
-    Pvis = p0*V0/L*np.squeeze(Pvis)
-    plt.figure()
-    plt.plot(r,Pvis)
+    Pvis = np.squeeze(Pvis)
+
     Pvistot = 2*np.pi*Ltot*np.trapz(r*Pvis,r)
     
     print("Total bremsstrahlung power: ",Pbremtot)
@@ -177,7 +178,7 @@ def main():
     print("Central ion temp", Timid)
     print("Central electron temp", Temid)
 
-    sourceStrength = 4500.0
+    sourceStrength = 25.0
     sourceCenter =  2.0
     sourceWidth = 0.6
     Sn = n0*V0/L*sourceStrength * np.exp(-1 / sourceWidth * (np.array(x) - sourceCenter) * (np.array(x) - sourceCenter))
@@ -189,6 +190,10 @@ def main():
     plt.xlabel(r"$\hat{r}$")
     plt.ylabel(r"$S_n (m^{-3}s^{-1})$")
     
+    plt.figure()
+    plt.plot(r,Pvis)
+    plt.xlabel(r"$\hat{r}$")
+    plt.ylabel(r"$P_{vis}$")
     #ax6.plot(r,Spast[-1,:])
 
     # h_i = np.array(data.groups["Var3"].variables["u"])

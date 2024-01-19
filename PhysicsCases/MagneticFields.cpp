@@ -1,29 +1,30 @@
 #include "MagneticFields.hpp"
+#include <iostream>
 
 CylindricalMagneticField::CylindricalMagneticField(const std::string &file)
 {
     filename = file;
-    data_file.open(file, netCDF::NcFile::FileMode::read);
+    data_file.open(filename, netCDF::NcFile::FileMode::read);
 
     R_dim = data_file.getDim("R");
     nPoints = R_dim.getSize();
+
     double tmp[nPoints];
 
     // copy nc data into vectors
     data_file.getVar("R").getVar(tmp);
-    R_var.insert(R_var.end(), tmp[0], tmp[nPoints]);
+    R_var.insert(R_var.end(), &tmp[0], &tmp[nPoints]);
 
     data_file.getVar("Bz").getVar(tmp);
-    Bz_var.insert(Bz_var.end(), tmp[0], tmp[nPoints]);
+    Bz_var.insert(Bz_var.end(), &tmp[0], &tmp[nPoints]);
 
     data_file.getVar("Psi").getVar(tmp);
-    Psi_var.insert(Psi_var.end(), tmp[0], tmp[nPoints]);
+    Psi_var.insert(Psi_var.end(), &tmp[0], &tmp[nPoints]);
 
     data_file.getVar("Rm").getVar(tmp);
-    Rm_var.insert(Rm_var.end(), tmp[0], tmp[nPoints]);
+    Rm_var.insert(Rm_var.end(), &tmp[0], &tmp[nPoints]);
 
     h = R_var[1] - R_var[0];
-    delete tmp;
 }
 
 CylindricalMagneticField::~CylindricalMagneticField()
