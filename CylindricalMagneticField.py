@@ -11,18 +11,17 @@ class CylindricalMagneticField():
         self.Ri = np.sqrt(f["configuration"]["Lower_boundary"]/np.pi)
         self.Ro = np.sqrt(f["configuration"]["Upper_boundary"]/np.pi)
 
+        self.m = -self.B0/(2*(self.Ro-self.Ri))
+
         self.R = np.linspace(self.Ri,self.Ro,nPoints)
         
     # Linear B - decreases from a value of B0 at Ri to a value of 0.5*B0 at Ro
     def Bz(self) -> np.ndarray:
-        m = -self.B0/(2*(self.Ro-self.Ri))
-
-        return self.B0 + m*(self.R - self.Ri)
+        return self.B0 + self.m*(self.R - self.Ri)
     
     def Psi(self) -> np.ndarray:
-        m = -self.B0/(2*(self.Ro-self.Ri))
 
-        return self.B0*self.R**2/2.+ m*(self.R**3/3. - self.Ri*self.R**2/2.)
+        return self.B0*self.R**2/2.+ self.m*(self.R**3/3. - self.Ri*self.R**2/2.)
     
     def Rm(self) -> np.ndarray:
         return self.Bz()/self.B0*self.Rm0
@@ -32,12 +31,12 @@ class CylindricalMagneticField():
 
 def main():
     nPoints = 300
-    B0 = 4.5
+    B0 = 1.0
     Rm0 = 3.3
     config = "./Config/MirrorPlasmaDebug.conf"
     B = CylindricalMagneticField(B0,Rm0,nPoints,config)
 
-    ncfile = Dataset("./PhysicsCases/Bfield.nc",mode="w",format="NETCDF4_CLASSIC")
+    ncfile = Dataset("./Tests/UnitTests/Bfield.nc",mode="w",format="NETCDF4_CLASSIC")
     
     ncfile.createDimension('R',nPoints)
     R = ncfile.createVariable('R',np.float64,('R',))

@@ -4,7 +4,7 @@
 #include <toml.hpp>
 #include <filesystem>
 
-const std::filesystem::path file = std::filesystem::current_path().string() + "/PhysicsCases/Bfield.nc";
+const std::filesystem::path file = std::filesystem::current_path().string() + "/Tests/UnitTests/Bfield.ref.nc";
 
 BOOST_AUTO_TEST_SUITE(magnetic_fields_test_suite, *boost::unit_test::tolerance(1e-8))
 
@@ -15,7 +15,7 @@ BOOST_AUTO_TEST_CASE(magnetic_fields_init_tests)
 
 BOOST_AUTO_TEST_CASE(magnetic_fields_values)
 {
-    const double B0 = 4.5;
+    const double B0 = 1.0;
     const double Rm0 = 3.3;
 
     const double Bmid = 0.75 * B0;
@@ -26,6 +26,12 @@ BOOST_AUTO_TEST_CASE(magnetic_fields_values)
     CylindricalMagneticField B(file);
 
     BOOST_TEST(B.Bz_R(Rmid) == Bmid);
+
+    double Vmid = M_PI * Rmid * Rmid;
+
+    double Psi_mid = B.Psi_V(Vmid);
+
+    BOOST_TEST(B.R(Psi_mid) == Rmid);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -1,5 +1,6 @@
 #include "MagneticFields.hpp"
 #include <iostream>
+#include <boost/math/tools/roots.hpp>
 
 CylindricalMagneticField::CylindricalMagneticField(const std::string &file)
 {
@@ -40,7 +41,8 @@ double CylindricalMagneticField::Bz_R(double R)
 
 double CylindricalMagneticField::V(double Psi)
 {
-    return 0.0;
+    double R_Psi = R(Psi);
+    return L_z * pi * R_Psi * R_Psi;
 }
 
 double CylindricalMagneticField::Psi(double R)
@@ -61,7 +63,27 @@ double CylindricalMagneticField::VPrime(double V)
 
 double CylindricalMagneticField::R(double Psi)
 {
-    return 0.0;
+    // return sqrt(x / (M_PI * L));
+    using boost::math::tools::bracket_and_solve_root;
+    using boost::math::tools::eps_tolerance;
+    double guess = R_var[nPoints / 2]; // Rough guess is to divide the exponent by three.
+    // double min = Rmin;                                      // Minimum possible value is half our guess.
+    // double max = Rmax;                                      // Maximum possible value is twice our guess.
+    const int digits = std::numeric_limits<double>::digits; // Maximum possible binary digits accuracy for type T.
+    int get_digits = static_cast<int>(digits * 0.6);        // Accuracy doubles with each step, so stop when we have
+                                                            // just over half the digits correct.
+    double factor = 2;
+    bool is_rising = true;
+    auto getPair = [this](double x, double R)
+    { return this->Psi(R) - x; }; // change to V(psi(R))
+
+    auto func = std::bind_front(getPair, Psi);
+    eps_tolerance<double> tol(get_digits);
+
+    const boost::uintmax_t maxit = 20;
+    boost::uintmax_t it = maxit;
+    std::pair<double, double> r = bracket_and_solve_root(func, guess, factor, is_rising, tol, it);
+    return r.first + (r.second - r.first) / 2;
 }
 
 double CylindricalMagneticField::R_V(double V)
