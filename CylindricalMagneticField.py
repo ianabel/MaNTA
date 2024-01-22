@@ -31,12 +31,12 @@ class CylindricalMagneticField():
 
 def main():
     nPoints = 300
-    B0 = 1.0
-    Rm0 = 3.3
+    B0 = 3.0
+    Rm0 = 3.0
     config = "./Config/MirrorPlasmaDebug.conf"
     B = CylindricalMagneticField(B0,Rm0,nPoints,config)
 
-    ncfile = Dataset("./Tests/UnitTests/Bfield.nc",mode="w",format="NETCDF4_CLASSIC")
+    ncfile = Dataset("./PhysicsCases/Bfield.nc",mode="w",format="NETCDF4_CLASSIC")
     
     ncfile.createDimension('R',nPoints)
     R = ncfile.createVariable('R',np.float64,('R',))

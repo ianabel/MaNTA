@@ -1,6 +1,7 @@
 #include "MirrorPlasmaDebug.hpp"
 #include "Constants.hpp"
 #include <iostream>
+#include <string>
 
 REGISTER_PHYSICS_IMPL(MirrorPlasmaDebug);
 const double n_mid = 0.25;
@@ -12,15 +13,13 @@ const double omega_edge = 0.1, omega_mid = 1.0;
 MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid)
 	: AutodiffTransportSystem(config, grid, 4, 0)
 {
-	B = new StraightMagneticField();
+
+	// B = new StraightMagneticField();
 	ParticleSourceStrength = 1.0;
 	jRadial = -4.0;
 
 	xL = grid.lowerBoundary();
 	xR = grid.upperBoundary();
-
-	R_Lower = B->R_V(xL);
-	R_Upper = B->R_V(xR);
 
 	isLowerDirichlet = true;
 	isUpperDirichlet = true;
@@ -42,6 +41,13 @@ MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid
 		double nEdge = toml::find_or(InternalConfig, "nEdge", n_edge);
 		double TEdge = toml::find_or(InternalConfig, "TEdge", T_edge);
 		double omegaEdge = toml::find_or(InternalConfig, "omegaEdge", omega_edge);
+
+		const std::string B_file = toml::find_or(InternalConfig, "B_file", B_file);
+		B = new CylindricalMagneticField(B_file);
+
+		R_Lower = B->R_V(xL);
+		R_Upper = B->R_V(xR);
+
 		uL[Channel::Density] = nEdge;
 		uR[Channel::Density] = nEdge;
 		uL[Channel::IonEnergy] = (3. / 2.) * nEdge * TEdge;
@@ -94,7 +100,7 @@ Value MirrorPlasmaDebug::InitialDerivative(Index i, Position V) const
 	double T = T_edge + (T_mid - T_edge) * std::cos(pi * (R - R_mid) / (R_max - R_min));
 	double nPrime = -(pi / (R_max - R_min)) * (n_mid - n_edge) * std::sin(pi * (R - R_mid) / (R_max - R_min));
 	double TPrime = -(pi / (R_max - R_min)) * (T_mid - T_edge) * std::sin(pi * (R - R_mid) / (R_max - R_min));
-	double dRdV = 1. / (2.0 * pi * R);
+	double dRdV = B->dRdV(V);
 	double omega = omega_edge + (omega_mid - omega_edge) * std::cos(pi * (R - R_mid) / (R_max - R_min));
 	double omegaPrime = -(pi / (R_max - R_min)) * (omega_mid - omega_edge) * std::sin(pi * (R - R_mid) / (R_max - R_min));
 
@@ -299,7 +305,7 @@ Real MirrorPlasmaDebug::Pi(RealVector u, RealVector q, double V, double t) const
 
 	Real J = n * R * R; // Normalisation includes the m_i
 	Real nPrime = q(Channel::Density);
-	double dRdV = 1. / (2.0 * pi * R);
+	double dRdV = B->dRdV(V);
 	Real JPrime = R * R * nPrime + 2.0 * dRdV * R * n;
 
 	Real L = u(Channel::AngularMomentum);
@@ -348,7 +354,7 @@ Real MirrorPlasmaDebug::Spi(RealVector u, RealVector q, RealVector sigma, Positi
 	Real J = n * R * R; // Normalisation includes the m_i
 	Real L = u(Channel::AngularMomentum);
 	Real nPrime = q(Channel::Density);
-	double dRdV = 1. / (2.0 * pi * R);
+	double dRdV = B->dRdV(V);
 	Real JPrime = R * R * nPrime + 2.0 * dRdV * R * n;
 	Real LPrime = q(Channel::AngularMomentum);
 	Real dOmegadV = LPrime / J - JPrime * L / (J * J);

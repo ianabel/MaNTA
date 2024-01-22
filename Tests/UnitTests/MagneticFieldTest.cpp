@@ -27,11 +27,14 @@ BOOST_AUTO_TEST_CASE(magnetic_fields_values)
 
     BOOST_TEST(B.Bz_R(Rmid) == Bmid);
 
-    double Vmid = M_PI * Rmid * Rmid;
-
-    double Psi_mid = B.Psi_V(Vmid);
+    const double Vmid = M_PI * Rmid * Rmid;
+    const double Psi_mid = B.Psi_V(Vmid);
 
     BOOST_TEST(B.R(Psi_mid) == Rmid);
+
+    const double dRdV_mid = 1. / (2.0 * M_PI * Rmid);
+
+    BOOST_TEST(B.dRdV(Vmid) == dRdV_mid);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

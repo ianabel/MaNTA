@@ -1,6 +1,7 @@
 #include "MagneticFields.hpp"
 #include <iostream>
 #include <boost/math/tools/roots.hpp>
+#include <filesystem>
 
 CylindricalMagneticField::CylindricalMagneticField(const std::string &file)
 {
@@ -10,33 +11,36 @@ CylindricalMagneticField::CylindricalMagneticField(const std::string &file)
     R_dim = data_file.getDim("R");
     nPoints = R_dim.getSize();
 
-    double tmp[nPoints];
+    double *temp = new double[nPoints];
 
     // copy nc data into vectors
-    data_file.getVar("R").getVar(tmp);
-    R_var.insert(R_var.end(), &tmp[0], &tmp[nPoints]);
+    data_file.getVar("R").getVar(temp);
+    R_var.insert(R_var.end(), &temp[0], &temp[nPoints]);
 
-    data_file.getVar("Bz").getVar(tmp);
-    Bz_var.insert(Bz_var.end(), &tmp[0], &tmp[nPoints]);
+    data_file.getVar("Bz").getVar(temp);
+    Bz_var.insert(Bz_var.end(), &temp[0], &temp[nPoints]);
 
-    data_file.getVar("Psi").getVar(tmp);
-    Psi_var.insert(Psi_var.end(), &tmp[0], &tmp[nPoints]);
+    data_file.getVar("Psi").getVar(temp);
+    Psi_var.insert(Psi_var.end(), &temp[0], &temp[nPoints]);
 
-    data_file.getVar("Rm").getVar(tmp);
-    Rm_var.insert(Rm_var.end(), &tmp[0], &tmp[nPoints]);
+    data_file.getVar("Rm").getVar(temp);
+    Rm_var.insert(Rm_var.end(), &temp[0], &temp[nPoints]);
+
+    data_file.close();
+    delete[] temp;
+
+    // create spline interperlant objects
 
     h = R_var[1] - R_var[0];
-}
 
-CylindricalMagneticField::~CylindricalMagneticField()
-{
-    data_file.close();
+    B_spline = std::make_unique<spline>(Bz_var.begin(), Bz_var.end(), R_var[0], h);
+    Psi_spline = std::make_unique<spline>(Psi_var.begin(), Psi_var.end(), R_var[0], h);
+    Rm_spline = std::make_unique<spline>(Rm_var.begin(), Rm_var.end(), R_var[0], h);
 }
 
 double CylindricalMagneticField::Bz_R(double R)
 {
-    spline B_spline(Bz_var.begin(), Bz_var.end(), R_var[0], h);
-    return B_spline(R);
+    return (*B_spline)(R);
 }
 
 double CylindricalMagneticField::V(double Psi)
@@ -47,8 +51,7 @@ double CylindricalMagneticField::V(double Psi)
 
 double CylindricalMagneticField::Psi(double R)
 {
-    spline Psi_spline(Psi_var.begin(), Psi_var.end(), R_var[0], h);
-    return Psi_spline(R);
+    return (*Psi_spline)(R);
 }
 
 double CylindricalMagneticField::Psi_V(double V)
@@ -75,7 +78,7 @@ double CylindricalMagneticField::R(double Psi)
     double factor = 2;
     bool is_rising = true;
     auto getPair = [this](double x, double R)
-    { return this->Psi(R) - x; }; // change to V(psi(R))
+    { return this->Psi(R) - x; };
 
     auto func = std::bind_front(getPair, Psi);
     eps_tolerance<double> tol(get_digits);
@@ -91,8 +94,13 @@ double CylindricalMagneticField::R_V(double V)
     return sqrt(V / (pi * L_z));
 }
 
+// dRdV = dPsidR*dVdPsi
+double CylindricalMagneticField::dRdV(double V)
+{
+    return 1 / Psi_spline->prime(R_V(V)) * 1 / VPrime(V);
+}
+
 double CylindricalMagneticField::MirrorRatio(double V)
 {
-    spline Rm_spline(Rm_var.begin(), Rm_var.end(), R_var[0], h);
-    return Rm_spline(R_V(V));
+    return (*Rm_spline)(R_V(V));
 }

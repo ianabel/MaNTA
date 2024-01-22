@@ -54,7 +54,7 @@ class CylindricalMagneticField
 {
 public:
 	CylindricalMagneticField(const std::string &file);
-	~CylindricalMagneticField();
+	~CylindricalMagneticField() = default;
 
 	double Bz_R(double R);
 	double V(double Psi);
@@ -63,6 +63,7 @@ public:
 	double VPrime(double V);
 	double R(double Psi);
 	double R_V(double V);
+	double dRdV(double V);
 	double MirrorRatio(double V);
 
 private:
@@ -78,6 +79,10 @@ private:
 	std::vector<double> Bz_var;
 	std::vector<double> Psi_var;
 	std::vector<double> Rm_var;
+
+	std::unique_ptr<spline> B_spline;
+	std::unique_ptr<spline> Psi_spline;
+	std::unique_ptr<spline> Rm_spline;
 };
 
 #endif // MAGNETICFIELDS_HPP
