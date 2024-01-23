@@ -340,9 +340,20 @@ Real MirrorPlasmaDebug::IonClassicalAngularMomentumFlux(Position V, Real n, Real
 
 Real MirrorPlasmaDebug::Sn(RealVector u, RealVector q, RealVector sigma, Position V, double t) const
 {
-	// See what happens with a uniform source
-	double ParallelLosses = 0.0;
-	return ParticleSourceStrength + ParallelLosses;
+	Real n = u(Channel::Density), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
+	Real Te = p_e / n;
+	Real Ti = p_i / n;
+
+	double R = B->R_V(V);
+
+	Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
+	Real omega = u(Channel::AngularMomentum) / J;
+
+	Real Xi = Xi_e(V, omega, Ti, Te);
+	Real ParallelLosses = ElectronPastukhovLossRate(V, Xi, n, Te);
+
+	Real FusionLosses = FusionRate(n, p_i);
+	return ParticleSourceStrength - ParallelLosses - FusionLosses;
 };
 
 /*
