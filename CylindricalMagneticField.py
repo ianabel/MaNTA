@@ -31,7 +31,7 @@ class CylindricalMagneticField():
 
 def main():
     nPoints = 300
-    B0 = 3.0
+    B0 = 1.0
     Rm0 = 3.0
     config = "./Config/MirrorPlasmaDebug.conf"
     B = CylindricalMagneticField(B0,Rm0,nPoints,config)

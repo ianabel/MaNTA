@@ -1,7 +1,5 @@
 #include "MagneticFields.hpp"
-#include <iostream>
 #include <boost/math/tools/roots.hpp>
-#include <filesystem>
 
 CylindricalMagneticField::CylindricalMagneticField(const std::string &file)
 {

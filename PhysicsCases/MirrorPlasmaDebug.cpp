@@ -1,7 +1,6 @@
 #include "MirrorPlasmaDebug.hpp"
 #include "Constants.hpp"
 #include <iostream>
-#include <string>
 
 REGISTER_PHYSICS_IMPL(MirrorPlasmaDebug);
 const double n_mid = 0.25;
@@ -10,13 +9,13 @@ const double T_mid = 0.2, T_edge = 0.1;
 
 const double omega_edge = 0.1, omega_mid = 1.0;
 
+const std::string B_file = "Bfield.nc";
+
 MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid)
 	: AutodiffTransportSystem(config, grid, 4, 0)
 {
 
 	// B = new StraightMagneticField();
-	ParticleSourceStrength = 1.0;
-	jRadial = -4.0;
 
 	xL = grid.lowerBoundary();
 	xR = grid.upperBoundary();
@@ -26,14 +25,6 @@ MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid
 
 	uL.resize(nVars);
 	uR.resize(nVars);
-	uL[Channel::Density] = n_edge;
-	uR[Channel::Density] = n_edge;
-	uL[Channel::IonEnergy] = (3. / 2.) * n_edge * T_edge;
-	uR[Channel::IonEnergy] = (3. / 2.) * n_edge * T_edge;
-	uL[Channel::ElectronEnergy] = (3. / 2.) * n_edge * T_edge;
-	uR[Channel::ElectronEnergy] = (3. / 2.) * n_edge * T_edge;
-	uL[Channel::AngularMomentum] = omega_edge * n_edge * R_Lower * R_Lower;
-	uR[Channel::AngularMomentum] = omega_edge * n_edge * R_Upper * R_Upper;
 
 	if (config.count("MirrorPlasma") == 1)
 	{
@@ -42,8 +33,8 @@ MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid
 		double TEdge = toml::find_or(InternalConfig, "TEdge", T_edge);
 		double omegaEdge = toml::find_or(InternalConfig, "omegaEdge", omega_edge);
 
-		const std::string B_file = toml::find_or(InternalConfig, "B_file", B_file);
-		B = new CylindricalMagneticField(B_file);
+		std::string Bfile = toml::find_or(InternalConfig, "B_file", B_file);
+		B = new CylindricalMagneticField("./PhysicsCases/" + Bfile);
 
 		R_Lower = B->R_V(xL);
 		R_Upper = B->R_V(xR);
@@ -58,6 +49,23 @@ MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid
 		uR[Channel::AngularMomentum] = omegaEdge * nEdge * R_Upper * R_Upper;
 		jRadial = -toml::find_or(InternalConfig, "jRadial", 4.0);
 		ParticleSourceStrength = toml::find_or(InternalConfig, "ParticleSource", 10.0);
+	}
+	else
+	{
+		ParticleSourceStrength = 1.0;
+		jRadial = -4.0;
+		B = new CylindricalMagneticField(std::filesystem::path("./PhysicsCases/" + B_file));
+
+		R_Lower = B->R_V(xL);
+		R_Upper = B->R_V(xR);
+		uL[Channel::Density] = n_edge;
+		uR[Channel::Density] = n_edge;
+		uL[Channel::IonEnergy] = (3. / 2.) * n_edge * T_edge;
+		uR[Channel::IonEnergy] = (3. / 2.) * n_edge * T_edge;
+		uL[Channel::ElectronEnergy] = (3. / 2.) * n_edge * T_edge;
+		uR[Channel::ElectronEnergy] = (3. / 2.) * n_edge * T_edge;
+		uL[Channel::AngularMomentum] = omega_edge * n_edge * R_Lower * R_Lower;
+		uR[Channel::AngularMomentum] = omega_edge * n_edge * R_Upper * R_Upper;
 	}
 };
 
