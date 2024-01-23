@@ -91,6 +91,10 @@ private:
 	Real IonPastukhovLossRate(double V, Real Xi_i, Real n, Real Ti) const;
 	Real CentrifugalPotential(double V, Real omega, Real Ti, Real Te) const;
 
+	Real FusionRate(Real n, Real pi) const;
+	Real TotalAlphaPower(Real n, Real pi) const;
+	Real BremsstrahlungLosses(Real n, Real pe) const;
+
 	Real Xi_i(Position V, Real omega, Real Ti, Real Te) const;
 	Real Xi_e(Position V, Real omega, Real Ti, Real Te) const;
 	double R_Lower, R_Upper;

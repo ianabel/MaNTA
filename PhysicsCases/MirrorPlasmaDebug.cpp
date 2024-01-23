@@ -424,9 +424,13 @@ Real MirrorPlasmaDebug::Spe(RealVector u, RealVector q, RealVector sigma, Positi
 	Real Te = p_e / n, Ti = p_i / n;
 	Real EnergyExchange = -IonElectronEnergyExchange(n, p_e, p_i, V, t);
 
-	Real Heating = EnergyExchange;
+	double MirrorRatio = B->MirrorRatio(V);
+	Real AlphaHeating = sqrt(1 - 1 / MirrorRatio) * TotalAlphaPower(n, p_i);
+
+	Real Heating = EnergyExchange + AlphaHeating;
 
 	double R = B->R_V(V);
+
 	Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
 	Real omega = u(Channel::AngularMomentum) / J;
 
@@ -434,7 +438,9 @@ Real MirrorPlasmaDebug::Spe(RealVector u, RealVector q, RealVector sigma, Positi
 	Real ParticleEnergy = Te * (1.0 + Xi);
 	Real ParallelLosses = ParticleEnergy * ElectronPastukhovLossRate(V, Xi, n, Te);
 
-	return Heating - ParallelLosses;
+	Real RadiationLosses = BremsstrahlungLosses(n, p_e);
+
+	return Heating - ParallelLosses - RadiationLosses;
 };
 
 // Source of angular momentum -- this is just imposed J x B torque (we can account for the particle source being a sink later).
@@ -507,6 +513,38 @@ Real MirrorPlasmaDebug::CentrifugalPotential(double V, Real omega, Real Ti, Real
 	Real MachNumber = omega * R / sqrt(Te); // omega is normalised to c_s0 / a
 	Real Potential = -(1.0 / (1.0 + tau)) * (1.0 - 1.0 / MirrorRatio) * MachNumber * MachNumber / 2.0;
 	return Potential;
+}
+
+// [ n0 T0 R_ref B_ref^2 / ( m_e Omega_e(B_ref)^2 tau_e(n0,T0) ) ]^-1
+// Implements D-T fusion rate from NRL plasma formulary
+Real MirrorPlasmaDebug::FusionRate(Real n, Real pi) const
+{
+
+	Real Normalization = n0 * n0 * T0 * a * B0 * B0 / (electronMass * Om_e(B0) * Om_e(B0) * tau_e(n0, n0 * T0));
+	Real Factor = 1e-6 * 3.68e-12 * n0 * n0 / Normalization;
+	Real Ti_kev = (pi / n) * T0 / (1000 * ElementaryCharge);
+	Real R = Factor * 0.25 * n * n * pow(Ti_kev, -2. / 3.) * exp(-19.94 * pow(Ti_kev, -1. / 3.));
+
+	return R;
+}
+
+Real MirrorPlasmaDebug::TotalAlphaPower(Real n, Real pi) const
+{
+	double Factor = 5.6e-13 / (n0 * T0);
+	return Factor * FusionRate(n, pi);
+}
+
+// Implements Bremsstrahlung radiative losses from NRL plasma formulary
+Real MirrorPlasmaDebug::BremsstrahlungLosses(Real n, Real pe) const
+{
+	double p0 = n0 * T0;
+	Real Normalization = p0 * n0 * T0 * a * B0 * B0 / (electronMass * Om_e(B0) * Om_e(B0) * tau_e(n0, n0 * T0));
+	Real Factor = 2 * 1e6 * 1.69e-32 * 1e-12 * n0 * n0 / Normalization;
+
+	Real Te_eV = (pe / n) * T0 / ElementaryCharge;
+	Real Pbrem = Factor * n * n * sqrt(Te_eV);
+
+	return Pbrem;
 }
 
 // omega & n are callables
