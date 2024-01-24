@@ -9,10 +9,9 @@ const double T_mid = 0.2, T_edge = 0.1;
 
 const double omega_edge = 0.1, omega_mid = 1.0;
 
-const std::string B_file = "Bfield.nc";
+const std::string B_file = "/home/eatocco/projects/MaNTA/PhysicsCases/Bfield.nc";
 
-MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid)
-	: AutodiffTransportSystem(config, grid, 4, 0)
+MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid) : AutodiffTransportSystem(config, grid, 4, 0)
 {
 
 	// B = new StraightMagneticField();
@@ -34,7 +33,7 @@ MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid
 		double omegaEdge = toml::find_or(InternalConfig, "omegaEdge", omega_edge);
 
 		std::string Bfile = toml::find_or(InternalConfig, "B_file", B_file);
-		B = new CylindricalMagneticField("./PhysicsCases/" + Bfile);
+		B = new CylindricalMagneticField(Bfile);
 
 		R_Lower = B->R_V(xL);
 		R_Upper = B->R_V(xR);
@@ -541,8 +540,9 @@ Real MirrorPlasmaDebug::FusionRate(Real n, Real pi) const
 
 Real MirrorPlasmaDebug::TotalAlphaPower(Real n, Real pi) const
 {
-	double Factor = 5.6e-13 / (n0 * T0);
-	return Factor * FusionRate(n, pi);
+	double Factor = 5.6e-13 / (T0);
+	Real AlphaPower = Factor * FusionRate(n, pi);
+	return AlphaPower;
 }
 
 // Implements Bremsstrahlung radiative losses from NRL plasma formulary
@@ -581,9 +581,13 @@ void MirrorPlasmaDebug::initialiseDiagnostics(NetCDFIO &nc)
 	{ return InitialValue(Channel::Density, V); };
 
 	double initialVoltage = Voltage(initialL, initialn);
+
+	const std::function<double(const double &)> initialZero = [](const double &V)
+	{ return 0.0; };
 	nc.AddTimeSeries("Voltage", "Total voltage drop across the plasma", "Volts", initialVoltage);
 	nc.AddGroup("Heating", "Separated heating sources");
-	// TODO: Put the AddVariable stuff here for the heating.
+	nc.AddVariable("Heating", "AlphaHeating", "Alpha heat source", "-", initialZero);
+	nc.AddVariable("Heating", "ViscousHeating", "Viscous heat source", "-", initialZero);
 }
 
 void MirrorPlasmaDebug::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
@@ -592,7 +596,37 @@ void MirrorPlasmaDebug::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, 
 	{ return y.u(Channel::AngularMomentum)(V); };
 	auto n = [&y](double V)
 	{ return y.u(Channel::Density)(V); };
+
 	double voltage = Voltage(L, n);
 	nc.AppendToTimeSeries("Voltage", voltage, tIndex);
+
+	// Wrap DGApprox with lambdas for heating functions
+	Fn ViscousHeating = [this, &y, &t](double V)
+	{
+		Real n = y.u(Channel::Density)(V), p_i = (2. / 3.) * y.u(Channel::IonEnergy)(V);
+		Real L = y.u(Channel::AngularMomentum)(V);
+		Real Ti = p_i / n;
+		double R = this->B->R_V(V);
+		Real J = y.u(Channel::Density)(V) * R * R; // Normalisation includes the m_i
+		Real nPrime = y.q(Channel::Density)(V);
+		double dRdV = B->dRdV(V);
+		Real JPrime = R * R * nPrime + 2.0 * dRdV * R * n;
+		Real LPrime = y.q(Channel::AngularMomentum)(V);
+		Real dOmegadV = LPrime / J - JPrime * L / (J * J);
+
+		double Heating = this->IonClassicalAngularMomentumFlux(V, n, Ti, dOmegadV, t).val * dOmegadV.val;
+		return Heating;
+	};
+
+	Fn AlphaHeating = [this, &y](double V)
+	{
+		Real n = y.u(Channel::Density)(V), p_i = (2. / 3.) * y.u(Channel::IonEnergy)(V);
+		double MirrorRatio = this->B->MirrorRatio(V);
+
+		double Heating = sqrt(1 - 1 / MirrorRatio) * this->TotalAlphaPower(n, p_i).val;
+		return Heating;
+	};
+
 	// Add the appends for the heating stuff
+	nc.AppendToGroup<Fn>("Heating", tIndex, {{"AlphaHeating", AlphaHeating}, {"ViscousHeating", ViscousHeating}});
 }

@@ -18,6 +18,8 @@ def main():
 
     data = Dataset('./MirrorPlasmaDebug.nc')#xr.open_dataset("./Config/LinearDiffusion.nc")
     Vars = data.groups
+
+    
     # plt.figure()
     # plt.plot(data.groups["Var2"].variables["sigma"][5,:])
     # plt.show()
@@ -38,7 +40,8 @@ def main():
     #     plt.title("q" + Var)
     #     plt.show()
 
-    
+  
+    print(data.groups["Heating"])
 
     plt.figure()
     ax = plt.axes()
@@ -178,23 +181,14 @@ def main():
     print("Central ion temp", Timid)
     print("Central electron temp", Temid)
 
-    sourceStrength = 25.0
-    sourceCenter =  2.0
-    sourceWidth = 0.6
-    Sn = n0*V0/L*sourceStrength * np.exp(-1 / sourceWidth * (np.array(x) - sourceCenter) * (np.array(x) - sourceCenter))
     plt.figure()
-    plt.plot(r,Sn)
-
-    Sntot = 2*np.pi*Ltot*np.trapz(r*Sn,r)
-    print("Particle Source",Sntot)
-    plt.xlabel(r"$\hat{r}$")
-    plt.ylabel(r"$S_n (m^{-3}s^{-1})$")
+    AlphaHeat = np.array(data.groups["Heating"].variables["AlphaHeating"])
+    ViscousHeat = np.array(data.groups["Heating"].variables["ViscousHeating"])
     
+    plt.plot(r,AlphaHeat[-1,:])
     plt.figure()
-    plt.plot(r,Pvis)
-    plt.xlabel(r"$\hat{r}$")
-    plt.ylabel(r"$P_{vis}$")
-    #ax6.plot(r,Spast[-1,:])
+    plt.plot(r,ViscousHeat[-1,:])
+
 
     # h_i = np.array(data.groups["Var3"].variables["u"])
     # w = np.sqrt(np.divide(h_i,r*r*n))

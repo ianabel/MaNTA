@@ -30,7 +30,20 @@ public:
 	void AddVariable(std::string name, std::string description, std::string units, T const &initialValue);
 
 	template <typename T>
-	void AddVariable(std::string groupName, std::string name, std::string description, std::string units, T const &initialValue);
+	void AddVariable(std::string groupName, std::string name, std::string description, std::string units, T const &initialValue)
+	{
+		netCDF::NcGroup group = data_file.getGroup(groupName);
+		netCDF::NcVar newvar = group.addVar(name, netCDF::NcDouble(), {TimeDim, SpaceDim});
+		newvar.putAtt("description", description);
+		if (units != "")
+			newvar.putAtt("units", units);
+		std::vector<double> gridValues;
+		gridValues.resize(gridpoints.size());
+		for (size_t i = 0; i < gridpoints.size(); ++i)
+			gridValues[i] = initialValue(gridpoints[i]);
+
+		newvar.putVar({0, 0}, {1, gridpoints.size()}, gridValues.data());
+	}
 
 	void AddGroup(std::string name, std::string description);
 
@@ -41,9 +54,23 @@ public:
 	void AppendToVariable(std::string const &name, T const &var, size_t tIndex);
 
 	template <typename T>
-	void AppendToGroup(std::string const &name, size_t tIndex, const std::initializer_list<std::pair<std::string, T>> &vars);
+	void AppendToGroup(std::string const &name, size_t tIndex, const std::initializer_list<std::pair<std::string, T const &>> &vars)
+	{
 
-	void StoreGridInfo( const Grid&, unsigned int );
+		std::vector<double> gridValues;
+		gridValues.resize(gridpoints.size());
+
+		netCDF::NcGroup group = data_file.getGroup(name);
+		for (auto &var : vars)
+		{
+			for (size_t i = 0; i < gridpoints.size(); ++i)
+				gridValues[i] = var.second(gridpoints[i]);
+
+			group.getVar(var.first).putVar({tIndex, 0}, {1, gridpoints.size()}, gridValues.data());
+		}
+	}
+
+	void StoreGridInfo(const Grid &, unsigned int);
 
 private:
 	std::string filename;
