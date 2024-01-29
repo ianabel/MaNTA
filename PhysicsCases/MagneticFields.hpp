@@ -70,6 +70,8 @@ private:
 	double L_z = 1.0;
 	double h;
 
+	double R_root_solver(double Psi);
+
 	std::string filename;
 	std::vector<double> gridpoints;
 	netCDF::NcFile data_file;
@@ -83,6 +85,7 @@ private:
 	std::unique_ptr<spline> B_spline;
 	std::unique_ptr<spline> Psi_spline;
 	std::unique_ptr<spline> Rm_spline;
+	std::unique_ptr<spline> R_Psi_spline;
 };
 
 #endif // MAGNETICFIELDS_HPP

@@ -9,6 +9,11 @@ CylindricalMagneticField::CylindricalMagneticField(const std::string &file)
     R_dim = data_file.getDim("R");
     nPoints = R_dim.getSize();
 
+    R_var.reserve(nPoints);
+    Bz_var.reserve(nPoints);
+    Psi_var.reserve(nPoints);
+    Rm_var.reserve(nPoints);
+
     double *temp = new double[nPoints];
 
     // copy nc data into vectors
@@ -34,6 +39,20 @@ CylindricalMagneticField::CylindricalMagneticField(const std::string &file)
     B_spline = std::make_unique<spline>(Bz_var.begin(), Bz_var.end(), R_var[0], h);
     Psi_spline = std::make_unique<spline>(Psi_var.begin(), Psi_var.end(), R_var[0], h);
     Rm_spline = std::make_unique<spline>(Rm_var.begin(), Rm_var.end(), R_var[0], h);
+
+    std::vector<double> R_Psi;
+    R_Psi.reserve(nPoints);
+
+    R_Psi.push_back(*(R_var.begin()));
+
+    for (auto &Psi : std::vector<double>(Psi_var.begin() + 1, Psi_var.end() - 1))
+    {
+        R_Psi.push_back(R_root_solver(Psi));
+    }
+
+    R_Psi.push_back(R_var.back());
+
+    R_Psi_spline = std::make_unique<spline>(R_Psi.begin(), R_Psi.end(), R_var[0], h);
 }
 
 double CylindricalMagneticField::Bz_R(double R)
@@ -64,27 +83,7 @@ double CylindricalMagneticField::VPrime(double V)
 
 double CylindricalMagneticField::R(double Psi)
 {
-    // return sqrt(x / (M_PI * L));
-    using boost::math::tools::bracket_and_solve_root;
-    using boost::math::tools::eps_tolerance;
-    double guess = R_var[nPoints / 2]; // Rough guess is to divide the exponent by three.
-    // double min = Rmin;                                      // Minimum possible value is half our guess.
-    // double max = Rmax;                                      // Maximum possible value is twice our guess.
-    const int digits = std::numeric_limits<double>::digits; // Maximum possible binary digits accuracy for type T.
-    int get_digits = static_cast<int>(digits * 0.6);        // Accuracy doubles with each step, so stop when we have
-                                                            // just over half the digits correct.
-    double factor = 2;
-    bool is_rising = true;
-    auto getPair = [this](double x, double R)
-    { return this->Psi(R) - x; };
-
-    auto func = std::bind_front(getPair, Psi);
-    eps_tolerance<double> tol(get_digits);
-
-    const boost::uintmax_t maxit = 20;
-    boost::uintmax_t it = maxit;
-    std::pair<double, double> r = bracket_and_solve_root(func, guess, factor, is_rising, tol, it);
-    return r.first + (r.second - r.first) / 2;
+    return (*R_Psi_spline)(Psi);
 }
 
 double CylindricalMagneticField::R_V(double V)
@@ -101,4 +100,24 @@ double CylindricalMagneticField::dRdV(double V)
 double CylindricalMagneticField::MirrorRatio(double V)
 {
     return (*Rm_spline)(R_V(V));
+}
+
+double CylindricalMagneticField::R_root_solver(double Psi)
+{
+    // return sqrt(x / (M_PI * L));
+    using boost::math::tools::bisect;
+    using boost::math::tools::eps_tolerance;
+    const int digits = std::numeric_limits<double>::digits; // Maximum possible binary digits accuracy for type T.
+    int get_digits = static_cast<int>(digits * 0.6);        // Accuracy doubles with each step, so stop when we have
+                                                            // just over half the digits correct.
+    auto getPair = [this](double x, double R)
+    { return this->Psi(R) - x; };
+
+    auto func = std::bind_front(getPair, Psi);
+    eps_tolerance<double> tol(get_digits);
+
+    const boost::uintmax_t maxit = 20;
+    boost::uintmax_t it = maxit;
+    std::pair<double, double> r = bisect(func, *R_var.begin(), R_var.back(), tol, it);
+    return r.first + (r.second - r.first) / 2;
 }
