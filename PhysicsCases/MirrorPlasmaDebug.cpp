@@ -5,7 +5,7 @@
 REGISTER_PHYSICS_IMPL(MirrorPlasmaDebug);
 const double n_mid = 0.25;
 const double n_edge = 0.05;
-const double T_mid = 0.2, T_edge = 0.1;
+const double T_mid = 1.0, T_edge = 0.1;
 
 const double omega_edge = 0.1, omega_mid = 1.0;
 
@@ -525,12 +525,11 @@ Real MirrorPlasmaDebug::CentrifugalPotential(double V, Real omega, Real Ti, Real
 	return Potential;
 }
 
-// [ n0 T0 R_ref B_ref^2 / ( m_e Omega_e(B_ref)^2 tau_e(n0,T0) ) ]^-1
 // Implements D-T fusion rate from NRL plasma formulary
 Real MirrorPlasmaDebug::FusionRate(Real n, Real pi) const
 {
 
-	Real Normalization = n0 * n0 * T0 * a * B0 * B0 / (electronMass * Om_e(B0) * Om_e(B0) * tau_e(n0, n0 * T0));
+	Real Normalization = n0 * T0 * a * B0 * B0 / (electronMass * Om_e(B0) * Om_e(B0) * tau_e(n0, n0 * T0));
 	Real Factor = 1e-6 * 3.68e-12 * n0 * n0 / Normalization;
 	Real Ti_kev = (pi / n) * T0 / (1000 * ElementaryCharge);
 	Real R = Factor * 0.25 * n * n * pow(Ti_kev, -2. / 3.) * exp(-19.94 * pow(Ti_kev, -1. / 3.));
@@ -549,8 +548,8 @@ Real MirrorPlasmaDebug::TotalAlphaPower(Real n, Real pi) const
 Real MirrorPlasmaDebug::BremsstrahlungLosses(Real n, Real pe) const
 {
 	double p0 = n0 * T0;
-	Real Normalization = p0 * n0 * T0 * a * B0 * B0 / (electronMass * Om_e(B0) * Om_e(B0) * tau_e(n0, n0 * T0));
-	Real Factor = 2 * 1e6 * 1.69e-32 * 1e-12 * n0 * n0 / Normalization;
+	Real Normalization = p0 * T0 * a * B0 * B0 / (electronMass * Om_e(B0) * Om_e(B0) * tau_e(n0, n0 * T0));
+	Real Factor = 2 * 1.69e-32 * 1e-6 * n0 * n0 / Normalization;
 
 	Real Te_eV = (pe / n) * T0 / ElementaryCharge;
 	Real Pbrem = Factor * n * n * sqrt(Te_eV);
@@ -588,6 +587,7 @@ void MirrorPlasmaDebug::initialiseDiagnostics(NetCDFIO &nc)
 	nc.AddGroup("Heating", "Separated heating sources");
 	nc.AddVariable("Heating", "AlphaHeating", "Alpha heat source", "-", initialZero);
 	nc.AddVariable("Heating", "ViscousHeating", "Viscous heat source", "-", initialZero);
+	nc.AddVariable("Heating", "RadiationLosses", "Bremsstrahlung heat losses", "-", initialZero);
 }
 
 void MirrorPlasmaDebug::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
@@ -627,6 +627,14 @@ void MirrorPlasmaDebug::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, 
 		return Heating;
 	};
 
+	Fn RadiationLosses = [this, &y](double V)
+	{
+		Real n = y.u(Channel::Density)(V), p_e = (2. / 3.) * y.u(Channel::ElectronEnergy)(V);
+		double Losses = this->BremsstrahlungLosses(n, p_e).val;
+
+		return Losses;
+	};
+
 	// Add the appends for the heating stuff
-	nc.AppendToGroup<Fn>("Heating", tIndex, {{"AlphaHeating", AlphaHeating}, {"ViscousHeating", ViscousHeating}});
+	nc.AppendToGroup<Fn>("Heating", tIndex, {{"AlphaHeating", AlphaHeating}, {"ViscousHeating", ViscousHeating}, {"RadiationLosses", RadiationLosses}});
 }

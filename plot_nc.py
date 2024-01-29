@@ -184,10 +184,13 @@ def main():
     plt.figure()
     AlphaHeat = np.array(data.groups["Heating"].variables["AlphaHeating"])
     ViscousHeat = np.array(data.groups["Heating"].variables["ViscousHeating"])
-    
+    Pbrem = np.array(data.groups["Heating"].variables["RadiationLosses"])
     plt.plot(r,AlphaHeat[-1,:])
     plt.figure()
     plt.plot(r,ViscousHeat[-1,:])
+
+    plt.figure()
+    plt.plot(r,Pbrem[-1,:])
 
 
     # h_i = np.array(data.groups["Var3"].variables["u"])
