@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import numpy as np
 import toml
 from netCDF4 import Dataset
@@ -33,10 +35,10 @@ def main():
     nPoints = 300
     B0 = 1.0
     Rm0 = 3.0
-    config = "./Config/MirrorPlasmaDebug.conf"
+    config = "MirrorPlasma.conf"
     B = CylindricalMagneticField(B0,Rm0,nPoints,config)
 
-    ncfile = Dataset("./PhysicsCases/Bfield.nc",mode="w",format="NETCDF4_CLASSIC")
+    ncfile = Dataset("MagField.nc",mode="w",format="NETCDF4")
     
     ncfile.createDimension('R',nPoints)
     R = ncfile.createVariable('R',np.float64,('R',))
