@@ -4,14 +4,13 @@
 #include <iostream>
 using namespace autodiff;
 
-
-
-AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config, Grid const& grid, Index nV, Index nS )
+AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config, Grid const &grid, Index nV, Index nS)
 {
 	nVars = nV;
 	nScalars = nS;
 
-	if (config.count("AutodiffTransportSystem") == 1) {
+	if (config.count("AutodiffTransportSystem") == 1)
+	{
 
 		auto const &InternalConfig = config.at("AutodiffTransportSystem");
 
@@ -38,19 +37,27 @@ AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config, Grid
 
 Value AutodiffTransportSystem::SigmaFn(Index i, const State &s, Position x, Time t)
 {
-    VectorXdual uw(s.Variable);
-    VectorXdual qw(s.Derivative);
+	VectorXdual uw(s.Variable);
+	VectorXdual qw(s.Derivative);
 
-	return Flux( i, uw, qw, x, t).val;
+	auto FluxWrapper = [this, i](VectorXdual uD, VectorXdual qD, Position X, Time T)
+	{ return this->Flux(i, uD, qD, X, T); };
+
+	Real sigma = Postprocessor(FluxWrapper, uw, qw, x, t);
+	return sigma.val;
 }
 
 Value AutodiffTransportSystem::Sources(Index i, const State &s, Position x, Time t)
 {
-    VectorXdual uw(s.Variable);
-    VectorXdual qw(s.Derivative);
-    VectorXdual sw(s.Flux);
+	VectorXdual uw(s.Variable);
+	VectorXdual qw(s.Derivative);
+	VectorXdual sw(s.Flux);
 
-    return Source(i, uw, qw, sw, x, t).val;
+	auto SourceWrapper = [this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
+	{ return this->Source(i, uD, qD, sD, X, T); };
+
+	Real S = Postprocessor(SourceWrapper, uw, qw, sw, x, t);
+	return S.val;
 }
 
 // We need derivatives of the flux functions
@@ -59,7 +66,12 @@ void AutodiffTransportSystem::dSigmaFn_du(Index i, Values &grad, const State &s,
 	autodiff::VectorXdual uw(s.Variable);
 	autodiff::VectorXdual qw(s.Derivative);
 
-	grad = autodiff::gradient( [ this,i ]( VectorXdual uD, VectorXdual qD, Position X, Time T ) { return this->Flux( i, uD, qD, X, T ); }, wrt(uw), at(uw, qw, x, t));
+	auto FluxWrapper = [this, i](VectorXdual uD, VectorXdual qD, Position X, Time T)
+	{ return this->Flux(i, uD, qD, X, T); };
+
+	grad = Postprocessor([FluxWrapper](VectorXdual uD, VectorXdual qD, Position X, Time t)
+						 { return autodiff::gradient(FluxWrapper, wrt(uD), at(uD, qD, X, t)); },
+						 uw, qw, x, t);
 }
 
 void AutodiffTransportSystem::dSigmaFn_dq(Index i, Values &grad, const State &s, Position x, Time t)
@@ -67,38 +79,55 @@ void AutodiffTransportSystem::dSigmaFn_dq(Index i, Values &grad, const State &s,
 	autodiff::VectorXdual uw(s.Variable);
 	autodiff::VectorXdual qw(s.Derivative);
 
-	grad = autodiff::gradient( [ this,i ]( VectorXdual uD, VectorXdual qD, Position X, Time T ) { return this->Flux( i, uD, qD, X, T ); }, wrt(qw), at(uw, qw, x, t));
+	auto FluxWrapper = [this, i](VectorXdual uD, VectorXdual qD, Position X, Time T)
+	{ return this->Flux(i, uD, qD, X, T); };
+
+	grad = Postprocessor([FluxWrapper](VectorXdual uD, VectorXdual qD, Position X, Time t)
+						 { return autodiff::gradient(FluxWrapper, wrt(qD), at(uD, qD, X, t)); },
+						 uw, qw, x, t);
 }
 
 // and for the sources
 void AutodiffTransportSystem::dSources_du(Index i, Values &grad, const State &s, Position x, Time t)
 {
-    VectorXdual uw(s.Variable);
-    VectorXdual qw(s.Derivative);
-    VectorXdual sw(s.Flux);
+	VectorXdual uw(s.Variable);
+	VectorXdual qw(s.Derivative);
+	VectorXdual sw(s.Flux);
 
-    grad = gradient( [ this,i ]( VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T ) { return this->Source( i, uD, qD, sD, X, T ); },
-                     wrt(uw), at(uw, qw, sw, x, t));
+	auto SourceWrapper = [this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
+	{ return this->Source(i, uD, qD, sD, X, T); };
+
+	grad = Postprocessor([SourceWrapper](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time t)
+						 { return autodiff::gradient(SourceWrapper, wrt(uD), at(uD, qD, sD, X, t)); },
+						 uw, qw, sw, x, t);
 }
 
 void AutodiffTransportSystem::dSources_dq(Index i, Values &grad, const State &s, Position x, Time t)
 {
-    VectorXdual uw(s.Variable);
-    VectorXdual qw(s.Derivative);
-    VectorXdual sw(s.Flux);
+	VectorXdual uw(s.Variable);
+	VectorXdual qw(s.Derivative);
+	VectorXdual sw(s.Flux);
 
-    grad = gradient( [ this,i ]( VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T ) { return this->Source( i, uD, qD, sD, X, T ); },
-                     wrt(qw), at(uw, qw, sw, x, t));
+	auto SourceWrapper = [this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
+	{ return this->Source(i, uD, qD, sD, X, T); };
+
+	grad = Postprocessor([SourceWrapper](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time t)
+						 { return autodiff::gradient(SourceWrapper, wrt(qD), at(uD, qD, sD, X, t)); },
+						 uw, qw, sw, x, t);
 }
 
 void AutodiffTransportSystem::dSources_dsigma(Index i, Values &grad, const State &s, Position x, Time t)
 {
-    VectorXdual uw(s.Variable);
-    VectorXdual qw(s.Derivative);
-    VectorXdual sw(s.Flux);
+	VectorXdual uw(s.Variable);
+	VectorXdual qw(s.Derivative);
+	VectorXdual sw(s.Flux);
 
-    grad = gradient( [ this,i ]( VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T ) { return this->Source( i, uD, qD, sD, X, T ); },
-                     wrt(sw), at(uw, qw, sw, x, t));
+	auto SourceWrapper = [this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
+	{ return this->Source(i, uD, qD, sD, X, T); };
+
+	grad = Postprocessor([SourceWrapper](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time t)
+						 { return autodiff::gradient(SourceWrapper, wrt(sD), at(uD, qD, sD, X, t)); },
+						 uw, qw, sw, x, t);
 }
 
 // and initial conditions for u & q
@@ -111,8 +140,9 @@ Value AutodiffTransportSystem::InitialDerivative(Index i, Position x) const
 {
 	dual2nd pos = x;
 	dual2nd t = 0.0;
-	auto InitialValueFn = [ this ]( Index j, dual2nd X, dual2nd T, double uR, double uL, double x_L, double x_R ) {
-		return InitialFunction( j, X, T, uR, uL, x_L, x_R );
+	auto InitialValueFn = [this](Index j, dual2nd X, dual2nd T, double uR, double uL, double x_L, double x_R)
+	{
+		return InitialFunction(j, X, T, uR, uL, x_L, x_R);
 	};
 	double deriv = derivative(InitialValueFn, wrt(pos), at(i, pos, t, UpperBoundary(i, 0.0), LowerBoundary(i, 0.0), xL, xR));
 	return deriv;
@@ -120,33 +150,57 @@ Value AutodiffTransportSystem::InitialDerivative(Index i, Position x) const
 
 dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R) const
 {
-    dual2nd a, b, c, d;
-    dual2nd u = 0;
+	dual2nd a, b, c, d;
+	dual2nd u = 0;
 	dual2nd v = 0;
-    dual2nd xMid = 0.5 * (x_R + x_L);
-    double m = (u_L - u_R) / (x_L - x_R);
-    double shape = 5; // 10 / (x_R - x_L) * ::log(10);
-    switch (InitialProfile[i])
-	 {
-		 case ProfileType::Gaussian:
-			 u = u_L + InitialHeights[i] * (exp(-(x - xMid) * (x - xMid) * shape) - exp(-(x_L - xMid) * (x_L - xMid) * shape));
-			 break;
-		 case ProfileType::Cosine:
-			 u = u_L + m * (x - x_L) + InitialHeights[i] * cos( M_PI * (x - xMid )/(x_R - x_L) );
-			 break;
-		 case ProfileType::CosineSquared:
-			 v = cos( M_PI * (x - xMid )/(x_R - x_L) );
-			 u = u_L + m * (x - x_L) + InitialHeights[i] * v * v;
-			 break;
-		 case ProfileType::Uniform:
-			 u = u_L;
-			 break;
-		 case ProfileType::Linear:
-			 u = u_L + m * (x - x_L);
-			 break;
-		 default:
-			 break;
-	 };
-    return u;
+	dual2nd xMid = 0.5 * (x_R + x_L);
+	double m = (u_L - u_R) / (x_L - x_R);
+	double shape = 5; // 10 / (x_R - x_L) * ::log(10);
+	switch (InitialProfile[i])
+	{
+	case ProfileType::Gaussian:
+		u = u_L + InitialHeights[i] * (exp(-(x - xMid) * (x - xMid) * shape) - exp(-(x_L - xMid) * (x_L - xMid) * shape));
+		break;
+	case ProfileType::Cosine:
+		u = u_L + m * (x - x_L) + InitialHeights[i] * cos(M_PI * (x - xMid) / (x_R - x_L));
+		break;
+	case ProfileType::CosineSquared:
+		v = cos(M_PI * (x - xMid) / (x_R - x_L));
+		u = u_L + m * (x - x_L) + InitialHeights[i] * v * v;
+		break;
+	case ProfileType::Uniform:
+		u = u_L;
+		break;
+	case ProfileType::Linear:
+		u = u_L + m * (x - x_L);
+		break;
+	default:
+		break;
+	};
+	return u;
 }
 
+// void AutodiffTransportSystem::FluxPreprocessor(Index, RealVector, RealVector)
+// {
+// }
+
+// Real AutodiffTransportSystem::FluxPostprocessor(Index, Real sigma)
+// {
+// 	return sigma;
+// }
+
+// void AutodiffTransportSystem::GraduPreprocessor(Index, RealVector, RealVector)
+// {
+// }
+
+// void AutodiffTransportSystem::GraduPostprocessor(Index, Values &)
+// {
+// }
+
+// void AutodiffTransportSystem::GradqPreprocessor(Index, RealVector, RealVector)
+// {
+// }
+
+// void AutodiffTransportSystem::GradqPostprocessor(Index, Values &)
+// {
+// }
