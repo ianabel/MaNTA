@@ -17,8 +17,8 @@ int sgn(T val)
     return (T(0) < val) - (val < T(0));
 }
 
-FourVarMirror::FourVarMirror( toml::value const &config, Grid const& grid )
-	: AutodiffTransportSystem( config, grid, 4, 0 )
+FourVarMirror::FourVarMirror(toml::value const &config, Grid const &grid)
+    : AutodiffTransportSystem(config, grid, 4, 0)
 {
     if (config.count("4VarMirror") != 1)
         throw std::invalid_argument("There should be a [4VarMirror] section if you are using the 4VarMirror physics model.");
@@ -58,53 +58,56 @@ FourVarMirror::FourVarMirror( toml::value const &config, Grid const& grid )
     h0 = ionMass * n0 * L * L * omega0;
 };
 
-enum Channel : Index {
-	Density = 0,
-	ElectronEnergy = 1,
-	IonEnergy = 2,
-	AngularMomentum = 3,
+enum Channel : Index
+{
+    Density = 0,
+    ElectronEnergy = 1,
+    IonEnergy = 2,
+    AngularMomentum = 3,
 };
 
-Real FourVarMirror::Flux( Index i, RealVector u, RealVector q, Position x, Time t )
+Real FourVarMirror::Flux(Index i, RealVector u, RealVector q, Position x, Time t, std::vector<Position> *ExtraValues)
 {
-	Channel c = static_cast<Channel>(i);
-	switch(c) {
-		case Density:
-			return Gamma_hat( u, q, x, t );
-			break;
-		case ElectronEnergy:
-			return qe_hat( u, q, x, t );
-			break;
-		case IonEnergy:
-			return qi_hat( u, q, x, t );
-			break;
-		case AngularMomentum:
-			return hi_hat( u, q, x, t );
-			break;
-		default:
-			throw std::runtime_error("Request for flux for undefined variable!");
-	}
+    Channel c = static_cast<Channel>(i);
+    switch (c)
+    {
+    case Density:
+        return Gamma_hat(u, q, x, t);
+        break;
+    case ElectronEnergy:
+        return qe_hat(u, q, x, t);
+        break;
+    case IonEnergy:
+        return qi_hat(u, q, x, t);
+        break;
+    case AngularMomentum:
+        return hi_hat(u, q, x, t);
+        break;
+    default:
+        throw std::runtime_error("Request for flux for undefined variable!");
+    }
 }
 
-Real FourVarMirror::Source( Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t )
+Real FourVarMirror::Source(Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t, std::vector<Position> *ExtraValues)
 {
-	Channel c = static_cast<Channel>(i);
-	switch(c) {
-		case Density:
-			return Sn_hat( u, q, sigma, x, t );
-			break;
-		case ElectronEnergy:
-			return Spe_hat( u, q, sigma, x, t );
-			break;
-		case IonEnergy:
-			return Spi_hat( u, q, sigma, x, t );
-			break;
-		case AngularMomentum:
-			return Shi_hat( u, q, sigma, x, t );
-			break;
-		default:
-			throw std::runtime_error("Request for source for undefined variable!");
-	}
+    Channel c = static_cast<Channel>(i);
+    switch (c)
+    {
+    case Density:
+        return Sn_hat(u, q, sigma, x, t);
+        break;
+    case ElectronEnergy:
+        return Spe_hat(u, q, sigma, x, t);
+        break;
+    case IonEnergy:
+        return Spi_hat(u, q, sigma, x, t);
+        break;
+    case AngularMomentum:
+        return Shi_hat(u, q, sigma, x, t);
+        break;
+    default:
+        throw std::runtime_error("Request for source for undefined variable!");
+    }
 }
 
 Real FourVarMirror::Gamma_hat(RealVector u, RealVector q, Real x, double t)
@@ -341,9 +344,10 @@ Real FourVarMirror::phi0(RealVector u, RealVector q, Real x, double t)
 Real FourVarMirror::dphi0dV(RealVector u, RealVector q, Real x, double t)
 {
     Real Rval = R(x.val, t);
-	 auto phi0fn = [ this ]( RealVector u, RealVector q, Real x, double t ) -> Real {
-		 return this->phi0( u, q, x, t );
-	 };
+    auto phi0fn = [this](RealVector u, RealVector q, Real x, double t) -> Real
+    {
+        return this->phi0(u, q, x, t);
+    };
     Real dphi0dV = derivative(phi0fn, wrt(Rval), at(u, q, x, t)) / (2 * M_PI * Rval);
     auto dphi0du = gradient(phi0fn, wrt(u), at(u, q, x, t));
     auto qi = q.begin();
@@ -403,7 +407,7 @@ double FourVarMirror::R(double x, double t)
     // return sqrt(x / (M_PI * L));
     using boost::math::tools::bracket_and_solve_root;
     using boost::math::tools::eps_tolerance;
-    double guess = 0.5;                                     // Rough guess is to divide the exponent by three.
+    double guess = 0.5; // Rough guess is to divide the exponent by three.
     // double min = Rmin;                                      // Minimum possible value is half our guess.
     // double max = Rmax;                                      // Maximum possible value is twice our guess.
     const int digits = std::numeric_limits<double>::digits; // Maximum possible binary digits accuracy for type T.
@@ -411,7 +415,8 @@ double FourVarMirror::R(double x, double t)
                                                             // just over half the digits correct.
     double factor = 2;
     bool is_rising = true;
-    auto getPair = [this](double x, double R) { return this->V(R) - x; }; // change to V(psi(R))
+    auto getPair = [this](double x, double R)
+    { return this->V(R) - x; }; // change to V(psi(R))
 
     auto func = std::bind_front(getPair, x);
     eps_tolerance<double> tol(get_digits);
@@ -421,4 +426,3 @@ double FourVarMirror::R(double x, double t)
     std::pair<double, double> r = bracket_and_solve_root(func, guess, factor, is_rising, tol, it);
     return r.first + (r.second - r.first) / 2;
 };
-

@@ -10,8 +10,8 @@ enum
     Gaussian = 1,
 };
 
-FourVarCylFlux::FourVarCylFlux( toml::value const &config, Grid const& grid )
-	: AutodiffTransportSystem( config, grid, 4, 0 )
+FourVarCylFlux::FourVarCylFlux(toml::value const &config, Grid const &grid)
+    : AutodiffTransportSystem(config, grid, 4, 0)
 {
     if (config.count("4VarCylFlux") != 1)
         throw std::invalid_argument("There should be a [4VarCylFlux] section if you are using the 4VarCylFlux physics model.");
@@ -60,52 +60,51 @@ FourVarCylFlux::FourVarCylFlux( toml::value const &config, Grid const& grid )
     taue0 = tau_e(n0, p0);
     taui0 = tau_i(n0, p0);
     h0 = ionMass * n0 * E0 / Bmid;
-
 };
 
-
-Real FourVarCylFlux::Flux( Index i, RealVector u, RealVector q, Position x, Time t )
+Real FourVarCylFlux::Flux(Index i, RealVector u, RealVector q, Position x, Time t, std::vector<Position> *ExtraValues)
 {
-	Channel c = static_cast<Channel>(i);
-	switch(c) {
-		case Density:
-			return Gamma_hat( u, q, x, t );
-			break;
-		case ElectronEnergy:
-			return qe_hat( u, q, x, t );
-			break;
-		case IonEnergy:
-			return qi_hat( u, q, x, t );
-			break;
-		case AngularMomentum:
-			return hi_hat( u, q, x, t );
-			break;
-		default:
-			throw std::runtime_error("Request for flux for undefined variable!");
-	}
+    Channel c = static_cast<Channel>(i);
+    switch (c)
+    {
+    case Density:
+        return Gamma_hat(u, q, x, t);
+        break;
+    case ElectronEnergy:
+        return qe_hat(u, q, x, t);
+        break;
+    case IonEnergy:
+        return qi_hat(u, q, x, t);
+        break;
+    case AngularMomentum:
+        return hi_hat(u, q, x, t);
+        break;
+    default:
+        throw std::runtime_error("Request for flux for undefined variable!");
+    }
 }
 
-Real FourVarCylFlux::Source( Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t )
+Real FourVarCylFlux::Source(Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t, std::vector<Position> *ExtraValues)
 {
-	Channel c = static_cast<Channel>(i);
-	switch(c) {
-		case Density:
-			return Sn_hat( u, q, sigma, x, t );
-			break;
-		case ElectronEnergy:
-			return Spe_hat( u, q, sigma, x, t );
-			break;
-		case IonEnergy:
-			return Spi_hat( u, q, sigma, x, t );
-			break;
-		case AngularMomentum:
-			return Shi_hat( u, q, sigma, x, t );
-			break;
-		default:
-			throw std::runtime_error("Request for source for undefined variable!");
-	}
+    Channel c = static_cast<Channel>(i);
+    switch (c)
+    {
+    case Density:
+        return Sn_hat(u, q, sigma, x, t);
+        break;
+    case ElectronEnergy:
+        return Spe_hat(u, q, sigma, x, t);
+        break;
+    case IonEnergy:
+        return Spi_hat(u, q, sigma, x, t);
+        break;
+    case AngularMomentum:
+        return Shi_hat(u, q, sigma, x, t);
+        break;
+    default:
+        throw std::runtime_error("Request for source for undefined variable!");
+    }
 }
-
 
 Real FourVarCylFlux::Gamma_hat(RealVector u, RealVector q, Real x, double t)
 {

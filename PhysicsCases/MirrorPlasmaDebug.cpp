@@ -130,7 +130,7 @@ Value MirrorPlasmaDebug::InitialDerivative(Index i, Position V) const
 	}
 }
 
-Real MirrorPlasmaDebug::Flux(Index i, RealVector u, RealVector q, Position x, Time t)
+Real MirrorPlasmaDebug::Flux(Index i, RealVector u, RealVector q, Position x, Time t, std::vector<Position> *ExtraValues)
 {
 	Channel c = static_cast<Channel>(i);
 	switch (c)
@@ -152,7 +152,7 @@ Real MirrorPlasmaDebug::Flux(Index i, RealVector u, RealVector q, Position x, Ti
 	}
 }
 
-Real MirrorPlasmaDebug::Source(Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t)
+Real MirrorPlasmaDebug::Source(Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t, std::vector<Position> *ExtraValues)
 {
 	Channel c = static_cast<Channel>(i);
 	switch (c)

@@ -44,20 +44,12 @@ protected:
 
 private:
 	// API to underlying flux model
-	virtual Real Flux(Index, RealVector, RealVector, Position, Time) = 0;
-	virtual Real Source(Index, RealVector, RealVector, RealVector, Position, Time) = 0;
+	virtual Real Flux(Index, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) = 0;
+	virtual Real Source(Index, RealVector, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) = 0;
 
-	// Pre and post processing for fluxes and sources, e.g. to do flux surface averages
+	// Generic postprocessor for fluxes and sources, e.g. to do flux surface averages
 	template <typename T, typename... Args>
 	auto Postprocessor(const T &f, Args... args);
-	// void FluxPreprocessor(Index, RealVector, RealVector);
-	// Real FluxPostprocessor(Index, Real);
-
-	// void GraduPreprocessor(Index, RealVector, RealVector);
-	// void GraduPostprocessor(Index, Values &);
-
-	// void GradqPreprocessor(Index, RealVector, RealVector);
-	// void GradqPostprocessor(Index, Values &);
 
 	enum class ProfileType
 	{
@@ -79,6 +71,7 @@ private:
 };
 #endif
 
+// default postprocessor - just call the input function using the given arguments
 template <typename T, typename... Args>
 inline auto AutodiffTransportSystem::Postprocessor(const T &f, Args... args)
 {

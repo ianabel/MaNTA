@@ -9,8 +9,8 @@ public:
     FourVarCylFlux(toml::value const &, Grid const& );
 
 private:
-	 Real Flux( Index, RealVector, RealVector, Position, Time ) override;
-	 Real Source( Index, RealVector, RealVector, RealVector, Position, Time ) override;
+    Real Flux(Index, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) override;
+    Real Source(Index, RealVector, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) override;
 
     std::map<std::string, int> ParticleSources = {{"None", 0}, {"Gaussian", 1}};
     int ParticleSource;

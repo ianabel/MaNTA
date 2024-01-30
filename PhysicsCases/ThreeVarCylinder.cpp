@@ -4,11 +4,10 @@
 
 REGISTER_PHYSICS_IMPL(ThreeVarCylinder);
 
-
 std::map<std::string, SourceType> ParticleSources = {{"None", None}, {"Gaussian", Gaussian}};
 
-ThreeVarCylinder::ThreeVarCylinder( toml::value const &config, Grid const& grid )
-	: AutodiffTransportSystem( config, grid, 3, 0 ) // Configure a blank autodiff system with three variables and no scalars
+ThreeVarCylinder::ThreeVarCylinder(toml::value const &config, Grid const &grid)
+    : AutodiffTransportSystem(config, grid, 3, 0) // Configure a blank autodiff system with three variables and no scalars
 {
     if (config.count("ThreeVarCylinder") != 1)
         throw std::invalid_argument("There should be a [ThreeVarCylinder] section if you are using the 3VarCylinder physics model.");
@@ -47,44 +46,44 @@ ThreeVarCylinder::ThreeVarCylinder( toml::value const &config, Grid const& grid 
 
     taue0 = tau_e(n0, p0);
     taui0 = tau_i(n0, p0);
-
 };
 
-
-Real ThreeVarCylinder::Flux( Index i, RealVector u, RealVector q, Position x, Time t )
+Real ThreeVarCylinder::Flux(Index i, RealVector u, RealVector q, Position x, Time t, std::vector<Position> *ExtraValues)
 {
-	Channel c = static_cast<Channel>(i);
-	switch(c) {
-		case Density:
-			return Gamma_hat( u, q, x, t );
-			break;
-		case ElectronEnergy:
-			return qe_hat( u, q, x, t );
-			break;
-		case IonEnergy:
-			return qi_hat( u, q, x, t );
-			break;
-		default:
-			throw std::runtime_error("Request for flux for undefined variable!");
-	}
+    Channel c = static_cast<Channel>(i);
+    switch (c)
+    {
+    case Density:
+        return Gamma_hat(u, q, x, t);
+        break;
+    case ElectronEnergy:
+        return qe_hat(u, q, x, t);
+        break;
+    case IonEnergy:
+        return qi_hat(u, q, x, t);
+        break;
+    default:
+        throw std::runtime_error("Request for flux for undefined variable!");
+    }
 }
 
-Real ThreeVarCylinder::Source( Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t )
+Real ThreeVarCylinder::Source(Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t, std::vector<Position> *ExtraValues)
 {
-	Channel c = static_cast<Channel>(i);
-	switch(c) {
-		case Density:
-			return Sn_hat( u, q, sigma, x, t );
-			break;
-		case ElectronEnergy:
-			return Spe_hat( u, q, sigma, x, t );
-			break;
-		case IonEnergy:
-			return Spi_hat( u, q, sigma, x, t );
-			break;
-		default:
-			throw std::runtime_error("Request for source for undefined variable!");
-	}
+    Channel c = static_cast<Channel>(i);
+    switch (c)
+    {
+    case Density:
+        return Sn_hat(u, q, sigma, x, t);
+        break;
+    case ElectronEnergy:
+        return Spe_hat(u, q, sigma, x, t);
+        break;
+    case IonEnergy:
+        return Spi_hat(u, q, sigma, x, t);
+        break;
+    default:
+        throw std::runtime_error("Request for source for undefined variable!");
+    }
 }
 
 Real ThreeVarCylinder::Gamma_hat(RealVector u, RealVector q, Position x, Time t)
@@ -93,7 +92,7 @@ Real ThreeVarCylinder::Gamma_hat(RealVector u, RealVector q, Position x, Time t)
 
     Real G = 2. * x * u(1) / tau_hat(u(0), u(1)) * ((-q(1) / 2. + q(2)) / u(1) + 3. / 2. * q(0) / u(0));
 
-    if ( !std::isfinite( G.val ) )
+    if (!std::isfinite(G.val))
         throw std::runtime_error("Particle flux generated Inf or NaN");
     else
         return G;
@@ -107,7 +106,7 @@ Real ThreeVarCylinder::qi_hat(RealVector u, RealVector q, Position x, Time t)
     Real qri = ::sqrt(ionMass / (2. * electronMass)) * 1.0 / tau_hat(u(0), u(2)) * 2. * u(2) * u(2) / u(0) * dT;
     Real Q = (2. / 3.) * (5. / 2. * u(2) / u(0) * G + (2. * x) * qri);
 
-	 if( !std::isfinite( Q.val ) )
+    if (!std::isfinite(Q.val))
         throw std::runtime_error("Ion energy flux generated Inf or NaN");
     else
         return Q;
@@ -120,7 +119,7 @@ Real ThreeVarCylinder::qe_hat(RealVector u, RealVector q, Position x, Time t)
 
     Real Q = (2. / 3.) * (5. / 2. * u(1) / u(0) * G + (2. * x) * qre);
 
-	 if( !std::isfinite( Q.val ) )
+    if (!std::isfinite(Q.val))
         throw std::runtime_error("Electron energy flux generated Inf or NaN");
     else
         return Q;
@@ -144,7 +143,7 @@ Real ThreeVarCylinder::Sn_hat(RealVector u, RealVector q, RealVector sigma, Posi
 // look at ion and electron sources again -- they should be opposite
 Real ThreeVarCylinder::Spi_hat(RealVector u, RealVector q, RealVector sigma, Position x, double t)
 {
-    Real S = 0.0; 
+    Real S = 0.0;
 
     return S + Sn_hat(u, q, sigma, x, t);
     // return 0.0;
@@ -167,5 +166,3 @@ Real ThreeVarCylinder::Spe_hat(RealVector u, RealVector q, RealVector sigma, Pos
     }
     // return 0.0;
 };
-
-

@@ -47,8 +47,8 @@ private:
 		Ionization = 3,
 	};
 
-	Real Flux(Index, RealVector, RealVector, Position, Time) override;
-	Real Source(Index, RealVector, RealVector, RealVector, Position, Time) override;
+	Real Flux(Index, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) override;
+	Real Source(Index, RealVector, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) override;
 
 	double ParticleSourceStrength, jRadial;
 

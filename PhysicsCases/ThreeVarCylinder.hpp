@@ -12,12 +12,11 @@ enum SourceType
 class ThreeVarCylinder : public AutodiffTransportSystem
 {
 public:
-    ThreeVarCylinder(toml::value const &config, Grid const& grid );
+    ThreeVarCylinder(toml::value const &config, Grid const &grid);
 
 private:
-
-	 Real Flux( Index, RealVector, RealVector, Position, Time ) override;
-	 Real Source( Index, RealVector, RealVector, RealVector, Position, Time ) override;
+    Real Flux(Index, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) override;
+    Real Source(Index, RealVector, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) override;
 
     SourceType ParticleSource;
     double sourceStrength;
@@ -35,7 +34,7 @@ private:
     Real taue0;
     Real taui0;
 
-	 Real omega0;
+    Real omega0;
 
     Vector InitialHeights;
     Real Gamma_hat(RealVector u, RealVector q, Position x, Time t);
@@ -45,13 +44,13 @@ private:
     Real Spe_hat(RealVector u, RealVector q, RealVector sigma, Position x, Time t);
     Real Spi_hat(RealVector u, RealVector q, RealVector sigma, Position x, Time t);
 
-
-	 enum Channel : Index {
-		 Density = 0,
-		 ElectronEnergy = 1,
-		 IonEnergy = 2,
-	 };
-	 REGISTER_PHYSICS_HEADER(ThreeVarCylinder)
+    enum Channel : Index
+    {
+        Density = 0,
+        ElectronEnergy = 1,
+        IonEnergy = 2,
+    };
+    REGISTER_PHYSICS_HEADER(ThreeVarCylinder)
 };
 
 #endif

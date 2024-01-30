@@ -40,8 +40,8 @@ Value AutodiffTransportSystem::SigmaFn(Index i, const State &s, Position x, Time
 	VectorXdual uw(s.Variable);
 	VectorXdual qw(s.Derivative);
 
-	auto FluxWrapper = [this, i](VectorXdual uD, VectorXdual qD, Position X, Time T)
-	{ return this->Flux(i, uD, qD, X, T); };
+	auto FluxWrapper = [this, i](VectorXdual uD, VectorXdual qD, Position X, Time T, std::vector<Position> *ExtraValues = nullptr)
+	{ return this->Flux(i, uD, qD, X, T, ExtraValues); };
 
 	Real sigma = Postprocessor(FluxWrapper, uw, qw, x, t);
 	return sigma.val;
@@ -53,8 +53,8 @@ Value AutodiffTransportSystem::Sources(Index i, const State &s, Position x, Time
 	VectorXdual qw(s.Derivative);
 	VectorXdual sw(s.Flux);
 
-	auto SourceWrapper = [this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
-	{ return this->Source(i, uD, qD, sD, X, T); };
+	auto SourceWrapper = [this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T, std::vector<Position> *ExtraValues = nullptr)
+	{ return this->Source(i, uD, qD, sD, X, T, ExtraValues); };
 
 	Real S = Postprocessor(SourceWrapper, uw, qw, sw, x, t);
 	return S.val;
@@ -66,11 +66,11 @@ void AutodiffTransportSystem::dSigmaFn_du(Index i, Values &grad, const State &s,
 	autodiff::VectorXdual uw(s.Variable);
 	autodiff::VectorXdual qw(s.Derivative);
 
-	auto FluxWrapper = [this, i](VectorXdual uD, VectorXdual qD, Position X, Time T)
-	{ return this->Flux(i, uD, qD, X, T); };
+	auto FluxWrapper = [this, i](VectorXdual uD, VectorXdual qD, Position X, Time T, std::vector<Position> *ExtraValues = nullptr)
+	{ return this->Flux(i, uD, qD, X, T, ExtraValues); };
 
-	grad = Postprocessor([FluxWrapper](VectorXdual uD, VectorXdual qD, Position X, Time t)
-						 { return autodiff::gradient(FluxWrapper, wrt(uD), at(uD, qD, X, t)); },
+	grad = Postprocessor([FluxWrapper](VectorXdual uD, VectorXdual qD, Position X, Time t, std::vector<Position> *ExtraValues = nullptr)
+						 { return autodiff::gradient(FluxWrapper, wrt(uD), at(uD, qD, X, t, ExtraValues)); },
 						 uw, qw, x, t);
 }
 
@@ -79,11 +79,11 @@ void AutodiffTransportSystem::dSigmaFn_dq(Index i, Values &grad, const State &s,
 	autodiff::VectorXdual uw(s.Variable);
 	autodiff::VectorXdual qw(s.Derivative);
 
-	auto FluxWrapper = [this, i](VectorXdual uD, VectorXdual qD, Position X, Time T)
-	{ return this->Flux(i, uD, qD, X, T); };
+	auto FluxWrapper = [this, i](VectorXdual uD, VectorXdual qD, Position X, Time T, std::vector<Position> *ExtraValues = nullptr)
+	{ return this->Flux(i, uD, qD, X, T, ExtraValues); };
 
-	grad = Postprocessor([FluxWrapper](VectorXdual uD, VectorXdual qD, Position X, Time t)
-						 { return autodiff::gradient(FluxWrapper, wrt(qD), at(uD, qD, X, t)); },
+	grad = Postprocessor([FluxWrapper](VectorXdual uD, VectorXdual qD, Position X, Time t, std::vector<Position> *ExtraValues = nullptr)
+						 { return autodiff::gradient(FluxWrapper, wrt(qD), at(uD, qD, X, t, ExtraValues)); },
 						 uw, qw, x, t);
 }
 
@@ -94,11 +94,11 @@ void AutodiffTransportSystem::dSources_du(Index i, Values &grad, const State &s,
 	VectorXdual qw(s.Derivative);
 	VectorXdual sw(s.Flux);
 
-	auto SourceWrapper = [this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
-	{ return this->Source(i, uD, qD, sD, X, T); };
+	auto SourceWrapper = [this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T, std::vector<Position> *ExtraValues = nullptr)
+	{ return this->Source(i, uD, qD, sD, X, T, ExtraValues); };
 
-	grad = Postprocessor([SourceWrapper](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time t)
-						 { return autodiff::gradient(SourceWrapper, wrt(uD), at(uD, qD, sD, X, t)); },
+	grad = Postprocessor([SourceWrapper](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time t, std::vector<Position> *ExtraValues = nullptr)
+						 { return autodiff::gradient(SourceWrapper, wrt(uD), at(uD, qD, sD, X, t, ExtraValues)); },
 						 uw, qw, sw, x, t);
 }
 
@@ -108,11 +108,11 @@ void AutodiffTransportSystem::dSources_dq(Index i, Values &grad, const State &s,
 	VectorXdual qw(s.Derivative);
 	VectorXdual sw(s.Flux);
 
-	auto SourceWrapper = [this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
-	{ return this->Source(i, uD, qD, sD, X, T); };
+	auto SourceWrapper = [this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T, std::vector<Position> *ExtraValues = nullptr)
+	{ return this->Source(i, uD, qD, sD, X, T, ExtraValues); };
 
-	grad = Postprocessor([SourceWrapper](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time t)
-						 { return autodiff::gradient(SourceWrapper, wrt(qD), at(uD, qD, sD, X, t)); },
+	grad = Postprocessor([SourceWrapper](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time t, std::vector<Position> *ExtraValues = nullptr)
+						 { return autodiff::gradient(SourceWrapper, wrt(qD), at(uD, qD, sD, X, t, ExtraValues)); },
 						 uw, qw, sw, x, t);
 }
 
@@ -122,11 +122,11 @@ void AutodiffTransportSystem::dSources_dsigma(Index i, Values &grad, const State
 	VectorXdual qw(s.Derivative);
 	VectorXdual sw(s.Flux);
 
-	auto SourceWrapper = [this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
-	{ return this->Source(i, uD, qD, sD, X, T); };
+	auto SourceWrapper = [this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T, std::vector<Position> *ExtraValues = nullptr)
+	{ return this->Source(i, uD, qD, sD, X, T, ExtraValues); };
 
-	grad = Postprocessor([SourceWrapper](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time t)
-						 { return autodiff::gradient(SourceWrapper, wrt(sD), at(uD, qD, sD, X, t)); },
+	grad = Postprocessor([SourceWrapper](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time t, std::vector<Position> *ExtraValues = nullptr)
+						 { return autodiff::gradient(SourceWrapper, wrt(sD), at(uD, qD, sD, X, t, ExtraValues)); },
 						 uw, qw, sw, x, t);
 }
 
