@@ -42,14 +42,14 @@ public:
 protected:
 	Position xR, xL;
 
+	// Generic postprocessor for fluxes and sources, e.g. to do flux surface averages
+	template <typename T, typename... Args>
+	auto Postprocessor(const T &f, Args... args);
+
 private:
 	// API to underlying flux model
 	virtual Real Flux(Index, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) = 0;
 	virtual Real Source(Index, RealVector, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) = 0;
-
-	// Generic postprocessor for fluxes and sources, e.g. to do flux surface averages
-	template <typename T, typename... Args>
-	auto Postprocessor(const T &f, Args... args);
 
 	enum class ProfileType
 	{

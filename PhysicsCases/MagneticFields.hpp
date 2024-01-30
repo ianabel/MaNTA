@@ -88,4 +88,50 @@ private:
 	std::unique_ptr<spline> R_Psi_spline;
 };
 
+class CurvedMagneticField
+{
+public:
+	CurvedMagneticField(const std::string &file);
+	~CurvedMagneticField() = default;
+
+	double Bz_R(double R);
+	double V(double Psi);
+	double Psi(double R);
+	double Psi_V(double V);
+	double VPrime(double V);
+	double R(double Psi);
+	double R_V(double V);
+	double dRdV(double V);
+	double MirrorRatio(double V);
+	template <typename T, typename... Args>
+	auto FluxSurfaceAverage(const T &f, Args... args);
+
+private:
+	double L_z = 1.0;
+	double h;
+
+	double R_root_solver(double Psi);
+
+	std::string filename;
+	std::vector<double> gridpoints;
+	netCDF::NcFile data_file;
+	unsigned int nPoints;
+	netCDF::NcDim R_dim;
+	std::vector<double> R_var;
+	std::vector<double> Bz_var;
+	std::vector<double> Psi_var;
+	std::vector<double> Rm_var;
+
+	std::unique_ptr<spline> B_spline;
+	std::unique_ptr<spline> Psi_spline;
+	std::unique_ptr<spline> Rm_spline;
+	std::unique_ptr<spline> R_Psi_spline;
+};
+
+template <typename T, typename... Args>
+inline auto CurvedMagneticField::FluxSurfaceAverage(const T &f, Args... args)
+{
+	return f(args...);
+}
+
 #endif // MAGNETICFIELDS_HPP
