@@ -8,17 +8,6 @@
 using Real = autodiff::dual;
 using RealVector = autodiff::VectorXdual;
 
-// struct Real
-// {
-// public:
-// 	Real(){};
-// 	~Real() = default;
-
-// 	autodiff::dual val;
-
-// 	explicit operator autodiff::dual() const { return val; };
-// };
-
 class AutodiffTransportSystem : public TransportSystem
 {
 public:
@@ -42,17 +31,17 @@ public:
 protected:
 	Position xR, xL;
 
-	using FluxWrapper = std::function<Real(std::vector<Value> *)>;
-	using GradWrapper = std::function<Values(std::vector<Value> *)>;
+	using FluxWrapper = std::function<Real(Position, Time, std::vector<Value> *)>;
+	using GradWrapper = std::function<Values(Position, Time, std::vector<Value> *)>;
 
 private:
 	// API to underlying flux model
 	virtual Real Flux(Index, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) = 0;
 	virtual Real Source(Index, RealVector, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) = 0;
 
-	// Generic postprocessor for fluxes and sources, e.g. to do flux surface averages
-	virtual Real Postprocessor(const FluxWrapper &f, std::vector<Position> * = nullptr) = 0;
-	virtual Values Postprocessor(const GradWrapper &f, std::vector<Position> * = nullptr) = 0;
+	// Postprocessor for fluxes and sources, e.g. to do flux surface averages
+	virtual Real Postprocessor(const FluxWrapper &f, Position x, Time t) = 0;
+	virtual Values Postprocessor(const GradWrapper &f, Position x, Time t) = 0;
 
 	enum class ProfileType
 	{
