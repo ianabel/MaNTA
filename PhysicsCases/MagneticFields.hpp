@@ -103,6 +103,7 @@ public:
 	double R_V(double V);
 	double dRdV(double V);
 	double MirrorRatio(double V);
+
 	template <typename T, typename... Args>
 	auto FluxSurfaceAverage(const T &f, Args... args);
 

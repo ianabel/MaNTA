@@ -3,7 +3,8 @@
 
 CurvedMagneticField::CurvedMagneticField(const std::string &file)
 {
-    filename = file;
+    // filename = file;
+    filename = "/home/eatocco/projects/MaNTA/PhysicsCases/Bfield.nc";
     data_file.open(filename, netCDF::NcFile::FileMode::read);
 
     R_dim = data_file.getDim("R");

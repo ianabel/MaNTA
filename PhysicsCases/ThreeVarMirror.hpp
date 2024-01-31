@@ -13,6 +13,9 @@ private:
 	Real Flux(Index, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) override;
 	Real Source(Index, RealVector, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) override;
 
+	Real Postprocessor(const FluxWrapper &f, std::vector<Position> *ExtraValues = nullptr) override { return f(ExtraValues); };
+	Values Postprocessor(const GradWrapper &f, std::vector<Position> *ExtraValues = nullptr) override { return f(ExtraValues); };
+
 	std::map<std::string, int> ParticleSources = {{"None", 0}, {"Gaussian", 1}};
 	int ParticleSource;
 	double sourceStrength;

@@ -6,19 +6,22 @@
 class ADTwoChannel : public AutodiffTransportSystem
 {
 public:
-    ADTwoChannel(toml::value const &config, Grid const& grid );
+	ADTwoChannel(toml::value const &config, Grid const &grid);
 
 private:
-	 Real Flux( Index, RealVector, RealVector, Position, Time ) override;
-	 Real Source( Index, RealVector, RealVector, RealVector, Position, Time ) override;
+	Real Flux(Index, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) override;
+	Real Source(Index, RealVector, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) override;
 
-	 Value InitialValue( Index, Position ) const override;
-	 Value InitialDerivative( Index, Position ) const override;
+	Real Postprocessor(const FluxWrapper &f, std::vector<Position> *ExtraValues = nullptr) override { return f(ExtraValues); };
+	Values Postprocessor(const GradWrapper &f, std::vector<Position> *ExtraValues = nullptr) override { return f(ExtraValues); };
 
-	 double A,c,kappa, S_w;
-	 std::vector<Value> H;
+	Value InitialValue(Index, Position) const override;
+	Value InitialDerivative(Index, Position) const override;
 
-    REGISTER_PHYSICS_HEADER(ADTwoChannel)
+	double A, c, kappa, S_w;
+	std::vector<Value> H;
+
+	REGISTER_PHYSICS_HEADER(ADTwoChannel)
 };
 
 #endif

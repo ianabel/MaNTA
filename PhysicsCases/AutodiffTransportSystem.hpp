@@ -42,14 +42,17 @@ public:
 protected:
 	Position xR, xL;
 
-	// Generic postprocessor for fluxes and sources, e.g. to do flux surface averages
-	template <typename T, typename... Args>
-	auto Postprocessor(const T &f, Args... args);
+	using FluxWrapper = std::function<Real(std::vector<Value> *)>;
+	using GradWrapper = std::function<Values(std::vector<Value> *)>;
 
 private:
 	// API to underlying flux model
 	virtual Real Flux(Index, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) = 0;
 	virtual Real Source(Index, RealVector, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) = 0;
+
+	// Generic postprocessor for fluxes and sources, e.g. to do flux surface averages
+	virtual Real Postprocessor(const FluxWrapper &f, std::vector<Position> * = nullptr) = 0;
+	virtual Values Postprocessor(const GradWrapper &f, std::vector<Position> * = nullptr) = 0;
 
 	enum class ProfileType
 	{
@@ -69,11 +72,11 @@ private:
 
 	autodiff::dual2nd InitialFunction(Index i, autodiff::dual2nd x, autodiff::dual2nd t, double u_R, double u_L, double x_L, double x_R) const;
 };
-#endif
 
 // default postprocessor - just call the input function using the given arguments
-template <typename T, typename... Args>
-inline auto AutodiffTransportSystem::Postprocessor(const T &f, Args... args)
-{
-	return f(args...);
-}
+// template <typename T, typename... Args>
+// inline auto AutodiffTransportSystem::Postprocessor(const T &f, Args... args)
+// {
+// 	return f(args...);
+// }
+#endif

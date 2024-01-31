@@ -50,11 +50,14 @@ private:
     Real Flux(Index, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) override;
     Real Source(Index, RealVector, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) override;
 
-    // Overload default postprocessor
-    using AutodiffTransportSystem::Postprocessor;
+    Real Postprocessor(const FluxWrapper &f, std::vector<Position> *ExtraValues = nullptr) override { return this->B->FluxSurfaceAverage(f, ExtraValues); };
+    Values Postprocessor(const GradWrapper &f, std::vector<Position> *ExtraValues = nullptr) override { return this->B->FluxSurfaceAverage(f, ExtraValues); };
 
-    template <typename T, typename... Args>
-    auto Postprocessor(const T &f, Args... args) { return B->FluxSurfaceAverage(f, args...); };
+    // // Overload default postprocessor
+    // using AutodiffTransportSystem::Postprocessor;
+
+    // template <typename T, typename... Args>
+    // auto Postprocessor(const T &f, Args... args) { return B->FluxSurfaceAverage(f, args...); }
 
     double ParticleSourceStrength, jRadial;
 
