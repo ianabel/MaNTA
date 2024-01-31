@@ -34,7 +34,7 @@ MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid
 		double omegaEdge = toml::find_or(InternalConfig, "omegaEdge", omega_edge);
 
 		std::string Bfile = toml::find_or(InternalConfig, "B_file", B_file);
-		B = new CylindricalMagneticField("./PhysicsCases/" + Bfile);
+		B = new CylindricalMagneticField(Bfile);
 
 		R_Lower = B->R_V(xL);
 		R_Upper = B->R_V(xR);

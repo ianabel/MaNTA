@@ -91,10 +91,12 @@ double CylindricalMagneticField::R_V(double V)
     return sqrt(V / (pi * L_z));
 }
 
-// dRdV = dPsidR*dVdPsi
+// dRdV = (dPsidR*dVdPsi)^-1
+// dPsidR = R Bz
 double CylindricalMagneticField::dRdV(double V)
 {
-    return 1 / Psi_spline->prime(R_V(V)) * 1 / VPrime(V);
+	double Rval = R_V(V);
+    return 1.0 / ( Rval * Bz_R(Rval) * VPrime(V) );
 }
 
 double CylindricalMagneticField::MirrorRatio(double V)
