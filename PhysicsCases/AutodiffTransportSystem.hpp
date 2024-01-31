@@ -40,8 +40,9 @@ private:
 	virtual Real Source(Index, RealVector, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) = 0;
 
 	// Postprocessor for fluxes and sources, e.g. to do flux surface averages
-	virtual Real Postprocessor(const FluxWrapper &f, Position x, Time t) = 0;
-	virtual Values Postprocessor(const GradWrapper &f, Position x, Time t) = 0;
+	// just run the function by default
+	virtual Real Postprocessor(const FluxWrapper &f, Position x, Time t) { return f(x, t, nullptr); };
+	virtual Values Postprocessor(const GradWrapper &f, Position x, Time t) { return f(x, t, nullptr); };
 
 	enum class ProfileType
 	{

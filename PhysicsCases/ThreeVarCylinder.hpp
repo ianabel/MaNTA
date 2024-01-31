@@ -18,9 +18,6 @@ private:
     Real Flux(Index, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) override;
     Real Source(Index, RealVector, RealVector, RealVector, Position, Time, std::vector<Position> * = nullptr) override;
 
-    Real Postprocessor(const FluxWrapper &f, Position x, Time t) override { return f(x, t, nullptr); };
-    Values Postprocessor(const GradWrapper &f, Position x, Time t) override { return f(x, t, nullptr); };
-
     SourceType ParticleSource;
     double sourceStrength;
     Real sourceWidth;
