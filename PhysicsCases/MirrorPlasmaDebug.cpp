@@ -7,7 +7,7 @@ const double n_mid = 0.25;
 const double n_edge = 0.05;
 const double T_mid = 0.2, T_edge = 0.1;
 
-const double omega_edge = 0.1, omega_mid = 1.0;
+const double omega_edge = 0.1, omega_mid = 4.0;
 
 const std::string B_file = "Bfield.nc";
 
@@ -213,7 +213,7 @@ inline Real MirrorPlasmaDebug::ElectronCollisionTime(Real ne, Real Te) const
 // Return the actual value in SI units
 inline double MirrorPlasmaDebug::ReferenceElectronCollisionTime() const
 {
-	double LogLambdaRef = 24.0 - log(n0) / 2.0 + log(T0); // 24 - ln( n^1/2 T^-1 ) from NRL pg 34
+	double LogLambdaRef = 24.0 - log(n0cgs) / 2.0 + log(T0eV); // 24 - ln( n^1/2 T^-1 ) from NRL pg 34
 	return 12.0 * pow(M_PI, 1.5) * sqrt(ElectronMass) * pow(T0, 1.5) * VacuumPermittivity * VacuumPermittivity / (sqrt(2) * n0 * pow(ElementaryCharge, 4) * LogLambdaRef);
 }
 // Return sqrt(2) * tau_ii (Helander & Sigmar notation ) normalised to tau_ii( n0, T0 )
@@ -226,7 +226,7 @@ inline Real MirrorPlasmaDebug::IonCollisionTime(Real ni, Real Ti) const
 // Return the actual value in SI units
 inline double MirrorPlasmaDebug::ReferenceIonCollisionTime() const
 {
-	double LogLambdaRef = 23.0 - log(2.0) - log(n0) / 2.0 + log(T0) * 1.5; // 23 - ln( (2n)^1/2 T^-3/2 ) from NRL pg 34
+	double LogLambdaRef = 23.0 - log(2.0) - log(n0cgs) / 2.0 + log(T0eV) * 1.5; // 23 - ln( (2n)^1/2 T^-3/2 ) from NRL pg 34
 	return 12.0 * pow(M_PI, 1.5) * sqrt(IonMass) * pow(T0, 1.5) * VacuumPermittivity * VacuumPermittivity / (n0 * pow(ElementaryCharge, 4) * LogLambdaRef);
 }
 
@@ -380,7 +380,7 @@ Real MirrorPlasmaDebug::Spi(RealVector u, RealVector q, RealVector sigma, Positi
 	Real ParticleEnergy = Ti * (1.0 + Xi);
 	Real ParallelLosses = ParticleEnergy * IonPastukhovLossRate(V, Xi, n, Ti);
 
-	return Heating - ParallelLosses;
+	return Heating - 0.001*ParallelLosses;
 }
 
 // Energy normalisation is T0, but these return Xi_s / T_s as that is what enters the
@@ -436,7 +436,7 @@ Real MirrorPlasmaDebug::Spe(RealVector u, RealVector q, RealVector sigma, Positi
 	Real ParticleEnergy = Te * (1.0 + Xi);
 	Real ParallelLosses = ParticleEnergy * ElectronPastukhovLossRate(V, Xi, n, Te);
 
-	return Heating - ParallelLosses;
+	return Heating - 0.001 * ParallelLosses;
 };
 
 // Source of angular momentum -- this is just imposed J x B torque (we can account for the particle source being a sink later).
@@ -457,7 +457,7 @@ Real MirrorPlasmaDebug::Somega(RealVector u, RealVector q, RealVector sigma, Pos
 	Real AngularMomentumPerParticle = L / n;
 	Real ParallelLosses = AngularMomentumPerParticle * IonPastukhovLossRate(V, Xi, n, Te);
 
-	return JxB - ParallelLosses;
+	return JxB - 0.001 * ParallelLosses;
 };
 
 Real MirrorPlasmaDebug::ElectronPastukhovLossRate(double V, Real Xi_e, Real n, Real Te) const
@@ -467,6 +467,7 @@ Real MirrorPlasmaDebug::ElectronPastukhovLossRate(double V, Real Xi_e, Real n, R
 	double Sigma = 2.0; // = 1 + Z_eff ; Include collisions with ions and impurities as well as self-collisions
 
 	Real PastukhovFactor = (exp(-Xi_e) / Xi_e);
+	
 	// Cap loss rates
 	if (PastukhovFactor.val > 1.0)
 		PastukhovFactor.val = 1.0;
@@ -487,6 +488,7 @@ Real MirrorPlasmaDebug::IonPastukhovLossRate(double V, Real Xi_i, Real n, Real T
 	double Sigma = 1.0; // Just ion-ion collisions
 
 	Real PastukhovFactor = (exp(-Xi_i) / Xi_i);
+
 	// Cap loss rates
 	if (PastukhovFactor.val > 1.0)
 		PastukhovFactor.val = 1.0;
@@ -507,7 +509,7 @@ Real MirrorPlasmaDebug::CentrifugalPotential(double V, Real omega, Real Ti, Real
 	double R = B->R_V(V);
 	Real tau = Ti / Te;
 	Real MachNumber = omega * R / sqrt(Te); // omega is normalised to c_s0 / a
-	Real Potential = -(1.0 / (1.0 + tau)) * (1.0 - 1.0 / MirrorRatio) * MachNumber * MachNumber / 2.0;
+	Real Potential = (1.0 / (1.0 + tau)) * (1.0 - 1.0 / MirrorRatio) * MachNumber * MachNumber / 2.0;
 	return Potential;
 }
 
@@ -528,6 +530,11 @@ double MirrorPlasmaDebug::Voltage(T1 &L_phi, T2 &n)
 void MirrorPlasmaDebug::initialiseDiagnostics(NetCDFIO &nc)
 {
 	// Add diagnostics here
+	//
+	double RhoStar = RhoStarRef();
+	double TauNorm = (IonMass/ElectronMass)*(1.0/(RhoStar*RhoStar))*(ReferenceElectronCollisionTime());
+	nc.AddScalarVariable("Tau","Normalising time","s",TauNorm);
+	
 	auto initialL = [this](double V)
 	{ return InitialValue(Channel::AngularMomentum, V); };
 	auto initialn = [this](double V)
@@ -537,6 +544,7 @@ void MirrorPlasmaDebug::initialiseDiagnostics(NetCDFIO &nc)
 	nc.AddTimeSeries("Voltage", "Total voltage drop across the plasma", "Volts", initialVoltage);
 	nc.AddGroup("Heating", "Separated heating sources");
 	// TODO: Put the AddVariable stuff here for the heating.
+	
 }
 
 void MirrorPlasmaDebug::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
