@@ -1,10 +1,21 @@
 #include "MagneticFields.hpp"
 #include <boost/math/tools/roots.hpp>
+#include <iostream>
+#include <filesystem>
+#include <string>
 
 CylindricalMagneticField::CylindricalMagneticField(const std::string &file)
 {
     filename = file;
-    data_file.open(filename, netCDF::NcFile::FileMode::read);
+    try
+    {
+        data_file.open(filename, netCDF::NcFile::FileMode::read);
+    }
+    catch (...)
+    {
+        std::string msg = "Failed to open netCDF file at: " + std::string(std::filesystem::absolute(std::filesystem::path(filename)));
+        throw std::runtime_error(msg);
+    }
 
     R_dim = data_file.getDim("R");
     nPoints = R_dim.getSize();
@@ -95,13 +106,19 @@ double CylindricalMagneticField::R_V(double V)
 // dPsidR = R Bz
 double CylindricalMagneticField::dRdV(double V)
 {
-	double Rval = R_V(V);
-    return 1.0 / ( Rval * Bz_R(Rval) * VPrime(V) );
+    double Rval = R_V(V);
+    return 1.0 / (Rval * Bz_R(Rval) * VPrime(V));
 }
 
 double CylindricalMagneticField::MirrorRatio(double V)
 {
     return (*Rm_spline)(R_V(V));
+}
+
+void CylindricalMagneticField::CheckBoundaries(double VL, double VR)
+{
+    if ((R_V(VL) < R_var.front()) || (R_V(VR) > R_var.back()))
+        throw std::runtime_error("Magnetic field file must include entire domain");
 }
 
 double CylindricalMagneticField::R_root_solver(double Psi)

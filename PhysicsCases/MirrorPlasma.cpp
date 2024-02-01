@@ -31,17 +31,17 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
 		auto const &InternalConfig = config.at("MirrorPlasma");
 		nEdge = toml::find_or(InternalConfig, "EdgeDensity", n_edge);
 		TeEdge = toml::find_or(InternalConfig, "EdgeElectronTemperature", T_edge);
-		TiEdge = toml::find_or(InternalConfig, "EdgeIonTemperature", TeEdge );
+		TiEdge = toml::find_or(InternalConfig, "EdgeIonTemperature", TeEdge);
 		OmegaEdge = toml::find_or(InternalConfig, "EdgeRotationRate", omega_edge);
 
-
-		InitialPeakDensity = toml::find_or(InternalConfig, "InitialDensity", n_mid );
-		InitialPeakTe      = toml::find_or(InternalConfig, "InitialElectronTemperature", T_mid );
-		InitialPeakTe      = toml::find_or(InternalConfig, "InitialIonTemperature", T_mid );
-		InitialPeakOmega   = toml::find_or(InternalConfig, "InitialRotationRate", omega_mid );
+		InitialPeakDensity = toml::find_or(InternalConfig, "InitialDensity", n_mid);
+		InitialPeakTe = toml::find_or(InternalConfig, "InitialElectronTemperature", T_mid);
+		InitialPeakTe = toml::find_or(InternalConfig, "InitialIonTemperature", T_mid);
+		InitialPeakOmega = toml::find_or(InternalConfig, "InitialRotationRate", omega_mid);
 
 		std::string Bfile = toml::find_or(InternalConfig, "MagneticFieldData", B_file);
 		B = new CylindricalMagneticField(Bfile);
+		B->CheckBoundaries(xL, xR);
 
 		R_Lower = B->R_V(xL);
 		R_Upper = B->R_V(xR);
@@ -57,7 +57,7 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
 		jRadial = -toml::find_or(InternalConfig, "jRadial", 4.0);
 		ParticleSourceStrength = toml::find_or(InternalConfig, "ParticleSource", 10.0);
 	}
-	else if ( config.count("MirrorPlasma") == 0 )
+	else if (config.count("MirrorPlasma") == 0)
 	{
 		throw std::invalid_argument("To use the Mirror Plasma physics model, a [MirrorPlasma] configuration section is required.");
 	}

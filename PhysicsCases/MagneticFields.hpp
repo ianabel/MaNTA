@@ -65,6 +65,7 @@ public:
 	double R_V(double V);
 	double dRdV(double V);
 	double MirrorRatio(double V);
+	void CheckBoundaries(double VL, double VR);
 
 private:
 	double L_z = 1.0;

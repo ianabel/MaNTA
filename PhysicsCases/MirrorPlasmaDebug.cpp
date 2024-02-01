@@ -35,6 +35,7 @@ MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid
 
 		std::string Bfile = toml::find_or(InternalConfig, "B_file", B_file);
 		B = new CylindricalMagneticField(Bfile);
+		B->CheckBoundaries(xL, xR);
 
 		R_Lower = B->R_V(xL);
 		R_Upper = B->R_V(xR);
@@ -55,6 +56,7 @@ MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid
 		ParticleSourceStrength = 1.0;
 		jRadial = -4.0;
 		B = new CylindricalMagneticField(std::filesystem::path("./PhysicsCases/" + B_file));
+		B->CheckBoundaries(xL, xR);
 
 		R_Lower = B->R_V(xL);
 		R_Upper = B->R_V(xR);
