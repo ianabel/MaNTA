@@ -65,10 +65,13 @@ public:
 	double R_V(double V);
 	double dRdV(double V);
 	double MirrorRatio(double V);
+	void CheckBoundaries(double VL, double VR);
 
 private:
 	double L_z = 1.0;
 	double h;
+
+	double R_root_solver(double Psi);
 
 	std::string filename;
 	std::vector<double> gridpoints;
@@ -83,6 +86,7 @@ private:
 	std::unique_ptr<spline> B_spline;
 	std::unique_ptr<spline> Psi_spline;
 	std::unique_ptr<spline> Rm_spline;
+	std::unique_ptr<spline> R_Psi_spline;
 };
 
 #endif // MAGNETICFIELDS_HPP

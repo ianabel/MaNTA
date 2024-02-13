@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import numpy as np
 import toml
 from netCDF4 import Dataset
@@ -11,7 +13,7 @@ class CylindricalMagneticField():
         self.Ri = np.sqrt(f["configuration"]["Lower_boundary"]/np.pi)
         self.Ro = np.sqrt(f["configuration"]["Upper_boundary"]/np.pi)
 
-        self.m = 0.0# -self.B0/(2*(self.Ro-self.Ri))
+        self.m = 0.0#-self.B0/(2*(self.Ro-self.Ri))
 
         self.R = np.linspace(self.Ri,self.Ro,nPoints)
         
@@ -36,7 +38,7 @@ def main():
     config = "./Config/MirrorPlasmaDebug.conf"
     B = CylindricalMagneticField(B0,Rm0,nPoints,config)
 
-    ncfile = Dataset("./PhysicsCases/Bfield.nc",mode="w",format="NETCDF4_CLASSIC")
+    ncfile = Dataset("./Bfield.nc",mode="w",format="NETCDF4")
     
     ncfile.createDimension('R',nPoints)
     R = ncfile.createVariable('R',np.float64,('R',))

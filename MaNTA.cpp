@@ -15,10 +15,12 @@ void LoadFromFile( std::string const& );
 double getFloatWithDefault( std::string const& name, toml::value const& config, double defaultValue )
 {
 	auto confCount = config.count(name);
-	if ( confCount == 0 )
+	if ( confCount == 0 ) {
+		std::cerr << "INFO: Using default value " << defaultValue << " for configuration option " << name << std::endl;
 		return defaultValue;
-	else if ( confCount > 1 )
+	} else if ( confCount > 1 ) {
 		throw std::invalid_argument(name + " was multiply specified." );
+	}
 
 	auto configElement = toml::find(config, name);
 
@@ -37,7 +39,7 @@ double getFloat( std::string const& name, toml::value const& config )
 	if ( confCount == 0 )
 		throw std::invalid_argument(name + " was not specified." );
 	else if ( confCount > 1 )
-		throw std::invalid_argument(name + " was multioply specified." );
+		throw std::invalid_argument(name + " was multiply specified." );
 
 	auto configElement = toml::find(config, name);
 	if (configElement.is_integer())
@@ -52,10 +54,12 @@ double getFloat( std::string const& name, toml::value const& config )
 int getIntWithDefault( std::string const& name, toml::value const& config, int defaultValue )
 {
 	auto confCount = config.count(name);
-	if ( confCount == 0 )
+	if ( confCount == 0 ) {
+		std::cerr << "INFO: Using default value " << defaultValue << " for configuration option " << name << std::endl;
 		return defaultValue;
-	else if ( confCount > 1 )
-		throw std::invalid_argument(name + " was multioply specified." );
+	} else if ( confCount > 1 ) {
+		throw std::invalid_argument(name + " was multiply specified." );
+	}
 
 	auto configElement = toml::find(config, name);
 	if (configElement.is_integer())
