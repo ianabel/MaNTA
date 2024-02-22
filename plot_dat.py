@@ -20,11 +20,11 @@ def solution_NonLinear(x,t):
     return np.power(1-eta,1/n)
 
 def main():
-    with open("./Config/3VarMirror.dat",'rt') as data:
+    with open("./MirrorPlasma.dat",'rt') as data:
         count = 0
         time = 0
         index = 0
-        nVars = 3
+        nVars = 4
         headings = ""
         line_begin = False
         u = np.ndarray(shape=(301,nVars))
@@ -48,7 +48,7 @@ def main():
                 h = line
                 headings = parse.parse(header_format,line)
 
-            elif count > 3:
+            elif count > 4:
                 if(line.startswith("#")):
                     if (line[2] != "L"):
                         U = np.vstack((U,np.expand_dims(u,0)))
@@ -107,10 +107,11 @@ def main():
             plt.plot(x,Q[2,:,i])
             plt.plot(x,Q[-1,:,i])
             plt.show()
-            # plt.figure()
+            plt.figure()
             plt.plot(x,U[2,:,i])
-            plt.plot(x,U[3,:,i])
+
             plt.plot(x,U[-1,:,i])
+            plt.title(str(i)+"profile")
             # plt.show()
             # plt.figure()
 

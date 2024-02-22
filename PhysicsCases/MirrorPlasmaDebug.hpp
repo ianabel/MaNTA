@@ -50,7 +50,7 @@ private:
 	Real Flux(Index, RealVector, RealVector, Position, Time) override;
 	Real Source(Index, RealVector, RealVector, RealVector, Position, Time) override;
 
-	double ParticleSourceStrength, jRadial;
+	double ParticleSourceStrength, jRadial, SourceFactor;
 
 	// Reference Values
 	constexpr static double ElectronMass = 9.1094e-31;		   // Electron Mass, kg

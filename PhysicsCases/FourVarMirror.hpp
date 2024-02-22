@@ -6,13 +6,14 @@
 class FourVarMirror : public AutodiffTransportSystem
 {
 public:
-    FourVarMirror(toml::value const &, Grid const& );
+    FourVarMirror(toml::value const &, Grid const &);
 
 private:
-	 Real Flux( Index, RealVector, RealVector, Position, Time ) override;
-	 Real Source( Index, RealVector, RealVector, RealVector, Position, Time ) override;
+    Real Flux(Index, RealVector, RealVector, Position, Time) override;
+    Real Source(Index, RealVector, RealVector, RealVector, Position, Time) override;
 
-    std::map<std::string, int> ParticleSources = {{"None", 0}, {"Gaussian", 1}};
+    std::map<std::string, int> ParticleSources = {{"None", 0}, {"Gaussian", 1}, {"Uniform", 2}};
+
     int ParticleSource;
     double sourceStrength;
     Vector InitialHeights;
@@ -47,7 +48,8 @@ private:
     Real dphi0dV(RealVector u, RealVector q, Real x, double t);
     Real Chi_e(RealVector u, RealVector q, Real x, double t);
     Real Chi_i(RealVector u, RealVector q, Real x, double t);
-    bool includeParallelLosses;
+    bool includeParallelLosses, includeRadiation, includeAlphas;
+    double BfieldSlope;
 
     double Rmin;
     double Rmax;
@@ -58,6 +60,9 @@ private:
     double Vprime(double R);
     double B(double x, double t);
     double Bmax;
+
+    void initialiseDiagnostics(NetCDFIO &nc) override;
+    void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override;
 
     REGISTER_PHYSICS_HEADER(FourVarMirror)
 };
