@@ -56,7 +56,7 @@ dual tau_hat(dual n, dual P)
     if (P > 0)
         return (1.0 / pow(n, 5.0 / 2.0)) * (pow(P, 3.0 / 2.0));
     else
-		throw std::logic_error( "Negative pressure encountered inside calculation.");
+        throw std::logic_error("Negative pressure encountered inside calculation.");
 }
 
 dual Ce(dual n, dual Pi, dual Pe)
@@ -83,6 +83,13 @@ dual RDT(dual n, dual Pe)
 
 dual PastukhovLoss(dual n, dual P, dual Xs, dual Rm)
 {
+    // Cap loss rates
+    dual PastukhovFactor = exp(-Xs) / Xs;
+    if (PastukhovFactor.val > 1.0)
+        PastukhovFactor.val = 1.0;
+    // If the loss becomes a gain, flatten at zero
+    if (PastukhovFactor.val < 0.0)
+        return 0.0;
     double Sigma = 2;
-    return -2 * n * Sigma / sqrt(M_PI) * 1 / tau_hat(n, P) * 1 / log(Sigma * Rm) * exp(-Xs) / Xs;
+    return -2 * n * Sigma / sqrt(M_PI) * 1 / tau_hat(n, P) * 1 / log(Sigma * Rm) * PastukhovFactor;
 }

@@ -46,13 +46,13 @@ private:
 		Ionization = 3,
 	};
 
-	double nEdge, TeEdge, TiEdge, OmegaEdge;
-	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakOmega, ParallelLossFactor, DelayFactor;
+	double nEdge, TeEdge, TiEdge, MEdge;
+	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber, ParallelLossFactor, DelayFactor;
 
 	Real Flux(Index, RealVector, RealVector, Position, Time) override;
 	Real Source(Index, RealVector, RealVector, RealVector, Position, Time) override;
 
-	double ParticleSourceStrength, jRadial;
+	double ParticleSourceStrength, jRadial, ParticleSourceWidth, UniformHeatSource;
 
 	// Reference Values
 	constexpr static double ElectronMass = 9.1094e-31;		   // Electron Mass, kg
@@ -88,6 +88,8 @@ private:
 	double RhoStarRef() const;
 
 	CylindricalMagneticField *B;
+
+	Real ParticleSource(double R, double t) const;
 
 	Real ElectronPastukhovLossRate(double V, Real Xi_e, Real n, Real Te) const;
 	Real IonPastukhovLossRate(double V, Real Xi_i, Real n, Real Ti) const;

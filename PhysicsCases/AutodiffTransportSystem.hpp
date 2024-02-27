@@ -6,6 +6,7 @@
 #include <autodiff/forward/dual/eigen.hpp>
 
 using Real = autodiff::dual;
+using Real2nd = autodiff::dual2nd;
 using RealVector = autodiff::VectorXdual;
 
 class AutodiffTransportSystem : public TransportSystem

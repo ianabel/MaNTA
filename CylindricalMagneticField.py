@@ -13,7 +13,7 @@ class CylindricalMagneticField():
         self.Ri = 0.9*np.sqrt(f["configuration"]["Lower_boundary"]/np.pi)
         self.Ro = 1.1*np.sqrt(f["configuration"]["Upper_boundary"]/np.pi)
 
-        self.m = -self.B0/(2*(self.Ro-self.Ri))
+        self.m = -0.2*self.B0/(2*(self.Ro-self.Ri))
 
         self.R = np.linspace(self.Ri,self.Ro,nPoints)
         
@@ -33,9 +33,9 @@ class CylindricalMagneticField():
 
 def main():
     nPoints = 300
-    B0 = 1.5
-    Rm0 = 3.0
-    config = "./Config/4VarMirror.conf"
+    B0 = 4.5
+    Rm0 = 3.3
+    config = "./Config/MirrorPlasma.conf"
     B = CylindricalMagneticField(B0,Rm0,nPoints,config)
 
     ncfile = Dataset("./Bfield.nc",mode="w",format="NETCDF4")

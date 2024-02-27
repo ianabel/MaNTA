@@ -9,7 +9,8 @@ enum
 {
     None = 0,
     Gaussian = 1,
-    Uniform = 2
+    Uniform = 2,
+    GaussianEdge = 3,
 };
 
 template <typename T>
@@ -38,6 +39,7 @@ FourVarMirror::FourVarMirror(toml::value const &config, Grid const &grid)
     includeRadiation = toml::find_or(DiffConfig, "includeRadiation", false);
 
     BfieldSlope = toml::find_or(DiffConfig, "MagneticFieldSlope", 0.0);
+    ParallelLossFactor = toml::find_or(DiffConfig, "ParallelLossFactor", 1.0);
 
     Rmin = toml::find_or(DiffConfig, "Rmin", 0.1);
     Rmax = toml::find_or(DiffConfig, "Rmax", 1.0);
@@ -220,6 +222,11 @@ Real FourVarMirror::Sn_hat(RealVector u, RealVector q, RealVector sigma, Real x,
         break;
     case Uniform:
         S = sourceStrength;
+    case GaussianEdge:
+    {
+        Real Rval = R(x.val, t);
+        S = sourceStrength * (exp(-1 / sourceWidth * (Rval - Rmin) * (Rval - Rmin)) + exp(-1 / sourceWidth * (Rval - Rmax) * (Rval - Rmax)));
+    }
     default:
         break;
     }

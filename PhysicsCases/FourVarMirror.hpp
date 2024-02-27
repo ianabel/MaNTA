@@ -12,7 +12,7 @@ private:
     Real Flux(Index, RealVector, RealVector, Position, Time) override;
     Real Source(Index, RealVector, RealVector, RealVector, Position, Time) override;
 
-    std::map<std::string, int> ParticleSources = {{"None", 0}, {"Gaussian", 1}, {"Uniform", 2}};
+    std::map<std::string, int> ParticleSources = {{"None", 0}, {"Gaussian", 1}, {"Uniform", 2}, {"GaussianEdge", 2}};
 
     int ParticleSource;
     double sourceStrength;
@@ -49,7 +49,7 @@ private:
     Real Chi_e(RealVector u, RealVector q, Real x, double t);
     Real Chi_i(RealVector u, RealVector q, Real x, double t);
     bool includeParallelLosses, includeRadiation, includeAlphas;
-    double BfieldSlope;
+    double BfieldSlope, ParallelLossFactor;
 
     double Rmin;
     double Rmax;
