@@ -288,7 +288,7 @@ Real MirrorPlasmaDebug::qe(RealVector u, RealVector q, double V, double t) const
 
 	double R = B->R_V(V);
 	double GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e, leaving (V'R)^2
-	Real HeatFlux = GeometricFactor * GeometricFactor * (p_e / ElectronCollisionTime(n, Te)) * (4.66 * Te_prime / Te - (3. / 2.) * (p_e_prime + p_i_prime) / p_e);
+	Real HeatFlux = GeometricFactor * GeometricFactor * (p_e / ElectronCollisionTime(n, Te)) * (4.66 * Te_prime - (3. / 2.) * (p_e_prime + p_i_prime) / n );
 
 	if (std::isfinite(HeatFlux.val))
 		return HeatFlux;
