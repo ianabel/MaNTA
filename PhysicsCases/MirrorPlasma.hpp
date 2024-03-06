@@ -56,7 +56,7 @@ private:
 
 	// Reference Values
 	constexpr static double ElectronMass = 9.1094e-31;		   // Electron Mass, kg
-	constexpr static double IonMass = 1.6726e-27;			   // Ion Mass ( = proton mass) kg
+	constexpr static double IonMass = 2.5 * 1.6726e-27;		   // 2.5* Ion Mass ( = proton mass) kg (DT fusion)
 	constexpr static double ElementaryCharge = 1.60217663e-19; // Coulombs
 	constexpr static double VacuumPermittivity = 8.8541878128e-12;
 

@@ -42,24 +42,39 @@ def main():
 
   
 
-    plt.figure()
-    ax = plt.axes()
+ 
     n = np.array(data.groups["Var0"].variables["u"])
+    dn = np.array(data.groups["Var0"].variables["q"])
     p_i = 2./3.*np.array(data.groups["Var1"].variables["u"])
     p_e  = 2./3.*np.array(data.groups["Var2"].variables["u"])
+    dp_i = 2./3.*np.array(data.groups["Var1"].variables["q"])
+    dp_e  = 2./3.*np.array(data.groups["Var2"].variables["q"])
     L = np.array(data.groups["Var3"].variables["u"])
     omega = L/(n*r*r)
     
+    pfluxderiv = np.abs((dp_i)/p_e + 3./2.*dn/n)-np.abs(0.5*dp_e/p_e)
+
     Voltage = np.array(data.variables["Voltage"])
     
-    Ti = np.divide(p_i,n)
-    Te = np.divide(p_e,n)
+    Ti = p_i/n
+    Te = p_e/n
     tau = Ti/Te
     M = omega*r/np.sqrt(Te)
 
-
+    plt.figure()
+    ax = plt.axes()
     ax.plot(r,n[-1,:],label = r"$\hat{n}$")
-    ax.plot(r,n[0,:],label = r"$\hat{n}, t = 0$")
+    ax.legend()
+    plt.xlabel(r"$\hat{r}$")
+
+    plt.figure()
+    ax = plt.axes()
+    ax.plot(r,n[-1,:],label = r"$\hat{n}$")
+    ax.plot(r,p_i[-1,:],label=r"$\hat{p}_i$")
+    ax.plot(r,Ti[-1,:],label=r"$\hat{T}_i$")
+
+    #ax.plot(r,n[0,:],label = r"$\hat{n}, t = 0$")
+    ax.set_xlim(0.69,0.7)
    # ax.plot(r,data.groups["Var3"].variables["u"][-1,:],label = r"$\hat{h}$")
     ax.legend()
     plt.xlabel(r"$\hat{r}$")
@@ -78,6 +93,12 @@ def main():
     ax3.plot(r,omega[0,:],label=r"$\omega, t = 0$")
     ax3.legend()
 
+    plt.figure()
+    ax = plt.axes()
+    ax.plot(r,pfluxderiv[-1,:])
+    plt.title("check if particle flux is unstable")
+    
+
     w0 = np.sqrt(e_charge*1000/ionMass)
     M = r*omega/np.sqrt(Te)
     v = r*omega*w0
@@ -87,6 +108,8 @@ def main():
     ax3.legend()
     plt.xlabel(r"$\hat{r}$")
     plt.ylabel(r"$v_\theta (m/s)$")
+
+
     plt.figure()
     plt.plot(t,Voltage)
     
@@ -126,3 +149,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# %%

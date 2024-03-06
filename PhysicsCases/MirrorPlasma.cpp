@@ -93,11 +93,11 @@ autodiff::dual2nd MirrorPlasma::InitialFunction(Index i, autodiff::dual2nd V, au
 
 	autodiff::dual2nd v = cos(pi * (R - R_mid) / (R_max - R_min));
 
-	autodiff::dual2nd n = nEdge + (nMid - nEdge) * v * v;
-	autodiff::dual2nd Te = TeEdge + (TeMid - TeEdge) * v * v;
-	autodiff::dual2nd Ti = TiEdge + (TiMid - TiEdge) * v * v;
+	autodiff::dual2nd n = nEdge + (nMid - nEdge) * v;
+	autodiff::dual2nd Te = TeEdge + (TeMid - TeEdge) * v * v * v;
+	autodiff::dual2nd Ti = TiEdge + (TiMid - TiEdge) * v * v * v;
 
-	autodiff::dual2nd M = MEdge + (MMid - MEdge) * v * v;
+	autodiff::dual2nd M = MEdge + (MMid - MEdge) * v * v * v;
 	autodiff::dual2nd omega = sqrt(Te) * M / R;
 
 	Channel c = static_cast<Channel>(i);
@@ -228,10 +228,15 @@ Real MirrorPlasma::Gamma(RealVector u, RealVector q, double V, double t) const
 	Real Te = p_e / n;
 	Real nPrime = q(Channel::Density), p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
 	Real Te_prime = (p_e_prime - nPrime * Te) / n;
-
+	Real PressureGradient = ((p_e_prime + p_i_prime) / p_e);
+	Real TemperatureGradient = (3. / 2.) * (Te_prime / Te);
+	// if ((abs(PressureGradient) - abs(TemperatureGradient)) < -1e-3)
+	// {
+	// 	return 0.0;
+	// }
 	double R = B->R_V(V);
 	double GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e
-	Real Gamma = GeometricFactor * GeometricFactor * (p_e / ElectronCollisionTime(n, Te)) * ((p_e_prime + p_i_prime) / p_e - (3. / 2.) * (Te_prime / Te));
+	Real Gamma = GeometricFactor * GeometricFactor * (p_e / ElectronCollisionTime(n, Te)) * (PressureGradient - TemperatureGradient);
 
 	if (std::isfinite(Gamma.val))
 		return Gamma;
@@ -276,7 +281,7 @@ Real MirrorPlasma::qe(RealVector u, RealVector q, double V, double t) const
 
 	double R = B->R_V(V);
 	double GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e, leaving (V'R)^2
-	Real HeatFlux = GeometricFactor * GeometricFactor * (p_e / ElectronCollisionTime(n, Te)) * (4.66 * Te_prime / Te - (3. / 2.) * (p_e_prime + p_i_prime) / p_e);
+	Real HeatFlux = GeometricFactor * GeometricFactor * (p_e*Te / ElectronCollisionTime(n, Te)) * (4.66 * Te_prime / Te - (3. / 2.) * (p_e_prime + p_i_prime) / p_e);
 
 	if (std::isfinite(HeatFlux.val))
 		return HeatFlux;
@@ -410,7 +415,7 @@ Real MirrorPlasma::IonElectronEnergyExchange(Real n, Real pe, Real pi, Position 
 	Real Te = pe / n;
 	double RhoStar = RhoStarRef();
 	Real pDiff = pe - pi;
-	Real IonHeating = (pDiff / ElectronCollisionTime(n, Te)) * ((3.0 / (RhoStar * RhoStar)) * (ElectronMass / IonMass));
+	Real IonHeating = (pDiff / ElectronCollisionTime(n, Te)) * ((3.0 / (RhoStar * RhoStar))); //* (ElectronMass / IonMass));
 
 	if (std::isfinite(IonHeating.val))
 		return IonHeating;
@@ -466,10 +471,11 @@ Real MirrorPlasma::Somega(RealVector u, RealVector q, RealVector sigma, Position
 
 Real MirrorPlasma::ParticleSource(double R, double t) const
 {
-	double shape = 1 / ParticleSourceWidth;
+	// double shape = 1 / ParticleSourceWidth;
 	// return ParticleSourceStrength * (DelayFactor / 10 + DelayFactor * exp(-shape * (R - R_Lower) * (R - R_Lower)) + exp(-shape * (R - R_Upper) * (R - R_Upper)));
-	double Rmid = 0.5 * (R_Lower + R_Upper);
-	return ParticleSourceStrength * (exp(-shape * (R - Rmid) * (R - Rmid)));
+	// // double Rmid = 0.5 * (R_Lower + R_Upper);
+	// // return ParticleSourceStrength * (exp(-shape * (R - Rmid) * (R - Rmid)));
+	return ParticleSourceStrength;
 };
 
 Real MirrorPlasma::ElectronPastukhovLossRate(double V, Real Xi_e, Real n, Real Te) const
