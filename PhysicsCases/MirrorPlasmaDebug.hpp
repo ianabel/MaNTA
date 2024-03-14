@@ -104,6 +104,8 @@ private:
 	void initialiseDiagnostics(NetCDFIO &nc) override;
 	void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override;
 
+	double ParFac = 1.0;
+
 	REGISTER_PHYSICS_HEADER(MirrorPlasmaDebug)
 };
 
