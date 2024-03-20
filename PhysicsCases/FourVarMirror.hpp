@@ -8,11 +8,20 @@ class FourVarMirror : public AutodiffTransportSystem
 public:
     FourVarMirror(toml::value const &, Grid const &);
 
+    virtual Real2nd InitialFunction(Index i, Real2nd x, Real2nd t) const override;
+
 private:
     Real Flux(Index, RealVector, RealVector, Position, Time) override;
     Real Source(Index, RealVector, RealVector, RealVector, Position, Time) override;
 
-    std::map<std::string, int> ParticleSources = {{"None", 0}, {"Gaussian", 1}, {"Uniform", 2}, {"GaussianEdge", 2}};
+    //    Function for passing boundary conditions to the solver
+    virtual Value LowerBoundary(Index i, Time t) const override;
+    virtual Value UpperBoundary(Index i, Time t) const override;
+
+    virtual bool isLowerBoundaryDirichlet(Index i) const override;
+    virtual bool isUpperBoundaryDirichlet(Index i) const override;
+
+    std::map<std::string, int> ParticleSources = {{"None", 0}, {"Gaussian", 1}, {"Uniform", 2}, {"GaussianEdge", 3}};
 
     int ParticleSource;
     double sourceStrength;
@@ -35,6 +44,10 @@ private:
     Real h0;
     Real omega0;
 
+    // Initial values
+    double nEdge, TeEdge, TiEdge, MEdge;
+    double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber;
+
     Real Gamma_hat(RealVector u, RealVector q, Real x, double t);
     Real qe_hat(RealVector u, RealVector q, Real x, double t);
     Real qi_hat(RealVector u, RealVector q, Real x, double t);
@@ -44,17 +57,18 @@ private:
     Real Spi_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t);
     Real Shi_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t);
 
+    Real ParticleSourceFn(Real x, double t);
     Real phi0(RealVector u, RealVector q, Real x, double t);
     Real dphi0dV(RealVector u, RealVector q, Real x, double t);
     Real Chi_e(RealVector u, RealVector q, Real x, double t);
     Real Chi_i(RealVector u, RealVector q, Real x, double t);
     bool includeParallelLosses, includeRadiation, includeAlphas;
-    double BfieldSlope, ParallelLossFactor;
+    double BfieldSlope, ParallelLossFactor, DragWidth, DragFactor;
 
     double Rmin;
     double Rmax;
 
-    double R(double x, double t);
+    double R(double x, double t) const;
     double psi(double R);
     double V(double R);
     double Vprime(double R);

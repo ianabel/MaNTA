@@ -21,7 +21,10 @@ BOOST_AUTO_TEST_CASE(magnetic_fields_values)
     const double Bmid = 0.75 * B0;
     const double Rm_mid = 0.75 * Rm0;
 
-    const double Rmid = 0.5 * (0.7 + 0.2);
+    const double Rl = 0.2;
+    const double Rr = 0.7;
+
+    const double Rmid = 0.5 * (Rr + Rl);
 
     CylindricalMagneticField B(file);
 
@@ -35,7 +38,14 @@ BOOST_AUTO_TEST_CASE(magnetic_fields_values)
 
     const double dRdV_mid = 1. / (2.0 * M_PI * Rmid);
 
+    const double Vl = M_PI*Rl*Rl;
+    const double Vr = M_PI*Rr*Rr;
+    const double dRdV_left = 1./(2.0*M_PI*Rl);
+    const double dRdV_right = 1./(2.0*M_PI*Rr);
+
     BOOST_TEST(B.dRdV(Vmid) == dRdV_mid);
+    BOOST_TEST(B.dRdV(Vl) == dRdV_left);
+    BOOST_TEST(B.dRdV(Vr) == dRdV_right);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

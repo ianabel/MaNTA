@@ -27,7 +27,7 @@ public:
 	MirrorPlasma(toml::value const &config, Grid const &grid);
 	virtual ~MirrorPlasma() { delete B; };
 
-	virtual autodiff::dual2nd InitialFunction(Index i, autodiff::dual2nd x, autodiff::dual2nd t, double u_R, double u_L, double x_L, double x_R) const override;
+	virtual autodiff::dual2nd InitialFunction(Index i, autodiff::dual2nd x, autodiff::dual2nd t) const override;
 
 private:
 	enum Channel : Index
@@ -47,12 +47,19 @@ private:
 	};
 
 	double nEdge, TeEdge, TiEdge, MEdge;
-	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber, ParallelLossFactor, DelayFactor;
+	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber, ParallelLossFactor, DragFactor, DragWidth;
 
 	Real Flux(Index, RealVector, RealVector, Position, Time) override;
 	Real Source(Index, RealVector, RealVector, RealVector, Position, Time) override;
 
-	double ParticleSourceStrength, jRadial, ParticleSourceWidth, UniformHeatSource;
+	Value LowerBoundary(Index i, Time t) const override;
+	Value UpperBoundary(Index i, Time t) const override;
+
+	virtual bool isLowerBoundaryDirichlet(Index i) const override;
+	virtual bool isUpperBoundaryDirichlet(Index i) const override;
+
+	double ParticleSourceStrength, ParticleSourceCenter,
+		jRadial, ParticleSourceWidth, UniformHeatSource;
 
 	// Reference Values
 	constexpr static double ElectronMass = 9.1094e-31;		   // Electron Mass, kg

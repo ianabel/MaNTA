@@ -10,10 +10,10 @@ class CylindricalMagneticField():
         self.Rm0 = Rm0
         f = toml.load(config)
 
-        self.Ri = 0.9*np.sqrt(f["configuration"]["Lower_boundary"]/np.pi)
-        self.Ro = 1.1*np.sqrt(f["configuration"]["Upper_boundary"]/np.pi)
+        self.Ri = 0.5*np.sqrt(f["configuration"]["Lower_boundary"]/np.pi)
+        self.Ro = 1.5*np.sqrt(f["configuration"]["Upper_boundary"]/np.pi)
 
-        self.m = -0.2*self.B0/(2*(self.Ro-self.Ri))
+        self.m = -0.1*self.B0/(2*(self.Ro-self.Ri))
 
         self.R = np.linspace(self.Ri,self.Ro,nPoints)
         

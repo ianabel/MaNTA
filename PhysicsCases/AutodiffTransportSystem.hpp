@@ -29,7 +29,7 @@ public:
 	virtual Value InitialValue(Index i, Position x) const override;
 	virtual Value InitialDerivative(Index i, Position x) const override;
 
-	virtual autodiff::dual2nd InitialFunction(Index i, autodiff::dual2nd x, autodiff::dual2nd t, double u_R, double u_L, double x_L, double x_R) const;
+	virtual autodiff::dual2nd InitialFunction(Index i, autodiff::dual2nd x, autodiff::dual2nd t) const;
 
 protected:
 	Position xR, xL;

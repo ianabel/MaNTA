@@ -110,46 +110,49 @@ void AutodiffTransportSystem::dSources_dsigma(Index i, Values &grad, const State
 // and initial conditions for u & q
 Value AutodiffTransportSystem::InitialValue(Index i, Position x) const
 {
-	return InitialFunction(i, x, 0.0, UpperBoundary(i, 0.0), LowerBoundary(i, 0.0), xL, xR).val.val;
+	return InitialFunction(i, x, 0.0).val.val;
 }
 
 Value AutodiffTransportSystem::InitialDerivative(Index i, Position x) const
 {
 	dual2nd pos = x;
 	dual2nd t = 0.0;
-	auto InitialValueFn = [this](Index j, dual2nd X, dual2nd T, double uR, double uL, double x_L, double x_R)
+	auto InitialValueFn = [this](Index j, dual2nd X, dual2nd T)
 	{
-		return InitialFunction(j, X, T, uR, uL, x_L, x_R);
+		return InitialFunction(j, X, T);
 	};
-	double deriv = derivative(InitialValueFn, wrt(pos), at(i, pos, t, UpperBoundary(i, 0.0), LowerBoundary(i, 0.0), xL, xR));
+	double deriv = derivative(InitialValueFn, wrt(pos), at(i, pos, t));
 	return deriv;
 }
 
-dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t, double u_R, double u_L, double x_L, double x_R) const
+dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t) const
 {
 	dual2nd a, b, c, d;
 	dual2nd u = 0;
 	dual2nd v = 0;
-	dual2nd xMid = 0.5 * (x_R + x_L);
-	double m = (u_L - u_R) / (x_L - x_R);
-	double shape = 5; // 10 / (x_R - x_L) * ::log(10);
+	dual2nd xMid = 0.5 * (xR + xL);
+	double u_L = uL[i];
+	double u_R = uR[i];
+	double m = (u_L - u_R) / (xL - xR);
+	double shape = 5; // 10 / (xR - xL) * ::log(10);
+
 	switch (InitialProfile[i])
 	{
 	case ProfileType::Gaussian:
-		u = u_L + InitialHeights[i] * (exp(-(x - xMid) * (x - xMid) * shape) - exp(-(x_L - xMid) * (x_L - xMid) * shape));
+		u = u_L + InitialHeights[i] * (exp(-(x - xMid) * (x - xMid) * shape) - exp(-(xL - xMid) * (xL - xMid) * shape));
 		break;
 	case ProfileType::Cosine:
-		u = u_L + m * (x - x_L) + InitialHeights[i] * cos(M_PI * (x - xMid) / (x_R - x_L));
+		u = u_L + m * (x - xL) + InitialHeights[i] * cos(M_PI * (x - xMid) / (xR - xL));
 		break;
 	case ProfileType::CosineSquared:
-		v = cos(M_PI * (x - xMid) / (x_R - x_L));
-		u = u_L + m * (x - x_L) + InitialHeights[i] * v * v;
+		v = cos(M_PI * (x - xMid) / (xR - xL));
+		u = u_L + m * (x - xL) + InitialHeights[i] * v * v;
 		break;
 	case ProfileType::Uniform:
 		u = u_L;
 		break;
 	case ProfileType::Linear:
-		u = u_L + m * (x - x_L);
+		u = u_L + m * (x - xL);
 		break;
 	default:
 		break;

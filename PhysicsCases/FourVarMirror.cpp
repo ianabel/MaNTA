@@ -5,12 +5,26 @@
 
 REGISTER_PHYSICS_IMPL(FourVarMirror);
 
+const double n_mid = 0.25;
+const double n_edge = 0.05;
+const double T_mid = 0.2, T_edge = 0.1;
+
+const double omega_edge = 0.1, omega_mid = 1.0;
+
 enum
 {
     None = 0,
     Gaussian = 1,
     Uniform = 2,
     GaussianEdge = 3,
+};
+
+enum Channel : Index
+{
+    Density = 0,
+    ElectronEnergy = 1,
+    IonEnergy = 2,
+    AngularMomentum = 3,
 };
 
 template <typename T>
@@ -22,6 +36,9 @@ int sgn(T val)
 FourVarMirror::FourVarMirror(toml::value const &config, Grid const &grid)
     : AutodiffTransportSystem(config, grid, 4, 0)
 {
+    uL.resize(nVars);
+    uR.resize(nVars);
+
     if (config.count("4VarMirror") != 1)
         throw std::invalid_argument("There should be a [4VarMirror] section if you are using the 4VarMirror physics model.");
 
@@ -34,6 +51,9 @@ FourVarMirror::FourVarMirror(toml::value const &config, Grid const &grid)
     sourceCenter = toml::find_or(DiffConfig, "SourceCenter", 0.25);
     sourceWidth = toml::find_or(DiffConfig, "SourceWidth", 0.01);
 
+    DragFactor = toml::find_or(DiffConfig, "DragFactor", 1.0);
+    DragWidth = toml::find_or(DiffConfig, "DragWidth", 0.01);
+
     includeParallelLosses = toml::find_or(DiffConfig, "includeParallelLosses", false);
     includeAlphas = toml::find_or(DiffConfig, "includeAlphas", false);
     includeRadiation = toml::find_or(DiffConfig, "includeRadiation", false);
@@ -45,15 +65,15 @@ FourVarMirror::FourVarMirror(toml::value const &config, Grid const &grid)
     Rmax = toml::find_or(DiffConfig, "Rmax", 1.0);
 
     // reference values
-    n0 = toml::find_or(DiffConfig, "n0", 3e19);
+    n0 = toml::find_or(DiffConfig, "n0", 1e20);
     T0 = e_charge * toml::find_or(DiffConfig, "T0", 1e3);
-    Bmid = toml::find_or(DiffConfig, "Bmid", 1.0);
+    Bmid = toml::find_or(DiffConfig, "Bmid", 4.5);
     double Rm = toml::find_or(DiffConfig, "Rm", 3.3);
     Bmax = Bmid.val * Rm;
     //   E0 = toml::find_or(DiffConfig, "E0", 1e5);
     L = toml::find_or(DiffConfig, "L", 1.0);
     J0 = toml::find_or(DiffConfig, "J0", 0.01);
-
+    // normalization values
     p0 = n0 * T0;
 
     Gamma0 = (p0 / L) / (electronMass * Om_e(Bmid) * Om_e(Bmid) * tau_e(n0, p0));
@@ -63,15 +83,72 @@ FourVarMirror::FourVarMirror(toml::value const &config, Grid const &grid)
     taui0 = tau_i(n0, p0);
 
     h0 = ionMass * n0 * L * L * omega0;
+
+    nEdge = toml::find_or(DiffConfig, "EdgeDensity", n_edge);
+    TeEdge = toml::find_or(DiffConfig, "EdgeElectronTemperature", T_edge);
+    TiEdge = toml::find_or(DiffConfig, "EdgeIonTemperature", T_edge);
+    MEdge = toml::find_or(DiffConfig, "EdgeMachNumber", omega_edge);
+
+    InitialPeakDensity = toml::find_or(DiffConfig, "InitialDensity", n_mid);
+    InitialPeakTe = toml::find_or(DiffConfig, "InitialElectronTemperature", T_mid);
+    InitialPeakTi = toml::find_or(DiffConfig, "InitialIonTemperature", T_mid);
+    InitialPeakMachNumber = toml::find_or(DiffConfig, "InitialMachNumber", omega_mid);
+
+    ParallelLossFactor = toml::find_or(DiffConfig, "ParallelLossFactor", 1.0);
+    DragFactor = toml::find_or(DiffConfig, "DragFactor", 1.0);
+    DragWidth = toml::find_or(DiffConfig, "DragWidth", 0.01);
+
+    double Omega_Lower = sqrt(TeEdge) * MEdge / Rmin;
+    double Omega_Upper = sqrt(TeEdge) * MEdge / Rmax;
+
+    uL[Channel::Density] = nEdge;
+    uR[Channel::Density] = nEdge;
+    uL[Channel::IonEnergy] = nEdge * TiEdge;
+    uR[Channel::IonEnergy] = nEdge * TiEdge;
+    uL[Channel::ElectronEnergy] = nEdge * TeEdge;
+    uR[Channel::ElectronEnergy] = nEdge * TeEdge;
+    uL[Channel::AngularMomentum] = Omega_Lower * nEdge * Rmin * Rmin;
+    uR[Channel::AngularMomentum] = Omega_Upper * nEdge * Rmax * Rmax;
 };
 
-enum Channel : Index
+Real2nd FourVarMirror::InitialFunction(Index i, Real2nd V, Real2nd t) const
 {
-    Density = 0,
-    ElectronEnergy = 1,
-    IonEnergy = 2,
-    AngularMomentum = 3,
-};
+    Real2nd Rval = sqrt(V / (M_PI * L));
+    Real2nd R_mid = (Rmin + Rmax) / 2.0;
+
+    Real2nd nMid = InitialPeakDensity;
+    Real2nd TeMid = InitialPeakTe;
+    Real2nd TiMid = InitialPeakTi;
+    Real2nd MMid = InitialPeakMachNumber;
+
+    Real2nd v = cos(pi * (Rval - R_mid) / (Rmax - Rmin));
+
+    Real2nd n = nEdge + (nMid - nEdge) * v * v;
+    Real2nd Te = TeEdge + (TeMid - TeEdge) * v * v;
+    Real2nd Ti = TiEdge + (TiMid - TiEdge) * v * v;
+
+    Real2nd M = MEdge + (MMid - MEdge) * v * v * v;
+    Real2nd omega = sqrt(Te) * M / Rval;
+
+    Channel c = static_cast<Channel>(i);
+    switch (c)
+    {
+    case Channel::Density:
+        return n;
+        break;
+    case Channel::ElectronEnergy:
+        return n * Te;
+        break;
+    case Channel::IonEnergy:
+        return n * Ti;
+        break;
+    case Channel::AngularMomentum:
+        return omega * n * Rval * Rval;
+        break;
+    default:
+        throw std::runtime_error("Request for initial value for undefined variable!");
+    }
+}
 
 Real FourVarMirror::Flux(Index i, RealVector u, RealVector q, Position x, Time t)
 {
@@ -117,6 +194,93 @@ Real FourVarMirror::Source(Index i, RealVector u, RealVector q, RealVector sigma
     }
 }
 
+// Function for passing boundary conditions to the solver
+Value FourVarMirror::LowerBoundary(Index i, Time t) const
+{
+    Channel c = static_cast<Channel>(i);
+    switch (c)
+    {
+    case Channel::Density:
+        return uL[Channel::Density];
+        break;
+    case Channel::IonEnergy:
+        return uL[Channel::IonEnergy];
+        break;
+    case Channel::ElectronEnergy:
+        return uL[Channel::ElectronEnergy];
+        break;
+    case Channel::AngularMomentum:
+        return 0.0;
+        break;
+    default:
+        throw std::runtime_error("Request for boundary condition for undefined variable!");
+    }
+}
+Value FourVarMirror::UpperBoundary(Index i, Time t) const
+{
+    Channel c = static_cast<Channel>(i);
+    switch (c)
+    {
+    case Channel::Density:
+        return uR[Channel::Density];
+        break;
+    case Channel::IonEnergy:
+        return uR[Channel::IonEnergy];
+        break;
+    case Channel::ElectronEnergy:
+        return uR[Channel::ElectronEnergy];
+        break;
+    case Channel::AngularMomentum:
+        return 0.0;
+        break;
+    default:
+        throw std::runtime_error("Request for boundary condition for undefined variable!");
+    }
+}
+
+bool FourVarMirror::isLowerBoundaryDirichlet(Index i) const
+{
+    Channel c = static_cast<Channel>(i);
+    switch (c)
+    {
+    case Channel::Density:
+        return true;
+        break;
+    case Channel::IonEnergy:
+        return true;
+        break;
+    case Channel::ElectronEnergy:
+        return true;
+        break;
+    case Channel::AngularMomentum:
+        return false;
+        break;
+    default:
+        return true;
+    }
+}
+bool FourVarMirror::isUpperBoundaryDirichlet(Index i) const
+{
+    Channel c = static_cast<Channel>(i);
+    switch (c)
+    {
+    case Channel::Density:
+        return true;
+        break;
+    case Channel::IonEnergy:
+        return true;
+        break;
+    case Channel::ElectronEnergy:
+        return true;
+        break;
+    case Channel::AngularMomentum:
+        return false;
+        break;
+    default:
+        return true;
+    }
+}
+
 Real FourVarMirror::Gamma_hat(RealVector u, RealVector q, Real x, double t)
 {
 
@@ -141,9 +305,9 @@ Real FourVarMirror::hi_hat(RealVector u, RealVector q, Real x, double t)
     Real dV = u(3) / u(0) * (q(3) / u(3) - q(0) / u(0) - 1 / (M_PI * Rval * Rval));
     Real ghi = ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(2)) * lambda_hat(u(0), u(1), n0, p0)) * 3. / 10. * u(2) * dV;
     Real H = u(3) * G / u(0) + coef * ghi;
-    if (H != H)
+    if (!std::isfinite(H.val))
     {
-        return 0.0;
+        throw std::logic_error("Ion momentum flux returned Inf or NaN");
     }
     else
     {
@@ -159,14 +323,12 @@ Real FourVarMirror::qi_hat(RealVector u, RealVector q, Real x, double t)
     // Real G = Gamma_hat(u, q, x, t);
     Real qri = ::sqrt(ionMass / (2 * electronMass)) * 1.0 / (tau_hat(u(0), u(2)) * lambda_hat(u(0), u(1), n0, p0)) * 2. * u(2) * u(2) / u(0) * (q(2) / u(2) - q(0) / u(0));
     Real Q = (2. / 3.) * (coef * qri); // + 5. / 2. * u(2) / u(0) * G);
-    if ((Q != Q))
+    if (!std::isfinite(Q.val))
     {
-        //  std::cout << Q << std::endl;
-        return 0.0;
+        throw std::logic_error("Ion heat flux returned Inf or NaN");
     }
     else
     {
-        // std::cout << sgn(q(2).val) << std::endl;
         return Q;
     }
     // return 0.0;
@@ -178,16 +340,17 @@ Real FourVarMirror::qe_hat(RealVector u, RealVector q, Real x, double t)
     double Vpval = Vprime(Rval);
     double coef = Rval * Rval * Vpval * Vpval;
     // Real G = Gamma_hat(u, q, x, t);
-    Real qre = 1.0 / tau_hat(u(0), u(1)) * (4.66 * u(1) * u(1) / u(0) * (q(1) / u(1) - q(0) / u(0)) - (3. / 2.) * u(1) / u(0) * (q(2) + q(1)));
+    Real qre = 1.0 / (tau_hat(u(0), u(1)) * lambda_hat(u(0), u(1), n0, p0)) * (4.66 * u(1) * u(1) / u(0) * (q(1) / u(1) - q(0) / u(0)) - (3. / 2.) * u(1) / u(0) * (q(2) + q(1)));
 
     Real Q = (2. / 3.) * (coef * qre); // + 5. / 2. * u(1) / u(0) * G + coef * qre);
-    if (Q != Q)
+    if (!std::isfinite(Q.val))
     {
-        return 0.0;
+        throw std::logic_error("Electron heat flux returned Inf or NaN");
     }
     else
-
+    {
         return Q;
+    }
 };
 
 Real FourVarMirror::Sn_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t)
@@ -213,6 +376,13 @@ Real FourVarMirror::Sn_hat(RealVector u, RealVector q, RealVector sigma, Real x,
         Real loss = PastukhovLoss(u(0), u(1), Xe, Rm);
         Spast = coef * loss;
     }
+    S = ParticleSourceFn(x, t);
+    return (S - Sfus + Spast);
+};
+
+Real FourVarMirror::ParticleSourceFn(Real x, double t)
+{
+    Real S;
     switch (ParticleSource)
     {
     case None:
@@ -222,16 +392,19 @@ Real FourVarMirror::Sn_hat(RealVector u, RealVector q, RealVector sigma, Real x,
         break;
     case Uniform:
         S = sourceStrength;
+        break;
     case GaussianEdge:
     {
         Real Rval = R(x.val, t);
         S = sourceStrength * (exp(-1 / sourceWidth * (Rval - Rmin) * (Rval - Rmin)) + exp(-1 / sourceWidth * (Rval - Rmax) * (Rval - Rmax)));
-    }
-    default:
         break;
     }
-    return (S - Sfus + Spast);
-};
+    default:
+        S = 0.0;
+        break;
+    }
+    return S;
+}
 
 Real FourVarMirror::Shi_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t)
 {
@@ -244,9 +417,13 @@ Real FourVarMirror::Shi_hat(RealVector u, RealVector q, RealVector sigma, Real x
     }
     double Rval = R(x.val, t);
     Real coef = L / (h0 * V0);
-    double c = 0.5 * (Rmin + Rmax);
+
+    Real omega = u(Channel::AngularMomentum) / u(Channel::Density) * 1 / (Rval * Rval);
+    double shape = 1 / DragWidth;
+    Real Drag = Rval * Rval * Rval * omega * omega * DragFactor * (exp(-shape * (Rval - Rmin) * (Rval - Rmin)) + exp(-shape * (Rval - Rmax) * (Rval - Rmax)));
+
     Real S = (J0 / Rval) * coef * B(x.val, t) * Rval * Rval;
-    return S + Spast; // 100 * Sn_hat(u, q, sigma, x, t); //+ u(3) / (u(0) * Rval * Rval) * Sn_hat(u, q, sigma, x, t);
+    return S + Spast - Drag; // 100 * Sn_hat(u, q, sigma, x, t); //+ u(3) / (u(0) * Rval * Rval) * Sn_hat(u, q, sigma, x, t);
 };
 
 // look at ion and electron sources again -- they should be opposite
@@ -268,19 +445,22 @@ Real FourVarMirror::Spi_hat(RealVector u, RealVector q, RealVector sigma, Real x
     double Rval = R(x.val, t);
     double Vpval = Vprime(Rval);
     double coef = Vpval * Vpval * Rval * Rval * Rval * Rval;
-
+    // double shape = 1e-3;
+    // Real ZeroEdge = 1 - (exp(-shape * (Rval - Rmin) * (Rval - Rmin)) + exp(-shape * (Rval - Rmax) * (Rval - Rmax)));
     Real dV = u(3) / u(0) * (q(3) / u(3) - q(0) / u(0) - 1 / (M_PI * Rval * Rval));
     Real ghi = ::pow(ionMass / electronMass, 1. / 2.) * 1.0 / (::sqrt(2) * tau_hat(u(0), u(2)) * lambda_hat(u(0), u(1), n0, p0)) * 3. / 10. * u(2);
     Pvis = ghi * dV * dV * coef;
 
-    Real G = sigma(0); //-Gamma_hat(u, q, x, t);
-    // sigma(0);
-    //  Gamma_hat(u, q, x, t); // sigma(0); // / (coef);
-    Real omega = u(3) / u(0) * 1 / (Rval * Rval);
+    Real J = u(0) * Rval * Rval; // Normalisation includes the m_i
+    Real L = u(Channel::AngularMomentum);
+    Real omega = L / J;
+    Real ParticleSourceHeating = .5 * omega * omega * Rval * Rval * ParticleSourceFn(Rval, t);
+
+    Real G = sigma(0);
     Ppot = -G * dphi0dV(u, q, x, t) + 0.5 * (pow(omega, 2) / M_PI) * G;
 
     Real Pcol = Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
-    Real S = (2. / 3.) * (Ppot + Pcol + Pvis + Ppast);
+    Real S = (2. / 3.) * (Ppot + Pcol + Pvis + Ppast + ParticleSourceHeating);
 
     if (S != S)
         throw std::logic_error("Error compution ion heating sources");
@@ -320,8 +500,13 @@ Real FourVarMirror::Spe_hat(RealVector u, RealVector q, RealVector sigma, Real x
         // 1e-6 * n0 * n0 * R * u(0) * u(0);
         Pfus = 0.25 * sqrt(1 - 1 / Rm) * 1e6 * 5.6e-13 * n * n * 1e-12 * R; // n *n * 5.6e-13
     }
+    Real Rval = R(x.val, t);
+    Real J = u(0) * Rval * Rval; // Normalisation includes the m_i
+    Real L = u(Channel::AngularMomentum);
+    Real omega = L / J;
+    Real ParticleSourceHeating = electronMass / ionMass * .5 * omega * omega * Rval * Rval * ParticleSourceFn(Rval, t);
     Real Pcol = Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
-    Real S = 2. / 3. * (Pcol + Ppast + L / (p0 * V0) * (Pfus + Pbrem));
+    Real S = 2. / 3. * (Pcol + Ppast + ParticleSourceHeating + L / (p0 * V0) * (Pfus + Pbrem));
 
     if (S != S)
         throw std::logic_error("Error computing the electron heating sources");
@@ -335,7 +520,7 @@ Real FourVarMirror::phi0(RealVector u, RealVector q, Real x, double t)
     double Rval = R(x.val, t);
     Real Rm = Bmax / Bmid.val;
     Real Romega = u(3) / (u(0) * Rval);
-    Real tau = u(2) / u(0);
+    Real tau = u(2) / u(1);
     Real phi0 = 1 / (1 + tau) * (1 / Rm - 1) * Romega * Romega / 2;
     // Real phi0 = u(3) * u(3) / (2 * u(2) * u(0) * u(0) * Rval * Rval) * 1 / (1 / u(2) + 1 / u(1));
     return phi0;
@@ -377,7 +562,7 @@ Real FourVarMirror::Chi_i(RealVector u, RealVector q, Real x, double t)
     Real Rm = Bmax / B(x.val, t);
     Real tau = u(2) / u(1);
     Real omega = u(3) / u(0) * 1 / (Rval * Rval);
-    Real M2 = Rval * Rval * pow(omega, 2) * u(0) / u(2);
+    Real M2 = Rval * Rval * pow(omega, 2) * u(0) / u(1);
     return 0.5 * tau / (1 + tau) * (1 - 1 / Rm) * M2;
 }
 
@@ -403,29 +588,29 @@ double FourVarMirror::B(double x, double t)
     return Bmid.val * (1 + BfieldSlope * (Rval - Rmin));
 }
 
-double FourVarMirror::R(double x, double t)
+double FourVarMirror::R(double x, double t) const
 {
-    // return sqrt(x / (M_PI * L));
-    using boost::math::tools::bracket_and_solve_root;
-    using boost::math::tools::eps_tolerance;
-    double guess = 0.5; // Rough guess is to divide the exponent by three.
-    // double min = Rmin;                                      // Minimum possible value is half our guess.
-    // double max = Rmax;                                      // Maximum possible value is twice our guess.
-    const int digits = std::numeric_limits<double>::digits; // Maximum possible binary digits accuracy for type T.
-    int get_digits = static_cast<int>(digits * 0.6);        // Accuracy doubles with each step, so stop when we have
-                                                            // just over half the digits correct.
-    double factor = 2;
-    bool is_rising = true;
-    auto getPair = [this](double x, double R)
-    { return this->V(R) - x; }; // change to V(psi(R))
+    return sqrt(x / (M_PI * L));
+    // using boost::math::tools::bracket_and_solve_root;
+    // using boost::math::tools::eps_tolerance;
+    // double guess = 0.5; // Rough guess is to divide the exponent by three.
+    // // double min = Rmin;                                      // Minimum possible value is half our guess.
+    // // double max = Rmax;                                      // Maximum possible value is twice our guess.
+    // const int digits = std::numeric_limits<double>::digits; // Maximum possible binary digits accuracy for type T.
+    // int get_digits = static_cast<int>(digits * 0.6);        // Accuracy doubles with each step, so stop when we have
+    //                                                         // just over half the digits correct.
+    // double factor = 2;
+    // bool is_rising = true;
+    // auto getPair = [this](double x, double R)
+    // { return this->V(R) - x; }; // change to V(psi(R))
 
-    auto func = std::bind_front(getPair, x);
-    eps_tolerance<double> tol(get_digits);
+    // auto func = std::bind_front(getPair, x);
+    // eps_tolerance<double> tol(get_digits);
 
-    const boost::uintmax_t maxit = 20;
-    boost::uintmax_t it = maxit;
-    std::pair<double, double> r = bracket_and_solve_root(func, guess, factor, is_rising, tol, it);
-    return r.first + (r.second - r.first) / 2;
+    // const boost::uintmax_t maxit = 20;
+    // boost::uintmax_t it = maxit;
+    // std::pair<double, double> r = bracket_and_solve_root(func, guess, factor, is_rising, tol, it);
+    // return r.first + (r.second - r.first) / 2;
 };
 
 void FourVarMirror::initialiseDiagnostics(NetCDFIO &nc)
