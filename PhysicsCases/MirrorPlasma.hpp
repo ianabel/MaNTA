@@ -38,6 +38,7 @@ private:
 		AngularMomentum = 3
 	};
 	std::map<std::string, Index> ChannelMap = {{"Density", Channel::Density}, {"IonEnergy", Channel::IonEnergy}, {"ElectronEnergy", Channel::ElectronEnergy}, {"AngularMomentum", Channel::AngularMomentum}};
+	std::map<std::string, bool> ConstantChannelMap = {{"Density", false}, {"IonEnergy", false}, {"ElectronEnergy", false}, {"AngularMomentum", false}};
 
 	enum ParticleSourceType
 	{

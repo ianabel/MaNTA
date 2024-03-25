@@ -34,12 +34,16 @@ public:
 protected:
 	Position xR, xL;
 	std::vector<Index> ConstantProfiles;
-	int nConstantProfiles;
+	int nConstantProfiles = 0;
+	Index getConstantI(Index i) const;
 
 private:
 	// API to underlying flux model
 	virtual Real Flux(Index, RealVector, RealVector, Position, Time) = 0;
 	virtual Real Source(Index, RealVector, RealVector, RealVector, Position, Time) = 0;
+
+	void InsertConstantValues(Index i, RealVector &u, RealVector &q, Position x);
+	void RemoveConstantValues(Values &v);
 
 	enum class ProfileType
 	{

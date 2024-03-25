@@ -35,6 +35,7 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
 		for (auto &p : constProfiles)
 		{
 			ConstantProfiles.push_back(ChannelMap[p]);
+			ConstantChannelMap[p] = true;
 		}
 		nConstantProfiles = ConstantProfiles.size();
 
@@ -719,134 +720,121 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
 	double TauNorm = (IonMass / ElectronMass) * (1.0 / (RhoStar * RhoStar)) * (ReferenceElectronCollisionTime());
 	nc.AddScalarVariable("Tau", "Normalising time", "s", TauNorm);
 
-	auto initialL = [this](double V)
-	{ return InitialValue(Channel::AngularMomentum, V); };
-	auto initialn = [this](double V)
-	{ return InitialValue(Channel::Density, V); };
+	auto getConstI = [this](int c)
+	{
+		for (auto &constI : ConstantProfiles)
+		{
+			if (c > constI)
+				c--;
+		};
+		return c;
+	};
+	auto L = [this, &getConstI](double V)
+	{
+		int i = getConstI(Channel::AngularMomentum);
+		return InitialValue(i, V);
+	};
+	auto LPrime = [this, &getConstI](double V)
+	{
+		int i = getConstI(Channel::AngularMomentum);
+		return InitialDerivative(i, V);
+	};
+	auto n = [this, &getConstI](double V)
+	{
+		int i = getConstI(Channel::Density);
+		return InitialValue(i, V);
+	};
+	auto nPrime = [this, &getConstI](double V)
+	{
+		int i = getConstI(Channel::Density);
+		return InitialDerivative(i, V);
+	};
+	auto p_i = [this, &getConstI](double V)
+	{
+		int i = getConstI(Channel::IonEnergy);
+		return (2. / 3.) * InitialValue(i, V);
+	};
+	auto p_e = [this, &getConstI](double V)
+	{
+		int i = getConstI(Channel::ElectronEnergy);
+		return (2. / 3.) * InitialValue(i, V);
+	};
 
-	double initialVoltage = Voltage(initialL, initialn);
+	double initialVoltage = Voltage(L, n);
 
 	const std::function<double(const double &)> initialZero = [](const double &V)
 	{ return 0.0; };
 
 	// Wrap DGApprox with lambdas for heating functions
-	Fn ViscousHeating = [this](double V)
+	Fn ViscousHeating = [this, &n, &nPrime, &L, &LPrime, &p_i](double V)
 	{
-		Real n = InitialValue(Channel::Density, V), p_i = (2. / 3.) * InitialValue(Channel::IonEnergy, V);
-		Real L = InitialValue(Channel::AngularMomentum, V);
-		Real Ti = p_i / n;
+		Real Ti = p_i(V) / n(V);
 		double R = this->B->R_V(V);
-		Real J = n * R * R; // Normalisation includes the m_i
-		Real nPrime = InitialDerivative(Channel::Density, V);
+		Real J = n(V) * R * R; // Normalisation includes the m_i
 		double dRdV = B->dRdV(V);
-		Real JPrime = R * R * nPrime + 2.0 * dRdV * R * n;
-		Real LPrime = InitialDerivative(Channel::AngularMomentum, V);
-		Real dOmegadV = LPrime / J - JPrime * L / (J * J);
+		Real JPrime = R * R * nPrime(V) + 2.0 * dRdV * R * n(V);
+		Real dOmegadV = LPrime(V) / J - JPrime * L(V) / (J * J);
 
-		double Heating = this->IonClassicalAngularMomentumFlux(V, n, Ti, dOmegadV, 0.0).val * dOmegadV.val;
-		return Heating;
+		try
+		{
+			double Heating = this->IonClassicalAngularMomentumFlux(V, n(V), Ti, dOmegadV, 0).val * dOmegadV.val;
+			return Heating;
+		}
+		catch (...)
+		{
+			return 0.0;
+		};
 	};
 
-	Fn AlphaHeating = [this](double V)
+	Fn AlphaHeating = [this, &n, &p_i](double V)
 	{
-		Real n = InitialValue(Channel::Density, V), p_i = (2. / 3.) * InitialValue(Channel::IonEnergy, V);
 		double MirrorRatio = this->B->MirrorRatio(V);
 
-		double Heating = sqrt(1 - 1 / MirrorRatio) * this->TotalAlphaPower(n, p_i).val;
+		double Heating = sqrt(1 - 1 / MirrorRatio) * this->TotalAlphaPower(n(V), p_i(V)).val;
 		return Heating;
 	};
 
-	Fn RadiationLosses = [this](double V)
+	Fn RadiationLosses = [this, &n, &p_e](double V)
 	{
-		Real n = InitialValue(Channel::Density, V), p_e = (2. / 3.) * InitialValue(Channel::ElectronEnergy, V);
-		double Losses = this->BremsstrahlungLosses(n, p_e).val;
+		double Losses = this->BremsstrahlungLosses(n(V), p_e(V)).val;
 
 		return Losses;
 	};
 
-	Fn ParallelLosses = [this](double V)
+	Fn ParallelLosses = [this, &n, &p_i, &p_e, &L](double V)
 	{
-		Real n = InitialValue(Channel::Density, V), p_i = (2. / 3.) * InitialValue(Channel::IonEnergy, V), p_e = (2. / 3.) * InitialValue(Channel::ElectronEnergy, V);
-		Real L = InitialValue(Channel::AngularMomentum, V);
-		Real Ti = p_i / n;
-		Real Te = p_e / n;
+		Real Ti = p_i(V) / n(V);
+		Real Te = p_e(V) / n(V);
 
 		double R = this->B->R_V(V);
-		Real J = n * R * R; // Normalisation includes the m_i
+		Real J = n(V) * R * R; // Normalisation includes the m_i
 
-		Real omega = L / J;
+		Real omega = L(V) / J;
 
 		Real Xe = Xi_e(V, omega, Ti, Te);
 
-		double ParallelLosses = ElectronPastukhovLossRate(V, Xe, n, Te).val / ParallelLossFactor;
+		double ParallelLosses = ElectronPastukhovLossRate(V, Xe, n(V), Te).val / ParallelLossFactor;
 
 		return ParallelLosses;
 	};
 
-	Fn Phi0 = [this](double V)
+	Fn Phi0 = [this, &n, &p_i, &p_e, &L](double V)
 	{
-		Real n = InitialValue(Channel::Density, V), p_i = (2. / 3.) * InitialValue(Channel::IonEnergy, V), p_e = (2. / 3.) * InitialValue(Channel::ElectronEnergy, V);
-		Real L = InitialValue(Channel::AngularMomentum, V);
-		Real Ti = p_i / n;
-		Real Te = p_e / n;
+		Real Ti = p_i(V) / n(V);
+		Real Te = p_e(V) / n(V);
 
 		double R = this->B->R_V(V);
-		Real J = n * R * R; // Normalisation includes the m_i
+		Real J = n(V) * R * R; // Normalisation includes the m_i
 
-		Real omega = L / J;
+		Real omega = L(V) / J;
 
 		double Phi0 = Xi_i(V, omega, Ti, Te).val;
 
 		return Phi0;
 	};
 
-	Fn IonMomentumParticleFlux = [this](double V)
-	{
-		Real n = InitialValue(Channel::Density, V);
-		// dOmega dV = L'/J - J' L / J^2 ; L = angular momentum / J = moment of Inertia
-		double R = B->R_V(V);
-
-		Real J = n * R * R; // Normalisation includes the m_i
-
-		Real L = InitialValue(Channel::AngularMomentum, V);
-		Real omega = L / J;
-
-		RealVector u(4);
-		RealVector q(4);
-		for (int i = Channel::Density; i <= Channel::AngularMomentum; ++i)
-		{
-			u[i] = InitialValue(i, V);
-			q[i] = InitialDerivative(i, V);
-		};
-
-		Real Pi_v = omega * R * R * Gamma(u, q, V, 0.0);
-		return Pi_v.val;
-	};
-
-	Fn IonMomentumFlux = [this](double V)
-	{
-		Real n = InitialValue(Channel::Density, V), p_i = (2. / 3.) * InitialValue(Channel::IonEnergy, V);
-		Real Ti = p_i / n;
-		// dOmega dV = L'/J - J' L / J^2 ; L = angular momentum / J = moment of Inertia
-		double R = B->R_V(V);
-
-		Real J = n * R * R; // Normalisation includes the m_i
-		Real nPrime = InitialDerivative(Channel::Density, V);
-		double dRdV = B->dRdV(V);
-		Real JPrime = R * R * nPrime + 2.0 * dRdV * R * n;
-
-		Real L = InitialValue(Channel::AngularMomentum, V);
-		Real LPrime = InitialDerivative(Channel::AngularMomentum, V);
-		Real dOmegadV = LPrime / J - JPrime * L / (J * J);
-
-		Real Pi_v = IonClassicalAngularMomentumFlux(V, n, Ti, dOmegadV, 0.0);
-		return Pi_v.val;
-	};
-
 	nc.AddTimeSeries("Voltage", "Total voltage drop across the plasma", "Volts", initialVoltage);
 	nc.AddGroup("MomentumFlux", "Separating momentum fluxes");
-	nc.AddVariable("MomentumFlux", "ClassicalFlux", "Classical momentum flux", "-", IonMomentumFlux);
-	nc.AddVariable("MomentumFlux", "ParticleFlux", "Motion of particles", "-", IonMomentumParticleFlux);
 	nc.AddGroup("ParallelLosses", "Separated parallel losses");
 	nc.AddVariable("ParallelLosses", "ParLoss", "Parallel particle losses", "-", ParallelLosses);
 	nc.AddVariable("ParallelLosses", "CentrifugalPotential", "Centrifugal potential", "-", Phi0);
@@ -858,31 +846,80 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
 
 void MirrorPlasma::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
 {
-	auto L = [&y](double V)
-	{ return y.u(Channel::AngularMomentum)(V); };
-	auto n = [&y](double V)
-	{ return y.u(Channel::Density)(V); };
+	auto getConstI = [this](int c)
+	{
+		for (auto &constI : ConstantProfiles)
+		{
+			if (c > constI)
+				c--;
+		};
+		return c;
+	};
+	auto L = [this, &y, &getConstI](double V)
+	{
+		int i = getConstI(Channel::AngularMomentum);
+		if (ConstantChannelMap["AngularMomentum"])
+			return InitialValue(i, V);
+		else
+			return y.u(i)(V);
+	};
+	auto LPrime = [this, &y, &getConstI](double V)
+	{
+		int i = getConstI(Channel::AngularMomentum);
+		if (ConstantChannelMap["AngularMomentum"])
+			return InitialDerivative(i, V);
+		else
+			return y.q(i)(V);
+	};
+	auto n = [this, &y, &getConstI](double V)
+	{
+		int i = getConstI(Channel::Density);
+		if (ConstantChannelMap["Density"])
+			return InitialValue(i, V);
+		else
+			return y.u(i)(V);
+	};
+	auto nPrime = [this, &y, &getConstI](double V)
+	{
+		int i = getConstI(Channel::Density);
+		if (ConstantChannelMap["Density"])
+			return InitialDerivative(i, V);
+		else
+			return y.q(i)(V);
+	};
+	auto p_i = [this, &y, &getConstI](double V)
+	{
+		int i = getConstI(Channel::IonEnergy);
+		if (ConstantChannelMap["IonEnergy"])
+			return (2. / 3.) * InitialValue(i, V);
+		else
+			return (2. / 3.) * y.u(i)(V);
+	};
+	auto p_e = [this, &y, &getConstI](double V)
+	{
+		int i = getConstI(Channel::ElectronEnergy);
+		if (ConstantChannelMap["ElectronEnergy"])
+			return (2. / 3.) * InitialValue(i, V);
+		else
+			return (2. / 3.) * y.u(i)(V);
+	};
 
 	double voltage = Voltage(L, n);
 	nc.AppendToTimeSeries("Voltage", voltage, tIndex);
 
 	// Wrap DGApprox with lambdas for heating functions
-	Fn ViscousHeating = [this, &y, &t](double V)
+	Fn ViscousHeating = [this, &n, &nPrime, &L, &LPrime, &p_i, &t](double V)
 	{
-		Real n = y.u(Channel::Density)(V), p_i = (2. / 3.) * y.u(Channel::IonEnergy)(V);
-		Real L = y.u(Channel::AngularMomentum)(V);
-		Real Ti = p_i / n;
+		Real Ti = p_i(V) / n(V);
 		double R = this->B->R_V(V);
-		Real J = y.u(Channel::Density)(V) * R * R; // Normalisation includes the m_i
-		Real nPrime = y.q(Channel::Density)(V);
+		Real J = n(V) * R * R; // Normalisation includes the m_i
 		double dRdV = B->dRdV(V);
-		Real JPrime = R * R * nPrime + 2.0 * dRdV * R * n;
-		Real LPrime = y.q(Channel::AngularMomentum)(V);
-		Real dOmegadV = LPrime / J - JPrime * L / (J * J);
+		Real JPrime = R * R * nPrime(V) + 2.0 * dRdV * R * n(V);
+		Real dOmegadV = LPrime(V) / J - JPrime * L(V) / (J * J);
 
 		try
 		{
-			double Heating = this->IonClassicalAngularMomentumFlux(V, n, Ti, dOmegadV, t).val * dOmegadV.val;
+			double Heating = this->IonClassicalAngularMomentumFlux(V, n(V), Ti, dOmegadV, t).val * dOmegadV.val;
 			return Heating;
 		}
 		catch (...)
@@ -891,112 +928,55 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_
 		};
 	};
 
-	Fn AlphaHeating = [this, &y](double V)
+	Fn AlphaHeating = [this, &n, &p_i](double V)
 	{
-		Real n = y.u(Channel::Density)(V), p_i = (2. / 3.) * y.u(Channel::IonEnergy)(V);
 		double MirrorRatio = this->B->MirrorRatio(V);
 
-		double Heating = sqrt(1 - 1 / MirrorRatio) * this->TotalAlphaPower(n, p_i).val;
+		double Heating = sqrt(1 - 1 / MirrorRatio) * this->TotalAlphaPower(n(V), p_i(V)).val;
 		return Heating;
 	};
 
-	Fn RadiationLosses = [this, &y](double V)
+	Fn RadiationLosses = [this, &n, &p_e](double V)
 	{
-		Real n = y.u(Channel::Density)(V), p_e = (2. / 3.) * y.u(Channel::ElectronEnergy)(V);
-		double Losses = this->BremsstrahlungLosses(n, p_e).val;
+		double Losses = this->BremsstrahlungLosses(n(V), p_e(V)).val;
 
 		return Losses;
 	};
 
-	Fn ParallelLosses = [this, &y](double V)
+	Fn ParallelLosses = [this, &n, &p_i, &p_e, &L](double V)
 	{
-		Real n = y.u(Channel::Density)(V), p_i = (2. / 3.) * y.u(Channel::IonEnergy)(V), p_e = (2. / 3.) * y.u(Channel::ElectronEnergy)(V);
-		Real L = y.u(Channel::AngularMomentum)(V);
-		Real Ti = p_i / n;
-		Real Te = p_e / n;
+		Real Ti = p_i(V) / n(V);
+		Real Te = p_e(V) / n(V);
 
 		double R = this->B->R_V(V);
-		Real J = y.u(Channel::Density)(V) * R * R; // Normalisation includes the m_i
+		Real J = n(V) * R * R; // Normalisation includes the m_i
 
-		Real omega = L / J;
+		Real omega = L(V) / J;
 
 		Real Xe = Xi_e(V, omega, Ti, Te);
 
-		double ParallelLosses = ElectronPastukhovLossRate(V, Xe, n, Te).val / ParallelLossFactor;
+		double ParallelLosses = ElectronPastukhovLossRate(V, Xe, n(V), Te).val / ParallelLossFactor;
 
 		return ParallelLosses;
 	};
 
-	Fn Phi0 = [this, &y](double V)
+	Fn Phi0 = [this, &n, &p_i, &p_e, &L](double V)
 	{
-		Real n = y.u(Channel::Density)(V), p_i = (2. / 3.) * y.u(Channel::IonEnergy)(V), p_e = (2. / 3.) * y.u(Channel::ElectronEnergy)(V);
-		Real L = y.u(Channel::AngularMomentum)(V);
-		Real Ti = p_i / n;
-		Real Te = p_e / n;
+		Real Ti = p_i(V) / n(V);
+		Real Te = p_e(V) / n(V);
 
 		double R = this->B->R_V(V);
-		Real J = y.u(Channel::Density)(V) * R * R; // Normalisation includes the m_i
+		Real J = n(V) * R * R; // Normalisation includes the m_i
 
-		Real omega = L / J;
+		Real omega = L(V) / J;
 
 		double Phi0 = Xi_i(V, omega, Ti, Te).val;
 
 		return Phi0;
 	};
 
-	Fn IonMomentumParticleFlux = [this, &y, &t](double V)
-	{
-		Real n = y.u(Channel::Density)(V);
-		// dOmega dV = L'/J - J' L / J^2 ; L = angular momentum / J = moment of Inertia
-		double R = B->R_V(V);
-
-		Real J = n * R * R; // Normalisation includes the m_i
-
-		Real L = y.u(Channel::AngularMomentum)(V);
-		Real omega = L / J;
-
-		RealVector u(4);
-		RealVector q(4);
-		for (int i = Channel::Density; i < Channel::AngularMomentum; ++i)
-		{
-			u[i] = y.u(i)(V);
-			q[i] = y.q(i)(V);
-		};
-
-		Real Pi_v = omega * R * R * Gamma(u, q, V, t);
-		return Pi_v.val;
-	};
-
-	Fn IonMomentumFlux = [this, &y, &t, &IonMomentumParticleFlux](double V)
-	{
-		Real n = y.u(Channel::Density)(V), p_i = (2. / 3.) * y.u(Channel::IonEnergy)(V);
-		Real Ti = p_i / n;
-		// dOmega dV = L'/J - J' L / J^2 ; L = angular momentum / J = moment of Inertia
-		double R = B->R_V(V);
-
-		Real J = n * R * R; // Normalisation includes the m_i
-		Real nPrime = y.q(Channel::Density)(V);
-		double dRdV = B->dRdV(V);
-		Real JPrime = R * R * nPrime + 2.0 * dRdV * R * n;
-
-		Real L = y.u(Channel::AngularMomentum)(V);
-		Real LPrime = y.q(Channel::AngularMomentum)(V);
-		Real dOmegadV = LPrime / J - JPrime * L / (J * J);
-		try
-		{
-			Real Pi_v = IonClassicalAngularMomentumFlux(V, n, Ti, dOmegadV, t);
-			return Pi_v.val;
-		}
-		catch (...)
-		{
-			return 0.0;
-		}
-	};
-
 	// Add the appends for the heating stuff
 	nc.AppendToGroup<Fn>("Heating", tIndex, {{"AlphaHeating", AlphaHeating}, {"ViscousHeating", ViscousHeating}, {"RadiationLosses", RadiationLosses}});
-
-	nc.AppendToGroup<Fn>("MomentumFlux", tIndex, {{"ClassicalFlux", IonMomentumFlux}, {"ParticleFlux", IonMomentumParticleFlux}});
 
 	nc.AppendToGroup<Fn>("ParallelLosses", tIndex, {{"ParLoss", ParallelLosses}, {"CentrifugalPotential", Phi0}});
 }
