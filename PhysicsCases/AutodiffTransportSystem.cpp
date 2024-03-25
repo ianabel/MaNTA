@@ -40,6 +40,20 @@ Value AutodiffTransportSystem::SigmaFn(Index i, const State &s, Position x, Time
 	VectorXdual uw(s.Variable);
 	VectorXdual qw(s.Derivative);
 
+	if (nConstantProfiles > 0)
+	{
+		int nTotal = nVars + nConstantProfiles;
+		uw.conservativeResize(nTotal);
+		qw.conservativeResize(nTotal);
+		for (auto &i : ConstantProfiles)
+		{
+			uw(Eigen::seq(i + 1, nTotal)) = uw(Eigen::seq(i, nTotal - 1));
+			uw(i) = InitialValue(i, x);
+			qw(Eigen::seq(i + 1, nTotal)) = qw(Eigen::seq(i, nTotal - 1));
+			qw(i) = InitialDerivative(i, x);
+		}
+	}
+
 	return Flux(i, uw, qw, x, t).val;
 }
 
@@ -48,6 +62,25 @@ Value AutodiffTransportSystem::Sources(Index i, const State &s, Position x, Time
 	VectorXdual uw(s.Variable);
 	VectorXdual qw(s.Derivative);
 	VectorXdual sw(s.Flux);
+
+	if (nConstantProfiles > 0)
+	{
+		int nTotal = nVars + nConstantProfiles;
+		uw.conservativeResize(nTotal);
+		qw.conservativeResize(nTotal);
+		sw.resize(nTotal);
+		for (auto &i : ConstantProfiles)
+		{
+			uw(Eigen::seq(i + 1, nTotal)) = uw(Eigen::seq(i, nTotal - 1));
+			uw(i) = InitialValue(i, x);
+			qw(Eigen::seq(i + 1, nTotal)) = qw(Eigen::seq(i, nTotal - 1));
+			qw(i) = InitialDerivative(i, x);
+		}
+		for (Index i = 0; i < nTotal - 1; i++)
+		{
+			sw(i) = Flux(i, uw, qw, x, t);
+		}
+	}
 
 	return Source(i, uw, qw, sw, x, t).val;
 }
@@ -58,6 +91,20 @@ void AutodiffTransportSystem::dSigmaFn_du(Index i, Values &grad, const State &s,
 	autodiff::VectorXdual uw(s.Variable);
 	autodiff::VectorXdual qw(s.Derivative);
 
+	if (nConstantProfiles > 0)
+	{
+		int nTotal = nVars + nConstantProfiles;
+		uw.conservativeResize(nTotal);
+		qw.conservativeResize(nTotal);
+		for (auto &i : ConstantProfiles)
+		{
+			uw(Eigen::seq(i + 1, nTotal)) = uw(Eigen::seq(i, nTotal - 1));
+			uw(i) = InitialValue(i, x);
+			qw(Eigen::seq(i + 1, nTotal)) = qw(Eigen::seq(i, nTotal - 1));
+			qw(i) = InitialDerivative(i, x);
+		}
+	}
+
 	grad = autodiff::gradient([this, i](VectorXdual uD, VectorXdual qD, Position X, Time T)
 							  { return this->Flux(i, uD, qD, X, T); },
 							  wrt(uw), at(uw, qw, x, t));
@@ -67,6 +114,20 @@ void AutodiffTransportSystem::dSigmaFn_dq(Index i, Values &grad, const State &s,
 {
 	autodiff::VectorXdual uw(s.Variable);
 	autodiff::VectorXdual qw(s.Derivative);
+
+	if (nConstantProfiles > 0)
+	{
+		int nTotal = nVars + nConstantProfiles;
+		uw.conservativeResize(nTotal);
+		qw.conservativeResize(nTotal);
+		for (auto &i : ConstantProfiles)
+		{
+			uw(Eigen::seq(i + 1, nTotal)) = uw(Eigen::seq(i, nTotal - 1));
+			uw(i) = InitialValue(i, x);
+			qw(Eigen::seq(i + 1, nTotal)) = qw(Eigen::seq(i, nTotal - 1));
+			qw(i) = InitialDerivative(i, x);
+		}
+	}
 
 	grad = autodiff::gradient([this, i](VectorXdual uD, VectorXdual qD, Position X, Time T)
 							  { return this->Flux(i, uD, qD, X, T); },
@@ -80,6 +141,25 @@ void AutodiffTransportSystem::dSources_du(Index i, Values &grad, const State &s,
 	VectorXdual qw(s.Derivative);
 	VectorXdual sw(s.Flux);
 
+	if (nConstantProfiles > 0)
+	{
+		int nTotal = nVars + nConstantProfiles;
+		uw.conservativeResize(nTotal);
+		qw.conservativeResize(nTotal);
+		sw.resize(nTotal);
+		for (auto &i : ConstantProfiles)
+		{
+			uw(Eigen::seq(i + 1, nTotal)) = uw(Eigen::seq(i, nTotal - 1));
+			uw(i) = InitialValue(i, x);
+			qw(Eigen::seq(i + 1, nTotal)) = qw(Eigen::seq(i, nTotal - 1));
+			qw(i) = InitialDerivative(i, x);
+		}
+		for (Index i = 0; i < nTotal - 1; i++)
+		{
+			sw(i) = Flux(i, uw, qw, x, t);
+		}
+	}
+
 	grad = gradient([this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
 					{ return this->Source(i, uD, qD, sD, X, T); },
 					wrt(uw), at(uw, qw, sw, x, t));
@@ -91,6 +171,25 @@ void AutodiffTransportSystem::dSources_dq(Index i, Values &grad, const State &s,
 	VectorXdual qw(s.Derivative);
 	VectorXdual sw(s.Flux);
 
+	if (nConstantProfiles > 0)
+	{
+		int nTotal = nVars + nConstantProfiles;
+		uw.conservativeResize(nTotal);
+		qw.conservativeResize(nTotal);
+		sw.resize(nTotal);
+		for (auto &i : ConstantProfiles)
+		{
+			uw(Eigen::seq(i + 1, nTotal)) = uw(Eigen::seq(i, nTotal - 1));
+			uw(i) = InitialValue(i, x);
+			qw(Eigen::seq(i + 1, nTotal)) = qw(Eigen::seq(i, nTotal - 1));
+			qw(i) = InitialDerivative(i, x);
+		}
+		for (Index i = 0; i < nTotal - 1; i++)
+		{
+			sw(i) = Flux(i, uw, qw, x, t);
+		}
+	}
+
 	grad = gradient([this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
 					{ return this->Source(i, uD, qD, sD, X, T); },
 					wrt(qw), at(uw, qw, sw, x, t));
@@ -101,6 +200,25 @@ void AutodiffTransportSystem::dSources_dsigma(Index i, Values &grad, const State
 	VectorXdual uw(s.Variable);
 	VectorXdual qw(s.Derivative);
 	VectorXdual sw(s.Flux);
+
+	if (nConstantProfiles > 0)
+	{
+		int nTotal = nVars + nConstantProfiles;
+		uw.conservativeResize(nTotal);
+		qw.conservativeResize(nTotal);
+		sw.resize(nTotal);
+		for (auto &i : ConstantProfiles)
+		{
+			uw(Eigen::seq(i + 1, nTotal)) = uw(Eigen::seq(i, nTotal - 1));
+			uw(i) = InitialValue(i, x);
+			qw(Eigen::seq(i + 1, nTotal)) = qw(Eigen::seq(i, nTotal - 1));
+			qw(i) = InitialDerivative(i, x);
+		}
+		for (Index i = 0; i < nTotal - 1; i++)
+		{
+			sw(i) = Flux(i, uw, qw, x, t);
+		}
+	}
 
 	grad = gradient([this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
 					{ return this->Source(i, uD, qD, sD, X, T); },

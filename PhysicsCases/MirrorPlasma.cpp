@@ -23,15 +23,26 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
 	xL = grid.lowerBoundary();
 	xR = grid.upperBoundary();
 
-	isLowerDirichlet = true;
-	isUpperDirichlet = true;
-
-	uL.resize(nVars);
-	uR.resize(nVars);
+	// isLowerDirichlet = true;
+	// isUpperDirichlet = true;
 
 	if (config.count("MirrorPlasma") == 1)
 	{
 		auto const &InternalConfig = config.at("MirrorPlasma");
+
+		std::vector<std::string> constProfiles = toml::find_or(InternalConfig, "ConstantProfiles", std::vector<std::string>());
+
+		for (auto &p : constProfiles)
+		{
+			ConstantProfiles.push_back(ChannelMap[p]);
+		}
+		nConstantProfiles = ConstantProfiles.size();
+
+		nVars -= nConstantProfiles;
+
+		uL.resize(nVars);
+		uR.resize(nVars);
+
 		nEdge = toml::find_or(InternalConfig, "EdgeDensity", n_edge);
 		TeEdge = toml::find_or(InternalConfig, "EdgeElectronTemperature", T_edge);
 		TiEdge = toml::find_or(InternalConfig, "EdgeIonTemperature", TeEdge);
@@ -193,7 +204,7 @@ Value MirrorPlasma::UpperBoundary(Index i, Time t) const
 	switch (c)
 	{
 	case Channel::Density:
-		return uR[Channel::Density];
+		return 0.0;
 		break;
 	case Channel::IonEnergy:
 		return uR[Channel::IonEnergy];
@@ -237,7 +248,7 @@ bool MirrorPlasma::isUpperBoundaryDirichlet(Index i) const
 	switch (c)
 	{
 	case Channel::Density:
-		return true;
+		return false;
 		break;
 	case Channel::IonEnergy:
 		return true;
@@ -497,7 +508,7 @@ Real MirrorPlasma::Spi(RealVector u, RealVector q, RealVector sigma, Position V,
 	Real PotentialHeating = -Gamma(u, q, V, t) * (omega * omega / B->Bz_R(R) - dphi0dV);
 	Real EnergyExchange = IonElectronEnergyExchange(n, p_e, p_i, V, t);
 
-	Real ParticleSourceHeating =  0.5 * omega * omega * R * R * ParticleSource(R, t);
+	Real ParticleSourceHeating = 0.5 * omega * omega * R * R * ParticleSource(R, t);
 
 	Real Heating = ViscousHeating + PotentialHeating + EnergyExchange + UniformHeatSource + ParticleSourceHeating;
 

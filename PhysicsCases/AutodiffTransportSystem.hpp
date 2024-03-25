@@ -33,6 +33,8 @@ public:
 
 protected:
 	Position xR, xL;
+	std::vector<Index> ConstantProfiles;
+	int nConstantProfiles;
 
 private:
 	// API to underlying flux model
