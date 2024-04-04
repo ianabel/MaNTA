@@ -2,7 +2,7 @@
 #define SYSTEMSOLVER_HPP
 
 #include <sundials/sundials_linearsolver.h> /* Generic Liner Solver Interface */
-#include <sundials/sundials_types.h>		/* defs of realtype, sunindextype  */
+#include <sundials/sundials_types.h>		/* defs of sunrealtype, sunindextype  */
 #include <filesystem>
 
 #include "Types.hpp"
@@ -103,7 +103,7 @@ public:
 
 	Vector resEval(std::vector<Vector> resTerms);
 
-	void mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorWrapper &lam, realtype *const &Y) const;
+	void mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorWrapper &lam, sunrealtype *const &Y) const;
 
 	static SystemSolver *ConstructFromConfig(std::string fname);
 
@@ -117,7 +117,7 @@ public:
 	void setInputFile( std::string const& fn ) { inputFilePath = fn; };
 
 	void setJacEvalY( N_Vector & );
-	int residual(realtype, N_Vector, N_Vector, N_Vector );
+	int residual(sunrealtype, N_Vector, N_Vector, N_Vector );
 
 private:
 	Grid grid;

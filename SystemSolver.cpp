@@ -1,7 +1,7 @@
 #include "SystemSolver.hpp"
 #include <sundials/sundials_nvector.h>
 #include <sundials/sundials_linearsolver.h> /* Generic Liner Solver Interface */
-#include <sundials/sundials_types.h>		/* defs of realtype, sunindextype  */
+#include <sundials/sundials_types.h>		/* defs of sunrealtype, sunindextype  */
 #include <nvector/nvector_serial.h>	  /* access to serial N_Vector            */
 #include <Eigen/Core>
 #include <Eigen/Dense>
@@ -16,7 +16,7 @@
 SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *transpSystem)
 	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars( transpSystem->getNumScalars() ), MXSolvers( Grid.getNCells() ), y( nVars, grid, k, nScalars ), dydt( nVars, grid, k, nScalars ), yJac( nVars, grid, k, nScalars ), problem(transpSystem)
 {
-	if ( SUNContext_Create(nullptr, &ctx) < 0 )
+	if ( SUNContext_Create(SUN_COMM_NULL, &ctx) < 0 )
 		throw std::runtime_error( "Unable to allocate SUNDIALS Context, aborting." );
 	yJacMem = new double[ yJac.getDoF() ];
 	yJac.Map( yJacMem );
@@ -618,7 +618,7 @@ void SystemSolver::updateMatricesForJacSolve()
 
 }
 
-void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorWrapper &lam, realtype *const &Y) const
+void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorWrapper &lam, sunrealtype *const &Y) const
 {
 	SQU_cell.clear();
 	for (Index i = 0; i < nCells; i++)
@@ -817,7 +817,7 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
 	}
 }
 
-int static_residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval, void *user_data)
+int static_residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval, void *user_data)
 {
 	auto system = reinterpret_cast<SystemSolver *>(user_data);
 	try {
@@ -828,7 +828,7 @@ int static_residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval, v
 	}
 }
 
-int SystemSolver::residual(realtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval )
+int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval )
 {
 	updateBoundaryConditions(tres);
 

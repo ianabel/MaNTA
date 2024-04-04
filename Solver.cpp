@@ -2,7 +2,7 @@
 #include <nvector/nvector_serial.h>	  /* access to serial N_Vector            */
 #include <sunmatrix/sunmatrix_band.h> /* access to band SUNMatrix             */
 #include <sunlinsol/sunlinsol_band.h> /* access to band SUNLinearSolver       */
-#include <sundials/sundials_types.h>  /* definition of type realtype          */
+#include <sundials/sundials_types.h>  /* definition of type sunrealtype          */
 #include <toml.hpp>
 #include <iostream>
 #include <fstream>
@@ -20,8 +20,8 @@ extern "C" {
 	int IDAEwtSet( N_Vector, N_Vector, void* );
 }
 
-int static_residual(realtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data);
-int JacSetup(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3);
+int static_residual(sunrealtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data);
+int JacSetup(sunrealtype tt, sunrealtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3);
 
 void SystemSolver::runSolver( double tFinal )
 {
@@ -37,7 +37,7 @@ void SystemSolver::runSolver( double tFinal )
 	N_Vector res = NULL;		 // vector for storing residual
 	N_Vector absTolVec = NULL;	 // vector for storing absolute tolerances
 	double delta_t = dt;
-	realtype tout, tret;
+	sunrealtype tout, tret;
 
 	if( !initialised )
 		initialiseMatrices();
@@ -71,7 +71,7 @@ void SystemSolver::runSolver( double tFinal )
 	res = N_VClone(Y);
 	if (ErrorChecker::check_retval((void *)res, "N_VClone", 0))
 		std::runtime_error("Sundials initialization Error, run in debug to find");
-	// realtype tRes;
+	// sunrealtype tRes;
 
 	// No constraints are imposed as negative coefficients may allow for a better fit across a cell
 	constraints = N_VClone(Y);
@@ -135,8 +135,8 @@ void SystemSolver::runSolver( double tFinal )
 		tolerances.Scalar( i ) = atol[0];
 
 	// Steady-state stopping conditions
-	realtype dydt_rel_tol = steady_state_tol;
-	realtype dydt_abs_tol = 1e-2;
+	sunrealtype dydt_rel_tol = steady_state_tol;
+	sunrealtype dydt_abs_tol = 1e-2;
 
 	retval = IDASVtolerances(IDA_mem, rtol, absTolVec);
 	if (ErrorChecker::check_retval(&retval, "IDASVtolerances", 1))
@@ -151,7 +151,7 @@ void SystemSolver::runSolver( double tFinal )
 	// it won't hold it beyond the lifetime of this function call.
 	LS = SunLinSolWrapper::SunLinSol(this, IDA_mem, ctx);
 
-	if (IDASetLinearSolver(IDA_mem, LS, sunMat) != SUNLS_SUCCESS)
+	if (IDASetLinearSolver(IDA_mem, LS, sunMat) != SUN_SUCCESS)
 		std::runtime_error("Error in IDASetLinearSolver");
 
 	IDASetJacFn(IDA_mem, JacSetup);
@@ -266,12 +266,12 @@ void SystemSolver::runSolver( double tFinal )
 
 		// Check if steady-state is achieved (test the lambda points)
 		if (  TerminateOnSteadyState ) {
-			realtype dydt_norm = 0.0;
+			sunrealtype dydt_norm = 0.0;
 			for ( Index i = 0; i < nCells; i++ )
 				for ( Index v=0; v < nVars; v++ )
 				{
-					realtype xi = dydt.lambda( v )[ i ] * delta_t;
-					realtype wi = 1.0 / ( y.lambda( v )[ i ] * dydt_rel_tol + dydt_abs_tol );
+					sunrealtype xi = dydt.lambda( v )[ i ] * delta_t;
+					sunrealtype wi = 1.0 / ( y.lambda( v )[ i ] * dydt_rel_tol + dydt_abs_tol );
 					dydt_norm += xi*xi*wi*wi;
 				}
 			dydt_norm = sqrt( dydt_norm );
@@ -332,7 +332,7 @@ void SystemSolver::runSolver( double tFinal )
  * SUNDIALS Calls this function to recompute the local Jacobian
  * This is the function that should set the point at which the sub-matrices for the Jacobian solve are evaluated
  */
-int JacSetup(realtype tt, realtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3)
+int JacSetup(sunrealtype tt, sunrealtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3)
 {
 	// Sundials looks for a Jacobian, but our Jacobian equation is solved without computing the jacobian.
 	// We use this function to capture t and cj for the solve.
