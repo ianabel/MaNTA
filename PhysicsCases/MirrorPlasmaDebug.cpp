@@ -50,12 +50,13 @@ MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid
 		uR[Channel::AngularMomentum] = omegaEdge * nEdge * R_Upper * R_Upper;
 		jRadial = -toml::find_or(InternalConfig, "jRadial", 4.0);
 		ParticleSourceStrength = toml::find_or(InternalConfig, "ParticleSource", 10.0);
+		ParFac = toml::find_or(InternalConfig,"ParFac",1.0);
 	}
 	else
 	{
 		ParticleSourceStrength = 1.0;
 		jRadial = -4.0;
-		B = new CylindricalMagneticField(std::filesystem::path("./PhysicsCases/" + B_file));
+		B = new CylindricalMagneticField(std::filesystem::path(B_file));
 		B->CheckBoundaries(xL, xR);
 
 		R_Lower = B->R_V(xL);
@@ -68,6 +69,7 @@ MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid
 		uR[Channel::ElectronEnergy] = (3. / 2.) * n_edge * T_edge;
 		uL[Channel::AngularMomentum] = omega_edge * n_edge * R_Lower * R_Lower;
 		uR[Channel::AngularMomentum] = omega_edge * n_edge * R_Upper * R_Upper;
+		ParFac = 1.0;
 	}
 };
 
@@ -380,7 +382,7 @@ Real MirrorPlasmaDebug::Spi(RealVector u, RealVector q, RealVector sigma, Positi
 	Real ParticleEnergy = Ti * (1.0 + Xi);
 	Real ParallelLosses = ParticleEnergy * IonPastukhovLossRate(V, Xi, n, Ti);
 
-	return Heating - 0.001*ParallelLosses;
+	return Heating - ParFac * ParallelLosses;
 }
 
 // Energy normalisation is T0, but these return Xi_s / T_s as that is what enters the
@@ -436,7 +438,7 @@ Real MirrorPlasmaDebug::Spe(RealVector u, RealVector q, RealVector sigma, Positi
 	Real ParticleEnergy = Te * (1.0 + Xi);
 	Real ParallelLosses = ParticleEnergy * ElectronPastukhovLossRate(V, Xi, n, Te);
 
-	return Heating - 0.001 * ParallelLosses;
+	return Heating - ParFac * ParallelLosses;
 };
 
 // Source of angular momentum -- this is just imposed J x B torque (we can account for the particle source being a sink later).
@@ -457,7 +459,7 @@ Real MirrorPlasmaDebug::Somega(RealVector u, RealVector q, RealVector sigma, Pos
 	Real AngularMomentumPerParticle = L / n;
 	Real ParallelLosses = AngularMomentumPerParticle * IonPastukhovLossRate(V, Xi, n, Te);
 
-	return JxB - 0.001 * ParallelLosses;
+	return JxB - ParFac * ParallelLosses;
 };
 
 Real MirrorPlasmaDebug::ElectronPastukhovLossRate(double V, Real Xi_e, Real n, Real Te) const
