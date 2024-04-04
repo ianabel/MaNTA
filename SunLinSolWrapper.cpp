@@ -3,7 +3,7 @@
 #include <nvector/nvector_serial.h>    /* access to serial N_Vector            */
 #include <sunmatrix/sunmatrix_band.h>  /* access to band SUNMatrix             */
 #include <sunlinsol/sunlinsol_band.h>  /* access to band SUNLinearSolver       */
-#include <sundials/sundials_types.h>   /* definition of type realtype          */
+#include <sundials/sundials_types.h>   /* definition of type sunrealtype          */
 #include <memory>
 
 int SunLinSolWrapper::Solve( SUNMatrix A, N_Vector x, N_Vector b )
@@ -31,7 +31,7 @@ SUNLinearSolver_ID SunLinSolWrapper::LSGetID( SUNLinearSolver /* LS */ )
 
 int SunLinSolWrapper::LSinitialize(SUNLinearSolver /* LS */)
 {
-	return SUNLS_SUCCESS;
+	return SUN_SUCCESS;
 }
 
 int SunLinSolWrapper::LSsetup(SUNLinearSolver LS, SUNMatrix M )
@@ -40,7 +40,7 @@ int SunLinSolWrapper::LSsetup(SUNLinearSolver LS, SUNMatrix M )
 	return err;
 }
 
-int SunLinSolWrapper::LSsolve(SUNLinearSolver LS, SUNMatrix M, N_Vector x, N_Vector b, realtype)
+int SunLinSolWrapper::LSsolve(SUNLinearSolver LS, SUNMatrix M, N_Vector x, N_Vector b, sunrealtype)
 {
 	int err = LSWrapper( LS )->Solve( M, x, b );
 	return err;
@@ -51,7 +51,7 @@ int SunLinSolWrapper::LSfree(SUNLinearSolver LS)
 	delete LSWrapper( LS );
 	LS->ops = nullptr;
 	SUNLinSolFreeEmpty( LS );
-	return SUNLS_SUCCESS;
+	return SUN_SUCCESS;
 }
 
 struct _generic_SUNLinearSolver_Ops LSOps = 
