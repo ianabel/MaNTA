@@ -2,6 +2,8 @@
 #include "Constants.hpp"
 #include <autodiff/forward/dual.hpp>
 #include <iostream>
+#include <filesystem>
+#include <string>
 using namespace autodiff;
 
 AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config, Grid const &grid, Index nV, Index nS)
@@ -11,7 +13,6 @@ AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config, Grid
 
 	if (config.count("AutodiffTransportSystem") == 1)
 	{
-
 		auto const &InternalConfig = config.at("AutodiffTransportSystem");
 
 		isUpperDirichlet = toml::find_or(InternalConfig, "isUpperDirichlet", true);
@@ -35,52 +36,10 @@ AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config, Grid
 	}
 }
 
-Index AutodiffTransportSystem::getConstantI(Index i) const
-{
-	for (auto &constI : ConstantProfiles)
-	{
-		if (i >= constI)
-			i++;
-	}
-	return i;
-}
-void AutodiffTransportSystem::InsertConstantValues(Index i, RealVector &u, RealVector &q, Position x)
-{
-	int nTotal = nVars + nConstantProfiles;
-	u.conservativeResize(nTotal);
-	q.conservativeResize(nTotal);
-	int count = nConstantProfiles;
-	for (auto &constI : ConstantProfiles)
-	{
-		u(Eigen::seq(constI + 1, nTotal - count)) = u(Eigen::seq(constI, nTotal - count - 1));
-		u(constI) = InitialValue(i, x);
-		q(Eigen::seq(constI + 1, nTotal - count)) = q(Eigen::seq(constI, nTotal - count - 1));
-		q(constI) = InitialDerivative(i, x);
-		count--;
-	}
-}
-
-void AutodiffTransportSystem::RemoveConstantValues(Values &v)
-{
-	int nTotal = nVars + nConstantProfiles;
-	int count = nConstantProfiles;
-	for (auto &i : ConstantProfiles)
-	{
-		v(Eigen::seq(i, nTotal - count - 1)) = v(Eigen::seq(i + 1, nTotal - count));
-		count--;
-	}
-	v.conservativeResize(nVars);
-}
-
 Value AutodiffTransportSystem::SigmaFn(Index i, const State &s, Position x, Time t)
 {
 	VectorXdual uw(s.Variable);
 	VectorXdual qw(s.Derivative);
-
-	if (nConstantProfiles > 0)
-	{
-		InsertConstantValues(i, uw, qw, x);
-	}
 
 	return Flux(i, uw, qw, x, t).val;
 }
@@ -91,16 +50,6 @@ Value AutodiffTransportSystem::Sources(Index i, const State &s, Position x, Time
 	VectorXdual qw(s.Derivative);
 	VectorXdual sw(s.Flux);
 
-	if (nConstantProfiles > 0)
-	{
-		InsertConstantValues(i, uw, qw, x);
-		sw.resize(nVars + nConstantProfiles);
-		for (Index i = 0; i < nVars + nConstantProfiles - 1; i++)
-		{
-			sw(i) = Flux(i, uw, qw, x, t);
-		}
-	}
-
 	return Source(i, uw, qw, sw, x, t).val;
 }
 
@@ -110,20 +59,9 @@ void AutodiffTransportSystem::dSigmaFn_du(Index i, Values &grad, const State &s,
 	autodiff::VectorXdual uw(s.Variable);
 	autodiff::VectorXdual qw(s.Derivative);
 
-	if (nConstantProfiles > 0)
-	{
-		InsertConstantValues(i, uw, qw, x);
-		grad = autodiff::gradient([this, i](VectorXdual uD, VectorXdual qD, Position X, Time T)
-								  { return this->Flux(i, uD, qD, X, T); },
-								  wrt(uw), at(uw, qw, x, t));
-		RemoveConstantValues(grad);
-	}
-	else
-	{
-		grad = autodiff::gradient([this, i](VectorXdual uD, VectorXdual qD, Position X, Time T)
-								  { return this->Flux(i, uD, qD, X, T); },
-								  wrt(uw), at(uw, qw, x, t));
-	}
+	grad = autodiff::gradient([this, i](VectorXdual uD, VectorXdual qD, Position X, Time T)
+							  { return this->Flux(i, uD, qD, X, T); },
+							  wrt(uw), at(uw, qw, x, t));
 }
 
 void AutodiffTransportSystem::dSigmaFn_dq(Index i, Values &grad, const State &s, Position x, Time t)
@@ -131,21 +69,9 @@ void AutodiffTransportSystem::dSigmaFn_dq(Index i, Values &grad, const State &s,
 	autodiff::VectorXdual uw(s.Variable);
 	autodiff::VectorXdual qw(s.Derivative);
 
-	if (nConstantProfiles > 0)
-	{
-		InsertConstantValues(i, uw, qw, x);
-		grad = autodiff::gradient([this, i](VectorXdual uD, VectorXdual qD, Position X, Time T)
-								  { return this->Flux(i, uD, qD, X, T); },
-								  wrt(qw), at(uw, qw, x, t));
-		RemoveConstantValues(grad);
-	}
-	else
-	{
-
-		grad = autodiff::gradient([this, i](VectorXdual uD, VectorXdual qD, Position X, Time T)
-								  { return this->Flux(i, uD, qD, X, T); },
-								  wrt(qw), at(uw, qw, x, t));
-	}
+	grad = autodiff::gradient([this, i](VectorXdual uD, VectorXdual qD, Position X, Time T)
+							  { return this->Flux(i, uD, qD, X, T); },
+							  wrt(qw), at(uw, qw, x, t));
 }
 
 // and for the sources
@@ -155,26 +81,9 @@ void AutodiffTransportSystem::dSources_du(Index i, Values &grad, const State &s,
 	VectorXdual qw(s.Derivative);
 	VectorXdual sw(s.Flux);
 
-	if (nConstantProfiles > 0)
-	{
-		InsertConstantValues(i, uw, qw, x);
-		sw.resize(nVars + nConstantProfiles);
-		for (Index i = 0; i < nVars + nConstantProfiles - 1; i++)
-		{
-			sw(i) = Flux(i, uw, qw, x, t);
-		}
-		grad = gradient([this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
-						{ return this->Source(i, uD, qD, sD, X, T); },
-						wrt(uw), at(uw, qw, sw, x, t));
-		RemoveConstantValues(grad);
-	}
-	else
-	{
-
-		grad = gradient([this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
-						{ return this->Source(i, uD, qD, sD, X, T); },
-						wrt(uw), at(uw, qw, sw, x, t));
-	}
+	grad = gradient([this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
+					{ return this->Source(i, uD, qD, sD, X, T); },
+					wrt(uw), at(uw, qw, sw, x, t));
 }
 
 void AutodiffTransportSystem::dSources_dq(Index i, Values &grad, const State &s, Position x, Time t)
@@ -183,25 +92,9 @@ void AutodiffTransportSystem::dSources_dq(Index i, Values &grad, const State &s,
 	VectorXdual qw(s.Derivative);
 	VectorXdual sw(s.Flux);
 
-	if (nConstantProfiles > 0)
-	{
-		InsertConstantValues(i, uw, qw, x);
-		sw.resize(nVars + nConstantProfiles);
-		for (Index i = 0; i < nVars + nConstantProfiles - 1; i++)
-		{
-			sw(i) = Flux(i, uw, qw, x, t);
-		}
-		grad = gradient([this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
-						{ return this->Source(i, uD, qD, sD, X, T); },
-						wrt(qw), at(uw, qw, sw, x, t));
-		RemoveConstantValues(grad);
-	}
-	else
-	{
-		grad = gradient([this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
-						{ return this->Source(i, uD, qD, sD, X, T); },
-						wrt(qw), at(uw, qw, sw, x, t));
-	}
+	grad = gradient([this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
+					{ return this->Source(i, uD, qD, sD, X, T); },
+					wrt(qw), at(uw, qw, sw, x, t));
 }
 
 void AutodiffTransportSystem::dSources_dsigma(Index i, Values &grad, const State &s, Position x, Time t)
@@ -210,43 +103,35 @@ void AutodiffTransportSystem::dSources_dsigma(Index i, Values &grad, const State
 	VectorXdual qw(s.Derivative);
 	VectorXdual sw(s.Flux);
 
-	if (nConstantProfiles > 0)
-	{
-		InsertConstantValues(i, uw, qw, x);
-		sw.resize(nVars + nConstantProfiles);
-		for (Index i = 0; i < nVars + nConstantProfiles - 1; i++)
-		{
-			sw(i) = Flux(i, uw, qw, x, t);
-		}
-		grad = gradient([this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
-						{ return this->Source(i, uD, qD, sD, X, T); },
-						wrt(sw), at(uw, qw, sw, x, t));
-		RemoveConstantValues(grad);
-	}
-	else
-	{
-		grad = gradient([this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
-						{ return this->Source(i, uD, qD, sD, X, T); },
-						wrt(sw), at(uw, qw, sw, x, t));
-	}
+	grad = gradient([this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
+					{ return this->Source(i, uD, qD, sD, X, T); },
+					wrt(sw), at(uw, qw, sw, x, t));
 }
 
 // and initial conditions for u & q
 Value AutodiffTransportSystem::InitialValue(Index i, Position x) const
 {
-	return InitialFunction(getConstantI(i), x, 0.0).val.val;
+	if (loadInitialConditionsFromFile)
+		return (*NcFileInitialValues[i])(x);
+	else
+		return InitialFunction(i, x, 0.0).val.val;
 }
 
 Value AutodiffTransportSystem::InitialDerivative(Index i, Position x) const
 {
-	dual2nd pos = x;
-	dual2nd t = 0.0;
-	auto InitialValueFn = [this](Index j, dual2nd X, dual2nd T)
+	if (loadInitialConditionsFromFile)
+		return (*NcFileInitialValues[i]).prime(x);
+	else
 	{
-		return InitialFunction(j, X, T);
-	};
-	double deriv = derivative(InitialValueFn, wrt(pos), at(getConstantI(i), pos, t));
-	return deriv;
+		dual2nd pos = x;
+		dual2nd t = 0.0;
+		auto InitialValueFn = [this](Index j, dual2nd X, dual2nd T)
+		{
+			return InitialFunction(j, X, T);
+		};
+		double deriv = derivative(InitialValueFn, wrt(pos), at(i, pos, t));
+		return deriv;
+	}
 }
 
 dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t) const
@@ -282,4 +167,48 @@ dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t) 
 		break;
 	};
 	return u;
+}
+
+void AutodiffTransportSystem::LoadDataToSpline(const std::string &file)
+{
+	try
+	{
+#ifdef DEBUG
+		data_file.open("/home/eatocco/projects/MaNTA/MirrorPlasmaRERUN.nc", netCDF::NcFile::FileMode::read);
+#else
+		data_file.open(file, netCDF::NcFile::FileMode::read);
+#endif
+	}
+	catch (...)
+	{
+		std::string msg = "Failed to open netCDF file at: " + std::string(std::filesystem::absolute(std::filesystem::path(file)));
+		throw std::runtime_error(msg);
+	}
+
+	auto x_dim = data_file.getDim("x");
+	auto t_dim = data_file.getDim("t");
+	auto nPoints = x_dim.getSize();
+	auto nTime = t_dim.getSize();
+
+	std::vector<double> x(nPoints);
+	data_file.getVar("x").getVar(x.data());
+	double h = x[1] - x[0];
+
+	std::vector<double> temp(nPoints);
+	netCDF::NcGroup tempGroup;
+
+	std::vector<size_t> start = {nTime - 1, 0};
+	std::vector<size_t> count = {1, nPoints};
+
+	for (Index i = 0; i < nVars; ++i)
+	{
+		tempGroup = data_file.getGroup("Var" + std::to_string(i));
+
+		tempGroup.getVar("u").getVar(start, count, temp.data());
+		NcFileInitialValues.push_back(std::make_unique<spline>(temp.begin(), temp.end(), x[0], h));
+
+		tempGroup.getVar("q").getVar(start, count, temp.data());
+		NcFileInitialDerivatives.push_back(std::make_unique<spline>(temp.begin(), temp.end(), x[0], h));
+	}
+	data_file.close();
 }

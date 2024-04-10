@@ -22,6 +22,7 @@ def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, include_ini
             except:
                 continue
         ax.legend()
+        plt.title("u")
     if (plot_q):
         plt.figure()
         ax = plt.axes()
@@ -34,6 +35,7 @@ def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, include_ini
             except:
                 continue
         ax.legend()
+        plt.title("q")
     if (plot_sigma):
         plt.figure()
         ax = plt.axes()
@@ -46,12 +48,14 @@ def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, include_ini
             except:
                 continue
         ax.legend()
+        plt.title("sigma")
+    data.close()
 
 
 
 def main():
-    fname = "./LinearDiffusion.nc"
-    plot_nc(fname)
+    fname = "./LinearDiffSourceTest.nc"
+    plot_nc(fname,True,True,True)
 
 if __name__ == "__main__":
     main()

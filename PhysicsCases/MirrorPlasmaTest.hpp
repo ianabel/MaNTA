@@ -1,5 +1,5 @@
-#ifndef MIRRORPLASMA
-#define MIRRORPLASMA
+#ifndef MIRRORPLASMATEST
+#define MIRRORPLASMATEST
 
 #include "MagneticFields.hpp"
 #include "AutodiffTransportSystem.hpp"
@@ -21,11 +21,11 @@
 
 #include <cmath>
 
-class MirrorPlasma : public AutodiffTransportSystem
+class MirrorPlasmaTest : public AutodiffTransportSystem
 {
 public:
-	MirrorPlasma(toml::value const &config, Grid const &grid);
-	virtual ~MirrorPlasma() { delete B; };
+	MirrorPlasmaTest(toml::value const &config, Grid const &grid);
+	virtual ~MirrorPlasmaTest() { delete B; };
 
 	virtual autodiff::dual2nd InitialFunction(Index i, autodiff::dual2nd x, autodiff::dual2nd t) const override;
 
@@ -48,8 +48,11 @@ private:
 		Ionization = 3,
 	};
 
+	std::vector<bool> upperBoundaryConditions;
+	std::vector<bool> lowerBoundaryConditions;
+
 	double nEdge, TeEdge, TiEdge, MEdge;
-	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber, ParallelLossFactor, DragFactor, DragWidth;
+	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber, ParallelLossFactor, DragFactor, DragWidth, ParticlePhysicsFactor, PotentialHeatingFactor, ViscousHeatingFactor;
 	double DensityWidth;
 
 	Real Flux(Index, RealVector, RealVector, Position, Time) override;
@@ -98,6 +101,9 @@ private:
 	double RhoStarRef() const;
 
 	CylindricalMagneticField *B;
+	// test source
+	double LargeEdgeSourceSize, LargeEdgeSourceWidth;
+	Real LargeEdgeSource(double R, double t) const;
 
 	Real ParticleSource(double R, double t) const;
 
@@ -118,7 +124,7 @@ private:
 	void initialiseDiagnostics(NetCDFIO &nc) override;
 	void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override;
 
-	REGISTER_PHYSICS_HEADER(MirrorPlasma)
+	REGISTER_PHYSICS_HEADER(MirrorPlasmaTest)
 };
 
 #endif

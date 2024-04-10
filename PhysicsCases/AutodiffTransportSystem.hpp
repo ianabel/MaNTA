@@ -5,6 +5,9 @@
 #include <autodiff/forward/dual.hpp>
 #include <autodiff/forward/dual/eigen.hpp>
 
+#include <boost/math/interpolators/cardinal_cubic_b_spline.hpp>
+using spline = boost::math::interpolators::cardinal_cubic_b_spline<double>;
+
 using Real = autodiff::dual;
 using Real2nd = autodiff::dual2nd;
 using RealVector = autodiff::VectorXdual;
@@ -12,6 +15,7 @@ using RealVector = autodiff::VectorXdual;
 class AutodiffTransportSystem : public TransportSystem
 {
 public:
+	AutodiffTransportSystem() = default;
 	explicit AutodiffTransportSystem(toml::value const &config, Grid const &, Index nVars, Index nScalars);
 
 	// Implement the TransportSystem interface.
@@ -33,17 +37,20 @@ public:
 
 protected:
 	Position xR, xL;
-	std::vector<Index> ConstantProfiles;
-	int nConstantProfiles = 0;
-	Index getConstantI(Index i) const;
+	bool loadInitialConditionsFromFile;
+	std::string filename;
+	void LoadDataToSpline(const std::string &file);
 
 private:
 	// API to underlying flux model
 	virtual Real Flux(Index, RealVector, RealVector, Position, Time) = 0;
 	virtual Real Source(Index, RealVector, RealVector, RealVector, Position, Time) = 0;
 
-	void InsertConstantValues(Index i, RealVector &u, RealVector &q, Position x);
-	void RemoveConstantValues(Values &v);
+	// For loading initial conditions from a netCDF file
+	netCDF::NcFile data_file;
+	std::vector<std::unique_ptr<spline>> NcFileInitialValues;
+	std::vector<std::unique_ptr<spline>> NcFileInitialDerivatives;
+
 
 	enum class ProfileType
 	{
