@@ -8,7 +8,7 @@
 	Linear Diffusion test case with a coupled scalar.
 
 	du         d^2 u
-	-- - Kappa ----- = J S( x )
+	-- - Kappa ----- = J S( x ) + S_2(x)
 	dt          dx^2
 
 	where J is chosen to enforce constant total mass of u i.e.
@@ -25,6 +25,14 @@
 
 	J = [ - Kappa du/dx ]_( x = 1 ) - [ - Kappa du/dx ]_( x = -1 )
 
+	S_2[x] is chosen such that it has no firest moment
+
+	/ 1
+	|   S_2 dx = 0
+   /-1
+
+	we chose Cos( pi x )
+
  */
 
 // Needed to register the class
@@ -34,7 +42,7 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const&)
 {
 	// Always set nVars in a derived constructor
 	nVars = 1;
-	nScalars = 1;
+	nScalars = 0;
 
 	// Construst your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
@@ -79,9 +87,9 @@ Value ScalarTestLD3::ScaledSource( Position x ) const
 
 Value ScalarTestLD3::Sources(Index, const State &s, Position x, Time)
 {
-	double J = s.Scalars[ 0 ];
+	double J = 0; // s.Scalars[ 0 ];
 
-	return J * ScaledSource( x );
+	return J * ScaledSource( x ) + 0.5*std::cos( std::numbers::pi * x );
 }
 
 void ScalarTestLD3::dSigmaFn_dq(Index, Values &v, const State &, Position, Time)
@@ -133,9 +141,9 @@ Value ScalarTestLD3::ScalarG( Index, const DGSoln & y, Time )
 void ScalarTestLD3::ScalarGPrime( Index, State &s, const DGSoln &y, std::function<double( double )> P, Interval I, Time )
 {
 	s.Flux[ 0 ] = 0.0;
-	if ( abs( I.x_u - 1 ) < 1e-8 )
+	if ( abs( I.x_u - 1 ) < 1e-9 )
 		s.Flux[ 0 ] -= P( I.x_u );
-	if ( abs( I.x_l + 1 ) < 1e-8 )
+	if ( abs( I.x_l + 1 ) < 1e-9 )
 		s.Flux[ 0 ] += P( I.x_l );
 	s.Derivative[ 0 ] = 0.0;
 	s.Variable[ 0 ] = 0.0;

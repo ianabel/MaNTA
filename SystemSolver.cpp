@@ -24,6 +24,7 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSyst
 	U_DOF = k + 1;
 	Q_DOF = k + 1;
 	SQU_DOF = U_DOF + Q_DOF + S_DOF;
+	std::cerr << "Total HDG degrees of freedom " << SQU_DOF * nCells + (nCells + 1) << std::endl;
 	if ( nScalars > 0 ) {
 		v = new N_Vector[ nScalars ];
 		w = new N_Vector[ nScalars ];
@@ -592,8 +593,10 @@ void SystemSolver::updateMatricesForJacSolve()
 	// also construct the scalar-scalar coupling matrix N
 
 	std::vector<DGSoln> w_map;
-	for ( Index i = 0; i < nScalars; ++i )
+	for ( Index i = 0; i < nScalars; ++i ) {
 		w_map.emplace_back( nVars, grid, k, N_VGetArrayPointer( w[ i ] ), nScalars );
+		w_map.back().zeroCoeffs();
+	}
 
 	for ( Index i = 0; i < nCells; ++i )
 	{
@@ -650,6 +653,8 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 		for ( Index i=0; i < nScalars; ++i )
 			e[ i ] = N_VClone( delY );
 		N_Vector g = N_VClone( delY );
+		DGSoln res_g_map(nVars, grid, k, N_VGetArrayPointer( res_g ), nScalars );
+		DGSoln del_y(nVars, grid, k, N_VGetArrayPointer( delY ), nScalars );
 
 		// Let A be the HDG linear operator solved in solveHDGJac
 
@@ -657,11 +662,11 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 		solveHDGJac( res_g, d );
 
 		// Now A e = v ; Do as a loop over nScalars
+		#pragma omp parallel for
 		for ( Index i = 0; i < nScalars; ++i ) {
 			solveHDGJac( e[ i ], v[ i ] );
 		}
 
-		DGSoln res_g_map(nVars, grid, k, N_VGetArrayPointer( res_g ), nScalars );
 		Vector tmp_N = N_global.inverse() * res_g_map.Scalars();
 		N_VLinearCombination( nScalars, tmp_N.data(), e, g ); // g = Sum_i tmp_N[i]*e[i]
 		N_VLinearSum( 1.0, g, 1.0, d, g ); // g += d;
@@ -681,7 +686,6 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 		N_VLinearSum( 1.0, delY, 1.0, g, delY ); // delY += g; so delY = g - (....), which is the final answer
 
 		// Finally, set the components of delY related to the change of the scalars
-		DGSoln del_y(nVars, grid, k, N_VGetArrayPointer( delY ), nScalars );
 
 		del_y.Scalars() = Values::Zero( nScalars );
 
@@ -689,13 +693,15 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 		for ( Index i = 0; i < nScalars; ++i )
 			del_y_scalars( i ) = res_g_map.Scalar( i ) - N_VDotProd( w[ i ], delY );
 
-		del_y.Scalars() = N_global.inverse() * del_y_scalars;
+		// factor of sqrt( SQU_DOF * nCells ) because we rescaled the residual function
+		del_y.Scalars() =  (1.0 / std::sqrt( SQU_DOF * nCells )) * N_global.inverse() * del_y_scalars;
 
 		for ( Index i = 0; i < nScalars; ++i )
 			N_VDestroy( e[ i ] );
 		N_VDestroy( d );
 		N_VDestroy( g );
 		delete[] e;
+
 
 	} else {
 		solveHDGJac( res_g, delY );
@@ -922,7 +928,8 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 	// the number of spatial degrees of freedom increase.
 
 	for ( Index j = 0; j < nScalars; j++ ) {
-		res.Scalar( j ) = std::sqrt(SQU_DOF * nCells) * problem->ScalarG( j, Y_h, tres );
+		res.Scalar( j ) =  std::sqrt( SQU_DOF * nCells ) * problem->ScalarG( j, Y_h, tres );
+		// res.Scalar( j ) =  problem->ScalarG( j, Y_h, tres );
 	}
 
 	return 0;

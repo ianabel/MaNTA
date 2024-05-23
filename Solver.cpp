@@ -261,6 +261,7 @@ void SystemSolver::runSolver( double tFinal )
 			residual( tret, Y, dYdt, res );
 			IDAEwtSet( Y, wgt, IDA_mem );
 			res_out << "# Residual norm at t = " << tret << " is " << N_VWrmsNorm( res, wgt ) << std::endl;
+			print( res_out, tret, nOut, res );
 		}
 		WriteTimeslice( tret );
 
