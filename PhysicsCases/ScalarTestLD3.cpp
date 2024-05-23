@@ -32,7 +32,7 @@
 
 	to try and keep M at the initial value
 
-	S_2[x] is chosen such that it has no firest moment
+	S_2[x] is chosen such that it has no first moment
 
 	/ 1
 	|   S_2 dx = 0
@@ -96,7 +96,7 @@ Value ScalarTestLD3::ScaledSource(Position x) const
 
 Value ScalarTestLD3::Sources(Index, const State &s, Position x, Time)
 {
-	double J = 0; // s.Scalars[ 0 ];
+	double J = s.Scalars[0];
 
 	return J * ScaledSource(x) + 0.5 * std::cos(std::numbers::pi * x);
 }
