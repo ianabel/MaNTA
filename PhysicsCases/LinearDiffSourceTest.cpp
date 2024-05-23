@@ -1,4 +1,5 @@
 #include "LinearDiffSourceTest.hpp"
+#include <string>
 
 REGISTER_PHYSICS_IMPL(LinearDiffSourceTest);
 
@@ -23,13 +24,51 @@ LinearDiffSourceTest::LinearDiffSourceTest(toml::value const &config, Grid const
         uL = toml::find_or(InternalConfig, "uL", std::vector<double>(nVars, 0.0));
         uR = toml::find_or(InternalConfig, "uR", std::vector<double>(nVars, 0.0));
 
-        SourceWidth = toml::find_or(InternalConfig, "SourceWidth", std::vector<double>(nVars, 0.1));
-        SourceStrength = toml::find_or(InternalConfig, "SourceStrength", std::vector<double>(nVars, 1.0));
-        SourceCenter = toml::find_or(InternalConfig, "SourceCenter", std::vector<double>(nVars, 0.0));
+        nSources = toml::find_or(InternalConfig, "nSources", nVars);
 
-        std::vector<std::string> sourceType = toml::find_or(InternalConfig, "SourceTypes", std::vector<std::string>(nVars, "PeakedEdge"));
-        for (auto &s : sourceType)
-            SourceTypes.push_back(SourceMap[s]);
+        useMMS = toml::find_or(InternalConfig, "useMMS", false);
+
+        SourceWidth.resize(nSources);
+        SourceStrength.resize(nSources);
+        SourceCenter.resize(nSources);
+        SourceTypes.resize(nSources);
+        if (InternalConfig.count("SourceWidth") > 0)
+        {
+            auto SourceWidth_toml = toml::find(InternalConfig, "SourceWidth");
+            SourceWidth = toml::get<std::vector<double>>(SourceWidth_toml);
+        }
+        else
+        {
+            SourceWidth = std::vector<double>(nSources, 1.0);
+        }
+        if (InternalConfig.count("SourceCenter") > 0)
+        {
+            auto SourceCenter_toml = toml::find(InternalConfig, "SourceCenter");
+            SourceCenter = toml::get<std::vector<double>>(SourceCenter_toml);
+        }
+        else
+        {
+            SourceCenter = std::vector<double>(nSources, 0.0);
+        }
+        if (InternalConfig.count("SourceStrength") > 0)
+        {
+            auto SourceStrength_toml = toml::find(InternalConfig, "SourceStrength");
+            SourceStrength = toml::get<std::vector<double>>(SourceStrength_toml);
+        }
+        else
+        {
+            SourceStrength = std::vector<double>(nSources, 1.0);
+        }
+        if (InternalConfig.count("SourceTypes") > 0)
+        {
+            auto SourceTypes_toml = toml::find<std::vector<int>>(InternalConfig, "SourceTypes");
+            for (Index i = 0; i < nSources; i++)
+                SourceTypes[i] = static_cast<Sources>(SourceTypes_toml[i]);
+        }
+        else
+        {
+            SourceTypes = std::vector<Sources>(nSources, Sources::PeakedEdge);
+        }
 
         InitialWidth = toml::find_or(InternalConfig, "InitialWidth", std::vector<double>(nVars, 0.1));
         InitialHeight = toml::find_or(InternalConfig, "InitialHeight", std::vector<double>(nVars, 1.0));
@@ -57,19 +96,30 @@ Real LinearDiffSourceTest::Flux(Index i, RealVector u, RealVector q, Position x,
 
 Real LinearDiffSourceTest::Source(Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t)
 {
-    auto s = SourceTypes[i];
-    double shape = 1.0 / SourceWidth[i];
-    switch (s)
+    Real S = 0.0;
+    for (auto j = 0; j < nSources; ++j)
     {
-    case Sources::PeakedEdge:
-        return SourceStrength[i] * (exp(-shape * (x - xL) * (x - xL)) + exp(-shape * (x - xR) * (x - xR)));
-    case Sources::Gaussian:
-        return SourceStrength[i] * exp(-shape * (x - SourceCenter[i]) * (x - SourceCenter[i]));
-    case Sources::Uniform:
-        return SourceStrength[i];
-    default:
-        return 0.0;
+        auto s = SourceTypes[j];
+        double shape = 1.0 / SourceWidth[j];
+        switch (s)
+        {
+        case Sources::PeakedEdge:
+            S += SourceStrength[j] * (exp(-shape * (x - xL) * (x - xL)) + exp(-shape * (x - xR) * (x - xR)));
+            break;
+        case Sources::Gaussian:
+            S += SourceStrength[j] * exp(-shape * (x - SourceCenter[j]) * (x - SourceCenter[j]));
+            break;
+        case Sources::Uniform:
+            S += SourceStrength[j];
+            break;
+        case Sources::Step:
+            S += x < SourceCenter[j] ? 0.0 : SourceStrength[j];
+            break;
+        default:
+            break;
+        }
     }
+    return S;
 }
 
 Value LinearDiffSourceTest::LowerBoundary(Index i, Time t) const

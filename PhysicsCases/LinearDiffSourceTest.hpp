@@ -14,10 +14,11 @@ private:
     {
         PeakedEdge = 0,
         Gaussian = 1,
-        Uniform = 2
+        Uniform = 2,
+        Step = 3
     };
 
-    std::map<std::string, Sources> SourceMap = {{"PeakedEdge", Sources::PeakedEdge}, {"Gaussian", Sources::Gaussian}, {"Uniform", Sources::Uniform}};
+    std::map<std::string, Sources> SourceMap = {{"PeakedEdge", Sources::PeakedEdge}, {"Gaussian", Sources::Gaussian}, {"Uniform", Sources::Uniform}, {"Step", Sources::Step}};
 
     Real Flux(Index, RealVector, RealVector, Position, Time) override;
     Real Source(Index, RealVector, RealVector, RealVector, Position, Time) override;
@@ -30,10 +31,11 @@ private:
 
     std::vector<double> uL, uR, SourceStrength, SourceWidth, SourceCenter, InitialWidth, InitialHeight;
     std::vector<Sources> SourceTypes;
+    Index nSources;
     std::vector<bool> upperBoundaryConditions, lowerBoundaryConditions;
     Matrix Kappa;
 
-    REGISTER_PHYSICS_HEADER(LinearDiffSourceTest);
+    REGISTER_PHYSICS_HEADER(LinearDiffSourceTest)
 };
 
 #endif

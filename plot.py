@@ -4,10 +4,11 @@ import matplotlib.pyplot as plt
 from netCDF4 import Dataset
 import numpy as np
 
-def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, include_initial = False):
+def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_grid= False, include_initial = False):
 
     data = Dataset(fname)
     Vars = data.groups
+    Grid = np.array(data.groups["Grid"].variables["CellBoundaries"])
     t = np.array(data.variables["t"])
     x = np.array(data.variables["x"] )
     if (plot_u):
@@ -21,7 +22,12 @@ def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, include_ini
                     ax.plot(x,y[0,:],label=Var+", t = 0")
             except:
                 continue
+    
         ax.legend()
+        if (plot_grid):
+            for x in Grid:
+                plt.axvline(x,label="_grid",color="red",linestyle="--",alpha=0.25)
+       
         plt.title("u")
     if (plot_q):
         plt.figure()
@@ -49,13 +55,16 @@ def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, include_ini
                 continue
         ax.legend()
         plt.title("sigma")
+
     data.close()
 
 
 
 def main():
     fname = "./LinearDiffSourceTest.nc"
-    plot_nc(fname,True,True,True)
+    plot_nc(fname,True,True,True,False,True)
 
 if __name__ == "__main__":
     main()
+
+# %%

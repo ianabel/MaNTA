@@ -52,11 +52,14 @@ private:
 	std::vector<bool> lowerBoundaryConditions;
 
 	double nEdge, TeEdge, TiEdge, MEdge;
-	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber, ParallelLossFactor, DragFactor, DragWidth, ParticlePhysicsFactor, PotentialHeatingFactor, ViscousHeatingFactor;
+	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber, ParallelLossFactor, DragFactor, DragWidth, ParticlePhysicsFactor, PotentialHeatingFactor, ViscousHeatingFactor, EnergyExchangeFactor;
+	double MaxPastukhov;
 	double DensityWidth;
+	bool ZeroEdgeSources;
+	double ZeroEdgeFactor;
 
-	Real Flux(Index, RealVector, RealVector, Position, Time) override;
-	Real Source(Index, RealVector, RealVector, RealVector, Position, Time) override;
+	Real Flux(Index, RealVector, RealVector, Real, Time) override;
+	Real Source(Index, RealVector, RealVector, RealVector, Real, Time) override;
 
 	Value LowerBoundary(Index i, Time t) const override;
 	Value UpperBoundary(Index i, Time t) const override;
@@ -79,14 +82,14 @@ private:
 	constexpr static double B0 = 1.0; // Reference field in T
 	constexpr static double a = 1.0;  // Reference length in m
 
-	Real Gamma(RealVector u, RealVector q, Position x, Time t) const;
-	Real qe(RealVector u, RealVector q, Position x, Time t) const;
-	Real qi(RealVector u, RealVector q, Position x, Time t) const;
-	Real Pi(RealVector u, RealVector q, Position x, Time t) const;
-	Real Sn(RealVector u, RealVector q, RealVector sigma, Position x, Time t) const;
-	Real Spe(RealVector u, RealVector q, RealVector sigma, Position x, Time t) const;
-	Real Spi(RealVector u, RealVector q, RealVector sigma, Position x, Time t) const;
-	Real Somega(RealVector u, RealVector q, RealVector sigma, Position x, Time t) const;
+	Real Gamma(RealVector u, RealVector q, Real x, Time t) const;
+	Real qe(RealVector u, RealVector q, Real x, Time t) const;
+	Real qi(RealVector u, RealVector q, Real x, Time t) const;
+	Real Pi(RealVector u, RealVector q, Real x, Time t) const;
+	Real Sn(RealVector u, RealVector q, RealVector sigma, Real x, Time t) const;
+	Real Spe(RealVector u, RealVector q, RealVector sigma, Real x, Time t) const;
+	Real Spi(RealVector u, RealVector q, RealVector sigma, Real x, Time t) const;
+	Real Somega(RealVector u, RealVector q, RealVector sigma, Real x, Time t) const;
 
 	// Underlying functions
 	Real LogLambda_ii(Real, Real) const;
@@ -96,27 +99,28 @@ private:
 	double ReferenceElectronCollisionTime() const;
 	double ReferenceIonCollisionTime() const;
 
-	Real IonElectronEnergyExchange(Real n, Real pe, Real pi, Position V, double t) const;
-	Real IonClassicalAngularMomentumFlux(Position V, Real n, Real Ti, Real dOmegadV, double t) const;
+	Real IonElectronEnergyExchange(Real n, Real pe, Real pi, Real V, double t) const;
+	Real IonClassicalAngularMomentumFlux(Real V, Real n, Real Ti, Real dOmegadV, double t) const;
 	double RhoStarRef() const;
 
-	CylindricalMagneticField *B;
+	StraightMagneticField *B;
 	// test source
 	double LargeEdgeSourceSize, LargeEdgeSourceWidth;
 	Real LargeEdgeSource(double R, double t) const;
 
 	Real ParticleSource(double R, double t) const;
 
-	Real ElectronPastukhovLossRate(double V, Real Xi_e, Real n, Real Te) const;
-	Real IonPastukhovLossRate(double V, Real Xi_i, Real n, Real Ti) const;
-	Real CentrifugalPotential(double V, Real omega, Real Ti, Real Te) const;
+	Real ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real Te) const;
+	Real IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) const;
+	Real CentrifugalPotential(Real V, Real omega, Real Ti, Real Te) const;
 
 	Real FusionRate(Real n, Real pi) const;
 	Real TotalAlphaPower(Real n, Real pi) const;
 	Real BremsstrahlungLosses(Real n, Real pe) const;
 
-	Real Xi_i(Position V, Real omega, Real Ti, Real Te) const;
-	Real Xi_e(Position V, Real omega, Real Ti, Real Te) const;
+	Real Xi_i(Real V, Real omega, Real n, Real Ti, Real Te) const;
+	Real Xi_e(Real V, Real omega, Real n, Real Ti, Real Te) const;
+	Real AmbipolarPhi(Real V, Real n, Real Ti, Real Te) const;
 	double R_Lower, R_Upper;
 
 	template <typename T1, typename T2>

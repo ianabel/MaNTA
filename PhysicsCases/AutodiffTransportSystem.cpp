@@ -41,7 +41,9 @@ Value AutodiffTransportSystem::SigmaFn(Index i, const State &s, Position x, Time
 	VectorXdual uw(s.Variable);
 	VectorXdual qw(s.Derivative);
 
-	return Flux(i, uw, qw, x, t).val;
+	Real xreal = x;
+
+	return Flux(i, uw, qw, xreal, t).val;
 }
 
 Value AutodiffTransportSystem::Sources(Index i, const State &s, Position x, Time t)
@@ -50,7 +52,16 @@ Value AutodiffTransportSystem::Sources(Index i, const State &s, Position x, Time
 	VectorXdual qw(s.Derivative);
 	VectorXdual sw(s.Flux);
 
-	return Source(i, uw, qw, sw, x, t).val;
+	Real xreal = x;
+
+	if (useMMS)
+	{
+		return Source(i, uw, qw, sw, xreal, t).val + MMS_Source(i, x, t);
+	}
+	else
+	{
+		return Source(i, uw, qw, sw, xreal, t).val;
+	}
 }
 
 // We need derivatives of the flux functions
@@ -59,7 +70,7 @@ void AutodiffTransportSystem::dSigmaFn_du(Index i, Values &grad, const State &s,
 	autodiff::VectorXdual uw(s.Variable);
 	autodiff::VectorXdual qw(s.Derivative);
 
-	grad = autodiff::gradient([this, i](VectorXdual uD, VectorXdual qD, Position X, Time T)
+	grad = autodiff::gradient([this, i](VectorXdual uD, VectorXdual qD, Real X, Time T)
 							  { return this->Flux(i, uD, qD, X, T); },
 							  wrt(uw), at(uw, qw, x, t));
 }
@@ -69,7 +80,7 @@ void AutodiffTransportSystem::dSigmaFn_dq(Index i, Values &grad, const State &s,
 	autodiff::VectorXdual uw(s.Variable);
 	autodiff::VectorXdual qw(s.Derivative);
 
-	grad = autodiff::gradient([this, i](VectorXdual uD, VectorXdual qD, Position X, Time T)
+	grad = autodiff::gradient([this, i](VectorXdual uD, VectorXdual qD, Real X, Time T)
 							  { return this->Flux(i, uD, qD, X, T); },
 							  wrt(qw), at(uw, qw, x, t));
 }
@@ -81,7 +92,7 @@ void AutodiffTransportSystem::dSources_du(Index i, Values &grad, const State &s,
 	VectorXdual qw(s.Derivative);
 	VectorXdual sw(s.Flux);
 
-	grad = gradient([this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
+	grad = gradient([this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Real X, Time T)
 					{ return this->Source(i, uD, qD, sD, X, T); },
 					wrt(uw), at(uw, qw, sw, x, t));
 }
@@ -92,7 +103,7 @@ void AutodiffTransportSystem::dSources_dq(Index i, Values &grad, const State &s,
 	VectorXdual qw(s.Derivative);
 	VectorXdual sw(s.Flux);
 
-	grad = gradient([this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
+	grad = gradient([this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Real X, Time T)
 					{ return this->Source(i, uD, qD, sD, X, T); },
 					wrt(qw), at(uw, qw, sw, x, t));
 }
@@ -103,7 +114,7 @@ void AutodiffTransportSystem::dSources_dsigma(Index i, Values &grad, const State
 	VectorXdual qw(s.Derivative);
 	VectorXdual sw(s.Flux);
 
-	grad = gradient([this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Position X, Time T)
+	grad = gradient([this, i](VectorXdual uD, VectorXdual qD, VectorXdual sD, Real X, Time T)
 					{ return this->Source(i, uD, qD, sD, X, T); },
 					wrt(sw), at(uw, qw, sw, x, t));
 }
@@ -120,7 +131,7 @@ Value AutodiffTransportSystem::InitialValue(Index i, Position x) const
 Value AutodiffTransportSystem::InitialDerivative(Index i, Position x) const
 {
 	if (loadInitialConditionsFromFile)
-		return (*NcFileInitialValues[i]).prime(x);
+		return (*NcFileInitialDerivatives[i])(x);
 	else
 	{
 		dual2nd pos = x;
@@ -211,4 +222,57 @@ void AutodiffTransportSystem::LoadDataToSpline(const std::string &file)
 		NcFileInitialDerivatives.push_back(std::make_unique<spline>(temp.begin(), temp.end(), x[0], h));
 	}
 	data_file.close();
+}
+
+autodiff::dual2nd AutodiffTransportSystem::MMS_Solution(Index i, Real2nd x, Real2nd t)
+{
+	Real2nd tfac = growth * tanh(growth_rate * t);
+	Real2nd S = (1 + tfac) * InitialFunction(i, x, 0.0);
+	return S;
+}
+
+Value AutodiffTransportSystem::MMS_Source(Index i, Position x, Time t)
+{
+	Real2nd xval = x;
+	Real2nd tval = t;
+
+	State s(nVars, nScalars);
+	Values d2udx2(nVars);
+	VectorXdual sigma(nVars);
+
+	for (Index j = 0; j < nVars; ++j)
+	{
+		auto [uval, qval, d2udx2val] = derivatives([this, j](Real2nd x, Real2nd t)
+												   { return this->MMS_Solution(j, x, t); }, wrt(xval, xval), at(xval, tval));
+
+		s.Variable(j) = uval;
+		s.Derivative(j) = qval;
+		d2udx2(j) = d2udx2val;
+	}
+
+	Values gradu(nVars);
+	Values gradq(nVars);
+
+	dSigmaFn_du(i, gradu, s, x, t);
+	dSigmaFn_dq(i, gradq, s, x, t);
+
+	VectorXdual uw(s.Variable);
+	VectorXdual qw(s.Derivative);
+
+	Real xreal = x;
+
+	double dSdx = derivative([this, i](VectorXdual uD, VectorXdual qD, Real X, Time T)
+							 { return this->Flux(i, uD, qD, X, T); },
+							 wrt(xreal), at(uw, qw, xreal, t));
+	double dSigma_dx = dSdx;
+	for (Index j = 0; j < nVars; ++j)
+	{
+		sigma(j) = Flux(i, uw, qw, xreal, t);
+		dSigma_dx += s.Derivative[j] * gradu[j] + d2udx2[j] * gradq[j];
+	}
+	auto [u, dudx, dudt] = derivatives([this, i](Real2nd x, Real2nd t)
+									   { return this->MMS_Solution(i, x, t); }, wrt(tval), at(xval, tval));
+	double S = dudt - dSigma_dx - Source(i, uw, qw, sigma, x, t).val;
+
+	return S;
 }

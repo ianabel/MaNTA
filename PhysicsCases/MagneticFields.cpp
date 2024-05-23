@@ -107,7 +107,13 @@ double CylindricalMagneticField::R_V(double V)
 double CylindricalMagneticField::dRdV(double V)
 {
     double Rval = R_V(V);
-    return 1.0 / (Rval * Bz_R(Rval) * VPrime(V));
+    return 1.0 / (2 * pi * Rval);
+}
+
+autodiff::dual CylindricalMagneticField::dRdV(autodiff::dual V)
+{
+    autodiff::dual Rval = R_V(V);
+    return 1.0 / (2 * pi * Rval);
 }
 
 double CylindricalMagneticField::MirrorRatio(double V)

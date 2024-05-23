@@ -13,7 +13,7 @@ class CylindricalMagneticField():
         self.Ri = 0.5*np.sqrt(f["configuration"]["Lower_boundary"]/np.pi)
         self.Ro = 1.5*np.sqrt(f["configuration"]["Upper_boundary"]/np.pi)
 
-        self.m = -0.1*self.B0/(2*(self.Ro-self.Ri))
+        self.m = 0.0*self.B0/(2*(self.Ro-self.Ri))
 
         self.R = np.linspace(self.Ri,self.Ro,nPoints)
         
