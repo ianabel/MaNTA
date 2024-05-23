@@ -25,7 +25,7 @@
 
 	J = [ - Kappa du/dx ]_( x = 1 ) - [ - Kappa du/dx ]_( x = -1 )
 
-	S_2[x] is chosen such that it has no firest moment
+	S_2[x] is chosen such that it has no first moment
 
 	/ 1
 	|   S_2 dx = 0
@@ -42,7 +42,7 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const&)
 {
 	// Always set nVars in a derived constructor
 	nVars = 1;
-	nScalars = 0;
+	nScalars = 1;
 
 	// Construst your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
@@ -87,7 +87,7 @@ Value ScalarTestLD3::ScaledSource( Position x ) const
 
 Value ScalarTestLD3::Sources(Index, const State &s, Position x, Time)
 {
-	double J = 0; // s.Scalars[ 0 ];
+	double J = s.Scalars[ 0 ];
 
 	return J * ScaledSource( x ) + 0.5*std::cos( std::numbers::pi * x );
 }
