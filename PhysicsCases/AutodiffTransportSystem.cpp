@@ -56,7 +56,7 @@ Value AutodiffTransportSystem::Sources(Index i, const State &s, Position x, Time
 
 	if (useMMS)
 	{
-		return Source(i, uw, qw, sw, xreal, t).val + MMS_Source(i, x, t);
+		return Source(i, uw, qw, sw, xreal, t).val + MMS_Source(i, xreal.val, t);
 	}
 	else
 	{
@@ -264,14 +264,15 @@ Value AutodiffTransportSystem::MMS_Source(Index i, Position x, Time t)
 	double dSdx = derivative([this, i](VectorXdual uD, VectorXdual qD, Real X, Time T)
 							 { return this->Flux(i, uD, qD, X, T); },
 							 wrt(xreal), at(uw, qw, xreal, t));
+
 	double dSigma_dx = dSdx;
 	for (Index j = 0; j < nVars; ++j)
 	{
 		sigma(j) = Flux(i, uw, qw, xreal, t);
 		dSigma_dx += s.Derivative[j] * gradu[j] + d2udx2[j] * gradq[j];
 	}
-	auto [u, dudx, dudt] = derivatives([this, i](Real2nd x, Real2nd t)
-									   { return this->MMS_Solution(i, x, t); }, wrt(tval), at(xval, tval));
+	double dudt = derivative([this, i](Real2nd x, Real2nd t)
+							 { return this->MMS_Solution(i, x, t); }, wrt(tval), at(xval, tval));
 	double S = dudt - dSigma_dx - Source(i, uw, qw, sigma, x, t).val;
 
 	return S;

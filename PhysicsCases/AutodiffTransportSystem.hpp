@@ -72,9 +72,9 @@ private:
 
 	Vector InitialHeights;
 
-	autodiff::dual2nd DirichletIC(Index i, autodiff::dual2nd x, autodiff::dual2nd t, double u_R, double u_L, double x_L, double x_R) const;
+	Real2nd DirichletIC(Index i, Real2nd x, Real2nd t, double u_R, double u_L, double x_L, double x_R) const;
 
-	virtual autodiff::dual2nd MMS_Solution(Index i, Real2nd x, Real2nd t);
+	virtual Real2nd MMS_Solution(Index i, Real2nd x, Real2nd t);
 
 	Value MMS_Source(Index, Position, Time);
 };

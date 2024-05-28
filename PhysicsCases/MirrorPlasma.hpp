@@ -61,6 +61,8 @@ private:
 	virtual bool isLowerBoundaryDirichlet(Index i) const override;
 	virtual bool isUpperBoundaryDirichlet(Index i) const override;
 
+	Real2nd MMS_Solution(Index i, Real2nd x, Real2nd t) override;
+
 	double ParticleSourceStrength, ParticleSourceCenter,
 		jRadial, ParticleSourceWidth, UniformHeatSource;
 

@@ -16,72 +16,118 @@ using spline = boost::math::interpolators::cardinal_cubic_b_spline<double>;
 class StraightMagneticField
 {
 public:
-	double Bz_R(double R) { return B_z; };
-	double V(double Psi)
+	template <typename T>
+	T Bz_R(T R) { return B_z; };
+	template <typename T>
+	T V(T Psi)
 	{
 		return 2 * pi * Psi * L_z / B_z;
 	};
-	double Psi(double R)
+	template <typename T>
+	T Psi(T R)
 	{
 		return R * R * B_z / 2.0;
 	};
-	double Psi_V(double V)
+	template <typename T>
+	T Psi_V(T V)
 	{
 		return B_z * V / (2 * pi * L_z);
 	};
-	double VPrime(double V)
+	template <typename T>
+	T VPrime(T V)
 	{
 		return 2 * pi * L_z / B_z;
 	};
-	double R(double Psi)
+	template <typename T>
+	T R(T Psi)
 	{
 		return sqrt(2 * Psi / B_z);
 	};
-	double R_V(double V)
+	template <typename T>
+	T R_V(T V)
 	{
 		return sqrt(V / (pi * L_z));
 	};
-	double dRdV(double V)
+	template <typename T>
+	T dRdV(T V)
 	{
 		return 1.0 / (2 * pi * R_V(V));
 	}
-	double MirrorRatio(double)
+	template <typename T>
+	double MirrorRatio(T)
 	{
-		return 3.3;
-	};
-	autodiff::dual Bz_R(autodiff::dual R) { return B_z; };
-	autodiff::dual V(autodiff::dual Psi)
-	{
-		return 2 * pi * Psi * L_z / B_z;
-	};
-	autodiff::dual Psi(autodiff::dual R)
-	{
-		return R * R * B_z / 2.0;
-	};
-	autodiff::dual Psi_V(autodiff::dual V)
-	{
-		return B_z * V / (2 * pi * L_z);
-	};
-	autodiff::dual VPrime(autodiff::dual V)
-	{
-		return 2 * pi * L_z / B_z;
-	};
-	autodiff::dual R(autodiff::dual Psi)
-	{
-		return sqrt(2 * Psi / B_z);
-	};
-	autodiff::dual R_V(autodiff::dual V)
-	{
-		return sqrt(V / (pi * L_z));
-	};
-	autodiff::dual dRdV(autodiff::dual V)
-	{
-		return 1.0 / (2 * pi * R_V(V));
+		return 3.0;
 	}
-	double MirrorRatio(autodiff::dual)
-	{
-		return 3.3;
-	};
+	// double Bz_R(double R) { return B_z; };
+	// double V(double Psi)
+	// {
+	// 	return 2 * pi * Psi * L_z / B_z;
+	// };
+	// double Psi(double R)
+	// {
+	// 	return R * R * B_z / 2.0;
+	// };
+	// double Psi_V(double V)
+	// {
+	// 	return B_z * V / (2 * pi * L_z);
+	// };
+	// double VPrime(double V)
+	// {
+	// 	return 2 * pi * L_z / B_z;
+	// };
+	// double R(double Psi)
+	// {
+	// 	return sqrt(2 * Psi / B_z);
+	// };
+	// double R_V(double V)
+	// {
+	// 	return sqrt(V / (pi * L_z));
+	// };
+	// double dRdV(double V)
+	// {
+	// 	return 1.0 / (2 * pi * R_V(V));
+	// }
+	// double MirrorRatio(double)
+	// {
+	// 	return 3.3;
+	// };
+	// autodiff::dual Bz_R(autodiff::dual R) { return B_z; };
+	// autodiff::dual V(autodiff::dual Psi)
+	// {
+	// 	return 2 * pi * Psi * L_z / B_z;
+	// };
+	// autodiff::dual Psi(autodiff::dual R)
+	// {
+	// 	return R * R * B_z / 2.0;
+	// };
+	// autodiff::dual Psi_V(autodiff::dual V)
+	// {
+	// 	return B_z * V / (2 * pi * L_z);
+	// };
+	// autodiff::dual VPrime(autodiff::dual V)
+	// {
+	// 	return 2 * pi * L_z / B_z;
+	// };
+	// autodiff::dual R(autodiff::dual Psi)
+	// {
+	// 	return sqrt(2 * Psi / B_z);
+	// };
+	// autodiff::dual R_V(autodiff::dual V)
+	// {
+	// 	return sqrt(V / (pi * L_z));
+	// };
+	// autodiff::dual2nd R_V(autodiff::dual2nd V)
+	// {
+	// 	return sqrt(V / (pi * L_z));
+	// }
+	// autodiff::dual dRdV(autodiff::dual V)
+	// {
+	// 	return 1.0 / (2 * pi * R_V(V));
+	// }
+	// double MirrorRatio(autodiff::dual)
+	// {
+	// 	return 3.3;
+	// };
 
 private:
 	double L_z = 1.0;

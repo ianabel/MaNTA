@@ -133,10 +133,11 @@ MirrorPlasmaTest::MirrorPlasmaTest(toml::value const &config, Grid const &grid)
 
 autodiff::dual2nd MirrorPlasmaTest::InitialFunction(Index i, autodiff::dual2nd V, autodiff::dual2nd t) const
 {
+	autodiff::dual2nd tfac = 1 + growth * tanh(growth_rate * t);
 	autodiff::dual2nd R_min = B->R_V(xL);
 	autodiff::dual2nd R_max = B->R_V(xR);
-	autodiff::dual2nd R = B->R_V(V.val.val);
-	R.grad = B->dRdV(V.val.val);
+	autodiff::dual2nd R = B->R_V(V);
+	// R.grad = B->dRdV(V.val.val);
 	autodiff::dual2nd R_mid = (R_min + R_max) / 2.0;
 
 	autodiff::dual2nd nMid = InitialPeakDensity;
@@ -146,7 +147,7 @@ autodiff::dual2nd MirrorPlasmaTest::InitialFunction(Index i, autodiff::dual2nd V
 
 	autodiff::dual2nd v = cos(pi * (R - R_mid) / (R_max - R_min));
 	double shape = 1 / DensityWidth;
-	autodiff::dual2nd n = nEdge + (nMid - nEdge) * v * exp(-shape * (R - R_mid) * (R - R_mid));
+	autodiff::dual2nd n = nEdge + tfac * (nMid - nEdge) * v * exp(-shape * (R - R_mid) * (R - R_mid));
 	autodiff::dual2nd Te = TeEdge + (TeMid - TeEdge) * v * v;
 	autodiff::dual2nd Ti = TiEdge + (TiMid - TiEdge) * v * v;
 	shape = 500;
@@ -259,6 +260,11 @@ bool MirrorPlasmaTest::isLowerBoundaryDirichlet(Index i) const
 bool MirrorPlasmaTest::isUpperBoundaryDirichlet(Index i) const
 {
 	return upperBoundaryConditions[i];
+}
+
+Real2nd MirrorPlasmaTest::MMS_Solution(Index i, Real2nd x, Real2nd t)
+{
+	return InitialFunction(i, x, t);
 }
 
 /*

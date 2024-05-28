@@ -283,6 +283,11 @@ bool MirrorPlasma::isUpperBoundaryDirichlet(Index i) const
 	}
 }
 
+Real2nd MirrorPlasma::MMS_Solution(Index i, Real2nd x, Real2nd t)
+{
+	return InitialFunction(i, x, t);
+}
+
 /*
 Normalisation:
    All lengths to a, densities to n0, temperatures to T0
