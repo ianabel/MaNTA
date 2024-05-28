@@ -69,6 +69,8 @@ private:
 
 	Real2nd MMS_Solution(Index i, Real2nd V, Real2nd t) override;
 
+	std::vector<double> growth_rates;
+
 	double ParticleSourceStrength, ParticleSourceCenter,
 		jRadial, ParticleSourceWidth, UniformHeatSource;
 

@@ -1,6 +1,7 @@
 #include "MirrorPlasmaTest.hpp"
 #include "Constants.hpp"
 #include <iostream>
+#include <string>
 
 REGISTER_PHYSICS_IMPL(MirrorPlasmaTest);
 const double n_mid = 0.25;
@@ -148,10 +149,10 @@ autodiff::dual2nd MirrorPlasmaTest::InitialFunction(Index i, autodiff::dual2nd V
 	autodiff::dual2nd v = cos(pi * (R - R_mid) / (R_max - R_min));
 	double shape = 1 / DensityWidth;
 	autodiff::dual2nd n = nEdge + tfac * (nMid - nEdge) * v * exp(-shape * (R - R_mid) * (R - R_mid));
-	autodiff::dual2nd Te = TeEdge + (TeMid - TeEdge) * v * v;
-	autodiff::dual2nd Ti = TiEdge + (TiMid - TiEdge) * v * v;
+	autodiff::dual2nd Te = TeEdge + tfac * (TeMid - TeEdge) * v * v;
+	autodiff::dual2nd Ti = TiEdge + tfac * (TiMid - TiEdge) * v * v;
 	shape = 500;
-	autodiff::dual2nd M = MEdge + MMid * (1 - (exp(-shape * (R - R_Upper) * (R - R_Upper)) + exp(-shape * (R - R_Lower) * (R - R_Lower))));
+	autodiff::dual2nd M = MEdge + tfac * MMid * (1 - (exp(-shape * (R - R_Upper) * (R - R_Upper)) + exp(-shape * (R - R_Lower) * (R - R_Lower))));
 	autodiff::dual2nd omega = sqrt(Te) * M / R;
 
 	Channel c = static_cast<Channel>(i);
@@ -854,6 +855,10 @@ void MirrorPlasmaTest::initialiseDiagnostics(NetCDFIO &nc)
 	};
 
 	nc.AddTimeSeries("Voltage", "Total voltage drop across the plasma", "Volts", initialVoltage);
+	nc.AddGroup("MMS", "Manufactured solutions");
+	for (int j = 0; j < nVars; ++j)
+		nc.AddVariable("MMS", "Var" + std::to_string(j), "Manufactured solution", "-", [this, j](double V)
+					   { return this->InitialFunction(j, V, 0.0).val.val; });
 	nc.AddGroup("MomentumFlux", "Separating momentum fluxes");
 	nc.AddGroup("ParallelLosses", "Separated parallel losses");
 	nc.AddVariable("ParallelLosses", "ParLoss", "Parallel particle losses", "-", ParallelLosses);
@@ -968,8 +973,23 @@ void MirrorPlasmaTest::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, s
 		return IonElectronEnergyExchange(n(V), p_e(V), p_i(V), V, 0.0).val;
 	};
 
+	Fn DensitySol = [this, t](double V)
+	{ return this->InitialFunction(Channel::Density, V, t).val.val; };
+	Fn IonEnergySol = [this, t](double V)
+	{ return this->InitialFunction(Channel::IonEnergy, V, t).val.val; };
+	Fn ElectronEnergySol = [this, t](double V)
+	{ return this->InitialFunction(Channel::ElectronEnergy, V, t).val.val; };
+	Fn AngularMomentumSol = [this, t](double V)
+	{ return this->InitialFunction(Channel::AngularMomentum, V, t).val.val; };
+	// std::vector<std::pair<std::string, const Fn &>> MMSsols;
+	// for (int j = 0; j < nVars; ++j)
+	// {
+	// 	MMSsols.push_back({"MMSVar" + std::to_string(j), );
+	// }
 	// Add the appends for the heating stuff
 	nc.AppendToGroup<Fn>("Heating", tIndex, {{"AlphaHeating", AlphaHeating}, {"ViscousHeating", ViscousHeating}, {"RadiationLosses", RadiationLosses}, {"EnergyExchange", EnergyExchange}});
 
 	nc.AppendToGroup<Fn>("ParallelLosses", tIndex, {{"ParLoss", ParallelLosses}, {"CentrifugalPotential", Phi0}});
+
+	nc.AppendToGroup<Fn>("MMS", tIndex, {{"Var0", DensitySol}, {"Var1", IonEnergySol}, {"Var2", ElectronEnergySol}, {"Var3", AngularMomentumSol}});
 }

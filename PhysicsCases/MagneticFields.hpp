@@ -17,37 +17,37 @@ class StraightMagneticField
 {
 public:
 	template <typename T>
-	T Bz_R(T R) { return B_z; };
+	T Bz_R(T R) { return B_z; }
 	template <typename T>
 	T V(T Psi)
 	{
 		return 2 * pi * Psi * L_z / B_z;
-	};
+	}
 	template <typename T>
 	T Psi(T R)
 	{
 		return R * R * B_z / 2.0;
-	};
+	}
 	template <typename T>
 	T Psi_V(T V)
 	{
 		return B_z * V / (2 * pi * L_z);
-	};
+	}
 	template <typename T>
 	T VPrime(T V)
 	{
 		return 2 * pi * L_z / B_z;
-	};
+	}
 	template <typename T>
 	T R(T Psi)
 	{
 		return sqrt(2 * Psi / B_z);
-	};
+	}
 	template <typename T>
 	T R_V(T V)
 	{
 		return sqrt(V / (pi * L_z));
-	};
+	}
 	template <typename T>
 	T dRdV(T V)
 	{

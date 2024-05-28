@@ -18,6 +18,8 @@ private:
         Step = 3
     };
 
+    Real2nd MMS_Solution(Index i, Real2nd x, Real2nd t) override;
+
     std::map<std::string, Sources> SourceMap = {{"PeakedEdge", Sources::PeakedEdge}, {"Gaussian", Sources::Gaussian}, {"Uniform", Sources::Uniform}, {"Step", Sources::Step}};
 
     Real Flux(Index, RealVector, RealVector, Position, Time) override;
@@ -34,6 +36,9 @@ private:
     Index nSources;
     std::vector<bool> upperBoundaryConditions, lowerBoundaryConditions;
     Matrix Kappa;
+
+    void initialiseDiagnostics(NetCDFIO &nc) override;
+    void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override;
 
     REGISTER_PHYSICS_HEADER(LinearDiffSourceTest)
 };

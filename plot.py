@@ -58,12 +58,25 @@ def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_grid= 
 
     data.close()
 
+def plot_MMS(fname):
+    data = Dataset(fname)
+    t = np.array(data.variables["t"])
+
+    Solgroup = data.groups["MMS"]
+    plt.figure()
+    ax = plt.axes()
+    for var in Solgroup.variables:
+        s = np.array(Solgroup.variables[var])
+        sac = np.array(data.groups[var].variables["u"])
+        diff = np.amax(np.abs(s - sac),axis=1)
+        ax.semilogy(t,diff,label=var)
 
 
 def main():
     fname = "./LinearDiffSourceTest.nc"
     plot_nc(fname,True,True,True,False,True)
-
+    plot_MMS(fname)
+    
 if __name__ == "__main__":
     main()
 

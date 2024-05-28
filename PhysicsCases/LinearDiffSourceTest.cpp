@@ -8,7 +8,7 @@ LinearDiffSourceTest::LinearDiffSourceTest(toml::value const &config, Grid const
     xL = grid.lowerBoundary();
     xR = grid.upperBoundary();
 
-    nVars = toml::find<int>(config.at("configuration"), "nVars");
+    nVars = 2; // toml::find<int>(config.at("configuration"), "nVars");
     nScalars = 0;
 
     if (config.count("LinearDiffSourceTest") == 1)
@@ -27,6 +27,8 @@ LinearDiffSourceTest::LinearDiffSourceTest(toml::value const &config, Grid const
         nSources = toml::find_or(InternalConfig, "nSources", nVars);
 
         useMMS = toml::find_or(InternalConfig, "useMMS", false);
+        growth = toml::find_or(InternalConfig, "growth", 1.0);
+        growth_rate = toml::find_or(InternalConfig, "growth_rate", 0.5);
 
         SourceWidth.resize(nSources);
         SourceStrength.resize(nSources);
@@ -88,6 +90,11 @@ Real2nd LinearDiffSourceTest::InitialFunction(Index i, Real2nd x, Real2nd t) con
     return InitialHeight[i] * exp(-shape * (x - center) * (x - center));
 };
 
+Real2nd LinearDiffSourceTest::MMS_Solution(Index i, Real2nd x, Real2nd t)
+{
+    return (1 + growth * tanh(growth_rate * t)) * InitialFunction(i, x, t);
+}
+
 Real LinearDiffSourceTest::Flux(Index i, RealVector u, RealVector q, Position x, Time t)
 {
     RealVector sigma = Kappa * q;
@@ -97,29 +104,36 @@ Real LinearDiffSourceTest::Flux(Index i, RealVector u, RealVector q, Position x,
 Real LinearDiffSourceTest::Source(Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t)
 {
     Real S = 0.0;
-    for (auto j = 0; j < nSources; ++j)
-    {
-        auto s = SourceTypes[j];
-        double shape = 1.0 / SourceWidth[j];
-        switch (s)
-        {
-        case Sources::PeakedEdge:
-            S += SourceStrength[j] * (exp(-shape * (x - xL) * (x - xL)) + exp(-shape * (x - xR) * (x - xR)));
-            break;
-        case Sources::Gaussian:
-            S += SourceStrength[j] * exp(-shape * (x - SourceCenter[j]) * (x - SourceCenter[j]));
-            break;
-        case Sources::Uniform:
-            S += SourceStrength[j];
-            break;
-        case Sources::Step:
-            S += x < SourceCenter[j] ? 0.0 : SourceStrength[j];
-            break;
-        default:
-            break;
-        }
-    }
+    if (i == 0)
+
+        S = SourceStrength[0] * u[1];
+    else
+        S = SourceStrength[1] * u[0];
+
     return S;
+    // for (auto j = 0; j < nSources; ++j)
+    // {
+    //     auto s = SourceTypes[j];
+    //     double shape = 1.0 / SourceWidth[j];
+    //     switch (s)
+    //     {
+    //     case Sources::PeakedEdge:
+    //         S += SourceStrength[j] * (exp(-shape * (x - xL) * (x - xL)) + exp(-shape * (x - xR) * (x - xR)));
+    //         break;
+    //     case Sources::Gaussian:
+    //         S += SourceStrength[j] * exp(-shape * (x - SourceCenter[j]) * (x - SourceCenter[j]));
+    //         break;
+    //     case Sources::Uniform:
+    //         S += SourceStrength[j];
+    //         break;
+    //     case Sources::Step:
+    //         S += x < SourceCenter[j] ? 0.0 : SourceStrength[j];
+    //         break;
+    //     default:
+    //         break;
+    //     }
+    // }
+    // return S;
 }
 
 Value LinearDiffSourceTest::LowerBoundary(Index i, Time t) const
@@ -139,4 +153,22 @@ bool LinearDiffSourceTest::isLowerBoundaryDirichlet(Index i) const
 bool LinearDiffSourceTest::isUpperBoundaryDirichlet(Index i) const
 {
     return upperBoundaryConditions[i];
+}
+
+void LinearDiffSourceTest::initialiseDiagnostics(NetCDFIO &nc)
+{
+    nc.AddGroup("MMS", "Manufactured solutions");
+    for (int j = 0; j < nVars; ++j)
+        nc.AddVariable("MMS", "Var" + std::to_string(j), "Manufactured solution", "-", [this, j](double V)
+                       { return this->InitialFunction(j, V, 0.0).val.val; });
+}
+
+void LinearDiffSourceTest::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
+{
+    Fn s1 = [this, t](double x)
+    { return this->MMS_Solution(0, x, t).val.val; };
+    Fn s2 = [this, t](double x)
+    { return this->MMS_Solution(1, x, t).val.val; };
+
+    nc.AppendToGroup<Fn>("MMS", tIndex, {{"Var0", s1}, {"Var1", s2}});
 }

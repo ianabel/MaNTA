@@ -70,6 +70,23 @@ public:
 		}
 	}
 
+	template <typename T>
+	void AppendToGroup(std::string const &name, size_t tIndex, const std::vector<std::pair<std::string, T const &>> &vars)
+	{
+
+		std::vector<double> gridValues;
+		gridValues.resize(gridpoints.size());
+
+		netCDF::NcGroup group = data_file.getGroup(name);
+		for (auto &var : vars)
+		{
+			for (size_t i = 0; i < gridpoints.size(); ++i)
+				gridValues[i] = var.second(gridpoints[i]);
+
+			group.getVar(var.first).putVar({tIndex, 0}, {1, gridpoints.size()}, gridValues.data());
+		}
+	}
+
 	void StoreGridInfo(const Grid &, unsigned int);
 
 private:
