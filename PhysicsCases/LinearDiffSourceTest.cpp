@@ -106,9 +106,9 @@ Real LinearDiffSourceTest::Source(Index i, RealVector u, RealVector q, RealVecto
     Real S = 0.0;
     if (i == 0)
 
-        S = SourceStrength[0] * u[1];
+        S = SourceStrength[0] * u[0];
     else
-        S = SourceStrength[1] * u[0];
+        S = SourceStrength[1] * u[1];
 
     return S;
     // for (auto j = 0; j < nSources; ++j)

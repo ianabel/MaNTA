@@ -15,13 +15,11 @@ def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_grid= 
         plt.figure()
         ax = plt.axes()
         for Var in Vars: 
-            try:
+            if (Var.startswith("Var")):
                 y = np.array(data.groups[Var].variables["u"])
                 ax.plot(x,y[-1,:],label=Var)
                 if (include_initial):
                     ax.plot(x,y[0,:],label=Var+", t = 0")
-            except:
-                continue
     
         ax.legend()
         if (plot_grid):
@@ -33,26 +31,24 @@ def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_grid= 
         plt.figure()
         ax = plt.axes()
         for Var in Vars: 
-            try:
+            if (Var.startswith("Var")):
                 y = np.array(data.groups[Var].variables["q"])
                 ax.plot(x,y[-1,:],label=Var)
                 if (include_initial):
                     ax.plot(x,y[0,:],label=Var+", t = 0")
-            except:
-                continue
+
         ax.legend()
         plt.title("q")
     if (plot_sigma):
         plt.figure()
         ax = plt.axes()
         for Var in Vars: 
-            try:
+            if (Var.startswith("Var")):
                 y = np.array(data.groups[Var].variables["sigma"])
                 ax.plot(x,y[-1,:],label=Var)
                 if (include_initial):
                     ax.plot(x,y[0,:],label=Var+", t = 0")
-            except:
-                continue
+
         ax.legend()
         plt.title("sigma")
 
@@ -62,21 +58,21 @@ def plot_MMS(fname):
     data = Dataset(fname)
     t = np.array(data.variables["t"])
 
-    Solgroup = data.groups["MMS"]
+    MMS = data.groups["MMS"]
     plt.figure()
     ax = plt.axes()
-    for var in Solgroup.variables:
-        s = np.array(Solgroup.variables[var])
+    for var in MMS.variables:
+        s = np.array(MMS.variables[var])
         sac = np.array(data.groups[var].variables["u"])
         diff = np.amax(np.abs(s - sac),axis=1)
         ax.semilogy(t,diff,label=var)
 
 
 def main():
-    fname = "./LinearDiffSourceTest.nc"
+    fname = "./LinearDiffusion.nc"
     plot_nc(fname,True,True,True,False,True)
     plot_MMS(fname)
-    
+
 if __name__ == "__main__":
     main()
 
