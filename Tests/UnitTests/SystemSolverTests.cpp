@@ -103,7 +103,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_init_tests)
 
 	// Initial conditions
 	SUNContext ctx;
-	SUNContext_Create(nullptr, &ctx);
+	SUNContext_Create( SUN_COMM_NULL, &ctx);
 
 	N_Vector y0, y0_dot;
 
@@ -236,7 +236,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_matrix_tests)
 	BOOST_CHECK_NO_THROW( system->initialiseMatrices() );
 
 	SUNContext ctx;
-	SUNContext_Create(nullptr, &ctx);
+	SUNContext_Create( SUN_COMM_NULL, &ctx);
 
 	N_Vector y0, y0_dot;
 
