@@ -66,10 +66,13 @@ def plot_MMS(fname):
         sac = np.array(data.groups[var].variables["u"])
         diff = np.amax(np.abs(s - sac),axis=1)
         ax.semilogy(t,diff,label=var)
+    ax.legend()
+    plt.xlabel("t")
+    plt.ylabel("error")
 
 
 def main():
-    fname = "./LinearDiffusion.nc"
+    fname = "./SlabPlasma.nc"
     plot_nc(fname,True,True,True,False,True)
     plot_MMS(fname)
 
