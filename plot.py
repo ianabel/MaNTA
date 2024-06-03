@@ -41,17 +41,18 @@ def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_grid= 
         ax.legend()
         plt.title("q")
     if (plot_sigma):
-        plt.figure()
-        ax = plt.axes()
-        for Var in Vars: 
+
+        for Var in Vars:
             if (Var.startswith("Var")):
+                plt.figure()
+                ax = plt.axes()
                 y = np.array(data.groups[Var].variables["sigma"])
                 ax.plot(x,y[-1,:],label=Var)
                 if (include_initial):
                     ax.plot(x,y[0,:],label=Var+", t = 0")
 
-        ax.legend()
-        plt.title("sigma")
+                ax.legend()
+                plt.title("sigma")
 
     data.close()
 
@@ -70,6 +71,8 @@ def plot_MMS(fname):
     ax.legend()
     plt.xlabel("t")
     plt.ylabel("error")
+
+    data.close()
 
 
 def main():

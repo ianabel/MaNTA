@@ -28,7 +28,8 @@ SlabPlasma::SlabPlasma(toml::value const &config, Grid const &grid) : AutodiffTr
         DensityProfile = toml::find_or(InternalConfig, "DensityProfile", "Uniform");
 
         nEdge = toml::find_or(InternalConfig, "EdgeDensity", n_edge);
-        InitialHeight = toml::find_or(InternalConfig, "InitialHeight", T_mid);
+        nMid = toml::find_or(InternalConfig, "InitialDensity", n_mid);
+        TMid = toml::find_or(InternalConfig, "InitialTemperature", T_mid);
         InitialWidth = toml::find_or(InternalConfig, "InitialWidth", 0.1);
         TeEdge = toml::find_or(InternalConfig, "EdgeElectronTemperature", T_edge);
         TiEdge = toml::find_or(InternalConfig, "EdgeIonTemperature", T_edge);
@@ -51,16 +52,16 @@ SlabPlasma::SlabPlasma(toml::value const &config, Grid const &grid) : AutodiffTr
 Real2nd SlabPlasma::InitialFunction(Index i, Real2nd x, Real2nd t) const
 {
     Real2nd tfac = 1 + growth * tanh(growth_rate * t);
-    double TeMid = InitialHeight;
-    double TiMid = InitialHeight;
+    double TeMid = TMid;
+    double TiMid = TMid;
 
     double x_mid = 0.5 * (xL + xR);
 
     Real2nd v = cos(pi * (x - x_mid) / (xR - xL));
 
     Real2nd n = Density(x, t);
-    Real2nd Te = TeEdge + tfac * (TeMid - TeEdge) * v * exp(-1 / InitialWidth * (x - x_mid) * (x - x_mid));
-    Real2nd Ti = TiEdge + tfac * (TiMid - TiEdge) * v * exp(-1 / InitialWidth * (x - x_mid) * (x - x_mid));
+    Real2nd Te = TeEdge + tfac * (TeMid - TeEdge) * v * v;
+    Real2nd Ti = TiEdge + tfac * (TiMid - TiEdge) * v * v;
 
     Channel c = static_cast<Channel>(i);
     switch (c)
@@ -115,7 +116,7 @@ Real2nd SlabPlasma::Density(Real2nd x, Real2nd t) const
     {
         double x_mid = 0.5 * (xL + xR);
         Real2nd v = cos(pi * (x - x_mid) / (xR - xL));
-        Real2nd n = nEdge + (1.0 - nEdge) * v * exp(-1 / InitialWidth * (x - x_mid) * (x - x_mid));
+        Real2nd n = nEdge + (nMid - nEdge) * v * exp(-1.0 / InitialWidth * (x - x_mid) * (x - x_mid));
         return n;
     }
     default:
@@ -125,14 +126,30 @@ Real2nd SlabPlasma::Density(Real2nd x, Real2nd t) const
 
 Real SlabPlasma::DensityPrime(Real x, Real t) const
 {
-    return autodiff::derivative([this](Real x, Real t)
-                                { return this->Density(x, t); }, wrt(x), at(x, t));
+    Real nPrime;
+    Real2nd x2 = x.val;
+    Real2nd t2 = t.val;
+    auto [n0, dndx, dn2dx] = autodiff::derivatives([this](Real2nd x, Real2nd t)
+                                                   { return this->Density(x, t); }, wrt(x2, x2), at(x2, t2));
+    if (x.grad != 0.0)
+    {
+        nPrime.val = dndx;
+        nPrime.grad = dn2dx;
+    }
+    else
+    {
+        nPrime.val = dndx;
+        nPrime.grad = 0.0;
+    }
+    return nPrime;
 }
 
 Real SlabPlasma::qi(RealVector u, RealVector q, Real x, Time t)
 {
     Real n = Density(x, t).val, p_i = (2. / 3.) * u(Channel::IonEnergy);
-    Real Ti = p_i / n;
+    if (x.grad != 0.0)
+        n.grad = DensityPrime(x, t).val;
+    Real Ti = p_i / n.val;
     Real nPrime = DensityPrime(x, t);
     Real p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
     Real Ti_prime = (p_i_prime - nPrime * Ti) / n;
@@ -147,6 +164,8 @@ Real SlabPlasma::qi(RealVector u, RealVector q, Real x, Time t)
 Real SlabPlasma::qe(RealVector u, RealVector q, Real x, Time t)
 {
     Real n = Density(x, t).val, p_e = (2. / 3.) * u(Channel::ElectronEnergy);
+    if (x.grad != 0.0)
+        n.grad = DensityPrime(x, t).val;
     Real Te = p_e / n;
     Real nPrime = DensityPrime(x, t);
     Real p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);

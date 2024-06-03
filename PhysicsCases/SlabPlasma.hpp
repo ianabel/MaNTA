@@ -49,8 +49,8 @@ private:
     Real Si(RealVector, RealVector, RealVector, Real, Time);
     Real Se(RealVector, RealVector, RealVector, Real, Time);
 
-    double InitialWidth, InitialHeight;
-    double nEdge, nMid, TiEdge, TeEdge;
+    double InitialWidth;
+    double nEdge, nMid, TiEdge, TeEdge, TMid;
 
     // Reference Values
     constexpr static double ElectronMass = 9.1094e-31;         // Electron Mass, kg
