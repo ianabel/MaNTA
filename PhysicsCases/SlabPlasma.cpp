@@ -4,6 +4,7 @@
 REGISTER_PHYSICS_IMPL(SlabPlasma);
 
 const double n_edge = 1.0;
+const double n_mid = 1.0;
 const double T_mid = 1.0, T_edge = 1e-2;
 
 SlabPlasma::SlabPlasma(toml::value const &config, Grid const &grid) : AutodiffTransportSystem(config, grid, 2, 0)
@@ -24,6 +25,8 @@ SlabPlasma::SlabPlasma(toml::value const &config, Grid const &grid) : AutodiffTr
         growth_rate = toml::find_or(InternalConfig, "MMSgrowth_rate", 0.5);
         EnergyExchangeFactor = toml::find_or(InternalConfig, "EnergyExchangeFactor", 1.0);
 
+        DensityProfile = toml::find_or(InternalConfig, "DensityProfile", "Uniform");
+
         nEdge = toml::find_or(InternalConfig, "EdgeDensity", n_edge);
         InitialHeight = toml::find_or(InternalConfig, "InitialHeight", T_mid);
         InitialWidth = toml::find_or(InternalConfig, "InitialWidth", 0.1);
@@ -34,6 +37,14 @@ SlabPlasma::SlabPlasma(toml::value const &config, Grid const &grid) : AutodiffTr
         uR[Channel::IonEnergy] = (3. / 2.) * nEdge * TiEdge;
         uL[Channel::ElectronEnergy] = (3. / 2.) * nEdge * TeEdge;
         uR[Channel::ElectronEnergy] = (3. / 2.) * nEdge * TeEdge;
+    }
+    else if (config.count("SlabPlasma") == 0)
+    {
+        throw std::invalid_argument("To use the Slab Plasma physics model, a [SlabPlasma] configuration section is required.");
+    }
+    else
+    {
+        throw std::invalid_argument("Unable to find unique [SlabPlasma] configuration section in configuration file.");
     }
 }
 
@@ -93,9 +104,23 @@ Real SlabPlasma::Source(Index i, RealVector u, RealVector q, RealVector sigma, R
     }
 }
 
-Real SlabPlasma::Density(Real2nd, Real2nd) const
+Real2nd SlabPlasma::Density(Real2nd x, Real2nd t) const
 {
-    return nEdge;
+    DensityType d = static_cast<DensityType>(DensityMap.at(DensityProfile));
+    switch (d)
+    {
+    case DensityType::Uniform:
+        return nEdge;
+    case DensityType::Gaussian:
+    {
+        double x_mid = 0.5 * (xL + xR);
+        Real2nd v = cos(pi * (x - x_mid) / (xR - xL));
+        Real2nd n = nEdge + (1.0 - nEdge) * v * exp(-1 / InitialWidth * (x - x_mid) * (x - x_mid));
+        return n;
+    }
+    default:
+        throw std::runtime_error("Request for invalid density profile!");
+    }
 }
 
 Real SlabPlasma::DensityPrime(Real x, Real t) const
@@ -106,7 +131,7 @@ Real SlabPlasma::DensityPrime(Real x, Real t) const
 
 Real SlabPlasma::qi(RealVector u, RealVector q, Real x, Time t)
 {
-    Real n = Density(x, t), p_i = (2. / 3.) * u(Channel::IonEnergy);
+    Real n = Density(x, t).val, p_i = (2. / 3.) * u(Channel::IonEnergy);
     Real Ti = p_i / n;
     Real nPrime = DensityPrime(x, t);
     Real p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
@@ -121,7 +146,7 @@ Real SlabPlasma::qi(RealVector u, RealVector q, Real x, Time t)
 }
 Real SlabPlasma::qe(RealVector u, RealVector q, Real x, Time t)
 {
-    Real n = Density(x, t), p_e = (2. / 3.) * u(Channel::ElectronEnergy);
+    Real n = Density(x, t).val, p_e = (2. / 3.) * u(Channel::ElectronEnergy);
     Real Te = p_e / n;
     Real nPrime = DensityPrime(x, t);
     Real p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
@@ -137,13 +162,13 @@ Real SlabPlasma::qe(RealVector u, RealVector q, Real x, Time t)
 
 Real SlabPlasma::Si(RealVector u, RealVector q, RealVector sigma, Real x, Time t)
 {
-    Real n = Density(x, t), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
+    Real n = Density(x, t).val, p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
     Real EnergyExchange = IonElectronEnergyExchange(n, p_e, p_i, x, t);
     return EnergyExchange;
 };
 Real SlabPlasma::Se(RealVector u, RealVector q, RealVector sigma, Real x, Time t)
 {
-    Real n = Density(x, t), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
+    Real n = Density(x, t).val, p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
     Real EnergyExchange = -IonElectronEnergyExchange(n, p_e, p_i, x, t);
     return EnergyExchange;
 };

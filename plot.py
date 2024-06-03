@@ -12,21 +12,22 @@ def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_grid= 
     t = np.array(data.variables["t"])
     x = np.array(data.variables["x"] )
     if (plot_u):
-        plt.figure()
-        ax = plt.axes()
         for Var in Vars: 
+
             if (Var.startswith("Var")):
+                plt.figure()
+                ax = plt.axes()
                 y = np.array(data.groups[Var].variables["u"])
                 ax.plot(x,y[-1,:],label=Var)
                 if (include_initial):
                     ax.plot(x,y[0,:],label=Var+", t = 0")
-    
-        ax.legend()
+                ax.legend()
+                plt.title("u")
         if (plot_grid):
             for x in Grid:
                 plt.axvline(x,label="_grid",color="red",linestyle="--",alpha=0.25)
        
-        plt.title("u")
+    
     if (plot_q):
         plt.figure()
         ax = plt.axes()

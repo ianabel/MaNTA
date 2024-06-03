@@ -38,9 +38,9 @@ private:
         Gaussian = 1,
     };
 
-    std::map<std::string, Index> DensityMap = {{"Uniform", DensityType::Uniform}, {"Gaussian", DensityType::Gaussian}};
+    const std::map<std::string, Index> DensityMap = {{"Uniform", DensityType::Uniform}, {"Gaussian", DensityType::Gaussian}};
     std::string DensityProfile;
-    Real Density(Real2nd, Real2nd) const;
+    Real2nd Density(Real2nd, Real2nd) const;
     Real DensityPrime(Real, Real) const;
 
     Real qi(RealVector, RealVector, Real, Time);
@@ -50,7 +50,7 @@ private:
     Real Se(RealVector, RealVector, RealVector, Real, Time);
 
     double InitialWidth, InitialHeight;
-    double nEdge, TiEdge, TeEdge;
+    double nEdge, nMid, TiEdge, TeEdge;
 
     // Reference Values
     constexpr static double ElectronMass = 9.1094e-31;         // Electron Mass, kg
