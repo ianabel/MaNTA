@@ -206,10 +206,10 @@ Real SlabPlasma::qe(RealVector u, RealVector q, Real x, Time t)
     }
     Real Te = p_e / n;
     Real nPrime = DensityPrime(x, t);
-    Real p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
+    Real p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy); //, p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
     Real Te_prime = (p_e_prime - nPrime * Te) / n;
 
-    Real HeatFlux = (p_e * Te / (ElectronCollisionTime(n, Te))) * (4.66 * Te_prime / Te - (3. / 2.) * (p_e_prime + p_i_prime) / p_e);
+    Real HeatFlux = (p_e * Te / (ElectronCollisionTime(n, Te))) * (4.66 * Te_prime / Te); //- (3. / 2.) * (p_e_prime + p_i_prime) / p_e);
 
     if (std::isfinite(HeatFlux.val))
         return HeatFlux;
