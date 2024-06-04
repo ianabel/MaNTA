@@ -1,5 +1,5 @@
-#ifndef SlabPlasma
-#define SlabPlamsa
+#ifndef SLABPLASMA_HPP
+#define SLABPLASMA_HPP
 
 #include "AutodiffTransportSystem.hpp"
 
@@ -41,7 +41,7 @@ private:
     const std::map<std::string, Index> DensityMap = {{"Uniform", DensityType::Uniform}, {"Gaussian", DensityType::Gaussian}};
     std::string DensityProfile;
     Real2nd Density(Real2nd, Real2nd) const;
-    Real DensityPrime(Real, Real) const;
+    Real DensityPrime(Real x, Real t) const;
 
     Real qi(RealVector, RealVector, Real, Time);
     Real qe(RealVector, RealVector, Real, Time);

@@ -74,11 +74,32 @@ def plot_MMS(fname):
 
     data.close()
 
+def plot_diagnostics(fname):
+    data = Dataset(fname)
+    t = np.array(data.variables["t"])
+    x = np.array(data.variables["x"])
+    for group in data.groups:
+        if (not group.startswith("Var") and not group.startswith("MMS") and not group.startswith("Grid")):
+            for var in data.groups[group].variables:
+                y = np.array(data.groups[group].variables[var])
+                plt.figure()
+                ax = plt.axes()
+                ax.plot(x,y[-1,:],label = var)
+                ax.plot(x,y[0,:],label = var + " t=0")
+                ax.legend()
+                plt.title(data.groups[group].description)
+                plt.xlabel("x")
+
+
+
+    data.close()
+
 
 def main():
     fname = "./SlabPlasma.nc"
     plot_nc(fname,True,True,True,False,True)
     plot_MMS(fname)
+    plot_diagnostics(fname)
 
 if __name__ == "__main__":
     main()

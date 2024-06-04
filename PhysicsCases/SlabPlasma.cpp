@@ -5,7 +5,7 @@ REGISTER_PHYSICS_IMPL(SlabPlasma);
 
 const double n_edge = 1.0;
 const double n_mid = 1.0;
-const double T_mid = 1.0, T_edge = 1e-2;
+const double T_mid = 1.0, T_edge = 0.1;
 
 SlabPlasma::SlabPlasma(toml::value const &config, Grid const &grid) : AutodiffTransportSystem(config, grid, 2, 0)
 {
@@ -19,6 +19,9 @@ SlabPlasma::SlabPlasma(toml::value const &config, Grid const &grid) : AutodiffTr
 
         uL.resize(nVars);
         uR.resize(nVars);
+
+        isUpperDirichlet = toml::find_or(InternalConfig, "isUpperDirichlet", true);
+        isLowerDirichlet = toml::find_or(InternalConfig, "isLowerDirichlet", true);
 
         useMMS = toml::find_or(InternalConfig, "useMMS", false);
         growth = toml::find_or(InternalConfig, "MMSgrowth", 1.0);
@@ -60,8 +63,8 @@ Real2nd SlabPlasma::InitialFunction(Index i, Real2nd x, Real2nd t) const
     Real2nd v = cos(pi * (x - x_mid) / (xR - xL));
 
     Real2nd n = Density(x, t);
-    Real2nd Te = TeEdge + tfac * (TeMid - TeEdge) * v * v;
-    Real2nd Ti = TiEdge + tfac * (TiMid - TiEdge) * v * v;
+    Real2nd Te = TeEdge + tfac * (TeMid - TeEdge) * v;
+    Real2nd Ti = TiEdge + tfac * (TiMid - TiEdge) * v;
 
     Channel c = static_cast<Channel>(i);
     switch (c)
@@ -126,35 +129,60 @@ Real2nd SlabPlasma::Density(Real2nd x, Real2nd t) const
 
 Real SlabPlasma::DensityPrime(Real x, Real t) const
 {
-    Real nPrime;
-    Real2nd x2 = x.val;
-    Real2nd t2 = t.val;
-    auto [n0, dndx, dn2dx] = autodiff::derivatives([this](Real2nd x, Real2nd t)
-                                                   { return this->Density(x, t); }, wrt(x2, x2), at(x2, t2));
-    if (x.grad != 0.0)
+    DensityType d = static_cast<DensityType>(DensityMap.at(DensityProfile));
+    switch (d)
     {
-        nPrime.val = dndx;
-        nPrime.grad = dn2dx;
-    }
-    else
+    case DensityType::Uniform:
+        return 0.0;
+    case DensityType::Gaussian:
     {
-        nPrime.val = dndx;
-        nPrime.grad = 0.0;
+        double x_mid = 0.5 * (xL + xR);
+        double k = 1.0 / InitialWidth;
+        Real n = -((nMid - nEdge) * exp(-k * (x - x_mid) * (x - x_mid)) * (pi * sin((pi * (x - x_mid)) / (xR - xL)) + 2 * k * (xR - xL) * (x - x_mid) * cos((pi * (x - x_mid)) / (xR - xL)))) / (xR - xL);
+        return n;
     }
-    return nPrime;
+    default:
+        throw std::runtime_error("Request for invalid density profile!");
+    }
+    // Real nPrime;
+    // Real2nd x2 = x.val;
+    // Real2nd t2 = t.val;
+    // auto [n0, dndx, dn2dx] = autodiff::derivatives([this](Real2nd x, Real2nd t)
+    //                                                { return this->Density(x, t); }, wrt(x2, x2), at(x2, t2));
+    // if (x.grad != 0.0)
+    // {
+    //     nPrime.val = dndx;
+    //     nPrime.grad = dn2dx;
+    // }
+    // else
+    // {
+    //     nPrime.val = dndx;
+    //     nPrime.grad = 0.0;
+    // }
+    // return nPrime;
 }
 
 Real SlabPlasma::qi(RealVector u, RealVector q, Real x, Time t)
 {
-    Real n = Density(x, t).val, p_i = (2. / 3.) * u(Channel::IonEnergy);
+    Real2nd nreal = Density(x, t);
+
+    Real n, p_i = (2. / 3.) * u(Channel::IonEnergy);
     if (x.grad != 0.0)
-        n.grad = DensityPrime(x, t).val;
+    {
+        n.val = nreal.val.val;
+        n.grad = nreal.grad.val;
+    }
+    else
+    {
+        n.val = nreal.val.val;
+        n.grad = 0.0;
+    }
     Real Ti = p_i / n.val;
     Real nPrime = DensityPrime(x, t);
     Real p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
-    Real Ti_prime = (p_i_prime - nPrime * Ti) / n;
+    Real Ti_prime = (p_i_prime - nPrime * Ti) / n.val;
 
-    Real HeatFlux = 2.0 * sqrt(IonMass / (2.0 * ElectronMass)) * (p_i / (IonCollisionTime(n, Ti))) * Ti_prime;
+    Real HeatFlux = 2.0 * sqrt(IonMass / (2.0 * ElectronMass)) * (p_i / (IonCollisionTime(n.val, Ti))) * Ti_prime;
 
     if (std::isfinite(HeatFlux.val))
         return HeatFlux;
@@ -163,9 +191,19 @@ Real SlabPlasma::qi(RealVector u, RealVector q, Real x, Time t)
 }
 Real SlabPlasma::qe(RealVector u, RealVector q, Real x, Time t)
 {
-    Real n = Density(x, t).val, p_e = (2. / 3.) * u(Channel::ElectronEnergy);
+    Real2nd nreal = Density(x, t);
+
+    Real n, p_e = (2. / 3.) * u(Channel::ElectronEnergy);
     if (x.grad != 0.0)
-        n.grad = DensityPrime(x, t).val;
+    {
+        n.val = nreal.val.val;
+        n.grad = nreal.grad.val;
+    }
+    else
+    {
+        n.val = nreal.val.val;
+        n.grad = 0.0;
+    }
     Real Te = p_e / n;
     Real nPrime = DensityPrime(x, t);
     Real p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
@@ -194,7 +232,7 @@ Real SlabPlasma::Se(RealVector u, RealVector q, RealVector sigma, Real x, Time t
 
 inline double SlabPlasma::RhoStarRef() const
 {
-    return sqrt(T0 * IonMass) / (ElementaryCharge * B0 * a);
+    return sqrt(T0 * IonMass) / (ElementaryCharge * B0);
 }
 
 // Return this normalised to log Lambda at n0,T0
@@ -255,14 +293,45 @@ Real SlabPlasma::IonElectronEnergyExchange(Real n, Real pe, Real pi, Real x, dou
 
 void SlabPlasma::initialiseDiagnostics(NetCDFIO &nc)
 {
+    nc.AddGroup("Temps", "Temperature values");
+
     nc.AddGroup("MMS", "Manufactured solutions");
     for (Index j = 0; j < nVars; ++j)
+    {
+        nc.AddVariable("Temps", "Var" + std::to_string(j), "Temperature value", "-", [this, j](double x)
+                       { Real2nd u = this->InitialFunction(j, x, 0.0);
+                       Real2nd n = this->Density(x,0.0);
+                       Real2nd T = (2. / 3. * u / n);
+                       return T.val.val; });
         nc.AddVariable("MMS", "Var" + std::to_string(j), "Manufactured solution", "-", [this, j](double x)
                        { return this->InitialFunction(j, x, 0.0).val.val; });
+    }
 }
 
 void SlabPlasma::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
 {
+    auto n = [this, t](double x)
+    {
+        return this->Density(x, t).val.val;
+    };
+    auto p_i = [this, &y](double x)
+    {
+        return (2. / 3.) * y.u(Channel::IonEnergy)(x);
+    };
+    auto p_e = [this, &y](double x)
+    {
+        return (2. / 3.) * y.u(Channel::ElectronEnergy)(x);
+    };
+    Fn T_i = [this, &p_i, &n](double x)
+    {
+        return p_i(x) / n(x);
+    };
+    Fn T_e = [this, &p_e, &n](double x)
+    {
+        return p_e(x) / n(x);
+    };
+
+    nc.AppendToGroup<Fn>("Temps", tIndex, {{"Var0", T_i}, {"Var1", T_e}});
 
     Fn IonEnergySol = [this, t](double x)
     { return this->InitialFunction(Channel::IonEnergy, x, t).val.val; };
