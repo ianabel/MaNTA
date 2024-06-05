@@ -44,6 +44,7 @@ protected:
 
 	double growth_rate = 0.5;
 	double growth = 1.0;
+	virtual Real2nd MMS_Solution(Index i, Real2nd x, Real2nd t);
 
 private:
 	// API to underlying flux model
@@ -73,8 +74,6 @@ private:
 	Vector InitialHeights;
 
 	Real2nd DirichletIC(Index i, Real2nd x, Real2nd t, double u_R, double u_L, double x_L, double x_R) const;
-
-	virtual Real2nd MMS_Solution(Index i, Real2nd x, Real2nd t);
 
 	Value MMS_Source(Index, Position, Time);
 };
