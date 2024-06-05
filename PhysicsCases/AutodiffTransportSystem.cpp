@@ -53,15 +53,12 @@ Value AutodiffTransportSystem::Sources(Index i, const State &s, Position x, Time
 	VectorXdual sw(s.Flux);
 
 	Real xreal = x;
+	double S = Source(i, uw, qw, sw, xreal, t).val;
 
 	if (useMMS)
-	{
-		return Source(i, uw, qw, sw, xreal, t).val + MMS_Source(i, xreal.val, t);
-	}
-	else
-	{
-		return Source(i, uw, qw, sw, xreal, t).val;
-	}
+		S += MMS_Source(i, x, t);
+
+	return S;
 }
 
 // We need derivatives of the flux functions

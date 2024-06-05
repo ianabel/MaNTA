@@ -22,7 +22,8 @@ private:
     enum Channel : Index
     {
         IonEnergy = 0,
-        ElectronEnergy = 1
+        ElectronEnergy = 1,
+        Density = 2
     };
     Real Flux(Index, RealVector, RealVector, Real, Time) override;
     Real Source(Index, RealVector, RealVector, RealVector, Real, Time) override;
@@ -39,16 +40,22 @@ private:
     };
 
     const std::map<std::string, Index> DensityMap = {{"Uniform", DensityType::Uniform}, {"Gaussian", DensityType::Gaussian}};
-    std::string DensityProfile;
-    Real2nd Density(Real2nd, Real2nd) const;
+
+    bool isDensityConstant;
+    double SourceStrength;
+    std::string SelectedDensityProfile;
+    Real2nd DensityProfile(Real2nd, Real2nd) const;
     Real DensityPrime(Real x, Real t) const;
 
     Real qi(RealVector, RealVector, Real, Time);
     Real qe(RealVector, RealVector, Real, Time);
+    Real Gamma(RealVector, RealVector, Real, Time);
 
     Real Si(RealVector, RealVector, RealVector, Real, Time);
     Real Se(RealVector, RealVector, RealVector, Real, Time);
+    Real Sn(RealVector, RealVector, RealVector, Real, Time);
 
+    bool includePoloidalTerm;
     double InitialWidth;
     double nEdge, nMid, TiEdge, TeEdge, TMid;
 

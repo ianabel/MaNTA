@@ -17,6 +17,9 @@ SlabPlasma::SlabPlasma(toml::value const &config, Grid const &grid) : AutodiffTr
     {
         auto const &InternalConfig = config.at("SlabPlasma");
 
+        isDensityConstant = toml::find_or(InternalConfig, "isDensityConstant", true);
+        if (!isDensityConstant)
+            nVars = 3;
         uL.resize(nVars);
         uR.resize(nVars);
 
@@ -27,8 +30,11 @@ SlabPlasma::SlabPlasma(toml::value const &config, Grid const &grid) : AutodiffTr
         growth = toml::find_or(InternalConfig, "MMSgrowth", 1.0);
         growth_rate = toml::find_or(InternalConfig, "MMSgrowth_rate", 0.5);
         EnergyExchangeFactor = toml::find_or(InternalConfig, "EnergyExchangeFactor", 1.0);
+        SourceStrength = toml::find_or(InternalConfig, "ParticleSource", 0.0);
 
-        DensityProfile = toml::find_or(InternalConfig, "DensityProfile", "Uniform");
+        SelectedDensityProfile = toml::find_or(InternalConfig, "DensityProfile", "Uniform");
+
+        includePoloidalTerm = toml::find_or(InternalConfig, "includePoloidalTerm", false);
 
         nEdge = toml::find_or(InternalConfig, "EdgeDensity", n_edge);
         nMid = toml::find_or(InternalConfig, "InitialDensity", n_mid);
@@ -41,6 +47,11 @@ SlabPlasma::SlabPlasma(toml::value const &config, Grid const &grid) : AutodiffTr
         uR[Channel::IonEnergy] = (3. / 2.) * nEdge * TiEdge;
         uL[Channel::ElectronEnergy] = (3. / 2.) * nEdge * TeEdge;
         uR[Channel::ElectronEnergy] = (3. / 2.) * nEdge * TeEdge;
+        if (!isDensityConstant)
+        {
+            uL[Channel::Density] = nEdge;
+            uR[Channel::Density] = nEdge;
+        }
     }
     else if (config.count("SlabPlasma") == 0)
     {
@@ -62,7 +73,7 @@ Real2nd SlabPlasma::InitialFunction(Index i, Real2nd x, Real2nd t) const
 
     Real2nd v = cos(pi * (x - x_mid) / (xR - xL));
 
-    Real2nd n = Density(x, t);
+    Real2nd n = DensityProfile(x, t);
     Real2nd Te = TeEdge + tfac * (TeMid - TeEdge) * v;
     Real2nd Ti = TiEdge + tfac * (TiMid - TiEdge) * v;
 
@@ -75,6 +86,13 @@ Real2nd SlabPlasma::InitialFunction(Index i, Real2nd x, Real2nd t) const
     case Channel::ElectronEnergy:
         return (3. / 2.) * n * Te;
         break;
+    case Channel::Density:
+    {
+        if (isDensityConstant)
+            throw std::runtime_error("Request for initial condition for constant variable!");
+        else
+            return n;
+    }
     default:
         throw std::runtime_error("Request for initial value for undefined variable!");
     }
@@ -89,6 +107,13 @@ Real SlabPlasma::Flux(Index i, RealVector u, RealVector q, Real x, Time t)
         return qi(u, q, x, t);
     case Channel::ElectronEnergy:
         return qe(u, q, x, t);
+    case Channel::Density:
+    {
+        if (isDensityConstant)
+            throw std::runtime_error("Request for flux for constant variable!");
+        else
+            return Gamma(u, q, x, t);
+    }
     default:
         throw std::runtime_error("Request for flux for undefined variable!");
     };
@@ -103,14 +128,21 @@ Real SlabPlasma::Source(Index i, RealVector u, RealVector q, RealVector sigma, R
         return Si(u, q, sigma, x, t);
     case Channel::ElectronEnergy:
         return Se(u, q, sigma, x, t);
+    case Channel::Density:
+    {
+        if (isDensityConstant)
+            throw std::runtime_error("Request for source for constant variable!");
+        else
+            return Sn(u, q, sigma, x, t);
+    }
     default:
         throw std::runtime_error("Request for source for undefined variable!");
     }
 }
 
-Real2nd SlabPlasma::Density(Real2nd x, Real2nd t) const
+Real2nd SlabPlasma::DensityProfile(Real2nd x, Real2nd t) const
 {
-    DensityType d = static_cast<DensityType>(DensityMap.at(DensityProfile));
+    DensityType d = static_cast<DensityType>(DensityMap.at(SelectedDensityProfile));
     switch (d)
     {
     case DensityType::Uniform:
@@ -129,7 +161,7 @@ Real2nd SlabPlasma::Density(Real2nd x, Real2nd t) const
 
 Real SlabPlasma::DensityPrime(Real x, Real t) const
 {
-    DensityType d = static_cast<DensityType>(DensityMap.at(DensityProfile));
+    DensityType d = static_cast<DensityType>(DensityMap.at(SelectedDensityProfile));
     switch (d)
     {
     case DensityType::Uniform:
@@ -144,45 +176,38 @@ Real SlabPlasma::DensityPrime(Real x, Real t) const
     default:
         throw std::runtime_error("Request for invalid density profile!");
     }
-    // Real nPrime;
-    // Real2nd x2 = x.val;
-    // Real2nd t2 = t.val;
-    // auto [n0, dndx, dn2dx] = autodiff::derivatives([this](Real2nd x, Real2nd t)
-    //                                                { return this->Density(x, t); }, wrt(x2, x2), at(x2, t2));
-    // if (x.grad != 0.0)
-    // {
-    //     nPrime.val = dndx;
-    //     nPrime.grad = dn2dx;
-    // }
-    // else
-    // {
-    //     nPrime.val = dndx;
-    //     nPrime.grad = 0.0;
-    // }
-    // return nPrime;
 }
 
 Real SlabPlasma::qi(RealVector u, RealVector q, Real x, Time t)
 {
-    Real2nd nreal = Density(x, t);
+    Real p_i = (2. / 3.) * u(Channel::IonEnergy);
 
-    Real n, p_i = (2. / 3.) * u(Channel::IonEnergy);
-    if (x.grad != 0.0)
+    Real n, nPrime;
+    if (isDensityConstant)
     {
-        n.val = nreal.val.val;
-        n.grad = nreal.grad.val;
+        nPrime = DensityPrime(x, t);
+        Real2nd nreal = DensityProfile(x, t);
+        if (x.grad != 0.0)
+        {
+            n.val = nreal.val.val;
+            n.grad = nreal.grad.val;
+        }
+        else
+        {
+            n.val = nreal.val.val;
+            n.grad = 0.0;
+        }
     }
     else
     {
-        n.val = nreal.val.val;
-        n.grad = 0.0;
+        n = u[Channel::Density];
+        nPrime = q[Channel::Density];
     }
     Real Ti = p_i / n;
-    Real nPrime = DensityPrime(x, t);
     Real p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
     Real Ti_prime = (p_i_prime - nPrime * Ti) / n;
 
-    Real HeatFlux = 2.0 * sqrt(IonMass / (2.0 * ElectronMass)) * (p_i / (IonCollisionTime(n, Ti))) * Ti_prime;
+    Real HeatFlux = 2.0 * sqrt(IonMass / (2.0 * ElectronMass)) * p_i / IonCollisionTime(n, Ti) * Ti_prime;
 
     if (std::isfinite(HeatFlux.val))
         return HeatFlux;
@@ -191,25 +216,40 @@ Real SlabPlasma::qi(RealVector u, RealVector q, Real x, Time t)
 }
 Real SlabPlasma::qe(RealVector u, RealVector q, Real x, Time t)
 {
-    Real2nd nreal = Density(x, t);
+    Real p_e = (2. / 3.) * u(Channel::ElectronEnergy);
 
-    Real n, p_e = (2. / 3.) * u(Channel::ElectronEnergy);
-    if (x.grad != 0.0)
+    Real n, nPrime;
+    if (isDensityConstant)
     {
-        n.val = nreal.val.val;
-        n.grad = nreal.grad.val;
+        nPrime = DensityPrime(x, t);
+        Real2nd nreal = DensityProfile(x, t);
+        if (x.grad != 0.0)
+        {
+            n.val = nreal.val.val;
+            n.grad = nreal.grad.val;
+        }
+        else
+        {
+            n.val = nreal.val.val;
+            n.grad = 0.0;
+        }
     }
     else
     {
-        n.val = nreal.val.val;
-        n.grad = 0.0;
+        n = u[Channel::Density];
+        nPrime = q[Channel::Density];
     }
     Real Te = p_e / n;
-    Real nPrime = DensityPrime(x, t);
+
     Real p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
     Real Te_prime = (p_e_prime - nPrime * Te) / n;
 
-    Real HeatFlux = (p_e * Te / (ElectronCollisionTime(n, Te))) * ((4.66 * Te_prime / Te) - (3. / 2.) * (p_e_prime + p_i_prime) / p_e);
+    Real PoloidalFlowTerm = 0.0;
+
+    if (includePoloidalTerm)
+        PoloidalFlowTerm = (3. / 2.) * (p_e_prime + p_i_prime) / p_e;
+
+    Real HeatFlux = p_e * Te / ElectronCollisionTime(n, Te) * (4.66 * Te_prime / Te - PoloidalFlowTerm);
 
     if (std::isfinite(HeatFlux.val))
         return HeatFlux;
@@ -217,17 +257,38 @@ Real SlabPlasma::qe(RealVector u, RealVector q, Real x, Time t)
         throw std::logic_error("Non-finite value computed for the electron heat flux at x = " + std::to_string(x.val) + " and t = " + std::to_string(t));
 }
 
+Real SlabPlasma::Gamma(RealVector u, RealVector q, Real x, Time t)
+{
+    Real n = u(Channel::Density), p_e = (2. / 3.) * u(Channel::ElectronEnergy);
+    Real Te = p_e / n;
+    Real nPrime = q(Channel::Density), p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
+    Real Te_prime = (p_e_prime - nPrime * Te) / n;
+    Real PressureGradient = ((p_e_prime + p_i_prime) / p_e);
+    Real TemperatureGradient = (3. / 2.) * (Te_prime / Te);
+
+    Real Gamma = (p_e / (ElectronCollisionTime(n, Te))) * (PressureGradient - TemperatureGradient);
+
+    if (std::isfinite(Gamma.val))
+        return Gamma;
+    else
+        throw std::logic_error("Non-finite value computed for the particle flux at x = " + std::to_string(x.val) + " and t = " + std::to_string(t));
+}
+
 Real SlabPlasma::Si(RealVector u, RealVector q, RealVector sigma, Real x, Time t)
 {
-    Real n = Density(x, t).val, p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
+    Real n = DensityProfile(x, t).val, p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
     Real EnergyExchange = IonElectronEnergyExchange(n, p_e, p_i, x, t);
     return EnergyExchange;
 };
 Real SlabPlasma::Se(RealVector u, RealVector q, RealVector sigma, Real x, Time t)
 {
-    Real n = Density(x, t).val, p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
+    Real n = DensityProfile(x, t).val, p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
     Real EnergyExchange = -IonElectronEnergyExchange(n, p_e, p_i, x, t);
     return EnergyExchange;
+}
+Real SlabPlasma::Sn(RealVector, RealVector, RealVector, Real, Time)
+{
+    return SourceStrength;
 };
 
 inline double SlabPlasma::RhoStarRef() const
@@ -293,26 +354,34 @@ Real SlabPlasma::IonElectronEnergyExchange(Real n, Real pe, Real pi, Real x, dou
 
 void SlabPlasma::initialiseDiagnostics(NetCDFIO &nc)
 {
+
     nc.AddGroup("Temps", "Temperature values");
 
     nc.AddGroup("MMS", "Manufactured solutions");
     for (Index j = 0; j < nVars; ++j)
     {
-        nc.AddVariable("Temps", "Var" + std::to_string(j), "Temperature value", "-", [this, j](double x)
-                       { Real2nd u = this->InitialFunction(j, x, 0.0);
-                       Real2nd n = this->Density(x,0.0);
-                       Real2nd T = (2. / 3. * u / n);
-                       return T.val.val; });
-        nc.AddVariable("MMS", "Var" + std::to_string(j), "Manufactured solution", "-", [this, j](double x)
-                       { return this->InitialFunction(j, x, 0.0).val.val; });
+        if (!(j == Channel::Density))
+        {
+            nc.AddVariable("Temps", "Var" + std::to_string(j), "Temperature value", "-", [this, j](double x)
+                           { 
+                        Real2nd u = this->InitialFunction(j, x, 0.0);
+                        Real2nd n = this->DensityProfile(x, 0.0);
+                        Real2nd T = (2. / 3. * u / n);
+                        return T.val.val; });
+            nc.AddVariable("MMS", "Var" + std::to_string(j), "Manufactured solution", "-", [this, j](double x)
+                           { return this->InitialFunction(j, x, 0.0).val.val; });
+        }
     }
 }
 
 void SlabPlasma::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
 {
-    auto n = [this, t](double x)
+    auto n = [this, &y, t](double x)
     {
-        return this->Density(x, t).val.val;
+        if (isDensityConstant)
+            return this->DensityProfile(x, t).val.val;
+        else
+            return y.u(Channel::Density)(x);
     };
     auto p_i = [this, &y](double x)
     {
