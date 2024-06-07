@@ -101,7 +101,7 @@ def plot_diagnostics(fname):
 
 
 def main():
-    fname = "./SlabPlasma.nc"
+    fname = "./MirrorPlasmaTest.nc"
     plot_nc(fname,True,True,True,False,True)
     plot_MMS(fname)
     plot_diagnostics(fname)

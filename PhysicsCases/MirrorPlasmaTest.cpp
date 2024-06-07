@@ -149,10 +149,10 @@ autodiff::dual2nd MirrorPlasmaTest::InitialFunction(Index i, autodiff::dual2nd V
 	autodiff::dual2nd v = cos(pi * (R - R_mid) / (R_max - R_min));
 	double shape = 1 / DensityWidth;
 	autodiff::dual2nd n = nEdge + tfac * (nMid - nEdge) * v * exp(-shape * (R - R_mid) * (R - R_mid));
-	autodiff::dual2nd Te = TeEdge + tfac * (TeMid - TeEdge) * v * v;
-	autodiff::dual2nd Ti = TiEdge + tfac * (TiMid - TiEdge) * v * v;
+	autodiff::dual2nd Te = TeEdge + (TeMid - TeEdge) * v * v;
+	autodiff::dual2nd Ti = TiEdge + (TiMid - TiEdge) * v * v;
 	shape = 500;
-	autodiff::dual2nd M = MEdge + tfac * MMid * (1 - (exp(-shape * (R - R_Upper) * (R - R_Upper)) + exp(-shape * (R - R_Lower) * (R - R_Lower))));
+	autodiff::dual2nd M = MEdge + MMid * (1 - (exp(-shape * (R - R_Upper) * (R - R_Upper)) + exp(-shape * (R - R_Lower) * (R - R_Lower))));
 	autodiff::dual2nd omega = sqrt(Te) * M / R;
 
 	Channel c = static_cast<Channel>(i);

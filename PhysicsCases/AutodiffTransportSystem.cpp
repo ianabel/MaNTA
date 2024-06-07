@@ -270,7 +270,10 @@ Value AutodiffTransportSystem::MMS_Source(Index i, Position x, Time t)
 	}
 	double dudt = derivative([this, i](Real2nd x, Real2nd t)
 							 { return this->MMS_Solution(i, x, t); }, wrt(tval), at(xval, tval));
-	double S = dudt - dSigma_dx - Source(i, uw, qw, sigma, x, t).val;
 
-	return S;
+	double S = Source(i, uw, qw, sigma, xreal, t).val;
+
+	double MMS = dudt - dSigma_dx - S;
+
+	return MMS;
 }
