@@ -22,8 +22,8 @@ private:
 
     std::map<std::string, Sources> SourceMap = {{"PeakedEdge", Sources::PeakedEdge}, {"Gaussian", Sources::Gaussian}, {"Uniform", Sources::Uniform}, {"Step", Sources::Step}};
 
-    Real Flux(Index, RealVector, RealVector, Position, Time) override;
-    Real Source(Index, RealVector, RealVector, RealVector, Position, Time) override;
+    Real Flux(Index, RealVector, RealVector, Real, Time) override;
+    Real Source(Index, RealVector, RealVector, RealVector, Real, Time) override;
 
     Value LowerBoundary(Index i, Time t) const override;
     Value UpperBoundary(Index i, Time t) const override;

@@ -49,13 +49,14 @@ MirrorPlasmaTest::MirrorPlasmaTest(toml::value const &config, Grid const &grid)
 
 		useMMS = toml::find_or(InternalConfig, "useMMS", false);
 		growth = toml::find_or(InternalConfig, "MMSgrowth", 1.0);
+		growth_factors = toml::find_or(InternalConfig, "growth_factors", std::vector<double>(nVars, 1.0));
 		growth_rate = toml::find_or(InternalConfig, "MMSgrowth_rate", 0.5);
 
 		// test source
 		LargeEdgeSourceSize = toml::find_or(InternalConfig, "LargeTestSourceSize", 0.0);
 		LargeEdgeSourceWidth = toml::find_or(InternalConfig, "LargeTestSourceWidth", 1e-5);
 		ZeroEdgeSources = toml::find_or(InternalConfig, "ZeroEdgeSources", false);
-		ZeroEdgeFactor = toml::find_or(InternalConfig, "ZeroEdgeFactor", 0.99);
+		ZeroEdgeFactor = toml::find_or(InternalConfig, "ZeroEdgeFactor", 0.9);
 		EnergyExchangeFactor = toml::find_or(InternalConfig, "EnergyExchangeFactor", 1.0);
 		MaxPastukhov = toml::find_or(InternalConfig, "MaxLossRate", 1.0);
 
@@ -134,7 +135,9 @@ MirrorPlasmaTest::MirrorPlasmaTest(toml::value const &config, Grid const &grid)
 
 autodiff::dual2nd MirrorPlasmaTest::InitialFunction(Index i, autodiff::dual2nd V, autodiff::dual2nd t) const
 {
-	autodiff::dual2nd tfac = 1 + growth * tanh(growth_rate * t);
+	auto tfac = [this, t](double growth)
+	{ return 1 + growth * tanh(growth_rate * t); };
+	// autodiff::dual2nd tfac = 1 + growth * tanh(growth_rate * t);
 	autodiff::dual2nd R_min = B->R_V(xL);
 	autodiff::dual2nd R_max = B->R_V(xR);
 	autodiff::dual2nd R = B->R_V(V);
@@ -148,11 +151,11 @@ autodiff::dual2nd MirrorPlasmaTest::InitialFunction(Index i, autodiff::dual2nd V
 
 	autodiff::dual2nd v = cos(pi * (R - R_mid) / (R_max - R_min));
 	double shape = 1 / DensityWidth;
-	autodiff::dual2nd n = nEdge + tfac * (nMid - nEdge) * v * exp(-shape * (R - R_mid) * (R - R_mid));
-	autodiff::dual2nd Te = TeEdge + (TeMid - TeEdge) * v * v;
-	autodiff::dual2nd Ti = TiEdge + (TiMid - TiEdge) * v * v;
+	autodiff::dual2nd n = nEdge + tfac(growth_factors[Channel::Density]) * (nMid - nEdge) * v * exp(-shape * (R - R_mid) * (R - R_mid));
+	autodiff::dual2nd Te = TeEdge + tfac(growth_factors[Channel::ElectronEnergy]) * (TeMid - TeEdge) * v;
+	autodiff::dual2nd Ti = TiEdge + tfac(growth_factors[Channel::ElectronEnergy]) * (TiMid - TiEdge) * v;
 	shape = 500;
-	autodiff::dual2nd M = MEdge + MMid * (1 - (exp(-shape * (R - R_Upper) * (R - R_Upper)) + exp(-shape * (R - R_Lower) * (R - R_Lower))));
+	autodiff::dual2nd M = MEdge + tfac(growth_factors[Channel::AngularMomentum]) * (1 - (exp(-shape * (R - R_Upper) * (R - R_Upper)) + exp(-shape * (R - R_Lower) * (R - R_Lower))));
 	autodiff::dual2nd omega = sqrt(Te) * M / R;
 
 	Channel c = static_cast<Channel>(i);

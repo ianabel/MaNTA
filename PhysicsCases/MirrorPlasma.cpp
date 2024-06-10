@@ -110,27 +110,27 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
 	}
 };
 
-autodiff::dual2nd MirrorPlasma::InitialFunction(Index i, autodiff::dual2nd V, autodiff::dual2nd t) const
+Real2nd MirrorPlasma::InitialFunction(Index i, Real2nd V, Real2nd t) const
 {
-	autodiff::dual2nd R_min = B->R_V(xL);
-	autodiff::dual2nd R_max = B->R_V(xR);
-	autodiff::dual2nd R = B->R_V(V.val.val);
+	Real2nd R_min = B->R_V(xL);
+	Real2nd R_max = B->R_V(xR);
+	Real2nd R = B->R_V(V.val.val);
 	R.grad = B->dRdV(V.val.val);
-	autodiff::dual2nd R_mid = (R_min + R_max) / 2.0;
+	Real2nd R_mid = (R_min + R_max) / 2.0;
 
-	autodiff::dual2nd nMid = InitialPeakDensity;
-	autodiff::dual2nd TeMid = InitialPeakTe;
-	autodiff::dual2nd TiMid = InitialPeakTi;
-	autodiff::dual2nd MMid = InitialPeakMachNumber;
+	Real2nd nMid = InitialPeakDensity;
+	Real2nd TeMid = InitialPeakTe;
+	Real2nd TiMid = InitialPeakTi;
+	Real2nd MMid = InitialPeakMachNumber;
 
-	autodiff::dual2nd v = cos(pi * (R - R_mid) / (R_max - R_min));
+	Real2nd v = cos(pi * (R - R_mid) / (R_max - R_min));
 	double shape = 1 / DensityWidth;
-	autodiff::dual2nd n = nEdge + (nMid - nEdge) * v * exp(-shape * (R - R_mid) * (R - R_mid));
-	autodiff::dual2nd Te = TeEdge + (TeMid - TeEdge) * v * v;
-	autodiff::dual2nd Ti = TiEdge + (TiMid - TiEdge) * v * v;
+	Real2nd n = nEdge + (nMid - nEdge) * v * exp(-shape * (R - R_mid) * (R - R_mid));
+	Real2nd Te = TeEdge + (TeMid - TeEdge) * v * v;
+	Real2nd Ti = TiEdge + (TiMid - TiEdge) * v * v;
 	shape = 1000;
-	autodiff::dual2nd M = MEdge + MMid * (1 - (exp(-shape * (R - R_Upper) * (R - R_Upper)) + exp(-shape * (R - R_Lower) * (R - R_Lower))));
-	autodiff::dual2nd omega = sqrt(Te) * M / R;
+	Real2nd M = MEdge + MMid * (1 - (exp(-shape * (R - R_Upper) * (R - R_Upper)) + exp(-shape * (R - R_Lower) * (R - R_Lower))));
+	Real2nd omega = sqrt(Te) * M / R;
 
 	Channel c = static_cast<Channel>(i);
 	switch (c)
@@ -152,8 +152,9 @@ autodiff::dual2nd MirrorPlasma::InitialFunction(Index i, autodiff::dual2nd V, au
 	}
 }
 
-Real MirrorPlasma::Flux(Index i, RealVector u, RealVector q, Position x, Time t)
+Real MirrorPlasma::Flux(Index i, RealVector u, RealVector q, Real xreal, Time t)
 {
+	double x = xreal.val;
 	Channel c = static_cast<Channel>(i);
 	switch (c)
 	{
@@ -174,8 +175,9 @@ Real MirrorPlasma::Flux(Index i, RealVector u, RealVector q, Position x, Time t)
 	}
 }
 
-Real MirrorPlasma::Source(Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t)
+Real MirrorPlasma::Source(Index i, RealVector u, RealVector q, RealVector sigma, Real xreal, Time t)
 {
+	double x = xreal.val;
 	Channel c = static_cast<Channel>(i);
 	switch (c)
 	{

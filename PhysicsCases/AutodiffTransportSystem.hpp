@@ -48,11 +48,9 @@ protected:
 
 private:
 	// API to underlying flux model
-	virtual Real Flux(Index, RealVector, RealVector, Position, Time) { return 0; };
-	virtual Real Source(Index, RealVector, RealVector, RealVector, Position, Time) { return 0; };
 
-	virtual Real Flux(Index i, RealVector u, RealVector q, Real x, Time t) { return Flux(i, u, q, x.val, t); }
-	virtual Real Source(Index i, RealVector u, RealVector q, RealVector sigma, Real x, Time t) { return Source(i, u, q, sigma, x.val, t); };
+	virtual Real Flux(Index i, RealVector u, RealVector q, Real x, Time t) = 0;
+	virtual Real Source(Index i, RealVector u, RealVector q, RealVector sigma, Real x, Time t) = 0;
 
 	// For loading initial conditions from a netCDF file
 	netCDF::NcFile data_file;
