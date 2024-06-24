@@ -95,20 +95,20 @@ Real2nd LinearDiffSourceTest::MMS_Solution(Index i, Real2nd x, Real2nd t)
     return (1 + growth * tanh(growth_rate * t)) * InitialFunction(i, x, t);
 }
 
-Real LinearDiffSourceTest::Flux(Index i, RealVector u, RealVector q, Position x, Time t)
+Real LinearDiffSourceTest::Flux(Index i, RealVector u, RealVector q, Real x, Time t)
 {
     RealVector sigma = Kappa * q;
     return sigma(i);
 }
 
-Real LinearDiffSourceTest::Source(Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t)
+Real LinearDiffSourceTest::Source(Index i, RealVector u, RealVector q, RealVector sigma, Real x, Time t)
 {
     Real S = 0.0;
     if (i == 0)
 
-        S = SourceStrength[0] * u[0];
+        S = SourceStrength[0]; //* u[0];
     else
-        S = SourceStrength[1] * u[1];
+        S = SourceStrength[1]; // * u[1];
 
     return S;
     // for (auto j = 0; j < nSources; ++j)

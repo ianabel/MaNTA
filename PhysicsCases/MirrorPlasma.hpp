@@ -27,7 +27,7 @@ public:
 	MirrorPlasma(toml::value const &config, Grid const &grid);
 	virtual ~MirrorPlasma() { delete B; };
 
-	virtual autodiff::dual2nd InitialFunction(Index i, autodiff::dual2nd x, autodiff::dual2nd t) const override;
+	virtual Real2nd InitialFunction(Index i, Real2nd x, Real2nd t) const override;
 
 private:
 	enum Channel : Index
@@ -52,8 +52,8 @@ private:
 	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber, ParallelLossFactor, DragFactor, DragWidth;
 	double DensityWidth;
 
-	Real Flux(Index, RealVector, RealVector, Position, Time) override;
-	Real Source(Index, RealVector, RealVector, RealVector, Position, Time) override;
+	Real Flux(Index, RealVector, RealVector, Real, Time) override;
+	Real Source(Index, RealVector, RealVector, RealVector, Real, Time) override;
 
 	Value LowerBoundary(Index i, Time t) const override;
 	Value UpperBoundary(Index i, Time t) const override;

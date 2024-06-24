@@ -55,11 +55,13 @@ MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid
 		uR[Channel::AngularMomentum] = omegaEdge * nEdge * R_Upper * R_Upper;
 		jRadial = -toml::find_or(InternalConfig, "jRadial", 4.0);
 		ParticleSourceStrength = toml::find_or(InternalConfig, "ParticleSource", 10.0);
+		ParFac = toml::find_or(InternalConfig, "ParFac", 1.0);
 	}
 	else
 	{
 		ParticleSourceStrength = 1.0;
 		jRadial = -4.0;
+		B = new CylindricalMagneticField(std::filesystem::path(B_file));
 		B = new CylindricalMagneticField(std::filesystem::path(B_file));
 		B->CheckBoundaries(xL, xR);
 
@@ -73,6 +75,7 @@ MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid
 		uR[Channel::ElectronEnergy] = (3. / 2.) * n_edge * T_edge;
 		uL[Channel::AngularMomentum] = omega_edge * n_edge * R_Lower * R_Lower;
 		uR[Channel::AngularMomentum] = omega_edge * n_edge * R_Upper * R_Upper;
+		ParFac = 1.0;
 	}
 };
 
@@ -296,7 +299,7 @@ Real MirrorPlasmaDebug::qe(RealVector u, RealVector q, double V, double t) const
 
 	double R = B->R_V(V);
 	double GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e, leaving (V'R)^2
-	Real HeatFlux = GeometricFactor * GeometricFactor * (p_e / ElectronCollisionTime(n, Te)) * (4.66 * Te_prime / Te - (3. / 2.) * (p_e_prime + p_i_prime) / p_e);
+	Real HeatFlux = GeometricFactor * GeometricFactor * (p_e / ElectronCollisionTime(n, Te)) * (4.66 * Te_prime - (3. / 2.) * (p_e_prime + p_i_prime) / n);
 
 	if (std::isfinite(HeatFlux.val))
 		return HeatFlux;
@@ -399,7 +402,7 @@ Real MirrorPlasmaDebug::Spi(RealVector u, RealVector q, RealVector sigma, Positi
 	Real ParticleEnergy = Ti * (1.0 + Xi);
 	Real ParallelLosses = ParticleEnergy * IonPastukhovLossRate(V, Xi, n, Ti);
 
-	return Heating - ParallelLosses;
+	return Heating - ParFac * ParallelLosses;
 }
 
 // Energy normalisation is T0, but these return Xi_s / T_s as that is what enters the
@@ -459,9 +462,7 @@ Real MirrorPlasmaDebug::Spe(RealVector u, RealVector q, RealVector sigma, Positi
 	Real ParticleEnergy = Te * (1.0 + Xi);
 	Real ParallelLosses = ParticleEnergy * ElectronPastukhovLossRate(V, Xi, n, Te);
 
-	Real RadiationLosses = BremsstrahlungLosses(n, p_e);
-
-	return Heating - ParallelLosses - RadiationLosses;
+	return Heating - ParFac * ParallelLosses;
 };
 
 // Source of angular momentum -- this is just imposed J x B torque (we can account for the particle source being a sink later).
@@ -482,7 +483,7 @@ Real MirrorPlasmaDebug::Somega(RealVector u, RealVector q, RealVector sigma, Pos
 	Real AngularMomentumPerParticle = L / n;
 	Real ParallelLosses = AngularMomentumPerParticle * IonPastukhovLossRate(V, Xi, n, Te);
 
-	return JxB - ParallelLosses;
+	return JxB - ParFac * ParallelLosses;
 };
 
 Real MirrorPlasmaDebug::ElectronPastukhovLossRate(double V, Real Xi_e, Real n, Real Te) const

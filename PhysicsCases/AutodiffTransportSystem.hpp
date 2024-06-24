@@ -44,14 +44,13 @@ protected:
 
 	double growth_rate = 0.5;
 	double growth = 1.0;
+	virtual Real2nd MMS_Solution(Index i, Real2nd x, Real2nd t);
 
 private:
 	// API to underlying flux model
-	virtual Real Flux(Index, RealVector, RealVector, Position, Time) { return 0; };
-	virtual Real Source(Index, RealVector, RealVector, RealVector, Position, Time) { return 0; };
 
-	virtual Real Flux(Index i, RealVector u, RealVector q, Real x, Time t) { return Flux(i, u, q, x.val, t); }
-	virtual Real Source(Index i, RealVector u, RealVector q, RealVector sigma, Real x, Time t) { return Source(i, u, q, sigma, x.val, t); };
+	virtual Real Flux(Index i, RealVector u, RealVector q, Real x, Time t) = 0;
+	virtual Real Source(Index i, RealVector u, RealVector q, RealVector sigma, Real x, Time t) = 0;
 
 	// For loading initial conditions from a netCDF file
 	netCDF::NcFile data_file;
@@ -73,8 +72,6 @@ private:
 	Vector InitialHeights;
 
 	Real2nd DirichletIC(Index i, Real2nd x, Real2nd t, double u_R, double u_L, double x_L, double x_R) const;
-
-	virtual Real2nd MMS_Solution(Index i, Real2nd x, Real2nd t);
 
 	Value MMS_Source(Index, Position, Time);
 };
