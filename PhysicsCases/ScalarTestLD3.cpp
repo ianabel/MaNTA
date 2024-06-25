@@ -8,7 +8,7 @@
 	Linear Diffusion test case with a coupled scalar.
 
 	du         d^2 u
-	-- - Kappa ----- = J S( x ) + S_2(x)
+	-- - Kappa ----- = J S( x )
 	dt          dx^2
 
 	where J is chosen to enforce constant total mass M of u i.e.
@@ -31,14 +31,6 @@
 	J = gamma * E + J_exact
 
 	to try and keep M at the initial value
-
-	S_2[x] is chosen such that it has no first moment
-
-	/ 1
-	|   S_2 dx = 0
-   /-1
-
-	we chose Cos( pi x )
 
  */
 
