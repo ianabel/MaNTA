@@ -50,7 +50,7 @@ class ScalarTestLD3 : public TransportSystem {
 
 private:
 	// Put class-specific data here
-	double kappa, alpha, beta, u0;
+	double kappa, alpha, beta, gamma, u0;
 
 	Value ScaledSource( Position ) const;
 

@@ -611,8 +611,9 @@ void SystemSolver::updateMatricesForJacSolve()
 					w_map[ j ].u( v ).getCoeff( i ).second( l ) = s.Variable[ v ];
 				}
 				if ( l == 0 && i == 0 ) {
-					/* dG_i/d(Scalar_j) should vanish for  i!=j and doesn't depend on test function, so we can just do this once  */
-					N_global( j, j ) = s.Scalars[ j ];
+					/* dG_i/d(Scalar_j) doesn't depend on cell or test function, so we can just do this once  */
+					for( Index m = 0; m < nScalars; ++m )
+						N_global( m, j ) = s.Scalars[ m ];
 				}
 			}
 		}

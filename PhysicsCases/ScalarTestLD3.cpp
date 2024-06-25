@@ -8,7 +8,7 @@
 	Linear Diffusion test case with a coupled scalar.
 
 	du         d^2 u
-	-- - Kappa ----- = J S( x ) + S_2(x)
+	-- - Kappa ----- = J S( x )
 	dt          dx^2
 
 	where J is chosen to enforce constant total mass of u i.e.
@@ -24,14 +24,6 @@
 	The explicit equation for J is
 
 	J = [ - Kappa du/dx ]_( x = 1 ) - [ - Kappa du/dx ]_( x = -1 )
-
-	S_2[x] is chosen such that it has no first moment
-
-	/ 1
-	|   S_2 dx = 0
-   /-1
-
-	we chose Cos( pi x )
 
  */
 
@@ -56,6 +48,7 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const&)
 	kappa = toml::find_or(DiffConfig, "Kappa", 1.0);
 	alpha = toml::find_or(DiffConfig, "alpha", 0.2);
 	beta = toml::find_or(DiffConfig, "beta", 0.2);
+	gamma = toml::find_or(DiffConfig, "gamma", 1.0);
 	u0 = toml::find_or(DiffConfig, "u0", 0.1);
 
 }
@@ -133,9 +126,11 @@ Value ScalarTestLD3::InitialDerivative(Index, Position x) const
 
 Value ScalarTestLD3::ScalarG( Index, const DGSoln & y, Time )
 {
-	// J = sigma(x = +1) - sigma(x = -1)
+	// J = -(M_M_0) + [ sigma(x = +1) - sigma(x = -1) ]
 
-	return y.Scalar( 0 ) - ( y.sigma( 0 )( 1 ) - y.sigma( 0 )( -1 ) );
+	double M0 = 2*u0 + 4*beta/std::numbers::pi;
+	double M = boost::math::quadrature::gauss_kronrod<double, 31>::integrate( [ & ]( double x ){ return y.u( 0 )( x );}, -1, 1 );
+	return y.Scalar( 0 ) + gamma * ( M - M0 ) - ( y.sigma( 0 )( 1 ) - y.sigma( 0 )( -1 ) );
 }
 
 void ScalarTestLD3::ScalarGPrime( Index, State &s, const DGSoln &y, std::function<double( double )> P, Interval I, Time )
@@ -146,7 +141,8 @@ void ScalarTestLD3::ScalarGPrime( Index, State &s, const DGSoln &y, std::functio
 	if ( abs( I.x_l + 1 ) < 1e-9 )
 		s.Flux[ 0 ] += P( I.x_l );
 	s.Derivative[ 0 ] = 0.0;
-	s.Variable[ 0 ] = 0.0;
+	double P_mass = boost::math::quadrature::gauss_kronrod<double, 31>::integrate( P, -1, 1 );
+	s.Variable[ 0 ] = gamma * P_mass;
 	s.Scalars[ 0 ] = 1.0;
 }
 
