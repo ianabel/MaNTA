@@ -46,6 +46,9 @@ protected:
 	double growth = 1.0;
 	virtual Real2nd MMS_Solution(Index i, Real2nd x, Real2nd t);
 
+	void initialiseDiagnostics(NetCDFIO &nc) override;
+	void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override;
+
 private:
 	// API to underlying flux model
 

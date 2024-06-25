@@ -241,6 +241,7 @@ void SystemSolver::initialiseMatrices()
 		M.block(0, nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)).setZero();	 // NLq added at Jac step
 		M.block(0, 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)).setZero(); // NLu added at Jac step
 
+		// why negative?
 		// row2
 		M.block(nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)).setZero();
 		M.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = -A;
@@ -278,7 +279,7 @@ void SystemSolver::initialiseMatrices()
 					Cvar(0, i) = 0;
 					Evar(i, 0) = 0;
 				}
-				// should this be is upper boundary dirichlet?
+
 				if (I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(var))
 				{
 					Cvar(1, i) = 0;

@@ -354,6 +354,7 @@ Real SlabPlasma::IonElectronEnergyExchange(Real n, Real pe, Real pi, Real x, dou
 
 void SlabPlasma::initialiseDiagnostics(NetCDFIO &nc)
 {
+    AutodiffTransportSystem::initialiseDiagnostics(nc);
 
     nc.AddGroup("Temps", "Temperature values");
 
@@ -376,6 +377,8 @@ void SlabPlasma::initialiseDiagnostics(NetCDFIO &nc)
 
 void SlabPlasma::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
 {
+    AutodiffTransportSystem::writeDiagnostics(y, t, nc, tIndex);
+
     auto n = [this, &y, t](double x)
     {
         if (isDensityConstant)

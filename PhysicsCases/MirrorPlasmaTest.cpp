@@ -133,30 +133,33 @@ MirrorPlasmaTest::MirrorPlasmaTest(toml::value const &config, Grid const &grid)
 	}
 };
 
-autodiff::dual2nd MirrorPlasmaTest::InitialFunction(Index i, autodiff::dual2nd V, autodiff::dual2nd t) const
+Real2nd MirrorPlasmaTest::InitialFunction(Index i, Real2nd V, Real2nd t) const
 {
 	auto tfac = [this, t](double growth)
 	{ return 1 + growth * tanh(growth_rate * t); };
-	// autodiff::dual2nd tfac = 1 + growth * tanh(growth_rate * t);
-	autodiff::dual2nd R_min = B->R_V(xL);
-	autodiff::dual2nd R_max = B->R_V(xR);
-	autodiff::dual2nd R = B->R_V(V);
+	// Real2nd tfac = 1 + growth * tanh(growth_rate * t);
+	Real2nd R_min = B->R_V(xL);
+	Real2nd R_max = B->R_V(xR);
+	Real2nd R = B->R_V(V);
 	// R.grad = B->dRdV(V.val.val);
-	autodiff::dual2nd R_mid = (R_min + R_max) / 2.0;
+	Real2nd R_mid = (R_min + R_max) / 2.0;
 
-	autodiff::dual2nd nMid = InitialPeakDensity;
-	autodiff::dual2nd TeMid = InitialPeakTe;
-	autodiff::dual2nd TiMid = InitialPeakTi;
-	autodiff::dual2nd MMid = InitialPeakMachNumber;
-
-	autodiff::dual2nd v = cos(pi * (R - R_mid) / (R_max - R_min));
+	Real2nd nMid = InitialPeakDensity;
+	Real2nd TeMid = InitialPeakTe;
+	Real2nd TiMid = InitialPeakTi;
+	Real2nd MMid = InitialPeakMachNumber;
 	double shape = 1 / DensityWidth;
-	autodiff::dual2nd n = nEdge + tfac(growth_factors[Channel::Density]) * (nMid - nEdge) * v * exp(-shape * (R - R_mid) * (R - R_mid));
-	autodiff::dual2nd Te = TeEdge + tfac(growth_factors[Channel::ElectronEnergy]) * (TeMid - TeEdge) * v;
-	autodiff::dual2nd Ti = TiEdge + tfac(growth_factors[Channel::ElectronEnergy]) * (TiMid - TiEdge) * v;
+
+	Real2nd v = cos(pi * (R - R_mid) / (R_max - R_min)); //* exp(-shape * (R - R_mid) * (R - R_mid));
+
+	Real2nd Te = TeEdge + tfac(growth_factors[Channel::ElectronEnergy]) * (TeMid - TeEdge) * v * v;
+	Real2nd Ti = TiEdge + tfac(growth_factors[Channel::IonEnergy]) * (TiMid - TiEdge) * v * v;
+	double p = 0.9 * (1.66 / 3.0);
+	Real2nd n = nEdge + tfac(growth_factors[Channel::Density]) * (nMid - nEdge) * v * exp(-shape * (R - R_mid) * (R - R_mid));
+	//  //= nEdge * pow(TeEdge, -p) * pow(Te, p); //
 	shape = 500;
-	autodiff::dual2nd M = MEdge + tfac(growth_factors[Channel::AngularMomentum]) * (1 - (exp(-shape * (R - R_Upper) * (R - R_Upper)) + exp(-shape * (R - R_Lower) * (R - R_Lower))));
-	autodiff::dual2nd omega = sqrt(Te) * M / R;
+	Real2nd M = MEdge + (MMid - MEdge) * v; // MEdge + tfac(growth_factors[Channel::AngularMomentum]) * (MMid - MEdge) * (1 - (exp(-shape * (R - R_Upper) * (R - R_Upper)) + exp(-shape * (R - R_Lower) * (R - R_Lower))));
+	Real2nd omega = sqrt(Te) * M / R;
 
 	Channel c = static_cast<Channel>(i);
 	switch (c)
@@ -599,10 +602,10 @@ Real MirrorPlasmaTest::Somega(RealVector u, RealVector q, RealVector sigma, Real
 
 Real MirrorPlasmaTest::ParticleSource(double R, double t) const
 {
-	double shape = 1 / ParticleSourceWidth;
-	// return (exp(-shape * (R - R_Lower) * (R - R_Lower)) + exp(-shape * (R - R_Upper) * (R - R_Upper)));
-	return ParticleSourceStrength * (exp(-shape * (R - ParticleSourceCenter) * (R - ParticleSourceCenter)));
-	//   return ParticleSourceStrength;
+	// double shape = 1 / ParticleSourceWidth;
+	//  return (exp(-shape * (R - R_Lower) * (R - R_Lower)) + exp(-shape * (R - R_Upper) * (R - R_Upper)));
+	return 1.0; // ParticleSourceStrength * (exp(-shape * (R - ParticleSourceCenter) * (R - ParticleSourceCenter)));
+				//   return ParticleSourceStrength;
 };
 
 Real MirrorPlasmaTest::LargeEdgeSource(double R, double t) const
@@ -621,26 +624,26 @@ Real MirrorPlasmaTest::ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real
 	// Cap loss rates
 	// if ((PastukhovFactor > MaxPastukhov) && ((R < (R_Lower + delta)) || (R > (R_Upper - delta))))
 	// 	PastukhovFactor = MaxPastukhov;
-	if (PastukhovFactor > MaxPastukhov)
-	{
-		double slope = 1.0;
-		Real R = B->R_V(V);
-		double rl = R_Lower + delta;
-		double rr = R_Upper - delta;
-		double delta2 = (1 - MaxPastukhov) / slope + delta;
-		if ((R < rl) || (R > rr))
-		{
-			PastukhovFactor = MaxPastukhov;
-		}
-		else if (R < (rl + delta2))
-		{
-			PastukhovFactor = MaxPastukhov + slope * (R - rl);
-		}
-		else if (R > (rr - delta2))
-		{
-			PastukhovFactor = MaxPastukhov - slope * (R - rr);
-		}
-	}
+	// if (PastukhovFactor > MaxPastukhov)
+	// {
+	// 	double slope = 1.0;
+	// 	Real R = B->R_V(V);
+	// 	double rl = R_Lower + delta;
+	// 	double rr = R_Upper - delta;
+	// 	double delta2 = (1 - MaxPastukhov) / slope + delta;
+	// 	if ((R < rl) || (R > rr))
+	// 	{
+	// 		PastukhovFactor = MaxPastukhov;
+	// 	}
+	// 	else if (R < (rl + delta2))
+	// 	{
+	// 		PastukhovFactor = MaxPastukhov + slope * (R - rl);
+	// 	}
+	// 	else if (R > (rr - delta2))
+	// 	{
+	// 		PastukhovFactor = MaxPastukhov - slope * (R - rr);
+	// 	}
+	// }
 	// If the loss becomes a gain, flatten at zero
 	if (PastukhovFactor.val < 0.0)
 		return 0.0;
@@ -659,27 +662,27 @@ Real MirrorPlasmaTest::IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) 
 	double delta = (1 - ZeroEdgeFactor) * (R_Upper - R_Lower);
 	Real PastukhovFactor = (exp(-Xi_i) / Xi_i);
 
-	// Cap loss rates
-	if (PastukhovFactor > MaxPastukhov)
-	{
-		double slope = 1.0;
-		Real R = B->R_V(V);
-		double rl = R_Lower + delta;
-		double rr = R_Upper - delta;
-		double delta2 = (1 - MaxPastukhov) / slope + delta;
-		if ((R < rl) || (R > rr))
-		{
-			PastukhovFactor = MaxPastukhov;
-		}
-		else if (R < (rl + delta2))
-		{
-			PastukhovFactor = MaxPastukhov + slope * (R - rl);
-		}
-		else if (R > (rr - delta2))
-		{
-			PastukhovFactor = MaxPastukhov - slope * (R - rr);
-		}
-	}
+	// // Cap loss rates
+	// if (PastukhovFactor > MaxPastukhov)
+	// {
+	// 	double slope = 1.0;
+	// 	Real R = B->R_V(V);
+	// 	double rl = R_Lower + delta;
+	// 	double rr = R_Upper - delta;
+	// 	double delta2 = (1 - MaxPastukhov) / slope + delta;
+	// 	if ((R < rl) || (R > rr))
+	// 	{
+	// 		PastukhovFactor = MaxPastukhov;
+	// 	}
+	// 	else if (R < (rl + delta2))
+	// 	{
+	// 		PastukhovFactor = MaxPastukhov + slope * (R - rl);
+	// 	}
+	// 	else if (R > (rr - delta2))
+	// 	{
+	// 		PastukhovFactor = MaxPastukhov - slope * (R - rr);
+	// 	}
+	// }
 	// If the loss becomes a gain, flatten at zero
 	if (PastukhovFactor.val < 0.0)
 		return 0.0;
@@ -748,6 +751,8 @@ double MirrorPlasmaTest::Voltage(T1 &L_phi, T2 &n)
 
 void MirrorPlasmaTest::initialiseDiagnostics(NetCDFIO &nc)
 {
+	if (useMMS)
+		AutodiffTransportSystem::initialiseDiagnostics(nc);
 	// Add diagnostics here
 	//
 	double RhoStar = RhoStarRef();
@@ -875,6 +880,9 @@ void MirrorPlasmaTest::initialiseDiagnostics(NetCDFIO &nc)
 
 void MirrorPlasmaTest::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
 {
+	if (useMMS)
+		AutodiffTransportSystem::writeDiagnostics(y, t, nc, tIndex);
+
 	auto L = [this, &y](double V)
 	{
 		return y.u(Channel::AngularMomentum)(V);

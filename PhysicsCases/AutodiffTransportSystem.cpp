@@ -277,3 +277,18 @@ Value AutodiffTransportSystem::MMS_Source(Index i, Position x, Time t)
 
 	return MMS;
 }
+
+void AutodiffTransportSystem::initialiseDiagnostics(NetCDFIO &nc)
+{
+	nc.AddGroup("MMSSource", "MMS sources");
+	for (Index j = 0; j < nVars; ++j)
+		nc.AddVariable("MMSSource", "Var" + std::to_string(j), "MMS source", "-", [this, j](double x)
+					   { return this->MMS_Source(j, x, 0.0); });
+}
+
+void AutodiffTransportSystem::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
+{
+	for (Index j = 0; j < nVars; ++j)
+		nc.AppendToGroup("MMSSource", tIndex, "Var" + std::to_string(j), [this, j, t](double x)
+						 { return this->MMS_Source(j, x, t); });
+}

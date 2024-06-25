@@ -129,7 +129,7 @@ Real2nd MirrorPlasma::InitialFunction(Index i, Real2nd V, Real2nd t) const
 	Real2nd Te = TeEdge + (TeMid - TeEdge) * v * v;
 	Real2nd Ti = TiEdge + (TiMid - TiEdge) * v * v;
 	shape = 1000;
-	Real2nd M = MEdge + MMid * (1 - (exp(-shape * (R - R_Upper) * (R - R_Upper)) + exp(-shape * (R - R_Lower) * (R - R_Lower))));
+	Real2nd M = MEdge + (MMid - MEdge) * (1 - (exp(-shape * (R - R_Upper) * (R - R_Upper)) + exp(-shape * (R - R_Lower) * (R - R_Lower))));
 	Real2nd omega = sqrt(Te) * M / R;
 
 	Channel c = static_cast<Channel>(i);

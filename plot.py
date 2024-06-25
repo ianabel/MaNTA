@@ -59,6 +59,18 @@ def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_grid= 
 def plot_MMS(fname):
     data = Dataset(fname)
     t = np.array(data.variables["t"])
+    x = np.array(data.variables["x"])
+
+    if ("MMSSource" in data.groups):
+        MMSSource = data.groups["MMSSource"]
+        for var in MMSSource.variables:
+            plt.figure()
+            s = np.array(MMSSource.variables[var])
+            plt.plot(x,s[-1,:])
+            plt.xlabel("x")
+            plt.ylabel("MMS source")
+            plt.title("MMS source for " + var)
+
 
     MMS = data.groups["MMS"]
     plt.figure()
@@ -67,10 +79,10 @@ def plot_MMS(fname):
         s = np.array(MMS.variables[var])
         sac = np.array(data.groups[var].variables["u"])
         diff = np.amax(np.abs(s - sac),axis=1)
-        ax.semilogy(t,diff,label = "error")
+        ax.semilogy(t,diff,label = var + " error")
         start = round(0.1*diff.size)
         fit = np.polyfit(t[start:],np.log(diff[start:]),1)
-        ax.semilogy(t,np.exp(fit[1]+fit[0]*t),label="fit")
+        ax.semilogy(t,np.exp(fit[1]+fit[0]*t),label=var + " fit")
         print("Error growth rate = " + "{:.3f}".format(fit[0]))
 
     ax.legend()
@@ -103,7 +115,7 @@ def plot_diagnostics(fname):
 def main():
     fname = "./MirrorPlasmaTest.nc"
     plot_nc(fname,True,True,True,False,True)
-    plot_MMS(fname)
+    # plot_MMS(fname)
     plot_diagnostics(fname)
 
 if __name__ == "__main__":
