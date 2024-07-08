@@ -8,7 +8,6 @@
 
 #include "gridStructures.hpp"
 
-
 class State {
 	public:
 		State() = default;
@@ -17,6 +16,13 @@ class State {
 			Derivative.resize( nv );
 			Flux.resize( nv );
 			Scalars.resize( ns );
+		}
+
+		void zero() {
+			Variable.setZero();
+			Derivative.setZero();
+			Flux.setZero();
+			Scalars.setZero();
 		}
 
 		Vector Variable,Derivative,Flux;
@@ -33,6 +39,7 @@ public:
 	virtual ~DGSoln() = default;
 
 	Index getNumVars() const { return nVars; };
+	Index getScalars() const { return nScalars; };
 
 	size_t getDoF() const
 	{

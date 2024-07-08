@@ -603,8 +603,9 @@ void SystemSolver::updateMatricesForJacSolve()
 		Interval const& I( grid[ i ] );
 		for ( Index j = 0; j < nScalars; ++j ) {
 			State s( nVars, nScalars );
+			State s_dt( nVars, nScalars );
 			for ( Index l = 0; l < k + 1; ++l ) {
-				problem->ScalarGPrime( j, s, yJac, [=]( double x ){ return LegendreBasis::Evaluate( I, l, x ); }, I, jt );
+				problem->ScalarGPrimeExtended( j, s, s_dt, yJac, [=]( double x ){ return LegendreBasis::Evaluate( I, l, x ); }, I, jt );
 				for ( Index v = 0; v < nVars; ++v ) {
 					w_map[ j ].sigma( v ).getCoeff( i ).second( l ) = s.Flux[ v ];
 					w_map[ j ].q( v ).getCoeff( i ).second( l ) = s.Derivative[ v ];
@@ -668,7 +669,7 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 			solveHDGJac( e[ i ], v[ i ] );
 		}
 
-		Vector tmp_N = N_global.inverse() * res_g_map.Scalars();
+		Vector tmp_N = (N_global.inverse() * res_g_map.Scalars());
 		N_VLinearCombination( nScalars, tmp_N.data(), e, g ); // g = Sum_i tmp_N[i]*e[i]
 		N_VLinearSum( 1.0, g, 1.0, d, g ); // g += d;
 
@@ -682,7 +683,7 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 				wTe( i, j ) = N_VDotProd( w[ i ], e[ j ] );
 
 		Matrix Nwe = N_global + wTe;
-		Vector NweInv_w_g = -1 * Nwe.inverse() * wDotg; // Uses PartialPivLU internally, never really does inverse
+		Vector NweInv_w_g = -1 * Nwe.inverse() * wDotg; // Uses PartialPivLU internally, never really does inverse (except for small matrices)
 		N_VLinearCombination( nScalars, NweInv_w_g.data(), e, delY ); // Set delY = - [ e  ( N + w^T e )^-1  w ]  g
 		N_VLinearSum( 1.0, delY, 1.0, g, delY ); // delY += g; so delY = g - (....), which is the final answer
 
@@ -694,8 +695,7 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 		for ( Index i = 0; i < nScalars; ++i )
 			del_y_scalars( i ) = res_g_map.Scalar( i ) - N_VDotProd( w[ i ], delY );
 
-		// factor of sqrt( SQU_DOF * nCells ) because we rescaled the residual function
-		del_y.Scalars() =  (1.0 / std::sqrt( SQU_DOF * nCells )) * N_global.inverse() * del_y_scalars;
+		del_y.Scalars() =  N_global.inverse() * del_y_scalars;
 
 		for ( Index i = 0; i < nScalars; ++i )
 			N_VDestroy( e[ i ] );
@@ -924,13 +924,8 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 		}
 	}
 
-	// For the scalars, we multiply by sqrt(N_HDG) to avoid the scalars being
-	// ignored relative to the error in the spatially-varying quantities as
-	// the number of spatial degrees of freedom increase.
-
 	for ( Index j = 0; j < nScalars; j++ ) {
-		res.Scalar( j ) =  std::sqrt( SQU_DOF * nCells ) * problem->ScalarG( j, Y_h, tres );
-		// res.Scalar( j ) =  problem->ScalarG( j, Y_h, tres );
+		res.Scalar( j ) = problem->ScalarG( j, Y_h, tres );
 	}
 
 	return 0;

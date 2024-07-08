@@ -62,11 +62,15 @@ public:
 		return 0.0;
 	}
 
-	virtual void ScalarGPrime( Index, State &, const DGSoln &, std::function<double( double )>, Interval, Time ) {
-		if ( nScalars != 0 )
+	virtual void ScalarGPrime( Index i, State &out, const DGSoln &y, std::function<double( double )> phi, Interval I, Time t ) {
 			throw std::logic_error( "nScalars > 0 but no scalar G derivative provided" );
 	}
-	
+
+	virtual void ScalarGPrimeExtended( Index i, State &out, State &out_dt, const DGSoln &y, std::function<double( double )> phi, Interval I, Time t ) {
+		out_dt.zero();
+		ScalarGPrime( i, out, y, phi, I, t );
+	}
+
 	virtual void dSources_dScalars( Index, Values &, const State &, Position, Time ) {
 		if ( nScalars != 0 )
 			throw std::logic_error( "nScalars > 0 but no coupling function provided" );

@@ -25,13 +25,8 @@ private:
         ElectronEnergy = 1,
         Density = 2
     };
-    Real Flux(Index, RealVector, RealVector, Real, Time) override;
-    Real Source(Index, RealVector, RealVector, RealVector, Real, Time) override;
-
-    Real MMS_Solution(Index i, Real x, Real t) override
-    {
-        return InitialFunction(i, x, t);
-    };
+    virtual Real Flux(Index, RealVector, RealVector, Position, Time) override;
+    virtual Real Source(Index, RealVector, RealVector, RealVector, Position, Time) override;
 
     enum DensityType : Index
     {

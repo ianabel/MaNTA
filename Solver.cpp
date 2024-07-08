@@ -129,6 +129,11 @@ void SystemSolver::runSolver( double tFinal )
 				tolerances.lambda(v).setConstant(absTolU);
 			}
 		}
+		for( Index s = 0; s < nScalars; ++s )
+		{
+			double absTol = atol[0];
+			tolerances.Scalars().setConstant( absTol );
+		}
 	}
 
 	for ( Index i = 0; i < nScalars; ++i )
