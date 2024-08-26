@@ -263,6 +263,7 @@ Value AutodiffTransportSystem::MMS_Source(Index i, Position x, Time t)
 							 wrt(xreal), at(uw, qw, xreal, t));
 
 	double dSigma_dx = dSdx;
+
 	for (Index j = 0; j < nVars; ++j)
 	{
 		sigma(j) = Flux(i, uw, qw, xreal, t);
