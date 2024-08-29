@@ -123,8 +123,9 @@ private:
 
 	StraightMagneticField *B;
 	// test source
-	double LargeEdgeSourceSize, LargeEdgeSourceWidth;
-	Real LargeEdgeSource(double R, double t) const;
+	double EdgeSourceSize, EdgeSourceWidth;
+
+	double SourceCap;
 
 	Real ParticleSource(double R, double t) const;
 
@@ -145,6 +146,8 @@ private:
 	{
 		return RelaxFactor * (A - B);
 	};
+
+	Real RelaxEdge(Real x, Real y, Real EdgeVal) const;
 
 	template <typename T1, typename T2>
 	double Voltage(T1 &L_phi, T2 &n);

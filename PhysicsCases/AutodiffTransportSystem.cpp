@@ -120,7 +120,10 @@ void AutodiffTransportSystem::dSources_dsigma(Index i, Values &grad, const State
 Value AutodiffTransportSystem::InitialValue(Index i, Position x) const
 {
 	if (loadInitialConditionsFromFile)
-		return (*NcFileInitialValues[i])(x);
+	{
+		double y = (*NcFileInitialValues[i])(x);
+		return y;
+	}
 	else
 		return InitialFunction(i, x, 0.0).val.val;
 }
@@ -128,7 +131,7 @@ Value AutodiffTransportSystem::InitialValue(Index i, Position x) const
 Value AutodiffTransportSystem::InitialDerivative(Index i, Position x) const
 {
 	if (loadInitialConditionsFromFile)
-		return (*NcFileInitialDerivatives[i])(x);
+		return (*NcFileInitialValues[i]).prime(x);
 	else
 	{
 		dual2nd pos = x;
@@ -182,7 +185,7 @@ void AutodiffTransportSystem::LoadDataToSpline(const std::string &file)
 	try
 	{
 #ifdef DEBUG
-		data_file.open("/home/eatocco/projects/MaNTA/MirrorPlasmaRERUN.nc", netCDF::NcFile::FileMode::read);
+		data_file.open("/home/eatocco/projects/MaNTA/MirrorPlasmaTestRERUN.nc", netCDF::NcFile::FileMode::read);
 #else
 		data_file.open(file, netCDF::NcFile::FileMode::read);
 #endif
@@ -203,20 +206,23 @@ void AutodiffTransportSystem::LoadDataToSpline(const std::string &file)
 	double h = x[1] - x[0];
 
 	std::vector<double> temp(nPoints);
+	std::vector<double> temp_deriv(nPoints);
 	netCDF::NcGroup tempGroup;
 
 	std::vector<size_t> start = {nTime - 1, 0};
 	std::vector<size_t> count = {1, nPoints};
+
+	double xmid = 0.5 * (x.back() + x.front());
 
 	for (Index i = 0; i < nVars; ++i)
 	{
 		tempGroup = data_file.getGroup("Var" + std::to_string(i));
 
 		tempGroup.getVar("u").getVar(start, count, temp.data());
-		NcFileInitialValues.push_back(std::make_unique<spline>(temp.begin(), temp.end(), x[0], h));
+		tempGroup.getVar("q").getVar(start, count, temp_deriv.data());
+		NcFileInitialValues.push_back(std::make_unique<spline>(temp.begin(), temp.end(), x[0], h, temp_deriv.front(), temp_deriv.back()));
 
-		tempGroup.getVar("q").getVar(start, count, temp.data());
-		NcFileInitialDerivatives.push_back(std::make_unique<spline>(temp.begin(), temp.end(), x[0], h));
+		NcFileInitialDerivatives.push_back(std::make_unique<spline>(temp_deriv.begin(), temp_deriv.end(), x[0], h));
 	}
 	data_file.close();
 }

@@ -72,6 +72,20 @@ LinearDiffSourceTest::LinearDiffSourceTest(toml::value const &config, Grid const
             SourceTypes = std::vector<Sources>(nSources, Sources::PeakedEdge);
         }
 
+        loadInitialConditionsFromFile = toml::find_or(InternalConfig, "useNcFile", false);
+        if (loadInitialConditionsFromFile)
+        {
+            if (InternalConfig.count("InitialConditionFilename") > 0)
+            {
+                filename = toml::find<std::string>(InternalConfig, "InitialConditionFilename");
+                LoadDataToSpline(filename);
+            }
+            else
+            {
+                throw std::invalid_argument("Please specify a filename to load initial conditions from file.");
+            }
+        }
+
         InitialWidth = toml::find_or(InternalConfig, "InitialWidth", std::vector<double>(nVars, 0.1));
         InitialHeight = toml::find_or(InternalConfig, "InitialHeight", std::vector<double>(nVars, 1.0));
         lowerBoundaryConditions = toml::find_or(InternalConfig, "LowerBoundaryConditions", std::vector<bool>(nVars, true));
@@ -165,10 +179,7 @@ void LinearDiffSourceTest::initialiseDiagnostics(NetCDFIO &nc)
 
 void LinearDiffSourceTest::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
 {
-    Fn s1 = [this, t](double x)
-    { return this->MMS_Solution(0, x, t).val.val; };
-    Fn s2 = [this, t](double x)
-    { return this->MMS_Solution(1, x, t).val.val; };
-
-    nc.AppendToGroup<Fn>("MMS", tIndex, {{"Var0", s1}, {"Var1", s2}});
+    for (Index j = 0; j < nVars; ++j)
+        nc.AppendToGroup("MMS", tIndex, "Var" + std::to_string(j), [this, j, t](double x)
+                         { return this->MMS_Solution(j, x, t).val.val; });
 }

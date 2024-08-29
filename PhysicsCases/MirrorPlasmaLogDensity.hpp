@@ -30,6 +30,19 @@ public:
     virtual autodiff::dual2nd InitialFunction(Index i, autodiff::dual2nd x, autodiff::dual2nd t) const override;
 
 private:
+    double RelaxFactor;
+    double MinDensity;
+    double MinTemp;
+    Real floor(Real x, double val) const
+    {
+        if (x >= val)
+            return x;
+        else
+        {
+            x.val = val;
+            return x;
+        }
+    } // return x ? x > tol : tol; };
     enum Channel : Index
     {
         Density = 0,
@@ -109,8 +122,7 @@ private:
 
     StraightMagneticField *B;
     // test source
-    double LargeEdgeSourceSize, LargeEdgeSourceWidth;
-    Real LargeEdgeSource(double R, double t) const;
+    double EdgeSourceSize, EdgeSourceWidth;
 
     Real ParticleSource(double R, double t) const;
 
@@ -126,6 +138,13 @@ private:
     Real Xi_e(Real V, Real omega, Real n, Real Ti, Real Te) const;
     Real AmbipolarPhi(Real V, Real n, Real Ti, Real Te) const;
     double R_Lower, R_Upper;
+
+    Real RelaxSource(Real A, Real B) const
+    {
+        return RelaxFactor * (A - B);
+    };
+
+    Real RelaxEdge(Real x, Real y, Real EdgeVal) const;
 
     template <typename T1, typename T2>
     double Voltage(T1 &L_phi, T2 &n);

@@ -15,6 +15,12 @@ const std::string B_file = "/home/eatocco/projects/MaNTA/Bfield.nc";
 const std::string B_file = "Bfield.nc";
 #endif
 
+template <typename T>
+int sign(T x)
+{
+	return x >= 0 ? 1 : -1;
+}
+
 MirrorPlasmaTest::MirrorPlasmaTest(toml::value const &config, Grid const &grid)
 	: AutodiffTransportSystem(config, grid, 4, 0)
 {
@@ -55,10 +61,10 @@ MirrorPlasmaTest::MirrorPlasmaTest(toml::value const &config, Grid const &grid)
 		growth = toml::find_or(InternalConfig, "MMSgrowth", 1.0);
 		growth_factors = toml::find_or(InternalConfig, "growth_factors", std::vector<double>(nVars, 1.0));
 		growth_rate = toml::find_or(InternalConfig, "MMSgrowth_rate", 0.5);
-
+		SourceCap = toml::find_or(InternalConfig, "SourceCap", 1e5);
 		// test source
-		LargeEdgeSourceSize = toml::find_or(InternalConfig, "LargeTestSourceSize", 0.0);
-		LargeEdgeSourceWidth = toml::find_or(InternalConfig, "LargeTestSourceWidth", 1e-5);
+		EdgeSourceSize = toml::find_or(InternalConfig, "EdgeSourceSize", 0.0);
+		EdgeSourceWidth = toml::find_or(InternalConfig, "EdgeSourceWidth", 1e-5);
 		ZeroEdgeSources = toml::find_or(InternalConfig, "ZeroEdgeSources", false);
 		ZeroEdgeFactor = toml::find_or(InternalConfig, "ZeroEdgeFactor", 0.9);
 		EnergyExchangeFactor = toml::find_or(InternalConfig, "EnergyExchangeFactor", 1.0);
@@ -83,7 +89,7 @@ MirrorPlasmaTest::MirrorPlasmaTest(toml::value const &config, Grid const &grid)
 		loadInitialConditionsFromFile = toml::find_or(InternalConfig, "useNcFile", false);
 		if (loadInitialConditionsFromFile)
 		{
-			filename = toml::find_or(InternalConfig, "InitialConditionFilename", "MirrorPlasmaTest.nc");
+			filename = toml::find_or(InternalConfig, "InitialConditionFilename", "MirrorPlasmaTestRERUN.nc");
 			LoadDataToSpline(filename);
 
 			uL[Channel::Density] = InitialValue(Channel::Density, xL);
@@ -232,6 +238,8 @@ Real MirrorPlasmaTest::Source(Index i, RealVector u, RealVector q, RealVector si
 	default:
 		throw std::runtime_error("Request for flux for undefined variable!");
 	}
+	if (abs(S) > SourceCap)
+		S = sign(S) * SourceCap;
 	return S;
 }
 
@@ -333,10 +341,10 @@ Real MirrorPlasmaTest::Gamma(RealVector u, RealVector q, Real V, double t) const
 	Real GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e
 	Real Gamma = GeometricFactor * GeometricFactor * (p_e / (ElectronCollisionTime(n, Te))) * (PressureGradient - TemperatureGradient);
 
-	// if ((u(Channel::Density) <= 1.1 * MinDensity) && (Gamma > 0))
+	// if ((u(Channel::Density) <= MinDensity))
 	// 	Gamma.val = 0.0;
 
-	Gamma *= 1 + 20 * (n - u(Channel::Density)) / MinDensity;
+	// Gamma *= floor((1 - 5 * (n - u(Channel::Density)) / MinDensity), 0) + 5 * (n - u(Channel::Density)) / MinDensity * nPrime;
 
 	if (std::isfinite(Gamma.val))
 		return Gamma;
@@ -455,7 +463,11 @@ Real MirrorPlasmaTest::Sn(RealVector u, RealVector q, RealVector sigma, Real V, 
 	Real S = DensitySource - ParallelLosses - FusionLosses;
 
 	S *= floor((1 - 20 * (n - u(Channel::Density)) / MinDensity), 0);
-	return S - RelaxSource(u(Channel::Density), n);
+	Real RelaxDensity = 0.0;
+	if (!isUpperBoundaryDirichlet(Channel::Density) || !isLowerBoundaryDirichlet(Channel::Density))
+		RelaxDensity = RelaxEdge(V, u(Channel::Density), MinDensity);
+
+	return S - RelaxSource(u(Channel::Density), n) + R * RelaxDensity;
 	// return S + exp(1000 * (n - u(Channel::Density))) - 1;
 };
 
@@ -500,7 +512,7 @@ Real MirrorPlasmaTest::Spi(RealVector u, RealVector q, RealVector sigma, Real V,
 	// if (p_i < MinTemp * MinDensity)
 	// 	S *= 1e-2;
 
-	return S + RelaxSource(u(Channel::Density) * Ti, p_i);
+	return S + RelaxSource(n * Ti, p_i);
 }
 
 // Energy normalisation is T0, but these return Xi_s / T_s as that is what enters the
@@ -578,7 +590,7 @@ Real MirrorPlasmaTest::Spe(RealVector u, RealVector q, RealVector sigma, Real V,
 	// if (p_e < MinTemp * MinDensity)
 	// 	S *= 1e-2;
 
-	return S + RelaxSource(u(Channel::Density) * Te, p_e);
+	return S + RelaxSource(n * Te, p_e);
 };
 
 // Source of angular momentum -- this is just imposed J x B torque (we can account for the particle source being a sink later).
@@ -595,15 +607,19 @@ Real MirrorPlasmaTest::Somega(RealVector u, RealVector q, RealVector sigma, Real
 	Real omega = L / J;
 	Real vtheta = omega * R;
 
-	double shape = 1 / DragWidth;
-	Real Drag = (omega * B->Bz_R(R) * DragFactor) * (exp(-shape * (R - R_Lower) * (R - R_Lower)) + exp(-shape * (R - R_Upper) * (R - R_Upper)));
+	// double shape = 1 / DragWidth;
+	// Real Drag = (omega * B->Bz_R(R) * DragFactor) * (exp(-shape * (R - R_Lower) * (R - R_Lower)) + exp(-shape * (R - R_Upper) * (R - R_Upper)));
 
 	// Neglect electron momentum
 	Real Xi = Xi_i(V, omega, n, Ti, Te);
 	Real AngularMomentumPerParticle = L / n;
 	Real ParallelLosses = AngularMomentumPerParticle * IonPastukhovLossRate(V, Xi, n, Te);
+	Real RelaxMach = 0.0;
+	Real M = vtheta / sqrt(Te);
+	if (!isUpperBoundaryDirichlet(Channel::AngularMomentum) || !isLowerBoundaryDirichlet(Channel::AngularMomentum))
+		RelaxMach = RelaxEdge(V, M, MEdge);
 
-	return JxB - ParallelLosses - (Drag); //+ RelaxSource(omega * R * R * u(Channel::Density), L);
+	return JxB - ParallelLosses + R * RelaxMach; // (Drag); //+ RelaxSource(omega * R * R * u(Channel::Density), L);
 };
 
 Real MirrorPlasmaTest::ParticleSource(double R, double t) const
@@ -614,11 +630,11 @@ Real MirrorPlasmaTest::ParticleSource(double R, double t) const
 	//   return ParticleSourceStrength;
 };
 
-Real MirrorPlasmaTest::LargeEdgeSource(double R, double t) const
-{
-	double shape = 1 / LargeEdgeSourceWidth;
-	return LargeEdgeSourceSize * (exp(-shape * (R - R_Lower) * (R - R_Lower)) + exp(-shape * (R - R_Upper) * (R - R_Upper)));
-};
+// Real MirrorPlasmaTest::LargeEdgeSource(double R, double t) const
+// {
+// 	double shape = 1 / LargeEdgeSourceWidth;
+// 	return LargeEdgeSourceSize * (exp(-shape * (R - R_Lower) * (R - R_Lower)) + exp(-shape * (R - R_Upper) * (R - R_Upper)));
+// };
 
 Real MirrorPlasmaTest::ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real Te) const
 {
@@ -759,6 +775,13 @@ double MirrorPlasmaTest::Voltage(T1 &L_phi, T2 &n)
 	};
 	double cs0 = std::sqrt(T0 / IonMass);
 	return cs0 * integrator.integrate(integrand, xL, xR);
+}
+
+Real MirrorPlasmaTest::RelaxEdge(Real x, Real y, Real EdgeVal) const
+{
+	double shape = 1 / EdgeSourceWidth;
+	Real g = (exp(-shape * (x - xL) * (x - xL)) + exp(-shape * (x - xR) * (x - xR)));
+	return EdgeSourceSize * g * (EdgeVal - y);
 }
 
 void MirrorPlasmaTest::initialiseDiagnostics(NetCDFIO &nc)
