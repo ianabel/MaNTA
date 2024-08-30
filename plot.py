@@ -113,10 +113,10 @@ def plot_diagnostics(fname):
 
 
 def main():
-    fname = "./MirrorPlasmaTestRERUN.nc"
-    plot_nc(fname,False,True,include_initial=True)
-    fname = "./MirrorPlasmaTest.nc"
-    plot_nc(fname,False,True,include_initial=True)
+    fname = "./MirrorPlasmaTest1.restart5.nc"
+    plot_nc(fname,False,False,True,include_initial=True)
+    # fname = "./MirrorPlasmaTest.nc"
+    # plot_nc(fname,False,False,include_initial=True)
     # plot_MMS(fname)
     #plot_diagnostics(fname)
     plt.show()

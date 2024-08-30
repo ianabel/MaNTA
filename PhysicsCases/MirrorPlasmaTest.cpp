@@ -333,6 +333,7 @@ Real MirrorPlasmaTest::Gamma(RealVector u, RealVector q, Real V, double t) const
 {
 	Real n = floor(u(Channel::Density), MinDensity), p_e = (2. / 3.) * u(Channel::ElectronEnergy);
 	Real Te = floor(p_e / n, MinTemp);
+
 	Real nPrime = q(Channel::Density), p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
 	Real Te_prime = (p_e_prime - nPrime * Te) / n;
 	Real PressureGradient = ((p_e_prime + p_i_prime) / p_e);
@@ -468,7 +469,6 @@ Real MirrorPlasmaTest::Sn(RealVector u, RealVector q, RealVector sigma, Real V, 
 		RelaxDensity = RelaxEdge(V, u(Channel::Density), MinDensity);
 
 	return S - RelaxSource(u(Channel::Density), n) + R * RelaxDensity;
-	// return S + exp(1000 * (n - u(Channel::Density))) - 1;
 };
 
 /*
@@ -508,9 +508,6 @@ Real MirrorPlasmaTest::Spi(RealVector u, RealVector q, RealVector sigma, Real V,
 	Real ParallelLosses = ParticleEnergy * IonPastukhovLossRate(V, Xi, n, Ti);
 
 	Real S = Heating - ParallelLosses;
-
-	// if (p_i < MinTemp * MinDensity)
-	// 	S *= 1e-2;
 
 	return S + RelaxSource(n * Ti, p_i);
 }
@@ -598,10 +595,19 @@ Real MirrorPlasmaTest::Somega(RealVector u, RealVector q, RealVector sigma, Real
 {
 	// J x B torque
 	Real R = B->R_V(V);
-	Real JxB = -jRadial * R * B->Bz_R(R);
 
 	Real n = floor(u(Channel::Density), MinDensity), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
 	Real Te = floor(p_e / n, MinTemp), Ti = p_i / n;
+
+	if (Te > 4.5)
+	{
+		jRadial = -250.0;
+	}
+	if (Te > 6.0)
+	{
+		jRadial = -130.0;
+	}
+	Real JxB = -jRadial * R * B->Bz_R(R);
 	Real L = u(Channel::AngularMomentum);
 	Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
 	Real omega = L / J;
@@ -630,12 +636,6 @@ Real MirrorPlasmaTest::ParticleSource(double R, double t) const
 	//   return ParticleSourceStrength;
 };
 
-// Real MirrorPlasmaTest::LargeEdgeSource(double R, double t) const
-// {
-// 	double shape = 1 / LargeEdgeSourceWidth;
-// 	return LargeEdgeSourceSize * (exp(-shape * (R - R_Lower) * (R - R_Lower)) + exp(-shape * (R - R_Upper) * (R - R_Upper)));
-// };
-
 Real MirrorPlasmaTest::ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real Te) const
 {
 	double MirrorRatio = B->MirrorRatio(V);
@@ -643,29 +643,7 @@ Real MirrorPlasmaTest::ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real
 	double Sigma = 2.0; // = 1 + Z_eff ; Include collisions with ions and impurities as well as self-collisions
 	double delta = (1 - ZeroEdgeFactor) * (xR - xL);
 	Real PastukhovFactor = (exp(-Xi_e) / Xi_e);
-	// Cap loss rates
-	// if ((PastukhovFactor > MaxPastukhov) && ((R < (R_Lower + delta)) || (R > (R_Upper - delta))))
-	// PastukhovFactor = MaxPastukhov;
-	// if (PastukhovFactor > MaxPastukhov)
-	// {
-	// 	double slope = 1.0;
-	// 	Real R = B->R_V(V);
-	// 	double rl = R_Lower + delta;
-	// 	double rr = R_Upper - delta;
-	// 	double delta2 = (1 - MaxPastukhov) / slope + delta;
-	// 	if ((R < rl) || (R > rr))
-	// 	{
-	// 		PastukhovFactor = MaxPastukhov;
-	// 	}
-	// 	else if (R < (rl + delta2))
-	// 	{
-	// 		PastukhovFactor = MaxPastukhov + slope * (R - rl);
-	// 	}
-	// 	else if (R > (rr - delta2))
-	// 	{
-	// 		PastukhovFactor = MaxPastukhov - slope * (R - rr);
-	// 	}
-	// }
+
 	// If the loss becomes a gain, flatten at zero
 	if (PastukhovFactor.val < 0.0)
 		return 0.0;
@@ -684,27 +662,6 @@ Real MirrorPlasmaTest::IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) 
 	double delta = (1 - ZeroEdgeFactor) * (R_Upper - R_Lower);
 	Real PastukhovFactor = (exp(-Xi_i) / Xi_i);
 
-	// // Cap loss rates
-	// if (PastukhovFactor > MaxPastukhov)
-	// {
-	// 	double slope = 1.0;
-	// 	Real R = B->R_V(V);
-	// 	double rl = R_Lower + delta;
-	// 	double rr = R_Upper - delta;
-	// 	double delta2 = (1 - MaxPastukhov) / slope + delta;
-	// 	if ((R < rl) || (R > rr))
-	// 	{
-	// 		PastukhovFactor = MaxPastukhov;
-	// 	}
-	// 	else if (R < (rl + delta2))
-	// 	{
-	// 		PastukhovFactor = MaxPastukhov + slope * (R - rl);
-	// 	}
-	// 	else if (R > (rr - delta2))
-	// 	{
-	// 		PastukhovFactor = MaxPastukhov - slope * (R - rr);
-	// 	}
-	// }
 	// If the loss becomes a gain, flatten at zero
 	if (PastukhovFactor.val < 0.0)
 		return 0.0;

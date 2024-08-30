@@ -86,7 +86,9 @@ private:
 	std::vector<double> growth_factors;
 
 	double ParticleSourceStrength, ParticleSourceCenter,
-		jRadial, ParticleSourceWidth, UniformHeatSource;
+		ParticleSourceWidth, UniformHeatSource;
+
+	mutable double jRadial;
 
 	// Reference Values
 	constexpr static double ElectronMass = 9.1094e-31;		   // Electron Mass, kg

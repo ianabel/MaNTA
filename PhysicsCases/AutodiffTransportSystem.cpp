@@ -184,11 +184,7 @@ void AutodiffTransportSystem::LoadDataToSpline(const std::string &file)
 {
 	try
 	{
-#ifdef DEBUG
-		data_file.open("/home/eatocco/projects/MaNTA/MirrorPlasmaTestRERUN.nc", netCDF::NcFile::FileMode::read);
-#else
 		data_file.open(file, netCDF::NcFile::FileMode::read);
-#endif
 	}
 	catch (...)
 	{
