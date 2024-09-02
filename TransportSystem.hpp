@@ -13,7 +13,6 @@
 
  */
 
-
 class TransportSystem
 {
 public:
@@ -21,11 +20,11 @@ public:
 
 	Index getNumVars() const { return nVars; };
 	Index getNumScalars() const { return nScalars; };
-    Index getNumAux() const { return nAux; };
+	Index getNumAux() const { return nAux; };
 
 	// Function for passing boundary conditions to the solver
-	virtual Value LowerBoundary(Index i, Time t) const { return uL[i];};
-	virtual Value UpperBoundary(Index i, Time t) const { return uR[i];};
+	virtual Value LowerBoundary(Index i, Time t) const { return uL[i]; };
+	virtual Value UpperBoundary(Index i, Time t) const { return uR[i]; };
 
 	virtual bool isLowerBoundaryDirichlet(Index i) const { return isLowerDirichlet; };
 	virtual bool isUpperBoundaryDirichlet(Index i) const { return isUpperDirichlet; };
@@ -50,59 +49,67 @@ public:
 	virtual Value InitialValue(Index i, Position x) const = 0;
 	virtual Value InitialDerivative(Index i, Position x) const = 0;
 
-	virtual Value InitialScalarValue( Index s ) const {
-		if ( nScalars != 0 )
-			throw std::logic_error( "nScalars > 0 but no initial value provided" );
+	virtual Value InitialScalarValue(Index s) const
+	{
+		if (nScalars != 0)
+			throw std::logic_error("nScalars > 0 but no initial value provided");
 		return 0.0;
 	}
 
 	// Scalar functions
-	virtual Value ScalarG( Index, const DGSoln&, Time ) {
-		if ( nScalars != 0 )
-			throw std::logic_error( "nScalars > 0 but no scalar G provided" );
+	virtual Value ScalarG(Index, const DGSoln &, Time)
+	{
+		if (nScalars != 0)
+			throw std::logic_error("nScalars > 0 but no scalar G provided");
 		return 0.0;
 	}
 
-	virtual void ScalarGPrime( Index i, State &out, const DGSoln &y, std::function<double( double )> phi, Interval I, Time t ) {
-			throw std::logic_error( "nScalars > 0 but no scalar G derivative provided" );
+	virtual void ScalarGPrime(Index i, State &out, const DGSoln &y, std::function<double(double)> phi, Interval I, Time t)
+	{
+		throw std::logic_error("nScalars > 0 but no scalar G derivative provided");
 	}
 
-	virtual void ScalarGPrimeExtended( Index i, State &out, State &out_dt, const DGSoln &y, std::function<double( double )> phi, Interval I, Time t ) {
+	virtual void ScalarGPrimeExtended(Index i, State &out, State &out_dt, const DGSoln &y, std::function<double(double)> phi, Interval I, Time t)
+	{
 		out_dt.zero();
-		ScalarGPrime( i, out, y, phi, I, t );
+		ScalarGPrime(i, out, y, phi, I, t);
 	}
 
-	virtual void dSources_dScalars( Index, Values &, const State &, Position, Time ) {
-		if ( nScalars != 0 )
-			throw std::logic_error( "nScalars > 0 but no coupling function provided" );
+	virtual void dSources_dScalars(Index, Values &, const State &, Position, Time)
+	{
+		if (nScalars != 0)
+			throw std::logic_error("nScalars > 0 but no coupling function provided");
 	}
 
-    // Auxiliary variable functions
+	// Auxiliary variable functions
 
-    virtual Value InitialAuxValue( Index i, Position x ) const {
-        if ( nAux != 0 )
-            throw std::logic_error( "nAux > 0 but no initial auxiliary value provided" );
-        return 0.0;
-    }
+	virtual Value InitialAuxValue(Index i, Position x) const
+	{
+		if (nAux != 0)
+			throw std::logic_error("nAux > 0 but no initial auxiliary value provided");
+		return 0.0;
+	}
 
-    // G_i( a(x), {u_j(x), q_j(x), sigma_j(x)} , x ) = 0 is the equation
-    // that defines the auxiliary variable a
-    virtual Value AuxG( Index i, const State &, Position, Time ) {
-        if ( nAux != 0 )
-            throw std::logic_error( "nAux > 0 but no auxiliary G provided" );
-        return 0.0;
-    }
+	// G_i( a(x), {u_j(x), q_j(x), sigma_j(x)} , x ) = 0 is the equation
+	// that defines the auxiliary variable a
+	virtual Value AuxG(Index i, const State &, Position, Time)
+	{
+		if (nAux != 0)
+			throw std::logic_error("nAux > 0 but no auxiliary G provided");
+		return 0.0;
+	}
 
-    // AuxGPrime returns dG_i in out
-    virtual void AuxGPrime( Index i, State &out, const State &, Position, Time ) {
-        throw std::logic_error( "nAux > 0 but no G derivative provided" );
-    }
+	// AuxGPrime returns dG_i in out
+	virtual void AuxGPrime(Index i, State &out, const State &, Position, Time)
+	{
+		throw std::logic_error("nAux > 0 but no G derivative provided");
+	}
 
-
-    virtual void dSources_dPhi( Index, Values &, const State &, Position, Time ) {
-        if ( nAux != 0 )
-            throw std::logic_error( "nAux > 0 but no coupling to the main sources provided" );
-    }
+	virtual void dSources_dPhi(Index, Values &, const State &, Position, Time)
+	{
+		if (nAux != 0)
+			throw std::logic_error("nAux > 0 but no coupling to the main sources provided");
+	}
 
 	virtual std::string getVariableName(Index i)
 	{
@@ -114,10 +121,10 @@ public:
 		return std::string("Scalar") + std::to_string(i);
 	}
 
-    virtual std::string getAuxVarName(Index i)
-    {
-        return std::string("AuxVariable") + std::to_string(i);
-    }
+	virtual std::string getAuxVarName(Index i)
+	{
+		return std::string("AuxVariable") + std::to_string(i);
+	}
 
 	virtual std::string getVariableDescription(Index i)
 	{
@@ -150,16 +157,19 @@ public:
 	}
 
 	// Hooks for adding extra NetCDF outputs
-	virtual void initialiseDiagnostics( NetCDFIO & ) {
+	virtual void initialiseDiagnostics(NetCDFIO &)
+	{
 		return;
 	}
 
 	// Parameters are ( solution, time, netcdf output object, time index )
-	virtual void writeDiagnostics( DGSoln const&, double, NetCDFIO &, size_t ) {
+	virtual void writeDiagnostics(DGSoln const &, double, NetCDFIO &, size_t)
+	{
 		return;
 	}
 
-	virtual void finaliseDiagnostics( NetCDFIO & ) {
+	virtual void finaliseDiagnostics(NetCDFIO &)
+	{
 		return;
 	}
 
@@ -168,9 +178,9 @@ public:
 protected:
 	Index nVars;
 	Index nScalars = 0;
-    Index nAux = 0;
-	std::vector<Value> uL,uR;
-	bool isUpperDirichlet,isLowerDirichlet;
+	Index nAux = 0;
+	std::vector<Value> uL, uR;
+	bool isUpperDirichlet, isLowerDirichlet;
 };
 
 #endif // TRANSPORTSYSTEM_HPP

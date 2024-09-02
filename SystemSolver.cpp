@@ -87,6 +87,9 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 	auto initial_aux = std::bind_front(&TransportSystem::InitialAuxValue, problem);
 	y.AssignAux(initial_aux);
 
+	auto initial_aux = std::bind_front(&TransportSystem::InitialAuxValue, problem);
+	y.AssignAux(initial_aux);
+
 	ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
 
 	// Zero most of dydt, we only have to set it to nonzero values for the differential parts of y
@@ -523,6 +526,8 @@ void SystemSolver::updateMatricesForJacSolve()
 		Eigen::MatrixXd Ssig(nVars * (k + 1), nVars * (k + 1));
 		Eigen::MatrixXd Sq(nVars * (k + 1), nVars * (k + 1));
 		Eigen::MatrixXd Su(nVars * (k + 1), nVars * (k + 1));
+
+		Eigen::MatrixXd Sphi(nVars * (k + 1), nAux * (k + 1));
 
 		Eigen::MatrixXd Sphi(nVars * (k + 1), nAux * (k + 1));
 
