@@ -11,43 +11,55 @@
 class State {
 	public:
 		State() = default;
-		explicit State( Index nv, Index ns = 0 ) {
+		explicit State( Index nv, Index ns = 0, Index naux = 0 ) {
 			Variable.resize( nv );
 			Derivative.resize( nv );
 			Flux.resize( nv );
 			Scalars.resize( ns );
+            Aux.resize( naux );
 		}
+
+        void clone( const State & other ) {
+            Variable.resize( other.Variable.size() );
+            Derivative.resize( other.Derivative.size() );
+            Flux.resize( other.Flux.size() );
+            Scalars.resize( other.Scalars.size() );
+            Aux.resize( other.Aux.size() );
+        }
 
 		void zero() {
 			Variable.setZero();
 			Derivative.setZero();
 			Flux.setZero();
 			Scalars.setZero();
+            Aux.setZero();
 		}
 
-		Vector Variable,Derivative,Flux;
+		Vector Variable,Derivative,Flux,Aux;
 		Vector Scalars;
 };
 
 class DGSoln
 {
 public:
-	DGSoln(Index n_var, Grid const &_grid, Index Order, Index Scalars = 0) : nVars(n_var), grid(_grid), k(Order), nScalars( Scalars ), mu_( nullptr, 0 ) {};
+	DGSoln(Index n_var, Grid const &_grid, Index Order, Index Scalars = 0, Index aux = 0) : nVars(n_var), grid(_grid), k(Order), nScalars( Scalars ), nAux( aux ), mu_( nullptr, 0 ) {};
 
-	DGSoln(Index n_var, Grid const &_grid, Index Order, double *memory, Index Scalars = 0) : nVars(n_var), grid(_grid), k(Order), nScalars( Scalars ), mu_( nullptr, 0 ) { Map(memory); };
+	DGSoln(Index n_var, Grid const &_grid, Index Order, double *memory, Index Scalars = 0, Index naux = 0 ) : nVars(n_var), grid(_grid), k(Order), nScalars( Scalars ), nAux( naux ), mu_( nullptr, 0 ) { Map(memory); };
 
 	virtual ~DGSoln() = default;
 
 	Index getNumVars() const { return nVars; };
 	Index getScalars() const { return nScalars; };
+    Index getAux() const { return nAux; };
 
 	size_t getDoF() const
 	{
 		// 3 = u + q + sigma
 		// nCells + 1 for lambda because we store values at both ends
 		// and we are carrying nScalar scalar variables
+        // Auxiliary variables depend on space, so each one carries nCells * (k+1) degrees of freedom
 		return grid.getNCells() * nVars * (k + 1) * 3 +
-		         (grid.getNCells() + 1) * nVars + nScalars;
+		         (grid.getNCells() + 1) * nVars + nScalars + grid.getNCells() * nAux * (k + 1);
 	};
 
 	void Map(double *Y)
@@ -60,16 +72,34 @@ public:
 		sigma_.reserve(nVars);
 		lambda_.clear();
 		lambda_.reserve(nVars);
+
+        aux_.clear();
+        aux_.reserve( nAux );
+
 		auto nCells = grid.getNCells();
+
+        size_t per_cell_dof = (3 * nVars + nAux) * ( k + 1 );
+        size_t sigma_offset = 0;
+        size_t q_offset = nVars * ( k + 1 );
+        size_t u_offset = 2 * nVars * ( k + 1 );
+        size_t aux_offset = 3 * nVars * ( k + 1 );
+        size_t lambda_offset = ( 3 * nVars + nAux ) * ( k + 1 ) * nCells;
+        size_t scalar_offset = ( 3 * nVars + nAux ) * ( k + 1 ) * nCells + nVars * ( nCells + 1 );
+
 		for (int var = 0; var < nVars; var++)
 		{
-			sigma_.emplace_back(grid, k, (Y + var * (k + 1)), 3 * nVars * (k + 1));
-			q_.emplace_back(grid, k, (Y + nVars * (k + 1) + var * (k + 1)), 3 * nVars * (k + 1));
-			u_.emplace_back(grid, k, (Y + 2 * nVars * (k + 1) + var * (k + 1)), 3 * nVars * (k + 1));
+			sigma_.emplace_back(grid, k, (Y + sigma_offset + var * (k + 1)), per_cell_dof );
+			q_    .emplace_back(grid, k, (Y + q_offset     + var * (k + 1)), per_cell_dof );
+			u_    .emplace_back(grid, k, (Y + u_offset     + var * (k + 1)), per_cell_dof );
 
-			lambda_.emplace_back(Y + nVars * (nCells) * (3 * k + 3) + var * (nCells + 1), (nCells + 1));
+			lambda_.emplace_back(Y + lambda_offset + var * (nCells + 1), (nCells + 1));
 		}
-		new ( &mu_ ) VectorWrapper( Y + nVars * nCells * ( 3 * k + 3 ) + nVars * ( nCells + 1 ), nScalars );
+
+		new ( &mu_ ) VectorWrapper( Y + scalar_offset, nScalars );
+
+        for ( int a = 0; a < nAux; a++ )
+          aux_.emplace_back( grid, k, Y + aux_offset + a * ( k + 1 ), per_cell_dof );
+
 	};
 
 	// Accessors, both const & non-const
@@ -91,8 +121,12 @@ public:
 	VectorWrapper const & Scalars() const { return mu_; };
 	VectorWrapper & Scalars() { return mu_; };
 
+    // Auxiliary variables that are purely algebraic
+    DGApprox & Aux(Index i) { return aux_[i]; };
+    DGApprox const & Aux(Index i) const { return aux_[i]; };
+
 	State eval( double x ) const {
-		State out( nVars, nScalars );
+		State out( nVars, nScalars, nAux );
 		for ( Index i = 0; i < nVars; ++i ) {
 			out.Variable[i] = u_[i]( x );
 			out.Derivative[i] =  q_[i]( x );
@@ -101,6 +135,9 @@ public:
 		for ( Index i = 0; i < nScalars; ++i ) {
 			out.Scalars[i] = mu_[i];
 		}
+        for ( Index i = 0; i < nAux; ++i ) {
+            out.Aux[i] = aux_[i]( x );
+        }
 		return out;
 	}
 
@@ -154,6 +191,14 @@ public:
 		for (Index i = 0; i < nVars; ++i)
 		{
 			q_[i] = std::bind(q_fn, i, std::placeholders::_1);
+		}
+	};
+
+	void AssignAux(std::function<double(Index, double)> phi_fn)
+	{
+		for (Index i = 0; i < nAux; ++i)
+		{
+			aux_[i] = std::bind(phi_fn, i, std::placeholders::_1);
 		}
 	};
 
@@ -256,18 +301,23 @@ public:
 			lambda_[i].setZero();
 		}
 		mu_.setZero();
+        for ( Index i = 0; i < nAux; ++i )
+        {
+            aux_[i].zeroCoeffs();
+        }
 	}
 
 private:
 	const Index nVars;
 	const Grid &grid;
 	const Index k;
-	const Index nScalars;
+	const Index nScalars, nAux;
 	std::vector<DGApprox> u_;
 	std::vector<DGApprox> q_;
 	std::vector<DGApprox> sigma_;
 	std::vector<VectorWrapper> lambda_;
 	VectorWrapper mu_;
+	std::vector<DGApprox> aux_;
 };
 
 

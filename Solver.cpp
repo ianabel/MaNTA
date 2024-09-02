@@ -55,7 +55,7 @@ void SystemSolver::runSolver( double tFinal )
 	//-----------------------------Initial conditions-------------------------------
 
 	// Set original vector lengths
-	Y = N_VNew_Serial(nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars, ctx);
+	Y = N_VNew_Serial(nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * ( k + 1 ), ctx);
 	if (ErrorChecker::check_retval((void *)Y, "N_VNew_Serial", 0))
 		throw std::runtime_error("Sundials Initialization Error");
 
@@ -83,7 +83,9 @@ void SystemSolver::runSolver( double tFinal )
 	if (ErrorChecker::check_retval((void *)id, "N_VClone", 0))
 		std::runtime_error("Sundials initialization Error, run in debug to find");
 
-	DGSoln isDifferential( nVars, grid, k, nScalars );
+    N_VConst( 2.0, id );
+
+	DGSoln isDifferential( nVars, grid, k, nScalars, nAux );
 	isDifferential.Map( N_VGetArrayPointer( id ) );
 	isDifferential.zeroCoeffs();
 	for ( Index v = 0; v < nVars; ++v )
@@ -106,7 +108,7 @@ void SystemSolver::runSolver( double tFinal )
 	VectorWrapper absTolVals(N_VGetArrayPointer(absTolVec), N_VGetLength(absTolVec));
 	absTolVals.setZero();
 
-	DGSoln tolerances( nVars, grid, k, nScalars );
+	DGSoln tolerances( nVars, grid, k, nScalars, nAux );
 	tolerances.Map(N_VGetArrayPointer(absTolVec));
 	for (Index i = 0; i < nCells; ++i)
 	{
@@ -129,11 +131,11 @@ void SystemSolver::runSolver( double tFinal )
 				tolerances.lambda(v).setConstant(absTolU);
 			}
 		}
-		for( Index s = 0; s < nScalars; ++s )
-		{
-			double absTol = atol[0];
-			tolerances.Scalars().setConstant( absTol );
-		}
+
+        for( Index a = 0; a < nAux; ++a )
+        {
+            tolerances.Aux( a ).getCoeff( i ).second.setConstant( atol[ 0 ] );
+        }
 	}
 
 	for ( Index i = 0; i < nScalars; ++i )

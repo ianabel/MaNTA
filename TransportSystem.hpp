@@ -21,6 +21,7 @@ public:
 
 	Index getNumVars() const { return nVars; };
 	Index getNumScalars() const { return nScalars; };
+    Index getNumAux() const { return nAux; };
 
 	// Function for passing boundary conditions to the solver
 	virtual Value LowerBoundary(Index i, Time t) const { return uL[i];};
@@ -76,6 +77,33 @@ public:
 			throw std::logic_error( "nScalars > 0 but no coupling function provided" );
 	}
 
+    // Auxiliary variable functions
+
+    virtual Value InitialAuxValue( Index i, Position x ) const {
+        if ( nAux != 0 )
+            throw std::logic_error( "nAux > 0 but no initial auxiliary value provided" );
+        return 0.0;
+    }
+
+    // G_i( a(x), {u_j(x), q_j(x), sigma_j(x)} , x ) = 0 is the equation
+    // that defines the auxiliary variable a
+    virtual Value AuxG( Index i, const State &, Position, Time ) {
+        if ( nAux != 0 )
+            throw std::logic_error( "nAux > 0 but no auxiliary G provided" );
+        return 0.0;
+    }
+
+    // AuxGPrime returns dG_i in out
+    virtual void AuxGPrime( Index i, State &out, const State &, Position, Time ) {
+        throw std::logic_error( "nAux > 0 but no G derivative provided" );
+    }
+
+
+    virtual void dSources_dPhi( Index, Values &, const State &, Position, Time ) {
+        if ( nScalars != 0 )
+            throw std::logic_error( "nAux > 0 but no coupling to the main sources provided" );
+    }
+
 	virtual std::string getVariableName(Index i)
 	{
 		return std::string("Var") + std::to_string(i);
@@ -85,6 +113,11 @@ public:
 	{
 		return std::string("Scalar") + std::to_string(i);
 	}
+
+    virtual std::string getAuxVarName(Index i)
+    {
+        return std::string("AuxVariable") + std::to_string(i);
+    }
 
 	virtual std::string getVariableDescription(Index i)
 	{
@@ -96,12 +129,22 @@ public:
 		return std::string("Scalar ") + std::to_string(i);
 	}
 
+	virtual std::string getAuxDescription(Index i)
+	{
+		return std::string("Auxiliary Variable ") + std::to_string(i);
+	}
+
 	virtual std::string getVariableUnits(Index i)
 	{
 		return std::string("");
 	}
 
 	virtual std::string getScalarUnits(Index i)
+	{
+		return std::string("");
+	}
+
+	virtual std::string getAuxUnits(Index i)
 	{
 		return std::string("");
 	}
@@ -125,6 +168,7 @@ public:
 protected:
 	Index nVars;
 	Index nScalars = 0;
+    Index nAux = 0;
 	std::vector<Value> uL,uR;
 	bool isUpperDirichlet,isLowerDirichlet;
 };

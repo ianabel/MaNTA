@@ -211,6 +211,11 @@ void SystemSolver::initialiseNetCDF(std::string const &NetcdfOutputFile, size_t 
 		nc_output.AddTimeSeries( problem->getScalarName( i ), problem->getScalarDescription( i ), problem->getScalarUnits( i ),y.Scalar( i ) );
 	}
 
+    for( Index i = 0; i < nAux; ++i )
+    {
+      nc_output.AddVariable(problem->getAuxVarName( i ), problem->getAuxDescription( i ), problem->getAuxUnits( i ), y.Aux( i ) );
+    }
+
 	problem->initialiseDiagnostics( nc_output );
 }
 

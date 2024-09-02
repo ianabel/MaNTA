@@ -14,7 +14,7 @@
 
 
 SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *transpSystem)
-	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars( transpSystem->getNumScalars() ), MXSolvers( Grid.getNCells() ), y( nVars, grid, k, nScalars ), dydt( nVars, grid, k, nScalars ), yJac( nVars, grid, k, nScalars ), problem(transpSystem)
+	: grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars( transpSystem->getNumScalars() ), nAux( transpSystem->getNumAux() ), MXSolvers( Grid.getNCells() ), y( nVars, grid, k, nScalars, nAux ), dydt( nVars, grid, k, nScalars, nAux ), yJac( nVars, grid, k, nScalars, nAux ), problem(transpSystem)
 {
 	if ( SUNContext_Create(SUN_COMM_NULL, &ctx) < 0 )
 		throw std::runtime_error( "Unable to allocate SUNDIALS Context, aborting." );
@@ -23,8 +23,13 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSyst
 	S_DOF = k + 1;
 	U_DOF = k + 1;
 	Q_DOF = k + 1;
+
 	SQU_DOF = U_DOF + Q_DOF + S_DOF;
-	std::cerr << "Total HDG degrees of freedom " << SQU_DOF * nCells + (nCells + 1) << std::endl;
+
+    AUX_DOF = k + 1;
+    localDOF = nVars * SQU_DOF + nAux * AUX_DOF;
+
+	std::cerr << "Total HDG degrees of freedom " << ( localDOF ) * nCells + (nCells + 1) + nScalars << std::endl;
 	if ( nScalars > 0 ) {
 		v = new N_Vector[ nScalars ];
 		w = new N_Vector[ nScalars ];
@@ -72,30 +77,19 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 	y.AssignQ(initial_q);
 
 	y.EvaluateLambda();
-	// y.EvaluateLambda( tauc );
-
-	/*
-	for ( Index i = 0; i < nCells; i++ )
-	{
-		for ( Index var = 0; var < nVars; var++ )
-		{
-			y.q( var ).getCoeff( i ).second = A_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1).inverse() * (
-					 - B_cellwise[i].transpose().block(var * (k + 1), var * (k + 1), k + 1, k + 1) * y.u(var).getCoeff(i).second
-					 + C_cellwise[i].transpose().block(var * (k + 1), var * 2, k + 1, 2) * y.lambda(var).segment<2>( i )
-					 - RF_cellwise[i].block(var * (k + 1), 0, k + 1, 1)
-					);
-		}
-	}
-	*/
-
 
 	for ( Index s = 0; s < nScalars; ++s )
 		y.Scalar( s ) = problem->InitialScalarValue( s );
 
+    auto initial_aux = std::bind_front( &TransportSystem::InitialAuxValue, problem );
+    y.AssignAux( initial_aux );
+
 	ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
 
-	auto sigma_wrapper = [this](Index i, const State &s, Position x, Time t)
-	{ return -problem->SigmaFn(i, s, x, t); };
+    // Zero most of dydt, we only have to set it to nonzero values for the differential parts of y
+    dydt.zeroCoeffs();
+
+	auto sigma_wrapper = [this](Index i, const State &s, Position x, Time t) { return -problem->SigmaFn(i, s, x, t); };
 	y.AssignSigma(sigma_wrapper);
 
 	for (Index var = 0; var < nVars; var++)
@@ -153,8 +147,6 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 				 );
 			// <cellwise derivative matrix> * dydt.u( var ).getCoeff( i ).second;
 		}
-		dydt.q(var).zeroCoeffs();
-		dydt.sigma(var).zeroCoeffs();
 	}
 }
 
@@ -238,7 +230,8 @@ void SystemSolver::initialiseMatrices()
 		B_cellwise.emplace_back(B);
 		D_cellwise.emplace_back(D);
 
-		Eigen::MatrixXd M(3 * nVars * (k + 1), 3 * nVars * (k + 1));
+        // M is the local DG Matrix
+		Eigen::MatrixXd M( localDOF, localDOF );
 		M.setZero();
 
 		// row1
@@ -259,7 +252,7 @@ void SystemSolver::initialiseMatrices()
 		// TODO: Consider factorization here (is M sparse enough to warrant a sparse implementation?)
 		MBlocks.emplace_back(M);
 
-		Eigen::MatrixXd CE_vec(3 * nVars * (k + 1), 2 * nVars);
+		Eigen::MatrixXd CE_vec( localDOF , 2 * nVars);
 		CE_vec.setZero();
 		for (Index var = 0; var < nVars; var++)
 		{
@@ -303,6 +296,7 @@ void SystemSolver::initialiseMatrices()
 		CE_vec.block( 0,                   0, nVars * (k + 1), nVars * 2).setZero();
 		CE_vec.block( nVars * (k + 1),     0, nVars * (k + 1), nVars * 2) = C.transpose();
 		CE_vec.block( 2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * 2) = E;
+        CE_vec.block( 3 * nVars * (k + 1), 0, nAux * ( k + 1 ), nVars * 2 ).setZero();
 		CEBlocks.emplace_back(CE_vec);
 
 		C_cellwise.emplace_back(C);
@@ -360,11 +354,10 @@ void SystemSolver::initialiseMatrices()
 			G.block(2 * var, (k + 1) * var, 2, (k + 1)) = Gvar;
 		}
 
-		//[ C 0 G ]
-		CG_cellwise.emplace_back(2 * nVars, 3 * nVars * (k + 1));
+		//[ C 0 G 0 ] (4th index is aux vars)
+		CG_cellwise.emplace_back(2 * nVars, localDOF );
 		CG_cellwise[i].setZero();
 		CG_cellwise[i].block(0, 0, 2 * nVars, nVars * (k + 1)) = C;
-		CG_cellwise[i].block(0, nVars * (k + 1), 2 * nVars, nVars * (k + 1)).setZero();
 		CG_cellwise[i].block(0, 2 * nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = G;
 		G_cellwise.emplace_back(G);
 
@@ -411,7 +404,7 @@ void SystemSolver::initialiseMatrices()
 		}
 		XMats.emplace_back(X);
 
-		MXSolvers.emplace_back( nVars * SQU_DOF );
+		MXSolvers.emplace_back( nVars * SQU_DOF + nAux * AUX_DOF );
 
 	}
 	// Factorise the global H matrix
@@ -532,9 +525,11 @@ void SystemSolver::updateMatricesForJacSolve()
 		Eigen::MatrixXd Ssig(nVars * (k + 1), nVars * (k + 1));
 		Eigen::MatrixXd Sq(nVars * (k + 1), nVars * (k + 1));
 		Eigen::MatrixXd Su(nVars * (k + 1), nVars * (k + 1));
+		
+        Eigen::MatrixXd Sphi(nVars * (k + 1), nAux * (k + 1));
 
 		Interval const &I(grid[i]);
-		Eigen::MatrixXd MX(3 * nVars * (k + 1), 3 * nVars * (k + 1));
+		Eigen::MatrixXd MX(nVars * SQU_DOF + nAux * AUX_DOF, nVars * SQU_DOF + nAux * AUX_DOF );
 		MX = MBlocks[i];
 
 		// X matrix
@@ -567,6 +562,12 @@ void SystemSolver::updateMatricesForJacSolve()
 		dSourcedu_Mat(Su, yJac, I);
 		MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
 
+        dSourcedPhi_Mat( Sphi, yJac, I);
+        MX.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
+
+        // Set Parts of Matrix due to aux variables
+        dAux_Mat( MX.block( 3 * nVars * ( k + 1 ), 0, nAux * ( k + 1 ), ( 3 * nVars + nAux ) * ( k + 1 ) ), yJac, I );
+
 		MXSolvers[ i ].compute(MX);
 
 	}
@@ -576,7 +577,7 @@ void SystemSolver::updateMatricesForJacSolve()
 
 	std::vector<DGSoln> v_map;
 	for ( Index i = 0; i < nScalars; ++i )
-		v_map.emplace_back( nVars, grid, k, N_VGetArrayPointer( v[ i ] ), nScalars );
+		v_map.emplace_back( nVars, grid, k, N_VGetArrayPointer( v[ i ] ), nScalars, nAux );
 
 	for ( Index i = 0; i < nCells; ++i )
 	{
@@ -594,7 +595,7 @@ void SystemSolver::updateMatricesForJacSolve()
 
 	std::vector<DGSoln> w_map;
 	for ( Index i = 0; i < nScalars; ++i ) {
-		w_map.emplace_back( nVars, grid, k, N_VGetArrayPointer( w[ i ] ), nScalars );
+		w_map.emplace_back( nVars, grid, k, N_VGetArrayPointer( w[ i ] ), nScalars, nAux );
 		w_map.back().zeroCoeffs();
 	}
 
@@ -628,15 +629,15 @@ void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorW
 	SQU_cell.clear();
 	for (Index i = 0; i < nCells; i++)
 	{
-		SQU_cell.emplace_back(VectorWrapper(Y + i * nVars * SQU_DOF, nVars * SQU_DOF));
+		SQU_cell.emplace_back(VectorWrapper(Y + i * localDOF, localDOF ));
 	}
 
-	new (&lam) VectorWrapper(Y + nVars * (nCells) * (3 * k + 3), nVars * (nCells + 1));
+	new (&lam) VectorWrapper(Y + nCells * localDOF, nVars * (nCells + 1));
 }
 
 void SystemSolver::setJacEvalY( N_Vector & yy )
 {
-	DGSoln yyMap( nVars, grid, k, nScalars );
+	DGSoln yyMap( nVars, grid, k, nScalars, nAux );
 	assert(static_cast<size_t>(N_VGetLength(yy)) == yyMap.getDoF());
 	yyMap.Map( N_VGetArrayPointer( yy ) );
 
@@ -655,8 +656,8 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 		for ( Index i=0; i < nScalars; ++i )
 			e[ i ] = N_VClone( delY );
 		N_Vector g = N_VClone( delY );
-		DGSoln res_g_map(nVars, grid, k, N_VGetArrayPointer( res_g ), nScalars );
-		DGSoln del_y(nVars, grid, k, N_VGetArrayPointer( delY ), nScalars );
+		DGSoln res_g_map(nVars, grid, k, N_VGetArrayPointer( res_g ), nScalars, nAux );
+		DGSoln del_y(nVars, grid, k, N_VGetArrayPointer( delY ), nScalars, nAux );
 
 		// Let A be the HDG linear operator solved in solveHDGJac
 
@@ -715,10 +716,10 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
 {
 	// DGsoln object that will map the data from delY
-	DGSoln del_y(nVars, grid, k, nScalars );
+	DGSoln del_y(nVars, grid, k, nScalars, nAux );
 #ifdef DEBUG
 	// Provide view on g for debugging
-	DGSoln gMap( nVars, grid, k, nScalars );
+	DGSoln gMap( nVars, grid, k, nScalars, nAux );
 	assert(static_cast<size_t>(N_VGetLength(g)) == gMap.getDoF());
 	gMap.Map( N_VGetArrayPointer( g ) );
 #endif
@@ -778,7 +779,7 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
 	// Factorise the global matrix ( size n_cells * n_variables )
 	EigenGlobalSolver globalKSolver(K_global);
 	// This solves for the lambdas of all variables at once (drop it in the memory sundials reserved for it)
-	Index LambdaOffset = nVars * nCells * SQU_DOF;
+	Index LambdaOffset = nCells * localDOF;
 
 	delYVec.segment(LambdaOffset, nVars * (nCells + 1)) = globalKSolver.solve(F);
 
@@ -839,9 +840,9 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 {
 	updateBoundaryConditions(tres);
 
-	DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y), nScalars );
-	DGSoln dYdt_h(nVars, grid, k, N_VGetArrayPointer(dYdt), nScalars );
-	DGSoln res(nVars, grid, k, N_VGetArrayPointer(resval), nScalars );
+	DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux );
+	DGSoln dYdt_h(nVars, grid, k, N_VGetArrayPointer(dYdt), nScalars, nAux );
+	DGSoln res(nVars, grid, k, N_VGetArrayPointer(resval), nScalars, nAux );
 
 	VectorWrapper resVec( N_VGetArrayPointer( resval ), N_VGetLength( resval ) );
 
@@ -922,7 +923,16 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 				B_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.sigma(var).getCoeff(i).second + D_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.u(var).getCoeff(i).second + E_cellwise[i].block(var * (k + 1), var * 2, k + 1, 2) * lambda - RF_cellwise[i].block(nVars * (k + 1) + var * (k + 1), 0, k + 1, 1) - S_cellwise + XMats[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * dYdt_h.u(var).getCoeff(i).second;
 
 		}
+
 	}
+
+    for( Index aux = 0; aux < nAux; aux++ )
+    {
+        // For the auxiliary variable bits
+        // Set (res_aux_i)_j = < G_i, phi_j >
+        // so we enforce G = 0 by projection
+        res.Aux( aux ) = [&,this]( Position x ){ return problem->AuxG( aux, Y_h.eval( x ), x, tres ); };
+    }
 
 	for ( Index j = 0; j < nScalars; j++ ) {
 		res.Scalar( j ) = problem->ScalarG( j, Y_h, tres );
@@ -933,7 +943,7 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 
 void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &tempY, bool printSources )
 {
-	DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY), nScalars );
+	DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY), nScalars, nAux );
 
 	out << "# t = " << t << std::endl;
 	for ( Index v = 0; v < nVars; ++v )
@@ -963,6 +973,10 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
 			if ( printSources )
 				out << "\t" << problem->Sources( v, s, x, t );
 		}
+
+        for( Index a = 0; a < nAux; ++a )
+          out << "\t" << s.Aux[ a ];
+
 		out << std::endl;
 	}
 	out << std::endl;
@@ -999,6 +1013,10 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
 			if ( printSources )
 				out << "\t" << problem->Sources( v, s, x, t );
 		}
+
+        for( Index a = 0; a < nAux; ++a )
+          out << "\t" << s.Aux[ a ];
+
 		out << std::endl;
 	}
 	out << std::endl;
