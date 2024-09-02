@@ -128,7 +128,8 @@ private:
 	unsigned int k;		   // polynomial degree per cell
 	unsigned int nCells;   // Total cell count
 	unsigned int nVars;	   // Total number of variables
-	unsigned int nScalars; // Total number of variables
+	unsigned int nScalars; // Any global scalars
+	unsigned int nAux;	   // Any auxiliary constraints
 
 	using EigenCellwiseSolver = Eigen::PartialPivLU<Matrix>;
 	using EigenGlobalSolver = Eigen::FullPivLU<Matrix>;
@@ -168,6 +169,10 @@ private:
 
 	void dSources_dScalars_Mat(Matrix &, DGSoln const &, Interval);
 
+	void dSourcedPhi_Mat(Matrix &, DGSoln const &, Interval);
+
+	void dAux_Mat(Eigen::Ref<Matrix>, DGSoln const &, Interval);
+
 	double resNorm = 0.0; // Exclusively for unit testing purposes
 
 	double dt;
@@ -196,7 +201,8 @@ private:
 	void initialiseNetCDF(std::string const &fname, size_t nOut);
 	void WriteTimeslice(double tNew);
 
-	size_t S_DOF, U_DOF, Q_DOF, SQU_DOF;
+	size_t S_DOF, U_DOF, Q_DOF, AUX_DOF, SQU_DOF;
+	size_t localDOF;
 
 	bool TerminateOnSteadyState = false;
 	double steady_state_tol = 1e-3;
