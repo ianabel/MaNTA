@@ -100,7 +100,7 @@ public:
 
 
     virtual void dSources_dPhi( Index, Values &, const State &, Position, Time ) {
-        if ( nScalars != 0 )
+        if ( nAux != 0 )
             throw std::logic_error( "nAux > 0 but no coupling to the main sources provided" );
     }
 
