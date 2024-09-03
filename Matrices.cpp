@@ -141,9 +141,9 @@ void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Interval
 				for ( Index j=0; j < k + 1; ++j )
 				{
 					mat( XVar * ( k + 1 ) + j, iScalar ) +=
-						wgt * dSdS_vals1[ XVar ] * LegendreBasis::Evaluate( I, j, y_plus );
+						wgt * dSdS_vals1[ iScalar ] * LegendreBasis::Evaluate( I, j, y_plus );
 					mat( XVar * ( k + 1 ) + j, iScalar ) +=
-						wgt * dSdS_vals2[ XVar ] * LegendreBasis::Evaluate( I, j, y_minus );
+						wgt * dSdS_vals2[ iScalar ] * LegendreBasis::Evaluate( I, j, y_minus );
 				}
 			}
 		}
