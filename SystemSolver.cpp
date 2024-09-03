@@ -237,7 +237,6 @@ void SystemSolver::initialiseMatrices()
 		M.block(0, nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)).setZero();	 // NLq added at Jac step
 		M.block(0, 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)).setZero(); // NLu added at Jac step
 
-		// why negative?
 		// row2
 		M.block(nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)).setZero();
 		M.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = -A;
@@ -275,7 +274,7 @@ void SystemSolver::initialiseMatrices()
 					Cvar(0, i) = 0;
 					Evar(i, 0) = 0;
 				}
-
+				// should this be is upper boundary dirichlet?
 				if (I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(var))
 				{
 					Cvar(1, i) = 0;
@@ -618,8 +617,9 @@ void SystemSolver::updateMatricesForJacSolve()
 				}
 				if (l == 0 && i == 0)
 				{
-					/* dG_i/d(Scalar_j) should vanish for  i!=j and doesn't depend on test function, so we can just do this once  */
-					N_global(j, j) = s.Scalars[j];
+					/* dG_i/d(Scalar_j) doesn't depend on cell or test function, so we can just do this once  */
+					for (Index m = 0; m < nScalars; ++m)
+						N_global(m, j) = s.Scalars[m];
 				}
 			}
 		}
@@ -668,7 +668,8 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 		// First solve A d = res_g ;
 		solveHDGJac(res_g, d);
 
-		// Now A e = v ; Do as a loop over nScalars
+// Now A e = v ; Do as a loop over nScalars
+#pragma omp parallel for
 		for (Index i = 0; i < nScalars; ++i)
 		{
 			solveHDGJac(e[i], v[i]);
@@ -694,7 +695,6 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 		N_VLinearSum(1.0, delY, 1.0, g, delY);						// delY += g; so delY = g - (....), which is the final answer
 
 		// Finally, set the components of delY related to the change of the scalars
-		DGSoln del_y(nVars, grid, k, N_VGetArrayPointer(delY), nScalars);
 
 		del_y.Scalars() = Values::Zero(nScalars);
 
@@ -938,14 +938,6 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 		{ return problem->AuxG(aux, Y_h.eval(x), x, tres); };
 	}
 
-	for (Index aux = 0; aux < nAux; aux++)
-	{
-		// For the auxiliary variable bits
-		// Set (res_aux_i)_j = < G_i, phi_j >
-		// so we enforce G = 0 by projection
-		res.Aux(aux) = [&, this](Position x)
-		{ return problem->AuxG(aux, Y_h.eval(x), x, tres); };
-	}
 	for (Index j = 0; j < nScalars; j++)
 	{
 		res.Scalar(j) = problem->ScalarG(j, Y_h, tres);

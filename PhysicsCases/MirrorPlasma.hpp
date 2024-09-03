@@ -48,8 +48,9 @@ private:
 		Ionization = 3,
 	};
 
-	double nEdge, TeEdge, TiEdge, OmegaEdge;
-	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakOmega;
+	double nEdge, TeEdge, TiEdge, MEdge;
+	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber, ParallelLossFactor, DragFactor, DragWidth;
+	double DensityWidth;
 
 	Real Flux(Index, RealVector, RealVector, Real, Time) override;
 	Real Source(Index, RealVector, RealVector, RealVector, RealVector, Real, Time) override;

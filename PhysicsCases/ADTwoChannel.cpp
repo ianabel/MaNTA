@@ -27,7 +27,7 @@ ADTwoChannel::ADTwoChannel(toml::value const &config, Grid const &grid)
 	kappa = 1;
 };
 
-Real ADTwoChannel::Flux(Index i, RealVector u, RealVector q, Position x, Time t)
+Real ADTwoChannel::Flux(Index i, RealVector u, RealVector q, Real x, Time t)
 {
 	if (u(1) < 0 || u(0) < 0)
 	{
