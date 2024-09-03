@@ -146,7 +146,7 @@ Value ScalarTestLD3::ScalarG( Index s, const DGSoln & y, Time )
 	} else if ( s == 1 ) {
 		// J = -gamma * E + [ sigma(x = +1) - sigma(x = -1) ]
 		// => G_1 = J + gamma * E - [ sigma(x = +1) - sigma(x = -1) ]
-		return J + gamma * E; //- ( y.sigma( 0 )( 1 ) - y.sigma( 0 )( -1 ) );
+		return J + gamma * E - ( y.sigma( 0 )( 1 ) - y.sigma( 0 )( -1 ) );
 	} else {
 		throw std::logic_error("scalar index > nScalars");
 	}
@@ -166,12 +166,10 @@ void ScalarTestLD3::ScalarGPrime( Index scalarIndex, State &s, const DGSoln &y, 
 		// dG_1 / d sigma = -[ delta(x-1) - delta(x + 1) ] ;
 		// return as functional derivative acting on P
 		s.Flux[ 0 ] = 0.0;
-        /*
 		if ( abs( I.x_u - 1 ) < 1e-9 )
 			s.Flux[ 0 ] -= P( I.x_u );
 		if ( abs( I.x_l + 1 ) < 1e-9 )
 			s.Flux[ 0 ] += P( I.x_l );
-            */
 		// dG_1 / d (u')
 		s.Derivative[ 0 ] = 0.0;
 		// dG_1 / du (at fixed sigma & E so no u dependence)
@@ -188,14 +186,15 @@ void ScalarTestLD3::ScalarGPrime( Index scalarIndex, State &s, const DGSoln &y, 
 void ScalarTestLD3::dSources_dScalars( Index, Values &v, const State &, Position x, Time )
 {
 	v[ 0 ] = ScaledSource( x );
+    v[ 1 ] = 0.0;
 }
 
 Value ScalarTestLD3::InitialScalarValue( Index s ) const
 {
 	// Our job to make sure this is consistent!
-	if( s = 0 ) // E
+	if( s == 0 ) // E
 		return 0;
-	else if (s = 1) // J
+	else if (s == 1) // J
 		return -kappa * ( InitialDerivative( 0, 1 ) - InitialDerivative( 0, -1 ) );
 	else
 		throw std::logic_error("scalar index > nScalars");
