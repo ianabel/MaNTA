@@ -176,7 +176,6 @@ dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t) 
 {
 	dual2nd a, b, c, d;
 	dual2nd u = 0;
-
 	dual2nd v = 0;
 	dual2nd xMid = 0.5 * (xR + xL);
 	double u_L = uL[i];
