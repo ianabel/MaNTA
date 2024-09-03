@@ -22,7 +22,7 @@ int sign(T x)
 }
 
 MirrorPlasmaTest::MirrorPlasmaTest(toml::value const &config, Grid const &grid)
-	: AutodiffTransportSystem(config, grid, 4, 0)
+	: AutodiffTransportSystem(config, grid, 4, 0, 0)
 {
 
 	// B = new StraightMagneticField();
@@ -213,7 +213,7 @@ Real MirrorPlasmaTest::Flux(Index i, RealVector u, RealVector q, Real x, Time t)
 	}
 }
 
-Real MirrorPlasmaTest::Source(Index i, RealVector u, RealVector q, RealVector sigma, Real x, Time t)
+Real MirrorPlasmaTest::Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector, Real x, Time t)
 {
 	Channel c = static_cast<Channel>(i);
 	Real S;

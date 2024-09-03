@@ -175,7 +175,30 @@ Real MirrorPlasma::Flux(Index i, RealVector u, RealVector q, Real xreal, Time t)
 	}
 }
 
-Real MirrorPlasma::Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector, Position x, Time t)
+Real MirrorPlasma::Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector, Real xreal, Time t)
+{
+	double x = xreal.val;
+	Channel c = static_cast<Channel>(i);
+	switch (c)
+	{
+	case Channel::Density:
+		return ConstantChannelMap[Channel::Density] ? 0.0 : Sn(u, q, sigma, x, t);
+		break;
+	case Channel::IonEnergy:
+		return ConstantChannelMap[Channel::IonEnergy] ? 0.0 : Spi(u, q, sigma, x, t);
+		break;
+	case Channel::ElectronEnergy:
+		return ConstantChannelMap[Channel::ElectronEnergy] ? 0.0 : Spe(u, q, sigma, x, t);
+		break;
+	case Channel::AngularMomentum:
+		return ConstantChannelMap[Channel::AngularMomentum] ? 0.0 : Somega(u, q, sigma, x, t);
+		break;
+	default:
+		throw std::runtime_error("Request for flux for undefined variable!");
+	}
+}
+
+Value MirrorPlasma::LowerBoundary(Index i, Time t) const
 {
 	Channel c = static_cast<Channel>(i);
 	switch (c)

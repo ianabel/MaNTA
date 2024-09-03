@@ -15,6 +15,7 @@ using RealVector = autodiff::VectorXdual;
 class AutodiffTransportSystem : public TransportSystem
 {
 public:
+	AutodiffTransportSystem() = default;
 	explicit AutodiffTransportSystem(toml::value const &config, Grid const &, Index nVars, Index nScalars, Index nAux);
 
 	// Implement the TransportSystem interface.
@@ -46,6 +47,9 @@ private:
 	virtual Real Flux(Index, RealVector, RealVector, Position, Time) = 0;
 	virtual Real Source(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) = 0;
 
+	virtual Real Flux(Index i, RealVector u, RealVector q, Real x, Time t) = 0;
+	virtual Real Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) = 0;
+
 	virtual Real Phi(Index, RealVector, RealVector, RealVector, RealVector, Position, Time)
 	{
 		if (nAux > 0)
@@ -53,6 +57,11 @@ private:
 		else
 			return 0.0;
 	};
+
+	// For loading initial conditions from a netCDF file
+	netCDF::NcFile data_file;
+	std::vector<std::unique_ptr<spline>> NcFileInitialValues;
+	std::vector<std::unique_ptr<spline>> NcFileInitialDerivatives;
 
 	enum class ProfileType
 	{

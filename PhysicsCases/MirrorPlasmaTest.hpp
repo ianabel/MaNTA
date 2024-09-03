@@ -73,7 +73,7 @@ private:
 	double ZeroEdgeFactor;
 
 	Real Flux(Index, RealVector, RealVector, Real, Time) override;
-	Real Source(Index, RealVector, RealVector, RealVector, Real, Time) override;
+	Real Source(Index, RealVector, RealVector, RealVector, RealVector, Real, Time) override;
 
 	Value LowerBoundary(Index i, Time t) const override;
 	Value UpperBoundary(Index i, Time t) const override;

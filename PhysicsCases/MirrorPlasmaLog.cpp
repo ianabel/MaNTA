@@ -16,7 +16,7 @@ const std::string B_file = "Bfield.nc";
 #endif
 
 MirrorPlasmaLog::MirrorPlasmaLog(toml::value const &config, Grid const &grid)
-    : AutodiffTransportSystem(config, grid, 4, 0)
+    : AutodiffTransportSystem(config, grid, 4, 0, 0)
 {
 
     // B = new StraightMagneticField();
@@ -196,7 +196,7 @@ Real MirrorPlasmaLog::Flux(Index i, RealVector u, RealVector q, Real x, Time t)
     }
 }
 
-Real MirrorPlasmaLog::Source(Index i, RealVector u, RealVector q, RealVector sigma, Real x, Time t)
+Real MirrorPlasmaLog::Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector, Real x, Time t)
 {
     Channel c = static_cast<Channel>(i);
     Real S;

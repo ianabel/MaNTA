@@ -10,6 +10,7 @@ LinearDiffSourceTest::LinearDiffSourceTest(toml::value const &config, Grid const
 
     nVars = 2; // toml::find<int>(config.at("configuration"), "nVars");
     nScalars = 0;
+    nAux = 0;
 
     if (config.count("LinearDiffSourceTest") == 1)
     {
@@ -115,7 +116,7 @@ Real LinearDiffSourceTest::Flux(Index i, RealVector u, RealVector q, Real x, Tim
     return sigma(i);
 }
 
-Real LinearDiffSourceTest::Source(Index i, RealVector u, RealVector q, RealVector sigma, Real x, Time t)
+Real LinearDiffSourceTest::Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector, Real x, Time t)
 {
     Real S = 0.0;
     if (i == 0)

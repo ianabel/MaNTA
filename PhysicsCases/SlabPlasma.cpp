@@ -7,7 +7,7 @@ const double n_edge = 1.0;
 const double n_mid = 1.0;
 const double T_mid = 1.0, T_edge = 0.1;
 
-SlabPlasma::SlabPlasma(toml::value const &config, Grid const &grid) : AutodiffTransportSystem(config, grid, 2, 0)
+SlabPlasma::SlabPlasma(toml::value const &config, Grid const &grid) : AutodiffTransportSystem(config, grid, 2, 0, 0)
 {
 
     xL = grid.lowerBoundary();
@@ -119,7 +119,7 @@ Real SlabPlasma::Flux(Index i, RealVector u, RealVector q, Real x, Time t)
     };
 }
 
-Real SlabPlasma::Source(Index i, RealVector u, RealVector q, RealVector sigma, Real x, Time t)
+Real SlabPlasma::Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector, Real x, Time t)
 {
     Channel c = static_cast<Channel>(i);
     switch (c)
