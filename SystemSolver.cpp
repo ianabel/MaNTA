@@ -568,12 +568,6 @@ void SystemSolver::updateMatricesForJacSolve()
 		// Set Parts of Matrix due to aux variables
 		dAux_Mat(MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), yJac, I);
 
-		dSourcedPhi_Mat(Sphi, yJac, I);
-		MX.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
-
-		// Set Parts of Matrix due to aux variables
-		dAux_Mat(MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), yJac, I);
-
 		MXSolvers[i].compute(MX);
 	}
 

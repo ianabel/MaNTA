@@ -129,7 +129,7 @@ def plot_diagnostics(fname):
 
 
 def main():
-    fname = "./AuxVarTest.nc"
+    fname = "./AuxVarADTest.nc"
     plot_nc(fname,plot_aux=True,include_initial=False)
     # fname = "./MirrorPlasmaTest.nc"
     # plot_nc(fname,False,False,include_initial=True)
