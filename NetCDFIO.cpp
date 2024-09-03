@@ -157,44 +157,42 @@ void NetCDFIO::AddGroup(std::string name, std::string description)
 
 // SystemSolver routines that use NetCDFIO
 
-void NetCDFIO::StoreGridInfo( const Grid& grid, unsigned int k )
+void NetCDFIO::StoreGridInfo(const Grid &grid, unsigned int k)
 {
-	std::vector<double> CellBoundaries( grid.getNCells() + 1 );
-	CellBoundaries[ 0 ] = grid.lowerBoundary();
-	for ( Grid::Index i = 0; i < grid.getNCells(); ++i )
-		CellBoundaries[ i + 1 ] = grid[ i ].x_u;
-	NcGroup gridGroup = data_file.addGroup( "Grid" );
-	gridGroup.putAtt( "Description", "Information about the underlying grid used for the simulation" );
-	std::vector<int> indexes( CellBoundaries.size() );
+	std::vector<double> CellBoundaries(grid.getNCells() + 1);
+	CellBoundaries[0] = grid.lowerBoundary();
+	for (Grid::Index i = 0; i < grid.getNCells(); ++i)
+		CellBoundaries[i + 1] = grid[i].x_u;
+	NcGroup gridGroup = data_file.addGroup("Grid");
+	gridGroup.putAtt("Description", "Information about the underlying grid used for the simulation");
+	std::vector<int> indexes(CellBoundaries.size());
 	int n = 0;
-	std::ranges::generate( indexes, [&n]() mutable { return n++; } );
-	NcDim indexDim = gridGroup.addDim( "Index", CellBoundaries.size() );
-	NcVar indexVar = gridGroup.addVar( "Index", netCDF::NcInt(), indexDim );
+	std::ranges::generate(indexes, [&n]() mutable
+						  { return n++; });
+	NcDim indexDim = gridGroup.addDim("Index", CellBoundaries.size());
+	NcVar indexVar = gridGroup.addVar("Index", netCDF::NcInt(), indexDim);
 	indexVar.putVar({0}, {indexes.size()}, indexes.data());
-	NcVar cellBoundaries = gridGroup.addVar("CellBoundaries", netCDF::NcDouble(), indexDim );
+	NcVar cellBoundaries = gridGroup.addVar("CellBoundaries", netCDF::NcDouble(), indexDim);
 	cellBoundaries.putVar({0}, {CellBoundaries.size()}, CellBoundaries.data());
 
-	NcVar order = gridGroup.addVar( "PolyOrder", netCDF::NcInt() );
-	order.putAtt( "Description", "Order of Polynomials used in HDG representation" );
-	order.putVar( &k );
-
+	NcVar order = gridGroup.addVar("PolyOrder", netCDF::NcInt());
+	order.putAtt("Description", "Order of Polynomials used in HDG representation");
+	order.putVar(&k);
 }
 
 void SystemSolver::initialiseNetCDF(std::string const &NetcdfOutputFile, size_t nOut)
 {
 	nc_output.Open(NetcdfOutputFile);
 	std::vector<double> gridpoints(nOut);
-	std::ranges::generate(gridpoints, [this, nOut]() {
+	std::ranges::generate(gridpoints, [this, nOut]()
+						  {
 		static int i = 0;
 		double delta_x = ( grid.upperBoundary() - grid.lowerBoundary() ) * ( 1.0/( nOut - 1.0 ) );
-		return static_cast<double>( i++ )*delta_x + grid.lowerBoundary(); 
-		});
+		return static_cast<double>( i++ )*delta_x + grid.lowerBoundary(); });
 
 	nc_output.SetOutputGrid(gridpoints);
 
-	nc_output.StoreGridInfo( grid, k );
-
-
+	nc_output.StoreGridInfo(grid, k);
 
 	nc_output.AddScalarVariable("nVariables", "Number of independent variables", "", static_cast<double>(nVars));
 
@@ -206,17 +204,17 @@ void SystemSolver::initialiseNetCDF(std::string const &NetcdfOutputFile, size_t 
 		nc_output.AddVariable(problem->getVariableName(i), "sigma", "Flux", problem->getVariableUnits(i), y.sigma(i));
 	}
 
-	for ( Index i=0; i < nScalars; ++i )
+	for (Index i = 0; i < nScalars; ++i)
 	{
-		nc_output.AddTimeSeries( problem->getScalarName( i ), problem->getScalarDescription( i ), problem->getScalarUnits( i ),y.Scalar( i ) );
+		nc_output.AddTimeSeries(problem->getScalarName(i), problem->getScalarDescription(i), problem->getScalarUnits(i), y.Scalar(i));
 	}
 
-    for( Index i = 0; i < nAux; ++i )
-    {
-      nc_output.AddVariable(problem->getAuxVarName( i ), problem->getAuxDescription( i ), problem->getAuxUnits( i ), y.Aux( i ) );
-    }
+	for (Index i = 0; i < nAux; ++i)
+	{
+		nc_output.AddVariable(problem->getAuxVarName(i), problem->getAuxDescription(i), problem->getAuxUnits(i), y.Aux(i));
+	}
 
-	problem->initialiseDiagnostics( nc_output );
+	problem->initialiseDiagnostics(nc_output);
 }
 
 void SystemSolver::WriteTimeslice(double tNew)
@@ -228,10 +226,13 @@ void SystemSolver::WriteTimeslice(double tNew)
 		nc_output.AppendToGroup<DGApprox>(problem->getVariableName(i), tIndex, {{"u", y.u(i)}, {"q", y.q(i)}, {"sigma", y.sigma(i)}});
 	}
 
-	for ( Index i = 0; i < nScalars; ++i )
-		nc_output.AppendToTimeSeries( problem->getScalarName( i ), y.Scalar( 0 ), tIndex );
+	for (Index i = 0; i < nAux; ++i)
+	{
+		nc_output.AppendToVariable(problem->getAuxVarName(i), y.Aux(i), tIndex);
+	}
 
-	problem->writeDiagnostics( y, tNew, nc_output, tIndex );
+	for (Index i = 0; i < nScalars; ++i)
+		nc_output.AppendToTimeSeries(problem->getScalarName(i), y.Scalar(i), tIndex);
+
+	problem->writeDiagnostics(y, tNew, nc_output, tIndex);
 }
-
-

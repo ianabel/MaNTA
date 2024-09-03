@@ -6,11 +6,11 @@
 class FourVarCylFlux : public AutodiffTransportSystem
 {
 public:
-    FourVarCylFlux(toml::value const &, Grid const& );
+    FourVarCylFlux(toml::value const &, Grid const &);
 
 private:
-	 Real Flux( Index, RealVector, RealVector, Position, Time ) override;
-	 Real Source( Index, RealVector, RealVector, RealVector, Position, Time ) override;
+    Real Flux(Index, RealVector, RealVector, Position, Time) override;
+    Real Source(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) override;
 
     std::map<std::string, int> ParticleSources = {{"None", 0}, {"Gaussian", 1}};
     int ParticleSource;
@@ -42,13 +42,14 @@ private:
     Real Spi_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t);
     Real Shi_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t);
 
-	 enum Channel : Index {
-		 Density = 0,
-		 ElectronEnergy = 1,
-		 IonEnergy = 2,
-		 AngularMomentum = 3
-	 };
-	 REGISTER_PHYSICS_HEADER(FourVarCylFlux)
+    enum Channel : Index
+    {
+        Density = 0,
+        ElectronEnergy = 1,
+        IonEnergy = 2,
+        AngularMomentum = 3
+    };
+    REGISTER_PHYSICS_HEADER(FourVarCylFlux)
 };
 
 #endif
