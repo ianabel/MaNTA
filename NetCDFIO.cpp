@@ -193,8 +193,13 @@ void SystemSolver::WriteTimeslice(double tNew)
 		nc_output.AppendToGroup<DGApprox>(problem->getVariableName(i), tIndex, {{"u", y.u(i)}, {"q", y.q(i)}, {"sigma", y.sigma(i)}});
 	}
 
+	for (Index i = 0; i < nAux; ++i)
+	{
+		nc_output.AppendToVariable(problem->getAuxVarName(i), y.Aux(i), tIndex);
+	}
+
 	for (Index i = 0; i < nScalars; ++i)
-		nc_output.AppendToTimeSeries(problem->getScalarName(i), y.Scalar(0), tIndex);
+		nc_output.AppendToTimeSeries(problem->getScalarName(i), y.Scalar(i), tIndex);
 
 	problem->writeDiagnostics(y, tNew, nc_output, tIndex);
 }

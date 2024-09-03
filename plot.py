@@ -4,9 +4,10 @@ import matplotlib.pyplot as plt
 from netCDF4 import Dataset
 import numpy as np
 
-def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_grid= False, include_initial = False):
-
+def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_aux = False,plot_grid= False, include_initial = False):
+  
     data = Dataset(fname)
+    print(data)
     Vars = data.groups
     Grid = np.array(data.groups["Grid"].variables["CellBoundaries"])
     t = np.array(data.variables["t"])
@@ -19,6 +20,7 @@ def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_grid= 
                 ax = plt.axes()
                 y = np.array(data.groups[Var].variables["u"])
                 ax.plot(x,y[-1,:],label=Var)
+                ax.plot(x,np.cos(np.pi/2*x),label="cos")
                 if (include_initial):
                     ax.plot(x,y[0,:],label=Var+", t = 0")
                 ax.legend()
@@ -53,6 +55,20 @@ def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_grid= 
 
                 ax.legend()
                 plt.title("sigma")
+
+    if (plot_aux):
+
+        plt.figure()
+        ax = plt.axes()
+        y = np.array(data.variables["AuxVariable0"])
+        y2 = np.array(data.groups["Var0"].variables["u"])
+        ax.plot(x,y[-1,:],label=Var)
+        ax.plot(x,y2[0,:]**2,label="u*u")
+        if (include_initial):
+            ax.plot(x,y[0,:],label=Var+", t = 0")
+
+        ax.legend()
+        plt.title("aux")
 
     data.close()
 
@@ -113,8 +129,8 @@ def plot_diagnostics(fname):
 
 
 def main():
-    fname = "./MirrorPlasmaTest1.restart5.nc"
-    plot_nc(fname,False,False,True,include_initial=True)
+    fname = "./AuxVarADTest.nc"
+    plot_nc(fname,plot_aux=True,include_initial=False)
     # fname = "./MirrorPlasmaTest.nc"
     # plot_nc(fname,False,False,include_initial=True)
     # plot_MMS(fname)

@@ -48,7 +48,7 @@ private:
 	};
 
 	Real Flux(Index, RealVector, RealVector, Position, Time) override;
-	Real Source(Index, RealVector, RealVector, RealVector, Position, Time) override;
+	Real Source(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) override;
 
 	double ParticleSourceStrength, jRadial, SourceFactor;
 

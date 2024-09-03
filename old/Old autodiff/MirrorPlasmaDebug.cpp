@@ -15,7 +15,8 @@ const std::string B_file = "/home/eatocco/projects/MaNTA/Bfield.nc";
 const std::string B_file = "Bfield.nc";
 #endif
 
-MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid) : AutodiffTransportSystem(config, grid, 4, 0)
+MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid)
+	: AutodiffTransportSystem(config, grid, 4, 0, 0)
 {
 
 	// B = new StraightMagneticField();
@@ -164,7 +165,7 @@ Real MirrorPlasmaDebug::Flux(Index i, RealVector u, RealVector q, Position x, Ti
 	}
 }
 
-Real MirrorPlasmaDebug::Source(Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t)
+Real MirrorPlasmaDebug::Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector, Position x, Time t)
 {
 	Channel c = static_cast<Channel>(i);
 	switch (c)
@@ -606,9 +607,7 @@ void MirrorPlasmaDebug::initialiseDiagnostics(NetCDFIO &nc)
 	nc.AddVariable("ParallelLosses", "ParLoss", "Parallel particle losses", "-", initialZero);
 	nc.AddVariable("ParallelLosses", "CentrifugalPotential", "Parallel particle losses", "-", initialZero);
 	nc.AddGroup("Heating", "Separated heating sources");
-	nc.AddVariable("Heating", "AlphaHeating", "Alpha heat source", "-", initialZero);
-	nc.AddVariable("Heating", "ViscousHeating", "Viscous heat source", "-", initialZero);
-	nc.AddVariable("Heating", "RadiationLosses", "Bremsstrahlung heat losses", "-", initialZero);
+	// TODO: Put the AddVariable stuff here for the heating.
 }
 
 void MirrorPlasmaDebug::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)

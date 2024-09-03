@@ -15,8 +15,7 @@ using RealVector = autodiff::VectorXdual;
 class AutodiffTransportSystem : public TransportSystem
 {
 public:
-	AutodiffTransportSystem() = default;
-	explicit AutodiffTransportSystem(toml::value const &config, Grid const &, Index nVars, Index nScalars);
+	explicit AutodiffTransportSystem(toml::value const &config, Grid const &, Index nVars, Index nScalars, Index nAux);
 
 	// Implement the TransportSystem interface.
 	Value SigmaFn(Index i, const State &, Position x, Time t) override;
@@ -29,6 +28,10 @@ public:
 	void dSources_dq(Index i, Values &, const State &, Position x, Time t) override;
 	void dSources_dsigma(Index i, Values &, const State &, Position x, Time t) override;
 
+	Value AuxG(Index, const State &, Position, Time) override;
+	void AuxGPrime(Index, State &, const State &, Position, Time) override;
+	void dSources_dPhi(Index, Values &, const State &, Position, Time) override;
+
 	// and initial conditions for u & q
 	virtual Value InitialValue(Index i, Position x) const override;
 	virtual Value InitialDerivative(Index i, Position x) const override;
@@ -37,28 +40,19 @@ public:
 
 protected:
 	Position xR, xL;
-	bool loadInitialConditionsFromFile = false;
-	std::string filename;
-	void LoadDataToSpline(const std::string &file);
-	bool useMMS = false;
-
-	double growth_rate = 0.5;
-	double growth = 1.0;
-	virtual Real2nd MMS_Solution(Index i, Real2nd x, Real2nd t);
-
-	void initialiseDiagnostics(NetCDFIO &nc) override;
-	void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override;
 
 private:
 	// API to underlying flux model
+	virtual Real Flux(Index, RealVector, RealVector, Position, Time) = 0;
+	virtual Real Source(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) = 0;
 
-	virtual Real Flux(Index i, RealVector u, RealVector q, Real x, Time t) = 0;
-	virtual Real Source(Index i, RealVector u, RealVector q, RealVector sigma, Real x, Time t) = 0;
-
-	// For loading initial conditions from a netCDF file
-	netCDF::NcFile data_file;
-	std::vector<std::unique_ptr<spline>> NcFileInitialValues;
-	std::vector<std::unique_ptr<spline>> NcFileInitialDerivatives;
+	virtual Real Phi(Index, RealVector, RealVector, RealVector, RealVector, Position, Time)
+	{
+		if (nAux > 0)
+			throw std::logic_error("nAux > 0 but no implementation of auxiliary variable provided");
+		else
+			return 0.0;
+	};
 
 	enum class ProfileType
 	{
@@ -74,8 +68,6 @@ private:
 
 	Vector InitialHeights;
 
-	Real2nd DirichletIC(Index i, Real2nd x, Real2nd t, double u_R, double u_L, double x_L, double x_R) const;
-
-	Value MMS_Source(Index, Position, Time);
+	autodiff::dual2nd DirichletIC(Index i, autodiff::dual2nd x, autodiff::dual2nd t, double u_R, double u_L, double x_L, double x_R) const;
 };
 #endif

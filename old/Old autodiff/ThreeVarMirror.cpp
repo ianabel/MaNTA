@@ -13,7 +13,7 @@ enum
 };
 
 ThreeVarMirror::ThreeVarMirror(toml::value const &config, Grid const &grid)
-    : AutodiffTransportSystem(config, grid, 3, 0) // nVars = 3, nScalars = 0
+    : AutodiffTransportSystem(config, grid, 3, 0, 0) // nVars = 3, nScalars = 0
 {
     if (config.count("3VarMirror") != 1)
         throw std::invalid_argument("There should be a [3VarMirror] section if you are using the 3VarMirror physics model.");
@@ -70,7 +70,7 @@ Real ThreeVarMirror::Flux(Index i, RealVector u, RealVector q, Position x, Time 
     }
 }
 
-Real ThreeVarMirror::Source(Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t)
+Real ThreeVarMirror::Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector, Position x, Time t)
 {
     switch (Channel(i))
     {
@@ -347,10 +347,7 @@ double ThreeVarMirror::V(double R)
 // V' == dV/dPsi or dV/dR ?
 double ThreeVarMirror::Vprime(double R)
 {
-    double m = 0.0;
-    double B = (1 + m * (R - Rmin));
-
-    return 2 * M_PI * L / B;
+    return L / Bmid.val;
 }
 
 double ThreeVarMirror::B(double x, double t)

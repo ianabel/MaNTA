@@ -13,7 +13,7 @@ REGISTER_PHYSICS_IMPL(ADTwoChannel);
  */
 
 ADTwoChannel::ADTwoChannel(toml::value const &config, Grid const &grid)
-	: AutodiffTransportSystem(config, grid, 2, 0) // Configure a blank autodiff system with three variables and no scalars
+	: AutodiffTransportSystem(config, grid, 2, 0, 0) // Configure a blank autodiff system with three variables and no scalars
 {
 	isLowerDirichlet = true;
 	isUpperDirichlet = true;
@@ -27,7 +27,7 @@ ADTwoChannel::ADTwoChannel(toml::value const &config, Grid const &grid)
 	kappa = 1;
 };
 
-Real ADTwoChannel::Flux(Index i, RealVector u, RealVector q, Real x, Time t)
+Real ADTwoChannel::Flux(Index i, RealVector u, RealVector q, Position x, Time t)
 {
 	if (u(1) < 0 || u(0) < 0)
 	{
@@ -47,7 +47,7 @@ Real ADTwoChannel::Flux(Index i, RealVector u, RealVector q, Real x, Time t)
 	return 0.0;
 }
 
-Real ADTwoChannel::Source(Index i, RealVector u, RealVector q, RealVector sigma, Real x, Time t)
+Real ADTwoChannel::Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector, Position x, Time t)
 {
 	switch (i)
 	{

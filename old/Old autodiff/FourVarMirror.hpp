@@ -8,20 +8,9 @@ class FourVarMirror : public AutodiffTransportSystem
 public:
     FourVarMirror(toml::value const &, Grid const &);
 
-    virtual Real2nd InitialFunction(Index i, Real2nd x, Real2nd t) const override;
-
 private:
     Real Flux(Index, RealVector, RealVector, Position, Time) override;
-    Real Source(Index, RealVector, RealVector, RealVector, Position, Time) override;
-
-    //    Function for passing boundary conditions to the solver
-    virtual Value LowerBoundary(Index i, Time t) const override;
-    virtual Value UpperBoundary(Index i, Time t) const override;
-
-    virtual bool isLowerBoundaryDirichlet(Index i) const override;
-    virtual bool isUpperBoundaryDirichlet(Index i) const override;
-
-    std::map<std::string, int> ParticleSources = {{"None", 0}, {"Gaussian", 1}, {"Uniform", 2}, {"GaussianEdge", 3}};
+    Real Source(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) override;
 
     int ParticleSource;
     double sourceStrength;
