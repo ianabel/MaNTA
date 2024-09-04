@@ -47,11 +47,11 @@ private:
 		Ionization = 3,
 	};
 
-	double nEdge,TeEdge,TiEdge,OmegaEdge;
-	double InitialPeakDensity,InitialPeakTe,InitialPeakTi,InitialPeakOmega;
+	double nEdge, TeEdge, TiEdge, OmegaEdge;
+	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakOmega;
 
 	Real Flux(Index, RealVector, RealVector, Position, Time) override;
-	Real Source(Index, RealVector, RealVector, RealVector, Position, Time) override;
+	Real Source(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) override;
 
 	double ParticleSourceStrength, jRadial;
 

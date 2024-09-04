@@ -12,7 +12,7 @@ const double omega_edge = 0.1, omega_mid = 1.0;
 const std::string B_file = "Bfield.nc";
 
 MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
-	: AutodiffTransportSystem(config, grid, 4, 0)
+	: AutodiffTransportSystem(config, grid, 4, 0, 0)
 {
 
 	// B = new StraightMagneticField();
@@ -172,7 +172,7 @@ Real MirrorPlasma::Flux(Index i, RealVector u, RealVector q, Position x, Time t)
 	}
 }
 
-Real MirrorPlasma::Source(Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t)
+Real MirrorPlasma::Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector, Position x, Time t)
 {
 	Channel c = static_cast<Channel>(i);
 	switch (c)

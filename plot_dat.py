@@ -24,7 +24,7 @@ def main():
         count = 0
         time = 0
         index = 0
-        nVars = 3
+        nVars = 1
         headings = ""
         line_begin = False
         u = np.ndarray(shape=(301,nVars))

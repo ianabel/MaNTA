@@ -12,8 +12,8 @@ enum
     Gaussian = 1,
 };
 
-ThreeVarMirror::ThreeVarMirror( toml::value const &config, Grid const& grid )
-	: AutodiffTransportSystem( config, grid, 3, 0 ) // nVars = 3, nScalars = 0
+ThreeVarMirror::ThreeVarMirror(toml::value const &config, Grid const &grid)
+    : AutodiffTransportSystem(config, grid, 3, 0, 0) // nVars = 3, nScalars = 0
 {
     if (config.count("3VarMirror") != 1)
         throw std::invalid_argument("There should be a [3VarMirror] section if you are using the 3VarMirror physics model.");
@@ -50,41 +50,42 @@ ThreeVarMirror::ThreeVarMirror( toml::value const &config, Grid const& grid )
 
     taue0 = tau_e(n0, p0);
     taui0 = tau_i(n0, p0);
-
 };
 
-Real ThreeVarMirror::Flux( Index i, RealVector u, RealVector q, Position x, Time t )
+Real ThreeVarMirror::Flux(Index i, RealVector u, RealVector q, Position x, Time t)
 {
-	switch( Channel( i ) ) {
-		case Channel::Density:
-			return Gamma_hat( u, q, x, t );
-			break;
-		case Channel::ElectronEnergy:
-			return qe_hat( u, q, x, t );
-			break;
-		case Channel::IonEnergy:
-			return qi_hat( u, q, x, t );
-			break;
-		default:
-			throw std::runtime_error("Request for flux for undefined variable!");
-	}
+    switch (Channel(i))
+    {
+    case Channel::Density:
+        return Gamma_hat(u, q, x, t);
+        break;
+    case Channel::ElectronEnergy:
+        return qe_hat(u, q, x, t);
+        break;
+    case Channel::IonEnergy:
+        return qi_hat(u, q, x, t);
+        break;
+    default:
+        throw std::runtime_error("Request for flux for undefined variable!");
+    }
 }
 
-Real ThreeVarMirror::Source( Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t )
+Real ThreeVarMirror::Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector, Position x, Time t)
 {
-	switch( Channel( i ) ) {
-		case Channel::Density:
-			return Sn_hat( u, q, sigma, x, t );
-			break;
-		case Channel::ElectronEnergy:
-			return Spe_hat( u, q, sigma, x, t );
-			break;
-		case Channel::IonEnergy:
-			return Spi_hat( u, q, sigma, x, t );
-			break;
-		default:
-			throw std::runtime_error("Request for source for undefined variable!");
-	}
+    switch (Channel(i))
+    {
+    case Channel::Density:
+        return Sn_hat(u, q, sigma, x, t);
+        break;
+    case Channel::ElectronEnergy:
+        return Spe_hat(u, q, sigma, x, t);
+        break;
+    case Channel::IonEnergy:
+        return Spi_hat(u, q, sigma, x, t);
+        break;
+    default:
+        throw std::runtime_error("Request for source for undefined variable!");
+    }
 }
 
 Real ThreeVarMirror::Gamma_hat(RealVector u, RealVector q, Real x, double t)
@@ -96,8 +97,8 @@ Real ThreeVarMirror::Gamma_hat(RealVector u, RealVector q, Real x, double t)
     double coef = Rval * Rval * Vpval * Vpval;
     Real G = coef * u(1) / (tau_hat(u(0), u(1)) * lambda_hat(u(0), u(1), n0, p0)) * ((-q(1) / 2. + q(2)) / u(1) + 3. / 2. * q(0) / u(0));
 
-    if ( !std::isfinite( G.val ) )
-		 throw std::logic_error( "Particle flux returned Inf or NaN" );
+    if (!std::isfinite(G.val))
+        throw std::logic_error("Particle flux returned Inf or NaN");
     else
         return G;
 };
@@ -211,7 +212,7 @@ Real ThreeVarMirror::Spi_hat(RealVector u, RealVector q, RealVector sigma, Real 
     Real S = (2. / 3.) * (Ppot + Pcol + Pvis + Ppast);
 
     if (S != S)
-		 throw std::logic_error("Error compution ion heating sources");
+        throw std::logic_error("Error compution ion heating sources");
     else
         return S; //+ 10 * Sn_hat(u, q, sigma, x, t); //+ ::pow(ionMass / electronMass, 1. / 2.) * u(2) / u(0) * Sn_hat(u, q, sigma, x, t);
     // return 0.0;
@@ -247,7 +248,7 @@ Real ThreeVarMirror::Spe_hat(RealVector u, RealVector q, RealVector sigma, Real 
     Real S = 2. / 3. * (Pcol + Ppast + L / (p0 * V0) * (Pfus + Pbrem));
 
     if (S != S)
-		 throw std::logic_error("Error computing the electron heating sources");
+        throw std::logic_error("Error computing the electron heating sources");
     else
         return S; //+ u(1) / u(0) * Sn_hat(u, q, sigma, x, t);
     // return 0.0;
@@ -255,9 +256,9 @@ Real ThreeVarMirror::Spe_hat(RealVector u, RealVector q, RealVector sigma, Real 
 
 Real ThreeVarMirror::omega(Real R, double t)
 {
-	double Rmid = (Rmin + Rmax) / 2.0;
-	double omegaMax = M0.val / Rmid;
-	return omegaOffset + (omegaMax - omegaOffset) * cos( M_PI * (R-Rmid) / (Rmax - Rmin) );
+    double Rmid = (Rmin + Rmax) / 2.0;
+    double omegaMax = M0.val / Rmid;
+    return omegaOffset + (omegaMax - omegaOffset) * cos(M_PI * (R - Rmid) / (Rmax - Rmin));
 }
 
 double ThreeVarMirror::domegadV(Real x, double t)
@@ -265,8 +266,9 @@ double ThreeVarMirror::domegadV(Real x, double t)
     Real Rval = R(x.val, t);
     double Bval = B(x.val, t) / Bmid.val;
     double Vpval = Vprime(Rval.val);
-	 auto omegaFn = [ this, t ]( Real x ) -> Real { return this->omega(x,t); };
-    double domegadR = derivative( omegaFn, wrt(Rval), at(Rval));
+    auto omegaFn = [this, t](Real x) -> Real
+    { return this->omega(x, t); };
+    double domegadR = derivative(omegaFn, wrt(Rval), at(Rval));
     return domegadR / (Vpval * Rval.val * Bval);
 }
 
@@ -283,9 +285,10 @@ Real ThreeVarMirror::phi0(RealVector u, RealVector q, Real x, double t)
 Real ThreeVarMirror::dphi0dV(RealVector u, RealVector q, Real x, double t)
 {
     Real Rval = R(x.val, t);
-	 auto phi0fn = [ this ]( RealVector u, RealVector q, Real x, double t ) -> Real {
-		 return this->phi0( u, q, x, t );
-	 };
+    auto phi0fn = [this](RealVector u, RealVector q, Real x, double t) -> Real
+    {
+        return this->phi0(u, q, x, t);
+    };
     Real dphi0dV = derivative(phi0fn, wrt(Rval), at(u, q, x, t)) / (2 * M_PI * Rval);
     auto dphi0du = gradient(phi0fn, wrt(u), at(u, q, x, t));
     auto qi = q.begin();
@@ -331,7 +334,7 @@ double ThreeVarMirror::V(double R)
 // V' == dV/dPsi or dV/dR ?
 double ThreeVarMirror::Vprime(double R)
 {
-    return L/Bmid.val;
+    return L / Bmid.val;
 }
 
 double ThreeVarMirror::B(double x, double t)
@@ -343,7 +346,7 @@ double ThreeVarMirror::R(double x, double t)
 {
     using boost::math::tools::bracket_and_solve_root;
     using boost::math::tools::eps_tolerance;
-    double guess = 0.5;                                     // 
+    double guess = 0.5; //
     // double min = Rmin;                                      // Minimum possible value is half our guess.
     // double max = Rmax;                                      // Maximum possible value is twice our guess.
     const int digits = std::numeric_limits<double>::digits; // Maximum possible binary digits accuracy for type T.
@@ -352,7 +355,8 @@ double ThreeVarMirror::R(double x, double t)
     double factor = 2;
     bool is_rising = true;
 
-    auto getPair = [this](double x, double R) { return this->V(R) - x; }; // change to V(R(psi))
+    auto getPair = [this](double x, double R)
+    { return this->V(R) - x; }; // change to V(R(psi))
     auto func = std::bind_front(getPair, x);
 
     eps_tolerance<double> tol(get_digits);
@@ -362,4 +366,3 @@ double ThreeVarMirror::R(double x, double t)
     std::pair<double, double> r = bracket_and_solve_root(func, guess, factor, is_rising, tol, it);
     return r.first + (r.second - r.first) / 2;
 };
-

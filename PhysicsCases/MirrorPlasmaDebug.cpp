@@ -12,7 +12,7 @@ const double omega_edge = 0.1, omega_mid = 4.0;
 const std::string B_file = "Bfield.nc";
 
 MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid)
-	: AutodiffTransportSystem(config, grid, 4, 0)
+	: AutodiffTransportSystem(config, grid, 4, 0, 0)
 {
 
 	// B = new StraightMagneticField();
@@ -50,7 +50,7 @@ MirrorPlasmaDebug::MirrorPlasmaDebug(toml::value const &config, Grid const &grid
 		uR[Channel::AngularMomentum] = omegaEdge * nEdge * R_Upper * R_Upper;
 		jRadial = -toml::find_or(InternalConfig, "jRadial", 4.0);
 		ParticleSourceStrength = toml::find_or(InternalConfig, "ParticleSource", 10.0);
-		ParFac = toml::find_or(InternalConfig,"ParFac",1.0);
+		ParFac = toml::find_or(InternalConfig, "ParFac", 1.0);
 	}
 	else
 	{
@@ -156,7 +156,7 @@ Real MirrorPlasmaDebug::Flux(Index i, RealVector u, RealVector q, Position x, Ti
 	}
 }
 
-Real MirrorPlasmaDebug::Source(Index i, RealVector u, RealVector q, RealVector sigma, Position x, Time t)
+Real MirrorPlasmaDebug::Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector, Position x, Time t)
 {
 	Channel c = static_cast<Channel>(i);
 	switch (c)
@@ -290,7 +290,7 @@ Real MirrorPlasmaDebug::qe(RealVector u, RealVector q, double V, double t) const
 
 	double R = B->R_V(V);
 	double GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e, leaving (V'R)^2
-	Real HeatFlux = GeometricFactor * GeometricFactor * (p_e / ElectronCollisionTime(n, Te)) * (4.66 * Te_prime - (3. / 2.) * (p_e_prime + p_i_prime) / n );
+	Real HeatFlux = GeometricFactor * GeometricFactor * (p_e / ElectronCollisionTime(n, Te)) * (4.66 * Te_prime - (3. / 2.) * (p_e_prime + p_i_prime) / n);
 
 	if (std::isfinite(HeatFlux.val))
 		return HeatFlux;
@@ -469,7 +469,7 @@ Real MirrorPlasmaDebug::ElectronPastukhovLossRate(double V, Real Xi_e, Real n, R
 	double Sigma = 2.0; // = 1 + Z_eff ; Include collisions with ions and impurities as well as self-collisions
 
 	Real PastukhovFactor = (exp(-Xi_e) / Xi_e);
-	
+
 	// Cap loss rates
 	if (PastukhovFactor.val > 1.0)
 		PastukhovFactor.val = 1.0;
@@ -534,9 +534,9 @@ void MirrorPlasmaDebug::initialiseDiagnostics(NetCDFIO &nc)
 	// Add diagnostics here
 	//
 	double RhoStar = RhoStarRef();
-	double TauNorm = (IonMass/ElectronMass)*(1.0/(RhoStar*RhoStar))*(ReferenceElectronCollisionTime());
-	nc.AddScalarVariable("Tau","Normalising time","s",TauNorm);
-	
+	double TauNorm = (IonMass / ElectronMass) * (1.0 / (RhoStar * RhoStar)) * (ReferenceElectronCollisionTime());
+	nc.AddScalarVariable("Tau", "Normalising time", "s", TauNorm);
+
 	auto initialL = [this](double V)
 	{ return InitialValue(Channel::AngularMomentum, V); };
 	auto initialn = [this](double V)
@@ -546,7 +546,6 @@ void MirrorPlasmaDebug::initialiseDiagnostics(NetCDFIO &nc)
 	nc.AddTimeSeries("Voltage", "Total voltage drop across the plasma", "Volts", initialVoltage);
 	nc.AddGroup("Heating", "Separated heating sources");
 	// TODO: Put the AddVariable stuff here for the heating.
-	
 }
 
 void MirrorPlasmaDebug::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
