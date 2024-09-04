@@ -117,8 +117,8 @@ void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Interval
 
 	for ( Index XVar = 0; XVar < nVars; XVar++ )
 	{
-		Values dSdS_vals1( nVars );
-		Values dSdS_vals2( nVars );
+		Values dSdS_vals1( nScalars );
+		Values dSdS_vals2( nScalars );
 		for ( size_t i=0; i < n_abscissa; ++i ) {
 			// Pull the loop over the gaussian integration points
 			// outside so we can evaluate u, q, dX_dZ once and store the values

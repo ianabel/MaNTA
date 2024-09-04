@@ -54,12 +54,12 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const&)
 
 	kappa = toml::find_or(DiffConfig, "Kappa", 1.0);
 	alpha = toml::find_or(DiffConfig, "alpha", 0.2);
-	beta = toml::find_or(DiffConfig, "beta", 0.2);
-	gamma = toml::find_or(DiffConfig, "gamma", 1.0);
+	beta = toml::find_or(DiffConfig, "beta", 1.0);
+	gamma = toml::find_or(DiffConfig, "gamma", 5.0);
 	u0 = toml::find_or(DiffConfig, "u0", 0.1);
 
 	M0 = 2*u0 + 4*beta/std::numbers::pi;
-
+    std::cerr << "M0 : " << M0 << std::endl;
 }
 
 // Dirichlet Boundary Conditon
@@ -154,6 +154,7 @@ Value ScalarTestLD3::ScalarG( Index s, const DGSoln & y, Time )
 
 void ScalarTestLD3::ScalarGPrime( Index scalarIndex, State &s, const DGSoln &y, std::function<double( double )> P, Interval I, Time )
 {
+    s.zero();
 	if ( scalarIndex == 0 ) {
 		s.Flux[ 0 ] = 0.0; // d G_0 / d sigma
 		s.Derivative[ 0 ] = 0.0; // d G_0 / d (u')
@@ -185,8 +186,8 @@ void ScalarTestLD3::ScalarGPrime( Index scalarIndex, State &s, const DGSoln &y, 
 
 void ScalarTestLD3::dSources_dScalars( Index, Values &v, const State &, Position x, Time )
 {
-	v[ 0 ] = ScaledSource( x );
-    v[ 1 ] = 0.0;
+    v[ 0 ] = 0.0;
+    v[ 1 ] = ScaledSource( x );
 }
 
 Value ScalarTestLD3::InitialScalarValue( Index s ) const
@@ -202,7 +203,7 @@ Value ScalarTestLD3::InitialScalarValue( Index s ) const
 
 void ScalarTestLD3::initialiseDiagnostics( NetCDFIO &nc )
 {
-	nc.AddTimeSeries( "Mass", "Integral of the solution over the domain", "", 2*u0 + 4*beta/std::numbers::pi );
+	nc.AddTimeSeries( "Mass", "Integral of the solution over the domain", "", M0 );
 }
 
 void ScalarTestLD3::writeDiagnostics( DGSoln const& y, double, NetCDFIO &nc, size_t tIndex )

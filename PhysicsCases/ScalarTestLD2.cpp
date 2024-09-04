@@ -92,11 +92,11 @@ Value ScalarTestLD2::ScaledSource( Position x ) const
 		return beta*( 1.0 - x/alpha );
 }
 
-Value ScalarTestLD2::Sources(Index, const State &s, Position x, Time)
+Value ScalarTestLD2::Sources(Index i, const State &s, Position x, Time)
 {
 	double J = s.Scalars[ 0 ];
 
-	return J * ScaledSource( x );
+	return ( J ) * ScaledSource( x );
 }
 
 void ScalarTestLD2::dSigmaFn_dq(Index, Values &v, const State &, Position, Time)
@@ -142,12 +142,12 @@ Value ScalarTestLD2::ScalarG( Index, const DGSoln & y, Time )
 {
 	// J = Int_0^1 u => G[u;J] = J - Int_[0,1] u
 
-	return y.Scalar( 0 ) - boost::math::quadrature::gauss_kronrod<double, 31>::integrate( [ & ]( double x ){ return y.u( 0 )( x ); }, 0, 1 );
+  return y.Scalar( 0 ) - boost::math::quadrature::gauss_kronrod<double, 31>::integrate( [ & ]( double x ){ return y.u( 0 )( x ); }, 0, 1 );
 }
 
-void ScalarTestLD2::ScalarGPrime( Index, State &s, const DGSoln &y, std::function<double( double )> P, Interval I, Time )
+void ScalarTestLD2::ScalarGPrime( Index i, State &s, const DGSoln &y, std::function<double( double )> P, Interval I, Time )
 {
-	s.Variable[ 0 ] = -boost::math::quadrature::gauss_kronrod<double, 31>::integrate( P, I.x_l, I.x_u );
+    s.Variable[ 0 ] = -boost::math::quadrature::gauss_kronrod<double, 31>::integrate( P, I.x_l, I.x_u );
 	s.Derivative[ 0 ] = 0.0;
 	s.Flux[ 0 ] = 0.0;
 	s.Scalars[ 0 ] = 1.0;
