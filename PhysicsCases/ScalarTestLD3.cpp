@@ -54,8 +54,8 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
 
 	kappa = toml::find_or(DiffConfig, "Kappa", 1.0);
 	alpha = toml::find_or(DiffConfig, "alpha", 0.2);
-	beta = toml::find_or(DiffConfig, "beta", 0.2);
-	gamma = toml::find_or(DiffConfig, "gamma", 1.0);
+	beta = toml::find_or(DiffConfig, "beta", 1.0);
+	gamma = toml::find_or(DiffConfig, "gamma", 5.0);
 	u0 = toml::find_or(DiffConfig, "u0", 0.1);
 
 	M0 = 2 * u0 + 4 * beta / std::numbers::pi;

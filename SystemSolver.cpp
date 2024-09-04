@@ -627,6 +627,8 @@ void SystemSolver::updateMatricesForJacSolve()
 						N_global(m, j) = s.Scalars[m];
 				}
 			}
+			for (Index m = 0; m < nScalars; ++m)
+				N_global(j, m) = s.Scalars[m];
 		}
 	}
 	w_map.clear();
