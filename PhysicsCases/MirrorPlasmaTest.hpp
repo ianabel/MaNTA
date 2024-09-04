@@ -71,9 +71,13 @@ private:
 	double DensityWidth;
 	bool ZeroEdgeSources;
 	double ZeroEdgeFactor;
+	bool useAmbipolarPhi;
 
 	Real Flux(Index, RealVector, RealVector, Real, Time) override;
 	Real Source(Index, RealVector, RealVector, RealVector, RealVector, Real, Time) override;
+
+	Real Phi(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) override;
+	Value InitialAuxValue(Index, Position) const override;
 
 	Value LowerBoundary(Index i, Time t) const override;
 	Value UpperBoundary(Index i, Time t) const override;
@@ -106,10 +110,10 @@ private:
 	Real qe(RealVector u, RealVector q, Real x, Time t) const;
 	Real qi(RealVector u, RealVector q, Real x, Time t) const;
 	Real Pi(RealVector u, RealVector q, Real x, Time t) const;
-	Real Sn(RealVector u, RealVector q, RealVector sigma, Real x, Time t) const;
-	Real Spe(RealVector u, RealVector q, RealVector sigma, Real x, Time t) const;
-	Real Spi(RealVector u, RealVector q, RealVector sigma, Real x, Time t) const;
-	Real Somega(RealVector u, RealVector q, RealVector sigma, Real x, Time t) const;
+	Real Sn(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) const;
+	Real Spe(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) const;
+	Real Spi(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) const;
+	Real Somega(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) const;
 
 	// Underlying functions
 	Real LogLambda_ii(Real, Real) const;
@@ -139,9 +143,12 @@ private:
 	Real TotalAlphaPower(Real n, Real pi) const;
 	Real BremsstrahlungLosses(Real n, Real pe) const;
 
-	Real Xi_i(Real V, Real omega, Real n, Real Ti, Real Te) const;
-	Real Xi_e(Real V, Real omega, Real n, Real Ti, Real Te) const;
+	// Real Xi_i(Real V, Real omega, Real n, Real Ti, Real Te) const;
+	// Real Xi_e(Real V, Real omega, Real n, Real Ti, Real Te) const;
+	Real Xi_i(Real V, Real phi, Real Ti, Real Te, Real omega) const;
+	Real Xi_e(Real V, Real phi, Real Ti, Real Te, Real omegae) const;
 	Real AmbipolarPhi(Real V, Real n, Real Ti, Real Te) const;
+	Real ParellelCurrent(Real V, Real omega, Real n, Real Ti, Real Te, Real phi) const;
 	double R_Lower, R_Upper;
 
 	Real RelaxSource(Real A, Real B) const
