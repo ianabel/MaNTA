@@ -816,9 +816,12 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
 		for (Index var = 0; var < nVars; var++)
 		{
 			del_y.sigma(var).getCoeff(i).second = delSQU.segment( var * S_DOF, S_DOF );
-			del_y.q(var).getCoeff(i).second = delSQU.segment( nVars * S_DOF + var * Q_DOF, Q_DOF );
-			del_y.u(var).getCoeff(i).second = delSQU.segment( nVars * (S_DOF + Q_DOF) + var * U_DOF, U_DOF );
+			del_y.q(var).getCoeff(i).second     = delSQU.segment( nVars * S_DOF + var * Q_DOF, Q_DOF );
+			del_y.u(var).getCoeff(i).second     = delSQU.segment( nVars * (S_DOF + Q_DOF) + var * U_DOF, U_DOF );
 		}
+        for( Index aux = 0 ; aux < nAux; aux++ )
+            del_y.Aux(aux).getCoeff(i).second   = delSQU.segment( nVars * SQU_DOF + aux * AUX_DOF, AUX_DOF );
+
 	}
 }
 
