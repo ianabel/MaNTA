@@ -20,6 +20,7 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(AuxVarTest);
 
+const double AuxNorm = 10.0;
 AuxVarTest::AuxVarTest(toml::value const &config, Grid const &)
 {
 	// Always set nVars in a derived constructor
@@ -65,7 +66,7 @@ Value AuxVarTest::Sources(Index, const State &st, Position x, Time)
 {
 	double U = ::cos(M_PI_2 * x);
 	double a = st.Aux[0];
-	return kappa * M_PI_2 * M_PI_2 * U + a - U * U;
+	return kappa * M_PI_2 * M_PI_2 * U + AuxNorm * (a - U * U);
 }
 
 void AuxVarTest::dSigmaFn_dq(Index, Values &v, const State &, Position, Time)
@@ -99,11 +100,11 @@ Value AuxVarTest::InitialAuxValue(Index i, Position x) const
 	return u0 * u0;
 }
 
-Value AuxVarTest::AuxG(Index, const State &st, Position x, Time)
+Value AuxVarTest::AuxG(Index, const State &st, Position x, Time t )
 {
 	double a = st.Aux[0];
 	double u = st.Variable[0];
-	return a - u * u;
+	return AuxNorm * (a - u * u);
 }
 
 void AuxVarTest::AuxGPrime(Index, State &out, const State &st, Position, Time)
@@ -113,16 +114,16 @@ void AuxVarTest::AuxGPrime(Index, State &out, const State &st, Position, Time)
 	// most derivatives are zero
 	out.zero();
 	// dG/du = -2.0 * u
-	out.Variable[0] = -2.0 * u;
+	out.Variable[0] = AuxNorm * (-2.0 * u);
 	// dG/da = 1.0
-	out.Aux[0] = 1.0;
+	out.Aux[0] = AuxNorm * (1.0);
 
 	return;
 }
 
 void AuxVarTest::dSources_dPhi(Index, Values &v, const State &st, Position, Time)
 {
-	v[0] = 1.0;
+	v[0] = AuxNorm * 1.0;
 	return;
 }
 

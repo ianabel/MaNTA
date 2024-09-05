@@ -836,6 +836,8 @@ for ( Index i=0; i < nVars; i++ ) {
 			del_y.q(var).getCoeff(i).second = delSQU.segment(nVars * S_DOF + var * Q_DOF, Q_DOF);
 			del_y.u(var).getCoeff(i).second = delSQU.segment(nVars * (S_DOF + Q_DOF) + var * U_DOF, U_DOF);
 		}
+		for (Index aux = 0; aux < nAux; aux++)
+			del_y.Aux(aux).getCoeff(i).second = delSQU.segment(nVars * SQU_DOF + aux * AUX_DOF, AUX_DOF);
 	}
 }
 
