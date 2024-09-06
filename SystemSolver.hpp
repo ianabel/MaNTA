@@ -173,10 +173,6 @@ private:
 
 	void dAux_Mat(Eigen::Ref<Matrix>, DGSoln const &, Interval);
 
-	void dSourcedPhi_Mat(Matrix &, DGSoln const &, Interval);
-
-	void dAux_Mat(Eigen::Ref<Matrix>, DGSoln const &, Interval);
-
 	double resNorm = 0.0; // Exclusively for unit testing purposes
 
 	double dt;

@@ -87,9 +87,6 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 	auto initial_aux = std::bind_front(&TransportSystem::InitialAuxValue, problem);
 	y.AssignAux(initial_aux);
 
-	auto initial_aux = std::bind_front(&TransportSystem::InitialAuxValue, problem);
-	y.AssignAux(initial_aux);
-
 	ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
 
 	// Zero most of dydt, we only have to set it to nonzero values for the differential parts of y
@@ -529,14 +526,12 @@ void SystemSolver::updateMatricesForJacSolve()
 
 		Eigen::MatrixXd Sphi(nVars * (k + 1), nAux * (k + 1));
 
-		Eigen::MatrixXd Sphi(nVars * (k + 1), nAux * (k + 1));
-
 		Interval const &I(grid[i]);
 		Eigen::MatrixXd MX(nVars * SQU_DOF + nAux * AUX_DOF, nVars * SQU_DOF + nAux * AUX_DOF);
 		MX = MBlocks[i];
 
 		// X matrix
-        X.setZero();
+		X.setZero();
 		for (Index var = 0; var < nVars; var++)
 		{
 			std::function<double(double)> alphaF = [=, this](double x)
