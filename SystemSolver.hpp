@@ -117,7 +117,7 @@ public:
 
 	void setInputFile( std::string const& fn ) { inputFilePath = fn; };
 
-	void setJacEvalY( N_Vector & );
+	void setJacEvalY( N_Vector );
 	int residual(sunrealtype, N_Vector, N_Vector, N_Vector );
 
 private:

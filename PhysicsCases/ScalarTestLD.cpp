@@ -3,6 +3,7 @@
 
 /*
 	Implementation of the Linear Diffusion case
+    with an uncoupled scalar that satisfies ds/dt = 1
  */
 
 // Needed to register the class
@@ -96,21 +97,25 @@ Value ScalarTestLD::InitialDerivative(Index, Position x) const
 	return InitialHeight * (-2.0 * y) * ::exp(-y * y) * (1.0 / InitialWidth);
 }
 
-Value ScalarTestLD::ScalarG( Index, const DGSoln & y, Time )
+Value ScalarTestLD::ScalarGExtended( Index, const DGSoln & y, const DGSoln &dydt, Time )
 {
-	return y.Scalar( 0 );
+	return 100 * (dydt.Scalar( 0 ) - y.Scalar( 0 ));
 }
 
-void ScalarTestLD::ScalarGPrime( Index, State &s, const DGSoln &y, std::function<double( double )>, Interval, Time )
+void ScalarTestLD::ScalarGPrimeExtended( Index, State &out, State &out_dt, const DGSoln &y, std::function<double( double )>, Interval, Time )
 {
-	s.Flux[ 0 ] = 0.0;
-	s.Derivative[ 0 ] = 0.0;
-	s.Variable[ 0 ] = 0.0;
-	s.Scalars[ 0 ] = 1.0;
+    out.zero(); out_dt.zero();
+    out.Scalars( 0 ) = -100.0;
+    out_dt.Scalars( 0 ) = 100.0;
 }
 
 void ScalarTestLD::dSources_dScalars( Index, Values &v, const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
+}
+
+Value ScalarTestLD::InitialScalarValue( Index ) const
+{
+    return 1.0;
 }
 

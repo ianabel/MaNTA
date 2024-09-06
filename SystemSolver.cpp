@@ -609,13 +609,13 @@ void SystemSolver::updateMatricesForJacSolve()
 			for ( Index l = 0; l < k + 1; ++l ) {
 				problem->ScalarGPrimeExtended( j, s, s_dt, yJac, [=]( double x ){ return LegendreBasis::Evaluate( I, l, x ); }, I, jt );
 				for ( Index v = 0; v < nVars; ++v ) {
-					w_map[ j ].sigma( v ).getCoeff( i ).second( l ) = s.Flux[ v ];
-					w_map[ j ].q( v ).getCoeff( i ).second( l ) = s.Derivative[ v ];
-					w_map[ j ].u( v ).getCoeff( i ).second( l ) = s.Variable[ v ];
+					w_map[ j ].sigma( v ).getCoeff( i ).second( l ) = s.Flux[ v ]       + alpha * s_dt.Flux[ v ];
+					w_map[ j ].q( v ).getCoeff( i ).second( l )     = s.Derivative[ v ] + alpha * s_dt.Derivative[ v ];
+					w_map[ j ].u( v ).getCoeff( i ).second( l )     = s.Variable[ v ]   + alpha * s_dt.Variable[ v ];
 				}
 			}
             for( Index m = 0; m < nScalars; ++m )
-                N_global( j, m ) = s.Scalars[ m ];
+                N_global( j, m ) = s.Scalars[ m ] + alpha * s_dt.Scalars[ m ];
 		}
 	}
 	w_map.clear();
@@ -633,7 +633,7 @@ void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorW
 	new (&lam) VectorWrapper(Y + nCells * localDOF, nVars * (nCells + 1));
 }
 
-void SystemSolver::setJacEvalY( N_Vector & yy )
+void SystemSolver::setJacEvalY( N_Vector yy )
 {
 	DGSoln yyMap( nVars, grid, k, nScalars, nAux );
 	assert(static_cast<size_t>(N_VGetLength(yy)) == yyMap.getDoF());
@@ -935,9 +935,9 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
         res.Aux( aux ) = [&,this]( Position x ){ return problem->AuxG( aux, Y_h.eval( x ), x, tres ); };
     }
 
-	for ( Index j = 0; j < nScalars; j++ ) {
-		res.Scalar( j ) = problem->ScalarG( j, Y_h, tres );
-	}
+    for ( Index j = 0; j < nScalars; j++ ) {
+        res.Scalar( j ) = problem->ScalarGExtended( j, Y_h, dYdt_h, tres );
+    }
 
 	return 0;
 }

@@ -35,14 +35,14 @@ class ScalarTestLD : public TransportSystem {
 		void dSources_dsigma( Index, Values&v , const State &, Position, Time ) override;
 
 
-		virtual Value ScalarG( Index, const DGSoln& , Time ) override;
-		virtual void ScalarGPrime( Index, State &, const DGSoln &, std::function<double( double )>, Interval, Time ) override;
+		virtual Value ScalarGExtended( Index, const DGSoln&, const DGSoln &, Time ) override;
+		virtual void ScalarGPrimeExtended( Index, State &, State &, const DGSoln &, std::function<double( double )>, Interval, Time ) override;
 		virtual void dSources_dScalars( Index, Values &, const State &, Position, Time ) override;
 
 		// Finally one has to provide initial conditions for u & q
 		Value      InitialValue( Index, Position ) const override;
 		Value InitialDerivative( Index, Position ) const override;
-		Value InitialScalarValue( Index ) const override { return 0.0; };
+		Value InitialScalarValue( Index ) const override;
 
 private:
 	// Put class-specific data here
