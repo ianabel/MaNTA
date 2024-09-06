@@ -24,7 +24,7 @@ const double AuxNorm = 10.0;
 AuxVarTest::AuxVarTest(toml::value const &config, Grid const &)
 {
 	// Always set nVars in a derived constructor
-	nVars = 1;
+	nVars = 2;
 	nAux = 1;
 
 	// Construst your problem from user-specified config
@@ -56,42 +56,51 @@ Value AuxVarTest::UpperBoundary(Index, Time t) const
 bool AuxVarTest::isLowerBoundaryDirichlet(Index) const { return true; };
 bool AuxVarTest::isUpperBoundaryDirichlet(Index) const { return true; };
 
-Value AuxVarTest::SigmaFn(Index, const State &s, Position, Time)
+Value AuxVarTest::SigmaFn(Index i, const State &s, Position, Time)
 {
-	return kappa * s.Derivative[0];
+	return kappa * s.Derivative[i];
 }
 
 //
-Value AuxVarTest::Sources(Index, const State &st, Position x, Time)
+Value AuxVarTest::Sources(Index i, const State &st, Position x, Time)
 {
 	double U = ::cos(M_PI_2 * x);
 	double a = st.Aux[0];
-	return kappa * M_PI_2 * M_PI_2 * U + AuxNorm * (a - U * U);
+    switch ( i ) {
+      case 0:
+        return kappa * M_PI_2 * M_PI_2 * U + AuxNorm * (a - U * U);
+        break;
+      case 1:
+        return kappa * M_PI_2 * M_PI_2 * U;
+        break;
+    }
+    return 0;
 }
 
-void AuxVarTest::dSigmaFn_dq(Index, Values &v, const State &, Position, Time)
+void AuxVarTest::dSigmaFn_dq(Index i, Values &v, const State &, Position, Time)
 {
-	v[0] = kappa;
+    v.setZero();
+	v[i] = kappa;
 };
 
 void AuxVarTest::dSigmaFn_du(Index, Values &v, const State &, Position, Time)
 {
-	v[0] = 0.0;
+    v.setZero();
 };
 
 void AuxVarTest::dSources_du(Index, Values &v, const State &st, Position, Time)
 {
-	v[0] = 0.0;
+    v.setZero();
 };
 
 void AuxVarTest::dSources_dq(Index, Values &v, const State &, Position, Time)
 {
-	v[0] = 0.0;
+    v.setZero();
 };
 
 void AuxVarTest::dSources_dsigma(Index, Values &v, const State &, Position, Time)
 {
-	v[0] = 0.0;
+    v.setZero();
 };
 
 Value AuxVarTest::InitialAuxValue(Index i, Position x) const
@@ -107,30 +116,37 @@ Value AuxVarTest::AuxG(Index, const State &st, Position x, Time t )
 	return AuxNorm * (a - u * u);
 }
 
-void AuxVarTest::AuxGPrime(Index, State &out, const State &st, Position, Time)
+void AuxVarTest::AuxGPrime(Index iAux, State &out, const State &st, Position, Time)
 {
 	double u = st.Variable[0];
 
-	// most derivatives are zero
-	out.zero();
-	// dG/du = -2.0 * u
-	out.Variable[0] = AuxNorm * (-2.0 * u);
-	// dG/da = 1.0
-	out.Aux[0] = AuxNorm * (1.0);
+    if( iAux != 0 ) {
+        throw std::logic_error("ABORT!");
+    }
+    // most derivatives are zero
+    out.zero();
+    // dG/du = -2.0 * u
+    out.Variable[0] = AuxNorm * (-2.0 * u);
+    // dG/da = 1.0
+    out.Aux[0] = AuxNorm * (1.0);
 
 	return;
 }
 
-void AuxVarTest::dSources_dPhi(Index, Values &v, const State &st, Position, Time)
+void AuxVarTest::dSources_dPhi(Index i, Values &v, const State &st, Position, Time)
 {
-	v[0] = AuxNorm * 1.0;
-	return;
+    v.setZero();
+    switch ( i ) {
+      case 0:
+        v[0] = AuxNorm * 1.0;
+        return;
+      case 1:
+        return;
+    }
 }
 
-// We don't need the index variables as nVars is 1, so the index argument should
-// always be 0
 
-// Initialise with a Gaussian at x = 0
+// Initialise with a Gaussian at x = 0 for both variables
 Value AuxVarTest::InitialValue(Index, Position x) const
 {
 	double y = (x - Centre);

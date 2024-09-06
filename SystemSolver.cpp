@@ -536,6 +536,7 @@ void SystemSolver::updateMatricesForJacSolve()
 		MX = MBlocks[i];
 
 		// X matrix
+        X.setZero();
 		for (Index var = 0; var < nVars; var++)
 		{
 			std::function<double(double)> alphaF = [=, this](double x)

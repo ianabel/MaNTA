@@ -51,6 +51,9 @@ void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX
 	{
 		Values dX_dZ_vals1( nVars );
 		Values dX_dZ_vals2( nVars );
+        dX_dZ_vals1.setZero();
+        dX_dZ_vals2.setZero();
+
 		for ( size_t i=0; i < n_abscissa; ++i ) {
 			// Pull the loop over the gaussian integration points
 			// outside so we can evaluate u, q, dX_dZ once and store the values
@@ -283,9 +286,9 @@ void SystemSolver::dAux_Mat( Eigen::Ref<Matrix> mat, DGSoln const& Y, Interval I
         {
           for ( Index l=0; l < k + 1; ++l )
           {
-            mat( Aux * ( k + 1 ) + j, SQU_DOF + A2 * ( k + 1 ) + l ) +=
+            mat( Aux * ( k + 1 ) + j, SQU_DOF * nVars + A2 * ( k + 1 ) + l ) +=
               wgt * dG_dPhi_vals1[ A2 ] * LegendreBasis::Evaluate( I, j, y_plus ) * LegendreBasis::Evaluate( I, l, y_plus );
-            mat( Aux * ( k + 1 ) + j, SQU_DOF + A2 * ( k + 1 ) + l ) +=
+            mat( Aux * ( k + 1 ) + j, SQU_DOF * nVars + A2 * ( k + 1 ) + l ) +=
               wgt * dG_dPhi_vals2[ A2 ] * LegendreBasis::Evaluate( I, j, y_minus ) * LegendreBasis::Evaluate( I, l, y_minus );
           }
         }
