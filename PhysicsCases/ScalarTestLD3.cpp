@@ -89,7 +89,7 @@ Value ScalarTestLD3::ScaledSource( Position x ) const
 
 Value ScalarTestLD3::Sources(Index, const State &s, Position x, Time)
 {
-	double J = s.Scalars[ 0 ];
+	double J = s.Scalars[ 1 ];
 
 	return J * ScaledSource( x ) + 0.5*std::cos( std::numbers::pi * x );
 }
