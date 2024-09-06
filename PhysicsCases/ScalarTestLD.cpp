@@ -99,14 +99,14 @@ Value ScalarTestLD::InitialDerivative(Index, Position x) const
 
 Value ScalarTestLD::ScalarGExtended( Index, const DGSoln & y, const DGSoln &dydt, Time )
 {
-	return 100 * (dydt.Scalar( 0 ) - y.Scalar( 0 ));
+	return (dydt.Scalar( 0 ) - y.Scalar( 0 ));
 }
 
 void ScalarTestLD::ScalarGPrimeExtended( Index, State &out, State &out_dt, const DGSoln &y, std::function<double( double )>, Interval, Time )
 {
     out.zero(); out_dt.zero();
-    out.Scalars( 0 ) = -100.0;
-    out_dt.Scalars( 0 ) = 100.0;
+    out.Scalars( 0 ) = -1.0;
+    out_dt.Scalars( 0 ) = 1.0;
 }
 
 void ScalarTestLD::dSources_dScalars( Index, Values &v, const State &, Position, Time )
