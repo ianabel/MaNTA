@@ -1023,3 +1023,63 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
 	out << std::endl;
 	out << std::endl; // Two blank lines needed to make gnuplot happy
 }
+
+int SystemSolver::getErrorWeights( N_Vector y_sundials, N_Vector ewt_sundials )
+{
+    DGSoln y(nVars, grid, k, N_VGetArrayPointer(y_sundials), nScalars, nAux );
+    DGSoln ewt(nVars, grid, k, N_VGetArrayPointer(ewt_sundials), nScalars, nAux );
+    for (Index i = 0; i < nCells; ++i)
+    {
+        double absTol = 1e-8;
+        for (Index v = 0; v < nVars; ++v)
+        {
+            if (atol.size() == 1)
+            {
+                absTol = atol[0];
+            }
+            else if (atol.size() == nVars)
+            {
+                absTol = atol[v];
+            }
+
+            ewt.u(v).getCoeff(i).second = 1.0 / ( rtol * abs( y.u(v).getCoeff(i).second.array() ) + absTol );
+            ewt.q(v).getCoeff(i).second = 1.0 / ( rtol * abs( y.q(v).getCoeff(i).second.array() ) + absTol );
+            ewt.sigma(v).getCoeff(i).second = 1.0 / ( rtol * abs( y.sigma(v).getCoeff(i).second.array() ) + absTol );
+        }
+
+        for (Index a = 0; a < nAux; ++a)
+        {
+            ewt.Aux(a).getCoeff(i).second = 1.0 / ( rtol * abs( y.Aux(a).getCoeff(i).second.array() ) + absTol );
+        }
+    }
+
+    for (Index v = 0; v < nVars; ++v )
+    {
+
+        double absTol = 1e-8;
+
+        if (atol.size() == 1)
+        {
+            absTol = atol[0];
+        }
+        else if (atol.size() == nVars)
+        {
+            absTol = atol[v];
+        }
+        ewt.lambda(v) = 1.0 / ( rtol * abs( y.lambda( v ).array() ) + absTol );
+    }
+
+    for (Index i = 0; i < nScalars; ++i)
+    {
+        double absTol = atol[0];
+        ewt.Scalar( i ) = ::sqrt( localDOF * nCells ) / ( rtol * abs( y.Scalar( i ) ) + absTol );
+    }
+
+    return 0;
+}
+
+int SystemSolver::getErrorWeights_static( N_Vector y, N_Vector ewt, void *sys )
+{
+    return reinterpret_cast<SystemSolver*>( sys )->getErrorWeights( y, ewt );
+}
+

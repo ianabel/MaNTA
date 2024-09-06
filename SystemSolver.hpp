@@ -220,6 +220,9 @@ private:
 	int nOut;
 	double min_step_size;
 
+    int getErrorWeights( N_Vector y, N_Vector ewt );
+    static int getErrorWeights_static( N_Vector, N_Vector, void * );
+
 };
 
 #endif // SYSTEMSOLVER_HPP

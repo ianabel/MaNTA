@@ -102,55 +102,12 @@ void SystemSolver::runSolver(double tFinal)
 	if (ErrorChecker::check_retval(&retval, "IDAInit", 1))
 		std::runtime_error("Sundials initialization Error, run in debug to find");
 
-	// Set tolerances
-	absTolVec = N_VClone(Y);
-	if (ErrorChecker::check_retval((void *)absTolVec, "N_VClone", 0))
-		std::runtime_error("Sundials initialization Error, run in debug to find");
-	VectorWrapper absTolVals(N_VGetArrayPointer(absTolVec), N_VGetLength(absTolVec));
-	absTolVals.setZero();
-
-	DGSoln tolerances(nVars, grid, k, nScalars, nAux);
-	tolerances.Map(N_VGetArrayPointer(absTolVec));
-	for (Index i = 0; i < nCells; ++i)
-	{
-		for (Index v = 0; v < nVars; ++v)
-		{
-			if (atol.size() == 1)
-			{
-				double absTol = atol[0];
-				tolerances.u(v).getCoeff(i).second.setConstant(absTol);
-				tolerances.q(v).getCoeff(i).second.setConstant(absTol);
-				tolerances.sigma(v).getCoeff(i).second.setConstant(absTol);
-				tolerances.lambda(v).setConstant(absTol);
-			}
-			else if (atol.size() == nVars)
-			{
-				double absTolU, absTolQ, absTolSigma;
-				absTolU = atol[v];
-				absTolQ = atol[v];
-				absTolSigma = atol[v];
-				tolerances.u(v).getCoeff(i).second.setConstant(absTolU);
-				tolerances.q(v).getCoeff(i).second.setConstant(absTolQ);
-				tolerances.sigma(v).getCoeff(i).second.setConstant(absTolSigma);
-				tolerances.lambda(v).setConstant(absTolU);
-			}
-		}
-
-		for (Index a = 0; a < nAux; ++a)
-		{
-			tolerances.Aux(a).getCoeff(i).second.setConstant(atol[0]);
-		}
-	}
-
-	for (Index i = 0; i < nScalars; ++i)
-		tolerances.Scalar(i) = atol[0];
-
 	// Steady-state stopping conditions
 	sunrealtype dydt_rel_tol = steady_state_tol;
 	sunrealtype dydt_abs_tol = 1e-2;
 
-	retval = IDASVtolerances(IDA_mem, rtol, absTolVec);
-	if (ErrorChecker::check_retval(&retval, "IDASVtolerances", 1))
+	retval = IDAWFtolerances(IDA_mem, SystemSolver::getErrorWeights_static );
+	if (ErrorChecker::check_retval(&retval, "IDAWFtolerances", 1))
 		std::runtime_error("Sundials initialization Error, run in debug to find");
 
 	//--------------set up user-built objects------------------
