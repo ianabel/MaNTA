@@ -317,6 +317,14 @@ Value AutodiffTransportSystem::MMS_Source(Index i, Position x, Time t)
 
 void AutodiffTransportSystem::initialiseDiagnostics(NetCDFIO &nc)
 {
+	if (nAux > 0)
+	{
+		nc.AddGroup("AuxG", "Auxiliary functions");
+		for (Index i = 0; i < nAux; ++i)
+			nc.AddVariable("AuxG", "Aux" + std::to_string(i), "Auxiliary function", "-", [this, i](double x)
+						   { return this->InitialAuxValue(i, x); });
+	}
+
 	nc.AddGroup("MMSSource", "MMS sources");
 	for (Index j = 0; j < nVars; ++j)
 		nc.AddVariable("MMSSource", "Var" + std::to_string(j), "MMS source", "-", [this, j](double x)
@@ -325,6 +333,15 @@ void AutodiffTransportSystem::initialiseDiagnostics(NetCDFIO &nc)
 
 void AutodiffTransportSystem::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
 {
+	if (nAux > 0)
+	{
+		nc.AddGroup("AuxG", "Auxiliary functions");
+		for (Index i = 0; i < nAux; ++i)
+			nc.AppendToGroup("AuxG", tIndex, "Aux" + std::to_string(i), [this, i, &y, &t](double x)
+							 {  State s = y.eval(x);
+								return this->AuxG(i, s, x, t); });
+	}
+
 	for (Index j = 0; j < nVars; ++j)
 		nc.AppendToGroup("MMSSource", tIndex, "Var" + std::to_string(j), [this, j, t](double x)
 						 { return this->MMS_Source(j, x, t); });

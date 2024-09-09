@@ -267,34 +267,33 @@ Real MirrorPlasmaTest::Phi(Index, RealVector u, RealVector, RealVector, RealVect
 
 Value MirrorPlasmaTest::InitialAuxValue(Index, Position V) const
 {
-	// using boost::math::tools::bisect;
-	// using boost::math::tools::eps_tolerance;
+	using boost::math::tools::bisect;
+	using boost::math::tools::eps_tolerance;
 
-	// Real n = InitialFunction(Channel::Density, V, 0.0).val, p_e = (2. / 3.) * InitialFunction(Channel::ElectronEnergy, V, 0.0).val, p_i = (2. / 3.) * InitialFunction(Channel::IonEnergy, V, 0.0).val;
-	// Real Te = p_e / n;
-	// Real Ti = p_i / n;
+	Real n = InitialFunction(Channel::Density, V, 0.0).val, p_e = (2. / 3.) * InitialFunction(Channel::ElectronEnergy, V, 0.0).val, p_i = (2. / 3.) * InitialFunction(Channel::IonEnergy, V, 0.0).val;
+	Real Te = p_e / n;
+	Real Ti = p_i / n;
 
-	// double R = B->R_V(V);
+	double R = B->R_V(V);
 
-	// Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
-	// Real omega = InitialFunction(Channel::AngularMomentum, V, 0.0).val / J;
-	// // Real phi = CentrifugalPotential(V, omega, Ti, Te) + AmbipolarPhi(V, n, Ti, Te) / 2.0;
-	// double M = omega.val * R / sqrt(Te.val);
-	// auto func = [this, &n, &Te, &Ti, &omega, &V](double phi)
-	// {
-	// 	return ParellelCurrent(V, omega, n, Ti, Te, phi).val;
-	// };
+	Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
+	Real omega = InitialFunction(Channel::AngularMomentum, V, 0.0).val / J;
+	// Real phi = CentrifugalPotential(V, omega, Ti, Te) + AmbipolarPhi(V, n, Ti, Te) / 2.0;
+	double M = omega.val * R / sqrt(Te.val);
+	auto func = [this, &n, &Te, &Ti, &omega, &V](double phi)
+	{
+		return ParellelCurrent(V, omega, n, Ti, Te, phi).val;
+	};
 
-	// const int digits = std::numeric_limits<double>::digits; // Maximum possible binary digits accuracy for type T.
-	// int get_digits = static_cast<int>(digits * 0.6);		// Accuracy doubles with each step, so stop when we have
-	// 														// just over half the digits correct.
-	// eps_tolerance<double> tol(get_digits);
+	const int digits = std::numeric_limits<double>::digits; // Maximum possible binary digits accuracy for type T.
+	int get_digits = static_cast<int>(digits * 0.6);		// Accuracy doubles with each step, so stop when we have
+															// just over half the digits correct.
+	eps_tolerance<double> tol(get_digits);
 
-	// const boost::uintmax_t maxit = 20;
-	// boost::uintmax_t it = maxit;
-	// std::pair<double, double> phi_g = bisect(func, 1e-6, M * M / 2, tol, it);
-	// return phi_g.first + (phi_g.second - phi_g.first) / 2;
-	return 0.0;
+	const boost::uintmax_t maxit = 20;
+	boost::uintmax_t it = maxit;
+	std::pair<double, double> phi_g = bisect(func, -M, M, tol, it);
+	return phi_g.first + (phi_g.second - phi_g.first) / 2;
 }
 
 Value MirrorPlasmaTest::LowerBoundary(Index i, Time t) const
@@ -512,7 +511,7 @@ Real MirrorPlasmaTest::Sn(RealVector u, RealVector q, RealVector sigma, RealVect
 	Real Xi;
 	if (useAmbipolarPhi)
 	{
-		Xi = Xi_e(V, phi(0), Ti, Te, omega) + AmbipolarPhi(V, n, Ti, Te) / 2.0;
+		Xi = Xi_e(V, phi(0), Ti, Te, omega); //+ AmbipolarPhi(V, n, Ti, Te) / 2.0;
 	}
 	else
 	{
@@ -557,7 +556,7 @@ Real MirrorPlasmaTest::Spi(RealVector u, RealVector q, RealVector sigma, RealVec
 
 	Real ViscousHeating = ViscousHeatingFactor * IonClassicalAngularMomentumFlux(V, n, Ti, dOmegadV, t) * dOmegadV;
 
-	Real PotentialHeating = PotentialHeatingFactor * -Gamma(u, q, V, t) * (omega * omega / B->Bz_R(R) + e_charge * B0 / sqrt(T0 * ionMass) * omega / (2 * pi) * B->Bz_R(R));
+	Real PotentialHeating = PotentialHeatingFactor * -Gamma(u, q, V, t) * (omega * omega / B->Bz_R(R) + a * e_charge * B0 / sqrt(T0 * ionMass) * omega * R * B->Bz_R(R));
 	Real EnergyExchange = IonElectronEnergyExchange(n, p_e, p_i, V, t);
 
 	Real ParticleSourceHeating = 0.5 * omega * omega * R * R * ParticleSource(R.val, t);
@@ -567,7 +566,7 @@ Real MirrorPlasmaTest::Spi(RealVector u, RealVector q, RealVector sigma, RealVec
 	Real Xi;
 	if (useAmbipolarPhi)
 	{
-		Xi = Xi_i(V, phi(0), Ti, Te, omega) + AmbipolarPhi(V, n, Ti, Te) / 2.0;
+		Xi = Xi_i(V, phi(0), Ti, Te, omega); //+ AmbipolarPhi(V, n, Ti, Te) / 2.0;
 	}
 	else
 	{
@@ -597,14 +596,14 @@ Real MirrorPlasmaTest::Spe(RealVector u, RealVector q, RealVector sigma, RealVec
 	Real omega = L / J;
 	Real ParticleSourceHeating = electronMass / ionMass * .5 * omega * omega * R * R * ParticleSource(R.val, t);
 
-	Real PotentialHeating = PotentialHeatingFactor * e_charge * B0 / sqrt(T0 * ionMass) * Gamma(u, q, V, t) * omega / (2 * pi) * B->Bz_R(R);
+	Real PotentialHeating = PotentialHeatingFactor * e_charge * B0 / sqrt(T0 * ionMass) * Gamma(u, q, V, t) * omega * R * B->Bz_R(R);
 
 	Real Heating = EnergyExchange + AlphaHeating + ParticleSourceHeating + PotentialHeating;
 
 	Real Xi;
 	if (useAmbipolarPhi)
 	{
-		Xi = Xi_e(V, phi(0), Ti, Te, omega) + AmbipolarPhi(V, n, Ti, Te) / 2.0;
+		Xi = Xi_e(V, phi(0), Ti, Te, omega); //+ AmbipolarPhi(V, n, Ti, Te) / 2.0;
 	}
 	else
 	{
@@ -653,7 +652,7 @@ Real MirrorPlasmaTest::Somega(RealVector u, RealVector q, RealVector sigma, Real
 	Real Xi;
 	if (useAmbipolarPhi)
 	{
-		Xi = Xi_i(V, phi(0), Ti, Te, omega) + AmbipolarPhi(V, n, Ti, Te) / 2.0;
+		Xi = Xi_i(V, phi(0), Ti, Te, omega); //+ AmbipolarPhi(V, n, Ti, Te) / 2.0;
 	}
 	else
 	{
@@ -673,15 +672,12 @@ Real MirrorPlasmaTest::Somega(RealVector u, RealVector q, RealVector sigma, Real
 // Pastukhov factor
 inline Real MirrorPlasmaTest::Xi_i(Real V, Real phi, Real Ti, Real Te, Real omega) const
 {
-	return CentrifugalPotential(V, omega, Ti, Te); //+ AmbipolarPhi(V, n, Ti, Te) / 2.0;
-												   // CentrifugalPotential(V, omega, Ti, Te) + phi / Ti; //+ 0.5 * R * R * omega * omega / Ti;
+	return CentrifugalPotential(V, omega, Ti, Te) + phi; //+ 0.5 * R * R * omega * omega / Ti;
 }
 
 Real MirrorPlasmaTest::Xi_e(Real V, Real phi, Real Ti, Real Te, Real omega) const
 {
-	return CentrifugalPotential(V, omega, Ti, Te);
-	//+AmbipolarPhi(V, n, Ti, Te) / 2.0;
-	// CentrifugalPotential(V, omega, Ti, Te) - phi / Te;
+	return CentrifugalPotential(V, omega, Ti, Te) - phi;
 }
 
 inline Real MirrorPlasmaTest::AmbipolarPhi(Real V, Real n, Real Ti, Real Te) const
