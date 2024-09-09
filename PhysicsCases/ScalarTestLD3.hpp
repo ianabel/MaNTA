@@ -35,8 +35,8 @@ class ScalarTestLD3 : public TransportSystem {
 		void dSources_dsigma( Index, Values&v , const State &, Position, Time ) override;
 
 
-		Value ScalarG( Index, const DGSoln& , Time ) override;
-		void ScalarGPrime( Index, State &, const DGSoln &, std::function<double( double )>, Interval, Time ) override;
+		Value ScalarGExtended( Index, const DGSoln &, const DGSoln &, Time ) override;
+		void ScalarGPrimeExtended( Index, State &, State &, const DGSoln &, std::function<double( double )>, Interval, Time ) override;
 		void dSources_dScalars( Index, Values &, const State &, Position, Time ) override;
 
 		// Finally one has to provide initial conditions for u & q
@@ -44,13 +44,14 @@ class ScalarTestLD3 : public TransportSystem {
 		Value InitialDerivative( Index, Position ) const override;
 
 		Value InitialScalarValue( Index ) const override;
+        Value InitialScalarDerivative( Index s, const DGSoln& y, const DGSoln &dydt ) const override;
 
 		void initialiseDiagnostics( NetCDFIO &nc ) override;
 		void writeDiagnostics( DGSoln const&, double, NetCDFIO &, size_t ) override;
 
 private:
 	// Put class-specific data here
-	double kappa, alpha, beta, gamma, u0, M0;
+	double kappa, alpha, beta, gamma, u0, M0, gamma_d;
 
 	Value ScaledSource( Position ) const;
 

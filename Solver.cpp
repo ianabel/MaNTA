@@ -84,14 +84,18 @@ void SystemSolver::runSolver(double tFinal)
 	if (ErrorChecker::check_retval((void *)id, "N_VClone", 0))
 		std::runtime_error("Sundials initialization Error, run in debug to find");
 
-	N_VConst(2.0, id);
-
 	DGSoln isDifferential(nVars, grid, k, nScalars, nAux);
 	isDifferential.Map(N_VGetArrayPointer(id));
 	isDifferential.zeroCoeffs();
 	for (Index v = 0; v < nVars; ++v)
 		for (Index i = 0; i < nCells; ++i)
 			isDifferential.u(v).getCoeff(i).second.Constant(k + 1, 1.0);
+
+    for (Index s = 0; s < nScalars; ++s) {
+      if( problem->isScalarDifferential( s ) ) {
+        isDifferential.Scalar(s) = 1.0;
+      }
+    }
 
 	retval = IDASetId(IDA_mem, id);
 	if (ErrorChecker::check_retval(&retval, "IDASetId", 1))

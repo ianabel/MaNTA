@@ -77,9 +77,11 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 	y.AssignQ(initial_q);
 
 	y.EvaluateLambda();
+    dydt.zeroCoeffs();
 
-	for ( Index s = 0; s < nScalars; ++s )
+	for ( Index s = 0; s < nScalars; ++s ) {
 		y.Scalar( s ) = problem->InitialScalarValue( s );
+    }
 
     auto initial_aux = std::bind_front( &TransportSystem::InitialAuxValue, problem );
     y.AssignAux( initial_aux );
@@ -87,7 +89,6 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 	ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
 
     // Zero most of dydt, we only have to set it to nonzero values for the differential parts of y
-    dydt.zeroCoeffs();
 
 	auto sigma_wrapper = [this](Index i, const State &s, Position x, Time t) { return -problem->SigmaFn(i, s, x, t); };
 	y.AssignSigma(sigma_wrapper);
@@ -148,6 +149,12 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 			// <cellwise derivative matrix> * dydt.u( var ).getCoeff( i ).second;
 		}
 	}
+
+	for ( Index s = 0; s < nScalars; ++s ) {
+        if( problem->isScalarDifferential( s ) ) {
+            dydt.Scalar(s) = problem->InitialScalarDerivative( s, y, dydt );
+        }
+    }
 }
 
 void SystemSolver::ApplyDirichletBCs(DGSoln &Y)

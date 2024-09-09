@@ -25,12 +25,16 @@
 
 	J_exact = [ - Kappa du/dx ]_( x = 1 ) - [ - Kappa du/dx ]_( x = -1 )
 
-	but we use
+	but we use a PID controller on top of that to keep M constant:
 
 	E = M - M(t=0)
-	J = gamma * E + J_exact
+	J = -gamma * E + gamma_d * dE/dt + gamma_I * Int_0^t ( E(t') dt' ) + J_exact
 
-	to try and keep M at the initial value
+    to handle the integral term, we add on
+
+    dI/dt = E
+
+    and treat I as a third scalar
 
  */
 
@@ -55,7 +59,8 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const&)
 	kappa = toml::find_or(DiffConfig, "Kappa", 1.0);
 	alpha = toml::find_or(DiffConfig, "alpha", 0.2);
 	beta = toml::find_or(DiffConfig, "beta", 1.0);
-	gamma = toml::find_or(DiffConfig, "gamma", 5.0);
+	gamma = toml::find_or(DiffConfig, "gamma", 1.0);
+	gamma_d = toml::find_or(DiffConfig, "gamma_d", 0.0);
 	u0 = toml::find_or(DiffConfig, "u0", 0.1);
 
 	M0 = 2*u0 + 4*beta/std::numbers::pi;
@@ -133,8 +138,9 @@ Value ScalarTestLD3::InitialDerivative(Index, Position x) const
 	return -( beta * std::numbers::pi / 2.0 )*std::sin( std::numbers::pi * x / 2.0 );
 }
 
-Value ScalarTestLD3::ScalarG( Index s, const DGSoln & y, Time )
+Value ScalarTestLD3::ScalarGExtended( Index s, const DGSoln & y, const DGSoln & dydt, Time )
 {
+    double dEdt = dydt.Scalar(0);
 	double E = y.Scalar(0);
 	double J = y.Scalar(1);
 	if( s == 0 ) {
@@ -146,15 +152,16 @@ Value ScalarTestLD3::ScalarG( Index s, const DGSoln & y, Time )
 	} else if ( s == 1 ) {
 		// J = -gamma * E + [ sigma(x = +1) - sigma(x = -1) ]
 		// => G_1 = J + gamma * E - [ sigma(x = +1) - sigma(x = -1) ]
-		return J + gamma * E - ( y.sigma( 0 )( 1 ) - y.sigma( 0 )( -1 ) );
+		return J + gamma * E - gamma_d * dEdt - ( y.sigma( 0 )( 1 ) - y.sigma( 0 )( -1 ) );
 	} else {
 		throw std::logic_error("scalar index > nScalars");
 	}
 }
 
-void ScalarTestLD3::ScalarGPrime( Index scalarIndex, State &s, const DGSoln &y, std::function<double( double )> P, Interval I, Time )
+void ScalarTestLD3::ScalarGPrimeExtended( Index scalarIndex, State &s, State &out_dt, const DGSoln &y, std::function<double( double )> P, Interval I, Time )
 {
     s.zero();
+    out_dt.zero();
 	if ( scalarIndex == 0 ) {
 		s.Flux[ 0 ] = 0.0; // d G_0 / d sigma
 		s.Derivative[ 0 ] = 0.0; // d G_0 / d (u')
@@ -171,14 +178,11 @@ void ScalarTestLD3::ScalarGPrime( Index scalarIndex, State &s, const DGSoln &y, 
 			s.Flux[ 0 ] -= P( I.x_u );
 		if ( abs( I.x_l + 1 ) < 1e-9 )
 			s.Flux[ 0 ] += P( I.x_l );
-		// dG_1 / d (u')
-		s.Derivative[ 0 ] = 0.0;
-		// dG_1 / du (at fixed sigma & E so no u dependence)
-		s.Variable[ 0 ] = 0.0;
 		// dG_1/dE
 		s.Scalars[ 0 ] = gamma;
 		// dG_1/dJ
 		s.Scalars[ 1 ] = 1.0;
+        out_dt.Scalars[ 0 ] = -gamma_d;
 	} else {
 		throw std::logic_error("scalar index > nScalars");
 	}
@@ -199,6 +203,18 @@ Value ScalarTestLD3::InitialScalarValue( Index s ) const
 		return -kappa * ( InitialDerivative( 0, 1 ) - InitialDerivative( 0, -1 ) );
 	else
 		throw std::logic_error("scalar index > nScalars");
+}
+
+Value ScalarTestLD3::InitialScalarDerivative( Index s, const DGSoln& y, const DGSoln &dydt ) const
+{
+	// Our job to make sure this is consistent!
+	if( s == 0 ) // dE/dt at t=0
+    {
+        double Mdot = boost::math::quadrature::gauss_kronrod<double, 31>::integrate( [ & ]( double x ){ return dydt.u( 0 )( x );}, -1, 1 );
+        return Mdot;
+    }
+	else
+		throw std::logic_error("Initial derivative called for algebraic (non-differential) scalar");
 }
 
 void ScalarTestLD3::initialiseDiagnostics( NetCDFIO &nc )
