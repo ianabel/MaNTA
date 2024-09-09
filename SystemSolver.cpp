@@ -83,8 +83,10 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 		y.Scalar( s ) = problem->InitialScalarValue( s );
     }
 
-    auto initial_aux = std::bind_front( &TransportSystem::InitialAuxValue, problem );
-    y.AssignAux( initial_aux );
+    if( nAux > 0 ) {
+        auto initial_aux = std::bind_front( &TransportSystem::InitialAuxValue, problem );
+        y.AssignAux( initial_aux );
+    }
 
 	ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
 

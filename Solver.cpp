@@ -146,19 +146,20 @@ void SystemSolver::runSolver(double tFinal)
 	N_Vector wgt;
 
 	if (physics_debug)
-	{
-		wgt = N_VClone(res);
-		dydt_out.open(baseName + ".dydt.dat");
-		dydt_out << "# dydt before CalcIC" << std::endl;
-		print(dydt_out, t0, nOut, dYdt);
-		res_out.open(baseName + ".res.dat");
-		residual(t0, Y, dYdt, res);
-		IDAEwtSet(Y, wgt, IDA_mem);
-		res_out << "# Residual norm at t = " << t0 << " (pre-calcIC) is " << N_VWrmsNorm(res, wgt) << std::endl;
-		print(res_out, t0, nOut, res);
-		out0 << "# t = " << t0 << " (pre-calcIC) " << std::endl;
-		print(out0, t0, nOut, true);
-	}
+    {
+        wgt = N_VClone(res);
+        dydt_out.open(baseName + ".dydt.dat");
+        dydt_out << "# dydt before CalcIC" << std::endl;
+        print(dydt_out, t0, nOut, dYdt);
+        res_out.open(baseName + ".res.dat");
+        residual(t0, Y, dYdt, res);
+        getErrorWeights(Y, wgt);
+        double residual_val = N_VWrmsNorm(res, wgt);
+        res_out << "# Residual norm at t = " << t0 << " (pre-calcIC) is " << residual_val << std::endl;
+        print(res_out, t0, nOut, res);
+        out0 << "# t = " << t0 << " (pre-calcIC) " << std::endl;
+        print(out0, t0, nOut, true);
+    }
 
 	//------------------------------Solve------------------------------
 	// Update initial solution to be within tolerance of the residual equation

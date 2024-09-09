@@ -158,6 +158,11 @@ public:
 
 			lambda_[i] = other.lambda_[i];
 		}
+        mu_ = other.mu_;
+        for(Index i = 0; i < nAux; ++i) 
+        {
+            aux_[i].copy(other.aux_[i]);
+        }
 	}
 
 	DGSoln &operator+=(DGSoln const &other)

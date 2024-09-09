@@ -27,8 +27,8 @@
 
 	but we use a PID controller on top of that to keep M constant:
 
-	E = M - M(t=0)
-	J = -gamma * E + gamma_d * dE/dt + gamma_I * Int_0^t ( E(t') dt' ) + J_exact
+	E = M(t=0) - M
+	J = gamma * E + gamma_d * dE/dt + gamma_I * Int_0^t ( E(t') dt' ) + J_exact
 
     to handle the integral term, we add on
 
@@ -141,21 +141,20 @@ Value ScalarTestLD3::InitialDerivative(Index, Position x) const
 Value ScalarTestLD3::ScalarGExtended( Index s, const DGSoln & y, const DGSoln & dydt, Time )
 {
     double dEdt = dydt.Scalar(0);
-	double E = y.Scalar(0);
-	double J = y.Scalar(1);
-	if( s == 0 ) {
-		// E = (M - M0)
-		// => G_0 = E - (M-M0)
-
-		double M = boost::math::quadrature::gauss_kronrod<double, 31>::integrate( [ & ]( double x ){ return y.u( 0 )( x );}, -1, 1 );
-		return E - (M - M0);
-	} else if ( s == 1 ) {
-		// J = -gamma * E + [ sigma(x = +1) - sigma(x = -1) ]
-		// => G_1 = J + gamma * E - [ sigma(x = +1) - sigma(x = -1) ]
-		return J + gamma * E - gamma_d * dEdt - ( y.sigma( 0 )( 1 ) - y.sigma( 0 )( -1 ) );
-	} else {
-		throw std::logic_error("scalar index > nScalars");
-	}
+    double E = y.Scalar(0);
+    double J = y.Scalar(1);
+    if( s == 0 ) {
+        // E = (M0 - M)
+        // => G_0 = E - (M-M0)
+        double M = boost::math::quadrature::gauss_kronrod<double, 31>::integrate( [ & ]( double x ){ return y.u( 0 )( x );}, -1, 1 );
+        return E - (M - M0);
+    } else if ( s == 1 ) {
+        // J = gamma * E + gamma_d * dE/dt + [ sigma(x = +1) - sigma(x = -1) ]
+        // => G_1 = J - gamma * E - gamma_d * dE/dt - [ sigma(x = +1) - sigma(x = -1) ]
+        return J - gamma * E - gamma_d * dEdt - ( y.sigma( 0 )( 1 ) - y.sigma( 0 )( -1 ) );
+    } else {
+        throw std::logic_error("scalar index > nScalars");
+    }
 }
 
 void ScalarTestLD3::ScalarGPrimeExtended( Index scalarIndex, State &s, State &out_dt, const DGSoln &y, std::function<double( double )> P, Interval I, Time )
@@ -179,7 +178,7 @@ void ScalarTestLD3::ScalarGPrimeExtended( Index scalarIndex, State &s, State &ou
 		if ( abs( I.x_l + 1 ) < 1e-9 )
 			s.Flux[ 0 ] += P( I.x_l );
 		// dG_1/dE
-		s.Scalars[ 0 ] = gamma;
+		s.Scalars[ 0 ] = -gamma;
 		// dG_1/dJ
 		s.Scalars[ 1 ] = 1.0;
         out_dt.Scalars[ 0 ] = -gamma_d;

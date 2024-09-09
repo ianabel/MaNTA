@@ -34,12 +34,6 @@
 
 	u(x) = 0.1 + J*(1-x) + (x>0.2) ? 0 : (25 J/3) * (x - 0.2)^3
 
-	and
-
-	J = 0.198675
-
-    Also implemented as two identical uncoupled copies to check nScalars > 1 is OK
-
 	*/
 
 // Needed to register the class
@@ -98,10 +92,9 @@ Value ScalarTestLD2a::ScaledSource( Position x ) const
 
 Value ScalarTestLD2a::Sources(Index i, const State &s, Position x, Time)
 {
-	double J1 = s.Scalars[ 0 ];
-    double J2 = s.Scalars[ 1 ];
+	double J = s.Scalars[ 0 ];
 
-	return ( J1 + J2 ) * ScaledSource( x );
+	return J * ScaledSource( x );
 }
 
 void ScalarTestLD2a::dSigmaFn_dq(Index, Values &v, const State &, Position, Time)
@@ -145,14 +138,17 @@ Value ScalarTestLD2a::InitialDerivative(Index, Position x) const
 
 Value ScalarTestLD2a::ScalarG( Index i, const DGSoln & y, Time )
 {
-	// J = Int_0^1 u => G[u;J] = J - Int_[0,1] u
+    // J^2 + E^2 - 7 = 0
+    // E - sqrt(6) = 0
 
+    double J = y.Scalar(0);
+    double E = y.Scalar(1);
     switch( i ) {
         case 0:
-            return y.Scalar( 0 ) - a1 * boost::math::quadrature::gauss_kronrod<double, 31>::integrate( [ & ]( double x ){ return y.u( 0 )( x ); }, 0, 1 );
+            return J*J + E*E - 7.0;
             break;
         case 1:
-            return y.Scalar( 1 ) - (1.0 - a1) * boost::math::quadrature::gauss_kronrod<double, 31>::integrate( [ & ]( double x ){ return y.u( 0 )( x ); }, 0, 1 );
+            return E - std::sqrt(6);
             break;
     }
     return 0;
@@ -161,31 +157,33 @@ Value ScalarTestLD2a::ScalarG( Index i, const DGSoln & y, Time )
 void ScalarTestLD2a::ScalarGPrime( Index i, State &s, const DGSoln &y, std::function<double( double )> P, Interval I, Time )
 {
     s.zero();
+    double J = y.Scalar(0);
+    double E = y.Scalar(1);
     if ( i == 0 ) {
-        s.Variable[ 0 ] = -a1 * boost::math::quadrature::gauss_kronrod<double, 31>::integrate( P, I.x_l, I.x_u );
-        s.Scalars[ 0 ] = 1.0;
+        s.Scalars[ 0 ] = 2.0 * J;
+        s.Scalars[ 1 ] = 2.0 * E;
     } else if ( i == 1 ) {
-        s.Variable[ 0 ] = ( a1 - 1.0 ) * boost::math::quadrature::gauss_kronrod<double, 31>::integrate( P, I.x_l, I.x_u );
         s.Scalars[ 1 ] = 1.0;
     }
 }
 
 void ScalarTestLD2a::dSources_dScalars( Index, Values &v, const State &, Position x, Time )
 {
-	v[ 0 ] = a1*ScaledSource( x );
-	v[ 1 ] = (1 - a1)*ScaledSource( x );
+    v.setZero();
+	v[ 0 ] = ScaledSource( x );
 }
 
 Value ScalarTestLD2a::InitialScalarValue( Index s ) const
 {
     switch(s) {
         case 0:
-            return a1 * u0;
+            return 1.0;
             break;
         case 1:
-            return (1.0 - a1) * u0;
+            return std::sqrt(6);
             break;
     }
+    throw std::logic_error("ARGH!");
     return 0.0;
 }
 
