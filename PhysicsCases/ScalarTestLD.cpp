@@ -3,7 +3,7 @@
 
 /*
 	Implementation of the Linear Diffusion case
-    with an uncoupled scalar that satisfies ds/dt = 1
+    with an uncoupled scalar that satisfies ds/dt = s
  */
 
 // Needed to register the class
@@ -27,9 +27,8 @@ ScalarTestLD::ScalarTestLD(toml::value const &config, Grid const&)
 	kappa = toml::find_or(DiffConfig, "Kappa", 1.0);
 	InitialWidth = toml::find_or(DiffConfig, "InitialWidth", 0.2);
 	InitialHeight = toml::find_or(DiffConfig, "InitialHeight", 1.0);
-	Centre = toml::find_or(DiffConfig, "Centre", 0.5);
+	Centre = toml::find_or(DiffConfig, "Centre", 0.0);
 
-	lowerNeumann = toml::find_or(DiffConfig, "LowerNeumann", false);
 }
 
 // Dirichlet Boundary Conditon
@@ -43,7 +42,7 @@ Value ScalarTestLD::UpperBoundary(Index, Time) const
 	return 0.0;
 }
 
-bool ScalarTestLD::isLowerBoundaryDirichlet(Index) const { return !lowerNeumann; };
+bool ScalarTestLD::isLowerBoundaryDirichlet(Index) const { return false; };
 bool ScalarTestLD::isUpperBoundaryDirichlet(Index) const { return true; };
 
 Value ScalarTestLD::SigmaFn(Index, const State &s, Position x, Time)
@@ -51,9 +50,9 @@ Value ScalarTestLD::SigmaFn(Index, const State &s, Position x, Time)
 	return kappa * s.Derivative[0];
 }
 
-Value ScalarTestLD::Sources(Index, const State &, Position, Time)
+Value ScalarTestLD::Sources(Index, const State &, Position x, Time)
 {
-	return 0.0;
+	return 1.0 - x;
 }
 
 void ScalarTestLD::dSigmaFn_dq(Index, Values &v, const State &, Position, Time)

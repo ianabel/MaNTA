@@ -147,7 +147,7 @@ Value ScalarTestLD3::ScalarGExtended( Index s, const DGSoln & y, const DGSoln & 
         // E = (M0 - M)
         // => G_0 = E - (M-M0)
         double M = boost::math::quadrature::gauss_kronrod<double, 31>::integrate( [ & ]( double x ){ return y.u( 0 )( x );}, -1, 1 );
-        return E - (M - M0);
+        return E - (M0-M);
     } else if ( s == 1 ) {
         // J = gamma * E + gamma_d * dE/dt + [ sigma(x = +1) - sigma(x = -1) ]
         // => G_1 = J - gamma * E - gamma_d * dE/dt - [ sigma(x = +1) - sigma(x = -1) ]

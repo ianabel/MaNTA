@@ -47,7 +47,6 @@ class ScalarTestLD : public TransportSystem {
 private:
 	// Put class-specific data here
 	double kappa, InitialWidth, InitialHeight, Centre;
-	bool lowerNeumann;
 
 	// Without this (and the implementation line in ScalarTestLD.cpp)
 	// ManTA won't know how to relate the string 'ScalarTestLD' to the class.
