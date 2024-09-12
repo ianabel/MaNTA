@@ -56,12 +56,23 @@ public:
 		return 0.0;
 	}
 
+	// Only called if you set a scalar to be differential (rather than algebraic)
+	virtual Value InitialScalarDerivative(Index s, const DGSoln &y, const DGSoln &dydt) const
+	{
+		return 0.0;
+	}
+
 	// Scalar functions
 	virtual Value ScalarG(Index, const DGSoln &, Time)
 	{
 		if (nScalars != 0)
 			throw std::logic_error("nScalars > 0 but no scalar G provided");
 		return 0.0;
+	}
+
+	virtual Value ScalarGExtended(Index i, const DGSoln &y, const DGSoln &dydt, Time t)
+	{
+		return ScalarG(i, y, t);
 	}
 
 	virtual void ScalarGPrime(Index i, State &out, const DGSoln &y, std::function<double(double)> phi, Interval I, Time t)
@@ -73,6 +84,11 @@ public:
 	{
 		out_dt.zero();
 		ScalarGPrime(i, out, y, phi, I, t);
+	}
+
+	virtual bool isScalarDifferential(Index i)
+	{
+		return false;
 	}
 
 	virtual void dSources_dScalars(Index, Values &, const State &, Position, Time)

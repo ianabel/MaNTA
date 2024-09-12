@@ -3,6 +3,7 @@
 
 #include <sundials/sundials_linearsolver.h> /* Generic Liner Solver Interface */
 #include <sundials/sundials_types.h>		/* defs of sunrealtype, sunindextype  */
+#include <nvector/nvector_serial.h>
 #include <filesystem>
 
 #include "Types.hpp"
@@ -120,7 +121,7 @@ public:
 
 	void setInputFile(std::string const &fn) { inputFilePath = fn; };
 
-	void setJacEvalY(N_Vector &);
+	void setJacEvalY(N_Vector);
 	int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
 
 private:
@@ -222,6 +223,9 @@ private:
 	double dt0; // initial dt for CalcIC
 	int nOut;
 	double min_step_size;
+
+	int getErrorWeights(N_Vector y, N_Vector ewt);
+	static int getErrorWeights_static(N_Vector, N_Vector, void *);
 };
 
 #endif // SYSTEMSOLVER_HPP

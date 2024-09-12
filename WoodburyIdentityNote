@@ -19,4 +19,12 @@ x = g - [ e * ( B + w * e )^-1 * w ] * g
 
 But B + w * e is a N_scalar x N_scalar matrix which one can just invert directly.
 
-Thus we need ( 1 + N_scalar ) operations of A^-1. 
+Thus we need ( 1 + N_scalar ) operations of A^-1.
+
+
+J = dF/dy + alpha dF/d(dy/dt)
+
+
+
+
+

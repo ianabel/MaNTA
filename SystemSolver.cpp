@@ -80,17 +80,22 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 	y.AssignQ(initial_q);
 
 	y.EvaluateLambda();
+	dydt.zeroCoeffs();
 
 	for (Index s = 0; s < nScalars; ++s)
+	{
 		y.Scalar(s) = problem->InitialScalarValue(s);
+	}
 
-	auto initial_aux = std::bind_front(&TransportSystem::InitialAuxValue, problem);
-	y.AssignAux(initial_aux);
+	if (nAux > 0)
+	{
+		auto initial_aux = std::bind_front(&TransportSystem::InitialAuxValue, problem);
+		y.AssignAux(initial_aux);
+	}
 
 	ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
 
 	// Zero most of dydt, we only have to set it to nonzero values for the differential parts of y
-	dydt.zeroCoeffs();
 
 	auto sigma_wrapper = [this](Index i, const State &s, Position x, Time t)
 	{ return -problem->SigmaFn(i, s, x, t); };
@@ -144,6 +149,14 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 				XMats[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1).inverse() *
 				(-B_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * sigma_vec - D_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * u_vec - E_cellwise[i].block(var * (k + 1), var * 2, k + 1, 2) * lamCell + RF_cellwise[i].block(nVars * (k + 1) + var * (k + 1), 0, k + 1, 1) + S_cellwise);
 			// <cellwise derivative matrix> * dydt.u( var ).getCoeff( i ).second;
+		}
+	}
+
+	for (Index s = 0; s < nScalars; ++s)
+	{
+		if (problem->isScalarDifferential(s))
+		{
+			dydt.Scalar(s) = problem->InitialScalarDerivative(s, y, dydt);
 		}
 	}
 }
@@ -569,6 +582,11 @@ void SystemSolver::updateMatricesForJacSolve()
 		dAux_Mat(MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), yJac, I);
 
 		MXSolvers[i].compute(MX);
+
+		// Set Parts of Matrix due to aux variables
+		dAux_Mat(MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), yJac, I);
+
+		MXSolvers[i].compute(MX);
 	}
 
 	// Construct the N_HDG_DOF x N_Scalar matrix v which
@@ -612,19 +630,13 @@ void SystemSolver::updateMatricesForJacSolve()
 											  { return LegendreBasis::Evaluate(I, l, x); }, I, jt);
 				for (Index v = 0; v < nVars; ++v)
 				{
-					w_map[j].sigma(v).getCoeff(i).second(l) = s.Flux[v];
-					w_map[j].q(v).getCoeff(i).second(l) = s.Derivative[v];
-					w_map[j].u(v).getCoeff(i).second(l) = s.Variable[v];
-				}
-				if (l == 0 && i == 0)
-				{
-					/* dG_i/d(Scalar_j) doesn't depend on cell or test function, so we can just do this once  */
-					for (Index m = 0; m < nScalars; ++m)
-						N_global(m, j) = s.Scalars[m];
+					w_map[j].sigma(v).getCoeff(i).second(l) = s.Flux[v] + alpha * s_dt.Flux[v];
+					w_map[j].q(v).getCoeff(i).second(l) = s.Derivative[v] + alpha * s_dt.Derivative[v];
+					w_map[j].u(v).getCoeff(i).second(l) = s.Variable[v] + alpha * s_dt.Variable[v];
 				}
 			}
 			for (Index m = 0; m < nScalars; ++m)
-				N_global(j, m) = s.Scalars[m];
+				N_global(j, m) = s.Scalars[m] + alpha * s_dt.Scalars[m];
 		}
 	}
 	w_map.clear();
@@ -641,7 +653,7 @@ void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorW
 	new (&lam) VectorWrapper(Y + nCells * localDOF, nVars * (nCells + 1));
 }
 
-void SystemSolver::setJacEvalY(N_Vector &yy)
+void SystemSolver::setJacEvalY(N_Vector yy)
 {
 	DGSoln yyMap(nVars, grid, k, nScalars, nAux);
 	assert(static_cast<size_t>(N_VGetLength(yy)) == yyMap.getDoF());
@@ -705,8 +717,7 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 		for (Index i = 0; i < nScalars; ++i)
 			del_y_scalars(i) = res_g_map.Scalar(i) - N_VDotProd(w[i], delY);
 
-		// factor of sqrt( SQU_DOF * nCells ) because we rescaled the residual function
-		del_y.Scalars() = (1.0 / std::sqrt(SQU_DOF * nCells)) * N_global.inverse() * del_y_scalars;
+		del_y.Scalars() = N_global.inverse() * del_y_scalars;
 
 		for (Index i = 0; i < nScalars; ++i)
 			N_VDestroy(e[i]);
@@ -946,7 +957,7 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 
 	for (Index j = 0; j < nScalars; j++)
 	{
-		res.Scalar(j) = problem->ScalarG(j, Y_h, tres);
+		res.Scalar(j) = problem->ScalarGExtended(j, Y_h, dYdt_h, tres);
 	}
 
 	return 0;
@@ -1035,4 +1046,63 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
 	}
 	out << std::endl;
 	out << std::endl; // Two blank lines needed to make gnuplot happy
+}
+
+int SystemSolver::getErrorWeights(N_Vector y_sundials, N_Vector ewt_sundials)
+{
+	DGSoln y(nVars, grid, k, N_VGetArrayPointer(y_sundials), nScalars, nAux);
+	DGSoln ewt(nVars, grid, k, N_VGetArrayPointer(ewt_sundials), nScalars, nAux);
+	for (Index i = 0; i < nCells; ++i)
+	{
+		double absTol = 1e-8;
+		for (Index v = 0; v < nVars; ++v)
+		{
+			if (atol.size() == 1)
+			{
+				absTol = atol[0];
+			}
+			else if (atol.size() == nVars)
+			{
+				absTol = atol[v];
+			}
+
+			ewt.u(v).getCoeff(i).second = 1.0 / (rtol * abs(y.u(v).getCoeff(i).second.array()) + absTol);
+			ewt.q(v).getCoeff(i).second = 1.0 / (rtol * abs(y.q(v).getCoeff(i).second.array()) + absTol);
+			ewt.sigma(v).getCoeff(i).second = 1.0 / (rtol * abs(y.sigma(v).getCoeff(i).second.array()) + absTol);
+		}
+
+		for (Index a = 0; a < nAux; ++a)
+		{
+			ewt.Aux(a).getCoeff(i).second = 1.0 / (rtol * abs(y.Aux(a).getCoeff(i).second.array()) + absTol);
+		}
+	}
+
+	for (Index v = 0; v < nVars; ++v)
+	{
+
+		double absTol = 1e-8;
+
+		if (atol.size() == 1)
+		{
+			absTol = atol[0];
+		}
+		else if (atol.size() == nVars)
+		{
+			absTol = atol[v];
+		}
+		ewt.lambda(v) = 1.0 / (rtol * abs(y.lambda(v).array()) + absTol);
+	}
+
+	for (Index i = 0; i < nScalars; ++i)
+	{
+		double absTol = atol[0];
+		ewt.Scalar(i) = ::sqrt(localDOF * nCells) / (rtol * abs(y.Scalar(i)) + absTol);
+	}
+
+	return 0;
+}
+
+int SystemSolver::getErrorWeights_static(N_Vector y, N_Vector ewt, void *sys)
+{
+	return reinterpret_cast<SystemSolver *>(sys)->getErrorWeights(y, ewt);
 }

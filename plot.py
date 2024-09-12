@@ -56,7 +56,6 @@ def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_aux = 
                 ax.legend()
                 plt.title("sigma")
 
-
     if (plot_aux):
 
         plt.figure()
@@ -138,12 +137,12 @@ def plot_diagnostics(fname):
 
 
 def main():
-    fname = "./MirrorPlasmaTest1.nc"
+    fname = "./MirrorPlasmaTest.nc"
     plot_nc(fname,plot_u=True,plot_aux=False,include_initial=True)
     # fname = "./MirrorPlasmaTest.nc"
     #plot_nc(fname,False,False,include_initial=True)
     # plot_MMS(fname)
-    plot_diagnostics(fname)
+    #plot_diagnostics(fname)
     plt.show()
     
 
