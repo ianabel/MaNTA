@@ -156,20 +156,33 @@ void AutodiffTransportSystem::dSources_dPhi(Index i, Values &grad, const State &
 // and initial conditions for u & q
 Value AutodiffTransportSystem::InitialValue(Index i, Position x) const
 {
-
-	return InitialFunction(i, x, 0.0).val.val;
+	if (loadInitialConditionsFromFile)
+	{
+		return (*NcFileInitialValues[i])(x);
+	}
+	else
+	{
+		return InitialFunction(i, x, 0.0).val.val;
+	}
 }
 
 Value AutodiffTransportSystem::InitialDerivative(Index i, Position x) const
 {
-	dual2nd pos = x;
-	dual2nd t = 0.0;
-	auto InitialValueFn = [this](Index j, dual2nd X, dual2nd T)
+	if (loadInitialConditionsFromFile)
 	{
-		return InitialFunction(j, X, T);
-	};
-	double deriv = derivative(InitialValueFn, wrt(pos), at(i, pos, t));
-	return deriv;
+		return (*NcFileInitialValues[i]).prime(x);
+	}
+	else
+	{
+		dual2nd pos = x;
+		dual2nd t = 0.0;
+		auto InitialValueFn = [this](Index j, dual2nd X, dual2nd T)
+		{
+			return InitialFunction(j, X, T);
+		};
+		double deriv = derivative(InitialValueFn, wrt(pos), at(i, pos, t));
+		return deriv;
+	}
 }
 
 dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t) const

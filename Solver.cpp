@@ -123,7 +123,7 @@ void SystemSolver::runSolver(double tFinal)
 				tolerances.sigma(v).getCoeff(i).second.setConstant(absTol);
 				tolerances.lambda(v).setConstant(absTol);
 			}
-			else if (atol.size() == nVars)
+			else if (atol.size() >= nVars)
 			{
 				double absTolU, absTolQ, absTolSigma;
 				absTolU = atol[v];
@@ -138,7 +138,10 @@ void SystemSolver::runSolver(double tFinal)
 
 		for (Index a = 0; a < nAux; ++a)
 		{
-			tolerances.Aux(a).getCoeff(i).second.setConstant(atol[0]);
+			if (atol.size() < nVars + nAux)
+				tolerances.Aux(a).getCoeff(i).second.setConstant(atol[0]);
+			else
+				tolerances.Aux(a).getCoeff(i).second.setConstant(atol[a + nVars]);
 		}
 	}
 
@@ -208,7 +211,7 @@ void SystemSolver::runSolver(double tFinal)
 
 	//------------------------------Solve------------------------------
 	// Update initial solution to be within tolerance of the residual equation
-	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, min_step_size);
+	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
 	if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
 	{
 		throw std::runtime_error("IDACalcIC could not complete");

@@ -11,6 +11,7 @@ using spline = boost::math::interpolators::cardinal_cubic_b_spline<double>;
 using Real = autodiff::dual;
 using Real2nd = autodiff::dual2nd;
 using RealVector = autodiff::VectorXdual;
+using Real2ndVector = autodiff::VectorXdual2nd;
 
 class AutodiffTransportSystem : public TransportSystem
 {

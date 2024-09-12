@@ -42,7 +42,7 @@ private:
 			x.val = val;
 			return x;
 		}
-	} // return x ? x > tol : tol; };
+	}
 
 	enum Channel : Index
 	{
@@ -145,13 +145,13 @@ private:
 
 	// Real Xi_i(Real V, Real omega, Real n, Real Ti, Real Te) const;
 	// Real Xi_e(Real V, Real omega, Real n, Real Ti, Real Te) const;
-	Real phi0(RealVector u, RealVector q, Real V) const;
+	Real2nd phi0(Real2ndVector u, Real2nd V) const;
 	Real dphi0dV(RealVector u, RealVector q, Real V) const;
 
 	Real Xi_i(Real V, Real phi, Real Ti, Real Te, Real omega) const;
 	Real Xi_e(Real V, Real phi, Real Ti, Real Te, Real omegae) const;
 	Real AmbipolarPhi(Real V, Real n, Real Ti, Real Te) const;
-	Real ParellelCurrent(Real V, Real omega, Real n, Real Ti, Real Te, Real phi) const;
+	Real ParallelCurrent(Real V, Real omega, Real n, Real Ti, Real Te, Real phi) const;
 	double R_Lower, R_Upper;
 
 	Real RelaxSource(Real A, Real B) const
