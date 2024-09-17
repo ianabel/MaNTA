@@ -269,30 +269,37 @@ Value MirrorPlasmaTest::InitialAuxValue(Index, Position V) const
 	using boost::math::tools::bisect;
 	using boost::math::tools::eps_tolerance;
 
-	double n = InitialValue(Channel::Density, V), p_e = (2. / 3.) * InitialValue(Channel::ElectronEnergy, V), p_i = (2. / 3.) * InitialValue(Channel::IonEnergy, V);
-	double Te = p_e / n;
-	double Ti = p_i / n;
-
-	double R = B->R_V(V);
-
-	double J = n * R * R; // Normalisation of the moment of inertia includes the m_i
-	double omega = InitialValue(Channel::AngularMomentum, V) / J;
-
-	double M = omega * R / sqrt(Te);
-	auto func = [this, &n, &Te, &Ti, &omega, &V](double phi)
+	if (loadInitialConditionsFromFile)
 	{
-		return ParallelCurrent(V, omega, n, Ti, Te, phi);
-	};
+		return (*NcFileInitialAuxValue[0])(V);
+	}
+	else
+	{
+		double n = InitialValue(Channel::Density, V), p_e = (2. / 3.) * InitialValue(Channel::ElectronEnergy, V), p_i = (2. / 3.) * InitialValue(Channel::IonEnergy, V);
+		double Te = p_e / n;
+		double Ti = p_i / n;
 
-	const int digits = std::numeric_limits<double>::digits; // Maximum possible binary digits accuracy for type T.
-	int get_digits = static_cast<int>(digits * 0.6);		// Accuracy doubles with each step, so stop when we have
-															// just over half the digits correct.
-	eps_tolerance<double> tol(get_digits);
+		double R = B->R_V(V);
 
-	const boost::uintmax_t maxit = 20;
-	boost::uintmax_t it = maxit;
-	std::pair<double, double> phi_g = bisect(func, -M, M, tol, it);
-	return phi_g.first + (phi_g.second - phi_g.first) / 2;
+		double J = n * R * R; // Normalisation of the moment of inertia includes the m_i
+		double omega = InitialValue(Channel::AngularMomentum, V) / J;
+
+		double M = omega * R / sqrt(Te);
+		auto func = [this, &n, &Te, &Ti, &omega, &V](double phi)
+		{
+			return ParallelCurrent(V, omega, n, Ti, Te, phi);
+		};
+
+		const int digits = std::numeric_limits<double>::digits; // Maximum possible binary digits accuracy for type T.
+		int get_digits = static_cast<int>(digits * 0.6);		// Accuracy doubles with each step, so stop when we have
+																// just over half the digits correct.
+		eps_tolerance<double> tol(get_digits);
+
+		const boost::uintmax_t maxit = 20;
+		boost::uintmax_t it = maxit;
+		std::pair<double, double> phi_g = bisect(func, -2 * M, 0.0, tol, it);
+		return phi_g.first + (phi_g.second - phi_g.first) / 2;
+	}
 }
 
 Value MirrorPlasmaTest::LowerBoundary(Index i, Time t) const
@@ -619,7 +626,7 @@ Real MirrorPlasmaTest::Spe(RealVector u, RealVector q, RealVector sigma, RealVec
 	Real ParticleEnergy = Te * (1.0 + Xi);
 	Real ParallelLosses = ParticleEnergy * ElectronPastukhovLossRate(V, Xi, n, Te);
 
-	Real RadiationLosses = ParticlePhysicsFactor * BremsstrahlungLosses(n, p_e);
+	Real RadiationLosses = ParticlePhysicsFactor * BremsstrahlungLosses(n, p_e) + CyclotronLosses(V, n, Te);
 
 	Real S = Heating - ParallelLosses - RadiationLosses;
 
@@ -954,12 +961,36 @@ Real MirrorPlasmaTest::BremsstrahlungLosses(Real n, Real pe) const
 {
 	double p0 = n0 * T0;
 	Real Normalization = p0 * T0 * a * B0 * B0 / (electronMass * Om_e(B0) * Om_e(B0) * tau_e(n0, n0 * T0));
-	Real Factor = 2 * 1.69e-32 * 1e-6 * n0 * n0 / Normalization;
+	Real Factor = (1 + Z_eff) * 1.69e-32 * 1e-6 * n0 * n0 / Normalization;
 
 	Real Te_eV = (pe / n) * T0 / ElementaryCharge;
 	Real Pbrem = Factor * n * n * sqrt(Te_eV);
 
 	return Pbrem;
+}
+
+Real MirrorPlasmaTest::CyclotronLosses(Real V, Real n, Real Te) const
+{
+	// NRL formulary with reference values factored out
+	// Return units are W/m^3
+	Real Te_eV = T0 / ElementaryCharge * Te;
+	Real n_e20 = n * n0 / 1e20;
+	Real B_z = B->Bz_R(B->R_V(V)) * B0; // in Tesla
+	Real P_vacuum = 6.21 * n_e20 * Te_eV * B_z * B_z;
+
+	// Characteristic absorption length
+	// lambda_0 = (Electron Inertial Lenght) / ( Plasma Frequency / Cyclotron Frequency )  ; Eq (4) of Tamor
+	//				= (5.31 * 10^-4 / (n_e20)^1/2) / ( 3.21 * (n_e20)^1/2 / B ) ; From NRL Formulary, converted to our units (Tesla for B & 10^20 /m^3 for n_e)
+	Real LambdaZero = (5.31e-4 / 3.21) * (B_z / n_e20);
+	double WallReflectivity = 0.95;
+	Real OpticalThickness = ((R_Upper - R_Lower) / (1.0 - WallReflectivity)) / LambdaZero;
+	// This is the Phi introduced by Trubnikov and later approximated by Tamor
+	Real TransparencyFactor = pow(Te_eV, 1.5) / (200.0 * sqrt(OpticalThickness));
+	// Moderate the vacuum emission by the transparency factor
+	Real Normalization = n0 * T0 * T0 * a * B0 * B0 / (electronMass * Om_e(B0) * Om_e(B0) * tau_e(n0, n0 * T0));
+
+	Real P_cy = P_vacuum * TransparencyFactor / Normalization;
+	return P_cy;
 }
 
 // omega & n are callables
@@ -1152,11 +1183,6 @@ void MirrorPlasmaTest::initialiseDiagnostics(NetCDFIO &nc)
 		return IonElectronEnergyExchange(n(V), p_e(V), p_i(V), V, 0.0).val;
 	};
 
-	Fn dPhi0dV = [this, &u, &q](double V)
-	{
-		return dphi0dV(u(V), q(V), V).val;
-	};
-
 	Fn PotentialHeating = [this, &u, &q, &n, &L, &aux](double V)
 	{
 		Real R = this->B->R_V(V);
@@ -1192,6 +1218,12 @@ void MirrorPlasmaTest::initialiseDiagnostics(NetCDFIO &nc)
 	nc.AddVariable("Heating", "PotentialHeating", "Ion potential heating", "-", PotentialHeating);
 	nc.AddVariable("dPhi0dV", "Phi0 derivative", "-", [this, &u, &q](double V)
 				   { return dphi0dV(u(V), q(V), V).val; });
+	nc.AddVariable("dPhi1dV", "Phi1 derivative", "-", [this, &u, &q, &aux](double V)
+				   {
+		if (nAux > 0)
+			return dphi1dV(u(V), q(V), aux(V)[0], V).val;
+		else
+			return 0.0; });
 }
 
 void MirrorPlasmaTest::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
@@ -1402,4 +1434,11 @@ void MirrorPlasmaTest::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, s
 
 	nc.AppendToVariable("dPhi0dV", [this, &u, &q](double V)
 						{ return dphi0dV(u(V), q(V), V).val; }, tIndex);
+
+	nc.AppendToVariable("dPhi1dV", [this, &u, &q, &aux](double V)
+						{
+		if (nAux > 0)
+			return dphi1dV(u(V), q(V), aux(V)[0], V).val;
+		else
+			return 0.0; }, tIndex);
 }

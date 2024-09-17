@@ -260,6 +260,11 @@ void AutodiffTransportSystem::LoadDataToSpline(const std::string &file)
 
 		NcFileInitialDerivatives.push_back(std::make_unique<spline>(temp_deriv.begin(), temp_deriv.end(), x[0], h));
 	}
+	for (Index i = 0; i < nAux; ++i)
+	{
+		data_file.getVar("AuxVariable" + std::to_string(i)).getVar(start, count, temp.data());
+		NcFileInitialAuxValue.push_back(std::make_unique<spline>(temp.begin(), temp.end(), x[0], h));
+	}
 	data_file.close();
 }
 

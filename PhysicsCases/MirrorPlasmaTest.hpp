@@ -155,6 +155,7 @@ private:
 	Real FusionRate(Real n, Real pi) const;
 	Real TotalAlphaPower(Real n, Real pi) const;
 	Real BremsstrahlungLosses(Real n, Real pe) const;
+	Real CyclotronLosses(Real V, Real n, Real Te) const;
 
 	// Real Xi_i(Real V, Real omega, Real n, Real Ti, Real Te) const;
 	// Real Xi_e(Real V, Real omega, Real n, Real Ti, Real Te) const;

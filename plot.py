@@ -119,17 +119,25 @@ def plot_diagnostics(fname):
     ax.legend()
     plt.title("dphi0dv")
     plt.xlabel("x")
-    for group in data.groups:
-        if (not group.startswith("Var") and not group.startswith("MMS") and not group.startswith("Grid")):
-            for var in data.groups[group].variables:
-                y = np.array(data.groups[group].variables[var])
-                plt.figure()
-                ax = plt.axes()
-                ax.plot(x,y[-1,:],label = var)
-                ax.plot(x,y[0,:],label = var + " t=0")
-                ax.legend()
-                plt.title(data.groups[group].description)
-                plt.xlabel("x")
+    y = np.array(data.variables["dPhi1dV"])
+    plt.figure()
+    ax = plt.axes()
+    ax.plot(x,y[-1,:],label ="dphi1")
+    ax.plot(x,y[0,:],label = "dphi1" + " t=0")
+    ax.legend()
+    plt.title("dphi1dv")
+    plt.xlabel("x")
+    # for group in data.groups:
+    #     if (not group.startswith("Var") and not group.startswith("MMS") and not group.startswith("Grid")):
+    #         for var in data.groups[group].variables:
+    #             y = np.array(data.groups[group].variables[var])
+    #             plt.figure()
+    #             ax = plt.axes()
+    #             ax.plot(x,y[-1,:],label = var)
+    #             ax.plot(x,y[0,:],label = var + " t=0")
+    #             ax.legend()
+    #             plt.title(data.groups[group].description)
+    #             plt.xlabel("x")
 
 
 

@@ -45,6 +45,7 @@ protected:
 	bool loadInitialConditionsFromFile = false;
 	std::string filename;
 	void LoadDataToSpline(const std::string &file);
+	std::vector<std::unique_ptr<spline>> NcFileInitialAuxValue;
 	bool useMMS = false;
 
 	double growth_rate = 0.5;
