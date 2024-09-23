@@ -10,10 +10,10 @@ class CylindricalMagneticField():
         self.Rm0 = Rm0
         f = toml.load(config)
 
-        self.Ri = np.sqrt(f["configuration"]["Lower_boundary"]/np.pi)
-        self.Ro = np.sqrt(f["configuration"]["Upper_boundary"]/np.pi)
+        self.Ri = 0.5*np.sqrt(f["configuration"]["Lower_boundary"]/np.pi)
+        self.Ro = 1.5*np.sqrt(f["configuration"]["Upper_boundary"]/np.pi)
 
-        self.m = 0.0#-self.B0/(2*(self.Ro-self.Ri))
+        self.m = 0.0*self.B0/(2*(self.Ro-self.Ri))
 
         self.R = np.linspace(self.Ri,self.Ro,nPoints)
         
@@ -33,9 +33,9 @@ class CylindricalMagneticField():
 
 def main():
     nPoints = 300
-    B0 = 1.0
-    Rm0 = 3.0
-    config = "./Config/MirrorPlasmaDebug.conf"
+    B0 = 4.5
+    Rm0 = 3.3
+    config = "./Config/MirrorPlasma.conf"
     B = CylindricalMagneticField(B0,Rm0,nPoints,config)
 
     ncfile = Dataset("./Bfield.nc",mode="w",format="NETCDF4")

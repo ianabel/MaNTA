@@ -5,12 +5,17 @@
 #include <autodiff/forward/dual.hpp>
 #include <autodiff/forward/dual/eigen.hpp>
 
+#include <boost/math/interpolators/cardinal_cubic_b_spline.hpp>
+using spline = boost::math::interpolators::cardinal_cubic_b_spline<double>;
+
 using Real = autodiff::dual;
+using Real2nd = autodiff::dual2nd;
 using RealVector = autodiff::VectorXdual;
 
 class AutodiffTransportSystem : public TransportSystem
 {
 public:
+	AutodiffTransportSystem() = default;
 	explicit AutodiffTransportSystem(toml::value const &config, Grid const &, Index nVars, Index nScalars, Index nAux);
 
 	// Implement the TransportSystem interface.
@@ -37,10 +42,23 @@ public:
 protected:
 	Position xR, xL;
 
+	bool loadInitialConditionsFromFile = false;
+	std::string filename;
+	void LoadDataToSpline(const std::string &file);
+	bool useMMS = false;
+
+	double growth_rate = 0.5;
+	double growth = 1.0;
+	virtual Real2nd MMS_Solution(Index i, Real2nd x, Real2nd t);
+
+	void initialiseDiagnostics(NetCDFIO &nc) override;
+	void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override;
+
 private:
 	// API to underlying flux model
-	virtual Real Flux(Index, RealVector, RealVector, Position, Time) = 0;
-	virtual Real Source(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) = 0;
+
+	virtual Real Flux(Index i, RealVector u, RealVector q, Real x, Time t) = 0;
+	virtual Real Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) = 0;
 
 	virtual Real Phi(Index, RealVector, RealVector, RealVector, RealVector, Position, Time)
 	{
@@ -49,6 +67,11 @@ private:
 		else
 			return 0.0;
 	};
+
+	// For loading initial conditions from a netCDF file
+	netCDF::NcFile data_file;
+	std::vector<std::unique_ptr<spline>> NcFileInitialValues;
+	std::vector<std::unique_ptr<spline>> NcFileInitialDerivatives;
 
 	enum class ProfileType
 	{
@@ -65,5 +88,7 @@ private:
 	Vector InitialHeights;
 
 	autodiff::dual2nd DirichletIC(Index i, autodiff::dual2nd x, autodiff::dual2nd t, double u_R, double u_L, double x_L, double x_R) const;
+
+	Value MMS_Source(Index, Position, Time);
 };
 #endif

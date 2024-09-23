@@ -50,7 +50,7 @@ private:
 	Real Flux(Index, RealVector, RealVector, Position, Time) override;
 	Real Source(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) override;
 
-	double ParticleSourceStrength, jRadial;
+	double ParticleSourceStrength, jRadial, SourceFactor;
 
 	// Reference Values
 	constexpr static double ElectronMass = 9.1094e-31;		   // Electron Mass, kg
@@ -90,6 +90,10 @@ private:
 	Real ElectronPastukhovLossRate(double V, Real Xi_e, Real n, Real Te) const;
 	Real IonPastukhovLossRate(double V, Real Xi_i, Real n, Real Ti) const;
 	Real CentrifugalPotential(double V, Real omega, Real Ti, Real Te) const;
+
+	Real FusionRate(Real n, Real pi) const;
+	Real TotalAlphaPower(Real n, Real pi) const;
+	Real BremsstrahlungLosses(Real n, Real pe) const;
 
 	Real Xi_i(Position V, Real omega, Real Ti, Real Te) const;
 	Real Xi_e(Position V, Real omega, Real Ti, Real Te) const;

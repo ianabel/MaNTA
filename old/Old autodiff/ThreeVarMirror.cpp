@@ -183,6 +183,7 @@ Real ThreeVarMirror::Spi_hat(RealVector u, RealVector q, RealVector sigma, Real 
     Real Ppot = 0;
     Real Pvis = 0;
     Real Ppast = 0.0;
+    Real Ppart = 0.0;
 
     if (includeParallelLosses)
     {
@@ -206,10 +207,12 @@ Real ThreeVarMirror::Spi_hat(RealVector u, RealVector q, RealVector sigma, Real 
         Real G = sigma(0); //-Gamma_hat(u, q, x, t);
         // sigma(0);
         //  Gamma_hat(u, q, x, t); // sigma(0); // / (coef);
-        Ppot = -G * dphi0dV(u, q, x, t) + 0.5 * (pow(omega(Rval, t), 2) / M_PI) * G;
+        Ppot = -G * e_charge * B_mid / sqrt(T0 * ionMass) * omega(Rval, t) / (2 * M_PI) * B(Rval, t) + 0.5 * (pow(omega(Rval, t), 2) / M_PI) * G;
+
+        // Ppart = 0.5 * pow(omega(Rval, t), 2) * Rval * Rval * sourceStrength * exp(-1 / sourceWidth * (x - sourceCenter) * (x - sourceCenter));
     }
     Real Pcol = Ci(u(0), u(2), u(1)) * L / (V0 * taue0);
-    Real S = (2. / 3.) * (Ppot + Pcol + Pvis + Ppast);
+    Real S = (2. / 3.) * (Ppot + Pcol + Pvis + Ppast + Ppart);
 
     if (S != S)
         throw std::logic_error("Error compution ion heating sources");
@@ -223,12 +226,22 @@ Real ThreeVarMirror::Spe_hat(RealVector u, RealVector q, RealVector sigma, Real 
     Real Pfus = 0.0;
     Real Pbrem = 0.0;
     Real Ppast = 0.0;
+    Real Ppot = 0.0;
     Real Rm = Bmax / B(x.val, t);
     if (includeParallelLosses)
     {
         Real Xe = Chi_e(u, q, x, t); // phi0(u, q, x, t) * u(0) / u(1) * (1 - 1 / Rm);
         Real Spast = L / (taue0 * V0) * PastukhovLoss(u(0), u(1), Xe, Rm);
         Ppast = u(1) / u(0) * (1 + Xe) * Spast;
+    }
+
+    if (useConstantOmega)
+    {
+        double Rval = R(x.val, t);
+        Real G = sigma(0); //-Gamma_hat(u, q, x, t);
+        // sigma(0);
+        //  Gamma_hat(u, q, x, t); // sigma(0); // / (coef);
+        Ppot = G * e_charge * B_mid / sqrt(T0 * ionMass) * omega(Rval, t) / (2 * M_PI) * B(Rval, t);
     }
 
     //
@@ -245,7 +258,7 @@ Real ThreeVarMirror::Spe_hat(RealVector u, RealVector q, RealVector sigma, Real 
     Pfus = 0.25 * sqrt(1 - 1 / Rm) * 1e6 * 5.6e-13 * n * n * 1e-12 * R; // n *n * 5.6e-13
 
     Real Pcol = Ce(u(0), u(2), u(1)) * L / (V0 * taue0);
-    Real S = 2. / 3. * (Pcol + Ppast + L / (p0 * V0) * (Pfus + Pbrem));
+    Real S = 2. / 3. * (Pcol + Ppot + Ppast + L / (p0 * V0) * (Pfus + Pbrem));
 
     if (S != S)
         throw std::logic_error("Error computing the electron heating sources");
@@ -339,7 +352,9 @@ double ThreeVarMirror::Vprime(double R)
 
 double ThreeVarMirror::B(double x, double t)
 {
-    return Bmid.val; //* (1 + m * (Rval - Rmin)); //* exp(-0.5 * Rval * Rval); // / R(x, t);
+    double m = 0.0;
+    double Rval = R(x, t);
+    return Bmid.val * (1 + m * (Rval - Rmin)); //* exp(-0.5 * Rval * Rval); // / R(x, t);
 }
 
 double ThreeVarMirror::R(double x, double t)

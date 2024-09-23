@@ -51,12 +51,12 @@ Value AuxVarADTest::UpperBoundary(Index, Time t) const
 bool AuxVarADTest::isLowerBoundaryDirichlet(Index) const { return true; };
 bool AuxVarADTest::isUpperBoundaryDirichlet(Index) const { return true; };
 
-Real AuxVarADTest::Flux(Index, RealVector, RealVector q, Position, Time)
+Real AuxVarADTest::Flux(Index i, RealVector, RealVector q, Real, Time)
 {
-    return kappa * q(0);
+    return kappa * q(i);
 }
 
-Real AuxVarADTest::Source(Index, RealVector u, RealVector, RealVector, RealVector phi, Position x, Time)
+Real AuxVarADTest::Source(Index, RealVector u, RealVector, RealVector, RealVector phi, Real x, Time)
 {
     Real U = cos(M_PI_2 * x);
     return kappa * M_PI_2 * M_PI_2 * U + phi(0) - U * U;

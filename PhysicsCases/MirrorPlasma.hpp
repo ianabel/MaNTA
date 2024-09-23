@@ -27,8 +27,7 @@ public:
 	MirrorPlasma(toml::value const &config, Grid const &grid);
 	virtual ~MirrorPlasma() { delete B; };
 
-	virtual Value InitialValue(Index i, Position x) const override;
-	virtual Value InitialDerivative(Index i, Position x) const override;
+	virtual Real2nd InitialFunction(Index i, Real2nd x, Real2nd t) const override;
 
 private:
 	enum Channel : Index
@@ -38,6 +37,8 @@ private:
 		ElectronEnergy = 2,
 		AngularMomentum = 3
 	};
+	std::map<std::string, Index> ChannelMap = {{"Density", Channel::Density}, {"IonEnergy", Channel::IonEnergy}, {"ElectronEnergy", Channel::ElectronEnergy}, {"AngularMomentum", Channel::AngularMomentum}};
+	std::map<Index, bool> ConstantChannelMap = {{Channel::Density, false}, {Channel::IonEnergy, false}, {Channel::ElectronEnergy, false}, {Channel::AngularMomentum, false}};
 
 	enum ParticleSourceType
 	{
@@ -47,17 +48,35 @@ private:
 		Ionization = 3,
 	};
 
+<<<<<<< HEAD
 	double nEdge, TeEdge, TiEdge, OmegaEdge;
 	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakOmega;
 
 	Real Flux(Index, RealVector, RealVector, Position, Time) override;
 	Real Source(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) override;
+=======
+	double nEdge, TeEdge, TiEdge, MEdge;
+	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber, ParallelLossFactor, DragFactor, DragWidth;
+	double DensityWidth;
 
-	double ParticleSourceStrength, jRadial;
+	Real Flux(Index, RealVector, RealVector, Real, Time) override;
+	Real Source(Index, RealVector, RealVector, RealVector, RealVector, Real, Time) override;
+>>>>>>> relax-sources
+
+	Value LowerBoundary(Index i, Time t) const override;
+	Value UpperBoundary(Index i, Time t) const override;
+
+	virtual bool isLowerBoundaryDirichlet(Index i) const override;
+	virtual bool isUpperBoundaryDirichlet(Index i) const override;
+
+	Real2nd MMS_Solution(Index i, Real2nd x, Real2nd t) override;
+
+	double ParticleSourceStrength, ParticleSourceCenter,
+		jRadial, ParticleSourceWidth, UniformHeatSource;
 
 	// Reference Values
 	constexpr static double ElectronMass = 9.1094e-31;		   // Electron Mass, kg
-	constexpr static double IonMass = 1.6726e-27;			   // Ion Mass ( = proton mass) kg
+	constexpr static double IonMass = 2.5 * 1.6726e-27;		   // 2.5* Ion Mass ( = proton mass) kg (DT fusion)
 	constexpr static double ElementaryCharge = 1.60217663e-19; // Coulombs
 	constexpr static double VacuumPermittivity = 8.8541878128e-12;
 
@@ -90,9 +109,15 @@ private:
 
 	CylindricalMagneticField *B;
 
+	Real ParticleSource(double R, double t) const;
+
 	Real ElectronPastukhovLossRate(double V, Real Xi_e, Real n, Real Te) const;
 	Real IonPastukhovLossRate(double V, Real Xi_i, Real n, Real Ti) const;
 	Real CentrifugalPotential(double V, Real omega, Real Ti, Real Te) const;
+
+	Real FusionRate(Real n, Real pi) const;
+	Real TotalAlphaPower(Real n, Real pi) const;
+	Real BremsstrahlungLosses(Real n, Real pe) const;
 
 	Real Xi_i(Position V, Real omega, Real Ti, Real Te) const;
 	Real Xi_e(Position V, Real omega, Real Ti, Real Te) const;

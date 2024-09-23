@@ -34,11 +34,11 @@ BOOST_AUTO_TEST_CASE(systemsolver_init_tests)
 	double tau = 0.5;
 
 	TestDiffusion problem(config_snippet);
-	BOOST_TEST( problem.Centre == 0.0 );
+	BOOST_TEST(problem.Centre == 0.0);
 
 	BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, &problem));
 
-	system->setTau( tau );
+	system->setTau(tau);
 
 	system->resetCoeffs();
 
@@ -46,7 +46,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_init_tests)
 	BOOST_TEST(system->grid == testGrid);
 	BOOST_TEST(system->nVars == 1);
 
-	BOOST_CHECK_NO_THROW( system->initialiseMatrices() );
+	BOOST_CHECK_NO_THROW(system->initialiseMatrices());
 
 	BOOST_TEST((system->A_cellwise[0] - Matrix::Identity(k + 1, k + 1)).norm() < 1e-9);
 	BOOST_TEST((system->A_cellwise[1] - Matrix::Identity(k + 1, k + 1)).norm() < 1e-9);
@@ -111,16 +111,13 @@ BOOST_AUTO_TEST_CASE(systemsolver_init_tests)
 	y0_dot = N_VClone(y0);
 	system->setInitialConditions(y0, y0_dot);
 	// Check y0 & y0dot
-	
-	DGSoln yMap( system->nVars, testGrid, k, N_VGetArrayPointer( y0 ) );
-	Vector lambdaRef( 5 );
+
+	DGSoln yMap(system->nVars, testGrid, k, N_VGetArrayPointer(y0));
+	Vector lambdaRef(5);
 	// Values of exp( -25x^2 ) at 0/0.25/0.5/0.75/1.0
-	lambdaRef << 1.0, ::cos( M_PI/8 ), ::cos( M_PI/4 ), ::cos( 3*M_PI/8 ), 0.0;
-	BOOST_TEST( ( yMap.lambda( 0 ) - lambdaRef ).norm() < 0.025 );
+	lambdaRef << 1.0, ::cos(M_PI / 8), ::cos(M_PI / 4), ::cos(3 * M_PI / 8), 0.0;
+	BOOST_TEST((yMap.lambda(0) - lambdaRef).norm() < 0.025);
 }
-
-
-
 
 const toml::value config_snippet_2 = u8R"(
 [DiffusionProblem]
@@ -138,18 +135,18 @@ BOOST_AUTO_TEST_CASE(systemsolver_multichannel_init_tests)
 	SystemSolver *system = nullptr;
 	double tau = 0.5;
 
-	MatrixDiffusion problem(config_snippet_2,testGrid);
+	MatrixDiffusion problem(config_snippet_2, testGrid);
 
 	BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, &problem));
 
-	system->setTau( tau );
+	system->setTau(tau);
 	system->resetCoeffs();
 
 	BOOST_TEST(system->k == k);
 	BOOST_TEST(system->grid == testGrid);
 	BOOST_TEST(system->nVars == 2);
 
-	BOOST_CHECK_NO_THROW( system->initialiseMatrices() );
+	BOOST_CHECK_NO_THROW(system->initialiseMatrices());
 
 	Index N = 2 * (k + 1);
 	BOOST_TEST((system->A_cellwise[0] - Matrix::Identity(N, N)).norm() < 1e-9);
@@ -230,10 +227,10 @@ BOOST_AUTO_TEST_CASE(systemsolver_matrix_tests)
 
 	BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, &problem));
 
-	system->setTau( tau );
+	system->setTau(tau);
 	system->resetCoeffs();
 
-	BOOST_CHECK_NO_THROW( system->initialiseMatrices() );
+	BOOST_CHECK_NO_THROW(system->initialiseMatrices());
 
 	SUNContext ctx;
 	SUNContext_Create(SUN_COMM_NULL, &ctx);
@@ -255,12 +252,12 @@ BOOST_AUTO_TEST_CASE(systemsolver_matrix_tests)
 	}
 
 	delete system;
-	MatrixDiffusion problem2(config_snippet_2,testGrid);
+	MatrixDiffusion problem2(config_snippet_2, testGrid);
 
 	BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, &problem2));
 
-	system->setTau( tau );
-	BOOST_CHECK_NO_THROW( system->initialiseMatrices() );
+	system->setTau(tau);
+	BOOST_CHECK_NO_THROW(system->initialiseMatrices());
 
 	N_VDestroy(y0);
 	N_VDestroy(y0_dot);

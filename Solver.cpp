@@ -106,6 +106,49 @@ void SystemSolver::runSolver(double tFinal)
 	if (ErrorChecker::check_retval(&retval, "IDAInit", 1))
 		std::runtime_error("Sundials initialization Error, run in debug to find");
 
+	// Set tolerances
+	absTolVec = N_VClone(Y);
+	if (ErrorChecker::check_retval((void *)absTolVec, "N_VClone", 0))
+		std::runtime_error("Sundials initialization Error, run in debug to find");
+	VectorWrapper absTolVals(N_VGetArrayPointer(absTolVec), N_VGetLength(absTolVec));
+	absTolVals.setZero();
+
+	DGSoln tolerances(nVars, grid, k, nScalars, nAux);
+	tolerances.Map(N_VGetArrayPointer(absTolVec));
+	for (Index i = 0; i < nCells; ++i)
+	{
+		for (Index v = 0; v < nVars; ++v)
+		{
+			if (atol.size() == 1)
+			{
+				double absTol = atol[0];
+				tolerances.u(v).getCoeff(i).second.setConstant(absTol);
+				tolerances.q(v).getCoeff(i).second.setConstant(absTol);
+				tolerances.sigma(v).getCoeff(i).second.setConstant(absTol);
+				tolerances.lambda(v).setConstant(absTol);
+			}
+			else if (atol.size() == nVars)
+			{
+				double absTolU, absTolQ, absTolSigma;
+				absTolU = atol[v];
+				absTolQ = atol[v];
+				absTolSigma = atol[v];
+				tolerances.u(v).getCoeff(i).second.setConstant(absTolU);
+				tolerances.q(v).getCoeff(i).second.setConstant(absTolQ);
+				tolerances.sigma(v).getCoeff(i).second.setConstant(absTolSigma);
+				tolerances.lambda(v).setConstant(absTolU);
+			}
+		}
+
+		for (Index a = 0; a < nAux; ++a)
+		{
+			tolerances.Aux(a).getCoeff(i).second.setConstant(atol[0]);
+		}
+	}
+
+	for (Index i = 0; i < nScalars; ++i)
+		tolerances.Scalar(i) = atol[0];
+
 	// Steady-state stopping conditions
 	sunrealtype dydt_rel_tol = steady_state_tol;
 	sunrealtype dydt_abs_tol = 1e-2;
@@ -138,7 +181,14 @@ void SystemSolver::runSolver(double tFinal)
 	out0 << "# Columns Headings: " << std::endl;
 	out0 << "# x";
 	for (Index v = 0; v < nVars; ++v)
-		out0 << "\t" << "var" << v << " u" << "\t" << "var" << v << " q" << "\t" << "var" << v << " sigma" << "\t" << "var" << v << " source";
+		out0 << "\t"
+			 << "var" << v << " u"
+			 << "\t"
+			 << "var" << v << " q"
+			 << "\t"
+			 << "var" << v << " sigma"
+			 << "\t"
+			 << "var" << v << " source";
 	out0 << std::endl;
 
 	std::ofstream dydt_out, res_out;
@@ -161,9 +211,9 @@ void SystemSolver::runSolver(double tFinal)
         print(out0, t0, nOut, true);
     }
 
-	//------------------------------Solve------------------------------
+    //------------------------------Solve------------------------------
 	// Update initial solution to be within tolerance of the residual equation
-	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
+	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, min_step_size);
 	if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
 	{
 		throw std::runtime_error("IDACalcIC could not complete");

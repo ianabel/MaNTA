@@ -93,23 +93,6 @@ void NetCDFIO::AppendToVariable(std::string const &name, T const &var, size_t tI
 	variable.putVar({tIndex, 0}, {1, gridpoints.size()}, gridValues.data());
 }
 
-template <typename T>
-void NetCDFIO::AppendToGroup(std::string const &name, size_t tIndex, const std::initializer_list<std::pair<std::string, T>> &vars)
-{
-
-	std::vector<double> gridValues;
-	gridValues.resize(gridpoints.size());
-
-	NcGroup group = data_file.getGroup(name);
-	for (auto &var : vars)
-	{
-		for (size_t i = 0; i < gridpoints.size(); ++i)
-			gridValues[i] = var.second(gridpoints[i]);
-
-		group.getVar(var.first).putVar({tIndex, 0}, {1, gridpoints.size()}, gridValues.data());
-	}
-}
-
 void NetCDFIO::SetOutputGrid(std::vector<double> const &gridpoints_)
 {
 	gridpoints = gridpoints_;
@@ -122,22 +105,6 @@ template <typename T>
 void NetCDFIO::AddVariable(std::string name, std::string description, std::string units, T const &initialValue)
 {
 	NcVar newvar = data_file.addVar(name, netCDF::NcDouble(), {TimeDim, SpaceDim});
-	newvar.putAtt("description", description);
-	if (units != "")
-		newvar.putAtt("units", units);
-	std::vector<double> gridValues;
-	gridValues.resize(gridpoints.size());
-	for (size_t i = 0; i < gridpoints.size(); ++i)
-		gridValues[i] = initialValue(gridpoints[i]);
-
-	newvar.putVar({0, 0}, {1, gridpoints.size()}, gridValues.data());
-}
-
-template <typename T>
-void NetCDFIO::AddVariable(std::string groupName, std::string name, std::string description, std::string units, T const &initialValue)
-{
-	NcGroup group = data_file.getGroup(groupName);
-	NcVar newvar = group.addVar(name, netCDF::NcDouble(), {TimeDim, SpaceDim});
 	newvar.putAtt("description", description);
 	if (units != "")
 		newvar.putAtt("units", units);
@@ -202,6 +169,8 @@ void SystemSolver::initialiseNetCDF(std::string const &NetcdfOutputFile, size_t 
 		nc_output.AddVariable(problem->getVariableName(i), "u", "Value", problem->getVariableUnits(i), y.u(i));
 		nc_output.AddVariable(problem->getVariableName(i), "q", "Derivative", problem->getVariableUnits(i), y.q(i));
 		nc_output.AddVariable(problem->getVariableName(i), "sigma", "Flux", problem->getVariableUnits(i), y.sigma(i));
+		nc_output.AddVariable(problem->getVariableName(i), "S", "Source", problem->getVariableUnits(i), [this, i](double x)
+							  { return problem->Sources(i, y.eval(x), x, 0); });
 	}
 
 	for (Index i = 0; i < nScalars; ++i)
@@ -224,6 +193,8 @@ void SystemSolver::WriteTimeslice(double tNew)
 	for (Index i = 0; i < nVars; ++i)
 	{
 		nc_output.AppendToGroup<DGApprox>(problem->getVariableName(i), tIndex, {{"u", y.u(i)}, {"q", y.q(i)}, {"sigma", y.sigma(i)}});
+		nc_output.AppendToGroup(problem->getVariableName(i), t, "S", [this, i, tNew](double x)
+								{ return problem->Sources(i, y.eval(x), x, tNew); });
 	}
 
 	for (Index i = 0; i < nAux; ++i)

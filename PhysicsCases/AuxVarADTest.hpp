@@ -16,8 +16,13 @@ private:
     bool isLowerBoundaryDirichlet(Index) const override;
     bool isUpperBoundaryDirichlet(Index) const override;
 
+<<<<<<< HEAD
     Real Flux(Index, RealVector, RealVector, Position, Time) override;
     Real Source(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) override;
+=======
+    Real Flux(Index, RealVector, RealVector, Real, Time) override;
+    Real Source(Index, RealVector, RealVector, RealVector, RealVector, Real, Time) override;
+>>>>>>> relax-sources
     Real Phi(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) override;
 
     autodiff::dual2nd InitialFunction(Index i, autodiff::dual2nd x, autodiff::dual2nd t) const override;

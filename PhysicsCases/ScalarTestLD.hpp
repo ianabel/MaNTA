@@ -42,7 +42,11 @@ class ScalarTestLD : public TransportSystem {
 		// Finally one has to provide initial conditions for u & q
 		Value      InitialValue( Index, Position ) const override;
 		Value InitialDerivative( Index, Position ) const override;
+<<<<<<< HEAD
 		Value InitialScalarValue( Index ) const override;
+=======
+		Value InitialScalarValue( Index ) const override { return 0.0; };
+>>>>>>> relax-sources
 
 private:
 	// Put class-specific data here

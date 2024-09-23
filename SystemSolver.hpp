@@ -33,40 +33,44 @@ class SystemSolver
 {
 public:
 	SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *pProblem);
-	SystemSolver( const SystemSolver& ) = delete; // Best practice to define this as deleted. We can't copy this class.
+	SystemSolver(const SystemSolver &) = delete; // Best practice to define this as deleted. We can't copy this class.
 	~SystemSolver();
 
-	void setOutputCadence( double Dt ) { 
-		if( Dt < 0 )
+	void setOutputCadence(double Dt)
+	{
+		if (Dt < 0)
 			throw std::logic_error("Output cadence cannot be negative.");
 		dt = Dt;
 	};
-	void setInitialTimestep( double Dt0 ) { dt0 = Dt0; };
-	void setInitialTime( double T ) { t0 = T; };
-	void setSteadyStateTolerance( double ss_tol ) {
-		if( ss_tol <= 0 )
+	void setInitialTimestep(double Dt0) { dt0 = Dt0; };
+	void setInitialTime(double T) { t0 = T; };
+	void setSteadyStateTolerance(double ss_tol)
+	{
+		if (ss_tol <= 0)
 			throw std::logic_error("Tolerance for steady-state termination cannot be zero or negative.");
 		steady_state_tol = ss_tol;
 		TerminateOnSteadyState = true;
 	};
-	void setNOutput( int nO ) { 
-		if( nO <= 0 )
+	void setNOutput(int nO)
+	{
+		if (nO <= 0)
 			throw std::logic_error("Number of output grid points cannot be zero or negative.");
 		nOut = nO;
 	};
-	void setMinStepSize( double dt_min ) { 
-		if( dt_min <= 0 )
+	void setMinStepSize(double dt_min)
+	{
+		if (dt_min <= 0)
 			throw std::logic_error("Minimum delta t cannot be zero or negative.");
-		min_step_size = dt_min; 
+		min_step_size = dt_min;
 	};
 
-	void setTolerances( std::vector<double> a, double r ) {
-		if( r <= 0 )
+	void setTolerances(std::vector<double> a, double r)
+	{
+		if (r <= 0)
 			throw std::logic_error("Cannot set tolerance to non-positive value");
 		atol = a;
 		rtol = r;
 	};
-
 
 	// Initialises u, q and lambda to satisfy residual equation at t=0
 	void setInitialConditions(N_Vector &Y, N_Vector &dYdt);
@@ -92,8 +96,8 @@ public:
 	void setAlpha(double const a) { alpha = a; }
 
 	// print current output for u and q to output file
-	void print(std::ostream &out, double t, int nOut, bool printSources = false );
-	void print(std::ostream &out, double t, int nOut, N_Vector const &tempY, bool printSources = false );
+	void print(std::ostream &out, double t, int nOut, bool printSources = false);
+	void print(std::ostream &out, double t, int nOut, N_Vector const &tempY, bool printSources = false);
 
 	double getdt() const { return dt; }
 
@@ -109,24 +113,24 @@ public:
 	static SystemSolver *ConstructFromConfig(std::string fname);
 
 	// Initialise
-	void runSolver( double );
+	void runSolver(double);
 
 	void setJacTime(double tt) { jt = tt; };
 	void setTime(double tt) { t = tt; };
 	void setTau(double tau) { tauc = tau; };
 
-	void setInputFile( std::string const& fn ) { inputFilePath = fn; };
+	void setInputFile(std::string const &fn) { inputFilePath = fn; };
 
-	void setJacEvalY( N_Vector );
-	int residual(sunrealtype, N_Vector, N_Vector, N_Vector );
+	void setJacEvalY(N_Vector &);
+	int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
 
 private:
 	Grid grid;
-	unsigned int k;		 // polynomial degree per cell
-	unsigned int nCells; // Total cell count
-	unsigned int nVars;	 // Total number of variables
-	unsigned int nScalars;	 // Any global scalars
-	unsigned int nAux;	 // Any auxiliary constraints
+	unsigned int k;		   // polynomial degree per cell
+	unsigned int nCells;   // Total cell count
+	unsigned int nVars;	   // Total number of variables
+	unsigned int nScalars; // Any global scalars
+	unsigned int nAux;	   // Any auxiliary constraints
 
 	using EigenCellwiseSolver = Eigen::PartialPivLU<Matrix>;
 	using EigenGlobalSolver = Eigen::FullPivLU<Matrix>;
@@ -142,7 +146,7 @@ private:
 	std::vector<Matrix> A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise;
 
 	SUNContext ctx;
-	N_Vector *v,*w;
+	N_Vector *v, *w;
 
 	std::vector<Matrix> W_cellwise;
 	Matrix N_global; // Scalar-scalar coupling matrix
@@ -164,7 +168,11 @@ private:
 
 	void DerivativeSubMatrix(Matrix &mat, void (TransportSystem::*dX_dZ)(Index, Values &, const State &, Position, Time), DGSoln const &Y, Interval I);
 
-	void dSources_dScalars_Mat( Matrix &, DGSoln const&, Interval );
+	void dSources_dScalars_Mat(Matrix &, DGSoln const &, Interval);
+
+	void dSourcedPhi_Mat(Matrix &, DGSoln const &, Interval);
+
+	void dAux_Mat(Eigen::Ref<Matrix>, DGSoln const &, Interval);
 
     void dSourcedPhi_Mat( Matrix &, DGSoln const&, Interval );
 
@@ -173,7 +181,7 @@ private:
 	double resNorm = 0.0; // Exclusively for unit testing purposes
 
 	double dt;
-	double t0,t,jt;
+	double t0, t, jt;
 
 	// Really we should do init in the constructor and not need this flag. TODO
 	bool initialised = false;
@@ -199,7 +207,7 @@ private:
 	void WriteTimeslice(double tNew);
 
 	size_t S_DOF, U_DOF, Q_DOF, AUX_DOF, SQU_DOF;
-    size_t localDOF;
+	size_t localDOF;
 
 	bool TerminateOnSteadyState = false;
 	double steady_state_tol = 1e-3;

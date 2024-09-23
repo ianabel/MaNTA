@@ -12,7 +12,6 @@ private:
     Real Flux(Index, RealVector, RealVector, Position, Time) override;
     Real Source(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) override;
 
-    std::map<std::string, int> ParticleSources = {{"None", 0}, {"Gaussian", 1}};
     int ParticleSource;
     double sourceStrength;
     Vector InitialHeights;
@@ -34,6 +33,10 @@ private:
     Real h0;
     Real omega0;
 
+    // Initial values
+    double nEdge, TeEdge, TiEdge, MEdge;
+    double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber;
+
     Real Gamma_hat(RealVector u, RealVector q, Real x, double t);
     Real qe_hat(RealVector u, RealVector q, Real x, double t);
     Real qi_hat(RealVector u, RealVector q, Real x, double t);
@@ -43,21 +46,26 @@ private:
     Real Spi_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t);
     Real Shi_hat(RealVector u, RealVector q, RealVector sigma, Real x, double t);
 
+    Real ParticleSourceFn(Real x, double t);
     Real phi0(RealVector u, RealVector q, Real x, double t);
     Real dphi0dV(RealVector u, RealVector q, Real x, double t);
     Real Chi_e(RealVector u, RealVector q, Real x, double t);
     Real Chi_i(RealVector u, RealVector q, Real x, double t);
-    bool includeParallelLosses;
+    bool includeParallelLosses, includeRadiation, includeAlphas;
+    double BfieldSlope, ParallelLossFactor, DragWidth, DragFactor;
 
     double Rmin;
     double Rmax;
 
-    double R(double x, double t);
+    double R(double x, double t) const;
     double psi(double R);
     double V(double R);
     double Vprime(double R);
     double B(double x, double t);
     double Bmax;
+
+    void initialiseDiagnostics(NetCDFIO &nc) override;
+    void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override;
 
     REGISTER_PHYSICS_HEADER(FourVarMirror)
 };
