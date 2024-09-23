@@ -42,7 +42,7 @@ private:
 			x.val = val;
 			return x;
 		}
-	} // return x ? x > tol : tol; };
+	}
 
 	enum Channel : Index
 	{
@@ -65,7 +65,7 @@ private:
 	std::vector<bool> upperBoundaryConditions;
 	std::vector<bool> lowerBoundaryConditions;
 
-	double nEdge, TeEdge, TiEdge, MEdge;
+	double nEdge, TeEdge, TiEdge, MUpper, MLower, MEdge;
 	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber, ParallelLossFactor, DragFactor, DragWidth, ParticlePhysicsFactor, PotentialHeatingFactor, ViscousHeatingFactor, EnergyExchangeFactor;
 	double MaxPastukhov;
 	double DensityWidth;
@@ -96,7 +96,7 @@ private:
 
 	// Reference Values
 	constexpr static double ElectronMass = 9.1094e-31;		   // Electron Mass, kg
-	constexpr static double IonMass = 2.5 * 1.6726e-27;		   // 2.5* Ion Mass ( = proton mass) kg (DT fusion)
+	constexpr static double IonMass = 2.0 * 1.6726e-27;		   // 2.5* Ion Mass ( = proton mass) kg (DT fusion)
 	constexpr static double ElementaryCharge = 1.60217663e-19; // Coulombs
 	constexpr static double VacuumPermittivity = 8.8541878128e-12;
 
@@ -105,6 +105,7 @@ private:
 	constexpr static double T0 = 1000.0 * ElementaryCharge, T0eV = T0 / ElementaryCharge;
 	constexpr static double B0 = 1.0; // Reference field in T
 	constexpr static double a = 1.0;  // Reference length in m
+	constexpr static double Z_eff = 3.0;
 
 	Real Gamma(RealVector u, RealVector q, Real x, Time t) const;
 	Real qe(RealVector u, RealVector q, Real x, Time t) const;
@@ -116,10 +117,19 @@ private:
 	Real Somega(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) const;
 
 	// Underlying functions
-	Real LogLambda_ii(Real, Real) const;
-	Real LogLambda_ei(Real, Real) const;
-	Real ElectronCollisionTime(Real, Real) const;
-	Real IonCollisionTime(Real, Real) const;
+
+	template <typename T>
+	T LogLambda_ii(T, T) const;
+
+	template <typename T>
+	T LogLambda_ei(T, T) const;
+
+	template <typename T>
+	T ElectronCollisionTime(T, T) const;
+
+	template <typename T>
+	T IonCollisionTime(T, T) const;
+
 	double ReferenceElectronCollisionTime() const;
 	double ReferenceIonCollisionTime() const;
 
@@ -128,6 +138,7 @@ private:
 	double RhoStarRef() const;
 
 	StraightMagneticField *B;
+
 	// test source
 	double EdgeSourceSize, EdgeSourceWidth;
 
@@ -137,21 +148,32 @@ private:
 
 	Real ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real Te) const;
 	Real IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) const;
-	Real CentrifugalPotential(Real V, Real omega, Real Ti, Real Te) const;
+
+	template <typename T>
+	T CentrifugalPotential(T V, T omega, T Ti, T Te) const;
 
 	Real FusionRate(Real n, Real pi) const;
 	Real TotalAlphaPower(Real n, Real pi) const;
 	Real BremsstrahlungLosses(Real n, Real pe) const;
+	Real CyclotronLosses(Real V, Real n, Real Te) const;
 
 	// Real Xi_i(Real V, Real omega, Real n, Real Ti, Real Te) const;
 	// Real Xi_e(Real V, Real omega, Real n, Real Ti, Real Te) const;
-	Real phi0(RealVector u, RealVector q, Real V) const;
+	template <typename T>
+	T phi0(Eigen::Matrix<T, -1, 1, 0, -1, 1> u, T V) const;
 	Real dphi0dV(RealVector u, RealVector q, Real V) const;
+	Real dphi1dV(RealVector u, RealVector q, Real phi, Real V) const;
+	Real dphidV(RealVector u, RealVector q, RealVector phi, Real V) const;
 
-	Real Xi_i(Real V, Real phi, Real Ti, Real Te, Real omega) const;
-	Real Xi_e(Real V, Real phi, Real Ti, Real Te, Real omegae) const;
+	template <typename T>
+	T Xi_i(T V, T phi, T Ti, T Te, T omega) const;
+
+	template <typename T>
+	T Xi_e(T V, T phi, T Ti, T Te, T omegae) const;
 	Real AmbipolarPhi(Real V, Real n, Real Ti, Real Te) const;
-	Real ParellelCurrent(Real V, Real omega, Real n, Real Ti, Real Te, Real phi) const;
+
+	template <typename T>
+	T ParallelCurrent(T V, T omega, T n, T Ti, T Te, T phi) const;
 	double R_Lower, R_Upper;
 
 	Real RelaxSource(Real A, Real B) const

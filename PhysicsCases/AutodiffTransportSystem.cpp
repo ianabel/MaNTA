@@ -156,20 +156,33 @@ void AutodiffTransportSystem::dSources_dPhi(Index i, Values &grad, const State &
 // and initial conditions for u & q
 Value AutodiffTransportSystem::InitialValue(Index i, Position x) const
 {
-
-	return InitialFunction(i, x, 0.0).val.val;
+	if (loadInitialConditionsFromFile)
+	{
+		return (*NcFileInitialValues[i])(x);
+	}
+	else
+	{
+		return InitialFunction(i, x, 0.0).val.val;
+	}
 }
 
 Value AutodiffTransportSystem::InitialDerivative(Index i, Position x) const
 {
-	dual2nd pos = x;
-	dual2nd t = 0.0;
-	auto InitialValueFn = [this](Index j, dual2nd X, dual2nd T)
+	if (loadInitialConditionsFromFile)
 	{
-		return InitialFunction(j, X, T);
-	};
-	double deriv = derivative(InitialValueFn, wrt(pos), at(i, pos, t));
-	return deriv;
+		return (*NcFileInitialValues[i]).prime(x);
+	}
+	else
+	{
+		dual2nd pos = x;
+		dual2nd t = 0.0;
+		auto InitialValueFn = [this](Index j, dual2nd X, dual2nd T)
+		{
+			return InitialFunction(j, X, T);
+		};
+		double deriv = derivative(InitialValueFn, wrt(pos), at(i, pos, t));
+		return deriv;
+	}
 }
 
 dual2nd AutodiffTransportSystem::InitialFunction(Index i, dual2nd x, dual2nd t) const
@@ -246,6 +259,11 @@ void AutodiffTransportSystem::LoadDataToSpline(const std::string &file)
 		NcFileInitialValues.push_back(std::make_unique<spline>(temp.begin(), temp.end(), x[0], h, temp_deriv.front(), temp_deriv.back()));
 
 		NcFileInitialDerivatives.push_back(std::make_unique<spline>(temp_deriv.begin(), temp_deriv.end(), x[0], h));
+	}
+	for (Index i = 0; i < nAux; ++i)
+	{
+		data_file.getVar("AuxVariable" + std::to_string(i)).getVar(start, count, temp.data());
+		NcFileInitialAuxValue.push_back(std::make_unique<spline>(temp.begin(), temp.end(), x[0], h));
 	}
 	data_file.close();
 }
@@ -324,26 +342,28 @@ void AutodiffTransportSystem::initialiseDiagnostics(NetCDFIO &nc)
 			nc.AddVariable("AuxG", "Aux" + std::to_string(i), "Auxiliary function", "-", [this, i](double x)
 						   { return this->InitialAuxValue(i, x); });
 	}
-
-	nc.AddGroup("MMSSource", "MMS sources");
-	for (Index j = 0; j < nVars; ++j)
-		nc.AddVariable("MMSSource", "Var" + std::to_string(j), "MMS source", "-", [this, j](double x)
-					   { return this->MMS_Source(j, x, 0.0); });
+	if (useMMS)
+	{
+		nc.AddGroup("MMSSource", "MMS sources");
+		for (Index j = 0; j < nVars; ++j)
+			nc.AddVariable("MMSSource", "Var" + std::to_string(j), "MMS source", "-", [this, j](double x)
+						   { return this->MMS_Source(j, x, 0.0); });
+	}
 }
 
 void AutodiffTransportSystem::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
 {
 	if (nAux > 0)
 	{
-		nc.AddGroup("AuxG", "Auxiliary functions");
 		for (Index i = 0; i < nAux; ++i)
 			nc.AppendToGroup("AuxG", tIndex, "Aux" + std::to_string(i), [this, i, &y, &t](double x)
 							 {  State s = y.eval(x);
 								return this->AuxG(i, s, x, t); });
 	}
-
-	for (Index j = 0; j < nVars; ++j)
-		nc.AppendToGroup("MMSSource", tIndex, "Var" + std::to_string(j), [this, j, t](double x)
-						 { return this->MMS_Source(j, x, t); });
->>>>>>> relax-sources
+	if (useMMS)
+	{
+		for (Index j = 0; j < nVars; ++j)
+			nc.AppendToGroup("MMSSource", tIndex, "Var" + std::to_string(j), [this, j, t](double x)
+							 { return this->MMS_Source(j, x, t); });
+	}
 }

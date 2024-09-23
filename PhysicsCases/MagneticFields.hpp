@@ -16,6 +16,8 @@ using spline = boost::math::interpolators::cardinal_cubic_b_spline<double>;
 class StraightMagneticField
 {
 public:
+	StraightMagneticField() = default;
+	StraightMagneticField(double L_z, double B_z, double Rm) : L_z(L_z), B_z(B_z), Rm(Rm) {};
 	template <typename T>
 	T Bz_R(T R) { return B_z; }
 	template <typename T>
@@ -56,12 +58,13 @@ public:
 	template <typename T>
 	double MirrorRatio(T)
 	{
-		return 3.0;
+		return Rm;
 	}
 
 private:
-	double L_z = 1.0;
-	double B_z = 1.0;
+	double L_z = 0.6;
+	double B_z = 0.3;
+	double Rm = 10.0;
 };
 
 class CylindricalMagneticField

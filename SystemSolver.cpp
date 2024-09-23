@@ -22,7 +22,6 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSyst
     S_DOF = k + 1;
     U_DOF = k + 1;
     Q_DOF = k + 1;
-
     SQU_DOF = U_DOF + Q_DOF + S_DOF;
 
     AUX_DOF = k + 1;
@@ -108,7 +107,6 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
             // Evaluate Source Function
             Eigen::VectorXd S_cellwise(k + 1);
             S_cellwise.setZero();
-
             auto const &x_vals = DGApprox::Integrator().abscissa();
             auto const &x_wgts = DGApprox::Integrator().weights();
             const size_t n_abscissa = x_vals.size();
@@ -129,7 +127,6 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
             {
                 double x_val = I.x_l + (1 - x_vals[i]) * I.h() / 2.0;
                 double wgt = x_wgts[i] * (I.h() / 2.0);
-
                 State s = y.eval(x_val);
                 double sourceVal = problem->Sources(var, s, x_val, t);
                 for (Eigen::Index j = 0; j < k + 1; j++)
@@ -268,7 +265,6 @@ void SystemSolver::initialiseMatrices()
                 // C_ij = < psi_i, phi_j * n_x > , where psi_i are edge degrees of
                 // freedom and n_x is the unit normal in the x direction
                 // for a line, edge degrees of freedom are just 1 at each end
-
                 Cvar(0, i) = -LegendreBasis::Evaluate(I, i, I.x_l);
                 Cvar(1, i) = LegendreBasis::Evaluate(I, i, I.x_u);
 
@@ -303,7 +299,6 @@ void SystemSolver::initialiseMatrices()
         CE_vec.block( 2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * 2) = E;
         CE_vec.block( 3 * nVars * (k + 1), 0, nAux * ( k + 1 ), nVars * 2 ).setZero();
         CEBlocks.emplace_back(CE_vec);
-
         C_cellwise.emplace_back(C);
         E_cellwise.emplace_back(E);
 
@@ -534,8 +529,6 @@ void SystemSolver::updateMatricesForJacSolve()
 
         Eigen::MatrixXd Sphi(nVars * (k + 1), nAux * (k + 1));
 
-        Eigen::MatrixXd Sphi(nVars * (k + 1), nAux * (k + 1));
-
         Interval const &I(grid[i]);
         Eigen::MatrixXd MX(nVars * SQU_DOF + nAux * AUX_DOF, nVars * SQU_DOF + nAux * AUX_DOF );
         MX = MBlocks[i];
@@ -645,7 +638,6 @@ void SystemSolver::setJacEvalY( N_Vector yy )
     DGSoln yyMap( nVars, grid, k, nScalars, nAux );
     assert(static_cast<size_t>(N_VGetLength(yy)) == yyMap.getDoF());
     yyMap.Map(N_VGetArrayPointer(yy));
-
     yJac.copy(yyMap); // Deep copy -- yyMap only aliases the N_Vector, this copies the data
 }
 
@@ -1034,10 +1026,10 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
     out << std::endl; // Two blank lines needed to make gnuplot happy
 }
 
-int SystemSolver::getErrorWeights( N_Vector y_sundials, N_Vector ewt_sundials )
+int SystemSolver::getErrorWeights(N_Vector y_sundials, N_Vector ewt_sundials)
 {
-    DGSoln y(nVars, grid, k, N_VGetArrayPointer(y_sundials), nScalars, nAux );
-    DGSoln ewt(nVars, grid, k, N_VGetArrayPointer(ewt_sundials), nScalars, nAux );
+    DGSoln y(nVars, grid, k, N_VGetArrayPointer(y_sundials), nScalars, nAux);
+    DGSoln ewt(nVars, grid, k, N_VGetArrayPointer(ewt_sundials), nScalars, nAux);
     for (Index i = 0; i < nCells; ++i)
     {
         double absTol = 1e-8;
@@ -1052,18 +1044,18 @@ int SystemSolver::getErrorWeights( N_Vector y_sundials, N_Vector ewt_sundials )
                 absTol = atol[v];
             }
 
-            ewt.u(v).getCoeff(i).second = 1.0 / ( rtol * abs( y.u(v).getCoeff(i).second.array() ) + absTol );
-            ewt.q(v).getCoeff(i).second = 1.0 / ( rtol * abs( y.q(v).getCoeff(i).second.array() ) + absTol );
-            ewt.sigma(v).getCoeff(i).second = 1.0 / ( rtol * abs( y.sigma(v).getCoeff(i).second.array() ) + absTol );
+            ewt.u(v).getCoeff(i).second = 1.0 / (rtol * abs(y.u(v).getCoeff(i).second.array()) + absTol);
+            ewt.q(v).getCoeff(i).second = 1.0 / (rtol * abs(y.q(v).getCoeff(i).second.array()) + absTol);
+            ewt.sigma(v).getCoeff(i).second = 1.0 / (rtol * abs(y.sigma(v).getCoeff(i).second.array()) + absTol);
         }
 
         for (Index a = 0; a < nAux; ++a)
         {
-            ewt.Aux(a).getCoeff(i).second = 1.0 / ( rtol * abs( y.Aux(a).getCoeff(i).second.array() ) + absTol );
+            ewt.Aux(a).getCoeff(i).second = 1.0 / (rtol * abs(y.Aux(a).getCoeff(i).second.array()) + absTol);
         }
     }
 
-    for (Index v = 0; v < nVars; ++v )
+    for (Index v = 0; v < nVars; ++v)
     {
 
         double absTol = 1e-8;
@@ -1076,19 +1068,19 @@ int SystemSolver::getErrorWeights( N_Vector y_sundials, N_Vector ewt_sundials )
         {
             absTol = atol[v];
         }
-        ewt.lambda(v) = 1.0 / ( rtol * abs( y.lambda( v ).array() ) + absTol );
+        ewt.lambda(v) = 1.0 / (rtol * abs(y.lambda(v).array()) + absTol);
     }
 
     for (Index i = 0; i < nScalars; ++i)
     {
         double absTol = atol[0];
-        ewt.Scalar( i ) = ::sqrt( localDOF * nCells ) / ( rtol * abs( y.Scalar( i ) ) + absTol );
+        ewt.Scalar(i) = ::sqrt(localDOF * nCells) / (rtol * abs(y.Scalar(i)) + absTol);
     }
 
     return 0;
 }
 
-int SystemSolver::getErrorWeights_static( N_Vector y, N_Vector ewt, void *sys )
+int SystemSolver::getErrorWeights_static(N_Vector y, N_Vector ewt, void *sys)
 {
-    return reinterpret_cast<SystemSolver*>( sys )->getErrorWeights( y, ewt );
+	return reinterpret_cast<SystemSolver *>(sys)->getErrorWeights(y, ewt);
 }

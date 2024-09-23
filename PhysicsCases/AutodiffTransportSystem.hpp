@@ -11,6 +11,7 @@ using spline = boost::math::interpolators::cardinal_cubic_b_spline<double>;
 using Real = autodiff::dual;
 using Real2nd = autodiff::dual2nd;
 using RealVector = autodiff::VectorXdual;
+using Real2ndVector = autodiff::VectorXdual2nd;
 
 class AutodiffTransportSystem : public TransportSystem
 {
@@ -45,6 +46,7 @@ protected:
 	bool loadInitialConditionsFromFile = false;
 	std::string filename;
 	void LoadDataToSpline(const std::string &file);
+	std::vector<std::unique_ptr<spline>> NcFileInitialAuxValue;
 	bool useMMS = false;
 
 	double growth_rate = 0.5;

@@ -386,19 +386,19 @@ void SlabPlasma::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t 
         else
             return y.u(Channel::Density)(x);
     };
-    auto p_i = [this, &y](double x)
+    auto p_i = [&y](double x)
     {
         return (2. / 3.) * y.u(Channel::IonEnergy)(x);
     };
-    auto p_e = [this, &y](double x)
+    auto p_e = [&y](double x)
     {
         return (2. / 3.) * y.u(Channel::ElectronEnergy)(x);
     };
-    Fn T_i = [this, &p_i, &n](double x)
+    Fn T_i = [&p_i, &n](double x)
     {
         return p_i(x) / n(x);
     };
-    Fn T_e = [this, &p_e, &n](double x)
+    Fn T_e = [&p_e, &n](double x)
     {
         return p_e(x) / n(x);
     };

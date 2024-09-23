@@ -834,27 +834,27 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
 
 void MirrorPlasma::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
 {
-	auto L = [this, &y](double V)
+	auto L = [&y](double V)
 	{
 		return y.u(Channel::AngularMomentum)(V);
 	};
-	auto LPrime = [this, &y](double V)
+	auto LPrime = [&y](double V)
 	{
 		return y.q(Channel::AngularMomentum)(V);
 	};
-	auto n = [this, &y](double V)
+	auto n = [&y](double V)
 	{
 		return y.u(Channel::Density)(V);
 	};
-	auto nPrime = [this, &y](double V)
+	auto nPrime = [&y](double V)
 	{
 		return y.q(Channel::Density)(V);
 	};
-	auto p_i = [this, &y](double V)
+	auto p_i = [ &y](double V)
 	{
 		return (2. / 3.) * y.u(Channel::IonEnergy)(V);
 	};
-	auto p_e = [this, &y](double V)
+	auto p_e = [&y](double V)
 	{
 		return (2. / 3.) * y.u(Channel::ElectronEnergy)(V);
 	};

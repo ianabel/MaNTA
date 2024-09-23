@@ -878,27 +878,27 @@ void MirrorPlasmaLog::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, si
     if (useMMS)
         AutodiffTransportSystem::writeDiagnostics(y, t, nc, tIndex);
 
-    auto L = [this, &y](double V)
+    auto L = [&y](double V)
     {
         return y.u(Channel::AngularMomentum)(V);
     };
-    auto LPrime = [this, &y](double V)
+    auto LPrime = [&y](double V)
     {
         return y.q(Channel::AngularMomentum)(V);
     };
-    auto n = [this, &y](double V)
+    auto n = [&y](double V)
     {
         return exp(y.u(Channel::Density)(V));
     };
-    auto nPrime = [this, &y](double V)
+    auto nPrime = [&y](double V)
     {
         return y.q(Channel::Density)(V);
     };
-    auto p_i = [this, &y, &n](double V)
+    auto p_i = [&y, &n](double V)
     {
         return (2. / 3.) * n(V) * exp(y.u(Channel::IonTemperature)(V));
     };
-    auto p_e = [this, &y, &n](double V)
+    auto p_e = [&y, &n](double V)
     {
         return (2. / 3.) * n(V) * exp(y.u(Channel::ElectronTemperature)(V));
     };

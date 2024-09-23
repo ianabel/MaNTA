@@ -55,7 +55,7 @@ private:
     double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber, ParallelLossFactor, DragFactor, DragWidth, ParticlePhysicsFactor, PotentialHeatingFactor, ViscousHeatingFactor, EnergyExchangeFactor;
     double MaxPastukhov;
     double DensityWidth;
-    bool ZeroEdgeSources;
+    // bool ZeroEdgeSources;
     double ZeroEdgeFactor;
 
     Real Flux(Index, RealVector, RealVector, Real, Time) override;

@@ -16,11 +16,7 @@ class SlabPlasma : public AutodiffTransportSystem
 public:
     SlabPlasma(toml::value const &config, Grid const &grid);
 
-<<<<<<< HEAD
-    Real InitialFunction(Index i, Real x, Real t) const override;
-=======
     Real2nd InitialFunction(Index i, Real2nd x, Real2nd t) const override;
->>>>>>> relax-sources
 
 private:
     enum Channel : Index
@@ -29,10 +25,6 @@ private:
         ElectronEnergy = 1,
         Density = 2
     };
-<<<<<<< HEAD
-    virtual Real Flux(Index, RealVector, RealVector, Position, Time) override;
-    virtual Real Source(Index, RealVector, RealVector, RealVector, Position, Time) override;
-=======
     Real Flux(Index, RealVector, RealVector, Real, Time) override;
     Real Source(Index, RealVector, RealVector, RealVector, RealVector, Real, Time) override;
 
@@ -40,7 +32,6 @@ private:
     {
         return InitialFunction(i, x, t);
     };
->>>>>>> relax-sources
 
     enum DensityType : Index
     {
@@ -53,11 +44,7 @@ private:
     bool isDensityConstant;
     double SourceStrength;
     std::string SelectedDensityProfile;
-<<<<<<< HEAD
-    Real DensityProfile(Real, Real) const;
-=======
     Real2nd DensityProfile(Real2nd, Real2nd) const;
->>>>>>> relax-sources
     Real DensityPrime(Real x, Real t) const;
 
     Real qi(RealVector, RealVector, Real, Time);

@@ -97,7 +97,7 @@ void SystemSolver::runSolver(double tFinal)
       }
     }
 
-	retval = IDASetId(IDA_mem, id);
+    retval = IDASetId(IDA_mem, id);
 	if (ErrorChecker::check_retval(&retval, "IDASetId", 1))
 		std::runtime_error("Sundials initialization Error, run in debug to find");
 
@@ -153,7 +153,7 @@ void SystemSolver::runSolver(double tFinal)
 	sunrealtype dydt_rel_tol = steady_state_tol;
 	sunrealtype dydt_abs_tol = 1e-2;
 
-	retval = IDAWFtolerances(IDA_mem, SystemSolver::getErrorWeights_static );
+	retval = IDAWFtolerances(IDA_mem, SystemSolver::getErrorWeights_static);
 	if (ErrorChecker::check_retval(&retval, "IDAWFtolerances", 1))
 		std::runtime_error("Sundials initialization Error, run in debug to find");
 
@@ -213,7 +213,7 @@ void SystemSolver::runSolver(double tFinal)
 
     //------------------------------Solve------------------------------
 	// Update initial solution to be within tolerance of the residual equation
-	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, min_step_size);
+	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
 	if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
 	{
 		throw std::runtime_error("IDACalcIC could not complete");

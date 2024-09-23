@@ -25,7 +25,6 @@
 
 	J_exact = [ - Kappa du/dx ]_( x = 1 ) - [ - Kappa du/dx ]_( x = -1 )
 
-<<<<<<< HEAD
 	but we use a PID controller on top of that to keep M constant:
 
 	E = M(t=0) - M
@@ -36,21 +35,13 @@
     dI/dt = E
 
     and treat I as a third scalar
-=======
-	but we use
-
-	E = M - M(t=0)
-	J = gamma * E + J_exact
-
-	to try and keep M at the initial value
->>>>>>> relax-sources
 
  */
 
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(ScalarTestLD3);
 
-ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
+ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const&)
 {
 	// Always set nVars in a derived constructor
 	nVars = 1;
@@ -68,19 +59,12 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
 	kappa = toml::find_or(DiffConfig, "Kappa", 1.0);
 	alpha = toml::find_or(DiffConfig, "alpha", 0.2);
 	beta = toml::find_or(DiffConfig, "beta", 1.0);
-<<<<<<< HEAD
 	gamma = toml::find_or(DiffConfig, "gamma", 1.0);
 	gamma_d = toml::find_or(DiffConfig, "gamma_d", 0.0);
 	u0 = toml::find_or(DiffConfig, "u0", 0.1);
 
 	M0 = 2*u0 + 4*beta/std::numbers::pi;
     std::cerr << "M0 : " << M0 << std::endl;
-=======
-	gamma = toml::find_or(DiffConfig, "gamma", 5.0);
-	u0 = toml::find_or(DiffConfig, "u0", 0.1);
-
-	M0 = 2 * u0 + 4 * beta / std::numbers::pi;
->>>>>>> relax-sources
 }
 
 // Dirichlet Boundary Conditon
@@ -102,23 +86,17 @@ Value ScalarTestLD3::SigmaFn(Index, const State &s, Position x, Time)
 	return kappa * s.Derivative[0];
 }
 
-Value ScalarTestLD3::ScaledSource(Position x) const
+Value ScalarTestLD3::ScaledSource( Position x ) const
 {
-	double Ainv = alpha * std::sqrt(std::numbers::pi) * std::erf(1.0 / alpha);
-	return exp(-(x / alpha) * (x / alpha)) / Ainv;
+	double Ainv = alpha * std::sqrt( std::numbers::pi ) * std::erf( 1.0/alpha );
+	return exp( -( x/alpha )*( x/alpha ) )/Ainv;
 }
 
 Value ScalarTestLD3::Sources(Index, const State &s, Position x, Time)
 {
-<<<<<<< HEAD
 	double J = s.Scalars[ 1 ];
 
 	return J * ScaledSource( x ) + 0.5*std::cos( std::numbers::pi * x );
-=======
-	double J = s.Scalars[0];
-
-	return J * ScaledSource(x) + 0.5 * std::cos(std::numbers::pi * x);
->>>>>>> relax-sources
 }
 
 void ScalarTestLD3::dSigmaFn_dq(Index, Values &v, const State &, Position, Time)
@@ -152,15 +130,14 @@ void ScalarTestLD3::dSources_dsigma(Index, Values &v, const State &, Position, T
 // Initialise with a Gaussian at x = 0
 Value ScalarTestLD3::InitialValue(Index, Position x) const
 {
-	return u0 + beta * std::cos(std::numbers::pi * x / 2.0);
+	return u0 + beta*std::cos( std::numbers::pi * x / 2.0 );
 }
 
 Value ScalarTestLD3::InitialDerivative(Index, Position x) const
 {
-	return -(beta * std::numbers::pi / 2.0) * std::sin(std::numbers::pi * x / 2.0);
+	return -( beta * std::numbers::pi / 2.0 )*std::sin( std::numbers::pi * x / 2.0 );
 }
 
-<<<<<<< HEAD
 Value ScalarTestLD3::ScalarGExtended( Index s, const DGSoln & y, const DGSoln & dydt, Time )
 {
     double dEdt = dydt.Scalar(0);
@@ -196,94 +173,29 @@ void ScalarTestLD3::ScalarGPrimeExtended( Index scalarIndex, State &s, State &ou
 		// dG_1 / d sigma = -[ delta(x-1) - delta(x + 1) ] ;
 		// return as functional derivative acting on P
 		s.Flux[ 0 ] = 0.0;
-=======
-Value ScalarTestLD3::ScalarG(Index s, const DGSoln &y, Time)
-{
-	double E = y.Scalar(0);
-	double J = y.Scalar(1);
-	if (s == 0)
-	{
-		// E = (M - M0)
-		// => G_0 = E - (M-M0)
-
-		double M = boost::math::quadrature::gauss_kronrod<double, 31>::integrate([&](double x)
-																				 { return y.u(0)(x); }, -1, 1);
-		return E - (M - M0);
-	}
-	else if (s == 1)
-	{
-		// J = -gamma * E + [ sigma(x = +1) - sigma(x = -1) ]
-		// => G_1 = J + gamma * E - [ sigma(x = +1) - sigma(x = -1) ]
-		return J + gamma * E; //- ( y.sigma( 0 )( 1 ) - y.sigma( 0 )( -1 ) );
-	}
-	else
-	{
-		throw std::logic_error("scalar index > nScalars");
-	}
-}
-
-void ScalarTestLD3::ScalarGPrime(Index scalarIndex, State &s, const DGSoln &y, std::function<double(double)> P, Interval I, Time)
-{
-	if (scalarIndex == 0)
-	{
-		s.Flux[0] = 0.0;	   // d G_0 / d sigma
-		s.Derivative[0] = 0.0; // d G_0 / d (u')
-		// dG_0 / du = - dM/du (as functional derivative, taken as an inner product with P)
-		double P_mass = boost::math::quadrature::gauss_kronrod<double, 31>::integrate(P, -1, 1);
-		s.Variable[0] = -P_mass;
-		s.Scalars[0] = 1.0; // dG_0/dE
-		s.Scalars[1] = 0.0; // dG_0/dJ
-	}
-	else if (scalarIndex == 1)
-	{
-		// dG_1 / d sigma = -[ delta(x-1) - delta(x + 1) ] ;
-		// return as functional derivative acting on P
-		s.Flux[0] = 0.0;
-		/*
->>>>>>> relax-sources
 		if ( abs( I.x_u - 1 ) < 1e-9 )
 			s.Flux[ 0 ] -= P( I.x_u );
 		if ( abs( I.x_l + 1 ) < 1e-9 )
 			s.Flux[ 0 ] += P( I.x_l );
-<<<<<<< HEAD
 		// dG_1/dE
 		s.Scalars[ 0 ] = -gamma;
 		// dG_1/dJ
 		s.Scalars[ 1 ] = 1.0;
         out_dt.Scalars[ 0 ] = -gamma_d;
 	} else {
-=======
-			*/
-		// dG_1 / d (u')
-		s.Derivative[0] = 0.0;
-		// dG_1 / du (at fixed sigma & E so no u dependence)
-		s.Variable[0] = 0.0;
-		// dG_1/dE
-		s.Scalars[0] = gamma;
-		// dG_1/dJ
-		s.Scalars[1] = 1.0;
-	}
-	else
-	{
->>>>>>> relax-sources
 		throw std::logic_error("scalar index > nScalars");
 	}
 }
 
-void ScalarTestLD3::dSources_dScalars(Index, Values &v, const State &, Position x, Time)
+void ScalarTestLD3::dSources_dScalars( Index, Values &v, const State &, Position x, Time )
 {
-<<<<<<< HEAD
     v[ 0 ] = 0.0;
     v[ 1 ] = ScaledSource( x );
-=======
-	v[0] = ScaledSource(x);
->>>>>>> relax-sources
 }
 
-Value ScalarTestLD3::InitialScalarValue(Index s) const
+Value ScalarTestLD3::InitialScalarValue( Index s ) const
 {
 	// Our job to make sure this is consistent!
-<<<<<<< HEAD
 	if( s == 0 ) // E
 		return 0;
 	else if (s == 1) // J
@@ -302,28 +214,17 @@ Value ScalarTestLD3::InitialScalarDerivative( Index s, const DGSoln& y, const DG
     }
 	else
 		throw std::logic_error("Initial derivative called for algebraic (non-differential) scalar");
-=======
-	if (s = 0) // E
-		return 0;
-	else if (s = 1) // J
-		return -kappa * (InitialDerivative(0, 1) - InitialDerivative(0, -1));
-	else
-		throw std::logic_error("scalar index > nScalars");
->>>>>>> relax-sources
 }
 
-void ScalarTestLD3::initialiseDiagnostics(NetCDFIO &nc)
+void ScalarTestLD3::initialiseDiagnostics( NetCDFIO &nc )
 {
-<<<<<<< HEAD
 	nc.AddTimeSeries( "Mass", "Integral of the solution over the domain", "", M0 );
-=======
-	nc.AddTimeSeries("Mass", "Integral of the solution over the domain", "", 2 * u0 + 4 * beta / std::numbers::pi);
->>>>>>> relax-sources
 }
 
-void ScalarTestLD3::writeDiagnostics(DGSoln const &y, double, NetCDFIO &nc, size_t tIndex)
+void ScalarTestLD3::writeDiagnostics( DGSoln const& y, double, NetCDFIO &nc, size_t tIndex )
 {
-	double mass = boost::math::quadrature::gauss_kronrod<double, 31>::integrate([&](double x)
-																				{ return y.u(0)(x); }, -1, 1);
-	nc.AppendToTimeSeries("Mass", mass, tIndex);
+	double mass = boost::math::quadrature::gauss_kronrod<double, 31>::integrate( [ & ]( double x ){ return y.u( 0 )( x );}, -1, 1 );
+	nc.AppendToTimeSeries( "Mass", mass, tIndex );
 }
+
+
