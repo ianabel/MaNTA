@@ -65,7 +65,7 @@ private:
 	std::vector<bool> upperBoundaryConditions;
 	std::vector<bool> lowerBoundaryConditions;
 
-	double nEdge, TeEdge, TiEdge, MEdge;
+	double nEdge, TeEdge, TiEdge, MUpper, MLower, MEdge;
 	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber, ParallelLossFactor, DragFactor, DragWidth, ParticlePhysicsFactor, PotentialHeatingFactor, ViscousHeatingFactor, EnergyExchangeFactor;
 	double MaxPastukhov;
 	double DensityWidth;
@@ -159,7 +159,8 @@ private:
 
 	// Real Xi_i(Real V, Real omega, Real n, Real Ti, Real Te) const;
 	// Real Xi_e(Real V, Real omega, Real n, Real Ti, Real Te) const;
-	Real2nd phi0(Real2ndVector u, Real2nd V) const;
+	template <typename T>
+	T phi0(Eigen::Matrix<T, -1, 1, 0, -1, 1> u, T V) const;
 	Real dphi0dV(RealVector u, RealVector q, Real V) const;
 	Real dphi1dV(RealVector u, RealVector q, Real phi, Real V) const;
 	Real dphidV(RealVector u, RealVector q, RealVector phi, Real V) const;
