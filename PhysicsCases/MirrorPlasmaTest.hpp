@@ -68,7 +68,7 @@ private:
 	double nEdge, TeEdge, TiEdge, MUpper, MLower, MEdge;
 	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber, ParallelLossFactor, DragFactor, DragWidth, ParticlePhysicsFactor, PotentialHeatingFactor, ViscousHeatingFactor, EnergyExchangeFactor;
 	double MaxPastukhov;
-	double DensityWidth;
+	double MachWidth;
 	bool ZeroEdgeSources;
 	double ZeroEdgeFactor;
 	bool useAmbipolarPhi;
@@ -92,11 +92,11 @@ private:
 	double ParticleSourceStrength, ParticleSourceCenter,
 		ParticleSourceWidth, UniformHeatSource;
 
-	mutable double jRadial;
+	mutable double IRadial;
 
 	// Reference Values
 	constexpr static double ElectronMass = 9.1094e-31;		   // Electron Mass, kg
-	constexpr static double IonMass = 2.0 * 1.6726e-27;		   // 2.5* Ion Mass ( = proton mass) kg (DT fusion)
+	constexpr static double IonMass = 2.0 * 1.6726e-27;		   // 2.0* Ion Mass ( =2 * proton mass) kg (D-D plasma)
 	constexpr static double ElementaryCharge = 1.60217663e-19; // Coulombs
 	constexpr static double VacuumPermittivity = 8.8541878128e-12;
 
