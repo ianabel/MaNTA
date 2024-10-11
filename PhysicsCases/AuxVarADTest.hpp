@@ -18,7 +18,7 @@ private:
 
     Real Flux(Index, RealVector, RealVector, Real, Time) override;
     Real Source(Index, RealVector, RealVector, RealVector, RealVector, Real, Time) override;
-    Real Phi(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) override;
+    Real GFunc(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) override;
 
     autodiff::dual2nd InitialFunction(Index i, autodiff::dual2nd x, autodiff::dual2nd t) const override;
     Value InitialAuxValue(Index, Position) const override;

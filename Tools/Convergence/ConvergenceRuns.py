@@ -9,6 +9,7 @@ import sys
 import os
 import scipy
 import tomlkit
+import csv
 
 manta_file = "../../MaNTA"
 
@@ -65,24 +66,27 @@ def write_new_config( out, template, cells, order, rtol = 1e-3, atol = 1e-3 ):
     toml_data["configuration"]["Absolute_tolerance"] = atol
     tomlkit.dump( toml_data, outfile )
 
-for k in (2,3):
-    print("# k = ",k)
-    print("# nCells\tError ")
-    for nCells in (2,4,8,16,32):
-        if( nCells > 7 ):
-            rtol = 1e-8
-            atol = 1e-4
-        else:
-            rtol = 1e-3
-            atol = 1e-2
+for k in (1,2,3):
+    with open("../../figs/conv_dat"+str(k)+".csv","w") as fp:
+        writer = csv.writer(fp, delimiter=",")
+        # print("# k = ",k)
+        # print("# nCells\tError ")
+        for nCells in (2,4,8,16,32):
+            if( nCells > 7 ):
+                rtol = 1e-10
+                atol = 1e-4
+            else:
+                rtol = 1e-3
+                atol = 1e-2
 
-        write_new_config( "nonlin_ss_run.conf", "nonlin_ss.template", nCells, k, rtol, atol );
-        run_manta("nonlin_ss_run.conf")
-        err = get_steady_state_error( "nonlin_ss_run.nc", nonlin_ss )
-        print(nCells,"\t",err)
-        cleanup( "nonlin_ss_run" )
-    print("")
-    print("")
+            write_new_config( "nonlin_ss_run.conf", "nonlin_ss.template", nCells, k, rtol, atol );
+            run_manta("nonlin_ss_run.conf")
+            err = get_steady_state_error( "nonlin_ss_run.nc", nonlin_ss )
+            # print(nCells,"\t",err)
+            writer.writerow([nCells,err])
+            cleanup( "nonlin_ss_run" )
+        # print("")
+        # print("")
 
 
 sys.exit(0)

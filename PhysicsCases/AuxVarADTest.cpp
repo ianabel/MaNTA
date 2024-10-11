@@ -62,7 +62,7 @@ Real AuxVarADTest::Source(Index, RealVector u, RealVector, RealVector, RealVecto
     return kappa * M_PI_2 * M_PI_2 * U + phi(0) - U * U;
 }
 
-Real AuxVarADTest::Phi(Index, RealVector u, RealVector, RealVector, RealVector phi, Position, Time)
+Real AuxVarADTest::GFunc(Index, RealVector u, RealVector, RealVector, RealVector phi, Position, Time)
 {
     return phi(0) - u(0) * u(0);
 }

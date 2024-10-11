@@ -76,7 +76,7 @@ private:
 	Real Flux(Index, RealVector, RealVector, Real, Time) override;
 	Real Source(Index, RealVector, RealVector, RealVector, RealVector, Real, Time) override;
 
-	Real Phi(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) override;
+	Real GFunc(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) override;
 	Value InitialAuxValue(Index, Position) const override;
 
 	Value LowerBoundary(Index i, Time t) const override;

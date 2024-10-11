@@ -38,7 +38,7 @@ public:
 	virtual Value InitialValue(Index i, Position x) const override;
 	virtual Value InitialDerivative(Index i, Position x) const override;
 
-	virtual autodiff::dual2nd InitialFunction(Index i, autodiff::dual2nd x, autodiff::dual2nd t) const;
+	virtual Real2nd InitialFunction(Index i, Real2nd x, Real2nd t) const;
 
 protected:
 	Position xR, xL;
@@ -62,7 +62,7 @@ private:
 	virtual Real Flux(Index i, RealVector u, RealVector q, Real x, Time t) = 0;
 	virtual Real Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) = 0;
 
-	virtual Real Phi(Index, RealVector, RealVector, RealVector, RealVector, Position, Time)
+	virtual Real GFunc(Index, RealVector, RealVector, RealVector, RealVector, Position, Time)
 	{
 		if (nAux > 0)
 			throw std::logic_error("nAux > 0 but no implementation of auxiliary variable provided");

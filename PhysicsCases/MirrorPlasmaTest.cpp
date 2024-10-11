@@ -251,7 +251,7 @@ Real MirrorPlasmaTest::Source(Index i, RealVector u, RealVector q, RealVector si
 	return S;
 }
 
-Real MirrorPlasmaTest::Phi(Index, RealVector u, RealVector, RealVector, RealVector phi, Position V, Time t)
+Real MirrorPlasmaTest::GFunc(Index, RealVector u, RealVector, RealVector, RealVector phi, Position V, Time t)
 {
 
 	Real n = floor(u(Channel::Density), MinDensity), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
@@ -267,8 +267,8 @@ Real MirrorPlasmaTest::Phi(Index, RealVector u, RealVector, RealVector, RealVect
 
 Value MirrorPlasmaTest::InitialAuxValue(Index, Position V) const
 {
-	using boost::math::tools::bisect;
 	using boost::math::tools::eps_tolerance;
+	using boost::math::tools::newton_raphson_iterate;
 
 	if (loadInitialConditionsFromFile)
 	{
@@ -276,19 +276,25 @@ Value MirrorPlasmaTest::InitialAuxValue(Index, Position V) const
 	}
 	else
 	{
-		double n = InitialValue(Channel::Density, V), p_e = (2. / 3.) * InitialValue(Channel::ElectronEnergy, V), p_i = (2. / 3.) * InitialValue(Channel::IonEnergy, V);
-		double Te = p_e / n;
-		double Ti = p_i / n;
+		Real n = InitialValue(Channel::Density, V), p_e = (2. / 3.) * InitialValue(Channel::ElectronEnergy, V), p_i = (2. / 3.) * InitialValue(Channel::IonEnergy, V);
+		Real Te = p_e / n;
+		Real Ti = p_i / n;
 
-		double R = B->R_V(V);
+		Real R = B->R_V(V);
 
-		double J = n * R * R; // Normalisation of the moment of inertia includes the m_i
-		double omega = InitialValue(Channel::AngularMomentum, V) / J;
+		Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
+		Real omega = InitialValue(Channel::AngularMomentum, V) / J;
 
-		double M = omega * R / sqrt(Te);
+		double M = (static_cast<Real>(omega * R / sqrt(Te))).val;
 		auto func = [this, &n, &Te, &Ti, &omega, &V](double phi)
 		{
-			return ParallelCurrent(V, omega, n, Ti, Te, phi);
+			return ParallelCurrent<Real>(static_cast<Real>(V), omega, n, Ti, Te, static_cast<Real>(phi)).val;
+		};
+		auto deriv_func = [this, &n, &Te, &Ti, &omega, &V](double phi)
+		{
+			Real phireal = phi;
+			return derivative([this](Real V, Real omega, Real n, Real Ti, Real Te, Real phi)
+							  { return ParallelCurrent<Real>(V, omega, n, Ti, Te, phi); }, wrt(phireal), at(V, omega, n, Ti, Te, phireal));
 		};
 
 		const int digits = std::numeric_limits<double>::digits; // Maximum possible binary digits accuracy for type T.
@@ -298,8 +304,11 @@ Value MirrorPlasmaTest::InitialAuxValue(Index, Position V) const
 
 		const boost::uintmax_t maxit = 20;
 		boost::uintmax_t it = maxit;
-		std::pair<double, double> phi_g = bisect(func, -0.9 * (M - 1), 0.0, tol, it);
-		return phi_g.first + (phi_g.second - phi_g.first) / 2;
+		// std::pair<double, double> phi_g = bisect(func, -0.9 * (M - 1), 0.0, tol, it);
+		double phi_g = newton_raphson_iterate([&func, &deriv_func](double phi)
+											  { return std::pair<double, double>(func(phi), deriv_func(phi)); }, 0.0, -CentrifugalPotential(V, omega.val, Ti.val, Te.val), 0.01, get_digits, it);
+		return phi_g;
+		// return phi_g.first + (phi_g.second - phi_g.first) / 2;
 	}
 }
 
@@ -346,18 +355,18 @@ inline double MirrorPlasmaTest::RhoStarRef() const
 template <typename T>
 T MirrorPlasmaTest::LogLambda_ei(T ne, T Te) const
 {
-	// double LogLambdaRef = 23.0 - log(2.0) - log(n0) / 2.0 + log(T0) * 1.5;
-	// Real LogLambda = 23.0 - log(2.0) - log(ne * n0) / 2.0 + log(Te * T0) * 1.5;
-	return 1.0; // return LogLambdaRef / LogLambda; // really needs to know Ti as well
+	double LogLambdaRef = 23.0 - log(2.0) - log(n0cgs) / 2.0 + log(T0eV) * 1.5;
+	T LogLambda = 23.0 - log(2.0) - log(ne * n0cgs) / 2.0 + log(Te * T0eV) * 1.5;
+	return LogLambda / LogLambdaRef; // really needs to know Ti as well
 }
 
 // Return this normalised to log Lambda at n0,T0
 template <typename T>
 T MirrorPlasmaTest::LogLambda_ii(T ni, T Ti) const
 {
-	// double LogLambdaRef = 23.0 - log(2.0) - log(n0) / 2.0 + log(T0) * 1.5;
-	// Real LogLambda = 23.0 - log(2.0) - log(ni * n0) / 2.0 + log(Ti * T0) * 1.5;
-	return 1.0; // LogLambdaRef / LogLambda; // really needs to know Ti as well
+	double LogLambdaRef = 24.0 - log(n0cgs) / 2.0 + log(T0eV);
+	T LogLambda = 24.0 - log(n0cgs * ni) / 2.0 + log(T0eV * Ti);
+	return LogLambda / LogLambdaRef; // really needs to know Ti as well
 }
 
 // Return tau_ei (Helander & Sigmar notation ) normalised to tau_ei( n0, T0 )
@@ -372,7 +381,7 @@ T MirrorPlasmaTest::ElectronCollisionTime(T ne, T Te) const
 // Return the actual value in SI units
 inline double MirrorPlasmaTest::ReferenceElectronCollisionTime() const
 {
-	double LogLambdaRef = 24.0 - log(n0) / 2.0 + log(T0); // 24 - ln( n^1/2 T^-1 ) from NRL pg 34
+	double LogLambdaRef = 24.0 - log(n0cgs) / 2.0 + log(T0eV); // 24 - ln( n^1/2 T^-1 ) from NRL pg 34
 	return 12.0 * pow(M_PI, 1.5) * sqrt(ElectronMass) * pow(T0, 1.5) * VacuumPermittivity * VacuumPermittivity / (sqrt(2) * n0 * pow(ElementaryCharge, 4) * LogLambdaRef);
 }
 // Return sqrt(2) * tau_ii (Helander & Sigmar notation ) normalised to tau_ii( n0, T0 )
@@ -386,7 +395,7 @@ inline T MirrorPlasmaTest::IonCollisionTime(T ni, T Ti) const
 // Return the actual value in SI units
 inline double MirrorPlasmaTest::ReferenceIonCollisionTime() const
 {
-	double LogLambdaRef = 23.0 - log(2.0) - log(n0) / 2.0 + log(T0) * 1.5; // 23 - ln( (2n)^1/2 T^-3/2 ) from NRL pg 34
+	double LogLambdaRef = 23.0 - log(2.0) - log(n0cgs) / 2.0 + log(T0eV) * 1.5; // 23 - ln( (2n)^1/2 T^-3/2 ) from NRL pg 34
 	return 12.0 * pow(M_PI, 1.5) * sqrt(IonMass) * pow(T0, 1.5) * VacuumPermittivity * VacuumPermittivity / (n0 * pow(ElementaryCharge, 4) * LogLambdaRef);
 }
 
@@ -525,7 +534,7 @@ Real MirrorPlasmaTest::Sn(RealVector u, RealVector q, RealVector sigma, RealVect
 	Real Xi;
 	if (useAmbipolarPhi)
 	{
-		Xi = Xi_e(V, phi(0), Ti, Te, omega); //+ AmbipolarPhi(V, n, Ti, Te) / 2.0;
+		Xi = Xi_e(V, phi(0), Ti, Te, omega);
 	}
 	else
 	{
@@ -537,7 +546,6 @@ Real MirrorPlasmaTest::Sn(RealVector u, RealVector q, RealVector sigma, RealVect
 
 	Real S = DensitySource - ParallelLosses - FusionLosses;
 
-	S *= floor((1 - 20 * (n - u(Channel::Density)) / MinDensity), 0);
 	Real RelaxDensity = 0.0;
 	if (!isUpperBoundaryDirichlet(Channel::Density) || !isLowerBoundaryDirichlet(Channel::Density))
 		RelaxDensity = RelaxEdge(V, u(Channel::Density), MinDensity);
@@ -570,7 +578,8 @@ Real MirrorPlasmaTest::Spi(RealVector u, RealVector q, RealVector sigma, RealVec
 
 	Real ViscousHeating = ViscousHeatingFactor * IonClassicalAngularMomentumFlux(V, n, Ti, dOmegadV, t) * dOmegadV;
 
-	Real PotentialHeating = -PotentialHeatingFactor * Gamma(u, q, V, t) * (omega * omega / (2 * pi * a) - dphidV(u, q, phi, V)); //(dpdphi1dV(u, q, phi(0), V)));
+	// Use this version since we have no parallel flux in a square well
+	Real PotentialHeating = -PotentialHeatingFactor * Gamma(u, q, V, t) * (omega * omega / (2 * pi * a) - dphidV(u, q, phi, V));
 	Real EnergyExchange = IonElectronEnergyExchange(n, p_e, p_i, V, t);
 
 	// Real ParticleSourceHeating = 0.5 * omega * omega * R * R * ParticleSource(R.val, t);
@@ -673,6 +682,8 @@ Real MirrorPlasmaTest::Somega(RealVector u, RealVector q, RealVector sigma, Real
 
 	return JxB - ParallelLosses + R * RelaxMach + RelaxSource(omega * R * R * u(Channel::Density), L);
 };
+
+// Template function to avoid annoying dual vs. dual2nd behavior
 template <typename T>
 T MirrorPlasmaTest::phi0(Eigen::Matrix<T, -1, 1, 0, -1, 1> u, T V) const
 {
@@ -688,6 +699,7 @@ T MirrorPlasmaTest::phi0(Eigen::Matrix<T, -1, 1, 0, -1, 1> u, T V) const
 	return phi;
 }
 
+// Use the chain rule to calculate dphi0/dV, making sure to set gradient values correctly
 Real MirrorPlasmaTest::dphi0dV(RealVector u, RealVector q, Real V) const
 {
 	auto phi0fn = [this](Real2ndVector u, Real2nd V)
@@ -786,12 +798,12 @@ Real MirrorPlasmaTest::dphi1dV(RealVector u, RealVector q, Real phi, Real V) con
 	}
 
 	// phi1 parts
-
 	Real dJpardphi1_real = dJpardphi1;
 
 	if (phi.grad != 0)
 		dJpardphi1_real.grad = d2Jpardphi12;
 
+	// dphi1dV computed using the chain rule derivative of the parallel current
 	Real dphi1dV = -(dJpardV_real + qdotdJdu) * Ti / dJpardphi1_real + phi * Ti_prime;
 
 	return dphi1dV;
@@ -806,6 +818,7 @@ Real MirrorPlasmaTest::dphidV(RealVector u, RealVector q, RealVector phi, Real V
 
 	return dphidV;
 }
+
 // Energy normalisation is T0, but these return Xi_s / T_s as that is what enters the
 // Pastukhov factor
 template <typename T>
@@ -1021,6 +1034,8 @@ void MirrorPlasmaTest::initialiseDiagnostics(NetCDFIO &nc)
 	double RhoStar = RhoStarRef();
 	double TauNorm = (IonMass / ElectronMass) * (1.0 / (RhoStar * RhoStar)) * (ReferenceElectronCollisionTime());
 	nc.AddScalarVariable("Tau", "Normalising time", "s", TauNorm);
+
+	// lambda wrappers for DGSoln object
 
 	auto L = [this](double V)
 	{
@@ -1253,8 +1268,6 @@ void MirrorPlasmaTest::initialiseDiagnostics(NetCDFIO &nc)
 		return ParticleSourceHeating.val;
 	};
 
-	Fn Relax = [](double V)
-	{ return 0.0; };
 	Real tnorm = n0 * T0 * a * B0 * B0 / (electronMass * Om_e(B0) * Om_e(B0) * tau_e(n0, n0 * T0));
 	nc.AddScalarVariable("tnorm", "time normalization", "s", 1 / tnorm.val);
 	nc.AddScalarVariable("Lnorm", "Length normalization", "m", 1 / a);
@@ -1269,14 +1282,15 @@ void MirrorPlasmaTest::initialiseDiagnostics(NetCDFIO &nc)
 					   { return this->InitialFunction(j, V, 0.0).val.val; });
 	nc.AddVariable("ShearingRate", "Plasma shearing rate", "-", ShearingRate);
 	nc.AddVariable("ElectrostaticPotential", "electrostatic potential (phi0+phi1)", "-", ElectrostaticPotential);
-	nc.AddGroup("RelaxSource", "Relaxation Sources");
-	nc.AddVariable("RelaxSource", "RelaxDensity", "Relaxation density source", "-", Relax);
+
 	nc.AddGroup("MomentumFlux", "Separating momentum fluxes");
 	nc.AddGroup("ParallelLosses", "Separated parallel losses");
 	nc.AddVariable("ParallelLosses", "ElectronParLoss", "Parallel particle losses", "-", ElectronParallelLosses);
 	nc.AddVariable("ParallelLosses", "IonParLoss", "Parallel particle losses", "-", IonParallelLosses);
 	nc.AddVariable("ParallelLosses", "CentrifugalPotential", "Centrifugal potential", "-", phi);
 	nc.AddVariable("ParallelLosses", "AngularMomentumLosses", "Angular momentum loss rate", "-", AngularMomentumLosses);
+
+	// Heat Sources
 	nc.AddGroup("Heating", "Separated heating sources");
 	nc.AddVariable("Heating", "AlphaHeating", "Alpha heat source", "-", AlphaHeating);
 	nc.AddVariable("Heating", "ViscousHeating", "Viscous heat source", "-", ViscousHeating);
@@ -1300,6 +1314,7 @@ void MirrorPlasmaTest::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, s
 
 	AutodiffTransportSystem::writeDiagnostics(y, t, nc, tIndex);
 
+	// lambda wrappers for DGSoln object
 	auto L = [&y](double V)
 	{
 		return y.u(Channel::AngularMomentum)(V);
@@ -1543,25 +1558,12 @@ void MirrorPlasmaTest::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, s
 	Fn AngularMomentumSol = [this, t](double V)
 	{ return this->InitialFunction(Channel::AngularMomentum, V, t).val.val; };
 
-	Fn Relax = [this, &n, &p_e](double V)
-	{
-		double nf = floor(n(V), MinDensity).val;
-		double Te = p_e(V) / nf;
-		return RelaxSource(nf * Te, p_e(V)).val;
-	};
-	// std::vector<std::pair<std::string, const Fn &>> MMSsols;
-	// for (int j = 0; j < nVars; ++j)
-	// {
-	// 	MMSsols.push_back({"MMSVar" + std::to_string(j), );
-	// }
 	// Add the appends for the heating stuff
 	nc.AppendToGroup<Fn>("Heating", tIndex, {{"AlphaHeating", AlphaHeating}, {"ViscousHeating", ViscousHeating}, {"RadiationLosses", RadiationLosses}, {"EnergyExchange", EnergyExchange}, {"IonPotentialHeating", IonPotentialHeating}, {"ElectronPotentialHeating", ElectronPotentialHeating}, {"ParticleSourceHeating", ParticleSourceHeating}});
 
 	nc.AppendToGroup<Fn>("ParallelLosses", tIndex, {{"ElectronParLoss", ElectronParallelLosses}, {"IonParLoss", IonParallelLosses}, {"CentrifugalPotential", phi}, {"AngularMomentumLosses", AngularMomentumLosses}});
 
 	nc.AppendToGroup<Fn>("MMS", tIndex, {{"Var0", DensitySol}, {"Var1", IonEnergySol}, {"Var2", ElectronEnergySol}, {"Var3", AngularMomentumSol}});
-
-	nc.AppendToGroup<Fn>("RelaxSource", tIndex, {{"RelaxDensity", Relax}});
 
 	nc.AppendToVariable("dPhi0dV", [this, &u, &q](double V)
 						{ return dphi0dV(u(V), q(V), V).val; }, tIndex);
