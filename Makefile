@@ -15,7 +15,7 @@ SOLVER = MaNTA
 HEADERS = gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp SystemSolver.hpp ErrorChecker.hpp ErrorTester.hpp TransportSystem.hpp PhysicsCases.hpp DGSoln.hpp
 OBJECTS = $(patsubst %.cpp,%.o,$(SOURCES))
 
-PHYSICS_SOURCES = $(wildcard PhysicsCases/*.cpp)
+PHYSICS_SOURCES = $(wildcard PhysicsCases/*.cpp PhysicsCases/MirrorPlasma/*.cpp)
 PHYSICS_OBJECTS = $(patsubst %.cpp,%.o,$(PHYSICS_SOURCES))
 
 CXXFLAGS += -I.

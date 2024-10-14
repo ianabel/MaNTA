@@ -35,20 +35,34 @@ public:
 	void dSources_dPhi(Index, Values &, const State &, Position, Time) override;
 
 	// and initial conditions for u & q
-	virtual Value InitialValue(Index i, Position x) const override;
-	virtual Value InitialDerivative(Index i, Position x) const override;
+	Value InitialValue(Index i, Position x) const override;
+	Value InitialDerivative(Index i, Position x) const override;
+
+	// Override base initial phi value, add t dependency for MMS solutions
+	Value InitialAuxValue(Index i, Position x) const override
+	{
+		if (loadInitialConditionsFromFile && nAux > 0)
+		{
+			return (*NcFileInitialAuxValue[i])(x);
+		}
+		else
+		{
+			return InitialAuxValue(i, x, 0.0);
+		}
+	};
 
 	virtual Real2nd InitialFunction(Index i, Real2nd x, Real2nd t) const;
 
 protected:
 	Position xR, xL;
 
+	// For loading initial conditions from netCDF file, needs to be accessed by child classes
 	bool loadInitialConditionsFromFile = false;
 	std::string filename;
 	void LoadDataToSpline(const std::string &file);
-	std::vector<std::unique_ptr<spline>> NcFileInitialAuxValue;
-	bool useMMS = false;
 
+	// MMS Solution
+	bool useMMS = false;
 	double growth_rate = 0.5;
 	double growth = 1.0;
 	virtual Real2nd MMS_Solution(Index i, Real2nd x, Real2nd t);
@@ -57,15 +71,23 @@ protected:
 	void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override;
 
 private:
-	// API to underlying flux model
-
+	// API to underlying flux models
 	virtual Real Flux(Index i, RealVector u, RealVector q, Real x, Time t) = 0;
 	virtual Real Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) = 0;
 
+	// Auxiliary variables are optional, so provide a default implementation
 	virtual Real GFunc(Index, RealVector, RealVector, RealVector, RealVector, Position, Time)
 	{
 		if (nAux > 0)
-			throw std::logic_error("nAux > 0 but no implementation of auxiliary variable provided");
+			throw std::logic_error("nAux > 0 but no implementation of auxiliary variable function provided");
+		else
+			return 0.0;
+	};
+
+	virtual Value InitialAuxValue(Index, Position, Time) const
+	{
+		if (nAux > 0)
+			throw std::logic_error("nAux > 0 but no implementation of auxiliary variable initial value provided");
 		else
 			return 0.0;
 	};
@@ -74,6 +96,7 @@ private:
 	netCDF::NcFile data_file;
 	std::vector<std::unique_ptr<spline>> NcFileInitialValues;
 	std::vector<std::unique_ptr<spline>> NcFileInitialDerivatives;
+	std::vector<std::unique_ptr<spline>> NcFileInitialAuxValue;
 
 	enum class ProfileType
 	{
@@ -88,8 +111,6 @@ private:
 	std::map<std::string, ProfileType> InitialProfiles = {{"Gaussian", ProfileType::Gaussian}, {"Cosine", ProfileType::Cosine}, {"CosineSquared", ProfileType::CosineSquared}, {"Uniform", ProfileType::Uniform}, {"Linear", ProfileType::Linear}};
 
 	Vector InitialHeights;
-
-	autodiff::dual2nd DirichletIC(Index i, autodiff::dual2nd x, autodiff::dual2nd t, double u_R, double u_L, double x_L, double x_R) const;
 
 	Value MMS_Source(Index, Position, Time);
 };
