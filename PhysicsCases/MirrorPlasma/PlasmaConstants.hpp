@@ -24,6 +24,7 @@ enum PlasmaTypes : int
 class IonSpecies
 {
 public:
+    // IonSpecies() = default;
     IonSpecies(double A) : IonMass(A * ProtonMass) {};
     virtual ~IonSpecies() = default;
 
@@ -88,15 +89,28 @@ private:
 template <typename T>
 IonSpecies *createIonSpecies() { return new T(); };
 
+// Map to the constructor for each of the different ion species
 static std::map<int, IonSpecies *(*)()> PlasmaMap = {{PlasmaTypes::H, &createIonSpecies<Hydrogen>}, {PlasmaTypes::DD, &createIonSpecies<Deuterium>}, {PlasmaTypes::DT, &createIonSpecies<DeuteriumTritium>}};
 
 // Class for computing common plasma constants
 class PlasmaConstants
 {
 public:
-    // Constructor takes ion type, pointer to magnetic field, other normalizing parameters if desired
-    PlasmaConstants(PlasmaTypes p, std::shared_ptr<StraightMagneticField> B, double PlasmaWidth) : B(B), PlasmaWidth(PlasmaWidth) { Plasma = PlasmaMap[p](); };
-    PlasmaConstants(PlasmaTypes p, std::shared_ptr<StraightMagneticField> B, double n0, double T0, double Z_eff, double PlasmaWidth) : B(B), n0(n0), T0(T0), Z_eff(Z_eff), PlasmaWidth(PlasmaWidth) { Plasma = PlasmaMap[p](); };
+    // Constructor takes ion type, magnetic field, other normalizing parameters if desired
+    PlasmaConstants(PlasmaTypes p, std::shared_ptr<StraightMagneticField> B, double PlasmaWidth) : B(B), PlasmaWidth(PlasmaWidth)
+    {
+        auto it = PlasmaMap.find(p);
+        if (it == PlasmaMap.end())
+            throw std::logic_error("Requested ion species does not exist.");
+        Plasma = it->second();
+    }
+    PlasmaConstants(PlasmaTypes p, std::shared_ptr<StraightMagneticField> B, double n0, double T0, double Z_eff, double PlasmaWidth) : B(B), n0(n0), T0(T0), Z_eff(Z_eff), PlasmaWidth(PlasmaWidth)
+    {
+        auto it = PlasmaMap.find(p);
+        if (it == PlasmaMap.end())
+            throw std::logic_error("Requested ion species does not exist.");
+        Plasma = it->second();
+    };
     virtual ~PlasmaConstants() { delete Plasma; }
 
     template <typename T>

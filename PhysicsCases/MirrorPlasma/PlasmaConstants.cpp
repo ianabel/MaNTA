@@ -102,6 +102,8 @@ double PlasmaConstants::RhoStarRef() const
 {
     return sqrt(T0 * IonMass()) / (ElementaryCharge * B0 * a);
 }
+
+// The normalizing time can also be written this way
 double PlasmaConstants::NormalizingTime() const
 {
     double RhoStar = RhoStarRef();

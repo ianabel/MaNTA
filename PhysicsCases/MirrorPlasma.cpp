@@ -264,11 +264,9 @@ Value MirrorPlasma::InitialAuxValue(Index, Position V, Time t) const
 
 	const boost::uintmax_t maxit = 20;
 	boost::uintmax_t it = maxit;
-	// std::pair<double, double> phi_g = bisect(func, -0.9 * (M - 1), 0.0, tol, it);
 	double phi_g = newton_raphson_iterate([&func, &deriv_func](double phi)
 										  { return std::pair<double, double>(func(phi), deriv_func(phi)); }, 0.0, -CentrifugalPotential(V, omega.val, Ti.val, Te.val), 0.01, get_digits, it);
 	return phi_g;
-	// return phi_g.first + (phi_g.second - phi_g.first) / 2;
 }
 
 Value MirrorPlasma::LowerBoundary(Index i, Time t) const
