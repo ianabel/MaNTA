@@ -8,7 +8,7 @@ double MirrorPlasma::Voltage(T1 &L_phi, T2 &n)
     auto integrand = [this, &L_phi, &n](double V)
     {
         double R = B->R_V(V);
-        return L_phi(V) / (n(V) * R * R * B->VPrime(V));
+        return L_phi(V) / (n(V) * R * R * B->VPrime(V).val);
     };
     double cs0 = std::sqrt(T0 / Plasma->IonMass());
     return cs0 * integrator.integrate(integrand, xL, xR);

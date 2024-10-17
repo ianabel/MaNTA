@@ -10,61 +10,89 @@
 #include <autodiff/forward/dual.hpp>
 using std::numbers::pi;
 using spline = boost::math::interpolators::cardinal_cubic_b_spline<double>;
+using Real = autodiff::dual;
 // Magnetic field
 // All of these values are returned in SI units
 // (we may later introduce a B0 & R0, but these are 1T & 1m for now)
-class StraightMagneticField
+
+class MagneticField
+{
+public:
+	MagneticField() = default;
+	virtual Real Psi(Real V) const = 0;
+	virtual Real B(Real Psi, Real s) const = 0;
+	virtual Real R(Real Psi, Real s) const = 0;
+	Real R_V(Real V, Real s) const { return R(Psi(V), s); }
+	virtual Real dRdV(Real V, Real s) const = 0;
+	virtual Real VPrime(Real V) const = 0;
+	virtual Real MirrorRatio(Real V, Real s) const = 0;
+
+	template <typename F>
+	Real FluxSurfaceAverage(const F &f, Real V) { return f(V, 0.0); };
+
+private:
+	virtual Real LeftEndpoint(Real Psi) const = 0;
+	virtual Real RightEndpoint(Real Psi) const = 0;
+};
+
+// Function for creating an instance of a magnetic field
+// Allow for constructors that take a different number of arguments
+template <typename T, typename... Args>
+static std::shared_ptr<MagneticField> createMagneticField(Args... args) { return std::make_shared<T>(args...); };
+
+class StraightMagneticField : public MagneticField
 {
 public:
 	StraightMagneticField() = default;
 	StraightMagneticField(double L_z, double B_z, double Rm) : L_z(L_z), B_z(B_z), Rm(Rm) {};
+
 	template <typename T>
-	T Bz_R(T R) { return B_z; }
-	template <typename T>
-	T V(T Psi)
-	{
-		return 2 * pi * Psi * L_z / B_z;
-	}
-	template <typename T>
-	T Psi(T R)
-	{
-		return R * R * B_z / 2.0;
-	}
-	template <typename T>
-	T Psi_V(T V)
+	T Bz_R(T R) const { return B_z; }
+
+	Real B(Real Psi, Real) const override { return Bz_R(R(Psi)); };
+
+	Real Psi(Real V) const override
 	{
 		return B_z * V / (2 * pi * L_z);
 	}
-	template <typename T>
-	T VPrime(T V)
-	{
-		return 2 * pi * L_z / B_z;
-	}
-	template <typename T>
-	T R(T Psi)
+
+	Real R(Real Psi) const
 	{
 		return sqrt(2 * Psi / B_z);
 	}
+	Real R(Real Psi, Real) const override { return R(Psi); };
+
+		Real VPrime(Real V) const override
+	{
+		return 2 * pi * L_z / B_z;
+	}
+
 	template <typename T>
-	T R_V(T V)
+	T R_V(T V) const
 	{
 		return sqrt(V / (pi * L_z));
 	}
+
 	template <typename T>
-	T dRdV(T V)
+	T dRdV(T V) const
 	{
 		return 1.0 / (2 * pi * R_V(V));
 	}
+	Real dRdV(Real V, Real) const override { return dRdV(V); }
+
 	template <typename T>
-	double MirrorRatio(T)
+	T MirrorRatio(T) const
 	{
 		return Rm;
 	}
+	Real MirrorRatio(Real V, Real) const override { return MirrorRatio(V); }
 
 private:
 	double L_z = 0.6;
 	double B_z = 0.3;
 	double Rm = 10.0;
+	Real LeftEndpoint(Real) const override { return -L_z / 2.0; }
+	Real RightEndpoint(Real) const override { return L_z / 2.0; }
 };
 
 class CylindricalMagneticField

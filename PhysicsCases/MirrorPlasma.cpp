@@ -231,6 +231,7 @@ Real MirrorPlasma::GFunc(Index, RealVector u, RealVector, RealVector, RealVector
 	return ParallelCurrent<Real>(V, omega, n, Ti, Te, phi(0));
 }
 
+// Since we can take derivatives of Jpar, use Newton Raphson method to compute initial values
 Value MirrorPlasma::InitialAuxValue(Index, Position V, Time t) const
 {
 	using boost::math::tools::eps_tolerance;
@@ -245,27 +246,21 @@ Value MirrorPlasma::InitialAuxValue(Index, Position V, Time t) const
 	Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
 	Real omega = InitialFunction(Channel::AngularMomentum, V, t).val / J;
 
-	double M = (static_cast<Real>(omega * R / sqrt(Te))).val;
 	auto func = [this, &n, &Te, &Ti, &omega, &V](double phi)
 	{
-		return ParallelCurrent<Real>(static_cast<Real>(V), omega, n, Ti, Te, static_cast<Real>(phi)).val;
-	};
-	auto deriv_func = [this, &n, &Te, &Ti, &omega, &V](double phi)
-	{
+		auto Jpar = [&](Real phi)
+		{ return ParallelCurrent<Real>(static_cast<Real>(V), omega, n, Ti, Te, phi); };
 		Real phireal = phi;
-		return derivative([this](Real V, Real omega, Real n, Real Ti, Real Te, Real phi)
-						  { return ParallelCurrent<Real>(V, omega, n, Ti, Te, phi); }, wrt(phireal), at(V, omega, n, Ti, Te, phireal));
+		return std::pair<double, double>(Jpar(phi).val, derivative(Jpar, wrt(phireal), at(phireal)));
 	};
 
 	const int digits = std::numeric_limits<double>::digits; // Maximum possible binary digits accuracy for type T.
 	int get_digits = static_cast<int>(digits * 0.6);		// Accuracy doubles with each step, so stop when we have
 															// just over half the digits correct.
-	eps_tolerance<double> tol(get_digits);
 
 	const boost::uintmax_t maxit = 20;
 	boost::uintmax_t it = maxit;
-	double phi_g = newton_raphson_iterate([&func, &deriv_func](double phi)
-										  { return std::pair<double, double>(func(phi), deriv_func(phi)); }, 0.0, -CentrifugalPotential(V, omega.val, Ti.val, Te.val), 0.01, get_digits, it);
+	double phi_g = newton_raphson_iterate(func, 0.0, -CentrifugalPotential(V, omega.val, Ti.val, Te.val), 0.01, get_digits, it);
 	return phi_g;
 }
 
@@ -500,7 +495,7 @@ Real MirrorPlasma::Spe(RealVector u, RealVector q, RealVector sigma, RealVector 
 	Real Ti = floor(p_i / n, MinTemp);
 	Real EnergyExchange = -Plasma->IonElectronEnergyExchange(n, p_e, p_i, V, t);
 
-	double MirrorRatio = B->MirrorRatio(V);
+	Real MirrorRatio = B->MirrorRatio(V);
 	Real AlphaHeating = sqrt(1 - 1 / MirrorRatio) * Plasma->TotalAlphaPower(n, p_i);
 
 	Real R = B->R_V(V);
@@ -701,11 +696,13 @@ T MirrorPlasma::Xi_e(T V, T phi, T Ti, T Te, T omega) const
 
 inline Real MirrorPlasma::AmbipolarPhi(Real V, Real n, Real Ti, Real Te) const
 {
-	double R = B->MirrorRatio(V);
+	Real R = B->MirrorRatio(V);
 	double Sigma = 1.0;
-	return log((Plasma->ElectronCollisionTime(n, Te) / Plasma->IonCollisionTime(n, Ti)) * (log(R * Sigma) / (Sigma * ::log(R))));
+	return log((Plasma->ElectronCollisionTime(n, Te) / Plasma->IonCollisionTime(n, Ti)) * (log(R * Sigma) / (Sigma * log(R))));
 }
 
+// This isn't really the parallel current
+// We assume a-priori that Jpar = 0 and divide out some common factors
 template <typename T>
 T MirrorPlasma::ParallelCurrent(T V, T omega, T n, T Ti, T Te, T phi) const
 {
@@ -735,7 +732,7 @@ Real MirrorPlasma::ParticleSource(double R, double t) const
 
 Real MirrorPlasma::ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real Te) const
 {
-	double MirrorRatio = B->MirrorRatio(V);
+	Real MirrorRatio = B->MirrorRatio(V);
 	Real tau_ee = Plasma->ElectronCollisionTime(n, Te);
 	double Sigma = 1 + Z_eff; // Include collisions with ions and impurities as well as self-collisions
 	Real PastukhovFactor = (exp(-Xi_e) / Xi_e);
@@ -752,7 +749,7 @@ Real MirrorPlasma::IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) cons
 {
 	// For consistency, the integral in Pastukhov's paper is 1.0, as the
 	// entire theory is an expansion in M^2 >> 1
-	double MirrorRatio = B->MirrorRatio(V);
+	Real MirrorRatio = B->MirrorRatio(V);
 	Real tau_ii = Plasma->IonCollisionTime(n, Ti);
 	double Sigma = 1.0; // Just ion-ion collisions
 	Real PastukhovFactor = (exp(-Xi_i) / Xi_i);

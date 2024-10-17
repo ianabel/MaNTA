@@ -31,7 +31,7 @@ Real PlasmaConstants::CyclotronLosses(Real V, Real n, Real Te) const
     // Return units are W/m^3
     Real Te_eV = T0 / ElementaryCharge * Te;
     Real n_e20 = n * n0 / 1e20;
-    Real B_z = B->Bz_R(B->R_V(V)) * B0; // in Tesla
+    Real B_z = B->B(B->Psi(V), 0.0) * B0; // in Tesla
     Real P_vacuum = 6.21 * n_e20 * Te_eV * B_z * B_z;
 
     // Characteristic absorption length

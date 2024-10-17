@@ -105,14 +105,14 @@ private:
 	constexpr static double a = 1.0;  // Reference length in m
 	constexpr static double Z_eff = 3.0;
 
-	Real Gamma(RealVector u, RealVector q, Real x, Time t) const;
-	Real qe(RealVector u, RealVector q, Real x, Time t) const;
-	Real qi(RealVector u, RealVector q, Real x, Time t) const;
-	Real Pi(RealVector u, RealVector q, Real x, Time t) const;
-	Real Sn(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) const;
-	Real Spe(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) const;
-	Real Spi(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) const;
-	Real Somega(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) const;
+	Real Gamma(RealVector u, RealVector q, Real V, Time t) const;
+	Real qe(RealVector u, RealVector q, Real V, Time t) const;
+	Real qi(RealVector u, RealVector q, Real V, Time t) const;
+	Real Pi(RealVector u, RealVector q, Real V, Time t) const;
+	Real Sn(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real V, Time t) const;
+	Real Spe(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real V, Time t) const;
+	Real Spi(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real V, Time t) const;
+	Real Somega(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real V, Time t) const;
 
 	// Underlying functions
 
