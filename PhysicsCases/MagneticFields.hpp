@@ -8,6 +8,7 @@
 #include <vector>
 #include <boost/math/interpolators/cardinal_cubic_b_spline.hpp>
 #include <autodiff/forward/dual.hpp>
+#include "../util/trapezoid.hpp"
 using std::numbers::pi;
 using spline = boost::math::interpolators::cardinal_cubic_b_spline<double>;
 using Real = autodiff::dual;
@@ -15,28 +16,33 @@ using Real = autodiff::dual;
 // All of these values are returned in SI units
 // (we may later introduce a B0 & R0, but these are 1T & 1m for now)
 
+// Base magnetic field class
 class MagneticField
 {
 public:
 	MagneticField() = default;
-	virtual Real Psi(Real V) const = 0;
+	virtual Real Psi_V(Real V) const = 0;
 	virtual Real B(Real Psi, Real s) const = 0;
 	virtual Real R(Real Psi, Real s) const = 0;
-	Real R_V(Real V, Real s) const { return R(Psi(V), s); }
+	virtual Real R_V(Real V, Real s) const { return R(Psi_V(V), s); }
 	virtual Real dRdV(Real V, Real s) const = 0;
 	virtual Real VPrime(Real V) const = 0;
 	virtual Real MirrorRatio(Real V, Real s) const = 0;
 
 	template <typename F>
-	Real FluxSurfaceAverage(const F &f, Real V) { return f(V, 0.0); };
+	Real FluxSurfaceAverage(const F &f, Real V) const
+	{
+		return 2 * M_PI / VPrime(V) * trapezoid([&](Real s)
+												{ return f(s) / B(Psi_V(V), s); }, LeftEndpoint(Psi_V(V)), RightEndpoint(Psi_V(V)));
+	}
 
 private:
 	virtual Real LeftEndpoint(Real Psi) const = 0;
 	virtual Real RightEndpoint(Real Psi) const = 0;
 };
 
-
-
+// Just a uniform magnetic field
+// Leave these template functions for now so we don't break MirrorPlasma
 class StraightMagneticField : public MagneticField
 {
 public:
@@ -48,7 +54,7 @@ public:
 
 	Real B(Real Psi, Real) const override { return Bz_R(R(Psi)); };
 
-	Real Psi(Real V) const override
+	Real Psi_V(Real V) const override
 	{
 		return B_z * V / (2 * pi * L_z);
 	}
@@ -69,6 +75,7 @@ public:
 	{
 		return sqrt(V / (pi * L_z));
 	}
+	Real R_V(Real V, Real) const override { return R_V(V); }
 
 	template <typename T>
 	T dRdV(T V) const

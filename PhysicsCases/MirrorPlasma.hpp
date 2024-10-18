@@ -149,6 +149,9 @@ private:
 	Real dphi1dV(RealVector u, RealVector q, Real phi, Real V) const;
 	Real dphidV(RealVector u, RealVector q, RealVector phi, Real V) const;
 
+	Real IonPotentialHeating(RealVector u, RealVector q, RealVector phi, Real V) const;
+	Real ElectronPotentialHeating(RealVector u, RealVector q, RealVector phi, Real V) const;
+
 	template <typename T>
 	T Xi_i(T V, T phi, T Ti, T Te, T omega) const;
 
@@ -191,10 +194,11 @@ private:
 		writeMirrorDiagnostics(y, t, nc, tIndex, *this);
 	}
 
-	template <typename T>
-	friend void initializeMirrorDiagnostics(NetCDFIO &nc,  T const &p);
+	// Allow mirror diagnostic functions to access private members
+	template <class T>
+	friend void initializeMirrorDiagnostics(NetCDFIO &nc, T const &p);
 
-	template <typename T>
+	template <class T>
 	friend void writeMirrorDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex, T const &p);
 	REGISTER_PHYSICS_HEADER(MirrorPlasma)
 };

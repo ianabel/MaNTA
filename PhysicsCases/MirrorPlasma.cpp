@@ -466,7 +466,7 @@ Real MirrorPlasma::Spi(RealVector u, RealVector q, RealVector sigma, RealVector 
 	Real ViscousHeating = IonClassicalAngularMomentumFlux(V, n, Ti, dOmegadV, t) * dOmegadV;
 
 	// Use this version since we have no parallel flux in a square well
-	Real PotentialHeating = -Gamma(u, q, V, t) * (omega * omega / (2 * pi * a) - dphidV(u, q, phi, V));
+	Real PotentialHeating = IonPotentialHeating(u, q, phi, V);
 	Real EnergyExchange = Plasma->IonElectronEnergyExchange(n, p_e, p_i, V, t);
 
 	Real Heating = ViscousHeating + PotentialHeating + EnergyExchange + UniformHeatSource;
@@ -504,7 +504,7 @@ Real MirrorPlasma::Spe(RealVector u, RealVector q, RealVector sigma, RealVector 
 	Real L = u(Channel::AngularMomentum);
 	Real omega = L / J;
 
-	Real PotentialHeating = -Gamma(u, q, V, t) * dphidV(u, q, phi, V); //(dphi1dV(u, q, phi(0), V));
+	Real PotentialHeating = ElectronPotentialHeating(u, q, phi, V); //(dphi1dV(u, q, phi(0), V));
 
 	Real Heating = EnergyExchange + AlphaHeating + PotentialHeating;
 
@@ -679,6 +679,23 @@ Real MirrorPlasma::dphidV(RealVector u, RealVector q, RealVector phi, Real V) co
 		dphidV += dphi1dV(u, q, phi(0), V);
 
 	return dphidV;
+}
+
+Real MirrorPlasma::IonPotentialHeating(RealVector u, RealVector q, RealVector phi, Real V) const
+{
+	Real R = B->R_V(V);
+
+	Real n = floor(u(Channel::Density), MinDensity);
+
+	Real L = u(Channel::AngularMomentum);
+	Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
+	Real omega = L / J;
+	return -Gamma(u, q, V, 0.0) * (omega * omega / (2 * pi * a) - dphidV(u, q, phi, V));
+}
+
+Real MirrorPlasma::ElectronPotentialHeating(RealVector u, RealVector q, RealVector phi, Real V) const
+{
+	return -Gamma(u, q, V, 0.0) * dphidV(u, q, phi, V);
 }
 
 // Energy normalisation is T0, but these return Xi_s / T_s as that is what enters the

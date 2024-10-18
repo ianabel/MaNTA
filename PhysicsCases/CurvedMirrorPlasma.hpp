@@ -29,7 +29,12 @@ public:
     CurvedMirrorPlasma(toml::value const &config, Grid const &grid);
     ~CurvedMirrorPlasma() = default;
 
-    virtual Real2nd InitialFunction(Index i, Real2nd x, Real2nd t) const override;
+    // This effectively makes this physics case incompatible with MMS, but we'll worry about that later
+    virtual Real2nd InitialFunction(Index i, Real2nd V, Real2nd t) const override
+    {
+        return B->FluxSurfaceAverage([&](Real s)
+                                     { return InitialFunction(i, V.val, s, t.val); }, V.val);
+    }
 
 private:
     double RelaxFactor;
@@ -74,23 +79,26 @@ private:
 
     Real Flux(Index i, RealVector u, RealVector q, Real V, Time t) override
     {
-        return B->FluxSurfaceAverage([&](Real V, Real s)
+        return B->FluxSurfaceAverage([&](Real s)
                                      { return Flux(i, u, q, V, s, t); }, V);
     };
     Real Flux(Index, RealVector, RealVector, Real, Real, Time);
 
     Real Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector phi, Real V, Time t) override
     {
-        return B->FluxSurfaceAverage([&](Real V, Real s)
+        return B->FluxSurfaceAverage([&](Real s)
                                      { return Source(i, u, q, sigma, phi, V, s, t); }, V);
     };
     Real Source(Index, RealVector, RealVector, RealVector, RealVector, Real, Real, Time);
 
     Real GFunc(Index i, RealVector u, RealVector q, RealVector sigma, RealVector phi, Position V, Time t) override
     {
-        return B->FluxSurfaceAverage([&](Real V, Real s)
+        return B->FluxSurfaceAverage([&](Real s)
                                      { return GFunc(i, u, q, sigma, phi, V, s, t); }, V);
     };
+
+    Real InitialFunction(Index i, Real V, Real s, Real t) const;
+
     Real GFunc(Index, RealVector, RealVector, RealVector, RealVector, Real, Real, Time);
     Value InitialAuxValue(Index, Position, Time) const override;
 
@@ -132,7 +140,10 @@ private:
 
     // Underlying functions
 
+    // Overloaded functions without "s" argument are purely for diagnostics
+
     Real IonClassicalAngularMomentumFlux(Real V, Real s, Real n, Real Ti, Real dOmegadV, Time t) const;
+    Real IonClassicalAngularMomentumFlux(Real V, Real n, Real Ti, Real dOmegadV, Time t) const { return IonClassicalAngularMomentumFlux(V, 0.0, n, Ti, dOmegadV, t); };
 
     // Add a cap to sources to prevent ridiculous values
     double SourceCap;
@@ -140,15 +151,28 @@ private:
     Real ParticleSource(double R, double t) const;
 
     Real ElectronPastukhovLossRate(Real V, Real s, Real Xi_e, Real n, Real Te) const;
+    Real ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real Te) const { return ElectronPastukhovLossRate(V, 0.0, Xi_e, n, Te); };
+
     Real IonPastukhovLossRate(Real V, Real s, Real Xi_i, Real n, Real Ti) const;
+    Real IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) const { return IonPastukhovLossRate(V, 0.0, Xi_i, n, Ti); };
 
     Real CentrifugalPotential(Real V, Real s, Real omega, Real Ti, Real Te) const;
+    Real CentrifugalPotential(Real V, Real omega, Real Ti, Real Te) const { return CentrifugalPotential(V, 0.0, omega, Ti, Te); }
 
     Real phi0(RealVector u, Real V, Real s) const;
+    Real phi0(RealVector u, Real V) const { return phi0(u, V, 0.0); };
 
     Real Xi_i(Real V, Real s, Real phi, Real Ti, Real Te, Real omega) const;
+    Real Xi_i(Real V, Real phi, Real Ti, Real Te, Real omega) const { return Xi_i(V, 0.0, phi, Ti, Te, omega); };
 
     Real Xi_e(Real V, Real s, Real phi, Real Ti, Real Te, Real omega) const;
+    Real Xi_e(Real V, Real phi, Real Ti, Real Te, Real omega) const { return Xi_e(V, 0.0, phi, Ti, Te, omega); };
+
+    // Implement eventually ??? for curved fields
+    Real IonPotentialHeating(RealVector, RealVector, RealVector, Real) const { return 0.0; };
+    Real ElectronPotentialHeating(RealVector, RealVector, RealVector, Real) const { return 0.0; };
+
+    Real MagneticFieldShapeFactor(Real V, Real s, RealVector u) const;
 
     // First order correction to phi, only used if not calculating auxiliary phi1
     Real AmbipolarPhi(Real V, Real n, Real Ti, Real Te) const;
@@ -161,10 +185,36 @@ private:
         return RelaxFactor * (A - B);
     };
 
-    // template <typename T1, typename T2>
-    // double Voltage(T1 &L_phi, T2 &n);
-    // void initialiseDiagnostics(NetCDFIO &nc) override;
-    // void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override;
+    // omega & n are callables
+    template <typename T1, typename T2>
+    double Voltage(T1 &L_phi, T2 &n) const
+    {
+        auto integrator = boost::math::quadrature::gauss<double, 15>();
+        auto integrand = [this, &L_phi, &n](double V)
+        {
+            double R = B->R_V(V, 0.0);
+            return L_phi(V) / (n(V) * R * R * B->VPrime(V).val);
+        };
+        double cs0 = std::sqrt(T0 / Plasma->IonMass());
+        return cs0 * integrator.integrate(integrand, xL, xR);
+    }
+    void initialiseDiagnostics(NetCDFIO &nc) override
+    {
+        AutodiffTransportSystem::initialiseDiagnostics(nc);
+        initializeMirrorDiagnostics(nc, *this);
+    }
+    void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override
+    {
+        AutodiffTransportSystem::writeDiagnostics(y, t, nc, tIndex);
+        writeMirrorDiagnostics(y, t, nc, tIndex, *this);
+    }
+
+    // Allow mirror diagnostic functions to access private members
+    template <class T>
+    friend void initializeMirrorDiagnostics(NetCDFIO &nc, T const &p);
+
+    template <class T>
+    friend void writeMirrorDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex, T const &p);
 
     REGISTER_PHYSICS_HEADER(CurvedMirrorPlasma)
 };

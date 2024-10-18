@@ -17,7 +17,10 @@ enum Channel : int
     AngularMomentum = 3
 };
 
-template <typename Plasma>
+// Functions for mirror diagnostics, templated so we can have multiple mirror plasma files
+// Need to be very careful that each mirror plasma has all the members used here
+// Magnetic field calls only use base class methods
+template <class Plasma>
 void initializeMirrorDiagnostics(NetCDFIO &nc, Plasma const &p)
 {
 
@@ -88,7 +91,7 @@ void initializeMirrorDiagnostics(NetCDFIO &nc, Plasma const &p)
         Real Ti = p_i(V) / n(V);
         Real Te = p_e(V) / n(V);
 
-        Real R = p.B->R_V(V);
+        Real R = p.B->R_V(V, 0.0);
         Real J = n(V) * R * R; // Normalisation includes the m_i
 
         Real omega = L(V) / J;
@@ -115,10 +118,10 @@ void initializeMirrorDiagnostics(NetCDFIO &nc, Plasma const &p)
         auto qV = q(V);
         auto uV = u(V);
         Real Ti = 2. / 3. * uV(Channel::IonEnergy) / uV(Channel::Density);
-        double R = p.B->R_V(V);
+        Real R = p.B->R_V(V, 0.0);
         Real vtheta = 1 / R * uV(Channel::AngularMomentum) / uV(Channel::Density);
 
-        double dVdR = 1 / p.B->dRdV(V);
+        Real dVdR = 1 / p.B->dRdV(V, 0.0);
         Real SR = 1.0 / sqrt(Ti) * (dVdR / uV(Channel::Density) * (qV(Channel::AngularMomentum) - R * vtheta * qV(Channel::Density)) - vtheta);
         return SR.val;
     };
@@ -144,9 +147,9 @@ void initializeMirrorDiagnostics(NetCDFIO &nc, Plasma const &p)
     Fn ViscousHeating = [&](double V)
     {
         Real Ti = p_i(V) / n(V);
-        Real R = p.B->R_V(V);
+        Real R = p.B->R_V(V, 0.0);
         Real J = n(V) * R * R; // Normalisation includes the m_i
-        Real dRdV = p.B->dRdV(V);
+        Real dRdV = p.B->dRdV(V, 0.0);
         Real JPrime = R * R * nPrime(V) + 2.0 * dRdV * R * n(V);
         Real dOmegadV = LPrime(V) / J - JPrime * L(V) / (J * J);
 
@@ -163,7 +166,7 @@ void initializeMirrorDiagnostics(NetCDFIO &nc, Plasma const &p)
 
     Fn AlphaHeating = [&](double V)
     {
-        double MirrorRatio = p.B->MirrorRatio(V);
+        double MirrorRatio = p.B->MirrorRatio(V, 0.0).val;
 
         double Heating = sqrt(1 - 1 / MirrorRatio) * p.Plasma->TotalAlphaPower(n(V), p_i(V)).val;
         return Heating;
@@ -181,7 +184,7 @@ void initializeMirrorDiagnostics(NetCDFIO &nc, Plasma const &p)
         Real Ti = p_i(V) / n(V);
         Real Te = p_e(V) / n(V);
 
-        Real R = p.B->R_V(V);
+        Real R = p.B->R_V(V, 0.0);
         Real J = n(V) * R * R; // Normalisation includes the m_i
 
         Real omega = L(V) / J;
@@ -198,7 +201,7 @@ void initializeMirrorDiagnostics(NetCDFIO &nc, Plasma const &p)
         Real Ti = p_i(V) / n(V);
         Real Te = p_e(V) / n(V);
 
-        Real R = p.B->R_V(V);
+        Real R = p.B->R_V(V, 0.0);
         Real J = n(V) * R * R; // Normalisation includes the m_i
 
         Real omega = L(V) / J;
@@ -215,7 +218,7 @@ void initializeMirrorDiagnostics(NetCDFIO &nc, Plasma const &p)
         Real Ti = p_i(V) / n(V);
         Real Te = p_e(V) / n(V);
 
-        Real R = p.B->R_V(V);
+        Real R = p.B->R_V(V, 0.0);
         Real J = n(V) * R * R; // Normalisation includes the m_i
 
         Real omega = L(V) / J;
@@ -236,25 +239,17 @@ void initializeMirrorDiagnostics(NetCDFIO &nc, Plasma const &p)
 
     Fn IonPotentialHeating = [&](double V)
     {
-        Real R = p.B->R_V(V);
-        Real J = n(V) * R * R; // Normalisation includes the m_i
-
-        Real omega = L(V) / J;
-        Real S = -p.Gamma(u(V), q(V), V, 0.0) * (omega * omega / (2 * pi * p.a) - p.dphidV(u(V), q(V), aux(V), V));
-
-        return S.val;
+        return p.IonPotentialHeating(u(V), q(V), aux(V), V).val;
     };
 
     Fn ElectronPotentialHeating = [&](double V)
     {
-        Real S = -p.Gamma(u(V), q(V), V, 0.0) * (p.dphidV(u(V), q(V), aux(V), V));
-
-        return S.val;
+        return p.ElectronPotentialHeating(u(V), q(V), aux(V), V).val;
     };
 
     Fn ParticleSourceHeating = [&](double V)
     {
-        Real R = p.B->R_V(V);
+        Real R = p.B->R_V(V, 0.0);
         Real J = n(V) * R * R; // Normalisation includes the m_i
 
         Real omega = L(V) / J;
@@ -293,17 +288,9 @@ void initializeMirrorDiagnostics(NetCDFIO &nc, Plasma const &p)
     nc.AddVariable("Heating", "IonPotentialHeating", "Ion potential heating", "-", IonPotentialHeating);
     nc.AddVariable("Heating", "ElectronPotentialHeating", "Ion potential heating", "-", ElectronPotentialHeating);
     nc.AddVariable("Heating", "ParticleSourceHeating", "Heating due to particle source", "-", ParticleSourceHeating);
-    nc.AddVariable("dPhi0dV", "Phi0 derivative", "-", [&](double V)
-                   { return p.dphi0dV(u(V), q(V), V).val; });
-    nc.AddVariable("dPhi1dV", "Phi1 derivative", "-", [&](double V)
-                   {
-		if (nAux > 0)
-			return p.dphi1dV(u(V), q(V), aux(V)[0], V).val;
-		else
-			return 0.0; });
 };
 
-template <typename Plasma>
+template <class Plasma>
 void writeMirrorDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex, Plasma const &p)
 {
     auto nVars = p.nVars;
@@ -366,7 +353,7 @@ void writeMirrorDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex
         Real Ti = p_i(V) / n(V);
         Real Te = p_e(V) / n(V);
 
-        Real R = p.B->R_V(V);
+        Real R = p.B->R_V(V, 0.0);
         Real J = n(V) * R * R; // Normalisation includes the m_i
 
         Real omega = L(V) / J;
@@ -393,10 +380,10 @@ void writeMirrorDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex
         auto qV = q(V);
         auto uV = u(V);
         Real Ti = 2. / 3. * uV(Channel::IonEnergy) / uV(Channel::Density);
-        double R = p.B->R_V(V);
+        Real R = p.B->R_V(V, 0.0);
         Real vtheta = 1 / R * uV(Channel::AngularMomentum) / uV(Channel::Density);
 
-        double dVdR = 1 / p.B->dRdV(V);
+        Real dVdR = 1 / p.B->dRdV(V, 0.0);
         Real SR = 1.0 / sqrt(Ti) * (dVdR / uV(Channel::Density) * (qV(Channel::AngularMomentum) - R * vtheta * qV(Channel::Density)) - vtheta);
         return SR.val;
     };
@@ -422,9 +409,9 @@ void writeMirrorDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex
     Fn ViscousHeating = [&](double V)
     {
         Real Ti = p_i(V) / n(V);
-        Real R = p.B->R_V(V);
+        Real R = p.B->R_V(V, 0.0);
         Real J = n(V) * R * R; // Normalisation includes the m_i
-        Real dRdV = p.B->dRdV(V);
+        Real dRdV = p.B->dRdV(V, 0.0);
         Real JPrime = R * R * nPrime(V) + 2.0 * dRdV * R * n(V);
         Real dOmegadV = LPrime(V) / J - JPrime * L(V) / (J * J);
 
@@ -441,7 +428,7 @@ void writeMirrorDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex
 
     Fn AlphaHeating = [&](double V)
     {
-        double MirrorRatio = p.B->MirrorRatio(V);
+        double MirrorRatio = p.B->MirrorRatio(V, 0.0).val;
 
         double Heating = sqrt(1 - 1 / MirrorRatio) * p.Plasma->TotalAlphaPower(n(V), p_i(V)).val;
         return Heating;
@@ -459,7 +446,7 @@ void writeMirrorDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex
         Real Ti = p_i(V) / n(V);
         Real Te = p_e(V) / n(V);
 
-        Real R = p.B->R_V(V);
+        Real R = p.B->R_V(V, 0.0);
         Real J = n(V) * R * R; // Normalisation includes the m_i
 
         Real omega = L(V) / J;
@@ -476,7 +463,7 @@ void writeMirrorDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex
         Real Ti = p_i(V) / n(V);
         Real Te = p_e(V) / n(V);
 
-        Real R = p.B->R_V(V);
+        Real R = p.B->R_V(V, 0.0);
         Real J = n(V) * R * R; // Normalisation includes the m_i
 
         Real omega = L(V) / J;
@@ -493,7 +480,7 @@ void writeMirrorDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex
         Real Ti = p_i(V) / n(V);
         Real Te = p_e(V) / n(V);
 
-        Real R = p.B->R_V(V);
+        Real R = p.B->R_V(V, 0.0);
         Real J = n(V) * R * R; // Normalisation includes the m_i
 
         Real omega = L(V) / J;
@@ -514,25 +501,17 @@ void writeMirrorDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex
 
     Fn IonPotentialHeating = [&](double V)
     {
-        Real R = p.B->R_V(V);
-        Real J = n(V) * R * R; // Normalisation includes the m_i
-
-        Real omega = L(V) / J;
-        Real S = -p.Gamma(u(V), q(V), V, 0.0) * (omega * omega / (2 * pi * p.a) - p.dphidV(u(V), q(V), aux(V), V));
-
-        return S.val;
+        return p.IonPotentialHeating(u(V), q(V), aux(V), V).val;
     };
 
     Fn ElectronPotentialHeating = [&](double V)
     {
-        Real S = -p.Gamma(u(V), q(V), V, 0.0) * (p.dphidV(u(V), q(V), aux(V), V));
-
-        return S.val;
+        return p.ElectronPotentialHeating(u(V), q(V), aux(V), V).val;
     };
 
     Fn ParticleSourceHeating = [&](double V)
     {
-        Real R = p.B->R_V(V);
+        Real R = p.B->R_V(V, 0.0);
         Real J = n(V) * R * R; // Normalisation includes the m_i
 
         Real omega = L(V) / J;
@@ -556,15 +535,6 @@ void writeMirrorDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex
 
     nc.AppendToGroup<Fn>("MMS", tIndex, {{"Var0", DensitySol}, {"Var1", IonEnergySol}, {"Var2", ElectronEnergySol}, {"Var3", AngularMomentumSol}});
 
-    nc.AppendToVariable("dPhi0dV", [&](double V)
-                        { return p.dphi0dV(u(V), q(V), V).val; }, tIndex);
-
-    nc.AppendToVariable("dPhi1dV", [&](double V)
-                        {
-		if (nAux > 0)
-			return p.dphi1dV(u(V), q(V), aux(V)[0], V).val;
-		else
-			return 0.0; }, tIndex);
     nc.AppendToVariable("ElectrostaticPotential", ElectrostaticPotential, tIndex);
     nc.AppendToVariable("ShearingRate", ShearingRate, tIndex);
 };
