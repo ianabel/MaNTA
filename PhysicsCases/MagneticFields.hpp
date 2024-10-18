@@ -35,10 +35,7 @@ private:
 	virtual Real RightEndpoint(Real Psi) const = 0;
 };
 
-// Function for creating an instance of a magnetic field
-// Allow for constructors that take a different number of arguments
-template <typename T, typename... Args>
-static std::shared_ptr<MagneticField> createMagneticField(Args... args) { return std::make_shared<T>(args...); };
+
 
 class StraightMagneticField : public MagneticField
 {
@@ -62,7 +59,7 @@ public:
 	}
 	Real R(Real Psi, Real) const override { return R(Psi); };
 
-		Real VPrime(Real V) const override
+	Real VPrime(Real V) const override
 	{
 		return 2 * pi * L_z / B_z;
 	}
@@ -147,5 +144,10 @@ private:
 	std::unique_ptr<spline> Rm_spline;
 	std::unique_ptr<spline> R_Psi_spline;
 };
+
+// Function for creating an instance of a magnetic field
+// Allow for constructors that take a different number of arguments
+template <typename T, typename... Args>
+static std::shared_ptr<MagneticField> createMagneticField(Args &&...args) { return std::make_shared<T>(std::forward<Args>(args)...); };
 
 #endif // MAGNETICFIELDS_HPP

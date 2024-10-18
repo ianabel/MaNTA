@@ -5,6 +5,7 @@
 #include "AutodiffTransportSystem.hpp"
 // #include "Constants.hpp"
 #include "MirrorPlasma/PlasmaConstants.hpp"
+#include "MirrorPlasma/MirrorPlasmaDiagnostics.hpp"
 
 /*
 	Ground-up reimplementation of a collisional cylindrical plasma, with a single ion species
@@ -166,11 +167,35 @@ private:
 		return RelaxFactor * (A - B);
 	};
 
+	// omega & n are callables
 	template <typename T1, typename T2>
-	double Voltage(T1 &L_phi, T2 &n);
-	void initialiseDiagnostics(NetCDFIO &nc) override;
-	void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override;
+	double Voltage(T1 &L_phi, T2 &n) const
+	{
+		auto integrator = boost::math::quadrature::gauss<double, 15>();
+		auto integrand = [this, &L_phi, &n](double V)
+		{
+			double R = B->R_V(V);
+			return L_phi(V) / (n(V) * R * R * B->VPrime(V).val);
+		};
+		double cs0 = std::sqrt(T0 / Plasma->IonMass());
+		return cs0 * integrator.integrate(integrand, xL, xR);
+	}
+	void initialiseDiagnostics(NetCDFIO &nc) override
+	{
+		AutodiffTransportSystem::initialiseDiagnostics(nc);
+		initializeMirrorDiagnostics(nc, *this);
+	}
+	void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override
+	{
+		AutodiffTransportSystem::writeDiagnostics(y, t, nc, tIndex);
+		writeMirrorDiagnostics(y, t, nc, tIndex, *this);
+	}
 
+	template <typename T>
+	friend void initializeMirrorDiagnostics(NetCDFIO &nc,  T const &p);
+
+	template <typename T>
+	friend void writeMirrorDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex, T const &p);
 	REGISTER_PHYSICS_HEADER(MirrorPlasma)
 };
 
