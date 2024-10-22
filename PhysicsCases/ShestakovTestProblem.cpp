@@ -7,7 +7,10 @@ REGISTER_PHYSICS_IMPL(ShestakovTestProblem);
 ShestakovTestProblem::ShestakovTestProblem(toml::value const &config, Grid const &grid)
 	: AutodiffTransportSystem(config, grid, 1, 0, 0) // Configure a blank autodiff system with one variable and no scalars
 {
-
+    uL={0.0};
+    uR={0.0};
+    isUpperDirichlet = true;  // u(1) = 0
+    isLowerDirichlet = false; // u'(0) = 0
 }
 
 Real ShestakovTestProblem::Flux(Index, RealVector u, RealVector q, Real, Time)
@@ -27,7 +30,7 @@ Real ShestakovTestProblem::Source(Index, RealVector, RealVector, RealVector, Rea
 Value ShestakovTestProblem::InitialValue(Index, Position x) const
 {
     if( x > 0.9 )
-        return 9.0 - 10*x;
+        return 10.0*(1.0 - x);
     else
         return 1.0;
 
