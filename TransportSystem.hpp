@@ -33,6 +33,23 @@ class TransportSystem
         virtual Value SigmaFn(Index i, const State &s, Position x, Time t) = 0;
         virtual Value Sources(Index i, const State &s, Position x, Time t) = 0;
 
+        virtual Values SigmaFn( Index i, std::vector<State> const & states, std::vector<Position> const & abscissae, std::vector<Time> const & times ) {
+            Values out( states.size() );
+            for( size_t j = 0; j < states.size(); ++j) {
+                out( j ) = SigmaFn( i, states[ j ], abscissae[ j ], times[ j ] );
+            }
+            return out;
+        };
+
+        virtual Values Sources( Index i, std::vector<State> const & states, std::vector<Position> const & abscissae, std::vector<Time> const & times ) {
+            Values out( states.size() );
+            for( size_t j = 0; j < states.size(); ++j) {
+                out( j ) = Sources( i, states[ j ], abscissae[ j ], times[ j ] );
+            }
+            return out;
+        };
+
+
         // This determines the a_i functions. Only one with a default option, but can be overriden
         virtual Value aFn(Index i, Position x) { return 1.0; };
 
@@ -40,11 +57,26 @@ class TransportSystem
         virtual void dSigmaFn_du(Index i, Values &, const State &s, Position x, Time t) = 0;
         virtual void dSigmaFn_dq(Index i, Values &, const State &s, Position x, Time t) = 0;
 
+        virtual void dSigma( Index i, std::vector<State> &out, std::vector<State> const & states, std::vector<Position> const & abscissae, std::vector<Time> const& times ) {
+            for( size_t j = 0; j < states.size(); ++j) {
+                dSigmaFn_du( i, out[ j ].Variable, states[ j ], abscissae[ j ], times[ j ] );
+                dSigmaFn_dq( i, out[ j ].Derivative, states[ j ], abscissae[ j ], times[ j ] );
+            }
+        }
+
         // and for the sources
         virtual void dSources_du(Index i, Values &, const State &, Position x, Time t) = 0;
         virtual void dSources_dq(Index i, Values &, const State &, Position x, Time t) = 0;
         virtual void dSources_dsigma(Index i, Values &, const State &, Position x, Time t) = 0;
 
+        virtual void dSources( Index i, std::vector<State> &out, std::vector<State> const & states, std::vector<Position> const & abscissae, std::vector<Time> const& times ) {
+            for( size_t j = 0; j < states.size(); ++j) {
+                dSources_du( i, out[ j ].Variable, states[ j ], abscissae[ j ], times[ j ] );
+                dSources_dq( i, out[ j ].Derivative, states[ j ], abscissae[ j ], times[ j ] );
+                dSources_dsigma( i, out[ j ].Flux, states[ j ], abscissae[ j ], times[ j ] );
+            }
+        }
+        
         // and initial conditions for u & q
         virtual Value InitialValue(Index i, Position x) const = 0;
         virtual Value InitialDerivative(Index i, Position x) const = 0;
