@@ -69,11 +69,11 @@ CurvedMirrorPlasma::CurvedMirrorPlasma(toml::value const &config, Grid const &gr
         double Rm = toml::find_or(InternalConfig, "Rm", 3.0);
         double L_z = toml::find_or(InternalConfig, "Lz", 1.0);
 
-        B = createMagneticField<StraightMagneticField>(L_z, B_z, Rm); // std::make_shared<StraightMagneticField>(L_z, B_z, Rm);
+        B = createMagneticField<CurvedMagneticField>(L_z, B_z, Rm); // std::make_shared<StraightMagneticField>(L_z, B_z, Rm);
         // B->CheckBoundaries(xL, xR);
 
-        R_Lower = B->R_V(xL, 0.0).val;
-        R_Upper = B->R_V(xR, 0.0).val;
+        R_Lower = B->R_V(xL, 0.5 * L_z).val;
+        R_Upper = B->R_V(xR, 0.5 * L_z).val;
 
         Plasma = std::make_unique<PlasmaConstants>(PlasmaTypes::DD, B, n0, T0, Z_eff, R_Upper - R_Lower);
 
@@ -130,7 +130,7 @@ Real CurvedMirrorPlasma::InitialFunction(Index i, Real V, Real s, Real t) const
     { return 1 + growth * tanh(growth_rate * t); };
     Real R_min = B->R_V(xL, s);
     Real R_max = B->R_V(xR, s);
-    Real R = B->R_V(V.val, s);
+    Real R = B->R_V(V, s);
 
     Real R_mid = (R_min + R_max) / 2.0;
 
@@ -144,10 +144,11 @@ Real CurvedMirrorPlasma::InitialFunction(Index i, Real V, Real s, Real t) const
 
     Real Te = TeEdge + tfac(growth_factors[Channel::ElectronEnergy]) * (TeMid - TeEdge) * v * v;
     Real Ti = TiEdge + tfac(growth_factors[Channel::IonEnergy]) * (TiMid - TiEdge) * v * v;
-    Real n = nEdge + tfac(growth_factors[Channel::Density]) * (nMid - nEdge) * v;
+
     auto slope = (MUpper - MLower) / (R_Upper - R_Lower);
     Real M = MLower + slope * (R - R_Lower) + (MMid - 0.5 * (MUpper + MLower)) * v / exp(-shape * (R - R_mid) * (R - R_mid)); // MEdge + tfac(growth_factors[Channel::AngularMomentum]) * (MMid - MEdge) * (1 - (exp(-shape * (R - R_Upper) * (R - R_Upper)) + exp(-shape * (R - R_Lower) * (R - R_Lower))));
     Real omega = sqrt(Te) * M / R;
+    Real n = nEdge + tfac(growth_factors[Channel::Density]) * (nMid - nEdge) * v;
 
     Channel c = static_cast<Channel>(i);
     switch (c)
@@ -221,14 +222,15 @@ Real CurvedMirrorPlasma::Source(Index i, RealVector u, RealVector q, RealVector 
 Real CurvedMirrorPlasma::GFunc(Index, RealVector u, RealVector, RealVector, RealVector phi, Real V, Real s, Time t)
 {
 
-    Real n = floor(u(Channel::Density), MinDensity) * MagneticFieldShapeFactor(V, s, u), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
+    Real n = floor(u(Channel::Density), MinDensity), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
     Real Te = floor(p_e / n, MinTemp);
     Real Ti = floor(p_i / n, MinTemp);
 
-    Real R = B->R_V(V, s);
+    Real Rmax = B->Rmax(V);
 
-    Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
+    Real J = n * Rmax * Rmax; // Normalisation of the moment of inertia includes the m_i
     Real omega = u(Channel::AngularMomentum) / J;
+    n *= MagneticFieldShapeFactor(V, s, u);
     return ParallelCurrent(V, s, omega, n, Ti, Te, phi(0));
 }
 
@@ -242,11 +244,11 @@ Value CurvedMirrorPlasma::InitialAuxValue(Index, Position V, Time t) const
     Real Te = p_e / n;
     Real Ti = p_i / n;
 
-    Real s = 0.0;
+    Real s = 0.4;
 
-    Real R = B->R_V(V, s);
+    Real Rmax = B->Rmax(V);
 
-    Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
+    Real J = n * Rmax * Rmax; // Normalisation of the moment of inertia includes the m_i
     Real omega = InitialFunction(Channel::AngularMomentum, V, t).val / J;
 
     auto func = [&](double phi)
@@ -306,7 +308,7 @@ Normalisation:
 // Define lengths so R_ref = 1
 Real CurvedMirrorPlasma::Gamma(RealVector u, RealVector q, Real V, Real s, Time t) const
 {
-    Real n = floor(u(Channel::Density), MinDensity) * MagneticFieldShapeFactor(V, s, u), p_e = (2. / 3.) * u(Channel::ElectronEnergy);
+    Real n = floor(u(Channel::Density), MinDensity), p_e = (2. / 3.) * u(Channel::ElectronEnergy);
     Real Te = p_e / n;
 
     // Not sure if we need to include any flux surface averaging here
@@ -315,6 +317,7 @@ Real CurvedMirrorPlasma::Gamma(RealVector u, RealVector q, Real V, Real s, Time 
     Real PressureGradient = ((p_e_prime + p_i_prime) / p_e);
     Real TemperatureGradient = (3. / 2.) * (Te_prime / Te);
 
+    p_e *= MagneticFieldShapeFactor(V, s, u);
     // Real TemperatureGradient = (3. / 2.) * (p_e_prime - nPrime * Te) / p_e;
     Real R = B->R_V(V, s);
     Real GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e
@@ -335,10 +338,12 @@ Real CurvedMirrorPlasma::Gamma(RealVector u, RealVector q, Real V, Real s, Time 
 */
 Real CurvedMirrorPlasma::qi(RealVector u, RealVector q, Real V, Real s, Time t) const
 {
-    Real n = floor(u(Channel::Density), MinDensity) * MagneticFieldShapeFactor(V, s, u), p_i = (2. / 3.) * u(Channel::IonEnergy);
+    Real n = floor(u(Channel::Density), MinDensity), p_i = (2. / 3.) * u(Channel::IonEnergy);
     Real Ti = p_i / n;
     Real nPrime = q(Channel::Density), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
     Real Ti_prime = (p_i_prime - nPrime * Ti) / n;
+
+    p_i *= MagneticFieldShapeFactor(V, s, u);
 
     Real R = B->R_V(V, s);
     Real GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e, leaving (V'R)^2
@@ -356,14 +361,16 @@ Real CurvedMirrorPlasma::qi(RealVector u, RealVector q, Real V, Real s, Time t) 
  */
 Real CurvedMirrorPlasma::qe(RealVector u, RealVector q, Real V, Real s, Time t) const
 {
-    Real n = floor(u(Channel::Density), MinDensity) * MagneticFieldShapeFactor(V, s, u), p_e = (2. / 3.) * u(Channel::ElectronEnergy);
+    Real n = floor(u(Channel::Density), MinDensity), p_e = (2. / 3.) * u(Channel::ElectronEnergy);
     Real Te = p_e / n;
     Real nPrime = q(Channel::Density), p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
     Real Te_prime = (p_e_prime - nPrime * Te) / n;
 
     Real R = B->R_V(V, s);
     Real GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e, leaving (V'R)^2
-    Real HeatFlux = GeometricFactor * GeometricFactor * (p_e * Te / (Plasma->ElectronCollisionTime(n, Te))) * (4.66 * Te_prime / Te - (3. / 2.) * (p_e_prime + p_i_prime) / p_e);
+
+    p_e *= MagneticFieldShapeFactor(V, s, u);
+    Real HeatFlux = GeometricFactor * GeometricFactor * (Te / (Plasma->ElectronCollisionTime(n, Te))) * (4.66 * p_e * Te_prime / Te - (3. / 2.) * (p_e_prime + p_i_prime));
 
     if (std::isfinite(HeatFlux.val))
         return HeatFlux;
@@ -384,20 +391,27 @@ Real CurvedMirrorPlasma::qe(RealVector u, RealVector q, Real V, Real s, Time t) 
  */
 Real CurvedMirrorPlasma::Pi(RealVector u, RealVector q, Real V, Real s, Time t) const
 {
-    Real n = floor(u(Channel::Density), MinDensity) * MagneticFieldShapeFactor(V, s, u), p_i = (2. / 3.) * u(Channel::IonEnergy);
+    Real n = floor(u(Channel::Density), MinDensity), p_i = (2. / 3.) * u(Channel::IonEnergy);
     Real Ti = p_i / n;
     // dOmega dV = L'/J - J' L / J^2 ; L = angular momentum / J = moment of Inertia
     Real R = B->R_V(V, s);
 
-    Real J = n * R * R; // Normalisation includes the m_i
+    Real Rmax = B->Rmax(V);
+
+    // Should be computed where <nRR> = nRR, that should be around the midplane though
+    Real J = n * Rmax * Rmax; // Normalisation includes the m_i
     Real nPrime = q(Channel::Density);
-    Real dRdV = B->dRdV(V, s);
-    Real JPrime = R * R * nPrime + 2.0 * dRdV * R * n;
+
+    /*danger, swap out for Lmid*/
+    Real dRdV = B->dRdV(V, 0.5);
+    Real JPrime = Rmax * Rmax * nPrime + 2.0 * dRdV * Rmax * n;
 
     Real L = u(Channel::AngularMomentum);
     Real LPrime = q(Channel::AngularMomentum);
     Real dOmegadV = LPrime / J - JPrime * L / (J * J);
     Real omega = L / J;
+
+    n *= MagneticFieldShapeFactor(V, s, u);
 
     Real Pi_v = IonClassicalAngularMomentumFlux(V, s, n, Ti, dOmegadV, t) + omega * R * R * Gamma(u, q, V, s, t);
     return Pi_v;
@@ -419,14 +433,19 @@ Real CurvedMirrorPlasma::IonClassicalAngularMomentumFlux(Real V, Real s, Real n,
 
 Real CurvedMirrorPlasma::Sn(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real V, Real s, Time t) const
 {
-    Real n = floor(u(Channel::Density), MinDensity) * MagneticFieldShapeFactor(V, s, u), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
+    Real n = floor(u(Channel::Density), MinDensity), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
     Real Te = floor(p_e / n, MinTemp);
     Real Ti = floor(p_i / n, MinTemp);
 
-    Real R = B->R_V(V, s);
+    Real Rmax = B->Rmax(V);
 
-    Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
+    Real J = n * Rmax * Rmax; // Normalisation of the moment of inertia includes the m_i
     Real omega = u(Channel::AngularMomentum) / J;
+
+    Real WW = MagneticFieldShapeFactor(V, s, u);
+    n *= WW;
+    p_i *= WW;
+    p_e *= WW;
     Real Xi;
     if (useAmbipolarPhi)
     {
@@ -437,7 +456,7 @@ Real CurvedMirrorPlasma::Sn(RealVector u, RealVector q, RealVector sigma, RealVe
         Xi = CentrifugalPotential(V, s, omega, Ti, Te) + AmbipolarPhi(V, n, Ti, Te) / 2.0;
     }
     Real ParallelLosses = ElectronPastukhovLossRate(V, s, Xi, n, Te);
-    Real DensitySource = ParticleSourceStrength * ParticleSource(R.val, t);
+    Real DensitySource = ParticleSourceStrength * ParticleSource(Rmax.val, t);
     Real FusionLosses = Plasma->FusionRate(n, p_i);
 
     Real S = DensitySource - ParallelLosses - FusionLosses;
@@ -454,19 +473,27 @@ Real CurvedMirrorPlasma::Sn(RealVector u, RealVector q, RealVector sigma, RealVe
  */
 Real CurvedMirrorPlasma::Spi(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real V, Real s, Time t) const
 {
-    Real n = floor(u(Channel::Density), MinDensity) * MagneticFieldShapeFactor(V, s, u), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
+    Real n = floor(u(Channel::Density), MinDensity), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
     Real Te = floor(p_e / n, MinTemp);
     Real Ti = floor(p_i / n, MinTemp);
     // pi * d omega / d psi = (V'pi)*(d omega / d V)
-    Real R = B->R_V(V, s);
-    Real J = n * R * R; // Normalisation includes the m_i
+    Real Rmax = B->Rmax(V);
+    Real J = n * Rmax * Rmax; // Normalisation includes the m_i
     Real L = u(Channel::AngularMomentum);
     Real nPrime = q(Channel::Density);
-    Real dRdV = B->dRdV(V, s);
-    Real JPrime = R * R * nPrime + 2.0 * dRdV * R * n;
+
+    /*danger*/
+    Real dRdV = B->dRdV(V, 0.5); // swap this out for Lmid at some point
+
+    Real JPrime = Rmax * Rmax * nPrime + 2.0 * dRdV * Rmax * n;
     Real LPrime = q(Channel::AngularMomentum);
     Real dOmegadV = LPrime / J - JPrime * L / (J * J);
     Real omega = L / J;
+
+    Real WW = MagneticFieldShapeFactor(V, s, u);
+    n *= WW;
+    p_i *= WW;
+    p_e *= WW;
 
     Real ViscousHeating = IonClassicalAngularMomentumFlux(V, s, n, Ti, dOmegadV, t) * dOmegadV;
 
@@ -495,19 +522,24 @@ Real CurvedMirrorPlasma::Spi(RealVector u, RealVector q, RealVector sigma, RealV
 
 Real CurvedMirrorPlasma::Spe(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real V, Real s, Time t) const
 {
-    Real n = floor(u(Channel::Density), MinDensity) * MagneticFieldShapeFactor(V, s, u), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
+    Real n = floor(u(Channel::Density), MinDensity), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
     Real Te = floor(p_e / n, MinTemp);
     Real Ti = floor(p_i / n, MinTemp);
+
+    Real Rmax = B->Rmax(V);
+
+    Real J = n * Rmax * Rmax; // Normalisation includes the m_i
+    Real L = u(Channel::AngularMomentum);
+    Real omega = L / J;
+
+    Real WW = MagneticFieldShapeFactor(V, s, u);
+    n *= WW;
+    p_i *= WW;
+    p_e *= WW;
     Real EnergyExchange = -Plasma->IonElectronEnergyExchange(n, p_e, p_i, V, t);
 
     Real MirrorRatio = B->MirrorRatio(V, s);
     Real AlphaHeating = sqrt(1 - 1 / MirrorRatio) * Plasma->TotalAlphaPower(n, p_i);
-
-    Real R = B->R_V(V, s);
-
-    Real J = n * R * R; // Normalisation includes the m_i
-    Real L = u(Channel::AngularMomentum);
-    Real omega = L / J;
 
     Real PotentialHeating = 0.0; //-Gamma(u, q, V, t) * dphidV(u, q, phi, V); //(dphi1dV(u, q, phi(0), V));
 
@@ -540,15 +572,22 @@ Real CurvedMirrorPlasma::Somega(RealVector u, RealVector q, RealVector sigma, Re
     // J x B torque
     Real R = B->R_V(V, s);
 
-    Real n = floor(u(Channel::Density), MinDensity) * MagneticFieldShapeFactor(V, s, u), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
+    Real n = floor(u(Channel::Density), MinDensity), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
 
     Real Te = floor(p_e / n, MinTemp);
     Real Ti = floor(p_i / n, MinTemp);
 
     Real JxB = -IRadial / B->VPrime(V); //-jRadial * R * B->Bz_R(R);
     Real L = u(Channel::AngularMomentum);
-    Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
+
+    Real Rmax = B->Rmax(V);
+    Real J = n * Rmax * Rmax; // Normalisation of the moment of inertia includes the m_i
     Real omega = L / J;
+
+    Real WW = MagneticFieldShapeFactor(V, s, u);
+    n *= WW;
+    p_i *= WW;
+    p_e *= WW;
 
     // Neglect electron momentum
     Real Xi;
@@ -601,7 +640,7 @@ Real CurvedMirrorPlasma::MagneticFieldShapeFactor(Real V, Real s, RealVector u) 
     // Only use the part of Xi that depends on s, the ambipolar potential is a flux function so it cancels
     auto W = [&](Real s)
     {
-        Real R = B->R_V(V, s);
+        Real Rmax = B->Rmax(V);
 
         Real n = floor(u(Channel::Density), MinDensity), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
 
@@ -609,14 +648,16 @@ Real CurvedMirrorPlasma::MagneticFieldShapeFactor(Real V, Real s, RealVector u) 
         Real Ti = floor(p_i / n, MinTemp);
 
         Real L = u(Channel::AngularMomentum);
-        Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
+        Real J = n * Rmax * Rmax; // Normalisation of the moment of inertia includes the m_i
         Real omega = L / J;
 
-        return exp(CentrifugalPotential(V, s, omega, Ti, Te));
+        return exp(-CentrifugalPotential(V, s, omega, Ti, Te));
     };
 
     Real W_V = W(s);
-    return W_V / B->FluxSurfaceAverage(W, V);
+
+    Real WW = W_V / B->FluxSurfaceAverage(W, V);
+    return WW;
 }
 
 inline Real CurvedMirrorPlasma::AmbipolarPhi(Real V, Real n, Real Ti, Real Te) const
@@ -692,10 +733,11 @@ Real CurvedMirrorPlasma::IonPastukhovLossRate(Real V, Real s, Real Xi_i, Real n,
 // Returns (1/(1 + Tau))*(1-1/R_m)*(M^2)
 Real CurvedMirrorPlasma::CentrifugalPotential(Real V, Real s, Real omega, Real Ti, Real Te) const
 {
-    Real MirrorRatio = B->MirrorRatio(V, s);
+
     Real R = B->R_V(V, s);
+    Real Rmax = B->Rmax(V);
     Real tau = Ti / Te;
     Real MachNumber = omega * R / sqrt(Te); // omega is normalised to c_s0 / a
-    Real Potential = (1.0 / (1.0 + tau)) * (1.0 - 1.0 / MirrorRatio) * MachNumber * MachNumber / 2.0;
+    Real Potential = (1.0 / (1.0 + tau)) * (1.0 - R * R / (Rmax * Rmax)) * MachNumber * MachNumber / 2.0;
     return Potential;
 }

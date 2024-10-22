@@ -32,8 +32,11 @@ public:
     // This effectively makes this physics case incompatible with MMS, but we'll worry about that later
     virtual Real2nd InitialFunction(Index i, Real2nd V, Real2nd t) const override
     {
-        return B->FluxSurfaceAverage([&](Real s)
-                                     { return InitialFunction(i, V.val, s, t.val); }, V.val);
+        Real Vreal = V.val.val;
+        if (V.val.grad != 0)
+            Vreal.grad = V.val.grad;
+
+        return InitialFunction(i, Vreal, 0.5, t.val);
     }
 
 private:
@@ -79,15 +82,19 @@ private:
 
     Real Flux(Index i, RealVector u, RealVector q, Real V, Time t) override
     {
-        return B->FluxSurfaceAverage([&](Real s)
-                                     { return Flux(i, u, q, V, s, t); }, V);
+        Real G = B->FluxSurfaceAverage([&](Real s)
+                                       { return Flux(i, u, q, V, s, t); }, V);
+
+        return G;
     };
     Real Flux(Index, RealVector, RealVector, Real, Real, Time);
 
     Real Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector phi, Real V, Time t) override
     {
-        return B->FluxSurfaceAverage([&](Real s)
-                                     { return Source(i, u, q, sigma, phi, V, s, t); }, V);
+        Real S = B->FluxSurfaceAverage([&](Real s)
+                                       { return Source(i, u, q, sigma, phi, V, s, t); }, V);
+
+        return S;
     };
     Real Source(Index, RealVector, RealVector, RealVector, RealVector, Real, Real, Time);
 

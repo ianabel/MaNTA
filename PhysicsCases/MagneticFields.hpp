@@ -17,28 +17,41 @@ using Real = autodiff::dual;
 // (we may later introduce a B0 & R0, but these are 1T & 1m for now)
 
 // Base magnetic field class
+// Functions depend on the flux surface volume and another coordinate
+// This is usually the arc length "s", but it is sometimes easier to make it another coordinate, so we leave it open ended
 class MagneticField
 {
 public:
 	MagneticField() = default;
 	virtual Real Psi_V(Real V) const = 0;
-	virtual Real B(Real Psi, Real s) const = 0;
-	virtual Real R(Real Psi, Real s) const = 0;
+	virtual Real B(Real Psi, Real) const = 0;
+	virtual Real R(Real Psi, Real) const = 0;
 	virtual Real R_V(Real V, Real s) const { return R(Psi_V(V), s); }
-	virtual Real dRdV(Real V, Real s) const = 0;
+	virtual Real dRdV(Real V, Real) const = 0;
 	virtual Real VPrime(Real V) const = 0;
-	virtual Real MirrorRatio(Real V, Real s) const = 0;
+	virtual Real MirrorRatio(Real V, Real) const = 0;
+	virtual Real Rmax(Real V) const { return R(Psi_V(V), 0.5 * (LeftEndpoint(Psi_V(V)) + RightEndpoint(Psi_V(V)))); }
+	virtual Real Rmin(Real V) const { return R(Psi_V(V), RightEndpoint(Psi_V(V))); }
 
+	/// @brief Computes the flux surface average of a function f(V,s).
+	/// @tparam F is a generic function argument
+	/// @param f is the function that is being flux surface averaged, must be a function of the flux surface volume and another coordinate
+	/// @param V is the flux surface volume
+	/// @return Flux surface average <f>
 	template <typename F>
 	Real FluxSurfaceAverage(const F &f, Real V) const
 	{
-		return 2 * M_PI / VPrime(V) * trapezoid([&](Real s)
-												{ return f(s) / B(Psi_V(V), s); }, LeftEndpoint(Psi_V(V)), RightEndpoint(Psi_V(V)));
+		auto Integrand = [&](Real s)
+		{ return f(s) / B_s(Psi_V(V), s); };
+		Real I = 2 * M_PI / VPrime(V) * trapezoid(Integrand, LeftEndpoint(Psi_V(V)), RightEndpoint(Psi_V(V)), 1e-3);
+		return I;
 	}
 
 private:
 	virtual Real LeftEndpoint(Real Psi) const = 0;
 	virtual Real RightEndpoint(Real Psi) const = 0;
+
+	virtual Real B_s(Real Psi, Real s) const { return B(Psi, s); }
 };
 
 // Just a uniform magnetic field
@@ -92,69 +105,50 @@ public:
 	Real MirrorRatio(Real V, Real) const override { return MirrorRatio(V); }
 
 private:
-	double L_z = 0.6;
-	double B_z = 0.3;
-	double Rm = 10.0;
+	const double L_z = 0.6;
+	const double B_z = 0.3;
+	const double Rm = 10.0;
 	Real LeftEndpoint(Real) const override { return -L_z / 2.0; }
 	Real RightEndpoint(Real) const override { return L_z / 2.0; }
 };
 
-class CylindricalMagneticField
+// Define an analytic B_z(z) that sort of looks like a mirror field
+class CurvedMagneticField : public MagneticField
 {
 public:
-	CylindricalMagneticField(const std::string &file);
-	~CylindricalMagneticField() = default;
-
-	double Bz_R(double R);
-	double Bz_R(autodiff::dual R) { return Bz_R(R.val); };
-
-	double V(double Psi);
-	double Psi(double R);
-	double Psi_V(double V);
-	double VPrime(double V);
-	double VPrime(autodiff::dual V) { return VPrime(V.val); };
-
-	double R(double Psi);
-	double R_V(double V);
-	autodiff::dual R_V(autodiff::dual V)
-	{
-		autodiff::dual R = R_V(V.val);
-		if (V.grad != 0.0)
-			R.grad += V.grad * dRdV(V.val);
-		return R;
-	};
-
-	double dRdV(double V);
-	autodiff::dual dRdV(autodiff::dual V);
-	double MirrorRatio(double V);
-	double MirrorRatio(autodiff::dual V) { return MirrorRatio(V.val); };
-	void CheckBoundaries(double VL, double VR);
+	CurvedMagneticField() = default;
+	CurvedMagneticField(double L_z, double Bmid, double Rm) : L_z(L_z), Bmid(Bmid), Rm(Rm) {}
+	Real Psi_V(Real V) const override;
+	Real B(Real Psi, Real z) const override;
+	Real R(Real Psi, Real z) const override;
+	Real R_V(Real V, Real z) const override { return R(Psi_V(V), z); }
+	Real dRdV(Real V, Real z) const override;
+	Real VPrime(Real V) const override;
+	Real MirrorRatio(Real V, Real z) const override;
 
 private:
-	double L_z = 1.0;
-	double h;
+	const double L_z = 1.0;
+	const double Bmid = 0.34;
+	const double Rm = 10.0;
 
-	double R_root_solver(double Psi);
+	const double A = (Rm - 1) / (1 + Rm);
+	const double gamma = 2 * M_PI / L_z;
+	const double B0 = Bmid * (1 + A);
 
-	std::string filename;
-	std::vector<double> gridpoints;
-	netCDF::NcFile data_file;
-	unsigned int nPoints;
-	netCDF::NcDim R_dim;
-	std::vector<double> R_var;
-	std::vector<double> Bz_var;
-	std::vector<double> Psi_var;
-	std::vector<double> Rm_var;
+	Real LeftEndpoint(Real Psi) const override;
+	Real RightEndpoint(Real Psi) const override;
 
-	std::unique_ptr<spline> B_spline;
-	std::unique_ptr<spline> Psi_spline;
-	std::unique_ptr<spline> Rm_spline;
-	std::unique_ptr<spline> R_Psi_spline;
+	Real B_s(Real Psi, Real s) const override { return B_z(s); }
+	Real B_z(Real z) const;
+	Real B_r(Real Psi, Real z) const;
 };
 
 // Function for creating an instance of a magnetic field
 // Allow for constructors that take a different number of arguments
 template <typename T, typename... Args>
-static std::shared_ptr<MagneticField> createMagneticField(Args &&...args) { return std::make_shared<T>(std::forward<Args>(args)...); };
+static std::shared_ptr<MagneticField> createMagneticField(Args &&...args)
+{
+	return std::make_shared<T>(std::forward<Args>(args)...);
+};
 
 #endif // MAGNETICFIELDS_HPP
