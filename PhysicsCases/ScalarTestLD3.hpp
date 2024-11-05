@@ -48,6 +48,8 @@ public:
 
 	void initialiseDiagnostics(NetCDFIO &nc) override;
 	void writeDiagnostics(DGSoln const &, double, NetCDFIO &, size_t) override;
+        
+    bool isScalarDifferential( Index ) override;
 
 private:
 	// Put class-specific data here
