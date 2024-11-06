@@ -193,8 +193,6 @@ void SystemSolver::runSolver(double tFinal)
 
 	std::ofstream dydt_out, res_out;
 
-	N_Vector wgt;
-
 	if (physics_debug)
     {
         wgt = N_VClone(res);

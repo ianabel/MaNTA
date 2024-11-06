@@ -226,6 +226,8 @@ class SystemSolver
 
         int getErrorWeights( N_Vector y, N_Vector ewt );
         static int getErrorWeights_static( N_Vector, N_Vector, void * );
+
+        N_Vector wgt;
 };
 
 #endif // SYSTEMSOLVER_HPP
