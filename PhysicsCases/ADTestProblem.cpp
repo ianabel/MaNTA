@@ -11,7 +11,7 @@ ADTestProblem::ADTestProblem(toml::value const &config, Grid const &grid)
 	{
 		if (config.count("ADTestProblem") != 1)
 		{
-			throw std::invalid_argument("There should be a [ADTestProblem] section if you are using the 3VarCylinder physics model.");
+			throw std::invalid_argument("There should be a [ADTestProblem] section.");
 		}
 
 		T_s = 50;
