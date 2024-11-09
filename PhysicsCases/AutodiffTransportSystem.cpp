@@ -208,7 +208,7 @@ Real2nd AutodiffTransportSystem::InitialFunction(Index i, Real2nd x, Real2nd t) 
 		u = u_L + m * (x - xL) + InitialHeights[i] * v * v;
 		break;
 	case ProfileType::Uniform:
-		u = u_L;
+		u = InitialHeights[i];
 		break;
 	case ProfileType::Linear:
 		u = u_L + m * (x - xL);

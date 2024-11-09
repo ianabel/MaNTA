@@ -2,7 +2,9 @@
 #include "NonlinDiffTest.hpp"
 
 /*
-	Implementation of the Linear Diffusion case
+	Test implementation of nonlinear diffusion
+
+
  */
 
 // Needed to register the class
