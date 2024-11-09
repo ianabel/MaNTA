@@ -146,8 +146,14 @@ class DGApprox
 
         static void MassMatrix(Interval const &I, MatrixRef u)
         {
-            // The unweighted mass matrix is the identity.
-            u.setIdentity();
+            for (Index i = 0; i < u.rows(); i++)
+                for (Index j = 0; j < u.cols(); j++)
+                {
+                    auto F = [&](double x)
+                    { return Basis.Evaluate(I, i, x) * Basis.Evaluate(I, j, x); };
+                    u(i, j) = integrator.integrate(F, I.x_l, I.x_u);
+                }
+
         };
 
         static void MassMatrix(Interval const &I, MatrixRef u, std::function<double(double)> const &w)

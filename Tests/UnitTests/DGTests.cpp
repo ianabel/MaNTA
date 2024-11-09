@@ -191,7 +191,7 @@ BOOST_AUTO_TEST_CASE( dg_approx_static )
 	Eigen::MatrixXd tmp( 5, 5 );
 	tmp.setZero();
 	DGApprox::MassMatrix( testGrid[ 0 ], tmp );
-	BOOST_TEST( static_cast<bool>( tmp == Eigen::MatrixXd::Identity( 5, 5 ) ) );
+	BOOST_TEST( ( tmp - Eigen::MatrixXd::Identity( 5, 5 ) ).norm() < 1e-7 );
 
 	DGApprox::MassMatrix( testGrid[ 0 ], tmp, []( double ){ return 1.0; } );
 	BOOST_TEST( ( tmp - Eigen::MatrixXd::Identity( 5, 5 ) ).norm() < 1e-9 );
