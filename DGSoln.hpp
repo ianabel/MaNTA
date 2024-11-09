@@ -215,12 +215,12 @@ class DGSoln
                 for (Index i = 0; i < nCells; ++i)
                 {
                     Interval const &I = grid[i];
-                    lambda_[var](i) += LegendreBasis::Evaluate(I, u_[var].coeffs[i].second, I.x_l) / 2.0;
-                    lambda_[var](i + 1) += LegendreBasis::Evaluate(I, u_[var].coeffs[i].second, I.x_u) / 2.0;
+                    lambda_[var](i) += BasisType::Evaluate(I, u_[var].coeffs[i].second, I.x_l) / 2.0;
+                    lambda_[var](i + 1) += BasisType::Evaluate(I, u_[var].coeffs[i].second, I.x_u) / 2.0;
                 }
                 // Just set boundaries to the trace value of u. BCs are someone else's job
-                lambda_[var](0) = LegendreBasis::Evaluate(grid[0], u_[var].coeffs[0].second, grid.lowerBoundary());
-                lambda_[var](nCells) = LegendreBasis::Evaluate(grid[nCells - 1], u_[var].coeffs[nCells - 1].second, grid.upperBoundary());
+                lambda_[var](0) = BasisType::Evaluate(grid[0], u_[var].coeffs[0].second, grid.lowerBoundary());
+                lambda_[var](nCells) = BasisType::Evaluate(grid[nCells - 1], u_[var].coeffs[nCells - 1].second, grid.upperBoundary());
             }
         };
 
@@ -233,15 +233,15 @@ class DGSoln
                 for (Index i = 0; i < nCells; ++i)
                 {
                     Interval const &I = grid[i];
-                    lambda_[var](i) += LegendreBasis::Evaluate(I, u_[var].coeffs[i].second, I.x_l) / 2.0;
-                    lambda_[var](i + 1) += LegendreBasis::Evaluate(I, u_[var].coeffs[i].second, I.x_u) / 2.0;
+                    lambda_[var](i) += BasisType::Evaluate(I, u_[var].coeffs[i].second, I.x_l) / 2.0;
+                    lambda_[var](i + 1) += BasisType::Evaluate(I, u_[var].coeffs[i].second, I.x_u) / 2.0;
 
-                    lambda_[var](i)     += LegendreBasis::Evaluate(I, q_[var].coeffs[i].second, I.x_l) / (2.0*tau);
-                    lambda_[var](i + 1) -= LegendreBasis::Evaluate(I, q_[var].coeffs[i].second, I.x_u) / (2.0*tau);
+                    lambda_[var](i)     += BasisType::Evaluate(I, q_[var].coeffs[i].second, I.x_l) / (2.0*tau);
+                    lambda_[var](i + 1) -= BasisType::Evaluate(I, q_[var].coeffs[i].second, I.x_u) / (2.0*tau);
                 }
                 // Just set boundaries to the trace value of u. BCs are someone else's job
-                lambda_[var](0) = LegendreBasis::Evaluate(grid[0], u_[var].coeffs[0].second, grid.lowerBoundary());
-                lambda_[var](nCells) = LegendreBasis::Evaluate(grid[nCells - 1], u_[var].coeffs[nCells - 1].second, grid.upperBoundary());
+                lambda_[var](0) = BasisType::Evaluate(grid[0], u_[var].coeffs[0].second, grid.lowerBoundary());
+                lambda_[var](nCells) = BasisType::Evaluate(grid[nCells - 1], u_[var].coeffs[nCells - 1].second, grid.upperBoundary());
             }
         };
 
@@ -283,8 +283,8 @@ class DGSoln
 
                         for (Index j = 0; j < k + 1; ++j)
                         {
-                            coeffPair.second[j] += wgt * sigma_plus * LegendreBasis::Evaluate(I, j, y_plus);
-                            coeffPair.second[j] += wgt * sigma_minus * LegendreBasis::Evaluate(I, j, y_minus);
+                            coeffPair.second[j] += wgt * sigma_plus * BasisType::Evaluate(I, j, y_plus);
+                            coeffPair.second[j] += wgt * sigma_minus * BasisType::Evaluate(I, j, y_minus);
                         }
                     }
                 }

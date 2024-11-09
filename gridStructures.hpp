@@ -18,6 +18,9 @@ typedef std::function<double(double)> Fn;
 #include <numbers>
 using std::numbers::pi;
 
+class LegendreBasis;
+using BasisType = LegendreBasis;
+
 class Interval
 {
 public:

@@ -34,8 +34,8 @@ void SystemSolver::NLuMat( Matrix& NLu, DGSoln const& Y, Interval I ) {
  
 void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX_dZ )( Index, Values&, const State&, Position, double ), DGSoln const& Y, Interval I )
 {
-	auto const& x_vals = DGApprox::Integrator().abscissa();
-	auto const& x_wgts = DGApprox::Integrator().weights();
+	auto const& x_vals = DGApprox::abscissae();
+	auto const& x_wgts = DGApprox::weights();
 	const size_t n_abscissa = x_vals.size();
 
 	// ASSERT mat.shape == ( nVars * ( k + 1) , nVars * ( k + 1 ) )
@@ -78,9 +78,9 @@ void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX
 					for ( Index l=0; l < k + 1; ++l )
 					{
 						mat( XVar * ( k + 1 ) + j, ZVar * ( k + 1 ) + l ) +=
-							wgt * dX_dZ_vals1[ ZVar ] * LegendreBasis::Evaluate( I, j, y_plus ) * LegendreBasis::Evaluate( I, l, y_plus );
+							wgt * dX_dZ_vals1[ ZVar ] * BasisType::Evaluate( I, j, y_plus ) * BasisType::Evaluate( I, l, y_plus );
 						mat( XVar * ( k + 1 ) + j, ZVar * ( k + 1 ) + l ) +=
-							wgt * dX_dZ_vals2[ ZVar ] * LegendreBasis::Evaluate( I, j, y_minus ) * LegendreBasis::Evaluate( I, l, y_minus );
+							wgt * dX_dZ_vals2[ ZVar ] * BasisType::Evaluate( I, j, y_minus ) * BasisType::Evaluate( I, l, y_minus );
 					}
 				}
 			}
@@ -105,8 +105,8 @@ void SystemSolver::dSourcedsigma_Mat( Matrix& dSourcedsigmaMatrix, DGSoln const&
 
 void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Interval I )
 {
-	auto const& x_vals = DGApprox::Integrator().abscissa();
-	auto const& x_wgts = DGApprox::Integrator().weights();
+	auto const& x_vals = DGApprox::abscissae();
+	auto const& x_wgts = DGApprox::weights();
 	const size_t n_abscissa = x_vals.size();
 
 	// ASSERT mat.shape == ( nVars * ( k + 1) , nScalars )
@@ -144,9 +144,9 @@ void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Interval
 				for ( Index j=0; j < k + 1; ++j )
 				{
 					mat( XVar * ( k + 1 ) + j, iScalar ) +=
-						wgt * dSdS_vals1[ iScalar ] * LegendreBasis::Evaluate( I, j, y_plus );
+						wgt * dSdS_vals1[ iScalar ] * BasisType::Evaluate( I, j, y_plus );
 					mat( XVar * ( k + 1 ) + j, iScalar ) +=
-						wgt * dSdS_vals2[ iScalar ] * LegendreBasis::Evaluate( I, j, y_minus );
+						wgt * dSdS_vals2[ iScalar ] * BasisType::Evaluate( I, j, y_minus );
 				}
 			}
 		}
@@ -155,8 +155,8 @@ void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Interval
 
 void SystemSolver::dSourcedPhi_Mat( Matrix& mat, DGSoln const& Y, Interval I )
 {
-	auto const& x_vals = DGApprox::Integrator().abscissa();
-	auto const& x_wgts = DGApprox::Integrator().weights();
+	auto const& x_vals = DGApprox::abscissae();
+	auto const& x_wgts = DGApprox::weights();
 	const size_t n_abscissa = x_vals.size();
 
 	// ASSERT mat.shape == ( nVars * ( k + 1) , nAux * ( k + 1 ) )
@@ -196,9 +196,9 @@ void SystemSolver::dSourcedPhi_Mat( Matrix& mat, DGSoln const& Y, Interval I )
 					for ( Index l=0; l < k + 1; ++l )
 					{
 						mat( Var * ( k + 1 ) + j, Aux * ( k + 1 ) + l ) +=
-							wgt * dS_dPhi_vals1[ Aux ] * LegendreBasis::Evaluate( I, j, y_plus ) * LegendreBasis::Evaluate( I, l, y_plus );
+							wgt * dS_dPhi_vals1[ Aux ] * BasisType::Evaluate( I, j, y_plus ) * BasisType::Evaluate( I, l, y_plus );
 						mat( Var * ( k + 1 ) + j, Aux * ( k + 1 ) + l ) +=
-							wgt * dS_dPhi_vals2[ Aux ] * LegendreBasis::Evaluate( I, j, y_minus ) * LegendreBasis::Evaluate( I, l, y_minus );
+							wgt * dS_dPhi_vals2[ Aux ] * BasisType::Evaluate( I, j, y_minus ) * BasisType::Evaluate( I, l, y_minus );
 					}
 				}
 			}
@@ -208,8 +208,8 @@ void SystemSolver::dSourcedPhi_Mat( Matrix& mat, DGSoln const& Y, Interval I )
 
 void SystemSolver::dAux_Mat( Eigen::Ref<Matrix> mat, DGSoln const& Y, Interval I )
 {
-  auto const& x_vals = DGApprox::Integrator().abscissa();
-  auto const& x_wgts = DGApprox::Integrator().weights();
+  auto const& x_vals = DGApprox::abscissae();
+  auto const& x_wgts = DGApprox::weights();
   const size_t n_abscissa = x_vals.size();
 
   // Assert Mat.shape == ( nAux * ( k + 1 ), ( 3 * nVars + nAux ) * ( k + 1 ) )
@@ -264,19 +264,19 @@ void SystemSolver::dAux_Mat( Eigen::Ref<Matrix> mat, DGSoln const& Y, Interval I
           for ( Index l=0; l < k + 1; ++l )
           {
             mat( Aux * ( k + 1 ) + j, Var * ( k + 1 ) + l ) +=
-              wgt * dG_dsigma_vals1[ Var ] * LegendreBasis::Evaluate( I, j, y_plus ) * LegendreBasis::Evaluate( I, l, y_plus );
+              wgt * dG_dsigma_vals1[ Var ] * BasisType::Evaluate( I, j, y_plus ) * BasisType::Evaluate( I, l, y_plus );
             mat( Aux * ( k + 1 ) + j, Var * ( k + 1 ) + l ) +=
-              wgt * dG_dsigma_vals2[ Var ] * LegendreBasis::Evaluate( I, j, y_minus ) * LegendreBasis::Evaluate( I, l, y_minus );
+              wgt * dG_dsigma_vals2[ Var ] * BasisType::Evaluate( I, j, y_minus ) * BasisType::Evaluate( I, l, y_minus );
             
             mat( Aux * ( k + 1 ) + j, nVars * ( k + 1 ) + Var * ( k + 1 ) + l ) +=
-              wgt * dG_dq_vals1[ Var ] * LegendreBasis::Evaluate( I, j, y_plus ) * LegendreBasis::Evaluate( I, l, y_plus );
+              wgt * dG_dq_vals1[ Var ] * BasisType::Evaluate( I, j, y_plus ) * BasisType::Evaluate( I, l, y_plus );
             mat( Aux * ( k + 1 ) + j, nVars * ( k + 1 ) + Var * ( k + 1 ) + l ) +=
-              wgt * dG_dq_vals2[ Var ] * LegendreBasis::Evaluate( I, j, y_minus ) * LegendreBasis::Evaluate( I, l, y_minus );
+              wgt * dG_dq_vals2[ Var ] * BasisType::Evaluate( I, j, y_minus ) * BasisType::Evaluate( I, l, y_minus );
             
             mat( Aux * ( k + 1 ) + j, 2 * nVars * ( k + 1 ) + Var * ( k + 1 ) + l ) +=
-              wgt * dG_du_vals1[ Var ] * LegendreBasis::Evaluate( I, j, y_plus ) * LegendreBasis::Evaluate( I, l, y_plus );
+              wgt * dG_du_vals1[ Var ] * BasisType::Evaluate( I, j, y_plus ) * BasisType::Evaluate( I, l, y_plus );
             mat( Aux * ( k + 1 ) + j, 2 * nVars * ( k + 1 ) + Var * ( k + 1 ) + l ) +=
-              wgt * dG_du_vals2[ Var ] * LegendreBasis::Evaluate( I, j, y_minus ) * LegendreBasis::Evaluate( I, l, y_minus );
+              wgt * dG_du_vals2[ Var ] * BasisType::Evaluate( I, j, y_minus ) * BasisType::Evaluate( I, l, y_minus );
           }
         }
       }
@@ -287,9 +287,9 @@ void SystemSolver::dAux_Mat( Eigen::Ref<Matrix> mat, DGSoln const& Y, Interval I
           for ( Index l=0; l < k + 1; ++l )
           {
             mat( Aux * ( k + 1 ) + j, SQU_DOF * nVars + A2 * ( k + 1 ) + l ) +=
-              wgt * dG_dPhi_vals1[ A2 ] * LegendreBasis::Evaluate( I, j, y_plus ) * LegendreBasis::Evaluate( I, l, y_plus );
+              wgt * dG_dPhi_vals1[ A2 ] * BasisType::Evaluate( I, j, y_plus ) * BasisType::Evaluate( I, l, y_plus );
             mat( Aux * ( k + 1 ) + j, SQU_DOF * nVars + A2 * ( k + 1 ) + l ) +=
-              wgt * dG_dPhi_vals2[ A2 ] * LegendreBasis::Evaluate( I, j, y_minus ) * LegendreBasis::Evaluate( I, l, y_minus );
+              wgt * dG_dPhi_vals2[ A2 ] * BasisType::Evaluate( I, j, y_minus ) * BasisType::Evaluate( I, l, y_minus );
           }
         }
       }

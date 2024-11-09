@@ -129,6 +129,9 @@ class DGApprox
                 return Basis.Evaluate(it->first, it->second, x);
         };
 
+        static const std::array<double,15>& abscissae() { return integrator.abscissa(); };
+        static const std::array<double,15>& weights() { return integrator.weights(); };
+
         static double CellProduct(Interval const &I, std::function<double(double)> f, std::function<double(double)> g)
         {
             auto u = [&](double x)
@@ -249,7 +252,7 @@ class DGApprox
         const Grid &grid;
         unsigned int k;
         Coeff_t coeffs;
-        static LegendreBasis Basis;
+        static BasisType Basis;
         static IntegratorType integrator;
 
         friend class DGSoln;
