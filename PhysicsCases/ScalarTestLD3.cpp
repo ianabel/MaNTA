@@ -138,6 +138,14 @@ Value ScalarTestLD3::InitialDerivative(Index, Position x) const
 	return -( beta * std::numbers::pi / 2.0 )*std::sin( std::numbers::pi * x / 2.0 );
 }
 
+bool ScalarTestLD3::isScalarDifferential( Index s ) 
+{
+    if( s == 0 ) 
+        return true; // E is differential, as we depend on dE/dt expliticly
+    else
+        return false; // J is not differential
+}
+
 Value ScalarTestLD3::ScalarGExtended( Index s, const DGSoln & y, const DGSoln & dydt, Time )
 {
     double dEdt = dydt.Scalar(0);
@@ -165,7 +173,7 @@ void ScalarTestLD3::ScalarGPrimeExtended( Index scalarIndex, State &s, State &ou
 		s.Flux[ 0 ] = 0.0; // d G_0 / d sigma
 		s.Derivative[ 0 ] = 0.0; // d G_0 / d (u')
 		// dG_0 / du = - dM/du (as functional derivative, taken as an inner product with P)
-		double P_mass = boost::math::quadrature::gauss_kronrod<double, 31>::integrate( P, -1, 1 );
+		double P_mass = boost::math::quadrature::gauss_kronrod<double, 31>::integrate( P, I.x_l, I.x_u );
 		s.Variable[ 0 ] = -P_mass;
 		s.Scalars[ 0 ] = 1.0; // dG_0/dE
 		s.Scalars[ 1 ] = 0.0; // dG_0/dJ

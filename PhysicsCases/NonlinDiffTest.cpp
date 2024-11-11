@@ -2,13 +2,15 @@
 #include "NonlinDiffTest.hpp"
 
 /*
-	Implementation of the Linear Diffusion case
+	Test implementation of nonlinear diffusion
+
+
  */
 
 // Needed to register the class
 REGISTER_PHYSICS_IMPL( NonlinDiffTest );
 
-NonlinDiffTest::NonlinDiffTest( toml::value const& config, Grid const& )
+NonlinDiffTest::NonlinDiffTest( toml::value const& config, Grid const& g )
 {
 	// Always set nVars in a derived constructor
 	nVars = 1;
@@ -18,12 +20,14 @@ NonlinDiffTest::NonlinDiffTest( toml::value const& config, Grid const& )
 
 	if ( config.count( "DiffusionProblem" ) != 1 ) {
 		n = 2;
+	    t0 = 1.0;
 	} else {
 		auto const& DiffConfig = config.at( "DiffusionProblem" );
 		n = toml::find_or( DiffConfig, "n", 2 );
+        t0 = toml::find_or( DiffConfig, "t0", 1.0 );
 	}
 
-	t0 = 1.1;
+    xR = g.upperBoundary();
 
 }
 
