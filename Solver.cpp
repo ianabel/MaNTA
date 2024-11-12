@@ -368,7 +368,7 @@ int JacSetup(sunrealtype tt, sunrealtype cj, N_Vector yy, N_Vector yp, N_Vector 
 	auto System = reinterpret_cast<SystemSolver *>(user_data);
 	System->setJacTime(tt);
 	System->setAlpha(cj);
-	System->setJacEvalY(yy);
+	System->setJacEvalY(yy,yp);
 	System->updateBoundaryConditions(tt);
 	System->updateMatricesForJacSolve();
 	return 0;

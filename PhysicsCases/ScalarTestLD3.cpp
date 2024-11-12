@@ -173,7 +173,7 @@ Value ScalarTestLD3::ScalarGExtended( Index s, const DGSoln & y, const DGSoln & 
     }
 }
 
-void ScalarTestLD3::ScalarGPrimeExtended( Index scalarIndex, State &s, State &out_dt, const DGSoln &y, std::function<double( double )> P, Interval I, Time )
+void ScalarTestLD3::ScalarGPrimeExtended( Index scalarIndex, State &s, State &out_dt, const DGSoln &y, const DGSoln & dydt, std::function<double( double )> P, Interval I, Time )
 {
     s.zero();
     out_dt.zero();
