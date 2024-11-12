@@ -151,7 +151,6 @@ class LegendreBasis
         }
 };
 
-/*
 class ChebyshevBasis
 {
     private:
@@ -369,5 +368,5 @@ public:
 		};
 	}
 };
-*/
+
 #endif
