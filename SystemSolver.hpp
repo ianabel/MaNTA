@@ -121,7 +121,7 @@ class SystemSolver
 
         void setInputFile(std::string const &fn) { inputFilePath = fn; };
 
-        void setJacEvalY( N_Vector );
+        void setJacEvalY( N_Vector, N_Vector );
         int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
 
     private:
@@ -157,7 +157,10 @@ class SystemSolver
         DGSoln y, dydt; // memory owned by SUNDIALS
 
         double *yJacMem = nullptr;
+        double *dydtJacMem = nullptr;
+
         DGSoln yJac; // memory owned by us
+        DGSoln dydtJac; // memory owned by us
 
         void NLqMat(Matrix &, DGSoln const &, Interval);
         void NLuMat(Matrix &, DGSoln const &, Interval);

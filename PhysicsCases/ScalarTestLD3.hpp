@@ -36,7 +36,7 @@ public:
 	void dSources_dsigma(Index, Values &v, const State &, Position, Time) override;
 
 	Value ScalarGExtended(Index, const DGSoln &, const DGSoln &, Time) override;
-	void ScalarGPrimeExtended(Index, State &, State &, const DGSoln &, std::function<double(double)>, Interval, Time) override;
+	void ScalarGPrimeExtended(Index, State &, State &, const DGSoln &, const DGSoln &, std::function<double(double)>, Interval, Time) override;
 	void dSources_dScalars(Index, Values &, const State &, Position, Time) override;
 
 	// Finally one has to provide initial conditions for u & q

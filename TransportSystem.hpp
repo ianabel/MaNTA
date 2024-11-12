@@ -79,7 +79,7 @@ class TransportSystem
         }
 
 
-        virtual void ScalarGPrimeExtended( Index i, State &out, State &out_dt, const DGSoln &y, std::function<double( double )> phi, Interval I, Time t ) {
+        virtual void ScalarGPrimeExtended( Index i, State &out, State &out_dt, const DGSoln &y, const DGSoln &dydt, std::function<double( double )> phi, Interval I, Time t ) {
             out_dt.zero();
             ScalarGPrime( i, out, y, phi, I, t );
         }

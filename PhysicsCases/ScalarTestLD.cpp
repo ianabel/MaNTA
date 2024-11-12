@@ -101,7 +101,7 @@ Value ScalarTestLD::ScalarGExtended( Index, const DGSoln & y, const DGSoln &dydt
 	return (dydt.Scalar( 0 ) - y.Scalar( 0 ));
 }
 
-void ScalarTestLD::ScalarGPrimeExtended( Index, State &out, State &out_dt, const DGSoln &y, std::function<double( double )>, Interval, Time )
+void ScalarTestLD::ScalarGPrimeExtended( Index, State &out, State &out_dt, const DGSoln &y, const DGSoln &dydt, std::function<double( double )>, Interval, Time )
 {
     out.zero(); out_dt.zero();
     out.Scalars( 0 ) = -1.0;
