@@ -34,8 +34,8 @@ void SystemSolver::NLuMat( Matrix& NLu, DGSoln const& Y, Interval I ) {
  
 void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX_dZ )( Index, Values&, const State&, Position, double ), DGSoln const& Y, Interval I )
 {
-	auto const& x_vals = DGApprox::abscissae();
-	auto const& x_wgts = DGApprox::weights();
+	auto const& x_vals = BasisType::abscissae();
+	auto const& x_wgts = BasisType::weights();
 	const size_t n_abscissa = x_vals.size();
 
 	// ASSERT mat.shape == ( nVars * ( k + 1) , nVars * ( k + 1 ) )
@@ -105,8 +105,8 @@ void SystemSolver::dSourcedsigma_Mat( Matrix& dSourcedsigmaMatrix, DGSoln const&
 
 void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Interval I )
 {
-	auto const& x_vals = DGApprox::abscissae();
-	auto const& x_wgts = DGApprox::weights();
+	auto const& x_vals = BasisType::abscissae();
+	auto const& x_wgts = BasisType::weights();
 	const size_t n_abscissa = x_vals.size();
 
 	// ASSERT mat.shape == ( nVars * ( k + 1) , nScalars )
@@ -155,8 +155,8 @@ void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Interval
 
 void SystemSolver::dSourcedPhi_Mat( Matrix& mat, DGSoln const& Y, Interval I )
 {
-	auto const& x_vals = DGApprox::abscissae();
-	auto const& x_wgts = DGApprox::weights();
+	auto const& x_vals = BasisType::abscissae();
+	auto const& x_wgts = BasisType::weights();
 	const size_t n_abscissa = x_vals.size();
 
 	// ASSERT mat.shape == ( nVars * ( k + 1) , nAux * ( k + 1 ) )
@@ -208,8 +208,8 @@ void SystemSolver::dSourcedPhi_Mat( Matrix& mat, DGSoln const& Y, Interval I )
 
 void SystemSolver::dAux_Mat( Eigen::Ref<Matrix> mat, DGSoln const& Y, Interval I )
 {
-  auto const& x_vals = DGApprox::abscissae();
-  auto const& x_wgts = DGApprox::weights();
+  auto const& x_vals = BasisType::abscissae();
+  auto const& x_wgts = BasisType::weights();
   const size_t n_abscissa = x_vals.size();
 
   // Assert Mat.shape == ( nAux * ( k + 1 ), ( 3 * nVars + nAux ) * ( k + 1 ) )

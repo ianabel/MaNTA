@@ -53,7 +53,7 @@ public:
 
 private:
 	// Put class-specific data here
-	double kappa, alpha, beta, gamma, u0, M0, gamma_d;
+	double kappa, alpha, beta, gamma, u0, M0, gamma_d, gamma_I;
 
 	Value ScaledSource(Position) const;
 

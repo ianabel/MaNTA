@@ -45,8 +45,10 @@ public:
 	}
 
 	double x_l, x_u;
-	bool contains(double x) const { return (x_l <= x) && (x <= x_u); };
-	double h() const { return (x_u - x_l); };
+	bool inline contains(double x) const { return (x_l <= x) && (x <= x_u); };
+	double inline h() const { return (x_u - x_l); };
+    double inline toRef(double x) const { return 2 * (x - x_l) / (x_u - x_l) - 1.0; };
+    double inline fromRef(double x) const { return (x+1.0)*(x_u-x_l)/2.0 + x_l; };
 };
 
 class Grid

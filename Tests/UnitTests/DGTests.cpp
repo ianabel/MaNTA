@@ -190,14 +190,15 @@ BOOST_AUTO_TEST_CASE( dg_approx_static )
 
 	Eigen::MatrixXd tmp( 5, 5 );
 	tmp.setZero();
-	DGApprox::MassMatrix( testGrid[ 0 ], tmp );
+    DGApprox dg(testGrid, 4);
+	dg.MassMatrix( testGrid[ 0 ], tmp );
 	BOOST_TEST( ( tmp - Eigen::MatrixXd::Identity( 5, 5 ) ).norm() < 1e-7 );
 
-	DGApprox::MassMatrix( testGrid[ 0 ], tmp, []( double ){ return 1.0; } );
+	dg.MassMatrix( testGrid[ 0 ], tmp, []( double ){ return 1.0; } );
 	BOOST_TEST( ( tmp - Eigen::MatrixXd::Identity( 5, 5 ) ).norm() < 1e-9 );
 
 
-	DGApprox::MassMatrix( testGrid[ 0 ], tmp, []( double x ){ return x; } );
+	dg.MassMatrix( testGrid[ 0 ], tmp, []( double x ){ return x; } );
 	Eigen::MatrixXd ref( 5,5 ); 
 	// Courtesy of Mathematica
 	ref << 0.125,      0.07216878, 0.0,        0.0,        0.0,
@@ -208,7 +209,7 @@ BOOST_AUTO_TEST_CASE( dg_approx_static )
 
 	BOOST_TEST( ( tmp - ref ).norm() < 1e-7 );
 	
-	DGApprox::MassMatrix( testGrid[ 0 ], tmp, []( double x, int ){ return x; }, 0 );
+	dg.MassMatrix( testGrid[ 0 ], tmp, []( double x, int ){ return x; }, 0 );
 	BOOST_TEST( ( tmp - ref ).norm() < 1e-7 );
 
 	DGApprox test( testGrid, 4 );
@@ -218,7 +219,7 @@ BOOST_AUTO_TEST_CASE( dg_approx_static )
 	BOOST_TEST( ( tmp - ref ).norm() < 1e-7 );
 
 	tmp.resize( 5, 5 );
-	DGApprox::DerivativeMatrix( testGrid[ 0 ], tmp );
+	dg.DerivativeMatrix( testGrid[ 0 ], tmp );
 	ref << 0.0, 13.8564, 0.0,     21.166,  0.0,
 	       0.0, 0.0,     30.9839, 0.0,     41.5692,
 	       0.0, 0.0,     0.0,     47.3286, 0.0,
@@ -226,10 +227,10 @@ BOOST_AUTO_TEST_CASE( dg_approx_static )
 	       0.0, 0.0,     0.0,     0.0,     0.0;
 	BOOST_TEST( ( tmp - ref ).norm() < 1e-4 ); // Entries are only good to 0.0001 anyway
 
-	DGApprox::DerivativeMatrix( testGrid[ 0 ], tmp, [](  double ){ return 1.0; } );
+	dg.DerivativeMatrix( testGrid[ 0 ], tmp, [](  double ){ return 1.0; } );
 	BOOST_TEST( ( tmp - ref ).norm() < 1e-4 );
 
-	DGApprox::DerivativeMatrix( testGrid[ 0 ], tmp, []( double x ){ return x; } );
+	dg.DerivativeMatrix( testGrid[ 0 ], tmp, []( double x ){ return x; } );
 	ref << 0.0, 1.73205, 2.23607, 2.64575, 3.0,
 	       0.0, 1.0,     3.87298, 4.58258, 5.19615,
 	       0.0, 0.0,     2.0,     5.91608, 6.7082,

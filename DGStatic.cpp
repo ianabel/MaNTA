@@ -3,6 +3,8 @@
 
 #include "DGApprox.hpp"
 
-DGApprox::IntegratorType DGApprox::integrator;
+std::map<unsigned int, BasisType> BasisType::singletons;
+BasisType::IntegratorType BasisType::integrator;
+
 
 

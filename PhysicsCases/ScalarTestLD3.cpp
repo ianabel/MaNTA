@@ -30,8 +30,9 @@
 	E = M(t=0) - M
 	J = gamma * E + gamma_d * dE/dt + gamma_I * Int_0^t ( E(t') dt' ) + J_exact
 
-    to handle the integral term, we add on
+    to handle the integral term, we write
 
+	J = gamma * E + gamma_d * dE/dt + gamma_I * I + J_exact
     dI/dt = E
 
     and treat I as a third scalar
@@ -45,7 +46,7 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const&)
 {
 	// Always set nVars in a derived constructor
 	nVars = 1;
-	nScalars = 2;
+	nScalars = 3;
 
 	// Construst your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
@@ -61,7 +62,9 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const&)
 	beta = toml::find_or(DiffConfig, "beta", 1.0);
 	gamma = toml::find_or(DiffConfig, "gamma", 1.0);
 	gamma_d = toml::find_or(DiffConfig, "gamma_d", 0.0);
+	gamma_I = toml::find_or(DiffConfig, "gamma_I", 0.0);
 	u0 = toml::find_or(DiffConfig, "u0", 0.1);
+
 
 	M0 = 2*u0 + 4*beta/std::numbers::pi;
     std::cerr << "M0 : " << M0 << std::endl;
@@ -140,8 +143,8 @@ Value ScalarTestLD3::InitialDerivative(Index, Position x) const
 
 bool ScalarTestLD3::isScalarDifferential( Index s ) 
 {
-    if( s == 0 ) 
-        return true; // E is differential, as we depend on dE/dt expliticly
+    if( s == 0 || s == 2) 
+        return true; // E & I are differential, as we depend on d{E,I}/dt expliticly
     else
         return false; // J is not differential
 }
@@ -149,17 +152,22 @@ bool ScalarTestLD3::isScalarDifferential( Index s )
 Value ScalarTestLD3::ScalarGExtended( Index s, const DGSoln & y, const DGSoln & dydt, Time )
 {
     double dEdt = dydt.Scalar(0);
+    double dIdt = dydt.Scalar(2);
     double E = y.Scalar(0);
     double J = y.Scalar(1);
+    double I = y.Scalar(2);
     if( s == 0 ) {
         // E = (M0 - M)
         // => G_0 = E - (M-M0)
         double M = boost::math::quadrature::gauss_kronrod<double, 31>::integrate( [ & ]( double x ){ return y.u( 0 )( x );}, -1, 1 );
         return E - (M0-M);
     } else if ( s == 1 ) {
-        // J = gamma * E + gamma_d * dE/dt + [ sigma(x = +1) - sigma(x = -1) ]
-        // => G_1 = J - gamma * E - gamma_d * dE/dt - [ sigma(x = +1) - sigma(x = -1) ]
-        return J - gamma * E - gamma_d * dEdt - ( y.sigma( 0 )( 1 ) - y.sigma( 0 )( -1 ) );
+        // J = gamma * E + gamma_d * dE/dt + gamma_I * I + [ sigma(x = +1) - sigma(x = -1) ]
+        // => G_1 = J - gamma * E - gamma_d * dE/dt - gamma_I * I - [ sigma(x = +1) - sigma(x = -1) ]
+        return J - gamma * E - gamma_d * dEdt - gamma_I * I - ( y.sigma( 0 )( 1 ) - y.sigma( 0 )( -1 ) );
+    } else if ( s == 2 ) {
+        // dI/dt = E <=> I = Int_0^{t} E
+        return dIdt - E;
     } else {
         throw std::logic_error("scalar index > nScalars");
     }
@@ -190,7 +198,13 @@ void ScalarTestLD3::ScalarGPrimeExtended( Index scalarIndex, State &s, State &ou
 		// dG_1/dJ
 		s.Scalars[ 1 ] = 1.0;
         out_dt.Scalars[ 0 ] = -gamma_d;
-	} else {
+	} else if ( scalarIndex == 2 ) {
+        // G_2 = I-dot - E
+        // dG_2/dE = -1 
+        s.Scalars[ 0 ] = -1.0;
+        // dG_2/dIdot = 1
+        out_dt.Scalars[ 2 ] = 1.0;
+    } else {
 		throw std::logic_error("scalar index > nScalars");
 	}
 }
@@ -208,6 +222,8 @@ Value ScalarTestLD3::InitialScalarValue( Index s ) const
 		return 0;
 	else if (s == 1) // J
 		return -kappa * ( InitialDerivative( 0, 1 ) - InitialDerivative( 0, -1 ) );
+    else if (s == 2) // I
+        return 0.0;
 	else
 		throw std::logic_error("scalar index > nScalars");
 }
@@ -219,8 +235,10 @@ Value ScalarTestLD3::InitialScalarDerivative( Index s, const DGSoln& y, const DG
     {
         double Mdot = boost::math::quadrature::gauss_kronrod<double, 31>::integrate( [ & ]( double x ){ return dydt.u( 0 )( x );}, -1, 1 );
         return Mdot;
-    }
-	else
+    } else if ( s == 2 ) {
+        double E = y.Scalar(0);
+        return E; // dI/dt = E
+    } else
 		throw std::logic_error("Initial derivative called for algebraic (non-differential) scalar");
 }
 
