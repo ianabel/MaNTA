@@ -23,16 +23,17 @@ class DGApprox
 
         ~DGApprox() = default;
 
-        DGApprox(Grid const &_grid, unsigned int Order)
-            : grid(_grid), k(Order), coeffs(), Basis( BasisType::getBasis( Order ) )
+        DGApprox(Grid const &_grid, BasisType const& basis )
+            : grid(_grid), coeffs(), Basis( basis )
         {
+            k = Basis.Order();
             coeffs.reserve(grid.getNCells());
         };
 
-        DGApprox(Grid const &_grid, unsigned int Order, double *block_data, size_t stride) 
-            : grid(_grid), Basis( BasisType::getBasis( Order ) )
+        DGApprox(Grid const &_grid, BasisType const& basis, double *block_data, size_t stride) 
+            : grid(_grid), Basis( basis )
         {
-            k = Order;
+            k = Basis.Order();
             Grid::Index nCells = grid.getNCells();
             coeffs.clear();
             coeffs.reserve(nCells);
@@ -76,13 +77,8 @@ class DGApprox
             for (auto pair : coeffs)
             {
                 Interval const &I = pair.first;
-                pair.second.setZero();
-                // assert( pair.second.size == k + 1);
-                // Interpolate onto k legendre polynomials
-                for (Index i = 0; i <= k; i++)
-                {
-                    pair.second(i) = CellProduct(I, f, Basis.phi(I, i));
-                }
+                // Project onto polynomials
+                pair.second = Basis.ProjectOntoBasis( I, f );
             }
             return *this;
         }
@@ -129,91 +125,7 @@ class DGApprox
                 return Basis.Evaluate(it->first, it->second, x);
         };
 
-        static double CellProduct(Interval const &I, std::function<double(double)> f, std::function<double(double)> g)
-        {
-            auto u = [&](double x)
-            { return f(x) * g(x); };
-            return BasisType::integrator.integrate(u, I.x_l, I.x_u);
-        };
-
-        static double EdgeProduct(Interval const &I, std::function<double(double)> f, std::function<double(double)> g)
-        {
-            return f(I.x_l) * g(I.x_l) + f(I.x_u) * g(I.x_u);
-        };
-
-        void MassMatrix(Interval const &I, MatrixRef u)
-        {
-            for (Index i = 0; i < u.rows(); i++)
-                for (Index j = 0; j < u.cols(); j++)
-                {
-                    auto F = [&](double x)
-                    { return Basis.Evaluate(I, i, x) * Basis.Evaluate(I, j, x); };
-                    u(i, j) = BasisType::integrator.integrate(F, I.x_l, I.x_u);
-                }
-
-        };
-
-        void MassMatrix(Interval const &I, MatrixRef u, std::function<double(double)> const &w)
-        {
-            for (Index i = 0; i < u.rows(); i++)
-                for (Index j = 0; j < u.cols(); j++)
-                {
-                    auto F = [&](double x)
-                    { return w(x) * Basis.Evaluate(I, i, x) * Basis.Evaluate(I, j, x); };
-                    u(i, j) = BasisType::integrator.integrate(F, I.x_l, I.x_u);
-                }
-        };
-
-        void MassMatrix(Interval const &I, MatrixRef u, std::function<double(double, int)> const &w, int var)
-        {
-            for (Index i = 0; i < u.rows(); i++)
-                for (Index j = 0; j < u.cols(); j++)
-                {
-                    auto F = [&](double x)
-                    { return w(x, var) * Basis.Evaluate(I, i, x) * Basis.Evaluate(I, j, x); };
-                    u(i, j) = BasisType::integrator.integrate(F, I.x_l, I.x_u);
-                }
-        };
-
-        Matrix MassMatrix(Interval const &I)
-        {
-            return Matrix::Identity(k + 1, k + 1);
-        }
-
-        Matrix MassMatrix(Interval const &I, std::function<double(double)> const &w)
-        {
-            Matrix u(k + 1, k + 1);
-            for (Index i = 0; i < u.rows(); i++)
-                for (Index j = 0; j < u.cols(); j++)
-                {
-                    auto F = [&](double x)
-                    { return w(x) * Basis.Evaluate(I, i, x) * Basis.Evaluate(I, j, x); };
-                    u(i, j) = BasisType::integrator.integrate(F, I.x_l, I.x_u);
-                }
-            return u;
-        }
-
-        void DerivativeMatrix(Interval const &I, MatrixRef D)
-        {
-            for (Index i = 0; i < D.rows(); i++)
-                for (Index j = 0; j < D.cols(); j++)
-                {
-                    auto F = [&](double x)
-                    { return Basis.Evaluate(I, i, x) * Basis.Prime(I, j, x); };
-                    D(i, j) = BasisType::integrator.integrate(F, I.x_l, I.x_u);
-                }
-        }
-
-        void DerivativeMatrix(Interval const &I, MatrixRef D, std::function<double(double)> const &w)
-        {
-            for (Index i = 0; i < D.rows(); i++)
-                for (Index j = 0; j < D.cols(); j++)
-                {
-                    auto F = [&](double x)
-                    { return w(x) * Basis.Evaluate(I, i, x) * Basis.Prime(I, j, x); };
-                    D(i, j) = BasisType::integrator.integrate(F, I.x_l, I.x_u);
-                }
-        }
+        
 
         void zeroCoeffs()
         {
@@ -254,7 +166,7 @@ class DGApprox
         const Grid &grid;
         unsigned int k;
         Coeff_t coeffs;
-        const BasisType Basis;
+        const BasisType& Basis;
 
         friend class DGSoln;
 };

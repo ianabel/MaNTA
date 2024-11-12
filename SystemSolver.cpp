@@ -210,9 +210,9 @@ void SystemSolver::initialiseMatrices()
             Bvar.setZero();
             Dvar.setZero();
             // A_ij = ( phi_j, phi_i )
-            y.u(0).MassMatrix(I, Avar);
+            y.getBasis().MassMatrix(I, Avar);
             // B_ij = ( phi_i, phi_j' )
-            y.u(0).DerivativeMatrix(I, Bvar);
+            y.getBasis().DerivativeMatrix(I, Bvar);
 
             // Now do all the boundary terms
             for (Eigen::Index i = 0; i < k + 1; i++)
@@ -401,7 +401,7 @@ void SystemSolver::initialiseMatrices()
         for (Index var = 0; var < nVars; var++)
         {
             Eigen::MatrixXd Xvar(k + 1, k + 1);
-            y.u(0).MassMatrix(I, Xvar, [this, var](double x)
+            y.getBasis().MassMatrix(I, Xvar, [this, var](double x)
                     { return problem->aFn(var, x); });
             X.block(var * (k + 1), var * (k + 1), k + 1, k + 1) = Xvar;
         }
@@ -542,7 +542,7 @@ void SystemSolver::updateMatricesForJacSolve()
             std::function<double(double)> alphaF = [=, this](double x)
             { return alpha * problem->aFn(var, x); };
             Eigen::MatrixXd Xsubmat((k + 1), (k + 1));
-            y.u(0).MassMatrix(I, Xsubmat, alphaF);
+            y.getBasis().MassMatrix(I, Xsubmat, alphaF);
             X.block(var * (k + 1), var * (k + 1), k + 1, k + 1) = Xsubmat;
         }
         MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += X;
@@ -901,16 +901,10 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
             };
 
             // Evaluate Diffusion Function
-            Eigen::VectorXd kappa_cellwise(k + 1);
-            kappa_cellwise.setZero();
-            for (Eigen::Index j = 0; j < k + 1; j++)
-                kappa_cellwise(j) = y.u(0).CellProduct(I, kappaFunc, BasisType::phi(I, j));
+            Eigen::VectorXd kappa_cellwise = y.getBasis().ProjectOntoBasis( I, kappaFunc );
 
             // Evaluate Source Function
-            Eigen::VectorXd S_cellwise(k + 1);
-            S_cellwise.setZero();
-            for (Eigen::Index j = 0; j < k + 1; j++)
-                S_cellwise(j) = y.u(0).CellProduct(I, sourceFunc, BasisType::phi(I, j));
+            Eigen::VectorXd S_cellwise = y.getBasis().ProjectOntoBasis(I, sourceFunc );
 
             auto const &lambda = lamCell.segment<2>(2 * var);
 

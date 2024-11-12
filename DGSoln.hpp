@@ -41,9 +41,9 @@ class State {
 class DGSoln
 {
     public:
-        DGSoln(Index n_var, Grid const &_grid, Index Order, Index Scalars = 0, Index aux = 0) : nVars(n_var), grid(_grid), k(Order), nScalars( Scalars ), nAux( aux ), mu_( nullptr, 0 ) {};
+        DGSoln(Index n_var, Grid const &_grid, Index Order, Index Scalars = 0, Index aux = 0) : nVars(n_var), grid(_grid), k(Order), nScalars( Scalars ), nAux( aux ), mu_( nullptr, 0 ), Basis( BasisType::getBasis( Order ) ) {};
 
-        DGSoln(Index n_var, Grid const &_grid, Index Order, double *memory, Index Scalars = 0, Index naux = 0 ) : nVars(n_var), grid(_grid), k(Order), nScalars( Scalars ), nAux( naux ), mu_( nullptr, 0 ) { Map(memory); };
+        DGSoln(Index n_var, Grid const &_grid, Index Order, double *memory, Index Scalars = 0, Index naux = 0 ) : nVars(n_var), grid(_grid), k(Order), nScalars( Scalars ), nAux( naux ), mu_( nullptr, 0 ), Basis( BasisType::getBasis( Order ) )  { Map(memory); };
 
         virtual ~DGSoln() = default;
 
@@ -87,9 +87,9 @@ class DGSoln
 
             for (int var = 0; var < nVars; var++)
             {
-                sigma_.emplace_back(grid, k, (Y + sigma_offset + var * (k + 1)), per_cell_dof );
-                q_    .emplace_back(grid, k, (Y + q_offset     + var * (k + 1)), per_cell_dof );
-                u_    .emplace_back(grid, k, (Y + u_offset     + var * (k + 1)), per_cell_dof );
+                sigma_.emplace_back(grid, Basis, (Y + sigma_offset + var * (k + 1)), per_cell_dof );
+                q_    .emplace_back(grid, Basis, (Y + q_offset     + var * (k + 1)), per_cell_dof );
+                u_    .emplace_back(grid, Basis, (Y + u_offset     + var * (k + 1)), per_cell_dof );
 
                 lambda_.emplace_back(Y + lambda_offset + var * (nCells + 1), (nCells + 1));
             }
@@ -97,7 +97,7 @@ class DGSoln
             new ( &mu_ ) VectorWrapper( Y + scalar_offset, nScalars );
 
             for ( int a = 0; a < nAux; a++ )
-                aux_.emplace_back( grid, k, Y + aux_offset + a * ( k + 1 ), per_cell_dof );
+                aux_.emplace_back( grid, Basis, Y + aux_offset + a * ( k + 1 ), per_cell_dof );
 
         };
 
@@ -311,6 +311,8 @@ class DGSoln
             }
         }
 
+        BasisType const& getBasis() const { return Basis; };
+
     private:
         const Index nVars;
         const Grid &grid;
@@ -322,6 +324,8 @@ class DGSoln
         std::vector<VectorWrapper> lambda_;
         VectorWrapper mu_;
         std::vector<DGApprox> aux_;
+
+        const BasisType Basis;
 };
 
 

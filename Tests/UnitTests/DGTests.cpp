@@ -50,32 +50,24 @@ BOOST_AUTO_TEST_CASE( legendre_basis_test )
 
 	for ( auto const& I : test_intervals ) {
 		for ( auto i : test_indices ) {
-			auto phi_fn = LegendreBasis::phi( I, i );
-			auto phiPrime_fn = LegendreBasis::phiPrime( I, i );
 
 			double sgn = ( i%2 == 0 ? 1.0 : -1.0 );
 			double uVal = ::sqrt( ( 2* i + 1 )/( I.h() ) );
 			double lVal = sgn * uVal;
 
 			BOOST_TEST( LegendreBasis::Evaluate( I, i, I.x_l ) == lVal );
-			BOOST_TEST( phi_fn( I.x_l ) == lVal );
 			BOOST_TEST( LegendreBasis::Prime( I, i, I.x_l ) == sgn * i*( i + 1.0 )/2.0 );
-			BOOST_TEST( phiPrime_fn( I.x_l ) == sgn * i*( i + 1.0 )/2.0 );
 
 			for ( auto x : test_pt ) {
 				double x_pt = x * I.h() + I.x_l;
 				double y = 2*x - 1.0;
 				BOOST_TEST( LegendreBasis::Evaluate( I, i, x_pt ) == ::sqrt( ( 2* i + 1 )/( I.h() ) ) * std::legendre( i, y ) );
-				BOOST_TEST( phi_fn( x_pt ) == ::sqrt( ( 2* i + 1 )/( I.h() ) ) * std::legendre( i, y ) );
 				double primeVal = i == 0 ? 0 : ::sqrt( ( 2* i + 1 )/( I.h() ) ) * ( 2*i/I.h() ) *( 1.0/( y*y-1.0 ) )*( y*std::legendre( i, y ) - std::legendre( i-1,y ) );
 				BOOST_TEST( LegendreBasis::Prime( I, i, x_pt ) == primeVal );
-				BOOST_TEST( phiPrime_fn( x_pt ) == primeVal );
 			}
 
 			BOOST_TEST( LegendreBasis::Evaluate( I, i, I.x_u ) == uVal );
-			BOOST_TEST( phi_fn( I.x_u ) == uVal );
 			BOOST_TEST( LegendreBasis::Prime( I, i, I.x_u ) == i*( i + 1.0 )/2.0 );
-			BOOST_TEST( phiPrime_fn( I.x_u ) == i*( i + 1.0 )/2.0 );
 		}
 	}
 
@@ -85,7 +77,8 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction )
 {
 	Grid testGrid( 0.0, 1.0, 4 );
 	double a = 2.0;
-		DGApprox linear( testGrid, 1 );
+    LegendreBasis Basis = LegendreBasis::getBasis( 1 );
+    DGApprox linear( testGrid, Basis );
 
 	auto const& cref = linear.getCoeffs();
 	BOOST_TEST( cref.size() == 0 );
@@ -112,7 +105,7 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction )
 	BOOST_TEST( linear( 0.7 ) == a*0.7 );
 
 	double *extraMem = new double[ linear.getDoF() ];
-	DGApprox constructedLinear( testGrid, 1, extraMem, 2 );
+	DGApprox constructedLinear( testGrid, LegendreBasis::getBasis( 1 ), extraMem, 2 );
 
 	// Check copy
 	BOOST_CHECK_NO_THROW( constructedLinear.copy( linear ) );
@@ -125,7 +118,7 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction )
 
 
 	// Another window on mem
-	DGApprox constructedData( testGrid, 1, mem, 2 );
+	DGApprox constructedData( testGrid, LegendreBasis::getBasis( 1 ), mem, 2 );
 
 	BOOST_TEST( constructedData( 0.1 ) == a*0.1 );
 	BOOST_TEST( constructedData( 0.7 ) == a*0.7 );
@@ -185,20 +178,22 @@ BOOST_AUTO_TEST_CASE( dg_approx_static )
 	auto foo = []( double x ){ return x; };
 	auto bar = []( double x ){ return ::sin( x ); };
 
-	BOOST_TEST( DGApprox::CellProduct( testGrid[ 0 ], foo, bar ) == ::sin( 0.25 ) - 0.25*::cos( 0.25 ) );
-	BOOST_TEST( DGApprox::EdgeProduct( testGrid[ 0 ], foo, bar ) == 0.25*::sin( 0.25 ) );
 
 	Eigen::MatrixXd tmp( 5, 5 );
 	tmp.setZero();
-    DGApprox dg(testGrid, 4);
-	dg.MassMatrix( testGrid[ 0 ], tmp );
+    LegendreBasis basis = LegendreBasis::getBasis( 4 );
+
+	BOOST_TEST( basis.CellProduct( testGrid[ 0 ], foo, bar ) == ::sin( 0.25 ) - 0.25*::cos( 0.25 ) );
+	BOOST_TEST( basis.EdgeProduct( testGrid[ 0 ], foo, bar ) == 0.25*::sin( 0.25 ) );
+
+	basis.MassMatrix( testGrid[ 0 ], tmp );
 	BOOST_TEST( ( tmp - Eigen::MatrixXd::Identity( 5, 5 ) ).norm() < 1e-7 );
 
-	dg.MassMatrix( testGrid[ 0 ], tmp, []( double ){ return 1.0; } );
+	basis.MassMatrix( testGrid[ 0 ], tmp, []( double ){ return 1.0; } );
 	BOOST_TEST( ( tmp - Eigen::MatrixXd::Identity( 5, 5 ) ).norm() < 1e-9 );
 
 
-	dg.MassMatrix( testGrid[ 0 ], tmp, []( double x ){ return x; } );
+	basis.MassMatrix( testGrid[ 0 ], tmp, []( double x ){ return x; } );
 	Eigen::MatrixXd ref( 5,5 ); 
 	// Courtesy of Mathematica
 	ref << 0.125,      0.07216878, 0.0,        0.0,        0.0,
@@ -209,17 +204,16 @@ BOOST_AUTO_TEST_CASE( dg_approx_static )
 
 	BOOST_TEST( ( tmp - ref ).norm() < 1e-7 );
 	
-	dg.MassMatrix( testGrid[ 0 ], tmp, []( double x, int ){ return x; }, 0 );
+	basis.MassMatrix( testGrid[ 0 ], tmp, []( double x, int ){ return x; }, 0 );
 	BOOST_TEST( ( tmp - ref ).norm() < 1e-7 );
 
-	DGApprox test( testGrid, 4 );
-	BOOST_TEST( static_cast<bool>( test.MassMatrix( testGrid[ 0 ] ) == Eigen::MatrixXd::Identity( 5, 5 ) ) );
+	BOOST_TEST( static_cast<bool>( basis.MassMatrix( testGrid[ 0 ] ) == Eigen::MatrixXd::Identity( 5, 5 ) ) );
 	
-	tmp = test.MassMatrix( testGrid[ 0 ], []( double x ) { return x; } );
+	tmp = basis.MassMatrix( testGrid[ 0 ], []( double x ) { return x; } );
 	BOOST_TEST( ( tmp - ref ).norm() < 1e-7 );
 
 	tmp.resize( 5, 5 );
-	dg.DerivativeMatrix( testGrid[ 0 ], tmp );
+	basis.DerivativeMatrix( testGrid[ 0 ], tmp );
 	ref << 0.0, 13.8564, 0.0,     21.166,  0.0,
 	       0.0, 0.0,     30.9839, 0.0,     41.5692,
 	       0.0, 0.0,     0.0,     47.3286, 0.0,
@@ -227,10 +221,10 @@ BOOST_AUTO_TEST_CASE( dg_approx_static )
 	       0.0, 0.0,     0.0,     0.0,     0.0;
 	BOOST_TEST( ( tmp - ref ).norm() < 1e-4 ); // Entries are only good to 0.0001 anyway
 
-	dg.DerivativeMatrix( testGrid[ 0 ], tmp, [](  double ){ return 1.0; } );
+	basis.DerivativeMatrix( testGrid[ 0 ], tmp, [](  double ){ return 1.0; } );
 	BOOST_TEST( ( tmp - ref ).norm() < 1e-4 );
 
-	dg.DerivativeMatrix( testGrid[ 0 ], tmp, []( double x ){ return x; } );
+	basis.DerivativeMatrix( testGrid[ 0 ], tmp, []( double x ){ return x; } );
 	ref << 0.0, 1.73205, 2.23607, 2.64575, 3.0,
 	       0.0, 1.0,     3.87298, 4.58258, 5.19615,
 	       0.0, 0.0,     2.0,     5.91608, 6.7082,
