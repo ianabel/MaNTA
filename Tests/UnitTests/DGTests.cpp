@@ -105,7 +105,7 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction )
 	BOOST_TEST( linear( 0.7 ) == a*0.7 );
 
 	double *extraMem = new double[ linear.getDoF() ];
-	DGApprox constructedLinear( testGrid, LegendreBasis::getBasis( 1 ), extraMem, 2 );
+	DGApprox constructedLinear( testGrid, Basis, extraMem, 2 );
 
 	// Check copy
 	BOOST_CHECK_NO_THROW( constructedLinear.copy( linear ) );
@@ -118,7 +118,7 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction )
 
 
 	// Another window on mem
-	DGApprox constructedData( testGrid, LegendreBasis::getBasis( 1 ), mem, 2 );
+	DGApprox constructedData( testGrid, Basis, mem, 2 );
 
 	BOOST_TEST( constructedData( 0.1 ) == a*0.1 );
 	BOOST_TEST( constructedData( 0.7 ) == a*0.7 );

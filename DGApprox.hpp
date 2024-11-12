@@ -24,7 +24,7 @@ class DGApprox
         ~DGApprox() = default;
 
         DGApprox(Grid const &_grid, BasisType const& basis )
-            : grid(_grid), coeffs(), Basis( basis )
+            : grid(_grid), Basis( basis )
         {
             k = Basis.Order();
             coeffs.reserve(grid.getNCells());
