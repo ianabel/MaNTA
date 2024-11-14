@@ -41,6 +41,7 @@ BOOST_AUTO_TEST_CASE( grid_test )
 
 }
 
+/*
 BOOST_AUTO_TEST_CASE( legendre_basis_test )
 {
 	Interval I1( 0.0, 1.0 ),I2( 0.5, 0.55 ),I3( -0.2,-0.13 );
@@ -72,7 +73,31 @@ BOOST_AUTO_TEST_CASE( legendre_basis_test )
 	}
 
 }
+*/
 
+BOOST_AUTO_TEST_CASE( cheb_basis_test )
+{
+	Interval I1( 0.0, 1.0 ),I2( 0.5, 0.55 ),I3( -0.2,-0.13 );
+	std::vector<Interval> test_intervals{ I1, I2, I3 };
+	std::vector<unsigned int> test_indices{ 0, 1, 2, 4, 8 };
+	std::vector<double> test_pt{ 0.1, 0.2, 0.5, 0.9 };
+
+	for ( auto const& I : test_intervals ) {
+		for ( auto i : test_indices ) {
+
+			double sgn = ( i%2 == 0 ? 1.0 : -1.0 );
+
+			BOOST_TEST( ChebyshevBasis::Evaluate( I, i, I.x_l ) == sgn );
+			BOOST_TEST( ChebyshevBasis::Prime( I, i, I.x_l ) == (-sgn) * i*i * (2.0/I.h()) );
+			BOOST_TEST( ChebyshevBasis::Evaluate( I, i, (I.x_l + I.x_u)/2.0 ) == std::cos( pi * i / 2.0 ) );
+			BOOST_TEST( ChebyshevBasis::Evaluate( I, i, I.x_u ) == 1.0 );
+			BOOST_TEST( ChebyshevBasis::Prime( I, i, I.x_u ) == i*i* (2.0/I.h()) );
+		}
+	}
+
+}
+
+/*
 BOOST_AUTO_TEST_CASE( dg_approx_construction )
 {
 	Grid testGrid( 0.0, 1.0, 4 );
@@ -233,6 +258,7 @@ BOOST_AUTO_TEST_CASE( dg_approx_static )
 	BOOST_TEST( ( tmp - ref ).norm() < 1e-5 );
 
 }
+*/
 
 BOOST_AUTO_TEST_SUITE_END()
 

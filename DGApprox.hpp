@@ -11,6 +11,8 @@
 #include <vector>
 #include <iostream>
 
+#include <Eigen/LU>
+
 
 class DGApprox
 {
@@ -78,7 +80,9 @@ class DGApprox
             {
                 Interval const &I = pair.first;
                 // Project onto polynomials
-                pair.second = Basis.ProjectOntoBasis( I, f );
+                // (u_fn,phi_j) = Sum_i u_i (phi_i,phi_j) = M^T . u_vec (M is the Mass Matrix)
+                // => u_vec = M^T^-1( (u_fn,phi_j) )
+                pair.second = Basis.MassMatrix(I).transpose().inverse() * Basis.ProjectOntoBasis( I, f );
             }
             return *this;
         }

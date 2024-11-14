@@ -273,7 +273,7 @@ class ChebyshevBasis
 
         Matrix MassMatrix(Interval const &I) const
         {
-            return Matrix::Identity(k + 1, k + 1);
+            return (I.h()/2.0) * RefMass;
         }
 
         Matrix MassMatrix(Interval const &I, std::function<double(double)> const &w) const

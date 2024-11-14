@@ -258,6 +258,8 @@ class DGSoln
                 {
                     Interval const &I = coeffPair.first;
                     coeffPair.second.setZero();
+                    Matrix Mass = Basis.MassMatrix(I);
+                    Eigen::PartialPivLU<Matrix> mass_transpose_inverse( Mass.transpose() );
                     for (size_t i = 0; i < n_abscissa; ++i)
                     {
                         // Pull the loop over the gaussian integration points
@@ -286,6 +288,7 @@ class DGSoln
                             coeffPair.second[j] += wgt * sigma_plus * BasisType::Evaluate(I, j, y_plus);
                             coeffPair.second[j] += wgt * sigma_minus * BasisType::Evaluate(I, j, y_minus);
                         }
+                        coeffPair.second = mass_transpose_inverse.solve( coeffPair.second );
                     }
                 }
             }
