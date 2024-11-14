@@ -18,7 +18,8 @@ typedef std::function<double(double)> Fn;
 using std::numbers::pi;
 
 class LegendreBasis;
-using BasisType = LegendreBasis;
+class ChebyshevBasis;
+using BasisType = ChebyshevBasis;
 
 class Interval
 {

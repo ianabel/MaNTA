@@ -106,7 +106,7 @@ class LegendreBasis
                 {
                     auto F = [&](double x)
                     { return w(x, var) * Evaluate(I, i, x) * Evaluate(I, j, x); };
-                    u(i, j) = BasisType::integrator.integrate(F, I.x_l, I.x_u);
+                    u(i, j) = integrator.integrate(F, I.x_l, I.x_u);
                 }
         };
 
@@ -155,20 +155,27 @@ class ChebyshevBasis
 {
     private:
         unsigned int k;
-        ChebyshevBasis( unsigned int  Order ) : k(Order) 
+        Matrix RefMass,RefDerivative; // Matrices for the reference interval
+        ChebyshevBasis( unsigned int  Order ) : k(Order)
         {
-            // Should precompute here
+            RefMass.resize( k + 1, k + 1 );
+            for (Index i = 0; i < k + 1; i++)
+                for (Index j = 0; j < k + 1; j++)
+                {
+                    auto F = [&](double x) { return Tn(i, x) * Tn(j, x); };
+                    RefMass(i, j) = integrator.integrate(F, -1, 1);
+                }
         };
         static std::map<unsigned int,ChebyshevBasis> singletons;
 
         static double Tn( unsigned int n, double x ) { return std::cos( n * std::acos( x ) ); };
-        static double Un( unsigned int n, double x ) { 
-            double theta = std::acos( x ); 
+        static double Un( unsigned int n, double x ) {
+            double theta = std::acos( x );
             if( theta == 0 )
                 return n + 1.0;
             if( theta == pi )
                 return ( n % 2 == 0 ) ? ( n + 1.0 ) : -( n + 1.0 );
-            return std::sin( n * theta )/std::sin( theta ); 
+            return std::sin( n * theta )/std::sin( theta );
         };
 
     public:
@@ -239,7 +246,7 @@ class ChebyshevBasis
 
         void MassMatrix(Interval const &I, MatrixRef u) const
         {
-            u.setIdentity( k + 1, k + 1 );
+            u = (I.h()/2.0) * RefMass;
         };
 
         void MassMatrix(Interval const &I, MatrixRef u, std::function<double(double)> const &w) const
@@ -260,7 +267,7 @@ class ChebyshevBasis
                 {
                     auto F = [&](double x)
                     { return w(x, var) * Evaluate(I, i, x) * Evaluate(I, j, x); };
-                    u(i, j) = BasisType::integrator.integrate(F, I.x_l, I.x_u);
+                    u(i, j) = integrator.integrate(F, I.x_l, I.x_u);
                 }
         };
 
