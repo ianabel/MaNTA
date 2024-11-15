@@ -72,7 +72,7 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
 			gamma_d = toml::find_or(InternalConfig, "gamma_d", 0.0);
 			gamma_h = toml::find_or(InternalConfig, "gamma_h", 0.0);
 			growth = 0.0;
-			nScalars = 3;
+			nScalars = 1;
 		}
 
 		// Add floor for computed densities and temperatures
@@ -507,9 +507,9 @@ Real MirrorPlasma::Somega(RealVector u, RealVector q, RealVector sigma, RealVect
 
 	Real RadialCurrent;
 	if (useConstantVoltage)
-		RadialCurrent = -Scalars(1);
+		RadialCurrent = IRadial; //-Scalars(1);
 	else
-		RadialCurrent = -IRadial;
+		RadialCurrent = IRadial;
 
 	Real JxB = -RadialCurrent / B->VPrime(V); //-jRadial * R * B->Bz_R(R);
 	Real L = u(Channel::AngularMomentum);

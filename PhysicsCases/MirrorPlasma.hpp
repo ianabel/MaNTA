@@ -54,7 +54,7 @@ public:
 	void ScalarGPrimeExtended(Index, State &, State &, const DGSoln &, const DGSoln &, std::function<double(double)>, Interval, Time) override;
 
 private:
-	using integrator = boost::math::quadrature::gauss<double, 30>;
+	using integrator = boost::math::quadrature::gauss_kronrod<double, 61>;
 
 	Real Flux(Index, RealVector, RealVector, Real, Time) override;
 	Real Source(Index, RealVector, RealVector, RealVector, RealVector, RealVector, Real, Time) override;

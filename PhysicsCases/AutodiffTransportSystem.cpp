@@ -378,6 +378,7 @@ void AutodiffTransportSystem::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO
 							 {  State s = y.eval(x);
 								return this->AuxG(i, s, x, t); });
 	}
+
 	if (useMMS)
 	{
 		for (Index i = 0; i < nVars; ++i)
