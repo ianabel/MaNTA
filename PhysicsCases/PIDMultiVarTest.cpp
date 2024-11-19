@@ -124,6 +124,8 @@ void PIDMultiVarTest::dSigmaFn_dq(Index, Values &v, const State &s, Position, Ti
 
 void PIDMultiVarTest::dSigmaFn_du(Index, Values &v, const State &s, Position, Time)
 {
+    if( a == 0 )
+        v[ 0 ] = 0.0;
     v[0] = kappa * a * pow( s.Variable[ 0 ], a - 1 ) * s.Derivative[ 0 ];
 };
 
@@ -236,7 +238,7 @@ Value PIDMultiVarTest::InitialScalarValue( Index s ) const
     if( s == 0 ) // E
         return 0;
     else if (s == 1) // J
-        return -kappa * ( InitialDerivative( 0, 1 ) - InitialDerivative( 0, -1 ) );
+        return -kappa * ( pow(u0,a) * InitialDerivative( 0, 1 ) - pow( u0 , a )*InitialDerivative( 0, -1 ) );
     else if (s == 2) // I
         return 0.0;
     else
