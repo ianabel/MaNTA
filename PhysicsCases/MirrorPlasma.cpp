@@ -331,8 +331,19 @@ Real MirrorPlasma::qe(RealVector u, RealVector q, Real V, Time t) const
 	Real Te_prime = (p_e_prime - nPrime * Te) / n;
 
 	Real R = B->R_V(V);
+	Real J = n * R * R; // Normalisation includes the m_i
+	Real dRdV = B->dRdV(V);
+	Real JPrime = R * R * nPrime + 2.0 * dRdV * R * n;
+
+	Real L = u(Channel::AngularMomentum);
+	Real LPrime = q(Channel::AngularMomentum);
+	Real dOmegadV = LPrime / J - JPrime * L / (J * J);
+	Real omega = L / J;
+
+	Real U = (p_e_prime + p_i_prime) / p_e + omega * R * R * dOmegadV;
+
 	Real GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e, leaving (V'R)^2
-	Real HeatFlux = GeometricFactor * GeometricFactor * (p_e * Te / (Plasma->ElectronCollisionTime(n, Te))) * (4.66 * Te_prime / Te - (3. / 2.) * (p_e_prime + p_i_prime) / p_e);
+	Real HeatFlux = GeometricFactor * GeometricFactor * (p_e * Te / (Plasma->ElectronCollisionTime(n, Te))) * (4.66 * Te_prime / Te - (3. / 2.) * U);
 
 	if (std::isfinite(HeatFlux.val))
 		return HeatFlux;
@@ -633,4 +644,21 @@ Real MirrorPlasma::IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) cons
 	Real LossRate = (M_2_SQRTPI / tau_ii) * Normalization * Sigma * n * (1.0 / log(MirrorRatio * Sigma)) * PastukhovFactor;
 
 	return LossRate;
+}
+
+Real MirrorPlasma::IonPotentialHeating(RealVector u, RealVector q, RealVector phi, Real V) const
+{
+	Real n = floor(u(Channel::Density), MinDensity);
+
+	Real R = B->R_V(V);
+
+	Real J = n * R * R; // Normalisation includes the m_i
+	Real L = u(Channel::AngularMomentum);
+	Real omega = L / J;
+	return -Gamma(u, q, V, 0.0) * (omega * omega / (2 * pi * a) - dphidV(u, q, phi, V));
+}
+
+Real MirrorPlasma::ElectronPotentialHeating(RealVector u, RealVector q, RealVector phi, Real V) const
+{
+	return -Gamma(u, q, V, 0.0) * dphidV(u, q, phi, V);
 }

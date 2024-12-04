@@ -91,6 +91,8 @@ private:
 	Real ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real Te) const;
 	Real IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) const;
 
+	Real IonPotentialHeating(RealVector, RealVector, RealVector, Real) const;
+	Real ElectronPotentialHeating(RealVector, RealVector, RealVector, Real) const;
 	// Template function to avoid annoying dual vs. dual2nd behavior
 	template <typename T>
 	T phi0(Eigen::Matrix<T, -1, 1, 0, -1, 1> u, T V) const
@@ -148,10 +150,35 @@ private:
 
 	// omega & n are callables
 	template <typename T1, typename T2>
-	double Voltage(T1 &L_phi, T2 &n);
+	double Voltage(T1 &L_phi, T2 &n) const
+	{
+		auto integrator = boost::math::quadrature::gauss<double, 15>();
+		auto integrand = [this, &L_phi, &n](double V)
+		{
+			double R = B->R_V(V, 0.0);
+			return L_phi(V) / (n(V) * R * R * B->VPrime(V).val);
+		};
+		double cs0 = std::sqrt(T0 / Plasma->IonMass());
+		return cs0 * integrator.integrate(integrand, xL, xR);
+	}
 
-	void initialiseDiagnostics(NetCDFIO &) override;
-	void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override;
+	void initialiseDiagnostics(NetCDFIO &nc) override
+	{
+		AutodiffTransportSystem::initialiseDiagnostics(nc);
+		initializeMirrorDiagnostics(nc, *this);
+	}
+	void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override
+	{
+		AutodiffTransportSystem::writeDiagnostics(y, t, nc, tIndex);
+		writeMirrorDiagnostics(y, t, nc, tIndex, *this);
+	}
+
+	// Allow mirror diagnostic functions to access private members
+	template <class T>
+	friend void initializeMirrorDiagnostics(NetCDFIO &nc, T const &p);
+
+	template <class T>
+	friend void writeMirrorDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex, T const &p);
 
 private:
 	std::unique_ptr<PlasmaConstants> Plasma;
