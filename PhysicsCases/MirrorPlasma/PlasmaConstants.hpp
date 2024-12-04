@@ -116,7 +116,6 @@ public:
     template <typename T>
     T LogLambda_ii(T ni, T Ti) const
     {
-
         double LogLambdaRef = 24.0 - log(n0cgs) / 2.0 + log(T0eV);
         T LogLambda = 24.0 - log(n0cgs * ni) / 2.0 + log(T0eV * Ti);
         return LogLambda / LogLambdaRef; // really needs to know Ti as well

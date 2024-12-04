@@ -44,7 +44,7 @@ REGISTER_PHYSICS_IMPL(ScalarTestAD);
 ScalarTestAD::ScalarTestAD(toml::value const &config, Grid const &)
 {
     // Always set nVars in a derived constructor
-    nVars = 1;
+    nVars = 2;
     nScalars = 2;
 
     // Construst your problem from user-specified config
@@ -88,7 +88,9 @@ Real ScalarTestAD::Flux(Index i, RealVector u, RealVector q, Real x, Time t)
 
 Real ScalarTestAD::Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector phi, RealVector Scalars, Real x, Time t)
 {
-    Real J = Scalars[1];
+    Real J = 0;
+    if (i == 0)
+        J = Scalars[1];
 
     return J * ScaledSource(x) + 0.5 * cos(std::numbers::pi * x);
 }

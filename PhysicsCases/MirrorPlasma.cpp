@@ -275,10 +275,19 @@ Real MirrorPlasma::Gamma(RealVector u, RealVector q, Real V, Time t) const
 	Real PressureGradient = ((p_e_prime + p_i_prime) / p_e);
 	Real TemperatureGradient = (3. / 2.) * (Te_prime / Te);
 
-	// Real TemperatureGradient = (3. / 2.) * (p_e_prime - nPrime * Te) / p_e;
 	Real R = B->R_V(V);
+	Real J = n * R * R; // Normalisation includes the m_i
+	Real dRdV = B->dRdV(V);
+	Real JPrime = R * R * nPrime + 2.0 * dRdV * R * n;
+
+	Real L = u(Channel::AngularMomentum);
+	Real LPrime = q(Channel::AngularMomentum);
+	Real dOmegadV = LPrime / J - JPrime * L / (J * J);
+	Real omega = L / J;
+
+	// Real TemperatureGradient = (3. / 2.) * (p_e_prime - nPrime * Te) / p_e;
 	Real GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e
-	Real Gamma = GeometricFactor * GeometricFactor * (p_e / (Plasma->ElectronCollisionTime(n, Te))) * (PressureGradient - TemperatureGradient);
+	Real Gamma = GeometricFactor * GeometricFactor * (p_e / (Plasma->ElectronCollisionTime(n, Te))) * (PressureGradient - TemperatureGradient + omega * R * R * dOmegadV);
 
 	if (std::isfinite(Gamma.val))
 		return Gamma;
@@ -568,7 +577,7 @@ Real MirrorPlasma::dphi0dV(RealVector u, RealVector q, Real V) const
 
 Real MirrorPlasma::dphidV(RealVector u, RealVector q, RealVector phi, Real V) const
 {
-	Real dphidV = dphi0dV(u, q, V);
+	Real dphidV = 0.0; // dphi0dV(u, q, V);
 
 	if (nAux > 0)
 		dphidV += dphi1dV(u, q, phi(0), V);
@@ -585,8 +594,9 @@ inline Real MirrorPlasma::AmbipolarPhi(Real V, Real n, Real Ti, Real Te) const
 
 Real MirrorPlasma::ParticleSource(double R, double t) const
 {
-	double shape = 1 / ParticleSourceWidth;
-	return (exp(-shape * (R - R_Lower) * (R - R_Lower)) + exp(-shape * (R - R_Upper) * (R - R_Upper)));
+	// double shape = 1 / ParticleSourceWidth;
+	// return (exp(-shape * (R - R_Lower) * (R - R_Lower)) + exp(-shape * (R - R_Upper) * (R - R_Upper)));
+	return exp(-(R - R_Lower) / ParticleSourceWidth);
 	// return exp(-shape * (R - ParticleSourceCenter) * (R - ParticleSourceCenter));
 	//   return ParticleSourceStrength;
 };
