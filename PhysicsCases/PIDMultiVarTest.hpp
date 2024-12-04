@@ -8,12 +8,12 @@
  */
 
 // Always inherit from TransportSystem
-class ScalarTestLD3 : public TransportSystem
+class PIDMultiVarTest : public TransportSystem
 {
 public:
 	// Must provide a constructor that constructs from a toml configuration snippet
 	// you can ignore it, or read problem-dependent parameters from the configuration file
-	explicit ScalarTestLD3(toml::value const &config, Grid const &);
+	explicit PIDMultiVarTest(toml::value const &config, Grid const &);
 
 	// You must provide implementations of both, these are your boundary condition functions
 	Value LowerBoundary(Index, Time) const override;
@@ -53,13 +53,13 @@ public:
 
 private:
 	// Put class-specific data here
-	double kappa, alpha, beta, gamma, u0, M0, gamma_d;
+	double kappa, alpha, beta, gamma, u0, M0, gamma_d, gamma_I, a;
 
 	Value ScaledSource(Position) const;
 
-	// Without this (and the implementation line in ScalarTestLD3.cpp)
-	// ManTA won't know how to relate the string 'ScalarTestLD3' to the class.
-	REGISTER_PHYSICS_HEADER(ScalarTestLD3)
+	// Without this (and the implementation line in PIDMultiVarTest.cpp)
+	// ManTA won't know how to relate the string 'PIDMultiVarTest' to the class.
+	REGISTER_PHYSICS_HEADER(PIDMultiVarTest)
 };
 
 #endif // SCALARTESTLD_HPP

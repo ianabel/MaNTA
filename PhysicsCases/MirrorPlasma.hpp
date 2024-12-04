@@ -7,6 +7,8 @@
 #include "MirrorPlasma/PlasmaConstants.hpp"
 #include "MirrorPlasma/MirrorPlasmaDiagnostics.hpp"
 
+#include <boost/math/quadrature/gauss_kronrod.hpp>
+
 /*
 	Ground-up reimplementation of a collisional cylindrical plasma, with a single ion species
 	we use V( psi ), the volume enclosed by a flux surface as the radial coordinate.
@@ -24,6 +26,18 @@
 
 #include <cmath>
 
+inline Real
+floor(Real x, double val)
+{
+	if (x >= val)
+		return x;
+	else
+	{
+		x.val = val;
+		return x;
+	}
+}
+
 class MirrorPlasma : public AutodiffTransportSystem
 {
 public:
@@ -32,20 +46,126 @@ public:
 
 	virtual Real2nd InitialFunction(Index i, Real2nd x, Real2nd t) const override;
 
+	// Add scalars to allow for constant voltage runs
+	Value InitialScalarValue(Index) const override;
+	Value InitialScalarDerivative(Index s, const DGSoln &y, const DGSoln &dydt) const override;
+
+	bool isScalarDifferential(Index) override;
+	Value ScalarGExtended(Index, const DGSoln &, const DGSoln &, Time) override;
+	void ScalarGPrimeExtended(Index, State &, State &, const DGSoln &, const DGSoln &, std::function<double(double)>, Interval, Time) override;
+
 private:
+	using integrator = boost::math::quadrature::gauss_kronrod<double, 61>;
+
+	Real Flux(Index, RealVector, RealVector, Real, Time) override;
+	Real Source(Index, RealVector, RealVector, RealVector, RealVector, RealVector, Real, Time) override;
+
+	Real GFunc(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) override;
+	Value InitialAuxValue(Index, Position, Time) const override;
+
+	Value LowerBoundary(Index i, Time t) const override;
+	Value UpperBoundary(Index i, Time t) const override;
+
+	virtual bool isLowerBoundaryDirichlet(Index i) const override;
+	virtual bool isUpperBoundaryDirichlet(Index i) const override;
+
+	Real2nd MMS_Solution(Index i, Real2nd V, Real2nd t) override;
+
+	Real Gamma(RealVector u, RealVector q, Real x, Time t) const;
+	Real qe(RealVector u, RealVector q, Real x, Time t) const;
+	Real qi(RealVector u, RealVector q, Real x, Time t) const;
+	Real Pi(RealVector u, RealVector q, Real x, Time t) const;
+	Real Sn(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) const;
+	Real Spe(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) const;
+	Real Spi(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) const;
+	Real Somega(RealVector u, RealVector q, RealVector sigma, RealVector phi, RealVector Scalars, Real x, Time t) const;
+
+	// Underlying functions
+
+	Value InitialDensityTimeDerivative(RealVector u, RealVector q, Position V) const;
+
+	Real IonClassicalAngularMomentumFlux(Real V, Real n, Real Ti, Real dOmegadV, Time t) const;
+
+	Real ParticleSource(double R, double t) const;
+
+	Real ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real Te) const;
+	Real IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) const;
+
+	// Template function to avoid annoying dual vs. dual2nd behavior
+	template <typename T>
+	T phi0(Eigen::Matrix<T, -1, 1, 0, -1, 1> u, T V) const
+	{
+		T n = u(Channel::Density), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
+
+		T Te = p_e / n, Ti = p_i / n;
+		T L = u(Channel::AngularMomentum);
+		T R = B->R_V(V);
+		T J = n * R * R; // Normalisation of the moment of inertia includes the m_i
+		T omega = L / J;
+		T phi = 0.5 / (1 / Ti + 1 / Te) * omega * omega * R * R / Ti * (1 / B->MirrorRatio(V) - 1);
+
+		return phi;
+	}
+	Real dphi0dV(RealVector u, RealVector q, Real V) const;
+	Real dphi1dV(RealVector u, RealVector q, Real phi, Real V) const;
+	Real dphidV(RealVector u, RealVector q, RealVector phi, Real V) const;
+
+	// Returns (1/(1 + Tau))*(1-1/R_m)*(M^2)
+	template <typename T>
+	T CentrifugalPotential(T V, T omega, T Ti, T Te) const
+	{
+		double MirrorRatio = B->MirrorRatio(V);
+		T R = B->R_V(V);
+		T tau = Ti / Te;
+		T MachNumber = omega * R / sqrt(Te); // omega is normalised to c_s0 / a
+		T Potential = (1.0 / (1.0 + tau)) * (1.0 - 1.0 / MirrorRatio) * MachNumber * MachNumber / 2.0;
+		return Potential;
+	}
+	// Energy normalisation is T0, but these return Xi_s / T_s as that is what enters the
+	// Pastukhov factor
+	template <typename T>
+	T Xi_i(T V, T phi, T Ti, T Te, T omega) const
+	{
+		return CentrifugalPotential<T>(V, omega, Ti, Te) + phi;
+	}
+	template <typename T>
+	T Xi_e(T V, T phi, T Ti, T Te, T omega) const
+	{
+		return CentrifugalPotential<T>(V, omega, Ti, Te) - Ti / Te * phi;
+	}
+
+	// First order correction to phi, only used if not calculating auxiliary phi1
+	Real AmbipolarPhi(Real V, Real n, Real Ti, Real Te) const;
+
+	template <typename T>
+	T ParallelCurrent(T V, T omega, T n, T Ti, T Te, T phi) const;
+	double R_Lower, R_Upper;
+
+	Real RelaxSource(Real A, Real B) const
+	{
+		return RelaxFactor * (A - B);
+	};
+
+	// omega & n are callables
+	template <typename T1, typename T2>
+	double Voltage(T1 &L_phi, T2 &n);
+
+	void initialiseDiagnostics(NetCDFIO &) override;
+	void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override;
+
+private:
+	std::unique_ptr<PlasmaConstants> Plasma;
+	std::shared_ptr<StraightMagneticField> B;
+
+	// Desired voltage to keep constant
+	double V0;
+	double gamma;
+	double gamma_d;
+	double gamma_h;
+
 	double RelaxFactor;
 	double MinDensity;
 	double MinTemp;
-	Real floor(Real x, double val) const
-	{
-		if (x >= val)
-			return x;
-		else
-		{
-			x.val = val;
-			return x;
-		}
-	}
 
 	enum Channel : Index
 	{
@@ -72,20 +192,7 @@ private:
 	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber;
 	double MachWidth;
 	bool useAmbipolarPhi;
-
-	Real Flux(Index, RealVector, RealVector, Real, Time) override;
-	Real Source(Index, RealVector, RealVector, RealVector, RealVector, Real, Time) override;
-
-	Real GFunc(Index, RealVector, RealVector, RealVector, RealVector, Position, Time) override;
-	Value InitialAuxValue(Index, Position, Time) const override;
-
-	Value LowerBoundary(Index i, Time t) const override;
-	Value UpperBoundary(Index i, Time t) const override;
-
-	virtual bool isLowerBoundaryDirichlet(Index i) const override;
-	virtual bool isUpperBoundaryDirichlet(Index i) const override;
-
-	Real2nd MMS_Solution(Index i, Real2nd V, Real2nd t) override;
+	bool useConstantVoltage;
 
 	std::vector<double> growth_factors;
 
@@ -94,8 +201,8 @@ private:
 
 	double IRadial;
 
-	std::unique_ptr<PlasmaConstants> Plasma;
-	std::shared_ptr<StraightMagneticField> B;
+	// Add a cap to sources to prevent ridiculous values
+	double SourceCap;
 
 	// // Reference Values
 
@@ -106,100 +213,6 @@ private:
 	constexpr static double a = 1.0;  // Reference length in m
 	constexpr static double Z_eff = 3.0;
 
-	Real Gamma(RealVector u, RealVector q, Real V, Time t) const;
-	Real qe(RealVector u, RealVector q, Real V, Time t) const;
-	Real qi(RealVector u, RealVector q, Real V, Time t) const;
-	Real Pi(RealVector u, RealVector q, Real V, Time t) const;
-	Real Sn(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real V, Time t) const;
-	Real Spe(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real V, Time t) const;
-	Real Spi(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real V, Time t) const;
-	Real Somega(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real V, Time t) const;
-
-	// Underlying functions
-
-	Real IonClassicalAngularMomentumFlux(Real V, Real n, Real Ti, Real dOmegadV, Time t) const;
-
-	// Add a cap to sources to prevent ridiculous values
-	double SourceCap;
-
-	Real ParticleSource(double R, double t) const;
-
-	Real ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real Te) const;
-	Real IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) const;
-
-	template <typename T>
-	T CentrifugalPotential(T V, T omega, T Ti, T Te) const;
-
-	// Template function to avoid annoying dual vs. dual2nd behavior
-	template <typename T>
-	T phi0(Eigen::Matrix<T, -1, 1, 0, -1, 1> u, T V) const
-	{
-		T n = u(Channel::Density), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
-
-		T Te = p_e / n, Ti = p_i / n;
-		T L = u(Channel::AngularMomentum);
-		T R = B->R_V(V);
-		T J = n * R * R; // Normalisation of the moment of inertia includes the m_i
-		T omega = L / J;
-		T phi = 0.5 / (1 / Ti + 1 / Te) * omega * omega * R * R / Ti * (1 / B->MirrorRatio(V) - 1);
-
-		return phi;
-	}
-	Real dphi0dV(RealVector u, RealVector q, Real V) const;
-	Real dphi1dV(RealVector u, RealVector q, Real phi, Real V) const;
-	Real dphidV(RealVector u, RealVector q, RealVector phi, Real V) const;
-
-	Real IonPotentialHeating(RealVector u, RealVector q, RealVector phi, Real V) const;
-	Real ElectronPotentialHeating(RealVector u, RealVector q, RealVector phi, Real V) const;
-
-	template <typename T>
-	T Xi_i(T V, T phi, T Ti, T Te, T omega) const;
-
-	template <typename T>
-	T Xi_e(T V, T phi, T Ti, T Te, T omegae) const;
-
-	// First order correction to phi, only used if not calculating auxiliary phi1
-	Real AmbipolarPhi(Real V, Real n, Real Ti, Real Te) const;
-
-	template <typename T>
-	T ParallelCurrent(T V, T omega, T n, T Ti, T Te, T phi) const;
-	double R_Lower, R_Upper;
-
-	Real RelaxSource(Real A, Real B) const
-	{
-		return RelaxFactor * (A - B);
-	};
-
-	// omega & n are callables
-	template <typename T1, typename T2>
-	double Voltage(T1 &L_phi, T2 &n) const
-	{
-		auto integrator = boost::math::quadrature::gauss<double, 15>();
-		auto integrand = [this, &L_phi, &n](double V)
-		{
-			double R = B->R_V(V);
-			return L_phi(V) / (n(V) * R * R * B->VPrime(V).val);
-		};
-		double cs0 = std::sqrt(T0 / Plasma->IonMass());
-		return cs0 * integrator.integrate(integrand, xL, xR);
-	}
-	void initialiseDiagnostics(NetCDFIO &nc) override
-	{
-		AutodiffTransportSystem::initialiseDiagnostics(nc);
-		initializeMirrorDiagnostics(nc, *this);
-	}
-	void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override
-	{
-		AutodiffTransportSystem::writeDiagnostics(y, t, nc, tIndex);
-		writeMirrorDiagnostics(y, t, nc, tIndex, *this);
-	}
-
-	// Allow mirror diagnostic functions to access private members
-	template <class T>
-	friend void initializeMirrorDiagnostics(NetCDFIO &nc, T const &p);
-
-	template <class T>
-	friend void writeMirrorDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex, T const &p);
 	REGISTER_PHYSICS_HEADER(MirrorPlasma)
 };
 

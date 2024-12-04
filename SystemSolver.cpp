@@ -13,12 +13,14 @@
 #include "gridStructures.hpp"
 
 SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *transpSystem)
-    : grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars( transpSystem->getNumScalars() ), nAux( transpSystem->getNumAux() ), MXSolvers( Grid.getNCells() ), y( nVars, grid, k, nScalars, nAux ), dydt( nVars, grid, k, nScalars, nAux ), yJac( nVars, grid, k, nScalars, nAux ), problem(transpSystem)
+    : grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars( transpSystem->getNumScalars() ), nAux( transpSystem->getNumAux() ), MXSolvers( Grid.getNCells() ), y( nVars, grid, k, nScalars, nAux ), dydt( nVars, grid, k, nScalars, nAux ), yJac( nVars, grid, k, nScalars, nAux ), dydtJac( nVars, grid, k, nScalars, nAux ), problem(transpSystem)
 {
     if ( SUNContext_Create(SUN_COMM_NULL, &ctx) < 0 )
         throw std::runtime_error( "Unable to allocate SUNDIALS Context, aborting." );
     yJacMem = new double[ yJac.getDoF() ];
     yJac.Map( yJacMem );
+    dydtJacMem = new double[ yJac.getDoF() ];
+    dydtJac.Map( dydtJacMem );
     S_DOF = k + 1;
     U_DOF = k + 1;
     Q_DOF = k + 1;
@@ -608,7 +610,7 @@ void SystemSolver::updateMatricesForJacSolve()
             State s( nVars, nScalars );
             State s_dt( nVars, nScalars );
             for ( Index l = 0; l < k + 1; ++l ) {
-                problem->ScalarGPrimeExtended( j, s, s_dt, yJac, [=]( double x ){ return LegendreBasis::Evaluate( I, l, x ); }, I, jt );
+                problem->ScalarGPrimeExtended( j, s, s_dt, yJac, dydtJac, [=]( double x ){ return LegendreBasis::Evaluate( I, l, x ); }, I, jt );
                 for ( Index v = 0; v < nVars; ++v ) {
                     w_map[ j ].sigma( v ).getCoeff( i ).second( l ) = s.Flux[ v ]       + alpha * s_dt.Flux[ v ];
                     w_map[ j ].q( v ).getCoeff( i ).second( l )     = s.Derivative[ v ] + alpha * s_dt.Derivative[ v ];
@@ -633,12 +635,17 @@ void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorW
     new (&lam) VectorWrapper(Y + nCells * localDOF, nVars * (nCells + 1));
 }
 
-void SystemSolver::setJacEvalY( N_Vector yy )
+void SystemSolver::setJacEvalY( N_Vector yy, N_Vector yp )
 {
     DGSoln yyMap( nVars, grid, k, nScalars, nAux );
     assert(static_cast<size_t>(N_VGetLength(yy)) == yyMap.getDoF());
     yyMap.Map(N_VGetArrayPointer(yy));
     yJac.copy(yyMap); // Deep copy -- yyMap only aliases the N_Vector, this copies the data
+
+    DGSoln ypMap( nVars, grid, k, nScalars, nAux );
+    assert(static_cast<size_t>(N_VGetLength(yp)) == ypMap.getDoF());
+    ypMap.Map(N_VGetArrayPointer(yp));
+    dydtJac.copy(ypMap); // Deep copy 
 }
 
 // Over-arching Jacobian function. If there's no coupled B-field solve, or auxiliar variables, then just do the
