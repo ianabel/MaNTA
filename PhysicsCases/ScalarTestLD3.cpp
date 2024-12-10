@@ -95,10 +95,14 @@ Value ScalarTestLD3::ScaledSource(Position x) const
 Value ScalarTestLD3::Sources(Index i, const State &s, Position x, Time)
 {
 	double J = 0;
-	if (i == 0)
-		double J = s.Scalars[1];
+    if (i == 0) {
+        double J = s.Scalars[1];
+        return J * ScaledSource(x) + 0.5 * std::cos(std::numbers::pi * x);
+    } else if ( i == 1 ) {
+        return ScaledSource(x);
+    }
 
-	return J * ScaledSource(x) + 0.5 * std::cos(std::numbers::pi * x);
+    throw std::logic_error("Index out of range");
 }
 
 void ScalarTestLD3::dSigmaFn_dq(Index i, Values &v, const State &, Position, Time)
