@@ -50,6 +50,7 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSyst
 SystemSolver::~SystemSolver()
 {
     delete[] yJacMem;
+    delete[] dydtJacMem;
     if (nScalars > 0)
     {
         for (Index i = 0; i < nScalars; ++i)
@@ -79,9 +80,6 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     y.AssignU(initial_u);
     y.AssignQ(initial_q);
 
-    y.EvaluateLambda();
-    dydt.zeroCoeffs();
-
     for ( Index s = 0; s < nScalars; ++s ) {
         y.Scalar( s ) = problem->InitialScalarValue( s );
     }
@@ -97,6 +95,9 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
     auto sigma_wrapper = [this](Index i, const State &s, Position x, Time t) { return -problem->SigmaFn(i, s, x, t); };
     y.AssignSigma(sigma_wrapper);
+
+    y.EvaluateLambda();
+    dydt.zeroCoeffs();
 
     for (Index var = 0; var < nVars; var++)
     {

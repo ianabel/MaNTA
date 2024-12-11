@@ -36,8 +36,8 @@ public:
 	void dSources_dPhi(Index, Values &, const State &, Position, Time) override;
 
 	// and initial conditions for u & q
-	Value InitialValue(Index i, Position x) const override;
-	Value InitialDerivative(Index i, Position x) const override;
+	virtual Value InitialValue(Index i, Position x) const override;
+	virtual Value InitialDerivative(Index i, Position x) const override;
 
 	// Override base initial phi value, add t dependency for MMS solutions
 	Value InitialAuxValue(Index i, Position x) const override
