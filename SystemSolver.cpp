@@ -29,7 +29,7 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSyst
     AUX_DOF = k + 1;
     localDOF = nVars * SQU_DOF + nAux * AUX_DOF;
 
-    std::cerr << "Total HDG degrees of freedom " << ( localDOF ) * nCells + (nCells + 1) + nScalars << std::endl;
+    std::cerr << "Total HDG degrees of freedom " << ( localDOF ) * nCells + (nCells + 1) * nVars + nScalars << std::endl;
     if ( nScalars > 0 ) {
         v = new N_Vector[ nScalars ];
         w = new N_Vector[ nScalars ];
