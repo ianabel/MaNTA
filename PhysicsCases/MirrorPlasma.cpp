@@ -305,7 +305,7 @@ Real MirrorPlasma::Gamma(RealVector u, RealVector q, Real V, Time t) const
 	Real dOmegadV = LPrime / J - JPrime * L / (J * J);
 	Real omega = L / J;
 
-	Real U = (p_e_prime + p_i_prime) + n * omega * R * R * dOmegadV; // n*(U_e - U_i) dot grad phi
+	Real U = (p_e_prime + p_i_prime) + n * omega * R * R * dOmegadV; // -n*(U_e - U_i) dot grad phi
 
 	Real GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e
 	Real Gamma = GeometricFactor * GeometricFactor * (1 / (Plasma->ElectronCollisionTime(n, Te))) * (U - ThermalForce);
@@ -361,7 +361,7 @@ Real MirrorPlasma::qe(RealVector u, RealVector q, Real V, Time t) const
 	Real dOmegadV = LPrime / J - JPrime * L / (J * J);
 	Real omega = L / J;
 
-	Real U = Te * (p_e_prime + p_i_prime) + p_e * omega * R * R * dOmegadV;
+	Real U = Te * (p_e_prime + p_i_prime) + p_e * omega * R * R * dOmegadV; // -p_e*(U_e-U_i)
 
 	Real GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e, leaving (V'R)^2
 	Real HeatFlux = GeometricFactor * GeometricFactor * (1 / (Plasma->ElectronCollisionTime(n, Te))) * (4.66 * p_e * Te_prime - (3. / 2.) * U);
