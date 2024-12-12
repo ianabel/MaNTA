@@ -47,6 +47,38 @@ Real PlasmaConstants::CyclotronLosses(Real V, Real n, Real Te) const
 
     Real P_cy = P_vacuum * TransparencyFactor / Normalization;
     return P_cy;
+}
+
+// Return the total (electron+proton) ionization rate in 1/(m^3 s)
+Real PlasmaConstants::IonizationRate(Real n, Real NeutralDensity, Real v, Real Te, Real Ti) const
+{
+
+    Real n_m3 = n * n0;
+    Real n_neutrals = NeutralDensity * n0;
+
+    Real IonIntegral = NeutralProcess([this](double Energy)
+                                      { return Plasma->protonImpactIonizationCrossSection(Energy); }, v, Ti, IonMass(), 200.0);
+
+    Real ElectronIntegral = NeutralProcess([this](double Energy)
+                                           { return Plasma->electronImpactIonizationCrossSection(Energy); }, v, Te, ElectronMass, 13.6);
+
+    Real R = n_m3 * n_neutrals * (IonIntegral + ElectronIntegral);
+
+    return R;
+}
+
+// Returns the charge exchange loss rate in 1/(m^3 s)
+Real PlasmaConstants::ChargeExchangeLossRate(Real n, Real NeutralDensity, Real v, Real Ti) const
+{
+    Real n_m3 = n * n0;
+    Real n_neutrals = NeutralDensity * n0;
+
+    Real IonIntegral = NeutralProcess([this](double Energy)
+                                      { return Plasma->HydrogenChargeExchangeCrossSection(Energy); }, v, Ti, IonMass(), 0.1);
+
+    Real R = n_m3 * n_neutrals * (IonIntegral);
+
+    return R;
 };
 
 /*
@@ -66,7 +98,7 @@ Real PlasmaConstants::IonElectronEnergyExchange(Real n, Real pe, Real pi, Real V
     Real Te = pe / n;
     double RhoStar = RhoStarRef();
     Real pDiff = pe - pi;
-    Real IonHeating = (pDiff / (ElectronCollisionTime(n, Te))) * ((3.0 / (RhoStar * RhoStar))); //* (ElectronMass / IonMass));
+    Real IonHeating = (pDiff / (ElectronCollisionTime(n, Te))) * (3.0 / (RhoStar * RhoStar)); //* (ElectronMass / IonMass));
 
     if (std::isfinite(IonHeating.val))
         return IonHeating;
@@ -103,7 +135,7 @@ double PlasmaConstants::RhoStarRef() const
     return sqrt(T0 * IonMass()) / (ElementaryCharge * B0 * a);
 }
 
-// The normalizing time can also be written this way
+// Normalize to the particle diffusion time
 double PlasmaConstants::NormalizingTime() const
 {
     double RhoStar = RhoStarRef();

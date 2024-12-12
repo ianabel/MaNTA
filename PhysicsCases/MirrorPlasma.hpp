@@ -86,6 +86,7 @@ private:
 	Real IonClassicalAngularMomentumFlux(Real V, Real n, Real Ti, Real dOmegadV, Time t) const;
 
 	Real ParticleSource(double R, double t) const;
+	Real NeutralDensity(Real R, Time t) const;
 
 	Real ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real Te) const;
 	Real IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) const;
@@ -138,6 +139,7 @@ private:
 
 	template <typename T>
 	T ParallelCurrent(T V, T omega, T n, T Ti, T Te, T phi) const;
+
 	double R_Lower, R_Upper;
 
 	Real RelaxSource(Real A, Real B) const
@@ -152,6 +154,15 @@ private:
 	void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override;
 
 private:
+	// // Reference Values
+
+	// // All reference values should be in SI (non SI variants are explicitly noted)
+	constexpr static double n0 = 1.e20, n0cgs = n0 / 1.e6;
+	constexpr static double T0 = 1000.0 * ElementaryCharge, T0eV = T0 / ElementaryCharge;
+	constexpr static double B0 = 1.0; // Reference field in T
+	constexpr static double a = 1.0;  // Reference length in m
+	constexpr static double Z_eff = 3.0;
+
 	std::unique_ptr<PlasmaConstants> Plasma;
 	std::shared_ptr<StraightMagneticField> B;
 
@@ -188,28 +199,21 @@ private:
 
 	double nEdge, TeEdge, TiEdge, MUpper, MLower, MEdge;
 	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber;
+	double nNeutrals;
+	bool useNeutralModel;
 	double MachWidth;
 	bool useAmbipolarPhi;
 	bool useConstantVoltage;
 
 	std::vector<double> growth_factors;
 
-	double ParticleSourceStrength, ParticleSourceCenter,
+	double LowerParticleSourceStrength, UpperParticleSourceStrength, ParticleSourceCenter,
 		ParticleSourceWidth, UniformHeatSource;
 
-	double IRadial;
+	double IRadial, I0;
 
 	// Add a cap to sources to prevent ridiculous values
 	double SourceCap;
-
-	// // Reference Values
-
-	// // All reference values should be in SI (non SI variants are explicitly noted)
-	constexpr static double n0 = 1.e20, n0cgs = n0 / 1.e6;
-	constexpr static double T0 = 1000.0 * ElementaryCharge, T0eV = T0 / ElementaryCharge;
-	constexpr static double B0 = 1.0; // Reference field in T
-	constexpr static double a = 1.0;  // Reference length in m
-	constexpr static double Z_eff = 3.0;
 
 	REGISTER_PHYSICS_HEADER(MirrorPlasma)
 };

@@ -146,7 +146,7 @@ def plot_diagnostics(fname):
 
 
 def main():
-    fname = "./CMFX.nc"
+    fname = "./runs/CMFX.nc"
     plot_nc(fname,plot_u=False,plot_aux=True,include_initial=True)
     # fname = "./MirrorPlasmaTest.nc"
     #plot_nc(fname,False,False,include_initial=True)

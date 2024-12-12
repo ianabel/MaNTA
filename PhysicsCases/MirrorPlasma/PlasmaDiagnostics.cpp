@@ -50,6 +50,15 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
         return (2. / 3.) * InitialValue(Channel::ElectronEnergy, V);
     };
 
+    auto Te = [&](double V)
+    {
+        return p_e(V) / n(V);
+    };
+    auto Ti = [&](double V)
+    {
+        return p_i(V) / n(V);
+    };
+
     auto u = [this](double V)
     {
         RealVector U(nVars);
@@ -256,13 +265,14 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
         return ParticleSourceHeating.val;
     };
 
-    Real tnorm = n0 * TauNorm; // n0 * T0 * a * B0 * B0 / (electronMass * Om_e(B0) * Om_e(B0) * tau_e(n0, n0 * T0));
-    nc.AddScalarVariable("tnorm", "time normalization", "s", 1 / tnorm.val);
+    // Real tnorm = n0 * TauNorm; // n0 * T0 * a * B0 * B0 / (electronMass * Om_e(B0) * Om_e(B0) * tau_e(n0, n0 * T0));
+    double omega0 = 1 / a * sqrt(T0 / Plasma->IonMass());
+    nc.AddScalarVariable("tnorm", "time normalization", "s", TauNorm);
     nc.AddScalarVariable("Lnorm", "Length normalization", "m", 1 / a);
     nc.AddScalarVariable("n0", "Density normalization", "m^-3", n0);
     nc.AddScalarVariable("T0", "Temperature normalization", "J", T0);
     nc.AddScalarVariable("B0", "Reference magnetic field", "T", B0);
-    nc.AddScalarVariable("IRadial", "Radial current", "A", IRadial * (Plasma->IonMass() * sqrt(T0 / Plasma->IonMass()) * a) * tnorm.val / B0);
+    nc.AddScalarVariable("IRadial", "Radial current", "A", IRadial);
     nc.AddTimeSeries("Voltage", "Total voltage drop across the plasma", "Volts", initialVoltage);
     nc.AddGroup("MMS", "Manufactured solutions");
     for (int j = 0; j < nVars; ++j)
@@ -277,6 +287,13 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
     nc.AddVariable("ParallelLosses", "IonParLoss", "Parallel particle losses", "-", IonParallelLosses);
     nc.AddVariable("ParallelLosses", "CentrifugalPotential", "Centrifugal potential", "-", phi);
     nc.AddVariable("ParallelLosses", "AngularMomentumLosses", "Angular momentum loss rate", "-", AngularMomentumLosses);
+
+    // Collisions with neutrals
+    nc.AddGroup("Neutrals", "Collisional neutral terms");
+    nc.AddVariable("Neutrals", "Ionization", "Ionization rate", "m^-3 s^-1", [&](double V)
+                   { return Plasma->IonizationRate(n(V), NeutralDensity(B->R(V), 0.0), L(V) / (n(V) * B->R_V(V)), Te(V), Ti(V)).val; });
+    nc.AddVariable("Neutrals", "ChargeExchange", "Charge exchange rate", "m^-3 s^-1", [&](double V)
+                   { return Plasma->ChargeExchangeLossRate(n(V), NeutralDensity(B->R(V), 0.0), L(V) / (n(V) * B->R_V(V)), Ti(V)).val; });
 
     // Heat Sources
     nc.AddGroup("Heating", "Separated heating sources");
@@ -326,6 +343,15 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_
     auto p_e = [&y](double V)
     {
         return (2. / 3.) * y.u(Channel::ElectronEnergy)(V);
+    };
+
+    auto Te = [&](double V)
+    {
+        return p_e(V) / n(V);
+    };
+    auto Ti = [&](double V)
+    {
+        return p_i(V) / n(V);
     };
 
     auto u = [this, &y](double V)
@@ -552,6 +578,11 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_
     nc.AppendToGroup<Fn>("ParallelLosses", tIndex, {{"ElectronParLoss", ElectronParallelLosses}, {"IonParLoss", IonParallelLosses}, {"CentrifugalPotential", phi}, {"AngularMomentumLosses", AngularMomentumLosses}});
 
     nc.AppendToGroup<Fn>("MMS", tIndex, {{"Var0", DensitySol}, {"Var1", IonEnergySol}, {"Var2", ElectronEnergySol}, {"Var3", AngularMomentumSol}});
+
+    nc.AppendToGroup("Neutrals", tIndex, "Ionization", [&](double V)
+                     { return Plasma->IonizationRate(n(V), NeutralDensity(B->R_V(V), t), L(V) / (n(V) * B->R_V(V)), Te(V), Ti(V)).val; });
+    nc.AppendToGroup("Neutrals", tIndex, "ChargeExchange", [&](double V)
+                     { return Plasma->ChargeExchangeLossRate(n(V), NeutralDensity(B->R_V(V), t), L(V) / (n(V) * B->R_V(V)), Ti(V)).val; });
 
     nc.AppendToVariable("dPhi0dV", [this, &u, &q](double V)
                         { return dphi0dV(u(V), q(V), V).val; }, tIndex);
