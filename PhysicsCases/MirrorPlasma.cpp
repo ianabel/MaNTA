@@ -623,8 +623,8 @@ Real MirrorPlasma::dphidV(RealVector u, RealVector q, RealVector phi, Real V) co
 {
 	Real dphidV = 0.0; // dphi0dV(u, q, V);
 
-	if (nAux > 0)
-		dphidV += dphi1dV(u, q, phi(0), V);
+	// if (nAux > 0)
+	// 	dphidV += dphi1dV(u, q, phi(0), V);
 
 	return dphidV;
 }
