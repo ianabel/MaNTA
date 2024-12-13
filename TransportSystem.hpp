@@ -123,6 +123,13 @@ class TransportSystem
                 throw std::logic_error("nAux > 0 but no coupling to the main sources provided");
         }
 
+        virtual void dSigma_dPhi(Index, Values &v, const State &, Position, Time)
+        {
+          v.setZero();
+          return;
+        }
+
+
         virtual std::string getVariableName(Index i)
         {
             return std::string("Var") + std::to_string(i);

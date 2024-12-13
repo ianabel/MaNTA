@@ -659,11 +659,15 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
         // allocate temporary working space for gauss elimination of scalars.
 
         N_Vector d = N_VClone( delY );
+
         N_Vector *e = new N_Vector[ nScalars ];
         for ( Index i=0; i < nScalars; ++i )
             e[ i ] = N_VClone( delY );
+
         N_Vector g = N_VClone( delY );
+
         DGSoln res_g_map( nVars, grid, k, N_VGetArrayPointer( res_g ), nScalars, nAux );
+
         DGSoln del_y( nVars, grid, k, N_VGetArrayPointer( delY ), nScalars, nAux );
 
 
@@ -675,7 +679,7 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
         // Now A e = v ; Do as a loop over nScalars
 #pragma omp parallel for
         for ( Index i = 0; i < nScalars; ++i ) {
-            solveHDGJac( e[ i ], v[ i ] );
+            solveHDGJac( v[ i ], e[ i ] );
         }
 
         Vector tmp_N = (N_global.inverse() * res_g_map.Scalars());

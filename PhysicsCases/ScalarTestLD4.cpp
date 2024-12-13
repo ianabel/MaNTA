@@ -1,5 +1,5 @@
 
-#include "ScalarTestLD3.hpp"
+#include "ScalarTestLD4.hpp"
 #include <boost/math/quadrature/gauss_kronrod.hpp>
 #include <cmath>
 #include <numbers>
@@ -39,12 +39,12 @@
  */
 
 // Needed to register the class
-REGISTER_PHYSICS_IMPL(ScalarTestLD3);
+REGISTER_PHYSICS_IMPL(ScalarTestLD4);
 
-ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
+ScalarTestLD4::ScalarTestLD4(toml::value const &config, Grid const &)
 {
 	// Always set nVars in a derived constructor
-	nVars = 1;
+	nVars = 2;
 	nScalars = 2;
 
 	// Construst your problem from user-specified config
@@ -52,7 +52,7 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
 	// here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 
 	if (config.count("DiffusionProblem") != 1)
-		throw std::invalid_argument("There should be a [DiffusionProblem] section if you are using the ScalarTestLD3 physics model.");
+		throw std::invalid_argument("There should be a [DiffusionProblem] section if you are using the ScalarTestLD4 physics model.");
 
 	auto const &DiffConfig = config.at("DiffusionProblem");
 
@@ -68,31 +68,31 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
 }
 
 // Dirichlet Boundary Conditon
-Value ScalarTestLD3::LowerBoundary(Index, Time) const
+Value ScalarTestLD4::LowerBoundary(Index, Time) const
 {
 	return u0;
 }
 
-Value ScalarTestLD3::UpperBoundary(Index, Time) const
+Value ScalarTestLD4::UpperBoundary(Index, Time) const
 {
 	return u0;
 }
 
-bool ScalarTestLD3::isLowerBoundaryDirichlet(Index) const { return true; };
-bool ScalarTestLD3::isUpperBoundaryDirichlet(Index) const { return true; };
+bool ScalarTestLD4::isLowerBoundaryDirichlet(Index) const { return true; };
+bool ScalarTestLD4::isUpperBoundaryDirichlet(Index) const { return true; };
 
-Value ScalarTestLD3::SigmaFn(Index i, const State &s, Position x, Time)
+Value ScalarTestLD4::SigmaFn(Index i, const State &s, Position x, Time)
 {
 	return kappa * s.Derivative[i];
 }
 
-Value ScalarTestLD3::ScaledSource(Position x) const
+Value ScalarTestLD4::ScaledSource(Position x) const
 {
 	double Ainv = alpha * std::sqrt(std::numbers::pi) * std::erf(1.0 / alpha);
 	return exp(-(x / alpha) * (x / alpha)) / Ainv;
 }
 
-Value ScalarTestLD3::Sources(Index i, const State &s, Position x, Time)
+Value ScalarTestLD4::Sources(Index i, const State &s, Position x, Time)
 {
 	double J = 0;
     if (i == 0) {
@@ -105,27 +105,27 @@ Value ScalarTestLD3::Sources(Index i, const State &s, Position x, Time)
     throw std::logic_error("Index out of range");
 }
 
-void ScalarTestLD3::dSigmaFn_dq(Index i, Values &v, const State &, Position, Time)
+void ScalarTestLD4::dSigmaFn_dq(Index i, Values &v, const State &, Position, Time)
 {
 	v[i] = kappa;
 };
 
-void ScalarTestLD3::dSigmaFn_du(Index i, Values &v, const State &, Position, Time)
+void ScalarTestLD4::dSigmaFn_du(Index i, Values &v, const State &, Position, Time)
 {
 	v[i] = 0.0;
 };
 
-void ScalarTestLD3::dSources_du(Index i, Values &v, const State &, Position, Time)
+void ScalarTestLD4::dSources_du(Index i, Values &v, const State &, Position, Time)
 {
 	v[i] = 0.0;
 };
 
-void ScalarTestLD3::dSources_dq(Index i, Values &v, const State &, Position, Time)
+void ScalarTestLD4::dSources_dq(Index i, Values &v, const State &, Position, Time)
 {
 	v[i] = 0.0;
 };
 
-void ScalarTestLD3::dSources_dsigma(Index i, Values &v, const State &, Position, Time)
+void ScalarTestLD4::dSources_dsigma(Index i, Values &v, const State &, Position, Time)
 {
 	v[i] = 0.0;
 };
@@ -134,17 +134,17 @@ void ScalarTestLD3::dSources_dsigma(Index i, Values &v, const State &, Position,
 // always be 0
 
 // Initialise with a Gaussian at x = 0
-Value ScalarTestLD3::InitialValue(Index, Position x) const
+Value ScalarTestLD4::InitialValue(Index, Position x) const
 {
 	return u0 + beta * std::cos(std::numbers::pi * x / 2.0);
 }
 
-Value ScalarTestLD3::InitialDerivative(Index, Position x) const
+Value ScalarTestLD4::InitialDerivative(Index, Position x) const
 {
 	return -(beta * std::numbers::pi / 2.0) * std::sin(std::numbers::pi * x / 2.0);
 }
 
-bool ScalarTestLD3::isScalarDifferential(Index s)
+bool ScalarTestLD4::isScalarDifferential(Index s)
 {
 	if (s == 0)
 		return true; // E is differential, as we depend on dE/dt expliticly
@@ -152,7 +152,7 @@ bool ScalarTestLD3::isScalarDifferential(Index s)
 		return false; // J is not differential
 }
 
-Value ScalarTestLD3::ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt, Time)
+Value ScalarTestLD4::ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt, Time)
 {
 	double dEdt = dydt.Scalar(0);
 	double E = y.Scalar(0);
@@ -177,7 +177,7 @@ Value ScalarTestLD3::ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dyd
 	}
 }
 
-void ScalarTestLD3::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_dt, const DGSoln &y, const DGSoln &dydt, std::function<double(double)> P, Interval I, Time)
+void ScalarTestLD4::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_dt, const DGSoln &y, const DGSoln &dydt, std::function<double(double)> P, Interval I, Time)
 {
 	s.zero();
 	out_dt.zero();
@@ -212,7 +212,7 @@ void ScalarTestLD3::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out
 	}
 }
 
-void ScalarTestLD3::dSources_dScalars(Index i, Values &v, const State &, Position x, Time)
+void ScalarTestLD4::dSources_dScalars(Index i, Values &v, const State &, Position x, Time)
 {
 	if (i == 0)
 	{
@@ -223,7 +223,7 @@ void ScalarTestLD3::dSources_dScalars(Index i, Values &v, const State &, Positio
 		v.setZero();
 }
 
-Value ScalarTestLD3::InitialScalarValue(Index s) const
+Value ScalarTestLD4::InitialScalarValue(Index s) const
 {
 	// Our job to make sure this is consistent!
 	if (s == 0) // E
@@ -234,7 +234,7 @@ Value ScalarTestLD3::InitialScalarValue(Index s) const
 		throw std::logic_error("scalar index > nScalars");
 }
 
-Value ScalarTestLD3::InitialScalarDerivative(Index s, const DGSoln &y, const DGSoln &dydt) const
+Value ScalarTestLD4::InitialScalarDerivative(Index s, const DGSoln &y, const DGSoln &dydt) const
 {
 	// Our job to make sure this is consistent!
 	if (s == 0) // dE/dt at t=0
@@ -247,12 +247,12 @@ Value ScalarTestLD3::InitialScalarDerivative(Index s, const DGSoln &y, const DGS
 		throw std::logic_error("Initial derivative called for algebraic (non-differential) scalar");
 }
 
-void ScalarTestLD3::initialiseDiagnostics(NetCDFIO &nc)
+void ScalarTestLD4::initialiseDiagnostics(NetCDFIO &nc)
 {
 	nc.AddTimeSeries("Mass", "Integral of the solution over the domain", "", M0);
 }
 
-void ScalarTestLD3::writeDiagnostics(DGSoln const &y, double, NetCDFIO &nc, size_t tIndex)
+void ScalarTestLD4::writeDiagnostics(DGSoln const &y, double, NetCDFIO &nc, size_t tIndex)
 {
 	double mass = boost::math::quadrature::gauss_kronrod<double, 31>::integrate([&](double x)
 																				{ return y.u(0)(x); }, -1, 1);

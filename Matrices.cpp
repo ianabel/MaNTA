@@ -25,6 +25,10 @@ void SystemSolver::NLuMat( Matrix& NLu, DGSoln const& Y, Interval I ) {
 	DerivativeSubMatrix( NLu, &TransportSystem::dSigmaFn_du, Y, I );
 }
 
+void SystemSolver::NLphiMat( Matrix& M, DGSoln const& Y, Interval I ) {
+ return;
+}
+
 // Sets matrices of the form
 //	[ dX_1dZ1    dX_1dZ2    dX_1dZ3 ]
 //	[ dX_2dZ1    dX_2dZ2    dX_2dZ3 ]
