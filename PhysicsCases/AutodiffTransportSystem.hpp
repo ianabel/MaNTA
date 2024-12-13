@@ -29,14 +29,15 @@ public:
 	void dSources_du(Index i, Values &, const State &, Position x, Time t) override;
 	void dSources_dq(Index i, Values &, const State &, Position x, Time t) override;
 	void dSources_dsigma(Index i, Values &, const State &, Position x, Time t) override;
+	void dSources_dScalars(Index, Values &, const State &, Position, Time) override;
 
 	Value AuxG(Index, const State &, Position, Time) override;
 	void AuxGPrime(Index, State &, const State &, Position, Time) override;
 	void dSources_dPhi(Index, Values &, const State &, Position, Time) override;
 
 	// and initial conditions for u & q
-	Value InitialValue(Index i, Position x) const override;
-	Value InitialDerivative(Index i, Position x) const override;
+	virtual Value InitialValue(Index i, Position x) const override;
+	virtual Value InitialDerivative(Index i, Position x) const override;
 
 	// Override base initial phi value, add t dependency for MMS solutions
 	Value InitialAuxValue(Index i, Position x) const override
@@ -66,6 +67,7 @@ protected:
 	double growth_rate = 0.5;
 	double growth = 1.0;
 	virtual Real2nd MMS_Solution(Index i, Real2nd x, Real2nd t);
+	Value MMS_Source(Index, Position, Time);
 
 	void initialiseDiagnostics(NetCDFIO &nc) override;
 	void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override;
@@ -73,7 +75,24 @@ protected:
 private:
 	// API to underlying flux models
 	virtual Real Flux(Index i, RealVector u, RealVector q, Real x, Time t) = 0;
-	virtual Real Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) = 0;
+	virtual Real Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t)
+	{
+		if (nScalars > 0)
+		{
+			throw std::logic_error("nScalars > 0 but no implementation of scalar sources provided");
+		}
+		else
+			return 0.0;
+	}
+	virtual Real Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector phi, RealVector Scalars, Real x, Time t)
+	{
+		if (nScalars > 0)
+		{
+			throw std::logic_error("nScalars > 0 but no implementation of scalar sources provided");
+		}
+		else
+			return Source(i, u, q, sigma, phi, x, t);
+	}
 
 	// Auxiliary variables are optional, so provide a default implementation
 	virtual Real GFunc(Index, RealVector, RealVector, RealVector, RealVector, Position, Time)
@@ -111,7 +130,5 @@ private:
 	std::map<std::string, ProfileType> InitialProfiles = {{"Gaussian", ProfileType::Gaussian}, {"Cosine", ProfileType::Cosine}, {"CosineSquared", ProfileType::CosineSquared}, {"Uniform", ProfileType::Uniform}, {"Linear", ProfileType::Linear}};
 
 	Vector InitialHeights;
-
-	Value MMS_Source(Index, Position, Time);
 };
 #endif

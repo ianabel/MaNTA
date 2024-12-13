@@ -29,7 +29,7 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSyst
     AUX_DOF = k + 1;
     localDOF = nVars * SQU_DOF + nAux * AUX_DOF;
 
-    std::cerr << "Total HDG degrees of freedom " << ( localDOF ) * nCells + (nCells + 1) + nScalars << std::endl;
+    std::cerr << "Total HDG degrees of freedom " << ( localDOF ) * nCells + (nCells + 1) * nVars + nScalars << std::endl;
     if ( nScalars > 0 ) {
         v = new N_Vector[ nScalars ];
         w = new N_Vector[ nScalars ];
@@ -50,6 +50,7 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSyst
 SystemSolver::~SystemSolver()
 {
     delete[] yJacMem;
+    delete[] dydtJacMem;
     if (nScalars > 0)
     {
         for (Index i = 0; i < nScalars; ++i)
@@ -79,9 +80,6 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     y.AssignU(initial_u);
     y.AssignQ(initial_q);
 
-    y.EvaluateLambda();
-    dydt.zeroCoeffs();
-
     for ( Index s = 0; s < nScalars; ++s ) {
         y.Scalar( s ) = problem->InitialScalarValue( s );
     }
@@ -97,6 +95,9 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
     auto sigma_wrapper = [this](Index i, const State &s, Position x, Time t) { return -problem->SigmaFn(i, s, x, t); };
     y.AssignSigma(sigma_wrapper);
+
+    y.EvaluateLambda();
+    dydt.zeroCoeffs();
 
     for (Index var = 0; var < nVars; var++)
     {
@@ -658,11 +659,15 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
         // allocate temporary working space for gauss elimination of scalars.
 
         N_Vector d = N_VClone( delY );
+
         N_Vector *e = new N_Vector[ nScalars ];
         for ( Index i=0; i < nScalars; ++i )
             e[ i ] = N_VClone( delY );
+
         N_Vector g = N_VClone( delY );
+
         DGSoln res_g_map( nVars, grid, k, N_VGetArrayPointer( res_g ), nScalars, nAux );
+
         DGSoln del_y( nVars, grid, k, N_VGetArrayPointer( delY ), nScalars, nAux );
 
 
@@ -674,7 +679,7 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
         // Now A e = v ; Do as a loop over nScalars
 #pragma omp parallel for
         for ( Index i = 0; i < nScalars; ++i ) {
-            solveHDGJac( e[ i ], v[ i ] );
+            solveHDGJac( v[ i ], e[ i ] );
         }
 
         Vector tmp_N = (N_global.inverse() * res_g_map.Scalars());

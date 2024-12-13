@@ -164,6 +164,7 @@ class SystemSolver
 
         void NLqMat(Matrix &, DGSoln const &, Interval);
         void NLuMat(Matrix &, DGSoln const &, Interval);
+        void NLphiMat(Matrix &, DGSoln const &, Interval);
 
         void dSourcedu_Mat(Matrix &, DGSoln const &, Interval);
         void dSourcedq_Mat(Matrix &, DGSoln const &, Interval);
