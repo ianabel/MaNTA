@@ -65,14 +65,8 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
 	gamma_I = toml::find_or(DiffConfig, "gamma_I", 0.0);
 	u0 = toml::find_or(DiffConfig, "u0", 0.1);
 
-<<<<<<< HEAD
-
-	M0 = 2*u0 + 4*beta/std::numbers::pi;
-    std::cerr << "M0 : " << M0 << std::endl;
-=======
 	M0 = 2 * u0 + 4 * beta / std::numbers::pi;
 	std::cerr << "M0 : " << M0 << std::endl;
->>>>>>> main
 }
 
 // Dirichlet Boundary Conditon
@@ -154,22 +148,14 @@ Value ScalarTestLD3::InitialDerivative(Index, Position x) const
 
 bool ScalarTestLD3::isScalarDifferential(Index s)
 {
-<<<<<<< HEAD
     if( s == 0 || s == 2) 
         return true; // E & I are differential, as we depend on d{E,I}/dt expliticly
     else
         return false; // J is not differential
-=======
-	if (s == 0)
-		return true; // E is differential, as we depend on dE/dt expliticly
-	else
-		return false; // J is not differential
->>>>>>> main
 }
 
 Value ScalarTestLD3::ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt, Time)
 {
-<<<<<<< HEAD
     double dEdt = dydt.Scalar(0);
     double dIdt = dydt.Scalar(2);
     double E = y.Scalar(0);
@@ -224,62 +210,6 @@ void ScalarTestLD3::ScalarGPrimeExtended( Index scalarIndex, State &s, State &ou
         // dG_2/dIdot = 1
         out_dt.Scalars[ 2 ] = 1.0;
     } else {
-=======
-	double dEdt = dydt.Scalar(0);
-	double E = y.Scalar(0);
-	double J = y.Scalar(1);
-	if (s == 0)
-	{
-		// E = (M0 - M)
-		// => G_0 = E - (M-M0)
-		double M = boost::math::quadrature::gauss_kronrod<double, 31>::integrate([&](double x)
-																				 { return y.u(0)(x); }, -1, 1);
-		return E - (M0 - M);
-	}
-	else if (s == 1)
-	{
-		// J = gamma * E + gamma_d * dE/dt + [ sigma(x = +1) - sigma(x = -1) ]
-		// => G_1 = J - gamma * E - gamma_d * dE/dt - [ sigma(x = +1) - sigma(x = -1) ]
-		return J - gamma * E - gamma_d * dEdt - (y.sigma(0)(1) - y.sigma(0)(-1));
-	}
-	else
-	{
->>>>>>> main
-		throw std::logic_error("scalar index > nScalars");
-	}
-}
-
-void ScalarTestLD3::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_dt, const DGSoln &y, const DGSoln &dydt, std::function<double(double)> P, Interval I, Time)
-{
-	s.zero();
-	out_dt.zero();
-	if (scalarIndex == 0)
-	{
-		s.Flux[0] = 0.0;	   // d G_0 / d sigma
-		s.Derivative[0] = 0.0; // d G_0 / d (u')
-		// dG_0 / du = - dM/du (as functional derivative, taken as an inner product with P)
-		double P_mass = boost::math::quadrature::gauss_kronrod<double, 31>::integrate(P, I.x_l, I.x_u);
-		s.Variable[0] = -P_mass;
-		s.Scalars[0] = 1.0; // dG_0/dE
-		s.Scalars[1] = 0.0; // dG_0/dJ
-	}
-	else if (scalarIndex == 1)
-	{
-		// dG_1 / d sigma = -[ delta(x-1) - delta(x + 1) ] ;
-		// return as functional derivative acting on P
-		s.Flux[0] = 0.0;
-		if (abs(I.x_u - 1) < 1e-9)
-			s.Flux[0] -= P(I.x_u);
-		if (abs(I.x_l + 1) < 1e-9)
-			s.Flux[0] += P(I.x_l);
-		// dG_1/dE
-		s.Scalars[0] = -gamma;
-		// dG_1/dJ
-		s.Scalars[1] = 1.0;
-		out_dt.Scalars[0] = -gamma_d;
-	}
-	else
-	{
 		throw std::logic_error("scalar index > nScalars");
 	}
 }
@@ -301,13 +231,9 @@ Value ScalarTestLD3::InitialScalarValue(Index s) const
 	if (s == 0) // E
 		return 0;
 	else if (s == 1) // J
-<<<<<<< HEAD
 		return -kappa * ( InitialDerivative( 0, 1 ) - InitialDerivative( 0, -1 ) );
     else if (s == 2) // I
         return 0.0;
-=======
-		return -kappa * (InitialDerivative(0, 1) - InitialDerivative(0, -1));
->>>>>>> main
 	else
 		throw std::logic_error("scalar index > nScalars");
 }
@@ -315,7 +241,6 @@ Value ScalarTestLD3::InitialScalarValue(Index s) const
 Value ScalarTestLD3::InitialScalarDerivative(Index s, const DGSoln &y, const DGSoln &dydt) const
 {
 	// Our job to make sure this is consistent!
-<<<<<<< HEAD
 	if( s == 0 ) // dE/dt at t=0
     {
         double Mdot = boost::math::quadrature::gauss_kronrod<double, 31>::integrate( [ & ]( double x ){ return dydt.u( 0 )( x );}, -1, 1 );
@@ -324,15 +249,6 @@ Value ScalarTestLD3::InitialScalarDerivative(Index s, const DGSoln &y, const DGS
         double E = y.Scalar(0);
         return E; // dI/dt = E
     } else
-=======
-	if (s == 0) // dE/dt at t=0
-	{
-		double Mdot = boost::math::quadrature::gauss_kronrod<double, 31>::integrate([&](double x)
-																					{ return dydt.u(0)(x); }, -1, 1);
-		return Mdot;
-	}
-	else
->>>>>>> main
 		throw std::logic_error("Initial derivative called for algebraic (non-differential) scalar");
 }
 
