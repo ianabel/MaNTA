@@ -55,6 +55,7 @@ public:
 
 private:
 	using integrator = boost::math::quadrature::gauss_kronrod<double, 61>;
+	constexpr static int max_depth = 0;
 
 	Real Flux(Index, RealVector, RealVector, Real, Time) override;
 	Real Source(Index, RealVector, RealVector, RealVector, RealVector, RealVector, Real, Time) override;
@@ -82,6 +83,7 @@ private:
 	// Underlying functions
 
 	Value InitialDensityTimeDerivative(RealVector u, RealVector q, Position V) const;
+	Value InitialCurrent(Time t) const;
 
 	Real IonClassicalAngularMomentumFlux(Real V, Real n, Real Ti, Real dOmegadV, Time t) const;
 
@@ -172,6 +174,13 @@ private:
 	double gamma_d;
 	double gamma_h;
 
+	enum Scalar : Index
+	{
+		Error = 0,
+		Integral = 1,
+		Current = 2
+	};
+
 	double RelaxFactor;
 	double MinDensity;
 	double MinTemp;
@@ -210,7 +219,7 @@ private:
 	double LowerParticleSourceStrength, UpperParticleSourceStrength, ParticleSourceCenter,
 		ParticleSourceWidth, UniformHeatSource;
 
-	double IRadial, I0;
+	double IRadial, I0, CurrentDecay;
 
 	// Add a cap to sources to prevent ridiculous values
 	double SourceCap;

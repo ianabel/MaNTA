@@ -608,8 +608,8 @@ void SystemSolver::updateMatricesForJacSolve()
     {
         Interval const& I( grid[ i ] );
         for ( Index j = 0; j < nScalars; ++j ) {
-            State s( nVars, nScalars );
-            State s_dt( nVars, nScalars );
+            State s( nVars, nScalars, nAux );
+            State s_dt( nVars, nScalars, nAux );
             for ( Index l = 0; l < k + 1; ++l ) {
                 problem->ScalarGPrimeExtended( j, s, s_dt, yJac, dydtJac, [=]( double x ){ return LegendreBasis::Evaluate( I, l, x ); }, I, jt );
                 for ( Index v = 0; v < nVars; ++v ) {
@@ -617,6 +617,9 @@ void SystemSolver::updateMatricesForJacSolve()
                     w_map[ j ].q( v ).getCoeff( i ).second( l )     = s.Derivative[ v ] + alpha * s_dt.Derivative[ v ];
                     w_map[ j ].u( v ).getCoeff( i ).second( l )     = s.Variable[ v ]   + alpha * s_dt.Variable[ v ];
                 }
+                for (Index a = 0; a < nAux; ++a) 
+                   w_map[ j ].Aux( a ).getCoeff( i ).second( l )    = s.Aux[ a ]        + alpha * s_dt.Aux[ a ];
+                
             }
             for( Index m = 0; m < nScalars; ++m )
                 N_global( j, m ) = s.Scalars[ m ] + alpha * s_dt.Scalars[ m ];

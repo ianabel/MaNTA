@@ -69,12 +69,14 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
 		if (useConstantVoltage)
 		{
 			double cs0 = std::sqrt(T0 / Plasma->IonMass());
-			V0 = toml::find_or(InternalConfig, "V0", 50e3 / cs0); // default 50 kV
+			V0 = toml::find_or(InternalConfig, "V0", 50e3); // default 50 kV
+			V0 /= cs0;
+			CurrentDecay = toml::find_or(InternalConfig, "CurrentDecay", 1e-5);
 			gamma = toml::find_or(InternalConfig, "gamma", 1.0);
 			gamma_d = toml::find_or(InternalConfig, "gamma_d", 0.0);
 			gamma_h = toml::find_or(InternalConfig, "gamma_h", 0.0);
 			growth = 0.0;
-			nScalars = 1;
+			nScalars = 3;
 		}
 
 		// Add floor for computed densities and temperatures
@@ -134,7 +136,6 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
 
 		ParticleSourceWidth = toml::find_or(InternalConfig, "ParticleSourceWidth", 0.02);
 		ParticleSourceCenter = toml::find_or(InternalConfig, "ParticleSourceCenter", 0.5 * (R_Lower + R_Upper));
-		std::cout << UpperParticleSourceStrength << std::endl;
 	}
 	else if (config.count("MirrorPlasma") == 0)
 	{
@@ -556,7 +557,7 @@ Real MirrorPlasma::Somega(RealVector u, RealVector q, RealVector sigma, RealVect
 
 	Real RadialCurrent;
 	if (useConstantVoltage)
-		RadialCurrent = IRadial / I0; //-Scalars(1);
+		RadialCurrent = -Scalars(Scalar::Current);
 	else
 		RadialCurrent = IRadial / I0;
 

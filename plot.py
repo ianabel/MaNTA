@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from netCDF4 import Dataset
 import numpy as np
 
-def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_aux = False,plot_grid= False, include_initial = False):
+def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_aux = False,plot_scalars = False, plot_grid= False, include_initial = False):
   
     data = Dataset(fname)
     print(data)
@@ -66,6 +66,20 @@ def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_aux = 
 
         ax.legend()
         plt.title("aux")
+
+    if (plot_scalars):
+        Vars = data.variables
+        for Var in Vars:
+            if (Var.startswith("Scalar")):
+                plt.figure()
+                ax = plt.axes()
+                y = np.array(data.variables[Var])
+                #y2 = np.array(data.variables["Voltage"])
+                ax.plot(t,y)
+                #ax.plot(t,y2)
+                plt.title(Var)
+
+        
 
     data.close()
 
@@ -140,18 +154,18 @@ def plot_diagnostics(fname):
                 plt.title(data.groups[group].description)
                 plt.xlabel("x")
 
-
+ 
 
     data.close()
 
 
 def main():
     fname = "./runs/CMFX.nc"
-    plot_nc(fname,plot_u=False,plot_aux=True,include_initial=True)
+    plot_nc(fname,plot_u=True,plot_scalars=True,include_initial=True)
     # fname = "./MirrorPlasmaTest.nc"
     #plot_nc(fname,False,False,include_initial=True)
     # plot_MMS(fname)
-    plot_diagnostics(fname)
+    #plot_diagnostics(fname)
     plt.show()
     
 

@@ -44,7 +44,7 @@ REGISTER_PHYSICS_IMPL(ScalarTestLD3);
 ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
 {
 	// Always set nVars in a derived constructor
-	nVars = 1;
+	nVars = 2;
 	nScalars = 2;
 
 	// Construst your problem from user-specified config
