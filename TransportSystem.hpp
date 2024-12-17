@@ -181,6 +181,11 @@ class TransportSystem
             return;
         }
 
+        virtual void writeDiagnostics(DGSoln const &y, DGSoln const &dydt, double t, NetCDFIO &nc, size_t tIndex)
+        {
+            writeDiagnostics(y, t, nc, tIndex);
+        }
+
         // Parameters are ( solution, time, netcdf output object, time index )
         virtual void writeDiagnostics(DGSoln const &, double, NetCDFIO &, size_t)
         {

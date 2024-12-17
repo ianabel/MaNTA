@@ -360,6 +360,13 @@ void AutodiffTransportSystem::initialiseDiagnostics(NetCDFIO &nc)
 						   { return this->InitialAuxValue(i, x); });
 	}
 
+	if (nScalars > 0)
+	{
+		nc.AddGroup("ScalarG", "Scalar functions");
+		for (Index i = 0; i < nScalars; ++i)
+			nc.AddTimeSeries("ScalarG", "ScalarG" + std::to_string(i), "Scalar function", "-", InitialScalarValue(i));
+	}
+
 	if (useMMS)
 	{
 		nc.AddGroup("MMSSource", "MMS sources");
@@ -369,7 +376,7 @@ void AutodiffTransportSystem::initialiseDiagnostics(NetCDFIO &nc)
 	}
 }
 
-void AutodiffTransportSystem::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
+void AutodiffTransportSystem::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t, NetCDFIO &nc, size_t tIndex)
 {
 	if (nAux > 0)
 	{
@@ -377,6 +384,12 @@ void AutodiffTransportSystem::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO
 			nc.AppendToGroup("AuxG", tIndex, "Aux" + std::to_string(i), [this, i, &y, &t](double x)
 							 {  State s = y.eval(x);
 								return this->AuxG(i, s, x, t); });
+	}
+
+	if (nScalars > 0)
+	{
+		for (Index i = 0; i < nScalars; ++i)
+			nc.AppendToTimeSeries("ScalarG", "ScalarG" + std::to_string(i), ScalarGExtended(i, y, dydt, t), tIndex);
 	}
 
 	if (useMMS)

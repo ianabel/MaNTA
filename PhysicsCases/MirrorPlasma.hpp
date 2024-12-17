@@ -54,8 +54,8 @@ public:
 	void ScalarGPrimeExtended(Index, State &, State &, const DGSoln &, const DGSoln &, std::function<double(double)>, Interval, Time) override;
 
 private:
-	using integrator = boost::math::quadrature::gauss_kronrod<double, 61>;
-	constexpr static int max_depth = 0;
+	using integrator = boost::math::quadrature::gauss_kronrod<double, 15>;
+	constexpr static int max_depth = 2;
 
 	Real Flux(Index, RealVector, RealVector, Real, Time) override;
 	Real Source(Index, RealVector, RealVector, RealVector, RealVector, RealVector, Real, Time) override;
@@ -153,7 +153,7 @@ private:
 	double Voltage(T1 &L_phi, T2 &n);
 
 	void initialiseDiagnostics(NetCDFIO &) override;
-	void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override;
+	void writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t, NetCDFIO &nc, size_t tIndex) override;
 
 private:
 	// // Reference Values

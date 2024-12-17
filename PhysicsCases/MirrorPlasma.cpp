@@ -69,7 +69,7 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
 		if (useConstantVoltage)
 		{
 			double cs0 = std::sqrt(T0 / Plasma->IonMass());
-			V0 = toml::find_or(InternalConfig, "V0", 50e3); // default 50 kV
+			V0 = toml::find_or(InternalConfig, "PlasmaVoltage", 50e3); // default 50 kV
 			V0 /= cs0;
 			CurrentDecay = toml::find_or(InternalConfig, "CurrentDecay", 1e-5);
 			gamma = toml::find_or(InternalConfig, "gamma", 1.0);

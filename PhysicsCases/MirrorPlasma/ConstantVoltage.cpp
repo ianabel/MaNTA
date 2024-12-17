@@ -69,8 +69,7 @@ Value MirrorPlasma::InitialScalarValue(Index s) const
     auto omega = [&](Position V)
     {
         Value R = B->R_V(V);
-        Value w = L(V) / (n(V) * R * R);
-        return w;
+        return L(V) / (n(V) * R * R);
     };
 
     auto Phi_V = [&](Position V)
