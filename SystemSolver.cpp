@@ -76,22 +76,9 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
     if (problem->isRestarting())
     {
-        // Copy restart values into y, set appropriate dydt values
-        DGSoln _y(problem->getRestartY());
-        DGSoln _dydt(problem->getRestartdYdt());
-        y.copy(_y);
-
-        dydt.zeroCoeffs();
-        for (Index var = 0; var < nVars; ++var)
-            dydt.u(var).copy(_dydt.u(var));
-
-        for (Index s = 0; s < nScalars; ++s)
-        {
-            if (problem->isScalarDifferential(s))
-            {
-                dydt.Scalar(s) = _dydt.Scalar(s);
-            }
-        }
+        // Copy restart values into y
+        y.copy(problem->getRestartY());
+        ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
     }
     else 
     {
@@ -109,8 +96,8 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
             auto initial_aux = std::bind_front( &TransportSystem::InitialAuxValue, problem );
             y.AssignAux( initial_aux );
         }
-        
-        ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
+
+        ApplyDirichletBCs(y);
 
         // Zero most of dydt, we only have to set it to nonzero values for the differential parts of y
 
@@ -118,64 +105,66 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         y.AssignSigma(sigma_wrapper);
 
         y.EvaluateLambda();
-        dydt.zeroCoeffs();
+    }
+    
+    dydt.zeroCoeffs();
 
-        for (Index var = 0; var < nVars; var++)
+    for (Index var = 0; var < nVars; var++)
+    {
+        // Solver For dudt with dudt = X^-1( -B*Sig - D*U - E*Lam + F )
+        Eigen::Vector2d lamCell;
+        for (Index i = 0; i < nCells; i++)
         {
-            // Solver For dudt with dudt = X^-1( -B*Sig - D*U - E*Lam + F )
-            Eigen::Vector2d lamCell;
-            for (Index i = 0; i < nCells; i++)
+            Interval I = grid[i];
+
+            // Evaluate Source Function
+            Eigen::VectorXd S_cellwise(k + 1);
+            S_cellwise.setZero();
+            auto const &x_vals = DGApprox::Integrator().abscissa();
+            auto const &x_wgts = DGApprox::Integrator().weights();
+            const size_t n_abscissa = x_vals.size();
+
+            S_cellwise.setZero();
+            for (size_t i = 0; i < n_abscissa; ++i)
             {
-                Interval I = grid[i];
+                double x_val = I.x_l + (1 + x_vals[i]) * I.h() / 2.0;
+                double wgt = x_wgts[i] * (I.h() / 2.0);
 
-                // Evaluate Source Function
-                Eigen::VectorXd S_cellwise(k + 1);
-                S_cellwise.setZero();
-                auto const &x_vals = DGApprox::Integrator().abscissa();
-                auto const &x_wgts = DGApprox::Integrator().weights();
-                const size_t n_abscissa = x_vals.size();
-
-                S_cellwise.setZero();
-                for (size_t i = 0; i < n_abscissa; ++i)
-                {
-                    double x_val = I.x_l + (1 + x_vals[i]) * I.h() / 2.0;
-                    double wgt = x_wgts[i] * (I.h() / 2.0);
-
-                    State s = y.eval(x_val);
-                    double sourceVal = problem->Sources(var, s, x_val, t);
-                    for (Eigen::Index j = 0; j < k + 1; j++)
-                        S_cellwise(j) += wgt * sourceVal * LegendreBasis::Evaluate(I, j, x_val);
-                }
-                // And for the other half of the abscissas
-                for (size_t i = 0; i < n_abscissa; ++i)
-                {
-                    double x_val = I.x_l + (1 - x_vals[i]) * I.h() / 2.0;
-                    double wgt = x_wgts[i] * (I.h() / 2.0);
-                    State s = y.eval(x_val);
-                    double sourceVal = problem->Sources(var, s, x_val, t);
-                    for (Eigen::Index j = 0; j < k + 1; j++)
-                        S_cellwise(j) += wgt * sourceVal * LegendreBasis::Evaluate(I, j, x_val);
-                }
-
-                lamCell[0] = y.lambda(var)[i];
-                lamCell[1] = y.lambda(var)[i + 1];
-                // dudt.coeffs[ var ][ i ].second.setZero();
-                auto const &sigma_vec = y.sigma(var).getCoeff(i).second;
-                auto const &u_vec = y.u(var).getCoeff(i).second;
-                dydt.u(var).getCoeff(i).second =
-                    XMats[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1).inverse() *
-                    (-B_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * sigma_vec - D_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * u_vec - E_cellwise[i].block(var * (k + 1), var * 2, k + 1, 2) * lamCell + RF_cellwise[i].block(nVars * (k + 1) + var * (k + 1), 0, k + 1, 1) + S_cellwise);
-                // <cellwise derivative matrix> * dydt.u( var ).getCoeff( i ).second;
+                State s = y.eval(x_val);
+                double sourceVal = problem->Sources(var, s, x_val, t);
+                for (Eigen::Index j = 0; j < k + 1; j++)
+                    S_cellwise(j) += wgt * sourceVal * LegendreBasis::Evaluate(I, j, x_val);
             }
-        }
-        for (Index s = 0; s < nScalars; ++s)
-        {
-            if (problem->isScalarDifferential(s))
+            // And for the other half of the abscissas
+            for (size_t i = 0; i < n_abscissa; ++i)
             {
-                dydt.Scalar(s) = problem->InitialScalarDerivative(s, y, dydt);
+                double x_val = I.x_l + (1 - x_vals[i]) * I.h() / 2.0;
+                double wgt = x_wgts[i] * (I.h() / 2.0);
+                State s = y.eval(x_val);
+                double sourceVal = problem->Sources(var, s, x_val, t);
+                for (Eigen::Index j = 0; j < k + 1; j++)
+                    S_cellwise(j) += wgt * sourceVal * LegendreBasis::Evaluate(I, j, x_val);
             }
+
+            lamCell[0] = y.lambda(var)[i];
+            lamCell[1] = y.lambda(var)[i + 1];
+            // dudt.coeffs[ var ][ i ].second.setZero();
+            auto const &sigma_vec = y.sigma(var).getCoeff(i).second;
+            auto const &u_vec = y.u(var).getCoeff(i).second;
+            dydt.u(var).getCoeff(i).second =
+                XMats[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1).inverse() *
+                (-B_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * sigma_vec - D_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * u_vec - E_cellwise[i].block(var * (k + 1), var * 2, k + 1, 2) * lamCell + RF_cellwise[i].block(nVars * (k + 1) + var * (k + 1), 0, k + 1, 1) + S_cellwise);
+            // <cellwise derivative matrix> * dydt.u( var ).getCoeff( i ).second;
         }
     }
+    for (Index s = 0; s < nScalars; ++s)
+    {
+        if (problem->isScalarDifferential(s))
+        {
+            dydt.Scalar(s) = problem->InitialScalarDerivative(s, y, dydt);
+        }
+    }
+    
 }
 
 void SystemSolver::ApplyDirichletBCs(DGSoln &Y)
