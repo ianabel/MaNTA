@@ -76,8 +76,9 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
     if (problem->isRestarting())
     {
-        DGSoln _y(nVars, grid, k, problem->getRestartY().data(), nScalars, nAux);
-        DGSoln _dydt(nVars, grid, k, problem->getRestartdYdt().data(), nScalars, nAux);
+        // Copy restart values into y, set appropriate dydt values
+        DGSoln _y(problem->getRestartY());
+        DGSoln _dydt(problem->getRestartdYdt());
         y.copy(_y);
         // dydt.copy(_dydt);
         dydt.zeroCoeffs();

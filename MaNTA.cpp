@@ -10,6 +10,7 @@
 #include "SystemSolver.hpp"
 #include "PhysicsCases.hpp"
 
+// Load restart data into vectors
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vector<double> &dYdt)
 {
 	netCDF::NcGroup GridGroup = restart_file.getGroup("Grid");
@@ -196,6 +197,7 @@ int runManta(std::string const &fname)
 	} 
 	else 
 	{
+		// Load grid from restart file
 		netCDF::NcGroup GridGroup = restart_file.getGroup("Grid");
 		auto nPoints = GridGroup.getDim("Index").getSize();
 		std::vector<Position> CellBoundaries(nPoints);
@@ -257,16 +259,16 @@ int runManta(std::string const &fname)
 	if(isRestarting)
 	{
 		std::vector<double> Y, dYdt;
-
 		Index nDOF_file = LoadFromFile(restart_file, Y, dYdt);
+		
+		// Make sure degrees of freedom are consistent with restart file
 		const Index nCells = grid->getNCells();
-
 		const Index nDOF = pProblem->getNumVars() * 3 * nCells * (k + 1) + pProblem->getNumVars() * (nCells + 1) + pProblem->getNumScalars() + pProblem->getNumAux() * nCells * (k + 1);
 
 		if (nDOF_file != nDOF)
 			throw std::invalid_argument("nVars/nAux/nScalars in restart file inconsistent with physics case");
 
-		pProblem->setRestartValues(Y, dYdt);
+		pProblem->setRestartValues(Y, dYdt, *grid, k);
 	}
 
 	if (pProblem == nullptr)

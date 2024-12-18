@@ -22,16 +22,26 @@ class TransportSystem
         Index getNumScalars() const { return nScalars; };
         Index getNumAux() const { return nAux; };
 
-        virtual void setRestartValues(std::vector<double> y,  std::vector<double> dydt)
+        virtual void setRestartValues(std::vector<double> y, std::vector<double> dydt, const Grid& grid, Index k)
         {
-            restart_Y = y;
-            restart_dYdt = dydt;
+            // Create DGSolns to wrap restart data
+            restart_Y = std::make_shared<DGSoln>(nVars, grid, k, y.data(), nScalars, nAux);
+            restart_dYdt = std::make_shared<DGSoln>(nVars, grid, k, dydt.data(), nScalars, nAux);
             restarting = true;
+
+            // Pull boundary conditions directly from restart values
+            Position xL = grid.lowerBoundary();
+            Position xR = grid.upperBoundary();
+            for (Index i; i < nVars; ++i)
+            {
+                uL[i] = restart_Y->u(i)(xL);
+                uR[i] = restart_Y->u(i)(xR);
+            }
         }
 
         bool isRestarting() const { return restarting; };
-        std::vector<double> &getRestartY() { return restart_Y; };
-        std::vector<double> &getRestartdYdt() { return restart_dYdt; };
+        DGSoln &getRestartY() { return *restart_Y; };
+        DGSoln &getRestartdYdt() { return *restart_dYdt; };
 
         // Function for passing boundary conditions to the solver
         virtual Value LowerBoundary(Index i, Time t) const { return uL[i]; };
@@ -217,8 +227,8 @@ class TransportSystem
         Index nAux = 0;
 
         bool restarting = false;
-        std::vector<double> restart_Y;
-        std::vector<double> restart_dYdt;
+        std::shared_ptr<DGSoln> restart_Y = nullptr;
+        std::shared_ptr<DGSoln> restart_dYdt = nullptr;
 
         std::vector<Value> uL, uR;
         bool isUpperDirichlet, isLowerDirichlet;
