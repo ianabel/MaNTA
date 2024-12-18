@@ -22,7 +22,7 @@ class TransportSystem
         Index getNumScalars() const { return nScalars; };
         Index getNumAux() const { return nAux; };
 
-        virtual void setRestartValues(std::shared_ptr<DGSoln> y, std::shared_ptr<DGSoln> dydt)
+        virtual void setRestartValues(std::vector<double> y,  std::vector<double> dydt)
         {
             restart_Y = y;
             restart_dYdt = dydt;
@@ -30,8 +30,8 @@ class TransportSystem
         }
 
         bool isRestarting() const { return restarting; };
-        DGSoln& getRestartY() const { return *restart_Y; };
-        DGSoln& getRestartdYdt() const { return *restart_dYdt; };
+        std::vector<double> &getRestartY() { return restart_Y; };
+        std::vector<double> &getRestartdYdt() { return restart_dYdt; };
 
         // Function for passing boundary conditions to the solver
         virtual Value LowerBoundary(Index i, Time t) const { return uL[i]; };
@@ -217,8 +217,8 @@ class TransportSystem
         Index nAux = 0;
 
         bool restarting = false;
-        std::shared_ptr<DGSoln> restart_Y = nullptr;
-        std::shared_ptr<DGSoln> restart_dYdt = nullptr;
+        std::vector<double> restart_Y;
+        std::vector<double> restart_dYdt;
 
         std::vector<Value> uL, uR;
         bool isUpperDirichlet, isLowerDirichlet;

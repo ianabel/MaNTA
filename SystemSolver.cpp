@@ -76,8 +76,13 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
     if (problem->isRestarting())
     {
-        y.copy(problem->getRestartY());
-        dydt.copy(problem->getRestartdYdt());
+        DGSoln _y(nVars, grid, k, problem->getRestartY().data(), nScalars, nAux);
+        DGSoln _dydt(nVars, grid, k, problem->getRestartdYdt().data(), nScalars, nAux);
+        y.copy(_y);
+        // dydt.copy(_dydt);
+        dydt.zeroCoeffs();
+        for (Index var = 0; var < nVars; ++var)
+            dydt.u(var).copy(_dydt.u(var));
     }
     else 
     {
@@ -95,7 +100,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         auto initial_aux = std::bind_front( &TransportSystem::InitialAuxValue, problem );
         y.AssignAux( initial_aux );
     }
-
+    
     ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
 
     // Zero most of dydt, we only have to set it to nonzero values for the differential parts of y
@@ -154,13 +159,14 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
             // <cellwise derivative matrix> * dydt.u( var ).getCoeff( i ).second;
         }
     }
-
+    }
     for ( Index s = 0; s < nScalars; ++s ) {
         if( problem->isScalarDifferential( s ) ) {
             dydt.Scalar(s) = problem->InitialScalarDerivative( s, y, dydt );
         }
     }
-    }
+    
+    
 }
 
 void SystemSolver::ApplyDirichletBCs(DGSoln &Y)

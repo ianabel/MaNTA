@@ -10,44 +10,30 @@
 #include "SystemSolver.hpp"
 #include "PhysicsCases.hpp"
 
-// int LoadFromFile(netCDF::NcFile &restart_file, Grid *grid, TransportSystem *Problem, const std::string &name, toml::value const &config)
-// {
-// 	netCDF::NcGroup GridGroup = restart_file.getGroup("Grid");
-// 	auto nPoints = GridGroup.getDim("Index").getSize();
-// 	std::vector<Position> CellBoundaries(nPoints);
+int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vector<double> &dYdt)
+{
+	netCDF::NcGroup GridGroup = restart_file.getGroup("Grid");
+	auto nCells = GridGroup.getDim("Index").getSize() - 1;
+	Index k;
+	GridGroup.getVar("PolyOrder").getVar(&k);
+	netCDF::NcGroup RestartGroup = restart_file.getGroup("RestartData");
+	Index nVars, nAux, nScalars;
+	RestartGroup.getVar("nVars").getVar(&nVars);
+	RestartGroup.getVar("nAux").getVar(&nAux);
+	RestartGroup.getVar("nScalars").getVar(&nScalars);
 
-// 	GridGroup.getVar("CellBoundaries").getVar(CellBoundaries.data());
+	const Index nDOF = nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1);
 
-// 	grid = new Grid(CellBoundaries, static_cast<Index>(nPoints - 1));
+	Y.resize(nDOF);
+	dYdt.resize(nDOF);
 
-// 	Index k, nVars, nAux, nScalars;
-// 	GridGroup.getVar("PolyOrder").getVar(&k);
+	RestartGroup.getVar("Y").getVar(Y.data());
+	RestartGroup.getVar("dYdt").getVar(dYdt.data());
 
-// 	netCDF::NcGroup RestartGroup = restart_file.getGroup("RestartData");
+	restart_file.close();
 
-// 	RestartGroup.getVar("nVars").getVar(&nVars);
-// 	RestartGroup.getVar("nAux").getVar(&nAux);
-// 	RestartGroup.getVar("nScalars").getVar(&nScalars);
-
-// 	const Index nCells = grid->getNCells();
-
-// 	const Index nDOF = nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1);
-
-// 	std::vector<double> Y(nDOF);
-// 	std::vector<double> dYdt(nDOF);
-
-// 	RestartGroup.getVar("Y").getVar(Y.data());
-// 	RestartGroup.getVar("dYdt").getVar(dYdt.data());
-
-// 	Problem = PhysicsCases::InstantiateProblem(name, config, *grid);
-// 	Problem->setRestartValues(new DGSoln(nVars, *grid, k, Y.data(), nScalars, nAux), new DGSoln(nVars, *grid, k, dYdt.data(), nScalars, nAux));
-
-// 	if (nVars != Problem->getNumVars() || nAux != Problem->getNumAux() || nScalars != Problem->getNumScalars()) 
-// 		throw std::invalid_argument("nVars/nAux/nScalars in restart file inconsistent with physics case");
-
-// 	restart_file.close();
-// 	return k;
-// }
+	return nDOF;
+}
 
 double getFloatWithDefault(std::string const &name, toml::value const &config, double defaultValue)
 {
@@ -134,7 +120,8 @@ int runManta(std::string const &fname)
 
 	if (isRestarting)
 	{
-		std::string fileName = "/home/eatocco/projects/MaNTA/runs/ScalarTestDot.restart.nc"; // toml::find_or(config, "RestartFile", fname + ".restart.nc");
+		std::string fbase = std::filesystem::path(fname).stem();
+		std::string fileName = toml::find_or(config, "RestartFile", fbase + ".restart.nc");
 		try
 		{
 			restart_file.open(fileName, netCDF::NcFile::FileMode::read);
@@ -207,6 +194,18 @@ int runManta(std::string const &fname)
 		grid = new Grid(lBound, uBound, nCells, highGridBoundary, upperBoundaryFraction, lowerBoundaryFraction);
 
 	} 
+	else 
+	{
+		netCDF::NcGroup GridGroup = restart_file.getGroup("Grid");
+		auto nPoints = GridGroup.getDim("Index").getSize();
+		std::vector<Position> CellBoundaries(nPoints);
+
+		GridGroup.getVar("CellBoundaries").getVar(CellBoundaries.data());
+
+		grid = new Grid(CellBoundaries, static_cast<Index>(nPoints - 1));
+
+		GridGroup.getVar("PolyOrder").getVar(&k);
+	}
 
 	double tau = getFloatWithDefault("tau", config, 1.0);
 	double delta_t = getFloat("delta_t", config);
@@ -253,48 +252,21 @@ int runManta(std::string const &fname)
 
 	// Convert string to TransportSystem* instance
 
-	TransportSystem *pProblem;
+	TransportSystem *pProblem = PhysicsCases::InstantiateProblem(ProblemName, configFile, *grid);
 
-	if (!isRestarting)
+	if(isRestarting)
 	{
-		pProblem = PhysicsCases::InstantiateProblem(ProblemName, configFile, *grid);
-	} 
-	else
-	{
-		netCDF::NcGroup GridGroup = restart_file.getGroup("Grid");
-		auto nPoints = GridGroup.getDim("Index").getSize();
-		std::vector<Position> CellBoundaries(nPoints);
+		std::vector<double> Y, dYdt;
 
-		GridGroup.getVar("CellBoundaries").getVar(CellBoundaries.data());
-
-		grid = new Grid(CellBoundaries, static_cast<Index>(nPoints - 1));
-
-		Index nVars, nAux, nScalars;
-		GridGroup.getVar("PolyOrder").getVar(&k);
-
-		netCDF::NcGroup RestartGroup = restart_file.getGroup("RestartData");
-
-		RestartGroup.getVar("nVars").getVar(&nVars);
-		RestartGroup.getVar("nAux").getVar(&nAux);
-		RestartGroup.getVar("nScalars").getVar(&nScalars);
-
+		Index nDOF_file = LoadFromFile(restart_file, Y, dYdt);
 		const Index nCells = grid->getNCells();
 
-		const Index nDOF = nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1);
+		const Index nDOF = pProblem->getNumVars() * 3 * nCells * (k + 1) + pProblem->getNumVars() * (nCells + 1) + pProblem->getNumScalars() + pProblem->getNumAux() * nCells * (k + 1);
 
-		std::vector<double> Y(nDOF);
-		std::vector<double> dYdt(nDOF);
-
-		RestartGroup.getVar("Y").getVar(Y.data());
-		RestartGroup.getVar("dYdt").getVar(dYdt.data());
-
-		pProblem = PhysicsCases::InstantiateProblem(ProblemName, configFile, *grid);
-		pProblem->setRestartValues(std::make_shared<DGSoln>(nVars, *grid, k, Y.data(), nScalars, nAux), std::make_shared<DGSoln>(nVars, *grid, k, dYdt.data(), nScalars, nAux));
-
-		if (nVars != pProblem->getNumVars() || nAux != pProblem->getNumAux() || nScalars != pProblem->getNumScalars())
+		if (nDOF_file != nDOF)
 			throw std::invalid_argument("nVars/nAux/nScalars in restart file inconsistent with physics case");
 
-		restart_file.close();
+		pProblem->setRestartValues(Y, dYdt);
 	}
 
 	if (pProblem == nullptr)
