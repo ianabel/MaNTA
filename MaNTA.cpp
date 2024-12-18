@@ -13,17 +13,9 @@
 // Load restart data into vectors
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vector<double> &dYdt)
 {
-	netCDF::NcGroup GridGroup = restart_file.getGroup("Grid");
-	auto nCells = GridGroup.getDim("Index").getSize() - 1;
-	Index k;
-	GridGroup.getVar("PolyOrder").getVar(&k);
 	netCDF::NcGroup RestartGroup = restart_file.getGroup("RestartData");
-	Index nVars, nAux, nScalars;
-	RestartGroup.getVar("nVars").getVar(&nVars);
-	RestartGroup.getVar("nAux").getVar(&nAux);
-	RestartGroup.getVar("nScalars").getVar(&nScalars);
 
-	const Index nDOF = nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1);
+	Index nDOF = RestartGroup.getDim("nDOF").getSize();
 
 	Y.resize(nDOF);
 	dYdt.resize(nDOF);
@@ -129,7 +121,7 @@ int runManta(std::string const &fname)
 		}
 		catch (...)
 		{
-			std::string msg = "Failed to open netCDF file at: " + std::string(std::filesystem::absolute(std::filesystem::path(fileName)));
+			std::string msg = "Failed to open restart netCDF file at: " + std::string(std::filesystem::absolute(std::filesystem::path(fileName)));
 			throw std::runtime_error(msg);
 		}
 	}

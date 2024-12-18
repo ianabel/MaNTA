@@ -206,7 +206,7 @@ class SystemSolver
         NetCDFIO restart_file;
         void initialiseNetCDF(std::string const &fname, size_t nOut);
         void WriteTimeslice(double tNew);
-        void WriteRestartFile(std::string const &fname, N_Vector const &Y, N_Vector const &dYdt);
+        void WriteRestartFile(std::string const &fname, N_Vector const &Y, N_Vector const &dYdt, size_t nOut);
 
         size_t S_DOF,
         U_DOF, Q_DOF, AUX_DOF, SQU_DOF;

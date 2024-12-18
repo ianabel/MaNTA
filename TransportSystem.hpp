@@ -32,6 +32,8 @@ class TransportSystem
             // Pull boundary conditions directly from restart values
             Position xL = grid.lowerBoundary();
             Position xR = grid.upperBoundary();
+            uL.resize(nVars);
+            uR.resize(nVars);
             for (Index i; i < nVars; ++i)
             {
                 uL[i] = restart_Y->u(i)(xL);

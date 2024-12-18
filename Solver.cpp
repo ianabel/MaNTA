@@ -217,6 +217,7 @@ void SystemSolver::runSolver(double tFinal)
 		throw std::runtime_error("IDACalcIC could not complete");
 	}
 
+
 	long int nresevals = 0;
 	IDAGetNumResEvals(IDA_mem, &nresevals);
 	std::cout << "Number of Residual Evaluations due to IDACalcIC " << nresevals << std::endl;
@@ -332,8 +333,8 @@ void SystemSolver::runSolver(double tFinal)
 		res_out.close();
 	}
 	nc_output.Close();
-
-	WriteRestartFile(baseName + ".restart.nc", Y, dYdt);
+	
+	WriteRestartFile(baseName + ".restart.nc", Y, dYdt, nOut);
 
 	// No SunLinSol wrapper classes exist beyond this point, so we are safe in using raw pointers to construct them.
 	SUNLinSolFree(LS);

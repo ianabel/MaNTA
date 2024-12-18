@@ -289,7 +289,7 @@ Normalisation:
 // Define lengths so R_ref = 1
 Real MirrorPlasma::Gamma(RealVector u, RealVector q, Real V, Time t) const
 {
-	Real n = u(Channel::Density), p_e = (2. / 3.) * u(Channel::ElectronEnergy);
+	Real n = floor(u(Channel::Density), MinDensity), p_e = (2. / 3.) * u(Channel::ElectronEnergy);
 	Real Te = p_e / n;
 
 	Real nPrime = q(Channel::Density), p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
