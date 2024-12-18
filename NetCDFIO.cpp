@@ -112,6 +112,13 @@ void NetCDFIO::AddGroup(std::string name, std::string description)
 	newgroup.putAtt("description", description);
 }
 
+netCDF::NcGroup NetCDFIO::CreateGroup(std::string name, std::string description)
+{
+	NcGroup newgroup = data_file.addGroup(name);
+	newgroup.putAtt("description", description);
+	return newgroup;
+}
+
 // SystemSolver routines that use NetCDFIO
 
 void NetCDFIO::StoreGridInfo(const Grid &grid, unsigned int k)
@@ -192,4 +199,24 @@ void SystemSolver::WriteTimeslice(double tNew)
 		nc_output.AppendToTimeSeries(problem->getScalarName(i), y.Scalar(i), tIndex);
 
 	problem->writeDiagnostics(y, dydt, tNew, nc_output, tIndex);
+}
+
+void SystemSolver::WriteRestartFile(std::string const &fname, N_Vector const &Y, N_Vector const &dYdt)
+{
+	restart_file.Open(fname);
+
+	restart_file.StoreGridInfo(grid, k);
+
+	NcGroup RestartGroup = restart_file.CreateGroup("RestartData","Restart group");
+
+	const size_t nDOF = nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1);
+	NcDim yDim = RestartGroup.addDim("nDOF", nDOF);
+	RestartGroup.addVar("nVars", netCDF::NcInt()).putVar(&nVars);
+	RestartGroup.addVar("nAux", netCDF::NcInt()).putVar(&nAux);
+	RestartGroup.addVar("nScalars", netCDF::NcInt()).putVar(&nScalars);
+
+	RestartGroup.addVar("Y", netCDF::NcDouble(), yDim).putVar({0}, {nDOF}, N_VGetArrayPointer(Y));
+	RestartGroup.addVar("dYdt", netCDF::NcDouble(), yDim).putVar({0}, {nDOF}, N_VGetArrayPointer(dYdt));
+
+	restart_file.Close();
 }

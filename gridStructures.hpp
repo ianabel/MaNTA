@@ -116,6 +116,17 @@ public:
 			throw std::runtime_error("Unable to construct grid.");
 	}
 
+	Grid(const std::vector<Position> &points, Index nCells)
+	{
+		gridCells.reserve(nCells);
+		lowerBound = points.front();
+		upperBound = points.back();
+		for (Index i = 0; i < nCells; ++i)
+		{
+			gridCells.emplace_back(points[i], points[i + 1]);
+		}
+	}
+
 	Grid(const Grid &grid) = default;
 
 	Index getNCells() const { return gridCells.size(); };

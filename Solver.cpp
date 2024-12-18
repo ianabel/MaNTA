@@ -333,6 +333,8 @@ void SystemSolver::runSolver(double tFinal)
 	}
 	nc_output.Close();
 
+	WriteRestartFile(baseName + ".restart.nc", Y, dYdt);
+
 	// No SunLinSol wrapper classes exist beyond this point, so we are safe in using raw pointers to construct them.
 	SUNLinSolFree(LS);
 

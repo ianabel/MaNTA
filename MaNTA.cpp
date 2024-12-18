@@ -10,7 +10,44 @@
 #include "SystemSolver.hpp"
 #include "PhysicsCases.hpp"
 
-void LoadFromFile(std::string const &);
+// int LoadFromFile(netCDF::NcFile &restart_file, Grid *grid, TransportSystem *Problem, const std::string &name, toml::value const &config)
+// {
+// 	netCDF::NcGroup GridGroup = restart_file.getGroup("Grid");
+// 	auto nPoints = GridGroup.getDim("Index").getSize();
+// 	std::vector<Position> CellBoundaries(nPoints);
+
+// 	GridGroup.getVar("CellBoundaries").getVar(CellBoundaries.data());
+
+// 	grid = new Grid(CellBoundaries, static_cast<Index>(nPoints - 1));
+
+// 	Index k, nVars, nAux, nScalars;
+// 	GridGroup.getVar("PolyOrder").getVar(&k);
+
+// 	netCDF::NcGroup RestartGroup = restart_file.getGroup("RestartData");
+
+// 	RestartGroup.getVar("nVars").getVar(&nVars);
+// 	RestartGroup.getVar("nAux").getVar(&nAux);
+// 	RestartGroup.getVar("nScalars").getVar(&nScalars);
+
+// 	const Index nCells = grid->getNCells();
+
+// 	const Index nDOF = nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1);
+
+// 	std::vector<double> Y(nDOF);
+// 	std::vector<double> dYdt(nDOF);
+
+// 	RestartGroup.getVar("Y").getVar(Y.data());
+// 	RestartGroup.getVar("dYdt").getVar(dYdt.data());
+
+// 	Problem = PhysicsCases::InstantiateProblem(name, config, *grid);
+// 	Problem->setRestartValues(new DGSoln(nVars, *grid, k, Y.data(), nScalars, nAux), new DGSoln(nVars, *grid, k, dYdt.data(), nScalars, nAux));
+
+// 	if (nVars != Problem->getNumVars() || nAux != Problem->getNumAux() || nScalars != Problem->getNumScalars()) 
+// 		throw std::invalid_argument("nVars/nAux/nScalars in restart file inconsistent with physics case");
+
+// 	restart_file.close();
+// 	return k;
+// }
 
 double getFloatWithDefault(std::string const &name, toml::value const &config, double defaultValue)
 {
@@ -92,62 +129,84 @@ int runManta(std::string const &fname)
 	const auto configFile = toml::parse(fname);
 	const auto config = toml::find<toml::value>(configFile, "configuration");
 
-	// Solver parameters
-	double lBound, uBound, lowerBoundaryFraction, upperBoundaryFraction;
-	bool highGridBoundary;
-	int nCells;
+	bool isRestarting = toml::find_or(config, "restart", false);
+	netCDF::NcFile restart_file;
 
-	unsigned int k = 1;
-
-	auto polyDegree = toml::find(config, "Polynomial_degree");
-	if (config.count("Polynomial_degree") != 1)
-		throw std::invalid_argument("Polynomial_degree unspecified or specified more than once");
-	else if (!polyDegree.is_integer())
-		throw std::invalid_argument("Polynomial_degree must be specified as an integer");
-	else
-		k = polyDegree.as_integer();
-
-	if (config.count("High_Grid_Boundary") != 1)
-		highGridBoundary = false;
-	else
+	if (isRestarting)
 	{
-		highGridBoundary = config.at("High_Grid_Boundary").as_boolean();
-		lowerBoundaryFraction = toml::find_or(config, "Lower_Boundary_Fraction", 0.2);
-		upperBoundaryFraction = toml::find_or(config, "Upper_Boundary_Fraction", 0.2);
+		std::string fileName = "/home/eatocco/projects/MaNTA/runs/ScalarTestDot.restart.nc"; // toml::find_or(config, "RestartFile", fname + ".restart.nc");
+		try
+		{
+			restart_file.open(fileName, netCDF::NcFile::FileMode::read);
+		}
+		catch (...)
+		{
+			std::string msg = "Failed to open netCDF file at: " + std::string(std::filesystem::absolute(std::filesystem::path(fileName)));
+			throw std::runtime_error(msg);
+		}
 	}
 
-	auto numberOfCells = toml::find(config, "Grid_size");
-	if (config.count("Grid_size") != 1)
-		throw std::invalid_argument("Grid_size unspecified or specified more than once");
-	if (!numberOfCells.is_integer())
-		throw std::invalid_argument("Grid_size must be specified as an integer");
-	else
-		nCells = numberOfCells.as_integer();
+	Grid *grid;
+	unsigned int k = 1;
+	if (!isRestarting)
+	{
 
-	if (nCells < 4 && highGridBoundary)
-		throw std::invalid_argument("Grid size must exceed 4 cells in order to implemet dense boundaries");
+		// Solver parameters
+		double lBound, uBound, lowerBoundaryFraction, upperBoundaryFraction;
+		bool highGridBoundary;
+		int nCells;
 
-	auto lowerBoundary = toml::find(config, "Lower_boundary");
-	if (config.count("Lower_boundary") != 1)
-		throw std::invalid_argument("Lower_boundary unspecified or specified more than once");
-	else if (lowerBoundary.is_integer())
-		lBound = static_cast<double>(lowerBoundary.as_floating());
-	else if (lowerBoundary.is_floating())
-		lBound = static_cast<double>(lowerBoundary.as_floating());
-	else
-		throw std::invalid_argument("Lower_boundary specified incorrrectly");
+		auto polyDegree = toml::find(config, "Polynomial_degree");
+		if (config.count("Polynomial_degree") != 1)
+			throw std::invalid_argument("Polynomial_degree unspecified or specified more than once");
+		else if (!polyDegree.is_integer())
+			throw std::invalid_argument("Polynomial_degree must be specified as an integer");
+		else
+			k = polyDegree.as_integer();
 
-	auto upperBoundary = toml::find(config, "Upper_boundary");
-	if (config.count("Upper_boundary") != 1)
-		throw std::invalid_argument("Upper_boundary unspecified or specified more than once");
-	else if (upperBoundary.is_integer())
-		uBound = static_cast<double>(upperBoundary.as_floating());
-	else if (upperBoundary.is_floating())
-		uBound = static_cast<double>(upperBoundary.as_floating());
-	else
-		throw std::invalid_argument("Upper_boundary specified incorrrectly");
+		if (config.count("High_Grid_Boundary") != 1)
+			highGridBoundary = false;
+		else
+		{
+			highGridBoundary = config.at("High_Grid_Boundary").as_boolean();
+			lowerBoundaryFraction = toml::find_or(config, "Lower_Boundary_Fraction", 0.2);
+			upperBoundaryFraction = toml::find_or(config, "Upper_Boundary_Fraction", 0.2);
+		}
 
-	Grid grid(lBound, uBound, nCells, highGridBoundary, upperBoundaryFraction, lowerBoundaryFraction);
+		auto numberOfCells = toml::find(config, "Grid_size");
+		if (config.count("Grid_size") != 1)
+			throw std::invalid_argument("Grid_size unspecified or specified more than once");
+		if (!numberOfCells.is_integer())
+			throw std::invalid_argument("Grid_size must be specified as an integer");
+		else
+			nCells = numberOfCells.as_integer();
+
+		if (nCells < 4 && highGridBoundary)
+			throw std::invalid_argument("Grid size must exceed 4 cells in order to implemet dense boundaries");
+
+		auto lowerBoundary = toml::find(config, "Lower_boundary");
+		if (config.count("Lower_boundary") != 1)
+			throw std::invalid_argument("Lower_boundary unspecified or specified more than once");
+		else if (lowerBoundary.is_integer())
+			lBound = static_cast<double>(lowerBoundary.as_floating());
+		else if (lowerBoundary.is_floating())
+			lBound = static_cast<double>(lowerBoundary.as_floating());
+		else
+			throw std::invalid_argument("Lower_boundary specified incorrrectly");
+
+		auto upperBoundary = toml::find(config, "Upper_boundary");
+		if (config.count("Upper_boundary") != 1)
+			throw std::invalid_argument("Upper_boundary unspecified or specified more than once");
+		else if (upperBoundary.is_integer())
+			uBound = static_cast<double>(upperBoundary.as_floating());
+		else if (upperBoundary.is_floating())
+			uBound = static_cast<double>(upperBoundary.as_floating());
+		else
+			throw std::invalid_argument("Upper_boundary specified incorrrectly");
+
+		grid = new Grid(lBound, uBound, nCells, highGridBoundary, upperBoundaryFraction, lowerBoundaryFraction);
+
+	} 
 
 	double tau = getFloatWithDefault("tau", config, 1.0);
 	double delta_t = getFloat("delta_t", config);
@@ -185,10 +244,7 @@ int runManta(std::string const &fname)
 
 	int nOutput = getIntWithDefault("OutputPoints", config, 301);
 
-	if (config.count("LibraryFile") == 1)
-	{
-		LoadFromFile(config.at("LibraryFile").as_string());
-	}
+	
 
 	if (config.count("TransportSystem") != 1)
 		throw std::invalid_argument("TransportSystem needs to specified exactly once in the general configuration section");
@@ -197,7 +253,49 @@ int runManta(std::string const &fname)
 
 	// Convert string to TransportSystem* instance
 
-	TransportSystem *pProblem = PhysicsCases::InstantiateProblem(ProblemName, configFile, grid);
+	TransportSystem *pProblem;
+
+	if (!isRestarting)
+	{
+		pProblem = PhysicsCases::InstantiateProblem(ProblemName, configFile, *grid);
+	} 
+	else
+	{
+		netCDF::NcGroup GridGroup = restart_file.getGroup("Grid");
+		auto nPoints = GridGroup.getDim("Index").getSize();
+		std::vector<Position> CellBoundaries(nPoints);
+
+		GridGroup.getVar("CellBoundaries").getVar(CellBoundaries.data());
+
+		grid = new Grid(CellBoundaries, static_cast<Index>(nPoints - 1));
+
+		Index nVars, nAux, nScalars;
+		GridGroup.getVar("PolyOrder").getVar(&k);
+
+		netCDF::NcGroup RestartGroup = restart_file.getGroup("RestartData");
+
+		RestartGroup.getVar("nVars").getVar(&nVars);
+		RestartGroup.getVar("nAux").getVar(&nAux);
+		RestartGroup.getVar("nScalars").getVar(&nScalars);
+
+		const Index nCells = grid->getNCells();
+
+		const Index nDOF = nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1);
+
+		std::vector<double> Y(nDOF);
+		std::vector<double> dYdt(nDOF);
+
+		RestartGroup.getVar("Y").getVar(Y.data());
+		RestartGroup.getVar("dYdt").getVar(dYdt.data());
+
+		pProblem = PhysicsCases::InstantiateProblem(ProblemName, configFile, *grid);
+		pProblem->setRestartValues(std::make_shared<DGSoln>(nVars, *grid, k, Y.data(), nScalars, nAux), std::make_shared<DGSoln>(nVars, *grid, k, dYdt.data(), nScalars, nAux));
+
+		if (nVars != pProblem->getNumVars() || nAux != pProblem->getNumAux() || nScalars != pProblem->getNumScalars())
+			throw std::invalid_argument("nVars/nAux/nScalars in restart file inconsistent with physics case");
+
+		restart_file.close();
+	}
 
 	if (pProblem == nullptr)
 	{
@@ -211,7 +309,7 @@ int runManta(std::string const &fname)
 		return 1;
 	}
 
-	system = std::make_shared<SystemSolver>(grid, k, pProblem);
+	system = std::make_shared<SystemSolver>(*grid, k, pProblem);
 
 	system->setOutputCadence(delta_t);
 	system->setTolerances(absTol, rtol);
@@ -233,6 +331,7 @@ int runManta(std::string const &fname)
 	// For compiled-in TransportSystems we have the type information and
 	// this will call the correct inherited destructor
 	delete pProblem;
+	delete grid;
 
 	return 0;
 }

@@ -74,6 +74,13 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     if (!initialised)
         throw std::logic_error("setInitialConditions can only be called after initialising the matrices");
 
+    if (problem->isRestarting())
+    {
+        y.copy(problem->getRestartY());
+        dydt.copy(problem->getRestartdYdt());
+    }
+    else 
+    {
     // slightly minging syntax. blame C++
     auto initial_u = std::bind_front(&TransportSystem::InitialValue, problem);
     auto initial_q = std::bind_front(&TransportSystem::InitialDerivative, problem);
@@ -152,6 +159,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         if( problem->isScalarDifferential( s ) ) {
             dydt.Scalar(s) = problem->InitialScalarDerivative( s, y, dydt );
         }
+    }
     }
 }
 
@@ -618,7 +626,7 @@ void SystemSolver::updateMatricesForJacSolve()
                     w_map[ j ].u( v ).getCoeff( i ).second( l )     = s.Variable[ v ]   + alpha * s_dt.Variable[ v ];
                 }
                 for (Index a = 0; a < nAux; ++a) 
-                   w_map[ j ].Aux( a ).getCoeff( i ).second( l )    = s.Aux[ a ]        + alpha * s_dt.Aux[ a ];
+                    w_map[ j ].Aux( a ).getCoeff( i ).second( l )    = s.Aux[ a ]       + alpha * s_dt.Aux[ a ];
                 
             }
             for( Index m = 0; m < nScalars; ++m )
