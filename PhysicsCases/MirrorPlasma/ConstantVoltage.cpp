@@ -58,7 +58,14 @@ Value MirrorPlasma::InitialDensityTimeDerivative(RealVector u, RealVector q, Pos
 
 Value MirrorPlasma::InitialCurrent(Time t) const
 {
-    return -IRadial * exp(-t / CurrentDecay);
+    if (restarting)
+    {
+        return 0.0;
+    }
+    else
+    {
+        return -IRadial * exp(-t / CurrentDecay);
+    }
 }
 Value MirrorPlasma::InitialScalarValue(Index s) const
 {

@@ -75,7 +75,7 @@ def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_aux = 
                 ax = plt.axes()
                 y = np.array(data.variables[Var])
                 #y2 = np.array(data.variables["Voltage"])
-                ax.plot(t,y)
+                ax.plot(t,y,"ro")
                 #ax.plot(t,y2)
                 plt.title(Var)
 
@@ -170,7 +170,7 @@ def plot_diagnostics(fname):
 
 def main():
     fname = "./runs/CMFX.restart.nc"
-    plot_nc(fname,plot_u=True,plot_q=True,plot_sigma=True,plot_scalars=False,include_initial=True)
+    plot_nc(fname,plot_u=True,plot_q=True,plot_sigma=True,plot_scalars=True,include_initial=True)
     # fname = "./MirrorPlasmaTest.nc"
     #plot_nc(fname,False,False,include_initial=True)
     # plot_MMS(fname)
