@@ -19,7 +19,8 @@ using std::numbers::pi;
 
 class LegendreBasis;
 class ChebyshevBasis;
-using BasisType = ChebyshevBasis;
+
+template<class> class DGSolnImpl;
 
 class Interval
 {

@@ -41,7 +41,6 @@ BOOST_AUTO_TEST_CASE( grid_test )
 
 }
 
-/*
 BOOST_AUTO_TEST_CASE( legendre_basis_test )
 {
 	Interval I1( 0.0, 1.0 ),I2( 0.5, 0.55 ),I3( -0.2,-0.13 );
@@ -73,7 +72,6 @@ BOOST_AUTO_TEST_CASE( legendre_basis_test )
 	}
 
 }
-*/
 
 BOOST_AUTO_TEST_CASE( cheb_basis_test )
 {
@@ -97,7 +95,6 @@ BOOST_AUTO_TEST_CASE( cheb_basis_test )
 
 }
 
-/*
 BOOST_AUTO_TEST_CASE( dg_approx_construction )
 {
 	Grid testGrid( 0.0, 1.0, 4 );
@@ -258,7 +255,6 @@ BOOST_AUTO_TEST_CASE( dg_approx_static )
 	BOOST_TEST( ( tmp - ref ).norm() < 1e-5 );
 
 }
-*/
 
 BOOST_AUTO_TEST_SUITE_END()
 

@@ -48,10 +48,11 @@ BOOST_AUTO_TEST_CASE(systemsolver_init_tests)
 
 	BOOST_CHECK_NO_THROW(system->initialiseMatrices());
 
-	BOOST_TEST((system->A_cellwise[0] - Matrix::Identity(k + 1, k + 1)).norm() < 1e-9);
-	BOOST_TEST((system->A_cellwise[1] - Matrix::Identity(k + 1, k + 1)).norm() < 1e-9);
-	BOOST_TEST((system->A_cellwise[2] - Matrix::Identity(k + 1, k + 1)).norm() < 1e-9);
-	BOOST_TEST((system->A_cellwise[3] - Matrix::Identity(k + 1, k + 1)).norm() < 1e-9);
+    // Should be the mass matrix (checking the mass matrix is correct is for the Chebyshev basis tests)
+	BOOST_TEST((system->A_cellwise[0] - system->y.getBasis().MassMatrix( testGrid[0] ) ).norm() < 1e-9);
+	BOOST_TEST((system->A_cellwise[1] - system->y.getBasis().MassMatrix( testGrid[1] ) ).norm() < 1e-9);
+	BOOST_TEST((system->A_cellwise[2] - system->y.getBasis().MassMatrix( testGrid[2] ) ).norm() < 1e-9);
+	BOOST_TEST((system->A_cellwise[3] - system->y.getBasis().MassMatrix( testGrid[3] ) ).norm() < 1e-9);
 
 	Matrix ref(k + 1, k + 1);
 	// Derivative matrix

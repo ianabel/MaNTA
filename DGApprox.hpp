@@ -13,26 +13,24 @@
 
 #include <Eigen/LU>
 
-
-class DGApprox
+template<class BasisType> class DGApproxImpl
 {
     public:
         using Position = double;
 
-        DGApprox() = delete;
-        DGApprox(const DGApprox &other) = default; // Allow copy-construction (the copy will reference the same data as the original, unless the original owned its data in which case a deep copy is done)
-        DGApprox(DGApprox &&) = default;
+        DGApproxImpl() = delete;
+        DGApproxImpl(const DGApproxImpl<BasisType> &other) = default;
 
-        ~DGApprox() = default;
+        ~DGApproxImpl() = default;
 
-        DGApprox(Grid const &_grid, BasisType const& basis )
+        DGApproxImpl(Grid const &_grid, BasisType const& basis )
             : grid(_grid), Basis( basis )
         {
             k = Basis.Order();
             coeffs.reserve(grid.getNCells());
         };
 
-        DGApprox(Grid const &_grid, BasisType const& basis, double *block_data, size_t stride) 
+        DGApproxImpl(Grid const &_grid, BasisType const& basis, double *block_data, size_t stride) 
             : grid(_grid), Basis( basis )
         {
             k = Basis.Order();
@@ -63,7 +61,7 @@ class DGApprox
         }
 
         // Do a copy from other's memory into ours
-        void copy(DGApprox const &other)
+        void copy(DGApproxImpl<BasisType> const &other)
         {
             if (grid != other.grid)
                 throw std::invalid_argument("To use copy, construct from the same grid.");
@@ -73,7 +71,7 @@ class DGApprox
             coeffs = other.coeffs;
         }
 
-        DGApprox &operator=(std::function<double(double)> const &f)
+        DGApproxImpl<BasisType> &operator=(std::function<double(double)> const &f)
         {
             // check for data ownership
             for (auto pair : coeffs)
@@ -89,7 +87,7 @@ class DGApprox
 
         size_t getDoF() const { return (k + 1) * grid.getNCells(); };
 
-        DGApprox &operator+=(DGApprox const &other)
+        DGApproxImpl<BasisType> &operator+=(DGApproxImpl<BasisType> const &other)
         {
             if (grid != other.grid)
                 throw std::invalid_argument("Cannot add two DGApprox's on different grids");
@@ -172,6 +170,7 @@ class DGApprox
         Coeff_t coeffs;
         const BasisType& Basis;
 
-        friend class DGSoln;
+        friend class DGSolnImpl<BasisType>;
 };
+
 #endif

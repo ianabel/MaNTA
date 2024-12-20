@@ -38,14 +38,15 @@ class State {
         Vector Scalars;
 };
 
-class DGSoln
+template<class BasisType> class DGSolnImpl
 {
     public:
-        DGSoln(Index n_var, Grid const &_grid, Index Order, Index Scalars = 0, Index aux = 0) : nVars(n_var), grid(_grid), k(Order), nScalars( Scalars ), nAux( aux ), mu_( nullptr, 0 ), Basis( BasisType::getBasis( Order ) ) {};
+        using DGApprox = DGApproxImpl<BasisType>;
+        DGSolnImpl(Index n_var, Grid const &_grid, Index Order, Index Scalars = 0, Index aux = 0) : nVars(n_var), grid(_grid), k(Order), nScalars( Scalars ), nAux( aux ), mu_( nullptr, 0 ), Basis( BasisType::getBasis( Order ) ) {};
 
-        DGSoln(Index n_var, Grid const &_grid, Index Order, double *memory, Index Scalars = 0, Index naux = 0 ) : nVars(n_var), grid(_grid), k(Order), nScalars( Scalars ), nAux( naux ), mu_( nullptr, 0 ), Basis( BasisType::getBasis( Order ) )  { Map(memory); };
+        DGSolnImpl(Index n_var, Grid const &_grid, Index Order, double *memory, Index Scalars = 0, Index naux = 0 ) : nVars(n_var), grid(_grid), k(Order), nScalars( Scalars ), nAux( naux ), mu_( nullptr, 0 ), Basis( BasisType::getBasis( Order ) )  { Map(memory); };
 
-        virtual ~DGSoln() = default;
+        virtual ~DGSolnImpl() = default;
 
         Index getNumVars() const { return nVars; };
         Index getScalars() const { return nScalars; };
@@ -142,7 +143,7 @@ class DGSoln
 
         // Deep copy of the data in other to the memory we are
         // wrapping
-        void copy(DGSoln const &other)
+        void copy(DGSolnImpl<BasisType> const &other)
         {
             if (nVars != other.nVars)
                 throw std::invalid_argument("Cannot add two DGSoln's with different numbers of variables");
@@ -164,7 +165,7 @@ class DGSoln
             }
         }
 
-        DGSoln &operator+=(DGSoln const &other)
+        DGSolnImpl<BasisType> &operator+=(DGSolnImpl<BasisType> const &other)
         {
             if (nVars != other.nVars)
                 throw std::invalid_argument("Cannot add two DGSoln's with different numbers of variables");
@@ -258,7 +259,8 @@ class DGSoln
                 {
                     Interval const &I = coeffPair.first;
                     coeffPair.second.setZero();
-                    Matrix Mass = Basis.MassMatrix(I);
+                    Matrix Mass( k + 1, k + 1 );
+                    Basis.MassMatrix(I,Mass);
                     Eigen::PartialPivLU<Matrix> mass_transpose_inverse( Mass.transpose() );
                     for (size_t i = 0; i < n_abscissa; ++i)
                     {
@@ -288,8 +290,8 @@ class DGSoln
                             coeffPair.second[j] += wgt * sigma_plus * BasisType::Evaluate(I, j, y_plus);
                             coeffPair.second[j] += wgt * sigma_minus * BasisType::Evaluate(I, j, y_minus);
                         }
-                        coeffPair.second = mass_transpose_inverse.solve( coeffPair.second );
                     }
+                    coeffPair.second = mass_transpose_inverse.solve( coeffPair.second );
                 }
             }
         }
@@ -332,5 +334,6 @@ class DGSoln
 };
 
 
+using DGSoln = DGSolnImpl<ChebyshevBasis>;
 
 #endif // DGSOLN_HPP

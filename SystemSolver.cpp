@@ -110,8 +110,8 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
             // Evaluate Source Function
             Eigen::VectorXd S_cellwise(k + 1);
             S_cellwise.setZero();
-            auto const &x_vals = DGApprox::Integrator().abscissa();
-            auto const &x_wgts = DGApprox::Integrator().weights();
+            auto const &x_vals = DGSoln::DGApprox::Integrator().abscissa();
+            auto const &x_wgts = DGSoln::DGApprox::Integrator().weights();
             const size_t n_abscissa = x_vals.size();
 
             S_cellwise.setZero();
@@ -880,7 +880,9 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 #pragma omp parallel for
     for (Index i = 0; i < nCells; i++)
     {
+        Eigen::MatrixXd Mass( k + 1, k + 1 );
         Interval I = grid[i];
+        y.getBasis().MassMatrix( I, Mass );
         Eigen::VectorXd lamCell(2 * nVars);
 
         for (Index var = 0; var < nVars; var++)
@@ -919,7 +921,7 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
             // For sigma and q, just make the 'sigma-determinitive' equation the sigma component and the same for q.
             // as these equations are proportional to the variables themselves, we are done
 
-            res.sigma(var).getCoeff(i).second = Y_h.sigma(var).getCoeff(i).second + kappa_cellwise;
+            res.sigma(var).getCoeff(i).second = A_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.sigma(var).getCoeff(i).second + kappa_cellwise;
 
             res.q(var).getCoeff(i).second =
                 -A_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.q(var).getCoeff(i).second - B_cellwise[i].transpose().block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.u(var).getCoeff(i).second + C_cellwise[i].transpose().block(var * (k + 1), var * 2, k + 1, 2) * lambda - RF_cellwise[i].block(var * (k + 1), 0, k + 1, 1);
