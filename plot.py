@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from netCDF4 import Dataset
 import numpy as np
 
-def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_aux = False,plot_grid= False, include_initial = False):
+def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_aux = False,plot_scalars = False, plot_grid= False, include_initial = False):
   
     data = Dataset(fname)
     print(data)
@@ -66,6 +66,20 @@ def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_aux = 
 
         ax.legend()
         plt.title("aux")
+
+    if (plot_scalars):
+        Vars = data.variables
+        for Var in Vars:
+            if (Var.startswith("Scalar")):
+                plt.figure()
+                ax = plt.axes()
+                y = np.array(data.variables[Var])
+                #y2 = np.array(data.variables["Voltage"])
+                ax.plot(t,y)
+                #ax.plot(t,y2)
+                plt.title(Var)
+
+        
 
     data.close()
 
@@ -129,25 +143,34 @@ def plot_diagnostics(fname):
     # plt.figure()
     # plt.plot(x,sig[-1,:]*(-phi0[-1,:]+phi1[-1,:]))
     for group in data.groups:
-        if (not group.startswith("Var") and not group.startswith("MMS") and not group.startswith("Grid")):
+        # if (not group.startswith("Var") and not group.startswith("MMS") and not group.startswith("Grid") and not group.startswith("Scalar")):
+        #     for var in data.groups[group].variables:
+        #         y = np.array(data.groups[group].variables[var])
+        #         plt.figure()
+        #         ax = plt.axes()
+        #         ax.plot(x,y[-1,:],label = var)
+        #         ax.plot(x,y[0,:],label = var + " t=0")
+        #         ax.legend()
+        #         plt.title(data.groups[group].description)
+        #         plt.xlabel("x")
+
+        if (group.startswith("Scalar")):
             for var in data.groups[group].variables:
-                y = np.array(data.groups[group].variables[var])
                 plt.figure()
                 ax = plt.axes()
-                ax.plot(x,y[-1,:],label = var)
-                ax.plot(x,y[0,:],label = var + " t=0")
+                y = np.array(data.groups[group].variables[var])
+                ax.plot(t,y,label=var)
                 ax.legend()
-                plt.title(data.groups[group].description)
-                plt.xlabel("x")
 
 
+ 
 
     data.close()
 
 
 def main():
-    fname = "./CMFX.nc"
-    plot_nc(fname,plot_u=False,plot_aux=True,include_initial=True)
+    fname = "./runs/CMFX.nc"
+    plot_nc(fname,plot_u=False,plot_scalars=False,include_initial=True)
     # fname = "./MirrorPlasmaTest.nc"
     #plot_nc(fname,False,False,include_initial=True)
     # plot_MMS(fname)

@@ -25,6 +25,7 @@ public:
 	void SetOutputGrid(std::vector<double> const &gridpoints);
 
 	void AddTimeSeries(std::string name, std::string description, std::string units, double initialValue);
+	void AddTimeSeries(std::string groupName, std::string name, std::string description, std::string units, double initialValue);
 
 	template <typename T>
 	void AddVariable(std::string name, std::string description, std::string units, T const &initialValue)
@@ -62,6 +63,8 @@ public:
 	size_t AddTimeSlice(double T);
 
 	void AppendToTimeSeries(std::string const &name, double value, size_t tIndex);
+
+	void AppendToTimeSeries(std::string const &groupName, std::string const &name, double value, size_t tIndex);
 
 	template <typename T>
 	void AppendToVariable(std::string const &name, T const &var, size_t tIndex)

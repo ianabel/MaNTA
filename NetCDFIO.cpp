@@ -66,6 +66,16 @@ void NetCDFIO::AddTimeSeries(std::string name, std::string description, std::str
 	newvar.putVar({0}, InitialValue);
 }
 
+void NetCDFIO::AddTimeSeries(std::string groupName, std::string name, std::string description, std::string units, double InitialValue)
+{
+	netCDF::NcGroup group = data_file.getGroup(groupName);
+	NcVar newvar = group.addVar(name, netCDF::NcDouble(), TimeDim);
+	newvar.putAtt("description", description);
+	if (units != "")
+		newvar.putAtt("units", units);
+	newvar.putVar({0}, InitialValue);
+}
+
 size_t NetCDFIO::AddTimeSlice(double T)
 {
 	size_t next = TimeDim.getSize();
@@ -77,6 +87,13 @@ size_t NetCDFIO::AddTimeSlice(double T)
 void NetCDFIO::AppendToTimeSeries(std::string const &name, double value, size_t tIndex)
 {
 	NcVar variable = data_file.getVar(name);
+	std::vector<size_t> v = {tIndex};
+	variable.putVar(v, value);
+}
+
+void NetCDFIO::AppendToTimeSeries(std::string const &groupName, std::string const &name, double value, size_t tIndex)
+{
+	netCDF::NcVar variable = data_file.getGroup(groupName).getVar(name);
 	std::vector<size_t> v = {tIndex};
 	variable.putVar(v, value);
 }
@@ -174,5 +191,5 @@ void SystemSolver::WriteTimeslice(double tNew)
 	for (Index i = 0; i < nScalars; ++i)
 		nc_output.AppendToTimeSeries(problem->getScalarName(i), y.Scalar(i), tIndex);
 
-	problem->writeDiagnostics(y, tNew, nc_output, tIndex);
+	problem->writeDiagnostics(y, dydt, tNew, nc_output, tIndex);
 }
