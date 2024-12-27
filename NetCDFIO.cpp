@@ -180,7 +180,7 @@ void SystemSolver::WriteTimeslice(double tNew)
 
 	for (Index i = 0; i < nVars; ++i)
 	{
-		nc_output.AppendToGroup<DGApprox>(problem->getVariableName(i), tIndex, {{"u", y.u(i)}, {"q", y.q(i)}, {"sigma", y.sigma(i)}});
+		nc_output.AppendToGroup<DGSoln::DGApprox>(problem->getVariableName(i), tIndex, {{"u", y.u(i)}, {"q", y.q(i)}, {"sigma", y.sigma(i)}});
 	}
 
 	for (Index i = 0; i < nAux; ++i)

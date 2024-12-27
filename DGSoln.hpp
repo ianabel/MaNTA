@@ -41,6 +41,7 @@ class State {
 template<class BasisType> class DGSolnImpl
 {
     public:
+        typedef BasisType basis_type;
         using DGApprox = DGApproxImpl<BasisType>;
         DGSolnImpl(Index n_var, Grid const &_grid, Index Order, Index Scalars = 0, Index aux = 0) : nVars(n_var), grid(_grid), k(Order), nScalars( Scalars ), nAux( aux ), mu_( nullptr, 0 ), Basis( BasisType::getBasis( Order ) ) {};
 
@@ -334,6 +335,6 @@ template<class BasisType> class DGSolnImpl
 };
 
 
-using DGSoln = DGSolnImpl<ChebyshevBasis>;
+using DGSoln = DGSolnImpl<LegendreBasis>;
 
 #endif // DGSOLN_HPP

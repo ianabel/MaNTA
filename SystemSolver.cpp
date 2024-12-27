@@ -109,32 +109,8 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
             // Evaluate Source Function
             Eigen::VectorXd S_cellwise(k + 1);
-            S_cellwise.setZero();
-            auto const &x_vals = DGSoln::DGApprox::Integrator().abscissa();
-            auto const &x_wgts = DGSoln::DGApprox::Integrator().weights();
-            const size_t n_abscissa = x_vals.size();
 
-            S_cellwise.setZero();
-            for (size_t i = 0; i < n_abscissa; ++i)
-            {
-                double x_val = I.x_l + (1 + x_vals[i]) * I.h() / 2.0;
-                double wgt = x_wgts[i] * (I.h() / 2.0);
-
-                State s = y.eval(x_val);
-                double sourceVal = problem->Sources(var, s, x_val, t);
-                for (Eigen::Index j = 0; j < k + 1; j++)
-                    S_cellwise(j) += wgt * sourceVal * BasisType::Evaluate(I, j, x_val);
-            }
-            // And for the other half of the abscissas
-            for (size_t i = 0; i < n_abscissa; ++i)
-            {
-                double x_val = I.x_l + (1 - x_vals[i]) * I.h() / 2.0;
-                double wgt = x_wgts[i] * (I.h() / 2.0);
-                State s = y.eval(x_val);
-                double sourceVal = problem->Sources(var, s, x_val, t);
-                for (Eigen::Index j = 0; j < k + 1; j++)
-                    S_cellwise(j) += wgt * sourceVal * BasisType::Evaluate(I, j, x_val);
-            }
+            S_cellwise = y.getBasis().ProjectOntoBasis( I, [&,this] ( double x ) { return problem->Sources( var, y.eval( x ), x, t ); } );
 
             lamCell[0] = y.lambda(var)[i];
             lamCell[1] = y.lambda(var)[i + 1];
@@ -221,8 +197,8 @@ void SystemSolver::initialiseMatrices()
                 for (Eigen::Index j = 0; j < k + 1; j++)
                 {
                     Dvar(i, j) +=
-                        tau(I.x_l) * BasisType::Evaluate(I, j, I.x_l) * BasisType::Evaluate(I, i, I.x_l) +
-                        tau(I.x_u) * BasisType::Evaluate(I, j, I.x_u) * BasisType::Evaluate(I, i, I.x_u);
+                        tau(I.x_l) * y.getBasis().Evaluate(I, j, I.x_l) * y.getBasis().Evaluate(I, i, I.x_l) +
+                        tau(I.x_u) * y.getBasis().Evaluate(I, j, I.x_u) * y.getBasis().Evaluate(I, i, I.x_u);
                 }
             }
 
@@ -268,12 +244,12 @@ void SystemSolver::initialiseMatrices()
                 // C_ij = < psi_i, phi_j * n_x > , where psi_i are edge degrees of
                 // freedom and n_x is the unit normal in the x direction
                 // for a line, edge degrees of freedom are just 1 at each end
-                Cvar(0, i) = -BasisType::Evaluate(I, i, I.x_l);
-                Cvar(1, i) = BasisType::Evaluate(I, i, I.x_u);
+                Cvar(0, i) = -y.getBasis().Evaluate(I, i, I.x_l);
+                Cvar(1, i) = y.getBasis().Evaluate(I, i, I.x_u);
 
                 // E_ij = < phi_i, (- tau ) lambda >
-                Evar(i, 0) = BasisType::Evaluate(I, i, I.x_l) * (-tau(I.x_l));
-                Evar(i, 1) = BasisType::Evaluate(I, i, I.x_u) * (-tau(I.x_u));
+                Evar(i, 0) = y.getBasis().Evaluate(I, i, I.x_l) * (-tau(I.x_l));
+                Evar(i, 1) = y.getBasis().Evaluate(I, i, I.x_u) * (-tau(I.x_u));
 
                 if (I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryDirichlet(var))
                 {
@@ -321,9 +297,9 @@ void SystemSolver::initialiseMatrices()
                 for (Eigen::Index j = 0; j < k + 1; j++)
                 {
                     // < g_D , v . n > ~= g_D( x_0 ) * phi_j( x_0 ) * ( n_x = -1 )
-                    RF_cellwise[i](j + var * (k + 1)) += -BasisType::Evaluate(I, j, I.x_l) * (-1) * problem->LowerBoundary(var, 0.0);
+                    RF_cellwise[i](j + var * (k + 1)) += -y.getBasis().Evaluate(I, j, I.x_l) * (-1) * problem->LowerBoundary(var, 0.0);
                     // < ( tau ) g_D, w >
-                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += BasisType::Evaluate(I, j, I.x_l) * tau(I.x_l) * problem->LowerBoundary(var, 0.0);
+                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_l) * tau(I.x_l) * problem->LowerBoundary(var, 0.0);
                 }
             }
 
@@ -332,8 +308,8 @@ void SystemSolver::initialiseMatrices()
                 for (Eigen::Index j = 0; j < k + 1; j++)
                 {
                     // < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 )
-                    RF_cellwise[i](j + var * (k + 1)) += -BasisType::Evaluate(I, j, I.x_u) * (+1) * problem->UpperBoundary(var, 0.0);
-                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += BasisType::Evaluate(I, j, I.x_u) * tau(I.x_u) * problem->UpperBoundary(var, 0.0);
+                    RF_cellwise[i](j + var * (k + 1)) += -y.getBasis().Evaluate(I, j, I.x_u) * (+1) * problem->UpperBoundary(var, 0.0);
+                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_u) * tau(I.x_u) * problem->UpperBoundary(var, 0.0);
                 }
             }
         }
@@ -347,10 +323,10 @@ void SystemSolver::initialiseMatrices()
             Eigen::MatrixXd Gvar(2, k + 1);
             for (Index i = 0; i < k + 1; i++)
             {
-                Gvar(0, i) = tau(I.x_l) * BasisType::Evaluate(I, i, I.x_l);
+                Gvar(0, i) = tau(I.x_l) * y.getBasis().Evaluate(I, i, I.x_l);
                 if (I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryDirichlet(var))
                     Gvar(0, i) = 0.0;
-                Gvar(1, i) = tau(I.x_u) * BasisType::Evaluate(I, i, I.x_u);
+                Gvar(1, i) = tau(I.x_u) * y.getBasis().Evaluate(I, i, I.x_u);
                 if (I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(var))
                     Gvar(1, i) = 0.0;
             }
@@ -462,9 +438,9 @@ void SystemSolver::updateBoundaryConditions(double t)
                 for (Eigen::Index j = 0; j < k + 1; j++)
                 {
                     // < g_D , v . n > ~= g_D( x_0 ) * phi_j( x_0 ) * ( n_x = -1 )
-                    RF_cellwise[i](j + var * (k + 1)) += -BasisType::Evaluate(I, j, I.x_l) * (-1) * problem->LowerBoundary(var, t);
+                    RF_cellwise[i](j + var * (k + 1)) += -y.getBasis().Evaluate(I, j, I.x_l) * (-1) * problem->LowerBoundary(var, t);
                     // < ( tau ) g_D, w >
-                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += BasisType::Evaluate(I, j, I.x_l) * tau(I.x_l) * problem->LowerBoundary(var, t);
+                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_l) * tau(I.x_l) * problem->LowerBoundary(var, t);
                 }
             }
 
@@ -473,8 +449,8 @@ void SystemSolver::updateBoundaryConditions(double t)
                 for (Eigen::Index j = 0; j < k + 1; j++)
                 {
                     // < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 )
-                    RF_cellwise[i](j + var * (k + 1)) += -BasisType::Evaluate(I, j, I.x_u) * (+1) * problem->UpperBoundary(var, t);
-                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += BasisType::Evaluate(I, j, I.x_u) * tau(I.x_u) * problem->UpperBoundary(var, t);
+                    RF_cellwise[i](j + var * (k + 1)) += -y.getBasis().Evaluate(I, j, I.x_u) * (+1) * problem->UpperBoundary(var, t);
+                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_u) * tau(I.x_u) * problem->UpperBoundary(var, t);
                 }
             }
 
@@ -611,7 +587,7 @@ void SystemSolver::updateMatricesForJacSolve()
             State s( nVars, nScalars, nAux );
             State s_dt( nVars, nScalars, nAux );
             for ( Index l = 0; l < k + 1; ++l ) {
-                problem->ScalarGPrimeExtended( j, s, s_dt, yJac, dydtJac, [=]( double x ){ return BasisType::Evaluate( I, l, x ); }, I, jt );
+                problem->ScalarGPrimeExtended( j, s, s_dt, yJac, dydtJac, [=,this]( double x ){ return y.getBasis().Evaluate( I, l, x ); }, I, jt );
                 for ( Index v = 0; v < nVars; ++v ) {
                     w_map[ j ].sigma( v ).getCoeff( i ).second( l ) = s.Flux[ v ]       + alpha * s_dt.Flux[ v ];
                     w_map[ j ].q( v ).getCoeff( i ).second( l )     = s.Derivative[ v ] + alpha * s_dt.Derivative[ v ];

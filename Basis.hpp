@@ -128,6 +128,7 @@ class LegendreBasis
             return u;
         }
 
+
         void DerivativeMatrix(Interval const &I, MatrixRef D) const
         {
             for (Index i = 0; i < D.rows(); i++)
@@ -137,6 +138,13 @@ class LegendreBasis
                     { return Evaluate(I, i, x) * Prime(I, j, x); };
                     D(i, j) = integrator.integrate(F, I.x_l, I.x_u);
                 }
+        }
+
+        Matrix DerivativeMatrix(Interval const &I) const
+        {
+            Matrix D( k + 1, k + 1 );
+            DerivativeMatrix( I, D );
+            return D;
         }
 
         void DerivativeMatrix(Interval const &I, MatrixRef D, std::function<double(double)> const &w) const
@@ -167,6 +175,7 @@ class ChebyshevBasis
                 }
         };
         static std::map<unsigned int,ChebyshevBasis> singletons;
+    public:
 
         static double Tn( unsigned int n, double x ) { return std::cos( n * std::acos( x ) ); };
         static double Un( unsigned int n, double x ) {
@@ -175,10 +184,9 @@ class ChebyshevBasis
                 return n + 1.0;
             if( theta == pi )
                 return ( n % 2 == 0 ) ? ( n + 1.0 ) : -( n + 1.0 );
-            return std::sin( n * theta )/std::sin( theta );
+            return std::sin( (n + 1) * theta )/std::sin( theta );
         };
 
-    public:
         ~ChebyshevBasis(){};
 
         unsigned int Order() const { return k; };
@@ -300,6 +308,13 @@ class ChebyshevBasis
                 }
         }
 
+        Matrix DerivativeMatrix(Interval const &I) const
+        {
+            Matrix D( k + 1, k + 1 );
+            DerivativeMatrix( I, D );
+            return D;
+        }
+
         void DerivativeMatrix(Interval const &I, MatrixRef D, std::function<double(double)> const &w) const
         {
             for (Index i = 0; i < D.rows(); i++)
@@ -312,7 +327,7 @@ class ChebyshevBasis
         }
 };
 
-class NodalBasis 
+class NodalBasis
 {
 public:
 	NodalBasis(){};
