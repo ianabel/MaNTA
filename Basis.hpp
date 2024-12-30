@@ -327,13 +327,12 @@ class ChebyshevBasis
         }
 };
 
+// Uses 
 class NodalBasis
 {
 public:
 	NodalBasis(){};
 	~NodalBasis(){};
-
-    
 
 	static double Evaluate(Interval const &I, Index i, double x)
 	{

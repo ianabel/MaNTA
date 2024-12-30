@@ -65,42 +65,53 @@ BOOST_AUTO_TEST_CASE(systemsolver_init_tests)
 	BOOST_TEST((system->B_cellwise[2] - basis.DerivativeMatrix( testGrid[2] ) ).norm() < 1e-9);
 	BOOST_TEST((system->B_cellwise[3] - basis.DerivativeMatrix( testGrid[3] ) ).norm() < 1e-9);
 
-	ref << 4.0, 0.0,
-		0.0, 12.0;
+	for (unsigned int i = 0; i < 4; i++)
+    {
+      ref.setZero();
+      Interval const &I(testGrid[i]);
+      for (Eigen::Index ii = 0; ii < k + 1; ii++)
+      {
+        for (Eigen::Index j = 0; j < k + 1; j++)
+        {
+          ref(ii, j) +=
+            system->tau(I.x_l) * basis.Evaluate(I, j, I.x_l) * basis.Evaluate(I, ii, I.x_l) +
+            system->tau(I.x_u) * basis.Evaluate(I, j, I.x_u) * basis.Evaluate(I, ii, I.x_u);
+        }
+      }
+      BOOST_TEST((system->D_cellwise[i] - ref).norm() < 1e-9);
 
-	BOOST_TEST((system->D_cellwise[0] - ref).norm() < 1e-9);
-	BOOST_TEST((system->D_cellwise[1] - ref).norm() < 1e-9);
-	BOOST_TEST((system->D_cellwise[2] - ref).norm() < 1e-9);
-	BOOST_TEST((system->D_cellwise[3] - ref).norm() < 1e-9);
+      ref.setZero();
+      for(Eigen::Index j = 0; j < k + 1; j++)
+      {
+        ref(0,j) = -basis.Evaluate(I, j, I.x_l);
+        ref(1,j) =  basis.Evaluate(I, j, I.x_u);
+        if (i==0) {
+          ref(0,j) = 0;
+        }
 
-	double TwoRootThree = 2.0 * ::sqrt(3.0);
+        if (i==3) {
+          ref(1,j) = 0;
+        }
+      }
 
-	ref << 0.0, 0.0,
-		2.0, TwoRootThree;
-	BOOST_TEST((system->C_cellwise[0] - ref).norm() < 1e-9);
+      BOOST_TEST((system->C_cellwise[i] - ref).norm() < 1e-9);
 
-	ref << -2.0, TwoRootThree,
-		2.0, TwoRootThree;
-	BOOST_TEST((system->C_cellwise[1] - ref).norm() < 1e-9);
-	BOOST_TEST((system->C_cellwise[2] - ref).norm() < 1e-9);
+      ref.setZero();
+      for(Eigen::Index j = 0; j < k + 1; j++)
+      {
+        ref(j,0) = basis.Evaluate(I, j, I.x_l) * (-system->tau(I.x_l));
+        ref(j,1) = basis.Evaluate(I, j, I.x_u) * (-system->tau(I.x_u));
+        if (i==0) {
+          ref(j,0) = 0;
+        }
 
-	ref << -2.0, TwoRootThree,
-		0.0, 0.0;
-	BOOST_TEST((system->C_cellwise[3] - ref).norm() < 1e-9);
+        if (i==3) {
+          ref(j,1) = 0;
+        }
+      }
+      BOOST_TEST((system->E_cellwise[i] - ref).norm() < 1e-9);
+    }
 
-	double RootThree = ::sqrt(3.0);
-	ref << 0.0, -1.0,
-		0.0, -RootThree;
-	BOOST_TEST((system->E_cellwise[0] - ref).norm() < 1e-9);
-
-	ref << -1.0, -1.0,
-		RootThree, -RootThree;
-	BOOST_TEST((system->E_cellwise[1] - ref).norm() < 1e-9);
-	BOOST_TEST((system->E_cellwise[2] - ref).norm() < 1e-9);
-
-	ref << -1.0, 0.0,
-		RootThree, 0.0;
-	BOOST_TEST((system->E_cellwise[3] - ref).norm() < 1e-9);
 
 	// Should check k > 1 here
 
