@@ -149,84 +149,85 @@ BOOST_AUTO_TEST_CASE(systemsolver_multichannel_init_tests)
 	SystemSolver *system = nullptr;
 	double tau = 0.5;
 
-	MatrixDiffusion problem(config_snippet_2, testGrid);
+    MatrixDiffusion problem(config_snippet_2, testGrid);
 
-	BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, &problem));
+    BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, &problem));
 
-	system->setTau(tau);
-	system->resetCoeffs();
+    system->setTau(tau);
+    system->resetCoeffs();
 
-	BOOST_TEST(system->k == k);
-	BOOST_TEST(system->grid == testGrid);
-	BOOST_TEST(system->nVars == 2);
+    BOOST_TEST(system->k == k);
+    BOOST_TEST(system->grid == testGrid);
+    BOOST_TEST(system->nVars == 2);
 
-	BOOST_CHECK_NO_THROW(system->initialiseMatrices());
+    BOOST_CHECK_NO_THROW(system->initialiseMatrices());
+    Index N = 2 * (k + 1);
+    Matrix ref(N, N);
+    DGSoln::basis_type const & basis = system->y.getBasis();
 
-	Index N = 2 * (k + 1);
-	BOOST_TEST((system->A_cellwise[0] - Matrix::Identity(N, N)).norm() < 1e-9);
-	BOOST_TEST((system->A_cellwise[1] - Matrix::Identity(N, N)).norm() < 1e-9);
-	BOOST_TEST((system->A_cellwise[2] - Matrix::Identity(N, N)).norm() < 1e-9);
-	BOOST_TEST((system->A_cellwise[3] - Matrix::Identity(N, N)).norm() < 1e-9);
+    for( int i = 0; i < 4; i++ ) {
+      Interval const &I(testGrid[i]);
+      ref.block(0,0,2,2) = basis.MassMatrix( I );
+      ref.block(2,2,2,2) = basis.MassMatrix( I );
 
-	Matrix ref(N, N);
-	// Derivative matrix
-	ref << 0.0, 13.85640646055103, 0.0, 0.0,
-		0.0, 0.0, 0.0, 0.0,
-		0.0, 0.0, 0.0, 13.85640646055103,
-		0.0, 0.0, 0.0, 0.0;
-	BOOST_TEST((system->B_cellwise[0] - ref).norm() < 1e-9);
-	BOOST_TEST((system->B_cellwise[1] - ref).norm() < 1e-9);
-	BOOST_TEST((system->B_cellwise[2] - ref).norm() < 1e-9);
-	BOOST_TEST((system->B_cellwise[3] - ref).norm() < 1e-9);
+      BOOST_TEST((system->A_cellwise[i] - ref ).norm() < 1e-9);
 
-	ref << 4.0, 0.0, 0.0, 0.0,
-		0.0, 12.0, 0.0, 0.0,
-		0.0, 0.0, 4.0, 0.0,
-		0.0, 0.0, 0.0, 12.0;
+      ref.setZero();
+      ref.block(0,0,2,2) = basis.DerivativeMatrix( I );
+      ref.block(2,2,2,2) = basis.DerivativeMatrix( I );
 
-	BOOST_TEST((system->D_cellwise[0] - ref).norm() < 1e-9);
-	BOOST_TEST((system->D_cellwise[1] - ref).norm() < 1e-9);
-	BOOST_TEST((system->D_cellwise[2] - ref).norm() < 1e-9);
-	BOOST_TEST((system->D_cellwise[3] - ref).norm() < 1e-9);
+      BOOST_TEST((system->B_cellwise[i] - ref ).norm() < 1e-9);
 
-	double TwoRootThree = 2.0 * ::sqrt(3.0);
+      ref.setZero();
 
-	ref << 0.0, 0.0, 0.0, 0.0,
-		2.0, TwoRootThree, 0.0, 0.0,
-		0.0, 0.0, 0.0, 0.0,
-		0.0, 0.0, 2.0, TwoRootThree;
+      for (Eigen::Index ii = 0; ii < k + 1; ii++)
+      {
+        for (Eigen::Index j = 0; j < k + 1; j++)
+        {
+          ref(ii, j) +=
+            system->tau(I.x_l) * basis.Evaluate(I, j, I.x_l) * basis.Evaluate(I, ii, I.x_l) +
+            system->tau(I.x_u) * basis.Evaluate(I, j, I.x_u) * basis.Evaluate(I, ii, I.x_u);
+          ref(ii + 2, j + 2 ) +=
+            system->tau(I.x_l) * basis.Evaluate(I, j, I.x_l) * basis.Evaluate(I, ii, I.x_l) +
+            system->tau(I.x_u) * basis.Evaluate(I, j, I.x_u) * basis.Evaluate(I, ii, I.x_u);
+        }
+      }
+      BOOST_TEST((system->D_cellwise[i] - ref).norm() < 1e-9);
 
-	BOOST_TEST((system->C_cellwise[0] - ref).norm() < 1e-9);
+      ref.setZero();
+      for(Eigen::Index j = 0; j < k + 1; j++)
+      {
+        ref(0,j) = -basis.Evaluate(I, j, I.x_l);
+        ref(1,j) =  basis.Evaluate(I, j, I.x_u);
+        if (i==0) {
+          ref(0,j) = 0;
+        }
 
-	ref << -2.0, TwoRootThree, 0.0, 0.0,
-		2.0, TwoRootThree, 0.0, 0.0,
-		0.0, 0.0, -2.0, TwoRootThree,
-		0.0, 0.0, 2.0, TwoRootThree;
+        if (i==3) {
+          ref(1,j) = 0;
+        }
+      }
+      ref.block( 2,2,2,2 ) = ref.block( 0,0,2,2 );
 
-	BOOST_TEST((system->C_cellwise[1] - ref).norm() < 1e-9);
-	BOOST_TEST((system->C_cellwise[2] - ref).norm() < 1e-9);
+      BOOST_TEST((system->C_cellwise[i] - ref).norm() < 1e-9);
 
-	ref << -2.0, TwoRootThree, 0.0, 0.0,
-		0.0, 0.0, 0.0, 0.0,
-		0.0, 0.0, -2.0, TwoRootThree,
-		0.0, 0.0, 0.0, 0.0;
+      ref.setZero();
+      for(Eigen::Index j = 0; j < k + 1; j++)
+      {
+        ref(j,0) = basis.Evaluate(I, j, I.x_l) * (-system->tau(I.x_l));
+        ref(j,1) = basis.Evaluate(I, j, I.x_u) * (-system->tau(I.x_u));
+        if (i==0) {
+          ref(j,0) = 0;
+        }
 
-	BOOST_TEST((system->C_cellwise[3] - ref).norm() < 1e-9);
+        if (i==3) {
+          ref(j,1) = 0;
+        }
+      }
+      ref.block( 2,2,2,2 ) = ref.block( 0,0,2,2 );
 
-	double RootThree = ::sqrt(3.0);
-	ref << 0.0, -1.0, 0.0, 0.0,
-		0.0, -RootThree, 0.0, 0.0,
-		0.0, 0.0, 0.0, -1.0,
-		0.0, 0.0, 0.0, -RootThree;
-	BOOST_TEST((system->E_cellwise[0] - ref).norm() < 1e-9);
-
-	ref << -1.0, -1.0, 0.0, 0.0,
-		RootThree, -RootThree, 0.0, 0.0,
-		0.0, 0.0, -1.0, -1.0,
-		0.0, 0.0, RootThree, -RootThree;
-
-	BOOST_TEST((system->E_cellwise[1] - ref).norm() < 1e-9);
-	BOOST_TEST((system->E_cellwise[2] - ref).norm() < 1e-9);
+      BOOST_TEST((system->E_cellwise[i] - ref).norm() < 1e-9);
+    }
 }
 
 BOOST_AUTO_TEST_CASE(systemsolver_matrix_tests)
@@ -257,10 +258,12 @@ BOOST_AUTO_TEST_CASE(systemsolver_matrix_tests)
 
 	Matrix NLMat(k + 1, k + 1);
 
+    DGSoln::basis_type const & basis = system->y.getBasis();
+
 	for (Index i = 0; i < 4; ++i)
 	{
 		system->NLqMat(NLMat, system->y, testGrid[i]);
-		BOOST_TEST((NLMat - Matrix::Identity(k + 1, k + 1)).norm() < 1e-9);
+		BOOST_TEST((NLMat - basis.MassMatrix( testGrid[i] ) ).norm() < 1e-9);
 		system->NLuMat(NLMat, system->y, testGrid[i]);
 		BOOST_TEST((NLMat - Matrix::Zero(k + 1, k + 1)).norm() < 1e-9);
 	}
@@ -282,10 +285,15 @@ BOOST_AUTO_TEST_CASE(systemsolver_matrix_tests)
 
 	NLMat.resize(2 * (k + 1), 2 * (k + 1));
 
+    Matrix ref( 2*(k+1), 2*(k+1) );
 	for (Index i = 0; i < 4; ++i)
 	{
-		system->NLqMat(NLMat, system->y, testGrid[i]);
-		BOOST_TEST((NLMat - Matrix::Identity(2 * (k + 1), 2 * (k + 1))).norm() < 1e-9);
+        ref.setZero();
+        ref.block(0,0,2,2) = basis.MassMatrix( testGrid[i] );
+        ref.block(2,2,2,2) = basis.MassMatrix( testGrid[i] );
+        system->NLqMat(NLMat, system->y, testGrid[i]);
+
+		BOOST_TEST((NLMat - ref).norm() < 1e-9);
 		system->NLuMat(NLMat, system->y, testGrid[i]);
 		BOOST_TEST((NLMat - Matrix::Zero(2 * (k + 1), 2 * (k + 1))).norm() < 1e-9);
 	}
