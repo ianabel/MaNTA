@@ -82,6 +82,9 @@ private:
 
 	// Underlying functions
 
+	Real uToDensity(Real) const;
+	Real qToDensityGradient(Real, Real) const;
+
 	Value InitialDensityTimeDerivative(RealVector u, RealVector q, Position V) const;
 	Value InitialCurrent(Time t) const;
 
@@ -165,8 +168,11 @@ private:
 	constexpr static double a = 1.0;  // Reference length in m
 	constexpr static double Z_eff = 3.0;
 
+	//
 	std::unique_ptr<PlasmaConstants> Plasma;
 	std::shared_ptr<StraightMagneticField> B;
+
+	bool evolveLogDensity;
 
 	// Desired voltage to keep constant
 	double V0;
@@ -207,6 +213,7 @@ private:
 	std::vector<bool> lowerBoundaryConditions;
 
 	double nEdge, TeEdge, TiEdge, MUpper, MLower, MEdge;
+	double lowNDiffusivity, lowNThreshold;
 	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber;
 	double nNeutrals;
 	bool useNeutralModel;

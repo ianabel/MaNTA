@@ -35,11 +35,11 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
     };
     auto n = [this](double V)
     {
-        return InitialValue(Channel::Density, V);
+        return uToDensity(InitialValue(Channel::Density, V)).val;
     };
     auto nPrime = [this](double V)
     {
-        return InitialDerivative(Channel::Density, V);
+        return qToDensityGradient(InitialDerivative(Channel::Density, V), InitialValue(Channel::Density, V)).val;
     };
     auto p_i = [this](double V)
     {
@@ -288,13 +288,13 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
     {
         return y.q(Channel::AngularMomentum)(V);
     };
-    auto n = [&y](double V)
+    auto n = [&](double V)
     {
-        return y.u(Channel::Density)(V);
+        return uToDensity(y.u(Channel::Density)(V)).val;
     };
-    auto nPrime = [&y](double V)
+    auto nPrime = [&](double V)
     {
-        return y.q(Channel::Density)(V);
+        return qToDensityGradient(y.q(Channel::Density)(V), y.u(Channel::Density)(V)).val;
     };
     auto p_i = [&y](double V)
     {
@@ -374,10 +374,10 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
         auto uV = u(V);
         Real Ti = 2. / 3. * uV(Channel::IonEnergy) / uV(Channel::Density);
         double R = B->R_V(V);
-        Real vtheta = 1 / R * uV(Channel::AngularMomentum) / uV(Channel::Density);
+        Real vtheta = 1 / R * uV(Channel::AngularMomentum) / uToDensity(uV(Channel::Density));
 
         double dVdR = 1 / B->dRdV(V);
-        Real SR = 1.0 / sqrt(Ti) * (dVdR / uV(Channel::Density) * (qV(Channel::AngularMomentum) - R * vtheta * qV(Channel::Density)) - vtheta);
+        Real SR = 1.0 / sqrt(Ti) * (dVdR / uV(Channel::Density) * (qV(Channel::AngularMomentum) - R * vtheta * qToDensityGradient(qV(Channel::Density), uV(Channel::Density)) - vtheta));
         return SR.val;
     };
 
