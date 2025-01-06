@@ -327,7 +327,7 @@ class ChebyshevBasis
         }
 };
 
-// Uses 
+// Uses LGL points
 class NodalBasis
 {
 public:
