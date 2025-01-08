@@ -103,6 +103,19 @@ BOOST_AUTO_TEST_CASE( cheb_basis_test )
 
 }
 
+BOOST_AUTO_TEST_CASE( nodal_basis_test )
+{
+    NodalBasis basis = NodalBasis::getBasis( 6 );
+    std::vector<double> nodes{ -1, -0.83022389627856692986, -0.46884879347071421380, 0, 0.46884879347071421380, 0.83022389627856692986, 1.0 };
+
+    for( int i=0; i < 7; i++ ) {
+        for( int j=0; j < 7; j++ ) {
+            double delta = ( i == j ) ? 1.0 : 0.0;
+            BOOST_TEST( basis.Evaluate( i, nodes[ j ] ) == delta );
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE( dg_approx_construction )
 {
     Grid testGrid( 0.0, 1.0, 4 );

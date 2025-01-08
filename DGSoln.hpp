@@ -217,12 +217,12 @@ template<class BasisType> class DGSolnImpl
                 for (Index i = 0; i < nCells; ++i)
                 {
                     Interval const &I = grid[i];
-                    lambda_[var](i) += BasisType::Evaluate(I, u_[var].coeffs[i].second, I.x_l) / 2.0;
-                    lambda_[var](i + 1) += BasisType::Evaluate(I, u_[var].coeffs[i].second, I.x_u) / 2.0;
+                    lambda_[var](i) += Basis.Evaluate(I, u_[var].coeffs[i].second, I.x_l) / 2.0;
+                    lambda_[var](i + 1) += Basis.Evaluate(I, u_[var].coeffs[i].second, I.x_u) / 2.0;
                 }
                 // Just set boundaries to the trace value of u. BCs are someone else's job
-                lambda_[var](0) = BasisType::Evaluate(grid[0], u_[var].coeffs[0].second, grid.lowerBoundary());
-                lambda_[var](nCells) = BasisType::Evaluate(grid[nCells - 1], u_[var].coeffs[nCells - 1].second, grid.upperBoundary());
+                lambda_[var](0) = Basis.Evaluate(grid[0], u_[var].coeffs[0].second, grid.lowerBoundary());
+                lambda_[var](nCells) = Basis.Evaluate(grid[nCells - 1], u_[var].coeffs[nCells - 1].second, grid.upperBoundary());
             }
         };
 
@@ -235,15 +235,15 @@ template<class BasisType> class DGSolnImpl
                 for (Index i = 0; i < nCells; ++i)
                 {
                     Interval const &I = grid[i];
-                    lambda_[var](i) += BasisType::Evaluate(I, u_[var].coeffs[i].second, I.x_l) / 2.0;
-                    lambda_[var](i + 1) += BasisType::Evaluate(I, u_[var].coeffs[i].second, I.x_u) / 2.0;
+                    lambda_[var](i) += Basis.Evaluate(I, u_[var].coeffs[i].second, I.x_l) / 2.0;
+                    lambda_[var](i + 1) += Basis.Evaluate(I, u_[var].coeffs[i].second, I.x_u) / 2.0;
 
-                    lambda_[var](i)     += BasisType::Evaluate(I, q_[var].coeffs[i].second, I.x_l) / (2.0*tau);
-                    lambda_[var](i + 1) -= BasisType::Evaluate(I, q_[var].coeffs[i].second, I.x_u) / (2.0*tau);
+                    lambda_[var](i)     += Basis.Evaluate(I, q_[var].coeffs[i].second, I.x_l) / (2.0*tau);
+                    lambda_[var](i + 1) -= Basis.Evaluate(I, q_[var].coeffs[i].second, I.x_u) / (2.0*tau);
                 }
                 // Just set boundaries to the trace value of u. BCs are someone else's job
-                lambda_[var](0) = BasisType::Evaluate(grid[0], u_[var].coeffs[0].second, grid.lowerBoundary());
-                lambda_[var](nCells) = BasisType::Evaluate(grid[nCells - 1], u_[var].coeffs[nCells - 1].second, grid.upperBoundary());
+                lambda_[var](0) = Basis.Evaluate(grid[0], u_[var].coeffs[0].second, grid.lowerBoundary());
+                lambda_[var](nCells) = Basis.Evaluate(grid[nCells - 1], u_[var].coeffs[nCells - 1].second, grid.upperBoundary());
             }
         };
 
@@ -288,8 +288,8 @@ template<class BasisType> class DGSolnImpl
 
                         for (Index j = 0; j < k + 1; ++j)
                         {
-                            coeffPair.second[j] += wgt * sigma_plus * BasisType::Evaluate(I, j, y_plus);
-                            coeffPair.second[j] += wgt * sigma_minus * BasisType::Evaluate(I, j, y_minus);
+                            coeffPair.second[j] += wgt * sigma_plus * Basis.Evaluate(I, j, y_plus);
+                            coeffPair.second[j] += wgt * sigma_minus * Basis.Evaluate(I, j, y_minus);
                         }
                     }
                     coeffPair.second = mass_transpose_inverse.solve( coeffPair.second );
@@ -335,6 +335,6 @@ template<class BasisType> class DGSolnImpl
 };
 
 
-using DGSoln = DGSolnImpl<LegendreBasis>;
+using DGSoln = DGSolnImpl<NodalBasis>;
 
 #endif // DGSOLN_HPP
