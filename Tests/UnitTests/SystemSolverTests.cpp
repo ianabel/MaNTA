@@ -277,4 +277,60 @@ BOOST_AUTO_TEST_CASE(systemsolver_matrix_tests)
 	}
 }
 
+BOOST_AUTO_TEST_CASE(systemsolver_restart_tests)
+{
+
+	netCDF::NcFile restart_file;
+
+	// Load grid from restart file
+	BOOST_CHECK_NO_THROW(restart_file.open("./Tests/UnitTests/MatrixDiffusion.restart.nc", netCDF::NcFile::FileMode::read));
+
+	netCDF::NcGroup GridGroup = restart_file.getGroup("Grid");
+	auto nPoints = GridGroup.getDim("Index").getSize();
+	std::vector<Position> CellBoundaries(nPoints);
+
+	GridGroup.getVar("CellBoundaries").getVar(CellBoundaries.data());
+
+	// Check loading grid from file
+	Grid *testGrid;
+	BOOST_CHECK_NO_THROW(testGrid = new Grid(CellBoundaries, static_cast<Index>(nPoints - 1)));
+
+	Index k;
+	GridGroup.getVar("PolyOrder").getVar(&k);
+
+	MatrixDiffusion *problem;
+	BOOST_CHECK_NO_THROW(problem = new MatrixDiffusion(config_snippet_2, *testGrid));
+
+	// scope this section to make sure restart data doesn't get deleted
+	{
+		std::vector<double> Y, dYdt;
+		netCDF::NcGroup RestartGroup = restart_file.getGroup("RestartData");
+
+		Index nDOF_file = RestartGroup.getDim("nDOF").getSize();
+
+		Y.resize(nDOF_file);
+		dYdt.resize(nDOF_file);
+
+		RestartGroup.getVar("Y").getVar(Y.data());
+		RestartGroup.getVar("dYdt").getVar(dYdt.data());
+
+		restart_file.close();
+		// Make sure degrees of freedom are consistent with restart file
+		const Index nCells = testGrid->getNCells();
+		const Index nDOF = problem->getNumVars() * 3 * nCells * (k + 1) + problem->getNumVars() * (nCells + 1) + problem->getNumScalars() + problem->getNumAux() * nCells * (k + 1);
+
+		BOOST_TEST(nDOF_file == nDOF);
+
+		BOOST_CHECK_NO_THROW(problem->setRestartValues(Y, dYdt, *testGrid, k));
+	}
+
+	DGSoln y = problem->getRestartY();
+
+	// just check that everything didn't get set to 0, a regression test would be better for checking the actual data
+	BOOST_CHECK_NE(y.u(0)(0), 0.0);
+
+	delete testGrid;
+	delete problem;
+}
+
 BOOST_AUTO_TEST_SUITE_END()
