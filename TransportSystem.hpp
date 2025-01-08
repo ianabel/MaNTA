@@ -22,11 +22,15 @@ public:
     Index getNumScalars() const { return nScalars; };
     Index getNumAux() const { return nAux; };
 
-    virtual void setRestartValues(std::vector<double> y, std::vector<double> dydt, const Grid &grid, Index k)
+    virtual void setRestartValues(const std::vector<double> &y, const std::vector<double> &dydt, const Grid &grid, Index k)
     {
+        // need to copy data into vectors owned by TransportSystem
+        restart_Y_data = y;
+        restart_dYdt_data = dydt;
+
         // Create DGSolns to wrap restart data
-        restart_Y = std::make_shared<DGSoln>(nVars, grid, k, y.data(), nScalars, nAux);
-        restart_dYdt = std::make_shared<DGSoln>(nVars, grid, k, dydt.data(), nScalars, nAux);
+        restart_Y = std::make_shared<DGSoln>(nVars, grid, k, restart_Y_data.data(), nScalars, nAux);
+        restart_dYdt = std::make_shared<DGSoln>(nVars, grid, k, restart_dYdt_data.data(), nScalars, nAux);
         restarting = true;
 
         // Pull boundary conditions directly from restart values
@@ -234,6 +238,8 @@ protected:
     Index nAux = 0;
 
     bool restarting = false;
+    std::vector<double> restart_Y_data;
+    std::vector<double> restart_dYdt_data;
     std::shared_ptr<DGSoln> restart_Y = nullptr;
     std::shared_ptr<DGSoln> restart_dYdt = nullptr;
 

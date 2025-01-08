@@ -139,8 +139,12 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
 		ParticleSourceWidth = toml::find_or(InternalConfig, "ParticleSourceWidth", 0.02);
 		ParticleSourceCenter = toml::find_or(InternalConfig, "ParticleSourceCenter", 0.5 * (R_Lower + R_Upper));
 
+		// Adding diffusion for low values of density or pressure
 		lowNDiffusivity = toml::find_or(InternalConfig, "lowNDiffusivity", 0.0);
 		lowNThreshold = toml::find_or(InternalConfig, "lowNThreshold", 0.2);
+
+		lowPDiffusivity = toml::find_or(InternalConfig, "lowPDiffusivity", 0.0);
+		lowPThreshold = toml::find_or(InternalConfig, "lowPThreshold", 0.2);
 
 		for (Index i = 0; i < nVars; ++i)
 		{
@@ -342,9 +346,11 @@ Real MirrorPlasma::Gamma(RealVector u, RealVector q, Real V, Time t) const
 	Real GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e
 	Real Gamma = GeometricFactor * GeometricFactor * (1 / (Plasma->ElectronCollisionTime(n, Te))) * (U - ThermalForce);
 
-	// When N drops below a theshold value, add an artificial diffusion to smooth things out
-	if (n < (1 + lowNThreshold) * nEdge)
-		Gamma += lowNDiffusivity * ((1 + lowNThreshold) * nEdge - n) * nPrime; // lowNDiffusivity * (exp(log(2) / (lowNThreshold * nEdge) * ((1 + lowNThreshold) * nEdge - n)) - 1) * nPrime;
+	// If gradient is too steep for MaNTA to handle, add diffusion
+	Real lambda_n = abs(nPrime / n);
+
+	if (lambda_n > lowNThreshold)
+		Gamma += lowNDiffusivity * pow(lambda_n - lowNThreshold, 0.5) * nPrime;
 
 	if (std::isfinite(Gamma.val))
 		return Gamma;
@@ -370,8 +376,10 @@ Real MirrorPlasma::qi(RealVector u, RealVector q, Real V, Time t) const
 	Real GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e, leaving (V'R)^2
 	Real HeatFlux = 2.0 * GeometricFactor * GeometricFactor * sqrt(Plasma->IonMass() / (2.0 * ElectronMass)) * (p_i / (Plasma->IonCollisionTime(n, Ti))) * Ti_prime;
 
-	// if (n < (1 + lowNThreshold) * nEdge)
-	// 	HeatFlux += lowNDiffusivity * ((1 + lowNThreshold) * nEdge - n) * Ti_prime; // lowNDiffusivity * (exp(log(2) / (lowNThreshold * nEdge) * ((1 + lowNThreshold) * nEdge - n)) - 1) * Ti_prime;
+	Real lambda_p = abs(p_i_prime / p_i);
+
+	if (lambda_p > lowPThreshold)
+		HeatFlux += lowPDiffusivity * pow(lambda_p - lowPThreshold, 0.5) * p_i_prime;
 
 	if (std::isfinite(HeatFlux.val))
 		return HeatFlux;
@@ -405,8 +413,15 @@ Real MirrorPlasma::qe(RealVector u, RealVector q, Real V, Time t) const
 	Real GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e, leaving (V'R)^2
 	Real HeatFlux = GeometricFactor * GeometricFactor * (1 / (Plasma->ElectronCollisionTime(n, Te))) * (4.66 * p_e * Te_prime - (3. / 2.) * U);
 
-	if (n < (1 + lowNThreshold) * nEdge)
-		HeatFlux += lowNDiffusivity * ((1 + lowNThreshold) * nEdge - n) * p_e_prime; // lowNDiffusivity * (exp(log(2) / (lowNThreshold * nEdge) * ((1 + lowNThreshold) * nEdge - n)) - 1) * Te_prime;
+	Real lambda_p = abs(p_e_prime / p_e);
+
+	if (lambda_p > lowPThreshold)
+		HeatFlux += lowPDiffusivity * pow(lambda_p - lowPThreshold, 0.5) * p_e_prime;
+
+	Real lambda_T = abs(Te_prime / Te);
+
+	if (lambda_T > lowPThreshold)
+		HeatFlux += lowPDiffusivity * pow(lambda_T - lowPThreshold, 0.5) * n * Te_prime;
 
 	if (std::isfinite(HeatFlux.val))
 		return HeatFlux;
@@ -483,7 +498,7 @@ Real MirrorPlasma::Sn(RealVector u, RealVector q, RealVector sigma, RealVector p
 	Real ParallelLosses = ElectronPastukhovLossRate(V, Xi, n, Te);
 	Real DensitySource;
 	if (useNeutralModel)
-		DensitySource = ParticleSource(R.val, t) + Plasma->NormalizingTime() / n0 * (Plasma->IonizationRate(n, NeutralDensity(R, t), R * omega, Te, Ti) - Plasma->ChargeExchangeLossRate(n, NeutralDensity(R, t), R * omega, Ti));
+		DensitySource = ParticleSource(R.val, t) + Plasma->NormalizingTime() / n0 * (Plasma->IonizationRate(n, NeutralDensity(R, t), R * omega, Te, Ti)); //- Plasma->ChargeExchangeLossRate(n, NeutralDensity(R, t), R * omega, Ti));
 	else
 		DensitySource = ParticleSource(R.val, t);
 	Real FusionLosses = Plasma->FusionRate(n, p_i);
@@ -518,8 +533,17 @@ Real MirrorPlasma::Spi(RealVector u, RealVector q, RealVector sigma, RealVector 
 
 	Real ViscousHeating = IonClassicalAngularMomentumFlux(V, n, Ti, dOmegadV, t) * dOmegadV;
 
+	Real p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
+
+	Real ThermalForce = (3. / 2.) * (p_e_prime - nPrime * Te); // p_e dT/dpsi
+
+	Real U = (p_e_prime + p_i_prime) + n * omega * R * R * dOmegadV; // -n*(U_e - U_i) dot grad phi
+
+	Real GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e
+	Real G = GeometricFactor * GeometricFactor * (1 / (Plasma->ElectronCollisionTime(n, Te))) * (U - ThermalForce);
+
 	// Use this version since we have no parallel flux in a square well
-	Real PotentialHeating = -Gamma(u, q, V, t) * (omega * omega / (2 * pi * a) - dphidV(u, q, phi, V));
+	Real PotentialHeating = -G * (omega * omega / (2 * pi * a) - dphidV(u, q, phi, V));
 	Real EnergyExchange = Plasma->IonElectronEnergyExchange(n, p_e, p_i, V, t);
 
 	Real Heating = ViscousHeating + PotentialHeating + EnergyExchange;
@@ -537,10 +561,14 @@ Real MirrorPlasma::Spi(RealVector u, RealVector q, RealVector sigma, RealVector 
 	Real ParallelLosses = ParticleEnergy * IonPastukhovLossRate(V, Xi, n, Ti);
 
 	Real ChargeExchangeHeatLosses = 0;
-	if (useNeutralModel)
-		ChargeExchangeHeatLosses = Ti * Plasma->NormalizingTime() / n0 * Plasma->ChargeExchangeLossRate(n, NeutralDensity(R, t), R * omega, Ti);
+	Real ParticleSourceHeating = 0.0;
+	// if (useNeutralModel)
+	// {
+	// 	ChargeExchangeHeatLosses = Ti * Plasma->NormalizingTime() / n0 * Plasma->ChargeExchangeLossRate(n, NeutralDensity(R, t), R * omega, Ti);
+	// 	// ParticleSourceHeating = 0.5 * omega * omega * R * R * (ParticleSource(R.val, t) + Plasma->NormalizingTime() / n0 * (Plasma->IonizationRate(n, NeutralDensity(R, t), R * omega, Te, Ti) - Plasma->ChargeExchangeLossRate(n, NeutralDensity(R, t), R * omega, Ti)));
+	// }
 
-	Real S = Heating - ParallelLosses - ChargeExchangeHeatLosses;
+	Real S = Heating - ParallelLosses - ChargeExchangeHeatLosses + ParticleSourceHeating;
 
 	return S; //+ RelaxSource(u(Channel::Density) * Te, p_e) + RelaxSource(n * floor(Te, MinTemp), p_e);
 }
@@ -622,8 +650,8 @@ Real MirrorPlasma::Somega(RealVector u, RealVector q, RealVector sigma, RealVect
 	Real ParallelLosses = AngularMomentumPerParticle * IonPastukhovLossRate(V, Xi, n, Te);
 
 	Real ChargeExchangeMomentumLosses = 0;
-	if (useNeutralModel)
-		ChargeExchangeMomentumLosses = AngularMomentumPerParticle * Plasma->NormalizingTime() / n0 * Plasma->ChargeExchangeLossRate(n, NeutralDensity(R, t), R * omega, Ti);
+	// if (useNeutralModel)
+	// 	ChargeExchangeMomentumLosses = AngularMomentumPerParticle * Plasma->NormalizingTime() / n0 * Plasma->ChargeExchangeLossRate(n, NeutralDensity(R, t), R * omega, Ti);
 
 	return JxB - ParallelLosses - ChargeExchangeMomentumLosses; //+ RelaxSource(omega * R * R * u(Channel::Density), L);
 };
@@ -697,11 +725,13 @@ inline Real MirrorPlasma::AmbipolarPhi(Real V, Real n, Real Ti, Real Te) const
 
 Real MirrorPlasma::ParticleSource(double R, double t) const
 {
-	// double shape = 1 / ParticleSourceWidth;
-	// return (exp(-shape * (R - R_Lower) * (R - R_Lower)) + exp(-shape * (R - R_Upper) * (R - R_Upper)));
-	Real S = LowerParticleSourceStrength * exp(-(R - R_Lower) / ParticleSourceWidth) + UpperParticleSourceStrength * exp((R - R_Upper) / ParticleSourceWidth);
-	return S;
-	// return exp(-shape * (R - ParticleSourceCenter) * (R - ParticleSourceCenter));
+	// double shape = 1 / ParticleSourceWidth;/
+	// // return (exp(-shape * (R - R_Lower) * (R - R_Lower)) + exp(-shape * (R - R_Upper) * (R - R_Upper)));
+	// // Real S = LowerParticleSourceStrength * exp(-(R - R_Lower) / ParticleSourceWidth) + UpperParticleSourceStrength * exp((R - R_Upper) / ParticleSourceWidth);
+	// // return LowerParticleSourceStrength; //* exp(-t / 5e-2);
+
+	// return LowerParticleSourceStrength * exp(-shape * (R - ParticleSourceCenter) * (R - ParticleSourceCenter));
+	return LowerParticleSourceStrength;
 	//   return ParticleSourceStrength;
 };
 

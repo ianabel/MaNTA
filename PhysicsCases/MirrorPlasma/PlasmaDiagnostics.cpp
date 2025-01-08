@@ -377,7 +377,7 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
         Real vtheta = 1 / R * uV(Channel::AngularMomentum) / uToDensity(uV(Channel::Density));
 
         double dVdR = 1 / B->dRdV(V);
-        Real SR = 1.0 / sqrt(Ti) * (dVdR / uV(Channel::Density) * (qV(Channel::AngularMomentum) - R * vtheta * qToDensityGradient(qV(Channel::Density), uV(Channel::Density)) - vtheta));
+        Real SR = 1.0 / sqrt(Ti) * (dVdR / uV(Channel::Density) * (qV(Channel::AngularMomentum) - R * vtheta * qToDensityGradient(qV(Channel::Density), uV(Channel::Density))) - vtheta);
         return SR.val;
     };
 

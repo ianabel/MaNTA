@@ -169,12 +169,12 @@ def plot_diagnostics(fname):
 
 
 def main():
-    fname = "./runs/CMFX.nc"
-    plot_nc(fname,plot_u=True,plot_scalars=True,include_initial=True)
+    fname = "./runs/CMFX.restart.nc"
+    plot_nc(fname,plot_u=True,plot_sigma=True,include_initial=False)
     # fname = "./MirrorPlasmaTest.nc"
     #plot_nc(fname,False,False,include_initial=True)
     # plot_MMS(fname)
-    #plot_diagnostics(fname)
+    plot_diagnostics(fname)
     plt.show()
     
 

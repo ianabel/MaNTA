@@ -213,7 +213,10 @@ private:
 	std::vector<bool> lowerBoundaryConditions;
 
 	double nEdge, TeEdge, TiEdge, MUpper, MLower, MEdge;
+
 	double lowNDiffusivity, lowNThreshold;
+	double lowPDiffusivity, lowPThreshold;
+
 	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber;
 	double nNeutrals;
 	bool useNeutralModel;
