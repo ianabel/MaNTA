@@ -1,5 +1,6 @@
 
 #include <boost/test/unit_test.hpp>
+#include <boost/math/special_functions/legendre.hpp>
 
 #include "../../gridStructures.hpp"
 #include "../../DGSoln.hpp"
@@ -48,6 +49,17 @@ BOOST_AUTO_TEST_CASE( legendre_basis_test )
     std::vector<unsigned int> test_indices{ 0, 1, 2, 4, 8 };
     std::vector<double> test_pt{ 0.1, 0.2, 0.5, 0.9 };
 
+    std::vector<double> test_ref{ -1.0, -0.8, -0.5, -0.25, 0, 0.25, 0.5, 0.8, 1.0 };
+
+    for ( auto i : test_indices ) {
+        for( auto x : test_ref ) {
+
+            BOOST_TEST( LegendreBasis::Evaluate( i, x ) == sqrt( 0.5 + i )*boost::math::legendre_p( i, x ) );
+            BOOST_TEST( LegendreBasis::Prime( i, x ) == sqrt( 0.5 + i )*boost::math::legendre_p_prime( i, x ) );
+
+        }
+    }
+
     for ( auto const& I : test_intervals ) {
         for ( auto i : test_indices ) {
 
@@ -56,18 +68,18 @@ BOOST_AUTO_TEST_CASE( legendre_basis_test )
             double lVal = sgn * uVal;
 
             BOOST_TEST( LegendreBasis::Evaluate( I, i, I.x_l ) == lVal );
-            BOOST_TEST( LegendreBasis::Prime( I, i, I.x_l ) == sgn * i*( i + 1.0 )/2.0 );
+            BOOST_TEST( LegendreBasis::Prime( I, i, I.x_l ) == boost::math::legendre_p_prime( i, -1 ) * ::sqrt( (2*i+1)/I.h() ) * (2.0/I.h()) );
 
             for ( auto x : test_pt ) {
                 double x_pt = x * I.h() + I.x_l;
-                double y = 2*x - 1.0;
+                double y = I.toRef( x_pt );
                 BOOST_TEST( LegendreBasis::Evaluate( I, i, x_pt ) == ::sqrt( ( 2* i + 1 )/( I.h() ) ) * std::legendre( i, y ) );
-                double primeVal = i == 0 ? 0 : ::sqrt( ( 2* i + 1 )/( I.h() ) ) * ( 2*i/I.h() ) *( 1.0/( y*y-1.0 ) )*( y*std::legendre( i, y ) - std::legendre( i-1,y ) );
+                double primeVal = boost::math::legendre_p_prime( i, y ) * ( ::sqrt( (2*i + 1)/I.h() ) ) * (2.0/I.h());
                 BOOST_TEST( LegendreBasis::Prime( I, i, x_pt ) == primeVal );
             }
 
             BOOST_TEST( LegendreBasis::Evaluate( I, i, I.x_u ) == uVal );
-            BOOST_TEST( LegendreBasis::Prime( I, i, I.x_u ) == i*( i + 1.0 )/2.0 );
+            BOOST_TEST( LegendreBasis::Prime( I, i, I.x_u ) == boost::math::legendre_p_prime( i, 1 ) * ::sqrt( (2*i+1)/I.h() ) * (2.0/I.h()) );
         }
     }
 
@@ -359,6 +371,87 @@ BOOST_AUTO_TEST_CASE( dg_approx_static_cheb )
 
 }
 
+BOOST_AUTO_TEST_CASE( dg_approx_static_nodal )
+{
+    Grid testGrid( 0.0, 1.0, 4 );
+    auto foo = []( double x ){ return x; };
+    auto bar = []( double x ){ return ::sin( x ); };
+
+
+    Eigen::MatrixXd tmp( 5, 5 );
+    tmp.setZero();
+    NodalBasis basis = NodalBasis::getBasis( 4 );
+
+    BOOST_TEST( basis.CellProduct( testGrid[ 0 ], foo, bar ) == ::sin( 0.25 ) - 0.25*::cos( 0.25 ) );
+    BOOST_TEST( basis.EdgeProduct( testGrid[ 0 ], foo, bar ) == 0.25*::sin( 0.25 ) );
+
+    Eigen::MatrixXd ref( 5,5 );
+
+    // Nodal Mass Matrix should be 
+    basis.MassMatrix( testGrid[ 0 ], tmp );
+    ref << 0.0888889,  0.0259259,  -0.0296296,   0.0259259, -0.0111111,
+           0.0259259,  0.483951,    0.0691358,  -0.0604938,  0.0259259,
+          -0.0296296,  0.0691358,   0.632099,    0.0691358, -0.0296296,
+           0.0259259, -0.0604938,   0.0691358,   0.483951,   0.0259259,
+          -0.0111111,  0.0259259,  -0.0296296,   0.0259259,  0.0888889;
+
+
+    ref *= 1.0/8.0;
+
+
+    BOOST_TEST( ( tmp - ref ).norm() < 1e-7 );
+
+    basis.MassMatrix( testGrid[ 0 ], tmp, []( double ){ return 1.0; } );
+    BOOST_TEST( ( tmp - ref ).norm() < 1e-7 );
+
+    basis.MassMatrix( testGrid[ 0 ], tmp, []( double x ){ return x; } );
+    ref << 0.000173611, -0.000265195, 0.,           0.000265195, -0.000173611,
+          -0.000265195,  0.0032302,   0.000373059, -0.000945216,  0.00054499,
+           0.,           0.000373059, 0.00987654,   0.00178743,  -0.000925926,
+           0.000265195, -0.000945216, 0.00178743,   0.0118933,    0.00107538,
+          -0.000173611,  0.00054499, -0.000925926,  0.00107538,   0.00260417;
+
+
+    BOOST_TEST( ( tmp - ref ).norm() < 1e-7 );
+
+    basis.MassMatrix( testGrid[ 0 ], tmp, []( double x, int ){ return x; }, 0 );
+    BOOST_TEST( ( tmp - ref ).norm() < 1e-7 );
+
+
+    tmp = basis.MassMatrix( testGrid[ 0 ], []( double x ) { return x; } );
+    BOOST_TEST( ( tmp - ref ).norm() < 1e-7 );
+
+    tmp.resize( 5, 5 );
+    basis.DerivativeMatrix( testGrid[ 0 ], tmp );
+    // Courtesy of Mathematica 
+    ref << -0.5,      0.67565,  -0.266667,  0.141016, -0.05,
+           -0.67565,  0.,        0.95046,  -0.415826,  0.141016,
+           0.266667, -0.95046,   0.0,       0.95046,  -0.266667,
+           -0.141016, 0.415826, -0.95046,   0.,        0.67565,
+           0.05,     -0.141016,  0.266667, -0.67565,   0.5;
+
+    BOOST_TEST( ( tmp - ref ).norm() < 1e-4 ); // Entries are only good to 0.0001 anyway
+
+    basis.DerivativeMatrix( testGrid[ 0 ], tmp, [](  double ){ return 1.0; } );
+    BOOST_TEST( ( tmp - ref ).norm() < 1e-4 );
+
+    basis.DerivativeMatrix( testGrid[ 0 ], tmp, []( double x ){ return x; } );
+    /*
+     * (0	1/4	1/3	1/4	4/15
+        0	1/12	1/3	7/20	4/15
+        0	-(1/12)	1/15	9/20	44/105
+        0	-(1/20)	-(1/5)	9/140	4/7
+        0	-(1/60)	-(13/105)	-(9/28)	4/63
+
+) */
+    ref <<  0.0,   1.0/4.0,    1.0/3.0,   1.0/4.0,   4.0/15.0,
+            0.0,  1.0/12.0,    1.0/3.0,  7.0/20.0,   4.0/15.0,
+            0.0, -1.0/12.0,   1.0/15.0,  9.0/20.0, 44.0/105.0,
+            0.0, -1.0/20.0,   -1.0/5.0, 9.0/140.0,    4.0/7.0,
+            0.0, -1.0/60.0,-13.0/105.0, -9.0/28.0,   4.0/63.0;
+    BOOST_TEST( ( tmp - ref ).norm() < 1e-5 );
+
+}
 
 BOOST_AUTO_TEST_SUITE_END()
 

@@ -7,6 +7,7 @@
 #include "Types.hpp"
 #include "Jacobi.hpp"
 #include <boost/math/special_functions/legendre.hpp>
+#include <boost/math/special_functions/binomial.hpp>
 
 class Interval;
 
@@ -42,6 +43,19 @@ class LegendreBasis
             return ::sqrt((2 * i + 1) / (2.0)) * std::legendre(i, x );
         };
 
+        static double Prime(Index i, double x)
+        {
+            if (i == 0)
+                return 0.0;
+
+            if (x == 1.0)
+                return ( ( i + 1 ) / 2.0 ) * ::sqrt( 0.5 + i ) * ( i );
+            if (x == -1.0)
+                return ::pow( -1, i-1 ) * ( ( i + 1 ) / 2.0 ) * ::sqrt( 0.5 + i ) * ( i );
+
+            return ::sqrt(0.5 + i ) * ((1.0 + i) / (1.0-x*x)) * ( x * std::legendre(i, x) - std::legendre(i + 1, x));
+        };
+
 
         static double Prime(Interval const &I, Index i, double x)
         {
@@ -50,26 +64,8 @@ class LegendreBasis
 
             double y = I.toRef(x);
 
-            if (y == 1.0)
-                return i * (i + 1.0) / 2.0;
-            if (y == -1.0)
-                return (i % 2 == 0 ? i * (i + 1.0) / 2.0 : -i * (i + 1.0) / 2.0);
-
-            return ::sqrt((2 * i + 1) / (I.h())) * (2 * i / I.h()) * (1.0 / (y * y - 1.0)) * (y * std::legendre(i, y) - std::legendre(i - 1, y));
+            return ::sqrt( 2.0 / I.h() ) * (2.0 / I.h() ) * Prime( i, y );
         };
-
-        static double Prime(Index i, double x)
-        {
-            if (i == 0)
-                return 0.0;
-
-            if (x == 1.0)
-                return i * (i + 1.0) / 2.0;
-            if (x == -1.0)
-                return (i % 2 == 0 ? i * (i + 1.0) / 2.0 : -i * (i + 1.0) / 2.0);
-
-            return ::sqrt((2 * i + 1) / (2.0) * i) * (1.0 / (x * x - 1.0)) * (x * std::legendre(i, x) - std::legendre(i - 1, x));
-        }
 
         static double Evaluate(Interval const &I, const VectorRef &vCoeffs, double x)
         {
@@ -389,7 +385,6 @@ class NodalBasis
                     Vr( i, j ) = LegendreBasis::Prime( j, LGLNodes( i ) );
                 }
             }
-
 
             RefMass = ( Vandermonde * Vandermonde.transpose() ).inverse();
 
