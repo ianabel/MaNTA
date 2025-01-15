@@ -57,10 +57,8 @@ BOOST_AUTO_TEST_CASE(systemsolver_init_tests)
 	BOOST_TEST((system->A_cellwise[3] - basis.MassMatrix( testGrid[3] ) ).norm() < 1e-9);
 
 	Matrix ref(k + 1, k + 1);
-	// Derivative matrix
-	ref << 0.0, 13.85640646055103,
-		0.0, 0.0;
-	BOOST_TEST((system->B_cellwise[0] - basis.DerivativeMatrix( testGrid[0] ) ).norm() < 1e-9);
+
+    BOOST_TEST((system->B_cellwise[0] - basis.DerivativeMatrix( testGrid[0] ) ).norm() < 1e-9);
 	BOOST_TEST((system->B_cellwise[1] - basis.DerivativeMatrix( testGrid[1] ) ).norm() < 1e-9);
 	BOOST_TEST((system->B_cellwise[2] - basis.DerivativeMatrix( testGrid[2] ) ).norm() < 1e-9);
 	BOOST_TEST((system->B_cellwise[3] - basis.DerivativeMatrix( testGrid[3] ) ).norm() < 1e-9);

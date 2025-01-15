@@ -462,6 +462,7 @@ class NodalBasis
             double l = Evaluate(i,x);
             double sum = 0;
             for( Index j = 0; j < k + 1; ++j ) {
+                if( j == i ) continue;
                 double y = (x - LGLNodes(j));
                 if( y == 0 ) {
                     return ( BarycentricWeights( i )/BarycentricWeights( j ) )/( LGLNodes( j ) - LGLNodes( i ) );

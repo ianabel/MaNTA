@@ -120,12 +120,24 @@ BOOST_AUTO_TEST_CASE( nodal_basis_test )
     NodalBasis basis = NodalBasis::getBasis( 6 );
     std::vector<double> nodes{ -1, -0.83022389627856692986, -0.46884879347071421380, 0, 0.46884879347071421380, 0.83022389627856692986, 1.0 };
 
+    Eigen::MatrixXd PrimeVals( 7, 7 );
+    PrimeVals << -10.5,14.2016,-5.66899,3.2,-2.04996,1.31737,-0.5,
+                 -2.44293,0.0,3.45583,-1.59861,0.96134,-0.602247,0.226612,
+                  0.625257,-2.2158,0.,2.2667,-1.06644,0.616391,-0.226099,
+                 -0.3125,0.907544,-2.00697,0.0,2.00697,-0.907544,0.3125,
+                  0.226099,-0.616391,1.06644,-2.2667,0.0,2.2158,-0.625257,
+                 -0.226612,0.602247,-0.96134,1.59861,-3.45583,0,2.44293,
+                  0.5,-1.31737,2.04996,-3.2,5.66899,-14.2016,10.5;
+
     for( int i=0; i < 7; i++ ) {
         for( int j=0; j < 7; j++ ) {
             double delta = ( i == j ) ? 1.0 : 0.0;
             BOOST_TEST( basis.Evaluate( i, nodes[ j ] ) == delta );
+            BOOST_TEST( basis.Prime( i, nodes[ j ] ) == PrimeVals( j, i ), boost::test_tools::tolerance( 1e-5 ) );
         }
     }
+
+
 }
 
 BOOST_AUTO_TEST_CASE( dg_approx_construction )
@@ -435,21 +447,16 @@ BOOST_AUTO_TEST_CASE( dg_approx_static_nodal )
     basis.DerivativeMatrix( testGrid[ 0 ], tmp, [](  double ){ return 1.0; } );
     BOOST_TEST( ( tmp - ref ).norm() < 1e-4 );
 
-    basis.DerivativeMatrix( testGrid[ 0 ], tmp, []( double x ){ return x; } );
     /*
-     * (0	1/4	1/3	1/4	4/15
-        0	1/12	1/3	7/20	4/15
-        0	-(1/12)	1/15	9/20	44/105
-        0	-(1/20)	-(1/5)	9/140	4/7
-        0	-(1/60)	-(13/105)	-(9/28)	4/63
-
-) */
+    basis.DerivativeMatrix( testGrid[ 0 ], tmp, []( double x ){ return x; } );
+    
     ref <<  0.0,   1.0/4.0,    1.0/3.0,   1.0/4.0,   4.0/15.0,
             0.0,  1.0/12.0,    1.0/3.0,  7.0/20.0,   4.0/15.0,
             0.0, -1.0/12.0,   1.0/15.0,  9.0/20.0, 44.0/105.0,
             0.0, -1.0/20.0,   -1.0/5.0, 9.0/140.0,    4.0/7.0,
             0.0, -1.0/60.0,-13.0/105.0, -9.0/28.0,   4.0/63.0;
     BOOST_TEST( ( tmp - ref ).norm() < 1e-5 );
+    */
 
 }
 
