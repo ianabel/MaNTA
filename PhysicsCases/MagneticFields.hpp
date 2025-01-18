@@ -60,6 +60,11 @@ public:
 	{
 		return Rm;
 	}
+	template <typename T>
+	T L_V(T)
+	{
+		return L_z;
+	}
 
 private:
 	double L_z = 0.6;

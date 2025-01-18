@@ -135,10 +135,16 @@ double PlasmaConstants::RhoStarRef() const
     return sqrt(T0 * IonMass()) / (ElementaryCharge * B0 * a);
 }
 
+// mi/me
+double PlasmaConstants::mu() const
+{
+    return IonMass() / ElectronMass;
+}
+
 // Normalize to the particle diffusion time
 double PlasmaConstants::NormalizingTime() const
 {
     double RhoStar = RhoStarRef();
 
-    return IonMass() / ElectronMass * 1 / (RhoStar * RhoStar) * ReferenceElectronCollisionTime();
+    return mu() * 1 / (RhoStar * RhoStar) * ReferenceElectronCollisionTime();
 };

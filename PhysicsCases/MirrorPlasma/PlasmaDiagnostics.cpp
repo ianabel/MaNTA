@@ -26,37 +26,34 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
     // lambda wrappers for DGSoln object
 
     auto L = [this](double V)
-    {
-        return InitialValue(Channel::AngularMomentum, V);
-    };
+    { return InitialValue(Channel::AngularMomentum, V); };
     auto LPrime = [this](double V)
-    {
-        return InitialDerivative(Channel::AngularMomentum, V);
-    };
+    { return InitialDerivative(Channel::AngularMomentum, V); };
     auto n = [this](double V)
-    {
-        return uToDensity(InitialValue(Channel::Density, V)).val;
-    };
+    { return uToDensity(InitialValue(Channel::Density, V)).val; };
     auto nPrime = [this](double V)
-    {
-        return qToDensityGradient(InitialDerivative(Channel::Density, V), InitialValue(Channel::Density, V)).val;
-    };
+    { return qToDensityGradient(InitialDerivative(Channel::Density, V), InitialValue(Channel::Density, V)).val; };
     auto p_i = [this](double V)
-    {
-        return (2. / 3.) * InitialValue(Channel::IonEnergy, V);
-    };
+    { return (2. / 3.) * InitialValue(Channel::IonEnergy, V); };
+    auto p_i_prime = [this](double V)
+    { return (2. / 3.) * InitialDerivative(Channel::IonEnergy, V); };
     auto p_e = [this](double V)
-    {
-        return (2. / 3.) * InitialValue(Channel::ElectronEnergy, V);
-    };
+    { return (2. / 3.) * InitialValue(Channel::ElectronEnergy, V); };
+    auto p_e_prime = [this](double V)
+    { return (2. / 3.) * InitialDerivative(Channel::ElectronEnergy, V); };
 
     auto Te = [&](double V)
-    {
-        return p_e(V) / n(V);
-    };
+    { return p_e(V) / n(V); };
     auto Ti = [&](double V)
+    { return p_i(V) / n(V); };
+
+    auto Ti_prime = [&](double V)
     {
-        return p_i(V) / n(V);
+        return (p_i_prime(V) - nPrime(V) * Ti(V)) / n(V);
+    };
+    auto Te_prime = [&](double V)
+    {
+        return (p_e_prime(V) - nPrime(V) * Te(V)) / n(V);
     };
 
     auto omega = [&](double V)
@@ -64,6 +61,15 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
         Position R = B->R_V(V);
         Value J = n(V) * R * R;
         return L(V) / J;
+    };
+    auto dOmegadV = [&](double V)
+    {
+        double R = B->R_V(V);
+        double J = n(V) * R * R; // Normalisation includes the m_i
+
+        double dRdV = B->dRdV(V);
+        double JPrime = R * R * nPrime(V) + 2.0 * dRdV * R * n(V);
+        return LPrime(V) / J - JPrime * L(V) / (J * J);
     };
 
     auto u = [this](double V)
@@ -110,7 +116,7 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
         }
     };
 
-    auto ShearingRate = [this, &u, &q](double V)
+    Fn ShearingRate = [this, &u, &q](double V)
     {
         auto qV = q(V);
         auto uV = u(V);
@@ -224,8 +230,70 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
         return S.val;
     };
 
+    Fn DensityArtificialDiffusion = [&](double V)
+    {
+        double lambda_n = abs(nPrime(V) / n(V));
+
+        double x = sqrt(Te(V)) * lambda_n - lowNThreshold / Plasma->RhoStarRef();
+
+        if (x > 0)
+            return SmoothTransition(x, transitionLength, lowNDiffusivity) * nPrime(V) / n(V);
+        else
+            return 0.0;
+    };
+
+    Fn IonPressureArtificialDiffusion = [&](double V)
+    {
+        double lambda_T = abs(Ti_prime(V) / sqrt(Ti(V)));
+
+        double x = lambda_T - lowPThreshold / Plasma->RhoStarRef();
+
+        if (x > 0)
+            return SmoothTransition(x, transitionLength, lowPDiffusivity) * Ti_prime(V) / Ti(V);
+        else
+            return 0.0;
+    };
+    Fn ElectronPressureArtificialDiffusion = [&](double V)
+    {
+        double lambda_T = abs(Te_prime(V) / sqrt(Te(V)));
+
+        double x = lambda_T - lowPThreshold * sqrt(Plasma->mu()) / Plasma->RhoStarRef();
+
+        if (x > 0)
+            return SmoothTransition(x, transitionLength, lowPDiffusivity) * Te_prime(V) / Te(V);
+        else
+            return 0.0;
+    };
+    Fn AngularMomentumArtificialDiffusion = [&](double V)
+    {
+        double R = B->R_V(V);
+        double dRdV = B->dRdV(V);
+        double lambda_omega = abs((2 * R * dRdV * omega(V) + R * R * dOmegadV(V)) / (R * R * omega(V)));
+
+        double x = sqrt(Ti(V)) * lambda_omega - lowLThreshold / Plasma->RhoStarRef();
+
+        if (x > 0)
+            return SmoothTransition(x, transitionLength, lowLDiffusivity) * (2 * R * dRdV * omega(V) + R * R * dOmegadV(V)) / (R * R * omega(V));
+        else
+            return 0.0;
+    };
+
+    auto rho_i = [&](double V)
+    { return sqrt(Ti(V)) * Plasma->RhoStarRef() / B->Bz_R(B->R_V(V)); };
+
+    auto rho_e = [&](double V)
+    { return sqrt(Te(V)) * Plasma->RhoStarRef() / sqrt(Plasma->mu()) / B->Bz_R(B->R_V(V)); };
+
+    auto collisionality = [&](double V)
+    { return 1.0 / (Plasma->IonCollisionTime(n(V), Ti(V)) * Plasma->ReferenceIonCollisionTime()) * B->L_V(V) / Plasma->c_s(Te(V)); };
+
     // Real tnorm = n0 * TauNorm; // n0 * T0 * a * B0 * B0 / (electronMass * Om_e(B0) * Om_e(B0) * tau_e(n0, n0 * T0));
     double omega0 = 1 / a * sqrt(T0 / Plasma->IonMass());
+    double Iout = 0;
+    if (useConstantVoltage)
+        Iout = -InitialScalarValue(Scalar::Current) * I0;
+    else
+        Iout = IRadial * I0;
 
     // reference values
     nc.AddScalarVariable("tnorm", "time normalization", "s", TauNorm);
@@ -233,13 +301,34 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
     nc.AddScalarVariable("n0", "Density normalization", "m^-3", n0);
     nc.AddScalarVariable("T0", "Temperature normalization", "J", T0);
     nc.AddScalarVariable("B0", "Reference magnetic field", "T", B0);
-    nc.AddScalarVariable("IRadial", "Radial current", "A", IRadial);
     nc.AddTimeSeries("Voltage", "Total voltage drop across the plasma", "Volts", initialVoltage);
+    nc.AddTimeSeries("Current", "Radial current through plasma", "A", Iout);
     nc.AddGroup("MMS", "Manufactured solutions");
     for (int j = 0; j < nVars; ++j)
         nc.AddVariable("MMS", "Var" + std::to_string(j), "Manufactured solution", "-", [this, j](double V)
                        { return this->InitialFunction(j, V, 0.0).val.val; });
-    nc.AddVariable("ShearingRate", "Plasma shearing rate", "-", ShearingRate);
+
+    nc.AddGroup("DimensionlessNumbers", "Useful dimensionless values");
+    nc.AddVariable("DimensionlessNumbers", "ShearingRate", "Plasma shearing rate", "-", ShearingRate);
+    nc.AddVariable("DimensionlessNumbers", "RhoN", "Gyroradius over the gradient scale length", "", [&](double V)
+                   { return rho_i(V) * nPrime(V) / n(V); });
+    nc.AddVariable("DimensionlessNumbers", "RhoTi", "Gyroradius over the gradient scale length", "", [&](double V)
+                   { return rho_i(V) * Ti_prime(V) / Ti(V); });
+    nc.AddVariable("DimensionlessNumbers", "RhoTe", "Gyroradius over the gradient scale length", "", [&](double V)
+                   { return rho_e(V) * Te_prime(V) / Te(V); });
+
+    nc.AddVariable("DimensionlessNumbers", "RhoL", "Gyroradius over the gradient scale length", "",
+                   [&](double V)
+                   {
+                       double R = B->R_V(V);
+                       double dRdV = B->dRdV(V);
+                       double lambda_omega = (2 * R * dRdV * omega(V) + R * R * dOmegadV(V)) / (R * R * omega(V));
+
+                       return rho_i(V) * lambda_omega;
+                   });
+
+    nc.AddVariable("DimensionlessNumbers", "Collisionality", "Plasma collisionality", "-", collisionality);
+
     nc.AddVariable("ElectrostaticPotential", "electrostatic potential (phi0+phi1)", "-", ElectrostaticPotential);
 
     // Parallel losses
@@ -272,6 +361,15 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
 			return dphi1dV(u(V), q(V), aux(V)[0], V).val;
 		else
 			return 0.0; });
+
+    // Artificial Diffusion
+
+    nc.AddGroup("ArtificialDiffusion", "Extra diffusion added at high gradients");
+
+    nc.AddVariable("ArtificialDiffusion", "DensityArtificialDiffusion", "AD for density", "-", DensityArtificialDiffusion);
+    nc.AddVariable("ArtificialDiffusion", "IonPressureArtificialDiffusion", "AD for IonPressure", "-", IonPressureArtificialDiffusion);
+    nc.AddVariable("ArtificialDiffusion", "ElectronPressureArtificialDiffusion", "AD for ElectionPressure", "-", ElectronPressureArtificialDiffusion);
+    nc.AddVariable("ArtificialDiffusion", "AngularMomentumArtificialDiffusion", "AD for AngularMomentum", "-", AngularMomentumArtificialDiffusion);
 }
 
 void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t, NetCDFIO &nc, size_t tIndex)
@@ -305,6 +403,11 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
         return (2. / 3.) * y.u(Channel::ElectronEnergy)(V);
     };
 
+    auto p_i_prime = [&y](double V)
+    { return (2. / 3.) * y.q(Channel::IonEnergy)(V); };
+    auto p_e_prime = [&y](double V)
+    { return (2. / 3.) * y.q(Channel::ElectronEnergy)(V); };
+
     auto Te = [&](double V)
     {
         return p_e(V) / n(V);
@@ -312,6 +415,32 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
     auto Ti = [&](double V)
     {
         return p_i(V) / n(V);
+    };
+
+    auto Ti_prime = [&](double V)
+    {
+        return (p_i_prime(V) - nPrime(V) * Ti(V)) / n(V);
+    };
+    auto Te_prime = [&](double V)
+    {
+        return (p_e_prime(V) - nPrime(V) * Te(V)) / n(V);
+    };
+
+    auto omega = [&](double V)
+    {
+        Position R = B->R_V(V);
+        Value J = n(V) * R * R;
+        return L(V) / J;
+    };
+
+    auto dOmegadV = [&](double V)
+    {
+        double R = B->R_V(V);
+        double J = n(V) * R * R; // Normalisation includes the m_i
+
+        double dRdV = B->dRdV(V);
+        double JPrime = R * R * nPrime(V) + 2.0 * dRdV * R * n(V);
+        return LPrime(V) / J - JPrime * L(V) / (J * J);
     };
 
     auto u = [this, &y](double V)
@@ -395,6 +524,13 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
 
     double voltage = Voltage(L, n);
     nc.AppendToTimeSeries("Voltage", voltage, tIndex);
+
+    double Iout = 0;
+    if (useConstantVoltage)
+        Iout = -y.Scalar(Scalar::Current) * I0;
+    else
+        Iout = IRadial * I0;
+    nc.AppendToTimeSeries("Current", Iout, tIndex);
 
     // Wrap DGApprox with lambdas for heating functions
     Fn ViscousHeating = [this, &n, &nPrime, &L, &LPrime, &p_i, &t](double V)
@@ -513,6 +649,63 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
         return S.val;
     };
 
+    Fn DensityArtificialDiffusion = [&](double V)
+    {
+        double lambda_n = abs(nPrime(V) / n(V));
+
+        double x = sqrt(Te(V)) * lambda_n - lowNThreshold / Plasma->RhoStarRef();
+
+        if (x > 0)
+            return SmoothTransition(x, transitionLength, lowNDiffusivity) * nPrime(V) / n(V);
+        else
+            return 0.0;
+    };
+
+    Fn IonPressureArtificialDiffusion = [&](double V)
+    {
+        double lambda_T = abs(Ti_prime(V) / sqrt(Ti(V)));
+
+        double x = lambda_T - lowPThreshold / Plasma->RhoStarRef();
+
+        if (x > 0)
+            return SmoothTransition(x, transitionLength, lowPDiffusivity) * Ti_prime(V) / Ti(V);
+        else
+            return 0.0;
+    };
+    Fn ElectronPressureArtificialDiffusion = [&](double V)
+    {
+        double lambda_T = abs(Te_prime(V) / sqrt(Te(V)));
+
+        double x = lambda_T - lowPThreshold * sqrt(Plasma->mu()) / Plasma->RhoStarRef();
+
+        if (x > 0)
+            return SmoothTransition(x, transitionLength, lowPDiffusivity) * Te_prime(V) / Te(V);
+        else
+            return 0.0;
+    };
+    Fn AngularMomentumArtificialDiffusion = [&](double V)
+    {
+        double R = B->R_V(V);
+        double dRdV = B->dRdV(V);
+        double lambda_omega = abs((2 * R * dRdV * omega(V) + R * R * dOmegadV(V)) / (R * R * omega(V)));
+
+        double x = sqrt(Ti(V)) * lambda_omega - lowLThreshold / Plasma->RhoStarRef();
+
+        if (x > 0)
+            return SmoothTransition(x, transitionLength, lowLDiffusivity) * (2 * R * dRdV * omega(V) + R * R * dOmegadV(V)) / (R * R * omega(V));
+        else
+            return 0.0;
+    };
+
+    auto rho_i = [&](double V)
+    { return sqrt(Ti(V)) * Plasma->RhoStarRef() / B->Bz_R(B->R_V(V)); };
+
+    auto rho_e = [&](double V)
+    { return sqrt(Te(V)) * Plasma->RhoStarRef() / sqrt(Plasma->mu()) / B->Bz_R(B->R_V(V)); };
+
+    auto collisionality = [&](double V)
+    { return 1.0 / (Plasma->IonCollisionTime(n(V), Ti(V)) * Plasma->ReferenceIonCollisionTime()) * B->L_V(V) / Plasma->c_s(Te(V)); };
+
     Fn DensitySol = [this, t](double V)
     { return this->InitialFunction(Channel::Density, V, t).val.val; };
     Fn IonEnergySol = [this, t](double V)
@@ -523,9 +716,19 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
     { return this->InitialFunction(Channel::AngularMomentum, V, t).val.val; };
 
     // Add the appends for the heating stuff
-    nc.AppendToGroup<Fn>("Heating", tIndex, {{"AlphaHeating", AlphaHeating}, {"ViscousHeating", ViscousHeating}, {"RadiationLosses", RadiationLosses}, {"EnergyExchange", EnergyExchange}, {"IonPotentialHeating", IonPotentialHeating}, {"ElectronPotentialHeating", ElectronPotentialHeating}});
+    nc.AppendToGroup<Fn>("Heating", tIndex,
+                         {{"AlphaHeating", AlphaHeating},
+                          {"ViscousHeating", ViscousHeating},
+                          {"RadiationLosses", RadiationLosses},
+                          {"EnergyExchange", EnergyExchange},
+                          {"IonPotentialHeating", IonPotentialHeating},
+                          {"ElectronPotentialHeating", ElectronPotentialHeating}});
 
-    nc.AppendToGroup<Fn>("ParallelLosses", tIndex, {{"ElectronParLoss", ElectronParallelLosses}, {"IonParLoss", IonParallelLosses}, {"CentrifugalPotential", phi}, {"AngularMomentumLosses", AngularMomentumLosses}});
+    nc.AppendToGroup<Fn>("ParallelLosses", tIndex,
+                         {{"ElectronParLoss", ElectronParallelLosses},
+                          {"IonParLoss", IonParallelLosses},
+                          {"CentrifugalPotential", phi},
+                          {"AngularMomentumLosses", AngularMomentumLosses}});
 
     nc.AppendToGroup<Fn>("MMS", tIndex, {{"Var0", DensitySol}, {"Var1", IonEnergySol}, {"Var2", ElectronEnergySol}, {"Var3", AngularMomentumSol}});
 
@@ -533,6 +736,27 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
                      { return Plasma->IonizationRate(n(V), NeutralDensity(B->R_V(V), t), L(V) / (n(V) * B->R_V(V)), Te(V), Ti(V)).val; });
     nc.AppendToGroup("Neutrals", tIndex, "ChargeExchange", [&](double V)
                      { return Plasma->ChargeExchangeLossRate(n(V), NeutralDensity(B->R_V(V), t), L(V) / (n(V) * B->R_V(V)), Ti(V)).val; });
+
+    // Dimensionless numbers
+    nc.AppendToGroup("DimensionlessNumbers", tIndex, "ShearingRate", ShearingRate);
+
+    nc.AppendToGroup("DimensionlessNumbers", tIndex, "RhoN", [&](double V)
+                     { return rho_i(V) * nPrime(V) / n(V); });
+    nc.AppendToGroup("DimensionlessNumbers", tIndex, "RhoTi", [&](double V)
+                     { return rho_i(V) * Ti_prime(V) / Ti(V); });
+    nc.AppendToGroup("DimensionlessNumbers", tIndex, "RhoTe", [&](double V)
+                     { return rho_e(V) * Te_prime(V) / Te(V); });
+
+    nc.AppendToGroup("DimensionlessNumbers", tIndex, "RhoL",
+                     [&](double V)
+                     {
+                         double R = B->R_V(V);
+                         double dRdV = B->dRdV(V);
+                         double lambda_omega = (2 * R * dRdV * omega(V) + R * R * dOmegadV(V)) / (R * R * omega(V));
+
+                         return rho_i(V) * lambda_omega;
+                     });
+    nc.AppendToGroup("DimensionlessNumbers", tIndex, "Collisionality", collisionality);
 
     nc.AppendToVariable("dPhi0dV", [this, &u, &q](double V)
                         { return dphi0dV(u(V), q(V), V).val; }, tIndex);
@@ -544,5 +768,10 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
 		else
 			return 0.0; }, tIndex);
     nc.AppendToVariable("ElectrostaticPotential", ElectrostaticPotential, tIndex);
-    nc.AppendToVariable("ShearingRate", ShearingRate, tIndex);
+
+    nc.AppendToGroup<Fn>("ArtificialDiffusion", tIndex,
+                         {{"DensityArtificialDiffusion", DensityArtificialDiffusion},
+                          {"IonPressureArtificialDiffusion", IonPressureArtificialDiffusion},
+                          {"ElectronPressureArtificialDiffusion", ElectronPressureArtificialDiffusion},
+                          {"AngularMomentumArtificialDiffusion", AngularMomentumArtificialDiffusion}});
 }

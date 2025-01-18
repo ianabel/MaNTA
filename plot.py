@@ -24,9 +24,9 @@ def plot_nc(fname,plot_u = True, plot_q = False, plot_sigma = False, plot_aux = 
                     ax.plot(x,y[0,:],label=Var+", t = 0")
                 ax.legend()
                 plt.title("u")
-        if (plot_grid):
-            for x in Grid:
-                plt.axvline(x,label="_grid",color="red",linestyle="--",alpha=0.25)
+                if (plot_grid):
+                    for cell in Grid:
+                        ax.axvline(cell,label="_grid",color="red",linestyle="--",alpha=0.25)
        
     
     if (plot_q):
@@ -169,12 +169,12 @@ def plot_diagnostics(fname):
 
 
 def main():
-    fname = "./runs/CMFX.restart.nc"
-    plot_nc(fname,plot_u=True,plot_sigma=True,include_initial=False)
+    fname = "./runs/CMFX.nc"
+    plot_nc(fname,plot_u=True,plot_q=True,plot_scalars=True,plot_grid=True,include_initial=False)
     # fname = "./MirrorPlasmaTest.nc"
     #plot_nc(fname,False,False,include_initial=True)
     # plot_MMS(fname)
-    plot_diagnostics(fname)
+    # plot_diagnostics(fname)
     plt.show()
     
 

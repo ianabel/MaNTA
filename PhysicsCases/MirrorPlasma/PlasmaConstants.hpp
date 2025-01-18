@@ -243,6 +243,12 @@ public:
         return ElementaryCharge * B / ElectronMass;
     }
 
+    template <typename T>
+    T c_s(T Te) const
+    {
+        return static_cast<T>(sqrt(T0 * Te / IonMass()));
+    }
+
     Real FusionRate(Real n, Real pi) const;
     Real TotalAlphaPower(Real n, Real pi) const;
     Real BremsstrahlungLosses(Real n, Real pe) const;
@@ -256,6 +262,7 @@ public:
     double ReferenceElectronCollisionTime() const;
     double ReferenceIonCollisionTime() const;
     double RhoStarRef() const;
+    double mu() const;
     double NormalizingTime() const;
 
 private:
