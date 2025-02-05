@@ -241,6 +241,8 @@ private:
 	double lowPDiffusivity, lowPThreshold;
 	double lowLDiffusivity, lowLThreshold;
 
+	double TeDiffusivity;
+
 	double transitionLength;
 
 	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber;

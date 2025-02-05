@@ -8,7 +8,7 @@ using namespace toml::literals::toml_literals;
 // raw string literal (`R"(...)"` is useful for this purpose)
 const toml::value config_snippet = u8R"(
 [LinearDiffSourceTest]
-
+nVars = 2
 useMMS = false
 growth = 1.0
 growth_rate = 1.0
@@ -24,7 +24,7 @@ Kappa = [1.0,0.0,
 
 const toml::value config_snippet_nc_file = u8R"(
 [LinearDiffSourceTest]
-
+nVars = 2
 useNcFile = true
 InitialConditionFilename = "./Tests/UnitTests/testic.nc"
 
