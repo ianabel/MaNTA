@@ -107,10 +107,11 @@ int runManta(std::string const &fname)
 	else
 		k = polyDegree.as_integer();
 
-	if (config.count("High_Grid_Boundary") != 1)
+	if (config.count("High_Grid_Boundary") != 1) {
 		highGridBoundary = false;
-	else
-	{
+		lowerBoundaryFraction = 0.0;
+		upperBoundaryFraction = 0.0;
+    } else {
 		highGridBoundary = config.at("High_Grid_Boundary").as_boolean();
 		lowerBoundaryFraction = toml::find_or(config, "Lower_Boundary_Fraction", 0.2);
 		upperBoundaryFraction = toml::find_or(config, "Upper_Boundary_Fraction", 0.2);
