@@ -121,31 +121,18 @@ Value MirrorPlasma::InitialScalarValue(Index s) const
             return Aux;
         };
 
-        // auto dJdt = [&](Position V)
-        // {
-        //     Position R = B->R_V(V);
-        //     return R * R * InitialDensityTimeDerivative(u(V), q(V), V);
-        // };
-
         RealVector pSigma(nVars);
         pSigma.setZero();
 
         RealVector pScalar(nScalars);
         pScalar.setZero();
 
-        // auto I1 = [&](Position V)
-        // {
-        //     return dJdt(V) * omega(V);
-        // };
-
-        // Value B1 = integrator::integrate(I1, xL, xR);
-
         Value TimeDerivativeTerm = 0.0; // B1;
 
         Value FluxTerm = Pi(u(xL), q(xL), xL, 0.0).val - Pi(u(xR), q(xR), xR, 0.0).val;
         Value SourceTerm = integrator::integrate([&](Position V)
                                                  { return Somega(u(V), q(V), pSigma, aux(V), pScalar, V, 0.0).val; }, xL, xR, max_depth);
-        Value Itot = 1 / (B->Psi_V(xR) - B->Psi_V(xL)) * (TimeDerivativeTerm + FluxTerm - SourceTerm);
+        Value Itot = 1 / (B->Psi_V(xR) - B->Psi_V(xL)) * (FluxTerm - SourceTerm);
         return Itot + InitialCurrent(0);
     }
     default:

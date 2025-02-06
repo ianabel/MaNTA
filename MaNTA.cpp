@@ -144,8 +144,11 @@ int runManta(std::string const &fname)
 		else
 			k = polyDegree.as_integer();
 
-		if (config.count("High_Grid_Boundary") != 1)
+		if (config.count("High_Grid_Boundary") != 1) {
 			highGridBoundary = false;
+			lowerBoundaryFraction = 0.0;
+			upperBoundaryFraction = 0.0;
+		}
 		else
 		{
 			highGridBoundary = config.at("High_Grid_Boundary").as_boolean();
@@ -196,7 +199,7 @@ int runManta(std::string const &fname)
 
 		GridGroup.getVar("CellBoundaries").getVar(CellBoundaries.data());
 
-		grid = new Grid(CellBoundaries, static_cast<Index>(nPoints - 1));
+		grid = new Grid(CellBoundaries);
 
 		GridGroup.getVar("PolyOrder").getVar(&k);
 	}

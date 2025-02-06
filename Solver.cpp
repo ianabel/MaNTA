@@ -228,7 +228,6 @@ void SystemSolver::runSolver(double tFinal)
 	print(out0, t0, nOut, true);
 	if (physics_debug)
 	{
-
 		dydt_out << "# After CalcIC " << std::endl;
 		print(dydt_out, t0, nOut, dYdt);
 

@@ -291,8 +291,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_restart_tests)
 	GridGroup.getVar("CellBoundaries").getVar(CellBoundaries.data());
 
 	// Check loading grid from file
-	Grid *testGrid;
-	BOOST_CHECK_NO_THROW(testGrid = new Grid(CellBoundaries, static_cast<Index>(nPoints - 1)));
+	Grid *testGrid = new Grid(CellBoundaries);
 
 	Index k;
 	GridGroup.getVar("PolyOrder").getVar(&k);
@@ -300,29 +299,27 @@ BOOST_AUTO_TEST_CASE(systemsolver_restart_tests)
 	MatrixDiffusion *problem;
 	BOOST_CHECK_NO_THROW(problem = new MatrixDiffusion(config_snippet_2, *testGrid));
 	Index nDOF;
-	// scope this section to make sure restart data doesn't get deleted
-	{
-		std::vector<double> Y, dYdt;
-		netCDF::NcGroup RestartGroup = restart_file.getGroup("RestartData");
 
-		Index nDOF_file = RestartGroup.getDim("nDOF").getSize();
+	std::vector<double> Y, dYdt;
+	netCDF::NcGroup RestartGroup = restart_file.getGroup("RestartData");
 
-		Y.resize(nDOF_file);
-		dYdt.resize(nDOF_file);
+	Index nDOF_file = RestartGroup.getDim("nDOF").getSize();
 
-		RestartGroup.getVar("Y").getVar(Y.data());
-		RestartGroup.getVar("dYdt").getVar(dYdt.data());
+	Y.resize(nDOF_file);
+	dYdt.resize(nDOF_file);
 
-		restart_file.close();
-		// Make sure degrees of freedom are consistent with restart file
-		const Index nCells = testGrid->getNCells();
-		nDOF = problem->getNumVars() * 3 * nCells * (k + 1) + problem->getNumVars() * (nCells + 1) + problem->getNumScalars() + problem->getNumAux() * nCells * (k + 1);
+	RestartGroup.getVar("Y").getVar(Y.data());
+	RestartGroup.getVar("dYdt").getVar(dYdt.data());
 
-		BOOST_TEST(nDOF_file == nDOF);
+	restart_file.close();
+	// Make sure degrees of freedom are consistent with restart file
+	const Index nCells = testGrid->getNCells();
+	nDOF = problem->getNumVars() * 3 * nCells * (k + 1) + problem->getNumVars() * (nCells + 1) + problem->getNumScalars() + problem->getNumAux() * nCells * (k + 1);
 
-		BOOST_CHECK_NO_THROW(problem->setRestartValues(Y, dYdt, *testGrid, k));
-	}
+	BOOST_TEST(nDOF_file == nDOF);
 
+	BOOST_CHECK_NO_THROW(problem->setRestartValues(Y, dYdt, *testGrid, k));
+	
 	DGSoln y = problem->getRestartY();
 
 	// just check that everything didn't get set to 0, a regression test would be better for checking the actual data

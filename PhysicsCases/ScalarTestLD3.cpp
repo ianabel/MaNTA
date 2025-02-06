@@ -94,7 +94,6 @@ Value ScalarTestLD3::ScaledSource(Position x) const
 
 Value ScalarTestLD3::Sources(Index i, const State &s, Position x, Time)
 {
-	double J = 0;
 	if (i == 0)
 	{
 		double J = s.Scalars[1];

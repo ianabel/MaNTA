@@ -770,7 +770,6 @@ inline Real MirrorPlasma::AmbipolarPhi(Real V, Real n, Real Ti, Real Te) const
 
 Real MirrorPlasma::ParticleSource(double R, double t) const
 {
-	double shape = 1 / ParticleSourceWidth;
 
 	// // return (exp(-shape * (R - R_Lower) * (R - R_Lower)) + exp(-shape * (R - R_Upper) * (R - R_Upper)));
 	Real S = LowerParticleSourceStrength * exp(-(R - R_Lower) / ParticleSourceWidth) + UpperParticleSourceStrength * exp((R - R_Upper) / ParticleSourceWidth);

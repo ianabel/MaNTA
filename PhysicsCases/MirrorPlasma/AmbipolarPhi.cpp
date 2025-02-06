@@ -29,7 +29,6 @@ Value MirrorPlasma::InitialAuxValue(Index, Position V, Time t) const
     Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
     Real omega = InitialFunction(Channel::AngularMomentum, V, t).val / J;
 
-    double M = (static_cast<Real>(omega * R / sqrt(Te))).val;
     auto func = [this, &n, &Te, &Ti, &omega, &V](double phi)
     {
         return ParallelCurrent<Real>(static_cast<Real>(V), omega, n, Ti, Te, static_cast<Real>(phi)).val;

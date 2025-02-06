@@ -40,7 +40,7 @@ public:
         uL.resize(nVars);
         uR.resize(nVars);
 
-        for (Index i; i < nVars; ++i)
+        for (Index i = 0; i < nVars; ++i)
         {
             uL[i] = isLowerBoundaryDirichlet(i) ? restart_Y->u(i)(xL) : restart_Y->sigma(i)(xL);
             uR[i] = isUpperBoundaryDirichlet(i) ? restart_Y->u(i)(xR) : restart_Y->sigma(i)(xR);

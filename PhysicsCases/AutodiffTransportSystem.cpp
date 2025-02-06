@@ -265,8 +265,6 @@ void AutodiffTransportSystem::LoadDataToSpline(const std::string &file)
 	std::vector<size_t> start = {nTime - 1, 0};
 	std::vector<size_t> count = {1, nPoints};
 
-	double xmid = 0.5 * (x.back() + x.front());
-
 	for (Index i = 0; i < nVars; ++i)
 	{
 		tempGroup = data_file.getGroup("Var" + std::to_string(i));

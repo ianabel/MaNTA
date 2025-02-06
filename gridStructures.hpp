@@ -119,8 +119,9 @@ public:
 			throw std::runtime_error("Unable to construct grid.");
 	}
 
-	Grid(const std::vector<Position> &points, Index nCells)
+	Grid(const std::vector<Position> &points)
 	{
+		auto nCells = points.size() - 1;
 		gridCells.reserve(nCells);
 		lowerBound = points.front();
 		upperBound = points.back();
