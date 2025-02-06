@@ -127,8 +127,6 @@ Value MirrorPlasma::InitialScalarValue(Index s) const
         RealVector pScalar(nScalars);
         pScalar.setZero();
 
-        Value TimeDerivativeTerm = 0.0; // B1;
-
         Value FluxTerm = Pi(u(xL), q(xL), xL, 0.0).val - Pi(u(xR), q(xR), xR, 0.0).val;
         Value SourceTerm = integrator::integrate([&](Position V)
                                                  { return Somega(u(V), q(V), pSigma, aux(V), pScalar, V, 0.0).val; }, xL, xR, max_depth);
@@ -233,7 +231,6 @@ Value MirrorPlasma::ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt
         Value Integral = y.Scalar(Scalar::Integral);
         Value Current = y.Scalar(Scalar::Current);
 
-
         Value FluxTerm = y.sigma(Channel::AngularMomentum)(xR) - y.sigma(Channel::AngularMomentum)(xL); // SigmaFn(Channel::AngularMomentum, y.eval(xL), xL, t) - SigmaFn(Channel::AngularMomentum, y.eval(xR), xR, t);
 
         Value SourceTerm = integrator::integrate(
@@ -245,7 +242,7 @@ Value MirrorPlasma::ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt
                 return Somega(state.Variable, state.Derivative, state.Flux, state.Aux, pScalar, V, t).val;
             },
             xL, xR, max_depth);
-        Value Itot = 1 / (B->Psi_V(xR) - B->Psi_V(xL)) * (TimeDerivativeTerm + FluxTerm - SourceTerm) + InitialCurrent(t);
+        Value Itot = 1 / (B->Psi_V(xR) - B->Psi_V(xL)) * (FluxTerm - SourceTerm) + InitialCurrent(t);
         Value res = (Current - Itot) - gamma * E - gamma_d * dEdt - gamma_h * Integral;
         return res;
     }

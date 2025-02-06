@@ -439,26 +439,8 @@ Real MirrorPlasma::qe(RealVector u, RealVector q, Real V, Time t) const
 	Real GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e, leaving (V'R)^2
 	Real HeatFlux = GeometricFactor * GeometricFactor * (1 / (Plasma->ElectronCollisionTime(n, Te))) * (4.66 * p_e * Te_prime - (3. / 2.) * U);
 
-	// Real lambda_p = abs(p_e_prime / p_e);
-
-	// Real x = lambda_p - lowPThreshold;
-
-	// // Real lambda_T = abs(Te_prime / Te);
-	// // Real x = lambda_T - lowPThreshold;
-
-	// if (lambda_p > lowPThreshold)
-	// 	HeatFlux += SmoothTransition(x, transitionLength, lowPDiffusivity) * p_e_prime / p_e;
-
-	// Real dvt = abs(R * dRdV * dOmegadV + omega);
-
-	// Real lambda_T = R / dRdV * abs(Te_prime / Te);
-	// Real lambda_N = R / dRdV * abs(nPrime / n);
-	// Real x = lambda_T / (lowPThreshold * max(4.5, 0.8 * lambda_N)) - 1.0; //- lowPThreshold * sqrt(Plasma->mu()) / Plasma->RhoStarRef(); //-1 / sqrt(Plasma->mu()) * dvt;
-
-	// if (x > 0)
-	// 	HeatFlux += SmoothTransition(x, transitionLength, TeDiffusivity) * Te_prime / Te;
-
-	HeatFlux += GeometricFactor * GeometricFactor * TeDiffusivity * Te_prime;
+	Real Chi_e = pow(Te, 3. / 2.) * abs(Te_prime);
+	HeatFlux += GeometricFactor * GeometricFactor * TeDiffusivity * Chi_e * Te_prime;
 
 	if (std::isfinite(HeatFlux.val))
 		return HeatFlux;
