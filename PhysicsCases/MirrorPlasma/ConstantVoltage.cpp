@@ -232,9 +232,7 @@ Value MirrorPlasma::ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt
     {
         Value Integral = y.Scalar(Scalar::Integral);
         Value Current = y.Scalar(Scalar::Current);
-        Value TimeDerivativeTerm = 0.0;
-        // /integrator::integrate([&](Position V)
-        //                       { return dJdt(V) * omega(V); }, xL, xR);
+
 
         Value FluxTerm = y.sigma(Channel::AngularMomentum)(xR) - y.sigma(Channel::AngularMomentum)(xL); // SigmaFn(Channel::AngularMomentum, y.eval(xL), xL, t) - SigmaFn(Channel::AngularMomentum, y.eval(xR), xR, t);
 

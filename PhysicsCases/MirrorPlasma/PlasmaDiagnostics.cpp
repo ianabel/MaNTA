@@ -293,8 +293,6 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
     auto collisionality = [&](double V)
     { return 1.0 / (Plasma->IonCollisionTime(n(V), Ti(V)) * Plasma->ReferenceIonCollisionTime()) * B->L_V(V) / Plasma->c_s(Te(V)); };
 
-    // Real tnorm = n0 * TauNorm; // n0 * T0 * a * B0 * B0 / (electronMass * Om_e(B0) * Om_e(B0) * tau_e(n0, n0 * T0));
-    double omega0 = 1 / a * sqrt(T0 / Plasma->IonMass());
     double Iout = 0;
     if (useConstantVoltage)
         Iout = -InitialScalarValue(Scalar::Current) * I0;
