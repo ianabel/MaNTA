@@ -58,12 +58,19 @@ Value MirrorPlasma::InitialDensityTimeDerivative(RealVector u, RealVector q, Pos
 
 Value MirrorPlasma::InitialCurrent(Time t) const
 {
-    return -IRadial * exp(-t / CurrentDecay);
+    if (restarting)
+    {
+        return 0.0;
+    }
+    else
+    {
+        return -IRadial * exp(-t / CurrentDecay);
+    }
 }
 Value MirrorPlasma::InitialScalarValue(Index s) const
 {
     auto n = [&](Position V)
-    { return InitialValue(Channel::Density, V); };
+    { return uToDensity(InitialValue(Channel::Density, V)).val; };
     auto L = [&](Position V)
     { return InitialValue(Channel::AngularMomentum, V); };
     auto omega = [&](Position V)
@@ -114,31 +121,18 @@ Value MirrorPlasma::InitialScalarValue(Index s) const
             return Aux;
         };
 
-        // auto dJdt = [&](Position V)
-        // {
-        //     Position R = B->R_V(V);
-        //     return R * R * InitialDensityTimeDerivative(u(V), q(V), V);
-        // };
-
         RealVector pSigma(nVars);
         pSigma.setZero();
 
         RealVector pScalar(nScalars);
         pScalar.setZero();
 
-        // auto I1 = [&](Position V)
-        // {
-        //     return dJdt(V) * omega(V);
-        // };
-
-        // Value B1 = integrator::integrate(I1, xL, xR);
-
         Value TimeDerivativeTerm = 0.0; // B1;
 
         Value FluxTerm = Pi(u(xL), q(xL), xL, 0.0).val - Pi(u(xR), q(xR), xR, 0.0).val;
         Value SourceTerm = integrator::integrate([&](Position V)
                                                  { return Somega(u(V), q(V), pSigma, aux(V), pScalar, V, 0.0).val; }, xL, xR, max_depth);
-        Value Itot = 1 / (B->Psi_V(xR) - B->Psi_V(xL)) * (TimeDerivativeTerm + FluxTerm - SourceTerm);
+        Value Itot = 1 / (B->Psi_V(xR) - B->Psi_V(xL)) * (FluxTerm - SourceTerm);
         return Itot + InitialCurrent(0);
     }
     default:
@@ -154,9 +148,11 @@ Value MirrorPlasma::InitialScalarDerivative(Index s, const DGSoln &y, const DGSo
         auto domegadt = [&](Position V)
         {
             Position R = B->R_V(V);
-            Value n = y.u(Channel::Density)(V);
+            Value n = uToDensity(y.u(Channel::Density)(V)).val;
             Value L = y.u(Channel::AngularMomentum)(V);
             Value ndot = dydt.u(Channel::Density)(V);
+            if (evolveLogDensity)
+                ndot *= n; // if evolving log, ndot actually represents d log n / dt
             Value Ldot = dydt.u(Channel::AngularMomentum)(V);
             return 1 / (R * R * B->VPrime(V)) * (Ldot / n - L * ndot / (n * n));
         };
@@ -189,7 +185,7 @@ Value MirrorPlasma::ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt
     Value E = y.Scalar(Scalar::Error);
 
     auto n = [&](Position V)
-    { return y.u(Channel::Density)(V); };
+    { return uToDensity(y.u(Channel::Density)(V)).val; };
     auto L = [&](Position V)
     { return y.u(Channel::AngularMomentum)(V); };
     auto omega = [&](Position V)
@@ -265,7 +261,7 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
     out_dt.zero();
 
     auto n = [&](Position V)
-    { return y.u(Channel::Density)(V); };
+    { return uToDensity(y.u(Channel::Density)(V)).val; };
     // // auto dndt = [&](Position V)
     // // { return dydt.u(Channel::Density)(V); };
     auto L = [&](Position V)
@@ -307,7 +303,10 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
             {
                 Position R = B->R_V(V);
                 Value nv = n(V);
-                return -(P(V) / B->VPrime(V)) * L(V) / (nv * nv * R * R);
+                Value I = -(P(V) / B->VPrime(V)) * L(V) / (nv * nv * R * R);
+                if (evolveLogDensity)
+                    I *= nv;
+                return I;
             },
             I.x_l, I.x_u, max_depth);
         s.Variable(Channel::AngularMomentum) = P_L;

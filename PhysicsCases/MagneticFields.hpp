@@ -18,32 +18,25 @@ class StraightMagneticField
 public:
 	StraightMagneticField() = default;
 	StraightMagneticField(double L_z, double B_z, double Rm) : L_z(L_z), B_z(B_z), Rm(Rm) {};
+	StraightMagneticField(double L_z, double B_z, double Rm, double Vmin, double m) : L_z(L_z), B_z(B_z), Rm(Rm), Rmin(R_V(Vmin)), m(m) {};
+
 	template <typename T>
-	T Bz_R(T R) { return B_z; }
-	template <typename T>
-	T V(T Psi)
-	{
-		return 2 * pi * Psi * L_z / B_z;
-	}
+	T Bz_R(T R) { return B_z - m * (R - Rmin); }
+
 	template <typename T>
 	T Psi(T R)
 	{
-		return R * R * B_z / 2.0;
+		return R * R * Bz_R(R) / 2.0;
 	}
 	template <typename T>
 	T Psi_V(T V)
 	{
-		return B_z * V / (2 * pi * L_z);
+		return Bz_R(R_V(V)) * V / (2 * pi * L_z);
 	}
 	template <typename T>
 	T VPrime(T V)
 	{
-		return 2 * pi * L_z / B_z;
-	}
-	template <typename T>
-	T R(T Psi)
-	{
-		return sqrt(2 * Psi / B_z);
+		return 2 * pi * L_z / Bz_R(R_V(V));
 	}
 	template <typename T>
 	T R_V(T V)
@@ -53,18 +46,29 @@ public:
 	template <typename T>
 	T dRdV(T V)
 	{
-		return 1.0 / (2 * pi * R_V(V));
+		return 1.0 / (2 * pi * L_z * R_V(V));
 	}
 	template <typename T>
 	double MirrorRatio(T)
 	{
 		return Rm;
 	}
+	template <typename T>
+	T L_V(T)
+	{
+		return L_z;
+	}
+
+	void setRmin(double R) { Rmin = R; };
+	void setm(double min) { m = min; };
 
 private:
 	double L_z = 0.6;
 	double B_z = 0.3;
 	double Rm = 10.0;
+
+	double Rmin = 0.0;
+	double m = 0.0;
 };
 
 class CylindricalMagneticField

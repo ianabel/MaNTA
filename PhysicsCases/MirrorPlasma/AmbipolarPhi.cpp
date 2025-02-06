@@ -4,7 +4,7 @@
 // G = Ipar = 0
 Real MirrorPlasma::GFunc(Index, RealVector u, RealVector, RealVector, RealVector phi, Position V, Time t)
 {
-    Real n = floor(u(Channel::Density), MinDensity), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
+    Real n = uToDensity(u(Channel::Density)), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
     Real Te = floor(p_e / n, MinTemp);
     Real Ti = floor(p_i / n, MinTemp);
 
@@ -20,7 +20,7 @@ Value MirrorPlasma::InitialAuxValue(Index, Position V, Time t) const
     using boost::math::tools::eps_tolerance;
     using boost::math::tools::newton_raphson_iterate;
 
-    Real n = InitialFunction(Channel::Density, V, t).val, p_e = (2. / 3.) * InitialFunction(Channel::ElectronEnergy, V, t).val, p_i = (2. / 3.) * InitialFunction(Channel::IonEnergy, V, t).val;
+    Real n = uToDensity(InitialFunction(Channel::Density, V, t).val), p_e = (2. / 3.) * InitialFunction(Channel::ElectronEnergy, V, t).val, p_i = (2. / 3.) * InitialFunction(Channel::IonEnergy, V, t).val;
     Real Te = p_e / n;
     Real Ti = p_i / n;
 
@@ -29,7 +29,6 @@ Value MirrorPlasma::InitialAuxValue(Index, Position V, Time t) const
     Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
     Real omega = InitialFunction(Channel::AngularMomentum, V, t).val / J;
 
-    double M = (static_cast<Real>(omega * R / sqrt(Te))).val;
     auto func = [this, &n, &Te, &Ti, &omega, &V](double phi)
     {
         return ParallelCurrent<Real>(static_cast<Real>(V), omega, n, Ti, Te, static_cast<Real>(phi)).val;
@@ -79,6 +78,8 @@ Real MirrorPlasma::dphi1dV(RealVector u, RealVector q, Real phi, Real V) const
     auto Jpar = [this](Real2ndVector u, Real2nd phi, Real2nd V)
     {
         Real2nd n = u(Channel::Density), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
+        if (evolveLogDensity)
+            n = exp(n);
         if (n < MinDensity)
             n.val.val = MinDensity;
         Real2nd Te = p_e / n;
@@ -114,10 +115,10 @@ Real MirrorPlasma::dphi1dV(RealVector u, RealVector q, Real phi, Real V) const
     Real2nd ___;
     auto d2Jpardu2 = hessian(Jpar, wrt(u2), at(u2, phi2, V2), ___, dJpardu);
 
-    Real n = floor(u(Channel::Density), MinDensity), p_i = (2. / 3.) * u(Channel::IonEnergy);
+    Real n = uToDensity(u(Channel::Density)), p_i = (2. / 3.) * u(Channel::IonEnergy);
     Real Ti = p_i / n;
 
-    Real nPrime = q(Channel::Density), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
+    Real nPrime = qToDensityGradient(q(Channel::Density), u(Channel::Density)), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
     Real Ti_prime = (p_i_prime - nPrime * Ti) / n;
 
     // set all of the autodiff gradients

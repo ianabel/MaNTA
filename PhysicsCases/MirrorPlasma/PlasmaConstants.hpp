@@ -96,6 +96,7 @@ public:
         return sigma;
     }
 
+    // Energy in eV, returns cross section in cm^2
     virtual double HydrogenChargeExchangeCrossSection(double Energy)
     {
         // Minimum energy of cross section in eV
@@ -243,6 +244,12 @@ public:
         return ElementaryCharge * B / ElectronMass;
     }
 
+    template <typename T>
+    T c_s(T Te) const
+    {
+        return static_cast<T>(sqrt(T0 * Te / IonMass()));
+    }
+
     Real FusionRate(Real n, Real pi) const;
     Real TotalAlphaPower(Real n, Real pi) const;
     Real BremsstrahlungLosses(Real n, Real pe) const;
@@ -255,7 +262,10 @@ public:
     double IonMass() const { return Plasma->IonMass; }
     double ReferenceElectronCollisionTime() const;
     double ReferenceIonCollisionTime() const;
+    double ReferenceElectronThermalVelocity() const;
+    double ReferenceIonThermalVelocity() const;
     double RhoStarRef() const;
+    double mu() const;
     double NormalizingTime() const;
 
 private:

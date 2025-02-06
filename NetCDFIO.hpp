@@ -60,6 +60,8 @@ public:
 
 	void AddGroup(std::string name, std::string description);
 
+	netCDF::NcGroup CreateGroup(std::string name, std::string description);
+
 	size_t AddTimeSlice(double T);
 
 	void AppendToTimeSeries(std::string const &name, double value, size_t tIndex);
