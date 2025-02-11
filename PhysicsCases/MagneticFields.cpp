@@ -72,7 +72,7 @@ double CylindricalMagneticField::dRdV(double V)
     return (*dRdV_spline)(V);
 }
 
-double CylindricalMagneticField::MirrorRatio(double V)
+double CylindricalMagneticField::MirrorRatio(double V) const
 {
     return (*Rm_spline)(V);
 }

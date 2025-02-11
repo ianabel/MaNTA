@@ -614,6 +614,7 @@ Real MirrorPlasma::Spe(RealVector u, RealVector q, RealVector sigma, RealVector 
 	Real EnergyExchange = -Plasma->IonElectronEnergyExchange(n, p_e, p_i, V, t);
 
 	Real MirrorRatio = B->MirrorRatio(V);
+	Real MirrorRatio = B->MirrorRatio(V);
 	Real AlphaHeating = sqrt(1 - 1 / MirrorRatio) * Plasma->TotalAlphaPower(n, p_i);
 
 	Real R = B->R_V(V);
@@ -622,7 +623,7 @@ Real MirrorPlasma::Spe(RealVector u, RealVector q, RealVector sigma, RealVector 
 	Real L = u(Channel::AngularMomentum);
 	Real omega = L / J;
 
-	Real PotentialHeating = -Gamma(u, q, V, t) * dphidV(u, q, phi, V); //(dphi1dV(u, q, phi(0), V));
+	Real PotentialHeating = ElectronPotentialHeating(u, q, phi, V); //(dphi1dV(u, q, phi(0), V));
 
 	Real Heating = EnergyExchange + AlphaHeating + PotentialHeating;
 
@@ -752,7 +753,9 @@ Real MirrorPlasma::dphidV(RealVector u, RealVector q, RealVector phi, Real V) co
 inline Real MirrorPlasma::AmbipolarPhi(Real V, Real n, Real Ti, Real Te) const
 {
 	Real R = B->MirrorRatio(V);
+	Real R = B->MirrorRatio(V);
 	double Sigma = 1.0;
+	return log((Plasma->ElectronCollisionTime(n, Te) / Plasma->IonCollisionTime(n, Ti)) * (log(R * Sigma) / (Sigma * log(R))));
 	return log((Plasma->ElectronCollisionTime(n, Te) / Plasma->IonCollisionTime(n, Ti)) * (log(R * Sigma) / (Sigma * log(R))));
 }
 
@@ -773,6 +776,7 @@ Real MirrorPlasma::ParticleSource(double R, double t) const
 
 Real MirrorPlasma::ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real Te) const
 {
+	Real MirrorRatio = B->MirrorRatio(V);
 	Real MirrorRatio = B->MirrorRatio(V);
 	Real tau_ee = Plasma->ElectronCollisionTime(n, Te);
 	double Sigma = 1 + Z_eff; // Include collisions with ions and impurities as well as self-collisions
@@ -796,6 +800,7 @@ Real MirrorPlasma::IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) cons
 	// For consistency, the integral in Pastukhov's paper is 1.0, as the
 	// entire theory is an expansion in M^2 >> 1
 	Real MirrorRatio = B->MirrorRatio(V);
+	Real MirrorRatio = B->MirrorRatio(V);
 	Real tau_ii = Plasma->IonCollisionTime(n, Ti);
 	double Sigma = 1.0; // Just ion-ion collisions
 	Real PastukhovFactor = (exp(-Xi_i) / Xi_i);
@@ -808,4 +813,21 @@ Real MirrorPlasma::IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) cons
 	Real LossRate = (M_2_SQRTPI / tau_ii) * Normalization * Sigma * n * (1.0 / log(MirrorRatio * Sigma)) * PastukhovFactor;
 
 	return LossRate;
+}
+
+Real MirrorPlasma::IonPotentialHeating(RealVector u, RealVector q, RealVector phi, Real V) const
+{
+	Real n = floor(u(Channel::Density), MinDensity);
+
+	Real R = B->R_V(V);
+
+	Real J = n * R * R; // Normalisation includes the m_i
+	Real L = u(Channel::AngularMomentum);
+	Real omega = L / J;
+	return -Gamma(u, q, V, 0.0) * (omega * omega / (2 * pi * a) - dphidV(u, q, phi, V));
+}
+
+Real MirrorPlasma::ElectronPotentialHeating(RealVector u, RealVector q, RealVector phi, Real V) const
+{
+	return -Gamma(u, q, V, 0.0) * dphidV(u, q, phi, V);
 }

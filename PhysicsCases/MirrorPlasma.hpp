@@ -5,6 +5,7 @@
 #include "AutodiffTransportSystem.hpp"
 // #include "Constants.hpp"
 #include "MirrorPlasma/PlasmaConstants.hpp"
+#include "MirrorPlasma/MirrorPlasmaDiagnostics.hpp"
 
 #include <boost/math/quadrature/gauss_kronrod.hpp>
 
@@ -96,6 +97,8 @@ private:
 	Real ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real Te) const;
 	Real IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) const;
 
+	Real IonPotentialHeating(RealVector, RealVector, RealVector, Real) const;
+	Real ElectronPotentialHeating(RealVector, RealVector, RealVector, Real) const;
 	// Template function to avoid annoying dual vs. dual2nd behavior
 	template <typename T>
 	T phi0(Eigen::Matrix<T, -1, 1, 0, -1, 1> u, T V) const

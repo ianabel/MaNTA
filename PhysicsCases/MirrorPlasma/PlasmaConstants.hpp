@@ -174,7 +174,7 @@ private:
 
 // Hold the different ion species types
 template <typename T>
-IonSpecies *createIonSpecies() { return new T(); };
+constexpr IonSpecies *createIonSpecies() { return new T(); };
 
 // Map to the constructor for each of the different ion species
 static std::map<std::string, IonSpecies *(*)()> PlasmaMap = {{"Hydrogen", &createIonSpecies<Hydrogen>}, {"Deuterium", &createIonSpecies<Deuterium>}, {"DeuteriumTritium", &createIonSpecies<DeuteriumTritium>}};
@@ -184,14 +184,14 @@ class PlasmaConstants
 {
 public:
     // Constructor takes ion type, magnetic field, other normalizing parameters if desired
-    PlasmaConstants(std::string IonType, std::shared_ptr<StraightMagneticField> B, double PlasmaWidth) : B(B), PlasmaWidth(PlasmaWidth)
+    PlasmaConstants(std::string IonType, std::shared_ptr<MagneticField> B, double PlasmaWidth) : B(B), PlasmaWidth(PlasmaWidth)
     {
         auto it = PlasmaMap.find(IonType);
         if (it == PlasmaMap.end())
             throw std::logic_error("Requested ion species does not exist.");
         Plasma = it->second();
     }
-    PlasmaConstants(std::string IonType, std::shared_ptr<StraightMagneticField> B, double n0, double T0, double Z_eff, double PlasmaWidth) : B(B), n0(n0), T0(T0), Z_eff(Z_eff), PlasmaWidth(PlasmaWidth)
+    PlasmaConstants(std::string IonType, std::shared_ptr<MagneticField> B, double n0, double T0, double Z_eff, double PlasmaWidth) : B(B), n0(n0), T0(T0), Z_eff(Z_eff), PlasmaWidth(PlasmaWidth)
     {
         auto it = PlasmaMap.find(IonType);
         if (it == PlasmaMap.end())
@@ -200,6 +200,7 @@ public:
     };
     virtual ~PlasmaConstants() { delete Plasma; }
 
+    // Compute the Coulomb logarithm, normalized to the reference value
     template <typename T>
     T LogLambda_ii(T ni, T Ti) const
     {
@@ -305,7 +306,7 @@ private:
 
 private:
     IonSpecies *Plasma = nullptr;
-    std::shared_ptr<StraightMagneticField> B;
+    std::shared_ptr<MagneticField> B;
     const double n0 = 1e20;
     const double n0cgs = n0 * 1e-6;
     const double T0 = 1000.0 * ElementaryCharge, T0eV = T0 / ElementaryCharge;
@@ -316,4 +317,4 @@ private:
     double PlasmaWidth;
 };
 
-#endif
+#endif // PLASMACONSTANTS_HPP
