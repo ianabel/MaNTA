@@ -285,10 +285,10 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
     };
 
     auto rho_i = [&](double V)
-    { return sqrt(Ti(V)) * Plasma->RhoStarRef() / B->Bz_R(B->R_V(V)); };
+    { return sqrt(Ti(V)) * Plasma->RhoStarRef() / B->B(V); };
 
     auto rho_e = [&](double V)
-    { return sqrt(Te(V)) * Plasma->RhoStarRef() / sqrt(Plasma->mu()) / B->Bz_R(B->R_V(V)); };
+    { return sqrt(Te(V)) * Plasma->RhoStarRef() / sqrt(Plasma->mu()) / B->B(V); };
 
     auto collisionality = [&](double V)
     { return 1.0 / (Plasma->IonCollisionTime(n(V), Ti(V)) * Plasma->ReferenceIonCollisionTime()) * B->L_V(V) / Plasma->c_s(Te(V)); };
@@ -312,6 +312,9 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
         nc.AddVariable("MMS", "Var" + std::to_string(j), "Manufactured solution", "-", [this, j](double V)
                        { return this->InitialFunction(j, V, 0.0).val.val; });
 
+    nc.AddVariable("B", "Magnetic field", "T", [&](double V)
+                   { return B0 * B->B(V); });
+
     nc.AddGroup("GradientScaleLengths", "Gradient scale lengths");
     nc.AddVariable("GradientScaleLengths", "Ln", "", "m", [&](double V)
                    { return a * B->dRdV(V) * n(V) / nPrime(V); });
@@ -331,11 +334,11 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
                    { return Te_prime(V) / Te(V) * n(V) / nPrime(V); });
     nc.AddVariable("DimensionlessNumbers", "ShearingRate", "Plasma shearing rate", "m^-1", ShearingRate);
     nc.AddVariable("DimensionlessNumbers", "RhoN", "Gyroradius over the gradient scale length", "", [&](double V)
-                   { return rho_i(V) * nPrime(V) / n(V); });
+                   { return rho_i(V) * nPrime(V) / B->dRdV(V) / n(V); });
     nc.AddVariable("DimensionlessNumbers", "RhoTi", "Gyroradius over the gradient scale length", "", [&](double V)
-                   { return rho_i(V) * Ti_prime(V) / Ti(V); });
+                   { return rho_i(V) * Ti_prime(V) / B->dRdV(V) / Ti(V); });
     nc.AddVariable("DimensionlessNumbers", "RhoTe", "Gyroradius over the gradient scale length", "", [&](double V)
-                   { return rho_e(V) * Te_prime(V) / Te(V); });
+                   { return rho_e(V) * Te_prime(V) / B->dRdV(V) / Te(V); });
 
     nc.AddVariable("DimensionlessNumbers", "RhoL", "Gyroradius over the gradient scale length", "",
                    [&](double V)
@@ -706,10 +709,10 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
             return 0.0;
     };
     auto rho_i = [&](double V)
-    { return sqrt(Ti(V)) * Plasma->RhoStarRef() / B->Bz_R(B->R_V(V)); };
+    { return sqrt(Ti(V)) * Plasma->RhoStarRef() / B->B(V); };
 
     auto rho_e = [&](double V)
-    { return sqrt(Te(V)) * Plasma->RhoStarRef() / sqrt(Plasma->mu()) / B->Bz_R(B->R_V(V)); };
+    { return sqrt(Te(V)) * Plasma->RhoStarRef() / sqrt(Plasma->mu()) / B->B(V); };
 
     auto collisionality = [&](double V)
     { return 1.0 / (Plasma->IonCollisionTime(n(V), Ti(V)) * Plasma->ReferenceIonCollisionTime()) * B->L_V(V) / Plasma->c_s(Te(V)); };
@@ -765,11 +768,11 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
     nc.AppendToGroup("DimensionlessNumbers", tIndex, "ShearingRate", ShearingRate);
 
     nc.AppendToGroup("DimensionlessNumbers", tIndex, "RhoN", [&](double V)
-                     { return rho_i(V) * nPrime(V) / n(V); });
+                     { return rho_i(V) * nPrime(V) / B->dRdV(V) / n(V); });
     nc.AppendToGroup("DimensionlessNumbers", tIndex, "RhoTi", [&](double V)
-                     { return rho_i(V) * Ti_prime(V) / Ti(V); });
+                     { return rho_i(V) * Ti_prime(V) / B->dRdV(V) / Ti(V); });
     nc.AppendToGroup("DimensionlessNumbers", tIndex, "RhoTe", [&](double V)
-                     { return rho_e(V) * Te_prime(V) / Te(V); });
+                     { return rho_e(V) * Te_prime(V) / B->dRdV(V) / Te(V); });
 
     nc.AppendToGroup("DimensionlessNumbers", tIndex, "RhoL",
                      [&](double V)

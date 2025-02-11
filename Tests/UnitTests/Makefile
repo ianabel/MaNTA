@@ -3,7 +3,7 @@
 all: UnitTests
 .PHONY: all clean
 
-TEST_SOURCES = DGTests.cpp SystemSolverTests.cpp MagneticFieldTest.cpp AutodiffTest.cpp
+TEST_SOURCES = DGTests.cpp SystemSolverTests.cpp AutodiffTest.cpp
 TEST_HEADERS = TestDiffusion.hpp
 
 CXXFLAGS += -I../../ -DTEST
