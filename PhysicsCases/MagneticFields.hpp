@@ -11,6 +11,8 @@
 #include "../util/trapezoid.hpp"
 using std::numbers::pi;
 using Real = autodiff::dual;
+using Real2nd = autodiff::dual2nd;
+
 // Magnetic field
 // All of these values are returned in SI units
 // (we may later introduce a B0 & R0, but these are 1T & 1m for now)
@@ -18,17 +20,37 @@ using Real = autodiff::dual;
 // Base magnetic field class
 // Functions depend on the flux surface volume and another coordinate
 // This is usually the arc length "s", but it is sometimes easier to make it another coordinate, so we leave it open ended
+// The base implementation should be of the "Real" type
 class MagneticField
 {
 public:
 	MagneticField() = default;
 	virtual Real Psi_V(Real V) const = 0;
-	virtual Real B(Real Psi, Real) const = 0;
+	virtual double Psi_V(double V) const { return Psi_V(static_cast<Real>(V)).val; }
+
+	virtual Real B(Real V, Real) const = 0;
+	virtual double B(double V, double z) const { return B(static_cast<Real>(V), static_cast<Real>(z)).val; }
+
 	virtual Real R(Real Psi, Real) const = 0;
+	virtual double R(double Psi, double s) const { return R(static_cast<Real>(Psi), static_cast<Real>(s)).val; }
+
 	virtual Real R_V(Real V, Real s) const { return R(Psi_V(V), s); }
+	virtual double R_V(double V, double s) const { return R_V(static_cast<Real>(V), static_cast<Real>(s)).val; }
+	virtual Real2nd R_V(Real2nd V, Real2nd s) const { throw std::logic_error("If 2nd derivative behavior is required it must be explicitly defined in your magnetic field class"); }
+
 	virtual Real dRdV(Real V, Real) const = 0;
+	virtual double dRdV(double V, double s) const { return dRdV(static_cast<Real>(V), static_cast<Real>(s)).val; };
+
 	virtual Real VPrime(Real V) const = 0;
+	virtual double VPrime(double V) const { return VPrime(static_cast<Real>(V)).val; }
+
 	virtual Real MirrorRatio(Real V, Real) const = 0;
+	virtual double MirrorRatio(double V, double s) const { return MirrorRatio(static_cast<Real>(V), static_cast<Real>(s)).val; }
+	virtual Real2nd MirrorRatio(Real2nd V, Real2nd s) const { throw std::logic_error("If 2nd derivative behavior is required it must be explicitly defined in your magnetic field class"); }
+
+	virtual Real L_V(Real V) const = 0;
+	virtual double L_V(double V) const { return L_V(static_cast<Real>(V)).val; }
+
 	virtual Real Rmax(Real V) const { return R(Psi_V(V), 0.5 * (LeftEndpoint(Psi_V(V)) + RightEndpoint(Psi_V(V)))); }
 	virtual Real Rmin(Real V) const { return R(Psi_V(V), RightEndpoint(Psi_V(V))); }
 
@@ -64,31 +86,30 @@ public:
 	StraightMagneticField(double L_z, double B_z, double Rm, double Vmin, double m) : L_z(L_z), B_z(B_z), Rm(Rm), Rmin(R_V(Vmin)), m(m) {};
 
 	template <typename T>
-	T Bz_R(T R) { return B_z - m * (R - Rmin); }
+	T Bz_R(T R) const { return B_z - m * (R - Rmin); }
 
 	template <typename T>
-	T B(T V) { return Bz_R(R_V(V)); }
+	T B(T V) const { return Bz_R(R_V(V)); }
+	virtual Real B(Real V, Real z = 0.0) const override { return B<Real>(V); };
 
 	template <typename T>
-	T Psi(T R)
+	T Psi(T R) const
 	{
 		return R * R * Bz_R(R) / 2.0;
 	}
 	template <typename T>
-	T Psi_V(T V)
+	T Psi_V(T V) const
 	{
 		return B(V) * V / (2 * pi * L_z);
 	}
+	virtual Real Psi_V(Real V) const override { return Psi_V<Real>(V); };
+
 	template <typename T>
-	T VPrime(T V)
+	T VPrime(T V) const
 	{
 		return 2 * pi * L_z / B(V);
 	}
-	Real R(Real Psi) const
-	{
-		return sqrt(2 * Psi / B_z);
-	}
-	Real R(Real Psi, Real) const override { return R(Psi); };
+	Real R(Real Psi, Real V = 0.0) const override { return sqrt(2 * Psi / B_z); };
 
 	Real VPrime(Real V) const override
 	{
@@ -100,7 +121,8 @@ public:
 	{
 		return sqrt(V / (pi * L_z));
 	}
-	Real R_V(Real V, Real) const override { return R_V(V); }
+	Real R_V(Real V, Real z = 0.0) const override { return R_V<Real>(V); }
+	Real2nd R_V(Real2nd V, Real2nd z = 0.0) const override { return R_V<Real2nd>(V); }
 
 	template <typename T>
 	T dRdV(T V) const
@@ -112,22 +134,24 @@ public:
 	{
 		return Rm * B(V) / B_z;
 	}
-	Real MirrorRatio(Real V, Real) const override { return MirrorRatio(V); }
-	Real dRdV(Real V, Real) const override { return dRdV(V); }
+	Real MirrorRatio(Real V, Real z = 0.0) const override { return MirrorRatio<Real>(V); }
+	Real2nd MirrorRatio(Real2nd V, Real2nd z = 0.0) const override { return MirrorRatio<Real2nd>(V); }
+
+	Real dRdV(Real V, Real z = 0.0) const override { return dRdV<Real>(V); }
 
 	template <typename T>
-	T L_V(T)
+	T L_V(T) const
 	{
 		return L_z;
 	}
-
-	void setRmin(double R) { Rmin = R; };
-	void setm(double min) { m = min; };
+	Real L_V(Real V) const override { return L_V<Real>(V); }
 
 	void setRmin(double R) { Rmin = R; };
 	void setm(double min) { m = min; };
 
 private:
+	virtual Real LeftEndpoint(Real Psi) const override { return 0.0; };
+	virtual Real RightEndpoint(Real Psi) const override { return L_z; };
 	double L_z = 0.6;
 	double B_z = 0.3;
 	double Rm = 10.0;
@@ -136,74 +160,90 @@ private:
 	double m = 0.0;
 };
 
-class CylindricalMagneticField
+class CylindricalMagneticField : public MagneticField
 {
 public:
 	CylindricalMagneticField(const std::string &file);
 	~CylindricalMagneticField() = default;
 
-	double B(double V);
-	autodiff::dual B(autodiff::dual V)
+	virtual double B(double V, double z = 0.0) const override;
+	virtual Real B(Real V, Real z = 0.0) const override
 	{
-		autodiff::dual Bz = B(V.val);
+		Real Bz = B(V.val);
 		if (V.grad != 0)
 			Bz.grad = B_spline->prime(V.val);
 		return Bz;
 	}
 
-	double Psi_V(double V);
-	autodiff::dual Psi_V(autodiff::dual V)
+	double Psi_V(double V) const override;
+	Real Psi_V(Real V) const override
 	{
-		autodiff::dual Psi = B(V.val);
+		Real Psi = B(V.val);
 		if (V.grad != 0)
 			Psi.grad = Psi_spline->prime(V.val);
 		return Psi;
 	}
 
-	double VPrime(double V);
-	autodiff::dual VPrime(autodiff::dual V)
+	double VPrime(double V) const override;
+	Real VPrime(Real V)
 	{
-		autodiff::dual Vp = VPrime(V.val);
+		Real Vp = (*Vp_spline)(V.val);
 		if (V.grad != 0)
 			Vp.grad = Vp_spline->prime(V.val);
 		return Vp;
 	};
 
-	double R_V(double V);
-	autodiff::dual R_V(autodiff::dual V)
+	double R_V(double V, double s = 0.0) const override;
+	Real R_V(Real V, Real s = 0.0) const override
 	{
-		autodiff::dual R = R_V(V.val);
+		Real R = R_V(V.val);
 		if (V.grad != 0.0)
 			R.grad = dRdV(V.val);
 		return R;
 	};
-	autodiff::dual2nd R_V(autodiff::dual2nd V)
+	Real2nd R_V(Real2nd V, Real2nd s = 0.0) const override
 	{
-		autodiff::dual2nd R = R_V(V.val);
+		Real2nd R = R_V(V.val);
 		if (V.grad != 0.0)
 			R.grad.val = dRdV(V.val.val);
 		return R;
 	};
 
-	double dRdV(double V);
-	autodiff::dual dRdV(autodiff::dual V)
+	double dRdV(double V, double s = 0.0) const override;
+	Real dRdV(Real V, Real s = 0.0) const override
 	{
-		autodiff::dual drdv = MirrorRatio(V.val);
+		Real drdv = MirrorRatio(V.val);
 		if (V.grad != 0)
 			drdv.grad = dRdV_spline->prime(V.val);
 		return drdv;
 	}
 
-	double MirrorRatio(double V);
-	autodiff::dual MirrorRatio(autodiff::dual V)
+	double MirrorRatio(double V, double s = 0.0) const override;
+	Real MirrorRatio(Real V, Real s = 0.0) const override
 	{
-		autodiff::dual Rm = MirrorRatio(V.val);
+		Real Rm = MirrorRatio(V.val);
 		if (V.grad != 0)
 			Rm.grad = Rm_spline->prime(V.val);
 		return Rm;
 	};
+	Real2nd MirrorRatio(Real2nd V, Real2nd s = 0.0) const override
+	{
+		Real2nd Rm = MirrorRatio(V.val);
+		if (V.grad != 0)
+			Rm.grad.val = Rm_spline->prime(V.val.val);
+		return Rm;
+	};
 
-	void CheckBoundaries(double VL, double VR);
+	double L_V(double V) const override;
+	Real L_V(Real V) const override
+	{
+		Real L = L_V(V.val);
+		if (V.grad != 0)
+			L.grad = L_spline->prime(V.val);
+		return L;
+	}
+
+	void CheckBoundaries(double VL, double VR) const;
 
 private:
 	using spline = boost::math::barycentric_rational<double>;

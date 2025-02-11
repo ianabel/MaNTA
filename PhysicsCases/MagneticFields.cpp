@@ -47,37 +47,42 @@ CylindricalMagneticField::CylindricalMagneticField(const std::string &file)
     L_spline = std::make_unique<spline>(temp.data(), V.data(), nPoints);
 }
 
-double CylindricalMagneticField::B(double V)
+double CylindricalMagneticField::B(double V, double z) const
 {
     return (*B_spline)(V);
 }
 
-double CylindricalMagneticField::Psi_V(double V)
+double CylindricalMagneticField::Psi_V(double V) const
 {
     return (*Psi_spline)(V);
 }
 
-double CylindricalMagneticField::VPrime(double V)
+double CylindricalMagneticField::VPrime(double V) const
 {
     return (*Vp_spline)(V);
 }
 
-double CylindricalMagneticField::R_V(double V)
+double CylindricalMagneticField::R_V(double V, double z) const
 {
     return (*R_V_spline)(V);
 }
 
-double CylindricalMagneticField::dRdV(double V)
+double CylindricalMagneticField::dRdV(double V, double z) const
 {
     return (*dRdV_spline)(V);
 }
 
-double CylindricalMagneticField::MirrorRatio(double V) const
+double CylindricalMagneticField::MirrorRatio(double V, double z) const
 {
     return (*Rm_spline)(V);
 }
 
-void CylindricalMagneticField::CheckBoundaries(double VL, double VR)
+double CylindricalMagneticField::L_V(double V) const
+{
+    return (*L_spline)(V);
+}
+
+void CylindricalMagneticField::CheckBoundaries(double VL, double VR) const
 {
     if ((VL < V.front()) || (VR > V.back()))
         throw std::runtime_error("Magnetic field file must include entire domain");

@@ -75,7 +75,7 @@ Value MirrorPlasma::InitialScalarValue(Index s) const
     { return InitialValue(Channel::AngularMomentum, V); };
     auto omega = [&](Position V)
     {
-        Value R = B->R_V(V);
+        Value R = B->R_V(V, 0.0);
         return L(V) / (n(V) * R * R);
     };
 
@@ -145,7 +145,7 @@ Value MirrorPlasma::InitialScalarDerivative(Index s, const DGSoln &y, const DGSo
     {
         auto domegadt = [&](Position V)
         {
-            Position R = B->R_V(V);
+            Position R = B->R_V(V, 0.0);
             Value n = uToDensity(y.u(Channel::Density)(V)).val;
             Value L = y.u(Channel::AngularMomentum)(V);
             Value ndot = dydt.u(Channel::Density)(V);
@@ -188,18 +188,18 @@ Value MirrorPlasma::ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt
     { return y.u(Channel::AngularMomentum)(V); };
     auto omega = [&](Position V)
     {
-        Value R = B->R_V(V);
+        Value R = B->R_V(V, 0.0);
         Value w = L(V) / (n(V) * R * R);
         return w;
     };
     // auto dJdt = [&](Position V)
     // {
-    //     Value R = B->R_V(V);
+    //     Value R = B->R_V(V,0.0);
     //     return R * R * dydt.u(Channel::Density)(V);
     // };
     // auto dJprimedt = [&](Position V)
     // {
-    //     Value R = B->R_V(V);
+    //     Value R = B->R_V(V,0.0);
     //     return 2 * R * dydt.u(Channel::Density)(V) + R * R * dydt.q(Channel::Density)(V);
     // };
     // auto n0 = [&](Position V)
@@ -263,17 +263,17 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
     { return y.u(Channel::AngularMomentum)(V); };
     // auto omega = [&](Position V)
     // {
-    //     Value R = B->R_V(V);
+    //     Value R = B->R_V(V,0.0);
     //     return L(V) / (n(V) * R * R);
     // };
     // auto dJdt = [&](Position V)
     // {
-    //     Value R = B->R_V(V);
+    //     Value R = B->R_V(V,0.0);
     //     return R * R * dydt.u(Channel::Density)(V);
     // };
     // auto dJprimedt = [&](Position V)
     // {
-    //     Value R = B->R_V(V);
+    //     Value R = B->R_V(V,0.0);
     //     return 2 * R * dydt.u(Channel::Density)(V) + R * R * dydt.q(Channel::Density)(V);
     // };
     // auto Phi_V = [&](Position V)
@@ -289,14 +289,14 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
         double P_L = integrator::integrate(
             [&](Position V)
             {
-                Position R = B->R_V(V);
+                Position R = B->R_V(V, 0.0);
                 return (P(V) / B->VPrime(V)) / (n(V) * R * R);
             },
             I.x_l, I.x_u, max_depth);
         double P_n = integrator::integrate(
             [&](Position V)
             {
-                Position R = B->R_V(V);
+                Position R = B->R_V(V, 0.0);
                 Value nv = n(V);
                 Value I = -(P(V) / B->VPrime(V)) * L(V) / (nv * nv * R * R);
                 if (evolveLogDensity)
@@ -351,7 +351,7 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
 
         // s.Variable(Channel::AngularMomentum) += 1 / dPsi * integrator::integrate([&](Position V)
         //                                                                          {
-        //     Position R = B->R_V(V);
+        //     Position R = B->R_V(V,0.0);
         //     return P(V) / (R * R * n(V)) * dJdt(V); }, I.x_l, I.x_u);
 
         if (abs(I.x_u - xR) < 1e-9)
@@ -369,13 +369,13 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
 
     // out_dt.Variable(Channel::Density) = 1 / dPsi * integrator::integrate([&](Position V)
     //                                                                      {
-    //     Position R = B->R_V(V);
+    //     Position R = B->R_V(V,0.0);
     //          return P(V) * R * R * omega(V); }, I.x_l, I.x_u);
 
     // if (abs(I.x_u - xR) < 1e-9)
     //     out_dt.Variable(Channel::Density) += B->VPrime(xR) * Phi_V(xR) * P(I.x_u);
 
     // out_dt.Derivative(Channel::Density) = -1 / dPsi * integrator::integrate([&](Position V)
-    //                                                                         { Position R = B->R_V(V);
+    //                                                                         { Position R = B->R_V(V,0.0);
     //     return P(V) * R * R * omega(V); }, I.x_l, I.x_u);
 }

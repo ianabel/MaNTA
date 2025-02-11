@@ -10,51 +10,72 @@ class CylindricalMagneticField():
         self.Rm0 = Rm0
         f = toml.load(config)
 
-        self.Ri = 0.5*np.sqrt(f["configuration"]["Lower_boundary"]/np.pi)
-        self.Ro = 1.5*np.sqrt(f["configuration"]["Upper_boundary"]/np.pi)
+        self.Vi = np.sqrt(f["configuration"]["Lower_boundary"])
+        self.Vo = np.sqrt(f["configuration"]["Upper_boundary"])
+        self.L_z = f["MirrorPlasma"]["Lz"]
+        self.V = np.linspace(self.Vi,self.Vo,nPoints)
+
+        self.Ro = np.sqrt(self.Vo/(np.pi*self.L_z))
+        self.Ri = np.sqrt(self.Vi/(np.pi*self.L_z))
 
         self.m = 0.0*self.B0/(2*(self.Ro-self.Ri))
 
-        self.R = np.linspace(self.Ri,self.Ro,nPoints)
         
     # Linear B - decreases from a value of B0 at Ri to a value of 0.5*B0 at Ro
+    def R(self) -> np.ndarray:
+        return np.sqrt(self.V/(np.pi*self.L_z))
+    
+    def dRdV(self) -> np.ndarray:
+        return 1.0 / (2 * np.pi * self.L_z * self.R())
+
     def Bz(self) -> np.ndarray:
-        return self.B0 + self.m*(self.R - self.Ri)
+        return self.B0 + self.m*(self.R() - self.Ri)
     
     def Psi(self) -> np.ndarray:
-
-        return self.B0*self.R**2/2.+ self.m*(self.R**3/3. - self.Ri*self.R**2/2.)
+        R = self.R()
+        return self.B0*R**2/2.+ self.m*(R**3/3. - self.Ri*R**2/2.)
+    
+    def VPrime(self) ->np.ndarray:
+        return 2 * np.pi * self.L_z / self.Bz()
     
     def Rm(self) -> np.ndarray:
         return self.Bz()/self.B0*self.Rm0
     
-    def getR(self) -> np.ndarray:
-        return self.R
 
 def main():
     nPoints = 300
     B0 = 4.5
     Rm0 = 3.3
-    config = "./Config/MirrorPlasma.conf"
+    config = "./Config/CMFX.conf"
     B = CylindricalMagneticField(B0,Rm0,nPoints,config)
 
     ncfile = Dataset("./Bfield.nc",mode="w",format="NETCDF4")
     
-    ncfile.createDimension('R',nPoints)
-    R = ncfile.createVariable('R',np.float64,('R',))
-    Bz = ncfile.createVariable('Bz',np.float64,('R',))
-    Rm = ncfile.createVariable('Rm',np.float64,('R',))
-    Psi = ncfile.createVariable('Psi',np.float64,('R',))
+    ncfile.createDimension('V',nPoints)
+    V_var = ncfile.createVariable('V',np.float64,('V',))
+    Vprime =ncfile.createVariable('VPrime',np.float64,('V',))
+    L_z = ncfile.createVariable('L',np.float64,('V',))
+    R = ncfile.createVariable('R',np.float64,('V',))
+    dRdV = ncfile.createVariable('dRdV',np.float64,('V',))
+    Bz = ncfile.createVariable('Bz',np.float64,('V',))
+    Rm = ncfile.createVariable('Rm',np.float64,('V',))
+    Psi = ncfile.createVariable('Psi',np.float64,('V',))
 
     R.units = 'm'
-    R[:] = B.getR()
+    V_var[:] = B.V
+    R[:] = B.R()
+    dRdV[:] = B.dRdV()
 
     Bz.units = 'T'
     Bz[:] = B.Bz()
 
+    Vprime[:] = B.VPrime()
+
     Rm[:] = B.Rm()
 
     Psi[:] = B.Psi()
+
+    L_z[:] = B.L_z*np.ones(B.V.shape)
 
     print(ncfile)
     ncfile.close()

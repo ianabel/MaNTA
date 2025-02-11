@@ -8,7 +8,7 @@ Real MirrorPlasma::GFunc(Index, RealVector u, RealVector, RealVector, RealVector
     Real Te = floor(p_e / n, MinTemp);
     Real Ti = floor(p_i / n, MinTemp);
 
-    Real R = B->R_V(V);
+    Real R = B->R_V(V, 0.0);
 
     Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
     Real omega = u(Channel::AngularMomentum) / J;
@@ -24,7 +24,7 @@ Value MirrorPlasma::InitialAuxValue(Index, Position V, Time t) const
     Real Te = p_e / n;
     Real Ti = p_i / n;
 
-    Real R = B->R_V(V);
+    Real R = B->R_V(V, 0.0);
 
     Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
     Real omega = InitialFunction(Channel::AngularMomentum, V, t).val / J;
@@ -58,7 +58,7 @@ T MirrorPlasma::ParallelCurrent(T V, T omega, T n, T Ti, T Te, T phi) const
     T Xii = Xi_i<T>(V, phi, Ti, Te, omega);
     T Xie = Xi_e<T>(V, phi, Ti, Te, omega);
 
-    double MirrorRatio = B->MirrorRatio(V);
+    T MirrorRatio = B->MirrorRatio(V, 0.0);
 
     double Sigma_i = 1.0;
     double Sigma_e = 1 + Z_eff;
@@ -85,7 +85,7 @@ Real MirrorPlasma::dphi1dV(RealVector u, RealVector q, Real phi, Real V) const
         Real2nd Te = p_e / n;
         Real2nd Ti = p_i / n;
 
-        Real2nd R = B->R_V(V);
+        Real2nd R = B->R_V(V, 0.0);
 
         Real2nd L = u(Channel::AngularMomentum);
         Real2nd J = n * R * R; // Normalisation of the moment of inertia includes the m_i

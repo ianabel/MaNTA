@@ -107,10 +107,10 @@ private:
 
 		T Te = p_e / n, Ti = p_i / n;
 		T L = u(Channel::AngularMomentum);
-		T R = B->R_V(V);
+		T R = B->R_V(V, 0.0);
 		T J = n * R * R; // Normalisation of the moment of inertia includes the m_i
 		T omega = L / J;
-		T phi = 0.5 / (1 / Ti + 1 / Te) * omega * omega * R * R / Ti * (1 / B->MirrorRatio(V) - 1);
+		T phi = 0.5 / (1 / Ti + 1 / Te) * omega * omega * R * R / Ti * (1 / B->MirrorRatio(V, 0.0) - 1);
 
 		return phi;
 	}
@@ -122,8 +122,8 @@ private:
 	template <typename T>
 	T CentrifugalPotential(T V, T omega, T Ti, T Te) const
 	{
-		double MirrorRatio = B->MirrorRatio(V);
-		T R = B->R_V(V);
+		T MirrorRatio = B->MirrorRatio(V, 0.0);
+		T R = B->R_V(V, 0.0);
 		T tau = Ti / Te;
 		T MachNumber = omega * R / sqrt(Te); // omega is normalised to c_s0 / a
 		T Potential = (1.0 / (1.0 + tau)) * (1.0 - 1.0 / MirrorRatio) * MachNumber * MachNumber / 2.0;
@@ -196,7 +196,7 @@ private:
 
 	//
 	std::unique_ptr<PlasmaConstants> Plasma;
-	std::shared_ptr<StraightMagneticField> B;
+	std::shared_ptr<MagneticField> B;
 
 	bool evolveLogDensity;
 
