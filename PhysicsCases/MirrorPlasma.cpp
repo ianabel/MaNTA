@@ -9,6 +9,8 @@ const double T_mid = 0.2, T_edge = 0.1;
 
 const double omega_edge = 0.1, omega_mid = 1.0;
 
+const std::string B_file = "./Bfield.nc";
+
 template <typename T>
 T sign(T x)
 {
@@ -46,14 +48,17 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
 
 		evolveLogDensity = toml::find_or(InternalConfig, "LogDensity", false);
 
-		// std::string Bfile = toml::find_or(InternalConfig, "MagneticFieldData", B_file);
+		std::string Bfile = toml::find_or(InternalConfig, "MagneticFieldData", B_file);
+		bool useNcBField = toml::find_or(InternalConfig, "useNcBField", false);
 		double B_z = toml::find_or(InternalConfig, "Bz", 1.0);
 		double Rm = toml::find_or(InternalConfig, "Rm", 3.0);
 		double L_z = toml::find_or(InternalConfig, "Lz", 1.0) / a;
 
 		double m = toml::find_or(InternalConfig, "FieldSlope", 0.0);
-
-		B = createMagneticField<StraightMagneticField>(L_z, B_z, Rm, xL, m); // std::make_shared<StraightMagneticField>(L_z, B_z, Rm, xL, m);
+		if (useNcBField)
+			B = createMagneticField<CylindricalMagneticField>(Bfile);
+		else
+			B = createMagneticField<StraightMagneticField>(L_z, B_z, Rm, xL, m); // std::make_shared<StraightMagneticField>(L_z, B_z, Rm, xL, m); //  //
 
 		R_Lower = B->R_V(xL, 0.0);
 		R_Upper = B->R_V(xR, 0.0);
@@ -662,7 +667,7 @@ Real MirrorPlasma::Somega(RealVector u, RealVector q, RealVector sigma, RealVect
 	if (useConstantVoltage)
 		RadialCurrent = -Scalars(Scalar::Current);
 	else
-		RadialCurrent = IRadial / I0;
+		RadialCurrent = IRadial;
 
 	Real JxB = -RadialCurrent / B->VPrime(V); //-jRadial * R * B->Bz_R(R);
 	Real L = u(Channel::AngularMomentum);

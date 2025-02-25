@@ -24,27 +24,27 @@ CylindricalMagneticField::CylindricalMagneticField(const std::string &file)
     data_file.getVar("V").getVar(V.data());
 
     std::vector<double> temp(nPoints);
-
+    double h = V[1] - V[0];
     data_file.getVar("Bz").getVar(temp.data());
-    B_spline = std::make_unique<spline>(temp.data(), V.data(), nPoints);
+    B_spline = std::make_unique<spline>(temp.begin(), temp.end(), V[0], h);
 
     data_file.getVar("VPrime").getVar(temp.data());
-    Vp_spline = std::make_unique<spline>(temp.data(), V.data(), nPoints);
+    Vp_spline = std::make_unique<spline>(temp.begin(), temp.end(), V[0], h);
 
     data_file.getVar("Psi").getVar(temp.data());
-    Psi_spline = std::make_unique<spline>(temp.data(), V.data(), nPoints);
+    Psi_spline = std::make_unique<spline>(temp.begin(), temp.end(), V[0], h);
 
     data_file.getVar("Rm").getVar(temp.data());
-    Rm_spline = std::make_unique<spline>(temp.data(), V.data(), nPoints);
+    Rm_spline = std::make_unique<spline>(temp.begin(), temp.end(), V[0], h);
 
     data_file.getVar("R").getVar(temp.data());
-    R_V_spline = std::make_unique<spline>(temp.data(), V.data(), nPoints);
+    R_V_spline = std::make_unique<spline>(temp.begin(), temp.end(), V[0], h);
 
     data_file.getVar("dRdV").getVar(temp.data());
-    dRdV_spline = std::make_unique<spline>(temp.data(), V.data(), nPoints);
+    dRdV_spline = std::make_unique<spline>(temp.begin(), temp.end(), V[0], h);
 
     data_file.getVar("L").getVar(temp.data());
-    L_spline = std::make_unique<spline>(temp.data(), V.data(), nPoints);
+    L_spline = std::make_unique<spline>(temp.begin(), temp.end(), V[0], h);
 }
 
 double CylindricalMagneticField::B(double V, double z) const

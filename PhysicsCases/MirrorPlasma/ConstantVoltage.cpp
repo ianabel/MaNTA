@@ -81,8 +81,8 @@ Value MirrorPlasma::InitialScalarValue(Index s) const
 
     auto Phi_V = [&](Position V)
     {
-        Value VPrime = B->VPrime(V);
-        Value phi = 1 / VPrime * integrator::integrate(omega, xL, V, max_depth);
+        Value phi = integrator::integrate([&](double V)
+                                          { return omega(V) / B->VPrime(V); }, xL, V, max_depth);
         return phi;
     };
 
@@ -209,8 +209,8 @@ Value MirrorPlasma::ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt
     // Value N0 = integrator::integrate(n0, xL, xR);
     auto Phi_V = [&](Position V)
     {
-        Value VPrime = B->VPrime(V);
-        Value phi = 1 / VPrime * integrator::integrate(omega, xL, V, max_depth);
+        Value phi = integrator::integrate([&](double V)
+                                          { return omega(V) / B->VPrime(V); }, xL, V, max_depth);
         return phi;
     };
     switch (static_cast<Scalar>(s))

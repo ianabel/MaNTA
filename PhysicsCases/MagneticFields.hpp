@@ -6,7 +6,7 @@
 #include <netcdf>
 #include <string>
 #include <vector>
-#include <boost/math/interpolators/barycentric_rational.hpp>
+#include <boost/math/interpolators/cardinal_cubic_b_spline.hpp>
 #include <autodiff/forward/dual.hpp>
 #include "../util/trapezoid.hpp"
 using std::numbers::pi;
@@ -36,7 +36,7 @@ public:
 
 	virtual Real R_V(Real V, Real s) const { return R(Psi_V(V), s); }
 	virtual double R_V(double V, double s) const { return R_V(static_cast<Real>(V), static_cast<Real>(s)).val; }
-	virtual Real2nd R_V(Real2nd V, Real2nd s) const { throw std::logic_error("If 2nd derivative behavior is required it must be explicitly defined in your magnetic field class"); }
+	virtual Real2nd R_V(Real2nd V, Real2nd s) const { throw std::logic_error("If 2nd derivative behavior is required it must be explicitly implemented in your magnetic field class"); }
 
 	virtual Real dRdV(Real V, Real) const = 0;
 	virtual double dRdV(double V, double s) const { return dRdV(static_cast<Real>(V), static_cast<Real>(s)).val; };
@@ -46,7 +46,7 @@ public:
 
 	virtual Real MirrorRatio(Real V, Real) const = 0;
 	virtual double MirrorRatio(double V, double s) const { return MirrorRatio(static_cast<Real>(V), static_cast<Real>(s)).val; }
-	virtual Real2nd MirrorRatio(Real2nd V, Real2nd s) const { throw std::logic_error("If 2nd derivative behavior is required it must be explicitly defined in your magnetic field class"); }
+	virtual Real2nd MirrorRatio(Real2nd V, Real2nd s) const { throw std::logic_error("If 2nd derivative behavior is required it must be explicitly implemented in your magnetic field class"); }
 
 	virtual Real L_V(Real V) const = 0;
 	virtual double L_V(double V) const { return L_V(static_cast<Real>(V)).val; }
@@ -83,14 +83,14 @@ public:
 	StraightMagneticField() = default;
 	StraightMagneticField(double L_z, double B_z, double Rm) : L_z(L_z), B_z(B_z), Rm(Rm) {};
 
-	StraightMagneticField(double L_z, double B_z, double Rm, double Vmin, double m) : L_z(L_z), B_z(B_z), Rm(Rm), Rmin(R_V(Vmin)), m(m) {};
+	StraightMagneticField(double L_z, double B_z, double Rm, double Vmin, double m) : L_z(L_z), B_z(B_z), Rm(Rm), Vmin(Vmin), m(m) {};
 
 	template <typename T>
-	T Bz_R(T R) const { return B_z - m * (R - Rmin); }
-
-	template <typename T>
-	T B(T V) const { return Bz_R(R_V(V)); }
-	virtual Real B(Real V, Real z = 0.0) const override { return B<Real>(V); };
+	T B_T(T V) const
+	{
+		return B_z - m * (V - Vmin);
+	}
+	virtual Real B(Real V, Real) const override { return B_T(std::move(V)); };
 
 	template <typename T>
 	T Psi(T R) const
@@ -98,56 +98,53 @@ public:
 		return R * R * Bz_R(R) / 2.0;
 	}
 	template <typename T>
-	T Psi_V(T V) const
+	T Psi_V_T(T V) const
 	{
-		return B(V) * V / (2 * pi * L_z);
+		return B_T(V) * V / (2 * pi * L_z);
 	}
-	virtual Real Psi_V(Real V) const override { return Psi_V<Real>(V); };
+	virtual Real Psi_V(Real V) const override { return Psi_V_T(std::move(V)); };
 
 	template <typename T>
-	T VPrime(T V) const
+	T VPrime_T(T V) const
 	{
-		return 2 * pi * L_z / B(V);
+		return 2 * pi * L_V_T(V) / B_T(V);
 	}
-	Real R(Real Psi, Real V = 0.0) const override { return sqrt(2 * Psi / B_z); };
-
 	Real VPrime(Real V) const override
 	{
-		return 2 * pi * L_z / B_z;
+		return VPrime_T(V); // 2 * pi * L_z / B_T(V);
 	}
 
+	Real R(Real Psi, Real) const override { return sqrt(2 * Psi / B_z); };
+
 	template <typename T>
-	T R_V(T V) const
+	T R_V_T(T V) const
 	{
 		return sqrt(V / (pi * L_z));
 	}
-	Real R_V(Real V, Real z = 0.0) const override { return R_V<Real>(V); }
-	Real2nd R_V(Real2nd V, Real2nd z = 0.0) const override { return R_V<Real2nd>(V); }
+	Real R_V(Real V, Real) const override { return R_V_T(std::move(V)); }
+	Real2nd R_V(Real2nd V, Real2nd) const override { return R_V_T(std::move(V)); }
 
 	template <typename T>
-	T dRdV(T V) const
+	T dRdV_T(T V) const
 	{
-		return 1.0 / (2 * pi * L_z * R_V(V));
+		return 1.0 / (2 * pi * L_V_T(V) * R_V_T(V));
 	}
+	Real dRdV(Real V, Real) const override { return dRdV_T(std::move(V)); }
+
 	template <typename T>
-	T MirrorRatio(T V) const
+	T MirrorRatio_T(T V) const
 	{
-		return Rm * B(V) / B_z;
+		return Rm * B_T(V) / B_z;
 	}
-	Real MirrorRatio(Real V, Real z = 0.0) const override { return MirrorRatio<Real>(V); }
-	Real2nd MirrorRatio(Real2nd V, Real2nd z = 0.0) const override { return MirrorRatio<Real2nd>(V); }
-
-	Real dRdV(Real V, Real z = 0.0) const override { return dRdV<Real>(V); }
+	Real MirrorRatio(Real V, Real) const override { return MirrorRatio_T(std::move(V)); }
+	Real2nd MirrorRatio(Real2nd V, Real2nd) const override { return MirrorRatio_T(std::move(V)); }
 
 	template <typename T>
-	T L_V(T) const
+	T L_V_T(T) const
 	{
 		return L_z;
 	}
-	Real L_V(Real V) const override { return L_V<Real>(V); }
-
-	void setRmin(double R) { Rmin = R; };
-	void setm(double min) { m = min; };
+	Real L_V(Real V) const override { return L_V_T(std::move(V)); }
 
 private:
 	virtual Real LeftEndpoint(Real Psi) const override { return 0.0; };
@@ -156,7 +153,7 @@ private:
 	double B_z = 0.3;
 	double Rm = 10.0;
 
-	double Rmin = 0.0;
+	double Vmin = 0.0;
 	double m = 0.0;
 };
 
@@ -178,14 +175,14 @@ public:
 	double Psi_V(double V) const override;
 	Real Psi_V(Real V) const override
 	{
-		Real Psi = B(V.val);
+		Real Psi = Psi_V(V.val);
 		if (V.grad != 0)
 			Psi.grad = Psi_spline->prime(V.val);
 		return Psi;
 	}
 
 	double VPrime(double V) const override;
-	Real VPrime(Real V)
+	Real VPrime(Real V) const override
 	{
 		Real Vp = (*Vp_spline)(V.val);
 		if (V.grad != 0)
@@ -209,10 +206,12 @@ public:
 		return R;
 	};
 
+	Real R(Real Psi, Real) const override { return sqrt(2 * Psi / B(Psi)); };
+
 	double dRdV(double V, double s = 0.0) const override;
 	Real dRdV(Real V, Real s = 0.0) const override
 	{
-		Real drdv = MirrorRatio(V.val);
+		Real drdv = dRdV(V.val);
 		if (V.grad != 0)
 			drdv.grad = dRdV_spline->prime(V.val);
 		return drdv;
@@ -246,7 +245,10 @@ public:
 	void CheckBoundaries(double VL, double VR) const;
 
 private:
-	using spline = boost::math::barycentric_rational<double>;
+	using spline = boost::math::interpolators::cardinal_cubic_b_spline<double>;
+
+	virtual Real LeftEndpoint(Real V) const override { return 0.0; };
+	virtual Real RightEndpoint(Real V) const override { return L_V(V); };
 	// double R_root_solver(double Psi);
 
 	std::string filename;

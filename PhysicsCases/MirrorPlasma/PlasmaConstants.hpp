@@ -283,7 +283,8 @@ private:
         double cs0 = sqrt(T0 / IonMass());
         Real Mth = vtheta * cs0 / sqrt(vth2);
 
-        auto Integrand = [this](double Energy, Real Mass, Real M, Real T, Real CrossSection)
+        // Energy in eV, mass in kg, T in keV, cross section in cm^2
+        auto Integrand = [this](double Energy, double Mass, Real M, Real T, Real CrossSection)
         {
             Real MmE = M - sqrt(Energy / T);
             Real MpE = M + sqrt(Energy / T);
@@ -292,14 +293,37 @@ private:
             return I;
         };
 
+        Real min_sqrt = 4;
+        // Velocity such that Exp( -(M-v)^2 ) is negligibly small;
+        Real min_velocity;
+        if (Mth <= min_sqrt)
+            min_velocity = 0;
+        else
+            min_velocity = Mth - min_sqrt;
+        Real max_velocity;
+        max_velocity = Mth + min_sqrt;
+
+        Real minE = minEnergy; // max(minEnergy, min_velocity * min_velocity * T * T0 / ElementaryCharge);
+
+        Real maxEV = max_velocity * max_velocity * T * T0 / ElementaryCharge;
+        Real maxE = min(1e6, maxEV);
+
         Real Integral = 0;
         Integral.val = integrator::integrate([&](double Energy)
-                                             { return Integrand(Energy, Mass, Mth, T * T0eV, CrossSection(Energy)).val; }, minEnergy, std::numeric_limits<double>::infinity(), max_depth, tol);
+                                             { return Integrand(Energy, Mass, Mth, T * T0eV, CrossSection(Energy)).val; }, minE.val, maxE.val, max_depth, tol);
 
         // boost isn't compatible with autodiff so we calculate .grad integral separately if needed
         if (T.grad != 0 || vtheta.grad != 0)
+        {
+            Real dmaxEdT = maxEV > 1e6 ? 0.0 : static_cast<Real>(T0 / ElementaryCharge * (max_velocity * max_velocity - 2 * Mth * max_velocity));
+            Real dmaxEdVtheta = maxEV > 1e6 ? 0.0 : static_cast<Real>(-2 * Mth / vtheta * max_velocity * T * T0 / ElementaryCharge);
             Integral.grad = integrator::integrate([&](double Energy)
-                                                  { return Integrand(Energy, Mass, Mth, T * T0eV, CrossSection(Energy)).grad; }, minEnergy, std::numeric_limits<double>::infinity(), max_depth, tol);
+                                                  { return Integrand(Energy, Mass, Mth, T * T0eV, CrossSection(Energy)).grad; }, minE.val, maxE.val, max_depth, tol);
+            if (T.grad != 0)
+                Integral.grad += dmaxEdT.val * Integrand(maxE.val, Mass, Mth, T * T0eV, CrossSection(maxE.val)).val;
+            else
+                Integral.grad += dmaxEdVtheta.val * Integrand(maxE.val, Mass, Mth, T * T0eV, CrossSection(maxE.val)).val;
+        }
 
         return Integral / (sqrt(M_PI) * Mth * vth2);
     }

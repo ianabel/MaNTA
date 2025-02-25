@@ -159,19 +159,6 @@ private:
 	template <typename T>
 	T SmoothTransition(T x, double L, double yf) const
 	{
-		// double c = 1.0;
-		// double xt = 0; //(yf < 0.5) ? yf : 0.5; // xt must be less than 1 and yf
-		// double b = pow(c - xt * xt, k + 1) * pow(k / (2 * xt), k);
-		// double a = xt - pow(k * b / (2 * xt), 1 / (k + 1));
-
-		// T xl = yf * (x * x);
-		// T xr = yf * (-b / pow(x - a, k) + c);
-		// // double a = xt - pow(2 * xt / k, 1.0 / (k - 1));
-		// // double C = xt * xt - pow(xt - a, k);
-
-		// // T xl = x * x;
-		// // T xr = pow(x - a, k) + C;
-
 		T xl = yf / 2.0 * (1 - cos(M_PI * x / L));
 		T xr = yf;
 
