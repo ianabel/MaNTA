@@ -76,7 +76,7 @@ Real PlasmaConstants::ChargeExchangeLossRate(Real n, Real NeutralDensity, Real v
     Real IonIntegral = NeutralProcess([this](double Energy)
                                       { return Plasma->HydrogenChargeExchangeCrossSection(Energy); }, v, Ti, IonMass(), 0.1);
 
-    Real R = n_m3 * n_neutrals * (IonIntegral);
+    Real R = n_m3 * n_neutrals * IonIntegral;
 
     return R;
 };
@@ -118,6 +118,18 @@ double PlasmaConstants::ReferenceIonCollisionTime() const
 {
     double LogLambdaRef = 23.0 - log(2.0) - log(n0cgs) / 2.0 + log(T0eV) * 1.5; // 23 - ln( (2n)^1/2 T^-3/2 ) from NRL pg 34
     return 12.0 * pow(M_PI, 1.5) * sqrt(IonMass()) * pow(T0, 1.5) * VacuumPermittivity * VacuumPermittivity / (n0 * pow(ElementaryCharge, 4) * LogLambdaRef);
+}
+
+// sqrt(2*T0/me)
+double PlasmaConstants::ReferenceElectronThermalVelocity() const
+{
+    return sqrt(2 * T0 / ElectronMass);
+}
+
+// sqrt(2*T0/mi)
+double PlasmaConstants::ReferenceIonThermalVelocity() const
+{
+    return sqrt(2 * T0 / IonMass());
 };
 
 /*
@@ -135,10 +147,16 @@ double PlasmaConstants::RhoStarRef() const
     return sqrt(T0 * IonMass()) / (ElementaryCharge * B0 * a);
 }
 
+// mi/me
+double PlasmaConstants::mu() const
+{
+    return IonMass() / ElectronMass;
+}
+
 // Normalize to the particle diffusion time
 double PlasmaConstants::NormalizingTime() const
 {
     double RhoStar = RhoStarRef();
 
-    return IonMass() / ElectronMass * 1 / (RhoStar * RhoStar) * ReferenceElectronCollisionTime();
+    return mu() * 1 / (RhoStar * RhoStar) * ReferenceElectronCollisionTime();
 };

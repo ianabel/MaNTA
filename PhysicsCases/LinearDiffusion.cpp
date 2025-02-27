@@ -119,7 +119,6 @@ double LinearDiffusion::MMS_Source(Index, Position x, Time t)
 	double dudt = growth * growth_rate * 1 / (cosh(growth_rate * t) * cosh(growth_rate * t)) * InitialValue(0, x);
 
 	double alpha = 1 / InitialWidth;
-	double beta = 1 + growth * tanh(growth_rate * t);
 	double y = x - Centre;
 	double d2udx2 = 2 * alpha * (2 * alpha * y * y - 1) * u;
 

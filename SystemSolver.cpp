@@ -74,29 +74,39 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     if (!initialised)
         throw std::logic_error("setInitialConditions can only be called after initialising the matrices");
 
-    // slightly minging syntax. blame C++
-    auto initial_u = std::bind_front(&TransportSystem::InitialValue, problem);
-    auto initial_q = std::bind_front(&TransportSystem::InitialDerivative, problem);
-    y.AssignU(initial_u);
-    y.AssignQ(initial_q);
-
-    for ( Index s = 0; s < nScalars; ++s ) {
-        y.Scalar( s ) = problem->InitialScalarValue( s );
+    if (problem->isRestarting())
+    {
+        // Copy restart values into y
+        y.copy(problem->getRestartY());
+        ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
     }
+    else 
+    {
+        // slightly minging syntax. blame C++
+        auto initial_u = std::bind_front(&TransportSystem::InitialValue, problem);
+        auto initial_q = std::bind_front(&TransportSystem::InitialDerivative, problem);
+        y.AssignU(initial_u);
+        y.AssignQ(initial_q);
 
-    if( nAux > 0 ) {
-        auto initial_aux = std::bind_front( &TransportSystem::InitialAuxValue, problem );
-        y.AssignAux( initial_aux );
+        for ( Index s = 0; s < nScalars; ++s ) {
+            y.Scalar( s ) = problem->InitialScalarValue( s );
+        }
+
+        if( nAux > 0 ) {
+            auto initial_aux = std::bind_front( &TransportSystem::InitialAuxValue, problem );
+            y.AssignAux( initial_aux );
+        }
+
+        ApplyDirichletBCs(y);
+
+        // Zero most of dydt, we only have to set it to nonzero values for the differential parts of y
+
+        auto sigma_wrapper = [this](Index i, const State &s, Position x, Time t) { return -problem->SigmaFn(i, s, x, t); };
+        y.AssignSigma(sigma_wrapper);
+
+        y.EvaluateLambda();
     }
-
-    ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
-
-    // Zero most of dydt, we only have to set it to nonzero values for the differential parts of y
-
-    auto sigma_wrapper = [this](Index i, const State &s, Position x, Time t) { return -problem->SigmaFn(i, s, x, t); };
-    y.AssignSigma(sigma_wrapper);
-
-    y.EvaluateLambda();
+    
     dydt.zeroCoeffs();
 
     for (Index var = 0; var < nVars; var++)
@@ -123,12 +133,14 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
             // <cellwise derivative matrix> * dydt.u( var ).getCoeff( i ).second;
         }
     }
-
-    for ( Index s = 0; s < nScalars; ++s ) {
-        if( problem->isScalarDifferential( s ) ) {
-            dydt.Scalar(s) = problem->InitialScalarDerivative( s, y, dydt );
+    for (Index s = 0; s < nScalars; ++s)
+    {
+        if (problem->isScalarDifferential(s))
+        {
+            dydt.Scalar(s) = problem->InitialScalarDerivative(s, y, dydt);
         }
     }
+    
 }
 
 void SystemSolver::ApplyDirichletBCs(DGSoln &Y)
@@ -594,7 +606,7 @@ void SystemSolver::updateMatricesForJacSolve()
                     w_map[ j ].u( v ).getCoeff( i ).second( l )     = s.Variable[ v ]   + alpha * s_dt.Variable[ v ];
                 }
                 for (Index a = 0; a < nAux; ++a) 
-                   w_map[ j ].Aux( a ).getCoeff( i ).second( l )    = s.Aux[ a ]        + alpha * s_dt.Aux[ a ];
+                    w_map[ j ].Aux( a ).getCoeff( i ).second( l )    = s.Aux[ a ]       + alpha * s_dt.Aux[ a ];
                 
             }
             for( Index m = 0; m < nScalars; ++m )

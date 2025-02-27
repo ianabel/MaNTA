@@ -102,6 +102,8 @@ public:
 			{
 				double cellLeft = lBoundaryLayer - lBoundaryWidth * cos((pi * i) / (2.0 * BoundaryCells - 1.0));
 				double cellRight = lBoundaryLayer - lBoundaryWidth * cos((pi * (i + 1)) / (2.0 * BoundaryCells - 1.0));
+				if (i == 0)
+					cellLeft = lowerBound;
 				if (i == BoundaryCells - 1)
 					cellRight = lBoundaryLayer;
 				gridCells.emplace_back(cellLeft, cellRight);
@@ -114,12 +116,25 @@ public:
 				double cellRight = uBoundaryLayer + uBoundaryWidth * cos(pi * (BoundaryCells - i - 1) / (2.0 * BoundaryCells - 1.0));
 				if (i == 0)
 					cellLeft = uBoundaryLayer;
-
+				if (i == BoundaryCells - 1)
+					cellRight = upperBound;
 				gridCells.emplace_back(cellLeft, cellRight);
 			}
 		}
 		if (gridCells.size() != nCells)
 			throw std::runtime_error("Unable to construct grid.");
+	}
+
+	Grid(const std::vector<Position> &points)
+	{
+		auto nCells = points.size() - 1;
+		gridCells.reserve(nCells);
+		lowerBound = points.front();
+		upperBound = points.back();
+		for (Index i = 0; i < nCells; ++i)
+		{
+			gridCells.emplace_back(points[i], points[i + 1]);
+		}
 	}
 
 	Grid(const Grid &grid) = default;
