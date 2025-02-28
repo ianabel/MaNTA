@@ -296,7 +296,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_restart_tests)
 	Index k;
 	GridGroup.getVar("PolyOrder").getVar(&k);
 
-	MatrixDiffusion *problem;
+	MatrixDiffusion *problem = nullptr;
 	BOOST_CHECK_NO_THROW(problem = new MatrixDiffusion(config_snippet_2, *testGrid));
 	Index nDOF;
 

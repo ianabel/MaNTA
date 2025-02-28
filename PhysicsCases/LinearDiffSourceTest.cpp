@@ -172,7 +172,7 @@ void LinearDiffSourceTest::initialiseDiagnostics(NetCDFIO &nc)
                        { return this->InitialFunction(j, V, 0.0).val.val; });
 }
 
-void LinearDiffSourceTest::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
+void LinearDiffSourceTest::writeDiagnostics(DGSoln const &y, DGSoln const&, Time t, NetCDFIO &nc, size_t tIndex)
 {
     for (Index j = 0; j < nVars; ++j)
         nc.AppendToGroup("MMS", tIndex, "Var" + std::to_string(j), [this, j, t](double x)

@@ -37,7 +37,7 @@ public:
     Value InitialScalarDerivative(Index s, const DGSoln &y, const DGSoln &dydt) const override;
 
     void initialiseDiagnostics(NetCDFIO &nc) override;
-    void writeDiagnostics(DGSoln const &, double, NetCDFIO &, size_t) override;
+    void writeDiagnostics(DGSoln const &, DGSoln const &, Time, NetCDFIO &, size_t) override;
 
     bool isScalarDifferential(Index) override;
 
