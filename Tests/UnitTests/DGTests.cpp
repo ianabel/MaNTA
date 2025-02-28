@@ -239,6 +239,225 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction )
 
 }
 
+BOOST_AUTO_TEST_CASE( dg_approx_construction_nodal )
+{
+    Grid testGrid( 0.0, 1.0, 4 );
+    double a = 2.0;
+    NodalBasis Basis = NodalBasis::getBasis( 1 );
+    DGApproxImpl<NodalBasis> linear( testGrid, Basis );
+
+    auto const& cref = linear.getCoeffs();
+    BOOST_TEST( cref.size() == 0 );
+    BOOST_TEST( cref.capacity() == testGrid.getNCells() );
+    BOOST_TEST( linear.getDoF() == 8 );
+
+    // Map memory
+    double* mem = new double[ linear.getDoF() ];
+    VectorWrapper v( mem, linear.getDoF() );
+    linear.Map( mem, 2 );
+
+    // Pick something that is exact
+    linear = [=]( double x ){ return a*x; };
+
+    // LGL Nodes on [-1,1] are { -0.5773502691896257645, +0.5773502691896257645 }
+    constexpr double node = 0.5773502691896257645;
+
+    // v( 2*i ) == Value at (x_l + x_u)/2.0 - node * (x_u - x_l) / 2.0
+    //          == a * ( x_u * ( 1 - node ) /2.0 + x_l * (1 + node ) / 2.0 )
+
+    for( Index i = 0; i < 4; ++i )
+    {
+      BOOST_TEST( v( 2*i ) == a * ( testGrid[i].x_u * ( 1.0 - node ) / 2.0 + testGrid[i].x_l * ( 1.0 + node ) / 2.0 ) );
+      BOOST_TEST( v( 2*i + 1 ) == a * ( testGrid[i].x_u * ( 1.0 + node ) / 2.0 + testGrid[i].x_l * ( 1.0 - node ) / 2.0 ) );
+    }
+
+    BOOST_TEST( linear( 0.1 ) == a*0.1 );
+    BOOST_TEST( linear( 0.7 ) == a*0.7 );
+
+    double *extraMem = new double[ linear.getDoF() ];
+    DGApproxImpl<NodalBasis> constructedLinear( testGrid, Basis, extraMem, 2 );
+
+    // Check copy
+    BOOST_CHECK_NO_THROW( constructedLinear.copy( linear ) );
+    BOOST_TEST( constructedLinear.getCoeffs().size() == testGrid.getNCells() );
+    BOOST_TEST( constructedLinear.getDoF() == testGrid.getNCells() * 2 );
+    BOOST_TEST( constructedLinear( 0.1 ) == a*0.1 );
+    BOOST_TEST( constructedLinear( 0.7 ) == a*0.7 );
+    BOOST_TEST( constructedLinear( 0.1, testGrid[ 0 ] ) == a * 0.1 );
+    BOOST_TEST( constructedLinear( 0.7, testGrid[ 2 ] ) == a * 0.7 );
+
+
+    // Another window on mem
+    DGApproxImpl<NodalBasis> constructedData( testGrid, Basis, mem, 2 );
+
+    BOOST_TEST( constructedData( 0.1 ) == a*0.1 );
+    BOOST_TEST( constructedData( 0.7 ) == a*0.7 );
+    BOOST_TEST( constructedData.getDoF() == 8 );
+
+    // += operator testing.
+    constructedData = [ = ]( double x ){ return ( a/2.0 )*x; };
+
+    // check we overwrote the data we thought we were using
+    for( Index i = 0; i < 4; ++i )
+    {
+      BOOST_TEST( v( 2*i ) == a * ( testGrid[i].x_u * ( 1.0 - node ) / 2.0 + testGrid[i].x_l * ( 1.0 + node ) / 2.0 ) );
+      BOOST_TEST( v( 2*i + 1 ) == a * ( testGrid[i].x_u * ( 1.0 + node ) / 2.0 + testGrid[i].x_l * ( 1.0 - node ) / 2.0 ) );
+    }
+
+    BOOST_CHECK_NO_THROW( constructedLinear += constructedData );
+
+    BOOST_TEST( constructedLinear.getDoF() == testGrid.getNCells() * 2 );
+    BOOST_TEST( constructedLinear( 0.1 ) == 1.5*a*0.1 );
+    BOOST_TEST( constructedLinear( 0.7 ) == 1.5*a*0.7 );
+
+    delete[] extraMem;
+    delete[] mem;
+
+    // Interleaved data test
+    mem = new double[ linear.getDoF() * 2 ];
+    linear.Map( mem, 4 );
+    constructedData.Map( mem + 2, 4 );
+    linear = [=]( double x ){ return a*x; };
+    constructedData = [ = ]( double x ){ return ( a/2.0 )*x; };
+
+    BOOST_TEST( linear.getDoF() == 8 );
+    BOOST_TEST( linear( 0.1 ) == a*0.1 );
+    BOOST_TEST( linear( 0.7 ) == a*0.7 );
+
+    BOOST_TEST( constructedData( 0.1 ) == ( a/2.0 )*0.1 );
+    BOOST_TEST( constructedData( 0.7 ) == ( a/2.0 )*0.7 );
+    BOOST_TEST( constructedData.getDoF() == 8 );
+
+    new ( &v ) VectorWrapper( mem, linear.getDoF()*2 );
+    // Data for 'linear'
+    for( Index i = 0; i < 4; ++i )
+    {
+      BOOST_TEST( v( 4*i ) == a * ( testGrid[i].x_u * ( 1.0 - node ) / 2.0 + testGrid[i].x_l * ( 1.0 + node ) / 2.0 ) );
+      BOOST_TEST( v( 4*i + 1 ) == a * ( testGrid[i].x_u * ( 1.0 + node ) / 2.0 + testGrid[i].x_l * ( 1.0 - node ) / 2.0 ) );
+      BOOST_TEST( v( 4*i + 2 ) == (a/2.0) * ( testGrid[i].x_u * ( 1.0 - node ) / 2.0 + testGrid[i].x_l * ( 1.0 + node ) / 2.0 ) );
+      BOOST_TEST( v( 4*i + 3 ) == (a/2.0) * ( testGrid[i].x_u * ( 1.0 + node ) / 2.0 + testGrid[i].x_l * ( 1.0 - node ) / 2.0 ) );
+    }
+
+    delete[] mem;
+}
+
+BOOST_AUTO_TEST_CASE( dg_approx_construction_cheb )
+{
+    Grid testGrid( 0.0, 1.0, 4 );
+    double a = 2.0;
+    ChebyshevBasis Basis = ChebyshevBasis::getBasis( 1 );
+    DGApproxImpl<ChebyshevBasis> linear( testGrid, Basis );
+
+    auto const& cref = linear.getCoeffs();
+    BOOST_TEST( cref.size() == 0 );
+    BOOST_TEST( cref.capacity() == testGrid.getNCells() );
+    BOOST_TEST( linear.getDoF() == 8 );
+
+    // Map memory
+    double* mem = new double[ linear.getDoF() ];
+    VectorWrapper v( mem, linear.getDoF() );
+    linear.Map( mem, 2 );
+
+    // Pick something that is exact
+    linear = [=]( double x ){ return a*x; };
+
+    // v( 2*i ) == Value at cell centre
+    //          == a * ( x_u + x_l ) / 2.0
+    // v( 2*i + 1 ) == Slope in ref units = a * cell size / 2
+
+    BOOST_TEST( v( 0 ) == ( a * 0.125 ) );
+    BOOST_TEST( v( 2 ) == ( a * 0.375 ) );
+    BOOST_TEST( v( 4 ) == ( a * 0.625 ) );
+    BOOST_TEST( v( 6 ) == ( a * 0.875 ) );
+    BOOST_TEST( v( 1 ) == ( a * 0.125 ) );
+    BOOST_TEST( v( 3 ) == ( a * 0.125 ) );
+    BOOST_TEST( v( 5 ) == ( a * 0.125 ) );
+    BOOST_TEST( v( 7 ) == ( a * 0.125 ) );
+
+    BOOST_TEST( linear( 0.1 ) == a*0.1 );
+    BOOST_TEST( linear( 0.7 ) == a*0.7 );
+
+    double *extraMem = new double[ linear.getDoF() ];
+    DGApproxImpl<ChebyshevBasis> constructedLinear( testGrid, Basis, extraMem, 2 );
+
+    // Check copy
+    BOOST_CHECK_NO_THROW( constructedLinear.copy( linear ) );
+    BOOST_TEST( constructedLinear.getCoeffs().size() == testGrid.getNCells() );
+    BOOST_TEST( constructedLinear.getDoF() == testGrid.getNCells() * 2 );
+    BOOST_TEST( constructedLinear( 0.1 ) == a*0.1 );
+    BOOST_TEST( constructedLinear( 0.7 ) == a*0.7 );
+    BOOST_TEST( constructedLinear( 0.1, testGrid[ 0 ] ) == a * 0.1 );
+    BOOST_TEST( constructedLinear( 0.7, testGrid[ 2 ] ) == a * 0.7 );
+
+
+    // Another window on mem
+    DGApproxImpl<ChebyshevBasis> constructedData( testGrid, Basis, mem, 2 );
+
+    BOOST_TEST( constructedData( 0.1 ) == a*0.1 );
+    BOOST_TEST( constructedData( 0.7 ) == a*0.7 );
+    BOOST_TEST( constructedData.getDoF() == 8 );
+
+    // += operator testing.
+    constructedData = [ = ]( double x ){ return ( a/2.0 )*x; };
+
+    // check we overwrote the data we thought we were using
+    BOOST_TEST( v( 0 ) == ( a * 0.125 / 2.0 ) );
+    BOOST_TEST( v( 2 ) == ( a * 0.375 / 2.0 ) );
+    BOOST_TEST( v( 4 ) == ( a * 0.625 / 2.0 ) );
+    BOOST_TEST( v( 6 ) == ( a * 0.875 / 2.0 ) );
+    BOOST_TEST( v( 1 ) == ( a * 0.125 / 2.0 ) );
+    BOOST_TEST( v( 3 ) == ( a * 0.125 / 2.0 ) );
+    BOOST_TEST( v( 5 ) == ( a * 0.125 / 2.0 ) );
+    BOOST_TEST( v( 7 ) == ( a * 0.125 / 2.0 ) );
+
+    BOOST_CHECK_NO_THROW( constructedLinear += constructedData );
+
+    BOOST_TEST( constructedLinear.getDoF() == testGrid.getNCells() * 2 );
+    BOOST_TEST( constructedLinear( 0.1 ) == 1.5*a*0.1 );
+    BOOST_TEST( constructedLinear( 0.7 ) == 1.5*a*0.7 );
+
+    delete[] extraMem;
+    delete[] mem;
+
+    // Interleaved data test
+    mem = new double[ linear.getDoF() * 2 ];
+    linear.Map( mem, 4 );
+    constructedData.Map( mem + 2, 4 );
+    linear = [=]( double x ){ return a*x; };
+    constructedData = [ = ]( double x ){ return ( a/2.0 )*x; };
+
+    BOOST_TEST( linear.getDoF() == 8 );
+    BOOST_TEST( linear( 0.1 ) == a*0.1 );
+    BOOST_TEST( linear( 0.7 ) == a*0.7 );
+
+    BOOST_TEST( constructedData( 0.1 ) == ( a/2.0 )*0.1 );
+    BOOST_TEST( constructedData( 0.7 ) == ( a/2.0 )*0.7 );
+    BOOST_TEST( constructedData.getDoF() == 8 );
+
+    new ( &v ) VectorWrapper( mem, linear.getDoF()*2 );
+    // Data for 'linear'
+    BOOST_TEST( v( 0 ) == ( a * 0.125 ) );
+    BOOST_TEST( v( 4 ) == ( a * 0.375 ) );
+    BOOST_TEST( v( 8 ) == ( a * 0.625 ) );
+    BOOST_TEST( v( 12 ) == ( a * 0.875 ) );
+    BOOST_TEST( v( 1 ) == ( a * 0.125 ) );
+    BOOST_TEST( v( 5 ) == ( a * 0.125 ) );
+    BOOST_TEST( v( 9 ) == ( a * 0.125 ) );
+    BOOST_TEST( v( 13 ) == ( a * 0.125 ) );
+
+    // Data for 'constructedData'
+    BOOST_TEST( v( 2 ) == ( a * 0.125 / 2.0 ) );
+    BOOST_TEST( v( 6 ) == ( a * 0.375 / 2.0 ) );
+    BOOST_TEST( v( 10 ) == ( a * 0.625 / 2.0 ) );
+    BOOST_TEST( v( 14 ) == ( a * 0.875 / 2.0 ) );
+    BOOST_TEST( v( 3 ) == ( a * 0.125 / 2.0 ) );
+    BOOST_TEST( v( 7 ) == ( a * 0.125 / 2.0 ) );
+    BOOST_TEST( v( 11 ) == ( a * 0.125 / 2.0 ) );
+    BOOST_TEST( v( 15 ) == ( a * 0.125 / 2.0 ) );
+
+    delete[] mem;
+}
+
 BOOST_AUTO_TEST_CASE( dg_approx_static )
 {
     Grid testGrid( 0.0, 1.0, 4 );

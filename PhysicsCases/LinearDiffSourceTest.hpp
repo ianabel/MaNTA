@@ -42,7 +42,7 @@ private:
     Matrix Kappa;
 
     void initialiseDiagnostics(NetCDFIO &nc) override;
-    void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override;
+    void writeDiagnostics(DGSoln const &y, DGSoln const& dydt, Time t, NetCDFIO &nc, size_t tIndex) override;
 
     REGISTER_PHYSICS_HEADER(LinearDiffSourceTest)
 };

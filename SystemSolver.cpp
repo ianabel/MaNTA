@@ -390,8 +390,7 @@ void SystemSolver::initialiseMatrices()
         for (Index var = 0; var < nVars; var++)
         {
             Eigen::MatrixXd Xvar(k + 1, k + 1);
-            y.getBasis().MassMatrix(I, Xvar, [this, var](double x)
-                    { return problem->aFn(var, x); });
+            y.getBasis().MassMatrix( I, Xvar );
             X.block(var * (k + 1), var * (k + 1), k + 1, k + 1) = Xvar;
         }
         XMats.emplace_back(X);

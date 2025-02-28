@@ -282,7 +282,7 @@ private:
         double cs0 = sqrt(T0 / IonMass());
         Real Mth = vtheta * cs0 / sqrt(vth2);
 
-        auto Integrand = [this](double Energy, Real Mass, Real M, Real T, Real CrossSection)
+        auto Integrand = [](double Energy, Real Mass, Real M, Real T, Real CrossSection)
         {
             Real MmE = M - sqrt(Energy / T);
             Real MpE = M + sqrt(Energy / T);
