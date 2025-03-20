@@ -212,7 +212,7 @@ void ScalarTestAD::initialiseDiagnostics(NetCDFIO &nc)
     nc.AddTimeSeries("Mass", "Integral of the solution over the domain", "", M0);
 }
 
-void ScalarTestAD::writeDiagnostics(DGSoln const &y, double, NetCDFIO &nc, size_t tIndex)
+void ScalarTestAD::writeDiagnostics(DGSoln const &y, DGSoln const &, double, NetCDFIO &nc, size_t tIndex)
 {
     double mass = boost::math::quadrature::gauss_kronrod<double, 31>::integrate([&](double x)
                                                                                 { return y.u(0)(x); }, -1, 1);

@@ -326,23 +326,27 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
             grad(i) = integrator::integrate(
                 [&](Position V)
                 {
-                    dSources_du(Channel::AngularMomentum, grad_temp, y.eval(V), V, t);
+                    State yval = y.eval(V);
+                    yval.Scalars.setZero(); // we don't want the part of the source that depends on Scalars
+                    dSources_du(Channel::AngularMomentum, grad_temp, yval, V, t);
                     return grad_temp(i) * P(V);
                 },
                 I.x_l, I.x_u, max_depth);
-        s.Variable = -1 / dPsi * grad;
+        s.Variable = 1 / dPsi * grad;
         grad.resize(nAux);
         grad_temp.resize(nAux);
         for (Index i = 0; i < nAux; ++i)
             grad(i) = integrator::integrate(
                 [&](Position V)
                 {
-                    dSources_dPhi(Channel::AngularMomentum, grad_temp, y.eval(V), V, t);
+                    State yval = y.eval(V);
+                    yval.Scalars.setZero();
+                    dSources_dPhi(Channel::AngularMomentum, grad_temp, yval, V, t);
                     return grad_temp(i) * P(V);
                 },
                 I.x_l, I.x_u, max_depth);
 
-        s.Aux = -1 / dPsi * grad;
+        s.Aux = 1 / dPsi * grad;
 
         s.Scalars(Scalar::Error) = -gamma;
         out_dt.Scalars(Scalar::Error) = -gamma_d;

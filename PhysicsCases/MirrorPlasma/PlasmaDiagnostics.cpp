@@ -141,7 +141,7 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
     { return 0.0; };
 
     // Wrap DGApprox with lambdas for heating functions
-    Fn ViscousHeating = [this, &n, &nPrime, &L, &LPrime, &p_i](double V)
+    Fn ViscousHeating = [&](double V)
     {
         Real Ti = p_i(V) / n(V);
         Real R = this->B->R_V(V, 0.0);
@@ -152,7 +152,7 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
 
         try
         {
-            double Heating = this->IonClassicalAngularMomentumFlux(V, n(V), Ti, dOmegadV, 0).val * dOmegadV.val;
+            double Heating = this->IonClassicalAngularMomentumFlux(V, n(V), Ti, omega(V), dOmegadV, 0).val * dOmegadV.val;
             return Heating;
         }
         catch (...)
@@ -549,7 +549,7 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
     nc.AppendToTimeSeries("Current", Iout, tIndex);
 
     // Wrap DGApprox with lambdas for heating functions
-    Fn ViscousHeating = [this, &n, &nPrime, &L, &LPrime, &p_i, &t](double V)
+    Fn ViscousHeating = [&](double V)
     {
         Real Ti = p_i(V) / n(V);
         Real R = this->B->R_V(V, 0.0);
@@ -560,7 +560,7 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
 
         try
         {
-            double Heating = this->IonClassicalAngularMomentumFlux(V, n(V), Ti, dOmegadV, t).val * dOmegadV.val;
+            double Heating = this->IonClassicalAngularMomentumFlux(V, n(V), Ti, omega(V), dOmegadV, t).val * dOmegadV.val;
             return Heating;
         }
         catch (...)

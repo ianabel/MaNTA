@@ -363,14 +363,16 @@ Real MirrorPlasma::Gamma(RealVector u, RealVector q, Real V, Time t) const
 	Real Gamma = GeometricFactor * GeometricFactor * (1 / (Plasma->ElectronCollisionTime(n, Te))) * (U - ThermalForce);
 
 	// If gradient is too steep for MaNTA to handle, add diffusion
-	Real lambda_n = 1 / dRdV * abs(nPrime / n);
 
-	Real x = sqrt(Ti) * lambda_n / (lowNThreshold / Plasma->RhoStarRef()) - 1.0;
+	Real rhon = abs(sqrt(Ti) * Plasma->RhoStarRef() * nPrime / B->dRdV(V, 0.0) / n);
+	// Real lambda_n = (B->L_V(V) * (R_Upper - R_Lower)) * abs(nPrime);
 
-	Real Chi_n = sqrt(Plasma->mu()) * pow(Ti, 3. / 2.) * lambda_n;
+	Real x = (rhon - lowNThreshold) / lowNThreshold;
 
-	if (x > 0)
-		Gamma += SmoothTransition(x, transitionLength, lowNDiffusivity) * GeometricFactor * GeometricFactor * Chi_n * nPrime; /// n;
+	// Real Chi_n = 1.0; // sqrt(Plasma->mu()) * pow(Ti, 3. / 2.) * lambda_n;
+
+	if (x >= 0)
+		Gamma += x * lowNDiffusivity * nPrime * GeometricFactor * R; // SmoothTransition(x, transitionLength, lowNDiffusivity) * Chi_n * GeometricFactor * R * nPrime * x;
 
 	if (std::isfinite(Gamma.val))
 		return Gamma;
@@ -403,18 +405,21 @@ Real MirrorPlasma::qi(RealVector u, RealVector q, Real V, Time t) const
 	// if (lambda_p > lowPThreshold)
 	// 	HeatFlux += SmoothTransition(x, transitionLength, lowPDiffusivity) * p_i_prime / p_i; // Ti_prime / Ti;
 
-	Real lambda_T = 1 / B->dRdV(V, 0.0) * abs(Ti_prime / sqrt(Ti));
+	// Real lambda_T = (B->L_V(V) * (R_Upper - R_Lower)) * abs(Ti_prime);
 
-	Real x = lambda_T / (lowPThreshold / Plasma->RhoStarRef()) - 1.0;
+	Real rhoTi = abs(sqrt(Ti) * Plasma->RhoStarRef() * Ti_prime / B->dRdV(V, 0.0) / Ti);
+
+	// Real x = lambda_T * Plasma->RhoStarRef() - lowPThreshold;
+	Real x = (rhoTi - lowPThreshold) / lowPThreshold;
 
 	// Real lambda_n = 1 / B->dRdV(V 0.0) * abs(nPrime / n);
 
 	// Real x = sqrt(Ti) * lambda_n / (lowNThreshold / Plasma->RhoStarRef()) - 1.0;
 
-	Real Chi_i = sqrt(Plasma->mu()) * pow(Ti, 3. / 2.) * lambda_T;
+	Real Chi_i = 1.0; // sqrt(Plasma->mu()) * pow(Ti, 3. / 2.) * lambda_T;
 
-	if (x > 0)
-		HeatFlux += SmoothTransition(x, transitionLength, lowPDiffusivity) * GeometricFactor * GeometricFactor * Chi_i * Ti_prime; // / Ti;
+	if (x >= 0)
+		HeatFlux += x * lowPDiffusivity * Chi_i * GeometricFactor * R * Ti_prime; // / Ti;
 
 	if (std::isfinite(HeatFlux.val))
 		return HeatFlux;
@@ -448,8 +453,8 @@ Real MirrorPlasma::qe(RealVector u, RealVector q, Real V, Time t) const
 	Real GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e, leaving (V'R)^2
 	Real HeatFlux = GeometricFactor * GeometricFactor * (1 / (Plasma->ElectronCollisionTime(n, Te))) * (4.66 * p_e * Te_prime - (3. / 2.) * U);
 
-	Real Chi_e = pow(Te, 3. / 2.) * abs(1 / dRdV * Te_prime / Te);
-	HeatFlux += GeometricFactor * GeometricFactor * TeDiffusivity * Chi_e * Te_prime;
+	// Real Chi_e = pow(Te, 3. / 2.) * abs(1 / dRdV * Te_prime / Te);
+	HeatFlux += TeDiffusivity * GeometricFactor * Te_prime;
 
 	if (std::isfinite(HeatFlux.val))
 		return HeatFlux;
@@ -485,9 +490,8 @@ Real MirrorPlasma::Pi(RealVector u, RealVector q, Real V, Time t) const
 	Real dOmegadV = LPrime / J - JPrime * L / (J * J);
 	Real omega = L / J;
 
-	Real Pi_v = IonClassicalAngularMomentumFlux(V, n, Ti, dOmegadV, t) + omega * R * R * Gamma(u, q, V, t);
+	Real Pi_v = IonClassicalAngularMomentumFlux(V, n, Ti, omega, dOmegadV, t) + omega * R * R * Gamma(u, q, V, t);
 
-	Real lambda_omega = 1 / dRdV * abs((2 * R * dRdV * omega + R * R * dOmegadV) / (R * R * omega));
 	// Real lambda_L = abs(LPrime / L);
 
 	// Real x = lambda_L - lowLThreshold;
@@ -495,16 +499,23 @@ Real MirrorPlasma::Pi(RealVector u, RealVector q, Real V, Time t) const
 	// if (lambda_L > lowLThreshold)
 	// 	Pi_v += SmoothTransition(x, transitionLength, lowLDiffusivity) * LPrime / L;
 	Real GeometricFactor = (B->VPrime(V) * R * R);
-	Real x = sqrt(Ti) * lambda_omega / (lowLThreshold / Plasma->RhoStarRef()) - 1.0;
-	// Real GeometricFactor = (B->VPrime(V) * R);
-	// Real lambda_n = 1 / dRdV * abs(nPrime / n);
+	// Real x = sqrt(Ti) * lambda_omega / (lowLThreshold / Plasma->RhoStarRef()) - 1.0;
+	// // Real GeometricFactor = (B->VPrime(V) * R);
+	// // Real lambda_n = 1 / dRdV * abs(nPrime / n);
 
-	// Real x = sqrt(Ti) * lambda_n / (lowNThreshold / Plasma->RhoStarRef()) - 1.0;
+	// // Real x = sqrt(Ti) * lambda_n / (lowNThreshold / Plasma->RhoStarRef()) - 1.0;
 
-	Real Chi_L = sqrt(Plasma->mu()) * pow(Ti, 3. / 2.) * lambda_omega;
+	// Real Chi_L = 1.0; // sqrt(Plasma->mu()) * pow(Ti, 3. / 2.) * lambda_omega;
+	Real Chi_L = 1.0; // sqrt(Plasma->mu()) * pow(Ti, 3. / 2.) * lambda_omega;
 
-	if (x > 0)
-		Pi_v += SmoothTransition(x, transitionLength, lowLDiffusivity) * GeometricFactor * GeometricFactor * Chi_L * (R * R * dOmegadV); /// (R * R * omega);
+	Real rho_omega = abs(sqrt(Ti) * Plasma->RhoStarRef() * dOmegadV / B->dRdV(V, 0.0) / omega);
+	// Real lambda_omega = (B->L_V(V) * (R_Upper - R_Lower)) * abs(dOmegadV);
+	// Real x = lambda_omega * Plasma->RhoStarRef() - lowLThreshold;
+	Real x = (rho_omega - lowLThreshold) / lowLThreshold;
+	if (x >= 0)
+		Pi_v += x * lowLDiffusivity * GeometricFactor * Chi_L * (R * R * dOmegadV);
+	// if (x > 0)
+	// 	Pi_v += SmoothTransition(x, transitionLength, lowLDiffusivity) * GeometricFactor * GeometricFactor * Chi_L * (R * R * dOmegadV); /// (R * R * omega);
 
 	return Pi_v;
 };
@@ -512,11 +523,12 @@ Real MirrorPlasma::Pi(RealVector u, RealVector q, Real V, Time t) const
 /*
    Returns V' pi_cl_i
  */
-Real MirrorPlasma::IonClassicalAngularMomentumFlux(Real V, Real n, Real Ti, Real dOmegadV, Time t) const
+Real MirrorPlasma::IonClassicalAngularMomentumFlux(Real V, Real n, Real Ti, Real omega, Real dOmegadV, Time t) const
 {
 	Real R = B->R_V(V, 0.0);
 	Real GeometricFactor = (B->VPrime(V) * R * R); // |grad psi| = R B , cancel the B with the B in Omega_e, leaving (V'R)^2
 	Real MomentumFlux = 0.3 * GeometricFactor * GeometricFactor * sqrt(Plasma->mu() / 2.0) * (n * Ti / (Plasma->IonCollisionTime(n, Ti))) * dOmegadV;
+
 	if (std::isfinite(MomentumFlux.val))
 		return MomentumFlux;
 	else
@@ -545,7 +557,7 @@ Real MirrorPlasma::Sn(RealVector u, RealVector q, RealVector sigma, RealVector p
 	Real ParallelLosses = ElectronPastukhovLossRate(V, Xi, n, Te);
 	Real DensitySource;
 	if (useNeutralModel)
-		DensitySource = ParticleSource(R.val, t) + Plasma->NormalizingTime() / n0 * (Plasma->IonizationRate(n, NeutralDensity(R, t), R * omega, Te, Ti)); //- Plasma->ChargeExchangeLossRate(n, NeutralDensity(R, t), R * omega, Ti));
+		DensitySource = ParticleSource(R.val, t) + Plasma->NormalizingTime() / n0 * (Plasma->IonizationRate(n, NeutralDensity(R, t), R * omega, Te, Ti));
 	else
 		DensitySource = ParticleSource(R.val, t);
 	Real FusionLosses = Plasma->FusionRate(n, p_i);
@@ -578,7 +590,7 @@ Real MirrorPlasma::Spi(RealVector u, RealVector q, RealVector sigma, RealVector 
 	Real dOmegadV = LPrime / J - JPrime * L / (J * J);
 	Real omega = L / J;
 
-	Real ViscousHeating = IonClassicalAngularMomentumFlux(V, n, Ti, dOmegadV, t) * dOmegadV;
+	Real ViscousHeating = IonClassicalAngularMomentumFlux(V, n, Ti, omega, dOmegadV, t) * dOmegadV;
 
 	// Use this version since we have no parallel flux in a square well
 	Real PotentialHeating = 0.0; //-G * (omega * omega / (2 * pi * a) - dphidV(u, q, phi, V));
@@ -784,7 +796,7 @@ Real MirrorPlasma::ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real Te)
 	Real PastukhovFactor = (exp(-Xi_e) / Xi_e);
 
 	// If the loss becomes a gain, flatten at zero
-	if (PastukhovFactor.val < 0.0)
+	if (PastukhovFactor < 0.0)
 		return 0.0;
 	double Normalization = Plasma->mu() * (1.0 / (Plasma->RhoStarRef() * Plasma->RhoStarRef()));
 	Real LossRate = (M_2_SQRTPI / tau_ee) * Normalization * Sigma * n * (1.0 / log(MirrorRatio * Sigma)) * PastukhovFactor;
@@ -806,7 +818,7 @@ Real MirrorPlasma::IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) cons
 	Real PastukhovFactor = (exp(-Xi_i) / Xi_i);
 
 	// If the loss becomes a gain, flatten at zero
-	if (PastukhovFactor.val < 0.0)
+	if (PastukhovFactor < 0.0)
 		return 0.0;
 
 	double Normalization = sqrt(Plasma->mu()) * (1.0 / (Plasma->RhoStarRef() * Plasma->RhoStarRef()));

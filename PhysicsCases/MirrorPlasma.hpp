@@ -55,8 +55,8 @@ public:
 	void ScalarGPrimeExtended(Index, State &, State &, const DGSoln &, const DGSoln &, std::function<double(double)>, Interval, Time) override;
 
 private:
-	using integrator = boost::math::quadrature::gauss_kronrod<double, 15>;
-	constexpr static int max_depth = 2;
+	using integrator = boost::math::quadrature::gauss_kronrod<double, 31>;
+	constexpr static int max_depth = 6;
 
 	Real Flux(Index, RealVector, RealVector, Real, Time) override;
 	Real Source(Index, RealVector, RealVector, RealVector, RealVector, RealVector, Real, Time) override;
@@ -89,7 +89,7 @@ private:
 	Value InitialDensityTimeDerivative(RealVector u, RealVector q, Position V) const;
 	Value InitialCurrent(Time t) const;
 
-	Real IonClassicalAngularMomentumFlux(Real V, Real n, Real Ti, Real dOmegadV, Time t) const;
+	Real IonClassicalAngularMomentumFlux(Real V, Real n, Real Ti, Real omega, Real dOmegadV, Time t) const;
 
 	Real ParticleSource(double R, double t) const;
 	Real NeutralDensity(Real R, Time t) const;
