@@ -149,13 +149,13 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
 
 		// Adding diffusion for low values of density or pressure
 		lowNDiffusivity = toml::find_or(InternalConfig, "lowNDiffusivity", 0.0);
-		lowNThreshold = toml::find_or(InternalConfig, "lowNThreshold", 0.0);
+		lowNThreshold = toml::find_or(InternalConfig, "lowNThreshold", 1.0);
 
 		lowPDiffusivity = toml::find_or(InternalConfig, "lowPDiffusivity", 0.0);
-		lowPThreshold = toml::find_or(InternalConfig, "lowPThreshold", 0.0);
+		lowPThreshold = toml::find_or(InternalConfig, "lowPThreshold", 1.0);
 
 		lowLDiffusivity = toml::find_or(InternalConfig, "lowLDiffusivity", 0.0);
-		lowLThreshold = toml::find_or(InternalConfig, "lowLThreshold", 0.0);
+		lowLThreshold = toml::find_or(InternalConfig, "lowLThreshold", 1.0);
 
 		TeDiffusivity = toml::find_or(InternalConfig, "TeDiffusivity", 0.0);
 
