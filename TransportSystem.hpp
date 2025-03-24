@@ -25,8 +25,8 @@ public:
     virtual void setRestartValues(const std::vector<double> &y, const std::vector<double> &dydt, const Grid &grid, Index k)
     {
         // need to copy data into vectors owned by TransportSystem
-        restart_Y_data = y;
-        restart_dYdt_data = dydt;
+        restart_Y_data = std::move(y);
+        restart_dYdt_data = std::move(dydt);
 
         // Create DGSolns to wrap restart data
         restart_Y = std::make_shared<DGSoln>(nVars, grid, k, restart_Y_data.data(), nScalars, nAux);

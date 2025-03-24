@@ -5,6 +5,7 @@
 #include "AutodiffTransportSystem.hpp"
 // #include "Constants.hpp"
 #include "MirrorPlasma/PlasmaConstants.hpp"
+#include "MirrorPlasma/MirrorPlasmaDiagnostics.hpp"
 
 #include <boost/math/quadrature/gauss_kronrod.hpp>
 
@@ -54,8 +55,8 @@ public:
 	void ScalarGPrimeExtended(Index, State &, State &, const DGSoln &, const DGSoln &, std::function<double(double)>, Interval, Time) override;
 
 private:
-	using integrator = boost::math::quadrature::gauss_kronrod<double, 15>;
-	constexpr static int max_depth = 2;
+	using integrator = boost::math::quadrature::gauss_kronrod<double, 31>;
+	constexpr static int max_depth = 6;
 
 	Real Flux(Index, RealVector, RealVector, Real, Time) override;
 	Real Source(Index, RealVector, RealVector, RealVector, RealVector, RealVector, Real, Time) override;
@@ -88,7 +89,7 @@ private:
 	Value InitialDensityTimeDerivative(RealVector u, RealVector q, Position V) const;
 	Value InitialCurrent(Time t) const;
 
-	Real IonClassicalAngularMomentumFlux(Real V, Real n, Real Ti, Real dOmegadV, Time t) const;
+	Real IonClassicalAngularMomentumFlux(Real V, Real n, Real Ti, Real omega, Real dOmegadV, Time t) const;
 
 	Real ParticleSource(double R, double t) const;
 	Real NeutralDensity(Real R, Time t) const;
@@ -96,6 +97,8 @@ private:
 	Real ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real Te) const;
 	Real IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) const;
 
+	Real IonPotentialHeating(RealVector, RealVector, RealVector, Real) const;
+	Real ElectronPotentialHeating(RealVector, RealVector, RealVector, Real) const;
 	// Template function to avoid annoying dual vs. dual2nd behavior
 	template <typename T>
 	T phi0(Eigen::Matrix<T, -1, 1, 0, -1, 1> u, T V) const
@@ -104,10 +107,10 @@ private:
 
 		T Te = p_e / n, Ti = p_i / n;
 		T L = u(Channel::AngularMomentum);
-		T R = B->R_V(V);
+		T R = B->R_V(V, 0.0);
 		T J = n * R * R; // Normalisation of the moment of inertia includes the m_i
 		T omega = L / J;
-		T phi = 0.5 / (1 / Ti + 1 / Te) * omega * omega * R * R / Ti * (1 / B->MirrorRatio(V) - 1);
+		T phi = 0.5 / (1 / Ti + 1 / Te) * omega * omega * R * R / Ti * (1 / B->MirrorRatio(V, 0.0) - 1);
 
 		return phi;
 	}
@@ -119,8 +122,8 @@ private:
 	template <typename T>
 	T CentrifugalPotential(T V, T omega, T Ti, T Te) const
 	{
-		double MirrorRatio = B->MirrorRatio(V);
-		T R = B->R_V(V);
+		T MirrorRatio = B->MirrorRatio(V, 0.0);
+		T R = B->R_V(V, 0.0);
 		T tau = Ti / Te;
 		T MachNumber = omega * R / sqrt(Te); // omega is normalised to c_s0 / a
 		T Potential = (1.0 / (1.0 + tau)) * (1.0 - 1.0 / MirrorRatio) * MachNumber * MachNumber / 2.0;
@@ -156,19 +159,6 @@ private:
 	template <typename T>
 	T SmoothTransition(T x, double L, double yf) const
 	{
-		// double c = 1.0;
-		// double xt = 0; //(yf < 0.5) ? yf : 0.5; // xt must be less than 1 and yf
-		// double b = pow(c - xt * xt, k + 1) * pow(k / (2 * xt), k);
-		// double a = xt - pow(k * b / (2 * xt), 1 / (k + 1));
-
-		// T xl = yf * (x * x);
-		// T xr = yf * (-b / pow(x - a, k) + c);
-		// // double a = xt - pow(2 * xt / k, 1.0 / (k - 1));
-		// // double C = xt * xt - pow(xt - a, k);
-
-		// // T xl = x * x;
-		// // T xr = pow(x - a, k) + C;
-
 		T xl = yf / 2.0 * (1 - cos(M_PI * x / L));
 		T xr = yf;
 
@@ -193,7 +183,7 @@ private:
 
 	//
 	std::unique_ptr<PlasmaConstants> Plasma;
-	std::shared_ptr<StraightMagneticField> B;
+	std::shared_ptr<MagneticField> B;
 
 	bool evolveLogDensity;
 

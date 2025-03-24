@@ -174,7 +174,7 @@ private:
 
 // Hold the different ion species types
 template <typename T>
-IonSpecies *createIonSpecies() { return new T(); };
+constexpr IonSpecies *createIonSpecies() { return new T(); };
 
 // Map to the constructor for each of the different ion species
 static std::map<std::string, IonSpecies *(*)()> PlasmaMap = {{"Hydrogen", &createIonSpecies<Hydrogen>}, {"Deuterium", &createIonSpecies<Deuterium>}, {"DeuteriumTritium", &createIonSpecies<DeuteriumTritium>}};
@@ -184,14 +184,14 @@ class PlasmaConstants
 {
 public:
     // Constructor takes ion type, magnetic field, other normalizing parameters if desired
-    PlasmaConstants(std::string IonType, std::shared_ptr<StraightMagneticField> B, double PlasmaWidth) : B(B), PlasmaWidth(PlasmaWidth)
+    PlasmaConstants(std::string IonType, std::shared_ptr<MagneticField> B, double PlasmaWidth) : B(B), PlasmaWidth(PlasmaWidth)
     {
         auto it = PlasmaMap.find(IonType);
         if (it == PlasmaMap.end())
             throw std::logic_error("Requested ion species does not exist.");
         Plasma = it->second();
     }
-    PlasmaConstants(std::string IonType, std::shared_ptr<StraightMagneticField> B, double n0, double T0, double Z_eff, double PlasmaWidth) : B(B), n0(n0), T0(T0), Z_eff(Z_eff), PlasmaWidth(PlasmaWidth)
+    PlasmaConstants(std::string IonType, std::shared_ptr<MagneticField> B, double n0, double T0, double Z_eff, double PlasmaWidth) : B(B), n0(n0), T0(T0), Z_eff(Z_eff), PlasmaWidth(PlasmaWidth)
     {
         auto it = PlasmaMap.find(IonType);
         if (it == PlasmaMap.end())
@@ -200,6 +200,7 @@ public:
     };
     virtual ~PlasmaConstants() { delete Plasma; }
 
+    // Compute the Coulomb logarithm, normalized to the reference value
     template <typename T>
     T LogLambda_ii(T ni, T Ti) const
     {
@@ -281,7 +282,7 @@ private:
         Real vth2 = 2 * T * T0 / Mass;
         double cs0 = sqrt(T0 / IonMass());
         Real Mth = vtheta * cs0 / sqrt(vth2);
-
+        // Energy in eV, mass in kg, T in keV, cross section in cm^2
         auto Integrand = [](double Energy, Real Mass, Real M, Real T, Real CrossSection)
         {
             Real MmE = M - sqrt(Energy / T);
@@ -291,21 +292,44 @@ private:
             return I;
         };
 
+        Real min_sqrt = 4;
+        // Velocity such that Exp( -(M-v)^2 ) is negligibly small;
+        Real min_velocity;
+        if (Mth <= min_sqrt)
+            min_velocity = 0;
+        else
+            min_velocity = Mth - min_sqrt;
+        Real max_velocity;
+        max_velocity = Mth + min_sqrt;
+
+        Real minE = minEnergy; // max(minEnergy, min_velocity * min_velocity * T * T0 / ElementaryCharge);
+
+        Real maxEV = max_velocity * max_velocity * T * T0 / ElementaryCharge;
+        Real maxE = min(1e6, maxEV);
+
         Real Integral = 0;
         Integral.val = integrator::integrate([&](double Energy)
-                                             { return Integrand(Energy, Mass, Mth, T * T0eV, CrossSection(Energy)).val; }, minEnergy, std::numeric_limits<double>::infinity(), max_depth, tol);
+                                             { return Integrand(Energy, Mass, Mth, T * T0eV, CrossSection(Energy)).val; }, minE.val, maxE.val, max_depth, tol);
 
         // boost isn't compatible with autodiff so we calculate .grad integral separately if needed
         if (T.grad != 0 || vtheta.grad != 0)
+        {
+            Real dmaxEdT = maxEV > 1e6 ? 0.0 : static_cast<Real>(T0 / ElementaryCharge * (max_velocity * max_velocity - 2 * Mth * max_velocity));
+            Real dmaxEdVtheta = maxEV > 1e6 ? 0.0 : static_cast<Real>(-2 * Mth / vtheta * max_velocity * T * T0 / ElementaryCharge);
             Integral.grad = integrator::integrate([&](double Energy)
-                                                  { return Integrand(Energy, Mass, Mth, T * T0eV, CrossSection(Energy)).grad; }, minEnergy, std::numeric_limits<double>::infinity(), max_depth, tol);
+                                                  { return Integrand(Energy, Mass, Mth, T * T0eV, CrossSection(Energy)).grad; }, minE.val, maxE.val, max_depth, tol);
+            if (T.grad != 0)
+                Integral.grad += dmaxEdT.val * Integrand(maxE.val, Mass, Mth, T * T0eV, CrossSection(maxE.val)).val;
+            else
+                Integral.grad += dmaxEdVtheta.val * Integrand(maxE.val, Mass, Mth, T * T0eV, CrossSection(maxE.val)).val;
+        }
 
         return Integral / (sqrt(M_PI) * Mth * vth2);
     }
 
 private:
     IonSpecies *Plasma = nullptr;
-    std::shared_ptr<StraightMagneticField> B;
+    std::shared_ptr<MagneticField> B;
     const double n0 = 1e20;
     const double n0cgs = n0 * 1e-6;
     const double T0 = 1000.0 * ElementaryCharge, T0eV = T0 / ElementaryCharge;
@@ -316,4 +340,4 @@ private:
     double PlasmaWidth;
 };
 
-#endif
+#endif // PLASMACONSTANTS_HPP

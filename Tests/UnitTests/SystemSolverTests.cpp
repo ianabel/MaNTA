@@ -291,13 +291,13 @@ BOOST_AUTO_TEST_CASE(systemsolver_restart_tests)
 	GridGroup.getVar("CellBoundaries").getVar(CellBoundaries.data());
 
 	// Check loading grid from file
-	Grid *testGrid = new Grid(CellBoundaries);
+	Grid testGrid(CellBoundaries);
 
 	Index k;
 	GridGroup.getVar("PolyOrder").getVar(&k);
 
 	MatrixDiffusion *problem = nullptr;
-	BOOST_CHECK_NO_THROW(problem = new MatrixDiffusion(config_snippet_2, *testGrid));
+	BOOST_CHECK_NO_THROW(problem = new MatrixDiffusion(config_snippet_2, testGrid));
 	Index nDOF;
 
 	std::vector<double> Y, dYdt;
@@ -313,13 +313,13 @@ BOOST_AUTO_TEST_CASE(systemsolver_restart_tests)
 
 	restart_file.close();
 	// Make sure degrees of freedom are consistent with restart file
-	const Index nCells = testGrid->getNCells();
+	const Index nCells = testGrid.getNCells();
 	nDOF = problem->getNumVars() * 3 * nCells * (k + 1) + problem->getNumVars() * (nCells + 1) + problem->getNumScalars() + problem->getNumAux() * nCells * (k + 1);
 
 	BOOST_TEST(nDOF_file == nDOF);
 
-	BOOST_CHECK_NO_THROW(problem->setRestartValues(Y, dYdt, *testGrid, k));
-	
+	BOOST_CHECK_NO_THROW(problem->setRestartValues(Y, dYdt, testGrid, k));
+
 	DGSoln y = problem->getRestartY();
 
 	// just check that everything didn't get set to 0, a regression test would be better for checking the actual data
@@ -328,7 +328,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_restart_tests)
 	SUNContext ctx;
 	SUNContext_Create(SUN_COMM_NULL, &ctx);
 
-	SystemSolver *system = new SystemSolver(*testGrid, k, problem);
+	SystemSolver *system = new SystemSolver(testGrid, k, problem);
 
 	system->setTau(1.0);
 	system->initialiseMatrices();
@@ -340,7 +340,6 @@ BOOST_AUTO_TEST_CASE(systemsolver_restart_tests)
 	N_VDestroy(y0);
 	N_VDestroy(y0_dot);
 
-	delete testGrid;
 	delete problem;
 	delete system;
 }
