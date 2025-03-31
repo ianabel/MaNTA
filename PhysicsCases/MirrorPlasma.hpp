@@ -165,6 +165,8 @@ private:
 		return x < L ? xl : xr;
 	}
 
+	Value TotalCurrent(DGSoln const &y, Time t);
+
 	template <typename T1, typename T2>
 	double Voltage(T1 &L_phi, T2 &n);
 

@@ -85,13 +85,34 @@ public:
 
 	StraightMagneticField(double L_z, double B_z, double Rm, double Vmin, double m) : L_z(L_z), B_z(B_z), Rm(Rm), Vmin(Vmin), m(m) {};
 
+	// Override base class methods by calling template versions
+	virtual Real B(Real V, Real) const override { return B_T(V); };
+	virtual Real Psi_V(Real V) const override { return Psi_V_T(V); };
+
+	Real VPrime(Real V) const override
+	{
+		return VPrime_T(V); // 2 * pi * L_z / B_T(V);
+	}
+
+	Real R(Real Psi, Real) const override { return sqrt(2 * Psi / B_z); };
+
+	Real R_V(Real V, Real) const override { return R_V_T(V); }
+	Real2nd R_V(Real2nd V, Real2nd) const override { return R_V_T(V); }
+
+	Real dRdV(Real V, Real) const override { return dRdV_T(V); }
+
+	Real MirrorRatio(Real V, Real) const override { return MirrorRatio_T(V); }
+	Real2nd MirrorRatio(Real2nd V, Real2nd) const override { return MirrorRatio_T(V); }
+
+	Real L_V(Real V) const override { return L_V_T(V); }
+
+private:
+	// template versions
 	template <typename T>
 	T B_T(T V) const
 	{
 		return B_z - m * (V - Vmin);
 	}
-	virtual Real B(Real V, Real) const override { return B_T(std::move(V)); };
-
 	template <typename T>
 	T Psi(T R) const
 	{
@@ -100,51 +121,34 @@ public:
 	template <typename T>
 	T Psi_V_T(T V) const
 	{
-		return B_T(V) * V / (2 * pi * L_z);
+		return B_T(V) * V / (2 * pi * L_V_T(V));
 	}
-	virtual Real Psi_V(Real V) const override { return Psi_V_T(std::move(V)); };
-
 	template <typename T>
 	T VPrime_T(T V) const
 	{
 		return 2 * pi * L_V_T(V) / B_T(V);
 	}
-	Real VPrime(Real V) const override
-	{
-		return VPrime_T(V); // 2 * pi * L_z / B_T(V);
-	}
-
-	Real R(Real Psi, Real) const override { return sqrt(2 * Psi / B_z); };
 
 	template <typename T>
 	T R_V_T(T V) const
 	{
 		return sqrt(V / (pi * L_z));
 	}
-	Real R_V(Real V, Real) const override { return R_V_T(std::move(V)); }
-	Real2nd R_V(Real2nd V, Real2nd) const override { return R_V_T(std::move(V)); }
-
 	template <typename T>
 	T dRdV_T(T V) const
 	{
 		return 1.0 / (2 * pi * L_V_T(V) * R_V_T(V));
 	}
-	Real dRdV(Real V, Real) const override { return dRdV_T(std::move(V)); }
-
 	template <typename T>
 	T MirrorRatio_T(T V) const
 	{
-		return Rm * B_T(V) / B_z;
+		return Rm * B_z / B_T(V);
 	}
-	Real MirrorRatio(Real V, Real) const override { return MirrorRatio_T(std::move(V)); }
-	Real2nd MirrorRatio(Real2nd V, Real2nd) const override { return MirrorRatio_T(std::move(V)); }
-
 	template <typename T>
 	T L_V_T(T) const
 	{
 		return L_z;
 	}
-	Real L_V(Real V) const override { return L_V_T(std::move(V)); }
 
 private:
 	virtual Real LeftEndpoint(Real Psi) const override { return 0.0; };

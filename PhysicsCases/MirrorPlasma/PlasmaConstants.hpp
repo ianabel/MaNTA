@@ -271,7 +271,7 @@ public:
 
 private:
     using integrator = boost::math::quadrature::gauss_kronrod<double, 15>;
-    constexpr static unsigned max_depth = 0;
+    constexpr static unsigned max_depth = 6;
     constexpr static double tol = 1e-6;
 
     // Calculates the velocity space integral for collisional processes with neutrals

@@ -67,6 +67,25 @@ Value MirrorPlasma::InitialCurrent(Time t) const
         return -IRadial * exp(-t / CurrentDecay);
     }
 }
+
+Value MirrorPlasma::TotalCurrent(DGSoln const &y, Time t)
+{
+    Value FluxTerm = y.sigma(Channel::AngularMomentum)(xR) - y.sigma(Channel::AngularMomentum)(xL); // SigmaFn(Channel::AngularMomentum, y.eval(xL), xL, t) - SigmaFn(Channel::AngularMomentum, y.eval(xR), xR, t);
+
+    Value SourceTerm = integrator::integrate(
+        [&](Position V)
+        {
+            State state = y.eval(V);
+            Values pScalar(nScalars);
+            pScalar.setZero();
+            return Somega(state.Variable, state.Derivative, state.Flux, state.Aux, pScalar, V, t).val;
+        },
+        xL, xR, max_depth);
+    Value Itot = 1 / (B->Psi_V(xR) - B->Psi_V(xL)) * (FluxTerm - SourceTerm);
+
+    return Itot;
+}
+
 Value MirrorPlasma::InitialScalarValue(Index s) const
 {
     auto n = [&](Position V)
@@ -131,7 +150,7 @@ Value MirrorPlasma::InitialScalarValue(Index s) const
         Value SourceTerm = integrator::integrate([&](Position V)
                                                  { return Somega(u(V), q(V), pSigma, aux(V), pScalar, V, 0.0).val; }, xL, xR, max_depth);
         Value Itot = 1 / (B->Psi_V(xR) - B->Psi_V(xL)) * (FluxTerm - SourceTerm);
-        return Itot + InitialCurrent(0);
+        return InitialCurrent(0);
     }
     default:
         throw std::logic_error("Initial value requested for non-existent scalar!");
@@ -231,19 +250,7 @@ Value MirrorPlasma::ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt
         Value Integral = y.Scalar(Scalar::Integral);
         Value Current = y.Scalar(Scalar::Current);
 
-        Value FluxTerm = y.sigma(Channel::AngularMomentum)(xR) - y.sigma(Channel::AngularMomentum)(xL); // SigmaFn(Channel::AngularMomentum, y.eval(xL), xL, t) - SigmaFn(Channel::AngularMomentum, y.eval(xR), xR, t);
-
-        Value SourceTerm = integrator::integrate(
-            [&](Position V)
-            {
-                State state = y.eval(V);
-                Values pScalar(nScalars);
-                pScalar.setZero();
-                return Somega(state.Variable, state.Derivative, state.Flux, state.Aux, pScalar, V, t).val;
-            },
-            xL, xR, max_depth);
-        Value Itot = 1 / (B->Psi_V(xR) - B->Psi_V(xL)) * (FluxTerm - SourceTerm) + InitialCurrent(t);
-        Value res = (Current - Itot) - gamma * E - gamma_d * dEdt - gamma_h * Integral;
+        Value res = Current - InitialCurrent(t) - tanh(t / CurrentDecay) * (TotalCurrent(y, t) + gamma * E + gamma_d * dEdt + gamma_h * Integral);
         return res;
     }
     default:
@@ -332,7 +339,7 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
                     return grad_temp(i) * P(V);
                 },
                 I.x_l, I.x_u, max_depth);
-        s.Variable = 1 / dPsi * grad;
+        s.Variable = 1 / dPsi * grad * tanh(t / CurrentDecay);
         grad.resize(nAux);
         grad_temp.resize(nAux);
         for (Index i = 0; i < nAux; ++i)
@@ -346,11 +353,11 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
                 },
                 I.x_l, I.x_u, max_depth);
 
-        s.Aux = 1 / dPsi * grad;
+        s.Aux = 1 / dPsi * grad * tanh(t / CurrentDecay);
 
-        s.Scalars(Scalar::Error) = -gamma;
-        out_dt.Scalars(Scalar::Error) = -gamma_d;
-        s.Scalars(Scalar::Integral) = -gamma_h;
+        s.Scalars(Scalar::Error) = -gamma * tanh(t / CurrentDecay);
+        out_dt.Scalars(Scalar::Error) = -gamma_d * tanh(t / CurrentDecay);
+        s.Scalars(Scalar::Integral) = -gamma_h * tanh(t / CurrentDecay);
         s.Scalars(Scalar::Current) = 1.0;
 
         // s.Variable(Channel::AngularMomentum) += 1 / dPsi * integrator::integrate([&](Position V)
@@ -359,9 +366,9 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
         //     return P(V) / (R * R * n(V)) * dJdt(V); }, I.x_l, I.x_u);
 
         if (abs(I.x_u - xR) < 1e-9)
-            s.Flux(Channel::AngularMomentum) += -1.0 / dPsi * P(I.x_u);
+            s.Flux(Channel::AngularMomentum) += -1.0 / dPsi * P(I.x_u) * tanh(t / CurrentDecay);
         if (abs(I.x_l - xL) < 1e-9)
-            s.Flux(Channel::AngularMomentum) -= -1.0 / dPsi * P(I.x_l);
+            s.Flux(Channel::AngularMomentum) -= -1.0 / dPsi * P(I.x_l) * tanh(t / CurrentDecay);
         break;
     }
     default:

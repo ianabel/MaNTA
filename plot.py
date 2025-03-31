@@ -169,8 +169,8 @@ def plot_diagnostics(fname):
 
 
 def main():
-    fname = "./runs/LinearDiffSourceTest.nc"
-    plot_nc(fname,plot_u=True,plot_grid=True,include_initial=False)
+    fname = "./runs/CMFX3.nc"
+    plot_nc(fname,plot_u=True,plot_grid=True,plot_scalars=True,include_initial=False)
     # fname = "./MirrorPlasmaTest.nc"
     #plot_nc(fname,False,False,include_initial=True)
     # plot_MMS(fname)

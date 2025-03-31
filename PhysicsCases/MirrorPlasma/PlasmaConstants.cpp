@@ -16,13 +16,13 @@ Real PlasmaConstants::TotalAlphaPower(Real n, Real pi) const
 // Implements Bremsstrahlung radiative losses from NRL plasma formulary
 Real PlasmaConstants::BremsstrahlungLosses(Real n, Real pe) const
 {
-    double p0 = n0 * T0;
-    Real Normalization = p0 / NormalizingTime();
-    Real Factor = (1 + Z_eff) * 1.69e-32 * 1e-6 * n0 * n0 / Normalization;
+    // double p0 = n0 * T0;
+    // Real Normalization = p0 / NormalizingTime();
+    // Real Factor = (1 + Z_eff) * 1.69e-32 * 1e-6 * n0 * n0 / Normalization;
 
-    Real Te_eV = (pe / n) * T0 / ElementaryCharge;
-    Real Pbrem = Factor * n * n * sqrt(Te_eV);
-
+    // Real Te_eV = (pe / n) * T0eV;
+    // Real Pbrem = Factor * n * n * sqrt(Te_eV);
+    Real Pbrem = NormalizingTime() / (n0 * T0) * 5.34e3 * sqrt(pe / n) * Z_eff * n * n;
     return Pbrem;
 };
 Real PlasmaConstants::CyclotronLosses(Real V, Real n, Real Te) const

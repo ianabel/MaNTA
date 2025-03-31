@@ -323,6 +323,7 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
     nc.AddScalarVariable("L_z", "Plasma axial length", "m", a * B->L_V(xL));
     nc.AddTimeSeries("Voltage", "Total voltage drop across the plasma", "Volts", initialVoltage);
     nc.AddTimeSeries("Current", "Radial current through plasma", "A", Iout);
+    nc.AddTimeSeries("ComputedCurrent", "Radial current computed from momentum equation", "A", -Iout);
     nc.AddGroup("MMS", "Manufactured solutions");
     for (int j = 0; j < nVars; ++j)
         nc.AddVariable("MMS", "Var" + std::to_string(j), "Manufactured solution", "-", [this, j](double V)
@@ -554,6 +555,7 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
     else
         Iout = IRadial * I0;
     nc.AppendToTimeSeries("Current", Iout, tIndex);
+    nc.AppendToTimeSeries("ComputedCurrent", TotalCurrent(y, t) * I0, tIndex);
 
     // Wrap DGApprox with lambdas for heating functions
     Fn ViscousHeating = [&](double V)
