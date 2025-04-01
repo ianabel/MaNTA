@@ -657,7 +657,7 @@ Real MirrorPlasma::Spe(RealVector u, RealVector q, RealVector sigma, RealVector 
 	Real ParticleEnergy = Te * (1.0 + Xi);
 	Real ParallelLosses = ParticleEnergy * ElectronPastukhovLossRate(V, Xi, n, Te);
 
-	Real RadiationLosses = Plasma->BremsstrahlungLosses(n, p_e); //+ Plasma->CyclotronLosses(V, n, Te);
+	Real RadiationLosses = Plasma->BremsstrahlungLosses(n, p_e) + Plasma->CyclotronLosses(V, n, Te);
 
 	Real S = Heating - ParallelLosses - RadiationLosses;
 

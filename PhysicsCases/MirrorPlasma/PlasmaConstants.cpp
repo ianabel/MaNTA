@@ -41,7 +41,7 @@ Real PlasmaConstants::CyclotronLosses(Real V, Real n, Real Te) const
     double WallReflectivity = 0.95;
     Real OpticalThickness = (PlasmaWidth / (1.0 - WallReflectivity)) / LambdaZero;
     // This is the Phi introduced by Trubnikov and later approximated by Tamor
-    Real TransparencyFactor = pow(Te_eV, 1.5) / (200.0 * sqrt(OpticalThickness));
+    Real TransparencyFactor = pow(Te, 1.5) / (200.0 * sqrt(OpticalThickness));
     // Moderate the vacuum emission by the transparency factor
     Real Normalization = n0 * T0 / NormalizingTime();
 

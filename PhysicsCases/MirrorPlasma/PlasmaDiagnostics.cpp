@@ -400,6 +400,8 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
     nc.AddVariable("Heating", "EnergyExchange", "Collisional ion-electron energy exhange", "-", EnergyExchange);
     nc.AddVariable("Heating", "IonPotentialHeating", "Ion potential heating", "-", IonPotentialHeating);
     nc.AddVariable("Heating", "ElectronPotentialHeating", "Ion potential heating", "-", ElectronPotentialHeating);
+    nc.AddVariable("Heating", "CyclotronLosses", "Cyclotron heat losses", "-", [&](double V)
+                   { return Plasma->CyclotronLosses(V, n(V), Te(V)).val; });
 
     nc.AddVariable("dPhi0dV", "Phi0 derivative", "-", [this, &u, &q](double V)
                    { return dphi0dV(u(V), q(V), V).val; });
@@ -683,6 +685,9 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
         return S.val;
     };
 
+    Fn CyclotronLosses = [&](double V)
+    { return Plasma->CyclotronLosses(V, n(V), Te(V)).val; };
+
     Fn DensityArtificialDiffusion = [&](double V)
     {
         double GeometricFactor = (B->VPrime(V) * B->R_V(V, 0.0));
@@ -774,7 +779,8 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
                           {"RadiationLosses", RadiationLosses},
                           {"EnergyExchange", EnergyExchange},
                           {"IonPotentialHeating", IonPotentialHeating},
-                          {"ElectronPotentialHeating", ElectronPotentialHeating}});
+                          {"ElectronPotentialHeating", ElectronPotentialHeating},
+                          {"CyclotronLosses", CyclotronLosses}});
 
     nc.AppendToGroup<Fn>("ParallelLosses", tIndex,
                          {{"ParLoss", ParallelLosses},

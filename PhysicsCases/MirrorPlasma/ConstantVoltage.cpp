@@ -81,7 +81,10 @@ Value MirrorPlasma::TotalCurrent(DGSoln const &y, Time t)
             return Somega(state.Variable, state.Derivative, state.Flux, state.Aux, pScalar, V, t).val;
         },
         xL, xR, max_depth);
-    Value Itot = 1 / (B->Psi_V(xR) - B->Psi_V(xL)) * (FluxTerm - SourceTerm);
+
+    Value dPsi = integrator::integrate([&](double V)
+                                       { return 1 / B->VPrime(V); }, xL, xR, max_depth);
+    Value Itot = 1 / dPsi * (FluxTerm - SourceTerm);
 
     return Itot;
 }
@@ -113,43 +116,43 @@ Value MirrorPlasma::InitialScalarValue(Index s) const
         return 0.0;
     case Scalar::Current:
     {
-        auto u = [&](double V)
-        {
-            Values U(nVars);
-            for (Index i = 0; i < nVars; ++i)
-                U(i) = InitialValue(i, V);
+        // auto u = [&](double V)
+        // {
+        //     Values U(nVars);
+        //     for (Index i = 0; i < nVars; ++i)
+        //         U(i) = InitialValue(i, V);
 
-            return U;
-        };
+        //     return U;
+        // };
 
-        auto q = [&](double V)
-        {
-            Values Q(nVars);
-            for (Index i = 0; i < nVars; ++i)
-                Q(i) = InitialDerivative(i, V);
+        // auto q = [&](double V)
+        // {
+        //     Values Q(nVars);
+        //     for (Index i = 0; i < nVars; ++i)
+        //         Q(i) = InitialDerivative(i, V);
 
-            return Q;
-        };
+        //     return Q;
+        // };
 
-        auto aux = [&](double V)
-        {
-            Values Aux(nAux);
-            for (Index i = 0; i < nAux; ++i)
-                Aux(i) = AutodiffTransportSystem::InitialAuxValue(i, V);
+        // auto aux = [&](double V)
+        // {
+        //     Values Aux(nAux);
+        //     for (Index i = 0; i < nAux; ++i)
+        //         Aux(i) = AutodiffTransportSystem::InitialAuxValue(i, V);
 
-            return Aux;
-        };
+        //     return Aux;
+        // };
 
-        RealVector pSigma(nVars);
-        pSigma.setZero();
+        // RealVector pSigma(nVars);
+        // pSigma.setZero();
 
-        RealVector pScalar(nScalars);
-        pScalar.setZero();
+        // RealVector pScalar(nScalars);
+        // pScalar.setZero();
 
-        Value FluxTerm = Pi(u(xL), q(xL), xL, 0.0).val - Pi(u(xR), q(xR), xR, 0.0).val;
-        Value SourceTerm = integrator::integrate([&](Position V)
-                                                 { return Somega(u(V), q(V), pSigma, aux(V), pScalar, V, 0.0).val; }, xL, xR, max_depth);
-        Value Itot = 1 / (B->Psi_V(xR) - B->Psi_V(xL)) * (FluxTerm - SourceTerm);
+        // Value FluxTerm = Pi(u(xL), q(xL), xL, 0.0).val - Pi(u(xR), q(xR), xR, 0.0).val;
+        // Value SourceTerm = integrator::integrate([&](Position V)
+        //                                          { return Somega(u(V), q(V), pSigma, aux(V), pScalar, V, 0.0).val; }, xL, xR, max_depth);
+        // Value Itot = 1 / (B->Psi_V(xR) - B->Psi_V(xL)) * (FluxTerm - SourceTerm);
         return InitialCurrent(0);
     }
     default:
@@ -211,6 +214,8 @@ Value MirrorPlasma::ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt
         Value w = L(V) / (n(V) * R * R);
         return w;
     };
+
+    Value tfac = restarting ? 1.0 : tanh(t / CurrentDecay);
     // auto dJdt = [&](Position V)
     // {
     //     Value R = B->R_V(V,0.0);
@@ -236,13 +241,13 @@ Value MirrorPlasma::ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt
     {
     case Scalar::Error:
     {
-        Value res = E - (V0 - Phi_V(xR));
+        Value res = (E - (V0 - Phi_V(xR)));
         return res;
     }
     case Scalar::Integral:
     {
         Value dIdt = dydt.Scalar(Scalar::Integral);
-        Value res = dIdt - E;
+        Value res = (dIdt - E);
         return res;
     }
     case Scalar::Current:
@@ -250,7 +255,7 @@ Value MirrorPlasma::ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt
         Value Integral = y.Scalar(Scalar::Integral);
         Value Current = y.Scalar(Scalar::Current);
 
-        Value res = Current - InitialCurrent(t) - tanh(t / CurrentDecay) * (TotalCurrent(y, t) + gamma * E + gamma_d * dEdt + gamma_h * Integral);
+        Value res = Current - InitialCurrent(t) - tfac * (TotalCurrent(y, t) + gamma * E + gamma_d * dEdt + gamma_h * Integral);
         return res;
     }
     default:
@@ -268,6 +273,8 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
     // // { return dydt.u(Channel::Density)(V); };
     auto L = [&](Position V)
     { return y.u(Channel::AngularMomentum)(V); };
+
+    Value tfac = restarting ? 1.0 : tanh(t / CurrentDecay);
     // auto omega = [&](Position V)
     // {
     //     Value R = B->R_V(V,0.0);
@@ -326,7 +333,8 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
     }
     case Scalar::Current:
     {
-        Value dPsi = B->Psi_V(xR) - B->Psi_V(xL);
+        Value dPsi = integrator::integrate([&](double V)
+                                           { return 1 / B->VPrime(V); }, xL, xR, max_depth);
         Values grad(nVars);
         Values grad_temp(nVars);
         for (Index i = 0; i < nVars; ++i)
@@ -339,7 +347,7 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
                     return grad_temp(i) * P(V);
                 },
                 I.x_l, I.x_u, max_depth);
-        s.Variable = 1 / dPsi * grad * tanh(t / CurrentDecay);
+        s.Variable = 1 / dPsi * grad * tfac;
         grad.resize(nAux);
         grad_temp.resize(nAux);
         for (Index i = 0; i < nAux; ++i)
@@ -353,11 +361,11 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
                 },
                 I.x_l, I.x_u, max_depth);
 
-        s.Aux = 1 / dPsi * grad * tanh(t / CurrentDecay);
+        s.Aux = 1 / dPsi * grad * tfac;
 
-        s.Scalars(Scalar::Error) = -gamma * tanh(t / CurrentDecay);
-        out_dt.Scalars(Scalar::Error) = -gamma_d * tanh(t / CurrentDecay);
-        s.Scalars(Scalar::Integral) = -gamma_h * tanh(t / CurrentDecay);
+        s.Scalars(Scalar::Error) = -gamma * tfac;
+        out_dt.Scalars(Scalar::Error) = -gamma_d * tfac;
+        s.Scalars(Scalar::Integral) = -gamma_h * tfac;
         s.Scalars(Scalar::Current) = 1.0;
 
         // s.Variable(Channel::AngularMomentum) += 1 / dPsi * integrator::integrate([&](Position V)
@@ -366,9 +374,9 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
         //     return P(V) / (R * R * n(V)) * dJdt(V); }, I.x_l, I.x_u);
 
         if (abs(I.x_u - xR) < 1e-9)
-            s.Flux(Channel::AngularMomentum) += -1.0 / dPsi * P(I.x_u) * tanh(t / CurrentDecay);
+            s.Flux(Channel::AngularMomentum) += -1.0 / dPsi * P(I.x_u) * tfac;
         if (abs(I.x_l - xL) < 1e-9)
-            s.Flux(Channel::AngularMomentum) -= -1.0 / dPsi * P(I.x_l) * tanh(t / CurrentDecay);
+            s.Flux(Channel::AngularMomentum) -= -1.0 / dPsi * P(I.x_l) * tfac;
         break;
     }
     default:
