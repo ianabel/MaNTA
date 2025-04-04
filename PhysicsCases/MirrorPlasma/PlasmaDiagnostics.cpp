@@ -119,8 +119,12 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
     Fn ShearingRate = [&](double V)
     {
         double dRdV = B->dRdV(V, 0.0);
-        double gradV = B->R_V(V, 0.0) * dOmegadV(V) / dRdV + omega(V);
-        return 1 / a * gradV / sqrt(Ti(V));
+        double R = B->R_V(V, 0.0);
+        // double dOmegadR = dOmegadV(V) / dRdV;
+        // return sqrt(Te(V))*B->R_V(V)/omega*dOmegadR;
+        // double gradV = B->R_V(V, 0.0) * dOmegadV(V) / dRdV + omega(V);
+
+        return R * R / (sqrt(Te(V)))*dOmegadV(V) / dRdV; // sqrt(Te(V)) * dOmegadV(V) / (dRdV * omega(V));
     };
 
     auto ElectrostaticPotential = [this, &u, &aux, &p_i, &n](double V)
@@ -532,8 +536,13 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
     Fn ShearingRate = [&](double V)
     {
         double dRdV = B->dRdV(V, 0.0);
-        double gradV = B->R_V(V, 0.0) * dOmegadV(V) / dRdV + omega(V);
-        return 1 / a * gradV / sqrt(Ti(V));
+        double R = B->R_V(V, 0.0);
+        // double dOmegadR = dOmegadV(V) / dRdV;
+        // return sqrt(Te(V))*B->R_V(V)/omega*dOmegadR;
+        // double gradV = B->R_V(V, 0.0) * dOmegadV(V) / dRdV + omega(V);
+
+        return R * R / (sqrt(Te(V)))*dOmegadV(V) / dRdV;
+        // return 1 / a * gradV / sqrt(Ti(V));
     };
 
     auto ElectrostaticPotential = [this, &u, &aux, &p_i, &n](double V)

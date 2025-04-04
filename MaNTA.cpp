@@ -187,7 +187,7 @@ int runManta(std::string const &fname)
 		else
 			throw std::invalid_argument("Upper_boundary specified incorrrectly");
 
-		grid = new Grid(lBound, uBound, nCells, highGridBoundary, upperBoundaryFraction, lowerBoundaryFraction);
+		grid = new Grid(lBound, uBound, nCells, highGridBoundary, lowerBoundaryFraction, upperBoundaryFraction);
 
 	} 
 	else 
