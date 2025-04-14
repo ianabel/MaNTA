@@ -206,7 +206,7 @@ Real2nd MirrorPlasma::InitialFunction(Index i, Real2nd V, Real2nd t) const
 	Real2nd v = cos(pi * (R - R_mid) / (R_max - R_min)); //* exp(-shape * (R - R_mid) * (R - R_mid));
 
 	/// Real2nd Te = TeEdge + tfac(growth_factors[Channel::ElectronEnergy]) * (TeMid - TeEdge) * v * v;
-	Real2nd omega = Omega_Lower + m * (V - xL) + OmegaMid * cos(pi * (V - xmid) / (xR - xL));
+	Real2nd omega = Omega_Lower + m * (V - xL) + OmegaMid * v; // cos(pi * (V - xmid) / (xR - xL));
 	// TeEdge + tfac(growth_factors[Channel::ElectronEnergy]) * (TeMid - TeEdge) * v * v;
 	Real2nd Ti = TiEdge + tfac(growth_factors[Channel::IonEnergy]) * (TiMid - TiEdge) * v * v;
 	Real2nd n = nEdge + tfac(growth_factors[Channel::Density]) * (nMid - nEdge) * cos(pi * (V - xmid) / (xR - xL));
@@ -590,13 +590,11 @@ Real MirrorPlasma::Spi(RealVector u, RealVector q, RealVector sigma, RealVector 
 	Real dOmegadV = LPrime / J - JPrime * L / (J * J);
 	Real omega = L / J;
 
-	Real ViscousHeating = IonClassicalAngularMomentumFlux(V, n, Ti, omega, dOmegadV, t) * dOmegadV;
+	Real ViscousHeating = IonClassicalAngularMomentumFlux(V, n, Ti, omega, dOmegadV, t) * dOmegadV; // Pi(u, q, V, t) * dOmegadV; //
 
 	// Use this version since we have no parallel flux in a square well
-	Real PotentialHeating = 0.0; //-G * (omega * omega / (2 * pi * a) - dphidV(u, q, phi, V));
+	// Real PotentialHeating = IonPotentialHeating(u, q, phi, V); //-G * (omega * omega / (2 * pi * a) - dphidV(u, q, phi, V));
 	Real EnergyExchange = Plasma->IonElectronEnergyExchange(n, p_e, p_i, V, t);
-
-	Real Heating = ViscousHeating + PotentialHeating + EnergyExchange;
 
 	Real Xi;
 	if (useAmbipolarPhi)
@@ -618,6 +616,8 @@ Real MirrorPlasma::Spi(RealVector u, RealVector q, RealVector sigma, RealVector 
 	// 	// ParticleSourceHeating = 0.5 * omega * omega * R * R * (ParticleSource(R.val, t) + Plasma->NormalizingTime() / n0 * (Plasma->IonizationRate(n, NeutralDensity(R, t), R * omega, Te, Ti) - Plasma->ChargeExchangeLossRate(n, NeutralDensity(R, t), R * omega, Ti)));
 	// }
 
+	Real PotentialHeating = 0.0; //-0.5 * omega * omega * R * R * ParticleSource(R.val, t); // Sn(u, q, sigma, phi, V, t);
+	Real Heating = ViscousHeating + PotentialHeating + EnergyExchange;
 	Real S = Heating - ParallelLosses - ChargeExchangeHeatLosses + ParticleSourceHeating;
 
 	return S; //+ RelaxSource(u(Channel::Density) * Te, p_e) + RelaxSource(n * floor(Te, MinTemp), p_e);
@@ -639,9 +639,7 @@ Real MirrorPlasma::Spe(RealVector u, RealVector q, RealVector sigma, RealVector 
 	Real L = u(Channel::AngularMomentum);
 	Real omega = L / J;
 
-	Real PotentialHeating = 0.0; // ElectronPotentialHeating(u, q, phi, V); //(dphi1dV(u, q, phi(0), V));
-
-	Real Heating = EnergyExchange + AlphaHeating + PotentialHeating;
+	// Real PotentialHeating = //ElectronPotentialHeating(u, q, phi, V); //(dphi1dV(u, q, phi(0), V));
 
 	Real Xi;
 	if (useAmbipolarPhi)
@@ -653,6 +651,8 @@ Real MirrorPlasma::Spe(RealVector u, RealVector q, RealVector sigma, RealVector 
 		Xi = CentrifugalPotential(V, omega, Ti, Te) + AmbipolarPhi(V, n, Ti, Te) / 2.0;
 	}
 
+	Real PotentialHeating = 0.0; // Te * Xi * ParticleSource(R.val, t); // Sn(u, q, sigma, phi, V, t);
+	Real Heating = EnergyExchange + AlphaHeating + PotentialHeating;
 	// Parallel Losses
 	Real ParticleEnergy = Te * (1.0 + Xi);
 	Real ParallelLosses = ParticleEnergy * ElectronPastukhovLossRate(V, Xi, n, Te);
