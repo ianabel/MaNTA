@@ -297,6 +297,68 @@ BOOST_AUTO_TEST_CASE(systemsolver_matrix_tests)
 	}
 }
 
+BOOST_AUTO_TEST_CASE(systemsolver_jacobian_tests)
+{
+	Grid testGrid(0.0, 1.0, 4);
+	Index k = 1; // Start piecewise linear
+
+	SystemSolver *system = nullptr;
+	double tau = 0.5;
+
+	TestDiffusion problem(config_snippet);
+
+	BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, &problem));
+
+	system->setTau(tau);
+	system->resetCoeffs();
+
+	BOOST_CHECK_NO_THROW(system->initialiseMatrices());
+
+	SUNContext ctx;
+	SUNContext_Create(SUN_COMM_NULL, &ctx);
+
+	N_Vector y0, y0_dot;
+
+	y0 = N_VNew_Serial(2 * (3 * 4 * (2) + 1 * (4 + 1)), ctx);
+	y0_dot = N_VClone(y0);
+
+    N_VConst( 0.0, y0 );
+    N_VConst( 0.0, y0_dot );
+	system->setInitialConditions(y0, y0_dot);
+
+    system->updateMatricesForJacSolve();
+
+
+	N_Vector g, dy;
+
+	g = N_VNew_Serial(3 * 4 * (2) + 1 * (4 + 1), ctx);
+	dy = N_VClone(g);
+
+    // Check we haven't totally fucked up:
+    N_VConst( 0.0, g );
+
+    // Set dy = J^-1 g
+    system->solveHDGJac( g, dy );
+    BOOST_TEST( N_VMaxNorm( dy ) == 0.0 );
+
+    /*
+    // Set up test problem
+    DGSoln gMap( 1, testGrid, 1 );
+    gMap.Map(N_VGetArrayPointer(g));
+
+    Vector e(2);
+    e(0) = 1.0; e(1) = 1.0;
+    gMap.sigma(0).getCoeff(0).second = e;
+    VectorWrapper gV( N_VGetArrayPointer( g ), N_VGetLength( g ) );
+
+    system->solveHDGJac( g, dy );
+    VectorWrapper dyV( N_VGetArrayPointer( dy ), N_VGetLength( dy ) );
+    BOOST_TEST( N_VMaxNorm( dy ) == 0.0 );
+    */
+}
+
+
+
 BOOST_AUTO_TEST_CASE(systemsolver_restart_tests)
 {
 	netCDF::NcFile restart_file;

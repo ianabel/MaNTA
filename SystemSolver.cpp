@@ -831,7 +831,7 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
 
 int static_residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval, void *user_data)
 {
-    auto system = reinterpret_cast<SystemSolver *>(user_data);
+    auto system = static_cast<SystemSolver *>(user_data);
     try
     {
         return system->residual(tres, Y, dYdt, resval);
@@ -1080,5 +1080,5 @@ int SystemSolver::getErrorWeights(N_Vector y_sundials, N_Vector ewt_sundials)
 
 int SystemSolver::getErrorWeights_static(N_Vector y, N_Vector ewt, void *sys)
 {
-	return reinterpret_cast<SystemSolver *>(sys)->getErrorWeights(y, ewt);
+	return static_cast<SystemSolver *>(sys)->getErrorWeights(y, ewt);
 }

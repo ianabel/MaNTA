@@ -259,16 +259,15 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction_nodal )
     // Pick something that is exact
     linear = [=]( double x ){ return a*x; };
 
-    // LGL Nodes on [-1,1] are { -0.5773502691896257645, +0.5773502691896257645 }
-    constexpr double node = 0.5773502691896257645;
+    // Linear LGL Nodes on [-1,1] are { -1, 1 }
+    constexpr double node = 1.0;
 
-    // v( 2*i ) == Value at (x_l + x_u)/2.0 - node * (x_u - x_l) / 2.0
-    //          == a * ( x_u * ( 1 - node ) /2.0 + x_l * (1 + node ) / 2.0 )
+    // v( 2*i ) == Value at x_l
 
     for( Index i = 0; i < 4; ++i )
     {
-      BOOST_TEST( v( 2*i ) == a * ( testGrid[i].x_u * ( 1.0 - node ) / 2.0 + testGrid[i].x_l * ( 1.0 + node ) / 2.0 ) );
-      BOOST_TEST( v( 2*i + 1 ) == a * ( testGrid[i].x_u * ( 1.0 + node ) / 2.0 + testGrid[i].x_l * ( 1.0 - node ) / 2.0 ) );
+      BOOST_TEST( v( 2*i ) == a * ( testGrid[i].x_l ) );
+      BOOST_TEST( v( 2*i + 1 ) == a * ( testGrid[i].x_u ) );
     }
 
     BOOST_TEST( linear( 0.1 ) == a*0.1 );
@@ -300,8 +299,8 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction_nodal )
     // check we overwrote the data we thought we were using
     for( Index i = 0; i < 4; ++i )
     {
-      BOOST_TEST( v( 2*i ) == a * ( testGrid[i].x_u * ( 1.0 - node ) / 2.0 + testGrid[i].x_l * ( 1.0 + node ) / 2.0 ) );
-      BOOST_TEST( v( 2*i + 1 ) == a * ( testGrid[i].x_u * ( 1.0 + node ) / 2.0 + testGrid[i].x_l * ( 1.0 - node ) / 2.0 ) );
+      BOOST_TEST( v( 2*i ) == a * testGrid[i].x_l / 2.0 );
+      BOOST_TEST( v( 2*i + 1 ) == a * testGrid[i].x_u / 2.0 );
     }
 
     BOOST_CHECK_NO_THROW( constructedLinear += constructedData );
