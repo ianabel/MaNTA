@@ -19,6 +19,7 @@ using std::numbers::pi;
 
 class LegendreBasis;
 class ChebyshevBasis;
+class NodalBasis;
 
 template<class> class DGSolnImpl;
 
