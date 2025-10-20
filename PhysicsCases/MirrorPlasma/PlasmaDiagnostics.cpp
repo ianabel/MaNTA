@@ -124,7 +124,7 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
         // return sqrt(Te(V))*B->R_V(V)/omega*dOmegadR;
         // double gradV = B->R_V(V, 0.0) * dOmegadV(V) / dRdV + omega(V);
 
-        return R * R / (sqrt(Te(V)))*dOmegadV(V) / dRdV; // sqrt(Te(V)) * dOmegadV(V) / (dRdV * omega(V));
+        return R * R / (sqrt(Te(V))) * dOmegadV(V) / dRdV; // sqrt(Te(V)) * dOmegadV(V) / (dRdV * omega(V));
     };
 
     auto ElectrostaticPotential = [this, &u, &aux, &p_i, &n](double V)
@@ -145,24 +145,9 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
     { return 0.0; };
 
     // Wrap DGApprox with lambdas for heating functions
-    Fn ViscousHeating = [&](double V)
+    Fn VisHeating = [&](double V)
     {
-        Real Ti = p_i(V) / n(V);
-        Real R = this->B->R_V(V, 0.0);
-        Real J = n(V) * R * R; // Normalisation includes the m_i
-        Real dRdV = B->dRdV(V, 0.0);
-        Real JPrime = R * R * nPrime(V) + 2.0 * dRdV * R * n(V);
-        Real dOmegadV = LPrime(V) / J - JPrime * L(V) / (J * J);
-
-        try
-        {
-            double Heating = this->IonClassicalAngularMomentumFlux(V, n(V), Ti, omega(V), dOmegadV, 0).val * dOmegadV.val;
-            return Heating;
-        }
-        catch (...)
-        {
-            return 0.0;
-        };
+        return ViscousHeating(u(V), q(V), V, 0.0).val;
     };
 
     Fn AlphaHeating = [this, &n, &p_i](double V)
@@ -223,18 +208,14 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
         return Plasma->IonElectronEnergyExchange(n(V), p_e(V), p_i(V), V, 0.0).val;
     };
 
-    Fn IonPotentialHeating = [&](double V)
+    Fn IonPotentialHeatingWrapper = [&](double V)
     {
-        Real S = -Gamma(u(V), q(V), V, 0.0) * (omega(V) * omega(V) / (2 * pi * a) - dphidV(u(V), q(V), aux(V), V));
-
-        return S.val;
+        return IonPotentialHeating(u(V), q(V), aux(V), V).val;
     };
 
-    Fn ElectronPotentialHeating = [&](double V)
+    Fn ElectronPotentialHeatingWrapper = [&](double V)
     {
-        Real S = -Gamma(u(V), q(V), V, 0.0) * (dphidV(u(V), q(V), aux(V), V));
-
-        return S.val;
+        return ElectronPotentialHeating(u(V), q(V), aux(V), V).val;
     };
 
     Fn DensityArtificialDiffusion = [&](double V)
@@ -399,11 +380,11 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
     // Heat Sources
     nc.AddGroup("Heating", "Separated heating sources");
     nc.AddVariable("Heating", "AlphaHeating", "Alpha heat source", "-", AlphaHeating);
-    nc.AddVariable("Heating", "ViscousHeating", "Viscous heat source", "-", ViscousHeating);
+    nc.AddVariable("Heating", "ViscousHeating", "Viscous heat source", "-", VisHeating);
     nc.AddVariable("Heating", "RadiationLosses", "Bremsstrahlung heat losses", "-", RadiationLosses);
     nc.AddVariable("Heating", "EnergyExchange", "Collisional ion-electron energy exhange", "-", EnergyExchange);
-    nc.AddVariable("Heating", "IonPotentialHeating", "Ion potential heating", "-", IonPotentialHeating);
-    nc.AddVariable("Heating", "ElectronPotentialHeating", "Ion potential heating", "-", ElectronPotentialHeating);
+    nc.AddVariable("Heating", "IonPotentialHeating", "Ion potential heating", "-", IonPotentialHeatingWrapper);
+    nc.AddVariable("Heating", "ElectronPotentialHeating", "Ion potential heating", "-", ElectronPotentialHeatingWrapper);
     nc.AddVariable("Heating", "CyclotronLosses", "Cyclotron heat losses", "-", [&](double V)
                    { return Plasma->CyclotronLosses(V, n(V), Te(V)).val; });
 
@@ -541,7 +522,7 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
         // return sqrt(Te(V))*B->R_V(V)/omega*dOmegadR;
         // double gradV = B->R_V(V, 0.0) * dOmegadV(V) / dRdV + omega(V);
 
-        return R * R / (sqrt(Te(V)))*dOmegadV(V) / dRdV;
+        return R * R / (sqrt(Te(V))) * dOmegadV(V) / dRdV;
         // return 1 / a * gradV / sqrt(Ti(V));
     };
 
@@ -569,24 +550,9 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
     nc.AppendToTimeSeries("ComputedCurrent", TotalCurrent(y, t) * I0, tIndex);
 
     // Wrap DGApprox with lambdas for heating functions
-    Fn ViscousHeating = [&](double V)
+    Fn VisHeating = [&](double V)
     {
-        Real Ti = p_i(V) / n(V);
-        Real R = this->B->R_V(V, 0.0);
-        Real J = n(V) * R * R; // Normalisation includes the m_i
-        Real dRdV = B->dRdV(V, 0.0);
-        Real JPrime = R * R * nPrime(V) + 2.0 * dRdV * R * n(V);
-        Real dOmegadV = LPrime(V) / J - JPrime * L(V) / (J * J);
-
-        try
-        {
-            double Heating = this->IonClassicalAngularMomentumFlux(V, n(V), Ti, omega(V), dOmegadV, t).val * dOmegadV.val;
-            return Heating;
-        }
-        catch (...)
-        {
-            return 0.0;
-        };
+        return ViscousHeating(u(V), q(V), V, t).val;
     };
 
     Fn AlphaHeating = [this, &n, &p_i](double V)
@@ -676,22 +642,14 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
         return dphi0dV(u(V), q(V), V).val;
     };
 
-    Fn IonPotentialHeating = [this, &u, &q, &n, &L, &aux](double V)
+    Fn IonPotentialHeatingWrapper = [&](double V)
     {
-        Real R = this->B->R_V(V, 0.0);
-        Real J = n(V) * R * R; // Normalisation includes the m_i
-
-        Real omega = L(V) / J;
-        Real S = -Gamma(u(V), q(V), V, 0.0) * (omega * omega / (2 * pi * a) - dphidV(u(V), q(V), aux(V), V));
-
-        return S.val;
+        return IonPotentialHeating(u(V), q(V), aux(V), V).val;
     };
 
-    Fn ElectronPotentialHeating = [this, &u, &q, &aux](double V)
+    Fn ElectronPotentialHeatingWrapper = [&](double V)
     {
-        Real S = -Gamma(u(V), q(V), V, 0.0) * (dphidV(u(V), q(V), aux(V), V));
-
-        return S.val;
+        return ElectronPotentialHeating(u(V), q(V), aux(V), V).val;
     };
 
     Fn CyclotronLosses = [&](double V)
@@ -784,11 +742,11 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
     // Add the appends for the heating stuff
     nc.AppendToGroup<Fn>("Heating", tIndex,
                          {{"AlphaHeating", AlphaHeating},
-                          {"ViscousHeating", ViscousHeating},
+                          {"ViscousHeating", VisHeating},
                           {"RadiationLosses", RadiationLosses},
                           {"EnergyExchange", EnergyExchange},
-                          {"IonPotentialHeating", IonPotentialHeating},
-                          {"ElectronPotentialHeating", ElectronPotentialHeating},
+                          {"IonPotentialHeating", IonPotentialHeatingWrapper},
+                          {"ElectronPotentialHeating", ElectronPotentialHeatingWrapper},
                           {"CyclotronLosses", CyclotronLosses}});
 
     nc.AppendToGroup<Fn>("ParallelLosses", tIndex,

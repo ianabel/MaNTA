@@ -97,6 +97,7 @@ private:
 	Real ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real Te) const;
 	Real IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) const;
 
+	Real ViscousHeating(RealVector, RealVector, Real, Time) const;
 	Real IonPotentialHeating(RealVector, RealVector, RealVector, Real) const;
 	Real ElectronPotentialHeating(RealVector, RealVector, RealVector, Real) const;
 	// Template function to avoid annoying dual vs. dual2nd behavior
@@ -122,8 +123,8 @@ private:
 	template <typename T>
 	T CentrifugalPotential(T V, T omega, T Ti, T Te) const
 	{
-		T MirrorRatio = B->MirrorRatio(V, 0.0);
 		T R = B->R_V(V, 0.0);
+		T MirrorRatio = B->MirrorRatio(V, 0.0);
 		T tau = Ti / Te;
 		T MachNumber = omega * R / sqrt(Te); // omega is normalised to c_s0 / a
 		T Potential = (1.0 / (1.0 + tau)) * (1.0 - 1.0 / MirrorRatio) * MachNumber * MachNumber / 2.0;
@@ -248,6 +249,8 @@ private:
 
 	double LowerParticleSourceStrength, UpperParticleSourceStrength, ParticleSourceCenter,
 		ParticleSourceWidth, UniformHeatSource;
+
+	double SourceRampup;
 
 	double IRadial, I0, CurrentDecay;
 

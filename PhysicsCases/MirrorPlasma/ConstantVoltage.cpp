@@ -320,8 +320,6 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
             I.x_l, I.x_u, max_depth);
         s.Variable(Channel::AngularMomentum) = P_L;
         s.Variable(Channel::Density) = P_n;
-        // double P_n = integrator::integrate(P, I.x_l, I.x_u);
-        // s.Variable(Channel::Density) = P_n;
         s.Scalars(Scalar::Error) = 1.0; // dG_0/dE
         break;
     }

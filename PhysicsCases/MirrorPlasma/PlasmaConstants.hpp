@@ -274,21 +274,46 @@ private:
     constexpr static unsigned max_depth = 2;
     constexpr static double tol = 1e-6;
 
+    enum MomentTypes : int
+    {
+        Density = 0,
+        Momentum = 1,
+        Energy = 2,
+    };
+
     // Calculates the velocity space integral for collisional processes with neutrals
     // CrossSection is a lambda with units of cm^2 that returns an autodiff compatible type (Real or double)
     template <class XS>
-    Real NeutralProcess(XS const &CrossSection, Real vtheta, Real T, double Mass, double minEnergy) const
+    Real NeutralProcess(XS const &CrossSection, Real vtheta, Real T, double Mass, double minEnergy, MomentTypes Moment = MomentTypes::Density) const
     {
         Real vth2 = 2 * T * T0 / Mass;
         double cs0 = sqrt(T0 / IonMass());
-        Real Mth = vtheta * cs0 / sqrt(vth2);
+        vtheta *= cs0;
+        Real Mth = vtheta / sqrt(vth2);
         // Energy in eV, mass in kg, T in keV, cross section in cm^2
-        auto Integrand = [](double Energy, Real Mass, Real M, Real T, Real CrossSection)
+        auto Integrand = [&](double Energy, Real Mass, Real M, Real T, Real CrossSection)
         {
             Real MmE = M - sqrt(Energy / T);
             Real MpE = M + sqrt(Energy / T);
             Real v = sqrt(2 * ElementaryCharge * Energy / Mass);
-            Real I = v * ElementaryCharge / Mass * (CrossSection * 1e-4) * (exp(-MmE * MmE) - exp(-MpE * MpE));
+
+            // For energy and momentum losses, we need to calculate the appropriate moment
+            Real x;
+            switch (Moment)
+            {
+            case MomentTypes::Density:
+                x = 1.0;
+                break;
+            case MomentTypes::Momentum:
+                x = Mass * (v - vtheta);
+                break;
+            case MomentTypes::Energy:
+                x = 0.5 * Mass * (v * v - 2 * vtheta * v + vtheta * vtheta);
+                break;
+            default:
+                break;
+            }
+            Real I = v * x * ElementaryCharge / Mass * (CrossSection * 1e-4) * (exp(-MmE * MmE) - exp(-MpE * MpE));
             return I;
         };
 
@@ -330,6 +355,7 @@ private:
 private:
     IonSpecies *Plasma = nullptr;
     std::shared_ptr<MagneticField> B;
+
     const double n0 = 1e20;
     const double n0cgs = n0 * 1e-6;
     const double T0 = 1000.0 * ElementaryCharge, T0eV = T0 / ElementaryCharge;

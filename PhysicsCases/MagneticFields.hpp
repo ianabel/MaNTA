@@ -52,7 +52,11 @@ public:
 	virtual double L_V(double V) const { return L_V(static_cast<Real>(V)).val; }
 
 	virtual Real Rmax(Real V) const { return R(Psi_V(V), 0.5 * (LeftEndpoint(Psi_V(V)) + RightEndpoint(Psi_V(V)))); }
+	virtual double Rmax(double V) const { return Rmax(static_cast<Real>(V)).val; }
+	virtual Real2nd Rmax(Real2nd V) const { throw std::logic_error("If 2nd derivative behavior is required it must be explicitly implemented in your magnetic field class"); }
 	virtual Real Rmin(Real V) const { return R(Psi_V(V), RightEndpoint(Psi_V(V))); }
+	virtual double Rmin(double V) const { return Rmin(static_cast<Real>(V)).val; }
+	virtual Real2nd Rmin(Real2nd V) const { throw std::logic_error("If 2nd derivative behavior is required it must be explicitly implemented in your magnetic field class"); }
 
 	/// @brief Computes the flux surface average of a function f(V,s).
 	/// @tparam F is a generic function argument
@@ -103,6 +107,12 @@ public:
 
 	Real MirrorRatio(Real V, Real) const override { return MirrorRatio_T(V); }
 	Real2nd MirrorRatio(Real2nd V, Real2nd) const override { return MirrorRatio_T(V); }
+
+	Real Rmax(Real V) const override { return R_V_T(V); };
+	Real Rmin(Real V) const override { return R_V_T(V) / sqrt(MirrorRatio_T(V)); }
+
+	Real2nd Rmax(Real2nd V) const override { return R_V_T(V); };
+	Real2nd Rmin(Real2nd V) const override { return R_V_T(V) / sqrt(MirrorRatio_T(V)); }
 
 	Real L_V(Real V) const override { return L_V_T(V); }
 
