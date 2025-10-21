@@ -19,6 +19,7 @@
 #include "TransportSystem.hpp"
 #include "DGSoln.hpp"
 #include "NetCDFIO.hpp"
+#include "AdjointProblem.hpp"
 
 #ifdef TEST
 namespace system_solver_test_suite
@@ -124,6 +125,8 @@ class SystemSolver
         void setJacEvalY( N_Vector, N_Vector );
         int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
 
+        void initializeMatricesForAdjointSolve();
+
     private:
         Grid grid;
         unsigned int k;		   // polynomial degree per cell
@@ -131,6 +134,8 @@ class SystemSolver
         unsigned int nVars;	   // Total number of variables
         unsigned int nScalars; // Any global scalars
         unsigned int nAux;	   // Any auxiliary constraints
+
+        unsigned int nP;       // Number of parameters to compute for adjoint senstivity problem 
 
         using EigenCellwiseSolver = Eigen::PartialPivLU<Matrix>;
         using EigenGlobalSolver = Eigen::FullPivLU<Matrix>;
@@ -144,6 +149,9 @@ class SystemSolver
         std::vector<Vector> RF_cellwise;
         std::vector<Matrix> CG_cellwise;
         std::vector<Matrix> A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise;
+
+        // Adjoint vectors
+        std::vector<Vector> G_y;
 
         SUNContext ctx;
         N_Vector *v, *w;
@@ -178,6 +186,13 @@ class SystemSolver
 
         void dAux_Mat(Eigen::Ref<Matrix>, DGSoln const &, Interval);
 
+        void DerivativeSubVector(Index, Vector &, void (AdjointProblem::*dX_dZ)(Index, Values &, const State &, Position), DGSoln const &Y, Interval I);
+        void dGdu_Vec(Index, Vector &, DGSoln const &, Interval);
+        void dGdq_Vec(Index, Vector &, DGSoln const &, Interval);
+        void dGdsigma_Vec(Index, Vector &, DGSoln const &, Interval);
+        void dSigmadp_Vec(Index, Vector &, DGSoln const &, Interval);
+        void dSourcesdp_Vec(Index, Vector &, DGSoln const &, Interval);
+
         double resNorm = 0.0; // Exclusively for unit testing purposes
 
         double dt;
@@ -194,6 +209,7 @@ class SystemSolver
 
         // Hide all physics-specific info in here
         TransportSystem *problem = nullptr;
+        AdjointSystem *adjointProblem = nullptr;
 
         // Tau
         double tauc;

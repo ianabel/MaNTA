@@ -878,7 +878,7 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 
     VectorWrapper resVec(N_VGetArrayPointer(resval), N_VGetLength(resval));
 
-    resVec.setZero();
+    resVec.setZero(); 
 
     // residual.lambda = C*sigma + G*u + H*lambda - L
 
@@ -966,6 +966,13 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
     }
 
     return 0;
+}
+
+void SystemSolver::initializeMatricesForAdjointSolve()
+{
+    setAlpha(0);
+
+    
 }
 
 void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &tempY, bool printSources)
