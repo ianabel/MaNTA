@@ -16,6 +16,8 @@ AdjointTestProblem::AdjointTestProblem(toml::value const &config, Grid const &gr
     D = 1.0;
     SourceWidth = 0.02;
     SourceCentre = 0.3;
+
+    addP(std::ref(SourceCentre));
 }
 
 Real AdjointTestProblem::Flux(Index i, RealVector u, RealVector q, Real x, Time t)
@@ -28,4 +30,9 @@ Real AdjointTestProblem::Source(Index i, RealVector u, RealVector q, RealVector 
 {
     Real y = (x - SourceCentre);
     return T_s * exp(-y * y / SourceWidth);
+}
+
+Real AdjointTestProblem::g(Position, Real, RealVector u, RealVector, RealVector)
+{
+    return u(0) * u(0);
 }

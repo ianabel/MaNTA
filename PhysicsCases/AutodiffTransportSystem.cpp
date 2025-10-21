@@ -140,6 +140,41 @@ void AutodiffTransportSystem::dSources_dScalars(Index i, Values &grad, const Sta
 					wrt(Scalar), at(u, q, sigma, phi, Scalar, x, t));
 }
 
+void AutodiffTransportSystem::dSigmaFn_dp(Index i, Value &grad, const State &s, Position x, Time t)
+{
+	RealVector u(s.Variable);
+	RealVector q(s.Derivative);
+
+	Real p = getPval(i);
+
+	grad = autodiff::derivative(
+		[this, i](Real p, RealVector uD, RealVector qD, Position X, Time T)
+		{
+			setPval(i, p);
+			return Flux(i, uD, qD, X, T);
+		},
+		wrt(p), at(p, u, q, x, t));
+}
+
+void AutodiffTransportSystem::dSources_dp(Index i, Value &grad, const State &s, Position x, Time t)
+{
+	RealVector u(s.Variable);
+	RealVector q(s.Derivative);
+	RealVector sigma(s.Flux);
+	RealVector phi(s.Aux);
+	RealVector Scalar(s.Scalars);
+
+	Real p = getPval(i);
+
+	grad = autodiff::derivative(
+		[this, i](Real p, RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)
+		{
+			setPval(i, p);
+			return Source(i, uD, qD, sD, phiD, ScalarD, X, T);
+		},
+		wrt(p), at(p, u, q, sigma, phi, Scalar, x, t));
+}
+
 Value AutodiffTransportSystem::AuxG(Index i, const State &s, Position x, Time t)
 {
 	RealVector u(s.Variable);
