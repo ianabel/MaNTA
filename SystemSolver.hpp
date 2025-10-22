@@ -27,13 +27,18 @@ namespace system_solver_test_suite
     struct systemsolver_init_tests;
     struct systemsolver_multichannel_init_tests;
     struct systemsolver_matrix_tests;
+    
 };
+namespace adjoint_test_suite
+{
+    struct systemsolver_adjoint_tests;
+}
 #endif
 
 class SystemSolver
 {
     public:
-        SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *pProblem);
+        SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *pProblem, AdjointProblem *adjointProblem = nullptr);
         SystemSolver(const SystemSolver &) = delete; // Best practice to define this as deleted. We can't copy this class.
         ~SystemSolver();
 
@@ -127,6 +132,8 @@ class SystemSolver
 
         void initializeMatricesForAdjointSolve();
 
+        void solveAdjointState(Index i);
+
     private:
         Grid grid;
         unsigned int k;		   // polynomial degree per cell
@@ -190,8 +197,8 @@ class SystemSolver
         void dGdu_Vec(Index, Vector &, DGSoln const &, Interval);
         void dGdq_Vec(Index, Vector &, DGSoln const &, Interval);
         void dGdsigma_Vec(Index, Vector &, DGSoln const &, Interval);
-        void dSigmadp_Vec(Index, Vector &, DGSoln const &, Interval);
-        void dSourcesdp_Vec(Index, Vector &, DGSoln const &, Interval);
+        // void dSigmadp_Vec(Index, Vector &, DGSoln const &, Interval);
+        // void dSourcesdp_Vec(Index, Vector &, DGSoln const &, Interval);
 
         double resNorm = 0.0; // Exclusively for unit testing purposes
 
@@ -209,7 +216,8 @@ class SystemSolver
 
         // Hide all physics-specific info in here
         TransportSystem *problem = nullptr;
-        AdjointSystem *adjointProblem = nullptr;
+   
+        AdjointProblem *adjointProblem = nullptr;
 
         // Tau
         double tauc;
@@ -240,6 +248,7 @@ class SystemSolver
         friend struct system_solver_test_suite::systemsolver_init_tests;
         friend struct system_solver_test_suite::systemsolver_multichannel_init_tests;
         friend struct system_solver_test_suite::systemsolver_matrix_tests;
+        friend struct adjoint_test_suite::systemsolver_adjoint_tests;
 #endif
 
         std::filesystem::path inputFilePath;

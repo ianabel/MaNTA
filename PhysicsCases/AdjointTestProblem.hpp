@@ -8,7 +8,7 @@ class AdjointTestProblem : public AutodiffTransportSystem
 public:
     AdjointTestProblem(toml::value const &config, Grid const &grid);
 
-    Real g(Position, Real, RealVector, RealVector, RealVector);
+    Real g(Position, Real, RealVector, RealVector, RealVector, RealVector);
 
 private:
     Real Flux(Index, RealVector, RealVector, Real, Time) override;

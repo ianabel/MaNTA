@@ -4,7 +4,6 @@
 #include "Types.hpp"
 #include "DGSoln.hpp"
 
-template <typename T, typename... Args>
 class AdjointProblem
 {
 public:
@@ -13,21 +12,20 @@ public:
     virtual Value GFn(Index i, DGSoln &y) const = 0;
     virtual Value dGFndp(Index i, DGSoln &y) const = 0;
 
-    virtual void dgFn_du(Index i, Values &, const State &s, Position x) const = 0;
-    virtual void dgFn_dq(Index i, Values &, const State &s, Position x) const = 0;
-    virtual void dgFn_dsigma(Index i, Values &, const State &s, Position x) const = 0;
+    // We're assuming Gfn = Int gFn dx for now
+    virtual Value gFn(Index i, const State &s, Position x) const = 0;
+    // For compute g_y
+    virtual void dgFn_du(Index i, Values &, const State &s, Position x) = 0;
+    virtual void dgFn_dq(Index i, Values &, const State &s, Position x) = 0;
+    virtual void dgFn_dsigma(Index i, Values &, const State &s, Position x) = 0;
+    virtual void dgFn_dphi(Index i, Values &, const State &s, Position x) = 0;
     // For computing F_p
-    virtual void dSigmaFn_dp(Index i, Value &, const State &s, Position x, Time t) const = 0;
-    virtual void dSources_dp(Index i, Value &, const State &s, Position x, Time t) const = 0;
+    virtual void dSigmaFn_dp(Index i, Value &, const State &s, Position x) = 0;
+    virtual void dSources_dp(Index i, Value &, const State &s, Position x) = 0;
 
     int getNp() const { return np; }
-    void setNp(int n) const { np = n; }
-
-    void setG(std::function<T(Position, T, Args &...args)> g) { gFn = g; }
-
 
 protected:
     int np;
-    std::function<T(Position, T, Args &...args)> gFn;
 };
 #endif

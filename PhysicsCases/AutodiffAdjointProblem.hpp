@@ -9,24 +9,31 @@
 #include "Types.hpp"
 #include "AdjointProblem.hpp"
 
-class AutodiffAdjointProblem : public AdjointProblem<Real, RealVector, RealVector, RealVector>
+class AutodiffAdjointProblem : public AdjointProblem
 {
 public:
-    AutodiffAdjointProblem(std::shared_ptr<AutodiffTransportSystem> TransportSystem) : PhysicsProblem(TransportSystem) {}
+    AutodiffAdjointProblem(AutodiffTransportSystem *TransportSystem) : PhysicsProblem(TransportSystem) {}
 
     virtual Value GFn(Index i, DGSoln &y) const override;
     virtual Value dGFndp(Index i, DGSoln &y) const override;
 
-    virtual void dgFn_du(Index i, Values &, const State &s, Position x) const override;
-    virtual void dgFn_dq(Index i, Values &, const State &s, Position x) const override;
-    virtual void dgFn_dsigma(Index i, Values &, const State &s, Position x) const override;
+    virtual Value gFn(Index i, const State &s, Position x) const override;
 
-    virtual void dSigmaFn_dp(Index i, Value &, const State &s, Position x, Time t) const override;
-    virtual void dSources_dp(Index i, Value &, const State &, Position x, Time t) const override;
+    virtual void dgFn_du(Index i, Values &, const State &s, Position x) override;
+    virtual void dgFn_dq(Index i, Values &, const State &s, Position x) override;
+    virtual void dgFn_dsigma(Index i, Values &, const State &s, Position x) override;
+    virtual void dgFn_dphi(Index i, Values &, const State &s, Position x) override;
+
+    virtual void dSigmaFn_dp(Index i, Value &, const State &s, Position x) override;
+    virtual void dSources_dp(Index i, Value &, const State &, Position x) override;
+
+    void setG(std::function<Real(Position, Real, RealVector &, RealVector &, RealVector &, RealVector &)> gin) { g = gin; }
 
 private:
+    int np;
+    std::function<Real(Position, Real, RealVector &, RealVector &, RealVector &, RealVector &)> g;
     using integrator = boost::math::quadrature::gauss_kronrod<double, 15>;
     constexpr static int max_depth = 2;
-    std::shared_ptr<AutodiffTransportSystem> PhysicsProblem;
+    AutodiffTransportSystem *PhysicsProblem;
 };
 #endif

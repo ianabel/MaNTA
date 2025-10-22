@@ -43,16 +43,16 @@ void SystemSolver::DerivativeSubVector(Index i, Vector &Vec, void (AdjointProble
 
             State Y_plus = Y.eval(y_plus), Y_minus = Y.eval(y_minus);
 
-            (problem->*dX_dZ)(i, dX_dZ_vals1, Y_plus, y_plus, 0.0);
-            (problem->*dX_dZ)(i, dX_dZ_vals2, Y_minus, y_minus, 0.0);
+            (adjointProblem->*dX_dZ)(i, dX_dZ_vals1, Y_plus, y_plus);
+            (adjointProblem->*dX_dZ)(i, dX_dZ_vals2, Y_minus, y_minus);
 
          
             for (Index j = 0; j < k + 1; ++j)
             {   
                     Vec(XVar * (k + 1) + j) +=
-                        wgt * dX_dZ_vals1[ZVar] * LegendreBasis::Evaluate(I, j, y_plus);
+                        wgt * dX_dZ_vals1[XVar] * LegendreBasis::Evaluate(I, j, y_plus);
                     Vec(XVar * (k + 1) + j) +=
-                        wgt * dX_dZ_vals2[ZVar] * LegendreBasis::Evaluate(I, j, y_minus);
+                        wgt * dX_dZ_vals2[XVar] * LegendreBasis::Evaluate(I, j, y_minus);
             }
         }
     }
@@ -61,19 +61,19 @@ void SystemSolver::dGdu_Vec(Index i, Vector &Vec, DGSoln const &Y, Interval I)
 {
     DerivativeSubVector(i, Vec, &AdjointProblem::dgFn_du, Y, I);
 }
-void SystemSolver::dGdq_Vec(Index, Vector &, DGSoln const &, Interval)
+void SystemSolver::dGdq_Vec(Index i, Vector &Vec, DGSoln const &Y, Interval I)
 {
     DerivativeSubVector(i, Vec, &AdjointProblem::dgFn_dq, Y, I);
 }
-void SystemSolver::dGdsigma_Vec(Index, Vector &, DGSoln const &, Interval)
+void SystemSolver::dGdsigma_Vec(Index i, Vector &Vec, DGSoln const &Y, Interval I)
 {
     DerivativeSubVector(i, Vec, &AdjointProblem::dgFn_dsigma, Y, I);
 }
-void SystemSolver::dSigmadp_Vec(Index i, Vector &Vec, DGSoln const &Y, Interval I)
-{
-    DerivativeSubVector(i, Vec, &AdjointProblem::dSigmaFn_dp, Y, I);
-}
-void SystemSolver::dSourcesdp_Vec(Index i, Vector &Vec, DGSoln const &Y, Interval I)
-{
-    DerivativeSubVector(i, Vec, &AdjointProblem::dSourceFn_dp, Y, I);
-}
+// void SystemSolver::dSigmadp_Vec(Index i, Vector &Vec, DGSoln const &Y, Interval I)
+// {
+//     DerivativeSubVector(i, Vec, &AdjointProblem::dSigmaFn_dp, Y, I);
+// }
+// void SystemSolver::dSourcesdp_Vec(Index i, Vector &Vec, DGSoln const &Y, Interval I)
+// {
+//     DerivativeSubVector(i, Vec, &AdjointProblem::dSources_dp, Y, I);
+// }
