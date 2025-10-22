@@ -197,6 +197,7 @@ class SystemSolver
         void dGdu_Vec(Index, Vector &, DGSoln const &, Interval);
         void dGdq_Vec(Index, Vector &, DGSoln const &, Interval);
         void dGdsigma_Vec(Index, Vector &, DGSoln const &, Interval);
+        void dGdaux_Vec(Index, Vector &, DGSoln const &, Interval);
         // void dSigmadp_Vec(Index, Vector &, DGSoln const &, Interval);
         // void dSourcesdp_Vec(Index, Vector &, DGSoln const &, Interval);
 

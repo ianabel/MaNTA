@@ -34,5 +34,5 @@ Real AdjointTestProblem::Source(Index i, RealVector u, RealVector q, RealVector 
 
 Real AdjointTestProblem::g(Position, Real, RealVector u, RealVector, RealVector, RealVector)
 {
-    return u(0) * u(0);
+    return 0.5 * u(0) * u(0);
 }

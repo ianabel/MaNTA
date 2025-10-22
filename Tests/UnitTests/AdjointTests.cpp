@@ -92,7 +92,7 @@ BOOST_AUTO_TEST_CASE(test_derivatives)
 
     Values grad(1);
     adjoint.dgFn_du(0, grad, s, 0.0);
-    BOOST_TEST(grad(0) == 4.0);
+    BOOST_TEST(grad(0) == 2.0);
 
     adjoint.dgFn_dq(0, grad, s, 0.0);
     BOOST_TEST(grad(0) == 0.0);
@@ -105,7 +105,8 @@ BOOST_AUTO_TEST_CASE(test_derivatives)
 
 BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
 {
-    Grid testGrid(-1.0, 1.0, 4);
+    int nGrid = 10;
+    Grid testGrid(-1.0, 1.0, nGrid);
     AdjointTestProblem *problem = new AdjointTestProblem(config_snippet, testGrid);
 
     AutodiffAdjointProblem *adjoint = new AutodiffAdjointProblem(problem);
@@ -117,21 +118,46 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
 
     adjoint->setG(gfun);
 
-    Index k = 1; // Start piecewise linear
+    Index k = 2; // Start piecewise linear
 
     SystemSolver *system = nullptr;
-    double tau = 0.5;
+
+    SUNContext ctx;
+    SUNContext_Create(SUN_COMM_NULL, &ctx);
 
     BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, problem, adjoint));
 
-    // SUNContext ctx;
-    // SUNContext_Create(SUN_COMM_NULL, &ctx);
+    system->setTau(1.0);
+    system->resetCoeffs();
+    system->initialiseMatrices();
 
-    // N_Vector y0, y0_dot;
+    N_Vector y0, y0_dot;
+    y0 = N_VNew_Serial(3 * nGrid * (k + 1) + 1 * (nGrid + 1), ctx);
+    y0_dot = N_VClone(y0);
+    BOOST_CHECK_NO_THROW(system->setInitialConditions(y0, y0_dot));
 
-    // y0 = N_VNew_Serial(3 * 4 * (2) + 1 * (4 + 1), ctx);
-    // y0_dot = N_VClone(y0);
-    // system->setInitialConditions(y0, y0_dot);
+    Vector test_Vec(k + 1);
+    Vector dGdu_test(k + 1);
+    Vector zeroVec(k + 1);
+    zeroVec.setZero();
+    for (Index i = 0; i < nGrid; ++i)
+    {
+        auto I = testGrid[i];
+
+        auto yCoeffs = system->y.u(0).getCoeff(i);
+        dGdu_test = yCoeffs.second;
+        BOOST_CHECK_NO_THROW(system->dGdu_Vec(0, test_Vec, system->y, I));
+        BOOST_TEST((dGdu_test - test_Vec).norm() < 1e-9);
+
+        BOOST_CHECK_NO_THROW(system->dGdq_Vec(0, test_Vec, system->y, I));
+        BOOST_TEST((zeroVec - test_Vec).norm() == 0.0);
+
+        BOOST_CHECK_NO_THROW(system->dGdsigma_Vec(0, test_Vec, system->y, I));
+        BOOST_TEST((zeroVec - test_Vec).norm() == 0.0);
+
+        BOOST_CHECK_NO_THROW(system->dGdaux_Vec(0, test_Vec, system->y, I));
+        BOOST_TEST((zeroVec - test_Vec).norm() == 0.0);
+    }
 
     delete problem;
     delete adjoint;
