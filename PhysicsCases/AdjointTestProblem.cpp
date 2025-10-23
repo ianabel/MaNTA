@@ -13,7 +13,7 @@ AdjointTestProblem::AdjointTestProblem(toml::value const &config, Grid const &gr
     }
 
     T_s = 50;
-    D = 1.0;
+    D = 2.0;
     SourceWidth = 0.02;
     SourceCentre = 0.3;
 

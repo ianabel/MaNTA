@@ -149,6 +149,7 @@ class SystemSolver
         std::vector<Matrix> XMats;
         std::vector<Matrix> MBlocks;
         std::vector<Matrix> CEBlocks;
+        std::vector<Matrix> CGBlocks;
         Matrix K_global;
         Vector L_global;
         Matrix H_global_mat;

@@ -75,6 +75,8 @@ BOOST_AUTO_TEST_CASE(test_derivatives)
     Positions << 0.2, 0.0, -0.2;
     State s(1);
     s.zero();
+
+    // dGdp tests
     Value p;
     adjoint.dSources_dp(0, p, s, Positions(0));
     BOOST_TEST(dGdp(Positions(0)) == p);
@@ -88,6 +90,7 @@ BOOST_AUTO_TEST_CASE(test_derivatives)
     adjoint.dSigmaFn_dp(0, p, s, Positions(0));
     BOOST_TEST(p == 0.0);
 
+    // dGdy tests
     s.Variable[0] = 2.0;
 
     Values grad(1);
@@ -105,7 +108,7 @@ BOOST_AUTO_TEST_CASE(test_derivatives)
 
 BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
 {
-    int nGrid = 10;
+    int nGrid = 4;
     Grid testGrid(-1.0, 1.0, nGrid);
     AdjointTestProblem *problem = new AdjointTestProblem(config_snippet, testGrid);
 
@@ -118,7 +121,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
 
     adjoint->setG(gfun);
 
-    Index k = 2; // Start piecewise linear
+    Index k = 1; // make sure it works for higher order bases
 
     SystemSolver *system = nullptr;
 
@@ -144,6 +147,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
     {
         auto I = testGrid[i];
 
+        // dG/dCij = c_ij ? 
         auto yCoeffs = system->y.u(0).getCoeff(i);
         dGdu_test = yCoeffs.second;
         BOOST_CHECK_NO_THROW(system->dGdu_Vec(0, test_Vec, system->y, I));
@@ -157,6 +161,14 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
 
         BOOST_CHECK_NO_THROW(system->dGdaux_Vec(0, test_Vec, system->y, I));
         BOOST_TEST((zeroVec - test_Vec).norm() == 0.0);
+    }
+
+    BOOST_CHECK_NO_THROW(system->initializeMatricesForAdjointSolve());
+
+    for (Index i = 0; i < nGrid; ++i)
+    {
+        std::cout << "-----------------" << std::endl;
+        std::cout << system->CEBlocks[i] << std::endl;
     }
 
     delete problem;
