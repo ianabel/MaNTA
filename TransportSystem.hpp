@@ -4,6 +4,7 @@
 #include "Types.hpp"
 #include "DGSoln.hpp"
 #include "NetCDFIO.hpp"
+#include "AdjointProblem.hpp"
 
 /*
     Pure interface class
@@ -160,6 +161,11 @@ public:
     {
         v.setZero();
         return;
+    }
+
+    virtual AdjointProblem * createAdjointProblem()
+    {
+        throw std::logic_error("Adjoint problem not implemented for this physics case");
     }
 
     virtual std::string getVariableName(Index i)

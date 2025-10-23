@@ -32,7 +32,7 @@ Real AdjointTestProblem::Source(Index i, RealVector u, RealVector q, RealVector 
     return T_s * exp(-y * y / SourceWidth);
 }
 
-Real AdjointTestProblem::g(Position, Real, RealVector u, RealVector, RealVector, RealVector)
+Real AdjointTestProblem::g(Position, Real, RealVector &u, RealVector &, RealVector &, RealVector &)
 {
     return 0.5 * u(0) * u(0);
 }

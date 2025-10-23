@@ -1126,7 +1126,6 @@ void SystemSolver::initializeMatricesForAdjointSolve()
 
         CGBlocks.emplace_back(CG_vec);
 
-        H_cellwise[i] = H_cellwise[i].transpose()
 
         // Finally fill L
         // for (Index var = 0; var < nVars; var++)

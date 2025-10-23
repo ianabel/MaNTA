@@ -112,14 +112,14 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
     Grid testGrid(-1.0, 1.0, nGrid);
     AdjointTestProblem *problem = new AdjointTestProblem(config_snippet, testGrid);
 
-    AutodiffAdjointProblem *adjoint = new AutodiffAdjointProblem(problem);
+    AdjointProblem *adjoint = problem->createAdjointProblem();
 
-    auto gfun = [&](Position x, Real p, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
-    {
-        return problem->g(x, p, u, q, sigma, phi);
-    };
+    // auto gfun = [&](Position x, Real p, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
+    // {
+    //     return problem->g(x, p, u, q, sigma, phi);
+    // };
 
-    adjoint->setG(gfun);
+    // adjoint->setG(gfun);
 
     Index k = 1; // make sure it works for higher order bases
 
@@ -147,7 +147,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
     {
         auto I = testGrid[i];
 
-        // dG/dCij = c_ij ? 
+        // dG/dCij = c_ij ?
         auto yCoeffs = system->y.u(0).getCoeff(i);
         dGdu_test = yCoeffs.second;
         BOOST_CHECK_NO_THROW(system->dGdu_Vec(0, test_Vec, system->y, I));
