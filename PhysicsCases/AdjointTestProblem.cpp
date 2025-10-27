@@ -12,12 +12,23 @@ AdjointTestProblem::AdjointTestProblem(toml::value const &config, Grid const &gr
         throw std::invalid_argument("There should be a [AdjointTestProblem] section.");
     }
 
+    auto const &DiffConfig = config.at("AdjointTestProblem");
+
     T_s = 50;
     D = 2.0;
     SourceWidth = 0.02;
-    SourceCentre = 0.3;
+    SourceCentre = toml::find_or(DiffConfig, "SourceCentre", 0.3);
 
     addP(std::ref(SourceCentre));
+}
+
+AdjointProblem *AdjointTestProblem::createAdjointProblem()
+{
+    AutodiffAdjointProblem *p = new AutodiffAdjointProblem(this);
+    p->setG([this](Position x, Real p, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
+            { return this->g(x, p, u, q, sigma, phi); });
+    p->setNp(1);
+    return p;
 }
 
 Real AdjointTestProblem::Flux(Index i, RealVector u, RealVector q, Real x, Time t)

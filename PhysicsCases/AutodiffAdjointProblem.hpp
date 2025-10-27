@@ -28,9 +28,9 @@ public:
     virtual void dSources_dp(Index i, Value &, const State &, Position x) override;
 
     void setG(std::function<Real(Position, Real, RealVector &, RealVector &, RealVector &, RealVector &)> gin) { g = gin; }
+    void setNp(int n) { AdjointProblem::np = n; }
 
 private:
-    int np;
     std::function<Real(Position, Real, RealVector &, RealVector &, RealVector &, RealVector &)> g;
     using integrator = boost::math::quadrature::gauss_kronrod<double, 15>;
     constexpr static int max_depth = 2;

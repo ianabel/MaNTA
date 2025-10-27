@@ -130,9 +130,14 @@ class SystemSolver
         void setJacEvalY( N_Vector, N_Vector );
         int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
 
+        // Adjoints
+        void setSolveAdjoint(bool a) { solveAdjoint = a; }
+
         void initializeMatricesForAdjointSolve();
 
         void solveAdjointState(Index i);
+
+        void computeAdjointGradients();
 
     private:
         Grid grid;
@@ -160,6 +165,8 @@ class SystemSolver
 
         // Adjoint vectors
         std::vector<Vector> G_y;
+        Vector adjoint_lambdas;
+        std::vector<Vector> adjoint_squ;
 
         SUNContext ctx;
         N_Vector *v, *w;
@@ -177,6 +184,8 @@ class SystemSolver
 
         DGSoln yJac; // memory owned by us
         DGSoln dydtJac; // memory owned by us
+
+        Vector G_p; // gradients computed by adjoint state method
 
         void NLqMat(Matrix &, DGSoln const &, Interval);
         void NLuMat(Matrix &, DGSoln const &, Interval);
@@ -216,6 +225,8 @@ class SystemSolver
         // Why do we need to know? Surely everything is encoded in the construction of the Grid, which is done elsewhere?
         bool highGridBoundary = true;
 
+        bool solveAdjoint = false; 
+
         // Hide all physics-specific info in here
         TransportSystem *problem = nullptr;
    
@@ -233,6 +244,7 @@ class SystemSolver
         void initialiseNetCDF(std::string const &fname, size_t nOut);
         void WriteTimeslice(double tNew);
         void WriteRestartFile(std::string const &fname, N_Vector const &Y, N_Vector const &dYdt, size_t nOut);
+        void WriteAdjoints();
 
         size_t S_DOF,
         U_DOF, Q_DOF, AUX_DOF, SQU_DOF;

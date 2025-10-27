@@ -201,6 +201,15 @@ void SystemSolver::WriteTimeslice(double tNew)
 	problem->writeDiagnostics(y, dydt, tNew, nc_output, tIndex);
 }
 
+void SystemSolver::WriteAdjoints()
+{
+	for (Index i = 0; i < adjointProblem->getNp(); ++i)
+	{
+		nc_output.AddScalarVariable("G" + std::to_string(i), "", "", adjointProblem->GFn(i,y));
+		nc_output.AddScalarVariable("p" + std::to_string(i), "", "", G_p[i]);
+	}
+}
+
 void SystemSolver::WriteRestartFile(std::string const &fname, N_Vector const &Y, N_Vector const &dYdt, size_t nOut)
 {
 	restart_file.Open(fname);
@@ -238,7 +247,7 @@ void SystemSolver::WriteRestartFile(std::string const &fname, N_Vector const &Y,
 	}
 
 	// Save N_Vector directly
-	NcGroup RestartGroup = restart_file.CreateGroup("RestartData","Restart group");
+	NcGroup RestartGroup = restart_file.CreateGroup("RestartData", "Restart group");
 
 	const size_t nDOF = nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1);
 	NcDim yDim = RestartGroup.addDim("nDOF", nDOF);

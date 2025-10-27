@@ -324,6 +324,15 @@ void SystemSolver::runSolver(double tFinal)
 	std::cout << "Total Number of Residual Evaluations  :" << nresevals << std::endl;
 	std::cout << "Total Number of Jacobian Computations :" << njacevals << std::endl;
 
+	if (solveAdjoint)
+	{
+		std::cout << "Computing adjoints" << std::endl;
+		initializeMatricesForAdjointSolve();
+		solveAdjointState(0);
+		computeAdjointGradients();
+		WriteAdjoints();
+	}
+
 	problem->finaliseDiagnostics(nc_output);
 	out0.close();
 	if (physics_debug)

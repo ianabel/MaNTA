@@ -9,13 +9,7 @@ class AdjointTestProblem : public AutodiffTransportSystem
 public:
     AdjointTestProblem(toml::value const &config, Grid const &grid);
 
-    virtual AdjointProblem *createAdjointProblem() override
-    {
-        AutodiffAdjointProblem *p = new AutodiffAdjointProblem(this);
-        p->setG([this](Position x, Real p, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
-                { return this->g(x, p, u, q, sigma, phi); });
-        return p;
-    }
+    virtual AdjointProblem *createAdjointProblem() override;
 
     Real g(Position, Real, RealVector &, RealVector &, RealVector &, RealVector &);
 

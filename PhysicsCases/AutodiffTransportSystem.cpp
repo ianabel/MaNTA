@@ -170,7 +170,8 @@ void AutodiffTransportSystem::dSources_dp(Index i, Value &grad, const State &s, 
 		[this, i](Real p, RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)
 		{
 			setPval(i, p);
-			return Source(i, uD, qD, sD, phiD, ScalarD, X, T);
+			Real S = Source(i, uD, qD, sD, phiD, ScalarD, X, T);
+			return S;
 		},
 		wrt(p), at(p, u, q, sigma, phi, Scalar, x, t));
 }

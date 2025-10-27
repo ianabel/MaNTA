@@ -240,7 +240,9 @@ int runManta(std::string const &fname)
 
 	int nOutput = getIntWithDefault("OutputPoints", config, 301);
 
-	
+	bool solveAdjoint = false; 
+	if (config.count("solveAdjoint") == 1)
+		solveAdjoint = config.at("solveAdjoint").as_boolean();
 
 	if (config.count("TransportSystem") != 1)
 		throw std::invalid_argument("TransportSystem needs to specified exactly once in the general configuration section");
@@ -250,6 +252,10 @@ int runManta(std::string const &fname)
 	// Convert string to TransportSystem* instance
 
 	TransportSystem *pProblem = PhysicsCases::InstantiateProblem(ProblemName, configFile, *grid);
+
+	AdjointProblem *adjoint = nullptr;
+	if (solveAdjoint)
+		adjoint = pProblem->createAdjointProblem();
 
 	if(isRestarting)
 	{
@@ -278,13 +284,14 @@ int runManta(std::string const &fname)
 		return 1;
 	}
 
-	system = std::make_shared<SystemSolver>(*grid, k, pProblem);
+	system = std::make_shared<SystemSolver>(*grid, k, pProblem, adjoint);
 
 	system->setOutputCadence(delta_t);
 	system->setTolerances(absTol, rtol);
 	system->setTau(tau);
 	system->setInitialTime(tZero);
 	system->setInputFile(fname);
+	system->setSolveAdjoint(solveAdjoint);
 
 	system->setNOutput(nOutput);
 	system->setMinStepSize(dt_min);
@@ -299,8 +306,9 @@ int runManta(std::string const &fname)
 
 	// For compiled-in TransportSystems we have the type information and
 	// this will call the correct inherited destructor
+	delete adjoint;
 	delete pProblem;
 	delete grid;
-
+	std::cout << "Done." << std::endl;
 	return 0;
 }
