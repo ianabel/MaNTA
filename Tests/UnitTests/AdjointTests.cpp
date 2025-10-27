@@ -168,7 +168,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
     for (Index i = 0; i < nGrid; ++i)
     {
         std::cout << "-----------------" << std::endl;
-        std::cout << system->G_y[i] << std::endl;
+        std::cout << system->B_cellwise[i] << std::endl;
     }
 
     delete problem;

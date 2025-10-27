@@ -1040,19 +1040,19 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         auto B = B_cellwise[i];
         auto D = D_cellwise[i];
         // row1
-        M.block(0, 0, nVars * (k + 1), nVars * (k + 1)) = A.transpose();
-        M.block(0, nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)).setZero();
-        M.block(0, 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = (B - Ssig).transpose(); // NLu added at Jac step
+        M.block(0, 0, nVars * (k + 1), nVars * (k + 1)) = A;
+        M.block(0, nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)).setZero() = NLq;
+        M.block(0, 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLu; // NLu added at Jac step
 
         // row2
-        M.block(nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) = NLu.transpose();
-        M.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = -A.transpose();
-        M.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = -Sq.transpose();
+        M.block(nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)).setZero();
+        M.block(nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = -A;
+        M.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = -B.transpose();
 
         // row3
-        M.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) = NLq.transpose();
-        M.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = B;
-        M.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = (D - Su).transpose();
+        M.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) = B - Ssig;
+        M.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = Sq;
+        M.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = (D - Su);
 
         // TODO: This is probably wrong
         if (nAux > 0)
@@ -1072,68 +1072,27 @@ void SystemSolver::initializeMatricesForAdjointSolve()
 
         MBlocks[i] = M;
 
-        Eigen::MatrixXd CE_vec(2 * nVars, localDOF);
+        Eigen::MatrixXd CE_vec(localDOF, 2 * nVars);
         CE_vec.setZero();
         auto C = C_cellwise[i];
         auto E = E_cellwise[i];
-        CE_vec.block(0, 0, nVars * 2, nVars * (k + 1)).setZero();
-        CE_vec.block(0, nVars * (k + 1), nVars * 2, nVars * (k + 1)) = C;
-        CE_vec.block(0, 2 * nVars * (k + 1), nVars * 2, nVars * (k + 1)) = E.transpose();
-        CE_vec.block(0, 3 * nVars * (k + 1), nVars * 2, nAux * (k + 1)).setZero();
+        CE_vec.block(0, 0, nVars * (k + 1), nVars * 2).setZero();
+        CE_vec.block(nVars * (k + 1), 0, nVars * (k + 1), nVars * 2) = C.transpose();
+        CE_vec.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * 2) = E;
+        CE_vec.block(3 * nVars * (k + 1), 0, nAux * (k + 1), nVars * 2).setZero();
         CEBlocks[i] = CE_vec;
-
-        // // // To store the RHS
-        // // RF_cellwise.emplace_back(nVars * 2 * (k + 1));
-
-        // // // R is composed of parts of the values of
-        // // // u on the total domain boundary
-        // // // don't need to do RHS terms here, those are now in 'Sources'
-        // // // (should we double check that RF_cellwise[ i ] == RF_cellwise.back()?
-        // // RF_cellwise[i].setZero();
-
-        // // for (Index var = 0; var < nVars; var++)
-        // // {
-        // //     if (I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryDirichlet(var))
-        // //     {
-        // //         for (Eigen::Index j = 0; j < k + 1; j++)
-        // //         {
-        // //             // < g_D , v . n > ~= g_D( x_0 ) * phi_j( x_0 ) * ( n_x = -1 )
-        // //             RF_cellwise[i](j + var * (k + 1)) += -LegendreBasis::Evaluate(I, j, I.x_l) * (-1) * problem->LowerBoundary(var, 0.0);
-        // //             // < ( tau ) g_D, w >
-        // //             RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += LegendreBasis::Evaluate(I, j, I.x_l) * tau(I.x_l) * problem->LowerBoundary(var, 0.0);
-        // //         }
-        // //     }
-
-        // //     if (I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(var))
-        // //     {
-        // //         for (Eigen::Index j = 0; j < k + 1; j++)
-        // //         {
-        // //             // < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 )
-        // //             RF_cellwise[i](j + var * (k + 1)) += -LegendreBasis::Evaluate(I, j, I.x_u) * (+1) * problem->UpperBoundary(var, 0.0);
-        // //             RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += LegendreBasis::Evaluate(I, j, I.x_u) * tau(I.x_u) * problem->UpperBoundary(var, 0.0);
-        // //         }
-        // //     }
-        // // }
 
         //[ C 0 G 0 ] (4th index is aux vars)
         auto G = G_cellwise[i];
-        Eigen::MatrixXd CG_vec(localDOF, 2 * nVars);
+        Eigen::MatrixXd CG_vec(2 * nVars, localDOF);
 
         CG_vec.setZero();
-        CG_vec.block(0, 0, nVars * (k + 1), 2 * nVars) = C.transpose();
-        CG_vec.block(2 * nVars * (k + 1), 0, nVars * (k + 1), 2 * nVars) = G.transpose();
+        CG_vec.block(0, 0, 2 * nVars, nVars * (k + 1)) = C;
+        CG_vec.block(0, 2 * nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = G;
 
         CGBlocks.emplace_back(CG_vec);
 
-        // Finally fill L
-        // for (Index var = 0; var < nVars; var++)
-        // {
-        //     if (I.x_l == grid.lowerBoundary() && /* is b.d. Neumann at lower boundary */ !problem->isLowerBoundaryDirichlet(var))
-        //         L_global(var * (nCells + 1) + i) += problem->LowerBoundary(var, 0.0);
-        //     if (I.x_u == grid.upperBoundary() && /* is b.d. Neumann at upper boundary */ !problem->isUpperBoundaryDirichlet(var))
-        //         L_global(var * (nCells + 1) + i + 1) += problem->UpperBoundary(var, 0.0);
-        // }
-        MXSolvers[i].compute(M);
+        MXSolvers[i].compute(MBlocks[i]);
     }
 
     // no computation of scalars
@@ -1153,18 +1112,18 @@ void SystemSolver::solveAdjointState(Index i)
         // Interval const& I( grid[ i ] );
 
         // SQU_f
-        Eigen::VectorXd const &g1g2g3 = G_y[i];
+        Vector g1g2g3 = G_y[i];
 
         SQU_f[i] = MXSolvers[i].solve(g1g2g3);
 
         // SQU_0
-        Eigen::MatrixXd const &CG = CGBlocks[i];
-        SQU_0[i] = MXSolvers[i].solve(CG);
+        Eigen::MatrixXd const &CE = CEBlocks[i];
+        SQU_0[i] = MXSolvers[i].solve(CE);
         // std::cerr << SQU_0[i] << std::endl << std::endl;
         // std::cerr << CE << std::endl << std::endl;
 
         Eigen::MatrixXd K_cell(nVars * 2, nVars * 2);
-        K_cell = H_cellwise[i].transpose() - CEBlocks[i] * SQU_0[i];
+        K_cell = H_cellwise[i].transpose() - CGBlocks[i] * SQU_0[i];
 
         // K
         for (Index varI = 0; varI < nVars; varI++)
@@ -1179,7 +1138,7 @@ void SystemSolver::solveAdjointState(Index i)
     {
         for (Index var = 0; var < nVars; var++)
         {
-            F.block<2, 1>(var * (nCells + 1) + i, 0) -= (CEBlocks[i] * SQU_f[i]).block(var * 2, 0, 2, 1);
+            F.block<2, 1>(var * (nCells + 1) + i, 0) -= (CGBlocks[i] * SQU_f[i]).block(var * 2, 0, 2, 1);
         }
     }
 
@@ -1221,7 +1180,6 @@ void SystemSolver::solveAdjointState(Index i)
 
         adjoint_squ.emplace_back(SQU_f[i] - SQU_0[i] * LambdaCell);
     }
-    Index LambdaOffset = nCells * localDOF;
 }
 
 void SystemSolver::computeAdjointGradients()
@@ -1232,7 +1190,6 @@ void SystemSolver::computeAdjointGradients()
     {
         for (Index i = 0; i < nCells; ++i)
         {
-            auto asqu = adjoint_squ[i];
             Vector F_p(3 * nVars * (k + 1) + nAux * (k + 1));
             F_p.setZero();
             Vector F_p_boundary(nCells);
@@ -1283,7 +1240,7 @@ void SystemSolver::computeAdjointGradients()
             F_p.segment(0, k + 1) = dkappa_dp_phi;
 
             auto C_cell = C_cellwise[i];
-            F_p.segment(2 * (k + 1), k + 1) = -dkappa_dp_phi_prime + dSdp_cellwise + dkappa_dp_boundary;
+            F_p.segment(2 * (k + 1), k + 1) = -dkappa_dp_phi_prime - dSdp_cellwise + dkappa_dp_boundary;
 
             // TODO: implement this
             if (nAux > 0)
@@ -1292,7 +1249,7 @@ void SystemSolver::computeAdjointGradients()
 
             // SQU portion
 
-            G_p(pIndex) -= asqu.transpose() * F_p;
+            G_p(pIndex) -= adjoint_squ[i].transpose() * F_p;
 
             // // Lambda portion
             // G_p -= adjoint_lambdas.segment(i, 2).transpose() * (dkappa_dp_boundary);
