@@ -1066,7 +1066,7 @@ void SystemSolver::initializeMatricesForAdjointSolve()
             // TODO: Consider factorization here (is M sparse enough to warrant a sparse implementation?)
         }
 
-        MBlocks[i] = M;
+        MBlocks[i] = M.transpose();
 
         Eigen::MatrixXd CE_vec(localDOF, 2 * nVars);
         CE_vec.setZero();
@@ -1076,7 +1076,7 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         CE_vec.block(nVars * (k + 1), 0, nVars * (k + 1), nVars * 2) = C.transpose();
         CE_vec.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * 2) = E;
         CE_vec.block(3 * nVars * (k + 1), 0, nAux * (k + 1), nVars * 2).setZero();
-        CEBlocks[i] = CE_vec;
+        CEBlocks[i] = CE_vec.transpose();
 
         //[ C 0 G 0 ] (4th index is aux vars)
         auto G = G_cellwise[i];
@@ -1086,7 +1086,7 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         CG_vec.block(0, 0, 2 * nVars, nVars * (k + 1)) = C;
         CG_vec.block(0, 2 * nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = G;
 
-        CGBlocks.emplace_back(CG_vec);
+        CGBlocks.emplace_back(CG_vec.transpose());
 
         MXSolvers[i].compute(MBlocks[i]);
     }
@@ -1113,13 +1113,13 @@ void SystemSolver::solveAdjointState(Index gIndex)
         SQU_f[i] = MXSolvers[i].solve(g1g2g3);
 
         // SQU_0
-        Eigen::MatrixXd const &CE = CEBlocks[i];
-        SQU_0[i] = MXSolvers[i].solve(CE);
+        Eigen::MatrixXd const &CG = CGBlocks[i];
+        SQU_0[i] = MXSolvers[i].solve(CG);
         // std::cerr << SQU_0[i] << std::endl << std::endl;
         // std::cerr << CE << std::endl << std::endl;
 
         Eigen::MatrixXd K_cell(nVars * 2, nVars * 2);
-        K_cell = H_cellwise[i].transpose() - CGBlocks[i] * SQU_0[i];
+        K_cell = H_cellwise[i].transpose() - CEBlocks[i] * SQU_0[i];
 
         // K
         for (Index varI = 0; varI < nVars; varI++)
@@ -1134,7 +1134,7 @@ void SystemSolver::solveAdjointState(Index gIndex)
     {
         for (Index var = 0; var < nVars; var++)
         {
-            F.block<2, 1>(var * (nCells + 1) + i, 0) -= (CGBlocks[i] * SQU_f[i]).block(var * 2, 0, 2, 1);
+            F.block<2, 1>(var * (nCells + 1) + i, 0) -= (CEBlocks[i] * SQU_f[i]).block(var * 2, 0, 2, 1);
         }
     }
 
@@ -1189,7 +1189,7 @@ void SystemSolver::computeAdjointGradients()
             State s = y.eval(x);
             Value grad;
             adjointProblem->dSigmaFn_dp(pIndex, grad, s, x);
-            return -grad;
+            return grad;
         };
 
         auto dSdp = [&](double x)
@@ -1208,23 +1208,13 @@ void SystemSolver::computeAdjointGradients()
             Eigen::VectorXd dkappa_dp_phi(k + 1);
             dkappa_dp_phi.setZero();
 
-            Eigen::VectorXd dkappa_dp_phi_prime(k + 1);
-            dkappa_dp_phi_prime.setZero();
-
-            Eigen::VectorXd dkappa_dp_boundary(k + 1);
-            dkappa_dp_boundary.setZero();
-
             Interval I = grid[i];
 
             for (Eigen::Index j = 0; j < k + 1; j++)
             {
                 dkappa_dp_phi(j) = DGApprox::CellProduct(I, dkappadp, LegendreBasis::phi(I, j));
-                dkappa_dp_phi_prime(j) = DGApprox::CellProduct(I, dkappadp, LegendreBasis::phiPrime(I, j));
-
-                dkappa_dp_boundary(j) = dkappadp(I.x_u) * LegendreBasis::Evaluate(I, j, I.x_u) - dkappadp(I.x_l) * LegendreBasis::Evaluate(I, j, I.x_l); // DGApprox::EdgeProduct(I, dkappadp, LegendreBasis::phi(I, j));
             }
-            // dkappa_dp_boundary(0) = dkappadp(I.x_l);
-            // dkappa_dp_boundary(1) = dkappadp(I.x_u);
+          
 
             // Evaluate Source Function
             Eigen::VectorXd dSdp_cellwise(k + 1);
@@ -1235,7 +1225,7 @@ void SystemSolver::computeAdjointGradients()
             F_p.segment(0, k + 1) = dkappa_dp_phi;
 
             auto C_cell = C_cellwise[i];
-            F_p.segment(2 * (k + 1), k + 1) = -dkappa_dp_phi_prime - dSdp_cellwise + dkappa_dp_boundary;
+            F_p.segment(2 * (k + 1), k + 1) = -dSdp_cellwise;
 
             // TODO: implement this
             if (nAux > 0)
@@ -1246,9 +1236,9 @@ void SystemSolver::computeAdjointGradients()
 
             G_p(pIndex) -= adjoint_squ[i].transpose() * F_p;
 
-            Eigen::VectorXd dkappa_lambda = C_cell * dkappa_dp_phi;
-            // // // // Lambda portion
-            G_p(pIndex) -= adjoint_lambdas.segment(i, 2).transpose() * dkappa_lambda;
+            // Eigen::VectorXd dkappa_lambda = C_cell * dkappa_dp_phi;
+            // // // // // Lambda portion
+            // G_p(pIndex) -= adjoint_lambdas.segment(i, 2).transpose() * dkappa_lambda;
         }
     }
 }

@@ -129,7 +129,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
 
     // adjoint->setG(gfun);
 
-    Index k = 1; // make sure it works for higher order bases
+    Index k = 2; // make sure it works for higher order bases
 
     SystemSolver *system = nullptr;
 
