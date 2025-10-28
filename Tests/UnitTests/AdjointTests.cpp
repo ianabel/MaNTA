@@ -26,6 +26,8 @@ InitialHeights = [1.0]
 InitialProfile = ["Gaussian"]
 
 [AdjointTestProblem]
+SourceCentre = 0.3
+kappa = 2.0
 
 )"_toml;
 
@@ -65,7 +67,7 @@ BOOST_AUTO_TEST_CASE(test_derivatives)
     Value SourceWidth = 0.02;
     Value SourceCentre = 0.3;
 
-    auto dGdp = [&](Position x)
+    auto dSdc = [&](Position x)
     {
         auto y = x - SourceCentre;
         return T_s * (2 * y) / SourceWidth * exp(-y * y / SourceWidth);
@@ -79,16 +81,22 @@ BOOST_AUTO_TEST_CASE(test_derivatives)
     // dGdp tests
     Value p;
     adjoint.dSources_dp(0, p, s, Positions(0));
-    BOOST_TEST(dGdp(Positions(0)) == p);
+    BOOST_TEST(dSdc(Positions(0)) == p);
 
     adjoint.dSources_dp(0, p, s, Positions(1));
-    BOOST_TEST(dGdp(Positions(1)) == p);
+    BOOST_TEST(dSdc(Positions(1)) == p);
 
     adjoint.dSources_dp(0, p, s, Positions(2));
-    BOOST_TEST(dGdp(Positions(2)) == p);
+    BOOST_TEST(dSdc(Positions(2)) == p);
 
-    adjoint.dSigmaFn_dp(0, p, s, Positions(0));
-    BOOST_TEST(p == 0.0);
+    s.Derivative[0] = 1.0;
+
+    adjoint.dSigmaFn_dp(1, p, s, Positions(0));
+    BOOST_TEST(p == s.Derivative[0]);
+    adjoint.dSigmaFn_dp(1, p, s, Positions(1));
+    BOOST_TEST(p == s.Derivative[0]);
+    adjoint.dSigmaFn_dp(1, p, s, Positions(2));
+    BOOST_TEST(p == s.Derivative[0]);
 
     // dGdy tests
     s.Variable[0] = 2.0;
@@ -164,12 +172,6 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
     }
 
     BOOST_CHECK_NO_THROW(system->initializeMatricesForAdjointSolve());
-
-    for (Index i = 0; i < nGrid; ++i)
-    {
-        std::cout << "-----------------" << std::endl;
-        std::cout << system->B_cellwise[i] << std::endl;
-    }
 
     delete problem;
     delete adjoint;

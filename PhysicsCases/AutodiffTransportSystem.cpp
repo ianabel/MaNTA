@@ -144,8 +144,15 @@ void AutodiffTransportSystem::dSigmaFn_dp(Index i, Value &grad, const State &s, 
 {
 	RealVector u(s.Variable);
 	RealVector q(s.Derivative);
-
-	Real p = getPval(i);
+	// make sure all gradients are zero
+	Real p;
+	for (unsigned int j = 0; j < pvals.size(); ++j)
+	{
+		p = getPval(j);
+		p.grad = 0.0;
+		setPval(j, p);
+	}
+	p = getPval(i);
 
 	grad = autodiff::derivative(
 		[this, i](Real p, RealVector uD, RealVector qD, Position X, Time T)
@@ -164,7 +171,15 @@ void AutodiffTransportSystem::dSources_dp(Index i, Value &grad, const State &s, 
 	RealVector phi(s.Aux);
 	RealVector Scalar(s.Scalars);
 
-	Real p = getPval(i);
+	// make sure all gradients are zero
+	Real p;
+	for (unsigned int j = 0; j < pvals.size(); ++j)
+	{
+		p = getPval(j);
+		p.grad = 0.0;
+		setPval(j, p);
+	}
+	p = getPval(i);
 
 	grad = autodiff::derivative(
 		[this, i](Real p, RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)

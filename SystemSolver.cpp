@@ -1057,15 +1057,11 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         // TODO: This is probably wrong
         if (nAux > 0)
         {
-            dSourcedPhi_Mat(Sphi, yJac, I);
-            M.block(3 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) = Sphi.transpose();
+            dSourcedPhi_Mat(Sphi, y, I);
+            M.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
 
             // Set Parts of Matrix due to aux variables
-            dAux_Mat(M.block(0, 3 * nVars * (k + 1), (3 * nVars + nAux) * (k + 1), nAux * (k + 1)), yJac, I);
-            for (Index j = 0; j < 4; ++j)
-            {
-                M.block(3 * nVars * (k + 1), j * nVars * (k + 1), nAux * (k + 1), (nVars + nAux) * (k + 1)) = M.block(j * nVars * (k + 1), 3 * nVars * (k + 1), (nVars + nAux) * (k + 1), nAux * (k + 1)).transpose();
-            }
+            dAux_Mat(M.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), y, I);
 
             // TODO: Consider factorization here (is M sparse enough to warrant a sparse implementation?)
         }
@@ -1100,7 +1096,7 @@ void SystemSolver::initializeMatricesForAdjointSolve()
     initialised = true;
 }
 
-void SystemSolver::solveAdjointState(Index i)
+void SystemSolver::solveAdjointState(Index gIndex)
 {
 
     K_global.setZero();
@@ -1188,28 +1184,25 @@ void SystemSolver::computeAdjointGradients()
     G_p.setZero();
     for (Index pIndex = 0; pIndex < adjointProblem->getNp(); ++pIndex)
     {
+        auto dkappadp = [&](double x)
+        {
+            State s = y.eval(x);
+            Value grad;
+            adjointProblem->dSigmaFn_dp(pIndex, grad, s, x);
+            return -grad;
+        };
+
+        auto dSdp = [&](double x)
+        {
+            State s = y.eval(x);
+            Value grad;
+            adjointProblem->dSources_dp(pIndex, grad, s, x);
+            return grad;
+        };
         for (Index i = 0; i < nCells; ++i)
         {
             Vector F_p(3 * nVars * (k + 1) + nAux * (k + 1));
             F_p.setZero();
-            Vector F_p_boundary(nCells);
-            F_p_boundary.setZero();
-
-            std::function<double(double)> dkappadp = [=, this](double x)
-            {
-                State s = yJac.eval(x);
-                Value grad;
-                adjointProblem->dSigmaFn_dp(pIndex, grad, s, x);
-                return grad;
-            };
-
-            std::function<double(double)> dSdp = [=, this](double x)
-            {
-                State s = yJac.eval(x);
-                Value grad;
-                adjointProblem->dSources_dp(pIndex, grad, s, x);
-                return grad;
-            };
 
             // Evaluate Diffusion Function
             Eigen::VectorXd dkappa_dp_phi(k + 1);
@@ -1228,8 +1221,10 @@ void SystemSolver::computeAdjointGradients()
                 dkappa_dp_phi(j) = DGApprox::CellProduct(I, dkappadp, LegendreBasis::phi(I, j));
                 dkappa_dp_phi_prime(j) = DGApprox::CellProduct(I, dkappadp, LegendreBasis::phiPrime(I, j));
 
-                dkappa_dp_boundary(j) = dkappadp(I.x_u) - dkappadp(I.x_l);
+                dkappa_dp_boundary(j) = dkappadp(I.x_u) * LegendreBasis::Evaluate(I, j, I.x_u) - dkappadp(I.x_l) * LegendreBasis::Evaluate(I, j, I.x_l); // DGApprox::EdgeProduct(I, dkappadp, LegendreBasis::phi(I, j));
             }
+            // dkappa_dp_boundary(0) = dkappadp(I.x_l);
+            // dkappa_dp_boundary(1) = dkappadp(I.x_u);
 
             // Evaluate Source Function
             Eigen::VectorXd dSdp_cellwise(k + 1);
@@ -1251,8 +1246,9 @@ void SystemSolver::computeAdjointGradients()
 
             G_p(pIndex) -= adjoint_squ[i].transpose() * F_p;
 
-            // // Lambda portion
-            // G_p -= adjoint_lambdas.segment(i, 2).transpose() * (dkappa_dp_boundary);
+            Eigen::VectorXd dkappa_lambda = C_cell * dkappa_dp_phi;
+            // // // // Lambda portion
+            G_p(pIndex) -= adjoint_lambdas.segment(i, 2).transpose() * dkappa_lambda;
         }
     }
 }

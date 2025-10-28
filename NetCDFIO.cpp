@@ -203,10 +203,10 @@ void SystemSolver::WriteTimeslice(double tNew)
 
 void SystemSolver::WriteAdjoints()
 {
+	nc_output.AddScalarVariable("GFn", "", "", adjointProblem->GFn(0, y));
 	for (Index i = 0; i < adjointProblem->getNp(); ++i)
 	{
-		nc_output.AddScalarVariable("G" + std::to_string(i), "", "", adjointProblem->GFn(i,y));
-		nc_output.AddScalarVariable("p" + std::to_string(i), "", "", G_p[i]);
+		nc_output.AddScalarVariable("p" + std::to_string(i), "", "", G_p(i));
 	}
 }
 

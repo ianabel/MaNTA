@@ -15,11 +15,14 @@ AdjointTestProblem::AdjointTestProblem(toml::value const &config, Grid const &gr
     auto const &DiffConfig = config.at("AdjointTestProblem");
 
     T_s = 50;
-    D = 2.0;
     SourceWidth = 0.02;
+    D = toml::find_or(DiffConfig, "kappa", 2.0);
     SourceCentre = toml::find_or(DiffConfig, "SourceCentre", 0.3);
-
-    addP(std::ref(SourceCentre));
+    // addP(std::ref(SourceCentre));
+    if (DiffConfig.count("SourceCentre") == 1)
+        addP(std::ref(SourceCentre));
+    if (DiffConfig.count("kappa") == 1)
+        addP(std::ref(D));
 }
 
 AdjointProblem *AdjointTestProblem::createAdjointProblem()
@@ -27,7 +30,7 @@ AdjointProblem *AdjointTestProblem::createAdjointProblem()
     AutodiffAdjointProblem *p = new AutodiffAdjointProblem(this);
     p->setG([this](Position x, Real p, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
             { return this->g(x, p, u, q, sigma, phi); });
-    p->setNp(1);
+    p->setNp(pvals.size());
     return p;
 }
 
