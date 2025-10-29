@@ -1184,52 +1184,82 @@ void SystemSolver::computeAdjointGradients()
     G_p.setZero();
     for (Index pIndex = 0; pIndex < adjointProblem->getNp(); ++pIndex)
     {
-        auto dkappadp = [&](double x)
-        {
-            State s = y.eval(x);
-            Value grad;
-            adjointProblem->dSigmaFn_dp(pIndex, grad, s, x);
-            return grad;
-        };
-
-        auto dSdp = [&](double x)
-        {
-            State s = y.eval(x);
-            Value grad;
-            adjointProblem->dSources_dp(pIndex, grad, s, x);
-            return grad;
-        };
         for (Index i = 0; i < nCells; ++i)
         {
             Vector F_p(3 * nVars * (k + 1) + nAux * (k + 1));
             F_p.setZero();
 
             // Evaluate Diffusion Function
-            Eigen::VectorXd dkappa_dp_phi(k + 1);
-            dkappa_dp_phi.setZero();
+           
 
             Interval I = grid[i];
 
-            for (Eigen::Index j = 0; j < k + 1; j++)
+            for (Index var = 0; var < nVars; ++var)
             {
-                dkappa_dp_phi(j) = DGApprox::CellProduct(I, dkappadp, LegendreBasis::phi(I, j));
-            }
+                auto dkappadp = [&](double x)
+                {
+                    State s = y.eval(x);
+                    Value grad;
+                    adjointProblem->dSigmaFn_dp(var, pIndex, grad, s, x);
+                    return grad;
+                };
+
+                auto dSdp = [&](double x)
+                {
+                    State s = y.eval(x);
+                    Value grad;
+                    adjointProblem->dSources_dp(var, pIndex, grad, s, x);
+                    return grad;
+                };
+
+                Eigen::VectorXd dkappa_dp_phi(k + 1);
+                dkappa_dp_phi.setZero();
+                if (!adjointProblem->computeLowerBoundarySensitivity(i, pIndex) && !adjointProblem->computeUpperBoundarySensitivity(i, pIndex))
+                {
+                    for (Eigen::Index j = 0; j < k + 1; j++)
+                    {
+                        dkappa_dp_phi(j) = DGApprox::CellProduct(I, dkappadp, LegendreBasis::phi(I, j));
+                    }
+                }
           
 
-            // Evaluate Source Function
-            Eigen::VectorXd dSdp_cellwise(k + 1);
-            dSdp_cellwise.setZero();
-            for (Eigen::Index j = 0; j < k + 1; j++)
-                dSdp_cellwise(j) = DGApprox::CellProduct(I, dSdp, LegendreBasis::phi(I, j));
+                // Evaluate Source Function
+                Eigen::VectorXd dSdp_cellwise(k + 1);
+                dSdp_cellwise.setZero();
+                if (!adjointProblem->computeLowerBoundarySensitivity(i, pIndex) && !adjointProblem->computeUpperBoundarySensitivity(i, pIndex))
+                {
+                    for (Eigen::Index j = 0; j < k + 1; j++)
+                        dSdp_cellwise(j) = DGApprox::CellProduct(I, dSdp, LegendreBasis::phi(I, j));
+                }
 
-            F_p.segment(0, k + 1) = dkappa_dp_phi;
+                F_p.segment(var * (k + 1), k + 1) = dkappa_dp_phi;
 
-            auto C_cell = C_cellwise[i];
-            F_p.segment(2 * (k + 1), k + 1) = -dSdp_cellwise;
+                auto C_cell = C_cellwise[i];
+                F_p.segment(var * (k + 1) + 2 * nVars * (k + 1), k + 1) = -dSdp_cellwise;
 
-            // TODO: implement this
-            if (nAux > 0)
-            {
+                // TODO: implement this
+                if (nAux > 0)
+                {
+                }
+
+                // Boundary conditions
+                if (I.x_l == grid.lowerBoundary() && adjointProblem->computeLowerBoundarySensitivity(var, pIndex))
+                {
+                    for (Eigen::Index j = 0; j < k + 1; j++)
+                    {
+    
+                        F_p(nVars * (k + 1) + j + var * (k + 1)) += LegendreBasis::Evaluate(I, j, I.x_l);
+                    }
+                }
+
+                if (I.x_u == grid.upperBoundary() && adjointProblem->computeUpperBoundarySensitivity(var, pIndex))
+                {
+                    for (Eigen::Index j = 0; j < k + 1; j++)
+                    {
+                        // < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 )
+                        F_p(nVars * (k + 1) + j + var * (k + 1)) += LegendreBasis::Evaluate(I, j, I.x_u);
+                    }
+                }
             }
 
             // SQU portion

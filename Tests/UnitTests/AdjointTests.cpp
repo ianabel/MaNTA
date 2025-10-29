@@ -80,26 +80,26 @@ BOOST_AUTO_TEST_CASE(test_derivatives)
 
     // dGdp tests
     Value p;
-    adjoint.dSources_dp(0, p, s, Positions(0));
+    adjoint.dSources_dp(0, 0, p, s, Positions(0));
     BOOST_TEST(dSdc(Positions(0)) == p);
 
-    adjoint.dSources_dp(0, p, s, Positions(1));
+    adjoint.dSources_dp(0, 0, p, s, Positions(1));
     BOOST_TEST(dSdc(Positions(1)) == p);
 
-    adjoint.dSources_dp(0, p, s, Positions(2));
+    adjoint.dSources_dp(0, 0, p, s, Positions(2));
     BOOST_TEST(dSdc(Positions(2)) == p);
 
     s.Derivative[0] = 1.0;
+    s.Variable[0] = 2.0;
 
-    adjoint.dSigmaFn_dp(1, p, s, Positions(0));
+    adjoint.dSigmaFn_dp(0, 1, p, s, Positions(0));
     BOOST_TEST(p == s.Derivative[0]);
-    adjoint.dSigmaFn_dp(1, p, s, Positions(1));
+    adjoint.dSigmaFn_dp(0, 1, p, s, Positions(1));
     BOOST_TEST(p == s.Derivative[0]);
-    adjoint.dSigmaFn_dp(1, p, s, Positions(2));
+    adjoint.dSigmaFn_dp(0, 1, p, s, Positions(2));
     BOOST_TEST(p == s.Derivative[0]);
 
     // dGdy tests
-    s.Variable[0] = 2.0;
 
     Values grad(1);
     adjoint.dgFn_du(0, grad, s, 0.0);

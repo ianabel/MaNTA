@@ -140,30 +140,25 @@ void AutodiffTransportSystem::dSources_dScalars(Index i, Values &grad, const Sta
 					wrt(Scalar), at(u, q, sigma, phi, Scalar, x, t));
 }
 
-void AutodiffTransportSystem::dSigmaFn_dp(Index i, Value &grad, const State &s, Position x, Time t)
+void AutodiffTransportSystem::dSigmaFn_dp(Index i, Index pIndex, Value &grad, const State &s, Position x, Time t)
 {
 	RealVector u(s.Variable);
 	RealVector q(s.Derivative);
 	// make sure all gradients are zero
-	Real p;
-	for (unsigned int j = 0; j < pvals.size(); ++j)
-	{
-		p = getPval(j);
-		p.grad = 0.0;
-		setPval(j, p);
-	}
-	p = getPval(i);
+	Real p = getPval(i);
 
 	grad = autodiff::derivative(
-		[this, i](Real p, RealVector uD, RealVector qD, Position X, Time T)
+		[this, i, pIndex](Real p, RealVector uD, RealVector qD, Position X, Time T)
 		{
-			setPval(i, p);
+			setPval(pIndex, p);
 			return Flux(i, uD, qD, X, T);
 		},
 		wrt(p), at(p, u, q, x, t));
+
+	clearGradients();
 }
 
-void AutodiffTransportSystem::dSources_dp(Index i, Value &grad, const State &s, Position x, Time t)
+void AutodiffTransportSystem::dSources_dp(Index i, Index pIndex, Value &grad, const State &s, Position x, Time t)
 {
 	RealVector u(s.Variable);
 	RealVector q(s.Derivative);
@@ -171,24 +166,19 @@ void AutodiffTransportSystem::dSources_dp(Index i, Value &grad, const State &s, 
 	RealVector phi(s.Aux);
 	RealVector Scalar(s.Scalars);
 
-	// make sure all gradients are zero
-	Real p;
-	for (unsigned int j = 0; j < pvals.size(); ++j)
-	{
-		p = getPval(j);
-		p.grad = 0.0;
-		setPval(j, p);
-	}
-	p = getPval(i);
+	Real p = getPval(pIndex);
 
 	grad = autodiff::derivative(
-		[this, i](Real p, RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)
+		[this, i, pIndex](Real p, RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)
 		{
-			setPval(i, p);
+			setPval(pIndex, p);
 			Real S = Source(i, uD, qD, sD, phiD, ScalarD, X, T);
 			return S;
 		},
 		wrt(p), at(p, u, q, sigma, phi, Scalar, x, t));
+
+	// make sure all gradients are zero
+	clearGradients();
 }
 
 Value AutodiffTransportSystem::AuxG(Index i, const State &s, Position x, Time t)

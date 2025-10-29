@@ -95,12 +95,40 @@ void AutodiffAdjointProblem::dgFn_dphi(Index i, Values &grad, const State &s, Po
                               { return g(X, p, uD, qD, sigmaD, phiD); }, wrt(phi), at(x, p, u, q, sigma, phi));
 }
 
-void AutodiffAdjointProblem::dSigmaFn_dp(Index i, Value &grad, const State &s, Position x)
+void AutodiffAdjointProblem::dSigmaFn_dp(Index i, Index pIndex, Value &grad, const State &s, Position x)
 {
-    return PhysicsProblem->dSigmaFn_dp(i, grad, s, x, 0.0);
+    return PhysicsProblem->dSigmaFn_dp(i, pIndex, grad, s, x, 0.0);
 }
 
-void AutodiffAdjointProblem::dSources_dp(Index i, Value &grad, const State &s, Position x)
+void AutodiffAdjointProblem::dSources_dp(Index i, Index pIndex, Value &grad, const State &s, Position x)
 {
-    return PhysicsProblem->dSources_dp(i, grad, s, x, 0.0);
+    return PhysicsProblem->dSources_dp(i, pIndex, grad, s, x, 0.0);
+}
+
+bool AutodiffAdjointProblem::computeUpperBoundarySensitivity(Index var, Index pIndex)
+{
+    auto it = upperBoundarySensitivities.find({var, pIndex});
+    if (it != upperBoundarySensitivities.end())
+        return it->second;
+    else
+        return false;
+}
+
+bool AutodiffAdjointProblem::computeLowerBoundarySensitivity(Index var, Index pIndex)
+{
+    auto it = lowerBoundarySensitivities.find({var, pIndex});
+    if (it != lowerBoundarySensitivities.end())
+        return it->second;
+    else
+        return false;
+}
+
+void AutodiffAdjointProblem::addUpperBoundarySensitivity(Index i, Index pIndex)
+{
+    upperBoundarySensitivities.insert(std::make_pair(std::make_tuple(i, pIndex), true));
+}
+
+void AutodiffAdjointProblem::addLowerBoundarySensitivity(Index i, Index pIndex)
+{
+    lowerBoundarySensitivities.insert(std::make_pair(std::make_tuple(i, pIndex), true));
 }

@@ -32,8 +32,8 @@ public:
 	void dSources_dq(Index i, Values &, const State &, Position x, Time t) override;
 	void dSources_dsigma(Index i, Values &, const State &, Position x, Time t) override;
 	void dSources_dScalars(Index, Values &, const State &, Position, Time) override;
-	void dSigmaFn_dp(Index i, Value &, const State &s, Position x, Time t);
-	void dSources_dp(Index i, Value &, const State &, Position x, Time t);
+	void dSigmaFn_dp(Index i, Index pIndex, Value &, const State &s, Position x, Time t);
+	void dSources_dp(Index i, Index pIndex, Value &, const State &, Position x, Time t);
 
 	Value AuxG(Index, const State &, Position, Time) override;
 	void AuxGPrime(Index, State &, const State &, Position, Time) override;
@@ -60,9 +60,17 @@ public:
 
 	virtual void setPval(Index i, Real p)
 	{
-		pvals[i].get() = p;
+		if (static_cast<size_t>(i) < pvals.size())
+			pvals[i].get() = p;
 	}
-	virtual Real getPval(Index i) const { return pvals[i].get(); }
+	virtual Real getPval(Index i) const
+	{
+		if (static_cast<size_t>(i) < pvals.size())
+			return pvals[i].get();
+		else
+			return 0.0;
+	}
+
 	Position xR, xL;
 
 protected:
@@ -83,6 +91,13 @@ protected:
 
 	void addP(std::reference_wrapper<Real> p) { pvals.push_back(p); }
 	std::vector<std::reference_wrapper<Real>> pvals;
+
+	// Set gradients of p values to 0
+	void clearGradients()
+	{
+		for (auto pval : pvals)
+			pval.get().grad = 0.0;
+	}
 
 private:
 	// API to underlying flux models
