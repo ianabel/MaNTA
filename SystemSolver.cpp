@@ -1066,6 +1066,7 @@ void SystemSolver::initializeMatricesForAdjointSolve()
             // TODO: Consider factorization here (is M sparse enough to warrant a sparse implementation?)
         }
 
+        // Note we save the transpose for adjoints
         MBlocks[i] = M.transpose();
 
         Eigen::MatrixXd CE_vec(localDOF, 2 * nVars);
@@ -1243,11 +1244,11 @@ void SystemSolver::computeAdjointGradients()
                 }
 
                 // Boundary conditions
+                // p = g_D in this case, so the derivatives are just the basis functions
                 if (I.x_l == grid.lowerBoundary() && adjointProblem->computeLowerBoundarySensitivity(var, pIndex))
                 {
                     for (Eigen::Index j = 0; j < k + 1; j++)
                     {
-    
                         F_p(nVars * (k + 1) + j + var * (k + 1)) += LegendreBasis::Evaluate(I, j, I.x_l);
                     }
                 }

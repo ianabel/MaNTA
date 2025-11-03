@@ -281,6 +281,19 @@ private:
 	std::unique_ptr<spline> L_spline;
 };
 
+class ToroidalMagneticField : public MagneticField
+{
+public:
+	ToroidalMagneticField() = default;
+	ToroidalMagneticField(Real Btor, Real Bpol) : Btor(Btor), Bpol(Bpol) {}
+
+	
+
+private:
+	Real Btor;
+	Real Bpol;
+};
+
 // Function for creating an instance of a magnetic field
 // Allow for constructors that take a different number of arguments
 template <typename T, typename... Args>
