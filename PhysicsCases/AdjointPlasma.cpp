@@ -65,7 +65,7 @@ AdjointPlasma::AdjointPlasma(toml::value const &config, Grid const &grid)
         nu = toml::find_or(InternalConfig, "nu", 1.0);
         ne = toml::find_or(InternalConfig, "ne", 1.0);
 
-        addP(alpha);
+        addP(std::ref(AspectRatio));
 
         InitialPeakDensity = toml::find_or(InternalConfig, "InitialDensity", n_mid);
         InitialPeakTe = toml::find_or(InternalConfig, "InitialElectronTemperature", T_mid);
@@ -197,11 +197,11 @@ Real AdjointPlasma::qe(RealVector u, RealVector q, Real x, Time t) const
 
     Real Te = pe / ne, Ti = pi / ne; // Temps in keV
 
-    Real Te_prime = (p_e_prime - R_Ln / (R0 * 2 * a)) / ne;
+    Real Te_prime = (p_e_prime) / ne;
 
     Real tau = Ti / Te;
 
-    Real R_LTi = -(2 * r * AspectRatio * p_i_prime / pi - R_Ln);
+    Real R_LTi = -(2 * r * AspectRatio * p_i_prime / pi);
 
     Real GeometricFactor = r * r; // pi * a * Btor * r;
 
@@ -216,6 +216,7 @@ Real AdjointPlasma::qe(RealVector u, RealVector q, Real x, Time t) const
 
     Real q_out = GeometricFactor * Chi_e * ne * Te_prime;
 
+    // for neumann condition
     if (x <= 0.1)
         q_out += 5.0 * (1 - 10.0 * x) * ne * Te_prime;
 
@@ -231,10 +232,10 @@ Real AdjointPlasma::qi(RealVector u, RealVector q, Real x, Time t) const
     Real p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
     Real Te = pe / ne, Ti = pi / ne; // Temps in keV
 
-    Real Ti_prime = (p_i_prime - R_Ln / (R0 * 2 * a)) / ne;
+    Real Ti_prime = (p_i_prime) / ne;
 
     Real tau = Ti / Te;
-    Real R_LTi = -(2 * r * AspectRatio * p_i_prime / pi - R_Ln);
+    Real R_LTi = -(2 * r * AspectRatio * p_i_prime / pi);
 
     Real GeometricFactor = r * r; // pi * a * Btor * r;
 
@@ -248,6 +249,8 @@ Real AdjointPlasma::qi(RealVector u, RealVector q, Real x, Time t) const
         Chi_i += C * pow(Ti, 3. / 2.) * pow(R_LTi - R_LTi_crit, alpha);
     }
     Real q_out = GeometricFactor * Chi_i * ne * Ti_prime;
+
+    // for neumann condition
     if (x <= 0.1)
         q_out += 5.0 * (1 - 10.0 * x) * ne * Ti_prime;
 
@@ -280,7 +283,7 @@ Real AdjointPlasma::Spi(RealVector u, RealVector q, RealVector sigma, RealVector
 
 Real AdjointPlasma::SafetyFactor(Real r) const
 {
-    return 2 * (nu + 1) * Btor / R0 * pow(r, 2) / (1 - pow(1 - r * r, nu + 1));
+    return (nu + 1) * Btor / Bpol * 1 / AspectRatio * pow(r, 2) / (1 - pow(1 - r * r, nu + 1));
 }
 Real AdjointPlasma::Shear(Real r) const
 {

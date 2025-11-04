@@ -145,7 +145,7 @@ void AutodiffTransportSystem::dSigmaFn_dp(Index i, Index pIndex, Value &grad, co
 	RealVector u(s.Variable);
 	RealVector q(s.Derivative);
 	// make sure all gradients are zero
-	Real p = getPval(i);
+	Real p = getPval(pIndex);
 
 	grad = autodiff::derivative(
 		[this, i, pIndex](Real p, RealVector uD, RealVector qD, Position X, Time T)
