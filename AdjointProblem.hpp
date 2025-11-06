@@ -27,8 +27,10 @@ public:
     virtual bool computeLowerBoundarySensitivity(Index i, Index pIndex) { return false; };
 
     int getNp() const { return np; }
+    int getNpBoundary() const { return np_boundary; }
 
 protected:
     int np;
+    int np_boundary = 0;
 };
 #endif

@@ -21,9 +21,9 @@ AdjointTestProblem::AdjointTestProblem(toml::value const &config, Grid const &gr
     a = toml::find_or(DiffConfig, "a", 0.0);
     // addP(std::ref(SourceCentre));
     if (DiffConfig.count("SourceCentre") == 1)
-        addP(std::ref(SourceCentre));
+        addP(SourceCentre);
     if (DiffConfig.count("kappa") == 1)
-        addP(std::ref(D));
+        addP(D);
 }
 
 AdjointProblem *AdjointTestProblem::createAdjointProblem()

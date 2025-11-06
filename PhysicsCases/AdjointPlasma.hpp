@@ -35,6 +35,9 @@ private:
     Real Spe(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) const;
     Real Spi(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t) const;
 
+    Real DensityFn(Real x) const;
+    Real DensityPrime(Real x) const;
+
     Real SafetyFactor(Real r) const;
     Real Shear(Real r) const;
 
@@ -51,7 +54,7 @@ private:
 
     //
     bool evolveDensity = false;
-    Real ne = 1.0, R_Ln = 0.0;
+    Real grad_n;
 
     Real R0 = 3.0;
     Real a = 0.4;
@@ -75,8 +78,8 @@ private:
     Real SourceStrength = 10.0;
     Real SourceWidth = 0.03;
 
-    Value nEdge, TeEdge, TiEdge, MUpper, MLower, MEdge;
-    Value InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber;
+    Value nEdge, TeEdge, TiEdge;
+    Value InitialPeakDensity, InitialPeakTe, InitialPeakTi;
 
     REGISTER_PHYSICS_HEADER(AdjointPlasma)
 };

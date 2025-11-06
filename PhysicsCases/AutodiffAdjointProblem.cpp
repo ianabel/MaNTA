@@ -126,9 +126,11 @@ bool AutodiffAdjointProblem::computeLowerBoundarySensitivity(Index var, Index pI
 void AutodiffAdjointProblem::addUpperBoundarySensitivity(Index i, Index pIndex)
 {
     upperBoundarySensitivities.insert(std::make_pair(std::make_tuple(i, pIndex), true));
+    AdjointProblem::np_boundary++;
 }
 
 void AutodiffAdjointProblem::addLowerBoundarySensitivity(Index i, Index pIndex)
 {
     lowerBoundarySensitivities.insert(std::make_pair(std::make_tuple(i, pIndex), true));
+    AdjointProblem::np_boundary++;
 }

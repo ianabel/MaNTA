@@ -46,6 +46,16 @@ void NetCDFIO::AddScalarVariable(std::string name, std::string description, std:
 	newvar.putVar(&tmp);
 }
 
+void NetCDFIO::AddScalarVariable(std::string groupName, std::string name, std::string description, std::string units, double value)
+{
+	NcVar newvar = data_file.getGroup(groupName).addVar(name, netCDF::NcDouble());
+	newvar.putAtt("description", description);
+	if (units != "")
+		newvar.putAtt("units", units);
+	double tmp = value;
+	newvar.putVar(&tmp);
+}
+
 void NetCDFIO::AddTextVariable(std::string name, std::string description, std::string units, std::string text)
 {
 	NcVar newvar = data_file.addVar(name, netCDF::NcString());
@@ -204,9 +214,17 @@ void SystemSolver::WriteTimeslice(double tNew)
 void SystemSolver::WriteAdjoints()
 {
 	nc_output.AddScalarVariable("GFn", "", "", adjointProblem->GFn(0, y));
-	for (Index i = 0; i < adjointProblem->getNp(); ++i)
+	nc_output.AddScalarVariable("np", "", "", adjointProblem->getNp());
+	nc_output.AddScalarVariable("np_boundary", "", "", adjointProblem->getNpBoundary());
+	nc_output.AddGroup("G_p", "Gradients of G using adjoint state method");
+	nc_output.AddGroup("G_boundary", "Gradients of G on boundary using adjoint state method");
+	for (Index i = 0; i < adjointProblem->getNp() - adjointProblem->getNpBoundary(); ++i)
 	{
-		nc_output.AddScalarVariable("p" + std::to_string(i), "", "", G_p(i));
+		nc_output.AddScalarVariable("G_p", "p" + std::to_string(i), "", "", G_p(i));
+	}
+	for (Index i = 0; i < adjointProblem->getNpBoundary(); ++i)
+	{
+		nc_output.AddScalarVariable("G_boundary", "p" + std::to_string(i), "", "", G_p(i + adjointProblem->getNp() - adjointProblem->getNpBoundary()));
 	}
 }
 
