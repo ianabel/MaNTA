@@ -29,8 +29,8 @@ AdjointTestProblem::AdjointTestProblem(toml::value const &config, Grid const &gr
 AdjointProblem *AdjointTestProblem::createAdjointProblem()
 {
     AutodiffAdjointProblem *p = new AutodiffAdjointProblem(this);
-    p->setG([this](Position x, Real p, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
-            { return g(x, p, u, q, sigma, phi); });
+    p->setG([this](Position x, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
+            { return g(x, u, q, sigma, phi); });
     p->setNp(pvals.size() + 1);
     p->addUpperBoundarySensitivity(0, pvals.size());
     return p;
@@ -49,7 +49,7 @@ Real AdjointTestProblem::Source(Index i, RealVector u, RealVector q, RealVector 
     return T_s * exp(-y * y / SourceWidth);
 }
 
-Real AdjointTestProblem::g(Position, Real, RealVector &u, RealVector &, RealVector &, RealVector &)
+Real AdjointTestProblem::g(Position, RealVector &u, RealVector &, RealVector &, RealVector &)
 {
     return 0.5 * u(0) * u(0);
 }

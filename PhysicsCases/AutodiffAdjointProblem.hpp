@@ -33,11 +33,11 @@ public:
     void addUpperBoundarySensitivity(Index i, Index pIndex);
     void addLowerBoundarySensitivity(Index i, Index pIndex);
 
-    void setG(std::function<Real(Position, Real, RealVector &, RealVector &, RealVector &, RealVector &)> gin) { g = gin; }
+    void setG(std::function<Real(Position, RealVector &, RealVector &, RealVector &, RealVector &)> gin) { g = gin; }
     void setNp(int n) { AdjointProblem::np = n; }
 
 private:
-    std::function<Real(Position, Real, RealVector &, RealVector &, RealVector &, RealVector &)> g;
+    std::function<Real(Position, RealVector &, RealVector &, RealVector &, RealVector &)> g;
 
     using integrator = boost::math::quadrature::gauss_kronrod<double, 15>;
     constexpr static int max_depth = 2;
@@ -46,4 +46,5 @@ private:
     std::map<std::tuple<Index, Index>, bool> upperBoundarySensitivities;
     std::map<std::tuple<Index, Index>, bool> lowerBoundarySensitivities;
 };
+
 #endif

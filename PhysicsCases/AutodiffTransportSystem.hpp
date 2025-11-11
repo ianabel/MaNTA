@@ -71,6 +71,13 @@ public:
 			return 0.0;
 	}
 
+	// Set gradients of p values to 0
+	void clearGradients()
+	{
+		for (auto pval : pvals)
+			pval.get().grad = 0.0;
+	}
+
 	Position xR, xL;
 
 protected:
@@ -89,15 +96,11 @@ protected:
 	void initialiseDiagnostics(NetCDFIO &nc) override;
 	void writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t, NetCDFIO &nc, size_t tIndex) override;
 
-	void addP(std::reference_wrapper<Real> p) { pvals.push_back(p); }
-	std::vector<std::reference_wrapper<Real>> pvals;
-
-	// Set gradients of p values to 0
-	void clearGradients()
+	void addP(std::reference_wrapper<Real> p)
 	{
-		for (auto pval : pvals)
-			pval.get().grad = 0.0;
+		pvals.push_back(p);
 	}
+	std::vector<std::reference_wrapper<Real>> pvals;
 
 private:
 	// API to underlying flux models
@@ -158,4 +161,7 @@ private:
 
 	Vector InitialHeights;
 };
+
+#define STRINGIFY(Var) #Var
+
 #endif

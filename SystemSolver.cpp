@@ -1185,6 +1185,7 @@ void SystemSolver::computeAdjointGradients()
     G_p.setZero();
     for (Index pIndex = 0; pIndex < adjointProblem->getNp(); ++pIndex)
     {
+        G_p[pIndex] = adjointProblem->dGFndp(pIndex, y);
         for (Index i = 0; i < nCells; ++i)
         {
             Vector F_p(3 * nVars * (k + 1) + nAux * (k + 1));
@@ -1265,7 +1266,7 @@ void SystemSolver::computeAdjointGradients()
 
             // SQU portion
 
-            G_p(pIndex) -= adjoint_squ[i].transpose() * F_p;
+            G_p(pIndex) -=  adjoint_squ[i].transpose() * F_p;
 
             // Eigen::VectorXd dkappa_lambda = C_cell * dkappa_dp_phi;
             // // // // // Lambda portion

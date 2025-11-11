@@ -19,6 +19,18 @@ const double n_mid = 1.0;
 const double n_edge = 0.5;
 const double T_mid = 4.0, T_edge = 1.0;
 
+// Fusion yield coeffs
+constexpr static double BG = 31.3970;
+constexpr static double mc2 = 937814;
+
+constexpr static double C1 = 5.65718e-12;
+constexpr static double C2 = 3.41267e-3;
+constexpr static double C3 = 1.99167e-3;
+constexpr static double C4 = 0.0;
+constexpr static double C5 = 1.05060e-5;
+constexpr static double C6 = 0.0;
+constexpr static double C7 = 0.0;
+
 AdjointPlasma::AdjointPlasma(toml::value const &config, Grid const &grid)
 {
     nVars = 2;
@@ -34,6 +46,12 @@ AdjointPlasma::AdjointPlasma(toml::value const &config, Grid const &grid)
 
         uL.resize(nVars);
         uR.resize(nVars);
+
+        std::string of = toml::find_or(InternalConfig, "ObjectiveFunction", "StoredEnergy");
+        if (objectiveFunctions.contains(of))
+            objectiveFunction = objectiveFunctions[of];
+        else
+            throw std::invalid_argument("Invalid objective function, please use either FusionYield or StoredEnergy");
 
         EquilibrationFactor = toml::find_or(InternalConfig, "EquilibrationFactor", 1.0);
 
@@ -63,9 +81,6 @@ AdjointPlasma::AdjointPlasma(toml::value const &config, Grid const &grid)
         a = R0 / AspectRatio;
         Chi_min = toml::find_or(InternalConfig, "Chi_min", 0.1);
         nu = toml::find_or(InternalConfig, "nu", 1.0);
-
-        addP(grad_n);
-        addP(AspectRatio);
 
         InitialPeakDensity = toml::find_or(InternalConfig, "InitialDensity", n_mid);
         InitialPeakTe = toml::find_or(InternalConfig, "InitialElectronTemperature", T_mid);
@@ -103,8 +118,13 @@ Real2nd AdjointPlasma::InitialFunction(Index i, Real2nd x, Real2nd t) const
 AdjointProblem *AdjointPlasma::createAdjointProblem()
 {
     AutodiffAdjointProblem *p = new AutodiffAdjointProblem(this);
-    p->setG([this](Position x, Real p, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
-            { return g(x, p, u, q, sigma, phi); });
+    p->setG([this](Position x, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
+            { return g(x, u, q, sigma, phi); });
+
+    addP(grad_n);
+    addP(AspectRatio);
+    addP(Xe_Xi);
+    addP(alpha);
 
     p->addUpperBoundarySensitivity(Channel::IonEnergy, pvals.size());
     p->addUpperBoundarySensitivity(Channel::ElectronEnergy, pvals.size() + 1);
@@ -113,15 +133,83 @@ AdjointProblem *AdjointPlasma::createAdjointProblem()
     return p;
 }
 
-Real AdjointPlasma::g(Position x, Real p, RealVector &u, RealVector &q, RealVector &sigma, RealVector &)
+Real AdjointPlasma::g(Position x, RealVector &u, RealVector &q, RealVector &sigma, RealVector &)
 {
+    Real gout = 0;
+    switch (static_cast<ObjectiveFunctions>(objectiveFunction))
+    {
+    case ObjectiveFunctions::StoredEnergy:
+    {
+        Real pe = 2. / 3. * u(Channel::ElectronEnergy),
+             pi = 2. / 3. * u(Channel::IonEnergy);
+        // Real p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy);
 
+        gout = 3. / 2. * (pe + pi);
+        break;
+    }
+    case ObjectiveFunctions::FusionYield:
+    {
+        Real n = DensityFn(x);
+        Real pi = 2. / 3. * u(Channel::IonEnergy);
+        Real Ti = pi / n;
+
+        Real theta = Ti / (1 - (Ti * (C2 + Ti * (C4 + Ti * C6)) / (1 + Ti * (C3 + Ti * (C5 + Ti * C7)))));
+        Real xi = pow(BG * BG / (4 * theta), 1. / 3.);
+        Real sigmav = C1 * theta * sqrt(xi / (mc2 * pow(Ti, 3))) * exp(-3 * xi);
+
+        gout = 17.6 * 0.25 * n * n * sigmav * pow(100.0, -3) * 1e40;
+        break;
+    }
+    default:
+        break;
+    }
     // Real r = sqrt(x); // treat x as r/a for now
-    Real pe = 2. / 3. * u(Channel::ElectronEnergy),
-         pi = 2. / 3. * u(Channel::IonEnergy);
-    // Real p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy);
+    return gout;
+}
 
-    return 3. / 2. * (pe + pi);
+void AdjointPlasma::initialiseDiagnostics(NetCDFIO &nc)
+{
+    auto p_i = [this](double x)
+    { return (2. / 3.) * InitialValue(Channel::IonEnergy, x); };
+    // auto p_i_prime = [this](double x)
+    // { return (2. / 3.) * InitialDerivative(Channel::IonEnergy, x); };
+    auto p_e = [this](double x)
+    { return (2. / 3.) * InitialValue(Channel::ElectronEnergy, x); };
+    // auto p_e_prime = [this](double x)
+    // { return (2. / 3.) * InitialDerivative(Channel::ElectronEnergy, x); };
+
+    auto T_i = [&](double x)
+    { return p_i(x) / DensityFn(x).val; };
+    auto T_e = [&](double x)
+    { return p_e(x) / DensityFn(x).val; };
+
+    nc.AddGroup("Temperatures", "");
+    nc.AddVariable("Temperatures", "Ti", "ion temperature", "-", T_i);
+    nc.AddVariable("Temperatures", "Te", "electron temperature", "-", T_e);
+    nc.AddVariable("Density", "density function", "-", [this](double x)
+                   { return DensityFn(x).val; });
+}
+
+void AdjointPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t, NetCDFIO &nc, size_t tIndex)
+{
+    auto p_i = [&](double x)
+    { return (2. / 3.) * y.u(Channel::IonEnergy)(x); };
+    // auto p_i_prime = [this](double x)
+    // { return (2. / 3.) * InitialDerivative(Channel::IonEnergy, x); };
+    auto p_e = [&](double x)
+    { return (2. / 3.) * y.u(Channel::ElectronEnergy)(x); };
+    // auto p_e_prime = [this](double x)
+    // { return (2. / 3.) * InitialDerivative(Channel::ElectronEnergy, x); };
+
+    Fn T_i = [&](double x)
+    { return p_i(x) / DensityFn(x).val; };
+    Fn T_e = [&](double x)
+    { return p_e(x) / DensityFn(x).val; };
+
+    nc.AppendToGroup<Fn>("Temperatures", tIndex,
+                         {{"Ti", T_i}, {"Te", T_e}});
+    nc.AppendToVariable("Density", [this](double x)
+                        { return DensityFn(x).val; }, tIndex);
 }
 
 Real AdjointPlasma::Flux(Index i, RealVector u, RealVector q, Real x, Time t)
@@ -189,7 +277,7 @@ Real AdjointPlasma::Gamma(RealVector u, RealVector q, Real x, Time t) const
 
 Real AdjointPlasma::qe(RealVector u, RealVector q, Real x, Time t) const
 {
-    Real r = sqrt(x); // treat x as r/a for now
+    Real r = sqrt(x);
     Real pe = 2. / 3. * u(Channel::ElectronEnergy),
          pi = 2. / 3. * u(Channel::IonEnergy);
     // Real p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy);
@@ -219,15 +307,15 @@ Real AdjointPlasma::qe(RealVector u, RealVector q, Real x, Time t) const
     Real q_out = GeometricFactor * Chi_e * n * Te_prime;
 
     // for neumann condition
-    if (x <= 0.1)
-        q_out += 2.0 * (1 - 10.0 * x) * Te_prime;
+    if (x <= 0.05)
+        q_out += 2.0 * (1 - 1 / 0.05 * x) * Te_prime;
 
     return q_out;
 }
 
 Real AdjointPlasma::qi(RealVector u, RealVector q, Real x, Time t) const
 {
-    Real r = sqrt(x); // treat x as r/a for now
+    Real r = sqrt(x);
     Real pe = 2. / 3. * u(Channel::ElectronEnergy),
          pi = 2. / 3. * u(Channel::IonEnergy);
     // Real p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy);
@@ -257,8 +345,8 @@ Real AdjointPlasma::qi(RealVector u, RealVector q, Real x, Time t) const
     Real q_out = GeometricFactor * Chi_i * n * Ti_prime;
 
     // for neumann condition
-    if (x <= 0.1)
-        q_out += 2.0 * (1 - 10.0 * x) * Ti_prime;
+    if (x <= 0.05)
+        q_out += 2.0 * (1 - 1 / 0.05 * x) * Ti_prime;
 
     return q_out;
 }

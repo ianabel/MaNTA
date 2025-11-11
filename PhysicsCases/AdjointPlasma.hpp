@@ -15,7 +15,10 @@ public:
 
     virtual AdjointProblem *createAdjointProblem() override;
 
-    Real g(Position, Real, RealVector &, RealVector &, RealVector &, RealVector &);
+    Real g(Position, RealVector &, RealVector &, RealVector &, RealVector &);
+
+    void initialiseDiagnostics(NetCDFIO &) override;
+    void writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t, NetCDFIO &nc, size_t tIndex) override;
 
 private:
     Real Flux(Index, RealVector, RealVector, Real, Time) override;
@@ -47,6 +50,15 @@ private:
         ElectronEnergy = 1,
         Density = 2
     };
+
+    enum ObjectiveFunctions : Index
+    {
+        StoredEnergy = 0,
+        FusionYield = 1
+    };
+
+    std::map<std::string, Index>
+        objectiveFunctions = {{"StoredEnergy", 0}, {"FusionYield", 1}};
 
 private:
     // std::unique_ptr<PlasmaConstants> Plasma = nullptr;
@@ -80,6 +92,10 @@ private:
 
     Value nEdge, TeEdge, TiEdge;
     Value InitialPeakDensity, InitialPeakTe, InitialPeakTi;
+
+    std::map<Index, std::string> adjointNames;
+
+    Index objectiveFunction = 0;
 
     REGISTER_PHYSICS_HEADER(AdjointPlasma)
 };

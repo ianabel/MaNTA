@@ -237,6 +237,8 @@ public:
 
     std::map<int, std::string> subVars = {{0, "u"}, {1, "q"}, {2, "sigma"}, {3, "S"}};
 
+    virtual std::string getAdjointNames(Index pIndex) const { return "p" + std::to_string(pIndex); }
+
 protected:
     Index nVars;
     Index nScalars = 0;

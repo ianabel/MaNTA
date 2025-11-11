@@ -11,7 +11,7 @@ public:
 
     virtual AdjointProblem *createAdjointProblem() override;
 
-    Real g(Position, Real, RealVector &, RealVector &, RealVector &, RealVector &);
+    Real g(Position, RealVector &, RealVector &, RealVector &, RealVector &);
 
 private:
     Real Flux(Index, RealVector, RealVector, Real, Time) override;

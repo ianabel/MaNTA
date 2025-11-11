@@ -57,9 +57,9 @@ BOOST_AUTO_TEST_CASE(test_derivatives)
 
     AutodiffAdjointProblem adjoint(problem);
 
-    auto gfun = [&](Position x, Real p, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
+    auto gfun = [&](Position x, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
     {
-        return problem->g(x, p, u, q, sigma, phi);
+        return problem->g(x, u, q, sigma, phi);
     };
 
     BOOST_CHECK_NO_THROW(adjoint.setG(gfun));
