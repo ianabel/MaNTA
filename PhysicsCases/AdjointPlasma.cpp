@@ -125,6 +125,7 @@ AdjointProblem *AdjointPlasma::createAdjointProblem()
     addP(AspectRatio);
     addP(Xe_Xi);
     addP(alpha);
+    addP(SourceCenter);
 
     p->addUpperBoundarySensitivity(Channel::IonEnergy, pvals.size());
     p->addUpperBoundarySensitivity(Channel::ElectronEnergy, pvals.size() + 1);
@@ -157,7 +158,7 @@ Real AdjointPlasma::g(Position x, RealVector &u, RealVector &q, RealVector &sigm
         Real xi = pow(BG * BG / (4 * theta), 1. / 3.);
         Real sigmav = C1 * theta * sqrt(xi / (mc2 * pow(Ti, 3))) * exp(-3 * xi);
 
-        gout = 17.6 * 0.25 * n * n * sigmav * pow(100.0, -3) * 1e40;
+        gout = 17.6 * 0.25 * n * n * sigmav * pow(100.0, -3) * 1e40 * (2 * M_PI * M_PI) * R0 * R0 / AspectRatio;
         break;
     }
     default:
@@ -307,8 +308,8 @@ Real AdjointPlasma::qe(RealVector u, RealVector q, Real x, Time t) const
     Real q_out = GeometricFactor * Chi_e * n * Te_prime;
 
     // for neumann condition
-    if (x <= 0.05)
-        q_out += 2.0 * (1 - 1 / 0.05 * x) * Te_prime;
+    if (x <= 0.01)
+        q_out += 2.0 * (1 - 1 / 0.01 * x) * Te_prime;
 
     return q_out;
 }
@@ -345,8 +346,8 @@ Real AdjointPlasma::qi(RealVector u, RealVector q, Real x, Time t) const
     Real q_out = GeometricFactor * Chi_i * n * Ti_prime;
 
     // for neumann condition
-    if (x <= 0.05)
-        q_out += 2.0 * (1 - 1 / 0.05 * x) * Ti_prime;
+    if (x <= 0.01)
+        q_out += 2.0 * (1 - 1 / 0.01 * x) * Ti_prime;
 
     return q_out;
 }
@@ -397,8 +398,7 @@ Real AdjointPlasma::DensityFn(Real x) const
 Real AdjointPlasma::DensityPrime(Real x) const
 {
     return -grad_n;
-}
-
+}   
 Real AdjointPlasma::SafetyFactor(Real r) const
 {
     return (nu + 1) * Btor / Bpol * 1 / AspectRatio * pow(r, 2) / (1 - pow(1 - r * r, nu + 1));
