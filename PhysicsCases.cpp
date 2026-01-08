@@ -3,7 +3,6 @@
 #include "PhysicsCases.hpp"
 
 PhysicsCases::map_type *PhysicsCases::map;
-
 #include <iostream>
 #include <dlfcn.h>
 
@@ -15,7 +14,7 @@ void LoadFromFile( std::string const& filename )
 		std::cerr << "\t" << dlerror() << std::endl;
 		return;
 	}
-	using allocatorType = TransportSystem*( toml::value const&, Grid const& );
+	using allocatorType = std::unique_ptr<TransportSystem>(toml::value const&, Grid const&);
 	allocatorType *creator = reinterpret_cast<allocatorType*>( dlsym( handle, "createTransportSystem" ) );
 	using classnameFn = std::string(void);
 	classnameFn* pGCN = reinterpret_cast<classnameFn*>( dlsym( handle, "getClassName" ) );

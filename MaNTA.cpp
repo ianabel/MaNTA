@@ -144,7 +144,8 @@ int runManta(std::string const &fname)
 		else
 			k = polyDegree.as_integer();
 
-		if (config.count("High_Grid_Boundary") != 1) {
+		if (config.count("High_Grid_Boundary") != 1)
+		{
 			highGridBoundary = false;
 			lowerBoundaryFraction = 0.0;
 			upperBoundaryFraction = 0.0;
@@ -188,9 +189,8 @@ int runManta(std::string const &fname)
 			throw std::invalid_argument("Upper_boundary specified incorrrectly");
 
 		grid = new Grid(lBound, uBound, nCells, highGridBoundary, lowerBoundaryFraction, upperBoundaryFraction);
-
-	} 
-	else 
+	}
+	else
 	{
 		// Load grid from restart file
 		netCDF::NcGroup GridGroup = restart_file.getGroup("Grid");
@@ -240,7 +240,7 @@ int runManta(std::string const &fname)
 
 	int nOutput = getIntWithDefault("OutputPoints", config, 301);
 
-	bool solveAdjoint = false; 
+	bool solveAdjoint = false;
 	if (config.count("solveAdjoint") == 1)
 		solveAdjoint = config.at("solveAdjoint").as_boolean();
 
@@ -251,17 +251,17 @@ int runManta(std::string const &fname)
 
 	// Convert string to TransportSystem* instance
 
-	TransportSystem *pProblem = PhysicsCases::InstantiateProblem(ProblemName, configFile, *grid);
+	std::unique_ptr<TransportSystem> pProblem = PhysicsCases::InstantiateProblem(ProblemName, configFile, *grid);
 
 	AdjointProblem *adjoint = nullptr;
 	if (solveAdjoint)
 		adjoint = pProblem->createAdjointProblem();
 
-	if(isRestarting)
+	if (isRestarting)
 	{
 		std::vector<double> Y, dYdt;
 		Index nDOF_file = LoadFromFile(restart_file, Y, dYdt);
-		
+
 		// Make sure degrees of freedom are consistent with restart file
 		const Index nCells = grid->getNCells();
 		const Index nDOF = pProblem->getNumVars() * 3 * nCells * (k + 1) + pProblem->getNumVars() * (nCells + 1) + pProblem->getNumScalars() + pProblem->getNumAux() * nCells * (k + 1);
@@ -284,7 +284,7 @@ int runManta(std::string const &fname)
 		return 1;
 	}
 
-	system = std::make_shared<SystemSolver>(*grid, k, pProblem, adjoint);
+	system = std::make_shared<SystemSolver>(*grid, k, pProblem.get(), adjoint);
 
 	system->setOutputCadence(delta_t);
 	system->setTolerances(absTol, rtol);
@@ -307,7 +307,6 @@ int runManta(std::string const &fname)
 	// For compiled-in TransportSystems we have the type information and
 	// this will call the correct inherited destructor
 	delete adjoint;
-	delete pProblem;
 	delete grid;
 	std::cout << "Done." << std::endl;
 	return 0;

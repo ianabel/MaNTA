@@ -1192,7 +1192,6 @@ void SystemSolver::computeAdjointGradients()
             F_p.setZero();
 
             // Evaluate Diffusion Function
-           
 
             Interval I = grid[i];
 
@@ -1223,7 +1222,6 @@ void SystemSolver::computeAdjointGradients()
                         dkappa_dp_phi(j) = DGApprox::CellProduct(I, dkappadp, LegendreBasis::phi(I, j));
                     }
                 }
-          
 
                 // Evaluate Source Function
                 Eigen::VectorXd dSdp_cellwise(k + 1);
@@ -1266,7 +1264,7 @@ void SystemSolver::computeAdjointGradients()
 
             // SQU portion
 
-            G_p(pIndex) -=  adjoint_squ[i].transpose() * F_p;
+            G_p(pIndex) -= adjoint_squ[i].transpose() * F_p;
 
             // Eigen::VectorXd dkappa_lambda = C_cell * dkappa_dp_phi;
             // // // // // Lambda portion
