@@ -121,12 +121,13 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 	py::class_<toml::value>(m, "TomlValue")
 		.def(py::init<>())
 		.def("__getitem__",
-			 [](toml::value &v, const std::string &key)
+			 [](const toml::value &v, const std::string &key)
 			 {
+				 auto temp = v;
 				 py::object result = py::none();
 				 if (!v.contains(key))
 				 {
-					 for (auto &[k, val] : v.as_table())
+					 for (auto &[k, val] : temp.as_table())
 					 {
 						 result = cast_toml(val[key]);
 						 if (!result.is_none())
@@ -135,7 +136,7 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 				 }
 				 else
 				 {
-					 result = cast_toml(v[key]);
+					 result = cast_toml(temp[key]);
 				 }
 
 				 if (result.is_none())

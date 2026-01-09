@@ -63,7 +63,7 @@ class JAXLinearDiffusion(JAXTransportSystem):
         return self.kappa * tprime[index]
 
     def Sources( self, index, state, x, t ):
-        return 0.0
+        return 10.0
     
     def LowerBoundary(self, index, t):
         return 0.0
@@ -82,40 +82,33 @@ class NonlinearDiffusion(JAXTransportSystem):
         super().__init__()
         self.nVars = 1
         self.isUpperDirichlet  = True
-        self.isLowerDirichlet  = True
+        self.isLowerDirichlet  = False
 
-        self.Centre = config["Centre"]
-        self.InitialWidth = 0.1
-        self.InitialHeight = 1.0
-        self.n = 2
-        self.t0 = 1.1
+        self.T_s = 50
+        self.a = 6.0
+        self.SourceWidth = 0.02
+        self.SourceCenter = 0.3
 
     def SigmaFn( self, index, state, x, t ):
 
         u = state["Variable"][index]
         q = state["Derivative"][index]
 
-        NonlinearKappa = self.n/2.0*u**self.n*(1-u**self.n)/(self.n+1.0)
+        NonlinearKappa = self.a / jnp.pow(u,1.5)
         return NonlinearKappa * q
 
     def Sources( self, index, state, x, t ):
-        return 0.0
+        y = x - self.SourceCenter
+        return self.T_s*jnp.exp(-y*y/self.SourceWidth)
     
     def LowerBoundary(self, index, t):
         return 0.0
 
     def UpperBoundary(self, index, t):
-        return self.ExactSolution( 1, self.t0+t)
+        return 0.3
     
     def InitialValue(self, index, x):
-        return self.ExactSolution(x,self.t0)
-    
-    def ExactSolution( self, x, t ):
-        eta = x/t
-  
-        if (eta >= 1.0):
-            return 0.0
-        return jnp.pow(1.0-eta,1.0/self.n)
+        return 0.3
 
 
 def registerTransportSystems():
