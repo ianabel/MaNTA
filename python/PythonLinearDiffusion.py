@@ -6,9 +6,7 @@ class PythonLinearDiffusion(MaNTA.TransportSystem):
     def __init__(self, config, grid):
         MaNTA.TransportSystem.__init__(self)
         self.nVars = 1
-        print(config("configuration"))
-        # Config should be a dict
-        # self.nVars = 1
+        # Really should sanitize input here, c.f.
         # if not ("chi0" in config) and ("kappa" in config) and ("gamma" in config):
         #     print("For the stuff transport model, you must specify chi0, kappa, and gamma")
         #     sys.exit(1)
@@ -20,7 +18,6 @@ class PythonLinearDiffusion(MaNTA.TransportSystem):
         self.InitialHeight = 1.0
         self.kappa = 1.0
         self.t0 = self.InitialWidth * self.InitialWidth / ( 4.0 * self.kappa )
-        #print("t0 = ",self.t0)
 
 # This problem uses VN lower boundary and dirichlet upper boundary
 # assumed to be on [0,1] in normalised flux
@@ -73,6 +70,5 @@ class PythonLinearDiffusion(MaNTA.TransportSystem):
 
 
 def registerTransportSystems():
-    #MaNTA.testFunction(PythonLinearDiffusion)
     MaNTA.registerPhysicsCase("PythonLinearDiffusion", PythonLinearDiffusion)
 

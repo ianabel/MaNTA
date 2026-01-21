@@ -12,10 +12,8 @@ namespace py = pybind11;
 
 int runManta(std::string const &);
 
-void testFunction(std::function<TransportSystem *()> creator)
-{
-	creator();
-}
+// This allows one to use a python dict as a state variable,
+// if the python dict has the right keys in it
 namespace pybind11
 {
 	namespace detail
@@ -52,6 +50,8 @@ namespace pybind11
 	}
 };
 
+// TODO: Check if we can just use pytoml instead and
+// remove this extra cast
 py::object cast_toml(toml::value v)
 {
 	if (v.is_boolean())
@@ -86,13 +86,14 @@ py::object cast_toml(toml::value v)
 	}
 }
 
+// Defines the MaNTA module and what can be called
 PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 {
 	m.doc() = "Python bindings for MaNTA";
 	m.def("run", runManta, "Runs the MaNTA suite using given configuration file");
 	m.def("registerPhysicsCase", &PhysicsCases::RegisterPhysicsCase, "Register a Physics Case");
-	m.def("testFunction", &testFunction, "test conversion of function types");
 
+    // List all interfaces of the main TransportSystem class which is what has to be derived from in python
 	py::class_<TransportSystem, PyTransportSystem, py::smart_holder>(m, "TransportSystem")
 		.def(py::init<>())
 		.def("LowerBoundary", &TransportSystem::LowerBoundary)

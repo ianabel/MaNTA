@@ -9,9 +9,9 @@ filename = ""
 if len(sys.argv) == 2:
     filename = sys.argv[1]
 elif len(sys.argv) == 1:
-    filename = "python/py.conf"
+    filename = "py.conf"
 else:
-    print("Usage: PyMaNTA <configuration file>")
+    print("Usage: PyMaNTA <configuration file (defaults to py.conf)>")
     sys.exit()
 
 import MaNTA
