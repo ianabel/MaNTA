@@ -8,13 +8,13 @@ LinearDiffSourceTest::LinearDiffSourceTest(toml::value const &config, Grid const
     xL = grid.lowerBoundary();
     xR = grid.upperBoundary();
 
-    nVars = 2; // toml::find<int>(config.at("configuration"), "nVars");
     nScalars = 0;
     nAux = 0;
 
     if (config.count("LinearDiffSourceTest") == 1)
     {
         auto const &InternalConfig = config.at("LinearDiffSourceTest");
+        nVars = toml::find_or(InternalConfig, "nVars", 1);
         if (InternalConfig.count("Kappa") != 1)
             Kappa = Matrix::Identity(nVars, nVars);
         else
@@ -118,14 +118,8 @@ Real LinearDiffSourceTest::Flux(Index i, RealVector u, RealVector q, Real x, Tim
 
 Real LinearDiffSourceTest::Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector, Real x, Time t)
 {
-    Real S = 0.0;
-    if (i == 0)
 
-        S = SourceStrength[0]; //* u[0];
-    else
-        S = SourceStrength[1]; // * u[1];
-
-    return S;
+    return (x > -SourceWidth[i] / 2.0) && (x < SourceWidth[i] / 2.0) ? SourceStrength[i] : 0.0;
     // for (auto j = 0; j < nSources; ++j)
     // {
     //     auto s = SourceTypes[j];
@@ -178,7 +172,7 @@ void LinearDiffSourceTest::initialiseDiagnostics(NetCDFIO &nc)
                        { return this->InitialFunction(j, V, 0.0).val.val; });
 }
 
-void LinearDiffSourceTest::writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex)
+void LinearDiffSourceTest::writeDiagnostics(DGSoln const &y, DGSoln const&, Time t, NetCDFIO &nc, size_t tIndex)
 {
     for (Index j = 0; j < nVars; ++j)
         nc.AppendToGroup("MMS", tIndex, "Var" + std::to_string(j), [this, j, t](double x)

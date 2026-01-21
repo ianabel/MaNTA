@@ -1,4 +1,5 @@
 import MaNTA
+import sys
 
 class StiffTransport(TransportSystem):
     def __init__(self, config):
@@ -11,7 +12,7 @@ class StiffTransport(TransportSystem):
         self.chi0 = config["chi0"]
         self.kappa = config["kappa"]
         self.gamma = config["gamma"]
-        selc.tprim_crit = config["CriticalGradient"]
+        self.tprim_crit = config["CriticalGradient"]
         self.EdgeValue = config["EdgeTemperature"]
 
 # This problem uses VN lower boundary and dirichlet upper boundary

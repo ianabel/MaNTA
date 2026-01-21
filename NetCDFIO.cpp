@@ -46,6 +46,16 @@ void NetCDFIO::AddScalarVariable(std::string name, std::string description, std:
 	newvar.putVar(&tmp);
 }
 
+void NetCDFIO::AddScalarVariable(std::string groupName, std::string name, std::string description, std::string units, double value)
+{
+	NcVar newvar = data_file.getGroup(groupName).addVar(name, netCDF::NcDouble());
+	newvar.putAtt("description", description);
+	if (units != "")
+		newvar.putAtt("units", units);
+	double tmp = value;
+	newvar.putVar(&tmp);
+}
+
 void NetCDFIO::AddTextVariable(std::string name, std::string description, std::string units, std::string text)
 {
 	NcVar newvar = data_file.addVar(name, netCDF::NcString());
@@ -110,6 +120,13 @@ void NetCDFIO::AddGroup(std::string name, std::string description)
 {
 	NcGroup newgroup = data_file.addGroup(name);
 	newgroup.putAtt("description", description);
+}
+
+netCDF::NcGroup NetCDFIO::CreateGroup(std::string name, std::string description)
+{
+	NcGroup newgroup = data_file.addGroup(name);
+	newgroup.putAtt("description", description);
+	return newgroup;
 }
 
 // SystemSolver routines that use NetCDFIO
@@ -192,4 +209,72 @@ void SystemSolver::WriteTimeslice(double tNew)
 		nc_output.AppendToTimeSeries(problem->getScalarName(i), y.Scalar(i), tIndex);
 
 	problem->writeDiagnostics(y, dydt, tNew, nc_output, tIndex);
+}
+
+void SystemSolver::WriteAdjoints()
+{
+	nc_output.AddScalarVariable("GFn", "", "", adjointProblem->GFn(0, y));
+	nc_output.AddScalarVariable("np", "", "", adjointProblem->getNp());
+	nc_output.AddScalarVariable("np_boundary", "", "", adjointProblem->getNpBoundary());
+	nc_output.AddGroup("G_p", "Gradients of G using adjoint state method");
+	nc_output.AddGroup("G_boundary", "Gradients of G on boundary using adjoint state method");
+	for (Index i = 0; i < adjointProblem->getNp() - adjointProblem->getNpBoundary(); ++i)
+	{
+		nc_output.AddScalarVariable("G_p", "p" + std::to_string(i), "", "", G_p(i));
+	}
+	for (Index i = 0; i < adjointProblem->getNpBoundary(); ++i)
+	{
+		nc_output.AddScalarVariable("G_boundary", "p" + std::to_string(i), "", "", G_p(i + adjointProblem->getNp() - adjointProblem->getNpBoundary()));
+	}
+}
+
+void SystemSolver::WriteRestartFile(std::string const &fname, N_Vector const &Y, N_Vector const &dYdt, size_t nOut)
+{
+	restart_file.Open(fname);
+
+	// Include profiles for debugging
+	std::vector<double> gridpoints(nOut);
+	std::ranges::generate(gridpoints, [this, nOut]()
+						  {
+		static int i = 0;
+		double delta_x = ( grid.upperBoundary() - grid.lowerBoundary() ) * ( 1.0/( nOut - 1.0 ) );
+		return static_cast<double>( i++ )*delta_x + grid.lowerBoundary(); });
+
+	restart_file.SetOutputGrid(gridpoints);
+
+	restart_file.StoreGridInfo(grid, k);
+
+	restart_file.AddScalarVariable("nVariables", "Number of independent variables", "", static_cast<double>(nVars));
+
+	for (Index i = 0; i < nVars; ++i)
+	{
+		restart_file.AddGroup(problem->getVariableName(i), problem->getVariableDescription(i));
+		restart_file.AddVariable(problem->getVariableName(i), "u", "Value", problem->getVariableUnits(i), y.u(i));
+		restart_file.AddVariable(problem->getVariableName(i), "q", "Derivative", problem->getVariableUnits(i), y.q(i));
+		restart_file.AddVariable(problem->getVariableName(i), "sigma", "Flux", problem->getVariableUnits(i), y.sigma(i));
+	}
+
+	for (Index i = 0; i < nScalars; ++i)
+	{
+		restart_file.AddTimeSeries(problem->getScalarName(i), problem->getScalarDescription(i), problem->getScalarUnits(i), y.Scalar(i));
+	}
+
+	for (Index i = 0; i < nAux; ++i)
+	{
+		restart_file.AddVariable(problem->getAuxVarName(i), problem->getAuxDescription(i), problem->getAuxUnits(i), y.Aux(i));
+	}
+
+	// Save N_Vector directly
+	NcGroup RestartGroup = restart_file.CreateGroup("RestartData", "Restart group");
+
+	const size_t nDOF = nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1);
+	NcDim yDim = RestartGroup.addDim("nDOF", nDOF);
+	RestartGroup.addVar("nVars", netCDF::NcInt()).putVar(&nVars);
+	RestartGroup.addVar("nAux", netCDF::NcInt()).putVar(&nAux);
+	RestartGroup.addVar("nScalars", netCDF::NcInt()).putVar(&nScalars);
+
+	RestartGroup.addVar("Y", netCDF::NcDouble(), yDim).putVar({0}, {nDOF}, N_VGetArrayPointer(Y));
+	RestartGroup.addVar("dYdt", netCDF::NcDouble(), yDim).putVar({0}, {nDOF}, N_VGetArrayPointer(dYdt));
+
+	restart_file.Close();
 }

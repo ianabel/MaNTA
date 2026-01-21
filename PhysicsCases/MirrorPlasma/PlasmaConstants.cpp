@@ -16,13 +16,13 @@ Real PlasmaConstants::TotalAlphaPower(Real n, Real pi) const
 // Implements Bremsstrahlung radiative losses from NRL plasma formulary
 Real PlasmaConstants::BremsstrahlungLosses(Real n, Real pe) const
 {
-    double p0 = n0 * T0;
-    Real Normalization = p0 / NormalizingTime();
-    Real Factor = (1 + Z_eff) * 1.69e-32 * 1e-6 * n0 * n0 / Normalization;
+    // double p0 = n0 * T0;
+    // Real Normalization = p0 / NormalizingTime();
+    // Real Factor = (1 + Z_eff) * 1.69e-32 * 1e-6 * n0 * n0 / Normalization;
 
-    Real Te_eV = (pe / n) * T0 / ElementaryCharge;
-    Real Pbrem = Factor * n * n * sqrt(Te_eV);
-
+    // Real Te_eV = (pe / n) * T0eV;
+    // Real Pbrem = Factor * n * n * sqrt(Te_eV);
+    Real Pbrem = NormalizingTime() / (n0 * T0) * 5.34e3 * sqrt(pe / n) * Z_eff * n * n;
     return Pbrem;
 };
 Real PlasmaConstants::CyclotronLosses(Real V, Real n, Real Te) const
@@ -31,7 +31,7 @@ Real PlasmaConstants::CyclotronLosses(Real V, Real n, Real Te) const
     // Return units are W/m^3
     Real Te_eV = T0 / ElementaryCharge * Te;
     Real n_e20 = n * n0 / 1e20;
-    Real B_z = B->Bz_R(B->R_V(V)) * B0; // in Tesla
+    Real B_z = B->B(B->Psi_V(V), 0.0) * B0; // in Tesla
     Real P_vacuum = 6.21 * n_e20 * Te_eV * B_z * B_z;
 
     // Characteristic absorption length
@@ -41,7 +41,7 @@ Real PlasmaConstants::CyclotronLosses(Real V, Real n, Real Te) const
     double WallReflectivity = 0.95;
     Real OpticalThickness = (PlasmaWidth / (1.0 - WallReflectivity)) / LambdaZero;
     // This is the Phi introduced by Trubnikov and later approximated by Tamor
-    Real TransparencyFactor = pow(Te_eV, 1.5) / (200.0 * sqrt(OpticalThickness));
+    Real TransparencyFactor = pow(Te, 1.5) / (200.0 * sqrt(OpticalThickness));
     // Moderate the vacuum emission by the transparency factor
     Real Normalization = n0 * T0 / NormalizingTime();
 
@@ -76,7 +76,7 @@ Real PlasmaConstants::ChargeExchangeLossRate(Real n, Real NeutralDensity, Real v
     Real IonIntegral = NeutralProcess([this](double Energy)
                                       { return Plasma->HydrogenChargeExchangeCrossSection(Energy); }, v, Ti, IonMass(), 0.1);
 
-    Real R = n_m3 * n_neutrals * (IonIntegral);
+    Real R = n_m3 * n_neutrals * IonIntegral;
 
     return R;
 };
@@ -118,6 +118,18 @@ double PlasmaConstants::ReferenceIonCollisionTime() const
 {
     double LogLambdaRef = 23.0 - log(2.0) - log(n0cgs) / 2.0 + log(T0eV) * 1.5; // 23 - ln( (2n)^1/2 T^-3/2 ) from NRL pg 34
     return 12.0 * pow(M_PI, 1.5) * sqrt(IonMass()) * pow(T0, 1.5) * VacuumPermittivity * VacuumPermittivity / (n0 * pow(ElementaryCharge, 4) * LogLambdaRef);
+}
+
+// sqrt(2*T0/me)
+double PlasmaConstants::ReferenceElectronThermalVelocity() const
+{
+    return sqrt(2 * T0 / ElectronMass);
+}
+
+// sqrt(2*T0/mi)
+double PlasmaConstants::ReferenceIonThermalVelocity() const
+{
+    return sqrt(2 * T0 / IonMass());
 };
 
 /*
@@ -135,10 +147,16 @@ double PlasmaConstants::RhoStarRef() const
     return sqrt(T0 * IonMass()) / (ElementaryCharge * B0 * a);
 }
 
+// mi/me
+double PlasmaConstants::mu() const
+{
+    return IonMass() / ElectronMass;
+}
+
 // Normalize to the particle diffusion time
 double PlasmaConstants::NormalizingTime() const
 {
     double RhoStar = RhoStarRef();
 
-    return IonMass() / ElectronMass * 1 / (RhoStar * RhoStar) * ReferenceElectronCollisionTime();
+    return mu() * 1 / (RhoStar * RhoStar) * ReferenceElectronCollisionTime();
 };

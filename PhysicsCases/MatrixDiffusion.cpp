@@ -7,7 +7,7 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(MatrixDiffusion);
 
-MatrixDiffusion::MatrixDiffusion( toml::value const &config, Grid const& )
+MatrixDiffusion::MatrixDiffusion(toml::value const &config, Grid const &)
 {
 
 	// Construst your problem from user-specified config
@@ -56,7 +56,7 @@ bool MatrixDiffusion::isUpperBoundaryDirichlet(Index) const { return true; };
 
 Value MatrixDiffusion::SigmaFn(Index i, const State &s, Position, Time)
 {
-	auto sigma = Kappa * s.Derivative[0];
+	auto sigma = Kappa * s.Derivative;
 
 	return sigma(i);
 }

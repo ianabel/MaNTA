@@ -9,8 +9,10 @@ const double T_mid = 0.2, T_edge = 0.1;
 
 const double omega_edge = 0.1, omega_mid = 1.0;
 
+const std::string B_file = "./Bfield.nc";
+
 template <typename T>
-int sign(T x)
+T sign(T x)
 {
 	return x >= 0 ? 1 : -1;
 }
@@ -44,20 +46,27 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
 		lowerBoundaryConditions = toml::find_or(InternalConfig, "lowerBoundaryConditions", std::vector<bool>(nVars, true));
 		upperBoundaryConditions = toml::find_or(InternalConfig, "upperBoundaryConditions", std::vector<bool>(nVars, true));
 
-		// std::string Bfile = toml::find_or(InternalConfig, "MagneticFieldData", B_file);
+		evolveLogDensity = toml::find_or(InternalConfig, "LogDensity", false);
+
+		std::string Bfile = toml::find_or(InternalConfig, "MagneticFieldData", B_file);
+		bool useNcBField = toml::find_or(InternalConfig, "useNcBField", false);
 		double B_z = toml::find_or(InternalConfig, "Bz", 1.0);
 		double Rm = toml::find_or(InternalConfig, "Rm", 3.0);
-		double L_z = toml::find_or(InternalConfig, "Lz", 1.0);
+		double L_z = toml::find_or(InternalConfig, "Lz", 1.0) / a;
 
-		B = std::make_shared<StraightMagneticField>(L_z, B_z, Rm);
+		double m = toml::find_or(InternalConfig, "FieldSlope", 0.0);
+		if (useNcBField)
+			B = createMagneticField<CylindricalMagneticField>(Bfile);
+		else
+			B = createMagneticField<StraightMagneticField>(L_z, B_z, Rm, xL, m); // std::make_shared<StraightMagneticField>(L_z, B_z, Rm, xL, m); //  //
+
+		R_Lower = B->R_V(xL, 0.0);
+		R_Upper = B->R_V(xR, 0.0);
 		// B->CheckBoundaries(xL, xR);
-
-		R_Lower = B->R_V(xL);
-		R_Upper = B->R_V(xR);
 
 		std::string IonType = toml::find_or(InternalConfig, "IonSpecies", "Deuterium");
 
-		Plasma = std::make_unique<PlasmaConstants>(IonType, B, n0, T0, Z_eff, R_Upper - R_Lower);
+		Plasma = std::make_unique<PlasmaConstants>(IonType, B, n0, T0, Z_eff, a * (R_Upper - R_Lower));
 
 		// Compute phi to satisfy zero parallel current
 		useAmbipolarPhi = toml::find_or(InternalConfig, "useAmbipolarPhi", false);
@@ -90,6 +99,7 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
 		growth_rate = toml::find_or(InternalConfig, "MMSgrowth_rate", 0.5);
 
 		SourceCap = toml::find_or(InternalConfig, "SourceCap", 1e5);
+		SourceRampup = toml::find_or(InternalConfig, "SourceRampup", 1e-3);
 
 		loadInitialConditionsFromFile = toml::find_or(InternalConfig, "useNcFile", false);
 		if (loadInitialConditionsFromFile)
@@ -114,8 +124,8 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
 		double Omega_Lower = sqrt(TeEdge) * MLower / R_Lower;
 		double Omega_Upper = sqrt(TeEdge) * MUpper / R_Upper;
 
-		uL[Channel::Density] = nEdge;
-		uR[Channel::Density] = nEdge;
+		uL[Channel::Density] = evolveLogDensity ? log(nEdge) : nEdge;
+		uR[Channel::Density] = evolveLogDensity ? log(nEdge) : nEdge;
 		uL[Channel::IonEnergy] = (3. / 2.) * nEdge * TiEdge;
 		uR[Channel::IonEnergy] = (3. / 2.) * nEdge * TiEdge;
 		uL[Channel::ElectronEnergy] = (3. / 2.) * nEdge * TeEdge;
@@ -123,12 +133,13 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
 		uL[Channel::AngularMomentum] = Omega_Lower * nEdge * R_Lower * R_Lower;
 		uR[Channel::AngularMomentum] = Omega_Upper * nEdge * R_Upper * R_Upper;
 
-		IRadial = -toml::find_or(InternalConfig, "IRadial", 0.1); // Current in amps
-		I0 = 1.0;												  // Plasma->IonMass() * n0 * sqrt(T0 / Plasma->IonMass()) * a * a * a / Plasma->NormalizingTime(); // Current normalizing factor
+		IRadial = -toml::find_or(InternalConfig, "IRadial", 0.1);											// Current in amps
+		I0 = Plasma->IonMass() * n0 * sqrt(T0 / Plasma->IonMass()) * a * a * a / Plasma->NormalizingTime(); // Current normalizing factor
+		IRadial /= I0;
 
 		useNeutralModel = toml::find_or(InternalConfig, "useNeutralsModel", false);
-		if (useNeutralModel)
-			nNeutrals = toml::find_or(InternalConfig, "NeutralDensity", 1e18) / n0;
+
+		nNeutrals = toml::find_or(InternalConfig, "NeutralDensity", 1e18) / n0;
 
 		LowerParticleSourceStrength = toml::find_or(InternalConfig, "LowerPS", 10.0);
 
@@ -136,6 +147,28 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
 
 		ParticleSourceWidth = toml::find_or(InternalConfig, "ParticleSourceWidth", 0.02);
 		ParticleSourceCenter = toml::find_or(InternalConfig, "ParticleSourceCenter", 0.5 * (R_Lower + R_Upper));
+
+		// Adding diffusion for low values of density or pressure
+		lowNDiffusivity = toml::find_or(InternalConfig, "lowNDiffusivity", 0.0);
+		lowNThreshold = toml::find_or(InternalConfig, "lowNThreshold", 1.0);
+
+		lowPDiffusivity = toml::find_or(InternalConfig, "lowPDiffusivity", 0.0);
+		lowPThreshold = toml::find_or(InternalConfig, "lowPThreshold", 1.0);
+
+		lowLDiffusivity = toml::find_or(InternalConfig, "lowLDiffusivity", 0.0);
+		lowLThreshold = toml::find_or(InternalConfig, "lowLThreshold", 1.0);
+
+		TeDiffusivity = toml::find_or(InternalConfig, "TeDiffusivity", 0.0);
+
+		transitionLength = toml::find_or(InternalConfig, "transitionLength", 1.0);
+
+		for (Index i = 0; i < nVars; ++i)
+		{
+			if (!isUpperBoundaryDirichlet(i))
+				uL[i] = InitialDerivative(i, xL);
+			if (!isLowerBoundaryDirichlet(i))
+				uR[i] = InitialDerivative(i, xR);
+		}
 	}
 	else if (config.count("MirrorPlasma") == 0)
 	{
@@ -152,9 +185,9 @@ Real2nd MirrorPlasma::InitialFunction(Index i, Real2nd V, Real2nd t) const
 	auto tfac = [this, t](double growth)
 	{ return 1 + growth * tanh(growth_rate * t); };
 
-	Real2nd R_min = B->R_V(xL);
-	Real2nd R_max = B->R_V(xR);
-	Real2nd R = B->R_V(V);
+	Real2nd R_min = B->R_V(xL, 0.0);
+	Real2nd R_max = B->R_V(xR, 0.0);
+	Real2nd R = B->R_V(V, 0.0);
 
 	Real2nd R_mid = (R_min + R_max) / 2.0;
 
@@ -174,20 +207,25 @@ Real2nd MirrorPlasma::InitialFunction(Index i, Real2nd V, Real2nd t) const
 	Real2nd v = cos(pi * (R - R_mid) / (R_max - R_min)); //* exp(-shape * (R - R_mid) * (R - R_mid));
 
 	/// Real2nd Te = TeEdge + tfac(growth_factors[Channel::ElectronEnergy]) * (TeMid - TeEdge) * v * v;
-	Real2nd omega = Omega_Lower + m * (V - xL) + OmegaMid * cos(pi * (V - xmid) / (xR - xL));
+	Real2nd omega = Omega_Lower + m * (V - xL) + OmegaMid * pow(cos(pi * (V - xmid) / (xR - xL)), 2.0);
 	// TeEdge + tfac(growth_factors[Channel::ElectronEnergy]) * (TeMid - TeEdge) * v * v;
-	Real2nd Ti = TiEdge + tfac(growth_factors[Channel::IonEnergy]) * (TiMid - TiEdge) * v * v;
-	Real2nd n = nEdge + tfac(growth_factors[Channel::Density]) * (nMid - nEdge) * cos(pi * (V - xmid) / (xR - xL));
+	Real2nd Ti = TiEdge + tfac(growth_factors[Channel::IonEnergy]) * (TiMid - TiEdge) * v;
+	Real2nd n = nEdge + tfac(growth_factors[Channel::Density]) * (nMid - nEdge) * v * v; // cos(pi * (V - xmid) / (xR - xL));
 	auto slope = (MUpper - MLower) / (R_Upper - R_Lower);
-	Real2nd M = MLower + slope * (R - R_Lower) + (MMid - 0.5 * (MUpper + MLower)) * v / exp(-shape * (R - R_mid) * (R - R_mid)); // MEdge + tfac(growth_factors[Channel::AngularMomentum]) * (MMid - MEdge) * (1 - (exp(-shape * (R - R_Upper) * (R - R_Upper)) + exp(-shape * (R - R_Lower) * (R - R_Lower))));
+	Real2nd M = MLower + slope * (R - R_Lower) + (MMid - 0.5 * (MUpper + MLower)) * v; /// exp(-shape * (R - R_mid) * (R - R_mid)); // MEdge + tfac(growth_factors[Channel::AngularMomentum]) * (MMid - MEdge) * (1 - (exp(-shape * (R - R_Upper) * (R - R_Upper)) + exp(-shape * (R - R_Lower) * (R - R_Lower))));
 	Real2nd Te = R * R * omega * omega / (M * M);
 
 	Channel c = static_cast<Channel>(i);
 	switch (c)
 	{
 	case Channel::Density:
-		return n;
+	{
+		if (evolveLogDensity)
+			return log(n);
+		else
+			return n;
 		break;
+	}
 	case Channel::IonEnergy:
 		return (3. / 2.) * n * Ti;
 		break;
@@ -208,8 +246,13 @@ Real MirrorPlasma::Flux(Index i, RealVector u, RealVector q, Real x, Time t)
 	switch (c)
 	{
 	case Channel::Density:
-		return ConstantChannelMap[Channel::Density] ? 0.0 : Gamma(u, q, x, t);
+	{
+		if (evolveLogDensity)
+			return ConstantChannelMap[Channel::Density] ? 0.0 : static_cast<Real>(Gamma(u, q, x, t) / uToDensity(u(Channel::Density)));
+		else
+			return ConstantChannelMap[Channel::Density] ? 0.0 : Gamma(u, q, x, t);
 		break;
+	}
 	case Channel::IonEnergy:
 		return ConstantChannelMap[Channel::IonEnergy] ? 0.0 : qi(u, q, x, t);
 		break;
@@ -232,8 +275,16 @@ Real MirrorPlasma::Source(Index i, RealVector u, RealVector q, RealVector sigma,
 	switch (c)
 	{
 	case Channel::Density:
-		S = ConstantChannelMap[Channel::Density] ? 0.0 : Sn(u, q, sigma, phi, x, t);
+	{
+		if (evolveLogDensity)
+		{
+			S = ConstantChannelMap[Channel::Density] ? 0.0 : static_cast<Real>(1 / uToDensity(u(Channel::Density)) * (Sn(u, q, sigma, phi, x, t) + Gamma(u, q, x, t) * q(Channel::Density)));
+			return S; // Avoid source cap when evolving log
+		}
+		else
+			S = ConstantChannelMap[Channel::Density] ? 0.0 : Sn(u, q, sigma, phi, x, t);
 		break;
+	}
 	case Channel::IonEnergy:
 		S = ConstantChannelMap[Channel::IonEnergy] ? 0.0 : Spi(u, q, sigma, phi, x, t);
 		break;
@@ -253,11 +304,11 @@ Real MirrorPlasma::Source(Index i, RealVector u, RealVector q, RealVector sigma,
 
 Value MirrorPlasma::LowerBoundary(Index i, Time t) const
 {
-	return isLowerBoundaryDirichlet(i) ? uL[i] : 0.0;
+	return uL[i];
 }
 Value MirrorPlasma::UpperBoundary(Index i, Time t) const
 {
-	return isUpperBoundaryDirichlet(i) ? uR[i] : 0.0;
+	return uR[i];
 }
 
 bool MirrorPlasma::isLowerBoundaryDirichlet(Index i) const
@@ -289,16 +340,17 @@ Normalisation:
 // Define lengths so R_ref = 1
 Real MirrorPlasma::Gamma(RealVector u, RealVector q, Real V, Time t) const
 {
-	Real n = u(Channel::Density), p_e = (2. / 3.) * u(Channel::ElectronEnergy);
+	Real n = uToDensity(u(Channel::Density)), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
 	Real Te = p_e / n;
+	Real Ti = floor(p_i / n, MinTemp);
 
-	Real nPrime = q(Channel::Density), p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
+	Real nPrime = qToDensityGradient(q(Channel::Density), u(Channel::Density)), p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
 
-	Real ThermalForce = (3. / 2.) * (p_e_prime - nPrime * Te); // p_e dT/dpsi
+	Real ThermalForce = (3. / 2.) * (p_e_prime - nPrime * Te); // p_e  * (1/T) * dT/dpsi
 
-	Real R = B->R_V(V);
+	Real R = B->R_V(V, 0.0);
 	Real J = n * R * R; // Normalisation includes the m_i
-	Real dRdV = B->dRdV(V);
+	Real dRdV = B->dRdV(V, 0.0);
 	Real JPrime = R * R * nPrime + 2.0 * dRdV * R * n;
 
 	Real L = u(Channel::AngularMomentum);
@@ -310,6 +362,18 @@ Real MirrorPlasma::Gamma(RealVector u, RealVector q, Real V, Time t) const
 
 	Real GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e
 	Real Gamma = GeometricFactor * GeometricFactor * (1 / (Plasma->ElectronCollisionTime(n, Te))) * (U - ThermalForce);
+
+	// If gradient is too steep for MaNTA to handle, add diffusion
+
+	Real rhon = abs(sqrt(Ti) * Plasma->RhoStarRef() * nPrime / B->dRdV(V, 0.0) / n);
+	// Real lambda_n = (B->L_V(V) * (R_Upper - R_Lower)) * abs(nPrime);
+
+	Real x = (rhon - lowNThreshold) / lowNThreshold;
+
+	// Real Chi_n = 1.0; // sqrt(Plasma->mu()) * pow(Ti, 3. / 2.) * lambda_n;
+
+	if (x >= 0)
+		Gamma += x * lowNDiffusivity * nPrime * GeometricFactor * R; // SmoothTransition(x, transitionLength, lowNDiffusivity) * Chi_n * GeometricFactor * R * nPrime * x;
 
 	if (std::isfinite(Gamma.val))
 		return Gamma;
@@ -326,17 +390,49 @@ Real MirrorPlasma::Gamma(RealVector u, RealVector q, Real V, Time t) const
 */
 Real MirrorPlasma::qi(RealVector u, RealVector q, Real V, Time t) const
 {
-	Real n = floor(u(Channel::Density), MinDensity), p_i = (2. / 3.) * u(Channel::IonEnergy);
-	Real Ti = p_i / n;
-	Real nPrime = q(Channel::Density), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
+	Real n = uToDensity(u(Channel::Density)), p_i = (2. / 3.) * u(Channel::IonEnergy), p_e = (2. / 3.) * u(Channel::ElectronEnergy);
+	Real Te = p_e / n;
+	Real Ti = floor(p_i / n, MinTemp);
+	Real nPrime = qToDensityGradient(q(Channel::Density), u(Channel::Density)), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
 	Real Ti_prime = (p_i_prime - nPrime * Ti) / n;
 
-	Real R = B->R_V(V);
+	Real R = B->R_V(V, 0.0);
 	Real GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e, leaving (V'R)^2
-	Real HeatFlux = 2.0 * GeometricFactor * GeometricFactor * sqrt(Plasma->IonMass() / (2.0 * ElectronMass)) * (p_i / (Plasma->IonCollisionTime(n, Ti))) * Ti_prime;
+	Real HeatFlux = 2.0 * GeometricFactor * GeometricFactor * sqrt(Plasma->mu() / 2.0) * (p_i / (Plasma->IonCollisionTime(n, Ti))) * Ti_prime;
 
-	if (std::isfinite(HeatFlux.val))
-		return HeatFlux;
+	Real J = n * R * R; // Normalisation includes the m_i
+	Real L = u(Channel::AngularMomentum);
+	Real omega = L / J;
+	Real PotentialEnergyFlux = 0.5 * omega * omega * R * R * Gamma(u, q, V, t);
+	// Real lambda_p = abs(p_i_prime / p_i);
+
+	// Real x = lambda_p - lowPThreshold;
+
+	// if (lambda_p > lowPThreshold)
+	// 	HeatFlux += SmoothTransition(x, transitionLength, lowPDiffusivity) * p_i_prime / p_i; // Ti_prime / Ti;
+
+	// Real lambda_T = (B->L_V(V) * (R_Upper - R_Lower)) * abs(Ti_prime);
+
+	// Real rhoTi = abs(sqrt(Ti) * Plasma->RhoStarRef() * Ti_prime / B->dRdV(V, 0.0) / Ti);
+
+	Real R_LTi = abs(R * Ti_prime / B->dRdV(V, 0.0) / Ti);
+	Real R_LTi_crit = 4 / 3 * (1 + Ti / Te);
+
+	// Real x = lambda_T * Plasma->RhoStarRef() - lowPThreshold;
+	// Real x = (rhoTi - lowPThreshold) / lowPThreshold;
+	Real x = R_LTi - R_LTi_crit;
+	// Real lambda_n = 1 / B->dRdV(V 0.0) * abs(nPrime / n);
+
+	// Real x = sqrt(Ti) * lambda_n / (lowNThreshold / Plasma->RhoStarRef()) - 1.0;
+
+	// Real Chi_i = 1.0; // sqrt(Plasma->mu()) * pow(Ti, 3. / 2.) * lambda_T;
+
+	// if (x >= 0)
+	// 	HeatFlux += x * lowPDiffusivity * Chi_i * GeometricFactor * GeometricFactor * n * pow(Ti, 3. / 2.) * Ti_prime; // / Ti;
+	if (x >= 0)
+		HeatFlux += lowPDiffusivity * sqrt(Plasma->mu() / 2.0) * pow(Ti, 3. / 2.) * pow(x, 2) * n * Ti_prime * GeometricFactor * GeometricFactor;
+	if (std::isfinite(HeatFlux.val) && std::isfinite(PotentialEnergyFlux.val))
+		return HeatFlux - PotentialEnergyFlux;
 	else
 		throw std::logic_error("Non-finite value computed for the ion heat flux at x = " + std::to_string(V.val) + " and t = " + std::to_string(t));
 }
@@ -347,14 +443,14 @@ Real MirrorPlasma::qi(RealVector u, RealVector q, Real V, Time t) const
  */
 Real MirrorPlasma::qe(RealVector u, RealVector q, Real V, Time t) const
 {
-	Real n = floor(u(Channel::Density), MinDensity), p_e = (2. / 3.) * u(Channel::ElectronEnergy);
+	Real n = uToDensity(u(Channel::Density)), p_e = (2. / 3.) * u(Channel::ElectronEnergy);
 	Real Te = p_e / n;
-	Real nPrime = q(Channel::Density), p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
+	Real nPrime = qToDensityGradient(q(Channel::Density), u(Channel::Density)), p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
 	Real Te_prime = (p_e_prime - nPrime * Te) / n;
 
-	Real R = B->R_V(V);
+	Real R = B->R_V(V, 0.0);
 	Real J = n * R * R; // Normalisation includes the m_i
-	Real dRdV = B->dRdV(V);
+	Real dRdV = B->dRdV(V, 0.0);
 	Real JPrime = R * R * nPrime + 2.0 * dRdV * R * n;
 
 	Real L = u(Channel::AngularMomentum);
@@ -366,6 +462,9 @@ Real MirrorPlasma::qe(RealVector u, RealVector q, Real V, Time t) const
 
 	Real GeometricFactor = (B->VPrime(V) * R); // |grad psi| = R B , cancel the B with the B in Omega_e, leaving (V'R)^2
 	Real HeatFlux = GeometricFactor * GeometricFactor * (1 / (Plasma->ElectronCollisionTime(n, Te))) * (4.66 * p_e * Te_prime - (3. / 2.) * U);
+
+	// Real Chi_e = pow(Te, 3. / 2.) * abs(1 / dRdV * Te_prime / Te);
+	HeatFlux += TeDiffusivity * GeometricFactor * Te_prime;
 
 	if (std::isfinite(HeatFlux.val))
 		return HeatFlux;
@@ -386,14 +485,14 @@ Real MirrorPlasma::qe(RealVector u, RealVector q, Real V, Time t) const
  */
 Real MirrorPlasma::Pi(RealVector u, RealVector q, Real V, Time t) const
 {
-	Real n = floor(u(Channel::Density), MinDensity), p_i = (2. / 3.) * u(Channel::IonEnergy);
-	Real Ti = p_i / n;
+	Real n = uToDensity(u(Channel::Density)), p_i = (2. / 3.) * u(Channel::IonEnergy);
+	Real Ti = floor(p_i / n, MinTemp);
 	// dOmega dV = L'/J - J' L / J^2 ; L = angular momentum / J = moment of Inertia
-	Real R = B->R_V(V);
+	Real R = B->R_V(V, 0.0);
 
 	Real J = n * R * R; // Normalisation includes the m_i
-	Real nPrime = q(Channel::Density);
-	Real dRdV = B->dRdV(V);
+	Real nPrime = qToDensityGradient(q(Channel::Density), u(Channel::Density));
+	Real dRdV = B->dRdV(V, 0.0);
 	Real JPrime = R * R * nPrime + 2.0 * dRdV * R * n;
 
 	Real L = u(Channel::AngularMomentum);
@@ -401,18 +500,45 @@ Real MirrorPlasma::Pi(RealVector u, RealVector q, Real V, Time t) const
 	Real dOmegadV = LPrime / J - JPrime * L / (J * J);
 	Real omega = L / J;
 
-	Real Pi_v = IonClassicalAngularMomentumFlux(V, n, Ti, dOmegadV, t) + omega * R * R * Gamma(u, q, V, t);
+	Real Pi_v = IonClassicalAngularMomentumFlux(V, n, Ti, omega, dOmegadV, t) + omega * R * R * Gamma(u, q, V, t);
+
+	// Real lambda_L = abs(LPrime / L);
+
+	// Real x = lambda_L - lowLThreshold;
+
+	// if (lambda_L > lowLThreshold)
+	// 	Pi_v += SmoothTransition(x, transitionLength, lowLDiffusivity) * LPrime / L;
+	Real GeometricFactor = (B->VPrime(V) * R * R);
+	// Real x = sqrt(Ti) * lambda_omega / (lowLThreshold / Plasma->RhoStarRef()) - 1.0;
+	// // Real GeometricFactor = (B->VPrime(V) * R);
+	// // Real lambda_n = 1 / dRdV * abs(nPrime / n);
+
+	// // Real x = sqrt(Ti) * lambda_n / (lowNThreshold / Plasma->RhoStarRef()) - 1.0;
+
+	// Real Chi_L = 1.0; // sqrt(Plasma->mu()) * pow(Ti, 3. / 2.) * lambda_omega;
+	Real Chi_L = 1.0; // sqrt(Plasma->mu()) * pow(Ti, 3. / 2.) * lambda_omega;
+
+	Real rho_omega = abs(sqrt(Ti) * Plasma->RhoStarRef() * dOmegadV / B->dRdV(V, 0.0) / omega);
+	// Real lambda_omega = (B->L_V(V) * (R_Upper - R_Lower)) * abs(dOmegadV);
+	// Real x = lambda_omega * Plasma->RhoStarRef() - lowLThreshold;
+	Real x = (rho_omega - lowLThreshold) / lowLThreshold;
+	if (x >= 0)
+		Pi_v += x * lowLDiffusivity * GeometricFactor * GeometricFactor * Chi_L * (dOmegadV);
+	// if (x > 0)
+	// 	Pi_v += SmoothTransition(x, transitionLength, lowLDiffusivity) * GeometricFactor * GeometricFactor * Chi_L * (R * R * dOmegadV); /// (R * R * omega);
+
 	return Pi_v;
 };
 
 /*
    Returns V' pi_cl_i
  */
-Real MirrorPlasma::IonClassicalAngularMomentumFlux(Real V, Real n, Real Ti, Real dOmegadV, Time t) const
+Real MirrorPlasma::IonClassicalAngularMomentumFlux(Real V, Real n, Real Ti, Real omega, Real dOmegadV, Time t) const
 {
-	Real R = B->R_V(V);
+	Real R = B->R_V(V, 0.0);
 	Real GeometricFactor = (B->VPrime(V) * R * R); // |grad psi| = R B , cancel the B with the B in Omega_e, leaving (V'R)^2
-	Real MomentumFlux = 0.3 * GeometricFactor * GeometricFactor * sqrt(Plasma->IonMass() / (2.0 * ElectronMass)) * (n * Ti / (Plasma->IonCollisionTime(n, Ti))) * dOmegadV;
+	Real MomentumFlux = 0.3 * GeometricFactor * GeometricFactor * sqrt(Plasma->mu() / 2.0) * (n * Ti / (Plasma->IonCollisionTime(n, Ti))) * dOmegadV;
+
 	if (std::isfinite(MomentumFlux.val))
 		return MomentumFlux;
 	else
@@ -421,11 +547,11 @@ Real MirrorPlasma::IonClassicalAngularMomentumFlux(Real V, Real n, Real Ti, Real
 
 Real MirrorPlasma::Sn(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real V, Time t) const
 {
-	Real n = floor(u(Channel::Density), MinDensity), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
+	Real n = uToDensity(u(Channel::Density)), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
 	Real Te = floor(p_e / n, MinTemp);
 	Real Ti = floor(p_i / n, MinTemp);
 
-	Real R = B->R_V(V);
+	Real R = B->R_V(V, 0.0);
 
 	Real J = n * R * R; // Normalisation of the moment of inertia includes the m_i
 	Real omega = u(Channel::AngularMomentum) / J;
@@ -440,13 +566,17 @@ Real MirrorPlasma::Sn(RealVector u, RealVector q, RealVector sigma, RealVector p
 	}
 	Real ParallelLosses = ElectronPastukhovLossRate(V, Xi, n, Te);
 	Real DensitySource;
-	// if (useNeutralModel)
-	// 	DensitySource = Plasma->NormalizingTime() / n0 * (Plasma->IonizationRate(n, NeutralDensity(R, t), R * omega, Te, Ti) - Plasma->ChargeExchangeLossRate(n, NeutralDensity(R, t), R * omega, Ti));
-	// else
-	DensitySource = ParticleSource(R.val, t);
+	if (useNeutralModel)
+		DensitySource = ParticleSource(R.val, t) + Plasma->NormalizingTime() / n0 * (Plasma->IonizationRate(n, NeutralDensity(R, t), R * omega, Te, Ti));
+	else
+		DensitySource = ParticleSource(R.val, t);
+
+	// auto RampupFactor = [&](Time t)
+	// { return SourceRampup > 0 ? (1 - 0.1) * tanh(t / SourceRampup) + 0.1 : 1.0; };
+
 	Real FusionLosses = Plasma->FusionRate(n, p_i);
 
-	Real S = DensitySource - ParallelLosses - FusionLosses;
+	Real S = DensitySource - (ParallelLosses - FusionLosses);
 
 	return S - RelaxSource(u(Channel::Density), n);
 };
@@ -460,27 +590,18 @@ Real MirrorPlasma::Sn(RealVector u, RealVector q, RealVector sigma, RealVector p
  */
 Real MirrorPlasma::Spi(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real V, Time t) const
 {
-	Real n = floor(u(Channel::Density), MinDensity), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
+	Real n = uToDensity(u(Channel::Density)), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
 	Real Te = floor(p_e / n, MinTemp);
 	Real Ti = floor(p_i / n, MinTemp);
 	// pi * d omega / d psi = (V'pi)*(d omega / d V)
-	Real R = B->R_V(V);
+	Real R = B->R_V(V, 0.0);
 	Real J = n * R * R; // Normalisation includes the m_i
 	Real L = u(Channel::AngularMomentum);
-	Real nPrime = q(Channel::Density);
-	Real dRdV = B->dRdV(V);
-	Real JPrime = R * R * nPrime + 2.0 * dRdV * R * n;
-	Real LPrime = q(Channel::AngularMomentum);
-	Real dOmegadV = LPrime / J - JPrime * L / (J * J);
 	Real omega = L / J;
 
-	Real ViscousHeating = IonClassicalAngularMomentumFlux(V, n, Ti, dOmegadV, t) * dOmegadV;
-
 	// Use this version since we have no parallel flux in a square well
-	Real PotentialHeating = -Gamma(u, q, V, t) * (omega * omega / (2 * pi * a) - dphidV(u, q, phi, V));
+	// Real PotentialHeating = IonPotentialHeating(u, q, phi, V); //-G * (omega * omega / (2 * pi * a) - dphidV(u, q, phi, V));
 	Real EnergyExchange = Plasma->IonElectronEnergyExchange(n, p_e, p_i, V, t);
-
-	Real Heating = ViscousHeating + PotentialHeating + EnergyExchange + UniformHeatSource;
 
 	Real Xi;
 	if (useAmbipolarPhi)
@@ -495,33 +616,38 @@ Real MirrorPlasma::Spi(RealVector u, RealVector q, RealVector sigma, RealVector 
 	Real ParallelLosses = ParticleEnergy * IonPastukhovLossRate(V, Xi, n, Ti);
 
 	Real ChargeExchangeHeatLosses = 0;
-	if (useNeutralModel)
-		ChargeExchangeHeatLosses = Ti * Plasma->NormalizingTime() / n0 * Plasma->ChargeExchangeLossRate(n, NeutralDensity(R, t), R * omega, Ti);
+	Real ParticleSourceHeating = 0.0;
+	// if (useNeutralModel)
+	// {
+	ChargeExchangeHeatLosses = Ti * Plasma->NormalizingTime() / n0 * Plasma->ChargeExchangeLossRate(n, NeutralDensity(R, t), R * omega, Ti);
+	// 	// ParticleSourceHeating = 0.5 * omega * omega * R * R * (ParticleSource(R.val, t) + Plasma->NormalizingTime() / n0 * (Plasma->IonizationRate(n, NeutralDensity(R, t), R * omega, Te, Ti) - Plasma->ChargeExchangeLossRate(n, NeutralDensity(R, t), R * omega, Ti)));
+	// }
+	auto RampupFactor = [&](Time t)
+	{ return SourceRampup > 0 ? (1 - 0.1) * tanh(t / SourceRampup) + 0.1 : 1.0; };
 
-	Real S = Heating - ParallelLosses - ChargeExchangeHeatLosses;
+	Real Heating = RampupFactor(t) * (ViscousHeating(u, q, V, t) + IonPotentialHeating(u, q, phi, V)) + EnergyExchange;
+	Real S = Heating - (ParallelLosses - ChargeExchangeHeatLosses + ParticleSourceHeating);
 
-	return S + RelaxSource(u(Channel::Density) * Te, p_e) + RelaxSource(n * floor(Te, MinTemp), p_e);
+	return S + RelaxSource(n * Ti, p_i); //+ RelaxSource(u(Channel::Density) * Te, p_e) + RelaxSource(n * floor(Te, MinTemp), p_e);
 }
 
 Real MirrorPlasma::Spe(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real V, Time t) const
 {
-	Real n = floor(u(Channel::Density), MinDensity), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
+	Real n = uToDensity(u(Channel::Density)), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
 	Real Te = floor(p_e / n, MinTemp);
 	Real Ti = floor(p_i / n, MinTemp);
 	Real EnergyExchange = -Plasma->IonElectronEnergyExchange(n, p_e, p_i, V, t);
 
-	double MirrorRatio = B->MirrorRatio(V);
+	Real MirrorRatio = B->MirrorRatio(V, 0.0);
 	Real AlphaHeating = sqrt(1 - 1 / MirrorRatio) * Plasma->TotalAlphaPower(n, p_i);
 
-	Real R = B->R_V(V);
+	Real R = B->R_V(V, 0.0);
 
 	Real J = n * R * R; // Normalisation includes the m_i
 	Real L = u(Channel::AngularMomentum);
 	Real omega = L / J;
 
-	Real PotentialHeating = -Gamma(u, q, V, t) * dphidV(u, q, phi, V); //(dphi1dV(u, q, phi(0), V));
-
-	Real Heating = EnergyExchange + AlphaHeating + PotentialHeating;
+	// Real PotentialHeating = //ElectronPotentialHeating(u, q, phi, V); //(dphi1dV(u, q, phi(0), V));
 
 	Real Xi;
 	if (useAmbipolarPhi)
@@ -532,25 +658,28 @@ Real MirrorPlasma::Spe(RealVector u, RealVector q, RealVector sigma, RealVector 
 	{
 		Xi = CentrifugalPotential(V, omega, Ti, Te) + AmbipolarPhi(V, n, Ti, Te) / 2.0;
 	}
-
+	auto RampupFactor = [&](Time t)
+	{ return SourceRampup > 0 ? (1 - 0.1) * tanh(t / SourceRampup) + 0.1 : 1.0; };
+	Real PotentialHeating = 0.0; // Te * Xi * ParticleSource(R.val, t); // Sn(u, q, sigma, phi, V, t);
+	Real Heating = EnergyExchange + AlphaHeating + PotentialHeating;
 	// Parallel Losses
 	Real ParticleEnergy = Te * (1.0 + Xi);
 	Real ParallelLosses = ParticleEnergy * ElectronPastukhovLossRate(V, Xi, n, Te);
 
 	Real RadiationLosses = Plasma->BremsstrahlungLosses(n, p_e) + Plasma->CyclotronLosses(V, n, Te);
 
-	Real S = Heating - ParallelLosses - RadiationLosses;
+	Real S = Heating - (ParallelLosses + RadiationLosses);
 
-	return S + RelaxSource(u(Channel::Density) * Te, p_e) + RelaxSource(n * floor(Te, MinTemp), p_e);
+	return RampupFactor(t) * S; //+ RelaxSource(u(Channel::Density) * Te, p_e) + RelaxSource(n * floor(Te, MinTemp), p_e);
 };
 
 // Source of angular momentum -- this is just imposed J x B torque (we can account for the particle source being a sink later).
 Real MirrorPlasma::Somega(RealVector u, RealVector q, RealVector sigma, RealVector phi, RealVector Scalars, Real V, Time t) const
 {
 	// J x B torque
-	Real R = B->R_V(V);
+	Real R = B->R_V(V, 0.0);
 
-	Real n = floor(u(Channel::Density), MinDensity), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
+	Real n = uToDensity(u(Channel::Density)), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
 
 	Real Te = floor(p_e / n, MinTemp);
 	Real Ti = floor(p_i / n, MinTemp);
@@ -559,7 +688,7 @@ Real MirrorPlasma::Somega(RealVector u, RealVector q, RealVector sigma, RealVect
 	if (useConstantVoltage)
 		RadialCurrent = -Scalars(Scalar::Current);
 	else
-		RadialCurrent = IRadial / I0;
+		RadialCurrent = IRadial;
 
 	Real JxB = -RadialCurrent / B->VPrime(V); //-jRadial * R * B->Bz_R(R);
 	Real L = u(Channel::AngularMomentum);
@@ -579,12 +708,30 @@ Real MirrorPlasma::Somega(RealVector u, RealVector q, RealVector sigma, RealVect
 	Real AngularMomentumPerParticle = L / n;
 	Real ParallelLosses = AngularMomentumPerParticle * IonPastukhovLossRate(V, Xi, n, Te);
 
+	auto RampupFactor = [&](Time t)
+	{ return SourceRampup > 0 ? (1 - 0.005) * tanh(t / SourceRampup) + 0.005 : 1.0; };
 	Real ChargeExchangeMomentumLosses = 0;
-	if (useNeutralModel)
-		ChargeExchangeMomentumLosses = AngularMomentumPerParticle * Plasma->NormalizingTime() / n0 * Plasma->ChargeExchangeLossRate(n, NeutralDensity(R, t), R * omega, Ti);
+	// if (useNeutralModel)
+	ChargeExchangeMomentumLosses = AngularMomentumPerParticle * Plasma->NormalizingTime() / n0 * Plasma->ChargeExchangeLossRate(n, NeutralDensity(R, t), R * omega, Ti);
 
-	return JxB - ParallelLosses - ChargeExchangeMomentumLosses + RelaxSource(omega * R * R * u(Channel::Density), L);
+	return JxB - RampupFactor(t) * ((ParallelLosses + ChargeExchangeMomentumLosses)); //+ RelaxSource(omega * R * R * u(Channel::Density), L);
 };
+
+Real MirrorPlasma::uToDensity(Real un) const
+{
+	if (evolveLogDensity)
+		return exp(un);
+	else
+		return floor(un, MinDensity);
+}
+
+Real MirrorPlasma::qToDensityGradient(Real qn, Real un) const
+{
+	if (evolveLogDensity)
+		return uToDensity(un) * qn;
+	else
+		return qn;
+}
 
 // Use the chain rule to calculate dphi0/dV, making sure to set gradient values correctly
 Real MirrorPlasma::dphi0dV(RealVector u, RealVector q, Real V) const
@@ -632,33 +779,40 @@ Real MirrorPlasma::dphidV(RealVector u, RealVector q, RealVector phi, Real V) co
 
 inline Real MirrorPlasma::AmbipolarPhi(Real V, Real n, Real Ti, Real Te) const
 {
-	double R = B->MirrorRatio(V);
+	Real R = B->MirrorRatio(V, 0.0);
 	double Sigma = 1.0;
-	return log((Plasma->ElectronCollisionTime(n, Te) / Plasma->IonCollisionTime(n, Ti)) * (log(R * Sigma) / (Sigma * ::log(R))));
+	return log((Plasma->ElectronCollisionTime(n, Te) / Plasma->IonCollisionTime(n, Ti)) * (log(R * Sigma) / (Sigma * log(R))));
 }
 
 Real MirrorPlasma::ParticleSource(double R, double t) const
 {
-	// double shape = 1 / ParticleSourceWidth;
-	// return (exp(-shape * (R - R_Lower) * (R - R_Lower)) + exp(-shape * (R - R_Upper) * (R - R_Upper)));
+
+	// // return (exp(-shape * (R - R_Lower) * (R - R_Lower)) + exp(-shape * (R - R_Upper) * (R - R_Upper)));
 	Real S = LowerParticleSourceStrength * exp(-(R - R_Lower) / ParticleSourceWidth) + UpperParticleSourceStrength * exp((R - R_Upper) / ParticleSourceWidth);
+	// // return LowerParticleSourceStrength; //* exp(-t / 5e-2);
+
+	// return
+	// return LowerParticleSourceStrength +
+	// 	   UpperParticleSourceStrength * exp(-shape * (R - ParticleSourceCenter) * (R - ParticleSourceCenter));
 	return S;
-	// return exp(-shape * (R - ParticleSourceCenter) * (R - ParticleSourceCenter));
+
 	//   return ParticleSourceStrength;
 };
 
 Real MirrorPlasma::ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real Te) const
 {
-	double MirrorRatio = B->MirrorRatio(V);
+	Real MirrorRatio = B->MirrorRatio(V, 0.0);
 	Real tau_ee = Plasma->ElectronCollisionTime(n, Te);
 	double Sigma = 1 + Z_eff; // Include collisions with ions and impurities as well as self-collisions
 	Real PastukhovFactor = (exp(-Xi_e) / Xi_e);
 
 	// If the loss becomes a gain, flatten at zero
-	if (PastukhovFactor.val < 0.0)
+	if (PastukhovFactor < 0.0)
 		return 0.0;
-	double Normalization = (Plasma->IonMass() / ElectronMass) * (1.0 / (Plasma->RhoStarRef() * Plasma->RhoStarRef()));
+	double Normalization = Plasma->mu() * (1.0 / (Plasma->RhoStarRef() * Plasma->RhoStarRef()));
 	Real LossRate = (M_2_SQRTPI / tau_ee) * Normalization * Sigma * n * (1.0 / log(MirrorRatio * Sigma)) * PastukhovFactor;
+	// if (Xi_e < 1.0)
+	// 	LossRate = Plasma->NormalizingTime() * n * sqrt(Te * T0 / Plasma->IonMass()) / B->L_V(V);
 	return LossRate;
 }
 
@@ -671,17 +825,55 @@ Real MirrorPlasma::IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) cons
 {
 	// For consistency, the integral in Pastukhov's paper is 1.0, as the
 	// entire theory is an expansion in M^2 >> 1
-	double MirrorRatio = B->MirrorRatio(V);
+	Real MirrorRatio = B->MirrorRatio(V, 0.0);
 	Real tau_ii = Plasma->IonCollisionTime(n, Ti);
 	double Sigma = 1.0; // Just ion-ion collisions
 	Real PastukhovFactor = (exp(-Xi_i) / Xi_i);
 
 	// If the loss becomes a gain, flatten at zero
-	if (PastukhovFactor.val < 0.0)
+	if (PastukhovFactor < 0.0)
 		return 0.0;
 
-	double Normalization = sqrt(Plasma->IonMass() / ElectronMass) * (1.0 / (Plasma->RhoStarRef() * Plasma->RhoStarRef()));
+	double Normalization = sqrt(Plasma->mu()) * (1.0 / (Plasma->RhoStarRef() * Plasma->RhoStarRef()));
 	Real LossRate = (M_2_SQRTPI / tau_ii) * Normalization * Sigma * n * (1.0 / log(MirrorRatio * Sigma)) * PastukhovFactor;
-
+	// if (Xi_i < 1.0)
+	// 	LossRate = Plasma->NormalizingTime() * n * sqrt(Ti * T0 / Plasma->IonMass()) / B->L_V(V);
 	return LossRate;
+}
+
+Real MirrorPlasma::ViscousHeating(RealVector u, RealVector q, Real V, Time t) const
+{
+	Real n = uToDensity(u(Channel::Density)); //, p_i = (2. / 3.) * u(Channel::IonEnergy);
+	// Real Ti = floor(p_i / n, MinTemp);
+	//  pi * d omega / d psi = (V'pi)*(d omega / d V)
+	Real R = B->R_V(V, 0.0);
+	Real J = n * R * R; // Normalisation includes the m_i
+	Real L = u(Channel::AngularMomentum);
+	Real nPrime = qToDensityGradient(q(Channel::Density), u(Channel::Density));
+	Real dRdV = B->dRdV(V, 0.0);
+	Real JPrime = R * R * nPrime + 2.0 * dRdV * R * n;
+	Real LPrime = q(Channel::AngularMomentum);
+	Real dOmegadV = LPrime / J - JPrime * L / (J * J);
+	// Real omega = L / J;
+
+	Real ViscousHeating = Pi(u, q, V, t) * dOmegadV; //(IonClassicalAngularMomentumFlux(V, n, Ti, omega, dOmegadV, t) + omega * R * R * Gamma(u, q, V, t)) * dOmegadV;
+
+	return ViscousHeating;
+}
+
+Real MirrorPlasma::IonPotentialHeating(RealVector u, RealVector q, RealVector phi, Real V) const
+{
+	Real n = floor(u(Channel::Density), MinDensity);
+
+	Real R = B->R_V(V, 0.0);
+
+	Real J = n * R * R; // Normalisation includes the m_i
+	Real L = u(Channel::AngularMomentum);
+	Real omega = L / J;
+	return -0.5 * omega * omega * R * R * Sn(u, q, u, phi, V, 0.0); //-Gamma(u, q, V, 0.0) * (omega * omega / (2 * pi * a) - dphidV(u, q, phi, V));
+}
+
+Real MirrorPlasma::ElectronPotentialHeating(RealVector u, RealVector q, RealVector phi, Real V) const
+{
+	return -Gamma(u, q, V, 0.0) * dphidV(u, q, phi, V);
 }

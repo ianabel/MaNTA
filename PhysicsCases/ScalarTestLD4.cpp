@@ -94,7 +94,6 @@ Value ScalarTestLD4::ScaledSource(Position x) const
 
 Value ScalarTestLD4::Sources(Index i, const State &s, Position x, Time)
 {
-	double J = 0;
     if (i == 0) {
         double J = s.Scalars[1];
         return J * ScaledSource(x) + 0.5 * std::cos(std::numbers::pi * x);

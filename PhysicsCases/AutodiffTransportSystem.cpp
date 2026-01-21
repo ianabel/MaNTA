@@ -140,6 +140,47 @@ void AutodiffTransportSystem::dSources_dScalars(Index i, Values &grad, const Sta
 					wrt(Scalar), at(u, q, sigma, phi, Scalar, x, t));
 }
 
+void AutodiffTransportSystem::dSigmaFn_dp(Index i, Index pIndex, Value &grad, const State &s, Position x, Time t)
+{
+	RealVector u(s.Variable);
+	RealVector q(s.Derivative);
+	// make sure all gradients are zero
+	Real p = getPval(pIndex);
+
+	grad = autodiff::derivative(
+		[this, i, pIndex](Real p, RealVector uD, RealVector qD, Position X, Time T)
+		{
+			setPval(pIndex, p);
+			return Flux(i, uD, qD, X, T);
+		},
+		wrt(p), at(p, u, q, x, t));
+
+	clearGradients();
+}
+
+void AutodiffTransportSystem::dSources_dp(Index i, Index pIndex, Value &grad, const State &s, Position x, Time t)
+{
+	RealVector u(s.Variable);
+	RealVector q(s.Derivative);
+	RealVector sigma(s.Flux);
+	RealVector phi(s.Aux);
+	RealVector Scalar(s.Scalars);
+
+	Real p = getPval(pIndex);
+
+	grad = autodiff::derivative(
+		[this, i, pIndex](Real p, RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)
+		{
+			setPval(pIndex, p);
+			Real S = Source(i, uD, qD, sD, phiD, ScalarD, X, T);
+			return S;
+		},
+		wrt(p), at(p, u, q, sigma, phi, Scalar, x, t));
+
+	// make sure all gradients are zero
+	clearGradients();
+}
+
 Value AutodiffTransportSystem::AuxG(Index i, const State &s, Position x, Time t)
 {
 	RealVector u(s.Variable);
@@ -264,8 +305,6 @@ void AutodiffTransportSystem::LoadDataToSpline(const std::string &file)
 
 	std::vector<size_t> start = {nTime - 1, 0};
 	std::vector<size_t> count = {1, nPoints};
-
-	double xmid = 0.5 * (x.back() + x.front());
 
 	for (Index i = 0; i < nVars; ++i)
 	{

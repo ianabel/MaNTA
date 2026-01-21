@@ -1,66 +1,74 @@
 import MaNTA
 import numpy as np
+import sys
 
 class PythonLinearDiffusion(MaNTA.TransportSystem):
-    def __init__(self, config):
-        # Config should be a dict
+    def __init__(self, config, grid):
+        MaNTA.TransportSystem.__init__(self)
         self.nVars = 1
-        if not ("chi0" in config) and ("kappa" in config) and ("gamma" in config):
-            print("For the stuff transport model, you must specify chi0, kappa, and gamma")
-            sys.exit(1)
-
+        # Really should sanitize input here, c.f.
+        # if not ("chi0" in config) and ("kappa" in config) and ("gamma" in config):
+        #     print("For the stuff transport model, you must specify chi0, kappa, and gamma")
+        #     sys.exit(1)
+        self.isUpperDirichlet  = True
+        self.isLowerDirichlet  = True
 
         self.Centre = 0.0
         self.InitialWidth = 0.2
         self.InitialHeight = 1.0
-        self.kappa = config["kappa"]
-        self.t0 = InitialWidth * InitialWidth / ( 4.0 * kappa );
-        print("t0 = ",t0)
+        self.kappa = 1.0
+        self.t0 = self.InitialWidth * self.InitialWidth / ( 4.0 * self.kappa )
 
 # This problem uses VN lower boundary and dirichlet upper boundary
 # assumed to be on [0,1] in normalised flux
     def LowerBoundary(self, index, t):
-        return self.ExactSolution( 0.0, t )
-    def isLowerBoundaryDirichlet(self, index):
-        return True
+        return 0.0
     def UpperBoundary(self, index, t):
-        return self.ExactSolution( 1.0, t )
-    def isUpperBoundaryDirichlet(self, index):
-        return True
+        return 0.0
 
-    def SigmaFn( self, index, uVals, qVals, x, t ):
-        tprim = qVals[0]
+    def SigmaFn( self, index, state, x, t ):
+        tprim = state["Derivative"][0]
         return self.kappa * tprim
 
-    def Sources( self, index, u, q, sigma, x, t ):
+    def Sources( self, index, state, x, t ):
         return 0
 
-    def dSigmaFn_dq( self, index, out, u, q, x, t):
+    def dSigmaFn_dq( self, index, state, x, t):
+        out = np.zeros(shape=(self.nVars,))
         out[0] = self.kappa
-    def dSigmaFn_du( self, index, out, u, q, x, t):
-        out[0] = 0.0
+        return out
+    
+    def dSigmaFn_du( self, index, state, x, t):
+        out = np.zeros(shape=(self.nVars,))
+        return out
         
-    def dSources_du( self, index, out, q, u, x, t ):
-        out[0] = 0.0
+    def dSources_du( self, index, state, x, t ):
+        out = np.zeros(shape=(self.nVars,))
+        return out
 
-    def dSources_dq( self, index, out, q, u, x, t ):
-        out[0] = 0.0
+    def dSources_dq( self, index, state, x, t ):
+        out = np.zeros(shape=(self.nVars,))
+        return out
 
-    def dSources_dsigma( self, index, out, q, u, x, t ):
-        out[0] = 0.0
+    def dSources_dsigma( self, index, state, x, t ):
+        out = np.zeros(shape=(self.nVars,))
+        return out
 
     def InitialValue( self, index, x ):
-        y = ( x - self.Centre )/self.InitialWidth
-        return self.InitialHeight * np.exp( -y*y )
+        alpha = 1 / self.InitialWidth
+        y = (x - self.Centre)
+        return self.InitialHeight * np.exp(-alpha * y * y)
 
     def InitialDerivative( self, index, x ):
-        y = ( x - self.Centre )/self.InitialWidth
-        return self.InitialHeight * ( -2.0 * y ) * np.exp( -y*y ) * ( 1.0/self.InitialWidth )
+        y = (x - self.Centre)
+        alpha = 1 / self.InitialWidth
+        return -self.InitialHeight * (2.0 * y) * np.exp(-alpha * y * y) * alpha
 
     def ExactSolution( self, x, t ):
-        EtaSquared = ( x - Centre )*( x - Centre )/( 4.0 * kappa * ( t + t0 ) );
-        return self.InitialHeight * np.sqrt( self.t0/( t + self.t0 ) ) * np.exp( -EtaSquared );
+        EtaSquared = ( x - self.Centre )*( x - self.Centre )/( 4.0 * self.kappa * ( t + self.t0 ) )
+        return self.InitialHeight * np.sqrt( self.t0/( t + self.t0 ) ) * np.exp( -EtaSquared )
+
 
 def registerTransportSystems():
-    MaNTA.registerPhysicsCase( "PythonLinearDiffusion", PythonLinearDiffusion.__init__ )
+    MaNTA.registerPhysicsCase("PythonLinearDiffusion", PythonLinearDiffusion)
 

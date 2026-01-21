@@ -8,11 +8,12 @@ export
 
 include Makefile.config
 
-SOURCES = MaNTA.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp Solver.cpp Matrices.cpp DGStatic.cpp PhysicsCases.cpp NetCDFIO.cpp
+SOURCES = MaNTA.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp Solver.cpp Matrices.cpp DGStatic.cpp PhysicsCases.cpp NetCDFIO.cpp AdjointVectors.cpp 
 
 SOLVER = MaNTA
 
-HEADERS = gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp SystemSolver.hpp ErrorChecker.hpp ErrorTester.hpp TransportSystem.hpp PhysicsCases.hpp DGSoln.hpp Basis.hpp
+HEADERS = gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp SystemSolver.hpp ErrorChecker.hpp ErrorTester.hpp TransportSystem.hpp PhysicsCases.hpp DGSoln.hpp Basis.hpp AdjointProblem.hpp
+
 OBJECTS = $(patsubst %.cpp,%.o,$(SOURCES))
 
 PHYSICS_SOURCES = $(wildcard PhysicsCases/*.cpp PhysicsCases/MirrorPlasma/*.cpp)
@@ -32,17 +33,17 @@ Tests/UnitTests/UnitTests: $(SOLVER)
 test: $(SOLVER) Tests/UnitTests/UnitTests
 	Tests/UnitTests/UnitTests
 
-PYTHON_NAME=MaNTA
-PYTHON_OUTPUT=$(PYTHON_NAME)$(shell python3-config --extension-suffix)
+PYTHON_NAME=python/MaNTA$(shell python3-config --extension-suffix)
+PYTHON_OUTPUT=$(PYTHON_NAME) 
 
 python: $(PYTHON_OUTPUT)
 
 $(PYTHON_OUTPUT): $(OBJECTS) $(PHYSICS_OBJECTS) Python.cpp PyTransportSystem.hpp
-	$(CXX) $(CXXFLAGS) $(shell python3 -m pybind11 --includes) -shared -fPIC -o $@ Python.cpp $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $$(python3-config --includes) -I$(realpath extern/pybind11/include) -shared -fPIC  -fvisibility=hidden -o $@ Python.cpp $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
 
 clean:
 	$(MAKE) -C Tests/UnitTests clean
-	rm -f $(SOLVER) main.o $(OBJECTS) $(ERROBJECTS) $(TESTOBJECTS) $(PHYSICS_OBJECTS) $(PYTHON_OUTPUT)
+	rm -f $(SOLVER) main.o $(OBJECTS) $(ERROBJECTS) $(TESTOBJECTS) $(PHYSICS_OBJECTS) $(PYTHON_NAME)
 
 regression_tests: $(SOLVER)
 	$(MAKE) -C Tests/RegressionTests

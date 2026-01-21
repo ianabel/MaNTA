@@ -5,6 +5,7 @@
 #include "AutodiffTransportSystem.hpp"
 // #include "Constants.hpp"
 #include "MirrorPlasma/PlasmaConstants.hpp"
+#include "MirrorPlasma/MirrorPlasmaDiagnostics.hpp"
 
 #include <boost/math/quadrature/gauss_kronrod.hpp>
 
@@ -82,10 +83,13 @@ private:
 
 	// Underlying functions
 
+	Real uToDensity(Real) const;
+	Real qToDensityGradient(Real, Real) const;
+
 	Value InitialDensityTimeDerivative(RealVector u, RealVector q, Position V) const;
 	Value InitialCurrent(Time t) const;
 
-	Real IonClassicalAngularMomentumFlux(Real V, Real n, Real Ti, Real dOmegadV, Time t) const;
+	Real IonClassicalAngularMomentumFlux(Real V, Real n, Real Ti, Real omega, Real dOmegadV, Time t) const;
 
 	Real ParticleSource(double R, double t) const;
 	Real NeutralDensity(Real R, Time t) const;
@@ -93,6 +97,9 @@ private:
 	Real ElectronPastukhovLossRate(Real V, Real Xi_e, Real n, Real Te) const;
 	Real IonPastukhovLossRate(Real V, Real Xi_i, Real n, Real Ti) const;
 
+	Real ViscousHeating(RealVector, RealVector, Real, Time) const;
+	Real IonPotentialHeating(RealVector, RealVector, RealVector, Real) const;
+	Real ElectronPotentialHeating(RealVector, RealVector, RealVector, Real) const;
 	// Template function to avoid annoying dual vs. dual2nd behavior
 	template <typename T>
 	T phi0(Eigen::Matrix<T, -1, 1, 0, -1, 1> u, T V) const
@@ -101,10 +108,10 @@ private:
 
 		T Te = p_e / n, Ti = p_i / n;
 		T L = u(Channel::AngularMomentum);
-		T R = B->R_V(V);
+		T R = B->R_V(V, 0.0);
 		T J = n * R * R; // Normalisation of the moment of inertia includes the m_i
 		T omega = L / J;
-		T phi = 0.5 / (1 / Ti + 1 / Te) * omega * omega * R * R / Ti * (1 / B->MirrorRatio(V) - 1);
+		T phi = 0.5 / (1 / Ti + 1 / Te) * omega * omega * R * R / Ti * (1 / B->MirrorRatio(V, 0.0) - 1);
 
 		return phi;
 	}
@@ -116,8 +123,8 @@ private:
 	template <typename T>
 	T CentrifugalPotential(T V, T omega, T Ti, T Te) const
 	{
-		double MirrorRatio = B->MirrorRatio(V);
-		T R = B->R_V(V);
+		T R = B->R_V(V, 0.0);
+		T MirrorRatio = B->MirrorRatio(V, 0.0);
 		T tau = Ti / Te;
 		T MachNumber = omega * R / sqrt(Te); // omega is normalised to c_s0 / a
 		T Potential = (1.0 / (1.0 + tau)) * (1.0 - 1.0 / MirrorRatio) * MachNumber * MachNumber / 2.0;
@@ -149,6 +156,18 @@ private:
 		return RelaxFactor * (A - B);
 	};
 
+	// Transitions smoothly from 0 to yf in x = L
+	template <typename T>
+	T SmoothTransition(T x, double L, double yf) const
+	{
+		T xl = yf / 2.0 * (1 - cos(M_PI * x / L));
+		T xr = yf;
+
+		return x < L ? xl : xr;
+	}
+
+	Value TotalCurrent(DGSoln const &y, Time t);
+
 	template <typename T1, typename T2>
 	double Voltage(T1 &L_phi, T2 &n);
 
@@ -165,8 +184,11 @@ private:
 	constexpr static double a = 1.0;  // Reference length in m
 	constexpr static double Z_eff = 3.0;
 
+	//
 	std::unique_ptr<PlasmaConstants> Plasma;
-	std::shared_ptr<StraightMagneticField> B;
+	std::shared_ptr<MagneticField> B;
+
+	bool evolveLogDensity;
 
 	// Desired voltage to keep constant
 	double V0;
@@ -207,6 +229,15 @@ private:
 	std::vector<bool> lowerBoundaryConditions;
 
 	double nEdge, TeEdge, TiEdge, MUpper, MLower, MEdge;
+
+	double lowNDiffusivity, lowNThreshold;
+	double lowPDiffusivity, lowPThreshold;
+	double lowLDiffusivity, lowLThreshold;
+
+	double TeDiffusivity;
+
+	double transitionLength;
+
 	double InitialPeakDensity, InitialPeakTe, InitialPeakTi, InitialPeakMachNumber;
 	double nNeutrals;
 	bool useNeutralModel;
@@ -218,6 +249,8 @@ private:
 
 	double LowerParticleSourceStrength, UpperParticleSourceStrength, ParticleSourceCenter,
 		ParticleSourceWidth, UniformHeatSource;
+
+	double SourceRampup;
 
 	double IRadial, I0, CurrentDecay;
 

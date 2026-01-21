@@ -20,6 +20,7 @@ public:
 	void Open(const std::string &file);
 	void Close();
 	void AddScalarVariable(std::string name, std::string description, std::string units, double value);
+	void AddScalarVariable(std::string groupName, std::string name, std::string description, std::string units, double value);
 	void AddTextVariable(std::string name, std::string description, std::string units, std::string text);
 
 	void SetOutputGrid(std::vector<double> const &gridpoints);
@@ -59,6 +60,8 @@ public:
 	}
 
 	void AddGroup(std::string name, std::string description);
+
+	netCDF::NcGroup CreateGroup(std::string name, std::string description);
 
 	size_t AddTimeSlice(double T);
 
