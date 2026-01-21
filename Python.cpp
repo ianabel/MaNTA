@@ -93,15 +93,15 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 	m.def("run", runManta, "Runs the MaNTA suite using given configuration file");
 	m.def("registerPhysicsCase", &PhysicsCases::RegisterPhysicsCase, "Register a Physics Case");
 
-    // List all interfaces of the main TransportSystem class which is what has to be derived from in python
+	// List all interfaces of the main TransportSystem class which is what has to be derived from in python
 	py::class_<TransportSystem, PyTransportSystem, py::smart_holder>(m, "TransportSystem")
 		.def(py::init<>())
 		.def("LowerBoundary", &TransportSystem::LowerBoundary)
 		.def("UpperBoundary", &TransportSystem::UpperBoundary)
 		.def("isLowerBoundaryDirichlet", &TransportSystem::isLowerBoundaryDirichlet)
 		.def("isUpperBoundaryDirichlet", &TransportSystem::isUpperBoundaryDirichlet)
-		.def("SigmaFn", &TransportSystem::SigmaFn)
-		.def("Sources", &TransportSystem::Sources)
+		.def("SigmaFn", py::overload_cast<Index, const State &, Position, Time>(&TransportSystem::SigmaFn))
+		.def("Sources", py::overload_cast<Index, const State &, Position, Time>(&TransportSystem::Sources))
 		.def("dSigmaFn_du", &TransportSystem::dSigmaFn_du)
 		.def("dSigmaFn_dq", &TransportSystem::dSigmaFn_dq)
 		.def("dSources_du", &TransportSystem::dSources_du)
