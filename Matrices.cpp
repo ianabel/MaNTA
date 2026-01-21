@@ -72,8 +72,8 @@ void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX
 
 			State Y_plus = Y.eval( y_plus ), Y_minus = Y.eval( y_minus );
 
-			( problem->*dX_dZ )( XVar, dX_dZ_vals1, Y_plus, y_plus, 0.0 );
-			( problem->*dX_dZ )( XVar, dX_dZ_vals2, Y_minus, y_minus, 0.0 );
+			( problem->*dX_dZ )( XVar, dX_dZ_vals1, Y_plus, y_plus, jt );
+			( problem->*dX_dZ )( XVar, dX_dZ_vals2, Y_minus, y_minus, jt );
 
 			for(Index ZVar = 0; ZVar < nVars; ZVar++)
 			{

@@ -11,13 +11,14 @@
 #include "TransportSystem.hpp"
 #include "gridStructures.hpp"
 
-template<typename T> TransportSystem* createTransportSystem( toml::value const& config, Grid const& grid ) { return new T( config, grid ); }
+template<typename T> std::unique_ptr<TransportSystem> createTransportSystem( toml::value const& config, Grid const& grid ) { return std::make_unique<T>( config, grid ); }
 
 struct PhysicsCases {
 	public:
-		typedef std::map<std::string, TransportSystem*(*)( toml::value const&, Grid const & )> map_type;
+		typedef std::function< std::unique_ptr<TransportSystem>( toml::value const&,  Grid const& ) > function_type;
+		typedef std::map<std::string, function_type> map_type;
 
-		static TransportSystem* InstantiateProblem(std::string const& s, toml::value const& config, Grid const& grid ) {
+		static std::unique_ptr<TransportSystem> InstantiateProblem(std::string const& s, toml::value const& config, Grid const& grid ) {
 			map_type::iterator it = getMap()->find(s);
 			if(it == getMap()->end())
 				return nullptr;
@@ -25,7 +26,7 @@ struct PhysicsCases {
 		}
 
 		// To register explicitly
-		static void RegisterPhysicsCase( std::string const& s, TransportSystem*(*creator)( toml::value const& config, Grid const& grid ) ) {
+		static void RegisterPhysicsCase( std::string const& s, function_type creator ) {
 			getMap()->insert( std::make_pair( s, creator ) );
 		}
 

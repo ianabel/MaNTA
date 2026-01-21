@@ -19,6 +19,7 @@
 #include "TransportSystem.hpp"
 #include "DGSoln.hpp"
 #include "NetCDFIO.hpp"
+#include "AdjointProblem.hpp"
 
 #ifdef TEST
 namespace system_solver_test_suite
@@ -26,13 +27,18 @@ namespace system_solver_test_suite
     struct systemsolver_init_tests;
     struct systemsolver_multichannel_init_tests;
     struct systemsolver_matrix_tests;
+    
 };
+namespace adjoint_test_suite
+{
+    struct systemsolver_adjoint_tests;
+}
 #endif
 
 class SystemSolver
 {
     public:
-        SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *pProblem);
+        SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *pProblem, AdjointProblem *adjointProblem = nullptr);
         SystemSolver(const SystemSolver &) = delete; // Best practice to define this as deleted. We can't copy this class.
         ~SystemSolver();
 
@@ -124,6 +130,15 @@ class SystemSolver
         void setJacEvalY( N_Vector, N_Vector );
         int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
 
+        // Adjoints
+        void setSolveAdjoint(bool a) { solveAdjoint = a; }
+
+        void initializeMatricesForAdjointSolve();
+
+        void solveAdjointState(Index i);
+
+        void computeAdjointGradients();
+
     private:
         Grid grid;
         unsigned int k;		   // polynomial degree per cell
@@ -132,11 +147,14 @@ class SystemSolver
         unsigned int nScalars; // Any global scalars
         unsigned int nAux;	   // Any auxiliary constraints
 
+        unsigned int nP;       // Number of parameters to compute for adjoint senstivity problem 
+
         using EigenCellwiseSolver = Eigen::PartialPivLU<Matrix>;
         using EigenGlobalSolver = Eigen::FullPivLU<Matrix>;
         std::vector<Matrix> XMats;
         std::vector<Matrix> MBlocks;
         std::vector<Matrix> CEBlocks;
+        std::vector<Matrix> CGBlocks;
         Matrix K_global;
         Vector L_global;
         Matrix H_global_mat;
@@ -144,6 +162,11 @@ class SystemSolver
         std::vector<Vector> RF_cellwise;
         std::vector<Matrix> CG_cellwise;
         std::vector<Matrix> A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise;
+
+        // Adjoint vectors
+        std::vector<Vector> G_y;
+        Vector adjoint_lambdas;
+        std::vector<Vector> adjoint_squ;
 
         SUNContext ctx;
         N_Vector *v, *w;
@@ -162,6 +185,8 @@ class SystemSolver
         DGSoln yJac; // memory owned by us
         DGSoln dydtJac; // memory owned by us
 
+        Vector G_p; // gradients computed by adjoint state method
+
         void NLqMat(Matrix &, DGSoln const &, Interval);
         void NLuMat(Matrix &, DGSoln const &, Interval);
         void NLphiMat(Matrix &, DGSoln const &, Interval);
@@ -178,6 +203,14 @@ class SystemSolver
 
         void dAux_Mat(Eigen::Ref<Matrix>, DGSoln const &, Interval);
 
+        void DerivativeSubVector(Index, Vector &, void (AdjointProblem::*dX_dZ)(Index, Values &, const State &, Position), DGSoln const &Y, Interval I);
+        void dGdu_Vec(Index, Vector &, DGSoln const &, Interval);
+        void dGdq_Vec(Index, Vector &, DGSoln const &, Interval);
+        void dGdsigma_Vec(Index, Vector &, DGSoln const &, Interval);
+        void dGdaux_Vec(Index, Vector &, DGSoln const &, Interval);
+        // void dSigmadp_Vec(Index, Vector &, DGSoln const &, Interval);
+        // void dSourcesdp_Vec(Index, Vector &, DGSoln const &, Interval);
+
         double resNorm = 0.0; // Exclusively for unit testing purposes
 
         double dt;
@@ -192,8 +225,12 @@ class SystemSolver
         // Why do we need to know? Surely everything is encoded in the construction of the Grid, which is done elsewhere?
         bool highGridBoundary = true;
 
+        bool solveAdjoint = false; 
+
         // Hide all physics-specific info in here
         TransportSystem *problem = nullptr;
+   
+        AdjointProblem *adjointProblem = nullptr;
 
         // Tau
         double tauc;
@@ -207,6 +244,7 @@ class SystemSolver
         void initialiseNetCDF(std::string const &fname, size_t nOut);
         void WriteTimeslice(double tNew);
         void WriteRestartFile(std::string const &fname, N_Vector const &Y, N_Vector const &dYdt, size_t nOut);
+        void WriteAdjoints();
 
         size_t S_DOF,
         U_DOF, Q_DOF, AUX_DOF, SQU_DOF;
@@ -224,6 +262,7 @@ class SystemSolver
         friend struct system_solver_test_suite::systemsolver_init_tests;
         friend struct system_solver_test_suite::systemsolver_multichannel_init_tests;
         friend struct system_solver_test_suite::systemsolver_matrix_tests;
+        friend struct adjoint_test_suite::systemsolver_adjoint_tests;
 #endif
 
         std::filesystem::path inputFilePath;

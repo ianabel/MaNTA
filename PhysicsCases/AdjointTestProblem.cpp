@@ -12,15 +12,34 @@ AdjointTestProblem::AdjointTestProblem(toml::value const &config, Grid const &gr
         throw std::invalid_argument("There should be a [AdjointTestProblem] section.");
     }
 
+    auto const &DiffConfig = config.at("AdjointTestProblem");
+
     T_s = 50;
-    D = 1.0;
     SourceWidth = 0.02;
-    SourceCentre = 0.3;
+    D = toml::find_or(DiffConfig, "kappa", 2.0);
+    SourceCentre = toml::find_or(DiffConfig, "SourceCentre", 0.3);
+    a = toml::find_or(DiffConfig, "a", 0.0);
+    // addP(std::ref(SourceCentre));
+    if (DiffConfig.count("SourceCentre") == 1)
+        addP(SourceCentre);
+    if (DiffConfig.count("kappa") == 1)
+        addP(D);
+}
+
+AdjointProblem *AdjointTestProblem::createAdjointProblem()
+{
+    AutodiffAdjointProblem *p = new AutodiffAdjointProblem(this);
+    p->setG([this](Position x, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
+            { return g(x, u, q, sigma, phi); });
+    p->setNp(pvals.size() + 1);
+    p->addUpperBoundarySensitivity(0, pvals.size());
+    return p;
 }
 
 Real AdjointTestProblem::Flux(Index i, RealVector u, RealVector q, Real x, Time t)
 {
-    return D * q(0);
+
+    return (D * pow(u(0), a)) * q(0);
 }
 
 Real AdjointTestProblem::Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector, Real x, Time t)
@@ -28,4 +47,9 @@ Real AdjointTestProblem::Source(Index i, RealVector u, RealVector q, RealVector 
 {
     Real y = (x - SourceCentre);
     return T_s * exp(-y * y / SourceWidth);
+}
+
+Real AdjointTestProblem::g(Position, RealVector &u, RealVector &, RealVector &, RealVector &)
+{
+    return 0.5 * u(0) * u(0);
 }

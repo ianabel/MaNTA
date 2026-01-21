@@ -5,6 +5,8 @@
 #include <autodiff/forward/dual.hpp>
 #include <autodiff/forward/dual/eigen.hpp>
 
+#include "AdjointProblem.hpp"
+
 #include <boost/math/interpolators/cardinal_cubic_b_spline.hpp>
 using spline = boost::math::interpolators::cardinal_cubic_b_spline<double>;
 
@@ -30,6 +32,8 @@ public:
 	void dSources_dq(Index i, Values &, const State &, Position x, Time t) override;
 	void dSources_dsigma(Index i, Values &, const State &, Position x, Time t) override;
 	void dSources_dScalars(Index, Values &, const State &, Position, Time) override;
+	void dSigmaFn_dp(Index i, Index pIndex, Value &, const State &s, Position x, Time t);
+	void dSources_dp(Index i, Index pIndex, Value &, const State &, Position x, Time t);
 
 	Value AuxG(Index, const State &, Position, Time) override;
 	void AuxGPrime(Index, State &, const State &, Position, Time) override;
@@ -54,9 +58,29 @@ public:
 
 	virtual Real2nd InitialFunction(Index i, Real2nd x, Real2nd t) const;
 
-protected:
+	virtual void setPval(Index i, Real p)
+	{
+		if (static_cast<size_t>(i) < pvals.size())
+			pvals[i].get() = p;
+	}
+	virtual Real getPval(Index i) const
+	{
+		if (static_cast<size_t>(i) < pvals.size())
+			return pvals[i].get();
+		else
+			return 0.0;
+	}
+
+	// Set gradients of p values to 0
+	void clearGradients()
+	{
+		for (auto pval : pvals)
+			pval.get().grad = 0.0;
+	}
+
 	Position xR, xL;
 
+protected:
 	// For loading initial conditions from netCDF file, needs to be accessed by child classes
 	bool loadInitialConditionsFromFile = false;
 	std::string filename;
@@ -71,6 +95,12 @@ protected:
 
 	void initialiseDiagnostics(NetCDFIO &nc) override;
 	void writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t, NetCDFIO &nc, size_t tIndex) override;
+
+	void addP(std::reference_wrapper<Real> p)
+	{
+		pvals.push_back(p);
+	}
+	std::vector<std::reference_wrapper<Real>> pvals;
 
 private:
 	// API to underlying flux models
@@ -131,4 +161,7 @@ private:
 
 	Vector InitialHeights;
 };
+
+#define STRINGIFY(Var) #Var
+
 #endif

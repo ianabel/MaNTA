@@ -3,14 +3,15 @@
 
 import sys
 
+
 filename = ""
 
 if len(sys.argv) == 2:
     filename = sys.argv[1]
 elif len(sys.argv) == 1:
-    filename = "MaNTA.conf"
+    filename = "py.conf"
 else:
-    print("Usage: PyMaNTA <configuration file>")
+    print("Usage: PyMaNTA <configuration file (defaults to py.conf)>")
     sys.exit()
 
 import MaNTA
@@ -23,8 +24,6 @@ if conf == None:
     print("Missing [configuration] section in " + filename)
     sys.exit(1)
 
-
-
 import importlib.util
 
 if "PythonModuleName" in conf:
@@ -33,9 +32,20 @@ if "PythonModuleName" in conf:
         mod_path = conf["PythonModuleFile"]
     else:
         print("Must specify a file containing a python module if you specify a python module to use")
-        sys.exit(1);
+        sys.exit(1)
     mod_spec = importlib.util.spec_from_file_location( mod_name, mod_path )
     module_handle = importlib.util.module_from_spec( mod_spec )
+    sys.modules[ mod_name ] = module_handle
+    try:
+        mod_spec.loader.exec_module(module_handle)
+    except Exception:
+        # If execution fails, remove the module from sys.modules
+        del sys.modules[mod_name]
+        raise
+
+    # A = module_handle.PythonLinearDiffusion(None,None)
+    # print(type(A.InitialValue(0,0.1)))
+
     module_handle.registerTransportSystems()
 
 

@@ -4,6 +4,7 @@
 #include "Types.hpp"
 #include "DGSoln.hpp"
 #include "NetCDFIO.hpp"
+#include "AdjointProblem.hpp"
 
 /*
     Pure interface class
@@ -162,6 +163,11 @@ public:
         return;
     }
 
+    virtual AdjointProblem * createAdjointProblem()
+    {
+        throw std::logic_error("Adjoint problem not implemented for this physics case");
+    }
+
     virtual std::string getVariableName(Index i)
     {
         return std::string("Var") + std::to_string(i);
@@ -230,6 +236,8 @@ public:
     }
 
     std::map<int, std::string> subVars = {{0, "u"}, {1, "q"}, {2, "sigma"}, {3, "S"}};
+
+    virtual std::string getAdjointNames(Index pIndex) const { return "p" + std::to_string(pIndex); }
 
 protected:
     Index nVars;

@@ -46,6 +46,16 @@ void NetCDFIO::AddScalarVariable(std::string name, std::string description, std:
 	newvar.putVar(&tmp);
 }
 
+void NetCDFIO::AddScalarVariable(std::string groupName, std::string name, std::string description, std::string units, double value)
+{
+	NcVar newvar = data_file.getGroup(groupName).addVar(name, netCDF::NcDouble());
+	newvar.putAtt("description", description);
+	if (units != "")
+		newvar.putAtt("units", units);
+	double tmp = value;
+	newvar.putVar(&tmp);
+}
+
 void NetCDFIO::AddTextVariable(std::string name, std::string description, std::string units, std::string text)
 {
 	NcVar newvar = data_file.addVar(name, netCDF::NcString());
@@ -201,6 +211,23 @@ void SystemSolver::WriteTimeslice(double tNew)
 	problem->writeDiagnostics(y, dydt, tNew, nc_output, tIndex);
 }
 
+void SystemSolver::WriteAdjoints()
+{
+	nc_output.AddScalarVariable("GFn", "", "", adjointProblem->GFn(0, y));
+	nc_output.AddScalarVariable("np", "", "", adjointProblem->getNp());
+	nc_output.AddScalarVariable("np_boundary", "", "", adjointProblem->getNpBoundary());
+	nc_output.AddGroup("G_p", "Gradients of G using adjoint state method");
+	nc_output.AddGroup("G_boundary", "Gradients of G on boundary using adjoint state method");
+	for (Index i = 0; i < adjointProblem->getNp() - adjointProblem->getNpBoundary(); ++i)
+	{
+		nc_output.AddScalarVariable("G_p", "p" + std::to_string(i), "", "", G_p(i));
+	}
+	for (Index i = 0; i < adjointProblem->getNpBoundary(); ++i)
+	{
+		nc_output.AddScalarVariable("G_boundary", "p" + std::to_string(i), "", "", G_p(i + adjointProblem->getNp() - adjointProblem->getNpBoundary()));
+	}
+}
+
 void SystemSolver::WriteRestartFile(std::string const &fname, N_Vector const &Y, N_Vector const &dYdt, size_t nOut)
 {
 	restart_file.Open(fname);
@@ -238,7 +265,7 @@ void SystemSolver::WriteRestartFile(std::string const &fname, N_Vector const &Y,
 	}
 
 	// Save N_Vector directly
-	NcGroup RestartGroup = restart_file.CreateGroup("RestartData","Restart group");
+	NcGroup RestartGroup = restart_file.CreateGroup("RestartData", "Restart group");
 
 	const size_t nDOF = nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1);
 	NcDim yDim = RestartGroup.addDim("nDOF", nDOF);
