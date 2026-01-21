@@ -1386,5 +1386,11 @@ int SystemSolver::getErrorWeights_static(N_Vector y, N_Vector ewt, void *sys)
 
 void SystemSolver::PrintDebugInfo()
 {
-    std::cout << "DO SOMETHING!" << std::endl;
+    initialiseMatrices();
+    for (Index i = 0; i < nCells; i++)
+    {
+        std::cout << "Cell " << i << " M Matrix: " << std::endl;
+        std::cout << MBlocks[i] << std::endl
+                  << std::endl;
+    }
 }
