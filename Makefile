@@ -1,6 +1,7 @@
 
+SOLVER = MaNTA
 
-all: test
+all: $(SOLVER) python test
 
 PHYSICS_DEBUG=on
 
@@ -9,8 +10,6 @@ export
 include Makefile.config
 
 SOURCES = MaNTA.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp Solver.cpp Matrices.cpp DGStatic.cpp PhysicsCases.cpp NetCDFIO.cpp AdjointVectors.cpp 
-
-SOLVER = MaNTA
 
 HEADERS = gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp SystemSolver.hpp ErrorChecker.hpp ErrorTester.hpp TransportSystem.hpp PhysicsCases.hpp DGSoln.hpp Basis.hpp AdjointProblem.hpp Jacobi.hpp
 

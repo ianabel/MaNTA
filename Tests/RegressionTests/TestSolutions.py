@@ -56,8 +56,8 @@ def test_ref_soln_l2( filename, ref_filename, tolerance ):
     if (nc_root.groups.get("G_p") is not None):
         print("  ... also checking adjoint variables")
         for var in nc_root.groups["G_p"].variables:
-            G_p     = np.array(nc_root.groups["G_p"].variables[var])
-            G_p_ref = np.array(nc_root_ref.groups["G_p"].variables[var])
+            G_p     = nc_root.groups["G_p"].variables[var][0]
+            G_p_ref = nc_root_ref.groups["G_p"].variables[var][0]
 
             l2norm_diff = G_p
             l2norm_ref = G_p_ref
@@ -69,8 +69,8 @@ def test_ref_soln_l2( filename, ref_filename, tolerance ):
         if (nc_root.groups.get("G_boundary") is not None):
             print("  ... also checking boundary adjoint variables")
             for var in nc_root.groups["G_boundary"].variables:
-                G_bndry     = np.array(nc_root.groups["G_boundary"].variables[var])
-                G_bndry_ref = np.array(nc_root_ref.groups["G_boundary"].variables[var])
+                G_bndry     = nc_root.groups["G_boundary"].variables[var][0]
+                G_bndry_ref = nc_root_ref.groups["G_boundary"].variables[var][0]
 
                 l2norm_diff = G_bndry
                 l2norm_ref = G_bndry_ref
