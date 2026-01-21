@@ -662,6 +662,21 @@ BOOST_AUTO_TEST_CASE( dg_approx_static_nodal )
 
     BOOST_TEST( ( tmp - ref ).norm() < 1e-4 ); // Entries are only good to 0.0001 anyway
 
+    tmp.resize( 5, 5 );
+    Grid refGrid( -1.0, 1.0, 1 );
+    basis.DerivativeMatrix( refGrid[ 0 ], tmp );
+    // Identity courtesy of book
+    ref << -5.0,      6.7565,  -2.66667,  1.41016, -0.5,
+           -6.7565,  0.,        9.5046,  -4.15826,  1.41016,
+           2.66667, -9.5046,   0.0,       0.95046,  -2.66667,
+           -1.41016, 4.15826, -9.5046,   0.,        6.7565,
+           0.5,     -1.41016,  2.66667, -6.7565,   5.0;
+
+    Eigen::MatrixXd masstmp( 5, 5 );
+    basis.MassMatrix( refGrid[ 0 ], masstmp );
+    BOOST_TEST( ( tmp - masstmp * ref ).norm() < 1e-4 ); // Entries are only good to 0.0001 anyway
+
+
     basis.DerivativeMatrix( testGrid[ 0 ], tmp, [](  double ){ return 1.0; } );
     BOOST_TEST( ( tmp - ref ).norm() < 1e-4 );
 

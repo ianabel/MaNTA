@@ -132,7 +132,7 @@ class SystemSolver
         unsigned int nScalars; // Any global scalars
         unsigned int nAux;	   // Any auxiliary constraints
 
-        using EigenCellwiseSolver = Eigen::PartialPivLU<Matrix>;
+        using EigenCellwiseSolver = Eigen::FullPivLU<Matrix>;
         using EigenGlobalSolver = Eigen::FullPivLU<Matrix>;
         std::vector<Matrix> XMats;
         std::vector<Matrix> MBlocks;

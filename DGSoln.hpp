@@ -262,7 +262,7 @@ template<class BasisType> class DGSolnImpl
                     coeffPair.second.setZero();
                     Matrix Mass( k + 1, k + 1 );
                     Basis.MassMatrix(I,Mass);
-                    Eigen::PartialPivLU<Matrix> mass_transpose_inverse( Mass.transpose() );
+                    Eigen::FullPivLU<Matrix> mass_transpose_inverse( Mass.transpose() );
                     for (size_t i = 0; i < n_abscissa; ++i)
                     {
                         // Pull the loop over the gaussian integration points
@@ -291,6 +291,9 @@ template<class BasisType> class DGSolnImpl
                             coeffPair.second[j] += wgt * sigma_plus * Basis.Evaluate(I, j, y_plus);
                             coeffPair.second[j] += wgt * sigma_minus * Basis.Evaluate(I, j, y_minus);
                         }
+                    }
+                    if( mass_transpose_inverse.rcond() < 0.1 ) {
+                      std::cerr << "Mass Matrix is ill-conditioned" << std::endl;
                     }
                     coeffPair.second = mass_transpose_inverse.solve( coeffPair.second );
                 }
@@ -335,6 +338,6 @@ template<class BasisType> class DGSolnImpl
 };
 
 
-using DGSoln = DGSolnImpl<NodalBasis>;
+using DGSoln = DGSolnImpl<LegendreBasis>;
 
 #endif // DGSOLN_HPP
