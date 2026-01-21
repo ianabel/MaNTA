@@ -8,7 +8,7 @@ class JAXTransportSystem(MaNTA.TransportSystem):
         MaNTA.TransportSystem.__init__(self)
         self.dSigmadvar = jax.jit(jax.grad(self.SigmaFn, argnums=1))
         self.dSourcedvar = jax.jit(jax.grad(self.Sources, argnums=1))
-        self.dInitialValue = jax.grad(self.InitialValue, argnums=1)
+        self.dInitialValue = jax.jit(jax.grad(self.InitialValue, argnums=1))
 
     def LowerBoundary(self, index, t):
         pass
