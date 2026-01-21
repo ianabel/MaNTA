@@ -139,6 +139,8 @@ class SystemSolver
 
         void computeAdjointGradients();
 
+        void PrintDebugInfo();
+
     private:
         Grid grid;
         unsigned int k;		   // polynomial degree per cell

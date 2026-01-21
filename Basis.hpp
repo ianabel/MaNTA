@@ -363,6 +363,9 @@ class NodalBasis
                 LGLNodes( 0 ) = 0.0;
                 RefMass.resize( 1, 1 );
                 RefMass( 0, 0 ) = 1.0;
+                RefDerivative.resize( 1, 1 );
+                RefDerivative( 0, 0 ) = 0.0;
+                return;
             }
 
             LGLNodes.resize( k + 1 );

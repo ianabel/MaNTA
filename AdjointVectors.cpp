@@ -49,9 +49,9 @@ void SystemSolver::DerivativeSubVector(Index pIndex, Vector &Vec, void (AdjointP
             for (Index j = 0; j < k + 1; ++j)
             {
                 Vec(XVar * (k + 1) + j) +=
-                    wgt * dX_dZ_vals1[XVar] * LegendreBasis::Evaluate(I, j, y_plus);
+                    wgt * dX_dZ_vals1[XVar] * y.getBasis().Evaluate(I, j, y_plus);
                 Vec(XVar * (k + 1) + j) +=
-                    wgt * dX_dZ_vals2[XVar] * LegendreBasis::Evaluate(I, j, y_minus);
+                    wgt * dX_dZ_vals2[XVar] * y.getBasis().Evaluate(I, j, y_minus);
             }
         }
     }
@@ -110,9 +110,9 @@ void SystemSolver::dGdaux_Vec(Index pIndex, Vector &Vec, DGSoln const &Y, Interv
             for (Index j = 0; j < k + 1; ++j)
             {
                 Vec(XVar * (k + 1) + j) +=
-                    wgt * dX_dZ_vals1[XVar] * LegendreBasis::Evaluate(I, j, y_plus);
+                    wgt * dX_dZ_vals1[XVar] * y.getBasis().Evaluate(I, j, y_plus);
                 Vec(XVar * (k + 1) + j) +=
-                    wgt * dX_dZ_vals2[XVar] * LegendreBasis::Evaluate(I, j, y_minus);
+                    wgt * dX_dZ_vals2[XVar] * y.getBasis().Evaluate(I, j, y_minus);
             }
         }
     }

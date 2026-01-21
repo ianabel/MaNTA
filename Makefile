@@ -9,7 +9,7 @@ export
 
 include Makefile.config
 
-SOURCES = MaNTA.cpp SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp Solver.cpp Matrices.cpp DGStatic.cpp PhysicsCases.cpp NetCDFIO.cpp AdjointVectors.cpp 
+SOURCES = SystemSolver.cpp SunLinSolWrapper.cpp ErrorChecker.cpp Solver.cpp Matrices.cpp DGStatic.cpp PhysicsCases.cpp NetCDFIO.cpp AdjointVectors.cpp 
 
 HEADERS = gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp SystemSolver.hpp ErrorChecker.hpp ErrorTester.hpp TransportSystem.hpp PhysicsCases.hpp DGSoln.hpp Basis.hpp AdjointProblem.hpp Jacobi.hpp
 
@@ -23,8 +23,12 @@ CXXFLAGS += -I.
 %.o: %.cpp $(HEADERS)
 	$(CXX) -c $(CXXFLAGS) -o $@ $<
 
-$(SOLVER): main.o $(OBJECTS) $(PHYSICS_OBJECTS) $(HEADERS)
-	$(CXX) $(CXXFLAGS) -g -o $(SOLVER) main.o $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
+$(SOLVER): main.o MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(HEADERS)
+	$(CXX) $(CXXFLAGS) -g -o $(SOLVER) main.o MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
+
+testHarness: main.o TestHarness.o $(OBJECTS) $(PHYSICS_OBJECTS) $(HEADERS)
+	$(CXX) $(CXXFLAGS) -g -o testHarness main.o TestHarness.o $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
+
 
 Tests/UnitTests/UnitTests: $(SOLVER)
 	$(MAKE) -C Tests/UnitTests all

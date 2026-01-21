@@ -1383,3 +1383,8 @@ int SystemSolver::getErrorWeights_static(N_Vector y, N_Vector ewt, void *sys)
 {
     return static_cast<SystemSolver *>(sys)->getErrorWeights(y, ewt);
 }
+
+void SystemSolver::PrintDebugInfo()
+{
+    std::cout << "DO SOMETHING!" << std::endl;
+}
