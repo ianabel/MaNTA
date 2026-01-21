@@ -149,8 +149,9 @@ class SystemSolver
 
         unsigned int nP;       // Number of parameters to compute for adjoint senstivity problem 
 
-        using EigenCellwiseSolver = Eigen::PartialPivLU<Matrix>;
+        using EigenCellwiseSolver = Eigen::FullPivLU<Matrix>;
         using EigenGlobalSolver = Eigen::FullPivLU<Matrix>;
+
         std::vector<Matrix> XMats;
         std::vector<Matrix> MBlocks;
         std::vector<Matrix> CEBlocks;

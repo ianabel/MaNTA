@@ -16,6 +16,12 @@
 
 class TransportSystem
 {
+
+protected:
+    Index nVars;
+    Index nScalars = 0;
+    Index nAux = 0;
+
 public:
     virtual ~TransportSystem() = default;
 
@@ -47,8 +53,6 @@ public:
             uR[i] = isUpperBoundaryDirichlet(i) ? restart_Y->u(i)(xR) : restart_Y->sigma(i)(xR);
         }
     }
-
-
 
 
     bool isRestarting() const { return restarting; };
@@ -277,11 +281,6 @@ public:
     virtual std::string getAdjointNames(Index pIndex) const { return "p" + std::to_string(pIndex); }
 
 protected:
-    Index nVars;
-    Index nScalars = 0;
-
-    Index nAux = 0;
-
     bool restarting = false;
     std::vector<double> restart_Y_data;
     std::vector<double> restart_dYdt_data;

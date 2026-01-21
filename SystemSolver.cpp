@@ -393,13 +393,13 @@ void SystemSolver::initialiseMatrices()
         for (Index var = 0; var < nVars; var++)
         {
             Eigen::MatrixXd Xvar(k + 1, k + 1);
-            y.getBasis().MassMatrix(I, Xvar, [this, var](double x)
-                    { return problem->aFn(var, x); });
+            y.getBasis().MassMatrix( I, Xvar );
             X.block(var * (k + 1), var * (k + 1), k + 1, k + 1) = Xvar;
         }
         XMats.emplace_back(X);
 
-        MXSolvers.emplace_back(nVars * SQU_DOF + nAux * AUX_DOF);
+        Eigen::Index nDof = nVars * SQU_DOF + nAux * AUX_DOF;
+        MXSolvers.emplace_back( nDof, nDof );
     }
     // Factorise the global H matrix
     H_global.compute(HGlobalMat);
@@ -564,7 +564,9 @@ void SystemSolver::updateMatricesForJacSolve()
         // Set Parts of Matrix due to aux variables
         dAux_Mat(MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), yJac, I);
 
-        MXSolvers[i].compute(MX);
+        MXSolvers[ i ].compute(MX);
+        if( MXSolvers[ i ].rcond() > 0.01 )
+          std::cerr << "MXSolver[ " << i << " ] is ill-conditioned" << std::endl;
     }
 
     // Construct the N_HDG_DOF x N_Scalar matrix v which
@@ -835,7 +837,7 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
 
 int static_residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval, void *user_data)
 {
-    auto system = reinterpret_cast<SystemSolver *>(user_data);
+    auto system = static_cast<SystemSolver *>(user_data);
     try
     {
         return system->residual(tres, Y, dYdt, resval);
@@ -1378,5 +1380,5 @@ int SystemSolver::getErrorWeights(N_Vector y_sundials, N_Vector ewt_sundials)
 
 int SystemSolver::getErrorWeights_static(N_Vector y, N_Vector ewt, void *sys)
 {
-    return reinterpret_cast<SystemSolver *>(sys)->getErrorWeights(y, ewt);
+    return static_cast<SystemSolver *>(sys)->getErrorWeights(y, ewt);
 }

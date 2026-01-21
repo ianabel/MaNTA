@@ -9,5 +9,8 @@ LegendreBasis::IntegratorType LegendreBasis::integrator;
 std::map<unsigned int, ChebyshevBasis> ChebyshevBasis::singletons;
 ChebyshevBasis::IntegratorType ChebyshevBasis::integrator;
 
+std::map<unsigned int, NodalBasis> NodalBasis::singletons;
+NodalBasis::IntegratorType NodalBasis::integrator;
+
 
 
