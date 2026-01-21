@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 from netCDF4 import Dataset
 import matplotlib
@@ -51,6 +51,33 @@ def test_ref_soln_l2( filename, ref_filename, tolerance ):
             if( abs( l2norm_diff/l2norm_ref ) > tolerance ):
                 print("Error: L_2 norm ", l2norm_diff, " ( ref is ", l2norm_ref, " ) at t = ",t_var[t_idx]," is greater than ",tolerance)
                 sys.exit( 1 )
+    
+    # Check if adjoints were computed, if so compare those too
+    if (nc_root.groups.get("G_p") is not None):
+        print("  ... also checking adjoint variables")
+        for var in nc_root.groups["G_p"].variables:
+            G_p     = np.array(nc_root.groups["G_p"].variables[var])
+            G_p_ref = np.array(nc_root_ref.groups["G_p"].variables[var])
+
+            l2norm_diff = G_p
+            l2norm_ref = G_p_ref
+    
+            if( abs( l2norm_diff-l2norm_ref ) > tolerance ):
+                print("Error: Adjoint norm ", l2norm_diff, " ( ref is ", l2norm_ref, " ) for variable ",var," is greater than ",tolerance)
+                sys.exit( 1 )
+
+        if (nc_root.groups.get("G_boundary") is not None):
+            print("  ... also checking boundary adjoint variables")
+            for var in nc_root.groups["G_boundary"].variables:
+                G_bndry     = np.array(nc_root.groups["G_boundary"].variables[var])
+                G_bndry_ref = np.array(nc_root_ref.groups["G_boundary"].variables[var])
+
+                l2norm_diff = G_bndry
+                l2norm_ref = G_bndry_ref
+        
+                if( abs( l2norm_diff-l2norm_ref ) > tolerance ):
+                    print("Error: Boundary adjoint norm ", l2norm_diff, " ( ref is ", l2norm_ref, " ) for variable ",var," is greater than ",tolerance)
+                    sys.exit( 1 )
 
 
 def test_analytic_soln( filename, soln_fn, tolerance ):
@@ -158,6 +185,7 @@ check_ref_case( "MatTestAlpha" )
 check_ref_case( "ADTest" )
 check_ref_case( "Nonlin2" )
 check_ref_case( "PIDTest" )
+check_ref_case( "AdjointTestProblem" )
 
 print("\n\n----------------")
 print("All Tests Passed")
