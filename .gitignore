@@ -13,7 +13,6 @@ Makefile.local
 toml11/
 sundials/
 resources/
-extern/
 figs/
 runs/
 .vscode/
