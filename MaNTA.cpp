@@ -253,7 +253,7 @@ int runManta(std::string const &fname)
 
 	std::unique_ptr<TransportSystem> pProblem = PhysicsCases::InstantiateProblem(ProblemName, configFile, *grid);
 
-	AdjointProblem *adjoint = nullptr;
+	std::unique_ptr<AdjointProblem> adjoint = nullptr;
 	if (solveAdjoint)
 		adjoint = pProblem->createAdjointProblem();
 
@@ -284,7 +284,7 @@ int runManta(std::string const &fname)
 		return 1;
 	}
 
-	system = std::make_shared<SystemSolver>(*grid, k, pProblem.get(), adjoint);
+	system = std::make_shared<SystemSolver>(*grid, k, pProblem.get(), adjoint.get());
 
 	system->setOutputCadence(delta_t);
 	system->setTolerances(absTol, rtol);
@@ -306,7 +306,7 @@ int runManta(std::string const &fname)
 
 	// For compiled-in TransportSystems we have the type information and
 	// this will call the correct inherited destructor
-	delete adjoint;
+
 	delete grid;
 	std::cout << "Done." << std::endl;
 	return 0;

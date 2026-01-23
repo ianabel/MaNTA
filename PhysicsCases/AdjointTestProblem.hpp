@@ -9,7 +9,7 @@ class AdjointTestProblem : public AutodiffTransportSystem
 public:
     AdjointTestProblem(toml::value const &config, Grid const &grid);
 
-    virtual AdjointProblem *createAdjointProblem() override;
+    virtual std::unique_ptr<AdjointProblem> createAdjointProblem() override;
 
     Real g(Position, RealVector &, RealVector &, RealVector &, RealVector &);
 

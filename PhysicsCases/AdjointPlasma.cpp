@@ -115,9 +115,9 @@ Real2nd AdjointPlasma::InitialFunction(Index i, Real2nd x, Real2nd t) const
     return 3. / 2. * TiEdge * DensityFn(x.val);
 }
 
-AdjointProblem *AdjointPlasma::createAdjointProblem()
+std::unique_ptr<AdjointProblem> AdjointPlasma::createAdjointProblem()
 {
-    AutodiffAdjointProblem *p = new AutodiffAdjointProblem(this);
+    std::unique_ptr<AutodiffAdjointProblem> p = std::make_unique<AutodiffAdjointProblem>(this);
     p->setG([this](Position x, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
             { return g(x, u, q, sigma, phi); });
 
@@ -398,7 +398,7 @@ Real AdjointPlasma::DensityFn(Real x) const
 Real AdjointPlasma::DensityPrime(Real x) const
 {
     return -grad_n;
-}   
+}
 Real AdjointPlasma::SafetyFactor(Real r) const
 {
     return (nu + 1) * Btor / Bpol * 1 / AspectRatio * pow(r, 2) / (1 - pow(1 - r * r, nu + 1));

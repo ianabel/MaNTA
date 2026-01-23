@@ -30,6 +30,7 @@ public:
     int getNpBoundary() const { return np_boundary; }
 
 protected:
+
     int np;
     int np_boundary = 0;
 };

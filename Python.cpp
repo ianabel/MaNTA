@@ -7,6 +7,7 @@
 
 #include "PhysicsCases.hpp"
 #include "PyTransportSystem.hpp"
+#include "PyAdjointProblem.hpp"
 
 namespace py = pybind11;
 
@@ -90,6 +91,7 @@ py::object cast_toml(toml::value v)
 PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 {
 	m.doc() = "Python bindings for MaNTA";
+
 	m.def("run", runManta, "Runs the MaNTA suite using given configuration file");
 	m.def("registerPhysicsCase", &PhysicsCases::RegisterPhysicsCase, "Register a Physics Case");
 
@@ -109,9 +111,26 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 		.def("dSources_dsigma", &TransportSystem::dSources_dsigma)
 		.def("InitialValue", &TransportSystem::InitialValue)
 		.def("InitialDerivative", &TransportSystem::InitialDerivative)
+		.def("createAdjointProblem", &TransportSystem::createAdjointProblem)
 		.def_readwrite("isUpperDirichlet", &PyTransportSystem::isUpperDirichlet)
 		.def_readwrite("isLowerDirichlet", &PyTransportSystem::isLowerDirichlet)
 		.def_readwrite("nVars", &PyTransportSystem::nVars);
+
+	py::class_<AdjointProblem, PyAdjointProblem, py::smart_holder>(m, "AdjointProblem")
+		.def(py::init<>())
+		.def("GFn", &AdjointProblem::GFn)
+		.def("dGFndp", &AdjointProblem::dGFndp)
+		.def("gFn", &AdjointProblem::gFn)
+		.def("dgFn_du", &AdjointProblem::dgFn_du)
+		.def("dgFn_dq", &AdjointProblem::dgFn_dq)
+		.def("dgFn_dsigma", &AdjointProblem::dgFn_dsigma)
+		.def("dgFn_dphi", &AdjointProblem::dgFn_dphi)
+		.def("dSigmaFn_dp", &AdjointProblem::dSigmaFn_dp)
+		.def("dSources_dp", &AdjointProblem::dSources_dp)
+		.def("computeUpperBoundarySensitivity", &AdjointProblem::computeUpperBoundarySensitivity)
+		.def("computeLowerBoundarySensitivity", &AdjointProblem::computeLowerBoundarySensitivity)
+		.def_readwrite("np", &PyAdjointProblem::np)
+		.def_readwrite("np_boundary", &PyAdjointProblem::np_boundary);
 
 	py::class_<Grid>(m, "Grid")
 		.def(py::init<>())

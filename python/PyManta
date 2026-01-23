@@ -43,8 +43,7 @@ if "PythonModuleName" in conf:
         del sys.modules[mod_name]
         raise
 
-    # A = module_handle.PythonLinearDiffusion(None,None)
-    # print(type(A.InitialValue(0,0.1)))
+    print(f"Using python module {mod_name} from file {mod_path}\n")
 
     module_handle.registerTransportSystems()
 
