@@ -92,8 +92,8 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 {
 	m.doc() = "Python bindings for MaNTA";
 
-	m.def("run", runManta, "Runs the MaNTA suite using given configuration file");
-	m.def("registerPhysicsCase", &PhysicsCases::RegisterPhysicsCase, "Register a Physics Case");
+	m.def("run", runManta, py::return_value_policy::reference, "Runs the MaNTA suite using given configuration file");
+	m.def("registerPhysicsCase", &PhysicsCases::RegisterPhysicsCase, py::return_value_policy::reference, "Register a Physics Case");
 
 	// List all interfaces of the main TransportSystem class which is what has to be derived from in python
 	py::class_<TransportSystem, PyTransportSystem, py::smart_holder>(m, "TransportSystem")
@@ -125,16 +125,16 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 		.def("dgFn_dq", &AdjointProblem::dgFn_dq)
 		.def("dgFn_dsigma", &AdjointProblem::dgFn_dsigma)
 		.def("dgFn_dphi", &AdjointProblem::dgFn_dphi)
-		.def("dSigmaFn_dp", &AdjointProblem::dSigmaFn_dp)
-		.def("dSources_dp", &AdjointProblem::dSources_dp)
+		.def("dSigmaFn_dp", py::overload_cast<Index, Index, Value &, const State &, Position>(&AdjointProblem::dSigmaFn_dp))
+		.def("dSources_dp", py::overload_cast<Index, Index, Value &, const State &, Position>(&AdjointProblem::dSources_dp))
 		.def("computeUpperBoundarySensitivity", &AdjointProblem::computeUpperBoundarySensitivity)
 		.def("computeLowerBoundarySensitivity", &AdjointProblem::computeLowerBoundarySensitivity)
 		.def_readwrite("np", &PyAdjointProblem::np)
 		.def_readwrite("np_boundary", &PyAdjointProblem::np_boundary);
 
 	py::class_<Grid>(m, "Grid")
-		.def(py::init<>())
-		.def(py::init<Grid::Position, Grid::Position, Grid::Index, bool, double, double>())
+		.def(py::init<>(), py::return_value_policy::reference)
+		.def(py::init<Grid::Position, Grid::Position, Grid::Index, bool, double, double>(), py::return_value_policy::reference)
 		.def("getNCells", &Grid::getNCells);
 
 	py::class_<toml::value>(m, "TomlValue")

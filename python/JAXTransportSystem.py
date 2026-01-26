@@ -24,10 +24,10 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     def Sources( self, index, state, x, t ):
         return self.source(index, state, x, t, self.params)
 
-    def sigma( self, index, state, x, t, params):
+    def sigma( self, index, state, x, t, params: NamedTuple):
         pass
 
-    def source( self, index, state, x, t, params):
+    def source( self, index, state, x, t, params: NamedTuple):
         pass
 
     def dSigmaFn_dq( self, index, state, x, t):
@@ -101,7 +101,7 @@ class JAXLinearDiffusion(JAXTransportSystem):
         return 0.0
     
     def InitialValue( self, index, x ):
-        alpha = 1 / self.params.InitialWidth
+        alpha = 1 / 0.02
         y = (x - self.params.Centre)
         return self.params.InitialHeight * jnp.exp(-alpha * y * y)
 
@@ -111,26 +111,27 @@ def show_example(structured):
     print(f"{structured=}\n  {flat=}\n  {tree=}\n  {unflattened=}")
 
 class NonlinearDiffusionParams(NamedTuple):
+    SourceCentre: float
+    D: float
     T_s: float
     a: float
     SourceWidth: float
-    SourceCenter: float
-    D: float
+   
 
     @classmethod
     def make(cls, config: MaNTA.TomlValue) -> 'NonlinearDiffusionParams':
         
+        SourceCentre = config["SourceCentre"]
+        D = config["D"]
         T_s = 50.0
-        a = 0.0
+        a = config["a"]
         SourceWidth = 0.02
-        SourceCenter = 0.3
-        D = 2.0
-
+ 
         return cls(
             T_s = T_s,
             a = a,
             SourceWidth = SourceWidth,
-            SourceCenter = SourceCenter,
+            SourceCentre = SourceCentre,
             D = D,
         )
 
@@ -151,10 +152,10 @@ class JAXNonlinearDiffusion(JAXTransportSystem):
         
         u = state["Variable"][0]
         q = state["Derivative"][0]
-        return params.D*u ** params.a * q
+        return params.D*(u ** params.a) * q
 
     def source( self, index, state, x, t, params ):
-        y = x - params.SourceCenter
+        y = x - params.SourceCentre
         return params.T_s*jnp.exp(-y*y/params.SourceWidth)
 
     def LowerBoundary(self, index, t):

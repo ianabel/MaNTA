@@ -13,6 +13,7 @@ class PyTransportSystem : public TransportSystem, public py::trampoline_self_lif
 {
 public:
 	using TransportSystem::TransportSystem;
+
 	void initializeOverrides()
 	{
 		auto make_override = [this](const char *method_name)

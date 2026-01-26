@@ -112,6 +112,7 @@ template<class BasisType> class DGApproxImpl
                 if (I.first.contains(x))
                     return Basis.Evaluate(I.first, I.second, x);
             }
+            std::cerr << "x = " << x << ", grid bounds = [" << grid.lowerBoundary() << ", " << grid.upperBoundary() << "]" << std::endl;
             throw std::logic_error("Evaluation outside of grid");
         };
 

@@ -158,11 +158,8 @@ void SystemSolver::initialiseNetCDF(std::string const &NetcdfOutputFile, size_t 
 {
 	nc_output.Open(NetcdfOutputFile);
 	std::vector<double> gridpoints(nOut);
-	std::ranges::generate(gridpoints, [this, nOut]()
-						  {
-		static int i = 0;
-		double delta_x = ( grid.upperBoundary() - grid.lowerBoundary() ) * ( 1.0/( nOut - 1.0 ) );
-		return static_cast<double>( i++ )*delta_x + grid.lowerBoundary(); });
+	for (unsigned int i = 0; i < nOut; ++i)
+		gridpoints[i] = grid.lowerBoundary() + i * (grid.upperBoundary() - grid.lowerBoundary()) / (nOut - 1);
 
 	nc_output.SetOutputGrid(gridpoints);
 
@@ -234,11 +231,8 @@ void SystemSolver::WriteRestartFile(std::string const &fname, N_Vector const &Y,
 
 	// Include profiles for debugging
 	std::vector<double> gridpoints(nOut);
-	std::ranges::generate(gridpoints, [this, nOut]()
-						  {
-		static int i = 0;
-		double delta_x = ( grid.upperBoundary() - grid.lowerBoundary() ) * ( 1.0/( nOut - 1.0 ) );
-		return static_cast<double>( i++ )*delta_x + grid.lowerBoundary(); });
+	for (unsigned int i = 0; i < nOut; ++i)
+		gridpoints[i] = grid.lowerBoundary() + i * (grid.upperBoundary() - grid.lowerBoundary()) / (nOut - 1);
 
 	restart_file.SetOutputGrid(gridpoints);
 

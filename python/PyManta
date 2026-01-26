@@ -9,7 +9,7 @@ filename = ""
 if len(sys.argv) == 2:
     filename = sys.argv[1]
 elif len(sys.argv) == 1:
-    filename = "py.conf"
+    filename = "/home/eatocco/projects/MaNTA/python/jax_adjoint.conf"
 else:
     print("Usage: PyMaNTA <configuration file (defaults to py.conf)>")
     sys.exit()
@@ -25,6 +25,7 @@ if conf == None:
     sys.exit(1)
 
 import importlib.util
+import time
 
 if "PythonModuleName" in conf:
     mod_name = conf["PythonModuleName"]

@@ -111,6 +111,15 @@ public:
         out = method_overrides["dSources_dp"](i, pIndex, s, x).cast<Value>();
     };
 
+    bool computeUpperBoundarySensitivity(Index i, Index pIndex) override
+    {
+        PYBIND11_OVERRIDE(bool, AdjointProblem, computeUpperBoundarySensitivity, i, pIndex);
+    };
+    bool computeLowerBoundarySensitivity(Index i, Index pIndex) override
+    {
+        PYBIND11_OVERRIDE(bool, AdjointProblem, computeLowerBoundarySensitivity, i, pIndex);
+    };
+
 public:
     using AdjointProblem::np;
     using AdjointProblem::np_boundary;

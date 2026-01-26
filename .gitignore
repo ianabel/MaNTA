@@ -19,5 +19,5 @@ runs/
 python/__pycache__/
 build/
 python/__pycache__/
-python/venv
+venv
 gmon.out
