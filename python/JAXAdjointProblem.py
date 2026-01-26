@@ -51,4 +51,10 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
     def computeLowerBoundarySensitivity(self, i, pIndex):
         return False
     
+    def getName(self, pIndex):
+        if pIndex < self.np -1:
+            return list(self.params._fields)[pIndex]
+        else:
+            return "BoundaryCondition"
+    
    

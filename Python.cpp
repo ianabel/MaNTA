@@ -129,6 +129,7 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 		.def("dSources_dp", py::overload_cast<Index, Index, Value &, const State &, Position>(&AdjointProblem::dSources_dp))
 		.def("computeUpperBoundarySensitivity", &AdjointProblem::computeUpperBoundarySensitivity)
 		.def("computeLowerBoundarySensitivity", &AdjointProblem::computeLowerBoundarySensitivity)
+		.def("getName", &AdjointProblem::getName)
 		.def_readwrite("np", &PyAdjointProblem::np)
 		.def_readwrite("np_boundary", &PyAdjointProblem::np_boundary);
 

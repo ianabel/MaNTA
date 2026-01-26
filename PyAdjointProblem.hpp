@@ -111,6 +111,11 @@ public:
         out = method_overrides["dSources_dp"](i, pIndex, s, x).cast<Value>();
     };
 
+    std::string getName(Index pIndex) const override
+    {
+        PYBIND11_OVERRIDE(std::string, AdjointProblem, getName, pIndex);
+    };
+
     bool computeUpperBoundarySensitivity(Index i, Index pIndex) override
     {
         PYBIND11_OVERRIDE(bool, AdjointProblem, computeUpperBoundarySensitivity, i, pIndex);
