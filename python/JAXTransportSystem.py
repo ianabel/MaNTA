@@ -50,9 +50,7 @@ class JAXTransportSystem(MaNTA.TransportSystem):
 
     def InitialDerivative( self, index, x ):
         return self.dInitialValue(index,x)
-    
-    def createAdjointProblem(self):
-        return JAXAdjointProblem(self, self.g)
+
 
 # Need PyTree structure for class paramters to be able to compute adjoints
 class LinearDiffusionParams(NamedTuple):
@@ -166,10 +164,14 @@ class JAXNonlinearDiffusion(JAXTransportSystem):
     
     def InitialValue(self, index, x):
         return 0.3
+    
+    def createAdjointProblem(self):
+        adjointProblem = JAXAdjointProblem(self, self.g)
+        adjointProblem.addUpperBoundarySensitivity(0)
+        return adjointProblem
 
 
 def registerTransportSystems():
-    #MaNTA.testFunction(PythonLinearDiffusion)
     MaNTA.registerPhysicsCase("JAXLinearDiffusion", JAXLinearDiffusion)
     MaNTA.registerPhysicsCase("JAXNonlinearDiffusion", JAXNonlinearDiffusion)
 

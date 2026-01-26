@@ -5,22 +5,23 @@ import MaNTA
 class JAXAdjointProblem(MaNTA.AdjointProblem):
     def __init__(self, transport_system, g):
         MaNTA.AdjointProblem.__init__(self)
-        self.transport_system = transport_system
-        self.params = self.transport_system.params
+        self.params = transport_system.params
         self.g = g
         self.dg_dvar = jax.jit(jax.grad(self.g, argnums=0))
         self.dg_dp = jax.jit(jax.grad(self.g, argnums=2))
-        self.np = len(self.transport_system.params)+1
-        self.np_boundary = 1
-        print("Number of parameters in adjoint problem: ", self.np)
-        self.dsigma_dp = jax.jit(jax.grad(self.transport_system.sigma, argnums=4))
-        self.dsource_dp = jax.jit(jax.grad(self.transport_system.source, argnums=4))
+        self.np = len(transport_system.params)
+        self.np_boundary = 0
+        self.dsigma_dp = jax.jit(jax.grad(transport_system.sigma, argnums=4))
+        self.dsource_dp = jax.jit(jax.grad(transport_system.source, argnums=4))
+
+        self.UpperBoundarySensitivities = {}
+        self.LowerBoundarySensitivities = {}
 
     def gFn(self, i, state, x):
         return self.g(state, x, self.params)
     
     def dgFndp(self, i, state, x):
-        if ( i < self.np -2 ):
+        if ( i < self.np-1 ):
             return self.dg_dp(state, x, self.params)[i]
         else:
             return 0.0
@@ -44,17 +45,30 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
         return self.dsource_dp(index, state, x, 0.0, self.params)[pIndex]
     
     def computeUpperBoundarySensitivity(self, i, pIndex):
-        if (pIndex >= self.np-1):
+        if (i, pIndex) in self.UpperBoundarySensitivities:
             return True
         else:
             return False
     def computeLowerBoundarySensitivity(self, i, pIndex):
-        return False
+        if (i, pIndex) in self.LowerBoundarySensitivities:
+            return True
+        else:
+            return False
     
     def getName(self, pIndex):
-        if pIndex < self.np -1:
+        if pIndex < len(self.params):
             return list(self.params._fields)[pIndex]
         else:
-            return "BoundaryCondition"
+            return "BoundaryCondition"+str(pIndex)
+        
+    def addUpperBoundarySensitivity(self, i):
+        self.UpperBoundarySensitivities[(i,self.np)] = True
+        self.np += 1
+        self.np_boundary += 1
+
+    def addLowerBoundarySensitivity(self, i):
+        self.LowerBoundarySensitivities[(i,self.np)] = True
+        self.np += 1
+        self.np_boundary += 1
     
    
