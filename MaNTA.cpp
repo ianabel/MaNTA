@@ -126,7 +126,9 @@ int runManta(std::string const &fname)
 		}
 	}
 
-	Grid *grid;
+	std::unique_ptr<Grid> grid;
+
+	//Grid *grid;
 	unsigned int k = 1;
 	if (!isRestarting)
 	{
@@ -188,7 +190,7 @@ int runManta(std::string const &fname)
 		else
 			throw std::invalid_argument("Upper_boundary specified incorrrectly");
 
-		grid = new Grid(lBound, uBound, nCells, highGridBoundary, lowerBoundaryFraction, upperBoundaryFraction);
+		grid = std::make_unique<Grid>(lBound, uBound, nCells, highGridBoundary, lowerBoundaryFraction, upperBoundaryFraction);
 	}
 	else
 	{
@@ -199,7 +201,7 @@ int runManta(std::string const &fname)
 
 		GridGroup.getVar("CellBoundaries").getVar(CellBoundaries.data());
 
-		grid = new Grid(CellBoundaries);
+		grid = std::make_unique<Grid>(CellBoundaries);
 
 		GridGroup.getVar("PolyOrder").getVar(&k);
 	}
@@ -253,7 +255,7 @@ int runManta(std::string const &fname)
 
 	std::unique_ptr<TransportSystem> pProblem = PhysicsCases::InstantiateProblem(ProblemName, configFile, *grid);
 
-	AdjointProblem *adjoint = nullptr;
+	std::unique_ptr<AdjointProblem> adjoint = nullptr;
 	if (solveAdjoint)
 		adjoint = pProblem->createAdjointProblem();
 
@@ -284,7 +286,7 @@ int runManta(std::string const &fname)
 		return 1;
 	}
 
-	system = std::make_shared<SystemSolver>(*grid, k, pProblem.get(), adjoint);
+	system = std::make_shared<SystemSolver>(*grid, k, pProblem.get(), adjoint.get());
 
 	system->setOutputCadence(delta_t);
 	system->setTolerances(absTol, rtol);
@@ -306,8 +308,8 @@ int runManta(std::string const &fname)
 
 	// For compiled-in TransportSystems we have the type information and
 	// this will call the correct inherited destructor
-	delete adjoint;
-	delete grid;
+
+	//delete grid;
 	std::cout << "Done." << std::endl;
 	return 0;
 }

@@ -23,6 +23,8 @@ public:
     virtual void dSigmaFn_dp(Index i, Index pIndex, Value &, const State &s, Position x) = 0;
     virtual void dSources_dp(Index i, Index pIndex, Value &, const State &s, Position x) = 0;
 
+    virtual std::string getName(Index pIndex) const { return "p" + std::to_string(pIndex); };
+
     virtual bool computeUpperBoundarySensitivity(Index i, Index pIndex) { return false; };
     virtual bool computeLowerBoundarySensitivity(Index i, Index pIndex) { return false; };
 

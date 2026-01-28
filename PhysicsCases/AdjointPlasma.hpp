@@ -13,7 +13,7 @@ public:
 
     virtual Real2nd InitialFunction(Index i, Real2nd x, Real2nd t) const override;
 
-    virtual AdjointProblem *createAdjointProblem() override;
+    virtual std::unique_ptr<AdjointProblem> createAdjointProblem() override;
 
     Real g(Position, RealVector &, RealVector &, RealVector &, RealVector &);
 

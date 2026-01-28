@@ -320,7 +320,14 @@ template<class BasisType> class DGSolnImpl
             }
         }
 
-        BasisType const& getBasis() const { return Basis; };
+        Value EvaluateIntegral(std::function<Value(const DGSolnImpl<BasisType> &, Position)> fn) const
+        {
+            return Basis.integrator.integrate( [&]( Position x ) {
+                return fn( *this, x );
+            }, grid.lowerBoundary(), grid.upperBoundary() );
+        }
+
+        BasisType const &getBasis() const { return Basis; };
 
     private:
         const Index nVars;

@@ -204,7 +204,7 @@ public:
       return;
     }
 
-    virtual AdjointProblem * createAdjointProblem()
+    virtual std::unique_ptr<AdjointProblem> createAdjointProblem()
     {
       throw std::logic_error("Adjoint problem not implemented for this physics case");
     }

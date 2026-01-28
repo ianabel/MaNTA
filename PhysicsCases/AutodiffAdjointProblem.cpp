@@ -2,7 +2,7 @@
 
 Value AutodiffAdjointProblem::GFn(Index i, DGSoln &y) const
 {
-    auto g_wrapper = [&](Position x)
+    auto g_wrapper = [this](const DGSoln &y, Position x)
     {
         State s = y.eval(x);
         RealVector u(s.Variable);
@@ -12,7 +12,7 @@ Value AutodiffAdjointProblem::GFn(Index i, DGSoln &y) const
         return g(x, u, q, sigma, phi).val;
     };
 
-    return integrator::integrate(g_wrapper, PhysicsProblem->xL, PhysicsProblem->xR, max_depth);
+    return y.EvaluateIntegral(g_wrapper);
 }
 
 Value AutodiffAdjointProblem::dGFndp(Index i, DGSoln &y) const

@@ -120,7 +120,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
     Grid testGrid(-1.0, 1.0, nGrid);
     AdjointTestProblem *problem = new AdjointTestProblem(config_snippet, testGrid);
 
-    AdjointProblem *adjoint = problem->createAdjointProblem();
+    std::unique_ptr<AdjointProblem> adjoint = problem->createAdjointProblem();
 
     // auto gfun = [&](Position x, Real p, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
     // {
@@ -136,7 +136,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
     SUNContext ctx;
     SUNContext_Create(SUN_COMM_NULL, &ctx);
 
-    BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, problem, adjoint));
+    BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, problem, adjoint.get()));
 
     system->setTau(1.0);
     system->resetCoeffs();
@@ -174,7 +174,6 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
     BOOST_CHECK_NO_THROW(system->initializeMatricesForAdjointSolve());
 
     delete problem;
-    delete adjoint;
     delete system;
 }
 

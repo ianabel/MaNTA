@@ -13,6 +13,7 @@ class PyTransportSystem : public TransportSystem, public py::trampoline_self_lif
 {
 public:
 	using TransportSystem::TransportSystem;
+
 	void initializeOverrides()
 	{
 		auto make_override = [this](const char *method_name)
@@ -104,6 +105,11 @@ public:
 	{
 		PYBIND11_OVERRIDE_PURE(Value, TransportSystem, InitialDerivative, i, x);
 	};
+
+	std::unique_ptr<AdjointProblem> createAdjointProblem() override
+	{
+		PYBIND11_OVERRIDE(std::unique_ptr<AdjointProblem>, TransportSystem, createAdjointProblem);
+	}
 
 public:
 	using TransportSystem::isLowerDirichlet;

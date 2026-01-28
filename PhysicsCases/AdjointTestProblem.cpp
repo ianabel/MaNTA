@@ -26,9 +26,9 @@ AdjointTestProblem::AdjointTestProblem(toml::value const &config, Grid const &gr
         addP(D);
 }
 
-AdjointProblem *AdjointTestProblem::createAdjointProblem()
+std::unique_ptr<AdjointProblem> AdjointTestProblem::createAdjointProblem()
 {
-    AutodiffAdjointProblem *p = new AutodiffAdjointProblem(this);
+    std::unique_ptr<AutodiffAdjointProblem> p = std::make_unique<AutodiffAdjointProblem>(this);
     p->setG([this](Position x, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
             { return g(x, u, q, sigma, phi); });
     p->setNp(pvals.size() + 1);
