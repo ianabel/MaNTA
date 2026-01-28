@@ -338,6 +338,6 @@ template<class BasisType> class DGSolnImpl
 };
 
 
-using DGSoln = DGSolnImpl<NodalBasis>;
+using DGSoln = DGSolnImpl<LegendreBasis>;
 
 #endif // DGSOLN_HPP

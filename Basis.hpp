@@ -370,12 +370,14 @@ class NodalBasis
 
             LGLNodes.resize( k + 1 );
             Jacobi jac( 1, 1 );
-            Eigen::VectorXd nodes( k - 1 );
-            std::tie( nodes, std::ignore ) = jac.GaussQuadrature( k - 1 );
+            Eigen::VectorXd nodes( k + 1 );
+            std::tie( nodes, std::ignore ) = jac.GaussQuadrature( k + 1 );
             std::sort( nodes.begin(), nodes.end() );
-            LGLNodes.segment( 1, k - 1 ) = nodes;
+            LGLNodes = nodes;
+            /*
             LGLNodes( 0 ) = -1.0;
             LGLNodes( k ) =  1.0;
+            */
 
             // LGLNodes now contains the Legendre-Gauss-Lobatto nodes on [-1,1]
 
@@ -481,7 +483,7 @@ class NodalBasis
             double x = I.toRef(X);
             return (2.0/I.h())*Prime(i,x);
         };
-
+        
         static const std::array<double,15>& abscissae() { return integrator.abscissa(); };
         static const std::array<double,15>& weights() { return integrator.weights(); };
         using IntegratorType = boost::math::quadrature::gauss<double, 30>;
