@@ -9,6 +9,8 @@
 #include <boost/math/special_functions/legendre.hpp>
 #include <boost/math/special_functions/binomial.hpp>
 
+
+
 class Interval;
 
 class LegendreBasis
@@ -353,14 +355,14 @@ class NodalBasis
     private:
         unsigned int k;
         Matrix Vandermonde,Vr,RefMass,RefDerivative; // Matrices for the reference interval
-        Vector LGLNodes;
+        Vector ChebNodes;
         Vector BarycentricWeights;
 
         NodalBasis( unsigned int  Order ) : k(Order)
         {
             if( Order == 0 ) {
-                LGLNodes.resize( 1 );
-                LGLNodes( 0 ) = 0.0;
+                ChebNodes.resize( 1 );
+                ChebNodes( 0 ) = 0.0;
                 RefMass.resize( 1, 1 );
                 RefMass( 0, 0 ) = 1.0;
                 RefDerivative.resize( 1, 1 );
@@ -368,26 +370,20 @@ class NodalBasis
                 return;
             }
 
-            LGLNodes.resize( k + 1 );
-            Jacobi jac( 1, 1 );
-            Eigen::VectorXd nodes( k + 1 );
-            std::tie( nodes, std::ignore ) = jac.GaussQuadrature( k + 1 );
-            std::sort( nodes.begin(), nodes.end() );
-            LGLNodes = nodes;
-            /*
-            LGLNodes( 0 ) = -1.0;
-            LGLNodes( k ) =  1.0;
-            */
+            ChebNodes.resize( k + 1 );
 
-            // LGLNodes now contains the Legendre-Gauss-Lobatto nodes on [-1,1]
+            for( Index i = 0; i < k + 1; ++i )
+              ChebNodes( k - i ) = std::cos( ( i + 0.5 ) * M_PI / ( k + 1 ) );
+
+            // ChebNodes now contains the Chebyshev nodes on (-1,1)
 
             Vandermonde.resize( k + 1, k + 1 );
             Vr.resize( k + 1, k + 1 );
 
             for( Index i = 0; i < k + 1; ++i ) {
                 for( Index j = 0; j < k + 1; ++j ) {
-                    Vandermonde( i, j ) = LegendreBasis::Evaluate( j, LGLNodes( i ) );
-                    Vr( i, j ) = LegendreBasis::Prime( j, LGLNodes( i ) );
+                    Vandermonde( i, j ) = LegendreBasis::Evaluate( j, ChebNodes( i ) );
+                    Vr( i, j ) = LegendreBasis::Prime( j, ChebNodes( i ) );
                 }
             }
 
@@ -404,7 +400,7 @@ class NodalBasis
                 for( Index j = 0; j < k + 1; ++j ) {
                     if( j == i )
                         continue;
-                    BarycentricWeights( i ) *= 1.0/(LGLNodes(j) - LGLNodes(i));
+                    BarycentricWeights( i ) *= 1.0/(ChebNodes(j) - ChebNodes(i));
                 }
             }
 
@@ -427,15 +423,15 @@ class NodalBasis
 
         double Evaluate(Index i, double x) const
         {
-            if( x == LGLNodes( i ) )
+            if( x == ChebNodes( i ) )
                 return 1.0;
 
-            double numerator = BarycentricWeights( i ) / ( x - LGLNodes( i ) );
+            double numerator = BarycentricWeights( i ) / ( x - ChebNodes( i ) );
             double denominator = 0.0;
 
             for( Index j = 0; j < k + 1; ++j ) {
 
-                double y = ( x - LGLNodes( j ) );
+                double y = ( x - ChebNodes( j ) );
 
                 if( y == 0.0 )
                     return 0.0;
@@ -468,9 +464,9 @@ class NodalBasis
             double sum = 0;
             for( Index j = 0; j < k + 1; ++j ) {
                 if( j == i ) continue;
-                double y = (x - LGLNodes(j));
+                double y = (x - ChebNodes(j));
                 if( y == 0 ) {
-                    return ( BarycentricWeights( i )/BarycentricWeights( j ) )/( LGLNodes( j ) - LGLNodes( i ) );
+                    return ( BarycentricWeights( i )/BarycentricWeights( j ) )/( ChebNodes( j ) - ChebNodes( i ) );
                 }
                 sum += 1.0/y;
             }
@@ -501,7 +497,7 @@ class NodalBasis
             Vector out( k + 1 );
             Vector vals( k + 1 );
             for( Index i = 0; i < k + 1; i++ )
-                vals( i ) = f( I.fromRef( LGLNodes( i ) ) );
+                vals( i ) = f( I.fromRef( ChebNodes( i ) ) );
             out = (I.h()/2.0) * RefMass * vals;
             return out;
         };
@@ -579,6 +575,8 @@ class NodalBasis
                     D(i, j) = integrator.integrate(F, I.x_l, I.x_u);
                 }
         }
+
+        double Nodes( Index i ) { return ChebNodes( i ); };
 };
 
 #endif
