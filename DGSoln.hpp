@@ -320,6 +320,7 @@ template<class BasisType> class DGSolnImpl
             }
         }
 
+        // Evaluates the integral of a function over the domain
         Value EvaluateIntegral(std::function<Value(const DGSolnImpl<BasisType> &, Position)> fn) const
         {
             return Basis.integrator.integrate( [&]( Position x ) {

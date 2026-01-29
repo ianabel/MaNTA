@@ -24,10 +24,11 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     def Sources( self, index, state, x, t ):
         return self.source(index, state, x, t, self.params)
 
-    def sigma( self, index, state, x, t, params: NamedTuple):
+    # User-defined functions to be overridden in derived classes
+    def sigma( self, index, state, x, t, params: NamedTuple ):
         pass
 
-    def source( self, index, state, x, t, params: NamedTuple):
+    def source( self, index, state, x, t, params: NamedTuple ):
         pass
 
     def dSigmaFn_dq( self, index, state, x, t):
@@ -50,6 +51,9 @@ class JAXTransportSystem(MaNTA.TransportSystem):
 
     def InitialDerivative( self, index, x ):
         return self.dInitialValue(index,x)
+    
+    def createAdjointProblem(self):
+        pass
 
 
 # Need PyTree structure for class paramters to be able to compute adjoints
@@ -103,11 +107,6 @@ class JAXLinearDiffusion(JAXTransportSystem):
         y = (x - self.params.Centre)
         return self.params.InitialHeight * jnp.exp(-alpha * y * y)
 
-def show_example(structured):
-    flat, tree = structured.tree_flatten()
-    unflattened = JAXLinearDiffusion.tree_unflatten(tree, flat)
-    print(f"{structured=}\n  {flat=}\n  {tree=}\n  {unflattened=}")
-
 class NonlinearDiffusionParams(NamedTuple):
     SourceCentre: float
     D: float
@@ -115,7 +114,6 @@ class NonlinearDiffusionParams(NamedTuple):
     a: float
     SourceWidth: float
    
-
     @classmethod
     def make(cls, config: MaNTA.TomlValue) -> 'NonlinearDiffusionParams':
         
@@ -134,25 +132,26 @@ class NonlinearDiffusionParams(NamedTuple):
         )
 
 class JAXNonlinearDiffusion(JAXTransportSystem):
-    def __init__(self,config,grid):
+    def __init__(self, config: MaNTA.TomlValue, grid: MaNTA.Grid):
         super().__init__()
         self.nVars = 1
         self.isUpperDirichlet  = True
         self.isLowerDirichlet  = False
 
+        # This object will be passed to sigma and source functions
         self.params = NonlinearDiffusionParams.make(config)
 
     def g(self, state, x, params):
         u = state["Variable"][0]
         return 0.5 * u * u
 
-    def sigma( self, index, state, x, t, params ):
+    def sigma( self, index, state, x, t, params: NonlinearDiffusionParams ):
         
         u = state["Variable"][0]
         q = state["Derivative"][0]
         return params.D*(u ** params.a) * q
 
-    def source( self, index, state, x, t, params ):
+    def source( self, index, state, x, t, params: NonlinearDiffusionParams ):
         y = x - params.SourceCentre
         return params.T_s*jnp.exp(-y*y/params.SourceWidth)
 
@@ -169,7 +168,6 @@ class JAXNonlinearDiffusion(JAXTransportSystem):
         adjointProblem = JAXAdjointProblem(self, self.g)
         adjointProblem.addUpperBoundarySensitivity(0)
         return adjointProblem
-
 
 def registerTransportSystems():
     MaNTA.registerPhysicsCase("JAXLinearDiffusion", JAXLinearDiffusion)

@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import MaNTA
 
 class JAXAdjointProblem(MaNTA.AdjointProblem):
-    def __init__(self, transport_system, g):
+    def __init__(self, transport_system: MaNTA.TransportSystem, g):
         MaNTA.AdjointProblem.__init__(self)
         self.params = transport_system.params
         self.g = g
@@ -49,6 +49,7 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
             return True
         else:
             return False
+        
     def computeLowerBoundarySensitivity(self, i, pIndex):
         if (i, pIndex) in self.LowerBoundarySensitivities:
             return True

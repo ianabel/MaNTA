@@ -46,6 +46,7 @@ public:
     using IntegratorType = boost::math::quadrature::gauss<double, 30>;
     static IntegratorType integrator;
 
+    // We don't have the DGSoln object in Python, so we implement GFn and dGFndp here
     Value GFn(Index i, DGSoln &y) const override
     {
         auto g_wrapper = [&](const DGSoln &y, Position x)
