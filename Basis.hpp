@@ -400,7 +400,7 @@ class NodalBasis
                 for( Index j = 0; j < k + 1; ++j ) {
                     if( j == i )
                         continue;
-                    BarycentricWeights( i ) *= 1.0/(ChebNodes(j) - ChebNodes(i));
+                    BarycentricWeights( i ) *= 1.0/(ChebNodes(i) - ChebNodes(j));
                 }
             }
 
