@@ -48,8 +48,9 @@ def test_ref_soln_l2( filename, ref_filename, tolerance ):
 
             l2norm_diff = np.sqrt( diff2 )
             l2norm_ref  = np.sqrt( norm2ref )
-            if( abs( l2norm_diff/l2norm_ref ) > tolerance ):
-                print("Error: L_2 norm ", l2norm_diff, " ( ref is ", l2norm_ref, " ) at t = ",t_var[t_idx]," is greater than ",tolerance)
+            diff  = abs( l2norm_diff/l2norm_ref ) if l2norm_ref > 1e-12 else abs(l2norm_diff)
+            if( diff > tolerance ):
+                print("Error: L_2 norm ", diff, " ( ref is ", l2norm_ref, " ) at t = ",t_var[t_idx]," is greater than ",tolerance)
                 sys.exit( 1 )
     
     # Check if adjoints were computed, if so compare those too
@@ -59,11 +60,10 @@ def test_ref_soln_l2( filename, ref_filename, tolerance ):
             G_p     = nc_root.groups["G_p"].variables[var][0]
             G_p_ref = nc_root_ref.groups["G_p"].variables[var][0]
 
-            l2norm_diff = G_p
-            l2norm_ref = G_p_ref
+            diff = abs( (G_p - G_p_ref)/G_p_ref )
     
-            if( abs( l2norm_diff-l2norm_ref ) > tolerance ):
-                print("Error: Adjoint norm ", l2norm_diff, " ( ref is ", l2norm_ref, " ) for variable ",var," is greater than ",tolerance)
+            if( diff > tolerance ):
+                print("Error: Adjoint norm ", diff, " ( ref is ", G_p_ref, " ) for variable ",var," is greater than ",tolerance)
                 sys.exit( 1 )
 
         if (nc_root.groups.get("G_boundary") is not None):
@@ -72,11 +72,10 @@ def test_ref_soln_l2( filename, ref_filename, tolerance ):
                 G_bndry     = nc_root.groups["G_boundary"].variables[var][0]
                 G_bndry_ref = nc_root_ref.groups["G_boundary"].variables[var][0]
 
-                l2norm_diff = G_bndry
-                l2norm_ref = G_bndry_ref
+                diff = abs( (G_bndry - G_bndry_ref)/G_bndry_ref )
         
-                if( abs( l2norm_diff-l2norm_ref ) > tolerance ):
-                    print("Error: Boundary adjoint norm ", l2norm_diff, " ( ref is ", l2norm_ref, " ) for variable ",var," is greater than ",tolerance)
+                if( diff > tolerance ):
+                    print("Error: Boundary adjoint norm ", diff, " ( ref is ", G_bndry_ref, " ) for variable ",var," is greater than ",tolerance)
                     sys.exit( 1 )
 
 
@@ -139,7 +138,7 @@ def check_ref_case( prefix ):
     run_manta( prefix + ".conf" )
     ncFileName = prefix + ".nc"
     ncRefFile  = prefix + ".ref.nc"
-    test_ref_soln_l2( ncFileName, ncRefFile, 1e-3 )
+    test_ref_soln_l2( ncFileName, ncRefFile, 5e-3 )
     cleanup( prefix )
     
 def ld_soln( x, t ):

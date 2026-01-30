@@ -1,4 +1,5 @@
 #include <boost/test/unit_test.hpp>
+#include <boost/math/quadrature/gauss.hpp>
 #include "../../PhysicsCases/AdjointTestProblem.hpp"
 #include "../../PhysicsCases/AutodiffAdjointProblem.hpp"
 #include "Types.hpp"
@@ -146,20 +147,31 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
     y0 = N_VNew_Serial(3 * nGrid * (k + 1) + 1 * (nGrid + 1), ctx);
     y0_dot = N_VClone(y0);
     BOOST_CHECK_NO_THROW(system->setInitialConditions(y0, y0_dot));
-
+    auto integrator = boost::math::quadrature::gauss<double, 30>();
     Vector test_Vec(k + 1);
     Vector dGdu_test(k + 1);
+
     Vector zeroVec(k + 1);
     zeroVec.setZero();
     for (Index i = 0; i < nGrid; ++i)
     {
         auto I = testGrid[i];
 
-        // dG/dCij = c_ij ?
-        auto yCoeffs = system->y.u(0).getCoeff(i);
-        dGdu_test = yCoeffs.second;
+        // dG/dCij
+        // If using orthogonal basis, dG/dCij = Cij
+        for (Index j = 0; j < k + 1; ++j)
+        {
+            auto integrand = [&](double x)
+            {
+                Values grad(1);
+
+                adjoint->dgFn_du(0, grad, system->y.eval(x), x);
+                return system->y.getBasis().Evaluate(I, j, x) * grad(0);
+            };
+            dGdu_test(j) = integrator.integrate(integrand, I.x_l, I.x_u);
+        }
         BOOST_CHECK_NO_THROW(system->dGdu_Vec(0, test_Vec, system->y, I));
-        BOOST_TEST((dGdu_test - test_Vec).norm() < 1e-9);
+        BOOST_TEST((dGdu_test - test_Vec).norm() == 0.0);
 
         BOOST_CHECK_NO_THROW(system->dGdq_Vec(0, test_Vec, system->y, I));
         BOOST_TEST((zeroVec - test_Vec).norm() == 0.0);
