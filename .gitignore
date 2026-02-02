@@ -18,6 +18,9 @@ runs/
 .vscode/
 python/__pycache__/
 build/
-python/__pycache__/
+python/Tests/__pycache__/
+python/Tests/.pytest_cache/
+
+
 venv
 gmon.out

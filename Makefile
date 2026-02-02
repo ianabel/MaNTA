@@ -51,4 +51,7 @@ clean:
 regression_tests: $(SOLVER)
 	$(MAKE) -C Tests/RegressionTests
 
-.PHONY: clean test regression_tests Tests/UnitTests/UnitTests python
+python_tests:  $(SOLVER)
+	$(MAKE) -C python/Tests
+
+.PHONY: clean test regression_tests Tests/UnitTests/UnitTests python python_tests

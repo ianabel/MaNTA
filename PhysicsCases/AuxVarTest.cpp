@@ -20,37 +20,37 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(AuxVarTest);
 
-const double AuxNorm = 10.0;
+const double AuxNorm = 1.0;
 AuxVarTest::AuxVarTest(toml::value const &config, Grid const &)
 {
-	// Always set nVars in a derived constructor
-	nVars = 2;
-	nAux = 1;
+    // Always set nVars in a derived constructor
+    nVars = 2;
+    nAux = 1;
 
-	// Construst your problem from user-specified config
-	// throw an exception if you can't. NEVER leave a part-constructed object around
-	// here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
+    // Construst your problem from user-specified config
+    // throw an exception if you can't. NEVER leave a part-constructed object around
+    // here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 
-	if (config.count("DiffusionProblem") != 1)
-		throw std::invalid_argument("There should be a [DiffusionProblem] section if you are using the AuxVarTest physics model.");
+    if (config.count("DiffusionProblem") != 1)
+        throw std::invalid_argument("There should be a [DiffusionProblem] section if you are using the AuxVarTest physics model.");
 
-	auto const &DiffConfig = config.at("DiffusionProblem");
+    auto const &DiffConfig = config.at("DiffusionProblem");
 
-	kappa = toml::find_or(DiffConfig, "Kappa", 1.0);
-	InitialWidth = toml::find_or(DiffConfig, "InitialWidth", 0.2);
-	InitialHeight = toml::find_or(DiffConfig, "InitialHeight", 1.0);
-	Centre = toml::find_or(DiffConfig, "Centre", 0.0);
+    kappa = toml::find_or(DiffConfig, "Kappa", 1.0);
+    InitialWidth = toml::find_or(DiffConfig, "InitialWidth", 0.2);
+    InitialHeight = toml::find_or(DiffConfig, "InitialHeight", 1.0);
+    Centre = toml::find_or(DiffConfig, "Centre", 0.0);
 }
 
 // Dirichlet Boundary Conditon
 Value AuxVarTest::LowerBoundary(Index, Time t) const
 {
-	return 0.0;
+    return 0.0;
 }
 
 Value AuxVarTest::UpperBoundary(Index, Time t) const
 {
-	return 0.0;
+    return 0.0;
 }
 
 bool AuxVarTest::isLowerBoundaryDirichlet(Index) const { return true; };
@@ -58,19 +58,20 @@ bool AuxVarTest::isUpperBoundaryDirichlet(Index) const { return true; };
 
 Value AuxVarTest::SigmaFn(Index i, const State &s, Position, Time)
 {
-	return kappa * s.Derivative[i];
+    return kappa * s.Derivative[i];
 }
 
 //
 Value AuxVarTest::Sources(Index i, const State &st, Position x, Time)
 {
-	double U = ::cos(M_PI_2 * x);
-	double a = st.Aux[0];
-    switch ( i ) {
-      case 0:
+    double U = ::cos(M_PI_2 * x);
+    double a = st.Aux[0];
+    switch (i)
+    {
+    case 0:
         return kappa * M_PI_2 * M_PI_2 * U + AuxNorm * (a - U * U);
         break;
-      case 1:
+    case 1:
         return kappa * M_PI_2 * M_PI_2 * U;
         break;
     }
@@ -80,7 +81,7 @@ Value AuxVarTest::Sources(Index i, const State &st, Position x, Time)
 void AuxVarTest::dSigmaFn_dq(Index i, Values &v, const State &, Position, Time)
 {
     v.setZero();
-	v[i] = kappa;
+    v[i] = kappa;
 };
 
 void AuxVarTest::dSigmaFn_du(Index, Values &v, const State &, Position, Time)
@@ -105,22 +106,23 @@ void AuxVarTest::dSources_dsigma(Index, Values &v, const State &, Position, Time
 
 Value AuxVarTest::InitialAuxValue(Index i, Position x) const
 {
-	double u0 = InitialValue(i, x);
-	return u0 * u0;
+    double u0 = InitialValue(i, x);
+    return u0 * u0;
 }
 
-Value AuxVarTest::AuxG(Index, const State &st, Position x, Time t )
+Value AuxVarTest::AuxG(Index, const State &st, Position x, Time t)
 {
-	double a = st.Aux[0];
-	double u = st.Variable[0];
-	return AuxNorm * (a - u * u);
+    double a = st.Aux[0];
+    double u = st.Variable[0];
+    return (a - u * u);
 }
 
 void AuxVarTest::AuxGPrime(Index iAux, State &out, const State &st, Position, Time)
 {
-	double u = st.Variable[0];
+    double u = st.Variable[0];
 
-    if( iAux != 0 ) {
+    if (iAux != 0)
+    {
         throw std::logic_error("ABORT!");
     }
     // most derivatives are zero
@@ -130,31 +132,31 @@ void AuxVarTest::AuxGPrime(Index iAux, State &out, const State &st, Position, Ti
     // dG/da = 1.0
     out.Aux[0] = AuxNorm * (1.0);
 
-	return;
+    return;
 }
 
 void AuxVarTest::dSources_dPhi(Index i, Values &v, const State &st, Position, Time)
 {
     v.setZero();
-    switch ( i ) {
-      case 0:
+    switch (i)
+    {
+    case 0:
         v[0] = AuxNorm * 1.0;
         return;
-      case 1:
+    case 1:
         return;
     }
 }
 
-
 // Initialise with a Gaussian at x = 0 for both variables
 Value AuxVarTest::InitialValue(Index, Position x) const
 {
-	double y = (x - Centre);
-	return ::exp(-25 * y * y);
+    double y = (x - Centre);
+    return ::exp(-25 * y * y);
 }
 
 Value AuxVarTest::InitialDerivative(Index, Position x) const
 {
-	double y = (x - Centre);
-	return -50 * y * ::exp(-25 * y * y);
+    double y = (x - Centre);
+    return -50 * y * ::exp(-25 * y * y);
 }

@@ -1350,6 +1350,7 @@ int SystemSolver::getErrorWeights(N_Vector y_sundials, N_Vector ewt_sundials)
 
         for (Index a = 0; a < nAux; ++a)
         {
+
             ewt.Aux(a).getCoeff(i).second = 1.0 / (rtol * abs(y.Aux(a).getCoeff(i).second.array()) + absTol);
         }
     }

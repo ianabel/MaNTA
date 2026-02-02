@@ -1,5 +1,4 @@
 #include "AutodiffTransportSystem.hpp"
-#include "Constants.hpp"
 #include <autodiff/forward/dual.hpp>
 #include <iostream>
 #include <filesystem>

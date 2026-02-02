@@ -1,5 +1,4 @@
 #include "ADTestProblem.hpp"
-#include "Constants.hpp"
 #include <iostream>
 
 REGISTER_PHYSICS_IMPL(ADTestProblem);

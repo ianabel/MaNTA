@@ -1,5 +1,4 @@
 #include "AdjointTestProblem.hpp"
-#include "Constants.hpp"
 #include <iostream>
 
 REGISTER_PHYSICS_IMPL(AdjointTestProblem);
