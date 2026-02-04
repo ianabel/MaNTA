@@ -59,12 +59,12 @@ Real AuxVarADTest::Flux(Index i, RealVector, RealVector q, Real, Time)
 Real AuxVarADTest::Source(Index, RealVector u, RealVector, RealVector, RealVector phi, Real x, Time)
 {
     Real U = cos(M_PI_2 * x);
-    return kappa * M_PI_2 * M_PI_2 * U + phi(0) - U * U;
+    return kappa * M_PI_2 * M_PI_2 * U;
 }
 
-Real AuxVarADTest::GFunc(Index, RealVector u, RealVector, RealVector, RealVector phi, Position, Time)
+Real AuxVarADTest::GFunc(Index, RealVector u, RealVector, RealVector, RealVector phi, Position, Time t)
 {
-    return phi(0) - u(0) * u(0);
+    return (phi(0) - u(0) * u(0));
 }
 
 // We don't need the index variables as nVars is 1, so the index argument should

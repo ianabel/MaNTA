@@ -114,7 +114,7 @@ Value AuxVarTest::AuxG(Index, const State &st, Position x, Time t)
 {
     double a = st.Aux[0];
     double u = st.Variable[0];
-    return (a - u * u);
+    return -(a - u * u);
 }
 
 void AuxVarTest::AuxGPrime(Index iAux, State &out, const State &st, Position, Time)
@@ -128,9 +128,9 @@ void AuxVarTest::AuxGPrime(Index iAux, State &out, const State &st, Position, Ti
     // most derivatives are zero
     out.zero();
     // dG/du = -2.0 * u
-    out.Variable[0] = AuxNorm * (-2.0 * u);
+    out.Variable[0] = -AuxNorm * (-2.0 * u);
     // dG/da = 1.0
-    out.Aux[0] = AuxNorm * (1.0);
+    out.Aux[0] = -AuxNorm * (1.0);
 
     return;
 }

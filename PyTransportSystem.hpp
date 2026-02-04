@@ -37,6 +37,12 @@ public:
 		method_overrides.insert(std::make_pair("dSources_dq", make_override("dSources_dq")));
 		method_overrides.insert(std::make_pair("dSources_du", make_override("dSources_du")));
 		method_overrides.insert(std::make_pair("dSources_dsigma", make_override("dSources_dsigma")));
+		if (nAux > 0)
+		{
+			method_overrides.insert(std::make_pair("AuxGPrime", make_override("AuxGPrime")));
+			method_overrides.insert(std::make_pair("dSources_dPhi", make_override("dSources_dPhi")));
+			method_overrides.insert(std::make_pair("dSigma_dPhi", make_override("dSigma_dPhi")));
+		}
 
 		initialized = true;
 	}
@@ -106,6 +112,48 @@ public:
 		PYBIND11_OVERRIDE_PURE(Value, TransportSystem, InitialDerivative, i, x);
 	};
 
+	Value InitialAuxValue(Index i, Position x) const override
+	{
+		PYBIND11_OVERRIDE(Value, TransportSystem, InitialAuxValue, i, x);
+	}
+
+	Value AuxG(Index i, const State &s, Position x, Time t) override
+	{
+		PYBIND11_OVERRIDE(Value, TransportSystem, AuxG, i, s, x, t);
+	}
+
+	void AuxGPrime(Index i, State &out, const State &s, Position x, Time t) override
+	{
+		if (!initialized)
+			initializeOverrides();
+
+		out = method_overrides["AuxGPrime"](i, s, x, t).cast<State>();
+	}
+
+	void dSources_dPhi(Index i, Values &v, const State &s, Position x, Time t) override
+	{
+		if (nAux == 0)
+		{
+			v.setZero();
+			return;
+		}
+		if (!initialized)
+			initializeOverrides();
+		v = method_overrides["dSources_dPhi"](i, s, x, t).cast<Values>();
+	}
+
+	void dSigma_dPhi(Index i, Values &v, const State &s, Position x, Time t) override
+	{
+		if (nAux == 0)
+		{
+			v.setZero();
+			return;
+		}
+		if (!initialized)
+			initializeOverrides();
+		v = method_overrides["dSigma_dPhi"](i, s, x, t).cast<Values>();
+	}
+
 	std::unique_ptr<AdjointProblem> createAdjointProblem() override
 	{
 		PYBIND11_OVERRIDE(std::unique_ptr<AdjointProblem>, TransportSystem, createAdjointProblem);
@@ -114,6 +162,7 @@ public:
 public:
 	using TransportSystem::isLowerDirichlet;
 	using TransportSystem::isUpperDirichlet;
+	using TransportSystem::nAux;
 	using TransportSystem::nVars;
 
 private:

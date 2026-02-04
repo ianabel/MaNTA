@@ -928,16 +928,17 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
             res.u(var).getCoeff(i).second =
                 B_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.sigma(var).getCoeff(i).second + D_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * Y_h.u(var).getCoeff(i).second + E_cellwise[i].block(var * (k + 1), var * 2, k + 1, 2) * lambda - RF_cellwise[i].block(nVars * (k + 1) + var * (k + 1), 0, k + 1, 1) - S_cellwise + XMats[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1) * dYdt_h.u(var).getCoeff(i).second;
         }
+        for (Index aux = 0; aux < nAux; aux++)
+        {
+            // For the auxiliary variable bits
+            // Set (res_aux_i)_j = < G_i, phi_j >
+            // so we enforce G = 0 by projection
+            auto auxFunc = [&, this](Position x)
+            { return problem->AuxG(aux, Y_h.eval(x), x, tres); };
+            res.Aux(aux).getCoeff(i).second = y.getBasis().ProjectOntoBasis(I, auxFunc);
+        }
     }
 
-    for (Index aux = 0; aux < nAux; aux++)
-    {
-        // For the auxiliary variable bits
-        // Set (res_aux_i)_j = < G_i, phi_j >
-        // so we enforce G = 0 by projection
-        res.Aux(aux) = [&, this](Position x)
-        { return problem->AuxG(aux, Y_h.eval(x), x, tres); };
-    }
 
     for (Index j = 0; j < nScalars; j++)
     {

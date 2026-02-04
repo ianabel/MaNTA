@@ -23,6 +23,11 @@ public:
     virtual void dSigmaFn_dp(Index i, Index pIndex, Value &, const State &s, Position x) = 0;
     virtual void dSources_dp(Index i, Index pIndex, Value &, const State &s, Position x) = 0;
 
+    virtual void dAux_dp(Index i, Index pIndex, Value &, const State &s, Position x)
+    {
+        std::logic_error("nAux > 0 but no G derivative provided");
+    };
+
     virtual std::string getName(Index pIndex) const { return "p" + std::to_string(pIndex); };
 
     virtual bool computeUpperBoundarySensitivity(Index i, Index pIndex) { return false; };

@@ -13,6 +13,7 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
         self.np_boundary = 0
         self.dsigma_dp = jax.jit(jax.grad(transport_system.sigma, argnums=4))
         self.dsource_dp = jax.jit(jax.grad(transport_system.source, argnums=4))
+        self.daux_dp = jax.jit(jax.grad(transport_system.aux, argnums=4))
 
         self.UpperBoundarySensitivities = {}
         self.LowerBoundarySensitivities = {}
@@ -43,6 +44,9 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
     
     def dSources_dp(self, index, pIndex, state, x):
         return self.dsource_dp(index, state, x, 0.0, self.params)[pIndex]
+    
+    def dAux_dp(self, index, pIndex, state, x):
+        return self.daux_dp(index, state, x, 0.0, self.params )[pIndex]
     
     def computeUpperBoundarySensitivity(self, i, pIndex):
         if (i, pIndex) in self.UpperBoundarySensitivities:

@@ -39,6 +39,8 @@ public:
         method_overrides.insert(std::make_pair("dSigmaFn_dp", make_override("dSigmaFn_dp")));
         method_overrides.insert(std::make_pair("dSources_dp", make_override("dSources_dp")));
 
+        method_overrides.insert(std::make_pair("dAux_dp", make_override("dAux_dp")));
+
         initialized = true;
     }
     // PyTransportSystem(TransportSystem &&base) : Tr
@@ -111,6 +113,14 @@ public:
             initializeOverrides();
         out = method_overrides["dSources_dp"](i, pIndex, s, x).cast<Value>();
     };
+
+    void dAux_dp(Index i, Index pIndex, Value &out, const State &s, Position x) override
+    {
+
+        if (!initialized)
+            initializeOverrides();
+        out = method_overrides["dAux_dp"](i, pIndex, s, x).cast<Value>();
+    }
 
     std::string getName(Index pIndex) const override
     {

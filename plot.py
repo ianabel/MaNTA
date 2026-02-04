@@ -149,7 +149,7 @@ def plot_diagnostics(fname):
                 plt.figure()
                 ax = plt.axes()
                 ax.plot(x,y[-1,:],label = var)
-                ax.plot(x,y[0,:],label = var + " t=0")
+                #ax.plot(x,y[0,:],label = var + " t=0")
                 ax.legend()
                 plt.title(data.groups[group].description)
                 plt.xlabel("x")
@@ -169,12 +169,12 @@ def plot_diagnostics(fname):
 
 
 def main():
-    fname = "./runs/MirrorFusion.nc"
-    plot_nc(fname,plot_u=True,plot_grid=True,plot_scalars=True,include_initial=False)
+    fname = "./runs/AuxVarADTest.nc"
+    plot_nc(fname,plot_u=True,plot_grid=True,plot_aux=True,include_initial=True)
     # fname = "./MirrorPlasmaTest.nc"
     #plot_nc(fname,False,False,include_initial=True)
     # plot_MMS(fname)
-    #plot_diagnostics(fname)
+    plot_diagnostics(fname)
     plt.show()
     
 
