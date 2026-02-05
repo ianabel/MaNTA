@@ -28,7 +28,6 @@ namespace pybind11
 			bool load(handle src, bool)
 			{
 				py::dict d = py::cast<py::dict>(src);
-				auto value = State();
 				value.Variable = py::cast<Vector>(d["Variable"]);
 				value.Derivative = py::cast<Vector>(d["Derivative"]);
 				value.Flux = py::cast<Vector>(d["Flux"]);

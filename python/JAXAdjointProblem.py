@@ -46,6 +46,7 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
         return self.dsource_dp(index, state, x, 0.0, self.params)[pIndex]
     
     def dAux_dp(self, index, pIndex, state, x):
+       
         return self.daux_dp(index, state, x, 0.0, self.params )[pIndex]
     
     def computeUpperBoundarySensitivity(self, i, pIndex):
@@ -55,6 +56,7 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
             return False
         
     def computeLowerBoundarySensitivity(self, i, pIndex):
+ 
         if (i, pIndex) in self.LowerBoundarySensitivities:
             return True
         else:

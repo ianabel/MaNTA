@@ -1203,10 +1203,7 @@ void SystemSolver::computeAdjointGradients()
                 auto C_cell = C_cellwise[i];
                 F_p.segment(var * (k + 1) + 2 * nVars * (k + 1), k + 1) = -dSdp_cellwise;
 
-                // TODO: implement this
-                if (nAux > 0)
-                {
-                }
+                
 
                 // Boundary conditions
                 // p = g_D in this case, so the derivatives are just the basis functions
@@ -1225,6 +1222,23 @@ void SystemSolver::computeAdjointGradients()
                         // < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 )
                         F_p(nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_u);
                     }
+                }
+                // TODO: implement this
+               
+            }
+            for (Index aux = 0; aux < nAux; ++aux)
+            {
+                if (pIndex < adjointProblem->getNp() - adjointProblem->getNpBoundary() - 1)
+                {
+                    auto dAuxdp = [&](double x)
+                    {
+                        State s = y.eval(x);
+                        Value grad;
+                        adjointProblem->dAux_dp(aux, pIndex, grad, s, x);
+                        return grad;
+                    };
+                    Eigen::VectorXd dAux_dp_cellwise = y.getBasis().ProjectOntoBasis(I, dAuxdp);
+                    F_p.segment(3 * nVars * (k + 1) + aux * (k + 1), k + 1) = dAux_dp_cellwise;
                 }
             }
 
