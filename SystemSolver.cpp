@@ -1185,7 +1185,7 @@ void SystemSolver::computeAdjointGradients()
 
                 Eigen::VectorXd dkappa_dp_phi(k + 1);
                 dkappa_dp_phi.setZero();
-                if (!adjointProblem->computeLowerBoundarySensitivity(var, pIndex) && !adjointProblem->computeUpperBoundarySensitivity(var, pIndex))
+                if (pIndex < adjointProblem->getNp() - adjointProblem->getNpBoundary())
                 {
                     dkappa_dp_phi = y.getBasis().ProjectOntoBasis( I, dkappadp );
                 }
@@ -1193,7 +1193,7 @@ void SystemSolver::computeAdjointGradients()
                 // Evaluate Source Function
                 Eigen::VectorXd dSdp_cellwise(k + 1);
                 dSdp_cellwise.setZero();
-                if (!adjointProblem->computeLowerBoundarySensitivity(var, pIndex) && !adjointProblem->computeUpperBoundarySensitivity(var, pIndex))
+                if (pIndex < adjointProblem->getNp() - adjointProblem->getNpBoundary())
                 {
                     dSdp_cellwise = y.getBasis().ProjectOntoBasis( I, dSdp );
                 }
@@ -1228,7 +1228,7 @@ void SystemSolver::computeAdjointGradients()
             }
             for (Index aux = 0; aux < nAux; ++aux)
             {
-                if (pIndex < adjointProblem->getNp() - adjointProblem->getNpBoundary() - 1)
+                if (pIndex < adjointProblem->getNp() - adjointProblem->getNpBoundary())
                 {
                     auto dAuxdp = [&](double x)
                     {
