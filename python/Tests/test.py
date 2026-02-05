@@ -81,6 +81,7 @@ def compare_solution(transport_system):
  
 def test():
     compare_solution("JAXLinearDiffusion")
+    compare_solution("JAXAuxTest")
 
 
 

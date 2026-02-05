@@ -1,6 +1,4 @@
 from typing import NamedTuple
-import jax
-import pytest
 import sys
 sys.path.insert(0, '../')  # To find MaNTA module
 

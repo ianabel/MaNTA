@@ -36,7 +36,7 @@ class JAXTransportSystem(MaNTA.TransportSystem):
 
     
     """
-    Sigma and source functions to be overloaded in derived classes
+    Sigma and source, and auxilliary functions to be overloaded in derived classes
 
     Parameters
     ----------
@@ -57,6 +57,7 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     """
     def sigma( self, index, state, x, t, params: NamedTuple ):
         pass
+
     def source( self, index, state, x, t, params: NamedTuple ):
         pass
 
@@ -69,7 +70,7 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     def dSigmaFn_du( self, index, state, x, t):
         return self.dSigmadvar(index,state,x,t)["Variable"]
     
-    def dSigmaFn_dPhi( self, index, state, x, t):
+    def dSigma_dPhi( self, index, state, x, t):
         return self.dSigmadvar(index,state,x,t)["Aux"]
         
     def dSources_du( self, index, state, x, t ):
@@ -86,10 +87,28 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     
     def AuxG( self, index, state, x, t):
         return self.aux(index, state, x, t, self.params)
+    
+    """
+    Compute derivative of auxilliary functions
 
+     Parameters
+    ----------
+    index : int
+        Variable index
+    state : dict
+        Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
+    x : float
+        Spatial location
+    t : float
+        Time
+    Returns
+    -------
+    state : dict
+        Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
+    """
     def AuxGPrime( self, index, state, x , t):
         return self.dAuxdvars(index, state, x, t)
-
+      
     def InitialValue( self, index, x ):
         pass
 
@@ -154,6 +173,7 @@ class JAXNonlinearDiffusion(JAXTransportSystem):
         y = x - params.SourceCentre
         return params.T_s*jnp.exp(-y*y/params.SourceWidth)
 
+
     def LowerBoundary(self, index, t):
         return 0.0
 
@@ -172,6 +192,7 @@ class JAXAuxTest(JAXTransportSystem):
     def __init__(self, config: MaNTA.TomlValue, grid: MaNTA.Grid):
         super().__init__()
         self.nVars = 1
+        self.nAux = 1
         self.isUpperDirichlet  = True
         self.isLowerDirichlet  = False
 
@@ -187,10 +208,17 @@ class JAXAuxTest(JAXTransportSystem):
         u = state["Variable"][0]
         q = state["Derivative"][0]
         return params.D*(u ** params.a) * q
+    
+    def aux( self, index ,state, x, t, params):
+        a = state["Aux"][0]
+        u = state["Variable"][0]
+        return a - params.D*u*u
 
     def source( self, index, state, x, t, params: NonlinearDiffusionParams ):
         y = x - params.SourceCentre
-        return params.T_s*jnp.exp(-y*y/params.SourceWidth)
+        u = state["Variable"][0]
+        a = state["Aux"][0]
+        return params.T_s*jnp.exp(-y*y/params.SourceWidth) + a - params.D*u*u
 
     def LowerBoundary(self, index, t):
         return 0.0
@@ -201,6 +229,10 @@ class JAXAuxTest(JAXTransportSystem):
     def InitialValue(self, index, x):
         return 0.3
     
+    def InitialAuxValue(self, index, x):
+        u0 = self.InitialValue(index, x)
+        return self.params.D*u0*u0
+    
     def createAdjointProblem(self):
         adjointProblem = JAXAdjointProblem(self, self.g)
         adjointProblem.addUpperBoundarySensitivity(0)
@@ -209,4 +241,5 @@ class JAXAuxTest(JAXTransportSystem):
 def registerTransportSystems():
 
     MaNTA.registerPhysicsCase("JAXNonlinearDiffusion", JAXNonlinearDiffusion)
+    MaNTA.registerPhysicsCase("JAXAuxTest", JAXAuxTest)
 
