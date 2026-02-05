@@ -15,6 +15,11 @@ class LD2 : public TransportSystem {
 		// you can ignore it, or read problem-dependent parameters from the configuration file
 		explicit LD2( toml::value const& config, Grid const& );
 
+        virtual ~LD2() {
+            std::cout << "During scope existence, Sigma was called " << nSigmaCalls << " times;" << std::endl;
+            return;
+        }
+
 		// You must provide implementations of both, these are your boundary condition functions
 		Value LowerBoundary( Index, Time ) const override;
 		Value UpperBoundary( Index, Time ) const override;
@@ -44,6 +49,8 @@ private:
 	double kappa, InitialWidth, InitialHeight, Centre;
 	double t0;
 	Value ExactSolution( Position, Time ) const;
+
+    unsigned int nSigmaCalls,nSourceCalls;
 
 	// Without this (and the implementation line in LD2.cpp)
 	// ManTA won't know how to relate the string 'LD2' to the class.

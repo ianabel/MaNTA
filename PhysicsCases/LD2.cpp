@@ -29,6 +29,9 @@ LD2::LD2( toml::value const& config, Grid const& )
 	Centre =        toml::find_or( DiffConfig, "Centre", 0.0 );
 
 	t0 = InitialWidth * InitialWidth / ( 4.0 * kappa );
+    nSigmaCalls = 0;
+    nSourceCalls = 0;
+
 }
 
 // Dirichlet Boundary Conditon
@@ -48,11 +51,13 @@ bool LD2::isUpperBoundaryDirichlet( Index ) const { return true; };
 
 Value LD2::SigmaFn( Index, const State &s, Position, Time )
 {
+    ++nSigmaCalls;
 	return kappa * s.Derivative[ 0 ];
 }
 
 Value LD2::Sources( Index, const State &, Position, Time )
 {
+    ++nSourceCalls;
 	return 0.0;
 }
 

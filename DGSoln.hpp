@@ -214,6 +214,7 @@ template<class BasisType> class DGSolnImpl
             Index nCells = grid.getNCells();
             for (Index var = 0; var < nVars; ++var)
             {
+                lambda_[var].setZero();
                 for (Index i = 0; i < nCells; ++i)
                 {
                     Interval const &I = grid[i];
@@ -232,6 +233,7 @@ template<class BasisType> class DGSolnImpl
             Index nCells = grid.getNCells();
             for (Index var = 0; var < nVars; ++var)
             {
+                lambda_[var].setZero();
                 for (Index i = 0; i < nCells; ++i)
                 {
                     Interval const &I = grid[i];
