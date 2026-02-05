@@ -292,9 +292,6 @@ template<class BasisType> class DGSolnImpl
                             coeffPair.second[j] += wgt * sigma_minus * Basis.Evaluate(I, j, y_minus);
                         }
                     }
-                    if( mass_transpose_inverse.rcond() < 0.1 ) {
-                      std::cerr << "Mass Matrix is ill-conditioned" << std::endl;
-                    }
                     coeffPair.second = mass_transpose_inverse.solve( coeffPair.second );
                 }
             }

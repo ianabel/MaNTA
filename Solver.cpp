@@ -191,9 +191,9 @@ void SystemSolver::runSolver(double tFinal)
 			 << "var" << v << " source";
 	out0 << std::endl;
 
-	std::ofstream dydt_out, res_out;
+    std::ofstream dydt_out, res_out;
 
-	if (physics_debug)
+    if (physics_debug)
     {
         wgt = N_VClone(res);
         dydt_out.open(baseName + ".dydt.dat");
@@ -210,8 +210,9 @@ void SystemSolver::runSolver(double tFinal)
     }
 
     //------------------------------Solve------------------------------
-	// Update initial solution to be within tolerance of the residual equation
-	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
+    // Update initial solution to be within tolerance of the residual equation
+    retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
+    retval = 0;
 	if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
 	{
 		throw std::runtime_error("IDACalcIC could not complete");

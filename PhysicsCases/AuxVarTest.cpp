@@ -13,7 +13,15 @@
  *
  * d_t u - kappa * d_xx u = a + f(x)  ; a = u * u
  *
- * with the auxiliary variable system
+ * to check that this leaves a simple diffusion equation unaffected we also solve
+ *
+ * d_t v - kappa * d_xx v = g(x)
+ *
+ * in parallel
+ *
+ * Here the domain is [-1,1] , U(x) is chosen to be cos( pi x / 2 )
+ *
+ * g(x) = cos( 2 pi x ) if x is in [-0.25,0.25] and zero elsewhere
  *
  */
 
@@ -66,13 +74,16 @@ Value AuxVarTest::Sources(Index i, const State &st, Position x, Time)
 {
     double U = ::cos(M_PI_2 * x);
     double a = st.Aux[0];
-    switch (i)
-    {
-    case 0:
-        return kappa * M_PI_2 * M_PI_2 * U + AuxNorm * (a - U * U);
+    switch ( i ) {
+      case 0:
+        return kappa * M_PI_2 * M_PI_2 * U + (a - U * U);
         break;
-    case 1:
-        return kappa * M_PI_2 * M_PI_2 * U;
+      case 1:
+        if( ::fabs(x) <= 0.25 ) {
+            return ::cos( 2 * M_PI * x );
+        } else {
+            return 0;
+        }
         break;
     }
     return 0;

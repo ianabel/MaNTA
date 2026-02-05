@@ -652,7 +652,6 @@ BOOST_AUTO_TEST_CASE( dg_approx_static_nodal )
              0.000119571,  -0.000475085,    0.000932406,   0.011321,      0.00114058,
             -0.000120153,   0.000407881,   -0.000758618,   0.00114058,    0.00444517;
 
-    std::cout << tmp << std::endl;
     BOOST_TEST( ( tmp - ref ).norm() < 1e-7 );
 
     basis.MassMatrix( testGrid[ 0 ], tmp, []( double x, int ){ return x; }, 0 );

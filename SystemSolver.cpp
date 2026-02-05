@@ -566,8 +566,6 @@ void SystemSolver::updateMatricesForJacSolve()
         dAux_Mat(MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), yJac, I);
 
         MXSolvers[ i ].compute(MX);
-        if( MXSolvers[ i ].rcond() > 0.01 )
-          std::cerr << "MXSolver[ " << i << " ] is ill-conditioned" << std::endl;
     }
 
     // Construct the N_HDG_DOF x N_Scalar matrix v which
