@@ -36,7 +36,7 @@ class JAXTransportSystem(MaNTA.TransportSystem):
 
     
     """
-    Sigma and source functions to be overloaded in derived classes
+    Sigma and source, and auxilliary functions to be overloaded in derived classes
 
     Parameters
     ----------
@@ -57,6 +57,7 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     """
     def sigma( self, index, state, x, t, params: NamedTuple ):
         pass
+
     def source( self, index, state, x, t, params: NamedTuple ):
         pass
 
@@ -86,7 +87,25 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     
     def AuxG( self, index, state, x, t):
         return self.aux(index, state, x, t, self.params)
+    
+    """
+    Compute derivative of auxilliary functions
 
+     Parameters
+    ----------
+    index : int
+        Variable index
+    state : dict
+        Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
+    x : float
+        Spatial location
+    t : float
+        Time
+    Returns
+    -------
+    state : dict
+        Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
+    """
     def AuxGPrime( self, index, state, x , t):
         return self.dAuxdvars(index, state, x, t)
       
@@ -163,7 +182,6 @@ class JAXNonlinearDiffusion(JAXTransportSystem):
     
     def InitialValue(self, index, x):
         return 0.3
-    
     
     def createAdjointProblem(self):
         adjointProblem = JAXAdjointProblem(self, self.g)
