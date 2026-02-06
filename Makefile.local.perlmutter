@@ -1,0 +1,23 @@
+
+# A simple makefile for compiling on Perlmutter
+# if you are following the guide in the README
+
+# add and uncomment the following in your .bashrc (or equivalent, depending on preferred shell; for csh, need to use setenv instead of export, etc):
+#####
+
+# module load PrgEnv-gnu/8.5.0
+# export CXX=CC
+
+# module load gcc-native/13.2  cray-hdf5/1.14.3.1
+# module load cray-netcdf/4.9.0.13
+
+# module load python 
+# export SUNDIALS_ROOT=/global/cfs/cdirs/mp217/iabel/sundials/install
+# export BOOST_DIR=/global/cfs/cdirs/mp217/iabel/boost/boost_1_90_0
+# export EIGEN_DIR=/usr/include/eigen3
+
+#####
+
+# Uncomment for debug information
+#DEBUG = on
+PHYSICS_DEBUG=on
