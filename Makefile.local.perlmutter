@@ -21,3 +21,6 @@
 # Uncomment for debug information
 #DEBUG = on
 PHYSICS_DEBUG=on
+
+#
+SUNDIALS_DIR=$(SUNDIALS_ROOT)
