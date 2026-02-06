@@ -5,7 +5,6 @@
 #include <utility>
 
 #include "Types.hpp"
-#include "Jacobi.hpp"
 #include <boost/math/special_functions/legendre.hpp>
 #include <boost/math/special_functions/binomial.hpp>
 
