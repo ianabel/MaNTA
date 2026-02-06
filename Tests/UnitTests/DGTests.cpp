@@ -198,7 +198,7 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction )
 
     BOOST_TEST( constructedData( 0.1 ) == a*0.1 );
     BOOST_TEST( constructedData( 0.7 ) == a*0.7 );
-    BOOST_TEST( constructedData.getDoF() == 8 );
+    BOOST_TEST( constructedData.getDoF() == 8u );
 
     // += operator testing.
     constructedData = [ = ]( double x ){ return ( a/2.0 )*x; };
@@ -223,13 +223,13 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction )
     linear = [=]( double x ){ return a*x; };
     constructedData = [ = ]( double x ){ return ( a/2.0 )*x; };
 
-    BOOST_TEST( linear.getDoF() == 8 );
+    BOOST_TEST( linear.getDoF() == 8u );
     BOOST_TEST( linear( 0.1 ) == a*0.1 );
     BOOST_TEST( linear( 0.7 ) == a*0.7 );
 
     BOOST_TEST( constructedData( 0.1 ) == ( a/2.0 )*0.1 );
     BOOST_TEST( constructedData( 0.7 ) == ( a/2.0 )*0.7 );
-    BOOST_TEST( constructedData.getDoF() == 8 );
+    BOOST_TEST( constructedData.getDoF() == 8u );
 
     new ( &v ) VectorWrapper( mem, linear.getDoF()*2 );
     // Data for 'linear'
@@ -258,7 +258,7 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction_nodal )
     auto const& cref = linear.getCoeffs();
     BOOST_TEST( cref.size() == 0 );
     BOOST_TEST( cref.capacity() == testGrid.getNCells() );
-    BOOST_TEST( linear.getDoF() == 8 );
+    BOOST_TEST( linear.getDoF() == 8u );
 
     // Map memory
     double* mem = new double[ linear.getDoF() ];
@@ -300,7 +300,7 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction_nodal )
 
     BOOST_TEST( constructedData( 0.1 ) == a*0.1 );
     BOOST_TEST( constructedData( 0.7 ) == a*0.7 );
-    BOOST_TEST( constructedData.getDoF() == 8 );
+    BOOST_TEST( constructedData.getDoF() == 8u );
 
     // += operator testing.
     constructedData = [ = ]( double x ){ return ( a/2.0 )*x; };
@@ -328,13 +328,13 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction_nodal )
     linear = [=]( double x ){ return a*x; };
     constructedData = [ = ]( double x ){ return ( a/2.0 )*x; };
 
-    BOOST_TEST( linear.getDoF() == 8 );
+    BOOST_TEST( linear.getDoF() == 8u );
     BOOST_TEST( linear( 0.1 ) == a*0.1 );
     BOOST_TEST( linear( 0.7 ) == a*0.7 );
 
     BOOST_TEST( constructedData( 0.1 ) == ( a/2.0 )*0.1 );
     BOOST_TEST( constructedData( 0.7 ) == ( a/2.0 )*0.7 );
-    BOOST_TEST( constructedData.getDoF() == 8 );
+    BOOST_TEST( constructedData.getDoF() == 8u );
 
     new ( &v ) VectorWrapper( mem, linear.getDoF()*2 );
     // Data for 'linear'
@@ -359,7 +359,7 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction_cheb )
     auto const& cref = linear.getCoeffs();
     BOOST_TEST( cref.size() == 0 );
     BOOST_TEST( cref.capacity() == testGrid.getNCells() );
-    BOOST_TEST( linear.getDoF() == 8 );
+    BOOST_TEST( linear.getDoF() == 8u );
 
     // Map memory
     double* mem = new double[ linear.getDoF() ];
@@ -403,7 +403,7 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction_cheb )
 
     BOOST_TEST( constructedData( 0.1 ) == a*0.1 );
     BOOST_TEST( constructedData( 0.7 ) == a*0.7 );
-    BOOST_TEST( constructedData.getDoF() == 8 );
+    BOOST_TEST( constructedData.getDoF() == 8u );
 
     // += operator testing.
     constructedData = [ = ]( double x ){ return ( a/2.0 )*x; };
@@ -434,13 +434,13 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction_cheb )
     linear = [=]( double x ){ return a*x; };
     constructedData = [ = ]( double x ){ return ( a/2.0 )*x; };
 
-    BOOST_TEST( linear.getDoF() == 8 );
+    BOOST_TEST( linear.getDoF() == 8u );
     BOOST_TEST( linear( 0.1 ) == a*0.1 );
     BOOST_TEST( linear( 0.7 ) == a*0.7 );
 
     BOOST_TEST( constructedData( 0.1 ) == ( a/2.0 )*0.1 );
     BOOST_TEST( constructedData( 0.7 ) == ( a/2.0 )*0.7 );
-    BOOST_TEST( constructedData.getDoF() == 8 );
+    BOOST_TEST( constructedData.getDoF() == 8u );
 
     new ( &v ) VectorWrapper( mem, linear.getDoF()*2 );
     // Data for 'linear'
