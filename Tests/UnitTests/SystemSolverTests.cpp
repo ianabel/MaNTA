@@ -156,7 +156,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_multichannel_init_tests)
 
     BOOST_TEST(system->k == k);
     BOOST_TEST(system->grid == testGrid);
-    BOOST_TEST(system->nVars == 2);
+    BOOST_TEST(system->nVars == 2u);
 
     BOOST_CHECK_NO_THROW(system->initialiseMatrices());
     Index N = 2 * (k + 1);

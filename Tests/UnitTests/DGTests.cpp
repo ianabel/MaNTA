@@ -157,9 +157,9 @@ BOOST_AUTO_TEST_CASE( dg_approx_construction )
     DGApproxImpl<LegendreBasis> linear( testGrid, Basis );
 
     auto const& cref = linear.getCoeffs();
-    BOOST_TEST( cref.size() == 0 );
+    BOOST_TEST( cref.size() == 0u );
     BOOST_TEST( cref.capacity() == testGrid.getNCells() );
-    BOOST_TEST( linear.getDoF() == 8 );
+    BOOST_TEST( linear.getDoF() == 8u );
 
     // Map memory
     double* mem = new double[ linear.getDoF() ];
