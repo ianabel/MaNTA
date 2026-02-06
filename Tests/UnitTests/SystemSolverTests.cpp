@@ -44,7 +44,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_init_tests)
 
 	BOOST_TEST(system->k == k);
 	BOOST_TEST(system->grid == testGrid);
-	BOOST_TEST(system->nVars == 1);
+	BOOST_TEST(system->nVars == 1u);
 
 	BOOST_CHECK_NO_THROW(system->initialiseMatrices());
 

@@ -20,7 +20,7 @@ BOOST_AUTO_TEST_CASE( grid_test )
     Grid *pGrid = nullptr;
     BOOST_CHECK_NO_THROW( pGrid = new Grid( 0.0, 1.0, 5 ) );
 
-    BOOST_TEST( pGrid->getNCells() == 5 );
+    BOOST_TEST( pGrid->getNCells() == 5u );
     for ( auto i=0; i<5; ++i )
     {
         Interval const& I = ( *pGrid )[ i ];
