@@ -24,13 +24,15 @@ Value MirrorPlasma::InitialDensityTimeDerivative(RealVector u, RealVector q, Pos
 
     Real Vreal = V;
 
-    gradu = autodiff::gradient([this](RealVector uD, RealVector qD, Real X)
-                               { return Gamma(uD, qD, X, 0.0); },
-                               wrt(u), at(u, q, Vreal));
+    Real uout;
 
-    gradq = autodiff::gradient([this](RealVector uD, RealVector qD, Real X)
-                               { return Gamma(uD, qD, X, 0.0); },
-                               wrt(q), at(u, q, Vreal));
+    autodiff::gradient([this](RealVector uD, RealVector qD, Real X)
+                       { return Gamma(uD, qD, X, 0.0); },
+                       wrt(u), at(u, q, Vreal), uout, gradu);
+
+    autodiff::gradient([this](RealVector uD, RealVector qD, Real X)
+                       { return Gamma(uD, qD, X, 0.0); },
+                       wrt(q), at(u, q, Vreal), uout, gradq);
 
     double dSdx = autodiff::derivative([this](RealVector uD, RealVector qD, Real X)
                                        { return Gamma(uD, qD, X, 0.0); },

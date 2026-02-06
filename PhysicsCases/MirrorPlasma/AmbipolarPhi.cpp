@@ -73,78 +73,78 @@ T MirrorPlasma::ParallelCurrent(T V, T omega, T n, T Ti, T Te, T phi) const
 
 // Compute dphi1dV using the chain rule
 // Take derivative2 of Jpar using autodiff, and then make sure to set the correct gradient values so Jacobian is correct
-Real MirrorPlasma::dphi1dV(RealVector u, RealVector q, Real phi, Real V) const
-{
-    auto Jpar = [this](Real2ndVector u, Real2nd phi, Real2nd V)
-    {
-        Real2nd n = u(Channel::Density), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
-        if (evolveLogDensity)
-            n = exp(n);
-        if (n < MinDensity)
-            n.val.val = MinDensity;
-        Real2nd Te = p_e / n;
-        Real2nd Ti = p_i / n;
+// Real MirrorPlasma::dphi1dV(RealVector u, RealVector q, Real phi, Real V) const
+// {
+//     auto Jpar = [this](Real2ndVector u, Real2nd phi, Real2nd V)
+//     {
+//         Real2nd n = u(Channel::Density), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
+//         if (evolveLogDensity)
+//             n = exp(n);
+//         if (n < MinDensity)
+//             n.val.val = MinDensity;
+//         Real2nd Te = p_e / n;
+//         Real2nd Ti = p_i / n;
 
-        Real2nd R = B->R_V(V, 0.0);
+//         Real2nd R = B->R_V(V, 0.0);
 
-        Real2nd L = u(Channel::AngularMomentum);
-        Real2nd J = n * R * R; // Normalisation of the moment of inertia includes the m_i
-        Real2nd omega = L / J;
+//         Real2nd L = u(Channel::AngularMomentum);
+//         Real2nd J = n * R * R; // Normalisation of the moment of inertia includes the m_i
+//         Real2nd omega = L / J;
 
-        return ParallelCurrent<Real2nd>(V, omega, n, Ti, Te, phi);
-    };
+//         return ParallelCurrent<Real2nd>(V, omega, n, Ti, Te, phi);
+//     };
 
-    Real2ndVector u2(nVars);
+//     Real2ndVector u2(nVars);
 
-    Real2nd phi2 = phi.val;
+//     Real2nd phi2 = phi.val;
 
-    Real2nd V2 = V.val;
+//     Real2nd V2 = V.val;
 
-    for (Index i = 0; i < nVars; ++i)
-    {
-        u2(i).val.val = u(i).val;
-    }
+//     for (Index i = 0; i < nVars; ++i)
+//     {
+//         u2(i).val.val = u(i).val;
+//     }
 
-    // take derivatives wrt V, phi, and u
+//     // take derivatives wrt V, phi, and u
 
-    auto [_, dJpardV, d2JpardV2] = derivatives(Jpar, wrt(V2, V2), at(u2, phi2, V2));
+//     auto [_, dJpardV, d2JpardV2] = derivatives(Jpar, wrt(V2, V2), at(u2, phi2, V2));
 
-    auto [__, dJpardphi1, d2Jpardphi12] = derivatives(Jpar, wrt(phi2, phi2), at(u2, phi2, V2));
+//     auto [__, dJpardphi1, d2Jpardphi12] = derivatives(Jpar, wrt(phi2, phi2), at(u2, phi2, V2));
 
-    RealVector dJpardu(nVars);
-    Real2nd ___;
-    auto d2Jpardu2 = hessian(Jpar, wrt(u2), at(u2, phi2, V2), ___, dJpardu);
+//     RealVector dJpardu(nVars);
+//     Real2nd ___;
+//     auto d2Jpardu2 = hessian(Jpar, wrt(u2), at(u2, phi2, V2), ___, dJpardu);
 
-    Real n = uToDensity(u(Channel::Density)), p_i = (2. / 3.) * u(Channel::IonEnergy);
-    Real Ti = p_i / n;
+//     Real n = uToDensity(u(Channel::Density)), p_i = (2. / 3.) * u(Channel::IonEnergy);
+//     Real Ti = p_i / n;
 
-    Real nPrime = qToDensityGradient(q(Channel::Density), u(Channel::Density)), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
-    Real Ti_prime = (p_i_prime - nPrime * Ti) / n;
+//     Real nPrime = qToDensityGradient(q(Channel::Density), u(Channel::Density)), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
+//     Real Ti_prime = (p_i_prime - nPrime * Ti) / n;
 
-    // set all of the autodiff gradients
-    // V parts
-    Real dJpardV_real = dJpardV;
+//     // set all of the autodiff gradients
+//     // V parts
+//     Real dJpardV_real = dJpardV;
 
-    if (V.grad != 0)
-        dJpardV_real.grad = d2JpardV2;
+//     if (V.grad != 0)
+//         dJpardV_real.grad = d2JpardV2;
 
-    // u/q parts
-    Real qdotdJdu = 0.0;
-    for (Index i = 0; i < nVars; ++i)
-    {
-        if (u(i).grad != 0)
-            dJpardu(i).grad = d2Jpardu2(i, i);
-        qdotdJdu += q(i) * dJpardu(i);
-    }
+//     // u/q parts
+//     Real qdotdJdu = 0.0;
+//     for (Index i = 0; i < nVars; ++i)
+//     {
+//         if (u(i).grad != 0)
+//             dJpardu(i).grad = d2Jpardu2(i, i);
+//         qdotdJdu += q(i) * dJpardu(i);
+//     }
 
-    // phi1 parts
-    Real dJpardphi1_real = dJpardphi1;
+//     // phi1 parts
+//     Real dJpardphi1_real = dJpardphi1;
 
-    if (phi.grad != 0)
-        dJpardphi1_real.grad = d2Jpardphi12;
+//     if (phi.grad != 0)
+//         dJpardphi1_real.grad = d2Jpardphi12;
 
-    // dphi1dV computed using the chain rule derivative of the parallel current
-    Real dphi1dV = -(dJpardV_real + qdotdJdu) * Ti / dJpardphi1_real + phi * Ti_prime;
+//     // dphi1dV computed using the chain rule derivative of the parallel current
+//     Real dphi1dV = -(dJpardV_real + qdotdJdu) * Ti / dJpardphi1_real + phi * Ti_prime;
 
-    return dphi1dV;
-}
+//     return dphi1dV;
+// }

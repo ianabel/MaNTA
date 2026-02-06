@@ -388,17 +388,6 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
     nc.AddVariable("Heating", "CyclotronLosses", "Cyclotron heat losses", "-", [&](double V)
                    { return Plasma->CyclotronLosses(V, n(V), Te(V)).val; });
 
-    nc.AddVariable("dPhi0dV", "Phi0 derivative", "-", [this, &u, &q](double V)
-                   { return dphi0dV(u(V), q(V), V).val; });
-    nc.AddVariable("dPhi1dV", "Phi1 derivative", "-",
-                   [this, &u, &q, &aux](double V)
-                   {
-                       if (nAux > 0)
-                           return dphi1dV(u(V), q(V), aux(V)[0], V).val;
-                       else
-                           return 0.0;
-                   });
-
     // Artificial Diffusion
 
     nc.AddGroup("ArtificialDiffusion", "Extra diffusion added at high gradients");
@@ -637,11 +626,6 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
         return Plasma->IonElectronEnergyExchange(n(V), p_e(V), p_i(V), V, 0.0).val;
     };
 
-    Fn dPhi0dV = [this, &u, &q](double V)
-    {
-        return dphi0dV(u(V), q(V), V).val;
-    };
-
     Fn IonPotentialHeatingWrapper = [&](double V)
     {
         return IonPotentialHeating(u(V), q(V), aux(V), V).val;
@@ -799,15 +783,6 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
                      });
     nc.AppendToGroup("DimensionlessNumbers", tIndex, "Collisionality", collisionality);
 
-    nc.AppendToVariable("dPhi0dV", [this, &u, &q](double V)
-                        { return dphi0dV(u(V), q(V), V).val; }, tIndex);
-
-    nc.AppendToVariable("dPhi1dV", [this, &u, &q, &aux](double V)
-                        {
-		if (nAux > 0)
-			return dphi1dV(u(V), q(V), aux(V)[0], V).val;
-		else
-			return 0.0; }, tIndex);
     nc.AppendToVariable("ElectrostaticPotential", ElectrostaticPotential, tIndex);
 
     nc.AppendToGroup<Fn>("ArtificialDiffusion", tIndex,

@@ -53,10 +53,11 @@ void AutodiffAdjointProblem::dgFn_du(Index i, Values &grad, const State &s, Posi
     RealVector sigma(s.Flux);
     RealVector phi(s.Aux);
 
+    Real uout;
     // Real p = PhysicsProblem->getPval(i);
 
-    grad = autodiff::gradient([this, i](Position X, RealVector uD, RealVector qD, RealVector sigmaD, RealVector phiD)
-                              { return g(X, uD, qD, sigmaD, phiD); }, wrt(u), at(x, u, q, sigma, phi));
+    autodiff::gradient([this, i](Position X, RealVector uD, RealVector qD, RealVector sigmaD, RealVector phiD)
+                       { return g(X, uD, qD, sigmaD, phiD); }, wrt(u), at(x, u, q, sigma, phi), uout, grad);
 }
 
 void AutodiffAdjointProblem::dgFn_dq(Index i, Values &grad, const State &s, Position x)
@@ -67,9 +68,9 @@ void AutodiffAdjointProblem::dgFn_dq(Index i, Values &grad, const State &s, Posi
     RealVector phi(s.Aux);
 
     // Real p = PhysicsProblem->getPval(i);
-
-    grad = autodiff::gradient([this, i](Position X, RealVector uD, RealVector qD, RealVector sigmaD, RealVector phiD)
-                              { return g(X, uD, qD, sigmaD, phiD); }, wrt(q), at(x, u, q, sigma, phi));
+    Real uout;
+    autodiff::gradient([this, i](Position X, RealVector uD, RealVector qD, RealVector sigmaD, RealVector phiD)
+                       { return g(X, uD, qD, sigmaD, phiD); }, wrt(q), at(x, u, q, sigma, phi), uout, grad);
 }
 
 void AutodiffAdjointProblem::dgFn_dsigma(Index i, Values &grad, const State &s, Position x)
@@ -81,8 +82,10 @@ void AutodiffAdjointProblem::dgFn_dsigma(Index i, Values &grad, const State &s, 
 
     // Real p = PhysicsProblem->getPval(i);
 
-    grad = autodiff::gradient([this, i](Position X, RealVector uD, RealVector qD, RealVector sigmaD, RealVector phiD)
-                              { return g(X, uD, qD, sigmaD, phiD); }, wrt(sigma), at(x, u, q, sigma, phi));
+    Real uout;
+
+    autodiff::gradient([this, i](Position X, RealVector uD, RealVector qD, RealVector sigmaD, RealVector phiD)
+                       { return g(X, uD, qD, sigmaD, phiD); }, wrt(sigma), at(x, u, q, sigma, phi), uout, grad);
 }
 
 void AutodiffAdjointProblem::dgFn_dphi(Index i, Values &grad, const State &s, Position x)
@@ -94,8 +97,10 @@ void AutodiffAdjointProblem::dgFn_dphi(Index i, Values &grad, const State &s, Po
 
     // Real p = PhysicsProblem->getPval(i);
 
-    grad = autodiff::gradient([this, i](Position X, RealVector uD, RealVector qD, RealVector sigmaD, RealVector phiD)
-                              { return g(X, uD, qD, sigmaD, phiD); }, wrt(phi), at(x, u, q, sigma, phi));
+    Real uout;
+
+    autodiff::gradient([this, i](Position X, RealVector uD, RealVector qD, RealVector sigmaD, RealVector phiD)
+                       { return g(X, uD, qD, sigmaD, phiD); }, wrt(phi), at(x, u, q, sigma, phi), uout, grad);
 }
 
 void AutodiffAdjointProblem::dSigmaFn_dp(Index i, Index pIndex, Value &grad, const State &s, Position x)

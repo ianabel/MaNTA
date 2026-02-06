@@ -115,9 +115,6 @@ private:
 
 		return phi;
 	}
-	Real dphi0dV(RealVector u, RealVector q, Real V) const;
-	Real dphi1dV(RealVector u, RealVector q, Real phi, Real V) const;
-	Real dphidV(RealVector u, RealVector q, RealVector phi, Real V) const;
 
 	// Returns (1/(1 + Tau))*(1-1/R_m)*(M^2)
 	template <typename T>

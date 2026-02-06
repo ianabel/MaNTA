@@ -733,50 +733,6 @@ Real MirrorPlasma::qToDensityGradient(Real qn, Real un) const
 		return qn;
 }
 
-// Use the chain rule to calculate dphi0/dV, making sure to set gradient values correctly
-Real MirrorPlasma::dphi0dV(RealVector u, RealVector q, Real V) const
-{
-	auto phi0fn = [this](Real2ndVector u, Real2nd V)
-	{
-		return this->phi0(u, V);
-	};
-	Real2ndVector u2(nVars);
-
-	Real2nd V2 = V.val;
-
-	for (Index i = 0; i < nVars; ++i)
-	{
-		u2(i).val.val = u(i).val;
-	}
-	Real2nd dphi0dV_2 = phi0(u2, V2) / (pi * V2);
-	Real dphi0dV;
-	dphi0dV.val = dphi0dV_2.val.val;
-	dphi0dV.grad = dphi0dV_2.grad.val;
-	RealVector dphi0du(nVars);
-	Real2nd phi0;
-	auto d2phi0du2 = hessian(phi0fn, wrt(u2), at(u2, V), phi0, dphi0du);
-	for (Index i = 0; i < nVars; ++i)
-	{
-		if (u(i).grad != 0)
-		{
-			dphi0du(i).grad = d2phi0du2(i, i);
-		}
-		dphi0dV += q(i) * dphi0du(i);
-	}
-
-	return dphi0dV;
-}
-
-Real MirrorPlasma::dphidV(RealVector u, RealVector q, RealVector phi, Real V) const
-{
-	Real dphidV = 0.0; // dphi0dV(u, q, V);
-
-	// if (nAux > 0)
-	// 	dphidV += dphi1dV(u, q, phi(0), V);
-
-	return dphidV;
-}
-
 inline Real MirrorPlasma::AmbipolarPhi(Real V, Real n, Real Ti, Real Te) const
 {
 	Real R = B->MirrorRatio(V, 0.0);
@@ -875,5 +831,5 @@ Real MirrorPlasma::IonPotentialHeating(RealVector u, RealVector q, RealVector ph
 
 Real MirrorPlasma::ElectronPotentialHeating(RealVector u, RealVector q, RealVector phi, Real V) const
 {
-	return -Gamma(u, q, V, 0.0) * dphidV(u, q, phi, V);
+	return 0.0;
 }
