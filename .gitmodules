@@ -2,3 +2,9 @@
 	path = extern/pybind11
 	url = https://github.com/pybind/pybind11.git
 	branch = stable
+[submodule "extern/toml11"]
+	path = extern/toml11
+	url = https://github.com/toruniina/toml11.git
+[submodule "extern/autodiff"]
+	path = extern/autodiff
+	url = https://github.com/autodiff/autodiff.git
