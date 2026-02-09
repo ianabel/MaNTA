@@ -670,7 +670,6 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
         solveHDGJac(res_g, d);
 
         // Now A e = v ; Do as a loop over nScalars
-#pragma omp parallel for
         for (Index i = 0; i < nScalars; ++i)
         {
             solveHDGJac(v[i], e[i]);
@@ -803,7 +802,6 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
 
     // Now find del sigma, del q and del u to eventually find del Y
     // this can be done in parallel over each cell
-#pragma omp parallel for
     for (Index i = 0; i < nCells; i++)
     {
         Vector delSQU(nVars * SQU_DOF);
@@ -872,7 +870,6 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
         }
     }
 
-#pragma omp parallel for
     for (Index i = 0; i < nCells; i++)
     {
         Eigen::MatrixXd Mass( k + 1, k + 1 );
@@ -1127,7 +1124,6 @@ void SystemSolver::solveAdjointState(Index gIndex)
 
     // Now find del sigma, del q and del u to eventually find del Y
     // this can be done in parallel over each cell
-#pragma omp parallel for
     for (Index i = 0; i < nCells; i++)
     {
 
