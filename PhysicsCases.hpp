@@ -18,12 +18,7 @@ struct PhysicsCases {
 		typedef std::function< std::unique_ptr<TransportSystem>( toml::value const&,  Grid const& ) > function_type;
 		typedef std::map<std::string, function_type> map_type;
 
-		static std::unique_ptr<TransportSystem> InstantiateProblem(std::string const& s, toml::value const& config, Grid const& grid ) {
-			map_type::iterator it = getMap()->find(s);
-			if(it == getMap()->end())
-				return nullptr;
-			return it->second( config, grid );
-		}
+		static std::unique_ptr<TransportSystem> InstantiateProblem(std::string const& s, toml::value const& , Grid const& );
 
 		// To register explicitly
 		static void RegisterPhysicsCase( std::string const& s, function_type creator ) {
@@ -31,15 +26,10 @@ struct PhysicsCases {
 		}
 
 	protected:
-		static map_type * getMap() {
-			// never delete'ed. (exist until program termination)
-			// because we can't guarantee correct destruction order 
-			if(!map) { map = new map_type; } 
-			return map; 
-		}
+		static map_type* getMap();
 
 	public:
-		static map_type * map;
+		static map_type* map;
 };
 
 // For auto-registering
