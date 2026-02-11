@@ -339,13 +339,17 @@ void SystemSolver::initialiseMatrices()
         // First fill G
         Eigen::MatrixXd G(2 * nVars, nVars * (k + 1));
         G.setZero();
-        Eigen::MatrixXd CDouble(2 * nVars, 2 * nVars * (k + 1));
-        CDouble.setZero();
+        Eigen::MatrixXd Cq(2 * nVars, nVars * (k + 1));
+        Eigen::MatrixXd Csigma(2 * nVars, nVars * (k + 1));
+        Cq.setZero();
+        Csigma.setZero();
         for (Index var = 0; var < nVars; var++)
         {
             Eigen::MatrixXd Gvar(2, k + 1);
-            Eigen::MatrixXd CDoubleVar(2, 2 * (k + 1));
-            CDoubleVar.setZero();
+            Eigen::MatrixXd Cq_var(2, k + 1);
+            Eigen::MatrixXd Csigma_var(2, k + 1);
+            Cq_var.setZero();
+            Csigma_var.setZero();
             for (Index i = 0; i < k + 1; i++)
             {
                 // C_ij = < psi_i, phi_j * n_x > , where psi_i are edge degrees of
@@ -353,21 +357,21 @@ void SystemSolver::initialiseMatrices()
                 // for a line, edge degrees of freedom are just 1 at each end
 
                 // Always set this for sigma
-                CDoubleVar(1, i) = y.getBasis().Evaluate(I, i, I.x_u);
-                CDoubleVar(0, i) = -y.getBasis().Evaluate(I, i, I.x_l);
+                Csigma_var(1, i) = y.getBasis().Evaluate(I, i, I.x_u);
+                Csigma_var(0, i) = -y.getBasis().Evaluate(I, i, I.x_l);
 
                 // If we have neumann boundaries, need to also set the boundary parameters for q
                 if (I.x_l == grid.lowerBoundary() && !problem->isLowerBoundaryDirichlet(var))
                 {
-                    CDoubleVar(0, i) = 0.0; // Treat sigma as dirichlet
+                    Csigma_var(0, i) = 0.0; // Treat sigma as dirichlet
                     // CDoubleVar(1, i + (k + 1)) = y.getBasis().Evaluate(I, i, I.x_u);
-                    CDoubleVar(0, i + (k + 1)) = -y.getBasis().Evaluate(I, i, I.x_l); // Treat Q as neumann
+                    Cq_var(0, i) = -y.getBasis().Evaluate(I, i, I.x_l); // Treat Q as neumann
                 }
                 if (I.x_u == grid.upperBoundary() && !problem->isUpperBoundaryDirichlet(var))
                 {
-                    CDoubleVar(1, i) = 0.0; // Treat sigma as dirichlet
+                    Csigma_var(1, i) = 0.0; // Treat sigma as dirichlet
                     // CDoubleVar(0, i + (k + 1)) = -y.getBasis().Evaluate(I, i, I.x_l);
-                    CDoubleVar(1, i + (k + 1)) = y.getBasis().Evaluate(I, i, I.x_u); // Treat q as neumann
+                    Cq_var(1, i) = y.getBasis().Evaluate(I, i, I.x_u); // Treat q as neumann
                 }
 
                 Gvar(0, i) = tau(I.x_l) * y.getBasis().Evaluate(I, i, I.x_l);
@@ -375,19 +379,20 @@ void SystemSolver::initialiseMatrices()
                 // If Dirichlet, proceed as normal
                 if (I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryDirichlet(var))
                 {
-                    CDoubleVar(0, i) = 0.0;
+                    Csigma_var(0, i) = 0.0;
                     Gvar(0, i) = 0.0;
                 }
 
                 Gvar(1, i) = tau(I.x_u) * y.getBasis().Evaluate(I, i, I.x_u);
                 if (I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(var))
                 {
-                    CDoubleVar(1, i) = 0.0;
+                    Csigma_var(1, i) = 0.0;
                     Gvar(1, i) = 0.0;
                 }
             }
 
-            CDouble.block(2 * var, (k + 1) * var, 2, 2 * (k + 1)) = CDoubleVar;
+            Csigma.block(2 * var, (k + 1) * var, 2,(k + 1)) = Csigma_var;
+            Cq.block(2 * var, (k + 1) * var, 2, (k + 1)) = Cq_var;
 
             G.block(2 * var, (k + 1) * var, 2, (k + 1)) = Gvar;
         }
@@ -397,10 +402,12 @@ void SystemSolver::initialiseMatrices()
         CG_cellwise[i].setZero();
       
         CG_cellwise[i].block(0, 2 * nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = G; // this is the U block
-        CG_cellwise[i].block(0, 0, 2 * nVars, 2 * nVars * (k + 1)) = CDouble; // This is the combined [Sigma Q] block
-      
+        CG_cellwise[i].block(0, 0, 2 * nVars, nVars * (k + 1)) = Csigma; // This is the sigma block
+        CG_cellwise[i].block(0, nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = Cq; // This is the q block
+
         G_cellwise.emplace_back(G);
-        CDouble_cellwise.emplace_back(CDouble);
+        Csigma_cellwise.emplace_back(Csigma);
+        Cq_cellwise.emplace_back(Cq);
 
         // Now fill H
         Eigen::MatrixXd H(2 * nVars, 2 * nVars);
@@ -478,7 +485,8 @@ void SystemSolver::clearCellwiseVecs()
     C_cellwise.clear();
     G_cellwise.clear();
     H_cellwise.clear();
-    CDouble_cellwise.clear();
+    Csigma_cellwise.clear();
+    Cq_cellwise.clear();
 }
 
 // Memory Layout for a sundials Y is, if i indexes the components of u / q / sigma
@@ -907,15 +915,12 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
     resVec.setZero();
 
     // residual.lambda = C*sigma + G*u + H*lambda - L
-
     for (Index i = 0; i < nCells; i++)
     {
         // C_cellwise * sigma_cellwise
         for (Index var = 0; var < nVars; var++)
         {
-            auto Cq_block = CDouble_cellwise[i].block(var * 2, var * (k + 1) + (k + 1), 2, k + 1);
-            auto Csigma_block = CDouble_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1);
-            res.lambda(var).segment<2>(i) += Csigma_block * Y_h.sigma(var).getCoeff(i).second + Cq_block * Y_h.q(var).getCoeff(i).second + G_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.u(var).getCoeff(i).second + H_cellwise[i].block(2 * var, 2 * var, 2, 2) * Y_h.lambda(var).segment<2>(i) - L_global.segment<2>(var * (nCells + 1));
+            res.lambda(var).segment<2>(i) += Csigma_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.sigma(var).getCoeff(i).second + Cq_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.q(var).getCoeff(i).second + G_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.u(var).getCoeff(i).second + H_cellwise[i].block(2 * var, 2 * var, 2, 2) * Y_h.lambda(var).segment<2>(i) - L_global.segment<2>(var * (nCells + 1));
         }
     }
 
