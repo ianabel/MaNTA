@@ -329,31 +329,78 @@ void SystemSolver::initialiseMatrices()
             }
         }
 
+        // For Neumann, need a structure more like
+        // If (boundary cell)
+        // C is multiplied by Q and not sigma, so we need to change the structure of CG cellwise, also need to zero the contribution of sigma at the boundary so it can float
+        // if the flux is a complicated nonlinear function of the other variables, zero sigma does not necessarily mean zero q
+        // So we set up a "double" C matrix that includes all of this information and set the sigma and q portions at once
+
         // Per-cell contributions to the global matrices K and F.
         // First fill G
         Eigen::MatrixXd G(2 * nVars, nVars * (k + 1));
         G.setZero();
+        Eigen::MatrixXd CDouble(2 * nVars, 2 * nVars * (k + 1));
+        CDouble.setZero();
         for (Index var = 0; var < nVars; var++)
         {
             Eigen::MatrixXd Gvar(2, k + 1);
+            Eigen::MatrixXd CDoubleVar(2, 2 * (k + 1));
+            CDoubleVar.setZero();
             for (Index i = 0; i < k + 1; i++)
             {
+                // C_ij = < psi_i, phi_j * n_x > , where psi_i are edge degrees of
+                // freedom and n_x is the unit normal in the x direction
+                // for a line, edge degrees of freedom are just 1 at each end
+
+                // Always set this for sigma
+                CDoubleVar(1, i) = y.getBasis().Evaluate(I, i, I.x_u);
+                CDoubleVar(0, i) = -y.getBasis().Evaluate(I, i, I.x_l);
+
+                // If we have neumann boundaries, need to also set the boundary parameters for q
+                if (I.x_l == grid.lowerBoundary() && !problem->isLowerBoundaryDirichlet(var))
+                {
+                    CDoubleVar(0, i) = 0.0; // Treat sigma as dirichlet
+                    // CDoubleVar(1, i + (k + 1)) = y.getBasis().Evaluate(I, i, I.x_u);
+                    CDoubleVar(0, i + (k + 1)) = -y.getBasis().Evaluate(I, i, I.x_l); // Treat Q as neumann
+                }
+                if (I.x_u == grid.upperBoundary() && !problem->isUpperBoundaryDirichlet(var))
+                {
+                    CDoubleVar(1, i) = 0.0; // Treat sigma as dirichlet
+                    // CDoubleVar(0, i + (k + 1)) = -y.getBasis().Evaluate(I, i, I.x_l);
+                    CDoubleVar(1, i + (k + 1)) = y.getBasis().Evaluate(I, i, I.x_u); // Treat q as neumann
+                }
+
                 Gvar(0, i) = tau(I.x_l) * y.getBasis().Evaluate(I, i, I.x_l);
+
+                // If Dirichlet, proceed as normal
                 if (I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryDirichlet(var))
+                {
+                    CDoubleVar(0, i) = 0.0;
                     Gvar(0, i) = 0.0;
+                }
+
                 Gvar(1, i) = tau(I.x_u) * y.getBasis().Evaluate(I, i, I.x_u);
                 if (I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(var))
+                {
+                    CDoubleVar(1, i) = 0.0;
                     Gvar(1, i) = 0.0;
+                }
             }
+
+            CDouble.block(2 * var, (k + 1) * var, 2, 2 * (k + 1)) = CDoubleVar;
+
             G.block(2 * var, (k + 1) * var, 2, (k + 1)) = Gvar;
         }
 
         //[ C 0 G 0 ] (4th index is aux vars)
         CG_cellwise.emplace_back(2 * nVars, localDOF);
         CG_cellwise[i].setZero();
-        CG_cellwise[i].block(0, 0, 2 * nVars, nVars * (k + 1)) = C;
-        CG_cellwise[i].block(0, 2 * nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = G;
+      
+        CG_cellwise[i].block(0, 2 * nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = G; // this is the U block
+        CG_cellwise[i].block(0, 0, 2 * nVars, 2 * nVars * (k + 1)) = CDouble; // This is the combined [Sigma Q] block
+      
         G_cellwise.emplace_back(G);
+        CDouble_cellwise.emplace_back(CDouble);
 
         // Now fill H
         Eigen::MatrixXd H(2 * nVars, 2 * nVars);
@@ -431,6 +478,7 @@ void SystemSolver::clearCellwiseVecs()
     C_cellwise.clear();
     G_cellwise.clear();
     H_cellwise.clear();
+    CDouble_cellwise.clear();
 }
 
 // Memory Layout for a sundials Y is, if i indexes the components of u / q / sigma
@@ -865,8 +913,9 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
         // C_cellwise * sigma_cellwise
         for (Index var = 0; var < nVars; var++)
         {
-            res.lambda(var).segment<2>(i) +=
-                C_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.sigma(var).getCoeff(i).second + G_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.u(var).getCoeff(i).second + H_cellwise[i].block(2 * var, 2 * var, 2, 2) * Y_h.lambda(var).segment<2>(i) - L_global.segment<2>(var * (nCells + 1));
+            auto Cq_block = CDouble_cellwise[i].block(var * 2, var * (k + 1) + (k + 1), 2, k + 1);
+            auto Csigma_block = CDouble_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1);
+            res.lambda(var).segment<2>(i) += Csigma_block * Y_h.sigma(var).getCoeff(i).second + Cq_block * Y_h.q(var).getCoeff(i).second + G_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.u(var).getCoeff(i).second + H_cellwise[i].block(2 * var, 2 * var, 2, 2) * Y_h.lambda(var).segment<2>(i) - L_global.segment<2>(var * (nCells + 1));
         }
     }
 
@@ -1046,15 +1095,15 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         CE_vec.block(3 * nVars * (k + 1), 0, nAux * (k + 1), nVars * 2).setZero();
         CEBlocks[i] = CE_vec.transpose();
 
-        //[ C 0 G 0 ] (4th index is aux vars)
-        auto G = G_cellwise[i];
-        Eigen::MatrixXd CG_vec(2 * nVars, localDOF);
+        // //[ C 0 G 0 ] (4th index is aux vars)
+        // auto G = G_cellwise[i];
+        // Eigen::MatrixXd CG_vec(2 * nVars, localDOF);
 
-        CG_vec.setZero();
-        CG_vec.block(0, 0, 2 * nVars, nVars * (k + 1)) = C;
-        CG_vec.block(0, 2 * nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = G;
+        // CG_vec.setZero();
+        // CG_vec.block(0, 0, 2 * nVars, nVars * (k + 1)) = C;
+        // CG_vec.block(0, 2 * nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = G;
 
-        CGBlocks.emplace_back(CG_vec.transpose());
+        CGBlocks.emplace_back(CG_cellwise[i].transpose());
 
         MXSolvers[i].compute(MBlocks[i]);
     }

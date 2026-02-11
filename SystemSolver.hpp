@@ -164,7 +164,7 @@ class SystemSolver
         Eigen::FullPivLU<Matrix> H_global;
         std::vector<Vector> RF_cellwise;
         std::vector<Matrix> CG_cellwise;
-        std::vector<Matrix> A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise;
+        std::vector<Matrix> A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise, CDouble_cellwise;
 
         // Adjoint vectors
         std::vector<Vector> G_y;
