@@ -1101,14 +1101,15 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         CEBlocks[i] = CE_vec.transpose();
 
         // //[ C 0 G 0 ] (4th index is aux vars)
-        // auto G = G_cellwise[i];
-        // Eigen::MatrixXd CG_vec(2 * nVars, localDOF);
+        auto G = G_cellwise[i];
+        Eigen::MatrixXd CG_vec(2 * nVars, localDOF);
 
-        // CG_vec.setZero();
-        // CG_vec.block(0, 0, 2 * nVars, nVars * (k + 1)) = C;
-        // CG_vec.block(0, 2 * nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = G;
+        CG_vec.setZero();
+        CG_vec.block(0, 0, 2 * nVars, nVars * (k + 1)) = Csigma_cellwise[i];
+        CG_vec.block(0, nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = Cq_cellwise[i];
+        CG_vec.block(0, 2 * nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = G;
 
-        CGBlocks.emplace_back(CG_cellwise[i].transpose());
+        CGBlocks.emplace_back(CG_vec.transpose());
 
         MXSolvers[i].compute(MBlocks[i]);
     }
