@@ -1,4 +1,6 @@
-from operator import eq
+import os 
+os.environ.pop("LD_LIBRARY_PATH", None)
+
 import yancc
 from yancc.field import Field
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
@@ -99,10 +101,6 @@ class yancc_wrapper():
     
     def rho_from_normalized_volume(self, Vnorm):
         return desc.backend.root_scalar(lambda x: self.Vn(x) - Vnorm, jnp.sqrt(Vnorm))
-    
-    #@partial(jax.jit, static_argnums=(0,))
-    def drho_dx(self, x):
-        return 1.0 / (2.0 * jnp.sqrt(x))
     
 
 

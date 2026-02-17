@@ -5,8 +5,8 @@ import MaNTA
 import os
 os.environ.pop("LD_LIBRARY_PATH", None)
 
-#from JAXTransportSystem import JAXTransportSystem
-from JAXAdjointProblem import JAXAdjointProblem
+# from JAXTransportSystem import JAXTransportSystem
+# from JAXAdjointProblem import JAXAdjointProblem
 import jax.numpy as jnp
 import jax
 
@@ -50,7 +50,6 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def SigmaFn( self, index, state, x, t ):
         f = self.yancc_wrapper.flux(state, x)
         print(f)
-        print(type(f))
         return -f[index]
 
     @partial(jax.jit, static_argnums=(0,1))
@@ -84,14 +83,11 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def source( self, index, state, x, t, params: NamedTuple ):
         return params.SourceHeight * jnp.exp(-(x - params.SourceCenter)**2 / (2 * params.SourceWidth**2))
 
-    def aux( self, index, state, x, t, params: NamedTuple):
-        pass
-
-    @partial(jax.jit, static_argnums=(0,1))
+    #@partial(jax.jit, static_argnums=(0,1))
     def dSigmaFn_dq( self, index, state, x, t):
         return jax.grad(self.SigmaFn, argnums=1)(index, state, x, t)["Derivative"]
     
-    @partial(jax.jit, static_argnums=(0,1))
+    #@partial(jax.jit, static_argnums=(0,1))
     def dSigmaFn_du( self, index, state, x, t):
         f = jax.grad(self.SigmaFn, argnums=1)(index, state, x, t)["Variable"]
         print("flux grad")
@@ -116,30 +112,6 @@ class StellaratorTransport(MaNTA.TransportSystem):
     @partial(jax.jit, static_argnums=(0,1))
     def dSources_dPhi( self, index, state, x, t ):
         return jax.grad(self.Sources, argnums=1)(index, state, x, t)["Aux"]
-    
-    def AuxG( self, index, state, x, t):
-        return self.aux(index, state, x, t, self.params)
-    
-    """
-    Compute derivative of auxilliary functions
-
-     Parameters
-    ----------
-    index : int
-        Variable index
-    state : dict
-        Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
-    x : float
-        Spatial location
-    t : float
-        Time
-    Returns
-    -------
-    state : dict
-        Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
-    """
-    def AuxGPrime( self, index, state, x , t):
-        return self.dAuxdvars(index, state, x, t)
     
     @partial(jax.jit, static_argnums=(0,1))
     def InitialValue( self, index, x ):
