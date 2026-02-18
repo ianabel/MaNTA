@@ -491,13 +491,25 @@ class NodalBasis
             return integrator.integrate(u, I.x_l, I.x_u);
         };
 
-        Vector ProjectOntoBasis( Interval const& I, std::function<double(double)> f ) const
+        // Interpolatory projection
+        Vector InterpolateOntoBasis( Interval const& I, std::function<double(double)> f ) const
         {
             Vector out( k + 1 );
             Vector vals( k + 1 );
             for( Index i = 0; i < k + 1; i++ )
                 vals( i ) = f( I.fromRef( ChebNodes( i ) ) );
             out = (I.h()/2.0) * RefMass * vals;
+            return out;
+        };
+
+        // Standard projection
+        Vector ProjectOntoBasis( Interval const& I, std::function<double(double)> f ) const
+        {
+            Vector out( k + 1 );
+            for( Index i = 0; i < k + 1; i++ ) {
+                auto u = [&](double x) { return f(x) * Evaluate(I, i, x); };
+                out( i ) = integrator.integrate(u, I.x_l, I.x_u);
+            }
             return out;
         };
 

@@ -124,7 +124,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
             // Evaluate Source Function
             Eigen::VectorXd S_cellwise(k + 1);
 
-            S_cellwise = y.getBasis().ProjectOntoBasis( I, [&,this] ( double x ) { return problem->Sources( var, y.eval( x ), x, t ); } );
+            S_cellwise = y.getBasis().InterpolateOntoBasis( I, [&,this] ( double x ) { return problem->Sources( var, y.eval( x ), x, t ); } );
 
             lamCell[0] = y.lambda(var)[i];
             lamCell[1] = y.lambda(var)[i + 1];
@@ -955,10 +955,10 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
             };
 
             // Evaluate Diffusion Function
-            Eigen::VectorXd kappa_cellwise = y.getBasis().ProjectOntoBasis( I, kappaFunc );
+            Eigen::VectorXd kappa_cellwise = y.getBasis().InterpolateOntoBasis( I, kappaFunc );
 
             // Evaluate Source Function
-            Eigen::VectorXd S_cellwise = y.getBasis().ProjectOntoBasis(I, sourceFunc );
+            Eigen::VectorXd S_cellwise = y.getBasis().InterpolateOntoBasis(I, sourceFunc );
 
             auto const &lambda = lamCell.segment<2>(2 * var);
 
