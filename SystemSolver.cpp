@@ -350,6 +350,7 @@ void SystemSolver::initialiseMatrices()
             Eigen::MatrixXd Csigma_var(2, k + 1);
             Cq_var.setZero();
             Csigma_var.setZero();
+            Gvar.setZero();
             for (Index i = 0; i < k + 1; i++)
             {
                 // C_ij = < psi_i, phi_j * n_x > , where psi_i are edge degrees of
@@ -1251,7 +1252,7 @@ void SystemSolver::computeAdjointGradients()
 
                 F_p.segment(var * (k + 1), k + 1) = dkappa_dp_phi;
 
-                auto C_cell = C_cellwise[i];
+                //auto C_cell = C_cellwise[i];
                 F_p.segment(var * (k + 1) + 2 * nVars * (k + 1), k + 1) = -dSdp_cellwise;
 
                 
