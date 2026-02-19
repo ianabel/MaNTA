@@ -256,45 +256,26 @@ template<class BasisType> class DGSolnImpl
             auto const &x_wgts = DGApprox::Integrator().weights();
             const size_t n_abscissa = x_vals.size();
 
+            Index nCells = grid.getNCells();
             for (Index var = 0; var < nVars; ++var)
             {
-                for (auto &coeffPair : sigma_[var].coeffs)
+                for (Index cellIndex = 0; cellIndex < nCells; ++cellIndex)
                 {
-                    Interval const &I = coeffPair.first;
-                    coeffPair.second.setZero();
-                    Matrix Mass( k + 1, k + 1 );
-                    Basis.MassMatrix(I,Mass);
-                    Eigen::FullPivLU<Matrix> mass_transpose_inverse( Mass.transpose() );
-                    for (size_t i = 0; i < n_abscissa; ++i)
+                    Interval const &I = sigma_[var].coeffs[cellIndex].first;
+
+                    Vector nodes = Basis.getNodes();
+                    for ( Index i = 0; i < nodes.size(); ++i )
                     {
-                        // Pull the loop over the gaussian integration points
-                        // outside so we can evaluate u, q, sigmaFn once and store the values
-
-                        // Abscissa only stores positive points, so we have to double up manually
-
-                        State v1( nVars, nScalars ),v2( nVars, nScalars );
-
-                        double y_plus = I.x_l + (1 + x_vals[i]) * I.h() / 2.0;
-                        double y_minus = I.x_l + (1 - x_vals[i]) * I.h() / 2.0;
-                        double wgt = x_wgts[i] * (I.h() / 2.0);
+                        State s( nVars, nScalars );
                         for (Index j = 0; j < nVars; ++j)
                         {
-                            v1.Variable[j]   = u_[j](y_plus, I);
-                            v1.Derivative[j] = q_[j](y_plus, I);
-                            v2.Variable[j] = u_[j](y_minus, I);
-                            v2.Derivative[j] = q_[j](y_minus, I);
+                            s.Variable[j] = u_[j].coeffs[cellIndex].second( i );
+                            s.Derivative[j] = q_[j].coeffs[cellIndex].second( i );
                         }
-
-                        double sigma_plus = sigmaFn(var, v1, y_plus, 0.0);
-                        double sigma_minus = sigmaFn(var, v2, y_minus, 0.0);
-
-                        for (Index j = 0; j < k + 1; ++j)
-                        {
-                            coeffPair.second[j] += wgt * sigma_plus * Basis.Evaluate(I, j, y_plus);
-                            coeffPair.second[j] += wgt * sigma_minus * Basis.Evaluate(I, j, y_minus);
-                        }
+                        // Sigma isn't allowed to depend on scalars so we don't need to fill them in s
+                        // Now just eval on Node
+                        sigma_[var].coeffs[cellIndex].second( i ) = sigmaFn( var, s, nodes( i ), 0.0 );
                     }
-                    coeffPair.second = mass_transpose_inverse.solve( coeffPair.second );
                 }
             }
         }
