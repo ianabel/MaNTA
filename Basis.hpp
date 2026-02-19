@@ -410,6 +410,8 @@ class NodalBasis
 
         unsigned int Order() const { return k; };
 
+        Vector const& getNodes() const { return ChebNodes; };
+
         static NodalBasis getBasis( unsigned int k ) {
             if( singletons.contains( k ) )
                 return singletons.at( k );
@@ -492,12 +494,19 @@ class NodalBasis
         };
 
         // Interpolatory projection
+        Vector EvalOnNodes( Interval const& I, std::function<double(double)> f ) const
+        {
+            Vector vals( k + 1 );
+            for( Index i = 0; i < k + 1; i++ )
+                vals( i ) = f( I.fromRef( ChebNodes( i ) ) );
+            return vals;
+        }
+
         Vector InterpolateOntoBasis( Interval const& I, std::function<double(double)> f ) const
         {
             Vector out( k + 1 );
             Vector vals( k + 1 );
-            for( Index i = 0; i < k + 1; i++ )
-                vals( i ) = f( I.fromRef( ChebNodes( i ) ) );
+            vals = EvalOnNodes( I, f );
             out = (I.h()/2.0) * RefMass * vals;
             return out;
         };
