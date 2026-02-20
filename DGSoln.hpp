@@ -274,7 +274,7 @@ template<class BasisType> class DGSolnImpl
                         }
                         // Sigma isn't allowed to depend on scalars so we don't need to fill them in s
                         // Now just eval on Node
-                        sigma_[var].coeffs[cellIndex].second( i ) = sigmaFn( var, s, nodes( i ), 0.0 );
+                        sigma_[var].coeffs[cellIndex].second( i ) = sigmaFn( var, s, I.fromRef(nodes( i )), 0.0 );
                     }
                 }
             }
