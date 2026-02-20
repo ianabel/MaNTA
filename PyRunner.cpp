@@ -3,9 +3,28 @@
 
 // Load restart data into vectors
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vector<double> &dYdt);
+// Parameters required by "configure" function to be passed to SystemSolver
+static const map_t params = {{"restart", Parameter<bool>{.required = false, ._default = false}},
+                             {"RestartFile", Parameter<std::string>{.required = false, ._default = ""}},
+                             {"High_Grid_Boundary", Parameter<bool>{.required = false, ._default = false}},
+                             {"Lower_Boundary_Fraction", Parameter<double>{.required = false, ._default = 0.2}},
+                             {"Upper_Boundary_Fraction", Parameter<double>{.required = false, ._default = 0.2}},
+                             {"Polynomial_degree", Parameter<unsigned int>{.required = true}},
+                             {"Grid_size", Parameter<int>{.required = true}},
+                             {"tau", Parameter<double>{.required = false, ._default = 1.0}},
+                             {"delta_t", Parameter<double>{.required = true}},
+                             {"tZero", Parameter<double>{.required = false, ._default = 0.0}},
+                             {"tFinal", Parameter<double>{.required = true}},
+                             {"Relative_tolerance", Parameter<double>{.required = false, ._default = 1e-3}},
+                             {"Absolute_tolerance", Parameter<std::vector<double>>{.required = false, ._default = {1e-2}}},
+                             {"MinStepSize", Parameter<double>{.required = false, ._default = 1e-7}},
+                             {"OutputPoints", Parameter<int>{.required = false, ._default = 301}},
+                             {"solveAdjoint", Parameter<bool>{.required = false, ._default = false}},
+                             {"OutputFilename", Parameter<std::string>{.required = true}},
+                             {"SteadyStateTolerance", Parameter<double>{.required = false}}};
 
 template <typename T>
-T visitAndReturnValue(std::string key, const py::dict &d)
+T getValueWithDefault(std::string key, const py::dict &d)
 {
     if (d.contains(key))
     {
@@ -15,17 +34,16 @@ T visitAndReturnValue(std::string key, const py::dict &d)
         }
         catch (const std::exception &e)
         {
-            std::cerr << "The following error occured while trying to get the value of key: " << key << " from config:" << std::endl
-                      << e.what() << std::endl;
-
-            throw;
+            throw std::runtime_error("The following error occured while trying to get the value of key: " + key + " from config:\n" + e.what() + "\n");
         }
     }
     else
     {
         try
         {
+            std::cerr << "INFO: Using default value for configuration option " << key << std::endl;
             return std::get<Parameter<T>>(params.at(key))._default;
+            ;
         }
         catch (...)
         {
@@ -58,13 +76,14 @@ void PyRunner::configure(const py::dict &config)
     if (!requiredParams.empty())
         throw std::runtime_error("Required parameter(s): " + requiredParams + " not contained in config.");
 
-    bool isRestarting = visitAndReturnValue<bool>("restart", config);
+    // Configure MaNTA
+    bool isRestarting = getValueWithDefault<bool>("restart", config);
     netCDF::NcFile restart_file;
-    std::string fname = visitAndReturnValue<std::string>("OutputFilename", config);
+    std::string fname = getValueWithDefault<std::string>("OutputFilename", config);
     if (isRestarting)
     {
         std::string fbase = std::filesystem::path(fname).stem();
-        std::string fileName = visitAndReturnValue<std::string>("RestartFile", config);
+        std::string fileName = getValueWithDefault<std::string>("RestartFile", config);
         fileName = !fileName.empty() ? std::string(fileName) : fbase + ".restart.nc";
         try
         {
@@ -77,7 +96,6 @@ void PyRunner::configure(const py::dict &config)
         }
     }
 
-    // Grid *grid;
     unsigned int k = 1;
     if (!isRestarting)
     {
@@ -86,16 +104,16 @@ void PyRunner::configure(const py::dict &config)
         bool highGridBoundary;
         int nCells;
 
-        k = visitAndReturnValue<unsigned int>("Polynomial_degree", config);
+        k = getValueWithDefault<unsigned int>("Polynomial_degree", config);
 
-        highGridBoundary = visitAndReturnValue<bool>("High_Grid_Boundary", config);
-        lBound = visitAndReturnValue<double>("Lower_boundary", config);
-        uBound = visitAndReturnValue<double>("Upper_boundary", config);
+        highGridBoundary = getValueWithDefault<bool>("High_Grid_Boundary", config);
+        lBound = getValueWithDefault<double>("Lower_boundary", config);
+        uBound = getValueWithDefault<double>("Upper_boundary", config);
 
-        lowerBoundaryFraction = visitAndReturnValue<double>("Lower_Boundary_Fraction", config);
-        upperBoundaryFraction = visitAndReturnValue<double>("Upper_Boundary_Fraction", config);
+        lowerBoundaryFraction = getValueWithDefault<double>("Lower_Boundary_Fraction", config);
+        upperBoundaryFraction = getValueWithDefault<double>("Upper_Boundary_Fraction", config);
 
-        nCells = visitAndReturnValue<int>("Grid_size", config);
+        nCells = getValueWithDefault<int>("Grid_size", config);
 
         grid = std::make_unique<Grid>(lBound, uBound, nCells, highGridBoundary, lowerBoundaryFraction, upperBoundaryFraction);
     }
@@ -113,7 +131,7 @@ void PyRunner::configure(const py::dict &config)
         GridGroup.getVar("PolyOrder").getVar(&k);
     }
 
-    bool solveAdjoint = visitAndReturnValue<bool>("solveAdjoint", config);
+    bool solveAdjoint = getValueWithDefault<bool>("solveAdjoint", config);
     if (solveAdjoint)
         adjoint = pProblem->createAdjointProblem();
 
@@ -134,15 +152,15 @@ void PyRunner::configure(const py::dict &config)
 
     system = std::make_unique<SystemSolver>(*grid, k, pProblem.get(), adjoint.get());
 
-    double dt = visitAndReturnValue<double>("delta_t", config);
-    std::vector<double> atol = visitAndReturnValue<std::vector<double>>("Absolute_tolerance", config);
-    double rtol = visitAndReturnValue<double>("Relative_tolerance", config);
-    double tau = visitAndReturnValue<double>("tau", config);
-    double tZero = visitAndReturnValue<double>("tZero", config);
-    double dt_min = visitAndReturnValue<double>("MinStepSize", config);
-    int nOutput = visitAndReturnValue<int>("OutputPoints", config);
+    double dt = getValueWithDefault<double>("delta_t", config);
+    std::vector<double> atol = getValueWithDefault<std::vector<double>>("Absolute_tolerance", config);
+    double rtol = getValueWithDefault<double>("Relative_tolerance", config);
+    double tau = getValueWithDefault<double>("tau", config);
+    double tZero = getValueWithDefault<double>("tZero", config);
+    double dt_min = getValueWithDefault<double>("MinStepSize", config);
+    int nOutput = getValueWithDefault<int>("OutputPoints", config);
 
-    tFinal = visitAndReturnValue<double>("tFinal", config);
+    tFinal = getValueWithDefault<double>("tFinal", config);
 
     system->setOutputCadence(dt);
     system->setTolerances(atol, rtol);

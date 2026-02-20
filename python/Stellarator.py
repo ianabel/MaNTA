@@ -39,7 +39,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         self.nVars = 1
         self.params = StellaratorParams.from_config(config)
         self.yancc_wrapper = yancc_wrapper(self.Density, 1e19, 1e3)
-        self.dSigmaFn_dVars = jax.jacfwd(self.yancc_wrapper.flux, argnums=0)
+        self.dSigmaFn_dVars = jax.grad(self.yancc_wrapper.flux, argnums=0)
 
     def LowerBoundary(self, index, t):
         return 0.0
