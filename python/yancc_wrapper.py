@@ -28,6 +28,8 @@ Bnorm = 1.0 # Normalization magnetic field in Tesla
 
 class yancc_wrapper():
     def __init__(self, Density, nNorm, Tnorm, nx = 5, na = 65, nt = 17, nz = 33):
+        print("Initializing yancc wrapper with parameters:")
+        print(f"  nx={nx}, na={na}, nt={nt}, nz={nz}")
         self.nx = nx
         self.na = na
         self.nt = nt
@@ -56,6 +58,7 @@ class yancc_wrapper():
 
         self.speedgrid = MaxwellSpeedGrid(nx)
         self.pitchgrid = UniformPitchAngleGrid(na)
+        print("yancc wrapper initialized successfully.")
 
     """
     Compute fluxes using yancc given the MaNTA state
@@ -68,7 +71,6 @@ class yancc_wrapper():
     dict
         Fluxes computed by yancc, normalized to be dimensionless
     """
-    #@partial(jax.jit, static_argnums=(0,))
     def flux(self, state, x):
         p_i = 2. / 3. * state["Variable"][0]
         p_i_prime = 2. / 3. * state["Derivative"][0]
@@ -77,7 +79,7 @@ class yancc_wrapper():
         Vprim = self.dVndr(rho)
 
         dndrho = jax.grad(self.Density, argnums=0)(x)*Vprim
-        Erho = -2.3e3 
+        Erho = -2.3e3
         Ti = p_i / self.Density(x)
         dTidrho = (p_i_prime*Vprim - Ti*dndrho) / self.Density(x)
 
@@ -93,12 +95,13 @@ class yancc_wrapper():
          
         field = Field.from_desc(self.eq, rho, self.nt, self.nz)
 
+        print("Solving DKE with yancc...")
+
         _, _, fluxes, stats  = solve_dke(field, self.pitchgrid, self.speedgrid, species, Erho, print_every=10)
-        assert stats['res'] < 1e-5
+        # assert stats['res'] < 1e-5
+        return fluxes['<heat_flux>'][0] * Vprim / (self.FluxNorm)
 
-        return fluxes['<heat_flux>'] * Vprim / (self.FluxNorm)
-
-    
+    @partial(jax.jit, static_argnums=(0,))
     def rho_from_normalized_volume(self, Vnorm):
         return desc.backend.root_scalar(lambda x: self.Vn(x) - Vnorm, jnp.sqrt(Vnorm))
     

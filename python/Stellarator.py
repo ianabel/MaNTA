@@ -39,6 +39,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         self.nVars = 1
         self.params = StellaratorParams.from_config(config)
         self.yancc_wrapper = yancc_wrapper(self.Density, 1e19, 1e3)
+        self.dSigmaFn_dVars = jax.jacfwd(self.yancc_wrapper.flux, argnums=0)
 
     def LowerBoundary(self, index, t):
         return 0.0
@@ -85,17 +86,14 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     #@partial(jax.jit, static_argnums=(0,1))
     def dSigmaFn_dq( self, index, state, x, t):
-        return jax.grad(self.SigmaFn, argnums=1)(index, state, x, t)["Derivative"]
+        return self.dSigmaFn_dVars(state,x)["Derivative"]
     
     #@partial(jax.jit, static_argnums=(0,1))
     def dSigmaFn_du( self, index, state, x, t):
-        f = jax.grad(self.SigmaFn, argnums=1)(index, state, x, t)["Variable"]
-        print("flux grad")
-        print(f)
-        return f#jax.grad(self.SigmaFn, argnums=1)(index, state, x, t)["Variable"]
+        return self.dSigmaFn_dVars(state,x)["Variable"]
     
     def dSigma_dPhi( self, index, state, x, t):
-        return self.dSigmadvar(index,state,x,t)["Aux"]
+        return self.dSigmaFn_dVars(state,x)["Aux"]
     
     @partial(jax.jit, static_argnums=(0,1))
     def dSources_du( self, index, state, x, t ):

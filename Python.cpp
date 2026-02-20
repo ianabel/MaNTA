@@ -8,6 +8,7 @@
 #include "PhysicsCases.hpp"
 #include "PyTransportSystem.hpp"
 #include "PyAdjointProblem.hpp"
+#include "PyRunner.hpp"
 
 namespace py = pybind11;
 
@@ -174,4 +175,9 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 					 return result;
 				 }
 			 });
+
+	py::class_<PyRunner, py::smart_holder>(m, "Runner")
+		.def(py::init<std::shared_ptr<TransportSystem>>())
+		.def("configure", &PyRunner::configure)
+		.def("run", &PyRunner::run);
 }
