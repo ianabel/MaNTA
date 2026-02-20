@@ -13,6 +13,7 @@ Makefile.local
 sundials/
 resources/
 figs/
+runs
 runs/
 .vscode/
 python/__pycache__/
