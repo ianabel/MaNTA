@@ -39,8 +39,10 @@ public:
     int run(void);
 
 private:
-    // Ownership of objects handled by C++
+    // Shared ownership of TransportSystem so user can update in Python without recreating object
     const std::shared_ptr<TransportSystem> pProblem;
+
+    // Ownership of objects handled by C++
     std::unique_ptr<AdjointProblem> adjoint;
     std::unique_ptr<SystemSolver> system;
     std::unique_ptr<Grid> grid;
