@@ -716,7 +716,7 @@ BOOST_AUTO_TEST_CASE( dg_soln_construction )
 
     single_var.AssignSigma( []( Index, const State& s, Position x, Time ) {
             double u = s.Variable[0], q = s.Derivative[0];
-            return u * ( 1.0 - q*q );
+            return (2 * u - x) * ( 1.0 - q*q );
             } );
 
     BOOST_TEST( single_var.sigma( 0 )( 0.1 ) == 0.1 * ( ::sin( 0.1 )*::sin( 0.1 ) ) );
