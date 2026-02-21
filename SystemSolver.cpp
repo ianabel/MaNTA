@@ -67,6 +67,7 @@ SystemSolver::~SystemSolver()
 
 void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 {
+    std::cerr << "Setting initial conditions" << std::endl;
     t = t0;
     y.Map(N_VGetArrayPointer(Y));
     dydt.Map(N_VGetArrayPointer(dYdt));
@@ -566,6 +567,7 @@ void SystemSolver::resetCoeffs()
 
 void SystemSolver::updateMatricesForJacSolve()
 {
+    std::cerr << "Updating Jacobian at time " << jt << std::endl;
     updateBoundaryConditions(jt);
     // We know where the jacobian is to be evaluated -- yJac
     for (unsigned int i = 0; i < nCells; i++)
@@ -905,6 +907,8 @@ int static_residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval
 
 int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval)
 {
+    std::cerr << "Evaluating residual" << std::endl;
+    std::cerr << "  current residual norm: " << N_VWrmsNorm(resval, wgt) << std::endl;
     updateBoundaryConditions(tres);
 
     DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux);

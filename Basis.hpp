@@ -481,9 +481,9 @@ class NodalBasis
             return (2.0/I.h())*Prime(i,x);
         };
         
-        static const std::array<double,15>& abscissae() { return integrator.abscissa(); };
-        static const std::array<double,15>& weights() { return integrator.weights(); };
-        using IntegratorType = boost::math::quadrature::gauss<double, 30>;
+        static const std::array<double,4>& abscissae() { return integrator.abscissa(); };
+        static const std::array<double,4>& weights() { return integrator.weights(); };
+        using IntegratorType = boost::math::quadrature::gauss<double, 7>;
         static IntegratorType integrator;
 
         double CellProduct(Interval const &I, std::function<double(double)> f, std::function<double(double)> g) const

@@ -1,5 +1,5 @@
 import os 
-os.environ.pop("LD_LIBRARY_PATH", None)
+os.environ.pop("LD_LIBRARY_PATH", None) # Required for Perlmutter to work properly
 
 import yancc
 from yancc.field import Field
@@ -72,6 +72,7 @@ class yancc_wrapper():
         Fluxes computed by yancc, normalized to be dimensionless
     """
     def flux(self, state, x):
+    
         p_i = 2. / 3. * state["Variable"][0]
         p_i_prime = 2. / 3. * state["Derivative"][0]
 
@@ -79,10 +80,9 @@ class yancc_wrapper():
         Vprim = self.dVndr(rho)
 
         dndrho = jax.grad(self.Density, argnums=0)(x)*Vprim
-        Erho = -2.3e3
+        Erho = 0.0
         Ti = p_i / self.Density(x)
         dTidrho = (p_i_prime*Vprim - Ti*dndrho) / self.Density(x)
-
         species = [
         LocalMaxwellian(
             # can just give mass and charge in units of proton mass and elementary charge
@@ -95,11 +95,11 @@ class yancc_wrapper():
          
         field = Field.from_desc(self.eq, rho, self.nt, self.nz)
 
-        print("Solving DKE with yancc...")
 
         _, _, fluxes, stats  = solve_dke(field, self.pitchgrid, self.speedgrid, species, Erho, print_every=10)
-        # assert stats['res'] < 1e-5
-        return fluxes['<heat_flux>'][0] * Vprim / (self.FluxNorm)
+        assert stats['res'] < 1e-5
+        fout = fluxes['<heat_flux>'][0] * Vprim / (self.FluxNorm)
+        return self.Density(x) * fout
 
     @partial(jax.jit, static_argnums=(0,))
     def rho_from_normalized_volume(self, Vnorm):

@@ -115,6 +115,8 @@ void PyRunner::configure(const py::dict &config)
 
         nCells = getValueWithDefault<int>("Grid_size", config);
 
+        std::cerr << "INFO: Creating grid with " << nCells << " cells from x = " << lBound << " to x = " << uBound << std::endl;
+
         grid = std::make_unique<Grid>(lBound, uBound, nCells, highGridBoundary, lowerBoundaryFraction, upperBoundaryFraction);
     }
     else

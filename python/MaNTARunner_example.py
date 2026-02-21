@@ -13,12 +13,13 @@ class LinearDiffusionParams(NamedTuple):
     
 config = {
     "OutputFilename": "out",
-    "Polynomial_degree": 4,
-    "Grid_size": 15,
+    "Polynomial_degree": 5,
+    "Grid_size": 5,
     "Lower_boundary": -1.0,
     "Upper_boundary":  1.0,
+    "Relative_tolerance" : 0.01,
     "tFinal": 1.0,
-    "delta_t": 0.1,
+    "delta_t": 0.5,
     "solveAdjoint": True, 
 }
     

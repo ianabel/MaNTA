@@ -2,6 +2,7 @@ from typing import NamedTuple
 
 import MaNTA
 
+# Required for Perlmutter to work properly
 import os
 os.environ.pop("LD_LIBRARY_PATH", None)
 
@@ -34,11 +35,13 @@ class StellaratorParams(NamedTuple):
         )
 
 class StellaratorTransport(MaNTA.TransportSystem): 
-    def __init__(self, config: MaNTA.TomlValue, grid: MaNTA.Grid):
+    def __init__(self, config , grid: MaNTA.Grid = None):
         MaNTA.TransportSystem.__init__(self)
         self.nVars = 1
+        self.isUpperDirichlet  = True
+        self.isLowerDirichlet  = False
         self.params = StellaratorParams.from_config(config)
-        self.yancc_wrapper = yancc_wrapper(self.Density, 1e19, 1e3)
+        self.yancc_wrapper = yancc_wrapper(self.Density, 1e20, 1e3)
         self.dSigmaFn_dVars = jax.grad(self.yancc_wrapper.flux, argnums=0)
 
     def LowerBoundary(self, index, t):
@@ -51,7 +54,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def SigmaFn( self, index, state, x, t ):
         f = self.yancc_wrapper.flux(state, x)
         print(f)
-        return -f[index]
+        return -f
 
     @partial(jax.jit, static_argnums=(0,1))
     def Sources( self, index, state, x, t ):
