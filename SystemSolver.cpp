@@ -398,7 +398,7 @@ void SystemSolver::initialiseMatrices()
             X.block(var * (k + 1), var * (k + 1), k + 1, k + 1) = Xvar;
         }
         XMats.emplace_back(X);
-
+    
         Eigen::Index nDof = nVars * SQU_DOF + nAux * AUX_DOF;
         MXSolvers.emplace_back( nDof, nDof );
     }
@@ -511,6 +511,21 @@ void SystemSolver::updateMatricesForJacSolve()
 {
     updateBoundaryConditions(jt);
     // We know where the jacobian is to be evaluated -- yJac
+
+    IntegrationPoints Ivals(yJac);
+    std::vector<std::vector<State>> dSigma_vals;
+    std::vector<std::vector<State>> dSource_vals;
+    dSigma_vals.resize(nVars);
+    dSource_vals.resize(nVars);
+
+    const auto &points = Ivals.getPoints();
+    const auto states = yJac.eval(points);
+    problem->dSigma(dSigma_vals, states, points, jt);
+    problem->dSources(dSource_vals, states, points, jt);
+    
+    GlobalStateHolder dSigma_v(dSigma_vals, &Ivals, nVars);
+    GlobalStateHolder dSource_v(dSource_vals, &Ivals, nVars);
+
     for (unsigned int i = 0; i < nCells; i++)
     {
 
@@ -539,27 +554,28 @@ void SystemSolver::updateMatricesForJacSolve()
         }
         MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += X;
 
+        auto ip = Ivals[i];
         // NLq Matrix
-        NLqMat(NLq, yJac, I);
+        DerivativeSubMatrix(NLq, dSigma_v.Derivative(), ip, yJac, I);
         MX.block(0, nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLq;
 
         // NLu Matrix
-        NLuMat(NLu, yJac, I);
+        DerivativeSubMatrix(NLu, dSigma_v.Variable(), ip, yJac, I);
         MX.block(0, 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLu;
 
         // S_sig Matrix
-        dSourcedsigma_Mat(Ssig, yJac, I);
+        DerivativeSubMatrix(Ssig, dSource_v.Flux(), ip, yJac, I);
         MX.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) -= Ssig;
 
         // S_q Matrix
-        dSourcedq_Mat(Sq, yJac, I);
+        DerivativeSubMatrix(Sq, dSource_v.Derivative(), ip, yJac, I);
         MX.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Sq;
 
         // S_u Matrix
-        dSourcedu_Mat(Su, yJac, I);
+        DerivativeSubMatrix(Su, dSource_v.Variable(), ip, yJac, I);
         MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
 
-        dSourcedPhi_Mat(Sphi, yJac, I);
+        DerivativeSubMatrix(Sphi, dSource_v.Aux(), ip, yJac, I);
         MX.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
 
         // Set Parts of Matrix due to aux variables

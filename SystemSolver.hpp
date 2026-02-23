@@ -200,6 +200,8 @@ class SystemSolver
 
         void DerivativeSubMatrix(Matrix &mat, void (TransportSystem::*dX_dZ)(Index, Values &, const State &, Position, Time), DGSoln const &Y, Interval I);
 
+        void DerivativeSubMatrix(Matrix &mat, GlobalState const &, IntegrationPoint const &, DGSoln const &, Interval I);
+
         void dSources_dScalars_Mat(Matrix &, DGSoln const &, Interval);
 
         void dSourcedPhi_Mat(Matrix &, DGSoln const &, Interval);

@@ -7,9 +7,8 @@
 #include "Types.hpp"
 #include "SystemSolver.hpp"
 
-
-
-void SystemSolver::NLqMat( Matrix& NLq, DGSoln const &Y, Interval I ) {
+void SystemSolver::NLqMat(Matrix &NLq, DGSoln const &Y, Interval I)
+{
 	//	[ dkappa_1dq1    dkappa_1dq2    dkappa_1dq3 ]
 	//	[ dkappa_2dq1    dkappa_2dq2    dkappa_2dq3 ]
 	//	[ dkappa_3dq1    dkappa_3dq2    dkappa_3dq3 ]
@@ -35,7 +34,64 @@ void SystemSolver::NLphiMat( Matrix& M, DGSoln const& Y, Interval I ) {
 //	[ dX_3dZ1    dX_3dZ2    dX_3dZ3 ]
 //
 // where X is a sigma function or a source function and Z is one of u, q, or sigma.
- 
+void SystemSolver::DerivativeSubMatrix(Matrix &mat, GlobalState const &dX_dZ_vals, IntegrationPoint const &ip, DGSoln const & Y, Interval I)
+{
+	auto const &x_vals = y.getBasis().abscissae();
+	auto const &x_wgts = y.getBasis().weights();
+	const size_t n_abscissa = x_vals.size();
+
+	// ASSERT mat.shape == ( nVars * ( k + 1) , nVars * ( k + 1 ) )
+	assert(mat.rows() == nVars * (k + 1));
+	assert(mat.cols() == nVars * (k + 1));
+
+	mat.setZero();
+
+	// Phi are basis fn's
+	// M( nVars * K + k, nVars * J + j ) = Int_I ( d sigma_fn_K / d u_J * Phi_k * Phi_j )
+
+	for (Index XVar = 0; XVar < nVars; XVar++)
+	{
+		Values dX_dZ_vals1(nVars);
+		Values dX_dZ_vals2(nVars);
+		dX_dZ_vals1.setZero();
+		dX_dZ_vals2.setZero();
+
+		for (size_t i = 0; i < n_abscissa; ++i)
+		{
+			// Pull the loop over the gaussian integration points
+			// outside so we can evaluate u, q, dX_dZ once and store the values
+
+			// All for loops inside here can be parallelised as they all
+			// write to separate entries in mat
+
+			double wgt = x_wgts[i] * (I.h() / 2.0);
+
+			const auto [y_plus, y_minus] = ip.getPoints()[i];
+
+			State Y_plus = Y.eval(y_plus), Y_minus = Y.eval(y_minus);
+
+			const auto [i_plus, i_minus] = ip.getIndices()[i];
+
+			const auto dX_dZ_vals1 = dX_dZ_vals(XVar, i_plus);
+			const auto dX_dZ_vals2 = dX_dZ_vals(XVar, i_minus);
+
+			for (Index ZVar = 0; ZVar < nVars; ZVar++)
+			{
+				for (Index j = 0; j < k + 1; ++j)
+				{
+					for (Index l = 0; l < k + 1; ++l)
+					{
+						mat(XVar * (k + 1) + j, ZVar * (k + 1) + l) +=
+							wgt * dX_dZ_vals1[ZVar] * y.getBasis().Evaluate(I, j, y_plus) * y.getBasis().Evaluate(I, l, y_plus);
+						mat(XVar * (k + 1) + j, ZVar * (k + 1) + l) +=
+							wgt * dX_dZ_vals2[ZVar] * y.getBasis().Evaluate(I, j, y_minus) * y.getBasis().Evaluate(I, l, y_minus);
+					}
+				}
+			}
+		}
+	}
+}
+
 void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX_dZ )( Index, Values&, const State&, Position, double ), DGSoln const& Y, Interval I )
 {
 	auto const& x_vals = y.getBasis().abscissae();
