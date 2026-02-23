@@ -38,60 +38,34 @@ void SystemSolver::NLphiMat( Matrix& M, DGSoln const& Y, Index intervalIndex ) {
  
 void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX_dZ )( Index, Values&, const State&, Position, double ), DGSoln const& Y, Index intervalIndex )
 {
-	auto const& x_vals = y.getBasis().abscissae();
-	auto const& x_wgts = y.getBasis().weights();
-	const size_t n_abscissa = x_vals.size();
-
 	// ASSERT mat.shape == ( nVars * ( k + 1) , nVars * ( k + 1 ) )
 	assert( mat.rows() == nVars * ( k + 1 ) );
 	assert( mat.cols() == nVars * ( k + 1 ) );
 
 	mat.setZero();
 
-	// Phi are basis fn's
-	// M( nVars * K + k, nVars * J + j ) = Int_I ( d sigma_fn_K / d u_J * Phi_k * Phi_j )
+    // With interpolation we have Mass * diagonal( F'(nodes) ) (c.f. https://arxiv.org/pdf/1811.09667 eq 3.16ff)
 
-    Interval const &I( grid[intervalIndex] );
 
-	for ( Index XVar = 0; XVar < nVars; XVar++ )
-	{
-		Values dX_dZ_vals1( nVars );
-		Values dX_dZ_vals2( nVars );
-        dX_dZ_vals1.setZero();
-        dX_dZ_vals2.setZero();
-
-		for ( size_t i=0; i < n_abscissa; ++i ) {
-			// Pull the loop over the gaussian integration points
-			// outside so we can evaluate u, q, dX_dZ once and store the values
-			
-			// All for loops inside here can be parallelised as they all
-			// write to separate entries in mat
-			
-			double wgt = x_wgts[ i ]*( I.h()/2.0 );
-
-			double y_plus  = I.x_l + ( 1.0 + x_vals[ i ] )*( I.h()/2.0 );
-			double y_minus = I.x_l + ( 1.0 - x_vals[ i ] )*( I.h()/2.0 );
-
-			State Y_plus = Y.eval( y_plus ), Y_minus = Y.eval( y_minus );
-
-			( problem->*dX_dZ )( XVar, dX_dZ_vals1, Y_plus, y_plus, jt );
-			( problem->*dX_dZ )( XVar, dX_dZ_vals2, Y_minus, y_minus, jt );
-
-			for(Index ZVar = 0; ZVar < nVars; ZVar++)
-			{
-				for ( Index j=0; j < k + 1; ++j )
-				{
-					for ( Index l=0; l < k + 1; ++l )
-					{
-						mat( XVar * ( k + 1 ) + j, ZVar * ( k + 1 ) + l ) +=
-							wgt * dX_dZ_vals1[ ZVar ] * y.getBasis().Evaluate( I, j, y_plus ) * y.getBasis().Evaluate( I, l, y_plus );
-						mat( XVar * ( k + 1 ) + j, ZVar * ( k + 1 ) + l ) +=
-							wgt * dX_dZ_vals2[ ZVar ] * y.getBasis().Evaluate( I, j, y_minus ) * y.getBasis().Evaluate( I, l, y_minus );
-					}
-				}
-			}
-		}
-	}
+    for ( Index XVar = 0; XVar < nVars; XVar++ )
+    {
+        Matrix M = Y.getBasis().MassMatrix( grid[ intervalIndex ] );
+        for ( Index j=0; j < k + 1; ++j )
+        {
+            Vector vals( nVars );
+            vals.setZero();
+            double xi = grid[ intervalIndex ].fromRef( Y.getBasis().Nodes( j ) );
+            State s = Y.evalOnNode( intervalIndex, j );
+            ( problem->*dX_dZ )( XVar, vals, s, xi, jt );
+            for(Index ZVar = 0; ZVar < nVars; ZVar++)
+            {
+                mat( XVar * ( k + 1 ) + j, ZVar * ( k + 1 ) + j ) = vals[ ZVar ];
+            }
+        }
+        for(Index ZVar = 0; ZVar < nVars; ZVar++) {
+            mat.block( XVar * ( k + 1 ), ZVar * ( k + 1 ), k + 1, k + 1 ).applyOnTheLeft( M );
+        }
+    }
 }
 
 void SystemSolver::dSourcedq_Mat( Matrix& dSourcedqMatrix, DGSoln const& Y, Index I)

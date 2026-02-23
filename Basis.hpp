@@ -596,7 +596,7 @@ class NodalBasis
                 }
         }
 
-        double Nodes( Index i ) { return ChebNodes( i ); };
+        double Nodes( Index i ) const { return ChebNodes( i ); };
 };
 
 #endif
