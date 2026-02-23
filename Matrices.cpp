@@ -9,23 +9,23 @@
 
 
 
-void SystemSolver::NLqMat( Matrix& NLq, DGSoln const &Y, Interval I ) {
+void SystemSolver::NLqMat( Matrix& NLq, DGSoln const &Y, Index intervalIndex ) {
 	//	[ dkappa_1dq1    dkappa_1dq2    dkappa_1dq3 ]
 	//	[ dkappa_2dq1    dkappa_2dq2    dkappa_2dq3 ]
 	//	[ dkappa_3dq1    dkappa_3dq2    dkappa_3dq3 ]
 
-	DerivativeSubMatrix( NLq, &TransportSystem::dSigmaFn_dq, Y, I );
+	DerivativeSubMatrix( NLq, &TransportSystem::dSigmaFn_dq, Y, intervalIndex );
 }
 
-void SystemSolver::NLuMat( Matrix& NLu, DGSoln const& Y, Interval I ) {
+void SystemSolver::NLuMat( Matrix& NLu, DGSoln const& Y, Index intervalIndex ) {
 	//	[ dkappa_1du1    dkappa_1du2    dkappa_1du3 ]
 	//	[ dkappa_2du1    dkappa_2du2    dkappa_2du3 ]
 	//	[ dkappa_3du1    dkappa_3du2    dkappa_3du3 ]
 
-	DerivativeSubMatrix( NLu, &TransportSystem::dSigmaFn_du, Y, I );
+	DerivativeSubMatrix( NLu, &TransportSystem::dSigmaFn_du, Y, intervalIndex );
 }
 
-void SystemSolver::NLphiMat( Matrix& M, DGSoln const& Y, Interval I ) {
+void SystemSolver::NLphiMat( Matrix& M, DGSoln const& Y, Index intervalIndex ) {
  return;
 }
 
@@ -36,7 +36,7 @@ void SystemSolver::NLphiMat( Matrix& M, DGSoln const& Y, Interval I ) {
 //
 // where X is a sigma function or a source function and Z is one of u, q, or sigma.
  
-void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX_dZ )( Index, Values&, const State&, Position, double ), DGSoln const& Y, Interval I )
+void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX_dZ )( Index, Values&, const State&, Position, double ), DGSoln const& Y, Index intervalIndex )
 {
 	auto const& x_vals = y.getBasis().abscissae();
 	auto const& x_wgts = y.getBasis().weights();
@@ -50,6 +50,8 @@ void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX
 
 	// Phi are basis fn's
 	// M( nVars * K + k, nVars * J + j ) = Int_I ( d sigma_fn_K / d u_J * Phi_k * Phi_j )
+
+    Interval const &I( grid[intervalIndex] );
 
 	for ( Index XVar = 0; XVar < nVars; XVar++ )
 	{
@@ -92,23 +94,24 @@ void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX
 	}
 }
 
-void SystemSolver::dSourcedq_Mat( Matrix& dSourcedqMatrix, DGSoln const& Y, Interval I)
+void SystemSolver::dSourcedq_Mat( Matrix& dSourcedqMatrix, DGSoln const& Y, Index I)
 {
 	DerivativeSubMatrix( dSourcedqMatrix, &TransportSystem::dSources_dq, Y, I );
 }
 
-void SystemSolver::dSourcedu_Mat( Matrix& dSourceduMatrix, DGSoln const& Y, Interval I)
+void SystemSolver::dSourcedu_Mat( Matrix& dSourceduMatrix, DGSoln const& Y, Index I)
 {
 	DerivativeSubMatrix( dSourceduMatrix, &TransportSystem::dSources_du, Y, I );
 }
 
-void SystemSolver::dSourcedsigma_Mat( Matrix& dSourcedsigmaMatrix, DGSoln const& Y, Interval I )
+void SystemSolver::dSourcedsigma_Mat( Matrix& dSourcedsigmaMatrix, DGSoln const& Y, Index I )
 {
 	DerivativeSubMatrix( dSourcedsigmaMatrix, &TransportSystem::dSources_dsigma, Y, I );
 }
 
-void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Interval I )
+void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Index intervalIndex )
 {
+    Interval const &I( grid[ intervalIndex ] );
 	auto const& x_vals = y.getBasis().abscissae();
 	auto const& x_wgts = y.getBasis().weights();
 	const size_t n_abscissa = x_vals.size();
@@ -157,8 +160,10 @@ void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Interval
 	}
 }
 
-void SystemSolver::dSourcedPhi_Mat( Matrix& mat, DGSoln const& Y, Interval I )
+void SystemSolver::dSourcedPhi_Mat( Matrix& mat, DGSoln const& Y, Index intervalIndex )
 {
+    Interval const &I( grid[ intervalIndex ] );
+
 	auto const& x_vals = y.getBasis().abscissae();
 	auto const& x_wgts = y.getBasis().weights();
 	const size_t n_abscissa = x_vals.size();
@@ -210,8 +215,9 @@ void SystemSolver::dSourcedPhi_Mat( Matrix& mat, DGSoln const& Y, Interval I )
 	}
 }
 
-void SystemSolver::dAux_Mat( Eigen::Ref<Matrix> mat, DGSoln const& Y, Interval I )
+void SystemSolver::dAux_Mat( Eigen::Ref<Matrix> mat, DGSoln const& Y, Index intervalIndex )
 {
+  Interval const &I( grid[intervalIndex] );
   auto const& x_vals = y.getBasis().abscissae();
   auto const& x_wgts = y.getBasis().weights();
   const size_t n_abscissa = x_vals.size();

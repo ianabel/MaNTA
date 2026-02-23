@@ -597,30 +597,30 @@ void SystemSolver::updateMatricesForJacSolve()
         MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += X;
 
         // NLq Matrix
-        NLqMat(NLq, yJac, I);
+        NLqMat(NLq, yJac, i);
         MX.block(0, nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLq;
 
         // NLu Matrix
-        NLuMat(NLu, yJac, I);
+        NLuMat(NLu, yJac, i);
         MX.block(0, 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLu;
 
         // S_sig Matrix
-        dSourcedsigma_Mat(Ssig, yJac, I);
+        dSourcedsigma_Mat(Ssig, yJac, i);
         MX.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) -= Ssig;
 
         // S_q Matrix
-        dSourcedq_Mat(Sq, yJac, I);
+        dSourcedq_Mat(Sq, yJac, i);
         MX.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Sq;
 
         // S_u Matrix
-        dSourcedu_Mat(Su, yJac, I);
+        dSourcedu_Mat(Su, yJac, i);
         MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
 
-        dSourcedPhi_Mat(Sphi, yJac, I);
+        dSourcedPhi_Mat(Sphi, yJac, i);
         MX.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
 
         // Set Parts of Matrix due to aux variables
-        dAux_Mat(MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), yJac, I);
+        dAux_Mat(MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), yJac, i);
 
         MXSolvers[ i ].compute(MX);
     }
@@ -635,7 +635,7 @@ void SystemSolver::updateMatricesForJacSolve()
     for (Index i = 0; i < nCells; ++i)
     {
         Matrix v_tmp(nVars * U_DOF, nScalars);
-        dSources_dScalars_Mat(v_tmp, yJac, grid[i]);
+        dSources_dScalars_Mat(v_tmp, yJac, i);
         for (Index j = 0; j < nScalars; ++j)
             for (Index v = 0; v < nVars; ++v)
                 v_map[j].u(v).getCoeff(i).second = v_tmp.block(v * U_DOF, j, U_DOF, 1);
@@ -1009,18 +1009,18 @@ void SystemSolver::initializeMatricesForAdjointSolve()
     {
         G_y.emplace_back(3 * nVars * (k + 1) + nAux * (k + 1));
 
-        dGdsigma_Vec(0, dGdsigma, y, grid[i]);
+        dGdsigma_Vec(0, dGdsigma, y, i);
         G_y[i].block(0, 0, nVars * (k + 1), 1) = dGdsigma;
 
-        dGdq_Vec(0, dGdq, y, grid[i]);
+        dGdq_Vec(0, dGdq, y, i);
         G_y[i].block(nVars * (k + 1), 0, nVars * (k + 1), 1) = dGdq;
 
-        dGdu_Vec(0, dGdu, y, grid[i]);
+        dGdu_Vec(0, dGdu, y, i);
         G_y[i].block(2 * nVars * (k + 1), 0, nVars * (k + 1), 1) = dGdu;
 
         if (nAux > 0)
         {
-            dGdaux_Vec(0, dGdaux, y, grid[i]);
+            dGdaux_Vec(0, dGdaux, y, i);
             G_y[i].block(3 * nVars * (k + 1), 0, nAux * (k + 1), 1) = dGdaux;
         }
     }
@@ -1041,19 +1041,19 @@ void SystemSolver::initializeMatricesForAdjointSolve()
 
         Interval const &I(grid[i]);
         // NLq Matrix
-        NLqMat(NLq, y, I);
+        NLqMat(NLq, y, i);
 
         // NLu Matrix
-        NLuMat(NLu, y, I);
+        NLuMat(NLu, y, i);
 
         // S_sig Matrix
-        dSourcedsigma_Mat(Ssig, y, I);
+        dSourcedsigma_Mat(Ssig, y, i);
 
         // S_q Matrix
-        dSourcedq_Mat(Sq, y, I);
+        dSourcedq_Mat(Sq, y, i);
 
         // S_u Matrix
-        dSourcedu_Mat(Su, y, I);
+        dSourcedu_Mat(Su, y, i);
 
         // M is the local DG Matrix
         Eigen::MatrixXd M(localDOF, localDOF);
@@ -1079,11 +1079,11 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         // TODO: This is probably wrong
         if (nAux > 0)
         {
-            dSourcedPhi_Mat(Sphi, y, I);
+            dSourcedPhi_Mat(Sphi, y, i);
             M.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
 
             // Set Parts of Matrix due to aux variables
-            dAux_Mat(M.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), y, I);
+            dAux_Mat(M.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), y, i);
 
             // TODO: Consider factorization here (is M sparse enough to warrant a sparse implementation?)
         }

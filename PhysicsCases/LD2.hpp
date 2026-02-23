@@ -17,6 +17,8 @@ class LD2 : public TransportSystem {
 
         virtual ~LD2() {
             std::cout << "During scope existence, Sigma was called " << nSigmaCalls << " times;" << std::endl;
+            std::cout << "During scope existence, Sources was called " << nSourceCalls << " times;" << std::endl;
+            std::cout << "During scope existence, Derivative was called " << nDerivCalls << " times;" << std::endl;
             return;
         }
 
@@ -50,7 +52,7 @@ private:
 	double t0;
 	Value ExactSolution( Position, Time ) const;
 
-    unsigned int nSigmaCalls,nSourceCalls;
+    unsigned int nSigmaCalls,nSourceCalls,nDerivCalls;
 
 	// Without this (and the implementation line in LD2.cpp)
 	// ManTA won't know how to relate the string 'LD2' to the class.

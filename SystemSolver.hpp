@@ -190,29 +190,27 @@ class SystemSolver
 
         Vector G_p; // gradients computed by adjoint state method
 
-        void NLqMat(Matrix &, DGSoln const &, Interval);
-        void NLuMat(Matrix &, DGSoln const &, Interval);
-        void NLphiMat(Matrix &, DGSoln const &, Interval);
+        void NLqMat(Matrix &, DGSoln const &, Index);
+        void NLuMat(Matrix &, DGSoln const &, Index);
+        void NLphiMat(Matrix &, DGSoln const &, Index);
 
-        void dSourcedu_Mat(Matrix &, DGSoln const &, Interval);
-        void dSourcedq_Mat(Matrix &, DGSoln const &, Interval);
-        void dSourcedsigma_Mat(Matrix &, DGSoln const &, Interval);
+        void dSourcedu_Mat(Matrix &, DGSoln const &, Index);
+        void dSourcedq_Mat(Matrix &, DGSoln const &, Index);
+        void dSourcedsigma_Mat(Matrix &, DGSoln const &, Index);
 
-        void DerivativeSubMatrix(Matrix &mat, void (TransportSystem::*dX_dZ)(Index, Values &, const State &, Position, Time), DGSoln const &Y, Interval I);
+        void DerivativeSubMatrix(Matrix &mat, void (TransportSystem::*dX_dZ)(Index, Values &, const State &, Position, Time), DGSoln const &Y, Index I);
 
-        void dSources_dScalars_Mat(Matrix &, DGSoln const &, Interval);
+        void dSources_dScalars_Mat(Matrix &, DGSoln const &, Index );
 
-        void dSourcedPhi_Mat(Matrix &, DGSoln const &, Interval);
+        void dSourcedPhi_Mat(Matrix &, DGSoln const &, Index );
 
-        void dAux_Mat(Eigen::Ref<Matrix>, DGSoln const &, Interval);
+        void dAux_Mat(Eigen::Ref<Matrix>, DGSoln const &, Index );
 
-        void DerivativeSubVector(Index, Vector &, void (AdjointProblem::*dX_dZ)(Index, Values &, const State &, Position), DGSoln const &Y, Interval I);
-        void dGdu_Vec(Index, Vector &, DGSoln const &, Interval);
-        void dGdq_Vec(Index, Vector &, DGSoln const &, Interval);
-        void dGdsigma_Vec(Index, Vector &, DGSoln const &, Interval);
-        void dGdaux_Vec(Index, Vector &, DGSoln const &, Interval);
-        // void dSigmadp_Vec(Index, Vector &, DGSoln const &, Interval);
-        // void dSourcesdp_Vec(Index, Vector &, DGSoln const &, Interval);
+        void DerivativeSubVector(Index, Vector &, void (AdjointProblem::*dX_dZ)(Index, Values &, const State &, Position), DGSoln const &Y, Index I);
+        void dGdu_Vec(Index, Vector &, DGSoln const &, Index);
+        void dGdq_Vec(Index, Vector &, DGSoln const &, Index);
+        void dGdsigma_Vec(Index, Vector &, DGSoln const &, Index);
+        void dGdaux_Vec(Index, Vector &, DGSoln const &, Index);
 
         double resNorm = 0.0; // Exclusively for unit testing purposes
 
