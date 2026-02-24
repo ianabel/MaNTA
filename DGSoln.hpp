@@ -130,38 +130,51 @@ public:
     DGApprox &Aux(Index i) { return aux_[i]; };
     DGApprox const &Aux(Index i) const { return aux_[i]; };
 
-        State eval( double x ) const {
-            State out( nVars, nScalars, nAux );
-            for ( Index i = 0; i < nVars; ++i ) {
-                out.Variable[i] = u_[i]( x );
-                out.Derivative[i] =  q_[i]( x );
-                out.Flux[i] = sigma_[i]( x );
-            }
-            for ( Index i = 0; i < nScalars; ++i ) {
-                out.Scalars[i] = mu_[i];
-            }
-            for ( Index i = 0; i < nAux; ++i ) {
-                out.Aux[i] = aux_[i]( x );
-            }
-            return out;
+    State eval( double x ) const {
+        State out( nVars, nScalars, nAux );
+        for ( Index i = 0; i < nVars; ++i ) {
+            out.Variable[i] = u_[i]( x );
+            out.Derivative[i] =  q_[i]( x );
+            out.Flux[i] = sigma_[i]( x );
+        }
+        for ( Index i = 0; i < nScalars; ++i ) {
+            out.Scalars[i] = mu_[i];
+        }
+        for ( Index i = 0; i < nAux; ++i ) {
+            out.Aux[i] = aux_[i]( x );
+        }
+        return out;
+    }
+
+    std::vector<State> eval (std::vector<Position> xs) const
+    {
+        std::vector<State> out; 
+        out.reserve(xs.size());
+
+        for (auto &x : xs)
+        {
+            out.emplace_back(eval(x));
         }
 
-        State evalOnNode( Index cell, Index node ) const {
-            State out( nVars, nScalars, nAux );
-            double x = grid[ cell ].fromRef( Basis.Nodes( node ) );
-            for ( Index i = 0; i < nVars; ++i ) {
-                out.Variable[i] = u_[i]( x );
-                out.Derivative[i] =  q_[i]( x );
-                out.Flux[i] = sigma_[i]( x );
-            }
-            for ( Index i = 0; i < nScalars; ++i ) {
-                out.Scalars[i] = mu_[i];
-            }
-            for ( Index i = 0; i < nAux; ++i ) {
-                out.Aux[i] = aux_[i]( x );
-            }
-            return out;
+        return out; 
+    }
+
+    State evalOnNode( Index cell, Index node ) const {
+        State out( nVars, nScalars, nAux );
+        double x = grid[ cell ].fromRef( Basis.Nodes( node ) );
+        for ( Index i = 0; i < nVars; ++i ) {
+            out.Variable[i] = u_[i]( x );
+            out.Derivative[i] =  q_[i]( x );
+            out.Flux[i] = sigma_[i]( x );
         }
+        for ( Index i = 0; i < nScalars; ++i ) {
+            out.Scalars[i] = mu_[i];
+        }
+        for ( Index i = 0; i < nAux; ++i ) {
+            out.Aux[i] = aux_[i]( x );
+        }
+        return out;
+    }
 
     // Deep copy of the data in other to the memory we are
     // wrapping
@@ -353,21 +366,21 @@ class IntegrationPoint
 public:
     IntegrationPoint() = default;
 
-    void addIndex(std::pair<Index, Index> &&i_in)
+    void addIndex(Index &&i_in)
     {
         pointsIndex.push_back(i_in);
     }
-    void addPoint(std::pair<Position, Position> &&p_in)
+    void addPoint(Position &&p_in)
     {
         points.push_back(p_in);
     }
 
-    const std::vector<std::pair<Position, Position>> &getPoints() const { return points; }
-    const std::vector<std::pair<Index, Index>> &getIndices() const { return pointsIndex; }
+    const std::vector<Position> &getPoints() const { return points; }
+    const std::vector<Index> &getIndices() const { return pointsIndex; }
 
 private:
-    std::vector<std::pair<Index, Index>> pointsIndex;
-    std::vector<std::pair<Position, Position>> points;
+    std::vector<Index> pointsIndex;
+    std::vector<Position> points;
 };
 
 class IntegrationPoints
@@ -376,7 +389,7 @@ public:
     IntegrationPoints(const DGSoln &y)
     {
         nCells = (y.grid.getNCells());
-        const auto &x_vals = y.getBasis().abscissae();
+        const auto &x_vals =y.getBasis().getNodes();
         n_abscissa = x_vals.size();
         Index i_curr = 0;
         _integrationPoints.resize(nCells);
@@ -389,13 +402,10 @@ public:
 
             for (size_t j = 0; j < n_abscissa; ++j)
             {
-                double y_plus = I.x_l + (1.0 + x_vals[j]) * (I.h() / 2.0);
-                double y_minus = I.x_l + (1.0 - x_vals[j]) * (I.h() / 2.0);
-                ip.addIndex({i_curr, i_curr + 1});
-                ip.addPoint({y_plus, y_minus});
-                points.emplace_back(y_plus);
-                points.emplace_back(y_minus);
-                i_curr += 2;
+
+                ip.addIndex(i_curr++);
+                ip.addPoint(I.fromRef(x_vals[j]));
+                points.emplace_back(I.fromRef(x_vals[j]));
             }
         }
     }
@@ -462,22 +472,17 @@ public:
             {
                 const auto indices = (*integrationPoints)[i].getIndices();
 
-                for (const auto &[i1, i2] : indices)
+                for (const auto j : indices)
                 {
-                    const auto s1 = states[var][i1];
-                    const auto s2 = states[var][i2];
+                    const auto s = states[var][j];
+    
+                    var_out_var.push_back(s.Variable);
 
-                    var_out_var.push_back(s1.Variable);
-                    var_out_var.push_back(s2.Variable);
+                    deriv_out_var.push_back(s.Derivative);
 
-                    deriv_out_var.push_back(s1.Derivative);
-                    deriv_out_var.push_back(s2.Derivative);
+                    sigma_out_var.push_back(s.Flux);
 
-                    sigma_out_var.push_back(s1.Flux);
-                    sigma_out_var.push_back(s2.Flux);
-
-                    aux_out_var.push_back(s1.Aux);
-                    aux_out_var.push_back(s2.Aux);
+                    aux_out_var.push_back(s.Aux);
                 }
             }
         }

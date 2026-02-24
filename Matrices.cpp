@@ -35,60 +35,32 @@ void SystemSolver::NLphiMat( Matrix& M, DGSoln const& Y, Index intervalIndex ) {
 //	[ dX_3dZ1    dX_3dZ2    dX_3dZ3 ]
 //
 // where X is a sigma function or a source function and Z is one of u, q, or sigma.
-void SystemSolver::DerivativeSubMatrix(Matrix &mat, GlobalState const &dX_dZ_vals, IntegrationPoint const &ip, DGSoln const & Y, Interval I)
+void SystemSolver::DerivativeSubMatrix(Matrix &mat, GlobalState const &dX_dZ_vals, IntegrationPoint const &ip, DGSoln const & Y, Index intervalIndex)
 {
-	auto const &x_vals = y.getBasis().abscissae();
-	auto const &x_wgts = y.getBasis().weights();
-	const size_t n_abscissa = x_vals.size();
-
 	// ASSERT mat.shape == ( nVars * ( k + 1) , nVars * ( k + 1 ) )
 	assert(mat.rows() == nVars * (k + 1));
 	assert(mat.cols() == nVars * (k + 1));
 
 	mat.setZero();
 
-	// Phi are basis fn's
-	// M( nVars * K + k, nVars * J + j ) = Int_I ( d sigma_fn_K / d u_J * Phi_k * Phi_j )
+	// With interpolation we have Mass * diagonal( F'(nodes) ) (c.f. https://arxiv.org/pdf/1811.09667 eq 3.16ff)
 
 	for (Index XVar = 0; XVar < nVars; XVar++)
 	{
-		Values dX_dZ_vals1(nVars);
-		Values dX_dZ_vals2(nVars);
-		dX_dZ_vals1.setZero();
-		dX_dZ_vals2.setZero();
-
-		for (size_t i = 0; i < n_abscissa; ++i)
+		Matrix M = Y.getBasis().MassMatrix(grid[intervalIndex]);
+		for (Index j = 0; j < k + 1; ++j)
 		{
-			// Pull the loop over the gaussian integration points
-			// outside so we can evaluate u, q, dX_dZ once and store the values
-
-			// All for loops inside here can be parallelised as they all
-			// write to separate entries in mat
-
-			double wgt = x_wgts[i] * (I.h() / 2.0);
-
-			const auto [y_plus, y_minus] = ip.getPoints()[i];
-
-			State Y_plus = Y.eval(y_plus), Y_minus = Y.eval(y_minus);
-
-			const auto [i_plus, i_minus] = ip.getIndices()[i];
-
-			const auto dX_dZ_vals1 = dX_dZ_vals(XVar, i_plus);
-			const auto dX_dZ_vals2 = dX_dZ_vals(XVar, i_minus);
-
+			Vector vals(nVars);
+			vals.setZero();
+			State s = Y.evalOnNode(intervalIndex, j);
 			for (Index ZVar = 0; ZVar < nVars; ZVar++)
 			{
-				for (Index j = 0; j < k + 1; ++j)
-				{
-					for (Index l = 0; l < k + 1; ++l)
-					{
-						mat(XVar * (k + 1) + j, ZVar * (k + 1) + l) +=
-							wgt * dX_dZ_vals1[ZVar] * y.getBasis().Evaluate(I, j, y_plus) * y.getBasis().Evaluate(I, l, y_plus);
-						mat(XVar * (k + 1) + j, ZVar * (k + 1) + l) +=
-							wgt * dX_dZ_vals2[ZVar] * y.getBasis().Evaluate(I, j, y_minus) * y.getBasis().Evaluate(I, l, y_minus);
-					}
-				}
+				mat(XVar * (k + 1) + j, ZVar * (k + 1) + j) = dX_dZ_vals(XVar, ip.getIndices()[j])[ZVar];
 			}
+		}
+		for (Index ZVar = 0; ZVar < nVars; ZVar++)
+		{
+			mat.block(XVar * (k + 1), ZVar * (k + 1), k + 1, k + 1).applyOnTheLeft(M);
 		}
 	}
 }

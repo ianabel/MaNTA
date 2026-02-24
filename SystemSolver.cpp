@@ -613,23 +613,23 @@ void SystemSolver::updateMatricesForJacSolve()
 
         auto ip = Ivals[i];
         // NLq Matrix
-        DerivativeSubMatrix(NLq, dSigma_v.Derivative(), ip, yJac, I);
+        DerivativeSubMatrix(NLq, dSigma_v.Derivative(), ip, yJac, i);
         MX.block(0, nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLq;
 
         // NLu Matrix
-        DerivativeSubMatrix(NLu, dSigma_v.Variable(), ip, yJac, I);
+        DerivativeSubMatrix(NLu, dSigma_v.Variable(), ip, yJac, i);
         MX.block(0, 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLu;
 
         // S_sig Matrix
-        DerivativeSubMatrix(Ssig, dSource_v.Flux(), ip, yJac, I);
+        DerivativeSubMatrix(Ssig, dSource_v.Flux(), ip, yJac, i);
         MX.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) -= Ssig;
 
         // S_q Matrix
-        DerivativeSubMatrix(Sq, dSource_v.Derivative(), ip, yJac, I);
+        DerivativeSubMatrix(Sq, dSource_v.Derivative(), ip, yJac, i);
         MX.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Sq;
 
         // S_u Matrix
-        DerivativeSubMatrix(Su, dSource_v.Variable(), ip, yJac, I);
+        DerivativeSubMatrix(Su, dSource_v.Variable(), ip, yJac, i);
         MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
 
         dSourcedPhi_Mat(Sphi, yJac, i);
