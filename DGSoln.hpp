@@ -78,16 +78,31 @@ public:
         return out;
     }
 
+    Matrix& Variable()
+    {
+        return _Variable;
+    }
+    const Matrix& Variable() const 
+    {
+        return _Variable;
+    }
     VectorRef Variable(Index i)
     {
         return _Variable.col(i);
     }
-
     Eigen::Ref<Matrix> cellwiseVariable(Index cell)
     {
         return _Variable(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1)* (k + 1) - 1));
     }
 
+    Matrix& Derivative()
+    {
+        return _Derivative;
+    }
+    const Matrix& Derivative() const
+    {
+        return _Derivative;
+    }
     VectorRef Derivative(Index i)
     {
         return _Derivative.col(i);
@@ -97,6 +112,14 @@ public:
         return _Derivative(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
     }
 
+    Matrix& Flux()
+    {
+        return _Flux;
+    }
+    const Matrix& Flux() const
+    {
+        return _Flux;
+    }
     VectorRef Flux(Index i)
     {
         return _Flux.col(i);
@@ -106,6 +129,14 @@ public:
         return _Flux(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
     }
 
+    Matrix &Aux()
+    {
+        return _Aux;
+    }
+    const Matrix& Aux() const
+    {
+        return _Aux;
+    }
     VectorRef Aux(Index i)
     {
         return _Aux.col(i);
@@ -115,7 +146,11 @@ public:
         return _Aux(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
     }
 
-    auto Scalars()
+    Vector& Scalars()
+    {
+        return _Scalars;
+    }
+    const Vector& Scalars() const 
     {
         return _Scalars;
     }
