@@ -35,7 +35,7 @@ void SystemSolver::NLphiMat( Matrix& M, DGSoln const& Y, Index intervalIndex ) {
 //	[ dX_3dZ1    dX_3dZ2    dX_3dZ3 ]
 //
 // where X is a sigma function or a source function and Z is one of u, q, or sigma.
-void SystemSolver::DerivativeSubMatrix(Matrix &mat, GlobalState const &dX_dZ_vals, IntegrationPoint const &ip, DGSoln const & Y, Index intervalIndex)
+void SystemSolver::DerivativeSubMatrix(Matrix &mat, std::vector<Matrix> const &dX_dZ, DGSoln const & Y, Index intervalIndex)
 {
 	// ASSERT mat.shape == ( nVars * ( k + 1) , nVars * ( k + 1 ) )
 	assert(mat.rows() == nVars * (k + 1));
@@ -55,7 +55,7 @@ void SystemSolver::DerivativeSubMatrix(Matrix &mat, GlobalState const &dX_dZ_val
 			State s = Y.evalOnNode(intervalIndex, j);
 			for (Index ZVar = 0; ZVar < nVars; ZVar++)
 			{
-				mat(XVar * (k + 1) + j, ZVar * (k + 1) + j) = dX_dZ_vals(XVar, ip.getIndices()[j])[ZVar];
+				mat(XVar * (k + 1) + j, ZVar * (k + 1) + j) = dX_dZ[XVar](ZVar, j);
 			}
 		}
 		for (Index ZVar = 0; ZVar < nVars; ZVar++)
@@ -65,7 +65,7 @@ void SystemSolver::DerivativeSubMatrix(Matrix &mat, GlobalState const &dX_dZ_val
 	}
 }
 
-void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX_dZ )( Index, Values&, const State&, Position, double ), DGSoln const& Y, Index intervalIndex )
+void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX_dZ )( Index, VectorRef, const State&, Position, double ), DGSoln const& Y, Index intervalIndex )
 {
 	// ASSERT mat.shape == ( nVars * ( k + 1) , nVars * ( k + 1 ) )
 	assert( mat.rows() == nVars * ( k + 1 ) );

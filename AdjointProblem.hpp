@@ -15,10 +15,10 @@ public:
     // We're assuming Gfn = Int gFn dx for now
     virtual Value gFn(Index i, const State &s, Position x) const = 0;
     // For compute g_y
-    virtual void dgFn_du(Index i, Values &, const State &s, Position x) = 0;
-    virtual void dgFn_dq(Index i, Values &, const State &s, Position x) = 0;
-    virtual void dgFn_dsigma(Index i, Values &, const State &s, Position x) = 0;
-    virtual void dgFn_dphi(Index i, Values &, const State &s, Position x) = 0;
+    virtual void dgFn_du(Index i, VectorRef, const State &s, Position x) = 0;
+    virtual void dgFn_dq(Index i, VectorRef, const State &s, Position x) = 0;
+    virtual void dgFn_dsigma(Index i, VectorRef, const State &s, Position x) = 0;
+    virtual void dgFn_dphi(Index i, VectorRef, const State &s, Position x) = 0;
     // For computing F_p
     virtual void dSigmaFn_dp(Index i, Index pIndex, Value &, const State &s, Position x) = 0;
     virtual void dSources_dp(Index i, Index pIndex, Value &, const State &s, Position x) = 0;

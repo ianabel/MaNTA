@@ -19,10 +19,10 @@ public:
 
     virtual Value gFn(Index i, const State &s, Position x) const override;
 
-    virtual void dgFn_du(Index i, Values &, const State &s, Position x) override;
-    virtual void dgFn_dq(Index i, Values &, const State &s, Position x) override;
-    virtual void dgFn_dsigma(Index i, Values &, const State &s, Position x) override;
-    virtual void dgFn_dphi(Index i, Values &, const State &s, Position x) override;
+    virtual void dgFn_du(Index i, VectorRef, const State &s, Position x) override;
+    virtual void dgFn_dq(Index i, VectorRef, const State &s, Position x) override;
+    virtual void dgFn_dsigma(Index i, VectorRef, const State &s, Position x) override;
+    virtual void dgFn_dphi(Index i, VectorRef, const State &s, Position x) override;
 
     virtual void dSigmaFn_dp(Index i, Index pIndex, Value &, const State &s, Position x) override;
     virtual void dSources_dp(Index i, Index pIndex, Value &, const State &, Position x) override;

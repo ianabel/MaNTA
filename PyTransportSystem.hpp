@@ -61,44 +61,124 @@ public:
 			initializeOverrides();
 		return method_overrides["SigmaFn"](i, s, x, t).cast<Value>();
 	};
+	Values SigmaFn(Index i, std::vector<State> const &states, std::vector<Position> const &abscissae, Time time) override
+	{
+		py::gil_scoped_acquire gil;
+
+		auto _override = py::get_override(this, "SigmaFn_v");
+		if (_override)
+		{
+			return _override(i, states, abscissae, time).cast<Values>();
+		}
+		else
+		{
+			throw std::runtime_error("Attempted to call method SigmaFn_v not overridden in Python subclass");
+		}
+	};
 	Value Sources(Index i, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
 			initializeOverrides();
 		return method_overrides["Sources"](i, s, x, t).cast<Value>();
 	};
-	void dSigmaFn_du(Index i, Values &out, const State &s, Position x, Time t) override
+
+	Values Sources(Index i, std::vector<State> const &states, std::vector<Position> const &abscissae, Time time) override
+	{
+		py::gil_scoped_acquire gil;
+
+		auto _override = py::get_override(this, "Sources_v");
+		if (_override)
+		{
+			return _override(i, states, abscissae, time).cast<Values>();
+		}
+		else
+		{
+			throw std::runtime_error("Attempted to call method Sources_v not overridden in Python subclass");
+		}
+	};
+	void dSigmaFn_du(Index i, VectorRef out, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
 			initializeOverrides();
 		out = method_overrides["dSigmaFn_du"](i, s, x, t).cast<Values>();
 	};
-	void dSigmaFn_dq(Index i, Values &out, const State &s, Position x, Time t) override
+	void dSigmaFn_dq(Index i, VectorRef out, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
 			initializeOverrides();
 		out = method_overrides["dSigmaFn_dq"](i, s, x, t).cast<Values>();
 	};
 
-	void dSources_du(Index i, Values &v, const State &s, Position x, Time t) override
+	void dSources_du(Index i, VectorRef v, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
 			initializeOverrides();
 		v = method_overrides["dSources_du"](i, s, x, t).cast<Values>();
 	};
 
-	void dSources_dq(Index i, Values &v, const State &s, Position x, Time t) override
+	void dSources_dq(Index i, VectorRef v, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
 			initializeOverrides();
 		v = method_overrides["dSources_dq"](i, s, x, t).cast<Values>();
 	};
 
-	void dSources_dsigma(Index i, Values &v, const State &s, Position x, Time t) override
+	void dSources_dsigma(Index i, VectorRef v, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
 			initializeOverrides();
 		v = method_overrides["dSources_dsigma"](i, s, x, t).cast<Values>();
+	};
+
+	void dSigma(std::vector<std::vector<State>> &out, std::vector<State> const &states, std::vector<Position> const &abscissae, Time time) override
+	{
+		std::string method_name = "dSigma";
+		py::gil_scoped_acquire gil;
+		py::function _override = py::get_override(this, method_name.c_str());
+
+		if (!_override)
+		{
+			throw std::runtime_error(std::string("Virtual method ") + method_name + " not overridden in Python subclass");
+		}
+
+		for (Index i = 0; i < nVars; ++i)
+		{
+			auto &out_var = out[i];
+			auto retval = _override(i, states, abscissae, time).cast<std::vector<py::dict>>();
+			for (size_t j = 0; j < states.size(); ++j)
+			{
+				out_var.emplace_back(nVars, nScalars, nAux);
+				out_var[j].Variable = retval[j]["Variable"].cast<Vector>();
+				out_var[j].Derivative = retval[j]["Derivative"].cast<Vector>();
+			}
+		}
+	};
+
+	void dSources(std::vector<std::vector<State>> &out, std::vector<State> const &states, std::vector<Position> const &abscissae, Time time) override
+	{
+		std::string method_name = "dSources";
+		py::gil_scoped_acquire gil;
+		py::function _override = py::get_override(this, method_name.c_str());
+
+		if (!_override)
+		{
+			throw std::runtime_error(std::string("Virtual method ") + method_name + " not overridden in Python subclass");
+		}
+
+		for (Index i = 0; i < nVars; ++i)
+		{
+			auto &out_var = out[i];
+			auto retval = _override(i, states, abscissae, time).cast<std::vector<py::dict>>();
+			for (size_t j = 0; j < states.size(); ++j)
+			{
+				out_var.emplace_back(nVars, nScalars, nAux);
+				out_var[j].Variable = retval[j]["Variable"].cast<Vector>();
+				out_var[j].Derivative = retval[j]["Derivative"].cast<Vector>();
+				out_var[j].Flux = retval[j]["Flux"].cast<Vector>();
+				out_var[j].Aux = retval[j]["Aux"].cast<Vector>();
+				out_var[j].Scalars = retval[j]["Scalars"].cast<Vector>();
+			}
+		}
 	};
 
 	// Finally one has to provide initial conditions for u & q
@@ -130,7 +210,7 @@ public:
 		out = method_overrides["AuxGPrime"](i, s, x, t).cast<State>();
 	}
 
-	void dSources_dPhi(Index i, Values &v, const State &s, Position x, Time t) override
+	void dSources_dPhi(Index i, VectorRef v, const State &s, Position x, Time t) override
 	{
 		if (nAux == 0)
 		{
@@ -142,7 +222,7 @@ public:
 		v = method_overrides["dSources_dPhi"](i, s, x, t).cast<Values>();
 	}
 
-	void dSigma_dPhi(Index i, Values &v, const State &s, Position x, Time t) override
+	void dSigma_dPhi(Index i, VectorRef v, const State &s, Position x, Time t) override
 	{
 		if (nAux == 0)
 		{

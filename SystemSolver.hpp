@@ -198,9 +198,9 @@ class SystemSolver
         void dSourcedq_Mat(Matrix &, DGSoln const &, Index);
         void dSourcedsigma_Mat(Matrix &, DGSoln const &, Index);
 
-        void DerivativeSubMatrix(Matrix &mat, void (TransportSystem::*dX_dZ)(Index, Values &, const State &, Position, Time), DGSoln const &Y, Index I);
+        void DerivativeSubMatrix(Matrix &mat, void (TransportSystem::*dX_dZ)(Index, VectorRef, const State &, Position, Time), DGSoln const &Y, Index I);
 
-        void DerivativeSubMatrix(Matrix &mat, GlobalState const &, IntegrationPoint const &, DGSoln const &, Index intervalIndex);
+        void DerivativeSubMatrix(Matrix &mat, std::vector<Matrix> const &dX_dZ, DGSoln const &, Index intervalIndex);
 
         void dSources_dScalars_Mat(Matrix &, DGSoln const &, Index );
 
@@ -208,7 +208,7 @@ class SystemSolver
 
         void dAux_Mat(Eigen::Ref<Matrix>, DGSoln const &, Index );
 
-        void DerivativeSubVector(Index, Vector &, void (AdjointProblem::*dX_dZ)(Index, Values &, const State &, Position), DGSoln const &Y, Index I);
+        void DerivativeSubVector(Index, Vector &, void (AdjointProblem::*dX_dZ)(Index, VectorRef, const State &, Position), DGSoln const &Y, Index I);
         void dGdu_Vec(Index, Vector &, DGSoln const &, Index);
         void dGdq_Vec(Index, Vector &, DGSoln const &, Index);
         void dGdsigma_Vec(Index, Vector &, DGSoln const &, Index);

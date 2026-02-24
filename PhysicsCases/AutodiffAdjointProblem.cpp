@@ -46,7 +46,7 @@ Value AutodiffAdjointProblem::gFn(Index i, const State &s, Position x) const
     return g(x, u, q, sigma, phi).val;
 }
 
-void AutodiffAdjointProblem::dgFn_du(Index i, Values &grad, const State &s, Position x)
+void AutodiffAdjointProblem::dgFn_du(Index i, VectorRef grad, const State &s, Position x)
 {
     RealVector u(s.Variable);
     RealVector q(s.Derivative);
@@ -60,7 +60,7 @@ void AutodiffAdjointProblem::dgFn_du(Index i, Values &grad, const State &s, Posi
                        { return g(X, uD, qD, sigmaD, phiD); }, wrt(u), at(x, u, q, sigma, phi), uout, grad);
 }
 
-void AutodiffAdjointProblem::dgFn_dq(Index i, Values &grad, const State &s, Position x)
+void AutodiffAdjointProblem::dgFn_dq(Index i, VectorRef grad, const State &s, Position x)
 {
     RealVector u(s.Variable);
     RealVector q(s.Derivative);
@@ -73,7 +73,7 @@ void AutodiffAdjointProblem::dgFn_dq(Index i, Values &grad, const State &s, Posi
                        { return g(X, uD, qD, sigmaD, phiD); }, wrt(q), at(x, u, q, sigma, phi), uout, grad);
 }
 
-void AutodiffAdjointProblem::dgFn_dsigma(Index i, Values &grad, const State &s, Position x)
+void AutodiffAdjointProblem::dgFn_dsigma(Index i, VectorRef grad, const State &s, Position x)
 {
     RealVector u(s.Variable);
     RealVector q(s.Derivative);
@@ -88,7 +88,7 @@ void AutodiffAdjointProblem::dgFn_dsigma(Index i, Values &grad, const State &s, 
                        { return g(X, uD, qD, sigmaD, phiD); }, wrt(sigma), at(x, u, q, sigma, phi), uout, grad);
 }
 
-void AutodiffAdjointProblem::dgFn_dphi(Index i, Values &grad, const State &s, Position x)
+void AutodiffAdjointProblem::dgFn_dphi(Index i, VectorRef grad, const State &s, Position x)
 {
     RealVector u(s.Variable);
     RealVector q(s.Derivative);

@@ -42,6 +42,152 @@ public:
     Vector Scalars;
 };
 
+class GlobalState
+{
+public:
+    GlobalState() = default;
+
+    explicit GlobalState(Index nCells, Index k, Index nv, Index ns = 0, Index naux = 0) : nCells(nCells), k(k), nVars(nv), nScalars(ns), nAux(naux)
+    {
+        _Variable.resize(nVars, nCells * (k + 1));
+        _Derivative.resize(nVars, nCells * (k + 1));
+        _Flux.resize(nVars, nCells * (k + 1));
+        _Aux.resize(nAux, nCells * (k + 1));
+        _Scalars.resize(nScalars);
+    }
+
+    void setWithState(Index i, const State &s)
+    {
+        _Variable.col(i) = s.Variable;
+        _Derivative.col(i) = s.Derivative;
+        _Flux.col(i) = s.Flux;
+        _Aux.col(i) = s.Aux;
+        _Scalars = s.Scalars;
+    }
+
+    State operator[](Index i) const 
+    {
+        State out(nVars, nScalars, nAux);
+
+        out.Variable = _Variable.col(i);
+        out.Derivative = _Derivative.col(i);
+        out.Flux = _Flux.col(i);
+        out.Aux = _Aux.col(i);
+        out.Scalars = _Scalars;
+
+        return out;
+    }
+
+    VectorRef Variable(Index i)
+    {
+        return _Variable.col(i);
+    }
+
+    Eigen::Ref<Matrix> cellwiseVariable(Index cell)
+    {
+        return _Variable(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1)* (k + 1) - 1));
+    }
+
+    VectorRef Derivative(Index i)
+    {
+        return _Derivative.col(i);
+    }
+    Eigen::Ref<Matrix> cellwiseDerivative(Index cell)
+    {
+        return _Derivative(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
+    }
+
+    VectorRef Flux(Index i)
+    {
+        return _Flux.col(i);
+    }
+    Eigen::Ref<Matrix> cellwiseFlux(Index cell)
+    {
+        return _Flux(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
+    }
+
+    VectorRef Aux(Index i)
+    {
+        return _Aux.col(i);
+    }
+    Eigen::Ref<Matrix> cellwiseAux(Index cell)
+    {
+        return _Aux(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
+    }
+
+    auto Scalars()
+    {
+        return _Scalars;
+    }
+
+    size_t size() const { return static_cast<size_t>(nCells * (k + 1));}
+
+private:
+    Matrix _Variable, _Derivative, _Flux, _Aux;
+    Vector _Scalars;
+
+    Index nCells, k, nVars, nScalars, nAux;
+};
+
+class GlobalStateMatrix
+{
+public:
+    GlobalStateMatrix(Index nVars) : nVars(nVars) { data.reserve(nVars); };
+
+    void add(Index nCells, Index k, Index nVars, Index nScalars, Index nAux)
+    {
+        data.emplace_back(nCells, k, nVars, nScalars, nAux);
+    }
+
+    void add( GlobalState &g_in)
+    {
+        data.push_back(g_in);
+    }
+
+    std::vector<Matrix> Variable(Index cell) 
+    {
+        std::vector<Matrix> out;
+
+        for (Index var = 0; var < nVars; var++)
+        {
+            out.emplace_back(data[var].cellwiseVariable(cell));
+        }
+        return out; 
+    }
+
+    std::vector<Matrix> Derivative(Index cell) 
+    {
+        std::vector<Matrix> out;
+
+        for (Index var = 0; var < nVars; var++)
+        {
+            out.emplace_back(data[var].cellwiseDerivative(cell));
+        }
+        return out; 
+    }
+
+    std::vector<Matrix> Flux(Index cell) 
+    {
+        std::vector<Matrix> out;
+
+        for (Index var = 0; var < nVars; var++)
+        {
+            out.emplace_back(data[var].cellwiseFlux(cell));
+        }
+        return out; 
+    }
+
+    GlobalState &operator[](Index var)
+    {
+        return data[var];
+    }
+
+private:
+    std::vector<GlobalState> data;
+
+    Index nVars;
+};
+
 template <class BasisType>
 class DGSolnImpl
 {
@@ -130,50 +276,73 @@ public:
     DGApprox &Aux(Index i) { return aux_[i]; };
     DGApprox const &Aux(Index i) const { return aux_[i]; };
 
-    State eval( double x ) const {
-        State out( nVars, nScalars, nAux );
-        for ( Index i = 0; i < nVars; ++i ) {
-            out.Variable[i] = u_[i]( x );
-            out.Derivative[i] =  q_[i]( x );
-            out.Flux[i] = sigma_[i]( x );
+    State eval(double x) const
+    {
+        State out(nVars, nScalars, nAux);
+        for (Index i = 0; i < nVars; ++i)
+        {
+            out.Variable[i] = u_[i](x);
+            out.Derivative[i] = q_[i](x);
+            out.Flux[i] = sigma_[i](x);
         }
-        for ( Index i = 0; i < nScalars; ++i ) {
+        for (Index i = 0; i < nScalars; ++i)
+        {
             out.Scalars[i] = mu_[i];
         }
-        for ( Index i = 0; i < nAux; ++i ) {
-            out.Aux[i] = aux_[i]( x );
+        for (Index i = 0; i < nAux; ++i)
+        {
+            out.Aux[i] = aux_[i](x);
         }
         return out;
     }
 
-    std::vector<State> eval (std::vector<Position> xs) const
+    std::vector<Position> getPoints() const
     {
-        std::vector<State> out; 
-        out.reserve(xs.size());
+        Index nCells = grid.getNCells();
+        auto nodes = Basis.getNodes();
 
-        for (auto &x : xs)
+        std::vector<Position> xout;
+        xout.reserve((k + 1) * nCells);
+        for (Index i = 0; i < nCells; i++)
         {
-            out.emplace_back(eval(x));
+            Interval const &I = grid[i];
+            for (Index j = 0; j < k + 1; j++)
+                xout.push_back(I.fromRef(nodes[j]));
         }
-
-        return out; 
+        return xout; 
     }
 
-        State evalOnNode( Index cell, Index node ) const {
-            State out( nVars, nScalars, nAux );
-            for ( Index i = 0; i < nVars; ++i ) {
-                out.Variable[i] = u_[i].getCoeff(cell).second(node);
-                out.Derivative[i] =  q_[i].getCoeff(cell).second(node);
-                out.Flux[i] = sigma_[i].getCoeff(cell).second(node);
-            }
-            for ( Index i = 0; i < nScalars; ++i ) {
-                out.Scalars[i] = mu_[i];
-            }
-            for ( Index i = 0; i < nAux; ++i ) {
-                out.Aux[i] = aux_[i].getCoeff(cell).second(node);
-            }
-            return out;
+    GlobalState eval(std::vector<Position> xs) const
+    {
+        GlobalState out(grid.getNCells(), k, nVars, nScalars, nAux);
+
+        for (size_t i = 0; i < xs.size(); i++)
+        {
+            out.setWithState(i, eval(xs[i]));
         }
+
+        return out;
+    }
+
+    State evalOnNode(Index cell, Index node) const
+    {
+        State out(nVars, nScalars, nAux);
+        for (Index i = 0; i < nVars; ++i)
+        {
+            out.Variable[i] = u_[i].getCoeff(cell).second(node);
+            out.Derivative[i] = q_[i].getCoeff(cell).second(node);
+            out.Flux[i] = sigma_[i].getCoeff(cell).second(node);
+        }
+        for (Index i = 0; i < nScalars; ++i)
+        {
+            out.Scalars[i] = mu_[i];
+        }
+        for (Index i = 0; i < nAux; ++i)
+        {
+            out.Aux[i] = aux_[i].getCoeff(cell).second(node);
+        }
+        return out;
+    }
 
     // Deep copy of the data in other to the memory we are
     // wrapping
@@ -358,179 +527,5 @@ private:
 };
 
 using DGSoln = DGSolnImpl<NodalBasis>;
-
-// To make sure that the indexing works properly, we have a separate data structure that holds the indices to give to the state class
-class IntegrationPoint
-{
-public:
-    IntegrationPoint() = default;
-
-    void addIndex(Index &&i_in)
-    {
-        pointsIndex.push_back(i_in);
-    }
-    void addPoint(Position &&p_in)
-    {
-        points.push_back(p_in);
-    }
-
-    const std::vector<Position> &getPoints() const { return points; }
-    const std::vector<Index> &getIndices() const { return pointsIndex; }
-
-private:
-    std::vector<Index> pointsIndex;
-    std::vector<Position> points;
-};
-
-class IntegrationPoints
-{
-public:
-    // Holds points and indices for conversion between global and cellwise
-    IntegrationPoints(const DGSoln &y)
-    {
-        nCells = (y.grid.getNCells());
-        const auto &x_vals = y.getBasis().getNodes();
-        n_abscissa = x_vals.size();
-        Index i_curr = 0;
-        _integrationPoints.resize(nCells);
-        points.reserve(nCells * n_abscissa);
-
-        for (Index i = 0; i < nCells; ++i)
-        {
-            Interval const &I(y.grid[i]);
-            auto &ip = _integrationPoints[i];
-
-            for (size_t j = 0; j < n_abscissa; ++j)
-            {
-
-                ip.addIndex(i_curr++);
-                ip.addPoint(I.fromRef(x_vals[j]));
-                points.emplace_back(I.fromRef(x_vals[j]));
-            }
-        }
-    }
-
-    // For getting points to evaluate fluxes/sources at
-    const std::vector<Position> &getPoints() { return points; }
-    Index getNPoints() const { return static_cast<Index>(points.size());  }
-    Index getNCells() const { return nCells; }
-
-    // For performing the integration
-    const IntegrationPoint &operator[](Index i) const
-    {
-        return _integrationPoints[i];
-    }
-
-private:
-    std::vector<Position> points;
-    std::vector<IntegrationPoint> _integrationPoints;
-    size_t n_abscissa;
-    Index nCells;
-
-    friend class GlobalStateHolder;
-};
-
-// Data is held as a 2D vector where the first dimension is the variable and the second dimension is the integration point
-class GlobalState
-{
-public:
-    GlobalState(const std::vector<std::vector<Values>> &data_in) : data(data_in) {}
-    GlobalState(Index nVars, Index nPoints, Index k)
-    {
-        data.resize(nVars, std::vector<Values>(nPoints, Eigen::VectorXd::Zero( k )));
-    }
-
-    // Returns vector of values on a cell for cellwise operations
-    const Values &operator()(Index var, Index i) const { return data.at(var).at(i); }
-
-    // Takes in a global vector of values and transforms it to cellwise
-    void add(Index var, const Values &vin, const IntegrationPoints &Ivals)
-    {
-        assert(vin.size() == Ivals.getNPoints());
-
-        for (Index i = 0; i < Ivals.getNCells(); i++)
-        {
-            auto &data_cell = data[var][i];
-            const auto indices = Ivals[i].getIndices();
-            for (Index j = 0; j < data_cell.size(); j++)
-            {
-                data_cell[j] = vin[indices[j]];
-            }
-        }
-    }
-
-private:
-    std::vector<std::vector<Values>> data;
-};
-
-// This is to parse through the data returned from computing all the derivatives for the Jacobian 
-// Takes in vector of states and stores the data for cellwise operations 
-class GlobalStateHolder
-{
-public:
-    
-    GlobalStateHolder(std::vector<std::vector<State>> &s, IntegrationPoints *ip, Index nVars) : states(s), integrationPoints(ip)
-    {
-        std::vector<std::vector<Values>> var_out;
-        std::vector<std::vector<Values>> deriv_out;
-        std::vector<std::vector<Values>> sigma_out;
-        std::vector<std::vector<Values>> aux_out;
-        Index nCells = integrationPoints->nCells;
-        var_out.resize(nVars);
-        deriv_out.resize(nVars);
-        sigma_out.resize(nVars);
-        aux_out.resize(nVars);
-        for (Index var = 0; var < nVars; ++var)
-        {
-            auto &var_out_var = var_out[var];
-            var_out_var.reserve(nCells);
-
-            auto &deriv_out_var = deriv_out[var];
-            deriv_out_var.reserve(nCells);
-
-            auto &sigma_out_var = sigma_out[var];
-            sigma_out_var.reserve(nCells);
-
-            auto &aux_out_var = aux_out[var];
-            aux_out_var.reserve(nCells);
-
-            for (auto i = 0; i < nCells; ++i)
-            {
-                const auto indices = (*integrationPoints)[i].getIndices();
-
-                for (const auto j : indices)
-                {
-                    const auto s = states[var][j];
-    
-                    var_out_var.push_back(s.Variable);
-
-                    deriv_out_var.push_back(s.Derivative);
-
-                    sigma_out_var.push_back(s.Flux);
-
-                    aux_out_var.push_back(s.Aux);
-                }
-            }
-        }
-        variable = std::make_unique<GlobalState>(var_out);
-        derivative = std::make_unique<GlobalState>(deriv_out);
-        sigma = std::make_unique<GlobalState>(sigma_out);
-        aux = std::make_unique<GlobalState>(aux_out);
-    }
-
-    GlobalState const &Variable() { return *variable; }
-    GlobalState const &Derivative() { return *derivative; }
-    GlobalState const &Flux() { return *sigma; }
-    GlobalState const &Aux() { return *aux; }
-
-private:
-    std::unique_ptr<GlobalState> variable;
-    std::unique_ptr<GlobalState> derivative;
-    std::unique_ptr<GlobalState> sigma;
-    std::unique_ptr<GlobalState> aux;
-
-    const std::vector<std::vector<State>> states;
-    IntegrationPoints *integrationPoints;
-};
 
 #endif // DGSOLN_HPP

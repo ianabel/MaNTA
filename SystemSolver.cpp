@@ -569,19 +569,19 @@ void SystemSolver::updateMatricesForJacSolve()
     updateBoundaryConditions(jt);
     // We know where the jacobian is to be evaluated -- yJac
 
-    IntegrationPoints Ivals(yJac);
-    std::vector<std::vector<State>> dSigma_vals;
-    std::vector<std::vector<State>> dSource_vals;
-    dSigma_vals.resize(nVars);
-    dSource_vals.resize(nVars);
+    GlobalStateMatrix dSigma_vals(nVars);
+    GlobalStateMatrix dSource_vals(nVars);
 
-    const auto &points = Ivals.getPoints();
+    const auto points = yJac.getPoints();
     const auto states = yJac.eval(points);
-    problem->dSigma(dSigma_vals, states, points, jt);
-    problem->dSources(dSource_vals, states, points, jt);
-    
-    GlobalStateHolder dSigma_v(dSigma_vals, &Ivals, nVars);
-    GlobalStateHolder dSource_v(dSource_vals, &Ivals, nVars);
+     for (Index i = 0; i < nVars; i++)
+    {
+        dSigma_vals.add(nCells, k, nVars, nScalars, nVars /* This should be nAux, but output is wrt all variables*/);
+        dSource_vals.add(nCells, k, nVars, nScalars, nVars);
+
+        problem->dSigma(i, dSigma_vals[i], states, points, jt);
+        problem->dSources(i, dSource_vals[i], states, points, jt);
+    }
 
     for (unsigned int i = 0; i < nCells; i++)
     {
@@ -611,25 +611,24 @@ void SystemSolver::updateMatricesForJacSolve()
         }
         MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += X;
 
-        auto ip = Ivals[i];
         // NLq Matrix
-        DerivativeSubMatrix(NLq, dSigma_v.Derivative(), ip, yJac, i);
+        DerivativeSubMatrix(NLq, dSigma_vals.Derivative(i), yJac, i);
         MX.block(0, nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLq;
 
         // NLu Matrix
-        DerivativeSubMatrix(NLu, dSigma_v.Variable(), ip, yJac, i);
+        DerivativeSubMatrix(NLu, dSigma_vals.Variable(i), yJac, i);
         MX.block(0, 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLu;
 
         // S_sig Matrix
-        DerivativeSubMatrix(Ssig, dSource_v.Flux(), ip, yJac, i);
+        DerivativeSubMatrix(Ssig, dSource_vals.Flux(i), yJac, i);
         MX.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) -= Ssig;
 
         // S_q Matrix
-        DerivativeSubMatrix(Sq, dSource_v.Derivative(), ip, yJac, i);
+        DerivativeSubMatrix(Sq, dSource_vals.Derivative(i), yJac, i);
         MX.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Sq;
 
         // S_u Matrix
-        DerivativeSubMatrix(Su, dSource_v.Variable(), ip, yJac, i);
+        DerivativeSubMatrix(Su, dSource_vals.Variable(i), yJac, i);
         MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
 
         dSourcedPhi_Mat(Sphi, yJac, i);
@@ -931,17 +930,19 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 
     resVec.setZero();
 
-    IntegrationPoints Ivals(Y_h);
-    const auto &points = Ivals.getPoints();
+    const auto points = Y_h.getPoints();
+
     const auto states = Y_h.eval(points);
 
-    GlobalState Sigma_vals(nVars, Ivals.getNPoints(), k + 1 );
-    GlobalState Source_vals(nVars, Ivals.getNPoints(), k + 1);
+    std::vector<Values> Sigma_vals;
+    std::vector<Values> Source_vals;
 
+    Sigma_vals.resize(nVars);
+    Source_vals.resize(nVars);
     for (Index var = 0; var < nVars; var++)
     {
-        Sigma_vals.add(var, problem->SigmaFn(var, states, points, tres), Ivals);
-        Source_vals.add(var, problem->Sources(var, states, points, tres), Ivals);
+        Sigma_vals[var] = problem->SigmaFn(var, states, points, tres);
+        Source_vals[var] = problem->Sources(var, states, points, tres);
     }
 
     // residual.lambda = C*sigma + G*u + H*lambda - L
@@ -982,12 +983,12 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
             //     State s = Y_h.eval(x);
             //     return problem->Sources(var, s, x, tres);
             // };
-
+            auto ind = Eigen::seq(i * (k + 1), (i + 1) * (k + 1) - 1);
             // Evaluate Diffusion Function
-            Eigen::VectorXd kappa_cellwise = y.getBasis().InterpolateOntoBasis( I, Sigma_vals(var, i) );
+            Eigen::VectorXd kappa_cellwise = y.getBasis().InterpolateOntoBasis( I, Sigma_vals[var](ind) );
 
             // Evaluate Source Function
-            Eigen::VectorXd S_cellwise = y.getBasis().InterpolateOntoBasis(I, Source_vals(var, i) );
+            Eigen::VectorXd S_cellwise = y.getBasis().InterpolateOntoBasis(I, Source_vals[var](ind) );
 
             auto const &lambda = lamCell.segment<2>(2 * var);
 

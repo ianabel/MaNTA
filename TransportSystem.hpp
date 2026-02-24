@@ -73,17 +73,17 @@ public:
   virtual Value aFn(Index i, Position x) { return 1.0; };
 
   // We need derivatives of the flux functions
-  virtual void dSigmaFn_du(Index i, Values &, const State &s, Position x, Time t) = 0;
-  virtual void dSigmaFn_dq(Index i, Values &, const State &s, Position x, Time t) = 0;
+  virtual void dSigmaFn_du(Index i, VectorRef, const State &s, Position x, Time t) = 0;
+  virtual void dSigmaFn_dq(Index i, VectorRef, const State &s, Position x, Time t) = 0;
 
   // and for the sources
-  virtual void dSources_du(Index i, Values &, const State &, Position x, Time t) = 0;
-  virtual void dSources_dq(Index i, Values &, const State &, Position x, Time t) = 0;
-  virtual void dSources_dsigma(Index i, Values &, const State &, Position x, Time t) = 0;
+  virtual void dSources_du(Index i, VectorRef, const State &, Position x, Time t) = 0;
+  virtual void dSources_dq(Index i, VectorRef, const State &, Position x, Time t) = 0;
+  virtual void dSources_dsigma(Index i, VectorRef, const State &, Position x, Time t) = 0;
 
   // Wrapper functions which serialise batched evaluations
   //
-  virtual Values SigmaFn(Index i, std::vector<State> const &states, std::vector<Position> const &abscissae, Time time)
+  virtual Values SigmaFn(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
     Values out(states.size());
     for (size_t j = 0; j < states.size(); ++j)
@@ -93,7 +93,7 @@ public:
     return out;
   };
 
-  virtual Values Sources(Index i, std::vector<State> const &states, std::vector<Position> const &abscissae, Time time)
+  virtual Values Sources(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
     Values out(states.size());
     for (size_t j = 0; j < states.size(); ++j)
@@ -103,35 +103,23 @@ public:
     return out;
   };
 
-  virtual void dSigma(std::vector<std::vector<State>> &out, std::vector<State> const &states, std::vector<Position> const &abscissae, Time time)
+  virtual void dSigma(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
-    for (Index i = 0; i < nVars; ++i)
+    for (size_t j = 0; j < states.size(); ++j)
     {
-      auto &out_var = out[i];
-      out_var.reserve(nVars);
-      for (size_t j = 0; j < states.size(); ++j)
-      {
-        out_var.emplace_back(nVars, nScalars, nAux);
-        dSigmaFn_du(i, out_var[j].Variable, states[j], abscissae[j], time);
-        dSigmaFn_dq(i, out_var[j].Derivative, states[j], abscissae[j], time);
-      }
+      dSigmaFn_du(i, out.Variable(j), states[j], abscissae[j], time);
+      dSigmaFn_dq(i, out.Derivative(j), states[j], abscissae[j], time);
     }
   }
 
-  virtual void dSources(std::vector<std::vector<State>> &out, std::vector<State> const &states, std::vector<Position> const &abscissae, Time time)
+  virtual void dSources(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
-    for (Index i = 0; i < nVars; ++i)
+    for (size_t j = 0; j < states.size(); ++j)
     {
-      auto &out_var = out[i];
-      out_var.reserve(nVars);
-      for (size_t j = 0; j < states.size(); ++j)
-      {
-        out_var.emplace_back(nVars, nScalars, nAux);
-        dSources_du(i, out_var[j].Variable, states[j], abscissae[j], time);
-        dSources_dq(i, out_var[j].Derivative, states[j], abscissae[j], time);
-        dSources_dsigma(i, out_var[j].Flux, states[j], abscissae[j], time);
-        dSources_dPhi(i, out_var[j].Aux, states[j], abscissae[j], time);
-      }
+      dSources_du(i, out.Variable(j), states[j], abscissae[j], time);
+      dSources_dq(i, out.Derivative(j), states[j], abscissae[j], time);
+      dSources_dsigma(i, out.Flux(j), states[j], abscissae[j], time);
+      dSources_dPhi(i, out.Aux(j), states[j], abscissae[j], time);
     }
   }
 
@@ -181,7 +169,7 @@ public:
     return false;
   }
 
-  virtual void dSources_dScalars(Index, Values &, const State &, Position, Time)
+  virtual void dSources_dScalars(Index, VectorRef, const State &, Position, Time)
   {
     if (nScalars != 0)
       throw std::logic_error("nScalars > 0 but no coupling function provided");
@@ -211,7 +199,7 @@ public:
     throw std::logic_error("nAux > 0 but no G derivative provided");
   }
 
-  virtual void dSources_dPhi(Index, Values &, const State &, Position, Time)
+  virtual void dSources_dPhi(Index, VectorRef, const State &, Position, Time)
   {
     if (nAux != 0)
       throw std::logic_error("nAux > 0 but no coupling to the main sources provided");

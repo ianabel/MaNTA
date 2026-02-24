@@ -7,7 +7,7 @@
 #include "Types.hpp"
 #include "SystemSolver.hpp"
 
-void SystemSolver::DerivativeSubVector(Index pIndex, Vector &Vec, void (AdjointProblem::*dX_dZ)(Index, Values &, const State &, Position), DGSoln const &Y, Index intervalIndex )
+void SystemSolver::DerivativeSubVector(Index pIndex, Vector &Vec, void (AdjointProblem::*dX_dZ)(Index, VectorRef, const State &, Position), DGSoln const &Y, Index intervalIndex )
 {
     Interval const &I( grid[ intervalIndex ] );
     auto const &x_vals = y.getBasis().abscissae();
