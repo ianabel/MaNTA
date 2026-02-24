@@ -130,38 +130,38 @@ public:
     DGApprox &Aux(Index i) { return aux_[i]; };
     DGApprox const &Aux(Index i) const { return aux_[i]; };
 
-    State eval(double x) const
-    {
-        State out(nVars, nScalars, nAux);
-        for (Index i = 0; i < nVars; ++i)
-        {
-            out.Variable[i] = u_[i](x);
-            out.Derivative[i] = q_[i](x);
-            out.Flux[i] = sigma_[i](x);
-        }
-        for (Index i = 0; i < nScalars; ++i)
-        {
-            out.Scalars[i] = mu_[i];
-        }
-        for (Index i = 0; i < nAux; ++i)
-        {
-            out.Aux[i] = aux_[i](x);
-        }
-        return out;
-    }
-
-    std::vector<State> eval(const std::vector<Position> &xs) const
-    {
-        std::vector<State> out;
-        out.reserve(xs.size());
-
-        for (const auto &x : xs)
-        {
-            out.emplace_back(eval(x));
+        State eval( double x ) const {
+            State out( nVars, nScalars, nAux );
+            for ( Index i = 0; i < nVars; ++i ) {
+                out.Variable[i] = u_[i]( x );
+                out.Derivative[i] =  q_[i]( x );
+                out.Flux[i] = sigma_[i]( x );
+            }
+            for ( Index i = 0; i < nScalars; ++i ) {
+                out.Scalars[i] = mu_[i];
+            }
+            for ( Index i = 0; i < nAux; ++i ) {
+                out.Aux[i] = aux_[i]( x );
+            }
+            return out;
         }
 
-        return out;
-    }
+        State evalOnNode( Index cell, Index node ) const {
+            State out( nVars, nScalars, nAux );
+            double x = grid[ cell ].fromRef( Basis.Nodes( node ) );
+            for ( Index i = 0; i < nVars; ++i ) {
+                out.Variable[i] = u_[i]( x );
+                out.Derivative[i] =  q_[i]( x );
+                out.Flux[i] = sigma_[i]( x );
+            }
+            for ( Index i = 0; i < nScalars; ++i ) {
+                out.Scalars[i] = mu_[i];
+            }
+            for ( Index i = 0; i < nAux; ++i ) {
+                out.Aux[i] = aux_[i]( x );
+            }
+            return out;
+        }
 
     // Deep copy of the data in other to the memory we are
     // wrapping

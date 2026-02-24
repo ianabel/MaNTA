@@ -308,8 +308,8 @@ Real AdjointPlasma::qe(RealVector u, RealVector q, Real x, Time t) const
     Real q_out = GeometricFactor * Chi_e * n * Te_prime;
 
     // for neumann condition
-    if (x <= 0.01)
-        q_out += 2.0 * (1 - 1 / 0.01 * x) * Te_prime;
+    // if (x <= 0.01)
+    //     q_out += 2.0 * (1 - 1 / 0.01 * x) * Te_prime;
 
     return q_out;
 }
@@ -346,8 +346,8 @@ Real AdjointPlasma::qi(RealVector u, RealVector q, Real x, Time t) const
     Real q_out = GeometricFactor * Chi_i * n * Ti_prime;
 
     // for neumann condition
-    if (x <= 0.01)
-        q_out += 2.0 * (1 - 1 / 0.01 * x) * Ti_prime;
+    // if (x <= 0.01)
+    //     q_out += 2.0 * (1 - 1 / 0.01 * x) * Ti_prime;
 
     return q_out;
 }

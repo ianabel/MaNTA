@@ -329,31 +329,86 @@ void SystemSolver::initialiseMatrices()
             }
         }
 
+        // For Neumann, need a structure more like
+        // If (boundary cell)
+        // C is multiplied by Q and not sigma, so we need to change the structure of CG cellwise, also need to zero the contribution of sigma at the boundary so it can float
+        // if the flux is a complicated nonlinear function of the other variables, zero sigma does not necessarily mean zero q
+        // So we set up a "double" C matrix that includes all of this information and set the sigma and q portions at once
+
         // Per-cell contributions to the global matrices K and F.
         // First fill G
         Eigen::MatrixXd G(2 * nVars, nVars * (k + 1));
         G.setZero();
+        Eigen::MatrixXd Cq(2 * nVars, nVars * (k + 1));
+        Eigen::MatrixXd Csigma(2 * nVars, nVars * (k + 1));
+        Cq.setZero();
+        Csigma.setZero();
         for (Index var = 0; var < nVars; var++)
         {
             Eigen::MatrixXd Gvar(2, k + 1);
+            Eigen::MatrixXd Cq_var(2, k + 1);
+            Eigen::MatrixXd Csigma_var(2, k + 1);
+            Cq_var.setZero();
+            Csigma_var.setZero();
+            Gvar.setZero();
             for (Index i = 0; i < k + 1; i++)
             {
+                // C_ij = < psi_i, phi_j * n_x > , where psi_i are edge degrees of
+                // freedom and n_x is the unit normal in the x direction
+                // for a line, edge degrees of freedom are just 1 at each end
+
+                // Always set this for sigma
+                Csigma_var(1, i) = y.getBasis().Evaluate(I, i, I.x_u);
+                Csigma_var(0, i) = -y.getBasis().Evaluate(I, i, I.x_l);
+
+                // If we have neumann boundaries, need to also set the boundary parameters for q
+                if (I.x_l == grid.lowerBoundary() && !problem->isLowerBoundaryDirichlet(var))
+                {
+                    Csigma_var(0, i) = 0.0; // Treat sigma as dirichlet
+                    // CDoubleVar(1, i + (k + 1)) = y.getBasis().Evaluate(I, i, I.x_u);
+                    Cq_var(0, i) = -y.getBasis().Evaluate(I, i, I.x_l); // Treat Q as neumann
+                }
+                if (I.x_u == grid.upperBoundary() && !problem->isUpperBoundaryDirichlet(var))
+                {
+                    Csigma_var(1, i) = 0.0; // Treat sigma as dirichlet
+                    // CDoubleVar(0, i + (k + 1)) = -y.getBasis().Evaluate(I, i, I.x_l);
+                    Cq_var(1, i) = y.getBasis().Evaluate(I, i, I.x_u); // Treat q as neumann
+                }
+
                 Gvar(0, i) = tau(I.x_l) * y.getBasis().Evaluate(I, i, I.x_l);
+
+                // If Dirichlet, proceed as normal
                 if (I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryDirichlet(var))
+                {
+                    Csigma_var(0, i) = 0.0;
                     Gvar(0, i) = 0.0;
+                }
+
                 Gvar(1, i) = tau(I.x_u) * y.getBasis().Evaluate(I, i, I.x_u);
                 if (I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(var))
+                {
+                    Csigma_var(1, i) = 0.0;
                     Gvar(1, i) = 0.0;
+                }
             }
+
+            Csigma.block(2 * var, (k + 1) * var, 2,(k + 1)) = Csigma_var;
+            Cq.block(2 * var, (k + 1) * var, 2, (k + 1)) = Cq_var;
+
             G.block(2 * var, (k + 1) * var, 2, (k + 1)) = Gvar;
         }
 
         //[ C 0 G 0 ] (4th index is aux vars)
         CG_cellwise.emplace_back(2 * nVars, localDOF);
         CG_cellwise[i].setZero();
-        CG_cellwise[i].block(0, 0, 2 * nVars, nVars * (k + 1)) = C;
-        CG_cellwise[i].block(0, 2 * nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = G;
+      
+        CG_cellwise[i].block(0, 2 * nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = G; // this is the U block
+        CG_cellwise[i].block(0, 0, 2 * nVars, nVars * (k + 1)) = Csigma; // This is the sigma block
+        CG_cellwise[i].block(0, nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = Cq; // This is the q block
+
         G_cellwise.emplace_back(G);
+        Csigma_cellwise.emplace_back(Csigma);
+        Cq_cellwise.emplace_back(Cq);
 
         // Now fill H
         Eigen::MatrixXd H(2 * nVars, 2 * nVars);
@@ -431,6 +486,8 @@ void SystemSolver::clearCellwiseVecs()
     C_cellwise.clear();
     G_cellwise.clear();
     H_cellwise.clear();
+    Csigma_cellwise.clear();
+    Cq_cellwise.clear();
 }
 
 // Memory Layout for a sundials Y is, if i indexes the components of u / q / sigma
@@ -575,11 +632,11 @@ void SystemSolver::updateMatricesForJacSolve()
         DerivativeSubMatrix(Su, dSource_v.Variable(), ip, yJac, I);
         MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
 
-        dSourcedPhi_Mat(Sphi, yJac, I);
+        dSourcedPhi_Mat(Sphi, yJac, i);
         MX.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
 
         // Set Parts of Matrix due to aux variables
-        dAux_Mat(MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), yJac, I);
+        dAux_Mat(MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), yJac, i);
 
         MXSolvers[ i ].compute(MX);
     }
@@ -594,7 +651,7 @@ void SystemSolver::updateMatricesForJacSolve()
     for (Index i = 0; i < nCells; ++i)
     {
         Matrix v_tmp(nVars * U_DOF, nScalars);
-        dSources_dScalars_Mat(v_tmp, yJac, grid[i]);
+        dSources_dScalars_Mat(v_tmp, yJac, i);
         for (Index j = 0; j < nScalars; ++j)
             for (Index v = 0; v < nVars; ++v)
                 v_map[j].u(v).getCoeff(i).second = v_tmp.block(v * U_DOF, j, U_DOF, 1);
@@ -875,14 +932,12 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
     resVec.setZero();
 
     // residual.lambda = C*sigma + G*u + H*lambda - L
-
     for (Index i = 0; i < nCells; i++)
     {
         // C_cellwise * sigma_cellwise
         for (Index var = 0; var < nVars; var++)
         {
-            res.lambda(var).segment<2>(i) +=
-                C_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.sigma(var).getCoeff(i).second + G_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.u(var).getCoeff(i).second + H_cellwise[i].block(2 * var, 2 * var, 2, 2) * Y_h.lambda(var).segment<2>(i) - L_global.segment<2>(var * (nCells + 1));
+            res.lambda(var).segment<2>(i) += Csigma_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.sigma(var).getCoeff(i).second + Cq_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.q(var).getCoeff(i).second + G_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.u(var).getCoeff(i).second + H_cellwise[i].block(2 * var, 2 * var, 2, 2) * Y_h.lambda(var).segment<2>(i) - L_global.segment<2>(var * (nCells + 1));
         }
     }
 
@@ -970,18 +1025,18 @@ void SystemSolver::initializeMatricesForAdjointSolve()
     {
         G_y.emplace_back(3 * nVars * (k + 1) + nAux * (k + 1));
 
-        dGdsigma_Vec(0, dGdsigma, y, grid[i]);
+        dGdsigma_Vec(0, dGdsigma, y, i);
         G_y[i].block(0, 0, nVars * (k + 1), 1) = dGdsigma;
 
-        dGdq_Vec(0, dGdq, y, grid[i]);
+        dGdq_Vec(0, dGdq, y, i);
         G_y[i].block(nVars * (k + 1), 0, nVars * (k + 1), 1) = dGdq;
 
-        dGdu_Vec(0, dGdu, y, grid[i]);
+        dGdu_Vec(0, dGdu, y, i);
         G_y[i].block(2 * nVars * (k + 1), 0, nVars * (k + 1), 1) = dGdu;
 
         if (nAux > 0)
         {
-            dGdaux_Vec(0, dGdaux, y, grid[i]);
+            dGdaux_Vec(0, dGdaux, y, i);
             G_y[i].block(3 * nVars * (k + 1), 0, nAux * (k + 1), 1) = dGdaux;
         }
     }
@@ -1002,19 +1057,19 @@ void SystemSolver::initializeMatricesForAdjointSolve()
 
         Interval const &I(grid[i]);
         // NLq Matrix
-        NLqMat(NLq, y, I);
+        NLqMat(NLq, y, i);
 
         // NLu Matrix
-        NLuMat(NLu, y, I);
+        NLuMat(NLu, y, i);
 
         // S_sig Matrix
-        dSourcedsigma_Mat(Ssig, y, I);
+        dSourcedsigma_Mat(Ssig, y, i);
 
         // S_q Matrix
-        dSourcedq_Mat(Sq, y, I);
+        dSourcedq_Mat(Sq, y, i);
 
         // S_u Matrix
-        dSourcedu_Mat(Su, y, I);
+        dSourcedu_Mat(Su, y, i);
 
         // M is the local DG Matrix
         Eigen::MatrixXd M(localDOF, localDOF);
@@ -1040,11 +1095,11 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         // TODO: This is probably wrong
         if (nAux > 0)
         {
-            dSourcedPhi_Mat(Sphi, y, I);
+            dSourcedPhi_Mat(Sphi, y, i);
             M.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
 
             // Set Parts of Matrix due to aux variables
-            dAux_Mat(M.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), y, I);
+            dAux_Mat(M.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), y, i);
 
             // TODO: Consider factorization here (is M sparse enough to warrant a sparse implementation?)
         }
@@ -1062,12 +1117,13 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         CE_vec.block(3 * nVars * (k + 1), 0, nAux * (k + 1), nVars * 2).setZero();
         CEBlocks[i] = CE_vec.transpose();
 
-        //[ C 0 G 0 ] (4th index is aux vars)
+        // //[ C 0 G 0 ] (4th index is aux vars)
         auto G = G_cellwise[i];
         Eigen::MatrixXd CG_vec(2 * nVars, localDOF);
 
         CG_vec.setZero();
-        CG_vec.block(0, 0, 2 * nVars, nVars * (k + 1)) = C;
+        CG_vec.block(0, 0, 2 * nVars, nVars * (k + 1)) = Csigma_cellwise[i];
+        CG_vec.block(0, nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = Cq_cellwise[i];
         CG_vec.block(0, 2 * nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = G;
 
         CGBlocks.emplace_back(CG_vec.transpose());
@@ -1212,7 +1268,7 @@ void SystemSolver::computeAdjointGradients()
 
                 F_p.segment(var * (k + 1), k + 1) = dkappa_dp_phi;
 
-                auto C_cell = C_cellwise[i];
+                //auto C_cell = C_cellwise[i];
                 F_p.segment(var * (k + 1) + 2 * nVars * (k + 1), k + 1) = -dSdp_cellwise;
 
                 

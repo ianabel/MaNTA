@@ -260,9 +260,9 @@ BOOST_AUTO_TEST_CASE(systemsolver_matrix_tests)
 
 	for (Index i = 0; i < 4; ++i)
 	{
-		system->NLqMat(NLMat, system->y, testGrid[i]);
+		system->NLqMat(NLMat, system->y, i);
 		BOOST_TEST((NLMat - basis.MassMatrix( testGrid[i] ) ).norm() < 1e-9);
-		system->NLuMat(NLMat, system->y, testGrid[i]);
+		system->NLuMat(NLMat, system->y, i);
 		BOOST_TEST((NLMat - Matrix::Zero(k + 1, k + 1)).norm() < 1e-9);
 	}
 
@@ -289,10 +289,10 @@ BOOST_AUTO_TEST_CASE(systemsolver_matrix_tests)
         ref.setZero();
         ref.block(0,0,2,2) = basis.MassMatrix( testGrid[i] );
         ref.block(2,2,2,2) = basis.MassMatrix( testGrid[i] );
-        system->NLqMat(NLMat, system->y, testGrid[i]);
+        system->NLqMat(NLMat, system->y, i);
 
 		BOOST_TEST((NLMat - ref).norm() < 1e-9);
-		system->NLuMat(NLMat, system->y, testGrid[i]);
+		system->NLuMat(NLMat, system->y, i);
 		BOOST_TEST((NLMat - Matrix::Zero(2 * (k + 1), 2 * (k + 1))).norm() < 1e-9);
 	}
 }
