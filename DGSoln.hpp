@@ -389,7 +389,7 @@ public:
     IntegrationPoints(const DGSoln &y)
     {
         nCells = (y.grid.getNCells());
-        const auto &x_vals =y.getBasis().getNodes();
+        const auto &x_vals = y.getBasis().getNodes();
         n_abscissa = x_vals.size();
         Index i_curr = 0;
         _integrationPoints.resize(nCells);
