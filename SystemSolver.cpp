@@ -931,6 +931,19 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 
     resVec.setZero();
 
+    IntegrationPoints Ivals(Y_h);
+    const auto &points = Ivals.getPoints();
+    const auto states = Y_h.eval(points);
+
+    GlobalState Sigma_vals(nVars, Ivals.getNPoints(), k + 1 );
+    GlobalState Source_vals(nVars, Ivals.getNPoints(), k + 1);
+
+    for (Index var = 0; var < nVars; var++)
+    {
+        Sigma_vals.add(var, problem->SigmaFn(var, states, points, tres), Ivals);
+        Source_vals.add(var, problem->Sources(var, states, points, tres), Ivals);
+    }
+
     // residual.lambda = C*sigma + G*u + H*lambda - L
     for (Index i = 0; i < nCells; i++)
     {
@@ -958,23 +971,23 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
         // length = nVars*(k+1)
         for (Index var = 0; var < nVars; var++)
         {
-            std::function<double(double)> kappaFunc = [=, this, &Y_h](double x)
-            {
-                State s = Y_h.eval(x);
-                return problem->SigmaFn(var, s, x, tres);
-            };
+            // std::function<double(double)> kappaFunc = [=, this, &Y_h](double x)
+            // {
+            //     State s = Y_h.eval(x);
+            //     return problem->SigmaFn(var, s, x, tres);
+            // };
 
-            std::function<double(double)> sourceFunc = [=, this, &Y_h](double x)
-            {
-                State s = Y_h.eval(x);
-                return problem->Sources(var, s, x, tres);
-            };
+            // std::function<double(double)> sourceFunc = [=, this, &Y_h](double x)
+            // {
+            //     State s = Y_h.eval(x);
+            //     return problem->Sources(var, s, x, tres);
+            // };
 
             // Evaluate Diffusion Function
-            Eigen::VectorXd kappa_cellwise = y.getBasis().InterpolateOntoBasis( I, kappaFunc );
+            Eigen::VectorXd kappa_cellwise = y.getBasis().InterpolateOntoBasis( I, Sigma_vals(var, i) );
 
             // Evaluate Source Function
-            Eigen::VectorXd S_cellwise = y.getBasis().InterpolateOntoBasis(I, sourceFunc );
+            Eigen::VectorXd S_cellwise = y.getBasis().InterpolateOntoBasis(I, Source_vals(var, i) );
 
             auto const &lambda = lamCell.segment<2>(2 * var);
 

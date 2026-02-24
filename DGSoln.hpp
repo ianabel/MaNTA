@@ -386,6 +386,7 @@ private:
 class IntegrationPoints
 {
 public:
+    // Holds points and indices for conversion between global and cellwise
     IntegrationPoints(const DGSoln &y)
     {
         nCells = (y.grid.getNCells());
@@ -412,6 +413,8 @@ public:
 
     // For getting points to evaluate fluxes/sources at
     const std::vector<Position> &getPoints() { return points; }
+    Index getNPoints() const { return static_cast<Index>(points.size());  }
+    Index getNCells() const { return nCells; }
 
     // For performing the integration
     const IntegrationPoint &operator[](Index i) const
@@ -433,16 +436,40 @@ class GlobalState
 {
 public:
     GlobalState(const std::vector<std::vector<Values>> &data_in) : data(data_in) {}
+    GlobalState(Index nVars, Index nPoints, Index k)
+    {
+        data.resize(nVars, std::vector<Values>(nPoints, Eigen::VectorXd::Zero( k )));
+    }
 
+    // Returns vector of values on a cell for cellwise operations
     const Values &operator()(Index var, Index i) const { return data.at(var).at(i); }
 
+    // Takes in a global vector of values and transforms it to cellwise
+    void add(Index var, const Values &vin, const IntegrationPoints &Ivals)
+    {
+        assert(vin.size() == Ivals.getNPoints());
+
+        for (Index i = 0; i < Ivals.getNCells(); i++)
+        {
+            auto &data_cell = data[var][i];
+            const auto indices = Ivals[i].getIndices();
+            for (Index j = 0; j < data_cell.size(); j++)
+            {
+                data_cell[j] = vin[indices[j]];
+            }
+        }
+    }
+
 private:
-    const std::vector<std::vector<Values>> data;
+    std::vector<std::vector<Values>> data;
 };
 
+// This is to parse through the data returned from computing all the derivatives for the Jacobian 
+// Takes in vector of states and stores the data for cellwise operations 
 class GlobalStateHolder
 {
 public:
+    
     GlobalStateHolder(std::vector<std::vector<State>> &s, IntegrationPoints *ip, Index nVars) : states(s), integrationPoints(ip)
     {
         std::vector<std::vector<Values>> var_out;
