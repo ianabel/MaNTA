@@ -347,6 +347,7 @@ private:
 
 using DGSoln = DGSolnImpl<NodalBasis>;
 
+// To make sure that the indexing works properly, we have a separate data structure that holds the indices to give to the state class
 class IntegrationPoint
 {
 public:
@@ -417,6 +418,7 @@ private:
     friend class GlobalStateHolder;
 };
 
+// Data is held as a 2D vector where the first dimension is the variable and the second dimension is the integration point
 class GlobalState
 {
 public:
@@ -455,7 +457,7 @@ public:
 
             auto &aux_out_var = aux_out[var];
             aux_out_var.reserve(nCells);
-            
+
             for (auto i = 0; i < nCells; ++i)
             {
                 const auto indices = (*integrationPoints)[i].getIndices();

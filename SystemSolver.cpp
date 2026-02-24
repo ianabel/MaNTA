@@ -575,7 +575,7 @@ void SystemSolver::updateMatricesForJacSolve()
         DerivativeSubMatrix(Su, dSource_v.Variable(), ip, yJac, I);
         MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
 
-        DerivativeSubMatrix(Sphi, dSource_v.Aux(), ip, yJac, I);
+        dSourcedPhi_Mat(Sphi, yJac, I);
         MX.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
 
         // Set Parts of Matrix due to aux variables
