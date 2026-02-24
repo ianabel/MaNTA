@@ -159,22 +159,21 @@ public:
         return out; 
     }
 
-    State evalOnNode( Index cell, Index node ) const {
-        State out( nVars, nScalars, nAux );
-        double x = grid[ cell ].fromRef( Basis.Nodes( node ) );
-        for ( Index i = 0; i < nVars; ++i ) {
-            out.Variable[i] = u_[i]( x );
-            out.Derivative[i] =  q_[i]( x );
-            out.Flux[i] = sigma_[i]( x );
+        State evalOnNode( Index cell, Index node ) const {
+            State out( nVars, nScalars, nAux );
+            for ( Index i = 0; i < nVars; ++i ) {
+                out.Variable[i] = u_[i].getCoeff(cell).second(node);
+                out.Derivative[i] =  q_[i].getCoeff(cell).second(node);
+                out.Flux[i] = sigma_[i].getCoeff(cell).second(node);
+            }
+            for ( Index i = 0; i < nScalars; ++i ) {
+                out.Scalars[i] = mu_[i];
+            }
+            for ( Index i = 0; i < nAux; ++i ) {
+                out.Aux[i] = aux_[i].getCoeff(cell).second(node);
+            }
+            return out;
         }
-        for ( Index i = 0; i < nScalars; ++i ) {
-            out.Scalars[i] = mu_[i];
-        }
-        for ( Index i = 0; i < nAux; ++i ) {
-            out.Aux[i] = aux_[i]( x );
-        }
-        return out;
-    }
 
     // Deep copy of the data in other to the memory we are
     // wrapping

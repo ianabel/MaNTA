@@ -1014,7 +1014,7 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
             // so we enforce G = 0 by projection
             auto auxFunc = [&, this](Position x)
             { return problem->AuxG(aux, Y_h.eval(x), x, tres); };
-            res.Aux(aux).getCoeff(i).second = y.getBasis().ProjectOntoBasis(I, auxFunc);
+            res.Aux(aux).getCoeff(i).second = y.getBasis().InterpolateOntoBasis(I, auxFunc);
         }
     }
 
@@ -1266,17 +1266,17 @@ void SystemSolver::computeAdjointGradients()
 
                 Eigen::VectorXd dkappa_dp_phi(k + 1);
                 dkappa_dp_phi.setZero();
-                if (pIndex < adjointProblem->getNp() - adjointProblem->getNpBoundary())
+                if( adjointProblem->isAdjointIndexInternal( pIndex ) )
                 {
-                    dkappa_dp_phi = y.getBasis().ProjectOntoBasis( I, dkappadp );
+                    dkappa_dp_phi = y.getBasis().InterpolateOntoBasis( I, dkappadp );
                 }
 
                 // Evaluate Source Function
                 Eigen::VectorXd dSdp_cellwise(k + 1);
                 dSdp_cellwise.setZero();
-                if (pIndex < adjointProblem->getNp() - adjointProblem->getNpBoundary())
+                if( adjointProblem->isAdjointIndexInternal( pIndex ) )
                 {
-                    dSdp_cellwise = y.getBasis().ProjectOntoBasis( I, dSdp );
+                    dSdp_cellwise = y.getBasis().InterpolateOntoBasis( I, dSdp );
                 }
 
                 F_p.segment(var * (k + 1), k + 1) = dkappa_dp_phi;
@@ -1309,7 +1309,7 @@ void SystemSolver::computeAdjointGradients()
             }
             for (Index aux = 0; aux < nAux; ++aux)
             {
-                if (pIndex < adjointProblem->getNp() - adjointProblem->getNpBoundary())
+                if( adjointProblem->isAdjointIndexInternal( pIndex ) )
                 {
                     auto dAuxdp = [&](double x)
                     {

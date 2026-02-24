@@ -36,6 +36,12 @@ public:
     int getNp() const { return np; }
     int getNpBoundary() const { return np_boundary; }
 
+    // True if internal index ; false if boundary index
+    inline bool isAdjointIndexInternal( int pIndex ) const {
+        return (pIndex < np - np_boundary );
+    }
+
+
 protected:
     int np;
     int np_boundary = 0;
