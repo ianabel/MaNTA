@@ -78,6 +78,33 @@ public:
         return out;
     }
 
+    // Need to do it like this because jax likes to transpose things
+    GlobalState &operator=(const GlobalState &other)
+    {
+        Index rowCount = other.Variable().rows();
+        Index colCount = other.Variable().cols();
+        Index sz = nCells * (k + 1);
+        if (rowCount == nVars && sz == colCount)
+        {
+            _Variable = other.Variable();
+            _Derivative = other.Derivative();
+            _Flux = other.Flux();
+            _Aux = other.Aux();
+            _Scalars = other.Scalars();
+        }
+        else if (rowCount == sz && colCount == nVars )
+        {
+            _Variable = other.Variable().transpose();
+            _Derivative = other.Derivative().transpose();
+            _Flux = other.Flux().transpose();
+            _Aux = other.Aux().transpose();
+            _Scalars = other.Scalars().transpose();
+        } else {
+            throw std::runtime_error("Global states must be the same size when copying");
+        }
+        return *this;
+    }
+
     Matrix& Variable()
     {
         return _Variable;

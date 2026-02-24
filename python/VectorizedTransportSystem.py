@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 import MaNTA
 from JAXAdjointProblem import JAXAdjointProblem
 from typing import NamedTuple, Any
@@ -8,7 +9,8 @@ from typing import NamedTuple, Any
 JAX-based transport system base class that overloads MaNTA TransportSystem.
 Enables automatic differentiation of sigma and source terms using JAX.
 """
-
+vmap_axes = ({"Variable": 1, "Derivative": 1, "Flux": 1, "Aux": 1, "Scalars": None}, 0)
+    
 # Base class for JAX-based transport systems
 class VectorizedTransportSystem(MaNTA.TransportSystem):
     def __init__(self):
@@ -32,19 +34,26 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
 
     def Sources(self, index, state, x, t):
         return self.source(index, state, x, t, self.params)
+
     def SigmaFn_v( self, index, states, positions, t):
-        sin = jnp.array(states)
-        return jax.vmap(lambda s, p : self.sigma(index, s, p, t, self.params), in_axes=(0))(sin, positions)
+        x = jnp.array(positions)
+        return jax.vmap(lambda s, p : self.sigma(index, s, p, t, self.params), in_axes=(vmap_axes))(states, x)
 
     def Sources_v( self, index, states, positions, t ):
-        sin = jnp.array(states)
-        return jax.vmap(lambda s, p : self.source(index, s, p, t, self.params), in_axes=(0))(sin, positions)
+        x = jnp.array(positions)
+        return jax.vmap(lambda s, p : self.source(index, s, p, t, self.params), in_axes=(vmap_axes))(states, x)
     
     def dSigma(self, index, states, positions, t):
-        return jax.vmap(lambda s, p: jax.grad(self.sigma, argnums=1)(index, s, p, t, self.params), in_axes=(0,1))(states, positions)
+        x = jnp.array(positions)
+        out =  jax.vmap(lambda s, p: jax.grad(self.sigma, argnums=1)(index, s, p, t, self.params), in_axes=(vmap_axes))(states, x)
+        out["Scalars"] = []
+        return out
     
     def dSources(self, index, states, positions, t):
-        return jax.vmap(lambda s, p: jax.grad(self.source, argnums=1)(index, s, p, t, self.params), in_axes=(0,1))(states, positions)
+        x = jnp.array(positions)
+        out =  jax.vmap(lambda s, p: jax.grad(self.source, argnums=1)(index, s, p, t, self.params), in_axes=(vmap_axes))(states, x)
+        out["Scalars"] = []
+        return out
 
     
     """
@@ -95,9 +104,11 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
         return self.dSourcedvar(index,state,x,t)["Flux"]
     
     def dSources_dPhi( self, index, state, x, t ):
+        print("source_eval")
         return self.dSourcedvar(index,state,x,t)["Aux"]
     
     def AuxG( self, index, state, x, t):
+        print("aux_eval")
         return self.aux(index, state, x, t, self.params)
     
     """
@@ -119,6 +130,7 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
         Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
     """
     def AuxGPrime( self, index, state, x , t):
+        print("aux deriv")
         return self.dAuxdvars(index, state, x, t)
       
     def InitialValue( self, index, x ):

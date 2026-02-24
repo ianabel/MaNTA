@@ -56,11 +56,12 @@ namespace pybind11
 			bool load(handle src, bool)
 			{
 				py::dict d = py::cast<py::dict>(src);
+
 				value.Variable() = py::cast<Matrix>(d["Variable"]);
 				value.Derivative() = py::cast<Matrix>(d["Derivative"]);
 				value.Flux() = py::cast<Matrix>(d["Flux"]);
 				value.Aux() = py::cast<Matrix>(d["Aux"]);
-				value.Scalars() = py::cast<Matrix>(d["Scalars"]);
+				value.Scalars() = py::cast<Vector>(d["Scalars"]);
 				return true;
 			}
 

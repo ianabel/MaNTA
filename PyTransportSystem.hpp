@@ -4,6 +4,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/eigen.h>
+#include <pybind11/numpy.h>
 
 #include "TransportSystem.hpp"
 
@@ -199,7 +200,7 @@ public:
 		v = method_overrides["dSources_dPhi"](i, s, x, t).cast<Values>();
 	}
 
-	void dSigma_dPhi(Index i, Values & v, const State &s, Position x, Time t) override
+	void dSigma_dPhi(Index i, Values &v, const State &s, Position x, Time t) override
 	{
 		if (nAux == 0)
 		{
