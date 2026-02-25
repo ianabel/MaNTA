@@ -10,7 +10,6 @@ from yancc.solve import solve_dke
 from scipy.constants import elementary_charge, proton_mass
 
 import jax
-
 import jax.numpy as jnp
 
 from functools import partial

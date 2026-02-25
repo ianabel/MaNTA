@@ -26,6 +26,9 @@ class StellaratorParams(NamedTuple):
             EdgeDensity=config["EdgeDensity"],
             n0=config["n0"]
         )
+
+# Magic tuple to make vmap work
+vmap_axes = ({"Variable": 1, "Derivative": 1, "Flux": 1, "Aux": 1, "Scalars": None}, 0)
 """
 class StellaratorTransport
 
@@ -50,13 +53,31 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def UpperBoundary(self, index, t):
         return 1.5 * self.params.EdgeTemperature * self.Density(0.9)
 
-    #@partial(jax.jit, static_argnums=(0,1))
     def SigmaFn( self, index, state, x, t ):
-        return -self.yancc_wrapper.flux(state, x) 
+        return self.sigma(index, state, x, t, self.params)
 
-    @partial(jax.jit, static_argnums=(0,1))
-    def Sources( self, index, state, x, t ):
+    def Sources(self, index, state, x, t):
         return self.source(index, state, x, t, self.params)
+    
+    def SigmaFn_v( self, index, states, positions, t):
+        x = jnp.array(positions)
+        return jax.vmap(lambda s, p : self.sigma(index, s, p, t, self.params), in_axes=(vmap_axes))(states, x)
+
+    def Sources_v( self, index, states, positions, t ):
+        x = jnp.array(positions)
+        return jax.vmap(lambda s, p : self.source(index, s, p, t, self.params), in_axes=(vmap_axes))(states, x)
+    
+    def dSigma(self, index, states, positions, t):
+        x = jnp.array(positions)
+        out =  jax.vmap(lambda s, p: jax.grad(self.sigma, argnums=1)(index, s, p, t, self.params), in_axes=(vmap_axes))(states, x)
+        out["Scalars"] = []
+        return out
+    
+    def dSources(self, index, states, positions, t):
+        x = jnp.array(positions)
+        out =  jax.vmap(lambda s, p: jax.grad(self.source, argnums=1)(index, s, p, t, self.params), in_axes=(vmap_axes))(states, x)
+        out["Scalars"] = []
+        return out
 
     
     """
@@ -80,7 +101,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         Computed sigma or source term
     """
     def sigma( self, index, state, x, t, params: NamedTuple ):
-        pass
+        return -self.yancc_wrapper.flux(state, x) 
 
     def source( self, index, state, x, t, params: NamedTuple ):
         return params.SourceHeight * jnp.exp(-(x - params.SourceCenter)**2 / (2 * params.SourceWidth**2))
