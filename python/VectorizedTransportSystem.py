@@ -104,11 +104,9 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
         return self.dSourcedvar(index,state,x,t)["Flux"]
     
     def dSources_dPhi( self, index, state, x, t ):
-        print("source_eval")
         return self.dSourcedvar(index,state,x,t)["Aux"]
     
     def AuxG( self, index, state, x, t):
-        print("aux_eval")
         return self.aux(index, state, x, t, self.params)
     
     """
@@ -130,7 +128,6 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
         Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
     """
     def AuxGPrime( self, index, state, x , t):
-        print("aux deriv")
         return self.dAuxdvars(index, state, x, t)
       
     def InitialValue( self, index, x ):

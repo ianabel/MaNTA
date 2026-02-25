@@ -217,7 +217,7 @@ public:
         return out; 
     }
 
-    std::vector<Matrix> Derivative(Index cell) 
+    std::vector<Matrix> Derivative(Index cell)
     {
         std::vector<Matrix> out;
 
