@@ -73,7 +73,8 @@ public:
 		}
 		else
 		{
-			throw std::runtime_error("Attempted to call method SigmaFn_v not overridden in Python subclass");
+			std::cerr << "WARNING: Vectorized function \"SigmaFn_v\" not found in Python subclass; calling non-vectorized version." << std::endl;
+			return TransportSystem::SigmaFn(i, states, abscissae, time);
 		}
 	};
 	Value Sources(Index i, const State &s, Position x, Time t) override
@@ -94,7 +95,8 @@ public:
 		}
 		else
 		{
-			throw std::runtime_error("Attempted to call method Sources_v not overridden in Python subclass");
+			std::cerr << "WARNING: Vectorized function \"Sources_v\" not found in Python subclass; calling non-vectorized version." << std::endl;
+			return TransportSystem::Sources(i, states, abscissae, time);
 		}
 	};
 	void dSigmaFn_du(Index i, VectorRef out, const State &s, Position x, Time t) override
@@ -139,7 +141,9 @@ public:
 
 		if (!_override)
 		{
-			throw std::runtime_error(std::string("Virtual method ") + method_name + " not overridden in Python subclass");
+			std::cerr << "WARNING: Vectorized function \"dSigma\" not found in Python subclass; calling non-vectorized version." << std::endl;
+			TransportSystem::dSigma(i, out, states, abscissae, time);
+			return;
 		}
 
 		out = _override(i, states, abscissae, time).cast<GlobalState>();
@@ -153,7 +157,9 @@ public:
 
 		if (!_override)
 		{
-			throw std::runtime_error(std::string("Virtual method ") + method_name + " not overridden in Python subclass");
+			std::cerr << "WARNING: Vectorized function \"dSources\" not found in Python subclass; calling non-vectorized version." << std::endl;
+			TransportSystem::dSources(i, out, states, abscissae, time);
+			return;
 		}
 
 		out = _override(i, states, abscissae, time).cast<GlobalState>();

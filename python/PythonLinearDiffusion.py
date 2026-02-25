@@ -27,7 +27,6 @@ class PythonLinearDiffusion(MaNTA.TransportSystem):
         return 0.0
 
     def SigmaFn( self, index, state, x, t ):
-        print(state)
         tprim = state["Derivative"][0]
         return self.kappa * tprim
 

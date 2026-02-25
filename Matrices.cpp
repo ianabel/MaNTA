@@ -35,6 +35,7 @@ void SystemSolver::NLphiMat( Matrix& M, DGSoln const& Y, Index intervalIndex ) {
 //	[ dX_3dZ1    dX_3dZ2    dX_3dZ3 ]
 //
 // where X is a sigma function or a source function and Z is one of u, q, or sigma.
+// dX_dZ contains data on nodes in given cell
 void SystemSolver::DerivativeSubMatrix(Matrix &mat, std::vector<Matrix> const &dX_dZ, DGSoln const & Y, Index intervalIndex)
 {
 	// ASSERT mat.shape == ( nVars * ( k + 1) , nVars * ( k + 1 ) )
@@ -52,7 +53,6 @@ void SystemSolver::DerivativeSubMatrix(Matrix &mat, std::vector<Matrix> const &d
 		{
 			Vector vals(nVars);
 			vals.setZero();
-			State s = Y.evalOnNode(intervalIndex, j);
 			for (Index ZVar = 0; ZVar < nVars; ZVar++)
 			{
 				mat(XVar * (k + 1) + j, ZVar * (k + 1) + j) = dX_dZ[XVar](ZVar, j);
