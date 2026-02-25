@@ -1069,7 +1069,6 @@ void SystemSolver::initializeMatricesForAdjointSolve()
 
         Eigen::MatrixXd Sphi(nVars * (k + 1), nAux * (k + 1));
 
-        Interval const &I(grid[i]);
         // NLq Matrix
         NLqMat(NLq, y, i);
 

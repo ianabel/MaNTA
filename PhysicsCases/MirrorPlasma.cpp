@@ -202,7 +202,7 @@ Real2nd MirrorPlasma::InitialFunction(Index i, Real2nd V, Real2nd t) const
 
 	double xmid = 0.5 * (xR + xL);
 	Real2nd m = (Omega_Upper - Omega_Lower) / (xR - xL);
-	double shape = 1 / MachWidth;
+	// double shape = 1 / MachWidth;
 
 	Real2nd v = cos(pi * (R - R_mid) / (R_max - R_min)); //* exp(-shape * (R - R_mid) * (R - R_mid));
 

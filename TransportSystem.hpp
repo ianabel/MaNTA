@@ -86,6 +86,7 @@ public:
   virtual Values SigmaFn(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
     Values out(states.size());
+#pragma omp parallel for
     for (size_t j = 0; j < states.size(); ++j)
     {
       out(j) = SigmaFn(i, states[j], abscissae[j], time);
@@ -96,6 +97,7 @@ public:
   virtual Values Sources(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
     Values out(states.size());
+#pragma omp parallel for
     for (size_t j = 0; j < states.size(); ++j)
     {
       out(j) = Sources(i, states[j], abscissae[j], time);
@@ -105,6 +107,7 @@ public:
 
   virtual void dSigma(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
+#pragma omp parallel for
     for (size_t j = 0; j < states.size(); ++j)
     {
       dSigmaFn_du(i, out.Variable(j), states[j], abscissae[j], time);
@@ -114,6 +117,7 @@ public:
 
   virtual void dSources(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
+#pragma omp parallel for
     for (size_t j = 0; j < states.size(); ++j)
     {
       dSources_du(i, out.Variable(j), states[j], abscissae[j], time);
