@@ -60,7 +60,7 @@ Value NonlinDiffTest::Sources( Index, const State &, Position, Time )
 	return 0.0;
 }
 
-void NonlinDiffTest::dSigmaFn_dq( Index, Values& v, const State & s, Position, Time )
+void NonlinDiffTest::dSigmaFn_dq( Index, VectorRef  v, const State & s, Position, Time )
 {
 	double u = s.Variable[ 0 ];
 	double NonlinearKappa = ( n/2.0 )*::pow( u, n )*( 1.0 - ::pow( u, n )/( n + 1.0 ) );
@@ -68,23 +68,23 @@ void NonlinDiffTest::dSigmaFn_dq( Index, Values& v, const State & s, Position, T
 	v[ 0 ] = NonlinearKappa;
 };
 
-void NonlinDiffTest::dSigmaFn_du( Index, Values& v, const State & s, Position, Time )
+void NonlinDiffTest::dSigmaFn_du( Index, VectorRef  v, const State & s, Position, Time )
 {
 	double u = s.Variable[ 0 ], q = s.Derivative[ 0 ];
 	v[ 0 ] = ( ( n*n )/( 2.0*( n + 1.0 ) ) ) * ::pow( u, n - 1.0 ) * ( 1 + n - 2*::pow( u, n ) ) * q;
 };
 
-void NonlinDiffTest::dSources_du( Index, Values&v , const State &, Position, Time )
+void NonlinDiffTest::dSources_du( Index, VectorRef v , const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void NonlinDiffTest::dSources_dq( Index, Values&v , const State &, Position, Time )
+void NonlinDiffTest::dSources_dq( Index, VectorRef v , const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void NonlinDiffTest::dSources_dsigma( Index, Values&v , const State &, Position, Time )
+void NonlinDiffTest::dSources_dsigma( Index, VectorRef v , const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };

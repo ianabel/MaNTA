@@ -25,19 +25,19 @@ public:
 	Value SigmaFn(Index i, const State &, Position x, Time t) override;
 	Value Sources(Index i, const State &, Position x, Time t) override;
 
-	void dSigmaFn_du(Index i, Values &, const State &, Position x, Time t) override;
-	void dSigmaFn_dq(Index i, Values &, const State &, Position x, Time t) override;
+	void dSigmaFn_du(Index i, VectorRef, const State &, Position x, Time t) override;
+	void dSigmaFn_dq(Index i, VectorRef, const State &, Position x, Time t) override;
 
-	void dSources_du(Index i, Values &, const State &, Position x, Time t) override;
-	void dSources_dq(Index i, Values &, const State &, Position x, Time t) override;
-	void dSources_dsigma(Index i, Values &, const State &, Position x, Time t) override;
-	void dSources_dScalars(Index, Values &, const State &, Position, Time) override;
+	void dSources_du(Index i, VectorRef, const State &, Position x, Time t) override;
+	void dSources_dq(Index i, VectorRef, const State &, Position x, Time t) override;
+	void dSources_dsigma(Index i, VectorRef, const State &, Position x, Time t) override;
+	void dSources_dScalars(Index, VectorRef, const State &, Position, Time) override;
 	void dSigmaFn_dp(Index i, Index pIndex, Value &, const State &s, Position x, Time t);
 	void dSources_dp(Index i, Index pIndex, Value &, const State &, Position x, Time t);
 
 	Value AuxG(Index, const State &, Position, Time) override;
 	void AuxGPrime(Index, State &, const State &, Position, Time) override;
-	void dSources_dPhi(Index, Values &, const State &, Position, Time) override;
+	void dSources_dPhi(Index, VectorRef, const State &, Position, Time) override;
 
 	// and initial conditions for u & q
 	virtual Value InitialValue(Index i, Position x) const override;

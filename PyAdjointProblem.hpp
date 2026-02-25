@@ -77,25 +77,25 @@ public:
         PYBIND11_OVERRIDE_PURE(Value, PyAdjointProblem, dgFndp, i, s, x);
     };
 
-    void dgFn_du(Index i, Values &out, const State &s, Position x) override
+    void dgFn_du(Index i, VectorRef out, const State &s, Position x) override
     {
         if (!initialized)
             initializeOverrides();
         out = method_overrides["dgFn_du"](i, s, x).cast<Values>();
     };
-    void dgFn_dq(Index i, Values &out, const State &s, Position x) override
+    void dgFn_dq(Index i, VectorRef out, const State &s, Position x) override
     {
         if (!initialized)
             initializeOverrides();
         out = method_overrides["dgFn_dq"](i, s, x).cast<Values>();
     };
-    void dgFn_dsigma(Index i, Values &out, const State &s, Position x) override
+    void dgFn_dsigma(Index i, VectorRef out, const State &s, Position x) override
     {
         if (!initialized)
             initializeOverrides();
         out = method_overrides["dgFn_dsigma"](i, s, x).cast<Values>();
     };
-    void dgFn_dphi(Index i, Values &out, const State &s, Position x) override
+    void dgFn_dphi(Index i, VectorRef out, const State &s, Position x) override
     {
         if (!initialized)
             initializeOverrides();

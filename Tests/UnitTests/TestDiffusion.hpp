@@ -48,27 +48,27 @@ class TestDiffusion : public TransportSystem {
 			return 0.0;
 		};
 
-		void dSigmaFn_dq( Index, Values& v, const State &, Position, Time ) override
+		void dSigmaFn_dq( Index, VectorRef  v, const State &, Position, Time ) override
 		{
 			v[ 0 ] = kappa;
 		};
 
-		void dSigmaFn_du( Index, Values& v, const State&, Position, Time ) override
+		void dSigmaFn_du( Index, VectorRef  v, const State&, Position, Time ) override
 		{
 			v[ 0 ] = 0.0;
 		};
 
-		void dSources_du( Index, Values&v , const State &, Position, Time ) override
+		void dSources_du( Index, VectorRef v , const State &, Position, Time ) override
 		{
 			v[ 0 ] = 0.0;
 		};
 
-		void dSources_dq( Index, Values&v , const State &, Position, Time ) override
+		void dSources_dq( Index, VectorRef v , const State &, Position, Time ) override
 		{
 			v[ 0 ] = 0.0;
 		};
 
-		void dSources_dsigma( Index, Values&v , const State &, Position, Time ) override 
+		void dSources_dsigma( Index, VectorRef v , const State &, Position, Time ) override 
 		{
 			v[ 0 ] = 0.0;
 		};

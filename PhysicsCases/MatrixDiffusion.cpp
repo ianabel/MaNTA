@@ -66,28 +66,28 @@ Value MatrixDiffusion::Sources(Index, const State &, Position, Time)
 	return 0.0;
 }
 
-void MatrixDiffusion::dSigmaFn_dq(Index i, Values &v, const State &, Position, Time)
+void MatrixDiffusion::dSigmaFn_dq(Index i, VectorRef v, const State &, Position, Time)
 {
 	for (Index j = 0; j < nVars; ++j)
 		v[j] = Kappa(i, j);
 };
 
-void MatrixDiffusion::dSigmaFn_du(Index, Values &v, const State &, Position, Time)
+void MatrixDiffusion::dSigmaFn_du(Index, VectorRef v, const State &, Position, Time)
 {
 	v = Vector::Zero(nVars);
 };
 
-void MatrixDiffusion::dSources_du(Index, Values &v, const State &, Position, Time)
+void MatrixDiffusion::dSources_du(Index, VectorRef v, const State &, Position, Time)
 {
 	v = Vector::Zero(nVars);
 };
 
-void MatrixDiffusion::dSources_dq(Index, Values &v, const State &, Position, Time)
+void MatrixDiffusion::dSources_dq(Index, VectorRef v, const State &, Position, Time)
 {
 	v = Vector::Zero(nVars);
 };
 
-void MatrixDiffusion::dSources_dsigma(Index, Values &v, const State &, Position, Time)
+void MatrixDiffusion::dSources_dsigma(Index, VectorRef v, const State &, Position, Time)
 {
 	v = Vector::Zero(nVars);
 };

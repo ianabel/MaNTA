@@ -511,6 +511,15 @@ class NodalBasis
             return out;
         };
 
+        Vector InterpolateOntoBasis(Interval const &I, Vector const &vals) const 
+        {
+            assert(vals.size() == k + 1);
+            
+            Vector out( k + 1 );
+            out = (I.h() / 2.0) * RefMass * vals;
+            return out;
+        };
+
         // Standard projection
         Vector ProjectOntoBasis( Interval const& I, std::function<double(double)> f ) const
         {
@@ -596,7 +605,7 @@ class NodalBasis
                 }
         }
 
-        double Nodes( Index i ) { return ChebNodes( i ); };
+        double Nodes( Index i ) const { return ChebNodes( i ); };
 };
 
 #endif

@@ -454,7 +454,7 @@ void SystemSolver::initialiseMatrices()
             X.block(var * (k + 1), var * (k + 1), k + 1, k + 1) = Xvar;
         }
         XMats.emplace_back(X);
-
+    
         Eigen::Index nDof = nVars * SQU_DOF + nAux * AUX_DOF;
         MXSolvers.emplace_back( nDof, nDof );
     }
@@ -570,6 +570,21 @@ void SystemSolver::updateMatricesForJacSolve()
     std::cerr << "Updating Jacobian at time " << jt << std::endl;
     updateBoundaryConditions(jt);
     // We know where the jacobian is to be evaluated -- yJac
+
+    GlobalStateMatrix dSigma_vals(nVars);
+    GlobalStateMatrix dSource_vals(nVars);
+
+    const auto points = yJac.getPoints();
+    const auto states = yJac.eval(points);
+     for (Index i = 0; i < nVars; i++)
+    {
+        dSigma_vals.add(nCells, k, nVars, nScalars, nVars /* This should be nAux, but output is wrt all variables*/);
+        dSource_vals.add(nCells, k, nVars, nScalars, nVars);
+
+        problem->dSigma(i, dSigma_vals[i], states, points, jt);
+        problem->dSources(i, dSource_vals[i], states, points, jt);
+    }
+
     for (unsigned int i = 0; i < nCells; i++)
     {
 
@@ -599,30 +614,30 @@ void SystemSolver::updateMatricesForJacSolve()
         MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += X;
 
         // NLq Matrix
-        NLqMat(NLq, yJac, I);
+        DerivativeSubMatrix(NLq, dSigma_vals.Derivative(i), yJac, i);
         MX.block(0, nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLq;
 
         // NLu Matrix
-        NLuMat(NLu, yJac, I);
+        DerivativeSubMatrix(NLu, dSigma_vals.Variable(i), yJac, i);
         MX.block(0, 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLu;
 
         // S_sig Matrix
-        dSourcedsigma_Mat(Ssig, yJac, I);
+        DerivativeSubMatrix(Ssig, dSource_vals.Flux(i), yJac, i);
         MX.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) -= Ssig;
 
         // S_q Matrix
-        dSourcedq_Mat(Sq, yJac, I);
+        DerivativeSubMatrix(Sq, dSource_vals.Derivative(i), yJac, i);
         MX.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Sq;
 
         // S_u Matrix
-        dSourcedu_Mat(Su, yJac, I);
+        DerivativeSubMatrix(Su, dSource_vals.Variable(i), yJac, i);
         MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
 
-        dSourcedPhi_Mat(Sphi, yJac, I);
+        dSourcedPhi_Mat(Sphi, yJac, i);
         MX.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
 
         // Set Parts of Matrix due to aux variables
-        dAux_Mat(MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), yJac, I);
+        dAux_Mat(MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), yJac, i);
 
         MXSolvers[ i ].compute(MX);
     }
@@ -637,7 +652,7 @@ void SystemSolver::updateMatricesForJacSolve()
     for (Index i = 0; i < nCells; ++i)
     {
         Matrix v_tmp(nVars * U_DOF, nScalars);
-        dSources_dScalars_Mat(v_tmp, yJac, grid[i]);
+        dSources_dScalars_Mat(v_tmp, yJac, i);
         for (Index j = 0; j < nScalars; ++j)
             for (Index v = 0; v < nVars; ++v)
                 v_map[j].u(v).getCoeff(i).second = v_tmp.block(v * U_DOF, j, U_DOF, 1);
@@ -919,6 +934,21 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 
     resVec.setZero();
 
+    const auto points = Y_h.getPoints();
+
+    const auto states = Y_h.eval(points);
+
+    std::vector<Values> Sigma_vals;
+    std::vector<Values> Source_vals;
+
+    Sigma_vals.resize(nVars);
+    Source_vals.resize(nVars);
+    for (Index var = 0; var < nVars; var++)
+    {
+        Sigma_vals[var] = problem->SigmaFn(var, states, points, tres);
+        Source_vals[var] = problem->Sources(var, states, points, tres);
+    }
+
     // residual.lambda = C*sigma + G*u + H*lambda - L
     for (Index i = 0; i < nCells; i++)
     {
@@ -946,23 +976,23 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
         // length = nVars*(k+1)
         for (Index var = 0; var < nVars; var++)
         {
-            std::function<double(double)> kappaFunc = [=, this, &Y_h](double x)
-            {
-                State s = Y_h.eval(x);
-                return problem->SigmaFn(var, s, x, tres);
-            };
+            // std::function<double(double)> kappaFunc = [=, this, &Y_h](double x)
+            // {
+            //     State s = Y_h.eval(x);
+            //     return problem->SigmaFn(var, s, x, tres);
+            // };
 
-            std::function<double(double)> sourceFunc = [=, this, &Y_h](double x)
-            {
-                State s = Y_h.eval(x);
-                return problem->Sources(var, s, x, tres);
-            };
-
+            // std::function<double(double)> sourceFunc = [=, this, &Y_h](double x)
+            // {
+            //     State s = Y_h.eval(x);
+            //     return problem->Sources(var, s, x, tres);
+            // };
+            auto ind = Eigen::seq(i * (k + 1), (i + 1) * (k + 1) - 1);
             // Evaluate Diffusion Function
-            Eigen::VectorXd kappa_cellwise = y.getBasis().InterpolateOntoBasis( I, kappaFunc );
+            Eigen::VectorXd kappa_cellwise = y.getBasis().InterpolateOntoBasis( I, Sigma_vals[var](ind) );
 
             // Evaluate Source Function
-            Eigen::VectorXd S_cellwise = y.getBasis().InterpolateOntoBasis(I, sourceFunc );
+            Eigen::VectorXd S_cellwise = y.getBasis().InterpolateOntoBasis(I, Source_vals[var](ind) );
 
             auto const &lambda = lamCell.segment<2>(2 * var);
 
@@ -989,7 +1019,7 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
             // so we enforce G = 0 by projection
             auto auxFunc = [&, this](Position x)
             { return problem->AuxG(aux, Y_h.eval(x), x, tres); };
-            res.Aux(aux).getCoeff(i).second = y.getBasis().ProjectOntoBasis(I, auxFunc);
+            res.Aux(aux).getCoeff(i).second = y.getBasis().InterpolateOntoBasis(I, auxFunc);
         }
     }
 
@@ -1013,18 +1043,18 @@ void SystemSolver::initializeMatricesForAdjointSolve()
     {
         G_y.emplace_back(3 * nVars * (k + 1) + nAux * (k + 1));
 
-        dGdsigma_Vec(0, dGdsigma, y, grid[i]);
+        dGdsigma_Vec(0, dGdsigma, y, i);
         G_y[i].block(0, 0, nVars * (k + 1), 1) = dGdsigma;
 
-        dGdq_Vec(0, dGdq, y, grid[i]);
+        dGdq_Vec(0, dGdq, y, i);
         G_y[i].block(nVars * (k + 1), 0, nVars * (k + 1), 1) = dGdq;
 
-        dGdu_Vec(0, dGdu, y, grid[i]);
+        dGdu_Vec(0, dGdu, y, i);
         G_y[i].block(2 * nVars * (k + 1), 0, nVars * (k + 1), 1) = dGdu;
 
         if (nAux > 0)
         {
-            dGdaux_Vec(0, dGdaux, y, grid[i]);
+            dGdaux_Vec(0, dGdaux, y, i);
             G_y[i].block(3 * nVars * (k + 1), 0, nAux * (k + 1), 1) = dGdaux;
         }
     }
@@ -1045,19 +1075,19 @@ void SystemSolver::initializeMatricesForAdjointSolve()
 
         Interval const &I(grid[i]);
         // NLq Matrix
-        NLqMat(NLq, y, I);
+        NLqMat(NLq, y, i);
 
         // NLu Matrix
-        NLuMat(NLu, y, I);
+        NLuMat(NLu, y, i);
 
         // S_sig Matrix
-        dSourcedsigma_Mat(Ssig, y, I);
+        dSourcedsigma_Mat(Ssig, y, i);
 
         // S_q Matrix
-        dSourcedq_Mat(Sq, y, I);
+        dSourcedq_Mat(Sq, y, i);
 
         // S_u Matrix
-        dSourcedu_Mat(Su, y, I);
+        dSourcedu_Mat(Su, y, i);
 
         // M is the local DG Matrix
         Eigen::MatrixXd M(localDOF, localDOF);
@@ -1083,11 +1113,11 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         // TODO: This is probably wrong
         if (nAux > 0)
         {
-            dSourcedPhi_Mat(Sphi, y, I);
+            dSourcedPhi_Mat(Sphi, y, i);
             M.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
 
             // Set Parts of Matrix due to aux variables
-            dAux_Mat(M.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), y, I);
+            dAux_Mat(M.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), y, i);
 
             // TODO: Consider factorization here (is M sparse enough to warrant a sparse implementation?)
         }
@@ -1241,17 +1271,17 @@ void SystemSolver::computeAdjointGradients()
 
                 Eigen::VectorXd dkappa_dp_phi(k + 1);
                 dkappa_dp_phi.setZero();
-                if (pIndex < adjointProblem->getNp() - adjointProblem->getNpBoundary())
+                if( adjointProblem->isAdjointIndexInternal( pIndex ) )
                 {
-                    dkappa_dp_phi = y.getBasis().ProjectOntoBasis( I, dkappadp );
+                    dkappa_dp_phi = y.getBasis().InterpolateOntoBasis( I, dkappadp );
                 }
 
                 // Evaluate Source Function
                 Eigen::VectorXd dSdp_cellwise(k + 1);
                 dSdp_cellwise.setZero();
-                if (pIndex < adjointProblem->getNp() - adjointProblem->getNpBoundary())
+                if( adjointProblem->isAdjointIndexInternal( pIndex ) )
                 {
-                    dSdp_cellwise = y.getBasis().ProjectOntoBasis( I, dSdp );
+                    dSdp_cellwise = y.getBasis().InterpolateOntoBasis( I, dSdp );
                 }
 
                 F_p.segment(var * (k + 1), k + 1) = dkappa_dp_phi;
@@ -1284,7 +1314,7 @@ void SystemSolver::computeAdjointGradients()
             }
             for (Index aux = 0; aux < nAux; ++aux)
             {
-                if (pIndex < adjointProblem->getNp() - adjointProblem->getNpBoundary())
+                if( adjointProblem->isAdjointIndexInternal( pIndex ) )
                 {
                     auto dAuxdp = [&](double x)
                     {

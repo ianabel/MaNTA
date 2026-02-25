@@ -28,12 +28,12 @@ class AuxVarTest : public TransportSystem {
 		Value SigmaFn( Index, const State &, Position, Time ) override;
 		Value Sources( Index, const State &, Position, Time ) override;
 
-		void dSigmaFn_du( Index, Values &, const State &, Position, Time ) override;
-		void dSigmaFn_dq( Index, Values &, const State &, Position, Time ) override;
+		void dSigmaFn_du( Index, VectorRef, const State &, Position, Time ) override;
+		void dSigmaFn_dq( Index, VectorRef, const State &, Position, Time ) override;
 
-		void dSources_du( Index, Values&v , const State &, Position, Time ) override;
-		void dSources_dq( Index, Values&v , const State &, Position, Time ) override;
-		void dSources_dsigma( Index, Values&v , const State &, Position, Time ) override;
+		void dSources_du( Index, VectorRef , const State &, Position, Time ) override;
+		void dSources_dq( Index, VectorRef , const State &, Position, Time ) override;
+		void dSources_dsigma( Index, VectorRef , const State &, Position, Time ) override;
 
 		// Finally one has to provide initial conditions for u & q
 		Value      InitialValue( Index, Position ) const override;
@@ -41,7 +41,7 @@ class AuxVarTest : public TransportSystem {
 
         Value AuxG( Index, const State &, Position, Time ) override;
         void AuxGPrime( Index, State &, const State &, Position, Time ) override;
-        void dSources_dPhi( Index, Values &, const State &, Position, Time ) override;
+        void dSources_dPhi( Index, VectorRef, const State &, Position, Time ) override;
         Value InitialAuxValue( Index, Position ) const override;
 
 private:

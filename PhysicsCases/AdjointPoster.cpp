@@ -52,30 +52,30 @@ Value AdjointPoster::Sources( Index, const State &, Position x, Time )
 	return T_s*::exp( -y*y/SourceWidth );
 }
 
-void AdjointPoster::dSigmaFn_dq( Index, Values& v, const State &s, Position, Time )
+void AdjointPoster::dSigmaFn_dq( Index, VectorRef v, const State &s, Position, Time )
 {
 	double u = s.Variable[ 0 ];
 	double NonlinearKappa = a / ::pow( u, 1.5 );
 	v[ 0 ] = NonlinearKappa;
 };
 
-void AdjointPoster::dSigmaFn_du( Index, Values& v, const State& s, Position, Time )
+void AdjointPoster::dSigmaFn_du( Index, VectorRef v, const State& s, Position, Time )
 {
 	double u = s.Variable[ 0 ], q = s.Derivative[ 0 ];
 	v[ 0 ] = -( 3.0/2.0 )*( a / ::pow( u, 2.5 ) )*q;
 };
 
-void AdjointPoster::dSources_du( Index, Values &v, const State &, Position, Time )
+void AdjointPoster::dSources_du( Index, VectorRef v, const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void AdjointPoster::dSources_dq( Index, Values &v, const State &, Position, Time )
+void AdjointPoster::dSources_dq( Index, VectorRef v, const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
 
-void AdjointPoster::dSources_dsigma( Index, Values &v, const State &, Position, Time )
+void AdjointPoster::dSources_dsigma( Index, VectorRef v, const State &, Position, Time )
 {
 	v[ 0 ] = 0.0;
 };
