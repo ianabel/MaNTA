@@ -27,7 +27,20 @@ Bnorm = 1.0 # Normalization magnetic field in Tesla
 # Hold DESC equilibrium as well
 
 class yancc_wrapper():
-    def __init__(self, Density, nNorm, Tnorm, nx = 5, na = 65, nt = 17, nz = 33):
+    """
+    Create wrapper for yancc to interface with MaNTA, hold all field specific stuff
+    Parameters
+    ----------
+    Density : f(Volume)
+        the density isn't evolved yet, so it's just some prespecified function of the volume
+    nNorm : float
+        Normalization for density (m^-3)
+    Tnorm : float
+        Normalization for temperature (eV)
+    
+
+    """
+    def __init__(self, Density, nNorm = 1e20, Tnorm = 1e3, nx = 5, na = 65, nt = 17, nz = 33):
         print("Initializing yancc wrapper with parameters:")
         print(f"  nx={nx}, na={na}, nt={nt}, nz={nz}")
         self.nx = nx
@@ -72,7 +85,8 @@ class yancc_wrapper():
         Fluxes computed by yancc, normalized to be dimensionless
     """
     def flux(self, state, x):
-    
+        
+        # For now we only evolve the ion energy
         p_i = 2. / 3. * state["Variable"][0]
         p_i_prime = 2. / 3. * state["Derivative"][0]
 
@@ -99,7 +113,7 @@ class yancc_wrapper():
         _, _, fluxes, stats  = solve_dke(field, self.pitchgrid, self.speedgrid, species, Erho, print_every=10)
         assert stats['res'] < 1e-5
         fout = fluxes['<heat_flux>'][0] * Vprim / (self.FluxNorm)
-        return self.Density(x) * fout
+        return fout
 
     @partial(jax.jit, static_argnums=(0,))
     def rho_from_normalized_volume(self, Vnorm):

@@ -1,19 +1,12 @@
-from typing import NamedTuple
-
 import MaNTA
-
-# Required for Perlmutter to work properly
-import os
-os.environ.pop("LD_LIBRARY_PATH", None)
-
-# from JAXTransportSystem import JAXTransportSystem
-# from JAXAdjointProblem import JAXAdjointProblem
 import jax.numpy as jnp
 import jax
 
 from functools import partial
 
 from yancc_wrapper import yancc_wrapper 
+
+from typing import NamedTuple
 
 class StellaratorParams(NamedTuple):
     SourceCenter: float
@@ -33,28 +26,33 @@ class StellaratorParams(NamedTuple):
             EdgeDensity=config["EdgeDensity"],
             n0=config["n0"]
         )
+"""
+class StellaratorTransport
 
+Computes sources and neoclassical fluxes (returned from yancc) as required by MaNTA
+"""
 class StellaratorTransport(MaNTA.TransportSystem): 
     def __init__(self, config , grid: MaNTA.Grid = None):
         MaNTA.TransportSystem.__init__(self)
         self.nVars = 1
+
+        ### Remember to set boundary conditions ####
         self.isUpperDirichlet  = True
         self.isLowerDirichlet  = False
+
         self.params = StellaratorParams.from_config(config)
         self.yancc_wrapper = yancc_wrapper(self.Density, 1e20, 1e3)
-        self.dSigmaFn_dVars = jax.grad(self.yancc_wrapper.flux, argnums=0)
+        self.dSigmaFn_dVars = jax.grad(self.SigmaFn, argnums=1)
 
     def LowerBoundary(self, index, t):
         return 0.0
 
     def UpperBoundary(self, index, t):
-        return self.params.EdgeTemperature
+        return 1.5 * self.params.EdgeTemperature * self.Density(0.9)
 
     #@partial(jax.jit, static_argnums=(0,1))
     def SigmaFn( self, index, state, x, t ):
-        f = self.yancc_wrapper.flux(state, x)
-        print(f)
-        return -f
+        return -self.yancc_wrapper.flux(state, x) 
 
     @partial(jax.jit, static_argnums=(0,1))
     def Sources( self, index, state, x, t ):
@@ -89,14 +87,14 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     #@partial(jax.jit, static_argnums=(0,1))
     def dSigmaFn_dq( self, index, state, x, t):
-        return self.dSigmaFn_dVars(state,x)["Derivative"]
+        return self.dSigmaFn_dVars(index,state,x,t)["Derivative"]
     
     #@partial(jax.jit, static_argnums=(0,1))
     def dSigmaFn_du( self, index, state, x, t):
-        return self.dSigmaFn_dVars(state,x)["Variable"]
+        return self.dSigmaFn_dVars(index,state,x,t)["Variable"]
     
     def dSigma_dPhi( self, index, state, x, t):
-        return self.dSigmaFn_dVars(state,x)["Aux"]
+        return self.dSigmaFn_dVars(index,state,x,t)["Aux"]
     
     @partial(jax.jit, static_argnums=(0,1))
     def dSources_du( self, index, state, x, t ):
@@ -116,7 +114,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
     
     @partial(jax.jit, static_argnums=(0,1))
     def InitialValue( self, index, x ):
-        return self.params.EdgeTemperature * self.Density(x)
+        return 1.5 * self.params.EdgeTemperature * self.Density(x)
     
     @partial(jax.jit, static_argnums=(0,1))
     def InitialDerivative( self, index, x ):
@@ -126,7 +124,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return 0.0
 
     def Density(self, x):
-        return (self.params.n0 - self.params.EdgeDensity) * (1 - x) + self.params.EdgeDensity
+        return (self.params.n0 - self.params.EdgeDensity) * (1 - x*x) + self.params.EdgeDensity
     
     """
     Create the adjoint problem associated with this transport system
@@ -138,6 +136,3 @@ class StellaratorTransport(MaNTA.TransportSystem):
     """
     def createAdjointProblem(self):
         pass
-
-def registerTransportSystems():
-    MaNTA.registerPhysicsCase("StellaratorTransport", StellaratorTransport)
