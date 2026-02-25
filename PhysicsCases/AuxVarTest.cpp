@@ -89,28 +89,28 @@ Value AuxVarTest::Sources(Index i, const State &st, Position x, Time)
     return 0;
 }
 
-void AuxVarTest::dSigmaFn_dq(Index i, Values &v, const State &, Position, Time)
+void AuxVarTest::dSigmaFn_dq(Index i, VectorRef v, const State &, Position, Time)
 {
     v.setZero();
     v[i] = kappa;
 };
 
-void AuxVarTest::dSigmaFn_du(Index, Values &v, const State &, Position, Time)
+void AuxVarTest::dSigmaFn_du(Index, VectorRef v, const State &, Position, Time)
 {
     v.setZero();
 };
 
-void AuxVarTest::dSources_du(Index, Values &v, const State &st, Position, Time)
+void AuxVarTest::dSources_du(Index, VectorRef v, const State &st, Position, Time)
 {
     v.setZero();
 };
 
-void AuxVarTest::dSources_dq(Index, Values &v, const State &, Position, Time)
+void AuxVarTest::dSources_dq(Index, VectorRef v, const State &, Position, Time)
 {
     v.setZero();
 };
 
-void AuxVarTest::dSources_dsigma(Index, Values &v, const State &, Position, Time)
+void AuxVarTest::dSources_dsigma(Index, VectorRef v, const State &, Position, Time)
 {
     v.setZero();
 };
@@ -146,7 +146,7 @@ void AuxVarTest::AuxGPrime(Index iAux, State &out, const State &st, Position, Ti
     return;
 }
 
-void AuxVarTest::dSources_dPhi(Index i, Values &v, const State &st, Position, Time)
+void AuxVarTest::dSources_dPhi(Index i, VectorRef v, const State &st, Position, Time)
 {
     v.setZero();
     switch (i)

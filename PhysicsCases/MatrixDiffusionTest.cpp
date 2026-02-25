@@ -9,7 +9,7 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(MatrixDiffusionTest);
 
-MatrixDiffusionTest::MatrixDiffusionTest( toml::value const &config, Grid const& )
+MatrixDiffusionTest::MatrixDiffusionTest(toml::value const &config, Grid const &)
 {
 
 	// Construst your problem from user-specified config
@@ -21,7 +21,7 @@ MatrixDiffusionTest::MatrixDiffusionTest( toml::value const &config, Grid const&
 
 	auto const &DiffConfig = config.at("DiffusionProblem");
 
-	nVars = toml::find_or(DiffConfig, "nVars", 2 );
+	nVars = toml::find_or(DiffConfig, "nVars", 2);
 	Centre = toml::find_or(DiffConfig, "Centre", 0.0);
 	alpha = toml::find_or(DiffConfig, "alpha", 0.0);
 
@@ -29,7 +29,7 @@ MatrixDiffusionTest::MatrixDiffusionTest( toml::value const &config, Grid const&
 
 	if (static_cast<Index>(InitialHeight_v.size()) != nVars)
 	{
-		throw std::invalid_argument("Initial height vector must have " + std::to_string( nVars ) + " elements");
+		throw std::invalid_argument("Initial height vector must have " + std::to_string(nVars) + " elements");
 	}
 
 	InitialHeights.resize(nVars);
@@ -37,36 +37,35 @@ MatrixDiffusionTest::MatrixDiffusionTest( toml::value const &config, Grid const&
 		InitialHeights[i] = InitialHeight_v[i];
 
 	Kappa = Matrix::Identity(nVars, nVars);
-	Kappa( 0, 1 ) = alpha;
-	Kappa( 1, 0 ) = alpha;
+	Kappa(0, 1) = alpha;
+	Kappa(1, 0) = alpha;
 
 	Lambda1 = 1 + alpha;
 	Lambda2 = 1 - alpha;
 
-	// Orthonormal Eigenvectors 
+	// Orthonormal Eigenvectors
 	// are [ 1 , +/-1 ] / Sqrt(2)
 
 	// u0 = Sqrt(2) * (a1 * e1 + a2 * e2)
 	// => u(0) = a1 + a2
 	//    u(1) = a1 - a2
-	a1 = ( InitialHeights[ 0 ] + InitialHeights[ 1 ] )/( 2.0 );
-	a2 = ( InitialHeights[ 0 ] - InitialHeights[ 1 ] )/( 2.0 );
-
+	a1 = (InitialHeights[0] + InitialHeights[1]) / (2.0);
+	a2 = (InitialHeights[0] - InitialHeights[1]) / (2.0);
 }
 
 // Dirichlet Boundary Conditon
 Value MatrixDiffusionTest::LowerBoundary(Index i, Time t) const
 {
-	if ( i == 0 )
-		return a1 * ::exp( -( t*Lambda1*M_PI_2*M_PI_2 ) ) + a2 * ::exp( -( t*Lambda2*M_PI_2*M_PI_2 ) );
-	else if ( i == 1 )
-		return a1 * ::exp( -( t*Lambda1*M_PI_2*M_PI_2 ) ) - a2 * ::exp( -( t*Lambda2*M_PI_2*M_PI_2 ) );
-	else {
+	if (i == 0)
+		return a1 * ::exp(-(t * Lambda1 * M_PI_2 * M_PI_2)) + a2 * ::exp(-(t * Lambda2 * M_PI_2 * M_PI_2));
+	else if (i == 1)
+		return a1 * ::exp(-(t * Lambda1 * M_PI_2 * M_PI_2)) - a2 * ::exp(-(t * Lambda2 * M_PI_2 * M_PI_2));
+	else
+	{
 		throw std::runtime_error("i > nVars in LowerBoundary");
 		return 0.0;
 	}
 }
-
 
 Value MatrixDiffusionTest::UpperBoundary(Index, Time) const
 {
@@ -78,10 +77,10 @@ bool MatrixDiffusionTest::isUpperBoundaryDirichlet(Index) const { return true; }
 
 Value MatrixDiffusionTest::SigmaFn(Index i, const State &s, Position, Time)
 {
-	Eigen::Map<const Vector> qVec( s.Derivative.data(), s.Derivative.size() );
+	Eigen::Map<const Vector> qVec(s.Derivative.data(), s.Derivative.size());
 	auto sigma = Kappa * qVec;
 
-	return sigma( i );
+	return sigma(i);
 }
 
 Value MatrixDiffusionTest::Sources(Index, const State &, Position, Time)
@@ -89,28 +88,28 @@ Value MatrixDiffusionTest::Sources(Index, const State &, Position, Time)
 	return 0.0;
 }
 
-void MatrixDiffusionTest::dSigmaFn_dq(Index i, Values &v, const State &, Position, Time)
+void MatrixDiffusionTest::dSigmaFn_dq(Index i, VectorRef v, const State &, Position, Time)
 {
 	for (Index j = 0; j < nVars; ++j)
 		v[j] = Kappa(i, j);
 };
 
-void MatrixDiffusionTest::dSigmaFn_du(Index, Values &v, const State &, Position, Time)
+void MatrixDiffusionTest::dSigmaFn_du(Index, VectorRef v, const State &, Position, Time)
 {
 	v = Vector::Zero(nVars);
 };
 
-void MatrixDiffusionTest::dSources_du(Index, Values &v, const State &, Position, Time)
+void MatrixDiffusionTest::dSources_du(Index, VectorRef v, const State &, Position, Time)
 {
 	v = Vector::Zero(nVars);
 };
 
-void MatrixDiffusionTest::dSources_dq(Index, Values &v, const State &, Position, Time)
+void MatrixDiffusionTest::dSources_dq(Index, VectorRef v, const State &, Position, Time)
 {
 	v = Vector::Zero(nVars);
 };
 
-void MatrixDiffusionTest::dSources_dsigma(Index, Values &v, const State &, Position, Time)
+void MatrixDiffusionTest::dSources_dsigma(Index, VectorRef v, const State &, Position, Time)
 {
 	v = Vector::Zero(nVars);
 };
@@ -122,11 +121,11 @@ void MatrixDiffusionTest::dSources_dsigma(Index, Values &v, const State &, Posit
 Value MatrixDiffusionTest::InitialValue(Index i, Position x) const
 {
 	double y = (x - Centre);
-	return InitialHeights[i] * ::cos( M_PI_2 * y );
+	return InitialHeights[i] * ::cos(M_PI_2 * y);
 }
 
 Value MatrixDiffusionTest::InitialDerivative(Index i, Position x) const
 {
 	double y = (x - Centre);
-	return -1.0 * M_PI_2 * InitialHeights[i] * ::sin( M_PI_2 * y );
+	return -1.0 * M_PI_2 * InitialHeights[i] * ::sin(M_PI_2 * y);
 }

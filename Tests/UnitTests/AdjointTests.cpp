@@ -170,16 +170,16 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
             };
             dGdu_test(j) = integrator.integrate(integrand, I.x_l, I.x_u);
         }
-        BOOST_CHECK_NO_THROW(system->dGdu_Vec(0, test_Vec, system->y, I));
+        BOOST_CHECK_NO_THROW(system->dGdu_Vec(0, test_Vec, system->y, i));
         BOOST_TEST((dGdu_test - test_Vec).norm() == 0.0);
 
-        BOOST_CHECK_NO_THROW(system->dGdq_Vec(0, test_Vec, system->y, I));
+        BOOST_CHECK_NO_THROW(system->dGdq_Vec(0, test_Vec, system->y, i));
         BOOST_TEST((zeroVec - test_Vec).norm() == 0.0);
 
-        BOOST_CHECK_NO_THROW(system->dGdsigma_Vec(0, test_Vec, system->y, I));
+        BOOST_CHECK_NO_THROW(system->dGdsigma_Vec(0, test_Vec, system->y, i));
         BOOST_TEST((zeroVec - test_Vec).norm() == 0.0);
 
-        BOOST_CHECK_NO_THROW(system->dGdaux_Vec(0, test_Vec, system->y, I));
+        BOOST_CHECK_NO_THROW(system->dGdaux_Vec(0, test_Vec, system->y, i));
         BOOST_TEST((zeroVec - test_Vec).norm() == 0.0);
     }
 

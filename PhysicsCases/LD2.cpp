@@ -31,7 +31,7 @@ LD2::LD2( toml::value const& config, Grid const& )
 	t0 = InitialWidth * InitialWidth / ( 4.0 * kappa );
     nSigmaCalls = 0;
     nSourceCalls = 0;
-
+    nDerivCalls = 0;
 }
 
 // Dirichlet Boundary Conditon
@@ -61,28 +61,33 @@ Value LD2::Sources( Index, const State &, Position, Time )
 	return 0.0;
 }
 
-void LD2::dSigmaFn_dq( Index, Values& v, const State &, Position, Time )
+void LD2::dSigmaFn_dq( Index, VectorRef v, const State &, Position, Time )
 {
+    ++nDerivCalls;
 	v[ 0 ] = kappa;
 };
 
-void LD2::dSigmaFn_du( Index, Values& v, const State &, Position, Time )
+void LD2::dSigmaFn_du( Index, VectorRef v, const State &, Position, Time )
 {
+    ++nDerivCalls;
 	v[ 0 ] = 0.0;
 };
 
-void LD2::dSources_du( Index, Values&v , const State &, Position, Time )
+void LD2::dSources_du( Index, VectorRef v , const State &, Position, Time )
 {
+    ++nDerivCalls;
 	v[ 0 ] = 0.0;
 };
 
-void LD2::dSources_dq( Index, Values&v , const State &, Position, Time )
+void LD2::dSources_dq( Index, VectorRef v , const State &, Position, Time )
 {
+    ++nDerivCalls;
 	v[ 0 ] = 0.0;
 };
 
-void LD2::dSources_dsigma( Index, Values&v , const State &, Position, Time )
+void LD2::dSources_dsigma( Index, VectorRef v , const State &, Position, Time )
 {
+    ++nDerivCalls;
 	v[ 0 ] = 0.0;
 };
 

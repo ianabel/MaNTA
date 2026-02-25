@@ -64,27 +64,27 @@ Value LinearDiffusion::Sources(Index, const State &s, Position x, Time t)
 	return S;
 }
 
-void LinearDiffusion::dSigmaFn_dq(Index, Values &v, const State &, Position, Time)
+void LinearDiffusion::dSigmaFn_dq(Index, VectorRef v, const State &, Position, Time)
 {
 	v[0] = kappa;
 };
 
-void LinearDiffusion::dSigmaFn_du(Index, Values &v, const State &, Position, Time)
+void LinearDiffusion::dSigmaFn_du(Index, VectorRef v, const State &, Position, Time)
 {
 	v[0] = 0.0;
 };
 
-void LinearDiffusion::dSources_du(Index, Values &v, const State &, Position, Time)
+void LinearDiffusion::dSources_du(Index, VectorRef v, const State &, Position, Time)
 {
 	v[0] = 0.0;
 };
 
-void LinearDiffusion::dSources_dq(Index, Values &v, const State &, Position, Time)
+void LinearDiffusion::dSources_dq(Index, VectorRef v, const State &, Position, Time)
 {
 	v[0] = 0.0;
 };
 
-void LinearDiffusion::dSources_dsigma(Index, Values &v, const State &, Position, Time)
+void LinearDiffusion::dSources_dsigma(Index, VectorRef v, const State &, Position, Time)
 {
 	v[0] = 0.0;
 };

@@ -48,6 +48,35 @@ namespace pybind11
 				return d.release();
 			}
 		};
+		template <>
+		struct type_caster<GlobalState>
+		{
+		public:
+			PYBIND11_TYPE_CASTER(GlobalState, const_name("dict[Sequence[float]]"));
+
+			bool load(handle src, bool)
+			{
+				py::dict d = py::cast<py::dict>(src);
+
+				value.Variable() = py::cast<Matrix>(d["Variable"]);
+				value.Derivative() = py::cast<Matrix>(d["Derivative"]);
+				value.Flux() = py::cast<Matrix>(d["Flux"]);
+				value.Aux() = py::cast<Matrix>(d["Aux"]);
+				value.Scalars() = py::cast<Vector>(d["Scalars"]);
+				return true;
+			}
+
+			static handle cast(const GlobalState &src, return_value_policy /* policy */, handle /* parent */)
+			{
+				py::dict d;
+				d["Variable"] = src.Variable();
+				d["Derivative"] = src.Derivative();
+				d["Flux"] = src.Flux();
+				d["Aux"] = src.Aux();
+				d["Scalars"] = src.Scalars();
+				return d.release();
+			}
+		};
 	}
 };
 
@@ -103,12 +132,16 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 		.def("isLowerBoundaryDirichlet", &TransportSystem::isLowerBoundaryDirichlet)
 		.def("isUpperBoundaryDirichlet", &TransportSystem::isUpperBoundaryDirichlet)
 		.def("SigmaFn", py::overload_cast<Index, const State &, Position, Time>(&TransportSystem::SigmaFn))
+		.def("SigmaFn_v", py::overload_cast<Index, GlobalState const &, std::vector<Position> const &, Time>(&TransportSystem::SigmaFn))
 		.def("Sources", py::overload_cast<Index, const State &, Position, Time>(&TransportSystem::Sources))
+		.def("Sources_v", py::overload_cast<Index, GlobalState const &, std::vector<Position> const &, Time>(&TransportSystem::Sources))
 		.def("dSigmaFn_du", &TransportSystem::dSigmaFn_du)
 		.def("dSigmaFn_dq", &TransportSystem::dSigmaFn_dq)
 		.def("dSources_du", &TransportSystem::dSources_du)
 		.def("dSources_dq", &TransportSystem::dSources_dq)
 		.def("dSources_dsigma", &TransportSystem::dSources_dsigma)
+		.def("dSigma", &TransportSystem::dSigma)
+		.def("dSources", &TransportSystem::dSources)
 		.def("InitialValue", &TransportSystem::InitialValue)
 		.def("InitialDerivative", &TransportSystem::InitialDerivative)
 		.def("InitialAuxValue", &TransportSystem::InitialAuxValue)

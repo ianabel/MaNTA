@@ -109,27 +109,27 @@ Value ScalarTestLD3::Sources(Index i, const State &s, Position x, Time)
 	throw std::logic_error("Index out of range");
 }
 
-void ScalarTestLD3::dSigmaFn_dq(Index i, Values &v, const State &, Position, Time)
+void ScalarTestLD3::dSigmaFn_dq(Index i, VectorRef v, const State &, Position, Time)
 {
 	v[i] = kappa;
 };
 
-void ScalarTestLD3::dSigmaFn_du(Index i, Values &v, const State &, Position, Time)
+void ScalarTestLD3::dSigmaFn_du(Index i, VectorRef v, const State &, Position, Time)
 {
 	v[i] = 0.0;
 };
 
-void ScalarTestLD3::dSources_du(Index i, Values &v, const State &, Position, Time)
+void ScalarTestLD3::dSources_du(Index i, VectorRef v, const State &, Position, Time)
 {
 	v[i] = 0.0;
 };
 
-void ScalarTestLD3::dSources_dq(Index i, Values &v, const State &, Position, Time)
+void ScalarTestLD3::dSources_dq(Index i, VectorRef v, const State &, Position, Time)
 {
 	v[i] = 0.0;
 };
 
-void ScalarTestLD3::dSources_dsigma(Index i, Values &v, const State &, Position, Time)
+void ScalarTestLD3::dSources_dsigma(Index i, VectorRef v, const State &, Position, Time)
 {
 	v[i] = 0.0;
 };
@@ -216,7 +216,7 @@ void ScalarTestLD3::ScalarGPrimeExtended( Index scalarIndex, State &s, State &ou
 	}
 }
 
-void ScalarTestLD3::dSources_dScalars(Index i, Values &v, const State &, Position x, Time)
+void ScalarTestLD3::dSources_dScalars(Index i, VectorRef v, const State &, Position x, Time)
 {
 	if (i == 0)
 	{

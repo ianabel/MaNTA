@@ -42,27 +42,27 @@ Value LDTest::Sources(Index, const State &, Position x, Time)
 	return ::exp( -25.0*x*x );
 }
 
-void LDTest::dSigmaFn_dq(Index, Values &v, const State &, Position, Time)
+void LDTest::dSigmaFn_dq(Index, VectorRef v, const State &, Position, Time)
 {
 	v[0] = kappa;
 };
 
-void LDTest::dSigmaFn_du(Index, Values &v, const State &, Position, Time)
+void LDTest::dSigmaFn_du(Index, VectorRef v, const State &, Position, Time)
 {
 	v[0] = 0.0;
 };
 
-void LDTest::dSources_du(Index, Values &v, const State &, Position, Time)
+void LDTest::dSources_du(Index, VectorRef v, const State &, Position, Time)
 {
 	v[0] = 0.0;
 };
 
-void LDTest::dSources_dq(Index, Values &v, const State &, Position, Time)
+void LDTest::dSources_dq(Index, VectorRef v, const State &, Position, Time)
 {
 	v[0] = 0.0;
 };
 
-void LDTest::dSources_dsigma(Index, Values &v, const State &, Position, Time)
+void LDTest::dSources_dsigma(Index, VectorRef v, const State &, Position, Time)
 {
 	v[0] = 0.0;
 };

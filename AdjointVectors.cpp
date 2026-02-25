@@ -7,8 +7,9 @@
 #include "Types.hpp"
 #include "SystemSolver.hpp"
 
-void SystemSolver::DerivativeSubVector(Index pIndex, Vector &Vec, void (AdjointProblem::*dX_dZ)(Index, Values &, const State &, Position), DGSoln const &Y, Interval I)
+void SystemSolver::DerivativeSubVector(Index pIndex, Vector &Vec, void (AdjointProblem::*dX_dZ)(Index, VectorRef, const State &, Position), DGSoln const &Y, Index intervalIndex )
 {
+    Interval const &I( grid[ intervalIndex ] );
     auto const &x_vals = y.getBasis().abscissae();
     auto const &x_wgts = y.getBasis().weights();
     const size_t n_abscissa = x_vals.size();
@@ -56,20 +57,25 @@ void SystemSolver::DerivativeSubVector(Index pIndex, Vector &Vec, void (AdjointP
         }
     }
 }
-void SystemSolver::dGdu_Vec(Index i, Vector &Vec, DGSoln const &Y, Interval I)
+
+void SystemSolver::dGdu_Vec(Index i, Vector &Vec, DGSoln const &Y, Index I)
 {
     DerivativeSubVector(i, Vec, &AdjointProblem::dgFn_du, Y, I);
 }
-void SystemSolver::dGdq_Vec(Index i, Vector &Vec, DGSoln const &Y, Interval I)
+
+void SystemSolver::dGdq_Vec(Index i, Vector &Vec, DGSoln const &Y, Index I)
 {
     DerivativeSubVector(i, Vec, &AdjointProblem::dgFn_dq, Y, I);
 }
-void SystemSolver::dGdsigma_Vec(Index i, Vector &Vec, DGSoln const &Y, Interval I)
+
+void SystemSolver::dGdsigma_Vec(Index i, Vector &Vec, DGSoln const &Y, Index I)
 {
     DerivativeSubVector(i, Vec, &AdjointProblem::dgFn_dsigma, Y, I);
 }
-void SystemSolver::dGdaux_Vec(Index pIndex, Vector &Vec, DGSoln const &Y, Interval I)
+
+void SystemSolver::dGdaux_Vec(Index pIndex, Vector &Vec, DGSoln const &Y, Index intervalIndex )
 {
+    Interval const &I( grid[ intervalIndex ] );
     auto const &x_vals = y.getBasis().abscissae();
     auto const &x_wgts = y.getBasis().weights();
     const size_t n_abscissa = x_vals.size();
@@ -117,11 +123,11 @@ void SystemSolver::dGdaux_Vec(Index pIndex, Vector &Vec, DGSoln const &Y, Interv
         }
     }
 }
-// void SystemSolver::dSigmadp_Vec(Index i, Vector &Vec, DGSoln const &Y, Interval I)
+// void SystemSolver::dSigmadp_Vec(Index i, Vector &Vec, DGSoln const &Y, Index I)
 // {
 //     DerivativeSubVector(i, Vec, &AdjointProblem::dSigmaFn_dp, Y, I);
 // }
-// void SystemSolver::dSourcesdp_Vec(Index i, Vector &Vec, DGSoln const &Y, Interval I)
+// void SystemSolver::dSourcesdp_Vec(Index i, Vector &Vec, DGSoln const &Y, Index I)
 // {
 //     DerivativeSubVector(i, Vec, &AdjointProblem::dSources_dp, Y, I);
 // }

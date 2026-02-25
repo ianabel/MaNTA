@@ -17,6 +17,8 @@ class LD2 : public TransportSystem {
 
         virtual ~LD2() {
             std::cout << "During scope existence, Sigma was called " << nSigmaCalls << " times;" << std::endl;
+            std::cout << "During scope existence, Sources was called " << nSourceCalls << " times;" << std::endl;
+            std::cout << "During scope existence, Derivative was called " << nDerivCalls << " times;" << std::endl;
             return;
         }
 
@@ -33,12 +35,12 @@ class LD2 : public TransportSystem {
 		Value SigmaFn( Index, const State &, Position, Time ) override;
 		Value Sources( Index, const State &, Position, Time ) override;
 
-		void dSigmaFn_du( Index, Values &, const State &, Position, Time ) override;
-		void dSigmaFn_dq( Index, Values &, const State &, Position, Time ) override;
+		void dSigmaFn_du( Index, VectorRef, const State &, Position, Time ) override;
+		void dSigmaFn_dq( Index, VectorRef, const State &, Position, Time ) override;
 
-		void dSources_du( Index, Values & , const State &, Position, Time ) override;
-		void dSources_dq( Index, Values & , const State &, Position, Time ) override;
-		void dSources_dsigma( Index, Values & , const State &, Position, Time ) override;
+		void dSources_du( Index, VectorRef , const State &, Position, Time ) override;
+		void dSources_dq( Index, VectorRef , const State &, Position, Time ) override;
+		void dSources_dsigma( Index, VectorRef , const State &, Position, Time ) override;
 
 		// Finally one has to provide initial conditions for u & q
 		Value      InitialValue( Index, Position ) const override;
@@ -50,7 +52,7 @@ private:
 	double t0;
 	Value ExactSolution( Position, Time ) const;
 
-    unsigned int nSigmaCalls,nSourceCalls;
+    unsigned int nSigmaCalls,nSourceCalls,nDerivCalls;
 
 	// Without this (and the implementation line in LD2.cpp)
 	// ManTA won't know how to relate the string 'LD2' to the class.

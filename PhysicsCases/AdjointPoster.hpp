@@ -21,7 +21,7 @@ class AdjointPoster : public TransportSystem
 public:
 	// Must provide a constructor that constructs from a toml configuration snippet
 	// you can ignore it, or read problem-dependent parameters from the configuration file
-	explicit AdjointPoster(toml::value const &config, Grid const & );
+	explicit AdjointPoster(toml::value const &config, Grid const &);
 
 	// You must provide implementations of both, these are your boundary condition functions
 	Value LowerBoundary(Index, Time) const override;
@@ -36,12 +36,12 @@ public:
 	Value SigmaFn(Index, const State &, Position, Time) override;
 	Value Sources(Index, const State &, Position, Time) override;
 
-	void dSigmaFn_du(Index, Values &, const State &, Position, Time) override;
-	void dSigmaFn_dq(Index, Values &, const State &, Position, Time) override;
+	void dSigmaFn_du(Index, VectorRef, const State &, Position, Time) override;
+	void dSigmaFn_dq(Index, VectorRef, const State &, Position, Time) override;
 
-	void dSources_du(Index, Values &v, const State &, Position, Time) override;
-	void dSources_dq(Index, Values &v, const State &, Position, Time) override;
-	void dSources_dsigma(Index, Values &v, const State &, Position, Time) override;
+	void dSources_du(Index, VectorRef v, const State &, Position, Time) override;
+	void dSources_dq(Index, VectorRef v, const State &, Position, Time) override;
+	void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override;
 
 	// Finally one has to provide initial conditions for u & q
 	Value InitialValue(Index, Position) const override;
@@ -49,7 +49,7 @@ public:
 
 private:
 	// Put class-specific data here
-	double a, SourceCentre,SourceWidth,T_s;
+	double a, SourceCentre, SourceWidth, T_s;
 
 	// Without this (and the implementation line in AdjointPoster.cpp)
 	// ManTA won't know how to relate the string 'AdjointPoster' to the class.
