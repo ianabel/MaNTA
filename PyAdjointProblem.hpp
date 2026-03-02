@@ -32,13 +32,7 @@ public:
                 throw std::runtime_error(std::string("Pure virtual method ") + method_name + " not overridden in Python subclass");
             }
         };
-        method_overrides.insert(std::make_pair("dgFn_du", make_override("dgFn_du")));
-        method_overrides.insert(std::make_pair("dgFn_dq", make_override("dgFn_dq")));
-        method_overrides.insert(std::make_pair("dgFn_dsigma", make_override("dgFn_dsigma")));
         method_overrides.insert(std::make_pair("dgFn_dphi", make_override("dgFn_dphi")));
-        method_overrides.insert(std::make_pair("dSigmaFn_dp", make_override("dSigmaFn_dp")));
-        method_overrides.insert(std::make_pair("dSources_dp", make_override("dSources_dp")));
-
         method_overrides.insert(std::make_pair("dAux_dp", make_override("dAux_dp")));
 
         initialized = true;
@@ -72,28 +66,31 @@ public:
         PYBIND11_OVERRIDE_PURE(Value, AdjointProblem, gFn, i, s, x);
     };
 
-    virtual Value dgFndp(Index i, const State &s, Position x) const
+    Value dgFndp(Index i, const State &s, Position x) const override
     {
-        PYBIND11_OVERRIDE_PURE(Value, PyAdjointProblem, dgFndp, i, s, x);
+        PYBIND11_OVERRIDE_PURE(Value, AdjointProblem, dgFndp, i, s, x);
     };
 
     void dgFn_du(Index i, VectorRef out, const State &s, Position x) override
     {
-        if (!initialized)
-            initializeOverrides();
-        out = method_overrides["dgFn_du"](i, s, x).cast<Values>();
+        throw std::runtime_error("Individual derivative function \"dgFn_du\" depracated; use vectorized version dg instead.");
+        // if (!initialized)
+        //     initializeOverrides();
+        // out = method_overrides["dgFn_du"](i, s, x).cast<Values>();
     };
     void dgFn_dq(Index i, VectorRef out, const State &s, Position x) override
     {
-        if (!initialized)
-            initializeOverrides();
-        out = method_overrides["dgFn_dq"](i, s, x).cast<Values>();
+        throw std::runtime_error("Individual derivative function \"dgFn_dq\" depracated; use vectorized version dg instead.");
+        // if (!initialized)
+        //     initializeOverrides();
+        // out = method_overrides["dgFn_dq"](i, s, x).cast<Values>();
     };
     void dgFn_dsigma(Index i, VectorRef out, const State &s, Position x) override
     {
-        if (!initialized)
-            initializeOverrides();
-        out = method_overrides["dgFn_dsigma"](i, s, x).cast<Values>();
+        throw std::runtime_error("Individual derivative function \"dgFn_dsigma\" depracated; use vectorized version dg instead.");
+        // if (!initialized)
+        //     initializeOverrides();
+        // out = method_overrides["dgFn_dsigma"](i, s, x).cast<Values>();
     };
     void dgFn_dphi(Index i, VectorRef out, const State &s, Position x) override
     {
@@ -101,17 +98,72 @@ public:
             initializeOverrides();
         out = method_overrides["dgFn_dphi"](i, s, x).cast<Values>();
     };
+
+    void dg(Index gIndex, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae) override
+    {
+        std::string method_name = "dg";
+        py::gil_scoped_acquire gil;
+        py::function _override = py::get_override(this, method_name.c_str());
+
+        if (!_override)
+        {
+            throw std::runtime_error("Vectorized function \"dg\" not found in Python subclass");
+            // std::cerr << "WARNING: Vectorized function \"dSigma\" not found in Python subclass" << std::endl;
+            // TransportSystem::dSigma(i, out, states, abscissae, time);
+            // return;
+        }
+
+        out = _override(gIndex, states, abscissae).cast<GlobalState>();
+    };
+
     void dSigmaFn_dp(Index i, Index pIndex, Value &out, const State &s, Position x) override
     {
-        if (!initialized)
-            initializeOverrides();
-        out = method_overrides["dSigmaFn_dp"](i, pIndex, s, x).cast<Value>();
+        throw std::runtime_error("Individual derivative functions depracated; use vectorized version dSigma instead.");
+        // if (!initialized)
+        //     initializeOverrides();
+        // out = method_overrides["dSigmaFn_dp"](i, pIndex, s, x).cast<Value>();
     };
+
     void dSources_dp(Index i, Index pIndex, Value &out, const State &s, Position x) override
     {
-        if (!initialized)
-            initializeOverrides();
-        out = method_overrides["dSources_dp"](i, pIndex, s, x).cast<Value>();
+        throw std::runtime_error("Individual derivative functions depracated; use vectorized version dSources instead.");
+        // if (!initialized)
+        //     initializeOverrides();
+        // out = method_overrides["dSources_dp"](i, pIndex, s, x).cast<Value>();
+    };
+
+    void dSigma(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae) override
+    {
+        std::string method_name = "dSigma";
+        py::gil_scoped_acquire gil;
+        py::function _override = py::get_override(this, method_name.c_str());
+
+        if (!_override)
+        {
+            throw std::runtime_error("Vectorized function \"dSigma\" not found in Python subclass");
+            // std::cerr << "WARNING: Vectorized function \"dSigma\" not found in Python subclass" << std::endl;
+            // TransportSystem::dSigma(i, out, states, abscissae, time);
+            // return;
+        }
+
+        out.Variable() = _override(i, states, abscissae).cast<Matrix>();
+    };
+
+    void dSources(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae) override
+    {
+        std::string method_name = "dSources";
+        py::gil_scoped_acquire gil;
+        py::function _override = py::get_override(this, method_name.c_str());
+
+        if (!_override)
+        {
+            throw std::runtime_error("Vectorized function \"dSources\" not found in Python subclass");
+            // std::cerr << "WARNING: Vectorized function \"dSigma\" not found in Python subclass" << std::endl;
+            // TransportSystem::dSigma(i, out, states, abscissae, time);
+            // return;
+        }
+
+        out.Variable() = _override(i, states, abscissae).cast<Matrix>();
     };
 
     void dAux_dp(Index i, Index pIndex, Value &out, const State &s, Position x) override

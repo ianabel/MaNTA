@@ -14,6 +14,10 @@ public:
 
     // We're assuming Gfn = Int gFn dx for now
     virtual Value gFn(Index gIndex, const State &s, Position x) const = 0;
+    virtual Value dgFndp(Index gIndex, const State &s, Position x) const
+    {
+        throw std::runtime_error("Virtual function dgFndp only for use within python class.");
+    }
     // For compute g_y
     virtual void dgFn_du(Index gIndex, VectorRef, const State &s, Position x) = 0;
     virtual void dgFn_dq(Index gIndex, VectorRef, const State &s, Position x) = 0;
