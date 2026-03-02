@@ -69,10 +69,10 @@ namespace pybind11
 			static handle cast(const GlobalState &src, return_value_policy /* policy */, handle /* parent */)
 			{
 				py::dict d;
-				d["Variable"] = src.Variable();
-				d["Derivative"] = src.Derivative();
-				d["Flux"] = src.Flux();
-				d["Aux"] = src.Aux();
+				d["Variable"] = src.Variable().transpose();
+				d["Derivative"] = src.Derivative().transpose();
+				d["Flux"] = src.Flux().transpose();
+				d["Aux"] = src.Aux().transpose();
 				d["Scalars"] = src.Scalars();
 				return d.release();
 			}

@@ -20,6 +20,7 @@
 
 # Uncomment for debug information
 #DEBUG = on
+OMP=on
 PHYSICS_DEBUG=on
 
 #

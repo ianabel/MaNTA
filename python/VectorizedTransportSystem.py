@@ -9,7 +9,7 @@ from functools import partial
 JAX-based transport system base class that overloads MaNTA TransportSystem.
 Enables automatic differentiation of sigma and source terms using JAX.
 """
-vmap_axes = ({"Variable": 1, "Derivative": 1, "Flux": 1, "Aux": 1, "Scalars": None}, 0)
+vmap_axes = ({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0)
     
 # Base class for JAX-based transport systems
 class VectorizedTransportSystem(MaNTA.TransportSystem):
