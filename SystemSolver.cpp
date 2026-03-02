@@ -1030,22 +1030,27 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 
 void SystemSolver::initializeMatricesForAdjointSolve()
 {
+    GlobalState dGdvars(grid.getNCells(), k, nVars, nScalars, nAux);
+    const auto points = y.getPoints();
+    const auto states = y.eval(points);
+    adjointProblem->dg(0, dGdvars, states, points);
     Vector dGdu(nVars * (k + 1));
     Vector dGdq(nVars * (k + 1));
     Vector dGdsigma(nVars * (k + 1));
+    
     Vector dGdaux(nAux * (k + 1));
 
     for (Index i = 0; i < nCells; ++i)
     {
         G_y.emplace_back(3 * nVars * (k + 1) + nAux * (k + 1));
 
-        dGdsigma_Vec(0, dGdsigma, y, i);
+        DerivativeSubVector(0, dGdsigma, dGdvars.cellwiseFlux(i), y, i);
         G_y[i].block(0, 0, nVars * (k + 1), 1) = dGdsigma;
 
-        dGdq_Vec(0, dGdq, y, i);
+        DerivativeSubVector(0, dGdq, dGdvars.cellwiseDerivative(i), y, i);
         G_y[i].block(nVars * (k + 1), 0, nVars * (k + 1), 1) = dGdq;
 
-        dGdu_Vec(0, dGdu, y, i);
+        DerivativeSubVector(0, dGdu, dGdvars.cellwiseVariable(i), y, i);
         G_y[i].block(2 * nVars * (k + 1), 0, nVars * (k + 1), 1) = dGdu;
 
         if (nAux > 0)
@@ -1053,6 +1058,18 @@ void SystemSolver::initializeMatricesForAdjointSolve()
             dGdaux_Vec(0, dGdaux, y, i);
             G_y[i].block(3 * nVars * (k + 1), 0, nAux * (k + 1), 1) = dGdaux;
         }
+    }
+
+    GlobalStateMatrix dSigma_vals(nVars);
+    GlobalStateMatrix dSource_vals(nVars);
+
+    for (Index i = 0; i < nVars; i++)
+    {
+        dSigma_vals.add(nCells, k, nVars, nScalars, nVars /* This should be nAux, but output is wrt all variables*/);
+        dSource_vals.add(nCells, k, nVars, nScalars, nVars);
+
+        problem->dSigma(i, dSigma_vals[i], states, points, jt);
+        problem->dSources(i, dSource_vals[i], states, points, jt);
     }
 
     // We have to remake the M matrices because they're in the wrong order
@@ -1070,19 +1087,42 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         Eigen::MatrixXd Sphi(nVars * (k + 1), nAux * (k + 1));
 
         // NLq Matrix
-        NLqMat(NLq, y, i);
+        DerivativeSubMatrix(NLq, dSigma_vals.Derivative(i), yJac, i);
+        // MX.block(0, nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLq;
 
         // NLu Matrix
-        NLuMat(NLu, y, i);
+        DerivativeSubMatrix(NLu, dSigma_vals.Variable(i), yJac, i);
+        // MX.block(0, 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLu;
 
         // S_sig Matrix
-        dSourcedsigma_Mat(Ssig, y, i);
+        DerivativeSubMatrix(Ssig, dSource_vals.Flux(i), yJac, i);
+        // MX.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) -= Ssig;
 
         // S_q Matrix
-        dSourcedq_Mat(Sq, y, i);
+        DerivativeSubMatrix(Sq, dSource_vals.Derivative(i), yJac, i);
+        // MX.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Sq;
 
         // S_u Matrix
-        dSourcedu_Mat(Su, y, i);
+        DerivativeSubMatrix(Su, dSource_vals.Variable(i), yJac, i);
+        // MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
+
+        dSourcedPhi_Mat(Sphi, yJac, i);
+        // MX.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
+        // NLq Matrix
+        // NLqMat(NLq, y, i);
+        // DerivativeSubMatrix()
+
+        // // NLu Matrix
+        // NLuMat(NLu, y, i);
+
+        // // S_sig Matrix
+        // dSourcedsigma_Mat(Ssig, y, i);
+
+        // // S_q Matrix
+        // dSourcedq_Mat(Sq, y, i);
+
+        // // S_u Matrix
+        // dSourcedu_Mat(Su, y, i);
 
         // M is the local DG Matrix
         Eigen::MatrixXd M(localDOF, localDOF);
@@ -1105,7 +1145,6 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         M.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = Sq;
         M.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = (D - Su);
 
-        // TODO: This is probably wrong
         if (nAux > 0)
         {
             dSourcedPhi_Mat(Sphi, y, i);

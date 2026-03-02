@@ -250,17 +250,18 @@ Real MirrorPlasma::Flux(Index i, RealVector u, RealVector q, Real x, Time t)
 		if (evolveLogDensity)
 			return ConstantChannelMap[Channel::Density] ? 0.0 : static_cast<Real>(Gamma(u, q, x, t) / uToDensity(u(Channel::Density)));
 		else
-			return ConstantChannelMap[Channel::Density] ? 0.0 : Gamma(u, q, x, t);
+			return ConstantChannelMap[Channel::Density] ? 0.0 : static_cast<Real>(Gamma(u, q, x, t) + lowNDiffusivity * (x / (xR - xL)) * pow(q(Channel::Density) / u(Channel::Density), 1));
 		break;
 	}
 	case Channel::IonEnergy:
-		return ConstantChannelMap[Channel::IonEnergy] ? 0.0 : qi(u, q, x, t);
+		return ConstantChannelMap[Channel::IonEnergy] ? 0.0 : static_cast<Real>(qi(u, q, x, t) + lowPDiffusivity * (x / (xR - xL)) * pow(q(Channel::IonEnergy) / u(Channel::IonEnergy), 1));
+
 		break;
 	case Channel::ElectronEnergy:
 		return ConstantChannelMap[Channel::ElectronEnergy] ? 0.0 : qe(u, q, x, t);
 		break;
 	case Channel::AngularMomentum:
-		return ConstantChannelMap[Channel::AngularMomentum] ? 0.0 : Pi(u, q, x, t);
+		return ConstantChannelMap[Channel::AngularMomentum] ? 0.0 : static_cast<Real>(Pi(u, q, x, t) + lowLDiffusivity * (x / (xR - xL)) * pow(q(Channel::AngularMomentum) / u(Channel::AngularMomentum), 1));
 		break;
 	default:
 		throw std::runtime_error("Request for flux for undefined variable!");
@@ -375,7 +376,7 @@ Real MirrorPlasma::Gamma(RealVector u, RealVector q, Real V, Time t) const
 
 	// if (x >= 0)
 	// 	Gamma += x * lowNDiffusivity * nPrime * GeometricFactor * R; // SmoothTransition(x, transitionLength, lowNDiffusivity) * Chi_n * GeometricFactor * R * nPrime * x;
-	Gamma += lowNDiffusivity * nPrime * nPrime;
+	// Gamma += lowNDiffusivity * nPrime;
 	if (std::isfinite(Gamma.val))
 		return Gamma;
 	else
@@ -432,7 +433,7 @@ Real MirrorPlasma::qi(RealVector u, RealVector q, Real V, Time t) const
 	// // 	HeatFlux += x * lowPDiffusivity * Chi_i * GeometricFactor * GeometricFactor * n * pow(Ti, 3. / 2.) * Ti_prime; // / Ti;
 	// if (x >= 0)
 	// 	HeatFlux += lowPDiffusivity * sqrt(Plasma->mu() / 2.0) * pow(Ti, 3. / 2.) * pow(x, 2) * n * Ti_prime * GeometricFactor * GeometricFactor;
-	HeatFlux += lowPDiffusivity * Ti_prime / (Ti);
+	// HeatFlux += lowPDiffusivity * Ti_prime;
 	if (std::isfinite(HeatFlux.val) && std::isfinite(PotentialEnergyFlux.val))
 		return HeatFlux - PotentialEnergyFlux;
 	else
@@ -466,7 +467,7 @@ Real MirrorPlasma::qe(RealVector u, RealVector q, Real V, Time t) const
 	Real HeatFlux = GeometricFactor * GeometricFactor * (1 / (Plasma->ElectronCollisionTime(n, Te))) * (4.66 * p_e * Te_prime - (3. / 2.) * U);
 
 	// Real Chi_e = pow(Te, 3. / 2.) * abs(1 / dRdV * Te_prime / Te);
-	HeatFlux += TeDiffusivity * GeometricFactor * Te_prime;
+	HeatFlux += TeDiffusivity * Te_prime;
 
 	if (std::isfinite(HeatFlux.val))
 		return HeatFlux;
@@ -526,7 +527,7 @@ Real MirrorPlasma::Pi(RealVector u, RealVector q, Real V, Time t) const
 	// Real x = (rho_omega - lowLThreshold) / lowLThreshold;
 	// if (x >= 0)
 	// 	Pi_v += x * lowLDiffusivity * GeometricFactor * GeometricFactor * Chi_L * (dOmegadV);
-	Pi_v += lowLDiffusivity * dOmegadV * dOmegadV / (omega * omega);
+	// Pi_v += lowLDiffusivity * dOmegadV / (omega);
 	// if (x > 0)
 	// 	Pi_v += SmoothTransition(x, transitionLength, lowLDiffusivity) * GeometricFactor * GeometricFactor * Chi_L * (R * R * dOmegadV); /// (R * R * omega);
 
@@ -578,8 +579,15 @@ Real MirrorPlasma::Sn(RealVector u, RealVector q, RealVector sigma, RealVector p
 
 	Real S = DensitySource - (ParallelLosses - FusionLosses);
 	auto RampupFactor = [&](Time t)
-	{ return SourceRampup > 0 ? (1 - 1e-3) * tanh(t / SourceRampup) + 1e-3 : 1.0; };
+	{ return SourceRampup > 0 ? (1 - 1e-2) * tanh(t / SourceRampup) + 1e-2 : 1.0; };
+
 	S *= RampupFactor(t);
+	auto L = xR - xL;
+	if (abs(V - xL) / L < 1e-2 || abs(V - xR) / L < 1e-2)
+	{
+		S += RelaxFactor * (nEdge - n) / nEdge;
+	}
+
 	return S - RelaxSource(u(Channel::Density), n);
 };
 
@@ -630,7 +638,7 @@ Real MirrorPlasma::Spi(RealVector u, RealVector q, RealVector sigma, RealVector 
 	Real Heating = (ViscousHeating(u, q, V, t) + IonPotentialHeating(u, q, phi, V)) + EnergyExchange;
 	Real S = Heating - (ParallelLosses - ChargeExchangeHeatLosses + ParticleSourceHeating);
 	auto RampupFactor = [&](Time t)
-	{ return SourceRampup > 0 ? (1 - 1e-3) * tanh(t / SourceRampup) + 1e-3 : 1.0; };
+	{ return SourceRampup > 0 ? (1 - 1e-2) * tanh(t / SourceRampup) + 1e-2 : 1.0; };
 	S *= RampupFactor(t);
 	return S + RelaxSource(n * Ti, p_i); //+ RelaxSource(u(Channel::Density) * Te, p_e) + RelaxSource(n * floor(Te, MinTemp), p_e);
 }
@@ -672,7 +680,7 @@ Real MirrorPlasma::Spe(RealVector u, RealVector q, RealVector sigma, RealVector 
 
 	Real S = Heating - (ParallelLosses + RadiationLosses);
 	auto RampupFactor = [&](Time t)
-	{ return SourceRampup > 0 ? (1 - 1e-3) * tanh(t / SourceRampup) + 1e-3 : 1.0; };
+	{ return SourceRampup > 0 ? (1 - 1e-2) * tanh(t / SourceRampup) + 1e-2 : 1.0; };
 	S *= RampupFactor(t);
 	return S; //+ RelaxSource(u(Channel::Density) * Te, p_e) + RelaxSource(n * floor(Te, MinTemp), p_e);
 };
@@ -718,7 +726,7 @@ Real MirrorPlasma::Somega(RealVector u, RealVector q, RealVector sigma, RealVect
 
 	Real S = ((ParallelLosses + ChargeExchangeMomentumLosses));
 	auto RampupFactor = [&](Time t)
-	{ return SourceRampup > 0 ? (1 - 1e-3) * tanh(t / SourceRampup) + 1e-3 : 1.0; };
+	{ return SourceRampup > 0 ? (1 - 1e-2) * tanh(t / SourceRampup) + 1e-2 : 1.0; };
 	S *= RampupFactor(t);
 	return JxB - S; //+ RelaxSource(omega * R * R * u(Channel::Density), L);
 };

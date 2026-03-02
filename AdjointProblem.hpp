@@ -9,16 +9,27 @@ class AdjointProblem
 public:
     virtual ~AdjointProblem() = default;
 
-    virtual Value GFn(Index i, DGSoln &y) const = 0;
-    virtual Value dGFndp(Index i, DGSoln &y) const = 0;
+    virtual Value GFn(Index gIndex, DGSoln &y) const = 0;
+    virtual Value dGFndp(Index gIndex, DGSoln &y) const = 0;
 
     // We're assuming Gfn = Int gFn dx for now
-    virtual Value gFn(Index i, const State &s, Position x) const = 0;
+    virtual Value gFn(Index gIndex, const State &s, Position x) const = 0;
     // For compute g_y
-    virtual void dgFn_du(Index i, VectorRef, const State &s, Position x) = 0;
-    virtual void dgFn_dq(Index i, VectorRef, const State &s, Position x) = 0;
-    virtual void dgFn_dsigma(Index i, VectorRef, const State &s, Position x) = 0;
-    virtual void dgFn_dphi(Index i, VectorRef, const State &s, Position x) = 0;
+    virtual void dgFn_du(Index gIndex, VectorRef, const State &s, Position x) = 0;
+    virtual void dgFn_dq(Index gIndex, VectorRef, const State &s, Position x) = 0;
+    virtual void dgFn_dsigma(Index gIndex, VectorRef, const State &s, Position x) = 0;
+    virtual void dgFn_dphi(Index gIndex, VectorRef, const State &s, Position x) = 0;
+
+    virtual void dg(Index gIndex, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae)
+    {
+        for (size_t j = 0; j < states.size(); ++j)
+        {
+            dgFn_du(gIndex, out.Variable(j), states[j], abscissae[j]);
+            dgFn_dq(gIndex, out.Derivative(j), states[j], abscissae[j]);
+            dgFn_dsigma(gIndex, out.Flux(j), states[j], abscissae[j]);
+            dgFn_dphi(gIndex, out.Aux(j), states[j], abscissae[j]);
+        }
+    }
     // For computing F_p
     virtual void dSigmaFn_dp(Index i, Index pIndex, Value &, const State &s, Position x) = 0;
     virtual void dSources_dp(Index i, Index pIndex, Value &, const State &s, Position x) = 0;
@@ -37,10 +48,10 @@ public:
     int getNpBoundary() const { return np_boundary; }
 
     // True if internal index ; false if boundary index
-    inline bool isAdjointIndexInternal( int pIndex ) const {
-        return (pIndex < np - np_boundary );
+    inline bool isAdjointIndexInternal(int pIndex) const
+    {
+        return (pIndex < np - np_boundary);
     }
-
 
 protected:
     int np;

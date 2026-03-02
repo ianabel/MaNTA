@@ -209,6 +209,8 @@ class SystemSolver
         void dAux_Mat(Eigen::Ref<Matrix>, DGSoln const &, Index );
 
         void DerivativeSubVector(Index, Vector &, void (AdjointProblem::*dX_dZ)(Index, VectorRef, const State &, Position), DGSoln const &Y, Index I);
+        void DerivativeSubVector(Index, Vector &, MatrixRef const dX_dZ, DGSoln const &, Index intervalIndex);
+
         void dGdu_Vec(Index, Vector &, DGSoln const &, Index);
         void dGdq_Vec(Index, Vector &, DGSoln const &, Index);
         void dGdsigma_Vec(Index, Vector &, DGSoln const &, Index);
