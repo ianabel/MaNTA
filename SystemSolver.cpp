@@ -1077,7 +1077,6 @@ void SystemSolver::initializeMatricesForAdjointSolve()
 
     for (unsigned int i = 0; i < nCells; i++)
     {
-        Eigen::MatrixXd X(nVars * (k + 1), nVars * (k + 1));
         Eigen::MatrixXd NLq(nVars * (k + 1), nVars * (k + 1));
         Eigen::MatrixXd NLu(nVars * (k + 1), nVars * (k + 1));
         Eigen::MatrixXd Ssig(nVars * (k + 1), nVars * (k + 1));
@@ -1088,41 +1087,20 @@ void SystemSolver::initializeMatricesForAdjointSolve()
 
         // NLq Matrix
         DerivativeSubMatrix(NLq, dSigma_vals.Derivative(i), yJac, i);
-        // MX.block(0, nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLq;
 
         // NLu Matrix
         DerivativeSubMatrix(NLu, dSigma_vals.Variable(i), yJac, i);
-        // MX.block(0, 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLu;
 
         // S_sig Matrix
         DerivativeSubMatrix(Ssig, dSource_vals.Flux(i), yJac, i);
-        // MX.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) -= Ssig;
 
         // S_q Matrix
         DerivativeSubMatrix(Sq, dSource_vals.Derivative(i), yJac, i);
-        // MX.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Sq;
 
         // S_u Matrix
         DerivativeSubMatrix(Su, dSource_vals.Variable(i), yJac, i);
-        // MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
 
         dSourcedPhi_Mat(Sphi, yJac, i);
-        // MX.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
-        // NLq Matrix
-        // NLqMat(NLq, y, i);
-        // DerivativeSubMatrix()
-
-        // // NLu Matrix
-        // NLuMat(NLu, y, i);
-
-        // // S_sig Matrix
-        // dSourcedsigma_Mat(Ssig, y, i);
-
-        // // S_q Matrix
-        // dSourcedq_Mat(Sq, y, i);
-
-        // // S_u Matrix
-        // dSourcedu_Mat(Su, y, i);
 
         // M is the local DG Matrix
         Eigen::MatrixXd M(localDOF, localDOF);
@@ -1273,6 +1251,25 @@ void SystemSolver::computeAdjointGradients()
 {
     G_p.resize(adjointProblem->getNp());
     G_p.setZero();
+    GlobalStateMatrix dSigmadp(nVars);
+    GlobalStateMatrix dSourcedp(nVars);
+
+    const auto points = y.getPoints();
+    const auto states = y.eval(points);
+
+    const Index np_internal = adjointProblem->getNpInternal();
+    for (Index i = 0; i < nVars; i++)
+    {
+
+        // We use the global state to hold the derivatives, replacing nVars with np
+        // Only the Variable matrix is used internally to hold the derviatives
+        dSigmadp.add(nCells, k, np_internal, nScalars, np_internal /* This should be nAux, but output is wrt all variables*/);
+        dSourcedp.add(nCells, k, np_internal, nScalars, np_internal);
+
+        adjointProblem->dSigma(i, dSigmadp[i], states, points);
+        adjointProblem->dSources(i, dSourcedp[i], states, points);
+    }
+
     for (Index pIndex = 0; pIndex < adjointProblem->getNp(); ++pIndex)
     {
         G_p[pIndex] = adjointProblem->dGFndp(pIndex, y);
@@ -1287,27 +1284,13 @@ void SystemSolver::computeAdjointGradients()
 
             for (Index var = 0; var < nVars; ++var)
             {
-                auto dkappadp = [&](double x)
-                {
-                    State s = y.eval(x);
-                    Value grad;
-                    adjointProblem->dSigmaFn_dp(var, pIndex, grad, s, x);
-                    return grad;
-                };
-
-                auto dSdp = [&](double x)
-                {
-                    State s = y.eval(x);
-                    Value grad;
-                    adjointProblem->dSources_dp(var, pIndex, grad, s, x);
-                    return grad;
-                };
 
                 Eigen::VectorXd dkappa_dp_phi(k + 1);
                 dkappa_dp_phi.setZero();
                 if( adjointProblem->isAdjointIndexInternal( pIndex ) )
                 {
-                    dkappa_dp_phi = y.getBasis().InterpolateOntoBasis( I, dkappadp );
+                    const auto dSigmadp_cell = dSigmadp.Variable(i)[var];
+                    dkappa_dp_phi = y.getBasis().InterpolateOntoBasis( I, dSigmadp_cell(pIndex, Eigen::all) );
                 }
 
                 // Evaluate Source Function
@@ -1315,7 +1298,8 @@ void SystemSolver::computeAdjointGradients()
                 dSdp_cellwise.setZero();
                 if( adjointProblem->isAdjointIndexInternal( pIndex ) )
                 {
-                    dSdp_cellwise = y.getBasis().InterpolateOntoBasis( I, dSdp );
+                    const auto dSourcedp_cell = dSourcedp.Variable(i)[var];
+                    dSdp_cellwise = y.getBasis().InterpolateOntoBasis( I, dSourcedp_cell(pIndex, Eigen::all) );
                 }
 
                 F_p.segment(var * (k + 1), k + 1) = dkappa_dp_phi;

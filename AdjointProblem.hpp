@@ -34,6 +34,29 @@ public:
     virtual void dSigmaFn_dp(Index i, Index pIndex, Value &, const State &s, Position x) = 0;
     virtual void dSources_dp(Index i, Index pIndex, Value &, const State &s, Position x) = 0;
 
+    virtual void dSigma(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae)
+    {
+        for (size_t j = 0; j < states.size(); ++j)
+        {
+            for (Index pIndex = 0; pIndex < getNpInternal(); ++pIndex)
+            {
+                auto &vout = out.Variable(j)(pIndex); // we use the variable to represent p derivatives
+                dSigmaFn_dp(i, pIndex, vout, states[j], abscissae[j]);
+            }
+        }
+    }
+    virtual void dSources(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae)
+    {
+        for (size_t j = 0; j < states.size(); ++j)
+        {
+            for (Index pIndex = 0; pIndex < getNpInternal(); ++pIndex)
+            {
+                auto &vout = out.Variable(j)(pIndex); // we use the variable to represent p derivatives
+                dSources_dp(i, pIndex, vout, states[j], abscissae[j]);
+            }
+        }
+    }
+
     virtual void dAux_dp(Index i, Index pIndex, Value &, const State &s, Position x)
     {
         std::logic_error("nAux > 0 but no G derivative provided");
@@ -46,6 +69,8 @@ public:
 
     int getNp() const { return np; }
     int getNpBoundary() const { return np_boundary; }
+
+    int getNpInternal() const { return np - np_boundary; }
 
     // True if internal index ; false if boundary index
     inline bool isAdjointIndexInternal(int pIndex) const
