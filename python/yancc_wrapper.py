@@ -40,7 +40,7 @@ class yancc_wrapper():
     
 
     """
-    def __init__(self, Density, nNorm = 1e20, Tnorm = 1e3, nx = 5, na = 33, nt = 17, nz = 33):
+    def __init__(self, Density, nNorm = 1e20, Tnorm = 1e3, nx = 5, na = 65, nt = 17, nz = 33):
         print("Initializing yancc wrapper with parameters:")
         print(f"  nx={nx}, na={na}, nt={nt}, nz={nz}")
         self.nx = nx
@@ -129,7 +129,7 @@ class yancc_wrapper():
             dndrho=dndrho * self.nNorm),
         ]
 
-        _, _, fluxes, stats  = solve_dke(field, self.pitchgrid, self.speedgrid, species, Erho, verbose = 0)
+        _, _, fluxes, stats  = solve_dke(field, self.pitchgrid, self.speedgrid, species, Erho, verbose = False)
         #assert stats['res'] < 1e-5
         fout = fluxes['<heat_flux>'][0] * Vprim / (self.FluxNorm)
         return fout

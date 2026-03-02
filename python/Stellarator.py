@@ -2,8 +2,9 @@ import MaNTA
 import jax
 import jax.numpy as jnp
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
-from jax.experimental.shard_map import shard_map
+from jax import shard_map
 
+jax.config.update("jax_compilation_cache_dir", "__pycache__")
 import equinox as eqx
 
 
@@ -110,13 +111,14 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return self.source(index, state, x, t, self.params)
     
     def SigmaFn_v( self, index, states, positions, t):
-        # x_s = jax.device_put(jnp.array(positions),NamedSharding(mesh, P('ax',)))
         x = jnp.array(positions)
-        field, rho, vprime = self.yancc_wrapper.compute_fields(x)
-    
-        sigmavmap = jax.vmap(lambda s, p, field, rho, vprime: self.sigma(index, s, p, t, field, rho, vprime, self.params), in_axes=(vmap_axes_wfield))
+        
+        (field, rho, vprime) = eqx.filter_shard(self.yancc_wrapper.compute_fields(x), data_sharding)
+        x_s = jax.device_put(x,data_sharding)
+        states_s = jax.device_put(states, data_sharding)
+        sigmavmap = eqx.filter_jit(jax.vmap(lambda s, p, field, rho, vprime: self.sigma(index, s, p, t, field, rho, vprime, self.params), in_axes=(vmap_axes_wfield)), donate="all")
 
-        return sigmavmap(states, x, field, rho, vprime)
+        return sigmavmap(states_s, x_s, field, rho, vprime)
     
     @partial(jax.jit, static_argnums=(0,1))
     def Sources_v( self, index, states, positions, t ):
@@ -126,10 +128,12 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return out
     
     def dSigma(self, index, states, positions, t):
-        x_s = jnp.array(positions)#jax.device_put(jnp.array(positions),sharding)
-        field, rho, vprime = self.yancc_wrapper.compute_fields(x_s)
-        g_vmap = jax.vmap(lambda s, p, field, rho, vprime: jax.grad(self.sigma, argnums=1)(index, s, p, t, field,rho,vprime, self.params), in_axes=(vmap_axes_wfield))
-        out = g_vmap(states, x_s, field, rho, vprime)
+        x = jnp.array(positions)#jax.device_put(jnp.array(positions),sharding)
+        (field, rho, vprime) = eqx.filter_shard(self.yancc_wrapper.compute_fields(x), data_sharding)
+        x_s = jax.device_put(x,data_sharding)
+        states_s = jax.device_put(states, data_sharding)
+        g_vmap = eqx.filter_jit(jax.vmap(lambda s, p, field, rho, vprime: jax.grad(self.sigma, argnums=1)(index, s, p, t, field,rho,vprime, self.params), in_axes=(vmap_axes_wfield)), donate="all")
+        out = g_vmap(states_s, x_s, field, rho, vprime)
         out["Scalars"] = []
         return out
 
