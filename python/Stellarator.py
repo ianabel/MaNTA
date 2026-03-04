@@ -116,7 +116,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         (field, rho, vprime) = eqx.filter_shard(self.yancc_wrapper.compute_fields(x), data_sharding)
         x_s = jax.device_put(x,data_sharding)
         states_s = jax.device_put(states, data_sharding)
-        sigmavmap = eqx.filter_jit(jax.vmap(lambda s, p, field, rho, vprime: self.sigma(index, s, p, t, field, rho, vprime, self.params), in_axes=(vmap_axes_wfield)), donate="all")
+        sigmavmap = jax.vmap(lambda s, p, field, rho, vprime: self.sigma(index, s, p, t, field, rho, vprime, self.params), in_axes=(vmap_axes_wfield))
 
         return sigmavmap(states_s, x_s, field, rho, vprime)
     
@@ -132,7 +132,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         (field, rho, vprime) = eqx.filter_shard(self.yancc_wrapper.compute_fields(x), data_sharding)
         x_s = jax.device_put(x,data_sharding)
         states_s = jax.device_put(states, data_sharding)
-        g_vmap = eqx.filter_jit(jax.vmap(lambda s, p, field, rho, vprime: jax.grad(self.sigma, argnums=1)(index, s, p, t, field,rho,vprime, self.params), in_axes=(vmap_axes_wfield)), donate="all")
+        g_vmap = jax.vmap(lambda s, p, field, rho, vprime: jax.grad(self.sigma, argnums=1)(index, s, p, t, field,rho,vprime, self.params), in_axes=(vmap_axes_wfield))
         out = g_vmap(states_s, x_s, field, rho, vprime)
         out["Scalars"] = []
         return out
