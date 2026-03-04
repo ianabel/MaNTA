@@ -163,6 +163,9 @@ private:
 		return x < L ? xl : xr;
 	}
 
+	template <typename T>
+	T DiffuseHighGradient(T u, T q, double A, double D, T V) const;
+	
 	Value TotalCurrent(DGSoln const &y, Time t);
 
 	template <typename T1, typename T2>
