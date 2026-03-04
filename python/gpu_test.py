@@ -3,7 +3,7 @@ import MaNTA
 import jax 
 import jax.numpy as jnp
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
-from jax.experimental.shard_map import shard_map
+from jax import shard_map
 
 # %%
 import os

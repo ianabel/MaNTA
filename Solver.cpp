@@ -325,13 +325,9 @@ void SystemSolver::runSolver(double tFinal)
 	std::cout << "Total Number of Residual Evaluations  :" << nresevals << std::endl;
 	std::cout << "Total Number of Jacobian Computations :" << njacevals << std::endl;
 
-	if (solveAdjoint)
+	if(solveAdjoint)
 	{
-		std::cout << "Computing adjoints" << std::endl;
-		initializeMatricesForAdjointSolve();
-		solveAdjointState(0);
-		computeAdjointGradients();
-		WriteAdjoints();
+		runAdjointSolve();
 	}
 
 	problem->finaliseDiagnostics(nc_output);
@@ -342,7 +338,7 @@ void SystemSolver::runSolver(double tFinal)
 		res_out.close();
 	}
 	nc_output.Close();
-	
+
 	WriteRestartFile(baseName + ".restart.nc", Y, dYdt, nOut);
 
 	// No SunLinSol wrapper classes exist beyond this point, so we are safe in using raw pointers to construct them.
@@ -369,6 +365,21 @@ void SystemSolver::runSolver(double tFinal)
 	nc_output.Close();
 }
 
+void SystemSolver::runAdjointSolve()
+{
+	if (solveAdjoint)
+	{
+		std::cout << "Computing adjoints" << std::endl;
+		initializeMatricesForAdjointSolve();
+		solveAdjointState(0);
+		computeAdjointGradients();
+		WriteAdjoints();
+	}
+	else 
+	{
+		std::cerr << "Error: runAdjointSolve called but \"solveAdjoint\" was set to false.";
+	}
+}
 /*
  * SUNDIALS Calls this function to recompute the local Jacobian
  * This is the function that should set the point at which the sub-matrices for the Jacobian solve are evaluated

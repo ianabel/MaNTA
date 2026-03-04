@@ -12,6 +12,7 @@
 #include <variant>
 
 #include "SystemSolver.hpp"
+
 #include "PhysicsCases.hpp"
 
 namespace py = pybind11;
@@ -34,19 +35,46 @@ public:
         Takes constructed transport system as input
     */
     PyRunner(std::shared_ptr<TransportSystem> problem) : pProblem(problem) {};
+    ~PyRunner();
 
+    // Configure solver from Python 
     void configure(const py::dict &);
-    int run(void);
+
+    // Runs solver to time tin
+    int run(double tin = 0);
+
+    // Run adjoint solver and return the 
+    py::tuple runAdjointSolve(void);
 
 private:
     // Shared ownership of TransportSystem so user can update in Python without recreating object
     const std::shared_ptr<TransportSystem> pProblem;
 
     // Ownership of objects handled by C++
-    std::unique_ptr<AdjointProblem> adjoint;
+    std::shared_ptr<AdjointProblem> adjoint;
     std::unique_ptr<SystemSolver> system;
     std::unique_ptr<Grid> grid;
+
+    // Runner function that runs solver to tf
+    std::function<void(double)> runner;
+
+private:
     double tFinal;
+
+    // This class controls the lifetime of the solver objects
+
+    SUNLinearSolver LS = NULL; // linear solver memory structure
+    SUNMatrix sunMat = NULL;   //
+    void *IDA_mem = NULL;      // IDA memory structure
+    int retval;
+
+    N_Vector Y = NULL;           // vector for storing solution
+    N_Vector dYdt = NULL;        // vector for storing time derivative of solution
+    N_Vector constraints = NULL; // vector for storing constraints
+    N_Vector id = NULL;          // vector for storing id (which elements are algebraic or differentiable)
+    N_Vector res = NULL;         // vector for storing residual
+    N_Vector absTolVec = NULL;   // vector for storing absolute tolerances
+    sunrealtype tout, tret;
 };
 
 #endif

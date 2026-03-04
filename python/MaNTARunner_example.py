@@ -1,7 +1,7 @@
 from typing import NamedTuple
 
 import MaNTA
-from JAXTransportSystem import JAXTransportSystem
+from VectorizedTransportSystem import VectorizedTransportSystem
 from JAXAdjointProblem import JAXAdjointProblem
 import jax.numpy as jnp
 
@@ -23,7 +23,7 @@ config = {
     "solveAdjoint": True, 
 }
     
-class JAXLinearDiffusion(JAXTransportSystem):
+class JAXLinearDiffusion(VectorizedTransportSystem):
     def __init__(self):
         super().__init__()
 
@@ -65,5 +65,6 @@ def runMaNTA():
     runner = MaNTA.Runner(transportSystem)
     runner.configure(config)
     runner.run()
+    G, G_p = runner.runAdjointSolve()
 
 runMaNTA()

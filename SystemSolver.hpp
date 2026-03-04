@@ -120,6 +120,18 @@ class SystemSolver
 
         // Initialise
         void runSolver(double);
+        std::function<void(double)> makeSolver(SUNLinearSolver &LS,   // linear solver memory structure
+                                               SUNMatrix& sunMat,     
+                                               void *IDA_mem,         // IDA memory structure
+                                               int &retval,
+                                               N_Vector &Y,           // vector for storing solution
+                                               N_Vector &dYdt,        // vector for storing time derivative of solution
+                                               N_Vector &constraints, // vector for storing constraints
+                                               N_Vector &id,          // vector for storing id (which elements are algebraic or differentiable)
+                                               N_Vector &res,         // vector for storing residual
+                                               N_Vector &absTolVec,   // vector for storing absolute tolerances
+                                               sunrealtype &tout, sunrealtype &tret, bool writeOutput = true); // return a callable solver object
+        void runAdjointSolve();
 
         void setJacTime(double tt) { jt = tt; };
         void setTime(double tt) { t = tt; };
@@ -140,6 +152,8 @@ class SystemSolver
         void computeAdjointGradients();
 
         void PrintDebugInfo();
+
+        friend class PyRunner; // We need to be able to access private variables for the Python runner class
 
     private:
         Grid grid;

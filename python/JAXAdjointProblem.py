@@ -25,6 +25,9 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
         self.UpperBoundarySensitivities = {}
         self.LowerBoundarySensitivities = {}
 
+    def setParams(self, params):
+        self.params = params
+
     def gFn(self, i, state, x):
         return self.g(state, x, self.params)
 
