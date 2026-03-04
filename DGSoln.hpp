@@ -273,9 +273,6 @@ public:
 
     void AssignSigma(std::function<Value(Index, const State &, Position, Time)> sigmaFn)
     {
-        auto const &x_vals = DGApprox::Integrator().abscissa();
-        auto const &x_wgts = DGApprox::Integrator().weights();
-        const size_t n_abscissa = x_vals.size();
 
         Index nCells = grid.getNCells();
         for (Index var = 0; var < nVars; ++var)

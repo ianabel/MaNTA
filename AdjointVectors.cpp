@@ -7,9 +7,19 @@
 #include "Types.hpp"
 #include "SystemSolver.hpp"
 
-void SystemSolver::DerivativeSubVector(Index pIndex, Vector &Vec, void (AdjointProblem::*dX_dZ)(Index, VectorRef, const State &, Position), DGSoln const &Y, Index intervalIndex )
+void SystemSolver::DerivativeSubVector(Index gIndex, Vector &Vec, MatrixRef const dX_dZ, DGSoln const &Y, Index intervalIndex)
 {
-    Interval const &I( grid[ intervalIndex ] );
+    Interval const &I(grid[intervalIndex]);
+    for (Index XVar = 0; XVar < nVars; XVar++)
+    {
+        auto const &dX_dZ_vec = dX_dZ(XVar, Eigen::all);
+        Vec.block(XVar * (k + 1), 0, (k + 1), 1) = Y.getBasis().InterpolateOntoBasis(I, dX_dZ_vec);
+    }
+}
+
+void SystemSolver::DerivativeSubVector(Index gIndex, Vector &Vec, void (AdjointProblem::*dX_dZ)(Index, VectorRef, const State &, Position), DGSoln const &Y, Index intervalIndex)
+{
+    Interval const &I(grid[intervalIndex]);
     auto const &x_vals = y.getBasis().abscissae();
     auto const &x_wgts = y.getBasis().weights();
     const size_t n_abscissa = x_vals.size();
@@ -44,8 +54,8 @@ void SystemSolver::DerivativeSubVector(Index pIndex, Vector &Vec, void (AdjointP
 
             State Y_plus = Y.eval(y_plus), Y_minus = Y.eval(y_minus);
 
-            (adjointProblem->*dX_dZ)(pIndex, dX_dZ_vals1, Y_plus, y_plus);
-            (adjointProblem->*dX_dZ)(pIndex, dX_dZ_vals2, Y_minus, y_minus);
+            (adjointProblem->*dX_dZ)(gIndex, dX_dZ_vals1, Y_plus, y_plus);
+            (adjointProblem->*dX_dZ)(gIndex, dX_dZ_vals2, Y_minus, y_minus);
 
             for (Index j = 0; j < k + 1; ++j)
             {
@@ -58,24 +68,24 @@ void SystemSolver::DerivativeSubVector(Index pIndex, Vector &Vec, void (AdjointP
     }
 }
 
-void SystemSolver::dGdu_Vec(Index i, Vector &Vec, DGSoln const &Y, Index I)
+void SystemSolver::dGdu_Vec(Index gIndex, Vector &Vec, DGSoln const &Y, Index I)
 {
-    DerivativeSubVector(i, Vec, &AdjointProblem::dgFn_du, Y, I);
+    DerivativeSubVector(gIndex, Vec, &AdjointProblem::dgFn_du, Y, I);
 }
 
-void SystemSolver::dGdq_Vec(Index i, Vector &Vec, DGSoln const &Y, Index I)
+void SystemSolver::dGdq_Vec(Index gIndex, Vector &Vec, DGSoln const &Y, Index I)
 {
-    DerivativeSubVector(i, Vec, &AdjointProblem::dgFn_dq, Y, I);
+    DerivativeSubVector(gIndex, Vec, &AdjointProblem::dgFn_dq, Y, I);
 }
 
-void SystemSolver::dGdsigma_Vec(Index i, Vector &Vec, DGSoln const &Y, Index I)
+void SystemSolver::dGdsigma_Vec(Index gIndex, Vector &Vec, DGSoln const &Y, Index I)
 {
-    DerivativeSubVector(i, Vec, &AdjointProblem::dgFn_dsigma, Y, I);
+    DerivativeSubVector(gIndex, Vec, &AdjointProblem::dgFn_dsigma, Y, I);
 }
 
-void SystemSolver::dGdaux_Vec(Index pIndex, Vector &Vec, DGSoln const &Y, Index intervalIndex )
+void SystemSolver::dGdaux_Vec(Index gIndex, Vector &Vec, DGSoln const &Y, Index intervalIndex)
 {
-    Interval const &I( grid[ intervalIndex ] );
+    Interval const &I(grid[intervalIndex]);
     auto const &x_vals = y.getBasis().abscissae();
     auto const &x_wgts = y.getBasis().weights();
     const size_t n_abscissa = x_vals.size();
@@ -110,8 +120,8 @@ void SystemSolver::dGdaux_Vec(Index pIndex, Vector &Vec, DGSoln const &Y, Index 
 
             State Y_plus = Y.eval(y_plus), Y_minus = Y.eval(y_minus);
 
-            (adjointProblem->dgFn_dphi)(pIndex, dX_dZ_vals1, Y_plus, y_plus);
-            (adjointProblem->dgFn_dphi)(pIndex, dX_dZ_vals2, Y_minus, y_minus);
+            (adjointProblem->dgFn_dphi)(gIndex, dX_dZ_vals1, Y_plus, y_plus);
+            (adjointProblem->dgFn_dphi)(gIndex, dX_dZ_vals2, Y_minus, y_minus);
 
             for (Index j = 0; j < k + 1; ++j)
             {

@@ -349,7 +349,7 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
                 I.x_l, I.x_u, max_depth);
         s.Variable = 1 / dPsi * grad * tfac;
         grad.resize(nAux);
-        grad_temp.resize(nAux);
+        grad_temp.resize(nVars);
         for (Index i = 0; i < nAux; ++i)
             grad(i) = integrator::integrate(
                 [&](Position V)
