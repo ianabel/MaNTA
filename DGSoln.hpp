@@ -144,6 +144,20 @@ public:
         return out;
     }
 
+    GlobalState evalOnNodes() const 
+    {
+        GlobalState out(grid.getNCells(), k, nVars, nScalars, nAux);
+
+        for (size_t i = 0; i < grid.getNCells(); i++)
+        {
+            for (Index j = 0; j < k + 1; j++)
+            {
+                out.setWithState(i * (k + 1) + j, evalOnNode(i, j));
+            }
+        }
+        return out;
+    }
+
     State evalOnNode(Index cell, Index node) const
     {
         State out(nVars, nScalars, nAux);

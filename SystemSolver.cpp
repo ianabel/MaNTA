@@ -573,7 +573,7 @@ void SystemSolver::updateMatricesForJacSolve()
     GlobalStateMatrix dSource_vals(nVars);
 
     const auto points = yJac.getPoints();
-    const auto states = yJac.eval(points);
+    const auto states = yJac.evalOnNodes();
      for (Index i = 0; i < nVars; i++)
     {
         dSigma_vals.add(nCells, k, nVars, nScalars, nVars /* This should be nAux, but output is wrt all variables*/);
@@ -932,7 +932,7 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 
     const auto points = Y_h.getPoints();
 
-    const auto states = Y_h.eval(points);
+    const auto states = Y_h.evalOnNodes();
 
     std::vector<Values> Sigma_vals;
     std::vector<Values> Source_vals;
@@ -1032,7 +1032,7 @@ void SystemSolver::initializeMatricesForAdjointSolve()
 {
     GlobalState dGdvars(grid.getNCells(), k, nVars, nScalars, nAux);
     const auto points = y.getPoints();
-    const auto states = y.eval(points);
+    const auto states = y.evalOnNodes();
     adjointProblem->dg(0, dGdvars, states, points);
     Vector dGdu(nVars * (k + 1));
     Vector dGdq(nVars * (k + 1));
@@ -1255,7 +1255,7 @@ void SystemSolver::computeAdjointGradients()
     GlobalStateMatrix dSourcedp(nVars);
 
     const auto points = y.getPoints();
-    const auto states = y.eval(points);
+    const auto states = y.evalOnNodes();
 
     const Index np_internal = adjointProblem->getNpInternal();
     for (Index i = 0; i < nVars; i++)
