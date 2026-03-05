@@ -3,6 +3,7 @@
 #include <sunmatrix/sunmatrix_band.h> /* access to band SUNMatrix             */
 #include <sunlinsol/sunlinsol_band.h> /* access to band SUNLinearSolver       */
 #include <sundials/sundials_types.h>  /* definition of type sunrealtype          */
+#include <pybind11/eigen.h>
 
 #include "SunLinSolWrapper.hpp"
 #include "SunMatrixWrapper.hpp"
@@ -33,8 +34,6 @@ static const map_t params = {{"restart", Parameter<bool>{.required = false, ._de
                              {"delta_t", Parameter<double>{.required = true}},
                              //
                              {"tZero", Parameter<double>{.required = false, ._default = 0.0}},
-                             //
-                             {"tFinal", Parameter<double>{.required = true}},
                              //
                              {"Relative_tolerance", Parameter<double>{.required = false, ._default = 1e-3}},
                              //
@@ -191,8 +190,6 @@ void PyRunner::configure(const py::dict &config)
     double dt_min = getValueWithDefault<double>("MinStepSize", config);
     int nOutput = getValueWithDefault<int>("OutputPoints", config);
 
-    tFinal = getValueWithDefault<double>("tFinal", config);
-
     system->setOutputCadence(dt);
     system->setTolerances(atol, rtol);
     system->setTau(tau);
@@ -206,12 +203,18 @@ void PyRunner::configure(const py::dict &config)
     bool writeOutput = getValueWithDefault<bool>("WriteOutput", config);
     // Creation of solver function
     runner = system->makeSolver(LS, sunMat, IDA_mem, retval, Y, dYdt, constraints, id, res, absTolVec, tout, tret, writeOutput);
+
+    configured = true;
 }
 
-int PyRunner::run(double tin)
+int PyRunner::run(double tFinal)
 {
-    double tf = tin == 0 ? tFinal : tin;
-    runner(tf);
+    if (!configured)
+    {
+        std::cerr << "Error: Runner must be configured before running solver." << std::endl;
+        return 1;
+    }
+    runner(tFinal);
 
     std::cout << "Done." << std::endl;
     return 0;
@@ -219,8 +222,16 @@ int PyRunner::run(double tin)
 
 py::tuple PyRunner::runAdjointSolve(void)
 {
+    system->runAdjointSolve();
     using namespace pybind11::literals;
-    py::dict gp("G_p"_a = system->G_p(Eigen::seq(0, adjoint->getNpInternal() - 1)), "G_p_boundary"_a = system->G_p(Eigen::seq(adjoint->getNpInternal(), adjoint->getNp())));
+    auto np_internal = adjoint->getNpInternal();
+    Vector G_p = system->G_p(Eigen::seq(0, np_internal - 1));
+    py::dict gp("G_p"_a = G_p);
+    if (adjoint->getNpBoundary() > 0)
+    {
+        Vector G_p_boundary = system->G_p(Eigen::seq(np_internal, adjoint->getNp() - 1));
+        gp["G_p_boundary"] = G_p_boundary;
+    }
 
     double G = adjoint->GFn(0, system->y);
 
@@ -311,6 +322,7 @@ std::function<void(double)> SystemSolver::makeSolver(SUNLinearSolver &LS, // lin
     if (ErrorChecker::check_retval(&retval, "IDASetId", 1))
         std::runtime_error("Sundials initialization Error, run in debug to find");
 
+    wgt = N_VClone(res);
     // Initialise IDA
     retval = IDAInit(IDA_mem, static_residual, t0, Y, dYdt);
     if (ErrorChecker::check_retval(&retval, "IDAInit", 1))
@@ -410,18 +422,18 @@ std::function<void(double)> SystemSolver::makeSolver(SUNLinearSolver &LS, // lin
     tout = t0;
     tret = t0;
 
-    std::string baseName = inputFilePath.stem();
-    if (writeOutput)
-    {
-        initialiseNetCDF(baseName + ".nc", nOut);
-    }
-
-    auto fsolve = [&](double tFinal)
+    auto fsolve = [&, IDA_mem, writeOutput](double tFinal)
     {
         if (t0 > tFinal)
         {
             std::cout << "Initial time t = " << t0 << " is after the end of the simulation at t = " << tFinal << std::endl;
             throw std::runtime_error("Simulation ends before it begins.");
+        }
+
+        std::string baseName = inputFilePath.stem();
+        if (writeOutput)
+        {
+            initialiseNetCDF(baseName + ".nc", nOut);
         }
 
         // Solving Loop
@@ -485,13 +497,15 @@ std::function<void(double)> SystemSolver::makeSolver(SUNLinearSolver &LS, // lin
         problem->finaliseDiagnostics(nc_output);
 
         WriteRestartFile(baseName + ".restart.nc", Y, dYdt, nOut);
+        if (writeOutput)
+            nc_output.Close();
     };
     return fsolve;
 }
 
 PyRunner::~PyRunner()
 {
-    system->nc_output.Close();
+
     // No SunLinSol wrapper classes exist beyond this point, so we are safe in using raw pointers to construct them.
     SUNLinSolFree(LS);
 

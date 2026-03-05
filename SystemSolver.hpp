@@ -170,8 +170,8 @@ class SystemSolver
 
         std::vector<Matrix> XMats;
         std::vector<Matrix> MBlocks;
+
         std::vector<Matrix> CEBlocks;
-        std::vector<Matrix> CGBlocks;
         Matrix K_global;
         Vector L_global;
         Matrix H_global_mat;
@@ -181,6 +181,8 @@ class SystemSolver
         std::vector<Matrix> A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise, Csigma_cellwise, Cq_cellwise;
 
         // Adjoint vectors
+        std::vector<Matrix> adjoint_CEBlocks;
+        std::vector<Matrix> adjoint_CGBlocks;
         std::vector<Vector> G_y;
         Vector adjoint_lambdas;
         std::vector<Vector> adjoint_squ;
