@@ -262,7 +262,7 @@ Real MirrorPlasma::Flux(Index i, RealVector u, RealVector q, Real x, Time t)
 		return ConstantChannelMap[Channel::ElectronEnergy] ? 0.0 : qe(u, q, x, t);
 		break;
 	case Channel::AngularMomentum:
-		return ConstantChannelMap[Channel::AngularMomentum] ? 0.0 : static_cast<Real>(Pi(u, q, x, t) + DiffuseHighGradient(u(Channel::AngularMomentum), q(Channel::AngularMomentum), lowLThreshold, lowLDiffusivity, x));
+		return ConstantChannelMap[Channel::AngularMomentum] ? 0.0 : static_cast<Real>(Pi(u, q, x, t));
 		break;
 	default:
 		throw std::runtime_error("Request for flux for undefined variable!");
@@ -533,6 +533,14 @@ Real MirrorPlasma::Pi(RealVector u, RealVector q, Real V, Time t) const
 	// if (x > 0)
 	// 	Pi_v += SmoothTransition(x, transitionLength, lowLDiffusivity) * GeometricFactor * GeometricFactor * Chi_L * (R * R * dOmegadV); /// (R * R * omega);
 
+	Real p_e = (2. / 3.) * u(Channel::ElectronEnergy);
+	Real Te = p_e / n;
+	Real p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy);
+	Real Te_prime = (p_e_prime - nPrime * Te) / n;
+	Real M = R * omega / sqrt(Te);
+	Real dMdV = omega * dRdV + R * dOmegadV - R * omega / Te * Te_prime;
+	Pi_v += DiffuseHighGradient(M, dMdV, lowLThreshold, lowLDiffusivity, V);
+	// Pi_v += DiffuseHighGradient(omega, dOmegadV, lowLThreshold, lowLDiffusivity, V);
 	return Pi_v;
 };
 
