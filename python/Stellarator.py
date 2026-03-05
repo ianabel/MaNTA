@@ -3,6 +3,7 @@ import jax
 import jax.numpy as jnp
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import shard_map
+from jax.tree_util import tree_map
 
 jax.config.update("jax_compilation_cache_dir", "__pycache__")
 import equinox as eqx
@@ -47,33 +48,6 @@ class StellaratorParams(NamedTuple):
 vmap_axes = ({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0)
 vmap_axes_wfield = ({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None},0, 0, 0, 0)
 state_shard_specs = {"Variable": P('ax',), "Derivative":  P('ax',), "Flux":  P('ax',), "Aux":  P('ax',), "Scalars": P(None)}
-# field_shard_specs = Field(rho = P('ax',),
-#                     theta = P('ax',None),
-#                     zeta = P('ax',None),
-#                     wtheta = P('ax',None),
-#                     wzeta = P('ax',None),
-#                     B_sup_t = P('ax',None,None),
-#                     B_sup_z = P('ax',None,None),
-#                     B_sub_t = P('ax',None,None),
-#                     B_sub_z = P('ax',None,None),
-#                     sqrtg = P('ax',None,None),
-#                     Bmag = P('ax',None,None),
-#                     bdotgradB = P('ax',None,None),
-#                     BxgradrhodotgradB = P('ax',None,None),
-#                     dBdt = P('ax',None,None),
-#                     dBdz = P('ax',None,None),
-#                     Bmag_fsa = P('ax',),
-#                     B2mag_fsa = P('ax',),
-#                     psi_r = P('ax',),
-#                     psi_rho = P('ax',),
-#                     Psi = P('ax',),
-#                     R_major = P('ax',),
-#                     a_minor = P('ax',),
-#                     iota = P('ax',),
-#                     B0 = P('ax',),
-#                     ntheta = P('ax',),
-#                     nzeta = P('ax',),
-#                     NFP = P'))
 shard_map_specs = (state_shard_specs, P('ax',))
 shard_map_specs_wfield = (state_shard_specs, P(None),P(None),P(None),P(None))
 
@@ -97,6 +71,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
         self.yancc_wrapper = yancc_wrapper(self.Density, 1e20, 1e3)
         self.dSigmaFn_dVars = jax.grad(self.SigmaFn, argnums=1)
 
+        self.fmap = []
+
     def LowerBoundary(self, index, t):
         return 0.0
 
@@ -105,20 +81,24 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     def SigmaFn( self, index, state, x, t ):
         field, rho, vprime = self.yancc_wrapper.compute_field(x)
-        return self.sigma(index, state, x, t, field,rho, vprime, self.params)
+        flux, f = self.sigma(index, state, x, t, field,rho, vprime, self.params)
+        self.fmap.append(f)
+        return flux
     
     def Sources(self, index, state, x, t):
         return self.source(index, state, x, t, self.params)
     
     def SigmaFn_v( self, index, states, positions, t):
         x = jnp.array(positions)
-        
+        if (isinstance(self.flux, list)):
+            self.fmap = tree_map(lambda *vals: jnp.stack(vals), *self.fmap)
         (field, rho, vprime) = eqx.filter_shard(self.yancc_wrapper.compute_fields(x), data_sharding)
         x_s = jax.device_put(x,data_sharding)
         states_s = jax.device_put(states, data_sharding)
-        sigmavmap = jax.vmap(lambda s, p, field, rho, vprime: self.sigma(index, s, p, t, field, rho, vprime, self.params), in_axes=(vmap_axes_wfield))
-
-        return sigmavmap(states_s, x_s, field, rho, vprime)
+        fmap_s = eqx.filter_shard(self.fmap, data_sharding)
+        sigmavmap = jax.vmap(lambda s, p, field, rho, vprime, f1: self.sigma(index, s, p, t, field, rho, vprime, self.params, f1), in_axes=(vmap_axes_wfield))
+        out, self.fmap = sigmavmap(states_s, x_s, field, rho, vprime, fmap_s)
+        return out
     
     @partial(jax.jit, static_argnums=(0,1))
     def Sources_v( self, index, states, positions, t ):
@@ -132,8 +112,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
         (field, rho, vprime) = eqx.filter_shard(self.yancc_wrapper.compute_fields(x), data_sharding)
         x_s = jax.device_put(x,data_sharding)
         states_s = jax.device_put(states, data_sharding)
-        g_vmap = jax.vmap(lambda s, p, field, rho, vprime: jax.grad(self.sigma, argnums=1)(index, s, p, t, field,rho,vprime, self.params), in_axes=(vmap_axes_wfield))
-        out = g_vmap(states_s, x_s, field, rho, vprime)
+        fmap_s = eqx.filter_shard(self.fmap, data_sharding)
+        g_vmap = jax.vmap(lambda s, p, field, rho, vprime, f1: jax.grad(self.sigma, argnums=1)(index, s, p, t, field,rho,vprime, self.params, f1), in_axes=(vmap_axes_wfield))
+        out = g_vmap(states_s, x_s, field, rho, vprime, fmap_s)
         out["Scalars"] = []
         return out
 
@@ -168,8 +149,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
         Computed sigma or source term
     """
 
-    def sigma( self, index, state, x, t, field, rho, vprime, params: NamedTuple ):
-        return -self.yancc_wrapper.flux(state, x, field, rho, vprime) 
+    def sigma( self, index, state, x, t, field, rho, vprime, params: NamedTuple, f1 = None ):
+        flux, f = self.yancc_wrapper.flux(state, x, field, rho, vprime, f1) 
+        return -flux, f
 
     def source( self, index, state, x, t, params: NamedTuple ):
         return params.SourceHeight * jnp.exp(-(x - params.SourceCenter)**2 / (2 * params.SourceWidth**2))

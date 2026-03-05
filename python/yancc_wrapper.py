@@ -109,7 +109,7 @@ class yancc_wrapper():
 
     
 
-    def flux(self, state, x, field, rho, Vprim):
+    def flux(self, state, x, field, rho, Vprim, f1 = None):
         
         # For now we only evolve the ion energy
         p_i = 2. / 3. * state["Variable"][0]
@@ -129,10 +129,10 @@ class yancc_wrapper():
             dndrho=dndrho * self.nNorm),
         ]
 
-        _, _, fluxes, stats  = solve_dke(field, self.pitchgrid, self.speedgrid, species, Erho, verbose = False)
+        f, _, fluxes, stats  = solve_dke(field, self.pitchgrid, self.speedgrid, species, Erho, verbose = False, f1 = f1)
         #assert stats['res'] < 1e-5
         fout = fluxes['<heat_flux>'][0] * Vprim / (self.FluxNorm)
-        return fout
+        return fout, f
 
 
 
