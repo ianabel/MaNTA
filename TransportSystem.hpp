@@ -14,7 +14,7 @@
 
  */
 
-class TransportSystem
+class TransportSystem : public std::enable_shared_from_this<TransportSystem>
 {
 
 protected:

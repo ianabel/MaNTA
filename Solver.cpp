@@ -328,6 +328,7 @@ void SystemSolver::runSolver(double tFinal)
 	if(solveAdjoint)
 	{
 		runAdjointSolve();
+		WriteAdjoints();
 	}
 
 	problem->finaliseDiagnostics(nc_output);
@@ -373,7 +374,6 @@ void SystemSolver::runAdjointSolve()
 		initializeMatricesForAdjointSolve();
 		solveAdjointState(0);
 		computeAdjointGradients();
-		WriteAdjoints();
 	}
 	else 
 	{

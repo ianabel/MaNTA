@@ -8,6 +8,7 @@
 #include <pybind11/stl.h>
 #include <pybind11/functional.h>
 #include <pybind11/numpy.h>
+
 #include <string>
 #include <variant>
 
@@ -37,30 +38,30 @@ public:
     PyRunner(std::shared_ptr<TransportSystem> problem) : pProblem(problem) {};
     ~PyRunner();
 
-    // Configure solver from Python 
+    // Configure solver from Python
     void configure(const py::dict &);
 
     // Runs solver to time tin
-    int run(double tin = 0);
+    int run(double tFinal);
 
-    // Run adjoint solver and return the 
+    // Run adjoint solver and return the
     py::tuple runAdjointSolve(void);
 
 private:
     // Shared ownership of TransportSystem so user can update in Python without recreating object
-    const std::shared_ptr<TransportSystem> pProblem;
+    std::shared_ptr<TransportSystem> pProblem;
 
     // Ownership of objects handled by C++
-    std::shared_ptr<AdjointProblem> adjoint;
+    std::unique_ptr<AdjointProblem> adjoint;
     std::unique_ptr<SystemSolver> system;
     std::unique_ptr<Grid> grid;
 
     // Runner function that runs solver to tf
     std::function<void(double)> runner;
 
-private:
-    double tFinal;
+    bool configured = false; 
 
+private:
     // This class controls the lifetime of the solver objects
 
     SUNLinearSolver LS = NULL; // linear solver memory structure

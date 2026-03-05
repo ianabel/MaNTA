@@ -567,7 +567,6 @@ void SystemSolver::resetCoeffs()
 
 void SystemSolver::updateMatricesForJacSolve()
 {
-    std::cerr << "Updating Jacobian at time " << jt << std::endl;
     updateBoundaryConditions(jt);
     // We know where the jacobian is to be evaluated -- yJac
 
@@ -922,8 +921,7 @@ int static_residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval
 
 int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval)
 {
-    std::cerr << "Evaluating residual" << std::endl;
-    std::cerr << "  current residual norm: " << N_VWrmsNorm(resval, wgt) << std::endl;
+
     updateBoundaryConditions(tres);
 
     DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux);
@@ -1139,7 +1137,6 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         }
 
         // Note we save the transpose for adjoints
-        MBlocks[i] = M.transpose();
 
         Eigen::MatrixXd CE_vec(localDOF, 2 * nVars);
         CE_vec.setZero();
@@ -1149,7 +1146,7 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         CE_vec.block(nVars * (k + 1), 0, nVars * (k + 1), nVars * 2) = C.transpose();
         CE_vec.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * 2) = E;
         CE_vec.block(3 * nVars * (k + 1), 0, nAux * (k + 1), nVars * 2).setZero();
-        CEBlocks[i] = CE_vec.transpose();
+        adjoint_CEBlocks.emplace_back(CE_vec.transpose());
 
         // //[ C 0 G 0 ] (4th index is aux vars)
         auto G = G_cellwise[i];
@@ -1160,9 +1157,9 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         CG_vec.block(0, nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = Cq_cellwise[i];
         CG_vec.block(0, 2 * nVars * (k + 1), 2 * nVars, nVars * (k + 1)) = G;
 
-        CGBlocks.emplace_back(CG_vec.transpose());
+        adjoint_CGBlocks.emplace_back(CG_vec.transpose());
 
-        MXSolvers[i].compute(MBlocks[i]);
+        MXSolvers[i].compute(M.transpose());
     }
 
     // no computation of scalars
@@ -1187,13 +1184,13 @@ void SystemSolver::solveAdjointState(Index gIndex)
         SQU_f[i] = MXSolvers[i].solve(g1g2g3);
 
         // SQU_0
-        Eigen::MatrixXd const &CG = CGBlocks[i];
+        Eigen::MatrixXd const &CG = adjoint_CGBlocks[i];
         SQU_0[i] = MXSolvers[i].solve(CG);
         // std::cerr << SQU_0[i] << std::endl << std::endl;
         // std::cerr << CE << std::endl << std::endl;
 
         Eigen::MatrixXd K_cell(nVars * 2, nVars * 2);
-        K_cell = H_cellwise[i].transpose() - CEBlocks[i] * SQU_0[i];
+        K_cell = H_cellwise[i].transpose() - adjoint_CEBlocks[i] * SQU_0[i];
 
         // K
         for (Index varI = 0; varI < nVars; varI++)
@@ -1208,7 +1205,7 @@ void SystemSolver::solveAdjointState(Index gIndex)
     {
         for (Index var = 0; var < nVars; var++)
         {
-            F.block<2, 1>(var * (nCells + 1) + i, 0) -= (CEBlocks[i] * SQU_f[i]).block(var * 2, 0, 2, 1);
+            F.block<2, 1>(var * (nCells + 1) + i, 0) -= (adjoint_CEBlocks[i] * SQU_f[i]).block(var * 2, 0, 2, 1);
         }
     }
 

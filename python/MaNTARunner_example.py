@@ -14,7 +14,7 @@ class LinearDiffusionParams(NamedTuple):
 config = {
     "OutputFilename": "out",
     "Polynomial_degree": 5,
-    "Grid_size": 5,
+    "Grid_size": 10,
     "Lower_boundary": -1.0,
     "Upper_boundary":  1.0,
     "Relative_tolerance" : 0.01,
@@ -31,12 +31,14 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
 
         self.isUpperDirichlet  = True
         self.isLowerDirichlet  = True
-
-        self.params = LinearDiffusionParams(0.0, 0.1, 1.0, 2.0)
+        self.params = LinearDiffusionParams(0.1, 0.1, 2.0, 2.0)
 
     def g(self, state, x, params):
         u = state["Variable"][0]
         return 0.5 * u * u
+    
+    def setParams(self, params):
+        self.params = params
 
     def sigma( self, index, state, x, t, params ):
         tprime = state["Derivative"]
@@ -62,9 +64,19 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
 
 def runMaNTA():
     transportSystem = JAXLinearDiffusion()
+    transportSystem.setParams(LinearDiffusionParams(0.0, 0.1, 2.0, 4.0))
+
     runner = MaNTA.Runner(transportSystem)
     runner.configure(config)
-    runner.run()
+    runner.run(0.01)
     G, G_p = runner.runAdjointSolve()
+    print(G_p)
+    runner.run(1.0)
+    G, G_p = runner.runAdjointSolve()
+  
+    #print(transportSystem.params)
+    
+    
+    print(G_p)
 
 runMaNTA()

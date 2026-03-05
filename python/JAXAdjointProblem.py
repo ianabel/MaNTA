@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import MaNTA
 from functools import partial
 
-vmap_axes = (None, {"Variable": 1, "Derivative": 1, "Flux": 1, "Aux": 1, "Scalars": None}, 0, None,  None)
+vmap_axes = (None, {"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0, None,  None)
 
 class JAXAdjointProblem(MaNTA.AdjointProblem):
     def __init__(self, transport_system: MaNTA.TransportSystem, g):
@@ -42,7 +42,7 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
     def dg(self, i, states, positions):
         x = jnp.array(positions)
 
-        out = jax.vmap(jax.grad(self.g, argnums=0), in_axes=({"Variable": 1, "Derivative": 1, "Flux": 1, "Aux": 1, "Scalars": None}, 0, None))(states, x, self.params)  
+        out = jax.vmap(jax.grad(self.g, argnums=0), in_axes=({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0, None))(states, x, self.params)  
         out["Scalars"] = []
         return out
 
