@@ -12,6 +12,7 @@ from scipy.constants import elementary_charge, proton_mass
 import jax
 import jax.numpy as jnp
 from jax.tree_util import tree_map
+import equinox as eqx
 
 from functools import partial
 
@@ -108,7 +109,6 @@ class yancc_wrapper():
         return self.fields, self.rho, self.Vprim
 
     
-
     def flux(self, state, x, field, rho, Vprim, f1 = None):
         
         # For now we only evolve the ion energy
@@ -129,10 +129,10 @@ class yancc_wrapper():
             dndrho=dndrho * self.nNorm),
         ]
 
-        f, _, fluxes, stats  = solve_dke(field, self.pitchgrid, self.speedgrid, species, Erho, verbose = False, f1 = f1)
+        _, _, fluxes, _  = solve_dke(field, self.pitchgrid, self.speedgrid, species, Erho, verbose = False)
         #assert stats['res'] < 1e-5
         fout = fluxes['<heat_flux>'][0] * Vprim / (self.FluxNorm)
-        return fout, f
+        return fout
 
 
 

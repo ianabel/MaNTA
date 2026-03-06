@@ -26,22 +26,25 @@ config = {
     "Lower_boundary": 0.0,
     "Upper_boundary": 0.9,
     "Relative_tolerance": 0.01,
-    "tFinal": 1.0,
-    "delta_t": 0.5,
+    "delta_t": 0.1,
     "restart": False,
 }
 
 runner.configure(config)
 
 # %%
+
+tFinal = 1.0
 import time
+import datetime
+
 start = time.time()
-runner.run()
+runner.run(tFinal)
 
 end = time.time()
-
+time_duration = datetime.timedelta(seconds=end-start)
 print("Elapsed time:")
-print(end - start)
+print(time_duration)
 
 # %%
 

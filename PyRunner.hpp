@@ -26,7 +26,13 @@ struct Parameter
     T _default = T();
 };
 
-using ParameterType = std::variant<Parameter<double>, Parameter<std::string>, Parameter<int>, Parameter<unsigned int>, Parameter<bool>, Parameter<std::vector<double>>>;
+using ParameterType = std::variant<Parameter<double>,
+                                   Parameter<std::string>,
+                                   Parameter<int>,
+                                   Parameter<unsigned int>,
+                                   Parameter<bool>,
+                                   Parameter<std::vector<double>>>;
+
 using map_t = std::map<std::string, ParameterType>;
 class PyRunner
 {
@@ -41,8 +47,8 @@ public:
     // Configure solver from Python
     void configure(const py::dict &);
 
-    // Runs solver to time tin
-    int run(double tFinal);
+    // Runs solver to time tFInal
+    GlobalState run(double tFinal);
 
     // Run adjoint solver and return the
     py::tuple runAdjointSolve(void);
@@ -59,7 +65,7 @@ private:
     // Runner function that runs solver to tf
     std::function<void(double)> runner;
 
-    bool configured = false; 
+    bool configured = false;
 
 private:
     // This class controls the lifetime of the solver objects

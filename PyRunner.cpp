@@ -207,17 +207,16 @@ void PyRunner::configure(const py::dict &config)
     configured = true;
 }
 
-int PyRunner::run(double tFinal)
+GlobalState PyRunner::run(double tFinal)
 {
     if (!configured)
     {
-        std::cerr << "Error: Runner must be configured before running solver." << std::endl;
-        return 1;
+        throw std::runtime_error("Error: Runner must be configured before running solver.");
     }
     runner(tFinal);
 
     std::cout << "Done." << std::endl;
-    return 0;
+    return system->y.evalOnNodes();
 }
 
 py::tuple PyRunner::runAdjointSolve(void)

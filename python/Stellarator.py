@@ -1,11 +1,17 @@
 import MaNTA
 import jax
+import os
+
+if os.environ["JAX_COMPILATION_CACHE_DIR"] is not None:
+    print("Using cache directory: " + os.environ["JAX_COMPILATION_CACHE_DIR"])
+    jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+    jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+    jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
+
 import jax.numpy as jnp
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import shard_map
 from jax.tree_util import tree_map
-
-jax.config.update("jax_compilation_cache_dir", "__pycache__")
 import equinox as eqx
 
 
@@ -20,8 +26,6 @@ mesh = Mesh(devices, ('ax',),axis_types=(jax.sharding.AxisType.Auto,))
 from functools import partial
 
 from yancc_wrapper import yancc_wrapper 
-
-from yancc.field import Field
 
 from typing import NamedTuple
 
@@ -69,7 +73,6 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         self.params = StellaratorParams.from_config(config)
         self.yancc_wrapper = yancc_wrapper(self.Density, 1e20, 1e3)
-        self.dSigmaFn_dVars = jax.grad(self.SigmaFn, argnums=1)
 
         self.fmap = []
 
@@ -81,8 +84,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     def SigmaFn( self, index, state, x, t ):
         field, rho, vprime = self.yancc_wrapper.compute_field(x)
-        flux, f = self.sigma(index, state, x, t, field,rho, vprime, self.params)
-        self.fmap.append(f)
+        flux = self.sigma(index, state, x, t, field, rho, vprime, self.params)
         return flux
     
     def Sources(self, index, state, x, t):
@@ -90,14 +92,11 @@ class StellaratorTransport(MaNTA.TransportSystem):
     
     def SigmaFn_v( self, index, states, positions, t):
         x = jnp.array(positions)
-        if (isinstance(self.flux, list)):
-            self.fmap = tree_map(lambda *vals: jnp.stack(vals), *self.fmap)
         (field, rho, vprime) = eqx.filter_shard(self.yancc_wrapper.compute_fields(x), data_sharding)
         x_s = jax.device_put(x,data_sharding)
         states_s = jax.device_put(states, data_sharding)
-        fmap_s = eqx.filter_shard(self.fmap, data_sharding)
-        sigmavmap = jax.vmap(lambda s, p, field, rho, vprime, f1: self.sigma(index, s, p, t, field, rho, vprime, self.params, f1), in_axes=(vmap_axes_wfield))
-        out, self.fmap = sigmavmap(states_s, x_s, field, rho, vprime, fmap_s)
+        sigmavmap = jax.vmap(lambda s, p, field, rho, vprime: self.sigma(index, s, p, t, field, rho, vprime, self.params), in_axes=(vmap_axes_wfield))
+        out = sigmavmap(states_s, x_s, field, rho, vprime)
         return out
     
     @partial(jax.jit, static_argnums=(0,1))
@@ -112,13 +111,12 @@ class StellaratorTransport(MaNTA.TransportSystem):
         (field, rho, vprime) = eqx.filter_shard(self.yancc_wrapper.compute_fields(x), data_sharding)
         x_s = jax.device_put(x,data_sharding)
         states_s = jax.device_put(states, data_sharding)
-        fmap_s = eqx.filter_shard(self.fmap, data_sharding)
-        g_vmap = jax.vmap(lambda s, p, field, rho, vprime, f1: jax.grad(self.sigma, argnums=1)(index, s, p, t, field,rho,vprime, self.params, f1), in_axes=(vmap_axes_wfield))
-        out = g_vmap(states_s, x_s, field, rho, vprime, fmap_s)
+        fgrad = jax.grad(self.sigma,argnums=1)
+        g_vmap = jax.vmap(lambda s, p, field, rho, vprime: fgrad(index, s, p, t, field,rho,vprime, self.params), in_axes=(vmap_axes_wfield))
+        out = g_vmap(states_s, x_s, field, rho, vprime)
         out["Scalars"] = []
         return out
 
-    # def dSigma_gpu(self, )
     @partial(jax.jit, static_argnums=(0,1))
     def dSources(self, index, states, positions, t):
         x_s = jnp.array(positions)#jax.device_put(jnp.array(positions),sharding)
@@ -148,10 +146,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
     float
         Computed sigma or source term
     """
-
-    def sigma( self, index, state, x, t, field, rho, vprime, params: NamedTuple, f1 = None ):
-        flux, f = self.yancc_wrapper.flux(state, x, field, rho, vprime, f1) 
-        return -flux, f
+    def sigma( self, index, state, x, t, field, rho, vprime, params: NamedTuple ):
+        return -self.yancc_wrapper.flux(state, x, field, rho, vprime) 
 
     def source( self, index, state, x, t, params: NamedTuple ):
         return params.SourceHeight * jnp.exp(-(x - params.SourceCenter)**2 / (2 * params.SourceWidth**2))

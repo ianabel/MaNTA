@@ -569,6 +569,7 @@ void SystemSolver::updateMatricesForJacSolve()
 {
     updateBoundaryConditions(jt);
     // We know where the jacobian is to be evaluated -- yJac
+    std::cerr << "Updating Jacobian at t=" << jt << std::endl;
 
     GlobalStateMatrix dSigma_vals(nVars);
     GlobalStateMatrix dSource_vals(nVars);
@@ -921,7 +922,7 @@ int static_residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval
 
 int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval)
 {
-
+    std::cerr << "Evaluating residual at time t=" << tres << std::endl;
     updateBoundaryConditions(tres);
 
     DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux);

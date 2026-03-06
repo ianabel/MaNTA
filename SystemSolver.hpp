@@ -120,6 +120,8 @@ class SystemSolver
 
         // Initialise
         void runSolver(double);
+
+        // Function for creating solver lambda for use in PyRunner
         std::function<void(double)> makeSolver(SUNLinearSolver &LS,   // linear solver memory structure
                                                SUNMatrix& sunMat,     
                                                void *IDA_mem,         // IDA memory structure
