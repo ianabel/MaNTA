@@ -7,7 +7,7 @@ if os.environ["JAX_COMPILATION_CACHE_DIR"] is not None:
     jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
     jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
-
+#explain cache misses
 import jax.numpy as jnp
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import shard_map
@@ -50,7 +50,7 @@ class StellaratorParams(NamedTuple):
 
 # Magic tuple to make vmap work
 vmap_axes = ({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0)
-vmap_axes_wfield = ({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None},0, 0, 0, 0)
+vmap_axes_wfield = ({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None},0, 0, 0, 0, None)
 state_shard_specs = {"Variable": P('ax',), "Derivative":  P('ax',), "Flux":  P('ax',), "Aux":  P('ax',), "Scalars": P(None)}
 shard_map_specs = (state_shard_specs, P('ax',))
 shard_map_specs_wfield = (state_shard_specs, P(None),P(None),P(None),P(None))
@@ -95,7 +95,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         (field, rho, vprime) = eqx.filter_shard(self.yancc_wrapper.compute_fields(x), data_sharding)
         x_s = jax.device_put(x,data_sharding)
         states_s = jax.device_put(states, data_sharding)
-        sigmavmap = jax.vmap(lambda s, p, field, rho, vprime: self.sigma(index, s, p, t, field, rho, vprime, self.params), in_axes=(vmap_axes_wfield))
+        sigmavmap = jax.vmap(self.sigma(index, s, p, t, field, rho, vprime, self.params), in_axes=(vmap_axes_wfield))
         out = sigmavmap(states_s, x_s, field, rho, vprime)
         return out
     
@@ -112,7 +112,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         x_s = jax.device_put(x,data_sharding)
         states_s = jax.device_put(states, data_sharding)
         fgrad = jax.grad(self.sigma,argnums=1)
-        g_vmap = jax.vmap(lambda s, p, field, rho, vprime: fgrad(index, s, p, t, field,rho,vprime, self.params), in_axes=(vmap_axes_wfield))
+        g_vmap = jax.vmap(fgrad, in_axes=(vmap_axes_wfield))
         out = g_vmap(states_s, x_s, field, rho, vprime)
         out["Scalars"] = []
         return out

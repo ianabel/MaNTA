@@ -68,8 +68,9 @@ def runMaNTA():
 
     runner = MaNTA.Runner(transportSystem)
     runner.configure(config)
-    runner.run(0.01)
+    runner.run(0.5)
     G, G_p = runner.runAdjointSolve()
+
     print(G_p)
     runner.run(1.0)
     G, G_p = runner.runAdjointSolve()
@@ -78,5 +79,7 @@ def runMaNTA():
     
     
     print(G_p)
+
+
 
 runMaNTA()

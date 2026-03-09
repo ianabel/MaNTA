@@ -129,10 +129,10 @@ class yancc_wrapper():
             dndrho=dndrho * self.nNorm),
         ]
 
-        _, _, fluxes, _  = solve_dke(field, self.pitchgrid, self.speedgrid, species, Erho, verbose = False)
+        f, _, fluxes, _  = solve_dke(field, self.pitchgrid, self.speedgrid, species, Erho, verbose = False)
         #assert stats['res'] < 1e-5
         fout = fluxes['<heat_flux>'][0] * Vprim / (self.FluxNorm)
-        return fout
+        return fout, f
 
 
 
