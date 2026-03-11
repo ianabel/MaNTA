@@ -81,14 +81,14 @@ def runMaNTA():
     runner.configure(config)
     runner.run(5.0)
     G, G_p = runner.runAdjointSolve()
-    print(G_p)
-    transportSystem.setParams(LinearDiffusionParams(0.1, 0.1, 2.0, 1.0))
-    #runner.setTransportSystem(transportSystem)
+    # print(G_p)
+    # transportSystem.setParams(LinearDiffusionParams(0.1, 0.1, 2.0, 1.0))
+    # #runner.setTransportSystem(transportSystem)
 
    
-    u = runner.run(10.0)
-    G, G_p = runner.runAdjointSolve()
-    print(u)
+    # u = runner.run(10.0)
+    # G, G_p = runner.runAdjointSolve()
+    # print(u)
     #print(transportSystem.params)
     
     

@@ -65,17 +65,13 @@ public:
 
         Values out(np);
         out.setZero();
-
+        std::cout << "computing dGFndp" << std::endl;
         for (size_t i = 0; i < grid.getNCells(); i++)
         {
             const auto &I = grid[i];
             for (size_t j = 0; j < n_abscissa; ++j)
             {
                 // Pull the loop over the gaussian integration points
-                // outside so we can evaluate u, q, dX_dZ once and store the values
-
-                // All for loops inside here can be parallelised as they all
-                // write to separate entries in mat
 
                 double wgt = x_wgts[i] * (I.h() / 2.0);
 
@@ -176,9 +172,15 @@ public:
             // TransportSystem::dSigma(i, out, states, abscissae, time);
             // return;
         }
-
-        out.Variable() = _override(i, states, abscissae).cast<Matrix>();
-    };
+        try
+        {
+            out.Variable() = _override(i, states, abscissae).cast<Matrix>();
+        }
+        catch(...)
+        {
+            throw std::runtime_error("error when trying to compute dSigma");
+        }
+        };
 
     void dSources(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae) override
     {

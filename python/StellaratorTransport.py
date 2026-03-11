@@ -5,7 +5,7 @@ from Stellarator import StellaratorTransport
 # %%
 st_config = {
     "SourceCenter": 0.0,
-    "SourceHeight": 50.0,
+    "SourceHeight": 30.0,
     "SourceWidth": 0.2,
     "EdgeTemperature":0.5,
     "EdgeDensity": 0.1,
@@ -24,8 +24,8 @@ config = {
     "Lower_boundary": 0.0,
     "Upper_boundary": 0.9,
     "Relative_tolerance": 0.01,
-    "delta_t": 0.05,
-    "restart": False,
+    "delta_t": 0.001,
+    "restart": True,
     "solveAdjoint": True, 
 }
 

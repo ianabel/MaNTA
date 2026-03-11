@@ -233,7 +233,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
 
         flat, _ =  jax.flatten_util.ravel_pytree((eqx.filter(boundary_field, eqx.is_array)))
         print(len(flat))
-        self.np = len(flat)
+        self.np = len(flat)-1
         self.np_boundary = 0
 
         self.sigma = transport_system.sigma
@@ -249,10 +249,9 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         return self.g(state, x, self.params)
 
     def dgFndp(self, i, state, x):
-        # if ( i < self.np-1 ):
-        #     return jax.grad(self.g, argnums=2)(state, x, self.params)[i]
-        # else:
-        return 0.0
+        # g, _ = jax.flatten_util.ravel_pytree(eqx.filter_grad(lambda params: self.g(state, x, params))(self.field))
+        # out = jnp.pad(g, pad_width=(0, self.np_boundary), mode='constant', constant_values=0)
+        return jnp.zeros((self.np,))
         
     def dg(self, i, states, positions):
         x = jnp.array(positions)
@@ -265,7 +264,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
 
         boundary_state = getStateAtIndex(states, -1)
         out = eqx.filter_grad(lambda field: self.sigma(i, boundary_state, positions[-1], 0, field, self.vprime, self.params))(self.field)  
-        out_flattened, _ = jax.flatten_util.ravel_pytree(out)
+        out_flattened, self.unravel = jax.flatten_util.ravel_pytree(out)
         out_padded = jnp.zeros((len(out_flattened), len(positions)))
         out_padded = out_padded.at[:,-1].set(out_flattened)
         print(out_padded.shape)
@@ -273,9 +272,14 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         return out_padded
     
     def dSources(self, i, states, positions):
-        x = jnp.array(positions)
-        out = jax.vmap(jax.grad(self.source, argnums=4), in_axes=(None, {"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0, None,  None))(i, states, x, 0.0, self.params)  
-        return out
+        #  boundary_state = getStateAtIndex(states, -1)
+        # out = eqx.filter_grad(lambda field: self.source(i, boundary_state, positions[-1], 0, field, self.vprime, self.params))(self.field)  
+        # out_flattened, _ = jax.flatten_util.ravel_pytree(out)
+        # out_padded = jnp.zeros((len(out_flattened), len(positions)))
+        # out_padded = out_padded.at[:,-1].set(out_flattened)
+        # print(out_padded.shape)
+
+        return jnp.zeros((self.np, len(positions)))
 
     def dgFn_dphi(self, i, state, x):
         pass

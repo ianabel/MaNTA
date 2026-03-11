@@ -11,6 +11,7 @@
 #include "ErrorChecker.hpp"
 
 #include <string>
+#include <type_traits>
 
 // Load restart data into vectors
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vector<double> &dYdt);
@@ -70,8 +71,7 @@ T getValueWithDefault(std::string key, const py::dict &d)
     {
         try
         {
-            std::cerr
-                << "INFO: Using default value for configuration option " << key << std::endl;
+            std::cerr << "INFO: Using default value for configuration option " << key << std::endl;
             return std::get<Parameter<T>>(params.at(key))._default;
         }
         catch (...)
@@ -246,6 +246,7 @@ py::tuple PyRunner::runAdjointSolve(void)
     system->runAdjointSolve();
 
     auto np_internal = adjoint->getNpInternal();
+    std::cout <<"np_interal " << np_internal << std::endl; 
     Vector G_p = system->G_p(Eigen::seq(0, np_internal - 1));
 
     // Create output to pass back to Python

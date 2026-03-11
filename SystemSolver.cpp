@@ -246,7 +246,7 @@ void SystemSolver::initialiseMatrices()
         M.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)).setZero();
         M.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = D; // X added at Jac step
 
-        // TODO: Consider factorization here (is M sparse enough to warrant a sparse implementation?)
+        // TODO:  Consider factorization here (is M sparse nough to warrant a sparse implementation?)
         MBlocks.emplace_back(M);
 
         Eigen::MatrixXd CE_vec(localDOF, 2 * nVars);
@@ -1259,9 +1259,9 @@ void SystemSolver::computeAdjointGradients()
     const auto states = y.evalOnNodes();
 
     const Index np_internal = adjointProblem->getNpInternal();
+    std::cerr << "INFO: Computing adjoints for " << np_internal << " parameters" << std::endl;
     for (Index i = 0; i < nVars; i++)
     {
-
         // We use the global state to hold the derivatives, replacing nVars with np
         // Only the Variable matrix is used internally to hold the derviatives
         dSigmadp.add(nCells, k, np_internal, nScalars, np_internal /* This should be nAux, but output is wrt all variables*/);
@@ -1277,8 +1277,6 @@ void SystemSolver::computeAdjointGradients()
         {
             Vector F_p(3 * nVars * (k + 1) + nAux * (k + 1));
             F_p.setZero();
-
-            // Evaluate Diffusion Function
 
             Interval I = grid[i];
 
