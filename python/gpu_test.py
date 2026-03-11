@@ -216,12 +216,13 @@ config = {
     "Relative_tolerance": 0.001,
     "Absolute_tolerance": [0.0001],
     "delta_t": 0.25,
+    "SteadyStateTolerance": 1.0,
 }
 
 nl = JAXNonlinearDiffusion(nl_config)
 runner = MaNTA.Runner(nl)
 runner.configure(config)
-runner.run(5.0)
+runner.run_ss()
 
 # %%
 

@@ -1271,7 +1271,8 @@ void SystemSolver::computeAdjointGradients()
         adjointProblem->dSigma(i, dSigmadp[i], states, points);
         adjointProblem->dSources(i, dSourcedp[i], states, points);
     }
-
+    
+    #pragma omp parallel for
     for (Index pIndex = 0; pIndex < adjointProblem->getNp(); ++pIndex)
     {
         G_p[pIndex] = adjointProblem->dGFndp(pIndex, y);

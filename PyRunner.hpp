@@ -47,10 +47,13 @@ public:
     // Configure solver from Python
     void configure(const py::dict &);
 
-    // Runs solver to time tFInal
+    // Runs solver to time tFinal
     GlobalState run(double tFinal);
 
-    // Run adjoint solver and return the
+    // Runs solver to steady state
+    GlobalState run_ss(void);
+
+    // Run adjoint solver and return tuple (G, G_p)
     py::tuple runAdjointSolve(void);
 
 private:
@@ -66,10 +69,12 @@ private:
     std::function<void(double)> runner;
 
     bool configured = false;
+    double steady_state_tolerance;
 
 private:
-    // This class controls the lifetime of the solver objects
-
+    /*
+        This class controls the lifetime of the solver data so that we can request more timesteps without restarting the integration
+    */
     SUNLinearSolver LS = NULL; // linear solver memory structure
     SUNMatrix sunMat = NULL;   //
     void *IDA_mem = NULL;      // IDA memory structure

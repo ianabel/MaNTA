@@ -1,9 +1,12 @@
 from typing import NamedTuple
 
+from functools import partial
+
 import MaNTA
 from VectorizedTransportSystem import VectorizedTransportSystem
 from JAXAdjointProblem import JAXAdjointProblem
 import jax.numpy as jnp
+import jax
 
 class LinearDiffusionParams(NamedTuple):
     Centre: float
@@ -21,7 +24,11 @@ config = {
     "tFinal": 1.0,
     "delta_t": 0.5,
     "solveAdjoint": True, 
+    "SteadyStateTolerance": 1e-3
 }
+
+def getKappa():
+    return 1.0
     
 class JAXLinearDiffusion(VectorizedTransportSystem):
     def __init__(self):
@@ -36,14 +43,16 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
     def g(self, state, x, params):
         u = state["Variable"][0]
         return 0.5 * u * u
-    
+
     def setParams(self, params):
         self.params = params
 
+    @partial(jax.jit, static_argnums=(0,))
     def sigma( self, index, state, x, t, params ):
         tprime = state["Derivative"]
         return params.kappa * tprime[index]
     
+    @partial(jax.jit, static_argnums=(0,))
     def source( self, index, state, x, t, params ):
         return 10.0
   
@@ -62,24 +71,27 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
         adjointProblem = JAXAdjointProblem(self, self.g)
         return adjointProblem
 
+
+
 def runMaNTA():
     transportSystem = JAXLinearDiffusion()
-    transportSystem.setParams(LinearDiffusionParams(0.0, 0.1, 2.0, 4.0))
+    transportSystem.setParams(LinearDiffusionParams(0.0, 0.1, 2.0, 2.0))
 
     runner = MaNTA.Runner(transportSystem)
     runner.configure(config)
-    runner.run(0.5)
+    runner.run(5.0)
     G, G_p = runner.runAdjointSolve()
-
     print(G_p)
-    runner.run(1.0)
+    transportSystem.setParams(LinearDiffusionParams(0.1, 0.1, 2.0, 1.0))
+    #runner.setTransportSystem(transportSystem)
+
+   
+    u = runner.run(10.0)
     G, G_p = runner.runAdjointSolve()
-  
+    print(u)
     #print(transportSystem.params)
     
     
-    print(G_p)
-
 
 
 runMaNTA()

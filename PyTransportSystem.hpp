@@ -228,7 +228,7 @@ public:
 	using TransportSystem::isUpperDirichlet;
 	using TransportSystem::nAux;
 	using TransportSystem::nVars;
-
+	
 private:
 	bool initialized = false;
 	std::map<std::string, py::function> method_overrides;

@@ -14,6 +14,7 @@
 
 // Load restart data into vectors
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vector<double> &dYdt);
+
 // Parameters required by "configure" function to be passed to SystemSolver
 static const map_t params = {{"restart", Parameter<bool>{.required = false, ._default = false}},
                              //
@@ -47,7 +48,7 @@ static const map_t params = {{"restart", Parameter<bool>{.required = false, ._de
                              //
                              {"OutputFilename", Parameter<std::string>{.required = true}},
                              //
-                             {"SteadyStateTolerance", Parameter<double>{.required = false}},
+                             {"SteadyStateTolerance", Parameter<double>{.required = false, ._default = 1e-3}},
                              //
                              {"WriteOutput", Parameter<bool>{.required = false, ._default = true}}};
 
@@ -190,6 +191,8 @@ void PyRunner::configure(const py::dict &config)
     double dt_min = getValueWithDefault<double>("MinStepSize", config);
     int nOutput = getValueWithDefault<int>("OutputPoints", config);
 
+    steady_state_tolerance = getValueWithDefault<double>("SteadyStateTolerance", config);
+
     system->setOutputCadence(dt);
     system->setTolerances(atol, rtol);
     system->setTau(tau);
@@ -205,6 +208,7 @@ void PyRunner::configure(const py::dict &config)
     runner = system->makeSolver(LS, sunMat, IDA_mem, retval, Y, dYdt, constraints, id, res, absTolVec, tout, tret, writeOutput);
 
     configured = true;
+    std::cerr << "Configuration done." << std::endl;
 }
 
 GlobalState PyRunner::run(double tFinal)
@@ -213,7 +217,25 @@ GlobalState PyRunner::run(double tFinal)
     {
         throw std::runtime_error("Error: Runner must be configured before running solver.");
     }
+    if (system->TerminateOnSteadyState)
+    {
+        std::cerr << "\"run\" called but TerminateOnStateState is set to true. If you intended to run to steady state please call \"run_ss\". Running to passed tFinal" << std::endl;
+        system->TerminateOnSteadyState = false;
+    }
     runner(tFinal);
+
+    std::cout << "Done." << std::endl;
+    return system->y.evalOnNodes();
+}
+
+GlobalState PyRunner::run_ss()
+{
+    if (!configured)
+    {
+        throw std::runtime_error("Error: Runner must be configured before running solver.");
+    }
+    system->setSteadyStateTolerance(steady_state_tolerance);
+    runner(0); // Final time doesn't matter so just pass 0
 
     std::cout << "Done." << std::endl;
     return system->y.evalOnNodes();
@@ -222,9 +244,12 @@ GlobalState PyRunner::run(double tFinal)
 py::tuple PyRunner::runAdjointSolve(void)
 {
     system->runAdjointSolve();
-    using namespace pybind11::literals;
+
     auto np_internal = adjoint->getNpInternal();
     Vector G_p = system->G_p(Eigen::seq(0, np_internal - 1));
+
+    // Create output to pass back to Python
+    using namespace pybind11::literals;
     py::dict gp("G_p"_a = G_p);
     if (adjoint->getNpBoundary() > 0)
     {
@@ -370,10 +395,6 @@ std::function<void(double)> SystemSolver::makeSolver(SUNLinearSolver &LS, // lin
     for (Index i = 0; i < nScalars; ++i)
         tolerances.Scalar(i) = atol[0];
 
-    // Steady-state stopping conditions
-    sunrealtype dydt_rel_tol = steady_state_tol;
-    sunrealtype dydt_abs_tol = 1e-2;
-
     retval = IDAWFtolerances(IDA_mem, SystemSolver::getErrorWeights_static);
     if (ErrorChecker::check_retval(&retval, "IDAWFtolerances", 1))
         std::runtime_error("Sundials initialization Error, run in debug to find");
@@ -423,7 +444,10 @@ std::function<void(double)> SystemSolver::makeSolver(SUNLinearSolver &LS, // lin
 
     auto fsolve = [&, IDA_mem, writeOutput](double tFinal)
     {
-        if (t0 > tFinal)
+        // Steady-state stopping conditions
+        sunrealtype dydt_rel_tol = steady_state_tol;
+        sunrealtype dydt_abs_tol = 1e-2;
+        if (t0 > tFinal && !TerminateOnSteadyState)
         {
             std::cout << "Initial time t = " << t0 << " is after the end of the simulation at t = " << tFinal << std::endl;
             throw std::runtime_error("Simulation ends before it begins.");
@@ -436,10 +460,10 @@ std::function<void(double)> SystemSolver::makeSolver(SUNLinearSolver &LS, // lin
         }
 
         // Solving Loop
-        while (tFinal - tret > min_step_size)
+        while (tFinal - tret > min_step_size || TerminateOnSteadyState)
         {
             tout += dt;
-            if (tout > tFinal)
+            if (tout > tFinal && !TerminateOnSteadyState)
                 tout = tFinal; // Never ask for results beyond tFinal
             retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
             if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
@@ -473,7 +497,6 @@ std::function<void(double)> SystemSolver::makeSolver(SUNLinearSolver &LS, // lin
                         dydt_norm += xi * xi * wi * wi;
                     }
                 dydt_norm = sqrt(dydt_norm);
-
                 if (dydt_norm < 1.0)
                 {
                     std::cout << "Steady State achieved at time t = " << tret << std::endl;

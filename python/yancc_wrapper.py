@@ -41,7 +41,7 @@ class yancc_wrapper():
     
 
     """
-    def __init__(self, Density, nNorm = 1e20, Tnorm = 1e3, nx = 5, na = 65, nt = 17, nz = 33):
+    def __init__(self, Density, nNorm = 1e20, Tnorm = 1e3, nx = 5, na = 43, nt = 17, nz = 33):
         print("Initializing yancc wrapper with parameters:")
         print(f"  nx={nx}, na={na}, nt={nt}, nz={nz}")
         self.nx = nx
@@ -86,9 +86,12 @@ class yancc_wrapper():
     dict
         Fluxes computed by yancc, normalized to be dimensionless
     """
+    def set_field(self, field_in):
+        self.field = field_in
+
     def compute_field(self,x):
          rho = self.rho_from_normalized_volume(x)
-         return Field.from_desc(self.eq, rho, self.nt, self.nz), rho, self.dVndr(rho)
+         return Field.from_desc(self.eq, rho, self.nt, self.nz), self.dVndr(rho)
 
 
     def compute_fields(self, x):
@@ -106,10 +109,10 @@ class yancc_wrapper():
             self.fields = tree_map(lambda *vals: jnp.stack(vals), *self.fields)
             self.rho = jnp.array(rho)
             self.Vprim = jnp.array(self.dVndr(self.rho))
-        return self.fields, self.rho, self.Vprim
+        return self.fields, self.Vprim
 
     
-    def flux(self, state, x, field, rho, Vprim, f1 = None):
+    def flux(self, state, x, field, Vprim):
         
         # For now we only evolve the ion energy
         p_i = 2. / 3. * state["Variable"][0]
@@ -129,10 +132,10 @@ class yancc_wrapper():
             dndrho=dndrho * self.nNorm),
         ]
 
-        f, _, fluxes, _  = solve_dke(field, self.pitchgrid, self.speedgrid, species, Erho, verbose = False)
+        _, _, fluxes, _  = solve_dke(field, self.pitchgrid, self.speedgrid, species, Erho, verbose = False)
         #assert stats['res'] < 1e-5
         fout = fluxes['<heat_flux>'][0] * Vprim / (self.FluxNorm)
-        return fout, f
+        return fout
 
 
 
