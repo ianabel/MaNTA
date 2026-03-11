@@ -6,6 +6,8 @@ import jax.numpy as jnp
 import MaNTA
 from functools import partial
 
+from jax.flatten_util import ravel_pytree
+
 vmap_axes = (None, {"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0, None,  None)
 
 class JAXAdjointProblem(MaNTA.AdjointProblem):
@@ -32,11 +34,10 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
         return self.g(state, x, self.params)
 
     @partial(jax.jit, static_argnums=(0,1))
-    def dgFndp(self, i, state, x):
-        if ( i < self.np-1 ):
-            return jax.grad(self.g, argnums=2)(state, x, self.params)[i]
-        else:
-            return 0.0
+    def dgFndp(self, gIndex, state, x):
+        g, _ = ravel_pytree(jax.grad(self.g, argnums=2)(state, x, self.params))
+        out = jnp.pad(g, pad_width=(0, self.np_boundary), mode='constant', constant_values=0)
+        return out
 
     @partial(jax.jit, static_argnums=(0,))
     def dg(self, i, states, positions):

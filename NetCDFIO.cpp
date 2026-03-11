@@ -215,7 +215,7 @@ void SystemSolver::WriteAdjoints()
 	nc_output.AddScalarVariable("np_boundary", "", "", adjointProblem->getNpBoundary());
 	nc_output.AddGroup("G_p", "Gradients of G using adjoint state method");
 	nc_output.AddGroup("G_boundary", "Gradients of G on boundary using adjoint state method");
-	for (Index i = 0; i < adjointProblem->getNp() - adjointProblem->getNpBoundary(); ++i)
+	for (Index i = 0; i < adjointProblem->getNpInternal(); ++i)
 	{
 		nc_output.AddScalarVariable("G_p", adjointProblem->getName(i), "", "", G_p(i));
 	}

@@ -341,6 +341,8 @@ public:
 
     BasisType const &getBasis() const { return Basis; };
 
+    Grid const &getGrid() const { return grid; };
+
 private:
     const Index nVars;
     const Grid &grid;

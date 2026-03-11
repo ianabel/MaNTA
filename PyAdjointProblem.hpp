@@ -52,23 +52,54 @@ public:
         };
         return y.EvaluateIntegral(g_wrapper);
     };
-    Value dGFndp(Index i, DGSoln &y) const override
+    Value dGFndp(Index i, Index pIndex, DGSoln &y) const override
     {
-        auto g_wrapper = [&](const DGSoln &y, Position x)
-        {
-            State s = y.eval(x);
-            return dgFndp(i, s, x);
-        };
-        return y.EvaluateIntegral(g_wrapper);
+        throw std::runtime_error("Non-vectorized version of function \"dGFndp\" depracated.");
     };
+    Values dGFndp(Index gIndex, DGSoln &y) const override
+    {
+        auto const &grid = y.getGrid();
+        auto const &x_vals = y.getBasis().abscissae();
+        auto const &x_wgts = y.getBasis().weights();
+        const size_t n_abscissa = x_vals.size();
+
+        Values out(np);
+        out.setZero();
+
+        for (size_t i = 0; i < grid.getNCells(); i++)
+        {
+            const auto &I = grid[i];
+            for (size_t j = 0; j < n_abscissa; ++j)
+            {
+                // Pull the loop over the gaussian integration points
+                // outside so we can evaluate u, q, dX_dZ once and store the values
+
+                // All for loops inside here can be parallelised as they all
+                // write to separate entries in mat
+
+                double wgt = x_wgts[i] * (I.h() / 2.0);
+
+                double y_plus = I.x_l + (1.0 + x_vals[i]) * (I.h() / 2.0);
+                double y_minus = I.x_l + (1.0 - x_vals[i]) * (I.h() / 2.0);
+                State Y_plus = y.eval(y_plus), Y_minus = y.eval(y_minus);
+
+                Values dgdp_plus = dgFndp(gIndex, Y_plus, y_plus);
+                Values dgdp_minus = dgFndp(gIndex, Y_minus, y_minus);
+
+                out += wgt * dgdp_plus + wgt * dgdp_minus;
+            }
+        }
+
+        return out;
+    }
     Value gFn(Index i, const State &s, Position x) const override
     {
         PYBIND11_OVERRIDE_PURE(Value, AdjointProblem, gFn, i, s, x);
     };
 
-    Value dgFndp(Index i, const State &s, Position x) const override
+    Values dgFndp(Index i, const State &s, Position x) const override
     {
-        PYBIND11_OVERRIDE_PURE(Value, AdjointProblem, dgFndp, i, s, x);
+        PYBIND11_OVERRIDE_PURE(Values, AdjointProblem, dgFndp, i, s, x);
     };
 
     void dgFn_du(Index i, VectorRef out, const State &s, Position x) override

@@ -373,9 +373,9 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
         //     Position R = B->R_V(V,0.0);
         //     return P(V) / (R * R * n(V)) * dJdt(V); }, I.x_l, I.x_u);
 
-        if (abs(I.x_u - xR) < 1e-8)
+        if (abs(I.x_u - xR) < 1e-10)
             s.Flux(Channel::AngularMomentum) += -1.0 / dPsi * P(I.x_u) * tfac;
-        if (abs(I.x_l - xL) < 1e-8)
+        if (abs(I.x_l - xL) < 1e-10)
             s.Flux(Channel::AngularMomentum) -= -1.0 / dPsi * P(I.x_l) * tfac;
         break;
     }

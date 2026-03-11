@@ -15,7 +15,7 @@ public:
     AutodiffAdjointProblem(AutodiffTransportSystem *TransportSystem) : PhysicsProblem(TransportSystem) {}
 
     virtual Value GFn(Index i, DGSoln &y) const override;
-    virtual Value dGFndp(Index i, DGSoln &y) const override;
+    virtual Value dGFndp(Index i, Index pIndex, DGSoln &y) const override;
 
     virtual Value gFn(Index i, const State &s, Position x) const override;
 
