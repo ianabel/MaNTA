@@ -1249,8 +1249,7 @@ void SystemSolver::solveAdjointState(Index gIndex)
 
 void SystemSolver::computeAdjointGradients()
 {
-    G_p.resize(adjointProblem->getNp());
-    G_p.setZero();
+
     GlobalStateMatrix dSigmadp(nVars);
     GlobalStateMatrix dSourcedp(nVars);
 
@@ -1269,10 +1268,9 @@ void SystemSolver::computeAdjointGradients()
         adjointProblem->dSigma(i, dSigmadp[i], states, points);
         adjointProblem->dSources(i, dSourcedp[i], states, points);
     }
-
+    G_p = adjointProblem->dGFndp(0, y);
     for (Index pIndex = 0; pIndex < adjointProblem->getNp(); ++pIndex)
     {
-        G_p[pIndex] = adjointProblem->dGFndp(pIndex, y);
         for (Index i = 0; i < nCells; ++i)
         {
             Vector F_p(3 * nVars * (k + 1) + nAux * (k + 1));

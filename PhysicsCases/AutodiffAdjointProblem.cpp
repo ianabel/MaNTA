@@ -15,9 +15,9 @@ Value AutodiffAdjointProblem::GFn(Index i, DGSoln &y) const
     return y.EvaluateIntegral(g_wrapper);
 }
 
-Value AutodiffAdjointProblem::dGFndp(Index i, DGSoln &y) const
+Value AutodiffAdjointProblem::dGFndp(Index i, Index pIndex, DGSoln &y) const
 {
-    Real p = PhysicsProblem->getPval(i);
+    Real p = PhysicsProblem->getPval(pIndex);
 
     auto g_wrapper = [&](Real p, Position x)
     {

@@ -68,7 +68,7 @@ class yancc_wrapper():
     dict
         Fluxes computed by yancc, normalized to be dimensionless
     """
-    #@partial(jax.jit, static_argnums=(0,))
+    @eqx.filter_jit
     def flux(self, state, x):
         p_i = 2. / 3. * state["Variable"][0]
         p_i_prime = 2. / 3. * state["Derivative"][0]

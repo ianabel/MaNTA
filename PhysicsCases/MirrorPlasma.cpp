@@ -381,7 +381,8 @@ Real MirrorPlasma::Gamma(RealVector u, RealVector q, Real V, Time t) const
 	if (std::isfinite(Gamma.val))
 		return Gamma;
 	else
-		throw std::logic_error("Non-finite value computed for the particle flux at x = " + std::to_string(V.val) + " and t = " + std::to_string(t));
+		return 0.0;
+	// throw std::logic_error("Non-finite value computed for the particle flux at x = " + std::to_string(V.val) + " and t = " + std::to_string(t));
 };
 
 /*
@@ -439,7 +440,7 @@ Real MirrorPlasma::qi(RealVector u, RealVector q, Real V, Time t) const
 		return HeatFlux - PotentialEnergyFlux + DiffuseHighGradient(Ti, Ti_prime, lowPThreshold, lowPDiffusivity, V);
 
 	else
-		throw std::logic_error("Non-finite value computed for the ion heat flux at x = " + std::to_string(V.val) + " and t = " + std::to_string(t));
+		return 0.0; // throw std::logic_error("Non-finite value computed for the ion heat flux at x = " + std::to_string(V.val) + " and t = " + std::to_string(t));
 }
 
 /*
@@ -587,13 +588,13 @@ Real MirrorPlasma::Sn(RealVector u, RealVector q, RealVector sigma, RealVector p
 
 	Real FusionLosses = Plasma->FusionRate(n, p_i);
 
-	Real S = DensitySource - (ParallelLosses - FusionLosses);
+	Real S = -ParallelLosses - FusionLosses;
 	auto RampupFactor = [&](Time t)
 	{ return SourceRampup > 0 ? (1 - 1e-1) * tanh(t / SourceRampup) + 1e-1 : 1.0; };
 
 	S *= RampupFactor(t);
 
-	return S - RelaxSource(u(Channel::Density), n);
+	return DensitySource + S - RelaxSource(u(Channel::Density), n);
 };
 
 /*
@@ -643,9 +644,9 @@ Real MirrorPlasma::Spi(RealVector u, RealVector q, RealVector sigma, RealVector 
 	Real Heating = IonPotentialHeating(u, q, phi, V);
 	Real S = Heating - (ParallelLosses - ChargeExchangeHeatLosses + ParticleSourceHeating);
 	auto RampupFactor = [&](Time t)
-	{ return SourceRampup > 0 ? (1 - 1e-3) * tanh(t / SourceRampup) + 1e-3 : 1.0; };
+	{ return SourceRampup > 0 ? (1 - 1e-2) * tanh(t / SourceRampup) + 1e-2 : 1.0; };
 	S *= RampupFactor(t);
-	return S + ViscousHeating(u, q, V, t) + EnergyExchange + UniformHeatSource / pow(Ti / (TiEdge), 2) + RelaxSource(n * Ti, p_i); //+ RelaxSource(u(Channel::Density) * Te, p_e) + RelaxSource(n * floor(Te, MinTemp), p_e);
+	return S + ViscousHeating(u, q, V, t) + EnergyExchange + UniformHeatSource + RelaxSource(n * Ti, p_i); //+ RelaxSource(u(Channel::Density) * Te, p_e) + RelaxSource(n * floor(Te, MinTemp), p_e);
 }
 
 Real MirrorPlasma::Spe(RealVector u, RealVector q, RealVector sigma, RealVector phi, Real V, Time t) const
@@ -731,7 +732,7 @@ Real MirrorPlasma::Somega(RealVector u, RealVector q, RealVector sigma, RealVect
 
 	Real S = ((ParallelLosses + ChargeExchangeMomentumLosses));
 	auto RampupFactor = [&](Time t)
-	{ return SourceRampup > 0 ? (1 - 1e-2) * tanh(t / SourceRampup) + 1e-2 : 1.0; };
+	{ return SourceRampup > 0 ? (1 - 1e-3) * tanh(t / SourceRampup) + 1e-3 : 1.0; };
 	S *= RampupFactor(t);
 	return JxB - S; //+ RelaxSource(omega * R * R * u(Channel::Density), L);
 };

@@ -10,11 +10,21 @@ public:
     virtual ~AdjointProblem() = default;
 
     virtual Value GFn(Index gIndex, DGSoln &y) const = 0;
-    virtual Value dGFndp(Index gIndex, DGSoln &y) const = 0;
+    virtual Value dGFndp(Index gIndex, Index pIndex, DGSoln &y) const = 0;
+    virtual Values dGFndp(Index gIndex, DGSoln &y) const
+    {
+        Values out(np);
+        out.setZero();
+        for (Index i = 0; i < getNpInternal(); i++)
+        {
+            out(i) = dGFndp(gIndex, i, y);
+        }
+        return out;
+    }
 
     // We're assuming Gfn = Int gFn dx for now
     virtual Value gFn(Index gIndex, const State &s, Position x) const = 0;
-    virtual Value dgFndp(Index gIndex, const State &s, Position x) const
+    virtual Values dgFndp(Index gIndex, const State &s, Position x) const
     {
         throw std::runtime_error("Virtual function dgFndp only for use within python class.");
     }
