@@ -66,7 +66,7 @@ Value MirrorPlasma::InitialCurrent(Time t) const
     }
     else
     {
-        return -IRadial * exp(-t / CurrentDecay);
+        return -IRadial * (1 + tanh(-t / CurrentDecay));
     }
 }
 
@@ -80,7 +80,8 @@ Value MirrorPlasma::TotalCurrent(DGSoln const &y, Time t)
             State state = y.eval(V);
             Values pScalar(nScalars);
             pScalar.setZero();
-            return Somega(state.Variable, state.Derivative, state.Flux, state.Aux, pScalar, V, t).val;
+
+            return Source(Channel::AngularMomentum, state.Variable, state.Derivative, state.Flux, state.Aux, pScalar, V, t).val;
         },
         xL, xR, max_depth);
 
