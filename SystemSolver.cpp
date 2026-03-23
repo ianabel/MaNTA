@@ -1268,7 +1268,9 @@ void SystemSolver::computeAdjointGradients()
         adjointProblem->dSigma(i, dSigmadp[i], states, points);
         adjointProblem->dSources(i, dSourcedp[i], states, points);
     }
-    G_p = adjointProblem->dGFndp(0, y);
+    G_p.resize(adjointProblem->getNg(), adjointProblem->getNp());
+    for (Index i = 0; i < adjointProblem->getNg(); i++)
+        G_p.row(i) = adjointProblem->dGFndp(i, y);
     for (Index pIndex = 0; pIndex < adjointProblem->getNp(); ++pIndex)
     {
         for (Index i = 0; i < nCells; ++i)
@@ -1345,8 +1347,8 @@ void SystemSolver::computeAdjointGradients()
             }
 
             // SQU portion
-
-            G_p(pIndex) -= adjoint_squ[i].transpose() * F_p;
+            for (Index gIndex = 0; gIndex < adjointProblem->getNg(); gIndex++)
+                G_p(gIndex, pIndex) -= adjoint_squ[i].transpose() * F_p;
 
             // Eigen::VectorXd dkappa_lambda = C_cell * dkappa_dp_phi;
             // // // // // Lambda portion

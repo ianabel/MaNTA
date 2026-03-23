@@ -54,29 +54,34 @@ def test_ref_soln_l2( filename, ref_filename, tolerance ):
                 sys.exit( 1 )
     
     # Check if adjoints were computed, if so compare those too
-    if (nc_root.groups.get("G_p") is not None):
+    if ("ng" in nc_root.variables):
         print("  ... also checking adjoint variables")
-        for var in nc_root.groups["G_p"].variables:
-            G_p     = nc_root.groups["G_p"].variables[var][0]
-            G_p_ref = nc_root_ref.groups["G_p"].variables[var][0]
+        ng = int(nc_root.variables["ng"][0])
 
-            diff = abs( (G_p - G_p_ref)/G_p_ref )
-    
-            if( diff > tolerance ):
-                print("Error: Adjoint norm ", diff, " ( ref is ", G_p_ref, " ) for variable ",var," is greater than ",tolerance)
-                sys.exit( 1 )
+        for i in range(0, ng):
+            gname = "G" + str(i)
+            for var in nc_root.groups[gname + "_p"].variables:
 
-        if (nc_root.groups.get("G_boundary") is not None):
-            print("  ... also checking boundary adjoint variables")
-            for var in nc_root.groups["G_boundary"].variables:
-                G_bndry     = nc_root.groups["G_boundary"].variables[var][0]
-                G_bndry_ref = nc_root_ref.groups["G_boundary"].variables[var][0]
+                G_p     = nc_root.groups[gname + "_p"].variables[var][0]
+                G_p_ref = nc_root_ref.groups[gname + "_p"].variables[var][0]
 
-                diff = abs( (G_bndry - G_bndry_ref)/G_bndry_ref )
+                diff = abs( (G_p - G_p_ref)/G_p_ref )
         
                 if( diff > tolerance ):
-                    print("Error: Boundary adjoint norm ", diff, " ( ref is ", G_bndry_ref, " ) for variable ",var," is greater than ",tolerance)
+                    print("Error: Adjoint norm ", diff, " ( ref is ", G_p_ref, " ) for variable ",var," is greater than ",tolerance)
                     sys.exit( 1 )
+
+            if (nc_root.groups.get(gname + "_boundary") is not None):
+                print("  ... also checking boundary adjoint variables")
+                for var in nc_root.groups[gname + "_boundary"].variables:
+                    G_bndry     = nc_root.groups[gname + "_boundary"].variables[var][0]
+                    G_bndry_ref = nc_root_ref.groups[gname + "_boundary"].variables[var][0]
+
+                    diff = abs( (G_bndry - G_bndry_ref)/G_bndry_ref )
+            
+                    if( diff > tolerance ):
+                        print("Error: Boundary adjoint norm ", diff, " ( ref is ", G_bndry_ref, " ) for variable ",var," is greater than ",tolerance)
+                        sys.exit( 1 )
 
 
 def test_analytic_soln( filename, soln_fn, tolerance ):

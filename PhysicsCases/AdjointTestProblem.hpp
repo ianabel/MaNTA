@@ -11,7 +11,8 @@ public:
 
     virtual std::unique_ptr<AdjointProblem> createAdjointProblem() override;
 
-    Real g(Position, RealVector &, RealVector &, RealVector &, RealVector &);
+    Real g1(Position, RealVector &, RealVector &, RealVector &, RealVector &);
+    Real g2(Position, RealVector &, RealVector &, RealVector &, RealVector &);
 
 private:
     Real Flux(Index, RealVector, RealVector, Real, Time) override;

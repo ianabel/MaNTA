@@ -28,8 +28,10 @@ AdjointTestProblem::AdjointTestProblem(toml::value const &config, Grid const &gr
 std::unique_ptr<AdjointProblem> AdjointTestProblem::createAdjointProblem()
 {
     std::unique_ptr<AutodiffAdjointProblem> p = std::make_unique<AutodiffAdjointProblem>(this);
-    p->setG([this](Position x, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
-            { return g(x, u, q, sigma, phi); });
+    p->addG([this](Position x, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
+            { return g1(x, u, q, sigma, phi); });
+    p->addG([this](Position x, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
+            { return g2(x, u, q, sigma, phi); });
     p->setNp(pvals.size() + 1);
     p->addUpperBoundarySensitivity(0, pvals.size());
     return p;
@@ -48,7 +50,11 @@ Real AdjointTestProblem::Source(Index i, RealVector u, RealVector q, RealVector 
     return T_s * exp(-y * y / SourceWidth);
 }
 
-Real AdjointTestProblem::g(Position, RealVector &u, RealVector &, RealVector &, RealVector &)
+Real AdjointTestProblem::g1(Position, RealVector &u, RealVector &, RealVector &, RealVector &)
 {
     return 0.5 * u(0) * u(0);
+}
+Real AdjointTestProblem::g2(Position, RealVector &u, RealVector &, RealVector &, RealVector &)
+{
+    return  2.0 * u(0) * u(0);
 }
