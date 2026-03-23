@@ -53,6 +53,8 @@ public:
     // Runs solver to steady state
     GlobalState run_ss(void);
 
+    Vector G(void);
+
     // Run adjoint solver and return tuple (G, G_p)
     py::tuple runAdjointSolve(void);
 

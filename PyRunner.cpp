@@ -241,6 +241,11 @@ GlobalState PyRunner::run_ss()
     return system->y.evalOnNodes();
 }
 
+Vector PyRunner::G(void)
+{
+    return Vector();
+}
+
 py::tuple PyRunner::runAdjointSolve(void)
 {
     system->runAdjointSolve();
