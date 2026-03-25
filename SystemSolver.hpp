@@ -206,7 +206,7 @@ class SystemSolver
         DGSoln yJac; // memory owned by us
         DGSoln dydtJac; // memory owned by us
 
-        Vector G_p; // gradients computed by adjoint state method
+        Matrix G_p; // gradients computed by adjoint state method
 
         void NLqMat(Matrix &, DGSoln const &, Index);
         void NLuMat(Matrix &, DGSoln const &, Index);

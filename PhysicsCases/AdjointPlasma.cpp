@@ -118,7 +118,7 @@ Real2nd AdjointPlasma::InitialFunction(Index i, Real2nd x, Real2nd t) const
 std::unique_ptr<AdjointProblem> AdjointPlasma::createAdjointProblem()
 {
     std::unique_ptr<AutodiffAdjointProblem> p = std::make_unique<AutodiffAdjointProblem>(this);
-    p->setG([this](Position x, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
+    p->addG([this](Position x, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
             { return g(x, u, q, sigma, phi); });
 
     addP(grad_n);

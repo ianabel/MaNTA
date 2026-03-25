@@ -60,10 +60,10 @@ BOOST_AUTO_TEST_CASE(test_derivatives)
 
     auto gfun = [&](Position x, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
     {
-        return problem->g(x, u, q, sigma, phi);
+        return problem->g1(x, u, q, sigma, phi);
     };
 
-    BOOST_CHECK_NO_THROW(adjoint.setG(gfun));
+    BOOST_CHECK_NO_THROW(adjoint.addG(gfun));
     Value T_s = 50;
     Value SourceWidth = 0.02;
     Value SourceCentre = 0.3;
@@ -128,7 +128,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
     //     return problem->g(x, p, u, q, sigma, phi);
     // };
 
-    // adjoint->setG(gfun);
+    // adjoint->addG(gfun);
 
     Index k = 2; // make sure it works for higher order bases
 

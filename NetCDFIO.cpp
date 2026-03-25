@@ -210,18 +210,23 @@ void SystemSolver::WriteTimeslice(double tNew)
 
 void SystemSolver::WriteAdjoints()
 {
-	nc_output.AddScalarVariable("GFn", "", "", adjointProblem->GFn(0, y));
+	
+	nc_output.AddScalarVariable("ng", "", "", adjointProblem->getNg());
 	nc_output.AddScalarVariable("np", "", "", adjointProblem->getNp());
 	nc_output.AddScalarVariable("np_boundary", "", "", adjointProblem->getNpBoundary());
-	nc_output.AddGroup("G_p", "Gradients of G using adjoint state method");
-	nc_output.AddGroup("G_boundary", "Gradients of G on boundary using adjoint state method");
-	for (Index i = 0; i < adjointProblem->getNpInternal(); ++i)
+	for (Index i = 0; i < adjointProblem->getNg(); ++i)
 	{
-		nc_output.AddScalarVariable("G_p", adjointProblem->getName(i), "", "", G_p(i));
-	}
-	for (Index i = 0; i < adjointProblem->getNpBoundary(); ++i)
-	{
-		nc_output.AddScalarVariable("G_boundary", "p" + std::to_string(i), "", "", G_p(i + adjointProblem->getNp() - adjointProblem->getNpBoundary()));
+		nc_output.AddScalarVariable("G" + std::to_string(i), "G function", "", adjointProblem->GFn(i, y));
+		nc_output.AddGroup("G" + std::to_string(i) + "_p", "Gradients of G using adjoint state method");
+		nc_output.AddGroup("G" + std::to_string(i) + "_boundary", "Gradients of G on boundary using adjoint state method");
+		for (Index j = 0; j < adjointProblem->getNpInternal(); ++j)
+		{
+			nc_output.AddScalarVariable("G" + std::to_string(i) + "_p", adjointProblem->getName(j), "", "", G_p(i, j));
+		}
+		for (Index j = 0; j < adjointProblem->getNpBoundary(); ++j)
+		{
+			nc_output.AddScalarVariable("G" + std::to_string(i) + "_boundary", "p" + std::to_string(j), "", "", G_p(i, j + adjointProblem->getNp() - adjointProblem->getNpBoundary()));
+		}
 	}
 }
 

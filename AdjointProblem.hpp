@@ -81,6 +81,7 @@ public:
     virtual bool computeUpperBoundarySensitivity(Index i, Index pIndex) { return false; };
     virtual bool computeLowerBoundarySensitivity(Index i, Index pIndex) { return false; };
 
+    int getNg() const { return ng; }
     int getNp() const { return np; }
     int getNpBoundary() const { return np_boundary; }
 
@@ -93,6 +94,7 @@ public:
     }
 
 protected:
+    int ng = 1;
     int np;
     int np_boundary = 0;
 };
