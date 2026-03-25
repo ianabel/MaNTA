@@ -222,6 +222,7 @@ public:
     };
 
 public:
+    using AdjointProblem::ng;
     using AdjointProblem::np;
     using AdjointProblem::np_boundary;
 
