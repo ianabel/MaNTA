@@ -14,7 +14,7 @@ using ftype = std::function<Real(Position, RealVector &, RealVector &, RealVecto
 class AutodiffAdjointProblem : public AdjointProblem
 {
 public:
-    AutodiffAdjointProblem(AutodiffTransportSystem *TransportSystem) : PhysicsProblem(TransportSystem) {}
+    AutodiffAdjointProblem(AutodiffTransportSystem *TransportSystem) : PhysicsProblem(TransportSystem) { AdjointProblem::ng = 0; }
 
     virtual Value GFn(Index i, DGSoln &y) const override;
     virtual Value dGFndp(Index i, Index pIndex, DGSoln &y) const override;
@@ -35,7 +35,11 @@ public:
     void addUpperBoundarySensitivity(Index i, Index pIndex);
     void addLowerBoundarySensitivity(Index i, Index pIndex);
 
-    void addG(ftype gin) { g.push_back(gin); }
+    void addG(ftype gin)
+    {
+        g.push_back(gin);
+        AdjointProblem::ng++;
+    }
     void setNp(int n) { AdjointProblem::np = n; }
 
 private:

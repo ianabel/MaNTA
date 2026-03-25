@@ -33,6 +33,7 @@ std::unique_ptr<AdjointProblem> AdjointTestProblem::createAdjointProblem()
     p->addG([this](Position x, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
             { return g2(x, u, q, sigma, phi); });
     p->setNp(pvals.size() + 1);
+    
     p->addUpperBoundarySensitivity(0, pvals.size());
     return p;
 }

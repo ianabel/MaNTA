@@ -80,8 +80,8 @@ Value MirrorPlasma::TotalCurrent(DGSoln const &y, Time t)
             State state = y.eval(V);
             Values pScalar(nScalars);
             pScalar.setZero();
-
             return Source(Channel::AngularMomentum, state.Variable, state.Derivative, state.Flux, state.Aux, pScalar, V, t).val;
+
         },
         xL, xR, max_depth);
 
