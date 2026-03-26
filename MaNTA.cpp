@@ -286,7 +286,8 @@ int runManta(std::string const &fname)
 		return 1;
 	}
 
-	system = std::make_shared<SystemSolver>(*grid, k, pProblem.get(), adjoint.get());
+	system = std::make_shared<SystemSolver>(*grid, k, pProblem.get());
+
 
 	system->setOutputCadence(delta_t);
 	system->setTolerances(absTol, rtol);
@@ -294,6 +295,8 @@ int runManta(std::string const &fname)
 	system->setInitialTime(tZero);
 	system->setInputFile(fname);
 	system->setSolveAdjoint(solveAdjoint);
+	if (solveAdjoint)
+		system->setAdjointProblem(adjoint.get());
 
 	system->setNOutput(nOutput);
 	system->setMinStepSize(dt_min);

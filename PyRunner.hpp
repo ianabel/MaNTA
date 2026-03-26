@@ -48,22 +48,27 @@ public:
     void configure(const py::dict &);
 
     // Runs solver to time tFinal
-    GlobalState run(double tFinal);
+    void run(double tFinal);
 
     // Runs solver to steady state
-    GlobalState run_ss(void);
+    void run_ss(void);
 
-    Vector G(void);
-
+    void setAdjointProblem(std::shared_ptr<AdjointProblem> ap)
+    {
+        adjoint = ap;
+        system->setAdjointProblem(ap.get());
+    };
     // Run adjoint solver and return tuple (G, G_p)
     py::tuple runAdjointSolve(void);
+
+    std::vector<double> getPoints(void);
 
 private:
     // Shared ownership of TransportSystem so user can update in Python without recreating object
     std::shared_ptr<TransportSystem> pProblem;
+    std::shared_ptr<AdjointProblem> adjoint = nullptr;
 
     // Ownership of objects handled by C++
-    std::unique_ptr<AdjointProblem> adjoint;
     std::unique_ptr<SystemSolver> system;
     std::unique_ptr<Grid> grid;
 

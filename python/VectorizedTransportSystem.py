@@ -35,25 +35,24 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
     def Sources(self, index, state, x, t):
         return self.source(index, state, x, t, self.params)
 
-    #@partial(jax.jit, static_argnums=(0,))
+    @partial(jax.jit, static_argnums=(0,))
     def SigmaFn_v( self, index, states, positions, t):
         x = jnp.array(positions)
-        print(self.params.kappa)
         return jax.vmap(lambda s, p : self.sigma(index, s, p, t, self.params), in_axes=(vmap_axes))(states, x)
 
-    #@partial(jax.jit, static_argnums=(0,))
+    @partial(jax.jit, static_argnums=(0,))
     def Sources_v( self, index, states, positions, t ):
         x = jnp.array(positions)
         return jax.vmap(lambda s, p : self.source(index, s, p, t, self.params), in_axes=(vmap_axes))(states, x)
         
-    #@partial(jax.jit, static_argnums=(0,))
+    @partial(jax.jit, static_argnums=(0,))
     def dSigma(self, index, states, positions, t):
         x = jnp.array(positions)
         out =  jax.vmap(lambda s, p: jax.grad(self.sigma, argnums=1)(index, s, p, t, self.params), in_axes=(vmap_axes))(states, x)
         out["Scalars"] = []
         return out
     
-    #@partial(jax.jit, static_argnums=(0,))
+    @partial(jax.jit, static_argnums=(0,))
     def dSources(self, index, states, positions, t):
         x = jnp.array(positions)
         out =  jax.vmap(lambda s, p: jax.grad(self.source, argnums=1)(index, s, p, t, self.params), in_axes=(vmap_axes))(states, x)

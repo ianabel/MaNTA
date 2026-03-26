@@ -13,23 +13,24 @@ st_config = {
 }
 
 st = StellaratorTransport(st_config)
-runner = MaNTA.Runner(st)
 
-# %%
-config = {
-    "OutputFilename": "stellarator",
-    "Polynomial_degree": 3,
-    "Grid_size": 6,
-    "tau": 1.0, 
-    "Lower_boundary": 0.0,
-    "Upper_boundary": 0.9,
-    "Relative_tolerance": 0.01,
-    "delta_t": 0.001,
-    "restart": True,
-    "solveAdjoint": True, 
-}
+# runner = MaNTA.Runner(st)
 
-runner.configure(config)
+# # %%
+# config = {
+#     "OutputFilename": "stellarator",
+#     "Polynomial_degree": 3,
+#     "Grid_size": 6,
+#     "tau": 1.0, 
+#     "Lower_boundary": 0.0,
+#     "Upper_boundary": 1.0,
+#     "Relative_tolerance": 0.01,
+#     "delta_t": 0.001,
+#     "restart": True,
+#     "solveAdjoint": True, 
+# }
+
+# runner.configure(config)
 
 # %%
 tFinal = 1.0
@@ -37,7 +38,7 @@ import time
 import datetime
 
 start = time.time()
-finalState = runner.run_ss()
+finalState = st.run()
 
 end = time.time()
 time_duration = datetime.timedelta(seconds=end-start)
@@ -52,7 +53,7 @@ plt.plot(finalState["Variable"])
 
 
 # %%
-G, G_p = runner.runAdjointSolve()
+G, G_p = st.runAdjointSolve()
 print("Stored energy: " + str(G))
 print(G_p)
 

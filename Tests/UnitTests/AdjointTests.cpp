@@ -137,7 +137,9 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
     SUNContext ctx;
     SUNContext_Create(SUN_COMM_NULL, &ctx);
 
-    BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, problem, adjoint.get()));
+    BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, problem));
+
+    system->setAdjointProblem(adjoint.get());
 
     system->setTau(1.0);
     system->resetCoeffs();

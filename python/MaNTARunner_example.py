@@ -26,9 +26,6 @@ config = {
     "solveAdjoint": True, 
     "SteadyStateTolerance": 1e-3
 }
-
-def getKappa():
-    return 1.0
     
 class JAXLinearDiffusion(VectorizedTransportSystem):
     def __init__(self):
@@ -79,9 +76,12 @@ def runMaNTA():
 
     runner = MaNTA.Runner(transportSystem)
     runner.configure(config)
+    runner.setAdjointProblem(transportSystem.createAdjointProblem())
+    points = runner.getPoints()
+    print(points)
     runner.run(5.0)
     G, G_p = runner.runAdjointSolve()
-    # print(G_p)
+    print(G_p)
     # transportSystem.setParams(LinearDiffusionParams(0.1, 0.1, 2.0, 1.0))
     # #runner.setTransportSystem(transportSystem)
 

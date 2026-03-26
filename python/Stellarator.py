@@ -24,6 +24,7 @@ mesh = Mesh(devices, ('ax',),axis_types=(jax.sharding.AxisType.Auto,))
 from functools import partial
 
 from yancc_wrapper import yancc_wrapper 
+from desc.compute import get_profiles
 
 from typing import NamedTuple
 
@@ -81,14 +82,62 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         self.params = StellaratorParams.from_config(config)
         self.yancc_wrapper = yancc_wrapper(self.Density, 1e20, 1e3)
+        e = 1.6e-19
+        self.pnorm = 1e20 * e * 1e3
 
-        self.fmap = []
+        self.runner = MaNTA.Runner(self)
+
+        # %%
+        config = {
+            "OutputFilename": "stellarator",
+            "Polynomial_degree": 3,
+            "Grid_size": 6,
+            "tau": 1.0, 
+            "Lower_boundary": 0.0,
+            "Upper_boundary": 1.0,
+            "Relative_tolerance": 0.01,
+            "delta_t": 0.1,
+            "restart": False,
+            "solveAdjoint": True, 
+        }
+
+        self.runner.configure(config)
+
+        self.points = jnp.array(self.runner.getPoints())
+        field, vprime = self.yancc_wrapper.compute_field(self.points)
+
+        g = [self.ProfileError]
+
+        self.adjointProblem = StellaratorAdjointProblem(self, g, field, vprime)
+        self.runner.setAdjointProblem(self.adjointProblem)
+
+        print("Successfully created StellaratorTransport object")
+
+
+    def run(self, tFinal = None, field = None):
+        if (field is not None):
+            self.yancc_wrapper.setField(field)
+        
+        if (tFinal is not None):
+            sFinal = self.runner.run(tFinal)
+        else: 
+            sFinal = self.runner.run_ss()
+
+        return sFinal
+
+    def runAdjointSolve(self, eq = None):
+        if (eq is not None):
+            self.yancc_wrapper.setField(eq)
+            field, vprime = self.yancc_wrapper.compute_field(self.points)
+            self.adjointProblem.setField(field, vprime)
+        G, G_p = self.runner.runAdjointSolve()
+        return G, G_p
 
     def LowerBoundary(self, index, t):
         return 0.0
 
     def UpperBoundary(self, index, t):
-        return 1.5 * self.params.EdgeTemperature * self.Density(0.9)
+        return 1.5 * self.params.EdgeTemperature * self.Density(1.0)
 
     def SigmaFn( self, index, state, x, t ):
         field, vprime = self.yancc_wrapper.compute_field(x)
@@ -161,9 +210,15 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def source( self, index, state, x, t, params: NamedTuple ):
         return params.SourceHeight * jnp.exp(-(x - params.SourceCenter)**2 / (2 * params.SourceWidth**2))
 
-    def g(self, state, x, params):
+    def StoredEnergy(self, state, x, field, params):
         u = state["Variable"][0]
-        return u
+        return u* self.pnorm
+
+    def ProfileError(self, state, x, eq, params):
+        profile = get_profiles("pressure", eq)
+        pi = 2. / 3. * state["Variable"][0]
+        rho = self.yancc_wrapper.rho_from_normalized_volume(self, jnp.array(x))
+        return (pi * self.pnorm - profile(rho))**2
 
     #@partial(jax.jit, static_argnums=(0,1))
     def dSigmaFn_dq( self, index, state, x, t):
@@ -213,27 +268,23 @@ class StellaratorTransport(MaNTA.TransportSystem):
         The adjoint problem object
     """
     def createAdjointProblem(self):
-        field, vprime = self.yancc_wrapper.compute_field(0.9)
-        ap = StellaratorAdjointProblem(self, self.g, field, vprime)
-        return ap
+        pass
 
 class StellaratorAdjointProblem(MaNTA.AdjointProblem):
-    def __init__(self, transport_system: MaNTA.TransportSystem, g, boundary_field, boundary_vprime):
+    def __init__(self, transport_system: MaNTA.TransportSystem, g, field, vprime):
         MaNTA.AdjointProblem.__init__(self)
 
         self.g = g
+        self.ng = len(self.g) # g functions passed in as an array
 
-        # only need to compute gradient of flux on the boundary 
+        self.field  = field
+        self.vprime = vprime
+        self.boundary_field = field[-1]
+        self.boundary_vprime = vprime[-1]
 
-        # pvals = outer flux surface
-
-        # if xloc == outer, 
-        self.field = boundary_field
-        self.vprime = boundary_vprime
-
-        flat, _ =  jax.flatten_util.ravel_pytree((eqx.filter(boundary_field, eqx.is_array)))
+        flat, _ =  jax.flatten_util.ravel_pytree((eqx.filter(self.boundary_field, eqx.is_array)))
         print(len(flat))
-        self.np = len(flat)-1
+        self.np = (len(flat)-1)*24
         self.np_boundary = 0
 
         self.sigma = transport_system.sigma
@@ -245,26 +296,36 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         self.UpperBoundarySensitivities = {}
         self.LowerBoundarySensitivities = {}
 
+    def setField(self, field, vprime):
+        self.field = field
+        self.vprime = vprime
+
+    def unravel(self, grad):
+        self.unravel(grad)
+    
     def gFn(self, i, state, x):
-        return self.g(state, x, self.params)
+        return self.g[i](state, x, self.field, self.params)
 
     def dgFndp(self, i, state, x):
-        # g, _ = jax.flatten_util.ravel_pytree(eqx.filter_grad(lambda params: self.g(state, x, params))(self.field))
+
+        fgrad = eqx.filter_grad(lambda field: self.g[i](state, x, field, self.params))
+        fgrad_vmap = jax.vmap(fgrad, in_axes=({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0, 0, None))
+        grad, self.unravel = jax.flatten_util.ravel_pytree(fgrad_vmap(self.field))
         # out = jnp.pad(g, pad_width=(0, self.np_boundary), mode='constant', constant_values=0)
-        return jnp.zeros((self.np,))
+        return grad
         
     def dg(self, i, states, positions):
         x = jnp.array(positions)
 
-        out = jax.vmap(jax.grad(self.g, argnums=0), in_axes=({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0, None))(states, x, self.params)  
+        out = jax.vmap(jax.grad(self.g[i], argnums=0), in_axes=({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0, 0, None))(states, x, self.field, self.params)  
         out["Scalars"] = []
         return out
 
     def dSigma(self, i, states, positions):
 
         boundary_state = getStateAtIndex(states, -1)
-        out = eqx.filter_grad(lambda field: self.sigma(i, boundary_state, positions[-1], 0, field, self.vprime, self.params))(self.field)  
-        out_flattened, self.unravel = jax.flatten_util.ravel_pytree(out)
+        out = eqx.filter_grad(lambda field: self.sigma(i, boundary_state, positions[-1], 0, field, self.boundary_vprime, self.params))(self.boundary_field)  
+        out_flattened, _ = jax.flatten_util.ravel_pytree(out)
         out_padded = jnp.zeros((len(out_flattened), len(positions)))
         out_padded = out_padded.at[:,-1].set(out_flattened)
         print(out_padded.shape)
@@ -317,4 +378,6 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         self.np += 1
         self.np_boundary += 1
     
+# %%
+
    

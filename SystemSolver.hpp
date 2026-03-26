@@ -38,7 +38,7 @@ namespace adjoint_test_suite
 class SystemSolver
 {
     public:
-        SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *pProblem, AdjointProblem *adjointProblem = nullptr);
+        SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *pProblem);
         SystemSolver(const SystemSolver &) = delete; // Best practice to define this as deleted. We can't copy this class.
         ~SystemSolver();
 
@@ -133,6 +133,8 @@ class SystemSolver
                                                N_Vector &res,         // vector for storing residual
                                                N_Vector &absTolVec,   // vector for storing absolute tolerances
                                                sunrealtype &tout, sunrealtype &tret, bool writeOutput = true); // return a callable solver object
+
+        void setAdjointProblem(AdjointProblem *ap) { adjointProblem = ap; };
         void runAdjointSolve();
 
         void setJacTime(double tt) { jt = tt; };

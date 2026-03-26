@@ -181,7 +181,7 @@ void PyRunner::configure(const py::dict &config)
         pProblem->setRestartValues(Y, dYdt, *grid, k);
     }
 
-    system = std::make_unique<SystemSolver>(*grid, k, pProblem.get(), adjoint.get());
+    system = std::make_unique<SystemSolver>(*grid, k, pProblem.get());
 
     double dt = getValueWithDefault<double>("delta_t", config);
     std::vector<double> atol = getValueWithDefault<std::vector<double>>("Absolute_tolerance", config);
@@ -211,7 +211,7 @@ void PyRunner::configure(const py::dict &config)
     std::cerr << "Configuration done." << std::endl;
 }
 
-GlobalState PyRunner::run(double tFinal)
+void PyRunner::run(double tFinal)
 {
     if (!configured)
     {
@@ -225,10 +225,9 @@ GlobalState PyRunner::run(double tFinal)
     runner(tFinal);
 
     std::cout << "Done." << std::endl;
-    return system->y.evalOnNodes();
 }
 
-GlobalState PyRunner::run_ss()
+void PyRunner::run_ss()
 {
     if (!configured)
     {
@@ -238,34 +237,38 @@ GlobalState PyRunner::run_ss()
     runner(0); // Final time doesn't matter so just pass 0
 
     std::cout << "Done." << std::endl;
-    return system->y.evalOnNodes();
-}
-
-Vector PyRunner::G(void)
-{
-    return Vector();
 }
 
 py::tuple PyRunner::runAdjointSolve(void)
 {
+    if (adjoint == nullptr)
+        throw std::runtime_error("\"runAdjointSolve\" but adjoint problem not set");
     system->runAdjointSolve();
 
     auto np_internal = adjoint->getNpInternal();
-    std::cout <<"np_interal " << np_internal << std::endl; 
-    Vector G_p = system->G_p(Eigen::seq(0, np_internal - 1));
+    std::cout << "np_interal " << np_internal << std::endl;
+    Matrix G_p = system->G_p(Eigen::all, Eigen::seq(0, np_internal - 1));
 
     // Create output to pass back to Python
     using namespace pybind11::literals;
     py::dict gp("G_p"_a = G_p);
     if (adjoint->getNpBoundary() > 0)
     {
-        Vector G_p_boundary = system->G_p(Eigen::seq(np_internal, adjoint->getNp() - 1));
+        Matrix G_p_boundary = system->G_p(Eigen::all, Eigen::seq(np_internal, adjoint->getNp() - 1));
         gp["G_p_boundary"] = G_p_boundary;
     }
 
-    double G = adjoint->GFn(0, system->y);
+    Vector G(adjoint->getNg());
+    for (Index i = 0; i < adjoint->getNg(); i++)
+        G(i) = adjoint->GFn(i, system->y);
 
     return py::make_tuple(G, gp);
+}
+
+// Returns all points the fluxes and sources will be evaluated at
+std::vector<double> PyRunner::getPoints(void)
+{
+    return system->y.getPoints();
 }
 
 extern "C"

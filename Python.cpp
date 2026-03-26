@@ -9,10 +9,23 @@
 #include "PyTransportSystem.hpp"
 #include "PyAdjointProblem.hpp"
 #include "PyRunner.hpp"
+// #include "xla/ffi/api/c_api.h"
+// #include "xla/ffi/api/api.h"
+// #include <type_traits>
 
 namespace py = pybind11;
 
 int runManta(std::string const &);
+
+// // Needed to be able to handle FFI in JAX
+// template <typename T, typename... Args>
+// static py::capsule EncapsulateFfiCall(T (PyRunner::*fn)(Args...))
+// {
+// 	// This check is optional, but it can be helpful for avoiding invalid handlers.
+// 	static_assert(std::is_invocable_r_v<XLA_FFI_Error *, T, XLA_FFI_CallFrame *>,
+// 				  "Encapsulated function must be an XLA FFI handler");
+// 	return py::capsule(reinterpret_cast<void *&>(fn));
+// }
 
 // This allows one to use a python dict as a state variable,
 // if the python dict has the right keys in it
@@ -211,5 +224,7 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 		.def("configure", &PyRunner::configure)
 		.def("run", &PyRunner::run)
 		.def("run_ss", &PyRunner::run_ss)
+		.def("getPoints", &PyRunner::getPoints)
+		.def("setAdjointProblem", &PyRunner::setAdjointProblem)
 		.def("runAdjointSolve", &PyRunner::runAdjointSolve);
 }

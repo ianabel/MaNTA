@@ -61,11 +61,11 @@ class yancc_wrapper():
         
         self.eq = desc.examples.get("W7-X")
         r = jnp.linspace(0,1,20)
-        desc_grid = desc.grid.LinearGrid(rho=r, M=self.eq.M_grid, N=self.eq.N_grid, NFP=self.eq.NFP)
-        desc_data = self.eq.compute(["V(r)", "V_r(r)"], grid=desc_grid)
-        V = desc_grid.compress(desc_data['V(r)'])
+        self.grid = desc.grid.LinearGrid(rho=r, M=self.eq.M_grid, N=self.eq.N_grid, NFP=self.eq.NFP)
+        desc_data = self.eq.compute(["V(r)", "V_r(r)"], grid=self.grid)
+        V = self.grid.compress(desc_data['V(r)'])
         Vn = V/V[-1] # normalize
-        dVdr = desc_grid.compress(desc_data['V_r(r)'])
+        dVdr = self.grid.compress(desc_data['V_r(r)'])
         dVndr = dVdr/V[-1] # normalize
         self.Vn = interpax.CubicSpline(r, Vn)
         self.dVndr = interpax.CubicSpline(r, dVndr)
@@ -73,8 +73,10 @@ class yancc_wrapper():
         self.index = []
         self.speedgrid = MaxwellSpeedGrid(nx)
         self.pitchgrid = UniformPitchAngleGrid(na)
-        print("yancc wrapper initialized successfully.")
+        print("yancc_wrapper initialized successfully.")
 
+    def get_grid(self):
+        return self.grid
     """
     Compute fluxes using yancc given the MaNTA state
     Parameters
@@ -86,8 +88,9 @@ class yancc_wrapper():
     dict
         Fluxes computed by yancc, normalized to be dimensionless
     """
-    def set_field(self, field_in):
-        self.field = field_in
+    def set_field(self, eq):
+        self.eq = eq
+        self.fields = []
 
     def compute_field(self,x):
          rho = self.rho_from_normalized_volume(x)
