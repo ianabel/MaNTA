@@ -357,11 +357,9 @@ Normalisation:
 // Define lengths so R_ref = 1
 Real MirrorPlasma::Gamma(RealVector u, RealVector q, Real V, Time t) const
 {
-	Real n = uToDensity(u(Channel::Density)), p_e = (2. / 3.) * u(Channel::ElectronEnergy);
-	//, p_i = (2. / 3.) * u(Channel::IonEnergy);
+	Real n = uToDensity(u(Channel::Density)), p_e = (2. / 3.) * u(Channel::ElectronEnergy), p_i = (2. / 3.) * u(Channel::IonEnergy);
 	Real Te = p_e / n;
-	// Real Ti = floor(p_i / n, MinTemp);
-
+	Real Ti = p_i / n;
 	Real nPrime = qToDensityGradient(q(Channel::Density), u(Channel::Density)), p_e_prime = (2. / 3.) * q(Channel::ElectronEnergy), p_i_prime = (2. / 3.) * q(Channel::IonEnergy);
 
 	Real ThermalForce = (3. / 2.) * (p_e_prime - nPrime * Te); // p_e  * (1/T) * dT/dpsi
@@ -383,18 +381,18 @@ Real MirrorPlasma::Gamma(RealVector u, RealVector q, Real V, Time t) const
 
 	// If gradient is too steep for MaNTA to handle, add diffusion
 
-	// Real rhon = abs(sqrt(Ti) * Plasma->RhoStarRef() * nPrime / B->dRdV(V, 0.0) / n);
+	Real rhon = abs(sqrt(Ti) * Plasma->RhoStarRef() * nPrime / B->dRdV(V, 0.0) / n);
 	// // Real lambda_n = (B->L_V(V) * (R_Upper - R_Lower)) * abs(nPrime);
 
-	// Real x = (rhon - lowNThreshold) / lowNThreshold;
+	Real x = (rhon - lowNThreshold) / lowNThreshold;
 
 	// // Real Chi_n = 1.0; // sqrt(Plasma->mu()) * pow(Ti, 3. / 2.) * lambda_n;
 
-	// if (x >= 0)
-	// 	Gamma += x * lowNDiffusivity * nPrime * GeometricFactor * R; // SmoothTransition(x, transitionLength, lowNDiffusivity) * Chi_n * GeometricFactor * R * nPrime * x;
+	if (x >= 0)
+		Gamma += x * lowNDiffusivity * nPrime * GeometricFactor * R; // SmoothTransition(x, transitionLength, lowNDiffusivity) * Chi_n * GeometricFactor * R * nPrime * x;
 	// Gamma += lowNDiffusivity * nPrime;
 	if (std::isfinite(Gamma.val))
-		return Gamma + DiffuseHighGradient(u(Channel::Density), q(Channel::Density), lowNThreshold, lowNDiffusivity, V);
+		return Gamma; //+ DiffuseHighGradient(u(Channel::Density), q(Channel::Density), lowNThreshold, lowNDiffusivity, V);
 	else
 		throw std::logic_error("Non-finite value computed for the particle flux at x = " + std::to_string(V.val) + " and t = " + std::to_string(t));
 };
@@ -431,8 +429,8 @@ Real MirrorPlasma::qi(RealVector u, RealVector q, Real V, Time t) const
 
 	// Real lambda_T = (B->L_V(V) * (R_Upper - R_Lower)) * abs(Ti_prime);
 
-	// Real rhoTi = abs(sqrt(Ti) * Plasma->RhoStarRef() * Ti_prime / B->dRdV(V, 0.0) / Ti);
-
+	Real rhoTi = abs(sqrt(Ti) * Plasma->RhoStarRef() * Ti_prime / B->dRdV(V, 0.0) / Ti);
+	Real x = (rhoTi - lowPThreshold) / lowPThreshold;
 	// Real R_LTi = abs(R * Ti_prime / B->dRdV(V, 0.0) / Ti);
 	// Real R_LTi_crit = 4 / 3 * (1 + Ti / Te);
 
@@ -450,8 +448,10 @@ Real MirrorPlasma::qi(RealVector u, RealVector q, Real V, Time t) const
 	// if (x >= 0)
 	// 	HeatFlux += lowPDiffusivity * sqrt(Plasma->mu() / 2.0) * pow(Ti, 3. / 2.) * pow(x, 2) * n * Ti_prime * GeometricFactor * GeometricFactor;
 	// HeatFlux += lowPDiffusivity * Ti_prime;
+	if (x >= 0)
+		HeatFlux += x * lowPDiffusivity * Ti_prime * GeometricFactor * R; //
 	if (std::isfinite(HeatFlux.val) && std::isfinite(PotentialEnergyFlux.val))
-		return HeatFlux - PotentialEnergyFlux + DiffuseHighGradient(Ti, Ti_prime, lowPThreshold, lowPDiffusivity, V);
+		return HeatFlux - PotentialEnergyFlux; //+ DiffuseHighGradient(Ti, Ti_prime, lowPThreshold, lowPDiffusivity, V);
 
 	else
 		throw std::logic_error("Non-finite value computed for the ion heat flux at x = " + std::to_string(V.val) + " and t = " + std::to_string(t));
@@ -615,7 +615,7 @@ Real MirrorPlasma::Sn(RealVector u, RealVector q, RealVector sigma, RealVector p
 	{ return (Factor + (1 - Factor) * pow(sin(xn / transitionLength * M_PI_2), 1.0)); };
 	if (xn <= transitionLength)
 	{
-		S *= EdgeFactor(0.1); // 1 + 1 / 5e-2 * (xn - 5e-2);
+		S *= EdgeFactor(0.0); // 1 + 1 / 5e-2 * (xn - 5e-2);
 	}
 	return S;
 };
@@ -665,12 +665,12 @@ Real MirrorPlasma::Spi(RealVector u, RealVector q, RealVector sigma, RealVector 
 	// { return SourceRampup > 0 ? (1 - 0.1) * tanh(t / SourceRampup) + 0.1 : 1.0; };
 
 	Real Heating = IonPotentialHeating(u, q, phi, V);
-	Real S = Heating - (ParallelLosses - ChargeExchangeHeatLosses + ParticleSourceHeating);
+	Real S = Heating - (ParallelLosses + ChargeExchangeHeatLosses + ParticleSourceHeating);
 	auto RampupFactor = [&](Time t)
 	{ return SourceRampup > 0 ? (1 - 1e-2) * tanh(t / SourceRampup) + 1e-2 : 1.0; };
 	S *= RampupFactor(t);
 	S += ViscousHeating(u, q, V, t) + EnergyExchange + RelaxSource(n * Ti, p_i);
-	// S += UniformHeatSource * exp(-t / SourceRampup);
+	S += UniformHeatSource * exp(-t / SourceRampup);
 	Real xn = (R - R_Lower) / (R_Upper - R_Lower);
 	auto EdgeFactor = [&](double Factor)
 	{ return (Factor + (1 - Factor) * pow(sin(xn / transitionLength * M_PI_2), 1.0)); };
@@ -724,13 +724,13 @@ Real MirrorPlasma::Spe(RealVector u, RealVector q, RealVector sigma, RealVector 
 	S += UniformHeatSource * exp(-t / SourceRampup);
 	// Real xn = (x - xL) / (xR - xL);
 
-	Real xn = (R - R_Lower) / (R_Upper - R_Lower);
-	auto EdgeFactor = [&](double Factor)
-	{ return (Factor + (1 - Factor) * pow(sin(xn / transitionLength * M_PI_2), 1.0)); };
-	if (xn <= transitionLength)
-	{
-		S *= EdgeFactor(tanh(t / 0.01)); // 1 + 1 / 5e-2 * (xn - 5e-2);
-	}
+	// Real xn = (R - R_Lower) / (R_Upper - R_Lower);
+	// auto EdgeFactor = [&](double Factor)
+	// { return (Factor + (1 - Factor) * pow(sin(xn / transitionLength * M_PI_2), 1.0)); };
+	// if (xn <= transitionLength)
+	// {
+	// 	S *= EdgeFactor(tanh(t / 0.01)); // 1 + 1 / 5e-2 * (xn - 5e-2);
+	// }
 	return S; //+ RelaxSource(u(Channel::Density) * Te, p_e) + RelaxSource(n * floor(Te, MinTemp), p_e);
 };
 
@@ -843,10 +843,13 @@ Real MirrorPlasma::ParticleSource(double R, double t) const
 	// // return (exp(-shape * (R - R_Lower) * (R - R_Lower)) + exp(-shape * (R - R_Upper) * (R - R_Upper)));
 	// Real S = LowerParticleSourceStrength * exp(-(R - R_Lower) * shape) + UpperParticleSourceStrength * exp((R - R_Upper) * shape);
 	// // return LowerParticleSourceStrength; //* exp(-t / 5e-2);
+	Real S = LowerParticleSourceStrength +
+			 UpperParticleSourceStrength * exp(-shape * (R - ParticleSourceCenter) * (R - ParticleSourceCenter));
 
-	// return
-	return LowerParticleSourceStrength +
-		   UpperParticleSourceStrength * exp(-shape * (R - ParticleSourceCenter) * (R - ParticleSourceCenter));
+	if (useNeutralModel)
+		S *= (0.5 * exp(-t / 1e-3) + 0.5);
+
+	return S;
 	// return S;
 
 	//   return ParticleSourceStrength;

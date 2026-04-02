@@ -333,9 +333,19 @@ private:
         Real maxE = min(1e6, maxEV);
 
         Real Integral = 0;
-        Integral.val = integrator::integrate([&](double Energy)
-                                             { return Integrand(Energy, Mass, Mth, T * T0eV, CrossSection(Energy)).val; }, minE.val, maxE.val, max_depth, tol);
+        if (maxE <= minE || !std::isfinite(maxE.val))
+            return Integral; // Return 0 if the domain of integration doesn't make sense
 
+        try
+        {
+            Integral.val = integrator::integrate([&](double Energy)
+                                                 { return Integrand(Energy, Mass, Mth, T * T0eV, CrossSection(Energy)).val; }, minE.val, maxE.val, max_depth, tol);
+        }
+        catch (...)
+        {
+            std::cerr << maxE << ", " << minE << std::endl;
+            throw;
+        }
         // boost isn't compatible with autodiff so we calculate .grad integral separately if needed
         if (T.grad != 0 || vtheta.grad != 0)
         {

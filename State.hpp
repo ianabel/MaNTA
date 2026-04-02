@@ -121,8 +121,8 @@ public:
     {
         return _Variable.col(i);
     }
-    // Grabs data on a whole cell for Jacobian computation, **implicitly assumes we're doing interpolation
-    Eigen::Ref<Matrix> cellwiseVariable(Index cell)
+    // Grabs data on a whole cell for Jacobian computation, **implicitly assumes we're doing interpolation (read only)
+    Eigen::Ref<const Matrix> cellwiseVariable(Index cell)
     {
         return _Variable(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
     }
@@ -142,7 +142,7 @@ public:
     {
         return _Derivative.col(i);
     }
-    Eigen::Ref<Matrix> cellwiseDerivative(Index cell)
+    Eigen::Ref<const Matrix> cellwiseDerivative(Index cell)
     {
         return _Derivative(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
     }
@@ -162,7 +162,7 @@ public:
     {
         return _Flux.col(i);
     }
-    Eigen::Ref<Matrix> cellwiseFlux(Index cell)
+    Eigen::Ref<const Matrix> cellwiseFlux(Index cell)
     {
         return _Flux(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
     }
@@ -182,7 +182,7 @@ public:
     {
         return _Aux.col(i);
     }
-    Eigen::Ref<Matrix> cellwiseAux(Index cell)
+    Eigen::Ref<const Matrix> cellwiseAux(Index cell)
     {
         return _Aux(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
     }
@@ -213,6 +213,7 @@ private:
 };
 
 // Wrapper class to make Jacobian computation cleaner
+// In general, this class will be holding derivative data and not state data
 class GlobalStateMatrix
 {
 public:
@@ -231,9 +232,9 @@ public:
         Returns vector of Matrix for per-cell operations, index like Variable[Var1](Var2, i),
         where i is within-cell index
     */
-    std::vector<Matrix> Variable(Index cell)
+    std::vector<Eigen::Ref<const Matrix>> Variable(Index cell)
     {
-        std::vector<Matrix> out;
+        std::vector<Eigen::Ref<const Matrix>> out;
 
         for (Index var = 0; var < nVars; var++)
         {
@@ -242,9 +243,9 @@ public:
         return out;
     }
 
-    std::vector<Matrix> Derivative(Index cell)
+    std::vector<Eigen::Ref<const Matrix>> Derivative(Index cell)
     {
-        std::vector<Matrix> out;
+        std::vector<Eigen::Ref<const Matrix>> out;
 
         for (Index var = 0; var < nVars; var++)
         {
@@ -253,9 +254,9 @@ public:
         return out;
     }
 
-    std::vector<Matrix> Flux(Index cell)
+    std::vector<Eigen::Ref<const Matrix>> Flux(Index cell)
     {
-        std::vector<Matrix> out;
+        std::vector<Eigen::Ref<const Matrix>> out;
 
         for (Index var = 0; var < nVars; var++)
         {
