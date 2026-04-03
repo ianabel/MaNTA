@@ -24,7 +24,7 @@ public:
 
     // We're assuming Gfn = Int gFn dx for now
     virtual Value gFn(Index gIndex, const State &s, Position x) const = 0;
-    virtual Values dgFndp(Index gIndex, const State &s, Position x) const
+    virtual Matrix dgFndp(Index gIndex, const GlobalState &s, std::vector<Position> const &abscissae) const
     {
         throw std::runtime_error("Virtual function dgFndp only for use within python class.");
     }

@@ -28,9 +28,13 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
     def gFn(self, i, state, x):
         return self.g(state, x, self.params)
 
-    @partial(jax.jit, static_argnums=(0,1))
-    def dgFndp(self, gIndex, state, x):
-        g, _ = ravel_pytree(jax.grad(self.g, argnums=2)(state, x, self.params))
+    #@partial(jax.jit, static_argnums=(0,1))
+    def dgFndp(self, gIndex, states, positions):
+        x = jnp.array(positions)
+        dgdp = jax.vmap(jax.grad(self.g, argnums=2), in_axes=({"Variable": 1, "Derivative": 1, "Flux": 1, "Aux": 1, "Scalars": None}, 0, None))(states, x, self.params)
+        g, _ = ravel_pytree(dgdp)
+        g = jnp.reshape(g, (self.np - self.np_boundary, len(positions)))
+
         out = jnp.pad(g, pad_width=(0, self.np_boundary), mode='constant', constant_values=0)
         return out
 

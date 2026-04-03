@@ -58,35 +58,36 @@ public:
     };
     Values dGFndp(Index gIndex, DGSoln &y) const override
     {
-        auto const &grid = y.getGrid();
-        auto const &x_vals = y.getBasis().abscissae();
-        auto const &x_wgts = y.getBasis().weights();
-        const size_t n_abscissa = x_vals.size();
-
+        // auto const &grid = y.getGrid();
+        // auto const &x_vals = y.getBasis().abscissae();
+        // auto const &x_wgts = y.getBasis().weights();
+        // const size_t n_abscissa = x_vals.size();
+        const auto states = y.evalOnNodes();
+        const auto points = y.getPoints();
         Values out(np);
+
         out.setZero();
 
-        for (size_t i = 0; i < grid.getNCells(); i++)
+        Matrix dgdp = dgFndp(gIndex, states, points);
+
+        for (size_t i = 0; i < y.getGrid().getNCells(); i++)
         {
-            const auto &I = grid[i];
-            for (size_t j = 0; j < n_abscissa; ++j)
+            const Interval &I = y.getGrid()[i];
+
+            // interpolate dgFndp onto the quadrature points
+            // integrate interpolation to get weights
+            // compute integral as sum dgFndp * weights
+            const auto k = y.getBasis().Order();
+
+            const auto ind = Eigen::seq(i * (k + 1), (i + 1) * (k + 1) - 1);
+
+            const auto weights = y.getBasis().getIntegrationWeights(I);
+            for (Index p = 0; p < np; p++)
             {
-                // Pull the loop over the gaussian integration points
-                // outside so we can evaluate u, q, dX_dZ once and store the values
+                const Vector dgdp_cellwise = dgdp(p, ind);
+                auto coeffs = y.getBasis().InterpolateOntoBasis(I, dgdp_cellwise);
 
-                // All for loops inside here can be parallelised as they all
-                // write to separate entries in mat
-
-                double wgt = x_wgts[i] * (I.h() / 2.0);
-
-                double y_plus = I.x_l + (1.0 + x_vals[i]) * (I.h() / 2.0);
-                double y_minus = I.x_l + (1.0 - x_vals[i]) * (I.h() / 2.0);
-                State Y_plus = y.eval(y_plus), Y_minus = y.eval(y_minus);
-
-                Values dgdp_plus = dgFndp(gIndex, Y_plus, y_plus);
-                Values dgdp_minus = dgFndp(gIndex, Y_minus, y_minus);
-
-                out += wgt * dgdp_plus + wgt * dgdp_minus;
+                out(p) += coeffs.dot(weights);
             }
         }
 
@@ -97,9 +98,24 @@ public:
         PYBIND11_OVERRIDE_PURE(Value, AdjointProblem, gFn, i, s, x);
     };
 
-    Values dgFndp(Index i, const State &s, Position x) const override
+    Matrix dgFndp(Index i, const GlobalState &states, std::vector<Position> const &abscissae) const override
     {
-        PYBIND11_OVERRIDE_PURE(Values, AdjointProblem, dgFndp, i, s, x);
+
+        std::string method_name = "dgFndp";
+        py::gil_scoped_acquire gil;
+        py::function _override = py::get_override(this, method_name.c_str());
+
+        if (!_override)
+        {
+            throw std::runtime_error("Vectorized function \"dSigma\" not found in Python subclass");
+            // std::cerr << "WARNING: Vectorized function \"dSigma\" not found in Python subclass" << std::endl;
+            // TransportSystem::dSigma(i, out, states, abscissae, time);
+            // return;
+        }
+        auto out = _override(i, states, abscissae).cast<Matrix>();
+        return out;
+
+        // PYBIND11_OVERRIDE_PURE(GlobalState, AdjointProblem, dgFndp, i, s, x);
     };
 
     void dgFn_du(Index i, VectorRef out, const State &s, Position x) override

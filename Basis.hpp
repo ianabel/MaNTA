@@ -606,6 +606,18 @@ class NodalBasis
         }
 
         double Nodes( Index i ) const { return ChebNodes( i ); };
+
+        Vector getIntegrationWeights(Interval const &I) const
+        {
+            Vector out( k + 1 );
+            for( Index i = 0; i < k + 1; ++i )
+            {
+                auto F = [&](double x)
+                    { return  Evaluate(I, i, x) ; };
+                out( i ) = integrator.integrate(F, I.x_l, I.x_u);
+            }
+            return out;
+        }
 };
 
 #endif
