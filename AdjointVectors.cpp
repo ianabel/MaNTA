@@ -7,7 +7,7 @@
 #include "Types.hpp"
 #include "SystemSolver.hpp"
 
-void SystemSolver::DerivativeSubVector(Index gIndex, Vector &Vec, MatrixRef const dX_dZ, DGSoln const &Y, Index intervalIndex)
+void SystemSolver::DerivativeSubVector(Index gIndex, Vector &Vec, Eigen::Ref<const Matrix> const dX_dZ, DGSoln const &Y, Index intervalIndex)
 {
     Interval const &I(grid[intervalIndex]);
     for (Index XVar = 0; XVar < nVars; XVar++)

@@ -55,16 +55,22 @@ Real PlasmaConstants::IonizationRate(Real n, Real NeutralDensity, Real v, Real T
 
     Real n_m3 = n * n0;
     Real n_neutrals = NeutralDensity * n0;
+    try
+    {
+        Real IonIntegral = NeutralProcess([this](double Energy)
+                                          { return Plasma->protonImpactIonizationCrossSection(Energy); }, v, Ti, IonMass(), 200.0);
 
-    Real IonIntegral = NeutralProcess([this](double Energy)
-                                      { return Plasma->protonImpactIonizationCrossSection(Energy); }, v, Ti, IonMass(), 200.0);
-
-    Real ElectronIntegral = NeutralProcess([this](double Energy)
-                                           { return Plasma->electronImpactIonizationCrossSection(Energy); }, v, Te, ElectronMass, 13.6);
-
-    Real R = n_m3 * n_neutrals * (IonIntegral + ElectronIntegral);
-
-    return R;
+        Real ElectronIntegral = NeutralProcess([this](double Energy)
+                                               { return Plasma->electronImpactIonizationCrossSection(Energy); }, v, Te, ElectronMass, 13.6);
+        Real R = n_m3 * n_neutrals * (IonIntegral + ElectronIntegral);
+        return R;
+    }
+    catch (...)
+    {
+        std::cerr << Ti << std::endl;
+        std::cerr << Te << std::endl;
+        throw ::std::runtime_error("Caught exception while trying to calculate ionization rate");
+    }
 }
 
 // Returns the charge exchange loss rate in 1/(m^3 s)
@@ -72,13 +78,18 @@ Real PlasmaConstants::ChargeExchangeLossRate(Real n, Real NeutralDensity, Real v
 {
     Real n_m3 = n * n0;
     Real n_neutrals = NeutralDensity * n0;
+    try
+    {
+        Real IonIntegral = NeutralProcess([this](double Energy)
+                                          { return Plasma->HydrogenChargeExchangeCrossSection(Energy); }, v, Ti, IonMass(), 0.1);
+        Real R = n_m3 * n_neutrals * IonIntegral;
 
-    Real IonIntegral = NeutralProcess([this](double Energy)
-                                      { return Plasma->HydrogenChargeExchangeCrossSection(Energy); }, v, Ti, IonMass(), 0.1);
-
-    Real R = n_m3 * n_neutrals * IonIntegral;
-
-    return R;
+        return R;
+    }
+    catch (...)
+    {
+        throw std::runtime_error("Caught exception while trying to caluclat eCharge exchange");
+    }
 };
 
 /*
