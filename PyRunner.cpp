@@ -439,7 +439,7 @@ std::function<void(double)> SystemSolver::makeSolver(SUNLinearSolver &LS, // lin
     std::cout << "Number of Residual Evaluations due to IDACalcIC " << nresevals << std::endl;
 
     if (nresevals > 10)
-        std::cerr << " IDACalcIC required " << nresevals << " residual evaluations. Check settings in " << inputFilePath << std::endl;
+        std::cerr << " IDACalcIC required " << nresevals << " residual evaluations. Check config." << std::endl;
 
     // This also writes the t0 timeslice
 
@@ -536,6 +536,7 @@ std::function<void(double)> SystemSolver::makeSolver(SUNLinearSolver &LS, // lin
 
 PyRunner::~PyRunner()
 {
+    nc_output.Close(); // Make sure netCDF file is closed
 
     // No SunLinSol wrapper classes exist beyond this point, so we are safe in using raw pointers to construct them.
     SUNLinSolFree(LS);

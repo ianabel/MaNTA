@@ -24,7 +24,6 @@ mesh = Mesh(devices, ('ax',),axis_types=(jax.sharding.AxisType.Auto,))
 from functools import partial
 
 from yancc_wrapper import yancc_wrapper 
-from desc.compute import get_profiles
 
 from typing import NamedTuple
 
@@ -85,6 +84,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         e = 1.6e-19
         self.pnorm = 1e20 * e * 1e3
 
+        # Hold the MaNTA runner object in the class
         self.runner = MaNTA.Runner(self)
 
         # %%
@@ -96,15 +96,15 @@ class StellaratorTransport(MaNTA.TransportSystem):
             "Lower_boundary": 0.0,
             "Upper_boundary": 1.0,
             "Relative_tolerance": 0.01,
-            "delta_t": 0.1,
-            "restart": False,
+            "delta_t": 0.001,
+            "restart": True,
             "solveAdjoint": True, 
         }
 
         self.runner.configure(config)
 
         self.points = jnp.array(self.runner.getPoints())
-        field, vprime = self.yancc_wrapper.compute_field(self.points)
+        field, vprime = self.yancc_wrapper.compute_fields(self.points)
 
         g = [self.ProfileError]
 
@@ -112,7 +112,6 @@ class StellaratorTransport(MaNTA.TransportSystem):
         self.runner.setAdjointProblem(self.adjointProblem)
 
         print("Successfully created StellaratorTransport object")
-
 
     def run(self, tFinal = None, field = None):
         if (field is not None):
@@ -214,11 +213,11 @@ class StellaratorTransport(MaNTA.TransportSystem):
         u = state["Variable"][0]
         return u* self.pnorm
 
-    def ProfileError(self, state, x, eq, params):
-        profile = get_profiles("pressure", eq)
+    def ProfileError(self, state, x, field, params):
+        profile = self.yancc_wrapper.get_desc_pressure(field)
+        print(profile)
         pi = 2. / 3. * state["Variable"][0]
-        rho = self.yancc_wrapper.rho_from_normalized_volume(self, jnp.array(x))
-        return (pi * self.pnorm - profile(rho))**2
+        return (pi * self.pnorm - profile)**2
 
     #@partial(jax.jit, static_argnums=(0,1))
     def dSigmaFn_dq( self, index, state, x, t):
@@ -279,8 +278,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
 
         self.field  = field
         self.vprime = vprime
-        self.boundary_field = field[-1]
-        self.boundary_vprime = vprime[-1]
+        self.boundary_field, self.boundary_vprime = transport_system.yancc_wrapper.compute_field(1.0)
 
         flat, _ =  jax.flatten_util.ravel_pytree((eqx.filter(self.boundary_field, eqx.is_array)))
         print(len(flat))
@@ -308,9 +306,10 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
 
     def dgFndp(self, i, state, x):
 
-        fgrad = eqx.filter_grad(lambda field: self.g[i](state, x, field, self.params))
+        fgrad = jax.grad(self.g[i], argnums=2) #eqx.filter_grad(lambda field: self.g[i](state, x, field, self.params))
+        
         fgrad_vmap = jax.vmap(fgrad, in_axes=({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0, 0, None))
-        grad, self.unravel = jax.flatten_util.ravel_pytree(fgrad_vmap(self.field))
+        grad, self.unravel = jax.flatten_util.ravel_pytree(fgrad_vmap(state, x, self.field, self.params))
         # out = jnp.pad(g, pad_width=(0, self.np_boundary), mode='constant', constant_values=0)
         return grad
         

@@ -7,7 +7,7 @@ from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 from yancc.species import LocalMaxwellian
 from yancc.solve import solve_dke
 
-from scipy.constants import elementary_charge, proton_mass
+from scipy.constants import elementary_charge, mu_0, proton_mass
 
 import jax
 import jax.numpy as jnp
@@ -71,6 +71,7 @@ class yancc_wrapper():
         self.dVndr = interpax.CubicSpline(r, dVndr)
         self.fields = []
         self.index = []
+        self.rho = []
         self.speedgrid = MaxwellSpeedGrid(nx)
         self.pitchgrid = UniformPitchAngleGrid(na)
         print("yancc_wrapper initialized successfully.")
@@ -88,13 +89,19 @@ class yancc_wrapper():
     dict
         Fluxes computed by yancc, normalized to be dimensionless
     """
-    def set_field(self, eq):
-        self.eq = eq
-        self.fields = []
+    def set_fields(self, fields):
+        self.fields = fields
 
     def compute_field(self,x):
-         rho = self.rho_from_normalized_volume(x)
-         return Field.from_desc(self.eq, rho, self.nt, self.nz), self.dVndr(rho)
+        rho = self.rho_from_normalized_volume(x)
+        return Field.from_desc(self.eq, rho, self.nt, self.nz), self.dVndr(rho)
+    
+    def get_desc_pressure(self, field):
+        beta = 1e-2
+
+        pressure_profile_at_yancc_desc_grid_rho_pts =  beta * field.B2mag_fsa / (2 * mu_0) * (1 - field.rho) ** 2
+  
+        return pressure_profile_at_yancc_desc_grid_rho_pts
 
 
     def compute_fields(self, x):
@@ -107,6 +114,7 @@ class yancc_wrapper():
             for pos in x:
                 rho.append(self.rho_from_normalized_volume(pos))
                 self.fields.append(Field.from_desc(self.eq,rho[i],self.nt,self.nz))
+                
                 self.index.append(i)
                 i+=1
             self.fields = tree_map(lambda *vals: jnp.stack(vals), *self.fields)

@@ -1,3 +1,7 @@
+import jax
+
+jax.config.update("jax_enable_compilation_cache", False)
+
 from typing import NamedTuple
 
 from functools import partial
@@ -6,11 +10,12 @@ import MaNTA
 
 from VectorizedTransportSystem import VectorizedTransportSystem
 from JAXAdjointProblem import JAXAdjointProblem
+
+
 import jax.numpy as jnp
-import jax
+
+from jax.experimental import io_callback
 import equinox as eqx
-
-
 
 class LinearDiffusionParams(NamedTuple):
     Centre: float
@@ -32,7 +37,7 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
 
         # %%
         config = {
-            "OutputFilename": "out",
+            "OutputFilename": "output",
             "Polynomial_degree": 5,
             "Grid_size": 10,
             "Lower_boundary": -1.0,
@@ -41,6 +46,7 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
             "tFinal": 1.0,
             "delta_t": 0.5,
             "solveAdjoint": True, 
+            "restart" : False,
             "SteadyStateTolerance": 1e-3
         }
 
@@ -61,9 +67,9 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
             self.setParams(params)
         
         if (tFinal is not None):
-            sFinal = jax.pure_callback(self.runner.run, [], tFinal)
+            sFinal = io_callback(self.runner.run, [], tFinal, ordered=True)
        
-        sFinal = jax.pure_callback(self.runner.run_ss, [])
+        sFinal = io_callback(self.runner.run_ss, [], ordered=True)
 
         return sFinal
 
@@ -71,7 +77,7 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
         if (params is not None):
             self.run(params=params)
 
-        G, G_p = jax.pure_callback(self.runner.runAdjointSolve, self.adjointoutput) 
+        G, G_p = io_callback(self.runner.runAdjointSolve, self.adjointoutput, ordered=True) 
         return G, G_p
 
     def g(self, state, x, params):
@@ -104,12 +110,13 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
         adjointProblem = JAXAdjointProblem(self, self.g)
         return adjointProblem
 
-params = LinearDiffusionParams(0.1, 0.1, 2.0, 1.0)
+params = LinearDiffusionParams(0.1, 0.1, 0.1, 3.0)
 ld = JAXLinearDiffusion(params)
-
+ld.run()
 @jax.custom_jvp
 def fun(params):
-    G, _ = ld.runAdjointSolve(params=params)
+    G, G_p = ld.runAdjointSolve(params=params)
+    print(G_p)
     return G[0]
 
 @fun.defjvp
@@ -124,10 +131,14 @@ def fun_jvp(primals, tangents):
 
     return G[0], jnp.dot(Gravel, params_dot_flatten)
 
-params_new = LinearDiffusionParams(0.1, 0.1, 2.0, 1.0)
+params_new = LinearDiffusionParams(0.1, 0.1, 0.0, 2.0)
+g1 = eqx.filter_jit(jax.grad(fun))
+#g2 = eqx.filter_jit(jax.grad(fun))
+print(g1(params_new))
 
-grad = eqx.filter_jit(jax.grad(fun))
-print(grad(params_new))
+params_new = LinearDiffusionParams(0.1, 0.1, 0.0, 1.0)
+print(g1(params_new))
+#print(gprint(g1(params_new))2(params_new))
 
 
 

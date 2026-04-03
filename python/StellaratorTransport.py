@@ -46,10 +46,7 @@ print("Elapsed time:")
 print(time_duration)
 
 
-# %%
-import matplotlib.pyplot as plt
 
-plt.plot(finalState["Variable"])
 
 
 # %%
