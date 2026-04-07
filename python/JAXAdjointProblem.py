@@ -20,7 +20,6 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
 
         self.np = len(transport_system.params)
         self.np_boundary = 0
-        self.spatialParameters=True
 
         self.sigma = transport_system.sigma
         self.source = transport_system.source
@@ -44,7 +43,7 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
         g = jnp.reshape(g, (self.np - self.np_boundary, len(positions)))
 
         out = jnp.pad(g, pad_width=(0, self.np_boundary), mode='constant', constant_values=0)
-        return out
+        return out.transpose()
 
     @partial(jax.jit, static_argnums=(0,))
     def dg(self, i, states, positions):

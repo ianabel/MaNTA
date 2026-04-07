@@ -129,9 +129,15 @@ def fun_jvp(primals, tangents):
     Gravel, _ = jax.flatten_util.ravel_pytree(G_p)
     params_dot_flatten, _ = jax.flatten_util.ravel_pytree(params_dot)
 
-    return G[0], jnp.dot(Gravel, params_dot_flatten)
+    dot = jax.vmap(lambda g, g_p: jnp.dot(g, g_p), in_axes=(0, None))(Gravel, params_dot_flatten)
+
+
+    return G[0], jnp.sum(dot)
 
 params_new = LinearDiffusionParams(0.1, 0.1, 0.0, 2.0)
+
+print(fun(params_new))
+
 g1 = eqx.filter_jit(jax.grad(fun))
 #g2 = eqx.filter_jit(jax.grad(fun))
 print(g1(params_new))

@@ -1273,7 +1273,7 @@ void SystemSolver::computeAdjointGradients()
     
     // Spatial paramters effectively mean we have nCells * np parameters, but we store as a matrix to make output easier to interpret
     if (adjointProblem->areParametersSpatial())
-        G_p.resize(adjointProblem->getNg() * nCells, adjointProblem->getNp());
+        G_p.resize(adjointProblem->getNg() * nCells * (k + 1), adjointProblem->getNp());
     else 
         G_p.resize(adjointProblem->getNg(), adjointProblem->getNp());
 
@@ -1281,7 +1281,7 @@ void SystemSolver::computeAdjointGradients()
     {
         if (adjointProblem->areParametersSpatial())
         {
-            G_p.block(i * nCells, 0, nCells, adjointProblem->getNp()) = adjointProblem->dGFndp(i, y);
+            G_p.block(i * nCells * (k + 1), 0, nCells * (k + 1), adjointProblem->getNp()) = adjointProblem->dGFndp(i, y);
         }
         else
             G_p.row(i) = adjointProblem->dGFndp(i, y);
