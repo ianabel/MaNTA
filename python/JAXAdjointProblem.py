@@ -20,6 +20,7 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
 
         self.np = len(transport_system.params)
         self.np_boundary = 0
+        self.spatialParameters=True
 
         self.sigma = transport_system.sigma
         self.source = transport_system.source
@@ -38,7 +39,7 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
     #@partial(jax.jit, static_argnums=(0,1))
     def dgFndp(self, gIndex, states, positions):
         x = jnp.array(positions)
-        dgdp = jax.vmap(jax.grad(self.g, argnums=2), in_axes=({"Variable": 1, "Derivative": 1, "Flux": 1, "Aux": 1, "Scalars": None}, 0, None))(states, x, self.params)
+        dgdp = jax.vmap(jax.grad(self.g, argnums=2), in_axes=({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0, None))(states, x, self.params)
         g, _ = ravel_pytree(dgdp)
         g = jnp.reshape(g, (self.np - self.np_boundary, len(positions)))
 

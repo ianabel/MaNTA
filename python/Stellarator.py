@@ -104,11 +104,12 @@ class StellaratorTransport(MaNTA.TransportSystem):
         self.runner.configure(config)
 
         self.points = jnp.array(self.runner.getPoints())
+        print(self.points)
         field, vprime = self.yancc_wrapper.compute_fields(self.points)
-
+        print(field)
         g = [self.ProfileError]
 
-        self.adjointProblem = StellaratorAdjointProblem(self, g, field, vprime)
+        self.adjointProblem = StellaratorAdjointProblem(self, g, field, vprime, len(self.points))
         self.runner.setAdjointProblem(self.adjointProblem)
 
         print("Successfully created StellaratorTransport object")
@@ -270,7 +271,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         pass
 
 class StellaratorAdjointProblem(MaNTA.AdjointProblem):
-    def __init__(self, transport_system: MaNTA.TransportSystem, g, field, vprime):
+    def __init__(self, transport_system: MaNTA.TransportSystem, g, field, vprime, npoints):
         MaNTA.AdjointProblem.__init__(self)
 
         self.g = g
@@ -282,9 +283,15 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
 
         flat, _ =  jax.flatten_util.ravel_pytree((eqx.filter(self.boundary_field, eqx.is_array)))
         print(len(flat))
-        self.np = (len(flat)-1)*24
+        parameters, _ = eqx.partition(self.field, eqx.is_array)
+        print(parameters)
+        print(eqx.filter(self.field, eqx.is_array))
+        self.npoints = npoints
+        self.np_cell = len(flat)-1
+        self.np = (self.np_cell)
         self.np_boundary = 0
 
+        self.spatialParameters = True
         self.sigma = transport_system.sigma
         self.source = transport_system.source
 
@@ -304,14 +311,18 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
     def gFn(self, i, state, x):
         return self.g[i](state, x, self.field, self.params)
 
-    def dgFndp(self, i, state, x):
+    def dgFndp(self, i, states, positions):
 
-        fgrad = jax.grad(self.g[i], argnums=2) #eqx.filter_grad(lambda field: self.g[i](state, x, field, self.params))
-        
-        fgrad_vmap = jax.vmap(fgrad, in_axes=({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0, 0, None))
-        grad, self.unravel = jax.flatten_util.ravel_pytree(fgrad_vmap(state, x, self.field, self.params))
+        # filter_grad needs the differentiated parameter to be first so we have to use a lambda to swap the argument order
+        fgrad = eqx.filter_grad(lambda field, states, positions: self.g[i](states, positions, field, self.params)) #eqx.filter_grad(lambda field: self.g[i](state, x, field, self.params))
+        x = jnp.array(positions)
+        fgrad_vmap = eqx.filter_vmap(fgrad, in_axes=(0,{"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0))
+        grad_out = fgrad_vmap(self.field, states, x)
+        grad, self.unravel = jax.flatten_util.ravel_pytree(eqx.filter(grad_out, eqx.is_array))
+        jnp.expand_dims(grad,1)
+        out = jnp.reshape(grad, (self.np_cell, self.npoints ))
         # out = jnp.pad(g, pad_width=(0, self.np_boundary), mode='constant', constant_values=0)
-        return grad
+        return out.transpose()
         
     def dg(self, i, states, positions):
         x = jnp.array(positions)
@@ -327,7 +338,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         out_flattened, _ = jax.flatten_util.ravel_pytree(out)
         out_padded = jnp.zeros((len(out_flattened), len(positions)))
         out_padded = out_padded.at[:,-1].set(out_flattened)
-        print(out_padded.shape)
+        #print(out_padded.shape)
 
         return out_padded
     

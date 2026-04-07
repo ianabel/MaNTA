@@ -54,6 +54,7 @@ def manta_yancc_fun(yancc_fields):
 
 def objective_from_user_fun(grid, data):
   # note: don't change the signature to this function
+  
     yancc_dat = {
         "B_sup_t": data["B^theta"],
         "B_sup_z": data["B^zeta"],

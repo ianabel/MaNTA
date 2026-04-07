@@ -427,19 +427,20 @@ std::function<void(double)> SystemSolver::makeSolver(SUNLinearSolver &LS, // lin
     // Initialise text output and write out initial condition massaged by CalcIC
     //------------------------------Solve------------------------------
     // Update initial solution to be within tolerance of the residual equation
-    retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, dt);
-    retval = 0;
-    if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
-    {
-        throw std::runtime_error("IDACalcIC could not complete");
-    }
+
+    // retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, dt);
+    // retval = 0;
+    // if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
+    // {
+    //     throw std::runtime_error("IDACalcIC could not complete");
+    // }
 
     long int nresevals = 0;
-    IDAGetNumResEvals(IDA_mem, &nresevals);
-    std::cout << "Number of Residual Evaluations due to IDACalcIC " << nresevals << std::endl;
+    // IDAGetNumResEvals(IDA_mem, &nresevals);
+    // std::cout << "Number of Residual Evaluations due to IDACalcIC " << nresevals << std::endl;
 
-    if (nresevals > 10)
-        std::cerr << " IDACalcIC required " << nresevals << " residual evaluations. Check config." << std::endl;
+    // if (nresevals > 10)
+    //     std::cerr << " IDACalcIC required " << nresevals << " residual evaluations. Check config." << std::endl;
 
     // This also writes the t0 timeslice
 
@@ -536,7 +537,7 @@ std::function<void(double)> SystemSolver::makeSolver(SUNLinearSolver &LS, // lin
 
 PyRunner::~PyRunner()
 {
-    nc_output.Close(); // Make sure netCDF file is closed
+    system->nc_output.Close(); // Make sure netCDF file is closed
 
     // No SunLinSol wrapper classes exist beyond this point, so we are safe in using raw pointers to construct them.
     SUNLinSolFree(LS);

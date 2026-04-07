@@ -11,7 +11,7 @@ public:
 
     virtual Value GFn(Index gIndex, DGSoln &y) const = 0;
     virtual Value dGFndp(Index gIndex, Index pIndex, DGSoln &y) const = 0;
-    virtual Values dGFndp(Index gIndex, DGSoln &y) const
+    virtual Matrix dGFndp(Index gIndex, DGSoln &y) const
     {
         Values out(np);
         out.setZero();
@@ -93,9 +93,16 @@ public:
         return (pIndex < np - np_boundary);
     }
 
+    inline bool areParametersSpatial() const
+    {
+        return spatialParameters;
+    }
+
 protected:
     int ng = 1;
     int np;
     int np_boundary = 0;
+
+    bool spatialParameters = false; // whether the parameters have spatial dependence
 };
 #endif

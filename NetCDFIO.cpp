@@ -210,7 +210,7 @@ void SystemSolver::WriteTimeslice(double tNew)
 
 void SystemSolver::WriteAdjoints()
 {
-	
+
 	nc_output.AddScalarVariable("ng", "", "", adjointProblem->getNg());
 	nc_output.AddScalarVariable("np", "", "", adjointProblem->getNp());
 	nc_output.AddScalarVariable("np_boundary", "", "", adjointProblem->getNpBoundary());
@@ -221,7 +221,14 @@ void SystemSolver::WriteAdjoints()
 		nc_output.AddGroup("G" + std::to_string(i) + "_boundary", "Gradients of G on boundary using adjoint state method");
 		for (Index j = 0; j < adjointProblem->getNpInternal(); ++j)
 		{
+			// if (adjointProblem->areParametersSpatial())
+			// {
+			// 	nc_output.AddVariable("G" + std::to_string(i) + "_p", "p" + std::to_string(j), "Gradient of G with respect to p" + std::to_string(j), "", G_p.block(i * nCells, j, nCells, 1));
+			// }
+			// else
+			// {
 			nc_output.AddScalarVariable("G" + std::to_string(i) + "_p", adjointProblem->getName(j), "", "", G_p(i, j));
+			// }
 		}
 		for (Index j = 0; j < adjointProblem->getNpBoundary(); ++j)
 		{

@@ -181,7 +181,9 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 		.def("computeLowerBoundarySensitivity", &AdjointProblem::computeLowerBoundarySensitivity)
 		.def("getName", &AdjointProblem::getName)
 		.def_readwrite("np", &PyAdjointProblem::np)
-		.def_readwrite("np_boundary", &PyAdjointProblem::np_boundary);
+		.def_readwrite("np_boundary", &PyAdjointProblem::np_boundary)
+		.def_readwrite("ng", &PyAdjointProblem::ng)
+		.def_readwrite("spatialParameters", &PyAdjointProblem::spatialParameters);
 
 	py::class_<Grid>(m, "Grid")
 		.def(py::init<>(), py::return_value_policy::reference)

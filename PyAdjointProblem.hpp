@@ -56,7 +56,7 @@ public:
     {
         throw std::runtime_error("Non-vectorized version of function \"dGFndp\" depracated.");
     };
-    Values dGFndp(Index gIndex, DGSoln &y) const override
+    Matrix dGFndp(Index gIndex, DGSoln &y) const override
     {
         // auto const &grid = y.getGrid();
         // auto const &x_vals = y.getBasis().abscissae();
@@ -64,7 +64,18 @@ public:
         // const size_t n_abscissa = x_vals.size();
         const auto states = y.evalOnNodes();
         const auto points = y.getPoints();
-        Values out(np);
+        Matrix out;
+
+        // If parameters are spatial, int dg/dp dx = int dg/dp_cell delta(x - x_cell) dx, so we just return dg/dp evaluated at the nodes. Otherwise, we need to integrate dg/dp over the domain to get the total sensitivity with respect to that parameter.
+        if (areParametersSpatial())
+        {
+            return dgFndp(gIndex, states, points);
+            // out.resize(1, np * y.getGrid().getNCells());
+        }
+        else
+        {
+            out.resize(1, np);
+        }
 
         out.setZero();
 
@@ -196,11 +207,11 @@ public:
         {
             out.Variable() = _override(i, states, abscissae).cast<Matrix>();
         }
-        catch(...)
+        catch (...)
         {
             throw std::runtime_error("error when trying to compute dSigma");
         }
-        };
+    };
 
     void dSources(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae) override
     {
@@ -245,6 +256,8 @@ public:
     using AdjointProblem::ng;
     using AdjointProblem::np;
     using AdjointProblem::np_boundary;
+
+    using AdjointProblem::spatialParameters;
 
 private:
     bool initialized = false;
