@@ -9,6 +9,7 @@
 #include "PyTransportSystem.hpp"
 #include "PyAdjointProblem.hpp"
 #include "PyRunner.hpp"
+#include "PyGrid.hpp"
 // #include "xla/ffi/api/c_api.h"
 // #include "xla/ffi/api/api.h"
 // #include <type_traits>
@@ -136,6 +137,9 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 
 	m.def("run", runManta, py::return_value_policy::reference, "Runs the MaNTA suite using given configuration file");
 	m.def("registerPhysicsCase", &PhysicsCases::RegisterPhysicsCase, py::return_value_policy::reference, "Register a Physics Case");
+
+	m.def("getNodes", py::overload_cast<const std::vector<double> &, unsigned int>(&getNodes), py::return_value_policy::reference, "Get the points of a grid");
+	m.def("getNodes", py::overload_cast<Position, Position, Index, unsigned int>(&getNodes), py::return_value_policy::reference, "Get the points of a grid");
 
 	// List all interfaces of the main TransportSystem class which is what has to be derived from in python
 	py::class_<TransportSystem, PyTransportSystem, py::smart_holder>(m, "TransportSystem")

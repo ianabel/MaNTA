@@ -203,14 +203,8 @@ public:
             // TransportSystem::dSigma(i, out, states, abscissae, time);
             // return;
         }
-        try
-        {
-            out.Variable() = _override(i, states, abscissae).cast<Matrix>();
-        }
-        catch (...)
-        {
-            throw std::runtime_error("error when trying to compute dSigma");
-        }
+
+        out.Variable() = _override(i, states, abscissae).cast<Matrix>();
     };
 
     void dSources(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae) override

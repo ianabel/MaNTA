@@ -42,7 +42,7 @@ PYTHON_OUTPUT=$(PYTHON_NAME)
 
 python: $(PYTHON_OUTPUT)
 
-$(PYTHON_OUTPUT): $(OBJECTS) $(PHYSICS_OBJECTS) Python.cpp PyTransportSystem.hpp PyAdjointProblem.hpp PyRunner.hpp PyRunner.cpp
+$(PYTHON_OUTPUT): $(OBJECTS) $(PHYSICS_OBJECTS) Python.cpp PyTransportSystem.hpp PyAdjointProblem.hpp PyGrid.hpp PyRunner.hpp PyRunner.cpp 
 	$(CXX) $(CXXFLAGS) $$(python3-config --includes) -I$(realpath extern/pybind11/include) -shared -fPIC -fvisibility=hidden -o $@ Python.cpp PyRunner.cpp MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
 
 clean:

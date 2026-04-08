@@ -246,9 +246,9 @@ py::tuple PyRunner::runAdjointSolve(void)
     system->runAdjointSolve();
 
     auto np_internal = adjoint->getNpInternal();
-    std::cout << "np_interal " << np_internal << std::endl;
+    std::cout << "np_internal " << np_internal << std::endl;
     Matrix G_p = system->G_p(Eigen::all, Eigen::seq(0, np_internal - 1));
-
+    std::cout << "G_p shape: " << G_p.rows() << " x " << G_p.cols() << std::endl;
     // Create output to pass back to Python
     using namespace pybind11::literals;
     py::dict gp("G_p"_a = G_p);
