@@ -43,14 +43,31 @@ public:
     static IntegratorType integrator;
 
     // We don't have the DGSoln object in Python, so we implement GFn and dGFndp here
-    Value GFn(Index i, DGSoln &y) const override
+    Value GFn(Index gIndex, DGSoln &y) const override
     {
-        auto g_wrapper = [&](const DGSoln &y, Position x)
+        const auto states = y.evalOnNodes();
+        const auto points = y.getPoints();
+        Value out = 0.0;
+
+        Values g = gFn(gIndex, states, points);
+
+        for (size_t i = 0; i < y.getGrid().getNCells(); i++)
         {
-            State s = y.eval(x);
-            return gFn(i, s, x);
-        };
-        return y.EvaluateIntegral(g_wrapper);
+            const Interval &I = y.getGrid()[i];
+
+            // https://en.wikipedia.org/wiki/Newton%E2%80%93Cotes_formulas
+            // integrate interpolation to get weights
+            // compute integral as sum g * weights
+            const auto k = y.getBasis().Order();
+
+            const auto ind = Eigen::seq(i * (k + 1), (i + 1) * (k + 1) - 1);
+
+            const auto weights = y.getBasis().getIntegrationWeights(I);
+            const Vector g_cellwise = g(ind);
+            out += g_cellwise.dot(weights);
+        }
+
+        return out;
     };
     Value dGFndp(Index i, Index pIndex, DGSoln &y) const override
     {
@@ -96,38 +113,41 @@ public:
             for (Index p = 0; p < np; p++)
             {
                 const Vector dgdp_cellwise = dgdp(p, ind);
-                auto coeffs = y.getBasis().InterpolateOntoBasis(I, dgdp_cellwise);
-
-                out(p) += coeffs.dot(weights);
+                out(p) += dgdp_cellwise.dot(weights);
             }
         }
 
         return out;
     }
-    Value gFn(Index i, const State &s, Position x) const override
+    Value gFn(Index gIndex, const State &s, Position x) const override
     {
-        PYBIND11_OVERRIDE_PURE(Value, AdjointProblem, gFn, i, s, x);
+        throw std::runtime_error("Non-vectorized version of function \"gFn\" depracated.");
+    };
+    Values gFn(Index gIndex, const GlobalState &s, std::vector<Position> const &abscissae) const override
+    {
+        PYBIND11_OVERRIDE(Values, AdjointProblem, gFn, gIndex, s, abscissae);
     };
 
-    Matrix dgFndp(Index i, const GlobalState &states, std::vector<Position> const &abscissae) const override
+    Matrix dgFndp(Index gIndex, const GlobalState &states, std::vector<Position> const &abscissae) const override
     {
-
-        std::string method_name = "dgFndp";
-        py::gil_scoped_acquire gil;
-        py::function _override = py::get_override(this, method_name.c_str());
-
-        if (!_override)
-        {
-            throw std::runtime_error("Vectorized function \"dSigma\" not found in Python subclass");
-            // std::cerr << "WARNING: Vectorized function \"dSigma\" not found in Python subclass" << std::endl;
-            // TransportSystem::dSigma(i, out, states, abscissae, time);
-            // return;
-        }
-        auto out = _override(i, states, abscissae).cast<Matrix>();
-        return out;
-
-        // PYBIND11_OVERRIDE_PURE(GlobalState, AdjointProblem, dgFndp, i, s, x);
+        PYBIND11_OVERRIDE_PURE(Matrix, AdjointProblem, dgFndp, gIndex, states, abscissae);
     };
+    //     std::string method_name = "dgFndp";
+    //     py::gil_scoped_acquire gil;
+    //     py::function _override = py::get_override(this, method_name.c_str());
+
+    //     if (!_override)
+    //     {
+    //         throw std::runtime_error("Vectorized function \"dSigma\" not found in Python subclass");
+    //         // std::cerr << "WARNING: Vectorized function \"dSigma\" not found in Python subclass" << std::endl;
+    //         // TransportSystem::dSigma(i, out, states, abscissae, time);
+    //         // return;
+    //     }
+    //     auto out = _override(i, states, abscissae).cast<Matrix>();
+    //     return out;
+
+    //     // PYBIND11_OVERRIDE_PURE(GlobalState, AdjointProblem, dgFndp, i, s, x);
+    // };
 
     void dgFn_du(Index i, VectorRef out, const State &s, Position x) override
     {

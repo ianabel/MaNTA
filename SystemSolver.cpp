@@ -1286,12 +1286,19 @@ void SystemSolver::computeAdjointGradients()
         else
             G_p.row(i) = adjointProblem->dGFndp(i, y);
     }
-        
+    
+    //Index np = adjointProblem->areParametersSpatial() ? np_internal * nCells * (k + 1) + adjointProblem->getNpBoundary() : adjointProblem->getNp();
     for (Index pIndex = 0; pIndex < adjointProblem->getNp(); ++pIndex)
     {
         for (Index i = 0; i < nCells; ++i)
         {
-            Vector F_p(3 * nVars * (k + 1) + nAux * (k + 1));
+            Matrix F_p;
+            // if (adjointProblem->areParametersSpatial())
+            //     F_p.resize(3 * nVars * (k + 1) + nAux * (k + 1), (k + 1));
+            // else
+            // {
+                F_p.resize(3 * nVars * (k + 1) + nAux * (k + 1), 1);
+            // }
             F_p.setZero();
 
             Interval I = grid[i];
@@ -1316,10 +1323,10 @@ void SystemSolver::computeAdjointGradients()
                     dSdp_cellwise = y.getBasis().InterpolateOntoBasis( I, dSourcedp_cell(pIndex, Eigen::all) );
                 }
 
-                F_p.segment(var * (k + 1), k + 1) = dkappa_dp_phi;
+                F_p.block(var * (k + 1), 0, k + 1, 1) = dkappa_dp_phi;
 
                 //auto C_cell = C_cellwise[i];
-                F_p.segment(var * (k + 1) + 2 * nVars * (k + 1), k + 1) = -dSdp_cellwise;
+                F_p.block(var * (k + 1) + 2 * nVars * (k + 1), 0, k + 1, 1) = -dSdp_cellwise;
 
                 
 
@@ -1356,7 +1363,7 @@ void SystemSolver::computeAdjointGradients()
                         return grad;
                     };
                     Eigen::VectorXd dAux_dp_cellwise = y.getBasis().ProjectOntoBasis(I, dAuxdp);
-                    F_p.segment(3 * nVars * (k + 1) + aux * (k + 1), k + 1) = dAux_dp_cellwise;
+                    F_p.block(3 * nVars * (k + 1) + aux * (k + 1), 0, k + 1, 1) = dAux_dp_cellwise;
                 }
             }
 
@@ -1365,9 +1372,14 @@ void SystemSolver::computeAdjointGradients()
             for (Index gIndex = 0; gIndex < adjointProblem->getNg(); gIndex++)
             {
                 if (adjointProblem->areParametersSpatial())
-                    G_p(gIndex * nCells + i, pIndex) -= adjoint_squ[i].transpose() * F_p;
+                {
+                    for (Index j = 0; j < k + 1; j ++)
+                    {
+                        G_p(gIndex * nCells * (k + 1) + i * (k + 1) + j, pIndex) -= adjoint_squ[i].transpose() * static_cast<Vector>(F_p);
+                    }
+                }
                 else
-                    G_p(gIndex, pIndex) -= adjoint_squ[i].transpose() * F_p;
+                    G_p(gIndex, pIndex) -= adjoint_squ[i].transpose() * static_cast<Vector>(F_p);
             }
 
 

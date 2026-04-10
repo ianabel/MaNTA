@@ -8,79 +8,111 @@ from JAXAdjointProblem import JAXAdjointProblem
 import jax.numpy as jnp
 import jax
 
-class LinearDiffusionParams(NamedTuple):
-    Centre: float
-    InitialWidth: float
-    InitialHeight: float
-    kappa: float
-    
-config = {
-    "OutputFilename": "out",
-    "Polynomial_degree": 5,
-    "Grid_size": 10,
-    "Lower_boundary": -1.0,
-    "Upper_boundary":  1.0,
-    "Relative_tolerance" : 0.01,
-    "tFinal": 1.0,
-    "delta_t": 0.5,
-    "solveAdjoint": True, 
-    "SteadyStateTolerance": 1e-3
-}
-    
-class JAXLinearDiffusion(VectorizedTransportSystem):
-    def __init__(self):
+class NonlinearDiffusionParams(NamedTuple):
+    D: float
+    T_s: float
+    a: float    
+    SourceWidth: float
+    SourceCentre: float
+   
+    @classmethod
+    def make(cls, config) -> 'NonlinearDiffusionParams':
+        return cls(
+             SourceCentre = config["SourceCentre"],
+             D = config["D"],
+             T_s = 50.0,
+             a = config["a"],
+             SourceWidth = 0.02
+        )
+
+class JAXNonlinearDiffusion(VectorizedTransportSystem):
+    def __init__(self, config):
         super().__init__()
-
         self.nVars = 1
-
         self.isUpperDirichlet  = True
-        self.isLowerDirichlet  = True
-        self.params = LinearDiffusionParams(0.1, 0.1, 2.0, 2.0)
+        self.isLowerDirichlet  = False
+        
+
+        solver_config = {
+            "OutputFilename": "out",
+            "Polynomial_degree": 4,
+            "Grid_size": 20,
+            "tau": 1.0, 
+            "Lower_boundary": 0.0,
+            "Upper_boundary": 1.0,
+            "Relative_tolerance": 0.01,
+            "delta_t": 1.0,
+            "restart": False,
+            "solveAdjoint": True, 
+        }
+        print(config)
+        self.params = NonlinearDiffusionParams.make(config)
+        self.points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
+
+        self.runner = MaNTA.Runner(self)
+
+        self.runner.configure(solver_config)
+
+        self.adjointProblem = JAXAdjointProblem(self, self.g)
+        self.runner.setAdjointProblem(self.adjointProblem)
+        # This object will be passed to sigma and source functions
+    
+    def run(self, tFinal = None, kappa = None):
+        if (kappa is not None):
+            self.params["D"] = kappa
+        
+        if (tFinal is not None):
+            sFinal = self.runner.run(tFinal)
+        else: 
+            sFinal = self.runner.run_ss()
+
+        return sFinal
+
+    def runAdjointSolve(self, kappa = None):
+        if (kappa is not None):
+            self.params.D = kappa
+        G, G_p = self.runner.runAdjointSolve()
+        return G, G_p
 
     def g(self, state, x, params):
         u = state["Variable"][0]
-        return 0.5 * u * u
+        return 0.5 * u * u 
 
-    def setParams(self, params):
-        self.params = params
-
-    @partial(jax.jit, static_argnums=(0,))
     def sigma( self, index, state, x, t, params ):
-        tprime = state["Derivative"]
-        return params.kappa * tprime[index]
-    
-    @partial(jax.jit, static_argnums=(0,))
+        
+        u = state["Variable"][0]
+        q = state["Derivative"][0]
+        return params.D*(u ** params.a) * q
+
     def source( self, index, state, x, t, params ):
-        return 10.0
-  
+        y = x - params.SourceCentre
+        return params.T_s*jnp.exp(-y*y/params.SourceWidth)
+
+
     def LowerBoundary(self, index, t):
         return 0.0
 
     def UpperBoundary(self, index, t):
-        return 0.0
+        return 0.3
     
-    def InitialValue( self, index, x ):
-        alpha = 1 / 0.02
-        y = (x - self.params.Centre)
-        return self.params.InitialHeight * jnp.exp(-alpha * y * y)
+    def InitialValue(self, index, x):
+        return 0.3
     
     def createAdjointProblem(self):
-        adjointProblem = JAXAdjointProblem(self, self.g)
-        return adjointProblem
-
-
+        pass
 
 def runMaNTA():
-    transportSystem = JAXLinearDiffusion()
-    transportSystem.setParams(LinearDiffusionParams(0.0, 0.1, 2.0, 2.0))
+    config = {
+        "SourceCentre" : 0.3,
+        "D" : 2.0,
+        "a" : 0.0,
+    }
+    print(config)
+    transportSystem = JAXNonlinearDiffusion(config)
 
-    runner = MaNTA.Runner(transportSystem)
-    runner.configure(config)
-    runner.setAdjointProblem(transportSystem.createAdjointProblem())
-    points = runner.getPoints()
-    print(points)
-    runner.run(5.0)
-    G, G_p = runner.runAdjointSolve()
+    transportSystem.run(tFinal = 5.0)
+    G, G_p = transportSystem.runAdjointSolve()
+    print(G)
     print(G_p)
     # transportSystem.setParams(LinearDiffusionParams(0.1, 0.1, 2.0, 1.0))
     # #runner.setTransportSystem(transportSystem)

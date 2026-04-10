@@ -3,6 +3,7 @@
 
 #include "Types.hpp"
 #include "DGSoln.hpp"
+#include <Eigen/Core>
 
 class AdjointProblem
 {
@@ -19,11 +20,21 @@ public:
         {
             out(i) = dGFndp(gIndex, i, y);
         }
-        return out;
+        // cast to a row vector
+        return static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(out);
     }
 
     // We're assuming Gfn = Int gFn dx for now
     virtual Value gFn(Index gIndex, const State &s, Position x) const = 0;
+    virtual Values gFn(Index gIndex, const GlobalState &s, std::vector<Position> const &abscissae) const
+    {
+        Values out(abscissae.size());
+        for (size_t i = 0; i < abscissae.size(); ++i)
+        {
+            out(i) = gFn(gIndex, s[i], abscissae[i]);
+        }
+        return out;
+    }
     virtual Matrix dgFndp(Index gIndex, const GlobalState &s, std::vector<Position> const &abscissae) const
     {
         throw std::runtime_error("Virtual function dgFndp only for use within python class.");

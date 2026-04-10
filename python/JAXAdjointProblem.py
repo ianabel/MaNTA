@@ -32,8 +32,11 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
     def setParams(self, params):
         self.params = params
 
-    def gFn(self, i, state, x):
-        return self.g(state, x, self.params)
+    def gFn(self, i, states, positions):
+        x = jnp.array(positions)
+        out = jax.vmap(self.g, in_axes=({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0, None))(states, x, self.params)
+       
+        return out
 
     #@partial(jax.jit, static_argnums=(0,1))
     def dgFndp(self, gIndex, states, positions):
@@ -43,7 +46,8 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
         g = jnp.reshape(g, (self.np - self.np_boundary, len(positions)))
 
         out = jnp.pad(g, pad_width=(0, self.np_boundary), mode='constant', constant_values=0)
-        return out.transpose()
+    
+        return out
 
     @partial(jax.jit, static_argnums=(0,))
     def dg(self, i, states, positions):
@@ -57,6 +61,7 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
     def dSigma(self, i, states, positions):
         x = jnp.array(positions)
         out = jax.vmap(jax.grad(self.sigma, argnums=4), in_axes=(vmap_axes))(i, states, x, 0.0, self.params)  
+        print(out)
         return out
     
     

@@ -219,7 +219,7 @@ void PyRunner::run(double tFinal)
     }
     if (system->TerminateOnSteadyState)
     {
-        std::cerr << "\"run\" called but TerminateOnStateState is set to true. If you intended to run to steady state please call \"run_ss\". Running to passed tFinal" << std::endl;
+        std::cerr << "INFO: \"run\" called but TerminateOnSteadyState is set to true. If you intended to run to steady state please call \"run_ss\". Running to passed tFinal" << std::endl;
         system->TerminateOnSteadyState = false;
     }
     runner(tFinal);
@@ -246,9 +246,9 @@ py::tuple PyRunner::runAdjointSolve(void)
     system->runAdjointSolve();
 
     auto np_internal = adjoint->getNpInternal();
-    std::cout << "np_internal " << np_internal << std::endl;
+
     Matrix G_p = system->G_p(Eigen::all, Eigen::seq(0, np_internal - 1));
-    std::cout << "G_p shape: " << G_p.rows() << " x " << G_p.cols() << std::endl;
+
     // Create output to pass back to Python
     using namespace pybind11::literals;
     py::dict gp("G_p"_a = G_p);
@@ -263,12 +263,6 @@ py::tuple PyRunner::runAdjointSolve(void)
         G(i) = adjoint->GFn(i, system->y);
 
     return py::make_tuple(G, gp);
-}
-
-// Returns all points the fluxes and sources will be evaluated at
-std::vector<double> PyRunner::getPoints(void)
-{
-    return system->y.getPoints();
 }
 
 extern "C"
@@ -428,19 +422,19 @@ std::function<void(double)> SystemSolver::makeSolver(SUNLinearSolver &LS, // lin
     //------------------------------Solve------------------------------
     // Update initial solution to be within tolerance of the residual equation
 
-    // retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, dt);
-    // retval = 0;
-    // if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
-    // {
-    //     throw std::runtime_error("IDACalcIC could not complete");
-    // }
+    retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, dt);
+    retval = 0;
+    if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
+    {
+        throw std::runtime_error("IDACalcIC could not complete");
+    }
 
     long int nresevals = 0;
     // IDAGetNumResEvals(IDA_mem, &nresevals);
-    // std::cout << "Number of Residual Evaluations due to IDACalcIC " << nresevals << std::endl;
+    std::cout << "Number of Residual Evaluations due to IDACalcIC " << nresevals << std::endl;
 
-    // if (nresevals > 10)
-    //     std::cerr << " IDACalcIC required " << nresevals << " residual evaluations. Check config." << std::endl;
+    if (nresevals > 10)
+        std::cerr << " IDACalcIC required " << nresevals << " residual evaluations. Check config." << std::endl;
 
     // This also writes the t0 timeslice
 

@@ -174,7 +174,7 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 
 	py::class_<AdjointProblem, PyAdjointProblem, py::smart_holder>(m, "AdjointProblem")
 		.def(py::init<>())
-		.def("gFn", &AdjointProblem::gFn)
+		.def("gFn", py::overload_cast<Index, const GlobalState &, std::vector<Position> const &>(&AdjointProblem::gFn, py::const_))
 		.def("dgFndp", &AdjointProblem::dgFndp)
 		.def("dgFn_dphi", &AdjointProblem::dgFn_dphi)
 		.def("dg", &AdjointProblem::dg)
@@ -230,7 +230,6 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 		.def("configure", &PyRunner::configure)
 		.def("run", &PyRunner::run)
 		.def("run_ss", &PyRunner::run_ss)
-		.def("getPoints", &PyRunner::getPoints)
 		.def("setAdjointProblem", &PyRunner::setAdjointProblem)
 		.def("runAdjointSolve", &PyRunner::runAdjointSolve);
 }

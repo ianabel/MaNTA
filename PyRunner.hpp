@@ -61,8 +61,6 @@ public:
     // Run adjoint solver and return tuple (G, G_p)
     py::tuple runAdjointSolve(void);
 
-    std::vector<double> getPoints(void);
-
 private:
     // Shared ownership of TransportSystem so user can update in Python without recreating object
     std::shared_ptr<TransportSystem> pProblem;
