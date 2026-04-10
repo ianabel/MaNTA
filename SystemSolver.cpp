@@ -1277,6 +1277,8 @@ void SystemSolver::computeAdjointGradients()
     else 
         G_p.resize(adjointProblem->getNg(), adjointProblem->getNp());
 
+    G_p.setZero();
+
     for (Index i = 0; i < adjointProblem->getNg(); i++)
     {
         if (adjointProblem->areParametersSpatial())
@@ -1293,40 +1295,77 @@ void SystemSolver::computeAdjointGradients()
         for (Index i = 0; i < nCells; ++i)
         {
             Matrix F_p;
-            // if (adjointProblem->areParametersSpatial())
-            //     F_p.resize(3 * nVars * (k + 1) + nAux * (k + 1), (k + 1));
-            // else
-            // {
+            if (adjointProblem->areParametersSpatial())
+                F_p.resize(3 * nVars * (k + 1) + nAux * (k + 1), (k + 1));
+            else
+            {
                 F_p.resize(3 * nVars * (k + 1) + nAux * (k + 1), 1);
-            // }
+            }
             F_p.setZero();
 
             Interval I = grid[i];
 
             for (Index var = 0; var < nVars; ++var)
             {
-
+                
                 Eigen::VectorXd dkappa_dp_phi(k + 1);
-                dkappa_dp_phi.setZero();
-                if( adjointProblem->isAdjointIndexInternal( pIndex ) )
-                {
-                    const auto dSigmadp_cell = dSigmadp.Variable(i)[var];
-                    dkappa_dp_phi = y.getBasis().InterpolateOntoBasis( I, dSigmadp_cell(pIndex, Eigen::all) );
-                }
-
-                // Evaluate Source Function
                 Eigen::VectorXd dSdp_cellwise(k + 1);
-                dSdp_cellwise.setZero();
-                if( adjointProblem->isAdjointIndexInternal( pIndex ) )
+                if (adjointProblem->areParametersSpatial())
                 {
-                    const auto dSourcedp_cell = dSourcedp.Variable(i)[var];
-                    dSdp_cellwise = y.getBasis().InterpolateOntoBasis( I, dSourcedp_cell(pIndex, Eigen::all) );
+                    for (Index j = 0; j < k + 1; j++)
+                    {
+                        dkappa_dp_phi.setZero();
+                        if (adjointProblem->isAdjointIndexInternal(pIndex))
+                        {
+                            const auto dSigmadp_cell = dSigmadp.Variable(i)[var];
+                            Vector temp(k + 1);
+                            temp.setZero();
+                            temp(j) = dSigmadp_cell(pIndex, j);
+                            dkappa_dp_phi = y.getBasis().InterpolateOntoBasis(I, temp);
+                        }
+
+                        // Evaluate Source Function
+
+                        dSdp_cellwise.setZero();
+                        if (adjointProblem->isAdjointIndexInternal(pIndex))
+                        {
+                            const auto dSourcedp_cell = dSourcedp.Variable(i)[var];
+                            Vector temp(k + 1);
+                            temp.setZero();
+                            temp(j) = dSourcedp_cell(pIndex, j);
+                            dSdp_cellwise = y.getBasis().InterpolateOntoBasis(I, temp);
+                        }
+
+                 
+                        F_p.block(var * (k + 1), j, k + 1, 1) = dkappa_dp_phi;
+
+                        F_p.block(var * (k + 1) + 2 * nVars * (k + 1), j, k + 1, 1) = -dSdp_cellwise;
+                    }
                 }
+                else
+                {
+                    dkappa_dp_phi.setZero();
+                    if( adjointProblem->isAdjointIndexInternal( pIndex ) )
+                    {
+                        const auto dSigmadp_cell = dSigmadp.Variable(i)[var];
+                        dkappa_dp_phi = y.getBasis().InterpolateOntoBasis( I, dSigmadp_cell(pIndex, Eigen::all) );
+                    }
 
-                F_p.block(var * (k + 1), 0, k + 1, 1) = dkappa_dp_phi;
+                    // Evaluate Source Function
+               
+                    dSdp_cellwise.setZero();
+                    if( adjointProblem->isAdjointIndexInternal( pIndex ) )
+                    {
+                        const auto dSourcedp_cell = dSourcedp.Variable(i)[var];
+                        dSdp_cellwise = y.getBasis().InterpolateOntoBasis( I, dSourcedp_cell(pIndex, Eigen::all) );
+                    }
 
-                //auto C_cell = C_cellwise[i];
-                F_p.block(var * (k + 1) + 2 * nVars * (k + 1), 0, k + 1, 1) = -dSdp_cellwise;
+                
+                    F_p.block(var * (k + 1), 0, k + 1, 1) = dkappa_dp_phi;
+
+                    //auto C_cell = C_cellwise[i];
+                    F_p.block(var * (k + 1) + 2 * nVars * (k + 1), 0, k + 1, 1) = -dSdp_cellwise;
+                }
 
                 
 
@@ -1375,7 +1414,7 @@ void SystemSolver::computeAdjointGradients()
                 {
                     for (Index j = 0; j < k + 1; j ++)
                     {
-                        G_p(gIndex * nCells * (k + 1) + i * (k + 1) + j, pIndex) -= adjoint_squ[i].transpose() * static_cast<Vector>(F_p);
+                        G_p(gIndex * nCells * (k + 1) + i * (k + 1) + j, pIndex) -= adjoint_squ[i].transpose() * F_p.col(j);
                     }
                 }
                 else
