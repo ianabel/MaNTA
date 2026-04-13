@@ -265,6 +265,42 @@ py::tuple PyRunner::runAdjointSolve(void)
     return py::make_tuple(G, gp);
 }
 
+Vector PyRunner::getSolution(Index var, std::optional<std::vector<Position>> const &points) const
+{
+    if (points)
+    {
+        Vector sol(points.value().size());
+
+        for (size_t i = 0; i < points.value().size(); i++)
+        {
+            const auto &p = points.value()[i];
+
+            if (p < grid->lowerBoundary() || p > grid->upperBoundary())
+                throw std::out_of_range("Requested point outside of grid boundaries");
+
+            sol(i) = system->y.u(var)(p);
+        }
+        return sol;
+    }
+    else
+    {
+        const auto points = system->y.getPoints();
+        Vector sol(points.size());
+        for (size_t i = 0; i < points.size(); i++)
+        {
+            const auto &p = points[i];
+
+            if (p < grid->lowerBoundary() || p > grid->upperBoundary())
+                throw std::out_of_range("Requested point outside of grid boundaries");
+
+            sol(i) = system->y.u(var)(p);
+
+            return sol;
+        }
+        return sol;
+    }
+}
+
 extern "C"
 {
     int IDAEwtSet(N_Vector, N_Vector, void *);
@@ -430,7 +466,7 @@ std::function<void(double)> SystemSolver::makeSolver(SUNLinearSolver &LS, // lin
     }
 
     long int nresevals = 0;
-    // IDAGetNumResEvals(IDA_mem, &nresevals);
+    IDAGetNumResEvals(IDA_mem, &nresevals);
     std::cout << "Number of Residual Evaluations due to IDACalcIC " << nresevals << std::endl;
 
     if (nresevals > 10)

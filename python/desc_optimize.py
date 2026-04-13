@@ -1,5 +1,20 @@
 from scipy.constants import mu_0
 
+import MaNTA
+
+from Stellarator import StellaratorTransport
+
+st_config = {
+    "SourceCenter": 0.0,
+    "SourceHeight": 30.0,
+    "SourceWidth": 0.2,
+    "EdgeTemperature":0.5,
+    "EdgeDensity": 0.1,
+    "n0": 0.5,
+}
+
+st = StellaratorTransport(st_config)
+
 import jax
 import jax.numpy as jnp
 import yancc
@@ -23,33 +38,24 @@ from desc.objectives import (
 )
 from desc.profiles import SplineProfile
 
-from Objective import StellaratorObjective
-
-st_config = {
-    "SourceCenter": 0.0,
-    "SourceHeight": 30.0,
-    "SourceWidth": 0.2,
-    "EdgeTemperature":0.5,
-    "EdgeDensity": 0.1,
-    "n0": 0.5,
-}
-
-st_obj = StellaratorObjective(st_config, eq=None)
-
+points = st.points
 
 def manta_yancc_fun(yancc_fields):
+
+    stored_energy = st.Objective(yancc_fields) * st.pnorm
+    pressure = st.getPressure()
     ## run manta here to get steady state profiles given python list of yancc field objects
     # returns stored energy as a scalar, and an array of the steady state pressure at the
     # radial points of yancc/desc grid defined below
     # if needed we can generalize this to return pressure at different points from where
     # fluxes are calculated
     # as a dummy placeholder for testing, we just use the beta*B^2 energy/pressure from yancc fields
-    beta = 1e-2
-    pressure_profile_at_yancc_desc_grid_rho_pts = jnp.array(
-        [beta * f.Bmag ** 2 / (2 * mu_0) * (1 - f.rho) ** 2 for f in yancc_fields]
-    )
-    stored_energy = jnp.sum(pressure_profile_at_yancc_desc_grid_rho_pts)
-    return stored_energy, pressure_profile_at_yancc_desc_grid_rho_pts
+    # beta = 1e-2
+    # pressure_profile_at_yancc_desc_grid_rho_pts = jnp.array(
+    #     [beta * f.Bmag ** 2 / (2 * mu_0) * (1 - f.rho) ** 2 for f in yancc_fields]
+    # )
+    # stored_energy = jnp.sum(pressure_profile_at_yancc_desc_grid_rho_pts)
+    return stored_energy, pressure
 
 
 def objective_from_user_fun(grid, data):
@@ -125,8 +131,6 @@ V0 = eq.compute("V")["V"]
 yancc_desc_grid = LinearGrid(
     rho=yancc_rho, theta=yancc_ntheta, zeta=yancc_nzeta, NFP=eq.NFP
 )
-
-
 
 
 def pressure_constraint_fun(params):

@@ -75,33 +75,7 @@ class StellaratorObjective:
 
         field_dot_flatten = jax.flatten_util.ravel_pytree(field_dot)
 
-        return G[0], jnp.dot(G_p[0, :], field_dot_flatten)
-
-    @partial(custom_jvp, nondiff_argnums=(0,1))
-    def ProfileError(self, grid, field):
-        
-        ## set field within yancc wrapper
-        ## what to do with grid??
-
-        
-        # run to steady state
-        self.st.run(field=field)
-        G, _= self.st.runAdjointSolve()
-        # compute adjoint
-        # multiply field by G_p
-        # postprocess G_p? 
-        return G[1]
-    
-    @ProfileError.devjvp
-    def ProfileError_jvp(self, grid, primals, tangents):
-        field, = primals
-        field_dot, = tangents
-
-        G, G_p = self.st.runAdjointSolve(grid, field)   
-
-        field_dot_flatten = jax.flatten_util.ravel_pytree(field_dot)
-
-        return G[1], jnp.dot(G_p[1, :], field_dot_flatten)
+        return G[0], jnp.dot(G_p.flatten(), field_dot_flatten)
 
 
 

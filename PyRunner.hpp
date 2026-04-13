@@ -34,6 +34,7 @@ using ParameterType = std::variant<Parameter<double>,
                                    Parameter<std::vector<double>>>;
 
 using map_t = std::map<std::string, ParameterType>;
+
 class PyRunner
 {
 public:
@@ -61,6 +62,8 @@ public:
     // Run adjoint solver and return tuple (G, G_p)
     py::tuple runAdjointSolve(void);
 
+    Vector getSolution(Index var, std::optional<std::vector<Position>> const &points) const;
+
 private:
     // Shared ownership of TransportSystem so user can update in Python without recreating object
     std::shared_ptr<TransportSystem> pProblem;
@@ -76,7 +79,7 @@ private:
     bool configured = false;
     double steady_state_tolerance;
 
-private:
+private: // solver data
     /*
         This class controls the lifetime of the solver data so that we can request more timesteps without restarting the integration
     */

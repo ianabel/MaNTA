@@ -231,5 +231,6 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 		.def("run", &PyRunner::run)
 		.def("run_ss", &PyRunner::run_ss)
 		.def("setAdjointProblem", &PyRunner::setAdjointProblem)
-		.def("runAdjointSolve", &PyRunner::runAdjointSolve);
+		.def("runAdjointSolve", &PyRunner::runAdjointSolve)
+		.def("getSolution", &PyRunner::getSolution);
 }
