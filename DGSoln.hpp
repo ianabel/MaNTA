@@ -319,21 +319,11 @@ public:
         {
             for (Index cellIndex = 0; cellIndex < nCells; ++cellIndex)
             {
-                Interval const &I = sigma_[var].coeffs[cellIndex].first;
-                
                 Vector nodes = Basis.getNodes();
 
                 const auto cellwiseFlux = sin.cellwiseFlux(cellIndex);
                 for (Index i = 0; i < nodes.size(); ++i)
                 {
-                    State s(nVars, nScalars);
-                    for (Index j = 0; j < nVars; ++j)
-                    {
-                        s.Variable[j] = u_[j].coeffs[cellIndex].second(i);
-                        s.Derivative[j] = q_[j].coeffs[cellIndex].second(i);
-                    }
-                    // Sigma isn't allowed to depend on scalars so we don't need to fill them in s
-                    // Now just eval on Node
                     sigma_[var].coeffs[cellIndex].second(i) = cellwiseFlux(var, i);
                 }
             }

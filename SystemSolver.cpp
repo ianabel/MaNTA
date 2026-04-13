@@ -105,14 +105,13 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
         // Zero most of dydt, we only have to set it to nonzero values for the differential parts of y
 
-        // auto sigma_wrapper = [this](Index i, const State &s, Position x, Time t)
-        // { return -problem->SigmaFn(i, s, x, t); };
-
-        GlobalState initialState = y.evalOnNodes();
+        // Vectorize initial flux calculation
+        GlobalState initialState = y.evalOnNodes(); // only need u and q so this is ok
         const auto points = y.getPoints();
         for (Index var = 0; var < nVars; var++)
         {
-            initialState.Flux()(var, Eigen::all) = static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(problem->SigmaFn(var, initialState, points, t));
+            // set flux for each variable, casting to a row vector and making sure to remember minus sign
+            initialState.Flux()(var, Eigen::all) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(problem->SigmaFn(var, initialState, points, t));
         }
         y.AssignSigma(initialState);
 
@@ -1266,7 +1265,7 @@ void SystemSolver::computeAdjointGradients()
     const auto states = y.evalOnNodes();
 
     const Index np_internal = adjointProblem->getNpInternal();
-    std::cerr << "INFO: Computing adjoints for " << np_internal << " parameters" << std::endl;
+    std::cerr << "INFO: Computing adjoints for " << adjointProblem->getNp() << " parameters" << std::endl;
     for (Index i = 0; i < nVars; i++)
     {
         // We use the global state to hold the derivatives, replacing nVars with np
