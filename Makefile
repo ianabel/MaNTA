@@ -39,7 +39,6 @@ test: $(SOLVER) Tests/UnitTests/UnitTests
 PYTHON_NAME=python/MaNTA$(shell python3-config --extension-suffix)
 PYTHON_OUTPUT=$(PYTHON_NAME) 
 
-
 python: $(PYTHON_OUTPUT)
 
 $(PYTHON_OUTPUT): $(OBJECTS) $(PHYSICS_OBJECTS) Python.cpp PyTransportSystem.hpp PyAdjointProblem.hpp PyGrid.hpp PyRunner.hpp PyRunner.cpp 

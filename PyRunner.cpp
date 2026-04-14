@@ -265,7 +265,7 @@ py::tuple PyRunner::runAdjointSolve(void)
     return py::make_tuple(G, gp);
 }
 
-Vector PyRunner::getSolution(Index var, std::optional<std::vector<Position>> const &points) const
+Vector PyRunner::getSolution(Index var, std::optional<std::vector<Position>> const &points)
 {
     if (points)
     {

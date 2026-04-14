@@ -19,14 +19,16 @@ namespace py = pybind11;
 int runManta(std::string const &);
 
 // // Needed to be able to handle FFI in JAX
-// template <typename T, typename... Args>
-// static py::capsule EncapsulateFfiCall(T (PyRunner::*fn)(Args...))
-// {
-// 	// This check is optional, but it can be helpful for avoiding invalid handlers.
-// 	static_assert(std::is_invocable_r_v<XLA_FFI_Error *, T, XLA_FFI_CallFrame *>,
-// 				  "Encapsulated function must be an XLA FFI handler");
-// 	return py::capsule(reinterpret_cast<void *&>(fn));
-// }
+template <typename T>
+static py::capsule EncapsulateFfiCall(T &&fn)
+{
+	// This check is optional, but it can be helpful for avoiding invalid handlers.
+	// static_assert(std::is_invocable_r_v<XLA_FFI_Error *, T, XLA_FFI_CallFrame *>,
+	// 			  "Encapsulated function must be an XLA FFI handler");
+	std::cout << "Encapsulating FFI call" << std::endl;
+	std::cout << "Function address: " << &fn << std::endl;
+	return py::capsule(reinterpret_cast<void *>(&fn));
+}
 
 // This allows one to use a python dict as a state variable,
 // if the python dict has the right keys in it
@@ -232,5 +234,8 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 		.def("run_ss", &PyRunner::run_ss)
 		.def("setAdjointProblem", &PyRunner::setAdjointProblem)
 		.def("runAdjointSolve", &PyRunner::runAdjointSolve)
-		.def("getSolution", &PyRunner::getSolution);
+		.def("getSolution", &PyRunner::getSolution)
+		.def("run_ffi", [](PyRunner *self)
+			 { std::cout << self << std::endl;
+				return EncapsulateFfiCall(std::bind(&PyRunner::run, self, std::placeholders::_1)); });
 }

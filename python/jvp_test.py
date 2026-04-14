@@ -1,13 +1,12 @@
 import jax
 
-jax.config.update("jax_enable_compilation_cache", False)
-jax.config.update("jax_platform_name", "cpu")
+import MaNTA
 
 from typing import NamedTuple
 
 from functools import partial
 
-import MaNTA
+
 
 from VectorizedTransportSystem import VectorizedTransportSystem
 from JAXAdjointProblem import JAXAdjointProblem
@@ -15,7 +14,6 @@ from JAXAdjointProblem import JAXAdjointProblem
 
 import jax.numpy as jnp
 
-from jax.experimental import io_callback
 import equinox as eqx
 
 class LinearDiffusionParams(NamedTuple):
@@ -35,6 +33,8 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
 
         self.params = params
         self.runner = MaNTA.Runner(self)
+
+       
 
         # %%
         config = {
@@ -62,14 +62,19 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
             jax.ShapeDtypeStruct((self.adjointProblem.ng,), jnp.float32),
             jax.ShapeDtypeStruct((self.adjointProblem.ng, self.adjointProblem.np), jnp.float32)
         ]     
+        jax.ffi.register_ffi_target("run_ffi", self.runner.run_ffi(), platform="cpu")
+        # self.call_run = jax.ffi.ffi_call("run_ffi", [], vmap_method="broadcast_all")
+
 
     def run(self, tFinal = None, params=None):
         if (params is not None):
             self.setParams(params)
         
         if (tFinal is not None):
+            
             # sFinal = io_callback(self.runner.run, [], tFinal, ordered=True)
             self.runner.run(tFinal)
+            # self.call_run(tFinal)
 
         else:
             self.runner.run_ss()

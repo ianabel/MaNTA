@@ -62,7 +62,7 @@ public:
     // Run adjoint solver and return tuple (G, G_p)
     py::tuple runAdjointSolve(void);
 
-    Vector getSolution(Index var, std::optional<std::vector<Position>> const &points) const;
+    Vector getSolution(Index var, std::optional<std::vector<Position>> const &points);
 
 private:
     // Shared ownership of TransportSystem so user can update in Python without recreating object
