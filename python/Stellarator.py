@@ -14,6 +14,8 @@ from jax import shard_map
 from jax.tree_util import tree_map
 import equinox as eqx
 
+from jax.experimental import io_callback
+
 # %%
 P = PartitionSpec
 
@@ -73,30 +75,18 @@ class StellaratorTransport
 Computes sources and neoclassical fluxes (returned from yancc) as required by MaNTA
 """
 class StellaratorTransport(MaNTA.TransportSystem): 
-    def __init__(self, config , grid: MaNTA.Grid = None):
+    def __init__(self, config , eq = None, grid = None):
         MaNTA.TransportSystem.__init__(self)
         self.nVars = 1
 
         ### Remember to set boundary conditions ####
         self.isUpperDirichlet  = True
         self.isLowerDirichlet  = False
-
-        solver_config = {
-            "OutputFilename": "stellarator",
-            "Polynomial_degree": 3,
-            "Grid_size": 6,
-            "tau": 1.0, 
-            "Lower_boundary": 0.0,
-            "Upper_boundary": 1.0,
-            "Relative_tolerance": 0.01,
-            "delta_t": 0.01,
-            "restart": False,
-            "solveAdjoint": True, 
-        }
-
+        solver_config = config["Solver"]
+        st_config = config["Stellarator"]
         self.points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
-        self.params = StellaratorParams.from_config(config)
-        self.yancc_wrapper = yancc_data.from_eq(Volume=self.points, Density=self.Density)
+        self.params = StellaratorParams.from_config(st_config)
+        self.yancc_wrapper = yancc_data.from_eq(Volume=self.points, Density=self.Density, eq=eq, grid=grid)
         e = 1.6e-19
         self.pnorm = 1e20 * e * 1e3
 
@@ -125,9 +115,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.adjointProblem.setField(self.field, self.vprime)
 
         if (tFinal is not None):
-            self.runner.run(tFinal)
+            io_callback(self.runner.run, [], tFinal)
         else: 
-            self.runner.run_ss()
+            io_callback(self.runner.run_ss, [], None)
 
 
     def runAdjointSolve(self, field = None, grid = None):
@@ -135,11 +125,13 @@ class StellaratorTransport(MaNTA.TransportSystem):
             yancc_wrapper = yancc_data.from_other(field, grid, other=self.yancc_wrapper)
             self.run(yancc_wrapper=yancc_wrapper)
 
-        G, G_p = self.runner.runAdjointSolve()
+        G, G_p = io_callback(self.runner.runAdjointSolve, self.adjointProblem.adjointoutput , None)
         return G, G_p
 
     def getPressure(self):
-        return 2./3. * self.runner.run(0, self.points) * self.pnorm
+        ui = io_callback(self.runner.getSolution, [jax.ShapeDtypeStruct((len(self.points),), jnp.float32)], 0, self.points)
+        print(ui)
+        return 2./3. * ui * self.pnorm
 
     def LowerBoundary(self, index, t):
         return 0.0

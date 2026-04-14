@@ -55,6 +55,7 @@ class yancc_data(eqx.Module):
     pitchgrid: eqx.Module
     speedgrid: eqx.Module
     Vprim: Float[ArrayLike, '...'] # dV/dr normalized by V[-1], function of volume only for now but can be more general in the future
+    rho: Float[ArrayLike, '...']
     Density: callable = eqx.field(static=True) # function of volume only for now, can be more general in the future
     nNorm: float = eqx.field(static=True)
     Tnorm: float = eqx.field(static=True)
@@ -67,7 +68,8 @@ class yancc_data(eqx.Module):
             Density, 
             fields,
             grid, 
-            Vprim,  
+            Vprim,
+            rho,  
             nNorm: Optional[float] = 1e20, 
             Tnorm: Optional[float] = 1e3, 
             nx: Optional[int] = 5, 
@@ -76,6 +78,7 @@ class yancc_data(eqx.Module):
         self.fields = fields
         self.grid = grid
         self.Vprim = Vprim
+        self.rho=rho
         self.nx = nx
         self.na = na
 
@@ -115,7 +118,7 @@ class yancc_data(eqx.Module):
             eq = desc.examples.get("W7-X")
 
         if (grid is None):
-            rho = jnp.linspace(0,1,20)
+            rho = jnp.linspace(0,1,len(Volume))
             grid = desc.grid.LinearGrid(rho=rho, M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP)
        
 
@@ -133,14 +136,14 @@ class yancc_data(eqx.Module):
         rho_from_normalized_volume = lambda Vnorm : desc.backend.root_scalar(lambda x: Vn(x) - Vnorm, jnp.sqrt(Vnorm))
         for pos in Volume:
             r.append(rho_from_normalized_volume(pos))
-            fields.append(Field.from_desc(eq,r[i], nt, nz))
+            fields.append(Field.from_desc(eq, r[i], nt, nz))
             i+=1
 
         fields = tree_map(lambda *vals: jnp.stack(vals), *fields)
         r = jnp.array(r)
         Vprim = jnp.array(dVndr(r))
 
-        return cls(Density=Density, fields=fields, grid = grid, Vprim=Vprim, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
+        return cls(Density=Density, fields=fields, grid = grid, Vprim=Vprim, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na, rho=r)
 
     @classmethod
     def from_fields(cls, fields, grid, Density, nNorm=1e20, Tnorm=1e3, nx=5, na=43):
@@ -153,7 +156,7 @@ class yancc_data(eqx.Module):
 
     @classmethod 
     def from_other(cls, fields, grid, other):
-        return cls(Density=other.Density, fields=fields, grid=grid, Vprim = other.Vprim, nNorm=other.nNorm, Tnorm=other.Tnorm, nx=other.nx, na=other.na)
+        return cls(Density=other.Density, fields=fields, grid=grid, Vprim = other.Vprim, rho=other.rho, nNorm=other.nNorm, Tnorm=other.Tnorm, nx=other.nx, na=other.na)
 
     def get_fields(self):
         return self.fields, self.Vprim
