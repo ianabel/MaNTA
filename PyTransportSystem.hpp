@@ -5,8 +5,12 @@
 #include <pybind11/stl.h>
 #include <pybind11/eigen.h>
 #include <pybind11/numpy.h>
+#include <string_view>
 
 #include "TransportSystem.hpp"
+
+constexpr std::array<std::string_view, 7> required_method_names = {"SigmaFn", "Sources", "dSigmaFn_du", "dSigmaFn_dq", "dSources_du", "dSources_dq", "dSources_dsigma"};
+constexpr std::array<std::string_view, 4> required_method_names_vectorized = {"SigmaFn_v", "Sources_v", "dSigma", "dSources"};
 
 namespace py = pybind11;
 
@@ -21,23 +25,65 @@ public:
 		{
 			py::gil_scoped_acquire gil;
 			py::function _override = py::get_override(this, method_name);
+			return _override;
+		};
 
-			if (_override)
+		std::vector<std::string_view> missing_methods;
+		std::vector<std::string_view> missing_vectorized_methods;
+
+		for (const auto &method_name : required_method_names)
+		{
+			auto _override = make_override(method_name.data());
+			if (!_override)
 			{
-				return _override;
+				missing_methods.push_back(method_name);
 			}
 			else
 			{
-				throw std::runtime_error(std::string("Pure virtual method ") + method_name + " not overridden in Python subclass");
+				method_overrides.insert(std::make_pair(method_name, std::move(_override)));
 			}
-		};
-		method_overrides.insert(std::make_pair("SigmaFn", make_override("SigmaFn")));
-		method_overrides.insert(std::make_pair("Sources", make_override("Sources")));
-		method_overrides.insert(std::make_pair("dSigmaFn_du", make_override("dSigmaFn_du")));
-		method_overrides.insert(std::make_pair("dSigmaFn_dq", make_override("dSigmaFn_dq")));
-		method_overrides.insert(std::make_pair("dSources_dq", make_override("dSources_dq")));
-		method_overrides.insert(std::make_pair("dSources_du", make_override("dSources_du")));
-		method_overrides.insert(std::make_pair("dSources_dsigma", make_override("dSources_dsigma")));
+		}
+
+		for (const auto &method_name : required_method_names_vectorized)
+		{
+			auto _override = make_override(method_name.data());
+			if (!_override)
+			{
+				missing_methods.push_back(method_name);
+			}
+			else
+			{
+				method_overrides.insert(std::make_pair(method_name, std::move(_override)));
+			}
+		}
+
+		bool non_vectorized = missing_methods.empty();
+		bool vectorized = missing_vectorized_methods.empty();
+
+		if (!vectorized || !non_vectorized)
+		{
+			if (vectorized || non_vectorized)
+			{
+				// do nothing
+			}
+			else
+			{
+				std::string error_message = "The following required methods are missing in the Python subclass:\n";
+				error_message += "Non-vectorized methods:\n";
+				for (const auto &method_name : missing_methods)
+				{
+					error_message += std::string(method_name) + "\n";
+				}
+				error_message += "Vectorized methods:\n";
+				for (const auto &method_name : missing_vectorized_methods)
+				{
+					error_message += std::string(method_name) + "\n";
+				}
+				error_message += "MaNTA requires either all vectorized or all non-vectorized methods to be implemented. Please implement the missing methods and try again.\n";
+				throw std::runtime_error(error_message);
+			}
+		}
+
 		if (nAux > 0)
 		{
 			method_overrides.insert(std::make_pair("AuxGPrime", make_override("AuxGPrime")));
@@ -47,15 +93,12 @@ public:
 
 		initialized = true;
 	}
-	// PyTransportSystem(TransportSystem &&base) : TransportSystem(std::move(base)) {}
+
 	Value LowerBoundary(Index i, Time t) const override { PYBIND11_OVERRIDE(Value, TransportSystem, LowerBoundary, i, t); };
 	Value UpperBoundary(Index i, Time t) const override { PYBIND11_OVERRIDE(Value, TransportSystem, UpperBoundary, i, t); };
 	bool isLowerBoundaryDirichlet(Index i) const override { PYBIND11_OVERRIDE(Value, TransportSystem, isLowerBoundaryDirichlet, i); };
 	bool isUpperBoundaryDirichlet(Index i) const override { PYBIND11_OVERRIDE(Value, TransportSystem, isUpperBoundaryDirichlet, i); };
 
-	// The guts of the physics problem (these are non-const as they
-	// are allowed to alter internal state such as to store computations
-	// for future calls)
 	Value SigmaFn(Index i, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
@@ -64,19 +107,12 @@ public:
 	};
 	Values SigmaFn(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time) override
 	{
-		py::gil_scoped_acquire gil;
+		if (!initialized)
+			initializeOverrides();
 
-		auto _override = py::get_override(this, "SigmaFn_v");
-		if (_override)
-		{
-			return _override(i, states, abscissae, time).cast<Values>();
-		}
-		else
-		{
-			std::cerr << "WARNING: Vectorized function \"SigmaFn_v\" not found in Python subclass; calling non-vectorized version." << std::endl;
-			return TransportSystem::SigmaFn(i, states, abscissae, time);
-		}
+		return method_overrides["SigmaFn_v"](i, states, abscissae, time).cast<Values>();
 	};
+
 	Value Sources(Index i, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
@@ -86,19 +122,12 @@ public:
 
 	Values Sources(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time) override
 	{
-		py::gil_scoped_acquire gil;
+		if (!initialized)
+			initializeOverrides();
 
-		auto _override = py::get_override(this, "Sources_v");
-		if (_override)
-		{
-			return _override(i, states, abscissae, time).cast<Values>();
-		}
-		else
-		{
-			std::cerr << "WARNING: Vectorized function \"Sources_v\" not found in Python subclass; calling non-vectorized version." << std::endl;
-			return TransportSystem::Sources(i, states, abscissae, time);
-		}
+		return method_overrides["Sources_v"](i, states, abscissae, time).cast<Values>();
 	};
+
 	void dSigmaFn_du(Index i, VectorRef out, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
@@ -135,34 +164,18 @@ public:
 
 	void dSigma(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time) override
 	{
-		std::string method_name = "dSigma";
-		py::gil_scoped_acquire gil;
-		py::function _override = py::get_override(this, method_name.c_str());
+		if (!initialized)
+			initializeOverrides();
 
-		if (!_override)
-		{
-			std::cerr << "WARNING: Vectorized function \"dSigma\" not found in Python subclass; calling non-vectorized version." << std::endl;
-			TransportSystem::dSigma(i, out, states, abscissae, time);
-			return;
-		}
-
-		out = _override(i, states, abscissae, time).cast<GlobalState>();
+		out = method_overrides["dSigma"](i, states, abscissae, time).cast<GlobalState>();
 	};
 
 	void dSources(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time) override
 	{
-		std::string method_name = "dSources";
-		py::gil_scoped_acquire gil;
-		py::function _override = py::get_override(this, method_name.c_str());
+		if (!initialized)
+			initializeOverrides();
 
-		if (!_override)
-		{
-			std::cerr << "WARNING: Vectorized function \"dSources\" not found in Python subclass; calling non-vectorized version." << std::endl;
-			TransportSystem::dSources(i, out, states, abscissae, time);
-			return;
-		}
-
-		out = _override(i, states, abscissae, time).cast<GlobalState>();
+		out = method_overrides["dSources"](i, states, abscissae, time).cast<GlobalState>();
 	};
 
 	// Finally one has to provide initial conditions for u & q
@@ -228,7 +241,7 @@ public:
 	using TransportSystem::isUpperDirichlet;
 	using TransportSystem::nAux;
 	using TransportSystem::nVars;
-	
+
 private:
 	bool initialized = false;
 	std::map<std::string, py::function> method_overrides;

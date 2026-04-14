@@ -35,7 +35,7 @@ Bnorm = 1.0 # Normalization magnetic field in Tesla
 # Takes input MaNTA state, performs normalizations, returns fluxes
 # Hold DESC equilibrium as well
 
-class yancc_wrapper(eqx.Module):
+class yancc_data(eqx.Module):
     """
     Create wrapper for yancc to interface with MaNTA, hold all field specific stuff
     Parameters
@@ -50,24 +50,32 @@ class yancc_wrapper(eqx.Module):
     """
 
     fields: eqx.Module 
+    fields_unstacked: list[eqx.Module] # list of field objects at each radial point 
+    grid: eqx.Module
     pitchgrid: eqx.Module
     speedgrid: eqx.Module
+    Vprim: Float[ArrayLike, '...'] # dV/dr normalized by V[-1], function of volume only for now but can be more general in the future
     Density: callable = eqx.field(static=True) # function of volume only for now, can be more general in the future
     nNorm: float = eqx.field(static=True)
     Tnorm: float = eqx.field(static=True)
     nx: int = eqx.field(static=True)
     na: int = eqx.field(static=True)
+    FluxNorm: float
 
     def __init__(
             self, 
             Density, 
-            *, 
+            fields,
+            grid, 
+            Vprim,  
             nNorm: Optional[float] = 1e20, 
             Tnorm: Optional[float] = 1e3, 
             nx: Optional[int] = 5, 
             na: Optional[int] = 43): 
 
-   
+        self.fields = fields
+        self.grid = grid
+        self.Vprim = Vprim
         self.nx = nx
         self.na = na
 
@@ -83,13 +91,14 @@ class yancc_wrapper(eqx.Module):
 
         self.speedgrid = MaxwellSpeedGrid(nx)
         self.pitchgrid = UniformPitchAngleGrid(na)
+
+        self.fields_unstacked = desc.backend.tree_unstack(fields)
         
-       
         print("yancc_wrapper initialized successfully.")
 
     @classmethod
     def from_eq(cls, 
-            Volume: Float[ArrayLike] = eqx.field(static=True), 
+            Volume: Float[ArrayLike, '...'] = eqx.field(static=True), 
             Density:  callable = eqx.field(static=True), 
             nNorm: Optional[float] = 1e20, 
             Tnorm: Optional[float] = 1e3, 
@@ -99,7 +108,7 @@ class yancc_wrapper(eqx.Module):
             nz: Optional[int] = 33,
             eq = None,
             grid = None,
-            rho: Optional[Float[ArrayLike]] = None):
+            rho: Optional[Float[ArrayLike, '...']] = None):
         
         print("Initializing yancc wrapper")
         if (eq is None):
@@ -119,23 +128,32 @@ class yancc_wrapper(eqx.Module):
         dVndr = interpax.CubicSpline(rho, dVndr)
         rho = Vn
         fields = []
+        r = []
         i = 0
         rho_from_normalized_volume = lambda Vnorm : desc.backend.root_scalar(lambda x: Vn(x) - Vnorm, jnp.sqrt(Vnorm))
         for pos in Volume:
-            rho.append(rho_from_normalized_volume(pos))
-            fields.append(Field.from_desc(eq,rho[i], nt, nz))
+            r.append(rho_from_normalized_volume(pos))
+            fields.append(Field.from_desc(eq,r[i], nt, nz))
             i+=1
 
         fields = tree_map(lambda *vals: jnp.stack(vals), *fields)
-        rho = jnp.array(rho)
-        Vprim = jnp.array(dVndr(rho))
+        r = jnp.array(r)
+        Vprim = jnp.array(dVndr(r))
 
-        return cls(Density=Density, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na, fields=fields, Vprim=Vprim)
+        return cls(Density=Density, fields=fields, grid = grid, Vprim=Vprim, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
 
     @classmethod
-    def from_fields(cls, fields, Density, nNorm=1e20, Tnorm=1e3, nx=5, na=43):
-        return cls(Density=Density, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na, fields=fields)
+    def from_fields(cls, fields, grid, Density, nNorm=1e20, Tnorm=1e3, nx=5, na=43):
 
+        V = grid.compress(fields['V(r)'])
+        dVdr = grid.compress(fields['V_r(r)'])
+        dVndr = dVdr/V[-1] # normalize
+
+        return cls(Density=Density, fields=fields, grid=grid, Vprim = dVndr, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
+
+    @classmethod 
+    def from_other(cls, fields, grid, other):
+        return cls(Density=other.Density, fields=fields, grid=grid, Vprim = other.Vprim, nNorm=other.nNorm, Tnorm=other.Tnorm, nx=other.nx, na=other.na)
 
     def get_fields(self):
         return self.fields, self.Vprim
@@ -155,7 +173,7 @@ dict
 """
 
 @eqx.filter_jit
-def flux(state, x, field, Vprim, yancc_params: yancc_wrapper):
+def flux(state, x, field, Vprim, yancc_params: yancc_data):
     # For now we only evolve the ion energy
     p_i = 2. / 3. * state["Variable"][0]
     p_i_prime = 2. / 3. * state["Derivative"][0]

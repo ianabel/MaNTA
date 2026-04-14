@@ -12,7 +12,6 @@ import jax.numpy as jnp
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import shard_map
 from jax.tree_util import tree_map
-# from jax.experimental import io_callback
 import equinox as eqx
 
 # %%
@@ -24,7 +23,7 @@ mesh = Mesh(devices, ('ax',),axis_types=(jax.sharding.AxisType.Auto,))
 
 from functools import partial
 
-from yancc_wrapper import yancc_wrapper, flux
+from yancc_wrapper import yancc_data, flux
 
 from typing import NamedTuple
 
@@ -90,14 +89,14 @@ class StellaratorTransport(MaNTA.TransportSystem):
             "Lower_boundary": 0.0,
             "Upper_boundary": 1.0,
             "Relative_tolerance": 0.01,
-            "delta_t": 0.001,
-            "restart": True,
+            "delta_t": 0.01,
+            "restart": False,
             "solveAdjoint": True, 
         }
 
         self.points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
         self.params = StellaratorParams.from_config(config)
-        self.yancc_wrapper = yancc_wrapper.from_eq(Volume=self.points, Density=self.Density)
+        self.yancc_wrapper = yancc_data.from_eq(Volume=self.points, Density=self.Density)
         e = 1.6e-19
         self.pnorm = 1e20 * e * 1e3
 
@@ -109,58 +108,38 @@ class StellaratorTransport(MaNTA.TransportSystem):
         self.field, self.vprime = self.yancc_wrapper.get_fields()
         self.field_shard, self.vprime_shard = eqx.filter_shard((self.field, self.vprime), data_sharding)
 
-
-        
         self.runner.configure(solver_config)
 
         g = [self.StoredEnergy]
 
-        self.adjointProblem = StellaratorAdjointProblem(self, g, self.field, self.vprime, len(self.points))
+        self.adjointProblem = StellaratorAdjointProblem(self, g, self.yancc_wrapper, len(self.points))
         self.runner.setAdjointProblem(self.adjointProblem)
 
         print("Successfully created StellaratorTransport object")
 
-    def run(self, tFinal = None, field = None):
-        if (field is not None):
-            self.yancc_wrapper.fields = field
-            self.yancc_wrapper.compute_fields(self.points)
+    def run(self, tFinal = None, yancc_wrapper = None):
+        if (yancc_wrapper is not None):
+            self.yancc_wrapper = yancc_wrapper
             self.field, self.vprime = self.yancc_wrapper.get_fields()
             self.field_shard, self.vprime_shard = eqx.filter_shard((self.field, self.vprime), data_sharding)
             self.adjointProblem.setField(self.field, self.vprime)
 
         if (tFinal is not None):
-            sFinal = self.runner.run(tfinal = tFinal, field=field)
+            self.runner.run(tFinal)
         else: 
-            sFinal = self.runner.run_ss()
-
-        return sFinal
+            self.runner.run_ss()
 
 
-    def runAdjointSolve(self, field = None):
+    def runAdjointSolve(self, field = None, grid = None):
         if (field is not None):
-            self.run(field=field)
+            yancc_wrapper = yancc_data.from_other(field, grid, other=self.yancc_wrapper)
+            self.run(yancc_wrapper=yancc_wrapper)
 
         G, G_p = self.runner.runAdjointSolve()
         return G, G_p
 
     def getPressure(self):
-        return 2./3. * self.runner.getSolution(0, self.points) * self.pnorm
-
-    @jax.custom_jvp
-    def Objective(self, field):
-        G, _ = self.runAdjointSolve(field)
-        return G[0]
-    
-    @Objective.defjvp
-    def Objective_jvp(self, primals, tangents):
-        field, = primals
-        field_dot, = tangents
-
-        G, G_p = self.runAdjointSolve(field)   
-
-        field_dot_flatten = jax.flatten_util.ravel_pytree(field_dot)
-
-        return G[0], jnp.dot(G_p['G_p'].flatten(), field_dot_flatten)
+        return 2./3. * self.runner.run(0, self.points) * self.pnorm
 
     def LowerBoundary(self, index, t):
         return 0.0
@@ -168,14 +147,6 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def UpperBoundary(self, index, t):
         return 1.5 * self.params.EdgeTemperature * self.Density(1.0)
 
-    def SigmaFn( self, index, state, x, t ):
-        field, vprime = self.yancc_wrapper.compute_field(x)
-        flux = self.sigma(index, state, x, t, field, vprime, self.params)
-        return flux
-    
-    def Sources(self, index, state, x, t):
-        return self.source(index, state, x, t, self.params)
-    
     def SigmaFn_v( self, index, states, positions, t):
         x = jnp.array(positions)
         x_s = jax.device_put(x,data_sharding)
@@ -244,25 +215,6 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def StoredEnergy(self, field, state, x, params):
         u = state["Variable"][0]
         return u * self.pnorm
-
-    # depracated functions, still need to be defined for now
-    def dSigmaFn_dq( self, index, state, x, t):
-        pass
-
-    def dSigmaFn_du( self, index, state, x, t):
-        pass
-    
-    def dSigma_dPhi( self, index, state, x, t):
-        pass
-    
-    def dSources_du( self, index, state, x, t ):
-        pass
-
-    def dSources_dq( self, index, state, x, t ):
-        pass
-
-    def dSources_dsigma( self, index, state, x, t ):
-        pass
     
     @partial(jax.jit, static_argnums=(0,1))
     def dSources_dPhi( self, index, state, x, t ):
@@ -277,7 +229,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return jax.grad(self.InitialValue, argnums=1)(index, x)
     
     def InitialAuxValue(self, index, x):
-        return 0.0
+        pass
 
     # Constant density function
     def Density(self, x):
@@ -295,17 +247,16 @@ class StellaratorTransport(MaNTA.TransportSystem):
         pass
 
 class StellaratorAdjointProblem(MaNTA.AdjointProblem):
-    def __init__(self, transport_system: MaNTA.TransportSystem, g, field, vprime, npoints):
+    def __init__(self, transport_system: MaNTA.TransportSystem, g, yancc_data, npoints):
         MaNTA.AdjointProblem.__init__(self)
 
         self.g = g
         self.ng = len(self.g) # g functions passed in as an array
+        self.field, self.vprime = yancc_data.get_fields()
+  
+        boundary_field = yancc_data.fields_unstacked[-1]
 
-        self.field  = field
-        self.vprime = vprime
-        self.boundary_field, self.boundary_vprime = transport_system.yancc_wrapper.compute_field(1.0)
-
-        flat, _ =  jax.flatten_util.ravel_pytree((eqx.filter(self.boundary_field, eqx.is_array)))
+        flat, _ =  jax.flatten_util.ravel_pytree((eqx.filter(boundary_field, eqx.is_array)))
         self.npoints = npoints
         self.np_cell = len(flat)-1
         self.np = (self.np_cell)

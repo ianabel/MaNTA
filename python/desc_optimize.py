@@ -15,8 +15,26 @@ st_config = {
 
 st = StellaratorTransport(st_config)
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
+
+@eqx.filter_custom_jvp
+def Objective(field, grid):
+    G, _ = st.runAdjointSolve(field=field, grid=grid)
+    return G[0]
+
+@Objective.def_jvp
+def Objective_jvp(primals, tangents):
+    field, grid = primals
+    field_dot, _ = tangents
+    G, G_p = st.runAdjointSolve(field = field, grid = grid)   
+
+    field_dot_flatten = jax.flatten_util.ravel_pytree(field_dot)
+
+    return G[0], jnp.dot(G_p['G_p'].flatten(), field_dot_flatten)
+
+
 import yancc
 
 import desc
@@ -40,9 +58,9 @@ from desc.profiles import SplineProfile
 
 points = st.points
 
-def manta_yancc_fun(yancc_fields):
+def manta_yancc_fun(yancc_fields, grid):
 
-    stored_energy = st.Objective(yancc_fields) * st.pnorm
+    stored_energy = Objective(yancc_fields, grid)* st.pnorm
     pressure = st.getPressure()
     ## run manta here to get steady state profiles given python list of yancc field objects
     # returns stored energy as a scalar, and an array of the steady state pressure at the
@@ -87,7 +105,7 @@ def objective_from_user_fun(grid, data):
     yancc_fields = jax.vmap(lambda d: yancc.field.Field(**d, NFP=grid.NFP))(yancc_dat)
     #yancc_fields = desc.backend.tree_unstack(yancc_fields)
 
-    stored_energy, manta_pressure = manta_yancc_fun(yancc_fields)
+    stored_energy, manta_pressure = manta_yancc_fun(yancc_fields, grid)
     
     desc_pressure = grid.compress(data["p"], surface_label="rho")
     pressure_error = manta_pressure - desc_pressure
@@ -156,7 +174,8 @@ objectives = [
         target=0,
         weight=objective_from_user_weight,
         grid=yancc_desc_grid,
-        deriv_mode="fwd",  # need this assuming manta only has vjp, if using jvp switch to fwd
+        deriv_mode="fwd", 
+        use_jit = False # need this assuming manta only has vjp, if using jvp switch to fwd
     )
 ]
 

@@ -120,8 +120,13 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
     dydt.zeroCoeffs();
 
+    std::vector<Values> Source_vals;
+
+    Source_vals.resize(nVars);
+
     for (Index var = 0; var < nVars; var++)
     {
+        Source_vals[var] = problem->Sources(var, y.evalOnNodes(), y.getPoints(), t);
         // Solver For dudt with dudt = X^-1( -B*Sig - D*U - E*Lam + F )
         Eigen::Vector2d lamCell;
         for (Index i = 0; i < nCells; i++)
@@ -131,7 +136,9 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
             // Evaluate Source Function
             Eigen::VectorXd S_cellwise(k + 1);
 
-            S_cellwise = y.getBasis().InterpolateOntoBasis( I, [&,this] ( double x ) { return problem->Sources( var, y.eval( x ), x, t ); } );
+            auto ind = Eigen::seq(i * (k + 1), (i + 1) * (k + 1) - 1);
+
+            S_cellwise = y.getBasis().InterpolateOntoBasis( I, Source_vals[var](ind) );
 
             lamCell[0] = y.lambda(var)[i];
             lamCell[1] = y.lambda(var)[i + 1];

@@ -1,6 +1,7 @@
 import jax
 
 jax.config.update("jax_enable_compilation_cache", False)
+jax.config.update("jax_platform_name", "cpu")
 
 from typing import NamedTuple
 
@@ -52,7 +53,7 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
 
         self.runner.configure(config)
 
-        self.points = self.runner.getPoints()
+        self.points = MaNTA.getNodes(config["Lower_boundary"], config["Upper_boundary"], config["Grid_size"], config["Polynomial_degree"])
 
         self.adjointProblem = JAXAdjointProblem(self, self.g)
         self.runner.setAdjointProblem(self.adjointProblem)
@@ -67,17 +68,19 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
             self.setParams(params)
         
         if (tFinal is not None):
-            sFinal = io_callback(self.runner.run, [], tFinal, ordered=True)
-       
-        sFinal = io_callback(self.runner.run_ss, [], ordered=True)
+            # sFinal = io_callback(self.runner.run, [], tFinal, ordered=True)
+            self.runner.run(tFinal)
 
-        return sFinal
+        else:
+            self.runner.run_ss()
+
 
     def runAdjointSolve(self, params = None):
         if (params is not None):
             self.run(params=params)
 
-        G, G_p = io_callback(self.runner.runAdjointSolve, self.adjointoutput, ordered=True) 
+        # G, G_p = io_callback(self.runner.runAdjointSolve, self.adjointoutput, ordered=True) 
+        G, G_p = self.runner.runAdjointSolve()
         return G, G_p
 
     def g(self, state, x, params):
@@ -138,7 +141,7 @@ params_new = LinearDiffusionParams(0.1, 0.1, 0.0, 2.0)
 
 print(fun(params_new))
 
-g1 = eqx.filter_jit(jax.grad(fun))
+g1 = jax.grad(fun)
 #g2 = eqx.filter_jit(jax.grad(fun))
 print(g1(params_new))
 
