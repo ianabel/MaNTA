@@ -238,9 +238,9 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 	m.def("runner_ffi_ops", []()
 		  { 
 			py::dict ffi_ops;
-			ffi_ops["get_solution"] = EncapsulateFfiCall(get_solution_ffi_ops);
-			ffi_ops["run_adjoint_solve"] = EncapsulateFfiCall(run_adjoint_solve_ffi_ops);
-			ffi_ops["run"] = EncapsulateFfiCall(run_ffi_ops);
-			ffi_ops["run_ss"] = EncapsulateFfiCall(run_ss_ffi_ops);
+			ffi_ops["get_solution_ffi"] = EncapsulateFfiCall(get_solution_ffi_ops);
+			ffi_ops["run_adjoint_solve_ffi"] = EncapsulateFfiCall(run_adjoint_solve_ffi_ops);
+			ffi_ops["run_ffi"] = EncapsulateFfiCall(run_ffi_ops);
+			ffi_ops["run_ss_ffi"] = EncapsulateFfiCall(run_ss_ffi_ops);
 			return ffi_ops; });
 };

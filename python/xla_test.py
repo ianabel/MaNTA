@@ -1,11 +1,10 @@
 import jax
 import MaNTA
 import jax.numpy as jnp
-import ctypes
 # jax.ffi.register_ffi_type(
 #     "runner", MaNTA.runner_type(), platform="cpu")
-
-jax.ffi.register_ffi_target("ffi_ops", MaNTA.runner_ffi_ops())
+for name, target in MaNTA.runner_ffi_ops().items():
+    jax.ffi.register_ffi_target(name, target)
 
 from typing import NamedTuple
 
@@ -22,13 +21,24 @@ import jax.numpy as jnp
 import equinox as eqx
 
 class FFI_Runner:
-    def __init__(self, runner):
+    def __init__(self, runner, np, ng):
         self.runner = runner
         self.runner_adr = self.runner.get_address()
+        self.adjoint_output = [
+            jax.ShapeDtypeStruct((ng,), jnp.float64),
+            jax.ShapeDtypeStruct((ng, np), jnp.float64)
+        ]  
+        self.sol_output = jax.ShapeDtypeStruct((np,1), jnp.float64)
     def run(self, tFinal):
-        jax.ffi.ffi_call("ffi_ops", [])(self.runner_adr, 0, tFinal)
+        jax.ffi.ffi_call("run_ffi", [])(self.runner_adr, tFinal)
     def run_ss(self):
-        jax.ffi.ffi_call("ffi_ops", [])(self.runner_adr, 1)
+        jax.ffi.ffi_call("run_ss_ffi", [])(self.runner_adr)
+    def run_adjoint_solve(self):
+        out = jax.ffi.ffi_call("run_adjoint_solve_ffi", self.adjoint_output)(self.runner_adr)
+        return out
+    def get_profile(self, var):
+        out = jax.ffi.ffi_call("get_solution_ffi", self.sol_output)(var)
+        return out
 
 #jax.ffi.register_ffi_target("runner_ffi_ops", MaNTA.runner_ffi_ops(), platform="cpu")
 
@@ -78,11 +88,8 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
         self.adjointProblem = JAXAdjointProblem(self, self.g)
         self.runner.setAdjointProblem(self.adjointProblem)
 
-        self.adjointoutput = [
-            jax.ShapeDtypeStruct((self.adjointProblem.ng,), jnp.float32),
-            jax.ShapeDtypeStruct((self.adjointProblem.ng, self.adjointProblem.np), jnp.float32)
-        ]     
-        self.runner_ffi = FFI_Runner(self.runner)
+           
+        self.runner_ffi = FFI_Runner(self.runner, self.adjointProblem.np, self.adjointProblem.ng)
         #jax.ffi.register_ffi_target("run_ffi", self.runner.run_ffi(), platform="cpu")
         # self.call_run = jax.ffi.ffi_call("run_ffi", [], vmap_method="broadcast_all")
 
@@ -106,7 +113,7 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
             self.run(params=params)
 
         # G, G_p = io_callback(self.runner.runAdjointSolve, self.adjointoutput, ordered=True) 
-        G, G_p = self.runner.runAdjointSolve()
+        G, G_p = self.runner_ffi.run_adjoint_solve()
         return G, G_p
 
     def g(self, state, x, params):
@@ -142,6 +149,10 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
 params = LinearDiffusionParams(0.1, 0.1, 0.1, 3.0)
 ld = JAXLinearDiffusion(params)
 ld.run()
+
+u = ld.runner_ffi.get_profile(0)
+print(u)
+
 @jax.custom_jvp
 def fun(params):
     G, G_p = ld.runAdjointSolve(params=params)
