@@ -29,6 +29,7 @@ std::pair<int64_t, int64_t> GetDims(const ffi::AnyBuffer buffer)
 static ffi::Error run_ffi_impl(void *ctx, ffi::AnyBuffer args)
 {
     auto runner = static_cast<PyRunner *>(ctx);
+    py::gil_scoped_acquire gil; // needed to prevent segfault
     double tFinal = *args.typed_data<double>();
     runner->run(tFinal);
     return ffi::Error::Success();
@@ -37,6 +38,7 @@ static ffi::Error run_ffi_impl(void *ctx, ffi::AnyBuffer args)
 static ffi::Error run_ffi_ss_impl(void *ctx)
 {
     auto runner = static_cast<PyRunner *>(ctx);
+    py::gil_scoped_acquire gil;
     runner->run_ss();
     return ffi::Error::Success();
 };
@@ -44,70 +46,85 @@ static ffi::Error run_ffi_ss_impl(void *ctx)
 static ffi::Error run_adjoint_ffi_impl(void *ctx, ffi::Result<ffi::BufferR1<ffi::F64>> Gout, ffi::Result<ffi::BufferR2<ffi::F64>> G_p_out, std::optional<ffi::Result<ffi::BufferR1<ffi::F64>>> G_p_boundary_out)
 {
     auto runner = static_cast<PyRunner *>(ctx);
+    py::gil_scoped_acquire gil;
     py::tuple result = runner->runAdjointSolve();
     auto G = result[0].cast<Vector>();
     py::dict G_p = result[1];
     auto G_p_internal = G_p["G_p"].cast<Matrix>();
 
     double *G_out_data = Gout->typed_data();
-    G_out_data = G.data();
+    for (Index i = 0; i < G.size(); i++)
+        G_out_data[i] = G(i);
+    
     double *G_p_out_data = G_p_out->typed_data();
-    G_p_out_data = G_p_internal.data();
+    auto const out_dim = G_p_out->dimensions();
+    assert(out_dim.front() == G_p_internal.rows());
+    assert(out_dim.back() == G_p_internal.cols());
+    for (Index i = 0; i < G_p_internal.rows(); i++)
+        for (Index j = 0; j < G_p_internal.cols(); j++)
+        {
+            auto const idx = i * out_dim.back() + j;
+            G_p_out_data[idx] = G_p_internal(i, j);
+        }
 
     if (G_p.contains("G_p_boundary"))
     {
         auto G_p_boundary = G_p["G_p_boundary"].cast<Vector>();
         double *G_p_boundary_out_data = G_p_boundary_out.value()->typed_data();
-        G_p_boundary_out_data = G_p_boundary.data();
+        for (Index i = 0; i < G_p_boundary.size(); i++)
+            G_p_boundary_out_data[i] = G_p_boundary(i);
     }
 
     return ffi::Error::Success();
 };
 
-static ffi::Error get_solution_ffi_impl(void *ctx, ffi::Buffer<ffi::S32> var, std::optional<ffi::BufferR1<ffi::F64>> points, ffi::Result<ffi::BufferR1<ffi::F64>> out)
+static ffi::Error get_solution_ffi_impl(void *ctx, ffi::Buffer<ffi::S64> var, std::optional<ffi::BufferR1<ffi::F64>> points, ffi::Result<ffi::BufferR1<ffi::F64>> out)
 {
     auto runner = static_cast<PyRunner *>(ctx);
-
+    py::gil_scoped_acquire gil;
     int var_index = *var.typed_data();
     if (points)
     {
         int num_points = points.value().element_count();
-        std::vector<double> points_vec(points.value().typed_data(), points.value().typed_data() + sizeof(double) * num_points);
+        std::vector<double> points_vec(points.value().typed_data(), points.value().typed_data() + num_points);
         Vector result = runner->getSolution(var_index, points_vec);
         double *out_ptr = out->typed_data();
-        out_ptr = result.data();
+
+        for (Index i = 0; i < result.size(); i++)
+            out_ptr[i] = result(i);
+
         return ffi::Error::Success();
     }
     else
     {
         Vector result = runner->getSolution(var_index, std::nullopt);
         double *out_ptr = out->typed_data();
-        out_ptr = result.data();
+        for (Index i = 0; i < result.size(); i++)
+            out_ptr[i] = result(i);
         return ffi::Error::Success();
     }
-    return ffi::Error::Success();
 };
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(run_ffi_ops, run_ffi_impl,
                               ffi::Ffi::Bind()
-                                  .Attr<ffi::Pointer<void>>("ctx")
+                                  .Attr<ffi::Pointer<void>>("obj")
                                   .Arg<ffi::AnyBuffer>());
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(run_ss_ffi_ops, run_ffi_ss_impl,
                               ffi::Ffi::Bind()
-                                  .Attr<ffi::Pointer<void>>("ctx"));
+                                  .Attr<ffi::Pointer<void>>("obj"));
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(run_adjoint_solve_ffi_ops, run_adjoint_ffi_impl,
                               ffi::Ffi::Bind()
-                                  .Attr<ffi::Pointer<void>>("ctx")
+                                  .Attr<ffi::Pointer<void>>("obj")
                                   .Ret<ffi::BufferR1<ffi::F64>>()
                                   .Ret<ffi::BufferR2<ffi::F64>>()
                                   .OptionalRet<ffi::BufferR1<ffi::F64>>());
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(get_solution_ffi_ops, get_solution_ffi_impl,
                               ffi::Ffi::Bind()
-                                  .Attr<ffi::Pointer<void>>("ctx")
-                                  .Arg<ffi::Buffer<ffi::S32>>()
+                                  .Attr<ffi::Pointer<void>>("obj")
+                                  .Arg<ffi::Buffer<ffi::S64>>()
                                   .OptionalArg<ffi::BufferR1<ffi::F64>>()
                                   .Ret<ffi::BufferR1<ffi::F64>>());
 

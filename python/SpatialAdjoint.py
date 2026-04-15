@@ -22,6 +22,33 @@ import interpax
 
 from jax.flatten_util import ravel_pytree
 
+jax.config.update('jax_enable_x64', True)
+
+# jax.ffi.register_ffi_type(
+#     "runner", MaNTA.runner_type(), platform="cpu")
+for name, target in MaNTA.runner_ffi_ops().items():
+    jax.ffi.register_ffi_target(name, target)
+
+class FFI_Runner:
+    def __init__(self, runner, points, np, ng):
+        self.runner = runner
+        self.points = points
+        self.adjoint_output = [
+            jax.ShapeDtypeStruct((ng,), jnp.float64),
+            jax.ShapeDtypeStruct((ng * len(self.points), np), jnp.float64)
+        ]  
+        self.sol_output = jax.ShapeDtypeStruct((len(self.points),), jnp.float64)
+    def run(self, tFinal):
+        jax.ffi.ffi_call("run_ffi", [], has_side_effect=True)(jnp.float64(tFinal), obj=self.runner.get_address())
+    def run_ss(self):
+        jax.ffi.ffi_call("run_ss_ffi", [], has_side_effect=True)(obj=self.runner.get_address())
+    def runAdjointSolve(self):
+        out = jax.ffi.ffi_call("run_adjoint_solve_ffi", self.adjoint_output, has_side_effect=True)(obj=self.runner.get_address())
+        return out
+    def get_profile(self, var):
+        out = jax.ffi.ffi_call("get_solution_ffi", self.sol_output)(var, self.points, obj=self.runner.get_address())
+        return out
+
 vmap_axes_adj = (None, {"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0, None,  0)
 
 class JAXAdjointProblem(MaNTA.AdjointProblem):
@@ -45,6 +72,8 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
 
         self.UpperBoundarySensitivities = {}
         self.LowerBoundarySensitivities = {}
+
+
 
     def setParams(self, params):
         self.params = params
@@ -175,6 +204,8 @@ class JAXNonlinearDiffusion(VectorizedTransportSystem):
 
         self.adjointProblem = JAXAdjointProblem(self, self.g)
         self.runner.setAdjointProblem(self.adjointProblem)
+
+        self.runner_ffi = FFI_Runner(self.runner, self.points, self.adjointProblem.np, self.adjointProblem.ng)
         # This object will be passed to sigma and source functions
     
     def run(self, tFinal = None, kappa = None):
@@ -182,16 +213,16 @@ class JAXNonlinearDiffusion(VectorizedTransportSystem):
             self.params["D"] = self.D(self.points, kappa)
         
         if (tFinal is not None):
-            sFinal = self.runner.run(tFinal)
+            self.runner_ffi.run(tFinal)
+            #sFinal = self.runner.run(tFinal)
         else: 
-            sFinal = self.runner.run_ss()
+            self.runner_ffi.run_ss()
 
-        return sFinal
 
     def runAdjointSolve(self, kappa = None):
         if (kappa is not None):
             self.params["D"] = self.D(self.points, kappa)
-        G, G_p = self.runner.runAdjointSolve()
+        G, G_p = self.runner_ffi.runAdjointSolve()
         return G, G_p
 
     def g(self, state, x, params):
@@ -278,7 +309,7 @@ data.close()
 # %%
 G, G_p = nl.runAdjointSolve()
 
-print(G)
+print(G_p)
 
 u_interp = interpax.interp1d(nl.points, x, u[-1,:], method='cubic')
 

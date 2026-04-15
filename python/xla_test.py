@@ -1,6 +1,9 @@
 import jax
 import MaNTA
 import jax.numpy as jnp
+
+jax.config.update('jax_enable_x64', True)
+
 # jax.ffi.register_ffi_type(
 #     "runner", MaNTA.runner_type(), platform="cpu")
 for name, target in MaNTA.runner_ffi_ops().items():
@@ -10,7 +13,7 @@ from typing import NamedTuple
 
 from functools import partial
 
-
+from jax.experimental import io_callback
 
 from VectorizedTransportSystem import VectorizedTransportSystem
 from JAXAdjointProblem import JAXAdjointProblem
@@ -21,23 +24,23 @@ import jax.numpy as jnp
 import equinox as eqx
 
 class FFI_Runner:
-    def __init__(self, runner, np, ng):
+    def __init__(self, runner, points, np, ng):
         self.runner = runner
-        self.runner_adr = self.runner.get_address()
+        self.points = points
         self.adjoint_output = [
             jax.ShapeDtypeStruct((ng,), jnp.float64),
             jax.ShapeDtypeStruct((ng, np), jnp.float64)
         ]  
-        self.sol_output = jax.ShapeDtypeStruct((np,1), jnp.float64)
+        self.sol_output = jax.ShapeDtypeStruct((len(self.points),), jnp.float64)
     def run(self, tFinal):
-        jax.ffi.ffi_call("run_ffi", [])(self.runner_adr, tFinal)
+        jax.ffi.ffi_call("run_ffi", [], has_side_effect=True)(jnp.float64(tFinal), obj=self.runner.get_address())
     def run_ss(self):
-        jax.ffi.ffi_call("run_ss_ffi", [])(self.runner_adr)
+        jax.ffi.ffi_call("run_ss_ffi", [], has_side_effect=True)(obj=self.runner.get_address())
     def run_adjoint_solve(self):
-        out = jax.ffi.ffi_call("run_adjoint_solve_ffi", self.adjoint_output)(self.runner_adr)
+        out = jax.ffi.ffi_call("run_adjoint_solve_ffi", self.adjoint_output, has_side_effect=True)(obj=self.runner.get_address())
         return out
     def get_profile(self, var):
-        out = jax.ffi.ffi_call("get_solution_ffi", self.sol_output)(var)
+        out = jax.ffi.ffi_call("get_solution_ffi", self.sol_output)(var, self.points, obj=self.runner.get_address())
         return out
 
 #jax.ffi.register_ffi_target("runner_ffi_ops", MaNTA.runner_ffi_ops(), platform="cpu")
@@ -64,9 +67,6 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
         self.params = params
         self.runner = MaNTA.Runner(self)
 
-       
-
-        # %%
         config = {
             "OutputFilename": "output",
             "Polynomial_degree": 5,
@@ -87,11 +87,8 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
 
         self.adjointProblem = JAXAdjointProblem(self, self.g)
         self.runner.setAdjointProblem(self.adjointProblem)
-
            
-        self.runner_ffi = FFI_Runner(self.runner, self.adjointProblem.np, self.adjointProblem.ng)
-        #jax.ffi.register_ffi_target("run_ffi", self.runner.run_ffi(), platform="cpu")
-        # self.call_run = jax.ffi.ffi_call("run_ffi", [], vmap_method="broadcast_all")
+        self.runner_ffi = FFI_Runner(self.runner, self.points, self.adjointProblem.np, self.adjointProblem.ng)
 
 
     def run(self, tFinal = None, params=None):
@@ -99,8 +96,6 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
             self.setParams(params)
         
         if (tFinal is not None):
-            
-            # sFinal = io_callback(self.runner.run, [], tFinal, ordered=True)
             self.runner_ffi.run(tFinal)
             # self.call_run(tFinal)
 
@@ -119,6 +114,7 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
     def g(self, state, x, params):
         u = state["Variable"][0]
         return 0.5 * u * u
+    
  
     def setParams(self, params):
         self.params = params
@@ -148,37 +144,41 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
 
 params = LinearDiffusionParams(0.1, 0.1, 0.1, 3.0)
 ld = JAXLinearDiffusion(params)
-ld.run()
+fjit = jax.jit(ld.run)
+fjit()
 
 u = ld.runner_ffi.get_profile(0)
 print(u)
 
-@jax.custom_jvp
-def fun(params):
-    G, G_p = ld.runAdjointSolve(params=params)
-    return G[0]
+G, G_p = ld.runAdjointSolve()
+print(G)
+print(G_p)
 
-@fun.defjvp
-def fun_jvp(primals, tangents):
+# @jax.custom_jvp
+# def fun(params):
+#     G, G_p = ld.runAdjointSolve(params=params)
+#     return G[0]
 
-    params, = primals
-    params_dot, = tangents
+# @fun.defjvp
+# def fun_jvp(primals, tangents):
 
-    G, G_p = ld.runAdjointSolve(params=params)
-    Gravel, _ = jax.flatten_util.ravel_pytree(G_p)
-    params_dot_flatten, _ = jax.flatten_util.ravel_pytree(params_dot)
+#     params, = primals
+#     params_dot, = tangents
 
-    dot = jax.vmap(lambda g, g_p: jnp.dot(g, g_p), in_axes=(0, None))(Gravel, params_dot_flatten)
+#     G, G_p = ld.runAdjointSolve(params=params)
+#     print(G_p)
+#     Gravel, _ = jax.flatten_util.ravel_pytree(G_p)
+#     params_dot_flatten, _ = jax.flatten_util.ravel_pytree(params_dot)
+
+#     dot = jax.vmap(lambda g, g_p: jnp.dot(g, g_p), in_axes=(0, None))(Gravel, params_dot_flatten)
 
 
-    return G[0], jnp.sum(dot)
+#     return G[0], jnp.sum(dot)
 
-params_new = LinearDiffusionParams(0.1, 0.1, 0.0, 2.0)
+# params_new = LinearDiffusionParams(0.1, 0.1, 0.0, 2.0)
 
-print(fun(params_new))
-
-# g1 = jax.grad(fun)
-# #g2 = eqx.filter_jit(jax.grad(fun))
+# g1 = eqx.filter_jit(jax.grad(fun))
+# # # #g2 = eqx.filter_jit(jax.grad(fun))
 # print(g1(params_new))
 
 # params_new = LinearDiffusionParams(0.1, 0.1, 0.0, 1.0)

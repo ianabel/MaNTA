@@ -61,7 +61,6 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
     def dSigma(self, i, states, positions):
         x = jnp.array(positions)
         out = jax.vmap(jax.grad(self.sigma, argnums=4), in_axes=(vmap_axes))(i, states, x, 0.0, self.params)  
-        print(out)
         return out
     
     

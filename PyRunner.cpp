@@ -297,8 +297,6 @@ Vector PyRunner::getSolution(Index var, std::optional<std::vector<Position>> con
                 throw std::out_of_range("Requested point outside of grid boundaries");
 
             sol(i) = system->y.u(var)(p);
-
-            return sol;
         }
         return sol;
     }
