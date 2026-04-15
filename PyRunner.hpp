@@ -47,7 +47,6 @@ public:
         Creates runner object for running MaNTA from Python given a config dictionary
         Takes constructed transport system as input
     */
-    PyRunner() = default;
     explicit PyRunner(std::shared_ptr<TransportSystem> problem) : pProblem(problem) {};
     ~PyRunner();
 

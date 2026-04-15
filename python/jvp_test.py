@@ -16,10 +16,7 @@ import jax.numpy as jnp
 
 import equinox as eqx
 
-jax.ffi.register_ffi_type(
-    "runner", MaNTA.runner_type(), platform="cpu")
-
-jax.ffi.register_ffi_target("runner", MaNTA.handler(), platform="cpu", api_version=1)
+#jax.ffi.register_ffi_target("runner_ffi_ops", MaNTA.runner_ffi_ops(), platform="cpu")
 
 # jax.ffi.register_ffi_target("runner", MaNTA.Runner.handler(), platform="cpu")
 # for name, target in MaNTA.Runner.ffi_ops().items():

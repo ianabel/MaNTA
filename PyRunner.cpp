@@ -245,6 +245,7 @@ py::tuple PyRunner::runAdjointSolve(void)
 {
     if (adjoint == nullptr)
         throw std::runtime_error("\"runAdjointSolve\" but adjoint problem not set");
+
     system->runAdjointSolve();
 
     auto np_internal = adjoint->getNpInternal();

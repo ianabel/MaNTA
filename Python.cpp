@@ -231,30 +231,16 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 		.def("run_ss", &PyRunner::run_ss)
 		.def("setAdjointProblem", &PyRunner::setAdjointProblem)
 		.def("runAdjointSolve", &PyRunner::runAdjointSolve)
-		.def("getSolution", &PyRunner::getSolution);
-	// FFI bindings
-	m.def("type_id", []()
-		  { return py::capsule(reinterpret_cast<void *>(&PyRunner::id)); });
-	m.def("runner_type", []()
-		  {
-	// In earlier versions of XLA:FFI, the `MakeTypeInfo` helper was not
-	// available. In latest XLF:FFI `TypeInfo` is an alias for C API struct.
-#if XLA_FFI_API_MINOR >= 2
-			static auto kPyRunnerTypeInfo = ffi::MakeTypeInfo<PyRunner>();
-#else
-			static auto kPyRunnerTypeInfo = ffi::TypeInfo<PyRunner>();
-#endif
-			py::dict d;
-			d["type_id"] = py::capsule(reinterpret_cast<void *>(&PyRunner::id));
-			d["type_info"] = py::capsule(reinterpret_cast<void *>(&kPyRunnerTypeInfo));
-			return d; });
-	m.def("handler", []()
-		  {
-			py::dict d;
+		.def("getSolution", &PyRunner::getSolution)
+		.def("get_address", [](const PyRunner &runner)
+			 { return reinterpret_cast<std::uint64_t>(&runner); });
 
-			d["instantiate"] = py::capsule(reinterpret_cast<void *>(py_runner_instantiate));
-			d["execute"] = py::capsule(reinterpret_cast<void *>(kRunnerExecute));
-			return d; });
-
-	// return py::capsule(reinterpret_cast<void *>(handler)); });
+	m.def("runner_ffi_ops", []()
+		  { 
+			py::dict ffi_ops;
+			ffi_ops["get_solution"] = EncapsulateFfiCall(get_solution_ffi_ops);
+			ffi_ops["run_adjoint_solve"] = EncapsulateFfiCall(run_adjoint_solve_ffi_ops);
+			ffi_ops["run"] = EncapsulateFfiCall(run_ffi_ops);
+			ffi_ops["run_ss"] = EncapsulateFfiCall(run_ss_ffi_ops);
+			return ffi_ops; });
 };
