@@ -10,26 +10,23 @@
 #include "PyAdjointProblem.hpp"
 #include "PyRunner.hpp"
 #include "PyGrid.hpp"
-// #include "xla/ffi/api/c_api.h"
-// #include "xla/ffi/api/api.h"
-// #include <type_traits>
 
+#include "ffi.hpp"
+
+// #include <type_traits>
+namespace ffi = xla::ffi;
 namespace py = pybind11;
 
-int runManta(std::string const &);
-
-// // Needed to be able to handle FFI in JAX
 template <typename T>
-static py::capsule EncapsulateFfiCall(T &&fn)
+py::capsule EncapsulateFfiCall(T *fn)
 {
 	// This check is optional, but it can be helpful for avoiding invalid handlers.
-	// static_assert(std::is_invocable_r_v<XLA_FFI_Error *, T, XLA_FFI_CallFrame *>,
-	// 			  "Encapsulated function must be an XLA FFI handler");
-	std::cout << "Encapsulating FFI call" << std::endl;
-	std::cout << "Function address: " << &fn << std::endl;
-	return py::capsule(reinterpret_cast<void *>(&fn));
-}
+	static_assert(std::is_invocable_r_v<XLA_FFI_Error *, T, XLA_FFI_CallFrame *>,
+				  "Encapsulated function must be and XLA FFI handler");
+	return py::capsule(reinterpret_cast<void *>(fn));
+};
 
+int runManta(std::string const &);
 // This allows one to use a python dict as a state variable,
 // if the python dict has the right keys in it
 namespace pybind11
@@ -226,16 +223,38 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 					 return result;
 				 }
 			 });
-
 	py::class_<PyRunner, py::smart_holder>(m, "Runner")
 		.def(py::init<std::shared_ptr<TransportSystem>>())
+		.def("setTransportSystem", &PyRunner::setTransportSystem)
 		.def("configure", &PyRunner::configure)
 		.def("run", &PyRunner::run)
 		.def("run_ss", &PyRunner::run_ss)
 		.def("setAdjointProblem", &PyRunner::setAdjointProblem)
 		.def("runAdjointSolve", &PyRunner::runAdjointSolve)
-		.def("getSolution", &PyRunner::getSolution)
-		.def("run_ffi", [](PyRunner *self)
-			 { std::cout << self << std::endl;
-				return EncapsulateFfiCall(std::bind(&PyRunner::run, self, std::placeholders::_1)); });
-}
+		.def("getSolution", &PyRunner::getSolution);
+	// FFI bindings
+	m.def("type_id", []()
+		  { return py::capsule(reinterpret_cast<void *>(&PyRunner::id)); });
+	m.def("runner_type", []()
+		  {
+	// In earlier versions of XLA:FFI, the `MakeTypeInfo` helper was not
+	// available. In latest XLF:FFI `TypeInfo` is an alias for C API struct.
+#if XLA_FFI_API_MINOR >= 2
+			static auto kPyRunnerTypeInfo = ffi::MakeTypeInfo<PyRunner>();
+#else
+			static auto kPyRunnerTypeInfo = ffi::TypeInfo<PyRunner>();
+#endif
+			py::dict d;
+			d["type_id"] = py::capsule(reinterpret_cast<void *>(&PyRunner::id));
+			d["type_info"] = py::capsule(reinterpret_cast<void *>(&kPyRunnerTypeInfo));
+			return d; });
+	m.def("handler", []()
+		  {
+			py::dict d;
+
+			d["instantiate"] = py::capsule(reinterpret_cast<void *>(py_runner_instantiate));
+			d["execute"] = py::capsule(reinterpret_cast<void *>(kRunnerExecute));
+			return d; });
+
+	// return py::capsule(reinterpret_cast<void *>(handler)); });
+};

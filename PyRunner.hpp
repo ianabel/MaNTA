@@ -9,6 +9,10 @@
 #include <pybind11/functional.h>
 #include <pybind11/numpy.h>
 
+#include "xla/ffi/api/api.h"
+#include "xla/ffi/api/c_api.h"
+#include "xla/ffi/api/ffi.h"
+
 #include <string>
 #include <variant>
 
@@ -16,6 +20,7 @@
 
 #include "PhysicsCases.hpp"
 
+namespace ffi = xla::ffi;
 namespace py = pybind11;
 
 // Generic parameter
@@ -42,7 +47,8 @@ public:
         Creates runner object for running MaNTA from Python given a config dictionary
         Takes constructed transport system as input
     */
-    PyRunner(std::shared_ptr<TransportSystem> problem) : pProblem(problem) {};
+    PyRunner() = default;
+    explicit PyRunner(std::shared_ptr<TransportSystem> problem) : pProblem(problem) {};
     ~PyRunner();
 
     // Configure solver from Python
@@ -54,6 +60,11 @@ public:
     // Runs solver to steady state
     void run_ss(void);
 
+    void setTransportSystem(std::shared_ptr<TransportSystem> problem)
+    {
+        pProblem = problem;
+    };
+
     void setAdjointProblem(std::shared_ptr<AdjointProblem> ap)
     {
         adjoint = ap;
@@ -64,9 +75,12 @@ public:
 
     Vector getSolution(Index var, std::optional<std::vector<Position>> const &points);
 
+public:
+    static ffi::TypeId id;
+
 private:
     // Shared ownership of TransportSystem so user can update in Python without recreating object
-    std::shared_ptr<TransportSystem> pProblem;
+    std::shared_ptr<TransportSystem> pProblem = nullptr;
     std::shared_ptr<AdjointProblem> adjoint = nullptr;
 
     // Ownership of objects handled by C++
@@ -91,7 +105,7 @@ private: // solver data
     N_Vector Y = NULL;           // vector for storing solution
     N_Vector dYdt = NULL;        // vector for storing time derivative of solution
     N_Vector constraints = NULL; // vector for storing constraints
-    N_Vector id = NULL;          // vector for storing id (which elements are algebraic or differentiable)
+    N_Vector _id = NULL;         // vector for storing id (which elements are algebraic or differentiable)
     N_Vector res = NULL;         // vector for storing residual
     N_Vector absTolVec = NULL;   // vector for storing absolute tolerances
     sunrealtype tout, tret;

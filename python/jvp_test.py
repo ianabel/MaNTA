@@ -1,5 +1,5 @@
 import jax
-
+jax.config.update('jax_platform_name', 'cpu')
 import MaNTA
 
 from typing import NamedTuple
@@ -15,6 +15,15 @@ from JAXAdjointProblem import JAXAdjointProblem
 import jax.numpy as jnp
 
 import equinox as eqx
+
+jax.ffi.register_ffi_type(
+    "runner", MaNTA.runner_type(), platform="cpu")
+
+jax.ffi.register_ffi_target("runner", MaNTA.handler(), platform="cpu", api_version=1)
+
+# jax.ffi.register_ffi_target("runner", MaNTA.Runner.handler(), platform="cpu")
+# for name, target in MaNTA.Runner.ffi_ops().items():
+#     jax.ffi.register_ffi_target(name, target, platform="cpu")
 
 class LinearDiffusionParams(NamedTuple):
     Centre: float
@@ -62,7 +71,7 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
             jax.ShapeDtypeStruct((self.adjointProblem.ng,), jnp.float32),
             jax.ShapeDtypeStruct((self.adjointProblem.ng, self.adjointProblem.np), jnp.float32)
         ]     
-        jax.ffi.register_ffi_target("run_ffi", self.runner.run_ffi(), platform="cpu")
+        #jax.ffi.register_ffi_target("run_ffi", self.runner.run_ffi(), platform="cpu")
         # self.call_run = jax.ffi.ffi_call("run_ffi", [], vmap_method="broadcast_all")
 
 
@@ -124,7 +133,6 @@ ld.run()
 @jax.custom_jvp
 def fun(params):
     G, G_p = ld.runAdjointSolve(params=params)
-    print(G_p)
     return G[0]
 
 @fun.defjvp
@@ -146,12 +154,12 @@ params_new = LinearDiffusionParams(0.1, 0.1, 0.0, 2.0)
 
 print(fun(params_new))
 
-g1 = jax.grad(fun)
-#g2 = eqx.filter_jit(jax.grad(fun))
-print(g1(params_new))
+# g1 = jax.grad(fun)
+# #g2 = eqx.filter_jit(jax.grad(fun))
+# print(g1(params_new))
 
-params_new = LinearDiffusionParams(0.1, 0.1, 0.0, 1.0)
-print(g1(params_new))
+# params_new = LinearDiffusionParams(0.1, 0.1, 0.0, 1.0)
+# print(g1(params_new))
 #print(gprint(g1(params_new))2(params_new))
 
 

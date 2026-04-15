@@ -83,6 +83,8 @@ T getValueWithDefault(std::string key, const py::dict &d)
 
 void PyRunner::configure(const py::dict &config)
 {
+    if (!pProblem)
+        throw std::runtime_error("Transport system not set. Please set transport system before configuring solver.");
     // Set stored problem to null to allow reconfiguration after object creation
     system = nullptr;
     grid = nullptr;
@@ -205,7 +207,7 @@ void PyRunner::configure(const py::dict &config)
 
     bool writeOutput = getValueWithDefault<bool>("WriteOutput", config);
     // Creation of solver function
-    runner = system->makeSolver(LS, sunMat, IDA_mem, retval, Y, dYdt, constraints, id, res, absTolVec, tout, tret, writeOutput);
+    runner = system->makeSolver(LS, sunMat, IDA_mem, retval, Y, dYdt, constraints, _id, res, absTolVec, tout, tret, writeOutput);
 
     configured = true;
     std::cerr << "Configuration done." << std::endl;
@@ -581,7 +583,7 @@ PyRunner::~PyRunner()
     N_VDestroy(Y);
     N_VDestroy(dYdt);
     N_VDestroy(constraints);
-    N_VDestroy(id);
+    N_VDestroy(_id);
     N_VDestroy(res);
     N_VDestroy(absTolVec);
 

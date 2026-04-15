@@ -39,10 +39,12 @@ test: $(SOLVER) Tests/UnitTests/UnitTests
 PYTHON_NAME=python/MaNTA$(shell python3-config --extension-suffix)
 PYTHON_OUTPUT=$(PYTHON_NAME) 
 
+JAX_XLA_INCLUDES=-Ivenv/lib/python3.12/site-packages/jaxlib/include
+
 python: $(PYTHON_OUTPUT)
 
-$(PYTHON_OUTPUT): $(OBJECTS) $(PHYSICS_OBJECTS) Python.cpp PyTransportSystem.hpp PyAdjointProblem.hpp PyGrid.hpp PyRunner.hpp PyRunner.cpp 
-	$(CXX) $(CXXFLAGS) $$(python3-config --includes) -I$(realpath extern/pybind11/include) -shared -fPIC -fvisibility=hidden -o $@ Python.cpp PyRunner.cpp MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
+$(PYTHON_OUTPUT): $(OBJECTS) $(PHYSICS_OBJECTS) ffi.hpp Python.cpp PyTransportSystem.hpp PyAdjointProblem.hpp PyGrid.hpp PyRunner.hpp PyRunner.cpp 
+	$(CXX) $(CXXFLAGS) -Wno-attributes -Wno-return-type -Wno-unused-but-set-variable -Wno-changes-meaning -Wno-sign-compare  $$(python3-config --includes) $(JAX_XLA_INCLUDES) -I$(realpath extern/pybind11/include) -shared -fPIC -fvisibility=hidden -o $@ Python.cpp PyRunner.cpp MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
 
 clean:
 	$(MAKE) -C Tests/UnitTests clean
