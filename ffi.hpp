@@ -16,6 +16,12 @@
 namespace ffi = xla::ffi;
 namespace py = pybind11;
 
+/*
+    Bindings for XLA and JAX, enables native jit compilation
+
+    Basically emululate base functions but take in a void pointer to a PyRunner object
+*/
+
 // can use either 64 or 32 bit math, based on jax config
 #define fp_dtype ffi::F64
 #define i_dtype ffi::S64
@@ -52,12 +58,15 @@ static ffi::Error run_adjoint_ffi_impl(void *ctx, ffi::Result<ffi::BufferR1<fp_d
 
     auto *G_p_out_data = G_p_out->typed_data();
     auto const out_dim = G_p_out->dimensions();
+
+    // Make sure retval is correct shape
     assert(out_dim.front() == G_p_internal.rows());
     assert(out_dim.back() == G_p_internal.cols());
+
     for (Index i = 0; i < G_p_internal.rows(); i++)
         for (Index j = 0; j < G_p_internal.cols(); j++)
         {
-            auto const idx = i * out_dim.back() + j;
+            auto const idx = i * out_dim.back() + j; // formula for indexing into 2D buffer: https://github.com/openxla/xla/blob/main/xla/tests/custom_call_test.cc#L1577
             G_p_out_data[idx] = G_p_internal(i, j);
         }
 
@@ -76,7 +85,7 @@ static ffi::Error get_solution_ffi_impl(void *ctx, ffi::Buffer<i_dtype> var, std
 {
     auto runner = static_cast<PyRunner *>(ctx);
     py::gil_scoped_acquire gil;
-    int var_index = *var.typed_data();
+    auto var_index = *var.typed_data();
     if (points)
     {
         int num_points = points.value().element_count();
