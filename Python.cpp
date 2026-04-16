@@ -11,11 +11,12 @@
 #include "PyRunner.hpp"
 #include "PyGrid.hpp"
 
+namespace py = pybind11;
+
+#ifdef XLA_FFI
 #include "ffi.hpp"
 
-// #include <type_traits>
 namespace ffi = xla::ffi;
-namespace py = pybind11;
 
 template <typename T>
 py::capsule EncapsulateFfiCall(T *fn)
@@ -25,6 +26,9 @@ py::capsule EncapsulateFfiCall(T *fn)
 				  "Encapsulated function must be and XLA FFI handler");
 	return py::capsule(reinterpret_cast<void *>(fn));
 };
+#endif
+
+// #include <type_traits>
 
 int runManta(std::string const &);
 // This allows one to use a python dict as a state variable,
@@ -232,9 +236,9 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 		.def("setAdjointProblem", &PyRunner::setAdjointProblem)
 		.def("runAdjointSolve", &PyRunner::runAdjointSolve)
 		.def("getSolution", &PyRunner::getSolution)
-		.def("get_address", [](const PyRunner &runner)
+		.def("get_address", [](const PyRunner &runner) // needed for xla interface
 			 { return reinterpret_cast<std::uint64_t>(&runner); });
-
+#ifdef XLA_FFI
 	m.def("runner_ffi_ops", []()
 		  { 
 			py::dict ffi_ops;
@@ -243,4 +247,5 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 			ffi_ops["run_ffi"] = EncapsulateFfiCall(run_ffi_ops);
 			ffi_ops["run_ss_ffi"] = EncapsulateFfiCall(run_ss_ffi_ops);
 			return ffi_ops; });
+#endif
 };

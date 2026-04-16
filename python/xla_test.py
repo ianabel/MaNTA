@@ -37,11 +37,9 @@ class FFI_Runner:
     def run_ss(self):
         jax.ffi.ffi_call("run_ss_ffi", [], has_side_effect=True)(obj=self.runner.get_address())
     def run_adjoint_solve(self):
-        out = jax.ffi.ffi_call("run_adjoint_solve_ffi", self.adjoint_output, has_side_effect=True)(obj=self.runner.get_address())
-        return out
+        return jax.ffi.ffi_call("run_adjoint_solve_ffi", self.adjoint_output, has_side_effect=True)(obj=self.runner.get_address())
     def get_profile(self, var):
-        out = jax.ffi.ffi_call("get_solution_ffi", self.sol_output)(var, self.points, obj=self.runner.get_address())
-        return out
+        return jax.ffi.ffi_call("get_solution_ffi", self.sol_output)(var, self.points, obj=self.runner.get_address())
 
 #jax.ffi.register_ffi_target("runner_ffi_ops", MaNTA.runner_ffi_ops(), platform="cpu")
 
@@ -145,7 +143,7 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
 params = LinearDiffusionParams(0.1, 0.1, 0.1, 3.0)
 ld = JAXLinearDiffusion(params)
 fjit = jax.jit(ld.run)
-fjit()
+fjit(5.0)
 
 u = ld.runner_ffi.get_profile(0)
 print(u)
@@ -154,32 +152,31 @@ G, G_p = ld.runAdjointSolve()
 print(G)
 print(G_p)
 
-# @jax.custom_jvp
-# def fun(params):
-#     G, G_p = ld.runAdjointSolve(params=params)
-#     return G[0]
+@jax.custom_jvp
+def fun(params):
+    G, G_p = ld.runAdjointSolve(params=params)
+    return G[0]
 
-# @fun.defjvp
-# def fun_jvp(primals, tangents):
+@fun.defjvp
+def fun_jvp(primals, tangents):
 
-#     params, = primals
-#     params_dot, = tangents
+    params, = primals
+    params_dot, = tangents
 
-#     G, G_p = ld.runAdjointSolve(params=params)
-#     print(G_p)
-#     Gravel, _ = jax.flatten_util.ravel_pytree(G_p)
-#     params_dot_flatten, _ = jax.flatten_util.ravel_pytree(params_dot)
+    G, G_p = ld.runAdjointSolve(params=params)
+    Gravel, _ = jax.flatten_util.ravel_pytree(G_p)
+    params_dot_flatten, _ = jax.flatten_util.ravel_pytree(params_dot)
 
-#     dot = jax.vmap(lambda g, g_p: jnp.dot(g, g_p), in_axes=(0, None))(Gravel, params_dot_flatten)
+    dot = jax.vmap(lambda g, g_p: jnp.dot(g, g_p), in_axes=(0, None))(Gravel, params_dot_flatten)
 
 
-#     return G[0], jnp.sum(dot)
+    return G[0], jnp.sum(dot)
 
-# params_new = LinearDiffusionParams(0.1, 0.1, 0.0, 2.0)
+params_new = LinearDiffusionParams(0.1, 0.1, 0.0, 2.0)
 
-# g1 = eqx.filter_jit(jax.grad(fun))
+g1 = eqx.filter_jit(jax.grad(fun))
 # # # #g2 = eqx.filter_jit(jax.grad(fun))
-# print(g1(params_new))
+print(g1(params_new))
 
 # params_new = LinearDiffusionParams(0.1, 0.1, 0.0, 1.0)
 # print(g1(params_new))

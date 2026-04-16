@@ -16,15 +16,9 @@
 namespace ffi = xla::ffi;
 namespace py = pybind11;
 
-std::pair<int64_t, int64_t> GetDims(const ffi::AnyBuffer buffer)
-{
-    const ffi::AnyBuffer::Dimensions dims = buffer.dimensions();
-    if (dims.size() == 0)
-    {
-        return std::make_pair(0, 0);
-    }
-    return std::make_pair(buffer.element_count(), dims.back());
-}
+// can use either 64 or 32 bit math, based on jax config
+#define fp_dtype ffi::F64
+#define i_dtype ffi::S64
 
 static ffi::Error run_ffi_impl(void *ctx, ffi::AnyBuffer args)
 {
@@ -43,7 +37,7 @@ static ffi::Error run_ffi_ss_impl(void *ctx)
     return ffi::Error::Success();
 };
 
-static ffi::Error run_adjoint_ffi_impl(void *ctx, ffi::Result<ffi::BufferR1<ffi::F64>> Gout, ffi::Result<ffi::BufferR2<ffi::F64>> G_p_out, std::optional<ffi::Result<ffi::BufferR1<ffi::F64>>> G_p_boundary_out)
+static ffi::Error run_adjoint_ffi_impl(void *ctx, ffi::Result<ffi::BufferR1<fp_dtype>> Gout, ffi::Result<ffi::BufferR2<fp_dtype>> G_p_out, std::optional<ffi::Result<ffi::BufferR1<fp_dtype>>> G_p_boundary_out)
 {
     auto runner = static_cast<PyRunner *>(ctx);
     py::gil_scoped_acquire gil;
@@ -52,11 +46,11 @@ static ffi::Error run_adjoint_ffi_impl(void *ctx, ffi::Result<ffi::BufferR1<ffi:
     py::dict G_p = result[1];
     auto G_p_internal = G_p["G_p"].cast<Matrix>();
 
-    double *G_out_data = Gout->typed_data();
+    auto *G_out_data = Gout->typed_data();
     for (Index i = 0; i < G.size(); i++)
         G_out_data[i] = G(i);
-    
-    double *G_p_out_data = G_p_out->typed_data();
+
+    auto *G_p_out_data = G_p_out->typed_data();
     auto const out_dim = G_p_out->dimensions();
     assert(out_dim.front() == G_p_internal.rows());
     assert(out_dim.back() == G_p_internal.cols());
@@ -70,7 +64,7 @@ static ffi::Error run_adjoint_ffi_impl(void *ctx, ffi::Result<ffi::BufferR1<ffi:
     if (G_p.contains("G_p_boundary"))
     {
         auto G_p_boundary = G_p["G_p_boundary"].cast<Vector>();
-        double *G_p_boundary_out_data = G_p_boundary_out.value()->typed_data();
+        auto *G_p_boundary_out_data = G_p_boundary_out.value()->typed_data();
         for (Index i = 0; i < G_p_boundary.size(); i++)
             G_p_boundary_out_data[i] = G_p_boundary(i);
     }
@@ -78,7 +72,7 @@ static ffi::Error run_adjoint_ffi_impl(void *ctx, ffi::Result<ffi::BufferR1<ffi:
     return ffi::Error::Success();
 };
 
-static ffi::Error get_solution_ffi_impl(void *ctx, ffi::Buffer<ffi::S64> var, std::optional<ffi::BufferR1<ffi::F64>> points, ffi::Result<ffi::BufferR1<ffi::F64>> out)
+static ffi::Error get_solution_ffi_impl(void *ctx, ffi::Buffer<i_dtype> var, std::optional<ffi::BufferR1<fp_dtype>> points, ffi::Result<ffi::BufferR1<fp_dtype>> out)
 {
     auto runner = static_cast<PyRunner *>(ctx);
     py::gil_scoped_acquire gil;
@@ -88,7 +82,7 @@ static ffi::Error get_solution_ffi_impl(void *ctx, ffi::Buffer<ffi::S64> var, st
         int num_points = points.value().element_count();
         std::vector<double> points_vec(points.value().typed_data(), points.value().typed_data() + num_points);
         Vector result = runner->getSolution(var_index, points_vec);
-        double *out_ptr = out->typed_data();
+        auto *out_ptr = out->typed_data();
 
         for (Index i = 0; i < result.size(); i++)
             out_ptr[i] = result(i);
@@ -98,7 +92,7 @@ static ffi::Error get_solution_ffi_impl(void *ctx, ffi::Buffer<ffi::S64> var, st
     else
     {
         Vector result = runner->getSolution(var_index, std::nullopt);
-        double *out_ptr = out->typed_data();
+        auto *out_ptr = out->typed_data();
         for (Index i = 0; i < result.size(); i++)
             out_ptr[i] = result(i);
         return ffi::Error::Success();
@@ -117,53 +111,15 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(run_ss_ffi_ops, run_ffi_ss_impl,
 XLA_FFI_DEFINE_HANDLER_SYMBOL(run_adjoint_solve_ffi_ops, run_adjoint_ffi_impl,
                               ffi::Ffi::Bind()
                                   .Attr<ffi::Pointer<void>>("obj")
-                                  .Ret<ffi::BufferR1<ffi::F64>>()
-                                  .Ret<ffi::BufferR2<ffi::F64>>()
-                                  .OptionalRet<ffi::BufferR1<ffi::F64>>());
+                                  .Ret<ffi::BufferR1<fp_dtype>>()
+                                  .Ret<ffi::BufferR2<fp_dtype>>()
+                                  .OptionalRet<ffi::BufferR1<fp_dtype>>());
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(get_solution_ffi_ops, get_solution_ffi_impl,
                               ffi::Ffi::Bind()
                                   .Attr<ffi::Pointer<void>>("obj")
-                                  .Arg<ffi::Buffer<ffi::S64>>()
-                                  .OptionalArg<ffi::BufferR1<ffi::F64>>()
-                                  .Ret<ffi::BufferR1<ffi::F64>>());
+                                  .Arg<ffi::Buffer<i_dtype>>()
+                                  .OptionalArg<ffi::BufferR1<fp_dtype>>()
+                                  .Ret<ffi::BufferR1<fp_dtype>>());
 
 #endif // FFI_HPP
-
-// static ffi::Error runner_ffi_ops_impl(void *ctx, ffi::Buffer<ffi::S32> op, ffi::AnyBuffer args, ffi::Result<ffi::AnyBuffer> rets)
-// {
-//     auto runner = static_cast<PyRunner *>(ctx);
-//     FFI_OPS op_ = static_cast<FFI_OPS>(*op.typed_data());
-
-//     switch (op_)
-//     {
-//     case FFI_OPS::Run:
-//     {
-//         double tFinal = *args.typed_data<double>();
-//         runner->run(tFinal);
-//         break;
-//     }
-//     case FFI_OPS::RunSS:
-//     {
-//         runner->run_ss();
-//         break;
-//     }
-//     default:
-//         break;
-//         // case FFI_OPS::RunAdjoint:
-//         // {
-//         //     InvokeFn(runner, &PyRunner::runAdjointSolve);
-//         //     break;
-//         // }
-//         // case FFI_OPS::GetSolution:
-//         // {
-//         //     auto [var, points] = *args.typed_data<std::tuple<Index, std::optional<std::vector<Position>>>>();
-//         //     Vector result = InvokeFn(runner, &PyRunner::getSolution, var, points);
-//         //     rets.typed_data<std::vector<double>>() = result.data();
-//         //     break;
-//         // }
-//     };
-//     // auto *runner = static_cast<PyRunner *>(ctx);
-//     // // Handle the operation based on the buffer content
-//     return ffi::Error::Success();
-// }
