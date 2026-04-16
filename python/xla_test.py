@@ -186,7 +186,7 @@ def fun_jvp(primals, tangents):
 
 params_new = LinearDiffusionParams(0.1, 0.1, 0.0, 2.0)
 
-g1 = eqx.filter_jit(jax.grad(fun))
+g1 =jax.grad(fun)
 # # # #g2 = eqx.filter_jit(jax.grad(fun))
 print(g1(params_new))
 

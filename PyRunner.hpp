@@ -59,9 +59,9 @@ public:
     // Runs solver to steady state
     void run_ss(void);
 
-    void setTransportSystem(std::shared_ptr<TransportSystem> problem)
+    void setTransportSystem(const TransportSystem &problem)
     {
-        pProblem = problem;
+        *pProblem = problem;
     };
 
     void setAdjointProblem(std::shared_ptr<AdjointProblem> ap)
@@ -73,9 +73,6 @@ public:
     py::tuple runAdjointSolve(void);
 
     Vector getSolution(Index var, std::optional<std::vector<Position>> const &points);
-
-public:
-    static ffi::TypeId id;
 
 private:
     // Shared ownership of TransportSystem so user can update in Python without recreating object

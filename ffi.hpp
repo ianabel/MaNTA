@@ -167,7 +167,6 @@ static ffi::Error run_adjoint_ffi_impl_cuda(cudaStream_t stream, void *ctx, ffi:
     if (G_p.contains("G_p_boundary"))
     {
         auto G_p_boundary = G_p["G_p_boundary"].cast<Vector>();
-        auto *G_p_boundary_out_data = G_p_boundary_out.value()->typed_data();
         for (Index i = 0; i < G_p_boundary.size(); i++)
         {
             float tmp = static_cast<float>(G_p_boundary(i));

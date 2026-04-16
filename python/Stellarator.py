@@ -1,10 +1,6 @@
 import MaNTA
 import jax
 
-jax.config.update('jax_enable_x64', True)
-
-
-
 import os
 
 if os.environ["JAX_COMPILATION_CACHE_DIR"] is not None:
