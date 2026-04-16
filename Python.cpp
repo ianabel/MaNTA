@@ -247,5 +247,15 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 			ffi_ops["run_ffi"] = EncapsulateFfiCall(run_ffi_ops);
 			ffi_ops["run_ss_ffi"] = EncapsulateFfiCall(run_ss_ffi_ops);
 			return ffi_ops; });
+#ifdef CUDA
+	m.def("runner_ffi_ops_cuda", []()
+		  { 
+			py::dict ffi_ops;
+			ffi_ops["get_solution_ffi_cuda"] = EncapsulateFfiCall(get_solution_ffi_ops_cuda);
+			ffi_ops["run_adjoint_solve_ffi_cuda"] = EncapsulateFfiCall(run_adjoint_solve_ffi_ops_cuda);
+			ffi_ops["run_ffi_cuda"] = EncapsulateFfiCall(run_ffi_ops_cuda);
+			ffi_ops["run_ss_ffi_cuda"] = EncapsulateFfiCall(run_ss_ffi_ops_cuda);
+			return ffi_ops; });
+#endif
 #endif
 };

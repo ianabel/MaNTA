@@ -1,5 +1,10 @@
 import MaNTA
 import jax
+
+jax.config.update('jax_enable_x64', True)
+
+
+
 import os
 
 if os.environ["JAX_COMPILATION_CACHE_DIR"] is not None:
@@ -29,6 +34,10 @@ from yancc_wrapper import yancc_data, flux
 
 from typing import NamedTuple
 
+for name, target in MaNTA.runner_ffi_ops().items():
+    jax.ffi.register_ffi_target(name, target)
+
+
 def getStateAtIndex(states, i):
     out = {
         "Variable": states["Variable"][i,:],
@@ -38,6 +47,24 @@ def getStateAtIndex(states, i):
         "Scalars":states["Scalars"]
     }
     return out
+
+class FFI_Runner:
+    def __init__(self, runner, points, np, ng):
+        self.runner = runner
+        self.points = points
+        self.adjoint_output = [
+            jax.ShapeDtypeStruct((ng,), jnp.float64),
+            jax.ShapeDtypeStruct((ng * len(self.points), np), jnp.float64)
+        ]  
+        self.sol_output = jax.ShapeDtypeStruct((len(self.points),), jnp.float64)
+    def run(self, tFinal):
+        jax.ffi.ffi_call("run_ffi", [], has_side_effect=True)(jnp.float64(tFinal), obj=self.runner.get_address())
+    def run_ss(self):
+        jax.ffi.ffi_call("run_ss_ffi", [], has_side_effect=True)(obj=self.runner.get_address())
+    def run_adjoint_solve(self):
+        return jax.ffi.ffi_call("run_adjoint_solve_ffi", self.adjoint_output, has_side_effect=True)(obj=self.runner.get_address())
+    def get_profile(self, var):
+        return jax.ffi.ffi_call("get_solution_ffi", self.sol_output)(var, self.points, obj=self.runner.get_address())
 
 class StellaratorParams(NamedTuple):
     SourceCenter: float
@@ -105,6 +132,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
         self.adjointProblem = StellaratorAdjointProblem(self, g, self.yancc_wrapper, len(self.points))
         self.runner.setAdjointProblem(self.adjointProblem)
 
+        self.runner_ffi = FFI_Runner(self.runner, self.points, self.adjointProblem.np, self.adjointProblem.ng)
+
         print("Successfully created StellaratorTransport object")
 
     def run(self, tFinal = None, yancc_wrapper = None):
@@ -115,9 +144,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.adjointProblem.setField(self.field, self.vprime)
 
         if (tFinal is not None):
-            io_callback(self.runner.run, [], tFinal)
+            self.runner_ffi.run(tFinal)
         else: 
-            io_callback(self.runner.run_ss, [], None)
+            self.runner_ffi.run_ss()
 
 
     def runAdjointSolve(self, field = None, grid = None):
@@ -125,7 +154,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
             yancc_wrapper = yancc_data.from_other(field, grid, other=self.yancc_wrapper)
             self.run(yancc_wrapper=yancc_wrapper)
 
-        G, G_p = io_callback(self.runner.runAdjointSolve, self.adjointProblem.adjointoutput , None)
+        G, G_p = self.runner_ffi.run_adjoint_solve()
         return G, G_p
 
     def getPressure(self):
@@ -312,7 +341,6 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         grad, _ = jax.flatten_util.ravel_pytree(out_vmap(field, states_s, x_s, vprime))
         grad = jnp.expand_dims(grad,1)
         out = jnp.reshape(grad, (self.np_cell, self.npoints ))
-        print(out.shape)
         return out
     
     def dSources(self, i, states, positions):

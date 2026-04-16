@@ -1,5 +1,4 @@
 import os
-os.environ['JAX_PLATFORM_NAME'] = 'cpu'
 
 import jax
 import jax.numpy as jnp
