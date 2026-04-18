@@ -229,11 +229,11 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 			 });
 	py::class_<PyRunner, py::smart_holder>(m, "Runner")
 		.def(py::init<std::shared_ptr<TransportSystem>>())
-		.def("setTransportSystem", &PyRunner::setTransportSystem)
+		// .def("setTransportSystem", &PyRunner::setTransportSystem)
 		.def("configure", &PyRunner::configure)
 		.def("run", &PyRunner::run)
 		.def("run_ss", &PyRunner::run_ss)
-		.def("setAdjointProblem", &PyRunner::setAdjointProblem)
+		// .def("setAdjointProblem", &PyRunner::setAdjointProblem)
 		.def("runAdjointSolve", &PyRunner::runAdjointSolve)
 		.def("getSolution", &PyRunner::getSolution)
 		.def("get_address", [](const PyRunner &runner) // needed for xla interface

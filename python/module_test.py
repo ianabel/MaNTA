@@ -66,16 +66,19 @@ class LinearDiffusion(TransportModule):
         alpha = 1 / 0.02
         y = (x - self.params.Centre)
         return self.params.InitialHeight * jnp.exp(-alpha * y * y)
+    
+    def createAdjointProblem(self):
+        return AdjointModule.from_transport_system(self)
 
 params = LinearDiffusionParams(0.1, 0.1, 0.1, 3.0)
 ld = LinearDiffusion(params)
 points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
-ap = AdjointModule.from_transport_system(ld)
-runner = FFIRunner(ld, points, ap.ng, ap.np)
+
+runner = FFIRunner(ld, points, 1, len(params))
 
 runner.configure(solver_config)
 
-runner.setAdjointProblem(ap)
+# runner.setAdjointProblem(ap)
 
 runner.run_ss()
 

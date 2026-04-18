@@ -81,21 +81,19 @@ class TransportModule(MaNTA.TransportSystem):
     @eqx.filter_jit
     def InitialDerivative( self, index, x ):
         return jax.grad(self.InitialValue, argnums=1)(index, x)
-    
-    def createAdjointProblem(self):
-        pass
+ 
 
 class AdjointModule(MaNTA.AdjointProblem):
     params: eqx.Module
-    np: int = eqx.field(static=True)
-    ng: int = eqx.field(static=True)
-    np_boundary: int = eqx.field(static=True)
-    spatialParameters: bool = eqx.field(static=True)
-    g: callable = eqx.field(static=True)
-    sigma: callable = eqx.field(static=True)
-    source: callable = eqx.field(static=True)
-    UpperBoundarySensitivities: dict = eqx.field(static=True)
-    LowerBoundarySensitvities: dict = eqx.field(static=True)
+    np: int 
+    ng: int 
+    np_boundary: int 
+    spatialParameters: bool 
+    g: callable 
+    sigma: callable 
+    source: callable 
+    UpperBoundarySensitivities: dict 
+    LowerBoundarySensitvities: dict 
 
     def __init__(
             self, 

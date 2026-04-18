@@ -1,12 +1,12 @@
-#include <ida/ida.h>                  /* prototypes for IDA fcts., consts.    */
-#include <nvector/nvector_serial.h>   /* access to serial N_Vector            */
-#include <sunmatrix/sunmatrix_band.h> /* access to band SUNMatrix             */
-#include <sunlinsol/sunlinsol_band.h> /* access to band SUNLinearSolver       */
-#include <sundials/sundials_types.h>  /* definition of type sunrealtype          */
+// #include <ida/ida.h>                  /* prototypes for IDA fcts., consts.    */
+// #include <nvector/nvector_serial.h>   /* access to serial N_Vector            */
+// #include <sunmatrix/sunmatrix_band.h> /* access to band SUNMatrix             */
+// #include <sunlinsol/sunlinsol_band.h> /* access to band SUNLinearSolver       */
+// #include <sundials/sundials_types.h>  /* definition of type sunrealtype          */
 #include <pybind11/eigen.h>
 
-#include "SunLinSolWrapper.hpp"
-#include "SunMatrixWrapper.hpp"
+// #include "SunLinSolWrapper.hpp"
+// #include "SunMatrixWrapper.hpp"
 #include "PyRunner.hpp"
 #include "ErrorChecker.hpp"
 
@@ -207,7 +207,7 @@ void PyRunner::configure(const py::dict &config)
 
     bool writeOutput = getValueWithDefault<bool>("WriteOutput", config);
     // Creation of solver function
-    runner = system->makeSolver(LS, sunMat, IDA_mem, retval, Y, dYdt, constraints, _id, res, absTolVec, tout, tret, writeOutput);
+    // runner = system->makeSolver(LS, sunMat, IDA_mem, retval, Y, dYdt, constraints, _id, res, absTolVec, tout, tret, writeOutput);
 
     configured = true;
     std::cerr << "Configuration done." << std::endl;
@@ -224,7 +224,7 @@ void PyRunner::run(double tFinal)
         std::cerr << "INFO: \"run\" called but TerminateOnSteadyState is set to true. If you intended to run to steady state please call \"run_ss\". Running to passed tFinal" << std::endl;
         system->TerminateOnSteadyState = false;
     }
-    runner(tFinal);
+    system->runSolver(tFinal);
 
     std::cout << "Done." << std::endl;
 }
@@ -236,7 +236,8 @@ void PyRunner::run_ss()
         throw std::runtime_error("Error: Runner must be configured before running solver.");
     }
     system->setSteadyStateTolerance(steady_state_tolerance);
-    runner(0); // Final time doesn't matter so just pass 0
+    system->runSolver(0);
+    // runner(0); // Final time doesn't matter so just pass 0
 
     std::cout << "Done." << std::endl;
 }
@@ -246,7 +247,7 @@ py::tuple PyRunner::runAdjointSolve(void)
     if (adjoint == nullptr)
         throw std::runtime_error("\"runAdjointSolve\" but adjoint problem not set");
 
-    system->runAdjointSolve();
+    // system->runAdjointSolve();
 
     auto np_internal = adjoint->getNpInternal();
 
@@ -302,289 +303,289 @@ Vector PyRunner::getSolution(Index var, std::optional<std::vector<Position>> con
     }
 }
 
-extern "C"
-{
-    int IDAEwtSet(N_Vector, N_Vector, void *);
-}
+// extern "C"
+// {
+//     int IDAEwtSet(N_Vector, N_Vector, void *);
+// }
 
-int static_residual(sunrealtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data);
-int JacSetup(sunrealtype tt, sunrealtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3);
+// int static_residual(sunrealtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data);
+// int JacSetup(sunrealtype tt, sunrealtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3);
 
-std::function<void(double)> SystemSolver::makeSolver(SUNLinearSolver &LS, // linear solver memory structure
-                                                     SUNMatrix &sunMat,
-                                                     void *IDA_mem, // IDA memory structure
-                                                     int &retval,
-                                                     N_Vector &Y,           // vector for storing solution
-                                                     N_Vector &dYdt,        // vector for storing time derivative of solution
-                                                     N_Vector &constraints, // vector for storing constraints
-                                                     N_Vector &id,          // vector for storing id (which elements are algebraic or differentiable)
-                                                     N_Vector &res,         // vector for storing residual
-                                                     N_Vector &absTolVec,   // vector for storing absolute tolerances
-                                                     sunrealtype &tout, sunrealtype &tret, bool writeOutput)
-{
+// std::function<void(double)> SystemSolver::makeSolver(SUNLinearSolver &LS, // linear solver memory structure
+//                                                      SUNMatrix &sunMat,
+//                                                      void *IDA_mem, // IDA memory structure
+//                                                      int &retval,
+//                                                      N_Vector &Y,           // vector for storing solution
+//                                                      N_Vector &dYdt,        // vector for storing time derivative of solution
+//                                                      N_Vector &constraints, // vector for storing constraints
+//                                                      N_Vector &id,          // vector for storing id (which elements are algebraic or differentiable)
+//                                                      N_Vector &res,         // vector for storing residual
+//                                                      N_Vector &absTolVec,   // vector for storing absolute tolerances
+//                                                      sunrealtype &tout, sunrealtype &tret, bool writeOutput)
+// {
 
-    if (!initialised)
-        initialiseMatrices();
+//     if (!initialised)
+//         initialiseMatrices();
 
-    //-------------------------------------System Design----------------------------------------------
+//     //-------------------------------------System Design----------------------------------------------
 
-    IDA_mem = IDACreate(ctx);
-    if (ErrorChecker::check_retval((void *)IDA_mem, "IDACreate", 0))
-        throw std::runtime_error("Sundials Initialization Error");
+//     IDA_mem = IDACreate(ctx);
+//     if (ErrorChecker::check_retval((void *)IDA_mem, "IDACreate", 0))
+//         throw std::runtime_error("Sundials Initialization Error");
 
-    retval = IDASetUserData(IDA_mem, static_cast<void *>(this));
-    if (ErrorChecker::check_retval(&retval, "IDASetUserData", 1))
-        throw std::runtime_error("Sundials Initialization Error");
+//     retval = IDASetUserData(IDA_mem, static_cast<void *>(this));
+//     if (ErrorChecker::check_retval(&retval, "IDASetUserData", 1))
+//         throw std::runtime_error("Sundials Initialization Error");
 
-    //-----------------------------Initial conditions-------------------------------
+//     //-----------------------------Initial conditions-------------------------------
 
-    // Set original vector lengths
-    Y = N_VNew_Serial(nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1), ctx);
-    if (ErrorChecker::check_retval((void *)Y, "N_VNew_Serial", 0))
-        throw std::runtime_error("Sundials Initialization Error");
+//     // Set original vector lengths
+//     Y = N_VNew_Serial(nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1), ctx);
+//     if (ErrorChecker::check_retval((void *)Y, "N_VNew_Serial", 0))
+//         throw std::runtime_error("Sundials Initialization Error");
 
-    dYdt = N_VClone(Y);
-    if (ErrorChecker::check_retval((void *)dYdt, "N_VClone", 0))
-        throw std::runtime_error("Sundials Initialization Error");
+//     dYdt = N_VClone(Y);
+//     if (ErrorChecker::check_retval((void *)dYdt, "N_VClone", 0))
+//         throw std::runtime_error("Sundials Initialization Error");
 
-    // Initialise Y and dYdt
-    setInitialConditions(Y, dYdt);
+//     // Initialise Y and dYdt
+//     setInitialConditions(Y, dYdt);
 
-    // ----------------- Allocate and initialize all other sun-vectors. -------------
+//     // ----------------- Allocate and initialize all other sun-vectors. -------------
 
-    res = N_VClone(Y);
-    if (ErrorChecker::check_retval((void *)res, "N_VClone", 0))
-        std::runtime_error("Sundials initialization Error, run in debug to find");
-    // sunrealtype tRes;
+//     res = N_VClone(Y);
+//     if (ErrorChecker::check_retval((void *)res, "N_VClone", 0))
+//         std::runtime_error("Sundials initialization Error, run in debug to find");
+//     // sunrealtype tRes;
 
-    // No constraints are imposed as negative coefficients may allow for a better fit across a cell
-    constraints = N_VClone(Y);
-    if (ErrorChecker::check_retval((void *)constraints, "N_VClone", 0))
-        std::runtime_error("Sundials initialization Error, run in debug to find");
+//     // No constraints are imposed as negative coefficients may allow for a better fit across a cell
+//     constraints = N_VClone(Y);
+//     if (ErrorChecker::check_retval((void *)constraints, "N_VClone", 0))
+//         std::runtime_error("Sundials initialization Error, run in debug to find");
 
-    // Specify only u as differential
-    id = N_VClone(Y);
-    if (ErrorChecker::check_retval((void *)id, "N_VClone", 0))
-        std::runtime_error("Sundials initialization Error, run in debug to find");
+//     // Specify only u as differential
+//     id = N_VClone(Y);
+//     if (ErrorChecker::check_retval((void *)id, "N_VClone", 0))
+//         std::runtime_error("Sundials initialization Error, run in debug to find");
 
-    DGSoln isDifferential(nVars, grid, k, nScalars, nAux);
-    isDifferential.Map(N_VGetArrayPointer(id));
-    isDifferential.zeroCoeffs();
-    for (Index v = 0; v < nVars; ++v)
-        for (Index i = 0; i < nCells; ++i)
-            isDifferential.u(v).getCoeff(i).second.Constant(k + 1, 1.0);
+//     DGSoln isDifferential(nVars, grid, k, nScalars, nAux);
+//     isDifferential.Map(N_VGetArrayPointer(id));
+//     isDifferential.zeroCoeffs();
+//     for (Index v = 0; v < nVars; ++v)
+//         for (Index i = 0; i < nCells; ++i)
+//             isDifferential.u(v).getCoeff(i).second.Constant(k + 1, 1.0);
 
-    for (Index s = 0; s < nScalars; ++s)
-    {
-        if (problem->isScalarDifferential(s))
-        {
-            isDifferential.Scalar(s) = 1.0;
-        }
-    }
+//     for (Index s = 0; s < nScalars; ++s)
+//     {
+//         if (problem->isScalarDifferential(s))
+//         {
+//             isDifferential.Scalar(s) = 1.0;
+//         }
+//     }
 
-    retval = IDASetId(IDA_mem, id);
-    if (ErrorChecker::check_retval(&retval, "IDASetId", 1))
-        std::runtime_error("Sundials initialization Error, run in debug to find");
+//     retval = IDASetId(IDA_mem, id);
+//     if (ErrorChecker::check_retval(&retval, "IDASetId", 1))
+//         std::runtime_error("Sundials initialization Error, run in debug to find");
 
-    wgt = N_VClone(res);
-    // Initialise IDA
-    retval = IDAInit(IDA_mem, static_residual, t0, Y, dYdt);
-    if (ErrorChecker::check_retval(&retval, "IDAInit", 1))
-        std::runtime_error("Sundials initialization Error, run in debug to find");
+//     wgt = N_VClone(res);
+//     // Initialise IDA
+//     retval = IDAInit(IDA_mem, static_residual, t0, Y, dYdt);
+//     if (ErrorChecker::check_retval(&retval, "IDAInit", 1))
+//         std::runtime_error("Sundials initialization Error, run in debug to find");
 
-    // Set tolerances
-    absTolVec = N_VClone(Y);
-    if (ErrorChecker::check_retval((void *)absTolVec, "N_VClone", 0))
-        std::runtime_error("Sundials initialization Error, run in debug to find");
-    VectorWrapper absTolVals(N_VGetArrayPointer(absTolVec), N_VGetLength(absTolVec));
-    absTolVals.setZero();
+//     // Set tolerances
+//     absTolVec = N_VClone(Y);
+//     if (ErrorChecker::check_retval((void *)absTolVec, "N_VClone", 0))
+//         std::runtime_error("Sundials initialization Error, run in debug to find");
+//     VectorWrapper absTolVals(N_VGetArrayPointer(absTolVec), N_VGetLength(absTolVec));
+//     absTolVals.setZero();
 
-    DGSoln tolerances(nVars, grid, k, nScalars, nAux);
-    tolerances.Map(N_VGetArrayPointer(absTolVec));
-    for (Index i = 0; i < nCells; ++i)
-    {
-        for (Index v = 0; v < nVars; ++v)
-        {
-            if (atol.size() == 1)
-            {
-                double absTol = atol[0];
-                tolerances.u(v).getCoeff(i).second.setConstant(absTol);
-                tolerances.q(v).getCoeff(i).second.setConstant(absTol);
-                tolerances.sigma(v).getCoeff(i).second.setConstant(absTol);
-                tolerances.lambda(v).setConstant(absTol);
-            }
-            else if (atol.size() == nVars)
-            {
-                double absTolU, absTolQ, absTolSigma;
-                absTolU = atol[v];
-                absTolQ = atol[v];
-                absTolSigma = atol[v];
-                tolerances.u(v).getCoeff(i).second.setConstant(absTolU);
-                tolerances.q(v).getCoeff(i).second.setConstant(absTolQ);
-                tolerances.sigma(v).getCoeff(i).second.setConstant(absTolSigma);
-                tolerances.lambda(v).setConstant(absTolU);
-            }
-        }
+//     DGSoln tolerances(nVars, grid, k, nScalars, nAux);
+//     tolerances.Map(N_VGetArrayPointer(absTolVec));
+//     for (Index i = 0; i < nCells; ++i)
+//     {
+//         for (Index v = 0; v < nVars; ++v)
+//         {
+//             if (atol.size() == 1)
+//             {
+//                 double absTol = atol[0];
+//                 tolerances.u(v).getCoeff(i).second.setConstant(absTol);
+//                 tolerances.q(v).getCoeff(i).second.setConstant(absTol);
+//                 tolerances.sigma(v).getCoeff(i).second.setConstant(absTol);
+//                 tolerances.lambda(v).setConstant(absTol);
+//             }
+//             else if (atol.size() == nVars)
+//             {
+//                 double absTolU, absTolQ, absTolSigma;
+//                 absTolU = atol[v];
+//                 absTolQ = atol[v];
+//                 absTolSigma = atol[v];
+//                 tolerances.u(v).getCoeff(i).second.setConstant(absTolU);
+//                 tolerances.q(v).getCoeff(i).second.setConstant(absTolQ);
+//                 tolerances.sigma(v).getCoeff(i).second.setConstant(absTolSigma);
+//                 tolerances.lambda(v).setConstant(absTolU);
+//             }
+//         }
 
-        for (Index a = 0; a < nAux; ++a)
-        {
-            tolerances.Aux(a).getCoeff(i).second.setConstant(atol[0]);
-        }
-    }
+//         for (Index a = 0; a < nAux; ++a)
+//         {
+//             tolerances.Aux(a).getCoeff(i).second.setConstant(atol[0]);
+//         }
+//     }
 
-    for (Index i = 0; i < nScalars; ++i)
-        tolerances.Scalar(i) = atol[0];
+//     for (Index i = 0; i < nScalars; ++i)
+//         tolerances.Scalar(i) = atol[0];
 
-    retval = IDAWFtolerances(IDA_mem, SystemSolver::getErrorWeights_static);
-    if (ErrorChecker::check_retval(&retval, "IDAWFtolerances", 1))
-        std::runtime_error("Sundials initialization Error, run in debug to find");
+//     retval = IDAWFtolerances(IDA_mem, SystemSolver::getErrorWeights_static);
+//     if (ErrorChecker::check_retval(&retval, "IDAWFtolerances", 1))
+//         std::runtime_error("Sundials initialization Error, run in debug to find");
 
-    //--------------set up user-built objects------------------
+//     //--------------set up user-built objects------------------
 
-    // Use empty SunMatrix Object
-    sunMat = SunMatrixNew(ctx);
+//     // Use empty SunMatrix Object
+//     sunMat = SunMatrixNew(ctx);
 
-    // The only linear solver wrapper ever constructed from this object so we can give it a pointer to 'this' and
-    // it won't hold it beyond the lifetime of this function call.
-    LS = SunLinSolWrapper::SunLinSol(this, IDA_mem, ctx);
+//     // The only linear solver wrapper ever constructed from this object so we can give it a pointer to 'this' and
+//     // it won't hold it beyond the lifetime of this function call.
+//     LS = SunLinSolWrapper::SunLinSol(this, IDA_mem, ctx);
 
-    if (IDASetLinearSolver(IDA_mem, LS, sunMat) != SUN_SUCCESS)
-        std::runtime_error("Error in IDASetLinearSolver");
+//     if (IDASetLinearSolver(IDA_mem, LS, sunMat) != SUN_SUCCESS)
+//         std::runtime_error("Error in IDASetLinearSolver");
 
-    IDASetJacFn(IDA_mem, JacSetup);
+//     IDASetJacFn(IDA_mem, JacSetup);
 
-    IDASetMaxNonlinIters(IDA_mem, 10);
+//     IDASetMaxNonlinIters(IDA_mem, 10);
 
-    // Initialise text output and write out initial condition massaged by CalcIC
-    //------------------------------Solve------------------------------
-    // Update initial solution to be within tolerance of the residual equation
+//     // Initialise text output and write out initial condition massaged by CalcIC
+//     //------------------------------Solve------------------------------
+//     // Update initial solution to be within tolerance of the residual equation
 
-    retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, dt);
-    retval = 0;
-    if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
-    {
-        throw std::runtime_error("IDACalcIC could not complete");
-    }
+//     retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, dt);
+//     retval = 0;
+//     if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
+//     {
+//         throw std::runtime_error("IDACalcIC could not complete");
+//     }
 
-    long int nresevals = 0;
-    IDAGetNumResEvals(IDA_mem, &nresevals);
-    std::cout << "Number of Residual Evaluations due to IDACalcIC " << nresevals << std::endl;
+//     long int nresevals = 0;
+//     IDAGetNumResEvals(IDA_mem, &nresevals);
+//     std::cout << "Number of Residual Evaluations due to IDACalcIC " << nresevals << std::endl;
 
-    if (nresevals > 10)
-        std::cerr << " IDACalcIC required " << nresevals << " residual evaluations. Check config." << std::endl;
+//     if (nresevals > 10)
+//         std::cerr << " IDACalcIC required " << nresevals << " residual evaluations. Check config." << std::endl;
 
-    // This also writes the t0 timeslice
+//     // This also writes the t0 timeslice
 
-    IDASetMaxNumSteps(IDA_mem, 50000);
+//     IDASetMaxNumSteps(IDA_mem, 50000);
 
-    IDASetMinStep(IDA_mem, min_step_size);
+//     IDASetMinStep(IDA_mem, min_step_size);
 
-    t = t0;
-    tout = t0;
-    tret = t0;
+//     t = t0;
+//     tout = t0;
+//     tret = t0;
 
-    auto fsolve = [&, IDA_mem, writeOutput](double tFinal)
-    {
-        // Steady-state stopping conditions
-        sunrealtype dydt_rel_tol = steady_state_tol;
-        sunrealtype dydt_abs_tol = 1e-2;
-        if (t0 > tFinal && !TerminateOnSteadyState)
-        {
-            std::cout << "Initial time t = " << t0 << " is after the end of the simulation at t = " << tFinal << std::endl;
-            throw std::runtime_error("Simulation ends before it begins.");
-        }
+//     auto fsolve = [&, IDA_mem, writeOutput](double tFinal)
+//     {
+//         // Steady-state stopping conditions
+//         sunrealtype dydt_rel_tol = steady_state_tol;
+//         sunrealtype dydt_abs_tol = 1e-2;
+//         if (t0 > tFinal && !TerminateOnSteadyState)
+//         {
+//             std::cout << "Initial time t = " << t0 << " is after the end of the simulation at t = " << tFinal << std::endl;
+//             throw std::runtime_error("Simulation ends before it begins.");
+//         }
 
-        std::string baseName = inputFilePath.stem();
-        if (writeOutput)
-        {
-            initialiseNetCDF(baseName + ".nc", nOut);
-        }
+//         std::string baseName = inputFilePath.stem();
+//         if (writeOutput)
+//         {
+//             initialiseNetCDF(baseName + ".nc", nOut);
+//         }
 
-        // Solving Loop
-        while (tFinal - tret > min_step_size || TerminateOnSteadyState)
-        {
-            tout += dt;
-            if (tout > tFinal && !TerminateOnSteadyState)
-                tout = tFinal; // Never ask for results beyond tFinal
-            retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
-            if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
-            {
-                // try to emit final data
-                if (writeOutput)
-                {
-                    WriteTimeslice(tret);
-                    nc_output.Close();
-                }
-                throw std::runtime_error("IDASolve could not complete");
-            }
+//         // Solving Loop
+//         while (tFinal - tret > min_step_size || TerminateOnSteadyState)
+//         {
+//             tout += dt;
+//             if (tout > tFinal && !TerminateOnSteadyState)
+//                 tout = tFinal; // Never ask for results beyond tFinal
+//             retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
+//             if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
+//             {
+//                 // try to emit final data
+//                 if (writeOutput)
+//                 {
+//                     WriteTimeslice(tret);
+//                     nc_output.Close();
+//                 }
+//                 throw std::runtime_error("IDASolve could not complete");
+//             }
 
-            long int nstep_tmp;
-            IDAGetNumSteps(IDA_mem, &nstep_tmp);
-            std::cout << "Writing output at " << tret << " ( " << nstep_tmp << " timesteps )" << std::endl;
+//             long int nstep_tmp;
+//             IDAGetNumSteps(IDA_mem, &nstep_tmp);
+//             std::cout << "Writing output at " << tret << " ( " << nstep_tmp << " timesteps )" << std::endl;
 
-            if (writeOutput)
-            {
-                WriteTimeslice(tret);
-            }
-            // Check if steady-state is achieved (test the lambda points)
-            if (TerminateOnSteadyState)
-            {
-                sunrealtype dydt_norm = 0.0;
-                for (Index i = 0; i < nCells; i++)
-                    for (Index v = 0; v < nVars; v++)
-                    {
-                        sunrealtype xi = dydt.lambda(v)[i] * dt;
-                        sunrealtype wi = 1.0 / (y.lambda(v)[i] * dydt_rel_tol + dydt_abs_tol);
-                        dydt_norm += xi * xi * wi * wi;
-                    }
-                dydt_norm = sqrt(dydt_norm);
-                if (dydt_norm < 1.0)
-                {
-                    std::cout << "Steady State achieved at time t = " << tret << std::endl;
-                    break;
-                }
-            }
+//             if (writeOutput)
+//             {
+//                 WriteTimeslice(tret);
+//             }
+//             // Check if steady-state is achieved (test the lambda points)
+//             if (TerminateOnSteadyState)
+//             {
+//                 sunrealtype dydt_norm = 0.0;
+//                 for (Index i = 0; i < nCells; i++)
+//                     for (Index v = 0; v < nVars; v++)
+//                     {
+//                         sunrealtype xi = dydt.lambda(v)[i] * dt;
+//                         sunrealtype wi = 1.0 / (y.lambda(v)[i] * dydt_rel_tol + dydt_abs_tol);
+//                         dydt_norm += xi * xi * wi * wi;
+//                     }
+//                 dydt_norm = sqrt(dydt_norm);
+//                 if (dydt_norm < 1.0)
+//                 {
+//                     std::cout << "Steady State achieved at time t = " << tret << std::endl;
+//                     break;
+//                 }
+//             }
 
-            // Diagnostics go here
-        }
+//             // Diagnostics go here
+//         }
 
-        long int nsteps, njacevals;
-        IDAGetNumSteps(IDA_mem, &nsteps);
-        IDAGetNumResEvals(IDA_mem, &nresevals);
-        IDAGetNumLinSolvSetups(IDA_mem, &njacevals);
+//         long int nsteps, njacevals;
+//         IDAGetNumSteps(IDA_mem, &nsteps);
+//         IDAGetNumResEvals(IDA_mem, &nresevals);
+//         IDAGetNumLinSolvSetups(IDA_mem, &njacevals);
 
-        std::cout << "Total Number of Timesteps             :" << nsteps << std::endl;
-        std::cout << "Total Number of Residual Evaluations  :" << nresevals << std::endl;
-        std::cout << "Total Number of Jacobian Computations :" << njacevals << std::endl;
+//         std::cout << "Total Number of Timesteps             :" << nsteps << std::endl;
+//         std::cout << "Total Number of Residual Evaluations  :" << nresevals << std::endl;
+//         std::cout << "Total Number of Jacobian Computations :" << njacevals << std::endl;
 
-        problem->finaliseDiagnostics(nc_output);
+//         problem->finaliseDiagnostics(nc_output);
 
-        WriteRestartFile(baseName + ".restart.nc", Y, dYdt, nOut);
-        if (writeOutput)
-            nc_output.Close();
-    };
-    return fsolve;
-}
+//         WriteRestartFile(baseName + ".restart.nc", Y, dYdt, nOut);
+//         if (writeOutput)
+//             nc_output.Close();
+//     };
+//     return fsolve;
+// }
 
-PyRunner::~PyRunner()
-{
-    system->nc_output.Close(); // Make sure netCDF file is closed
+// PyRunner::~PyRunner()
+// {
+//     system->nc_output.Close(); // Make sure netCDF file is closed
 
-    // No SunLinSol wrapper classes exist beyond this point, so we are safe in using raw pointers to construct them.
-    SUNLinSolFree(LS);
+//     // No SunLinSol wrapper classes exist beyond this point, so we are safe in using raw pointers to construct them.
+//     SUNLinSolFree(LS);
 
-    MatDestroy(sunMat);
+//     MatDestroy(sunMat);
 
-    IDAFree(&IDA_mem);
+//     IDAFree(&IDA_mem);
 
-    // Free the raw data buffers allocated by SUNDIALS
+//     // Free the raw data buffers allocated by SUNDIALS
 
-    N_VDestroy(Y);
-    N_VDestroy(dYdt);
-    N_VDestroy(constraints);
-    N_VDestroy(_id);
-    N_VDestroy(res);
-    N_VDestroy(absTolVec);
+//     N_VDestroy(Y);
+//     N_VDestroy(dYdt);
+//     N_VDestroy(constraints);
+//     N_VDestroy(_id);
+//     N_VDestroy(res);
+//     N_VDestroy(absTolVec);
 
-    SUNContext_Free(&system->ctx);
-}
+//     SUNContext_Free(&system->ctx);
+// }

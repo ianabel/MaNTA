@@ -211,12 +211,17 @@ void SystemSolver::runSolver(double tFinal)
 
     //------------------------------Solve------------------------------
     // Update initial solution to be within tolerance of the residual equation
-    retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
-    retval = 0;
-	if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
+
+	if (!problem->isRestarting()) // Don't use calc IC if restarting
 	{
-		throw std::runtime_error("IDACalcIC could not complete");
-	}
+		retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
+		retval = 0;
+		if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
+		{
+			throw std::runtime_error("IDACalcIC could not complete");
+		}
+	} 
+
 
 
 	long int nresevals = 0;
@@ -247,10 +252,17 @@ void SystemSolver::runSolver(double tFinal)
 
 	IDASetMinStep(IDA_mem, min_step_size);
 
+
+
 	t = t0;
 	tout = t0;
 	tret = t0;
 	delta_t = dt;
+
+	if (problem->isRestarting()) // If restarting, try to continue at same delta t
+	{
+		IDASetInitStep(IDA_mem, delta_t);
+	}
 
 	if (t0 > tFinal)
 	{
@@ -262,7 +274,7 @@ void SystemSolver::runSolver(double tFinal)
 	while (tFinal - tret > min_step_size)
 	{
 		tout += delta_t;
-		if (tout > tFinal)
+		if (tout > tFinal && !TerminateOnSteadyState)
 			tout = tFinal; // Never ask for results beyond tFinal
 		retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
 		if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
