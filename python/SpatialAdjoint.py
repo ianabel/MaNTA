@@ -199,11 +199,10 @@ class JAXNonlinearDiffusion(VectorizedTransportSystem):
             "SourceCentre": self.SourceCentre * jnp.ones(len(self.points))
         }
         self.runner = MaNTA.Runner(self)
-
+        self.adjointProblem = JAXAdjointProblem(self, self.g)
         self.runner.configure(config)
 
-        self.adjointProblem = JAXAdjointProblem(self, self.g)
-        self.runner.setAdjointProblem(self.adjointProblem)
+        
 
         self.runner_ffi = FFI_Runner(self.runner, self.points, self.adjointProblem.np, self.adjointProblem.ng)
         # This object will be passed to sigma and source functions
@@ -283,7 +282,8 @@ class JAXNonlinearDiffusion(VectorizedTransportSystem):
         return 0.3
     
     def createAdjointProblem(self):
-        pass
+        return self.adjointProblem
+        # self.runner.setAdjointProblem(self.adjointProblem)
 
 # %%
 nl = JAXNonlinearDiffusion(4.0)

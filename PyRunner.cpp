@@ -88,7 +88,6 @@ void PyRunner::configure(const py::dict &config)
     // Set stored problem to null to allow reconfiguration after object creation
     system = nullptr;
     grid = nullptr;
-    adjoint = nullptr;
 
     // Check if config contains required params
     std::string requiredParams = "";
@@ -201,6 +200,11 @@ void PyRunner::configure(const py::dict &config)
     system->setInitialTime(tZero);
     system->setInputFile(fname);
     system->setSolveAdjoint(solveAdjoint);
+    if (solveAdjoint)
+        system->setAdjointProblem(adjoint.get());
+
+    system->setNOutput(nOutput);
+    system->setMinStepSize(dt_min);
 
     system->setNOutput(nOutput);
     system->setMinStepSize(dt_min);
@@ -282,7 +286,7 @@ Vector PyRunner::getSolution(Index var, std::optional<std::vector<Position>> con
             if (p < grid->lowerBoundary() || p > grid->upperBoundary())
                 throw std::out_of_range("Requested point outside of grid boundaries");
 
-            sol(i) = system->y.u(var)(p);
+            sol(i) = system->yJac.u(var)(p);
         }
         return sol;
     }
