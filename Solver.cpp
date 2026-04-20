@@ -91,13 +91,15 @@ void SystemSolver::runSolver(double tFinal)
 		for (Index i = 0; i < nCells; ++i)
 			isDifferential.u(v).getCoeff(i).second.Constant(k + 1, 1.0);
 
-    for (Index s = 0; s < nScalars; ++s) {
-      if( problem->isScalarDifferential( s ) ) {
-        isDifferential.Scalar(s) = 1.0;
-      }
-    }
+	for (Index s = 0; s < nScalars; ++s)
+	{
+		if (problem->isScalarDifferential(s))
+		{
+			isDifferential.Scalar(s) = 1.0;
+		}
+	}
 
-    retval = IDASetId(IDA_mem, id);
+	retval = IDASetId(IDA_mem, id);
 	if (ErrorChecker::check_retval(&retval, "IDASetId", 1))
 		std::runtime_error("Sundials initialization Error, run in debug to find");
 
@@ -191,26 +193,26 @@ void SystemSolver::runSolver(double tFinal)
 			 << "var" << v << " source";
 	out0 << std::endl;
 
-    std::ofstream dydt_out, res_out;
+	std::ofstream dydt_out, res_out;
 
-    if (physics_debug)
-    {
-        wgt = N_VClone(res);
-        dydt_out.open(baseName + ".dydt.dat");
-        dydt_out << "# dydt before CalcIC" << std::endl;
-        print(dydt_out, t0, nOut, dYdt);
-        res_out.open(baseName + ".res.dat");
-        residual(t0, Y, dYdt, res);
-        getErrorWeights(Y, wgt);
-        double residual_val = N_VWrmsNorm(res, wgt);
-        res_out << "# Residual norm at t = " << t0 << " (pre-calcIC) is " << residual_val << std::endl;
-        print(res_out, t0, nOut, res);
-        out0 << "# t = " << t0 << " (pre-calcIC) " << std::endl;
-        print(out0, t0, nOut, true);
-    }
+	if (physics_debug)
+	{
+		wgt = N_VClone(res);
+		dydt_out.open(baseName + ".dydt.dat");
+		dydt_out << "# dydt before CalcIC" << std::endl;
+		print(dydt_out, t0, nOut, dYdt);
+		res_out.open(baseName + ".res.dat");
+		residual(t0, Y, dYdt, res);
+		getErrorWeights(Y, wgt);
+		double residual_val = N_VWrmsNorm(res, wgt);
+		res_out << "# Residual norm at t = " << t0 << " (pre-calcIC) is " << residual_val << std::endl;
+		print(res_out, t0, nOut, res);
+		out0 << "# t = " << t0 << " (pre-calcIC) " << std::endl;
+		print(out0, t0, nOut, true);
+	}
 
-    //------------------------------Solve------------------------------
-    // Update initial solution to be within tolerance of the residual equation
+	//------------------------------Solve------------------------------
+	// Update initial solution to be within tolerance of the residual equation
 
 	if (!problem->isRestarting()) // Don't use calc IC if restarting
 	{
@@ -220,9 +222,7 @@ void SystemSolver::runSolver(double tFinal)
 		{
 			throw std::runtime_error("IDACalcIC could not complete");
 		}
-	} 
-
-
+	}
 
 	long int nresevals = 0;
 	IDAGetNumResEvals(IDA_mem, &nresevals);
@@ -251,8 +251,6 @@ void SystemSolver::runSolver(double tFinal)
 	IDASetMaxNumSteps(IDA_mem, 50000);
 
 	IDASetMinStep(IDA_mem, min_step_size);
-
-
 
 	t = t0;
 	tout = t0;
@@ -337,10 +335,10 @@ void SystemSolver::runSolver(double tFinal)
 	std::cout << "Total Number of Residual Evaluations  :" << nresevals << std::endl;
 	std::cout << "Total Number of Jacobian Computations :" << njacevals << std::endl;
 
-	if(solveAdjoint)
+	if (solveAdjoint)
 	{
 		runAdjointSolve();
-		WriteAdjoints();
+		// WriteAdjoints();
 	}
 
 	problem->finaliseDiagnostics(nc_output);
@@ -387,7 +385,7 @@ void SystemSolver::runAdjointSolve()
 		solveAdjointState(0);
 		computeAdjointGradients();
 	}
-	else 
+	else
 	{
 		std::cerr << "Error: runAdjointSolve called but \"solveAdjoint\" was set to false.";
 	}
@@ -403,7 +401,7 @@ int JacSetup(sunrealtype tt, sunrealtype cj, N_Vector yy, N_Vector yp, N_Vector 
 	auto System = reinterpret_cast<SystemSolver *>(user_data);
 	System->setJacTime(tt);
 	System->setAlpha(cj);
-	System->setJacEvalY(yy,yp);
+	System->setJacEvalY(yy, yp);
 	System->updateBoundaryConditions(tt);
 	System->updateMatricesForJacSolve();
 	return 0;

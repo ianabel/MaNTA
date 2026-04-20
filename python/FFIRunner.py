@@ -50,9 +50,9 @@ class FFIRunner(MaNTA.Runner):
         self.sol_output = jax.ShapeDtypeStruct((len(self.points),),dtype)
     
     def run(self, tFinal):
-        return jax.ffi.ffi_call(ffi_ops["run"], [], has_side_effect=True)(dtype(tFinal), obj=self.get_address())
+        jax.ffi.ffi_call(ffi_ops["run"], [], has_side_effect=True)(dtype(tFinal), obj=self.get_address())
     def run_ss(self):
-        return jax.ffi.ffi_call(ffi_ops["run_ss"], [], has_side_effect=True)(obj=self.get_address())
+        jax.ffi.ffi_call(ffi_ops["run_ss"], [], has_side_effect=True)(obj=self.get_address())
     def run_adjoint_solve(self):
         return jax.ffi.ffi_call(ffi_ops["run_adjoint_solve"], self.adjoint_output, has_side_effect=True)(obj=self.get_address())
     def get_profile(self, var, points = None):

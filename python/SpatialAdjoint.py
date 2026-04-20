@@ -171,7 +171,7 @@ class JAXNonlinearDiffusion(VectorizedTransportSystem):
         }
         
         self.adjointProblem = JAXAdjointProblem(self, self.g)
-        self.runner = FFIRunner(self, self.points, self.adjointProblem.np, self.adjointProblem.ng, spatialParameters=True)
+        self.runner = FFIRunner(self, self.points, self.adjointProblem.ng, self.adjointProblem.np, spatialParameters=True)
         self.runner.configure(config)
 
         # This object will be passed to sigma and source functions
@@ -186,8 +186,8 @@ class JAXNonlinearDiffusion(VectorizedTransportSystem):
             self.runner.run_ss()
 
 
-    def runAdjointSolve(self, kappa = None):
-        G, G_p = self.runner.runAdjointSolve()
+    def runAdjointSolve(self):
+        G, G_p = self.runner.run_adjoint_solve()
         return G, G_p
 
     def g(self, state, x, params):
@@ -253,7 +253,7 @@ class JAXNonlinearDiffusion(VectorizedTransportSystem):
 
 # %%
 nl = JAXNonlinearDiffusion(4.0)
-nl.run(tFinal = 5.0)
+nl.run()
 
 # %%
 import numpy as np
