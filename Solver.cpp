@@ -212,15 +212,15 @@ void SystemSolver::runSolver(double tFinal)
     //------------------------------Solve------------------------------
     // Update initial solution to be within tolerance of the residual equation
 
-	// if (!problem->isRestarting()) // Don't use calc IC if restarting
-	// {
+	if (!problem->isRestarting()) // Don't use calc IC if restarting
+	{
 		retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
 		retval = 0;
 		if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
 		{
 			throw std::runtime_error("IDACalcIC could not complete");
 		}
-	// } 
+	} 
 
 
 

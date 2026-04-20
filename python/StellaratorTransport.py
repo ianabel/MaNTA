@@ -12,23 +12,30 @@ st_config = {
     "n0": 0.5,
 }
 
-st = StellaratorTransport(st_config)
+
 
 # runner = MaNTA.Runner(st)
 
 # # %%
-# config = {
-#     "OutputFilename": "stellarator",
-#     "Polynomial_degree": 3,
-#     "Grid_size": 6,
-#     "tau": 1.0, 
-#     "Lower_boundary": 0.0,
-#     "Upper_boundary": 1.0,
-#     "Relative_tolerance": 0.01,
-#     "delta_t": 0.001,
-#     "restart": True,
-#     "solveAdjoint": True, 
-# }
+solver_config = {
+    "OutputFilename": "stellarator",
+    "Polynomial_degree": 3,
+    "Grid_size": 3,
+    "tau": 1.0, 
+    "Lower_boundary": 0.0,
+    "Upper_boundary": 1.0,
+    "Relative_tolerance": 0.01,
+    "delta_t": 0.01,
+    "restart": False,
+    "solveAdjoint": True, 
+}
+
+config = {
+    "Stellarator": st_config,
+    "Solver": solver_config,
+}
+
+st = StellaratorTransport(config)
 
 # runner.configure(config)
 

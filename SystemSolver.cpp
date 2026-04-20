@@ -81,6 +81,17 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         // Copy restart values into y
         y.copy(problem->getRestartY());
         ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
+
+        GlobalState initialState = y.evalOnNodes(); // only need u and q so this is ok
+        const auto points = y.getPoints();
+        for (Index var = 0; var < nVars; var++)
+        {
+            // set flux for each variable, casting to a row vector and making sure to remember minus sign
+            initialState.Flux()(var, Eigen::all) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(problem->SigmaFn(var, initialState, points, t));
+        }
+        y.AssignSigma(initialState);
+
+        y.EvaluateLambda();
     }
     else
     {

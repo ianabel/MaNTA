@@ -1,9 +1,10 @@
 import MaNTA
+from FFIRunner import FFIRunner
 import jax
 
 import os
 
-if os.environ["JAX_COMPILATION_CACHE_DIR"] is not None:
+if "JAX_COMPILATION_CACHE_DIR" in os.environ:
     print("Using cache directory: " + os.environ["JAX_COMPILATION_CACHE_DIR"])
     jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
@@ -44,24 +45,6 @@ def getStateAtIndex(states, i):
     }
     return out
 
-class FFI_Runner:
-    def __init__(self, runner, points, np, ng):
-        self.runner = runner
-        self.points = points
-        self.adjoint_output = [
-            jax.ShapeDtypeStruct((ng,), jnp.float64),
-            jax.ShapeDtypeStruct((ng * len(self.points), np), jnp.float64)
-        ]  
-        self.sol_output = jax.ShapeDtypeStruct((len(self.points),), jnp.float64)
-    def run(self, tFinal):
-        jax.ffi.ffi_call("run_ffi", [], has_side_effect=True)(jnp.float64(tFinal), obj=self.runner.get_address())
-    def run_ss(self):
-        jax.ffi.ffi_call("run_ss_ffi", [], has_side_effect=True)(obj=self.runner.get_address())
-    def run_adjoint_solve(self):
-        return jax.ffi.ffi_call("run_adjoint_solve_ffi", self.adjoint_output, has_side_effect=True)(obj=self.runner.get_address())
-    def get_profile(self, var):
-        return jax.ffi.ffi_call("get_solution_ffi", self.sol_output)(var, self.points, obj=self.runner.get_address())
-
 class StellaratorParams(NamedTuple):
     SourceCenter: float
     SourceHeight: float
@@ -101,6 +84,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def __init__(self, config , eq = None, grid = None):
         MaNTA.TransportSystem.__init__(self)
         self.nVars = 1
+        self.nAux = 0
 
         ### Remember to set boundary conditions ####
         self.isUpperDirichlet  = True
@@ -114,43 +98,40 @@ class StellaratorTransport(MaNTA.TransportSystem):
         self.pnorm = 1e20 * e * 1e3
 
         # Hold the MaNTA runner object in the class
-        self.runner = MaNTA.Runner(self)
 
         # %%
 
         self.field, self.vprime = self.yancc_wrapper.get_fields()
         self.field_shard, self.vprime_shard = eqx.filter_shard((self.field, self.vprime), data_sharding)
 
-        self.runner.configure(solver_config)
-
         g = [self.StoredEnergy]
 
         self.adjointProblem = StellaratorAdjointProblem(self, g, self.yancc_wrapper, len(self.points))
-        self.runner.setAdjointProblem(self.adjointProblem)
 
-        self.runner_ffi = FFI_Runner(self.runner, self.points, self.adjointProblem.np, self.adjointProblem.ng)
+        self.runner = FFIRunner(self, self.points, 1, self.adjointProblem.np, spatialParameters=True)
+        self.runner.configure(solver_config)
 
         print("Successfully created StellaratorTransport object")
 
-    def run(self, tFinal = None, yancc_wrapper = None):
-        if (yancc_wrapper is not None):
-            self.yancc_wrapper = yancc_wrapper
-            self.field, self.vprime = self.yancc_wrapper.get_fields()
-            self.field_shard, self.vprime_shard = eqx.filter_shard((self.field, self.vprime), data_sharding)
-            self.adjointProblem.setField(self.field, self.vprime)
+    def run(self, tFinal = None):
+        # if (yancc_wrapper is not None):
+        #     self.yancc_wrapper = yancc_wrapper
+        #     self.field, self.vprime = self.yancc_wrapper.get_fields()
+        #     self.field_shard, self.vprime_shard = eqx.filter_shard((self.field, self.vprime), data_sharding)
+        #     self.adjointProblem.setField(self.field, self.vprime)
 
         if (tFinal is not None):
-            self.runner_ffi.run(tFinal)
+            self.runner.run(tFinal)
         else: 
-            self.runner_ffi.run_ss()
+            self.runner.run_ss()
 
 
-    def runAdjointSolve(self, field = None, grid = None):
-        if (field is not None):
-            yancc_wrapper = yancc_data.from_other(field, grid, other=self.yancc_wrapper)
-            self.run(yancc_wrapper=yancc_wrapper)
+    def runAdjointSolve(self):
+        # if (field is not None):
+        #     yancc_wrapper = yancc_data.from_other(field, grid, other=self.yancc_wrapper)
+        #     self.run(yancc_wrapper=yancc_wrapper)
 
-        G, G_p = self.runner_ffi.run_adjoint_solve()
+        G, G_p = self.runner.run_adjoint_solve()
         return G, G_p
 
     def getPressure(self):
@@ -163,8 +144,15 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     def UpperBoundary(self, index, t):
         return 1.5 * self.params.EdgeTemperature * self.Density(1.0)
+    
+    def SigmaFn( self, index, state, x, t ):
+        return self.sigma(index, state, x, t, self.params)
+
+    def Sources(self, index, state, x, t):
+        return self.source(index, state, x, t, self.params)
 
     def SigmaFn_v( self, index, states, positions, t):
+
         x = jnp.array(positions)
         x_s = jax.device_put(x,data_sharding)
         states_s = jax.device_put(states, data_sharding)
@@ -245,8 +233,14 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def InitialDerivative( self, index, x ):
         return jax.grad(self.InitialValue, argnums=1)(index, x)
     
+    def aux( self, index, state, x, t, params: NamedTuple):
+        pass
+
     def InitialAuxValue(self, index, x):
         pass
+
+    def AuxG( self, index, state, x, t):
+        return self.aux(index, state, x, t, self.params)
 
     # Constant density function
     def Density(self, x):
@@ -261,7 +255,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         The adjoint problem object
     """
     def createAdjointProblem(self):
-        pass
+        return self.adjointProblem
 
 class StellaratorAdjointProblem(MaNTA.AdjointProblem):
     def __init__(self, transport_system: MaNTA.TransportSystem, g, yancc_data, npoints):
