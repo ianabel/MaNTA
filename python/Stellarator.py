@@ -1,5 +1,5 @@
 import MaNTA
-from FFIRunner import FFIRunner
+
 import jax
 
 import os
@@ -29,11 +29,9 @@ from functools import partial
 
 from yancc_wrapper import yancc_data, flux
 
+from FFIRunner import FFIRunner
+
 from typing import NamedTuple
-
-for name, target in MaNTA.runner_ffi_ops().items():
-    jax.ffi.register_ffi_target(name, target)
-
 
 def getStateAtIndex(states, i):
     out = {
@@ -114,12 +112,6 @@ class StellaratorTransport(MaNTA.TransportSystem):
         print("Successfully created StellaratorTransport object")
 
     def run(self, tFinal = None):
-        # if (yancc_wrapper is not None):
-        #     self.yancc_wrapper = yancc_wrapper
-        #     self.field, self.vprime = self.yancc_wrapper.get_fields()
-        #     self.field_shard, self.vprime_shard = eqx.filter_shard((self.field, self.vprime), data_sharding)
-        #     self.adjointProblem.setField(self.field, self.vprime)
-
         if (tFinal is not None):
             self.runner.run(tFinal)
         else: 
@@ -136,7 +128,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     def getPressure(self):
         ui = io_callback(self.runner.getSolution, [jax.ShapeDtypeStruct((len(self.points),), jnp.float32)], 0, self.points)
-        print(ui)
+
         return 2./3. * ui * self.pnorm
 
     def LowerBoundary(self, index, t):
@@ -146,10 +138,10 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return 1.5 * self.params.EdgeTemperature * self.Density(1.0)
     
     def SigmaFn( self, index, state, x, t ):
-        return self.sigma(index, state, x, t, self.params)
+        pass
 
     def Sources(self, index, state, x, t):
-        return self.source(index, state, x, t, self.params)
+        pass
 
     def SigmaFn_v( self, index, states, positions, t):
 
@@ -308,10 +300,10 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         grad_out = fgrad_vmap(self.field, states, x, self.params)
         grad, self.unravel = jax.flatten_util.ravel_pytree(eqx.filter(grad_out, eqx.is_array))
         grad = jnp.expand_dims(grad,1)
-        out = jnp.reshape(grad, (self.np_cell, self.npoints ))
+        out = jnp.reshape(grad, (self.npoints, self.np_cell ))
         print(out.shape)
         # out = jnp.pad(g, pad_width=(0, self.np_boundary), mode='constant', constant_values=0)
-        return out.transpose()
+        return out
         
     def dg(self, i, states, positions):
         x = jnp.array(positions)

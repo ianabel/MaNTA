@@ -62,7 +62,7 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
         g = jnp.reshape(g, (len(positions),self.np - self.np_boundary))
 
         out = jnp.pad(g, pad_width=(self.np_boundary, 0), mode='constant', constant_values=0)
-        print(out.shape)
+
         return out
 
     # @partial(jax.jit, static_argnums=(0,))
