@@ -93,7 +93,7 @@ class LegendreBasis
             Vector out( k + 1 );
             for( Index i = 0; i < k + 1; i++ )
             {
-                auto u = [&,this](double x) { return f(x) * Evaluate(I, i, x); };
+                auto u = [&](double x) { return f(x) * Evaluate(I, i, x); };
                 out( i ) = integrator.integrate(u, I.x_l, I.x_u);
             }
             return out;
@@ -262,7 +262,7 @@ class ChebyshevBasis
             Vector out( k + 1 );
             for( Index i = 0; i < k + 1; i++ )
             {
-                auto u = [&,this](double x) { return f(x) * Evaluate(I, i, x); };
+                auto u = [&](double x) { return f(x) * Evaluate(I, i, x); };
                 out( i ) = integrator.integrate(u, I.x_l, I.x_u);
             }
             return out;
@@ -434,8 +434,10 @@ class NodalBasis
 
                 double y = ( x - ChebNodes( j ) );
 
-                if( y == 0.0 )
-                    return 0.0;
+                if( y == 0.0 ) {
+                  return 0.0;
+                }
+
                 denominator += BarycentricWeights( j ) / y;
             }
 
