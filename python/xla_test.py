@@ -1,7 +1,6 @@
 import jax
 from FFIRunner import FFIRunner
 
-jax.config.update('jax_enable_x64', True)
 import os
 import MaNTA
 
@@ -106,6 +105,12 @@ params = LinearDiffusionParams(0.1, 0.1, 0.1, 3.0)
 ld = JAXLinearDiffusion(params)
 ld.run()
 
+# out = ld.runAdjointSolve()
+
+
+# u = ld.runner.get_profile(0)
+# print(u)
+
 @jax.custom_jvp
 def fun(params):
     ld = JAXLinearDiffusion(params, restart = True)
@@ -140,9 +145,8 @@ params_new = LinearDiffusionParams(0.1, 0.1, 0.1, 3.8)
 
 print(g1(params_new))
 
-# params_new = LinearDiffusionParams(0.1, 0.1, 0.0, 1.0)
-# print(g1(params_new))
-#print(gprint(g1(params_new))2(params_new))
+params_new = LinearDiffusionParams(0.1, 0.1, 0.0, 1.0)
+print(g1(params_new))
 
 
 

@@ -81,7 +81,7 @@ class StellaratorTransport
 Computes sources and neoclassical fluxes (returned from yancc) as required by MaNTA
 """
 class StellaratorTransport(MaNTA.TransportSystem): 
-    def __init__(self, config , eq = None, grid = None):
+    def __init__(self, config, yancc_wrapper):
         MaNTA.TransportSystem.__init__(self)
         self.nVars = 1
         self.nAux = 0
@@ -93,7 +93,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         st_config = config["Stellarator"]
         self.points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
         self.params = StellaratorParams.from_config(st_config)
-        self.yancc_wrapper = yancc_data.from_eq(Volume=self.points, Density=self.Density, eq=eq, grid=grid)
+        self.yancc_wrapper = yancc_wrapper
         e = 1.6e-19
         self.pnorm = 1e20 * e * 1e3
 

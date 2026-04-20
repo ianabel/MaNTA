@@ -39,8 +39,6 @@ test: $(SOLVER) Tests/UnitTests/UnitTests
 PYTHON_NAME=python/MaNTA$(shell python3-config --extension-suffix)
 PYTHON_OUTPUT=$(PYTHON_NAME) 
 
-
-
 python: $(PYTHON_OUTPUT)
 
 $(PYTHON_OUTPUT): $(OBJECTS) $(PHYSICS_OBJECTS) $(PYTHON_HEADERS) $(PYTHON_OBJECTS)

@@ -268,7 +268,7 @@ py::tuple PyRunner::runAdjointSolve(void)
 
     Vector G(adjoint->getNg());
     for (Index i = 0; i < adjoint->getNg(); i++)
-        G(i) = adjoint->GFn(i, system->y);
+        G(i) = adjoint->GFn(i, system->yJac);
 
     return py::make_tuple(G, gp);
 }

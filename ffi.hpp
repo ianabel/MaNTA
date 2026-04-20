@@ -145,7 +145,6 @@ static ffi::Error run_adjoint_ffi_impl_cuda(cudaStream_t stream, void *ctx, ffi:
     auto G = result[0].cast<Vector>();
     py::dict G_p = result[1];
     auto G_p_internal = G_p["G_p"].cast<Matrix>();
-
     for (Index i = 0; i < G.size(); i++)
     {
         float tmp = static_cast<float>(G(i));
@@ -153,7 +152,11 @@ static ffi::Error run_adjoint_ffi_impl_cuda(cudaStream_t stream, void *ctx, ffi:
     }
     // auto *G_p_out_data = G_p_out->typed_data();
     auto const out_dim = G_p_out->dimensions();
+    std::cerr << out_dim.front() << std::endl;
+    std::cerr << G_p_internal.rows() << std::endl;
 
+    std::cerr << out_dim.back() << std::endl;
+    std::cerr << G_p_internal.cols() << std::endl;
     // Make sure retval is correct shape
     assert(out_dim.front() == G_p_internal.rows());
     assert(out_dim.back() == G_p_internal.cols());
@@ -164,7 +167,7 @@ static ffi::Error run_adjoint_ffi_impl_cuda(cudaStream_t stream, void *ctx, ffi:
         {
             float tmp = static_cast<float>(G_p_internal(i, j));
             auto const idx = i * out_dim.back() + j; // formula for indexing into 2D buffer: https://github.com/openxla/xla/blob/main/xla/tests/custom_call_test.cc#L1577
-            cudaMemcpyAsync(&Gout->typed_data()[idx], &tmp, sizeof(float), cudaMemcpyHostToDevice, stream);
+            cudaMemcpyAsync(&G_p_out->typed_data()[idx], &tmp, sizeof(float), cudaMemcpyHostToDevice, stream);
         }
     }
 
