@@ -1483,8 +1483,8 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
         for (Index v = 0; v < nVars; ++v)
         {
             out << "\t" << s.Variable[v] << "\t" << s.Derivative[v] << "\t" << s.Flux[v];
-            if (printSources)
-                out << "\t" << problem->Sources(v, s, x, t);
+            // if (printSources)
+            //     out << "\t" << problem->Sources(v, s, x, t);
         }
 
         for (Index a = 0; a < nAux; ++a)
@@ -1525,8 +1525,8 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
         for (Index v = 0; v < nVars; ++v)
         {
             out << "\t" << s.Variable[v] << "\t" << s.Derivative[v] << "\t" << s.Flux[v];
-            if (printSources)
-                out << "\t" << problem->Sources(v, s, x, t);
+            // if (printSources)
+            //     out << "\t" << problem->Sources(v, s, x, t);
         }
 
         for (Index a = 0; a < nAux; ++a)

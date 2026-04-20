@@ -1,6 +1,7 @@
 import MaNTA
 
 from Stellarator import StellaratorTransport
+from yancc_wrapper import yancc_data
 
 # %%
 st_config = {
@@ -11,16 +12,13 @@ st_config = {
     "EdgeDensity": 0.1,
     "n0": 0.5,
 }
-
-
-
 # runner = MaNTA.Runner(st)
 
 # # %%
 solver_config = {
     "OutputFilename": "stellarator",
     "Polynomial_degree": 3,
-    "Grid_size": 3,
+    "Grid_size": 6,
     "tau": 1.0, 
     "Lower_boundary": 0.0,
     "Upper_boundary": 1.0,
@@ -35,7 +33,12 @@ config = {
     "Solver": solver_config,
 }
 
-st = StellaratorTransport(config)
+points =  MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
+Density = lambda x : (st_config["n0"] - st_config["EdgeDensity"]) * (1 - x*x) + st_config["EdgeDensity"]
+
+yancc_wrapper = yancc_data.from_eq(points, Density=Density)
+
+st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
 
 # runner.configure(config)
 

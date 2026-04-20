@@ -177,6 +177,7 @@ dict
 
 @eqx.filter_jit
 def flux(state, x, field, Vprim, yancc_params: yancc_data):
+    print("calling flux")
     # For now we only evolve the ion energy
     p_i = 2. / 3. * state["Variable"][0]
     p_i_prime = 2. / 3. * state["Derivative"][0]
@@ -198,6 +199,7 @@ def flux(state, x, field, Vprim, yancc_params: yancc_data):
     _, _, fluxes, _  = solve_dke(field, yancc_params.pitchgrid, yancc_params.speedgrid, species, Erho, verbose = False)
     #assert stats['res'] < 1e-5
     fout = fluxes['<heat_flux>'][0] * Vprim / (yancc_params.FluxNorm)
+    print("flux computed")
     return fout
     
 

@@ -16,8 +16,6 @@ from jax import shard_map
 from jax.tree_util import tree_map
 import equinox as eqx
 
-from jax.experimental import io_callback
-
 # %%
 P = PartitionSpec
 
@@ -29,7 +27,7 @@ from functools import partial
 
 from yancc_wrapper import yancc_data, flux
 
-from FFIRunner import FFIRunner
+# from FFIRunner import FFIRunner
 
 from typing import NamedTuple
 
@@ -79,7 +77,7 @@ class StellaratorTransport
 Computes sources and neoclassical fluxes (returned from yancc) as required by MaNTA
 """
 class StellaratorTransport(MaNTA.TransportSystem): 
-    def __init__(self, config, yancc_wrapper):
+    def __init__(self, config, yancc_wrapper : yancc_data):
         MaNTA.TransportSystem.__init__(self)
         self.nVars = 1
         self.nAux = 0
@@ -101,12 +99,12 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         self.field, self.vprime = self.yancc_wrapper.get_fields()
         self.field_shard, self.vprime_shard = eqx.filter_shard((self.field, self.vprime), data_sharding)
-
         g = [self.StoredEnergy]
 
         self.adjointProblem = StellaratorAdjointProblem(self, g, self.yancc_wrapper, len(self.points))
 
-        self.runner = FFIRunner(self, self.points, 1, self.adjointProblem.np, spatialParameters=True)
+        # self.runner = FFIRunner(self, self.points, 1, self.adjointProblem.np, spatialParameters=True)
+        self.runner = MaNTA.Runner(self)
         self.runner.configure(solver_config)
 
         print("Successfully created StellaratorTransport object")
@@ -123,11 +121,11 @@ class StellaratorTransport(MaNTA.TransportSystem):
         #     yancc_wrapper = yancc_data.from_other(field, grid, other=self.yancc_wrapper)
         #     self.run(yancc_wrapper=yancc_wrapper)
 
-        G, G_p = self.runner.run_adjoint_solve()
+        G, G_p = self.runner.runAdjointSolve()
         return G, G_p
 
     def getPressure(self):
-        ui = io_callback(self.runner.getSolution, [jax.ShapeDtypeStruct((len(self.points),), jnp.float32)], 0, self.points)
+        ui = self.runner.get_profile(0)
 
         return 2./3. * ui * self.pnorm
 
@@ -136,22 +134,17 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     def UpperBoundary(self, index, t):
         return 1.5 * self.params.EdgeTemperature * self.Density(1.0)
-    
-    def SigmaFn( self, index, state, x, t ):
-        pass
-
-    def Sources(self, index, state, x, t):
-        pass
 
     def SigmaFn_v( self, index, states, positions, t):
 
         x = jnp.array(positions)
+
         x_s = jax.device_put(x,data_sharding)
         states_s = jax.device_put(states, data_sharding)
         
         sigma_vmap = jax.vmap(self.sigma, in_axes=(vmap_axes_wfield))
         out = sigma_vmap(index, states_s, x_s, t, self.field_shard, self.vprime_shard, self.params)
-
+       
         return out
     
     @eqx.filter_jit
