@@ -59,12 +59,13 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
         x = jnp.array(positions)
         dgdp = jax.vmap(jax.grad(self.g, argnums=2), in_axes=({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0, 0))(states, x, self.params)
         g, _ = ravel_pytree(dgdp)
-        g = jnp.reshape(g, (self.np - self.np_boundary, len(positions)))
+        g = jnp.reshape(g, (len(positions),self.np - self.np_boundary))
 
-        out = jnp.pad(g, pad_width=(0, self.np_boundary), mode='constant', constant_values=0)
-        return out.transpose()
+        out = jnp.pad(g, pad_width=(self.np_boundary, 0), mode='constant', constant_values=0)
+        print(out.shape)
+        return out
 
-    @partial(jax.jit, static_argnums=(0,))
+    # @partial(jax.jit, static_argnums=(0,))
     def dg(self, i, states, positions):
         x = jnp.array(positions)
 
@@ -75,14 +76,14 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
     #@partial(jax.jit, static_argnums=(0,))
     def dSigma(self, i, states, positions):
         x = jnp.array(positions)
-        grad = jax.vmap(jax.grad(self.sigma, argnums=4), in_axes=(vmap_axes_adj))(i, states, x, 0.0, self.params)  
+        grad = jax.vmap(jax.grad(self.sigma, argnums=4), in_axes=(vmap_axes_adj))(i, states, x, 0.0, self.params) 
         grad_flattened, _ = jax.flatten_util.ravel_pytree(grad)
         grad_flattened = jnp.expand_dims(grad_flattened, 1)
         out = jnp.reshape(grad_flattened, (self.np, self.npoints ))
         return out
     
     
-    @partial(jax.jit, static_argnums=(0,))
+    # @partial(jax.jit, static_argnums=(0,))
     def dSources(self, i, states, positions):
         x = jnp.array(positions)
         grad = jax.vmap(jax.grad(self.source, argnums=4), in_axes=(vmap_axes_adj))(i, states, x, 0.0, self.params)  
@@ -91,7 +92,7 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
         out = jnp.reshape(grad_flattened, (self.np, self.npoints ))
         return out
 
-    @partial(jax.jit, static_argnums=(0,))
+    # @partial(jax.jit, static_argnums=(0,))
     def dgFn_dphi(self, i, state, x):
         return jax.grad(self.g, argnums=0)(state, x, self.params)["Aux"]
    
@@ -259,14 +260,14 @@ nl.run()
 import numpy as np
 from netCDF4 import Dataset
 
-data = Dataset("./out.nc")
+# data = Dataset("./out.nc")
 
-Vars = data.groups
-Grid = jnp.array(np.array(data.groups["Grid"].variables["CellBoundaries"]))
-t = jnp.array(np.array(data.variables["t"]))
-x = jnp.array(np.array(data.variables["x"]))
-u = jnp.array(np.array(Vars["Var0"].variables["u"]))
-data.close()
+# Vars = data.groups
+# Grid = jnp.array(np.array(data.groups["Grid"].variables["CellBoundaries"]))
+# t = jnp.array(np.array(data.variables["t"]))
+# x = jnp.array(np.array(data.variables["x"]))
+# u = jnp.array(np.array(Vars["Var0"].variables["u"]))
+# data.close()
 
 # %%
 # fig,ax = plt.subplots()
@@ -277,8 +278,8 @@ G, G_p = nl.runAdjointSolve()
 
 print(G_p)
 
-u_interp = interpax.interp1d(nl.points, x, u[-1,:], method='cubic')
+# u_interp = interpax.interp1d(nl.points, x, u[-1,:], method='cubic')
 
-g_approx = lambda u : jnp.trapezoid(0.5 * u * u * nl.params["D"], nl.points)
+# g_approx = lambda u : jnp.trapezoid(0.5 * u * u * nl.params["D"], nl.points)
 
-print(g_approx(u_interp))
+# print(g_approx(u_interp))

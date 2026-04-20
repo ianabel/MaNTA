@@ -120,8 +120,9 @@ static ffi::Error get_solution_ffi_impl(void *ctx, ffi::Buffer<i_dtype> var, std
 #ifdef CUDA
 static ffi::Error run_ffi_impl_cuda(cudaStream_t stream, void *ctx, ffi::AnyBuffer args)
 {
-    auto runner = static_cast<PyRunner *>(ctx);
     py::gil_scoped_acquire gil; // needed to prevent segfault
+    auto runner = static_cast<PyRunner *>(ctx);
+
     float tFinal;
     cudaMemcpyAsync(&tFinal, args.typed_data<float>(), sizeof(float), cudaMemcpyDeviceToHost, stream);
     cudaStreamSynchronize(stream);
@@ -131,16 +132,18 @@ static ffi::Error run_ffi_impl_cuda(cudaStream_t stream, void *ctx, ffi::AnyBuff
 
 static ffi::Error run_ffi_ss_impl_cuda(cudaStream_t stream, void *ctx)
 {
-    auto runner = static_cast<PyRunner *>(ctx);
     py::gil_scoped_acquire gil;
+    auto runner = static_cast<PyRunner *>(ctx);
+
     runner->run_ss();
     return ffi::Error::Success();
 };
 
 static ffi::Error run_adjoint_ffi_impl_cuda(cudaStream_t stream, void *ctx, ffi::Result<ffi::BufferR1<fp_dtype_cuda>> Gout, ffi::Result<ffi::BufferR2<fp_dtype_cuda>> G_p_out, std::optional<ffi::Result<ffi::BufferR1<fp_dtype_cuda>>> G_p_boundary_out)
 {
-    auto runner = static_cast<PyRunner *>(ctx);
     py::gil_scoped_acquire gil;
+    auto runner = static_cast<PyRunner *>(ctx);
+
     py::tuple result = runner->runAdjointSolve();
     auto G = result[0].cast<Vector>();
     py::dict G_p = result[1];
@@ -186,8 +189,9 @@ static ffi::Error run_adjoint_ffi_impl_cuda(cudaStream_t stream, void *ctx, ffi:
 
 static ffi::Error get_solution_ffi_impl_cuda(cudaStream_t stream, void *ctx, ffi::Buffer<i_dtype_cuda> var, std::optional<ffi::BufferR1<fp_dtype_cuda>> points, ffi::Result<ffi::BufferR1<fp_dtype_cuda>> out)
 {
-    auto runner = static_cast<PyRunner *>(ctx);
     py::gil_scoped_acquire gil;
+    auto runner = static_cast<PyRunner *>(ctx);
+
     int var_index;
     cudaMemcpyAsync(&var_index, var.typed_data(), sizeof(int), cudaMemcpyDeviceToHost, stream);
     cudaStreamSynchronize(stream);

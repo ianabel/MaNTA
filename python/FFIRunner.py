@@ -54,7 +54,7 @@ class FFIRunner(MaNTA.Runner):
     def run_ss(self):
         jax.ffi.ffi_call(ffi_ops["run_ss"], [], has_side_effect=True)(obj=self.get_address())
     def run_adjoint_solve(self):
-        return jax.ffi.ffi_call(ffi_ops["run_adjoint_solve"], self.adjoint_output, has_side_effect=True)(obj=self.get_address())
+        return jax.ffi.ffi_call(ffi_ops["run_adjoint_solve"], self.adjoint_output)(obj=self.get_address())
     def get_profile(self, var, points = None):
         if (points is None):
             points = self.points

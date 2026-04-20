@@ -86,7 +86,13 @@ public:
         // If parameters are spatial, int dg/dp dx = int dg/dp_cell delta(x - x_cell) dx, so we just return dg/dp evaluated at the nodes. Otherwise, we need to integrate dg/dp over the domain to get the total sensitivity with respect to that parameter.
         if (areParametersSpatial())
         {
-            return dgFndp(gIndex, states, points);
+            Matrix retval = dgFndp(gIndex, states, points);
+            std::cerr << "Successfully computed dgdp" << std::endl;
+
+            std::cerr << retval.cols() << std::endl;
+
+            std::cerr << retval.rows() << std::endl;
+            return retval;
             // out.resize(1, np * y.getGrid().getNCells());
         }
         else
