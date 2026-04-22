@@ -6,10 +6,10 @@ from yancc_wrapper import yancc_data
 # %%
 st_config = {
     "SourceCenter": 0.0,
-    "SourceHeight": 30.0,
+    "SourceHeight": 150.0,
     "SourceWidth": 0.2,
-    "EdgeTemperature":0.5,
-    "EdgeDensity": 0.1,
+    "EdgeTemperature":0.1,
+    "EdgeDensity": 0.0,
     "n0": 0.5,
 }
 # runner = MaNTA.Runner(st)
@@ -21,11 +21,11 @@ solver_config = {
     "Grid_size": 6,
     "tau": 1.0, 
     "Lower_boundary": 0.0,
-    "Upper_boundary": 1.0,
+    "Upper_boundary": 0.9,
     "Relative_tolerance": 0.01,
     "delta_t": 0.01,
     "restart": False,
-    "solveAdjoint": True, 
+    "solveAdjoint": False, 
 }
 
 config = {

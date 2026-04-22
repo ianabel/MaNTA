@@ -7,6 +7,8 @@ from Stellarator import StellaratorTransport
 
 import yancc
 
+from yancc_wrapper import yancc_data
+
 import desc
 from desc import set_device
 set_device("gpu")
@@ -35,25 +37,26 @@ import jax.numpy as jnp
 
 st_config = {
     "SourceCenter": 0.0,
-    "SourceHeight": 30.0,
+    "SourceHeight": 80.0,
     "SourceWidth": 0.2,
-    "EdgeTemperature":0.5,
-    "EdgeDensity": 0.1,
+    "EdgeTemperature":0.1,
+    "EdgeDensity": 0.0,
     "n0": 0.5,
 }
+# runner = MaNTA.Runner(st)
 
-
+# # %%
 solver_config = {
-    "OutputFilename": "stellarator",
+    "OutputFilename": "stellarator_opt",
     "Polynomial_degree": 3,
     "Grid_size": 6,
-    "tau": 1.0, 
+    "tau": 100.0, 
     "Lower_boundary": 0.0,
-    "Upper_boundary": 1.0,
+    "Upper_boundary": 0.9,
     "Relative_tolerance": 0.01,
     "delta_t": 0.01,
-    "restart": False,
-    "solveAdjoint": True, 
+    "restart": True,
+    "solveAdjoint": False, 
 }
 
 config = {
@@ -61,59 +64,82 @@ config = {
     "Solver": solver_config,
 }
 
+Density = lambda x : (st_config["n0"] - st_config["EdgeDensity"]) * (1 - x * x) + st_config["EdgeDensity"]
+
 # create initial surface. Aspect ratio ~ 6, circular cross section with slight
 # axis torsion to make it nonplanar
-surf = FourierRZToroidalSurface(
-    R_lmn=[1, 0.166, 0.1],
-    Z_lmn=[-0.166, -0.1],
-    modes_R=[[0, 0], [1, 0], [0, 1]],
-    modes_Z=[[-1, 0], [0, -1]],
-    NFP=2,
-)
+# surf = FourierRZToroidalSurface(
+#     R_lmn=[1, 0.166, 0.1],
+#     Z_lmn=[-0.166, -0.1],
+#     modes_R=[[0, 0], [1, 0], [0, 1]],
+#     modes_Z=[[-1, 0], [0, -1]],
+#     NFP=2,
+# )
 
-grid_points =  jnp.linspace(0, 1, solver_config["Grid_size"] * (solver_config["Polynomial_degree"] + 1))
-# change the rho coordinates here to wherever manta needs to evaluate yancc fluxes
-yancc_rho = grid_points
-yancc_ntheta = 15
-yancc_nzeta = 45
 
-# to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
-# + axis and lcfs
-# initial pressure is all zeros, can change this if desired
-pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
-desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 
-# create initial equilibrium. Psi chosen to give B ~ 1 T.
-# M=N=4 is fine for quick testing, for actual optimization may want to increase to ~8-10
-eq = Equilibrium(M=4, N=4, Psi=0.087, surface=surf, pressure=desc_pressure)
-eq = eq.solve(x_scale="ess")[0]
-# store initial equilibrium for comparison later
+# grid_points =  jnp.linspace(0, 1, solver_config["Grid_size"] * (solver_config["Polynomial_degree"] + 1))
+# # change the rho coordinates here to wherever manta needs to evaluate yancc fluxes
+# yancc_rho = grid_points
+# yancc_ntheta = 15
+# yancc_nzeta = 45
+
+
+
+# # to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
+# # + axis and lcfs
+# # initial pressure is all zeros, can change this if desired
+
+
+# # create initial equilibrium. Psi chosen to give B ~ 1 T.
+# # M=N=4 is fine for quick testing, for actual optimization may want to increase to ~8-10
+# eq = Equilibrium(M=4, N=4, Psi=0.087, surface=surf, pressure=desc_pressure)
+
+eq = desc.examples.get("ESTELL")
+# eq = eq.solve(x_scale="ess")[0]
+# # store initial equilibrium for comparison later
 eq_init = eq.copy()
+# yancc_grid = desc.grid.LinearGrid(rho=yancc_rho, M=eq_init.M_grid, N = eq_init.N_grid, NFP=eq_init.NFP)
+points =  MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
+# yancc_wrapper = yancc_data.from_eq(points, grid = yancc_grid,rho = yancc_rho, Density=Density, eq=eq_init, nt = yancc_ntheta, nz = yancc_nzeta)
+yancc_wrapper = yancc_data.from_eq(points, eq=eq_init, Density=Density)
+
 V0 = eq.compute("V")["V"]
 
-st = StellaratorTransport(config, eq=eq)
+st = StellaratorTransport(config, yancc_wrapper = yancc_wrapper)
+st.run()
+
+config["Solver"]["restart"] = True
+config["Solver"]["solveAdjoint"] = True
 
 @eqx.filter_custom_jvp
-def Objective(field, grid):
-    G, _ = st.runAdjointSolve(field = field, grid = grid)
-    return G[0]
+def Objective(data, grid):
+    yancc_wrapper = yancc_data.from_data(data, grid, Density=Density)
+    st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+    st.run()
+    G, G_p = st.runAdjointSolve()
+
+    pi = st.getPressure()
+
+    return G[0], pi 
 
 @Objective.def_jvp
 def Objective_jvp(primals, tangents):
-    field, grid = primals
+    data, grid = primals
     field_dot, _ = tangents
-    G, G_p = st.runAdjointSolve(field = field, grid = grid)   
+    yancc_wrapper = yancc_data.from_data(data, grid, Density=Density)
+    st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+    st.run()
+    G, G_p = st.runAdjointSolve()
+    pi = st.getPressure()
+    field_dot_flatten, _ = jax.flatten_util.ravel_pytree(field_dot)
 
-    field_dot_flatten = jax.flatten_util.ravel_pytree(field_dot)
-
-    return G[0], jnp.dot(G_p['G_p'].flatten(), field_dot_flatten)
+    return (G[0], pi), jnp.dot(G_p.flatten(), field_dot_flatten)
 
 
+def manta_yancc_fun(grid, data):
 
-def manta_yancc_fun(yancc_fields, grid):
-
-    stored_energy = Objective(yancc_fields, grid) * st.pnorm
-    pressure = st.getPressure()
+    stored_energy, pressure = Objective(data, grid) 
     ## run manta here to get steady state profiles given python list of yancc field objects
     # returns stored energy as a scalar, and an array of the steady state pressure at the
     # radial points of yancc/desc grid defined below
@@ -130,34 +156,37 @@ def manta_yancc_fun(yancc_fields, grid):
 
 def objective_from_user_fun(grid, data):
   # note: don't change the signature to this function
-  
-    yancc_dat = {
-        "B_sup_t": data["B^theta"],
-        "B_sup_z": data["B^zeta"],
-        "B_sub_t": data["B_theta"],
-        "B_sub_z": data["B_zeta"],
-        "Bmag": data["|B|"],
-        "dBdt": data["|B|_t"],
-        "dBdz": data["|B|_z"],
-        "sqrtg": data["sqrt(g)"],
-    }
+    # print(data)
+    # yancc_dat = {
+    #     "B_sup_t": data["B^theta"],
+    #     "B_sup_z": data["B^zeta"],
+    #     "B_sub_t": data["B_theta"],
+    #     "B_sub_z": data["B_zeta"],
+    #     "Bmag": data["|B|"],
+    #     "dBdt": data["|B|_t"],
+    #     "dBdz": data["|B|_z"],
+    #     "sqrtg": data["sqrt(g)"],
+    # }
 
-    yancc_dat = {
-        key: grid.meshgrid_reshape(val, "rtz") for key, val in yancc_dat.items()
-    }
+    # yancc_dat = {
+    #     key: grid.meshgrid_reshape(val, "rtz") for key, val in yancc_dat.items()
+    # }
 
-    yancc_dat["Psi"] = grid.compress(
-        data["Psi"] / grid.nodes[:, 0] ** 2, surface_label="rho"
-    )
-    yancc_dat["a_minor"] = jnp.full(grid.num_rho, data["a"])
-    yancc_dat["R_major"] = jnp.full(grid.num_rho, data["R0"])
-    yancc_dat["iota"] = grid.compress(data["iota"], surface_label="rho")
-    yancc_dat["rho"] = grid.compress(grid.nodes[:, 0], surface_label="rho")
+    # yancc_dat["Psi"] = grid.compress(
+    #     data["Psi"] / grid.nodes[:, 0] ** 2, surface_label="rho"
+    # )
+    # yancc_dat["a_minor"] = jnp.full(grid.num_rho, data["a"])
+    # yancc_dat["R_major"] = jnp.full(grid.num_rho, data["R0"])
+    # yancc_dat["iota"] = grid.compress(data["iota"], surface_label="rho")
+    # yancc_dat["rho"] = grid.compress(grid.nodes[:, 0], surface_label="rho")
 
-    yancc_fields = jax.vmap(lambda d: yancc.field.Field(**d, NFP=grid.NFP))(yancc_dat)
-    #yancc_fields = desc.backend.tree_unstack(yancc_fields)
 
-    stored_energy, manta_pressure = manta_yancc_fun(yancc_fields, grid)
+    # yancc_fields = jax.vmap(lambda d: yancc.field.Field(**d, NFP=grid.NFP))(yancc_dat)
+    # #yancc_fields = desc.backend.tree_unstack(yancc_fields)
+    # yancc_dat["V(r)"] = grid.compress(data["V(r)"], surface_label="rho")
+    # yancc_dat["V_r(r)"] = grid.compress(data["V_r(r)"], surface_label="rho")
+
+    stored_energy, manta_pressure = manta_yancc_fun(grid, data)
     
     desc_pressure = grid.compress(data["p"], surface_label="rho")
     pressure_error = manta_pressure - desc_pressure
@@ -165,6 +194,12 @@ def objective_from_user_fun(grid, data):
     # optimization is easiest for least squares objectives, so instead of maximizing
     # stored energy we minimize 1/stored_energy^2 (the squaring happens later)
     return jnp.append(pressure_error, 1 / stored_energy)
+
+yancc_rho = yancc_wrapper.rho
+
+pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
+initial_pressure = Density(pressure_rho**2) * st_config["EdgeTemperature"] * (1.6e-19) * 1e20 * 1e3
+desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 
 def pressure_constraint_fun(params):
     # function to fix dp/dr=0 at axis and p=0 at edge
@@ -177,12 +212,14 @@ def pressure_constraint_fun(params):
 
 pressure_constraint_target = jnp.array([0.0, 0.0])
 
-rho = st.yancc_wrapper.rho
+rho = yancc_wrapper.rho
 print(len(rho))
 # initial optimization just to get self consistent pressure with fixed initial boundary
 pressure_error_weight = jnp.full(len(rho), 1)
 stored_energy_weight = 0
 objective_from_user_weight = jnp.append(pressure_error_weight, stored_energy_weight)
+
+grid = yancc_wrapper.grid
 
 objectives = [
     ObjectiveFromUser(
@@ -190,8 +227,8 @@ objectives = [
         eq,
         target=0,
         weight=objective_from_user_weight,
-        grid=st.yancc_wrapper.grid,
-        deriv_mode="rev", 
+        grid= grid,
+        deriv_mode="fwd", 
         use_jit = False # need this assuming manta only has vjp, if using jvp switch to fwd
     )
 ]
@@ -245,8 +282,8 @@ objectives = [
         eq,
         target=0,
         weight=objective_from_user_weight,
-        grid=st.yancc_wrapper.grid,
-        deriv_mode="rev",  # need this assuming manta only has vjp, if using jvp switch to fwd
+        grid=grid,
+        deriv_mode="fwd",  # need this assuming manta only has vjp, if using jvp switch to fwd
         use_jit = False,
     ),
 ]
@@ -285,8 +322,8 @@ objectives = [
         eq,
         target=0,
         weight=objective_from_user_weight,
-        grid=st.yancc_wrapper.grid,
-        deriv_mode="rev",  # need this assuming manta only has vjp, if using jvp switch to fwd
+        grid=yancc_grid,
+        deriv_mode="fwd",  # need this assuming manta only has vjp, if using jvp switch to fwd
         use_jit = False,
     )
 ]

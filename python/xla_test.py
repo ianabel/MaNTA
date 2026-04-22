@@ -1,6 +1,5 @@
-import jax
 from FFIRunner import FFIRunner
-
+import jax
 import os
 import MaNTA
 
@@ -62,28 +61,30 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
     def run(self, tFinal = None):
     
         if (tFinal is not None):
-            self.runner.run(tFinal)
+            self.runner.Run(tFinal)
             # self.call_run(tFinal)
 
         else:
-            self.runner.run_ss()
+            self.runner.Run_ss()
 
 
     def runAdjointSolve(self):
 
         # G, G_p = io_callback(self.runner.runAdjointSolve, self.adjointoutput, ordered=True) 
-        G, G_p = self.runner.run_adjoint_solve()
+        G, G_p = self.runner.Run_adjoint_solve()
         return G, G_p
 
     def g(self, state, x, params):
         u = state["Variable"][0]
         return 0.5 * u * u
 
+    @eqx.filter_jit
     def sigma( self, index, state, x, t, params ):
         tprime = state["Derivative"]
         out = params.kappa * tprime[index]
         return out
     
+    @eqx.filter_jit
     def source( self, index, state, x, t, params ):
         return 10.0 * (1 - params.Centre)
   

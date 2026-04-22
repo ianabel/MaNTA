@@ -1,19 +1,19 @@
 import MaNTA
 
-import jax
 
 import os
-
-if "JAX_COMPILATION_CACHE_DIR" in os.environ:
-    print("Using cache directory: " + os.environ["JAX_COMPILATION_CACHE_DIR"])
-    jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
-    jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
-    jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
+import jax
+# if "JAX_COMPILATION_CACHE_DIR" in os.environ:
+#     print("Using cache directory: " + os.environ["JAX_COMPILATION_CACHE_DIR"])
+#     jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+#     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+#     jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
 #explain cache misses
 import jax.numpy as jnp
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import shard_map
 from jax.tree_util import tree_map
+from jax.experimental import io_callback
 import equinox as eqx
 
 # %%
@@ -27,7 +27,7 @@ from functools import partial
 
 from yancc_wrapper import yancc_data, flux
 
-# from FFIRunner import FFIRunner
+from FFIRunner import FFIRunner
 
 from typing import NamedTuple
 
@@ -71,6 +71,13 @@ shard_map_specs_wfield = (state_shard_specs, P(None),P(None),P(None),P(None))
 out_specs = {"Variable": P('ax',), "Derivative":  P('ax',), "Flux":  P('ax',), "Aux":  P('ax',), "Scalars":P( None)}
 data_sharding = NamedSharding(mesh, P("ax",))
 
+ops = MaNTA.runner_ffi_ops_cuda()
+
+
+name = "run_ss_ffi_cuda"
+jax.ffi.register_ffi_target(name, ops[name], platform="CUDA")
+
+
 """
 class StellaratorTransport
 
@@ -89,6 +96,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
         st_config = config["Stellarator"]
         self.points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
         self.params = StellaratorParams.from_config(st_config)
+
+        self.xL = solver_config["Lower_boundary"]
+        self.xR = solver_config["Upper_boundary"]
         self.yancc_wrapper = yancc_wrapper
         e = 1.6e-19
         self.pnorm = 1e20 * e * 1e3
@@ -99,12 +109,13 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         self.field, self.vprime = self.yancc_wrapper.get_fields()
         self.field_shard, self.vprime_shard = eqx.filter_shard((self.field, self.vprime), data_sharding)
+
         g = [self.StoredEnergy]
 
         self.adjointProblem = StellaratorAdjointProblem(self, g, self.yancc_wrapper, len(self.points))
-
-        # self.runner = FFIRunner(self, self.points, 1, self.adjointProblem.np, spatialParameters=True)
-        self.runner = MaNTA.Runner(self)
+        # self.runner = MaNTA.Runner(self)
+        self.runner = FFIRunner(self, self.points, 1, self.adjointProblem.np, spatialParameters=True)
+        # self.runner = MaNTA.Runner(self)
         self.runner.configure(solver_config)
 
         print("Successfully created StellaratorTransport object")
@@ -112,8 +123,11 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def run(self, tFinal = None):
         if (tFinal is not None):
             self.runner.run(tFinal)
-        else: 
-            self.runner.run_ss()
+        else:
+            # self.runner.run_ss()
+            out = io_callback(self.runner.run_ss, jax.ShapeDtypeStruct((),dtype=jnp.int32),ordered=True)()
+            print(out)
+            # self.runner.Run_ss()
 
 
     def runAdjointSolve(self):
@@ -121,7 +135,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         #     yancc_wrapper = yancc_data.from_other(field, grid, other=self.yancc_wrapper)
         #     self.run(yancc_wrapper=yancc_wrapper)
 
-        G, G_p = self.runner.runAdjointSolve()
+        G, G_p = self.runner.Run_adjoint_solve()
         return G, G_p
 
     def getPressure(self):
@@ -133,8 +147,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return 0.0
 
     def UpperBoundary(self, index, t):
-        return 1.5 * self.params.EdgeTemperature * self.Density(1.0)
-
+        return 1.5 * self.params.EdgeTemperature * self.yancc_wrapper.Density(self.xR)
+    
     def SigmaFn_v( self, index, states, positions, t):
 
         x = jnp.array(positions)
@@ -197,7 +211,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
     """
 
     def sigma( self, index, state, x, t, field, vprime, params ):
-        return -flux(state, x, field, vprime, self.yancc_wrapper) 
+        out = -flux(state, x, field, vprime, self.yancc_wrapper)
+        print(out) 
+        return out
 
     def source( self, index, state, x, t, params: NamedTuple ):
         return params.SourceHeight * jnp.exp(-(x - params.SourceCenter)**2 / (2 * params.SourceWidth**2))
@@ -206,18 +222,18 @@ class StellaratorTransport(MaNTA.TransportSystem):
         u = state["Variable"][0]
         return u * self.pnorm
     
-    @partial(jax.jit, static_argnums=(0,1))
+    @partial(jax.jit, static_argnums=(0,))
     def dSources_dPhi( self, index, state, x, t ):
         return jax.grad(self.Sources, argnums=1)(index, state, x, t)["Aux"]
     
-    @partial(jax.jit, static_argnums=(0,1))
+    @partial(jax.jit, static_argnums=(0,))
     def InitialValue( self, index, x ):
-        return 1.5 * self.params.EdgeTemperature * self.Density(x)
+        return 1.5 * self.params.EdgeTemperature * self.yancc_wrapper.Density(x)
     
-    @partial(jax.jit, static_argnums=(0,1))
+    @partial(jax.jit, static_argnums=(0,))
     def InitialDerivative( self, index, x ):
         return jax.grad(self.InitialValue, argnums=1)(index, x)
-    
+        
     def aux( self, index, state, x, t, params: NamedTuple):
         pass
 
@@ -227,10 +243,6 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def AuxG( self, index, state, x, t):
         return self.aux(index, state, x, t, self.params)
 
-    # Constant density function
-    def Density(self, x):
-        return (self.params.n0 - self.params.EdgeDensity) * (1 - x*x) + self.params.EdgeDensity
-    
     """
     Create the adjoint problem associated with this transport system
     

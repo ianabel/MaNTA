@@ -117,6 +117,7 @@ static ffi::Error get_solution_ffi_impl(void *ctx, ffi::Buffer<i_dtype> var, std
         return ffi::Error::Success();
     }
 };
+
 #ifdef CUDA
 static ffi::Error run_ffi_impl_cuda(cudaStream_t stream, void *ctx, ffi::AnyBuffer args)
 {
@@ -130,12 +131,15 @@ static ffi::Error run_ffi_impl_cuda(cudaStream_t stream, void *ctx, ffi::AnyBuff
     return ffi::Error::Success();
 };
 
-static ffi::Error run_ffi_ss_impl_cuda(cudaStream_t stream, void *ctx)
+static ffi::Error run_ffi_ss_impl_cuda(cudaStream_t stream, void *ctx, ffi::Result<ffi::BufferR0<i_dtype_cuda>> is_err)
 {
-
-    auto runner = static_cast<PyRunner *>(ctx);
     py::gil_scoped_acquire gil;
+    auto runner = static_cast<PyRunner *>(ctx);
+
     runner->run_ss();
+    int err = 0;
+    cudaMemcpyAsync(is_err->typed_data(), &err, sizeof(int), cudaMemcpyHostToDevice, stream);
+    cudaStreamSynchronize(stream);
     return ffi::Error::Success();
 };
 
@@ -251,7 +255,6 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(get_solution_ffi_ops, get_solution_ffi_impl,
                                   .Ret<ffi::BufferR1<fp_dtype>>());
 
 #ifdef CUDA
-
 XLA_FFI_DEFINE_HANDLER_SYMBOL(run_ffi_ops_cuda, run_ffi_impl_cuda,
                               ffi::Ffi::Bind()
                                   .Ctx<ffi::PlatformStream<cudaStream_t>>()
@@ -261,7 +264,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(run_ffi_ops_cuda, run_ffi_impl_cuda,
 XLA_FFI_DEFINE_HANDLER_SYMBOL(run_ss_ffi_ops_cuda, run_ffi_ss_impl_cuda,
                               ffi::Ffi::Bind()
                                   .Ctx<ffi::PlatformStream<cudaStream_t>>()
-                                  .Attr<ffi::Pointer<void>>("obj"));
+                                  .Attr<ffi::Pointer<void>>("obj")
+                                  .Ret<ffi::BufferR0<i_dtype_cuda>>());
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(run_adjoint_solve_ffi_ops_cuda, run_adjoint_ffi_impl_cuda,
                               ffi::Ffi::Bind()

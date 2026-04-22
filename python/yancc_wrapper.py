@@ -2,10 +2,10 @@ import os
 import jax
 os.environ.pop("LD_LIBRARY_PATH", None) # Required for Perlmutter to work properly
 
-if "JAX_COMPILATION_CACHE_DIR" in os.environ:
-    jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
-    jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
-    jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
+# if "JAX_COMPILATION_CACHE_DIR" in os.environ:
+#     jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+#     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+#     jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
 
 import yancc
 from yancc.field import Field
@@ -115,7 +115,8 @@ class yancc_data(eqx.Module):
         
         print("Initializing yancc wrapper")
         if (eq is None):
-            eq = desc.examples.get("W7-X")
+            print("No equilibrium passed, using ESTELL example")
+            eq = desc.examples.get("ESTELL")
 
         if (grid is None):
             rho = jnp.linspace(0,1,len(Volume))
@@ -142,17 +143,42 @@ class yancc_data(eqx.Module):
         fields = tree_map(lambda *vals: jnp.stack(vals), *fields)
         r = jnp.array(r)
         Vprim = jnp.array(dVndr(r))
-
+    
         return cls(Density=Density, fields=fields, grid = grid, Vprim=Vprim, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na, rho=r)
 
+    # for constructing from data passed by DESC
     @classmethod
-    def from_fields(cls, fields, grid, Density, nNorm=1e20, Tnorm=1e3, nx=5, na=43):
+    def from_data(cls, data, grid, Density, nNorm=1e20, Tnorm=1e3, nx=5, na=43):
 
-        V = grid.compress(fields['V(r)'])
-        dVdr = grid.compress(fields['V_r(r)'])
+        yancc_dat = {
+            "B_sup_t": data["B^theta"],
+            "B_sup_z": data["B^zeta"],
+            "B_sub_t": data["B_theta"],
+            "B_sub_z": data["B_zeta"],
+            "Bmag": data["|B|"],
+            "dBdt": data["|B|_t"],
+            "dBdz": data["|B|_z"],
+            "sqrtg": data["sqrt(g)"],
+        }
+
+        yancc_dat = {
+            key: grid.meshgrid_reshape(val, "rtz") for key, val in yancc_dat.items()
+        }
+
+        yancc_dat["Psi"] = grid.compress(
+            data["Psi"] / grid.nodes[:, 0] ** 2, surface_label="rho"
+        )
+        yancc_dat["a_minor"] = jnp.full(grid.num_rho, data["a"])
+        yancc_dat["R_major"] = jnp.full(grid.num_rho, data["R0"])
+        yancc_dat["iota"] = grid.compress(data["iota"], surface_label="rho")
+        yancc_dat["rho"] = grid.compress(grid.nodes[:, 0], surface_label="rho")
+        
+        V = grid.compress(data['V(r)'])
+        dVdr = grid.compress(data['V_r(r)'])
         dVndr = dVdr/V[-1] # normalize
 
-        return cls(Density=Density, fields=fields, grid=grid, Vprim = dVndr, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
+        fields = jax.vmap(lambda d: yancc.field.Field(**d, NFP=grid.NFP))(yancc_dat)
+        return cls(Density=Density, fields=fields, rho=yancc_dat["rho"], grid=grid, Vprim = dVndr, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
 
     @classmethod 
     def from_other(cls, fields, grid, other):
@@ -177,8 +203,8 @@ dict
 
 @eqx.filter_jit
 def flux(state, x, field, Vprim, yancc_params: yancc_data):
-    print("calling flux")
     # For now we only evolve the ion energy
+    # print("tracing flux")
     p_i = 2. / 3. * state["Variable"][0]
     p_i_prime = 2. / 3. * state["Derivative"][0]
 
@@ -198,8 +224,10 @@ def flux(state, x, field, Vprim, yancc_params: yancc_data):
 
     _, _, fluxes, _  = solve_dke(field, yancc_params.pitchgrid, yancc_params.speedgrid, species, Erho, verbose = False)
     #assert stats['res'] < 1e-5
+    print("traced flux")
+    print(fluxes)
     fout = fluxes['<heat_flux>'][0] * Vprim / (yancc_params.FluxNorm)
-    print("flux computed")
+
     return fout
     
 
