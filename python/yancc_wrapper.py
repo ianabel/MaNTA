@@ -2,10 +2,10 @@ import os
 import jax
 os.environ.pop("LD_LIBRARY_PATH", None) # Required for Perlmutter to work properly
 
-# if "JAX_COMPILATION_CACHE_DIR" in os.environ:
-#     jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
-#     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
-#     jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
+if "JAX_COMPILATION_CACHE_DIR" in os.environ:
+    jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+    jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+    jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
 
 import yancc
 from yancc.field import Field
@@ -116,7 +116,7 @@ class yancc_data(eqx.Module):
         print("Initializing yancc wrapper")
         if (eq is None):
             print("No equilibrium passed, using ESTELL example")
-            eq = desc.examples.get("ESTELL")
+            eq = desc.examples.get("W7-X")
 
         if (grid is None):
             rho = jnp.linspace(0,1,len(Volume))
@@ -201,7 +201,6 @@ dict
     Fluxes computed by yancc, normalized to be dimensionless
 """
 
-@eqx.filter_jit
 def flux(state, x, field, Vprim, yancc_params: yancc_data):
     # For now we only evolve the ion energy
     # print("tracing flux")
@@ -224,7 +223,6 @@ def flux(state, x, field, Vprim, yancc_params: yancc_data):
 
     _, _, fluxes, _  = solve_dke(field, yancc_params.pitchgrid, yancc_params.speedgrid, species, Erho, verbose = False)
     #assert stats['res'] < 1e-5
-    print("traced flux")
     print(fluxes)
     fout = fluxes['<heat_flux>'][0] * Vprim / (yancc_params.FluxNorm)
 

@@ -205,6 +205,7 @@ def pressure_constraint_fun(params):
     # function to fix dp/dr=0 at axis and p=0 at edge
     # can modify this for other BC (eg fix p at rho=0.8)
     p_l = params["p_l"]
+    print(p_l)
     dp0 = desc_pressure(Grid(jnp.zeros((1, 3)), jitable=True), p_l, dr=1)
     p1 = desc_pressure(Grid(jnp.zeros((1, 3)).at[0, 0].set(1.0), jitable=True), p_l)
     return jnp.array([dp0, p1]).squeeze()
@@ -322,7 +323,7 @@ objectives = [
         eq,
         target=0,
         weight=objective_from_user_weight,
-        grid=yancc_grid,
+        grid=grid,
         deriv_mode="fwd",  # need this assuming manta only has vjp, if using jvp switch to fwd
         use_jit = False,
     )

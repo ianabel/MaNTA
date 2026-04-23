@@ -10,6 +10,7 @@ from VectorizedTransportSystem import VectorizedTransportSystem
 from JAXAdjointProblem import JAXAdjointProblem
 
 
+
 import jax.numpy as jnp
 
 import equinox as eqx
@@ -19,6 +20,8 @@ class LinearDiffusionParams(NamedTuple):
     InitialHeight: float
     kappa: float
     
+flux_function = jax.jit(lambda q : q)
+
 class JAXLinearDiffusion(VectorizedTransportSystem):
     def __init__(self, params, restart= False):
         super().__init__()
@@ -51,7 +54,8 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
 
         self.runner = FFIRunner(self, self.points, self.adjointProblem.ng, self.adjointProblem.np)
 
-        self.runner.configure(config)
+        jax.debug.callback(lambda : self.runner.configure(config), ordered=True)
+
 
 
         # self.runner.setAdjointProblem(self.adjointProblem)
@@ -65,7 +69,7 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
             # self.call_run(tFinal)
 
         else:
-            self.runner.Run_ss()
+            jax.debug.callback(self.runner.run_ss)
 
 
     def runAdjointSolve(self):
@@ -81,7 +85,7 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
     @eqx.filter_jit
     def sigma( self, index, state, x, t, params ):
         tprime = state["Derivative"]
-        out = params.kappa * tprime[index]
+        out = params.kappa * flux_function(tprime[index])
         return out
     
     @eqx.filter_jit
@@ -112,10 +116,12 @@ ld.run()
 # u = ld.runner.get_profile(0)
 # print(u)
 
+
+
 @jax.custom_jvp
 def fun(params):
     ld = JAXLinearDiffusion(params, restart = True)
-    ld.run()
+
     G, G_p = ld.runAdjointSolve()
     return G[0]
 

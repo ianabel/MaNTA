@@ -1,13 +1,14 @@
 import MaNTA
 
-
 import os
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".40"
+from FFIRunner import FFIRunner
 import jax
-# if "JAX_COMPILATION_CACHE_DIR" in os.environ:
-#     print("Using cache directory: " + os.environ["JAX_COMPILATION_CACHE_DIR"])
-#     jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
-#     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
-#     jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
+if "JAX_COMPILATION_CACHE_DIR" in os.environ:
+    print("Using cache directory: " + os.environ["JAX_COMPILATION_CACHE_DIR"])
+    jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+    jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+    jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
 #explain cache misses
 import jax.numpy as jnp
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
@@ -27,7 +28,7 @@ from functools import partial
 
 from yancc_wrapper import yancc_data, flux
 
-from FFIRunner import FFIRunner
+
 
 from typing import NamedTuple
 
@@ -78,6 +79,7 @@ name = "run_ss_ffi_cuda"
 jax.ffi.register_ffi_target(name, ops[name], platform="CUDA")
 
 
+
 """
 class StellaratorTransport
 
@@ -112,21 +114,24 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         g = [self.StoredEnergy]
 
+        self.nc_flux = jax.jit(flux)
+        # self.nc_flux = eqx.filter_jit(flux).trace()
+        
         self.adjointProblem = StellaratorAdjointProblem(self, g, self.yancc_wrapper, len(self.points))
         # self.runner = MaNTA.Runner(self)
         self.runner = FFIRunner(self, self.points, 1, self.adjointProblem.np, spatialParameters=True)
         # self.runner = MaNTA.Runner(self)
-        self.runner.configure(solver_config)
+        io_callback(lambda : self.runner.configure(solver_config), [], ordered=True)
 
         print("Successfully created StellaratorTransport object")
 
     def run(self, tFinal = None):
         if (tFinal is not None):
-            self.runner.run(tFinal)
+            self.runner.Run(tFinal)
         else:
-            # self.runner.run_ss()
-            out = io_callback(self.runner.run_ss, jax.ShapeDtypeStruct((),dtype=jnp.int32),ordered=True)()
-            print(out)
+            # eqx.filter_pure_callback(self.runner.run_ss, [], result_shape_dtypes=[])
+            # io_callback(self.runner.Run_ss, [], ordered=True)()
+            jax.debug.callback(self.runner.run_ss)
             # self.runner.Run_ss()
 
 
@@ -211,9 +216,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
     """
 
     def sigma( self, index, state, x, t, field, vprime, params ):
-        out = -flux(state, x, field, vprime, self.yancc_wrapper)
-        print(out) 
-        return out
+        return -self.nc_flux(state, x, field, vprime, self.yancc_wrapper)
 
     def source( self, index, state, x, t, params: NamedTuple ):
         return params.SourceHeight * jnp.exp(-(x - params.SourceCenter)**2 / (2 * params.SourceWidth**2))
