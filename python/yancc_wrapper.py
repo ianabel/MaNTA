@@ -14,7 +14,6 @@ from yancc.species import LocalMaxwellian
 from yancc.solve import solve_dke
 
 from scipy.constants import elementary_charge, mu_0, proton_mass
-
 import jax.numpy as jnp
 from jax.tree_util import tree_map
 import equinox as eqx
@@ -27,6 +26,7 @@ from typing import Optional
 # Remove LD_LIBRARY_PATH to avoid conflicts with yancc's C++ extensions
 
 import desc
+
 import interpax
 
 Lnorm = 1.0 # Normalization length in meters
@@ -49,7 +49,7 @@ class yancc_data(eqx.Module):
 
     """
 
-    fields: eqx.Module 
+    fields: eqx.Module
     fields_unstacked: list[eqx.Module] # list of field objects at each radial point 
     grid: eqx.Module
     pitchgrid: eqx.Module
@@ -181,12 +181,12 @@ class yancc_data(eqx.Module):
         return cls(Density=Density, fields=fields, rho=yancc_dat["rho"], grid=grid, Vprim = dVndr, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
 
     @classmethod 
-    def from_other(cls, fields, grid, other):
-        return cls(Density=other.Density, fields=fields, grid=grid, Vprim = other.Vprim, rho=other.rho, nNorm=other.nNorm, Tnorm=other.Tnorm, nx=other.nx, na=other.na)
+    def from_other(cls, fields_, grid_, other):
+
+        return cls(Density=other.Density, fields=fields_, grid=grid_, Vprim = other.Vprim, rho=other.rho, nNorm=other.nNorm, Tnorm=other.Tnorm, nx=other.nx, na=other.na)
 
     def get_fields(self):
         return self.fields, self.Vprim
-
 
 # to avoid any surprises with jitting, we pass all the data as arguments rather than storing anything in the wrapper object
 """
@@ -200,12 +200,12 @@ Returns
 dict
     Fluxes computed by yancc, normalized to be dimensionless
 """
-
+@eqx.filter_jit
 def flux(state, x, field, Vprim, yancc_params: yancc_data):
     # For now we only evolve the ion energy
     # print("tracing flux")
-    p_i = 2. / 3. * state["Variable"][0]
-    p_i_prime = 2. / 3. * state["Derivative"][0]
+    p_i = 2. / 3. * state.Variable[0]
+    p_i_prime = 2. / 3. * state.Derivative[0]
 
     dndrho = jax.grad(yancc_params.Density, argnums=0)(x)*Vprim
     Erho = 0.0
@@ -223,7 +223,7 @@ def flux(state, x, field, Vprim, yancc_params: yancc_data):
 
     _, _, fluxes, _  = solve_dke(field, yancc_params.pitchgrid, yancc_params.speedgrid, species, Erho, verbose = False)
     #assert stats['res'] < 1e-5
-    print(fluxes)
+    # print(fluxes)
     fout = fluxes['<heat_flux>'][0] * Vprim / (yancc_params.FluxNorm)
 
     return fout

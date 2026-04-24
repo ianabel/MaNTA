@@ -1,3 +1,4 @@
+# %%
 from scipy.constants import mu_0
 
 import MaNTA
@@ -33,7 +34,11 @@ from desc.profiles import SplineProfile
 
 import equinox as eqx
 import jax
+jax.clear_caches()
 import jax.numpy as jnp
+
+
+# %%
 
 st_config = {
     "SourceCenter": 0.0,
@@ -54,7 +59,7 @@ solver_config = {
     "Lower_boundary": 0.0,
     "Upper_boundary": 0.9,
     "Relative_tolerance": 0.01,
-    "delta_t": 0.01,
+    "delta_t": 0.001,
     "restart": True,
     "solveAdjoint": False, 
 }
@@ -66,70 +71,32 @@ config = {
 
 Density = lambda x : (st_config["n0"] - st_config["EdgeDensity"]) * (1 - x * x) + st_config["EdgeDensity"]
 
-# create initial surface. Aspect ratio ~ 6, circular cross section with slight
-# axis torsion to make it nonplanar
-# surf = FourierRZToroidalSurface(
-#     R_lmn=[1, 0.166, 0.1],
-#     Z_lmn=[-0.166, -0.1],
-#     modes_R=[[0, 0], [1, 0], [0, 1]],
-#     modes_Z=[[-1, 0], [0, -1]],
-#     NFP=2,
-# )
+points =  MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
 
-
-
-# grid_points =  jnp.linspace(0, 1, solver_config["Grid_size"] * (solver_config["Polynomial_degree"] + 1))
-# # change the rho coordinates here to wherever manta needs to evaluate yancc fluxes
-# yancc_rho = grid_points
+yancc_rho = jnp.array(points)
 yancc_ntheta = 17
 yancc_nzeta = 33
 
-
-
-# # to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
-# # + axis and lcfs
-# # initial pressure is all zeros, can change this if desired
-
-
-# # create initial equilibrium. Psi chosen to give B ~ 1 T.
-# # M=N=4 is fine for quick testing, for actual optimization may want to increase to ~8-10
-# eq = Equilibrium(M=4, N=4, Psi=0.087, surface=surf, pressure=desc_pressure)
-
-yancc_rho = jnp.array([0.2, 0.4, 0.6, 0.8])
-
+# to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
+# + axis and lcfs
+# initial pressure is all zeros, can change this if desired
 pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
-initial_pressure = Density(pressure_rho**2) * st_config["EdgeTemperature"] * (1.6e-19) * 1e20 * 1e3
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
-
-
 
 eq_est = desc.examples.get("ESTELL")
 surf = eq_est.get_surface_at(rho=1)
 eq = Equilibrium(M=4, N=4, Psi=0.087, surface=surf, pressure=desc_pressure)
 eq = eq.solve(x_scale="ess")[0]
-# # store initial equilibrium for comparison later
-
-yancc_desc_grid = LinearGrid(
-    rho=yancc_rho, theta=yancc_ntheta, zeta=yancc_nzeta, NFP=eq.NFP
-)
 
 eq_init = eq.copy()
 
-
-# yancc_grid = desc.grid.LinearGrid(rho=yancc_rho, M=eq_init.M_grid, N = eq_init.N_grid, NFP=eq_init.NFP)
-points =  MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
-# yancc_wrapper = yancc_data.from_eq(points, grid = yancc_grid,rho = yancc_rho, Density=Density, eq=eq_init, nt = yancc_ntheta, nz = yancc_nzeta)
-yancc_wrapper = yancc_data.from_eq(points, eq=eq_init, Density=Density,nt=yancc_ntheta,nz=yancc_nzeta)
-
-yancc_rho = yancc_wrapper.rho
+yancc_wrapper = yancc_data.from_eq(points, eq=eq_init, Density=Density)
 
 V0 = eq.compute("V")["V"]
 
 st = StellaratorTransport(config, yancc_wrapper = yancc_wrapper)
 st.run()
 
-config["Solver"]["restart"] = True
-config["Solver"]["solveAdjoint"] = True
 
 @eqx.filter_custom_jvp
 def Objective(data, grid):
@@ -152,7 +119,6 @@ def Objective(data, grid):
         "Stellarator": st_config,
         "Solver": solver_config,
     }
-
     st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
     st.run()
     G, G_p = st.runAdjointSolve()
@@ -165,6 +131,7 @@ def Objective(data, grid):
 def Objective_jvp(primals, tangents):
     data, grid = primals
     field_dot, _ = tangents
+
     yancc_wrapper = yancc_data.from_data(data, grid, Density=Density)
 
     solver_config = {
@@ -184,7 +151,6 @@ def Objective_jvp(primals, tangents):
         "Stellarator": st_config,
         "Solver": solver_config,
     }
-
     st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
     st.run()
     G, G_p = st.runAdjointSolve()
@@ -197,17 +163,7 @@ def Objective_jvp(primals, tangents):
 def manta_yancc_fun(grid, data):
 
     stored_energy, pressure = Objective(data, grid) 
-    ## run manta here to get steady state profiles given python list of yancc field objects
-    # returns stored energy as a scalar, and an array of the steady state pressure at the
-    # radial points of yancc/desc grid defined below
-    # if needed we can generalize this to return pressure at different points from where
-    # fluxes are calculated
-    # as a dummy placeholder for testing, we just use the beta*B^2 energy/pressure from yancc fields
-    # beta = 1e-2
-    # pressure_profile_at_yancc_desc_grid_rho_pts = jnp.array(
-    #     [beta * f.Bmag ** 2 / (2 * mu_0) * (1 - f.rho) ** 2 for f in yancc_fields]
-    # )
-    # stored_energy = jnp.sum(pressure_profile_at_yancc_desc_grid_rho_pts)
+
     return stored_energy, pressure
 
 
@@ -222,13 +178,27 @@ def objective_from_user_fun(grid, data):
     # stored energy we minimize 1/stored_energy^2 (the squaring happens later)
     return jnp.append(pressure_error, 1 / stored_energy)
 
+# %%
+
+yancc_rho = yancc_wrapper.rho
+pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
+desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
+
+# grid where desc needs to evaluate field for yancc/manta
+yancc_desc_grid = LinearGrid(
+    rho=yancc_rho, theta=yancc_ntheta, zeta=yancc_nzeta, NFP=eq.NFP
+)
+
+# grid where desc needs to evaluate field for yancc/manta
+yancc_desc_grid = LinearGrid(
+    rho=yancc_rho, theta=yancc_ntheta, zeta=yancc_nzeta, NFP=eq.NFP
+)
 
 
 def pressure_constraint_fun(params):
     # function to fix dp/dr=0 at axis and p=0 at edge
     # can modify this for other BC (eg fix p at rho=0.8)
     p_l = params["p_l"]
-    print(p_l)
     dp0 = desc_pressure(Grid(jnp.zeros((1, 3)), jitable=True), p_l, dr=1)
     p1 = desc_pressure(Grid(jnp.zeros((1, 3)).at[0, 0].set(1.0), jitable=True), p_l)
     return jnp.array([dp0, p1]).squeeze()
@@ -241,16 +211,14 @@ pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 1)
 stored_energy_weight = 0
 objective_from_user_weight = jnp.append(pressure_error_weight, stored_energy_weight)
 
-
 objectives = [
     ObjectiveFromUser(
         objective_from_user_fun,
         eq,
         target=0,
         weight=objective_from_user_weight,
-        grid= yancc_desc_grid,
-        deriv_mode="fwd", 
-        use_jit = False # need this assuming manta only has vjp, if using jvp switch to fwd
+        grid=yancc_desc_grid,
+        deriv_mode="fwd",  # need this assuming manta only has vjp, if using jvp switch to fwd
     )
 ]
 
@@ -290,7 +258,7 @@ eq_self_consistent_pressure = eq.copy()
 
 # other objectives are non-dimensionalized, so weights should account for that
 # and handle relative weighting, this will likely need trial and error
-pressure_error_weight = jnp.full(len(yancc_rho), 10)
+pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 10)
 stored_energy_weight = 1000
 objective_from_user_weight = jnp.append(pressure_error_weight, stored_energy_weight)
 
@@ -305,7 +273,6 @@ objectives = [
         weight=objective_from_user_weight,
         grid=yancc_desc_grid,
         deriv_mode="fwd",  # need this assuming manta only has vjp, if using jvp switch to fwd
-        use_jit = False,
     ),
 ]
 constraints = [
@@ -333,7 +300,7 @@ eq_optimized = eq.copy()
 
 
 # do a final pass with just the self consistency part to make sure profiles match
-pressure_error_weight = jnp.full(len(yancc_rho), 1)
+pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 1)
 stored_energy_weight = 0
 objective_from_user_weight = jnp.append(pressure_error_weight, stored_energy_weight)
 
@@ -345,7 +312,6 @@ objectives = [
         weight=objective_from_user_weight,
         grid=yancc_desc_grid,
         deriv_mode="fwd",  # need this assuming manta only has vjp, if using jvp switch to fwd
-        use_jit = False,
     )
 ]
 
@@ -377,4 +343,13 @@ eq, info_out = eq.optimize(
 )
 eq_optimized_self_consistent = eq.copy()
 
+# %%
 eq_optimized_self_consistent.save("optimized_equilibrium.h5")
+
+# %%
+
+
+# %%
+
+
+
