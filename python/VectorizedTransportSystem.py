@@ -5,12 +5,33 @@ import MaNTA
 from JAXAdjointProblem import JAXAdjointProblem
 from typing import NamedTuple, Any
 from functools import partial
+from State import State
 """
 JAX-based transport system base class that overloads MaNTA TransportSystem.
 Enables automatic differentiation of sigma and source terms using JAX.
 """
-vmap_axes = ({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0)
-    
+vmap_axes = (State.vmap_axes(), 0)
+
+def MaNTA_Decorator(func):
+    def wrapper(self, index, states, positions, *args):
+        states_ = State.from_manta(states)
+        positions_ = jnp.array(positions)
+
+        # def _wrap_shard(self, *args):
+            
+        #     args_s = tuple(jax.device_put(arg, data_sharding) if not jnp.isscalar(arg) else jax.device_put(arg, static_sharding) for arg in args)
+        #     return func(self, *args_s)
+        
+        res = func(self, index, states_, positions_, *args)
+        print("before return")
+        print(res)
+        if (isinstance(res, State)):
+            return res.to_manta()
+        else: 
+            return res
+    return wrapper
+
+
 # Base class for JAX-based transport systems
 class VectorizedTransportSystem(MaNTA.TransportSystem):
     def __init__(self):
@@ -28,31 +49,29 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
 
     def UpperBoundary(self, index, t):
         pass
-
-    @partial(jax.jit, static_argnums=(0,))
-    def SigmaFn_v( self, index, states, positions, t):
-        #print(states)
     
-        x = jnp.array(positions)
-        return jax.vmap(lambda s, p : self.sigma(index, s, p, t, self.params), in_axes=(vmap_axes))(states, x)
+    @MaNTA_Decorator
+    def SigmaFn_v( self, index, states, positions, t):
+        print(states)
 
-    @partial(jax.jit, static_argnums=(0,))
+    
+        return jax.vmap(lambda s, p : self.sigma(index, s, p, t, self.params), in_axes=(vmap_axes))(states, positions)
+
+    @MaNTA_Decorator
     def Sources_v( self, index, states, positions, t ):
-        x = jnp.array(positions)
-        return jax.vmap(lambda s, p : self.source(index, s, p, t, self.params), in_axes=(vmap_axes))(states, x)
-        
-    @partial(jax.jit, static_argnums=(0,))
+    
+        return jax.vmap(lambda s, p : self.source(index, s, p, t, self.params), in_axes=(vmap_axes))(states, positions)
+    
+    @MaNTA_Decorator
     def dSigma(self, index, states, positions, t):
-        x = jnp.array(positions)
-        out =  jax.vmap(lambda s, p: jax.grad(self.sigma, argnums=1)(index, s, p, t, self.params), in_axes=(vmap_axes))(states, x)
-        out["Scalars"] = []
+
+        out =  jax.vmap(lambda s, p: jax.grad(self.sigma, argnums=1)(index, s, p, t, self.params), in_axes=(vmap_axes))(states, positions)
         return out
     
-    @partial(jax.jit, static_argnums=(0,))
+    @MaNTA_Decorator
     def dSources(self, index, states, positions, t):
-        x = jnp.array(positions)
-        out =  jax.vmap(lambda s, p: jax.grad(self.source, argnums=1)(index, s, p, t, self.params), in_axes=(vmap_axes))(states, x)
-        out["Scalars"] = []
+
+        out =  jax.vmap(lambda s, p: jax.grad(self.source, argnums=1)(index, s, p, t, self.params), in_axes=(vmap_axes))(states, positions)
         return out
 
     

@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import equinox as eqx
 import functools
 from Stellarator import StellaratorTransport
-
+import yancc
 from yancc_wrapper import yancc_data
 
 
@@ -22,7 +22,6 @@ def abstract_eval(yin):
     np = len(flat)-1
 
     return jax.ShapeDtypeStruct((),jnp.float32), jax.ShapeDtypeStruct((npoints, np), jnp.float32), jax.ShapeDtypeStruct((npoints,), jnp.float32)
-
 
 def make_objective(config, vectorized=False):
     """Make an external (python) function work with JAX.
@@ -48,31 +47,38 @@ def make_objective(config, vectorized=False):
         def wrapper(*args, **kwargs):
             result_shape_dtype = abstract_eval(*args, **kwargs)
             return io_callback(
-                func, result_shape_dtype, *args, **kwargs
+                func, result_shape_dtype, *args, ordered=False, **kwargs
             )
 
         return wrapper
     
-    _f_wrapped = wrap_pure_callback(functools.partial(StellaratorFun, config))
-    
+    _f_wrapped = functools.partial(StellaratorFun, config)
+
     @eqx.filter_custom_jvp
-    def objective(fields, grid, yin):
-        yancc_wrapper = yancc_data.from_other(fields, grid, yin)
-        G, G_p, pi = _f_wrapped(yancc_wrapper)
-        return G, pi
+    def _objective_base(fields, grid, Vprime):
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vprime)
 
-    @objective.def_jvp
-    def objective_jvp(primals, tangents):
-        fields, grid, yin = primals
+        G, G_p, pi = _f_wrapped(yancc_wrapper)
+        return G, pi 
+
+
+    @_objective_base.def_jvp
+    def _objective_base_jvp(primals, tangents):
+        fields, grid, Vprime = primals
         field_dot,_,_ = tangents
-        yancc_wrapper = yancc_data.from_other(fields, grid, yin)
+    
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vprime)
         G, G_p, pi = _f_wrapped(yancc_wrapper)
-
+ 
         field_dot_flatten,_ = jax.flatten_util.ravel_pytree(field_dot)
+        G_p_flat = G_p.flatten()
+        lg = len(G_p_flat)
+        lf = len(field_dot_flatten)
 
-        return (G, pi), (jnp.float32(jnp.dot(G_p.flatten(), field_dot_flatten)), None)
+        field_dot_pad = jnp.pad(field_dot_flatten, (lg-lf,0), mode='constant') 
+        return (G, pi), (jnp.float32(jnp.dot(G_p_flat, field_dot_pad)), None)
 
-    return objective
+    return _objective_base
 
 
 

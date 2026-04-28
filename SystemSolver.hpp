@@ -121,18 +121,18 @@ class SystemSolver
         // Initialise
         void runSolver(double);
 
-        // Function for creating solver lambda for use in PyRunner
-        std::function<void(double)> makeSolver(SUNLinearSolver &LS,   // linear solver memory structure
-                                               SUNMatrix& sunMat,     
-                                               void *IDA_mem,         // IDA memory structure
-                                               int &retval,
-                                               N_Vector &Y,           // vector for storing solution
-                                               N_Vector &dYdt,        // vector for storing time derivative of solution
-                                               N_Vector &constraints, // vector for storing constraints
-                                               N_Vector &id,          // vector for storing id (which elements are algebraic or differentiable)
-                                               N_Vector &res,         // vector for storing residual
-                                               N_Vector &absTolVec,   // vector for storing absolute tolerances
-                                               sunrealtype &tout, sunrealtype &tret, bool writeOutput = true); // return a callable solver object
+        // // Function for creating solver lambda for use in PyRunner
+        // std::function<void(double)> makeSolver(SUNLinearSolver &LS,   // linear solver memory structure
+        //                                        SUNMatrix& sunMat,     
+        //                                        void *IDA_mem,         // IDA memory structure
+        //                                        int &retval,
+        //                                        N_Vector &Y,           // vector for storing solution
+        //                                        N_Vector &dYdt,        // vector for storing time derivative of solution
+        //                                        N_Vector &constraints, // vector for storing constraints
+        //                                        N_Vector &id,          // vector for storing id (which elements are algebraic or differentiable)
+        //                                        N_Vector &res,         // vector for storing residual
+        //                                        N_Vector &absTolVec,   // vector for storing absolute tolerances
+        //                                        sunrealtype &tout, sunrealtype &tret, bool writeOutput = true); // return a callable solver object
 
         void setAdjointProblem(AdjointProblem *ap) { adjointProblem = ap; };
         void runAdjointSolve();
@@ -142,6 +142,8 @@ class SystemSolver
         void setTau(double tau) { tauc = tau; };
 
         void setInputFile(std::string const &fn) { inputFilePath = fn; };
+
+        void setUseCalcIC(bool in) { useCalcIC = in; };
 
         void setJacEvalY( N_Vector, N_Vector );
         int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
@@ -243,6 +245,8 @@ class SystemSolver
 
         // Really we should do init in the constructor and not need this flag. TODO
         bool initialised = false;
+
+        bool useCalcIC = true;
 
         double alpha = 1.0;
         bool testing = false;

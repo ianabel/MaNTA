@@ -31,6 +31,8 @@ static const map_t params = {{"restart", Parameter<bool>{.required = false, ._de
                              //
                              {"Grid_size", Parameter<int>{.required = true}},
                              //
+                             {"Grid_points", Parameter<std::vector<double>>{.required = false, ._default = {}}},
+                             //
                              {"tau", Parameter<double>{.required = false, ._default = 1.0}},
                              //
                              {"delta_t", Parameter<double>{.required = true}},
@@ -39,7 +41,7 @@ static const map_t params = {{"restart", Parameter<bool>{.required = false, ._de
                              //
                              {"Relative_tolerance", Parameter<double>{.required = false, ._default = 1e-3}},
                              //
-                             {"Absolute_tolerance", Parameter<std::vector<double>>{.required = false, ._default = {1e-2}}},
+                             {"Absolute_tolerance", Parameter<std::vector<double>>{.required = false, ._default = {1e-3}}},
                              //
                              {"MinStepSize", Parameter<double>{.required = false, ._default = 1e-7}},
                              //
@@ -51,7 +53,9 @@ static const map_t params = {{"restart", Parameter<bool>{.required = false, ._de
                              //
                              {"SteadyStateTolerance", Parameter<double>{.required = false, ._default = 1e-3}},
                              //
-                             {"WriteOutput", Parameter<bool>{.required = false, ._default = true}}};
+                             {"WriteOutput", Parameter<bool>{.required = false, ._default = true}},
+                             //
+                             {"useCalcIC", Parameter<bool>{.required = false, ._default = true}}};
 
 template <typename T>
 T getValueWithDefault(std::string key, const py::dict &d)
@@ -129,25 +133,39 @@ void PyRunner::configure(const py::dict &config)
     unsigned int k = 1;
     if (!isRestarting)
     {
-        // Solver parameters
-        double lBound, uBound, lowerBoundaryFraction, upperBoundaryFraction;
-        bool highGridBoundary;
-        int nCells;
 
         k = getValueWithDefault<unsigned int>("Polynomial_degree", config);
 
-        highGridBoundary = getValueWithDefault<bool>("High_Grid_Boundary", config);
-        lBound = getValueWithDefault<double>("Lower_boundary", config);
-        uBound = getValueWithDefault<double>("Upper_boundary", config);
+        auto CellBoundaries = getValueWithDefault<std::vector<double>>("Grid_points", config);
 
-        lowerBoundaryFraction = getValueWithDefault<double>("Lower_Boundary_Fraction", config);
-        upperBoundaryFraction = getValueWithDefault<double>("Upper_Boundary_Fraction", config);
+        if (CellBoundaries.size() > 0)
+        {
+            std::cerr << "INFO: Creating grid with cell boundaries at x = [";
+            for (const auto &p : CellBoundaries)
+                std::cerr << p << ", ";
+            std::cerr << "]" << std::endl;
 
-        nCells = getValueWithDefault<int>("Grid_size", config);
+            grid = std::make_unique<Grid>(CellBoundaries);
+        }
+        else
+        {
+            // Solver parameters
+            double lBound, uBound, lowerBoundaryFraction, upperBoundaryFraction;
+            bool highGridBoundary;
+            int nCells;
+            highGridBoundary = getValueWithDefault<bool>("High_Grid_Boundary", config);
+            lBound = getValueWithDefault<double>("Lower_boundary", config);
+            uBound = getValueWithDefault<double>("Upper_boundary", config);
 
-        std::cerr << "INFO: Creating grid with " << nCells << " cells from x = " << lBound << " to x = " << uBound << std::endl;
+            lowerBoundaryFraction = getValueWithDefault<double>("Lower_Boundary_Fraction", config);
+            upperBoundaryFraction = getValueWithDefault<double>("Upper_Boundary_Fraction", config);
 
-        grid = std::make_unique<Grid>(lBound, uBound, nCells, highGridBoundary, lowerBoundaryFraction, upperBoundaryFraction);
+            nCells = getValueWithDefault<int>("Grid_size", config);
+
+            std::cerr << "INFO: Creating grid with " << nCells << " cells from x = " << lBound << " to x = " << uBound << std::endl;
+
+            grid = std::make_unique<Grid>(lBound, uBound, nCells, highGridBoundary, lowerBoundaryFraction, upperBoundaryFraction);
+        }
     }
     else
     {
@@ -208,6 +226,7 @@ void PyRunner::configure(const py::dict &config)
 
     system->setNOutput(nOutput);
     system->setMinStepSize(dt_min);
+    system->setUseCalcIC(getValueWithDefault<bool>("useCalcIC", config));
 
     bool writeOutput = getValueWithDefault<bool>("WriteOutput", config);
     // Creation of solver function

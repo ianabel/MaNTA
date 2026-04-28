@@ -1,4 +1,5 @@
 import equinox as eqx
+import jax
 from jaxtyping import Array, ArrayLike, Float, Int
 import jax.numpy as jnp
 import numpy as np
@@ -31,12 +32,13 @@ class State(eqx.Module):
                    Scalars_=jnp.array(manta_state["Scalars"]))
     
     def to_manta(self):
+
         return {
-            "Variable": np.array(self.Variable),
-            "Derivative": np.array(self.Derivative),
-            "Flux": np.array(self.Flux),
-            "Aux": np.array(self.Aux),
-            "Scalars": np.array(self.Scalars)[0,:]
+            "Variable": np.asarray(self.Variable),
+            "Derivative": np.asarray(self.Derivative),
+            "Flux": np.asarray(self.Flux),
+            "Aux": np.asarray(self.Aux),
+            "Scalars": np.asarray([])
         }
     
     @staticmethod

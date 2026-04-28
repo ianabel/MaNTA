@@ -1,29 +1,39 @@
 import MaNTA
 
 import os
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".40"
-# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".60"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 # os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 from FFIRunner import FFIRunner
 import jax
-if "JAX_COMPILATION_CACHE_DIR" in os.environ:
-    print("Using cache directory: " + os.environ["JAX_COMPILATION_CACHE_DIR"])
-    jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
-    jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
-    jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
+jax.config.update("jax_enable_compilation_cache", False)
+# jax.config.update('jax_cpu_enable_async_dispatch', False)
+import equinox as eqx
+# jax.config.update("jax_log_compiles" ,True)
+# if "JAX_COMPILATION_CACHE_DIR" in os.environ:
+#     print("Using cache directory: " + os.environ["JAX_COMPILATION_CACHE_DIR"])
+#     jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+#     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+#     jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
 #explain cache misses
 import jax.numpy as jnp
 import numpy as np
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax.tree_util import tree_map
 from jax.experimental import io_callback
-import equinox as eqx
+
 P = PartitionSpec
 devices = jax.devices()
 print(devices)
-mesh = Mesh(devices, ('ax',),axis_types=(jax.sharding.AxisType.Auto,))
-data_sharding = NamedSharding(mesh, P("ax",))
+mesh = Mesh(devices, ('axis',),axis_types=(jax.sharding.AxisType.Auto,))
+data_sharding = NamedSharding(mesh, P("axis",))
+static_sharding = NamedSharding(mesh, P())
+
+from yancc.species import LocalMaxwellian
+from yancc.solve import solve_dke
 # %%
+
+
 
 from State import State
 
@@ -32,26 +42,45 @@ def MaNTA_Decorator(func):
         states_ = State.from_manta(states)
         positions_ = jnp.array(positions)
 
-        def _wrap_shard(self, index, states, positions, *args):
-            x_s = jax.device_put(positions,data_sharding)
-            states_s = jax.device_put(states, data_sharding)
-            # s_args = eqx.filter_shard((states, positions), data_sharding)
-            return func(self, index, states_s, x_s, *args)
+        def _wrap_shard(self, *args):
+            
+            args_s = tuple(jax.device_put(arg, data_sharding) if not jnp.isscalar(arg) else jax.device_put(arg, static_sharding) for arg in args)
+            return func(self, *args_s)
         
         res = _wrap_shard(self, index, states_, positions_, *args)
+
         if (isinstance(res, State)):
             return res.to_manta()
-        elif (isinstance(res, jax.Array)):
-            return np.array(res)
-        else:
+        else: 
             return res
     return wrapper
 
 from functools import partial
 
-from yancc_wrapper import yancc_data, flux
+from yancc_wrapper import yancc_data
+import yancc
 
 from typing import NamedTuple
+
+
+
+def put_on_gpu(tree):
+
+    def map_fn(leaf):
+        return leaf
+        # if not jnp.isscalar(leaf):
+        #     if (jnp.mod(leaf.shape[0], len(devices))==0):
+        #         return jax.device_put(leaf, data_sharding)
+        #     else:
+        #         return jax.device_put(leaf, static_sharding)
+        #     # return eqx.filter_shard(leaf, data_sharding)
+        #     # condition = jnp.mod(leaf.shape[0], len(devices)) == 0
+        #     # # lpad = (len(self.points) - leaf.shape[0],0)
+        #     # # print(lpad)
+        #     # return jax.lax.cond(condition, lambda leaf : jax.device_put(leaf, data_sharding), lambda leaf : jax.device_put(leaf, static_sharding), leaf)
+        # else:
+        #     return jax.device_put(leaf, static_sharding)
+    return jax.tree.map(map_fn, tree)
 
 
 def getStateAtIndex(states, i):
@@ -87,18 +116,13 @@ class StellaratorParams(NamedTuple):
 vmap_axes = (State.vmap_axes(), 0)
 vmap_axes_wfield = (None, State.vmap_axes(),0, None, 0, 0, None)
 vmap_axes_sources = (None, State.vmap_axes() ,0, None, None)
-# state_shard_specs = {"Variable": P('ax',), "Derivative":  P('ax',), "Flux":  P('ax',), "Aux":  P('ax',), "Scalars": P(None)}
-# shard_map_specs = (None, state_shard_specs, P('ax',), None, None)
-# shard_map_specs_wfield = (state_shard_specs, P(None),P(None),P(None),P(None))
-
-# out_specs = {"Variable": P('ax',), "Derivative":  P('ax',), "Flux":  P('ax',), "Aux":  P('ax',), "Scalars":P( None)}
-# data_sharding = NamedSharding(mesh, P("ax",))
 
 """
 class StellaratorTransport
 
 Computes sources and neoclassical fluxes (returned from yancc) as required by MaNTA
 """
+
 class StellaratorTransport(MaNTA.TransportSystem): 
     def __init__(self, config, yancc_wrapper : yancc_data):
         MaNTA.TransportSystem.__init__(self)
@@ -111,11 +135,14 @@ class StellaratorTransport(MaNTA.TransportSystem):
         solver_config = config["Solver"]
         st_config = config["Stellarator"]
         self.points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
-        self.params = StellaratorParams.from_config(st_config)
+
+        self.params = put_on_gpu(StellaratorParams.from_config(st_config))
+
 
         self.xL = solver_config["Lower_boundary"]
         self.xR = solver_config["Upper_boundary"]
-        self.yancc_wrapper = yancc_wrapper
+        self.yancc_wrapper = put_on_gpu(yancc_wrapper)#jax.device_put(yancc_wrapper, data_sharding)
+
         e = 1.6e-19
         self.pnorm = 1e20 * e * 1e3
 
@@ -124,7 +151,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
         # %%
 
         self.field, self.vprime = self.yancc_wrapper.get_fields()
-        self.field_shard, self.vprime_shard = eqx.filter_shard((self.field, self.vprime), data_sharding)
+        self.field_shard = put_on_gpu(self.field)
+        self.vprime_shard = jax.device_put(self.vprime, data_sharding) #put_on_gpu(self.field)
+        # self.field_shard, self.vprime_shard = eqx.filter_shard((self.field, self.vprime), data_sharding)
 
         g = [self.StoredEnergy]
 
@@ -141,25 +170,28 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     def run(self, tFinal = None):
         if (tFinal is not None):
-            self.runner.Run(tFinal)
+            self.runner.run(tFinal)
         else:
             # eqx.filter_pure_callback(self.runner.run_ss, [], result_shape_dtypes=[])
-            # jax.debug.callback(self.runner.run_ss,ordered=True)
-            self.runner.run_ss()
-            # self.runner.run_ss()
+            jax.debug.callback(self.runner.run_ss,ordered=True)
             # self.runner.Run_ss()
-
-
+            # io_callback(self.runner.run_ss, [], ordered=True)
+            # self.runner.run_ss()
+            # self.runner.run_ss()
+            # self.runner.Run_ss
     def runAdjointSolve(self):
         # if (field is not None):
         #     yancc_wrapper = yancc_data.from_other(field, grid, other=self.yancc_wrapper)
         #     self.run(yancc_wrapper=yancc_wrapper)
 
         G, G_p = self.runner.Run_adjoint_solve()
-        return G, G_p
+        return jnp.float32(G), jnp.float32(G_p)  
 
-    def getPressure(self):
-        ui = self.runner.get_profile(0)
+    def getPressure(self, points = None):
+        if points is None:
+            points = self.points
+
+        ui = jnp.float32(self.runner.get_profile(0, points))
 
         return 2./3. * ui * self.pnorm
 
@@ -167,7 +199,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return 0.0
 
     def UpperBoundary(self, index, t):
-        return 1.5 * self.params.EdgeTemperature * self.yancc_wrapper.Density(self.xR)
+        return 1.5 * self.params.EdgeTemperature * self.Density(self.xR)
     
     @MaNTA_Decorator
     def SigmaFn_v( self, index, states: State, positions, t ):
@@ -216,14 +248,42 @@ class StellaratorTransport(MaNTA.TransportSystem):
     """
 
     def sigma( self, index, state, x, t, field, vprime, params ):
-        return -flux(state, x, field, vprime, self.yancc_wrapper)
+        put = lambda x : jax.device_put(x, static_sharding)
+        n, nprime = put(jax.value_and_grad(self.Density)(x))
+
+        p_i = 2. / 3. * state.Variable[0]
+        p_i_prime = 2. / 3. * state.Derivative[0]
+        
+        dndrho = nprime * vprime
+        Erho = put(jnp.array(0.0))
+        Ti = p_i / n
+        dTidrho = (p_i_prime* vprime - Ti*dndrho) / n
+       
+        species = [
+        LocalMaxwellian(
+            # can just give mass and charge in units of proton mass and elementary charge
+            yancc.species.Species(1,1), 
+            temperature=Ti * self.yancc_wrapper.Tnorm, 
+            density=n * self.yancc_wrapper.nNorm, 
+            dTdrho=dTidrho * self.yancc_wrapper.Tnorm, 
+            dndrho=dndrho * self.yancc_wrapper.nNorm),
+        ]
+        
+        _, _, fluxes, _  = eqx.filter_jit(solve_dke)(field, self.yancc_wrapper.pitchgrid, self.yancc_wrapper.speedgrid, species, Erho)
+
+        fout = fluxes['<heat_flux>'][0] * vprime / (self.yancc_wrapper.FluxNorm)
+        return -fout
 
     def source( self, index, state, x, t, params: NamedTuple ):
+
         return params.SourceHeight * jnp.exp(-(x - params.SourceCenter)**2 / (2 * params.SourceWidth**2))
 
     def StoredEnergy(self, field, state, x, params):
         u = state.Variable[0]
         return u * self.pnorm
+    
+    def Density(self, x):
+        return (self.params.n0 - self.params.EdgeDensity) * (1 - x * x) + self.params.EdgeDensity
     
     @partial(jax.jit, static_argnums=(0,))
     def dSources_dPhi( self, index, state, x, t ):
@@ -231,7 +291,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
     
     @partial(jax.jit, static_argnums=(0,))
     def InitialValue( self, index, x ):
-        return 1.5 * self.params.EdgeTemperature * self.yancc_wrapper.Density(x)
+        return 1.5 * self.params.EdgeTemperature * self.Density(x)
     
     @partial(jax.jit, static_argnums=(0,))
     def InitialDerivative( self, index, x ):
@@ -264,7 +324,10 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         self.g = g
         self.ng = len(self.g) # g functions passed in as an array
         self.field, self.vprime = yancc_data.get_fields()
-        self.field_shard, self.vprime_shard = eqx.filter_shard((self.field, self.vprime), data_sharding)
+
+        # self.field_shard, self.vprime_shard = eqx.filter_shard((self.field, self.vprime), data_sharding)
+        self.field_shard = put_on_gpu(self.field)
+        self.vprime_shard = jax.device_put(self.vprime, data_sharding) 
   
         boundary_field = yancc_data.fields_unstacked[-1]
 

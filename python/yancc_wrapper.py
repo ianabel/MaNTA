@@ -2,10 +2,10 @@ import os
 import jax
 os.environ.pop("LD_LIBRARY_PATH", None) # Required for Perlmutter to work properly
 
-if "JAX_COMPILATION_CACHE_DIR" in os.environ:
-    jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
-    jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
-    jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
+# if "JAX_COMPILATION_CACHE_DIR" in os.environ:
+#     jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+#     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+#     jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
 
 import yancc
 from yancc.field import Field
@@ -21,6 +21,8 @@ from jaxtyping import Array, ArrayLike, Float, Int
 
 from functools import partial
 from typing import Optional
+
+devices = jax.devices()
 
 
 # Remove LD_LIBRARY_PATH to avoid conflicts with yancc's C++ extensions
@@ -56,16 +58,14 @@ class yancc_data(eqx.Module):
     speedgrid: eqx.Module
     Vprim: Float[ArrayLike, '...'] # dV/dr normalized by V[-1], function of volume only for now but can be more general in the future
     rho: Float[ArrayLike, '...']
-    Density: callable = eqx.field(static=True) # function of volume only for now, can be more general in the future
-    nNorm: float = eqx.field(static=True)
-    Tnorm: float = eqx.field(static=True)
-    nx: int = eqx.field(static=True)
-    na: int = eqx.field(static=True)
+    nNorm: float 
+    Tnorm: float
+    nx: int
+    na: int 
     FluxNorm: float
 
     def __init__(
             self, 
-            Density, 
             fields,
             grid, 
             Vprim,
@@ -73,12 +73,12 @@ class yancc_data(eqx.Module):
             nNorm: Optional[float] = 1e20, 
             Tnorm: Optional[float] = 1e3, 
             nx: Optional[int] = 5, 
-            na: Optional[int] = 43): 
+            na: Optional[int] = 65): 
 
         self.fields = fields
         self.grid = grid
         self.Vprim = Vprim
-        self.rho=rho
+        self.rho= rho
         self.nx = nx
         self.na = na
 
@@ -90,7 +90,6 @@ class yancc_data(eqx.Module):
 
         tau_norm = rho_star ** 2 * Cs0 / Lnorm                          # Time normalization
         self.FluxNorm = nNorm * elementary_charge * Tnorm / tau_norm
-        self.Density = Density # Constant density for now
 
         self.speedgrid = MaxwellSpeedGrid(nx)
         self.pitchgrid = UniformPitchAngleGrid(na)
@@ -101,12 +100,11 @@ class yancc_data(eqx.Module):
 
     @classmethod
     def from_eq(cls, 
-            Volume: Float[ArrayLike, '...'] = eqx.field(static=True), 
-            Density:  callable = eqx.field(static=True), 
+            Volume: Float[ArrayLike, '...'], 
             nNorm: Optional[float] = 1e20, 
             Tnorm: Optional[float] = 1e3, 
             nx: Optional[int] = 5, 
-            na: Optional[int] = 43, 
+            na: Optional[int] = 65, 
             nt: Optional[int] = 17,
             nz: Optional[int] = 33,
             eq = None,
@@ -144,11 +142,11 @@ class yancc_data(eqx.Module):
         r = jnp.array(r)
         Vprim = jnp.array(dVndr(r))
     
-        return cls(Density=Density, fields=fields, grid = grid, Vprim=Vprim, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na, rho=r)
+        return cls(fields=fields, grid = grid, Vprim=Vprim, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na, rho=r)
 
     # for constructing from data passed by DESC
     @classmethod
-    def from_data(cls, data, grid, Density, nNorm=1e20, Tnorm=1e3, nx=5, na=43):
+    def from_data(cls, data, grid, nNorm=1e20, Tnorm=1e3, nx=5, na=43):
 
         yancc_dat = {
             "B_sup_t": data["B^theta"],
@@ -178,12 +176,16 @@ class yancc_data(eqx.Module):
         dVndr = dVdr/V[-1] # normalize
 
         fields = jax.vmap(lambda d: yancc.field.Field(**d, NFP=grid.NFP))(yancc_dat)
-        return cls(Density=Density, fields=fields, rho=yancc_dat["rho"], grid=grid, Vprim = dVndr, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
+        return cls(fields=fields, grid=grid,rho=yancc_dat["rho"], Vprim = dVndr, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
+
+    @classmethod
+    def from_fields(cls, fields, grid, Vprime, nNorm=1e20, Tnorm=1e3, nx=5, na=43):
+        return cls(fields=fields, grid=grid, rho=fields.rho, Vprim=Vprime, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
 
     @classmethod 
     def from_other(cls, fields_, grid_, other):
 
-        return cls(Density=other.Density, fields=fields_, grid=grid_, Vprim = other.Vprim, rho=other.rho, nNorm=other.nNorm, Tnorm=other.Tnorm, nx=other.nx, na=other.na)
+        return cls(fields=fields_, grid=grid_, Vprim = other.Vprim, rho=other.rho, nNorm=other.nNorm, Tnorm=other.Tnorm, nx=other.nx, na=other.na)
 
     def get_fields(self):
         return self.fields, self.Vprim
@@ -200,27 +202,26 @@ Returns
 dict
     Fluxes computed by yancc, normalized to be dimensionless
 """
-@eqx.filter_jit
-def flux(state, x, field, Vprim, yancc_params: yancc_data):
+# @eqx.filter_jit
+def flux(state, x, field, Vprim, n, nprime, yancc_params: yancc_data):
     # For now we only evolve the ion energy
     # print("tracing flux")
     p_i = 2. / 3. * state.Variable[0]
     p_i_prime = 2. / 3. * state.Derivative[0]
 
-    dndrho = jax.grad(yancc_params.Density, argnums=0)(x)*Vprim
+    dndrho = nprime * Vprim
     Erho = 0.0
-    Ti = p_i / yancc_params.Density(x)
-    dTidrho = (p_i_prime*Vprim - Ti*dndrho) / yancc_params.Density(x)
+    Ti = p_i / n
+    dTidrho = (p_i_prime*Vprim - Ti*dndrho) / n
     species = [
     LocalMaxwellian(
         # can just give mass and charge in units of proton mass and elementary charge
         yancc.species.Species(1,1), 
         temperature=Ti * yancc_params.Tnorm, 
-        density=yancc_params.Density(x) * yancc_params.nNorm, 
+        density=n * yancc_params.nNorm, 
         dTdrho=dTidrho * yancc_params.Tnorm, 
         dndrho=dndrho * yancc_params.nNorm),
     ]
-
     _, _, fluxes, _  = solve_dke(field, yancc_params.pitchgrid, yancc_params.speedgrid, species, Erho, verbose = False)
     #assert stats['res'] < 1e-5
     # print(fluxes)

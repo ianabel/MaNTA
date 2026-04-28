@@ -79,7 +79,7 @@ namespace pybind11
 				value.Derivative() = py::cast<Matrix>(d["Derivative"]);
 				value.Flux() = py::cast<Matrix>(d["Flux"]);
 				value.Aux() = py::cast<Matrix>(d["Aux"]);
-				value.Scalars() = py::cast<Vector>(d["Scalars"]);
+				value.Scalars() = static_cast<Vector>(py::cast<Matrix>(d["Scalars"]));
 				return true;
 			}
 

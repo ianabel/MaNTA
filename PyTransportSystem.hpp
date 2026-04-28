@@ -14,6 +14,11 @@ constexpr std::array<std::string_view, 4> required_method_names_vectorized = {"S
 
 namespace py = pybind11;
 
+void acquire_and_release()
+{
+	py::gil_scoped_acquire g{};
+};
+
 class PyTransportSystem : public TransportSystem, public py::trampoline_self_life_support
 {
 public:
@@ -103,79 +108,97 @@ public:
 	{
 		if (!initialized)
 			initializeOverrides();
+		py::gil_scoped_acquire gil;
 		return method_overrides["SigmaFn"](i, s, x, t).cast<Value>();
+		py::gil_scoped_release release;
 	};
 	Values SigmaFn(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time) override
 	{
 		if (!initialized)
 			initializeOverrides();
-
+		py::gil_scoped_acquire gil;
 		return method_overrides["SigmaFn_v"](i, states, abscissae, time).cast<Values>();
+		py::gil_scoped_release release;
 	};
 
 	Value Sources(Index i, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
 			initializeOverrides();
+		py::gil_scoped_acquire gil;
 		return method_overrides["Sources"](i, s, x, t).cast<Value>();
+		py::gil_scoped_release release;
 	};
 
 	Values Sources(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time) override
 	{
 		if (!initialized)
 			initializeOverrides();
-
+		py::gil_scoped_acquire gil;
 		return method_overrides["Sources_v"](i, states, abscissae, time).cast<Values>();
+		py::gil_scoped_release release;
 	};
 
 	void dSigmaFn_du(Index i, VectorRef out, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
 			initializeOverrides();
+		py::gil_scoped_acquire gil;
 		out = method_overrides["dSigmaFn_du"](i, s, x, t).cast<Values>();
+		py::gil_scoped_release release;
 	};
 	void dSigmaFn_dq(Index i, VectorRef out, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
 			initializeOverrides();
+		py::gil_scoped_acquire gil;
 		out = method_overrides["dSigmaFn_dq"](i, s, x, t).cast<Values>();
+		py::gil_scoped_release release;
 	};
 
 	void dSources_du(Index i, VectorRef v, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
 			initializeOverrides();
+		py::gil_scoped_acquire gil;
 		v = method_overrides["dSources_du"](i, s, x, t).cast<Values>();
+		py::gil_scoped_release release;
 	};
 
 	void dSources_dq(Index i, VectorRef v, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
 			initializeOverrides();
+		py::gil_scoped_acquire gil;
 		v = method_overrides["dSources_dq"](i, s, x, t).cast<Values>();
+		py::gil_scoped_release release;
 	};
 
 	void dSources_dsigma(Index i, VectorRef v, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
 			initializeOverrides();
+		py::gil_scoped_acquire gil;
 		v = method_overrides["dSources_dsigma"](i, s, x, t).cast<Values>();
+		py::gil_scoped_release release;
 	};
 
 	void dSigma(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time) override
 	{
 		if (!initialized)
 			initializeOverrides();
-
+		py::gil_scoped_acquire gil;
 		out = method_overrides["dSigma"](i, states, abscissae, time).cast<GlobalState>();
+		py::gil_scoped_release release;
 	};
 
 	void dSources(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time) override
 	{
 		if (!initialized)
 			initializeOverrides();
-
+		py::gil_scoped_acquire gil;
 		out = method_overrides["dSources"](i, states, abscissae, time).cast<GlobalState>();
+		py::gil_scoped_release release;
 	};
 
 	// Finally one has to provide initial conditions for u & q
@@ -203,7 +226,7 @@ public:
 	{
 		if (!initialized)
 			initializeOverrides();
-
+		py::gil_scoped_acquire gil;
 		out = method_overrides["AuxGPrime"](i, s, x, t).cast<State>();
 	}
 
@@ -216,6 +239,7 @@ public:
 		}
 		if (!initialized)
 			initializeOverrides();
+		py::gil_scoped_acquire gil;
 		v = method_overrides["dSources_dPhi"](i, s, x, t).cast<Values>();
 	}
 
@@ -228,6 +252,7 @@ public:
 		}
 		if (!initialized)
 			initializeOverrides();
+		py::gil_scoped_acquire gil;
 		v = method_overrides["dSigma_dPhi"](i, s, x, t).cast<Values>();
 	}
 
