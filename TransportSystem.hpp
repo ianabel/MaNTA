@@ -123,7 +123,8 @@ public:
       dSources_du(i, out.Variable(j), states[j], abscissae[j], time);
       dSources_dq(i, out.Derivative(j), states[j], abscissae[j], time);
       dSources_dsigma(i, out.Flux(j), states[j], abscissae[j], time);
-      dSources_dPhi(i, out.Aux(j), states[j], abscissae[j], time);
+      if (nAux > 0)
+        dSources_dPhi(i, out.Aux(j), states[j], abscissae[j], time);
     }
   }
 

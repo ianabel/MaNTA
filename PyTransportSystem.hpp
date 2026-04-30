@@ -14,11 +14,6 @@ constexpr std::array<std::string_view, 4> required_method_names_vectorized = {"S
 
 namespace py = pybind11;
 
-void acquire_and_release()
-{
-	py::gil_scoped_acquire g{};
-};
-
 class PyTransportSystem : public TransportSystem, public py::trampoline_self_life_support
 {
 public:
@@ -108,97 +103,157 @@ public:
 	{
 		if (!initialized)
 			initializeOverrides();
-		py::gil_scoped_acquire gil;
-		return method_overrides["SigmaFn"](i, s, x, t).cast<Value>();
-		py::gil_scoped_release release;
+		try
+		{
+			return method_overrides["SigmaFn"](i, s, x, t).cast<Value>();
+		}
+		catch (const std::exception &e)
+		{
+			throw std::runtime_error(std::string("Error occurred when trying to calculate SigmaFn: ") + e.what());
+		}
 	};
 	Values SigmaFn(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time) override
 	{
 		if (!initialized)
 			initializeOverrides();
-		py::gil_scoped_acquire gil;
-		return method_overrides["SigmaFn_v"](i, states, abscissae, time).cast<Values>();
-		py::gil_scoped_release release;
+		try
+		{
+			return method_overrides["SigmaFn_v"](i, states, abscissae, time).cast<Values>();
+		}
+		catch (const std::exception &e)
+		{
+			throw std::runtime_error(std::string("Error occurred when trying to calculate SigmaFn: ") + e.what());
+		}
 	};
 
 	Value Sources(Index i, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
 			initializeOverrides();
-		py::gil_scoped_acquire gil;
-		return method_overrides["Sources"](i, s, x, t).cast<Value>();
-		py::gil_scoped_release release;
+
+		try
+		{
+			return method_overrides["Sources"](i, s, x, t).cast<Value>();
+		}
+		catch (const std::exception &e)
+		{
+			throw std::runtime_error(std::string("Error occurred when trying to calculate Sources: ") + e.what());
+		}
 	};
 
 	Values Sources(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time) override
 	{
 		if (!initialized)
 			initializeOverrides();
-		py::gil_scoped_acquire gil;
-		return method_overrides["Sources_v"](i, states, abscissae, time).cast<Values>();
-		py::gil_scoped_release release;
+
+		try
+		{
+			return method_overrides["Sources_v"](i, states, abscissae, time).cast<Values>();
+		}
+		catch (const std::exception &e)
+		{
+			throw std::runtime_error(std::string("Error occurred when trying to calculate Sources: ") + e.what());
+		}
 	};
 
 	void dSigmaFn_du(Index i, VectorRef out, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
 			initializeOverrides();
-		py::gil_scoped_acquire gil;
-		out = method_overrides["dSigmaFn_du"](i, s, x, t).cast<Values>();
-		py::gil_scoped_release release;
+
+		try
+		{
+			out = method_overrides["dSigmaFn_du"](i, s, x, t).cast<Values>();
+		}
+		catch (const std::exception &e)
+		{
+			throw std::runtime_error(std::string("Error occurred when trying to calculate dSigmaFn_du: ") + e.what());
+		}
 	};
 	void dSigmaFn_dq(Index i, VectorRef out, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
 			initializeOverrides();
-		py::gil_scoped_acquire gil;
-		out = method_overrides["dSigmaFn_dq"](i, s, x, t).cast<Values>();
-		py::gil_scoped_release release;
+		try
+		{
+			out = method_overrides["dSigmaFn_dq"](i, s, x, t).cast<Values>();
+		}
+		catch (const std::exception &e)
+		{
+			throw std::runtime_error(std::string("Error occurred when trying to calculate dSources_dq: ") + e.what());
+		}
 	};
 
 	void dSources_du(Index i, VectorRef v, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
 			initializeOverrides();
-		py::gil_scoped_acquire gil;
-		v = method_overrides["dSources_du"](i, s, x, t).cast<Values>();
-		py::gil_scoped_release release;
+
+		try
+		{
+			v = method_overrides["dSources_du"](i, s, x, t).cast<Values>();
+		}
+		catch (const std::exception &e)
+		{
+			throw std::runtime_error(std::string("Error occurred when trying to calculate dSources_du: ") + e.what());
+		}
 	};
 
 	void dSources_dq(Index i, VectorRef v, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
 			initializeOverrides();
-		py::gil_scoped_acquire gil;
-		v = method_overrides["dSources_dq"](i, s, x, t).cast<Values>();
-		py::gil_scoped_release release;
+
+		try
+		{
+			v = method_overrides["dSources_dq"](i, s, x, t).cast<Values>();
+		}
+		catch (const std::exception &e)
+		{
+			throw std::runtime_error(std::string("Error occurred when trying to calculate dSources_dq: ") + e.what());
+		}
 	};
 
 	void dSources_dsigma(Index i, VectorRef v, const State &s, Position x, Time t) override
 	{
 		if (!initialized)
 			initializeOverrides();
-		py::gil_scoped_acquire gil;
-		v = method_overrides["dSources_dsigma"](i, s, x, t).cast<Values>();
-		py::gil_scoped_release release;
+		try
+		{
+			v = method_overrides["dSources_dsigma"](i, s, x, t).cast<Values>();
+		}
+		catch (const std::exception &e)
+		{
+			throw std::runtime_error(std::string("Error occurred when trying to calculate dSources_dsigma: ") + e.what());
+		}
 	};
 
 	void dSigma(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time) override
 	{
 		if (!initialized)
 			initializeOverrides();
-		py::gil_scoped_acquire gil;
-		out = method_overrides["dSigma"](i, states, abscissae, time).cast<GlobalState>();
-		py::gil_scoped_release release;
+		try
+		{
+			out = method_overrides["dSigma"](i, states, abscissae, time).cast<GlobalState>();
+		}
+		catch (const std::exception &e)
+		{
+			throw std::runtime_error(std::string("Error occurred when trying to calculate dSigma: ") + e.what());
+		}
 	};
 
 	void dSources(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time) override
 	{
 		if (!initialized)
 			initializeOverrides();
-		py::gil_scoped_acquire gil;
-		out = method_overrides["dSources"](i, states, abscissae, time).cast<GlobalState>();
-		py::gil_scoped_release release;
+		try
+		{
+			out = method_overrides["dSigma"](i, states, abscissae, time).cast<GlobalState>();
+		}
+		catch (const std::exception &e)
+		{
+			throw std::runtime_error(std::string("Error occurred when trying to calculate dSources: ") + e.what());
+		}
 	};
 
 	// Finally one has to provide initial conditions for u & q

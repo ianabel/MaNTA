@@ -5,9 +5,25 @@ import jax.numpy as jnp
 import MaNTA
 from functools import partial
 
+from State import State
+
+
+
+def MaNTA_Decorator(func):
+    def wrapper(self, index, states, positions, *args):
+        states_ = State.from_manta(states)
+        positions_ = jnp.array(positions)
+        res = func(self, index, states_, positions_, *args)
+
+        if (isinstance(res, State)):
+            return res.to_manta()
+        else: 
+            return res
+    return wrapper
+
 from jax.flatten_util import ravel_pytree
 
-vmap_axes = (None, {"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0, None,  None)
+vmap_axes = (None, State.vmap_axes(), 0, None,  None)
 
 class JAXAdjointProblem(MaNTA.AdjointProblem):
     def __init__(self, transport_system: MaNTA.TransportSystem, g):
@@ -30,17 +46,16 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
 
     def setParams(self, params):
         self.params = params
-
+    @MaNTA_Decorator
     def gFn(self, i, states, positions):
-        x = jnp.array(positions)
-        out = jax.vmap(self.g, in_axes=({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0, None))(states, x, self.params)
+
+        out = jax.vmap(self.g, in_axes=(State.vmap_axes(), 0, None))(states, positions, self.params)
        
         return out
 
-    #@partial(jax.jit, static_argnums=(0,1))
+    @MaNTA_Decorator
     def dgFndp(self, gIndex, states, positions):
-        x = jnp.array(positions)
-        dgdp = jax.vmap(jax.grad(self.g, argnums=2), in_axes=({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0, None))(states, x, self.params)
+        dgdp = jax.vmap(jax.grad(self.g, argnums=2), in_axes=(State.vmap_axes(), 0, None))(states, positions, self.params)
         g, _ = ravel_pytree(dgdp)
         g = jnp.reshape(g, (self.np - self.np_boundary, len(positions)))
 
@@ -48,25 +63,21 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
     
         return out
 
-    @partial(jax.jit, static_argnums=(0,))
+    @MaNTA_Decorator
     def dg(self, i, states, positions):
-        x = jnp.array(positions)
 
-        out = jax.vmap(jax.grad(self.g, argnums=0), in_axes=({"Variable": 0, "Derivative": 0, "Flux": 0, "Aux": 0, "Scalars": None}, 0, None))(states, x, self.params)  
-        out["Scalars"] = []
+        out = jax.vmap(jax.grad(self.g, argnums=0), in_axes=(State.vmap_axes(), 0, None))(states, positions, self.params)  
         return out
 
-    #@partial(jax.jit, static_argnums=(0,))
+    @MaNTA_Decorator
     def dSigma(self, i, states, positions):
-        x = jnp.array(positions)
-        out = jax.vmap(jax.grad(self.sigma, argnums=4), in_axes=(vmap_axes))(i, states, x, 0.0, self.params)  
+        out = jax.vmap(jax.grad(self.sigma, argnums=4), in_axes=(vmap_axes))(i, states, positions, 0.0, self.params)  
         return out
     
     
-    @partial(jax.jit, static_argnums=(0,))
+    @MaNTA_Decorator
     def dSources(self, i, states, positions):
-        x = jnp.array(positions)
-        out = jax.vmap(jax.grad(self.source, argnums=4), in_axes=(vmap_axes))(i, states, x, 0.0, self.params)  
+        out = jax.vmap(jax.grad(self.source, argnums=4), in_axes=(vmap_axes))(i, states, positions, 0.0, self.params)  
         return out
 
     @partial(jax.jit, static_argnums=(0,))
@@ -103,5 +114,6 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
         self.LowerBoundarySensitivities[(i,self.np)] = True
         self.np += 1
         self.np_boundary += 1
+
     
    

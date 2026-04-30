@@ -3,6 +3,30 @@
 
 #include "Types.hpp"
 
+// Eigen error messages are very unhelpful so we make our own
+static void checkShapeAndSet(Matrix &lhs, const Matrix &rhs, std::string varname)
+{
+    if ((lhs.rows() == rhs.cols()) && (lhs.cols() == rhs.rows()))
+    {
+        lhs = rhs.transpose();
+    }
+    else
+    {
+        const auto lhs_rows = lhs.rows();
+        const auto rhs_rows = rhs.rows();
+
+        const auto lhs_cols = lhs.cols();
+        const auto rhs_cols = rhs.cols();
+
+        if (lhs_rows != rhs_rows || lhs_cols != rhs_cols)
+        {
+            const std::string msg = "Shape mismatch when attempting to set " + varname + " during assignment to GlobalState. Input shape: (" + std::to_string(rhs_rows) + ", " + std::to_string(rhs_cols) + "). Required shape: (" + std::to_string(lhs_rows) + ", " + std::to_string(lhs_cols) + ")";
+            throw std::runtime_error(msg);
+        }
+        lhs = rhs;
+    }
+}
+
 class State
 {
 public:
@@ -75,32 +99,19 @@ public:
         return out;
     }
 
-    // Need to do it like this because jax likes to transpose things
+    // This is mainly for copying from python
     GlobalState &operator=(const GlobalState &other)
     {
-        Index rowCount = other.Variable().rows();
-        Index colCount = other.Variable().cols();
-        Index sz = nCells * (k + 1);
-        if (rowCount == nVars && sz == colCount)
-        {
-            _Variable = other.Variable();
-            _Derivative = other.Derivative();
-            _Flux = other.Flux();
-            _Aux = other.Aux();
-            _Scalars = other.Scalars();
-        }
-        else if (rowCount == sz && colCount == nVars)
-        {
-            _Variable = other.Variable().transpose();
-            _Derivative = other.Derivative().transpose();
-            _Flux = other.Flux().transpose();
-            _Aux = other.Aux().transpose();
-            _Scalars = other.Scalars().transpose();
-        }
-        else
-        {
-            throw std::runtime_error("Global states must be the same size when copying.");
-        }
+        checkShapeAndSet(_Variable, other.Variable(), "Variable");
+        checkShapeAndSet(_Derivative, other.Derivative(), "Derivative");
+        checkShapeAndSet(_Flux, other.Flux(), "Flux");
+        if (nAux > 0) // Don't bother with Aux if nAux = 0
+            checkShapeAndSet(_Aux, other.Aux(), "Aux");
+        if (nScalars > 0)
+            if (_Scalars.size() == other.Scalars().size())
+                _Scalars = other.Scalars();
+            else
+                throw std::runtime_error("Shape of input scalar array must match nScalars (length of input = " + std::to_string(other.Scalars().size()) + ")");
         return *this;
     }
 
@@ -121,7 +132,7 @@ public:
     {
         return _Variable.col(i);
     }
-    // Grabs data on a whole cell for Jacobian computation, **implicitly assumes we're doing interpolation (read only)
+    // Grabs data on a whole cell for Jacobian computation, **implicitly assumes we're doing interpolation
     Eigen::Ref<Matrix> cellwiseVariable(Index cell)
     {
         return _Variable(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));

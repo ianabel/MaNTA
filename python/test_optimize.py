@@ -1,5 +1,9 @@
 from scipy.constants import mu_0
 import MaNTA
+
+import os 
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
 from Objective import make_objective
 
 
@@ -12,7 +16,7 @@ from yancc_wrapper import yancc_data
 
 import desc
 from desc import set_device
-set_device("gpu")
+set_device("cpu")
 import desc.io
 from desc.equilibrium import Equilibrium
 from desc.geometry import FourierRZToroidalSurface
@@ -69,8 +73,8 @@ config = {
 points =  MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
 
 yancc_rho = jnp.array(points)
-yancc_ntheta = 13
-yancc_nzeta = 23
+yancc_ntheta = 17
+yancc_nzeta = 33
 
 # to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
 # + axis and lcfs
@@ -182,7 +186,7 @@ pressure_constraint_target = jnp.array([0.0, 0.0])
 
 # initial optimization just to get self consistent pressure with fixed initial boundary
 pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 0.01)
-stored_energy_weight = 1000
+stored_energy_weight = 1.0
 objective_from_user_weight = jnp.append(pressure_error_weight, stored_energy_weight)
 
 # objectives = [
@@ -202,7 +206,8 @@ obj.build()
 
 # jax.config.update("jax_log_compiles", True)
 # jax.config.update("jax_explain_cache_misses", True)
-
+G = obj.compute_scaled_error(eq.params_dict)
+print(G)
 J = obj.jac_scaled(eq.params_dict)
 print(J)
 

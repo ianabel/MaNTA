@@ -32,13 +32,12 @@ class State(eqx.Module):
                    Scalars_=jnp.array(manta_state["Scalars"]))
     
     def to_manta(self):
-
         return {
             "Variable": np.asarray(self.Variable),
             "Derivative": np.asarray(self.Derivative),
             "Flux": np.asarray(self.Flux),
             "Aux": np.asarray(self.Aux),
-            "Scalars": np.asarray([])
+            "Scalars": np.asarray(self.Scalars[0])
         }
     
     @staticmethod

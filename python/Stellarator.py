@@ -1,20 +1,20 @@
 import MaNTA
 
 import os
-# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".60"
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".75"
+# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 # os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 from FFIRunner import FFIRunner
 import jax
-jax.config.update("jax_enable_compilation_cache", False)
+# jax.config.update("jax_enable_compilation_cache", False)
 # jax.config.update('jax_cpu_enable_async_dispatch', False)
 import equinox as eqx
 # jax.config.update("jax_log_compiles" ,True)
-# if "JAX_COMPILATION_CACHE_DIR" in os.environ:
-#     print("Using cache directory: " + os.environ["JAX_COMPILATION_CACHE_DIR"])
-#     jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
-#     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
-#     jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
+if "JAX_COMPILATION_CACHE_DIR" in os.environ:
+    print("Using cache directory: " + os.environ["JAX_COMPILATION_CACHE_DIR"])
+    jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+    jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+    jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
 #explain cache misses
 import jax.numpy as jnp
 import numpy as np
@@ -31,9 +31,6 @@ static_sharding = NamedSharding(mesh, P())
 
 from yancc.species import LocalMaxwellian
 from yancc.solve import solve_dke
-# %%
-
-
 
 from State import State
 
@@ -163,18 +160,29 @@ class StellaratorTransport(MaNTA.TransportSystem):
         self.adjointProblem = StellaratorAdjointProblem(self, g, self.yancc_wrapper, len(self.points))
 
         self.runner = FFIRunner(self, self.points, 1, self.adjointProblem.np, spatialParameters=True)
+        self.adjoint_output = [
+            jax.ShapeDtypeStruct((1,),jnp.float64),
+            {"G_p": jax.ShapeDtypeStruct((1 * len(self.points), self.adjointProblem.np), jnp.float64)}
+        ]  
         print("configuring")
         self.runner.configure(solver_config)
 
         print("Successfully created StellaratorTransport object")
 
     def run(self, tFinal = None):
-        if (tFinal is not None):
-            self.runner.run(tFinal)
-        else:
+        # if (tFinal is not None):
+        #     self.runner.run(tFinal)
+        # else:
             # eqx.filter_pure_callback(self.runner.run_ss, [], result_shape_dtypes=[])
-            jax.debug.callback(self.runner.run_ss,ordered=True)
+        jax.debug.callback(self.runner.run_ss,ordered=True)
+
+        G, G_p = io_callback(self.runner.runAdjointSolve, self.adjoint_output, ordered=True)
+        
+        return jnp.float32(G), jnp.float32(G_p["G_p"])  
             # self.runner.Run_ss()
+            # io_callback(self.runner.run_ss, [], ordered=True)
+
+        # return self.runAdjointSolve()
             # io_callback(self.runner.run_ss, [], ordered=True)
             # self.runner.run_ss()
             # self.runner.run_ss()
@@ -184,15 +192,12 @@ class StellaratorTransport(MaNTA.TransportSystem):
         #     yancc_wrapper = yancc_data.from_other(field, grid, other=self.yancc_wrapper)
         #     self.run(yancc_wrapper=yancc_wrapper)
 
-        G, G_p = self.runner.Run_adjoint_solve()
-        return jnp.float32(G), jnp.float32(G_p)  
+        G, G_p = io_callback(self.runner.runAdjointSolve, self.adjoint_output, ordered=True) #self.runner.Run_adjoint_solve()
+        return jnp.float32(G), jnp.float32(G_p["G_p"])  
 
     def getPressure(self, points = None):
-        if points is None:
-            points = self.points
 
-        ui = jnp.float32(self.runner.get_profile(0, points))
-
+        ui = jnp.float32(self.runner.get_profile(0))
         return 2./3. * ui * self.pnorm
 
     def LowerBoundary(self, index, t):

@@ -16,15 +16,13 @@ def MaNTA_Decorator(func):
     def wrapper(self, index, states, positions, *args):
         states_ = State.from_manta(states)
         positions_ = jnp.array(positions)
-
-        # def _wrap_shard(self, *args):
-            
-        #     args_s = tuple(jax.device_put(arg, data_sharding) if not jnp.isscalar(arg) else jax.device_put(arg, static_sharding) for arg in args)
-        #     return func(self, *args_s)
         
-        res = func(self, index, states_, positions_, *args)
-        print("before return")
-        print(res)
+        @partial(jax.jit(static_argnums=(0,)))
+        def wrap_jit(self, *args):
+            return func(self, *args)
+
+        res = wrap_jit(self, index, states_, positions_, *args)
+
         if (isinstance(res, State)):
             return res.to_manta()
         else: 
@@ -51,10 +49,7 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
         pass
     
     @MaNTA_Decorator
-    def SigmaFn_v( self, index, states, positions, t):
-        print(states)
-
-    
+    def SigmaFn_v( self, index, states, positions, t):    
         return jax.vmap(lambda s, p : self.sigma(index, s, p, t, self.params), in_axes=(vmap_axes))(states, positions)
 
     @MaNTA_Decorator

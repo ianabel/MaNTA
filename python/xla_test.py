@@ -9,9 +9,9 @@ from functools import partial
 from VectorizedTransportSystem import VectorizedTransportSystem
 from JAXAdjointProblem import JAXAdjointProblem
 
-
-
 import jax.numpy as jnp
+
+import numpy as np
 
 import equinox as eqx
 class LinearDiffusionParams(NamedTuple):
@@ -79,11 +79,13 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
 
         # G, G_p = io_callback(self.runner.runAdjointSolve, self.adjointoutput, ordered=True) 
         G, G_p = self.runner.Run_adjoint_solve()
+
         return G, G_p
 
     def g(self, state, x, params):
         u = state.Variable[0]
         return 0.5 * u * u
+
 
     def sigma( self, index, state, x, t, params ):
         tprime = state.Derivative
@@ -111,46 +113,46 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
 params = LinearDiffusionParams(0.1, 0.1, 0.1, 3.0)
 ld = JAXLinearDiffusion(params)
 ld.run()
+# print(ld.runner.runAdjointSolve())
+# print(ld.runner.get_profile(0, ld.points))
 
-print(ld.runner.get_profile(0, ld.points))
-
-out = ld.runAdjointSolve()
-print(out)
+G, G_p = ld.runAdjointSolve()
+# print(G_p)
 
 # u = ld.runner.get_profile(0)
 # print(u)
 
 
 
-# @jax.custom_jvp
-# def fun(params):
-#     ld = JAXLinearDiffusion(params, restart = False)
-#     ld.run()
-#     G, G_p = ld.runAdjointSolve()
-#     return G[0]
+@jax.custom_jvp
+def fun(params):
+    ld = JAXLinearDiffusion(params, restart = True)
+    ld.run()
+    G, G_p = ld.runAdjointSolve()
+    return G[0]
 
-# @fun.defjvp
-# def fun_jvp(primals, tangents):
+@fun.defjvp
+def fun_jvp(primals, tangents):
 
-#     params, = primals
-#     params_dot, = tangents
+    params, = primals
+    params_dot, = tangents
 
-#     ld = JAXLinearDiffusion(params, restart = False)
-#     ld.run()
-#     G, G_p = ld.runAdjointSolve()
+    ld = JAXLinearDiffusion(params, restart = True)
+    ld.run()
+    G, G_p = ld.runAdjointSolve()
 
-#     params_dot_flatten, _ = jax.flatten_util.ravel_pytree(params_dot)
-#     out = jnp.dot(G_p.flatten(), params_dot_flatten)
-#     #dot = jax.vmap(lambda g, g_p: jnp.dot(g, g_p), in_axes=(0, None))(G_p.flatten(), params_dot_flatten)
+    params_dot_flatten, _ = jax.flatten_util.ravel_pytree(params_dot)
+    out = jnp.dot(G_p.flatten(), params_dot_flatten)
+    #dot = jax.vmap(lambda g, g_p: jnp.dot(g, g_p), in_axes=(0, None))(G_p.flatten(), params_dot_flatten)
 
 
-#     return G[0], out
+    return G[0], out
 
-# params_new = LinearDiffusionParams(0.1, 0.1, 0.1, 5.0)
+params_new = LinearDiffusionParams(0.1, 0.1, 0.1, 5.0)
 
-# g1 = jax.grad(fun)
+g1 = jax.grad(fun)
 # # # # # #g2 = eqx.filter_jit(jax.grad(fun))
-# print(g1(params_new))
+print(g1(params_new))
 
 # # params_new = LinearDiffusionParams(0.1, 0.1, 0.1, 3.8)
 

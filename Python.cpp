@@ -28,8 +28,6 @@ py::capsule EncapsulateFfiCall(T *fn)
 };
 #endif
 
-// #include <type_traits>
-
 int runManta(std::string const &);
 // This allows one to use a python dict as a state variable,
 // if the python dict has the right keys in it
@@ -80,6 +78,7 @@ namespace pybind11
 				value.Flux() = py::cast<Matrix>(d["Flux"]);
 				value.Aux() = py::cast<Matrix>(d["Aux"]);
 				value.Scalars() = static_cast<Vector>(py::cast<Matrix>(d["Scalars"]));
+
 				return true;
 			}
 

@@ -33,8 +33,8 @@ def make_objective(config, vectorized=False):
         # 
 
         st = StellaratorTransport(config, yancc_wrapper=yin)
-        st.run()
-        G, G_p = st.runAdjointSolve()
+        G, G_p = st.run()
+        # G, G_p = st.runAdjointSolve()
 
         pi = jnp.array(st.getPressure())
 
