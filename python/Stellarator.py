@@ -35,6 +35,9 @@ from yancc.solve import solve_dke
 from State import State
 
 def MaNTA_Decorator(func):
+    """
+    Converts from MaNTA to jax and vice versa, also performs sharding on inputs
+    """
     def wrapper(self, index, states, positions, *args):
         states_ = State.from_manta(states)
         positions_ = jnp.array(positions)
@@ -252,7 +255,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         Computed sigma or source term
     """
 
-    def sigma( self, index, state, x, t, field, vprime, params ):
+    def sigma( self, index, state : State, x, t, field, vprime, params ):
         put = lambda x : jax.device_put(x, static_sharding)
         n, nprime = put(jax.value_and_grad(self.Density)(x))
 

@@ -946,12 +946,13 @@ int static_residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval
 
 int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval)
 {
-    // std::cerr << "Evaluating residual at time t=" << tres << std::endl;
 
+#ifdef DEBUG
     wgt = N_VClone(resval);
     getErrorWeights(Y, wgt);
     double residual_val = N_VWrmsNorm(resval, wgt);
     std::cerr << "Residual norm at t = " << tres << ": " << residual_val << std::endl;
+#endif
     updateBoundaryConditions(tres);
 
     DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux);

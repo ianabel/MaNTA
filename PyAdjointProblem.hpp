@@ -75,10 +75,6 @@ public:
     };
     Matrix dGFndp(Index gIndex, DGSoln &y) const override
     {
-        // auto const &grid = y.getGrid();
-        // auto const &x_vals = y.getBasis().abscissae();
-        // auto const &x_wgts = y.getBasis().weights();
-        // const size_t n_abscissa = x_vals.size();
         const auto states = y.evalOnNodes();
         const auto points = y.getPoints();
         Matrix out;
