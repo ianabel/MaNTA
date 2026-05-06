@@ -72,7 +72,7 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
             # self.call_run(tFinal)
 
         else:
-            self.runner.run_ss()
+            self.runner.Run_ss()
 
 
     def runAdjointSolve(self):
@@ -94,7 +94,7 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
     
     @eqx.filter_jit
     def source( self, index, state, x, t, params ):
-        return 10.0 * (1 - params.Centre)
+        return 10.0 * (1 - params.Centre) * x
   
     def LowerBoundary(self, index, t):
         return 0.0

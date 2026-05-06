@@ -65,22 +65,22 @@ from typing import NamedTuple
 
 
 def put_on_gpu(tree):
-
-    def map_fn(leaf):
-        return leaf
-        # if not jnp.isscalar(leaf):
-        #     if (jnp.mod(leaf.shape[0], len(devices))==0):
-        #         return jax.device_put(leaf, data_sharding)
-        #     else:
-        #         return jax.device_put(leaf, static_sharding)
-        #     # return eqx.filter_shard(leaf, data_sharding)
-        #     # condition = jnp.mod(leaf.shape[0], len(devices)) == 0
-        #     # # lpad = (len(self.points) - leaf.shape[0],0)
-        #     # # print(lpad)
-        #     # return jax.lax.cond(condition, lambda leaf : jax.device_put(leaf, data_sharding), lambda leaf : jax.device_put(leaf, static_sharding), leaf)
-        # else:
-        #     return jax.device_put(leaf, static_sharding)
-    return jax.tree.map(map_fn, tree)
+    return tree
+    # def map_fn(leaf):
+    #     return leaf
+    #     # if not jnp.isscalar(leaf):
+    #     #     if (jnp.mod(leaf.shape[0], len(devices))==0):
+    #     #         return jax.device_put(leaf, data_sharding)
+    #     #     else:
+    #     #         return jax.device_put(leaf, static_sharding)
+    #     #     # return eqx.filter_shard(leaf, data_sharding)
+    #     #     # condition = jnp.mod(leaf.shape[0], len(devices)) == 0
+    #     #     # # lpad = (len(self.points) - leaf.shape[0],0)
+    #     #     # # print(lpad)
+    #     #     # return jax.lax.cond(condition, lambda leaf : jax.device_put(leaf, data_sharding), lambda leaf : jax.device_put(leaf, static_sharding), leaf)
+    #     # else:
+    #     #     return jax.device_put(leaf, static_sharding)
+    # return jax.tree.map(map_fn, tree)
 
 
 def getStateAtIndex(states, i):
@@ -136,12 +136,12 @@ class StellaratorTransport(MaNTA.TransportSystem):
         st_config = config["Stellarator"]
         self.points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
 
-        self.params = put_on_gpu(StellaratorParams.from_config(st_config))
-
+        self.params = StellaratorParams.from_config(st_config)
+ 
 
         self.xL = solver_config["Lower_boundary"]
         self.xR = solver_config["Upper_boundary"]
-        self.yancc_wrapper = put_on_gpu(yancc_wrapper)#jax.device_put(yancc_wrapper, data_sharding)
+        self.yancc_wrapper = yancc_wrapper#jax.device_put(yancc_wrapper, data_sharding)
 
         e = 1.6e-19
         self.pnorm = 1e20 * e * 1e3
@@ -176,11 +176,14 @@ class StellaratorTransport(MaNTA.TransportSystem):
         # if (tFinal is not None):
         #     self.runner.run(tFinal)
         # else:
+        # do jit compilation
+        # jax.jit(function).lower().compile()
             # eqx.filter_pure_callback(self.runner.run_ss, [], result_shape_dtypes=[])
         jax.debug.callback(self.runner.run_ss,ordered=True)
+        # self.runner.run_ss()
 
         G, G_p = io_callback(self.runner.runAdjointSolve, self.adjoint_output, ordered=True)
-        
+        # return G, G_p
         return jnp.float32(G), jnp.float32(G_p["G_p"])  
             # self.runner.Run_ss()
             # io_callback(self.runner.run_ss, [], ordered=True)
@@ -207,7 +210,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return 0.0
 
     def UpperBoundary(self, index, t):
-        return 1.5 * self.params.EdgeTemperature * self.Density(self.xR)
+        return self.InitialValue(index, self.xR)
     
     @MaNTA_Decorator
     def SigmaFn_v( self, index, states: State, positions, t ):
@@ -266,7 +269,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         Erho = put(jnp.array(0.0))
         Ti = p_i / n
         dTidrho = (p_i_prime* vprime - Ti*dndrho) / n
-       
+
         species = [
         LocalMaxwellian(
             # can just give mass and charge in units of proton mass and elementary charge
@@ -280,18 +283,23 @@ class StellaratorTransport(MaNTA.TransportSystem):
         _, _, fluxes, _  = eqx.filter_jit(solve_dke)(field, self.yancc_wrapper.pitchgrid, self.yancc_wrapper.speedgrid, species, Erho)
 
         fout = fluxes['<heat_flux>'][0] * vprime / (self.yancc_wrapper.FluxNorm)
-        return -fout
 
+        return -jnp.nan_to_num(fout, nan=0.0, posinf=0.0, neginf=0.0)
+
+    @partial(jax.jit, static_argnums=(0,))
     def source( self, index, state, x, t, params: NamedTuple ):
-
         return params.SourceHeight * jnp.exp(-(x - params.SourceCenter)**2 / (2 * params.SourceWidth**2))
 
     def StoredEnergy(self, field, state, x, params):
         u = state.Variable[0]
-        return u * self.pnorm
+        return u 
     
     def Density(self, x):
-        return (self.params.n0 - self.params.EdgeDensity) * (1 - x * x) + self.params.EdgeDensity
+        return self.initial_profile(x, self.params.EdgeDensity, self.params.n0)
+
+    @staticmethod
+    def initial_profile(x, edge_value, peak_value):
+        return  (peak_value - edge_value) * (1 - x * x) + edge_value
     
     @partial(jax.jit, static_argnums=(0,))
     def dSources_dPhi( self, index, state, x, t ):

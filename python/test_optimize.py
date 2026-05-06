@@ -42,27 +42,27 @@ from desc.profiles import SplineProfile
 from Stellarator import StellaratorTransport
 
 st_config = {
-    "SourceCenter": 0.0,
-    "SourceHeight": 250.0,
-    "SourceWidth": 0.2,
-    "EdgeTemperature":0.1,
+    "SourceCenter": 0.2,
+    "SourceHeight": 400.0,
+    "SourceWidth": 0.4,
+    "EdgeTemperature":0.2,
     "EdgeDensity": 0.0,
-    "n0": 0.5,
+    "n0": 0.25,
 }
 # runner = MaNTA.Runner(st)
 
 # # %%
 solver_config = {
     "OutputFilename": "stellarator_opt2",
-    "Polynomial_degree": 3,
-    "Grid_size": 3,
-    "tau": 100.0, 
+    "Polynomial_degree": 4,
+    "Grid_size": 4,
+    "tau": 1.0, 
     "Lower_boundary": 0.0,
-    "Upper_boundary": 0.9,
+    "Upper_boundary": 0.95,
     "Relative_tolerance": 0.01,
     "delta_t": 0.0001,
     "MinStepSize": 1e-8,
-    "restart": False,
+    "restart": True,
     "solveAdjoint": True, 
 }
 
@@ -82,9 +82,9 @@ yancc_nzeta = 33
 pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 
-eq_est = desc.examples.get("W7-X")
+eq_est = desc.examples.get("ESTELL")
 surf = eq_est.get_surface_at(rho=1)
-eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
+eq = Equilibrium(M=8, N=8, Psi=0.1, surface=surf, pressure=desc_pressure)
 eq = eq.solve(x_scale="ess")[0]
 
 # eq = desc.io.load("eq_self_consistent_pressure.h5")
@@ -170,8 +170,8 @@ Vn = interpax.CubicSpline(yancc_rho, Vn)
 rho_from_normalized_volume = lambda Vnorm : desc.backend.root_scalar(lambda x: Vn(x) - Vnorm, jnp.sqrt(Vnorm))    
 
 # %%
-domain_boundary_rho = rho_from_normalized_volume(0.9)
-print(domain_boundary_rho)
+domain_boundary_rho = 1.0# rho_from_normalized_volume(1.0)
+# print(domain_boundary_rho)
 def pressure_constraint_fun(params):
     # function to fix dp/dr=0 at axis and p=0 at edge
     # can modify this for other BC (eg fix p at rho=0.8)
@@ -185,30 +185,31 @@ def pressure_constraint_fun(params):
 pressure_constraint_target = jnp.array([0.0, 0.0])
 
 # initial optimization just to get self consistent pressure with fixed initial boundary
-pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 0.01)
-stored_energy_weight = 1.0
+pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 0.001)
+stored_energy_weight = 1000.0
 objective_from_user_weight = jnp.append(pressure_error_weight, stored_energy_weight)
 
 # objectives = [
-obj = ObjectiveFromUser(
+objectives = [ObjectiveFromUser(
     objective_from_user_fun,
     eq,
     target=0,
     weight=objective_from_user_weight,
     grid=yancc_desc_grid,
     deriv_mode="fwd", 
-    use_jit=False,# need this assuming manta only has vjp, if using jvp switch to fwd
-)
+),]
 
 
 
-obj.build()
+obj = ObjectiveFunction(objectives)
+obj.build(use_jit=False)
 
-# jax.config.update("jax_log_compiles", True)
-# jax.config.update("jax_explain_cache_misses", True)
-G = obj.compute_scaled_error(eq.params_dict)
-print(G)
-J = obj.jac_scaled(eq.params_dict)
+# G = obj.compute_scaled_error(obj.x(eq))
+# print(G)
+
+jax.config.update("jax_log_compiles", True)
+jax.config.update("jax_explain_cache_misses", True)
+J = obj.jac_scaled(obj.x(eq))
 print(J)
 
 

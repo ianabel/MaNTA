@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <boost/math/interpolators/barycentric_rational.hpp>
 
 #include "gridStructures.hpp"
 
@@ -1481,6 +1482,15 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
     }
 
     double delta_x = (grid.upperBoundary() - grid.lowerBoundary()) * (1.0 / (nOut - 1.0));
+
+    // Sources are vectorized so we interpolate to the output grid
+    std::vector<boost::math::interpolators::barycentric_rational<double>> source_interp;
+    for (Index v = 0; v < nVars; ++v)
+    {
+        auto Source_vals = problem->Sources(v, tmp_y.evalOnNodes(), tmp_y.getPoints(), t);
+        source_interp.emplace_back(tmp_y.getPoints().data(), Source_vals.data(), Source_vals.size());
+    }
+
     for (int i = 0; i < nOut; ++i)
     {
         double x = static_cast<double>(i) * delta_x + grid.lowerBoundary();
@@ -1489,8 +1499,8 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
         for (Index v = 0; v < nVars; ++v)
         {
             out << "\t" << s.Variable[v] << "\t" << s.Derivative[v] << "\t" << s.Flux[v];
-            // if (printSources)
-            //     out << "\t" << problem->Sources(v, s, x, t);
+            if (printSources)
+                out << "\t" << source_interp[v](x);
         }
 
         for (Index a = 0; a < nAux; ++a)
@@ -1523,6 +1533,14 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
     }
 
     double delta_x = (grid.upperBoundary() - grid.lowerBoundary()) * (1.0 / (nOut - 1.0));
+
+    std::vector<boost::math::interpolators::barycentric_rational<double>> source_interp;
+    for (Index v = 0; v < nVars; ++v)
+    {
+        auto Source_vals = problem->Sources(v, tmp_y.evalOnNodes(), tmp_y.getPoints(), t);
+        source_interp.emplace_back(tmp_y.getPoints().data(), Source_vals.data(), Source_vals.size());
+    }
+
     for (int i = 0; i < nOut; ++i)
     {
         double x = static_cast<double>(i) * delta_x + grid.lowerBoundary();
@@ -1531,8 +1549,8 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
         for (Index v = 0; v < nVars; ++v)
         {
             out << "\t" << s.Variable[v] << "\t" << s.Derivative[v] << "\t" << s.Flux[v];
-            // if (printSources)
-            //     out << "\t" << problem->Sources(v, s, x, t);
+            if (printSources)
+                out << "\t" << source_interp[v](x);
         }
 
         for (Index a = 0; a < nAux; ++a)

@@ -103,7 +103,7 @@ class yancc_data(eqx.Module):
             Volume: Float[ArrayLike, '...'], 
             nNorm: Optional[float] = 1e20, 
             Tnorm: Optional[float] = 1e3, 
-            nx: Optional[int] = 5, 
+            nx: Optional[int] = 7, 
             na: Optional[int] = 65, 
             nt: Optional[int] = 17,
             nz: Optional[int] = 33,
@@ -146,7 +146,7 @@ class yancc_data(eqx.Module):
 
     # for constructing from data passed by DESC
     @classmethod
-    def from_data(cls, data, grid, nNorm=1e20, Tnorm=1e3, nx=5, na=43):
+    def from_data(cls, data, grid, nNorm=1e20, Tnorm=1e3, nx=7, na=65):
 
         yancc_dat = {
             "B_sup_t": data["B^theta"],
@@ -179,7 +179,7 @@ class yancc_data(eqx.Module):
         return cls(fields=fields, grid=grid,rho=yancc_dat["rho"], Vprim = dVndr, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
 
     @classmethod
-    def from_fields(cls, fields, grid, Vprime, nNorm=1e20, Tnorm=1e3, nx=5, na=43):
+    def from_fields(cls, fields, grid, Vprime, nNorm=1e20, Tnorm=1e3, nx=7, na=65):
         return cls(fields=fields, grid=grid, rho=fields.rho, Vprim=Vprime, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
 
     @classmethod 

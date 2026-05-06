@@ -153,7 +153,7 @@ void SystemSolver::runSolver(double tFinal)
 
 	// Steady-state stopping conditions
 	sunrealtype dydt_rel_tol = steady_state_tol;
-	sunrealtype dydt_abs_tol = 1e-2;
+	sunrealtype dydt_abs_tol = 1e-3;
 
 	retval = IDAWFtolerances(IDA_mem, SystemSolver::getErrorWeights_static);
 	if (ErrorChecker::check_retval(&retval, "IDAWFtolerances", 1))
@@ -214,15 +214,15 @@ void SystemSolver::runSolver(double tFinal)
 	//------------------------------Solve------------------------------
 	// Update initial solution to be within tolerance of the residual equation
 
-	if (!problem->isRestarting() && useCalcIC) // Don't use calc IC if restarting
-	{
+	// if (!problem->isRestarting() && useCalcIC) // Don't use calc IC if restarting
+	// {
 		retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, delta_t);
 		retval = 0;
 		if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
 		{
 			throw std::runtime_error("IDACalcIC could not complete");
 		}
-	}
+	// }
 
 	long int nresevals = 0;
 	IDAGetNumResEvals(IDA_mem, &nresevals);
