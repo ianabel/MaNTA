@@ -55,7 +55,6 @@ static ffi::Error run_ffi_ss_impl(void *ctx)
 
 static ffi::Error run_adjoint_ffi_impl(void *ctx, ffi::Result<ffi::BufferR1<fp_dtype>> Gout, ffi::Result<ffi::BufferR2<fp_dtype>> G_p_out, std::optional<ffi::Result<ffi::BufferR1<fp_dtype>>> G_p_boundary_out)
 {
-
     auto runner = static_cast<PyRunner *>(ctx);
     py::gil_scoped_acquire gil;
     py::tuple result = runner->runAdjointSolve();
@@ -121,32 +120,6 @@ static ffi::Error get_solution_ffi_impl(void *ctx, ffi::Buffer<i_dtype> var, std
 };
 
 #ifdef CUDA
-static ffi::Error run_ffi_impl_cuda(cudaStream_t stream, void *ctx, ffi::AnyBuffer args)
-{
-
-    auto runner = static_cast<PyRunner *>(ctx);
-    py::gil_scoped_acquire gil;
-    float tFinal;
-    cudaMemcpyAsync(&tFinal, args.typed_data<float>(), sizeof(float), cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);
-    runner->run(tFinal);
-    return ffi::Error::Success();
-};
-
-static ffi::Error run_ffi_ss_impl_cuda(cudaStream_t stream, void *ctx, ffi::Result<ffi::BufferR0<i_dtype_cuda>> is_err)
-{
-    py::gil_scoped_acquire gil;
-
-    auto runner = static_cast<PyRunner *>(ctx);
-    //
-    runner->run_ss();
-
-    int err = 0;
-    cudaMemcpyAsync(is_err->typed_data(), &err, sizeof(int), cudaMemcpyHostToDevice, stream);
-    cudaStreamSynchronize(stream);
-    return ffi::Error::Success();
-};
-
 static ffi::Error run_adjoint_ffi_impl_cuda(cudaStream_t stream, void *ctx, ffi::Result<ffi::BufferR1<fp_dtype_cuda>> Gout, ffi::Result<ffi::BufferR2<fp_dtype_cuda>> G_p_out, std::optional<ffi::Result<ffi::BufferR1<fp_dtype_cuda>>> G_p_boundary_out)
 {
     py::gil_scoped_acquire gil;
@@ -259,18 +232,6 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(get_solution_ffi_ops, get_solution_ffi_impl,
                                   .Ret<ffi::BufferR1<fp_dtype>>());
 
 #ifdef CUDA
-XLA_FFI_DEFINE_HANDLER_SYMBOL(run_ffi_ops_cuda, run_ffi_impl_cuda,
-                              ffi::Ffi::Bind()
-                                  .Ctx<ffi::PlatformStream<cudaStream_t>>()
-                                  .Attr<ffi::Pointer<void>>("obj")
-                                  .Arg<ffi::AnyBuffer>());
-
-XLA_FFI_DEFINE_HANDLER_SYMBOL(run_ss_ffi_ops_cuda, run_ffi_ss_impl_cuda,
-                              ffi::Ffi::Bind()
-                                  .Ctx<ffi::PlatformStream<cudaStream_t>>()
-                                  .Attr<ffi::Pointer<void>>("obj")
-                                  .Ret<ffi::BufferR0<i_dtype_cuda>>());
-
 XLA_FFI_DEFINE_HANDLER_SYMBOL(run_adjoint_solve_ffi_ops_cuda, run_adjoint_ffi_impl_cuda,
                               ffi::Ffi::Bind()
                                   .Ctx<ffi::PlatformStream<cudaStream_t>>()

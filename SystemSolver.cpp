@@ -1537,8 +1537,8 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
     std::vector<boost::math::interpolators::barycentric_rational<double>> source_interp;
     for (Index v = 0; v < nVars; ++v)
     {
-        auto Source_vals = problem->Sources(v, tmp_y.evalOnNodes(), tmp_y.getPoints(), t);
-        source_interp.emplace_back(tmp_y.getPoints().data(), Source_vals.data(), Source_vals.size());
+        auto Source_vals = problem->Sources(v, y.evalOnNodes(), y.getPoints(), t);
+        source_interp.emplace_back(y.getPoints().data(), Source_vals.data(), Source_vals.size());
     }
 
     for (int i = 0; i < nOut; ++i)

@@ -204,11 +204,9 @@ objectives = [ObjectiveFromUser(
 obj = ObjectiveFunction(objectives)
 obj.build(use_jit=False)
 
-# G = obj.compute_scaled_error(obj.x(eq))
-# print(G)
+G = obj.compute_scaled_error(obj.x(eq))
+print(G)
 
-jax.config.update("jax_log_compiles", True)
-jax.config.update("jax_explain_cache_misses", True)
 J = obj.jac_scaled(obj.x(eq))
 print(J)
 

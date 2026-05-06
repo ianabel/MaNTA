@@ -6,21 +6,23 @@ os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".75"
 # os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 from FFIRunner import FFIRunner
 import jax
-# jax.config.update("jax_enable_compilation_cache", False)
+jax.config.update("jax_enable_compilation_cache", False)
 # jax.config.update('jax_cpu_enable_async_dispatch', False)
 import equinox as eqx
 # jax.config.update("jax_log_compiles" ,True)
-if "JAX_COMPILATION_CACHE_DIR" in os.environ:
-    print("Using cache directory: " + os.environ["JAX_COMPILATION_CACHE_DIR"])
-    jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
-    jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
-    jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
+# if "JAX_COMPILATION_CACHE_DIR" in os.environ:
+#     print("Using cache directory: " + os.environ["JAX_COMPILATION_CACHE_DIR"])
+#     jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+#     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+#     jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
 #explain cache misses
 import jax.numpy as jnp
 import numpy as np
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax.tree_util import tree_map
 from jax.experimental import io_callback
+
+from desc.backend import execute_on_cpu
 
 P = PartitionSpec
 devices = jax.devices()
@@ -172,34 +174,16 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         print("Successfully created StellaratorTransport object")
 
+    @execute_on_cpu
     def run(self, tFinal = None):
-        # if (tFinal is not None):
-        #     self.runner.run(tFinal)
-        # else:
-        # do jit compilation
-        # jax.jit(function).lower().compile()
-            # eqx.filter_pure_callback(self.runner.run_ss, [], result_shape_dtypes=[])
-        jax.debug.callback(self.runner.run_ss,ordered=True)
-        # self.runner.run_ss()
-
-        G, G_p = io_callback(self.runner.runAdjointSolve, self.adjoint_output, ordered=True)
-        # return G, G_p
-        return jnp.float32(G), jnp.float32(G_p["G_p"])  
-            # self.runner.Run_ss()
-            # io_callback(self.runner.run_ss, [], ordered=True)
-
-        # return self.runAdjointSolve()
-            # io_callback(self.runner.run_ss, [], ordered=True)
-            # self.runner.run_ss()
-            # self.runner.run_ss()
-            # self.runner.Run_ss
+        if (tFinal is not None):
+            self.runner.Run(tFinal)
+        else:
+            self.runner.Run_ss()
+      
     def runAdjointSolve(self):
-        # if (field is not None):
-        #     yancc_wrapper = yancc_data.from_other(field, grid, other=self.yancc_wrapper)
-        #     self.run(yancc_wrapper=yancc_wrapper)
-
-        G, G_p = io_callback(self.runner.runAdjointSolve, self.adjoint_output, ordered=True) #self.runner.Run_adjoint_solve()
-        return jnp.float32(G), jnp.float32(G_p["G_p"])  
+        G, G_p = self.runner.Run_adjoint_solve()
+        return jnp.float32(G), jnp.float32(G_p)  
 
     def getPressure(self, points = None):
 

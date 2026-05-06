@@ -33,15 +33,15 @@ def make_objective(config, vectorized=False):
         # 
 
         st = StellaratorTransport(config, yancc_wrapper=yin)
-        G, G_p = st.run()
-        # G, G_p = st.runAdjointSolve()
+        st.run()
+        G, G_p = st.runAdjointSolve()
 
         pi = jnp.array(st.getPressure())
 
         return G[0], G_p, pi
 
 
-    def wrap_pure_callback(func):
+    def wrap_callback(func):
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):

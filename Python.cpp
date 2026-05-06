@@ -228,11 +228,9 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 			 });
 	py::class_<PyRunner, py::smart_holder>(m, "Runner")
 		.def(py::init<std::shared_ptr<TransportSystem>>())
-		// .def("setTransportSystem", &PyRunner::setTransportSystem)
 		.def("configure", &PyRunner::configure)
 		.def("run", &PyRunner::run)
 		.def("run_ss", &PyRunner::run_ss)
-		// .def("setAdjointProblem", &PyRunner::setAdjointProblem)
 		.def("runAdjointSolve", &PyRunner::runAdjointSolve)
 		.def("getSolution", &PyRunner::getSolution)
 		.def("get_address", [](const PyRunner &runner) // needed for xla interface
@@ -252,8 +250,6 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 			py::dict ffi_ops;
 			ffi_ops["get_solution_ffi_cuda"] = EncapsulateFfiCall(get_solution_ffi_ops_cuda);
 			ffi_ops["run_adjoint_solve_ffi_cuda"] = EncapsulateFfiCall(run_adjoint_solve_ffi_ops_cuda);
-			ffi_ops["run_ffi_cuda"] = EncapsulateFfiCall(run_ffi_ops_cuda);
-			ffi_ops["run_ss_ffi_cuda"] = EncapsulateFfiCall(run_ss_ffi_ops_cuda);
 			return ffi_ops; });
 #endif
 #endif
