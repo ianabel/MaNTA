@@ -159,9 +159,6 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         g = [self.StoredEnergy]
 
-     
-        # self.nc_flux = eqx.filter_jit(flux).trace()
-        
         self.adjointProblem = StellaratorAdjointProblem(self, g, self.yancc_wrapper, len(self.points))
 
         self.runner = FFIRunner(self, self.points, 1, self.adjointProblem.np, spatialParameters=True)
@@ -183,11 +180,10 @@ class StellaratorTransport(MaNTA.TransportSystem):
       
     def runAdjointSolve(self):
         G, G_p = self.runner.Run_adjoint_solve()
-        return jnp.float32(G), jnp.float32(G_p)  
+        return G, G_p  
 
     def getPressure(self, points = None):
-
-        ui = jnp.float32(self.runner.get_profile(0))
+        ui = self.runner.get_profile(0)
         return 2./3. * ui * self.pnorm
 
     def LowerBoundary(self, index, t):
@@ -252,7 +248,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         dndrho = nprime * vprime
         Erho = put(jnp.array(0.0))
         Ti = p_i / n
-        dTidrho = (p_i_prime* vprime - Ti*dndrho) / n
+        dTidrho = (p_i_prime * vprime - Ti * dndrho) / n
 
         species = [
         LocalMaxwellian(
@@ -351,14 +347,9 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
             jax.ShapeDtypeStruct((self.ng,), jnp.float32),
             jax.ShapeDtypeStruct((self.ng * self.npoints, self.np), jnp.float32)
         ]     
-
-    def setField(self, field, vprime):
-        self.field = field
-        self.vprime = vprime
     
     @MaNTA_Decorator
     def gFn(self, i, states, positions):
-
         out =  jax.vmap(self.g[i], in_axes=(0, State.vmap_axes(), 0, None))(self.field, states, positions, self.params)
         return out
 

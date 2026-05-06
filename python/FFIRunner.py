@@ -51,8 +51,10 @@ class FFIRunner(MaNTA.Runner):
             jax.ShapeDtypeStruct((ng,),dtype),
             jax.ShapeDtypeStruct((ng * fac, np),dtype)
         ]  
-        self.sol_output = jax.ShapeDtypeStruct((len(self.points),),dtype)
     
+    """
+    Assume that the user would want to call the ffi versions of the Runner class methods if they're using this class, so we disable the regular versions
+    """
     def run(self, *args, **kwargs):
         raise NotImplementedError("run method is disabled when using FFI; use Run")
     def run_ss(self, *args, **kwargs):
@@ -65,12 +67,11 @@ class FFIRunner(MaNTA.Runner):
     def Run(self, tFinal):
         jax.ffi.ffi_call(ffi_ops["run"], [], has_side_effect=True)(tFinal, obj=self.get_address())
     def Run_ss(self):
-        return jax.ffi.ffi_call(ffi_ops["run_ss"], [],  has_side_effect=True)(obj=self.get_address())
+        jax.ffi.ffi_call(ffi_ops["run_ss"], [],  has_side_effect=True)(obj=self.get_address())
     def Run_adjoint_solve(self):
         return jax.ffi.ffi_call(ffi_ops["run_adjoint_solve"], self.adjoint_output, has_side_effect=True)(obj=self.get_address())
     def get_profile(self, var, points = None):
         if (points is None):
             points = self.points
-
         sol_output = jax.ShapeDtypeStruct((len(points),),dtype)
         return jax.ffi.ffi_call(ffi_ops["get_solution"], sol_output, has_side_effect=True)(i_dtype(var), points, obj=self.get_address())

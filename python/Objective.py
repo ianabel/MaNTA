@@ -30,8 +30,6 @@ def make_objective(config, vectorized=False):
     """
 
     def StellaratorFun(config, yin):
-        # 
-
         st = StellaratorTransport(config, yancc_wrapper=yin)
         st.run()
         G, G_p = st.runAdjointSolve()
@@ -69,11 +67,20 @@ def make_objective(config, vectorized=False):
     
         yancc_wrapper = yancc_data.from_fields(fields, grid, Vprime)
         G, G_p, pi = _f_wrapped(yancc_wrapper)
- 
-        field_dot_flatten,_ = jax.flatten_util.ravel_pytree(field_dot)
+        _, unflatten = jax.flatten_util.ravel_pytree(fields)
         G_p_flat = G_p.flatten()
+        G_unflat = unflatten(jnp.float64(G_p_flat))
+
+        print(G_unflat)
+
+        field_dot_flatten, _ = jax.flatten_util.ravel_pytree(field_dot)
+        
         lg = len(G_p_flat)
         lf = len(field_dot_flatten)
+        print(lg)
+        print(lf)
+        print(field_dot)
+        print(fields)
 
         field_dot_pad = jnp.pad(field_dot_flatten, (lg-lf,0), mode='constant') 
         return (G, pi), (jnp.float32(jnp.dot(G_p_flat, field_dot_pad)), None)

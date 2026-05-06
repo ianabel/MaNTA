@@ -122,7 +122,7 @@ class yancc_data(eqx.Module):
         dVdr = grid.compress(desc_data['V_r(r)'])
         dVndr = dVdr/V[-1] # normalize
         Vn = interpax.CubicSpline(rho, Vn)
-        dVndr = interpax.CubicSpline(rho, dVndr)
+        dVndr = interpax.CubicSpline(rho, dVndr) 
         rho = Vn
         fields = []
         r = []
@@ -135,7 +135,9 @@ class yancc_data(eqx.Module):
 
         fields = tree_map(lambda *vals: jnp.stack(vals), *fields)
         r = jnp.array(r)
-        Vprim = jnp.array(dVndr(r))
+        Vprim = jnp.array(dVndr(r)) 
+
+
     
         return cls(fields=fields, grid = grid, Vprim=Vprim, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na, rho=r)
 

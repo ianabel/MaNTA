@@ -62,7 +62,7 @@ solver_config = {
     "Relative_tolerance": 0.01,
     "delta_t": 0.0001,
     "MinStepSize": 1e-8,
-    "restart": True,
+    "restart": False,
     "solveAdjoint": True, 
 }
 
@@ -190,24 +190,24 @@ stored_energy_weight = 1000.0
 objective_from_user_weight = jnp.append(pressure_error_weight, stored_energy_weight)
 
 # objectives = [
-objectives = [ObjectiveFromUser(
+obj = ObjectiveFromUser(
     objective_from_user_fun,
     eq,
     target=0,
     weight=objective_from_user_weight,
     grid=yancc_desc_grid,
     deriv_mode="fwd", 
-),]
+)
 
 
 
-obj = ObjectiveFunction(objectives)
+# obj = ObjectiveFunction(objectives)
 obj.build(use_jit=False)
 
-G = obj.compute_scaled_error(obj.x(eq))
+G = obj.compute_scaled_error(eq.params_dict)
 print(G)
 
-J = obj.jac_scaled(obj.x(eq))
+J = obj.jac_scaled(eq.params_dict)
 print(J)
 
 

@@ -23,7 +23,7 @@ py::capsule EncapsulateFfiCall(T *fn)
 {
 	// This check is optional, but it can be helpful for avoiding invalid handlers.
 	static_assert(std::is_invocable_r_v<XLA_FFI_Error *, T, XLA_FFI_CallFrame *>,
-				  "Encapsulated function must be and XLA FFI handler");
+				  "Encapsulated function must be an XLA FFI handler");
 	return py::capsule(reinterpret_cast<void *>(fn));
 };
 #endif
