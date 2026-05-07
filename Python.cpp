@@ -231,7 +231,7 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 		.def("configure", &PyRunner::configure)
 		.def("run", &PyRunner::run)
 		.def("run_ss", &PyRunner::run_ss)
-		.def("runAdjointSolve", &PyRunner::runAdjointSolve)
+		.def("getAdjointGradients", &PyRunner::getAdjointGradients)
 		.def("getSolution", &PyRunner::getSolution)
 		.def("get_address", [](const PyRunner &runner) // needed for xla interface
 			 { return reinterpret_cast<std::uint64_t>(&runner); });
@@ -240,7 +240,7 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 		  { 
 			py::dict ffi_ops;
 			ffi_ops["get_solution_ffi"] = EncapsulateFfiCall(get_solution_ffi_ops);
-			ffi_ops["run_adjoint_solve_ffi"] = EncapsulateFfiCall(run_adjoint_solve_ffi_ops);
+			ffi_ops["get_adjoint_gradients_ffi"] = EncapsulateFfiCall(get_adjoint_gradients_ffi_ops);
 			ffi_ops["run_ffi"] = EncapsulateFfiCall(run_ffi_ops);
 			ffi_ops["run_ss_ffi"] = EncapsulateFfiCall(run_ss_ffi_ops);
 			return ffi_ops; });
@@ -249,7 +249,7 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 		  { 
 			py::dict ffi_ops;
 			ffi_ops["get_solution_ffi_cuda"] = EncapsulateFfiCall(get_solution_ffi_ops_cuda);
-			ffi_ops["run_adjoint_solve_ffi_cuda"] = EncapsulateFfiCall(run_adjoint_solve_ffi_ops_cuda);
+			ffi_ops["get_adjoint_gradients_ffi_cuda"] = EncapsulateFfiCall(get_adjoint_gradients_ffi_ops_cuda);
 			return ffi_ops; });
 #endif
 #endif

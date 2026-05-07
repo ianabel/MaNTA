@@ -59,18 +59,8 @@ public:
     // Runs solver to steady state
     void run_ss(void);
 
-    // void setTransportSystem(const TransportSystem &problem)
-    // {
-    //     *pProblem = problem;
-    // };
-
-    // void setAdjointProblem(std::unique_ptr<AdjointProblem> ap)
-    // {
-    //     adjoint = ap;
-    //     system->setAdjointProblem(ap.get());
-    // };
     // Run adjoint solver and return tuple (G, G_p)
-    py::tuple runAdjointSolve(void);
+    py::tuple getAdjointGradients(void);
 
     Vector getSolution(Index var, std::optional<std::vector<Position>> const &points);
 
@@ -82,28 +72,8 @@ private:
     std::unique_ptr<SystemSolver> system;
     std::unique_ptr<Grid> grid;
 
-    // Runner function that runs solver to tf
-    // std::function<void(double)> runner;
-
     bool configured = false;
     double steady_state_tolerance;
-
-    // private: // solver data
-    //     /*
-    //         This class controls the lifetime of the solver data so that we can request more timesteps without restarting the integration
-    //     */
-    //     SUNLinearSolver LS = NULL; // linear solver memory structure
-    //     SUNMatrix sunMat = NULL;   //
-    //     void *IDA_mem = NULL;      // IDA memory structure
-    //     int retval;
-
-    //     N_Vector Y = NULL;           // vector for storing solution
-    //     N_Vector dYdt = NULL;        // vector for storing time derivative of solution
-    //     N_Vector constraints = NULL; // vector for storing constraints
-    //     N_Vector _id = NULL;         // vector for storing id (which elements are algebraic or differentiable)
-    //     N_Vector res = NULL;         // vector for storing residual
-    //     N_Vector absTolVec = NULL;   // vector for storing absolute tolerances
-    //     sunrealtype tout, tret;
 };
 
 #endif

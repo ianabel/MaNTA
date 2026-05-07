@@ -13,7 +13,6 @@
 
 #ifdef CUDA
 #include "cuda_runtime_api.h"
-// cuda only supports 32 bit floats
 #define fp_dtype_cuda ffi::F32
 #define i_dtype_cuda ffi::S32
 #endif
@@ -27,12 +26,11 @@ namespace py = pybind11;
 /*
     Bindings for XLA and JAX, enables native jit compilation
 
-    Basically emululate base functions but take in a void pointer to a PyRunner object
+    Basically emululate base functions but take in a pointer to a PyRunner object
 */
 
 // can use either 64 or 32 bit math, based on jax config
 
-// PyRunner is passed in as a void pointer then cast
 static ffi::Error run_ffi_impl(PyRunner *runner, ffi::AnyBuffer args)
 {
     py::gil_scoped_acquire gil;
@@ -50,10 +48,10 @@ static ffi::Error run_ffi_ss_impl(PyRunner *runner)
     return ffi::Error::Success();
 };
 
-static ffi::Error run_adjoint_ffi_impl(PyRunner *runner, ffi::Result<ffi::BufferR1<fp_dtype>> Gout, ffi::Result<ffi::BufferR2<fp_dtype>> G_p_out, std::optional<ffi::Result<ffi::BufferR1<fp_dtype>>> G_p_boundary_out)
+static ffi::Error get_adjoint_gradients_ffi_impl(PyRunner *runner, ffi::Result<ffi::BufferR1<fp_dtype>> Gout, ffi::Result<ffi::BufferR2<fp_dtype>> G_p_out, std::optional<ffi::Result<ffi::BufferR1<fp_dtype>>> G_p_boundary_out)
 {
     py::gil_scoped_acquire gil;
-    py::tuple result = runner->runAdjointSolve();
+    py::tuple result = runner->getAdjointGradients();
     auto G = result[0].cast<Vector>();
     py::dict G_p = result[1];
     auto G_p_internal = G_p["G_p"].cast<Matrix>();
@@ -115,11 +113,11 @@ static ffi::Error get_solution_ffi_impl(PyRunner *runner, ffi::Buffer<i_dtype> v
 };
 
 #ifdef CUDA
-static ffi::Error run_adjoint_ffi_impl_cuda(cudaStream_t stream, PyRunner *runner, ffi::Result<ffi::BufferR1<fp_dtype_cuda>> Gout, ffi::Result<ffi::BufferR2<fp_dtype_cuda>> G_p_out, std::optional<ffi::Result<ffi::BufferR1<fp_dtype_cuda>>> G_p_boundary_out)
+static ffi::Error get_adjoint_gradients_ffi_impl_cuda(cudaStream_t stream, PyRunner *runner, ffi::Result<ffi::BufferR1<fp_dtype_cuda>> Gout, ffi::Result<ffi::BufferR2<fp_dtype_cuda>> G_p_out, std::optional<ffi::Result<ffi::BufferR1<fp_dtype_cuda>>> G_p_boundary_out)
 {
 
     py::gil_scoped_acquire gil;
-    py::tuple result = runner->runAdjointSolve();
+    py::tuple result = runner->getAdjointGradients();
     auto G = result[0].cast<Vector>();
     py::dict G_p = result[1];
     auto G_p_internal = G_p["G_p"].cast<Matrix>();
@@ -207,7 +205,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(run_ss_ffi_ops, run_ffi_ss_impl,
                               ffi::Ffi::Bind()
                                   .Attr<ffi::Pointer<PyRunner>>("obj"));
 
-XLA_FFI_DEFINE_HANDLER_SYMBOL(run_adjoint_solve_ffi_ops, run_adjoint_ffi_impl,
+XLA_FFI_DEFINE_HANDLER_SYMBOL(get_adjoint_gradients_ffi_ops, get_adjoint_gradients_ffi_impl,
                               ffi::Ffi::Bind()
                                   .Attr<ffi::Pointer<PyRunner>>("obj")
                                   .Ret<ffi::BufferR1<fp_dtype>>()
@@ -222,7 +220,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(get_solution_ffi_ops, get_solution_ffi_impl,
                                   .Ret<ffi::BufferR1<fp_dtype>>());
 
 #ifdef CUDA
-XLA_FFI_DEFINE_HANDLER_SYMBOL(run_adjoint_solve_ffi_ops_cuda, run_adjoint_ffi_impl_cuda,
+XLA_FFI_DEFINE_HANDLER_SYMBOL(get_adjoint_gradients_ffi_ops_cuda, get_adjoint_gradients_ffi_impl_cuda,
                               ffi::Ffi::Bind()
                                   .Ctx<ffi::PlatformStream<cudaStream_t>>()
                                   .Attr<ffi::Pointer<PyRunner>>("obj")
