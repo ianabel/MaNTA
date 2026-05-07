@@ -463,10 +463,11 @@ void SystemSolver::initialiseMatrices()
         // Finally fill L
         for (Index var = 0; var < nVars; var++)
         {
-            if (I.x_l == grid.lowerBoundary() && /* is b.d. Neumann at lower boundary */ !problem->isLowerBoundaryDirichlet(var))
-                L_global(var * (nCells + 1) + i) += problem->LowerBoundary(var, 0.0);
-            if (I.x_u == grid.upperBoundary() && /* is b.d. Neumann at upper boundary */ !problem->isUpperBoundaryDirichlet(var))
-                L_global(var * (nCells + 1) + i + 1) += problem->UpperBoundary(var, 0.0);
+
+                if (I.x_l == grid.lowerBoundary() && /* is b.d. Neumann at lower boundary */ !problem->isLowerBoundaryDirichlet(var))
+                    L_global(var * (nCells + 1) + i) -= problem->LowerBoundary(var, 0.0);
+                if (I.x_u == grid.upperBoundary() && /* is b.d. Neumann at upper boundary */ !problem->isUpperBoundaryDirichlet(var))
+                    L_global(var * (nCells + 1) + i + 1) += problem->UpperBoundary(var, 0.0);
         }
 
         Eigen::MatrixXd X(nVars * (k + 1), nVars * (k + 1));
@@ -551,11 +552,13 @@ void SystemSolver::updateBoundaryConditions(double t)
                     RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_u) * tau(I.x_u) * problem->UpperBoundary(var, t);
                 }
             }
-
-            if (I.x_l == grid.lowerBoundary() && /* is b.d. Neumann at lower boundary */ !problem->isLowerBoundaryDirichlet(var))
-                L_global(var * (nCells + 1) + i) += problem->LowerBoundary(var, t);
-            if (I.x_u == grid.upperBoundary() && /* is b.d. Neumann at upper boundary */ !problem->isUpperBoundaryDirichlet(var))
-                L_global(var * (nCells + 1) + i + 1) += problem->UpperBoundary(var, t);
+            // for (Eigen::Index j = 0; j < k + 1; j ++) 
+            // {
+                if (I.x_l == grid.lowerBoundary() && /* is b.d. Neumann at lower boundary */ !problem->isLowerBoundaryDirichlet(var))
+                    L_global(var * (nCells + 1) + i) -= problem->LowerBoundary(var, t);
+                if (I.x_u == grid.upperBoundary() && /* is b.d. Neumann at upper boundary */ !problem->isUpperBoundaryDirichlet(var))
+                    L_global(var * (nCells + 1) + i + 1) += problem->UpperBoundary(var, t);
+                // }
         }
     }
 }
@@ -985,7 +988,7 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
         // C_cellwise * sigma_cellwise
         for (Index var = 0; var < nVars; var++)
         {
-            res.lambda(var).segment<2>(i) += Csigma_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.sigma(var).getCoeff(i).second + Cq_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.q(var).getCoeff(i).second + G_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.u(var).getCoeff(i).second + H_cellwise[i].block(2 * var, 2 * var, 2, 2) * Y_h.lambda(var).segment<2>(i) - L_global.segment<2>(var * (nCells + 1));
+            res.lambda(var).segment<2>(i) += Csigma_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.sigma(var).getCoeff(i).second + Cq_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.q(var).getCoeff(i).second + G_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.u(var).getCoeff(i).second + H_cellwise[i].block(2 * var, 2 * var, 2, 2) * Y_h.lambda(var).segment<2>(i) - L_global.segment<2>(var * (nCells + 1) + i);
         }
     }
 
@@ -1485,10 +1488,13 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
 
     // Sources are vectorized so we interpolate to the output grid
     std::vector<boost::math::interpolators::barycentric_rational<double>> source_interp;
-    for (Index v = 0; v < nVars; ++v)
+    if (printSources)
     {
-        auto Source_vals = problem->Sources(v, tmp_y.evalOnNodes(), tmp_y.getPoints(), t);
-        source_interp.emplace_back(tmp_y.getPoints().data(), Source_vals.data(), Source_vals.size());
+        for (Index v = 0; v < nVars; ++v)
+        {
+            auto Source_vals = problem->Sources(v, y.evalOnNodes(), y.getPoints(), t);
+            source_interp.emplace_back(y.getPoints().data(), Source_vals.data(), Source_vals.size());
+        }
     }
 
     for (int i = 0; i < nOut; ++i)
@@ -1535,10 +1541,14 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
     double delta_x = (grid.upperBoundary() - grid.lowerBoundary()) * (1.0 / (nOut - 1.0));
 
     std::vector<boost::math::interpolators::barycentric_rational<double>> source_interp;
-    for (Index v = 0; v < nVars; ++v)
+
+    if (printSources) 
     {
-        auto Source_vals = problem->Sources(v, y.evalOnNodes(), y.getPoints(), t);
-        source_interp.emplace_back(y.getPoints().data(), Source_vals.data(), Source_vals.size());
+        for (Index v = 0; v < nVars; ++v)
+        {
+            auto Source_vals = problem->Sources(v, y.evalOnNodes(), y.getPoints(), t);
+            source_interp.emplace_back(y.getPoints().data(), Source_vals.data(), Source_vals.size());
+        }
     }
 
     for (int i = 0; i < nOut; ++i)

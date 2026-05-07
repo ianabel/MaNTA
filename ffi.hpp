@@ -87,7 +87,6 @@ static ffi::Error get_adjoint_gradients_ffi_impl(PyRunner *runner, ffi::Result<f
 
 static ffi::Error get_solution_ffi_impl(PyRunner *runner, ffi::Buffer<i_dtype> var, std::optional<ffi::BufferR1<fp_dtype>> points, ffi::Result<ffi::BufferR1<fp_dtype>> out)
 {
-
     py::gil_scoped_acquire gil;
     auto var_index = *var.typed_data();
     if (points)

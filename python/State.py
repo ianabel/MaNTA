@@ -4,7 +4,9 @@ from jaxtyping import Array, ArrayLike, Float, Int
 import jax.numpy as jnp
 import numpy as np
 
-# Wrapper class for MaNTA state 
+"""
+Wrapper class for MaNTA State
+"""
 class State(eqx.Module):
     Variable: Float[ArrayLike, '...']
     Derivative: Float[ArrayLike, '...']

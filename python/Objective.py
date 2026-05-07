@@ -53,8 +53,8 @@ def make_objective(config, vectorized=False):
     _f_wrapped = functools.partial(StellaratorFun, config)
 
     @eqx.filter_custom_jvp
-    def _objective_base(fields, grid, Vprime):
-        yancc_wrapper = yancc_data.from_fields(fields, grid, Vprime)
+    def _objective_base(fields, grid, Vp, Vpp):
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp)
 
         G, G_p, pi = _f_wrapped(yancc_wrapper)
         return G, pi 
@@ -62,10 +62,10 @@ def make_objective(config, vectorized=False):
 
     @_objective_base.def_jvp
     def _objective_base_jvp(primals, tangents):
-        fields, grid, Vprime = primals
-        field_dot,_,_ = tangents
+        fields, grid, Vp, Vpp = primals
+        field_dot,_,_,_ = tangents
     
-        yancc_wrapper = yancc_data.from_fields(fields, grid, Vprime)
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp)
         G, G_p, pi = _f_wrapped(yancc_wrapper)
         # _, unflatten = jax.flatten_util.ravel_pytree(fields)
 
@@ -119,18 +119,18 @@ def make_objective_fd(config, abs_step=1e-4, rel_step=0):
     _f_wrapped = functools.partial(StellaratorFun, config)
 
     @eqx.filter_custom_jvp
-    def _objective_base(fields, grid, Vprime):
-        yancc_wrapper = yancc_data.from_fields(fields, grid, Vprime)
+    def _objective_base(fields, grid, Vp, Vpp):
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp)
 
         G, G_p, pi = _f_wrapped(yancc_wrapper)
         return G, pi 
 
     @_objective_base.def_jvp
     def _objective_base_jvp(primals, tangents):
-        fields, grid, Vprime = primals
-        field_dot,_,_ = tangents
+        fields, grid, Vp, Vpp = primals
+        field_dot,_,_ ,_= tangents
     
-        yancc_wrapper = yancc_data.from_fields(fields, grid, Vprime)
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp)
         G, G_p, pi = _f_wrapped(yancc_wrapper)
         primal_out = (G, pi)
         # primal_out = _f_wrapped(*primals)
@@ -148,7 +148,7 @@ def make_objective_fd(config, abs_step=1e-4, rel_step=0):
         vh = jnp.where(normv == 0, v, v / normv)
 
         def f(fields_in):
-            yancc_wrapper = yancc_data.from_fields(fields_in, grid, Vprime)
+            yancc_wrapper = yancc_data.from_fields(fields_in, grid, Vp, Vpp)
             G, G_p, pi = _f_wrapped(yancc_wrapper)
             return G
 

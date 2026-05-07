@@ -1,5 +1,7 @@
 # %%
-
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["HDF5_USE_FILE_LOCKING"]= "FALSE"
 import MaNTA
 from Objective import make_objective
 from Stellarator import StellaratorTransport
@@ -53,7 +55,7 @@ st_config = {
 solver_config = {
     "OutputFilename": "compilation_test",
     "Polynomial_degree": 3,
-    "Grid_size": 3,
+    "Grid_size": 4,
     "tau": 100.0, 
     "Lower_boundary": 0.0,
     "Upper_boundary": 0.9,
@@ -61,6 +63,7 @@ solver_config = {
     "delta_t": 0.001,
     "restart": False,
     "solveAdjoint": True, 
+    "SteadyStateTolerance": 1e-2,
 }
 
 config = {
@@ -100,8 +103,8 @@ V0 = eq.compute("V")["V"]
 
 # %%
 
-jax.config.update("jax_log_compiles", True)
-jax.config.update("jax_explain_cache_misses", True)
+# jax.config.update("jax_log_compiles", True)
+# jax.config.update("jax_explain_cache_misses", True)
 
 st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
 st.runner.Run_ss()

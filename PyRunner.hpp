@@ -9,10 +9,6 @@
 #include <pybind11/functional.h>
 #include <pybind11/numpy.h>
 
-// #include "xla/ffi/api/api.h"
-// #include "xla/ffi/api/c_api.h"
-// #include "xla/ffi/api/ffi.h"
-
 #include <string>
 #include <variant>
 
@@ -20,7 +16,6 @@
 
 #include "PhysicsCases.hpp"
 
-// namespace ffi = xla::ffi;
 namespace py = pybind11;
 
 // Generic parameter

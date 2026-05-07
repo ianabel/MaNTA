@@ -1,7 +1,7 @@
 import jax
 import MaNTA
 import jax.numpy as jnp
-# jax.config.update('jax_enable_x64', True)
+
 CPU = 0
 GPU = 1
 
@@ -63,6 +63,9 @@ class FFIRunner(MaNTA.Runner):
     def getSolution(self, *args, **kwargs):
         raise NotImplementedError("getSolution method is disabled when using FFI; use get_profile")
 
+    """
+    Runner functions using the ffi api 
+    """
     def Run(self, tFinal):
         with jax.default_device(cpu_device):
             jax.ffi.ffi_call(ffi_ops["run"], [], has_side_effect=True)(tFinal, obj=self.get_address())
