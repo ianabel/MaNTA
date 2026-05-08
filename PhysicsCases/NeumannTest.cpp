@@ -14,6 +14,7 @@ NeumannTest::NeumannTest(toml::value const &config, Grid const &grid)
     nVars = 1;
 
     xL = grid.lowerBoundary();
+    xR = grid.upperBoundary();
 
     // Construst your problem from user-specified config
     // throw an exception if you can't. NEVER leave a part-constructed object around
@@ -34,6 +35,7 @@ NeumannTest::NeumannTest(toml::value const &config, Grid const &grid)
     growth_rate = toml::find_or(DiffConfig, "growth_rate", 0.5);
 
     lowerNeumann = toml::find_or(DiffConfig, "LowerNeumann", false);
+    upperNeumann = toml::find_or(DiffConfig, "UpperNeumann", false);
 }
 
 // Dirichlet Boundary Conditon
@@ -47,11 +49,14 @@ Value NeumannTest::LowerBoundary(Index, Time) const
 
 Value NeumannTest::UpperBoundary(Index, Time) const
 {
-    return 0.0;
+    if (upperNeumann)
+        return InitialDerivative(0, xR);
+    else
+        return InitialValue(0, xR);
 }
 
 bool NeumannTest::isLowerBoundaryDirichlet(Index) const { return !lowerNeumann; };
-bool NeumannTest::isUpperBoundaryDirichlet(Index) const { return true; };
+bool NeumannTest::isUpperBoundaryDirichlet(Index) const { return !upperNeumann; };
 
 Value NeumannTest::SigmaFn(Index, const State &s, Position x, Time)
 {
@@ -60,8 +65,8 @@ Value NeumannTest::SigmaFn(Index, const State &s, Position x, Time)
 
 Value NeumannTest::Sources(Index, const State &s, Position x, Time t)
 {
-    double u = s.Variable[0];
-    double S = SourceStrength * u;
+    // double u = s.Variable[0];
+    double S = SourceStrength;
 
     return S;
 }

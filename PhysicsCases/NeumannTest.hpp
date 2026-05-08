@@ -43,8 +43,8 @@ public:
 private:
     // Put class-specific data here
     double kappa, InitialWidth, InitialHeight, Centre;
-    bool lowerNeumann;
-    double xL;
+    bool lowerNeumann, upperNeumann;
+    double xL, xR;
     double growth, growth_rate, SourceStrength;
 
     // Without this (and the implementation line in NeumannTest.cpp)

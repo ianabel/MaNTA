@@ -191,6 +191,8 @@ check_ref_case( "Nonlin2" )
 check_ref_case( "PIDTest" )
 check_ref_case( "AdjointTestProblem" )
 check_ref_case( "AuxVarTest" )
+check_ref_case( "NeumannTestLower" )
+check_ref_case( "NeumannTestUpper" )
 
 print("\n\n----------------")
 print("All Tests Passed")

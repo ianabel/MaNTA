@@ -463,11 +463,10 @@ void SystemSolver::initialiseMatrices()
         // Finally fill L
         for (Index var = 0; var < nVars; var++)
         {
-
-                if (I.x_l == grid.lowerBoundary() && /* is b.d. Neumann at lower boundary */ !problem->isLowerBoundaryDirichlet(var))
-                    L_global(var * (nCells + 1) + i) -= problem->LowerBoundary(var, 0.0);
-                if (I.x_u == grid.upperBoundary() && /* is b.d. Neumann at upper boundary */ !problem->isUpperBoundaryDirichlet(var))
-                    L_global(var * (nCells + 1) + i + 1) += problem->UpperBoundary(var, 0.0);
+            if (I.x_l == grid.lowerBoundary() && /* is b.d. Neumann at lower boundary */ !problem->isLowerBoundaryDirichlet(var))
+                L_global(var * (nCells + 1) + i) += -problem->LowerBoundary(var, 0.0);
+            if (I.x_u == grid.upperBoundary() && /* is b.d. Neumann at upper boundary */ !problem->isUpperBoundaryDirichlet(var))
+                L_global(var * (nCells + 1) + i + 1) += problem->UpperBoundary(var, 0.0);
         }
 
         Eigen::MatrixXd X(nVars * (k + 1), nVars * (k + 1));
@@ -552,13 +551,11 @@ void SystemSolver::updateBoundaryConditions(double t)
                     RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_u) * tau(I.x_u) * problem->UpperBoundary(var, t);
                 }
             }
-            // for (Eigen::Index j = 0; j < k + 1; j ++) 
-            // {
-                if (I.x_l == grid.lowerBoundary() && /* is b.d. Neumann at lower boundary */ !problem->isLowerBoundaryDirichlet(var))
-                    L_global(var * (nCells + 1) + i) -= problem->LowerBoundary(var, t);
-                if (I.x_u == grid.upperBoundary() && /* is b.d. Neumann at upper boundary */ !problem->isUpperBoundaryDirichlet(var))
-                    L_global(var * (nCells + 1) + i + 1) += problem->UpperBoundary(var, t);
-                // }
+
+            if (I.x_l == grid.lowerBoundary() && /* is b.d. Neumann at lower boundary */ !problem->isLowerBoundaryDirichlet(var))
+                L_global(var * (nCells + 1) + i) += -problem->LowerBoundary(var, t);
+            if (I.x_u == grid.upperBoundary() && /* is b.d. Neumann at upper boundary */ !problem->isUpperBoundaryDirichlet(var))
+                L_global(var * (nCells + 1) + i + 1) += problem->UpperBoundary(var, t);
         }
     }
 }
