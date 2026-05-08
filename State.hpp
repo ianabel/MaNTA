@@ -154,7 +154,6 @@ public:
         return _Derivative.col(i);
     }
     Eigen::Ref<Matrix> cellwiseDerivative(Index cell)
-    Eigen::Ref<Matrix> cellwiseDerivative(Index cell)
     {
         return _Derivative(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
     }
@@ -175,7 +174,6 @@ public:
         return _Flux.col(i);
     }
     Eigen::Ref<Matrix> cellwiseFlux(Index cell)
-    Eigen::Ref<Matrix> cellwiseFlux(Index cell)
     {
         return _Flux(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
     }
@@ -195,7 +193,6 @@ public:
     {
         return _Aux.col(i);
     }
-    Eigen::Ref<Matrix> cellwiseAux(Index cell)
     Eigen::Ref<Matrix> cellwiseAux(Index cell)
     {
         return _Aux(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
@@ -247,9 +244,7 @@ public:
         where i is within-cell index
     */
     std::vector<Eigen::Ref<Matrix>> Variable(Index cell)
-    std::vector<Eigen::Ref<Matrix>> Variable(Index cell)
     {
-        std::vector<Eigen::Ref<Matrix>> out;
         std::vector<Eigen::Ref<Matrix>> out;
 
         for (Index var = 0; var < nVars; var++)
@@ -260,9 +255,7 @@ public:
     }
 
     std::vector<Eigen::Ref<Matrix>> Derivative(Index cell)
-    std::vector<Eigen::Ref<Matrix>> Derivative(Index cell)
     {
-        std::vector<Eigen::Ref<Matrix>> out;
         std::vector<Eigen::Ref<Matrix>> out;
 
         for (Index var = 0; var < nVars; var++)
@@ -273,9 +266,7 @@ public:
     }
 
     std::vector<Eigen::Ref<Matrix>> Flux(Index cell)
-    std::vector<Eigen::Ref<Matrix>> Flux(Index cell)
     {
-        std::vector<Eigen::Ref<Matrix>> out;
         std::vector<Eigen::Ref<Matrix>> out;
 
         for (Index var = 0; var < nVars; var++)

@@ -135,7 +135,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         ### Remember to set boundary conditions ####
         self.isUpperDirichlet  = True
-        self.isLowerDirichlet  = False
+        self.isLowerDirichlet  = True
         solver_config = config["Solver"]
         st_config = config["Stellarator"]
         self.points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
@@ -189,7 +189,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return 2./3. * ui * self.pnorm
 
     def LowerBoundary(self, index, t):
-        return self.InitialDerivative(index, self.xL)
+        return 0.0#self.InitialDerivative(index, self.xL)
 
     def UpperBoundary(self, index, t):
         return self.InitialValue(index, self.xR)
@@ -244,12 +244,13 @@ class StellaratorTransport(MaNTA.TransportSystem):
         put = lambda x : jax.device_put(x, static_sharding)
         n, nprime = put(jax.value_and_grad(self.Density)(x))
 
-        p_i =       2. / 3. * self.Vp_u_to_u  (index, state, x, vp, vpp)
+        p_i       = 2. / 3. * self.Vp_u_to_u  (index, state, x, vp, vpp)
         p_i_prime = 2. / 3. * self.Vp_up_to_up(index, state, x, vp, vpp)
         
         dndrho = nprime
         Erho = put(jnp.array(0.0))
-        Ti = p_i / n
+        Ti = jax.lax.cond(jax.lax.eq(x, self.xR), lambda pi, n: params.EdgeTemperature,  lambda pi, n: pi/n, p_i, n)
+
         dTidrho = (p_i_prime - Ti * dndrho) / n
 
         species = [
@@ -289,7 +290,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     @staticmethod
     def initial_profile(x, edge_value, peak_value):
-        return  (peak_value - edge_value) * (1 - x * x) + edge_value
+        return  (peak_value - edge_value) * (1 - x ** 4) + edge_value
     
     @partial(jax.jit, static_argnums=(0,))
     def dSources_dPhi( self, index, state, x, t ):
