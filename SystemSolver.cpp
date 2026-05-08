@@ -438,7 +438,7 @@ void SystemSolver::initialiseMatrices()
         for (Index var = 0; var < nVars; var++)
         {
             if (I.x_l == grid.lowerBoundary() && /* is b.d. Neumann at lower boundary */ !problem->isLowerBoundaryDirichlet(var))
-                L_global(var * (nCells + 1) + i) += problem->LowerBoundary(var, 0.0);
+                L_global(var * (nCells + 1) + i) += -problem->LowerBoundary(var, 0.0);
             if (I.x_u == grid.upperBoundary() && /* is b.d. Neumann at upper boundary */ !problem->isUpperBoundaryDirichlet(var))
                 L_global(var * (nCells + 1) + i + 1) += problem->UpperBoundary(var, 0.0);
         }
@@ -527,7 +527,7 @@ void SystemSolver::updateBoundaryConditions(double t)
             }
 
             if (I.x_l == grid.lowerBoundary() && /* is b.d. Neumann at lower boundary */ !problem->isLowerBoundaryDirichlet(var))
-                L_global(var * (nCells + 1) + i) += problem->LowerBoundary(var, t);
+                L_global(var * (nCells + 1) + i) += -problem->LowerBoundary(var, t);
             if (I.x_u == grid.upperBoundary() && /* is b.d. Neumann at upper boundary */ !problem->isUpperBoundaryDirichlet(var))
                 L_global(var * (nCells + 1) + i + 1) += problem->UpperBoundary(var, t);
         }
@@ -951,7 +951,7 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
         // C_cellwise * sigma_cellwise
         for (Index var = 0; var < nVars; var++)
         {
-            res.lambda(var).segment<2>(i) += Csigma_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.sigma(var).getCoeff(i).second + Cq_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.q(var).getCoeff(i).second + G_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.u(var).getCoeff(i).second + H_cellwise[i].block(2 * var, 2 * var, 2, 2) * Y_h.lambda(var).segment<2>(i) - L_global.segment<2>(var * (nCells + 1));
+            res.lambda(var).segment<2>(i) += Csigma_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.sigma(var).getCoeff(i).second + Cq_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.q(var).getCoeff(i).second + G_cellwise[i].block(var * 2, var * (k + 1), 2, k + 1) * Y_h.u(var).getCoeff(i).second + H_cellwise[i].block(2 * var, 2 * var, 2, 2) * Y_h.lambda(var).segment<2>(i) - L_global.segment<2>(var * (nCells + 1) + i);
         }
     }
 
