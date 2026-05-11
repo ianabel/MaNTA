@@ -226,7 +226,7 @@ public:
             // return;
         }
 
-        out.Variable() = _override(i, states, abscissae).cast<Matrix>();
+        checkShapeAndSet(out.Variable(), _override(i, states, abscissae).cast<Matrix>(), "dSigma in PyAdjointProblem");
     };
 
     void dSources(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae) override
@@ -243,7 +243,7 @@ public:
             // return;
         }
 
-        out.Variable() = _override(i, states, abscissae).cast<Matrix>();
+        checkShapeAndSet(out.Variable(), _override(i, states, abscissae).cast<Matrix>(), "dSource in PyAdjointProblem");
     };
 
     void dAux_dp(Index i, Index pIndex, Value &out, const State &s, Position x) override

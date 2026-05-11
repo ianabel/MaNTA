@@ -51,8 +51,7 @@ class yancc_data(eqx.Module):
     grid: eqx.Module
     pitchgrid: eqx.Module
     speedgrid: eqx.Module
-    Vp: Float[ArrayLike, '...'] # dV/dr normalized by V[-1], function of volume only for now but can be more general in the future
-    Vpp: Float[ArrayLike, '...']
+    Vprim: Float[ArrayLike, '...'] # dV/dr normalized by V[-1], function of volume only for now but can be more general in the future
     rho: Float[ArrayLike, '...']
     nNorm: float 
     Tnorm: float
@@ -64,8 +63,7 @@ class yancc_data(eqx.Module):
             self, 
             fields,
             grid, 
-            Vp,
-            Vpp,
+            Vprim,
             rho,  
             nNorm: Optional[float] = 1e20, 
             Tnorm: Optional[float] = 1e3, 
@@ -74,8 +72,7 @@ class yancc_data(eqx.Module):
 
         self.fields = fields
         self.grid = grid
-        self.Vp = Vp
-        self.Vpp = Vpp
+        self.Vprim = Vprim
         self.rho= rho
         self.nx = nx
         self.na = na
@@ -98,7 +95,7 @@ class yancc_data(eqx.Module):
 
     @classmethod
     def from_eq(cls, 
-            rho: Float[ArrayLike, '...'],
+            Volume: Float[ArrayLike, '...'], 
             nNorm: Optional[float] = 1e20, 
             Tnorm: Optional[float] = 1e3, 
             nx: Optional[int] = 7, 
@@ -106,7 +103,8 @@ class yancc_data(eqx.Module):
             nt: Optional[int] = 17,
             nz: Optional[int] = 33,
             eq = None,
-            grid = None):
+            grid = None,
+            rho: Optional[Float[ArrayLike, '...']] = None):
         
         print("Initializing yancc wrapper")
         if (eq is None):
@@ -114,22 +112,34 @@ class yancc_data(eqx.Module):
             eq = desc.examples.get("W7-X")
 
         if (grid is None):
+            rho = jnp.linspace(0,1,len(Volume))
             grid = desc.grid.LinearGrid(rho=rho, M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP)
        
 
-        desc_data = eq.compute(["V(r)", "V_r(r)", "V_rr(r)"], grid=grid)
+        desc_data = eq.compute(["V(r)", "V_r(r)"], grid=grid)
         V = grid.compress(desc_data['V(r)'])
-        V_r = grid.compress(desc_data['V_r(r)'])/V[-1]
-        V_rr = grid.compress(desc_data['V_rr(r)'])/V[-1]
-        
+        Vn = V/V[-1] # normalize
+        dVdr = grid.compress(desc_data['V_r(r)'])
+        dVndr = dVdr/V[-1] # normalize
+        Vn = interpax.CubicSpline(rho, Vn)
+        dVndr = interpax.CubicSpline(rho, dVndr) 
+        rho = Vn
         fields = []
-        for r in rho:
-
-            fields.append(Field.from_desc(eq, r, nt, nz))
+        r = []
+        i = 0
+        rho_from_normalized_volume = lambda Vnorm : desc.backend.root_scalar(lambda x: Vn(x) - Vnorm, jnp.sqrt(Vnorm))
+        for pos in Volume:
+            r.append(rho_from_normalized_volume(pos))
+            fields.append(Field.from_desc(eq, r[i], nt, nz))
+            i+=1
 
         fields = tree_map(lambda *vals: jnp.stack(vals), *fields)
+        r = jnp.array(r)
+        Vprim = jnp.array(dVndr(r)) 
+
+
     
-        return cls(fields=fields, grid = grid, Vp=V_r, Vpp=V_rr, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na, rho=rho)
+        return cls(fields=fields, grid = grid, Vprim=Vprim, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na, rho=r)
 
     # for constructing from data passed by DESC
     @classmethod
@@ -159,23 +169,23 @@ class yancc_data(eqx.Module):
         yancc_dat["rho"] = grid.compress(grid.nodes[:, 0], surface_label="rho")
         
         V = grid.compress(data['V(r)'])
-        V_r = grid.compress(data['V_r(r)'])/V[-1]
-        V_rr = grid.compress(data['V_rr(r)'])/V[-1]
+        dVdr = grid.compress(data['V_r(r)'])
+        dVndr = dVdr/V[-1] # normalize
 
         fields = jax.vmap(lambda d: yancc.field.Field(**d, NFP=grid.NFP))(yancc_dat)
-        return cls(fields=fields, grid=grid,rho=yancc_dat["rho"], Vp=V_r, Vpp=V_rr, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
+        return cls(fields=fields, grid=grid,rho=yancc_dat["rho"], Vprim = dVndr, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
 
     @classmethod
-    def from_fields(cls, fields, grid, V_r, V_rr, nNorm=1e20, Tnorm=1e3, nx=7, na=65):
-        return cls(fields=fields, grid=grid, rho=fields.rho, Vp = V_r, Vpp = V_rr, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
+    def from_fields(cls, fields, grid, Vprime, nNorm=1e20, Tnorm=1e3, nx=7, na=65):
+        return cls(fields=fields, grid=grid, rho=fields.rho, Vprim=Vprime, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
 
     @classmethod 
     def from_other(cls, fields_, grid_, other):
 
-        return cls(fields=fields_, grid=grid_, Vp = other.Vp, Vpp = other.Vpp, rho=other.rho, nNorm=other.nNorm, Tnorm=other.Tnorm, nx=other.nx, na=other.na)
+        return cls(fields=fields_, grid=grid_, Vprim = other.Vprim, rho=other.rho, nNorm=other.nNorm, Tnorm=other.Tnorm, nx=other.nx, na=other.na)
 
     def get_fields(self):
-        return self.fields, self.Vp, self.Vpp
+        return self.fields, self.Vprim
 
 # to avoid any surprises with jitting, we pass all the data as arguments rather than storing anything in the wrapper object
 """
