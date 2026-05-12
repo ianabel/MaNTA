@@ -2,9 +2,9 @@
 
 import MaNTA
 
-from Stellarator import StellaratorTransport
+from projects.MaNTA.python.Stellarator2 import StellaratorTransport
 from Objective import make_objective
-from yancc_wrapper import yancc_data
+from projects.MaNTA.python.yancc_wrapper2 import yancc_data
 
 # %%
 # # %%

@@ -4,9 +4,9 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"]= "FALSE"
 import MaNTA
 from Objective import make_objective
-from Stellarator import StellaratorTransport
+from projects.MaNTA.python.Stellarator2 import StellaratorTransport
 
-from yancc_wrapper import yancc_data
+from projects.MaNTA.python.yancc_wrapper2 import yancc_data
 
 # %%
 import desc

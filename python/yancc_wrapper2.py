@@ -124,7 +124,6 @@ class yancc_data(eqx.Module):
         
         fields = []
         for r in rho:
-
             fields.append(Field.from_desc(eq, r, nt, nz))
 
         fields = tree_map(lambda *vals: jnp.stack(vals), *fields)

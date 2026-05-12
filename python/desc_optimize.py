@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import equinox as eqx
 import yancc
 
-from yancc_wrapper import yancc_data
+from projects.MaNTA.python.yancc_wrapper2 import yancc_data
 
 import desc
 from desc import set_device
@@ -34,7 +34,7 @@ from desc.objectives import (
 )
 from desc.profiles import SplineProfile
 
-from Stellarator import StellaratorTransport
+from projects.MaNTA.python.Stellarator2 import StellaratorTransport
 
 st_config = {
     "SourceCenter": 0.2,

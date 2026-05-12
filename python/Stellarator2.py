@@ -61,7 +61,7 @@ def MaNTA_Decorator(func):
 
 from functools import partial
 
-from yancc_wrapper import yancc_data
+from projects.MaNTA.python.yancc_wrapper2 import yancc_data
 import yancc
 
 from typing import NamedTuple
@@ -189,7 +189,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return 2./3. * ui * self.pnorm
 
     def LowerBoundary(self, index, t):
-        return 0.0#self.InitialDerivative(index, self.xL)
+        return 0.0 #self.InitialDerivative(index, self.xL)
 
     def UpperBoundary(self, index, t):
         return self.InitialValue(index, self.xR)
@@ -241,15 +241,14 @@ class StellaratorTransport(MaNTA.TransportSystem):
     """
 
     def sigma( self, index, state : State, x, t, field, vp, vpp, params ):
-        put = lambda x : jax.device_put(x, static_sharding)
-        n, nprime = put(jax.value_and_grad(self.Density)(x))
+        n, nprime = jax.value_and_grad(self.Density)(x)
 
         p_i       = 2. / 3. * self.Vp_u_to_u  (index, state, x, vp, vpp)
         p_i_prime = 2. / 3. * self.Vp_up_to_up(index, state, x, vp, vpp)
         
         dndrho = nprime
-        Erho = put(jnp.array(0.0))
-        Ti = jax.lax.cond(jax.lax.eq(x, self.xR), lambda pi, n: params.EdgeTemperature,  lambda pi, n: pi/n, p_i, n)
+        Erho = jnp.array(0.0)
+        Ti = p_i / n #jax.lax.cond(jax.lax.eq(x, self.xR), lambda x: params.EdgeTemperature,  lambda pi, n: pi/n, (p_i, n))
 
         dTidrho = (p_i_prime - Ti * dndrho) / n
 
@@ -266,12 +265,12 @@ class StellaratorTransport(MaNTA.TransportSystem):
         _, _, fluxes, _  = eqx.filter_jit(solve_dke)(field, self.yancc_wrapper.pitchgrid, self.yancc_wrapper.speedgrid, species, Erho)
 
         fout = fluxes['<heat_flux>'][0] * vp / (self.yancc_wrapper.FluxNorm)
-
+        # fout = -vp * dTidrho * 5.0 
         return -jnp.nan_to_num(fout, nan=0.0, posinf=0.0, neginf=0.0)
 
     @partial(jax.jit, static_argnums=(0,))
     def source( self, index, state, x, t, vp, params: NamedTuple ):
-        return vp * params.SourceHeight * jnp.exp(-(x - params.SourceCenter)**2 / (2 * params.SourceWidth**2))
+        return vp * params.SourceHeight * jnp.exp(-(x * x - params.SourceCenter)**2 / (2 * params.SourceWidth**2))
 
     def StoredEnergy(self, field, state, x, params):
         u = state.Variable[0]

@@ -2,9 +2,9 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 import functools
-from Stellarator import StellaratorTransport
+from projects.MaNTA.python.Stellarator2 import StellaratorTransport
 import yancc
-from yancc_wrapper import yancc_data
+from projects.MaNTA.python.yancc_wrapper2 import yancc_data
 
 
 from jax.experimental import io_callback
