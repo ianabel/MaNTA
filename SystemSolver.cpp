@@ -1314,7 +1314,9 @@ void SystemSolver::computeAdjointGradients()
     {
         if (adjointProblem->areParametersSpatial())
         {
-            G_p.block(i * nCells * (k + 1), 0, nCells * (k + 1), adjointProblem->getNp()) = adjointProblem->dGFndp(i, y);
+            Matrix dGdp(nCells * ( k + 1 ), adjointProblem->getNp());
+            checkShapeAndSet(dGdp, adjointProblem->dGFndp(i, y), "dGdp in SystemSolver");
+            G_p.block(i * nCells * (k + 1), 0, nCells * (k + 1), adjointProblem->getNp()) = dGdp;
         }
         else
             G_p.row(i) = adjointProblem->dGFndp(i, y);

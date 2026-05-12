@@ -8,21 +8,22 @@ GPU = 1
 cpu_device = jax.devices('cpu')[0]
 
 # MaNTA has to run on cpu so we only have cpu implementation for the run functions
-ffi_ops_names = [("get_solution", True), ("run_adjoint_solve", True), ("run", False), ("run_ss", False)] # (op_name, use_gpu)
+ffi_ops_names = [("get_solution", True), ("get_adjoint_gradients", True), ("run", False), ("run_ss", False)] # (op_name, use_gpu)
 ffi_ops = {}
 
 def register_ffi_cpu(op_name):
-    print("Using cpu implementation for operation " + op_name)
     jax.config.update('jax_enable_x64', True)
     for name, target in MaNTA.runner_ffi_ops().items():
         if (name.startswith(op_name)):
+            print("Using cpu implementation for operation " + op_name)
             jax.ffi.register_ffi_target(name, target, platform="cpu")
             return name
 
 def register_ffi_gpu(op_name):
-    print("Using gpu implementation for operation " + op_name)
+
     for name, target in MaNTA.runner_ffi_ops_cuda().items():
         if (name.startswith(op_name)):
+            print("Using gpu implementation for operation " + op_name)
             jax.ffi.register_ffi_target(name, target, platform="CUDA")
             return name
 
@@ -73,7 +74,7 @@ class FFIRunner(MaNTA.Runner):
         with jax.default_device(cpu_device):
             jax.ffi.ffi_call(ffi_ops["run_ss"], [],  has_side_effect=True)(obj=self.get_address())
     def Get_adjoint_gradients(self):
-        return jax.ffi.ffi_call(ffi_ops["run_adjoint_solve"], self.adjoint_output)(obj=self.get_address())
+        return jax.ffi.ffi_call(ffi_ops["get_adjoint_gradients"], self.adjoint_output)(obj=self.get_address())
     def Get_profile(self, var, points = None):
         if (points is None):
             points = self.points

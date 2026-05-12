@@ -53,8 +53,8 @@ def make_objective(config, vectorized=False):
     _f_wrapped = functools.partial(StellaratorFun, config)
 
     @eqx.filter_custom_jvp
-    def _objective_base(fields, grid, Vp, Vpp):
-        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp)
+    def _objective_base(fields, grid, Vp):
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp)
 
         G, G_p, pi = _f_wrapped(yancc_wrapper)
         return G, pi 
@@ -62,10 +62,10 @@ def make_objective(config, vectorized=False):
 
     @_objective_base.def_jvp
     def _objective_base_jvp(primals, tangents):
-        fields, grid, Vp, Vpp = primals
-        field_dot,_,_,_ = tangents
+        fields, grid, Vp = primals
+        field_dot,_,_= tangents
     
-        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp)
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp)
         G, G_p, pi = _f_wrapped(yancc_wrapper)
         # _, unflatten = jax.flatten_util.ravel_pytree(fields)
 
@@ -119,25 +119,25 @@ def make_objective_fd(config, abs_step=1e-4, rel_step=0):
     _f_wrapped = functools.partial(StellaratorFun, config)
 
     @eqx.filter_custom_jvp
-    def _objective_base(fields, grid, Vp, Vpp):
-        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp)
+    def _objective_base(fields, grid, Vp):
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp)
 
         G, G_p, pi = _f_wrapped(yancc_wrapper)
         return G, pi 
 
     @_objective_base.def_jvp
     def _objective_base_jvp(primals, tangents):
-        fields, grid, Vp, Vpp = primals
-        field_dot,_,_ ,_= tangents
+        fields, grid, Vp = primals
+        field_dot,_,_= tangents
     
-        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp)
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp)
         G, G_p, pi = _f_wrapped(yancc_wrapper)
         primal_out = (G, pi)
         # primal_out = _f_wrapped(*primals)
 
         # flatten everything into 1D vectors for easier finite differences
         # y, unflaty = jax.flatten_util.ravel_pytree(field_dot)
-        x, unflatx = jax.flatten_util.ravel_pytree(primals)
+        x, unflatx = jax.flatten_util.ravel_pytree(fields)
         v, _______ = jax.flatten_util.ravel_pytree(tangents)
 
         # finite difference step size
@@ -145,10 +145,10 @@ def make_objective_fd(config, abs_step=1e-4, rel_step=0):
 
         # scale tangents to unit norm if nonzero
         normv = jnp.linalg.norm(v)
-        vh = jnp.where(normv == 0, v, v / normv)
-
+        v1 = jnp.where(normv == 0, v, v / normv)
+        vh = jnp.pad(v1, (0, len(x)-len(v1)), mode='constant')
         def f(fields_in):
-            yancc_wrapper = yancc_data.from_fields(fields_in, grid, Vp, Vpp)
+            yancc_wrapper = yancc_data.from_fields(unflatx(fields_in), grid, Vp)
             G, G_p, pi = _f_wrapped(yancc_wrapper)
             return G
 

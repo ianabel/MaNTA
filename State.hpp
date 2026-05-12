@@ -266,6 +266,7 @@ public:
     }
 
     std::vector<Eigen::Ref<Matrix>> Flux(Index cell)
+    std::vector<Eigen::Ref<Matrix>> Flux(Index cell)
     {
         std::vector<Eigen::Ref<Matrix>> out;
 

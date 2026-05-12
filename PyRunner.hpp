@@ -9,7 +9,7 @@
 #include <pybind11/functional.h>
 #include <pybind11/numpy.h>
 
-#include <string>
+#include <string_view>
 #include <variant>
 
 #include "SystemSolver.hpp"
@@ -33,7 +33,7 @@ using ParameterType = std::variant<Parameter<double>,
                                    Parameter<bool>,
                                    Parameter<std::vector<double>>>;
 
-using map_t = std::map<std::string, ParameterType>;
+using map_t = std::map<std::string_view, ParameterType>;
 
 class PyRunner
 {
