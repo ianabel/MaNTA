@@ -390,15 +390,19 @@ void SystemSolver::initialiseMatrices()
                 // If we have neumann boundaries, need to also set the boundary parameters for q
                 if (I.x_l == grid.lowerBoundary() && !problem->isLowerBoundaryDirichlet(var))
                 {
-                    Csigma_var(0, i) = 0.0; // Treat sigma as dirichlet
-                    // CDoubleVar(1, i + (k + 1)) = y.getBasis().Evaluate(I, i, I.x_u);
-                    Cq_var(0, i) = -y.getBasis().Evaluate(I, i, I.x_l); // Treat Q as neumann
+                    // Csigma_var(0, i) = 0.0; // Treat sigma as dirichlet
+                    // // CDoubleVar(1, i + (k + 1)) = y.getBasis().Evaluate(I, i, I.x_u);
+                    // Cq_var(0, i) = -y.getBasis().Evaluate(I, i, I.x_l); // Treat Q as neumann
+                    Csigma_var(0, i) = -y.getBasis().Evaluate(I, i, I.x_l); // Treat sigma as neumann
+                    Cq_var(0, i) = 0.0;
                 }
                 if (I.x_u == grid.upperBoundary() && !problem->isUpperBoundaryDirichlet(var))
                 {
-                    Csigma_var(1, i) = 0.0; // Treat sigma as dirichlet
-                    // CDoubleVar(0, i + (k + 1)) = -y.getBasis().Evaluate(I, i, I.x_l);
-                    Cq_var(1, i) = y.getBasis().Evaluate(I, i, I.x_u); // Treat q as neumann
+                    // Csigma_var(1, i) = 0.0; // Treat sigma as dirichlet
+                    // // CDoubleVar(0, i + (k + 1)) = -y.getBasis().Evaluate(I, i, I.x_l);
+                    // Cq_var(1, i) = y.getBasis().Evaluate(I, i, I.x_u); // Treat q as neumann
+                    Csigma_var(1, i) = y.getBasis().Evaluate(I, i, I.x_u); // Treat sigma as neumann
+                    Cq_var(1, i) = 0.0;
                 }
 
                 Gvar(0, i) = tau(I.x_l) * y.getBasis().Evaluate(I, i, I.x_l);
@@ -1314,9 +1318,7 @@ void SystemSolver::computeAdjointGradients()
     {
         if (adjointProblem->areParametersSpatial())
         {
-            Matrix dGdp(nCells * ( k + 1 ), adjointProblem->getNp());
-            checkShapeAndSet(dGdp, adjointProblem->dGFndp(i, y), "dGdp in SystemSolver");
-            G_p.block(i * nCells * (k + 1), 0, nCells * (k + 1), adjointProblem->getNp()) = dGdp;
+            checkShapeAndSet(G_p.block(i * nCells * (k + 1), 0, nCells * (k + 1), adjointProblem->getNp()), adjointProblem->dGFndp(i, y), "dGdp in SystemSolver");
         }
         else
             G_p.row(i) = adjointProblem->dGFndp(i, y);

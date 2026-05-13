@@ -108,7 +108,7 @@ class yancc_data(eqx.Module):
         
         print("Initializing yancc wrapper")
         if (eq is None):
-            print("No equilibrium passed, using ESTELL example")
+            print("No equilibrium passed, using W7-X example")
             eq = desc.examples.get("W7-X")
 
         if (grid is None):

@@ -4,8 +4,14 @@
 #include "Types.hpp"
 
 // Eigen error messages are very unhelpful so we make our own
-static void checkShapeAndSet(Matrix &lhs, const Matrix &rhs, std::string varname)
+// Mainly for debugging, but also to make sure we don't accidentally mess up shapes when copying from python
+template <typename A, typename B>
+static void checkShapeAndSet(A &&lhs, const B &rhs, std::optional<std::string> varname)
 {
+    static_assert(std::is_base_of<Eigen::MatrixBase<typename std::decay<A>::type>, typename std::decay<A>::type>::value,
+                  "Input lhs must be an Eigen Matrix or Matrix Expression");
+    static_assert(std::is_base_of<Eigen::MatrixBase<typename std::decay<B>::type>, typename std::decay<B>::type>::value,
+                  "Input rhs must be an Eigen Matrix or Matrix Expression");
     if ((lhs.rows() == rhs.cols()) && (lhs.cols() == rhs.rows()))
     {
         lhs = rhs.transpose();
@@ -20,7 +26,7 @@ static void checkShapeAndSet(Matrix &lhs, const Matrix &rhs, std::string varname
 
         if (lhs_rows != rhs_rows || lhs_cols != rhs_cols)
         {
-            const std::string msg = "Shape mismatch when attempting to set " + varname + " during assignment to GlobalState. Input shape: (" + std::to_string(rhs_rows) + ", " + std::to_string(rhs_cols) + "). Required shape: (" + std::to_string(lhs_rows) + ", " + std::to_string(lhs_cols) + ")";
+            const std::string msg = "Shape mismatch when attempting to set " + varname.value_or("variable") + " during assignment. Input shape: (" + std::to_string(rhs_rows) + ", " + std::to_string(rhs_cols) + "). Required shape: (" + std::to_string(lhs_rows) + ", " + std::to_string(lhs_cols) + ")";
             throw std::runtime_error(msg);
         }
         lhs = rhs;
@@ -67,7 +73,7 @@ class GlobalState
 public:
     GlobalState() = default;
 
-    explicit GlobalState(Index nCells, Index k, Index nv, Index ns = 0, Index naux = 0) : nCells(nCells), k(k), nVars(nv), nScalars(ns), nAux(naux)
+    explicit GlobalState(Index nCells, Index k, Index nv, Index ns = 0, Index naux = 0) noexcept : nCells(nCells), k(k), nVars(nv), nScalars(ns), nAux(naux)
     {
         _Variable.resize(nVars, nCells * (k + 1));
         _Derivative.resize(nVars, nCells * (k + 1));
@@ -228,7 +234,7 @@ private:
 class GlobalStateMatrix
 {
 public:
-    GlobalStateMatrix(Index nVars) : nVars(nVars) { data.reserve(nVars); };
+    GlobalStateMatrix(Index nVars) noexcept : nVars(nVars) { data.reserve(nVars); };
 
     void add(Index nCells, Index k, Index nVars, Index nScalars, Index nAux)
     {
@@ -264,8 +270,6 @@ public:
         }
         return out;
     }
-
-    std::vector<Eigen::Ref<Matrix>> Flux(Index cell)
     std::vector<Eigen::Ref<Matrix>> Flux(Index cell)
     {
         std::vector<Eigen::Ref<Matrix>> out;

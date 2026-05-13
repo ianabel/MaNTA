@@ -4,12 +4,12 @@ import os
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"]= "FALSE"
-from projects.MaNTA.python.Stellarator2 import StellaratorTransport
+from Stellarator2 import StellaratorTransport
 import MaNTA
 from Objective import (make_objective, make_objective_fd)
 # from Stellarator import StellaratorTransport
 
-from projects.MaNTA.python.yancc_wrapper2 import yancc_data
+from yancc_wrapper2 import yancc_data
 
 # %%
 # # %%
@@ -87,12 +87,12 @@ import jax
 import jax.numpy as jnp
 
 st_config = {
-    "SourceCenter": 0.0,
-    "SourceHeight": 80.0,
-    "SourceWidth": 0.2,
-    "EdgeTemperature":0.1,
+    "SourceCenter": 0.2,
+    "SourceHeight": 400.0,
+    "SourceWidth": 0.5,
+    "EdgeTemperature":0.2,
     "EdgeDensity": 0.0,
-    "n0": 0.5,
+    "n0": 0.25,
 }
 
 # # %%
@@ -100,13 +100,14 @@ solver_config = {
     "OutputFilename": "stellarator_opt",
     "Polynomial_degree": 4,
     "Grid_size": 4,
-    "tau": 1000.0, 
+    "tau": 10.0, 
     "Lower_boundary": 0.0,
-    "Upper_boundary": 0.9,
+    "Upper_boundary": 0.95,
     "Relative_tolerance": 0.01,
-    "Absolute_tolerance": [1e-4],
-    "delta_t": 0.001,
+    "Absolute_tolerance": [1e-3],
+    "delta_t": 1e-4,
     "MinStepSize": 1e-8, 
+    "SteadyStateTolerance": 1e-2,
     "restart": False,
     "solveAdjoint": False, 
 }
@@ -138,7 +139,7 @@ eq_init = eq_est.copy()
 # yancc_grid = desc.grid.LinearGrid(rho=yancc_rho, M=eq_init.M_grid, N = eq_init.N_grid, NFP=eq_init.NFP)
 # points =  MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
 # yancc_wrapper = yancc_data.from_eq(points, grid = yancc_grid,rho = yancc_rho, Density=Density, eq=eq_init, nt = yancc_ntheta, nz = yancc_nzeta)
-yancc_wrapper = yancc_data.from_eq(points, eq=eq_init)
+yancc_wrapper = yancc_data.from_eq(points, eq=eq_init, nx=5, na=43, nz=yancc_nzeta, nt = yancc_ntheta)
 
 V0 = eq_est.compute("V")["V"]
 

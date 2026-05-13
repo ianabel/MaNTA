@@ -61,7 +61,7 @@ def MaNTA_Decorator(func):
 
 from functools import partial
 
-from projects.MaNTA.python.yancc_wrapper2 import yancc_data
+from yancc_wrapper2 import yancc_data
 import yancc
 
 from typing import NamedTuple
@@ -86,17 +86,6 @@ def put_on_gpu(tree):
     #     #     return jax.device_put(leaf, static_sharding)
     # return jax.tree.map(map_fn, tree)
 
-
-def getStateAtIndex(states, i):
-    out = {
-        "Variable": states["Variable"][i,:],
-        "Derivative": states["Derivative"][i,:],
-        "Flux": states["Flux"][i,:],
-        "Aux": states["Aux"][i,:],
-        "Scalars":states["Scalars"]
-    }
-    return out
-
 class StellaratorParams(NamedTuple):
     SourceCenter: float
     SourceHeight: float
@@ -117,7 +106,7 @@ class StellaratorParams(NamedTuple):
         )
 
 # Magic tuple to make vmap work
-vmap_axes = (State.vmap_axes(), 0)
+vmap_axes         = (State.vmap_axes(), 0)
 vmap_axes_wfield  = (None, State.vmap_axes(), 0, None, 0, 0, 0, None)
 vmap_axes_sources = (None, State.vmap_axes(), 0, None, 0, None)
 
@@ -134,8 +123,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
         self.nAux = 0
 
         ### Remember to set boundary conditions ####
-        self.isUpperDirichlet  = True
-        self.isLowerDirichlet  = True
+        self.isUpperDirichlet = True
+        self.isLowerDirichlet = False
         solver_config = config["Solver"]
         st_config = config["Stellarator"]
         self.points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
@@ -243,8 +232,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def sigma( self, index, state : State, x, t, field, vp, vpp, params ):
         n, nprime = jax.value_and_grad(self.Density)(x)
 
-        p_i       = 2. / 3. * self.Vp_u_to_u  (index, state, x, vp, vpp)
-        p_i_prime = 2. / 3. * self.Vp_up_to_up(index, state, x, vp, vpp)
+        p_i       = 2. / 3. * state.Variable[index] / vp#self.Vp_u_to_u  (index, state, x, vp, vpp)
+        p_i_prime = 2. / 3. * (state.Derivative[index] * vp - vpp * state.Variable[index]) / vp**2#self.Vp_up_to_up(index, state, x, vp, vpp)
         
         dndrho = nprime
         Erho = jnp.array(0.0)

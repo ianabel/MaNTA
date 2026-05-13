@@ -13,6 +13,28 @@
 #include <string>
 #include <type_traits>
 
+#ifdef VERBOSE_OUTPUT
+#define MAX_LOG_LEVEL LOG_LEVEL::INFO
+#else
+#define MAX_LOG_LEVEL LOG_LEVEL::WARNING
+#endif
+
+enum class LOG_LEVEL
+{
+    ERROR = 0,
+    WARNING = 1,
+    INFO = 2
+};
+
+#define LOG(level, message)                                             \
+    do                                                                  \
+    {                                                                   \
+        if (static_cast<int>(level) <= static_cast<int>(MAX_LOG_LEVEL)) \
+        {                                                               \
+            std::cerr << "[" << #level << "] " << message << std::endl; \
+        }                                                               \
+    } while (0)
+
 // Load restart data into vectors
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vector<double> &dYdt);
 
@@ -58,29 +80,29 @@ static const map_t params = {{"restart", Parameter<bool>{.required = false, ._de
                              {"useCalcIC", Parameter<bool>{.required = false, ._default = true}}};
 
 template <typename T>
-T getValueWithDefault(std::string key, const py::dict &d)
+T getValueWithDefault(std::string_view key, const py::dict &d)
 {
     if (d.contains(key))
     {
         try
         {
-            return d[key.c_str()].cast<T>();
+            return d[key.data()].cast<T>();
         }
         catch (const std::exception &e)
         {
-            throw std::runtime_error("The following error occured while trying to get the value of key: " + key + " from config:\n" + e.what() + "\n");
+            throw std::runtime_error("The following error occured while trying to get the value of key: " + std::string(key) + " from config:\n" + e.what() + "\n");
         }
     }
     else
     {
         try
         {
-            std::cerr << "INFO: Using default value for configuration option " << key << std::endl;
+            LOG(LOG_LEVEL::INFO, "INFO: Using default value for configuration option " << key);
             return std::get<Parameter<T>>(params.at(key))._default;
         }
         catch (...)
         {
-            throw std::runtime_error("Failed to retrieve default value for key: " + key + "; possible type mismatch.");
+            throw std::runtime_error("Failed to retrieve default value for key: " + std::string(key) + "; possible type mismatch.");
         }
     }
 };
@@ -100,9 +122,9 @@ void PyRunner::configure(const py::dict &config)
         std::visit(
             [&](const auto &v)
             {
-                if (v.required && !config.contains(key.c_str()))
+                if (v.required && !config.contains(key.data()))
                 {
-                    requiredParams += key + ", "; // throw std::runtime_error("Required parameter: " + key + " not contained in config.");
+                    requiredParams += std::string(key) + ", "; // throw std::runtime_error("Required parameter: " + key + " not contained in config.");
                 }
             },
             val);
@@ -162,7 +184,7 @@ void PyRunner::configure(const py::dict &config)
 
             nCells = getValueWithDefault<int>("Grid_size", config);
 
-            std::cerr << "INFO: Creating grid with " << nCells << " cells from x = " << lBound << " to x = " << uBound << std::endl;
+            LOG(LOG_LEVEL::INFO, "INFO: Grid configured with lower boundary at x = " << lBound << " and upper boundary at x = " << uBound);
 
             grid = std::make_unique<Grid>(lBound, uBound, nCells, highGridBoundary, lowerBoundaryFraction, upperBoundaryFraction);
         }
@@ -242,7 +264,7 @@ void PyRunner::run(double tFinal)
     }
     if (system->TerminateOnSteadyState)
     {
-        std::cerr << "INFO: \"run\" called but TerminateOnSteadyState is set to true. If you intended to run to steady state please call \"run_ss\". Running to passed tFinal" << std::endl;
+        LOG(LOG_LEVEL::WARNING, "WARNING: \"run\" called but TerminateOnSteadyState is set to true. If you intended to run to steady state please call \"run_ss\". Running to passed tFinal");
         system->TerminateOnSteadyState = false;
     }
     system->runSolver(tFinal);

@@ -6,15 +6,15 @@ os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".75"
 # os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 from FFIRunner import FFIRunner
 import jax
-jax.config.update("jax_enable_compilation_cache", False)
+# jax.config.update("jax_enable_compilation_cache", False)
 # jax.config.update('jax_cpu_enable_async_dispatch', False)
 import equinox as eqx
 # jax.config.update("jax_log_compiles" ,True)
-# if "JAX_COMPILATION_CACHE_DIR" in os.environ:
-#     print("Using cache directory: " + os.environ["JAX_COMPILATION_CACHE_DIR"])
-#     jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
-#     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
-#     jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
+if "JAX_COMPILATION_CACHE_DIR" in os.environ:
+    print("Using cache directory: " + os.environ["JAX_COMPILATION_CACHE_DIR"])
+    jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+    jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+    jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
 #explain cache misses
 import jax.numpy as jnp
 import numpy as np
@@ -59,7 +59,7 @@ def MaNTA_Decorator(func):
 
 from functools import partial
 
-from projects.MaNTA.python.yancc_wrapper2 import yancc_data
+from yancc_wrapper import yancc_data
 import yancc
 
 from typing import NamedTuple
@@ -133,7 +133,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         ### Remember to set boundary conditions ####
         self.isUpperDirichlet  = True
-        self.isLowerDirichlet  = True
+        self.isLowerDirichlet  = False
         solver_config = config["Solver"]
         st_config = config["Stellarator"]
         self.points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
@@ -278,7 +278,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     @staticmethod
     def initial_profile(x, edge_value, peak_value):
-        return  (peak_value - edge_value) * (1 - x ** 4) + edge_value
+        return  (peak_value - edge_value) * (1 - x ** 2) + edge_value
     
     @partial(jax.jit, static_argnums=(0,))
     def dSources_dPhi( self, index, state, x, t ):
@@ -328,7 +328,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
 
         flat, _ =  jax.flatten_util.ravel_pytree((eqx.filter(boundary_field, eqx.is_array)))
         self.npoints = npoints
-        self.np_cell = len(flat)-1
+        self.np_cell = len(flat) -1 + 1 # we add vprime 
         self.np = (self.np_cell)
         self.np_boundary = 0
 
@@ -360,13 +360,14 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         fgrad_vmap = eqx.filter_vmap(fgrad, in_axes=(0, State.vmap_axes(), 0, None))
         grad_out = fgrad_vmap(self.field, states, positions, self.params)
         grad_unstack = tree_unstack(grad_out)
-        grad_unraveled = jnp.stack([jax.flatten_util.ravel_pytree(g)[0] for g in grad_unstack], axis=1)
-
+        grad_unraveled = jnp.stack([jax.flatten_util.ravel_pytree(g)[0] for g in grad_unstack], axis=0)
+        grad_w_vprime = jnp.pad(grad_unraveled, ((0, 0), (0, 1)), mode="constant")
+        print(grad_w_vprime.shape)
         # grad, _ = jax.flatten_util.ravel_pytree(eqx.filter(grad_out, eqx.is_array))
         # grad = jnp.expand_dims(grad,1)
         # out = jnp.reshape(grad, (self.npoints, self.np_cell ))
 
-        return grad_unraveled
+        return grad_w_vprime
     
     @MaNTA_Decorator
     def dg(self, i, states, positions):
@@ -375,10 +376,16 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
 
     @MaNTA_Decorator
     def dSigma(self, i, states, positions):
-        fgrad = eqx.filter_grad(lambda field, states, x, vprime: self.sigma(i, states, x, 0, field, vprime, self.params))
-        grad_out = jax.vmap(fgrad, in_axes=(0, State.vmap_axes(), 0, 0))(self.field_shard, states, positions, self.vprime_shard)
+
+        tree_in = (self.field_shard, self.vprime_shard)
+        f_in = lambda tree, states, x : self.sigma(i, states, x, 0, tree[0], tree[1], self.params)
+
+        fgrad = eqx.filter_grad(f_in)
+        grad_out = jax.vmap(fgrad, in_axes=(0, State.vmap_axes(), 0))(tree_in, states, positions)
+        print(grad_out)
         grad_unstack = tree_unstack(grad_out)
-        grad_unraveled = jnp.stack([jax.flatten_util.ravel_pytree(g)[0] for g in grad_unstack], axis=1)
+        grad_unraveled = jnp.stack([jax.flatten_util.ravel_pytree(g)[0] for g in grad_unstack], axis=0)
+        print(grad_unraveled.shape)
         return grad_unraveled
     
     def dSources(self, i, states, positions):
