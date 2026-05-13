@@ -77,7 +77,7 @@ static const map_t params = {{"restart", Parameter<bool>{.required = false, ._de
                              //
                              {"WriteOutput", Parameter<bool>{.required = false, ._default = true}},
                              //
-                             {"useCalcIC", Parameter<bool>{.required = false, ._default = true}}};
+                             {"zeroFlux", Parameter<bool>{.required = false, ._default = false}}};
 
 template <typename T>
 T getValueWithDefault(std::string_view key, const py::dict &d)
@@ -248,7 +248,7 @@ void PyRunner::configure(const py::dict &config)
 
     system->setNOutput(nOutput);
     system->setMinStepSize(dt_min);
-    system->setUseCalcIC(getValueWithDefault<bool>("useCalcIC", config));
+    system->setZeroFlux(getValueWithDefault<bool>("zeroFlux", config));
 
     bool writeOutput = getValueWithDefault<bool>("WriteOutput", config);
 

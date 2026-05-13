@@ -2,9 +2,9 @@ import jax
 import MaNTA
 import jax.numpy as jnp
 
-from enum import Enum
+import enum
 
-class Platform(Enum):
+class Platform(enum.IntEnum):
     CPU = 0
     GPU = 1
 
@@ -23,7 +23,6 @@ def register_ffi_cpu(op_name):
             return name
 
 def register_ffi_gpu(op_name):
-
     for name, target in MaNTA.runner_ffi_ops_cuda().items():
         if (name.startswith(op_name)):
             print("Registering gpu implementation for operation " + op_name)

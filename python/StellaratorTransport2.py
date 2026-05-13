@@ -88,8 +88,8 @@ import jax.numpy as jnp
 
 st_config = {
     "SourceCenter": 0.2,
-    "SourceHeight": 400.0,
-    "SourceWidth": 0.5,
+    "SourceHeight": 350.0,
+    "SourceWidth": 0.4,
     "EdgeTemperature":0.2,
     "EdgeDensity": 0.0,
     "n0": 0.25,
@@ -100,16 +100,17 @@ solver_config = {
     "OutputFilename": "stellarator_opt",
     "Polynomial_degree": 4,
     "Grid_size": 4,
-    "tau": 10.0, 
+    "tau": 1.0, 
     "Lower_boundary": 0.0,
     "Upper_boundary": 0.95,
     "Relative_tolerance": 0.01,
-    "Absolute_tolerance": [1e-3],
+    "Absolute_tolerance": [1e-4],
     "delta_t": 1e-4,
     "MinStepSize": 1e-8, 
     "SteadyStateTolerance": 1e-2,
     "restart": False,
     "solveAdjoint": False, 
+    "zeroFlux": True,
 }
 
 config = {

@@ -144,9 +144,10 @@ class StellaratorTransport(MaNTA.TransportSystem):
         # %%
 
         self.field, self.vp, self.vpp = self.yancc_wrapper.get_fields()
-        self.field_shard = put_on_gpu(self.field)
-        self.vp_shard = jax.device_put(self.vp, data_sharding) #put_on_gpu(self.field)
-        self.vpp_shard = jax.device_put(self.vpp, data_sharding)
+        (self.field_shard, self.vp_shard, self.vpp_shard) = eqx.filter_shard((self.field, self.vp, self.vpp), data_sharding)
+        # self.field_shard = put_on_gpu(self.field)
+        # self.vp_shard = jax.device_put(self.vp, data_sharding) #put_on_gpu(self.field)
+        # self.vpp_shard = jax.device_put(self.vpp, data_sharding)
         # self.field_shard, self.vprime_shard = eqx.filter_shard((self.field, self.vprime), data_sharding)
         self.vp_interp = interpax.CubicSpline(self.points, self.vp)
         g = [self.StoredEnergy]

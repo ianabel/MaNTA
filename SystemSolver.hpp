@@ -143,7 +143,7 @@ class SystemSolver
 
         void setInputFile(std::string const &fn) { inputFilePath = fn; };
 
-        void setUseCalcIC(bool in) { useCalcIC = in; };
+        void setZeroFlux(bool in) { zeroFlux = in; };
 
         void setJacEvalY( N_Vector, N_Vector );
         int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
@@ -246,7 +246,7 @@ class SystemSolver
         // Really we should do init in the constructor and not need this flag. TODO
         bool initialised = false;
 
-        bool useCalcIC = true;
+        bool zeroFlux = false; // used to switch between zero-flux and zero-gradient BCs
 
         double alpha = 1.0;
         bool testing = false;
