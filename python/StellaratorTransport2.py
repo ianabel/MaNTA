@@ -86,9 +86,18 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 
+# st_config = {
+#     "SourceCenter": 0.2,
+#     "SourceHeight": 350.0,
+#     "SourceWidth": 0.4,
+#     "EdgeTemperature":0.2,
+#     "EdgeDensity": 0.0,
+#     "n0": 0.25,
+# }
+
 st_config = {
     "SourceCenter": 0.2,
-    "SourceHeight": 350.0,
+    "SourceHeight": 10.0,
     "SourceWidth": 0.4,
     "EdgeTemperature":0.2,
     "EdgeDensity": 0.0,
@@ -100,16 +109,16 @@ solver_config = {
     "OutputFilename": "stellarator_opt",
     "Polynomial_degree": 4,
     "Grid_size": 4,
-    "tau": 1.0, 
+    "tau": 100.0, 
     "Lower_boundary": 0.0,
-    "Upper_boundary": 0.95,
+    "Upper_boundary": 1.0,
     "Relative_tolerance": 0.01,
-    "Absolute_tolerance": [1e-4],
+    "Absolute_tolerance": [1e-3],
     "delta_t": 1e-4,
     "MinStepSize": 1e-8, 
     "SteadyStateTolerance": 1e-2,
     "restart": False,
-    "solveAdjoint": False, 
+    "solveAdjoint": True, 
     "zeroFlux": True,
 }
 
@@ -130,7 +139,7 @@ yancc_nzeta = 33
 pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 
-eq_est = desc.examples.get("ESTELL")
+eq_est = desc.examples.get("W7-X")
 # surf = eq_est.get_surface_at(rho=1)
 # eq = Equilibrium(M=4, N=4, Psi=0.087, surface=surf, pressure=desc_pressure)
 # eq = eq.solve(x_scale="ess")[0]
@@ -145,6 +154,11 @@ yancc_wrapper = yancc_data.from_eq(points, eq=eq_init, nx=5, na=43, nz=yancc_nze
 V0 = eq_est.compute("V")["V"]
 
 st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+
+# pi = 2./3. * st.InitialValue(0, yancc_rho)/yancc_wrapper.Vp
+# Ti = pi/st.Density(yancc_rho)
+# print(Ti)
+
 st.run()
 
 # %%

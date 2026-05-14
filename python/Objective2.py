@@ -2,9 +2,9 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 import functools
-from Stellarator import StellaratorTransport
+from Stellarator2 import StellaratorTransport
 import yancc
-from yancc_wrapper import yancc_data
+from yancc_wrapper2 import yancc_data
 
 
 from jax.experimental import io_callback
@@ -54,8 +54,8 @@ def make_objective(config, vectorized=False):
 
     @eqx.filter_custom_jvp
     def _objective_base(tree_in, grid):
-        fields, Vp = tree_in
-        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp)
+        fields, Vp, Vpp = tree_in
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp)
 
         G, G_p, pi = _f_wrapped(yancc_wrapper)
         return G, pi 
@@ -63,17 +63,18 @@ def make_objective(config, vectorized=False):
 
     @_objective_base.def_jvp
     def _objective_base_jvp(primals, tangents):
-        (fields, Vp), grid = primals
-        (field_dot, Vp_dot), _= tangents
+        (fields, Vp, Vpp), grid = primals
+        (field_dot, Vp_dot, Vpp_dot), _= tangents
     
-        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp)
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp)
         G, G_p, pi = _f_wrapped(yancc_wrapper)
         # _, unflatten = jax.flatten_util.ravel_pytree(fields)
 
         _, unflatten_field = jax.flatten_util.ravel_pytree(yancc_wrapper.fields_unstacked[0])
 
-        G_p_field = G_p[:, :-1] # remove vprime component
-        G_p_vprime = G_p[:, -1] # extract vprime component
+        G_p_field = G_p[:, :-2] # remove vprime component
+        G_p_vprime = G_p[:, -2] # extract vprime component
+        G_p_vpp = G_p[:, -1] # extract vpp component
         G_p_padded = jnp.pad(G_p_field, pad_width=((0,0),(0,1)), mode='constant')
 
         G_p_unflattened = jax.vmap(unflatten_field)((G_p_padded))
@@ -94,8 +95,9 @@ def make_objective(config, vectorized=False):
         #now do vprime
 
         result_vprime = jnp.dot(Vp_dot, G_p_vprime)
+        result_vpp = jnp.dot(Vpp_dot, G_p_vpp)
 
-        return (G, pi), ((jnp.sum(result_flattened)+result_vprime), None)
+        return (G, pi), ((jnp.sum(result_flattened)+result_vprime+result_vpp), None)
 
     return _objective_base
 

@@ -231,12 +231,16 @@ void SystemSolver::runSolver(double tFinal)
 	print(out0, t0, nOut, true);
 	if (physics_debug)
 	{
+		IDAGetConsistentIC(IDA_mem, Y, dYdt);
+		residual(t0, Y, dYdt, res);
 		dydt_out << "# After CalcIC " << std::endl;
 		print(dydt_out, t0, nOut, dYdt);
 
-		residual(t0, Y, dYdt, res);
+	
 
 		IDAEwtSet(Y, wgt, IDA_mem);
+
+
 
 		res_out << "# Residual norm at t = " << t0 << " (post-CalcIC) is " << N_VWrmsNorm(res, wgt) << std::endl;
 		print(res_out, t0, nOut, res);

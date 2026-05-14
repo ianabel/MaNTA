@@ -1,7 +1,6 @@
 import jax
 import MaNTA
 import jax.numpy as jnp
-
 import enum
 
 class Platform(enum.IntEnum):
@@ -29,30 +28,32 @@ def register_ffi_gpu(op_name):
             jax.ffi.register_ffi_target(name, target, platform="CUDA")
             return name
 
-platform = jax.lax.platform_dependent(None, cpu=(lambda x : Platform.CPU) , cuda=(lambda x : Platform.GPU)) # very silly syntax
-
 for name, has_gpu in ffi_ops_names:
     if (has_gpu):
         ffi_ops[name] = [register_ffi_cpu(name), register_ffi_gpu(name)] 
     else:
         ffi_ops[name] = [register_ffi_cpu(name)]
 
-dtype   = jnp.float32 if jax.lax.eq(platform, Platform.GPU) else jnp.float64
-i_dtype = jnp.int32   if jax.lax.eq(platform, Platform.GPU) else jnp.int64
+# def getPlatform():
+#     return Platform.CPU
+#     #return jax.lax.platform_dependent(None, cpu=(lambda x : Platform.CPU) , cuda=(lambda x : Platform.GPU))
+
+# def getdtypes(platform=getPlatform()):
+#     if (jax.lax.eq(platform, Platform.GPU)):
+#         return jnp.float64, jnp.int64
+#     else:
+#         return jnp.float64, jnp.int64
 
 class FFIRunner(MaNTA.Runner):
     def __init__(self, transport_system, points, ng, np, spatialParameters = False):
         MaNTA.Runner.__init__(self, transport_system)
     
-        self.points = jnp.array(points, dtype=dtype)
-        fac = 1
+        self.points = jnp.array(points)
+        self.fac = 1
         if (spatialParameters):
-            fac = len(self.points)
-
-        self.adjoint_output = [
-            jax.ShapeDtypeStruct((ng,),dtype),
-            jax.ShapeDtypeStruct((ng * fac, np),dtype)
-        ]  
+            self.fac = len(self.points)
+        self.ng = ng
+        self.np = np
     
     """
     Assume that the user would want to call the ffi versions of the Runner class methods if they're using this class, so we disable the regular versions
@@ -68,6 +69,8 @@ class FFIRunner(MaNTA.Runner):
 
     """
     Runner functions using the ffi api 
+
+    Run and Run_ss can only be called on cpu, but Get_profile and Get_adjoint_gradients can be called on either cpu or gpu and will select the appropriate implementation
     """
     def Run(self, tFinal):
         with jax.default_device(cpu_device):
@@ -75,12 +78,34 @@ class FFIRunner(MaNTA.Runner):
     def Run_ss(self):
         with jax.default_device(cpu_device):
             jax.ffi.ffi_call(ffi_ops["run_ss"][Platform.CPU], [],  has_side_effect=True)(obj=self.get_address())
+
+
     def Get_adjoint_gradients(self):
-        op_name = jax.lax.platform_dependent(ffi_ops["get_adjoint_gradients"], cpu=(lambda op : op[Platform.CPU]) , cuda=(lambda op : op[Platform.GPU]))
-        return jax.ffi.ffi_call(op_name, self.adjoint_output)(obj=self.get_address())
+        def cpu_call():
+            adjoint_output = adjoint_output = [
+                jax.ShapeDtypeStruct((self.ng,),jnp.float64),
+                jax.ShapeDtypeStruct((self.ng * self.fac, self.np),jnp.float64)
+            ]  
+            G, G_p = jax.ffi.ffi_call(ffi_ops["get_adjoint_gradients"][Platform.CPU], adjoint_output)(obj=self.get_address())
+            return G, G_p
+           
+        def gpu_call():
+            adjoint_output = adjoint_output = [
+                jax.ShapeDtypeStruct((self.ng,),jnp.float32),
+                jax.ShapeDtypeStruct((self.ng * self.fac, self.np),jnp.float32)
+            ] 
+            G, G_p = jax.ffi.ffi_call(ffi_ops["get_adjoint_gradients"][Platform.GPU], adjoint_output)(obj=self.get_address()) 
+            return jnp.float64(G), jnp.float64(G_p)
+        
+        return jax.lax.platform_dependent(cpu=cpu_call, cuda=gpu_call)
+
     def Get_profile(self, var, points = None):
-        if (points is None):
-            points = self.points
-        sol_output = jax.ShapeDtypeStruct((len(points),),dtype)
-        op_name = jax.lax.platform_dependent(ffi_ops["get_solution"], cpu=(lambda op : op[Platform.CPU]) , cuda=(lambda op : op[Platform.GPU]))
-        return jax.ffi.ffi_call(op_name, sol_output)(i_dtype(var), points, obj=self.get_address())
+        def cpu_call(points, var):
+            sol_output = jax.ShapeDtypeStruct((len(points),),jnp.float64)
+            return jax.ffi.ffi_call(ffi_ops["get_solution"][Platform.CPU], sol_output)(jnp.int64(var), points.astype(jnp.float64), obj=self.get_address())
+        
+        def gpu_call(points, var):
+             sol_output = jax.ShapeDtypeStruct((len(points),),jnp.float32)
+             return jnp.float64(jax.ffi.ffi_call(ffi_ops["get_solution"][Platform.GPU], sol_output)(jnp.int32(var), points.astype(jnp.float32), obj=self.get_address()))
+        
+        return jax.lax.platform_dependent(points if points is not None else self.points, var, cpu=cpu_call, cuda=gpu_call)

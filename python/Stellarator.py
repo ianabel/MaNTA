@@ -1,8 +1,8 @@
 import MaNTA
 
 import os
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".75"
-# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".2"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 # os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 from FFIRunner import FFIRunner
 import jax
@@ -153,19 +153,16 @@ class StellaratorTransport(MaNTA.TransportSystem):
         # %%
 
         self.field, self.vprime = self.yancc_wrapper.get_fields()
-        self.field_shard = put_on_gpu(self.field)
-        self.vprime_shard = jax.device_put(self.vprime, data_sharding) #put_on_gpu(self.field)
+        (self.field_shard, self.vprime_shard) = eqx.filter_shard((self.field, self.vprime), data_sharding)
+        # self.field_shard = put_on_gpu(self.field)
+        # self.vprime_shard = jax.device_put(self.vprime, data_sharding) #put_on_gpu(self.field)
         # self.field_shard, self.vprime_shard = eqx.filter_shard((self.field, self.vprime), data_sharding)
 
         g = [self.StoredEnergy]
 
         self.adjointProblem = StellaratorAdjointProblem(self, g, self.yancc_wrapper, len(self.points))
 
-        self.runner = FFIRunner(self, self.points, 1, self.adjointProblem.np, spatialParameters=True)
-        self.adjoint_output = [
-            jax.ShapeDtypeStruct((1,),jnp.float64),
-            {"G_p": jax.ShapeDtypeStruct((1 * len(self.points), self.adjointProblem.np), jnp.float64)}
-        ]  
+        self.runner = FFIRunner(self, self.points, 1, self.adjointProblem.np, spatialParameters=True)  
         print("configuring")
         self.runner.configure(solver_config)
 
@@ -238,14 +235,14 @@ class StellaratorTransport(MaNTA.TransportSystem):
     """
 
     def sigma( self, index, state : State, x, t, field, vprime, params ):
-        put = lambda x : jax.device_put(x, static_sharding)
-        n, nprime = put(jax.value_and_grad(self.Density)(x))
+        # put = lambda x : jax.device_put(x, static_sharding)
+        n, nprime = jax.value_and_grad(self.Density)(x)
 
         p_i = 2. / 3. * state.Variable[0]
         p_i_prime = 2. / 3. * state.Derivative[0]
         
         dndrho = nprime * vprime
-        Erho = put(jnp.array(0.0))
+        Erho = jnp.array(0.0)
         Ti = p_i / n
         dTidrho = (p_i_prime * vprime - Ti * dndrho) / n
 
@@ -259,7 +256,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
             dndrho=dndrho * self.yancc_wrapper.nNorm),
         ]
         
-        _, _, fluxes, _  = eqx.filter_jit(solve_dke)(field, self.yancc_wrapper.pitchgrid, self.yancc_wrapper.speedgrid, species, Erho)
+        _, _, fluxes, _  = eqx.filter_jit(solve_dke, backend="gpu")(field, self.yancc_wrapper.pitchgrid, self.yancc_wrapper.speedgrid, species, Erho)
 
         fout = fluxes['<heat_flux>'][0] * vprime / (self.yancc_wrapper.FluxNorm)
 
@@ -341,11 +338,6 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         
         self.UpperBoundarySensitivities = {}
         self.LowerBoundarySensitivities = {}
-
-        self.adjointoutput = [
-            jax.ShapeDtypeStruct((self.ng,), jnp.float32),
-            jax.ShapeDtypeStruct((self.ng * self.npoints, self.np), jnp.float32)
-        ]     
     
     @MaNTA_Decorator
     def gFn(self, i, states, positions):
@@ -362,7 +354,6 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         grad_unstack = tree_unstack(grad_out)
         grad_unraveled = jnp.stack([jax.flatten_util.ravel_pytree(g)[0] for g in grad_unstack], axis=0)
         grad_w_vprime = jnp.pad(grad_unraveled, ((0, 0), (0, 1)), mode="constant")
-        print(grad_w_vprime.shape)
         # grad, _ = jax.flatten_util.ravel_pytree(eqx.filter(grad_out, eqx.is_array))
         # grad = jnp.expand_dims(grad,1)
         # out = jnp.reshape(grad, (self.npoints, self.np_cell ))
@@ -382,10 +373,8 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
 
         fgrad = eqx.filter_grad(f_in)
         grad_out = jax.vmap(fgrad, in_axes=(0, State.vmap_axes(), 0))(tree_in, states, positions)
-        print(grad_out)
         grad_unstack = tree_unstack(grad_out)
         grad_unraveled = jnp.stack([jax.flatten_util.ravel_pytree(g)[0] for g in grad_unstack], axis=0)
-        print(grad_unraveled.shape)
         return grad_unraveled
     
     def dSources(self, i, states, positions):
