@@ -41,12 +41,12 @@ PYTHON_OUTPUT=$(PYTHON_NAME)
 
 python: $(PYTHON_OUTPUT)
 
-$(PYTHON_OUTPUT): $(OBJECTS) $(PHYSICS_OBJECTS) Python.cpp PyTransportSystem.hpp PyAdjointProblem.hpp
+$(PYTHON_OUTPUT): MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) Python.cpp PyTransportSystem.hpp PyAdjointProblem.hpp
 	$(CXX) $(CXXFLAGS) $$(python3-config --includes) -I$(realpath extern/pybind11/include) -shared -fPIC -fvisibility=hidden -o $@ Python.cpp MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
 
 clean:
 	$(MAKE) -C Tests/UnitTests clean
-	rm -f $(SOLVER) main.o MaNTA.o $(OBJECTS) $(ERROBJECTS) $(TESTOBJECTS) $(PHYSICS_OBJECTS) $(PYTHON_NAME)
+	rm -f $(SOLVER) main.o MaNTA.o $(OBJECTS) $(ERROBJECTS) $(TESTOBJECTS) $(PHYSICS_OBJECTS) $(PYTHON_OUTPUT)
 
 regression_tests: $(SOLVER)
 	$(MAKE) -C Tests/RegressionTests
