@@ -34,11 +34,11 @@ class JAXLinearDiffusion(JAXTransportSystem):
         self.params = LinearDiffusionParams.make(config)
 
     def g(self, state, x, params):
-        u = state["Variable"][0]
+        u = state.Variable[0]
         return 0.5 * u * u
 
     def sigma( self, index, state, x, t, params ):
-        tprime = state["Derivative"]
+        tprime = state.Derivative
         return params.kappa * tprime[index]
     
     def source( self, index, state, x, t, params ):
