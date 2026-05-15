@@ -16,8 +16,8 @@
 #define fp_dtype_cuda ffi::F32
 #define i_dtype_cuda ffi::S32
 #endif
-#define fp_dtype ffi::F64
-#define i_dtype ffi::S64
+#define fp_dtype ffi::F32
+#define i_dtype ffi::S32
 #include "PyRunner.hpp"
 
 namespace ffi = xla::ffi;
@@ -30,10 +30,10 @@ namespace py = pybind11;
 */
 
 // can use either 64 or 32 bit math, based on jax config
-static ffi::Error run_ffi_impl(PyRunner *runner, ffi::AnyBuffer args)
+static ffi::Error run_ffi_impl(PyRunner *runner, ffi::BufferR0<fp_dtype> args)
 {
     py::gil_scoped_acquire gil;
-    double tFinal = *args.typed_data<double>();
+    double tFinal = static_cast<double>(*args.typed_data());
 
     runner->run(tFinal);
     return ffi::Error::Success();
@@ -197,7 +197,7 @@ static ffi::Error get_solution_ffi_impl_cuda(cudaStream_t stream, PyRunner *runn
 XLA_FFI_DEFINE_HANDLER_SYMBOL(run_ffi_ops, run_ffi_impl,
                               ffi::Ffi::Bind()
                                   .Attr<ffi::Pointer<PyRunner>>("obj")
-                                  .Arg<ffi::AnyBuffer>());
+                                  .Arg<ffi::BufferR0<fp_dtype>>());
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(run_ss_ffi_ops, run_ffi_ss_impl,
                               ffi::Ffi::Bind()

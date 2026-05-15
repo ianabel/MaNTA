@@ -98,6 +98,7 @@ def runMaNTA(params):
 
     transportSystem.run(tFinal = 5.0)
     G, G_p = transportSystem.getAdjointGradients()
+    uout = transportSystem.runner.Get_profile(0)
     return G, G_p
 
 @jax.custom_jvp

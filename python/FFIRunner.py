@@ -9,12 +9,16 @@ class Platform(enum.IntEnum):
 
 cpu_device = jax.devices('cpu')[0]
 
+cpu_fp_dtype = jnp.float32
+cpu_i_dtype = jnp.int32
+
+if (cpu_fp_dtype == jnp.float64):
+    jax.config.update('jax_enable_x64', True)
 # MaNTA has to run on cpu so we only have cpu implementation for the run functions
 ffi_ops_names = ["get_solution", "get_adjoint_gradients","run", "run_ss"] # (op_name, use_gpu)
 ffi_ops = {}
 
 def register_ffi_cpu(op_name):
-    jax.config.update('jax_enable_x64', True)
     for name, target in MaNTA.runner_ffi_ops().items():
         if (name.startswith(op_name)):
             print("Registering cpu implementation for operation " + op_name)
@@ -69,7 +73,7 @@ class FFIRunner(MaNTA.Runner):
     """
     def Run(self, tFinal):
         with jax.default_device(cpu_device):
-            jax.ffi.ffi_call(ffi_ops["run"][Platform.CPU], [], has_side_effect=True)(tFinal, obj=self.get_address())
+            jax.ffi.ffi_call(ffi_ops["run"][Platform.CPU], [], has_side_effect=True)(cpu_fp_dtype(tFinal), obj=self.get_address())
     def Run_ss(self):
         with jax.default_device(cpu_device):
             jax.ffi.ffi_call(ffi_ops["run_ss"][Platform.CPU], [],  has_side_effect=True)(obj=self.get_address())
@@ -77,8 +81,8 @@ class FFIRunner(MaNTA.Runner):
     def Get_adjoint_gradients(self):
         def cpu_call():
             adjoint_output = [
-                jax.ShapeDtypeStruct((self.ng,),jnp.float64),
-                jax.ShapeDtypeStruct((self.ng * self.fac, self.np),jnp.float64)
+                jax.ShapeDtypeStruct((self.ng,),cpu_fp_dtype),
+                jax.ShapeDtypeStruct((self.ng * self.fac, self.np),cpu_fp_dtype)
             ]  
             G, G_p = jax.ffi.ffi_call(ffi_ops["get_adjoint_gradients"][Platform.CPU], adjoint_output)(obj=self.get_address())
             return G, G_p
@@ -89,17 +93,17 @@ class FFIRunner(MaNTA.Runner):
                 jax.ShapeDtypeStruct((self.ng * self.fac, self.np),jnp.float32)
             ] 
             G, G_p = jax.ffi.ffi_call(ffi_ops["get_adjoint_gradients"][Platform.GPU], adjoint_output)(obj=self.get_address()) 
-            return jnp.float64(G), jnp.float64(G_p)
+            return cpu_fp_dtype(G), cpu_fp_dtype(G_p)
         
         return jax.lax.platform_dependent(cpu=cpu_call, cuda=gpu_call)
 
     def Get_profile(self, var, points = None):
         def cpu_call(points, var):
-            sol_output = jax.ShapeDtypeStruct((len(points),),jnp.float64)
-            return jax.ffi.ffi_call(ffi_ops["get_solution"][Platform.CPU], sol_output)(jnp.int64(var), points.astype(jnp.float64), obj=self.get_address())
+            sol_output = jax.ShapeDtypeStruct((len(points),),cpu_fp_dtype)
+            return jax.ffi.ffi_call(ffi_ops["get_solution"][Platform.CPU], sol_output)(cpu_i_dtype(var), points.astype(cpu_fp_dtype), obj=self.get_address())
         
         def gpu_call(points, var):
              sol_output = jax.ShapeDtypeStruct((len(points),),jnp.float32)
-             return jnp.float64(jax.ffi.ffi_call(ffi_ops["get_solution"][Platform.GPU], sol_output)(jnp.int32(var), points.astype(jnp.float32), obj=self.get_address()))
+             return cpu_fp_dtype(jax.ffi.ffi_call(ffi_ops["get_solution"][Platform.GPU], sol_output)(jnp.int32(var), points.astype(jnp.float32), obj=self.get_address()))
         
         return jax.lax.platform_dependent(points if points is not None else self.points, var, cpu=cpu_call, cuda=gpu_call)
