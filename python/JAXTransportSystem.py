@@ -6,6 +6,8 @@ import jax.numpy as jnp
 import MaNTA
 from JAXAdjointProblem import JAXAdjointProblem
 from typing import NamedTuple, Any
+from abc import abstractmethod
+from State import State, MaNTA_Decorator
 
 """
 JAX-based transport system base class that overloads MaNTA TransportSystem.
@@ -17,23 +19,26 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     def __init__(self):
         MaNTA.TransportSystem.__init__(self)
         self.nAux = 0
-        self.dSigmadvar = jax.jit(jax.grad(self.SigmaFn, argnums=1))
-        self.dSourcedvar = jax.jit(jax.grad(self.Sources, argnums=1))
+        self.dSigmadvar = jax.jit(jax.grad(self.sigma, argnums=1))
+        self.dSourcedvar = jax.jit(jax.grad(self.source, argnums=1))
 
-        self.dAuxdvars = jax.jit(jax.grad(self.AuxG, argnums = 1))
+        self.dAuxdvars = jax.jit(jax.grad(self.aux, argnums = 1))
 
         self.dInitialValue = jax.jit(jax.grad(self.InitialValue, argnums=1))
 
+    @abstractmethod
     def LowerBoundary(self, index, t):
-        pass
+        raise NotImplementedError("LowerBoundary function not implemented")
 
+    @abstractmethod
     def UpperBoundary(self, index, t):
-        pass
+        raise NotImplementedError("UpperBoundary function not implemented")
 
-
+    @MaNTA_Decorator
     def SigmaFn( self, index, state, x, t ):
         return self.sigma(index, state, x, t, self.params)
 
+    @MaNTA_Decorator
     def Sources( self, index, state, x, t ):
         return self.source(index, state, x, t, self.params)
 
@@ -58,35 +63,46 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     float
         Computed sigma or source term
     """
-    def sigma( self, index, state, x, t, params: NamedTuple ):
+    @abstractmethod
+    def sigma( self, index, state, x, t, params ):
+        raise NotImplementedError("sigma function not implemented")
+
+    @abstractmethod
+    def source( self, index, state, x, t, params ):
+        raise NotImplementedError("source function not implemented")
+
+    @abstractmethod
+    def aux( self, index, state, x, t, params ):
         pass
 
-    def source( self, index, state, x, t, params: NamedTuple ):
-        pass
-
-    def aux( self, index, state, x, t, params: NamedTuple):
-        pass
-
+    @MaNTA_Decorator
     def dSigmaFn_dq( self, index, state, x, t):
-        return self.dSigmadvar(index,state,x,t)["Derivative"]
+
+        return self.dSigmadvar(index,state,x,t, self.params).Derivative
     
+    @MaNTA_Decorator
     def dSigmaFn_du( self, index, state, x, t):
-        return self.dSigmadvar(index,state,x,t)["Variable"]
-    
+        return self.dSigmadvar(index,state,x,t, self.params).Variable
+
+    @MaNTA_Decorator
     def dSigma_dPhi( self, index, state, x, t):
-        return self.dSigmadvar(index,state,x,t)["Aux"]
-        
-    def dSources_du( self, index, state, x, t ):
-        return self.dSourcedvar(index,state,x,t)["Variable"]
-
-    def dSources_dq( self, index, state, x, t ):
-        return self.dSourcedvar(index,state,x,t)["Derivative"]
-
-    def dSources_dsigma( self, index, state, x, t ):
-        return self.dSourcedvar(index,state,x,t)["Flux"]
+        return self.dSigmadvar(index,state,x,t, self.params).Aux
     
+    @MaNTA_Decorator
+    def dSources_du( self, index, state, x, t ):
+        return self.dSourcedvar(index,state,x,t, self.params).Variable
+
+    @MaNTA_Decorator
+    def dSources_dq( self, index, state, x, t ):
+        return self.dSourcedvar(index,state,x,t, self.params).Derivative
+
+    @MaNTA_Decorator
+    def dSources_dsigma( self, index, state, x, t ):
+        return self.dSourcedvar(index,state,x,t, self.params).Flux
+    
+    @MaNTA_Decorator
     def dSources_dPhi( self, index, state, x, t ):
-        return self.dSourcedvar(index,state,x,t)["Aux"]
+        return self.dSourcedvar(index,state,x,t, self.params).Aux
     
     def AuxG( self, index, state, x, t):
         return self.aux(index, state, x, t, self.params)
@@ -111,13 +127,15 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     """
     def AuxGPrime( self, index, state, x , t):
         return self.dAuxdvars(index, state, x, t)
-      
+    
+    @abstractmethod
     def InitialValue( self, index, x ):
-        pass
+        raise NotImplementedError("InitialValue function not implemented")
 
     def InitialDerivative( self, index, x ):
         return self.dInitialValue(index,x)
     
+    @abstractmethod
     def InitialAuxValue(self, index, x):
         pass
     
@@ -163,13 +181,12 @@ class JAXNonlinearDiffusion(JAXTransportSystem):
         self.params = NonlinearDiffusionParams.make(config)
 
     def g(self, state, x, params: NonlinearDiffusionParams):
-        u = state["Variable"][0]
+        u = state.Variable[0]
         return 0.5 * u * u
     
     def sigma( self, index, state, x, t, params: NonlinearDiffusionParams ):
-        
-        u = state["Variable"][0]
-        q = state["Derivative"][0]
+        u = state.Variable[0]
+        q = state.Derivative[0]
         return params.D*(u ** params.a) * q
 
     def source( self, index, state, x, t, params: NonlinearDiffusionParams ):
@@ -203,24 +220,24 @@ class JAXAuxTest(JAXTransportSystem):
         self.params = NonlinearDiffusionParams.make(config)
 
     def g(self, state, x, params: NonlinearDiffusionParams):
-        u = state["Variable"][0]
+        u = state.Variable[0]
         return 0.5 * u * u
     
     def sigma( self, index, state, x, t, params: NonlinearDiffusionParams ):
         
-        u = state["Variable"][0]
-        q = state["Derivative"][0]
+        u = state.Variable[0]
+        q = state.Derivative[0]
         return params.D*(u ** params.a) * q
     
     def aux( self, index ,state, x, t, params):
-        a = state["Aux"][0]
-        u = state["Variable"][0]
+        a = state.Aux[0]
+        u = state.Variable[0]
         return a - params.D*u*u
 
     def source( self, index, state, x, t, params: NonlinearDiffusionParams ):
         y = x - params.SourceCentre
-        u = state["Variable"][0]
-        a = state["Aux"][0]
+        u = state.Variable[0]
+        a = state.Aux[0]
         return params.T_s*jnp.exp(-y*y/params.SourceWidth) + a - params.D*u*u
 
     def LowerBoundary(self, index, t):

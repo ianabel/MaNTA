@@ -49,7 +49,7 @@ public:
 			auto _override = make_override(method_name.data());
 			if (!_override)
 			{
-				missing_methods.push_back(method_name);
+				missing_vectorized_methods.push_back(method_name);
 			}
 			else
 			{
@@ -58,7 +58,7 @@ public:
 		}
 
 		bool non_vectorized = missing_methods.empty();
-		bool vectorized = missing_vectorized_methods.empty();
+		vectorized = missing_vectorized_methods.empty();
 
 		if (!vectorized || !non_vectorized)
 		{
@@ -105,6 +105,7 @@ public:
 			initializeOverrides();
 		try
 		{
+			py::gil_scoped_acquire gil;
 			return method_overrides["SigmaFn"](i, s, x, t).cast<Value>();
 		}
 		catch (const std::exception &e)
@@ -118,6 +119,10 @@ public:
 			initializeOverrides();
 		try
 		{
+			py::gil_scoped_acquire gil;
+			if (!vectorized)
+				return TransportSystem::SigmaFn(i, states, abscissae, time); // Call base class version which will loop over non-vectorized method
+
 			return method_overrides["SigmaFn_v"](i, states, abscissae, time).cast<Values>();
 		}
 		catch (const std::exception &e)
@@ -133,6 +138,7 @@ public:
 
 		try
 		{
+			py::gil_scoped_acquire gil;
 			return method_overrides["Sources"](i, s, x, t).cast<Value>();
 		}
 		catch (const std::exception &e)
@@ -148,6 +154,10 @@ public:
 
 		try
 		{
+			py::gil_scoped_acquire gil;
+			if (!vectorized)
+				return TransportSystem::Sources(i, states, abscissae, time); // Call base class version which will loop over non-vectorized method
+
 			return method_overrides["Sources_v"](i, states, abscissae, time).cast<Values>();
 		}
 		catch (const std::exception &e)
@@ -163,6 +173,7 @@ public:
 
 		try
 		{
+			py::gil_scoped_acquire gil;
 			out = method_overrides["dSigmaFn_du"](i, s, x, t).cast<Values>();
 		}
 		catch (const std::exception &e)
@@ -176,6 +187,7 @@ public:
 			initializeOverrides();
 		try
 		{
+			py::gil_scoped_acquire gil;
 			out = method_overrides["dSigmaFn_dq"](i, s, x, t).cast<Values>();
 		}
 		catch (const std::exception &e)
@@ -191,6 +203,7 @@ public:
 
 		try
 		{
+			py::gil_scoped_acquire gil;
 			v = method_overrides["dSources_du"](i, s, x, t).cast<Values>();
 		}
 		catch (const std::exception &e)
@@ -206,6 +219,7 @@ public:
 
 		try
 		{
+			py::gil_scoped_acquire gil;
 			v = method_overrides["dSources_dq"](i, s, x, t).cast<Values>();
 		}
 		catch (const std::exception &e)
@@ -220,6 +234,7 @@ public:
 			initializeOverrides();
 		try
 		{
+			py::gil_scoped_acquire gil;
 			v = method_overrides["dSources_dsigma"](i, s, x, t).cast<Values>();
 		}
 		catch (const std::exception &e)
@@ -234,6 +249,13 @@ public:
 			initializeOverrides();
 		try
 		{
+			py::gil_scoped_acquire gil;
+			if (!vectorized)
+			{
+				TransportSystem::dSigma(i, out, states, abscissae, time); // Call base class version which will loop over non-vectorized method
+				return; 
+			}
+
 			out = method_overrides["dSigma"](i, states, abscissae, time).cast<GlobalState>();
 		}
 		catch (const std::exception &e)
@@ -248,7 +270,14 @@ public:
 			initializeOverrides();
 		try
 		{
-			out = method_overrides["dSigma"](i, states, abscissae, time).cast<GlobalState>();
+			py::gil_scoped_acquire gil;
+			if (!vectorized)
+			{
+				TransportSystem::dSources(i, out, states, abscissae, time); // Call base class version which will loop over non-vectorized method
+				return;
+			}
+
+			out = method_overrides["dSources"](i, states, abscissae, time).cast<GlobalState>();
 		}
 		catch (const std::exception &e)
 		{
@@ -324,7 +353,8 @@ public:
 
 private:
 	bool initialized = false;
-	std::map<std::string, py::function> method_overrides;
+	bool vectorized = false;
+	std::map<std::string_view, py::function> method_overrides;
 };
 
 #endif // PYTRANSPORTSYSTEM_HPP

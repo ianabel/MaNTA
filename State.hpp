@@ -290,6 +290,7 @@ private:
     std::vector<GlobalState> data;
 
     Index nVars;
+
 };
 
 #endif

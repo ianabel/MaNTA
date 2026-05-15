@@ -24,13 +24,12 @@ namespace ffi = xla::ffi;
 namespace py = pybind11;
 
 /*
-    Bindings for XLA and JAX, enables native jit compilation
+    Bindings for XLA and JAX, enables native MaNTA calls within JAX transforms
 
     Basically emululate base functions but take in a pointer to a PyRunner object
 */
 
 // can use either 64 or 32 bit math, based on jax config
-
 static ffi::Error run_ffi_impl(PyRunner *runner, ffi::AnyBuffer args)
 {
     py::gil_scoped_acquire gil;

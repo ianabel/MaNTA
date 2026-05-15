@@ -45,22 +45,18 @@ class JAXNonlinearDiffusion(VectorizedTransportSystem):
             "restart": False,
             "solveAdjoint": True, 
         }
-        print(config)
+  
         self.params = NonlinearDiffusionParams.make(config)
         self.points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
-
+        self.adjointProblem = JAXAdjointProblem(self, self.g)
         self.runner = MaNTA.Runner(self)
 
         self.runner.configure(solver_config)
 
-        self.adjointProblem = JAXAdjointProblem(self, self.g)
-        self.runner.setAdjointProblem(self.adjointProblem)
+
         # This object will be passed to sigma and source functions
     
-    def run(self, tFinal = None, kappa = None):
-        if (kappa is not None):
-            self.params["D"] = kappa
-        
+    def run(self, tFinal = None):
         if (tFinal is not None):
             sFinal = self.runner.run(tFinal)
         else: 
@@ -68,20 +64,18 @@ class JAXNonlinearDiffusion(VectorizedTransportSystem):
 
         return sFinal
 
-    def runAdjointSolve(self, kappa = None):
-        if (kappa is not None):
-            self.params.D = kappa
-        G, G_p = self.runner.runAdjointSolve()
+    def getAdjointGradients(self):
+        G, G_p = self.runner.getAdjointGradients()
         return G, G_p
 
     def g(self, state, x, params):
-        u = state["Variable"][0]
+        u = state.Variable[0]
         return 0.5 * u * u 
 
     def sigma( self, index, state, x, t, params ):
         
-        u = state["Variable"][0]
-        q = state["Derivative"][0]
+        u = state.Variable[0]
+        q = state.Derivative[0]
         return params.D*(u ** params.a) * q
 
     def source( self, index, state, x, t, params ):
@@ -99,7 +93,7 @@ class JAXNonlinearDiffusion(VectorizedTransportSystem):
         return 0.3
     
     def createAdjointProblem(self):
-        pass
+        return self.adjointProblem
 
 def runMaNTA():
     config = {
@@ -107,21 +101,13 @@ def runMaNTA():
         "D" : 2.0,
         "a" : 0.0,
     }
-    print(config)
     transportSystem = JAXNonlinearDiffusion(config)
 
     transportSystem.run(tFinal = 5.0)
-    G, G_p = transportSystem.runAdjointSolve()
+    G, G_p = transportSystem.getAdjointGradients()
     print(G)
     print(G_p)
-    # transportSystem.setParams(LinearDiffusionParams(0.1, 0.1, 2.0, 1.0))
-    # #runner.setTransportSystem(transportSystem)
-
-   
-    # u = runner.run(10.0)
-    # G, G_p = runner.runAdjointSolve()
-    # print(u)
-    #print(transportSystem.params)
+    # transportSystem.setParams(LinearDiffusionParams(0.1, 0.1, 2.0, 1.0)
     
     
 

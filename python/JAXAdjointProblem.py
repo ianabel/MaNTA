@@ -1,25 +1,10 @@
-import os
-
 import jax
 import jax.numpy as jnp
+import equinox as eqx
 import MaNTA
 from functools import partial
 
-from State import State
-
-
-
-def MaNTA_Decorator(func):
-    def wrapper(self, index, states, positions, *args):
-        states_ = State.from_manta(states)
-        positions_ = jnp.array(positions)
-        res = func(self, index, states_, positions_, *args)
-
-        if (isinstance(res, State)):
-            return res.to_manta()
-        else: 
-            return res
-    return wrapper
+from State import State, MaNTA_Decorator
 
 from jax.flatten_util import ravel_pytree
 
@@ -47,6 +32,7 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
     def setParams(self, params):
         self.params = params
     @MaNTA_Decorator
+    @eqx.filter_jit
     def gFn(self, i, states, positions):
 
         out = jax.vmap(self.g, in_axes=(State.vmap_axes(), 0, None))(states, positions, self.params)
@@ -54,6 +40,7 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
         return out
 
     @MaNTA_Decorator
+    @eqx.filter_jit
     def dgFndp(self, gIndex, states, positions):
         dgdp = jax.vmap(jax.grad(self.g, argnums=2), in_axes=(State.vmap_axes(), 0, None))(states, positions, self.params)
         g, _ = ravel_pytree(dgdp)
@@ -64,18 +51,21 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
         return out
 
     @MaNTA_Decorator
+    @eqx.filter_jit
     def dg(self, i, states, positions):
 
         out = jax.vmap(jax.grad(self.g, argnums=0), in_axes=(State.vmap_axes(), 0, None))(states, positions, self.params)  
         return out
 
     @MaNTA_Decorator
+    @eqx.filter_jit
     def dSigma(self, i, states, positions):
         out = jax.vmap(jax.grad(self.sigma, argnums=4), in_axes=(vmap_axes))(i, states, positions, 0.0, self.params)  
         return out
     
     
     @MaNTA_Decorator
+    @eqx.filter_jit
     def dSources(self, i, states, positions):
         out = jax.vmap(jax.grad(self.source, argnums=4), in_axes=(vmap_axes))(i, states, positions, 0.0, self.params)  
         return out

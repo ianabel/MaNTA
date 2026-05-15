@@ -77,7 +77,11 @@ namespace pybind11
 				value.Derivative() = py::cast<Matrix>(d["Derivative"]);
 				value.Flux() = py::cast<Matrix>(d["Flux"]);
 				value.Aux() = py::cast<Matrix>(d["Aux"]);
-				value.Scalars() = static_cast<Vector>(py::cast<Matrix>(d["Scalars"]));
+
+				auto scalars = py::cast<py::array_t<double>>(d["Scalars"]);
+				py::buffer_info info = scalars.request();
+				double* data = static_cast<double *>(info.ptr);
+				value.Scalars() = Eigen::Map<Vector>(data, info.size);
 
 				return true;
 			}

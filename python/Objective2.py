@@ -118,8 +118,8 @@ def make_objective_fd(config, abs_step=1e-4, rel_step=0):
 
     @eqx.filter_custom_jvp
     def _objective_base(tree_in, grid):
-        fields, Vp = tree_in
-        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp)
+        fields, Vp, Vpp = tree_in
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp)
 
         G, G_p, pi = _f_wrapped(yancc_wrapper)
         return G, pi 
@@ -129,7 +129,7 @@ def make_objective_fd(config, abs_step=1e-4, rel_step=0):
         tree_in, grid = primals
         tree_dot, _= tangents
     
-        yancc_wrapper = yancc_data.from_fields(tree_in[0], grid, tree_in[1])
+        yancc_wrapper = yancc_data.from_fields(tree_in[0], grid, tree_in[1], tree_in[2])
         G, G_p, pi = _f_wrapped(yancc_wrapper)
         primal_out = (G, pi)
         # primal_out = _f_wrapped(*primals)
@@ -139,6 +139,7 @@ def make_objective_fd(config, abs_step=1e-4, rel_step=0):
         x, unflatx = jax.flatten_util.ravel_pytree(tree_in)
         v1, ______ = jax.flatten_util.ravel_pytree(tree_dot[0])
         v2, ______ = jax.flatten_util.ravel_pytree(tree_dot[1])
+        v3, ______ = jax.flatten_util.ravel_pytree(tree_dot[2])
 
         # finite difference step size
         fd_step = abs_step + rel_step * jnp.mean(jnp.abs(x))
@@ -149,14 +150,17 @@ def make_objective_fd(config, abs_step=1e-4, rel_step=0):
         vh1 = jnp.pad(v1a, (0, len(x)-len(v1a)), mode='constant')
         normv2 = jnp.linalg.norm(v2)
         v2a = jnp.where(normv2 == 0, v2, v2 / normv2)
-        vcat = jnp.concatenate([vh1, v2a])
+        normv3 = jnp.linalg.norm(v3)
+        v3a = jnp.where(normv3 == 0, v3, v3 / normv3)
+        vcat = jnp.concatenate([vh1, v2a, v3a])
         normv = jnp.linalg.norm(vcat)
         vh = jnp.where(normv == 0, vcat, vcat / normv)
         def f(tree_in):
             tree_unflat = unflatx(tree_in)
             fields_in = tree_unflat[0]
             vp_in = tree_unflat[1]
-            yancc_wrapper = yancc_data.from_fields(fields_in, grid, vp_in)
+            vpp_in = tree_unflat[2]
+            yancc_wrapper = yancc_data.from_fields(fields_in, grid, vp_in, vpp_in)
             G, _, _ = _f_wrapped(yancc_wrapper)
             return G
 

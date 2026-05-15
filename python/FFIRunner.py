@@ -10,7 +10,7 @@ class Platform(enum.IntEnum):
 cpu_device = jax.devices('cpu')[0]
 
 # MaNTA has to run on cpu so we only have cpu implementation for the run functions
-ffi_ops_names = [("get_solution", True), ("get_adjoint_gradients", True), ("run", False), ("run_ss", False)] # (op_name, use_gpu)
+ffi_ops_names = ["get_solution", "get_adjoint_gradients","run", "run_ss"] # (op_name, use_gpu)
 ffi_ops = {}
 
 def register_ffi_cpu(op_name):
@@ -20,6 +20,7 @@ def register_ffi_cpu(op_name):
             print("Registering cpu implementation for operation " + op_name)
             jax.ffi.register_ffi_target(name, target, platform="cpu")
             return name
+    return False
 
 def register_ffi_gpu(op_name):
     for name, target in MaNTA.runner_ffi_ops_cuda().items():
@@ -27,22 +28,16 @@ def register_ffi_gpu(op_name):
             print("Registering gpu implementation for operation " + op_name)
             jax.ffi.register_ffi_target(name, target, platform="CUDA")
             return name
+    return False
 
-for name, has_gpu in ffi_ops_names:
-    if (has_gpu):
-        ffi_ops[name] = [register_ffi_cpu(name), register_ffi_gpu(name)] 
-    else:
-        ffi_ops[name] = [register_ffi_cpu(name)]
-
-# def getPlatform():
-#     return Platform.CPU
-#     #return jax.lax.platform_dependent(None, cpu=(lambda x : Platform.CPU) , cuda=(lambda x : Platform.GPU))
-
-# def getdtypes(platform=getPlatform()):
-#     if (jax.lax.eq(platform, Platform.GPU)):
-#         return jnp.float64, jnp.int64
-#     else:
-#         return jnp.float64, jnp.int64
+for name in ffi_ops_names:
+    cpu_op = register_ffi_cpu(name)
+    if (not cpu_op):
+        raise RuntimeError("Could not find cpu implementation for operation " + name)
+    ffi_ops[name] = [cpu_op]
+    gpu_op = register_ffi_gpu(name)
+    if (gpu_op):
+        ffi_ops[name].append(gpu_op)
 
 class FFIRunner(MaNTA.Runner):
     def __init__(self, transport_system, points, ng, np, spatialParameters = False):
@@ -65,7 +60,7 @@ class FFIRunner(MaNTA.Runner):
     def getAdjointGradients(self, *args, **kwargs):
         raise NotImplementedError("runAdjointSolve method is disabled when using FFI; use Run_adjoint_solve")
     def getSolution(self, *args, **kwargs):
-        raise NotImplementedError("getSolution method is disabled when using FFI; use get_profile")
+        raise NotImplementedError("getSolution method is disabled when using FFI; use Get_profile")
 
     """
     Runner functions using the ffi api 
@@ -79,10 +74,9 @@ class FFIRunner(MaNTA.Runner):
         with jax.default_device(cpu_device):
             jax.ffi.ffi_call(ffi_ops["run_ss"][Platform.CPU], [],  has_side_effect=True)(obj=self.get_address())
 
-
     def Get_adjoint_gradients(self):
         def cpu_call():
-            adjoint_output = adjoint_output = [
+            adjoint_output = [
                 jax.ShapeDtypeStruct((self.ng,),jnp.float64),
                 jax.ShapeDtypeStruct((self.ng * self.fac, self.np),jnp.float64)
             ]  
@@ -90,7 +84,7 @@ class FFIRunner(MaNTA.Runner):
             return G, G_p
            
         def gpu_call():
-            adjoint_output = adjoint_output = [
+            adjoint_output = [
                 jax.ShapeDtypeStruct((self.ng,),jnp.float32),
                 jax.ShapeDtypeStruct((self.ng * self.fac, self.np),jnp.float32)
             ] 

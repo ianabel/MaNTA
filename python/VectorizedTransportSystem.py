@@ -5,40 +5,23 @@ import MaNTA
 from JAXAdjointProblem import JAXAdjointProblem
 from typing import NamedTuple, Any
 from functools import partial
-from State import State
+from State import State, MaNTA_Decorator
+from abc import abstractmethod
+import equinox as eqx
+
 """
 JAX-based transport system base class that overloads MaNTA TransportSystem.
 Enables automatic differentiation of sigma and source terms using JAX.
 """
 vmap_axes = (State.vmap_axes(), 0)
 
-def MaNTA_Decorator(func):
-    def wrapper(self, index, states, positions, *args):
-        states_ = State.from_manta(states)
-        positions_ = jnp.array(positions)
-        
-        @partial(jax.jit(static_argnums=(0,)))
-        def wrap_jit(self, *args):
-            return func(self, *args)
-
-        res = wrap_jit(self, index, states_, positions_, *args)
-
-        if (isinstance(res, State)):
-            return res.to_manta()
-        else: 
-            return res
-    return wrapper
-
-
 # Base class for JAX-based transport systems
 class VectorizedTransportSystem(MaNTA.TransportSystem):
     def __init__(self):
         MaNTA.TransportSystem.__init__(self)
         self.nAux = 0
-        self.dSigmadvar = jax.jit(jax.grad(self.SigmaFn, argnums=1))
-        self.dSourcedvar = jax.jit(jax.grad(self.Sources, argnums=1))
 
-        self.dAuxdvars = jax.jit(jax.grad(self.AuxG, argnums = 1))
+        self.dAuxdvars = jax.jit(jax.grad(self.aux, argnums = 1))
 
         self.dInitialValue = jax.jit(jax.grad(self.InitialValue, argnums=1))
 
@@ -49,27 +32,25 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
         pass
     
     @MaNTA_Decorator
+    @eqx.filter_jit
     def SigmaFn_v( self, index, states, positions, t):    
         return jax.vmap(lambda s, p : self.sigma(index, s, p, t, self.params), in_axes=(vmap_axes))(states, positions)
 
     @MaNTA_Decorator
+    @eqx.filter_jit
     def Sources_v( self, index, states, positions, t ):
-    
         return jax.vmap(lambda s, p : self.source(index, s, p, t, self.params), in_axes=(vmap_axes))(states, positions)
     
     @MaNTA_Decorator
+    @eqx.filter_jit
     def dSigma(self, index, states, positions, t):
-
-        out =  jax.vmap(lambda s, p: jax.grad(self.sigma, argnums=1)(index, s, p, t, self.params), in_axes=(vmap_axes))(states, positions)
-        return out
+        return jax.vmap(lambda s, p: jax.grad(self.sigma, argnums=1)(index, s, p, t, self.params), in_axes=(vmap_axes))(states, positions)
     
     @MaNTA_Decorator
+    @eqx.filter_jit
     def dSources(self, index, states, positions, t):
+        return jax.vmap(lambda s, p: jax.grad(self.source, argnums=1)(index, s, p, t, self.params), in_axes=(vmap_axes))(states, positions)
 
-        out =  jax.vmap(lambda s, p: jax.grad(self.source, argnums=1)(index, s, p, t, self.params), in_axes=(vmap_axes))(states, positions)
-        return out
-
-    
     """
     Sigma and source, and auxilliary functions to be overloaded in derived classes
 
@@ -90,37 +71,19 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
     float
         Computed sigma or source term
     """
-
+    @abstractmethod
     def sigma( self, index, state, x, t, params: NamedTuple ):
-        pass
+        raise NotImplementedError("sigma function not implemented")
 
+    @abstractmethod
     def source( self, index, state, x, t, params: NamedTuple ):
-        pass
+        raise NotImplementedError("source function not implemented")
 
+    @abstractmethod
     def aux( self, index, state, x, t, params: NamedTuple):
         pass
-
-    def dSigmaFn_dq( self, index, state, x, t):
-        return self.dSigmadvar(index,state,x,t)["Derivative"]
     
-    def dSigmaFn_du( self, index, state, x, t):
-        return self.dSigmadvar(index,state,x,t)["Variable"]
-    
-    def dSigma_dPhi( self, index, state, x, t):
-        return self.dSigmadvar(index,state,x,t)["Aux"]
-        
-    def dSources_du( self, index, state, x, t ):
-        return self.dSourcedvar(index,state,x,t)["Variable"]
-
-    def dSources_dq( self, index, state, x, t ):
-        return self.dSourcedvar(index,state,x,t)["Derivative"]
-
-    def dSources_dsigma( self, index, state, x, t ):
-        return self.dSourcedvar(index,state,x,t)["Flux"]
-    
-    def dSources_dPhi( self, index, state, x, t ):
-        return self.dSourcedvar(index,state,x,t)["Aux"]
-    
+    @MaNTA_Decorator
     def AuxG( self, index, state, x, t):
         return self.aux(index, state, x, t, self.params)
     
@@ -142,8 +105,18 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
     state : dict
         Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
     """
+
+    @MaNTA_Decorator
+    def dSigma_dPhi( self, index, state, x, t):
+        return jax.grad(self.sigma, argnums=1)(index, state, x, t, self.params).Aux
+    
+    @MaNTA_Decorator
+    def dSources_dPhi( self, index, state, x, t ):
+        return jax.grad(self.source, argnums=1)(index, state, x, t, self.params).Aux
+
+    @MaNTA_Decorator
     def AuxGPrime( self, index, state, x , t):
-        return self.dAuxdvars(index, state, x, t)
+        return self.dAuxdvars(index, state, x, t, self.params)
       
     def InitialValue( self, index, x ):
         pass
@@ -196,13 +169,13 @@ class JAXNonlinearDiffusion(VectorizedTransportSystem):
         self.params = NonlinearDiffusionParams.make(config)
 
     def g(self, state, x, params: NonlinearDiffusionParams):
-        u = state["Variable"][0]
+        u = state.Variable[0]
         return 0.5 * u * u
     
     def sigma( self, index, state, x, t, params: NonlinearDiffusionParams ):
         
-        u = state["Variable"][0]
-        q = state["Derivative"][0]
+        u = state.Variable[0]
+        q = state.Derivative[0]
         return params.D*(u ** params.a) * q
 
     def source( self, index, state, x, t, params: NonlinearDiffusionParams ):
@@ -236,24 +209,24 @@ class JAXAuxTest(VectorizedTransportSystem):
         self.params = NonlinearDiffusionParams.make(config)
 
     def g(self, state, x, params: NonlinearDiffusionParams):
-        u = state["Variable"][0]
+        u = state.Variable[0]
         return 0.5 * u * u * params.D
     
     def sigma( self, index, state, x, t, params: NonlinearDiffusionParams ):
         
-        u = state["Variable"][0]
-        q = state["Derivative"][0]
+        u = state.Variable[0]
+        q = state.Derivative[0]
         return params.D*(u ** params.a) * q
     
     def aux( self, index ,state, x, t, params):
-        a = state["Aux"][0]
-        u = state["Variable"][0]
+        a = state.Aux[0]
+        u = state.Variable[0]
         return a - params.D*u*u
 
     def source( self, index, state, x, t, params: NonlinearDiffusionParams ):
         y = x - params.SourceCentre
-        u = state["Variable"][0]
-        a = state["Aux"][0]
+        u = state.Variable[0]
+        a = state.Aux[0]
         return params.T_s*jnp.exp(-y*y/params.SourceWidth) + a - params.D*u*u
 
     def LowerBoundary(self, index, t):
