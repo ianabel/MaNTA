@@ -1,8 +1,8 @@
 import MaNTA
 
 import os
-# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".75"
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".75"
+# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 # os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 from FFIRunner import FFIRunner
 import jax
@@ -265,7 +265,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
             dndrho=dndrho * self.yancc_wrapper.nNorm),
         ]
         
-        _, _, fluxes, _  = eqx.filter_jit(solve_dke, donate="all")(field, self.yancc_wrapper.pitchgrid, self.yancc_wrapper.speedgrid, species, Erho)
+        _, _, fluxes, _  = eqx.filter_jit(solve_dke)(field, self.yancc_wrapper.pitchgrid, self.yancc_wrapper.speedgrid, species, Erho)
 
         fout = fluxes['<heat_flux>'][0] * vp / (self.yancc_wrapper.FluxNorm)
         # fout = -vp * dTidrho * 5.0 

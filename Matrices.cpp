@@ -182,8 +182,8 @@ void SystemSolver::dSourcedPhi_Mat( Matrix& mat, DGSoln const& Y, Index interval
 
 	for ( Index Var = 0; Var < nVars; Var++ )
 	{
-		Values dS_dPhi_vals1( nVars );
-		Values dS_dPhi_vals2( nVars );
+		Values dS_dPhi_vals1( nAux );
+		Values dS_dPhi_vals2( nAux );
 		for ( size_t i=0; i < n_abscissa; ++i ) {
 			// Pull the loop over the gaussian integration points
 			// outside so we can evaluate u, q, dX_dZ once and store the values

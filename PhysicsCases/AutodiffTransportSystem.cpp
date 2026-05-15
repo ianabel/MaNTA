@@ -130,7 +130,7 @@ void AutodiffTransportSystem::dSources_dPhi(Index i, VectorRef grad, const State
 	RealVector sigma(s.Flux);
 	RealVector phi(s.Aux);
 	RealVector Scalar(s.Scalars);
-	phi.resize(nVars);
+	// phi.resize(nVars);
 	Real uout;
 
 	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)

@@ -617,7 +617,7 @@ void SystemSolver::updateMatricesForJacSolve()
     const auto states = yJac.evalOnNodes();
      for (Index i = 0; i < nVars; i++)
     {
-        dSigma_vals.add(nCells, k, nVars, nScalars, nAux /* This should be nAux, but output is wrt all variables*/);
+        dSigma_vals.add (nCells, k, nVars, nScalars, nAux);
         dSource_vals.add(nCells, k, nVars, nScalars, nAux);
 
         problem->dSigma(i, dSigma_vals[i], states, points, jt);
