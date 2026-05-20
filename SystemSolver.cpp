@@ -1583,24 +1583,25 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
     out << std::endl; // Two blank lines needed to make gnuplot happy
 }
 
-void SystemSolver::printOnNodes(std::ostream &out, double t, bool printSources)
+void SystemSolver::printOnNodes(std::ostream &out, double t, N_Vector const& tempY, bool printSources)
 {
 
+    DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY), nScalars, nAux);
     out << "# t = " << t << std::endl;
     for (Index v = 0; v < nVars; ++v)
     {
         out << "# Lambda (" << v << ") = ";
         for (Index i = 0; i < nCells; ++i)
-            out << y.lambda(v)[i] << ", ";
-        out << y.lambda(v)[nCells] << std::endl;
+            out << tmp_y.lambda(v)[i] << ", ";
+        out << tmp_y.lambda(v)[nCells] << std::endl;
     }
 
     if (nScalars > 0)
     {
         out << "# Scalars : ";
         for (Index i = 0; i < nScalars - 1; ++i)
-            out << y.Scalar(i) << ", ";
-        out << y.Scalar(nScalars - 1) << std::endl;
+            out << tmp_y.Scalar(i) << ", ";
+        out << tmp_y.Scalar(nScalars - 1) << std::endl;
     }
 
     std::vector<Values> sources(nVars);
@@ -1608,11 +1609,11 @@ void SystemSolver::printOnNodes(std::ostream &out, double t, bool printSources)
     {
         for (Index v = 0; v < nVars; ++v)
         {
-            sources[v] = problem->Sources(v, y.evalOnNodes(), y.getPoints(), t);
+            sources[v] = problem->Sources(v, tmp_y.evalOnNodes(), tmp_y.getPoints(), t);
         }
     }
-    const auto states = y.evalOnNodes();
-    const auto points = y.getPoints();
+    const auto states = tmp_y.evalOnNodes();
+    const auto points = tmp_y.getPoints();
     for (size_t i = 0; i < points.size(); ++i)
     {
         const auto& x = points[i];
@@ -1632,7 +1633,7 @@ void SystemSolver::printOnNodes(std::ostream &out, double t, bool printSources)
        
     }
     out << std::endl;
-    out << std::endl; // Two blank lines needed to make gnuplot happy
+    out << std::endl; // Two blank lines needed to make gnuplot happtmp_y
 }
 
 int SystemSolver::getErrorWeights(N_Vector y_sundials, N_Vector ewt_sundials)
