@@ -40,9 +40,10 @@ for name in ffi_ops_names:
     if (not cpu_op):
         raise RuntimeError("Could not find cpu implementation for operation " + name)
     ffi_ops[name] = [cpu_op]
-    gpu_op = register_ffi_gpu(name)
-    if (gpu_op):
-        ffi_ops[name].append(gpu_op)
+    if (hasattr(MaNTA, "runner_ffi_ops_cuda")):
+        gpu_op = register_ffi_gpu(name)
+        if (gpu_op):
+            ffi_ops[name].append(gpu_op)
 
 class FFIRunner(MaNTA.Runner):
     def __init__(self, transport_system, points, ng, np, spatialParameters = False):
