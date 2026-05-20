@@ -104,7 +104,7 @@ class SystemSolver
         // print current output for u and q to output file
         void print(std::ostream &out, double t, int nOut, bool printSources = false);
         void print(std::ostream &out, double t, int nOut, N_Vector const &tempY, bool printSources = false);
-
+        void printOnNodes(std::ostream &out, double t, int nOut, bool printSources = false);
         double getdt() const { return dt; }
 
         void setTesting(bool t) { testing = t; }

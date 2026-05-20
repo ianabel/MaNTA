@@ -8,7 +8,7 @@ from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 from yancc.species import LocalMaxwellian
 from yancc.solve import solve_dke
 
-from scipy.constants import elementary_charge, mu_0, proton_mass
+from scipy.constants import elementary_charge, mu_0, proton_mass, electron_mass
 import jax.numpy as jnp
 from jax.tree_util import tree_map
 import equinox as eqx
@@ -86,9 +86,12 @@ class yancc_data(eqx.Module):
         Cs0 = jnp.sqrt(2 * Tnorm * elementary_charge / proton_mass)     # Normalization sound speed
         rho_star = (proton_mass * Cs0 / (elementary_charge * Bnorm)) / Lnorm  # Gyroradius
 
-        tau_norm = rho_star ** 2 * Cs0 / Lnorm                          # Time normalization
-        self.FluxNorm = nNorm * elementary_charge * Tnorm / tau_norm
-
+       # tau_norm = rho_star ** 2 * Cs0 / rho_star                          # Time normalization
+        # log_lambda_ref = 24.0 - jnp.log(self.nNorm * 1.0e-6)/ 2.0 + jnp.log(self.Tnorm)
+        # tau_c = 12.0 * jnp.pi ** (3./2.) *jnp.sqrt(electron_mass) * (elementary_charge * self.Tnorm) * mu_0 **2 / (jnp.sqrt(2) * self.nNorm * elementary_charge ** 4 * log_lambda_ref)
+       # tau_norm = Cs0 / rho_star # gyro Bohm scaling
+        self.FluxNorm = nNorm * elementary_charge * Tnorm * Cs0 * rho_star ** 2#Cs0 * rho_star #nNorm * elementary_charge * Tnorm / tau_norm
+        print("Flux norm : " + str(self.FluxNorm))
         self.speedgrid = MaxwellSpeedGrid(nx)
         self.pitchgrid = UniformPitchAngleGrid(na)
 
@@ -101,8 +104,8 @@ class yancc_data(eqx.Module):
             rho: Float[ArrayLike, '...'],
             nNorm: Optional[float] = 1e20, 
             Tnorm: Optional[float] = 1e3, 
-            nx: Optional[int] = 7, 
-            na: Optional[int] = 65, 
+            nx: Optional[int] = 5, 
+            na: Optional[int] = 43, 
             nt: Optional[int] = 17,
             nz: Optional[int] = 33,
             eq = None,
@@ -110,7 +113,7 @@ class yancc_data(eqx.Module):
         
         print("Initializing yancc wrapper")
         if (eq is None):
-            print("No equilibrium passed, using ESTELL example")
+            print("No equilibrium passed, using W7-X example")
             eq = desc.examples.get("W7-X")
 
         if (grid is None):
@@ -132,7 +135,7 @@ class yancc_data(eqx.Module):
 
     # for constructing from data passed by DESC
     @classmethod
-    def from_data(cls, data, grid, nNorm=1e20, Tnorm=1e3, nx=7, na=65):
+    def from_data(cls, data, grid, nNorm=1e20, Tnorm=1e3, nx=5, na=43):
 
         yancc_dat = {
             "B_sup_t": data["B^theta"],
@@ -165,7 +168,7 @@ class yancc_data(eqx.Module):
         return cls(fields=fields, grid=grid,rho=yancc_dat["rho"], Vp=V_r, Vpp=V_rr, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
 
     @classmethod
-    def from_fields(cls, fields, grid, V_r, V_rr, nNorm=1e20, Tnorm=1e3, nx=7, na=65):
+    def from_fields(cls, fields, grid, V_r, V_rr, nNorm=1e20, Tnorm=1e3, nx=5, na=43):
         return cls(fields=fields, grid=grid, rho=fields.rho, Vp = V_r, Vpp = V_rr, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
 
     @classmethod 

@@ -1,9 +1,9 @@
 import MaNTA
 
 import os
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".75"
+# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".75"
 # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-# os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 from FFIRunner import FFIRunner
 import jax
 # jax.config.update("jax_enable_compilation_cache", False)
@@ -69,22 +69,16 @@ from typing import NamedTuple
 
 
 def put_on_gpu(tree):
+#    def map_fn(leaf):
+#        if not jnp.isscalar(leaf):
+#            if (jnp.mod(leaf.shape[0], len(devices))==0):
+#                return jax.device_put(leaf, data_sharding)
+#            else:
+#                return jax.device_put(leaf, static_sharding)
+#        else:
+#            return jax.device_put(leaf, static_sharding)
+#    return jax.tree.map(map_fn, tree)
     return tree
-    # def map_fn(leaf):
-    #     return leaf
-    #     # if not jnp.isscalar(leaf):
-    #     #     if (jnp.mod(leaf.shape[0], len(devices))==0):
-    #     #         return jax.device_put(leaf, data_sharding)
-    #     #     else:
-    #     #         return jax.device_put(leaf, static_sharding)
-    #     #     # return eqx.filter_shard(leaf, data_sharding)
-    #     #     # condition = jnp.mod(leaf.shape[0], len(devices)) == 0
-    #     #     # # lpad = (len(self.points) - leaf.shape[0],0)
-    #     #     # # print(lpad)
-    #     #     # return jax.lax.cond(condition, lambda leaf : jax.device_put(leaf, data_sharding), lambda leaf : jax.device_put(leaf, static_sharding), leaf)
-    #     # else:
-    #     #     return jax.device_put(leaf, static_sharding)
-    # return jax.tree.map(map_fn, tree)
 
 class StellaratorParams(NamedTuple):
     SourceCenter: float
@@ -127,7 +121,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
         self.isLowerDirichlet = False
         solver_config = config["Solver"]
         st_config = config["Stellarator"]
-        self.points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
+        self.points = yancc_wrapper.rho
+        # self.points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
 
         self.params = StellaratorParams.from_config(st_config)
  
@@ -152,7 +147,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         # self.vp_shard = jax.device_put(self.vp, data_sharding) #put_on_gpu(self.field)
         # self.vpp_shard = jax.device_put(self.vpp, data_sharding)
         # self.field_shard, self.vprime_shard = eqx.filter_shard((self.field, self.vprime), data_sharding)
-        self.vp_interp = interpax.CubicSpline(self.points, self.vp, check = False)
+        self.vp_interp = interpax.Akima1DInterpolator(self.points, self.vp, check = False)
         g = [self.StoredEnergy]
 
         self.adjointProblem = StellaratorAdjointProblem(self, g, self.yancc_wrapper, len(self.points))
@@ -161,19 +156,20 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         print("configuring")
         self.runner.configure(solver_config)
-
-        # self.uL = -self.sigma(
-        #     0, 
-        #     State(jnp.array([self.InitialValue(0, self.xL)]), jnp.array([self.InitialDerivative(0, self.xL)]), None, None, None), 
-        #     self.xL, 
-        #     0, 
-        #     self.yancc_wrapper.fields_unstacked[0], 
-        #     self.vp_shard[0], 
-        #     self.vpp_shard[0], 
-        #     self.params)
-        
-
-        # print(self.uL)
+        # io_callback(lambda : self.runner.configure(solver_config), [], ordered = True)
+#
+#        xL_p = self.points[0]
+#        self.uL = -self.sigma(
+#            0, 
+#            State(jnp.array([self.InitialValue(0, xL_p)]), jnp.array([self.InitialDerivative(0, xL_p)]), None, None, None), 
+#            xL_p, 
+#            0, 
+#            self.yancc_wrapper.fields_unstacked[0], 
+#            self.vp[0], 
+#            self.vpp[0], 
+#            self.params)
+#            
+#        print(self.uL)
 
         print("Successfully created StellaratorTransport object")
 
@@ -192,7 +188,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return 2./3. * ui * self.pnorm
 
     def LowerBoundary(self, index, t):
-        return 0.0 #self.InitialDerivative(index, self.xL)
+        return 0.0# self.uL
 
     def UpperBoundary(self, index, t):
         return self.InitialValue(index, self.xR)
@@ -223,7 +219,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     
     """
-    Sigma and source, and auxilliary functions to be overloaded in derived classes
+    Sigma and source, and auxilliary functions
 
     Parameters
     ----------
@@ -243,6 +239,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         Computed sigma or source term
     """
 
+    
     def sigma( self, index, state : State, x, t, field, vp, vpp, params ):
         n, nprime = jax.value_and_grad(self.Density)(x)
 
@@ -265,7 +262,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
             dndrho=dndrho * self.yancc_wrapper.nNorm),
         ]
         
-        _, _, fluxes, _  = eqx.filter_jit(solve_dke)(field, self.yancc_wrapper.pitchgrid, self.yancc_wrapper.speedgrid, species, Erho)
+        _, _, fluxes, _  = eqx.filter_jit(solve_dke)(put_on_gpu(field), self.yancc_wrapper.pitchgrid, self.yancc_wrapper.speedgrid, species, put_on_gpu(Erho))
 
         fout = fluxes['<heat_flux>'][0] * vp / (self.yancc_wrapper.FluxNorm)
         # fout = -vp * dTidrho * 5.0 
@@ -278,7 +275,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def StoredEnergy(self, field, state, x, params):
         u = state.Variable[0]
         return u 
-    
+
+    @eqx.filter_jit 
     def Density(self, x):
         return StellaratorTransport.initial_profile(x, self.params.EdgeDensity, self.params.n0)
     
@@ -292,15 +290,17 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     @staticmethod
     def initial_profile(x, edge_value, peak_value):
-        return  (peak_value - edge_value) * (1 - x ** 4) + edge_value
+        return (peak_value - edge_value) * (1 - x ** 4) + edge_value
     
     @partial(jax.jit, static_argnums=(0,))
     def dSources_dPhi( self, index, state, x, t ):
         return jax.grad(self.Sources, argnums=1)(index, state, x, t)["Aux"]
 
+    @eqx.filter_jit
     def InitialValue( self, index, x ):
         return 1.5 * self.params.EdgeTemperature * self.Density(x) * self.vp_interp(x)
-    
+
+    @eqx.filter_jit 
     def InitialDerivative( self, index, x ):
         return jax.grad(self.InitialValue, argnums=1)(index, x)
         
@@ -331,12 +331,8 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         self.g = g
         self.ng = len(self.g) # g functions passed in as an array
         self.field, self.vp, self.vpp = yancc_data.get_fields()
-
-        # self.field_shard, self.vprime_shard = eqx.filter_shard((self.field, self.vprime), data_sharding)
-        self.field_shard = put_on_gpu(self.field)
-        self.vp_shard = jax.device_put(self.vp, data_sharding)
-        self.vpp_shard = jax.device_put(self.vpp, data_sharding) 
-  
+        (self.field_shard, self.vp_shard, self.vpp_shard) = eqx.filter_shard((self.field, self.vp, self.vpp), data_sharding)
+         
         boundary_field = yancc_data.fields_unstacked[-1]
 
         flat, _ =  jax.flatten_util.ravel_pytree((eqx.filter(boundary_field, eqx.is_array)))
@@ -351,7 +347,6 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
 
         self.params = transport_system.params
 
-        
         self.UpperBoundarySensitivities = {}
         self.LowerBoundarySensitivities = {}
 
@@ -363,14 +358,12 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
     @MaNTA_Decorator
     def dgFndp(self, i, states, positions):
 
-        # filter_grad needs the differentiated parameter to be first so we have to use a lambda to swap the argument order
-        fgrad = eqx.filter_grad(self.g[i]) #eqx.filter_grad(lambda field: self.g[i](state, x, field, self.params))
+        fgrad = eqx.filter_grad(self.g[i]) 
         fgrad_vmap = eqx.filter_vmap(fgrad, in_axes=(0, State.vmap_axes(), 0, None))
         grad_out = fgrad_vmap(self.field, states, positions, self.params)
         grad_unstack = tree_unstack(grad_out)
         grad_unraveled = jnp.stack([jax.flatten_util.ravel_pytree(g)[0] for g in grad_unstack], axis=0)
         grad_w_vprime = jnp.pad(grad_unraveled, ((0, 0), (0, 2)), mode="constant")
-
 
         return grad_w_vprime
     

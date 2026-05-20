@@ -1583,6 +1583,58 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
     out << std::endl; // Two blank lines needed to make gnuplot happy
 }
 
+void SystemSolver::printOnNodes(std::ostream &out, double t, int nOut, bool printSources)
+{
+
+    out << "# t = " << t << std::endl;
+    for (Index v = 0; v < nVars; ++v)
+    {
+        out << "# Lambda (" << v << ") = ";
+        for (Index i = 0; i < nCells; ++i)
+            out << y.lambda(v)[i] << ", ";
+        out << y.lambda(v)[nCells] << std::endl;
+    }
+
+    if (nScalars > 0)
+    {
+        out << "# Scalars : ";
+        for (Index i = 0; i < nScalars - 1; ++i)
+            out << y.Scalar(i) << ", ";
+        out << y.Scalar(nScalars - 1) << std::endl;
+    }
+
+    std::vector<Values> sources(nVars);
+    if (printSources) 
+    {
+        for (Index v = 0; v < nVars; ++v)
+        {
+            sources.push_back(problem->Sources(v, y.evalOnNodes(), y.getPoints(), t));
+        }
+    }
+    const auto states = y.evalOnNodes();
+    const auto points = y.getPoints();
+    for (size_t i = 0; i < points.size(); ++i)
+    {
+        const auto& x = points[i];
+        const State s = states[i];
+
+        out << x;
+         for (Index v = 0; v < nVars; ++v)
+        {
+            out << "\t" << s.Variable[v] << "\t" << s.Derivative[v] << "\t" << s.Flux[v];
+            if (printSources)
+                out << "\t" << sources[v](i);
+        }
+        for (Index a = 0; a < nAux; ++a)
+            out << "\t" << s.Aux[a];
+
+        out << std::endl;
+       
+    }
+    out << std::endl;
+    out << std::endl; // Two blank lines needed to make gnuplot happy
+}
+
 int SystemSolver::getErrorWeights(N_Vector y_sundials, N_Vector ewt_sundials)
 {
     DGSoln y(nVars, grid, k, N_VGetArrayPointer(y_sundials), nScalars, nAux);

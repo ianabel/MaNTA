@@ -84,8 +84,8 @@ class yancc_data(eqx.Module):
         rho_star = (proton_mass * Cs0 / (elementary_charge * Bnorm)) / Lnorm  # Gyroradius
 
         tau_norm = rho_star ** 2 * Cs0 / Lnorm                          # Time normalization
-        self.FluxNorm = nNorm * elementary_charge * Tnorm / tau_norm
-
+        self.FluxNorm = Cs0 * tau_norm #nNorm * elementary_charge * Tnorm / tau_norm
+        print("Normalizing flux: " + str(self.FluxNorm))
         self.speedgrid = MaxwellSpeedGrid(nx)
         self.pitchgrid = UniformPitchAngleGrid(na)
 

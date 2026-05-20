@@ -13,6 +13,7 @@ cpu_fp_dtype = jnp.float32
 cpu_i_dtype = jnp.int32
 
 if (cpu_fp_dtype == jnp.float64):
+    print("Enabling 64-bit math")
     jax.config.update('jax_enable_x64', True)
 # MaNTA has to run on cpu so we only have cpu implementation for the run functions
 ffi_ops_names = ["get_solution", "get_adjoint_gradients","run", "run_ss"] # (op_name, use_gpu)

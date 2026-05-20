@@ -22,6 +22,7 @@ python/Tests/__pycache__/
 python/Tests/.pytest_cache/
 python/.ipynb_checkpoints/
 python/random/
+tags
 
 venv
 gmon.out
