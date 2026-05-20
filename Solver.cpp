@@ -200,13 +200,13 @@ void SystemSolver::runSolver(double tFinal)
 		wgt = N_VClone(res);
 		dydt_out.open(baseName + ".dydt.dat");
 		dydt_out << "# dydt before CalcIC" << std::endl;
-		printOnNodes(dydt_out, t0, nOut, dYdt);
+		printOnNodes(dydt_out, t0, dYdt);
 		res_out.open(baseName + ".res.dat");
 		residual(t0, Y, dYdt, res);
 		getErrorWeights(Y, wgt);
 		double residual_val = N_VWrmsNorm(res, wgt);
 		res_out << "# Residual norm at t = " << t0 << " (pre-calcIC) is " << residual_val << std::endl;
-		printOnNodes(res_out, t0, nOut, res);
+		printOnNodes(res_out, t0, res);
 		out0 << "# t = " << t0 << " (pre-calcIC) " << std::endl;
 		print(out0, t0, nOut, true);
 	}
@@ -234,7 +234,7 @@ void SystemSolver::runSolver(double tFinal)
 		IDAGetConsistentIC(IDA_mem, Y, dYdt);
 		residual(t0, Y, dYdt, res);
 		dydt_out << "# After CalcIC " << std::endl;
-		printOnNodes(dydt_out, t0, nOut, dYdt);
+		printOnNodes(dydt_out, t0, dYdt);
 
 	
 
@@ -243,7 +243,7 @@ void SystemSolver::runSolver(double tFinal)
 
 
 		res_out << "# Residual norm at t = " << t0 << " (post-CalcIC) is " << N_VWrmsNorm(res, wgt) << std::endl;
-		printOnNodes(res_out, t0, nOut, res);
+		printOnNodes(res_out, t0, res);
 	}
 
 	// This also writes the t0 timeslice
@@ -281,7 +281,7 @@ void SystemSolver::runSolver(double tFinal)
 			// try to emit final data
 			print(out0, tret, nOut, true);
 			if (physics_debug)
-				printOnNodes(dydt_out, tret, nOut, dYdt);
+				printOnNodes(dydt_out, tret, dYdt);
 			WriteTimeslice(tret);
 			out0.close();
 			nc_output.Close();
@@ -295,11 +295,11 @@ void SystemSolver::runSolver(double tFinal)
 		print(out0, tret, nOut, Y, true);
 		if (physics_debug)
 		{
-			printOnNodes(dydt_out, tret, nOut, dYdt);
+			printOnNodes(dydt_out, tret, dYdt);
 			residual(tret, Y, dYdt, res);
 			IDAEwtSet(Y, wgt, IDA_mem);
 			res_out << "# Residual norm at t = " << tret << " is " << N_VWrmsNorm(res, wgt) << std::endl;
-			printOnNodes(res_out, tret, nOut, res);
+			printOnNodes(res_out, tret, res);
 		}
 		WriteTimeslice(tret);
 

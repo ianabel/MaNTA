@@ -1583,7 +1583,7 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
     out << std::endl; // Two blank lines needed to make gnuplot happy
 }
 
-void SystemSolver::printOnNodes(std::ostream &out, double t, int nOut, bool printSources)
+void SystemSolver::printOnNodes(std::ostream &out, double t, bool printSources)
 {
 
     out << "# t = " << t << std::endl;
@@ -1608,7 +1608,7 @@ void SystemSolver::printOnNodes(std::ostream &out, double t, int nOut, bool prin
     {
         for (Index v = 0; v < nVars; ++v)
         {
-            sources.push_back(problem->Sources(v, y.evalOnNodes(), y.getPoints(), t));
+            sources[v] = problem->Sources(v, y.evalOnNodes(), y.getPoints(), t);
         }
     }
     const auto states = y.evalOnNodes();
