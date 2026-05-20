@@ -35,12 +35,14 @@ def register_ffi_gpu(op_name):
             return name
     return False
 
+has_gpu = hasattr(MaNTA, "runner_ffi_ops_cuda")
+
 for name in ffi_ops_names:
     cpu_op = register_ffi_cpu(name)
     if (not cpu_op):
         raise RuntimeError("Could not find cpu implementation for operation " + name)
     ffi_ops[name] = [cpu_op]
-    if (hasattr(MaNTA, "runner_ffi_ops_cuda")):
+    if (has_gpu):
         gpu_op = register_ffi_gpu(name)
         if (gpu_op):
             ffi_ops[name].append(gpu_op)
@@ -96,8 +98,10 @@ class FFIRunner(MaNTA.Runner):
             ] 
             G, G_p = jax.ffi.ffi_call(ffi_ops["get_adjoint_gradients"][Platform.GPU], adjoint_output)(obj=self.get_address()) 
             return cpu_fp_dtype(G), cpu_fp_dtype(G_p)
-        
-        return jax.lax.platform_dependent(cpu=cpu_call, cuda=gpu_call)
+        if (has_gpu):
+            return jax.lax.platform_dependent(cpu=cpu_call, cuda=gpu_call)
+        else:
+            return cpu_call()
 
     def Get_profile(self, var, points = None):
         def cpu_call(points, var):
@@ -107,5 +111,8 @@ class FFIRunner(MaNTA.Runner):
         def gpu_call(points, var):
              sol_output = jax.ShapeDtypeStruct((len(points),),jnp.float32)
              return cpu_fp_dtype(jax.ffi.ffi_call(ffi_ops["get_solution"][Platform.GPU], sol_output)(jnp.int32(var), points.astype(jnp.float32), obj=self.get_address()))
-        
-        return jax.lax.platform_dependent(points if points is not None else self.points, var, cpu=cpu_call, cuda=gpu_call)
+
+        if (has_gpu):
+            return jax.lax.platform_dependent(points if points is not None else self.points, var, cpu=cpu_call, cuda=gpu_call)
+        else: 
+            return cpu_call(points if points is not None else self.points, var)
