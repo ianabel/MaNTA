@@ -173,7 +173,6 @@ class yancc_data(eqx.Module):
 
     @classmethod 
     def from_other(cls, fields_, grid_, other):
-
         return cls(fields=fields_, grid=grid_, Vp = other.Vp, Vpp = other.Vpp, rho=other.rho, nNorm=other.nNorm, Tnorm=other.Tnorm, nx=other.nx, na=other.na)
 
     def get_fields(self):

@@ -98,6 +98,7 @@ class FFIRunner(MaNTA.Runner):
             ] 
             G, G_p = jax.ffi.ffi_call(ffi_ops["get_adjoint_gradients"][Platform.GPU], adjoint_output)(obj=self.get_address()) 
             return cpu_fp_dtype(G), cpu_fp_dtype(G_p)
+
         if (has_gpu):
             return jax.lax.platform_dependent(cpu=cpu_call, cuda=gpu_call)
         else:

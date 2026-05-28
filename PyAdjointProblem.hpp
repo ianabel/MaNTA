@@ -181,9 +181,9 @@ public:
 
     void dg(Index gIndex, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae) override
     {
-        std::string method_name = "dg";
+        constexpr const char* method_name = "dg";
         py::gil_scoped_acquire gil;
-        py::function _override = py::get_override(this, method_name.c_str());
+        py::function _override = py::get_override(this, method_name);
 
         if (!_override)
         {

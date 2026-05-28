@@ -13,11 +13,10 @@ import equinox as eqx
 JAX-based transport system base class that overloads MaNTA TransportSystem.
 Enables automatic differentiation of sigma and source terms using JAX.
 """
-vmap_axes = (State.vmap_axes(), 0)
 
 # Base class for JAX-based transport systems
 class VectorizedTransportSystem(MaNTA.TransportSystem):
-    def __init__(self):
+    def __init__(self, spatialParameters=False):
         MaNTA.TransportSystem.__init__(self)
         self.nAux = 0
 
@@ -25,6 +24,7 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
 
         self.dInitialValue = jax.jit(jax.grad(self.InitialValue, argnums=1))
 
+        self.vmap_axes = (State.vmap_axes(), 0, 0 if spatialParameters else None)
     def LowerBoundary(self, index, t):
         pass
 
@@ -32,24 +32,20 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
         pass
     
     @MaNTA_Decorator
-    @eqx.filter_jit
-    def SigmaFn_v( self, index, states, positions, t):    
-        return jax.vmap(lambda s, p : self.sigma(index, s, p, t, self.params), in_axes=(vmap_axes))(states, positions)
+    def SigmaFn_v( self, index, states, positions, t):
+        return jax.vmap(lambda s, p, params : self.sigma(index, s, p, t, params), in_axes=(self.vmap_axes))(states, positions, self.params)
 
     @MaNTA_Decorator
-    @eqx.filter_jit
     def Sources_v( self, index, states, positions, t ):
-        return jax.vmap(lambda s, p : self.source(index, s, p, t, self.params), in_axes=(vmap_axes))(states, positions)
+        return jax.vmap(lambda s, p, params : self.source(index, s, p, t, params), in_axes=(self.vmap_axes))(states, positions, self.params)
     
     @MaNTA_Decorator
-    @eqx.filter_jit
     def dSigma(self, index, states, positions, t):
-        return jax.vmap(lambda s, p: jax.grad(self.sigma, argnums=1)(index, s, p, t, self.params), in_axes=(vmap_axes))(states, positions)
+        return jax.vmap(lambda s, p, params: jax.grad(self.sigma, argnums=1)(index, s, p, t, params), in_axes=(self.vmap_axes))(states, positions, self.params)
     
     @MaNTA_Decorator
-    @eqx.filter_jit
     def dSources(self, index, states, positions, t):
-        return jax.vmap(lambda s, p: jax.grad(self.source, argnums=1)(index, s, p, t, self.params), in_axes=(vmap_axes))(states, positions)
+        return jax.vmap(lambda s, p, params: jax.grad(self.source, argnums=1)(index, s, p, t, params), in_axes=(self.vmap_axes))(states, positions, self.params)
 
     """
     Sigma and source, and auxilliary functions to be overloaded in derived classes
@@ -72,14 +68,17 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
         Computed sigma or source term
     """
     @abstractmethod
+    @partial(jax.jit, static_argnames=('self',))
     def sigma( self, index, state, x, t, params: NamedTuple ):
         raise NotImplementedError("sigma function not implemented")
 
     @abstractmethod
+    @partial(jax.jit, static_argnames=('self',))
     def source( self, index, state, x, t, params: NamedTuple ):
         raise NotImplementedError("source function not implemented")
 
     @abstractmethod
+    @partial(jax.jit, static_argnames=('self',))
     def aux( self, index, state, x, t, params: NamedTuple):
         pass
     
@@ -117,10 +116,14 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
     @MaNTA_Decorator
     def AuxGPrime( self, index, state, x , t):
         return self.dAuxdvars(index, state, x, t, self.params)
-      
-    def InitialValue( self, index, x ):
-        pass
 
+    @abstractmethod
+    @partial(jax.jit, static_argnames=('self',))
+    def InitialValue( self, index, x ):
+        raise NotImplementedError("InitialValue must be implemented in derived class")
+
+    @abstractmethod
+    @partial(jax.jit, static_argnames=('self',))
     def InitialDerivative( self, index, x ):
         return self.dInitialValue(index,x)
     

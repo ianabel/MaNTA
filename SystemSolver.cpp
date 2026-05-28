@@ -962,12 +962,12 @@ int static_residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval
 int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval)
 {
 
-#ifdef DEBUG
+// #ifdef DEBUG
     wgt = N_VClone(resval);
     getErrorWeights(Y, wgt);
     double residual_val = N_VWrmsNorm(resval, wgt);
     std::cerr << "Residual norm at t = " << tres << ": " << residual_val << std::endl;
-#endif
+// #endif
     updateBoundaryConditions(tres);
 
     DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux);
@@ -1633,7 +1633,7 @@ void SystemSolver::printOnNodes(std::ostream &out, double t, N_Vector const& tem
        
     }
     out << std::endl;
-    out << std::endl; // Two blank lines needed to make gnuplot happtmp_y
+    out << std::endl; // Two blank lines needed to make gnuplot happy
 }
 
 int SystemSolver::getErrorWeights(N_Vector y_sundials, N_Vector ewt_sundials)

@@ -8,14 +8,13 @@ from State import State, MaNTA_Decorator
 
 from jax.flatten_util import ravel_pytree
 
-vmap_axes = (None, State.vmap_axes(), 0, None,  None)
 
 class JAXAdjointProblem(MaNTA.AdjointProblem):
-    def __init__(self, transport_system: MaNTA.TransportSystem, g):
+    def __init__(self, transport_system: MaNTA.TransportSystem, g, spatialParameters = False):
         MaNTA.AdjointProblem.__init__(self)
         self.params = transport_system.params
         self.g = g
-
+        self.spatialParameters = spatialParameters
         self.ng = 1
 
         self.np = len(transport_system.params)
@@ -28,21 +27,23 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
 
         self.UpperBoundarySensitivities = {}
         self.LowerBoundarySensitivities = {}
+        self.param_axis = 0 if self.spatialParameters else None
 
+        self.vmap_axes = (None, State.vmap_axes(), 0, None,  self.param_axis)
     def setParams(self, params):
         self.params = params
     @MaNTA_Decorator
     @eqx.filter_jit
     def gFn(self, i, states, positions):
 
-        out = jax.vmap(self.g, in_axes=(State.vmap_axes(), 0, None))(states, positions, self.params)
+        out = jax.vmap(self.g, in_axes=(State.vmap_axes(), 0, self.param_axis))(states, positions, self.params)
        
         return out
 
     @MaNTA_Decorator
     @eqx.filter_jit
     def dgFndp(self, gIndex, states, positions):
-        dgdp = jax.vmap(jax.grad(self.g, argnums=2), in_axes=(State.vmap_axes(), 0, None))(states, positions, self.params)
+        dgdp = jax.vmap(jax.grad(self.g, argnums=2), in_axes=(State.vmap_axes(), 0, self.param_axis))(states, positions, self.params)
         g, _ = ravel_pytree(dgdp)
         g = jnp.reshape(g, (self.np - self.np_boundary, len(positions)))
 
@@ -53,21 +54,20 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
     @MaNTA_Decorator
     @eqx.filter_jit
     def dg(self, i, states, positions):
-
-        out = jax.vmap(jax.grad(self.g, argnums=0), in_axes=(State.vmap_axes(), 0, None))(states, positions, self.params)  
+        out = jax.vmap(jax.grad(self.g, argnums=0), in_axes=(State.vmap_axes(), 0, self.param_axis))(states, positions, self.params)  
         return out
 
     @MaNTA_Decorator
     @eqx.filter_jit
     def dSigma(self, i, states, positions):
-        out = jax.vmap(jax.grad(self.sigma, argnums=4), in_axes=(vmap_axes))(i, states, positions, 0.0, self.params)  
+        out = jax.vmap(jax.grad(self.sigma, argnums=4), in_axes=(self.vmap_axes))(i, states, positions, 0.0, self.params)  
         return out
     
     
     @MaNTA_Decorator
     @eqx.filter_jit
     def dSources(self, i, states, positions):
-        out = jax.vmap(jax.grad(self.source, argnums=4), in_axes=(vmap_axes))(i, states, positions, 0.0, self.params)  
+        out = jax.vmap(jax.grad(self.source, argnums=4), in_axes=(self.vmap_axes))(i, states, positions, 0.0, self.params)  
         return out
 
     @partial(jax.jit, static_argnums=(0,))

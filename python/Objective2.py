@@ -39,23 +39,23 @@ def make_objective(config, vectorized=False):
         return G[0], G_p, pi
 
 
-    def wrap_callback(func):
-
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            result_shape_dtype = abstract_eval(*args, **kwargs)
-            return io_callback(
-                func, result_shape_dtype, *args, ordered=False, **kwargs
-            )
-
-        return wrapper
+#    def wrap_callback(func):
+#
+#        @functools.wraps(func)
+#        def wrapper(*args, **kwargs):
+#            result_shape_dtype = abstract_eval(*args, **kwargs)
+#            return io_callback(
+#                func, result_shape_dtype, *args, ordered=False, **kwargs
+#            )
+#
+#        return wrapper
     
     _f_wrapped = functools.partial(StellaratorFun, config)
 
     @eqx.filter_custom_jvp
     def _objective_base(tree_in, grid):
         fields, Vp, Vpp = tree_in
-        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp)
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp, na = 55)
      
         G, G_p, pi = _f_wrapped(yancc_wrapper)
         return G, pi 
@@ -66,7 +66,7 @@ def make_objective(config, vectorized=False):
         (fields, Vp, Vpp), grid = primals
         (field_dot, Vp_dot, Vpp_dot), _= tangents
         
-        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp)
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp, na = 55)
         G, G_p, pi = _f_wrapped(yancc_wrapper)
 
         _, unflatten_field = jax.flatten_util.ravel_pytree(yancc_wrapper.fields_unstacked[0])
@@ -97,7 +97,7 @@ def make_objective(config, vectorized=False):
         return (G, pi), (jnp.float32(jnp.sum(result_flattened)+result_vprime+result_vpp), None)
 
     return _objective_base
-
+"""
 # Finite difference objective for testing
 def make_objective_fd(config, abs_step=1e-4, rel_step=0):
 
@@ -178,3 +178,5 @@ def make_objective_fd(config, abs_step=1e-4, rel_step=0):
         return primal_out, (jnp.float32(tangent_out), None)
 
     return _objective_base
+
+"""
