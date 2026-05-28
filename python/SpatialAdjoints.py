@@ -112,7 +112,7 @@ def runMaNTA(func, solver_config):
 solver_config = {
     "OutputFilename": "out",
     "Polynomial_degree": 3,
-    "Grid_size": 5,
+    "Grid_size": 4,
     "tau": 1.0, 
     "Lower_boundary": 0.0,
     "Upper_boundary": 1.0,
@@ -160,9 +160,8 @@ def adj_jvp(tangent):
 # plt.show()
 
 import matplotlib.pyplot as plt
-nTangents = 10
-
-rng_key = jax.random.PRNGKey(10)
+nTangents = 50
+rng_key = jax.random.PRNGKey(5)
 def make_random_tangent(primal):
     global rng_key
     rng_key, key = jax.random.split(rng_key)
@@ -180,14 +179,17 @@ def make_random_tangent(primal):
     return tangent_field
 
 fig, ax = plt.subplots()
-
+err = 0.0
 for i in range(0, nTangents):
     t = make_random_tangent(T_p)
     adj = adj_jvp(t)
     fd = fd_jvp(t)
+    err += jnp.abs(adj - fd)
     ax.plot(i, adj, 'bo')
     ax.plot(i, fd, 'rx')
+err /= nTangents
 
+print(f"Average error for {nTangents} iterations: {err}")
 plt.show()
 """
 IDEA: 

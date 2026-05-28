@@ -375,20 +375,15 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
     @MaNTA_Decorator
     def dSigma(self, i, states, positions):
         tree_in = (self.field_shard, self.vp_shard, self.vpp_shard)
+
+        # set up lambda to take in (field, vp, vpp) as a single object 
         f_in = lambda tree, states, x : self.sigma(i, states, x, 0, tree[0], tree[1], tree[2], self.params)
 
-        """
-        Could I do something here like, 
-
-        def compute_sigma_lmn(R_lmn, Z_lmn, L_lmn):
-            yancc.field_from_desc(R_lmn, Z_lmn, L_lmn)
-            sigma (yancc_wrapper)
-
-            dSigma/dp = jax.grad(sigma(yancc_wrapper))
-
-        """
+        # compute gradient
         fgrad = eqx.filter_grad(f_in)
         grad_out = jax.vmap(fgrad, in_axes=(0, State.vmap_axes(), 0))(tree_in, states, positions)
+        # Reshaping (this is where I think we may have issues)
+        #   Meant to be a matrix of (nPoints x len(field))
         grad_unstack = tree_unstack(grad_out)
         grad_unraveled = jnp.stack([jax.flatten_util.ravel_pytree(g)[0] for g in grad_unstack], axis=0)
         return grad_unraveled

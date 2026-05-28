@@ -77,7 +77,10 @@ static const map_t params = {{"restart", Parameter<bool>{.required = false, ._de
                              //
                              {"WriteOutput", Parameter<bool>{.required = false, ._default = true}},
                              //
-                             {"zeroFlux", Parameter<bool>{.required = false, ._default = false}}};
+                             {"zeroFlux", Parameter<bool>{.required = false, ._default = false}},
+                             // 
+                             {"initialTimestep", Parameter<double>{.required = false, ._default = 0.0}}
+                            };
 
 template <typename T>
 T getValueWithDefault(std::string_view key, const py::dict &d)
@@ -230,6 +233,7 @@ void PyRunner::configure(const py::dict &config)
     double tau = getValueWithDefault<double>("tau", config);
     double tZero = getValueWithDefault<double>("tZero", config);
     double dt_min = getValueWithDefault<double>("MinStepSize", config);
+    double dt0 = getValueWithDefault<double>("initialTimestep", config);
     int nOutput = getValueWithDefault<int>("OutputPoints", config);
 
     steady_state_tolerance = getValueWithDefault<double>("SteadyStateTolerance", config);
@@ -238,6 +242,7 @@ void PyRunner::configure(const py::dict &config)
     system->setTolerances(atol, rtol);
     system->setTau(tau);
     system->setInitialTime(tZero);
+    system->setInitialTimestep(dt0);
     system->setInputFile(fname);
     system->setSolveAdjoint(solveAdjoint);
     if (solveAdjoint)

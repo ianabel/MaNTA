@@ -70,25 +70,48 @@ primals = (yancc_wrapper.get_fields(), yancc_wrapper.grid)
 # st = StellaratorTransport(config, yancc_wrapper = yancc_wrapper)
 # st.run()
 
+pert_keys = [
+"B_sup_t", 
+"B_sup_z", 
+"B_sub_t", 
+"B_sub_z", 
+"Bmag" ,
+"dBdt",
+"dBdz",
+"sqrtg",
+]
+
 rng_key = jax.random.PRNGKey(69)
 def make_random_tangent(primal):
     global rng_key
     rng_key, key = jax.random.split(rng_key)
+    if isinstance(primal, jax.Array):
+        v = jax.random.normal(key, shape=primal.shape, dtype=primal.dtype)
+        return v/jnp.linalg.norm(v)
+    flat_primal, treedef = jax.tree_util.tree_flatten(primal)
+    keys = jax.random.split(key, len(flat_primal))
+    key_tree = jax.tree_util.tree_unflatten(treedef, keys)
     # key = jax.random.key(69)
-    def map_fn(leaf):
-        if jnp.isscalar(leaf) or jnp.isdtype(leaf, "integral"):
-            return leaf
-        else: 
-            v = jax.random.normal(key=key, shape=leaf.shape, dtype=leaf.dtype)
-            return v/jnp.linalg.norm(v) 
-    tangent_field = jax.tree.map(
+    def map_fn(path, val, k):
+        keystr = jax.tree_util.keystr((path[0],)).lstrip(".")
+        if keystr in pert_keys:
+            if jnp.isscalar(val) or jnp.isdtype(val, "integral"):
+                return val
+            else: 
+                v = jax.random.normal(k, shape=val.shape, dtype=val.dtype)
+                return v/jnp.linalg.norm(v) 
+        else:
+            return jnp.zeros_like(val)
+    tangent_field = jax.tree.map_with_path(
         map_fn,
-        primal 
+        primal, 
+        key_tree
     )
     return tangent_field
 tangents = primals
 grid = yancc_wrapper.grid
- 
+
+
 V0 = eq.compute("V")["V"]
 
 solver_config = {
@@ -134,7 +157,7 @@ def adj_jvp(primals, tangents):
 
     _, unflatten_field = jax.flatten_util.ravel_pytree(yancc_wrapper.fields_unstacked[0])
 
-    G_p_field = G_p[:, :-2] # remove vprime component
+    G_p_field = G_p[:, :-2] # remove field component
     G_p_vprime = G_p[:, -2] # extract vprime component
     G_p_vpp = G_p[:, -1] # extract vpp component
     G_p_padded = jnp.pad(G_p_field, pad_width=((0,0),(0,1)), mode='constant')
@@ -163,7 +186,7 @@ def adj_jvp(primals, tangents):
 # Finite difference objective for testing
 
 abs_step = 1e-3
-rel_step = 0.0# rel_step = 1e-3
+rel_step = 1e-3
 
 solver_config = {
     "OutputFilename": "stellarator_grad_test_t",
@@ -175,9 +198,10 @@ solver_config = {
     "Upper_boundary": 1.0,
     "Relative_tolerance": 0.01,
     "Absolute_tolerance": [1e-3],
-    "delta_t": 1e-4,
+    "delta_t": 1e-3,
+    "initialTimestep": 1e-5,
     "MinStepSize": 1e-8, 
-    "SteadyStateTolerance": 1e-2,
+    "SteadyStateTolerance": 1e-3,
     "restart": True,
     "solveAdjoint": True, 
     "zeroFlux": True,
@@ -201,7 +225,6 @@ def fd_jvp(primals, tangents):
     (fields_in, vp, vpp), grid = primals
     v1, v2, v3 = tangents
 
-
     x, unflatx = jax.flatten_util.ravel_pytree(fields_in)
     v1, ______ = jax.flatten_util.ravel_pytree(v1)
     # v2, ______ = jax.flatten_util.ravel_pytree(tree_dot[1])
@@ -214,18 +237,19 @@ def fd_jvp(primals, tangents):
     normv1 = jnp.linalg.norm(v1)
     
     vh1 = jnp.pad(v1, (0, len(x)-len(v1)), mode='constant')
-    v1a = jnp.where(normv1 == 0, vh1, vh1 / normv1)
-    normv2 = jnp.linalg.norm(v2)
-    v2a = jnp.where(normv2 == 0, v2, v2 / normv2)
-    normv3 = jnp.linalg.norm(v3)
-    v3a = jnp.where(normv3 == 0, v3, v3 / normv3)
-    vcat = jnp.concatenate([vh1, v2a, v3a])
+    vcat = jnp.concatenate([vh1, v2, v3])
     normv = jnp.linalg.norm(vcat)
-    # vh = jnp.where(normv == 0, vcat, vcat / normv)
+ 
+    # v1a = jnp.where(normv1 == 0, vh1, vh1 / normv)
+    # normv2 = jnp.linalg.norm(v2)
+    # v2a = jnp.where(normv2 == 0, v2, v2 / normv)
+    # normv3 = jnp.linalg.norm(v3)
+    # v3a = jnp.where(normv3 == 0, v3, v3 / normv)
+   # vh = jnp.where(normv == 0, vcat, vcat / normv)
 
-    steps = ((fd_step) * v1a, 
-                (fd_step) * v2a, 
-                (fd_step) * v3a)
+    steps = ((fd_step) * vh1, 
+                (fd_step) * v2, 
+                (fd_step) * v3)
     yancc_wrapper_step = yancc_data.from_fields(unflatx(x + steps[0]), grid, vp + steps[1], vpp + steps[2])
     G_step, _, _ = StellaratorFun(yancc_wrapper_step)
 
@@ -233,23 +257,21 @@ def fd_jvp(primals, tangents):
     # flatten everything into 1D vectors for easier finite differences
     # y, unflaty = jax.flatten_util.ravel_pytree(field_dot)
 
-    tangent_out = (G_step - G) / fd_step * normv
+    tangent_out = (G_step - G) / fd_step * normv 
     #tangent_out = (, None)
+
 
     return jnp.float32(tangent_out)
 
+nTangents = 3
 
-t1 = tuple(make_random_tangent(p) for p in primals[0])
-t2 = tuple(make_random_tangent(p) for p in primals[0])
-print(t1)
-print(t2)
+for i in range(0,nTangents):
+    t = tuple(make_random_tangent(p) for p in primals[0])
+    fd = fd_jvp(primals, t)
+    adj = adj_jvp(primals, t)
 
-fd1 = fd_jvp(primals, t2)
+    print(f"Iteration {i} jvps:\n   adjoints={adj}, finite differences={fd}\n")
 # fd2 = fd_jvp(primals, t2)
 
-adj1 = adj_jvp(primals, t2)
 # adj2 = adj_jvp(primals, t2)
-print(fd1)
-print(adj1)
-# print(f"Adjoint tangents {adj1}, {adj2}\n")
 # print(f"Finite difference tangents {fd1}, {fd2}\n")

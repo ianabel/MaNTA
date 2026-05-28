@@ -23,7 +23,7 @@ def abstract_eval(yin):
 
     return jax.ShapeDtypeStruct((),jnp.float32), jax.ShapeDtypeStruct((npoints, np), jnp.float32), jax.ShapeDtypeStruct((npoints,), jnp.float32)
 
-def make_objective(config, vectorized=False):
+def make_objective(config, yancc_res=None, vectorized=False):
     """Make an external (python) function work with JAX.
 
     callback syntax stolen from desc jaxify
@@ -55,7 +55,7 @@ def make_objective(config, vectorized=False):
     @eqx.filter_custom_jvp
     def _objective_base(tree_in, grid):
         fields, Vp, Vpp = tree_in
-        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp, na = 55)
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp, **yancc_res)
      
         G, G_p, pi = _f_wrapped(yancc_wrapper)
         return G, pi 
@@ -65,35 +65,44 @@ def make_objective(config, vectorized=False):
     def _objective_base_jvp(primals, tangents):
         (fields, Vp, Vpp), grid = primals
         (field_dot, Vp_dot, Vpp_dot), _= tangents
-        
-        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp, na = 55)
-        G, G_p, pi = _f_wrapped(yancc_wrapper)
 
+        # compute 
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp, **yancc_res)
+        G, G_p, pi = _f_wrapped(yancc_wrapper) # runs MaNTA and returns the adjoints + pressure profile
+
+        # get unflattening function
         _, unflatten_field = jax.flatten_util.ravel_pytree(yancc_wrapper.fields_unstacked[0])
 
-        G_p_field = G_p[:, :-2] # remove vprime component
+        # Separate out the different parts of the gradient 
+        G_p_field = G_p[:, :-2] # extract field component
         G_p_vprime = G_p[:, -2] # extract vprime component
         G_p_vpp = G_p[:, -1] # extract vpp component
+        # need to pad the field portion because NFP gets removed by equinox during the gradient calculation
         G_p_padded = jnp.pad(G_p_field, pad_width=((0,0),(0,1)), mode='constant')
 
+        # Create a field object from the padded G_p matrix
         G_p_unflattened = jax.vmap(unflatten_field)(jnp.float64(G_p_padded))
+
+        # Function to compute the dot product between individual components of the field
         def safe_mul(x, y):
             if x is None:
                 return y
             if y is None:
                 return x
+            x_flat = jax.flatten_util.ravel_pytree(x)[0]
+            y_flat = jax.flatten_util.ravel_pytree(y)[0]
+            return jnp.dot(x_flat,y_flat) 
 
-            return jnp.multiply(x, y) 
-
-        # Apply tree_map
+       # Apply tree_map to multiply G_p * tangents
         # We need to treat None as a leaf
         result = jax.tree.map(safe_mul, G_p_unflattened, field_dot, is_leaf=lambda x: x is None)
         result_flattened, _ = jax.flatten_util.ravel_pytree(result)
+        
         #now do vprime
-
         result_vprime = jnp.dot(G_p_vprime, Vp_dot)
         result_vpp = jnp.dot(G_p_vpp, Vpp_dot)
 
+        # Result is the sum of G_field * tangent_field + G_vp * tangent_vp + G_vpp * tangent_vpp
         return (G, pi), (jnp.float32(jnp.sum(result_flattened)+result_vprime+result_vpp), None)
 
     return _objective_base

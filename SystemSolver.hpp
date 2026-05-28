@@ -295,7 +295,7 @@ class SystemSolver
 #endif
 
         std::filesystem::path inputFilePath;
-        double dt0; // initial dt for CalcIC
+        double dt0 = 0.0; // initial dt for CalcIC
         int nOut;
         double min_step_size;
 
