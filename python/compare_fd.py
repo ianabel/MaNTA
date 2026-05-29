@@ -22,7 +22,7 @@ st_config = {
 solver_config = {
     "OutputFilename": "stellarator_grad_test",
     "Polynomial_degree": 3,
-    "Grid_size": 4,
+    "Grid_size": 6,
     "tau": 100.0, 
     "Lower_boundary": 0.0,
     "Upper_boundary": 1.0,
@@ -30,7 +30,7 @@ solver_config = {
     "Absolute_tolerance": [1e-3],
     "delta_t": 1e-2,
     "MinStepSize": 1e-8, 
-    "SteadyStateTolerance": 1e-2,
+    "SteadyStateTolerance": 1e-4,
     "restart": False,
     "solveAdjoint": True, 
     "zeroFlux": True,
@@ -70,18 +70,29 @@ primals = (yancc_wrapper.get_fields(), yancc_wrapper.grid)
 # st = StellaratorTransport(config, yancc_wrapper = yancc_wrapper)
 # st.run()
 
+#pert_keys = [
+#"B_sup_t", 
+#"B_sup_z", 
+#"B_sub_t", 
+#"B_sub_z", 
+#"Bmag" ,
+#"dBdt",
+#"dBdz",
+#"sqrtg",
+#]
+#
+#pert_keys = [
+#    "Rb_lmn",
+#    "Zb_lmn",
+#    "Ra_n",
+#    "Za_n",
+#]
 pert_keys = [
-"B_sup_t", 
-"B_sup_z", 
-"B_sub_t", 
-"B_sub_z", 
-"Bmag" ,
-"dBdt",
-"dBdz",
-"sqrtg",
+    "R_lmn",
+    "Z_lmn",
+    "L_lmn"
 ]
-
-rng_key = jax.random.PRNGKey(69)
+rng_key = jax.random.PRNGKey(10)
 def make_random_tangent(primal):
     global rng_key
     rng_key, key = jax.random.split(rng_key)
@@ -91,9 +102,9 @@ def make_random_tangent(primal):
     flat_primal, treedef = jax.tree_util.tree_flatten(primal)
     keys = jax.random.split(key, len(flat_primal))
     key_tree = jax.tree_util.tree_unflatten(treedef, keys)
-    # key = jax.random.key(69)
+    # for perturbing pytrees
     def map_fn(path, val, k):
-        keystr = jax.tree_util.keystr((path[0],)).lstrip(".")
+        keystr = jax.tree_util.keystr((path[0],)).lstrip(".").strip("[").strip("]").strip("'")
         if keystr in pert_keys:
             if jnp.isscalar(val) or jnp.isdtype(val, "integral"):
                 return val
@@ -108,34 +119,45 @@ def make_random_tangent(primal):
         key_tree
     )
     return tangent_field
+step_size = 1e-3
+def perturb_eq(eq, step_size=step_size, pert_keys=pert_keys):
+    params = eq.params_dict
+    deltas = {}
+    for key in pert_keys:
+        deltas[key] = step_size * jnp.linalg.norm(params[key]) * make_random_tangent(params[key])
+    # t = make_random_tangent(params)
+    # params_flat, unflat = jax.flatten_util.ravel_pytree(params)
+    # params_new = unflat( params_flat + step_size * jax.flatten_util.ravel_pytree(t)[0] )
+    return eq.copy().perturb(deltas)
+perturb_eq(eq)
 tangents = primals
 grid = yancc_wrapper.grid
 
-
 V0 = eq.compute("V")["V"]
-
-solver_config = {
-    "OutputFilename": "stellarator_grad_test_t",
-    "RestartFile": "stellarator_grad_test.restart.nc",
-    "Polynomial_degree": 3,
-    "Grid_size": 4,
-    "tau": 100.0, 
-    "Lower_boundary": 0.0,
-    "Upper_boundary": 1.0,
-    "Relative_tolerance": 0.01,
-    "Absolute_tolerance": [1e-3],
-    "delta_t": 1e-5,
-    "MinStepSize": 1e-8, 
-    "SteadyStateTolerance": 1e-2,
-    "restart": True,
-    "solveAdjoint": True, 
-    "zeroFlux": True,
-}
-config = {
-    "Stellarator": st_config,
-    "Solver": solver_config,
-}
-
+#
+#solver_config = {
+#    "OutputFilename": "stellarator_grad_test_t",
+#    "RestartFile": "stellarator_grad_test.restart.nc",
+#    "Polynomial_degree": 4,
+#    "Grid_size": 4,
+#    "tau": 100.0, 
+#    "Lower_boundary": 0.0,
+#    "Upper_boundary": 1.0,
+#    "Relative_tolerance": 0.01,
+#    "Absolute_tolerance": [1e-3],
+#    "delta_t": 1e-2,
+#    "initialTimestep": 1e-4,
+#    "MinStepSize": 1e-8, 
+#    "SteadyStateTolerance": 1e-3,
+#    "restart": True,
+#    "solveAdjoint": True, 
+#    "zeroFlux": True,
+#}
+#config = {
+#    "Stellarator": st_config,
+#    "Solver": solver_config,
+#}
+#
 
 def StellaratorFun(yin):
     st = StellaratorTransport(config, yancc_wrapper=yin)
@@ -151,15 +173,13 @@ G, G_p, p_i = StellaratorFun(yancc_wrapper)
 def adj_jvp(primals, tangents):
 
     (fields, Vp, Vpp), grid = primals
-    field_dot, Vp_dot, Vpp_dot= tangents
+    field_dot, Vp_dot, Vpp_dot = tangents
     
-    yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp, na = na, nx =nx)
-
     _, unflatten_field = jax.flatten_util.ravel_pytree(yancc_wrapper.fields_unstacked[0])
 
-    G_p_field = G_p[:, :-2] # remove field component
+    G_p_field  = G_p[:, :-2] # remove field component
     G_p_vprime = G_p[:, -2] # extract vprime component
-    G_p_vpp = G_p[:, -1] # extract vpp component
+    G_p_vpp    = G_p[:, -1] # extract vpp component
     G_p_padded = jnp.pad(G_p_field, pad_width=((0,0),(0,1)), mode='constant')
 
     G_p_unflattened = jax.vmap(unflatten_field)(jnp.float64(G_p_padded))
@@ -185,20 +205,20 @@ def adj_jvp(primals, tangents):
 
 # Finite difference objective for testing
 
-abs_step = 1e-3
-rel_step = 1e-3
+abs_step = 1e-2
+rel_step = 0.0
 
 solver_config = {
     "OutputFilename": "stellarator_grad_test_t",
     "RestartFile": "stellarator_grad_test.restart.nc",
-    "Polynomial_degree": 3,
-    "Grid_size": 4,
+    "Polynomial_degree": 6,
+    "Grid_size": 3,
     "tau": 100.0, 
     "Lower_boundary": 0.0,
     "Upper_boundary": 1.0,
     "Relative_tolerance": 0.01,
     "Absolute_tolerance": [1e-3],
-    "delta_t": 1e-3,
+    "delta_t": 1e-2,
     "initialTimestep": 1e-5,
     "MinStepSize": 1e-8, 
     "SteadyStateTolerance": 1e-3,
@@ -220,58 +240,43 @@ def StellaratorFun(yin):
 
     return G[0], G_p, pi
 
-
 def fd_jvp(primals, tangents):
-    (fields_in, vp, vpp), grid = primals
-    v1, v2, v3 = tangents
+    x, grid = primals
+    v = tangents
 
-    x, unflatx = jax.flatten_util.ravel_pytree(fields_in)
-    v1, ______ = jax.flatten_util.ravel_pytree(v1)
-    # v2, ______ = jax.flatten_util.ravel_pytree(tree_dot[1])
-    # v3, ______ = jax.flatten_util.ravel_pytree(tree_dot[2])
+    x, unflatx = jax.flatten_util.ravel_pytree(x)
+    v, _______ = jax.flatten_util.ravel_pytree(tangents)
     
     # finite difference step size
-    fd_step = abs_step + rel_step *(jnp.mean(jnp.abs(x)) + jnp.mean(jnp.abs(vp)) + jnp.mean(jnp.abs(vpp)))
-
+    fd_step = abs_step + rel_step *(jnp.mean(jnp.abs(x)))
     # scale tangents to unit norm if nonzero
-    normv1 = jnp.linalg.norm(v1)
-    
-    vh1 = jnp.pad(v1, (0, len(x)-len(v1)), mode='constant')
-    vcat = jnp.concatenate([vh1, v2, v3])
-    normv = jnp.linalg.norm(vcat)
  
-    # v1a = jnp.where(normv1 == 0, vh1, vh1 / normv)
-    # normv2 = jnp.linalg.norm(v2)
-    # v2a = jnp.where(normv2 == 0, v2, v2 / normv)
-    # normv3 = jnp.linalg.norm(v3)
-    # v3a = jnp.where(normv3 == 0, v3, v3 / normv)
-   # vh = jnp.where(normv == 0, vcat, vcat / normv)
+    normv = jnp.linalg.norm(v)
+    # vh = jnp.where(normv == 0, v, v / normv)
+    x1 = x + fd_step * v
 
-    steps = ((fd_step) * vh1, 
-                (fd_step) * v2, 
-                (fd_step) * v3)
-    yancc_wrapper_step = yancc_data.from_fields(unflatx(x + steps[0]), grid, vp + steps[1], vpp + steps[2])
-    G_step, _, _ = StellaratorFun(yancc_wrapper_step)
+    f_step, vp_step, vpp_step = unflatx(x1)
+    yancc_wrapper_step = yancc_data.from_fields(f_step, grid, vp_step, vpp_step)
 
-    # primal_out = _f_wrapped(*primals)
-    # flatten everything into 1D vectors for easier finite differences
-    # y, unflaty = jax.flatten_util.ravel_pytree(field_dot)
+    G_step = StellaratorFun(yancc_wrapper_step)[0]
+    print(G_step)
+    print(G)
 
-    tangent_out = (G_step - G) / fd_step * normv 
-    #tangent_out = (, None)
-
+    tangent_out = (G_step - G) / fd_step
 
     return jnp.float32(tangent_out)
 
-nTangents = 3
-
+nTangents = 2
+import operator
+from desc.plotting import plot_comparison
 for i in range(0,nTangents):
-    t = tuple(make_random_tangent(p) for p in primals[0])
+    eq_pert = perturb_eq(eq)
+    fig, ax = plot_comparison(eqs=[eq_pert, eq], labels=["perturbed", "initial"])
+    fig.savefig(f"eq_pert{i}.png")
+    fig.show()
+    yancc_wrapper_pert = yancc_data.from_eq(points, eq=eq_pert, nx=nx, na=na, nz = yancc_nzeta, nt = yancc_ntheta)
+    t = jax.tree.map(operator.sub, yancc_wrapper_pert.get_fields(), primals[0]) 
     fd = fd_jvp(primals, t)
     adj = adj_jvp(primals, t)
 
     print(f"Iteration {i} jvps:\n   adjoints={adj}, finite differences={fd}\n")
-# fd2 = fd_jvp(primals, t2)
-
-# adj2 = adj_jvp(primals, t2)
-# print(f"Finite difference tangents {fd1}, {fd2}\n")
