@@ -11,7 +11,7 @@ from desc.profiles import SplineProfile
 
 st_config = {
     "SourceCenter": 0.2,
-    "SourceHeight": 5.0,
+    "SourceHeight": 3.0,
     "SourceWidth": 0.4,
     "EdgeTemperature":0.2,
     "EdgeDensity": 0.0,
@@ -21,16 +21,17 @@ st_config = {
 
 solver_config = {
     "OutputFilename": "stellarator_grad_test",
-    "Polynomial_degree": 3,
-    "Grid_size": 6,
-    "tau": 100.0, 
+    "Polynomial_degree": 5,
+    "Grid_size": 4,
+    "tau": 0.5, 
     "Lower_boundary": 0.0,
     "Upper_boundary": 1.0,
     "Relative_tolerance": 0.01,
     "Absolute_tolerance": [1e-3],
-    "delta_t": 1e-2,
+    "delta_t": 0.1,
+    "initialTimestep": 1e-5,
     "MinStepSize": 1e-8, 
-    "SteadyStateTolerance": 1e-4,
+    "SteadyStateTolerance": 1e-2,
     "restart": False,
     "solveAdjoint": True, 
     "zeroFlux": True,
@@ -44,7 +45,7 @@ points =  MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_b
 
 yancc_rho = jnp.array(points)
 yancc_ntheta = 17
-yancc_nzeta = 23
+yancc_nzeta = 33
 
        
 # to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
@@ -54,7 +55,7 @@ pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 
 eq = desc.examples.get("W7-X")
-eq.change_resolution(M=4, N=4,L_grid=len(points), M_grid=4, N_grid=4)
+eq.change_resolution(M=8, N=8,L_grid=len(points))
 eq = eq.solve(x_scale="ess")[0]
 # # eq = eq.solve(x_scale="ess")[0]
 # # # store initial equilibrium for comparison later
@@ -63,9 +64,9 @@ eq = eq.solve(x_scale="ess")[0]
 # points =  MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
 # yancc_wrapper = yancc_data.from_eq(points, grid = yancc_grid,rho = yancc_rho, Density=Density, eq=eq_init, nt = yancc_ntheta, nz = yancc_nzeta)
 nx = 5
-na = 33
-
-yancc_wrapper = yancc_data.from_eq(points, eq=eq, nx=nx, na=na, nz = yancc_nzeta, nt = yancc_ntheta)
+na = 43
+yancc_res = {"nx":nx, "na": na}
+yancc_wrapper = yancc_data.from_eq(points, eq=eq, **yancc_res, nz = yancc_nzeta, nt = yancc_ntheta)
 primals = (yancc_wrapper.get_fields(), yancc_wrapper.grid)
 # st = StellaratorTransport(config, yancc_wrapper = yancc_wrapper)
 # st.run()
@@ -170,10 +171,18 @@ def StellaratorFun(yin):
 
 G, G_p, p_i = StellaratorFun(yancc_wrapper)
 
+@jax.custom_jvp
+def adj(params, eq):
+    return G 
+@adj.defjvp
 def adj_jvp(primals, tangents):
-
-    (fields, Vp, Vpp), grid = primals
-    field_dot, Vp_dot, Vpp_dot = tangents
+    params_dict, eq = primals
+    params_dot = tangents
+    eq_dot = eq.copy()
+    eq_dot.params_dict = params_dot
+    yancc_wrapper_dot = yancc_wrapper.from_eq(points, eq = eq_dot)
+    # (fields, Vp, Vpp), grid = primals
+    field_dot, Vp_dot, Vpp_dot = yancc_wrapper_dot.get_fields()
     
     _, unflatten_field = jax.flatten_util.ravel_pytree(yancc_wrapper.fields_unstacked[0])
 
@@ -201,7 +210,7 @@ def adj_jvp(primals, tangents):
     result_vprime = jnp.dot(G_p_vprime, Vp_dot)
     result_vpp = jnp.dot(G_p_vpp, Vpp_dot)
 
-    return jnp.float32(jnp.sum(result_flattened)+result_vprime+result_vpp) 
+    return G, jnp.float32(jnp.sum(result_flattened)+result_vprime+result_vpp) 
 
 # Finite difference objective for testing
 
@@ -211,9 +220,9 @@ rel_step = 0.0
 solver_config = {
     "OutputFilename": "stellarator_grad_test_t",
     "RestartFile": "stellarator_grad_test.restart.nc",
-    "Polynomial_degree": 6,
-    "Grid_size": 3,
-    "tau": 100.0, 
+    "Polynomial_degree": 3,
+    "Grid_size": 7,
+    "tau": 0.5, 
     "Lower_boundary": 0.0,
     "Upper_boundary": 1.0,
     "Relative_tolerance": 0.01,
@@ -256,7 +265,7 @@ def fd_jvp(primals, tangents):
     x1 = x + fd_step * v
 
     f_step, vp_step, vpp_step = unflatx(x1)
-    yancc_wrapper_step = yancc_data.from_fields(f_step, grid, vp_step, vpp_step)
+    yancc_wrapper_step = yancc_data.from_fields(f_step, grid, vp_step, vpp_step, **yancc_res)
 
     G_step = StellaratorFun(yancc_wrapper_step)[0]
     print(G_step)
@@ -274,9 +283,9 @@ for i in range(0,nTangents):
     fig, ax = plot_comparison(eqs=[eq_pert, eq], labels=["perturbed", "initial"])
     fig.savefig(f"eq_pert{i}.png")
     fig.show()
-    yancc_wrapper_pert = yancc_data.from_eq(points, eq=eq_pert, nx=nx, na=na, nz = yancc_nzeta, nt = yancc_ntheta)
+    yancc_wrapper_pert = yancc_data.from_eq(points, eq=eq_pert, **yancc_res, nz = yancc_nzeta, nt = yancc_ntheta)
     t = jax.tree.map(operator.sub, yancc_wrapper_pert.get_fields(), primals[0]) 
     fd = fd_jvp(primals, t)
-    adj = adj_jvp(primals, t)
+    a = jax.jvp(adj, primals =(eq.params_dict, eq), tangents = eq_pert.params_dict)
 
-    print(f"Iteration {i} jvps:\n   adjoints={adj}, finite differences={fd}\n")
+    print(f"Iteration {i} jvps:\n   adjoints={a}, finite differences={fd}\n")

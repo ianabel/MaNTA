@@ -97,7 +97,7 @@ class yancc_data(eqx.Module):
 
         self.fields_unstacked = desc.backend.tree_unstack(fields)
         
-        print("yancc_wrapper initialized successfully.")
+        print(f"yancc_wrapper initialized successfully with resolution na={self.na}, nx={self.nx}.")
 
     @classmethod
     def from_eq(cls, 
