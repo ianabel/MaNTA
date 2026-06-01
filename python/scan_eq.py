@@ -35,12 +35,13 @@ from desc.objectives import (
     RotationalTransform,
     Volume,
 )
+from desc.optimize._constraint_wrappers import ProximalProjection
 from desc.profiles import SplineProfile
 import matplotlib.pyplot as plt
 
 st_config = {
     "SourceCenter": 0.2,
-    "SourceHeight": 7.0,
+    "SourceHeight": 9.0,
     "SourceWidth": 0.4,
     "EdgeTemperature":0.1,
     "EdgeDensity": 0.0,
@@ -59,7 +60,7 @@ solver_config = {
     "Absolute_tolerance": [1e-3],
     "delta_t": 0.5,
     "MinStepSize": 1e-8, 
-    "SteadyStateTolerance": 1e-2,
+    "SteadyStateTolerance": 1e-4,
     "restart": False,
     "solveAdjoint": True, 
     "zeroFlux": True,
@@ -75,7 +76,6 @@ yancc_rho = jnp.array(points)
 yancc_ntheta = 17
 yancc_nzeta = 23
 
-       
 # to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
 # + axis and lcfs
 # initial pressure is all zeros, can change this if desired
@@ -83,6 +83,8 @@ pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 
 eq = desc.examples.get("W7-X")
+
+# Reduce the number of modes (not sure if this is a good thing to do)
 eq.change_resolution(M=4, N=4,L_grid=len(points), M_grid = 4, N_grid=4)# 
 eq = eq.solve(x_scale="ess")[0]
 eq_init = eq.copy()
@@ -95,7 +97,6 @@ yancc_wrapper = yancc_data.from_eq(points, eq=eq_init, nt = yancc_ntheta, nz = y
 def make_tangent(params, idx, key='Rb_lmn'):
     def map_fn(path, val):
         keystr = jax.tree_util.keystr((path[0],)).lstrip(".").strip("[").strip("]").strip("'")
-        print(keystr)
         if keystr == key:
             print(keystr)
             z = jnp.zeros_like(val)
@@ -108,31 +109,7 @@ def make_tangent(params, idx, key='Rb_lmn'):
     )
     return tangent_field
 
-# solver_config = {
-#    "OutputFilename": "stellarator_grad_test_t",
-#    "RestartFile": "stellarator_grad_test.restart.nc",
-#    "Polynomial_degree": 5,
-#    "Grid_size": 4,
-#    "tau": 100.0, 
-#    "Lower_boundary": 0.0,
-#    "Upper_boundary": 1.0,
-#    "Relative_tolerance": 0.01,
-#    "Absolute_tolerance": [1e-3],
-#    "delta_t": 0.01,
-#    "initialTimestep": 1e-4,
-#    "MinStepSize": 1e-8, 
-#    "SteadyStateTolerance": 1e-2,
-#    "restart": True,
-#    "solveAdjoint": True, 
-#    "zeroFlux": True,
-# }
-# config = {
-#    "Stellarator": st_config,
-#    "Solver": solver_config,
-# }
-
-manta_objective = make_objective(config, yancc_res=yancc_res,vectorized=True)
-
+manta_objective = make_objective(config, yancc_res=yancc_res)
 
 def objective_from_user_fun(grid, data):
   # note: don't change the signature to this function
@@ -182,7 +159,7 @@ def objective_from_user_fun(grid, data):
 
     # optimization is easiest for least squares objectives, so instead of maximizing
     # stored energy we minimize 1/stored_energy^2 (the squaring happens later)
-    return 1 / stored_energy
+    return stored_energy
 yancc_desc_grid = yancc_wrapper.grid
 
 # domain_boundary_rho = rho_from_normalized_volume(0.9)
@@ -216,43 +193,73 @@ objectives = [
 ]
 constraints = [
     ForceBalance(eq=eq),  # J x B - grad(p) = 0
-    FixCurrent(eq=eq),  # fix zero current, eventually should use real bootstrap
+    #FixCurrent(eq=eq),  # fix zero current, eventually should use real bootstrap
     # Volume(eq=eq, target=V0), # fix volume of outer flux surface
-    FixPsi(eq=eq),  # fix total magnetic flux
-    LinearObjectiveFromUser(
-        pressure_constraint_fun, eq, target=pressure_constraint_target
-    ),
+   # FixPsi(eq=eq),  # fix total magnetic flux
+   # LinearObjectiveFromUser(
+   #     pressure_constraint_fun, eq, target=pressure_constraint_target
+   # ),
 ]
 
-obj = ObjectiveFunction(objectives)
-obj.build(use_jit=False)
-idx = eq.surface.R_basis.get_idx(L=0, N=1, M=1)
+# Set up ProximalProjection object
+o1 = ObjectiveFunction(objectives)
+o1.build(use_jit=False)
+obj = ProximalProjection(o1, ObjectiveFunction(constraints), eq)
+obj.build()
+
+# Get the index of a mode
+idx = eq.surface.R_basis.get_idx(L=0, N=2, M=2)
 v0 = eq.Rb_lmn[idx]
 print(v0)
 eqs = EquilibriaFamily(eq.copy())
 grads = []
 G = []
-f = 0.05
-delta = f * jnp.abs(v0)
-start = v0 - delta
-end = v0 + delta
-sweep = jnp.linspace(start, end, 10)
+
+# Sweep in the proximity of initial value
+# f = 2.0
+# delta = f * jnp.abs(v0)
+# start = v0 - delta
+# end = v0 + delta
+start = -0.04
+end = 0.02
+sweep = jnp.linspace(start, end, 20)
+df = sweep[1] - sweep[0]
+
+eq_init = eq.copy()
+x_init = obj.x(eq_init)
 for i in range(0, len(sweep)):
 
-    t = jax.flatten_util.ravel_pytree(make_tangent(eq.params_dict, idx))[0]
+    lp = len(eq.p_l) 
+    # t = jax.flatten_util.ravel_pytree(make_tangent(eq.params_dict, idx))[0]
     eq_ = eq.copy()
-    params_dict_new = eq_.params_dict["Rb_lmn"].at[idx].set(sweep[i])
-    eq_.Rb_lmn = params_dict_new
-    eq_  = eq_.solve(x_scale="ess")[0]
     eqs.append(eq_)
-    x = obj.x(eq_)
-    G.append(obj.compute_scaled(x)[0])
-    grads.append(obj.jvp_scaled(t, x)) 
+    # ProximalProjection removes most of the fields so the index into the Rb_lmn field is this (I think?)
+    x_in = x_init.at[2 * lp + idx].set(sweep[i]) 
 
-fd_grad = jnp.gradient(jnp.array(G))/delta
+    # Set the tangent to 1 at the same index
+    t = jnp.zeros(obj.dim_x)
+    t1 = t.at[2 * lp + idx].set(1.0)
+    
+    # Compute value of objective
+    G.append(obj.compute_scaled(x_in)[0])
+    # Compute gradient
+    grads.append(obj.jvp_scaled(t1, x_in)[0]) 
+
+fd_grad = jnp.gradient(jnp.array(G))/df
 fig,ax = plt.subplots() 
 ax.plot(sweep, grads,'ro', label="adjoints")
 ax.plot(sweep, fd_grad, 'bx', label="finite difference")
+ax.legend()
+ax.set_xlabel(r"$R_{0, 2, 2}$")
+ax.set_ylabel(r"$dG/dR_{0, 2, 2}$")
+fig.savefig("fd_vs_adj.png")
+fig, ax = plt.subplots()
+ax.plot(sweep, G)
+ax.set_xlabel(r"$R_{0, 2, 2}$")
+ax.set_ylabel("G")
+fig.savefig("G.png")
+eqs.save("sweep.hd5")
 plt.figure()
-plt.plot(sweep, G)
-plt.show()
+from desc.plotting import plot_comparison
+fig, ax = plot_comparison(eqs=eqs[0:-1:5])
+fig.savefig("eqs.png")

@@ -22,8 +22,9 @@ python/Tests/__pycache__/
 python/Tests/.pytest_cache/
 python/.ipynb_checkpoints/
 python/random/
+*.png
 tags
-
+*.h5
 venv
 gmon.out
 *.sh

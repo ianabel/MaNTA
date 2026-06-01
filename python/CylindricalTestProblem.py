@@ -20,17 +20,30 @@ tau_d = 2.0
 b = 1/tau_d
 roots = scipy.special.jn_zeros(0, n) / a
 
-S = lambda i, r: scipy.special.jv(0, roots[i] * r)
-def Sjax(i, r):
-    return jax.pure_callback(S, 
-                        jax.ShapeDtypeStruct(r.shape,r.dtype),
-                         i, r, vmap_method="expand_dims")
-T = lambda i , r: 1 / (kappa * roots[i]**2 + b) * S(i, r)
+@eqx.filter_custom_jvp
+def bessel_j(x):
+    return jax.pure_callback(partial(scipy.special.jv, 0),
+                             jax.ShapeDtypeStruct(x.shape, x.dtype), x, vmap_method="expand_dims")
+
+@bessel_j.def_jvp
+def bessel_j_jvp(primals, tangents):
+    x = primals
+    dx = tangents
+    
+    dj = lambda x : 0.5 * (scipy.special.jv(-1, x) - scipy.special.jv(1, x))
+
+    return dx * jax.pure_callback(dj, x, jax.ShapeDtypeStruct(x.shape, x.dtype), x, vmap_method="expand_dims")
+
+
+
+
+S = lambda r, i: bessel_j(roots[i] * r)
+T = lambda r , i: 1 / (kappa * roots[i]**2 + b) * S(r, i)
 r = np.linspace(0, a)
 
 T_out = 0
 for i in range(0,n):
-    T_out += T(i, r)
+    T_out += T(r, i)
 
 # add r as a parameter
 class DiffusionParams(NamedTuple):
@@ -106,7 +119,7 @@ class CylindricalTestProblem(VectorizedTransportSystem):
     def source( self, index, state, x, t, params ):
         s = 0.0
         for i in range(0,n):
-            s+=Sjax(i, self.x_to_r(x))
+            s+=S(self.x_to_r(x), i)
         s -= self.u_to_T(state.Variable[index], x) *params.b
         return self.sourceFactor(x)* s
     
@@ -174,8 +187,8 @@ def make_jvp(coord_type):
 
     @obj.def_jvp
     def obj_jvp(primals,tangents):
-        params, = primals
-        t, = tangents
+        params= DiffusionParams(primals[0], primals[1])
+        t = tangents
         G, G_p = f_wrapper(params)
         t_out = jnp.dot(G_p, jax.flatten_util.ravel_pytree(t)[0])
         return G, t_out[0]
@@ -189,14 +202,15 @@ g_out = []
 grad_g = []
 for k in k1:
     params = DiffusionParams(k, b)
-    g, gp = jax.value_and_grad(gfunc)(params)
+    # g, _ = jax.value_and_grad(gfunc)(params)
+    g, gp = jax.jvp(gfunc, params, DiffusionParams(1.0, 0.0))
     g_out.append(g)
-    grad_g.append(gp.kappa)
+    grad_g.append(gp)
 
 plt.figure()
 plt.plot(k1,g_out)
 plt.figure()
-plt.plot(k1, jnp.gradient(jnp.array(g_out)/dk))
+plt.plot(k1, jnp.gradient(jnp.array(g_out))/dk)
 plt.plot(k1, grad_g)
 plt.show()
 # ctp = CylindricalTestProblem(coord_type="rT")

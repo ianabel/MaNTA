@@ -23,7 +23,7 @@ def abstract_eval(yin):
 
     return jax.ShapeDtypeStruct((),jnp.float32), jax.ShapeDtypeStruct((npoints, np), jnp.float32), jax.ShapeDtypeStruct((npoints,), jnp.float32)
 
-def make_objective(config, yancc_res=None, vectorized=False):
+def make_objective(config, yancc_res=None):
     """Make an external (python) function work with JAX.
 
     callback syntax stolen from desc jaxify
