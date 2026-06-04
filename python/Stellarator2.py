@@ -1,9 +1,9 @@
 import MaNTA
 
 import os
-# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".75"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".9"
 # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+#os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 from FFIRunner import FFIRunner
 import jax
 # jax.config.update("jax_enable_compilation_cache", False)
@@ -21,7 +21,7 @@ import numpy as np
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax.tree_util import tree_map
 from jax.experimental import io_callback
-
+from desc.batching import vmap_chunked
 import interpax
 
 from desc.backend import tree_unstack
@@ -66,8 +66,6 @@ import yancc
 
 from typing import NamedTuple
 
-
-
 def put_on_gpu(tree):
 #    def map_fn(leaf):
 #        if not jnp.isscalar(leaf):
@@ -101,7 +99,7 @@ class StellaratorParams(NamedTuple):
 
 # Magic tuple to make vmap work
 vmap_axes         = (State.vmap_axes(), 0)
-vmap_axes_wfield  = (None, State.vmap_axes(), 0, None, 0, 0, 0, None)
+vmap_axes_wfield  = (None, State.vmap_axes(), 0, None, 0, 0, 0, None, None)
 vmap_axes_sources = (None, State.vmap_axes(), 0, None, 0, None)
 
 """
@@ -133,7 +131,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         e = 1.6e-19
         self.pnorm = 1e20 * e * 1e3
-
+        self.chunk_size = int(solver_config["Grid_size"] / 2)
         # Hold the MaNTA runner object in the class
 
         # %%
@@ -157,20 +155,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         print("configuring")
         self.runner.configure(solver_config)
         # io_callback(lambda : self.runner.configure(solver_config), [], ordered = True)
-#
-#        xL_p = self.points[0]
-#        self.uL = -self.sigma(
-#            0, 
-#            State(jnp.array([self.InitialValue(0, xL_p)]), jnp.array([self.InitialDerivative(0, xL_p)]), None, None, None), 
-#            xL_p, 
-#            0, 
-#            self.yancc_wrapper.fields_unstacked[0], 
-#            self.vp[0], 
-#            self.vpp[0], 
-#            self.params)
-#            
-#        print(self.uL)
-
+        self.f1_cache = None
         print("Successfully created StellaratorTransport object")
 
     def run(self, tFinal = None):
@@ -190,14 +175,16 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def LowerBoundary(self, index, t):
         return 0.0# self.uL
 
+
     def UpperBoundary(self, index, t):
         return self.InitialValue(index, self.xR)
     
     @MaNTA_Decorator
     def SigmaFn_v( self, index, states: State, positions, t ):
-        sigma_vmap = eqx.filter_vmap(self.sigma, in_axes=(vmap_axes_wfield))
-        out = sigma_vmap(index , states, positions, t, self.field_shard, self.vp_shard, self.vpp_shard, self.params)
-        return out
+        in_axes = vmap_axes_wfield if self.f1_cache is None else vmap_axes_wfield[:-1] + (0,)
+        sigma_vmap = eqx.filter_vmap(self.sigma, in_axes=in_axes)
+        flux, _ = sigma_vmap(index , states, positions, t, self.field_shard, self.vp_shard, self.vpp_shard, self.params, self.f1_cache)
+        return flux
     
     @MaNTA_Decorator
     def Sources_v( self, index, states: State, positions, t ):
@@ -206,9 +193,10 @@ class StellaratorTransport(MaNTA.TransportSystem):
     
     @MaNTA_Decorator
     def dSigma(self, index, states: State, positions, t):
-        dsigma_vmap = eqx.filter_vmap(jax.grad(self.sigma,argnums=1), in_axes=(vmap_axes_wfield))
-        out = dsigma_vmap(index, states, positions, t, self.field_shard, self.vp_shard, self.vpp_shard, self.params)
-        return out
+        in_axes = vmap_axes_wfield if self.f1_cache is None else vmap_axes_wfield[:-1] + (0,)
+        dsigma_vmap = eqx.filter_vmap(jax.grad(self.sigma, argnums=1, has_aux=True), in_axes=in_axes)
+        dflux, _ = dsigma_vmap(index, states, positions, t, self.field_shard, self.vp_shard, self.vpp_shard, self.params, self.f1_cache)
+        return dflux
 
     @MaNTA_Decorator
     def dSources(self, index, states: State, positions, t):
@@ -240,7 +228,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
     """
 
     
-    def sigma( self, index, state : State, x, t, field, vp, vpp, params ):
+    def sigma( self, index, state : State, x, t, field, vp, vpp, params, f1_prev = None ):
         n, nprime = jax.value_and_grad(self.Density)(x)
 
         p_i       = 2. / 3. * self.Vp_u_to_u  (index, state, x, vp, vpp)
@@ -261,12 +249,10 @@ class StellaratorTransport(MaNTA.TransportSystem):
             dTdrho=dTidrho * self.yancc_wrapper.Tnorm, 
             dndrho=dndrho * self.yancc_wrapper.nNorm),
         ]
-        
-        _, _, fluxes, _  = eqx.filter_jit(solve_dke)(put_on_gpu(field), self.yancc_wrapper.pitchgrid, self.yancc_wrapper.speedgrid, species, put_on_gpu(Erho))
-
-        fout = fluxes['<heat_flux>'][0] * vp / (self.yancc_wrapper.FluxNorm)
+        sol, info  = jax.jit(solve_dke, static_argnames=["verbose"])(put_on_gpu(field), self.yancc_wrapper.pitchgrid, self.yancc_wrapper.speedgrid, species, put_on_gpu(Erho), f1=f1_prev)
+        fout = sol.get('<heat_flux>')[0] * vp / (self.yancc_wrapper.FluxNorm)
         # fout = -vp * dTidrho * 5.0 
-        return -jnp.nan_to_num(fout, nan=0.0, posinf=0.0, neginf=0.0)
+        return -jnp.nan_to_num(fout, nan=0.0, posinf=0.0, neginf=0.0), sol.f1
 
     @partial(jax.jit, static_argnums=(0,))
     def source( self, index, state, x, t, vp, params: NamedTuple ):
@@ -380,8 +366,8 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         f_in = lambda tree, states, x : self.sigma(i, states, x, 0, tree[0], tree[1], tree[2], self.params)
 
         # compute gradient
-        fgrad = eqx.filter_grad(f_in)
-        grad_out = jax.vmap(fgrad, in_axes=(0, State.vmap_axes(), 0))(tree_in, states, positions)
+        fgrad = eqx.filter_grad(f_in, has_aux=True)
+        grad_out, _ = jax.vmap(fgrad, in_axes=(0, State.vmap_axes(), 0))(tree_in, states, positions)
         # Reshaping (this is where I think we may have issues)
         #   Meant to be a matrix of (nPoints x len(field))
         grad_unstack = tree_unstack(grad_out)

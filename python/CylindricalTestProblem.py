@@ -7,6 +7,7 @@ import scipy.special
 import scipy.optimize
 import jax
 import jax.numpy as jnp
+import jax.scipy
 from functools import partial
 from typing import NamedTuple
 from jaxtyping import Array, ArrayLike, Float, Int
@@ -44,6 +45,12 @@ r = np.linspace(0, a)
 T_out = 0
 for i in range(0,n):
     T_out += T(r, i)
+
+def G_an(kappa, b):
+    T = lambda r , i: 1 / (kappa * roots[i]**2 + b) * S(r, i)
+    T_out = 0
+    T_out = jax.lax.scan(lambda i, T_out: (i+1, T_out + T(r, i)), 0, T_out, length=n)
+    return jnp.trapz(r * T_out, r)
 
 # add r as a parameter
 class DiffusionParams(NamedTuple):
@@ -207,8 +214,11 @@ for k in k1:
     g_out.append(g)
     grad_g.append(gp)
 
+
+
 plt.figure()
 plt.plot(k1,g_out)
+plt.plot(k1, [G_an(k, b) for k in k1])
 plt.figure()
 plt.plot(k1, jnp.gradient(jnp.array(g_out))/dk)
 plt.plot(k1, grad_g)

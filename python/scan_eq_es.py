@@ -40,32 +40,46 @@ from desc.profiles import SplineProfile
 import matplotlib.pyplot as plt
 
 st_config = {
-    "sourcecenter": 0.2,
-    "sourceheight": 6.0,
-    "sourcewidth": 0.4,
-    "edgetemperature":0.1,
-    "edgedensity": 0.0,
+    "SourceCenter": 0.1,
+    "SourceHeight": 40.0,
+    "SourceWidth": 0.8,
+    "EdgeTemperature":0.25,
+    "EdgeDensity": 0.0,
     "n0": 1.0,
 }
-# runner = MaNTA.Runner(st)
 
+# st_config = {
+#     "SourceCenter": 0.2,
+#     "SourceHeight": 1000.0,
+#     "SourceWidth": 0.8,
+#     "EdgeTemperature":0.5,
+#     "EdgeDensity": 0.0,
+#     "n0": 0.5,
+# }
+
+rho_upper = 1.0
+rtol = 1e-2
+atol = 1e-3
+
+# # %%
 solver_config = {
-    "OutputFilename": "stellarator_grad_test",
-    "Polynomial_degree": 5,
+    "OutputFilename": "stellarator_grad_test2",
+    "Polynomial_degree": 4,
     "Grid_size": 4,
-    "tau": 100.0, 
+    "tau": 1.0, 
     "Lower_boundary": 0.0,
-    "Upper_boundary": 1.0,
-    "Relative_tolerance": 1e-2,
-    "Absolute_tolerance": [1e-3],
-    "delta_t": 0.1,
-    "initialTimestep": 5e-5,
-    "MinStepSize": 1e-8, 
+    "Upper_boundary": rho_upper,
+    "Relative_tolerance": rtol,
+    "Absolute_tolerance": [atol],
+    "delta_t": 1e-1,
+    "initialTimestep": 1e-5,
+    "MinStepSize": 1e-9, 
     "SteadyStateTolerance": 1e-4,
     "restart": True,
     "solveAdjoint": True, 
     "zeroFlux": True,
 }
+
 config = {
     "Stellarator": st_config,
     "Solver": solver_config,
@@ -73,25 +87,32 @@ config = {
 
 points =  MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
 
+
 yancc_rho = jnp.array(points)
 yancc_ntheta = 17
-yancc_nzeta = 33
+yancc_nzeta = 23
+
+yancc_res = {"na":43,"nx":5}
 
 # to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
 # + axis and lcfs
 # initial pressure is all zeros, can change this if desired
+
 pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
-
-eq = desc.examples.get("W7-X")
-
-# Reduce the number of modes (not sure if this is a good thing to do)
-eq.change_resolution(M=4, N=4,L_grid=len(points), M_grid = 8, N_grid=8)# 
+print(pressure_rho)
+eq = desc.examples.get("ESTELL")
+surf = eq.get_surface_at(rho=1)
+# eq.change_resolution(M=4, N=4,L_grid=len(points), M_grid=4, N_grid=4)# 
+eq = Equilibrium(M=4, N=4, Psi=0.5, surface=surf, pressure=desc_pressure)
 eq = eq.solve(x_scale="ess")[0]
+
+# eq = desc.io.load("eq_self_consistent_pressure.h5")
+# desc_pressure = eq.get_profile('p')
 eq_init = eq.copy()
-nx = 5
-na = 43
-yancc_res = {"nx":nx, "na": na}
+
+V0 = eq.compute("V")["V"]
+# yancc_wrapper = yancc_data.from_eq(points, grid = yancc_grid,rho = yancc_rho, Density=Density, eq=eq_init, nt = yancc_ntheta, nz = yancc_nzeta)
 yancc_wrapper = yancc_data.from_eq(points, eq=eq_init, nt = yancc_ntheta, nz = yancc_nzeta, **yancc_res)
 # st = StellaratorTransport(config,yancc_wrapper=yancc_wrapper)
 # st.run()
@@ -207,7 +228,7 @@ o1 = ObjectiveFunction(objectives)
 o1.build(use_jit=False)
 obj = ProximalProjection(o1, ObjectiveFunction(constraints), eq)
 obj.build()
-N = 1
+N = 2
 M = 1
 # Get the index of a mode
 idx = eq.surface.R_basis.get_idx(L=0, N=N, M=M)
@@ -224,9 +245,8 @@ start = v0 - delta
 end = v0 + delta
 # start = -0.04
 # end = 0.02
-sweep = jnp.linspace(start, end, 20)
+sweep = jnp.linspace(start, end, 10)
 df = sweep[1] - sweep[0]
-
 
 eq_init = eq.copy()
 x_init = obj.x(eq_init)
@@ -234,15 +254,16 @@ x_init = obj.x(eq_init)
 for i in range(0, len(sweep)):
 
     lp = len(eq.p_l)
-    lc = len(eq.i_l)
+    lc = len(eq.c_l) 
     # t = jax.flatten_util.ravel_pytree(make_tangent(eq.params_dict, idx))[0]
     eq_ = eq.copy()
     eqs.append(eq_)
     # ProximalProjection removes most of the fields so the index into the Rb_lmn field is this (I think?)
     x_in = x_init.at[lp + lc + 1 + idx].set(sweep[i]) 
+
     # Set the tangent to 1 at the same index
     t = jnp.zeros(obj.dim_x)
-    t1 = t.at[lp+lc+ 1+idx].set(1.0)
+    t1 = t.at[lp + lc + 1 + idx].set(1.0)
     
     # Compute value of objective
     G.append(obj.compute_scaled(x_in)[0])
@@ -257,16 +278,15 @@ ax.legend()
 ax.set_xlabel(fr"$R_{{0, {N}, {M}}}$")
 ax.set_ylabel(fr"$dG/dR_{{0, {N}, {M}}}$")
 ax.axvline(v0, color='k', linestyle='--')
-fig.savefig(f"fd_vs_adj_w7x_{N}_{M}.png")
+fig.savefig(f"fd_vs_adj_es_{N}_{M}.png")
 fig, ax = plt.subplots()
 ax.plot(sweep, G)
 ax.set_xlabel(fr"$R_{{0, {N}, {M}}}$")
 ax.set_ylabel("G")
 ax.axvline(v0, color='k', linestyle='--')
-fig.savefig(f"G_w7x_{N}_{M}.png")
+fig.savefig(f"G_es_{N}_{M}.png")
 eqs.save("sweep.h5")
 plt.figure()
 from desc.plotting import plot_comparison
 fig, ax = plot_comparison(eqs=eqs[0:-1:4])
-fig.savefig(f"eqs_w7x{N}_{M}.png")
-
+fig.savefig(f"eqs_es{N}_{M}.png")
