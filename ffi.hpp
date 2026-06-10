@@ -34,8 +34,12 @@ static ffi::Error run_ffi_impl(PyRunner *runner, ffi::BufferR0<fp_dtype> args)
 {
     py::gil_scoped_acquire gil;
     double tFinal = static_cast<double>(*args.typed_data());
-
-    runner->run(tFinal);
+    try {
+        runner->run(tFinal);
+    }
+    catch (const std::exception& e) {
+        return ffi::Error::Internal(e.what());
+    }
     return ffi::Error::Success();
 };
 
@@ -43,7 +47,12 @@ static ffi::Error run_ffi_ss_impl(PyRunner *runner)
 {
     py::gil_scoped_acquire gil;
 
-    runner->run_ss();
+    try {
+        runner->run_ss();
+    }
+    catch (const std::exception& e) {
+        return ffi::Error::Internal(e.what());
+    }
     return ffi::Error::Success();
 };
 

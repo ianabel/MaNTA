@@ -1,27 +1,9 @@
-import os 
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-os.environ["HDF5_USE_FILE_LOCKING"]= "FALSE"
-    
-from scipy.constants import mu_0
-import MaNTA
-
-from Objective2 import make_objective
-
-
-import jax
-import jax.numpy as jnp
-import equinox as eqx 
-import yancc
-
-from yancc_wrapper2 import yancc_data
-
-import desc
-from desc import set_device
-set_device("gpu")
-import desc.io
-from desc.equilibrium import Equilibrium, EquilibriaFamily
-from desc.geometry import FourierRZToroidalSurface
-from desc.grid import Grid, LinearGrid
+from Stellarator2 import StellaratorTransport
+import matplotlib.pyplot as plt
+from desc.profiles import SplineProfile
+from desc.plotting import plot_boozer_surface, plot_boundaries, plot_qs_error
+from desc.plotting import plot_comparison
+from desc.plotting import plot_1d
 from desc.objectives import (
     AspectRatio,
     FixBoundaryR,
@@ -35,16 +17,28 @@ from desc.objectives import (
     RotationalTransform,
     Volume,
 )
-from desc.profiles import SplineProfile
-import matplotlib.pyplot as plt
+from desc.grid import Grid, LinearGrid
+from desc.geometry import FourierRZToroidalSurface
+from desc.equilibrium import Equilibrium, EquilibriaFamily
+import desc.io
+from desc import set_device
+import desc
+from yancc_wrapper2 import yancc_data
+import yancc
+import jax.numpy as jnp
+import jax
+from Objective2 import make_objective
+import MaNTA
+
+
+set_device("gpu")
 
 
 # %%
-from Stellarator2 import StellaratorTransport
 
 fname = "stellarator_opt"
 
-eq_name = "eq"
+eq_name = "eq2"
 
 # st_config = {
 #     "SourceCenter": 0.1,
@@ -68,8 +62,8 @@ st_config = {
     "SourceCenter": 0.2,
     "SourceHeight": 150.0,
     "SourceWidth": 0.8,
-    "EdgeTemperature":0.1,
-    "EdgeDensity": 0.0,
+    "EdgeTemperature": 0.1,
+    "EdgeDensity": 0.2,
     "n0": 0.5,
 }
 
@@ -82,17 +76,17 @@ solver_config = {
     "OutputFilename": "stellarator_opt0",
     "Polynomial_degree": 4,
     "Grid_size": 4,
-    "tau": 1.0, 
+    "tau": 1.0,
     "Lower_boundary": 0.0,
     "Upper_boundary": rho_upper,
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1e-2,
     "initialTimestep": 1e-7,
-    "MinStepSize": 1e-9, 
+    "MinStepSize": 1e-9,
     "SteadyStateTolerance": 1e-4,
     "restart": False,
-    "solveAdjoint": True, 
+    "solveAdjoint": True,
     "zeroFlux": True,
 }
 
@@ -102,14 +96,15 @@ config = {
     "Solver": solver_config,
 }
 
-points =  MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
+points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"],
+                        solver_config["Grid_size"], solver_config["Polynomial_degree"])
 
 
 yancc_rho = jnp.array(points)
 yancc_ntheta = 17
 yancc_nzeta = 23
 
-yancc_res = {"na":43,"nx":5}
+yancc_res = {"na": 43, "nx": 5}
 
 # to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
 # + axis and lcfs
@@ -135,11 +130,11 @@ eqs = EquilibriaFamily(eq)
 # eq = desc.examples.get("W7-X")
 
 # # Reduce the number of modes (not sure if this is a good thing to do)
-# eq.change_resolution(M=4, N=4,L_grid=len(points), M_grid = 8, N_grid=8)# 
+# eq.change_resolution(M=4, N=4,L_grid=len(points), M_grid = 8, N_grid=8)#
 # eq = eq.solve(x_scale="ess")[0]
 # eq = desc.examples.get("ESTELL")
 # surf = eq.get_surface_at(rho=1)
-# # eq.change_resolution(M=4, N=4,L_grid=len(points), M_grid=4, N_grid=4)# 
+# # eq.change_resolution(M=4, N=4,L_grid=len(points), M_grid=4, N_grid=4)#
 # eq = Equilibrium(M=4, N=4, Psi=0.5, surface=surf, pressure=desc_pressure)
 # eq = eq.solve(x_scale="ess")[0]
 
@@ -149,7 +144,8 @@ eq_init = eq.copy()
 
 V0 = eq.compute("V")["V"]
 # yancc_wrapper = yancc_data.from_eq(points, grid = yancc_grid,rho = yancc_rho, Density=Density, eq=eq_init, nt = yancc_ntheta, nz = yancc_nzeta)
-yancc_wrapper = yancc_data.from_eq(points, eq=eq_init, nt = yancc_ntheta, nz = yancc_nzeta, **yancc_res)
+yancc_wrapper = yancc_data.from_eq(
+    points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res)
 
 # %%
 
@@ -161,14 +157,13 @@ plt.plot(points, 2./3. * st.InitialValue(0, points) / yancc_wrapper.Vp)
 st.run()
 
 # %%
-from desc.plotting import plot_1d
 
 solver_config = {
     "OutputFilename": fname,
     "RestartFile": "stellarator_opt0.restart.nc",
     "Polynomial_degree": 4,
     "Grid_size": 4,
-    "tau": 1.0, 
+    "tau": 1.0,
     "Lower_boundary": 0.0,
     "Upper_boundary": rho_upper,
     "Relative_tolerance": rtol,
@@ -177,7 +172,7 @@ solver_config = {
     "initialTimestep": 1e-5,
     "MinStepSize": 1e-10,
     "restart": True,
-    "solveAdjoint": True, 
+    "solveAdjoint": True,
     "zeroFlux": True,
     "SteadyStateTolerance": 1e-4,
 }
@@ -197,13 +192,14 @@ for k in range(niters):
 
     fig, ax = plot_1d(eq2, "pressure", label="DESC " + str(k), ax=ax)
 
-    yancc_wrapper = yancc_data.from_eq(points, eq=eq2, nt = yancc_ntheta, nz = yancc_nzeta, **yancc_res)
+    yancc_wrapper = yancc_data.from_eq(
+        points, eq=eq2, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res)
     pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
     st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
     st.run()
-    
+
     pi = st.getPressure()
-    
+
     print(pi)
     pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
     ax.plot(pressure_rho, pi_manta, label="MANTA" + str(k))
@@ -220,7 +216,6 @@ eq_self_consistent = eq2.copy()
 ax.legend()
 fig.savefig("initial_self_consistent_pressure.png")
 # %%
-from desc.plotting import plot_comparison
 
 plot_comparison(
     eqs=[eq_init, eq2], labels=["Initial", "self-consistent"]
@@ -238,7 +233,7 @@ solver_config = {
     "OutputFilename": fname,
     "Polynomial_degree": 4,
     "Grid_size": 4,
-    "tau": 1.0, 
+    "tau": 1.0,
     "Lower_boundary": 0.0,
     "Upper_boundary": rho_upper,
     "Relative_tolerance": rtol,
@@ -247,7 +242,7 @@ solver_config = {
     "initialTimestep": 1e-5,
     "MinStepSize": 1e-10,
     "restart": True,
-    "solveAdjoint": True, 
+    "solveAdjoint": True,
     "zeroFlux": True,
     "SteadyStateTolerance": 1e-4,
 }
@@ -260,9 +255,10 @@ manta_objective = make_objective(config, yancc_res=yancc_res)
 
 # def manta_yancc_fun(fields, grid, Vprime):
 
-#     stored_energy, pressure = Objective(fields, grid, Vprime) 
+#     stored_energy, pressure = Objective(fields, grid, Vprime)
 
 #     return stored_energy, pressure
+
 
 def objective_from_user_fun(grid, data):
   # note: don't change the signature to this function
@@ -294,17 +290,19 @@ def objective_from_user_fun(grid, data):
     V_rr = grid.compress(data['V_rr(r)'])
     Vp = V_r/V[-1]
     Vpp = V_rr/V[-1]
-    
-    fields = jax.vmap(lambda d: yancc.field.Field(**d, NFP=grid.NFP))(yancc_dat)
+
+    fields = jax.vmap(lambda d: yancc.field.Field(
+        **d, NFP=grid.NFP))(yancc_dat)
 
     desc_pressure = grid.compress(data["p"], surface_label="rho")
-    
+
     stored_energy, manta_pressure = manta_objective((fields, Vp, Vpp), grid)
     print("------------ STORED ENERGY ----------------")
     print(stored_energy)
     print("-------------------------------------------")
-    
-    pressure_error = manta_pressure - desc_pressure # not sure if the sign makes the difference here
+
+    # not sure if the sign makes the difference here
+    pressure_error = manta_pressure - desc_pressure
 
     print("------------TOTAL PRESSURE ERROR-----------")
     print(pressure_error)
@@ -312,22 +310,27 @@ def objective_from_user_fun(grid, data):
 
     # optimization is easiest for least squares objectives, so instead of maximizing
     # stored energy we minimize 1/stored_energy^2 (the squaring happens later)
-    return 1 / stored_energy #jnp.append(pressure_error, 1 / stored_energy)
+    return 1 / stored_energy  # jnp.append(pressure_error, 1 / stored_energy)
+
 
 yancc_desc_grid = yancc_wrapper.grid
 
 # domain_boundary_rho = rho_from_normalized_volume(0.9)
 domain_boundary_rho = 1.0
+
+
 def pressure_constraint_fun(params):
     # function to fix dp/dr=0 at axis and p=0 at edge
     # can modify this for other BC (eg fix p at rho=0.8)
     p_l = params["p_l"]
     dp0 = desc_pressure(Grid(jnp.zeros((1, 3)), jitable=True), p_l, dr=1)
-    p1 = desc_pressure(Grid(jnp.zeros((1, 3)).at[0, 0].set(domain_boundary_rho), jitable=True), p_l)
+    p1 = desc_pressure(Grid(jnp.zeros((1, 3)).at[0, 0].set(
+        domain_boundary_rho), jitable=True), p_l)
     return jnp.array([dp0, p1]).squeeze()
 
 
-pressure_constraint_target = jnp.array([0.0, 0.0])
+pi_edge = st.getPressure([1.0])[0]
+pressure_constraint_target = jnp.array([0.0, pi_edge])
 # pressure_constraint_target = jnp.array([0.0, st.getPressure([0.9])[0]])
 
 # %%
@@ -338,7 +341,8 @@ pressure_constraint_target = jnp.array([0.0, 0.0])
 
 pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 1e-6)
 stored_energy_weight = 1.0
-objective_from_user_weight = stored_energy_weight#jnp.append(stored_energy_weight)
+# jnp.append(stored_energy_weight)
+objective_from_user_weight = stored_energy_weight
 
 objectives = [
     # AspectRatio(eq=eq, target=6, weight=10),
@@ -350,120 +354,126 @@ objectives = [
         target=0,
         weight=objective_from_user_weight,
         grid=yancc_desc_grid,
-        deriv_mode="fwd", 
+        deriv_mode="fwd",
         # need this assuming manta only has vjp, if using jvp switch to fwd
-    ),
-]
-k = 2
-R_modes = jnp.vstack(
-    (
-        [0, 0, 0],
-        eq.surface.R_basis.modes[
-            jnp.max(jnp.abs(eq.surface.R_basis.modes), 1) > k, :
-        ],
-    )
-)
-Z_modes = eq.surface.Z_basis.modes[
-    jnp.max(jnp.abs(eq.surface.Z_basis.modes), 1) > k, :
-]
-constraints = [
-    ForceBalance(eq=eq),  # J x B - grad(p) = 0
-    FixCurrent(eq=eq),  # fix zero current, eventually should use real bootstrap
-    # Volume(eq=eq, target=V0), # fix volume of outer flux surface
-    # FixBoundaryR(eq=eq, modes=R_modes),
-    # FixBoundaryZ(eq=eq, modes=Z_modes),
-    FixPsi(eq=eq),  # fix total magnetic flux
-    LinearObjectiveFromUser(
-        pressure_constraint_fun, eq, target=pressure_constraint_target
     ),
 ]
 
 objective = ObjectiveFunction(objectives)
 objective.build(use_jit=False)
-# print(objective.jac_scaled(objective.x(eq)))
-eq, info_out = eq.optimize(
-    objective=objective,
-    constraints=constraints,
-    optimizer="proximal-lsq-exact",
-    x_scale="ess",
-    maxiter=20,
-    ftol=1e-3,  # stopping tolerance on the function value
-    xtol=1e-6,  # stopping tolerance on the step size
-    gtol=1e-6,  # stopping tolerance on the gradient
-    # options={
-    #     "initial_trust_radius": 5e-4,   
-    #     "perturb_options": {"order": 2, "verbose": 3},  # use 2nd-order perturbations
-    # #     # "solve_options": {
-    # #     #     "ftol": 5e-3,
-    # #     #     "xtol": 1e-6,
-    # #     #     "gtol": 1e-6,
-    # #     #     "verbose": 3,
-    #     # },  # for equilibrium subproblem
-    # },
-    verbose=3,
-    copy=True,
-)
 
-eq_optimized = eq.copy()
-eqs.append(eq_optimized)
-eq.optimized.save(eq_name + "_optimized_equilibrium.h5")
-# %%
-# final self consistency 
 fig, ax = plt.subplots()
-niters = 2
-for k in range(niters):
-    eq = eq.copy()
 
-    fig, ax = plot_1d(eq, "pressure", label="DESC " + str(k), ax=ax)
 
-    yancc_wrapper = yancc_data.from_eq(points, eq=eq, nt = yancc_ntheta, nz = yancc_nzeta)
- 
-    st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-    st.run()
-    
-    pi = st.getPressure()
+def run_optimize(k, max_it=5, eq=eq, ax=ax):
 
-    pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
-    ax.plot(pressure_rho, pi_manta, label="MANTA" + str(k))
-    eq.pressure = SplineProfile(pi_manta, pressure_rho)
-    # fit the current profile to a power series, with c_0=c_1=0
-    
-    # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])
-    # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
-    # re-solve the equilibrium
-    eq, _ = eq.solve(objective="force", x_scale ="ess", optimizer="lsq-exact", verbose=3)
+    R_modes = jnp.vstack(
+        (
+            [0, 0, 0],
+            eq.surface.R_basis.modes[
+                jnp.max(jnp.abs(eq.surface.R_basis.modes), 1) > k, :
+            ],
+        )
+    )
+    Z_modes = eq.surface.Z_basis.modes[
+        jnp.max(jnp.abs(eq.surface.Z_basis.modes), 1) > k, :
+    ]
+    constraints = [
+        ForceBalance(eq=eq),  # J x B - grad(p) = 0
+        # fix zero current, eventually should use real bootstrap
+        FixCurrent(eq=eq),
+        # Volume(eq=eq, target=V0), # fix volume of outer flux surface
+        FixBoundaryR(eq=eq, modes=R_modes),
+        FixBoundaryZ(eq=eq, modes=Z_modes),
+        FixPsi(eq=eq),  # fix total magnetic flux
+        LinearObjectiveFromUser(
+            pressure_constraint_fun, eq, target=pressure_constraint_target
+        ),
+    ]
+
+    # print(objective.jac_scaled(objective.x(eq)))
+    eq, info_out = eq.optimize(
+        objective=objective,
+        constraints=constraints,
+        optimizer="proximal-lsq-exact",
+        x_scale="ess",
+        maxiter=max_it,
+        ftol=1e-3,  # stopping tolerance on the function value
+        xtol=1e-6,  # stopping tolerance on the step size
+        gtol=1e-6,  # stopping tolerance on the gradient
+        # options={
+        #     "initial_trust_radius": 5e-4,
+        #     "perturb_options": {"order": 2, "verbose": 3},  # use 2nd-order perturbations
+        # #     # "solve_options": {
+        # #     #     "ftol": 5e-3,
+        # #     #     "xtol": 1e-6,
+        # #     #     "gtol": 1e-6,
+        # #     #     "verbose": 3,
+        #     # },  # for equilibrium subproblem
+        # },
+        verbose=3,
+        copy=True,
+    )
+
+    eq_optimized = eq.copy()
+    eqs.append(eq_optimized)
+    eq_optimized.save(eq_name + str(k) + "_optimized_equilibrium.h5")
+    # %%
+    # final self consistency
+    niters = 2
+    for k in range(niters):
+
+        fig, ax = plot_1d(eq, "pressure", label="DESC " + str(k), ax=ax)
+
+        yancc_wrapper = yancc_data.from_eq(
+            points, eq=eq, nt=yancc_ntheta, nz=yancc_nzeta)
+
+        st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+        st.run()
+
+        pi = st.getPressure()
+
+        pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
+        ax.plot(pressure_rho, pi_manta, label="MANTA" + str(k))
+        eq.pressure = SplineProfile(pi_manta, pressure_rho)
+        # fit the current profile to a power series, with c_0=c_1=0
+
+        # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])
+        # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
+        # re-solve the equilibrium
+        eq, _ = eq.solve(objective="force", x_scale="ess",
+                         optimizer="lsq-exact", verbose=3)
+    eqs.append(eq.copy())
+    return eq
+
+
+eq = run_optimize(1, eq=eq)
+eq = run_optimize(2, eq=eq)
+eq = run_optimize(4, eq=eq, max_it=10)
 
 ax.legend()
 fig.savefig("final_pressure_comparison.png")
 eq_optimized_self_consistent = eq.copy()
-eqs.append(eq_optimized_self_consistent)
 eqs.save(eq_name + "_all_equilibria.h5")
 # %%
 eq_optimized_self_consistent.save(eq_name + "_self_consistent_equilibrium.h5")
 
 # %%
-from desc.plotting import plot_comparison
 
 fig, ax = plot_comparison(
-    eqs=[eq_init, eq_optimized, eq], labels=["Initial", "optimized", "self-consistent"]
+    eqs=[eq_init, eq], labels=[
+        "Initial", "optimized", "self-consistent"]
 )
 fig.savefig("final_comparison.png")
 fig, ax = plot_boundaries(
-    eqs=[eq_init, eq_optimized, eq], labels=["Initial", "optimized", "self-consistent"]
+    eqs=[eq_init, eq], labels=[
+        "Initial", "optimized", "self-consistent"]
 )
 fig.savefig("final_comparison_boundary.png")
 # %%
-from desc.plotting import plot_boozer_surface, plot_boundaries, plot_qs_error
 # eq = desc.io.load("../python/eq2optimized_equilibrium.h5")#desc.examples.get("ESTELL")
 # plot_boozer_surface(eq_init, fieldlines=8)
 fig, ax = plot_boozer_surface(eq, fieldlines=8)
 fig.savefig("final_boozer_surface.png")
 fig, ax = plot_qs_error(eq)
-fig.savefig("final_qs_error.png")    
-
-
-
-
-    
-
-
+fig.savefig("final_qs_error.png")
