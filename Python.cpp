@@ -73,10 +73,10 @@ namespace pybind11
 			{
 				py::dict d = py::cast<py::dict>(src);
 
-				value.Variable() = py::cast<Matrix>(d["Variable"]);
-				value.Derivative() = py::cast<Matrix>(d["Derivative"]);
-				value.Flux() = py::cast<Matrix>(d["Flux"]);
-				value.Aux() = py::cast<Matrix>(d["Aux"]);
+				value.Variable() = py::cast<Matrix>(d["Variable"]).transpose();
+				value.Derivative() = py::cast<Matrix>(d["Derivative"]).transpose();
+				value.Flux() = py::cast<Matrix>(d["Flux"]).transpose();
+				value.Aux() = py::cast<Matrix>(d["Aux"]).transpose();
 
 				auto scalars = py::cast<py::array_t<double>>(d["Scalars"]);
 				py::buffer_info info = scalars.request();
