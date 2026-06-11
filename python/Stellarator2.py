@@ -204,9 +204,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def dSigma(self, index, states: State, positions, t):
         fgrad = jax.grad(self.sigma, argnums=1, has_aux=True)
         if (self.f1_cache is not None):
-            return jax.lax.map(lambda args: fgrad(index, args[0], args[1], t, args[2], args[3], args[4], args[5], args[6])[0], (states, positions, self.field_shard, self.vp_shard, self.vpp_shard, self.params, self.f1_cache), batch_size=self.chunk_size)
+            return jax.lax.map(lambda args: fgrad(index, args[0], args[1], t, args[2], args[3], args[4], self.params, args[5])[0], (states, positions, self.field_shard, self.vp_shard, self.vpp_shard,  self.f1_cache), batch_size=self.chunk_size)
         else:
-            return jax.lax.map(lambda args: fgrad(index, args[0], args[1], t, args[2], args[3], args[4], args[5], None)[0], (states, positions, self.field_shard, self.vp_shard, self.vpp_shard), batch_size=self.chunk_size)
+            return jax.lax.map(lambda args: fgrad(index, args[0], args[1], t, args[2], args[3], args[4], self.params, None)[0], (states, positions, self.field_shard, self.vp_shard, self.vpp_shard), batch_size=self.chunk_size)
 
     @MaNTA_Decorator
     def dSources(self, index, states: State, positions, t):
@@ -381,13 +381,8 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
     def dSigma(self, i, states, positions):
         tree_in = (self.field_shard, self.vp_shard, self.vpp_shard)
 
-        # set up lambda to take in (field, vp, vpp) as a single object
-        def f_in(tree, states, x): 
-            return self.sigma(
-            i, states, x, 0, tree[0], tree[1], tree[2], self.params)
-
         # compute gradient
-        fgrad = eqx.filter_grad(f_in, has_aux=True)
+        fgrad = eqx.filter_grad(lambda tree, s, p: self.sigma(i, s, p, 0, tree[0], tree[1], tree[2], self.params), has_aux=True)
         grad_out = jax.lax.map(lambda args: fgrad(*args), (tree_in, states, positions), batch_size=self.chunk_size)[0]
         # Meant to be a matrix of (nPoints x len(field))
         grad_unstack = tree_unstack(grad_out)
