@@ -1,4 +1,5 @@
 from functools import partial
+from FFIRunner import FFIRunner
 from typing import NamedTuple
 import yancc
 from yancc_wrapper2 import yancc_data
@@ -15,12 +16,8 @@ import numpy as np
 import jax.numpy as jnp
 import equinox as eqx
 import jax
-from FFIRunner import FFIRunner
 import MaNTA
 import os
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".9"
 # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 # os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 # jax.config.update("jax_enable_compilation_cache", False)
@@ -47,24 +44,24 @@ def MaNTA_Decorator(func):
     """
     Converts from MaNTA to jax and vice versa, also performs sharding on inputs
     """
-
     def wrapper(self, index, states, positions, *args):
-        states_ = State.from_manta(states)
+        states_, empty = eqx.partition(State.from_manta(states), lambda x: x.size > 0) 
         positions_ = jnp.array(positions)
 
+        # Empty arrays causes issues with jax.lax.map, other operations, so we remove them and then add them back after
         def _wrap_shard(self, *args):
             args_s = tuple(jax.device_put(arg, data_sharding) if not jnp.isscalar(
                 arg) else jax.device_put(arg, static_sharding) for arg in args)
             return func(self, *args_s)
 
-        res = _wrap_shard(self, index, states_, positions_, *args)
+        result = _wrap_shard(self, index, states_, positions_, *args)
 
-        if (isinstance(res, State)):
-            return res.to_manta()
+        if (isinstance(result, State)):
+            # Recombine with empty arrays and convert back to MaNTA format
+            return eqx.combine(result, empty).to_manta()
         else:
-            return res
+            return result
     return wrapper
-
 
 def put_on_gpu(tree):
     #    def map_fn(leaf):
@@ -134,8 +131,11 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         e = 1.6e-19
         self.pnorm = 1e20 * e * 1e3
-        self.chunk_size = int(solver_config["Grid_size"] / 2)
-        # Hold the MaNTA runner object in the class
+        use_chunking = st_config["use_chunking"]
+        self.chunk_size = 0
+        if use_chunking:
+            self.chunk_size = 2 * len(devices) if jnp.mod(len(self.points), 2 * len(devices)) == 0 else len(devices)
+            print("Using chunking with chunk size " + str(self.chunk_size) + " on " + str(len(devices)) + " devices")
 
         # %%
 
@@ -152,7 +152,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         g = [self.StoredEnergy]
 
         self.adjointProblem = StellaratorAdjointProblem(
-            self, g, self.yancc_wrapper, len(self.points))
+            self, g, self.yancc_wrapper, len(self.points), chunk_size=self.chunk_size)
 
         self.runner = FFIRunner(self, self.points, 1,
                                 self.adjointProblem.np, spatialParameters=True)
@@ -202,13 +202,11 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     @MaNTA_Decorator
     def dSigma(self, index, states: State, positions, t):
-        in_axes = vmap_axes_wfield if self.f1_cache is None else vmap_axes_wfield[:-1] + (
-            0,)
-        dsigma_vmap = eqx.filter_vmap(
-            jax.grad(self.sigma, argnums=1, has_aux=True), in_axes=in_axes)
-        dflux, _ = dsigma_vmap(index, states, positions, t, self.field_shard,
-                               self.vp_shard, self.vpp_shard, self.params, self.f1_cache)
-        return dflux
+        fgrad = jax.grad(self.sigma, argnums=1, has_aux=True)
+        if (self.f1_cache is not None):
+            return jax.lax.map(lambda args: fgrad(index, args[0], args[1], t, args[2], args[3], args[4], args[5], args[6])[0], (states, positions, self.field_shard, self.vp_shard, self.vpp_shard, self.params, self.f1_cache), batch_size=self.chunk_size)
+        else:
+            return jax.lax.map(lambda args: fgrad(index, args[0], args[1], t, args[2], args[3], args[4], args[5], None)[0], (states, positions, self.field_shard, self.vp_shard, self.vpp_shard), batch_size=self.chunk_size)
 
     @MaNTA_Decorator
     def dSources(self, index, states: State, positions, t):
@@ -263,7 +261,6 @@ class StellaratorTransport(MaNTA.TransportSystem):
         sol, info = jax.jit(solve_dke, static_argnames=["verbose"])(put_on_gpu(
             field), self.yancc_wrapper.pitchgrid, self.yancc_wrapper.speedgrid, species, put_on_gpu(Erho), f1=f1_prev)
         fout = sol.get('<heat_flux>')[0] * vp / (self.yancc_wrapper.FluxNorm)
-        # fout = -vp * dTidrho * 5.0
         return -jnp.nan_to_num(fout, nan=0.0, posinf=0.0, neginf=0.0), sol.f1
 
     @partial(jax.jit, static_argnums=(0,))
@@ -325,7 +322,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
 
 class StellaratorAdjointProblem(MaNTA.AdjointProblem):
-    def __init__(self, transport_system: MaNTA.TransportSystem, g, yancc_data: yancc_data, npoints):
+    def __init__(self, transport_system: MaNTA.TransportSystem, g, yancc_data: yancc_data, npoints, chunk_size=0):
         MaNTA.AdjointProblem.__init__(self)
 
         self.g = g
@@ -333,7 +330,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         self.field, self.vp, self.vpp = yancc_data.get_fields()
         (self.field_shard, self.vp_shard, self.vpp_shard) = eqx.filter_shard(
             (self.field, self.vp, self.vpp), data_sharding)
-
+        self.chunk_size = chunk_size
         boundary_field = yancc_data.fields_unstacked[-1]
 
         flat, _ = jax.flatten_util.ravel_pytree(
@@ -385,15 +382,14 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         tree_in = (self.field_shard, self.vp_shard, self.vpp_shard)
 
         # set up lambda to take in (field, vp, vpp) as a single object
-        def f_in(tree, states, x): return self.sigma(
+        def f_in(tree, states, x): 
+            return self.sigma(
             i, states, x, 0, tree[0], tree[1], tree[2], self.params)
 
         # compute gradient
         fgrad = eqx.filter_grad(f_in, has_aux=True)
-        grad_out, _ = jax.vmap(fgrad, in_axes=(0, State.vmap_axes(), 0))(
-            tree_in, states, positions)
-        # Reshaping (this is where I think we may have issues)
-        #   Meant to be a matrix of (nPoints x len(field))
+        grad_out = jax.lax.map(lambda args: fgrad(*args), (tree_in, states, positions), batch_size=self.chunk_size)[0]
+        # Meant to be a matrix of (nPoints x len(field))
         grad_unstack = tree_unstack(grad_out)
         grad_unraveled = jnp.stack([jax.flatten_util.ravel_pytree(g)[
                                    0] for g in grad_unstack], axis=0)

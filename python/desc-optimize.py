@@ -26,6 +26,7 @@ import desc
 from yancc_wrapper2 import yancc_data
 import yancc
 import jax.numpy as jnp
+import numpy as np
 import jax
 from Objective2 import make_objective
 import MaNTA
@@ -62,9 +63,10 @@ st_config = {
     "SourceCenter": 0.2,
     "SourceHeight": 150.0,
     "SourceWidth": 0.8,
-    "EdgeTemperature": 0.1,
+    "EdgeTemperature": 0.2,
     "EdgeDensity": 0.2,
     "n0": 0.5,
+    "use_chunking": True,
 }
 
 rho_upper = 1.0
@@ -102,9 +104,9 @@ points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_bo
 
 yancc_rho = jnp.array(points)
 yancc_ntheta = 17
-yancc_nzeta = 23
+yancc_nzeta = 33
 
-yancc_res = {"na": 43, "nx": 5}
+yancc_res = {"na": 53, "nx": 5}
 
 # to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
 # + axis and lcfs
@@ -122,7 +124,7 @@ surf = FourierRZToroidalSurface(
 )
 # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
 # default is zero pressure and zero current
-eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
+eq = Equilibrium(M=8, N=8, Psi=0.1, surface=surf, pressure=desc_pressure)
 # this is usually all you need to solve a fixed boundary equilibrium
 eq = eq.solve(x_scale="ess")[0]
 # print(pressure_rho)
@@ -186,7 +188,7 @@ fig, ax = plt.subplots()
 
 eq2 = eq.copy()
 fam2 = EquilibriaFamily(eq2)
-niters = 3
+niters = 2
 for k in range(niters):
     eq2 = eq2.copy()
 
@@ -343,56 +345,60 @@ pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 1e-6)
 stored_energy_weight = 1.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
-
-objectives = [
-    # AspectRatio(eq=eq, target=6, weight=10),
-    Volume(eq=eq, target=V0, weight=0.5),
-    # RotationalTransform(eq=eq, target=0.42, weight=10),
-    ObjectiveFromUser(
-        objective_from_user_fun,
-        eq,
-        target=0,
-        weight=objective_from_user_weight,
-        grid=yancc_desc_grid,
-        deriv_mode="fwd",
-        # need this assuming manta only has vjp, if using jvp switch to fwd
-    ),
-]
-
-objective = ObjectiveFunction(objectives)
-objective.build(use_jit=False)
-
 fig, ax = plt.subplots()
+max_it = 8
+
+eqfam = EquilibriaFamily(eq)
+ks = [1, 2, eq.M + 1]
+for k in ks: 
+    print("\n==================================")
+    print("Optimizing boundary modes M,N <= {}".format(k))
+    print("====================================")
+
+    objectives = [
+        # AspectRatio(eq=eq, target=6, weight=10),
+        Volume(eq=eqfam[-1], target=V0, weight=0.5),
+        # RotationalTransform(eq=eq, target=0.42, weight=10),
+        ObjectiveFromUser(
+            objective_from_user_fun,
+            eqfam[-1],
+            target=0,
+            weight=objective_from_user_weight,
+            grid=yancc_desc_grid,
+            deriv_mode="fwd",
+            # need this assuming manta only has vjp, if using jvp switch to fwd
+        ),
+    ]
+
+    objective = ObjectiveFunction(objectives)
+    objective.build(use_jit=False)
 
 
-def run_optimize(k, max_it=5, eq=eq, ax=ax):
-
-    R_modes = jnp.vstack(
+    R_modes = np.vstack(
         (
             [0, 0, 0],
             eq.surface.R_basis.modes[
-                jnp.max(jnp.abs(eq.surface.R_basis.modes), 1) > k, :
+                np.max(np.abs(eq.surface.R_basis.modes), 1) > k, :
             ],
         )
     )
     Z_modes = eq.surface.Z_basis.modes[
-        jnp.max(jnp.abs(eq.surface.Z_basis.modes), 1) > k, :
+        np.max(np.abs(eq.surface.Z_basis.modes), 1) > k, :
     ]
     constraints = [
-        ForceBalance(eq=eq),  # J x B - grad(p) = 0
+        ForceBalance(eq=eqfam[-1]),  # J x B - grad(p) = 0
         # fix zero current, eventually should use real bootstrap
-        FixCurrent(eq=eq),
+        FixCurrent(eq=eqfam[-1]),
         # Volume(eq=eq, target=V0), # fix volume of outer flux surface
-        FixBoundaryR(eq=eq, modes=R_modes),
-        FixBoundaryZ(eq=eq, modes=Z_modes),
-        FixPsi(eq=eq),  # fix total magnetic flux
+        FixBoundaryR(eq=eqfam[-1], modes=R_modes),
+        FixBoundaryZ(eq=eqfam[-1], modes=Z_modes),
+        FixPsi(eq=eqfam[-1]),  # fix total magnetic flux
         LinearObjectiveFromUser(
-            pressure_constraint_fun, eq, target=pressure_constraint_target
+            pressure_constraint_fun, eqfam[-1], target=pressure_constraint_target
         ),
     ]
-
     # print(objective.jac_scaled(objective.x(eq)))
-    eq, info_out = eq.optimize(
+    eq_out, info_out = eqfam[-1].optimize(
         objective=objective,
         constraints=constraints,
         optimizer="proximal-lsq-exact",
@@ -415,65 +421,57 @@ def run_optimize(k, max_it=5, eq=eq, ax=ax):
         copy=True,
     )
 
-    eq_optimized = eq.copy()
-    eqs.append(eq_optimized)
-    eq_optimized.save(eq_name + str(k) + "_optimized_equilibrium.h5")
     # %%
-    # final self consistency
-    niters = 2
-    for k in range(niters):
+    eqfam.append(eq_out.copy())
 
-        fig, ax = plot_1d(eq, "pressure", label="DESC " + str(k), ax=ax)
+eq_sc = eqfam[-1].copy()
+# final self consistency
+niters = 2
+for k in range(niters):
 
-        yancc_wrapper = yancc_data.from_eq(
-            points, eq=eq, nt=yancc_ntheta, nz=yancc_nzeta)
+    fig, ax = plot_1d(eq_sc, "pressure", label="DESC " + str(k), ax=ax)
 
-        st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-        st.run()
+    yancc_wrapper = yancc_data.from_eq(
+        points, eq=eq_sc, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res)
 
-        pi = st.getPressure()
+    st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+    st.run()
 
-        pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
-        ax.plot(pressure_rho, pi_manta, label="MANTA" + str(k))
-        eq.pressure = SplineProfile(pi_manta, pressure_rho)
-        # fit the current profile to a power series, with c_0=c_1=0
+    pi = st.getPressure()
 
-        # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])
-        # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
-        # re-solve the equilibrium
-        eq, _ = eq.solve(objective="force", x_scale="ess",
-                         optimizer="lsq-exact", verbose=3)
-    eqs.append(eq.copy())
-    return eq
+    pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
+    ax.plot(pressure_rho, pi_manta, label="MANTA" + str(k))
+    eq_sc.pressure = SplineProfile(pi_manta, pressure_rho)
+    # fit the current profile to a power series, with c_0=c_1=0
 
+    # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])
+    # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
+    # re-solve the equilibrium
+    eq_sc, _ = eq_sc.solve(objective="force", x_scale="ess",
+                        optimizer="lsq-exact", verbose=3)
 
-eq = run_optimize(1, eq=eq)
-eq = run_optimize(2, eq=eq)
-eq = run_optimize(4, eq=eq, max_it=10)
-
+eqfam.append(eq_sc)
 ax.legend()
 fig.savefig("final_pressure_comparison.png")
-eq_optimized_self_consistent = eq.copy()
 eqs.save(eq_name + "_all_equilibria.h5")
 # %%
-eq_optimized_self_consistent.save(eq_name + "_self_consistent_equilibrium.h5")
 
 # %%
 
 fig, ax = plot_comparison(
-    eqs=[eq_init, eq], labels=[
-        "Initial", "optimized", "self-consistent"]
+    eqs=[eq_init, eqfam[-1]], labels=[
+        "Initial", "self-consistent"]
 )
 fig.savefig("final_comparison.png")
 fig, ax = plot_boundaries(
-    eqs=[eq_init, eq], labels=[
+    eqs=[eq_init, eqfam[-1]], labels=[
         "Initial", "optimized", "self-consistent"]
 )
 fig.savefig("final_comparison_boundary.png")
 # %%
 # eq = desc.io.load("../python/eq2optimized_equilibrium.h5")#desc.examples.get("ESTELL")
 # plot_boozer_surface(eq_init, fieldlines=8)
-fig, ax = plot_boozer_surface(eq, fieldlines=8)
+fig, ax = plot_boozer_surface(eqfam[-1], fieldlines=8)
 fig.savefig("final_boozer_surface.png")
-fig, ax = plot_qs_error(eq)
+fig, ax = plot_qs_error(eqfam[-1])
 fig.savefig("final_qs_error.png")

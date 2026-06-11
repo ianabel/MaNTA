@@ -3,11 +3,12 @@
 
 #include "Types.hpp"
 
+#ifdef DEBUG
 // Eigen error messages are very unhelpful so we make our own
 // Mainly for debugging, but also to make sure we don't accidentally mess up shapes when copying from python
 template <typename A, typename B>
 static void checkShapeAndSet(A &&lhs, const B &rhs, std::optional<std::string> varname)
-{
+{   
     static_assert(std::is_base_of<Eigen::MatrixBase<typename std::decay<A>::type>, typename std::decay<A>::type>::value,
                   "Input lhs must be an Eigen Matrix or Matrix Expression");
     static_assert(std::is_base_of<Eigen::MatrixBase<typename std::decay<B>::type>, typename std::decay<B>::type>::value,
@@ -32,7 +33,13 @@ static void checkShapeAndSet(A &&lhs, const B &rhs, std::optional<std::string> v
         lhs = rhs;
     }
 }
-
+#else
+template <typename A, typename B>
+inline static void checkShapeAndSet(A &&lhs, const B &rhs, std::optional<std::string> varname)
+{
+    lhs = rhs;
+}
+#endif
 class State
 {
 public:
