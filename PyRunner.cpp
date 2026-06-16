@@ -263,6 +263,17 @@ void PyRunner::run_ss() {
   std::cout << "Done." << std::endl;
 }
 
+Vector PyRunner::G() {
+  if (adjoint == nullptr) {
+    throw std::runtime_error("\"G\" called but adjoint problem not set");
+  }
+  Vector Gout(adjoint->getNg());
+  for (Index gIndex = 0; gIndex < adjoint->getNg(); ++gIndex) {
+    Gout(gIndex) = adjoint->GFn(gIndex, system->yJac);
+  }
+  return Gout;
+}
+
 py::tuple PyRunner::getAdjointGradients(void) {
   if (adjoint == nullptr)
     throw std::runtime_error(

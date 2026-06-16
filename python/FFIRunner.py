@@ -1,12 +1,12 @@
 import enum
 import os
+
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".9"
 import jax
 import MaNTA
 import jax.numpy as jnp
-import enum
 
 
 class Platform(enum.IntEnum):
@@ -27,9 +27,9 @@ ffi_ops_names = [
     "get_solution",
     "get_adjoint_gradients",
     "get_g_val",
-    " run",
+    "run",
     "run_ss",
-]  # (op_name, use_gpu)
+]
 ffi_ops = {}
 
 
@@ -118,8 +118,10 @@ class FFIRunner(MaNTA.Runner):
 
     def Get_G(self):
         with jax.default_device(cpu_device):
-            jax.ffi.ffi_call(
-                ffi_ops["get_g_val"][Platform.CPU], [], has_side_effect=True
+            return jax.ffi.ffi_call(
+                ffi_ops["get_g_val"][Platform.CPU],
+                [jax.ShapeDtypeStruct((self.ng,), cpu_fp_dtype)],
+                has_side_effect=True,
             )(obj=self.get_address())
 
     def Get_adjoint_gradients(self):
@@ -172,4 +174,3 @@ class FFIRunner(MaNTA.Runner):
             )
         else:
             return cpu_call(points if points is not None else self.points, var)
-

@@ -133,5 +133,5 @@ def fun_jvp(primals, tangents):
 
 
 params_new = LinearDiffusionParams(0.1, 0.1, 0.0, 2.0)
-
+print(fun(params_new))
 print(jax.grad(fun)(params_new))
