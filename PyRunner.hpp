@@ -1,13 +1,10 @@
 #ifndef PYRUNNER_HPP
 #define PYRUNNER_HPP
 
-#include <iostream>
-#include <fstream>
-
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
 #include <pybind11/functional.h>
 #include <pybind11/numpy.h>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 #include <string_view>
 #include <variant>
@@ -19,56 +16,53 @@
 namespace py = pybind11;
 
 // Generic parameter
-template <typename T>
-struct Parameter
-{
-    bool required;
-    T _default = T();
+template <typename T> struct Parameter {
+  bool required;
+  T _default = T();
 };
 
-using ParameterType = std::variant<Parameter<double>,
-                                   Parameter<std::string>,
-                                   Parameter<int>,
-                                   Parameter<unsigned int>,
-                                   Parameter<bool>,
-                                   Parameter<std::vector<double>>>;
+using ParameterType =
+    std::variant<Parameter<double>, Parameter<std::string>, Parameter<int>,
+                 Parameter<unsigned int>, Parameter<bool>,
+                 Parameter<std::vector<double>>>;
 
 using map_t = std::map<std::string_view, ParameterType>;
 
-class PyRunner
-{
+class PyRunner {
 public:
-    /*
-        Creates runner object for running MaNTA from Python given a config dictionary
-        Takes constructed transport system as input
-    */
-    explicit PyRunner(std::shared_ptr<TransportSystem> problem) : pProblem(problem) {};
-    ~PyRunner() = default;
+  /*
+      Creates runner object for running MaNTA from Python given a config
+     dictionary Takes constructed transport system as input
+  */
+  explicit PyRunner(std::shared_ptr<TransportSystem> problem)
+      : pProblem(problem) {};
+  ~PyRunner() = default;
 
-    // Configure solver from Python
-    void configure(const py::dict &);
+  // Configure solver from Python
+  void configure(const py::dict &);
 
-    // Runs solver to time tFinal
-    void run(double tFinal);
+  // Runs solver to time tFinal
+  void run(double tFinal);
 
-    // Runs solver to steady state
-    void run_ss(void);
+  // Runs solver to steady state
+  void run_ss(void);
 
-    // Run adjoint solver and return tuple (G, G_p)
-    py::tuple getAdjointGradients(void);
+  // Run adjoint solver and return tuple (G, G_p)
+  py::tuple getAdjointGradients(void);
 
-    Vector getSolution(Index var, std::optional<std::vector<Position>> const &points);
+  Vector getSolution(Index var,
+                     std::optional<std::vector<Position>> const &points);
 
 private:
-    std::shared_ptr<TransportSystem> pProblem = nullptr;
-    std::unique_ptr<AdjointProblem> adjoint = nullptr;
+  std::shared_ptr<TransportSystem> pProblem = nullptr;
+  std::unique_ptr<AdjointProblem> adjoint = nullptr;
 
-    // Ownership of objects handled by C++
-    std::unique_ptr<SystemSolver> system;
-    std::unique_ptr<Grid> grid;
+  // Ownership of objects handled by C++
+  std::unique_ptr<SystemSolver> system;
+  std::unique_ptr<Grid> grid;
 
-    bool configured = false;
-    double steady_state_tolerance;
+  bool configured = false;
+  double steady_state_tolerance;
 };
 
 #endif

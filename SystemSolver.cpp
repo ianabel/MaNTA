@@ -6,9 +6,7 @@
 #include <Eigen/Core>
 #include <Eigen/Dense>
 #include <toml.hpp>
-#include <fstream>
 #include <iostream>
-#include <string>
 #include <boost/math/interpolators/barycentric_rational.hpp>
 
 #include "gridStructures.hpp"
@@ -30,7 +28,7 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSyst
     AUX_DOF = k + 1;
     localDOF = nVars * SQU_DOF + nAux * AUX_DOF;
 
-    std::cerr << "Total HDG degrees of freedom " << (localDOF)*nCells + (nCells + 1) * nVars + nScalars << std::endl;
+    log<LOG_LEVEL::INFO>("Total HDG degrees of freedom {}", (localDOF)*nCells + (nCells + 1) * nVars + nScalars );
     if (nScalars > 0)
     {
         v = new N_Vector[nScalars];
@@ -68,7 +66,7 @@ SystemSolver::~SystemSolver()
 
 void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 {
-    std::cerr << "Setting initial conditions" << std::endl;
+    log<LOG_LEVEL::INFO>("Setting initial conditions");
     t = t0;
     y.Map(N_VGetArrayPointer(Y));
     dydt.Map(N_VGetArrayPointer(dYdt));
@@ -1297,7 +1295,7 @@ void SystemSolver::computeAdjointGradients()
     const auto states = y.evalOnNodes();
 
     const Index np_internal = adjointProblem->getNpInternal();
-    std::cerr << "INFO: Computing adjoints for " << adjointProblem->getNp() << " parameters" << std::endl;
+    log<LOG_LEVEL::INFO>("Computing adjoints for {} parameters.", adjointProblem->getNp());
     for (Index i = 0; i < nVars; i++)
     {
         // We use the global state to hold the derivatives, replacing nVars with np

@@ -11,6 +11,7 @@
 #include <Eigen/Core>
 #include <Eigen/Dense>
 
+#include "Logging.hpp"
 #include <fstream>
 #include <memory>
 #include <optional>
