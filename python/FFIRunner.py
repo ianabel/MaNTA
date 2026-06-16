@@ -1,3 +1,8 @@
+import enum
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".9"
 import jax
 import MaNTA
 import jax.numpy as jnp

@@ -191,17 +191,3 @@ err /= nTangents
 
 print(f"Average error for {nTangents} iterations: {err}")
 plt.show()
-"""
-IDEA: 
-
-Source term f(x) = some sort of series
-
-need three test cases 
-1) adjoints are f(x) at each point
-2) adjoints are fourier coefficients
-Need a spatial paramter version, finite difference version, and a global version
-
-How do I compare the two cases? 
-
-What is the derivative that I need? 
-"""

@@ -22,10 +22,14 @@ python/Tests/__pycache__/
 python/Tests/.pytest_cache/
 python/.ipynb_checkpoints/
 python/random/
-tags
 .clangd
 .clang-format
 compile_commands.json
+*.png
+tags
+.clangd
+.clang-format
+compile_commands.json*.h5
 venv
 gmon.out
 *.sh

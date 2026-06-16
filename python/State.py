@@ -28,11 +28,14 @@ class State(eqx.Module):
 
     @classmethod 
     def from_manta(cls, manta_state):
+        shape = manta_state["Variable"].shape
+        dp = shape[0]
+        nscalars = 0 if manta_state["Scalars"] is None else manta_state["Scalars"].shape[0]
         return cls(Variable_=jnp.array(manta_state["Variable"]),
                    Derivative_=jnp.array(manta_state["Derivative"]),
                    Flux_=jnp.array(manta_state["Flux"]),
                    Aux_=jnp.array(manta_state["Aux"]),
-                   Scalars_=jnp.array(manta_state["Scalars"]))
+                   Scalars_=jnp.repeat(jnp.expand_dims(jnp.array(manta_state["Scalars"]),axis=0),repeats=dp-nscalars, axis=0))
     
     def to_manta(self):
         Scalars_out = self.Scalars if self.Scalars.size==0 else self.Scalars[0]
@@ -46,7 +49,7 @@ class State(eqx.Module):
     
     @staticmethod
     def vmap_axes():
-        return State(0,0,0,0,None)
+        return 0
     
 def MaNTA_Decorator(func):
     def wrapper(self, index, states, positions, *args):

@@ -1,24 +1,7 @@
 #include "PyRunner.hpp"
-
+#include "Logging.hpp"
 #include <pybind11/eigen.h>
-
 #include <string>
-
-#ifdef VERBOSE_OUTPUT
-#define MAX_LOG_LEVEL LOG_LEVEL::INFO
-#else
-#define MAX_LOG_LEVEL LOG_LEVEL::WARNING
-#endif
-
-enum class LOG_LEVEL { ERROR = 0, WARNING = 1, INFO = 2 };
-
-#define LOG(level, message)                                                    \
-  do {                                                                         \
-    if (static_cast<int>(level) <= static_cast<int>(MAX_LOG_LEVEL)) {          \
-      std::cerr << "[" << #level << "] " << message << std::endl;              \
-    }                                                                          \
-  } while (0)
-
 // Load restart data into vectors
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y,
                  std::vector<double> &dYdt);
@@ -80,17 +63,15 @@ T getValueWithDefault(std::string_view key, const py::dict &d) {
     try {
       return d[key.data()].cast<T>();
     } catch (const std::exception &e) {
-      throw std::runtime_error("The following error occured while trying "
-                               "to get the value of key: " +
-                               std::string(key) + " from config:\n" + e.what() +
-                               "\n");
+      throw std::runtime_error(
+          "The following error occured while trying to get the value of key: " +
+          std::string(key) + " from config:\n" + e.what() + "\n");
     }
   } else {
     try {
-      LOG(LOG_LEVEL::INFO, "INFO: Using default value for configuration "
-                           "option "
-                               << key);
-      return std::get<Parameter<T>>(params.at(key))._default;
+      auto val = std::get<Parameter<T>>(params.at(key))._default;
+      log<LOG_LEVEL::INFO>("Using default value {} for parameter {}", val, key);
+      return val;
     } catch (...) {
       throw std::runtime_error("Failed to retrieve default value for key: " +
                                std::string(key) + "; possible type mismatch.");
@@ -100,10 +81,9 @@ T getValueWithDefault(std::string_view key, const py::dict &d) {
 
 void PyRunner::configure(const py::dict &config) {
   if (!pProblem)
-    throw std::runtime_error("Transport system not set. Please set "
-                             "transport system before configuring solver.");
-  // Set stored problem to null to allow reconfiguration after object
-  // creation
+    throw std::runtime_error("Transport system not set. Please set transport "
+                             "system before configuring solver.");
+  // Set stored problem to null to allow reconfiguration after object creation
   system = nullptr;
   grid = nullptr;
 
@@ -114,11 +94,9 @@ void PyRunner::configure(const py::dict &config) {
         [&](const auto &v) {
           if (v.required && !config.contains(key.data())) {
             requiredParams +=
-                std::string(key) + ", "; // throw
-                                         // std::runtime_error("Required
-                                         // parameter: "
-                                         // + key + " not contained in
-                                         // config.");
+                std::string(key) +
+                ", "; // throw std::runtime_error("Required parameter: " + key +
+                      // " not contained in config.");
           }
         },
         val);
@@ -150,17 +128,15 @@ void PyRunner::configure(const py::dict &config) {
 
   unsigned int k = 1;
   if (!isRestarting) {
+
     k = getValueWithDefault<unsigned int>("Polynomial_degree", config);
 
     auto CellBoundaries =
         getValueWithDefault<std::vector<double>>("Grid_points", config);
 
     if (CellBoundaries.size() > 0) {
-      std::cerr << "INFO: Creating grid with cell boundaries "
-                   "at x = [";
-      for (const auto &p : CellBoundaries)
-        std::cerr << p << ", ";
-      std::cerr << "]" << std::endl;
+      log<LOG_LEVEL::INFO>("Creating grid with cell boundaries at x = [{}]",
+                           CellBoundaries);
 
       grid = std::make_unique<Grid>(CellBoundaries);
     } else {
@@ -179,10 +155,9 @@ void PyRunner::configure(const py::dict &config) {
           getValueWithDefault<double>("Upper_Boundary_Fraction", config);
 
       nCells = getValueWithDefault<int>("Grid_size", config);
-
-      LOG(LOG_LEVEL::INFO, "INFO: Grid configured with lower boundary at x = "
-                               << lBound
-                               << " and upper boundary at x = " << uBound);
+      log<LOG_LEVEL::INFO>("Grid configured with lower boundary at x = {} and "
+                           "upper boundary at x = {}",
+                           lBound, uBound);
 
       grid =
           std::make_unique<Grid>(lBound, uBound, nCells, highGridBoundary,
@@ -217,8 +192,8 @@ void PyRunner::configure(const py::dict &config) {
                        pProblem->getNumAux() * nCells * (k + 1);
 
     if (nDOF_file != nDOF)
-      throw std::invalid_argument("nVars/nAux/nScalars in restart file "
-                                  "inconsistent with physics case");
+      throw std::invalid_argument(
+          "nVars/nAux/nScalars in restart file inconsistent with physics case");
 
     pProblem->setRestartValues(Y, dYdt, *grid, k);
   }
@@ -258,7 +233,7 @@ void PyRunner::configure(const py::dict &config) {
   bool writeOutput = getValueWithDefault<bool>("WriteOutput", config);
 
   configured = true;
-  std::cerr << "Configuration done." << std::endl;
+  log<LOG_LEVEL::INFO>("Configuration done.");
 }
 
 void PyRunner::run(double tFinal) {
@@ -267,11 +242,9 @@ void PyRunner::run(double tFinal) {
         "Error: Runner must be configured before running solver.");
   }
   if (system->TerminateOnSteadyState) {
-    LOG(LOG_LEVEL::WARNING,
-        "WARNING: \"run\" called but TerminateOnSteadyState is set "
-        "to "
-        "true. If you intended to run to steady state please call "
-        "\"run_ss\". Running to passed tFinal");
+    log<LOG_LEVEL::WARNING>(
+        "\"run\" called but TerminateOnSteadyState is set to true. If you"
+        " intended to run to steady-state, call \"run_ss\"");
     system->TerminateOnSteadyState = false;
   }
   system->runSolver(tFinal);
@@ -290,18 +263,12 @@ void PyRunner::run_ss() {
   std::cout << "Done." << std::endl;
 }
 
-Vector PyRunner::G() {
-  Vector Gout(adjoint->getNg());
-  for (Index i = 0; i < adjoint->getNg(); i++)
-    Gout(i) = adjoint->GFn(i, system->yJac);
-  return Gout;
-}
-
 py::tuple PyRunner::getAdjointGradients(void) {
   if (adjoint == nullptr)
     throw std::runtime_error(
-        "\"getAdjointGradients\" called but adjoint problem not "
-        "set");
+        "\"getAdjointGradients\" called but adjoint problem not set");
+
+  // system->runAdjointSolve();
 
   auto np_internal = adjoint->getNpInternal();
 
@@ -333,8 +300,7 @@ PyRunner::getSolution(Index var,
       const auto &p = points.value()[i];
 
       if (p < grid->lowerBoundary() || p > grid->upperBoundary())
-        throw std::out_of_range("Requested point outside of grid "
-                                "boundaries");
+        throw std::out_of_range("Requested point outside of grid boundaries");
 
       sol(i) = system->yJac.u(var)(p);
     }
@@ -346,8 +312,7 @@ PyRunner::getSolution(Index var,
       const auto &p = points[i];
 
       if (p < grid->lowerBoundary() || p > grid->upperBoundary())
-        throw std::out_of_range("Requested point outside of grid "
-                                "boundaries");
+        throw std::out_of_range("Requested point outside of grid boundaries");
 
       sol(i) = system->y.u(var)(p);
     }

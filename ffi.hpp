@@ -67,19 +67,29 @@ inline void copyToBuffer(Buffer &&lhs, const T &rhs) {
   }
 }
 // can use either 64 or 32 bit math, based on jax config
-static ffi::Error run_ffi_impl(PyRunner *runner, ffi::BufferR0<fp_dtype> args) {
-  py::gil_scoped_acquire gil;
-  double tFinal = static_cast<double>(*args.typed_data());
-
-  runner->run(tFinal);
-  return ffi::Error::Success();
+static ffi::Error run_ffi_impl(PyRunner *runner, ffi::BufferR0<fp_dtype> args)
+{
+    py::gil_scoped_acquire gil;
+    double tFinal = static_cast<double>(*args.typed_data());
+    try {
+        runner->run(tFinal);
+    }
+    catch (const std::exception& e) {
+        return ffi::Error::Internal(e.what());
+    }
+    return ffi::Error::Success();
 };
 
 static ffi::Error run_ffi_ss_impl(PyRunner *runner) {
   py::gil_scoped_acquire gil;
 
-  runner->run_ss();
-  return ffi::Error::Success();
+    try {
+        runner->run_ss();
+    }
+    catch (const std::exception& e) {
+        return ffi::Error::Internal(e.what());
+    }
+    return ffi::Error::Success();
 };
 static ffi::Error get_g_val(PyRunner *runner,
                             ffi::Result<ffi::BufferR1<fp_dtype>> Gout) {
