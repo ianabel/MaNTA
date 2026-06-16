@@ -23,7 +23,9 @@ python/Tests/.pytest_cache/
 python/.ipynb_checkpoints/
 python/random/
 tags
-
+.clangd
+.clang-format
+compile_commands.json
 venv
 gmon.out
 *.sh

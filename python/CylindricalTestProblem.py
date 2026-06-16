@@ -57,8 +57,8 @@ class CylindricalTestProblem(VectorizedTransportSystem):
             # %%
             config = {
                 "OutputFilename": "CylindricalTestProblem",
-                "Polynomial_degree": 5,
-                "Grid_size": 10,
+                "Polynomial_degree": 4,
+                "Grid_size": 5,
                 "Lower_boundary": 0.0,
                 "Upper_boundary":  self.r_to_x(a),
                 "Relative_tolerance" : 0.001,
@@ -182,7 +182,7 @@ def make_jvp(coord_type):
     
     return obj
 
-k1 = jnp.linspace(0.1, 0.5, 5)
+k1 = jnp.linspace(0.1, 0.5, 10)
 dk = k1[1] - k1[0]
 gfunc = make_jvp("adf")
 g_out = []
@@ -196,8 +196,8 @@ for k in k1:
 plt.figure()
 plt.plot(k1,g_out)
 plt.figure()
-plt.plot(k1, jnp.gradient(jnp.array(g_out)/dk))
-plt.plot(k1, grad_g)
+plt.plot(k1, jnp.gradient(jnp.array(g_out)/dk),'ro')
+plt.plot(k1, grad_g, 'bx')
 plt.show()
 # ctp = CylindricalTestProblem(coord_type="rT")
 
