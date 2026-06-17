@@ -29,7 +29,8 @@ compile_commands.json
 tags
 .clangd
 .clang-format
-compile_commands.json*.h5
+compile_commands.json
+*.h5
 venv
 gmon.out
 *.sh
