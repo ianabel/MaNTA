@@ -62,6 +62,7 @@ private:
 
   bool configured = false;
   double steady_state_tolerance;
+  double fillValue = 1e-12;
 };
 
 #endif

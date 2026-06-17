@@ -35,6 +35,13 @@ namespace adjoint_test_suite
     struct systemsolver_adjoint_tests;
 }
 #endif
+using Logging::log;
+using Logging::LOG_LEVEL;
+enum class ISTATUS {
+  SUCCESS,
+  NEGATIVE_DGDT,
+  FAILURE,
+};
 
 class SystemSolver
 {
@@ -119,21 +126,26 @@ class SystemSolver
 
         static SystemSolver *ConstructFromConfig(std::string fname);
 
-        // Initialise
-        void runSolver(double);
+        //---------------------------Variable assiments-------------------------------
+        SUNLinearSolver LS = NULL; // linear solver memory structure
+        void *IDA_mem = NULL;	   // IDA memory structure
+        int retval;
 
-        // // Function for creating solver lambda for use in PyRunner
-        // std::function<void(double)> makeSolver(SUNLinearSolver &LS,   // linear solver memory structure
-        //                                        SUNMatrix& sunMat,     
-        //                                        void *IDA_mem,         // IDA memory structure
-        //                                        int &retval,
-        //                                        N_Vector &Y,           // vector for storing solution
-        //                                        N_Vector &dYdt,        // vector for storing time derivative of solution
-        //                                        N_Vector &constraints, // vector for storing constraints
-        //                                        N_Vector &id,          // vector for storing id (which elements are algebraic or differentiable)
-        //                                        N_Vector &res,         // vector for storing residual
-        //                                        N_Vector &absTolVec,   // vector for storing absolute tolerances
-        //                                        sunrealtype &tout, sunrealtype &tret, bool writeOutput = true); // return a callable solver object
+        N_Vector Y = NULL;			 // vector for storing solution
+        N_Vector dYdt = NULL;		 // vector for storing time derivative of solution
+        N_Vector constraints = NULL; // vector for storing constraints
+        N_Vector id = NULL;			 // vector for storing id (which elements are algebraic or differentiable)
+        N_Vector res = NULL;		 // vector for storing residual
+        N_Vector absTolVec = NULL;	 // vector for storing absolute tolerances
+        sunrealtype tout, tret;
+        SUNMatrix sunMat;
+        long int nresevals = 0;
+        // File streams
+        std::ofstream out0, dydt_out, res_out;
+
+        // Initialise
+        ISTATUS initialize();
+        void runSolver(double);
 
         void setAdjointProblem(AdjointProblem *ap) { adjointProblem = ap; };
         void runAdjointSolve();
@@ -150,6 +162,7 @@ class SystemSolver
         int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
 
         // Adjoints
+        bool optimizeMode = false;
         void setSolveAdjoint(bool a) { solveAdjoint = a; }
 
         void initializeMatricesForAdjointSolve();

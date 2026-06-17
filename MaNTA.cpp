@@ -302,7 +302,12 @@ int runManta(std::string const &fname)
 		double sst = toml::find<double>(config, "SteadyStateTolerance");
     log<LOG_LEVEL::INFO>("Running until steady state achieved (variation below {}) or end time reached.", sst);
 	}
-
+  ISTATUS status = system->initialize();
+  if (status == ISTATUS::FAILURE)
+  {
+    log<LOG_LEVEL::ERROR>("Error encountered in initialization; exiting.");
+    return 1;
+  }
 	system->runSolver(tFinal);
 
 	// For compiled-in TransportSystems we have the type information and

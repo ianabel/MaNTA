@@ -71,7 +71,7 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
 
     def g(self, state, x, params):
         u = state.Variable[0]
-        return 0.5 * u * u
+        return -0.5 * u * u
 
     def G(self):
         return self.runner.Get_G()
@@ -115,7 +115,6 @@ def runMaNTA(params):
 def fun(params):
     transportSystem = JAXLinearDiffusion(params)
 
-    transportSystem.run(tFinal=5.0)
     G = transportSystem.G()
     return G[0]
 

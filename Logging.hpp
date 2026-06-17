@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <string_view>
 
+namespace Logging {
 enum class LOG_LEVEL {
   ERROR,
   WARNING,
@@ -49,12 +50,13 @@ inline void log(std::format_string<Args...> msg, Args &&...args) {
       std::println(msg, std::forward<Args>(args)...);
     } else if constexpr (LEVEL == LOG_LEVEL::PDEBUG) {
 #ifdef DEBUG
-      std::print("{}: ", levelToString(LEVEL));
+      std::print(stderr, "{}: ", levelToString(LEVEL));
       std::println(stderr, msg, std::forward<Args>(args)...);
 #endif
     } else {
-      throw std::logic_error("Invalid log level specified.");
+      throw std::invalid_argument("Invalid log level specified.");
     }
   }
 }
+} // namespace Logging
 #endif // LOGGING_HPP

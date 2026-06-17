@@ -24,21 +24,8 @@ extern "C"
 int static_residual(sunrealtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data);
 int JacSetup(sunrealtype tt, sunrealtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3);
 
-void SystemSolver::runSolver(double tFinal)
+ISTATUS SystemSolver::initialize()
 {
-	//---------------------------Variable assiments-------------------------------
-	SUNLinearSolver LS = NULL; // linear solver memory structure
-	void *IDA_mem = NULL;	   // IDA memory structure
-	int retval;
-
-	N_Vector Y = NULL;			 // vector for storing solution
-	N_Vector dYdt = NULL;		 // vector for storing time derivative of solution
-	N_Vector constraints = NULL; // vector for storing constraints
-	N_Vector id = NULL;			 // vector for storing id (which elements are algebraic or differentiable)
-	N_Vector res = NULL;		 // vector for storing residual
-	N_Vector absTolVec = NULL;	 // vector for storing absolute tolerances
-	double delta_t = dt;
-	sunrealtype tout, tret;
 
 	if (!initialised)
 		initialiseMatrices();
@@ -47,42 +34,86 @@ void SystemSolver::runSolver(double tFinal)
 
 	IDA_mem = IDACreate(ctx);
 	if (ErrorChecker::check_retval((void *)IDA_mem, "IDACreate", 0))
-		throw std::runtime_error("Sundials Initialization Error");
+  {
+    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+    return ISTATUS::FAILURE;
+  }
 
 	retval = IDASetUserData(IDA_mem, static_cast<void *>(this));
 	if (ErrorChecker::check_retval(&retval, "IDASetUserData", 1))
-		throw std::runtime_error("Sundials Initialization Error");
+  {
+    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+    return ISTATUS::FAILURE;
+  }
 
 	//-----------------------------Initial conditions-------------------------------
 
 	// Set original vector lengths
 	Y = N_VNew_Serial(nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1), ctx);
 	if (ErrorChecker::check_retval((void *)Y, "N_VNew_Serial", 0))
-		throw std::runtime_error("Sundials Initialization Error");
+  {
+    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+    return ISTATUS::FAILURE;
+  }
 
 	dYdt = N_VClone(Y);
 	if (ErrorChecker::check_retval((void *)dYdt, "N_VClone", 0))
-		throw std::runtime_error("Sundials Initialization Error");
+  {
+    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+    return ISTATUS::FAILURE;
+  }
 
 	// Initialise Y and dYdt
 	setInitialConditions(Y, dYdt);
+
+  // If we are optimizing, we can determine if G is decreasing and avoid solving
+  if (optimizeMode)
+  {
+    if (!adjointProblem)
+    {
+      log<LOG_LEVEL::ERROR>("Optimize mode on but adjointProblem not set");
+      return ISTATUS::FAILURE;
+    }
+    Vector dGdt(adjointProblem->getNg());
+    for (Index gIndex = 0; gIndex < adjointProblem->getNg(); gIndex++)
+      dGdt(gIndex) = adjointProblem->GFn(gIndex, dydt);
+    
+    log<LOG_LEVEL::PDEBUG>("Initial dGdt = {}", dGdt);
+    for (const auto& dG : dGdt) 
+    {
+      if (dG < 0)
+      {
+        log<LOG_LEVEL::WARNING>("Negative value of dGdt = {} encountered; Optimize mode assumes that we are maximizing G, so a negative dGdt indicates a bad step.", dG);
+        return ISTATUS::NEGATIVE_DGDT;
+      }
+    }
+  }
 
 	// ----------------- Allocate and initialize all other sun-vectors. -------------
 
 	res = N_VClone(Y);
 	if (ErrorChecker::check_retval((void *)res, "N_VClone", 0))
-		std::runtime_error("Sundials initialization Error, run in debug to find");
+  {
+    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+    return ISTATUS::FAILURE;
+  }
 	// sunrealtype tRes;
 
 	// No constraints are imposed as negative coefficients may allow for a better fit across a cell
 	constraints = N_VClone(Y);
 	if (ErrorChecker::check_retval((void *)constraints, "N_VClone", 0))
-		std::runtime_error("Sundials initialization Error, run in debug to find");
+  {
+    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+    return ISTATUS::FAILURE;
+  }
 
 	// Specify only u as differential
 	id = N_VClone(Y);
 	if (ErrorChecker::check_retval((void *)id, "N_VClone", 0))
-		std::runtime_error("Sundials initialization Error, run in debug to find");
+  {
+    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+    return ISTATUS::FAILURE;
+  }
 
 	DGSoln isDifferential(nVars, grid, k, nScalars, nAux);
 	isDifferential.Map(N_VGetArrayPointer(id));
@@ -101,17 +132,26 @@ void SystemSolver::runSolver(double tFinal)
 
 	retval = IDASetId(IDA_mem, id);
 	if (ErrorChecker::check_retval(&retval, "IDASetId", 1))
-		std::runtime_error("Sundials initialization Error, run in debug to find");
+  {
+    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+    return ISTATUS::FAILURE;
+  }
 
 	// Initialise IDA
 	retval = IDAInit(IDA_mem, static_residual, t0, Y, dYdt);
 	if (ErrorChecker::check_retval(&retval, "IDAInit", 1))
-		std::runtime_error("Sundials initialization Error, run in debug to find");
+  {
+    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+    return ISTATUS::FAILURE;
+  }
 
 	// Set tolerances
 	absTolVec = N_VClone(Y);
 	if (ErrorChecker::check_retval((void *)absTolVec, "N_VClone", 0))
-		std::runtime_error("Sundials initialization Error, run in debug to find");
+  {
+    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+    return ISTATUS::FAILURE;
+  }
 	VectorWrapper absTolVals(N_VGetArrayPointer(absTolVec), N_VGetLength(absTolVec));
 	absTolVals.setZero();
 
@@ -151,9 +191,6 @@ void SystemSolver::runSolver(double tFinal)
 	for (Index i = 0; i < nScalars; ++i)
 		tolerances.Scalar(i) = atol[0];
 
-	// Steady-state stopping conditions
-	sunrealtype dydt_rel_tol = steady_state_tol;
-	sunrealtype dydt_abs_tol = 1e-3;
 
 	retval = IDAWFtolerances(IDA_mem, SystemSolver::getErrorWeights_static);
 	if (ErrorChecker::check_retval(&retval, "IDAWFtolerances", 1))
@@ -162,7 +199,7 @@ void SystemSolver::runSolver(double tFinal)
 	//--------------set up user-built objects------------------
 
 	// Use empty SunMatrix Object
-	SUNMatrix sunMat = SunMatrixNew(ctx);
+	sunMat = SunMatrixNew(ctx);
 
 	// The only linear solver wrapper ever constructed from this object so we can give it a pointer to 'this' and
 	// it won't hold it beyond the lifetime of this function call.
@@ -177,7 +214,7 @@ void SystemSolver::runSolver(double tFinal)
 
 	// Initialise text output and write out initial condition massaged by CalcIC
 	std::string baseName = inputFilePath.stem();
-	std::ofstream out0(baseName + ".dat");
+	out0.open(baseName + ".dat");
 
 	out0 << "# Time indexes blocks. " << std::endl;
 	out0 << "# Columns Headings: " << std::endl;
@@ -192,8 +229,6 @@ void SystemSolver::runSolver(double tFinal)
 			 << "\t"
 			 << "var" << v << " source";
 	out0 << std::endl;
-
-	std::ofstream dydt_out, res_out;
 
 	if (physics_debug)
 	{
@@ -214,14 +249,14 @@ void SystemSolver::runSolver(double tFinal)
 	//------------------------------Solve------------------------------
 	// Update initial solution to be within tolerance of the residual equation
 
-	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, dt0 > 0.0 ? dt0 : delta_t);
+  IDASetNonlinConvCoefIC(IDA_mem, 0.01);
+	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, dt0 > 0.0 ? dt0 : dt);
 	retval = 0;
 	if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
 	{
 		throw std::runtime_error("IDACalcIC could not complete");
 	}
 
-	long int nresevals = 0;
 	IDAGetNumResEvals(IDA_mem, &nresevals);
   log<LOG_LEVEL::INFO>("Number of Residual Evaluations due to IDACalcIC: {}", nresevals);
 
@@ -256,15 +291,23 @@ void SystemSolver::runSolver(double tFinal)
 	t = t0;
 	tout = t0;
 	tret = t0;
-	delta_t = dt;
 
 	if (problem->isRestarting()) // If restarting, try to continue at same delta t
 	{
-		IDASetInitStep(IDA_mem, delta_t);
+		IDASetInitStep(IDA_mem, dt);
 	}
 	if (dt0 > 0.0)
 		IDASetInitStep(IDA_mem, dt0);
 
+  IDASetEtaMax(IDA_mem, 3.0);
+  return ISTATUS::SUCCESS;
+}
+
+void SystemSolver::runSolver(double tFinal)
+{
+	// Steady-state stopping conditions
+	sunrealtype dydt_rel_tol = steady_state_tol;
+	sunrealtype dydt_abs_tol = 1e-3;
 	if (t0 > tFinal)
 	{
     log<LOG_LEVEL::ERROR>("Initial time t = {} is after the end of the simulation at t = {}", t0, tFinal);
@@ -274,7 +317,7 @@ void SystemSolver::runSolver(double tFinal)
 	// Solving Loop
 	while (tFinal - tret > min_step_size || TerminateOnSteadyState)
 	{
-		tout += delta_t;
+		tout += dt;
 		if (tout > tFinal && !TerminateOnSteadyState)
 			tout = tFinal; // Never ask for results beyond tFinal
 		retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
@@ -312,7 +355,7 @@ void SystemSolver::runSolver(double tFinal)
 			for (Index i = 0; i < nCells; i++)
 				for (Index v = 0; v < nVars; v++)
 				{
-					sunrealtype xi = dydt.lambda(v)[i] * delta_t;
+					sunrealtype xi = dydt.lambda(v)[i] * dt;
 					sunrealtype wi = 1.0 / (y.lambda(v)[i] * dydt_rel_tol + dydt_abs_tol);
 					dydt_norm += xi * xi * wi * wi;
 				}
@@ -352,9 +395,28 @@ void SystemSolver::runSolver(double tFinal)
 		res_out.close();
 	}
 	nc_output.Close();
-
+	std::string baseName = inputFilePath.stem();
 	WriteRestartFile(baseName + ".restart.nc", Y, dYdt, nOut);
+}
 
+void SystemSolver::runAdjointSolve()
+{
+	if (solveAdjoint)
+	{
+    log<LOG_LEVEL::INFO>("Computing adjoints");
+		initializeMatricesForAdjointSolve();
+		solveAdjointState(0);
+		computeAdjointGradients();
+	}
+	else
+	{
+    log<LOG_LEVEL::ERROR>("Error: runAdjointSolve called but \"solveAdjoint\" was set to false");
+	}
+}
+
+// Since we don't know if solve will ever be called, put all destruction of SUNDIALS objects in destructor
+SystemSolver::~SystemSolver()
+{
 	// No SunLinSol wrapper classes exist beyond this point, so we are safe in using raw pointers to construct them.
 	SUNLinSolFree(LS);
 
@@ -377,22 +439,23 @@ void SystemSolver::runSolver(double tFinal)
 	SUNContext_Free(&ctx);
 
 	nc_output.Close();
+
+    delete[] yJacMem;
+    delete[] dydtJacMem;
+    if (nScalars > 0)
+    {
+        for (Index i = 0; i < nScalars; ++i)
+        {
+            N_VDestroy(v[i]);
+            N_VDestroy(w[i]);
+        }
+        delete[] v;
+        delete[] w;
+    }
+    SUNContext_Free(&ctx);
 }
 
-void SystemSolver::runAdjointSolve()
-{
-	if (solveAdjoint)
-	{
-    log<LOG_LEVEL::INFO>("Computing adjoints");
-		initializeMatricesForAdjointSolve();
-		solveAdjointState(0);
-		computeAdjointGradients();
-	}
-	else
-	{
-    log<LOG_LEVEL::ERROR>("Error: runAdjointSolve called but \"solveAdjoint\" was set to false");
-	}
-}
+
 /*
  * SUNDIALS Calls this function to recompute the local Jacobian
  * This is the function that should set the point at which the sub-matrices for the Jacobian solve are evaluated

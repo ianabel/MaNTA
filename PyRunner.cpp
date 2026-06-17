@@ -1,6 +1,7 @@
 #include "PyRunner.hpp"
 #include "Logging.hpp"
 #include <pybind11/eigen.h>
+#include <stdexcept>
 #include <string>
 // Load restart data into vectors
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y,
@@ -233,7 +234,7 @@ void PyRunner::configure(const py::dict &config) {
   bool writeOutput = getValueWithDefault<bool>("WriteOutput", config);
 
   configured = true;
-  log<LOG_LEVEL::INFO>("Configuration done.");
+  log<LOG_LEVEL::INFO>("Configuration done");
 }
 
 void PyRunner::run(double tFinal) {
@@ -247,6 +248,7 @@ void PyRunner::run(double tFinal) {
         " intended to run to steady-state, call \"run_ss\"");
     system->TerminateOnSteadyState = false;
   }
+  system->initialize();
   system->runSolver(tFinal);
 
   std::cout << "Done." << std::endl;
@@ -258,6 +260,9 @@ void PyRunner::run_ss() {
         "Error: Runner must be configured before running solver.");
   }
   system->setSteadyStateTolerance(steady_state_tolerance);
+  ISTATUS status = system->initialize();
+  if (status == ISTATUS::FAILURE)
+    throw std::runtime_error("initialization error");
   system->runSolver(0);
 
   std::cout << "Done." << std::endl;
@@ -267,7 +272,25 @@ Vector PyRunner::G() {
   if (adjoint == nullptr) {
     throw std::runtime_error("\"G\" called but adjoint problem not set");
   }
+  if (!configured) {
+    throw std::runtime_error(
+        "Error: Runner must be configured before running solver.");
+  }
   Vector Gout(adjoint->getNg());
+  system->optimizeMode = true;
+  system->setSteadyStateTolerance(steady_state_tolerance);
+  ISTATUS status = system->initialize();
+  if (status == ISTATUS::FAILURE)
+    throw std::runtime_error("initialization error");
+
+  if (status == ISTATUS::NEGATIVE_DGDT) {
+    for (Index gIndex = 0; gIndex < adjoint->getNg(); ++gIndex)
+      Gout(gIndex) = fillValue;
+    return Gout;
+  }
+  system->runSolver(0);
+
+  std::cout << "Done." << std::endl;
   for (Index gIndex = 0; gIndex < adjoint->getNg(); ++gIndex) {
     Gout(gIndex) = adjoint->GFn(gIndex, system->yJac);
   }
