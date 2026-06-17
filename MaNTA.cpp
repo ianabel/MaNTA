@@ -306,6 +306,7 @@ int runManta(std::string const &fname)
   if (status == ISTATUS::FAILURE)
   {
     log<LOG_LEVEL::ERROR>("Error encountered in initialization; exiting.");
+    system->destroySundials();
     return 1;
   }
 	system->runSolver(tFinal);

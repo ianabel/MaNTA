@@ -286,6 +286,7 @@ Vector PyRunner::G() {
   if (status == ISTATUS::NEGATIVE_DGDT) {
     for (Index gIndex = 0; gIndex < adjoint->getNg(); ++gIndex)
       Gout(gIndex) = fillValue;
+    system->destroySundials();
     return Gout;
   }
   system->runSolver(0);

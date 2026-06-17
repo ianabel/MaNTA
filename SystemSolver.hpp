@@ -143,6 +143,8 @@ class SystemSolver
         // File streams
         std::ofstream out0, dydt_out, res_out;
 
+        void destroySundials();
+
         // Initialise
         ISTATUS initialize();
         void runSolver(double);
