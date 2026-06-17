@@ -76,7 +76,7 @@ atol = 1e-3
 # # %%
 solver_config = {
     "OutputFilename": "stellarator_opt0",
-    "Polynomial_degree": 4,
+    "Polynomial_degree": 3,
     "Grid_size": 4,
     "tau": 1.0,
     "Lower_boundary": 0.0,
@@ -98,15 +98,19 @@ config = {
     "Solver": solver_config,
 }
 
-points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"],
-                        solver_config["Grid_size"], solver_config["Polynomial_degree"])
+points = MaNTA.getNodes(
+    solver_config["Lower_boundary"],
+    solver_config["Upper_boundary"],
+    solver_config["Grid_size"],
+    solver_config["Polynomial_degree"],
+)
 
 
 yancc_rho = jnp.array(points)
 yancc_ntheta = 17
-yancc_nzeta = 33
+yancc_nzeta = 23
 
-yancc_res = {"na": 53, "nx": 5}
+yancc_res = {"na": 43, "nx": 5}
 
 # to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
 # + axis and lcfs
@@ -147,13 +151,14 @@ eq_init = eq.copy()
 V0 = eq.compute("V")["V"]
 # yancc_wrapper = yancc_data.from_eq(points, grid = yancc_grid,rho = yancc_rho, Density=Density, eq=eq_init, nt = yancc_ntheta, nz = yancc_nzeta)
 yancc_wrapper = yancc_data.from_eq(
-    points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res)
+    points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
+)
 
 # %%
 
 
 st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-plt.plot(points, 2./3. * st.InitialValue(0, points) / yancc_wrapper.Vp)
+plt.plot(points, 2.0 / 3.0 * st.InitialValue(0, points) / yancc_wrapper.Vp)
 
 # %%
 st.run()
@@ -163,7 +168,7 @@ st.run()
 solver_config = {
     "OutputFilename": fname,
     "RestartFile": "stellarator_opt0.restart.nc",
-    "Polynomial_degree": 4,
+    "Polynomial_degree": 3,
     "Grid_size": 4,
     "tau": 1.0,
     "Lower_boundary": 0.0,
@@ -195,7 +200,8 @@ for k in range(niters):
     fig, ax = plot_1d(eq2, "pressure", label="DESC " + str(k), ax=ax)
 
     yancc_wrapper = yancc_data.from_eq(
-        points, eq=eq2, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res)
+        points, eq=eq2, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
+    )
     pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
     st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
     st.run()
@@ -212,16 +218,14 @@ for k in range(niters):
     # re-solve the equilibrium
     eq2, _ = eq2.solve(objective="force", optimizer="lsq-exact", verbose=3)
     fam2.append(eq2)
-eqs.append(eq2)
+    eqs.append(eq2)
 eq_self_consistent = eq2.copy()
 
 ax.legend()
 fig.savefig("initial_self_consistent_pressure.png")
 # %%
 
-plot_comparison(
-    eqs=[eq_init, eq2], labels=["Initial", "self-consistent"]
-)
+plot_comparison(eqs=[eq_init, eq2], labels=["Initial", "self-consistent"])
 
 # %%
 eq = eq2.copy()
@@ -233,7 +237,7 @@ eq = eq2.copy()
 # %%
 solver_config = {
     "OutputFilename": fname,
-    "Polynomial_degree": 4,
+    "Polynomial_degree": 3,
     "Grid_size": 4,
     "tau": 1.0,
     "Lower_boundary": 0.0,
@@ -263,7 +267,7 @@ manta_objective = make_objective(config, yancc_res=yancc_res)
 
 
 def objective_from_user_fun(grid, data):
-  # note: don't change the signature to this function
+    # note: don't change the signature to this function
     yancc_dat = {
         "B_sup_t": data["B^theta"],
         "B_sup_z": data["B^zeta"],
@@ -287,14 +291,13 @@ def objective_from_user_fun(grid, data):
     yancc_dat["iota"] = grid.compress(data["iota"], surface_label="rho")
     yancc_dat["rho"] = grid.compress(grid.nodes[:, 0], surface_label="rho")
 
-    V = grid.compress(data['V(r)'])
-    V_r = grid.compress(data['V_r(r)'])
-    V_rr = grid.compress(data['V_rr(r)'])
-    Vp = V_r/V[-1]
-    Vpp = V_rr/V[-1]
+    V = grid.compress(data["V(r)"])
+    V_r = grid.compress(data["V_r(r)"])
+    V_rr = grid.compress(data["V_rr(r)"])
+    Vp = V_r / V[-1]
+    Vpp = V_rr / V[-1]
 
-    fields = jax.vmap(lambda d: yancc.field.Field(
-        **d, NFP=grid.NFP))(yancc_dat)
+    fields = jax.vmap(lambda d: yancc.field.Field(**d, NFP=grid.NFP))(yancc_dat)
 
     desc_pressure = grid.compress(data["p"], surface_label="rho")
 
@@ -326,8 +329,9 @@ def pressure_constraint_fun(params):
     # can modify this for other BC (eg fix p at rho=0.8)
     p_l = params["p_l"]
     dp0 = desc_pressure(Grid(jnp.zeros((1, 3)), jitable=True), p_l, dr=1)
-    p1 = desc_pressure(Grid(jnp.zeros((1, 3)).at[0, 0].set(
-        domain_boundary_rho), jitable=True), p_l)
+    p1 = desc_pressure(
+        Grid(jnp.zeros((1, 3)).at[0, 0].set(domain_boundary_rho), jitable=True), p_l
+    )
     return jnp.array([dp0, p1]).squeeze()
 
 
@@ -346,11 +350,11 @@ stored_energy_weight = 1.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()
-max_it = 8
+max_it = 7
 
 eqfam = EquilibriaFamily(eq)
-ks = [1, 2, eq.M + 1]
-for k in ks: 
+ks = [2, 4, eq.M + 1]
+for k in ks:
     print("\n==================================")
     print("Optimizing boundary modes M,N <= {}".format(k))
     print("====================================")
@@ -372,7 +376,6 @@ for k in ks:
 
     objective = ObjectiveFunction(objectives)
     objective.build(use_jit=False)
-
 
     R_modes = np.vstack(
         (
@@ -428,11 +431,11 @@ eq_sc = eqfam[-1].copy()
 # final self consistency
 niters = 2
 for k in range(niters):
-
     fig, ax = plot_1d(eq_sc, "pressure", label="DESC " + str(k), ax=ax)
 
     yancc_wrapper = yancc_data.from_eq(
-        points, eq=eq_sc, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res)
+        points, eq=eq_sc, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
+    )
 
     st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
     st.run()
@@ -447,8 +450,9 @@ for k in range(niters):
     # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])
     # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
     # re-solve the equilibrium
-    eq_sc, _ = eq_sc.solve(objective="force", x_scale="ess",
-                        optimizer="lsq-exact", verbose=3)
+    eq_sc, _ = eq_sc.solve(
+        objective="force", x_scale="ess", optimizer="lsq-exact", verbose=3
+    )
 
 eqfam.append(eq_sc)
 ax.legend()
@@ -459,13 +463,11 @@ eqs.save(eq_name + "_all_equilibria.h5")
 # %%
 
 fig, ax = plot_comparison(
-    eqs=[eq_init, eqfam[-1]], labels=[
-        "Initial", "self-consistent"]
+    eqs=[eq_init, eqfam[-1]], labels=["Initial", "self-consistent"]
 )
 fig.savefig("final_comparison.png")
 fig, ax = plot_boundaries(
-    eqs=[eq_init, eqfam[-1]], labels=[
-        "Initial", "optimized", "self-consistent"]
+    eqs=[eq_init, eqfam[-1]], labels=["Initial", "optimized", "self-consistent"]
 )
 fig.savefig("final_comparison_boundary.png")
 # %%
