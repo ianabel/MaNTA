@@ -30,7 +30,7 @@ double getFloatWithDefault(std::string const &name, toml::value const &config, d
 	auto confCount = config.count(name);
 	if (confCount == 0)
 	{
-    log<LOG_LEVEL::INFO>("Using default value {} for configuration option {}", defaultValue, name);
+    logmsg<LOG_LEVEL::INFO>("Using default value {} for configuration option {}", defaultValue, name);
 		return defaultValue;
 	}
 	else if (confCount > 1)
@@ -72,7 +72,7 @@ int getIntWithDefault(std::string const &name, toml::value const &config, int de
 	auto confCount = config.count(name);
 	if (confCount == 0)
 	{
-    log<LOG_LEVEL::INFO>("Using default value {} for configuration option {}", defaultValue, name);
+    logmsg<LOG_LEVEL::INFO>("Using default value {} for configuration option {}", defaultValue, name);
 		return defaultValue;
 	}
 	else if (confCount > 1)
@@ -93,7 +93,7 @@ int runManta(std::string const &fname)
 	std::filesystem::path config_file_path(fname);
 	if (!std::filesystem::exists(config_file_path))
 	{
-    log<LOG_LEVEL::ERROR>("Configuration file {} does not exist.", fname);
+    logmsg<LOG_LEVEL::ERROR>("Configuration file {} does not exist.", fname);
 		return 1;
 	}
 
@@ -118,7 +118,7 @@ int runManta(std::string const &fname)
 		}
 		catch (...)
 		{
-      log<LOG_LEVEL::ERROR>("Failed to open restart netCDF file at: {}", std::string(std::filesystem::absolute(std::filesystem::path(fileName))));
+      logmsg<LOG_LEVEL::ERROR>("Failed to open restart netCDF file at: {}", std::string(std::filesystem::absolute(std::filesystem::path(fileName))));
       return 1;
 		}
 	}
@@ -273,7 +273,7 @@ int runManta(std::string const &fname)
 
 	if (pProblem == nullptr)
 	{
-    log<LOG_LEVEL::ERROR>("Could not instantiate a physics model for TransportSystem = {}\n  Available physics models include:  ", ProblemName); 
+    logmsg<LOG_LEVEL::ERROR>("Could not instantiate a physics model for TransportSystem = {}\n  Available physics models include:  ", ProblemName); 
 		for (auto pair : *PhysicsCases::map)
 		{
 			std::cerr << '\t' << pair.first << std::endl;
@@ -300,7 +300,7 @@ int runManta(std::string const &fname)
 	if (config.count("SteadyStateTolerance") == 1)
 	{
 		double sst = toml::find<double>(config, "SteadyStateTolerance");
-    log<LOG_LEVEL::INFO>("Running until steady state achieved (variation below {}) or end time reached.", sst);
+    logmsg<LOG_LEVEL::INFO>("Running until steady state achieved (variation below {}) or end time reached.", sst);
 	}
 
 	system->runSolver(tFinal);

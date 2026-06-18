@@ -28,7 +28,7 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSyst
     AUX_DOF = k + 1;
     localDOF = nVars * SQU_DOF + nAux * AUX_DOF;
 
-    log<LOG_LEVEL::INFO>("Total HDG degrees of freedom {}", (localDOF)*nCells + (nCells + 1) * nVars + nScalars );
+    logmsg<LOG_LEVEL::INFO>("Total HDG degrees of freedom {}", (localDOF)*nCells + (nCells + 1) * nVars + nScalars );
     if (nScalars > 0)
     {
         v = new N_Vector[nScalars];
@@ -66,7 +66,7 @@ SystemSolver::~SystemSolver()
 
 void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 {
-    log<LOG_LEVEL::INFO>("Setting initial conditions");
+    logmsg<LOG_LEVEL::INFO>("Setting initial conditions");
     t = t0;
     y.Map(N_VGetArrayPointer(Y));
     dydt.Map(N_VGetArrayPointer(dYdt));
@@ -1295,7 +1295,7 @@ void SystemSolver::computeAdjointGradients()
     const auto states = y.evalOnNodes();
 
     const Index np_internal = adjointProblem->getNpInternal();
-    log<LOG_LEVEL::INFO>("Computing adjoints for {} parameters.", adjointProblem->getNp());
+    logmsg<LOG_LEVEL::INFO>("Computing adjoints for {} parameters.", adjointProblem->getNp());
     for (Index i = 0; i < nVars; i++)
     {
         // We use the global state to hold the derivatives, replacing nVars with np

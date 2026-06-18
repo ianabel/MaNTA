@@ -2,7 +2,7 @@
 #define STATE_HPP
 
 #include "Types.hpp"
-
+#include "Logging.hpp"
 #ifdef DEBUG
 // Eigen error messages are very unhelpful so we make our own
 // Mainly for debugging, but also to make sure we don't accidentally mess up
@@ -17,6 +17,7 @@ inline void checkShapeAndSet(A &&lhs, const B &rhs,
                                 typename std::decay<B>::type>::value,
                 "Input rhs must be an Eigen Matrix or Matrix Expression");
   if ((lhs.rows() == rhs.cols()) && (lhs.cols() == rhs.rows())) {
+    logmsg<LOG_LEVEL::WARNING>("Transposing when copying {}; this will lead to an error if compiled with DEBUG=off", varname.value_or("variable"));
     lhs = rhs.transpose();
   } else {
     const auto lhs_rows = lhs.rows();
@@ -44,6 +45,7 @@ inline void checkShapeAndSet(A &&lhs, const B &rhs,
   lhs = rhs;
 }
 #endif
+
 class State {
 public:
   State() = default;
@@ -82,44 +84,44 @@ public:
   explicit GlobalState(Index nCells, Index k, Index nv, Index ns = 0,
                        Index naux = 0) noexcept
       : nCells(nCells), k(k), nVars(nv), nScalars(ns), nAux(naux) {
-    _Variable.resize(nVars, nCells * (k + 1));
-    _Derivative.resize(nVars, nCells * (k + 1));
-    _Flux.resize(nVars, nCells * (k + 1));
-    _Aux.resize(nAux, nCells * (k + 1));
-    _Scalars.resize(nScalars);
+    m_Variable.resize(nVars, nCells * (k + 1));
+    m_Derivative.resize(nVars, nCells * (k + 1));
+    m_Flux.resize(nVars, nCells * (k + 1));
+    m_Aux.resize(nAux, nCells * (k + 1));
+    m_Scalars.resize(nScalars);
   }
 
   void setWithState(Index i, const State &s) {
-    _Variable.col(i) = s.Variable;
-    _Derivative.col(i) = s.Derivative;
-    _Flux.col(i) = s.Flux;
-    _Aux.col(i) = s.Aux;
-    _Scalars = s.Scalars;
+    m_Variable.col(i) = s.Variable;
+    m_Derivative.col(i) = s.Derivative;
+    m_Flux.col(i) = s.Flux;
+    m_Aux.col(i) = s.Aux;
+    m_Scalars = s.Scalars;
   }
 
   // Return state at point i
   State operator[](Index i) const {
     State out(nVars, nScalars, nAux);
 
-    out.Variable = _Variable.col(i);
-    out.Derivative = _Derivative.col(i);
-    out.Flux = _Flux.col(i);
-    out.Aux = _Aux.col(i);
-    out.Scalars = _Scalars;
+    out.Variable = m_Variable.col(i);
+    out.Derivative = m_Derivative.col(i);
+    out.Flux = m_Flux.col(i);
+    out.Aux = m_Aux.col(i);
+    out.Scalars = m_Scalars;
 
     return out;
   }
 
   // This is mainly for copying from python
   GlobalState &operator=(const GlobalState &other) {
-    checkShapeAndSet(_Variable, other.Variable(), "Variable");
-    checkShapeAndSet(_Derivative, other.Derivative(), "Derivative");
-    checkShapeAndSet(_Flux, other.Flux(), "Flux");
+    checkShapeAndSet(m_Variable, other.Variable(), "Variable");
+    checkShapeAndSet(m_Derivative, other.Derivative(), "Derivative");
+    checkShapeAndSet(m_Flux, other.Flux(), "Flux");
     if (nAux > 0) // Don't bother with Aux if nAux = 0
-      checkShapeAndSet(_Aux, other.Aux(), "Aux");
+      checkShapeAndSet(m_Aux, other.Aux(), "Aux");
     if (nScalars > 0)
-      if (_Scalars.size() == other.Scalars().size())
-        _Scalars = other.Scalars();
+      if (m_Scalars.size() == other.Scalars().size())
+        m_Scalars = other.Scalars();
       else
         throw std::runtime_error("Shape of input scalar array must match "
                                  "nScalars (length of input = " +
@@ -131,64 +133,64 @@ public:
       Variable
   */
   // Accessor methods for translating between python and C++
-  Matrix &Variable() { return _Variable; }
-  const Matrix &Variable() const { return _Variable; }
+  Matrix &Variable() { return m_Variable; }
+  const Matrix &Variable() const { return m_Variable; }
   // Accessor methods for getting elements at a point or in a cell
-  VectorRef Variable(Index i) { return _Variable.col(i); }
+  VectorRef Variable(Index i) { return m_Variable.col(i); }
   // Grabs data on a whole cell for Jacobian computation, **implicitly assumes
   // we're doing interpolation
   Eigen::Ref<Matrix> cellwiseVariable(Index cell) {
-    return _Variable(Eigen::all,
+    return m_Variable(Eigen::all,
                      Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
   }
 
   /*
       Derivative
   */
-  Matrix &Derivative() { return _Derivative; }
-  const Matrix &Derivative() const { return _Derivative; }
-  VectorRef Derivative(Index i) { return _Derivative.col(i); }
+  Matrix &Derivative() { return m_Derivative; }
+  const Matrix &Derivative() const { return m_Derivative; }
+  VectorRef Derivative(Index i) { return m_Derivative.col(i); }
   Eigen::Ref<Matrix> cellwiseDerivative(Index cell) {
-    return _Derivative(Eigen::all,
+    return m_Derivative(Eigen::all,
                        Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
   }
 
   /*
       Flux
   */
-  Matrix &Flux() { return _Flux; }
-  const Matrix &Flux() const { return _Flux; }
-  VectorRef Flux(Index i) { return _Flux.col(i); }
+  Matrix &Flux() { return m_Flux; }
+  const Matrix &Flux() const { return m_Flux; }
+  VectorRef Flux(Index i) { return m_Flux.col(i); }
   Eigen::Ref<Matrix> cellwiseFlux(Index cell) {
-    return _Flux(Eigen::all,
+    return m_Flux(Eigen::all,
                  Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
   }
 
   /*
       Aux
   */
-  Matrix &Aux() { return _Aux; }
-  const Matrix &Aux() const { return _Aux; }
-  VectorRef Aux(Index i) { return _Aux.col(i); }
+  Matrix &Aux() { return m_Aux; }
+  const Matrix &Aux() const { return m_Aux; }
+  VectorRef Aux(Index i) { return m_Aux.col(i); }
   Eigen::Ref<Matrix> cellwiseAux(Index cell) {
-    return _Aux(Eigen::all,
+    return m_Aux(Eigen::all,
                 Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
   }
 
   /*
       Scalars
   */
-  Vector &Scalars() { return _Scalars; }
-  const Vector &Scalars() const { return _Scalars; }
+  Vector &Scalars() { return m_Scalars; }
+  const Vector &Scalars() const { return m_Scalars; }
 
   size_t size() const { return static_cast<size_t>(nCells * (k + 1)); }
 
 private:
   // We hold global state data in matrices that are (nVars x nPoints)
-  Matrix _Variable, _Derivative, _Flux, _Aux;
+  Matrix m_Variable, m_Derivative, m_Flux, m_Aux;
 
   // Scalars are global so this is just a vector
-  Vector _Scalars;
+  Vector m_Scalars;
 
   // Hold sizes internally for checking & preallocating memory
   Index nCells, k, nVars, nScalars, nAux;

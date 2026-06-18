@@ -223,10 +223,10 @@ void SystemSolver::runSolver(double tFinal)
 
 	long int nresevals = 0;
 	IDAGetNumResEvals(IDA_mem, &nresevals);
-  log<LOG_LEVEL::INFO>("Number of Residual Evaluations due to IDACalcIC: {}", nresevals);
+  logmsg<LOG_LEVEL::INFO>("Number of Residual Evaluations due to IDACalcIC: {}", nresevals);
 
 	if (nresevals > 10)
-    log<LOG_LEVEL::WARNING>("IDACalcIC required {} residual evaluations. Check settings in {}", nresevals, std::string(inputFilePath));
+    logmsg<LOG_LEVEL::WARNING>("IDACalcIC required {} residual evaluations. Check settings in {}", nresevals, std::string(inputFilePath));
 
 	print(out0, t0, nOut, true);
 	if (physics_debug)
@@ -267,7 +267,7 @@ void SystemSolver::runSolver(double tFinal)
 
 	if (t0 > tFinal)
 	{
-    log<LOG_LEVEL::ERROR>("Initial time t = {} is after the end of the simulation at t = {}", t0, tFinal);
+    logmsg<LOG_LEVEL::ERROR>("Initial time t = {} is after the end of the simulation at t = {}", t0, tFinal);
 		throw std::runtime_error("Simulation ends before it begins.");
 	}
 
@@ -383,14 +383,14 @@ void SystemSolver::runAdjointSolve()
 {
 	if (solveAdjoint)
 	{
-    log<LOG_LEVEL::INFO>("Computing adjoints");
+    logmsg<LOG_LEVEL::INFO>("Computing adjoints");
 		initializeMatricesForAdjointSolve();
 		solveAdjointState(0);
 		computeAdjointGradients();
 	}
 	else
 	{
-    log<LOG_LEVEL::ERROR>("Error: runAdjointSolve called but \"solveAdjoint\" was set to false");
+    logmsg<LOG_LEVEL::ERROR>("Error: runAdjointSolve called but \"solveAdjoint\" was set to false");
 	}
 }
 /*

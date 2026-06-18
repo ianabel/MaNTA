@@ -70,7 +70,7 @@ T getValueWithDefault(std::string_view key, const py::dict &d) {
   } else {
     try {
       auto val = std::get<Parameter<T>>(params.at(key))._default;
-      log<LOG_LEVEL::INFO>("Using default value {} for parameter {}", val, key);
+      logmsg<LOG_LEVEL::INFO>("Using default value {} for parameter {}", val, key);
       return val;
     } catch (...) {
       throw std::runtime_error("Failed to retrieve default value for key: " +
@@ -135,7 +135,7 @@ void PyRunner::configure(const py::dict &config) {
         getValueWithDefault<std::vector<double>>("Grid_points", config);
 
     if (CellBoundaries.size() > 0) {
-      log<LOG_LEVEL::INFO>("Creating grid with cell boundaries at x = [{}]",
+      logmsg<LOG_LEVEL::INFO>("Creating grid with cell boundaries at x = [{}]",
                            CellBoundaries);
 
       grid = std::make_unique<Grid>(CellBoundaries);
@@ -155,7 +155,7 @@ void PyRunner::configure(const py::dict &config) {
           getValueWithDefault<double>("Upper_Boundary_Fraction", config);
 
       nCells = getValueWithDefault<int>("Grid_size", config);
-      log<LOG_LEVEL::INFO>("Grid configured with lower boundary at x = {} and "
+      logmsg<LOG_LEVEL::INFO>("Grid configured with lower boundary at x = {} and "
                            "upper boundary at x = {}",
                            lBound, uBound);
 
@@ -233,7 +233,7 @@ void PyRunner::configure(const py::dict &config) {
   bool writeOutput = getValueWithDefault<bool>("WriteOutput", config);
 
   configured = true;
-  log<LOG_LEVEL::INFO>("Configuration done.");
+  logmsg<LOG_LEVEL::INFO>("Configuration done.");
 }
 
 void PyRunner::run(double tFinal) {
@@ -242,7 +242,7 @@ void PyRunner::run(double tFinal) {
         "Error: Runner must be configured before running solver.");
   }
   if (system->TerminateOnSteadyState) {
-    log<LOG_LEVEL::WARNING>(
+    logmsg<LOG_LEVEL::WARNING>(
         "\"run\" called but TerminateOnSteadyState is set to true. If you"
         " intended to run to steady-state, call \"run_ss\"");
     system->TerminateOnSteadyState = false;
