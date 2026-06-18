@@ -642,7 +642,7 @@ void SystemSolver::updateMatricesForJacSolve() {
     problem->dSigma(i, dSigma_vals[i], states, points, jt);
     problem->dSources(i, dSource_vals[i], states, points, jt);
   }
-
+#pragma omp parallel for
   for (unsigned int i = 0; i < nCells; i++) {
 
     Eigen::MatrixXd X(nVars * (k + 1), nVars * (k + 1));
@@ -997,7 +997,7 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt,
   wgt = N_VClone(resval);
   getErrorWeights(Y, wgt);
   double residual_val = N_VWrmsNorm(resval, wgt);
-  log<LOG_LEVEL::ERROR>("Residual norm at t = {}: {}",tres, residual_val);
+  log<LOG_LEVEL::ERROR>("Residual norm at t = {}: {}", tres, residual_val);
   updateBoundaryConditions(tres);
 
   DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux);
