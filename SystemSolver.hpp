@@ -143,6 +143,8 @@ class SystemSolver
         // File streams
         std::ofstream out0, dydt_out, res_out;
 
+        void destroySundials();
+
         // Initialise
         ISTATUS initialize();
         void runSolver(double);
@@ -162,7 +164,6 @@ class SystemSolver
         int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
 
         // Adjoints
-        bool optimizeMode = false;
         void setSolveAdjoint(bool a) { solveAdjoint = a; }
 
         void initializeMatricesForAdjointSolve();
@@ -252,6 +253,8 @@ class SystemSolver
         void dGdsigma_Vec(Index, Vector &, DGSoln const &, Index);
         void dGdaux_Vec(Index, Vector &, DGSoln const &, Index);
 
+        //------------------------Private Settings--------------------------------
+
         double resNorm = 0.0; // Exclusively for unit testing purposes
 
         double dt;
@@ -264,20 +267,30 @@ class SystemSolver
 
         double alpha = 1.0;
         bool testing = false;
+        bool optimizeMode = false;
+        bool aggressiveTimesteps = false;
 
         // Why do we need to know? Surely everything is encoded in the construction of the Grid, which is done elsewhere?
         bool highGridBoundary = true;
 
         bool solveAdjoint = false; 
+        bool TerminateOnSteadyState = false;
+        double steady_state_tol = 1e-3;
+
+        // Tau
+        double tauc;
+        double tau(double x) const { return tauc; };
+
+        std::filesystem::path inputFilePath;
+        double dt0 = 0.0; // optional initial dt 
+        int nOut;
+        double min_step_size;
 
         // Hide all physics-specific info in here
         TransportSystem *problem = nullptr;
    
         AdjointProblem *adjointProblem = nullptr;
 
-        // Tau
-        double tauc;
-        double tau(double x) const { return tauc; };
 
         double rtol;
         std::vector<double> atol;
@@ -293,8 +306,6 @@ class SystemSolver
         U_DOF, Q_DOF, AUX_DOF, SQU_DOF;
         size_t localDOF;
 
-        bool TerminateOnSteadyState = false;
-        double steady_state_tol = 1e-3;
 #ifdef PHYSICS_DEBUG
         constexpr static bool physics_debug = true;
 #else
@@ -308,10 +319,6 @@ class SystemSolver
         friend struct adjoint_test_suite::systemsolver_adjoint_tests;
 #endif
 
-        std::filesystem::path inputFilePath;
-        double dt0 = 0.0; // initial dt for CalcIC
-        int nOut;
-        double min_step_size;
 
         int getErrorWeights( N_Vector y, N_Vector ewt );
         static int getErrorWeights_static( N_Vector, N_Vector, void * );

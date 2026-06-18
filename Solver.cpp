@@ -292,14 +292,10 @@ ISTATUS SystemSolver::initialize()
 	tout = t0;
 	tret = t0;
 
-	if (problem->isRestarting()) // If restarting, try to continue at same delta t
-	{
-		IDASetInitStep(IDA_mem, dt);
-	}
 	if (dt0 > 0.0)
 		IDASetInitStep(IDA_mem, dt0);
-
-  IDASetEtaMax(IDA_mem, 3.0);
+  if (aggressiveTimesteps)
+    IDASetEtaMax(IDA_mem, 4.0); // Default is 2.0
   return ISTATUS::SUCCESS;
 }
 
@@ -414,8 +410,7 @@ void SystemSolver::runAdjointSolve()
 	}
 }
 
-// Since we don't know if solve will ever be called, put all destruction of SUNDIALS objects in destructor
-SystemSolver::~SystemSolver()
+void SystemSolver::destroySundials()
 {
 	// No SunLinSol wrapper classes exist beyond this point, so we are safe in using raw pointers to construct them.
 	SUNLinSolFree(LS);
@@ -438,23 +433,7 @@ SystemSolver::~SystemSolver()
 
 	SUNContext_Free(&ctx);
 
-	nc_output.Close();
-
-    delete[] yJacMem;
-    delete[] dydtJacMem;
-    if (nScalars > 0)
-    {
-        for (Index i = 0; i < nScalars; ++i)
-        {
-            N_VDestroy(v[i]);
-            N_VDestroy(w[i]);
-        }
-        delete[] v;
-        delete[] w;
-    }
-    SUNContext_Free(&ctx);
 }
-
 
 /*
  * SUNDIALS Calls this function to recompute the local Jacobian

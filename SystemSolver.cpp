@@ -49,6 +49,21 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum,
   }
   initialised = false; // Need to know tau to call this
 }
+
+SystemSolver::~SystemSolver() {
+
+  delete[] yJacMem;
+  delete[] dydtJacMem;
+  if (nScalars > 0) {
+    for (Index i = 0; i < nScalars; ++i) {
+      N_VDestroy(v[i]);
+      N_VDestroy(w[i]);
+    }
+    delete[] v;
+    delete[] w;
+  }
+}
+
 void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt) {
   log<LOG_LEVEL::INFO>("Setting initial conditions");
   t = t0;
@@ -627,7 +642,7 @@ void SystemSolver::updateMatricesForJacSolve() {
     problem->dSigma(i, dSigma_vals[i], states, points, jt);
     problem->dSources(i, dSource_vals[i], states, points, jt);
   }
-
+#pragma omp parallel for
   for (unsigned int i = 0; i < nCells; i++) {
 
     Eigen::MatrixXd X(nVars * (k + 1), nVars * (k + 1));
@@ -979,6 +994,10 @@ int static_residual(sunrealtype tres, N_Vector Y, N_Vector dYdt,
 
 int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt,
                            N_Vector resval) {
+  wgt = N_VClone(resval);
+  getErrorWeights(Y, wgt);
+  double residual_val = N_VWrmsNorm(resval, wgt);
+  log<LOG_LEVEL::ERROR>("Residual norm at t = {}: {}", tres, residual_val);
   updateBoundaryConditions(tres);
 
   DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux);

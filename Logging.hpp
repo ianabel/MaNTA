@@ -31,7 +31,7 @@ constexpr std::string_view levelToString(LOG_LEVEL level) {
 #ifdef DEBUG
 constexpr static LOG_LEVEL max_log_level = LOG_LEVEL::PDEBUG;
 #elif defined(VERBOSE)
-constexpr static LOG_LEVEL max_log_level = static_cast<LOG_LEVEL>(VERBOSE);
+constexpr static LOG_LEVEL max_log_level = LOG_LEVEL::INFO;
 #else
 constexpr static LOG_LEVEL max_log_level = LOG_LEVEL::WARNING;
 #endif
