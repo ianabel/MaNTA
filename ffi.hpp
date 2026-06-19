@@ -150,9 +150,11 @@ static void copyToBufferCUDA(cudaStream_t stream, Buffer &&lhs, const T &rhs) {
     if constexpr (Eigen::MatrixBase<
                       typename std::decay<T>::type>::IsVectorAtCompileTime) {
       for (Index i = 0; i < rhs.size(); i++)
+      {
         float tmp = static_cast<float>(rhs(i));
       cudaMemcpyAsync(&lhs->typed_data()[i], &tmp, sizeof(float),
                       cudaMemcpyHostToDevice, stream);
+      }
     } else {
       // otherwise assume it's a Matrix
       auto const lhs_dim = lhs->dimensions();
@@ -163,7 +165,7 @@ static void copyToBufferCUDA(cudaStream_t stream, Buffer &&lhs, const T &rhs) {
         for (Index j = 0; j < rhs.cols(); j++) {
           float tmp = static_cast<float>(rhs(i, j));
           auto const idx =
-              i * out_dim.back() +
+              i * lhs_dim.back() +
               j; // formula for indexing into 2D
                  // buffer:
                  // https://github.com/openxla/xla/blob/main/xla/tests/custom_call_test.cc#L1577
@@ -172,106 +174,108 @@ static void copyToBufferCUDA(cudaStream_t stream, Buffer &&lhs, const T &rhs) {
         }
     }
   }
+}
 
-  static ffi::Error get_adjoint_gradients_ffi_impl_cuda(
-      cudaStream_t stream, PyRunner * runner,
-      ffi::Result<ffi::BufferR1<fp_dtype_cuda>> Gout,
-      ffi::Result<ffi::BufferR2<fp_dtype_cuda>> G_p_out,
-      std::optional<ffi::Result<ffi::BufferR1<fp_dtype_cuda>>>
-          G_p_boundary_out) {
-    py::gil_scoped_acquire gil;
-    py::tuple result = runner->getAdjointGradients();
-    auto G = result[0].cast<Vector>();
-    copyToBufferCUDA(stream, Gout, G) py::dict G_p = result[1];
-    auto G_p_internal = G_p["G_p"].cast<Matrix>();
-    copyToBufferCUDA(stream, G_p_out, G_p_internal);
-    if (G_p.contains("G_p_boundary")) {
-      auto G_p_boundary = G_p["G_p_boundary"].cast<Vector>();
-      copyToBufferCUDA(stream, G_p_boundary_out.value(), G_p_boundary);
-    }
+static ffi::Error get_adjoint_gradients_ffi_impl_cuda(
+    cudaStream_t stream, PyRunner * runner,
+    ffi::Result<ffi::BufferR1<fp_dtype_cuda>> Gout,
+    ffi::Result<ffi::BufferR2<fp_dtype_cuda>> G_p_out,
+    std::optional<ffi::Result<ffi::BufferR1<fp_dtype_cuda>>>
+        G_p_boundary_out) {
+  py::gil_scoped_acquire gil;
+  py::tuple result = runner->getAdjointGradients();
+  auto G = result[0].cast<Vector>();
+  copyToBufferCUDA(stream, Gout, G);
+  py::dict G_p = result[1];
+  auto G_p_internal = G_p["G_p"].cast<Matrix>();
+  copyToBufferCUDA(stream, G_p_out, G_p_internal);
+  if (G_p.contains("G_p_boundary")) {
+    auto G_p_boundary = G_p["G_p_boundary"].cast<Vector>();
+    copyToBufferCUDA(stream, G_p_boundary_out.value(), G_p_boundary);
+  }
+  cudaStreamSynchronize(stream);
+  return ffi::Error::Success();
+};
+
+static ffi::Error get_solution_ffi_impl_cuda(
+    cudaStream_t stream, PyRunner * runner, ffi::Buffer<i_dtype_cuda> var,
+    std::optional<ffi::BufferR1<fp_dtype_cuda>> points,
+    ffi::Result<ffi::BufferR1<fp_dtype_cuda>> out) {
+  // auto runner = static_cast<PyRunner *>(obj);
+  py::gil_scoped_acquire gil;
+  int var_index;
+  cudaMemcpyAsync(&var_index, var.typed_data(), sizeof(int),
+                  cudaMemcpyDeviceToHost, stream);
+  cudaStreamSynchronize(stream);
+
+  if (points) {
+    int num_points = points.value().element_count();
+    std::vector<float> points_vec(num_points);
+    cudaMemcpyAsync(points_vec.data(), points.value().typed_data(),
+                    num_points * sizeof(float), cudaMemcpyDeviceToHost,
+                    stream);
+    cudaStreamSynchronize(stream);
+    std::vector<double> points_double(points_vec.begin(), points_vec.end());
+    Vector result = runner->getSolution(var_index, points_double);
+    copyToBufferCUDA(stream, out, result);
     cudaStreamSynchronize(stream);
     return ffi::Error::Success();
-  };
+  } else {
+    Vector result = runner->getSolution(var_index, std::nullopt);
 
-  static ffi::Error get_solution_ffi_impl_cuda(
-      cudaStream_t stream, PyRunner * runner, ffi::Buffer<i_dtype_cuda> var,
-      std::optional<ffi::BufferR1<fp_dtype_cuda>> points,
-      ffi::Result<ffi::BufferR1<fp_dtype_cuda>> out) {
-    // auto runner = static_cast<PyRunner *>(obj);
-    py::gil_scoped_acquire gil;
-    int var_index;
-    cudaMemcpyAsync(&var_index, var.typed_data(), sizeof(int),
-                    cudaMemcpyDeviceToHost, stream);
+    copyToBufferCUDA(stream, out, result);
     cudaStreamSynchronize(stream);
-
-    if (points) {
-      int num_points = points.value().element_count();
-      std::vector<float> points_vec(num_points);
-      cudaMemcpyAsync(points_vec.data(), points.value().typed_data(),
-                      num_points * sizeof(float), cudaMemcpyDeviceToHost,
-                      stream);
-      cudaStreamSynchronize(stream);
-      std::vector<double> points_double(points_vec.begin(), points_vec.end());
-      Vector result = runner->getSolution(var_index, points_double);
-      copyToBufferCUDA(stream, out, result);
-      cudaStreamSynchronize(stream);
-      return ffi::Error::Success();
-    } else {
-      Vector result = runner->getSolution(var_index, std::nullopt);
-
-      copyToBufferCUDA(stream, out, result);
-      cudaStreamSynchronize(stream);
-      return ffi::Error::Success();
-    }
-  };
+    return ffi::Error::Success();
+  }
+};
 #endif
 
-  XLA_FFI_DEFINE_HANDLER_SYMBOL(run_ffi_ops, run_ffi_impl,
-                                ffi::Ffi::Bind()
-                                    .Attr<ffi::Pointer<PyRunner>>("obj")
-                                    .Arg<ffi::BufferR0<fp_dtype>>());
+XLA_FFI_DEFINE_HANDLER_SYMBOL(run_ffi_ops, run_ffi_impl,
+                              ffi::Ffi::Bind()
+                                  .Attr<ffi::Pointer<PyRunner>>("obj")
+                                  .Arg<ffi::BufferR0<fp_dtype>>());
 
-  XLA_FFI_DEFINE_HANDLER_SYMBOL(
-      run_ss_ffi_ops, run_ffi_ss_impl,
-      ffi::Ffi::Bind().Attr<ffi::Pointer<PyRunner>>("obj"));
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    run_ss_ffi_ops, run_ffi_ss_impl,
+    ffi::Ffi::Bind().Attr<ffi::Pointer<PyRunner>>("obj"));
 
-  XLA_FFI_DEFINE_HANDLER_SYMBOL(get_adjoint_gradients_ffi_ops,
-                                get_adjoint_gradients_ffi_impl,
-                                ffi::Ffi::Bind()
-                                    .Attr<ffi::Pointer<PyRunner>>("obj")
-                                    .Ret<ffi::BufferR1<fp_dtype>>()
-                                    .Ret<ffi::BufferR2<fp_dtype>>()
-                                    .OptionalRet<ffi::BufferR1<fp_dtype>>());
+XLA_FFI_DEFINE_HANDLER_SYMBOL(get_adjoint_gradients_ffi_ops,
+                              get_adjoint_gradients_ffi_impl,
+                              ffi::Ffi::Bind()
+                                  .Attr<ffi::Pointer<PyRunner>>("obj")
+                                  .Ret<ffi::BufferR1<fp_dtype>>()
+                                  .Ret<ffi::BufferR2<fp_dtype>>()
+                                  .OptionalRet<ffi::BufferR1<fp_dtype>>());
 
-  XLA_FFI_DEFINE_HANDLER_SYMBOL(get_g_val_ffi_ops, get_g_val,
-                                ffi::Ffi::Bind()
-                                    .Attr<ffi::Pointer<PyRunner>>("obj")
-                                    .Ret<ffi::BufferR1<fp_dtype>>());
+XLA_FFI_DEFINE_HANDLER_SYMBOL(get_g_val_ffi_ops, get_g_val,
+                              ffi::Ffi::Bind()
+                                  .Attr<ffi::Pointer<PyRunner>>("obj")
+                                  .Ret<ffi::BufferR1<fp_dtype>>());
 
-  XLA_FFI_DEFINE_HANDLER_SYMBOL(get_solution_ffi_ops, get_solution_ffi_impl,
-                                ffi::Ffi::Bind()
-                                    .Attr<ffi::Pointer<PyRunner>>("obj")
-                                    .Arg<ffi::Buffer<i_dtype>>()
-                                    .OptionalArg<ffi::BufferR1<fp_dtype>>()
-                                    .Ret<ffi::BufferR1<fp_dtype>>());
+XLA_FFI_DEFINE_HANDLER_SYMBOL(get_solution_ffi_ops, get_solution_ffi_impl,
+                              ffi::Ffi::Bind()
+                                  .Attr<ffi::Pointer<PyRunner>>("obj")
+                                  .Arg<ffi::Buffer<i_dtype>>()
+                                  .OptionalArg<ffi::BufferR1<fp_dtype>>()
+                                  .Ret<ffi::BufferR1<fp_dtype>>());
 
 #ifdef CUDA
-  XLA_FFI_DEFINE_HANDLER_SYMBOL(
-      get_adjoint_gradients_ffi_ops_cuda, get_adjoint_gradients_ffi_impl_cuda,
-      ffi::Ffi::Bind()
-          .Ctx<ffi::PlatformStream<cudaStream_t>>()
-          .Attr<ffi::Pointer<PyRunner>>("obj")
-          .Ret<ffi::BufferR1<fp_dtype_cuda>>()
-          .Ret<ffi::BufferR2<fp_dtype_cuda>>()
-          .OptionalRet<ffi::BufferR1<fp_dtype_cuda>>());
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    get_adjoint_gradients_ffi_ops_cuda, get_adjoint_gradients_ffi_impl_cuda,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<ffi::Pointer<PyRunner>>("obj")
+        .Ret<ffi::BufferR1<fp_dtype_cuda>>()
+        .Ret<ffi::BufferR2<fp_dtype_cuda>>()
+        .OptionalRet<ffi::BufferR1<fp_dtype_cuda>>());
 
-  XLA_FFI_DEFINE_HANDLER_SYMBOL(get_solution_ffi_ops_cuda,
-                                get_solution_ffi_impl_cuda,
-                                ffi::Ffi::Bind()
-                                    .Ctx<ffi::PlatformStream<cudaStream_t>>()
-                                    .Attr<ffi::Pointer<PyRunner>>("obj")
-                                    .Arg<ffi::Buffer<i_dtype_cuda>>()
-                                    .OptionalArg<ffi::BufferR1<fp_dtype_cuda>>()
-                                    .Ret<ffi::BufferR1<fp_dtype_cuda>>());
+XLA_FFI_DEFINE_HANDLER_SYMBOL(get_solution_ffi_ops_cuda,
+                              get_solution_ffi_impl_cuda,
+                              ffi::Ffi::Bind()
+                                  .Ctx<ffi::PlatformStream<cudaStream_t>>()
+                                  .Attr<ffi::Pointer<PyRunner>>("obj")
+                                  .Arg<ffi::Buffer<i_dtype_cuda>>()
+                                  .OptionalArg<ffi::BufferR1<fp_dtype_cuda>>()
+                                  .Ret<ffi::BufferR1<fp_dtype_cuda>>());
 #endif
 #endif // FFI_HPP

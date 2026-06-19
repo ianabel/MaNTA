@@ -60,6 +60,7 @@ def make_objective(config, yancc_res=None):
     # solver_config["delta_t"] / 10000.0
     grad_solver_config["initialTimestep"] = 1e-6
     grad_solver_config["restart"] = True
+    grad_solver_config["solveAdjoint"] = True
 
     grad_config = {
         "Stellarator": config["Stellarator"], "Solver": grad_solver_config}
@@ -70,7 +71,9 @@ def make_objective(config, yancc_res=None):
         yancc_wrapper = yancc_data.from_fields(
             fields, grid, Vp, Vpp, **yancc_res)
 
-        G, G_p, pi = StellaratorFun(config, yancc_wrapper)
+        st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+        G = st.G()[0]
+        pi = jnp.array(st.getPressure())
         return G, pi
 
     @_objective_base.def_jvp

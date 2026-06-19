@@ -34,7 +34,7 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum,
   AUX_DOF = k + 1;
   localDOF = nVars * SQU_DOF + nAux * AUX_DOF;
 
-  log<LOG_LEVEL::INFO>("Total HDG degrees of freedom {}",
+  logmsg<LOG_LEVEL::INFO>("Total HDG degrees of freedom {}",
                        (localDOF)*nCells + (nCells + 1) * nVars + nScalars);
   if (nScalars > 0) {
     v = new N_Vector[nScalars];
@@ -65,7 +65,7 @@ SystemSolver::~SystemSolver() {
 }
 
 void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt) {
-  log<LOG_LEVEL::INFO>("Setting initial conditions");
+  logmsg<LOG_LEVEL::INFO>("Setting initial conditions");
   t = t0;
   y.Map(N_VGetArrayPointer(Y));
   dydt.Map(N_VGetArrayPointer(dYdt));
@@ -175,6 +175,9 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt) {
       dydt.Scalar(s) = problem->InitialScalarDerivative(s, y, dydt);
     }
   }
+
+  // Make sure we also populate yJac for optimize mode
+  setJacEvalY(Y, dYdt);
 }
 
 void SystemSolver::ApplyDirichletBCs(DGSoln &Y) {
@@ -997,7 +1000,7 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt,
   wgt = N_VClone(resval);
   getErrorWeights(Y, wgt);
   double residual_val = N_VWrmsNorm(resval, wgt);
-  log<LOG_LEVEL::ERROR>("Residual norm at t = {}: {}", tres, residual_val);
+  logmsg<LOG_LEVEL::ERROR>("Residual norm at t = {}: {}", tres, residual_val);
   updateBoundaryConditions(tres);
 
   DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux);
@@ -1365,7 +1368,7 @@ void SystemSolver::computeAdjointGradients() {
   const auto states = y.evalOnNodes();
 
   const Index np_internal = adjointProblem->getNpInternal();
-  log<LOG_LEVEL::INFO>("Computing adjoints for {} parameters.",
+  logmsg<LOG_LEVEL::INFO>("Computing adjoints for {} parameters.",
                        adjointProblem->getNp());
   for (Index i = 0; i < nVars; i++) {
     // We use the global state to hold the derivatives, replacing nVars with np

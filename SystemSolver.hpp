@@ -35,8 +35,6 @@ namespace adjoint_test_suite
     struct systemsolver_adjoint_tests;
 }
 #endif
-using Logging::log;
-using Logging::LOG_LEVEL;
 enum class ISTATUS {
   SUCCESS,
   NEGATIVE_DGDT,
@@ -138,7 +136,7 @@ class SystemSolver
         N_Vector res = NULL;		 // vector for storing residual
         N_Vector absTolVec = NULL;	 // vector for storing absolute tolerances
         sunrealtype tout, tret;
-        SUNMatrix sunMat;
+        SUNMatrix sunMat = NULL;
         long int nresevals = 0;
         // File streams
         std::ofstream out0, dydt_out, res_out;
@@ -253,7 +251,7 @@ class SystemSolver
         void dGdsigma_Vec(Index, Vector &, DGSoln const &, Index);
         void dGdaux_Vec(Index, Vector &, DGSoln const &, Index);
 
-        //------------------------Private Settings--------------------------------
+        //------------------------Private Settings--------------------------------//
 
         double resNorm = 0.0; // Exclusively for unit testing purposes
 

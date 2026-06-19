@@ -76,19 +76,18 @@ atol = 1e-3
 # # %%
 solver_config = {
     "OutputFilename": "stellarator_opt0",
-    "Polynomial_degree": 4,
+    "Polynomial_degree": 3,
     "Grid_size": 4,
     "tau": 1.0,
     "Lower_boundary": 0.0,
     "Upper_boundary": rho_upper,
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
-    "delta_t": 1e-2,
-    "initialTimestep": 1e-7,
+    "delta_t": 1e-3,
+    "initialTimestep": 1e-5,
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 1e-4,
-    "restart": False,
-    "solveAdjoint": True,
+    "restart": True,
     "zeroFlux": True,
 }
 
@@ -106,7 +105,7 @@ yancc_rho = jnp.array(points)
 yancc_ntheta = 17
 yancc_nzeta = 33
 
-yancc_res = {"na": 53, "nx": 5}
+yancc_res = {"na": 43, "nx": 5}
 
 # to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
 # + axis and lcfs
@@ -163,7 +162,7 @@ st.run()
 solver_config = {
     "OutputFilename": fname,
     "RestartFile": "stellarator_opt0.restart.nc",
-    "Polynomial_degree": 4,
+    "Polynomial_degree": 3,
     "Grid_size": 4,
     "tau": 1.0,
     "Lower_boundary": 0.0,
@@ -174,7 +173,6 @@ solver_config = {
     "initialTimestep": 1e-5,
     "MinStepSize": 1e-10,
     "restart": True,
-    "solveAdjoint": True,
     "zeroFlux": True,
     "SteadyStateTolerance": 1e-4,
 }
@@ -233,7 +231,7 @@ eq = eq2.copy()
 # %%
 solver_config = {
     "OutputFilename": fname,
-    "Polynomial_degree": 4,
+    "Polynomial_degree": 3,
     "Grid_size": 4,
     "tau": 1.0,
     "Lower_boundary": 0.0,
@@ -244,7 +242,6 @@ solver_config = {
     "initialTimestep": 1e-5,
     "MinStepSize": 1e-10,
     "restart": True,
-    "solveAdjoint": True,
     "zeroFlux": True,
     "SteadyStateTolerance": 1e-4,
 }
@@ -349,7 +346,7 @@ fig, ax = plt.subplots()
 max_it = 8
 
 eqfam = EquilibriaFamily(eq)
-ks = [1, 2, eq.M + 1]
+ks = [2, 4, eq.M + 1]
 for k in ks: 
     print("\n==================================")
     print("Optimizing boundary modes M,N <= {}".format(k))

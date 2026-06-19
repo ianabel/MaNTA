@@ -34,86 +34,88 @@ ISTATUS SystemSolver::initialize()
 
 	IDA_mem = IDACreate(ctx);
 	if (ErrorChecker::check_retval((void *)IDA_mem, "IDACreate", 0))
-  {
-    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
-    return ISTATUS::FAILURE;
-  }
+	{
+		logmsg<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+		return ISTATUS::FAILURE;
+	}
 
 	retval = IDASetUserData(IDA_mem, static_cast<void *>(this));
 	if (ErrorChecker::check_retval(&retval, "IDASetUserData", 1))
-  {
-    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
-    return ISTATUS::FAILURE;
-  }
+	{
+		logmsg<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+		return ISTATUS::FAILURE;
+	}
 
 	//-----------------------------Initial conditions-------------------------------
 
 	// Set original vector lengths
 	Y = N_VNew_Serial(nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1), ctx);
 	if (ErrorChecker::check_retval((void *)Y, "N_VNew_Serial", 0))
-  {
-    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
-    return ISTATUS::FAILURE;
-  }
+	{
+		logmsg<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+		return ISTATUS::FAILURE;
+	}
 
 	dYdt = N_VClone(Y);
 	if (ErrorChecker::check_retval((void *)dYdt, "N_VClone", 0))
-  {
-    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
-    return ISTATUS::FAILURE;
-  }
+	{
+		logmsg<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+		return ISTATUS::FAILURE;
+	}
 
 	// Initialise Y and dYdt
 	setInitialConditions(Y, dYdt);
 
-  // If we are optimizing, we can determine if G is decreasing and avoid solving
-  if (optimizeMode)
-  {
-    if (!adjointProblem)
-    {
-      log<LOG_LEVEL::ERROR>("Optimize mode on but adjointProblem not set");
-      return ISTATUS::FAILURE;
-    }
-    Vector dGdt(adjointProblem->getNg());
-    for (Index gIndex = 0; gIndex < adjointProblem->getNg(); gIndex++)
-      dGdt(gIndex) = adjointProblem->GFn(gIndex, dydt);
-    
-    log<LOG_LEVEL::PDEBUG>("Initial dGdt = {}", dGdt);
-    for (const auto& dG : dGdt) 
-    {
-      if (dG < 0)
-      {
-        log<LOG_LEVEL::WARNING>("Negative value of dGdt = {} encountered; Optimize mode assumes that we are maximizing G, so a negative dGdt indicates a bad step.", dG);
-        return ISTATUS::NEGATIVE_DGDT;
-      }
-    }
-  }
+    // If we are optimizing, we can determine if G is decreasing and avoid solving
+	if (optimizeMode)
+	{
+		if (!adjointProblem)
+		{
+			logmsg<LOG_LEVEL::ERROR>("Optimize mode on but adjointProblem not set");
+			return ISTATUS::FAILURE;
+		}
+		Vector dGdt(adjointProblem->getNg());
+		for (Index gIndex = 0; gIndex < adjointProblem->getNg(); gIndex++)
+		{
+			dGdt(gIndex) = adjointProblem->GFn(gIndex, dydt);
+		}
+		logmsg<LOG_LEVEL::PDEBUG>("Initial dGdt = {}", dGdt(0));
+		const double stoptol = 0.1; // acceptable decrease in G
+		for (const auto& dG : dGdt) 
+		{
+			if (dt * dG < -stoptol)
+			{
+				logmsg<LOG_LEVEL::WARNING>("Negative value of dGdt = {} encountered; Optimize mode assumes that we are maximizing G, so a negative dGdt indicates a bad step.", dG);
+				return ISTATUS::NEGATIVE_DGDT;
+			}
+		}
+	}
 
 	// ----------------- Allocate and initialize all other sun-vectors. -------------
 
 	res = N_VClone(Y);
 	if (ErrorChecker::check_retval((void *)res, "N_VClone", 0))
-  {
-    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
-    return ISTATUS::FAILURE;
-  }
-	// sunrealtype tRes;
+	{
+		logmsg<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+		return ISTATUS::FAILURE;
+	}
+		// sunrealtype tRes;
 
 	// No constraints are imposed as negative coefficients may allow for a better fit across a cell
 	constraints = N_VClone(Y);
 	if (ErrorChecker::check_retval((void *)constraints, "N_VClone", 0))
-  {
-    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
-    return ISTATUS::FAILURE;
-  }
+	{
+		logmsg<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+		return ISTATUS::FAILURE;
+	}
 
 	// Specify only u as differential
 	id = N_VClone(Y);
 	if (ErrorChecker::check_retval((void *)id, "N_VClone", 0))
-  {
-    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
-    return ISTATUS::FAILURE;
-  }
+	{
+		logmsg<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+		return ISTATUS::FAILURE;
+	}
 
 	DGSoln isDifferential(nVars, grid, k, nScalars, nAux);
 	isDifferential.Map(N_VGetArrayPointer(id));
@@ -132,26 +134,26 @@ ISTATUS SystemSolver::initialize()
 
 	retval = IDASetId(IDA_mem, id);
 	if (ErrorChecker::check_retval(&retval, "IDASetId", 1))
-  {
-    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
-    return ISTATUS::FAILURE;
-  }
+	{
+		logmsg<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+		return ISTATUS::FAILURE;
+	}
 
 	// Initialise IDA
 	retval = IDAInit(IDA_mem, static_residual, t0, Y, dYdt);
 	if (ErrorChecker::check_retval(&retval, "IDAInit", 1))
-  {
-    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
-    return ISTATUS::FAILURE;
-  }
+	{
+		logmsg<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+		return ISTATUS::FAILURE;
+	}
 
 	// Set tolerances
 	absTolVec = N_VClone(Y);
 	if (ErrorChecker::check_retval((void *)absTolVec, "N_VClone", 0))
-  {
-    log<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
-    return ISTATUS::FAILURE;
-  }
+	{
+		logmsg<LOG_LEVEL::ERROR>("Sundials Initialization Error on line {}", __LINE__ - 2);
+		return ISTATUS::FAILURE;
+	}
 	VectorWrapper absTolVals(N_VGetArrayPointer(absTolVec), N_VGetLength(absTolVec));
 	absTolVals.setZero();
 
@@ -249,7 +251,7 @@ ISTATUS SystemSolver::initialize()
 	//------------------------------Solve------------------------------
 	// Update initial solution to be within tolerance of the residual equation
 
-  IDASetNonlinConvCoefIC(IDA_mem, 0.01);
+	IDASetNonlinConvCoefIC(IDA_mem, 0.01);
 	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, dt0 > 0.0 ? dt0 : dt);
 	retval = 0;
 	if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
@@ -258,10 +260,10 @@ ISTATUS SystemSolver::initialize()
 	}
 
 	IDAGetNumResEvals(IDA_mem, &nresevals);
-  log<LOG_LEVEL::INFO>("Number of Residual Evaluations due to IDACalcIC: {}", nresevals);
+	logmsg<LOG_LEVEL::INFO>("Number of Residual Evaluations due to IDACalcIC: {}", nresevals);
 
 	if (nresevals > 10)
-    log<LOG_LEVEL::WARNING>("IDACalcIC required {} residual evaluations. Check settings in {}", nresevals, std::string(inputFilePath));
+    logmsg<LOG_LEVEL::WARNING>("IDACalcIC required {} residual evaluations. Check settings in {}", nresevals, std::string(inputFilePath));
 
 	print(out0, t0, nOut, true);
 	if (physics_debug)
@@ -294,9 +296,9 @@ ISTATUS SystemSolver::initialize()
 
 	if (dt0 > 0.0)
 		IDASetInitStep(IDA_mem, dt0);
-  if (aggressiveTimesteps)
-    IDASetEtaMax(IDA_mem, 4.0); // Default is 2.0
-  return ISTATUS::SUCCESS;
+	if (aggressiveTimesteps)
+		IDASetEtaMax(IDA_mem, 4.0); // Default is 2.0
+	return ISTATUS::SUCCESS;
 }
 
 void SystemSolver::runSolver(double tFinal)
@@ -306,7 +308,7 @@ void SystemSolver::runSolver(double tFinal)
 	sunrealtype dydt_abs_tol = 1e-3;
 	if (t0 > tFinal)
 	{
-    log<LOG_LEVEL::ERROR>("Initial time t = {} is after the end of the simulation at t = {}", t0, tFinal);
+    logmsg<LOG_LEVEL::ERROR>("Initial time t = {} is after the end of the simulation at t = {}", t0, tFinal);
 		throw std::runtime_error("Simulation ends before it begins.");
 	}
 
@@ -399,14 +401,14 @@ void SystemSolver::runAdjointSolve()
 {
 	if (solveAdjoint)
 	{
-    log<LOG_LEVEL::INFO>("Computing adjoints");
+    logmsg<LOG_LEVEL::INFO>("Computing adjoints");
 		initializeMatricesForAdjointSolve();
 		solveAdjointState(0);
 		computeAdjointGradients();
 	}
 	else
 	{
-    log<LOG_LEVEL::ERROR>("Error: runAdjointSolve called but \"solveAdjoint\" was set to false");
+    logmsg<LOG_LEVEL::ERROR>("Error: runAdjointSolve called but \"solveAdjoint\" was set to false");
 	}
 }
 
@@ -414,8 +416,8 @@ void SystemSolver::destroySundials()
 {
 	// No SunLinSol wrapper classes exist beyond this point, so we are safe in using raw pointers to construct them.
 	SUNLinSolFree(LS);
-
-	MatDestroy(sunMat);
+	if (sunMat)
+		MatDestroy(sunMat);
 
 	IDAFree(&IDA_mem);
 
@@ -432,7 +434,6 @@ void SystemSolver::destroySundials()
 	N_VDestroy(absTolVec);
 
 	SUNContext_Free(&ctx);
-
 }
 
 /*

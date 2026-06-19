@@ -133,9 +133,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
         self.pnorm = 1e20 * e * 1e3
         use_chunking = st_config["use_chunking"]
         self.chunk_size = 0
-        if use_chunking:
-            self.chunk_size = 2 * len(devices) if jnp.mod(len(self.points), 2 * len(devices)) == 0 else len(devices)
-            print("Using chunking with chunk size " + str(self.chunk_size) + " on " + str(len(devices)) + " devices")
+        # if use_chunking:
+        #     self.chunk_size = 2 * len(devices) if jnp.mod(len(self.points), 2 * len(devices)) == 0 else len(devices)
+        #     print("Using chunking with chunk size " + str(self.chunk_size) + " on " + str(len(devices)) + " devices")
 
         # %%
 
@@ -168,6 +168,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.runner.Run(tFinal)
         else:
             self.runner.Run_ss()
+
+    def G(self):
+        return self.runner.Get_G()
 
     def getAdjointGradients(self):
         G, G_p = self.runner.Get_adjoint_gradients()
@@ -202,11 +205,13 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     @MaNTA_Decorator
     def dSigma(self, index, states: State, positions, t):
-        fgrad = jax.grad(self.sigma, argnums=1, has_aux=True)
-        if (self.f1_cache is not None):
-            return jax.lax.map(lambda args: fgrad(index, args[0], args[1], t, args[2], args[3], args[4], self.params, args[5])[0], (states, positions, self.field_shard, self.vp_shard, self.vpp_shard,  self.f1_cache), batch_size=self.chunk_size)
-        else:
-            return jax.lax.map(lambda args: fgrad(index, args[0], args[1], t, args[2], args[3], args[4], self.params, None)[0], (states, positions, self.field_shard, self.vp_shard, self.vpp_shard), batch_size=self.chunk_size)
+        fgrad =jax.grad(self.sigma, argnums=1, has_aux=True)
+
+        in_axes = vmap_axes_wfield if self.f1_cache is None else vmap_axes_wfield[:-1] + (0,)
+        fgrad_vmap = eqx.filter_vmap(fgrad, in_axes=in_axes)
+        dflux = fgrad_vmap(index, states, positions, t, self.field_shard,
+                                self.vp_shard, self.vpp_shard, self.params, self.f1_cache)[0]
+        return dflux
 
     @MaNTA_Decorator
     def dSources(self, index, states: State, positions, t):
@@ -381,14 +386,20 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
     def dSigma(self, i, states, positions):
         tree_in = (self.field_shard, self.vp_shard, self.vpp_shard)
 
+        # set up lambda to take in (field, vp, vpp) as a single object
+        def f_in(tree, states, x): return self.sigma(
+            i, states, x, 0, tree[0], tree[1], tree[2], self.params)
+
         # compute gradient
-        fgrad = eqx.filter_grad(lambda tree, s, p: self.sigma(i, s, p, 0, tree[0], tree[1], tree[2], self.params), has_aux=True)
-        grad_out = jax.lax.map(lambda args: fgrad(*args), (tree_in, states, positions), batch_size=self.chunk_size)[0]
-        # Meant to be a matrix of (nPoints x len(field))
+        fgrad = eqx.filter_grad(f_in, has_aux=True)
+        grad_out, _ = jax.vmap(fgrad, in_axes=(0, State.vmap_axes(), 0))(
+            tree_in, states, positions)
+        # Reshaping (this is where I think we may have issues)
+        #   Meant to be a matrix of (nPoints x len(field))
         grad_unstack = tree_unstack(grad_out)
         grad_unraveled = jnp.stack([jax.flatten_util.ravel_pytree(g)[
                                    0] for g in grad_unstack], axis=0)
-        return grad_unraveled
+        return grad_unraveled.transpose()
 
     @MaNTA_Decorator
     def dSources(self, i, states, positions):
@@ -402,7 +413,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         grad_padded = jnp.pad(grad_out[:, jnp.newaxis], ((
             0, 0), (self.np-2, 1)), mode="constant")
 
-        return grad_padded
+        return grad_padded.transpose()
 
     def dgFn_dphi(self, i, state, x):
         pass
