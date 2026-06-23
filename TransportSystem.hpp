@@ -24,6 +24,7 @@ protected:
 
 public:
   virtual ~TransportSystem() = default;
+  using PhysicsOutput = std::array<std::vector<Values>, 2>;
 
   Index getNumVars() const { return nVars; };
   Index getNumScalars() const { return nScalars; };
@@ -81,6 +82,28 @@ public:
   virtual void dSources_dq(Index i, VectorRef, const State &, Position x, Time t) = 0;
   virtual void dSources_dsigma(Index i, VectorRef, const State &, Position x, Time t) = 0;
 
+
+ /*
+ * Compute all fluxes and sources 
+ */
+  virtual PhysicsOutput ComputePhysics(GlobalState const &states, std::vector<Position> const & abscissae, Time time)
+{
+    m_sourceCache.resize(nVars); // make sure we have enought elements in cache
+    PhysicsOutput out;
+    for (auto& p: out)
+    {
+      p.resize(nVars);
+      for (auto &v : p)
+           v.resize(states.size());
+    }
+    for (Index i = 0; i < nVars; ++i) 
+    {
+        out[0][i] = SigmaFn(i, states, abscissae, time);
+        out[1][i] = Sources(i, states, abscissae, time);
+        m_sourceCache[i] = out[1][i];
+    }
+    return out;
+  }
   // Wrapper functions which serialise batched evaluations
   //
   virtual Values SigmaFn(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
@@ -105,6 +128,23 @@ public:
     return out;
   };
 
+  virtual std::array<GlobalStateMatrix, 2> ComputePhysicsDerivatives(GlobalState const &states, std::vector<Position> const &abscissae, Time time)
+  {
+    GlobalStateMatrix dSigma_vals(nVars);
+    GlobalStateMatrix dSource_vals(nVars);
+    const auto k = states.cellDOF();
+    const auto& nCells = states.getNCells();
+    for (Index i = 0; i < nVars; i++)
+    {
+        dSigma_vals.add (nCells, k, nVars, nScalars, nAux);
+        dSource_vals.add(nCells, k, nVars, nScalars, nAux);
+
+        dSigma(i, dSigma_vals[i], states, abscissae, time);
+        dSources(i, dSource_vals[i], states, abscissae, time);
+    }
+    std::array<GlobalStateMatrix, 2> out = {std::move(dSigma_vals),std::move(dSource_vals)};
+    return out;
+  }
   virtual void dSigma(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
 #pragma omp parallel for
@@ -292,12 +332,16 @@ public:
 
   virtual std::string getAdjointNames(Index pIndex) const { return "p" + std::to_string(pIndex); }
 
+  const Values& getSourceCache(Index var) const { return m_sourceCache[var]; }
+
 protected:
   bool restarting = false;
   std::vector<double> restart_Y_data;
   std::vector<double> restart_dYdt_data;
   std::shared_ptr<DGSoln> restart_Y = nullptr;
   std::shared_ptr<DGSoln> restart_dYdt = nullptr;
+  
+  std::vector<Values> m_sourceCache; // since sources might be expensive to calculate, cache them for use in outputs
 
   std::vector<Value> uL, uR;
   bool isUpperDirichlet, isLowerDirichlet;

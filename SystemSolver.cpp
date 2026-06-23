@@ -9,6 +9,7 @@
 #include <iostream>
 #include <boost/math/interpolators/barycentric_rational.hpp>
 
+#include "State.hpp"
 #include "gridStructures.hpp"
 
 SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *transpSystem)
@@ -83,10 +84,11 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
         GlobalState initialState = y.evalOnNodes(); // only need u and q so this is ok
         const auto points = y.getPoints();
+        auto physics_vals = problem->ComputePhysics(initialState, points, t);
         for (Index var = 0; var < nVars; var++)
         {
             // set flux for each variable, casting to a row vector and making sure to remember minus sign
-            initialState.Flux()(var, Eigen::all) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(problem->SigmaFn(var, initialState, points, t));
+            initialState.Flux()(var, Eigen::all) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(physics_vals[0][var]);
         }
         y.AssignSigma(initialState);
 
@@ -118,10 +120,11 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         // Vectorize initial flux calculation
         GlobalState initialState = y.evalOnNodes(); // only need u and q so this is ok
         const auto points = y.getPoints();
+        auto physics_vals = problem->ComputePhysics(initialState, points, t);
         for (Index var = 0; var < nVars; var++)
         {
             // set flux for each variable, casting to a row vector and making sure to remember minus sign
-            initialState.Flux()(var, Eigen::all) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(problem->SigmaFn(var, initialState, points, t));
+            initialState.Flux()(var, Eigen::all) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(physics_vals[0][var]);
         }
         y.AssignSigma(initialState);
 
@@ -130,13 +133,9 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
     dydt.zeroCoeffs();
 
-    std::vector<Values> Source_vals;
-
-    Source_vals.resize(nVars);
-
+    auto Source_vals = problem->ComputePhysics(y.evalOnNodes(), y.getPoints(), t)[1];
     for (Index var = 0; var < nVars; var++)
     {
-        Source_vals[var] = problem->Sources(var, y.evalOnNodes(), y.getPoints(), t);
         // Solver For dudt with dudt = X^-1( -B*Sig - D*U - E*Lam + F )
         Eigen::Vector2d lamCell;
         for (Index i = 0; i < nCells; i++)
@@ -608,19 +607,13 @@ void SystemSolver::updateMatricesForJacSolve()
     // We know where the jacobian is to be evaluated -- yJac
     // std::cerr << "Updating Jacobian at t=" << jt << std::endl;
 
-    GlobalStateMatrix dSigma_vals(nVars);
-    GlobalStateMatrix dSource_vals(nVars);
 
     const auto points = yJac.getPoints();
     const auto states = yJac.evalOnNodes();
-     for (Index i = 0; i < nVars; i++)
-    {
-        dSigma_vals.add (nCells, k, nVars, nScalars, nAux);
-        dSource_vals.add(nCells, k, nVars, nScalars, nAux);
 
-        problem->dSigma(i, dSigma_vals[i], states, points, jt);
-        problem->dSources(i, dSource_vals[i], states, points, jt);
-    }
+    auto derivs = problem->ComputePhysicsDerivatives(states, points, jt);
+    GlobalStateMatrix dSigma_vals(std::move(derivs[0]));
+    GlobalStateMatrix dSource_vals(std::move(derivs[1]));
 
     for (unsigned int i = 0; i < nCells; i++)
     {
@@ -973,16 +966,11 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 
     const auto states = Y_h.evalOnNodes();
 
-    std::vector<Values> Sigma_vals;
-    std::vector<Values> Source_vals;
+    
+    auto values = problem->ComputePhysics(states, points, tres);
 
-    Sigma_vals.resize(nVars);
-    Source_vals.resize(nVars);
-    for (Index var = 0; var < nVars; var++)
-    {
-        Sigma_vals[var] = problem->SigmaFn(var, states, points, tres);
-        Source_vals[var] = problem->Sources(var, states, points, tres);
-    }
+    std::vector<Values> Sigma_vals = std::move(values[0]);
+    std::vector<Values> Source_vals = std::move(values[1]);
 
     // residual.lambda = C*sigma + G*u + H*lambda - L
     for (Index i = 0; i < nCells; i++)
@@ -1099,18 +1087,10 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         }
     }
 
-    GlobalStateMatrix dSigma_vals(nVars);
-    GlobalStateMatrix dSource_vals(nVars);
 
-    for (Index i = 0; i < nVars; i++)
-    {
-        dSigma_vals.add(nCells, k, nVars, nScalars, nAux);
-        dSource_vals.add(nCells, k, nVars, nScalars, nAux);
-
-        problem->dSigma(i, dSigma_vals[i], states, points, jt);
-        problem->dSources(i, dSource_vals[i], states, points, jt);
-    }
-
+    auto derivs = problem->ComputePhysicsDerivatives(states, points, jt);
+    GlobalStateMatrix dSigma_vals(std::move(derivs[0]));
+    GlobalStateMatrix dSource_vals(std::move(derivs[1]));
     // We have to remake the M matrices because they're in the wrong order
     // We also need to calculate the dSigmadX and dSourcedX matrices at the same time
 
@@ -1493,10 +1473,10 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
     if (printSources)
     {
         for (Index v = 0; v < nVars; ++v)
-        {
-            auto Source_vals = problem->Sources(v, y.evalOnNodes(), y.getPoints(), t);
-            source_interp.emplace_back(y.getPoints().data(), Source_vals.data(), Source_vals.size());
-        }
+       {
+          const auto& Source_vals = problem->getSourceCache(v);
+          source_interp.emplace_back(y.getPoints().data(), Source_vals.data(), Source_vals.size());
+       }
     }
 
     for (int i = 0; i < nOut; ++i)
@@ -1546,12 +1526,12 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
 
     if (printSources) 
     {
-        for (Index v = 0; v < nVars; ++v)
-        {
-            auto Source_vals = problem->Sources(v, y.evalOnNodes(), y.getPoints(), t);
-            source_interp.emplace_back(y.getPoints().data(), Source_vals.data(), Source_vals.size());
-        }
-    }
+      for (Index v = 0; v < nVars; ++v)
+      {
+          const auto& Source_vals = problem->getSourceCache(v);
+          source_interp.emplace_back(y.getPoints().data(), Source_vals.data(), Source_vals.size());
+      }
+   }
 
     for (int i = 0; i < nOut; ++i)
     {

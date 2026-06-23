@@ -50,15 +50,29 @@ class State(eqx.Module):
     @staticmethod
     def vmap_axes():
         return 0
+
+def MaNTA_Decorator2(func):
+    def wrapper(self, states, positions, *args):
+        states_, empty = eqx.partition(State.from_manta(states), lambda x: x.size > 0) 
+        positions_ = jnp.array(positions)
+
+        result = func(self, states_, positions_, *args)
+         
+        for i in range(0, len(result)):
+            for j in range(0, len(result[i])):
+                if (isinstance(result[i][j], State)):
+                    result[i][j] = eqx.combine(result[i][j], empty).to_manta()
+        return result
+    return wrapper
     
 def MaNTA_Decorator(func):
     def wrapper(self, index, states, positions, *args):
-        states_ = State.from_manta(states)
+        states_, empty = eqx.partition(State.from_manta(states), lambda x: x.size > 0) 
         positions_ = jnp.array(positions)
         res = func(self, index, states_, positions_, *args)
 
         if (isinstance(res, State)):
-            return res.to_manta()
+            return eqx.combine(res, empty).to_manta()
         else: 
             return res
     return wrapper

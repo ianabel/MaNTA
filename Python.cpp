@@ -10,6 +10,7 @@
 #include "PyAdjointProblem.hpp"
 #include "PyRunner.hpp"
 #include "PyGrid.hpp"
+#include "TransportSystem.hpp"
 
 namespace py = pybind11;
 
@@ -154,6 +155,8 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
 		.def("UpperBoundary", &TransportSystem::UpperBoundary)
 		.def("isLowerBoundaryDirichlet", &TransportSystem::isLowerBoundaryDirichlet)
 		.def("isUpperBoundaryDirichlet", &TransportSystem::isUpperBoundaryDirichlet)
+    .def("ComputePhysics", &TransportSystem::ComputePhysics)
+    .def("ComputePhysicsDerivatives", &TransportSystem::ComputePhysicsDerivatives)
 		.def("SigmaFn", py::overload_cast<Index, const State &, Position, Time>(&TransportSystem::SigmaFn))
 		.def("SigmaFn_v", py::overload_cast<Index, GlobalState const &, std::vector<Position> const &, Time>(&TransportSystem::SigmaFn))
 		.def("Sources", py::overload_cast<Index, const State &, Position, Time>(&TransportSystem::Sources))
