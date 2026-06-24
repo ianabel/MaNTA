@@ -60,7 +60,6 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
     @MaNTA_Decorator
     @eqx.filter_jit
     def dSigma(self, i, states, positions):
-        print(states)
         out = jax.vmap(jax.grad(self.sigma, argnums=4), in_axes=(self.vmap_axes))(i, states, positions, 0.0, self.params)  
         return out
     

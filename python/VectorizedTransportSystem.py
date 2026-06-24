@@ -5,7 +5,7 @@ import MaNTA
 from JAXAdjointProblem import JAXAdjointProblem
 from typing import NamedTuple, Any
 from functools import partial
-from State import State, MaNTA_Decorator, MaNTA_Decorator2
+from State import Physics_Decorator, State, MaNTA_Decorator 
 from abc import abstractmethod
 import equinox as eqx
 
@@ -33,28 +33,36 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
     def UpperBoundary(self, index, t):
         pass
 
-    @MaNTA_Decorator2
+    @Physics_Decorator
     def ComputePhysics(self, states, positions, t):
         index = jnp.arange(0, self.nVars)
         fluxes = []
         sources = []
+        aux = []
         for i in index:
             fluxes.append(self.SigmaFn_v(i, states, positions, t))
             sources.append(self.Sources_v(i, states, positions, t))
 
-        return [fluxes, sources]
-    
-    @MaNTA_Decorator2
+        for i in range(0, self.nAux):
+            aux.append(self.AuxG_v(i, states, positions, t))
+
+        return [fluxes, sources, aux]
+
+    @Physics_Decorator
     def ComputePhysicsDerivatives(self, states, positions, t):
         index = jnp.arange(0, self.nVars)
         fluxes = []
         sources = []
+        aux = []
         for i in index:
             fluxes.append(self.dSigma(i, states, positions, t))
             sources.append(self.dSources(i, states, positions, t))
 
-        return [fluxes, sources]
- 
+        for i in range(0, self.nAux):
+            aux.append(self.AuxGPrime_v(i, states, positions, t))
+
+        return [fluxes, sources, aux]
+
     def SigmaFn_v(self, index, states, positions, t):
         return jax.vmap(
             lambda s, p, params: self.sigma(index, s, p, t, params),
@@ -64,6 +72,12 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
     def Sources_v(self, index, states, positions, t):
         return jax.vmap(
             lambda s, p, params: self.source(index, s, p, t, params),
+            in_axes=(self.vmap_axes),
+        )(states, positions, self.params)
+
+    def AuxG_v(self, index, states, positions, t):
+        return jax.vmap(
+            lambda s, p, params: self.aux(index, s, p, t, params),
             in_axes=(self.vmap_axes),
         )(states, positions, self.params)
 
@@ -80,6 +94,12 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
             lambda s, p, params: jax.grad(self.source, argnums=1)(
                 index, s, p, t, params
             ),
+            in_axes=(self.vmap_axes),
+        )(states, positions, self.params)
+
+    def AuxGPrime_v(self, index, states, positions, t):
+        return jax.vmap(
+            lambda s, p, params: jax.grad(self.aux, argnums=1)(index, s, p, t, params),
             in_axes=(self.vmap_axes),
         )(states, positions, self.params)
 
@@ -120,39 +140,12 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
         pass
 
     @MaNTA_Decorator
-    def AuxG(self, index, state, x, t):
-        return self.aux(index, state, x, t, self.params)
-
-    """
-    Compute derivative of auxilliary functions
-
-     Parameters
-    ----------
-    index : int
-        Variable index
-    state : dict
-        Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
-    x : float
-        Spatial location
-    t : float
-        Time
-    Returns
-    -------
-    state : dict
-        Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
-    """
-
-    @MaNTA_Decorator
     def dSigma_dPhi(self, index, state, x, t):
         return jax.grad(self.sigma, argnums=1)(index, state, x, t, self.params).Aux
 
     @MaNTA_Decorator
     def dSources_dPhi(self, index, state, x, t):
         return jax.grad(self.source, argnums=1)(index, state, x, t, self.params).Aux
-
-    @MaNTA_Decorator
-    def AuxGPrime(self, index, state, x, t):
-        return self.dAuxdvars(index, state, x, t, self.params)
 
     @abstractmethod
     @partial(jax.jit, static_argnames=("self",))

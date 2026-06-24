@@ -7,9 +7,9 @@
 #include <Eigen/Dense>
 #include <toml.hpp>
 #include <iostream>
-#include <boost/math/interpolators/barycentric_rational.hpp>
 
 #include "State.hpp"
+#include "Types.hpp"
 #include "gridStructures.hpp"
 
 SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *transpSystem)
@@ -606,14 +606,23 @@ void SystemSolver::updateMatricesForJacSolve()
     updateBoundaryConditions(jt);
     // We know where the jacobian is to be evaluated -- yJac
     // std::cerr << "Updating Jacobian at t=" << jt << std::endl;
-
+    GlobalStateMatrix dSigma_vals(nVars);
+    GlobalStateMatrix dSource_vals(nVars);
+    GlobalStateMatrix dAux_vals(nAux);
 
     const auto points = yJac.getPoints();
     const auto states = yJac.evalOnNodes();
+    for (Index var = 0; var < nVars; var++)
+    {
+      dSigma_vals.add(nCells, k, nVars, nScalars, nAux);
+      dSource_vals.add(nCells, k, nVars, nScalars, nAux);
+    }
+    for (Index aux = 0; aux < nAux; aux++)
+    {
+      dAux_vals.add(nCells, k, nVars, nScalars, nAux);
+    }
 
-    auto derivs = problem->ComputePhysicsDerivatives(states, points, jt);
-    GlobalStateMatrix dSigma_vals(std::move(derivs[0]));
-    GlobalStateMatrix dSource_vals(std::move(derivs[1]));
+    problem->ComputePhysicsDerivatives({dSigma_vals, dSource_vals, dAux_vals}, states, points, jt);
 
     for (unsigned int i = 0; i < nCells; i++)
     {
@@ -667,7 +676,7 @@ void SystemSolver::updateMatricesForJacSolve()
         MX.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
 
         // Set Parts of Matrix due to aux variables
-        dAux_Mat(MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), yJac, i);
+        dAux_Mat(MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), dAux_vals, yJac, i);
 
         MXSolvers[ i ].compute(MX);
     }
@@ -971,6 +980,7 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 
     std::vector<Values> Sigma_vals = std::move(values[0]);
     std::vector<Values> Source_vals = std::move(values[1]);
+    std::vector<Values> Aux_vals = std::move(values[2]);
 
     // residual.lambda = C*sigma + G*u + H*lambda - L
     for (Index i = 0; i < nCells; i++)
@@ -1040,9 +1050,8 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
             // For the auxiliary variable bits
             // Set (res_aux_i)_j = < G_i, phi_j >
             // so we enforce G = 0 by projection
-            auto auxFunc = [&, this](Position x)
-            { return problem->AuxG(aux, Y_h.eval(x), x, tres); };
-            res.Aux(aux).getCoeff(i).second = y.getBasis().InterpolateOntoBasis(I, auxFunc);
+            auto ind = Eigen::seq(i * (k + 1), (i + 1) * (k + 1) - 1);
+            res.Aux(aux).getCoeff(i).second = y.getBasis().InterpolateOntoBasis(I, Aux_vals[aux](ind));
         }
     }
 
@@ -1088,10 +1097,23 @@ void SystemSolver::initializeMatricesForAdjointSolve()
     }
 
 
-    auto derivs = problem->ComputePhysicsDerivatives(states, points, jt);
-    GlobalStateMatrix dSigma_vals(std::move(derivs[0]));
-    GlobalStateMatrix dSource_vals(std::move(derivs[1]));
-    // We have to remake the M matrices because they're in the wrong order
+    GlobalStateMatrix dSigma_vals(nVars);
+    GlobalStateMatrix dSource_vals(nVars);
+    GlobalStateMatrix dAux_vals(nAux);
+
+    for (Index var = 0; var < nVars; var++)
+    {
+      dSigma_vals.add(nCells, k, nVars, nScalars, nAux);
+      dSource_vals.add(nCells, k, nVars, nScalars, nAux);
+    }
+    for (Index aux = 0; aux < nAux; aux++)
+    {
+      dAux_vals.add(nCells, k, nVars, nScalars, nAux);
+    }
+
+    problem->ComputePhysicsDerivatives({dSigma_vals, dSource_vals, dAux_vals}, states, points, jt);
+
+   // We have to remake the M matrices because they're in the wrong order
     // We also need to calculate the dSigmadX and dSourcedX matrices at the same time
 
     for (unsigned int i = 0; i < nCells; i++)
@@ -1148,7 +1170,8 @@ void SystemSolver::initializeMatricesForAdjointSolve()
             M.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
 
             // Set Parts of Matrix due to aux variables
-            dAux_Mat(M.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), y, i);
+
+            dAux_Mat(M.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), dAux_vals, y, i);
 
             // TODO: Consider factorization here (is M sparse enough to warrant a sparse implementation?)
         }
@@ -1270,22 +1293,23 @@ void SystemSolver::computeAdjointGradients()
 
     GlobalStateMatrix dSigmadp(nVars);
     GlobalStateMatrix dSourcedp(nVars);
+    GlobalStateMatrix dAuxdp(nAux);
 
     const auto points = y.getPoints();
     const auto states = y.evalOnNodes();
 
     const Index np_internal = adjointProblem->getNpInternal();
     logmsg<LOG_LEVEL::INFO>("Computing adjoints for {} parameters.", adjointProblem->getNp());
-    for (Index i = 0; i < nVars; i++)
+    for (Index var = 0; var < nVars; var++)
     {
-        // We use the global state to hold the derivatives, replacing nVars with np
-        // Only the Variable matrix is used internally to hold the derviatives
-        dSigmadp.add(nCells, k, np_internal, nScalars, np_internal /* This should be nAux, but output is wrt all variables*/);
-        dSourcedp.add(nCells, k, np_internal, nScalars, np_internal);
-
-        adjointProblem->dSigma(i, dSigmadp[i], states, points);
-        adjointProblem->dSources(i, dSourcedp[i], states, points);
+      dSigmadp.add(nCells, k, np_internal, nScalars, np_internal);
+      dSourcedp.add(nCells, k, np_internal, nScalars, np_internal);
     }
+    for (Index aux = 0; aux < nAux; aux++)
+    {
+      dAuxdp.add(nCells, k, np_internal, nScalars, np_internal);
+    }
+    adjointProblem->ComputePhysicsDerivatives({dSigmadp, dSourcedp, dAuxdp}, states, points);
     
     // Spatial paramters effectively mean we have nCells * np parameters, but we store as a matrix to make output easier to interpret
     if (adjointProblem->areParametersSpatial())
@@ -1469,13 +1493,13 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
     double delta_x = (grid.upperBoundary() - grid.lowerBoundary()) * (1.0 / (nOut - 1.0));
 
     // Sources are vectorized so we interpolate to the output grid
-    std::vector<boost::math::interpolators::barycentric_rational<double>> source_interp;
+    std::vector<DGApproxImpl<NodalBasis>> source_interp;
     if (printSources)
     {
         for (Index v = 0; v < nVars; ++v)
        {
-          const auto& Source_vals = problem->getSourceCache(v);
-          source_interp.emplace_back(y.getPoints().data(), Source_vals.data(), Source_vals.size());
+          auto Source_vals = problem->getSourceCache(v);
+          source_interp.emplace_back(grid, y.getBasis(), Source_vals.data(), static_cast<size_t>(k + 1));
        }
     }
 
@@ -1522,17 +1546,16 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
 
     double delta_x = (grid.upperBoundary() - grid.lowerBoundary()) * (1.0 / (nOut - 1.0));
 
-    std::vector<boost::math::interpolators::barycentric_rational<double>> source_interp;
 
-    if (printSources) 
+    std::vector<DGApproxImpl<NodalBasis>> source_interp;
+    if (printSources)
     {
-      for (Index v = 0; v < nVars; ++v)
-      {
-          const auto& Source_vals = problem->getSourceCache(v);
-          source_interp.emplace_back(y.getPoints().data(), Source_vals.data(), Source_vals.size());
-      }
-   }
-
+        for (Index v = 0; v < nVars; ++v)
+       {
+          auto Source_vals = problem->getSourceCache(v);
+          source_interp.emplace_back(grid, y.getBasis(), Source_vals.data(), static_cast<size_t>(k + 1));
+       }
+    }
     for (int i = 0; i < nOut; ++i)
     {
         double x = static_cast<double>(i) * delta_x + grid.lowerBoundary();

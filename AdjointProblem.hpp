@@ -24,6 +24,22 @@ public:
         return static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(out);
     }
 
+    virtual void ComputePhysicsDerivatives(std::array<std::reference_wrapper<GlobalStateMatrix>, NPHYSICS_FUNCTIONS>&&out, GlobalState const &states, std::vector<Position> const &abscissae)
+    {
+      GlobalStateMatrix& dSigma_vals = out[0];
+      GlobalStateMatrix& dSource_vals = out[1];
+      GlobalStateMatrix& dAux_vals = out[2];
+      for (Index i = 0; i < dSigma_vals.size(); i++)
+      {
+          dSigma(i, dSigma_vals[i], states, abscissae);
+          dSources(i, dSource_vals[i], states, abscissae);
+      }
+      for (Index i = 0; i < dAux_vals.size(); i++)
+      {
+          dAux(i, dAux_vals[i], states, abscissae);
+      }
+    }
+
     // We're assuming Gfn = Int gFn dx for now
     virtual Value gFn(Index gIndex, const State &s, Position x) const = 0;
     virtual Values gFn(Index gIndex, const GlobalState &s, std::vector<Position> const &abscissae) const
@@ -81,6 +97,19 @@ public:
             }
         }
     }
+
+    virtual void dAux(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae)
+    {
+        for (size_t j = 0; j < states.size(); ++j)
+        {
+            for (Index pIndex = 0; pIndex < getNpInternal(); ++pIndex)
+            {
+                auto &vout = out.Variable(j)(pIndex); // we use the variable to represent p derivatives
+                dAux_dp(i, pIndex, vout, states[j], abscissae[j]);
+            }
+        }
+    }
+
 
     virtual void dAux_dp(Index i, Index pIndex, Value &, const State &s, Position x)
     {

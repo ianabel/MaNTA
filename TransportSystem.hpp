@@ -14,6 +14,7 @@
 
  */
 
+
 class TransportSystem : public std::enable_shared_from_this<TransportSystem>
 {
 
@@ -24,7 +25,6 @@ protected:
 
 public:
   virtual ~TransportSystem() = default;
-  using PhysicsOutput = std::array<std::vector<Values>, 2>;
 
   Index getNumVars() const { return nVars; };
   Index getNumScalars() const { return nScalars; };
@@ -90,9 +90,11 @@ public:
 {
     m_sourceCache.resize(nVars); // make sure we have enought elements in cache
     PhysicsOutput out;
+    out[0].resize(nVars);
+    out[1].resize(nVars);
+    out[2].resize(nAux);
     for (auto& p: out)
     {
-      p.resize(nVars);
       for (auto &v : p)
            v.resize(states.size());
     }
@@ -102,6 +104,8 @@ public:
         out[1][i] = Sources(i, states, abscissae, time);
         m_sourceCache[i] = out[1][i];
     }
+    for (Index i = 0; i < nAux; ++i)
+      out[2][i] = AuxG(i, states, abscissae, time);
     return out;
   }
   // Wrapper functions which serialise batched evaluations
@@ -128,23 +132,22 @@ public:
     return out;
   };
 
-  virtual std::array<GlobalStateMatrix, 2> ComputePhysicsDerivatives(GlobalState const &states, std::vector<Position> const &abscissae, Time time)
+  virtual void ComputePhysicsDerivatives(std::array<std::reference_wrapper<GlobalStateMatrix>, NPHYSICS_FUNCTIONS>&&  out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
-    GlobalStateMatrix dSigma_vals(nVars);
-    GlobalStateMatrix dSource_vals(nVars);
-    const auto k = states.cellDOF();
-    const auto& nCells = states.getNCells();
+    GlobalStateMatrix& dSigma_vals = out[0];
+    GlobalStateMatrix& dSource_vals = out[1];
+    GlobalStateMatrix& dAux_vals = out[2];
     for (Index i = 0; i < nVars; i++)
     {
-        dSigma_vals.add (nCells, k, nVars, nScalars, nAux);
-        dSource_vals.add(nCells, k, nVars, nScalars, nAux);
-
         dSigma(i, dSigma_vals[i], states, abscissae, time);
         dSources(i, dSource_vals[i], states, abscissae, time);
     }
-    std::array<GlobalStateMatrix, 2> out = {std::move(dSigma_vals),std::move(dSource_vals)};
-    return out;
+    for (Index i = 0; i < nAux; i++)
+    {
+        AuxGPrime(i, dAux_vals[i], states, abscissae,  time);
+    }
   }
+
   virtual void dSigma(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
 #pragma omp parallel for
@@ -238,10 +241,32 @@ public:
     return 0.0;
   }
 
+  virtual Values AuxG(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
+  {
+    Values out(states.size());
+#pragma omp parallel for
+    for (size_t j = 0; j < states.size(); ++j)
+    {
+      out(j) = AuxG(i, states[j], abscissae[j], time);
+    }
+    return out;
+  }
+
   // AuxGPrime returns dG_i in out
   virtual void AuxGPrime(Index i, State &out, const State &, Position, Time)
   {
     throw std::logic_error("nAux > 0 but no G derivative provided");
+  }
+
+  virtual void AuxGPrime(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
+  {
+    State temp(nVars, nScalars, nAux);
+#pragma omp parallel for
+    for (size_t j = 0; j < states.size(); ++j)
+    {
+      AuxGPrime(i,temp, states[j], abscissae[j], time);
+      out.setWithState(j, temp);
+    }
   }
 
   virtual void dSources_dPhi(Index, VectorRef, const State &, Position, Time)

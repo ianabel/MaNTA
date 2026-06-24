@@ -117,38 +117,33 @@ public:
       m_sourceCache[var] = out[1][var];
     return out;
   }
-  std::array<GlobalStateMatrix, 2>
-  ComputePhysicsDerivatives(GlobalState const &states,
-                            std::vector<Position> const &abscissae,
-                            Time time) override {
+  void ComputePhysicsDerivatives(
+      std::array<std::reference_wrapper<GlobalStateMatrix>, NPHYSICS_FUNCTIONS>
+          &&out,
+      GlobalState const &states, std::vector<Position> const &abscissae,
+      Time time) override {
     py::gil_scoped_acquire gil;
     py::function _override =
         py::get_override(this, "ComputePhysicsDerivatives");
 
     if (!_override)
-      return TransportSystem::ComputePhysicsDerivatives(states, abscissae,
-                                                        time);
-    std::array<std::vector<GlobalState>, 2> temp =
+      TransportSystem::ComputePhysicsDerivatives(std::move(out), states,
+                                                 abscissae, time);
+    std::array<std::vector<GlobalState>, NPHYSICS_FUNCTIONS> temp =
         _override(states, abscissae, time)
-            .cast<std::array<std::vector<GlobalState>, 2>>();
+            .cast<std::array<std::vector<GlobalState>, NPHYSICS_FUNCTIONS>>();
 
-    GlobalStateMatrix dflux(nVars);
-    GlobalStateMatrix dsource(nVars);
-
-    const auto k = states.cellDOF();
-    const auto &nCells = states.getNCells();
+    GlobalStateMatrix &dflux = out[0];
+    GlobalStateMatrix &dsource = out[1];
+    GlobalStateMatrix &daux = out[2];
 
     for (Index var = 0; var < nVars; ++var) {
-      dflux.add(nCells, k, nVars, nScalars, nAux);
-      dsource.add(nCells, k, nVars, nScalars, nAux);
-
       dflux[var] = temp[0][var];
       dsource[var] = temp[1][var];
     }
-
-    std::array<GlobalStateMatrix, 2> out = {std::move(dflux),
-                                            std::move(dsource)};
-    return out;
+    for (Index aux = 0; aux < nAux; ++aux) {
+      daux[aux] = temp[2][aux];
+    }
   }
   Value SigmaFn(Index i, const State &s, Position x, Time t) override {
     if (!initialized)
@@ -347,10 +342,50 @@ public:
     PYBIND11_OVERRIDE(Value, TransportSystem, InitialAuxValue, i, x);
   }
 
+  Values AuxG(Index i, GlobalState const &states,
+              std::vector<Position> const &abscissae, Time time) override {
+    if (!initialized)
+      initializeOverrides();
+    try {
+      py::gil_scoped_acquire gil;
+      if (!vectorized)
+        return TransportSystem::AuxG(
+            i, states, abscissae, time); // Call base class version which will
+                                         // loop over non-vectorized method
+
+      return method_overrides["AuxG_v"](i, states, abscissae, time)
+          .cast<Values>();
+    } catch (const std::exception &e) {
+      throw std::runtime_error(
+          std::string("Error occurred when trying to calculate AuxG_v: ") +
+          e.what());
+    }
+  }
   Value AuxG(Index i, const State &s, Position x, Time t) override {
     PYBIND11_OVERRIDE(Value, TransportSystem, AuxG, i, s, x, t);
   }
 
+  void AuxGPrime(Index i, GlobalState &out, GlobalState const &states,
+                 std::vector<Position> const &abscissae, Time time) override {
+    if (!initialized)
+      initializeOverrides();
+    try {
+      py::gil_scoped_acquire gil;
+      if (!vectorized) {
+        TransportSystem::AuxGPrime(i, out, states, abscissae,
+                                   time); // Call base class version which will
+                                          // loop over non-vectorized method
+        return;
+      }
+
+      out = method_overrides["AuxGPrime_v"](i, states, abscissae, time)
+                .cast<GlobalState>();
+    } catch (const std::exception &e) {
+      throw std::runtime_error(
+          std::string("Error occurred when trying to calculate AuxGPrime: ") +
+          e.what());
+    }
+  }
   void AuxGPrime(Index i, State &out, const State &s, Position x,
                  Time t) override {
     if (!initialized)

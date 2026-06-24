@@ -210,6 +210,11 @@ public:
   GlobalStateMatrix(Index nVars) noexcept : nVars(nVars) {
     m_data.reserve(nVars);
   };
+  
+  GlobalStateMatrix(const GlobalStateMatrix &other) {
+    nVars = other.nVars;
+    m_data = other.m_data;
+  }
 
   GlobalStateMatrix(GlobalStateMatrix &&other) noexcept {
     nVars = other.nVars;
@@ -257,7 +262,17 @@ public:
     return out;
   }
 
+  std::vector<Eigen::Ref<Matrix>> Aux(Index cell) {
+    std::vector<Eigen::Ref<Matrix>> out;
+
+    for (Index var = 0; var < nVars; var++) {
+      out.emplace_back(m_data[var].cellwiseAux(cell));
+    }
+    return out;
+  }
   GlobalState &operator[](Index var) { return m_data[var]; }
+
+  const Index size() const { return nVars; }
 
 private:
   std::vector<GlobalState> m_data;

@@ -20,4 +20,6 @@ using Position = double;
 using Time = double;
 using Values = Vector;
 
+constexpr static size_t NPHYSICS_FUNCTIONS = 3; 
+using PhysicsOutput = std::array<std::vector<Values>, NPHYSICS_FUNCTIONS>;
 #endif // TYPES_HPP
