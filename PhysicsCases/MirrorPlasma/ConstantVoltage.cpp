@@ -119,43 +119,6 @@ Value MirrorPlasma::InitialScalarValue(Index s) const
         return 0.0;
     case Scalar::Current:
     {
-        // auto u = [&](double V)
-        // {
-        //     Values U(nVars);
-        //     for (Index i = 0; i < nVars; ++i)
-        //         U(i) = InitialValue(i, V);
-
-        //     return U;
-        // };
-
-        // auto q = [&](double V)
-        // {
-        //     Values Q(nVars);
-        //     for (Index i = 0; i < nVars; ++i)
-        //         Q(i) = InitialDerivative(i, V);
-
-        //     return Q;
-        // };
-
-        // auto aux = [&](double V)
-        // {
-        //     Values Aux(nAux);
-        //     for (Index i = 0; i < nAux; ++i)
-        //         Aux(i) = AutodiffTransportSystem::InitialAuxValue(i, V);
-
-        //     return Aux;
-        // };
-
-        // RealVector pSigma(nVars);
-        // pSigma.setZero();
-
-        // RealVector pScalar(nScalars);
-        // pScalar.setZero();
-
-        // Value FluxTerm = Pi(u(xL), q(xL), xL, 0.0).val - Pi(u(xR), q(xR), xR, 0.0).val;
-        // Value SourceTerm = integrator::integrate([&](Position V)
-        //                                          { return Somega(u(V), q(V), pSigma, aux(V), pScalar, V, 0.0).val; }, xL, xR, max_depth);
-        // Value Itot = 1 / (B->Psi_V(xR) - B->Psi_V(xL)) * (FluxTerm - SourceTerm);
         return InitialCurrent(0);
     }
     default:
@@ -278,26 +241,6 @@ void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_
     { return y.u(Channel::AngularMomentum)(V); };
 
     Value tfac = restarting ? 1.0 : tanh(t / CurrentDecay);
-    // auto omega = [&](Position V)
-    // {
-    //     Value R = B->R_V(V,0.0);
-    //     return L(V) / (n(V) * R * R);
-    // };
-    // auto dJdt = [&](Position V)
-    // {
-    //     Value R = B->R_V(V,0.0);
-    //     return R * R * dydt.u(Channel::Density)(V);
-    // };
-    // auto dJprimedt = [&](Position V)
-    // {
-    //     Value R = B->R_V(V,0.0);
-    //     return 2 * R * dydt.u(Channel::Density)(V) + R * R * dydt.q(Channel::Density)(V);
-    // };
-    // auto Phi_V = [&](Position V)
-    // {
-    //     Value VPrime = B->VPrime(V);
-    //     return 1 / VPrime * integrator::integrate(omega, xL, V, max_depth);
-    // };
 
     switch (static_cast<Scalar>(scalarIndex))
     {

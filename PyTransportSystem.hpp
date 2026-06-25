@@ -1,14 +1,15 @@
 #ifndef PYTRANSPORTSYSTEM_HPP
 #define PYTRANSPORTSYSTEM_HPP
 
+#include "PyIntegrator.hpp"
+#include "TransportSystem.hpp"
+#include "extern/pybind11/include/pybind11/pybind11.h"
+#include "pybind11/gil.h"
 #include <pybind11/eigen.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <string_view>
-
-#include "TransportSystem.hpp"
-#include "pybind11/gil.h"
 
 constexpr std::array<std::string_view, 7> required_method_names = {
     "SigmaFn",     "Sources",     "dSigmaFn_du",    "dSigmaFn_dq",
@@ -418,6 +419,57 @@ public:
     v = method_overrides["dSigma_dPhi"](i, s, x, t).cast<Values>();
   }
 
+  Value InitialScalarValue(Index s) const override {
+    PYBIND11_OVERRIDE(Value, TransportSystem, InitialScalarValue, s);
+  }
+  Value InitialScalarDerivative(Index s, const DGSoln &y,
+                                const DGSoln &dydt) const override {
+    py::gil_scoped_acquire gil;
+    py::function _override = py::get_override(this, "InitialScalarDerivative");
+
+    PyIntegrator integrator(y.getGrid(), y.getBasis());
+    GlobalState state = y.evalOnNodes();
+    GlobalState state_dot = dydt.evalOnNodes();
+
+    Value out =
+        _override(s, state, state_dot, integrator.getLambda()).cast<Value>();
+    return out;
+  }
+  Value ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt,
+                        Time t) override {
+    py::gil_scoped_acquire gil;
+    py::function _override = py::get_override(this, "ScalarG");
+
+    PyIntegrator integrator(y.getGrid(), y.getBasis());
+    GlobalState state = y.evalOnNodes();
+    GlobalState state_dot = dydt.evalOnNodes();
+
+    Value out =
+        _override(s, state, state_dot, integrator.getLambda()).cast<Value>();
+    return out;
+  }
+  void ScalarGPrimeExtended(Index s, State &out, State &out_dt, const DGSoln &y,
+                            const DGSoln &dydt,
+                            std::function<double(double)> phi, Interval I,
+                            Time t) override {
+
+    py::gil_scoped_acquire gil;
+    py::function _override = py::get_override(this, "ScalarG");
+
+    PyIntegrator integrator(y.getGrid(), y.getBasis());
+    GlobalState state = y.evalOnNodes();
+    GlobalState state_dot = dydt.evalOnNodes();
+
+    std::array<State, 2> _out =
+        _override(s, state, state_dot, integrator.getCellLambda())
+            .cast<std::array<State, 2>>();
+    return out;
+  }
+  bool isScalarDifferential(Index i) override {
+    PYBIND11_OVERRIDE(bool, TransportSystem, isScalarDifferential, i);
+  }
+  void dSources_dScalars(Index, VectorRef, const State &, Position,
+                         Time) override {}
   std::unique_ptr<AdjointProblem> createAdjointProblem() override {
     PYBIND11_OVERRIDE(std::unique_ptr<AdjointProblem>, TransportSystem,
                       createAdjointProblem);
@@ -427,6 +479,7 @@ public:
   using TransportSystem::isLowerDirichlet;
   using TransportSystem::isUpperDirichlet;
   using TransportSystem::nAux;
+  using TransportSystem::nScalars;
   using TransportSystem::nVars;
 
 private:

@@ -709,24 +709,32 @@ void SystemSolver::updateMatricesForJacSolve()
         w_map.back().zeroCoeffs();
     }
 
-    for (Index i = 0; i < nCells; ++i)
+    GlobalStateMatrix ScalarG_vals(nScalars);
+    GlobalStateMatrix ScalarG_dt_vals(nScalars);
+    for (Index s = 0; s < nScalars; s++) 
     {
-        Interval const& I( grid[ i ] );
-        for ( Index j = 0; j < nScalars; ++j ) {
-            State s( nVars, nScalars, nAux );
-            State s_dt( nVars, nScalars, nAux );
+      ScalarG_vals.add(nCells, k, nVars, nScalars, nAux);
+      ScalarG_dt_vals.add(nCells, k, nVars, nScalars, nAux);
+    }
+
+    problem->ScalarGPrimeExtended(ScalarG_vals, ScalarG_dt_vals, yJac, dydtJac, jt);
+  
+    for ( Index j = 0; j < nScalars; ++j ) {
+        const auto& s = ScalarG_vals[j];
+        const auto& s_dt = ScalarG_dt_vals[j];
+        for (Index i = 0; i < nCells; ++i)
+        {
             for ( Index l = 0; l < k + 1; ++l ) {
-                problem->ScalarGPrimeExtended( j, s, s_dt, yJac, dydtJac, [=,this]( double x ){ return y.getBasis().Evaluate( I, l, x ); }, I, jt );
                 for ( Index v = 0; v < nVars; ++v ) {
-                    w_map[ j ].sigma( v ).getCoeff( i ).second( l ) = s.Flux[ v ]       + alpha * s_dt.Flux[ v ];
-                    w_map[ j ].q( v ).getCoeff( i ).second( l )     = s.Derivative[ v ] + alpha * s_dt.Derivative[ v ];
-                    w_map[ j ].u( v ).getCoeff( i ).second( l )     = s.Variable[ v ]   + alpha * s_dt.Variable[ v ];
+                    w_map[ j ].sigma( v ).getCoeff( i ).second( l ) = s[i * (k + 1) + l].Flux[ v ]       + alpha * s_dt[i * (k + 1) + l].Flux[ v ];
+                    w_map[ j ].q( v ).getCoeff( i ).second( l )     = s[i * (k + 1) + l].Derivative[ v ] + alpha * s_dt[i * (k + 1) + l].Derivative[ v ];
+                    w_map[ j ].u( v ).getCoeff( i ).second( l )     = s[i * (k + 1) + l].Variable[ v ]   + alpha * s_dt[i * (k + 1) + l].Variable[ v ];
                 }
                 for (Index a = 0; a < nAux; ++a)
-                    w_map[j].Aux(a).getCoeff(i).second(l) = s.Aux[a] + alpha * s_dt.Aux[a];
+                    w_map[j].Aux(a).getCoeff(i).second(l) = s[i * (k + 1) + l].Aux[a] + alpha * s_dt[i * (k + 1) + l].Aux[a];
             }
             for (Index m = 0; m < nScalars; ++m)
-                N_global(j, m) = s.Scalars[m] + alpha * s_dt.Scalars[m];
+                N_global(j, m) = s.Scalars()[m] + alpha * s_dt.Scalars()[m];
         }
     }
     w_map.clear();

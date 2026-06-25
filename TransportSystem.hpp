@@ -1,6 +1,7 @@
 #ifndef TRANSPORTSYSTEM_HPP
 #define TRANSPORTSYSTEM_HPP
 
+#include "State.hpp"
 #include "Types.hpp"
 #include "DGSoln.hpp"
 #include "NetCDFIO.hpp"
@@ -204,6 +205,30 @@ public:
   virtual void ScalarGPrime(Index i, State &out, const DGSoln &y, std::function<double(double)> phi, Interval I, Time t)
   {
     throw std::logic_error("nScalars > 0 but no scalar G derivative provided");
+  }
+
+  virtual void ScalarGPrimeExtended(GlobalStateMatrix& out, GlobalStateMatrix& out_dt, const DGSoln &y, const DGSoln &dydt, Time t)
+  {
+    const Grid& grid = y.getGrid();
+    const Index k = y.getBasis().Order();
+
+    State s_temp( nVars, nScalars, nAux );
+    State s_dt_temp( nVars, nScalars, nAux );
+    for (Index s = 0; s < nScalars; ++s)
+    {
+      GlobalState& out_s = out[s];
+      GlobalState& out_dt_s = out_dt[s];
+      for (size_t i = 0; i < grid.getNCells(); ++i)
+      {
+        Interval const& I( grid[ i ] );
+        for (Index j = 0; j < k + 1; j++) 
+        {
+            ScalarGPrimeExtended( s, s_temp, s_dt_temp, y, dydt , [&]( double x ){ return y.getBasis().Evaluate( I, j, x ); }, I, t );
+            out_s.setWithState(i * (k + 1) + j, s_temp);
+            out_dt_s.setWithState(i * (k + 1) + j, s_dt_temp);
+        }
+      }
+    }
   }
 
   virtual void ScalarGPrimeExtended(Index i, State &out, State &out_dt, const DGSoln &y, const DGSoln &dydt, std::function<double(double)> phi, Interval I, Time t)
