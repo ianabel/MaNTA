@@ -5,7 +5,7 @@ import MaNTA
 from JAXAdjointProblem import JAXAdjointProblem
 from typing import NamedTuple, Any
 from functools import partial
-from State import Physics_Decorator, State, MaNTA_Decorator 
+from State import Physics_Decorator, State, MaNTA_Decorator
 from abc import abstractmethod
 import equinox as eqx
 
@@ -20,6 +20,7 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
     def __init__(self, spatialParameters=False):
         MaNTA.TransportSystem.__init__(self)
         self.nAux = 0
+        self.nScalars = 0
 
         self.dAuxdvars = jax.jit(jax.grad(self.aux, argnums=1))
 

@@ -1,148 +1,147 @@
 #ifndef ADJOINTPROBLEM_HPP
 #define ADJOINTPROBLEM_HPP
 
-#include "Types.hpp"
 #include "DGSoln.hpp"
+#include "Types.hpp"
 #include <Eigen/Core>
 
-class AdjointProblem
-{
+class AdjointProblem {
 public:
-    virtual ~AdjointProblem() = default;
+  virtual ~AdjointProblem() = default;
 
-    virtual Value GFn(Index gIndex, DGSoln &y) const = 0;
-    virtual Value dGFndp(Index gIndex, Index pIndex, DGSoln &y) const = 0;
-    virtual Matrix dGFndp(Index gIndex, DGSoln &y) const
-    {
-        Values out(np);
-        out.setZero();
-        for (Index i = 0; i < getNpInternal(); i++)
-        {
-            out(i) = dGFndp(gIndex, i, y);
-        }
-        // cast to a row vector
-        return static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(out);
+  virtual Value GFn(Index gIndex, DGSoln &y) const = 0;
+  virtual Value dGFndp(Index gIndex, Index pIndex, DGSoln &y) const = 0;
+  virtual Matrix dGFndp(Index gIndex, DGSoln &y) const {
+    Values out(np);
+    out.setZero();
+    for (Index i = 0; i < getNpInternal(); i++) {
+      out(i) = dGFndp(gIndex, i, y);
     }
+    // cast to a row vector
+    return static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(out);
+  }
 
-    virtual void ComputePhysicsDerivatives(std::array<std::reference_wrapper<GlobalStateMatrix>, NPHYSICS_FUNCTIONS>&&out, GlobalState const &states, std::vector<Position> const &abscissae)
-    {
-      GlobalStateMatrix& dSigma_vals = out[0];
-      GlobalStateMatrix& dSource_vals = out[1];
-      GlobalStateMatrix& dAux_vals = out[2];
-      for (Index i = 0; i < dSigma_vals.size(); i++)
-      {
-          dSigma(i, dSigma_vals[i], states, abscissae);
-          dSources(i, dSource_vals[i], states, abscissae);
+  virtual void ComputePhysicsDerivatives(
+      std::array<std::reference_wrapper<GlobalStateMatrix>, NPHYSICS_FUNCTIONS>
+          &&out,
+      GlobalState const &states, std::vector<Position> const &abscissae) {
+    GlobalStateMatrix &dSigma_vals = out[0];
+    GlobalStateMatrix &dSource_vals = out[1];
+    GlobalStateMatrix &dAux_vals = out[2];
+    for (Index i = 0; i < dSigma_vals.size(); i++) {
+      dSigma(i, dSigma_vals[i], states, abscissae);
+      dSources(i, dSource_vals[i], states, abscissae);
+    }
+    for (Index i = 0; i < dAux_vals.size(); i++) {
+      dAux(i, dAux_vals[i], states, abscissae);
+    }
+  }
+
+  // We're assuming Gfn = Int gFn dx for now
+  virtual Value gFn(Index gIndex, const State &s, Position x) const = 0;
+  virtual Values gFn(Index gIndex, const GlobalState &s,
+                     std::vector<Position> const &abscissae) const {
+    Values out(abscissae.size());
+    for (size_t i = 0; i < abscissae.size(); ++i) {
+      out(i) = gFn(gIndex, s[i], abscissae[i]);
+    }
+    return out;
+  }
+  virtual Matrix dgFndp(Index gIndex, const GlobalState &s,
+                        std::vector<Position> const &abscissae) const {
+    throw std::runtime_error(
+        "Virtual function dgFndp only for use within python class.");
+  }
+  // For compute g_y
+  virtual void dgFn_du(Index gIndex, VectorRef, const State &s, Position x) = 0;
+  virtual void dgFn_dq(Index gIndex, VectorRef, const State &s, Position x) = 0;
+  virtual void dgFn_dsigma(Index gIndex, VectorRef, const State &s,
+                           Position x) = 0;
+  virtual void dgFn_dphi(Index gIndex, VectorRef, const State &s,
+                         Position x) = 0;
+
+  virtual void dg(Index gIndex, GlobalState &out, GlobalState const &states,
+                  std::vector<Position> const &abscissae) {
+    for (size_t j = 0; j < states.size(); ++j) {
+      dgFn_du(gIndex, out.Variable(j), states[j], abscissae[j]);
+      dgFn_dq(gIndex, out.Derivative(j), states[j], abscissae[j]);
+      dgFn_dsigma(gIndex, out.Flux(j), states[j], abscissae[j]);
+      dgFn_dphi(gIndex, out.Aux(j), states[j], abscissae[j]);
+    }
+  }
+  // For computing F_p
+  virtual void dSigmaFn_dp(Index i, Index pIndex, Value &, const State &s,
+                           Position x) = 0;
+  virtual void dSources_dp(Index i, Index pIndex, Value &, const State &s,
+                           Position x) = 0;
+
+  virtual void dSigma(Index i, GlobalState &out, GlobalState const &states,
+                      std::vector<Position> const &abscissae) {
+    for (size_t j = 0; j < states.size(); ++j) {
+      for (Index pIndex = 0; pIndex < getNpInternal(); ++pIndex) {
+        auto &vout = out.Variable(j)(
+            pIndex); // we use the variable to represent p derivatives
+        dSigmaFn_dp(i, pIndex, vout, states[j], abscissae[j]);
       }
-      for (Index i = 0; i < dAux_vals.size(); i++)
-      {
-          dAux(i, dAux_vals[i], states, abscissae);
+    }
+  }
+  virtual void dSources(Index i, GlobalState &out, GlobalState const &states,
+                        std::vector<Position> const &abscissae) {
+    for (size_t j = 0; j < states.size(); ++j) {
+      for (Index pIndex = 0; pIndex < getNpInternal(); ++pIndex) {
+        auto &vout = out.Variable(j)(
+            pIndex); // we use the variable to represent p derivatives
+        dSources_dp(i, pIndex, vout, states[j], abscissae[j]);
       }
     }
+  }
 
-    // We're assuming Gfn = Int gFn dx for now
-    virtual Value gFn(Index gIndex, const State &s, Position x) const = 0;
-    virtual Values gFn(Index gIndex, const GlobalState &s, std::vector<Position> const &abscissae) const
-    {
-        Values out(abscissae.size());
-        for (size_t i = 0; i < abscissae.size(); ++i)
-        {
-            out(i) = gFn(gIndex, s[i], abscissae[i]);
-        }
-        return out;
+  virtual void dAux(Index i, GlobalState &out, GlobalState const &states,
+                    std::vector<Position> const &abscissae) {
+    for (size_t j = 0; j < states.size(); ++j) {
+      for (Index pIndex = 0; pIndex < getNpInternal(); ++pIndex) {
+        auto &vout = out.Variable(j)(
+            pIndex); // we use the variable to represent p derivatives
+        dAux_dp(i, pIndex, vout, states[j], abscissae[j]);
+      }
     }
-    virtual Matrix dgFndp(Index gIndex, const GlobalState &s, std::vector<Position> const &abscissae) const
-    {
-        throw std::runtime_error("Virtual function dgFndp only for use within python class.");
-    }
-    // For compute g_y
-    virtual void dgFn_du(Index gIndex, VectorRef, const State &s, Position x) = 0;
-    virtual void dgFn_dq(Index gIndex, VectorRef, const State &s, Position x) = 0;
-    virtual void dgFn_dsigma(Index gIndex, VectorRef, const State &s, Position x) = 0;
-    virtual void dgFn_dphi(Index gIndex, VectorRef, const State &s, Position x) = 0;
+  }
 
-    virtual void dg(Index gIndex, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae)
-    {
-        for (size_t j = 0; j < states.size(); ++j)
-        {
-            dgFn_du(gIndex, out.Variable(j), states[j], abscissae[j]);
-            dgFn_dq(gIndex, out.Derivative(j), states[j], abscissae[j]);
-            dgFn_dsigma(gIndex, out.Flux(j), states[j], abscissae[j]);
-            dgFn_dphi(gIndex, out.Aux(j), states[j], abscissae[j]);
-        }
-    }
-    // For computing F_p
-    virtual void dSigmaFn_dp(Index i, Index pIndex, Value &, const State &s, Position x) = 0;
-    virtual void dSources_dp(Index i, Index pIndex, Value &, const State &s, Position x) = 0;
+  virtual void dAux_dp(Index i, Index pIndex, Value &, const State &s,
+                       Position x) {
+    std::logic_error("nAux > 0 but no G derivative provided");
+  };
 
-    virtual void dSigma(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae)
-    {
-        for (size_t j = 0; j < states.size(); ++j)
-        {
-            for (Index pIndex = 0; pIndex < getNpInternal(); ++pIndex)
-            {
-                auto &vout = out.Variable(j)(pIndex); // we use the variable to represent p derivatives
-                dSigmaFn_dp(i, pIndex, vout, states[j], abscissae[j]);
-            }
-        }
-    }
-    virtual void dSources(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae)
-    {
-        for (size_t j = 0; j < states.size(); ++j)
-        {
-            for (Index pIndex = 0; pIndex < getNpInternal(); ++pIndex)
-            {
-                auto &vout = out.Variable(j)(pIndex); // we use the variable to represent p derivatives
-                dSources_dp(i, pIndex, vout, states[j], abscissae[j]);
-            }
-        }
-    }
+  virtual std::string getName(Index pIndex) const {
+    return "p" + std::to_string(pIndex);
+  };
 
-    virtual void dAux(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae)
-    {
-        for (size_t j = 0; j < states.size(); ++j)
-        {
-            for (Index pIndex = 0; pIndex < getNpInternal(); ++pIndex)
-            {
-                auto &vout = out.Variable(j)(pIndex); // we use the variable to represent p derivatives
-                dAux_dp(i, pIndex, vout, states[j], abscissae[j]);
-            }
-        }
-    }
+  virtual bool computeUpperBoundarySensitivity(Index i, Index pIndex) {
+    return false;
+  };
+  virtual bool computeLowerBoundarySensitivity(Index i, Index pIndex) {
+    return false;
+  };
 
+  int getNg() const { return ng; }
+  int getNp() const { return np; }
+  int getNpBoundary() const { return np_boundary; }
 
-    virtual void dAux_dp(Index i, Index pIndex, Value &, const State &s, Position x)
-    {
-        std::logic_error("nAux > 0 but no G derivative provided");
-    };
+  int getNpInternal() const { return np - np_boundary; }
 
-    virtual std::string getName(Index pIndex) const { return "p" + std::to_string(pIndex); };
+  // True if internal index ; false if boundary index
+  inline bool isAdjointIndexInternal(int pIndex) const {
+    return (pIndex < np - np_boundary);
+  }
 
-    virtual bool computeUpperBoundarySensitivity(Index i, Index pIndex) { return false; };
-    virtual bool computeLowerBoundarySensitivity(Index i, Index pIndex) { return false; };
-
-    int getNg() const { return ng; }
-    int getNp() const { return np; }
-    int getNpBoundary() const { return np_boundary; }
-
-    int getNpInternal() const { return np - np_boundary; }
-
-    // True if internal index ; false if boundary index
-    inline bool isAdjointIndexInternal(int pIndex) const
-    {
-        return (pIndex < np - np_boundary);
-    }
-
-    inline bool areParametersSpatial() const
-    {
-        return spatialParameters;
-    }
+  inline bool areParametersSpatial() const { return spatialParameters; }
 
 protected:
-    int ng = 1;
-    int np;
-    int np_boundary = 0;
+  int ng = 1;
+  int np;
+  int np_boundary = 0;
 
-    bool spatialParameters = false; // whether the parameters have spatial dependence
+  bool spatialParameters =
+      false; // whether the parameters have spatial dependence
 };
 #endif

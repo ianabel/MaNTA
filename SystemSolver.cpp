@@ -684,60 +684,66 @@ void SystemSolver::updateMatricesForJacSolve()
     // Construct the N_HDG_DOF x N_Scalar matrix v which
     // contains the effect of the scalars on the main variables (through the sources. nothing else is allowed to depend on scalars)
 
-    std::vector<DGSoln> v_map;
-    for (Index i = 0; i < nScalars; ++i)
-        v_map.emplace_back(nVars, grid, k, N_VGetArrayPointer(v[i]), nScalars, nAux);
-
-    for (Index i = 0; i < nCells; ++i)
+    if (nScalars > 0)
     {
-        Matrix v_tmp(nVars * U_DOF, nScalars);
-        dSources_dScalars_Mat(v_tmp, yJac, i);
-        for (Index j = 0; j < nScalars; ++j)
-            for (Index v = 0; v < nVars; ++v)
-                v_map[j].u(v).getCoeff(i).second = v_tmp.block(v * U_DOF, j, U_DOF, 1);
+      std::vector<DGSoln> v_map;
+      for (Index i = 0; i < nScalars; ++i)
+          v_map.emplace_back(nVars, grid, k, N_VGetArrayPointer(v[i]), nScalars, nAux);
+
+      for (Index i = 0; i < nCells; ++i)
+      {
+          Matrix v_tmp(nVars * U_DOF, nScalars);
+          dSources_dScalars_Mat(v_tmp, yJac, i);
+          for (Index j = 0; j < nScalars; ++j)
+              for (Index v = 0; v < nVars; ++v)
+                  v_map[j].u(v).getCoeff(i).second = v_tmp.block(v * U_DOF, j, U_DOF, 1);
+      }
+      v_map.clear();
     }
-    v_map.clear();
 
     // Construct N_Scalar x N_HDG_DOF matrix w which contains the Jacobian
     // of the scalars with respect to the other variables
     // also construct the scalar-scalar coupling matrix N
 
-    std::vector<DGSoln> w_map;
-    for (Index i = 0; i < nScalars; ++i)
+    if (nScalars > 0)
     {
-        w_map.emplace_back(nVars, grid, k, N_VGetArrayPointer(w[i]), nScalars, nAux);
-        w_map.back().zeroCoeffs();
-    }
+      std::vector<DGSoln> w_map;
+      for (Index i = 0; i < nScalars; ++i)
+      {
+          w_map.emplace_back(nVars, grid, k, N_VGetArrayPointer(w[i]), nScalars, nAux);
+          w_map.back().zeroCoeffs();
+      }
 
-    GlobalStateMatrix ScalarG_vals(nScalars);
-    GlobalStateMatrix ScalarG_dt_vals(nScalars);
-    for (Index s = 0; s < nScalars; s++) 
-    {
-      ScalarG_vals.add(nCells, k, nVars, nScalars, nAux);
-      ScalarG_dt_vals.add(nCells, k, nVars, nScalars, nAux);
-    }
+      GlobalStateMatrix ScalarG_vals(nScalars);
+      GlobalStateMatrix ScalarG_dt_vals(nScalars);
+      for (Index s = 0; s < nScalars; s++) 
+      {
+        ScalarG_vals.add(nCells, k, nVars, nScalars, nAux);
+        ScalarG_dt_vals.add(nCells, k, nVars, nScalars, nAux);
+      }
 
-    problem->ScalarGPrimeExtended(ScalarG_vals, ScalarG_dt_vals, yJac, dydtJac, jt);
-  
-    for ( Index j = 0; j < nScalars; ++j ) {
-        const auto& s = ScalarG_vals[j];
-        const auto& s_dt = ScalarG_dt_vals[j];
-        for (Index i = 0; i < nCells; ++i)
-        {
-            for ( Index l = 0; l < k + 1; ++l ) {
-                for ( Index v = 0; v < nVars; ++v ) {
-                    w_map[ j ].sigma( v ).getCoeff( i ).second( l ) = s[i * (k + 1) + l].Flux[ v ]       + alpha * s_dt[i * (k + 1) + l].Flux[ v ];
-                    w_map[ j ].q( v ).getCoeff( i ).second( l )     = s[i * (k + 1) + l].Derivative[ v ] + alpha * s_dt[i * (k + 1) + l].Derivative[ v ];
-                    w_map[ j ].u( v ).getCoeff( i ).second( l )     = s[i * (k + 1) + l].Variable[ v ]   + alpha * s_dt[i * (k + 1) + l].Variable[ v ];
-                }
-                for (Index a = 0; a < nAux; ++a)
-                    w_map[j].Aux(a).getCoeff(i).second(l) = s[i * (k + 1) + l].Aux[a] + alpha * s_dt[i * (k + 1) + l].Aux[a];
-            }
-            for (Index m = 0; m < nScalars; ++m)
-                N_global(j, m) = s.Scalars()[m] + alpha * s_dt.Scalars()[m];
-        }
-    }
-    w_map.clear();
+      problem->ScalarGPrimeExtended(ScalarG_vals, ScalarG_dt_vals, yJac, dydtJac, jt);
+    
+      for ( Index j = 0; j < nScalars; ++j ) {
+          const auto& s = ScalarG_vals[j];
+          const auto& s_dt = ScalarG_dt_vals[j];
+          for (Index i = 0; i < nCells; ++i)
+          {
+              for ( Index l = 0; l < k + 1; ++l ) {
+                  for ( Index v = 0; v < nVars; ++v ) {
+                      w_map[ j ].sigma( v ).getCoeff( i ).second( l ) = s[i * (k + 1) + l].Flux[ v ]       + alpha * s_dt[i * (k + 1) + l].Flux[ v ];
+                      w_map[ j ].q( v ).getCoeff( i ).second( l )     = s[i * (k + 1) + l].Derivative[ v ] + alpha * s_dt[i * (k + 1) + l].Derivative[ v ];
+                      w_map[ j ].u( v ).getCoeff( i ).second( l )     = s[i * (k + 1) + l].Variable[ v ]   + alpha * s_dt[i * (k + 1) + l].Variable[ v ];
+                  }
+                  for (Index a = 0; a < nAux; ++a)
+                      w_map[j].Aux(a).getCoeff(i).second(l) = s[i * (k + 1) + l].Aux[a] + alpha * s_dt[i * (k + 1) + l].Aux[a];
+              }
+              for (Index m = 0; m < nScalars; ++m)
+                  N_global(j, m) = s.Scalars()[m] + alpha * s_dt.Scalars()[m];
+          }
+      }
+      w_map.clear();
+  }
 }
 
 void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorWrapper &lam, sunrealtype *const &Y) const

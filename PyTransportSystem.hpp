@@ -9,13 +9,18 @@
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <stdexcept>
 #include <string_view>
 
 constexpr std::array<std::string_view, 7> required_method_names = {
     "SigmaFn",     "Sources",     "dSigmaFn_du",    "dSigmaFn_dq",
     "dSources_du", "dSources_dq", "dSources_dsigma"};
-constexpr std::array<std::string_view, 4> required_method_names_vectorized = {
-    "SigmaFn_v", "Sources_v", "dSigma", "dSources"};
+
+constexpr std::array<std::string_view, 2> required_method_names_vectorized = {
+    "ComputePhysics", "ComputePhysicsDerivatives"};
+
+constexpr std::array<std::string_view, 4> required_scalar_methods = {
+    "ScalarG", "ScalarGPrime", "InitialScalarValue", "dSources_dScalars"};
 
 namespace py = pybind11;
 
@@ -33,6 +38,7 @@ public:
 
     std::vector<std::string_view> missing_methods;
     std::vector<std::string_view> missing_vectorized_methods;
+    std::vector<std::string_view> missing_scalar_method;
 
     for (const auto &method_name : required_method_names) {
       auto _override = make_override(method_name.data());
@@ -54,7 +60,20 @@ public:
       }
     }
 
+    if (nScalars > 0) {
+      for (const auto &method_name : required_scalar_methods) {
+        auto _override = make_override(method_name.data());
+        if (!_override) {
+          missing_scalar_method.push_back(method_name);
+        } else {
+          method_overrides.insert(
+              std::make_pair(method_name, std::move(_override)));
+        }
+      }
+    }
+
     bool non_vectorized = missing_methods.empty();
+    bool has_scalar = missing_scalar_method.empty();
     vectorized = missing_vectorized_methods.empty();
 
     if (!vectorized || !non_vectorized) {
@@ -76,6 +95,15 @@ public:
                          "implement the missing methods and try again.\n";
         throw std::runtime_error(error_message);
       }
+    }
+
+    if (!has_scalar) {
+      std::string error_message = "The following required scalar methods are "
+                                  "missing in the Python subclass:\n";
+      for (const auto &method_name : missing_scalar_method) {
+        error_message += std::string(method_name) + "\n";
+      }
+      throw std::runtime_error(error_message);
     }
 
     if (nAux > 0) {
@@ -363,7 +391,9 @@ public:
     }
   }
   Value AuxG(Index i, const State &s, Position x, Time t) override {
-    PYBIND11_OVERRIDE(Value, TransportSystem, AuxG, i, s, x, t);
+    if (nAux > 0) {
+      PYBIND11_OVERRIDE_PURE(Value, TransportSystem, AuxG, i, s, x, t);
+    }
   }
 
   void AuxGPrime(Index i, GlobalState &out, GlobalState const &states,
@@ -420,7 +450,9 @@ public:
   }
 
   Value InitialScalarValue(Index s) const override {
-    PYBIND11_OVERRIDE(Value, TransportSystem, InitialScalarValue, s);
+    if (nScalars > 0) {
+      PYBIND11_OVERRIDE_PURE(Value, TransportSystem, InitialScalarValue, s);
+    }
   }
   Value InitialScalarDerivative(Index s, const DGSoln &y,
                                 const DGSoln &dydt) const override {
@@ -431,8 +463,7 @@ public:
     GlobalState state = y.evalOnNodes();
     GlobalState state_dot = dydt.evalOnNodes();
 
-    Value out =
-        _override(s, state, state_dot, integrator.getLambda()).cast<Value>();
+    Value out = _override(s, state, state_dot, integrator).cast<Value>();
     return out;
   }
   Value ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt,
@@ -444,32 +475,42 @@ public:
     GlobalState state = y.evalOnNodes();
     GlobalState state_dot = dydt.evalOnNodes();
 
-    Value out =
-        _override(s, state, state_dot, integrator.getLambda()).cast<Value>();
+    Value out = _override(s, state, state_dot, integrator).cast<Value>();
     return out;
   }
-  void ScalarGPrimeExtended(Index s, State &out, State &out_dt, const DGSoln &y,
-                            const DGSoln &dydt,
-                            std::function<double(double)> phi, Interval I,
-                            Time t) override {
 
+  virtual void ScalarGPrimeExtended(GlobalStateMatrix &out,
+                                    GlobalStateMatrix &out_dt, const DGSoln &y,
+                                    const DGSoln &dydt, Time t) override {
     py::gil_scoped_acquire gil;
-    py::function _override = py::get_override(this, "ScalarG");
+    py::function _override = py::get_override(this, "ScalarGPrime");
 
     PyIntegrator integrator(y.getGrid(), y.getBasis());
     GlobalState state = y.evalOnNodes();
     GlobalState state_dot = dydt.evalOnNodes();
 
-    std::array<State, 2> _out =
-        _override(s, state, state_dot, integrator.getCellLambda())
-            .cast<std::array<State, 2>>();
-    return out;
+    auto temp = _override(state, state_dot, integrator, t)
+                    .cast<std::array<std::vector<GlobalState>, 2>>();
+
+    for (Index s = 0; s < nScalars; s++) {
+      out[s] = temp[0][s];
+      out_dt[s] = temp[1][s];
+    }
   }
+
   bool isScalarDifferential(Index i) override {
-    PYBIND11_OVERRIDE(bool, TransportSystem, isScalarDifferential, i);
+    if (nScalars > 0) {
+      PYBIND11_OVERRIDE_PURE(bool, TransportSystem, isScalarDifferential, i);
+    }
   }
-  void dSources_dScalars(Index, VectorRef, const State &, Position,
-                         Time) override {}
+  void dSources_dScalars(Index s, VectorRef v, const State &state, Position x,
+                         Time t) override {
+
+    py::gil_scoped_acquire gil;
+    py::function _override = py::get_override(this, "dSources_dScalars");
+
+    v = _override(s, state, x, t).cast<Vector>();
+  }
   std::unique_ptr<AdjointProblem> createAdjointProblem() override {
     PYBIND11_OVERRIDE(std::unique_ptr<AdjointProblem>, TransportSystem,
                       createAdjointProblem);
