@@ -104,6 +104,16 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
             in_axes=(self.vmap_axes),
         )(states, positions, self.params)
 
+    @abstractmethod
+    @MaNTA_Decorator
+    def ScalarG(i, states, states_dot, integrator, t):
+        raise NotImplementedError("Scalar G function not implemented in derived class")
+
+    @abstractmethod
+    @MaNTA_Decorator
+    def ScalarGPrime(states, states_dot, integrator, t):
+        raise NotImplementedError("ScalarGPrime not implemented in derived class")
+
     """
     Sigma and source, and auxilliary functions to be overloaded in derived classes
 
@@ -154,12 +164,28 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
         raise NotImplementedError("InitialValue must be implemented in derived class")
 
     @abstractmethod
+    def InitialScalarValue(self, s):
+        raise NotImplementedError("InitialScalarValue not implemented in derived class")
+
+    @abstractmethod
     @partial(jax.jit, static_argnames=("self",))
     def InitialDerivative(self, index, x):
         return self.dInitialValue(index, x)
 
     def InitialAuxValue(self, index, x):
         pass
+
+    @abstractmethod
+    def InitialScalarDerivative(self, i, states, states_dot, integrator):
+        raise NotImplementedError(
+            "InitialScalarDerivative not implemented in derived class"
+        )
+
+    @abstractmethod
+    def isScalarDifferential(self, s) -> bool:
+        raise NotImplementedError(
+            "isScalarDifferential not implemented in derived class"
+        )
 
     """
     Create the adjoint problem associated with this transport system

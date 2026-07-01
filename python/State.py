@@ -24,6 +24,19 @@ class State(eqx.Module):
         self.Scalars = Scalars_
 
     @classmethod
+    def make_zero(cls, nVars, nAux, nScalars, nPoints):
+        zero_ = jnp.zeros((nPoints, nVars))
+        zero_aux = jnp.zeros((nPoints, nAux)) if nAux > 0 else None
+        zero_scalars = jnp.zeros((nScalars,)) if nScalars > 0 else None
+        return cls(
+            Variable_=zero_,
+            Derivative_=zero_,
+            Flux_=zero_,
+            Aux_=zero_aux,
+            Scalars_=zero_scalars,
+        )
+
+    @classmethod
     def from_manta(cls, manta_state):
         shape = manta_state["Variable"].shape
         dp = shape[0]
@@ -37,13 +50,19 @@ class State(eqx.Module):
             Aux_=jnp.array(manta_state["Aux"]),
             Scalars_=jnp.repeat(
                 jnp.expand_dims(jnp.array(manta_state["Scalars"]), axis=0),
-                repeats=dp - nscalars,
+                repeats=dp,
                 axis=0,
             ),
         )
 
     def to_manta(self):
-        Scalars_out = self.Scalars if self.Scalars.size == 0 else self.Scalars[0]
+        Scalars_out = []
+        if self.Scalars is not None:
+            Scalars_out = (
+                self.Scalars
+                if self.Scalars.size == 0
+                else jnp.atleast_2d(self.Scalars)[0, :]
+            )
         return {
             "Variable": np.asarray(self.Variable),
             "Derivative": np.asarray(self.Derivative),
@@ -83,5 +102,39 @@ def MaNTA_Decorator(func):
             return eqx.combine(res, empty).to_manta()
         else:
             return res
+
+    return wrapper
+
+
+def Scalar_Decorator(func):
+    def wrapper(self, index, states, states_dt, *args):
+        states_, empty = eqx.partition(State.from_manta(states), lambda x: x.size > 0)
+        states_dt_, empty = eqx.partition(
+            State.from_manta(states_dt), lambda x: x.size > 0
+        )
+        res = func(self, index, states_, states_dt_, *args)
+
+        if isinstance(res, State):
+            return eqx.combine(res, empty).to_manta()
+        else:
+            return res
+
+    return wrapper
+
+
+def Scalar_Decorator2(func):
+    def wrapper(self, states, states_dt, *args):
+        states_, empty = eqx.partition(State.from_manta(states), lambda x: x.size > 0)
+        states_dt_, empty = eqx.partition(
+            State.from_manta(states_dt), lambda x: x.size > 0
+        )
+
+        result = func(self, states_, states_dt_, *args)
+
+        for i in range(0, len(result)):
+            for j in range(0, len(result[i])):
+                if isinstance(result[i][j], State):
+                    result[i][j] = eqx.combine(result[i][j], empty).to_manta()
+        return result
 
     return wrapper

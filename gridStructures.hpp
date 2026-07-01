@@ -42,6 +42,11 @@ public:
 		return I.x_l < J.x_l;
 	}
 
+	friend bool operator>(Interval const &I, Interval const &J)
+	{
+		return I.x_u > J.x_u;
+	}
+
 	friend bool operator==(Interval const &I, Interval const &J)
 	{
 		return (I.x_l == J.x_l) && (I.x_u == J.x_u);

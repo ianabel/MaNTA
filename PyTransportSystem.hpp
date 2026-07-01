@@ -5,6 +5,7 @@
 #include "TransportSystem.hpp"
 #include "extern/pybind11/include/pybind11/pybind11.h"
 #include "pybind11/gil.h"
+#include <functional>
 #include <pybind11/eigen.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
@@ -20,9 +21,11 @@ constexpr std::array<std::string_view, 2> required_method_names_vectorized = {
     "ComputePhysics", "ComputePhysicsDerivatives"};
 
 constexpr std::array<std::string_view, 4> required_scalar_methods = {
-    "ScalarG", "ScalarGPrime", "InitialScalarValue", "dSources_dScalars"};
+    "ScalarG", "ScalarGPrime", "InitialScalarDerivative", "dSources_dScalars"};
 
 namespace py = pybind11;
+
+using Integrator::PyIntegrator;
 
 class PyTransportSystem : public TransportSystem,
                           public py::trampoline_self_life_support {
@@ -468,33 +471,35 @@ public:
   }
   Value ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt,
                         Time t) override {
-    py::gil_scoped_acquire gil;
-    py::function _override = py::get_override(this, "ScalarG");
+    if (!initialized)
+      initializeOverrides();
 
     PyIntegrator integrator(y.getGrid(), y.getBasis());
     GlobalState state = y.evalOnNodes();
     GlobalState state_dot = dydt.evalOnNodes();
 
-    Value out = _override(s, state, state_dot, integrator).cast<Value>();
+    Value out = method_overrides["ScalarG"](s, state, state_dot, integrator, t)
+                    .cast<Value>();
     return out;
   }
 
   virtual void ScalarGPrimeExtended(GlobalStateMatrix &out,
                                     GlobalStateMatrix &out_dt, const DGSoln &y,
                                     const DGSoln &dydt, Time t) override {
-    py::gil_scoped_acquire gil;
-    py::function _override = py::get_override(this, "ScalarGPrime");
+    if (!initialized)
+      initializeOverrides();
 
     PyIntegrator integrator(y.getGrid(), y.getBasis());
     GlobalState state = y.evalOnNodes();
     GlobalState state_dot = dydt.evalOnNodes();
 
-    auto temp = _override(state, state_dot, integrator, t)
-                    .cast<std::array<std::vector<GlobalState>, 2>>();
+    auto temp =
+        method_overrides["ScalarGPrime"](state, state_dot, integrator, t)
+            .cast<std::array<std::vector<py::dict>, 2>>();
 
-    for (Index s = 0; s < nScalars; s++) {
-      out[s] = temp[0][s];
-      out_dt[s] = temp[1][s];
+    for (Index i = 0; i < nScalars; i++) {
+      out[i] = temp[0][i].cast<GlobalState>();
+      out_dt[i] = temp[1][i].cast<GlobalState>();
     }
   }
 
@@ -506,10 +511,10 @@ public:
   void dSources_dScalars(Index s, VectorRef v, const State &state, Position x,
                          Time t) override {
 
-    py::gil_scoped_acquire gil;
-    py::function _override = py::get_override(this, "dSources_dScalars");
+    if (!initialized)
+      initializeOverrides();
 
-    v = _override(s, state, x, t).cast<Vector>();
+    v = method_overrides["dSources_dScalars"](s, state, x, t).cast<Vector>();
   }
   std::unique_ptr<AdjointProblem> createAdjointProblem() override {
     PYBIND11_OVERRIDE(std::unique_ptr<AdjointProblem>, TransportSystem,

@@ -12,6 +12,7 @@
 #include "PyIntegrator.hpp"
 #include "PyRunner.hpp"
 #include "PyTransportSystem.hpp"
+#include "State.hpp"
 #include "TransportSystem.hpp"
 
 namespace py = pybind11;
@@ -66,7 +67,6 @@ public:
 
   bool load(handle src, bool) {
     py::dict d = py::cast<py::dict>(src);
-
     value.Variable() = py::cast<Matrix>(d["Variable"]).transpose();
     value.Derivative() = py::cast<Matrix>(d["Derivative"]).transpose();
     value.Flux() = py::cast<Matrix>(d["Flux"]).transpose();
@@ -196,7 +196,8 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used()) {
       .def_readwrite("isUpperDirichlet", &PyTransportSystem::isUpperDirichlet)
       .def_readwrite("isLowerDirichlet", &PyTransportSystem::isLowerDirichlet)
       .def_readwrite("nVars", &PyTransportSystem::nVars)
-      .def_readwrite("nAux", &PyTransportSystem::nAux);
+      .def_readwrite("nAux", &PyTransportSystem::nAux)
+      .def_readwrite("nScalars", &PyTransportSystem::nScalars);
 
   py::class_<AdjointProblem, PyAdjointProblem, py::smart_holder>(
       m, "AdjointProblem")
@@ -232,7 +233,7 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used()) {
 
   py::class_<PyIntegrator>(m, "Integrator")
       .def("__call__", &PyIntegrator::operator())
-      .def("integrateOnCell", &PyIntegrator::integrateOnCell)
+      .def("computeCellProducts", &PyIntegrator::cellProducts)
       .def("Phi", &PyIntegrator::Phi);
 
   py::class_<toml::value>(m, "TomlValue")

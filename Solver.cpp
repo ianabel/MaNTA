@@ -283,7 +283,13 @@ void SystemSolver::runSolver(double tFinal)
 			// try to emit final data
 			print(out0, tret, nOut, true);
 			if (physics_debug)
-				printOnNodes(dydt_out, tret, dYdt);
+      {
+	      residual(tret, Y, dYdt, res);
+        IDAEwtSet(Y, wgt, IDA_mem);
+        res_out << "# Residual norm at t = " << tret << " is " << N_VWrmsNorm(res, wgt) << std::endl;
+        printOnNodes(res_out, tret, res);
+        printOnNodes(dydt_out, tret, dYdt);
+      }
 			WriteTimeslice(tret);
 			out0.close();
 			nc_output.Close();

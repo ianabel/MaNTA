@@ -210,7 +210,7 @@ public:
   GlobalStateMatrix(Index nVars) noexcept : nVars(nVars) {
     m_data.reserve(nVars);
   };
-  
+
   GlobalStateMatrix(const GlobalStateMatrix &other) {
     nVars = other.nVars;
     m_data = other.m_data;
