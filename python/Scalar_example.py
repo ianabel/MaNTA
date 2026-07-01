@@ -136,14 +136,14 @@ class ScalarLD(VectorizedTransportSystem):
         # Scalar 1
 
         _flux_L = jax.pure_callback(integrator.Phi, jax.ShapeDtypeStruct((self.k + 1, ), jnp.float32), 0, self.xL)
-        _flux_R = jax.pure_callback(integrator.Phi, jax.ShapeDtypeStruct((self.k + 1, ), jnp.float32), self.nCells - 1, self.xR)
+        _flux_R = -jax.pure_callback(integrator.Phi, jax.ShapeDtypeStruct((self.k + 1, ), jnp.float32), self.nCells - 1, self.xR)
 
         _flux = jnp.concatenate([_flux_L, jnp.zeros(((self.nCells - 2) * (self.k + 1), )) , _flux_R])
         _scalar = jnp.array([-self.params.gamma, 1.0, -self.params.gamma_I])
         _scalar_dt = jnp.array([-self.params.gamma_d, 0.0, 0.0])
 
         derivs.append(State(_zeros, _zeros, _flux, None, _scalar))
-        derivs_dt.append(State(_zeros, _zeros, _flux, None, _scalar_dt))
+        derivs_dt.append(State(_zeros, _zeros, _zeros, None, _scalar_dt))
 
         # Scalar 2
 
