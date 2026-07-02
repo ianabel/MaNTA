@@ -231,11 +231,6 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used()) {
            py::return_value_policy::reference)
       .def("getNCells", &Grid::getNCells);
 
-  py::class_<PyIntegrator>(m, "Integrator")
-      .def("__call__", &PyIntegrator::operator())
-      .def("computeCellProducts", &PyIntegrator::cellProducts)
-      .def("Phi", &PyIntegrator::Phi);
-
   py::class_<toml::value>(m, "TomlValue")
       .def(py::init<>())
       .def("__getitem__", [](const toml::value &v, const std::string &key) {

@@ -975,7 +975,6 @@ int static_residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval
 
 int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval)
 {
-    logmsg<LOG_LEVEL::PDEBUG>("Computing residual at t = {}", tres);
     updateBoundaryConditions(tres);
 
     DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux);

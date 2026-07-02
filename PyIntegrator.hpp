@@ -7,11 +7,15 @@
 
 namespace Integrator {
 
-// Save static values to avoid recomputation
-static std::map<Interval, Vector> integrationWeights;
-static std::map<Interval, std::vector<Vector>> phiCell;
 static const BasisType *m_basis =
     nullptr; // This can be static because NodalBasis has singletons
+// Save static values to avoid recomputation
+static std::map<Interval, Vector> integrationWeights;
+static std::map<Interval, Matrix> phiCell;
+static Vector globalIntegrationWeights;
+static Matrix globalCellWeights;
+static Matrix phiBoundary;
+
 static const Vector &getIntegrationWeights(Interval const &I) {
   if (integrationWeights.contains(I))
     return integrationWeights.at(I);
@@ -21,80 +25,75 @@ static const Vector &getIntegrationWeights(Interval const &I) {
   }
 }
 
-static const std::vector<Values> &getPhiCell(Interval const &I) {
+static const Vector &getIntegrationWeights(const BasisType &basis,
+                                           const Grid &grid) {
+  if (!m_basis)
+    m_basis = &basis;
+  if (globalIntegrationWeights.size() == 0) {
+    auto const k = m_basis->Order();
+    globalIntegrationWeights.resize(grid.getNCells() * (k + 1));
+
+    for (Index i = 0; i < grid.getNCells(); i++) {
+      const auto ind = Eigen::seq(i * (k + 1), (i + 1) * (k + 1) - 1);
+      globalIntegrationWeights(ind) = getIntegrationWeights(grid[i]);
+    }
+  }
+  return globalIntegrationWeights;
+}
+
+static const Matrix &getPhiCell(Interval const &I) {
   if (phiCell.contains(I))
     return phiCell.at(I);
   else {
     const auto k = m_basis->Order();
-    std::vector<Values> phis(k + 1);
+    Matrix phis(k + 1, k + 1);
     auto nodes = m_basis->getNodes();
     for (auto i = 0; i < k + 1; i++) {
       Position x = I.fromRef(nodes[i]);
-      phis[i].resize(k + 1);
       for (auto j = 0; j < k + 1; j++)
-        phis[i][j] = m_basis->Evaluate(I, j, x);
+        phis(i, j) = m_basis->Evaluate(I, j, x);
     }
     phiCell.insert({I, phis});
     return phiCell.at(I);
   }
 }
 
-class PyIntegrator {
-public:
-  explicit PyIntegrator(const Grid &grid, const BasisType &basis)
-      : m_grid(grid) {
-    if (!m_basis)
-      m_basis = &basis;
-  }
-  ~PyIntegrator() = default;
-
-  Value operator()(const Values &f) const {
-
-    const auto k = m_basis->Order();
-    Value out = 0.0;
-    for (size_t i = 0; i < m_grid.getNCells(); i++) {
-
-      const auto ind = Eigen::seq(i * (k + 1), (i + 1) * (k + 1) - 1);
-      out += integrateOnCell(f(ind), i);
-    }
-    return out;
-  };
-
-  Value integrateOnCell(Values &&f, Index i) const {
-    const Interval &I = m_grid[i];
-
-    // https://en.wikipedia.org/wiki/Newton%E2%80%93Cotes_formulas
-    // integrate interpolation to get weights
-    // compute integral as sum g * weights
-
-    const auto weights = getIntegrationWeights(I);
-    return (f.transpose() * weights).value();
-  }
-
-  Values cellProducts(const Values &f) const {
-    Values out(f.size());
-    const auto k = m_basis->Order();
-    for (size_t i = 0; i < m_grid.getNCells(); i++) {
-      const auto &phis = getPhiCell(m_grid[i]);
-      const auto ind = Eigen::seq(i * (k + 1), (i + 1) * (k + 1) - 1);
+static const Matrix &getPhiCell(const BasisType &basis, const Grid &grid) {
+  if (!m_basis)
+    m_basis = &basis;
+  if (globalCellWeights.size() == 0) {
+    auto const k = m_basis->Order();
+    globalCellWeights.resize(k + 1, grid.getNCells() * (k + 1));
+    for (Index i = 0; i < grid.getNCells(); i++) {
+      Vector temp(grid.getNCells() * (k + 1));
+      auto const &phiCell = getPhiCell(grid[i]);
       for (Index j = 0; j < k + 1; j++) {
-        out(i * (k + 1) + j) = integrateOnCell(f(ind).cwiseProduct(phis[j]), i);
+        const auto ind = Eigen::seq(i * (k + 1), (i + 1) * (k + 1) - 1);
+        globalCellWeights(j, ind) = phiCell(Eigen::all, j);
       }
     }
-    return out;
   }
+  return globalCellWeights;
+}
 
-  Values Phi(Index i, Position x) {
-    const Interval &I = m_grid[i];
+static const Matrix &getPhiBoundary(const BasisType &basis, const Grid &grid) {
+
+  if (!m_basis)
+    m_basis = &basis;
+
+  if (phiBoundary.size() == 0) {
+    const Interval &I_l = grid[0];
+    const Interval &I_u = grid[grid.getNCells() - 1];
+
     const auto k = m_basis->Order();
-    Values out(k + 1);
-    for (size_t j = 0; j < k + 1; j++)
-      out(j) = m_basis->Evaluate(I, j, x);
-    return out;
-  }
+    phiBoundary.resize(k + 1, 2);
 
-private:
-  Grid m_grid;
-};
-} // namespace Integrator
+    for (Index i = 0; i < k + 1; i++) {
+      phiBoundary(i, 0) = m_basis->Evaluate(I_l, i, I_l.x_l);
+      phiBoundary(i, 1) = m_basis->Evaluate(I_u, i, I_u.x_u);
+    }
+  }
+  return phiBoundary;
+}
+}; // namespace Integrator
 #endif // PYINTEGRATOR_HPP

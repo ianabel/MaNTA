@@ -25,8 +25,6 @@ constexpr std::array<std::string_view, 4> required_scalar_methods = {
 
 namespace py = pybind11;
 
-using Integrator::PyIntegrator;
-
 class PyTransportSystem : public TransportSystem,
                           public py::trampoline_self_life_support {
 public:
@@ -462,11 +460,10 @@ public:
     py::gil_scoped_acquire gil;
     py::function _override = py::get_override(this, "InitialScalarDerivative");
 
-    PyIntegrator integrator(y.getGrid(), y.getBasis());
     GlobalState state = y.evalOnNodes();
     GlobalState state_dot = dydt.evalOnNodes();
 
-    Value out = _override(s, state, state_dot, integrator).cast<Value>();
+    Value out = _override(s, state, state_dot, Integrator::getIntegrationWeights(y.getBasis(), y.getGrid())).cast<Value>();
     return out;
   }
   Value ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt,
@@ -474,11 +471,10 @@ public:
     if (!initialized)
       initializeOverrides();
 
-    PyIntegrator integrator(y.getGrid(), y.getBasis());
     GlobalState state = y.evalOnNodes();
     GlobalState state_dot = dydt.evalOnNodes();
 
-    Value out = method_overrides["ScalarG"](s, state, state_dot, integrator, t)
+    Value out = method_overrides["ScalarG"](s, state, state_dot, Integrator::getIntegrationWeights(y.getBasis(), y.getGrid()), t)
                     .cast<Value>();
     return out;
   }
@@ -489,12 +485,14 @@ public:
     if (!initialized)
       initializeOverrides();
 
-    PyIntegrator integrator(y.getGrid(), y.getBasis());
     GlobalState state = y.evalOnNodes();
     GlobalState state_dot = dydt.evalOnNodes();
 
+    const auto& basis = y.getBasis();
+    const auto& grid = y.getGrid();
+
     auto temp =
-        method_overrides["ScalarGPrime"](state, state_dot, integrator, t)
+        method_overrides["ScalarGPrime"](state, state_dot, Integrator::getIntegrationWeights(basis, grid), Integrator::getPhiCell(basis, grid), Integrator::getPhiBoundary(basis, grid), t)
             .cast<std::array<std::vector<py::dict>, 2>>();
 
     for (Index i = 0; i < nScalars; i++) {
