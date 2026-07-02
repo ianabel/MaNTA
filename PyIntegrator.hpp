@@ -7,16 +7,16 @@
 
 namespace Integrator {
 
-static const BasisType *m_basis =
+inline const BasisType *m_basis =
     nullptr; // This can be static because NodalBasis has singletons
 // Save static values to avoid recomputation
-static std::map<Interval, Vector> integrationWeights;
-static std::map<Interval, Matrix> phiCell;
-static Vector globalIntegrationWeights;
-static Matrix globalCellWeights;
-static Matrix phiBoundary;
+inline std::map<Interval, Vector> integrationWeights;
+inline std::map<Interval, Matrix> phiCell;
+inline Vector globalIntegrationWeights;
+inline Matrix globalCellWeights;
+inline Matrix phiBoundary;
 
-static const Vector &getIntegrationWeights(Interval const &I) {
+inline const Vector &getIntegrationWeights(Interval const &I) {
   if (integrationWeights.contains(I))
     return integrationWeights.at(I);
   else {
@@ -25,7 +25,7 @@ static const Vector &getIntegrationWeights(Interval const &I) {
   }
 }
 
-static const Vector &getIntegrationWeights(const BasisType &basis,
+inline const Vector &getIntegrationWeights(const BasisType &basis,
                                            const Grid &grid) {
   if (!m_basis)
     m_basis = &basis;
@@ -41,7 +41,7 @@ static const Vector &getIntegrationWeights(const BasisType &basis,
   return globalIntegrationWeights;
 }
 
-static const Matrix &getPhiCell(Interval const &I) {
+inline const Matrix &getPhiCell(Interval const &I) {
   if (phiCell.contains(I))
     return phiCell.at(I);
   else {
@@ -58,7 +58,7 @@ static const Matrix &getPhiCell(Interval const &I) {
   }
 }
 
-static const Matrix &getPhiCell(const BasisType &basis, const Grid &grid) {
+inline const Matrix &getPhiCell(const BasisType &basis, const Grid &grid) {
   if (!m_basis)
     m_basis = &basis;
   if (globalCellWeights.size() == 0) {
@@ -76,7 +76,7 @@ static const Matrix &getPhiCell(const BasisType &basis, const Grid &grid) {
   return globalCellWeights;
 }
 
-static const Matrix &getPhiBoundary(const BasisType &basis, const Grid &grid) {
+inline const Matrix &getPhiBoundary(const BasisType &basis, const Grid &grid) {
 
   if (!m_basis)
     m_basis = &basis;

@@ -6,8 +6,6 @@ import MaNTA
 from VectorizedTransportSystem import VectorizedTransportSystem
 from JAXAdjointProblem import JAXAdjointProblem
 import jax.numpy as jnp
-import jax
-
 
 class NonlinearDiffusionParams(NamedTuple):
     D: float
@@ -25,7 +23,6 @@ class NonlinearDiffusionParams(NamedTuple):
             a=config["a"],
             SourceWidth=0.02,
         )
-
 
 class JAXNonlinearDiffusion(VectorizedTransportSystem):
     def __init__(self, config):

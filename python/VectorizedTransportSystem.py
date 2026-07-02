@@ -5,7 +5,7 @@ import MaNTA
 from JAXAdjointProblem import JAXAdjointProblem
 from typing import NamedTuple, Any
 from functools import partial
-from State import Physics_Decorator, State, MaNTA_Decorator
+from State import Physics_Decorator, State
 from abc import abstractmethod
 import equinox as eqx
 
@@ -36,6 +36,9 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
     def UpperBoundary(self, index, t):
         raise NotImplementedError("UpperBoundary not implemented in derived class")
 
+    """
+    Base methods for vectorizing 
+    """
     @Physics_Decorator
     def ComputePhysics(self, states, positions, t):
         index = jnp.arange(0, self.nVars)
@@ -66,24 +69,28 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
 
         return [fluxes, sources, aux]
 
+    @partial(jax.jit, static_argnames=("self",))
     def SigmaFn_v(self, index, states, positions, t):
         return jax.vmap(
             lambda s, p, params: self.sigma(index, s, p, t, params),
             in_axes=(self.vmap_axes),
         )(states, positions, self.params)
 
+    @partial(jax.jit, static_argnames=("self",))
     def Sources_v(self, index, states, positions, t):
         return jax.vmap(
             lambda s, p, params: self.source(index, s, p, t, params),
             in_axes=(self.vmap_axes),
         )(states, positions, self.params)
 
+    @partial(jax.jit, static_argnames=("self",))
     def AuxG_v(self, index, states, positions, t):
         return jax.vmap(
             lambda s, p, params: self.aux(index, s, p, t, params),
             in_axes=(self.vmap_axes),
         )(states, positions, self.params)
 
+    @partial(jax.jit, static_argnames=("self",))
     def dSigma(self, index, states, positions, t):
         return jax.vmap(
             lambda s, p, params: jax.grad(self.sigma, argnums=1)(
@@ -92,6 +99,7 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
             in_axes=(self.vmap_axes),
         )(states, positions, self.params)
 
+    @partial(jax.jit, static_argnames=("self",))
     def dSources(self, index, states, positions, t):
         return jax.vmap(
             lambda s, p, params: jax.grad(self.source, argnums=1)(
@@ -100,6 +108,7 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
             in_axes=(self.vmap_axes),
         )(states, positions, self.params)
 
+    @partial(jax.jit, static_argnames=("self",))
     def AuxGPrime_v(self, index, states, positions, t):
         return jax.vmap(
             lambda s, p, params: jax.grad(self.aux, argnums=1)(index, s, p, t, params),
@@ -136,27 +145,16 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
     """
 
     @abstractmethod
-    @partial(jax.jit, static_argnames=("self",))
-    def sigma(self, index, state, x, t, params: NamedTuple):
+    def sigma(self, index, state, x, t, params):
         raise NotImplementedError("sigma function not implemented in derived class")
 
     @abstractmethod
-    @partial(jax.jit, static_argnames=("self",))
-    def source(self, index, state, x, t, params: NamedTuple):
+    def source(self, index, state, x, t, params):
         raise NotImplementedError("source function not implemented in derived class")
 
     @abstractmethod
-    @partial(jax.jit, static_argnames=("self",))
-    def aux(self, index, state, x, t, params: NamedTuple):
+    def aux(self, index, state, x, t, params):
         raise NotImplementedError("aux function not implemented in derived class")
-
-    @MaNTA_Decorator
-    def dSigma_dPhi(self, index, state, x, t):
-        return jax.grad(self.sigma, argnums=1)(index, state, x, t, self.params).Aux
-
-    @MaNTA_Decorator
-    def dSources_dPhi(self, index, state, x, t):
-        return jax.grad(self.source, argnums=1)(index, state, x, t, self.params).Aux
 
     @abstractmethod
     @partial(jax.jit, static_argnames=("self",))

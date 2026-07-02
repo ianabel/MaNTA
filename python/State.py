@@ -75,7 +75,9 @@ class State(eqx.Module):
     def vmap_axes():
         return 0
 
-
+"""
+Decorator functions for converting inputs from the C++ side (dictionaries) to dataclasses for easier use in JAX
+"""
 def Physics_Decorator(func):
     def wrapper(self, states, positions, *args):
         states_, empty = eqx.partition(State.from_manta(states), lambda x: x.size > 0)
@@ -106,7 +108,7 @@ def MaNTA_Decorator(func):
     return wrapper
 
 
-def Scalar_Decorator(func):
+def ScalarG_Decorator(func):
     def wrapper(self, index, states, states_dt, *args):
         states_, empty = eqx.partition(State.from_manta(states), lambda x: x.size > 0)
         states_dt_, empty = eqx.partition(
@@ -122,7 +124,7 @@ def Scalar_Decorator(func):
     return wrapper
 
 
-def Scalar_Decorator2(func):
+def ScalarGPrime_Decorator(func):
     def wrapper(self, states, states_dt, *args):
         states_, empty = eqx.partition(State.from_manta(states), lambda x: x.size > 0)
         states_dt_, empty = eqx.partition(
