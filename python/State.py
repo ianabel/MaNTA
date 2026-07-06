@@ -3,6 +3,7 @@ import jax
 from jaxtyping import Array, ArrayLike, Float, Int
 import jax.numpy as jnp
 import numpy as np
+from Integrator import Integrator
 
 """
 Wrapper class for MaNTA State
@@ -75,9 +76,12 @@ class State(eqx.Module):
     def vmap_axes():
         return 0
 
+
 """
 Decorator functions for converting inputs from the C++ side (dictionaries) to dataclasses for easier use in JAX
 """
+
+
 def Physics_Decorator(func):
     def wrapper(self, states, positions, *args):
         states_, empty = eqx.partition(State.from_manta(states), lambda x: x.size > 0)
@@ -109,12 +113,14 @@ def MaNTA_Decorator(func):
 
 
 def ScalarG_Decorator(func):
-    def wrapper(self, index, states, states_dt, *args):
+    def wrapper(self, index, states, states_dt, weights, *args):
         states_, empty = eqx.partition(State.from_manta(states), lambda x: x.size > 0)
         states_dt_, empty = eqx.partition(
             State.from_manta(states_dt), lambda x: x.size > 0
         )
-        res = func(self, index, states_, states_dt_, *args)
+
+        integrator = Integrator(self.k, self.nCells, weights, None, None)
+        res = func(self, index, states_, states_dt_, integrator, *args)
 
         if isinstance(res, State):
             return eqx.combine(res, empty).to_manta()
@@ -125,13 +131,14 @@ def ScalarG_Decorator(func):
 
 
 def ScalarGPrime_Decorator(func):
-    def wrapper(self, states, states_dt, *args):
+    def wrapper(self, states, states_dt, weights, phis, phi_boundary, *args):
         states_, empty = eqx.partition(State.from_manta(states), lambda x: x.size > 0)
         states_dt_, empty = eqx.partition(
             State.from_manta(states_dt), lambda x: x.size > 0
         )
 
-        result = func(self, states_, states_dt_, *args)
+        integrator = Integrator(self.k, self.nCells, weights, phis, phi_boundary)
+        result = func(self, states_, states_dt_, integrator, *args)
 
         for i in range(0, len(result)):
             for j in range(0, len(result[i])):

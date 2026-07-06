@@ -33,6 +33,7 @@ class ScalarLDParams(NamedTuple):
             alpha=0.2,
         )
 
+
 class ScalarLD(VectorizedTransportSystem):
     def __init__(self, config):
         super().__init__()
@@ -45,7 +46,7 @@ class ScalarLD(VectorizedTransportSystem):
             "OutputFilename": "out",
             "Polynomial_degree": 4,
             "Grid_size": 21,
-            "tau": 1.0,
+            "tau": 0.1,
             "Lower_boundary": -1.0,
             "Upper_boundary": 1.0,
             "Relative_tolerance": 1e-3,
@@ -90,7 +91,7 @@ class ScalarLD(VectorizedTransportSystem):
 
     @ScalarG_Decorator
     @partial(jax.jit, static_argnames=("self",))
-    def ScalarG(self, i, states, states_dot, weights, t):
+    def ScalarG(self, i, states, states_dot, integrator, t):
         E = states.Scalars[0, 0]
         J = states.Scalars[0, 1]
         I = states.Scalars[0, 2]
@@ -98,12 +99,19 @@ class ScalarLD(VectorizedTransportSystem):
         dEdt = states_dot.Scalars[0, 0]
         dIdt = states_dot.Scalars[0, 2]
 
-        M = jnp.dot(weights, states.Variable[:,0])
+        M = integrator(states.Variable[:, 0])
+
         def i0():
             return E - (self.M0 - M)
 
         def i1():
-            return J - self.params.gamma * E - self.params.gamma_d * dEdt - self.params.gamma_I * I + (states.Flux[0, 0] - states.Flux[-1, 0])
+            return (
+                J
+                - self.params.gamma * E
+                - self.params.gamma_d * dEdt
+                - self.params.gamma_I * I
+                + (states.Flux[0, 0] - states.Flux[-1, 0])
+            )
 
         def i2():
             return dIdt - E
@@ -112,7 +120,7 @@ class ScalarLD(VectorizedTransportSystem):
 
     @ScalarGPrime_Decorator
     @partial(jax.jit, static_argnames=("self",))
-    def ScalarGPrime(self, states, states_dot, weights, phis, phi_boundaries, t):
+    def ScalarGPrime(self, states, states_dot, integrator, t):
 
         sArgs = (self.nVars, self.nAux, self.nScalars, len(self.points))
 
@@ -120,7 +128,7 @@ class ScalarLD(VectorizedTransportSystem):
 
         varshape = states.Variable.shape
         _zeros = jnp.zeros(varshape)
-        _variable = -self.computeCellProducts(jnp.ones((self.nPoints,)), weights, phis)
+        _variable = -integrator.computeCellProducts(jnp.ones((self.nPoints,)))
 
         _scalar = jnp.array([1.0, 0.0, 0.0])
 
@@ -128,11 +136,13 @@ class ScalarLD(VectorizedTransportSystem):
         derivs_dt0 = State.make_zero(*sArgs)
 
         # Scalar 1
-        
-        _flux_L = phi_boundaries[:, 0]
-        _flux_R = -phi_boundaries[:, 1]
 
-        _flux = jnp.concatenate([_flux_L, jnp.zeros(((self.nCells - 2) * (self.k + 1), )) , _flux_R])
+        _flux_L = integrator.phiL()
+        _flux_R = -integrator.phiR()
+
+        _flux = jnp.concatenate(
+            [_flux_L, jnp.zeros(((self.nCells - 2) * (self.k + 1),)), _flux_R]
+        )
         _scalar = jnp.array([-self.params.gamma, 1.0, -self.params.gamma_I])
         _scalar_dt = jnp.array([-self.params.gamma_d, 0.0, 0.0])
 
@@ -150,17 +160,6 @@ class ScalarLD(VectorizedTransportSystem):
         out = [[derivs0, derivs1, derivs2], [derivs_dt0, derivs_dt1, derivs_dt2]]
         return out
 
-
-    def computeCellProducts(self, f, weights, phis):
-        def cellProduct(v, w):
-            return jnp.dot(v, w)
-
-        _cell_weights = jnp.reshape(jnp.atleast_2d(weights), (self.k + 1, self.nCells))
-        _rep_weights = jnp.repeat(_cell_weights, repeats=self.k+1, axis=1)
-        _vin = jnp.multiply(f, phis)
-        return jax.vmap(cellProduct, in_axes=(1,1))(_vin, _rep_weights)
-
-    
     @partial(jax.jit, static_argnames=("self",))
     def ScaledSource(self, x, params):
         Ainv = (
@@ -170,7 +169,7 @@ class ScalarLD(VectorizedTransportSystem):
 
     @partial(jax.jit, static_argnames=("self",))
     def dSources_dScalars(self, i, state, x, t):
-        return jnp.array([0.0, self.ScaledSource(x, self.params),0.0])
+        return jnp.array([0.0, self.ScaledSource(x, self.params), 0.0])
 
     @partial(jax.jit, static_argnames=("self",))
     def LowerBoundary(self, index, t):
@@ -183,33 +182,46 @@ class ScalarLD(VectorizedTransportSystem):
     def InitialValue(self, index, x):
         return self.params.u0 + self.params.beta * jnp.cos(jnp.pi * x / 2.0)
 
+    @partial(jax.jit, static_argnames=("self",))
     def InitialScalarValue(self, s):
-        if s == 0:
+
+        def i0():
             return 0.0
-        elif s == 1:
+
+        def i1():
             return -self.params.kappa * (
                 self.InitialDerivative(0, self.xR) - self.InitialDerivative(0, self.xL)
             )
 
-        elif s == 2:
+        def i2():
             return 0.0
 
-    def InitialScalarDerivative(self, i, state, state_dot, weights):
-        if i == 0:
-            mdot = jnp.dot(weights, state_dot["Variable"])
-            return mdot.item()
-        elif i == 2:
-            E = state["Scalars"][0]
+        return jax.lax.switch(s, [i0, i1, i2])
+
+    @ScalarG_Decorator
+    @partial(jax.jit, static_argnames=("self",))
+    def InitialScalarDerivative(self, i, state, state_dot, integrator):
+
+        E = state.Scalars[0, 0]
+        mdot = integrator(state_dot.Variable[:, 0])
+
+        def i0():
+            return mdot
+
+        def i2():
             return E
 
+        return jax.lax.switch(i, [i0, i2])
+
+    @partial(jax.jit, static_argnames=("self",))
     def isScalarDifferential(self, s):
-        if (s == 0) or (s == 2):
+        def i0():
             return True
-        else:
+
+        def i2():
             return False
 
-    def createAdjointProblem(self):
-        return self.adjointProblem
+        return jax.lax.switch(s, [i0, i2])
 
 
 def runMaNTA():
@@ -220,7 +232,7 @@ def runMaNTA():
     }
     transportSystem = ScalarLD(config)
 
-    transportSystem.run(tFinal=1.0)
+    transportSystem.run()
     # transportSystem.setParams(LinearDiffusionParams(0.1, 0.1, 2.0, 1.0)
 
 

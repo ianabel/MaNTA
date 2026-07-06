@@ -7,8 +7,7 @@
 
 namespace Integrator {
 
-inline const BasisType *m_basis =
-    nullptr; // This can be static because NodalBasis has singletons
+inline const BasisType *m_basis = nullptr; // Pointer to singleton
 // Save static values to avoid recomputation
 inline std::map<Interval, Vector> integrationWeights;
 inline std::map<Interval, Matrix> phiCell;
