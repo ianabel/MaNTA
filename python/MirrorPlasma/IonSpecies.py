@@ -1,6 +1,7 @@
 import equinox as eqx
 import jax.numpy as jnp
-from jax.typing import Float
+import jax
+from jaxtyping import Float
 from abc import abstractmethod
 from typing import override
 
@@ -13,9 +14,12 @@ VacuumPermittivity = 8.8541878128e-12
 class _IonSpecies(eqx.Module):
     IonMass: Float
 
-    @abstractmethod
     def FusionRate(self, n, pi):
-        return jnp.zeros(n.shape)
+        return 0.0
+
+    """
+        Electron ionization cross section, energy in ev
+    """
 
     @abstractmethod
     def electronImpactIonizationCrossSection(self, Energy):
@@ -51,14 +55,9 @@ class Hydrogen(_IonSpecies):
         fittingParamA = 0.18450
         fittingParamB = jnp.array([-0.032226, -0.034539, 1.4003, -2.8115, 2.2986])
 
-        if Energy < minimumEnergySigma:
-            return 0.0
-        else:
-            sum = 0.0
-            x = 1.0 - ionizationEnergy / Energy
-            if x <= 0:
-                return 0.0
+        x = 1.0 - ionizationEnergy / Energy
 
+        def _compute(x):
             sum = x * (
                 fittingParamB[0]
                 + x
@@ -72,6 +71,8 @@ class Hydrogen(_IonSpecies):
                 fittingParamA * jnp.log(Energy / ionizationEnergy) + sum
             )
             return sigma
+
+        return jnp.where(jax.lax.le(Energy, minimumEnergySigma), 0.0, _compute(x))
 
     @override
     def protonImpactIonizationCrossSection(self, Energy):
@@ -93,33 +94,32 @@ class Hydrogen(_IonSpecies):
         A7 = 3.1834
         A8 = -3.7154
 
-        if EnergyKEV < minimumEnergySigma:
-            return 0.0
-        else:
+        def _compute(E):
             # Energy is in units of keV
             sigma = (
                 1e-16
                 * A1
                 * (
-                    jnp.exp(-A2 / EnergyKEV) * jnp.log(1 + A3 * EnergyKEV) / EnergyKEV
-                    + A4
-                    * jnp.exp(-A5 * EnergyKEV)
-                    / (jnp.pow(EnergyKEV, A6) + A7 * jnp.pow(EnergyKEV, A8))
+                    jnp.exp(-A2 / E) * jnp.log(1 + A3 * E) / E
+                    + A4 * jnp.exp(-A5 * E) / (jnp.pow(E, A6) + A7 * jnp.pow(E, A8))
                 )
             )
             return sigma
+
+        return jnp.where(
+            jax.lax.le(EnergyKEV, minimumEnergySigma), 0.0, _compute(EnergyKEV)
+        )
 
     @override
     def hydrogenChargeExchangeCrossSection(self, Energy):
 
         # Minimum energy of cross section in eV
         minimumEnergySigma_n1 = 0.12
+
         # Contribution from ground -> ground state
         # Janev 1993 2.3.1
         # p + H(n=1) --> H + p
-        if Energy < minimumEnergySigma_n1:
-            return jnp.zeros(Energy.shape)
-        else:
+        def _compute(Energy):
             EnergyKEV = Energy / 1000
             sigma_n1 = (
                 1e-16
@@ -133,3 +133,7 @@ class Hydrogen(_IonSpecies):
                 )
             )
             return sigma_n1
+
+        return jnp.where(
+            jax.lax.le(Energy, minimumEnergySigma_n1), 0.0, _compute(Energy)
+        )

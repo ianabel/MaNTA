@@ -39,6 +39,7 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
     """
     Base methods for vectorizing 
     """
+
     @Physics_Decorator
     def ComputePhysics(self, states, positions, t):
         index = jnp.arange(0, self.nVars)
@@ -141,7 +142,7 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
     Returns
     -------
     float
-        Computed sigma or source term
+        Computed sigma, source, or aux term
     """
 
     @abstractmethod
@@ -197,5 +198,6 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
 
     @abstractmethod
     def createAdjointProblem(self):
-        raise NotImplementedError("createAdjointProblem not implemented in derived class")
-
+        raise NotImplementedError(
+            "createAdjointProblem not implemented in derived class"
+        )

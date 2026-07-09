@@ -19,9 +19,11 @@ class _MagneticField(eqx.Module):
     def R_x(self, x, s=0):
         raise NotImplementedError("R_x not implemented")
 
-    @abstractmethod
+    def dRdx(self, x, s=0):
+        return jax.vmap(jax.grad(self.R_x))(x, s)
+
     def VPrime(self, x):
-        return 1.0 / jax.grad(self.Psi_x)(x)
+        return 1.0 / jax.vmap(jax.grad(self.Psi_x))(x)
 
     @abstractmethod
     def MirrorRatio(self, x, s):
@@ -37,18 +39,18 @@ class StraightMagneticField(_MagneticField):
     dV: Float
     m: Float
 
-    def __init__(self, _L_z=0.6, _B_z=0.3, _Rm=10.0, _Vmin=0.0, _Vmax=1.0, _m=0.0):
+    def __init__(self, _L_z=0.6, _B_z=0.3, _Rm=10.0, _Rmin=0.0, _Rmax=1.0, _m=0.0):
         self.L_z = _L_z
         self.B_z = _B_z
         self.Rm = _Rm
-        self.Vmin = _Vmin
-        self.Vmax = _Vmax
-        self.dV = _Vmax - _Vmin
+        self.Vmin = self.V_R(_Rmin)
+        self.Vmax = self.V_R(_Rmax)
+        self.dV = self.Vmax - self.Vmin
         self.m = _m
 
     @override
     def Psi_x(self, x):
-        return self.B * self.V_x(x) / (2 * jnp.pi * self.L_z)
+        return self.B(x) * self.V_x(x) / (2 * jnp.pi * self.L_z)
 
     @override
     def B(self, x, s=0):
@@ -64,3 +66,6 @@ class StraightMagneticField(_MagneticField):
 
     def V_x(self, x):
         return self.Vmin + self.dV * x
+
+    def V_R(self, R):
+        return jnp.pi * self.L_z * R * R

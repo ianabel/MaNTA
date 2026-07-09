@@ -1,15 +1,13 @@
 import jax
+
+jax.config.update("jax_enable_x64", True)
 import equinox as eqx
 import jax.numpy as jnp
 from jaxtyping import Float, Int
 import enum
-from python.MirrorPlasma import IonSpecies, MagneticField
-
-
-ElectronMass = 9.1094e-31
-ProtonMass = 1.6726e-27
-ElementaryCharge = 1.60217663e-19
-VacuumPermittivity = 8.8541878128e-12
+from MagneticField import _MagneticField
+from IonSpecies import _IonSpecies
+import matplotlib.pyplot as plt
 
 
 class MomentType(enum.IntEnum):
@@ -23,12 +21,17 @@ class PlasmaConstants(eqx.Module):
     n0cgs: Float
     T0: Float
     T0eV: Float
+    omega0: Float
     a: Float
     Z_eff: Float
     B0: Float
     cs0: Float
-    IonSpecies: IonSpecies._IonSpecies
-    MagneticField: MagneticField._MagneticField
+    IonSpecies: _IonSpecies
+    MagneticField: _MagneticField
+    ElectronMass = 9.1094e-31
+    ProtonMass = 1.6726e-27
+    ElementaryCharge = 1.60217663e-19
+    VacuumPermittivity = 8.8541878128e-12
     nIntPoints: Int
 
     def __init__(
@@ -44,7 +47,7 @@ class PlasmaConstants(eqx.Module):
     ):
         self.n0 = _n0
         self.n0cgs = self.n0 * 1.0e-6
-        self.T0 = _T0 * ElementaryCharge
+        self.T0 = _T0 * self.ElementaryCharge
         self.T0eV = _T0
         self.a = _a
         self.Z_eff = _Z_eff
@@ -53,17 +56,17 @@ class PlasmaConstants(eqx.Module):
         self.MagneticField = _magneticField
         self.cs0 = jnp.sqrt(self.T0 / self.IonSpecies.IonMass)
         self.nIntPoints = _nIntPoints
+        self.omega0 = self.cs0 / self.a
 
     def ReferenceElectronCollisionTime(self):
         LogLambdaRef = 24.0 - jnp.log(self.n0cgs) / 2.0 + jnp.log(self.T0eV)
         return (
             12.0
             * jnp.pow(jnp.pi, 1.5)
-            * jnp.sqrt(ElectronMass)
+            * jnp.sqrt(self.ElectronMass)
             * jnp.pow(self.T0, 1.5)
-            * VacuumPermittivity
-            * VacuumPermittivity
-            / (jnp.sqrt(2) * self.n0 * jnp.pow(ElementaryCharge, 4) * LogLambdaRef)
+            * self.VacuumPermittivity**2
+            / (jnp.sqrt(2) * self.n0 * jnp.pow(self.ElementaryCharge, 4) * LogLambdaRef)
         )
 
     def ReferenceIonCollisionTime(self):
@@ -75,16 +78,22 @@ class PlasmaConstants(eqx.Module):
             * jnp.pow(jnp.pi, 1.5)
             * jnp.sqrt(self.IonSpecies.IonMass)
             * jnp.pow(self.T0, 1.5)
-            * VacuumPermittivity
-            * VacuumPermittivity
-            / (self.n0 * jnp.pow(ElementaryCharge, 4) * LogLambdaRef)
+            * self.VacuumPermittivity
+            * self.VacuumPermittivity
+            / (self.n0 * jnp.pow(self.ElementaryCharge, 4) * LogLambdaRef)
         )
 
     def ReferenceElectronThermalVelocity(self):
-        return jnp.sqrt(2 * self.T0 / ElectronMass)
+        return jnp.sqrt(2 * self.T0 / self.ElectronMass)
 
     def ReferenceIonThermalVelocity(self):
         return jnp.sqrt(2 * self.T0 / self.IonSpecies.IonMass)
+
+    def ReferenceIonGyrofrequency(self):
+        return self.ElementaryCharge * self.B0 / self.IonSpecies.IonMass
+
+    def ReferenceElectronGyrofrequency(self):
+        return self.ElementaryCharge * self.B0 / self.ElectronMass
 
     """
     Normalisation:
@@ -95,12 +104,12 @@ class PlasmaConstants(eqx.Module):
     """
 
     def RhoStarRef(self):
-        return jnp.sqrt(
-            self.T0 * self.IonSpecies.IonMass / (ElementaryCharge * self.B0 * self.a)
+        return jnp.sqrt(self.T0 * self.IonSpecies.IonMass) / (
+            self.ElementaryCharge * self.B0 * self.a
         )
 
     def mu(self):
-        return self.IonSpecies.IonMass / ElectronMass
+        return self.IonSpecies.IonMass / self.ElectronMass
 
     def NormalizingTime(self):
         return self.ReferenceIonCollisionTime() / self.RhoStarRef() ** 2
@@ -132,17 +141,17 @@ class PlasmaConstants(eqx.Module):
     def IonCollisionTime(self, ni, Ti):
         return pow(Ti, 1.5) / (ni * self.LogLambda_ii(ni, Ti))
 
-    def Om_i(self, B):
-        return ElementaryCharge * B / self.IonSpecies.IonMass
+    def Om_i(self, x):
+        return self.MagneticField.B(x)
 
-    def Om_e(self, B):
-        return ElementaryCharge * B / ElectronMass
+    def Om_e(self, x):
+        return self.MagneticField.B(x)
 
     def c_s(self, Te):
         return jnp.sqrt(self.T0 * Te / self.IonSpecies.IonMass)
 
     def FusionRate(self, n, pi):
-        Ti_keV = pi / n * self.T0 / (1000 * ElementaryCharge)
+        Ti_keV = pi / n * self.T0 / (1000 * self.ElementaryCharge)
         return (
             self.NormalizingTime()
             / self.n0
@@ -160,7 +169,7 @@ class PlasmaConstants(eqx.Module):
     def CyclotronLosses(self, x, n, Te):
         # NRL formulary with reference values factored out
         # Return units are W/m^3
-        Te_eV = self.T0 / ElementaryCharge * Te
+        Te_eV = self.T0 / self.ElementaryCharge * Te
         n_e20 = n * self.n0 / 1e20
         B_z = self.MagneticField.B(self.MagneticField.Psi_x(x)) * self.B0  # in Tesla
         P_vacuum = 6.21 * n_e20 * Te_eV * B_z * B_z
@@ -202,6 +211,46 @@ class PlasmaConstants(eqx.Module):
 
         return IonHeating / self.HeatEquationNormalization()
 
+    # Hold all dimensional values for fluxes here
+    def Gamma0(self):
+        return (
+            self.B0**2
+            * self.a**2
+            * self.n0
+            * self.T0
+            / (
+                self.ElectronMass
+                * self.ReferenceElectronGyrofrequency() ** 2
+                * self.ReferenceElectronCollisionTime()
+            )
+        )
+
+    def Pi0(self):
+        return (
+            self.B0**2
+            * self.a**4
+            * self.n0
+            * self.T0
+            * self.omega0
+            / (self.ReferenceIonGyrofrequency() ** 2 * self.ReferenceIonCollisionTime())
+        )
+
+    def qi0(self):
+        return (
+            self.B0**2
+            * self.a**2
+            * self.n0
+            * self.T0**2
+            / (
+                self.IonSpecies.IonMass
+                * self.ReferenceIonGyrofrequency() ** 2
+                * self.ReferenceIonCollisionTime()
+            )
+        )
+
+    def qe0(self):
+        return self.T0 * self.Gamma0()
+
     def NeutralProcess(
         self, CrossSection, vtheta, T, Mass, minEnergy, Moment=MomentType.Density
     ):
@@ -209,47 +258,84 @@ class PlasmaConstants(eqx.Module):
         vtheta *= self.cs0
         Mth = vtheta / jnp.sqrt(vth2)
 
-        def Integrand(Energy, XS):
-            MmE = Mth - jnp.sqrt(Energy / (T * self.T0eV))
-            MpE = Mth + jnp.sqrt(Energy / (T * self.T0eV))
-            v = jnp.sqrt(2 * ElementaryCharge * Energy / Mass)
+        def Integrand(v, XS):
+            MmE = Mth - v
 
-            def mDensity():
-                return 1.0
+            MpE = Mth + v
 
-            def mMomentum():
-                return Mass * (v - vtheta)
+            def mDensity(V):
+                return jnp.ones(V.shape)
 
-            def mEnergy():
-                return 0.5 * Mass * (v * v - 2 * vtheta * v + vtheta * vtheta)
+            def mMomentum(V):
+                return Mass * (V - vtheta)
 
-            x = jax.lax.switch(Moment, [mDensity, mMomentum, mEnergy])
+            def mEnergy(V):
+                return 0.5 * Mass * (V * V - 2 * vtheta * V + vtheta * vtheta)
 
-            I = (
-                v
-                * x
-                * ElementaryCharge
-                / Mass
-                * (XS * 1e-4)
-                * (jnp.exp(-MmE * MmE) - jnp.exp(-MpE * MpE))
-            )
-            return I
+            x = jax.lax.switch(Moment, [mDensity, mMomentum, mEnergy], v)
+
+            return x * v**2 * XS * (jnp.exp(-(MmE**2)) - jnp.exp(-(MpE**2)))
+
+        # def Integrand(Energy, XS):
+        #     v = jnp.sqrt(2 * ElementaryCharge * Energy / Mass)
+        #     MmE = Mth - v / jnp.sqrt(vth2)
+        #     MpE = Mth + v / jnp.sqrt(vth2)
+        #
+        #     def mDensity(V):
+        #         return jnp.ones(V.shape)
+        #
+        #     def mMomentum(V):
+        #         return Mass * (V - vtheta)
+        #
+        #     def mEnergy(V):
+        #         return 0.5 * Mass * (V * V - 2 * vtheta * V + vtheta * vtheta)
+        #
+        #     x = jax.lax.switch(Moment, [mDensity, mMomentum, mEnergy], v)
+        #
+        #     I = (
+        #         v
+        #         * x
+        #         * ElementaryCharge
+        #         / Mass
+        #         * (XS * 1e-4)
+        #         * (jnp.exp(-MmE * MmE) - jnp.exp(-MpE * MpE))
+        #     )
+        #     return I
+        #
 
         min_sqrt = 4
 
-        min_velocity = jax.lax.cond(Mth <= min_sqrt, lambda: 0, lambda: Mth - min_sqrt)
+        min_velocity = jax.lax.cond(
+            Mth <= min_sqrt, lambda: 0.0, lambda: Mth - min_sqrt
+        )
 
         max_velocity = Mth + min_sqrt
         minE = jnp.min(jnp.array([minEnergy, min_velocity**2 * T * self.T0eV]))
         maxEV = max_velocity**2 * T * self.T0eV
         maxE = jnp.min(jnp.array([1e6, maxEV]))
 
-        energy_grid = jnp.linspace(minE, maxE, self.nIntPoints)
-        XS = CrossSection(energy_grid)
-        integral = jax.scipy.integrate.trapezoid(
-            lambda Energy: Integrand(Energy, XS), energy_grid
+        vgrid = jnp.linspace(
+            jnp.sqrt(minE / self.T0eV),
+            0.5 * jnp.sqrt(maxE / self.T0eV),
+            self.nIntPoints,
         )
-        return integral
+        XS = CrossSection(vgrid**2 * self.T0eV) * 1e-4
+        plt.plot(vgrid, Integrand(vgrid, XS))
+        plt.show()
+        integral = jnp.sqrt(vth2 / 2) * jax.scipy.integrate.trapezoid(
+            Integrand(vgrid, XS), vgrid
+        )
+
+        # energy_grid = jnp.linspace(minE, maxE, self.nIntPoints)
+        # XS = CrossSection(energy_grid)
+
+        # integral = (
+        #     1
+        #     / vth2
+        #     * jax.scipy.integrate.trapezoid(Integrand(energy_grid, XS), energy_grid)
+        # )
+        #
+        return integral / (jnp.sqrt(jnp.pi) * Mth)
 
     def IonizationRate(self, n, NeutralDensity, v, Te, Ti):
         n_m3 = n * self.n0
@@ -266,7 +352,7 @@ class PlasmaConstants(eqx.Module):
             self.IonSpecies.electronImpactIonizationCrossSection,
             v,
             Te,
-            ElectronMass,
+            self.ElectronMass,
             13.6,
         )
         R = n_m3 * n_neutrals * (IonIntegral + ElectronIntegral)
