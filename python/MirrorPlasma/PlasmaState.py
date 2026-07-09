@@ -39,6 +39,11 @@ class Channel(enum.IntEnum):
     ElectronEnergy = 3
 
 
+"""
+Wrapper class for State to make accessing variables easier 
+"""
+
+
 class MirrorPlasmaState(eqx.Module):
     n: Float[ArrayLike, "..."]
     pi: Float[ArrayLike, "..."]

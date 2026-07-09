@@ -133,7 +133,7 @@ class PlasmaConstants(eqx.Module):
 
     # Return tau_ei (Helander & Sigmar notation ) normalised to tau_ei( n0, 0 )
     # This is equal to tau_e as used in Braginskii
-    def ElectronCollisionime(self, ne, Te):
+    def ElectronCollisionTime(self, ne, Te):
         return jnp.pow(Te, 1.5) / (ne * self.LogLambda_ei(ne, Te))
 
     # Return sqrt(2) * tau_ii (Helander & Sigmar notation ) normalised to tau_ii(
