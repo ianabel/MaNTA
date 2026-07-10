@@ -20,13 +20,14 @@ class _MagneticField(eqx.Module):
         raise NotImplementedError("R_x not implemented")
 
     def dRdx(self, x, s=0):
-        return jax.vmap(jax.grad(self.R_x))(x, s)
+        return jax.grad(self.R_x)(x)
+        # return jax.vmap(jax.grad(self.R_x), (0, None))(x, s)
 
     def VPrime(self, x):
-        return 1.0 / jax.vmap(jax.grad(self.Psi_x))(x)
+        return 1.0 / jax.grad(self.Psi_x)(x)
 
     @abstractmethod
-    def MirrorRatio(self, x, s):
+    def MirrorRatio(self, x, s=0):
         raise NotImplementedError("MirrorRatio not implemented")
 
 

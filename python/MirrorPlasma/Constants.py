@@ -17,22 +17,22 @@ class MomentType(enum.IntEnum):
 
 
 class PlasmaConstants(eqx.Module):
-    n0: Float
-    n0cgs: Float
-    T0: Float
-    T0eV: Float
-    omega0: Float
-    a: Float
-    Z_eff: Float
-    B0: Float
-    cs0: Float
     IonSpecies: _IonSpecies
     MagneticField: _MagneticField
+    n0: Float = eqx.field(static=True)
+    n0cgs: Float = eqx.field(static=True)
+    T0: Float = eqx.field(static=True)
+    T0eV: Float = eqx.field(static=True)
+    omega0: Float = eqx.field(static=True)
+    a: Float = eqx.field(static=True)
+    Z_eff: Float = eqx.field(static=True)
+    B0: Float = eqx.field(static=True)
+    cs0: Float = eqx.field(static=True)
+    nIntPoints: Int = eqx.field(static=True)
     ElectronMass = 9.1094e-31
     ProtonMass = 1.6726e-27
     ElementaryCharge = 1.60217663e-19
     VacuumPermittivity = 8.8541878128e-12
-    nIntPoints: Int
 
     def __init__(
         self,
@@ -153,9 +153,8 @@ class PlasmaConstants(eqx.Module):
     def FusionRate(self, n, pi):
         Ti_keV = pi / n * self.T0 / (1000 * self.ElementaryCharge)
         return (
-            self.NormalizingTime()
-            / self.n0
-            * self.IonSpecies.FusionRate(self.n0 * n, Ti_keV)
+            self.IonSpecies.FusionRate(self.n0 * n, Ti_keV)
+            / self.DensityEquationNormalization()
         )
 
     def TotalAlphaPower(self, n, pi):
