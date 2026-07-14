@@ -5,8 +5,8 @@ import equinox as eqx
 import jax.numpy as jnp
 from jaxtyping import Float, Int
 import enum
-from MagneticField import _MagneticField
-from IonSpecies import _IonSpecies
+from MirrorPlasma.MagneticField import _MagneticField
+from MirrorPlasma.IonSpecies import _IonSpecies
 import matplotlib.pyplot as plt
 
 
@@ -134,12 +134,12 @@ class PlasmaConstants(eqx.Module):
     # Return tau_ei (Helander & Sigmar notation ) normalised to tau_ei( n0, 0 )
     # This is equal to tau_e as used in Braginskii
     def ElectronCollisionTime(self, ne, Te):
-        return jnp.pow(Te, 1.5) / (ne * self.LogLambda_ei(ne, Te))
+        return Te**1.5 / (ne * self.LogLambda_ei(ne, Te))
 
     # Return sqrt(2) * tau_ii (Helander & Sigmar notation ) normalised to tau_ii(
     # n0, 0 ) his is equal to tau_i as used in Braginskii
     def IonCollisionTime(self, ni, Ti):
-        return pow(Ti, 1.5) / (ni * self.LogLambda_ii(ni, Ti))
+        return Ti**1.5 / (ni * self.LogLambda_ii(ni, Ti))
 
     def Om_i(self, x):
         return self.MagneticField.B(x)
@@ -168,9 +168,9 @@ class PlasmaConstants(eqx.Module):
     def CyclotronLosses(self, x, n, Te):
         # NRL formulary with reference values factored out
         # Return units are W/m^3
-        Te_eV = self.T0 / self.ElementaryCharge * Te
+        Te_eV = self.T0eV * Te
         n_e20 = n * self.n0 / 1e20
-        B_z = self.MagneticField.B(self.MagneticField.Psi_x(x)) * self.B0  # in Tesla
+        B_z = self.MagneticField.B(x) * self.B0  # in Tesla
         P_vacuum = 6.21 * n_e20 * Te_eV * B_z * B_z
 
         # Characteristic absorption length
@@ -180,7 +180,9 @@ class PlasmaConstants(eqx.Module):
         # n_e20)^1/2 / B )  From NRL Formulary, converted to our units (Tesla for B
         # 10^20 /m^3 for n_e)
 
-        PlasmaWidth = self.MagneticField.R_x(1.0) - self.MagneticField.R_x(0.0)
+        PlasmaWidth = (
+            self.MagneticField.R_x(1.0) - self.MagneticField.R_x(0.0)
+        ) * self.a
         LambdaZero = (5.31e-4 / 3.21) * (B_z / n_e20)
         WallReflectivity = 0.95
         OpticalThickness = (PlasmaWidth / (1.0 - WallReflectivity)) / LambdaZero
@@ -196,7 +198,13 @@ class PlasmaConstants(eqx.Module):
 
     # m_i * n * R^2 * omega
     def MomentumEquationNormalization(self):
-        return self.IonSpecies.IonMass * self.n0 * self.a**2 * (self.cs0 / self.a)
+        return (
+            self.IonSpecies.IonMass
+            * self.n0
+            * self.a**2
+            * (self.cs0 / self.a)
+            / self.NormalizingTime()
+        )
 
     def HeatEquationNormalization(self):
         return self.n0 * self.T0 / self.NormalizingTime()
@@ -204,7 +212,7 @@ class PlasmaConstants(eqx.Module):
     def IonElectronEnergyExchange(self, n, pe, pi):
         Te = pe / n
         pDiff = self.n0 * self.T0 * (pe - pi)
-        taue = self.ElectronCollisionime(n, Te) * self.ReferenceElectronCollisionTime()
+        taue = self.ElectronCollisionTime(n, Te) * self.ReferenceElectronCollisionTime()
 
         IonHeating = 3 * pDiff / taue * (1 / self.mu())
 
@@ -319,8 +327,8 @@ class PlasmaConstants(eqx.Module):
             self.nIntPoints,
         )
         XS = CrossSection(vgrid**2 * self.T0eV) * 1e-4
-        plt.plot(vgrid, Integrand(vgrid, XS))
-        plt.show()
+        # plt.plot(vgrid, Integrand(vgrid, XS))
+        # plt.show()
         integral = jnp.sqrt(vth2 / 2) * jax.scipy.integrate.trapezoid(
             Integrand(vgrid, XS), vgrid
         )
@@ -359,7 +367,7 @@ class PlasmaConstants(eqx.Module):
 
     def ChargeExchangeLossRate(self, n, NeutralDensity, v, Ti):
         n_m3 = n * self.n0
-        n_neutrals = NeutralDensity * self.n0
+        n_neutrals = NeutralDensity
 
         R = (
             n_m3

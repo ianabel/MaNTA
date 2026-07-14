@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-from PlasmaState import (
+from MirrorPlasma.PlasmaState import (
     MirrorPlasmaParams,
     MirrorPlasmaState,
 )
@@ -13,14 +13,23 @@ def InitialPhiValue(state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
         state_new = eqx.tree_at(lambda s: s.phi, state, phi)
         return ParallelCurrent(state_new, x, t, params)
 
-    phi_g = newton(func, 0.0, jax.grad(func))
+    fgrad = jax.grad(func)
+
+    phi_g = newton(func, 0.0, fgrad, tol=1e-4)
+    # phi_g = jax.pure_callback(
+    #     lambda: newton(func, 0.0, fgrad, tol=1e-4),
+    #     jax.ShapeDtypeStruct(
+    #         (),
+    #         jnp.float64,
+    #     ),
+    # )
     return phi_g
 
 
+@jax.jit
 def ParallelCurrent(state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
     return (
-        params.Constants.Z_eff
-        * IonPastukhovLossRate(state, x, t, params)
+        IonPastukhovLossRate(state, x, t, params)
         / params.Constants.DensityEquationNormalization()
         - ElectronPastukhovLossRate(state, x, t, params)
         / params.Constants.DensityEquationNormalization()
@@ -55,7 +64,7 @@ def ElectronPastukhovLossRate(
     )
     Sigma = 1 + params.Constants.Z_eff
     Xi = Xi_e(state, x, t, params)
-    PastukhovFactor = jnp.exp(-Xi / Xi)
+    PastukhovFactor = jnp.exp(-Xi) / Xi
 
     n = params.Constants.n0 * state.n
 
@@ -78,7 +87,8 @@ def IonPastukhovLossRate(state: MirrorPlasmaState, x, t, params: MirrorPlasmaPar
     )
     Sigma = 1.0
     Xi = Xi_i(state, x, t, params)
-    PastukhovFactor = jnp.exp(-Xi / Xi)
+
+    PastukhovFactor = jnp.exp(-Xi) / Xi
 
     n = params.Constants.n0 * state.n
 

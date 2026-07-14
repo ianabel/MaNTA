@@ -158,7 +158,6 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
         raise NotImplementedError("aux function not implemented in derived class")
 
     @abstractmethod
-    @partial(jax.jit, static_argnames=("self",))
     def InitialValue(self, index, x):
         raise NotImplementedError("InitialValue must be implemented in derived class")
 

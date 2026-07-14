@@ -39,31 +39,23 @@ class State(eqx.Module):
 
     @classmethod
     def from_manta(cls, manta_state):
-        shape = manta_state["Variable"].shape
-        dp = shape[0]
-        nscalars = (
-            0 if manta_state["Scalars"] is None else manta_state["Scalars"].shape[0]
-        )
+
         return cls(
             Variable_=jnp.array(manta_state["Variable"]),
             Derivative_=jnp.array(manta_state["Derivative"]),
             Flux_=jnp.array(manta_state["Flux"]),
             Aux_=jnp.array(manta_state["Aux"]),
-            Scalars_=jnp.repeat(
-                jnp.expand_dims(jnp.array(manta_state["Scalars"]), axis=0),
-                repeats=dp,
-                axis=0,
-            ),
+            Scalars_=jnp.array(manta_state["Scalars"]),
         )
 
     def to_manta(self):
         Scalars_out = []
         if self.Scalars is not None:
-            Scalars_out = (
-                self.Scalars
-                if self.Scalars.size == 0
-                else jnp.atleast_2d(self.Scalars)[0, :]
-            )
+            if jnp.ndim(self.Scalars) == 2:
+                Scalars_out = self.Scalars[0, :]
+            else:
+                Scalars_out = self.Scalars
+
         return {
             "Variable": np.asarray(self.Variable),
             "Derivative": np.asarray(self.Derivative),
@@ -74,7 +66,7 @@ class State(eqx.Module):
 
     @staticmethod
     def vmap_axes():
-        return 0
+        return State(0, 0, 0, 0, None)
 
 
 """

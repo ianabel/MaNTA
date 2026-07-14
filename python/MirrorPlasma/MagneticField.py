@@ -63,7 +63,7 @@ class StraightMagneticField(_MagneticField):
 
     @override
     def MirrorRatio(self, x, s=0):
-        return self.Rm * self.B_z * self.B(x)
+        return self.Rm * self.B_z / self.B(x)
 
     def V_x(self, x):
         return self.Vmin + self.dV * x

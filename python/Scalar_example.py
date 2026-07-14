@@ -92,12 +92,12 @@ class ScalarLD(VectorizedTransportSystem):
     @ScalarG_Decorator
     @partial(jax.jit, static_argnames=("self",))
     def ScalarG(self, i, states, states_dot, integrator, t):
-        E = states.Scalars[0, 0]
-        J = states.Scalars[0, 1]
-        I = states.Scalars[0, 2]
+        E = states.Scalars[0]
+        J = states.Scalars[1]
+        I = states.Scalars[2]
 
-        dEdt = states_dot.Scalars[0, 0]
-        dIdt = states_dot.Scalars[0, 2]
+        dEdt = states_dot.Scalars[0]
+        dIdt = states_dot.Scalars[2]
 
         M = integrator(states.Variable[:, 0])
 
@@ -202,7 +202,7 @@ class ScalarLD(VectorizedTransportSystem):
     @partial(jax.jit, static_argnames=("self",))
     def InitialScalarDerivative(self, i, state, state_dot, integrator):
 
-        E = state.Scalars[0, 0]
+        E = state.Scalars[0]
         mdot = integrator(state_dot.Variable[:, 0])
 
         def i0():

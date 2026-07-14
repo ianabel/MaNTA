@@ -1,8 +1,9 @@
 import equinox as eqx
+import jax
 import jax.numpy as jnp
-from Constants import PlasmaConstants
-from MagneticField import StraightMagneticField
-from IonSpecies import Hydrogen
+from MirrorPlasma.Constants import PlasmaConstants
+from MirrorPlasma.MagneticField import StraightMagneticField
+from MirrorPlasma.IonSpecies import Hydrogen
 
 from jaxtyping import Float, ArrayLike, Bool
 import enum
@@ -11,7 +12,7 @@ import sys
 
 sys.path.append("..")
 
-from State import State
+from State import State, ScalarGPrime_Decorator, ScalarG_Decorator
 
 
 class MirrorPlasmaConfig(eqx.Module):
@@ -31,6 +32,8 @@ class MirrorPlasmaConfig(eqx.Module):
     gamma_h: Float
     PlasmaVoltage: Float
     useConstantVoltage: Bool = eqx.field(static=True)
+    Current: Float
+    CurrentDecay: Float
     ParticleSourceCenter: Float
     ParticleSourceWidth: Float
     PlasmaLength: Float
@@ -49,7 +52,7 @@ class MirrorPlasmaConfig(eqx.Module):
         InitialIonTemperatureHeight: Float = 0.1,
         EdgeIonTemperature: Float = 0.05,
         InitialElectronTemperatureHeight: Float = 0.1,
-        EdgeElectronTemperature: Float = 0.01,
+        EdgeElectronTemperature: Float = 0.05,
         InitialMachNumber: Float = 6.0,
         EdgeMachNumber: Float = 3.0,
         gamma: Float = 10000.0,
@@ -57,8 +60,11 @@ class MirrorPlasmaConfig(eqx.Module):
         gamma_h: Float = 1000.0,
         PlasmaVoltage: Float = 100.0e3,
         useConstantVoltage: Bool = True,
+        Current: Float = 0.2,
+        CurrentDecay: Float = 1e-3,
         ParticleSourceCenter: Float = 0.5,
         ParticleSourceWidth: Float = 0.1,
+        ParticleSourceHeight: Float = 50.0,
         PlasmaLength: Float = 0.6,
         MagneticFieldStrength: Float = 0.34,
         MirrorRatio: Float = 10.0,
@@ -81,8 +87,11 @@ class MirrorPlasmaConfig(eqx.Module):
         self.gamma_h = gamma_h
         self.PlasmaVoltage = PlasmaVoltage
         self.useConstantVoltage = useConstantVoltage
+        self.Current = Current
+        self.CurrentDecay = CurrentDecay
         self.ParticleSourceCenter = ParticleSourceCenter
         self.ParticleSourceWidth = ParticleSourceWidth
+        self.ParticleSourceHeight = ParticleSourceHeight
         self.PlasmaLength = PlasmaLength
         self.MagneticFieldStrength = MagneticFieldStrength
         self.MirrorRatio = MirrorRatio
@@ -105,16 +114,16 @@ class MirrorPlasmaParams(eqx.Module):
     @classmethod
     def make(cls, config: MirrorPlasmaConfig):
         B = StraightMagneticField(
-            config.PlasmaLength,
-            config.MagneticFieldStrength,
-            config.MirrorRatio,
-            config.Rmin,
-            config.Rmax,
-            config.MagneticFieldSlope,
+            _L_z=config.PlasmaLength,
+            _B_z=config.MagneticFieldStrength,
+            _Rm=config.MirrorRatio,
+            _Rmin=config.Rmin,
+            _Rmax=config.Rmax,
+            _m=config.MagneticFieldSlope,
         )
         H = Hydrogen()
 
-        C = PlasmaConstants(H, B)
+        C = PlasmaConstants(H, B, _a=config.Rmax - config.Rmin)
         return cls(MagneticField=B, IonSpecies=H, Constants=C, Config=config)
 
 
@@ -135,6 +144,12 @@ class Channel(enum.IntEnum):
     AngularMomentum = 1
     IonEnergy = 2
     ElectronEnergy = 3
+
+
+class Scalar(enum.IntEnum):
+    Error = 0
+    Integral = 1
+    Current = 2
 
 
 """
@@ -163,7 +178,10 @@ class MirrorPlasmaState(eqx.Module):
     qi: Float[ArrayLike, "..."]  # Ion heat flux
     qe: Float[ArrayLike, "..."]  # Electron heat flux
     phi: Float[ArrayLike, "..."]  # Ambipolar potential correction
+    Current: Float
     Scalars: Float[ArrayLike, "..."]
+    R: Float[ArrayLike, "..."]
+    VPrime: Float[ArrayLike, "..."]
 
     def __init__(
         self,
@@ -187,7 +205,10 @@ class MirrorPlasmaState(eqx.Module):
         qi: Float[ArrayLike, "..."],
         qe: Float[ArrayLike, "..."],
         phi: Float[ArrayLike, "..."],
+        Current: Float,
         Scalars: Float[ArrayLike, "..."],
+        R: Float[ArrayLike, "..."],
+        VPrime: Float[ArrayLike, "..."],
     ):
         self.n = n
         self.pi = pi
@@ -209,7 +230,10 @@ class MirrorPlasmaState(eqx.Module):
         self.qi = qi
         self.qe = qe
         self.phi = phi
+        self.Current = Current
         self.Scalars = Scalars
+        self.R = R
+        self.VPrime = VPrime
 
     @classmethod
     def from_state(cls, state: State, x, params: MirrorPlasmaParams):
@@ -222,6 +246,7 @@ class MirrorPlasmaState(eqx.Module):
         Te = pe / n
 
         R = params.MagneticField.R_x(x)
+        VPrime = params.MagneticField.VPrime(x)
         J = n * R**2
         omega = L / J
         M = R * omega / jnp.sqrt(Te)
@@ -237,6 +262,14 @@ class MirrorPlasmaState(eqx.Module):
         dRdx = params.MagneticField.dRdx(x)
         dJdx = R * R * dndx + 2.0 * dRdx * R * n
         domegadx = dLdx / J - dJdx * L / (J * J)
+
+        if params.Config.useConstantVoltage:
+            Current = -state.Scalars[Scalar.Current]
+        else:
+            Current = (
+                -params.Config.Current
+                * params.Constants.MomentumEquationNormalization()
+            )
 
         return cls(
             n=n,
@@ -259,7 +292,10 @@ class MirrorPlasmaState(eqx.Module):
             qi=state.Flux[Channel.IonEnergy],
             qe=state.Flux[Channel.ElectronEnergy],
             phi=state.Aux[0],
+            Current=Current,
             Scalars=state.Scalars,
+            R=R,
+            VPrime=VPrime,
         )
 
     def to_state(self):
@@ -269,3 +305,32 @@ class MirrorPlasmaState(eqx.Module):
         )
         Flux = jnp.array([self.gamma, self.Pi, self.qi, self.qe])
         return State(Variable, Derivative, Flux, self.phi, self.Scalars)
+
+    @staticmethod
+    def vmap_axes():
+        return MirrorPlasmaState(
+            n=0,
+            pi=0,
+            pe=0,
+            L=0,
+            omega=0,
+            Ti=0,
+            Te=0,
+            M=0,
+            dndx=0,
+            dpidx=0,
+            dpedx=0,
+            dLdx=0,
+            domegadx=0,
+            dTidx=0,
+            dTedx=0,
+            gamma=0,
+            Pi=0,
+            qi=0,
+            qe=0,
+            phi=0,
+            Current=None,
+            Scalars=None,
+            R=0,
+            VPrime=0,
+        )

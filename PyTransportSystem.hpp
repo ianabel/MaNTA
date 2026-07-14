@@ -107,7 +107,7 @@ public:
       throw std::runtime_error(error_message);
     }
 
-    if (nAux > 0) {
+    if (nAux > 0 && !vectorized) {
       method_overrides.insert(
           std::make_pair("AuxGPrime", make_override("AuxGPrime")));
       method_overrides.insert(
@@ -457,13 +457,17 @@ public:
   }
   Value InitialScalarDerivative(Index s, const DGSoln &y,
                                 const DGSoln &dydt) const override {
+
     py::gil_scoped_acquire gil;
     py::function _override = py::get_override(this, "InitialScalarDerivative");
 
     GlobalState state = y.evalOnNodes();
     GlobalState state_dot = dydt.evalOnNodes();
 
-    Value out = _override(s, state, state_dot, Integrator::getIntegrationWeights(y.getBasis(), y.getGrid())).cast<Value>();
+    Value out =
+        _override(s, state, state_dot,
+                  Integrator::getIntegrationWeights(y.getBasis(), y.getGrid()))
+            .cast<Value>();
     return out;
   }
   Value ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt,
@@ -474,8 +478,11 @@ public:
     GlobalState state = y.evalOnNodes();
     GlobalState state_dot = dydt.evalOnNodes();
 
-    Value out = method_overrides["ScalarG"](s, state, state_dot, Integrator::getIntegrationWeights(y.getBasis(), y.getGrid()), t)
-                    .cast<Value>();
+    Value out =
+        method_overrides["ScalarG"](
+            s, state, state_dot,
+            Integrator::getIntegrationWeights(y.getBasis(), y.getGrid()), t)
+            .cast<Value>();
     return out;
   }
 
@@ -488,11 +495,14 @@ public:
     GlobalState state = y.evalOnNodes();
     GlobalState state_dot = dydt.evalOnNodes();
 
-    const auto& basis = y.getBasis();
-    const auto& grid = y.getGrid();
+    const auto &basis = y.getBasis();
+    const auto &grid = y.getGrid();
 
     auto temp =
-        method_overrides["ScalarGPrime"](state, state_dot, Integrator::getIntegrationWeights(basis, grid), Integrator::getPhiCell(basis, grid), Integrator::getPhiBoundary(basis, grid), t)
+        method_overrides["ScalarGPrime"](
+            state, state_dot, Integrator::getIntegrationWeights(basis, grid),
+            Integrator::getPhiCell(basis, grid),
+            Integrator::getPhiBoundary(basis, grid), t)
             .cast<std::array<std::vector<py::dict>, 2>>();
 
     for (Index i = 0; i < nScalars; i++) {
