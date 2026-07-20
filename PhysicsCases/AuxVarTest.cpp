@@ -66,7 +66,9 @@ bool AuxVarTest::isUpperBoundaryDirichlet(Index) const { return true; };
 
 Value AuxVarTest::SigmaFn(Index i, const State &s, Position, Time)
 {
-    return kappa * s.Derivative[i];
+    double a = s.Aux[0];
+    double u = s.Variable[0];
+    return kappa * s.Derivative[i] + (a - u * u );
 }
 
 //
@@ -89,15 +91,17 @@ Value AuxVarTest::Sources(Index i, const State &st, Position x, Time)
     return 0;
 }
 
-void AuxVarTest::dSigmaFn_dq(Index i, VectorRef v, const State &, Position, Time)
+void AuxVarTest::dSigmaFn_dq(Index i, VectorRef v, const State &s, Position, Time)
 {
     v.setZero();
     v[i] = kappa;
 };
 
-void AuxVarTest::dSigmaFn_du(Index, VectorRef v, const State &, Position, Time)
+void AuxVarTest::dSigmaFn_du(Index i, VectorRef v, const State &s, Position, Time)
 {
+    double u = s.Variable[0];
     v.setZero();
+    v[0] =( -2.0 * u );
 };
 
 void AuxVarTest::dSources_du(Index, VectorRef v, const State &st, Position, Time)
@@ -159,6 +163,19 @@ void AuxVarTest::dSources_dPhi(Index i, VectorRef v, const State &st, Position, 
     }
 }
 
+void AuxVarTest::dSigma_dPhi(Index i, VectorRef v, const State &st, Position, Time)
+{
+    v.setZero();
+    switch (i)
+    {
+    case 0:
+        v[0] = AuxNorm * 1.0;
+        return;
+    case 1:
+        return;
+    }
+
+}
 // Initialise with a Gaussian at x = 0 for both variables
 Value AuxVarTest::InitialValue(Index, Position x) const
 {

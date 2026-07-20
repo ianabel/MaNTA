@@ -3,6 +3,7 @@
 
 #include "PyIntegrator.hpp"
 #include "TransportSystem.hpp"
+#include "Types.hpp"
 #include "extern/pybind11/include/pybind11/pybind11.h"
 #include "pybind11/gil.h"
 #include <functional>
@@ -438,7 +439,7 @@ public:
     v = method_overrides["dSources_dPhi"](i, s, x, t).cast<Values>();
   }
 
-  void dSigma_dPhi(Index i, Values &v, const State &s, Position x,
+  void dSigma_dPhi(Index i, VectorRef v, const State &s, Position x,
                    Time t) override {
     if (nAux == 0) {
       v.setZero();
@@ -463,7 +464,10 @@ public:
     GlobalState state = y.evalOnNodes();
     GlobalState state_dot = dydt.evalOnNodes();
 
-    Value out = _override(s, state, state_dot, Integrator::getIntegrationWeights(y.getBasis(), y.getGrid())).cast<Value>();
+    Value out =
+        _override(s, state, state_dot,
+                  Integrator::getIntegrationWeights(y.getBasis(), y.getGrid()))
+            .cast<Value>();
     return out;
   }
   Value ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt,
@@ -474,8 +478,11 @@ public:
     GlobalState state = y.evalOnNodes();
     GlobalState state_dot = dydt.evalOnNodes();
 
-    Value out = method_overrides["ScalarG"](s, state, state_dot, Integrator::getIntegrationWeights(y.getBasis(), y.getGrid()), t)
-                    .cast<Value>();
+    Value out =
+        method_overrides["ScalarG"](
+            s, state, state_dot,
+            Integrator::getIntegrationWeights(y.getBasis(), y.getGrid()), t)
+            .cast<Value>();
     return out;
   }
 
@@ -488,11 +495,14 @@ public:
     GlobalState state = y.evalOnNodes();
     GlobalState state_dot = dydt.evalOnNodes();
 
-    const auto& basis = y.getBasis();
-    const auto& grid = y.getGrid();
+    const auto &basis = y.getBasis();
+    const auto &grid = y.getGrid();
 
     auto temp =
-        method_overrides["ScalarGPrime"](state, state_dot, Integrator::getIntegrationWeights(basis, grid), Integrator::getPhiCell(basis, grid), Integrator::getPhiBoundary(basis, grid), t)
+        method_overrides["ScalarGPrime"](
+            state, state_dot, Integrator::getIntegrationWeights(basis, grid),
+            Integrator::getPhiCell(basis, grid),
+            Integrator::getPhiBoundary(basis, grid), t)
             .cast<std::array<std::vector<py::dict>, 2>>();
 
     for (Index i = 0; i < nScalars; i++) {

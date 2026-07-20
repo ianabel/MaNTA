@@ -42,6 +42,8 @@ class AuxVarTest : public TransportSystem {
         Value AuxG( Index, const State &, Position, Time ) override;
         void AuxGPrime( Index, State &, const State &, Position, Time ) override;
         void dSources_dPhi( Index, VectorRef, const State &, Position, Time ) override;
+        
+        void dSigma_dPhi( Index, VectorRef, const State &, Position, Time ) override;
         Value InitialAuxValue( Index, Position ) const override;
 
 private:

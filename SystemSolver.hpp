@@ -228,6 +228,7 @@ class SystemSolver
         void dSources_dScalars_Mat(Matrix &, DGSoln const &, Index );
 
         void dSourcedPhi_Mat(Matrix &, DGSoln const &, Index );
+        void dPhi_Mat(Matrix &, std::vector<Eigen::Ref<Matrix>> const dX_dZ, DGSoln const &, Index );
 
         void dAux_Mat(Eigen::Ref<Matrix>, DGSoln const &, Index );
         void dAux_Mat(Eigen::Ref<Matrix>, GlobalStateMatrix&, DGSoln const &, Index );
