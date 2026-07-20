@@ -7,6 +7,7 @@ from VectorizedTransportSystem import VectorizedTransportSystem
 from JAXAdjointProblem import JAXAdjointProblem
 import jax.numpy as jnp
 
+
 class NonlinearDiffusionParams(NamedTuple):
     D: float
     T_s: float
@@ -24,10 +25,11 @@ class NonlinearDiffusionParams(NamedTuple):
             SourceWidth=0.02,
         )
 
+
 class JAXNonlinearDiffusion(VectorizedTransportSystem):
     def __init__(self, config):
         super().__init__()
-        self.nVars = 1
+        self.nVars = 2
         self.isUpperDirichlet = True
         self.isLowerDirichlet = False
 
@@ -71,12 +73,12 @@ class JAXNonlinearDiffusion(VectorizedTransportSystem):
         return G, G_p
 
     def g(self, state, x, params):
-        u = state.Variable[0]
+        u = state.Variable[0] + state.Variable[1]
         return 0.5 * u * u
 
     def sigma(self, index, state, x, t, params):
-        u = state.Variable[0]
-        q = state.Derivative[0]
+        u = state.Variable[index]
+        q = state.Derivative[index]
         return params.D * (u**params.a) * q
 
     def source(self, index, state, x, t, params):

@@ -159,7 +159,7 @@ class PlasmaConstants(eqx.Module):
 
     def TotalAlphaPower(self, n, pi):
         Factor = 5.6e-13 / self.T0
-        return Factor * self.FusionRate(n, pi)
+        return Factor * self.FusionRate(n, pi) / self.HeatEquationNormalization()
 
     def BremsstrahlungLosses(self, n, pe):
         Pbrem = 5.34e3 * jnp.sqrt(pe / n) * self.Z_eff * n * n

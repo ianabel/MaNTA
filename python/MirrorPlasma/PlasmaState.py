@@ -12,7 +12,7 @@ import sys
 
 sys.path.append("..")
 
-from State import State, ScalarGPrime_Decorator, ScalarG_Decorator
+from State import State
 
 
 class MirrorPlasmaConfig(eqx.Module):
@@ -36,6 +36,7 @@ class MirrorPlasmaConfig(eqx.Module):
     CurrentDecay: Float
     ParticleSourceCenter: Float
     ParticleSourceWidth: Float
+    ParticleSourceHeight: Float
     PlasmaLength: Float
     MagneticFieldStrength: Float
     MirrorRatio: Float
@@ -48,7 +49,7 @@ class MirrorPlasmaConfig(eqx.Module):
         Rmax: Float,
         MagneticFieldSlope: Float = 0.0,
         InitialDensityHeight: Float = 0.1,
-        EdgeDensity: Float = 0.01,
+        EdgeDensity: Float = 0.05,
         InitialIonTemperatureHeight: Float = 0.1,
         EdgeIonTemperature: Float = 0.05,
         InitialElectronTemperatureHeight: Float = 0.1,
@@ -62,7 +63,7 @@ class MirrorPlasmaConfig(eqx.Module):
         useConstantVoltage: Bool = True,
         Current: Float = 0.2,
         CurrentDecay: Float = 1e-3,
-        ParticleSourceCenter: Float = 0.5,
+        ParticleSourceCenter: Float = 0.1,
         ParticleSourceWidth: Float = 0.1,
         ParticleSourceHeight: Float = 50.0,
         PlasmaLength: Float = 0.6,
@@ -245,21 +246,21 @@ class MirrorPlasmaState(eqx.Module):
         Ti = pi / n
         Te = pe / n
 
-        R = params.MagneticField.R_x(x)
+        R = params.MagneticField.R_x(x) / params.Constants.a
         VPrime = params.MagneticField.VPrime(x)
         J = n * R**2
         omega = L / J
         M = R * omega / jnp.sqrt(Te)
 
-        dndx = state.Derivative[Channel.Density]
-        dLdx = state.Derivative[Channel.AngularMomentum]
-        dpidx = 2.0 / 3.0 * state.Derivative[Channel.IonEnergy]
-        dpedx = 2.0 / 3.0 * state.Derivative[Channel.ElectronEnergy]
+        dndx = state.Derivative[Channel.Density] * VPrime
+        dLdx = state.Derivative[Channel.AngularMomentum] * VPrime
+        dpidx = 2.0 / 3.0 * state.Derivative[Channel.IonEnergy] * VPrime
+        dpedx = 2.0 / 3.0 * state.Derivative[Channel.ElectronEnergy] * VPrime
 
         dTidx = (dpidx - dndx * Ti) / n
         dTedx = (dpedx - dndx * Te) / n
 
-        dRdx = params.MagneticField.dRdx(x)
+        dRdx = params.MagneticField.dRdx(x) / params.Constants.a
         dJdx = R * R * dndx + 2.0 * dRdx * R * n
         domegadx = dLdx / J - dJdx * L / (J * J)
 
@@ -268,7 +269,7 @@ class MirrorPlasmaState(eqx.Module):
         else:
             Current = (
                 -params.Config.Current
-                * params.Constants.MomentumEquationNormalization()
+                / params.Constants.MomentumEquationNormalization()
             )
 
         return cls(

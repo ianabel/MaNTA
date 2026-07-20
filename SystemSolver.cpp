@@ -1512,7 +1512,7 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
     {
         for (Index v = 0; v < nVars; ++v)
        {
-          auto Source_vals = problem->getSourceCache(v);
+          auto& Source_vals = problem->getSourceCache(v);
           source_interp.emplace_back(grid, y.getBasis(), Source_vals.data(), static_cast<size_t>(k + 1));
        }
     }
@@ -1566,7 +1566,7 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
     {
         for (Index v = 0; v < nVars; ++v)
        {
-          auto Source_vals = problem->getSourceCache(v);
+          auto& Source_vals = problem->getSourceCache(v);
           source_interp.emplace_back(grid, y.getBasis(), Source_vals.data(), static_cast<size_t>(k + 1));
        }
     }

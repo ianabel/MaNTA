@@ -382,7 +382,7 @@ public:
 
   virtual std::string getAdjointNames(Index pIndex) const { return "p" + std::to_string(pIndex); }
 
-  const Values& getSourceCache(Index var) const { return m_sourceCache[var]; }
+  Values& getSourceCache(Index var) { return m_sourceCache[var]; }
 
 protected:
   bool restarting = false;

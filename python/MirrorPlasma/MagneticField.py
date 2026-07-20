@@ -21,7 +21,6 @@ class _MagneticField(eqx.Module):
 
     def dRdx(self, x, s=0):
         return jax.grad(self.R_x)(x)
-        # return jax.vmap(jax.grad(self.R_x), (0, None))(x, s)
 
     def VPrime(self, x):
         return 1.0 / jax.grad(self.Psi_x)(x)
