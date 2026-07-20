@@ -10,6 +10,7 @@
 #include <vector>
 #include <iostream>
 
+#include "Logging.hpp"
 #include "Types.hpp"
 
 typedef std::function<double(double)> Fn;

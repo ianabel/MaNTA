@@ -24,7 +24,7 @@ static const map_t params = {
     //
     {"Polynomial_degree", Parameter<unsigned int>{.required = true}},
     //
-    {"Grid_size", Parameter<int>{.required = true}},
+    {"Grid_size", Parameter<int>{.required = false, ._default = 0}},
     //
     {"Grid_points",
      Parameter<std::vector<double>>{.required = false, ._default = {}}},
@@ -58,8 +58,10 @@ static const map_t params = {
     //
     {"initialTimestep", Parameter<double>{.required = false, ._default = 0.0}},
     //
-    {"aggressiveTimesteps", Parameter<bool>{.required = false, ._default = false}}
-  };
+    {"aggressiveTimesteps",
+     Parameter<bool>{.required = false, ._default = false}},
+    //
+    {"optimizeMode", Parameter<bool>{.required = false, ._default = false}}};
 
 template <typename T>
 T getValueWithDefault(std::string_view key, const py::dict &d) {
@@ -74,7 +76,8 @@ T getValueWithDefault(std::string_view key, const py::dict &d) {
   } else {
     try {
       auto val = std::get<Parameter<T>>(params.at(key))._default;
-      logmsg<LOG_LEVEL::INFO>("Using default value {} for parameter {}", val, key);
+      logmsg<LOG_LEVEL::INFO>("Using default value {} for parameter {}", val,
+                              key);
       return val;
     } catch (...) {
       throw std::runtime_error("Failed to retrieve default value for key: " +
@@ -139,8 +142,8 @@ void PyRunner::configure(const py::dict &config) {
         getValueWithDefault<std::vector<double>>("Grid_points", config);
 
     if (CellBoundaries.size() > 0) {
-      logmsg<LOG_LEVEL::INFO>("Creating grid with cell boundaries at x = [{}]",
-                           CellBoundaries);
+      logmsg<LOG_LEVEL::INFO>("Creating grid with cell boundaries at x = {}",
+                              CellBoundaries);
 
       grid = std::make_unique<Grid>(CellBoundaries);
     } else {
@@ -159,9 +162,10 @@ void PyRunner::configure(const py::dict &config) {
           getValueWithDefault<double>("Upper_Boundary_Fraction", config);
 
       nCells = getValueWithDefault<int>("Grid_size", config);
-      logmsg<LOG_LEVEL::INFO>("Grid configured with lower boundary at x = {} and "
-                           "upper boundary at x = {}",
-                           lBound, uBound);
+      logmsg<LOG_LEVEL::INFO>(
+          "Grid configured with lower boundary at x = {} and "
+          "upper boundary at x = {}",
+          lBound, uBound);
 
       grid =
           std::make_unique<Grid>(lBound, uBound, nCells, highGridBoundary,
@@ -236,9 +240,11 @@ void PyRunner::configure(const py::dict &config) {
 
   bool writeOutput = getValueWithDefault<bool>("WriteOutput", config);
 
-  system->aggressiveTimesteps = getValueWithDefault<bool>("aggressiveTimesteps", config);
+  system->aggressiveTimesteps =
+      getValueWithDefault<bool>("aggressiveTimesteps", config);
 
   configured = true;
+  optimizeMode = getValueWithDefault<bool>("optimizeMode", config);
   logmsg<LOG_LEVEL::INFO>("Configuration done");
 }
 
@@ -275,7 +281,8 @@ void PyRunner::run_ss() {
 
 Vector PyRunner::G() {
   if (adjoint == nullptr) {
-    logmsg<LOG_LEVEL::WARNING>("G called with solveAdjoint = false; attempting to create adjoint problem");
+    logmsg<LOG_LEVEL::WARNING>("G called with solveAdjoint = false; attempting "
+                               "to create adjoint problem");
     adjoint = pProblem->createAdjointProblem();
     system->setAdjointProblem(adjoint.get());
   }
@@ -284,7 +291,8 @@ Vector PyRunner::G() {
         "Error: Runner must be configured before running solver.");
   }
   Vector Gout(adjoint->getNg());
-  system->optimizeMode = true;
+  system->optimizeMode = optimizeMode;
+  system->aggressiveTimesteps = true;
   system->setSteadyStateTolerance(steady_state_tolerance);
   ISTATUS status = system->initialize();
   if (status == ISTATUS::FAILURE)
@@ -293,6 +301,12 @@ Vector PyRunner::G() {
   if (status == ISTATUS::NEGATIVE_DGDT) {
     for (Index gIndex = 0; gIndex < adjoint->getNg(); ++gIndex)
       Gout(gIndex) = fillValue;
+    system->destroySundials();
+    return Gout;
+  }
+  if (status == ISTATUS::ZERO_DGDT) {
+    for (Index gIndex = 0; gIndex < adjoint->getNg(); ++gIndex)
+      Gout(gIndex) = adjoint->GFn(gIndex, system->yJac);
     system->destroySundials();
     return Gout;
   }

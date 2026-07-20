@@ -61,6 +61,7 @@ private:
   std::unique_ptr<Grid> grid;
 
   bool configured = false;
+  bool optimizeMode;
   double steady_state_tolerance;
   double fillValue = 1e-12;
 };

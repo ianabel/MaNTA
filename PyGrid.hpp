@@ -3,6 +3,7 @@
 
 // Helper functions for obtaining points fluxes and sources are evaluated at for Python output
 
+#include "Logging.hpp"
 #include "gridStructures.hpp"
 #include "Basis.hpp"
 
@@ -12,7 +13,7 @@ using BasisType = NodalBasis;
 Vector getNodes(const std::vector<double> &cellBoundaries, unsigned int k)
 {
     Grid grid(cellBoundaries);
-    Vector points((k + 1) * cellBoundaries.size());
+    Vector points((k + 1) * (cellBoundaries.size() - 1));
     auto nodes = BasisType::getBasis(k).getNodes();
     for (size_t i = 0; i < grid.getNCells(); ++i)
     {

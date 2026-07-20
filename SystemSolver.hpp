@@ -38,6 +38,7 @@ namespace adjoint_test_suite
 enum class ISTATUS {
   SUCCESS,
   NEGATIVE_DGDT,
+  ZERO_DGDT,
   FAILURE,
 };
 
