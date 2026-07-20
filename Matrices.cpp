@@ -51,8 +51,6 @@ void SystemSolver::DerivativeSubMatrix(Matrix &mat, std::vector<Eigen::Ref<Matri
 		Matrix M = Y.getBasis().MassMatrix(grid[intervalIndex]);
 		for (Index j = 0; j < k + 1; ++j)
 		{
-			Vector vals(nVars);
-			vals.setZero();
 			for (Index ZVar = 0; ZVar < nVars; ZVar++)
 			{
 				mat(XVar * (k + 1) + j, ZVar * (k + 1) + j) = dX_dZ[XVar](ZVar, j);
@@ -163,6 +161,32 @@ void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Index in
 	}
 }
 
+void SystemSolver::dPhi_Mat(Matrix &mat, std::vector<Eigen::Ref<Matrix>> const dX_dZ, DGSoln const &Y, Index intervalIndex )
+{
+  // ASSERT mat.shape == ( nVars * ( k + 1) , nVars * ( k + 1 ) )
+	assert(mat.rows() == nVars * (k + 1));
+	assert(mat.cols() == nAux * (k + 1));
+
+	mat.setZero();
+
+	// With interpolation we have Mass * diagonal( F'(nodes) ) (c.f. https://arxiv.org/pdf/1811.09667 eq 3.16ff)
+
+	for (Index XVar = 0; XVar < nVars; XVar++)
+	{
+		Matrix M = Y.getBasis().MassMatrix(grid[intervalIndex]);
+		for (Index j = 0; j < k + 1; ++j)
+		{
+			for (Index ZVar = 0; ZVar < nAux; ZVar++)
+			{
+				mat(XVar * (k + 1) + j, ZVar * (k + 1) + j) = dX_dZ[XVar](ZVar, j);
+			}
+		}
+		for (Index ZVar = 0; ZVar < nAux; ZVar++)
+		{
+			mat.block(XVar * (k + 1), ZVar * (k + 1), k + 1, k + 1).applyOnTheLeft(M);
+		}
+	}
+}
 void SystemSolver::dSourcedPhi_Mat( Matrix& mat, DGSoln const& Y, Index intervalIndex )
 {
     Interval const &I( grid[ intervalIndex ] );
@@ -200,8 +224,7 @@ void SystemSolver::dSourcedPhi_Mat( Matrix& mat, DGSoln const& Y, Index interval
 
 			( problem->dSources_dPhi )( Var, dS_dPhi_vals1, Y_plus, y_plus, jt );
 			( problem->dSources_dPhi )( Var, dS_dPhi_vals2, Y_minus, y_minus, jt );
-
-			for(Index Aux = 0; Aux < nAux; Aux++)
+for(Index Aux = 0; Aux < nAux; Aux++)
 			{
 				for ( Index j=0; j < k + 1; ++j )
 				{
@@ -217,7 +240,47 @@ void SystemSolver::dSourcedPhi_Mat( Matrix& mat, DGSoln const& Y, Index interval
 		}
 	}
 }
+void SystemSolver::dAux_Mat(Eigen::Ref<Matrix> mat, GlobalStateMatrix& dAux, DGSoln const &Y, Index intervalIndex)
+{
+  Interval const &I( grid[intervalIndex] );
+  // Assert Mat.shape == ( nAux * ( k + 1 ), ( 3 * nVars + nAux ) * ( k + 1 ) )
+  assert( mat.rows() == nAux * ( k + 1 ) );
+  assert( mat.cols() == ( 3*nVars + nAux ) * ( k + 1 ) );
 
+	mat.setZero();
+
+	// With interpolation we have Mass * diagonal( F'(nodes) ) (c.f. https://arxiv.org/pdf/1811.09667 eq 3.16ff)
+  const auto dG_du = dAux.Variable(intervalIndex);
+  const auto dG_dq = dAux.Derivative(intervalIndex);
+  const auto dG_dsigma= dAux.Flux(intervalIndex);
+  const auto dG_dphi = dAux.Aux(intervalIndex);
+	for (Index Aux = 0; Aux < nAux; Aux++)
+	{
+		Matrix M = Y.getBasis().MassMatrix(grid[intervalIndex]);
+    
+		for (Index j = 0; j < k + 1; ++j)
+		{
+			Vector vals(nVars);
+			vals.setZero();
+			for (Index ZVar = 0; ZVar < nVars; ZVar++)
+			{
+				mat(Aux * (k + 1) + j, j) = dG_du[Aux](ZVar, j);
+				mat(Aux * (k + 1) + j, ZVar * (k + 1) + j) += dG_dq[Aux](ZVar, j);
+				mat(Aux * (k + 1) + j, 2 * ZVar * (k + 1) + j) += dG_dsigma[Aux](ZVar, j);
+			}
+      for (Index A2 = 0; A2 < nAux; A2++)
+				mat(Aux * (k + 1) + j, (3 * nVars + A2) * (k + 1) + j) += dG_dphi[Aux](A2, j);
+		}
+		for (Index ZVar = 0; ZVar < nVars; ZVar++)
+		{
+			mat.block(Aux * (k + 1), ZVar * (k + 1), k + 1, k + 1).applyOnTheLeft(M);
+		}
+    for (Index Aux = 0; Aux < nAux; Aux++)
+    {
+			mat.block(Aux * (k + 1), (3 * nVars + Aux) * (k + 1), k + 1, k + 1).applyOnTheLeft(M);
+    }
+	}
+}
 void SystemSolver::dAux_Mat( Eigen::Ref<Matrix> mat, DGSoln const& Y, Index intervalIndex )
 {
   Interval const &I( grid[intervalIndex] );

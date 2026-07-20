@@ -255,6 +255,7 @@ void PyRunner::run(double tFinal) {
   }
   if (system->TerminateOnSteadyState) {
     logmsg<LOG_LEVEL::WARNING>(
+    logmsg<LOG_LEVEL::WARNING>(
         "\"run\" called but TerminateOnSteadyState is set to true. If you"
         " intended to run to steady-state, call \"run_ss\"");
     system->TerminateOnSteadyState = false;

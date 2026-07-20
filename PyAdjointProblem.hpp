@@ -67,6 +67,7 @@ public:
 
     return out;
   };
+
   Value dGFndp(Index i, Index pIndex, DGSoln &y) const override {
     throw std::runtime_error("Non-vectorized version of function \"dGFndp\" "
                              "depracated.");
@@ -175,6 +176,55 @@ public:
     out = _override(gIndex, states, abscissae).cast<GlobalState>();
   };
 
+  void ComputePhysicsDerivatives(
+      std::array<std::reference_wrapper<GlobalStateMatrix>, NPHYSICS_FUNCTIONS>
+          &&out,
+      GlobalState const &states,
+      std::vector<Position> const &abscissae) override {
+    py::gil_scoped_acquire gil;
+    py::function _override =
+        py::get_override(this, "ComputePhysicsDerivatives");
+
+    if (!_override)
+      AdjointProblem::ComputePhysicsDerivatives(std::move(out), states,
+                                                abscissae);
+
+    std::array<std::vector<Matrix>, NPHYSICS_FUNCTIONS> temp =
+        _override(states, abscissae)
+            .cast<std::array<std::vector<Matrix>, NPHYSICS_FUNCTIONS>>();
+
+    GlobalStateMatrix &dflux = out[0];
+    GlobalStateMatrix &dsource = out[1];
+    GlobalStateMatrix &daux = out[2];
+
+    for (Index var = 0; var < dflux.size(); ++var) {
+      dflux[var].Variable() = temp[0][var];
+      dsource[var].Variable() = temp[1][var];
+    }
+    for (Index aux = 0; aux < daux.size(); ++aux) {
+      daux[aux].Variable() = temp[2][aux];
+    }
+  };
+
+  void dAux(Index i, GlobalState &out, GlobalState const &states,
+            std::vector<Position> const &abscissae) override {
+    std::string method_name = "dAux";
+    py::gil_scoped_acquire gil;
+    py::function _override = py::get_override(this, method_name.c_str());
+
+    if (!_override) {
+      throw std::runtime_error("Vectorized function \"dAux\" not found in "
+                               "Python subclass");
+      // std::cerr << "WARNING: Vectorized function \"dAux\"
+      // not found in Python subclass" << std::endl;
+      // TransportSystem::dAux(i, out, states, abscissae,
+      // time); return;
+    }
+
+    checkShapeAndSet(out.Variable(),
+                     _override(i, states, abscissae).cast<Matrix>(),
+                     "dAux in PyAdjointProblem");
+  }
   void dSigmaFn_dp(Index i, Index pIndex, Value &out, const State &s,
                    Position x) override {
     throw std::runtime_error("Individual derivative functions depracated; use "

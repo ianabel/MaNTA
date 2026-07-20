@@ -2,15 +2,18 @@
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-
 #include <string>
 #include <toml.hpp>
 
+#include "AdjointProblem.hpp"
 #include "PhysicsCases.hpp"
 #include "PyAdjointProblem.hpp"
 #include "PyGrid.hpp"
+#include "PyIntegrator.hpp"
 #include "PyRunner.hpp"
 #include "PyTransportSystem.hpp"
+#include "State.hpp"
+#include "TransportSystem.hpp"
 
 namespace py = pybind11;
 
@@ -64,7 +67,6 @@ public:
 
   bool load(handle src, bool) {
     py::dict d = py::cast<py::dict>(src);
-
     value.Variable() = py::cast<Matrix>(d["Variable"]).transpose();
     value.Derivative() = py::cast<Matrix>(d["Derivative"]).transpose();
     value.Flux() = py::cast<Matrix>(d["Flux"]).transpose();
@@ -136,8 +138,8 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used()) {
         py::overload_cast<Position, Position, Index, unsigned int>(&getNodes),
         py::return_value_policy::reference, "Get the points of a grid");
 
-  // List all interfaces of the main TransportSystem class which is what
-  // has to be derived from in python
+  // List all interfaces of the main TransportSystem class which is what has to
+  // be derived from in python
   py::class_<TransportSystem, PyTransportSystem, py::smart_holder>(
       m, "TransportSystem")
       .def(py::init<>())
@@ -147,6 +149,9 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used()) {
            &TransportSystem::isLowerBoundaryDirichlet)
       .def("isUpperBoundaryDirichlet",
            &TransportSystem::isUpperBoundaryDirichlet)
+      .def("ComputePhysics", &TransportSystem::ComputePhysics)
+      .def("ComputePhysicsDerivatives",
+           &TransportSystem::ComputePhysicsDerivatives)
       .def("SigmaFn", py::overload_cast<Index, const State &, Position, Time>(
                           &TransportSystem::SigmaFn))
       .def("SigmaFn_v", py::overload_cast<Index, GlobalState const &,
@@ -167,15 +172,32 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used()) {
       .def("InitialValue", &TransportSystem::InitialValue)
       .def("InitialDerivative", &TransportSystem::InitialDerivative)
       .def("InitialAuxValue", &TransportSystem::InitialAuxValue)
-      .def("AuxG", &TransportSystem::AuxG)
-      .def("AuxGPrime", &TransportSystem::AuxGPrime)
+      .def("AuxG", py::overload_cast<Index, const State &, Position, Time>(
+                       &TransportSystem::AuxG))
+      .def("AuxG_v", py::overload_cast<Index, const State &, Position, Time>(
+                         &TransportSystem::AuxG))
+      .def("AuxGPrime",
+           py::overload_cast<Index, State &, const State &, Position, Time>(
+               &TransportSystem::AuxGPrime))
+      .def("AuxGPrime_v",
+           py::overload_cast<Index, GlobalState &, GlobalState const &,
+                             std::vector<Position> const &, Time>(
+               &TransportSystem::AuxGPrime))
       .def("dSources_dPhi", &TransportSystem::dSources_dPhi)
       .def("dSigma_dPhi", &TransportSystem::dSigma_dPhi)
+      .def("ScalarG", &TransportSystem::ScalarGExtended)
+      .def("ScalarGPrime",
+           py::overload_cast<GlobalStateMatrix &, GlobalStateMatrix &,
+                             const DGSoln &, const DGSoln &, Time>(
+               &TransportSystem::ScalarGPrimeExtended))
+      .def("InitialScalarValue", &TransportSystem::InitialScalarValue)
+      .def("dSources_dScalars", &TransportSystem::dSources_dScalars)
       .def("createAdjointProblem", &TransportSystem::createAdjointProblem)
       .def_readwrite("isUpperDirichlet", &PyTransportSystem::isUpperDirichlet)
       .def_readwrite("isLowerDirichlet", &PyTransportSystem::isLowerDirichlet)
       .def_readwrite("nVars", &PyTransportSystem::nVars)
-      .def_readwrite("nAux", &PyTransportSystem::nAux);
+      .def_readwrite("nAux", &PyTransportSystem::nAux)
+      .def_readwrite("nScalars", &PyTransportSystem::nScalars);
 
   py::class_<AdjointProblem, PyAdjointProblem, py::smart_holder>(
       m, "AdjointProblem")
@@ -186,8 +208,11 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used()) {
       .def("dgFndp", &AdjointProblem::dgFndp)
       .def("dgFn_dphi", &AdjointProblem::dgFn_dphi)
       .def("dg", &AdjointProblem::dg)
+      .def("ComputePhysicsDerivatives",
+           &AdjointProblem::ComputePhysicsDerivatives)
       .def("dSigma", &AdjointProblem::dSigma)
       .def("dSources", &AdjointProblem::dSources)
+      .def("dAux", &AdjointProblem::dAux)
       .def("dAux_dp", &AdjointProblem::dAux_dp)
       .def("computeUpperBoundarySensitivity",
            &AdjointProblem::computeUpperBoundarySensitivity)
@@ -234,8 +259,7 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used()) {
       .def("run_ss", &PyRunner::run_ss)
       .def("getAdjointGradients", &PyRunner::getAdjointGradients)
       .def("getSolution", &PyRunner::getSolution)
-      .def("get_address",
-           [](const PyRunner &runner) // needed for xla interface
+      .def("get_address", [](const PyRunner &runner) // needed for xla interface
            { return reinterpret_cast<std::uint64_t>(&runner); });
 #ifdef XLA_FFI
   m.def("runner_ffi_ops", []() {
@@ -243,7 +267,6 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used()) {
     ffi_ops["get_solution_ffi"] = EncapsulateFfiCall(get_solution_ffi_ops);
     ffi_ops["get_adjoint_gradients_ffi"] =
         EncapsulateFfiCall(get_adjoint_gradients_ffi_ops);
-    ffi_ops["get_g_val"] = EncapsulateFfiCall(get_g_val_ffi_ops);
     ffi_ops["run_ffi"] = EncapsulateFfiCall(run_ffi_ops);
     ffi_ops["run_ss_ffi"] = EncapsulateFfiCall(run_ss_ffi_ops);
     return ffi_ops;

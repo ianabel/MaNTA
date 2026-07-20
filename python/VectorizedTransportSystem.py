@@ -5,7 +5,7 @@ import MaNTA
 from JAXAdjointProblem import JAXAdjointProblem
 from typing import NamedTuple, Any
 from functools import partial
-from State import State, MaNTA_Decorator
+from State import Physics_Decorator, State
 from abc import abstractmethod
 import equinox as eqx
 
@@ -20,6 +20,7 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
     def __init__(self, spatialParameters=False):
         MaNTA.TransportSystem.__init__(self)
         self.nAux = 0
+        self.nScalars = 0
 
         self.dAuxdvars = jax.jit(jax.grad(self.aux, argnums=1))
 
@@ -29,27 +30,67 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
 
     @abstractmethod
     def LowerBoundary(self, index, t):
-        raise NotImplementedError("LowerBoundary not implemented")
+        raise NotImplementedError("LowerBoundary not implemented in derived class")
 
     @abstractmethod
     def UpperBoundary(self, index, t):
-        raise NotImplementedError("UpperBoundary not implemented")
+        raise NotImplementedError("UpperBoundary not implemented in derived class")
 
-    @MaNTA_Decorator
+    """
+    Base methods for vectorizing 
+    """
+    @Physics_Decorator
+    def ComputePhysics(self, states, positions, t):
+        index = jnp.arange(0, self.nVars)
+        fluxes = []
+        sources = []
+        aux = []
+        for i in index:
+            fluxes.append(self.SigmaFn_v(i, states, positions, t))
+            sources.append(self.Sources_v(i, states, positions, t))
+
+        for i in range(0, self.nAux):
+            aux.append(self.AuxG_v(i, states, positions, t))
+
+        return [fluxes, sources, aux]
+
+    @Physics_Decorator
+    def ComputePhysicsDerivatives(self, states, positions, t):
+        index = jnp.arange(0, self.nVars)
+        fluxes = []
+        sources = []
+        aux = []
+        for i in index:
+            fluxes.append(self.dSigma(i, states, positions, t))
+            sources.append(self.dSources(i, states, positions, t))
+
+        for i in range(0, self.nAux):
+            aux.append(self.AuxGPrime_v(i, states, positions, t))
+
+        return [fluxes, sources, aux]
+
+    @partial(jax.jit, static_argnames=("self",))
     def SigmaFn_v(self, index, states, positions, t):
         return jax.vmap(
             lambda s, p, params: self.sigma(index, s, p, t, params),
             in_axes=(self.vmap_axes),
         )(states, positions, self.params)
 
-    @MaNTA_Decorator
+    @partial(jax.jit, static_argnames=("self",))
     def Sources_v(self, index, states, positions, t):
         return jax.vmap(
             lambda s, p, params: self.source(index, s, p, t, params),
             in_axes=(self.vmap_axes),
         )(states, positions, self.params)
 
-    @MaNTA_Decorator
+    @partial(jax.jit, static_argnames=("self",))
+    def AuxG_v(self, index, states, positions, t):
+        return jax.vmap(
+            lambda s, p, params: self.aux(index, s, p, t, params),
+            in_axes=(self.vmap_axes),
+        )(states, positions, self.params)
+
+    @partial(jax.jit, static_argnames=("self",))
     def dSigma(self, index, states, positions, t):
         return jax.vmap(
             lambda s, p, params: jax.grad(self.sigma, argnums=1)(
@@ -58,7 +99,7 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
             in_axes=(self.vmap_axes),
         )(states, positions, self.params)
 
-    @MaNTA_Decorator
+    @partial(jax.jit, static_argnames=("self",))
     def dSources(self, index, states, positions, t):
         return jax.vmap(
             lambda s, p, params: jax.grad(self.source, argnums=1)(
@@ -66,6 +107,21 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
             ),
             in_axes=(self.vmap_axes),
         )(states, positions, self.params)
+
+    @partial(jax.jit, static_argnames=("self",))
+    def AuxGPrime_v(self, index, states, positions, t):
+        return jax.vmap(
+            lambda s, p, params: jax.grad(self.aux, argnums=1)(index, s, p, t, params),
+            in_axes=(self.vmap_axes),
+        )(states, positions, self.params)
+
+    @abstractmethod
+    def ScalarG(self, i, states, states_dot, weights, t):
+        raise NotImplementedError("Scalar G function not implemented in derived class")
+
+    @abstractmethod
+    def ScalarGPrime(self, states, states_dot, weights, phis, phi_boundaries, t):
+        raise NotImplementedError("ScalarGPrime not implemented in derived class")
 
     """
     Sigma and source, and auxilliary functions to be overloaded in derived classes
@@ -89,54 +145,16 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
     """
 
     @abstractmethod
-    @partial(jax.jit, static_argnames=("self",))
-    def sigma(self, index, state, x, t, params: NamedTuple):
-        raise NotImplementedError("sigma function not implemented")
+    def sigma(self, index, state, x, t, params):
+        raise NotImplementedError("sigma function not implemented in derived class")
 
     @abstractmethod
-    @partial(jax.jit, static_argnames=("self",))
-    def source(self, index, state, x, t, params: NamedTuple):
-        raise NotImplementedError("source function not implemented")
+    def source(self, index, state, x, t, params):
+        raise NotImplementedError("source function not implemented in derived class")
 
     @abstractmethod
-    @partial(jax.jit, static_argnames=("self",))
-    def aux(self, index, state, x, t, params: NamedTuple):
-        pass
-
-    @MaNTA_Decorator
-    def AuxG(self, index, state, x, t):
-        return self.aux(index, state, x, t, self.params)
-
-    """
-    Compute derivative of auxilliary functions
-
-     Parameters
-    ----------
-    index : int
-        Variable index
-    state : dict
-        Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
-    x : float
-        Spatial location
-    t : float
-        Time
-    Returns
-    -------
-    state : dict
-        Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
-    """
-
-    @MaNTA_Decorator
-    def dSigma_dPhi(self, index, state, x, t):
-        return jax.grad(self.sigma, argnums=1)(index, state, x, t, self.params).Aux
-
-    @MaNTA_Decorator
-    def dSources_dPhi(self, index, state, x, t):
-        return jax.grad(self.source, argnums=1)(index, state, x, t, self.params).Aux
-
-    @MaNTA_Decorator
-    def AuxGPrime(self, index, state, x, t):
-        return self.dAuxdvars(index, state, x, t, self.params)
+    def aux(self, index, state, x, t, params):
+        raise NotImplementedError("aux function not implemented in derived class")
 
     @abstractmethod
     @partial(jax.jit, static_argnames=("self",))
@@ -144,12 +162,29 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
         raise NotImplementedError("InitialValue must be implemented in derived class")
 
     @abstractmethod
+    def InitialScalarValue(self, s):
+        raise NotImplementedError("InitialScalarValue not implemented in derived class")
+
+    @abstractmethod
     @partial(jax.jit, static_argnames=("self",))
     def InitialDerivative(self, index, x):
         return self.dInitialValue(index, x)
 
+    @abstractmethod
     def InitialAuxValue(self, index, x):
-        pass
+        raise NotImplementedError("InitialAuxValue not implemented in derived class")
+
+    @abstractmethod
+    def InitialScalarDerivative(self, i, states, states_dot, integrator):
+        raise NotImplementedError(
+            "InitialScalarDerivative not implemented in derived class"
+        )
+
+    @abstractmethod
+    def isScalarDifferential(self, s) -> bool:
+        raise NotImplementedError(
+            "isScalarDifferential not implemented in derived class"
+        )
 
     """
     Create the adjoint problem associated with this transport system
@@ -160,122 +195,7 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
         The adjoint problem object
     """
 
+    @abstractmethod
     def createAdjointProblem(self):
-        pass
+        raise NotImplementedError("createAdjointProblem not implemented in derived class")
 
-
-# Need PyTree structure for class paramters to be able to compute adjoints
-
-
-class NonlinearDiffusionParams(NamedTuple):
-    SourceCentre: float
-    D: float
-    T_s: float
-    a: float
-    SourceWidth: float
-
-    @classmethod
-    def make(cls, config: MaNTA.TomlValue) -> "NonlinearDiffusionParams":
-        return cls(
-            SourceCentre=config["SourceCentre"],
-            D=config["D"],
-            T_s=50.0,
-            a=config["a"],
-            SourceWidth=0.02,
-        )
-
-
-class JAXNonlinearDiffusion(VectorizedTransportSystem):
-    def __init__(self, config: MaNTA.TomlValue, grid: MaNTA.Grid):
-        super().__init__()
-        self.nVars = 1
-        self.isUpperDirichlet = True
-        self.isLowerDirichlet = False
-
-        # This object will be passed to sigma and source functions
-        self.params = NonlinearDiffusionParams.make(config)
-
-    def g(self, state, x, params: NonlinearDiffusionParams):
-        u = state.Variable[0]
-        return 0.5 * u * u
-
-    def sigma(self, index, state, x, t, params: NonlinearDiffusionParams):
-
-        u = state.Variable[0]
-        q = state.Derivative[0]
-        return params.D * (u**params.a) * q
-
-    def source(self, index, state, x, t, params: NonlinearDiffusionParams):
-        y = x - params.SourceCentre
-        return params.T_s * jnp.exp(-y * y / params.SourceWidth)
-
-    def LowerBoundary(self, index, t):
-        return 0.0
-
-    def UpperBoundary(self, index, t):
-        return 0.3
-
-    def InitialValue(self, index, x):
-        return 0.3
-
-    def createAdjointProblem(self):
-        adjointProblem = JAXAdjointProblem(self, self.g)
-        adjointProblem.addUpperBoundarySensitivity(0)
-        return adjointProblem
-
-
-class JAXAuxTest(VectorizedTransportSystem):
-    def __init__(self, config: MaNTA.TomlValue, grid: MaNTA.Grid):
-        super().__init__()
-        self.nVars = 1
-        self.nAux = 1
-        self.isUpperDirichlet = True
-        self.isLowerDirichlet = False
-
-        # This object will be passed to sigma and source functions
-        self.params = NonlinearDiffusionParams.make(config)
-
-    def g(self, state, x, params: NonlinearDiffusionParams):
-        u = state.Variable[0]
-        return 0.5 * u * u * params.D
-
-    def sigma(self, index, state, x, t, params: NonlinearDiffusionParams):
-
-        u = state.Variable[0]
-        q = state.Derivative[0]
-        return params.D * (u**params.a) * q
-
-    def aux(self, index, state, x, t, params):
-        a = state.Aux[0]
-        u = state.Variable[0]
-        return a - params.D * u * u
-
-    def source(self, index, state, x, t, params: NonlinearDiffusionParams):
-        y = x - params.SourceCentre
-        u = state.Variable[0]
-        a = state.Aux[0]
-        return params.T_s * jnp.exp(-y * y / params.SourceWidth) + a - params.D * u * u
-
-    def LowerBoundary(self, index, t):
-        return 0.0
-
-    def UpperBoundary(self, index, t):
-        return 0.3
-
-    def InitialValue(self, index, x):
-        return 0.3
-
-    def InitialAuxValue(self, index, x):
-        u0 = self.InitialValue(index, x)
-        return self.params.D * u0 * u0
-
-    def createAdjointProblem(self):
-        adjointProblem = JAXAdjointProblem(self, self.g)
-        adjointProblem.addUpperBoundarySensitivity(0)
-        return adjointProblem
-
-
-def registerTransportSystems():
-
-    MaNTA.registerPhysicsCase("JAXNonlinearDiffusion", JAXNonlinearDiffusion)
-    MaNTA.registerPhysicsCase("JAXAuxTest", JAXAuxTest)

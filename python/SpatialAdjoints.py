@@ -10,43 +10,52 @@ import numpy as np
 import jax
 from jaxtyping import Array, ArrayLike, Float, Int
 import equinox as eqx
+
+
 class NonlinearDiffusionParams(NamedTuple):
-    T_s: Float[ArrayLike, '...'] 
-    D: Float[ArrayLike, '...'] 
-    a: Float[ArrayLike, '...']
-    SourceWidth: Float[ArrayLike, '...']
-    SourceCentre: Float[ArrayLike, '...']
-   
+    T_s: Float[ArrayLike, "..."]
+    D: Float[ArrayLike, "..."]
+    a: Float[ArrayLike, "..."]
+    SourceWidth: Float[ArrayLike, "..."]
+    SourceCentre: Float[ArrayLike, "..."]
+
     @classmethod
-    def make(cls, config) -> 'NonlinearDiffusionParams':
+    def make(cls, config) -> "NonlinearDiffusionParams":
         return cls(
-             T_s = 50.0,
-             SourceCentre = config["SourceCentre"],
-             D = config["D"],
-             a = config["a"],
-             SourceWidth = 0.02
+            T_s=50.0,
+            SourceCentre=config["SourceCentre"],
+            D=config["D"],
+            a=config["a"],
+            SourceWidth=0.02,
         )
-    
+
     @classmethod
-    def makeSpatial(cls, config) -> 'NonlinearDiffusionParams':
+    def makeSpatial(cls, config) -> "NonlinearDiffusionParams":
         ones = jnp.ones_like(config["T_s"])
         return cls(
-             T_s = config["T_s"],
-             SourceCentre = config["SourceCentre"] * ones,
-             D = config["D"] * ones,
-             a = config["a"] * ones,
-             SourceWidth = 0.02 * ones
+            T_s=config["T_s"],
+            SourceCentre=config["SourceCentre"] * ones,
+            D=config["D"] * ones,
+            a=config["a"] * ones,
+            SourceWidth=0.02 * ones,
         )
+
+
 class JAXNonlinearDiffusion(VectorizedTransportSystem):
     def __init__(self, config):
         super().__init__(spatialParameters=True)
         self.nVars = 1
-        self.isUpperDirichlet  = True
-        self.isLowerDirichlet  = False
-        
+        self.isUpperDirichlet = True
+        self.isLowerDirichlet = False
+
         solver_config = config["solver"]
-        
-        self.points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
+
+        self.points = MaNTA.getNodes(
+            solver_config["Lower_boundary"],
+            solver_config["Upper_boundary"],
+            solver_config["Grid_size"],
+            solver_config["Polynomial_degree"],
+        )
 
         self.params = NonlinearDiffusionParams.makeSpatial(config["ts"])
         self.adjointProblem = JAXAdjointProblem(self, self.g, spatialParameters=True)
@@ -54,13 +63,12 @@ class JAXNonlinearDiffusion(VectorizedTransportSystem):
 
         self.runner.configure(solver_config)
 
-
         # This object will be passed to sigma and source functions
-    
-    def run(self, tFinal = None):
-        if (tFinal is not None):
+
+    def run(self, tFinal=None):
+        if tFinal is not None:
             sFinal = self.runner.run(tFinal)
-        else: 
+        else:
             sFinal = self.runner.run_ss()
 
         return sFinal
@@ -71,15 +79,15 @@ class JAXNonlinearDiffusion(VectorizedTransportSystem):
 
     def g(self, state, x, params):
         u = state.Variable[0]
-        return 0.5 * u * u 
+        return 0.5 * u * u
 
-    def sigma( self, index, state, x, t, params ):
-        
+    def sigma(self, index, state, x, t, params):
+
         u = state.Variable[0]
         q = state.Derivative[0]
-        return params.D*(u ** params.a) * q
+        return params.D * (u**params.a) * q
 
-    def source( self, index, state, x, t, params ):
+    def source(self, index, state, x, t, params):
         return params.T_s
 
     def LowerBoundary(self, index, t):
@@ -87,58 +95,64 @@ class JAXNonlinearDiffusion(VectorizedTransportSystem):
 
     def UpperBoundary(self, index, t):
         return 0.3
-    
+
     def InitialValue(self, index, x):
         return 0.3
-    
+
     def createAdjointProblem(self):
         return self.adjointProblem
 
+
 def runMaNTA(func, solver_config):
 
-    ts_config = {
-        "SourceCentre" : 0.3,
-        "D" : 2.0,
-        "a" : 0.0,
-        "T_s" : func 
-    }
+    ts_config = {"SourceCentre": 0.3, "D": 2.0, "a": 0.0, "T_s": func}
     config = {"solver": solver_config, "ts": ts_config}
     transportSystem = JAXNonlinearDiffusion(config)
 
     transportSystem.run()
     return transportSystem.getAdjointGradients()
-    
- 
+
+
 solver_config = {
     "OutputFilename": "out",
     "Polynomial_degree": 3,
     "Grid_size": 4,
-    "tau": 1.0, 
+    "tau": 1.0,
     "Lower_boundary": 0.0,
     "Upper_boundary": 1.0,
     "Relative_tolerance": 0.01,
     "delta_t": 1.0,
     "restart": False,
-    "solveAdjoint": True, 
+    "solveAdjoint": True,
 }
 
-points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
+points = MaNTA.getNodes(
+    solver_config["Lower_boundary"],
+    solver_config["Upper_boundary"],
+    solver_config["Grid_size"],
+    solver_config["Polynomial_degree"],
+)
 
-f = partial(runMaNTA, solver_config=solver_config)    
-T = lambda x : 50.0 * jnp.sin(2 * jnp.pi * x) ** 2
+f = partial(runMaNTA, solver_config=solver_config)
+T = lambda x: 50.0 * jnp.sin(2 * jnp.pi * x) ** 2
 G, G_p_adj = f(T(points))
 T_p = T(points)
 
 G_p_fd = []
 
+
 def fd_jvp(tangent):
-    dT = 0.001 + 0.1*jnp.linalg.norm(T_p)
+    dT = 0.001 + 0.1 * jnp.linalg.norm(T_p)
 
     T_in = T_p + dT * (tangent / jnp.linalg.norm(tangent))
     G_2 = f(T_in)[0]
-    return (G_2 - G)/ dT 
+    return (G_2 - G) / dT
+
+
 def adj_jvp(tangent):
-    return jnp.dot(G_p_adj[:,0], tangent)
+    return jnp.dot(G_p_adj[:, 0], tangent)
+
+
 # for i in range(0,len(points)):
 #     x = points[i]
 #     dT = 0.001 + 0.1* T(x)
@@ -146,7 +160,7 @@ def adj_jvp(tangent):
 #     T_pert = T_pert.at[i].set(T_p[i] + dT)
 #     G_1 = f(T_pert)[0]
 #     G_2 = f(T_p)[0]
-    
+
 #     print(G_1)
 #     print(G_2)
 #     G_p_fd.append((G_1-G_2) / (dT))
@@ -160,23 +174,26 @@ def adj_jvp(tangent):
 # plt.show()
 
 import matplotlib.pyplot as plt
+
 nTangents = 50
 rng_key = jax.random.PRNGKey(5)
+
+
 def make_random_tangent(primal):
     global rng_key
     rng_key, key = jax.random.split(rng_key)
+
     # key = jax.random.key(69)
     def map_fn(leaf):
         if jnp.isscalar(leaf) or jnp.isdtype(leaf, "integral"):
             return leaf
-        else: 
+        else:
             v = jax.random.normal(key=key, shape=leaf.shape, dtype=leaf.dtype)
-            return v/jnp.linalg.norm(v) 
-    tangent_field = jax.tree.map(
-        map_fn,
-        primal 
-    )
+            return v / jnp.linalg.norm(v)
+
+    tangent_field = jax.tree.map(map_fn, primal)
     return tangent_field
+
 
 fig, ax = plt.subplots()
 err = 0.0
@@ -185,8 +202,8 @@ for i in range(0, nTangents):
     adj = adj_jvp(t)
     fd = fd_jvp(t)
     err += jnp.abs(adj - fd)
-    ax.plot(i, adj, 'bo')
-    ax.plot(i, fd, 'rx')
+    ax.plot(i, adj, "bo")
+    ax.plot(i, fd, "rx")
 err /= nTangents
 
 print(f"Average error for {nTangents} iterations: {err}")

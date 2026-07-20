@@ -241,8 +241,10 @@ class SystemSolver
         void dSources_dScalars_Mat(Matrix &, DGSoln const &, Index );
 
         void dSourcedPhi_Mat(Matrix &, DGSoln const &, Index );
+        void dPhi_Mat(Matrix &, std::vector<Eigen::Ref<Matrix>> const dX_dZ, DGSoln const &, Index );
 
         void dAux_Mat(Eigen::Ref<Matrix>, DGSoln const &, Index );
+        void dAux_Mat(Eigen::Ref<Matrix>, GlobalStateMatrix&, DGSoln const &, Index );
 
         void DerivativeSubVector(Index, Vector &, void (AdjointProblem::*dX_dZ)(Index, VectorRef, const State &, Position), DGSoln const &Y, Index I);
         void DerivativeSubVector(Index, Vector &, Eigen::Ref<Matrix> const dX_dZ, DGSoln const &, Index intervalIndex);

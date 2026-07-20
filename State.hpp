@@ -1,8 +1,8 @@
 #ifndef STATE_HPP
 #define STATE_HPP
 
-#include "Types.hpp"
 #include "Logging.hpp"
+#include "Types.hpp"
 #ifdef DEBUG
 // Eigen error messages are very unhelpful so we make our own
 // Mainly for debugging, but also to make sure we don't accidentally mess up
@@ -17,7 +17,9 @@ inline void checkShapeAndSet(A &&lhs, const B &rhs,
                                 typename std::decay<B>::type>::value,
                 "Input rhs must be an Eigen Matrix or Matrix Expression");
   if ((lhs.rows() == rhs.cols()) && (lhs.cols() == rhs.rows())) {
-    logmsg<LOG_LEVEL::WARNING>("Transposing when copying {}; this will lead to an error if compiled with DEBUG=off", varname.value_or("variable"));
+    logmsg<LOG_LEVEL::WARNING>("Transposing when copying {}; this will lead to "
+                               "an error if compiled with DEBUG=off",
+                               varname.value_or("variable"));
     lhs = rhs.transpose();
   } else {
     const auto lhs_rows = lhs.rows();
@@ -141,7 +143,7 @@ public:
   // we're doing interpolation
   Eigen::Ref<Matrix> cellwiseVariable(Index cell) {
     return m_Variable(Eigen::all,
-                     Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
+                      Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
   }
 
   /*
@@ -152,7 +154,7 @@ public:
   VectorRef Derivative(Index i) { return m_Derivative.col(i); }
   Eigen::Ref<Matrix> cellwiseDerivative(Index cell) {
     return m_Derivative(Eigen::all,
-                       Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
+                        Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
   }
 
   /*
@@ -163,7 +165,7 @@ public:
   VectorRef Flux(Index i) { return m_Flux.col(i); }
   Eigen::Ref<Matrix> cellwiseFlux(Index cell) {
     return m_Flux(Eigen::all,
-                 Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
+                  Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
   }
 
   /*
@@ -174,7 +176,7 @@ public:
   VectorRef Aux(Index i) { return m_Aux.col(i); }
   Eigen::Ref<Matrix> cellwiseAux(Index cell) {
     return m_Aux(Eigen::all,
-                Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
+                 Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
   }
 
   /*
@@ -184,6 +186,11 @@ public:
   const Vector &Scalars() const { return m_Scalars; }
 
   size_t size() const { return static_cast<size_t>(nCells * (k + 1)); }
+
+  Index cellDOF() const { return k; };
+  Index getNCells() const { return nCells; };
+
+  friend class GlobalStateMatrix;
 
 private:
   // We hold global state data in matrices that are (nVars x nPoints)
@@ -201,14 +208,30 @@ private:
 class GlobalStateMatrix {
 public:
   GlobalStateMatrix(Index nVars) noexcept : nVars(nVars) {
-    data.reserve(nVars);
+    m_data.reserve(nVars);
   };
 
-  void add(Index nCells, Index k, Index nVars, Index nScalars, Index nAux) {
-    data.emplace_back(nCells, k, nVars, nScalars, nAux);
+  GlobalStateMatrix(const GlobalStateMatrix &other) {
+    nVars = other.nVars;
+    m_data = other.m_data;
   }
 
-  void add(GlobalState &g_in) { data.push_back(g_in); }
+  GlobalStateMatrix(GlobalStateMatrix &&other) noexcept {
+    nVars = other.nVars;
+    m_data = std::move(other.m_data);
+  }
+
+  void add(Index nCells, Index k, Index nVars, Index nScalars, Index nAux) {
+    m_data.emplace_back(nCells, k, nVars, nScalars, nAux);
+  }
+
+  GlobalStateMatrix &operator=(const std::vector<GlobalState> &other) {
+    nVars = other.size();
+    m_data = other;
+    return *this;
+  }
+
+  void add(const GlobalState &g_in) { m_data.push_back(g_in); }
   /*
       Returns vector of Matrix for per-cell operations, index like
      Variable[Var1](Var2, i), where i is within-cell index
@@ -217,7 +240,7 @@ public:
     std::vector<Eigen::Ref<Matrix>> out;
 
     for (Index var = 0; var < nVars; var++) {
-      out.emplace_back(data[var].cellwiseVariable(cell));
+      out.emplace_back(m_data[var].cellwiseVariable(cell));
     }
     return out;
   }
@@ -226,7 +249,7 @@ public:
     std::vector<Eigen::Ref<Matrix>> out;
 
     for (Index var = 0; var < nVars; var++) {
-      out.emplace_back(data[var].cellwiseDerivative(cell));
+      out.emplace_back(m_data[var].cellwiseDerivative(cell));
     }
     return out;
   }
@@ -234,15 +257,25 @@ public:
     std::vector<Eigen::Ref<Matrix>> out;
 
     for (Index var = 0; var < nVars; var++) {
-      out.emplace_back(data[var].cellwiseFlux(cell));
+      out.emplace_back(m_data[var].cellwiseFlux(cell));
     }
     return out;
   }
 
-  GlobalState &operator[](Index var) { return data[var]; }
+  std::vector<Eigen::Ref<Matrix>> Aux(Index cell) {
+    std::vector<Eigen::Ref<Matrix>> out;
+
+    for (Index var = 0; var < nVars; var++) {
+      out.emplace_back(m_data[var].cellwiseAux(cell));
+    }
+    return out;
+  }
+  GlobalState &operator[](Index var) { return m_data[var]; }
+
+  const Index size() const { return nVars; }
 
 private:
-  std::vector<GlobalState> data;
+  std::vector<GlobalState> m_data;
 
   Index nVars;
 };
