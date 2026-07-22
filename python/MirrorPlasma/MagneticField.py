@@ -39,7 +39,7 @@ class StraightMagneticField(_MagneticField):
     dV: Float
     m: Float
 
-    def __init__(self, _L_z=0.6, _B_z=0.3, _Rm=10.0, _Rmin=0.0, _Rmax=1.0, _m=0.0):
+    def __init__(self, _L_z=0.6, _B_z=0.34, _Rm=10.0, _Rmin=0.0, _Rmax=1.0, _m=0.0):
         self.L_z = _L_z
         self.B_z = _B_z
         self.Rm = _Rm

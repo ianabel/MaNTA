@@ -114,17 +114,18 @@ class MirrorPlasmaParams(eqx.Module):
 
     @classmethod
     def make(cls, config: MirrorPlasmaConfig):
+        a = config.Rmax - config.Rmin
         B = StraightMagneticField(
-            _L_z=config.PlasmaLength,
+            _L_z=config.PlasmaLength / a,
             _B_z=config.MagneticFieldStrength,
             _Rm=config.MirrorRatio,
-            _Rmin=config.Rmin,
-            _Rmax=config.Rmax,
+            _Rmin=config.Rmin / a,
+            _Rmax=config.Rmax / a,
             _m=config.MagneticFieldSlope,
         )
         H = Hydrogen()
 
-        C = PlasmaConstants(H, B, _a=config.Rmax - config.Rmin)
+        C = PlasmaConstants(H, B, _a=a)
         return cls(MagneticField=B, IonSpecies=H, Constants=C, Config=config)
 
 
@@ -167,13 +168,13 @@ class MirrorPlasmaState(eqx.Module):
     Ti: Float[ArrayLike, "..."]  # Ion temperature
     Te: Float[ArrayLike, "..."]  # Electron temperature
     M: Float[ArrayLike, "..."]  # Mach number
-    dndx: Float[ArrayLike, "..."]
-    dpidx: Float[ArrayLike, "..."]
-    dpedx: Float[ArrayLike, "..."]
-    dLdx: Float[ArrayLike, "..."]
-    domegadx: Float[ArrayLike, "..."]
-    dTidx: Float[ArrayLike, "..."]
-    dTedx: Float[ArrayLike, "..."]
+    dndpsi: Float[ArrayLike, "..."]
+    dpidpsi: Float[ArrayLike, "..."]
+    dpedpsi: Float[ArrayLike, "..."]
+    dLdpsi: Float[ArrayLike, "..."]
+    domegadpsi: Float[ArrayLike, "..."]
+    dTidpsi: Float[ArrayLike, "..."]
+    dTedpsi: Float[ArrayLike, "..."]
     gamma: Float[ArrayLike, "..."]  # Particle flux
     Pi: Float[ArrayLike, "..."]  # Viscous stress
     qi: Float[ArrayLike, "..."]  # Ion heat flux
@@ -194,13 +195,13 @@ class MirrorPlasmaState(eqx.Module):
         Ti: Float[ArrayLike, "..."],
         Te: Float[ArrayLike, "..."],
         M: Float[ArrayLike, "..."],
-        dndx: Float[ArrayLike, "..."],
-        dpidx: Float[ArrayLike, "..."],
-        dpedx: Float[ArrayLike, "..."],
-        dLdx: Float[ArrayLike, "..."],
-        domegadx: Float[ArrayLike, "..."],
-        dTidx: Float[ArrayLike, "..."],
-        dTedx: Float[ArrayLike, "..."],
+        dndpsi: Float[ArrayLike, "..."],
+        dpidpsi: Float[ArrayLike, "..."],
+        dpedpsi: Float[ArrayLike, "..."],
+        dLdpsi: Float[ArrayLike, "..."],
+        domegadpsi: Float[ArrayLike, "..."],
+        dTidpsi: Float[ArrayLike, "..."],
+        dTedpsi: Float[ArrayLike, "..."],
         gamma: Float[ArrayLike, "..."],
         Pi: Float[ArrayLike, "..."],
         qi: Float[ArrayLike, "..."],
@@ -219,13 +220,13 @@ class MirrorPlasmaState(eqx.Module):
         self.Ti = Ti
         self.Te = Te
         self.M = M
-        self.dndx = dndx
-        self.dpidx = dpidx
-        self.dpedx = dpedx
-        self.dLdx = dLdx
-        self.domegadx = domegadx
-        self.dTidx = dTidx
-        self.dTedx = dTedx
+        self.dndpsi = dndpsi
+        self.dpidpsi = dpidpsi
+        self.dpedpsi = dpedpsi
+        self.dLdpsi = dLdpsi
+        self.domegadpsi = domegadpsi
+        self.dTidpsi = dTidpsi
+        self.dTedpsi = dTedpsi
         self.gamma = gamma
         self.Pi = Pi
         self.qi = qi
@@ -246,23 +247,23 @@ class MirrorPlasmaState(eqx.Module):
         Ti = pi / n
         Te = pe / n
 
-        R = params.MagneticField.R_x(x) / params.Constants.a
+        R = params.MagneticField.R_x(x)
         VPrime = params.MagneticField.VPrime(x)
         J = n * R**2
         omega = L / J
         M = R * omega / jnp.sqrt(Te)
 
-        dndx = state.Derivative[Channel.Density] * VPrime
-        dLdx = state.Derivative[Channel.AngularMomentum] * VPrime
-        dpidx = 2.0 / 3.0 * state.Derivative[Channel.IonEnergy] * VPrime
-        dpedx = 2.0 / 3.0 * state.Derivative[Channel.ElectronEnergy] * VPrime
+        dndpsi = state.Derivative[Channel.Density] * VPrime
+        dLdpsi = state.Derivative[Channel.AngularMomentum] * VPrime
+        dpidpsi = 2.0 / 3.0 * state.Derivative[Channel.IonEnergy] * VPrime
+        dpedpsi = 2.0 / 3.0 * state.Derivative[Channel.ElectronEnergy] * VPrime
 
-        dTidx = (dpidx - dndx * Ti) / n
-        dTedx = (dpedx - dndx * Te) / n
+        dTidpsi = (dpidpsi - dndpsi * Ti) / n
+        dTedpsi = (dpedpsi - dndpsi * Te) / n
 
-        dRdx = params.MagneticField.dRdx(x) / params.Constants.a
-        dJdx = R * R * dndx + 2.0 * dRdx * R * n
-        domegadx = dLdx / J - dJdx * L / (J * J)
+        dRdpsi = params.MagneticField.dRdx(x) * VPrime
+        dJdx = R * R * dndpsi + 2.0 * dRdpsi * R * n
+        domegadpsi = dLdpsi / J - dJdx * L / (J * J)
 
         if params.Config.useConstantVoltage:
             Current = -state.Scalars[Scalar.Current]
@@ -281,13 +282,13 @@ class MirrorPlasmaState(eqx.Module):
             Ti=Ti,
             Te=Te,
             M=M,
-            dndx=dndx,
-            dpidx=dpidx,
-            dpedx=dpedx,
-            dLdx=dLdx,
-            domegadx=domegadx,
-            dTidx=dTidx,
-            dTedx=dTedx,
+            dndpsi=dndpsi,
+            dpidpsi=dpidpsi,
+            dpedpsi=dpedpsi,
+            dLdpsi=dLdpsi,
+            domegadpsi=domegadpsi,
+            dTidpsi=dTidpsi,
+            dTedpsi=dTedpsi,
             gamma=state.Flux[Channel.Density],
             Pi=state.Flux[Channel.AngularMomentum],
             qi=state.Flux[Channel.IonEnergy],
@@ -302,7 +303,12 @@ class MirrorPlasmaState(eqx.Module):
     def to_state(self):
         Variable = jnp.array([self.n, self.L, 3.0 / 2.0 * self.pi, 3.0 / 2.0 * self.pe])
         Derivative = jnp.array(
-            [self.dndx, self.dLdx, 3.0 / 2.0 * self.dpidx, 3.0 / 2.0 * self.dpedx]
+            [
+                self.dndpsi,
+                self.dLdpsi,
+                3.0 / 2.0 * self.dpidpsi,
+                3.0 / 2.0 * self.dpedpsi,
+            ]
         )
         Flux = jnp.array([self.gamma, self.Pi, self.qi, self.qe])
         return State(Variable, Derivative, Flux, self.phi, self.Scalars)
@@ -318,13 +324,13 @@ class MirrorPlasmaState(eqx.Module):
             Ti=0,
             Te=0,
             M=0,
-            dndx=0,
-            dpidx=0,
-            dpedx=0,
-            dLdx=0,
-            domegadx=0,
-            dTidx=0,
-            dTedx=0,
+            dndpsi=0,
+            dpidpsi=0,
+            dpedpsi=0,
+            dLdpsi=0,
+            domegadpsi=0,
+            dTidpsi=0,
+            dTedpsi=0,
             gamma=0,
             Pi=0,
             qi=0,

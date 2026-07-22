@@ -219,8 +219,56 @@ def make_gradients(psi, params):
     return jax.jacobian(lambda psi: make_profiles(psi, params))(psi)
 
 
+def test_gradients():
+    Rmin = 0.1
+    Rmax = 0.4
+    B_z = 0.34
+    args = {}
+    # args = {"MagneticFieldStrength": B_z}
+
+    config = MirrorPlasmaConfig(Rmin, Rmax, **args)
+    params = MirrorPlasmaParams.make(config)
+    B = params.MagneticField
+    C = params.Constants
+
+    psi_min = 0.5 * Rmin**2 * B.B_z
+    psi_max = 0.5 * Rmax**2 * B.B_z
+    psi_grid = jnp.linspace(psi_min, psi_max)
+    r_grid = jnp.sqrt(2 * psi_grid / B.B_z)
+    VPrime = 2 * jnp.pi * B.L_z / B.B_z
+
+    n, omega, Ti, Te = make_profiles(psi_grid, params)
+    dn, domega, dTi, dTe = jax.vmap(make_gradients, in_axes=(0, None))(psi_grid, params)
+    """
+    Compute values from MirrorPlasma
+    """
+    MP = MirrorPlasma(config=config, solver_config=solver_config)
+
+    x = (2 * jnp.pi * B.L_z * psi_grid / B.B_z - B.Vmin) / (B.dV)
+    s1, s0 = jax.vmap(make_test_state, in_axes=(0, None))(x, MP)
+
+    fig, ax = plt.subplots(2, 2)
+    ax[0, 0].plot(x, dn, label="test")
+    ax[0, 0].plot(x, s1.dndx, label="MP")
+
+    ax[0, 1].plot(x, domega, label="test")
+    ax[0, 1].plot(x, s1.domegadx, label="MP")
+
+    ax[1, 0].plot(x, dTi, label="test")
+    ax[1, 0].plot(x, s1.dTidx, label="MP")
+
+    ax[1, 1].plot(x, dTe, label="test")
+    ax[1, 1].plot(x, s1.dTedx, label="MP")
+
+    for a in ax.flatten():
+        a.legend()
+
+    plt.show()
+
+
 def gamma(psi, params):
     B = params.MagneticField
+    C = params.Constants
     R = jnp.sqrt(2 * psi / B.B_z)
     VPrime = 2 * jnp.pi * B.L_z / B.B_z
     (n, omega, Ti, Te) = make_profiles(psi, params)
@@ -231,13 +279,11 @@ def gamma(psi, params):
     dpi = n * dTi + Ti * dn
     dpe = n * dTe + Te * dn
 
-    C = params.Constants
-
     Uei = dpe / pe + (Ti / (C.Z_eff * Te)) * dpi / pi + omega * R * R / Te * domega
-    Uei = 1.0
+    # Uei = 1.0
 
     gamma0 = (
-        B.B_z**2
+        C.B0**2
         * C.n0
         * C.T0
         / (
@@ -246,10 +292,11 @@ def gamma(psi, params):
             * C.ReferenceElectronCollisionTime()
         )
     )
+    print(f"ratio of gammas {gamma0 / C.Gamma0()}")
 
-    D = gamma0 * R**2 * pe / (C.ElectronCollisionTime(n, Te))
+    D = gamma0 * VPrime * R**2 * pe / (C.ElectronCollisionTime(n, Te))
 
-    return D  # * (Uei - 3.0 / 2.0 * dTe / Te)
+    return D * (Uei - 3.0 / 2.0 * dTe / Te)
 
 
 def Pi(psi, params):
@@ -265,12 +312,13 @@ def Pi(psi, params):
     dpe = n * dTe + Te * dn
 
     C = params.Constants
-    Pi0 = (C.n0 * C.T0) / (
+    Pi0 = (C.B0**2 * C.n0 * C.T0 * C.omega0) / (
         C.ReferenceIonGyrofrequency() ** 2 * C.ReferenceIonCollisionTime()
     )
 
-    D = VPrime * Pi0 * (B.B_z * R**2) ** 2 * pi / C.IonCollisionTime(n, Ti)
+    D = VPrime * 3.0 / 10.0 * Pi0 * R**4 * pi / C.IonCollisionTime(n, Ti)
 
+    print(f"ratio of pis {Pi0 / C.Pi0()}")
     return D * domega + C.IonSpecies.IonMass * omega * C.omega0 * R**2 * gamma(
         psi, params
     )
@@ -290,13 +338,13 @@ def qi(psi, params):
 
     C = params.Constants
 
-    qi0 = (C.n0 * C.T0**2) / (
+    qi0 = (C.B0**2 * C.n0 * C.T0**2) / (
         C.IonSpecies.IonMass
         * C.ReferenceIonGyrofrequency() ** 2
         * C.ReferenceIonCollisionTime()
     )
 
-    D = VPrime * 2 * qi0 * (B.B_z * R) ** 2 * pi * Ti / C.IonCollisionTime(n, Ti)
+    D = VPrime * 2 * qi0 * R**2 * pi * Ti / C.IonCollisionTime(n, Ti)
 
     return D * dTi / Ti - 0.5 * C.IonSpecies.IonMass * (
         R * omega * C.omega0
@@ -319,25 +367,28 @@ def qe(psi, params):
 
     Uei = dpe / pe + (Ti / (C.Z_eff * Te)) * dpi / pi + omega * R * R / Te * domega
 
-    qe0 = (C.n0 * C.T0**2) / (
+    qe0 = (C.B0**2 * C.n0 * C.T0**2) / (
         C.ElectronMass
         * C.ReferenceElectronGyrofrequency() ** 2
         * C.ReferenceElectronCollisionTime()
     )
 
-    D = VPrime * (B.B_z * R) ** 2 * qe0 * pe * Te / C.ElectronCollisionTime(n, Te)
+    D = VPrime * R**2 * qe0 * pe * Te / C.ElectronCollisionTime(n, Te)
 
     return D * (4.66 * dTe / Te - 3.0 / 2.0 * Uei)
 
 
 def test_fluxes():
     Rmin = 0.1
-    Rmax = 0.3
+    Rmax = 0.4
+    B_z = 0.34
+    args = {}
+    # args = {"MagneticFieldStrength": B_z}
 
-    config = MirrorPlasmaConfig(Rmin, Rmax)
-    B = StraightMagneticField(_Rmin=Rmin, _Rmax=Rmax)
-    C = PlasmaConstants(H, B)
-    params = MirrorPlasmaParams(B, H, C, config)
+    config = MirrorPlasmaConfig(Rmin, Rmax, **args)
+    params = MirrorPlasmaParams.make(config)
+    B = params.MagneticField
+    C = params.Constants
 
     psi_min = 0.5 * Rmin**2 * B.B_z
     psi_max = 0.5 * Rmax**2 * B.B_z
@@ -381,8 +432,6 @@ def test_fluxes():
     x = (2 * jnp.pi * B.L_z * psi_grid / B.B_z - B.Vmin) / (B.dV)
     print(jnp.sum((r_grid - B.R_x(x)) ** 2))
     print(jnp.sum((psi_grid - B.Psi_x(x)) ** 2))
-    print(VPrime)
-    print(MP.params.MagneticField.VPrime(0.0) / VPrime)
 
     div_gamma = div_flux(x, 0) * MP.params.Constants.DensityEquationNormalization()
     div_pi = div_flux(x, 1) * MP.params.Constants.MomentumEquationNormalization()

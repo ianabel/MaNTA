@@ -177,36 +177,28 @@ class MirrorPlasma(VectorizedTransportSystem):
     # ======================================================================= #
 
     def Gamma(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
-        GeometricFactor = state.R**2
-
+        GeometricFactor = state.R**2 * state.VPrime
         Uei = (
-            state.dpedx / state.pe
-            + state.Ti / (state.Te * params.Constants.Z_eff) * state.dpidx / state.pi
-            + (state.omega * state.R**2) / state.Te * state.domegadx
+            state.dpedpsi / state.pe
+            + state.Ti / (state.Te * params.Constants.Z_eff) * state.dpidpsi / state.pi
+            + (state.omega * state.R**2) / state.Te * state.domegadpsi
         )
-        Uei = 1.0
-
-        G = (
+        D = (
             GeometricFactor
             * state.pe
             / params.Constants.ElectronCollisionTime(state.n, state.Te)
-            # * (Uei - 3.0 / 2.0 * state.dTedx / state.Te)
         )
+
+        G = D * (Uei - 3.0 / 2.0 * state.dTedpsi / state.Te)
 
         return (
             G
             * params.Constants.Gamma0()
             / params.Constants.DensityEquationNormalization()
         )
-        # return (
-        #     state.VPrime
-        #     * (params.MagneticField.B(x) * state.R * params.Constants.a) ** 2
-        #     * params.Constants.Gamma0()
-        #     / params.Constants.DensityEquationNormalization()
-        # )
 
     def Pi(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
-        GeometricFactor = state.R**4 * state.VPrime**2
+        GeometricFactor = state.R**4 * state.VPrime
 
         IonClassicalViscosity = (
             GeometricFactor
@@ -214,16 +206,12 @@ class MirrorPlasma(VectorizedTransportSystem):
             / 10.0
             * state.pi
             / params.Constants.IonCollisionTime(state.n, state.Ti)
-            * state.domegadx
+            * state.domegadpsi
         )
 
         Pi_out = (
             params.Constants.Pi0() * IonClassicalViscosity
-            + (
-                params.IonSpecies.IonMass
-                * params.Constants.omega0
-                * params.Constants.a**2
-            )
+            + (params.IonSpecies.IonMass * params.Constants.omega0)
             * state.omega
             * state.R**2
             * self.Gamma(state, x, t, params)
@@ -233,7 +221,7 @@ class MirrorPlasma(VectorizedTransportSystem):
         return Pi_out / params.Constants.MomentumEquationNormalization()
 
     def qi(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
-        GeometricFactor = (state.R * state.VPrime) ** 2
+        GeometricFactor = state.R**2 * state.VPrime
 
         HeatFlux = (
             2
@@ -241,17 +229,13 @@ class MirrorPlasma(VectorizedTransportSystem):
             * state.pi
             * state.Ti
             / params.Constants.IonCollisionTime(state.n, state.Ti)
-            * state.dTidx
+            * state.dTidpsi
             / state.Ti
         )
 
         qi_out = (
             params.Constants.qi0() * HeatFlux
-            - (
-                params.IonSpecies.IonMass
-                * params.Constants.omega0**2
-                * params.Constants.a**2
-            )
+            - (params.IonSpecies.IonMass * params.Constants.omega0**2)
             * 0.5
             * (state.omega * state.R) ** 2
             * self.Gamma(state, x, t, params)
@@ -260,12 +244,12 @@ class MirrorPlasma(VectorizedTransportSystem):
         return qi_out / params.Constants.HeatEquationNormalization()
 
     def qe(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
-        GeometricFactor = (state.R * state.VPrime) ** 2
+        GeometricFactor = state.R**2 * state.VPrime
 
         Uei = (
-            state.dpedx / state.pe
-            + state.Ti / (state.Te * params.Constants.Z_eff) * state.dpidx / state.pi
-            + (state.omega * state.R**2) / state.Te * state.domegadx
+            state.dpedpsi / state.pe
+            + state.Ti / (state.Te * params.Constants.Z_eff) * state.dpidpsi / state.pi
+            + (state.omega * state.R**2) / state.Te * state.domegadpsi
         )
 
         HeatFlux = (
@@ -273,7 +257,7 @@ class MirrorPlasma(VectorizedTransportSystem):
             * state.pe
             * state.Te
             / params.Constants.ElectronCollisionTime(state.n, state.Te)
-            * (4.66 * state.dTedx / state.Te - 3.0 / 2.0 * Uei)
+            * (4.66 * state.dTedpsi / state.Te - 3.0 / 2.0 * Uei)
         )
         return (
             params.Constants.qe0()
@@ -374,7 +358,7 @@ class MirrorPlasma(VectorizedTransportSystem):
     def ViscousHeating(
         self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams
     ):
-        return -1 * (state.domegadx * state.Pi)
+        return -1 * (state.domegadpsi * state.Pi)
 
     def IonPotentialHeating(
         self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams
