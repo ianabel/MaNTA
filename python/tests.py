@@ -88,6 +88,43 @@ def make_test_state(x, MP):
     return MirrorPlasmaState.from_state(s0, x, MP.params), s0
 
 
+def test_norm():
+    B = StraightMagneticField()
+    H = Hydrogen()
+    ElectronMass = 9.1094e-31
+    ProtonMass = 1.6726e-27
+    ElementaryCharge = 1.60217663e-19
+    VacuumPermittivity = 8.8541878128e-12
+
+    a = 1.0
+    B0 = 1.0
+    T0 = 1000.0 * ElementaryCharge
+    n0 = 1e20
+
+    def make_norm(a, B0):
+        rho_star = jnp.sqrt(T0 * ProtonMass) / (ElementaryCharge * a * B0)
+        C = PlasmaConstants(H, B, _a=a, _B0=B0)
+        tau = C.ReferenceIonCollisionTime() / rho_star**2
+        omega0 = 1 / a * jnp.sqrt(T0 / ProtonMass)
+
+        DENSITY_EQ_NORM = n0 / tau
+        MOMENTUM_EQ_NORM = ProtonMass * n0 * a**2 * omega0 / tau
+        HEAT_EQ_NORM = n0 * T0 / tau
+        return DENSITY_EQ_NORM, MOMENTUM_EQ_NORM, HEAT_EQ_NORM, C
+
+    t1 = (1.0, 1.0)
+    t2 = (0.2, 1.0)
+    t3 = (1.0, 0.2)
+    ts = (t1, t2, t3)
+
+    for t in ts:
+        (dndt0, dLdt0, dudt0, C) = make_norm(*t)
+
+        print(dndt0 - C.DensityEquationNormalization())
+        print(dLdt0 - C.MomentumEquationNormalization())
+        print(dudt0 - C.HeatEquationNormalization())
+
+
 def test_bfield():
     Rmin = 0.1
     Rmax = 0.3
@@ -113,6 +150,8 @@ def test_bfield():
 
 def test_neutrals():
 
+    H = Hydrogen()
+    B = StraightMagneticField()
     nn = 0.001
     v = 10.0
     n = 1.0
@@ -148,8 +187,18 @@ def test_neutrals():
 
 
 def test_current():
-    s1, s0, MP = make_test_state()
-    plt.plot(x, s1.Ti)
+    Rmin = 0.2
+    Rmax = 0.4
+    args = {}
+
+    config = MirrorPlasmaConfig(Rmin, Rmax, **args)
+    params = MirrorPlasmaParams.make(config)
+    x = jnp.linspace(0, 1)
+
+    MP = MirrorPlasma(config=config, solver_config=solver_config)
+
+    s1, s0 = jax.vmap(make_test_state, in_axes=(0, None))(x, MP)
+    plt.plot(x, s1.M)
     # plt.plot(x, ParallelCurrent(s1, x, 0.0, MP.params))
     plt.show()
     plt.figure()
@@ -160,7 +209,7 @@ def test_current():
         print(x[i])
         aux[i] = InitialPhiValue(s1_unstack[i], x[i], 0.0, MP.params)
     # plt.plot(x, s1.dndx)
-    s0 = eqx.tree_at(lambda s: s.Aux, s0, aux)
+    s0 = eqx.tree_at(lambda s: s.Aux, s0, jnp.atleast_2d(aux).transpose())
 
     s2 = jax.vmap(MirrorPlasmaState.from_state, in_axes=(0, 0, None))(s0, x, MP.params)
     plt.plot(
@@ -249,16 +298,17 @@ def test_gradients():
 
     fig, ax = plt.subplots(2, 2)
     ax[0, 0].plot(x, dn, label="test")
-    ax[0, 0].plot(x, s1.dndx, label="MP")
+    ax[0, 0].plot(x, s1.dndpsi, label="MP")
 
-    ax[0, 1].plot(x, domega, label="test")
-    ax[0, 1].plot(x, s1.domegadx, label="MP")
+    a = params.Constants.a
+    ax[0, 1].plot(x, omega, label="test")
+    ax[0, 1].plot(x, s1.omega / a, label="MP")
 
     ax[1, 0].plot(x, dTi, label="test")
-    ax[1, 0].plot(x, s1.dTidx, label="MP")
+    ax[1, 0].plot(x, s1.dTidpsi, label="MP")
 
     ax[1, 1].plot(x, dTe, label="test")
-    ax[1, 1].plot(x, s1.dTedx, label="MP")
+    ax[1, 1].plot(x, s1.dTedpsi, label="MP")
 
     for a in ax.flatten():
         a.legend()
@@ -312,14 +362,14 @@ def Pi(psi, params):
     dpe = n * dTe + Te * dn
 
     C = params.Constants
-    Pi0 = (C.B0**2 * C.n0 * C.T0 * C.omega0) / (
+    Pi0 = (C.B0**2 * C.n0 * C.T0 * C.omega0 * C.a) / (
         C.ReferenceIonGyrofrequency() ** 2 * C.ReferenceIonCollisionTime()
     )
 
     D = VPrime * 3.0 / 10.0 * Pi0 * R**4 * pi / C.IonCollisionTime(n, Ti)
 
     print(f"ratio of pis {Pi0 / C.Pi0()}")
-    return D * domega + C.IonSpecies.IonMass * omega * C.omega0 * R**2 * gamma(
+    return D * domega + C.IonSpecies.IonMass * omega * C.omega0 * C.a * R**2 * gamma(
         psi, params
     )
 
@@ -347,7 +397,7 @@ def qi(psi, params):
     D = VPrime * 2 * qi0 * R**2 * pi * Ti / C.IonCollisionTime(n, Ti)
 
     return D * dTi / Ti - 0.5 * C.IonSpecies.IonMass * (
-        R * omega * C.omega0
+        R * omega * C.omega0 * C.a
     ) ** 2 * gamma(psi, params)
 
 
@@ -380,24 +430,18 @@ def qe(psi, params):
 
 def test_fluxes():
     Rmin = 0.1
-    Rmax = 0.4
-    B_z = 0.34
+    Rmax = 0.3
     args = {}
-    # args = {"MagneticFieldStrength": B_z}
 
     config = MirrorPlasmaConfig(Rmin, Rmax, **args)
     params = MirrorPlasmaParams.make(config)
     B = params.MagneticField
-    C = params.Constants
 
     psi_min = 0.5 * Rmin**2 * B.B_z
     psi_max = 0.5 * Rmax**2 * B.B_z
     psi_grid = jnp.linspace(psi_min, psi_max)
     r_grid = jnp.sqrt(2 * psi_grid / B.B_z)
     VPrime = 2 * jnp.pi * B.L_z / B.B_z
-
-    n = make_profiles(psi_grid, params)[0]
-    dn = jax.vmap(make_gradients, in_axes=(0, None))(psi_grid, params)[0]
 
     """
     Compute test values
@@ -470,8 +514,43 @@ def test_fluxes():
 
 
 def test_sources():
-    s1, s0, MP = make_test_state()
-    fig, axs = plt.subplots(1, 4)
+    Rmin = 0.1
+    Rmax = 0.4
+    B_z = 0.34
+    args = {}
+    # args = {"MagneticFieldStrength": B_z}
+
+    config = MirrorPlasmaConfig(Rmin, Rmax, **args)
+    params = MirrorPlasmaParams.make(config)
+    B = params.MagneticField
+
+    C = params.Constants
+
+    """
+    Compute test values
+    """
+    psi_min = 0.5 * Rmin**2 * B.B_z
+    psi_max = 0.5 * Rmax**2 * B.B_z
+    psi_grid = jnp.linspace(psi_min, psi_max)
+    r_grid = jnp.sqrt(2 * psi_grid / B.B_z)
+    VPrime = 2 * jnp.pi * B.L_z / B.B_z
+
+    n, omega, Ti, Te = make_profiles(psi_grid, params)
+    dn, domega, dTi, dTe = jax.vmap(make_gradients, in_axes=(0, None))(psi_grid, params)
+
+    pi_test = jax.vmap(Pi, in_axes=(0, None))(psi_grid, params)
+    viscous_heating_test = (
+        -domega * params.Constants.a * params.Constants.omega0 * pi_test / VPrime
+    )
+
+    """
+    Compute values from MirrorPlasma
+    """
+    MP = MirrorPlasma(config=config, solver_config=solver_config)
+
+    x = (2 * jnp.pi * B.L_z * psi_grid / B.B_z - B.Vmin) / (B.dV)
+    s1, s0 = jax.vmap(make_test_state, in_axes=(0, None))(x, MP)
+
     s1_unstack = tree_unstack(s1)
     aux = np.zeros(x.shape)
     for i in range(0, len(x)):
@@ -480,11 +559,23 @@ def test_sources():
     s0 = eqx.tree_at(lambda s: s.Aux, s0, aux)
 
     # s2 = jax.vmap(MirrorPlasmaState.from_state, in_axes=(0, 0, None))(s0, x, MP.params)
+    #
+    viscous_heating = params.Constants.HeatEquationNormalization() * jax.vmap(
+        MP.ViscousHeating, in_axes=(MirrorPlasmaState.vmap_axes(), 0, None, None)
+    )(s1, x, 0.0, params)
 
-    for i in range(0, 4):
-        axs[i].plot(x, MP.Sources_v(i, s0, x, 0.0))
+    """
+
+    """
+    print(viscous_heating)
+
+    plt.plot(x, viscous_heating_test)
+
+    plt.plot(x, viscous_heating)
 
     plt.show()
 
 
+test_norm()
 test_fluxes()
+test_sources()

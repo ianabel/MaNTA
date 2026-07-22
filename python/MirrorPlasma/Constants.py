@@ -198,7 +198,13 @@ class PlasmaConstants(eqx.Module):
 
     # m_i * n * R^2 * omega
     def MomentumEquationNormalization(self):
-        return self.IonSpecies.IonMass * self.n0 * self.omega0 / self.NormalizingTime()
+        return (
+            self.IonSpecies.IonMass
+            * self.n0
+            * self.a**2
+            * self.omega0
+            / self.NormalizingTime()
+        )
 
     def HeatEquationNormalization(self):
         return self.n0 * self.T0 / self.NormalizingTime()
@@ -216,6 +222,7 @@ class PlasmaConstants(eqx.Module):
     def Gamma0(self):
         return (
             self.B0**2
+            * self.a**2
             * self.n0
             * self.T0
             / (
@@ -228,6 +235,7 @@ class PlasmaConstants(eqx.Module):
     def Pi0(self):
         return (
             self.B0**2
+            * self.a**4
             * self.n0
             * self.T0
             * self.omega0
@@ -237,6 +245,7 @@ class PlasmaConstants(eqx.Module):
     def qi0(self):
         return (
             self.B0**2
+            * self.a**2
             * self.n0
             * self.T0**2
             / (
@@ -248,6 +257,10 @@ class PlasmaConstants(eqx.Module):
 
     def qe0(self):
         return self.T0 * self.Gamma0()
+
+    # Current normalization (A)
+    def I0(self):
+        return self.ElementaryCharge * self.n0 * self.a**3 / self.NormalizingTime()
 
     def NeutralProcess(
         self, CrossSection, vtheta, T, Mass, minEnergy, Moment=MomentType.Density

@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 from MirrorPlasma.Constants import PlasmaConstants
 from MirrorPlasma.MagneticField import StraightMagneticField
-from MirrorPlasma.IonSpecies import Hydrogen
+from MirrorPlasma.IonSpecies import ElementaryCharge, Hydrogen
 
 from jaxtyping import Float, ArrayLike, Bool
 import enum
@@ -116,11 +116,11 @@ class MirrorPlasmaParams(eqx.Module):
     def make(cls, config: MirrorPlasmaConfig):
         a = config.Rmax - config.Rmin
         B = StraightMagneticField(
-            _L_z=config.PlasmaLength / a,
+            _L_z=config.PlasmaLength,
             _B_z=config.MagneticFieldStrength,
             _Rm=config.MirrorRatio,
-            _Rmin=config.Rmin / a,
-            _Rmax=config.Rmax / a,
+            _Rmin=config.Rmin,
+            _Rmax=config.Rmax,
             _m=config.MagneticFieldSlope,
         )
         H = Hydrogen()
@@ -156,6 +156,7 @@ class Scalar(enum.IntEnum):
 
 """
 Wrapper class for State to make accessing variables easier 
+All variables are normalized 
 """
 
 
@@ -239,6 +240,8 @@ class MirrorPlasmaState(eqx.Module):
 
     @classmethod
     def from_state(cls, state: State, x, params: MirrorPlasmaParams):
+
+        a = params.Constants.a
         n = state.Variable[Channel.Density]
         L = state.Variable[Channel.AngularMomentum]
         pi = 2.0 / 3.0 * state.Variable[Channel.IonEnergy]
@@ -247,7 +250,7 @@ class MirrorPlasmaState(eqx.Module):
         Ti = pi / n
         Te = pe / n
 
-        R = params.MagneticField.R_x(x)
+        R = params.MagneticField.R_x(x) / a
         VPrime = params.MagneticField.VPrime(x)
         J = n * R**2
         omega = L / J
@@ -261,17 +264,14 @@ class MirrorPlasmaState(eqx.Module):
         dTidpsi = (dpidpsi - dndpsi * Ti) / n
         dTedpsi = (dpedpsi - dndpsi * Te) / n
 
-        dRdpsi = params.MagneticField.dRdx(x) * VPrime
-        dJdx = R * R * dndpsi + 2.0 * dRdpsi * R * n
-        domegadpsi = dLdpsi / J - dJdx * L / (J * J)
+        dRdpsi = params.MagneticField.dRdx(x) / a * VPrime
+        dJdpsi = R * R * dndpsi + 2.0 * dRdpsi * R * n
+        domegadpsi = dLdpsi / J - dJdpsi * L / (J * J)
 
         if params.Config.useConstantVoltage:
             Current = -state.Scalars[Scalar.Current]
         else:
-            Current = (
-                -params.Config.Current
-                / params.Constants.MomentumEquationNormalization()
-            )
+            Current = -params.Config.Current / params.Constants.I0()
 
         return cls(
             n=n,

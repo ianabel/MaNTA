@@ -6,7 +6,7 @@ from MirrorPlasma.PlasmaState import MirrorPlasmaConfig
 
 solver_config = {
     "OutputFilename": "mirror",
-    "High_Grid_Boundary": False,
+    "High_Grid_Boundary": True,
     "Polynomial_degree": 6,
     "Grid_size": 43,
     "tau": 1000.0,
@@ -21,12 +21,12 @@ config = MirrorPlasmaConfig(
     0.1,
     0.5,
     InitialMachNumber=6.0,
-    EdgeMachNumber=5.5,
+    EdgeMachNumber=2.5,
     Current=0.5,
     useConstantVoltage=False,
     useNeutralsModel=False,
-    ParticleSourceHeight=10.0,
-    ParticleSourceCenter=0.2,
+    ParticleSourceHeight=5.0,
+    ParticleSourceCenter=0.3,
 )
 
 MP = MirrorPlasma(config, solver_config=solver_config)

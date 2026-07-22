@@ -70,10 +70,11 @@ class MirrorPlasma(VectorizedTransportSystem):
 
     @partial(jax.jit, static_argnames=("self",))
     def InitialValue(self, index, x):
-        Rmin = self.params.Config.Rmin
-        Rmax = self.params.Config.Rmax
+        a = self.params.Constants.a
+        Rmin = self.params.Config.Rmin / a
+        Rmax = self.params.Config.Rmax / a
         Rmid = 0.5 * (Rmin + Rmax)
-        R = self.params.MagneticField.R_x(x)
+        R = self.params.MagneticField.R_x(x) / a
         v = jnp.cos(jnp.pi * (R - Rmid) / (Rmax - Rmin))
 
         def n0():
@@ -211,7 +212,11 @@ class MirrorPlasma(VectorizedTransportSystem):
 
         Pi_out = (
             params.Constants.Pi0() * IonClassicalViscosity
-            + (params.IonSpecies.IonMass * params.Constants.omega0)
+            + (
+                params.IonSpecies.IonMass
+                * params.Constants.omega0
+                * params.Constants.a**2
+            )
             * state.omega
             * state.R**2
             * self.Gamma(state, x, t, params)
@@ -235,7 +240,11 @@ class MirrorPlasma(VectorizedTransportSystem):
 
         qi_out = (
             params.Constants.qi0() * HeatFlux
-            - (params.IonSpecies.IonMass * params.Constants.omega0**2)
+            - (
+                params.IonSpecies.IonMass
+                * params.Constants.a**2
+                * params.Constants.omega0**2
+            )
             * 0.5
             * (state.omega * state.R) ** 2
             * self.Gamma(state, x, t, params)
@@ -271,9 +280,7 @@ class MirrorPlasma(VectorizedTransportSystem):
 
     def Sn(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
         return self.ParticleSource(state, x, t, params)
-        # - self.ParallelParticleLosses(
-        #     state, x, t, params
-        # )
+        -self.ParallelParticleLosses(state, x, t, params)
 
     def Somega(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
         return self.JxBForce(state, x, t, params) - (
@@ -303,7 +310,7 @@ class MirrorPlasma(VectorizedTransportSystem):
     # ======================================================================= #
 
     def ParticleSource(self, state, x, t, params):
-        Center = params.Config.ParticleSourceCenter
+        Center = params.Config.ParticleSourceCenter / params.Constants.a
         Width = params.Config.ParticleSourceWidth
         Height = params.Config.ParticleSourceHeight
         return Height * jnp.exp(-((state.R - Center) ** 2) / Width)
@@ -320,21 +327,28 @@ class MirrorPlasma(VectorizedTransportSystem):
 
     def ParallelAngularMomentumLosses(self, state, x, t, params):
         return (
-            state.L
-            / state.n
+            state.omega
+            * state.R**2
             * IonPastukhovLossRate(state, x, t, params)
-            / params.Constants.DensityEquationNormalization()
+            * (
+                params.Constants.IonSpecies.IonMass
+                * params.Constants.omega0
+                * params.Constants.a**2
+            )
+            / params.Constants.MomentumEquationNormalization()
         )
 
     def ChargeExchangeMomentumLosses(self, state, x, t, params):
-        R = params.MagneticField.R_x(x)
 
         def true_fun():
             return (
                 state.L
                 / state.n
                 * params.Constants.ChargeExchangeLossRate(
-                    state.n, params.Config.NeutralDensity, R * state.omega, state.Ti
+                    state.n,
+                    params.Config.NeutralDensity,
+                    state.R * state.omega,
+                    state.Ti,
                 )
                 / params.Constants.DensityEquationNormalization()
             )
@@ -345,7 +359,9 @@ class MirrorPlasma(VectorizedTransportSystem):
         return jax.lax.cond(params.Config.useNeutralsModel, true_fun, false_fun)
 
     def JxBForce(self, state, x, t, params):
-        return -state.Current / state.VPrime
+        return (
+            -state.Current * params.Constants.I0() / state.VPrime
+        ) / params.Constants.MomentumEquationNormalization()
 
     # ======================================================================= #
     # Heat sources                                                            #
@@ -358,7 +374,15 @@ class MirrorPlasma(VectorizedTransportSystem):
     def ViscousHeating(
         self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams
     ):
-        return -1 * (state.domegadpsi * state.Pi)
+        return (
+            -1
+            * (state.domegadpsi * state.Pi / state.VPrime)
+            * (
+                params.Constants.omega0
+                * params.Constants.MomentumEquationNormalization()
+            )
+            / params.Constants.HeatEquationNormalization()
+        )
 
     def IonPotentialHeating(
         self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams
@@ -367,7 +391,7 @@ class MirrorPlasma(VectorizedTransportSystem):
         # return (
         #     -0.5
         #     * (params.Constants.a * params.Constants.omega0) ** 2
-        #     * (params.MagneticField.R_x(x) * state.omega) ** 2
+        #     * (state.R * state.omega) ** 2
         #     * self.Sn(state, x, t, params)
         # ) / params.Constants.HeatEquationNormalization()
 
@@ -398,8 +422,9 @@ class MirrorPlasma(VectorizedTransportSystem):
         ParticleEnergy = state.Ti * (1 + Xi_i(state, x, t, params))
         return (
             ParticleEnergy
+            * params.Constants.T0
             * IonPastukhovLossRate(state, x, t, params)
-            / params.Constants.DensityEquationNormalization()
+            / params.Constants.HeatEquationNormalization()
         )
 
     """
@@ -425,8 +450,9 @@ class MirrorPlasma(VectorizedTransportSystem):
         ParticleEnergy = state.Te * (1 + Xi_e(state, x, t, params))
         return (
             ParticleEnergy
+            * params.Constants.T0
             * ElectronPastukhovLossRate(state, x, t, params)
-            / params.Constants.DensityEquationNormalization()
+            / params.Constants.HeatEquationNormalization()
         )
 
     # ======================================================================= #
