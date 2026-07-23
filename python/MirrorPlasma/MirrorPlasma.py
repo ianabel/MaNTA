@@ -62,11 +62,17 @@ class MirrorPlasma(VectorizedTransportSystem):
 
     @partial(jax.jit, static_argnames=("self",))
     def LowerBoundary(self, index, t):
-        return self.InitialValue(index, 0.0)
+        if self.isLowerDirichlet:
+            return self.InitialValue(index, 0.0)
+        else:
+            return self.InitialDerivative(index, 0.0)
 
     @partial(jax.jit, static_argnames=("self",))
     def UpperBoundary(self, index, t):
-        return self.InitialValue(index, 1.0)
+        if self.isUpperDirichlet:
+            return self.InitialValue(index, 1.0)
+        else:
+            return self.InitialDerivative(index, 1.0)
 
     @partial(jax.jit, static_argnames=("self",))
     def InitialValue(self, index, x):
@@ -84,6 +90,7 @@ class MirrorPlasma(VectorizedTransportSystem):
                     self.params.Config.InitialDensityHeight
                     - self.params.Config.EdgeDensity
                 )
+                * v
                 * v
             )
 
@@ -342,15 +349,20 @@ class MirrorPlasma(VectorizedTransportSystem):
 
         def true_fun():
             return (
-                state.L
-                / state.n
+                state.omega
+                * state.R**2
                 * params.Constants.ChargeExchangeLossRate(
                     state.n,
                     params.Config.NeutralDensity,
                     state.R * state.omega,
                     state.Ti,
                 )
-                / params.Constants.DensityEquationNormalization()
+                * (
+                    params.Constants.IonSpecies.IonMass
+                    * params.Constants.omega0
+                    * params.Constants.a**2
+                )
+                / params.Constants.MomentumEquationNormalization()
             )
 
         def false_fun():
@@ -387,13 +399,14 @@ class MirrorPlasma(VectorizedTransportSystem):
     def IonPotentialHeating(
         self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams
     ):
-        return 0.0
-        # return (
-        #     -0.5
-        #     * (params.Constants.a * params.Constants.omega0) ** 2
-        #     * (state.R * state.omega) ** 2
-        #     * self.Sn(state, x, t, params)
-        # ) / params.Constants.HeatEquationNormalization()
+        return (
+            -0.5
+            * params.Constants.IonSpecies.IonMass
+            * (params.Constants.a * params.Constants.omega0) ** 2
+            * (state.R * state.omega) ** 2
+            * self.Sn(state, x, t, params)
+            * params.Constants.DensityEquationNormalization()
+        ) / params.Constants.HeatEquationNormalization()
 
     def ChargeExchangeHeatLosses(
         self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams

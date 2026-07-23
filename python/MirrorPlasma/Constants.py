@@ -43,7 +43,7 @@ class PlasmaConstants(eqx.Module):
         _a=1.0,
         _Z_eff=3.0,
         _B0=1.0,
-        _nIntPoints=100,
+        _nIntPoints=200,
     ):
         self.n0 = _n0
         self.n0cgs = self.n0 * 1.0e-6
@@ -327,7 +327,7 @@ class PlasmaConstants(eqx.Module):
 
         vgrid = jnp.linspace(
             jnp.sqrt(minE / self.T0eV),
-            0.5 * jnp.sqrt(maxE / self.T0eV),
+            jnp.sqrt(maxE / self.T0eV),
             self.nIntPoints,
         )
         XS = CrossSection(vgrid**2 * self.T0eV) * 1e-4

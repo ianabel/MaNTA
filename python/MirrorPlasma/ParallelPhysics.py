@@ -3,30 +3,23 @@ from MirrorPlasma.PlasmaState import (
     MirrorPlasmaParams,
     MirrorPlasmaState,
 )
-from scipy.optimize import newton
+import optimistix as optx
 import jax
 import equinox as eqx
 
 
+@jax.jit
 def InitialPhiValue(state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
-    def func(phi):
+    def func(phi, args):
         state_new = eqx.tree_at(lambda s: s.phi, state, phi)
         return ParallelCurrent(state_new, x, t, params)
 
-    fgrad = jax.grad(func)
-
-    phi_g = newton(func, 0.0, fgrad, tol=1e-4)
-    # phi_g = jax.pure_callback(
-    #     lambda: newton(func, 0.0, fgrad, tol=1e-4),
-    #     jax.ShapeDtypeStruct(
-    #         (),
-    #         jnp.float64,
-    #     ),
-    # )
+    solver = optx.Newton(rtol=1e-4, atol=1e-4)
+    sol = optx.root_find(func, solver, 0.0)
+    phi_g = sol.value
     return phi_g
 
 
-@jax.jit
 def ParallelCurrent(state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
     return (
         IonPastukhovLossRate(state, x, t, params)
