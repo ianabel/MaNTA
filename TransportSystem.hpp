@@ -156,6 +156,8 @@ public:
     {
       dSigmaFn_du(i, out.Variable(j), states[j], abscissae[j], time);
       dSigmaFn_dq(i, out.Derivative(j), states[j], abscissae[j], time);
+      if (nAux > 0)
+        dSigma_dPhi(i, out.Aux(j), states[j], abscissae[j], time);
     }
   }
 
@@ -300,10 +302,10 @@ public:
       throw std::logic_error("nAux > 0 but no coupling to the main sources provided");
   }
 
-  virtual void dSigma_dPhi(Index, Values &v, const State &, Position, Time)
+  virtual void dSigma_dPhi(Index, VectorRef, const State &, Position, Time)
   {
-    v.setZero();
-    return;
+    if (nAux != 0)
+      throw std::logic_error("nAux > 0 but no coupling to fluxes provided");
   }
 
   virtual std::unique_ptr<AdjointProblem> createAdjointProblem()

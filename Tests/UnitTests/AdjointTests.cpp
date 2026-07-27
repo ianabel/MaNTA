@@ -1,13 +1,13 @@
-#include <boost/test/unit_test.hpp>
-#include <boost/math/quadrature/gauss.hpp>
 #include "../../PhysicsCases/AdjointTestProblem.hpp"
 #include "../../PhysicsCases/AutodiffAdjointProblem.hpp"
 #include "Types.hpp"
+#include <boost/math/quadrature/gauss.hpp>
+#include <boost/test/unit_test.hpp>
 #include <toml.hpp>
 
 #include "SystemSolver.hpp"
 
-#include <nvector/nvector_serial.h>         /* access to serial N_Vector            */
+#include <nvector/nvector_serial.h> /* access to serial N_Vector            */
 #include <sundials/sundials_linearsolver.h> /* Generic Liner Solver Interface */
 #include <sundials/sundials_types.h>
 
@@ -34,161 +34,155 @@ kappa = 2.0
 
 BOOST_AUTO_TEST_SUITE(adjoint_test_suite, *boost::unit_test::tolerance(1e-6))
 
-BOOST_AUTO_TEST_CASE(autodiff_init_tests)
-{
-    Grid testGrid(-1.0, 1.0, 4);
-    BOOST_CHECK_NO_THROW(AdjointTestProblem problem(config_snippet, testGrid));
+BOOST_AUTO_TEST_CASE(autodiff_init_tests) {
+  Grid testGrid(-1.0, 1.0, 4);
+  BOOST_CHECK_NO_THROW(AdjointTestProblem problem(config_snippet, testGrid));
 }
 
-BOOST_AUTO_TEST_CASE(adjoint_init_tests)
-{
-    Grid testGrid(-1.0, 1.0, 4);
-    AdjointTestProblem *problem = new AdjointTestProblem(config_snippet, testGrid);
+BOOST_AUTO_TEST_CASE(adjoint_init_tests) {
+  Grid testGrid(-1.0, 1.0, 4);
+  AdjointTestProblem *problem =
+      new AdjointTestProblem(config_snippet, testGrid);
 
-    BOOST_CHECK_NO_THROW(AutodiffAdjointProblem adjoint(problem));
+  BOOST_CHECK_NO_THROW(AutodiffAdjointProblem adjoint(problem));
 
-    delete problem;
+  delete problem;
 }
 
-BOOST_AUTO_TEST_CASE(test_derivatives)
-{
+BOOST_AUTO_TEST_CASE(test_derivatives) {
 
-    Grid testGrid(-1.0, 1.0, 4);
-    AdjointTestProblem *problem = new AdjointTestProblem(config_snippet, testGrid);
+  Grid testGrid(-1.0, 1.0, 4);
+  AdjointTestProblem *problem =
+      new AdjointTestProblem(config_snippet, testGrid);
 
-    AutodiffAdjointProblem adjoint(problem);
+  AutodiffAdjointProblem adjoint(problem);
 
-    auto gfun = [&](Position x, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
-    {
-        return problem->g1(x, u, q, sigma, phi);
-    };
+  auto gfun = [&](Position x, RealVector &u, RealVector &q, RealVector &sigma,
+                  RealVector &phi) { return problem->g1(x, u, q, sigma, phi); };
 
-    BOOST_CHECK_NO_THROW(adjoint.addG(gfun));
-    Value T_s = 50;
-    Value SourceWidth = 0.02;
-    Value SourceCentre = 0.3;
+  BOOST_CHECK_NO_THROW(adjoint.addG(gfun));
+  Value T_s = 50;
+  Value SourceWidth = 0.02;
+  Value SourceCentre = 0.3;
 
-    auto dSdc = [&](Position x)
-    {
-        auto y = x - SourceCentre;
-        return T_s * (2 * y) / SourceWidth * exp(-y * y / SourceWidth);
-    };
+  auto dSdc = [&](Position x) {
+    auto y = x - SourceCentre;
+    return T_s * (2 * y) / SourceWidth * exp(-y * y / SourceWidth);
+  };
 
-    Values Positions(3);
-    Positions << 0.2, 0.0, -0.2;
-    State s(1);
-    s.zero();
+  Values Positions(3);
+  Positions << 0.2, 0.0, -0.2;
+  State s(1);
+  s.zero();
 
-    // dGdp tests
-    Value p;
-    adjoint.dSources_dp(0, 0, p, s, Positions(0));
-    BOOST_TEST(dSdc(Positions(0)) == p);
+  // dGdp tests
+  Value p;
+  adjoint.dSources_dp(0, 0, p, s, Positions(0));
+  BOOST_TEST(dSdc(Positions(0)) == p);
 
-    adjoint.dSources_dp(0, 0, p, s, Positions(1));
-    BOOST_TEST(dSdc(Positions(1)) == p);
+  adjoint.dSources_dp(0, 0, p, s, Positions(1));
+  BOOST_TEST(dSdc(Positions(1)) == p);
 
-    adjoint.dSources_dp(0, 0, p, s, Positions(2));
-    BOOST_TEST(dSdc(Positions(2)) == p);
+  adjoint.dSources_dp(0, 0, p, s, Positions(2));
+  BOOST_TEST(dSdc(Positions(2)) == p);
 
-    s.Derivative[0] = 1.0;
-    s.Variable[0] = 2.0;
+  s.Derivative[0] = 1.0;
+  s.Variable[0] = 2.0;
 
-    adjoint.dSigmaFn_dp(0, 1, p, s, Positions(0));
-    BOOST_TEST(p == s.Derivative[0]);
-    adjoint.dSigmaFn_dp(0, 1, p, s, Positions(1));
-    BOOST_TEST(p == s.Derivative[0]);
-    adjoint.dSigmaFn_dp(0, 1, p, s, Positions(2));
-    BOOST_TEST(p == s.Derivative[0]);
+  adjoint.dSigmaFn_dp(0, 1, p, s, Positions(0));
+  BOOST_TEST(p == s.Derivative[0]);
+  adjoint.dSigmaFn_dp(0, 1, p, s, Positions(1));
+  BOOST_TEST(p == s.Derivative[0]);
+  adjoint.dSigmaFn_dp(0, 1, p, s, Positions(2));
+  BOOST_TEST(p == s.Derivative[0]);
 
-    // dGdy tests
+  // dGdy tests
 
-    Values grad(1);
-    adjoint.dgFn_du(0, grad, s, 0.0);
-    BOOST_TEST(grad(0) == 2.0);
+  Values grad(1);
+  adjoint.dgFn_du(0, grad, s, 0.0);
+  BOOST_TEST(grad(0) == 2.0);
 
-    adjoint.dgFn_dq(0, grad, s, 0.0);
-    BOOST_TEST(grad(0) == 0.0);
+  adjoint.dgFn_dq(0, grad, s, 0.0);
+  BOOST_TEST(grad(0) == 0.0);
 
-    adjoint.dgFn_dsigma(0, grad, s, 0.0);
-    BOOST_TEST(grad(0) == 0.0);
+  adjoint.dgFn_dsigma(0, grad, s, 0.0);
+  BOOST_TEST(grad(0) == 0.0);
 
-    delete problem;
+  delete problem;
 }
 
-BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests)
-{
-    int nGrid = 4;
-    Grid testGrid(-1.0, 1.0, nGrid);
-    AdjointTestProblem *problem = new AdjointTestProblem(config_snippet, testGrid);
+BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests) {
+  int nGrid = 4;
+  Grid testGrid(-1.0, 1.0, nGrid);
+  AdjointTestProblem *problem =
+      new AdjointTestProblem(config_snippet, testGrid);
 
-    std::unique_ptr<AdjointProblem> adjoint = problem->createAdjointProblem();
+  std::unique_ptr<AdjointProblem> adjoint = problem->createAdjointProblem();
 
-    // auto gfun = [&](Position x, Real p, RealVector &u, RealVector &q, RealVector &sigma, RealVector &phi)
-    // {
-    //     return problem->g(x, p, u, q, sigma, phi);
-    // };
+  // auto gfun = [&](Position x, Real p, RealVector &u, RealVector &q,
+  // RealVector &sigma, RealVector &phi)
+  // {
+  //     return problem->g(x, p, u, q, sigma, phi);
+  // };
 
-    // adjoint->addG(gfun);
+  // adjoint->addG(gfun);
 
-    Index k = 2; // make sure it works for higher order bases
+  Index k = 2; // make sure it works for higher order bases
 
-    SystemSolver *system = nullptr;
+  SystemSolver *system = nullptr;
 
-    SUNContext ctx;
-    SUNContext_Create(SUN_COMM_NULL, &ctx);
+  SUNContext ctx;
+  SUNContext_Create(SUN_COMM_NULL, &ctx);
 
-    BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, problem));
+  BOOST_CHECK_NO_THROW(system = new SystemSolver(testGrid, k, problem));
 
-    system->setAdjointProblem(adjoint.get());
+  system->setAdjointProblem(adjoint.get());
 
-    system->setTau(1.0);
-    system->resetCoeffs();
-    system->initialiseMatrices();
+  system->setTau(1.0);
+  system->resetCoeffs();
+  system->initialiseMatrices();
 
-    N_Vector y0, y0_dot;
-    y0 = N_VNew_Serial(3 * nGrid * (k + 1) + 1 * (nGrid + 1), ctx);
-    y0_dot = N_VClone(y0);
-    BOOST_CHECK_NO_THROW(system->setInitialConditions(y0, y0_dot));
-    auto integrator = boost::math::quadrature::gauss<double, 30>();
-    Vector test_Vec(k + 1);
-    Vector dGdu_test(k + 1);
+  N_Vector y0, y0_dot;
+  y0 = N_VNew_Serial(3 * nGrid * (k + 1) + 1 * (nGrid + 1), ctx);
+  y0_dot = N_VClone(y0);
+  BOOST_CHECK_NO_THROW(system->setInitialConditions(y0, y0_dot));
+  auto integrator = boost::math::quadrature::gauss<double, 30>();
+  Vector test_Vec(k + 1);
+  Vector dGdu_test(k + 1);
 
-    Vector zeroVec(k + 1);
-    zeroVec.setZero();
-    for (Index i = 0; i < nGrid; ++i)
-    {
-        auto I = testGrid[i];
+  Vector zeroVec(k + 1);
+  zeroVec.setZero();
+  for (Index i = 0; i < nGrid; ++i) {
+    auto I = testGrid[i];
 
-        // dG/dCij
-        // If using orthogonal basis, dG/dCij = Cij
-        for (Index j = 0; j < k + 1; ++j)
-        {
-            auto integrand = [&](double x)
-            {
-                Values grad(1);
+    // dG/dCij
+    // If using orthogonal basis, dG/dCij = Cij
+    for (Index j = 0; j < k + 1; ++j) {
+      auto integrand = [&](double x) {
+        Values grad(1);
 
-                adjoint->dgFn_du(0, grad, system->y.eval(x), x);
-                return system->y.getBasis().Evaluate(I, j, x) * grad(0);
-            };
-            dGdu_test(j) = integrator.integrate(integrand, I.x_l, I.x_u);
-        }
-        BOOST_CHECK_NO_THROW(system->dGdu_Vec(0, test_Vec, system->y, i));
-        BOOST_TEST((dGdu_test - test_Vec).norm() == 0.0);
-
-        BOOST_CHECK_NO_THROW(system->dGdq_Vec(0, test_Vec, system->y, i));
-        BOOST_TEST((zeroVec - test_Vec).norm() == 0.0);
-
-        BOOST_CHECK_NO_THROW(system->dGdsigma_Vec(0, test_Vec, system->y, i));
-        BOOST_TEST((zeroVec - test_Vec).norm() == 0.0);
-
-        BOOST_CHECK_NO_THROW(system->dGdaux_Vec(0, test_Vec, system->y, i));
-        BOOST_TEST((zeroVec - test_Vec).norm() == 0.0);
+        adjoint->dgFn_du(0, grad, system->y.eval(x), x);
+        return system->y.getBasis().Evaluate(I, j, x) * grad(0);
+      };
+      dGdu_test(j) = integrator.integrate(integrand, I.x_l, I.x_u);
     }
+    BOOST_CHECK_NO_THROW(system->dGdu_Vec(0, test_Vec, system->y, i));
+    BOOST_TEST((dGdu_test - test_Vec).norm() == 0.0);
 
-    BOOST_CHECK_NO_THROW(system->initializeMatricesForAdjointSolve());
+    BOOST_CHECK_NO_THROW(system->dGdq_Vec(0, test_Vec, system->y, i));
+    BOOST_TEST((zeroVec - test_Vec).norm() == 0.0);
 
-    delete problem;
-    delete system;
+    BOOST_CHECK_NO_THROW(system->dGdsigma_Vec(0, test_Vec, system->y, i));
+    BOOST_TEST((zeroVec - test_Vec).norm() == 0.0);
+
+    BOOST_CHECK_NO_THROW(system->dGdaux_Vec(0, test_Vec, system->y, i));
+    BOOST_TEST((zeroVec - test_Vec).norm() == 0.0);
+  }
+
+  BOOST_CHECK_NO_THROW(system->initializeMatricesForAdjointSolve());
+
+  delete problem;
+  delete system;
 }
 
 BOOST_AUTO_TEST_SUITE_END()

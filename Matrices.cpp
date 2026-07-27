@@ -161,7 +161,7 @@ void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Index in
 	}
 }
 
-void SystemSolver::dSourcedPhi_Mat(Matrix &mat, std::vector<Eigen::Ref<Matrix>> const dX_dZ, DGSoln const &Y, Index intervalIndex )
+void SystemSolver::dPhi_Mat(Matrix &mat, std::vector<Eigen::Ref<Matrix>> const dX_dZ, DGSoln const &Y, Index intervalIndex )
 {
   // ASSERT mat.shape == ( nVars * ( k + 1) , nVars * ( k + 1 ) )
 	assert(mat.rows() == nVars * (k + 1));

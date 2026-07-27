@@ -3,6 +3,7 @@
 
 #include "PyIntegrator.hpp"
 #include "TransportSystem.hpp"
+#include "Types.hpp"
 #include "extern/pybind11/include/pybind11/pybind11.h"
 #include "pybind11/gil.h"
 #include <functional>
@@ -438,7 +439,7 @@ public:
     v = method_overrides["dSources_dPhi"](i, s, x, t).cast<Values>();
   }
 
-  void dSigma_dPhi(Index i, Values &v, const State &s, Position x,
+  void dSigma_dPhi(Index i, VectorRef v, const State &s, Position x,
                    Time t) override {
     if (nAux == 0) {
       v.setZero();
@@ -501,7 +502,6 @@ public:
     auto temp =
         method_overrides["ScalarGPrime"](
             state, state_dot, Integrator::getIntegrationWeights(basis, grid),
-            Integrator::getPhiCell(basis, grid),
             Integrator::getPhiBoundary(basis, grid), t)
             .cast<std::array<std::vector<py::dict>, 2>>();
 

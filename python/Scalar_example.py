@@ -34,6 +34,13 @@ class ScalarLDParams(NamedTuple):
         )
 
 
+def cheb_nodes(nCells):
+    nodes = np.ndarray((nCells + 1,))
+    for i in range(0, len(nodes)):
+        nodes[nCells - i] = np.cos(i * np.pi / nCells)
+    return nodes
+
+
 class ScalarLD(VectorizedTransportSystem):
     def __init__(self, config):
         super().__init__()
@@ -41,12 +48,15 @@ class ScalarLD(VectorizedTransportSystem):
         self.nScalars = 3
         self.isUpperDirichlet = True
         self.isLowerDirichlet = True
+        nCells = 12
 
         solver_config = {
+            "Grid_points": cheb_nodes(nCells),
+            # "High_Grid_Boundary": True,
             "OutputFilename": "out",
             "Polynomial_degree": 4,
-            "Grid_size": 21,
-            "tau": 0.1,
+            "Grid_size": nCells,
+            # "tau": 10.0,
             "Lower_boundary": -1.0,
             "Upper_boundary": 1.0,
             "Relative_tolerance": 1e-3,
@@ -100,6 +110,7 @@ class ScalarLD(VectorizedTransportSystem):
         dIdt = states_dot.Scalars[2]
 
         M = integrator(states.Variable[:, 0])
+        # jax.debug.print("scalarG M={val}", val=(M - self.M0) / self.M0)
 
         def i0():
             return E - (self.M0 - M)
