@@ -32,5 +32,3 @@ venv
 gmon.out
 *.sh
 slurm-*.out
-extern/
-extern/*
