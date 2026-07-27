@@ -30,7 +30,7 @@ inline const Vector &getIntegrationWeights(const BasisType &basis,
     auto const k = m_basis->Order();
     globalIntegrationWeights.resize(grid.getNCells() * (k + 1));
 
-    for (Index i = 0; i < grid.getNCells(); i++) {
+    for (Index i = 0; i < static_cast<Index>(grid.getNCells()); i++) {
       const auto ind = Eigen::seq(i * (k + 1), (i + 1) * (k + 1) - 1);
       globalIntegrationWeights(ind) = getIntegrationWeights(grid[i]);
     }

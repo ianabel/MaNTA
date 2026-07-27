@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <string_view>
 
-#if defined(__GNUC__) && (__GNUC__ < 16)
+#if defined(__GNUC__) && (__GNUC__ < 15)
 // taken from Google, for some reason g++ 14 supports C++23 but not std::vector
 // in std::println
 template <> struct std::formatter<std::vector<double>, char> {
