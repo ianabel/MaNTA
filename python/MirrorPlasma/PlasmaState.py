@@ -51,9 +51,9 @@ class MirrorPlasmaConfig(eqx.Module):
         InitialDensityHeight: Float = 0.1,
         EdgeDensity: Float = 0.05,
         InitialIonTemperatureHeight: Float = 0.1,
-        EdgeIonTemperature: Float = 0.05,
+        EdgeIonTemperature: Float = 0.1,
         InitialElectronTemperatureHeight: Float = 0.1,
-        EdgeElectronTemperature: Float = 0.05,
+        EdgeElectronTemperature: Float = 0.1,
         InitialMachNumber: Float = 6.0,
         EdgeMachNumber: Float = 3.0,
         gamma: Float = 10000.0,
@@ -62,7 +62,7 @@ class MirrorPlasmaConfig(eqx.Module):
         PlasmaVoltage: Float = 100.0e3,
         useConstantVoltage: Bool = True,
         Current: Float = 0.2,
-        CurrentDecay: Float = 1e-3,
+        CurrentDecay: Float = 1e-2,
         ParticleSourceCenter: Float = 0.1,
         ParticleSourceWidth: Float = 0.1,
         ParticleSourceHeight: Float = 50.0,
@@ -133,10 +133,7 @@ def MirrorPlasmaDecorator(func):
     def wrapper(self, index, state, x, t, params):
         _state = MirrorPlasmaState.from_state(state, x, params)
         res = func(self, index, _state, x, t, params)
-        if isinstance(res, MirrorPlasmaState):
-            return res.to_state()
-        else:
-            return res
+        return res
 
     return wrapper
 
@@ -269,9 +266,9 @@ class MirrorPlasmaState(eqx.Module):
         domegadpsi = dLdpsi / J - dJdpsi * L / (J * J)
 
         if params.Config.useConstantVoltage:
-            Current = -state.Scalars[Scalar.Current]
+            Current = state.Scalars[Scalar.Current]
         else:
-            Current = -params.Config.Current / params.Constants.I0()
+            Current = params.Config.Current / params.Constants.I0()
 
         return cls(
             n=n,

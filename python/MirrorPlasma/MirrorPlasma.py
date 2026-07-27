@@ -39,8 +39,8 @@ class MirrorPlasma(VectorizedTransportSystem):
             self.nScalars = 3
         else:
             self.nScalars = 0
-        self.isUpperDirichlet = True
-        self.isLowerDirichlet = True
+        self.upper_bcs = jnp.array([False, True, False, False])
+        self.lower_bcs = jnp.array([False, True, True, True])
         self.params = MirrorPlasmaParams.make(config)
         self.nCells = solver_config["Grid_size"]
         self.k = solver_config["Polynomial_degree"]
@@ -62,17 +62,35 @@ class MirrorPlasma(VectorizedTransportSystem):
 
     @partial(jax.jit, static_argnames=("self",))
     def LowerBoundary(self, index, t):
-        if self.isLowerDirichlet:
+        def dirichlet(index):
             return self.InitialValue(index, 0.0)
-        else:
+
+        def neumann(index):
             return self.InitialDerivative(index, 0.0)
+
+        return jax.lax.cond(
+            self.isLowerBoundaryDirichlet(index), dirichlet, neumann, index
+        )
 
     @partial(jax.jit, static_argnames=("self",))
     def UpperBoundary(self, index, t):
-        if self.isUpperDirichlet:
+        def dirichlet(index):
             return self.InitialValue(index, 1.0)
-        else:
+
+        def neumann(index):
             return self.InitialDerivative(index, 1.0)
+
+        return jax.lax.cond(
+            self.isUpperBoundaryDirichlet(index), dirichlet, neumann, index
+        )
+
+    @partial(jax.jit, static_argnames=("self",))
+    def isLowerBoundaryDirichlet(self, index):
+        return self.lower_bcs[index]
+
+    @partial(jax.jit, static_argnames=("self",))
+    def isUpperBoundaryDirichlet(self, index):
+        return self.upper_bcs[index]
 
     @partial(jax.jit, static_argnames=("self",))
     def InitialValue(self, index, x):
@@ -300,16 +318,23 @@ class MirrorPlasma(VectorizedTransportSystem):
             self.ViscousHeating(state, x, t, params)
             + self.IonPotentialHeating(state, x, t, params)
             + params.Constants.IonElectronEnergyExchange(state.n, state.pe, state.pi)
+            + self.UniformHeatSource(state, x, t, params)
         ) - (
             self.IonParallelHeatLosses(state, x, t, params)
             + self.ChargeExchangeHeatLosses(state, x, t, params)
         )
 
     def Spe(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
-        return self.AlphaHeating(state, x, t, params) - (
-            self.RadiationHeatLosses(state, x, t, params)
-            + self.ElectronParallelHeatLosses(state, x, t, params)
-            + params.Constants.IonElectronEnergyExchange(state.n, state.pe, state.pi)
+        return (
+            self.AlphaHeating(state, x, t, params)
+            + self.UniformHeatSource(state, x, t, params)
+            - (
+                self.RadiationHeatLosses(state, x, t, params)
+                + self.ElectronParallelHeatLosses(state, x, t, params)
+                + params.Constants.IonElectronEnergyExchange(
+                    state.n, state.pe, state.pi
+                )
+            )
         )
 
     # ======================================================================= #
@@ -372,12 +397,17 @@ class MirrorPlasma(VectorizedTransportSystem):
 
     def JxBForce(self, state, x, t, params):
         return (
-            -state.Current * params.Constants.I0() / state.VPrime
+            state.Current * params.Constants.I0() / state.VPrime
         ) / params.Constants.MomentumEquationNormalization()
 
     # ======================================================================= #
     # Heat sources                                                            #
     # ======================================================================= #
+
+    def UniformHeatSource(
+        self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams
+    ):
+        return 1.0
 
     """
     Ion heat sources
@@ -473,8 +503,10 @@ class MirrorPlasma(VectorizedTransportSystem):
     # ======================================================================= #
 
     def InitialCurrent(self, t):
-        return self.params.Config.Current * (
-            1 + jnp.tanh(-t / self.params.Config.CurrentDecay)
+        return (
+            self.params.Config.Current
+            / self.params.Constants.I0()
+            * (1 + jnp.tanh(-t / self.params.Config.CurrentDecay))
         )
 
     def TotalCurrent(self, states: MirrorPlasmaState, integrator, t):
@@ -482,26 +514,41 @@ class MirrorPlasma(VectorizedTransportSystem):
         dPsi = integrator(1.0 / Vp)
         deltaPi = states.Pi[0] - states.Pi[-1]
 
+        sin = eqx.tree_at(lambda s: s.Scalars, states, jnp.zeros(states.Scalars.shape))
+
         S = jax.vmap(
             self.Somega, in_axes=(MirrorPlasmaState.vmap_axes(), 0, None, None)
-        )(states, self.points, t, self.params)
+        )(sin, self.points, t, self.params)
 
         Itot = 1 / dPsi * (deltaPi - integrator(S))
-        print(Itot)
         return Itot
 
     def InitialScalarValue(self, s):
         def omega(x):
-            R = self.params.MagneticField.R_x(x)
-            return self.InitialValue(Channel.AngularMomentum, x) / (
-                R**2 * self.InitialValue(Channel.Density, x)
-            )
+            R = self.params.MagneticField.R_x(x) / self.params.Constants.a
+            VPrime = self.params.Constants.MagneticField.VPrime(x)
+            L = self.InitialValue(Channel.AngularMomentum, x)
+            n = self.InitialValue(Channel.Density, x)
+            return L / (n * R**2 * VPrime)
 
-        phi = quad(omega, 0.0, 1.0)[0]
+        # phi = quad(omega, 0.0, 1.0)[0]
+        integrand = jax.vmap(omega)(self.points)
+        phi = jax.scipy.integrate.trapezoid(integrand, self.points)
+
+        p2 = quad(lambda x: jnp.cos(jnp.pi / 2 * x), 0.0, 1.0)[0]
+        # p2 = jax.scipy.integrate.trapezoid(integrand, self.points)
+
+        jax.debug.print("p2: {val}", val=p2 * (jnp.pi / 2))
+        # jax.debug.print(
+        #     "V0: {val}",
+        #     val=self.params.Config.PlasmaVoltage / self.params.Constants.omega0,
+        # )
+
         match s:
             case Scalar.Error:
                 return (
-                    self.params.Config.PlasmaVoltage / self.params.Constants.cs0 - phi
+                    self.params.Config.PlasmaVoltage / self.params.Constants.omega0
+                    - phi
                 )
             case Scalar.Integral:
                 return 0.0
@@ -531,7 +578,7 @@ class MirrorPlasma(VectorizedTransportSystem):
 
                 return -integrator(domegadt)
             case Scalar.Integral:
-                return self.InitialScalarValue(i)
+                return self.InitialScalarValue(Scalar.Error)
 
     @partial(jax.jit, static_argnames=("self",))
     def isScalarDifferential(self, s) -> bool:
@@ -566,10 +613,17 @@ class MirrorPlasma(VectorizedTransportSystem):
         phi = integrator(states.omega / states.VPrime)
 
         tfac = jnp.tanh(t / self.params.Config.CurrentDecay)
+        jax.debug.print(
+            "p2: {val}",
+            val=integrator(jnp.cos(jnp.pi / 2 * self.points) * (jnp.pi / 2)),
+        )
+        jax.debug.print("Scalars: {val}", val=states_.Scalars)
+
+        jax.debug.print("Scalar_dot: {val}", val=states_dot_.Scalars)
 
         def sError():
             return states.Scalars[Scalar.Error] - (
-                self.params.Config.PlasmaVoltage / self.params.Constants.cs0 - phi
+                self.params.Config.PlasmaVoltage / self.params.Constants.omega0 - phi
             )
 
         def sIntegral():
@@ -612,6 +666,8 @@ class MirrorPlasma(VectorizedTransportSystem):
         sArgs = (self.nVars, self.nAux, self.nScalars, len(self.points))
         sZero = State.make_zero(*sArgs)
 
+        jax.debug.print("time = {val}", val=t)
+
         varshape = (len(self.points),)
         _zeros = jnp.zeros(varshape)
         """
@@ -648,7 +704,11 @@ class MirrorPlasma(VectorizedTransportSystem):
         """
 
         dPsi = integrator(1.0 / states.VPrime)
-        dSource = self.dSources(Channel.AngularMomentum, states_, self.points, t)
+
+        sin = eqx.tree_at(
+            lambda s: s.Scalars, states_, jnp.zeros(states_.Scalars.shape)
+        )
+        dSource = self.dSources(Channel.AngularMomentum, sin, self.points, t)
         _dvariable = (
             tfac
             * jax.vmap(integrator.computeCellProducts, in_axes=1)(dSource.Variable)
@@ -660,25 +720,32 @@ class MirrorPlasma(VectorizedTransportSystem):
             / dPsi
         )
 
-        _scalar = tfac * jnp.array(
-            [-self.params.Config.gamma, -self.params.Config.gamma_h, 1.0]
+        _scalar = jnp.array(
+            [-self.params.Config.gamma * tfac, -self.params.Config.gamma_h * tfac, 1.0]
         )
-        _scalar_dt = tfac * jnp.array([-self.params.Config.gamma_d, 0.0, 0.0])
+        _scalar_dt = jnp.array([-self.params.Config.gamma_d * tfac, 0.0, 0.0])
 
-        _flux_L = 1.0 / dPsi * integrator.phiL()
-        _flux_R = -1.0 / dPsi * integrator.phiR()
+        _flux_L = 1.0 / dPsi * integrator.phiL() * tfac
+        _flux_R = -1.0 / dPsi * integrator.phiR() * tfac
         _flux = jnp.concatenate(
             [_flux_L, jnp.zeros(((self.nCells - 2) * (self.k + 1),)), _flux_R]
         )
         _flux = jnp.stack([_zeros, _flux, _zeros, _zeros]).transpose()
 
+        # set variable
         derivs_Current = eqx.tree_at(
             lambda s: s.Variable, sZero, _dvariable.transpose()
         )
+
+        # set aux
         derivs_Current = eqx.tree_at(lambda s: s.Aux, sZero, _daux.transpose())
+
+        # set fluxes
         derivs_Current = eqx.tree_at(
             lambda s: s.Flux, derivs_Current, derivs_Current.Flux + _flux
         )
+
+        # set scalars
         derivs_Current = eqx.tree_at(lambda s: s.Scalars, derivs_Current, _scalar)
 
         derivs_dt_Current = eqx.tree_at(lambda s: s.Scalars, sZero, _scalar_dt)
