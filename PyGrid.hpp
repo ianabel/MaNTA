@@ -13,7 +13,7 @@ using BasisType = NodalBasis;
 constexpr Vector getNodes(const std::vector<double> &cellBoundaries,
                           unsigned int k) {
   Grid grid(cellBoundaries);
-  Vector points((k + 1) * cellBoundaries.size());
+  Vector points((k + 1) * (cellBoundaries.size() - 1));
   auto nodes = BasisType::getBasis(k).getNodes();
   for (size_t i = 0; i < grid.getNCells(); ++i) {
     auto const &cell = grid[i];

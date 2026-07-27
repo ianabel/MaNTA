@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 import equinox as eqx
 from numpy.random import geometric
 from scipy.integrate import quad
@@ -40,16 +41,17 @@ class MirrorPlasma(VectorizedTransportSystem):
         else:
             self.nScalars = 0
         self.upper_bcs = jnp.array([False, True, False, False])
-        self.lower_bcs = jnp.array([False, True, True, True])
+        self.lower_bcs = jnp.array([False, True, False, True])
         self.params = MirrorPlasmaParams.make(config)
         self.nCells = solver_config["Grid_size"]
         self.k = solver_config["Polynomial_degree"]
-        self.points = MaNTA.getNodes(
-            solver_config["Lower_boundary"],
-            solver_config["Upper_boundary"],
-            self.nCells,
-            self.k,
-        )
+        self.points = MaNTA.getNodes(solver_config["Grid_points"], self.k)
+        # self.points = MaNTA.getNodes(
+        #     solver_config["Lower_boundary"],
+        #     solver_config["Upper_boundary"],
+        #     self.nCells,
+        #     self.k,
+        # )
         self.nPoints = len(self.points)
         self.runner = MaNTA.Runner(self)
         self.runner.configure(solver_config)
@@ -407,7 +409,7 @@ class MirrorPlasma(VectorizedTransportSystem):
     def UniformHeatSource(
         self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams
     ):
-        return 1.0
+        return 2.0
 
     """
     Ion heat sources
@@ -535,10 +537,6 @@ class MirrorPlasma(VectorizedTransportSystem):
         integrand = jax.vmap(omega)(self.points)
         phi = jax.scipy.integrate.trapezoid(integrand, self.points)
 
-        p2 = quad(lambda x: jnp.cos(jnp.pi / 2 * x), 0.0, 1.0)[0]
-        # p2 = jax.scipy.integrate.trapezoid(integrand, self.points)
-
-        jax.debug.print("p2: {val}", val=p2 * (jnp.pi / 2))
         # jax.debug.print(
         #     "V0: {val}",
         #     val=self.params.Config.PlasmaVoltage / self.params.Constants.omega0,
@@ -594,8 +592,11 @@ class MirrorPlasma(VectorizedTransportSystem):
         return jax.lax.switch(s, [sError, sIntegral, sCurrent])
 
     @ScalarG_Decorator
-    @partial(jax.jit, static_argnames=("self",))
     def ScalarG(self, i, states_, states_dot_, integrator, t):
+        return self._ScalarG(i, states_, states_dot_, integrator, t)
+
+    @partial(jax.jit, static_argnames=("self",))
+    def _ScalarG(self, i, states_, states_dot_, integrator, t):
         states = jax.vmap(
             MirrorPlasmaState.from_state, in_axes=(State.vmap_axes(), 0, None)
         )(states_, self.points, self.params)
@@ -613,13 +614,6 @@ class MirrorPlasma(VectorizedTransportSystem):
         phi = integrator(states.omega / states.VPrime)
 
         tfac = jnp.tanh(t / self.params.Config.CurrentDecay)
-        jax.debug.print(
-            "p2: {val}",
-            val=integrator(jnp.cos(jnp.pi / 2 * self.points) * (jnp.pi / 2)),
-        )
-        jax.debug.print("Scalars: {val}", val=states_.Scalars)
-
-        jax.debug.print("Scalar_dot: {val}", val=states_dot_.Scalars)
 
         def sError():
             return states.Scalars[Scalar.Error] - (
@@ -666,89 +660,51 @@ class MirrorPlasma(VectorizedTransportSystem):
         sArgs = (self.nVars, self.nAux, self.nScalars, len(self.points))
         sZero = State.make_zero(*sArgs)
 
-        jax.debug.print("time = {val}", val=t)
-
         varshape = (len(self.points),)
         _zeros = jnp.zeros(varshape)
         """
         Error
         """
 
-        P_L = integrator.computeCellProducts(
-            1.0 / (states.VPrime * states.n * states.R**2)
+        derivs_Error = jax.grad(self._ScalarG, argnums=1)(
+            0, states_, states_dot_, integrator, t
         )
-        P_n = integrator.computeCellProducts(
-            -1.0 / (states.VPrime) * states.L / (states.n**2 * states.R**2)
-        )
-        _scalar = jnp.array([1.0, 0.0, 0.0])
-
-        derivs_Error = eqx.tree_at(
-            lambda s: s.Variable,
-            sZero,
-            jnp.stack([P_n, P_L, _zeros, _zeros]).transpose(),
-        )
-        derivs_Error = eqx.tree_at(lambda s: s.Scalars, derivs_Error, _scalar)
-
         """
         Integral
         """
-        # Error, Integral, Current
-        _scalar = jnp.array([-1.0, 0.0, 0.0])
-        _scalar_dt = jnp.array([0.0, 1.0, 0.0])
 
-        derivs_Integral = eqx.tree_at(lambda s: s.Scalars, sZero, _scalar)
-        derivs_dt_Integral = eqx.tree_at(lambda s: s.Scalars, sZero, _scalar_dt)
+        derivs_Integral = jax.grad(self._ScalarG, argnums=1)(
+            1, states_, states_dot_, integrator, t
+        )
 
+        derivs_dt_Integral = jax.grad(self._ScalarG, argnums=2)(
+            1, states_, states_dot_, integrator, t
+        )
         """
         Current
         """
-
-        dPsi = integrator(1.0 / states.VPrime)
-
         sin = eqx.tree_at(
             lambda s: s.Scalars, states_, jnp.zeros(states_.Scalars.shape)
         )
-        dSource = self.dSources(Channel.AngularMomentum, sin, self.points, t)
-        _dvariable = (
-            tfac
-            * jax.vmap(integrator.computeCellProducts, in_axes=1)(dSource.Variable)
-            / dPsi
-        )
-        _daux = (
-            tfac
-            * jax.vmap(integrator.computeCellProducts, in_axes=1)(dSource.Aux)
-            / dPsi
+        derivs_Current = jax.grad(self._ScalarG, argnums=1)(
+            2, sin, states_dot_, integrator, t
         )
 
-        _scalar = jnp.array(
-            [-self.params.Config.gamma * tfac, -self.params.Config.gamma_h * tfac, 1.0]
+        derivs_dt_Current = jax.grad(self._ScalarG, argnums=2)(
+            2, sin, states_dot_, integrator, t
         )
-        _scalar_dt = jnp.array([-self.params.Config.gamma_d * tfac, 0.0, 0.0])
 
+        dPsi = integrator(1.0 / states.VPrime)
         _flux_L = 1.0 / dPsi * integrator.phiL() * tfac
         _flux_R = -1.0 / dPsi * integrator.phiR() * tfac
         _flux = jnp.concatenate(
             [_flux_L, jnp.zeros(((self.nCells - 2) * (self.k + 1),)), _flux_R]
         )
         _flux = jnp.stack([_zeros, _flux, _zeros, _zeros]).transpose()
-
-        # set variable
-        derivs_Current = eqx.tree_at(
-            lambda s: s.Variable, sZero, _dvariable.transpose()
-        )
-
-        # set aux
-        derivs_Current = eqx.tree_at(lambda s: s.Aux, sZero, _daux.transpose())
-
         # set fluxes
         derivs_Current = eqx.tree_at(
             lambda s: s.Flux, derivs_Current, derivs_Current.Flux + _flux
         )
-
-        # set scalars
-        derivs_Current = eqx.tree_at(lambda s: s.Scalars, derivs_Current, _scalar)
-
-        derivs_dt_Current = eqx.tree_at(lambda s: s.Scalars, sZero, _scalar_dt)
 
         return [
             [derivs_Error, derivs_Integral, derivs_Current],
