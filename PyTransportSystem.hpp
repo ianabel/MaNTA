@@ -501,7 +501,6 @@ public:
     auto temp =
         method_overrides["ScalarGPrime"](
             state, state_dot, Integrator::getIntegrationWeights(basis, grid),
-            Integrator::getPhiCell(basis, grid),
             Integrator::getPhiBoundary(basis, grid), t)
             .cast<std::array<std::vector<py::dict>, 2>>();
 

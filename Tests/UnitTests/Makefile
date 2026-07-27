@@ -3,7 +3,7 @@
 all: UnitTests
 .PHONY: all clean
 
-TEST_SOURCES = DGTests.cpp SystemSolverTests.cpp AutodiffTest.cpp MirrorPlasmaTest.cpp AdjointTests.cpp
+TEST_SOURCES = DGTests.cpp SystemSolverTests.cpp AutodiffTest.cpp MirrorPlasmaTest.cpp AdjointTests.cpp IntegratorTest.cpp
 TEST_HEADERS = TestDiffusion.hpp 
 
 CXXFLAGS += -I../../ -DTEST

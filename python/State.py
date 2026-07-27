@@ -119,7 +119,7 @@ def ScalarG_Decorator(func):
             State.from_manta(states_dt), lambda x: x.size > 0
         )
 
-        integrator = Integrator(self.k, self.nCells, weights, None, None)
+        integrator = Integrator(self.k, self.nCells, weights, None)
         res = func(self, index, states_, states_dt_, integrator, *args)
 
         if isinstance(res, State):
@@ -131,13 +131,13 @@ def ScalarG_Decorator(func):
 
 
 def ScalarGPrime_Decorator(func):
-    def wrapper(self, states, states_dt, weights, phis, phi_boundary, *args):
+    def wrapper(self, states, states_dt, weights, phi_boundary, *args):
         states_, empty = eqx.partition(State.from_manta(states), lambda x: x.size > 0)
         states_dt_, empty = eqx.partition(
             State.from_manta(states_dt), lambda x: x.size > 0
         )
 
-        integrator = Integrator(self.k, self.nCells, weights, phis, phi_boundary)
+        integrator = Integrator(self.k, self.nCells, weights, phi_boundary)
         result = func(self, states_, states_dt_, integrator, *args)
 
         for i in range(0, len(result)):
