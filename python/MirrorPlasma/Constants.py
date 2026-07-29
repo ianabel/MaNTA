@@ -3,11 +3,12 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import equinox as eqx
 import jax.numpy as jnp
-from jaxtyping import Float, Int
+from jaxtyping import ArrayLike, Float, Int
 import enum
 from MirrorPlasma.MagneticField import _MagneticField
 from MirrorPlasma.IonSpecies import _IonSpecies
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 class MomentType(enum.IntEnum):
@@ -29,6 +30,8 @@ class PlasmaConstants(eqx.Module):
     B0: Float = eqx.field(static=True)
     cs0: Float = eqx.field(static=True)
     nIntPoints: Int = eqx.field(static=True)
+    weights: Float[ArrayLike, "..."]
+    abscissae: Float[ArrayLike, "..."]
     ElectronMass = 9.1094e-31
     ProtonMass = 1.6726e-27
     ElementaryCharge = 1.60217663e-19
@@ -57,6 +60,11 @@ class PlasmaConstants(eqx.Module):
         self.cs0 = jnp.sqrt(self.T0 / self.IonSpecies.IonMass)
         self.nIntPoints = _nIntPoints
         self.omega0 = self.cs0 / self.a
+
+        self.abscissae, self.weights = np.polynomial.hermite.hermgauss(10)
+        # with open("util/land.pkl", "rb") as file:
+        #     self.abscissae = pickle.load(file)
+        #     self.weights = jnp.array(pickle.load(file))
 
     def ReferenceElectronCollisionTime(self):
         LogLambdaRef = 24.0 - jnp.log(self.n0cgs) / 2.0 + jnp.log(self.T0eV)
@@ -180,9 +188,7 @@ class PlasmaConstants(eqx.Module):
         # n_e20)^1/2 / B )  From NRL Formulary, converted to our units (Tesla for B
         # 10^20 /m^3 for n_e)
 
-        PlasmaWidth = (
-            self.MagneticField.R_x(1.0) - self.MagneticField.R_x(0.0)
-        ) * self.a
+        PlasmaWidth = self.MagneticField.R_x(1.0) - self.MagneticField.R_x(0.0)
         LambdaZero = (5.31e-4 / 3.21) * (B_z / n_e20)
         WallReflectivity = 0.95
         OpticalThickness = (PlasmaWidth / (1.0 - WallReflectivity)) / LambdaZero
@@ -216,7 +222,7 @@ class PlasmaConstants(eqx.Module):
 
         IonHeating = 3 * pDiff / taue * (1 / self.mu())
 
-        return IonHeating / self.HeatEquationNormalization()
+        return 10.0 * IonHeating / self.HeatEquationNormalization()
 
     # Hold all dimensional values for fluxes here
     def Gamma0(self):
@@ -266,13 +272,12 @@ class PlasmaConstants(eqx.Module):
         self, CrossSection, vtheta, T, Mass, minEnergy, Moment=MomentType.Density
     ):
         vth2 = 2 * T * self.T0 / Mass
-        vtheta *= self.cs0
-        Mth = vtheta / jnp.sqrt(vth2)
+        vtheta /= jnp.sqrt(vth2)
 
-        def Integrand(v, XS):
-            MmE = Mth - v
+        def Integrand(x, XS):
+            # MmE = Mth - v
 
-            MpE = Mth + v
+            # MpE = Mth + v
 
             def mDensity(V):
                 return jnp.ones(V.shape)
@@ -283,9 +288,19 @@ class PlasmaConstants(eqx.Module):
             def mEnergy(V):
                 return 0.5 * Mass * (V * V - 2 * vtheta * V + vtheta * vtheta)
 
-            x = jax.lax.switch(Moment, [mDensity, mMomentum, mEnergy], v)
+            # x = jax.lax.switch(Moment, [mDensity, mMomentum, mEnergy], v)
 
-            return x * v**2 * XS * (jnp.exp(-(MmE**2)) - jnp.exp(-(MpE**2)))
+            x1 = x + vtheta
+            return XS * (
+                jnp.exp(-(vtheta**2))
+                * x1**2
+                * jnp.sinh(2 * vtheta * x1)
+                * jnp.exp(-(vtheta**2 + 2 * vtheta * x))
+            )
+
+            # return xp**2 * jnp.sinh(2 * vtheta * xp) * XS
+
+            # return x * v**2 * XS * (jnp.exp(-(MmE**2)) - jnp.exp(-(MpE**2)))
 
         # def Integrand(Energy, XS):
         #     v = jnp.sqrt(2 * ElementaryCharge * Energy / Mass)
@@ -314,29 +329,35 @@ class PlasmaConstants(eqx.Module):
         #     return I
         #
 
-        min_sqrt = 4
-
-        min_velocity = jax.lax.cond(
-            Mth <= min_sqrt, lambda: 0.0, lambda: Mth - min_sqrt
-        )
-
-        max_velocity = Mth + min_sqrt
-        minE = jnp.min(jnp.array([minEnergy, min_velocity**2 * T * self.T0eV]))
-        maxEV = max_velocity**2 * T * self.T0eV
-        maxE = jnp.min(jnp.array([1e6, maxEV]))
-
-        vgrid = jnp.linspace(
-            jnp.sqrt(minE / self.T0eV),
-            jnp.sqrt(maxE / self.T0eV),
-            self.nIntPoints,
-        )
-        XS = CrossSection(vgrid**2 * self.T0eV) * 1e-4
-        # plt.plot(vgrid, Integrand(vgrid, XS))
+        # min_sqrt = 4
+        #
+        # min_velocity = jax.lax.cond(
+        #     Mth <= min_sqrt, lambda: 0.0, lambda: Mth - min_sqrt
+        # )
+        #
+        # max_velocity = Mth + min_sqrt
+        # minE = jnp.min(jnp.array([minEnergy, min_velocity**2 * T * self.T0eV]))
+        # maxEV = max_velocity**2 * T * self.T0eV
+        # maxE = jnp.min(jnp.array([1e6, maxEV]))
+        #
+        # vgrid = jnp.linspace(
+        #     jnp.sqrt(minE / self.T0eV),
+        #     jnp.sqrt(maxE / self.T0eV),
+        #     self.nIntPoints,
+        # )
+        xp = self.abscissae
+        Energy = (xp + vtheta) ** 2 * self.T0eV
+        XS = CrossSection(Energy) * 1e-4
+        #
+        # plt.plot(self.abscissae, XS)
         # plt.show()
-        integral = jnp.sqrt(vth2 / 2) * jax.scipy.integrate.trapezoid(
-            Integrand(vgrid, XS), vgrid
-        )
-
+        I = jnp.dot(Integrand(self.abscissae, XS), self.weights)
+        integral = 2.0 * jnp.sqrt(vth2) / jnp.sqrt(jnp.pi) / vtheta * I
+        # jax.debug.print("XS = {val}", val=XS)
+        # integral = jnp.sqrt(vth2 / 2) * jax.scipy.integrate.trapezoid(
+        #     Integrand(vgrid, XS), vgrid
+        # )
+        #
         # energy_grid = jnp.linspace(minE, maxE, self.nIntPoints)
         # XS = CrossSection(energy_grid)
 
@@ -346,11 +367,11 @@ class PlasmaConstants(eqx.Module):
         #     * jax.scipy.integrate.trapezoid(Integrand(energy_grid, XS), energy_grid)
         # )
         #
-        return integral / (jnp.sqrt(jnp.pi) * Mth)
+        return integral
 
     def IonizationRate(self, n, NeutralDensity, v, Te, Ti):
         n_m3 = n * self.n0
-        n_neutrals = NeutralDensity * self.n0
+        n_neutrals = NeutralDensity
         IonIntegral = self.NeutralProcess(
             self.IonSpecies.protonImpactIonizationCrossSection,
             v,

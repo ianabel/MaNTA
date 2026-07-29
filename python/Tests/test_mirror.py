@@ -232,7 +232,7 @@ def test_neutrals(atol):
 
     H = Hydrogen()
     B = StraightMagneticField()
-    v = 5.0
+    v = 6.0
     n = 1.0
     pi = 1.0
     C = PlasmaConstants(H, B, _nIntPoints=200)
@@ -244,7 +244,16 @@ def test_neutrals(atol):
     vtheta = v * C.cs0
     vth2 = 2 * T * C.T0 / H.IonMass
     Mth = vtheta / jnp.sqrt(vth2)
-
+    #
+    # def Ian():
+    #     spi = np.sqrt(np.pi)
+    #     v2 = vtheta**2
+    #     a1 = v2 * (2 * gammaincc(0.5, v2) - 2 * spi)
+    #     a2 = 4 * gammaincc(1, v2) * vtheta
+    #     a3 = 2 * gammaincc(3.0 / 2.0, v2)
+    #
+    #     return -0.25 * (a1 - a2 + a3 - spi)
+    #
     A = Mth
     Rtest = jnp.sqrt(vth2 / 2) * (
         -gammaincc(1 / 2, A**2) * A**2

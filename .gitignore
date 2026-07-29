@@ -32,3 +32,4 @@ venv
 gmon.out
 *.sh
 slurm-*.out
+*.pkl

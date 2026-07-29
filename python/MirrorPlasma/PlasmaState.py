@@ -48,7 +48,7 @@ class MirrorPlasmaConfig(eqx.Module):
         Rmin: Float,
         Rmax: Float,
         MagneticFieldSlope: Float = 0.0,
-        InitialDensityHeight: Float = 0.2,
+        InitialDensityHeight: Float = 0.1,
         EdgeDensity: Float = 0.05,
         InitialIonTemperatureHeight: Float = 0.1,
         EdgeIonTemperature: Float = 0.1,
@@ -62,7 +62,7 @@ class MirrorPlasmaConfig(eqx.Module):
         PlasmaVoltage: Float = 100.0e3,
         useConstantVoltage: Bool = True,
         Current: Float = 0.2,
-        CurrentDecay: Float = 1e-4,
+        CurrentDecay: Float = 1e-3,
         ParticleSourceCenter: Float = 0.1,
         ParticleSourceWidth: Float = 0.1,
         ParticleSourceHeight: Float = 50.0,
@@ -90,6 +90,7 @@ class MirrorPlasmaConfig(eqx.Module):
         self.useConstantVoltage = useConstantVoltage
         self.Current = Current
         self.CurrentDecay = CurrentDecay
+
         self.ParticleSourceCenter = ParticleSourceCenter
         self.ParticleSourceWidth = ParticleSourceWidth
         self.ParticleSourceHeight = ParticleSourceHeight

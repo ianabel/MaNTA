@@ -40,18 +40,20 @@ class MirrorPlasma(VectorizedTransportSystem):
             self.nScalars = 3
         else:
             self.nScalars = 0
-        self.upper_bcs = jnp.array([False, True, False, False])
-        self.lower_bcs = jnp.array([False, True, False, True])
+        self.upper_bcs = jnp.array([False, True, True, True])
+        self.lower_bcs = jnp.array([False, True, True, True])
         self.params = MirrorPlasmaParams.make(config)
         self.nCells = solver_config["Grid_size"]
         self.k = solver_config["Polynomial_degree"]
-        self.points = MaNTA.getNodes(solver_config["Grid_points"], self.k)
-        # self.points = MaNTA.getNodes(
-        #     solver_config["Lower_boundary"],
-        #     solver_config["Upper_boundary"],
-        #     self.nCells,
-        #     self.k,
-        # )
+        if "Grid_points" in solver_config:
+            self.points = MaNTA.getNodes(solver_config["Grid_points"], self.k)
+        else:
+            self.points = MaNTA.getNodes(
+                solver_config["Lower_boundary"],
+                solver_config["Upper_boundary"],
+                self.nCells,
+                self.k,
+            )
         self.nPoints = len(self.points)
         self.runner = MaNTA.Runner(self)
         self.runner.configure(solver_config)
@@ -223,7 +225,7 @@ class MirrorPlasma(VectorizedTransportSystem):
             G
             * params.Constants.Gamma0()
             / params.Constants.DensityEquationNormalization()
-        )
+        ) + 1e-4 * state.dndpsi / state.n
 
     def Pi(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
         GeometricFactor = state.R**4 * state.VPrime
@@ -250,7 +252,10 @@ class MirrorPlasma(VectorizedTransportSystem):
             * params.Constants.DensityEquationNormalization()
         )
 
-        return Pi_out / params.Constants.MomentumEquationNormalization()
+        return (
+            Pi_out / params.Constants.MomentumEquationNormalization()
+            + 1e-4 * state.domegadpsi / state.omega
+        )
 
     def qi(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
         GeometricFactor = state.R**2 * state.VPrime
@@ -277,7 +282,10 @@ class MirrorPlasma(VectorizedTransportSystem):
             * self.Gamma(state, x, t, params)
             * params.Constants.DensityEquationNormalization()
         )
-        return qi_out / params.Constants.HeatEquationNormalization()
+        return (
+            qi_out / params.Constants.HeatEquationNormalization()
+            + 1e-4 * state.dTidpsi / state.Ti
+        )
 
     def qe(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
         GeometricFactor = state.R**2 * state.VPrime
@@ -299,15 +307,19 @@ class MirrorPlasma(VectorizedTransportSystem):
             params.Constants.qe0()
             / params.Constants.HeatEquationNormalization()
             * HeatFlux
-        )
+        ) + 1e-2 * state.dTedpsi / state.Te
 
     # ======================================================================= #
     # Sources                                                                 #
     # ======================================================================= #
 
     def Sn(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
-        return self.ParticleSource(state, x, t, params)
-        -self.ParallelParticleLosses(state, x, t, params)
+
+        return (
+            self.ParticleSource(state, x, t, params)
+            + self.IonizationSource(state, x, t, params)
+            - self.ParallelParticleLosses(state, x, t, params)
+        )
 
     def Somega(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
         return self.JxBForce(state, x, t, params) - (
@@ -345,9 +357,21 @@ class MirrorPlasma(VectorizedTransportSystem):
 
     def ParticleSource(self, state, x, t, params):
         Center = params.Config.ParticleSourceCenter / params.Constants.a
-        Width = params.Config.ParticleSourceWidth
+        Width = params.Config.ParticleSourceWidth / params.Constants.a
         Height = params.Config.ParticleSourceHeight
-        return Height * jnp.exp(-((state.R - Center) ** 2) / Width)
+        return Height * jnp.exp(-(((state.R - Center) / Width) ** 2))
+
+    def IonizationSource(self, state, x, t, params):
+        return (
+            params.Constants.IonizationRate(
+                state.n,
+                params.Config.NeutralDensity,
+                state.R * params.Constants.a * state.omega * params.Constants.omega0,
+                state.Te,
+                state.Ti,
+            )
+            / params.Constants.DensityEquationNormalization()
+        )
 
     def ParallelParticleLosses(self, state, x, t, params):
         return (
@@ -381,7 +405,10 @@ class MirrorPlasma(VectorizedTransportSystem):
                 * params.Constants.ChargeExchangeLossRate(
                     state.n,
                     params.Config.NeutralDensity,
-                    state.R * state.omega,
+                    state.R
+                    * params.Constants.a
+                    * state.omega
+                    * params.Constants.omega0,
                     state.Ti,
                 )
                 * (
@@ -431,12 +458,13 @@ class MirrorPlasma(VectorizedTransportSystem):
     def IonPotentialHeating(
         self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams
     ):
+        # return 0.0
         return (
             -0.5
             * params.Constants.IonSpecies.IonMass
             * (params.Constants.a * params.Constants.omega0) ** 2
             * (state.R * state.omega) ** 2
-            * self.Sn(state, x, t, params)
+            * self.ParticleSource(state, x, t, params)
             * params.Constants.DensityEquationNormalization()
         ) / params.Constants.HeatEquationNormalization()
 
@@ -450,7 +478,10 @@ class MirrorPlasma(VectorizedTransportSystem):
                 * params.Constants.ChargeExchangeLossRate(
                     state.n,
                     params.Config.NeutralDensity,
-                    state.R * state.omega,
+                    state.R
+                    * params.Constants.a
+                    * state.omega
+                    * params.Constants.omega0,
                     state.Ti,
                 )
                 / params.Constants.HeatEquationNormalization()
