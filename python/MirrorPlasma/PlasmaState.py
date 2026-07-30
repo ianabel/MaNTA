@@ -43,6 +43,7 @@ class MirrorPlasmaConfig(eqx.Module):
     NeutralDensity: Float
     useNeutralsModel: Bool = eqx.field(static=True)
     ADCoefficient: Float
+    NormalizeToR: Bool
 
     def __init__(
         self,
@@ -79,6 +80,8 @@ class MirrorPlasmaConfig(eqx.Module):
         useNeutralsModel: Bool = False,
         # Artificial diffusion
         ADCoefficient: Float = 0.0,
+        # Normalizations
+        NormalizeToR: Bool = True,
     ):
         self.Rmin = Rmin
         self.Rmax = Rmax
@@ -108,6 +111,7 @@ class MirrorPlasmaConfig(eqx.Module):
         self.NeutralDensity = NeutralDensity
         self.useNeutralsModel = useNeutralsModel
         self.ADCoefficient = ADCoefficient
+        self.NormalizeToR = NormalizeToR
 
 
 class MirrorPlasmaParams(eqx.Module):
@@ -124,7 +128,10 @@ class MirrorPlasmaParams(eqx.Module):
 
     @classmethod
     def make(cls, config: MirrorPlasmaConfig):
-        a = config.Rmax - config.Rmin
+        if config.NormalizeToR:
+            a = config.Rmax - config.Rmin
+        else:
+            a = 1.0
         B = StraightMagneticField(
             _L_z=config.PlasmaLength,
             _B_z=config.MagneticFieldStrength,

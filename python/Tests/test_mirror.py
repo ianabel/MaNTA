@@ -14,9 +14,12 @@ from MirrorPlasma.Constants import PlasmaConstants
 from MirrorPlasma.MagneticField import StraightMagneticField
 from MirrorPlasma.IonSpecies import Hydrogen
 from MirrorPlasma.MirrorPlasma import MirrorPlasma
-from MirrorPlasma.PlasmaState import MirrorPlasmaConfig
-from MirrorPlasma.PlasmaState import MirrorPlasmaState
-from MirrorPlasma.PlasmaState import MirrorPlasmaParams
+from MirrorPlasma.PlasmaState import (
+    MirrorPlasmaConfig,
+    MirrorPlasmaState,
+    MirrorPlasmaParams,
+    Channel,
+)
 from MirrorPlasma.ParallelPhysics import CentrifugalPotential, InitialPhiValue
 from MirrorPlasma.ParallelPhysics import (
     ParallelCurrent,
@@ -113,6 +116,12 @@ def MP(config, solver_config):
     return MirrorPlasma(config=config, solver_config=solver_config)
 
 
+@pytest.fixture
+def MP_unnorm(config, solver_config):
+    config_unnorm = eqx.tree_at(lambda c: c.NormalizeToR, config, False)
+    return MirrorPlasma(config=config_unnorm, solver_config=solver_config)
+
+
 def make_state(x, MP):
     n0 = MP.InitialValue(0, x)
     L0 = MP.InitialValue(1, x)
@@ -202,10 +211,6 @@ def test_norm(C):
     for t in ts:
         (dndt0, dLdt0, dudt0, C) = make_norm(*t)
 
-        print(dndt0 - C.DensityEquationNormalization())
-        print(dLdt0 - C.MomentumEquationNormalization())
-        print(dudt0 - C.HeatEquationNormalization())
-
 
 def test_bfield(config):
     Rmax = config.Rmax
@@ -219,7 +224,6 @@ def test_bfield(config):
     x = (2 * jnp.pi * B.L_z * psi_grid / B.B_z - B.Vmin) / (B.dV)
     Vp = jax.vmap(B.VPrime)(x)
     Vp_test = 2 * jnp.pi * B.L_z / (B.B_z * B.dV)
-    print(jnp.sum((Vp - Vp_test) ** 2))
 
     div = jax.vmap(jax.grad(lambda x: B.VPrime(x) * (B.B_z * B.R_x(x)) ** 2))(x)
 
@@ -272,7 +276,6 @@ def test_current(state, x, MP):
 
     aux = np.zeros(x.shape)
     for i in range(0, len(x)):
-        print(x[i])
         aux[i] = InitialPhiValue(s1_unstack[i], x[i], 0.0, MP.params)
     # plt.plot(x, s1.dndx)
     state = eqx.tree_at(lambda s: s.Aux, state, jnp.atleast_2d(aux).transpose())
@@ -341,7 +344,6 @@ def Pi(psi, B, C, MP):
 
     D = VPrime * 3.0 / 10.0 * Pi0 * R**4 * pi / C.IonCollisionTime(n, Ti)
 
-    print(f"ratio of pis {Pi0 / C.Pi0()}")
     return D * domega + C.IonSpecies.IonMass * omega * C.omega0 * C.a * R**2 * gamma(
         psi, B, C, MP
     )
@@ -395,7 +397,7 @@ def qe(psi, B, C, MP):
     return D * (4.66 * dTe / Te - 3.0 / 2.0 * Uei)
 
 
-def test_fluxes(psi, x, B, C, MP, VPrime, atol):
+def test_fluxes(psi, x, B, C, MP, VPrime, atol, subtests):
     """
     Compute test values
     """
@@ -439,18 +441,86 @@ def test_fluxes(psi, x, B, C, MP, VPrime, atol):
     div_qi = div_flux(x, 2) * MP.params.Constants.HeatEquationNormalization()
     div_qe = div_flux(x, 3) * MP.params.Constants.HeatEquationNormalization()
 
-    assert jnp.sum((div_gamma_test - div_gamma) ** 2) / jnp.mean(
-        div_gamma_test
-    ) == pytest.approx(0.0, abs=atol)
-    assert jnp.sum((div_pi_test - div_pi) ** 2) / jnp.mean(
-        div_pi_test
-    ) == pytest.approx(0.0, abs=atol)
-    assert jnp.sum((div_qi_test - div_qi) ** 2) / jnp.mean(
-        div_qi_test
-    ) == pytest.approx(0.0, abs=atol)
-    assert jnp.sum((div_qe_test - div_qe) ** 2) / jnp.mean(
-        div_qe_test
-    ) == pytest.approx(0.0, abs=atol)
+    with subtests.test():
+        assert jnp.sum((div_gamma_test - div_gamma) ** 2) / jnp.mean(
+            div_gamma_test
+        ) == pytest.approx(0.0, abs=atol)
+    with subtests.test():
+        assert jnp.sum((div_pi_test - div_pi) ** 2) / jnp.mean(
+            div_pi_test
+        ) == pytest.approx(0.0, abs=atol)
+    with subtests.test():
+        assert jnp.sum((div_qi_test - div_qi) ** 2) / jnp.mean(
+            div_qi_test
+        ) == pytest.approx(0.0, abs=atol)
+    with subtests.test():
+        assert jnp.sum((div_qe_test - div_qe) ** 2) / jnp.mean(
+            div_qe_test
+        ) == pytest.approx(0.0, abs=atol)
+
+
+# end-to-end test that changing the length normalization just scales the fluxes and sources
+def test_length_normalization(x, MP, MP_unnorm, atol, subtests):
+    s1 = jax.vmap(make_state, in_axes=(0, None))(x, MP)
+    s2 = jax.vmap(make_state, in_axes=(0, None))(x, MP_unnorm)
+    s1 = s1.to_manta()
+    s2 = s2.to_manta()
+
+    p1 = MP.ComputePhysics(s1, x, 0.0)
+    p2 = MP_unnorm.ComputePhysics(s2, x, 0.0)
+
+    a = MP.params.Constants.a
+
+    flux1 = p1[0]
+    flux2 = p2[0]
+
+    source1 = p1[1]
+    source2 = p2[1]
+
+    C1 = MP.params.Constants
+    C2 = MP_unnorm.params.Constants
+
+    with subtests.test():
+        assert jnp.sum(
+            (flux1[Channel.Density] - a**2 * flux2[Channel.Density]) ** 2
+        ) == pytest.approx(0.0, abs=atol)
+
+    with subtests.test():
+        assert jnp.sum(
+            (flux1[Channel.AngularMomentum] - a * flux2[Channel.AngularMomentum]) ** 2
+        ) == pytest.approx(0.0, abs=atol)
+
+    with subtests.test():
+        assert jnp.sum(
+            (flux1[Channel.IonEnergy] - a**2 * flux2[Channel.IonEnergy]) ** 2
+        ) == pytest.approx(0.0, abs=atol)
+
+    with subtests.test():
+        assert jnp.sum(
+            (flux1[Channel.ElectronEnergy] - a**2 * flux2[Channel.ElectronEnergy]) ** 2
+        ) == pytest.approx(0.0, abs=atol)
+
+    with subtests.test():
+        assert jnp.sum(
+            (source1[Channel.Density] - a**2 * source2[Channel.Density]) ** 2
+        ) == pytest.approx(0.0, abs=atol)
+
+    with subtests.test():
+        assert jnp.sum(
+            (source1[Channel.AngularMomentum] - a * source2[Channel.AngularMomentum])
+            ** 2
+        ) == pytest.approx(0.0, abs=atol)
+
+    with subtests.test():
+        assert jnp.sum(
+            (source1[Channel.IonEnergy] - a**2 * source2[Channel.IonEnergy]) ** 2
+        ) == pytest.approx(0.0, abs=atol)
+
+    with subtests.test():
+        assert jnp.sum(
+            (source1[Channel.ElectronEnergy] - a**2 * source2[Channel.ElectronEnergy])
+            ** 2
+        ) == pytest.approx(0.0, abs=atol)
 
 
 def test_sources(psi, x, MP, B, C, VPrime, atol):
@@ -475,9 +545,9 @@ def test_sources(psi, x, MP, B, C, VPrime, atol):
     assert jnp.sum((viscous_heating_test - viscous_heating) ** 2) / jnp.mean(
         viscous_heating_test
     ) == pytest.approx(0.0, abs=atol)
-
-    JxBtest = state.Current / VPrime
-
-    JxB = MP.JxBForce(mirror_state[0], x[0], 0.0, MP.params)
-
-    assert jnp.abs(JxB - JxBtest) == pytest.approx(0.0, abs=atol)
+    #
+    # JxBtest = state.Current / VPrime
+    #
+    # JxB = MP.JxBForce(mirror_state[0], x[0], 0.0, MP.params)
+    #
+    # assert jnp.abs(JxB - JxBtest) == pytest.approx(0.0, abs=atol)

@@ -2,23 +2,23 @@ from MirrorPlasma.PlasmaState import MirrorPlasmaConfig
 
 CMFX = MirrorPlasmaConfig(
     0.05,
-    0.2,
-    gamma=5e5,
-    gamma_d=10.0,
-    gamma_h=1e4,
+    0.25,
+    gamma=5e4,
+    gamma_d=100.0,
+    gamma_h=1e5,
     InitialIonTemperatureHeight=0.2,
     InitialElectronTemperatureHeight=0.2,
     InitialMachNumber=8.0,
-    EdgeMachNumber=5.0,
+    EdgeMachNumber=4.0,
     Current=15.0,
     useConstantVoltage=True,
     useNeutralsModel=True,
     NeutralDensity=1e14,
     ParticleSourceHeight=100.0,
     ParticleSourceWidth=0.1,
-    ParticleSourceCenter=0.1,
-    PlasmaVoltage=50e3,
-    ADCoefficient=1e-3,
+    ParticleSourceCenter=0.2,
+    PlasmaVoltage=80e3,
+    ADCoefficient=1.0,
 )
 
 Fusion = MirrorPlasmaConfig(
