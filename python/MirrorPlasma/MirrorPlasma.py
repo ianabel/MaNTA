@@ -225,7 +225,7 @@ class MirrorPlasma(VectorizedTransportSystem):
             G
             * params.Constants.Gamma0()
             / params.Constants.DensityEquationNormalization()
-        ) + 1e-4 * state.dndpsi / state.n
+        ) + params.Config.ADCoefficient * state.dndpsi / state.n
 
     def Pi(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
         GeometricFactor = state.R**4 * state.VPrime
@@ -254,7 +254,7 @@ class MirrorPlasma(VectorizedTransportSystem):
 
         return (
             Pi_out / params.Constants.MomentumEquationNormalization()
-            + 1e-4 * state.domegadpsi / state.omega
+            + params.Config.ADCoefficient * state.domegadpsi / state.omega
         )
 
     def qi(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
@@ -284,7 +284,7 @@ class MirrorPlasma(VectorizedTransportSystem):
         )
         return (
             qi_out / params.Constants.HeatEquationNormalization()
-            + 1e-4 * state.dTidpsi / state.Ti
+            + params.Config.ADCoefficient * state.dTidpsi / state.Ti
         )
 
     def qe(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
@@ -307,7 +307,7 @@ class MirrorPlasma(VectorizedTransportSystem):
             params.Constants.qe0()
             / params.Constants.HeatEquationNormalization()
             * HeatFlux
-        ) + 1e-2 * state.dTedpsi / state.Te
+        ) + params.Config.ADCoefficient * state.dTedpsi / state.Te
 
     # ======================================================================= #
     # Sources                                                                 #
@@ -358,7 +358,7 @@ class MirrorPlasma(VectorizedTransportSystem):
     def ParticleSource(self, state, x, t, params):
         Center = params.Config.ParticleSourceCenter / params.Constants.a
         Width = params.Config.ParticleSourceWidth / params.Constants.a
-        Height = params.Config.ParticleSourceHeight
+        Height = params.Config.ParticleSourceHeight * params.Constants.a**2
         return Height * jnp.exp(-(((state.R - Center) / Width) ** 2))
 
     def IonizationSource(self, state, x, t, params):
@@ -436,7 +436,7 @@ class MirrorPlasma(VectorizedTransportSystem):
     def UniformHeatSource(
         self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams
     ):
-        return 2.0
+        return 20.0 * jnp.exp(-t / 5e-2)
 
     """
     Ion heat sources
@@ -545,7 +545,7 @@ class MirrorPlasma(VectorizedTransportSystem):
     def TotalCurrent(self, states: MirrorPlasmaState, integrator, t):
         Vp = jax.vmap(self.params.MagneticField.VPrime)(self.points)
         dPsi = integrator(1.0 / Vp)
-        deltaPi = states.Pi[0] - states.Pi[-1]
+        deltaPi = -(states.Pi[0] - states.Pi[-1])
 
         sin = eqx.tree_at(lambda s: s.Scalars, states, jnp.zeros(states.Scalars.shape))
 
@@ -698,18 +698,18 @@ class MirrorPlasma(VectorizedTransportSystem):
         """
 
         derivs_Error = jax.grad(self._ScalarG, argnums=1)(
-            0, states_, states_dot_, integrator, t
+            Scalar.Error, states_, states_dot_, integrator, t
         )
         """
         Integral
         """
 
         derivs_Integral = jax.grad(self._ScalarG, argnums=1)(
-            1, states_, states_dot_, integrator, t
+            Scalar.Integral, states_, states_dot_, integrator, t
         )
 
         derivs_dt_Integral = jax.grad(self._ScalarG, argnums=2)(
-            1, states_, states_dot_, integrator, t
+            Scalar.Integral, states_, states_dot_, integrator, t
         )
         """
         Current
@@ -718,11 +718,11 @@ class MirrorPlasma(VectorizedTransportSystem):
             lambda s: s.Scalars, states_, jnp.zeros(states_.Scalars.shape)
         )
         derivs_Current = jax.grad(self._ScalarG, argnums=1)(
-            2, sin, states_dot_, integrator, t
+            Scalar.Current, sin, states_dot_, integrator, t
         )
 
         derivs_dt_Current = jax.grad(self._ScalarG, argnums=2)(
-            2, sin, states_dot_, integrator, t
+            Scalar.Current, sin, states_dot_, integrator, t
         )
 
         dPsi = integrator(1.0 / states.VPrime)
@@ -733,9 +733,7 @@ class MirrorPlasma(VectorizedTransportSystem):
         )
         _flux = jnp.stack([_zeros, _flux, _zeros, _zeros]).transpose()
         # set fluxes
-        derivs_Current = eqx.tree_at(
-            lambda s: s.Flux, derivs_Current, derivs_Current.Flux + _flux
-        )
+        derivs_Current = eqx.tree_at(lambda s: s.Flux, derivs_Current, _flux)
 
         return [
             [derivs_Error, derivs_Integral, derivs_Current],

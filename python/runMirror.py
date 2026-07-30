@@ -6,7 +6,7 @@ from MirrorPlasma.PlasmaState import MirrorPlasmaConfig
 import MirrorPlasma.configs as config
 import numpy as np
 
-nCells = 18
+nCells = 34
 
 
 def cheb_nodes(nCells):
@@ -19,15 +19,16 @@ def cheb_nodes(nCells):
 solver_config = {
     "OutputFilename": "mirror",
     "Grid_points": cheb_nodes(nCells),
-    "Polynomial_degree": 8,
+    "Polynomial_degree": 7,
     "Grid_size": nCells,
-    "tau": 1000.0,
+    "tau": 1.0,
     "Lower_boundary": 0.0,
     "Upper_boundary": 1.0,
     "Relative_tolerance": 1e-3,
+    "Absolute_tolerance": [1e-3],
     "MinStepSize": 1e-10,
-    "delta_t": 0.001,
+    "delta_t": 0.01,
 }
 
 MP = MirrorPlasma(config.CMFX, solver_config=solver_config)
-MP.run()
+MP.run(0.5)

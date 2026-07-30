@@ -230,14 +230,15 @@ Real2nd MirrorPlasma::InitialFunction(Index i, Real2nd V, Real2nd t) const {
   Real2nd n = nEdge + tfac(growth_factors[Channel::Density]) * (nMid - nEdge) *
                           v * v; // cos(pi * (V - xmid) / (xR - xL));
   auto slope = (MUpper - MLower) / (R_Upper - R_Lower);
-  Real2nd M = MLower + slope * (R - R_Lower) +
-              (MMid - 0.5 * (MUpper + MLower)) * v /
-                  exp(-shape * (R - R_mid) *
-                      (R - R_mid)); // MEdge +
-                                    // tfac(growth_factors[Channel::AngularMomentum])
-                                    // * (MMid - MEdge) * (1 - (exp(-shape * (R
-                                    // - R_Upper) * (R - R_Upper)) + exp(-shape
-                                    // * (R - R_Lower) * (R - R_Lower))));
+  Real2nd M =
+      MLower + slope * (R - R_Lower) +
+      (MMid - 0.5 * (MUpper + MLower)) * v /
+          exp(-shape * (R - R_mid) *
+              (R - R_mid)); // MEdge +
+                            // tfac(growth_factors[Channel::AngularMomentum])
+                            // * (MMid - MEdge) * (1 - (exp(-shape * (R
+                            // - R_Upper) * (R - R_Upper)) + exp(-shape
+                            // * (R - R_Lower) * (R - R_Lower))));
   // Real2nd Te = R * R * omega * omega / (M * M);
   Real2nd omega = sqrt(Te) * M / R;
 
@@ -435,7 +436,7 @@ Real MirrorPlasma::Gamma(RealVector u, RealVector q, Real V, Time t) const {
   // Gamma += lowNDiffusivity * nPrime;
   if (std::isfinite(Gamma.val))
     return Gamma; //+ DiffuseHighGradient(u(Channel::Density),
-                  //q(Channel::Density), lowNThreshold, lowNDiffusivity, V);
+                  // q(Channel::Density), lowNThreshold, lowNDiffusivity, V);
   else
     throw std::logic_error(
         "Non-finite value computed for the particle flux at x = " +
@@ -453,7 +454,7 @@ Real MirrorPlasma::Gamma(RealVector u, RealVector q, Real V, Time t) const {
 Real MirrorPlasma::qi(RealVector u, RealVector q, Real V, Time t) const {
   Real n = uToDensity(u(Channel::Density)),
        p_i = (2. / 3.) * u(Channel::IonEnergy); //, p_e = (2. / 3.) *
-                                                //u(Channel::ElectronEnergy);
+                                                // u(Channel::ElectronEnergy);
   // Real Te = p_e / n;
   Real Ti = floor(p_i / n, MinTemp);
   Real nPrime = qToDensityGradient(q(Channel::Density), u(Channel::Density)),
@@ -507,8 +508,9 @@ Real MirrorPlasma::qi(RealVector u, RealVector q, Real V, Time t) const {
   if (x >= 0)
     HeatFlux += x * lowPDiffusivity * Ti_prime * GeometricFactor * R; //
   if (std::isfinite(HeatFlux.val) && std::isfinite(PotentialEnergyFlux.val))
-    return HeatFlux - PotentialEnergyFlux; //+ DiffuseHighGradient(Ti, Ti_prime,
-                                           //lowPThreshold, lowPDiffusivity, V);
+    return HeatFlux -
+           PotentialEnergyFlux; //+ DiffuseHighGradient(Ti, Ti_prime,
+                                // lowPThreshold, lowPDiffusivity, V);
 
   else
     throw std::logic_error(
@@ -616,8 +618,8 @@ Real MirrorPlasma::Pi(RealVector u, RealVector q, Real V, Time t) const {
   // B->dRdV(V, 0.0) / omega); Real lambda_omega = (B->L_V(V) * (R_Upper -
   // R_Lower)) * abs(dOmegadV); Real x = lambda_omega * Plasma->RhoStarRef() -
   // lowLThreshold; Real x = (rho_omega - lowLThreshold) / lowLThreshold; if (x
-  // >= 0) 	Pi_v += x * lowLDiffusivity * GeometricFactor * GeometricFactor *
-  // Chi_L * (dOmegadV); Pi_v += lowLDiffusivity * dOmegadV / (omega); if (x >
+  // >= 0) 	Pi_v += x * lowLDiffusivity * GeometricFactor * GeometricFactor
+  // * Chi_L * (dOmegadV); Pi_v += lowLDiffusivity * dOmegadV / (omega); if (x >
   // 0) 	Pi_v += SmoothTransition(x, transitionLength, lowLDiffusivity) *
   // GeometricFactor * GeometricFactor * Chi_L * (R * R * dOmegadV); /// (R * R
   // * omega);
@@ -776,7 +778,7 @@ Real MirrorPlasma::Spi(RealVector u, RealVector q, RealVector sigma,
     S *= EdgeFactor(0.1); // 1 + 1 / 5e-2 * (xn - 5e-2);
   }
   return S; //+ RelaxSource(u(Channel::Density) * Te, p_e) + RelaxSource(n *
-            //floor(Te, MinTemp), p_e);
+            // floor(Te, MinTemp), p_e);
 }
 
 Real MirrorPlasma::Spe(RealVector u, RealVector q, RealVector sigma,
@@ -836,7 +838,7 @@ Real MirrorPlasma::Spe(RealVector u, RealVector q, RealVector sigma,
   // 	S *= EdgeFactor(tanh(t / 0.01)); // 1 + 1 / 5e-2 * (xn - 5e-2);
   // }
   return S; //+ RelaxSource(u(Channel::Density) * Te, p_e) + RelaxSource(n *
-            //floor(Te, MinTemp), p_e);
+            // floor(Te, MinTemp), p_e);
 };
 
 // Source of angular momentum -- this is just imposed J x B torque (we can

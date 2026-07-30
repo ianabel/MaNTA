@@ -42,12 +42,13 @@ class MirrorPlasmaConfig(eqx.Module):
     MirrorRatio: Float
     NeutralDensity: Float
     useNeutralsModel: Bool = eqx.field(static=True)
+    ADCoefficient: Float
 
     def __init__(
         self,
         Rmin: Float,
         Rmax: Float,
-        MagneticFieldSlope: Float = 0.0,
+        # Initial conditions
         InitialDensityHeight: Float = 0.1,
         EdgeDensity: Float = 0.05,
         InitialIonTemperatureHeight: Float = 0.1,
@@ -56,6 +57,7 @@ class MirrorPlasmaConfig(eqx.Module):
         EdgeElectronTemperature: Float = 0.1,
         InitialMachNumber: Float = 6.0,
         EdgeMachNumber: Float = 3.0,
+        # Voltage controller
         gamma: Float = 10000.0,
         gamma_d: Float = 100.0,
         gamma_h: Float = 1000.0,
@@ -63,14 +65,20 @@ class MirrorPlasmaConfig(eqx.Module):
         useConstantVoltage: Bool = True,
         Current: Float = 0.2,
         CurrentDecay: Float = 1e-3,
+        # Particle source
         ParticleSourceCenter: Float = 0.1,
         ParticleSourceWidth: Float = 0.1,
         ParticleSourceHeight: Float = 50.0,
+        # Magnetic field
         PlasmaLength: Float = 0.6,
+        MagneticFieldSlope: Float = 0.0,
         MagneticFieldStrength: Float = 0.34,
         MirrorRatio: Float = 10.0,
+        # Neutrals
         NeutralDensity: Float = 1e13,
         useNeutralsModel: Bool = False,
+        # Artificial diffusion
+        ADCoefficient: Float = 0.0,
     ):
         self.Rmin = Rmin
         self.Rmax = Rmax
@@ -99,6 +107,7 @@ class MirrorPlasmaConfig(eqx.Module):
         self.MirrorRatio = MirrorRatio
         self.NeutralDensity = NeutralDensity
         self.useNeutralsModel = useNeutralsModel
+        self.ADCoefficient = ADCoefficient
 
 
 class MirrorPlasmaParams(eqx.Module):

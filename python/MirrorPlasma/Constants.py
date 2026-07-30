@@ -159,7 +159,7 @@ class PlasmaConstants(eqx.Module):
         return jnp.sqrt(self.T0 * Te / self.IonSpecies.IonMass)
 
     def FusionRate(self, n, pi):
-        Ti_keV = pi / n * self.T0 / (1000 * self.ElementaryCharge)
+        Ti_keV = pi / n * self.T0eV / 1000.0
         return (
             self.IonSpecies.FusionRate(self.n0 * n, Ti_keV)
             / self.DensityEquationNormalization()
@@ -170,7 +170,10 @@ class PlasmaConstants(eqx.Module):
         return Factor * self.FusionRate(n, pi) / self.HeatEquationNormalization()
 
     def BremsstrahlungLosses(self, n, pe):
-        Pbrem = 5.34e3 * jnp.sqrt(pe / n) * self.Z_eff * n * n
+        n20 = n * self.n0 / 1e20
+        TkeV = pe / n * self.T0eV / 1000.0
+        Pbrem = 5.34e3 * jnp.sqrt(TkeV) * self.Z_eff * n20**2
+
         return Pbrem / self.HeatEquationNormalization()
 
     def CyclotronLosses(self, x, n, Te):
@@ -222,7 +225,7 @@ class PlasmaConstants(eqx.Module):
 
         IonHeating = 3 * pDiff / taue * (1 / self.mu())
 
-        return 10.0 * IonHeating / self.HeatEquationNormalization()
+        return IonHeating / self.HeatEquationNormalization()
 
     # Hold all dimensional values for fluxes here
     def Gamma0(self):
@@ -275,10 +278,6 @@ class PlasmaConstants(eqx.Module):
         vtheta /= jnp.sqrt(vth2)
 
         def Integrand(x, XS):
-            # MmE = Mth - v
-
-            # MpE = Mth + v
-
             def mDensity(V):
                 return jnp.ones(V.shape)
 
@@ -298,75 +297,11 @@ class PlasmaConstants(eqx.Module):
                 * jnp.exp(-(vtheta**2 + 2 * vtheta * x))
             )
 
-            # return xp**2 * jnp.sinh(2 * vtheta * xp) * XS
-
-            # return x * v**2 * XS * (jnp.exp(-(MmE**2)) - jnp.exp(-(MpE**2)))
-
-        # def Integrand(Energy, XS):
-        #     v = jnp.sqrt(2 * ElementaryCharge * Energy / Mass)
-        #     MmE = Mth - v / jnp.sqrt(vth2)
-        #     MpE = Mth + v / jnp.sqrt(vth2)
-        #
-        #     def mDensity(V):
-        #         return jnp.ones(V.shape)
-        #
-        #     def mMomentum(V):
-        #         return Mass * (V - vtheta)
-        #
-        #     def mEnergy(V):
-        #         return 0.5 * Mass * (V * V - 2 * vtheta * V + vtheta * vtheta)
-        #
-        #     x = jax.lax.switch(Moment, [mDensity, mMomentum, mEnergy], v)
-        #
-        #     I = (
-        #         v
-        #         * x
-        #         * ElementaryCharge
-        #         / Mass
-        #         * (XS * 1e-4)
-        #         * (jnp.exp(-MmE * MmE) - jnp.exp(-MpE * MpE))
-        #     )
-        #     return I
-        #
-
-        # min_sqrt = 4
-        #
-        # min_velocity = jax.lax.cond(
-        #     Mth <= min_sqrt, lambda: 0.0, lambda: Mth - min_sqrt
-        # )
-        #
-        # max_velocity = Mth + min_sqrt
-        # minE = jnp.min(jnp.array([minEnergy, min_velocity**2 * T * self.T0eV]))
-        # maxEV = max_velocity**2 * T * self.T0eV
-        # maxE = jnp.min(jnp.array([1e6, maxEV]))
-        #
-        # vgrid = jnp.linspace(
-        #     jnp.sqrt(minE / self.T0eV),
-        #     jnp.sqrt(maxE / self.T0eV),
-        #     self.nIntPoints,
-        # )
         xp = self.abscissae
         Energy = (xp + vtheta) ** 2 * self.T0eV
         XS = CrossSection(Energy) * 1e-4
-        #
-        # plt.plot(self.abscissae, XS)
-        # plt.show()
         I = jnp.dot(Integrand(self.abscissae, XS), self.weights)
         integral = 2.0 * jnp.sqrt(vth2) / jnp.sqrt(jnp.pi) / vtheta * I
-        # jax.debug.print("XS = {val}", val=XS)
-        # integral = jnp.sqrt(vth2 / 2) * jax.scipy.integrate.trapezoid(
-        #     Integrand(vgrid, XS), vgrid
-        # )
-        #
-        # energy_grid = jnp.linspace(minE, maxE, self.nIntPoints)
-        # XS = CrossSection(energy_grid)
-
-        # integral = (
-        #     1
-        #     / vth2
-        #     * jax.scipy.integrate.trapezoid(Integrand(energy_grid, XS), energy_grid)
-        # )
-        #
         return integral
 
     def IonizationRate(self, n, NeutralDensity, v, Te, Ti):

@@ -61,7 +61,7 @@ def config():
     Rmin = 0.1
     Rmax = 0.4
     B_z = 0.34
-    args = {"MagneticFieldStrength": B_z}
+    args = {"MagneticFieldStrength": B_z, "ADCoefficient": 0.0}
 
     return MirrorPlasmaConfig(Rmin, Rmax, **args)
 
@@ -232,41 +232,37 @@ def test_neutrals(atol):
 
     H = Hydrogen()
     B = StraightMagneticField()
-    v = 6.0
+    v = 5.0
     n = 1.0
     pi = 1.0
     C = PlasmaConstants(H, B, _nIntPoints=200)
+    T = pi / n
+
+    vth2 = 2 * T * C.T0 / H.IonMass
+    v *= C.cs0
 
     def XS(Energy):
         return 1e4
 
-    T = pi / n
-    vtheta = v * C.cs0
-    vth2 = 2 * T * C.T0 / H.IonMass
-    Mth = vtheta / jnp.sqrt(vth2)
-    #
-    # def Ian():
-    #     spi = np.sqrt(np.pi)
-    #     v2 = vtheta**2
-    #     a1 = v2 * (2 * gammaincc(0.5, v2) - 2 * spi)
-    #     a2 = 4 * gammaincc(1, v2) * vtheta
-    #     a3 = 2 * gammaincc(3.0 / 2.0, v2)
-    #
-    #     return -0.25 * (a1 - a2 + a3 - spi)
-    #
-    A = Mth
-    Rtest = jnp.sqrt(vth2 / 2) * (
-        -gammaincc(1 / 2, A**2) * A**2
-        + jnp.sqrt(jnp.pi) * A**2
-        + 2 * gammaincc(1, A**2) * A
-        - gammaincc(3 / 2, A**2)
-        + jnp.sqrt(jnp.pi) / 2
-    )
+    def Ian(v):
+        spi = np.sqrt(np.pi)
+        v2 = v**2
+        a1 = v2 * (2 * gammaincc(0.5, v2) - 2 * spi)
+        a2 = 4 * gammaincc(1, v2) * v
+        a3 = 2 * gammaincc(3.0 / 2.0, v2)
 
-    Rtest /= jnp.sqrt(jnp.pi) * Mth
+        return -0.25 * (a1 - a2 + a3 - spi)
+
+    Rtest = (
+        Ian(v / jnp.sqrt(vth2))
+        * 2.0
+        * jnp.sqrt(vth2)
+        / jnp.sqrt(jnp.pi)
+        / (v / jnp.sqrt(vth2))
+    )
     R = C.NeutralProcess(XS, v, T, H.IonMass, 0.0)
 
-    assert jnp.sum((R - Rtest) ** 2 / Rtest) == pytest.approx(0.0, abs=atol)
+    assert jnp.abs((R - Rtest) / Rtest) == pytest.approx(0.0, abs=atol)
 
 
 def test_current(state, x, MP):
@@ -322,7 +318,6 @@ def gamma(psi, B, C, MP):
             * C.ReferenceElectronCollisionTime()
         )
     )
-    print(f"ratio of gammas {gamma0 / C.Gamma0()}")
 
     D = gamma0 * VPrime * R**2 * pe / (C.ElectronCollisionTime(n, Te))
 
@@ -480,3 +475,9 @@ def test_sources(psi, x, MP, B, C, VPrime, atol):
     assert jnp.sum((viscous_heating_test - viscous_heating) ** 2) / jnp.mean(
         viscous_heating_test
     ) == pytest.approx(0.0, abs=atol)
+
+    JxBtest = state.Current / VPrime
+
+    JxB = MP.JxBForce(mirror_state[0], x[0], 0.0, MP.params)
+
+    assert jnp.abs(JxB - JxBtest) == pytest.approx(0.0, abs=atol)
