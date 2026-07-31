@@ -1,14 +1,11 @@
 import jax
 import jax.numpy as jnp
-import numpy as np
 import equinox as eqx
-from numpy.random import geometric
-from scipy.integrate import quad
+from MirrorPlasma.Config import MirrorPlasmaConfig
 from MirrorPlasma.PlasmaState import (
     MirrorPlasmaDecorator,
     MirrorPlasmaParams,
     MirrorPlasmaState,
-    MirrorPlasmaConfig,
     Channel,
     Scalar,
 )
@@ -27,7 +24,7 @@ from functools import partial
 
 sys.path.append("..")
 from VectorizedTransportSystem import VectorizedTransportSystem
-from State import State, MaNTA_Decorator, ScalarG_Decorator, ScalarGPrime_Decorator
+from State import State, ScalarG_Decorator, ScalarGPrime_Decorator
 import MaNTA
 
 
@@ -530,7 +527,7 @@ class MirrorPlasma(VectorizedTransportSystem):
         )
 
     # ======================================================================= #
-    # Scalars                                                                #
+    # Scalars                                                                 #
     # ======================================================================= #
 
     def InitialCurrent(self, t):

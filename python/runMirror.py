@@ -2,7 +2,6 @@ import jax
 
 jax.config.update("jax_enable_x64", True)
 from MirrorPlasma.MirrorPlasma import MirrorPlasma
-from MirrorPlasma.PlasmaState import MirrorPlasmaConfig
 import MirrorPlasma.configs as config
 import numpy as np
 
@@ -17,6 +16,7 @@ def cheb_nodes(nCells):
 
 
 solver_config = {
+    "restart": False,
     "OutputFilename": "mirror",
     "Grid_points": cheb_nodes(nCells),
     "Polynomial_degree": 7,
@@ -24,7 +24,7 @@ solver_config = {
     "tau": 10000.0,
     "Lower_boundary": 0.0,
     "Upper_boundary": 1.0,
-    "Relative_tolerance": 1e-3,
+    "Relative_tolerance": 1e-2,
     "Absolute_tolerance": [1e-3],
     "MinStepSize": 1e-10,
     "delta_t": 0.01,
