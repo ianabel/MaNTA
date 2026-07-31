@@ -354,7 +354,9 @@ class MirrorPlasma(VectorizedTransportSystem):
         Center = params.Config.ParticleSourceCenter / params.Constants.a
         Width = params.Config.ParticleSourceWidth / params.Constants.a
         Height = params.Config.ParticleSourceHeight * params.Constants.a**2
-        return Height * jnp.exp(-(((state.R - Center) / Width) ** 2))
+        return (
+            Height * jnp.exp(-(((state.R - Center) / Width) ** 2)) * jnp.exp(-t / 1e-2)
+        )
 
     def IonizationSource(self, state, x, t, params):
         return (
@@ -432,7 +434,7 @@ class MirrorPlasma(VectorizedTransportSystem):
     def UniformHeatSource(
         self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams
     ):
-        return params.Constants.a**2 * 500.0 * jnp.exp(-t / 5e-2)
+        return params.Constants.a**2 * 200.0 * jnp.exp(-t / 1e-2)
 
     """
     Ion heat sources

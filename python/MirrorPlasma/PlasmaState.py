@@ -34,6 +34,7 @@ class MirrorPlasmaParams(eqx.Module):
             a = config.Rmax - config.Rmin
         else:
             a = 1.0
+
         B = config.MagneticField
         P = config.IonSpecies
 
@@ -157,6 +158,7 @@ class MirrorPlasmaState(eqx.Module):
         pe = 2.0 / 3.0 * state.Variable[Channel.ElectronEnergy]
 
         Ti = pi / n
+
         Te = pe / n
 
         R = params.MagneticField.R_x(x) / a

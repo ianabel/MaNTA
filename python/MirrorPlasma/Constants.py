@@ -9,6 +9,7 @@ from MirrorPlasma.MagneticField import _MagneticField
 from MirrorPlasma.IonSpecies import _IonSpecies
 import matplotlib.pyplot as plt
 import numpy as np
+import pickle
 
 
 class MomentType(enum.IntEnum):
@@ -30,8 +31,8 @@ class PlasmaConstants(eqx.Module):
     B0: Float = eqx.field(static=True)
     cs0: Float = eqx.field(static=True)
     nIntPoints: Int = eqx.field(static=True)
-    weights: Float[ArrayLike, "..."]
-    abscissae: Float[ArrayLike, "..."]
+    land: tuple
+    herm: tuple
     ElectronMass = 9.1094e-31
     ProtonMass = 1.6726e-27
     ElementaryCharge = 1.60217663e-19
@@ -61,10 +62,13 @@ class PlasmaConstants(eqx.Module):
         self.nIntPoints = _nIntPoints
         self.omega0 = self.cs0 / self.a
 
-        self.abscissae, self.weights = np.polynomial.hermite.hermgauss(10)
-        # with open("util/land.pkl", "rb") as file:
-        #     self.abscissae = pickle.load(file)
-        #     self.weights = jnp.array(pickle.load(file))
+        a, w = np.polynomial.hermite.hermgauss(19)
+        self.herm = (a, w)
+
+        with open("util/land.pkl", "rb") as file:
+            a = pickle.load(file)
+            w = jnp.array(pickle.load(file))
+            self.land = (a, w)
 
     def ReferenceElectronCollisionTime(self):
         LogLambdaRef = 24.0 - jnp.log(self.n0cgs) / 2.0 + jnp.log(self.T0eV)
@@ -277,7 +281,7 @@ class PlasmaConstants(eqx.Module):
         vth2 = 2 * T * self.T0 / Mass
         vtheta /= jnp.sqrt(vth2)
 
-        def Integrand(x, XS):
+        def IntegrandHermite(x, XS):
             def mDensity(V):
                 return jnp.ones(V.shape)
 
@@ -297,10 +301,36 @@ class PlasmaConstants(eqx.Module):
                 * jnp.exp(-(vtheta**2 + 2 * vtheta * x))
             )
 
-        xp = self.abscissae
-        Energy = (xp + vtheta) ** 2 * self.T0eV
+        def IntegrandLandremann(x, XS):
+            def mDensity(V):
+                return jnp.ones(V.shape)
+
+            def mMomentum(V):
+                return Mass * (V - vtheta)
+
+            def mEnergy(V):
+                return 0.5 * Mass * (V * V - 2 * vtheta * V + vtheta * vtheta)
+
+            # x = jax.lax.switch(Moment, [mDensity, mMomentum, mEnergy], v)
+
+            return XS * jnp.exp(-(vtheta**2)) * x**2 * jnp.sinh(2 * vtheta * x)
+
+        x, w = jax.lax.cond(
+            jax.lax.le(vtheta, 4.0), lambda: self.land, lambda: self.herm
+        )
+        Energy = jax.lax.cond(
+            jax.lax.le(vtheta, 4.0),
+            lambda _x: _x**2 * self.T0eV,
+            lambda _x: (_x + vtheta) ** 2 * self.T0eV,
+            x,
+        )
         XS = CrossSection(Energy) * 1e-4
-        I = jnp.dot(Integrand(self.abscissae, XS), self.weights)
+
+        integrand = jax.lax.cond(
+            jax.lax.le(vtheta, 4.0), IntegrandLandremann, IntegrandHermite, x, XS
+        )
+
+        I = jnp.dot(integrand, w)
         integral = 2.0 * jnp.sqrt(vth2) / jnp.sqrt(jnp.pi) / vtheta * I
         return integral
 

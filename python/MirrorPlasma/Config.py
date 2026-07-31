@@ -9,17 +9,17 @@ from jaxtyping import Float, ArrayLike, Bool
 
 
 class MirrorPlasmaConfig(eqx.Module):
-    Rmin: Float = eqx.field(static=True)
-    Rmax: Float = eqx.field(static=True)
+    Rmin: Float
+    Rmax: Float
     MagneticFieldSlope: Float
-    InitialDensityHeight: Float = eqx.field(static=True)
-    EdgeDensity: Float = eqx.field(static=True)
-    InitialIonTemperatureHeight: Float = eqx.field(static=True)
-    EdgeIonTemperature: Float = eqx.field(static=True)
-    InitialElectronTemperatureHeight: Float = eqx.field(static=True)
-    EdgeElectronTemperature: Float = eqx.field(static=True)
-    InitialMachNumber: Float = eqx.field(static=True)
-    EdgeMachNumber: Float = eqx.field(static=True)
+    InitialDensityHeight: Float
+    EdgeDensity: Float
+    InitialIonTemperatureHeight: Float
+    EdgeIonTemperature: Float
+    InitialElectronTemperatureHeight: Float
+    EdgeElectronTemperature: Float
+    InitialMachNumber: Float
+    EdgeMachNumber: Float
     gamma: Float
     gamma_d: Float
     gamma_h: Float
@@ -70,6 +70,8 @@ class MirrorPlasmaConfig(eqx.Module):
         MagneticFieldSlope: Float = 0.0,
         MagneticFieldStrength: Float = 0.34,
         MirrorRatio: Float = 10.0,
+        # IonSpecies
+        IonSpecies: _IonSpecies = Hydrogen(),
         # Neutrals
         NeutralDensity: Float = 1e13,
         useNeutralsModel: Bool = False,
@@ -106,7 +108,7 @@ class MirrorPlasmaConfig(eqx.Module):
         self.NeutralDensity = NeutralDensity
         self.useNeutralsModel = useNeutralsModel
         self.ADCoefficient = ADCoefficient
-        self.IonSpecies = Hydrogen()
+        self.IonSpecies = IonSpecies
         self.MagneticField = StraightMagneticField(
             _L_z=self.PlasmaLength,
             _B_z=self.MagneticFieldStrength,
