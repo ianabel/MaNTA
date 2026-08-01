@@ -2,16 +2,18 @@
 #define LOGGING_HPP
 #include <cstdio>
 #include <print>
+#include <vector>
 #include <stdexcept>
 #include <string_view>
 
+// Specialization of std::formatter to std::vector<double> is not
+// available in libstdc++ until 15
 #if defined(__GNUC__) && (__GNUC__ < 15)
-// taken from Google, for some reason g++ 14 supports C++23 but not std::vector
-// in std::println
-template <> struct std::formatter<std::vector<double>, char> {
+
+template <> struct std::formatter< std::vector<double, std::allocator<double> >, char > {
   // 1. parse: parses format specifiers (e.g., {:x})
   constexpr auto parse(format_parse_context &ctx) {
-    return ctx.begin(); // We can ignore specifiers for this basic example
+    return ctx.begin(); // ignore -- we don't use these in our code apparently?
   }
 
   // 2. format: writes the formatted data to the output context
@@ -27,7 +29,9 @@ template <> struct std::formatter<std::vector<double>, char> {
     return std::format_to(out, "]");
   }
 };
+
 #endif
+
 enum class LOG_LEVEL {
   ERROR,
   WARNING,
