@@ -104,8 +104,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
         // Zero most of dydt, we only have to set it to nonzero values for the differential parts of y
 
-        auto sigma_wrapper = [this](Index i, const State &s, Position x, Time t)
-        { return -problem->SigmaFn(i, s, x, t); };
+        auto sigma_wrapper = [this](Index i, GlobalState const &s, std::vector<Position> x) { return -problem->SigmaFn(i, s, x, t0); };
         y.AssignSigma(sigma_wrapper);
 
         y.EvaluateLambda();

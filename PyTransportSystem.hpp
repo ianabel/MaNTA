@@ -31,13 +31,6 @@ public:
 				throw std::runtime_error(std::string("Pure virtual method ") + method_name + " not overridden in Python subclass");
 			}
 		};
-		method_overrides.insert(std::make_pair("SigmaFn", make_override("SigmaFn")));
-		method_overrides.insert(std::make_pair("Sources", make_override("Sources")));
-		method_overrides.insert(std::make_pair("dSigmaFn_du", make_override("dSigmaFn_du")));
-		method_overrides.insert(std::make_pair("dSigmaFn_dq", make_override("dSigmaFn_dq")));
-		method_overrides.insert(std::make_pair("dSources_dq", make_override("dSources_dq")));
-		method_overrides.insert(std::make_pair("dSources_du", make_override("dSources_du")));
-		method_overrides.insert(std::make_pair("dSources_dsigma", make_override("dSources_dsigma")));
 		if (nAux > 0)
 		{
 			method_overrides.insert(std::make_pair("AuxGPrime", make_override("AuxGPrime")));

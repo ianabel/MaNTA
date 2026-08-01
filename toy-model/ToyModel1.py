@@ -33,7 +33,7 @@ class PythonToyModel(MaNTA.TransportSystem):
         self.a = 6.0
         self.b = 0.02
         self.c = 0.3
-        seld.d = 50.0
+        self.d = 50.0
 
         self.u1 = 0.3
 
@@ -42,7 +42,16 @@ class PythonToyModel(MaNTA.TransportSystem):
     def LowerBoundary(self, index, t):
         return 0.0
     def UpperBoundary(self, index, t):
-        return u1
+        return self.u1
+
+    """
+    Old Non-vectorised interface
+    """
+    def SigmaFn( self, index, state, position, t ):
+        pass
+
+    def Sources( self, index, state, position, t ):
+        pass
 
     """
     Sigma_v and Sources_v, are vectorised calls to the flux and source functions
@@ -51,9 +60,9 @@ class PythonToyModel(MaNTA.TransportSystem):
     ----------
     index : int
         Variable index
-    states : array of dictionarie
-        Element i is a dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
-        which describe the system state at point i
+    states : dictionary of arrays
+        dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
+        which describe the system state at the points below
     positions : array of float
         Spatial locations where data is required, indexing corresponds to the states array
     t : float
@@ -63,14 +72,13 @@ class PythonToyModel(MaNTA.TransportSystem):
     float
         Computed sigma or source term
     """
-    def SigmaFn_v( self, index, states, positions, t):
+    def SigmaFn_v( self, index, state, positions, t):
         nPoints = len(positions)
         SigmaVals = np.empty( nPoints )
-        for i in nPoints:
-            state = states[i]
+        for i in range(nPoints):
             # [0] needed on the end as state['Variables'] is a one-element array because there's one variable
-            u    = state['Variable'][0]
-            dudx = state['Derivative'][0]
+            u    = state['Variable'][0][i]
+            dudx = state['Derivative'][0][i]
             flux = ( self.a / np.pow( u, 1.5 ) ) * dudx
             SigmaVals[i] = flux
         return SigmaVals
@@ -79,13 +87,56 @@ class PythonToyModel(MaNTA.TransportSystem):
     def Sources_v( self, index, states, positions, t ):
         nPoints = len(positions)
         SourceVals = np.empty( nPoints )
-        for i in nPoints:
+        for i in range(nPoints):
             x = positions[i]
             SourceVals[i] = self.d * np.exp( -( x - self.c ) ** 2 / self.b )
         return SourceVals
 
-    def dSigma(self, index, states, positions, t):
-    def dSources(self, index, states, positions, t):
+# Return value from the dSigma and dSources functions is
+# {
+# "Variable": [nVars x nPoints],
+# "Derivative": [nVars x nPoints],
+# "Flux": [nVars x nPoints],
+# "Aux": [nAux x nPoints],
+# "Scalars" :[nScalars]
+# }
+# where out["Variable"][i][j] is d Sigma_(index) / d u_(i) evaluated at the state at x = x_j
+#
+# 'Flux' is included in case the *sources* depend on the value of teh Sigma functions
+# 'Aux' and 'Scalars' are for auxiliary algebraic functions of space or global scalars respectively
+
+    def dSigma(self, index, state, positions, t):
+        nPoints = len(positions)
+        out["Variable"] = np.empty( shape=(self.nVars,nPoints) )
+        out["Derivative"] = np.empty( shape=(self.nVars,nPoints) )
+        out["Flux"] = np.zeros( shape=(self.nVars,nPoints) )
+        out["Aux"] = np.zeros( shape=(self.nAux,nPoints) )
+        out["Scalars"] = []
+
+        # Sigma = (a/u^(3/2))*(du/dx)
+        # d Sigma / d u = -(3/2) (a/u^(5/2))*(du/dx)
+        # d Sigma / d (du/dx) =  (a/u^(3/2))
+
+        for i in range(nPoints):
+            x = positions[i]
+            u    = state['Variable'][0][i]
+            dudx = state['Derivative'][0][i]
+            out['Variable'][0][i]   = -(3/2) (self.a/np.pow( u, 2.5 )) * dudx
+            out['Derivative'][0][i] = (self.a/np.pow( u, 1.5 ))
+
+        return out
+
+
+    # Our Source is just a function of 'x' (i.e. no reaction-like terms),
+    # so zeros here is all we need
+    def dSources(self, index, state, positions, t):
+        nPoints = len(positions)
+        out["Variable"] = np.zeros( shape=(self.nVars,nPoints) )
+        out["Derivative"] = np.zeros( shape=(self.nVars,nPoints) )
+        out["Flux"] = np.zeros( shape=(self.nVars,nPoints) )
+        out["Aux"] = np.zeros( shape=(self.nAux,nPoints) )
+        out["Scalars"] = []
+        return out
 
     # We need initial u and du/dx at t=0
     def InitialValue( self, index, x ):
@@ -107,5 +158,5 @@ class PythonToyModel(MaNTA.TransportSystem):
         return 1.0/(u2**2)
 
 def registerTransportSystems():
-    MaNTA.registerPhysicsCase("ToyModel1", PythonLinearDiffusion)
+    MaNTA.registerPhysicsCase("ToyModel1", PythonToyModel)
 

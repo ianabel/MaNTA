@@ -48,7 +48,6 @@ if "PythonModuleName" in conf:
 
     module_handle.registerTransportSystems()
 
-
 MaNTA.run( filename )
 
 

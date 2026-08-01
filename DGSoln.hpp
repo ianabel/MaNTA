@@ -144,7 +144,7 @@ public:
         return out;
     }
 
-    GlobalState evalOnNodes() const 
+    GlobalState evalOnNodes() const
     {
         GlobalState out(grid.getNCells(), k, nVars, nScalars, nAux);
 
@@ -282,6 +282,23 @@ public:
             // Just set boundaries to the trace value of u. BCs are someone else's job
             lambda_[var](0) = Basis.Evaluate(grid[0], u_[var].coeffs[0].second, grid.lowerBoundary());
             lambda_[var](nCells) = Basis.Evaluate(grid[nCells - 1], u_[var].coeffs[nCells - 1].second, grid.upperBoundary());
+        }
+    };
+
+    void AssignSigma(std::function<Values(Index, GlobalState const &, std::vector<Position> const & )> sigmaFn )
+    {
+        auto nodes = getPoints();
+        auto global_state = evalOnNodes();
+        for( Index var = 0; var < nVars; ++var ) {
+            Values out = sigmaFn( var, global_state, nodes );
+
+            for (size_t i = 0; i < grid.getNCells(); i++)
+            {
+                for (Index j = 0; j < k + 1; j++)
+                {
+                    sigma_[var].coeffs[i].second(j) = out( i * ( k + 1 ) + j );
+                }
+            }
         }
     };
 
