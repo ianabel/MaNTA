@@ -67,7 +67,9 @@ template <typename T>
 T getValueWithDefault(std::string_view key, const py::dict &d) {
   if (d.contains(key)) {
     try {
-      return d[key.data()].cast<T>();
+      auto val = d[key.data()].cast<T>();
+      logmsg<LOG_LEVEL::INFO>("Using value {} for parameter {}", val, key);
+      return val;
     } catch (const std::exception &e) {
       throw std::runtime_error(
           "The following error occured while trying to get the value of key: " +
@@ -142,8 +144,6 @@ void PyRunner::configure(const py::dict &config) {
         getValueWithDefault<std::vector<double>>("Grid_points", config);
 
     if (CellBoundaries.size() > 0) {
-      logmsg<LOG_LEVEL::INFO>("Creating grid with cell boundaries at x = {}",
-                              CellBoundaries);
 
       grid = std::make_unique<Grid>(CellBoundaries);
     } else {
@@ -162,11 +162,6 @@ void PyRunner::configure(const py::dict &config) {
           getValueWithDefault<double>("Upper_Boundary_Fraction", config);
 
       nCells = getValueWithDefault<int>("Grid_size", config);
-      logmsg<LOG_LEVEL::INFO>(
-          "Grid configured with lower boundary at x = {} and "
-          "upper boundary at x = {}",
-          lBound, uBound);
-
       grid =
           std::make_unique<Grid>(lBound, uBound, nCells, highGridBoundary,
                                  lowerBoundaryFraction, upperBoundaryFraction);

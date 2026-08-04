@@ -392,10 +392,14 @@ public:
           e.what());
     }
   }
+
   Value AuxG(Index i, const State &s, Position x, Time t) override {
     if (nAux > 0) {
       PYBIND11_OVERRIDE_PURE(Value, TransportSystem, AuxG, i, s, x, t);
+    } else {
+      throw std::runtime_error("AuxG called with nAux <= 0"); 
     }
+    throw std::runtime_error("Control reached beyond PYBIND11_OVERRIDE_PURE in AuxG. This should never happen");
   }
 
   void AuxGPrime(Index i, GlobalState &out, GlobalState const &states,
@@ -452,10 +456,16 @@ public:
   }
 
   Value InitialScalarValue(Index s) const override {
+
     if (nScalars > 0) {
       PYBIND11_OVERRIDE_PURE(Value, TransportSystem, InitialScalarValue, s);
+    } else {
+      throw std::runtime_error("InitialScalarValue called with nScalars <= 0"); 
     }
+
+    throw std::runtime_error("Control reached beyond PYBIND11_OVERRIDE_PURE. This should never happen");
   }
+
   Value InitialScalarDerivative(Index s, const DGSoln &y,
                                 const DGSoln &dydt) const override {
     py::gil_scoped_acquire gil;
@@ -470,6 +480,7 @@ public:
             .cast<Value>();
     return out;
   }
+
   Value ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt,
                         Time t) override {
     if (!initialized)
@@ -501,7 +512,6 @@ public:
     auto temp =
         method_overrides["ScalarGPrime"](
             state, state_dot, Integrator::getIntegrationWeights(basis, grid),
-            Integrator::getPhiCell(basis, grid),
             Integrator::getPhiBoundary(basis, grid), t)
             .cast<std::array<std::vector<py::dict>, 2>>();
 
@@ -514,8 +524,12 @@ public:
   bool isScalarDifferential(Index i) override {
     if (nScalars > 0) {
       PYBIND11_OVERRIDE_PURE(bool, TransportSystem, isScalarDifferential, i);
+    } else {
+      throw std::runtime_error( "isScalarDifferential called with nScalars <=0 0" );
     }
+    throw std::runtime_error( "Control passed beyond PYBIND11_OVERRIDE_PURE in isScalarDifferential; this should never happen!" );
   }
+
   void dSources_dScalars(Index s, VectorRef v, const State &state, Position x,
                          Time t) override {
 

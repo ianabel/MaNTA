@@ -3,8 +3,10 @@
 
 #include <algorithm>
 #include <utility>
+#include <map>
 
 #include "Types.hpp"
+#include "gridStructures.hpp"
 #include <boost/math/special_functions/legendre.hpp>
 #include <boost/math/special_functions/binomial.hpp>
 
