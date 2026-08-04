@@ -26,6 +26,7 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
 
         self.sigma = transport_system.sigma
         self.source = transport_system.source
+        self.aux = transport_system.aux
 
         self.daux_dp = jax.jit(jax.grad(transport_system.aux, argnums=4))
 
@@ -83,7 +84,6 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
 
         for i in range(0, self.nAux):
             aux.append(self.dAux(i, states, positions))
-        print(fluxes)
         return [fluxes, sources, aux]
 
     @eqx.filter_jit

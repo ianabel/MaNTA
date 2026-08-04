@@ -1,11 +1,14 @@
 from functools import partial
+
+from scipy.constants import elementary_charge
 from FFIRunner import FFIRunner
 from typing import NamedTuple
 import yancc
 from yancc_wrapper2 import yancc_data
-from State import State
+from State import State, Physics_Decorator
+from StellaratorState import StellaratorState, StellaratorParams, StellaratorDecorator
 from yancc.solve import solve_dke
-from yancc.species import LocalMaxwellian
+from yancc.species import LocalMaxwellian, Electron, Hydrogen
 from desc.backend import tree_unstack
 import interpax
 from desc.batching import vmap_chunked
@@ -16,6 +19,7 @@ import numpy as np
 import jax.numpy as jnp
 import equinox as eqx
 import jax
+import enum
 import MaNTA
 import os
 
@@ -79,6 +83,25 @@ def MaNTA_Decorator(func):
     return wrapper
 
 
+def shard_inputs(func):
+    def wrapper(self, states, positions, *args):
+        # print(states)
+
+        def _wrap_shard(self, *args):
+            args_s = tuple(
+                jax.device_put(arg, data_sharding)
+                if not jnp.isscalar(arg)
+                else jax.device_put(arg, static_sharding)
+                for arg in args
+            )
+            return func(self, *args_s)
+
+        result = _wrap_shard(self, states, positions, *args)
+        return result
+
+    return wrapper
+
+
 def put_on_gpu(tree):
     #    def map_fn(leaf):
     #        if not jnp.isscalar(leaf):
@@ -92,31 +115,10 @@ def put_on_gpu(tree):
     return tree
 
 
-class StellaratorParams(NamedTuple):
-    SourceCenter: float
-    SourceHeight: float
-    SourceWidth: float
-    EdgeTemperature: float
-    EdgeDensity: float
-    n0: float
-
-    @classmethod
-    def from_config(cls, config: MaNTA.TomlValue):
-        return cls(
-            SourceCenter=config["SourceCenter"],
-            SourceHeight=config["SourceHeight"],
-            SourceWidth=config["SourceWidth"],
-            EdgeTemperature=config["EdgeTemperature"],
-            EdgeDensity=config["EdgeDensity"],
-            n0=config["n0"],
-        )
-
-
 # Magic tuple to make vmap work
 vmap_axes = (State.vmap_axes(), 0)
-vmap_axes_wfield = (None, State.vmap_axes(), 0, None, 0, 0, 0, None, None)
+vmap_axes_wfield = (State.vmap_axes(), 0, None, 0, 0, 0, None)
 vmap_axes_sources = (None, State.vmap_axes(), 0, None, 0, None)
-
 """
 class StellaratorTransport
 
@@ -127,8 +129,6 @@ Computes sources and neoclassical fluxes (returned from yancc) as required by Ma
 class StellaratorTransport(MaNTA.TransportSystem):
     def __init__(self, config, yancc_wrapper: yancc_data):
         MaNTA.TransportSystem.__init__(self)
-        self.nVars = 1
-        self.nAux = 0
 
         ### Remember to set boundary conditions ####
         self.isUpperDirichlet = True
@@ -138,7 +138,14 @@ class StellaratorTransport(MaNTA.TransportSystem):
         self.points = yancc_wrapper.rho
         # self.points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
 
-        self.params = StellaratorParams.from_config(st_config)
+        self.params = StellaratorParams(**st_config)
+
+        if self.params.evolveDensity:
+            self.nVars = 3
+            self.nAux = 1
+        else:
+            self.nVars = 1
+            self.nAux = 0
 
         self.xL = solver_config["Lower_boundary"]
         self.xR = solver_config["Upper_boundary"]
@@ -147,38 +154,23 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         e = 1.6e-19
         self.pnorm = 1e20 * e * 1e3
-        use_chunking = st_config["use_chunking"]
-        self.chunk_size = 0
-        # if use_chunking:
-        #     self.chunk_size = 2 * len(devices) if jnp.mod(len(self.points), 2 * len(devices)) == 0 else len(devices)
-        #     print("Using chunking with chunk size " + str(self.chunk_size) + " on " + str(len(devices)) + " devices")
-
-        # %%
-
         self.field, self.vp, self.vpp = self.yancc_wrapper.get_fields()
         (self.field_shard, self.vp_shard, self.vpp_shard) = eqx.filter_shard(
             (self.field, self.vp, self.vpp), data_sharding
         )
-
-        # self.field_shard = put_on_gpu(self.field)
-        # self.vp_shard = jax.device_put(self.vp, data_sharding) #put_on_gpu(self.field)
-        # self.vpp_shard = jax.device_put(self.vpp, data_sharding)
-        # self.field_shard, self.vprime_shard = eqx.filter_shard((self.field, self.vprime), data_sharding)
         self.vp_interp = interpax.Akima1DInterpolator(self.points, self.vp, check=False)
-        g = [self.StoredEnergy]
+        # g = [self.StoredEnergy]
 
-        self.adjointProblem = StellaratorAdjointProblem(
-            self, g, self.yancc_wrapper, len(self.points), chunk_size=self.chunk_size
-        )
-
-        self.runner = FFIRunner(
-            self, self.points, 1, self.adjointProblem.np, spatialParameters=True
-        )
+        # self.adjointProblem = StellaratorAdjointProblem(
+        #     self, g, self.yancc_wrapper, len(self.points)
+        # )
+        #
+        np = 0
+        self.runner = FFIRunner(self, self.points, 1, np, spatialParameters=True)
 
         print("configuring")
         self.runner.configure(solver_config)
         # io_callback(lambda : self.runner.configure(solver_config), [], ordered = True)
-        self.f1_cache = None
         print("Successfully created StellaratorTransport object")
 
     def run(self, tFinal=None):
@@ -198,23 +190,16 @@ class StellaratorTransport(MaNTA.TransportSystem):
         ui = self.runner.Get_profile(0) / self.vp
         return 2.0 / 3.0 * ui * self.pnorm
 
-    def getTemperature(self, points=None):
-        return self.getPressure(points) / self.Density(points)
-
     def LowerBoundary(self, index, t):
         return 0.0  # self.uL
 
     def UpperBoundary(self, index, t):
         return self.InitialValue(index, self.xR)
 
-    @MaNTA_Decorator
-    def SigmaFn_v(self, index, states: State, positions, t):
-        in_axes = (
-            vmap_axes_wfield if self.f1_cache is None else vmap_axes_wfield[:-1] + (0,)
-        )
-        sigma_vmap = eqx.filter_vmap(self.sigma, in_axes=in_axes)
-        flux, _ = sigma_vmap(
-            index,
+    @Physics_Decorator
+    @shard_inputs
+    def ComputePhysics(self, states, positions, t):
+        dke_data = eqx.filter_vmap(self.compute_dke_sol, in_axes=vmap_axes_wfield)(
             states,
             positions,
             t,
@@ -222,25 +207,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.vp_shard,
             self.vpp_shard,
             self.params,
-            self.f1_cache,
         )
-        return flux
-
-    @MaNTA_Decorator
-    def Sources_v(self, index, states: State, positions, t):
-        source_vmap = eqx.filter_vmap(self.source, in_axes=(vmap_axes_sources))
-        return source_vmap(index, states, positions, t, self.vp_shard, self.params)
-
-    @MaNTA_Decorator
-    def dSigma(self, index, states: State, positions, t):
-        fgrad = jax.grad(self.sigma, argnums=1, has_aux=True)
-
-        in_axes = (
-            vmap_axes_wfield if self.f1_cache is None else vmap_axes_wfield[:-1] + (0,)
-        )
-        fgrad_vmap = eqx.filter_vmap(fgrad, in_axes=in_axes)
-        dflux = fgrad_vmap(
-            index,
+        sources = eqx.filter_vmap(self.compute_sources, in_axes=vmap_axes_wfield)(
             states,
             positions,
             t,
@@ -248,30 +216,57 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.vp_shard,
             self.vpp_shard,
             self.params,
-            self.f1_cache,
-        )[0]
-        return dflux
+        )
 
-    @MaNTA_Decorator
-    def dSources(self, index, states: State, positions, t):
-        grad = jax.grad(self.source, argnums=1)
-        g_vmap = eqx.filter_vmap(grad, in_axes=(vmap_axes_sources))
-        out = g_vmap(index, states, positions, t, self.vp_shard, self.params)
-        return out
+        return [dke_data[0], sources, dke_data[1]]
+
+    @Physics_Decorator
+    @shard_inputs
+    def ComputePhysicsDerivatives(self, states, positions, t):
+        ddke_data = eqx.filter_vmap(
+            eqx.filter_jacrev(self.compute_dke_sol), in_axes=vmap_axes_wfield
+        )(
+            states,
+            positions,
+            t,
+            self.field_shard,
+            self.vp_shard,
+            self.vpp_shard,
+            self.params,
+        )
+        dsources = eqx.filter_vmap(
+            eqx.filter_jacrev(self.compute_sources), in_axes=vmap_axes_wfield
+        )(
+            states,
+            positions,
+            t,
+            self.field_shard,
+            self.vp_shard,
+            self.vpp_shard,
+            self.params,
+        )
+
+        return [ddke_data[0], dsources, ddke_data[1]]
 
     """
-    Sigma and source, and auxilliary functions
+    Computes physics information for stellarator model
 
     Parameters
     ----------
     index : int
         Variable index
-    state : dict
-        Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
+    state : eqx.Module
+        Object containing state information
     x : float
         Spatial location
     t : float
         Time
+    field: yancc.Field
+        Magnetic field object
+    vp: float
+        V'
+    vpp: float
+        V''
     params : NamedTuple
         Transport system parameters, passed for JAX PyTree compatibility
     Returns
@@ -280,110 +275,196 @@ class StellaratorTransport(MaNTA.TransportSystem):
         Computed sigma or source term
     """
 
-    def sigma(self, index, state: State, x, t, field, vp, vpp, params, f1_prev=None):
-        n, nprime = jax.value_and_grad(self.Density)(x)
+    @partial(jax.jit, static_argnums=(0,))
+    @StellaratorDecorator
+    def compute_dke_sol(
+        self, state: StellaratorState, x, t, field, vp, vpp, params: StellaratorParams
+    ):
 
-        p_i = 2.0 / 3.0 * self.Vp_u_to_u(index, state, x, vp, vpp)
-        p_i_prime = 2.0 / 3.0 * self.Vp_up_to_up(index, state, x, vp, vpp)
+        def constant_density(state, x, t, field, vp, vpp, params):
+            Erho = jnp.array(0.0)
 
-        dndrho = nprime
-        Erho = jnp.array(0.0)
-        Ti = jax.lax.cond(
-            jax.lax.eq(x, self.xR),
-            lambda x: params.EdgeTemperature,
-            lambda x: x[0] / x[1],
-            (p_i, n),
-        )
+            species = [
+                LocalMaxwellian(
+                    Hydrogen,
+                    temperature=state.Ti * self.yancc_wrapper.Tnorm_eV,
+                    density=state.n * self.yancc_wrapper.nNorm,
+                    dTdrho=state.dTidrho * self.yancc_wrapper.Tnorm_eV,
+                    dndrho=state.dndrho * self.yancc_wrapper.nNorm,
+                ),
+            ]
 
-        dTidrho = (p_i_prime - Ti * dndrho) / n
+            sol, info = solve_dke(
+                put_on_gpu(field),
+                self.yancc_wrapper.pitchgrid,
+                self.yancc_wrapper.speedgrid,
+                species,
+                put_on_gpu(Erho),
+            )
+            flux = (
+                -sol.get("<heat_flux>")[0]
+                * vp
+                / (
+                    self.yancc_wrapper.Tnorm
+                    * self.yancc_wrapper.nNorm
+                    / self.yancc_wrapper.tnorm
+                )
+            )
 
-        species = [
-            LocalMaxwellian(
-                # can just give mass and charge in units of proton mass and elementary charge
-                yancc.species.Species(1, 1),
-                temperature=Ti * self.yancc_wrapper.Tnorm,
-                density=n * self.yancc_wrapper.nNorm,
-                dTdrho=dTidrho * self.yancc_wrapper.Tnorm,
-                dndrho=dndrho * self.yancc_wrapper.nNorm,
-            ),
-        ]
-        sol, info = jax.jit(solve_dke, static_argnames=["verbose"])(
-            put_on_gpu(field),
-            self.yancc_wrapper.pitchgrid,
-            self.yancc_wrapper.speedgrid,
-            species,
-            put_on_gpu(Erho),
-            f1=f1_prev,
-        )
-        # nmv
-        # M is the size of krylov space
-        fout = sol.get("<heat_flux>")[0] * vp / (self.yancc_wrapper.FluxNorm)
-        return -jnp.nan_to_num(fout, nan=0.0, posinf=0.0, neginf=0.0), sol.f1
+            return [flux], []
+
+        def ambipolar(state, x, t, field, vp, vpp, params):
+            species = [
+                LocalMaxwellian(
+                    # can just give mass and charge in units of proton mass and elementary charge
+                    Hydrogen,
+                    temperature=state.Ti * self.yancc_wrapper.Tnorm_eV,
+                    density=state.n * self.yancc_wrapper.nNorm,
+                    dTdrho=state.dTidrho * self.yancc_wrapper.Tnorm_eV,
+                    dndrho=state.dndrho * self.yancc_wrapper.nNorm,
+                ),
+                LocalMaxwellian(
+                    # can just give mass and charge in units of proton mass and elementary charge
+                    Electron,
+                    temperature=state.Te * self.yancc_wrapper.Tnorm_eV,
+                    density=state.n * self.yancc_wrapper.nNorm,
+                    dTdrho=state.dTedrho * self.yancc_wrapper.Tnorm_eV,
+                    dndrho=state.dndrho * self.yancc_wrapper.nNorm,
+                ),
+            ]
+
+            sol, info = jax.jit(solve_dke)(
+                put_on_gpu(field),
+                self.yancc_wrapper.pitchgrid,
+                self.yancc_wrapper.speedgrid,
+                species,
+                state.Er,
+            )
+
+            particle_flux = (
+                -sol.get("<particle_flux>")[0]
+                * vp
+                / (self.yancc_wrapper.nNorm / self.yancc_wrapper.tnorm)
+            )
+
+            heat_flux = (
+                -sol.get("<heat_flux>")
+                * vp
+                / (
+                    self.yancc_wrapper.nNorm
+                    * self.yancc_wrapper.Tnorm
+                    / self.yancc_wrapper.tnorm
+                )
+            )
+
+            aux_g_out = sol.get("J_rho") / (
+                self.yancc_wrapper.nNorm * elementary_charge / self.yancc_wrapper.tnorm
+            )
+
+            return [particle_flux, heat_flux[0], heat_flux[1]], [aux_g_out]
+
+        if self.params.evolveDensity:
+            return ambipolar(state, x, t, field, vp, vpp, params)
+        else:
+            return constant_density(state, x, t, field, vp, vpp, params)
 
     @partial(jax.jit, static_argnums=(0,))
-    def source(self, index, state, x, t, vp, params: StellaratorParams):
+    @StellaratorDecorator
+    def compute_sources(
+        self, state: StellaratorState, x, t, field, vp, vpp, params: StellaratorParams
+    ):
+
+        if self.params.evolveDensity:
+            sn = self.Sn(state, x, t, vp, params)
+            spi = self.Spi(state, x, t, vp, params)
+            spe = self.Spe(state, x, t, vp, params)
+            return [sn, spi, spe]
+
+        else:
+            return [self.Spi(state, x, t, vp, params)]
+
+    def Sn(self, state, x, t, vp, params):
         return (
             vp
-            * params.SourceHeight
+            * params.ParticleSourceHeight
             * jnp.exp(
-                -((x * x - params.SourceCenter) ** 2) / (2 * params.SourceWidth**2)
+                -((x * x - params.ParticleSourceCenter) ** 2)
+                / (2 * params.ParticleSourceWidth**2)
             )
         )
+
+    def Spi(self, state, x, t, vp, params):
+        return vp * (
+            params.HeatSourceHeight
+            * jnp.exp(
+                -((x * x - params.HeatSourceCenter) ** 2)
+                / (2 * params.HeatSourceWidth**2)
+            )
+            + self.CollisionalEnergyExchange(state)
+        )
+
+    def Spe(self, state, x, t, vp, params):
+        return vp * (
+            params.HeatSourceHeight
+            * jnp.exp(
+                -((x * x - params.HeatSourceCenter) ** 2)
+                / (2 * params.HeatSourceWidth**2)
+            )
+            - self.CollisionalEnergyExchange(state)
+        )
+
+    def CollisionalEnergyExchange(self, state):
+
+        pDiff = 10.0 * (state.pe - state.pi)
+        return pDiff
 
     def StoredEnergy(self, field, state, x, params):
         u = state.Variable[0]
         return u
 
     @eqx.filter_jit
-    def Density(self, x):
-        return StellaratorTransport.initial_profile(
-            x, self.params.EdgeDensity, self.params.n0
-        )
-
-    @staticmethod
-    def Vp_u_to_u(index, s, x, vp, vpp):
-        return jax.lax.cond(
-            jax.lax.eq(x, 0.0),
-            lambda state: state.Derivative[index] / vpp,
-            lambda state: state.Variable[index] / vp,
-            s,
-        )
-
-    @staticmethod
-    def Vp_up_to_up(index, s, x, vp, vpp):
-        return jax.lax.cond(
-            jax.lax.eq(x, 0.0),
-            lambda state: 0.0,
-            lambda state: (
-                (state.Derivative[index] * vp - vpp * state.Variable[index]) / vp**2
-            ),
-            s,
-        )
-
-    @staticmethod
-    def initial_profile(x, edge_value, peak_value):
-        return (peak_value - edge_value) * (1 - x**4) + edge_value
-
-    @partial(jax.jit, static_argnums=(0,))
-    def dSources_dPhi(self, index, state, x, t):
-        return jax.grad(self.Sources, argnums=1)(index, state, x, t)["Aux"]
-
-    @eqx.filter_jit
     def InitialValue(self, index, x):
-        return 1.5 * self.params.EdgeTemperature * self.Density(x) * self.vp_interp(x)
+        def constant_density(index, x):
+            n = StellaratorState.initial_profile(
+                x, self.params.EdgeDensity, self.params.n0
+            )
+
+            return 1.5 * self.params.EdgeTemperature * n * self.vp_interp(x)
+
+        def ambipolar(index, x):
+            def n0(x):
+                return self.params.EdgeDensity * self.vp_interp(x)
+
+            def ui0(x):
+                return (
+                    3.0
+                    / 2.0
+                    * self.params.EdgeDensity
+                    * self.params.EdgeTemperature
+                    * self.vp_interp(x)
+                )
+
+            def ue0(x):
+                return (
+                    3.0
+                    / 2.0
+                    * self.params.EdgeDensity
+                    * self.params.EdgeTemperature
+                    * self.vp_interp(x)
+                )
+
+            return jax.lax.switch(index, [n0, ui0, ue0], x)
+
+        return jax.lax.cond(
+            self.params.evolveDensity, ambipolar, constant_density, index, x
+        )
 
     @eqx.filter_jit
     def InitialDerivative(self, index, x):
         return jax.grad(self.InitialValue, argnums=1)(index, x)
 
-    def aux(self, index, state, x, t, params: NamedTuple):
-        pass
-
     def InitialAuxValue(self, index, x):
-        pass
-
-    def AuxG(self, index, state, x, t):
-        return self.aux(index, state, x, t, self.params)
+        return 0.0
 
     """
     Create the adjoint problem associated with this transport system
@@ -405,7 +486,6 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         g,
         yancc_data: yancc_data,
         npoints,
-        chunk_size=0,
     ):
         MaNTA.AdjointProblem.__init__(self)
 
@@ -415,7 +495,6 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         (self.field_shard, self.vp_shard, self.vpp_shard) = eqx.filter_shard(
             (self.field, self.vp, self.vpp), data_sharding
         )
-        self.chunk_size = chunk_size
         boundary_field = yancc_data.fields_unstacked[-1]
 
         flat, _ = jax.flatten_util.ravel_pytree(
@@ -463,6 +542,11 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
             jax.grad(self.g[i], argnums=1), in_axes=(0, State.vmap_axes(), 0, None)
         )(self.field, states, positions, self.params)
         return out
+
+    @Physics_Decorator
+    @shard_inputs
+    def ComputePhysicsDerivatives(self, states, positions):
+        pass
 
     @MaNTA_Decorator
     def dSigma(self, i, states, positions):
