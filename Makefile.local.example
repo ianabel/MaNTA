@@ -3,13 +3,17 @@
 # if you are following the guide in the README
 
 # Uncomment to use clang instead of g++
-CXX = g++
+# CXX = clang++
 
 # Uncomment for debug information
-DEBUG = on
+# DEBUG = on
+
+
 #CXXFLAGS = -DFPEXCEPT #-DSUNDIALS_DEBUG
 
-SUNDIALS_DIR=/home/ian/projects/sundials/install
-TOML11_DIR = /home/ian/projects/toml11
+# Points to an installation of SUNDIALS, v7.1.0 or above
+SUNDIALS_DIR= ../sundials/install
+
+# If Eigen is not in /usr/include, you need to specify this
 EIGEN_DIR = /usr/include/eigen3
 

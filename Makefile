@@ -46,7 +46,7 @@ $(PYTHON_OUTPUT): $(OBJECTS) $(PHYSICS_OBJECTS) $(PYTHON_HEADERS) $(PYTHON_OBJEC
 
 clean:
 	$(MAKE) -C Tests/UnitTests clean
-	rm -f $(SOLVER) main.o MaNTA.o $(OBJECTS) $(ERROBJECTS) $(TESTOBJECTS) $(PHYSICS_OBJECTS) $(PYTHON_NAME)
+	rm -f $(SOLVER) main.o MaNTA.o $(OBJECTS) $(ERROBJECTS) $(TESTOBJECTS) $(PHYSICS_OBJECTS) $(PYTHON_OUTPUT)
 
 regression_tests: $(SOLVER)
 	$(MAKE) -C Tests/RegressionTests
