@@ -40,9 +40,6 @@ slurm-*.out
 # Editor swap files
 *.swp
 
-# Locally built solver variants
-MaNTA-nodal-lgl
-
 # Coverage (make coverage)
 *.gcda
 *.gcno
