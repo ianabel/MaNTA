@@ -112,10 +112,7 @@ void SystemSolver::dSourcedsigma_Mat( Matrix& dSourcedsigmaMatrix, DGSoln const&
 
 void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Index intervalIndex )
 {
-    Interval const &I( grid[ intervalIndex ] );
-	auto const& x_vals = y.getBasis().abscissae();
-	auto const& x_wgts = y.getBasis().weights();
-	const size_t n_abscissa = x_vals.size();
+	Interval const &I( grid[ intervalIndex ] );
 
 	// ASSERT mat.shape == ( nVars * ( k + 1) , nScalars )
 	assert( mat.rows() == nVars * ( k + 1 ) );
@@ -123,40 +120,41 @@ void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Index in
 
 	mat.setZero();
 
-	// Phi are basis fn's
-	// M( nVars * K + k, nVars * J + j ) = Int_I ( d sigma_fn_K / d u_J * Phi_k * Phi_j )
+	// This is the derivative of the source term as the *residual* forms it, so
+	// it has to be built the same way the residual builds it. residual() uses
+	//
+	//     res.u += ... - InterpolateOntoBasis( I, S( nodes ) )
+	//
+	// i.e. the projection of the *interpolant* of S, so the derivative is the
+	// projection of the interpolant of dS/dmu -- the same
+	// `Mass * (values at nodes)` form every other Jacobian block in this file
+	// uses (c.f. https://arxiv.org/pdf/1811.09667 eq 3.16ff).
+	//
+	// This used to integrate dS/dmu exactly by Gauss quadrature instead. The two
+	// agree only when dS/dmu is a polynomial the basis represents: for
+	// ScalarTestLD3, whose dS/dJ is a narrow Gaussian, they differed by 7% of
+	// the residual at k = 2 on 4 cells (falling to 6e-9 by k = 6 on 32 cells, as
+	// the interpolation error dies away). The Jacobian is never assembled, so
+	// the only symptom was degraded Newton convergence.
+	Values dSdS( nScalars );
+	Matrix nodal( nScalars, k + 1 );
 
 	for ( Index XVar = 0; XVar < nVars; XVar++ )
 	{
-		Values dSdS_vals1( nScalars );
-		Values dSdS_vals2( nScalars );
-		for ( size_t i=0; i < n_abscissa; ++i ) {
-			// Pull the loop over the gaussian integration points
-			// outside so we can evaluate u, q, dX_dZ once and store the values
-			
-			// All for loops inside here can be parallelised as they all
-			// write to separate entries in mat
-			
-			double wgt = x_wgts[ i ]*( I.h()/2.0 );
+		for ( Index j = 0; j < k + 1; ++j )
+		{
+			dSdS.setZero();
+			double x_j = I.fromRef( Y.getBasis().Nodes( j ) );
+			State s = Y.evalOnNode( intervalIndex, j );
+			problem->dSources_dScalars( XVar, dSdS, s, x_j, jt );
+			nodal.col( j ) = dSdS;
+		}
 
-			double y_plus  = I.x_l + ( 1.0 + x_vals[ i ] )*( I.h()/2.0 );
-			double y_minus = I.x_l + ( 1.0 - x_vals[ i ] )*( I.h()/2.0 );
-
-			State Y_plus = Y.eval( y_plus ), Y_minus = Y.eval( y_minus );
-
-			problem->dSources_dScalars( XVar, dSdS_vals1, Y_plus, y_plus, jt );
-			problem->dSources_dScalars( XVar, dSdS_vals2, Y_minus, y_minus, jt );
-
-			for(Index iScalar = 0; iScalar < nScalars; iScalar++)
-			{
-				for ( Index j=0; j < k + 1; ++j )
-				{
-					mat( XVar * ( k + 1 ) + j, iScalar ) +=
-						wgt * dSdS_vals1[ iScalar ] * y.getBasis().Evaluate( I, j, y_plus );
-					mat( XVar * ( k + 1 ) + j, iScalar ) +=
-						wgt * dSdS_vals2[ iScalar ] * y.getBasis().Evaluate( I, j, y_minus );
-				}
-			}
+		for ( Index iScalar = 0; iScalar < nScalars; ++iScalar )
+		{
+			Vector vals = nodal.row( iScalar ).transpose();
+			mat.block( XVar * ( k + 1 ), iScalar, k + 1, 1 ) =
+				Y.getBasis().InterpolateOntoBasis( I, vals );
 		}
 	}
 }

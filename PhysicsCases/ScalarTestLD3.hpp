@@ -57,6 +57,16 @@ private:
 
 	Value ScaledSource(Position) const;
 
+	/// Int over the whole domain of variable `var`, integrated cell by cell.
+	///
+	/// A DG solution is only piecewise polynomial, so a single adaptive rule
+	/// over the whole domain resolves the cell-face kinks to its own tolerance
+	/// rather than exactly -- and, worse, its subdivision choices shift
+	/// discontinuously as the coefficients change, so the integral is not a
+	/// smooth function of them. Per cell the rule is exact, which is what the
+	/// hand-written dG_0/du claims.
+	static double Mass(DGSoln const &y, Index var);
+
 	// Without this (and the implementation line in ScalarTestLD3.cpp)
 	// ManTA won't know how to relate the string 'ScalarTestLD3' to the class.
 	REGISTER_PHYSICS_HEADER(ScalarTestLD3)

@@ -128,35 +128,54 @@ per-instantiation line records (all three modes give identical output).
 So: treat the headline as a floor, and judge work on this header by the count of
 *distinct* uncovered lines, not by its percentage.
 
-## Open question: the scalar (Woodbury) path in solveJacEq
+## The scalar (Woodbury) path in solveJacEq
 
 `SolveJacTests.cpp` builds the Jacobian by finite-differencing `residual` under
 IDA's convention (`J = dF/dY + cj dF/dY'`) and requires the vector the linear
-solve returns to satisfy `J dy = g`. With `nScalars = 0` this passes at **3e-10**,
-so `solveHDGJac`'s static condensation is verified.
+solve returns to satisfy `J dy = g`. With `nScalars = 0` that passes at 3e-10.
+With `nScalars = 3` (`ScalarTestLD3`) it came out **O(1)** -- and not only in the
+scalar rows, so it did not say whether the fault was in `solveJacEq`'s bordered
+elimination or in the physics case's hand-written derivatives.
 
-With `nScalars = 3` (`ScalarTestLD3`) the same check comes out **O(1)** -- about
-0.3 in the DG field rows and 5-8 in the scalar rows. Because the error is not
-confined to the scalar rows, there are two candidate explanations and they have
-not yet been separated:
+`ScalarJacobianTests.cpp` settles it by supplying scalar systems whose Jacobians
+are known in closed form:
 
-1. the Woodbury/bordered elimination in `solveJacEq` is wrong; or
-2. `ScalarTestLD3::ScalarGPrimeExtended` disagrees with its own
-   `ScalarGExtended`, which would corrupt the entire bordered solve rather than
-   just the scalar rows -- which is what the numbers look like.
+    d_t u = d_x( kappa d_x u ) + COUPLING * mu        G = mu - BETA * Int u dx
 
-**The `PIDTest` regression case cannot distinguish these and does not contradict
-either**: a wrong Jacobian only degrades Newton convergence, it still converges
-to the correct answer, so a reference-output comparison stays green.
+so `v = COUPLING`, `w = -BETA * Int phi`, `N = 1`, with a differential variant
+(`G = d(mu)/dt - BETA * Int u dx`, giving `N = alpha`) run at two values of
+alpha, because with an algebraic scalar the `alpha * dG/dmu'` term is identically
+zero and any handling of it looks correct.
 
-To settle it, add a minimal transport system with `nScalars = 1` and
-`G = mu - const`, whose Jacobian is exactly known, and run the same check. If
-that passes, the elimination is fine and the fault is in `ScalarTestLD3`.
+**`solveJacEq` is correct**: both satisfy `J dy = g` at 1e-10. The O(1) failure
+was three separate defects, none of them in the elimination:
 
-Until then the test asserts only what is actually established (the solve
-completes and returns finite values) and prints the residuals; the strict bound
-is deliberately not asserted, so the suite is green but not claiming this path
-is correct.
+1. `ScalarTestLD3::ScalarGPrimeExtended` reported `dG_0/du = -Int phi` where
+   `G_0 = E - (M0 - M)` gives `+Int phi`. `w` enters the bordered elimination, so
+   one sign there corrupts the *whole* solve -- which is what made the original
+   symptom ambiguous.
+2. `ScalarTestLD3::dSources_dScalars` assigned `v[0]` and `v[1]` and left `v[2]`
+   alone, and `dSources_dScalars_Mat` hands it an uninitialised Eigen vector.
+   Undefined behaviour, and a garbage column in the scalar coupling matrix.
+3. `dSources_dScalars_Mat` integrated `dS/dmu` exactly by quadrature, while
+   `residual` uses `InterpolateOntoBasis( I, S(nodes) )` -- the projection of the
+   *interpolant* of S. The two agree only when `dS/dmu` is a polynomial the basis
+   represents; `ScalarTestLD3`'s is a narrow Gaussian, and they differed by 7% of
+   the residual at k = 2 on 4 cells. Now interpolatory, like every other block in
+   `Matrices.cpp`.
+
+Two smaller things fell out: `dG_1/dI = -gamma_I` was never differentiated
+(latent, `gamma_I` defaults to 0), and the case integrated its own mass with a
+*global* adaptive Kronrod rule over a piecewise polynomial, so the integral was
+not a smooth function of the coefficients -- the finite-difference reference
+disagreed with the exact `Int phi` by 8% at k = 4 on 16 cells. Both fixed;
+`ScalarTestLD3` now agrees at 1e-9 or better across k = 2..6 and 4..32 cells.
+
+The reusable piece is `checkScalarDerivative`: finite-difference a case's own
+`ScalarGExtended` and require `ScalarGPrimeExtended` to match, coefficient by
+coefficient. That answers "does this physics case report its own scalar Jacobian
+correctly" for any case, and is the first thing to run when a scalar system
+converges slowly.
 
 ## Order of accuracy
 

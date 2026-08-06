@@ -1,26 +1,2 @@
 
 Add Scalars to python interface.
-
-Write a precise test for the scalar (global-unknown) Jacobian.
-  Tests/UnitTests/SolveJacTests.cpp finite-differences `residual` under IDA's
-  convention (J = dF/dY + cj dF/dY') and checks that the linear solve satisfies
-  J dy = g. With nScalars = 0 this passes at 3e-10, so solveHDGJac's static
-  condensation is verified. With nScalars = 3 (ScalarTestLD3) it comes out O(1):
-  ~0.3 in the DG field rows, 5-8 in the scalar rows.
-
-  The error is NOT confined to the scalar rows, so it is either
-    (a) the Woodbury/bordered elimination in solveJacEq, or
-    (b) ScalarTestLD3::ScalarGPrimeExtended disagreeing with its own
-        ScalarGExtended, which would corrupt the whole bordered solve.
-
-  PIDTest cannot distinguish these: a wrong Jacobian only slows Newton, it still
-  converges to the right answer, so the reference comparison stays green either
-  way.
-
-  To settle it: add a minimal TransportSystem with nScalars = 1 and
-  G = mu - const, whose Jacobian is exactly known, and run the same J dy = g
-  check. If that passes, the elimination is sound and the fault is in
-  ScalarTestLD3's hand-written scalar Jacobian; if it fails, solveJacEq is
-  wrong. Then re-enable the strict assertion in
-  solve_jac_eq_handles_global_scalars (it currently asserts only finiteness and
-  prints the residuals). See Tests/README.md.

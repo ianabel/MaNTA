@@ -18,6 +18,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include "../../PhysicsCases/ScalarTestLD3.hpp"
+#include "FiniteDifferenceJacobian.hpp"
 #include "SystemSolver.hpp"
 #include "TestDiffusion.hpp"
 #include "Types.hpp"
@@ -49,49 +50,10 @@ const toml::value scalar_config = u8R"(
     u0 = 0.1
 )"_toml;
 
-// Finite-difference the residual to get J = dF/dY + cj dF/dY'.
-Matrix finiteDifferenceJacobian(SystemSolver &sys, N_Vector Y, N_Vector dYdt,
-                                double t, double cj, SUNContext ctx)
-{
-    const Index n = N_VGetLength(Y);
-    Matrix J(n, n);
+// The finite-difference Jacobian helpers now live in
+// FiniteDifferenceJacobian.hpp, shared with ScalarJacobianTests.cpp.
+using fdjac::jacobian;
 
-    N_Vector Yp = N_VClone(Y), dYp = N_VClone(dYdt);
-    N_Vector Fplus = N_VClone(Y), Fminus = N_VClone(Y);
-
-    const double *Y0 = N_VGetArrayPointer(Y);
-    const double *dY0 = N_VGetArrayPointer(dYdt);
-    double *Ya = N_VGetArrayPointer(Yp);
-    double *dYa = N_VGetArrayPointer(dYp);
-
-    for (Index j = 0; j < n; ++j)
-    {
-        const double h = 1e-6 * std::max(1.0, std::abs(Y0[j]));
-
-        std::copy(Y0, Y0 + n, Ya);
-        std::copy(dY0, dY0 + n, dYa);
-        Ya[j] += h;
-        dYa[j] += cj * h;
-        sys.residual(t, Yp, dYp, Fplus);
-
-        std::copy(Y0, Y0 + n, Ya);
-        std::copy(dY0, dY0 + n, dYa);
-        Ya[j] -= h;
-        dYa[j] -= cj * h;
-        sys.residual(t, Yp, dYp, Fminus);
-
-        const double *fp = N_VGetArrayPointer(Fplus);
-        const double *fm = N_VGetArrayPointer(Fminus);
-        for (Index i = 0; i < n; ++i)
-            J(i, j) = (fp[i] - fm[i]) / (2.0 * h);
-    }
-
-    N_VDestroy(Yp);
-    N_VDestroy(dYp);
-    N_VDestroy(Fplus);
-    N_VDestroy(Fminus);
-    return J;
-}
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(solve_jac_tests)
@@ -127,7 +89,7 @@ BOOST_AUTO_TEST_CASE(solve_hdg_jac_agrees_with_a_dense_solve)
     sys.updateBoundaryConditions(t);
     sys.updateMatricesForJacSolve();
 
-    const Matrix J = finiteDifferenceJacobian(sys, Y, dYdt, t, cj, ctx);
+    const Matrix J = jacobian(sys, Y, dYdt, t, cj);
 
     Eigen::FullPivLU<Matrix> lu(J);
     BOOST_TEST_MESSAGE("FD Jacobian: n = " << n << ", rank = " << lu.rank());
@@ -321,144 +283,16 @@ BOOST_AUTO_TEST_CASE(update_matrices_for_jac_solve_is_idempotent)
 }
 
 // ------------------------------------------- the scalar (Woodbury) path --
-
-BOOST_AUTO_TEST_CASE(solve_jac_eq_handles_global_scalars)
-{
-    // solveJacEq wraps solveHDGJac in a bordered/Woodbury elimination for the
-    // nScalars global unknowns (see WoodburyIdentityNote). That elimination had
-    // no coverage at all: nothing in the suite ran a case with nScalars > 0
-    // through the linear solve, and IDA never checks it because the Jacobian is
-    // never formed.
-    //
-    // ScalarTestLD3 is linear diffusion carrying three global scalars, so it
-    // exercises the bordered solve while keeping the physics simple.
-    //
-    // OPEN QUESTION -- do not read this test as a clean bill of health.
-    // The J dy = g check that passes at 3e-10 for nScalars = 0 comes out O(1)
-    // here, in the field rows (~0.3) as well as the scalar rows (~5-8). Two
-    // candidate explanations, not yet separated:
-    //   (a) the Woodbury/bordered elimination in solveJacEq is wrong, or
-    //   (b) ScalarTestLD3's hand-written ScalarGPrimeExtended disagrees with
-    //       its own ScalarGExtended, which would corrupt the whole bordered
-    //       solve and not just the scalar rows -- matching what is observed.
-    // Distinguishing them needs a scalar system with an exactly-known
-    // Jacobian (G = mu - const). Note the PIDTest regression case would not
-    // catch (b): a wrong Jacobian only slows Newton, it still converges to the
-    // right answer. See Tests/README.md.
-    const Index k = 2, nCells = 4;
-    const double tau = 1.0, cj = 2.5, t = 0.0;
-
-    // ScalarTestLD3 hardcodes its domain as [-1, 1]: ScalarGExtended integrates
-    // u over (-1, 1) and evaluates sigma at +-1.
-    Grid grid(-1.0, 1.0, nCells);
-    ScalarTestLD3 problem(scalar_config, grid);
-    BOOST_TEST_REQUIRE(problem.getNumScalars() == 3);
-
-    SystemSolver sys(grid, k, &problem);
-    sys.setTau(tau);
-    sys.resetCoeffs();
-    sys.initialiseMatrices();
-
-    SUNContext ctx;
-    SUNContext_Create(SUN_COMM_NULL, &ctx);
-
-    DGSoln shape(problem.getNumVars(), grid, k, problem.getNumScalars(),
-                 problem.getNumAux());
-    const Index n = shape.getDoF();
-
-    N_Vector Y = N_VNew_Serial(n, ctx), dYdt = N_VClone(Y);
-    N_VConst(0.0, Y);
-    N_VConst(0.0, dYdt);
-    sys.setInitialConditions(Y, dYdt);
-
-    sys.setJacTime(t);
-    sys.setAlpha(cj);
-    sys.setJacEvalY(Y, dYdt);
-    sys.updateBoundaryConditions(t);
-    sys.updateMatricesForJacSolve();
-
-    const Matrix J = finiteDifferenceJacobian(sys, Y, dYdt, t, cj, ctx);
-
-    // As in the nScalars = 0 case, residual() leaves the Dirichlet boundary
-    // rows empty; exclude them.
-    std::vector<Index> emptyRows;
-    for (Index i = 0; i < n; ++i)
-        if (J.row(i).norm() == 0.0)
-            emptyRows.push_back(i);
-    BOOST_TEST_MESSAGE("scalar case: n = " << n << ", empty rows = "
-                                           << emptyRows.size());
-
-    for (int trial = 0; trial < 2; ++trial)
-    {
-        N_Vector g = N_VNew_Serial(n, ctx), dy = N_VClone(g);
-        double *ga = N_VGetArrayPointer(g);
-        Vector gVec(n);
-        for (Index i = 0; i < n; ++i)
-        {
-            ga[i] = std::cos(0.4 + i * (trial + 1) * 0.53);
-            gVec(i) = ga[i];
-        }
-
-        sys.solveJacEq(g, dy);
-
-        Vector dyOut(n);
-        const double *dya = N_VGetArrayPointer(dy);
-        for (Index i = 0; i < n; ++i)
-            dyOut(i) = dya[i];
-
-        const Vector r = J * dyOut - gVec;
-        double num = 0.0, den = 0.0;
-        for (Index i = 0; i < n; ++i)
-        {
-            if (std::find(emptyRows.begin(), emptyRows.end(), i) != emptyRows.end())
-                continue;
-            num += r(i) * r(i);
-            den += gVec(i) * gVec(i);
-        }
-        const double resid = std::sqrt(num) / std::sqrt(den);
-
-        // Split the residual: is the error in the DG field rows, or confined to
-        // the scalar rows? That distinguishes a broken Woodbury elimination from
-        // a physics case whose hand-written scalar Jacobian disagrees with its
-        // own ScalarGExtended.
-        const Index nS = problem.getNumScalars();
-        double fnum = 0.0, fden = 0.0, snum = 0.0, sden = 0.0;
-        for (Index i = 0; i < n; ++i)
-        {
-            if (std::find(emptyRows.begin(), emptyRows.end(), i) != emptyRows.end())
-                continue;
-            if (i >= n - nS) { snum += r(i) * r(i); sden += gVec(i) * gVec(i); }
-            else             { fnum += r(i) * r(i); fden += gVec(i) * gVec(i); }
-        }
-        BOOST_TEST_MESSAGE("  trial " << trial << ": total=" << resid
-                                      << "  field rows=" << std::sqrt(fnum / fden)
-                                      << "  scalar rows=" << std::sqrt(snum / sden));
-
-        // NOT asserted yet -- see the OPEN QUESTION at the top of this case.
-        // The identical check passes at 3e-10 for nScalars = 0, but here the
-        // residual is O(1) in BOTH the field and the scalar rows.
-
-        // What can be asserted: the solve completes, returns finite numbers,
-        // and actually produces a nonzero scalar block (so the bordered
-        // elimination is not being skipped outright).
-        for (Index i = 0; i < n; ++i)
-            BOOST_TEST(std::isfinite(dyOut(i)));
-
-        // The scalar block must actually be solved for, not left at zero --
-        // otherwise the bordered elimination could be skipped entirely and the
-        // residual check above would still pass on the field rows.
-        double scalarNorm = 0.0;
-        for (Index i = n - problem.getNumScalars(); i < n; ++i)
-            scalarNorm += dyOut(i) * dyOut(i);
-        BOOST_TEST(std::sqrt(scalarNorm) > 0.0);
-
-        N_VDestroy(g);
-        N_VDestroy(dy);
-    }
-
-    N_VDestroy(Y);
-    N_VDestroy(dYdt);
-    SUNContext_Free(&ctx);
-}
+//
+// Moved to ScalarJacobianTests.cpp, which settles it properly: the check here
+// used to assert only that the solve returned finite numbers, because with
+// ScalarTestLD3 the J dy = g residual came out O(1) and nothing distinguished a
+// broken elimination from a physics case misreporting its own derivatives.
+//
+// It was the latter, three times over -- a sign error in dG_0/du, an
+// uninitialised entry in dSources_dScalars, and dSources_dScalars_Mat
+// integrating exactly where the residual interpolates. solveJacEq itself is
+// correct, and is now verified against scalar systems whose Jacobians are known
+// in closed form.
 
 BOOST_AUTO_TEST_SUITE_END()
