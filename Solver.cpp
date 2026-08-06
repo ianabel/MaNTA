@@ -361,6 +361,18 @@ void SystemSolver::runSolver(double tFinal)
 
 	WriteRestartFile(baseName + ".restart.nc", Y, dYdt, nOut);
 
+	// Leave yJac holding the *final* solution. It is the only copy that
+	// outlives this function -- `y` is a non-owning view over Y, which is
+	// destroyed a few lines below -- and it is what PyRunner::getSolution and
+	// getAdjointGradients read. Until now it held whatever state IDA last
+	// evaluated a Jacobian at, which can be several steps stale, so a caller
+	// asking for "the solution" got a slightly earlier one.
+	//
+	// Deliberately after runAdjointSolve(): the adjoint solve above is defined
+	// at the state its matrices were built from, so moving this earlier would
+	// change the gradients.
+	setJacEvalY(Y, dYdt);
+
 	// No SunLinSol wrapper classes exist beyond this point, so we are safe in using raw pointers to construct them.
 	SUNLinSolFree(LS);
 
@@ -380,7 +392,13 @@ void SystemSolver::runSolver(double tFinal)
 	N_VDestroy(res);
 	N_VDestroy(absTolVec);
 
-	SUNContext_Free(&ctx);
+	// `ctx` belongs to the SystemSolver: it is created in the constructor
+	// (SystemSolver.cpp:18) and freed in the destructor (:65). Freeing it here
+	// as well left the member NULL, so a *second* runSolver call on the same
+	// object failed at IDACreate with "Sundials Initialization Error" -- which
+	// is why PyRunner::run works only once per configure(), even though it goes
+	// to the trouble of clearing TerminateOnSteadyState for a repeat call.
+	// The standalone binary never noticed because it runs once and exits.
 
 	nc_output.Close();
 }

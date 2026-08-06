@@ -24,6 +24,11 @@ constexpr std::array<std::string_view, 2> required_method_names_vectorized = {
 constexpr std::array<std::string_view, 4> required_scalar_methods = {
     "ScalarG", "ScalarGPrime", "InitialScalarDerivative", "dSources_dScalars"};
 
+// Needed by the pointwise path whenever nAux > 0. A vectorised subclass
+// supplies ComputePhysicsDerivatives instead and never reaches these.
+constexpr std::array<std::string_view, 3> required_aux_methods = {
+    "AuxGPrime", "dSources_dPhi", "dSigma_dPhi"};
+
 namespace py = pybind11;
 
 class PyTransportSystem : public TransportSystem,
@@ -109,15 +114,59 @@ public:
     }
 
     if (nAux > 0) {
-      method_overrides.insert(
-          std::make_pair("AuxGPrime", make_override("AuxGPrime")));
-      method_overrides.insert(
-          std::make_pair("dSources_dPhi", make_override("dSources_dPhi")));
-      method_overrides.insert(
-          std::make_pair("dSigma_dPhi", make_override("dSigma_dPhi")));
+      // These used to be inserted unconditionally, including when
+      // py::get_override returned an empty function -- and the call sites then
+      // invoked it. A Python subclass that set nAux = 1 and forgot AuxGPrime
+      // therefore *segfaulted* partway through the first Jacobian evaluation,
+      // with nothing naming the missing method. Collect and report them the
+      // same way the scalar methods are, so the failure happens at setup and
+      // says what to write.
+      //
+      // Only required on the pointwise path: a vectorised subclass provides
+      // ComputePhysicsDerivatives, which supersedes all three.
+      std::vector<std::string_view> missing_aux_methods;
+      for (const auto &method_name : required_aux_methods) {
+        auto _override = make_override(method_name.data());
+        if (!_override) {
+          if (!vectorized)
+            missing_aux_methods.push_back(method_name);
+        } else {
+          method_overrides.insert(
+              std::make_pair(method_name, std::move(_override)));
+        }
+      }
+
+      if (!missing_aux_methods.empty()) {
+        std::string error_message =
+            "This physics case sets nAux > 0, so the following methods are "
+            "required in the Python subclass but are missing:\n";
+        for (const auto &method_name : missing_aux_methods) {
+          error_message += std::string(method_name) + "\n";
+        }
+        error_message +=
+            "Provide them, or implement ComputePhysics and "
+            "ComputePhysicsDerivatives to take the vectorised path instead.\n";
+        throw std::runtime_error(error_message);
+      }
     }
 
     initialized = true;
+  }
+
+  /// Look up a Python override, failing with its name rather than crashing.
+  ///
+  /// `method_overrides[name]` default-constructs an empty py::function for a
+  /// key that was never inserted, and calling that dereferences null. Several
+  /// of the names used at the call sites below -- the "_v" variants in
+  /// particular -- are never inserted by initializeOverrides at all, so this is
+  /// not a hypothetical.
+  py::function const &override_for(std::string_view name) const {
+    auto it = method_overrides.find(name);
+    if (it == method_overrides.end() || !it->second)
+      throw std::runtime_error(
+          "MaNTA needs the Python method \"" + std::string(name) +
+          "\", but the transport system subclass does not provide it.");
+    return it->second;
   }
 
   Value LowerBoundary(Index i, Time t) const override {
@@ -157,9 +206,11 @@ public:
     py::function _override =
         py::get_override(this, "ComputePhysicsDerivatives");
 
-    if (!_override)
+    if (!_override) {
       TransportSystem::ComputePhysicsDerivatives(std::move(out), states,
                                                  abscissae, time);
+      return;
+    }
     std::array<std::vector<GlobalState>, NPHYSICS_FUNCTIONS> temp =
         _override(states, abscissae, time)
             .cast<std::array<std::vector<GlobalState>, NPHYSICS_FUNCTIONS>>();
@@ -181,7 +232,7 @@ public:
       initializeOverrides();
     try {
       py::gil_scoped_acquire gil;
-      return method_overrides["SigmaFn"](i, s, x, t).cast<Value>();
+      return override_for("SigmaFn")(i, s, x, t).cast<Value>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate SigmaFn: ") +
@@ -199,7 +250,7 @@ public:
             i, states, abscissae, time); // Call base class version which will
                                          // loop over non-vectorized method
 
-      return method_overrides["SigmaFn_v"](i, states, abscissae, time)
+      return override_for("SigmaFn_v")(i, states, abscissae, time)
           .cast<Values>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
@@ -214,7 +265,7 @@ public:
 
     try {
       py::gil_scoped_acquire gil;
-      return method_overrides["Sources"](i, s, x, t).cast<Value>();
+      return override_for("Sources")(i, s, x, t).cast<Value>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate Sources: ") +
@@ -234,7 +285,7 @@ public:
             i, states, abscissae, time); // Call base class version which will
                                          // loop over non-vectorized method
 
-      return method_overrides["Sources_v"](i, states, abscissae, time)
+      return override_for("Sources_v")(i, states, abscissae, time)
           .cast<Values>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
@@ -250,7 +301,7 @@ public:
 
     try {
       py::gil_scoped_acquire gil;
-      out = method_overrides["dSigmaFn_du"](i, s, x, t).cast<Values>();
+      out = override_for("dSigmaFn_du")(i, s, x, t).cast<Values>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate dSigmaFn_du: ") +
@@ -263,7 +314,7 @@ public:
       initializeOverrides();
     try {
       py::gil_scoped_acquire gil;
-      out = method_overrides["dSigmaFn_dq"](i, s, x, t).cast<Values>();
+      out = override_for("dSigmaFn_dq")(i, s, x, t).cast<Values>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate dSources_dq: ") +
@@ -278,7 +329,7 @@ public:
 
     try {
       py::gil_scoped_acquire gil;
-      v = method_overrides["dSources_du"](i, s, x, t).cast<Values>();
+      v = override_for("dSources_du")(i, s, x, t).cast<Values>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate dSources_du: ") +
@@ -293,7 +344,7 @@ public:
 
     try {
       py::gil_scoped_acquire gil;
-      v = method_overrides["dSources_dq"](i, s, x, t).cast<Values>();
+      v = override_for("dSources_dq")(i, s, x, t).cast<Values>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate dSources_dq: ") +
@@ -307,7 +358,7 @@ public:
       initializeOverrides();
     try {
       py::gil_scoped_acquire gil;
-      v = method_overrides["dSources_dsigma"](i, s, x, t).cast<Values>();
+      v = override_for("dSources_dsigma")(i, s, x, t).cast<Values>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string(
@@ -329,7 +380,7 @@ public:
         return;
       }
 
-      out = method_overrides["dSigma"](i, states, abscissae, time)
+      out = override_for("dSigma")(i, states, abscissae, time)
                 .cast<GlobalState>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
@@ -351,7 +402,7 @@ public:
         return;
       }
 
-      out = method_overrides["dSources"](i, states, abscissae, time)
+      out = override_for("dSources")(i, states, abscissae, time)
                 .cast<GlobalState>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
@@ -384,7 +435,7 @@ public:
             i, states, abscissae, time); // Call base class version which will
                                          // loop over non-vectorized method
 
-      return method_overrides["AuxG_v"](i, states, abscissae, time)
+      return override_for("AuxG_v")(i, states, abscissae, time)
           .cast<Values>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
@@ -415,7 +466,7 @@ public:
         return;
       }
 
-      out = method_overrides["AuxGPrime_v"](i, states, abscissae, time)
+      out = override_for("AuxGPrime_v")(i, states, abscissae, time)
                 .cast<GlobalState>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
@@ -428,7 +479,7 @@ public:
     if (!initialized)
       initializeOverrides();
     py::gil_scoped_acquire gil;
-    out = method_overrides["AuxGPrime"](i, s, x, t).cast<State>();
+    out = override_for("AuxGPrime")(i, s, x, t).cast<State>();
   }
 
   void dSources_dPhi(Index i, VectorRef v, const State &s, Position x,
@@ -440,7 +491,7 @@ public:
     if (!initialized)
       initializeOverrides();
     py::gil_scoped_acquire gil;
-    v = method_overrides["dSources_dPhi"](i, s, x, t).cast<Values>();
+    v = override_for("dSources_dPhi")(i, s, x, t).cast<Values>();
   }
 
   void dSigma_dPhi(Index i, VectorRef v, const State &s, Position x,
@@ -452,7 +503,7 @@ public:
     if (!initialized)
       initializeOverrides();
     py::gil_scoped_acquire gil;
-    v = method_overrides["dSigma_dPhi"](i, s, x, t).cast<Values>();
+    v = override_for("dSigma_dPhi")(i, s, x, t).cast<Values>();
   }
 
   Value InitialScalarValue(Index s) const override {
@@ -490,7 +541,7 @@ public:
     GlobalState state_dot = dydt.evalOnNodes();
 
     Value out =
-        method_overrides["ScalarG"](
+        override_for("ScalarG")(
             s, state, state_dot,
             Integrator::getIntegrationWeights(y.getBasis(), y.getGrid()), t)
             .cast<Value>();
@@ -510,7 +561,7 @@ public:
     const auto &grid = y.getGrid();
 
     auto temp =
-        method_overrides["ScalarGPrime"](
+        override_for("ScalarGPrime")(
             state, state_dot, Integrator::getIntegrationWeights(basis, grid),
             Integrator::getPhiBoundary(basis, grid), t)
             .cast<std::array<std::vector<py::dict>, 2>>();
@@ -536,7 +587,7 @@ public:
     if (!initialized)
       initializeOverrides();
 
-    v = method_overrides["dSources_dScalars"](s, state, x, t).cast<Vector>();
+    v = override_for("dSources_dScalars")(s, state, x, t).cast<Vector>();
   }
   std::unique_ptr<AdjointProblem> createAdjointProblem() override {
     PYBIND11_OVERRIDE(std::unique_ptr<AdjointProblem>, TransportSystem,

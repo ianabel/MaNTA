@@ -37,24 +37,24 @@ class JAXAuxTest(JAXTransportSystem):
         self.params = NonlinearDiffusionParams.make(config)
 
     def g(self, state, x, params: NonlinearDiffusionParams):
-        u = state["Variable"][0]
+        u = state.Variable[0]
         return 0.5 * u * u
-    
+
     def sigma( self, index, state, x, t, params: NonlinearDiffusionParams ):
-        
-        u = state["Variable"][0]
-        q = state["Derivative"][0]
+
+        u = state.Variable[0]
+        q = state.Derivative[0]
         return params.D*(u ** params.a) * q
-    
+
     def aux( self, index ,state, x, t, params):
-        a = state["Aux"][0]
-        u = state["Variable"][0]
+        a = state.Aux[0]
+        u = state.Variable[0]
         return a - params.D*u*u
 
     def source( self, index, state, x, t, params: NonlinearDiffusionParams ):
         y = x - params.SourceCentre
-        u = state["Variable"][0]
-        a = state["Aux"][0]
+        u = state.Variable[0]
+        a = state.Aux[0]
         return params.T_s*jnp.exp(-y*y/params.SourceWidth) + a - params.D*u*u
 
     def LowerBoundary(self, index, t):

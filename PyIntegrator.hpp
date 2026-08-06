@@ -5,27 +5,57 @@
 #include "PyGrid.hpp"
 #include "Types.hpp"
 
+#include <optional>
+#include <utility>
+
 namespace Integrator {
 
 inline const BasisType *m_basis = nullptr; // Pointer to singleton
-// Save static values to avoid recomputation
-inline std::map<Interval, Vector> integrationWeights;
+// Save static values to avoid recomputation. Keyed on polynomial order as well
+// as interval: the same Interval carries different weights at different orders.
+inline std::map<std::pair<unsigned int, Interval>, Vector> integrationWeights;
 inline Vector globalIntegrationWeights;
 inline Matrix phiBoundary;
+inline std::optional<Grid> cachedGrid;
+inline unsigned int cachedOrder = 0;
+
+// Discard everything cached if the basis order or the grid has changed.
+//
+// These are process-wide mutable globals that were only ever populated once
+// (`if (!m_basis)`, `if (size() == 0)`), so a second configure()/run() cycle
+// with a different grid or polynomial degree silently reused the previous
+// run's weights. PyRunner explicitly supports repeated configure/run for
+// optimisation loops, so that path is reachable from ordinary use.
+inline void invalidateIfStale(const BasisType &basis, const Grid &grid) {
+  const unsigned int order = basis.Order();
+
+  // Keyed on order and grid, not on &basis: BasisType::getBasis() returns the
+  // flyweight *by value*, so callers may hand us a different address each time
+  // for what is the same basis. Two bases of equal order are interchangeable.
+  m_basis = &basis;
+  if (cachedOrder == order && cachedGrid && *cachedGrid == grid)
+    return;
+
+  cachedOrder = order;
+  cachedGrid = grid;
+  integrationWeights.clear();
+  globalIntegrationWeights.resize(0);
+  phiBoundary.resize(0, 0);
+}
 
 inline const Vector &getIntegrationWeights(Interval const &I) {
-  if (integrationWeights.contains(I))
-    return integrationWeights.at(I);
+  const auto key = std::make_pair(cachedOrder, I);
+  if (integrationWeights.contains(key))
+    return integrationWeights.at(key);
   else {
-    integrationWeights.insert({I, m_basis->getIntegrationWeights(I)});
-    return integrationWeights[I];
+    integrationWeights.insert({key, m_basis->getIntegrationWeights(I)});
+    return integrationWeights[key];
   }
 }
 
 inline const Vector &getIntegrationWeights(const BasisType &basis,
                                            const Grid &grid) {
-  if (!m_basis)
-    m_basis = &basis;
+  invalidateIfStale(basis, grid);
   if (globalIntegrationWeights.size() == 0) {
     auto const k = m_basis->Order();
     globalIntegrationWeights.resize(grid.getNCells() * (k + 1));
@@ -40,8 +70,7 @@ inline const Vector &getIntegrationWeights(const BasisType &basis,
 
 inline const Matrix &getPhiBoundary(const BasisType &basis, const Grid &grid) {
 
-  if (!m_basis)
-    m_basis = &basis;
+  invalidateIfStale(basis, grid);
 
   if (phiBoundary.size() == 0) {
     const Interval &I_l = grid[0];

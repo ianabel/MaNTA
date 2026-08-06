@@ -1,6 +1,7 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include "TestPaths.hpp"
 #include "Types.hpp"
 #include <toml.hpp>
 #include "SystemSolver.hpp"
@@ -364,7 +365,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_restart_tests)
 	netCDF::NcFile restart_file;
 
 	// Load grid from restart file
-	BOOST_CHECK_NO_THROW(restart_file.open("./Tests/UnitTests/MatrixDiffusion.restart.nc", netCDF::NcFile::FileMode::read));
+	BOOST_CHECK_NO_THROW(restart_file.open(testDataPath("MatrixDiffusion.restart.nc"), netCDF::NcFile::FileMode::read));
 
 	netCDF::NcGroup GridGroup = restart_file.getGroup("Grid");
 	auto nPoints = GridGroup.getDim("Index").getSize();

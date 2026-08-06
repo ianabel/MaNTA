@@ -22,18 +22,17 @@
 #include "NetCDFIO.hpp"
 #include "AdjointProblem.hpp"
 
+// Unit tests exercise the HDG block assembly, the static-condensation solve and
+// the adjoint vectors directly -- all private. The previous scheme befriended
+// one struct per Boost test case (BOOST_AUTO_TEST_CASE generates a struct), so
+// every new test that touched private state needed both a forward declaration
+// and a friend line added to this header. That does not scale to the current
+// suite, so a TEST build simply widens access instead. Release builds are
+// unaffected: MANTA_TEST_PRIVATE is plain `private` unless -DTEST is set.
 #ifdef TEST
-namespace system_solver_test_suite
-{
-    struct systemsolver_init_tests;
-    struct systemsolver_multichannel_init_tests;
-    struct systemsolver_matrix_tests;
-    
-};
-namespace adjoint_test_suite
-{
-    struct systemsolver_adjoint_tests;
-}
+#define MANTA_TEST_PRIVATE public
+#else
+#define MANTA_TEST_PRIVATE private
 #endif
 
 class SystemSolver
@@ -113,11 +112,8 @@ class SystemSolver
 
         void updateBoundaryConditions(double t);
 
-        Vector resEval(std::vector<Vector> resTerms);
 
         void mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorWrapper &lam, sunrealtype *const &Y) const;
-
-        static SystemSolver *ConstructFromConfig(std::string fname);
 
         // Initialise
         void runSolver(double);
@@ -162,7 +158,7 @@ class SystemSolver
 
         friend class PyRunner; // We need to be able to access private variables for the Python runner class
 
-    private:
+    MANTA_TEST_PRIVATE:
         Grid grid;
         unsigned int k;		   // polynomial degree per cell
         unsigned int nCells;   // Total cell count
@@ -288,13 +284,6 @@ class SystemSolver
         constexpr static bool physics_debug = true;
 #else
         constexpr static bool physics_debug = false;
-#endif
-
-#ifdef TEST
-        friend struct system_solver_test_suite::systemsolver_init_tests;
-        friend struct system_solver_test_suite::systemsolver_multichannel_init_tests;
-        friend struct system_solver_test_suite::systemsolver_matrix_tests;
-        friend struct adjoint_test_suite::systemsolver_adjoint_tests;
 #endif
 
         std::filesystem::path inputFilePath;

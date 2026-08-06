@@ -104,6 +104,7 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     def dSources_dPhi( self, index, state, x, t ):
         return self.dSourcedvar(index,state,x,t, self.params).Aux
     
+    @MaNTA_Decorator
     def AuxG( self, index, state, x, t):
         return self.aux(index, state, x, t, self.params)
     
@@ -125,8 +126,9 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     state : dict
         Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
     """
+    @MaNTA_Decorator
     def AuxGPrime( self, index, state, x , t):
-        return self.dAuxdvars(index, state, x, t)
+        return self.dAuxdvars(index, state, x, t, self.params)
     
     @abstractmethod
     def InitialValue( self, index, x ):

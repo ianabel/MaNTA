@@ -42,6 +42,42 @@ If you're happy with this, let's proceed!
  7. Run `make`.
  8. Check the unit tests with `make test`. 
 
+### Testing
+
+MaNTA has three test suites, all driven from the top-level Makefile:
+
+| Command | What it runs |
+|---|---|
+| `make test` | Boost.Test C++ unit tests (`Tests/UnitTests`) |
+| `make regression_tests` | Runs the solver over `Tests/RegressionTests/*.conf` and compares against checked-in `.ref.nc` references |
+| `make python_tests` | pytest suite for the pybind11 module (`python/Tests`); needs `make python` first |
+
+The regression and Python suites need the Python dependencies. On distributions
+where the system Python is externally managed (Debian, Ubuntu), use a virtualenv:
+
+```sh
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+export PATH="$PWD/.venv/bin:$PATH"   # the regression driver uses `env python3`
+```
+
+All three suites can be run from any working directory.
+
+#### Coverage
+
+```sh
+.venv/bin/pip install gcovr
+make coverage
+```
+
+This rebuilds everything with `--coverage -O0` (no LTO -- it destroys line
+attribution), runs all three suites, and writes:
+
+  * `coverage/index.html` -- the numerical core and the Python binding layer
+  * `coverage/physics.html` -- `PhysicsCases/`, reported separately
+
+`make clean_coverage` removes the instrumentation data and the report.
+
 #### Installing SUNDIALS
 
 If you are only building a version of SUNDIALS for use with MaNTA the included script `build_sundials` should provide

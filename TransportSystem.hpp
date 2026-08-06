@@ -33,9 +33,13 @@ public:
 
   virtual void setRestartValues(const std::vector<double> &y, const std::vector<double> &dydt, const Grid &grid, Index k)
   {
-    // need to copy data into vectors owned by TransportSystem
-    restart_Y_data = std::move(y);
-    restart_dYdt_data = std::move(dydt);
+    // Copy into vectors owned by TransportSystem. (These were written as
+    // std::move(y), but y is a const lvalue reference -- std::move on it yields
+    // a const rvalue, which binds to copy-assignment, not move-assignment. So
+    // it was always a copy; the std::move only misled the reader. A copy is
+    // what we want here, since the caller keeps ownership of its vectors.)
+    restart_Y_data = y;
+    restart_dYdt_data = dydt;
 
     // Create DGSolns to wrap restart data
     restart_Y = std::make_shared<DGSoln>(nVars, grid, k, restart_Y_data.data(), nScalars, nAux);

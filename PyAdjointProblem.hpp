@@ -185,9 +185,11 @@ public:
     py::function _override =
         py::get_override(this, "ComputePhysicsDerivatives");
 
-    if (!_override)
+    if (!_override) {
       AdjointProblem::ComputePhysicsDerivatives(std::move(out), states,
                                                 abscissae);
+      return;
+    }
 
     std::array<std::vector<Matrix>, NPHYSICS_FUNCTIONS> temp =
         _override(states, abscissae)

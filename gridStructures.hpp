@@ -103,29 +103,46 @@ public:
 
 			double bulkCellLength = (uBoundaryLayer - lBoundaryLayer) / static_cast<double>(BulkCells);
 
-			// Chebyshev Locations for edge nodes
+			// Build the full list of cell boundaries first, then form cells
+			// from consecutive entries. Constructing each cell from its own
+			// independently-computed endpoints (as this used to) left the two
+			// sides of a shared face differing in the last bits -- the bulk
+			// accumulated lBoundaryLayer + i*bulkCellLength while the upper
+			// layer started from uBoundaryLayer computed directly, so the grid
+			// was not exactly contiguous. That is invisible to a tolerance
+			// comparison but makes Grid::operator== false, which breaks the
+			// restart round trip (StoreGridInfo writes one boundary per face,
+			// so the rebuilt grid silently closes the gap and compares
+			// unequal to the grid it came from).
+			std::vector<Position> boundaries;
+			boundaries.reserve(nCells + 1);
+			boundaries.push_back(lowerBound);
+
+			// Chebyshev locations for edge nodes
 			for (Index i = 0; i < BoundaryCells; i++)
 			{
-				double cellLeft = lBoundaryLayer - lBoundaryWidth * cos((pi * i) / (2.0 * BoundaryCells - 1.0));
-				double cellRight = lBoundaryLayer - lBoundaryWidth * cos((pi * (i + 1)) / (2.0 * BoundaryCells - 1.0));
-				if (i == 0)
-					cellLeft = lowerBound;
-				if (i == BoundaryCells - 1)
-					cellRight = lBoundaryLayer;
-				gridCells.emplace_back(cellLeft, cellRight);
+				double cellRight = (i == BoundaryCells - 1)
+									   ? lBoundaryLayer
+									   : lBoundaryLayer - lBoundaryWidth * cos((pi * (i + 1)) / (2.0 * BoundaryCells - 1.0));
+				boundaries.push_back(cellRight);
 			}
 			for (Index i = 0; i < BulkCells; i++)
-				gridCells.emplace_back(lBoundaryLayer + i * bulkCellLength, lBoundaryLayer + (i + 1) * bulkCellLength);
+			{
+				double cellRight = (i == BulkCells - 1)
+									   ? uBoundaryLayer
+									   : lBoundaryLayer + (i + 1) * bulkCellLength;
+				boundaries.push_back(cellRight);
+			}
 			for (Index i = 0; i < BoundaryCells; i++)
 			{
-				double cellLeft = uBoundaryLayer + uBoundaryWidth * cos(pi * (BoundaryCells - i) / (2.0 * BoundaryCells - 1.0));
-				double cellRight = uBoundaryLayer + uBoundaryWidth * cos(pi * (BoundaryCells - i - 1) / (2.0 * BoundaryCells - 1.0));
-				if (i == 0)
-					cellLeft = uBoundaryLayer;
-				if (i == BoundaryCells - 1)
-					cellRight = upperBound;
-				gridCells.emplace_back(cellLeft, cellRight);
+				double cellRight = (i == BoundaryCells - 1)
+									   ? upperBound
+									   : uBoundaryLayer + uBoundaryWidth * cos(pi * (BoundaryCells - i - 1) / (2.0 * BoundaryCells - 1.0));
+				boundaries.push_back(cellRight);
 			}
+
+			for (Index i = 0; i + 1 < boundaries.size(); ++i)
+				gridCells.emplace_back(boundaries[i], boundaries[i + 1]);
 		}
 		if (gridCells.size() != nCells)
 			throw std::runtime_error("Unable to construct grid.");
@@ -133,6 +150,12 @@ public:
 
 	Grid(const std::vector<Position> &points)
 	{
+		// points.size() - 1 is computed in size_t, so fewer than two points
+		// underflows to a huge cell count rather than failing cleanly (and
+		// points.front() on an empty vector is undefined behaviour).
+		if (points.size() < 2)
+			throw std::invalid_argument("At least two cell boundaries are required to construct a grid.");
+
 		auto nCells = points.size() - 1;
 		gridCells.reserve(nCells);
 		lowerBound = points.front();

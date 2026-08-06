@@ -29,6 +29,30 @@ compile_commands.json
 tags
 *.h5
 venv
+.venv/
 gmon.out
 *.sh
 slurm-*.out
+
+# Compiler-generated header dependency files (-MMD -MP)
+*.d
+
+# Editor swap files
+*.swp
+
+# Locally built solver variants
+MaNTA-nodal-lgl
+
+# Coverage (make coverage)
+*.gcda
+*.gcno
+*.gcov
+coverage/
+
+# Local scratch / run output
+Plots/
+runs-for-bhavin/
+scalar-tests/
+toy-model/
+__pycache__/
+.pytest_cache/

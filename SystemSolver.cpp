@@ -571,30 +571,6 @@ void SystemSolver::updateBoundaryConditions(double t)
     }
 }
 
-Vector SystemSolver::resEval(std::vector<Vector> resTerms)
-{
-    Vector maxTerms, res;
-    maxTerms.resize(resTerms[0].size());
-    res.resize(resTerms[0].size());
-    maxTerms.setZero();
-    res.setZero();
-    for (auto term : resTerms)
-    {
-        res += term;
-        for (int i = 0; i < term.size(); i++)
-        {
-            if (std::abs(term[i]) > maxTerms[i])
-                maxTerms[i] = std::abs(term[i]);
-        }
-    }
-    for (int i = 0; i < resTerms[0].size(); i++)
-    {
-        if (res[i] < maxTerms[i] * 10e-10)
-            res[i] = 0.0;
-    }
-    return res;
-}
-
 void SystemSolver::resetCoeffs()
 {
     y.zeroCoeffs();

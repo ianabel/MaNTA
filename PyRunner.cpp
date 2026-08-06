@@ -28,6 +28,17 @@ static const map_t params = {
     {"Grid_points",
      Parameter<std::vector<double>>{.required = false, ._default = {}}},
     //
+    // Needed whenever Grid_points is not supplied. They cannot be marked
+    // required here because the Grid_points path legitimately omits them, so
+    // configure() checks for them explicitly on the branch that uses them.
+    // Without these entries getValueWithDefault fell through to params.at(),
+    // which threw out_of_range and was reported as the thoroughly misleading
+    // "Failed to retrieve default value for key: Lower_boundary; possible type
+    // mismatch."
+    {"Lower_boundary", Parameter<double>{.required = false, ._default = 0.0}},
+    //
+    {"Upper_boundary", Parameter<double>{.required = false, ._default = 1.0}},
+    //
     {"tau", Parameter<double>{.required = false, ._default = 1.0}},
     //
     {"delta_t", Parameter<double>{.required = true}},
@@ -147,6 +158,17 @@ void PyRunner::configure(const py::dict &config) {
       int nCells;
       highGridBoundary =
           getValueWithDefault<bool>("High_Grid_Boundary", config);
+
+      // Required on this branch, but not listed as required in `params`
+      // because the Grid_points branch above does not need them -- so the
+      // up-front required-parameter check cannot catch them. Say so clearly
+      // rather than silently defaulting the domain to [0, 1].
+      if (!config.contains("Lower_boundary") ||
+          !config.contains("Upper_boundary"))
+        throw std::runtime_error(
+            "Required parameter(s): Lower_boundary, Upper_boundary must be "
+            "given unless Grid_points is supplied.");
+
       lBound = getValueWithDefault<double>("Lower_boundary", config);
       uBound = getValueWithDefault<double>("Upper_boundary", config);
 
@@ -303,7 +325,16 @@ PyRunner::getSolution(Index var,
     }
     return sol;
   } else {
-    const auto points = system->y.getPoints();
+    // Read yJac, not y. `y` is a non-owning DGSoln view over the N_Vector that
+    // runSolver allocates and then destroys before returning, so sampling it
+    // after a run reads freed memory -- and it disagreed with the branch above,
+    // which has always used yJac. yJac is owned by the SystemSolver (yJacMem)
+    // and stays valid.
+    //
+    // yJac holds the state as of the last Jacobian evaluation rather than the
+    // final step, so both branches can lag the very last correction slightly;
+    // that is pre-existing and applies equally to getAdjointGradients.
+    const auto points = system->yJac.getPoints();
     Vector sol(points.size());
     for (size_t i = 0; i < points.size(); i++) {
       const auto &p = points[i];
@@ -311,7 +342,7 @@ PyRunner::getSolution(Index var,
       if (p < grid->lowerBoundary() || p > grid->upperBoundary())
         throw std::out_of_range("Requested point outside of grid boundaries");
 
-      sol(i) = system->y.u(var)(p);
+      sol(i) = system->yJac.u(var)(p);
     }
     return sol;
   }

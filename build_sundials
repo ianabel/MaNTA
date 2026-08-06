@@ -1,23 +1,53 @@
 #!/bin/sh
+#
+# Build a minimal SUNDIALS into ./sundials/install for MaNTA.
+#
+# MaNTA needs v7.1.0 or later: it links sundials_core and uses SUNContext,
+# neither of which exists before v7. This script used to fetch 5.7.0, which
+# cannot build MaNTA at all.
+#
+# Override with e.g.  SUNDIALS_VERSION=7.4.0 ./build_sundials
 
-SUNDIALS_ROOT=`realpath ./sundials`
-SUNDIALS_URL="https://github.com/LLNL/sundials/releases/download/v5.7.0/sundials-5.7.0.tar.gz"
+set -e
 
-mkdir $SUNDIALS_ROOT
+SUNDIALS_VERSION=${SUNDIALS_VERSION:-7.5.0}
+SUNDIALS_ROOT=$(realpath "${SUNDIALS_ROOT:-./sundials}")
+SUNDIALS_URL="https://github.com/LLNL/sundials/releases/download/v${SUNDIALS_VERSION}/sundials-${SUNDIALS_VERSION}.tar.gz"
 
-cd $SUNDIALS_ROOT
-wget $SUNDIALS_URL
+mkdir -p "$SUNDIALS_ROOT"
+cd "$SUNDIALS_ROOT"
 
-tar xzf sundials-5.7.0.tar.gz
-mkdir build;
-cd build;
-cmake -g ../sundials-5.7.0/ -DCMAKE_INSTALL_PREFIX=$SUNDIALS_ROOT -DEXAMPLES_INSTALL=off;
-make -j install;
+if [ ! -f "sundials-${SUNDIALS_VERSION}.tar.gz" ]; then
+	wget -q "$SUNDIALS_URL"
+fi
 
-echo
-echo
-echo "Sundials has been compiled. To make MCTrans++ you should add"
-echo " SUNDIALS_DIR=$SUNDIALS_ROOT"
-echo "in Makefile.local"
-echo
-echo
+rm -rf "sundials-${SUNDIALS_VERSION}" build
+tar xzf "sundials-${SUNDIALS_VERSION}.tar.gz"
+mkdir -p build
+cd build
+
+# MaNTA only uses IDA and the serial N_Vector; the rest is dead weight.
+cmake "../sundials-${SUNDIALS_VERSION}/" \
+	-DCMAKE_INSTALL_PREFIX="$SUNDIALS_ROOT/install" \
+	-DCMAKE_BUILD_TYPE=Release \
+	-DBUILD_SHARED_LIBS=ON \
+	-DBUILD_STATIC_LIBS=OFF \
+	-DEXAMPLES_INSTALL=OFF \
+	-DEXAMPLES_ENABLE_C=OFF \
+	-DBUILD_ARKODE=OFF \
+	-DBUILD_CVODE=OFF \
+	-DBUILD_CVODES=OFF \
+	-DBUILD_IDAS=OFF \
+	-DBUILD_KINSOL=OFF
+
+make -j"$(nproc)" install
+
+cat <<EOF
+
+SUNDIALS ${SUNDIALS_VERSION} installed. To build MaNTA, put
+
+    SUNDIALS_DIR=$SUNDIALS_ROOT/install
+
+in Makefile.local
+
+EOF

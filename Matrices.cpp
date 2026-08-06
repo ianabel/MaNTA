@@ -250,35 +250,56 @@ void SystemSolver::dAux_Mat(Eigen::Ref<Matrix> mat, GlobalStateMatrix& dAux, DGS
 	mat.setZero();
 
 	// With interpolation we have Mass * diagonal( F'(nodes) ) (c.f. https://arxiv.org/pdf/1811.09667 eq 3.16ff)
-  const auto dG_du = dAux.Variable(intervalIndex);
-  const auto dG_dq = dAux.Derivative(intervalIndex);
-  const auto dG_dsigma= dAux.Flux(intervalIndex);
-  const auto dG_dphi = dAux.Aux(intervalIndex);
+	//
+	// The column layout is the one MX uses throughout: [ sigma | q | u | phi ],
+	// each of the first three nVars*(k+1) wide and phi nAux*(k+1) wide. See
+	// updateMatricesForJacSolve, which writes NLq at column nVars*(k+1) and NLu
+	// at 2*nVars*(k+1), and the sibling overload below, which integrates the
+	// same quantities against the same layout.
+	//
+	// This used to write dG/du into column j, dG/dq into ZVar*(k+1)+j and
+	// dG/dsigma into 2*ZVar*(k+1)+j -- three different derivatives piled into
+	// the sigma column block, with dG/du assigned rather than accumulated so
+	// only the last variable's value survived. For a case like AuxVarTest,
+	// whose only nonzero aux derivatives are dG/du and dG/dphi, that dropped
+	// dG/du from the Jacobian entirely. The residual was unaffected, so the
+	// answer stayed correct and only Newton convergence suffered -- which is
+	// why no regression test noticed. The M application below was also missing
+	// the q and u column blocks, and its inner loop shadowed `Aux`.
+	const auto dG_du = dAux.Variable(intervalIndex);
+	const auto dG_dq = dAux.Derivative(intervalIndex);
+	const auto dG_dsigma = dAux.Flux(intervalIndex);
+	const auto dG_dphi = dAux.Aux(intervalIndex);
+
+	const Index sigmaBlock = 0;
+	const Index qBlock = nVars * (k + 1);
+	const Index uBlock = 2 * nVars * (k + 1);
+	const Index phiBlock = 3 * nVars * (k + 1);
+
+	const Matrix M = Y.getBasis().MassMatrix(grid[intervalIndex]);
+
 	for (Index Aux = 0; Aux < nAux; Aux++)
 	{
-		Matrix M = Y.getBasis().MassMatrix(grid[intervalIndex]);
-    
 		for (Index j = 0; j < k + 1; ++j)
 		{
-			Vector vals(nVars);
-			vals.setZero();
 			for (Index ZVar = 0; ZVar < nVars; ZVar++)
 			{
-				mat(Aux * (k + 1) + j, j) = dG_du[Aux](ZVar, j);
-				mat(Aux * (k + 1) + j, ZVar * (k + 1) + j) += dG_dq[Aux](ZVar, j);
-				mat(Aux * (k + 1) + j, 2 * ZVar * (k + 1) + j) += dG_dsigma[Aux](ZVar, j);
+				mat(Aux * (k + 1) + j, sigmaBlock + ZVar * (k + 1) + j) += dG_dsigma[Aux](ZVar, j);
+				mat(Aux * (k + 1) + j, qBlock + ZVar * (k + 1) + j) += dG_dq[Aux](ZVar, j);
+				mat(Aux * (k + 1) + j, uBlock + ZVar * (k + 1) + j) += dG_du[Aux](ZVar, j);
 			}
-      for (Index A2 = 0; A2 < nAux; A2++)
-				mat(Aux * (k + 1) + j, (3 * nVars + A2) * (k + 1) + j) += dG_dphi[Aux](A2, j);
+			for (Index A2 = 0; A2 < nAux; A2++)
+				mat(Aux * (k + 1) + j, phiBlock + A2 * (k + 1) + j) += dG_dphi[Aux](A2, j);
 		}
+
 		for (Index ZVar = 0; ZVar < nVars; ZVar++)
 		{
-			mat.block(Aux * (k + 1), ZVar * (k + 1), k + 1, k + 1).applyOnTheLeft(M);
+			mat.block(Aux * (k + 1), sigmaBlock + ZVar * (k + 1), k + 1, k + 1).applyOnTheLeft(M);
+			mat.block(Aux * (k + 1), qBlock + ZVar * (k + 1), k + 1, k + 1).applyOnTheLeft(M);
+			mat.block(Aux * (k + 1), uBlock + ZVar * (k + 1), k + 1, k + 1).applyOnTheLeft(M);
 		}
-    for (Index Aux = 0; Aux < nAux; Aux++)
-    {
-			mat.block(Aux * (k + 1), (3 * nVars + Aux) * (k + 1), k + 1, k + 1).applyOnTheLeft(M);
-    }
+		for (Index A2 = 0; A2 < nAux; A2++)
+			mat.block(Aux * (k + 1), phiBlock + A2 * (k + 1), k + 1, k + 1).applyOnTheLeft(M);
 	}
 }
 void SystemSolver::dAux_Mat( Eigen::Ref<Matrix> mat, DGSoln const& Y, Index intervalIndex )

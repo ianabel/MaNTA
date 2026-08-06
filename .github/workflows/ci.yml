@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SUNDIALS_VERSION: 7.5.0
+
+jobs:
+  build-and-test:
+    name: Build + C++ tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++-14 cmake wget \
+            libboost-dev \
+            libeigen3-dev \
+            libnetcdf-dev libnetcdf-c++4-dev \
+            libblas-dev
+
+      # Boost.Test is used in header-only mode (boost/test/included/unit_test.hpp),
+      # so libboost-dev alone is enough -- no unit_test_framework link step.
+
+      - name: Cache SUNDIALS
+        id: cache-sundials
+        uses: actions/cache@v4
+        with:
+          path: sundials/install
+          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ runner.os }}-gcc14
+
+      - name: Build SUNDIALS
+        if: steps.cache-sundials.outputs.cache-hit != 'true'
+        run: ./build_sundials
+
+      - name: Configure Makefile.local
+        run: |
+          cat > Makefile.local <<'EOF'
+          CXX = g++-14
+          SUNDIALS_DIR = ./sundials/install
+          EIGEN_DIR = /usr/include/eigen3
+          EOF
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build solver
+        run: make MaNTA -j$(nproc)
+
+      - name: Unit tests
+        run: make test
+
+      - name: Regression tests
+        run: make regression_tests
+
+      - name: Build Python module
+        run: make python -j$(nproc)
+
+      - name: Python tests
+        run: make python_tests
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++-14 cmake wget \
+            libboost-dev \
+            libeigen3-dev \
+            libnetcdf-dev libnetcdf-c++4-dev \
+            libblas-dev
+
+      - name: Cache SUNDIALS
+        id: cache-sundials
+        uses: actions/cache@v4
+        with:
+          path: sundials/install
+          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ runner.os }}-gcc14
+
+      - name: Build SUNDIALS
+        if: steps.cache-sundials.outputs.cache-hit != 'true'
+        run: ./build_sundials
+
+      - name: Configure Makefile.local
+        run: |
+          cat > Makefile.local <<'EOF'
+          CXX = g++-14
+          SUNDIALS_DIR = ./sundials/install
+          EIGEN_DIR = /usr/include/eigen3
+          EOF
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt gcovr
+
+      - name: Run coverage
+        run: make coverage -j$(nproc)
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo '### Coverage (in-scope: numerical core + Python bindings)'
+            echo '```'
+            tail -n 40 coverage/summary.txt
+            echo '```'
+            echo '### PhysicsCases (informational)'
+            echo '```'
+            tail -n 20 coverage/physics.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/

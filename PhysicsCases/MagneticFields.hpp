@@ -66,7 +66,14 @@ public:
 	template <typename F>
 	Real FluxSurfaceAverage(const F &f, Real V) const
 	{
-		auto Integrand = [&](Real s)
+		// The `-> Real` is required, not stylistic. autodiff's operators return
+		// expression templates holding *references* to their operands, so with
+		// a deduced return type this lambda would hand back an expression
+		// referring to `s` and to the temporary from B_s(...) -- both dead by
+		// the time trapezoid evaluates it. The symptom is not a crash but a
+		// silently wrong (typically zero) integral. Verified in
+		// Tests/UnitTests/UtilityTests.cpp.
+		auto Integrand = [&](Real s) -> Real
 		{ return f(s) / B_s(Psi_V(V), s); };
 		Real I = 2 * M_PI / VPrime(V) * trapezoid(Integrand, LeftEndpoint(Psi_V(V)), RightEndpoint(Psi_V(V)), 1e-3);
 		return I;

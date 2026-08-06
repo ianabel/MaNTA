@@ -190,6 +190,28 @@ public:
   Index cellDOF() const { return k; };
   Index getNCells() const { return nCells; };
 
+  /// Recover the shape from the arrays themselves.
+  ///
+  /// Only for the pybind11 type_caster<GlobalState>: PYBIND11_TYPE_CASTER
+  /// default-constructs the value and `load` then assigns the matrices, so
+  /// without this the size members stay indeterminate and size()/operator[]
+  /// read uninitialised memory. The solver never noticed because it only ever
+  /// *assigns* a Python-loaded GlobalState into one it built itself, and
+  /// operator= copies the arrays and not the sizes.
+  ///
+  /// A dict of (nPoints, nVars) arrays does not say how the points are shared
+  /// out between cells, so this records nCells = nPoints and k = 0: size() is
+  /// then correct and operator[] works, but cellwise* is meaningless on such an
+  /// object.
+  void setShapeFromData()
+  {
+    nVars = m_Variable.rows();
+    nAux = m_Aux.rows();
+    nScalars = m_Scalars.size();
+    nCells = m_Variable.cols();
+    k = 0;
+  }
+
   friend class GlobalStateMatrix;
 
 private:
@@ -199,8 +221,10 @@ private:
   // Scalars are global so this is just a vector
   Vector m_Scalars;
 
-  // Hold sizes internally for checking & preallocating memory
-  Index nCells, k, nVars, nScalars, nAux;
+  // Hold sizes internally for checking & preallocating memory.
+  // Initialised here because the default constructor is used by the pybind11
+  // type caster; leaving them indeterminate made size() unpredictable.
+  Index nCells = 0, k = 0, nVars = 0, nScalars = 0, nAux = 0;
 };
 
 // Wrapper class to make Jacobian computation cleaner

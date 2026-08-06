@@ -4,6 +4,7 @@
 #include "DGSoln.hpp"
 #include "Types.hpp"
 #include <Eigen/Core>
+#include <stdexcept>
 
 class AdjointProblem {
 public:
@@ -109,7 +110,13 @@ public:
 
   virtual void dAux_dp(Index i, Index pIndex, Value &, const State &s,
                        Position x) {
-    std::logic_error("nAux > 0 but no G derivative provided");
+    // This was `std::logic_error(...);` -- an exception object constructed and
+    // immediately discarded, not thrown. The caller (dAux, and
+    // SystemSolver.cpp:1436) then read back an untouched output slot, so a
+    // missing aux parameter derivative produced a silently wrong gradient
+    // instead of an error. No C++ adjoint problem overrides this; the Python
+    // trampoline does.
+    throw std::logic_error("nAux > 0 but no G derivative provided");
   };
 
   virtual std::string getName(Index pIndex) const {
