@@ -10,15 +10,11 @@
 // test should be quiet -- otherwise real problems hide in the scroll.
 //
 // This redirects at the *file descriptor* level rather than swapping
-// std::cout's streambuf, because the three things that print here do not share
-// a mechanism:
-//
-//   ErrorChecker::check_retval  fprintf(stderr, ...)
-//   logmsg                      std::print(stderr, ...) -- a C FILE*, not cerr
-//   Solver.cpp                  std::cout << ...
-//   SUNDIALS' own error handler writes to stderr from C
-//
-// A streambuf swap would catch only the last of those.
+// std::cout's streambuf. The project's own output is all std::print now, but
+// that still lands in two different places -- std::print(stderr, ...) writes to
+// the C FILE*, while std::print(ofstream, ...) goes through the stream -- and
+// SUNDIALS' error handler writes to stderr from C regardless. Only the
+// descriptor is common to all three.
 //
 // USE IT TIGHTLY. Boost.Test writes its failure messages to stdout, so an
 // assertion that fires inside a captured scope is swallowed and the test fails

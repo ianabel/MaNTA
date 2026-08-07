@@ -2,6 +2,7 @@
 #define PLASMACONSTANTS_HPP
 
 #include <map>
+#include <print>
 #include <autodiff/forward/dual.hpp>
 #include "../MagneticFields.hpp"
 
@@ -343,7 +344,7 @@ private:
         }
         catch (...)
         {
-            std::cerr << maxE << ", " << minE << std::endl;
+            std::println(stderr, "{:g}, {:g}", maxE.val, minE.val);
             throw;
         }
         // boost isn't compatible with autodiff so we calculate .grad integral separately if needed

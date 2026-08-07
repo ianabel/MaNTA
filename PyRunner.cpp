@@ -2,6 +2,7 @@
 #include "Logging.hpp"
 #include <pybind11/eigen.h>
 #include <string>
+#include <print>
 // Load restart data into vectors
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y,
                  std::vector<double> &dYdt);
@@ -268,7 +269,7 @@ void PyRunner::run(double tFinal) {
   }
   system->runSolver(tFinal);
 
-  std::cout << "Done." << std::endl;
+  std::println("Done.");
 }
 
 void PyRunner::run_ss() {
@@ -279,7 +280,7 @@ void PyRunner::run_ss() {
   system->setSteadyStateTolerance(steady_state_tolerance);
   system->runSolver(0);
 
-  std::cout << "Done." << std::endl;
+  std::println("Done.");
 }
 
 py::tuple PyRunner::getAdjointGradients(void) {

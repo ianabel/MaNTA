@@ -6,7 +6,8 @@
 #include <Eigen/Core>
 #include <Eigen/Dense>
 #include <toml.hpp>
-#include <iostream>
+#include <ostream>
+#include <print>
 
 #include "State.hpp"
 #include "Types.hpp"
@@ -949,7 +950,7 @@ int static_residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval
     }
     catch (std::exception &e)
     {
-        std::cout << "Caught exception : " << e.what() << " ; Retrying. " << std::endl;
+        std::println("Caught exception : {} ; Retrying. ", e.what());
         return 1;
     }
 }
@@ -1468,21 +1469,21 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
 {
     DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY), nScalars, nAux);
 
-    out << "# t = " << t << std::endl;
+    std::println(out, "# t = {:g}", t);
     for (Index v = 0; v < nVars; ++v)
     {
-        out << "# Lambda (" << v << ") = ";
+        std::print(out, "# Lambda ({}) = ", v);
         for (Index i = 0; i < nCells; ++i)
-            out << tmp_y.lambda(v)[i] << ", ";
-        out << tmp_y.lambda(v)[nCells] << std::endl;
+            std::print(out, "{:g}, ", tmp_y.lambda(v)[i]);
+        std::println(out, "{:g}", tmp_y.lambda(v)[nCells]);
     }
 
     if (nScalars > 0)
     {
-        out << "# Scalars : ";
+        std::print(out, "# Scalars : ");
         for (Index i = 0; i < nScalars - 1; ++i)
-            out << tmp_y.Scalar(i) << ", ";
-        out << tmp_y.Scalar(nScalars - 1) << std::endl;
+            std::print(out, "{:g}, ", tmp_y.Scalar(i));
+        std::println(out, "{:g}", tmp_y.Scalar(nScalars - 1));
     }
 
     double delta_x = (grid.upperBoundary() - grid.lowerBoundary()) * (1.0 / (nOut - 1.0));
@@ -1501,42 +1502,42 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
     for (int i = 0; i < nOut; ++i)
     {
         double x = static_cast<double>(i) * delta_x + grid.lowerBoundary();
-        out << x;
+        std::print(out, "{:g}", x);
         State s = tmp_y.eval(x);
         for (Index v = 0; v < nVars; ++v)
         {
-            out << "\t" << s.Variable[v] << "\t" << s.Derivative[v] << "\t" << s.Flux[v];
+            std::print(out, "\t{:g}\t{:g}\t{:g}", s.Variable[v], s.Derivative[v], s.Flux[v]);
             if (printSources)
-                out << "\t" << source_interp[v](x);
+                std::print(out, "\t{:g}", source_interp[v](x));
         }
 
         for (Index a = 0; a < nAux; ++a)
-            out << "\t" << s.Aux[a];
+            std::print(out, "\t{:g}", s.Aux[a]);
 
-        out << std::endl;
+        std::println(out, "");
     }
-    out << std::endl;
-    out << std::endl;
+    std::println(out, "");
+    std::println(out, "");
 }
 
 void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSources)
 {
 
-    out << "# t = " << t << std::endl;
+    std::println(out, "# t = {:g}", t);
     for (Index v = 0; v < nVars; ++v)
     {
-        out << "# Lambda (" << v << ") = ";
+        std::print(out, "# Lambda ({}) = ", v);
         for (Index i = 0; i < nCells; ++i)
-            out << y.lambda(v)[i] << ", ";
-        out << y.lambda(v)[nCells] << std::endl;
+            std::print(out, "{:g}, ", y.lambda(v)[i]);
+        std::println(out, "{:g}", y.lambda(v)[nCells]);
     }
 
     if (nScalars > 0)
     {
-        out << "# Scalars : ";
+        std::print(out, "# Scalars : ");
         for (Index i = 0; i < nScalars - 1; ++i)
-            out << y.Scalar(i) << ", ";
-        out << y.Scalar(nScalars - 1) << std::endl;
+            std::print(out, "{:g}, ", y.Scalar(i));
+        std::println(out, "{:g}", y.Scalar(nScalars - 1));
     }
 
     double delta_x = (grid.upperBoundary() - grid.lowerBoundary()) * (1.0 / (nOut - 1.0));
@@ -1554,43 +1555,43 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
     for (int i = 0; i < nOut; ++i)
     {
         double x = static_cast<double>(i) * delta_x + grid.lowerBoundary();
-        out << x;
+        std::print(out, "{:g}", x);
         State s = y.eval(x);
         for (Index v = 0; v < nVars; ++v)
         {
-            out << "\t" << s.Variable[v] << "\t" << s.Derivative[v] << "\t" << s.Flux[v];
+            std::print(out, "\t{:g}\t{:g}\t{:g}", s.Variable[v], s.Derivative[v], s.Flux[v]);
             if (printSources)
-                out << "\t" << source_interp[v](x);
+                std::print(out, "\t{:g}", source_interp[v](x));
         }
 
         for (Index a = 0; a < nAux; ++a)
-            out << "\t" << s.Aux[a];
+            std::print(out, "\t{:g}", s.Aux[a]);
 
-        out << std::endl;
+        std::println(out, "");
     }
-    out << std::endl;
-    out << std::endl; // Two blank lines needed to make gnuplot happy
+    std::println(out, "");
+    std::println(out, ""); // Two blank lines needed to make gnuplot happy
 }
 
 void SystemSolver::printOnNodes(std::ostream &out, double t, N_Vector const& tempY, bool printSources)
 {
 
     DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY), nScalars, nAux);
-    out << "# t = " << t << std::endl;
+    std::println(out, "# t = {:g}", t);
     for (Index v = 0; v < nVars; ++v)
     {
-        out << "# Lambda (" << v << ") = ";
+        std::print(out, "# Lambda ({}) = ", v);
         for (Index i = 0; i < nCells; ++i)
-            out << tmp_y.lambda(v)[i] << ", ";
-        out << tmp_y.lambda(v)[nCells] << std::endl;
+            std::print(out, "{:g}, ", tmp_y.lambda(v)[i]);
+        std::println(out, "{:g}", tmp_y.lambda(v)[nCells]);
     }
 
     if (nScalars > 0)
     {
-        out << "# Scalars : ";
+        std::print(out, "# Scalars : ");
         for (Index i = 0; i < nScalars - 1; ++i)
-            out << tmp_y.Scalar(i) << ", ";
-        out << tmp_y.Scalar(nScalars - 1) << std::endl;
+            std::print(out, "{:g}, ", tmp_y.Scalar(i));
+        std::println(out, "{:g}", tmp_y.Scalar(nScalars - 1));
     }
 
     std::vector<Values> sources(nVars);
@@ -1608,21 +1609,21 @@ void SystemSolver::printOnNodes(std::ostream &out, double t, N_Vector const& tem
         const auto& x = points[i];
         const State s = states[i];
 
-        out << x;
-         for (Index v = 0; v < nVars; ++v)
+        std::print(out, "{:g}", x);
+        for (Index v = 0; v < nVars; ++v)
         {
-            out << "\t" << s.Variable[v] << "\t" << s.Derivative[v] << "\t" << s.Flux[v];
+            std::print(out, "\t{:g}\t{:g}\t{:g}", s.Variable[v], s.Derivative[v], s.Flux[v]);
             if (printSources)
-                out << "\t" << sources[v](i);
+                std::print(out, "\t{:g}", sources[v](i));
         }
         for (Index a = 0; a < nAux; ++a)
-            out << "\t" << s.Aux[a];
+            std::print(out, "\t{:g}", s.Aux[a]);
 
-        out << std::endl;
+        std::println(out, "");
        
     }
-    out << std::endl;
-    out << std::endl; // Two blank lines needed to make gnuplot happy
+    std::println(out, "");
+    std::println(out, ""); // Two blank lines needed to make gnuplot happy
 }
 
 int SystemSolver::getErrorWeights(N_Vector y_sundials, N_Vector ewt_sundials)
@@ -1690,8 +1691,14 @@ void SystemSolver::PrintDebugInfo()
     initialiseMatrices();
     for (Index i = 0; i < nCells; i++)
     {
-        std::cout << "Cell " << i << " M Matrix: " << std::endl;
-        std::cout << MBlocks[i] << std::endl
-                  << std::endl;
+        std::println("Cell {} M Matrix: ", i);
+        // Eigen has no std::formatter, so write the block out row by row.
+        for (Index r = 0; r < MBlocks[i].rows(); ++r)
+        {
+            for (Index c = 0; c < MBlocks[i].cols(); ++c)
+                std::print("{:g} ", MBlocks[i](r, c));
+            std::println("");
+        }
+        std::println("");
     }
 }

@@ -1,4 +1,3 @@
-#include <iostream>
 #include <memory>
 #include <boost/math/tools/roots.hpp>
 #include <toml.hpp>
@@ -205,9 +204,9 @@ int runManta(std::string const &fname)
 		logmsg<LOG_LEVEL::ERROR>("Could not instantiate a physics model for TransportSystem = {}\n  Available physics models include:  ", ProblemName);
 		for (auto pair : *PhysicsCases::map)
 		{
-			std::cerr << '\t' << pair.first << std::endl;
+			std::println(stderr, "\t{}", pair.first);
 		}
-		std::cerr << std::endl;
+		std::println(stderr, "");
 		return 1;
 	}
 
@@ -261,6 +260,6 @@ int runManta(std::string const &fname)
 	// this will call the correct inherited destructor
 
 	//delete grid;
-	std::cout << "Done." << std::endl;
+	std::println("Done.");
 	return 0;
 }

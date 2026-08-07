@@ -1,4 +1,5 @@
 #include "PlasmaConstants.hpp"
+#include <print>
 
 // Just normalize the fusion rate from the ion class
 Real PlasmaConstants::FusionRate(Real n, Real pi) const
@@ -67,8 +68,9 @@ Real PlasmaConstants::IonizationRate(Real n, Real NeutralDensity, Real v, Real T
     }
     catch (...)
     {
-        std::cerr << Ti << std::endl;
-        std::cerr << Te << std::endl;
+        // .val: autodiff duals have an operator<< but no std::formatter.
+        std::println(stderr, "Ti = {:g}", Ti.val);
+        std::println(stderr, "Te = {:g}", Te.val);
         throw ::std::runtime_error("Caught exception while trying to calculate ionization rate");
     }
 }

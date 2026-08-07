@@ -44,12 +44,12 @@ Two things worth knowing when adding a test:
   they run the full solver, hand `ErrorChecker` a null pointer, or make the
   physics throw so `static_residual` has to report it. Wrap those calls in a
   `CapturedOutput` (`CapturedOutput.hpp`) so the noise does not bury a real
-  failure. It redirects at the file-descriptor level, which is necessary
-  because the things that print here do not share a mechanism:
-  `ErrorChecker` uses `fprintf(stderr)`, `logmsg` uses `std::print(stderr)` on
-  a C `FILE*` rather than `std::cerr`, `Solver.cpp` uses `std::cout`, and
-  SUNDIALS' own error handler writes from C. Swapping `std::cout`'s streambuf
-  would catch only the third.
+  failure. It redirects at the file-descriptor level. The project's own output
+  is all `std::print`/`std::println` now, but that still lands in two different
+  places -- `std::print(stderr, ...)` writes to the C `FILE*` while
+  `std::print(ofstream, ...)` goes through the stream -- and SUNDIALS' error
+  handler writes to stderr from C regardless. Only the descriptor is common to
+  all three, so swapping `std::cout`'s streambuf would not do.
 
   Two rules when using it. **Capture the noisy call, restore, then assert** --
   Boost.Test writes failures to stdout, so an assertion that fires while

@@ -1,6 +1,6 @@
 
 #include <string>
-#include <iostream>
+#include <print>
 
 int runManta( std::string const& );
 
@@ -11,7 +11,7 @@ int main( int argc, char** argv )
 		fname = argv[1];
 	if (argc > 2)
 	{
-		std::cerr << "Usage: " << argv[ 0 ] << " ConfigFile.conf [default: MaNTA.conf]" << std::endl;
+		std::println(stderr, "Usage: {} ConfigFile.conf [default: MaNTA.conf]", argv[ 0 ]);
 		return 1;
 	}
 

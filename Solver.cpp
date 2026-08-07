@@ -4,8 +4,8 @@
 #include <sunlinsol/sunlinsol_band.h> /* access to band SUNLinearSolver       */
 #include <sundials/sundials_types.h>  /* definition of type sunrealtype          */
 #include <toml.hpp>
-#include <iostream>
 #include <fstream>
+#include <print>
 #include <memory>
 
 #include "Types.hpp"
@@ -179,19 +179,12 @@ void SystemSolver::runSolver(double tFinal)
 	std::string baseName = inputFilePath.stem();
 	std::ofstream out0(baseName + ".dat");
 
-	out0 << "# Time indexes blocks. " << std::endl;
-	out0 << "# Columns Headings: " << std::endl;
-	out0 << "# x";
+	std::println(out0, "# Time indexes blocks. ");
+	std::println(out0, "# Columns Headings: ");
+	std::print(out0, "# x");
 	for (Index v = 0; v < nVars; ++v)
-		out0 << "\t"
-			 << "var" << v << " u"
-			 << "\t"
-			 << "var" << v << " q"
-			 << "\t"
-			 << "var" << v << " sigma"
-			 << "\t"
-			 << "var" << v << " source";
-	out0 << std::endl;
+		std::print(out0, "\tvar{0} u\tvar{0} q\tvar{0} sigma\tvar{0} source", v);
+	std::println(out0, "");
 
 	std::ofstream dydt_out, res_out;
 
@@ -199,15 +192,15 @@ void SystemSolver::runSolver(double tFinal)
 	{
 		wgt = N_VClone(res);
 		dydt_out.open(baseName + ".dydt.dat");
-		dydt_out << "# dydt before CalcIC" << std::endl;
+		std::println(dydt_out, "# dydt before CalcIC");
 		printOnNodes(dydt_out, t0, dYdt);
 		res_out.open(baseName + ".res.dat");
 		residual(t0, Y, dYdt, res);
 		getErrorWeights(Y, wgt);
 		double residual_val = N_VWrmsNorm(res, wgt);
-		res_out << "# Residual norm at t = " << t0 << " (pre-calcIC) is " << residual_val << std::endl;
+		std::println(res_out, "# Residual norm at t = {:g} (pre-calcIC) is {:g}", t0, residual_val);
 		printOnNodes(res_out, t0, res);
-		out0 << "# t = " << t0 << " (pre-calcIC) " << std::endl;
+		std::println(out0, "# t = {:g} (pre-calcIC) ", t0);
 		print(out0, t0, nOut, true);
 	}
 
@@ -233,7 +226,7 @@ void SystemSolver::runSolver(double tFinal)
 	{
 		IDAGetConsistentIC(IDA_mem, Y, dYdt);
 		residual(t0, Y, dYdt, res);
-		dydt_out << "# After CalcIC " << std::endl;
+		std::println(dydt_out, "# After CalcIC ");
 		printOnNodes(dydt_out, t0, dYdt);
 
 	
@@ -242,7 +235,8 @@ void SystemSolver::runSolver(double tFinal)
 
 
 
-		res_out << "# Residual norm at t = " << t0 << " (post-CalcIC) is " << N_VWrmsNorm(res, wgt) << std::endl;
+		std::println(res_out, "# Residual norm at t = {:g} (post-CalcIC) is {:g}", t0,
+					 N_VWrmsNorm(res, wgt));
 		printOnNodes(res_out, t0, res);
 	}
 
@@ -286,7 +280,8 @@ void SystemSolver::runSolver(double tFinal)
       {
 	      residual(tret, Y, dYdt, res);
         IDAEwtSet(Y, wgt, IDA_mem);
-        res_out << "# Residual norm at t = " << tret << " is " << N_VWrmsNorm(res, wgt) << std::endl;
+        std::println(res_out, "# Residual norm at t = {:g} is {:g}", tret,
+                     N_VWrmsNorm(res, wgt));
         printOnNodes(res_out, tret, res);
         printOnNodes(dydt_out, tret, dYdt);
       }
@@ -299,14 +294,15 @@ void SystemSolver::runSolver(double tFinal)
 
 		long int nstep_tmp;
 		IDAGetNumSteps(IDA_mem, &nstep_tmp);
-		std::cout << "Writing output at " << tret << " ( " << nstep_tmp << " timesteps )" << std::endl;
+		std::println("Writing output at {:g} ( {} timesteps )", tret, nstep_tmp);
 		print(out0, tret, nOut, Y, true);
 		if (physics_debug)
 		{
 			printOnNodes(dydt_out, tret, dYdt);
 			residual(tret, Y, dYdt, res);
 			IDAEwtSet(Y, wgt, IDA_mem);
-			res_out << "# Residual norm at t = " << tret << " is " << N_VWrmsNorm(res, wgt) << std::endl;
+			std::println(res_out, "# Residual norm at t = {:g} is {:g}", tret,
+						 N_VWrmsNorm(res, wgt));
 			printOnNodes(res_out, tret, res);
 		}
 		WriteTimeslice(tret);
@@ -324,10 +320,10 @@ void SystemSolver::runSolver(double tFinal)
 				}
 			dydt_norm = sqrt(dydt_norm);
 			if (physics_debug)
-				std::cout << " dy/dt norm inferred from lambdas is " << dydt_norm << std::endl;
+				std::println(" dy/dt norm inferred from lambdas is {:g}", dydt_norm);
 			if (dydt_norm < 1.0)
 			{
-				std::cout << "Steady State achieved at time t = " << tret << std::endl;
+				std::println("Steady State achieved at time t = {:g}", tret);
 				break;
 			}
 		}
@@ -340,9 +336,9 @@ void SystemSolver::runSolver(double tFinal)
 	IDAGetNumResEvals(IDA_mem, &nresevals);
 	IDAGetNumLinSolvSetups(IDA_mem, &njacevals);
 
-	std::cout << "Total Number of Timesteps             :" << nsteps << std::endl;
-	std::cout << "Total Number of Residual Evaluations  :" << nresevals << std::endl;
-	std::cout << "Total Number of Jacobian Computations :" << njacevals << std::endl;
+	std::println("Total Number of Timesteps             :{}", nsteps);
+	std::println("Total Number of Residual Evaluations  :{}", nresevals);
+	std::println("Total Number of Jacobian Computations :{}", njacevals);
 
 	if (solveAdjoint)
 	{
