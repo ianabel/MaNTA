@@ -68,7 +68,7 @@ T getValueWithDefault(std::string_view key, const py::dict &d) {
   if (d.contains(key)) {
     try {
       auto val = d[key.data()].cast<T>();
-      logmsg<LOG_LEVEL::INFO>("Using value {} for parameter {}", val, key);
+      // logmsg<LOG_LEVEL::INFO>("Using value {} for parameter {}", val, key);
       return val;
     } catch (const std::exception &e) {
       throw std::runtime_error(
@@ -78,8 +78,8 @@ T getValueWithDefault(std::string_view key, const py::dict &d) {
   } else {
     try {
       auto val = std::get<Parameter<T>>(params.at(key))._default;
-      logmsg<LOG_LEVEL::INFO>("Using default value {} for parameter {}", val,
-                              key);
+      // logmsg<LOG_LEVEL::INFO>("Using default value {} for parameter {}", val,
+      //                         key);
       return val;
     } catch (...) {
       throw std::runtime_error("Failed to retrieve default value for key: " +

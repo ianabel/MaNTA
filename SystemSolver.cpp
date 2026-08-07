@@ -1189,6 +1189,7 @@ void SystemSolver::initializeMatricesForAdjointSolve() {
     Eigen::MatrixXd Su(nVars * (k + 1), nVars * (k + 1));
 
     Eigen::MatrixXd Sphi(nVars * (k + 1), nAux * (k + 1));
+    Eigen::MatrixXd Sigma_phi(nVars * (k + 1), nAux * (k + 1));
 
     // NLq Matrix
     DerivativeSubMatrix(NLq, dSigma_vals.Derivative(i), yJac, i);
@@ -1205,7 +1206,6 @@ void SystemSolver::initializeMatricesForAdjointSolve() {
     // S_u Matrix
     DerivativeSubMatrix(Su, dSource_vals.Variable(i), yJac, i);
 
-    dSourcedPhi_Mat(Sphi, yJac, i);
 
     // M is the local DG Matrix
     Eigen::MatrixXd M(localDOF, localDOF);
@@ -1236,9 +1236,11 @@ void SystemSolver::initializeMatricesForAdjointSolve() {
             nVars * (k + 1)) = (D - Su);
 
     if (nAux > 0) {
-      dSourcedPhi_Mat(Sphi, y, i);
-      M.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1),
-              nAux * (k + 1)) -= Sphi;
+        dPhi_Mat(Sigma_phi, dSigma_vals.Aux(i), yJac, i);
+        M.block(0, 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) = Sigma_phi;
+      dPhi_Mat(Sphi, dSource_vals.Aux(i), yJac, i);
+        M.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
+
 
             // Set Parts of Matrix due to aux variables
 

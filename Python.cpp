@@ -267,6 +267,7 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used()) {
     ffi_ops["get_solution_ffi"] = EncapsulateFfiCall(get_solution_ffi_ops);
     ffi_ops["get_adjoint_gradients_ffi"] =
         EncapsulateFfiCall(get_adjoint_gradients_ffi_ops);
+    ffi_ops["get_g_val_ffi"] = EncapsulateFfiCall(get_g_val_ffi_ops);
     ffi_ops["run_ffi"] = EncapsulateFfiCall(run_ffi_ops);
     ffi_ops["run_ss_ffi"] = EncapsulateFfiCall(run_ss_ffi_ops);
     return ffi_ops;

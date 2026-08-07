@@ -4,30 +4,31 @@
 #include <print>
 #include <stdexcept>
 #include <string_view>
-
-#if defined(__GNUC__) && (__GNUC__ < 15)
-// taken from Google, for some reason g++ 14 supports C++23 but not std::vector
-// in std::println
-template <> struct std::formatter<std::vector<double>, char> {
-  // 1. parse: parses format specifiers (e.g., {:x})
-  constexpr auto parse(format_parse_context &ctx) {
-    return ctx.begin(); // We can ignore specifiers for this basic example
-  }
-
-  // 2. format: writes the formatted data to the output context
-  auto format(const std::vector<double> &vec, format_context &ctx) const {
-    auto out = ctx.out();
-    out = std::format_to(out, "[");
-    for (size_t i = 0; i < vec.size(); ++i) {
-      out = std::format_to(out, "{}", vec[i]);
-      if (i < vec.size() - 1) {
-        out = std::format_to(out, ", ");
-      }
-    }
-    return std::format_to(out, "]");
-  }
-};
-#endif
+//
+// #if defined(__GNUC__) && (__GNUC__ < 15)
+//
+// template <> struct std::formatter<std::vector<double>> {
+//   // Parse format specifications
+//   constexpr auto parse(std::format_parse_context &ctx) {
+//     return ctx.begin(); // or parse custom specs
+//   }
+//
+//   // Format the vector contents
+//   auto format(const std::vector<double> &vec, std::format_context &ctx) const
+//   {
+//     auto out = ctx.out();
+//     std::format_to(out, "[");
+//     bool first = true;
+//     for (double val : vec) {
+//       if (!first)
+//         std::format_to(out, ", ");
+//       std::format_to(out, "{}", val);
+//       first = false;
+//     }
+//     return std::format_to(out, "]");
+//   }
+// };
+// #endif
 enum class LOG_LEVEL {
   ERROR,
   WARNING,

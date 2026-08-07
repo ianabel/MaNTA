@@ -26,7 +26,7 @@ if cpu_fp_dtype == jnp.float64:
 ffi_ops_names = [
     "get_solution",
     "get_adjoint_gradients",
-    # "get_g_val",
+    "get_g_val",
     "run",
     "run_ss",
 ]
@@ -116,14 +116,14 @@ class FFIRunner(MaNTA.Runner):
                 obj=self.get_address()
             )
 
-    # def Get_G(self):
-    #     with jax.default_device(cpu_device):
-    #         return jax.ffi.ffi_call(
-    #             ffi_ops["get_g_val"][Platform.CPU],
-    #             [jax.ShapeDtypeStruct((self.ng,), cpu_fp_dtype)],
-    #             has_side_effect=True,
-    #         )(obj=self.get_address())
-    #
+    def Get_G(self):
+        with jax.default_device(cpu_device):
+            return jax.ffi.ffi_call(
+                ffi_ops["get_g_val"][Platform.CPU],
+                [jax.ShapeDtypeStruct((self.ng,), cpu_fp_dtype)],
+                has_side_effect=True,
+            )(obj=self.get_address())
+    
     def Get_adjoint_gradients(self):
         def cpu_call():
             adjoint_output = [

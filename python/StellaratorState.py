@@ -35,15 +35,15 @@ class StellaratorParams(eqx.Module):
 
     def __init__(
         self,
-        ParticleSourceCenter,
-        ParticleSourceWidth,
-        ParticleSourceHeight,
-        HeatSourceCenter,
-        HeatSourceHeight,
-        HeatSourceWidth,
         EdgeTemperature,
         EdgeDensity,
         n0,
+        HeatSourceCenter,
+        HeatSourceHeight,
+        HeatSourceWidth,
+        ParticleSourceCenter = 0.0,
+        ParticleSourceWidth = 0.1,
+        ParticleSourceHeight = 1.0,
         evolveDensity=False,
     ):
         self.ParticleSourceCenter = ParticleSourceCenter

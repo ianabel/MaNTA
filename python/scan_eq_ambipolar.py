@@ -35,31 +35,31 @@ import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
-
 st_config = {
-    "SourceCenter": 0.2,
-    "SourceHeight": 10.0,
-    "SourceWidth": 0.4,
+    "ParticleSourceCenter": 0.1,
+    "ParticleSourceHeight": 0.01,
+    "ParticleSourceWidth": 0.1,
+    "HeatSourceCenter": 0.1,
+    "HeatSourceHeight": 0.1,
+    "HeatSourceWidth": 0.1,
     "EdgeTemperature": 0.2,
     "EdgeDensity": 0.2,
-    "n0": 1.0,
-    "evolveDensity": False,
+    "n0": 0.5,
+    "evolveDensity": True,
 }
-# runner = MaNTA.Runner(st)
-
 rho_upper = 1.0
 rtol = 1e-2
-atol = 1e-3
+atol = 1e-2
 # nodes = [0.0,0.5, 0.75, 0.9, 1.0]
-npoints = 4
-degree = 4
-base = 2.0
+npoints = 5
+degree = 3
+base = 1.6
 tau = 10.0
 nodes = 1 - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 1)
 nodes = np.concatenate(([0], nodes, [1]))
 # # %%
 solver_config = {
-    "OutputFilename": "stellarator_w7x_scan",
+    "OutputFilename": "stellarator_w7x",
     "Polynomial_degree": degree,
     "Grid_points": nodes,
     "tau": tau,
@@ -67,11 +67,12 @@ solver_config = {
     "Upper_boundary": rho_upper,
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
-    "delta_t": 1e-1,
-    # "initialTimestep": 1e-5,
+    "delta_t": 1.0,
+    # "initialTimestep": 1e-3,
     "MinStepSize": 1e-9,
-    "SteadyStateTolerance": 1e-4,
-    "restart": False,
+    "SteadyStateTolerance": 1e-2,
+    "aggressiveTimesteps": True,
+    "restart": True,
     "zeroFlux": True,
 }
 
@@ -87,12 +88,12 @@ points = MaNTA.getNodes(
     solver_config["Polynomial_degree"],
 )
 
-
 yancc_rho = jnp.array(points)
-yancc_ntheta = 13
-yancc_nzeta = 27
+yancc_ntheta = 17
+yancc_nzeta = 31
 
-yancc_res = {"na": 43, "nx": 5}
+yancc_res = {"na": 55, "nx": 5}
+
 ## to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
 # + axis and lcfs
 # initial pressure is all zeros, can change this if desired
@@ -108,8 +109,8 @@ eq_init = eq.copy()
 yancc_wrapper = yancc_data.from_eq(
     points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
-st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-st.run()
+# st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+# st.run()
 
 
 def make_tangent(params, idx, key="Rb_lmn"):
@@ -137,6 +138,7 @@ def make_tangent(params, idx, key="Rb_lmn"):
 
 solver_config = {
     "OutputFilename": "stellarator_w7x_scan",
+    "RestartFile": "stellarator_w7x.restart.nc",
     "Polynomial_degree": degree,
     "Grid_points": nodes,
     "tau": tau,
@@ -265,7 +267,7 @@ o1 = ObjectiveFunction(objectives)
 o1.build(use_jit=False)
 obj = ProximalProjection(o1, ObjectiveFunction(constraints), eq)
 obj.build()
-N = 2
+N = 1
 M = 1
 # Get the index of a mode
 idx = eq.surface.R_basis.get_idx(L=0, N=N, M=M)
@@ -282,7 +284,7 @@ start = v0 - delta
 end = v0 + delta
 # start = -0.04
 # end = 0.02
-sweep = jnp.linspace(start, end, 6)
+sweep = jnp.linspace(start, end, 10)
 df = sweep[1] - sweep[0]
 
 
