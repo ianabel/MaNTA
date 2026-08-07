@@ -76,7 +76,7 @@ solver_config = {
     "aggressiveTimesteps": True,
     "restart": True,
     "zeroFlux": True,
-    "solveAdjoint": True,
+    "solveAdjoint": False,
 }
 
 
