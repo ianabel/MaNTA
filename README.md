@@ -112,6 +112,30 @@ The core MaNTA algorithm solves a generic set of reaction-diffusion equations. T
 
 Example configurations live in the `examples/` subdirectory. 
 
+### Superconvergence
+
+Every run with `Polynomial_degree >= 1` reports an extra field per variable,
+`u_star`, in its netCDF output and in the `.dat` files: the element-local
+postprocessed solution in `P_{k+1}`, reconstructed from `u` and `q`.
+
+Setting
+
+```toml
+[configuration]
+Superconvergent = true
+```
+
+additionally switches the discretisation to the superconvergent interpolatory HDG
+method of Chen, Cockburn, Singler and Zhang (*J. Sci. Comput.* **81**, 2188), in
+which the physics is evaluated at the postprocessed solution. `u_star` then
+converges one order faster than `u` — order `k+2` against `k+1`. The option
+defaults to `false`, and with it off the discretisation is exactly what it was
+before the option existed.
+
+`Tests/README.md` has the measured convergence orders and the cases that are not
+covered (notably `k = 0` and spatial adjoint parameters, both of which are
+rejected with a clear error).
+
 ## Built With
 
 * [Boost](http://boost.org) - C++ Template library that radically extends the STL

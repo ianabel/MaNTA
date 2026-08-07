@@ -2,6 +2,7 @@
 #define ADJOINTPROBLEM_HPP
 
 #include "DGSoln.hpp"
+#include "Postprocessing.hpp"
 #include "Types.hpp"
 #include <Eigen/Core>
 #include <stdexcept>
@@ -11,6 +12,30 @@ public:
   virtual ~AdjointProblem() = default;
 
   virtual Value GFn(Index gIndex, DGSoln &y) const = 0;
+
+  // The objective with the superconvergent scheme, where u* is the solution the
+  // method actually delivers, so G is a functional of u* rather than of u_h.
+  //
+  // G = int I_h[g] dx, with g evaluated at the k+2 star nodes (u -> u*) and its
+  // P_{k+1} interpolant integrated exactly: that is b1 . g, where b1 holds the
+  // star basis's integration weights. The same quadrature is what
+  // SystemSolver::initializeMatricesForAdjointSolve differentiates to build G_y,
+  // so the reported objective and the reported gradient are exactly a function and
+  // its derivative -- which is what makes the finite-difference check in
+  // python/Tests/test_adjoint.py meaningful rather than merely close.
+  //
+  // Uses the batched gFn hook; the pointwise one is deprecated in the Python
+  // trampoline. Cases wanting a different objective can override.
+  virtual Value GFn(Index gIndex, DGSoln &y, Postprocessor const &pp) const {
+    const GlobalState states = pp.evalOnStarNodes(y);
+    const Values g = gFn(gIndex, states, pp.starPoints());
+
+    const Index nStar = pp.starDoF();
+    Value total = 0.0;
+    for (size_t cell = 0; cell < y.getGrid().getNCells(); ++cell)
+      total += pp.starWeights(cell).dot(g.segment(cell * nStar, nStar));
+    return total;
+  }
   virtual Value dGFndp(Index gIndex, Index pIndex, DGSoln &y) const = 0;
   virtual Matrix dGFndp(Index gIndex, DGSoln &y) const {
     Values out(np);

@@ -73,6 +73,11 @@ static const map_t params = {
     {"WriteDebugDatFiles",
      Parameter<bool>{.required = false, ._default = false}},
     //
+    // Switches the residual and Jacobian to the superconvergent interpolatory
+    // scheme; see SystemSolver::setSuperconvergent. Off by default so existing
+    // configurations are unaffected.
+    {"Superconvergent", Parameter<bool>{.required = false, ._default = false}},
+    //
     {"zeroFlux", Parameter<bool>{.required = false, ._default = false}},
     //
     {"initialTimestep", Parameter<double>{.required = false, ._default = 0.0}}};
@@ -257,6 +262,8 @@ void PyRunner::configure(const py::dict &config) {
   system->setNOutput(nOutput);
   system->setMinStepSize(dt_min);
   system->setZeroFlux(getValueWithDefault<bool>("zeroFlux", config));
+  system->setSuperconvergent(
+      getValueWithDefault<bool>("Superconvergent", config));
   system->setWriteDatFile(getValueWithDefault<bool>("WriteDatFile", config));
   system->setWriteDebugDatFiles(
       getValueWithDefault<bool>("WriteDebugDatFiles", config));
@@ -315,8 +322,18 @@ py::tuple PyRunner::getAdjointGradients(void) {
   }
 
   Vector G(adjoint->getNg());
-  for (Index i = 0; i < adjoint->getNg(); i++)
-    G(i) = adjoint->GFn(i, system->yJac);
+  if (system->isSuperconvergent()) {
+    // G_p above is the gradient of the u*-based objective, so the value reported
+    // alongside it has to be that same objective -- otherwise a finite-difference
+    // check compares the derivative of one functional against differences of
+    // another.
+    system->postprocessor->computeUStar(system->yJac);
+    for (Index i = 0; i < adjoint->getNg(); i++)
+      G(i) = adjoint->GFn(i, system->yJac, *system->postprocessor);
+  } else {
+    for (Index i = 0; i < adjoint->getNg(); i++)
+      G(i) = adjoint->GFn(i, system->yJac);
+  }
 
   return py::make_tuple(G, gp);
 }
@@ -358,4 +375,31 @@ PyRunner::getSolution(Index var,
     }
     return sol;
   }
+}
+
+Vector PyRunner::getPostprocessedSolution(
+    Index var, std::optional<std::vector<Position>> const &points) {
+  Postprocessor const *pp = system->getPostprocessor();
+  if (pp == nullptr)
+    throw std::runtime_error("No postprocessed solution is available: it "
+                             "requires Polynomial_degree >= 1 and a solver that "
+                             "has been run at least once");
+
+  // computeUStar is what fills the reconstruction, and it is driven by output
+  // writing -- so it has already run against yJac's contents only if this run
+  // wrote output. Recompute from yJac here so the answer does not depend on
+  // whether WriteOutput was set. Same yJac-vs-final-step caveat as getSolution.
+  system->postprocessor->computeUStar(system->yJac);
+
+  const std::vector<Position> xs =
+      points ? points.value() : system->yJac.getPoints();
+
+  Vector sol(xs.size());
+  for (size_t i = 0; i < xs.size(); i++) {
+    const auto &p = xs[i];
+    if (p < grid->lowerBoundary() || p > grid->upperBoundary())
+      throw std::out_of_range("Requested point outside of grid boundaries");
+    sol(i) = pp->uStar(var)(p);
+  }
+  return sol;
 }

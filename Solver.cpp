@@ -188,7 +188,7 @@ void SystemSolver::runSolver(double tFinal)
 		std::println(out0, "# Columns Headings: ");
 		std::print(out0, "# x");
 		for (Index v = 0; v < nVars; ++v)
-			std::print(out0, "\tvar{0} u\tvar{0} q\tvar{0} sigma\tvar{0} source", v);
+			std::print(out0, "\tvar{0} u\tvar{0} q\tvar{0} sigma\tvar{0} u_star\tvar{0} source", v);
 		std::println(out0, "");
 	}
 

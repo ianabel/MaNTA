@@ -276,6 +276,60 @@ def test_adjoint_gradient_matches_finite_differences(tmp_path):
     )
 
 
+def objective_only_superconvergent(p, tmp_path):
+    G, _, _, _ = solve(p, tmp_path, Superconvergent=True)
+    return float(G[0])
+
+
+def test_the_superconvergent_objective_matches_the_closed_form(tmp_path):
+    """With the flag on, G is a functional of u* rather than of u_h.
+
+    At k = 4 the exact steady state u = S x(1-x)/(2 kappa) is a quadratic, so u_h
+    represents it exactly and the reconstruction -- which is exact for anything of
+    degree <= k+1 -- returns the same function. The closed form is therefore still
+    the right reference, which makes this a clean check that the u*-based objective
+    is wired up correctly rather than a check of the postprocessing's accuracy.
+    """
+    p = np.array([KAPPA0, SOURCE0])
+    G, _, _, _ = solve(p, tmp_path, Superconvergent=True)
+
+    assert G[0] == pytest.approx(exact_G(*p), rel=1e-6), (
+        f"G = {G[0]}, expected {exact_G(*p)}"
+    )
+
+
+def test_the_superconvergent_adjoint_gradient_matches_finite_differences(tmp_path):
+    """The load-bearing test for the superconvergent adjoint path.
+
+    Both sides use the u*-based objective: the adjoint gradient because G_y now
+    contracts dg/du with B12/B11 through the reconstruction, and the reference
+    because objective_only_superconvergent re-runs with the flag on. Comparing a
+    u*-based gradient against differences of a u_h-based objective would be
+    comparing derivatives of two different functionals.
+    """
+    p0 = np.array([KAPPA0, SOURCE0])
+    _, adjoint_grad, _, _ = solve(p0, tmp_path / "base", Superconvergent=True)
+    adjoint_grad = adjoint_grad.reshape(-1)
+
+    assert adjoint_grad.shape == (NP,), adjoint_grad.shape
+
+    fd = np.zeros(NP)
+    for i in range(NP):
+        h = 1e-4 * abs(p0[i])
+        p_plus, p_minus = p0.copy(), p0.copy()
+        p_plus[i] += h
+        p_minus[i] -= h
+        fd[i] = (
+            objective_only_superconvergent(p_plus, tmp_path / f"p{i}")
+            - objective_only_superconvergent(p_minus, tmp_path / f"m{i}")
+        ) / (2.0 * h)
+
+    rel = np.abs(adjoint_grad - fd) / np.maximum(np.abs(fd), 1e-300)
+    assert np.all(rel < 1e-3), (
+        f"adjoint={adjoint_grad}\nfinite-difference={fd}\nrelative error={rel}"
+    )
+
+
 def test_adjoint_gradient_matches_the_closed_form(tmp_path):
     """Independent of the finite-difference check, and of the solver's own state.
 

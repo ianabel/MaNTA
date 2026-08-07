@@ -21,6 +21,7 @@
 #include "DGSoln.hpp"
 #include "NetCDFIO.hpp"
 #include "AdjointProblem.hpp"
+#include "Postprocessing.hpp"
 
 // Unit tests exercise the HDG block assembly, the static-condensation solve and
 // the adjoint vectors directly -- all private. The previous scheme befriended
@@ -142,6 +143,22 @@ class SystemSolver
 
         void setZeroFlux(bool in) { zeroFlux = in; };
 
+        // Switch the residual and Jacobian to the superconvergent interpolatory
+        // scheme of Chen, Cockburn, Singler & Zhang (J Sci Comput 81:2188): the
+        // physics is evaluated on the k+2 nodes of the degree-(k+1) basis with
+        // the postprocessed u* in place of u_h, and interpolated into P_{k+1}
+        // rather than P_k. Off by default -- with it off the solver is the
+        // interpolatory HDG method of arXiv:1811.09667, exactly as before.
+        //
+        // The postprocessed u* is reconstructed and written to the output either
+        // way; this flag controls only whether the *method* uses it.
+        void setSuperconvergent(bool in) { superconvergent = in; };
+        bool isSuperconvergent() const { return superconvergent; };
+
+        // Null when k = 0, where the degree-0 NodalBasis cannot be evaluated
+        // off-node and there is nothing to reconstruct from.
+        Postprocessor const *getPostprocessor() const { return postprocessor.get(); };
+
         // The plain-text .dat files are a gnuplot convenience, not the primary
         // output -- netCDF is. Both default to off so a run writes only its
         // .nc; ask for them explicitly when you want to plot.
@@ -216,6 +233,11 @@ class SystemSolver
         DGSoln yJac; // memory owned by us
         DGSoln dydtJac; // memory owned by us
 
+        // Built in initialiseMatrices(), once the polynomial degree and grid are
+        // fixed. Non-copyable and holds a reference to `grid`, hence the pointer.
+        std::unique_ptr<Postprocessor> postprocessor;
+        bool superconvergent = false;
+
         Matrix G_p; // gradients computed by adjoint state method
 
         void NLqMat(Matrix &, DGSoln const &, Index);
@@ -230,7 +252,41 @@ class SystemSolver
 
         void DerivativeSubMatrix(Matrix &mat, std::vector<Eigen::Ref<Matrix>> const dX_dZ, DGSoln const &, Index intervalIndex);
 
+        // The superconvergent counterpart of DerivativeSubMatrix, and the only
+        // place the chain rule through the postprocessing lives.
+        //
+        // With the star scheme a physics value X is evaluated at the k+2 star
+        // nodes with u* in place of u_h, and the resulting P_{k+1} interpolant is
+        // projected onto the P_k test space by A9. So for a cell dof vector Z,
+        //
+        //     d/dZ ( X, phi_i )_K  =  A9 . diag( dX/dW ) . dW/dZ
+        //
+        // where W is whichever field X was differentiated with respect to and the
+        // trailing `chain` is dW/dZ evaluated at the star nodes:
+        //
+        //     Z = u coefficients      chain = B12   (u* depends on them)
+        //     Z = q coefficients      chain = V     for dX/dq, and additionally
+        //                                    B11    for dX/du, since u* depends
+        //                                           on q as well
+        //     Z = sigma or phi        chain = V     (simply sampled there)
+        //
+        // Accumulates rather than assigns, so the two contributions to the q
+        // column can be added in turn. dX_dZ[XVar](WVar, m) is dX_XVar/dW_WVar at
+        // star node m, the same indexing DerivativeSubMatrix uses.
+        void accumulateStarBlocks(MatrixRef mat,
+                                  std::vector<Eigen::Ref<Matrix>> const &dX_dZ,
+                                  Matrix const &chain, Index nX, Index nZ,
+                                  Index intervalIndex) const;
+
         void dSources_dScalars_Mat(Matrix &, DGSoln const &, Index );
+
+        // Superconvergent counterpart. The scalars do not enter the
+        // postprocessing, so there is no chain matrix -- only the star nodes and
+        // A9 in place of the mass matrix. Takes the states and positions the
+        // caller already has rather than re-deriving them from a DGSoln, which it
+        // could not do for the star nodes anyway.
+        void dSources_dScalars_StarMat(Matrix &, GlobalState const &,
+                                       std::vector<Position> const &, Index);
 
         void dSourcedPhi_Mat(Matrix &, DGSoln const &, Index );
         void dPhi_Mat(Matrix &, std::vector<Eigen::Ref<Matrix>> const dX_dZ, DGSoln const &, Index );

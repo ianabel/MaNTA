@@ -63,6 +63,33 @@ void SystemSolver::DerivativeSubMatrix(Matrix &mat, std::vector<Eigen::Ref<Matri
 	}
 }
 
+// See the declaration in SystemSolver.hpp for what the chain matrix is and why
+// the q column needs two calls.
+void SystemSolver::accumulateStarBlocks(MatrixRef mat,
+										std::vector<Eigen::Ref<Matrix>> const &dX_dZ,
+										Matrix const &chain, Index nX, Index nZ,
+										Index intervalIndex) const
+{
+	assert(mat.rows() == nX * (k + 1));
+	assert(mat.cols() == nZ * (k + 1));
+	assert(chain.rows() == k + 2);
+	assert(chain.cols() == k + 1);
+
+	Matrix const &A9 = postprocessor->A9(intervalIndex);
+
+	for (Index XVar = 0; XVar < nX; XVar++)
+	{
+		for (Index ZVar = 0; ZVar < nZ; ZVar++)
+		{
+			// Materialised because asDiagonal() on a transposed row of an
+			// Eigen::Ref is fragile to alias analysis, and this is k+2 doubles.
+			const Vector d = dX_dZ[XVar].row(ZVar).transpose();
+			mat.block(XVar * (k + 1), ZVar * (k + 1), k + 1, k + 1) +=
+				(A9 * d.asDiagonal()) * chain;
+		}
+	}
+}
+
 void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX_dZ )( Index, VectorRef, const State&, Position, double ), DGSoln const& Y, Index intervalIndex )
 {
 	// ASSERT mat.shape == ( nVars * ( k + 1) , nVars * ( k + 1 ) )
@@ -156,6 +183,37 @@ void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Index in
 			mat.block( XVar * ( k + 1 ), iScalar, k + 1, 1 ) =
 				Y.getBasis().InterpolateOntoBasis( I, vals );
 		}
+	}
+}
+
+void SystemSolver::dSources_dScalars_StarMat(Matrix &mat, GlobalState const &states,
+											 std::vector<Position> const &points,
+											 Index intervalIndex)
+{
+	assert(mat.rows() == nVars * (k + 1));
+	assert(mat.cols() == nScalars);
+
+	mat.setZero();
+
+	const Index nStar = k + 2;
+	Matrix const &A9 = postprocessor->A9(intervalIndex);
+
+	Values dSdS(nScalars);
+	Matrix nodal(nScalars, nStar);
+
+	for (Index XVar = 0; XVar < nVars; XVar++)
+	{
+		for (Index m = 0; m < nStar; ++m)
+		{
+			dSdS.setZero();
+			const Index g = intervalIndex * nStar + m;
+			problem->dSources_dScalars(XVar, dSdS, states[g], points[g], jt);
+			nodal.col(m) = dSdS;
+		}
+
+		for (Index iScalar = 0; iScalar < nScalars; ++iScalar)
+			mat.block(XVar * (k + 1), iScalar, k + 1, 1) =
+				A9 * Vector(nodal.row(iScalar).transpose());
 	}
 }
 

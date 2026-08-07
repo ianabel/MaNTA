@@ -53,6 +53,12 @@ public:
   Vector getSolution(Index var,
                      std::optional<std::vector<Position>> const &points);
 
+  // The element-local postprocessed solution u* in P_{k+1}, sampled the same way
+  // getSolution samples u. Available for any k >= 1 regardless of whether the
+  // superconvergent scheme is switched on.
+  Vector getPostprocessedSolution(Index var,
+                                  std::optional<std::vector<Position>> const &points);
+
 private:
   std::shared_ptr<TransportSystem> pProblem = nullptr;
   std::unique_ptr<AdjointProblem> adjoint = nullptr;
