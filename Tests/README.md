@@ -40,6 +40,23 @@ Two things worth knowing when adding a test:
   `Bfield.ref.nc`) must be reached with `testDataPath()` from `TestPaths.hpp`,
   which resolves against the `TEST_DATA_DIR` baked in by the Makefile. Do not
   hardcode `./Tests/UnitTests/...`; that only works from the repo root.
+* **A passing run is silent.** Several tests deliberately provoke output --
+  they run the full solver, hand `ErrorChecker` a null pointer, or make the
+  physics throw so `static_residual` has to report it. Wrap those calls in a
+  `CapturedOutput` (`CapturedOutput.hpp`) so the noise does not bury a real
+  failure. It redirects at the file-descriptor level, which is necessary
+  because the things that print here do not share a mechanism:
+  `ErrorChecker` uses `fprintf(stderr)`, `logmsg` uses `std::print(stderr)` on
+  a C `FILE*` rather than `std::cerr`, `Solver.cpp` uses `std::cout`, and
+  SUNDIALS' own error handler writes from C. Swapping `std::cout`'s streambuf
+  would catch only the third.
+
+  Two rules when using it. **Capture the noisy call, restore, then assert** --
+  Boost.Test writes failures to stdout, so an assertion that fires while
+  captured is swallowed. And prefer asserting on `capture.text()` to merely
+  discarding it: `ErrorChecker` and `logmsg` exist to say something useful, so
+  checking *what* they printed is worth more than checking that they did not
+  throw.
 
 Run a single suite or case directly:
 

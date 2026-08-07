@@ -7,15 +7,18 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include "CapturedOutput.hpp"
 #include "Logging.hpp"
 #include "Types.hpp"
 #include "util/trapezoid.hpp"
 
 #include <autodiff/forward/dual.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -148,19 +151,57 @@ BOOST_AUTO_TEST_CASE(level_to_string_rejects_an_invalid_level)
     BOOST_CHECK_THROW(levelToString(bogus), std::invalid_argument);
 }
 
-BOOST_AUTO_TEST_CASE(logmsg_accepts_the_formats_the_codebase_uses)
+BOOST_AUTO_TEST_CASE(logmsg_writes_what_it_is_asked_to)
 {
-    // Compile-time level filtering means most of these are no-ops in a release
-    // build, but they must still type-check and not throw. The vector overload
-    // exercises the std::formatter shim added for libstdc++ < 15.
+    // logmsg goes to a C FILE* via std::print, not to std::cerr, so this has to
+    // capture at the descriptor level -- and capturing means the message can be
+    // checked rather than merely not-thrown. The vector case exercises the
+    // std::formatter shim added for libstdc++ < 15.
     std::vector<double> v{1.0, 2.5, -3.0};
 
-    BOOST_CHECK_NO_THROW(logmsg<LOG_LEVEL::ERROR>("plain message\n"));
-    BOOST_CHECK_NO_THROW(logmsg<LOG_LEVEL::ERROR>("value {}\n", 42));
-    BOOST_CHECK_NO_THROW(logmsg<LOG_LEVEL::ERROR>("double {} and string {}\n", 1.5, "s"));
-    BOOST_CHECK_NO_THROW(logmsg<LOG_LEVEL::WARNING>("vector {}\n", v));
-    BOOST_CHECK_NO_THROW(logmsg<LOG_LEVEL::INFO>("info {}\n", 1));
-    BOOST_CHECK_NO_THROW(logmsg<LOG_LEVEL::PDEBUG>("debug {}\n", 1));
+    std::string out;
+    {
+        CapturedOutput quiet;
+        logmsg<LOG_LEVEL::ERROR>("plain message");
+        logmsg<LOG_LEVEL::ERROR>("value {}", 42);
+        logmsg<LOG_LEVEL::ERROR>("double {} and string {}", 1.5, "s");
+        logmsg<LOG_LEVEL::WARNING>("vector {}", v);
+        out = quiet.text();
+    }
+
+    BOOST_TEST(out.find("ERROR: plain message") != std::string::npos, out);
+    BOOST_TEST(out.find("ERROR: value 42") != std::string::npos, out);
+    BOOST_TEST(out.find("ERROR: double 1.5 and string s") != std::string::npos, out);
+    BOOST_TEST(out.find("WARNING: vector [1, 2.5, -3]") != std::string::npos, out);
+
+    // One line per call: println adds the newline, so a format string should
+    // not carry its own.
+    BOOST_TEST(std::count(out.begin(), out.end(), '\n') == 4, out);
+}
+
+BOOST_AUTO_TEST_CASE(logmsg_filters_by_level_at_compile_time)
+{
+    // max_log_level is WARNING in a release build, INFO under VERBOSE and
+    // PDEBUG under DEBUG. Anything below the threshold must compile to nothing
+    // -- that is what makes it free to leave INFO logging in hot code.
+    std::string out;
+    {
+        CapturedOutput quiet;
+        logmsg<LOG_LEVEL::INFO>("info {}", 1);
+        logmsg<LOG_LEVEL::PDEBUG>("debug {}", 1);
+        out = quiet.text();
+    }
+
+#if defined(DEBUG)
+    BOOST_TEST(out.find("INFO: info 1") != std::string::npos, out);
+    BOOST_TEST(out.find("DEBUG: debug 1") != std::string::npos, out);
+#elif defined(VERBOSE)
+    BOOST_TEST(out.find("INFO: info 1") != std::string::npos, out);
+    BOOST_TEST(out.find("DEBUG") == std::string::npos, out);
+#else
+    BOOST_TEST(out.empty(),
+               "a release build should emit nothing below WARNING, got: " << out);
+#endif
 }
 
 BOOST_AUTO_TEST_SUITE_END()

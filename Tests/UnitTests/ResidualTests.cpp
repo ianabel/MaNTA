@@ -19,6 +19,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include "../../PhysicsCases/ScalarTestLD3.hpp"
+#include "CapturedOutput.hpp"
 #include "SystemSolver.hpp"
 #include "TestDiffusion.hpp"
 #include "Types.hpp"
@@ -29,6 +30,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <string>
 #include <toml.hpp>
 
 // Defined in SystemSolver.cpp with external linkage but no declaration in any
@@ -515,7 +517,22 @@ BOOST_AUTO_TEST_CASE(static_residual_converts_a_physics_exception_into_a_retry)
 
     ThrowingDiffusion bad(diffusion_config);
     sys.problem = &bad;
-    BOOST_TEST(static_residual(0.0, Y, dYdt, res, &sys) == 1);
+
+    // The wrapper reports the exception it swallowed, which is the point -- IDA
+    // is about to silently retry with a smaller step, and without this line the
+    // user would never know why. Capture it rather than letting it litter a
+    // passing run, and check it names the failure.
+    int retval = 0;
+    std::string reported;
+    {
+        CapturedOutput quiet;
+        retval = static_residual(0.0, Y, dYdt, res, &sys);
+        reported = quiet.text();
+    }
+    BOOST_TEST(retval == 1);
+    BOOST_TEST(reported.find("deliberate physics failure") != std::string::npos,
+               "static_residual should report what it caught, got: " << reported);
+    BOOST_TEST(reported.find("Retrying") != std::string::npos);
 
     // And the exception really does escape residual() itself -- otherwise the
     // check above would pass even if the wrapper were removed.

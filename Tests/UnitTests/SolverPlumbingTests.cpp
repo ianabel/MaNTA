@@ -8,6 +8,7 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include "CapturedOutput.hpp"
 #include "ErrorChecker.hpp"
 #include "SunLinSolWrapper.hpp"
 #include "SunMatrixWrapper.hpp"
@@ -18,6 +19,7 @@
 #include <sundials/sundials_context.h>
 
 #include <stdexcept>
+#include <string>
 #include <toml.hpp>
 
 using namespace toml::literals::toml_literals;
@@ -95,32 +97,99 @@ BOOST_AUTO_TEST_CASE(setters_that_do_not_validate_still_round_trip)
 
 // -------------------------------------------------------- ErrorChecker --
 
+// check_retval writes to stderr on failure, so each of these captures the
+// output rather than letting it litter a passing run -- and then asserts on it,
+// which is worth more than suppressing it: the whole point of the function is
+// to say which SUNDIALS call failed and how.
+
 BOOST_AUTO_TEST_CASE(check_retval_flags_null_pointers_for_opt_0_and_2)
 {
     int ok = 0;
+    int optZero = 0, optTwo = 0;
+    std::string zeroMsg, twoMsg;
 
-    // opt 0: SUNDIALS allocator returning NULL is an error.
-    BOOST_TEST(ErrorChecker::check_retval(nullptr, "alloc", 0) == 1);
-    BOOST_TEST(ErrorChecker::check_retval(&ok, "alloc", 0) == 0);
+    {
+        CapturedOutput quiet;
+        // opt 0: SUNDIALS allocator returning NULL is an error.
+        optZero = ErrorChecker::check_retval(nullptr, "IDACreate", 0);
+        zeroMsg = quiet.text();
+    }
+    {
+        CapturedOutput quiet;
+        // opt 2: same check, different message.
+        optTwo = ErrorChecker::check_retval(nullptr, "N_VNew_Serial", 2);
+        twoMsg = quiet.text();
+    }
 
-    // opt 2: same check, different message.
-    BOOST_TEST(ErrorChecker::check_retval(nullptr, "alloc", 2) == 1);
-    BOOST_TEST(ErrorChecker::check_retval(&ok, "alloc", 2) == 0);
+    BOOST_TEST(optZero == 1);
+    BOOST_TEST(zeroMsg.find("SUNDIALS_ERROR") != std::string::npos, zeroMsg);
+    BOOST_TEST(zeroMsg.find("IDACreate") != std::string::npos, zeroMsg);
+
+    BOOST_TEST(optTwo == 1);
+    BOOST_TEST(twoMsg.find("MEMORY_ERROR") != std::string::npos, twoMsg);
+    BOOST_TEST(twoMsg.find("N_VNew_Serial") != std::string::npos, twoMsg);
+
+    // The success paths must be silent as well as returning 0. Note the calls
+    // are inside the capture and the assertions are outside it: Boost.Test
+    // writes failures to stdout, so an assertion that fires while captured
+    // would be swallowed.
+    int okZero = 1, okTwo = 1;
+    std::string quietMsg;
+    {
+        CapturedOutput quiet;
+        okZero = ErrorChecker::check_retval(&ok, "alloc", 0);
+        okTwo = ErrorChecker::check_retval(&ok, "alloc", 2);
+        quietMsg = quiet.text();
+    }
+    BOOST_TEST(okZero == 0);
+    BOOST_TEST(okTwo == 0);
+    BOOST_TEST(quietMsg.empty(), "a successful check should print nothing, got: " << quietMsg);
 }
 
 BOOST_AUTO_TEST_CASE(check_retval_flags_negative_flags_for_opt_1)
 {
-    int negative = -1, zero = 0, positive = 7;
+    int negative = -3, zero = 0, positive = 7;
 
-    BOOST_TEST(ErrorChecker::check_retval(&negative, "call", 1) == 1);
-    BOOST_TEST(ErrorChecker::check_retval(&zero, "call", 1) == 0);
-    BOOST_TEST(ErrorChecker::check_retval(&positive, "call", 1) == 0);
+    int flagged = 0;
+    std::string message;
+    {
+        CapturedOutput quiet;
+        flagged = ErrorChecker::check_retval(&negative, "IDASolve", 1);
+        message = quiet.text();
+    }
+
+    BOOST_TEST(flagged == 1);
+    BOOST_TEST(message.find("IDASolve") != std::string::npos, message);
+    // The retval itself is the useful part -- without it the caller cannot tell
+    // a convergence failure from a bad argument.
+    BOOST_TEST(message.find("-3") != std::string::npos, message);
+
+    int zeroFlag = 1, positiveFlag = 1;
+    std::string quietMsg;
+    {
+        CapturedOutput quiet;
+        zeroFlag = ErrorChecker::check_retval(&zero, "call", 1);
+        positiveFlag = ErrorChecker::check_retval(&positive, "call", 1);
+        quietMsg = quiet.text();
+    }
+    BOOST_TEST(zeroFlag == 0);
+    BOOST_TEST(positiveFlag == 0);
+    BOOST_TEST(quietMsg.empty(), quietMsg);
 }
 
 BOOST_AUTO_TEST_CASE(check_retval_passes_anything_for_an_unknown_opt)
 {
-    // Only 0, 1 and 2 are defined; anything else falls through to success.
-    BOOST_TEST(ErrorChecker::check_retval(nullptr, "call", 3) == 0);
+    // Only 0, 1 and 2 are defined; anything else falls through to success --
+    // silently.
+    int result = 1;
+    std::string message;
+    {
+        CapturedOutput quiet;
+        result = ErrorChecker::check_retval(nullptr, "call", 3);
+        message = quiet.text();
+    }
+    BOOST_TEST(result == 0);
+    BOOST_TEST(message.empty(), message);
 }
 
 // --------------------------------------------------- the SUNDIALS shims --

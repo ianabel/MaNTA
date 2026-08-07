@@ -26,6 +26,7 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include "CapturedOutput.hpp"
 #include "SystemSolver.hpp"
 #include "Types.hpp"
 
@@ -148,7 +149,13 @@ double solveAndMeasure(Index k, Index nCells, double tFinal)
     // is a real limit of this solver, not of the manufactured problem.
     sys.setTolerances({1e-11}, 1e-9);
 
-    sys.runSolver(tFinal);
+    {
+        // runSolver reports its step counts and IDACalcIC warnings; sixteen
+        // integrations of that is a hundred lines of noise around a passing
+        // test. The measured orders are reported by BOOST_TEST_MESSAGE instead.
+        CapturedOutput quiet;
+        sys.runSolver(tFinal);
+    }
 
     const double err = l2Error(sys, grid, tFinal);
 

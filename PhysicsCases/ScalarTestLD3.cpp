@@ -1,5 +1,6 @@
 
 #include "ScalarTestLD3.hpp"
+#include "Logging.hpp"
 #include <boost/math/quadrature/gauss_kronrod.hpp>
 #include <cmath>
 #include <numbers>
@@ -66,7 +67,10 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
 	u0 = toml::find_or(DiffConfig, "u0", 0.1);
 
 	M0 = 2 * u0 + 4 * beta / std::numbers::pi;
-	std::cerr << "M0 : " << M0 << std::endl;
+	// Was an unconditional std::cerr, which printed once per construction --
+	// eight times in a `make test` run, and once per regression case. INFO is
+	// compiled out of a release build and still available with VERBOSE.
+	logmsg<LOG_LEVEL::INFO>("ScalarTestLD3 target mass M0 = {}", M0);
 }
 
 // Dirichlet Boundary Conditon
