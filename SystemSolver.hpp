@@ -142,6 +142,15 @@ class SystemSolver
 
         void setZeroFlux(bool in) { zeroFlux = in; };
 
+        // The plain-text .dat files are a gnuplot convenience, not the primary
+        // output -- netCDF is. Both default to off so a run writes only its
+        // .nc; ask for them explicitly when you want to plot.
+        void setWriteDatFile(bool in) { writeDatFile = in; };
+        // <stem>.dydt.dat and <stem>.res.dat. Additionally require a
+        // PHYSICS_DEBUG build, since that is what computes the residual and
+        // error weights they report.
+        void setWriteDebugDatFiles(bool in) { writeDebugDatFiles = in; };
+
         void setJacEvalY( N_Vector, N_Vector );
         int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
 
@@ -246,6 +255,10 @@ class SystemSolver
         bool initialised = false;
 
         bool zeroFlux = false; // used to switch between zero-flux and zero-gradient BCs
+
+        // Text output is opt-in; netCDF is what a run produces by default.
+        bool writeDatFile = false;
+        bool writeDebugDatFiles = false;
 
         double alpha = 1.0;
         bool testing = false;

@@ -172,12 +172,12 @@ def test_steady_state( filename, soln_fn, tolerance ):
         sys.exit( 1 )
 
 def cleanup( prefix ):
+    # .nc is always written; the .dat files are opt-in (WriteDatFile /
+    # WriteDebugDatFiles, both off by default) so none of them may exist.
     os.unlink( prefix + ".nc" )
-    os.unlink( prefix + ".dat" )
-    if ( os.path.exists( prefix + ".res.dat" ) ):
-       os.unlink( prefix + ".res.dat" )
-    if ( os.path.exists( prefix + ".dydt.dat" ) ):
-       os.unlink( prefix + ".dydt.dat" )
+    for suffix in ( ".dat", ".res.dat", ".dydt.dat" ):
+        if os.path.exists( prefix + suffix ):
+            os.unlink( prefix + suffix )
 
 def check_ref_case( prefix ):
     print("Checking Reference Solution for "+prefix+".conf")

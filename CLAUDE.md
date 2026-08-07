@@ -173,6 +173,12 @@ internal; several defaults loop only to `getNpInternal()`.
 * **Output filenames come from the config file's *stem*** (`Solver.cpp` uses
   `inputFilePath.stem()`), so `.nc` / `.dat` / `.restart.nc` land in the current
   directory regardless of any path in `OutputFilename`.
+* **netCDF is the default output; the `.dat` files are opt-in.** A run writes
+  `<stem>.nc` and `<stem>.restart.nc` unconditionally. The plain-text gnuplot
+  output needs `WriteDatFile = true`, and `<stem>.dydt.dat` / `<stem>.res.dat`
+  need `WriteDebugDatFiles = true` *and* a `PHYSICS_DEBUG` build. Both options
+  default to false and are accepted by `runManta` and `PyRunner::configure`
+  alike.
 * **Tests reach private `SystemSolver` members** through `MANTA_TEST_PRIVATE`,
   which a `-DTEST` build widens to `public`. No friend declarations needed.
 * **gcov counts a templated line once per instantiation**, which makes

@@ -16,6 +16,11 @@ therefore use unique cwd-relative names and clean up after themselves; see
 `test_output_filename_keeps_only_the_basename` in `test_runner.py`, which pins
 the behaviour.
 
+A run writes netCDF (`<stem>.nc`, `<stem>.restart.nc`) by default and no text
+output at all; `.dat` files need `WriteDatFile` (and `WriteDebugDatFiles` for
+the `.dydt.dat` / `.res.dat` pair), both off by default. Test cleanup code must
+therefore treat `.dat` as optional.
+
 `make coverage` rebuilds with `--coverage -O0`, runs all three, and writes
 `coverage/index.html` (numerical core + Python bindings) and
 `coverage/physics.html` (`PhysicsCases/`, informational). See the README.

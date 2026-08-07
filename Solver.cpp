@@ -175,20 +175,32 @@ void SystemSolver::runSolver(double tFinal)
 
 	IDASetMaxNonlinIters(IDA_mem, 10);
 
-	// Initialise text output and write out initial condition massaged by CalcIC
 	std::string baseName = inputFilePath.stem();
-	std::ofstream out0(baseName + ".dat");
 
-	std::println(out0, "# Time indexes blocks. ");
-	std::println(out0, "# Columns Headings: ");
-	std::print(out0, "# x");
-	for (Index v = 0; v < nVars; ++v)
-		std::print(out0, "\tvar{0} u\tvar{0} q\tvar{0} sigma\tvar{0} source", v);
-	std::println(out0, "");
+	// The .dat files are opt-in; netCDF below is what a run produces by
+	// default. Nothing is opened unless asked for, so a plain run leaves no
+	// text output behind at all.
+	std::ofstream out0;
+	if (writeDatFile)
+	{
+		out0.open(baseName + ".dat");
+		std::println(out0, "# Time indexes blocks. ");
+		std::println(out0, "# Columns Headings: ");
+		std::print(out0, "# x");
+		for (Index v = 0; v < nVars; ++v)
+			std::print(out0, "\tvar{0} u\tvar{0} q\tvar{0} sigma\tvar{0} source", v);
+		std::println(out0, "");
+	}
 
 	std::ofstream dydt_out, res_out;
 
-	if (physics_debug)
+	// The diagnostic .dat files need both the option and a PHYSICS_DEBUG build:
+	// the residual norms and error weights they report are only computed on
+	// that path, and `wgt` is only allocated there. One flag for both because
+	// they are always written together.
+	const bool debugDat = physics_debug && writeDebugDatFiles;
+
+	if (debugDat)
 	{
 		wgt = N_VClone(res);
 		dydt_out.open(baseName + ".dydt.dat");
@@ -200,8 +212,11 @@ void SystemSolver::runSolver(double tFinal)
 		double residual_val = N_VWrmsNorm(res, wgt);
 		std::println(res_out, "# Residual norm at t = {:g} (pre-calcIC) is {:g}", t0, residual_val);
 		printOnNodes(res_out, t0, res);
-		std::println(out0, "# t = {:g} (pre-calcIC) ", t0);
-		print(out0, t0, nOut, true);
+		if (writeDatFile)
+		{
+			std::println(out0, "# t = {:g} (pre-calcIC) ", t0);
+			print(out0, t0, nOut, true);
+		}
 	}
 
 	//------------------------------Solve------------------------------
@@ -221,8 +236,9 @@ void SystemSolver::runSolver(double tFinal)
 	if (nresevals > 10)
     logmsg<LOG_LEVEL::WARNING>("IDACalcIC required {} residual evaluations. Check settings in {}", nresevals, std::string(inputFilePath));
 
-	print(out0, t0, nOut, true);
-	if (physics_debug)
+	if (writeDatFile)
+		print(out0, t0, nOut, true);
+	if (debugDat)
 	{
 		IDAGetConsistentIC(IDA_mem, Y, dYdt);
 		residual(t0, Y, dYdt, res);
@@ -275,8 +291,9 @@ void SystemSolver::runSolver(double tFinal)
 		if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
 		{
 			// try to emit final data
-			print(out0, tret, nOut, true);
-			if (physics_debug)
+			if (writeDatFile)
+				print(out0, tret, nOut, true);
+			if (debugDat)
       {
 	      residual(tret, Y, dYdt, res);
         IDAEwtSet(Y, wgt, IDA_mem);
@@ -286,7 +303,8 @@ void SystemSolver::runSolver(double tFinal)
         printOnNodes(dydt_out, tret, dYdt);
       }
 			WriteTimeslice(tret);
-			out0.close();
+			if (writeDatFile)
+				out0.close();
 			nc_output.Close();
 
 			throw std::runtime_error("IDASolve could not complete");
@@ -295,8 +313,9 @@ void SystemSolver::runSolver(double tFinal)
 		long int nstep_tmp;
 		IDAGetNumSteps(IDA_mem, &nstep_tmp);
 		std::println("Writing output at {:g} ( {} timesteps )", tret, nstep_tmp);
-		print(out0, tret, nOut, Y, true);
-		if (physics_debug)
+		if (writeDatFile)
+			print(out0, tret, nOut, Y, true);
+		if (debugDat)
 		{
 			printOnNodes(dydt_out, tret, dYdt);
 			residual(tret, Y, dYdt, res);
@@ -347,8 +366,9 @@ void SystemSolver::runSolver(double tFinal)
 	}
 
 	problem->finaliseDiagnostics(nc_output);
-	out0.close();
-	if (physics_debug)
+	if (writeDatFile)
+		out0.close();
+	if (debugDat)
 	{
 		dydt_out.close();
 		res_out.close();
@@ -378,7 +398,7 @@ void SystemSolver::runSolver(double tFinal)
 
 	// Free the raw data buffers allocated by SUNDIALS
 
-	if (physics_debug)
+	if (debugDat)
 		N_VDestroy(wgt);
 
 	N_VDestroy(Y);

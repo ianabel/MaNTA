@@ -244,6 +244,11 @@ int runManta(std::string const &fname)
 	system->setNOutput(nOutput);
 	system->setMinStepSize(dt_min);
 
+	// netCDF is the default output. The plain-text .dat files are a gnuplot
+	// convenience and are written only when asked for.
+	system->setWriteDatFile(toml::find_or(config, "WriteDatFile", false));
+	system->setWriteDebugDatFiles(toml::find_or(config, "WriteDebugDatFiles", false));
+
 	if (config.count("SteadyStateTolerance") == 1)
 	{
 		double sst = getFloat("SteadyStateTolerance", config);

@@ -187,6 +187,69 @@ def test_the_defaults_are_enough(tmp_path):
     assert MaNTA.run(cfg) == 0
 
 
+def test_dat_output_is_off_by_default_and_opt_in(tmp_path):
+    """netCDF is what a run produces; the .dat files have to be asked for.
+
+    Output lands in the cwd, not next to the config (Solver.cpp keeps only the
+    stem), so this runs in a scratch directory of its own and checks what
+    appears there.
+    """
+    import os
+
+    scratch = tmp_path / "run"
+    scratch.mkdir()
+    previous = os.getcwd()
+    try:
+        os.chdir(scratch)
+
+        default_cfg = write_config(scratch, "quiet")
+        assert MaNTA.run(default_cfg) == 0
+        produced = {p.name for p in scratch.iterdir()}
+        assert "quiet.nc" in produced, produced
+        assert "quiet.dat" not in produced, (
+            f".dat was written without WriteDatFile: {produced}"
+        )
+
+        opted_in = write_config(scratch, "loud", WriteDatFile="true")
+        assert MaNTA.run(opted_in) == 0
+        produced = {p.name for p in scratch.iterdir()}
+        assert "loud.dat" in produced, produced
+        # And it is a real file, not an empty one left by an unguarded open().
+        assert (scratch / "loud.dat").stat().st_size > 0
+    finally:
+        os.chdir(previous)
+
+
+def test_the_runner_also_defaults_dat_output_off(tmp_path):
+    """Same contract through PyRunner's parameter table."""
+    import os
+
+    import numpy as np  # noqa: F401 -- Diffusion above already needs it
+
+    scratch = tmp_path / "runner"
+    scratch.mkdir()
+    previous = os.getcwd()
+    try:
+        os.chdir(scratch)
+        runner = MaNTA.Runner(Diffusion(None, None))
+        runner.configure(
+            {
+                "Polynomial_degree": 2,
+                "Grid_size": 6,
+                "Lower_boundary": 0.0,
+                "Upper_boundary": 1.0,
+                "delta_t": 0.1,
+                "OutputFilename": "runner_dat_default",
+            }
+        )
+        runner.run(0.1)
+        produced = {p.name for p in scratch.iterdir()}
+        assert "runner_dat_default.nc" in produced, produced
+        assert "runner_dat_default.dat" not in produced, produced
+    finally:
+        os.chdir(previous)
+
+
 # ------------------------------------------------------ "cannot start" -> 1 --
 
 

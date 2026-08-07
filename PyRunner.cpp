@@ -65,6 +65,14 @@ static const map_t params = {
     //
     {"WriteOutput", Parameter<bool>{.required = false, ._default = true}},
     //
+    // netCDF is the default output; the plain-text .dat files are opt-in.
+    // WriteDatFile controls <stem>.dat, WriteDebugDatFiles the .dydt.dat and
+    // .res.dat pair (which additionally need a PHYSICS_DEBUG build).
+    {"WriteDatFile", Parameter<bool>{.required = false, ._default = false}},
+    //
+    {"WriteDebugDatFiles",
+     Parameter<bool>{.required = false, ._default = false}},
+    //
     {"zeroFlux", Parameter<bool>{.required = false, ._default = false}},
     //
     {"initialTimestep", Parameter<double>{.required = false, ._default = 0.0}}};
@@ -249,6 +257,9 @@ void PyRunner::configure(const py::dict &config) {
   system->setNOutput(nOutput);
   system->setMinStepSize(dt_min);
   system->setZeroFlux(getValueWithDefault<bool>("zeroFlux", config));
+  system->setWriteDatFile(getValueWithDefault<bool>("WriteDatFile", config));
+  system->setWriteDebugDatFiles(
+      getValueWithDefault<bool>("WriteDebugDatFiles", config));
 
   bool writeOutput = getValueWithDefault<bool>("WriteOutput", config);
 
