@@ -69,6 +69,26 @@ block `MX`, and getting a column index wrong there is the most common way to
 break the solver silently. Note that only `PhysicsCases/` may be physics; the
 core is generic.
 
+**The second line above is a sign convention, not an identity: the stored `sigma`
+is `-sigma_hat`.** `residual` forms the flux row as
+`res.sigma = A sigma_h + (I_h sigma_hat, phi)` with `A` the mass matrix, so what
+it enforces is `sigma_h = -Pi(sigma_hat)`. (`setInitialConditions` does it
+explicitly, with a "remember minus sign" comment.) The PDE actually integrated is
+therefore
+
+```
+a_i d_t u_i - d_x[ sigma_hat_i(u, q, x, t) ] = S_i
+```
+
+Two consequences. A manufactured source must be differentiated with that minus
+sign — the check is `ManufacturedDiffusion` in `MMSConvergenceTests.cpp`, whose
+`SigmaFn` returns `kappa q` against `S = sin(pi x)(1 + kappa pi^2 (1+t))`, which
+is `u_t - kappa u_xx` for `u = sin(pi x)(1+t)`: a diffusion equation, not the
+anti-diffusion `+` would give. Get it backwards and the case still converges, to
+the wrong function, at the right rate — so an order study will not catch it, only
+a closed-form comparison will. And `State::Flux[i]`, which physics hooks read,
+carries the negated `sigma_h`, not `sigma_hat`.
+
 ### Solve path
 
 `Solver.cpp:runSolver` is the driver. IDA is handed a **custom
