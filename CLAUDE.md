@@ -156,6 +156,20 @@ derivatives; `SystemSolver::initializeMatricesForAdjointSolve` →
 `np` splits into `np_boundary` trailing boundary parameters and the rest
 internal; several defaults loop only to `getNpInternal()`.
 
+`initializeMatricesForAdjointSolve` assembles the same local blocks as
+`updateMatricesForJacSolve` and stores `M.transpose()`, so **the two must be kept
+in step block for block** — the adjoint operator *is* that transpose. This is
+where the two functions differ in consequence: a block missing from the forward
+Jacobian only slows Newton down, but a block missing from the adjoint matrix
+produces a silently wrong gradient with a perfectly good `G`. The `dSigma/dPhi`
+block was absent here for exactly that reason, and cost nothing visible until
+`python/Tests/test_adjoint_aux.py` was written. If you add a coupling to one
+function, add it to the other.
+
+Anything indexed per auxiliary variable is sized `nAux`, not `nVars`. Those
+coincide in every fixture except `test_adjoint_aux.py`, so a confusion between
+them is invisible in the rest of the suite; `dGdaux_Vec` had two.
+
 ## Traps worth knowing before you edit
 
 * **autodiff expression templates hold references to their operands.** A lambda

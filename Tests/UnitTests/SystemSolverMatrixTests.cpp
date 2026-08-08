@@ -431,7 +431,8 @@ BOOST_AUTO_TEST_CASE(d_aux_mat_overloads_agree)
 {
     // Both overloads fill the aux row of MX: the nAux*(k+1) rows against the
     // full [ sigma | q | u | phi ] column layout. The solver calls the batched
-    // one (SystemSolver.cpp:660 and :1169); the per-node one is unused but is
+    // one, from both updateMatricesForJacSolve and
+    // initializeMatricesForAdjointSolve; the per-node one is unused but is
     // the reference implementation of the layout, and it is the layout MX's
     // other blocks are written against.
     //

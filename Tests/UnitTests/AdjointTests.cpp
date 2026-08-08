@@ -175,8 +175,13 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests) {
     BOOST_CHECK_NO_THROW(system->dGdsigma_Vec(0, test_Vec, system->y, i));
     BOOST_TEST((zeroVec - test_Vec).norm() == 0.0);
 
-    BOOST_CHECK_NO_THROW(system->dGdaux_Vec(0, test_Vec, system->y, i));
-    BOOST_TEST((zeroVec - test_Vec).norm() == 0.0);
+    // AdjointTestProblem has nAux == 0, so dGdaux_Vec's output is empty --
+    // it writes one block per auxiliary variable, not per variable. This is
+    // therefore only a "does not throw" check; the substantive comparison
+    // against quadrature lives in AdjointProblemTests.cpp, whose fixture has
+    // nAux == 1 with nVars == 2 and so distinguishes the two lengths.
+    Vector aux_Vec(0);
+    BOOST_CHECK_NO_THROW(system->dGdaux_Vec(0, aux_Vec, system->y, i));
   }
 
   BOOST_CHECK_NO_THROW(system->initializeMatricesForAdjointSolve());
