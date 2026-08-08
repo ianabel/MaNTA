@@ -317,6 +317,68 @@ def test_the_python_adjoint_hooks_are_all_exercised(tmp_path):
         assert n > 0, f"{name} was never called; counts = {adjoint.call_counts}"
 
 
+def test_G_returns_the_objective_without_an_adjoint_solve(tmp_path):
+    """PyRunner::G -- the objective alone, for a driver that needs no gradient.
+
+    The saving is in the *run*: SystemSolver::integrate calls runAdjointSolve()
+    whenever solveAdjoint is set, so with solveAdjoint = True the gradients are
+    already computed by the time run() returns. Configuring solveAdjoint = False
+    skips that, and G() is then the way to get the objective out -- it builds an
+    AdjointProblem on demand purely to evaluate GFn.
+
+    The call counts are what prove no adjoint solve happened: dSigma and dSources
+    are reached only by computeAdjointGradients.
+    """
+    ts = ParametricDiffusion(np.array([KAPPA0, SOURCE0]))
+    adjoint = DiffusionAdjoint(ts)
+    ts.createAdjointProblem = lambda: adjoint
+
+    runner = MaNTA.Runner(ts)
+    runner.configure(adjoint_config(tmp_path / "gonly", solveAdjoint=False))
+    runner.run(T_FINAL)
+
+    G_only = np.asarray(runner.G())
+    assert G_only.shape == (1,), G_only.shape
+    assert G_only[0] == pytest.approx(exact_G(KAPPA0, SOURCE0), rel=1e-6)
+
+    assert adjoint.call_counts["dSigma"] == 0, (
+        f"an adjoint solve happened; counts = {adjoint.call_counts}"
+    )
+    assert adjoint.call_counts["dSources"] == 0
+    # But GFn was reached, so the number above is not a coincidence.
+    assert adjoint.call_counts["gFn"] > 0
+
+
+def test_G_agrees_with_the_G_from_getAdjointGradients(tmp_path):
+    """Both read the same GFn at the same yJac, so they must agree exactly."""
+    p = np.array([KAPPA0, SOURCE0])
+    ts = ParametricDiffusion(p)
+    runner = MaNTA.Runner(ts)
+    runner.configure(adjoint_config(tmp_path / "gboth"))
+    runner.run(T_FINAL)
+
+    G_full, _ = runner.getAdjointGradients()
+    assert float(np.asarray(runner.G())[0]) == float(np.asarray(G_full)[0])
+
+
+def test_G_is_refused_before_configure():
+    """G reads system->yJac, so there has to be a system."""
+    runner = MaNTA.Runner(ParametricDiffusion(np.array([KAPPA0, SOURCE0])))
+
+    with pytest.raises(RuntimeError, match="must be configured"):
+        runner.G()
+
+
+def test_aggressive_timesteps_is_accepted_and_does_not_change_the_answer(tmp_path):
+    """IDASetEtaMax changes how fast IDA may grow the step, not the answer."""
+    p = np.array([KAPPA0, SOURCE0])
+    G_default, _, _, _ = solve(p, tmp_path / "eta_default")
+    G_eta, _, _, _ = solve(p, tmp_path / "eta_max", aggressiveTimesteps=True)
+
+    assert float(G_eta[0]) == pytest.approx(float(G_default[0]), rel=1e-5)
+    assert float(G_eta[0]) == pytest.approx(exact_G(*p), rel=1e-6)
+
+
 def test_parameter_names_come_from_the_python_subclass(tmp_path):
     """getName is what labels the adjoint output groups in netCDF."""
     adjoint = DiffusionAdjoint(ParametricDiffusion(np.array([KAPPA0, SOURCE0])))

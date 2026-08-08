@@ -320,6 +320,27 @@ These are deliberate and tracked, not oversights:
   So the C++ `nAux > 0` path is sound and the fault is specific to the JAX
   fixture or to `JAXTransportSystem`'s aux hooks. That is where to look next.
 
+* **A second *integration* on the same `SystemSolver` fails.** `IDASolve` returns
+  `IDA_ERR_FAIL` (-3) -- "the error test failed repeatedly or with |h| = hmin" --
+  on the first step of the second run, whether the second run is a second
+  `runSolver()` or a second `initialize()`/`integrate()` pair, and whether or not
+  the first run completed.
+
+  This is *not* a consequence of splitting `runSolver` into
+  `initialize`/`integrate`/`destroySundials`. It was verified against `main` at
+  `b7d8031` by building that tree in a worktree and calling `runSolver` twice on
+  one solver: it fails identically. Nothing had exercised it, because
+  `PyRunner::configure` builds a fresh `SystemSolver` every time
+  (`PyRunner.cpp:117`) and the standalone binary runs once and exits. The `ctx`
+  double-free that used to make a second run fail at `IDACreate` is a *different*,
+  already-fixed bug; fixing it moved the failure later rather than removing it.
+
+  `SolverLifecycleTests.cpp::initialize_can_be_called_again_after_destroy` pins
+  what does work -- allocating again on the same object, and rebuilding the
+  initial condition -- and stops short of the second time loop. Undiagnosed;
+  candidates are state a completed run leaves in `RF_cellwise` /
+  `updateBoundaryConditions`, and the `nc_output` time index.
+
 * **`PhysicsCases/CurvedMirrorPlasma/` is excluded from the build.** It is
   unfinished (commit `c17fa42`, "start to add in curved stuff (doesn't
   compile)") and has never compiled: 49 errors, including references to a

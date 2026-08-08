@@ -263,6 +263,7 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used()) {
       .def("configure", &PyRunner::configure)
       .def("run", &PyRunner::run)
       .def("run_ss", &PyRunner::run_ss)
+      .def("G", &PyRunner::G)
       .def("getAdjointGradients", &PyRunner::getAdjointGradients)
       .def("getSolution", &PyRunner::getSolution)
       .def("get_address", [](const PyRunner &runner) // needed for xla interface

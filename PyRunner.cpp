@@ -75,7 +75,14 @@ static const map_t params = {
     //
     {"zeroFlux", Parameter<bool>{.required = false, ._default = false}},
     //
-    {"initialTimestep", Parameter<double>{.required = false, ._default = 0.0}}};
+    {"initialTimestep", Parameter<double>{.required = false, ._default = 0.0}},
+    //
+    // Let IDA grow the step by up to 10x rather than 2x between steps. Useful
+    // for an optimisation driver calling run_ss() in a loop, where the transient
+    // is not the interesting part; off by default because it makes IDA more
+    // likely to overshoot and retry.
+    {"aggressiveTimesteps",
+     Parameter<bool>{.required = false, ._default = false}}};
 
 template <typename T>
 T getValueWithDefault(std::string_view key, const py::dict &d) {
@@ -260,6 +267,8 @@ void PyRunner::configure(const py::dict &config) {
   system->setWriteDatFile(getValueWithDefault<bool>("WriteDatFile", config));
   system->setWriteDebugDatFiles(
       getValueWithDefault<bool>("WriteDebugDatFiles", config));
+  system->setAggressiveTimesteps(
+      getValueWithDefault<bool>("aggressiveTimesteps", config));
 
   bool writeOutput = getValueWithDefault<bool>("WriteOutput", config);
 
@@ -292,6 +301,42 @@ void PyRunner::run_ss() {
   system->runSolver(0);
 
   std::println("Done.");
+}
+
+Vector PyRunner::G(void) {
+  if (!configured)
+    throw std::runtime_error(
+        "Error: Runner must be configured before evaluating G.");
+
+  // The objective without the gradient, for a driver that only needs G: a
+  // finite-difference reference, a line search, a gradient-free optimiser.
+  //
+  // The saving is in the *run*, not here. SystemSolver::integrate calls
+  // runAdjointSolve() whenever solveAdjoint is set, so with solveAdjoint = True
+  // the gradients are already computed by the time the run returns and
+  // getAdjointGradients() merely reads G_p. Configure with solveAdjoint = False
+  // and the run skips the adjoint solve entirely -- and this is then the way to
+  // get the objective out.
+  //
+  // Which means G() has to be able to work without a configured adjoint. The
+  // AdjointProblem is what *defines* G, so build one on demand.
+  if (adjoint == nullptr && objectiveOnlyAdjoint == nullptr)
+    objectiveOnlyAdjoint = pProblem->createAdjointProblem();
+
+  // Deliberately not handed to the SystemSolver via setAdjointProblem: that
+  // would make getAdjointGradients() pass its null check and hand back a G_p
+  // that was never computed.
+  AdjointProblem *ap =
+      adjoint != nullptr ? adjoint.get() : objectiveOnlyAdjoint.get();
+
+  // GFn reads yJac, which holds the initial condition from initialize() and the
+  // final solution after a run. So this does not run the solver -- call run() or
+  // run_ss() first, exactly as for getAdjointGradients().
+  Vector Gout(ap->getNg());
+  for (Index i = 0; i < ap->getNg(); i++)
+    Gout(i) = ap->GFn(i, system->yJac);
+
+  return Gout;
 }
 
 py::tuple PyRunner::getAdjointGradients(void) {

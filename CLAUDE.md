@@ -71,10 +71,25 @@ core is generic.
 
 ### Solve path
 
-`Solver.cpp:runSolver` is the driver. IDA is handed a **custom
-`SUNLinearSolver`** (`SunLinSolWrapper`) plus a **deliberately empty `SUNMatrix`**
-(`SunMatrixWrapper`) whose only job is to convince IDA it has a matrix-based
-direct solver; the Jacobian is never assembled.
+`Solver.cpp:runSolver` is the driver. It is three phases, which can also be
+called separately:
+
+* `SystemSolver::initialize` — allocate the SUNDIALS objects, build the initial
+  condition, open the output files, run `IDACalcIC`.
+* `SystemSolver::integrate(tFinal)` — the time loop, then the adjoint solve and
+  the final netCDF / restart output.
+* `SystemSolver::destroySundials` — free all of it. Idempotent, and safe with no
+  preceding `initialize`, which is what lets `runSolver` free on both the normal
+  and the exceptional path.
+
+Every SUNDIALS handle is a member, not a local, so those three can be split.
+`ctx` is the exception: it belongs to the `SystemSolver`, not to a run, and
+`destroySundials` must not touch it.
+
+IDA is handed a **custom `SUNLinearSolver`** (`SunLinSolWrapper`) plus a
+**deliberately empty `SUNMatrix`** (`SunMatrixWrapper`) whose only job is to
+convince IDA it has a matrix-based direct solver; the Jacobian is never
+assembled.
 
 * `SystemSolver::residual` — evaluates the whole residual. Does **not** write the
   Dirichlet boundary rows; those constraints are imposed inside the linear solve,
@@ -96,10 +111,18 @@ are `SolveJacTests.cpp` (finite-difference the residual, require `J dy = g`) and
 ### Non-owning state views
 
 `DGSoln` / `DGApprox` are **`Eigen::Map` views over memory SUNDIALS owns**, not
-containers. `SystemSolver::y` maps the `N_Vector` that `runSolver` allocates *and
-destroys*, so it dangles after a run; `yJac`/`dydtJac` own their memory
-(`yJacMem`) and are what outlives the solve. Anything reading "the solution"
-after `runSolver` must use `yJac`.
+containers. `SystemSolver::y` maps the `N_Vector` that `initialize` allocates and
+`destroySundials` frees, so it dangles after a run; `yJac`/`dydtJac` own their
+memory (`yJacMem`) and are what outlives the solve. Anything reading "the
+solution" after a run must use `yJac`. `initialize` seeds it with the initial
+condition, so it is also valid *before* `integrate` — which matters now that a
+caller can stop between the two.
+
+`DGSolnImpl` holds its basis **by value** (`const BasisType Basis`), so
+`getBasis()` returns a reference into the `DGSoln`, not into a shared singleton.
+Binding that to a reference which outlives the owning object is a use-after-free;
+`SystemSolverTests.cpp` did it for years and only started failing when an
+unrelated new test file changed the allocation pattern.
 
 ### Physics cases
 
@@ -139,10 +162,21 @@ and batched (`SigmaFn(i, GlobalState, positions, t)`). The batched defaults in
   transposes in both directions** (C++ stores `(nVars, nPoints)`), so a
   round-trip test cannot detect a missing transpose on its own — check the
   orientation from inside a batched call instead.
-* **`PyRunner`** (`configure(dict)` / `run` / `run_ss` / `getSolution` /
+* **`PyRunner`** (`configure(dict)` / `run` / `run_ss` / `getSolution` / `G` /
   `getAdjointGradients`) is the API the optimisation drivers use, and the only
-  route supporting repeated configure/run cycles in one process. Its parameter
-  table is declarative and lives at the top of `PyRunner.cpp`.
+  route supporting repeated configure/run cycles in one process — it works by
+  building a *fresh* `SystemSolver` in every `configure()` (`PyRunner.cpp:117`),
+  which is load-bearing; see Known limitations. Its parameter table is
+  declarative and lives at the top of `PyRunner.cpp`.
+
+  `G` returns the objective without the gradient. The saving is in the run, not
+  in `G` itself: `integrate` calls `runAdjointSolve()` whenever `solveAdjoint` is
+  set, so with `solveAdjoint = True` the gradients are already computed by the
+  time `run` returns and `getAdjointGradients` only reads `G_p`. Configure with
+  `solveAdjoint = False` to skip the adjoint solve, and `G` builds an
+  `AdjointProblem` on demand purely to evaluate `GFn`. That object is kept in a
+  separate member from `adjoint` so its presence can never be mistaken for "the
+  gradients have been computed".
 
 JAX physics cases (`python/JAXTransportSystem.py`, `python/State.py`) wrap the
 dict interface in equinox modules via the `MaNTA_Decorator` / `Physics_Decorator`
@@ -206,7 +240,16 @@ These are deliberate and documented, not oversights — see `Tests/README.md` an
 
 * `WriteAdjoints()` is commented out at `Solver.cpp:350`, so no run serialises
   adjoint output. The gradients themselves are verified through
-  `PyRunner::getAdjointGradients` in `python/Tests/test_adjoint.py`.
+  `PyRunner::getAdjointGradients` in `python/Tests/test_adjoint.py` and
+  `test_adjoint_aux.py`.
+* **A second *integration* on the same `SystemSolver` does not work.** `IDASolve`
+  fails with `IDA_ERR_FAIL` (-3) on the first step of the second run. This is not
+  a consequence of the three-phase split — `main` before it failed identically
+  through two `runSolver` calls — it has simply never been exercised, because
+  `PyRunner::configure` builds a fresh `SystemSolver` and the standalone binary
+  runs once and exits. Calling `initialize` again after `destroySundials` *does*
+  work, and rebuilds the initial condition; it is completing a second time loop
+  that fails. Undiagnosed; `Tests/README.md` has the detail.
 * Restarting is fragile at tight tolerances, more so with `nAux > 0`; each
   regression round-trip case runs at the tightest tolerance that completes.
 * `python/Tests/test_reference_solutions.py::test_jax_aux_test` is a `strict=True`

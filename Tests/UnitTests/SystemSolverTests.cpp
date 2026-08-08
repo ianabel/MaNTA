@@ -257,7 +257,17 @@ BOOST_AUTO_TEST_CASE(systemsolver_matrix_tests)
 
 	Matrix NLMat(k + 1, k + 1);
 
-    DGSoln::basis_type const & basis = system->y.getBasis();
+    // A copy, not a reference. DGSolnImpl holds `const BasisType Basis` by value
+    // (DGSoln.hpp:375), so getBasis() returns a reference into system->y -- and
+    // `system` is deleted partway through this test, after which the reference
+    // dangled and every MassMatrix() call below it read freed memory. It happened
+    // to give the right answer for as long as nothing reused the block; adding
+    // SolverLifecycleTests.cpp changed the allocation pattern enough to make it
+    // return garbage, failing the second half of this test by 0.21.
+    //
+    // The basis depends only on the polynomial degree, so one copy is valid for
+    // both systems here -- they share k.
+    const DGSoln::basis_type basis = system->y.getBasis();
 
 	for (Index i = 0; i < 4; ++i)
 	{
