@@ -216,9 +216,11 @@ class MirrorPlasma(VectorizedTransportSystem):
             / params.Constants.ElectronCollisionTime(state.n, state.Te)
         )
 
-        G = (
-            D * (Uei - 3.0 / 2.0 * state.dTedpsi / state.Te)
-            + params.Config.ADCoefficient * state.dndpsi / state.n
+        G = D * (
+            Uei - 3.0 / 2.0 * state.dTedpsi / state.Te
+        ) + GeometricFactor * params.Config.ADCoefficient * state.dndpsi * (
+            jnp.exp(-t / params.Config.ADDecayRates[Channel.Density])
+            + params.Config.ADFinalCoeffs[Channel.Density]
         )
 
         return (
@@ -237,7 +239,10 @@ class MirrorPlasma(VectorizedTransportSystem):
             * state.pi
             / params.Constants.IonCollisionTime(state.n, state.Ti)
             * state.domegadpsi
-        ) + params.Config.ADCoefficient * state.domegadpsi / state.omega
+        ) + GeometricFactor * params.Config.ADCoefficient * state.domegadpsi * (
+            jnp.exp(-t / params.Config.ADDecayRates[Channel.AngularMomentum])
+            + params.Config.ADFinalCoeffs[Channel.AngularMomentum]
+        )
 
         Pi_out = (
             params.Constants.Pi0() * IonClassicalViscosity
@@ -265,7 +270,10 @@ class MirrorPlasma(VectorizedTransportSystem):
             / params.Constants.IonCollisionTime(state.n, state.Ti)
             * state.dTidpsi
             / state.Ti
-        ) + params.Config.ADCoefficient * state.dTidpsi / state.Ti
+        ) + GeometricFactor * params.Config.ADCoefficient * state.dTidpsi * (
+            jnp.exp(-t / params.Config.ADDecayRates[Channel.IonEnergy])
+            + params.Config.ADFinalCoeffs[Channel.IonEnergy]
+        )
 
         qi_out = (
             params.Constants.qi0() * HeatFlux
@@ -296,7 +304,10 @@ class MirrorPlasma(VectorizedTransportSystem):
             * state.Te
             / params.Constants.ElectronCollisionTime(state.n, state.Te)
             * (4.66 * state.dTedpsi / state.Te - 3.0 / 2.0 * Uei)
-        ) + params.Config.ADCoefficient * state.dTedpsi / state.Te
+        ) + GeometricFactor * params.Config.ADCoefficient * state.dTedpsi * (
+            jnp.exp(-t / params.Config.ADDecayRates[Channel.ElectronEnergy])
+            + params.Config.ADFinalCoeffs[Channel.ElectronEnergy]
+        )
 
         return (
             params.Constants.qe0()
@@ -355,7 +366,7 @@ class MirrorPlasma(VectorizedTransportSystem):
         Width = params.Config.ParticleSourceWidth / params.Constants.a
         Height = params.Config.ParticleSourceHeight * params.Constants.a**2
         return (
-            Height * jnp.exp(-(((state.R - Center) / Width) ** 2)) * jnp.exp(-t / 1e-2)
+            Height * jnp.exp(-(((state.R - Center) / Width) ** 2)) * jnp.exp(-t / 0.01)
         )
 
     def IonizationSource(self, state, x, t, params):
@@ -434,7 +445,7 @@ class MirrorPlasma(VectorizedTransportSystem):
     def UniformHeatSource(
         self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams
     ):
-        return params.Constants.a**2 * 200.0 * jnp.exp(-t / 1e-2)
+        return params.Constants.a**2 * 200.0 * jnp.exp(-t / 0.01)
 
     """
     Ion heat sources
@@ -512,10 +523,7 @@ class MirrorPlasma(VectorizedTransportSystem):
         ) + params.Constants.CyclotronLosses(x, state.n, state.Te)
 
     def AlphaHeating(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
-        return (
-            params.Constants.TotalAlphaPower(state.n, state.pi)
-            / params.Constants.HeatEquationNormalization()
-        )
+        return params.Constants.TotalAlphaPower(state.n, state.pi)
 
     def ElectronParallelHeatLosses(
         self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams

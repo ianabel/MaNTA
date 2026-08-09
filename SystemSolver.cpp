@@ -623,7 +623,7 @@ void SystemSolver::updateMatricesForJacSolve()
     }
 
     problem->ComputePhysicsDerivatives({dSigma_vals, dSource_vals, dAux_vals}, states, points, jt);
-
+#pragma omp parallel for
     for (unsigned int i = 0; i < nCells; i++)
     {
 
@@ -879,6 +879,9 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
 
     std::vector<Eigen::VectorXd> SQU_f(nCells);
     std::vector<Eigen::MatrixXd> SQU_0(nCells);
+
+
+#pragma omp parallel for
     for (Index i = 0; i < nCells; i++)
     {
         // Interval const& I( grid[ i ] );

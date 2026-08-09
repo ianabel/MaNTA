@@ -36,9 +36,11 @@ class MirrorPlasmaConfig(eqx.Module):
     NeutralDensity: Float
     useNeutralsModel: Bool = eqx.field(static=True)
     ADCoefficient: Float
+    ADDecayRates: Float[ArrayLike, "..."]
+    ADFinalCoeffs: Float[ArrayLike, "..."]
     MagneticField: _MagneticField
     IonSpecies: _IonSpecies
-    NormalizeToR: Bool
+    NormalizeToR: Bool = eqx.field(static=True)
 
     def __init__(
         self,
@@ -77,6 +79,8 @@ class MirrorPlasmaConfig(eqx.Module):
         useNeutralsModel: Bool = False,
         # Artificial diffusion
         ADCoefficient: Float = 0.0,
+        ADDecayRates: Float[ArrayLike, "..."] = 0.1 * jnp.ones((4,)),
+        ADFinalCoeffs: Float[ArrayLike, "..."] = 1e-2 * jnp.ones((4,)),
         # Normalizations
         NormalizeToR: Bool = True,
     ):
@@ -108,6 +112,8 @@ class MirrorPlasmaConfig(eqx.Module):
         self.NeutralDensity = NeutralDensity
         self.useNeutralsModel = useNeutralsModel
         self.ADCoefficient = ADCoefficient
+        self.ADDecayRates = ADDecayRates
+        self.ADFinalCoeffs = ADFinalCoeffs
         self.IonSpecies = IonSpecies
         self.MagneticField = StraightMagneticField(
             _L_z=self.PlasmaLength,
