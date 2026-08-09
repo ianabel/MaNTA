@@ -20,6 +20,21 @@ build the solver, the Python module and all three test suites clean under
 clang++ 19, clang++ 20 and clang++ 21. clang++ 18 is deliberately not among them,
 so it is verified rather than guarded.
 
+.. note::
+
+   With clang, **the standard library matters as much as the compiler.** clang
+   uses the newest GCC installation it finds, so a local clang build and CI's
+   clang legs can compile against different versions of libstdc++ — CI's get the
+   ``ubuntu-24.04`` image's libstdc++ 14, while a developer box with g++ 15
+   installed gets libstdc++ 15.
+
+   This has bitten once already: three ``std::bind_front`` conversions built fine
+   under clang++ 21 with libstdc++ 15 and were rejected by the same compiler with
+   libstdc++ 14.2, because ``_Bind_front::operator()`` has two implementations
+   selected by ``__cpp_explicit_this_parameter`` — a macro clang defines only from
+   version 20. If you are checking portability locally, pin the library too:
+   ``--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14``.
+
 System libraries, which you install yourself:
 
 .. list-table::

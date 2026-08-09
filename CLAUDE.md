@@ -327,6 +327,22 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
   (`-Wdelete-non-abstract-non-virtual-dtor`), and it reports it at the point of
   *destruction* inside libstdc++, once per instantiating translation unit, which
   makes the message look like a standard-library problem rather than yours.
+* **With clang, the libstdc++ version is part of the configuration.** clang selects
+  the newest GCC installation on the box, so a local clang build and CI's clang
+  legs need not use the same standard library: CI gets the `ubuntu-24.04` image's
+  libstdc++ 14 (14.2.0), a box with g++-15 installed gets libstdc++ 15. So "it
+  builds with clang here" is weaker evidence than it looks. Pin the library to
+  check portability: `--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14`, or
+  extract noble's `libstdc++-14-dev` .deb and point `-nostdinc++ -isystem` at it
+  when the patch level matters.
+
+  It has cost one red CI already. `std::bind_front` converted to `std::function`
+  is rejected by clang ≥ 20 with libstdc++ < 14.4: libstdc++ gives
+  `_Bind_front::operator()` two implementations chosen by
+  `#if __cpp_explicit_this_parameter`, clang defines that macro only from clang 20,
+  and the explicit-object-parameter branch failed `std::function`'s `_Callable`
+  probe until 14.4. `SystemSolver::setInitialConditions` and `DGSoln::AssignU` use
+  lambdas rather than the bind family for that reason — don't reintroduce it.
 * **Third-party includes use `-isystem`, not `-I`** (`Makefile.config`: SUNDIALS,
   toml11, Boost, netCDF, Eigen, autodiff, and pybind11 in the top-level Makefile).
   `-Werror` is on, and Eigen's own headers do trip `-Wunused-but-set-variable`

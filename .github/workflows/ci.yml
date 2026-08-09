@@ -40,6 +40,16 @@ jobs:
   # full build, both C++ suites, the pybind11 module and the Python suite -- before
   # this matrix landed. g++-15 and clang++-20 were not, because neither is packaged
   # for the Debian box this was written on, so CI is their first real run.
+  #
+  # Read that claim narrowly. A local clang build is NOT the same test as the clang
+  # legs here, because the standard library differs: clang picks the newest GCC
+  # installation on the box, and these legs get the runner image's, which on
+  # ubuntu-24.04 is libstdc++ 14 (14.2.0) -- only the g++-15 leg adds the toolchain
+  # PPA. That gap is not hypothetical. clang++-21 passed by hand against libstdc++
+  # 15 and then failed here on three std::bind_front conversions that libstdc++
+  # rejects before 14.4; see the comment in SystemSolver::setInitialConditions.
+  # Testing against the *older* library is the point -- it is what finds this
+  # class of bug -- so do not "fix" a leg by pulling in a newer libstdc++.
   build-and-test:
     name: Build + tests (${{ matrix.cxx }})
     runs-on: ubuntu-latest

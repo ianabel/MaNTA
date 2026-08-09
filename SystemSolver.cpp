@@ -97,11 +97,17 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     }
     else
     {
-        // slightly minging syntax. blame C++
-        auto initial_u = std::bind_front(&TransportSystem::InitialValue, problem);
-        auto initial_q = std::bind_front(&TransportSystem::InitialDerivative, problem);
-        y.AssignU(initial_u);
-        y.AssignQ(initial_q);
+        // Lambdas rather than std::bind_front. libstdc++ gives _Bind_front two
+        // implementations of operator(), chosen by #if
+        // __cpp_explicit_this_parameter -- four cv/ref-qualified overloads, or one
+        // with an explicit object parameter. clang only defines that macro from
+        // clang 20, and in libstdc++ before 14.4 the deducing-this overload fails
+        // std::function's _Callable check when the _Bind_front is converted as an
+        // lvalue. So (clang >= 20, libstdc++ < 14.4) rejected these three calls,
+        // which is exactly what ubuntu-24.04 gives CI's clang legs. Nothing here
+        // needed bind_front, so the portable spelling is also the clearer one.
+        y.AssignU([this](Index i, Position x) { return problem->InitialValue(i, x); });
+        y.AssignQ([this](Index i, Position x) { return problem->InitialDerivative(i, x); });
 
         for (Index s = 0; s < nScalars; ++s)
         {
@@ -110,8 +116,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
         if (nAux > 0)
         {
-            auto initial_aux = std::bind_front(&TransportSystem::InitialAuxValue, problem);
-            y.AssignAux(initial_aux);
+            y.AssignAux([this](Index i, Position x) { return problem->InitialAuxValue(i, x); });
         }
 
         ApplyDirichletBCs(y);
