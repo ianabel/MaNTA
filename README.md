@@ -113,20 +113,28 @@ MaNTA has three test suites, all driven from the top-level Makefile:
 | `make python_tests` | pytest suite for the pybind11 module (`python/Tests`); needs `make python` first |
 
 The regression and Python suites need the Python dependencies. On distributions
-where the system Python is externally managed (Debian, Ubuntu), use a virtualenv:
+where the system Python is externally managed (Debian, Ubuntu), that means a
+virtualenv, which `make venv` will build for you:
 
 ```sh
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+make venv
 export PATH="$PWD/.venv/bin:$PATH"   # the regression driver uses `env python3`
 ```
+
+That installs `requirements.txt` plus `gcovr`, so every target in the Makefile is
+then runnable. It builds the environment with a *versioned* interpreter
+(`python3.13` by default) on purpose: a venv created by plain `python3 -m venv`
+records the unversioned `/usr/bin/python3`, so when your distribution moves that
+symlink to a new release the environment's packages are stranded in the old
+`lib/python3.X/site-packages` and every import fails. Pick a different one with
+`make venv VENV_PYTHON=python3.12`, or a different location with
+`make venv VENV=/path/to/env`.
 
 All three suites can be run from any working directory.
 
 #### Coverage
 
 ```sh
-.venv/bin/pip install gcovr
 make coverage
 ```
 

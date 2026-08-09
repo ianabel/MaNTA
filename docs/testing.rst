@@ -23,7 +23,11 @@ the virtualenv on ``PATH`` — the regression driver's shebang is ``env python3`
 
 .. code-block:: sh
 
+   make venv                            # once
    export PATH="$PWD/.venv/bin:$PATH"
+
+See :doc:`install` for what ``make venv`` does and why it pins a versioned
+interpreter.
 
 All three run from any working directory.
 
@@ -79,7 +83,6 @@ Coverage
 
 .. code-block:: sh
 
-   .venv/bin/pip install gcovr
    make coverage
 
 This rebuilds everything with ``--coverage -O0`` — no LTO, which destroys line

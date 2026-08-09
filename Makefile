@@ -26,9 +26,33 @@ PHYSICS_OBJECTS = $(patsubst %.cpp,%.o,$(PHYSICS_SOURCES))
 
 CXXFLAGS += -I.
 
+# Where `make venv` puts the Python environment. Defined here rather than beside
+# that target because PYTHON_CONFIG below expands immediately and needs it.
+VENV ?= .venv
+
+# Which Python the extension module is built against.
+#
+# Default to the one `make venv` installed, if there is one. Left to itself,
+# python3-config follows the distribution's unversioned python3 symlink, so when
+# that moves to a new release `make python` silently starts building a module for
+# the new ABI -- python/MaNTA.cpython-314-*.so -- while .venv still runs 3.13 and
+# imports whatever stale .so is left over. That is a confusing failure: the tests
+# exercise old code and report failures that were fixed.
+#
+# Both probes are guarded, so this can only ever fall back to the previous
+# behaviour: no venv, or no matching pythonX.Y-config installed, and it is plain
+# python3-config again. Override explicitly with
+#     make python PYTHON_CONFIG=python3.12-config
+# and note that pythonX.Y-config derives its prefix from argv[0], so name it
+# directly rather than through a symlink of your own.
+VENV_PY_VER := $(shell $(VENV)/bin/python -c \
+                 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)
+VENV_PY_CONFIG := $(if $(VENV_PY_VER),$(shell command -v python$(VENV_PY_VER)-config 2>/dev/null))
+PYTHON_CONFIG ?= $(if $(VENV_PY_CONFIG),$(VENV_PY_CONFIG),python3-config)
+
 # Expanded once here rather than at every use: python3-config is a subprocess,
 # and PYTHON_NAME/PYTHON_DEPFILE are needed above the -include of $(DEPFILES).
-PYTHON_SUFFIX := $(shell python3-config --extension-suffix)
+PYTHON_SUFFIX := $(shell $(PYTHON_CONFIG) --extension-suffix)
 
 # Header dependencies come from the .d files gcc writes via -MMD -MP; $(HEADERS)
 # is kept only so a fresh tree still orders correctly before any .d exists.
@@ -67,7 +91,7 @@ python: $(PYTHON_OUTPUT)
 # Python.cpp and PyRunner.cpp are compiled inline by this rule, so they are
 # prerequisites too; their headers come in via $(PYTHON_HEADERS).
 $(PYTHON_OUTPUT): Python.cpp PyRunner.cpp MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(PYTHON_HEADERS) $(PYTHON_OBJECTS)
-	$(CXX) $(CXXFLAGS) $(PYTHON_FLAGS) $$(python3-config --includes) $(JAX_XLA_INCLUDES) -isystem $(realpath extern/pybind11/include) -shared -fPIC -fvisibility=hidden -o $@ Python.cpp PyRunner.cpp MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $(PYTHON_FLAGS) $$($(PYTHON_CONFIG) --includes) $(JAX_XLA_INCLUDES) -isystem $(realpath extern/pybind11/include) -shared -fPIC -fvisibility=hidden -o $@ Python.cpp PyRunner.cpp MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
 
 clean:
 	$(MAKE) -C Tests/UnitTests clean
@@ -88,6 +112,52 @@ regression_tests: $(SOLVER)
 
 python_tests:  $(SOLVER)
 	$(MAKE) -C python/Tests
+
+# ---------------------------------------------------------------------------
+# make venv
+#
+# Creates the virtualenv that the regression and pytest suites need and installs
+# requirements.txt into it. Not a prerequisite of anything: it downloads packages,
+# so it stays something you ask for explicitly.
+#
+#   make venv
+#   export PATH="$PWD/.venv/bin:$PATH"
+#
+# VENV_PYTHON is a *versioned* interpreter deliberately. A venv records the
+# interpreter it was built with, and `python3 -m venv` records the unversioned
+# /usr/bin/python3 -- so when the distribution moves that symlink to a new
+# release, .venv/bin/python3 follows it while the installed packages stay behind
+# in lib/python3.<old>/site-packages, and every import in the environment fails
+# with "No module named pytest". Naming python3.13 records python3.13, and the
+# environment survives the upgrade. This is not hypothetical: it happened here.
+#
+# Overrides:
+#   make venv VENV_PYTHON=python3.12     a different interpreter
+#   make venv VENV=/path/to/env          a different location
+#   make venv VENV_CREATE_FLAGS=--clear  rebuild an existing one from scratch
+#   make venv VENV_EXTRA=                skip gcovr
+# (VENV itself is defined near the top, where PYTHON_CONFIG needs it.)
+VENV_PYTHON ?= python3.13
+VENV_CREATE_FLAGS ?=
+# gcovr is not in requirements.txt, but `make coverage` needs it, so one
+# `make venv` leaves every target in this Makefile runnable.
+VENV_EXTRA ?= gcovr
+
+venv:
+	@command -v $(VENV_PYTHON) > /dev/null || { \
+	  echo "$(VENV_PYTHON) not found. Install it, or name another interpreter:"; \
+	  echo "    make venv VENV_PYTHON=python3.12"; \
+	  exit 1; }
+	$(VENV_PYTHON) -m venv $(VENV_CREATE_FLAGS) $(VENV)
+	$(VENV)/bin/pip install --quiet -r requirements.txt $(VENV_EXTRA)
+	@echo ""
+	@echo "$(VENV) ready, running $$($(VENV)/bin/python --version)."
+	@echo ""
+	@echo "Put it on PATH before running the suites. The regression driver's"
+	@echo "shebang is 'env python3', so it takes whichever python3 comes first:"
+	@echo ""
+	@echo "    export PATH=\"$(abspath $(VENV))/bin:\$$PATH\""
+	@echo ""
 
 # ---------------------------------------------------------------------------
 # Coverage
@@ -149,4 +219,4 @@ coverage:
 	@echo "In-scope report:  coverage/index.html"
 	@echo "PhysicsCases:     coverage/physics.html"
 
-.PHONY: clean clean_coverage coverage test regression_tests Tests/UnitTests/UnitTests python python_tests
+.PHONY: clean clean_coverage coverage test regression_tests Tests/UnitTests/UnitTests python python_tests venv

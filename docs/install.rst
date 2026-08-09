@@ -133,6 +133,8 @@ Build targets
      - The pytest suite for the Python module.
    * - ``make coverage``
      - Rebuilds instrumented, runs all three suites, writes ``coverage/``.
+   * - ``make venv``
+     - Creates ``.venv`` and installs the Python dependencies into it. See below.
    * - ``make clean``
      - Also sweeps orphaned ``PhysicsCases/*.o`` and ``.d`` files.
 
@@ -161,14 +163,50 @@ Python dependencies
 -------------------
 
 The regression and Python suites need the packages in ``requirements.txt``. On
-distributions where the system Python is externally managed, use a virtualenv,
-and put it on ``PATH`` — the regression driver's shebang is ``env python3``, so it
-picks up whichever ``python3`` is first:
+distributions where the system Python is externally managed that means a
+virtualenv, and ``make venv`` builds one:
 
 .. code-block:: sh
 
-   python3 -m venv .venv
-   .venv/bin/pip install -r requirements.txt
+   make venv
    export PATH="$PWD/.venv/bin:$PATH"
+
+It installs ``requirements.txt`` plus ``gcovr``, so ``make coverage`` works too.
+Putting it on ``PATH`` matters because the regression driver's shebang is
+``env python3``, so it takes whichever ``python3`` comes first.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - Override
+     - Effect
+   * - ``make venv VENV_PYTHON=python3.12``
+     - Build against a different interpreter.
+   * - ``make venv VENV=/path/to/env``
+     - Put the environment somewhere else.
+   * - ``make venv VENV_CREATE_FLAGS=--clear``
+     - Rebuild an existing environment from scratch.
+   * - ``make venv VENV_EXTRA=``
+     - Skip ``gcovr``.
+
+.. note::
+
+   ``make venv`` uses a **versioned** interpreter (``python3.13`` by default)
+   deliberately. A virtualenv records the interpreter it was created with, and
+   ``python3 -m venv`` records the unversioned ``/usr/bin/python3``. When the
+   distribution later moves that symlink to a new release, the environment's
+   ``bin/python3`` follows it while the installed packages stay behind in
+   ``lib/python3.<old>/site-packages``, and every import in the environment fails
+   with ``No module named pytest``. Naming ``python3.13`` records
+   ``python3.13``, and the environment survives the upgrade.
+
+   The same upgrade catches ``make python``, which asks ``python3-config`` for the
+   ABI suffix: after the system default moves, it starts building
+   ``MaNTA.cpython-3<new>-*.so`` while the virtualenv still runs the old release
+   and imports whichever stale module is left over — so the tests exercise old
+   code. The Makefile therefore prefers the ``pythonX.Y-config`` matching
+   ``$(VENV)`` when both exist, and falls back to plain ``python3-config``
+   otherwise. Override it with ``make python PYTHON_CONFIG=python3.12-config``.
 
 All three suites can be run from any working directory.
