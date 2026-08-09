@@ -120,7 +120,24 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
         raise NotImplementedError("Scalar G function not implemented in derived class")
 
     @abstractmethod
-    def ScalarGPrime(self, states, states_dot, weights, phis, phi_boundaries, t):
+    def ScalarGPrime(self, states, states_dot, weights, phi_boundary, t):
+        """d G_s / d state and d G_s / d state_dot, for every scalar.
+
+        Returns a pair of lists, each of nScalars GlobalState dicts: the first is
+        the derivative with respect to the state, the second with respect to its
+        time derivative (identically zero for an algebraic scalar).
+
+        `weights` is one quadrature weight per node, length nCells*(k+1), so an
+        integral over the domain is `weights @ u`. `phi_boundary` is (k+1, 2), the
+        basis functions evaluated at the two ends of the domain.
+
+        The signature here previously declared an extra `phis` parameter before
+        `phi_boundaries`. PyTransportSystem::ScalarGPrimeExtended passes five
+        arguments, not six, so any subclass that followed this declaration would
+        have failed with a TypeError on the first Jacobian evaluation. Nothing
+        caught it because the abstract method only ever raised, and there was no
+        Python test with a scalar -- see python/Tests/test_scalars.py.
+        """
         raise NotImplementedError("ScalarGPrime not implemented in derived class")
 
     """

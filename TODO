@@ -1,6 +1,4 @@
 
-Add Scalars to python interface.
-
 Diagnose why a second integration on the same SystemSolver fails. IDASolve
 returns IDA_ERR_FAIL (-3) on the first step of the second run, whether via a
 second runSolver() or a second initialize()/integrate() pair, and whether or not
