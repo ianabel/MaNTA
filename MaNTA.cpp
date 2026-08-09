@@ -249,6 +249,11 @@ int runManta(std::string const &fname)
 	system->setWriteDatFile(toml::find_or(config, "WriteDatFile", false));
 	system->setWriteDebugDatFiles(toml::find_or(config, "WriteDebugDatFiles", false));
 
+	// Off by default: with it off the discretisation is unchanged, so existing
+	// configs reproduce their reference solutions exactly. See
+	// SystemSolver::setSuperconvergent.
+	system->setSuperconvergent(toml::find_or(config, "Superconvergent", false));
+
 	// Let IDA grow the timestep by up to 10x rather than 2x between steps.
 	system->setAggressiveTimesteps(toml::find_or(config, "AggressiveTimesteps", false));
 

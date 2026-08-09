@@ -35,6 +35,8 @@
 #include <cmath>
 #include <cstdio>
 #include <numbers>
+#include <string>
+#include <typeinfo>
 #include <vector>
 
 namespace
@@ -99,9 +101,79 @@ public:
     }
 };
 
-// Cell-by-cell Gauss-30 quadrature of (u_h - u_exact)^2. Independent of the
+// The same manufactured solution with a nonlinear reaction term added --
+// F(u) = u^3 - u, the Chaffee-Infante / Allen-Cahn nonlinearity of Example 4.1
+// in Chen, Cockburn, Singler & Zhang.
+//
+// This, and not a non-polynomial source, is where the interpolatory method loses
+// superconvergence: I_h F(u_h) evaluates the nonlinearity at u_h, which is only
+// O(h^(k+1)) accurate pointwise, so the consistency error enters at that order.
+// Interpolating a *known* smooth source at the Chebyshev nodes does not have the
+// same effect -- see the note in the superconvergence test case below.
+//
+// Solving u_t - u_xx + F(u) = f for the same u = sin(pi x)(1 + t) gives
+//
+//     f = sin(pi x) ( 1 + pi^2 (1 + t) ) + F(u_exact)
+//
+// and MaNTA's source is S = f - F(u), which reduces to the right forcing at the
+// exact solution while retaining a genuine dependence on the state -- the
+// dependence that exercises the chain rule through the postprocessing.
+class ManufacturedReaction : public TransportSystem
+{
+public:
+    ManufacturedReaction() { nVars = 1; }
+
+    Value LowerBoundary(Index, Time) const override { return 0.0; }
+    Value UpperBoundary(Index, Time) const override { return 0.0; }
+    bool isLowerBoundaryDirichlet(Index) const override { return true; }
+    bool isUpperBoundaryDirichlet(Index) const override { return true; }
+
+    static double F(double u) { return u * u * u - u; }
+    static double dF(double u) { return 3.0 * u * u - 1.0; }
+
+    Value SigmaFn(Index, const State &s, Position, Time) override
+    {
+        return s.Derivative[0];
+    }
+
+    Value Sources(Index, const State &s, Position x, Time t) override
+    {
+        const double ue = exactSolution(x, t);
+        const double f = std::sin(pi * x) * (1.0 + pi * pi * (1.0 + t)) + F(ue);
+        return f - F(s.Variable[0]);
+    }
+
+    void dSigmaFn_dq(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 1.0;
+    }
+    void dSigmaFn_du(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+    void dSources_du(Index, VectorRef v, const State &s, Position, Time) override
+    {
+        v[0] = -dF(s.Variable[0]);
+    }
+    void dSources_dq(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+    void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+
+    Value InitialValue(Index, Position x) const override { return exactSolution(x, 0.0); }
+    Value InitialDerivative(Index, Position x) const override
+    {
+        return exactDerivative(x, 0.0);
+    }
+};
+
+// Cell-by-cell Gauss-30 quadrature of (f - u_exact)^2. Independent of the
 // basis's own integration weights, which are part of what is under test.
-double l2Error(SystemSolver &sys, Grid const &grid, double t)
+double l2ErrorOf(std::function<double(double)> f, Grid const &grid, double t)
 {
     boost::math::quadrature::gauss<double, 30> gauss;
     double total = 0.0;
@@ -110,7 +182,7 @@ double l2Error(SystemSolver &sys, Grid const &grid, double t)
         Interval const &I = grid[cell];
         auto integrand = [&](double x)
         {
-            const double d = sys.yJac.u(0)(x) - exactSolution(x, t);
+            const double d = f(x) - exactSolution(x, t);
             return d * d;
         };
         total += gauss.integrate(integrand, I.x_l, I.x_u);
@@ -118,22 +190,40 @@ double l2Error(SystemSolver &sys, Grid const &grid, double t)
     return std::sqrt(total);
 }
 
-// Run to tFinal on a uniform grid of nCells cells at degree k, and return the
-// L2 error of the final solution.
+double l2Error(SystemSolver &sys, Grid const &grid, double t)
+{
+    return l2ErrorOf([&](double x) { return sys.yJac.u(0)(x); }, grid, t);
+}
+
+// The two errors every run reports: the solution's own and the postprocessed
+// one. HDG gives k+1 for the first; the second is k+2 when the method is
+// superconvergent, and that difference is the whole point of the feature.
+struct Errors
+{
+    double u;
+    double uStar;
+};
+
+// Run to tFinal on a uniform grid of nCells cells at degree k, and return the L2
+// errors of the final solution and of its postprocessing.
 //
 // runSolver writes <stem>.nc / .dat / .restart.nc into the working directory,
 // so the output name is unique per case and the files are removed afterwards.
-double solveAndMeasure(Index k, Index nCells, double tFinal)
+template <class Problem = ManufacturedDiffusion>
+Errors solveAndMeasureBoth(Index k, Index nCells, double tFinal,
+                           bool superconvergent = false)
 {
     Grid grid(0.0, 1.0, nCells);
-    ManufacturedDiffusion problem;
+    Problem problem;
 
     SystemSolver sys(grid, k, &problem);
     sys.setTau(1.0);
+    sys.setSuperconvergent(superconvergent);
     sys.resetCoeffs();
 
-    const std::string stem =
-        "mms_k" + std::to_string(k) + "_n" + std::to_string(nCells);
+    const std::string stem = "mms_" + std::string(typeid(Problem).name()) + "_k" +
+                             std::to_string(k) + "_n" + std::to_string(nCells) +
+                             (superconvergent ? "_sc" : "");
     sys.setInputFile(stem);
 
     sys.setOutputCadence(tFinal);
@@ -157,12 +247,25 @@ double solveAndMeasure(Index k, Index nCells, double tFinal)
         sys.runSolver(tFinal);
     }
 
-    const double err = l2Error(sys, grid, tFinal);
+    // u* was last reconstructed from `y`, whose N_Vector runSolver has since
+    // destroyed. Rebuild it from yJac, which the solver owns.
+    sys.postprocessor->computeUStar(sys.yJac);
+
+    const Errors err{
+        l2Error(sys, grid, tFinal),
+        l2ErrorOf([&](double x) { return sys.getPostprocessor()->uStar(0)(x); },
+                  grid, tFinal)};
 
     for (const char *suffix : {".nc", ".dat", ".restart.nc"})
         std::remove((stem + suffix).c_str());
 
     return err;
+}
+
+// The u-only form the existing cases below are written against.
+double solveAndMeasure(Index k, Index nCells, double tFinal)
+{
+    return solveAndMeasureBoth(k, nCells, tFinal).u;
 }
 
 // Least-squares slope of log(error) against log(1/nCells) -- the observed order.
@@ -311,6 +414,138 @@ BOOST_AUTO_TEST_CASE(the_solution_is_accurate_at_a_later_time_too)
                "error at t=1 (" << late << ") is far worse than at t=0.25 (" << early
                                 << ")");
     BOOST_TEST(late > 0.0);
+}
+
+// --------------------------------------------------------- superconvergence --
+
+namespace
+{
+struct Rates
+{
+    double uOff, starOff, uOn, starOn;
+};
+
+// Refine, fit both orders, flag off and flag on, and report all four.
+template <class Problem>
+Rates measureRates(Index k, std::vector<Index> const &cells, double tFinal)
+{
+    std::vector<double> uOff, starOff, uOn, starOn;
+    for (Index n : cells)
+    {
+        const Errors off = solveAndMeasureBoth<Problem>(k, n, tFinal, false);
+        const Errors on = solveAndMeasureBoth<Problem>(k, n, tFinal, true);
+        uOff.push_back(off.u);
+        starOff.push_back(off.uStar);
+        uOn.push_back(on.u);
+        starOn.push_back(on.uStar);
+    }
+    return {observedOrder(cells, uOff), observedOrder(cells, starOff),
+            observedOrder(cells, uOn), observedOrder(cells, starOn)};
+}
+
+std::string report(Index k, Rates const &r)
+{
+    std::string s = "k = " + std::to_string(k) + ":  flag off  u " +
+                    std::to_string(r.uOff) + "  u* " + std::to_string(r.starOff) +
+                    "   |   flag on  u " + std::to_string(r.uOn) + "  u* " +
+                    std::to_string(r.starOn) + "   (u should be " +
+                    std::to_string(k + 1) + ", u* with the flag on " +
+                    std::to_string(k + 2) + ")";
+    return s;
+}
+} // namespace
+
+BOOST_AUTO_TEST_CASE(the_postprocessing_superconverges_with_the_flag_on)
+{
+    // The headline result: with the flag on, u* converges at k+2 while u_h keeps
+    // its optimal k+1.
+    //
+    // Measured here with a linear, constant-coefficient flux and a source that
+    // does not depend on u. Recording what this actually shows, because it is not
+    // what a first reading of the papers predicts:
+    //
+    //     k = 1:  flag off  u 1.96  u* 2.19   |   flag on  u 1.96  u* 3.05
+    //     k = 2:  flag off  u 2.97  u* 4.08   |   flag on  u 2.97  u* 4.03
+    //
+    // So at k = 1 the interpolatory scheme really has lost the superconvergence
+    // (u* is no better than u_h) and the flag restores it. At k = 2 it had not
+    // lost it, and the flag preserves it. The reason the loss is not universal
+    // here is that interpolating a *known* smooth source at the Chebyshev nodes
+    // leaves an error that is very nearly L2-orthogonal to P_k, so it does not
+    // pollute the duality argument the way the papers' I_h F(u_h) does -- there
+    // the nonlinearity is evaluated at u_h, which itself carries O(h^(k+1))
+    // error. The reaction-term case below is the one that isolates that
+    // mechanism.
+    //
+    // Hence the assertions: u* must reach k+2 with the flag on, and u_h must not
+    // regress. Nothing is asserted about the flag improving on the flag-off rate,
+    // because for this problem there is not always anything to improve.
+    const double tFinal = 0.25;
+
+    for (auto const &c : std::vector<std::pair<Index, std::vector<Index>>>{
+             {1, {4, 8, 16, 32}}, {2, {4, 8, 16}}})
+    {
+        const Rates r = measureRates<ManufacturedDiffusion>(c.first, c.second, tFinal);
+        BOOST_TEST_MESSAGE(report(c.first, r));
+
+        BOOST_TEST(r.uOff > c.first + 1 - 0.2,
+                   "k = " << c.first << ": u lost its rate with the flag off ("
+                          << r.uOff << ")");
+        BOOST_TEST(r.uOn > c.first + 1 - 0.2,
+                   "k = " << c.first << ": u lost its rate with the flag on ("
+                          << r.uOn << ")");
+        BOOST_TEST(r.starOn > c.first + 2 - 0.35,
+                   "k = " << c.first << ": u* did not reach k+2 = " << c.first + 2
+                          << " with the flag on (observed " << r.starOn << ")");
+        BOOST_TEST(r.starOn > r.uOn + 0.5,
+                   "k = " << c.first
+                          << ": u* is no better than u with the flag on (u "
+                          << r.uOn << ", u* " << r.starOn << ")");
+    }
+}
+
+BOOST_AUTO_TEST_CASE(the_flag_restores_superconvergence_for_a_nonlinear_reaction)
+{
+    // The case the papers are actually about. F(u) = u^3 - u is evaluated at u_h
+    // by the existing scheme and at u* by the new one, and that is the difference
+    // between losing and keeping the extra order.
+    //
+    // This is also the strongest available check on the Jacobian chain rule: the
+    // source's u-dependence makes B12 contribute to the u column and B11 to the q
+    // column, and a wrong chain shows up as IDA failing to converge or as a rate
+    // that never reaches k+2.
+    const double tFinal = 0.25;
+
+    for (auto const &c : std::vector<std::pair<Index, std::vector<Index>>>{
+             {1, {4, 8, 16, 32}}, {2, {4, 8, 16}}})
+    {
+        const Rates r = measureRates<ManufacturedReaction>(c.first, c.second, tFinal);
+        BOOST_TEST_MESSAGE("nonlinear reaction, " + report(c.first, r));
+
+        BOOST_TEST(r.uOn > c.first + 1 - 0.2,
+                   "k = " << c.first << ": u lost its rate with the flag on ("
+                          << r.uOn << ")");
+        BOOST_TEST(r.starOn > c.first + 2 - 0.35,
+                   "k = " << c.first << ": u* did not reach k+2 = " << c.first + 2
+                          << " with the flag on (observed " << r.starOn << ")");
+        BOOST_TEST(r.starOn > r.uOn + 0.5,
+                   "k = " << c.first
+                          << ": u* is no better than u with the flag on (u "
+                          << r.uOn << ", u* " << r.starOn << ")");
+    }
+}
+
+BOOST_AUTO_TEST_CASE(the_flag_is_rejected_at_degree_zero)
+{
+    // The reconstruction needs a degree-0 NodalBasis it can evaluate off-node,
+    // and there is not one (Basis.hpp:369-377). Better to say so than to produce
+    // a silently non-superconvergent run.
+    Grid grid(0.0, 1.0, 4);
+    ManufacturedDiffusion problem;
+    SystemSolver sys(grid, 0, &problem);
+    sys.setTau(1.0);
+    sys.setSuperconvergent(true);
+    BOOST_CHECK_THROW(sys.initialiseMatrices(), std::invalid_argument);
 }
 
 // ------------------------------------------------- the built-in MMS option --

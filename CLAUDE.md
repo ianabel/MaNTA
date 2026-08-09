@@ -69,6 +69,26 @@ block `MX`, and getting a column index wrong there is the most common way to
 break the solver silently. Note that only `PhysicsCases/` may be physics; the
 core is generic.
 
+**The second line above is a sign convention, not an identity: the stored `sigma`
+is `-sigma_hat`.** `residual` forms the flux row as
+`res.sigma = A sigma_h + (I_h sigma_hat, phi)` with `A` the mass matrix, so what
+it enforces is `sigma_h = -Pi(sigma_hat)`. (`setInitialConditions` does it
+explicitly, with a "remember minus sign" comment.) The PDE actually integrated is
+therefore
+
+```
+a_i d_t u_i - d_x[ sigma_hat_i(u, q, x, t) ] = S_i
+```
+
+Two consequences. A manufactured source must be differentiated with that minus
+sign — the check is `ManufacturedDiffusion` in `MMSConvergenceTests.cpp`, whose
+`SigmaFn` returns `kappa q` against `S = sin(pi x)(1 + kappa pi^2 (1+t))`, which
+is `u_t - kappa u_xx` for `u = sin(pi x)(1+t)`: a diffusion equation, not the
+anti-diffusion `+` would give. Get it backwards and the case still converges, to
+the wrong function, at the right rate — so an order study will not catch it, only
+a closed-form comparison will. And `State::Flux[i]`, which physics hooks read,
+carries the negated `sigma_h`, not `sigma_hat`.
+
 ### Solve path
 
 `Solver.cpp:runSolver` is the driver. It is three phases, which can also be
@@ -107,6 +127,47 @@ answer — only slow Newton convergence**. That is why several defects in this a
 survived a passing regression suite for months, and why the tests that matter here
 are `SolveJacTests.cpp` (finite-difference the residual, require `J dy = g`) and
 `MMSConvergenceTests.cpp` (observed order of accuracy).
+
+### Superconvergence (`Superconvergent = true`)
+
+MaNTA *is* an interpolatory HDG method: `residual` evaluates `SigmaFn`, `Sources`
+and `AuxG` at the `k+1` nodes of the degree-`k` nodal basis and applies
+`InterpolateOntoBasis`, i.e. `I_h F(u_h)` with `I_h` mapping into `W_h = P_k`.
+`Matrices.cpp` cites arXiv:1811.09667 for the Jacobian form, which is exactly the
+paper that method comes from. Its two sequels (`SuperconvergentHDG-I/II.pdf`)
+exist because that scheme loses the `k+2` superconvergence of the postprocessed
+solution, and paper I's fix is what the flag implements.
+
+`Postprocessing.{hpp,cpp}` reconstructs `u* ∈ P_{k+1}` per cell from `(u_h, q_h)`
+by the local Neumann problem of paper I eq. (7) — sign-flipped, because MaNTA
+carries `q = +d_x u` and the paper `q = -grad u`. Eliminating the Lagrange
+multiplier gives `gamma = B11 alpha_q + B12 beta_u`, so the per-cell operators are
+built once in `initialiseMatrices` and reused. Two more come with them:
+`V = [phi_j(x_m)]` samples a `P_k` field at the `k+2` star nodes, and
+`A9 = [(chi_m, phi_i)]` projects a `P_{k+1}` interpolant onto the `P_k` test
+space, replacing the mass matrix `InterpolateOntoBasis` applies.
+
+With the flag on, the physics is evaluated on the star nodes with `u*` in place of
+`u_h`, and every Jacobian block gains a chain factor
+(`SystemSolver::accumulateStarBlocks`):
+
+```
+d/d(u coeffs)     = A9 diag(dX/du) B12
+d/d(q coeffs)     = A9 [ diag(dX/dq) V + diag(dX/du) B11 ]
+d/d(sigma, phi)   = A9 diag(dX/dZ) V
+```
+
+`diag(dX/du) B11` in the `q` column is the only new coupling: `u*` depends on the
+cell's `q` as well as its `u`. Every block stays `(k+1)x(k+1)` and `u*` is
+cell-local, so **the DOF layout, `MX`, `solveHDGJac`, `solveJacEq`, the restart
+format and the pybind11 casters are all untouched.** `ComputePhysics` loops over
+`states.size()`, so no physics case — C++, Python or JAX — needs changing to be
+evaluated at `k+2` points instead of `k+1`.
+
+The reconstruction is built for every run with `k >= 1` regardless of the flag, so
+`u_star` is always in the netCDF output and the `.dat` files; the flag controls
+only whether the *method* uses it. `Tests/README.md` has the measured orders and
+the list of what is not covered.
 
 ### Non-owning state views
 
@@ -211,6 +272,19 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
   `-> Real` explicitly; with a deduced return type it hands back an expression
   referring to dead temporaries, and the symptom is a silently wrong (often zero)
   answer rather than a crash. See `Tests/UnitTests/UtilityTests.cpp`.
+* **Never slice an Eigen `solve()` result.** `lu.solve(B)` returns a lazy `Solve<>`
+  expression with no coefficient accessor, so `lu.solve(B).topRows(n)` compiles and
+  then corrupts the heap. It cost an afternoon in `Postprocessing.cpp`, where the
+  symptom was a SIGSEGV inside `free()` in an unrelated static's destructor.
+  Assign to a `Matrix` first, then slice.
+* **Include `<Eigen/Core>` and `<Eigen/Dense>` before the project headers**, the
+  way `SystemSolver.hpp` does. The build defines `EIGEN_USE_BLAS`, which swaps in
+  BLAS-backed product specialisations; a header that reaches Eigen only through
+  `Basis.hpp`'s `<Eigen/LU>` gives its translation units a different set of
+  definitions from ones that include `<Eigen/Dense>`. LTO then picks one, and the
+  symptom is heap corruption surfacing at exit in whichever static destructor runs
+  first — for us, `ChebyshevBasis::singletons`, which the change had nothing to do
+  with. `Postprocessing.hpp` carries a comment saying so.
 * **Build staleness has bitten three times.** Header dependencies now come from
   `-MMD -MP`, and the `python` target lists `MaNTA.o`, `Python.cpp` and
   `PyRunner.cpp` as prerequisites. If a fix appears to have no effect, check the
@@ -221,6 +295,10 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
 * **Output filenames come from the config file's *stem*** (`Solver.cpp` uses
   `inputFilePath.stem()`), so `.nc` / `.dat` / `.restart.nc` land in the current
   directory regardless of any path in `OutputFilename`.
+* **`printSources` reads the source cache through a basis of the residual's
+  order.** With `Superconvergent = true` the cache holds `k+2` values per cell
+  rather than `k+1`, so `SystemSolver::print` picks its basis and stride from the
+  flag; hardcoding `k+1` there reads across cell boundaries.
 * **netCDF is the default output; the `.dat` files are opt-in.** A run writes
   `<stem>.nc` and `<stem>.restart.nc` unconditionally. The plain-text gnuplot
   output needs `WriteDatFile = true`, and `<stem>.dydt.dat` / `<stem>.res.dat`

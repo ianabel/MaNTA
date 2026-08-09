@@ -234,6 +234,9 @@ check_ref_case( "AdjointTestProblem" )
 check_ref_case( "AuxVarTest" )
 check_ref_case( "NeumannTestLower" )
 check_ref_case( "NeumannTestUpper" )
+# Every case above runs with Superconvergent unset, which is what keeps their
+# references valid across the addition of that option. This one turns it on.
+check_ref_case( "SuperconvergentADTest" )
 
 
 # ---------------------------------------------------------------- restarts --
