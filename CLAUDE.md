@@ -298,6 +298,10 @@ These are deliberate and documented, not oversights — see `Tests/README.md` an
   the fault is in the JAX fixture or `JAXTransportSystem`'s aux hooks.
 * `PhysicsCases/CurvedMirrorPlasma/` has never compiled and is excluded from
   `PHYSICS_SOURCES`.
-* The `UseMMS` options on `LinearDiffusion` and `LinearDiffSourceTest` are not
-  usable as-is (the manufactured solution does not satisfy the boundary
-  conditions; the latter never applies `MMS_Source` at all).
+* The `UseMMS` options on `LinearDiffusion` and `LinearDiffSourceTest` have been
+  removed: the first's manufactured solution did not satisfy its own boundary
+  conditions, and the second never applied `MMS_Source` at all. `MirrorPlasma`
+  still implements `MMS_Solution` against `AutodiffTransportSystem`'s facility,
+  which is deliberate and untouched. Order of accuracy is measured by
+  `Tests/UnitTests/MMSConvergenceTests.cpp`, which builds its own manufactured
+  problems.

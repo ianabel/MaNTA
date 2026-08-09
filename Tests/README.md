@@ -218,13 +218,14 @@ Measured, for `u(x,t) = sin(pi x)(1 + t)` on `[0,1]`:
 Two things make this work, and both are easy to get wrong when adding a case:
 
 * **The manufactured solution must satisfy the boundary conditions the physics
-  case imposes.** `sin(pi x)` vanishes at both ends for every `t`. The `UseMMS`
-  option on `LinearDiffusion` does *not* have this property -- its manufactured
-  solution is the initial Gaussian, which is about 0.29 at the domain edge with
-  the default parameters, while the boundary condition is 0 -- so it cannot be
-  used for an order study as configured. (`LinearDiffSourceTest` reads `useMMS`
-  and never applies `MMS_Source` at all.) Neither is exercised by any regression
-  case; both are recorded in a test case rather than changed.
+  case imposes.** `sin(pi x)` vanishes at both ends for every `t`. This is what
+  the removed `UseMMS` option on `LinearDiffusion` got wrong: its manufactured
+  solution was the initial Gaussian, about 0.29 at the domain edge against a
+  boundary condition of 0, so an order study against it could not show `k+1`.
+  `LinearDiffSourceTest`'s was worse -- it read `useMMS` and never applied
+  `MMS_Source`, so the option silently did nothing. Both are gone; the
+  manufactured problems here are self-contained and never depended on them.
+  `MirrorPlasma` keeps its own MMS, which is a deliberate implementation.
 * **The time-integration tolerance must be well below the spatial error, but not
   so tight that IDA cannot start.** At 1e-12 it fails at `t = 0` for `k >= 2`
   with "the error test failed repeatedly or with |h| = hmin"; 1e-9 leaves three

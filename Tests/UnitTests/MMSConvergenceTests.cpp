@@ -14,9 +14,11 @@
 // which vanishes at both ends for every t, so it is consistent with the
 // homogeneous Dirichlet boundary conditions. That matters: an MMS whose exact
 // solution does not satisfy the boundary conditions imposed by the physics case
-// converges at the wrong rate, or not at all. (The `UseMMS` option on
-// `LinearDiffusion` has exactly that problem -- see the note at the end of this
-// file.)
+// converges at the wrong rate, or not at all. `LinearDiffusion` used to carry a
+// built-in `UseMMS` option with exactly that problem -- its manufactured solution
+// was the initial Gaussian, about 0.29 at the domain edge against a boundary
+// condition of 0 -- and it has been removed rather than fixed. The manufactured
+// problems in this file are self-contained and never used it.
 //
 // Substituting into d_t u = d_x( kappa d_x u ) + S gives
 //
@@ -311,47 +313,6 @@ BOOST_AUTO_TEST_CASE(the_solution_is_accurate_at_a_later_time_too)
                "error at t=1 (" << late << ") is far worse than at t=0.25 (" << early
                                 << ")");
     BOOST_TEST(late > 0.0);
-}
-
-// ------------------------------------------------- the built-in MMS option --
-
-BOOST_AUTO_TEST_CASE(the_linear_diffusion_mms_is_inconsistent_with_its_boundaries)
-{
-    // `LinearDiffusion` and `LinearDiffSourceTest` both accept a `UseMMS`
-    // option, and neither is exercised by any regression case (the two configs
-    // that mention it set it to false). Recording what is actually there:
-    //
-    //  * `LinearDiffusion::MMS_Solution` is (1 + growth tanh(rate t)) times the
-    //    initial Gaussian, while LowerBoundary/UpperBoundary return 0. The
-    //    manufactured solution therefore does not satisfy the boundary
-    //    conditions unless the Gaussian is negligible at the domain edges --
-    //    with the defaults (Centre = 0.5, InitialWidth = 0.2 on [0,1]) it is
-    //    about 0.29 there, so an order-of-accuracy study against it would not
-    //    show k+1.
-    //
-    //  * `LinearDiffSourceTest` reads `useMMS` from its config but never adds
-    //    `MMS_Source` to `Source()` -- only `LinearDiffusion` does. Setting
-    //    useMMS on that case is silently a no-op beyond adding a netCDF group.
-    //
-    // Neither is changed here: they are someone's physics options, and the
-    // convergence testing above does not need them. This case exists so the
-    // situation is written down and checked rather than rediscovered.
-    const double centre = 0.5, initialWidth = 0.2, height = 1.0;
-    const double alpha = 1.0 / initialWidth;
-
-    auto gaussian = [&](double x)
-    { return height * std::exp(-alpha * (x - centre) * (x - centre)); };
-
-    BOOST_TEST(gaussian(0.0) > 0.25,
-               "the default LinearDiffusion MMS profile is not small at x = 0 ("
-                   << gaussian(0.0) << "), so it cannot match a zero Dirichlet "
-                                       "boundary condition");
-    BOOST_TEST(gaussian(1.0) > 0.25);
-
-    // Narrowing it does make the mismatch negligible, which is how the option
-    // could be used for a convergence study if anyone wants to.
-    const double narrow = 0.01;
-    BOOST_TEST(height * std::exp(-(0.25) / narrow) < 1e-10);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
