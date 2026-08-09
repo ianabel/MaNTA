@@ -1,7 +1,18 @@
-# MaNTA -- The Maryland Nonliner Transport Analyzer
+# MaNTA -- The Maryland Nonlinear Transport Analyzer
 
 MaNTA is a code developed for the prediction and analysis of transport processes in a strongly-magnetized plasma.
-MaNTA solves
+It solves one-dimensional nonlinear reaction-diffusion and transport systems with a hybridizable discontinuous
+Galerkin (HDG) spatial discretisation, integrated in time as an index-1 DAE by SUNDIALS IDA.
+
+**Documentation** lives in [`docs/`](docs/index.rst) and is built with Sphinx for Read the Docs: the equations
+being solved, every configuration key, the output format, the adjoint interface, and how to write a transport
+system in C++ or Python. Build it locally with
+
+```sh
+python3 -m venv /tmp/docsvenv
+/tmp/docsvenv/bin/pip install -r docs/requirements.txt
+/tmp/docsvenv/bin/sphinx-build -W -b html docs docs/_build/html
+```
 
 ## Getting Started
 

@@ -46,6 +46,10 @@ slurm-*.out
 *.gcov
 coverage/
 
+# Sphinx (docs/), built locally with
+#   sphinx-build -W -b html docs docs/_build/html
+docs/_build/
+
 # Local scratch / run output
 Plots/
 runs-for-bhavin/
