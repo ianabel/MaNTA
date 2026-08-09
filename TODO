@@ -1,7 +1,10 @@
+Clean up python (make clean should remove python stuff, as should clean_coverage).
+
+Make python interface deployable so python drivers don't have to live in our tree
 
 Investigate IDACalcIC taking too many steps at initial time.
 
-Investigate occaisional wiggles in outputs.
+Investigate occasional wiggles in outputs.
 
 Superconvergence follow-ons (see Tests/README.md for what is already verified):
 

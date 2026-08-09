@@ -5,6 +5,11 @@
 
 #include <stdexcept>
 
+/*
+ * Postprocessing algorithm derived from SuperconvergentHDG-I.pdf, variable names
+ * correspond to matrices from that paper (referred to as paper I below)
+ */
+
 Postprocessor::Postprocessor(Grid const &Grid_, unsigned int Order, Index n_var,
                              Index Scalars, Index aux)
     : grid(Grid_), k(Order), nVars(n_var), nScalars(Scalars), nAux(aux),
