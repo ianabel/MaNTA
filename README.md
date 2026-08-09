@@ -11,15 +11,38 @@ You will need to download this codebase and compile it in order to run MaNTA
 
 To compile and use MaNTA you will need a system with the following
 
- - A C++23 compliant C++ compiler. Verified on **g++ 14**, **clang++ 19** and
-   **clang++ 21**: each builds the solver, the pybind11 module and all three test
-   suites clean, with `-Wall -Werror`. Pick one by setting `CXX` in
-   `Makefile.local`, or on the make command line (`make CXX=clang++-19`), which
-   overrides it. g++ 14 is what CI gates on, with clang++ 19 as a second job.
+ - A C++23 compliant C++ compiler: **g++ 14 or newer**, or **clang++ 19 or newer**.
+   Verified by hand on g++ 14, clang++ 19 and clang++ 21 -- each builds the solver,
+   the pybind11 module and all three test suites clean under `-Wall -Werror`. CI
+   runs five, one matrix leg each: g++ 14, g++ 15, clang++ 19, clang++ 20 and
+   clang++ 21. Pick one by setting `CXX` in `Makefile.local`, or on the make
+   command line (`make CXX=clang++-19`), which overrides it.
+
+   Both floors were measured, not guessed:
+
+     - **g++ 13 cannot build MaNTA at all.** libstdc++ 13 has no `<print>`, and the
+       output layer uses `std::print` throughout.
+     - **clang++ 18 builds the solver but not the tests or the Python module.**
+       `PyGrid.hpp` declares `constexpr Vector getNodes(...)`, and a dynamic Eigen
+       vector is not a literal type. C++23 permits that (P2448R2) as long as the
+       function is never constant-evaluated; clang 18 does not implement it, so
+       every target that includes `PyGrid.hpp` fails to compile.
  - The Boost C++ Template Library
  - The Eigen linear algebra template library
- - The SUNDIALS library, Version 6.0.0 or newer
+ - The SUNDIALS library, Version 7.1.0 or newer. Not 6.x: MaNTA links
+   `sundials_core` and uses `SUNContext`, neither of which exists before v7.
  - NETCDF C and NETCDF C++ 4.3 or newer (depends upon netcdf C interface 4.6.0 or newer)
+
+Three further libraries are **bundled as git submodules** under `extern/`, so
+there is nothing to install and no path to configure for them -- you only need to
+initialise them, which step 1 below covers:
+
+ - [toml11](http://github.com/toruniina/toml11) -- parses the configuration files
+ - [autodiff](https://autodiff.github.io) -- forward-mode automatic
+   differentiation, which is how `AutodiffTransportSystem` derives every Jacobian
+   entry from a physics case's `Flux` and `Source`
+ - [pybind11](https://github.com/pybind/pybind11) -- needed only for the Python
+   module, i.e. `make python` and `make python_tests`
 
 Precise dependencies have not been exhaustively tested, bug reports are welcome. Running on Windows requires the installation of [Windows Subsystem for Linux](https://docs.microsoft.com/en-us/windows/wsl/install) (WSL) and proceeding as for linux.
 
@@ -34,17 +57,37 @@ For example, if you are not using the default compiler (g++), then you can add a
 
 If you're happy with this, let's proceed!
 
- 1. Clone this repository into your chosen location.
+ 1. Clone this repository into your chosen location, **with its submodules**:
+
+    ```sh
+    git clone --recurse-submodules https://github.com/ianabel/MaNTA.git
+    ```
+
+    If you have already cloned without that flag, `extern/` will contain three
+    empty directories and the build will stop at a missing `toml.hpp`. Populate
+    them with
+
+    ```sh
+    git submodule update --init
+    ```
+
+    That is the whole of the toml11, autodiff and pybind11 installation.
+    `Makefile.config` already defaults `TOML11_DIR` and `AUTODIFF_DIR` into
+    `extern/`, and the pybind11 include path is not configurable at all, so none
+    of the three needs a `Makefile.local` entry -- set `TOML11_DIR` or
+    `AUTODIFF_DIR` only if you deliberately want to build against your own copy
+    somewhere else. (`git submodule update --init --recursive` is what CI runs and
+    also works; it additionally fetches toml11's own documentation and test
+    submodules, which MaNTA does not use.)
  2. Install the Boost library, either using your system package manager or manually by downloading from [here](https://www.boost.org). If this is a system-wide install,
- proceed to step 3. If you downloaded the Boost libraries, add a line to `Makefile.local` which sets `BOOST_DIR = /path/to/boost`.
- 3. Clone the [TOML11](http://github.com/toruniina/toml11) library into a directory of your choice. If you clone it into the default location of MCTrans/toml11, proceed to step 3. As with Boost, set `TOML11_DIR = /path/to/toml11` in `Makefile.local`.
- 4. Install [SUNDIALS](https://computing.llnl.gov/projects/sundials) and edit Makefile.local to set `SUNDIALS_DIR` to the location you have installed the Sundials library in. If you are only using SUNDIALS for MCTrans++, a quick intro to installing SUNDIALS is inclued below.
- 5. Install [NETCDF C and NETCDF C++](https://www.unidata.ucar.edu/software/netcdf/). On Ubuntu or Debian these can be installed from the package manager: `apt-get install libnetcdf-dev libnetcdff-dev libnetcdf-c++4-dev libnetcdf-c++4-1`. 
+ proceed to the next step. If you downloaded the Boost libraries, add a line to `Makefile.local` which sets `BOOST_DIR = /path/to/boost`.
+ 3. Install [SUNDIALS](https://computing.llnl.gov/projects/sundials) and edit Makefile.local to set `SUNDIALS_DIR` to the location you have installed the Sundials library in. If you are only using SUNDIALS for MaNTA, a quick intro to installing SUNDIALS is included below.
+ 4. Install [NETCDF C and NETCDF C++](https://www.unidata.ucar.edu/software/netcdf/). On Ubuntu or Debian these can be installed from the package manager: `apt-get install libnetcdf-dev libnetcdff-dev libnetcdf-c++4-dev libnetcdf-c++4-1`. 
  On MacOS, you can use either `brew install netcdf` or `conda install -c anaconda netcdf4` to install the C version, and `conda install -c conda-forge netcdf-cxx4` to install the C++ version. 
  Please specify in `Makefile.local` where these libraries are installed. For example, `NETCDF_DIR = /usr/local/Cellar/netcdf/4.8.0_2` and `NETCDF_CXX_DIR = /Users/<username>/miniconda3` if you used `brew` and `conda` to install on MacOS.
- 6. Set any other options, e.g. setting the variable `DEBUG` to any value will build a version that you can use to develop MCTrans++ and that includes debug information.
- 7. Run `make`.
- 8. Check the unit tests with `make test`. 
+ 5. Set any other options, e.g. setting the variable `DEBUG` to any value will build a version that you can use to develop MaNTA and that includes debug information.
+ 6. Run `make`.
+ 7. Check the unit tests with `make test`. 
 
 ### Testing
 
@@ -143,7 +186,10 @@ rejected with a clear error).
 ## Built With
 
 * [Boost](http://boost.org) - C++ Template library that radically extends the STL
-* [TOML11](http://github.com/toruniina/toml11) - For parsing configuration files written in [TOML](https://github.com/toml-lang/toml)
+* [TOML11](http://github.com/toruniina/toml11) - For parsing configuration files written in [TOML](https://github.com/toml-lang/toml). Submodule, `extern/toml11`
+* [autodiff](https://autodiff.github.io) - Forward-mode automatic differentiation, used by `AutodiffTransportSystem` to derive Jacobians from a physics case's flux and source. Submodule, `extern/autodiff`
+* [pybind11](https://github.com/pybind/pybind11) - Builds the `MaNTA` Python module. Submodule, `extern/pybind11`
+* [Eigen](https://eigen.tuxfamily.org) - Dense linear algebra throughout the solver
 * [Sundials](https://computing.llnl.gov/projects/sundials) - Suite of libraries from Lawrence Livermore National Laboratory for numerical solution of Nonlinear Algebraic Equations, ODEs and DAEs
 * [NETCDF C and NETCDF C++](https://www.unidata.ucar.edu/software/netcdf/) - A set of software libraries and machine-independent data formats that support the creation, access, and sharing of array-oriented scientific data.
 

@@ -1,7 +1,4 @@
 
-Update README.md to match the fact that most libraries are git submodules now
-(the compiler/version requirements are current).
-
 Investigate IDACalcIC taking too many steps at initial time.
 
 Investigate occaisional wiggles in outputs.
