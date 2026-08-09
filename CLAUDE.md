@@ -333,6 +333,17 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
   `-fno-inline-small-functions` / `-fno-default-inline` (gcc-only, ignored with a
   warning by clang), and `GCOV`, which is `gcov-14` for gcc but has to be
   `llvm-cov gcov` for clang. `-flto=auto` is fine on both.
+* **`GCOV` is derived outside `ifdef COVERAGE`, deliberately.** The `coverage`
+  target runs `gcovr` in the *parent* make and only recurses with `COVERAGE=on`,
+  so the make that expands `$(GCOV)` is the one where `COVERAGE` is undefined.
+  Deriving it inside that branch left the parent with a bare `gcov` — which is
+  gcov-14 on a box whose default compiler is gcc-14, and gcov-13 on
+  ubuntu-24.04, where the image ships gcc 12/13/14 with 13 as the default and the
+  workflow builds with `g++-14`. gcov then exits 3 with
+  `AdjointVectors.gcno:version 'B42*', prefer 'B33*'`, gcovr promotes that to a
+  hard error, and `make coverage` fails with exit 64 on CI while passing locally.
+  Anything that reads `.gcno`/`.gcda` must come from the same toolchain version
+  that wrote them.
 * **Output filenames come from the config file's *stem*** (`Solver.cpp` uses
   `inputFilePath.stem()`), so `.nc` / `.dat` / `.restart.nc` land in the current
   directory regardless of any path in `OutputFilename`.

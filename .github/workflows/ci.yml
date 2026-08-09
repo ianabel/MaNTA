@@ -200,6 +200,15 @@ jobs:
       - name: Summarise
         if: always()
         run: |
+          # Guarded because this step runs on always(). Without the guard a failed
+          # coverage step is followed by `tail: cannot open ...: No such file or
+          # directory`, and that becomes the *last* error in the log -- burying the
+          # real one several hundred lines up.
+          if [ ! -f coverage/summary.txt ]; then
+            echo 'Coverage report not produced -- see the "Run coverage" step.' \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           {
             echo '### Coverage (in-scope: numerical core + Python bindings)'
             echo '```'
@@ -207,7 +216,9 @@ jobs:
             echo '```'
             echo '### PhysicsCases (informational)'
             echo '```'
-            tail -n 20 coverage/physics.txt
+            # That report comes from a `-`-prefixed gcovr in the coverage target,
+            # so it is allowed to be absent while the in-scope one succeeded.
+            tail -n 20 coverage/physics.txt 2>/dev/null || echo '(not produced)'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
