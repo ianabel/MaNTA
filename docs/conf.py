@@ -78,3 +78,7 @@ html_sidebars = {
 html_static_path = ["_static"]
 html_title = "MaNTA"
 html_short_title = "MaNTA"
+
+# Where this is published, so generated pages carry a canonical link rather than
+# letting the per-version URLs compete with each other in search results.
+html_baseurl = "https://manta-docs.readthedocs.io/en/latest/"

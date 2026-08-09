@@ -4,9 +4,9 @@ MaNTA is a code developed for the prediction and analysis of transport processes
 It solves one-dimensional nonlinear reaction-diffusion and transport systems with a hybridizable discontinuous
 Galerkin (HDG) spatial discretisation, integrated in time as an index-1 DAE by SUNDIALS IDA.
 
-**Documentation** lives in [`docs/`](docs/index.rst) and is built with Sphinx for Read the Docs: the equations
-being solved, every configuration key, the output format, the adjoint interface, and how to write a transport
-system in C++ or Python. Build it locally with
+**Documentation: [manta-docs.readthedocs.io](https://manta-docs.readthedocs.io)** — the equations being solved,
+every configuration key, the output format, the adjoint interface, and how to write a transport system in C++ or
+Python. The sources live in [`docs/`](docs/index.rst); build them locally with
 
 ```sh
 python3 -m venv /tmp/docsvenv
