@@ -11,7 +11,11 @@ You will need to download this codebase and compile it in order to run MaNTA
 
 To compile and use MaNTA you will need a system with the following
 
- - A C++23 compliant C++ compiler (tested on g++ 13 and clang++ 16).
+ - A C++23 compliant C++ compiler. Verified on **g++ 14**, **clang++ 19** and
+   **clang++ 21**: each builds the solver, the pybind11 module and all three test
+   suites clean, with `-Wall -Werror`. Pick one by setting `CXX` in
+   `Makefile.local`, or on the make command line (`make CXX=clang++-19`), which
+   overrides it. g++ 14 is what CI gates on, with clang++ 19 as a second job.
  - The Boost C++ Template Library
  - The Eigen linear algebra template library
  - The SUNDIALS library, Version 6.0.0 or newer

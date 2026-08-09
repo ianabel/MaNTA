@@ -178,6 +178,29 @@ and batched (`SigmaFn(i, GlobalState, positions, t)`). The batched defaults in
   separate member from `adjoint` so its presence can never be mistaken for "the
   gradients have been computed".
 
+**The scalar hooks' Python signatures are not the C++ ones.** `ScalarGExtended`
+and friends take `DGSoln` and `Interval`, which have no Python representation, so
+`PyTransportSystem` evaluates on the nodes and passes a `GlobalState` plus the
+quadrature data instead. What Python must implement:
+
+```
+InitialScalarValue(s)                                    -> float
+InitialScalarDerivative(s, states, states_dot, weights)  -> float
+isScalarDifferential(i)                                  -> bool
+ScalarG(s, states, states_dot, weights, t)               -> float
+ScalarGPrime(states, states_dot, weights, phi_boundary, t)
+    -> (list of nScalars GlobalState dicts,   d G_s / d state
+        list of nScalars GlobalState dicts)   d G_s / d state_dot
+dSources_dScalars(s, state, x, t)  -> vector of length nScalars
+```
+
+`weights` is one quadrature weight per node (`nCells*(k+1)`), so an integral over
+the domain is `weights @ u`; `phi_boundary` is `(k+1, 2)`. Note
+`dSources_dScalars` is indexed by *scalar*, not by variable, and that
+`InitialScalarDerivative` is only consulted for scalars where
+`isScalarDifferential` is true. `python/Tests/test_scalars.py` exercises all of
+it against a closed form, in both the algebraic and differential cases.
+
 JAX physics cases (`python/JAXTransportSystem.py`, `python/State.py`) wrap the
 dict interface in equinox modules via the `MaNTA_Decorator` / `Physics_Decorator`
 adapters.
@@ -218,6 +241,24 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
 * **The top-level Makefile has a bare `export`.** A recursive `$(MAKE)` inherits
   the already-computed release `CXXFLAGS`, which is why the `coverage` target
   runs `env -u CXXFLAGS -u LDFLAGS $(MAKE) COVERAGE=on`.
+* **`-Wno-parentheses` is global, and on gcc it takes `-Wdangling-else` with it.**
+  So gcc will not tell you about a dangling `else`; clang will, because it treats
+  `-Wdangling-else` as a separate warning. Build with clang occasionally — that is
+  what CI's second job is for. The same applies in reverse: gcc never diagnoses a
+  polymorphic base with a non-virtual destructor, clang does
+  (`-Wdelete-non-abstract-non-virtual-dtor`), and it reports it at the point of
+  *destruction* inside libstdc++, once per instantiating translation unit, which
+  makes the message look like a standard-library problem rather than yours.
+* **Third-party includes use `-isystem`, not `-I`** (`Makefile.config`: SUNDIALS,
+  toml11, Boost, netCDF, Eigen, autodiff, and pybind11 in the top-level Makefile).
+  `-Werror` is on, and Eigen's own headers do trip `-Wunused-but-set-variable`
+  under clang — reachable only from the pybind11 build, which pulls in
+  `SparseCore`. Adding a dependency with `-I` re-arms that.
+* **`COMPILER_ID` in `Makefile.config`** distinguishes gcc from clang for the few
+  flags that differ: `-fprofile-abs-path` (gcc-only, a hard error on clang),
+  `-fno-inline-small-functions` / `-fno-default-inline` (gcc-only, ignored with a
+  warning by clang), and `GCOV`, which is `gcov-14` for gcc but has to be
+  `llvm-cov gcov` for clang. `-flto=auto` is fine on both.
 * **Output filenames come from the config file's *stem*** (`Solver.cpp` uses
   `inputFilePath.stem()`), so `.nc` / `.dat` / `.restart.nc` land in the current
   directory regardless of any path in `OutputFilename`.

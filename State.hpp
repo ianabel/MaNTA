@@ -121,13 +121,21 @@ public:
     checkShapeAndSet(m_Flux, other.Flux(), "Flux");
     if (nAux > 0) // Don't bother with Aux if nAux = 0
       checkShapeAndSet(m_Aux, other.Aux(), "Aux");
+    // Guard-clause form, and braced. The `else` used to hang off the inner `if`
+    // -- which is what was meant, so the behaviour here is unchanged -- but with
+    // two unbraced nested ifs that is only true by the standard's
+    // nearest-enclosing rule, not by anything the reader can see. gcc's
+    // -Wdangling-else lives inside -Wparentheses, which Makefile.config disables
+    // globally, so only clang reports it. It was the sole thing standing between
+    // this codebase and a clean clang build.
     if (nScalars > 0)
-      if (m_Scalars.size() == other.Scalars().size())
-        m_Scalars = other.Scalars();
-      else
+    {
+      if (m_Scalars.size() != other.Scalars().size())
         throw std::runtime_error("Shape of input scalar array must match "
                                  "nScalars (length of input = " +
                                  std::to_string(other.Scalars().size()) + ")");
+      m_Scalars = other.Scalars();
+    }
     return *this;
   }
 

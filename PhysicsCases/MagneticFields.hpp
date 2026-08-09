@@ -25,6 +25,22 @@ class MagneticField
 {
 public:
 	MagneticField() = default;
+
+	// A polymorphic base needs this. Without it, destroying a derived field
+	// through a MagneticField pointer is undefined behaviour -- which today it
+	// never is, because createMagneticField below returns a
+	// shared_ptr<MagneticField> built by make_shared<Derived>, and make_shared
+	// installs a deleter that remembers the concrete type. So this is latent
+	// rather than live: it becomes a real leak the first time one of these is put
+	// in a unique_ptr<MagneticField>, or deleted through a base pointer.
+	//
+	// clang reports it as -Wdelete-non-abstract-non-virtual-dtor at the point of
+	// destruction, i.e. inside libstdc++, once per instantiating translation unit;
+	// gcc does not warn at all. TransportSystem and AdjointProblem already
+	// declare theirs, so this was the only polymorphic base in the project
+	// without one.
+	virtual ~MagneticField() = default;
+
 	virtual Real Psi_V(Real V) const = 0;
 	virtual double Psi_V(double V) const { return Psi_V(static_cast<Real>(V)).val; }
 

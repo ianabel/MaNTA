@@ -67,7 +67,7 @@ python: $(PYTHON_OUTPUT)
 # Python.cpp and PyRunner.cpp are compiled inline by this rule, so they are
 # prerequisites too; their headers come in via $(PYTHON_HEADERS).
 $(PYTHON_OUTPUT): Python.cpp PyRunner.cpp MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(PYTHON_HEADERS) $(PYTHON_OBJECTS)
-	$(CXX) $(CXXFLAGS) $(PYTHON_FLAGS) $$(python3-config --includes) $(JAX_XLA_INCLUDES) -I$(realpath extern/pybind11/include) -shared -fPIC -fvisibility=hidden -o $@ Python.cpp PyRunner.cpp MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $(PYTHON_FLAGS) $$(python3-config --includes) $(JAX_XLA_INCLUDES) -isystem $(realpath extern/pybind11/include) -shared -fPIC -fvisibility=hidden -o $@ Python.cpp PyRunner.cpp MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
 
 clean:
 	$(MAKE) -C Tests/UnitTests clean
