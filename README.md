@@ -65,7 +65,7 @@ MacOS has yet to be tested.
 
 All the build options are set in the file `Makefile.local`, which you need to provide for your system.
 An example is provided in `Makefile.local.example` -- copy this file to `Makefile.local` and make any edits needed.
-This file is in GNU-compatable Makefile format, and you can set and override all the compilation options here.
+This file is in GNU-compatible Makefile format, and you can set and override all the compilation options here.
 For example, if you are not using the default compiler (g++), then you can add a line to `Makefile.local` that reads `CXX = /path/to/my/c++/compiler`.
 
 If you're happy with this, let's proceed!
@@ -224,7 +224,7 @@ We use [SemVer](http://semver.org/) for versioning. For the versions available, 
 
 * **Myles Kelly** - *Original author*
 * **Ian Abel** - *Maintainer* - [Ian Abel at UMD](https://ireap.umd.edu/faculty/abel)
-* **Eddie Tocco** - *Autodiff interfcaces*
+* **Eddie Tocco** - *Autodiff interfaces*
 
 For full copyright attribution, see the [COPYRIGHT](COPYRIGHT) file.
 For a summary of contributors, see the [contributors](http://github.com/ianabel/MCTrans/contributors) page.

@@ -207,7 +207,7 @@ class SystemSolver
         unsigned int nScalars; // Any global scalars
         unsigned int nAux;	   // Any auxiliary constraints
 
-        unsigned int nP;       // Number of parameters to compute for adjoint senstivity problem 
+        unsigned int nP;       // Number of parameters to compute for adjoint sensitivity problem 
 
         using EigenCellwiseSolver = Eigen::FullPivLU<Matrix>;
         using EigenGlobalSolver = Eigen::FullPivLU<Matrix>;

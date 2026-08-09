@@ -141,7 +141,7 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
         raise NotImplementedError("ScalarGPrime not implemented in derived class")
 
     """
-    Sigma and source, and auxilliary functions to be overloaded in derived classes
+    Sigma and source, and auxiliary functions to be overloaded in derived classes
 
     Parameters
     ----------

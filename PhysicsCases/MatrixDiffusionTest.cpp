@@ -12,7 +12,7 @@ REGISTER_PHYSICS_IMPL(MatrixDiffusionTest);
 MatrixDiffusionTest::MatrixDiffusionTest(toml::value const &config, Grid const &)
 {
 
-	// Construst your problem from user-specified config
+	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
 	// here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 
@@ -53,7 +53,7 @@ MatrixDiffusionTest::MatrixDiffusionTest(toml::value const &config, Grid const &
 	a2 = (InitialHeights[0] - InitialHeights[1]) / (2.0);
 }
 
-// Dirichlet Boundary Conditon
+// Dirichlet Boundary Condition
 Value MatrixDiffusionTest::LowerBoundary(Index i, Time t) const
 {
 	if (i == 0)

@@ -35,7 +35,7 @@ AuxVarTest::AuxVarTest(toml::value const &config, Grid const &)
     nVars = 2;
     nAux = 1;
 
-    // Construst your problem from user-specified config
+    // Construct your problem from user-specified config
     // throw an exception if you can't. NEVER leave a part-constructed object around
     // here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 
@@ -50,7 +50,7 @@ AuxVarTest::AuxVarTest(toml::value const &config, Grid const &)
     Centre = toml::find_or(DiffConfig, "Centre", 0.0);
 }
 
-// Dirichlet Boundary Conditon
+// Dirichlet Boundary Condition
 Value AuxVarTest::LowerBoundary(Index, Time t) const
 {
     return 0.0;

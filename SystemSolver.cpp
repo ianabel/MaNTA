@@ -848,7 +848,7 @@ void SystemSolver::setJacEvalY(N_Vector yy, N_Vector yp)
     dydtJac.copy(ypMap); // Deep copy
 }
 
-// Over-arching Jacobian function. If there's no coupled B-field solve, or auxiliar variables, then just do the
+// Over-arching Jacobian function. If there's no coupled B-field solve, or auxiliary variables, then just do the
 // HDG Jacobian solve
 void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 {
@@ -1589,7 +1589,7 @@ void SystemSolver::computeAdjointGradients()
     }
     adjointProblem->ComputePhysicsDerivatives({dSigmadp, dSourcedp, dAuxdp}, states, points);
     
-    // Spatial paramters effectively mean we have nCells * np parameters, but we store as a matrix to make output easier to interpret
+    // Spatial parameters effectively mean we have nCells * np parameters, but we store as a matrix to make output easier to interpret
     if (adjointProblem->areParametersSpatial())
         G_p.resize(adjointProblem->getNg() * nCells * (k + 1), adjointProblem->getNp());
     else 

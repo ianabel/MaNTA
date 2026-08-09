@@ -89,7 +89,7 @@ public:
   virtual Value SigmaFn(Index i, const State &s, Position x, Time t) = 0;
   virtual Value Sources(Index i, const State &s, Position x, Time t) = 0;
 
-  // This determines the a_i functions. Only one with a default option, but can be overriden
+  // This determines the a_i functions. Only one with a default option, but can be overridden
   virtual Value aFn(Index i, Position x) { return 1.0; };
 
   // We need derivatives of the flux functions
@@ -107,7 +107,7 @@ public:
  */
   virtual PhysicsOutput ComputePhysics(GlobalState const &states, std::vector<Position> const & abscissae, Time time)
 {
-    m_sourceCache.resize(nVars); // make sure we have enought elements in cache
+    m_sourceCache.resize(nVars); // make sure we have enough elements in cache
     PhysicsOutput out;
     out[0].resize(nVars);
     out[1].resize(nVars);

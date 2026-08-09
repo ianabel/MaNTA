@@ -70,7 +70,7 @@ public:
 
   Value dGFndp(Index i, Index pIndex, DGSoln &y) const override {
     throw std::runtime_error("Non-vectorized version of function \"dGFndp\" "
-                             "depracated.");
+                             "deprecated.");
   };
   Matrix dGFndp(Index gIndex, DGSoln &y) const override {
     const auto states = y.evalOnNodes();
@@ -115,7 +115,7 @@ public:
   }
   Value gFn(Index gIndex, const State &s, Position x) const override {
     throw std::runtime_error(
-        "Non-vectorized version of function \"gFn\" depracated.");
+        "Non-vectorized version of function \"gFn\" deprecated.");
   };
   Values gFn(Index gIndex, const GlobalState &s,
              std::vector<Position> const &abscissae) const override {
@@ -129,7 +129,7 @@ public:
   };
   void dgFn_du(Index i, VectorRef out, const State &s, Position x) override {
     throw std::runtime_error(
-        "Individual derivative function \"dgFn_du\" depracated; "
+        "Individual derivative function \"dgFn_du\" deprecated; "
         "use vectorized version dg instead.");
     // if (!initialized)
     //     initializeOverrides();
@@ -137,7 +137,7 @@ public:
   };
   void dgFn_dq(Index i, VectorRef out, const State &s, Position x) override {
     throw std::runtime_error(
-        "Individual derivative function \"dgFn_dq\" depracated; "
+        "Individual derivative function \"dgFn_dq\" deprecated; "
         "use vectorized version dg instead.");
     // if (!initialized)
     //     initializeOverrides();
@@ -146,7 +146,7 @@ public:
   void dgFn_dsigma(Index i, VectorRef out, const State &s,
                    Position x) override {
     throw std::runtime_error("Individual derivative function \"dgFn_dsigma\" "
-                             "depracated; use vectorized version dg instead.");
+                             "deprecated; use vectorized version dg instead.");
     // if (!initialized)
     //     initializeOverrides();
     // out = method_overrides["dgFn_dsigma"](i, s,
@@ -229,7 +229,7 @@ public:
   }
   void dSigmaFn_dp(Index i, Index pIndex, Value &out, const State &s,
                    Position x) override {
-    throw std::runtime_error("Individual derivative functions depracated; use "
+    throw std::runtime_error("Individual derivative functions deprecated; use "
                              "vectorized version dSigma instead.");
     // if (!initialized)
     //     initializeOverrides();
@@ -239,7 +239,7 @@ public:
 
   void dSources_dp(Index i, Index pIndex, Value &out, const State &s,
                    Position x) override {
-    throw std::runtime_error("Individual derivative functions depracated; use "
+    throw std::runtime_error("Individual derivative functions deprecated; use "
                              "vectorized version dSources instead.");
     // if (!initialized)
     //     initializeOverrides();

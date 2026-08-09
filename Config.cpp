@@ -29,7 +29,7 @@ double getFloatWithDefault(std::string const &name, toml::value const &config, d
 	else if (configElement.is_floating())
 		return static_cast<double>(configElement.as_floating());
 	else
-		throw std::invalid_argument(name + " specified incorrrectly");
+		throw std::invalid_argument(name + " specified incorrectly");
 }
 
 double getFloat(std::string const &name, toml::value const &config)
@@ -46,7 +46,7 @@ double getFloat(std::string const &name, toml::value const &config)
 	else if (configElement.is_floating())
 		return static_cast<double>(configElement.as_floating());
 	else
-		throw std::invalid_argument(name + " specified incorrrectly");
+		throw std::invalid_argument(name + " specified incorrectly");
 }
 
 int getIntWithDefault(std::string const &name, toml::value const &config, int defaultValue)
@@ -66,5 +66,5 @@ int getIntWithDefault(std::string const &name, toml::value const &config, int de
 	if (configElement.is_integer())
 		return static_cast<int>(configElement.as_integer());
 	else
-		throw std::invalid_argument(name + " specified incorrrectly");
+		throw std::invalid_argument(name + " specified incorrectly");
 }

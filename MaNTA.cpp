@@ -102,7 +102,7 @@ int runManta(std::string const &fname)
 			nCells = numberOfCells.as_integer();
 
 		if (nCells < 4 && highGridBoundary)
-			throw std::invalid_argument("Grid size must exceed 4 cells in order to implemet dense boundaries");
+			throw std::invalid_argument("Grid size must exceed 4 cells in order to implement dense boundaries");
 
 		// The is_integer() branches called as_floating(), which throws
 		// toml::type_error on an integer node -- so `Lower_boundary = 0` failed
@@ -118,7 +118,7 @@ int runManta(std::string const &fname)
 		else if (lowerBoundary.is_floating())
 			lBound = static_cast<double>(lowerBoundary.as_floating());
 		else
-			throw std::invalid_argument("Lower_boundary specified incorrrectly");
+			throw std::invalid_argument("Lower_boundary specified incorrectly");
 
 		auto upperBoundary = toml::find(config, "Upper_boundary");
 		if (config.count("Upper_boundary") != 1)
@@ -128,7 +128,7 @@ int runManta(std::string const &fname)
 		else if (upperBoundary.is_floating())
 			uBound = static_cast<double>(upperBoundary.as_floating());
 		else
-			throw std::invalid_argument("Upper_boundary specified incorrrectly");
+			throw std::invalid_argument("Upper_boundary specified incorrectly");
 
 		grid = std::make_unique<Grid>(lBound, uBound, nCells, highGridBoundary, lowerBoundaryFraction, upperBoundaryFraction);
 	}

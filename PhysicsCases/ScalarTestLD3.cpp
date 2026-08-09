@@ -49,7 +49,7 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
 	nVars = 1;
 	nScalars = 3;
 
-	// Construst your problem from user-specified config
+	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
 	// here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 
@@ -73,7 +73,7 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
 	logmsg<LOG_LEVEL::INFO>("ScalarTestLD3 target mass M0 = {}", M0);
 }
 
-// Dirichlet Boundary Conditon
+// Dirichlet Boundary Condition
 Value ScalarTestLD3::LowerBoundary(Index, Time) const
 {
 	return u0;

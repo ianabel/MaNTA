@@ -4,7 +4,7 @@ from JAXAdjointProblem import JAXAdjointProblem
 from typing import NamedTuple
 from VectorizedTransportSystem import VectorizedTransportSystem
 
-# Need PyTree structure for class paramters to be able to compute adjoints
+# Need PyTree structure for class parameters to be able to compute adjoints
 
 
 class NonlinearDiffusionParams(NamedTuple):

@@ -15,7 +15,7 @@ NonlinDiffTest::NonlinDiffTest( toml::value const& config, Grid const& g )
 	// Always set nVars in a derived constructor
 	nVars = 1;
 
-	// Construst your problem from user-specified config
+	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
 
 	if ( config.count( "DiffusionProblem" ) != 1 ) {
@@ -31,7 +31,7 @@ NonlinDiffTest::NonlinDiffTest( toml::value const& config, Grid const& g )
 
 }
 
-// Dirichlet Boundary Conditon at x = 0
+// Dirichlet Boundary Condition at x = 0
 Value NonlinDiffTest::LowerBoundary( Index, Time ) const
 {
 	return 1.0;

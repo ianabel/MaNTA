@@ -36,7 +36,7 @@ Real PlasmaConstants::CyclotronLosses(Real V, Real n, Real Te) const
     Real P_vacuum = 6.21 * n_e20 * Te_eV * B_z * B_z;
 
     // Characteristic absorption length
-    // lambda_0 = (Electron Inertial Lenght) / ( Plasma Frequency / Cyclotron Frequency )  ; Eq (4) of Tamor
+    // lambda_0 = (Electron Inertial Length) / ( Plasma Frequency / Cyclotron Frequency )  ; Eq (4) of Tamor
     //				= (5.31 * 10^-4 / (n_e20)^1/2) / ( 3.21 * (n_e20)^1/2 / B ) ; From NRL Formulary, converted to our units (Tesla for B & 10^20 /m^3 for n_e)
     Real LambdaZero = (5.31e-4 / 3.21) * (B_z / n_e20);
     double WallReflectivity = 0.95;

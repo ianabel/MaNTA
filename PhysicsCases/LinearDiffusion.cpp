@@ -13,7 +13,7 @@ LinearDiffusion::LinearDiffusion(toml::value const &config, Grid const &)
 	// Always set nVars in a derived constructor
 	nVars = 1;
 
-	// Construst your problem from user-specified config
+	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
 	// here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 
@@ -31,7 +31,7 @@ LinearDiffusion::LinearDiffusion(toml::value const &config, Grid const &)
 	lowerNeumann = toml::find_or(DiffConfig, "LowerNeumann", false);
 }
 
-// Dirichlet Boundary Conditon
+// Dirichlet Boundary Condition
 Value LinearDiffusion::LowerBoundary(Index, Time) const
 {
 	return 0.0;

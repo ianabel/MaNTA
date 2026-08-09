@@ -21,7 +21,7 @@ class TestDiffusion : public TransportSystem {
 			// Always set nVars in a derived constructor
 			nVars = 1;
 
-			// Construst your problem from user-specified config
+			// Construct your problem from user-specified config
 			// throw an exception if you can't. NEVER leave a part-constructed object around
 			// here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 

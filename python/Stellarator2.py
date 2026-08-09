@@ -216,7 +216,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return out
 
     """
-    Sigma and source, and auxilliary functions
+    Sigma and source, and auxiliary functions
 
     Parameters
     ----------

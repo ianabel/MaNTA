@@ -22,7 +22,7 @@ REGISTER_PHYSICS_IMPL(AuxVarADTest);
 
 AuxVarADTest::AuxVarADTest(toml::value const &config, Grid const &grid) : AutodiffTransportSystem(config, grid, 1, 0, 1)
 {
-    // Construst your problem from user-specified config
+    // Construct your problem from user-specified config
     // throw an exception if you can't. NEVER leave a part-constructed object around
     // here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 
@@ -37,7 +37,7 @@ AuxVarADTest::AuxVarADTest(toml::value const &config, Grid const &grid) : Autodi
     Centre = toml::find_or(DiffConfig, "Centre", 0.0);
 }
 
-// Dirichlet Boundary Conditon
+// Dirichlet Boundary Condition
 Value AuxVarADTest::LowerBoundary(Index, Time t) const
 {
     return 0.0;

@@ -13,7 +13,7 @@ AdjointPoster::AdjointPoster( toml::value const& config, Grid const & )
 	// Always set nVars in a derived constructor
 	nVars = 1;
 
-	// Construst your problem from user-specified config
+	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
 
 	T_s = 50;
@@ -22,7 +22,7 @@ AdjointPoster::AdjointPoster( toml::value const& config, Grid const & )
 	SourceCentre = 0.3;
 }
 
-// Dirichlet Boundary Conditon at x = 0
+// Dirichlet Boundary Condition at x = 0
 Value AdjointPoster::LowerBoundary( Index, Time ) const
 {
 	return 0.0;

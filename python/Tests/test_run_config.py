@@ -289,7 +289,7 @@ def test_a_small_grid_with_dense_boundaries_is_rejected(tmp_path):
 
 @pytest.mark.parametrize("key", ["Lower_boundary", "Upper_boundary"])
 def test_a_non_numeric_boundary_is_rejected(tmp_path, key):
-    with pytest.raises(ValueError, match=f"{key} specified incorrrectly"):
+    with pytest.raises(ValueError, match=f"{key} specified incorrectly"):
         MaNTA.run(write_config(tmp_path, **{key: '"not a number"'}))
 
 
@@ -307,13 +307,13 @@ def test_a_missing_required_float_is_named(tmp_path, key):
 
 @pytest.mark.parametrize("key", ["tau", "Relative_tolerance", "MinStepSize"])
 def test_a_non_numeric_optional_float_is_named(tmp_path, key):
-    with pytest.raises(ValueError, match=f"{key} specified incorrrectly"):
+    with pytest.raises(ValueError, match=f"{key} specified incorrectly"):
         MaNTA.run(write_config(tmp_path, **{key: '"text"'}))
 
 
 def test_a_non_integer_output_point_count_is_rejected(tmp_path):
     """getIntWithDefault takes integers only -- 301.0 is not one."""
-    with pytest.raises(ValueError, match="OutputPoints specified incorrrectly"):
+    with pytest.raises(ValueError, match="OutputPoints specified incorrectly"):
         MaNTA.run(write_config(tmp_path, OutputPoints="301.0"))
 
 

@@ -98,7 +98,7 @@ T getValueWithDefault(std::string_view key, const py::dict &d) {
       return val;
     } catch (const std::exception &e) {
       throw std::runtime_error(
-          "The following error occured while trying to get the value of key: " +
+          "The following error occurred while trying to get the value of key: " +
           std::string(key) + " from config:\n" + e.what() + "\n");
     }
   } else {
