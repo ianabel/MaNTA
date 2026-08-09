@@ -19,7 +19,11 @@ make regression_tests     # solver over Tests/RegressionTests/*.conf vs checked-
 make python               # the pybind11 extension, python/MaNTA<suffix>.so
 make python_tests         # pytest suite for that extension
 make coverage             # rebuild instrumented, run all three suites, write coverage/
-make clean                # also sweeps orphaned PhysicsCases/*.o and .d files
+make clean                # also sweeps orphaned PhysicsCases/*.o and .d files,
+                          # python/ modules of every ABI suffix, the bytecode
+                          # and pytest caches, and clean_data below
+make clean_data           # run output (.nc/.restart.nc/.dat) at the root and in
+                          # Tests/RegressionTests, python/, python/Tests/
 ```
 
 The regression and Python suites need `requirements.txt` installed and the
@@ -347,6 +351,14 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
 * **Output filenames come from the config file's *stem*** (`Solver.cpp` uses
   `inputFilePath.stem()`), so `.nc` / `.dat` / `.restart.nc` land in the current
   directory regardless of any path in `OutputFilename`.
+* **Not every `.nc` in the tree is output.** `clean_data` sweeps generated data
+  from the directories in `CLEAN_DATA_DIRS`, sparing `*.ref.nc` / `*.ref.dat`.
+  `Tests/UnitTests` is deliberately absent: its data files are tracked test
+  *inputs* — `testic.nc` (`AutodiffTest.cpp`) and `MatrixDiffusion.restart.nc`
+  (`SystemSolverTests.cpp:378`) — and the second has no `.ref.` in its name, so
+  the keep-pattern would not save it. Check tracked status, not the filename,
+  before adding a directory there. Unit-test output itself lands at the repo
+  root, because `make test` runs the binary from there.
 * **`printSources` reads the source cache through a basis of the residual's
   order.** With `Superconvergent = true` the cache holds `k+2` values per cell
   rather than `k+1`, so `SystemSolver::print` picks its basis and stride from the

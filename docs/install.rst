@@ -136,7 +136,27 @@ Build targets
    * - ``make venv``
      - Creates ``.venv`` and installs the Python dependencies into it. See below.
    * - ``make clean``
-     - Also sweeps orphaned ``PhysicsCases/*.o`` and ``.d`` files.
+     - Also sweeps orphaned ``PhysicsCases/*.o`` and ``.d`` files, every
+       ABI-suffixed module under ``python/``, the bytecode and pytest caches,
+       and — via ``clean_data`` — the run output.
+   * - ``make clean_data``
+     - Just the run output: ``.nc``, ``.restart.nc`` and ``.dat`` at the repo
+       root and in ``Tests/RegressionTests``, ``python`` and ``python/Tests``.
+
+.. warning::
+
+   ``clean_data`` spares files with ``.ref.`` in the name — the references the
+   regression and pytest suites compare against — and it does not descend into
+   subdirectories, so scratch and archive directories like ``runs/`` are left
+   alone.
+
+   It also skips ``Tests/UnitTests`` entirely. Every ``.nc`` in there is a
+   tracked test *input* rather than output, and one of them —
+   ``MatrixDiffusion.restart.nc``, read by ``SystemSolverTests.cpp`` — has no
+   ``.ref.`` in its name, so the keep-pattern would not save it. Nothing is lost
+   by the omission: ``make test`` runs the binary from the repo root, so
+   unit-test output lands there. Keep both facts in mind before adding a
+   directory to ``CLEAN_DATA_DIRS``.
 
 Build variants are set on the command line, for example ``make DEBUG=on test``:
 
