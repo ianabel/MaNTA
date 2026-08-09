@@ -402,7 +402,7 @@ BOOST_AUTO_TEST_CASE(adjoint_derivative_vectors_match_gauss_quadrature)
     // but only asserts the other three are *zero*, which they are for its
     // fixture; here all four integrands are nonzero and each is compared with
     // an independent 30-point rule.
-    const Index k = 2, nCells = 4, nVars = 2;
+    const Index k = 2, nCells = 4, nVars = 2, nAux = 1;
     Grid grid(0.0, 1.0, nCells);
     AdjointHostSystem problem;
     MockAdjoint adjoint;
@@ -434,7 +434,9 @@ BOOST_AUTO_TEST_CASE(adjoint_derivative_vectors_match_gauss_quadrature)
                                                           Position),
                              Index nComponents)
         {
-            Vector ref(nVars * (k + 1));
+            // Sized by nComponents, not nVars: dGdaux_Vec's output has one
+            // block per auxiliary variable, so for it the two differ.
+            Vector ref(nComponents * (k + 1));
             ref.setZero();
             for (Index var = 0; var < nComponents; ++var)
                 for (Index j = 0; j < k + 1; ++j)
@@ -467,12 +469,17 @@ BOOST_AUTO_TEST_CASE(adjoint_derivative_vectors_match_gauss_quadrature)
                    "dGdsigma_Vec, cell " << cell);
         BOOST_TEST(actual.norm() > 1e-6);
 
-        // dGdaux_Vec loops over nAux, not nVars, so only the first nAux blocks
-        // of the vector are written.
-        sys.dGdaux_Vec(gIndex, actual, sys.y, cell);
-        BOOST_TEST((actual - reference(&AdjointProblem::dgFn_dphi, 1)).norm() < 1e-10,
+        // dGdaux_Vec writes one block per *auxiliary* variable, so its result is
+        // nAux*(k+1) long -- which for this fixture (nVars = 2, nAux = 1) is not
+        // the same length as the other three. Passing the nVars-sized `actual`
+        // used to be accepted only because the size assert inside read nVars;
+        // it now demands nAux, matching what the solver's own call site in
+        // initializeMatricesForAdjointSolve supplies.
+        Vector actualAux(nAux * (k + 1));
+        sys.dGdaux_Vec(gIndex, actualAux, sys.y, cell);
+        BOOST_TEST((actualAux - reference(&AdjointProblem::dgFn_dphi, nAux)).norm() < 1e-10,
                    "dGdaux_Vec, cell " << cell);
-        BOOST_TEST(actual.norm() > 1e-6);
+        BOOST_TEST(actualAux.norm() > 1e-6);
     }
 
     N_VDestroy(Y);

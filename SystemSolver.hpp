@@ -116,21 +116,29 @@ class SystemSolver
 
         void mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorWrapper &lam, sunrealtype *const &Y) const;
 
-        // Initialise
-        void runSolver(double);
-
-        // // Function for creating solver lambda for use in PyRunner
-        // std::function<void(double)> makeSolver(SUNLinearSolver &LS,   // linear solver memory structure
-        //                                        SUNMatrix& sunMat,     
-        //                                        void *IDA_mem,         // IDA memory structure
-        //                                        int &retval,
-        //                                        N_Vector &Y,           // vector for storing solution
-        //                                        N_Vector &dYdt,        // vector for storing time derivative of solution
-        //                                        N_Vector &constraints, // vector for storing constraints
-        //                                        N_Vector &id,          // vector for storing id (which elements are algebraic or differentiable)
-        //                                        N_Vector &res,         // vector for storing residual
-        //                                        N_Vector &absTolVec,   // vector for storing absolute tolerances
-        //                                        sunrealtype &tout, sunrealtype &tret, bool writeOutput = true); // return a callable solver object
+        // The run lifecycle, in three phases.
+        //
+        //   initialize()       allocate the SUNDIALS objects, build the initial
+        //                      condition, open the output files, run IDACalcIC
+        //   integrate(tFinal)  the time loop, then the adjoint solve and the
+        //                      final netCDF / restart output
+        //   destroySundials()  free everything initialize() allocated
+        //
+        // runSolver() composes the three and is what the standalone binary and
+        // the tests call; behaviour through that entry point is unchanged, except
+        // that cleanup now happens even when the time loop throws.
+        //
+        // They are separate so that a caller can allocate, look at the state,
+        // integrate and free as distinct steps. PyRunner::G() is the motivating
+        // case: it wants the objective without also paying for a gradient.
+        //
+        // destroySundials() nulls what it frees, so calling it twice -- or
+        // without a preceding initialize() -- is safe. initialize() after a
+        // destroySundials() starts a fresh run on the same object.
+        void initialize();
+        void integrate(double tFinal);
+        void destroySundials();
+        void runSolver(double tFinal);
 
         void setAdjointProblem(AdjointProblem *ap) { adjointProblem = ap; };
         void runAdjointSolve();
@@ -167,6 +175,13 @@ class SystemSolver
         // PHYSICS_DEBUG build, since that is what computes the residual and
         // error weights they report.
         void setWriteDebugDatFiles(bool in) { writeDebugDatFiles = in; };
+
+        // Let IDA grow the step by up to 10x between steps instead of the
+        // default 2x. Worth it when the transient is short relative to the run
+        // and the interesting part is the steady state -- an optimisation driver
+        // calling run_ss() in a loop, for instance. It makes IDA more likely to
+        // overshoot and have to retry, so it is off by default.
+        void setAggressiveTimesteps(bool in) { aggressiveTimesteps = in; };
 
         void setJacEvalY( N_Vector, N_Vector );
         int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
@@ -218,6 +233,33 @@ class SystemSolver
 
         SUNContext ctx;
         N_Vector *v, *w;
+
+        // ---- state of one run, owned between initialize() and destroySundials()
+        //
+        // These were locals of runSolver(). They are members so the three phases
+        // can be called separately; destroySundials() nulls each one, which is
+        // both what makes it idempotent and what lets initialize() be called
+        // again afterwards.
+        //
+        // `ctx` above is deliberately *not* one of them: it belongs to the
+        // SystemSolver, created in the constructor and freed in the destructor.
+        // destroySundials() must not touch it -- freeing it per-run is what used
+        // to make a second runSolver() call on the same object fail at IDACreate.
+        void *IDA_mem = nullptr;      // IDA memory structure
+        SUNLinearSolver LS = nullptr; // linear solver memory structure
+        SUNMatrix sunMat = nullptr;   // the deliberately-empty matrix IDA needs
+        N_Vector Y = nullptr;         // solution
+        N_Vector dYdt = nullptr;      // time derivative of the solution
+        N_Vector constraints = nullptr;
+        N_Vector id = nullptr;        // which components are differential
+        N_Vector res = nullptr;       // residual
+        N_Vector absTolVec = nullptr;
+        sunrealtype tout = 0.0, tret = 0.0;
+
+        std::ofstream out0, dydt_out, res_out;
+        // writeDebugDatFiles && physics_debug. Computed once in initialize()
+        // because the time loop and the teardown both need it.
+        bool debugDat = false;
 
         std::vector<Matrix> W_cellwise;
         Matrix N_global; // Scalar-scalar coupling matrix
@@ -316,6 +358,10 @@ class SystemSolver
         bool writeDatFile = false;
         bool writeDebugDatFiles = false;
 
+        // IDASetEtaMax(10.0) rather than IDA's default 2.0. See
+        // setAggressiveTimesteps.
+        bool aggressiveTimesteps = false;
+
         double alpha = 1.0;
         bool testing = false;
 
@@ -363,7 +409,10 @@ class SystemSolver
         int getErrorWeights( N_Vector y, N_Vector ewt );
         static int getErrorWeights_static( N_Vector, N_Vector, void * );
 
-        N_Vector wgt;
+        // Allocated by initialize() only on the debug-.dat path, so it has to
+        // start null: destroySundials() frees it if it is non-null, and an
+        // uninitialised pointer there is a segfault on every ordinary run.
+        N_Vector wgt = nullptr;
 };
 
 #endif // SYSTEMSOLVER_HPP

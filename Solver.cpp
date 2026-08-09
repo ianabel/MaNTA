@@ -24,21 +24,31 @@ extern "C"
 int static_residual(sunrealtype tres, N_Vector Y, N_Vector dydt, N_Vector resval, void *user_data);
 int JacSetup(sunrealtype tt, sunrealtype cj, N_Vector yy, N_Vector yp, N_Vector rr, SUNMatrix Jac, void *user_data, N_Vector tmp1, N_Vector tmp2, N_Vector tmp3);
 
+// runSolver() is the whole run: allocate, integrate, free. It exists so that the
+// standalone binary and the tests have one call to make, and so that the free
+// happens even if the time loop throws -- which it previously did not, since
+// every N_VDestroy sat after the loop.
+//
+// destroySundials() is idempotent, so the catch-and-rethrow below cannot double
+// free.
 void SystemSolver::runSolver(double tFinal)
 {
-	//---------------------------Variable assiments-------------------------------
-	SUNLinearSolver LS = NULL; // linear solver memory structure
-	void *IDA_mem = NULL;	   // IDA memory structure
-	int retval;
+	initialize();
+	try
+	{
+		integrate(tFinal);
+	}
+	catch (...)
+	{
+		destroySundials();
+		throw;
+	}
+	destroySundials();
+}
 
-	N_Vector Y = NULL;			 // vector for storing solution
-	N_Vector dYdt = NULL;		 // vector for storing time derivative of solution
-	N_Vector constraints = NULL; // vector for storing constraints
-	N_Vector id = NULL;			 // vector for storing id (which elements are algebraic or differentiable)
-	N_Vector res = NULL;		 // vector for storing residual
-	N_Vector absTolVec = NULL;	 // vector for storing absolute tolerances
-	double delta_t = dt;
-	sunrealtype tout, tret;
+void SystemSolver::initialize()
+{
+	int retval;
 
 	if (!initialised)
 		initialiseMatrices();
@@ -67,22 +77,40 @@ void SystemSolver::runSolver(double tFinal)
 	// Initialise Y and dYdt
 	setInitialConditions(Y, dYdt);
 
+	// Seed yJac/dydtJac with the initial condition. `y` and `dydt` are
+	// non-owning views over memory SUNDIALS owns, so yJac is the only copy of the
+	// state that survives destroySundials(), and it is what PyRunner::getSolution
+	// and PyRunner::G read. Until the end of integrate() it otherwise holds
+	// uninitialised memory, so anything inspecting the solver after initialize()
+	// alone -- which the three-phase lifecycle now makes possible -- read
+	// garbage.
+	//
+	// Here rather than at the end of setInitialConditions because setJacEvalY
+	// asserts the vector length matches the full DoF, and setInitialConditions is
+	// also called directly by tests that size their own N_Vectors.
+	setJacEvalY(Y, dYdt);
+
 	// ----------------- Allocate and initialize all other sun-vectors. -------------
+	//
+	// Note the `throw` on each of these checks. They used to construct a
+	// std::runtime_error and discard it -- a no-op -- so every SUNDIALS failure
+	// from here to the end of this function was silently ignored and the run
+	// carried on with a null vector or an unconfigured IDA.
 
 	res = N_VClone(Y);
 	if (ErrorChecker::check_retval((void *)res, "N_VClone", 0))
-		std::runtime_error("Sundials initialization Error, run in debug to find");
+		throw std::runtime_error("Sundials initialization Error, run in debug to find");
 	// sunrealtype tRes;
 
 	// No constraints are imposed as negative coefficients may allow for a better fit across a cell
 	constraints = N_VClone(Y);
 	if (ErrorChecker::check_retval((void *)constraints, "N_VClone", 0))
-		std::runtime_error("Sundials initialization Error, run in debug to find");
+		throw std::runtime_error("Sundials initialization Error, run in debug to find");
 
 	// Specify only u as differential
 	id = N_VClone(Y);
 	if (ErrorChecker::check_retval((void *)id, "N_VClone", 0))
-		std::runtime_error("Sundials initialization Error, run in debug to find");
+		throw std::runtime_error("Sundials initialization Error, run in debug to find");
 
 	DGSoln isDifferential(nVars, grid, k, nScalars, nAux);
 	isDifferential.Map(N_VGetArrayPointer(id));
@@ -101,17 +129,17 @@ void SystemSolver::runSolver(double tFinal)
 
 	retval = IDASetId(IDA_mem, id);
 	if (ErrorChecker::check_retval(&retval, "IDASetId", 1))
-		std::runtime_error("Sundials initialization Error, run in debug to find");
+		throw std::runtime_error("Sundials initialization Error, run in debug to find");
 
 	// Initialise IDA
 	retval = IDAInit(IDA_mem, static_residual, t0, Y, dYdt);
 	if (ErrorChecker::check_retval(&retval, "IDAInit", 1))
-		std::runtime_error("Sundials initialization Error, run in debug to find");
+		throw std::runtime_error("Sundials initialization Error, run in debug to find");
 
 	// Set tolerances
 	absTolVec = N_VClone(Y);
 	if (ErrorChecker::check_retval((void *)absTolVec, "N_VClone", 0))
-		std::runtime_error("Sundials initialization Error, run in debug to find");
+		throw std::runtime_error("Sundials initialization Error, run in debug to find");
 	VectorWrapper absTolVals(N_VGetArrayPointer(absTolVec), N_VGetLength(absTolVec));
 	absTolVals.setZero();
 
@@ -151,25 +179,21 @@ void SystemSolver::runSolver(double tFinal)
 	for (Index i = 0; i < nScalars; ++i)
 		tolerances.Scalar(i) = atol[0];
 
-	// Steady-state stopping conditions
-	sunrealtype dydt_rel_tol = steady_state_tol;
-	sunrealtype dydt_abs_tol = 1e-3;
-
 	retval = IDAWFtolerances(IDA_mem, SystemSolver::getErrorWeights_static);
 	if (ErrorChecker::check_retval(&retval, "IDAWFtolerances", 1))
-		std::runtime_error("Sundials initialization Error, run in debug to find");
+		throw std::runtime_error("Sundials initialization Error, run in debug to find");
 
 	//--------------set up user-built objects------------------
 
 	// Use empty SunMatrix Object
-	SUNMatrix sunMat = SunMatrixNew(ctx);
+	sunMat = SunMatrixNew(ctx);
 
-	// The only linear solver wrapper ever constructed from this object so we can give it a pointer to 'this' and
-	// it won't hold it beyond the lifetime of this function call.
+	// The only linear solver wrapper ever constructed from this object, so we can
+	// give it a pointer to 'this': it does not outlive the SystemSolver.
 	LS = SunLinSolWrapper::SunLinSol(this, IDA_mem, ctx);
 
 	if (IDASetLinearSolver(IDA_mem, LS, sunMat) != SUN_SUCCESS)
-		std::runtime_error("Error in IDASetLinearSolver");
+		throw std::runtime_error("Error in IDASetLinearSolver");
 
 	IDASetJacFn(IDA_mem, JacSetup);
 
@@ -180,7 +204,6 @@ void SystemSolver::runSolver(double tFinal)
 	// The .dat files are opt-in; netCDF below is what a run produces by
 	// default. Nothing is opened unless asked for, so a plain run leaves no
 	// text output behind at all.
-	std::ofstream out0;
 	if (writeDatFile)
 	{
 		out0.open(baseName + ".dat");
@@ -192,13 +215,11 @@ void SystemSolver::runSolver(double tFinal)
 		std::println(out0, "");
 	}
 
-	std::ofstream dydt_out, res_out;
-
 	// The diagnostic .dat files need both the option and a PHYSICS_DEBUG build:
 	// the residual norms and error weights they report are only computed on
 	// that path, and `wgt` is only allocated there. One flag for both because
 	// they are always written together.
-	const bool debugDat = physics_debug && writeDebugDatFiles;
+	debugDat = physics_debug && writeDebugDatFiles;
 
 	if (debugDat)
 	{
@@ -222,7 +243,7 @@ void SystemSolver::runSolver(double tFinal)
 	//------------------------------Solve------------------------------
 	// Update initial solution to be within tolerance of the residual equation
 
-	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, dt0 > 0.0 ? dt0 : delta_t);
+	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, dt0 > 0.0 ? dt0 : dt);
 	retval = 0;
 	if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
 	{
@@ -266,14 +287,31 @@ void SystemSolver::runSolver(double tFinal)
 	t = t0;
 	tout = t0;
 	tret = t0;
-	delta_t = dt;
 
 	if (problem->isRestarting()) // If restarting, try to continue at same delta t
 	{
-		IDASetInitStep(IDA_mem, delta_t);
+		IDASetInitStep(IDA_mem, dt);
 	}
 	if (dt0 > 0.0)
 		IDASetInitStep(IDA_mem, dt0);
+
+	// Let IDA grow the step faster than its default factor of 2. See
+	// setAggressiveTimesteps.
+	if (aggressiveTimesteps)
+		IDASetEtaMax(IDA_mem, 10.0);
+}
+
+void SystemSolver::integrate(double tFinal)
+{
+	int retval;
+	std::string baseName = inputFilePath.stem();
+
+	if (IDA_mem == nullptr)
+		throw std::logic_error("integrate() called before initialize()");
+
+	// Steady-state stopping conditions
+	const sunrealtype dydt_rel_tol = steady_state_tol;
+	const sunrealtype dydt_abs_tol = 1e-3;
 
 	if (t0 > tFinal)
 	{
@@ -284,7 +322,7 @@ void SystemSolver::runSolver(double tFinal)
 	// Solving Loop
 	while (tFinal - tret > min_step_size || TerminateOnSteadyState)
 	{
-		tout += delta_t;
+		tout += dt;
 		if (tout > tFinal && !TerminateOnSteadyState)
 			tout = tFinal; // Never ask for results beyond tFinal
 		retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
@@ -333,7 +371,7 @@ void SystemSolver::runSolver(double tFinal)
 			for (Index i = 0; i < nCells; i++)
 				for (Index v = 0; v < nVars; v++)
 				{
-					sunrealtype xi = dydt.lambda(v)[i] * delta_t;
+					sunrealtype xi = dydt.lambda(v)[i] * dt;
 					sunrealtype wi = 1.0 / (y.lambda(v)[i] * dydt_rel_tol + dydt_abs_tol);
 					dydt_norm += xi * xi * wi * wi;
 				}
@@ -350,7 +388,7 @@ void SystemSolver::runSolver(double tFinal)
 		// Diagnostics go here
 	}
 
-	long int nsteps, njacevals;
+	long int nsteps, nresevals, njacevals;
 	IDAGetNumSteps(IDA_mem, &nsteps);
 	IDAGetNumResEvals(IDA_mem, &nresevals);
 	IDAGetNumLinSolvSetups(IDA_mem, &njacevals);
@@ -377,46 +415,77 @@ void SystemSolver::runSolver(double tFinal)
 
 	WriteRestartFile(baseName + ".restart.nc", Y, dYdt, nOut);
 
-	// Leave yJac holding the *final* solution. It is the only copy that
-	// outlives this function -- `y` is a non-owning view over Y, which is
-	// destroyed a few lines below -- and it is what PyRunner::getSolution and
-	// getAdjointGradients read. Until now it held whatever state IDA last
-	// evaluated a Jacobian at, which can be several steps stale, so a caller
-	// asking for "the solution" got a slightly earlier one.
+	// Leave yJac holding the *final* solution. It is the only copy that outlives
+	// destroySundials() -- `y` is a non-owning view over Y -- and it is what
+	// PyRunner::getSolution, getAdjointGradients and G read. Until now it held
+	// whatever state IDA last evaluated a Jacobian at, which can be several steps
+	// stale, so a caller asking for "the solution" got a slightly earlier one.
 	//
 	// Deliberately after runAdjointSolve(): the adjoint solve above is defined
 	// at the state its matrices were built from, so moving this earlier would
 	// change the gradients.
 	setJacEvalY(Y, dYdt);
 
+	nc_output.Close();
+}
+
+void SystemSolver::destroySundials()
+{
+	// Everything here is nulled after being freed, so a second call is a no-op
+	// and so is a call with no preceding initialize(). runSolver() relies on
+	// that: it calls this from both the normal and the exceptional path.
+
 	// No SunLinSol wrapper classes exist beyond this point, so we are safe in using raw pointers to construct them.
-	SUNLinSolFree(LS);
+	if (LS)
+	{
+		SUNLinSolFree(LS);
+		LS = nullptr;
+	}
 
-	MatDestroy(sunMat);
+	if (sunMat)
+	{
+		MatDestroy(sunMat);
+		sunMat = nullptr;
+	}
 
-	IDAFree(&IDA_mem);
+	if (IDA_mem)
+		IDAFree(&IDA_mem); // IDAFree nulls its argument itself
 
 	// Free the raw data buffers allocated by SUNDIALS
 
-	if (debugDat)
+	// Guarded on the pointer, not on debugDat: a second run with the option
+	// turned off would otherwise leak the previous run's vector.
+	if (wgt)
+	{
 		N_VDestroy(wgt);
+		wgt = nullptr;
+	}
 
-	N_VDestroy(Y);
-	N_VDestroy(dYdt);
-	N_VDestroy(constraints);
-	N_VDestroy(id);
-	N_VDestroy(res);
-	N_VDestroy(absTolVec);
+	for (N_Vector *vec : {&Y, &dYdt, &constraints, &id, &res, &absTolVec})
+	{
+		if (*vec)
+		{
+			N_VDestroy(*vec);
+			*vec = nullptr;
+		}
+	}
 
-	// `ctx` belongs to the SystemSolver: it is created in the constructor
-	// (SystemSolver.cpp:18) and freed in the destructor (:65). Freeing it here
-	// as well left the member NULL, so a *second* runSolver call on the same
-	// object failed at IDACreate with "Sundials Initialization Error" -- which
-	// is why PyRunner::run works only once per configure(), even though it goes
-	// to the trouble of clearing TerminateOnSteadyState for a repeat call.
-	// The standalone binary never noticed because it runs once and exits.
+	// The output streams too: initialize() opens them, so this is where they are
+	// closed. std::ofstream::open on an already-open stream sets failbit rather
+	// than reopening, so leaving them open here would silently discard the .dat
+	// output of every run after the first.
+	for (std::ofstream *stream : {&out0, &dydt_out, &res_out})
+		if (stream->is_open())
+			stream->close();
 
-	nc_output.Close();
+	// `ctx` is deliberately NOT freed here. It belongs to the SystemSolver: it is
+	// created in the constructor (SystemSolver.cpp:18) and freed in the
+	// destructor (:65). Freeing it per-run left the member dangling, so a
+	// *second* run on the same object failed at IDACreate with "Sundials
+	// Initialization Error" -- which is why PyRunner::run used to work only once
+	// per configure(), even though it goes to the trouble of clearing
+	// TerminateOnSteadyState for a repeat call. The standalone binary never
+	// noticed because it runs once and exits.
 }
 
 void SystemSolver::runAdjointSolve()

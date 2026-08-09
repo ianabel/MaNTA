@@ -90,8 +90,14 @@ void SystemSolver::dGdaux_Vec(Index gIndex, Vector &Vec, DGSoln const &Y, Index 
     auto const &x_wgts = y.getBasis().weights();
     const size_t n_abscissa = x_vals.size();
 
-    // ASSERT vec.shape == ( nVars * ( k + 1) )
-    assert(Vec.size() == nVars * (k + 1));
+    // This writes one (k+1)-block per *auxiliary* variable (the loop below runs
+    // to nAux), and its only caller sizes the vector nAux * (k + 1) --
+    // initializeMatricesForAdjointSolve in SystemSolver.cpp. The bound here read
+    // nVars, so a system with nAux != nVars aborted on a correctly-sized
+    // vector. Nothing defines NDEBUG in any build variant, so that abort was
+    // live in release builds too; it went unnoticed because every aux case in
+    // the suite happens to have nAux == nVars.
+    assert(Vec.size() == nAux * (k + 1));
 
     Vec.setZero();
 
@@ -100,8 +106,15 @@ void SystemSolver::dGdaux_Vec(Index gIndex, Vector &Vec, DGSoln const &Y, Index 
 
     for (Index XVar = 0; XVar < nAux; XVar++)
     {
-        Values dX_dZ_vals1(nVars);
-        Values dX_dZ_vals2(nVars);
+        // nAux, not nVars: dgFn_dphi fills one entry per auxiliary variable, and
+        // the reads below index these with XVar, which runs to nAux. Sized nVars
+        // this read past the end whenever nAux > nVars, and -- because the hook
+        // takes a VectorRef -- an implementation that assigns the whole vector
+        // rather than writing elementwise tripped Eigen's "Ref cannot be
+        // resized" assert instead. The C++ mocks in the unit tests all write
+        // elementwise and have nAux <= nVars, so neither symptom appeared there.
+        Values dX_dZ_vals1(nAux);
+        Values dX_dZ_vals2(nAux);
         dX_dZ_vals1.setZero();
         dX_dZ_vals2.setZero();
 

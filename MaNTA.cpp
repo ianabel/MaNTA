@@ -254,6 +254,9 @@ int runManta(std::string const &fname)
 	// SystemSolver::setSuperconvergent.
 	system->setSuperconvergent(toml::find_or(config, "Superconvergent", false));
 
+	// Let IDA grow the timestep by up to 10x rather than 2x between steps.
+	system->setAggressiveTimesteps(toml::find_or(config, "AggressiveTimesteps", false));
+
 	if (config.count("SteadyStateTolerance") == 1)
 	{
 		double sst = getFloat("SteadyStateTolerance", config);

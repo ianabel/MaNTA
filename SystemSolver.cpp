@@ -1298,6 +1298,7 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         Eigen::MatrixXd Sq(nVars * (k + 1), nVars * (k + 1));
         Eigen::MatrixXd Su(nVars * (k + 1), nVars * (k + 1));
 
+        Eigen::MatrixXd Sigma_phi(nVars * (k + 1), nAux * (k + 1));
         Eigen::MatrixXd Sphi(nVars * (k + 1), nAux * (k + 1));
 
         if (superconvergent)
@@ -1324,9 +1325,15 @@ void SystemSolver::initializeMatricesForAdjointSolve()
             Su.setZero();
             accumulateStarBlocks(Su, dSource_vals.Variable(i), pp.B12(i), nVars, nVars, i);
 
+            // phi is not reconstructed -- u* stands in for u only -- so both
+            // auxiliary columns take the plain evaluation chain A9 diag(dX/dphi) V.
+            Sigma_phi.setZero();
             Sphi.setZero();
             if (nAux > 0)
+            {
+                accumulateStarBlocks(Sigma_phi, dSigma_vals.Aux(i), pp.V(i), nVars, nAux, i);
                 accumulateStarBlocks(Sphi, dSource_vals.Aux(i), pp.V(i), nVars, nAux, i);
+            }
         }
         else
         {
@@ -1344,8 +1351,6 @@ void SystemSolver::initializeMatricesForAdjointSolve()
 
         // S_u Matrix
         DerivativeSubMatrix(Su, dSource_vals.Variable(i), yJac, i);
-
-        dSourcedPhi_Mat(Sphi, yJac, i);
         }
 
         // M is the local DG Matrix
@@ -1371,11 +1376,25 @@ void SystemSolver::initializeMatricesForAdjointSolve()
 
         if (nAux > 0)
         {
+            // Both auxiliary column blocks, in either discretisation. The
+            // dSigma/dPhi one at row 1 was missing entirely: M is zeroed and
+            // nothing ever wrote column block 3 of row 1, so whenever the flux
+            // depended on an auxiliary variable the matrix stored here was not
+            // the transpose of the forward Jacobian that
+            // updateMatricesForJacSolve builds (which does write it, above).
+            //
+            // On the forward side an inconsistent Jacobian only costs Newton
+            // iterations. Here it costs correctness: M.transpose() *is* the
+            // adjoint operator, so a missing block gives a silently wrong
+            // gradient. Nothing caught it because no adjoint test had nAux > 0;
+            // python/Tests/test_adjoint_aux.py now does.
+
             if (superconvergent)
             {
-                // Sphi is already the star form from above; recomputing it here
-                // (as the flag-off branch does) would discard it.
+                // Sigma_phi and Sphi already hold their star forms from above;
+                // recomputing them here would discard the chain rule.
                 Postprocessor const &pp = *postprocessor;
+                M.block(0, 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) = Sigma_phi;
                 M.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
 
                 auto auxRows = M.block(3 * nVars * (k + 1), 0, nAux * (k + 1),
@@ -1398,12 +1417,21 @@ void SystemSolver::initializeMatricesForAdjointSolve()
             }
             else
             {
-            dSourcedPhi_Mat(Sphi, y, i);
+            // dPhi_Mat, not dSourcedPhi_Mat: the residual interpolates the
+            // sources onto the basis, so the consistent block is the
+            // interpolatory Mass * diag(dX/dphi at the nodes), which is what the
+            // forward Jacobian uses. dSourcedPhi_Mat integrates by quadrature
+            // and also re-evaluates the physics hooks that
+            // ComputePhysicsDerivatives has already batched into dSource_vals.
+            dPhi_Mat(Sigma_phi, dSigma_vals.Aux(i), yJac, i);
+            M.block(0, 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) = Sigma_phi;
+
+            dPhi_Mat(Sphi, dSource_vals.Aux(i), yJac, i);
             M.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
 
             // Set Parts of Matrix due to aux variables
 
-            dAux_Mat(M.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), dAux_vals, y, i);
+            dAux_Mat(M.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), dAux_vals, yJac, i);
 
             // TODO: Consider factorization here (is M sparse enough to warrant a sparse implementation?)
             }

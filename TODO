@@ -32,9 +32,29 @@ Superconvergence follow-ons (see Tests/README.md for what is already verified):
     index the parameter vector by node, so the star node set would redefine how
     many parameters there are.
 
-  - dSourcedPhi_Mat and the per-node dAux_Mat overload integrate by Gauss
-    quadrature while the residual interpolates -- a pre-existing residual/Jacobian
-    inconsistency for nAux > 0 on the flag-off path. The flag-on path uses
-    interpolatory forms; the flag-off path was left alone deliberately, to keep
-    regression output bit-identical.
 
+Diagnose why a second integration on the same SystemSolver fails. IDASolve
+returns IDA_ERR_FAIL (-3) on the first step of the second run, whether via a
+second runSolver() or a second initialize()/integrate() pair, and whether or not
+the first run completed. Pre-existing -- b7d8031 fails identically -- and hidden
+because PyRunner::configure builds a fresh SystemSolver every time. Candidates:
+state a completed run leaves in RF_cellwise / updateBoundaryConditions, and the
+nc_output time index. Tests/README.md has the detail.
+
+Design a dG/dt early-exit gate for optimisation runs. origin/optimize-mode has
+one (commit e024294) and the initialize/integrate/destroySundials split exists
+partly to serve it, but it was not ported: it evaluates the objective functional
+on the time derivative, which equals dG/dt only if g is linear in the state; it
+scales the result by the netCDF output cadence, so an I/O setting decides whether
+a step is rejected (and setOutputCadence(0.0) disables the gate silently); and
+its thresholds are hardcoded. Wants an explicit dG/dt hook on AdjointProblem and
+a configurable tolerance.
+
+From the origin/optimize-mode review, still unmerged and worth taking:
+  - shard_inputs as a per-hook decorator in python/Stellarator2.py (but keep
+    MaNTA_Decorator sharding, or every hook needs the new decorator)
+  - the Python drivers: StellaratorState.py, desc-optimize-bfgs.py, scan_eq.py,
+    scan_eq_ambipolar.py, yancc_gpu_test.py
+  - why the branch removed both `#pragma omp parallel for` from
+    TransportSystem.hpp's batched defaults -- ask eatocco; may be a real finding
+    about OpenMP against a Python trampoline
