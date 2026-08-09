@@ -1,4 +1,33 @@
 
+Update README.md to match the fact that most libraries are git submodules now
+(the compiler/version requirements are current).
+
+Investigate IDACalcIC taking too many steps at initial time.
+
+Investigate occaisional wiggles in outputs.
+
+Superconvergence follow-ons (see Tests/README.md for what is already verified):
+
+  - Paper II's HDG(ABC) / HDG+ family: W_h = P_{k+1} with tau ~ 1/h makes u_h
+    itself superconverge, with no postprocessing, and reaches k+2 at k = 0 too.
+    Needs mixed polynomial degrees across fields, which the single-k assumption in
+    DGSoln::Map, every block in Matrices.cpp, AdjointVectors.cpp, the pybind11
+    casters and the restart format all rest on. tau ~ 1/h also changes every
+    existing run.
+
+  - An order study for a general nonlinear flux sigma_hat(u, q). Paper I covers
+    -Laplacian u + F(u) only, and names F(grad u, u) as open, so the k+2 rate for
+    MaNTA's flux is currently unasserted. SolveJacTests covers the Jacobian for
+    such a flux; only the rate is missing.
+
+  - Order studies with nAux > 0 and nScalars > 0 under Superconvergent = true.
+    The Jacobian handles both; nothing measures the rate.
+
+  - Spatial adjoint parameters with Superconvergent = true currently throw. They
+    index the parameter vector by node, so the star node set would redefine how
+    many parameters there are.
+
+
 Diagnose why a second integration on the same SystemSolver fails. IDASolve
 returns IDA_ERR_FAIL (-3) on the first step of the second run, whether via a
 second runSolver() or a second initialize()/integrate() pair, and whether or not

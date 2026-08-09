@@ -231,6 +231,80 @@ Two things make this work, and both are easy to get wrong when adding a case:
   with "the error test failed repeatedly or with |h| = hmin"; 1e-9 leaves three
   orders of margin over the smallest spatial error in the sweep.
 
+## Superconvergence
+
+`Superconvergent = true` switches the residual and Jacobian to the interpolatory
+HDG_k scheme of Chen, Cockburn, Singler & Zhang (*J Sci Comput* 81:2188): the
+physics is evaluated at the `k+2` nodes of the degree-`k+1` basis with the
+postprocessed `u*` in place of `u_h`, and interpolated into `P_{k+1}` rather than
+`P_k`. The reconstruction itself is `Postprocessing.{hpp,cpp}` and is built for
+every run with `k >= 1`, flag or no flag, so `u_star` appears in the netCDF
+output and in the `.dat` files unconditionally.
+
+Three tests carry this, in increasing order of scope.
+
+**`PostprocessingTests.cpp`** pins the four per-cell operators. The anchor is
+polynomial exactness: fed the `u_h` and `q_h` of a polynomial of degree `<= k+1`,
+the reconstruction must return that polynomial. That single property fixes the
+sign of the `A2` block (MaNTA carries `q = +d_x u`, the paper `q = -grad u`), the
+scaling with `h`, and both `B11` and `B12` at once. Everything runs on a uniform
+*and* a `High_Grid_Boundary` grid, because the operators are per-cell and a
+mistake in the `h` scaling is invisible when every cell is the same size.
+
+**`SolveJacTests.cpp`** finite-differences `residual()` with the flag on and
+requires `solveHDGJac` to satisfy `J dy = g`. This is the only check that can
+catch an error in the chain rule, since the Jacobian is never assembled and a
+wrong one costs Newton iterations rather than accuracy. It uses a locally defined
+`NonlinearDiffusion` whose flux *and* source depend on `u`; a constant-coefficient
+case cannot see the `B11` term at all, which is the one genuinely new coupling
+the scheme introduces. Measured `||J dy - g|| / ||g||` is 2e-10 to 5e-10 for
+`k = 1, 2, 3`.
+
+**`MMSConvergenceTests.cpp`** measures the observed orders, flag off and flag on,
+for `u` and for `u*`:
+
+| case | k | flag off: u, u* | flag on: u, u* |
+|---|---|---|---|
+| linear, constant kappa | 1 | 1.96, 2.19 | 1.96, **3.05** |
+| linear, constant kappa | 2 | 2.97, 4.08 | 2.97, 4.03 |
+| nonlinear reaction `u^3 - u` | 1 | 1.96, 2.23 | 1.97, **3.07** |
+| nonlinear reaction `u^3 - u` | 2 | 2.95, 4.10 | 2.97, 4.03 |
+
+Read that table carefully, because it is not what a first reading of the papers
+predicts. With the flag on, `u*` reaches `k+2` in every case and `u_h` keeps its
+optimal `k+1`. With the flag off, `u*` superconverges at `k = 2` but *not* at
+`k = 1`, and this is true whether or not the source is nonlinear. So the flag
+restores the extra order at `k = 1` and preserves it at `k = 2`.
+
+In particular the loss is not driven by the nonlinearity here, as the papers'
+analysis of `I_h F(u_h)` would suggest. Interpolating a *known* smooth source at
+the Chebyshev nodes leaves an error that is very nearly `L2`-orthogonal to `P_k`,
+so it does not pollute the duality argument the way evaluating `F` at the
+`O(h^(k+1))`-accurate `u_h` does. The tests therefore assert what is measured --
+`u*` reaches `k+2` with the flag on, and `u_h` does not regress -- and do not
+assert that the flag improves on the flag-off rate, because for these problems
+there is not always anything to improve.
+
+### What is not covered
+
+* **A general nonlinear flux `sigma_hat(u, q)` is outside the papers' theory.**
+  Their conclusion names `F(grad u, u)` as open. `SolveJacTests.cpp` shows the
+  Jacobian is right for such a flux, but no order study asserts `k+2` for one.
+* **`k = 0`** is rejected (`std::invalid_argument`). The degree-0 `NodalBasis`
+  returns from its constructor before building `Vandermonde` or
+  `BarycentricWeights` (`Basis.hpp:369-377`), so it cannot be evaluated off-node.
+  Paper I requires `k >= 1` for the superconvergence in any case.
+* **Spatial adjoint parameters** are rejected with the flag on: they index the
+  parameter vector by node, so the star node set would silently redefine how many
+  parameters there are.
+* **`nAux > 0` and `nScalars > 0`** are handled by the flag-on Jacobian, but no
+  order study covers them.
+* `dSourcedPhi_Mat` (`Matrices.cpp`) and the second `dAux_Mat` overload build
+  their blocks by Gauss quadrature while the residual interpolates, so for
+  `nAux > 0` they were *already* inconsistent with the residual before this work.
+  The flag-on path uses interpolatory forms; the flag-off path is left exactly as
+  it was so regression output stays bit-identical.
+
 ## Testing paired implementations
 
 Several Jacobian builders exist in pairs -- one taking a pointer-to-member and

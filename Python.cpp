@@ -266,6 +266,7 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used()) {
       .def("G", &PyRunner::G)
       .def("getAdjointGradients", &PyRunner::getAdjointGradients)
       .def("getSolution", &PyRunner::getSolution)
+      .def("getPostprocessedSolution", &PyRunner::getPostprocessedSolution)
       .def("get_address", [](const PyRunner &runner) // needed for xla interface
            { return reinterpret_cast<std::uint64_t>(&runner); });
 #ifdef XLA_FFI

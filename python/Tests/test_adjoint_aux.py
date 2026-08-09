@@ -279,8 +279,8 @@ def solve(p, tmp_path, **overrides):
     return np.asarray(G), np.asarray(gradients["G_p"]), system, runner
 
 
-def objective_only(p, tmp_path):
-    G, _, _, _ = solve(p, tmp_path)
+def objective_only(p, tmp_path, **overrides):
+    G, _, _, _ = solve(p, tmp_path, **overrides)
     return float(G[0])
 
 
@@ -326,18 +326,33 @@ def test_objective_matches_the_closed_form(tmp_path):
     )
 
 
-def test_adjoint_gradient_matches_finite_differences(tmp_path):
+# Both discretisations. `Superconvergent = True` evaluates the physics at the k+2
+# star nodes with u -> u*, so it takes a *different* route to the same aux blocks:
+# the chain rule A9 diag(dX/dphi) V rather than the interpolatory dPhi_Mat. Both
+# have to give the right gradient, and the flag-on aux path has no other coverage
+# -- the flag-on tests in test_adjoint.py all have nAux = 0.
+#
+# The closed form survives the flag: u is a quadratic and k = 4, so u* = u_h = u
+# exactly and the reconstruction changes nothing it could get wrong.
+SCHEMES = [
+    pytest.param({}, id="interpolatory"),
+    pytest.param({"Superconvergent": True}, id="superconvergent"),
+]
+
+
+@pytest.mark.parametrize("scheme", SCHEMES)
+def test_adjoint_gradient_matches_finite_differences(tmp_path, scheme):
     """The load-bearing test: dG/dp from the adjoint vs. re-running the solver.
 
     Central differences, so truncation error is O(h^2). Nothing about the
     adjoint implementation is reused -- the reference comes purely from
-    evaluating the objective at perturbed parameters.
+    evaluating the objective at perturbed parameters, with the same scheme.
 
     With the dSigma/dPhi block absent from the adjoint matrix this fails on both
     components by O(1).
     """
     p0 = np.array([KAPPA0, SOURCE0])
-    _, adjoint_grad, _, _ = solve(p0, tmp_path / "base")
+    _, adjoint_grad, _, _ = solve(p0, tmp_path / "base", **scheme)
     adjoint_grad = adjoint_grad.reshape(-1)
 
     assert adjoint_grad.shape == (NP,), adjoint_grad.shape
@@ -349,8 +364,8 @@ def test_adjoint_gradient_matches_finite_differences(tmp_path):
         p_plus[i] += h
         p_minus[i] -= h
         fd[i] = (
-            objective_only(p_plus, tmp_path / f"p{i}")
-            - objective_only(p_minus, tmp_path / f"m{i}")
+            objective_only(p_plus, tmp_path / f"p{i}", **scheme)
+            - objective_only(p_minus, tmp_path / f"m{i}", **scheme)
         ) / (2.0 * h)
 
     rel = np.abs(adjoint_grad - fd) / np.maximum(np.abs(fd), 1e-300)
@@ -359,10 +374,11 @@ def test_adjoint_gradient_matches_finite_differences(tmp_path):
     )
 
 
-def test_adjoint_gradient_matches_the_closed_form(tmp_path):
+@pytest.mark.parametrize("scheme", SCHEMES)
+def test_adjoint_gradient_matches_the_closed_form(tmp_path, scheme):
     """Independent of the finite-difference check and of the solver's own state."""
     p = np.array([KAPPA0, SOURCE0])
-    _, grad, _, _ = solve(p, tmp_path)
+    _, grad, _, _ = solve(p, tmp_path, **scheme)
     grad = grad.reshape(-1)
 
     expected = exact_dG(*p)

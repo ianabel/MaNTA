@@ -13,6 +13,20 @@
         a_i d_t u_i + d_x ( sigma_i ) = S_i( u(x), q(x), x, t ) ; S_i can depend on the entire u & q vector, but only locally.
         sigma_i = sigma_hat_i( u( x ), q( x ), x, t ) ; so can sigma_hat_i
 
+    The second line is a sign convention, not an identity. SigmaFn returns
+    sigma_hat, but the solver stores sigma_i = -sigma_hat_i: residual() forms the
+    flux row as ( sigma_h + I_h sigma_hat, phi ) = 0. So the equation actually
+    integrated is
+
+        a_i d_t u_i - d_x[ sigma_hat_i( u, q, x, t ) ] = S_i
+
+    Two things follow for anyone writing a case here. A manufactured source must
+    carry that minus sign -- get it backwards and the case converges at the right
+    rate to the wrong function, which no order study can detect. And State::Flux[i],
+    which the hooks below receive, holds the negated sigma_h rather than the
+    sigma_hat that SigmaFn returned.
+
+    See CLAUDE.md, "The equation being solved".
  */
 
 
