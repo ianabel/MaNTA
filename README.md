@@ -11,22 +11,24 @@ You will need to download this codebase and compile it in order to run MaNTA
 
 To compile and use MaNTA you will need a system with the following
 
- - A C++23 compliant C++ compiler: **g++ 14 or newer**, or **clang++ 19 or newer**.
-   Verified by hand on g++ 14, clang++ 19 and clang++ 21 -- each builds the solver,
-   the pybind11 module and all three test suites clean under `-Wall -Werror`. CI
-   runs five, one matrix leg each: g++ 14, g++ 15, clang++ 19, clang++ 20 and
-   clang++ 21. Pick one by setting `CXX` in `Makefile.local`, or on the make
+ - A C++23 compliant C++ compiler: **g++ 14 or newer**, or **clang++ 18 or newer**.
+   Verified by hand on g++ 14, clang++ 18, clang++ 19 and clang++ 21 -- each builds
+   the solver, the pybind11 module and all three test suites clean under
+   `-Wall -Werror`. Pick one by setting `CXX` in `Makefile.local`, or on the make
    command line (`make CXX=clang++-19`), which overrides it.
 
-   Both floors were measured, not guessed:
+   CI runs five, one matrix leg each: g++ 14, g++ 15, clang++ 19, clang++ 20 and
+   clang++ 21. **clang++ 18 is deliberately not among them**, so it is verified
+   rather than guarded, and can regress without anyone noticing -- adding it would
+   mean maintaining clang-18 `-Werror` compliance, and its C++23 support has gaps.
 
-     - **g++ 13 cannot build MaNTA at all.** libstdc++ 13 has no `<print>`, and the
-       output layer uses `std::print` throughout.
-     - **clang++ 18 builds the solver but not the tests or the Python module.**
-       `PyGrid.hpp` declares `constexpr Vector getNodes(...)`, and a dynamic Eigen
-       vector is not a literal type. C++23 permits that (P2448R2) as long as the
-       function is never constant-evaluated; clang 18 does not implement it, so
-       every target that includes `PyGrid.hpp` fails to compile.
+   The lower bound on gcc was measured, not guessed: **g++ 13 cannot build MaNTA at
+   all**, because libstdc++ 13 has no `<print>` and the output layer uses
+   `std::print` throughout. clang++ 18 took one source change to admit --
+   `PyGrid.hpp` used to declare `constexpr Vector getNodes(...)`, and a dynamic
+   Eigen vector is not a literal type; C++23 permits that under P2448R2 provided the
+   function is never constant-evaluated, which clang 18 does not implement. That
+   `constexpr` could never have done anything and is now `inline`.
  - The Boost C++ Template Library
  - The Eigen linear algebra template library
  - The SUNDIALS library, Version 7.1.0 or newer. Not 6.x: MaNTA links

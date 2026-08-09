@@ -47,17 +47,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The two floors here are measured, and neither older compiler can be
-          # added without a source change:
+          # Two older compilers were measured. Only one of them is impossible:
           #   g++-13     -- libstdc++-13 has no <print>, and ten files use
-          #                 std::print, so it fails at the first #include.
-          #   clang++-18 -- PyGrid.hpp declares `constexpr Vector getNodes(...)`,
-          #                 and a dynamic Eigen vector is not a literal type. C++23
-          #                 allows that (P2448R2) provided the function is never
-          #                 constant-evaluated, and clang 18 does not implement
-          #                 P2448R2. `make MaNTA` passes; `make test` and
-          #                 `make python` do not. Dropping the decorative constexpr
-          #                 from those two declarations would likely be enough.
+          #                 std::print, so it fails at the first #include. Nothing
+          #                 short of not using std::print would change that.
+          #   clang++-18 -- used to fail on PyGrid.hpp's `constexpr Vector
+          #                 getNodes(...)`, a constexpr function returning a
+          #                 non-literal type, which C++23 allows under P2448R2 but
+          #                 clang 18 does not implement. That constexpr was
+          #                 decorative and is now `inline`, so clang++-18 builds and
+          #                 passes all three suites as of that change. It is
+          #                 deliberately *not* a leg here: adding it would commit
+          #                 the project to clang-18 -Werror compliance, and P2448R2
+          #                 was only the first C++23 gap. It is verified, not
+          #                 guarded -- expect it to rot.
           - cxx: g++-14
             pkg: g++-14
           # Not in the noble archive (which stops at g++-14), so this leg needs the
