@@ -318,7 +318,7 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
 * **`-Wno-parentheses` is global, and on gcc it takes `-Wdangling-else` with it.**
   So gcc will not tell you about a dangling `else`; clang will, because it treats
   `-Wdangling-else` as a separate warning. Build with clang occasionally — that is
-  what CI's second job is for. The same applies in reverse: gcc never diagnoses a
+  what CI's clang matrix legs are for. The same applies in reverse: gcc never diagnoses a
   polymorphic base with a non-virtual destructor, clang does
   (`-Wdelete-non-abstract-non-virtual-dtor`), and it reports it at the point of
   *destruction* inside libstdc++, once per instantiating translation unit, which
