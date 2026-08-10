@@ -82,7 +82,7 @@ Value MatrixDiffusionTest::UpperBoundary(Index, Time) const
 
 Value MatrixDiffusionTest::SigmaFn(Index i, const State &s, Position, Time)
 {
-	Eigen::Map<const Vector> qVec(s.Derivative.data(), s.Derivative.size());
+	Eigen::Map<const Vector> qVec(s.q().data(), s.q().size());
 	auto sigma = Kappa * qVec;
 
 	return sigma(i);

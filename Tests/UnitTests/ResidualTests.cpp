@@ -78,7 +78,7 @@ public:
 
     Value SigmaFn(Index, const State &s, Position, Time) override
     {
-        return kappa * s.Derivative[0];
+        return kappa * s.q(0);
     }
     Value Sources(Index, const State &, Position x, Time) override
     {
@@ -140,8 +140,8 @@ public:
     Value LowerBoundary(Index, Time) const override { return 0.0; }
     Value UpperBoundary(Index, Time) const override { return 0.0; }
 
-    Value SigmaFn(Index, const State &s, Position, Time) override { return s.Derivative[0]; }
-    Value Sources(Index, const State &s, Position, Time) override { return s.Aux[0]; }
+    Value SigmaFn(Index, const State &s, Position, Time) override { return s.q(0); }
+    Value Sources(Index, const State &s, Position, Time) override { return s.phi(0); }
 
     void dSigmaFn_dq(Index, VectorRef v, const State &, Position, Time) override { v[0] = 1.0; }
     void dSigmaFn_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
@@ -162,13 +162,13 @@ public:
 
     Value AuxG(Index, const State &s, Position, Time) override
     {
-        return s.Aux[0] - auxCoeff * s.Variable[0];
+        return s.phi(0) - auxCoeff * s.u(0);
     }
     void AuxGPrime(Index, State &out, const State &, Position, Time) override
     {
         out.zero();
-        out.Variable[0] = -auxCoeff;
-        out.Aux[0] = 1.0;
+        out.u(0) = -auxCoeff;
+        out.phi(0) = 1.0;
     }
 
     Value InitialValue(Index, Position x) const override { return x * (1.0 - x); }
@@ -428,7 +428,7 @@ BOOST_AUTO_TEST_CASE(residual_scalar_rows_are_scalar_g_extended)
 
 BOOST_AUTO_TEST_CASE(residual_aux_rows_are_the_projected_constraint)
 {
-    // The aux rows enforce G = 0 by projection: res.Aux = P_h G(Y). With a
+    // The aux rows enforce G = 0 by projection: res.phi() = P_h G(Y). With a
     // linear constraint the projection is exact, so the residual coefficients
     // must equal the basis coefficients of a - c*u computed directly.
     const Index k = 3, nCells = 4;
@@ -611,7 +611,7 @@ BOOST_AUTO_TEST_CASE(error_weights_use_a_per_variable_atol_when_one_is_supplied)
         Value UpperBoundary(Index, Time) const override { return 0.0; }
         Value SigmaFn(Index i, const State &s, Position, Time) override
         {
-            return s.Derivative[i];
+            return s.q(i);
         }
         Value Sources(Index, const State &, Position, Time) override { return 0.0; }
         void dSigmaFn_dq(Index i, VectorRef v, const State &, Position, Time) override

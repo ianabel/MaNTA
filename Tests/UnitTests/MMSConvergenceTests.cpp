@@ -62,7 +62,7 @@ public:
 
     Value SigmaFn(Index, const State &s, Position, Time) override
     {
-        return KAPPA * s.Derivative[0];
+        return KAPPA * s.q(0);
     }
 
     // The manufactured forcing: d_t u - kappa u_xx evaluated on the exact
@@ -131,14 +131,14 @@ public:
 
     Value SigmaFn(Index, const State &s, Position, Time) override
     {
-        return s.Derivative[0];
+        return s.q(0);
     }
 
     Value Sources(Index, const State &s, Position x, Time t) override
     {
         const double ue = exactSolution(x, t);
         const double f = std::sin(pi * x) * (1.0 + pi * pi * (1.0 + t)) + F(ue);
-        return f - F(s.Variable[0]);
+        return f - F(s.u(0));
     }
 
     void dSigmaFn_dq(Index, VectorRef v, const State &, Position, Time) override
@@ -151,7 +151,7 @@ public:
     }
     void dSources_du(Index, VectorRef v, const State &s, Position, Time) override
     {
-        v[0] = -dF(s.Variable[0]);
+        v[0] = -dF(s.u(0));
     }
     void dSources_dq(Index, VectorRef v, const State &, Position, Time) override
     {
@@ -304,8 +304,8 @@ BOOST_AUTO_TEST_CASE(the_manufactured_source_is_consistent_with_the_exact_soluti
         const double dudt = (exactSolution(x, t + h) - exactSolution(x, t - h)) / (2.0 * h);
 
         State s(1);
-        s.Variable[0] = exactSolution(x, t);
-        s.Derivative[0] = exactDerivative(x, t);
+        s.u(0) = exactSolution(x, t);
+        s.q(0) = exactDerivative(x, t);
 
         const double S = problem.Sources(0, s, x, t);
         BOOST_TEST(dudt - KAPPA * d2udx2 == S, boost::test_tools::tolerance(1e-5));

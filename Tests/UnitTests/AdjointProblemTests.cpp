@@ -43,9 +43,9 @@ public:
 
     Value SigmaFn(Index i, const State &s, Position, Time) override
     {
-        return s.Derivative[i];
+        return s.q(i);
     }
-    Value Sources(Index, const State &s, Position, Time) override { return s.Aux[0]; }
+    Value Sources(Index, const State &s, Position, Time) override { return s.phi(0); }
 
     void dSigmaFn_dq(Index i, VectorRef v, const State &, Position, Time) override
     {
@@ -79,13 +79,13 @@ public:
     }
     Value AuxG(Index, const State &s, Position, Time) override
     {
-        return s.Aux[0] - s.Variable[0];
+        return s.phi(0) - s.u(0);
     }
     void AuxGPrime(Index, State &out, const State &, Position, Time) override
     {
         out.zero();
-        out.Variable[0] = -1.0;
-        out.Aux[0] = 1.0;
+        out.u(0) = -1.0;
+        out.phi(0) = 1.0;
     }
 
     Value InitialValue(Index i, Position x) const override
@@ -129,14 +129,14 @@ public:
     // hooks can be told apart in the assembled vectors.
     Value gFn(Index gIndex, const State &s, Position x) const override
     {
-        return (1.0 + gIndex) * (s.Variable[0] * s.Variable[0] + 2.0 * s.Derivative[0] +
-                                 3.0 * s.Flux[0] + 4.0 * s.Aux[0] + x);
+        return (1.0 + gIndex) * (s.u(0) * s.u(0) + 2.0 * s.q(0) +
+                                 3.0 * s.sigma(0) + 4.0 * s.phi(0) + x);
     }
 
     void dgFn_du(Index gIndex, VectorRef v, const State &s, Position) override
     {
         v.setZero();
-        v[0] = (1.0 + gIndex) * 2.0 * s.Variable[0];
+        v[0] = (1.0 + gIndex) * 2.0 * s.u(0);
     }
     void dgFn_dq(Index gIndex, VectorRef v, const State &, Position x) override
     {
@@ -156,11 +156,11 @@ public:
 
     void dSigmaFn_dp(Index i, Index pIndex, Value &out, const State &s, Position x) override
     {
-        out = 1.0 + i + 10.0 * pIndex + x + s.Variable[0];
+        out = 1.0 + i + 10.0 * pIndex + x + s.u(0);
     }
     void dSources_dp(Index i, Index pIndex, Value &out, const State &s, Position x) override
     {
-        out = -2.0 - i - 20.0 * pIndex + 2.0 * x + s.Derivative[0];
+        out = -2.0 - i - 20.0 * pIndex + 2.0 * x + s.q(0);
     }
 };
 
@@ -172,12 +172,12 @@ GlobalState makeStates(Index nCells, Index k, Index nVars, Index nAux)
         State s(nVars, 0, nAux);
         for (Index v = 0; v < nVars; ++v)
         {
-            s.Variable[v] = 0.2 * (j + 1) + v;
-            s.Derivative[v] = -0.4 * (j + 1) + v;
-            s.Flux[v] = 0.6 * (j + 1) - v;
+            s.u(v) = 0.2 * (j + 1) + v;
+            s.q(v) = -0.4 * (j + 1) + v;
+            s.sigma(v) = 0.6 * (j + 1) - v;
         }
         for (Index a = 0; a < nAux; ++a)
-            s.Aux[a] = 0.11 * (j + 1);
+            s.phi(a) = 0.11 * (j + 1);
         g.setWithState(j, s);
     }
     return g;

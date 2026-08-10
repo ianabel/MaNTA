@@ -65,39 +65,39 @@ public:
 
     Value SigmaFn(Index i, const State &s, Position x, Time) override
     {
-        return (1.0 + 0.3 * i) * s.Derivative[i] + 0.2 * s.Variable[0] * s.Variable[0] +
-               0.5 * s.Aux[0] * x;
+        return (1.0 + 0.3 * i) * s.q(i) + 0.2 * s.u(0) * s.u(0) +
+               0.5 * s.phi(0) * x;
     }
     Value Sources(Index i, const State &s, Position x, Time) override
     {
-        return 0.7 * s.Variable[i] + 0.1 * x + 0.4 * s.Scalars[0];
+        return 0.7 * s.u(i) + 0.1 * x + 0.4 * s.scalar(0);
     }
 
     // d(sigma_i)/dq_j -- varies with x and with the state.
     void dSigmaFn_dq(Index i, VectorRef v, const State &s, Position x, Time) override
     {
         for (Index j = 0; j < nVars; ++j)
-            v[j] = 0.31 + 0.11 * (i * nVars + j) + 0.7 * x + 0.13 * s.Variable[j];
+            v[j] = 0.31 + 0.11 * (i * nVars + j) + 0.7 * x + 0.13 * s.u(j);
     }
     void dSigmaFn_du(Index i, VectorRef v, const State &s, Position x, Time) override
     {
         for (Index j = 0; j < nVars; ++j)
-            v[j] = 0.17 + 0.23 * (i * nVars + j) - 0.5 * x + 0.09 * s.Derivative[j];
+            v[j] = 0.17 + 0.23 * (i * nVars + j) - 0.5 * x + 0.09 * s.q(j);
     }
     void dSources_du(Index i, VectorRef v, const State &s, Position x, Time) override
     {
         for (Index j = 0; j < nVars; ++j)
-            v[j] = 1.3 + 0.19 * (i * nVars + j) + 0.4 * x * x + 0.07 * s.Variable[j];
+            v[j] = 1.3 + 0.19 * (i * nVars + j) + 0.4 * x * x + 0.07 * s.u(j);
     }
     void dSources_dq(Index i, VectorRef v, const State &s, Position x, Time) override
     {
         for (Index j = 0; j < nVars; ++j)
-            v[j] = -0.6 + 0.29 * (i * nVars + j) + 0.8 * x - 0.05 * s.Derivative[j];
+            v[j] = -0.6 + 0.29 * (i * nVars + j) + 0.8 * x - 0.05 * s.q(j);
     }
     void dSources_dsigma(Index i, VectorRef v, const State &s, Position x, Time) override
     {
         for (Index j = 0; j < nVars; ++j)
-            v[j] = 0.43 - 0.07 * (i * nVars + j) + 0.25 * x + 0.02 * s.Flux[j];
+            v[j] = 0.43 - 0.07 * (i * nVars + j) + 0.25 * x + 0.02 * s.sigma(j);
     }
 
     // Constant, so the interpolatory and quadrature builders must agree exactly.
@@ -119,7 +119,7 @@ public:
 
     Value AuxG(Index, const State &s, Position, Time) override
     {
-        return s.Aux[0] - s.Variable[0] * s.Variable[0];
+        return s.phi(0) - s.u(0) * s.u(0);
     }
 
     // Distinct primes in every slot: if a builder puts dG/du where dG/dq
@@ -127,13 +127,13 @@ public:
     void AuxGPrime(Index, State &out, const State &, Position, Time) override
     {
         out.zero();
-        out.Variable[0] = 2.0;
-        out.Variable[1] = 3.0;
-        out.Derivative[0] = 5.0;
-        out.Derivative[1] = 7.0;
-        out.Flux[0] = 11.0;
-        out.Flux[1] = 13.0;
-        out.Aux[0] = 17.0;
+        out.u(0) = 2.0;
+        out.u(1) = 3.0;
+        out.q(0) = 5.0;
+        out.q(1) = 7.0;
+        out.sigma(0) = 11.0;
+        out.sigma(1) = 13.0;
+        out.phi(0) = 17.0;
     }
 
     Value InitialValue(Index i, Position x) const override

@@ -65,12 +65,12 @@ public:
     Value SigmaFn(Index i, const State &s, Position x, Time t) override
     {
         ++sigmaCalls;
-        return 1.0 + 10.0 * i + 100.0 * x + 3.0 * s.Variable[i] + 5.0 * s.Derivative[i] + t;
+        return 1.0 + 10.0 * i + 100.0 * x + 3.0 * s.u(i) + 5.0 * s.q(i) + t;
     }
     Value Sources(Index i, const State &s, Position x, Time t) override
     {
         ++sourceCalls;
-        return -2.0 - 7.0 * i + 13.0 * x + s.Variable[0] * s.Derivative[i] - 0.5 * t;
+        return -2.0 - 7.0 * i + 13.0 * x + s.u(0) * s.q(i) - 0.5 * t;
     }
 
     void dSigmaFn_du(Index i, VectorRef v, const State &, Position x, Time) override
@@ -131,15 +131,15 @@ public:
     Value AuxG(Index i, const State &s, Position x, Time t) override
     {
         ++auxCalls;
-        return 1000.0 * (i + 1) + 17.0 * x + s.Aux[i] - s.Variable[0] + 0.25 * t;
+        return 1000.0 * (i + 1) + 17.0 * x + s.phi(i) - s.u(0) + 0.25 * t;
     }
     void AuxGPrime(Index i, State &out, const State &s, Position x, Time) override
     {
         out.zero();
-        out.Variable[0] = -1.0 - i;
-        out.Derivative[0] = 2.0 * x;
-        out.Flux[0] = 3.0 + i;
-        out.Aux[i] = 1.0;
+        out.u(0) = -1.0 - i;
+        out.q(0) = 2.0 * x;
+        out.sigma(0) = 3.0 + i;
+        out.phi(i) = 1.0;
     }
     void dSources_dPhi(Index i, VectorRef v, const State &, Position x, Time) override
     {
@@ -166,14 +166,14 @@ GlobalState makeStates(Index nCells, Index k, Index nVars, Index nScalars, Index
         State s(nVars, nScalars, nAux);
         for (Index v = 0; v < nVars; ++v)
         {
-            s.Variable[v] = 0.1 * (j + 1) + v;
-            s.Derivative[v] = -0.3 * (j + 1) + 2.0 * v;
-            s.Flux[v] = 0.7 * (j + 1) - v;
+            s.u(v) = 0.1 * (j + 1) + v;
+            s.q(v) = -0.3 * (j + 1) + 2.0 * v;
+            s.sigma(v) = 0.7 * (j + 1) - v;
         }
         for (Index a = 0; a < nAux; ++a)
-            s.Aux[a] = 0.05 * (j + 1) * (a + 2);
+            s.phi(a) = 0.05 * (j + 1) * (a + 2);
         for (Index c = 0; c < nScalars; ++c)
-            s.Scalars[c] = 1.5 + c;
+            s.scalar(c) = 1.5 + c;
         g.setWithState(j, s);
     }
     return g;
@@ -265,8 +265,8 @@ BOOST_AUTO_TEST_CASE(compute_physics_fills_every_slot_and_caches_the_sources)
 
 BOOST_AUTO_TEST_CASE(compute_physics_derivatives_fills_the_right_state_slices)
 {
-    // dSigma writes into out.Variable/Derivative (and Aux when nAux > 0);
-    // dSources additionally writes out.Flux. Getting these slices crossed
+    // dSigma writes into out.u()/Derivative (and Aux when nAux > 0);
+    // dSources additionally writes out.sigma(). Getting these slices crossed
     // would put dS/dq where dS/du belongs in every Jacobian block.
     AuxSystem sys;
     const Index nCells = 2, k = 2, nVars = 2, nAux = 2;
@@ -317,10 +317,10 @@ BOOST_AUTO_TEST_CASE(compute_physics_derivatives_fills_the_right_state_slices)
         {
             State expected(nVars, 0, nAux);
             sys.AuxGPrime(a, expected, states[j], points[j], t);
-            BOOST_TEST((dAux[a].Variable(j) - expected.Variable).norm() < 1e-14);
-            BOOST_TEST((dAux[a].Derivative(j) - expected.Derivative).norm() < 1e-14);
-            BOOST_TEST((dAux[a].Flux(j) - expected.Flux).norm() < 1e-14);
-            BOOST_TEST((dAux[a].Aux(j) - expected.Aux).norm() < 1e-14);
+            BOOST_TEST((dAux[a].Variable(j) - expected.u()).norm() < 1e-14);
+            BOOST_TEST((dAux[a].Derivative(j) - expected.q()).norm() < 1e-14);
+            BOOST_TEST((dAux[a].Flux(j) - expected.sigma()).norm() < 1e-14);
+            BOOST_TEST((dAux[a].Aux(j) - expected.phi()).norm() < 1e-14);
         }
 }
 
@@ -361,8 +361,8 @@ BOOST_AUTO_TEST_CASE(batched_aux_wrappers_match_the_scalar_versions)
         {
             State expected(nVars, 0, nAux);
             sys.AuxGPrime(a, expected, states[j], points[j], t);
-            BOOST_TEST((out.Variable(j) - expected.Variable).norm() < 1e-14);
-            BOOST_TEST((out.Aux(j) - expected.Aux).norm() < 1e-14);
+            BOOST_TEST((out.Variable(j) - expected.u()).norm() < 1e-14);
+            BOOST_TEST((out.Aux(j) - expected.phi()).norm() < 1e-14);
         }
     }
 }
@@ -556,11 +556,11 @@ BOOST_AUTO_TEST_CASE(a_state_is_born_zeroed_not_merely_sized)
     for (int trial = 0; trial < 8; ++trial)
     {
         State s(4, 3, 2);
-        BOOST_TEST(s.Variable.isZero());
-        BOOST_TEST(s.Derivative.isZero());
-        BOOST_TEST(s.Flux.isZero());
-        BOOST_TEST(s.Aux.isZero());
-        BOOST_TEST(s.Scalars.isZero());
+        BOOST_TEST(s.u().isZero());
+        BOOST_TEST(s.q().isZero());
+        BOOST_TEST(s.sigma().isZero());
+        BOOST_TEST(s.phi().isZero());
+        BOOST_TEST(s.scalars().isZero());
     }
 }
 
@@ -592,7 +592,7 @@ BOOST_AUTO_TEST_CASE(sigma_hat_is_the_physical_flux_and_sigma_is_what_is_stored)
     BOOST_TEST(s.sigmaHat(1) == -1.5);
 
     // The named accessors and the raw vectors are two views of one buffer.
-    BOOST_TEST(s.Flux[0] == -3.25);
+    BOOST_TEST(s.sigma(0) == -3.25);
 }
 
 BOOST_AUTO_TEST_CASE(named_accessors_reach_the_same_storage_as_the_raw_vectors)
@@ -603,17 +603,17 @@ BOOST_AUTO_TEST_CASE(named_accessors_reach_the_same_storage_as_the_raw_vectors)
     s.phi(0) = 3.0;
     s.scalar(1) = 4.0;
 
-    BOOST_TEST(s.Variable[0] == 1.0);
-    BOOST_TEST(s.Derivative[2] == 2.0);
-    BOOST_TEST(s.Aux[0] == 3.0);
-    BOOST_TEST(s.Scalars[1] == 4.0);
+    BOOST_TEST(s.u(0) == 1.0);
+    BOOST_TEST(s.q(2) == 2.0);
+    BOOST_TEST(s.phi(0) == 3.0);
+    BOOST_TEST(s.scalar(1) == 4.0);
 
     // Aux is sized nAux and Variable nVars, and confusing the two is a
     // documented source of bugs here; under DEBUG the accessors say so rather
     // than reading past the end. (This build is not a DEBUG build, so only the
     // sizes are asserted.)
-    BOOST_TEST(s.Aux.size() == 1);
-    BOOST_TEST(s.Variable.size() == 3);
+    BOOST_TEST(s.phi().size() == 1);
+    BOOST_TEST(s.u().size() == 3);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

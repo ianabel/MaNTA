@@ -14,8 +14,8 @@ Value MirrorPlasma::InitialDensityTimeDerivative(RealVector u, RealVector q, Pos
         auto [uval, qval, d2udx2val] = derivatives([this, j](Real2nd x)
                                                    { return InitialFunction(j, x, 0.0); }, wrt(Vval, Vval), at(Vval));
 
-        s.Variable(j) = uval;
-        s.Derivative(j) = qval;
+        s.u(j) = uval;
+        s.q(j) = qval;
         d2udx2(j) = d2udx2val;
     }
 
@@ -211,8 +211,8 @@ Value MirrorPlasma::TotalCurrent(GlobalState const &y, std::vector<Position> con
     for (size_t j = 0; j < y.size(); ++j)
     {
         State st = y[j];
-        SourceTerm += weights(j) * Source(Channel::AngularMomentum, st.Variable, st.Derivative,
-                                          st.Flux, st.Aux, noScalars, abscissae[j], t)
+        SourceTerm += weights(j) * Source(Channel::AngularMomentum, st.u(), st.q(),
+                                          st.sigma(), st.phi(), noScalars, abscissae[j], t)
                                        .val;
     }
 
@@ -272,7 +272,7 @@ void MirrorPlasma::ScalarGPrime(GlobalStateMatrix &dG, GlobalStateMatrix &dGdot,
         // The part of the source that depends on the scalars is excluded: it is
         // accounted for by the explicit scalar entries below.
         State st = y[j];
-        st.Scalars.setZero();
+        st.scalars().setZero();
 
         dSources_du(Channel::AngularMomentum, grad_u, st, abscissae[j], t);
         for (Index v = 0; v < nVars; ++v)

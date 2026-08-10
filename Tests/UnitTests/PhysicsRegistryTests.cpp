@@ -45,7 +45,7 @@ public:
 
     Value SigmaFn(Index, const State &s, Position, Time) override
     {
-        return s.Derivative[0];
+        return s.q(0);
     }
     Value Sources(Index, const State &, Position, Time) override { return 0.0; }
     void dSigmaFn_du(Index, VectorRef v, const State &, Position, Time) override

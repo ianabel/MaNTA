@@ -87,11 +87,11 @@ public:
 
     Value SigmaFn(Index, const State &s, Position, Time) override
     {
-        return KAPPA * s.Derivative[0];
+        return KAPPA * s.q(0);
     }
     Value Sources(Index, const State &s, Position, Time) override
     {
-        return COUPLING * s.Scalars[0];
+        return COUPLING * s.scalar(0);
     }
 
     void dSigmaFn_dq(Index, VectorRef v, const State &, Position, Time) override

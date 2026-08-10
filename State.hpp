@@ -67,27 +67,27 @@ public:
   /// put a garbage column into the scalar coupling matrix. The hooks may still
   /// call zero() and several do; it is redundant now rather than load-bearing.
   explicit State(Index nv, Index ns = 0, Index naux = 0) {
-    Variable.setZero(nv);
-    Derivative.setZero(nv);
-    Flux.setZero(nv);
-    Scalars.setZero(ns);
-    Aux.setZero(naux);
+    m_Variable.setZero(nv);
+    m_Derivative.setZero(nv);
+    m_Flux.setZero(nv);
+    m_Scalars.setZero(ns);
+    m_Aux.setZero(naux);
   }
 
   void clone(const State &other) {
-    Variable.setZero(other.Variable.size());
-    Derivative.setZero(other.Derivative.size());
-    Flux.setZero(other.Flux.size());
-    Scalars.setZero(other.Scalars.size());
-    Aux.setZero(other.Aux.size());
+    m_Variable.setZero(other.m_Variable.size());
+    m_Derivative.setZero(other.m_Derivative.size());
+    m_Flux.setZero(other.m_Flux.size());
+    m_Scalars.setZero(other.m_Scalars.size());
+    m_Aux.setZero(other.m_Aux.size());
   }
 
   void zero() {
-    Variable.setZero();
-    Derivative.setZero();
-    Flux.setZero();
-    Scalars.setZero();
-    Aux.setZero();
+    m_Variable.setZero();
+    m_Derivative.setZero();
+    m_Flux.setZero();
+    m_Scalars.setZero();
+    m_Aux.setZero();
   }
 
 private:
@@ -110,12 +110,10 @@ public:
   /*
       Named access.
 
-      `s.Variable[0]` says where a number lives; `s.u(0)` says what it is. The
-      raw vectors below are still public because the type casters and the
-      autodiff layer construct whole RealVectors from them, but a physics case
-      should reach for these.
+      `s.Variable[0]` said where a number lived; `s.u(0)` says what it is. The
+      vectors themselves are private, so that is the only spelling.
 
-      Two things they buy beyond readability:
+      Two things this buys beyond readability:
 
       * bounds checking under DEBUG. Anything indexed per auxiliary variable is
         sized nAux, not nVars, and those coincide in nearly every case here --
@@ -126,28 +124,59 @@ public:
         gives that stored value, sigmaHat() gives the physical flux. See the
         header comment in TransportSystem.hpp.
   */
-  double &u(Index i) { return checked(Variable, i, "variable"); }
-  double u(Index i) const { return checked(Variable, i, "variable"); }
+  double &u(Index i) { return checked(m_Variable, i, "variable"); }
+  double u(Index i) const { return checked(m_Variable, i, "variable"); }
 
-  double &q(Index i) { return checked(Derivative, i, "variable"); }
-  double q(Index i) const { return checked(Derivative, i, "variable"); }
+  double &q(Index i) { return checked(m_Derivative, i, "variable"); }
+  double q(Index i) const { return checked(m_Derivative, i, "variable"); }
 
-  /// The stored flux, sigma = -sigma_hat. This is what Flux has always held.
-  double &sigma(Index i) { return checked(Flux, i, "variable"); }
-  double sigma(Index i) const { return checked(Flux, i, "variable"); }
+  /// The stored flux, sigma = -sigma_hat.
+  double &sigma(Index i) { return checked(m_Flux, i, "variable"); }
+  double sigma(Index i) const { return checked(m_Flux, i, "variable"); }
 
   /// The physical flux -- the quantity SigmaFn returns. Read-only: it is a
   /// negation of the stored value, so there is nothing to take a reference to.
-  double sigmaHat(Index i) const { return -checked(Flux, i, "variable"); }
+  double sigmaHat(Index i) const { return -checked(m_Flux, i, "variable"); }
 
-  double &phi(Index i) { return checked(Aux, i, "auxiliary variable"); }
-  double phi(Index i) const { return checked(Aux, i, "auxiliary variable"); }
+  double &phi(Index i) { return checked(m_Aux, i, "auxiliary variable"); }
+  double phi(Index i) const { return checked(m_Aux, i, "auxiliary variable"); }
 
-  double &scalar(Index i) { return checked(Scalars, i, "scalar"); }
-  double scalar(Index i) const { return checked(Scalars, i, "scalar"); }
+  double &scalar(Index i) { return checked(m_Scalars, i, "scalar"); }
+  double scalar(Index i) const { return checked(m_Scalars, i, "scalar"); }
 
-  Vector Variable, Derivative, Flux, Aux;
-  Vector Scalars;
+  /*
+      The same fields whole, for the callers that need a vector rather than an
+      element -- the autodiff layer builds a RealVector from each of these, and
+      the type casters assign them.
+
+      Overloaded on arity against the element accessors above: `s.u()` is the
+      vector, `s.u(i)` the entry. The underlying vectors are private, so
+      `s.Variable[0]` no longer compiles; that spelling said where a number
+      lived rather than what it was, and left the sign of the flux for the
+      reader to remember.
+  */
+  Vector &u() { return m_Variable; }
+  Vector const &u() const { return m_Variable; }
+
+  Vector &q() { return m_Derivative; }
+  Vector const &q() const { return m_Derivative; }
+
+  Vector &sigma() { return m_Flux; }
+  Vector const &sigma() const { return m_Flux; }
+
+  /// By value: a negation of the stored vector, so there is nothing to
+  /// reference. Use sigma() when assigning.
+  Vector sigmaHat() const { return -m_Flux; }
+
+  Vector &phi() { return m_Aux; }
+  Vector const &phi() const { return m_Aux; }
+
+  Vector &scalars() { return m_Scalars; }
+  Vector const &scalars() const { return m_Scalars; }
+
+private:
+  Vector m_Variable, m_Derivative, m_Flux, m_Aux;
+  Vector m_Scalars;
 };
 
 class GlobalState {
@@ -168,22 +197,22 @@ public:
   }
 
   void setWithState(Index i, const State &s) {
-    m_Variable.col(i) = s.Variable;
-    m_Derivative.col(i) = s.Derivative;
-    m_Flux.col(i) = s.Flux;
-    m_Aux.col(i) = s.Aux;
-    m_Scalars = s.Scalars;
+    m_Variable.col(i) = s.u();
+    m_Derivative.col(i) = s.q();
+    m_Flux.col(i) = s.sigma();
+    m_Aux.col(i) = s.phi();
+    m_Scalars = s.scalars();
   }
 
   // Return state at point i
   State operator[](Index i) const {
     State out(nVars, nScalars, nAux);
 
-    out.Variable = m_Variable.col(i);
-    out.Derivative = m_Derivative.col(i);
-    out.Flux = m_Flux.col(i);
-    out.Aux = m_Aux.col(i);
-    out.Scalars = m_Scalars;
+    out.u() = m_Variable.col(i);
+    out.q() = m_Derivative.col(i);
+    out.sigma() = m_Flux.col(i);
+    out.phi() = m_Aux.col(i);
+    out.scalars() = m_Scalars;
 
     return out;
   }

@@ -233,9 +233,10 @@ Its constructor is `(config, grid, SystemSpec)`.
 
 **Derivative out-parameters arrive zeroed.** `State` and `GlobalState` zero
 themselves on construction, so a hook assigns only its nonzero entries; an
-omitted one is zero rather than uninitialised heap. `State` also has named
-accessors — `u(i)`, `q(i)`, `sigma(i)`, `sigmaHat(i)`, `phi(i)`, `scalar(i)` —
-bounds-checked under `DEBUG`.
+omitted one is zero rather than uninitialised heap. `State`'s vectors are private; reach them
+through `u(i)`/`q(i)`/`sigma(i)`/`sigmaHat(i)`/`phi(i)`/`scalar(i)` for an entry,
+bounds-checked under `DEBUG`, or the same names with no argument for the whole
+vector (`s.u()`), which is what the autodiff layer builds its RealVectors from.
 
 **Every physics hook exists in two forms**: pointwise (`SigmaFn(i, State, x, t)`)
 and batched (`SigmaFn(i, GlobalState, positions, t)`). The batched defaults in

@@ -43,7 +43,7 @@ class TestDiffusion : public TransportSystem {
 		// are allowed to alter internal state such as to store computations
 		// for future calls)
 		Value SigmaFn( Index, const State &s, Position, Time ) override {
-			return kappa * s.Derivative[ 0 ];
+			return kappa * s.q(0);
 		};
 		Value Sources( Index, const State&, Position, Time ) override {
 			return 0.0;

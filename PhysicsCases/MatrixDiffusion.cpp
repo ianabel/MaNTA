@@ -61,7 +61,7 @@ Value MatrixDiffusion::UpperBoundary(Index, Time) const
 
 Value MatrixDiffusion::SigmaFn(Index i, const State &s, Position, Time)
 {
-	auto sigma = Kappa * s.Derivative;
+	auto sigma = Kappa * s.q();
 
 	return sigma(i);
 }

@@ -821,12 +821,12 @@ void SystemSolver::updateMatricesForJacSolve()
           {
               for ( Index l = 0; l < k + 1; ++l ) {
                   for ( Index v = 0; v < nVars; ++v ) {
-                      w_map[ j ].sigma( v ).getCoeff( i ).second( l ) = s[i * (k + 1) + l].Flux[ v ]       + alpha * s_dt[i * (k + 1) + l].Flux[ v ];
-                      w_map[ j ].q( v ).getCoeff( i ).second( l )     = s[i * (k + 1) + l].Derivative[ v ] + alpha * s_dt[i * (k + 1) + l].Derivative[ v ];
-                      w_map[ j ].u( v ).getCoeff( i ).second( l )     = s[i * (k + 1) + l].Variable[ v ]   + alpha * s_dt[i * (k + 1) + l].Variable[ v ];
+                      w_map[ j ].sigma( v ).getCoeff( i ).second( l ) = s[i * (k + 1) + l].sigma(v)       + alpha * s_dt[i * (k + 1) + l].sigma(v);
+                      w_map[ j ].q( v ).getCoeff( i ).second( l )     = s[i * (k + 1) + l].q(v) + alpha * s_dt[i * (k + 1) + l].q(v);
+                      w_map[ j ].u( v ).getCoeff( i ).second( l )     = s[i * (k + 1) + l].u(v)   + alpha * s_dt[i * (k + 1) + l].u(v);
                   }
                   for (Index a = 0; a < nAux; ++a)
-                      w_map[j].Aux(a).getCoeff(i).second(l) = s[i * (k + 1) + l].Aux[a] + alpha * s_dt[i * (k + 1) + l].Aux[a];
+                      w_map[j].Aux(a).getCoeff(i).second(l) = s[i * (k + 1) + l].phi(a) + alpha * s_dt[i * (k + 1) + l].phi(a);
               }
               for (Index m = 0; m < nScalars; ++m)
                   N_global(j, m) = s.Scalars()[m] + alpha * s_dt.Scalars()[m];
@@ -1829,14 +1829,14 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
         State s = tmp_y.eval(x);
         for (Index v = 0; v < nVars; ++v)
         {
-            std::print(out, "\t{:g}\t{:g}\t{:g}", s.Variable[v], s.Derivative[v], s.Flux[v]);
-            std::print(out, "\t{:g}", postprocessor ? postprocessor->uStar(v)(x) : s.Variable[v]);
+            std::print(out, "\t{:g}\t{:g}\t{:g}", s.u(v), s.q(v), s.sigma(v));
+            std::print(out, "\t{:g}", postprocessor ? postprocessor->uStar(v)(x) : s.u(v));
             if (printSources)
                 std::print(out, "\t{:g}", source_interp[v](x));
         }
 
         for (Index a = 0; a < nAux; ++a)
-            std::print(out, "\t{:g}", s.Aux[a]);
+            std::print(out, "\t{:g}", s.phi(a));
 
         std::println(out, "");
     }
@@ -1893,14 +1893,14 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
         State s = y.eval(x);
         for (Index v = 0; v < nVars; ++v)
         {
-            std::print(out, "\t{:g}\t{:g}\t{:g}", s.Variable[v], s.Derivative[v], s.Flux[v]);
-            std::print(out, "\t{:g}", postprocessor ? postprocessor->uStar(v)(x) : s.Variable[v]);
+            std::print(out, "\t{:g}\t{:g}\t{:g}", s.u(v), s.q(v), s.sigma(v));
+            std::print(out, "\t{:g}", postprocessor ? postprocessor->uStar(v)(x) : s.u(v));
             if (printSources)
                 std::print(out, "\t{:g}", source_interp[v](x));
         }
 
         for (Index a = 0; a < nAux; ++a)
-            std::print(out, "\t{:g}", s.Aux[a]);
+            std::print(out, "\t{:g}", s.phi(a));
 
         std::println(out, "");
     }
@@ -1951,13 +1951,13 @@ void SystemSolver::printOnNodes(std::ostream &out, double t, N_Vector const& tem
         std::print(out, "{:g}", x);
         for (Index v = 0; v < nVars; ++v)
         {
-            std::print(out, "\t{:g}\t{:g}\t{:g}", s.Variable[v], s.Derivative[v], s.Flux[v]);
-            std::print(out, "\t{:g}", postprocessor ? postprocessor->uStar(v)(x) : s.Variable[v]);
+            std::print(out, "\t{:g}\t{:g}\t{:g}", s.u(v), s.q(v), s.sigma(v));
+            std::print(out, "\t{:g}", postprocessor ? postprocessor->uStar(v)(x) : s.u(v));
             if (printSources)
                 std::print(out, "\t{:g}", sources[v](i));
         }
         for (Index a = 0; a < nAux; ++a)
-            std::print(out, "\t{:g}", s.Aux[a]);
+            std::print(out, "\t{:g}", s.phi(a));
 
         std::println(out, "");
        
