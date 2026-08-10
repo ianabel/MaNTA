@@ -116,9 +116,6 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
 
   m.def("run", runManta, py::return_value_policy::reference,
         "Runs the MaNTA suite using given configuration file");
-  m.def("registerPhysicsCase", &PhysicsCases::RegisterPhysicsCase,
-        py::return_value_policy::reference, "Register a Physics Case");
-
   m.def("getNodes",
         py::overload_cast<const std::vector<double> &, unsigned int>(&getNodes),
         py::return_value_policy::reference, "Get the points of a grid");
@@ -225,8 +222,11 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def("isUpperBoundaryDirichlet",
            &TransportSystem::isUpperBoundaryDirichlet)
       .def("ComputePhysics", &TransportSystem::ComputePhysics)
-      .def("ComputePhysicsDerivatives",
-           &TransportSystem::ComputePhysicsDerivatives)
+      // Not exposed, for the same reason as ScalarGPrime: its output parameter
+      // is an array of GlobalStateMatrix references, which has no Python type,
+      // so the bound base method was never callable from Python. A vectorised
+      // subclass *overrides* it and the trampoline reaches the override
+      // directly; binding it only put an unresolvable name in the stub.
       .def("SigmaFn", py::overload_cast<Index, const State &, Position, Time>(
                           &TransportSystem::SigmaFn))
       .def("SigmaFn_v", py::overload_cast<Index, GlobalState const &,
@@ -261,7 +261,11 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def("dSources_dPhi", &TransportSystem::dSources_dPhi)
       .def("dSigma_dPhi", &TransportSystem::dSigma_dPhi)
       .def("ScalarG", &TransportSystem::ScalarG)
-      .def("ScalarGPrime", &TransportSystem::ScalarGPrime)
+      // ScalarGPrime is deliberately not exposed: its first two parameters are
+      // GlobalStateMatrix, which has no Python type, so the bound base method
+      // was never callable. Python subclasses *override* it -- the trampoline
+      // reaches the override directly -- and the base default only throws.
+      // Leaving it bound put an unresolvable name in the generated stub.
       .def("InitialScalarValue", &TransportSystem::InitialScalarValue)
       .def("dSources_dScalars", &TransportSystem::dSources_dScalars)
       .def("createAdjointProblem", &TransportSystem::createAdjointProblem)
@@ -283,8 +287,11 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def("dgFndp", &AdjointProblem::dgFndp)
       .def("dgFn_dphi", &AdjointProblem::dgFn_dphi)
       .def("dg", &AdjointProblem::dg)
-      .def("ComputePhysicsDerivatives",
-           &AdjointProblem::ComputePhysicsDerivatives)
+      // Not exposed, for the same reason as ScalarGPrime: its output parameter
+      // is an array of GlobalStateMatrix references, which has no Python type,
+      // so the bound base method was never callable from Python. A vectorised
+      // subclass *overrides* it and the trampoline reaches the override
+      // directly; binding it only put an unresolvable name in the stub.
       .def("dSigma", &AdjointProblem::dSigma)
       .def("dSources", &AdjointProblem::dSources)
       .def("dAux", &AdjointProblem::dAux)
@@ -310,6 +317,8 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def(py::init<>())
       .def("__getitem__", [](const toml::value &v, const std::string &key) {
         auto temp = v;
+
+
         py::object result = py::none();
         if (!v.contains(key)) {
           for (auto &[k, val] : temp.as_table()) {
@@ -327,6 +336,15 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
           return result;
         }
       });
+  // Defined here, after TomlValue is registered: pybind11 renders a
+  // std::function parameter's signature from the types known at the point of
+  // def(), so binding this earlier left the raw
+  // `toml::toml11_4_4_0::basic_value<...>` in the docstring -- and hence in the
+  // generated stub, where it is not valid Python typing syntax.
+  m.def("registerPhysicsCase", &PhysicsCases::RegisterPhysicsCase, py::arg("name"),
+        py::arg("factory"), py::return_value_policy::reference,
+        "Register a physics case under the name a config file can ask for.");
+
   py::class_<PyRunner, py::smart_holder>(m, "Runner")
       .def(py::init<std::shared_ptr<TransportSystem>>())
       .def("configure", &PyRunner::configure)

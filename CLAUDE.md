@@ -21,6 +21,9 @@ make install PREFIX=...   # headers under include/manta, libmanta.so, manta.pc
 pip install .             # the `manta` package and the `manta` console script
 make python_tests         # pytest suite for that extension
 make coverage             # rebuild instrumented, run all three suites, write coverage/
+make stubs                # regenerate python/manta/_manta.pyi from the module
+make stubs-check          # fail if the committed stub is stale (CI runs this)
+make typecheck            # mypy over the manta package
 make clean                # also sweeps orphaned PhysicsCases/*.o and .d files,
                           # python/ modules of every ABI suffix, the bytecode
                           # and pytest caches, and clean_data below
@@ -339,6 +342,33 @@ Python side against a closed form, algebraic and differential.
 JAX physics cases (`python/JAXTransportSystem.py`, `python/State.py`) wrap the
 dict interface in equinox modules via the `MaNTA_Decorator` / `Physics_Decorator`
 adapters.
+
+### Type stubs
+
+`python/manta/_manta.pyi` is **generated** by `make stubs`; `make stubs-check`
+diffs it against a fresh generation and is what CI runs, because a stale stub is
+worse than none — it reports the old signature as fact.
+`python/manta/__init__.pyi` is hand-written and covers the Python layer, chiefly
+the hook signatures a case implements.
+
+Three things to know:
+
+* Every hook declaration carries `# type: ignore[override]`, and that is load
+  bearing rather than a workaround. The bound base method's signature is the C++
+  one — the derivative hooks take a `VectorRef` out-parameter, and pybind11
+  widens `int` to `SupportsInt | SupportsIndex` — while a Python case writes
+  `(i, state, x, t)` and *returns* the vector. The declarations are what a
+  user's subclass is checked against, which is the point; `warn_unused_ignores`
+  is on, so the ignores cannot outlive the asymmetry.
+* `check_untyped_defs` is what makes any of this bite. A physics case is
+  unannotated Python and mypy skips unannotated defs without it.
+* Two bindings were removed to keep the generated stub valid:
+  `TransportSystem::ScalarGPrime` and `ComputePhysicsDerivatives` both take
+  `GlobalStateMatrix`, which has no Python type, so the bound base methods were
+  never callable from Python — they only put unresolvable names in the stub.
+  `registerPhysicsCase` is `def`d after `TomlValue` for the same reason:
+  pybind11 renders a `std::function` parameter from the types registered at that
+  point, and binding it earlier left the raw toml11 C++ name in the signature.
 
 ### Out-of-tree builds
 

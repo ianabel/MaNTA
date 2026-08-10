@@ -110,6 +110,46 @@ python: $(PYTHON_OUTPUT)
 $(PYTHON_OUTPUT): Python.cpp PyRunner.cpp MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(PYTHON_HEADERS) $(PYTHON_OBJECTS)
 	$(CXX) $(CXXFLAGS) $(PYTHON_FLAGS) $$($(PYTHON_CONFIG) --includes) $(JAX_XLA_INCLUDES) -isystem $(realpath extern/pybind11/include) -shared -fPIC -fvisibility=hidden -o $@ Python.cpp PyRunner.cpp MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
 
+# ------------------------------------------------------------------ stubs --
+#
+# python/manta/_manta.pyi is generated from the built extension, not written by
+# hand: a hand-written stub for a pybind11 module is a second source of truth
+# that drifts silently, and a stale stub is worse than none -- it reports the
+# old signature as fact.
+#
+# `make stubs` regenerates it; `make stubs-check` fails if the committed one no
+# longer matches what the extension actually exposes, which is what CI runs.
+# The enum-class-locations flag tells stubgen where BoundaryKind lives, which it
+# cannot infer from a repr.
+# The venv's python when there is one, the system's otherwise -- CI installs
+# requirements.txt without making a venv.
+PYTHON_RUN := $(if $(wildcard $(VENV)/bin/python),$(VENV)/bin/python,python3)
+
+STUB = $(PYTHON_PACKAGE)/_manta.pyi
+STUBGEN = PYTHONPATH=python $(PYTHON_RUN) -m pybind11_stubgen manta._manta \
+          --enum-class-locations "BoundaryKind:manta._manta"
+
+$(STUB): $(PYTHON_OUTPUT)
+	$(STUBGEN) -o $(dir $@)..
+	@echo "Regenerated $@"
+
+stubs: $(STUB)
+
+stubs-check: $(PYTHON_OUTPUT)
+	@tmp=$$(mktemp -d); \
+	$(STUBGEN) -o $$tmp >/dev/null 2>&1; \
+	if diff -u $(STUB) $$tmp/manta/_manta.pyi; then \
+	    echo "$(STUB) is up to date"; rm -rf $$tmp; \
+	else \
+	    echo; echo "$(STUB) is stale -- run 'make stubs' and commit the result."; \
+	    rm -rf $$tmp; exit 1; \
+	fi
+
+typecheck: $(STUB)
+	$(PYTHON_RUN) -m mypy --config-file mypy.ini python/manta
+
+.PHONY: stubs stubs-check typecheck
+
 # ---------------------------------------------------------------- install --
 #
 # Enough for a physics case to be built outside this tree: the headers it

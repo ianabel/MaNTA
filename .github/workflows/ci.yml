@@ -180,6 +180,17 @@ jobs:
       - name: Python tests
         run: make python_tests
 
+      # One leg only: neither the generated stub nor the type check varies by
+      # compiler, and running them five times would just be five ways to learn
+      # the same thing.
+      - name: Stubs are up to date
+        if: matrix.cxx == 'g++-14'
+        run: make stubs-check
+
+      - name: Type check the manta package
+        if: matrix.cxx == 'g++-14'
+        run: make typecheck
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest

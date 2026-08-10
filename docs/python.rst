@@ -222,6 +222,47 @@ object from a view of one point.
    therefore cannot detect a missing transpose; to check orientation, look at the
    array shape from inside a batched call.
 
+Type stubs
+----------
+
+The package ships ``py.typed`` and two stub files, so an editor completes
+``manta.`` and a type checker can see the hook signatures:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - File
+     - Origin
+   * - ``manta/_manta.pyi``
+     - **Generated** from the built extension by ``make stubs``. Do not edit --
+       ``make stubs-check`` fails if it no longer matches what the module
+       exposes, and CI runs that.
+   * - ``manta/__init__.pyi``
+     - Hand-written, for the Python layer stubgen cannot see: the class-level
+       spec attributes and the hook signatures a case implements.
+
+The point of the second file is that a physics case with a wrong hook signature
+becomes a type error rather than a ``RuntimeError`` on the first residual
+evaluation:
+
+.. code-block:: sh
+
+   mypy --check-untyped-defs mycase.py
+
+``--check-untyped-defs`` is not optional here. A physics case is ordinary
+unannotated Python, and mypy skips unannotated definitions without it -- which
+would make the hook declarations decorative. ``mypy.ini`` in the repository has
+it on and is a reasonable starting point for your own.
+
+.. note::
+
+   A wrong hook signature is reported **twice**: once against
+   ``manta.TransportSystem``, which is the message to read, and once against
+   ``manta._manta.TransportSystem``, whose signature is the C++ one and carries
+   out-parameters you never write. The duplicate is unavoidable while both
+   classes are in the MRO.
+
 Scalar hooks
 ------------
 
