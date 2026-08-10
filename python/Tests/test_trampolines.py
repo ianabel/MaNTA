@@ -14,8 +14,7 @@ in a tracing framework.
 import numpy as np
 import pytest
 
-import MaNTA
-
+import manta as MaNTA
 KAPPA = 1.5
 SOURCE = 2.0
 ALPHA = 0.25  # makes sigma depend on u as well as q, so derivatives are nontrivial
@@ -33,12 +32,7 @@ class ScalarSystem(MaNTA.TransportSystem):
     """Implements only the pointwise virtuals -> C++ loops over them."""
 
     def __init__(self):
-        MaNTA.TransportSystem.__init__(self)
-        self.nVars = 1
-        self.nScalars = 0
-        self.nAux = 0
-        self.isLowerDirichlet = True
-        self.isUpperDirichlet = True
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1))
 
     def SigmaFn(self, i, state, x, t):
         return _sigma(state["Variable"][i], state["Derivative"][i])
@@ -82,12 +76,7 @@ class VectorisedSystem(MaNTA.TransportSystem):
     """
 
     def __init__(self):
-        MaNTA.TransportSystem.__init__(self)
-        self.nVars = 1
-        self.nScalars = 0
-        self.nAux = 0
-        self.isLowerDirichlet = True
-        self.isUpperDirichlet = True
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1))
         self.compute_physics_calls = 0
         self.compute_derivative_calls = 0
 
@@ -134,12 +123,7 @@ class IncompleteSystem(MaNTA.TransportSystem):
     """Neither a full scalar set nor a full vectorised set."""
 
     def __init__(self):
-        MaNTA.TransportSystem.__init__(self)
-        self.nVars = 1
-        self.nScalars = 0
-        self.nAux = 0
-        self.isLowerDirichlet = True
-        self.isUpperDirichlet = True
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1))
 
     def SigmaFn(self, i, state, x, t):
         return state["Derivative"][i]

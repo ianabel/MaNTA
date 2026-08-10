@@ -57,3 +57,11 @@ scalar-tests/
 toy-model/
 __pycache__/
 .pytest_cache/
+
+# Build artefacts of `make install` / `pip install .`
+libmanta.so
+manta.pc
+python/*.egg-info/
+python/manta/_manta*.so
+python/manta/_manta*.d
+docs/_build/

@@ -5,7 +5,8 @@ import numpy as np
 from util import get_transport_system_as_module
 
 sys.path.append("../")
-import MaNTA
+import manta as MaNTA
+
 
 # Test order:
 # 1) run MaNTA with a given config file

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "manta"
+version = "0.1.0"
+description = "Maryland Nonlinear Transport Analyzer -- 1-D reaction-diffusion / transport solver"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENCE.md" }
+dependencies = ["numpy"]
+
+[project.scripts]
+manta = "manta.cli:main"
+
+[project.urls]
+Documentation = "https://manta-docs.readthedocs.io"
+
+# The extension is built by the project's Makefile, not by setuptools: the build
+# needs SUNDIALS, netCDF, Eigen and autodiff located through Makefile.local, and
+# reproducing that discovery in setup.py would give two build systems that have
+# to agree. `pip install .` therefore shells out to `make python`.
+#
+# The consequence is that a wheel built here is not portable -- it links the
+# SUNDIALS the Makefile found. That is the same constraint the standalone binary
+# has always had.
+[tool.setuptools]
+package-dir = { "" = "python" }
+
+[tool.setuptools.packages.find]
+where = ["python"]
+include = ["manta*"]
+
+[tool.setuptools.package-data]
+manta = ["*.so", "*.pyi", "py.typed"]

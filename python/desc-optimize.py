@@ -29,9 +29,7 @@ import jax.numpy as jnp
 import numpy as np
 import jax
 from Objective2 import make_objective
-import MaNTA
-
-
+import manta as MaNTA
 set_device("gpu")
 
 

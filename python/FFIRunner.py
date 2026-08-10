@@ -4,7 +4,7 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".9"
 import jax
-import MaNTA
+import manta as MaNTA
 import jax.numpy as jnp
 class Platform(enum.IntEnum):
     CPU = 0

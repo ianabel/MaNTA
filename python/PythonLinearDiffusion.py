@@ -1,17 +1,15 @@
-import MaNTA
+import manta as MaNTA
 import numpy as np
 import sys
 
 class PythonLinearDiffusion(MaNTA.TransportSystem):
     def __init__(self, config, grid):
-        MaNTA.TransportSystem.__init__(self)
-        self.nVars = 1
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1))
         # Really should sanitize input here, c.f.
         # if not ("chi0" in config) and ("kappa" in config) and ("gamma" in config):
         #     print("For the stuff transport model, you must specify chi0, kappa, and gamma")
         #     sys.exit(1)
-        self.isUpperDirichlet  = True
-        self.isLowerDirichlet  = True
+        super().__init__(MaNTA.numbered_spec(1))
 
         self.Centre = 0.0
         self.InitialWidth = 0.2

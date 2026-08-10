@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-import MaNTA
+import manta as MaNTA
 from JAXAdjointProblem import JAXAdjointProblem
 from typing import NamedTuple, Any
 from functools import partial
@@ -17,10 +17,8 @@ Enables automatic differentiation of sigma and source terms using JAX.
 
 # Base class for JAX-based transport systems
 class VectorizedTransportSystem(MaNTA.TransportSystem):
-    def __init__(self, spatialParameters=False):
-        MaNTA.TransportSystem.__init__(self)
-        self.nAux = 0
-        self.nScalars = 0
+    def __init__(self, spec, spatialParameters=False):
+        MaNTA.TransportSystem.__init__(self, spec)
 
         self.dAuxdvars = jax.jit(jax.grad(self.aux, argnums=1))
 
@@ -116,11 +114,11 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
         )(states, positions, self.params)
 
     @abstractmethod
-    def ScalarG(self, i, states, states_dot, weights, t):
+    def ScalarG(self, i, states, states_dot, abscissae, weights, phi_boundary, t):
         raise NotImplementedError("Scalar G function not implemented in derived class")
 
     @abstractmethod
-    def ScalarGPrime(self, states, states_dot, weights, phi_boundary, t):
+    def ScalarGPrime(self, states, states_dot, abscissae, weights, phi_boundary, t):
         """d G_s / d state and d G_s / d state_dot, for every scalar.
 
         Returns a pair of lists, each of nScalars GlobalState dicts: the first is

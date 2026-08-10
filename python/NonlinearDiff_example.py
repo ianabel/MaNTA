@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-import MaNTA
+import manta as MaNTA
 from JAXAdjointProblem import JAXAdjointProblem
 from typing import NamedTuple
 from VectorizedTransportSystem import VectorizedTransportSystem
@@ -27,10 +27,7 @@ class NonlinearDiffusionParams(NamedTuple):
 
 class JAXNonlinearDiffusion(VectorizedTransportSystem):
     def __init__(self, config: MaNTA.TomlValue, grid: MaNTA.Grid):
-        super().__init__()
-        self.nVars = 1
-        self.isUpperDirichlet = True
-        self.isLowerDirichlet = False
+        super().__init__(MaNTA.numbered_spec(1, lower=MaNTA.Neumann))
 
         # This object will be passed to sigma and source functions
         self.params = NonlinearDiffusionParams.make(config)
@@ -66,11 +63,7 @@ class JAXNonlinearDiffusion(VectorizedTransportSystem):
 
 class JAXAuxTest(VectorizedTransportSystem):
     def __init__(self, config: MaNTA.TomlValue, grid: MaNTA.Grid):
-        super().__init__()
-        self.nVars = 1
-        self.nAux = 1
-        self.isUpperDirichlet = True
-        self.isLowerDirichlet = False
+        super().__init__(MaNTA.numbered_spec(1, nAux=1, lower=MaNTA.Neumann))
 
         # This object will be passed to sigma and source functions
         self.params = NonlinearDiffusionParams.make(config)

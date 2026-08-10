@@ -1,6 +1,6 @@
 from typing import NamedTuple
 
-import MaNTA
+import manta as MaNTA
 from JAXTransportSystem import JAXTransportSystem
 from JAXAdjointProblem import JAXAdjointProblem
 import jax.numpy as jnp
@@ -24,12 +24,7 @@ class LinearDiffusionParams(NamedTuple):
     
 class JAXLinearDiffusion(JAXTransportSystem):
     def __init__(self, config: MaNTA.TomlValue, grid: MaNTA.Grid):
-        super().__init__()
-
-        self.nVars = 1
-
-        self.isUpperDirichlet  = True
-        self.isLowerDirichlet  = True
+        super().__init__(MaNTA.numbered_spec(1))
 
         self.params = LinearDiffusionParams.make(config)
 

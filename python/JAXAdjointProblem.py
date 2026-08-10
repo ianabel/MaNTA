@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 import equinox as eqx
-import MaNTA
+import manta as MaNTA
 from functools import partial
 
 from State import State, MaNTA_Decorator, Physics_Decorator

@@ -16,7 +16,7 @@ import numpy as np
 import jax.numpy as jnp
 import equinox as eqx
 import jax
-import MaNTA
+import manta as MaNTA
 import os
 # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 # os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
@@ -110,13 +110,10 @@ Computes sources and neoclassical fluxes (returned from yancc) as required by Ma
 
 class StellaratorTransport(MaNTA.TransportSystem):
     def __init__(self, config, yancc_wrapper: yancc_data):
-        MaNTA.TransportSystem.__init__(self)
-        self.nVars = 1
-        self.nAux = 0
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1))
 
         ### Remember to set boundary conditions ####
-        self.isUpperDirichlet = True
-        self.isLowerDirichlet = False
+        super().__init__(MaNTA.numbered_spec(1, lower=MaNTA.Neumann))
         solver_config = config["Solver"]
         st_config = config["Stellarator"]
         self.points = yancc_wrapper.rho

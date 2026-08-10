@@ -39,8 +39,7 @@ legitimate reference rather than an approximation.
 import numpy as np
 import pytest
 
-import MaNTA
-
+import manta as MaNTA
 KAPPA0 = 1.5
 SOURCE0 = 2.0
 
@@ -68,12 +67,7 @@ class ParametricDiffusion(MaNTA.TransportSystem):
     """Linear diffusion whose diffusivity and source are the parameters."""
 
     def __init__(self, p):
-        MaNTA.TransportSystem.__init__(self)
-        self.nVars = 1
-        self.nScalars = 0
-        self.nAux = 0
-        self.isLowerDirichlet = True
-        self.isUpperDirichlet = True
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1))
         self.p = np.asarray(p, dtype=float)
 
     def SigmaFn(self, i, state, x, t):

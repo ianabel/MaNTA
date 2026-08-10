@@ -14,9 +14,18 @@
 #include <stdexcept>
 #include <string_view>
 
-constexpr std::array<std::string_view, 7> required_method_names = {
-    "SigmaFn",     "Sources",     "dSigmaFn_du",    "dSigmaFn_dq",
-    "dSources_du", "dSources_dq", "dSources_dsigma"};
+// A case has to say what its flux and source *are*. The five derivative hooks
+// used to be required alongside them, which meant a linear diffusion case had
+// to write four functions returning nothing but zeros before it would run. They
+// are optional now: an absent hook leaves the out-parameter as the framework
+// handed it over, and the framework hands over a zeroed one (see State's
+// constructor). "I did not write this derivative" and "this derivative is zero"
+// are then the same statement, which is what they always were in practice.
+constexpr std::array<std::string_view, 2> required_method_names = {"SigmaFn", "Sources"};
+
+// Looked up, used when present, and silently zero when not.
+constexpr std::array<std::string_view, 5> optional_derivative_names = {
+    "dSigmaFn_du", "dSigmaFn_dq", "dSources_du", "dSources_dq", "dSources_dsigma"};
 
 constexpr std::array<std::string_view, 2> required_method_names_vectorized = {
     "ComputePhysics", "ComputePhysicsDerivatives"};
@@ -34,7 +43,10 @@ namespace py = pybind11;
 class PyTransportSystem : public TransportSystem,
                           public py::trampoline_self_life_support {
 public:
-  using TransportSystem::TransportSystem;
+  // The spec comes up from Python: a case declares its variables, scalars and
+  // aux as data and passes them to super().__init__(). There is no default
+  // constructor to inherit any more.
+  explicit PyTransportSystem(SystemSpec spec) : TransportSystem(std::move(spec)) {}
 
   void initializeOverrides() {
     auto make_override = [this](const char *method_name) {
@@ -55,6 +67,13 @@ public:
         method_overrides.insert(
             std::make_pair(method_name, std::move(_override)));
       }
+    }
+
+    for (const auto &method_name : optional_derivative_names) {
+      auto _override = make_override(method_name.data());
+      if (_override)
+        method_overrides.insert(
+            std::make_pair(method_name, std::move(_override)));
     }
 
     for (const auto &method_name : required_method_names_vectorized) {
@@ -160,6 +179,18 @@ public:
   /// of the names used at the call sites below -- the "_v" variants in
   /// particular -- are never inserted by initializeOverrides at all, so this is
   /// not a hypothetical.
+  /// The override, or nullptr if the subclass did not provide one.
+  ///
+  /// For hooks where not writing one is a legitimate answer -- a derivative
+  /// block that is identically zero -- as opposed to override_for below, which
+  /// insists.
+  py::function const *optional_override(std::string_view name) const {
+    auto it = method_overrides.find(name);
+    if (it == method_overrides.end() || !it->second)
+      return nullptr;
+    return &it->second;
+  }
+
   py::function const &override_for(std::string_view name) const {
     auto it = method_overrides.find(name);
     if (it == method_overrides.end() || !it->second)
@@ -174,12 +205,6 @@ public:
   };
   Value UpperBoundary(Index i, Time t) const override {
     PYBIND11_OVERRIDE(Value, TransportSystem, UpperBoundary, i, t);
-  };
-  bool isLowerBoundaryDirichlet(Index i) const override {
-    PYBIND11_OVERRIDE(Value, TransportSystem, isLowerBoundaryDirichlet, i);
-  };
-  bool isUpperBoundaryDirichlet(Index i) const override {
-    PYBIND11_OVERRIDE(Value, TransportSystem, isUpperBoundaryDirichlet, i);
   };
 
   PhysicsOutput ComputePhysics(GlobalState const &states,
@@ -301,7 +326,9 @@ public:
 
     try {
       py::gil_scoped_acquire gil;
-      out = override_for("dSigmaFn_du")(i, s, x, t).cast<Values>();
+      // Absent means identically zero, and out arrives zeroed.
+      if (auto *f = optional_override("dSigmaFn_du"))
+        out = (*f)(i, s, x, t).cast<Values>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate dSigmaFn_du: ") +
@@ -314,7 +341,9 @@ public:
       initializeOverrides();
     try {
       py::gil_scoped_acquire gil;
-      out = override_for("dSigmaFn_dq")(i, s, x, t).cast<Values>();
+      // Absent means identically zero, and out arrives zeroed.
+      if (auto *f = optional_override("dSigmaFn_dq"))
+        out = (*f)(i, s, x, t).cast<Values>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate dSources_dq: ") +
@@ -329,7 +358,9 @@ public:
 
     try {
       py::gil_scoped_acquire gil;
-      v = override_for("dSources_du")(i, s, x, t).cast<Values>();
+      // Absent means identically zero, and v arrives zeroed.
+      if (auto *f = optional_override("dSources_du"))
+        v = (*f)(i, s, x, t).cast<Values>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate dSources_du: ") +
@@ -344,7 +375,9 @@ public:
 
     try {
       py::gil_scoped_acquire gil;
-      v = override_for("dSources_dq")(i, s, x, t).cast<Values>();
+      // Absent means identically zero, and v arrives zeroed.
+      if (auto *f = optional_override("dSources_dq"))
+        v = (*f)(i, s, x, t).cast<Values>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate dSources_dq: ") +
@@ -358,7 +391,9 @@ public:
       initializeOverrides();
     try {
       py::gil_scoped_acquire gil;
-      v = override_for("dSources_dsigma")(i, s, x, t).cast<Values>();
+      // Absent means identically zero, and v arrives zeroed.
+      if (auto *f = optional_override("dSources_dsigma"))
+        v = (*f)(i, s, x, t).cast<Values>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string(
@@ -532,53 +567,34 @@ public:
     return out;
   }
 
-  Value ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt,
-                        Time t) override {
+  // Straight pass-throughs now. These used to be the translation layer between
+  // the C++ scalar interface -- which took DGSoln, a std::function test
+  // function and an Interval -- and the flatter one Python could actually be
+  // handed. The C++ side has adopted that flatter interface, so there is
+  // nothing left to translate.
+  Value ScalarG(Index s, GlobalState const &y, GlobalState const &ydot,
+                std::vector<Position> const &abscissae, Values const &weights,
+                Matrix const &phiBoundary, Time t) override {
     if (!initialized)
       initializeOverrides();
 
-    GlobalState state = y.evalOnNodes();
-    GlobalState state_dot = dydt.evalOnNodes();
-
-    Value out =
-        override_for("ScalarG")(
-            s, state, state_dot,
-            Integrator::getIntegrationWeights(y.getBasis(), y.getGrid()), t)
-            .cast<Value>();
-    return out;
+    return override_for("ScalarG")(s, y, ydot, abscissae, weights, phiBoundary, t)
+        .cast<Value>();
   }
 
-  virtual void ScalarGPrimeExtended(GlobalStateMatrix &out,
-                                    GlobalStateMatrix &out_dt, const DGSoln &y,
-                                    const DGSoln &dydt, Time t) override {
+  void ScalarGPrime(GlobalStateMatrix &dG, GlobalStateMatrix &dGdot, GlobalState const &y,
+                    GlobalState const &ydot, std::vector<Position> const &abscissae,
+                    Values const &weights, Matrix const &phiBoundary, Time t) override {
     if (!initialized)
       initializeOverrides();
 
-    GlobalState state = y.evalOnNodes();
-    GlobalState state_dot = dydt.evalOnNodes();
-
-    const auto &basis = y.getBasis();
-    const auto &grid = y.getGrid();
-
-    auto temp =
-        override_for("ScalarGPrime")(
-            state, state_dot, Integrator::getIntegrationWeights(basis, grid),
-            Integrator::getPhiBoundary(basis, grid), t)
-            .cast<std::array<std::vector<py::dict>, 2>>();
+    auto temp = override_for("ScalarGPrime")(y, ydot, abscissae, weights, phiBoundary, t)
+                    .cast<std::array<std::vector<py::dict>, 2>>();
 
     for (Index i = 0; i < nScalars; i++) {
-      out[i] = temp[0][i].cast<GlobalState>();
-      out_dt[i] = temp[1][i].cast<GlobalState>();
+      dG[i] = temp[0][i].cast<GlobalState>();
+      dGdot[i] = temp[1][i].cast<GlobalState>();
     }
-  }
-
-  bool isScalarDifferential(Index i) override {
-    if (nScalars > 0) {
-      PYBIND11_OVERRIDE_PURE(bool, TransportSystem, isScalarDifferential, i);
-    } else {
-      throw std::runtime_error( "isScalarDifferential called with nScalars <=0 0" );
-    }
-    throw std::runtime_error( "Control passed beyond PYBIND11_OVERRIDE_PURE in isScalarDifferential; this should never happen!" );
   }
 
   void dSources_dScalars(Index s, VectorRef v, const State &state, Position x,
@@ -595,8 +611,6 @@ public:
   }
 
 public:
-  using TransportSystem::isLowerDirichlet;
-  using TransportSystem::isUpperDirichlet;
   using TransportSystem::nAux;
   using TransportSystem::nScalars;
   using TransportSystem::nVars;

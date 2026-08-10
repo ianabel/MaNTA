@@ -1,10 +1,10 @@
-import MaNTA
+import manta as MaNTA
 import sys
 
 class StiffTransport(TransportSystem):
     def __init__(self, config):
         # Config should be a dict
-        self.nVars = 1
+        super().__init__(MaNTA.numbered_spec(1))
         if not ("chi0" in config) and ("kappa" in config) and ("gamma" in config):
             print("For the stuff transport model, you must specify chi0, kappa, and gamma")
             sys.exit(1)

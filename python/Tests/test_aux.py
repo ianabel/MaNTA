@@ -16,8 +16,7 @@ expressed in plain numpy through the Python interface.
 import numpy as np
 import pytest
 
-import MaNTA
-
+import manta as MaNTA
 KAPPA = 1.0
 
 
@@ -30,12 +29,7 @@ class AuxDiffusion(MaNTA.TransportSystem):
     """
 
     def __init__(self):
-        MaNTA.TransportSystem.__init__(self)
-        self.nVars = 1
-        self.nScalars = 0
-        self.nAux = 1
-        self.isLowerDirichlet = True
-        self.isUpperDirichlet = True
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1, nAux=1))
 
     # --- flux and sources ----------------------------------------------
     def SigmaFn(self, i, state, x, t):
@@ -223,12 +217,7 @@ class AuxWithoutDerivative(MaNTA.TransportSystem):
     """
 
     def __init__(self):
-        MaNTA.TransportSystem.__init__(self)
-        self.nVars = 1
-        self.nScalars = 0
-        self.nAux = 1
-        self.isLowerDirichlet = True
-        self.isUpperDirichlet = True
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1, nAux=1))
 
     def SigmaFn(self, i, state, x, t):
         return KAPPA * state["Derivative"][i]

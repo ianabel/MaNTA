@@ -16,7 +16,7 @@ import os
 import numpy as np
 import pytest
 
-import MaNTA
+import manta as MaNTA
 
 
 class LinearDiffusion(MaNTA.TransportSystem):
@@ -26,13 +26,10 @@ class LinearDiffusion(MaNTA.TransportSystem):
     exactly -- which is the point: any error is in the plumbing, not here.
     """
 
-    def __init__(self, kappa=1.0, source=1.0):
-        MaNTA.TransportSystem.__init__(self)
-        self.nVars = 1
-        self.nScalars = 0
-        self.nAux = 0
-        self.isLowerDirichlet = True
-        self.isUpperDirichlet = True
+    def __init__(self, kappa=1.0, source=1.0, spec=None):
+        # spec is an argument so the two-variable subclass below can widen it.
+        # That used to be `self.nVars = 2` after construction.
+        MaNTA.TransportSystem.__init__(self, spec or MaNTA.numbered_spec(1))
         self.kappa = kappa
         self.source = source
 
@@ -477,8 +474,7 @@ def test_a_restart_with_the_wrong_variable_count_is_rejected():
 
     class TwoVariable(LinearDiffusion):
         def __init__(self):
-            super().__init__()
-            self.nVars = 2
+            super().__init__(spec=MaNTA.numbered_spec(2))
 
     name = "restart_dofmismatch"
     try:

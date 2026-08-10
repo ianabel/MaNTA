@@ -46,8 +46,7 @@ independent reference:
 import numpy as np
 import pytest
 
-import MaNTA
-
+import manta as MaNTA
 KAPPA0 = 1.5
 SOURCE0 = 2.0
 
@@ -78,12 +77,7 @@ class AuxParametricDiffusion(MaNTA.TransportSystem):
     """Linear diffusion whose flux is written in terms of an auxiliary variable."""
 
     def __init__(self, p):
-        MaNTA.TransportSystem.__init__(self)
-        self.nVars = 1
-        self.nScalars = 0
-        self.nAux = N_AUX
-        self.isLowerDirichlet = True
-        self.isUpperDirichlet = True
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1, nAux=N_AUX))
         self.p = np.asarray(p, dtype=float)
 
     # --- flux and sources ------------------------------------------------

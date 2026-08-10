@@ -2,7 +2,7 @@ from typing import NamedTuple
 
 from functools import partial
 
-import MaNTA
+import manta as MaNTA
 from VectorizedTransportSystem import VectorizedTransportSystem
 from JAXAdjointProblem import JAXAdjointProblem
 import jax.numpy as jnp
@@ -44,9 +44,7 @@ class NonlinearDiffusionParams(NamedTuple):
 class JAXNonlinearDiffusion(VectorizedTransportSystem):
     def __init__(self, config):
         super().__init__(spatialParameters=True)
-        self.nVars = 1
-        self.isUpperDirichlet = True
-        self.isLowerDirichlet = False
+        super().__init__(MaNTA.numbered_spec(1, lower=MaNTA.Neumann))
 
         solver_config = config["solver"]
 

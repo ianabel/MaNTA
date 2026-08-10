@@ -1,6 +1,5 @@
 import jax
-import MaNTA
-
+import manta as MaNTA
 from typing import NamedTuple
 
 from functools import partial
@@ -21,12 +20,7 @@ class LinearDiffusionParams(NamedTuple):
     
 class JAXLinearDiffusion(VectorizedTransportSystem):
     def __init__(self, params):
-        super().__init__()
-
-        self.nVars = 1
-
-        self.isUpperDirichlet  = True
-        self.isLowerDirichlet  = True
+        super().__init__(MaNTA.numbered_spec(1))
 
         self.params = params
 

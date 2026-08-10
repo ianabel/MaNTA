@@ -19,19 +19,13 @@ contract:
 import numpy as np
 import pytest
 
-import MaNTA
-
+import manta as MaNTA
 CASE_NAME = "UnitTestRunConfigCase"
 
 
 class Diffusion(MaNTA.TransportSystem):
     def __init__(self, config, grid):
-        MaNTA.TransportSystem.__init__(self)
-        self.nVars = 1
-        self.nScalars = 0
-        self.nAux = 0
-        self.isLowerDirichlet = True
-        self.isUpperDirichlet = True
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1))
 
     def SigmaFn(self, i, state, x, t):
         return state["Derivative"][i]

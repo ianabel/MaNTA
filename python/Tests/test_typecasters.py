@@ -25,8 +25,7 @@ vacuously.
 import numpy as np
 import pytest
 
-import MaNTA
-
+import manta as MaNTA
 NVARS = 2
 NAUX = 3
 NSCALARS = 2
@@ -37,12 +36,7 @@ class Recorder(MaNTA.TransportSystem):
     """Records what the C++ side hands it, and hands back what it is told to."""
 
     def __init__(self, nVars=NVARS, nAux=0, nScalars=0):
-        MaNTA.TransportSystem.__init__(self)
-        self.nVars = nVars
-        self.nAux = nAux
-        self.nScalars = nScalars
-        self.isLowerDirichlet = True
-        self.isUpperDirichlet = True
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(nVars, nScalars=nScalars, nAux=nAux))
         self.seen = []
         self.seen_batched = []
 
@@ -117,10 +111,10 @@ class Recorder(MaNTA.TransportSystem):
     # initializeOverrides refuses a subclass that declares scalars without all
     # four of these, so they have to exist even though nothing here runs the
     # solver. Their presence also exercises that branch of the check.
-    def ScalarG(self, s, states, states_dt, weights, t):
+    def ScalarG(self, s, states, states_dt, abscissae, weights, phi_boundary, t):
         return 0.0
 
-    def ScalarGPrime(self, states, states_dt, weights, phi_boundary, t):
+    def ScalarGPrime(self, states, states_dt, abscissae, weights, phi_boundary, t):
         return [[], []]
 
     def InitialScalarDerivative(self, s, states, states_dt, weights):
