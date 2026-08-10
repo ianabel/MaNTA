@@ -53,9 +53,11 @@ pass it up, so it is still complete before the base class exists:
 
    ``numberedFields(n)`` / ``numberedScalars(n)`` / ``numberedAux(n)`` in
    ``SystemSpec.hpp`` produce the placeholder names ``Var0``, ``Scalar0``,
-   ``AuxVariable0``. They exist because those are the names baked into the
-   checked-in regression references; a case written from scratch should name its
-   variables.
+   ``AuxVariable0``. They are for a case whose *width comes from its
+   configuration* and which therefore has no names to give —
+   ``MatrixDiffusion``, ``MatrixDiffusionTest`` and ``LinearDiffSourceTest`` are
+   the three in the tree. Every other case names its variables, and the netCDF
+   groups take those names.
 
 Two ways in
 -----------

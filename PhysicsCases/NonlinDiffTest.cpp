@@ -11,7 +11,7 @@
 REGISTER_PHYSICS_IMPL( NonlinDiffTest );
 
 NonlinDiffTest::NonlinDiffTest( toml::value const& config, Grid const& g )
-	: TransportSystem({.variables = numberedFields(1)})
+	: TransportSystem({.variables = {{"u", "the diffused quantity", ""}}})
 {
 	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around

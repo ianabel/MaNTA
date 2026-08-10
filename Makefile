@@ -291,7 +291,8 @@ clean_coverage:
 	rm -f *.gcda *.gcno PhysicsCases/*.gcda PhysicsCases/*.gcno \
 	      PhysicsCases/*/*.gcda PhysicsCases/*/*.gcno \
 	      Tests/UnitTests/*.gcda Tests/UnitTests/*.gcno \
-	      python/*.gcda python/*.gcno
+	      python/*.gcda python/*.gcno \
+	      python/manta/*.gcda python/manta/*.gcno
 	rm -rf coverage
 
 regression_tests: $(SOLVER)

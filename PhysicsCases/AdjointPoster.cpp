@@ -9,7 +9,8 @@
 REGISTER_PHYSICS_IMPL( AdjointPoster );
 
 AdjointPoster::AdjointPoster( toml::value const& config, Grid const & )
-	: TransportSystem({.variables = numberedFields(1, BoundaryKind::Neumann, BoundaryKind::Dirichlet)})
+	: TransportSystem({.variables = {{"u", "the diffused quantity", "",
+									 BoundaryKind::Neumann, BoundaryKind::Dirichlet}}})
 {
 	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around

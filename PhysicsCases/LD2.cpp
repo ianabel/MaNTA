@@ -10,7 +10,7 @@
 REGISTER_PHYSICS_IMPL( LD2 );
 
 LD2::LD2( toml::value const& config, Grid const& )
-	: TransportSystem({.variables = numberedFields(1)})
+	: TransportSystem({.variables = {{"u", "the diffused quantity", ""}}})
 {
 	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around

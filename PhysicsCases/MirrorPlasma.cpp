@@ -24,7 +24,11 @@ T sign(T x)
 // some sixty lines apart.
 SystemSpec MirrorPlasma::buildSpec(toml::value const &config)
 {
-	auto spec = SystemSpec{.variables = numberedFields(4)};
+	// The Channel enum's order, which is what every index in this case means.
+	auto spec = SystemSpec{.variables = {{"Density", "particle density", "n0"},
+										 {"IonEnergy", "ion energy density", "n0 T0"},
+										 {"ElectronEnergy", "electron energy density", "n0 T0"},
+										 {"AngularMomentum", "angular momentum density", "n0 T0 / c_s0"}}};
 
 	if (config.count("MirrorPlasma") != 1)
 		return spec;
@@ -40,15 +44,15 @@ SystemSpec MirrorPlasma::buildSpec(toml::value const &config)
 	}
 
 	if (toml::find_or(InternalConfig, "useAmbipolarPhi", false))
-		spec.aux = numberedAux(1);
+		spec.aux = {{"AmbipolarPhi", "electrostatic potential enforcing zero parallel current", "T0/e"}};
 
 	// Error and Integral are differential -- G depends explicitly on dE/dt and
 	// dI/dt -- Current is algebraic. This was MirrorPlasma::isScalarDifferential
 	// in ConstantVoltage.cpp.
 	if (toml::find_or(InternalConfig, "useConstantVoltage", false))
-		spec.scalars = {{"Scalar0", "Scalar 0", "", true},
-						{"Scalar1", "Scalar 1", "", true},
-						{"Scalar2", "Scalar 2", "", false}};
+		spec.scalars = {{"VoltageError", "V0 minus the achieved voltage", "", true},
+						{"VoltageErrorIntegral", "time integral of the error", "", true},
+						{"RadialCurrent", "radial current", "I0", false}};
 
 	return spec;
 }

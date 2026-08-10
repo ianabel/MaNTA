@@ -53,6 +53,14 @@ def test_ref_soln_l2( filename, ref_filename, tolerance ):
     nc_root_ref = Dataset(ref_filename, "r", format="NETCDF4")
 
     n_vars = int(nc_root.variables["nVariables"][0])
+
+    var_groups = variable_groups( nc_root )
+    if len(var_groups) != n_vars:
+        raise Exception(
+            f"{filename}: found {len(var_groups)} variable groups {var_groups}, "
+            f"expected {n_vars}"
+        )
+
     t_var   = nc_root.variables["t"]
     x_var   = nc_root.variables["x"]
 
@@ -60,8 +68,12 @@ def test_ref_soln_l2( filename, ref_filename, tolerance ):
     x_var_ref   = nc_root_ref.variables["x"]
 
     # Loop over variables
-    for v_idx in range(n_vars):
-        name = "Var" + str(v_idx)
+    for name in var_groups:
+        if name not in nc_root_ref.groups:
+            raise Exception(
+                f"{ref_filename} has no group '{name}'; the reference predates a "
+                f"rename of this case's variables and needs regenerating"
+            )
         Var     = nc_root.groups[name].variables["u"]
         Var_ref = nc_root_ref.groups[name].variables["u"]
 
@@ -125,11 +137,26 @@ def test_ref_soln_l2( filename, ref_filename, tolerance ):
                         sys.exit( 1 )
 
 
+def variable_groups( nc_root ):
+    """The netCDF groups holding a solution variable, in a deterministic order.
+
+    A physics case names its own variables, so these are called whatever the
+    case declared -- "u", "Density", "IonEnergy" -- rather than Var0, Var1.
+    Identified by holding a "u" variable, which separates them from Grid and
+    from the adjoint groups.
+
+    Sorted by name rather than by declaration order, which the file does not
+    record. Where an index is used below it is only to pair a run against
+    another run of the *same* case, so any consistent order will do.
+    """
+    return sorted( g for g, grp in nc_root.groups.items() if "u" in grp.variables )
+
+
 def test_analytic_soln( filename, soln_fn, tolerance ):
     print("Testing",filename)
     nc_root = Dataset(filename, "r", format="NETCDF4")
     t_var = nc_root.variables["t"]
-    Var = nc_root.groups["Var0"].variables["u"]
+    Var = nc_root.groups[ variable_groups( nc_root )[0] ].variables["u"]
     x_var = nc_root.variables["x"]
 
     # At each time t, calculate
@@ -154,7 +181,7 @@ def test_steady_state( filename, soln_fn, tolerance ):
     print("Testing",filename)
     nc_root = Dataset(filename, "r", format="NETCDF4")
     t_var = nc_root.variables["t"]
-    Var = nc_root.groups["Var0"].variables["u"]
+    Var = nc_root.groups[ variable_groups( nc_root )[0] ].variables["u"]
     x_var = nc_root.variables["x"]
 
     t_idx = -1
@@ -277,7 +304,7 @@ def config_variant( source_prefix, target_prefix, **overrides ):
 def final_slice( filename, var_index ):
     nc_root = Dataset( filename, "r", format = "NETCDF4" )
     x = np.array( nc_root.variables["x"][:] )
-    u = np.array( nc_root.groups["Var" + str( var_index )].variables["u"][-1, :] )
+    u = np.array( nc_root.groups[ variable_groups( nc_root )[ var_index ] ].variables["u"][-1, :] )
     return x, u
 
 

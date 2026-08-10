@@ -1,10 +1,67 @@
 Clean up python (make clean should remove python stuff, as should clean_coverage).
 
-Make python interface deployable so python drivers don't have to live in our tree
-
 Investigate IDACalcIC taking too many steps at initial time.
 
 Investigate occasional wiggles in outputs.
+
+Left over from the TransportSystem interface work. Everything else in that plan
+landed; these are the pieces that were deliberately not done, with the reason.
+
+  - Per-hook vectorisation in the Python trampoline. `override_for("SigmaFn_v")`
+    and the other `_v` names are looked up but never inserted into
+    method_overrides, so they can only throw: implementing `ComputePhysics` and
+    `ComputePhysicsDerivatives` together remains the only vectorised route. A
+    case that wants to vectorise one hook and leave the rest pointwise cannot.
+    Registering the `_v` names in initializeOverrides is most of the fix; the
+    rest is dropping the all-or-nothing classification.
+
+  - The autodiff Source still receives the *stored* sigma, not sigma_hat.
+    State::sigmaHat exists and is correct, but AutodiffTransportSystem::Sources
+    builds its RealVector from the stored (negated) value, so a case that starts
+    using its sigma argument gets the opposite sign from the one SigmaFn
+    returned. Flipping it also needs a compensating negation in
+    dSources_dsigma, because autodiff would then differentiate with respect to
+    sigma_hat while the solver wants d/d(stored sigma).
+
+    The reason this is not already done: *nothing in the tree reads the incoming
+    sigma at all*. MirrorPlasma and AdjointPlasma thread it into
+    Sn/Spi/Spe/Somega without using it, and every dSources_dsigma is identically
+    zero. So the change is unobservable today and no test would catch getting it
+    wrong -- which is exactly why it should not be made blind. Write a physics
+    case with a genuinely sigma-dependent source first, check it against a
+    closed form, then flip.
+
+  - GlobalState still crosses to Python as a dict of (nPoints, nVars) arrays
+    keyed "Variable"/"Derivative"/"Flux"/"Aux"/"Scalars". State became a named
+    view; GlobalState did not, because a dict of whole-batch arrays is what the
+    vectorised and JAX paths actually want. Worth revisiting only if the key
+    strings start causing the same trouble the pointwise ones did.
+
+  - The out-of-tree paths are verified by hand, not by CI. Both were exercised
+    end to end -- a one-file C++ case compiled against the installed headers,
+    dlopened via PhysicsPlugins and run; and `pip install .` into a fresh venv
+    with a Python case run from the user's own directory through the `manta`
+    command -- but neither is an automated test. The C++ one needs `make
+    install` to a temp prefix and a compiler invocation; the Python one needs a
+    venv. Both are slow enough to want their own CI job rather than a place in
+    `make test`.
+
+  - MirrorPlasma's useConstantVoltage scalars are unexercised. The port from
+    nested adaptive quadrature to the framework's node quadrature rests on the
+    algebra alone: nothing in any suite turns that mode on. checkScalarDerivative
+    in ScalarJacobianTests.cpp would check its Jacobian against a finite
+    difference of its own ScalarG for free, given a fixture that configures it.
+
+  - Physics cases now name their own variables, and netCDF groups take those
+    names. Two consequences for anything written earlier: an analysis script
+    that reads MirrorPlasma output by "Var0".."Var3" needs the channel names
+    instead (Density, IonEnergy, ElectronEnergy, AngularMomentum), and a
+    netCDF initial-condition file saved before the rename has groups the case no
+    longer looks for -- LoadDataToSpline reads getVariableName(i) now and will
+    say so rather than silently mis-load. Cases whose width comes from the
+    config (MatrixDiffusion, MatrixDiffusionTest, LinearDiffSourceTest) keep the
+    numbered placeholder names, which is why testic.nc is still valid.
+
 
 Superconvergence follow-ons (see Tests/README.md for what is already verified):
 

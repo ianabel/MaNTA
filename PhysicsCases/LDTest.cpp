@@ -9,7 +9,7 @@
 REGISTER_PHYSICS_IMPL(LDTest);
 
 LDTest::LDTest(toml::value const &config, Grid const& )
-	: TransportSystem({.variables = numberedFields(1)})
+	: TransportSystem({.variables = {{"u", "the diffused quantity", ""}}})
 {
 	auto const& DiffConfig = config.at( "DiffusionProblem" );
 	kappa = toml::find_or(DiffConfig, "Kappa", 1.0);

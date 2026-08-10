@@ -30,7 +30,9 @@ REGISTER_PHYSICS_IMPL(AuxVarTest);
 
 const double AuxNorm = 1.0;
 AuxVarTest::AuxVarTest(toml::value const &config, Grid const &)
-    : TransportSystem({.variables = numberedFields(2), .aux = numberedAux(1)})
+    : TransportSystem({.variables = {{"u", "reaction-diffusion variable", ""},
+                                     {"v", "plain diffusion variable", ""}},
+                       .aux = {{"a", "the auxiliary a = u * u", ""}}})
 {
     // Construct your problem from user-specified config
     // throw an exception if you can't. NEVER leave a part-constructed object around

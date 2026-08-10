@@ -17,9 +17,9 @@ SystemSpec LinearDiffusion::buildSpec(toml::value const &config)
 	if (config.count("DiffusionProblem") == 1)
 		lowerNeumann = toml::find_or(config.at("DiffusionProblem"), "LowerNeumann", false);
 
-	return {.variables = numberedFields(1,
-									    lowerNeumann ? BoundaryKind::Neumann : BoundaryKind::Dirichlet,
-									    BoundaryKind::Dirichlet)};
+	return {.variables = {{"u", "the diffused quantity", "",
+						   lowerNeumann ? BoundaryKind::Neumann : BoundaryKind::Dirichlet,
+						   BoundaryKind::Dirichlet}}};
 }
 
 LinearDiffusion::LinearDiffusion(toml::value const &config, Grid const &)

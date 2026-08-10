@@ -373,9 +373,9 @@ BOOST_AUTO_TEST_CASE(residual_is_affine_for_a_linear_problem)
     SUNContext_Free(&ctx);
 }
 
-BOOST_AUTO_TEST_CASE(residual_scalar_rows_are_scalar_g_extended)
+BOOST_AUTO_TEST_CASE(residual_scalar_rows_are_scalar_g)
 {
-    // res.Scalar(j) = ScalarGExtended(j, Y, dYdt, t), verbatim. Cheap to pin,
+    // res.Scalar(j) = ScalarG(j, ...), verbatim. Cheap to pin,
     // and it is the row block the Woodbury elimination borders onto.
     const Index k = 2, nCells = 4;
     Grid grid(-1.0, 1.0, nCells);

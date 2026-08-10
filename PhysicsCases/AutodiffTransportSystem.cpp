@@ -345,7 +345,15 @@ void AutodiffTransportSystem::LoadDataToSpline(const std::string &file)
 
 	for (Index i = 0; i < nVars; ++i)
 	{
-		tempGroup = data_file.getGroup("Var" + std::to_string(i));
+		// getVariableName(i), not "Var" + i: this reads back a file MaNTA wrote,
+		// and NetCDFIO names those groups after the case's own variables. The
+		// literal only worked while every case used the placeholder names.
+		tempGroup = data_file.getGroup(getVariableName(i));
+		if (tempGroup.isNull())
+			throw std::runtime_error(
+				"Initial-condition file " + file + " has no group '" + getVariableName(i) +
+				"'. A file written before this case's variables were named will use the "
+				"old names; regenerate it, or rename the groups.");
 
 		tempGroup.getVar("u").getVar(start, count, temp.data());
 		tempGroup.getVar("q").getVar(start, count, temp_deriv.data());

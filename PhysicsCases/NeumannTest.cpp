@@ -17,9 +17,9 @@ SystemSpec NeumannTest::buildSpec(toml::value const &config)
         lowerNeumann = toml::find_or(DiffConfig, "LowerNeumann", false);
         upperNeumann = toml::find_or(DiffConfig, "UpperNeumann", false);
     }
-    return {.variables = numberedFields(1,
-                                        lowerNeumann ? BoundaryKind::Neumann : BoundaryKind::Dirichlet,
-                                        upperNeumann ? BoundaryKind::Neumann : BoundaryKind::Dirichlet)};
+    return {.variables = {{"u", "the diffused quantity", "",
+                           lowerNeumann ? BoundaryKind::Neumann : BoundaryKind::Dirichlet,
+                           upperNeumann ? BoundaryKind::Neumann : BoundaryKind::Dirichlet}}};
 }
 
 NeumannTest::NeumannTest(toml::value const &config, Grid const &grid)

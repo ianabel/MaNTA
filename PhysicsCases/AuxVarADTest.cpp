@@ -20,7 +20,9 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(AuxVarADTest);
 
-AuxVarADTest::AuxVarADTest(toml::value const &config, Grid const &grid) : AutodiffTransportSystem(config, grid, {.variables = numberedFields(1), .aux = numberedAux(1)})
+AuxVarADTest::AuxVarADTest(toml::value const &config, Grid const &grid) : AutodiffTransportSystem(config, grid,
+                          {.variables = {{"u", "reaction-diffusion variable", ""}},
+                           .aux = {{"a", "the auxiliary a = u * u", ""}}})
 {
     // Construct your problem from user-specified config
     // throw an exception if you can't. NEVER leave a part-constructed object around

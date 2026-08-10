@@ -4,7 +4,7 @@
 REGISTER_PHYSICS_IMPL(ADTestProblem);
 
 ADTestProblem::ADTestProblem(toml::value const &config, Grid const &grid)
-	: AutodiffTransportSystem(config, grid, {.variables = numberedFields(1)})
+	: AutodiffTransportSystem(config, grid, {.variables = {{"u", "the diffused quantity", ""}}})
 {
 	if (config.count("ADTestProblem") != 1)
 	{

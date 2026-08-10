@@ -17,8 +17,10 @@
 //
 // This file separates them by supplying a scalar system whose Jacobian is known
 // exactly, so any failure can only be (a). It then adds a reusable consistency
-// check -- finite-difference ScalarGExtended and compare against
-// ScalarGPrimeExtended -- which answers (b) for any physics case.
+// check -- finite-difference ScalarG and compare against ScalarGPrime -- which
+// answers (b) for any physics case. (Those two hooks were called
+// ScalarGExtended and ScalarGPrimeExtended when this was written; the family
+// has since collapsed to one name each.)
 //
 // Result: solveJacEq is correct. Both minimal systems, algebraic and
 // differential, satisfy J dy = g to round-off. ScalarTestLD3's dG_0/du had the

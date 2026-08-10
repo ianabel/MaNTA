@@ -46,10 +46,10 @@ REGISTER_PHYSICS_IMPL(ScalarTestLD3);
 ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
 	// E and I are differential -- G_0 and G_2 depend explicitly on dE/dt and
 	// dI/dt -- while J is algebraic. This was isScalarDifferential(s).
-	: TransportSystem({.variables = numberedFields(1),
-					   .scalars = {{"Scalar0", "Scalar 0", "", true},
-								   {"Scalar1", "Scalar 1", "", false},
-								   {"Scalar2", "Scalar 2", "", true}}})
+	: TransportSystem({.variables = {{"u", "the diffused quantity", ""}},
+					   .scalars = {{"E", "mass error, M0 - M", "", true},
+								   {"J", "source strength from the PID controller", "", false},
+								   {"I", "integral of the error", "", true}}})
 {
 	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around

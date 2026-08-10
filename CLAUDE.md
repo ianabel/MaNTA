@@ -226,8 +226,13 @@ assigning `nVars` in a constructor body, nine naming virtuals,
 `isLower/isUpperBoundaryDirichlet`, `isScalarDifferential`, and a pair of
 uninitialised bools the boundary virtuals read. A case whose shape depends on its
 config builds the spec in a static helper: `: TransportSystem(buildSpec(config))`.
-`numberedFields/Scalars/Aux` produce the historical `Var0`/`Scalar0`/`AuxVariable0`
-placeholder names, which the checked-in `.ref.nc` files still key on.
+`numberedFields/Scalars/Aux` produce the placeholder names
+`Var0`/`Scalar0`/`AuxVariable0`, and are for a case whose width comes from its
+config and so has no names to give — `MatrixDiffusion`, `MatrixDiffusionTest`
+and `LinearDiffSourceTest`. Every other case names its variables, and the netCDF
+groups take those names, so nothing reads output by `Var0` any more: the
+regression harness finds a variable's group by its holding a `u`, and
+`LoadDataToSpline` reads back `getVariableName(i)`.
 
 Two layers sit above `TransportSystem`: cases may implement its virtuals
 directly, or derive from `AutodiffTransportSystem` and supply `Flux`/`Source` in

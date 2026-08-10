@@ -38,7 +38,10 @@ SystemSpec AdjointPlasma::buildSpec(toml::value const &)
     // false that nothing in this case or its config ever writes, so that branch
     // has never run. If it is ever wired up, the count has to be decided here,
     // before the object exists, and the matching uL/uR entries with it.
-    return {.variables = numberedFields(2, BoundaryKind::Neumann, BoundaryKind::Dirichlet)};
+    return {.variables = {{"IonEnergy", "ion energy density", "n0 T0",
+                           BoundaryKind::Neumann, BoundaryKind::Dirichlet},
+                          {"ElectronEnergy", "electron energy density", "n0 T0",
+                           BoundaryKind::Neumann, BoundaryKind::Dirichlet}}};
 }
 
 AdjointPlasma::AdjointPlasma(toml::value const &config, Grid const &grid)
