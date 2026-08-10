@@ -10,6 +10,7 @@
 #include "PyAdjointProblem.hpp"
 #include "PyGrid.hpp"
 #include "PyIntegrator.hpp"
+#include "PyState.hpp"
 #include "PyRunner.hpp"
 #include "PyTransportSystem.hpp"
 #include "State.hpp"
@@ -36,31 +37,9 @@ int runManta(std::string const &);
 // if the python dict has the right keys in it
 namespace pybind11 {
 namespace detail {
-template <> struct type_caster<State> {
-public:
-  PYBIND11_TYPE_CASTER(State, const_name("dict[Sequence[float]]"));
-
-  bool load(handle src, bool) {
-    py::dict d = py::cast<py::dict>(src);
-    value.Variable = py::cast<Vector>(d["Variable"]);
-    value.Derivative = py::cast<Vector>(d["Derivative"]);
-    value.Flux = py::cast<Vector>(d["Flux"]);
-    value.Aux = py::cast<Vector>(d["Aux"]);
-    value.Scalars = py::cast<Vector>(d["Scalars"]);
-    return true;
-  }
-
-  static handle cast(const State &src, return_value_policy /* policy */,
-                     handle /* parent */) {
-    py::dict d;
-    d["Variable"] = src.Variable;
-    d["Derivative"] = src.Derivative;
-    d["Flux"] = src.Flux;
-    d["Aux"] = src.Aux;
-    d["Scalars"] = src.Scalars;
-    return d.release();
-  }
-};
+// State no longer crosses the boundary as a dict -- see PyState.hpp. GlobalState
+// still does: it is the vectorised/JAX path's currency, where a dict of
+// (nPoints, nVars) arrays is what the numpy and JAX code actually wants.
 template <> struct type_caster<GlobalState> {
 public:
   PYBIND11_TYPE_CASTER(GlobalState, const_name("dict[Sequence[float]]"));
@@ -151,6 +130,8 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
   // replaces setting self.nVars / self.isUpperDirichlet after construction,
   // which could not be validated and left the boundary flags indeterminate if
   // a case forgot them.
+  bindState(m);
+
   py::enum_<BoundaryKind>(m, "BoundaryKind")
       .value("Dirichlet", BoundaryKind::Dirichlet)
       .value("Neumann", BoundaryKind::Neumann);

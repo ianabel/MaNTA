@@ -3,6 +3,7 @@ os.environ['JAX_PLATFORM_NAME'] = 'cpu'
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import manta as MaNTA
 from JAXAdjointProblem import JAXAdjointProblem
 from typing import NamedTuple, Any
@@ -128,8 +129,15 @@ class JAXTransportSystem(MaNTA.TransportSystem):
         Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
     """
     @MaNTA_Decorator
-    def AuxGPrime( self, index, state, x , t):
-        return self.dAuxdvars(index, state, x, t, self.params)
+    def AuxGPrime( self, index, out, state, x, t):
+        d = self.dAuxdvars(index, state, x, t, self.params)
+        for j, v in enumerate(np.asarray(d.Variable)):
+            out.u[j] = float(v)
+        for j, v in enumerate(np.asarray(d.Derivative)):
+            out.q[j] = float(v)
+        if d.Aux is not None:
+            for j, v in enumerate(np.asarray(d.Aux)):
+                out.phi[j] = float(v)
     
     @abstractmethod
     def InitialValue( self, index, x ):

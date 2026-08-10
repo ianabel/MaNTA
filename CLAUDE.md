@@ -271,11 +271,18 @@ gives. Four pieces to know:
   enforces the extra hooks required when `nScalars > 0` or `nAux > 0`. Look up
   overrides with `override_for(name)`, never `method_overrides[name]` — the
   latter default-constructs a null `py::function` and calling it segfaults.
-* **Type casters.** `State` ↔ `dict` of 1-D arrays;
-  `GlobalState` ↔ `dict` of `(nPoints, nVars)` arrays. **The `GlobalState` caster
+* **State is a view, GlobalState is a dict.** A pointwise `State` reaches Python
+  as a non-owning window onto solver memory (`PyState.hpp`) with named fields —
+  `s.u`, `s.q`, `s.sigma`, `s.sigmaHat`, `s.phi`, `s.scalars` — each indexable by
+  position or by declared name. It is valid only inside the call; `np.array(v,
+  copy=True)` to keep anything, and note that `__array__` has to honour `copy`
+  or numpy hands back a view of a destroyed temporary. There is no way to build
+  one from Python, which is why the tests drive the pointwise path through the
+  batched entry point. `GlobalState` still crosses as a `dict` of
+  `(nPoints, nVars)` arrays — what the JAX path wants — and **its caster
   transposes in both directions** (C++ stores `(nVars, nPoints)`), so a
-  round-trip test cannot detect a missing transpose on its own — check the
-  orientation from inside a batched call instead.
+  round-trip test cannot detect a missing transpose; check the orientation from
+  inside a batched call instead.
 * **`PyRunner`** (`configure(dict)` / `run` / `run_ss` / `getSolution` / `G` /
   `getAdjointGradients`) is the API the optimisation drivers use, and the only
   route supporting repeated configure/run cycles in one process — it works by

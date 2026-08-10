@@ -41,26 +41,34 @@ class Recorder(MaNTA.TransportSystem):
         self.seen_batched = []
 
     def _record(self, i, state, x, t):
+        # Copied out: the view is a window onto solver memory and is only valid
+        # for the duration of this call.
         self.seen.append(
             {
                 "i": i,
                 "x": x,
                 "t": t,
-                "state": {k: np.array(v, copy=True) for k, v in state.items()},
+                "state": {
+                    "Variable": np.array(state.u, copy=True),
+                    "Derivative": np.array(state.q, copy=True),
+                    "Flux": np.array(state.sigma, copy=True),
+                    "Aux": np.array(state.phi, copy=True),
+                    "Scalars": np.array(state.scalars, copy=True),
+                },
             }
         )
 
     def SigmaFn(self, i, state, x, t):
         self._record(i, state, x, t)
-        return float(state["Variable"][i])
+        return float(state.u[i])
 
     def Sources(self, i, state, x, t):
         self._record(i, state, x, t)
-        return float(state["Derivative"][i])
+        return float(state.q[i])
 
     def dSigmaFn_du(self, i, state, x, t):
         self._record(i, state, x, t)
-        return np.asarray(state["Flux"], dtype=float)
+        return np.asarray(state.sigma, dtype=float)
 
     def dSigmaFn_dq(self, i, state, x, t):
         return np.zeros(self.nVars)
@@ -159,70 +167,124 @@ def make_global_state(nVars=NVARS, nPoints=NPOINTS, nAux=NAUX, nScalars=NSCALARS
 POSITIONS = [0.1 * (j + 1) for j in range(NPOINTS)]
 
 
-# --------------------------------------------------------- the State caster --
+# ----------------------------------------------------------- the State view --
+#
+# These used to hand C++ a dict and check it came back unchanged. A State is a
+# non-owning view of solver memory now, with no way to construct one from
+# Python, so the way in is the batched entry point: with no vectorised
+# override it falls back to the C++ serial loop, which slices the GlobalState
+# into pointwise States and calls the Python hook once per point.
 
 
-def test_pointwise_state_round_trips_unchanged():
-    """dict -> State -> dict must be the identity, field by field."""
+def test_the_view_shows_each_field_under_its_own_name():
     system = Recorder(nAux=NAUX, nScalars=NSCALARS)
-    original = make_state()
+    states = make_global_state()
 
-    MaNTA.TransportSystem.SigmaFn(system, 1, original, 0.375, 2.5)
+    MaNTA.TransportSystem.SigmaFn_v(system, 0, states, POSITIONS, 2.5)
 
-    assert len(system.seen) == 1
-    call = system.seen[0]
-    assert call["i"] == 1
-    assert call["x"] == pytest.approx(0.375)
-    assert call["t"] == pytest.approx(2.5)
-
-    for field, expected in original.items():
-        got = call["state"][field]
-        assert got.shape == np.shape(expected), f"{field}: {got.shape}"
-        assert np.allclose(got, expected), f"{field}: got {got}, want {expected}"
+    seen = system.seen[0]["state"]
+    assert np.allclose(seen["Variable"], states["Variable"][0, :])   # state.u
+    assert np.allclose(seen["Derivative"], states["Derivative"][0, :])  # state.q
+    assert np.allclose(seen["Flux"], states["Flux"][0, :])           # state.sigma
+    assert np.allclose(seen["Aux"], states["Aux"][0, :])             # state.phi
+    assert np.allclose(seen["Scalars"], states["Scalars"])           # state.scalars
 
 
-def test_pointwise_state_return_value_comes_back_to_cpp():
-    """The cast is only half the story -- the value must survive the return."""
-    system = Recorder()
-    state = make_state(nAux=0, nScalars=0)
+def test_the_value_read_through_the_view_comes_back_to_cpp():
+    """The view is only half the story -- the value must survive the return."""
+    system = Recorder(nAux=NAUX, nScalars=NSCALARS)
+    states = make_global_state()
 
-    # SigmaFn returns state["Variable"][i].
     for i in range(NVARS):
-        out = MaNTA.TransportSystem.SigmaFn(system, i, state, 0.0, 0.0)
-        assert out == pytest.approx(state["Variable"][i])
+        out = np.asarray(
+            MaNTA.TransportSystem.SigmaFn_v(system, i, states, POSITIONS, 0.0)
+        )
+        # SigmaFn returns state.u[i], one value per point.
+        assert np.allclose(out, states["Variable"][:, i])
 
 
-def test_pointwise_state_handles_empty_aux_and_scalars():
-    """nAux = nScalars = 0 gives zero-length arrays, not None.
-
-    This is the shape State.to_manta had to be fixed to produce: it used to
-    short-circuit on Scalars.size == 0 and return a 2-D (1, 0) array, which the
-    Vector caster rejects.
-    """
+def test_an_empty_field_is_a_zero_length_array_not_a_failure():
+    """nAux = nScalars = 0 leaves Eigen with a null data pointer, which is the
+    one case a naive view would hand to py::capsule and crash on."""
     system = Recorder(nAux=0, nScalars=0)
-    state = make_state(nAux=0, nScalars=0)
+    states = make_global_state(nAux=0, nScalars=0)
 
-    MaNTA.TransportSystem.SigmaFn(system, 0, state, 0.0, 0.0)
+    MaNTA.TransportSystem.SigmaFn_v(system, 0, states, POSITIONS, 0.0)
 
     seen = system.seen[0]["state"]
     assert seen["Aux"].shape == (0,)
     assert seen["Scalars"].shape == (0,)
 
 
-def test_scalars_survive_the_pointwise_boundary():
-    """nScalars > 0 puts a non-empty Scalars vector through the caster.
+def test_a_field_is_indexable_by_declared_name_as_well_as_position():
+    """The point of naming variables: s.u["density"] rather than s.u[0]."""
 
-    Scalars are the one field the two casters treat differently (the GlobalState
-    one goes through a raw buffer), so the pointwise path needs its own check.
-    """
-    system = Recorder(nAux=NAUX, nScalars=NSCALARS)
-    state = make_state()
+    class Named(Recorder):
+        def __init__(self):
+            MaNTA.TransportSystem.__init__(
+                self,
+                variables=[MaNTA.Field("density"), MaNTA.Field("temperature")],
+                aux=[MaNTA.Aux("potential")],
+            )
+            self.seen = []
+            self.seen_batched = []
+            self.by_name = []
 
-    MaNTA.TransportSystem.Sources(system, 0, state, 0.0, 0.0)
+        def SigmaFn(self, i, state, x, t):
+            self.by_name.append(
+                (state.u["density"], state.u["temperature"], state.phi["potential"])
+            )
+            return float(state.u[i])
 
-    seen = system.seen[-1]["state"]
-    assert seen["Scalars"].shape == (NSCALARS,)
-    assert np.allclose(seen["Scalars"], state["Scalars"])
+    system = Named()
+    states = make_global_state(nAux=1, nScalars=0)
+    MaNTA.TransportSystem.SigmaFn_v(system, 0, states, POSITIONS, 0.0)
+
+    for j, (density, temperature, potential) in enumerate(system.by_name):
+        assert density == pytest.approx(states["Variable"][j, 0])
+        assert temperature == pytest.approx(states["Variable"][j, 1])
+        assert potential == pytest.approx(states["Aux"][j, 0])
+
+
+def test_an_undeclared_name_says_what_is_declared():
+    class Named(Recorder):
+        def __init__(self):
+            MaNTA.TransportSystem.__init__(
+                self, variables=[MaNTA.Field("density"), MaNTA.Field("temperature")]
+            )
+            self.seen = []
+            self.seen_batched = []
+
+        def SigmaFn(self, i, state, x, t):
+            return float(state.u["dnesity"])  # typo, on purpose
+
+    system = Named()
+    states = make_global_state(nAux=0, nScalars=0)
+    with pytest.raises(RuntimeError, match="density"):
+        MaNTA.TransportSystem.SigmaFn_v(system, 0, states, POSITIONS, 0.0)
+
+
+def test_sigma_hat_is_the_negation_of_the_stored_flux():
+    """The sign convention, made visible: sigma is what the solver stores,
+    sigmaHat is what SigmaFn returned."""
+
+    class Flux(Recorder):
+        def __init__(self):
+            MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(NVARS))
+            self.seen = []
+            self.seen_batched = []
+            self.pairs = []
+
+        def SigmaFn(self, i, state, x, t):
+            self.pairs.append((state.sigma[i], state.sigmaHat[i]))
+            return 0.0
+
+    system = Flux()
+    states = make_global_state(nAux=0, nScalars=0)
+    MaNTA.TransportSystem.SigmaFn_v(system, 0, states, POSITIONS, 0.0)
+
+    for stored, physical in system.pairs:
+        assert physical == pytest.approx(-stored)
 
 
 # --------------------------------------------------- the GlobalState caster --
@@ -246,7 +308,7 @@ def test_global_state_is_transposed_on_the_way_into_cpp():
     )
 
     assert out.shape == (NPOINTS,)
-    # SigmaFn returns state["Variable"][0] = 10*j + 0.
+    # SigmaFn returns state.u[0] = 10*j + 0.
     assert np.allclose(out, states["Variable"][:, 0])
 
     assert len(system.seen) == NPOINTS

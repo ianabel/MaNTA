@@ -40,7 +40,7 @@ class Registered(MaNTA.TransportSystem):
         self.kappa = float(config["kappa"])
 
     def SigmaFn(self, i, state, x, t):
-        return self.kappa * state["Derivative"][i]
+        return self.kappa * state.q[i]
 
     def Sources(self, i, state, x, t):
         return 1.0

@@ -397,16 +397,16 @@ void SystemSolver::dAux_Mat( Eigen::Ref<Matrix> mat, DGSoln const& Y, Index inte
 
       State dG1( nVars, nScalars, nAux ),dG2( nVars, nScalars, nAux );
       ( problem->AuxGPrime )( Aux, dG1, Y_plus, y_plus, jt );
-      dG_du_vals1 = dG1.Variable;
-      dG_dq_vals1 = dG1.Derivative;
-      dG_dsigma_vals1 = dG1.Flux;
-      dG_dPhi_vals1 = dG1.Aux;
+      dG_du_vals1 = dG1.u();
+      dG_dq_vals1 = dG1.q();
+      dG_dsigma_vals1 = dG1.sigma();
+      dG_dPhi_vals1 = dG1.phi();
 
       ( problem->AuxGPrime )( Aux, dG2, Y_minus, y_minus, jt );
-      dG_du_vals2 = dG2.Variable;
-      dG_dq_vals2 = dG2.Derivative;
-      dG_dsigma_vals2 = dG2.Flux;
-      dG_dPhi_vals2 = dG2.Aux;
+      dG_du_vals2 = dG2.u();
+      dG_dq_vals2 = dG2.q();
+      dG_dsigma_vals2 = dG2.sigma();
+      dG_dPhi_vals2 = dG2.phi();
 
 
 

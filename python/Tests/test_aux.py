@@ -33,11 +33,11 @@ class AuxDiffusion(MaNTA.TransportSystem):
 
     # --- flux and sources ----------------------------------------------
     def SigmaFn(self, i, state, x, t):
-        return KAPPA * state["Derivative"][i]
+        return KAPPA * state.q[i]
 
     def Sources(self, i, state, x, t):
         # f(x) chosen so the steady state is driven, plus the aux coupling.
-        return state["Aux"][0] + 1.0
+        return state.phi[0] + 1.0
 
     def dSigmaFn_du(self, i, state, x, t):
         return np.zeros(self.nVars)
@@ -56,16 +56,13 @@ class AuxDiffusion(MaNTA.TransportSystem):
 
     # --- the auxiliary constraint  G = a - u^2 = 0 ----------------------
     def AuxG(self, i, state, x, t):
-        return state["Aux"][0] - state["Variable"][0] ** 2
+        return state.phi[0] - state.u[0] ** 2
 
-    def AuxGPrime(self, i, state, x, t):
-        return {
-            "Variable": np.array([-2.0 * state["Variable"][0]]),
-            "Derivative": np.zeros(self.nVars),
-            "Flux": np.zeros(self.nVars),
-            "Aux": np.array([1.0]),
-            "Scalars": np.zeros(0),
-        }
+    def AuxGPrime(self, i, out, state, x, t):
+        # Filled rather than returned: `out` is a view of the solver's buffer
+        # and arrives zeroed, so only the nonzero entries need writing.
+        out.u[0] = -2.0 * state.u[0]
+        out.phi[0] = 1.0
 
     def dSources_dPhi(self, i, state, x, t):
         return np.array([1.0])  # d(a + 1)/da
@@ -187,9 +184,9 @@ def test_aux_hooks_are_all_reached(tmp_path):
             self.counts["AuxG"] += 1
             return super().AuxG(i, state, x, t)
 
-        def AuxGPrime(self, i, state, x, t):
+        def AuxGPrime(self, i, out, state, x, t):
             self.counts["AuxGPrime"] += 1
-            return super().AuxGPrime(i, state, x, t)
+            return super().AuxGPrime(i, out, state, x, t)
 
         def dSources_dPhi(self, i, state, x, t):
             self.counts["dSources_dPhi"] += 1
@@ -220,10 +217,10 @@ class AuxWithoutDerivative(MaNTA.TransportSystem):
         MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1, nAux=1))
 
     def SigmaFn(self, i, state, x, t):
-        return KAPPA * state["Derivative"][i]
+        return KAPPA * state.q[i]
 
     def Sources(self, i, state, x, t):
-        return state["Aux"][0] + 1.0
+        return state.phi[0] + 1.0
 
     def dSigmaFn_du(self, i, state, x, t):
         return np.zeros(self.nVars)
@@ -241,7 +238,7 @@ class AuxWithoutDerivative(MaNTA.TransportSystem):
         return np.zeros(self.nVars)
 
     def AuxG(self, i, state, x, t):
-        return state["Aux"][0] - state["Variable"][0] ** 2
+        return state.phi[0] - state.u[0] ** 2
 
     def dSources_dPhi(self, i, state, x, t):
         return np.array([1.0])

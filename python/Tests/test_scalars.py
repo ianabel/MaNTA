@@ -85,11 +85,11 @@ class ScalarDiffusion(MaNTA.TransportSystem):
 
     # --- flux and sources ------------------------------------------------
     def SigmaFn(self, i, state, x, t):
-        return KAPPA * state["Derivative"][i]
+        return KAPPA * state.q[i]
 
     def Sources(self, i, state, x, t):
         # The scalar raises the source uniformly.
-        return S0 + state["Scalars"][0]
+        return S0 + state.scalars[0]
 
     def dSigmaFn_du(self, i, state, x, t):
         return np.zeros(self.nVars)
@@ -377,7 +377,7 @@ def test_a_scalar_system_missing_its_hooks_is_reported(tmp_path):
             MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1, nScalars=1))
 
         def SigmaFn(self, i, state, x, t):
-            return KAPPA * state["Derivative"][i]
+            return KAPPA * state.q[i]
 
         def Sources(self, i, state, x, t):
             return S0

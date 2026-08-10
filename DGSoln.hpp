@@ -101,17 +101,17 @@ public:
         State out(nVars, nScalars, nAux);
         for (Index i = 0; i < nVars; ++i)
         {
-            out.Variable[i] = u_[i](x);
-            out.Derivative[i] = q_[i](x);
-            out.Flux[i] = sigma_[i](x);
+            out.u(i) = u_[i](x);
+            out.q(i) = q_[i](x);
+            out.sigma(i) = sigma_[i](x);
         }
         for (Index i = 0; i < nScalars; ++i)
         {
-            out.Scalars[i] = mu_[i];
+            out.scalar(i) = mu_[i];
         }
         for (Index i = 0; i < nAux; ++i)
         {
-            out.Aux[i] = aux_[i](x);
+            out.phi(i) = aux_[i](x);
         }
         return out;
     }
@@ -163,17 +163,17 @@ public:
         State out(nVars, nScalars, nAux);
         for (Index i = 0; i < nVars; ++i)
         {
-            out.Variable[i] = u_[i].getCoeff(cell).second(node);
-            out.Derivative[i] = q_[i].getCoeff(cell).second(node);
-            out.Flux[i] = sigma_[i].getCoeff(cell).second(node);
+            out.u(i) = u_[i].getCoeff(cell).second(node);
+            out.q(i) = q_[i].getCoeff(cell).second(node);
+            out.sigma(i) = sigma_[i].getCoeff(cell).second(node);
         }
         for (Index i = 0; i < nScalars; ++i)
         {
-            out.Scalars[i] = mu_[i];
+            out.scalar(i) = mu_[i];
         }
         for (Index i = 0; i < nAux; ++i)
         {
-            out.Aux[i] = aux_[i].getCoeff(cell).second(node);
+            out.phi(i) = aux_[i].getCoeff(cell).second(node);
         }
         return out;
     }
@@ -307,8 +307,8 @@ public:
                     State s(nVars, nScalars);
                     for (Index j = 0; j < nVars; ++j)
                     {
-                        s.Variable[j] = u_[j].coeffs[cellIndex].second(i);
-                        s.Derivative[j] = q_[j].coeffs[cellIndex].second(i);
+                        s.u(j) = u_[j].coeffs[cellIndex].second(i);
+                        s.q(j) = q_[j].coeffs[cellIndex].second(i);
                     }
                     // Sigma isn't allowed to depend on scalars so we don't need to fill them in s
                     // Now just eval on Node

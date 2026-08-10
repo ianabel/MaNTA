@@ -71,7 +71,7 @@ class ParametricDiffusion(MaNTA.TransportSystem):
         self.p = np.asarray(p, dtype=float)
 
     def SigmaFn(self, i, state, x, t):
-        return self.p[P_KAPPA] * state["Derivative"][i]
+        return self.p[P_KAPPA] * state.q[i]
 
     def Sources(self, i, state, x, t):
         return self.p[P_SOURCE]

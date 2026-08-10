@@ -28,7 +28,7 @@ class Diffusion(MaNTA.TransportSystem):
         MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1))
 
     def SigmaFn(self, i, state, x, t):
-        return state["Derivative"][i]
+        return state.q[i]
 
     def Sources(self, i, state, x, t):
         return 1.0

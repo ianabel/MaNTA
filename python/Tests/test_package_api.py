@@ -39,7 +39,7 @@ class DeclarativeDiffusion(manta.TransportSystem):
         self.kappa = kappa
 
     def SigmaFn(self, i, state, x, t):
-        return self.kappa * state["Derivative"][0]
+        return self.kappa * state.q[0]
 
     def Sources(self, i, state, x, t):
         return 0.0

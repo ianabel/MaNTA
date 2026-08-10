@@ -165,24 +165,60 @@ enforces the extra hooks that become mandatory when ``nScalars > 0`` or
 State and GlobalState
 ---------------------
 
-The two C++ state types cross the boundary as dictionaries:
+A pointwise ``State`` is an object with named fields:
 
 .. list-table::
    :header-rows: 1
-   :widths: 26 74
+   :widths: 22 78
 
-   * - C++ type
-     - Python form
-   * - ``State``
-     - A dict of 1-D arrays: ``"Variable"``, ``"Derivative"``, ``"Flux"``,
-       ``"Aux"``, ``"Scalars"``. Each is indexed by variable.
-   * - ``GlobalState``
-     - A dict of 2-D arrays, each ``(nPoints, nVars)``.
+   * - Field
+     - Meaning
+   * - ``s.u``
+     - the variables
+   * - ``s.q``
+     - :math:`\partial_x u`
+   * - ``s.sigma``
+     - the **stored** flux, :math:`-\hat\sigma`
+   * - ``s.sigmaHat``
+     - the **physical** flux, what ``SigmaFn`` returned (read-only)
+   * - ``s.phi``
+     - the auxiliary variables
+   * - ``s.scalars``
+     - the global scalars
+
+Each is indexable by position or by the name the case declared, and converts to
+a numpy array:
+
+.. code-block:: python
+
+   def SigmaFn(self, i, s, x, t):
+       return self.kappa * s.q["density"]     # or s.q[0]
+
+This replaced a dict of five 1-D arrays keyed ``"Variable"``, ``"Derivative"``,
+``"Flux"``, ``"Aux"``, ``"Scalars"``, so the idiom was
+``state["Derivative"][0]``. That named storage rather than meaning, gave no hint
+that ``"Flux"`` held the *negated* flux, turned a mistyped key into a KeyError
+deep inside the first residual evaluation, and copied all five vectors on every
+call — once per point, per hook.
+
+.. warning::
+
+   A ``State`` is a **view of solver memory**, valid only inside the call it was
+   passed to. To keep values past the hook's return, copy them:
+   ``np.array(s.u, copy=True)``. Keeping the view itself, or a ``np.asarray``
+   view of one of its fields, reads freed memory.
+
+   There is deliberately no way to construct one from Python.
+
+``GlobalState`` — the batched form — is still a dict of ``(nPoints, nVars)``
+arrays keyed the old way. That is what the vectorised and JAX paths actually
+want, and the keys stay because a 2-D array of every point is a different
+object from a view of one point.
 
 .. warning::
 
    The ``GlobalState`` caster **transposes in both directions** — C++ stores
-   ``(nVars, nPoints)`` and Python sees ``(nPoints, nVars)``. A round-trip test
+   ``(nVars, nPoints)`` and Python sees ``(nPoints, nVars)``. A round-trip
    therefore cannot detect a missing transpose; to check orientation, look at the
    array shape from inside a batched call.
 

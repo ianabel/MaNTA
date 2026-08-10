@@ -8,6 +8,7 @@
 #include <boost/math/quadrature/gauss.hpp>
 
 #include "AdjointProblem.hpp"
+#include "PyState.hpp"
 
 namespace py = pybind11;
 
@@ -133,7 +134,7 @@ public:
         "use vectorized version dg instead.");
     // if (!initialized)
     //     initializeOverrides();
-    // out = method_overrides["dgFn_du"](i, s, x).cast<Values>();
+    // out = method_overrides["dgFn_du"](i, StateView(const_cast<State &>(s)), x).cast<Values>();
   };
   void dgFn_dq(Index i, VectorRef out, const State &s, Position x) override {
     throw std::runtime_error(
@@ -141,7 +142,7 @@ public:
         "use vectorized version dg instead.");
     // if (!initialized)
     //     initializeOverrides();
-    // out = method_overrides["dgFn_dq"](i, s, x).cast<Values>();
+    // out = method_overrides["dgFn_dq"](i, StateView(const_cast<State &>(s)), x).cast<Values>();
   };
   void dgFn_dsigma(Index i, VectorRef out, const State &s,
                    Position x) override {
@@ -155,7 +156,7 @@ public:
   void dgFn_dphi(Index i, VectorRef out, const State &s, Position x) override {
     if (!initialized)
       initializeOverrides();
-    out = method_overrides["dgFn_dphi"](i, s, x).cast<Values>();
+    out = method_overrides["dgFn_dphi"](i, StateView(const_cast<State &>(s)), x).cast<Values>();
   };
 
   void dg(Index gIndex, GlobalState &out, GlobalState const &states,
@@ -291,7 +292,8 @@ public:
                Position x) override {
     if (!initialized)
       initializeOverrides();
-    out = method_overrides["dAux_dp"](i, pIndex, s, x).cast<Value>();
+    out = method_overrides["dAux_dp"](i, pIndex, StateView(const_cast<State &>(s)), x)
+              .cast<Value>();
   }
 
   std::string getName(Index pIndex) const override {

@@ -2,6 +2,7 @@
 #define PYTRANSPORTSYSTEM_HPP
 
 #include "PyIntegrator.hpp"
+#include "PyState.hpp"
 #include "TransportSystem.hpp"
 #include "Types.hpp"
 #include "extern/pybind11/include/pybind11/pybind11.h"
@@ -179,6 +180,16 @@ public:
   /// of the names used at the call sites below -- the "_v" variants in
   /// particular -- are never inserted by initializeOverrides at all, so this is
   /// not a hypothetical.
+  /// Wrap a State so Python sees named, name-indexable fields rather than a
+  /// dict of five arrays. Non-owning, so this must not outlive the call.
+  ///
+  /// const_cast because the hooks take `const State &` but the view is also
+  /// what an out-parameter is filled through; nothing writes to a field of a
+  /// state passed as input.
+  StateView view(const State &s) const {
+    return StateView(const_cast<State &>(s), spec());
+  }
+
   /// The override, or nullptr if the subclass did not provide one.
   ///
   /// For hooks where not writing one is a legitimate answer -- a derivative
@@ -257,7 +268,7 @@ public:
       initializeOverrides();
     try {
       py::gil_scoped_acquire gil;
-      return override_for("SigmaFn")(i, s, x, t).cast<Value>();
+      return override_for("SigmaFn")(i, view(s), x, t).cast<Value>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate SigmaFn: ") +
@@ -290,7 +301,7 @@ public:
 
     try {
       py::gil_scoped_acquire gil;
-      return override_for("Sources")(i, s, x, t).cast<Value>();
+      return override_for("Sources")(i, view(s), x, t).cast<Value>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate Sources: ") +
@@ -328,7 +339,7 @@ public:
       py::gil_scoped_acquire gil;
       // Absent means identically zero, and out arrives zeroed.
       if (auto *f = optional_override("dSigmaFn_du"))
-        out = (*f)(i, s, x, t).cast<Values>();
+        out = (*f)(i, view(s), x, t).cast<Values>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate dSigmaFn_du: ") +
@@ -343,7 +354,7 @@ public:
       py::gil_scoped_acquire gil;
       // Absent means identically zero, and out arrives zeroed.
       if (auto *f = optional_override("dSigmaFn_dq"))
-        out = (*f)(i, s, x, t).cast<Values>();
+        out = (*f)(i, view(s), x, t).cast<Values>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate dSources_dq: ") +
@@ -360,7 +371,7 @@ public:
       py::gil_scoped_acquire gil;
       // Absent means identically zero, and v arrives zeroed.
       if (auto *f = optional_override("dSources_du"))
-        v = (*f)(i, s, x, t).cast<Values>();
+        v = (*f)(i, view(s), x, t).cast<Values>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate dSources_du: ") +
@@ -377,7 +388,7 @@ public:
       py::gil_scoped_acquire gil;
       // Absent means identically zero, and v arrives zeroed.
       if (auto *f = optional_override("dSources_dq"))
-        v = (*f)(i, s, x, t).cast<Values>();
+        v = (*f)(i, view(s), x, t).cast<Values>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate dSources_dq: ") +
@@ -393,7 +404,7 @@ public:
       py::gil_scoped_acquire gil;
       // Absent means identically zero, and v arrives zeroed.
       if (auto *f = optional_override("dSources_dsigma"))
-        v = (*f)(i, s, x, t).cast<Values>();
+        v = (*f)(i, view(s), x, t).cast<Values>();
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string(
@@ -480,12 +491,17 @@ public:
   }
 
   Value AuxG(Index i, const State &s, Position x, Time t) override {
-    if (nAux > 0) {
-      PYBIND11_OVERRIDE_PURE(Value, TransportSystem, AuxG, i, s, x, t);
-    } else {
-      throw std::runtime_error("AuxG called with nAux <= 0"); 
-    }
-    throw std::runtime_error("Control reached beyond PYBIND11_OVERRIDE_PURE in AuxG. This should never happen");
+    if (nAux <= 0)
+      throw std::runtime_error("AuxG called with nAux <= 0");
+
+    // Explicit rather than PYBIND11_OVERRIDE_PURE, which would pass the State
+    // through the type caster instead of as a named view.
+    py::gil_scoped_acquire gil;
+    py::function f = py::get_override(this, "AuxG");
+    if (!f)
+      throw std::runtime_error(
+          "This physics case declares auxiliary variables, so it must implement AuxG.");
+    return f(i, view(s), x, t).cast<Value>();
   }
 
   void AuxGPrime(Index i, GlobalState &out, GlobalState const &states,
@@ -514,7 +530,10 @@ public:
     if (!initialized)
       initializeOverrides();
     py::gil_scoped_acquire gil;
-    out = override_for("AuxGPrime")(i, s, x, t).cast<State>();
+    // The out-parameter is passed and filled rather than returned: a StateView
+    // is a window onto solver memory and cannot be constructed from Python, and
+    // `out` already arrives zeroed so a hook writes only its nonzero entries.
+    override_for("AuxGPrime")(i, view(out), view(s), x, t);
   }
 
   void dSources_dPhi(Index i, VectorRef v, const State &s, Position x,
@@ -526,7 +545,7 @@ public:
     if (!initialized)
       initializeOverrides();
     py::gil_scoped_acquire gil;
-    v = override_for("dSources_dPhi")(i, s, x, t).cast<Values>();
+    v = override_for("dSources_dPhi")(i, view(s), x, t).cast<Values>();
   }
 
   void dSigma_dPhi(Index i, VectorRef v, const State &s, Position x,
@@ -538,7 +557,7 @@ public:
     if (!initialized)
       initializeOverrides();
     py::gil_scoped_acquire gil;
-    v = override_for("dSigma_dPhi")(i, s, x, t).cast<Values>();
+    v = override_for("dSigma_dPhi")(i, view(s), x, t).cast<Values>();
   }
 
   Value InitialScalarValue(Index s) const override {
@@ -603,7 +622,7 @@ public:
     if (!initialized)
       initializeOverrides();
 
-    v = override_for("dSources_dScalars")(s, state, x, t).cast<Vector>();
+    v = override_for("dSources_dScalars")(s, view(state), x, t).cast<Vector>();
   }
   std::unique_ptr<AdjointProblem> createAdjointProblem() override {
     PYBIND11_OVERRIDE(std::unique_ptr<AdjointProblem>, TransportSystem,

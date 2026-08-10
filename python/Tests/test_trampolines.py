@@ -35,10 +35,10 @@ class ScalarSystem(MaNTA.TransportSystem):
         MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1))
 
     def SigmaFn(self, i, state, x, t):
-        return _sigma(state["Variable"][i], state["Derivative"][i])
+        return _sigma(state.u[i], state.q[i])
 
     def Sources(self, i, state, x, t):
-        return _source(state["Variable"][i])
+        return _source(state.u[i])
 
     def dSigmaFn_du(self, i, state, x, t):
         return np.full(self.nVars, ALPHA)
@@ -126,7 +126,7 @@ class IncompleteSystem(MaNTA.TransportSystem):
         MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1))
 
     def SigmaFn(self, i, state, x, t):
-        return state["Derivative"][i]
+        return state.q[i]
 
     # Sources and every derivative are missing.
 

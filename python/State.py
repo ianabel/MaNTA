@@ -39,6 +39,18 @@ class State(eqx.Module):
 
     @classmethod
     def from_manta(cls, manta_state):
+        # The pointwise hooks are handed a manta.State -- a named view of one
+        # point -- while the batched ones still get a dict of (nPoints, nVars)
+        # arrays. Only the batched form broadcasts the scalars across points.
+        if hasattr(manta_state, "u"):
+            return cls(
+                Variable_=jnp.asarray(manta_state.u),
+                Derivative_=jnp.asarray(manta_state.q),
+                Flux_=jnp.asarray(manta_state.sigma),
+                Aux_=jnp.asarray(manta_state.phi),
+                Scalars_=jnp.asarray(manta_state.scalars),
+            )
+
         shape = manta_state["Variable"].shape
         dp = shape[0]
         nscalars = (
