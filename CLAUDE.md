@@ -476,6 +476,48 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
   `-Werror` is on, and Eigen's own headers do trip `-Wunused-but-set-variable`
   under clang — reachable only from the pybind11 build, which pulls in
   `SparseCore`. Adding a dependency with `-I` re-arms that.
+* **...but never `-isystem` a directory the compiler already searches.** Go through
+  `$(call sysinclude,DIR)` in `Makefile.config`, never a bare `-isystem`. Passing a
+  default system directory is not a no-op: gcc and clang both de-duplicate it,
+  dropping the directory from its proper place at the *end* of the system chain and
+  searching it where the `-isystem` appeared — ahead of the libstdc++ headers.
+  `<cstdlib>` then does `#include_next <stdlib.h>`, which only considers directories
+  *after* the one holding it, so every translation unit dies with
+
+  ```
+  /usr/include/c++/16/cstdlib:83:15: fatal error: stdlib.h: No such file or directory
+     83 | #include_next <stdlib.h>
+  ```
+
+  `NETCDF_DIR=/usr` did exactly that, which is what a package-manager install means
+  on Debian/Ubuntu, and `EIGEN_DIR=/usr/include` does the same. Note the asymmetry:
+  `-I` is safe here — gcc documents that an `-I` naming a standard system directory
+  "is ignored. The directory is still searched but as a system directory at its
+  normal position" — so the fix is to filter, not to downgrade to `-I`, which would
+  re-arm the `-Werror` problem above. **`NETCDF_DIR`/`NETCDF_CXX_DIR` should be
+  unset for a system install**; with neither set, `Makefile.config` asks pkg-config.
+  `sysinclude` compares canonically because clang reports its C++ directories as
+  `/usr/lib/gcc/x86_64-linux-gnu/16/../../../../include/c++/16` where gcc reports
+  `/usr/include/c++/16`, and a probe that fails filters nothing — degrading to the
+  old behaviour rather than to a new error. It cannot be replaced by a "does this
+  directory hold the header we want" test: `/usr/include` really does hold
+  `netcdf.h`. CI's `Makefile.local` leaves `NETCDF_DIR` unset, which is the one
+  configuration where this is invisible, so a workflow step compiles one object with
+  `NETCDF_DIR=/usr` on every matrix leg — on every leg because the probe is a
+  compiler command whose output format differs between gcc and clang.
+* **A comma inside `$(if ...)` is an argument separator, not text.** `syslibdir` in
+  `Makefile.config` writes `-Wl$(comma)-rpath` rather than a literal `-Wl,-rpath`
+  for that reason. Spelled literally, make reads the body of
+  `$(if $(strip $(1)),-L$(1) -Wl,-rpath $(1))` as *then:* `-L$(1) -Wl` and *else:*
+  `-rpath $(1)`, so an empty argument emitted a bare `-rpath` that swallowed the
+  next flag and a real one silently lost its rpath. The `$(comma)` looks like
+  clutter and is load-bearing; don't inline it.
+* **`make -B` does not work in this tree.** `--always-make` tries to remake every
+  target including the included `Makefile.local`, whose rule is a bare
+  `$(error You need to provide a Makefile.local...)`, so `-B` fails immediately with
+  that message no matter what you asked for. To see the recipe for an
+  already-built target, delete it, or read the expanded variables from a throwaway
+  makefile that `include`s `Makefile.config` and `$(info)`s them.
 * **`COMPILER_ID` in `Makefile.config`** distinguishes gcc from clang for the few
   flags that differ: `-fprofile-abs-path` (gcc-only, a hard error on clang),
   `-fno-inline-small-functions` / `-fno-default-inline` (gcc-only, ignored with a
@@ -515,6 +557,31 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
   alike.
 * **Tests reach private `SystemSolver` members** through `MANTA_TEST_PRIVATE`,
   which a `-DTEST` build widens to `public`. No friend declarations needed.
+* **The extension's ABI suffix comes from `PYTHON_CONFIG`, and the venv need not
+  agree with it.** `make python` names the module from
+  `$(PYTHON_CONFIG) --extension-suffix` and takes its headers from the same
+  program, so the two always match each other — but not necessarily the interpreter
+  that will import them. `PYTHON_CONFIG` prefers a `pythonX.Y-config` matching
+  `.venv`, and falls back to plain `python3-config` when there is none; that follows
+  the distribution's unversioned `python3` symlink. On a box whose `python3` has
+  moved ahead of the venv, the fallback builds `_manta.cpython-314-*.so` while
+  `.venv` runs 3.13, and `make python` *succeeds* while `python_tests`,
+  `stubs-check` and `typecheck` all fail — each with a message pointing somewhere
+  else. pytest exits "manta package not importable. Build it with `make python`",
+  which you just did. `typecheck` reports an `ImportError` for `_manta` dressed up
+  as "most likely due to a circular import", which sends you into `__init__.py`.
+  `stubs-check` is the worst of the three: regenerating the stub needs the import
+  too, so it fails to write one and then reports `_manta.pyi is stale -- run 'make
+  stubs' and commit the result`, which is a claim about a committed file that is
+  in fact fine. Check `ls python/manta/*.so` against
+  `python3 -c 'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX"))'`
+  before believing any of those three failures. The fix is the matching
+  `pythonX.Y-dev` package, or `make venv VENV_PYTHON=... VENV_CREATE_FLAGS=--clear`;
+  the header directory alone is not enough, since a `/usr/include/python3.13` left
+  behind by other packages can exist with no `Python.h` in it. `Makefile:34-51`
+  documents the mechanism, and `make python PYTHON_CONFIG=pythonX.Y-config`
+  overrides it — but only if that program is installed, because `pythonX.Y-config`
+  derives its prefix from `argv[0]`.
 * **gcov counts a templated line once per instantiation**, which makes
   `NetCDFIO.hpp` and `util/trapezoid.hpp` look far worse than they are. Judge
   those by distinct uncovered lines; `Tests/README.md` has the numbers.
