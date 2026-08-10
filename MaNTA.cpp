@@ -1,3 +1,4 @@
+#include <dlfcn.h> // physics plugins loaded from the config
 #include <memory>
 #include <boost/math/tools/roots.hpp>
 #include <toml.hpp>
@@ -190,6 +191,29 @@ int runManta(std::string const &fname)
 		throw std::invalid_argument("TransportSystem needs to specified exactly once in the general configuration section");
 
 	std::string ProblemName = config.at("TransportSystem").as_string();
+
+	// Physics cases built outside this tree.
+	//
+	// A case registers itself from a static initialiser, so loading the shared
+	// object is all that is needed -- its PhysicsCaseRegister runs on dlopen and
+	// inserts into the same process-global map the built-in cases use. This has
+	// to happen before InstantiateProblem, and duplicate names now throw rather
+	// than being dropped, so a plugin colliding with a built-in says so.
+	if (config.count("PhysicsPlugins") == 1)
+	{
+		for (auto const &entry : config.at("PhysicsPlugins").as_array())
+		{
+			const std::string path = entry.as_string();
+			// RTLD_GLOBAL so a plugin can be linked against another plugin's
+			// symbols; RTLD_NOW so an unresolved symbol is reported here rather
+			// than at the first call into the case.
+			if (dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL) == nullptr)
+			{
+				logmsg<LOG_LEVEL::ERROR>("Could not load physics plugin {}: {}", path, dlerror());
+				return 1;
+			}
+		}
+	}
 
 	// Convert string to TransportSystem* instance
 

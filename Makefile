@@ -78,8 +78,18 @@ DEPFILES = $(OBJECTS:.o=.d) $(PHYSICS_OBJECTS:.o=.d) main.d MaNTA.d $(PYTHON_DEP
 
 -include $(DEPFILES)
 
+# -rdynamic puts the solver's own symbols in the dynamic symbol table, which is
+# what lets a dlopen'd physics plugin resolve against them.
+#
+# A plugin must NOT link libmanta.so. The solver links the objects directly, so
+# a plugin that also pulled in libmanta would get a *second* copy of
+# PhysicsCases::map and register itself into a map the solver never reads --
+# silently, with the case simply missing at run time. Compile a plugin against
+# the headers alone and leave its MaNTA symbols undefined; the loader binds them
+# to the host process. (libmanta.so is for embedding the solver in another
+# program, which is a different job.)
 $(SOLVER): main.o MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(HEADERS)
-	$(CXX) $(CXXFLAGS) -g -o $(SOLVER) main.o MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -g -rdynamic -o $(SOLVER) main.o MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
 
 Tests/UnitTests/UnitTests: $(SOLVER)
 	$(MAKE) -C Tests/UnitTests all
@@ -100,9 +110,84 @@ python: $(PYTHON_OUTPUT)
 $(PYTHON_OUTPUT): Python.cpp PyRunner.cpp MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(PYTHON_HEADERS) $(PYTHON_OBJECTS)
 	$(CXX) $(CXXFLAGS) $(PYTHON_FLAGS) $$($(PYTHON_CONFIG) --includes) $(JAX_XLA_INCLUDES) -isystem $(realpath extern/pybind11/include) -shared -fPIC -fvisibility=hidden -o $@ Python.cpp PyRunner.cpp MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
 
+# ---------------------------------------------------------------- install --
+#
+# Enough for a physics case to be built outside this tree: the headers it
+# includes, a shared library with the solver and the registry in it, and a
+# pkg-config file so the case's own build can find both.
+#
+# A plugin is an ordinary shared object containing REGISTER_PHYSICS_IMPL; the
+# solver dlopens the ones named by the config's PhysicsPlugins key, and the
+# case's static initialiser registers it on load. Build one with:
+#
+#     g++ -shared -fPIC $$(pkg-config --cflags manta) MyCase.cpp -o libmycase.so
+#
+PREFIX ?= /usr/local
+INSTALL_INCLUDE = $(PREFIX)/include/manta
+INSTALL_LIB = $(PREFIX)/lib
+LIBMANTA = libmanta.so
+
+# Every header a physics case can reach transitively, keeping the directory
+# layout so the #includes inside them still resolve.
+# sort, for its side effect of removing duplicates: several of these are
+# already in $(HEADERS), and `install` refuses to overwrite a just-created file.
+INSTALL_HEADERS = $(sort $(HEADERS) Types.hpp State.hpp SystemSpec.hpp DGApprox.hpp \
+                         PyIntegrator.hpp PyGrid.hpp Postprocessing.hpp NetCDFIO.hpp \
+                         AdjointProblem.hpp)
+
+$(LIBMANTA): $(OBJECTS) $(PHYSICS_OBJECTS) MaNTA.o
+	$(CXX) $(CXXFLAGS) -shared -fPIC -o $@ $(OBJECTS) $(PHYSICS_OBJECTS) MaNTA.o $(LDFLAGS)
+
+# The flags a plugin MUST be compiled with, not merely may be.
+#
+# Eigen's fixed-size types are aligned according to the widest vector unit the
+# compiler is told about, and its expression templates are inlined into both
+# sides of the boundary. A plugin built without -march=native therefore lays out
+# and loads Eigen objects differently from a core built with it, and the symptom
+# is not a link error but a SIGSEGV inside an aligned AVX-512 load
+# (_mm512_load_pd) the first time the solver touches the plugin's state.
+# -DEIGEN_USE_BLAS is here for the same reason: it swaps in different product
+# specialisations, so the two sides must agree.
+#
+# -march=native is deliberately recorded as the *concrete* architecture the core
+# was built for, so a plugin compiled on a different machine is rejected by the
+# compiler rather than mis-aligned at run time.
+MANTA_ABI_FLAGS = -DEIGEN_USE_BLAS -march=$(shell $(CXX) -march=native -Q --help=target 2>/dev/null | awk '/^  -march=/{print $$2; exit}')
+
+manta.pc: Makefile
+	@printf 'prefix=%s\n' "$(PREFIX)" > $@
+	@printf 'includedir=$${prefix}/include/manta\n' >> $@
+	@printf 'libdir=$${prefix}/lib\n\n' >> $@
+	@printf 'Name: manta\n' >> $@
+	@printf 'Description: Maryland Nonlinear Transport Analyzer\n' >> $@
+	@printf 'Version: 0.1.0\n' >> $@
+	@# Both: -I${prefix}/include so a case can write the namespaced
+	@# <manta/PhysicsCases.hpp>, and -I${includedir} so the headers' own
+	@# quoted includes of each other resolve when included from elsewhere.
+	@printf 'Cflags: -I$${prefix}/include -I$${includedir} --std=$(STD) $(MANTA_ABI_FLAGS)\n' >> $@
+	@printf 'Libs: -L$${libdir} -lmanta\n' >> $@
+
+install: $(LIBMANTA) manta.pc
+	install -d $(INSTALL_INCLUDE) $(INSTALL_INCLUDE)/util $(INSTALL_LIB) $(INSTALL_LIB)/pkgconfig
+	install -m 644 $(INSTALL_HEADERS) $(INSTALL_INCLUDE)
+	install -m 644 util/*.hpp $(INSTALL_INCLUDE)/util 2>/dev/null || true
+	install -m 755 $(LIBMANTA) $(INSTALL_LIB)
+	install -m 644 manta.pc $(INSTALL_LIB)/pkgconfig
+	@echo "Installed to $(PREFIX). Build a physics plugin with:"
+	@echo "  g++ -shared -fPIC \$$(pkg-config --cflags manta) MyCase.cpp -o libmycase.so"
+	@echo "and name it in your config's PhysicsPlugins array. Do not link -lmanta:"
+	@echo "the plugin's MaNTA symbols bind to the solver process at dlopen." 
+
+uninstall:
+	rm -rf $(INSTALL_INCLUDE)
+	rm -f $(INSTALL_LIB)/$(LIBMANTA) $(INSTALL_LIB)/pkgconfig/manta.pc
+
+.PHONY: install uninstall
+
 clean: clean_data
 	$(MAKE) -C Tests/UnitTests clean
 	rm -f $(SOLVER) main.o MaNTA.o $(OBJECTS) $(DEPFILES)
+	rm -f $(LIBMANTA) manta.pc
 	# Wildcards, not the PHYSICS_OBJECTS variable: sweeps up orphaned .o files
 	# left behind by physics cases whose sources have since been deleted. (Named
 	# rather than referenced because make expands variables in recipe comments
