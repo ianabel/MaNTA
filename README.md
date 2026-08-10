@@ -97,7 +97,18 @@ If you're happy with this, let's proceed!
  3. Install [SUNDIALS](https://computing.llnl.gov/projects/sundials) and edit Makefile.local to set `SUNDIALS_DIR` to the location you have installed the Sundials library in. If you are only using SUNDIALS for MaNTA, a quick intro to installing SUNDIALS is included below.
  4. Install [NETCDF C and NETCDF C++](https://www.unidata.ucar.edu/software/netcdf/). On Ubuntu or Debian these can be installed from the package manager: `apt-get install libnetcdf-dev libnetcdff-dev libnetcdf-c++4-dev libnetcdf-c++4-1`. 
  On MacOS, you can use either `brew install netcdf` or `conda install -c anaconda netcdf4` to install the C version, and `conda install -c conda-forge netcdf-cxx4` to install the C++ version. 
- Please specify in `Makefile.local` where these libraries are installed. For example, `NETCDF_DIR = /usr/local/Cellar/netcdf/4.8.0_2` and `NETCDF_CXX_DIR = /Users/<username>/miniconda3` if you used `brew` and `conda` to install on MacOS.
+
+    A package-manager install needs no `Makefile.local` entry at all: it lands in
+    `/usr`, which every compiler already searches, and `Makefile.config` asks
+    `pkg-config` for the rest. Set `NETCDF_DIR` (and `NETCDF_CXX_DIR`, if the C++
+    binding is under a different prefix) only for an install somewhere the compiler
+    would not find on its own -- for example `NETCDF_DIR =
+    /usr/local/Cellar/netcdf/4.8.0_2` and `NETCDF_CXX_DIR =
+    /Users/<username>/miniconda3` if you used `brew` and `conda` on MacOS.
+
+    Naming a prefix the compiler already searches is harmless, but it used to break
+    the build outright, so `NETCDF_DIR = /usr` in an old `Makefile.local` can simply
+    be deleted.
  5. Set any other options, e.g. setting the variable `DEBUG` to any value will build a version that you can use to develop MaNTA and that includes debug information.
  6. Run `make`.
  7. Check the unit tests with `make test`. 

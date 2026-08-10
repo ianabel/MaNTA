@@ -191,6 +191,28 @@ jobs:
         if: matrix.cxx == 'g++-14'
         run: make typecheck
 
+      # Naming a prefix the compiler already searches must be a no-op. It was not:
+      # -isystem /usr/include makes gcc and clang drop /usr/include from the end of
+      # the system chain and search it ahead of the libstdc++ headers, so <cstdlib>'s
+      # `#include_next <stdlib.h>` finds nothing and every translation unit fails.
+      # The Makefile.local written above leaves NETCDF_DIR unset, which is the one
+      # configuration where the bug is invisible -- hence this step.
+      #
+      # Every leg, not one: the filter is built from a compiler probe whose output
+      # format differs between gcc and clang, so it has to be exercised on both.
+      # NETCDF_DIR goes on the command line rather than into Makefile.local so the
+      # rest of the configuration is untouched, and Config.o is removed either side
+      # so no later step inherits it.
+      - name: A system-prefix NETCDF_DIR is a no-op
+        run: |
+          rm -f Config.o
+          if make -n MaNTA NETCDF_DIR=/usr | grep -E -- '-isystem /usr/include( |$)'; then
+            echo "::error::NETCDF_DIR=/usr put /usr/include on the compile line as -isystem"
+            exit 1
+          fi
+          make Config.o NETCDF_DIR=/usr
+          rm -f Config.o
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
