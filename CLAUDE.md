@@ -16,7 +16,9 @@ in detail — read it before adding tests or interpreting a coverage number.
 make MaNTA                # the solver only (bare `make` also builds python + runs tests)
 make test                 # Boost.Test C++ unit tests
 make regression_tests     # solver over Tests/RegressionTests/*.conf vs checked-in .ref.nc
-make python               # the pybind11 extension, python/MaNTA<suffix>.so
+make python               # the manta package, python/manta/_manta<suffix>.so
+make install PREFIX=...   # headers under include/manta, libmanta.so, manta.pc
+pip install .             # the `manta` package and the `manta` console script
 make python_tests         # pytest suite for that extension
 make coverage             # rebuild instrumented, run all three suites, write coverage/
 make clean                # also sweeps orphaned PhysicsCases/*.o and .d files,
@@ -90,8 +92,13 @@ sign — the check is `ManufacturedDiffusion` in `MMSConvergenceTests.cpp`, whos
 is `u_t - kappa u_xx` for `u = sin(pi x)(1+t)`: a diffusion equation, not the
 anti-diffusion `+` would give. Get it backwards and the case still converges, to
 the wrong function, at the right rate — so an order study will not catch it, only
-a closed-form comparison will. And `State::Flux[i]`, which physics hooks read,
-carries the negated `sigma_h`, not `sigma_hat`.
+a closed-form comparison will. And the stored flux a hook reads
+carries the negated `sigma_h`: `State::sigma(i)` is that stored value,
+`State::sigmaHat(i)` the physical flux `SigmaFn` returned. Nothing in the tree
+reads the incoming sigma at all — `MirrorPlasma` and `AdjointPlasma` thread it
+into `Sn`/`Spi`/`Spe`/`Somega` without using it, and every `dSources_dsigma` is
+zero — so a case that starts using it is the first to care, and no test would
+catch a sign error there.
 
 ### Solve path
 
@@ -197,14 +204,38 @@ side effects: `REGISTER_PHYSICS_HEADER(T)` in the header plus
 whose constructor inserts a factory. Consequences:
 
 * A case only appears if its object file is linked in — nothing references it
-  directly, so a missing entry is a link-line problem with no compile error.
-* `RegisterPhysicsCase` uses `map::insert`, so a **duplicate name is silently
-  ignored and the first registration wins**.
+  directly, so a missing entry is a link-line problem with no compile error. An
+  unknown name now throws from `InstantiateProblem` with the list of what *is*
+  registered, rather than returning `nullptr` for every caller to check.
+* A **duplicate name throws**. It used to be a bare `map::insert`, so the first
+  registration silently won and the second case was unreachable.
 * The map is never reset, so tests must use unique throwaway names.
+* A case can live **outside this tree**: build it as a shared object against the
+  installed headers and name it in the config's `PhysicsPlugins` array, which
+  `runManta` dlopens before instantiating. See "Out-of-tree builds" below.
+
+**A case declares itself as data.** `TransportSystem`'s only constructor takes a
+`SystemSpec` (`SystemSpec.hpp`): the variables, scalars and aux variables with
+their names, descriptions, units, per-end `BoundaryKind` and the differential
+flag. `nVars`/`nScalars`/`nAux` are `const` and derived from it; the spec is
+validated in the constructor, so a part-built case cannot exist. This replaced
+assigning `nVars` in a constructor body, nine naming virtuals,
+`isLower/isUpperBoundaryDirichlet`, `isScalarDifferential`, and a pair of
+uninitialised bools the boundary virtuals read. A case whose shape depends on its
+config builds the spec in a static helper: `: TransportSystem(buildSpec(config))`.
+`numberedFields/Scalars/Aux` produce the historical `Var0`/`Scalar0`/`AuxVariable0`
+placeholder names, which the checked-in `.ref.nc` files still key on.
 
 Two layers sit above `TransportSystem`: cases may implement its virtuals
 directly, or derive from `AutodiffTransportSystem` and supply `Flux`/`Source` in
 terms of `autodiff` types, which then derives every Jacobian entry automatically.
+Its constructor is `(config, grid, SystemSpec)`.
+
+**Derivative out-parameters arrive zeroed.** `State` and `GlobalState` zero
+themselves on construction, so a hook assigns only its nonzero entries; an
+omitted one is zero rather than uninitialised heap. `State` also has named
+accessors — `u(i)`, `q(i)`, `sigma(i)`, `sigmaHat(i)`, `phi(i)`, `scalar(i)` —
+bounds-checked under `DEBUG`.
 
 **Every physics hook exists in two forms**: pointwise (`SigmaFn(i, State, x, t)`)
 and batched (`SigmaFn(i, GlobalState, positions, t)`). The batched defaults in
@@ -213,7 +244,24 @@ and batched (`SigmaFn(i, GlobalState, positions, t)`). The batched defaults in
 
 ### Python layer
 
-`Python.cpp` defines the `MaNTA` module. Three pieces to know:
+`Python.cpp` defines `_manta`, the compiled core of the **`manta` package**;
+`python/manta/__init__.py` re-exports it and adds the parts better written in
+Python. Users `import manta`, and `pip install .` makes that work from anywhere
+(the build shells out to `make python`, so it still needs `Makefile.local`).
+A Python case declares itself with class attributes:
+
+```python
+class MyCase(manta.TransportSystem):
+    variables = [manta.Field("n", "density", "m^-3", lower=manta.Neumann)]
+    def __init__(self, config, grid):
+        super().__init__()          # reads the class attributes
+```
+
+`super().__init__(spec)` and `super().__init__(variables=[...])` also work, for a
+case whose shape depends on its config. `nVars`/`nScalars`/`nAux` are read-only.
+**Only `SigmaFn` and `Sources` are required**: an absent derivative hook means
+that block is identically zero, which is what the zeroed out-parameter already
+gives. Four pieces to know:
 
 * **Trampolines.** `PyTransportSystem` / `PyAdjointProblem` dispatch each virtual
   to a Python override. `PyTransportSystem::initializeOverrides` probes the
@@ -243,32 +291,69 @@ and batched (`SigmaFn(i, GlobalState, positions, t)`). The batched defaults in
   separate member from `adjoint` so its presence can never be mistaken for "the
   gradients have been computed".
 
-**The scalar hooks' Python signatures are not the C++ ones.** `ScalarGExtended`
-and friends take `DGSoln` and `Interval`, which have no Python representation, so
-`PyTransportSystem` evaluates on the nodes and passes a `GlobalState` plus the
-quadrature data instead. What Python must implement:
+**The scalar hooks are one name each, and the same in both languages.** There
+used to be four names and five signatures — `ScalarG`, `ScalarGExtended`,
+`ScalarGPrime` and two `ScalarGPrimeExtended` overloads, one taking a
+`std::function` test function and an `Interval` and asking the case to integrate
+against them — plus a *different*, flatter set on the Python side that the
+trampoline translated to. The flat one won:
 
 ```
-InitialScalarValue(s)                                    -> float
-InitialScalarDerivative(s, states, states_dot, weights)  -> float
-isScalarDifferential(i)                                  -> bool
-ScalarG(s, states, states_dot, weights, t)               -> float
-ScalarGPrime(states, states_dot, weights, phi_boundary, t)
-    -> (list of nScalars GlobalState dicts,   d G_s / d state
-        list of nScalars GlobalState dicts)   d G_s / d state_dot
-dSources_dScalars(s, state, x, t)  -> vector of length nScalars
+ScalarG(s, y, ydot, abscissae, weights, phiBoundary, t)          -> Value
+ScalarGPrime(dG, dGdot, y, ydot, abscissae, weights, phiBoundary, t)
+InitialScalarValue(s)                                            -> Value
+InitialScalarDerivative(s, y, dydt)   [C++ takes DGSoln; Python takes nodal data]
+dSources_dScalars(s, out, state, x, t)   — indexed by *scalar*, not by variable
 ```
 
-`weights` is one quadrature weight per node (`nCells*(k+1)`), so an integral over
-the domain is `weights @ u`; `phi_boundary` is `(k+1, 2)`. Note
-`dSources_dScalars` is indexed by *scalar*, not by variable, and that
-`InitialScalarDerivative` is only consulted for scalars where
-`isScalarDifferential` is true. `python/Tests/test_scalars.py` exercises all of
-it against a closed form, in both the algebraic and differential cases.
+`y`/`ydot` are the solution sampled on the element nodes; `weights` is one
+quadrature weight per node, so `Int u dx` is `ScalarHooks::integrate(...)` and
+its derivative with respect to node j is `weights(j)`. **A case must use these
+weights rather than a rule of its own** — `ScalarTestLD3` used a global adaptive
+Kronrod rule over a piecewise polynomial, which is not a smooth function of the
+coefficients, and disagreed with its own Jacobian by 8%. `phiBoundary` is
+`(k+1, 2)` and is the *only* way to reach a boundary point value, because the
+nodes are Chebyshev points of the first kind and strictly interior;
+`ScalarHooks::boundaryValue` / `addBoundaryDerivative` do that contraction.
+`ScalarGPrime` reports every scalar at once, as d/d(DOF), into buffers that
+arrive zeroed.
+
+`checkScalarDerivative` in `ScalarJacobianTests.cpp` finite-differences a case's
+own `ScalarG` against its `ScalarGPrime` and is the first thing to run when a
+scalar system converges slowly. `python/Tests/test_scalars.py` exercises the
+Python side against a closed form, algebraic and differential.
+
+* **`manta.cli`** is the `manta` console script: it reads the config, imports the
+  module named by its `PythonModule` key (for the side effect of that module's
+  `registerPhysicsCase` call), and hands over to the same `runManta` the binary
+  uses. That is what lets a Python case and its driver live outside this tree.
 
 JAX physics cases (`python/JAXTransportSystem.py`, `python/State.py`) wrap the
 dict interface in equinox modules via the `MaNTA_Decorator` / `Physics_Decorator`
 adapters.
+
+### Out-of-tree builds
+
+`make install PREFIX=...` installs the headers under `$PREFIX/include/manta`,
+`libmanta.so`, and `manta.pc`. A physics case built as a shared object and named
+in the config's `PhysicsPlugins` array is dlopened by `runManta` before
+`InstantiateProblem`; its static initialiser registers it into the same
+process-global map. Two traps, neither of which is a link error:
+
+* **A plugin must be compiled with the flags `pkg-config --cflags manta`
+  reports.** Eigen aligns its types to the widest vector unit the compiler knows
+  about and inlines its expression templates into both sides of the boundary, so
+  a plugin built without the core's `-march=` faults inside an aligned AVX-512
+  load (`_mm512_load_pd`) the first time the solver touches its state. `manta.pc`
+  records the *concrete* architecture (`-march=znver4`, not `native`) so a
+  mismatch is a compile error rather than a run-time crash. `-DEIGEN_USE_BLAS`
+  travels for the same reason.
+* **A plugin must not link `-lmanta`.** The solver links the core objects
+  directly, so a plugin that also pulled in `libmanta.so` would get a second copy
+  of `PhysicsCases::map` and register into a map the solver never reads —
+  silently. Compile against the headers alone and let the loader bind the MaNTA
+  symbols to the host, which is linked `-rdynamic` for exactly that.
+  `libmanta.so` is for embedding the solver in another program.
 
 ### Adjoints
 

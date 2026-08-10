@@ -1,15 +1,19 @@
 The Python interface
 ====================
 
-``make python`` builds a pybind11 extension, ``python/MaNTA<suffix>.so``, which
-does two separate jobs: it drives the solver from Python, and it lets a transport
-system be *written* in Python.
+``make python`` builds the ``manta`` package -- a pybind11 extension,
+``python/manta/_manta<suffix>.so``, wrapped by a thin Python layer. It does two
+separate jobs: it drives the solver from Python, and it lets a transport system
+be *written* in Python.
 
 .. code-block:: sh
 
    make python
-   export PATH="$PWD/.venv/bin:$PATH"
-   cd python && python -c "import MaNTA; print(MaNTA.__doc__)"
+   pip install .                     # then `import manta` works anywhere
+   python -c "import manta; print(manta.__doc__)"
+
+A case and its driver can live in your own repository rather than in this tree;
+see :doc:`out_of_tree`.
 
 Module contents
 ---------------
@@ -20,17 +24,17 @@ Module contents
 
    * - Name
      - What it is
-   * - ``MaNTA.run(path)``
+   * - ``manta.run(path)``
      - Run a TOML config file, exactly as the ``MaNTA`` binary would.
-   * - ``MaNTA.Runner``
+   * - ``manta.Runner``
      - The configure/run/inspect interface. See below.
-   * - ``MaNTA.TransportSystem``
+   * - ``manta.TransportSystem``
      - Base class to subclass when writing physics in Python.
-   * - ``MaNTA.AdjointProblem``
+   * - ``manta.AdjointProblem``
      - Base class for an objective and its parameter derivatives.
-   * - ``MaNTA.registerPhysicsCase(name, factory)``
+   * - ``manta.registerPhysicsCase(name, factory)``
      - Register a Python case under a name the TOML interface can use.
-   * - ``MaNTA.getNodes(...)``
+   * - ``manta.getNodes(...)``
      - The positions at which fluxes and sources are evaluated, for a given grid
        and polynomial degree.
 
@@ -95,21 +99,20 @@ failure described in :doc:`running`. An optimisation driver that loops over
 Writing physics in Python
 -------------------------
 
-Subclass ``MaNTA.TransportSystem`` and override the hooks you need — the same
+Subclass ``manta.TransportSystem`` and override the hooks you need — the same
 names as the C++ interface described in :doc:`physics_interface`:
 
 .. code-block:: python
 
-   import MaNTA
+   import manta
    import numpy as np
 
-   class Diffusion(MaNTA.TransportSystem):
+   class Diffusion(manta.TransportSystem):
+       variables = [manta.Field("n", "density", "m^-3")]
+
        def __init__(self, kappa):
-           super().__init__()
-           self.nVars = 1
+           super().__init__()          # reads the class attributes above
            self.kappa = kappa
-           self.isLowerDirichlet = True
-           self.isUpperDirichlet = True
 
        def LowerBoundary(self, i, t): return 0.0
        def UpperBoundary(self, i, t): return 0.0
@@ -120,13 +123,37 @@ names as the C++ interface described in :doc:`physics_interface`:
        def Sources(self, i, state, x, t):
            return 0.0
 
-       def dSigmaFn_dq(self, i, out, state, x, t):
-           out[i] = self.kappa
+       def dSigmaFn_dq(self, i, state, x, t):
+           return np.full(self.nVars, self.kappa)
 
-       # ... the remaining derivative hooks ...
+       # dSigmaFn_du and the three dSources_* hooks are identically zero here,
+       # so they are simply left out.
 
        def InitialValue(self, i, x):     return np.sin(np.pi * x)
        def InitialDerivative(self, i, x): return np.pi * np.cos(np.pi * x)
+
+Declaring the case as data replaces assigning ``self.nVars`` and
+``self.isUpperDirichlet`` after construction. Those could not be validated --
+the object already existed by the time they were set -- and the boundary flags
+were read uninitialised if a case forgot them. ``nVars``, ``nScalars`` and
+``nAux`` are read-only properties derived from the declaration.
+
+``manta.Field(name, description, units, lower=..., upper=...)`` takes
+``manta.Dirichlet`` (the default) or ``manta.Neumann`` per end;
+``manta.Scalar(name, ..., differential=True)`` marks a scalar whose constraint
+involves the time derivative; ``manta.Aux(name, ...)`` declares an auxiliary
+variable. A case whose shape depends on its configuration cannot write that at
+class scope and passes a spec instead:
+
+.. code-block:: python
+
+   manta.TransportSystem.__init__(self, manta.numbered_spec(nVars, nAux=1))
+
+Only ``SigmaFn`` and ``Sources`` are required. **The derivative hooks are
+optional**: an absent one means that block is identically zero, which is what
+the framework's zeroed output buffer already provides. Before this, the simplest
+possible case had to write four functions returning ``np.zeros(nVars)`` before
+it would run.
 
 The subclass is inspected **once**, when it is first used, and classified as
 either *pointwise* or *vectorised*. The vectorised path requires **both**
@@ -159,32 +186,41 @@ The two C++ state types cross the boundary as dictionaries:
    therefore cannot detect a missing transpose; to check orientation, look at the
    array shape from inside a batched call.
 
-Scalar hooks: the signatures differ from C++
---------------------------------------------
+Scalar hooks
+------------
 
-The C++ scalar hooks take ``DGSoln`` and ``Interval``, which have no Python
-representation. The trampoline evaluates on the nodes and passes a
-``GlobalState`` plus the quadrature data instead, so a Python subclass with
-``nScalars > 0`` must implement these — **not** the C++ signatures:
+A subclass that declares scalars implements:
 
 .. code-block:: python
 
    InitialScalarValue(s)                                    -> float
    InitialScalarDerivative(s, states, states_dot, weights)  -> float
-   isScalarDifferential(i)                                  -> bool
-   ScalarG(s, states, states_dot, weights, t)               -> float
-   ScalarGPrime(states, states_dot, weights, phi_boundary, t)
+   ScalarG(s, states, states_dot, abscissae, weights, phi_boundary, t) -> float
+   ScalarGPrime(states, states_dot, abscissae, weights, phi_boundary, t)
        -> (list of nScalars GlobalState dicts,   # d G_s / d state
            list of nScalars GlobalState dicts)   # d G_s / d state_dot
    dSources_dScalars(s, state, x, t)  -> vector of length nScalars
 
-``weights`` is one quadrature weight per node — length ``nCells * (k+1)`` — so an
-integral over the domain is simply ``weights @ u``. ``phi_boundary`` is
-``(k+1, 2)``, the basis functions evaluated at the two ends of the domain.
+These are now the **same** signatures as the C++ hooks, argument for argument.
+They used to differ, because the C++ side took ``DGSoln``, a ``std::function``
+test function and an ``Interval``, none of which have a Python representation --
+so the trampoline was a translation layer between two interfaces that had to be
+kept in step by hand. The C++ side has adopted this one.
 
-Note that ``dSources_dScalars`` is indexed by **scalar**, not by variable, and
-that ``InitialScalarDerivative`` is only consulted for scalars where
-``isScalarDifferential`` returns true.
+``weights`` is one quadrature weight per node -- length ``nCells * (k+1)`` -- so
+an integral over the domain is simply ``weights @ u``, and the derivative of
+that integral with respect to node ``j`` is ``weights[j]``. ``phi_boundary`` is
+``(k+1, 2)``, the basis functions of the first and last cells evaluated at the
+two ends of the domain; because the nodes are strictly interior, this is the
+only way to express a constraint on a boundary point value. ``abscissae`` gives
+each node's position.
+
+Whether a scalar is differential is part of the declaration --
+``manta.Scalar("mu", differential=True)`` -- rather than an
+``isScalarDifferential`` hook. ``InitialScalarDerivative`` is consulted only for
+scalars declared that way.
+
+Note that ``dSources_dScalars`` is indexed by **scalar**, not by variable.
 
 JAX
 ---
