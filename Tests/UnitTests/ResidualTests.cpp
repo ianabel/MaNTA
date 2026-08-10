@@ -20,6 +20,7 @@
 
 #include "../../PhysicsCases/ScalarTestLD3.hpp"
 #include "CapturedOutput.hpp"
+#include "PyIntegrator.hpp"
 #include "SystemSolver.hpp"
 #include "TestDiffusion.hpp"
 #include "Types.hpp"
@@ -67,12 +68,13 @@ const toml::value scalar_config = u8R"(
 class PolynomialDiffusion : public TransportSystem
 {
 public:
-    explicit PolynomialDiffusion(double kappa_ = 1.3) : kappa(kappa_) { nVars = 1; }
+    explicit PolynomialDiffusion(double kappa_ = 1.3)
+        : TransportSystem({.variables = numberedFields(1)}), kappa(kappa_)
+    {
+    }
 
     Value LowerBoundary(Index, Time) const override { return 0.0; }
     Value UpperBoundary(Index, Time) const override { return 0.0; }
-    bool isLowerBoundaryDirichlet(Index) const override { return true; }
-    bool isUpperBoundaryDirichlet(Index) const override { return true; }
 
     Value SigmaFn(Index, const State &s, Position, Time) override
     {
@@ -131,15 +133,12 @@ class AuxResidualMock : public TransportSystem
 {
 public:
     AuxResidualMock()
+        : TransportSystem({.variables = numberedFields(1), .aux = numberedAux(1)})
     {
-        nVars = 1;
-        nAux = 1;
     }
 
     Value LowerBoundary(Index, Time) const override { return 0.0; }
     Value UpperBoundary(Index, Time) const override { return 0.0; }
-    bool isLowerBoundaryDirichlet(Index) const override { return true; }
-    bool isUpperBoundaryDirichlet(Index) const override { return true; }
 
     Value SigmaFn(Index, const State &s, Position, Time) override { return s.Derivative[0]; }
     Value Sources(Index, const State &s, Position, Time) override { return s.Aux[0]; }
@@ -414,8 +413,11 @@ BOOST_AUTO_TEST_CASE(residual_scalar_rows_are_scalar_g_extended)
     DGSoln res_h(problem.getNumVars(), grid, k, N_VGetArrayPointer(res),
                  problem.getNumScalars(), problem.getNumAux());
 
+    const Vector &weights = Integrator::getIntegrationWeights(Y_h.getBasis(), grid);
+    const Matrix &phiBoundary = Integrator::getPhiBoundary(Y_h.getBasis(), grid);
     for (Index j = 0; j < problem.getNumScalars(); ++j)
-        BOOST_TEST(res_h.Scalar(j) == problem.ScalarGExtended(j, Y_h, dY_h, 0.5),
+        BOOST_TEST(res_h.Scalar(j) == problem.ScalarG(j, Y_h.evalOnNodes(), dY_h.evalOnNodes(),
+                                                      Y_h.getPoints(), weights, phiBoundary, 0.5),
                    boost::test_tools::tolerance(1e-14));
 
     N_VDestroy(Y);
@@ -604,11 +606,9 @@ BOOST_AUTO_TEST_CASE(error_weights_use_a_per_variable_atol_when_one_is_supplied)
 
     struct TwoVar : public TransportSystem
     {
-        TwoVar() { nVars = 2; }
+        TwoVar() : TransportSystem({.variables = numberedFields(2)}) {}
         Value LowerBoundary(Index, Time) const override { return 0.0; }
         Value UpperBoundary(Index, Time) const override { return 0.0; }
-        bool isLowerBoundaryDirichlet(Index) const override { return true; }
-        bool isUpperBoundaryDirichlet(Index) const override { return true; }
         Value SigmaFn(Index i, const State &s, Position, Time) override
         {
             return s.Derivative[i];

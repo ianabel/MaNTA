@@ -54,13 +54,11 @@ double exactDerivative(double x, double t) { return pi * std::cos(pi * x) * (1.0
 class ManufacturedDiffusion : public TransportSystem
 {
 public:
-    ManufacturedDiffusion() { nVars = 1; }
-
     // u = 0 at both ends for all t, matching the manufactured solution.
+    ManufacturedDiffusion() : TransportSystem({.variables = numberedFields(1)}) {}
+
     Value LowerBoundary(Index, Time) const override { return 0.0; }
     Value UpperBoundary(Index, Time) const override { return 0.0; }
-    bool isLowerBoundaryDirichlet(Index) const override { return true; }
-    bool isUpperBoundaryDirichlet(Index) const override { return true; }
 
     Value SigmaFn(Index, const State &s, Position, Time) override
     {
@@ -123,12 +121,10 @@ public:
 class ManufacturedReaction : public TransportSystem
 {
 public:
-    ManufacturedReaction() { nVars = 1; }
+    ManufacturedReaction() : TransportSystem({.variables = numberedFields(1)}) {}
 
     Value LowerBoundary(Index, Time) const override { return 0.0; }
     Value UpperBoundary(Index, Time) const override { return 0.0; }
-    bool isLowerBoundaryDirichlet(Index) const override { return true; }
-    bool isUpperBoundaryDirichlet(Index) const override { return true; }
 
     static double F(double u) { return u * u * u - u; }
     static double dF(double u) { return 3.0 * u * u - 1.0; }

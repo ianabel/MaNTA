@@ -12,6 +12,10 @@
 #include "State.hpp"
 #include "Types.hpp"
 #include "gridStructures.hpp"
+// The scalar hooks are handed the quadrature weights and the boundary basis
+// values, so the case does not have to pick a rule of its own. Both are cached
+// here, keyed on basis order and grid.
+#include "PyIntegrator.hpp"
 
 SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *transpSystem)
     : grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars(transpSystem->getNumScalars()), nAux(transpSystem->getNumAux()), MXSolvers(Grid.getNCells()), y(nVars, grid, k, nScalars, nAux), dydt(nVars, grid, k, nScalars, nAux), yJac(nVars, grid, k, nScalars, nAux), dydtJac(nVars, grid, k, nScalars, nAux), problem(transpSystem)
@@ -805,7 +809,10 @@ void SystemSolver::updateMatricesForJacSolve()
         ScalarG_dt_vals.add(nCells, k, nVars, nScalars, nAux);
       }
 
-      problem->ScalarGPrimeExtended(ScalarG_vals, ScalarG_dt_vals, yJac, dydtJac, jt);
+      problem->ScalarGPrime(ScalarG_vals, ScalarG_dt_vals, yJac.evalOnNodes(), dydtJac.evalOnNodes(),
+                            yJac.getPoints(),
+                            Integrator::getIntegrationWeights(yJac.getBasis(), grid),
+                            Integrator::getPhiBoundary(yJac.getBasis(), grid), jt);
     
       for ( Index j = 0; j < nScalars; ++j ) {
           const auto& s = ScalarG_vals[j];
@@ -1177,9 +1184,18 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
     }
 
 
-    for (Index j = 0; j < nScalars; j++)
+    if (nScalars > 0)
     {
-        res.Scalar(j) = problem->ScalarGExtended(j, Y_h, dYdt_h, tres);
+        // Sampled once for all the scalars, not once each: evalOnNodes walks
+        // every cell and node, and the scalars all see the same state.
+        const GlobalState scalarStates = Y_h.evalOnNodes();
+        const GlobalState scalarStates_dt = dYdt_h.evalOnNodes();
+        const Vector &weights = Integrator::getIntegrationWeights(Y_h.getBasis(), grid);
+        const Matrix &phiBoundary = Integrator::getPhiBoundary(Y_h.getBasis(), grid);
+
+        for (Index j = 0; j < nScalars; j++)
+            res.Scalar(j) = problem->ScalarG(j, scalarStates, scalarStates_dt, Y_h.getPoints(),
+                                             weights, phiBoundary, tres);
     }
 
     return 0;

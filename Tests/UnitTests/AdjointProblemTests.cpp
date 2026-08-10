@@ -34,15 +34,12 @@ class AdjointHostSystem : public TransportSystem
 {
 public:
     AdjointHostSystem()
+        : TransportSystem({.variables = numberedFields(2), .aux = numberedAux(1)})
     {
-        nVars = 2;
-        nAux = 1;
     }
 
     Value LowerBoundary(Index, Time) const override { return 0.0; }
     Value UpperBoundary(Index, Time) const override { return 0.0; }
-    bool isLowerBoundaryDirichlet(Index) const override { return true; }
-    bool isUpperBoundaryDirichlet(Index) const override { return true; }
 
     Value SigmaFn(Index i, const State &s, Position, Time) override
     {

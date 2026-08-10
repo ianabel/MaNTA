@@ -28,6 +28,7 @@
 
 #include "../../PhysicsCases/ScalarTestLD3.hpp"
 #include "FiniteDifferenceJacobian.hpp"
+#include "PyIntegrator.hpp"
 #include "SystemSolver.hpp"
 #include "Types.hpp"
 
@@ -71,17 +72,18 @@ boost::math::quadrature::gauss<double, 30> integrator;
 class MinimalScalarSystem : public TransportSystem
 {
 public:
-    MinimalScalarSystem()
+    // One scalar. It is algebraic here -- G = mu - BETA * Int u dx has no
+    // explicit dmu/dt -- and differential in the subclass below, which is the
+    // whole point of the pair, so the kind is a constructor argument rather
+    // than the isScalarDifferential override it used to be.
+    explicit MinimalScalarSystem(bool differential = false)
+        : TransportSystem({.variables = numberedFields(1),
+                           .scalars = numberedScalars(1, differential)})
     {
-        nVars = 1;
-        nScalars = 1;
-        nAux = 0;
     }
 
     Value LowerBoundary(Index, Time) const override { return 0.0; }
     Value UpperBoundary(Index, Time) const override { return 0.0; }
-    bool isLowerBoundaryDirichlet(Index) const override { return true; }
-    bool isUpperBoundaryDirichlet(Index) const override { return true; }
 
     Value SigmaFn(Index, const State &s, Position, Time) override
     {
@@ -117,40 +119,35 @@ public:
         v[0] = COUPLING;
     }
 
-    /// Int_0^1 u dx, integrated *cell by cell*.
+    /// Int_0^1 u dx, on the framework's node quadrature.
     ///
-    /// u is only piecewise polynomial, so a single quadrature rule over the
-    /// whole domain does not integrate it exactly -- and then the derivative of
-    /// the computed mass is not the analytic Int phi that ScalarGPrime reports,
-    /// which would make this fixture disagree with itself by a couple of
-    /// percent and invalidate the whole test. Per cell the rule is exact.
-    static double mass(const DGSoln &y)
+    /// This was a cell-by-cell adaptive rule applied to y.u(0). The rule had to
+    /// be per cell, because u is only piecewise polynomial and a single rule
+    /// over the whole domain does not integrate it exactly -- and then the
+    /// derivative of the computed mass is not what ScalarGPrime reports, which
+    /// made the fixture disagree with itself by a couple of percent. Using the
+    /// weights the hook is handed removes the question: the derivative of
+    /// `weights . u` with respect to u_j is exactly weights(j).
+    static double mass(GlobalState const &y, Vector const &weights)
     {
-        double total = 0.0;
-        Grid const &g = y.getGrid();
-        for (Index i = 0; i < static_cast<Index>(g.getNCells()); ++i)
-            total += integrator.integrate([&](double x) { return y.u(0)(x); }, g[i].x_l,
-                                          g[i].x_u);
-        return total;
+        return ScalarHooks::integrate(y.Variable().row(0), weights);
     }
 
-    // G = mu - BETA * Int u dx. Algebraic, so ScalarGPrime is enough and the
-    // base class's ScalarGPrimeExtended forwards to it with a zeroed dY'/dt
-    // half -- which exercises that default too.
-    Value ScalarG(Index, const DGSoln &y, Time) override
+    // G = mu - BETA * Int u dx. Algebraic, so the dY'/dt half is zero.
+    Value ScalarG(Index, GlobalState const &y, GlobalState const &,
+                  std::vector<Position> const &, Values const &weights, Matrix const &,
+                  Time) override
     {
-        return y.Scalar(0) - BETA * mass(y);
+        return y.Scalars()(0) - BETA * mass(y, weights);
     }
 
-    void ScalarGPrime(Index, State &out, const DGSoln &, std::function<double(double)> phi,
-                      Interval I, Time) override
+    void ScalarGPrime(GlobalStateMatrix &dG, GlobalStateMatrix &, GlobalState const &,
+                      GlobalState const &, std::vector<Position> const &,
+                      Values const &weights, Matrix const &, Time) override
     {
-        out.zero();
-        out.Variable[0] = -BETA * integrator.integrate(phi, I.x_l, I.x_u);
-        out.Scalars[0] = 1.0;
+        dG[0].Variable().row(0) = -BETA * weights.transpose();
+        dG[0].Scalars()(0) = 1.0;
     }
-
-    bool isScalarDifferential(Index) override { return false; }
 
     Value InitialValue(Index, Position x) const override { return x * (1.0 - x); }
     Value InitialDerivative(Index, Position x) const override { return 1.0 - 2.0 * x; }
@@ -168,26 +165,29 @@ public:
 class DifferentialScalarSystem : public MinimalScalarSystem
 {
 public:
-    Value ScalarGExtended(Index, const DGSoln &y, const DGSoln &dydt, Time) override
+    DifferentialScalarSystem() : MinimalScalarSystem(true) {}
+
+    Value ScalarG(Index, GlobalState const &y, GlobalState const &ydot,
+                  std::vector<Position> const &, Values const &weights, Matrix const &,
+                  Time) override
     {
-        return dydt.Scalar(0) - BETA * mass(y);
+        return ydot.Scalars()(0) - BETA * mass(y, weights);
     }
 
-    void ScalarGPrimeExtended(Index, State &out, State &out_dt, const DGSoln &,
-                              const DGSoln &, std::function<double(double)> phi,
-                              Interval I, Time) override
+    void ScalarGPrime(GlobalStateMatrix &dG, GlobalStateMatrix &dGdot, GlobalState const &,
+                      GlobalState const &, std::vector<Position> const &,
+                      Values const &weights, Matrix const &, Time) override
     {
-        out.zero();
-        out_dt.zero();
-        out.Variable[0] = -BETA * integrator.integrate(phi, I.x_l, I.x_u);
-        out_dt.Scalars[0] = 1.0;
+        dG[0].Variable().row(0) = -BETA * weights.transpose();
+        dGdot[0].Scalars()(0) = 1.0;
     }
-
-    bool isScalarDifferential(Index) override { return true; }
 
     Value InitialScalarDerivative(Index, const DGSoln &y, const DGSoln &) const override
     {
-        return BETA * mass(y);
+        // Still a DGSoln hook, so it samples the nodes itself to reach the same
+        // mass the constraint uses.
+        return BETA * mass(y.evalOnNodes(),
+                           Integrator::getIntegrationWeights(y.getBasis(), y.getGrid()));
     }
 };
 
@@ -295,11 +295,17 @@ Residuals checkBorderedSolve(ScalarFixture &f, int trials = 3)
 }
 
 // --------------------------------------------------------------------------
-// Finite-difference ScalarGExtended and compare against ScalarGPrimeExtended.
+// Finite-difference ScalarG and compare against ScalarGPrime.
 //
 // This is the check that separates a broken elimination from a physics case
 // that misreports its own derivative, and it works for any case: perturb one
 // solution coefficient at a time and difference the scalar constraint.
+//
+// The hooks now report every scalar's derivative in one call, indexed by node
+// rather than being asked once per (cell, basis function), so the reported
+// value for cell i node l is column i*(k+1)+l -- the same flattening the
+// solver reads back into the w vectors, which is exactly the indexing an
+// off-by-one here would hide.
 //
 // Returns the largest disagreement found, and reports each one.
 double checkScalarDerivative(TransportSystem &problem, DGSoln &y, DGSoln &dydt,
@@ -308,9 +314,30 @@ double checkScalarDerivative(TransportSystem &problem, DGSoln &y, DGSoln &dydt,
     const Index nVars = problem.getNumVars();
     const Index nScalars = problem.getNumScalars();
     const Index nAux = problem.getNumAux();
-    auto const &basis = y.getBasis();
+    const Index nCells = static_cast<Index>(grid.getNCells());
+
+    const Vector &weights = Integrator::getIntegrationWeights(y.getBasis(), grid);
+    const Matrix &phiBoundary = Integrator::getPhiBoundary(y.getBasis(), grid);
 
     double worst = 0.0;
+
+    // What the case says its derivative is -- all scalars, all nodes, one call.
+    GlobalStateMatrix reported(nScalars), reported_dt(nScalars);
+    for (Index s = 0; s < nScalars; ++s)
+    {
+        reported.add(nCells, k, nVars, nScalars, nAux);
+        reported_dt.add(nCells, k, nVars, nScalars, nAux);
+    }
+    problem.ScalarGPrime(reported, reported_dt, y.evalOnNodes(), dydt.evalOnNodes(),
+                         y.getPoints(), weights, phiBoundary, t);
+
+    // Re-sampled on every call: the coefficient being perturbed has to reach
+    // the nodal values the constraint actually reads.
+    auto G = [&](Index s)
+    {
+        return problem.ScalarG(s, y.evalOnNodes(), dydt.evalOnNodes(), y.getPoints(), weights,
+                               phiBoundary, t);
+    };
 
     auto compare = [&](const char *what, Index s, Index cell, Index l, Index var,
                        double expected, double *coefficient)
@@ -319,9 +346,9 @@ double checkScalarDerivative(TransportSystem &problem, DGSoln &y, DGSoln &dydt,
         const double original = *coefficient;
 
         *coefficient = original + h;
-        const double gp = problem.ScalarGExtended(s, y, dydt, t);
+        const double gp = G(s);
         *coefficient = original - h;
-        const double gm = problem.ScalarGExtended(s, y, dydt, t);
+        const double gm = G(s);
         *coefficient = original;
 
         const double fd = (gp - gm) / (2.0 * h);
@@ -336,43 +363,32 @@ double checkScalarDerivative(TransportSystem &problem, DGSoln &y, DGSoln &dydt,
 
     for (Index s = 0; s < nScalars; ++s)
     {
-        for (Index cell = 0; cell < static_cast<Index>(grid.getNCells()); ++cell)
+        for (Index cell = 0; cell < nCells; ++cell)
         {
-            Interval const &I = grid[cell];
             for (Index l = 0; l < k + 1; ++l)
             {
-                auto phi = [&](double x) { return basis.Evaluate(I, l, x); };
-
-                State reported(nVars, nScalars, nAux);
-                State reported_dt(nVars, nScalars, nAux);
-                problem.ScalarGPrimeExtended(s, reported, reported_dt, y, dydt, phi, I, t);
+                const Index node = cell * (k + 1) + l;
 
                 for (Index v = 0; v < nVars; ++v)
                 {
-                    compare("u", s, cell, l, v, reported.Variable[v],
+                    compare("u", s, cell, l, v, reported[s].Variable()(v, node),
                             &y.u(v).getCoeff(cell).second(l));
-                    compare("q", s, cell, l, v, reported.Derivative[v],
+                    compare("q", s, cell, l, v, reported[s].Derivative()(v, node),
                             &y.q(v).getCoeff(cell).second(l));
-                    compare("sigma", s, cell, l, v, reported.Flux[v],
+                    compare("sigma", s, cell, l, v, reported[s].Flux()(v, node),
                             &y.sigma(v).getCoeff(cell).second(l));
                 }
                 for (Index a = 0; a < nAux; ++a)
-                    compare("aux", s, cell, l, a, reported.Aux[a],
+                    compare("aux", s, cell, l, a, reported[s].Aux()(a, node),
                             &y.Aux(a).getCoeff(cell).second(l));
             }
         }
 
-        // The scalar-scalar block, and the dY'/dt half. These use the last
-        // cell's basis function; the scalar entries do not depend on it.
-        Interval const &I = grid[0];
-        auto phi = [&](double x) { return basis.Evaluate(I, 0, x); };
-        State reported(nVars, nScalars, nAux), reported_dt(nVars, nScalars, nAux);
-        problem.ScalarGPrimeExtended(s, reported, reported_dt, y, dydt, phi, I, t);
-
+        // The scalar-scalar block, and the dY'/dt half.
         for (Index m = 0; m < nScalars; ++m)
         {
-            compare("mu", s, -1, -1, m, reported.Scalars[m], &y.Scalar(m));
-            compare("dmu/dt", s, -1, -1, m, reported_dt.Scalars[m], &dydt.Scalar(m));
+            compare("mu", s, -1, -1, m, reported[s].Scalars()(m), &y.Scalar(m));
+            compare("dmu/dt", s, -1, -1, m, reported_dt[s].Scalars()(m), &dydt.Scalar(m));
         }
     }
 

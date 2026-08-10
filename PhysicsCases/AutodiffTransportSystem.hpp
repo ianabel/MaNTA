@@ -18,8 +18,15 @@ using Real2ndVector = autodiff::VectorXdual2nd;
 class AutodiffTransportSystem : public TransportSystem
 {
 public:
-	AutodiffTransportSystem() = default;
-	explicit AutodiffTransportSystem(toml::value const &config, Grid const &, Index nVars, Index nScalars, Index nAux);
+	explicit AutodiffTransportSystem(toml::value const &config, Grid const &, SystemSpec spec);
+
+	/// Apply the `[AutodiffTransportSystem]` boundary keys to a spec.
+	///
+	/// `isUpperDirichlet` / `isLowerDirichlet` are single flags applied to every
+	/// variable, which is what they have always meant. They are honoured only
+	/// when actually present, so a case that declares per-variable boundary
+	/// kinds in its own spec keeps them.
+	static SystemSpec withBoundaryConfig(SystemSpec spec, toml::value const &config);
 
 	// Implement the TransportSystem interface.
 	Value SigmaFn(Index i, const State &, Position x, Time t) override;

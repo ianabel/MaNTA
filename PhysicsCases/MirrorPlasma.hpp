@@ -50,9 +50,11 @@ public:
 	Value InitialScalarValue(Index) const override;
 	Value InitialScalarDerivative(Index s, const DGSoln &y, const DGSoln &dydt) const override;
 
-	bool isScalarDifferential(Index) override;
-	Value ScalarGExtended(Index, const DGSoln &, const DGSoln &, Time) override;
-	void ScalarGPrimeExtended(Index, State &, State &, const DGSoln &, const DGSoln &, std::function<double(double)>, Interval, Time) override;
+	Value ScalarG(Index, GlobalState const &, GlobalState const &, std::vector<Position> const &,
+				  Values const &, Matrix const &, Time) override;
+	void ScalarGPrime(GlobalStateMatrix &, GlobalStateMatrix &, GlobalState const &,
+					  GlobalState const &, std::vector<Position> const &, Values const &,
+					  Matrix const &, Time) override;
 
 private:
 	using integrator = boost::math::quadrature::gauss_kronrod<double, 15>;
@@ -67,8 +69,6 @@ private:
 	Value LowerBoundary(Index i, Time t) const override;
 	Value UpperBoundary(Index i, Time t) const override;
 
-	virtual bool isLowerBoundaryDirichlet(Index i) const override;
-	virtual bool isUpperBoundaryDirichlet(Index i) const override;
 
 	Real2nd MMS_Solution(Index i, Real2nd V, Real2nd t) override;
 
@@ -166,7 +166,13 @@ private:
 	template <typename T>
 	T DiffuseHighGradient(T u, T q, double A, double D, T V) const;
 	
-	Value TotalCurrent(DGSoln const &y, Time t);
+	Value TotalCurrent(GlobalState const &y, std::vector<Position> const &abscissae,
+					   Values const &weights, Matrix const &phiBoundary, Time t);
+	/// Phi(xR) = Int omega / VPrime dV, on the node quadrature.
+	Value PhiAtUpperBoundary(GlobalState const &y, std::vector<Position> const &abscissae,
+							 Values const &weights) const;
+	/// Int 1/VPrime dV -- geometry only, so it stays on the adaptive rule.
+	Value dPsi() const;
 
 	template <typename T1, typename T2>
 	double Voltage(T1 &L_phi, T2 &n);
@@ -195,6 +201,8 @@ private:
 	double gamma;
 	double gamma_d;
 	double gamma_h;
+
+	static SystemSpec buildSpec(toml::value const &config);
 
 	enum Scalar : Index
 	{
@@ -225,8 +233,6 @@ private:
 		Ionization = 3,
 	};
 
-	std::vector<bool> upperBoundaryConditions;
-	std::vector<bool> lowerBoundaryConditions;
 
 	double nEdge, TeEdge, TiEdge, MUpper, MLower, MEdge;
 

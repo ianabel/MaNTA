@@ -54,16 +54,14 @@ class MatrixMock : public TransportSystem
 {
 public:
     MatrixMock()
+        : TransportSystem({.variables = numberedFields(2),
+                           .scalars = numberedScalars(2),
+                           .aux = numberedAux(1)})
     {
-        nVars = 2;
-        nScalars = 2;
-        nAux = 1;
     }
 
     Value LowerBoundary(Index, Time) const override { return 0.0; }
     Value UpperBoundary(Index, Time) const override { return 0.0; }
-    bool isLowerBoundaryDirichlet(Index) const override { return true; }
-    bool isUpperBoundaryDirichlet(Index) const override { return true; }
 
     Value SigmaFn(Index i, const State &s, Position x, Time) override
     {
@@ -149,7 +147,12 @@ public:
     Value InitialAuxValue(Index, Position x) const override { return 0.25 + x * x; }
     Value InitialScalarValue(Index s) const override { return 0.5 + 0.25 * s; }
 
-    Value ScalarG(Index s, const DGSoln &y, Time) override { return y.Scalar(s) - 1.0; }
+    Value ScalarG(Index s, GlobalState const &y, GlobalState const &,
+                  std::vector<Position> const &, Values const &, Matrix const &,
+                  Time) override
+    {
+        return y.Scalars()(s) - 1.0;
+    }
 };
 
 // Everything a matrix test needs: a solver with matrices built, initial

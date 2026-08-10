@@ -193,20 +193,18 @@ int runManta(std::string const &fname)
 
 	// Convert string to TransportSystem* instance
 
-	std::unique_ptr<TransportSystem> pProblem = PhysicsCases::InstantiateProblem(ProblemName, configFile, *grid);
-
-	// This check has to come before the first use of pProblem. InstantiateProblem
-	// returns nullptr for an unrecognised name, and both the adjoint setup and
-	// the restart block below dereference it -- so an unknown TransportSystem
-	// used to segfault instead of printing the list of available models.
-	if (pProblem == nullptr)
+	// InstantiateProblem throws for an unrecognised name, with the list of what
+	// is registered in the message. Caught here so the standalone binary still
+	// exits 1 with a readable line rather than terminating on an uncaught
+	// exception out of main.
+	std::unique_ptr<TransportSystem> pProblem;
+	try
 	{
-		logmsg<LOG_LEVEL::ERROR>("Could not instantiate a physics model for TransportSystem = {}\n  Available physics models include:  ", ProblemName);
-		for (auto pair : *PhysicsCases::map)
-		{
-			std::println(stderr, "\t{}", pair.first);
-		}
-		std::println(stderr, "");
+		pProblem = PhysicsCases::InstantiateProblem(ProblemName, configFile, *grid);
+	}
+	catch (std::invalid_argument const &e)
+	{
+		logmsg<LOG_LEVEL::ERROR>("Could not instantiate a physics model for TransportSystem = {}\n  {}", ProblemName, e.what());
 		return 1;
 	}
 

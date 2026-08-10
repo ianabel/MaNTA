@@ -19,9 +19,6 @@ class MatrixDiffusion : public TransportSystem {
 		Value LowerBoundary( Index, Time ) const override;
 		Value UpperBoundary( Index, Time ) const override;
 
-		bool isLowerBoundaryDirichlet( Index ) const override;
-		bool isUpperBoundaryDirichlet( Index ) const override;
-
 		// The guts of the physics problem (these are non-const as they
 		// are allowed to alter internal state such as to store computations
 		// for future calls)
@@ -40,6 +37,8 @@ class MatrixDiffusion : public TransportSystem {
 		Value InitialDerivative( Index, Position ) const override;
 
 private:
+		static SystemSpec buildSpec(toml::value const &config);
+
 	// Put class-specific data here
 	double InitialWidth, Centre;
 	Matrix Kappa;

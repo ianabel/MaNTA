@@ -1,21 +1,43 @@
 #include "AutodiffTransportSystem.hpp"
+#include "PyIntegrator.hpp"
 #include <autodiff/forward/dual.hpp>
 #include <iostream>
 #include <filesystem>
 #include <string>
 
-AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config, Grid const &grid, Index nV, Index nS, Index nA)
+SystemSpec AutodiffTransportSystem::withBoundaryConfig(SystemSpec spec, toml::value const &config)
 {
-	nVars = nV;
-	nScalars = nS;
-	nAux = nA;
+	if (config.count("AutodiffTransportSystem") != 1)
+		return spec;
 
+	auto const &InternalConfig = config.at("AutodiffTransportSystem");
+
+	auto kind = [](bool dirichlet)
+	{ return dirichlet ? BoundaryKind::Dirichlet : BoundaryKind::Neumann; };
+
+	if (InternalConfig.contains("isUpperDirichlet"))
+	{
+		const auto upper = kind(toml::find<bool>(InternalConfig, "isUpperDirichlet"));
+		for (auto &v : spec.variables)
+			v.upper = upper;
+	}
+
+	if (InternalConfig.contains("isLowerDirichlet"))
+	{
+		const auto lower = kind(toml::find<bool>(InternalConfig, "isLowerDirichlet"));
+		for (auto &v : spec.variables)
+			v.lower = lower;
+	}
+
+	return spec;
+}
+
+AutodiffTransportSystem::AutodiffTransportSystem(toml::value const &config, Grid const &grid, SystemSpec spec)
+	: TransportSystem(withBoundaryConfig(std::move(spec), config))
+{
 	if (config.count("AutodiffTransportSystem") == 1)
 	{
 		auto const &InternalConfig = config.at("AutodiffTransportSystem");
-
-		isUpperDirichlet = toml::find_or(InternalConfig, "isUpperDirichlet", true);
-		isLowerDirichlet = toml::find_or(InternalConfig, "isLowerDirichlet", true);
 
 		xL = grid.lowerBoundary();
 		xR = grid.upperBoundary();
@@ -385,7 +407,7 @@ Value AutodiffTransportSystem::MMS_Source(Index i, Position x, Time t)
 	for (Index j = 0; j < nVars; ++j)
 	{
 		sigma(j) = Flux(i, u, q, xreal, t);
-		dSigma_dx += s.Derivative[j] * gradu[j] + d2udx2[j] * gradq[j];
+		dSigma_dx += s.q(j) * gradu[j] + d2udx2[j] * gradq[j];
 	}
 
 	RealVector phi(nAux);
@@ -442,8 +464,17 @@ void AutodiffTransportSystem::writeDiagnostics(DGSoln const &y, DGSoln const &dy
 
 	if (nScalars > 0)
 	{
+		// Sampled once for all the scalars, as the residual does.
+		const GlobalState states = y.evalOnNodes();
+		const GlobalState states_dt = dydt.evalOnNodes();
+		const Grid &grid = y.getGrid();
+		const Vector &weights = Integrator::getIntegrationWeights(y.getBasis(), grid);
+		const Matrix &phiBoundary = Integrator::getPhiBoundary(y.getBasis(), grid);
+
 		for (Index i = 0; i < nScalars; ++i)
-			nc.AppendToTimeSeries("ScalarG", "ScalarG" + std::to_string(i), ScalarGExtended(i, y, dydt, t), tIndex);
+			nc.AppendToTimeSeries("ScalarG", "ScalarG" + std::to_string(i),
+								  ScalarG(i, states, states_dt, y.getPoints(), weights, phiBoundary, t),
+								  tIndex);
 	}
 
 	if (useMMS)

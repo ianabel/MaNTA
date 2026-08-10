@@ -11,10 +11,8 @@
 REGISTER_PHYSICS_IMPL( NonlinDiffTest );
 
 NonlinDiffTest::NonlinDiffTest( toml::value const& config, Grid const& g )
+	: TransportSystem({.variables = numberedFields(1)})
 {
-	// Always set nVars in a derived constructor
-	nVars = 1;
-
 	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
 
@@ -43,13 +41,10 @@ Value NonlinDiffTest::UpperBoundary( Index, Time t ) const
 	return ExactSolution( 1, t0 + t );
 }
 
-bool NonlinDiffTest::isLowerBoundaryDirichlet( Index ) const { return true; };
-bool NonlinDiffTest::isUpperBoundaryDirichlet( Index ) const { return true; };
-
 
 Value NonlinDiffTest::SigmaFn( Index, const State &s, Position, Time )
 {
-	double u = s.Variable[ 0 ],q = s.Derivative[ 0 ];
+	double u = s.u(0),q = s.q(0);
 
 	double NonlinearKappa = ( n/2.0 )*::pow( u, n )*( 1.0 - ::pow( u, n )/( n + 1.0 ) );
 	return NonlinearKappa * q;
@@ -62,7 +57,7 @@ Value NonlinDiffTest::Sources( Index, const State &, Position, Time )
 
 void NonlinDiffTest::dSigmaFn_dq( Index, VectorRef  v, const State & s, Position, Time )
 {
-	double u = s.Variable[ 0 ];
+	double u = s.u(0);
 	double NonlinearKappa = ( n/2.0 )*::pow( u, n )*( 1.0 - ::pow( u, n )/( n + 1.0 ) );
 
 	v[ 0 ] = NonlinearKappa;
@@ -70,7 +65,7 @@ void NonlinDiffTest::dSigmaFn_dq( Index, VectorRef  v, const State & s, Position
 
 void NonlinDiffTest::dSigmaFn_du( Index, VectorRef  v, const State & s, Position, Time )
 {
-	double u = s.Variable[ 0 ], q = s.Derivative[ 0 ];
+	double u = s.u(0), q = s.q(0);
 	v[ 0 ] = ( ( n*n )/( 2.0*( n + 1.0 ) ) ) * ::pow( u, n - 1.0 ) * ( 1 + n - 2*::pow( u, n ) ) * q;
 };
 

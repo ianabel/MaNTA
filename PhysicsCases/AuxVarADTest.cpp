@@ -20,7 +20,7 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(AuxVarADTest);
 
-AuxVarADTest::AuxVarADTest(toml::value const &config, Grid const &grid) : AutodiffTransportSystem(config, grid, 1, 0, 1)
+AuxVarADTest::AuxVarADTest(toml::value const &config, Grid const &grid) : AutodiffTransportSystem(config, grid, {.variables = numberedFields(1), .aux = numberedAux(1)})
 {
     // Construct your problem from user-specified config
     // throw an exception if you can't. NEVER leave a part-constructed object around
@@ -47,9 +47,6 @@ Value AuxVarADTest::UpperBoundary(Index, Time t) const
 {
     return 0.0;
 }
-
-bool AuxVarADTest::isLowerBoundaryDirichlet(Index) const { return true; };
-bool AuxVarADTest::isUpperBoundaryDirichlet(Index) const { return true; };
 
 Real AuxVarADTest::Flux(Index i, RealVector, RealVector q, Real, Time)
 {

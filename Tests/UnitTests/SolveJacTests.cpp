@@ -294,17 +294,10 @@ namespace
 class NonlinearDiffusion : public TransportSystem
 {
 public:
-    NonlinearDiffusion()
-    {
-        nVars = 1;
-        isLowerDirichlet = true;
-        isUpperDirichlet = true;
-    }
+    NonlinearDiffusion() : TransportSystem({.variables = numberedFields(1)}) {}
 
     Value LowerBoundary(Index, Time) const override { return 0.0; }
     Value UpperBoundary(Index, Time) const override { return 0.0; }
-    bool isLowerBoundaryDirichlet(Index) const override { return true; }
-    bool isUpperBoundaryDirichlet(Index) const override { return true; }
 
     // sigma_hat = ( 1 + u^2 ) q
     Value SigmaFn(Index, const State &s, Position, Time) override

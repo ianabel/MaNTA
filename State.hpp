@@ -3,6 +3,10 @@
 
 #include "Logging.hpp"
 #include "Types.hpp"
+
+#include <stdexcept>
+#include <string>
+
 #ifdef DEBUG
 // Eigen error messages are very unhelpful so we make our own
 // Mainly for debugging, but also to make sure we don't accidentally mess up
@@ -51,20 +55,31 @@ inline void checkShapeAndSet(A &&lhs, const B &rhs,
 class State {
 public:
   State() = default;
+
+  /// Born zeroed, not merely sized.
+  ///
+  /// These are handed to the derivative hooks as out-parameters, and Eigen's
+  /// resize() leaves the memory indeterminate. That put the burden of an
+  /// opening setZero() on every physics case, and a case that assigned only its
+  /// nonzero entries -- which is the natural way to write one -- got whatever
+  /// was in the buffer for the rest. That is not hypothetical: it is defect (2)
+  /// in the ScalarTestLD3 post-mortem in Tests/README.md, where a missing v[2]
+  /// put a garbage column into the scalar coupling matrix. The hooks may still
+  /// call zero() and several do; it is redundant now rather than load-bearing.
   explicit State(Index nv, Index ns = 0, Index naux = 0) {
-    Variable.resize(nv);
-    Derivative.resize(nv);
-    Flux.resize(nv);
-    Scalars.resize(ns);
-    Aux.resize(naux);
+    Variable.setZero(nv);
+    Derivative.setZero(nv);
+    Flux.setZero(nv);
+    Scalars.setZero(ns);
+    Aux.setZero(naux);
   }
 
   void clone(const State &other) {
-    Variable.resize(other.Variable.size());
-    Derivative.resize(other.Derivative.size());
-    Flux.resize(other.Flux.size());
-    Scalars.resize(other.Scalars.size());
-    Aux.resize(other.Aux.size());
+    Variable.setZero(other.Variable.size());
+    Derivative.setZero(other.Derivative.size());
+    Flux.setZero(other.Flux.size());
+    Scalars.setZero(other.Scalars.size());
+    Aux.setZero(other.Aux.size());
   }
 
   void zero() {
@@ -75,6 +90,62 @@ public:
     Aux.setZero();
   }
 
+private:
+  // Defined before the accessors that call it: a deduced return type has to be
+  // known at the point of use.
+  template <typename V>
+  static auto &checked(V &v, Index i, const char *what) {
+#ifdef DEBUG
+    if (i < 0 || i >= v.size())
+      throw std::out_of_range(std::string("State: no ") + what + " " +
+                              std::to_string(i) + " (there are " +
+                              std::to_string(v.size()) + ")");
+#else
+    (void)what;
+#endif
+    return v[i];
+  }
+
+public:
+  /*
+      Named access.
+
+      `s.Variable[0]` says where a number lives; `s.u(0)` says what it is. The
+      raw vectors below are still public because the type casters and the
+      autodiff layer construct whole RealVectors from them, but a physics case
+      should reach for these.
+
+      Two things they buy beyond readability:
+
+      * bounds checking under DEBUG. Anything indexed per auxiliary variable is
+        sized nAux, not nVars, and those coincide in nearly every case here --
+        which is how dGdaux_Vec carried two confusions between them unnoticed.
+
+      * an honest name for the flux. `Flux` holds the solver's *stored* sigma,
+        which is -sigma_hat: the negative of what SigmaFn returned. sigma()
+        gives that stored value, sigmaHat() gives the physical flux. See the
+        header comment in TransportSystem.hpp.
+  */
+  double &u(Index i) { return checked(Variable, i, "variable"); }
+  double u(Index i) const { return checked(Variable, i, "variable"); }
+
+  double &q(Index i) { return checked(Derivative, i, "variable"); }
+  double q(Index i) const { return checked(Derivative, i, "variable"); }
+
+  /// The stored flux, sigma = -sigma_hat. This is what Flux has always held.
+  double &sigma(Index i) { return checked(Flux, i, "variable"); }
+  double sigma(Index i) const { return checked(Flux, i, "variable"); }
+
+  /// The physical flux -- the quantity SigmaFn returns. Read-only: it is a
+  /// negation of the stored value, so there is nothing to take a reference to.
+  double sigmaHat(Index i) const { return -checked(Flux, i, "variable"); }
+
+  double &phi(Index i) { return checked(Aux, i, "auxiliary variable"); }
+  double phi(Index i) const { return checked(Aux, i, "auxiliary variable"); }
+
+  double &scalar(Index i) { return checked(Scalars, i, "scalar"); }
+  double scalar(Index i) const { return checked(Scalars, i, "scalar"); }
+
   Vector Variable, Derivative, Flux, Aux;
   Vector Scalars;
 };
@@ -83,14 +154,17 @@ class GlobalState {
 public:
   GlobalState() = default;
 
+  /// Zeroed for the same reason State is: SystemSolver builds a fresh
+  /// GlobalStateMatrix for every Jacobian evaluation and hands its columns
+  /// straight to dSigmaFn_du and friends as out-parameters.
   explicit GlobalState(Index nCells, Index k, Index nv, Index ns = 0,
                        Index naux = 0) noexcept
       : nCells(nCells), k(k), nVars(nv), nScalars(ns), nAux(naux) {
-    m_Variable.resize(nVars, nCells * (k + 1));
-    m_Derivative.resize(nVars, nCells * (k + 1));
-    m_Flux.resize(nVars, nCells * (k + 1));
-    m_Aux.resize(nAux, nCells * (k + 1));
-    m_Scalars.resize(nScalars);
+    m_Variable.setZero(nVars, nCells * (k + 1));
+    m_Derivative.setZero(nVars, nCells * (k + 1));
+    m_Flux.setZero(nVars, nCells * (k + 1));
+    m_Aux.setZero(nAux, nCells * (k + 1));
+    m_Scalars.setZero(nScalars);
   }
 
   void setWithState(Index i, const State &s) {
@@ -234,6 +308,57 @@ private:
   // type caster; leaving them indeterminate made size() unpredictable.
   Index nCells = 0, k = 0, nVars = 0, nScalars = 0, nAux = 0;
 };
+
+/*
+    Helpers for the scalar constraint hooks.
+
+    A scalar constraint is a functional of the whole solution, so writing one
+    means contracting nodal values with either the quadrature weights or the
+    boundary basis values. These put that arithmetic in one place: getting the
+    cell/node flattening wrong is silent, because a wrong scalar Jacobian only
+    slows Newton down.
+
+    Each takes a single field's nodal values -- a row of GlobalState's
+    (nVars x nPoints) matrices, e.g. `y.Variable().row(var)`.
+*/
+namespace ScalarHooks {
+
+/// Int over the whole domain of one field. weights has one entry per node.
+template <typename Row>
+inline double integrate(Row const &nodalValues, Vector const &weights) {
+  return (nodalValues.transpose().array() * weights.array()).sum();
+}
+
+/// The field's value at an end of the domain: 0 for the lower, 1 for the upper.
+///
+/// The nodes are interior, so this is a contraction of the first (or last)
+/// cell's degrees of freedom with the basis functions evaluated there.
+template <typename Row>
+inline double boundaryValue(Row const &nodalValues, Matrix const &phiBoundary,
+                            Index end) {
+  const Index cellDoF = phiBoundary.rows(); // k + 1
+  const Index offset = (end == 0) ? 0 : nodalValues.size() - cellDoF;
+  double out = 0.0;
+  for (Index j = 0; j < cellDoF; ++j)
+    out += phiBoundary(j, end) * nodalValues[offset + j];
+  return out;
+}
+
+/// d(boundaryValue)/d(nodal DOF), accumulated into a derivative row with the
+/// given scale. The counterpart of boundaryValue for the ScalarGPrime side.
+template <typename Row>
+inline void addBoundaryDerivative(Row &&dRow, Matrix const &phiBoundary, Index end,
+                                  double scale) {
+  const Index cellDoF = phiBoundary.rows();
+  const Index offset = (end == 0) ? 0 : dRow.size() - cellDoF;
+  for (Index j = 0; j < cellDoF; ++j)
+    dRow[offset + j] += scale * phiBoundary(j, end);
+}
+
+constexpr Index Lower = 0;
+constexpr Index Upper = 1;
+
+} // namespace ScalarHooks
 
 // Wrapper class to make Jacobian computation cleaner
 // In general, this class will be holding derivative data and not state data
