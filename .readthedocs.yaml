@@ -1,0 +1,46 @@
+# Read the Docs configuration file
+# See https://docs.readthedocs.io/en/stable/config-file/v2.html for details
+
+# Required
+version: 2
+
+# Set the OS, Python version, and other tools you might need
+build:
+  os: ubuntu-24.04
+  tools:
+    python: "3.13"
+
+# Build documentation in the "docs/" directory with Sphinx
+sphinx:
+   configuration: docs/conf.py
+   # Read the Docs turns this into `-W --keep-going`. Switched on once RTD was
+   # known green *and* known quiet: build #33983621 (commit 5b6b002) ends
+   # `build succeeded.` with no trailing count under Sphinx 7.4.7, and Sphinx
+   # writes `build succeeded, N warnings.` whenever there are any. So this only
+   # changes what happens to a warning that is not there today.
+   #
+   # One failure mode is not our markup. conf.py's intersphinx_mapping fetches
+   # objects.inv from docs.python.org and numpy.org on every build, and a fetch
+   # that times out is a warning -- which under -W now fails the build where
+   # before it published anyway. Sphinx 7.4 has no warning subtype for it, so it
+   # cannot be suppressed selectively: rebuild, and if it ever becomes routine,
+   # raise intersphinx_timeout or drop the mapping.
+   #
+   # To read a build log without a login: the dashboard at
+   # https://app.readthedocs.org/projects/manta-docs/builds/ blocks scripted
+   # fetches, but https://app.readthedocs.org/api/v2/build/<id>.txt does not.
+   fail_on_warning: true
+
+# Required, not optional: docs/requirements.txt is where sphinx-material comes
+# from, and without it the build fails on `html_theme = "sphinx_material"` with
+# the theme unavailable.
+#
+# It has to name Sphinx itself as well as the theme, and not because this block
+# replaces RTD's own Sphinx install -- it does not. RTD runs
+# `pip install --upgrade sphinx` regardless, unpinned, which currently brings
+# Sphinx 9.1.0; the `sphinx>=7,<8` line here is what pins it back to a release
+# sphinx-material 0.0.36 can work with. Drop it and the build gets whatever
+# Sphinx is newest that day.
+python:
+   install:
+   - requirements: docs/requirements.txt

@@ -44,7 +44,7 @@ class JAXTransportSystem(MaNTA.TransportSystem):
 
     
     """
-    Sigma and source, and auxilliary functions to be overloaded in derived classes
+    Sigma and source, and auxiliary functions to be overloaded in derived classes
 
     Parameters
     ----------
@@ -104,11 +104,12 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     def dSources_dPhi( self, index, state, x, t ):
         return self.dSourcedvar(index,state,x,t, self.params).Aux
     
+    @MaNTA_Decorator
     def AuxG( self, index, state, x, t):
         return self.aux(index, state, x, t, self.params)
     
     """
-    Compute derivative of auxilliary functions
+    Compute derivative of auxiliary functions
 
      Parameters
     ----------
@@ -125,8 +126,9 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     state : dict
         Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
     """
+    @MaNTA_Decorator
     def AuxGPrime( self, index, state, x , t):
-        return self.dAuxdvars(index, state, x, t)
+        return self.dAuxdvars(index, state, x, t, self.params)
     
     @abstractmethod
     def InitialValue( self, index, x ):
@@ -151,7 +153,7 @@ class JAXTransportSystem(MaNTA.TransportSystem):
         pass
 
 
-# Need PyTree structure for class paramters to be able to compute adjoints
+# Need PyTree structure for class parameters to be able to compute adjoints
 
 class NonlinearDiffusionParams(NamedTuple):
     SourceCentre: float

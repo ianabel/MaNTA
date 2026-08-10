@@ -320,7 +320,6 @@ class MirrorPlasma(VectorizedTransportSystem):
     # ======================================================================= #
 
     def Sn(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
-
         return (
             self.ParticleSource(state, x, t, params)
             + self.IonizationSource(state, x, t, params)

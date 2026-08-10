@@ -1,9 +1,10 @@
 #ifndef PLASMACONSTANTS_HPP
 #define PLASMACONSTANTS_HPP
 
-#include "../MagneticFields.hpp"
+#include "PhysicsCases/MagneticFields.hpp"
 #include <autodiff/forward/dual.hpp>
 #include <map>
+#include <print>
 
 #include <boost/math/quadrature/gauss_kronrod.hpp>
 
@@ -331,7 +332,7 @@ private:
           },
           minE.val, maxE.val, max_depth, tol);
     } catch (...) {
-      std::cerr << maxE << ", " << minE << std::endl;
+      std::println(stderr, "{:g}, {:g}", maxE.val, minE.val);
       throw;
     }
     // boost isn't compatible with autodiff so we calculate .grad integral

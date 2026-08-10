@@ -21,19 +21,19 @@
 #include "DGSoln.hpp"
 #include "NetCDFIO.hpp"
 #include "AdjointProblem.hpp"
+#include "Postprocessing.hpp"
 
+// Unit tests exercise the HDG block assembly, the static-condensation solve and
+// the adjoint vectors directly -- all private. The previous scheme befriended
+// one struct per Boost test case (BOOST_AUTO_TEST_CASE generates a struct), so
+// every new test that touched private state needed both a forward declaration
+// and a friend line added to this header. That does not scale to the current
+// suite, so a TEST build simply widens access instead. Release builds are
+// unaffected: MANTA_TEST_PRIVATE is plain `private` unless -DTEST is set.
 #ifdef TEST
-namespace system_solver_test_suite
-{
-    struct systemsolver_init_tests;
-    struct systemsolver_multichannel_init_tests;
-    struct systemsolver_matrix_tests;
-    
-};
-namespace adjoint_test_suite
-{
-    struct systemsolver_adjoint_tests;
-}
+#define MANTA_TEST_PRIVATE public
+#else
+#define MANTA_TEST_PRIVATE private
 #endif
 
 class SystemSolver
@@ -113,27 +113,32 @@ class SystemSolver
 
         void updateBoundaryConditions(double t);
 
-        Vector resEval(std::vector<Vector> resTerms);
 
         void mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorWrapper &lam, sunrealtype *const &Y) const;
 
-        static SystemSolver *ConstructFromConfig(std::string fname);
-
-        // Initialise
-        void runSolver(double);
-
-        // // Function for creating solver lambda for use in PyRunner
-        // std::function<void(double)> makeSolver(SUNLinearSolver &LS,   // linear solver memory structure
-        //                                        SUNMatrix& sunMat,     
-        //                                        void *IDA_mem,         // IDA memory structure
-        //                                        int &retval,
-        //                                        N_Vector &Y,           // vector for storing solution
-        //                                        N_Vector &dYdt,        // vector for storing time derivative of solution
-        //                                        N_Vector &constraints, // vector for storing constraints
-        //                                        N_Vector &id,          // vector for storing id (which elements are algebraic or differentiable)
-        //                                        N_Vector &res,         // vector for storing residual
-        //                                        N_Vector &absTolVec,   // vector for storing absolute tolerances
-        //                                        sunrealtype &tout, sunrealtype &tret, bool writeOutput = true); // return a callable solver object
+        // The run lifecycle, in three phases.
+        //
+        //   initialize()       allocate the SUNDIALS objects, build the initial
+        //                      condition, open the output files, run IDACalcIC
+        //   integrate(tFinal)  the time loop, then the adjoint solve and the
+        //                      final netCDF / restart output
+        //   destroySundials()  free everything initialize() allocated
+        //
+        // runSolver() composes the three and is what the standalone binary and
+        // the tests call; behaviour through that entry point is unchanged, except
+        // that cleanup now happens even when the time loop throws.
+        //
+        // They are separate so that a caller can allocate, look at the state,
+        // integrate and free as distinct steps. PyRunner::G() is the motivating
+        // case: it wants the objective without also paying for a gradient.
+        //
+        // destroySundials() nulls what it frees, so calling it twice -- or
+        // without a preceding initialize() -- is safe. initialize() after a
+        // destroySundials() starts a fresh run on the same object.
+        void initialize();
+        void integrate(double tFinal);
+        void destroySundials();
+        void runSolver(double tFinal);
 
         void setAdjointProblem(AdjointProblem *ap) { adjointProblem = ap; };
         void runAdjointSolve();
@@ -145,6 +150,38 @@ class SystemSolver
         void setInputFile(std::string const &fn) { inputFilePath = fn; };
 
         void setZeroFlux(bool in) { zeroFlux = in; };
+
+        // Switch the residual and Jacobian to the superconvergent interpolatory
+        // scheme of Chen, Cockburn, Singler & Zhang (J Sci Comput 81:2188): the
+        // physics is evaluated on the k+2 nodes of the degree-(k+1) basis with
+        // the postprocessed u* in place of u_h, and interpolated into P_{k+1}
+        // rather than P_k. Off by default -- with it off the solver is the
+        // interpolatory HDG method of arXiv:1811.09667, exactly as before.
+        //
+        // The postprocessed u* is reconstructed and written to the output either
+        // way; this flag controls only whether the *method* uses it.
+        void setSuperconvergent(bool in) { superconvergent = in; };
+        bool isSuperconvergent() const { return superconvergent; };
+
+        // Null when k = 0, where the degree-0 NodalBasis cannot be evaluated
+        // off-node and there is nothing to reconstruct from.
+        Postprocessor const *getPostprocessor() const { return postprocessor.get(); };
+
+        // The plain-text .dat files are a gnuplot convenience, not the primary
+        // output -- netCDF is. Both default to off so a run writes only its
+        // .nc; ask for them explicitly when you want to plot.
+        void setWriteDatFile(bool in) { writeDatFile = in; };
+        // <stem>.dydt.dat and <stem>.res.dat. Additionally require a
+        // PHYSICS_DEBUG build, since that is what computes the residual and
+        // error weights they report.
+        void setWriteDebugDatFiles(bool in) { writeDebugDatFiles = in; };
+
+        // Let IDA grow the step by up to 10x between steps instead of the
+        // default 2x. Worth it when the transient is short relative to the run
+        // and the interesting part is the steady state -- an optimisation driver
+        // calling run_ss() in a loop, for instance. It makes IDA more likely to
+        // overshoot and have to retry, so it is off by default.
+        void setAggressiveTimesteps(bool in) { aggressiveTimesteps = in; };
 
         void setJacEvalY( N_Vector, N_Vector );
         int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
@@ -162,7 +199,7 @@ class SystemSolver
 
         friend class PyRunner; // We need to be able to access private variables for the Python runner class
 
-    private:
+    MANTA_TEST_PRIVATE:
         Grid grid;
         unsigned int k;		   // polynomial degree per cell
         unsigned int nCells;   // Total cell count
@@ -170,7 +207,7 @@ class SystemSolver
         unsigned int nScalars; // Any global scalars
         unsigned int nAux;	   // Any auxiliary constraints
 
-        unsigned int nP;       // Number of parameters to compute for adjoint senstivity problem 
+        unsigned int nP;       // Number of parameters to compute for adjoint sensitivity problem 
 
         using EigenCellwiseSolver = Eigen::FullPivLU<Matrix>;
         using EigenGlobalSolver = Eigen::FullPivLU<Matrix>;
@@ -197,6 +234,33 @@ class SystemSolver
         SUNContext ctx;
         N_Vector *v, *w;
 
+        // ---- state of one run, owned between initialize() and destroySundials()
+        //
+        // These were locals of runSolver(). They are members so the three phases
+        // can be called separately; destroySundials() nulls each one, which is
+        // both what makes it idempotent and what lets initialize() be called
+        // again afterwards.
+        //
+        // `ctx` above is deliberately *not* one of them: it belongs to the
+        // SystemSolver, created in the constructor and freed in the destructor.
+        // destroySundials() must not touch it -- freeing it per-run is what used
+        // to make a second runSolver() call on the same object fail at IDACreate.
+        void *IDA_mem = nullptr;      // IDA memory structure
+        SUNLinearSolver LS = nullptr; // linear solver memory structure
+        SUNMatrix sunMat = nullptr;   // the deliberately-empty matrix IDA needs
+        N_Vector Y = nullptr;         // solution
+        N_Vector dYdt = nullptr;      // time derivative of the solution
+        N_Vector constraints = nullptr;
+        N_Vector id = nullptr;        // which components are differential
+        N_Vector res = nullptr;       // residual
+        N_Vector absTolVec = nullptr;
+        sunrealtype tout = 0.0, tret = 0.0;
+
+        std::ofstream out0, dydt_out, res_out;
+        // writeDebugDatFiles && physics_debug. Computed once in initialize()
+        // because the time loop and the teardown both need it.
+        bool debugDat = false;
+
         std::vector<Matrix> W_cellwise;
         Matrix N_global; // Scalar-scalar coupling matrix
 
@@ -210,6 +274,11 @@ class SystemSolver
 
         DGSoln yJac; // memory owned by us
         DGSoln dydtJac; // memory owned by us
+
+        // Built in initialiseMatrices(), once the polynomial degree and grid are
+        // fixed. Non-copyable and holds a reference to `grid`, hence the pointer.
+        std::unique_ptr<Postprocessor> postprocessor;
+        bool superconvergent = false;
 
         Matrix G_p; // gradients computed by adjoint state method
 
@@ -225,7 +294,41 @@ class SystemSolver
 
         void DerivativeSubMatrix(Matrix &mat, std::vector<Eigen::Ref<Matrix>> const dX_dZ, DGSoln const &, Index intervalIndex);
 
+        // The superconvergent counterpart of DerivativeSubMatrix, and the only
+        // place the chain rule through the postprocessing lives.
+        //
+        // With the star scheme a physics value X is evaluated at the k+2 star
+        // nodes with u* in place of u_h, and the resulting P_{k+1} interpolant is
+        // projected onto the P_k test space by A9. So for a cell dof vector Z,
+        //
+        //     d/dZ ( X, phi_i )_K  =  A9 . diag( dX/dW ) . dW/dZ
+        //
+        // where W is whichever field X was differentiated with respect to and the
+        // trailing `chain` is dW/dZ evaluated at the star nodes:
+        //
+        //     Z = u coefficients      chain = B12   (u* depends on them)
+        //     Z = q coefficients      chain = V     for dX/dq, and additionally
+        //                                    B11    for dX/du, since u* depends
+        //                                           on q as well
+        //     Z = sigma or phi        chain = V     (simply sampled there)
+        //
+        // Accumulates rather than assigns, so the two contributions to the q
+        // column can be added in turn. dX_dZ[XVar](WVar, m) is dX_XVar/dW_WVar at
+        // star node m, the same indexing DerivativeSubMatrix uses.
+        void accumulateStarBlocks(MatrixRef mat,
+                                  std::vector<Eigen::Ref<Matrix>> const &dX_dZ,
+                                  Matrix const &chain, Index nX, Index nZ,
+                                  Index intervalIndex) const;
+
         void dSources_dScalars_Mat(Matrix &, DGSoln const &, Index );
+
+        // Superconvergent counterpart. The scalars do not enter the
+        // postprocessing, so there is no chain matrix -- only the star nodes and
+        // A9 in place of the mass matrix. Takes the states and positions the
+        // caller already has rather than re-deriving them from a DGSoln, which it
+        // could not do for the star nodes anyway.
+        void dSources_dScalars_StarMat(Matrix &, GlobalState const &,
+                                       std::vector<Position> const &, Index);
 
         void dSourcedPhi_Mat(Matrix &, DGSoln const &, Index );
         void dPhi_Mat(Matrix &, std::vector<Eigen::Ref<Matrix>> const dX_dZ, DGSoln const &, Index );
@@ -250,6 +353,14 @@ class SystemSolver
         bool initialised = false;
 
         bool zeroFlux = false; // used to switch between zero-flux and zero-gradient BCs
+
+        // Text output is opt-in; netCDF is what a run produces by default.
+        bool writeDatFile = false;
+        bool writeDebugDatFiles = false;
+
+        // IDASetEtaMax(10.0) rather than IDA's default 2.0. See
+        // setAggressiveTimesteps.
+        bool aggressiveTimesteps = false;
 
         double alpha = 1.0;
         bool testing = false;
@@ -290,13 +401,6 @@ class SystemSolver
         constexpr static bool physics_debug = false;
 #endif
 
-#ifdef TEST
-        friend struct system_solver_test_suite::systemsolver_init_tests;
-        friend struct system_solver_test_suite::systemsolver_multichannel_init_tests;
-        friend struct system_solver_test_suite::systemsolver_matrix_tests;
-        friend struct adjoint_test_suite::systemsolver_adjoint_tests;
-#endif
-
         std::filesystem::path inputFilePath;
         double dt0 = 0.0; // initial dt for CalcIC
         int nOut;
@@ -305,7 +409,10 @@ class SystemSolver
         int getErrorWeights( N_Vector y, N_Vector ewt );
         static int getErrorWeights_static( N_Vector, N_Vector, void * );
 
-        N_Vector wgt;
+        // Allocated by initialize() only on the debug-.dat path, so it has to
+        // start null: destroySundials() frees it if it is non-null, and an
+        // uninitialised pointer there is a segfault on every ordinary run.
+        N_Vector wgt = nullptr;
 };
 
 #endif // SYSTEMSOLVER_HPP

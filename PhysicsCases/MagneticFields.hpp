@@ -25,6 +25,22 @@ class MagneticField
 {
 public:
 	MagneticField() = default;
+
+	// A polymorphic base needs this. Without it, destroying a derived field
+	// through a MagneticField pointer is undefined behaviour -- which today it
+	// never is, because createMagneticField below returns a
+	// shared_ptr<MagneticField> built by make_shared<Derived>, and make_shared
+	// installs a deleter that remembers the concrete type. So this is latent
+	// rather than live: it becomes a real leak the first time one of these is put
+	// in a unique_ptr<MagneticField>, or deleted through a base pointer.
+	//
+	// clang reports it as -Wdelete-non-abstract-non-virtual-dtor at the point of
+	// destruction, i.e. inside libstdc++, once per instantiating translation unit;
+	// gcc does not warn at all. TransportSystem and AdjointProblem already
+	// declare theirs, so this was the only polymorphic base in the project
+	// without one.
+	virtual ~MagneticField() = default;
+
 	virtual Real Psi_V(Real V) const = 0;
 	virtual double Psi_V(double V) const { return Psi_V(static_cast<Real>(V)).val; }
 
@@ -66,7 +82,14 @@ public:
 	template <typename F>
 	Real FluxSurfaceAverage(const F &f, Real V) const
 	{
-		auto Integrand = [&](Real s)
+		// The `-> Real` is required, not stylistic. autodiff's operators return
+		// expression templates holding *references* to their operands, so with
+		// a deduced return type this lambda would hand back an expression
+		// referring to `s` and to the temporary from B_s(...) -- both dead by
+		// the time trapezoid evaluates it. The symptom is not a crash but a
+		// silently wrong (typically zero) integral. Verified in
+		// Tests/UnitTests/UtilityTests.cpp.
+		auto Integrand = [&](Real s) -> Real
 		{ return f(s) / B_s(Psi_V(V), s); };
 		Real I = 2 * M_PI / VPrime(V) * trapezoid(Integrand, LeftEndpoint(Psi_V(V)), RightEndpoint(Psi_V(V)), 1e-3);
 		return I;

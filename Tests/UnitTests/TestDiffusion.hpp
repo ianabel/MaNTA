@@ -3,6 +3,11 @@
 
 #include "TransportSystem.hpp"
 
+// The constructor takes a toml::value. Without this include the header only
+// compiles when the translation unit happens to have included <toml.hpp>
+// first, which is why it worked from SystemSolverTests.cpp but nowhere else.
+#include <toml.hpp>
+
 /*
 	Header-only TransportSystem for the Unit tests to
 	enable testing of construction of a SystemSolver
@@ -16,7 +21,7 @@ class TestDiffusion : public TransportSystem {
 			// Always set nVars in a derived constructor
 			nVars = 1;
 
-			// Construst your problem from user-specified config
+			// Construct your problem from user-specified config
 			// throw an exception if you can't. NEVER leave a part-constructed object around
 			// here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 

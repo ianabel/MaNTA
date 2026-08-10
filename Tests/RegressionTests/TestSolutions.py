@@ -7,9 +7,40 @@ import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import sys
 import os
+import argparse
+import shutil
+import re
 import scipy
 
-manta_file = "../../" + os.environ["SOLVER"]
+# SOLVER is exported by the top-level Makefile. Default to the usual name so
+# `make -C Tests/RegressionTests` and running ./TestSolutions.py directly work
+# too -- previously either died with KeyError: 'SOLVER'.
+# Resolve against this script's location, not the caller's cwd.
+_here = os.path.dirname(os.path.abspath(__file__))
+manta_file = os.path.join(_here, "..", "..", os.environ.get("SOLVER", "MaNTA"))
+# All the .conf inputs and .ref.nc references are siblings of this script, and
+# the solver writes its output into the cwd -- so anchor there.
+os.chdir(_here)
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Run the MaNTA regression suite.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--tolerance",
+        type=float,
+        default=5e-3,
+        help="Relative L_2 tolerance for every comparison. Raise it to triage a "
+             "suite that has drifted; do not commit a raised value without "
+             "saying why.",
+    )
+    return parser.parse_args()
+
+
+ARGS = parse_args()
+TOLERANCE = ARGS.tolerance
+
+
 def run_manta( config_file ):
     code = os.system( manta_file + " " + config_file + " >/dev/null" )
     if( code != 0 ):
@@ -53,7 +84,17 @@ def test_ref_soln_l2( filename, ref_filename, tolerance ):
                 print("Error: L_2 norm ", diff, " ( ref is ", l2norm_ref, " ) at t = ",t_var[t_idx]," is greater than ",tolerance)
                 sys.exit( 1 )
     
-    # Check if adjoints were computed, if so compare those too
+    # Check if adjoints were computed, if so compare those too.
+    # NOTE: this guard tests the freshly-generated file. WriteAdjoints() is
+    # currently commented out at Solver.cpp:350 (commit 57d2652, "adjoint
+    # writing doesn't work for spatial adjoints"), so no run produces "ng" and
+    # this whole block silently skipped itself. Warn loudly when the reference
+    # has adjoint data that the run did not reproduce.
+    if ("ng" not in nc_root.variables) and ("ng" in nc_root_ref.variables):
+        print("  !! SKIPPING adjoint check for", filename, "- reference has adjoint")
+        print("     output but this run produced none. WriteAdjoints() is commented")
+        print("     out at Solver.cpp:350. Re-enable it to restore this check.")
+
     if ("ng" in nc_root.variables):
         print("  ... also checking adjoint variables")
         ng = int(nc_root.variables["ng"][0])
@@ -131,19 +172,19 @@ def test_steady_state( filename, soln_fn, tolerance ):
         sys.exit( 1 )
 
 def cleanup( prefix ):
+    # .nc is always written; the .dat files are opt-in (WriteDatFile /
+    # WriteDebugDatFiles, both off by default) so none of them may exist.
     os.unlink( prefix + ".nc" )
-    os.unlink( prefix + ".dat" )
-    if ( os.path.exists( prefix + ".res.dat" ) ):
-       os.unlink( prefix + ".res.dat" )
-    if ( os.path.exists( prefix + ".dydt.dat" ) ):
-       os.unlink( prefix + ".dydt.dat" )
+    for suffix in ( ".dat", ".res.dat", ".dydt.dat" ):
+        if os.path.exists( prefix + suffix ):
+            os.unlink( prefix + suffix )
 
 def check_ref_case( prefix ):
     print("Checking Reference Solution for "+prefix+".conf")
     run_manta( prefix + ".conf" )
     ncFileName = prefix + ".nc"
     ncRefFile  = prefix + ".ref.nc"
-    test_ref_soln_l2( ncFileName, ncRefFile, 5e-3 )
+    test_ref_soln_l2( ncFileName, ncRefFile, TOLERANCE )
     cleanup( prefix )
     
 def ld_soln( x, t ):
@@ -153,7 +194,7 @@ def ld_soln( x, t ):
 print("Testing Analytic Solutions")
 
 run_manta( "ld.conf" )
-test_analytic_soln( "ld.nc", ld_soln, 5e-3 )
+test_analytic_soln( "ld.nc", ld_soln, TOLERANCE )
 cleanup( "ld" )
 
 def nonlin_soln( x, t ):
@@ -163,7 +204,7 @@ def nonlin_soln( x, t ):
     return pow( 1 - eta, 1/n )
 
 run_manta( "nonlin.conf" )
-test_analytic_soln( "nonlin.nc", nonlin_soln, 5e-3 )
+test_analytic_soln( "nonlin.nc", nonlin_soln, TOLERANCE )
 cleanup( "nonlin" )
 
 def nonlin_ss( x ):
@@ -178,7 +219,7 @@ def nonlin_ss( x ):
     return 1.0/(u2**2)
 
 run_manta( "nonlin_ss.conf" )
-test_steady_state( "nonlin_ss.nc", nonlin_ss, 5e-3 )
+test_steady_state( "nonlin_ss.nc", nonlin_ss, TOLERANCE )
 cleanup( "nonlin_ss" )
 
 print("Checking Reference Solutions")
@@ -193,6 +234,176 @@ check_ref_case( "AdjointTestProblem" )
 check_ref_case( "AuxVarTest" )
 check_ref_case( "NeumannTestLower" )
 check_ref_case( "NeumannTestUpper" )
+# Every case above runs with Superconvergent unset, which is what keeps their
+# references valid across the addition of that option. This one turns it on.
+check_ref_case( "SuperconvergentADTest" )
+
+
+# ---------------------------------------------------------------- restarts --
+#
+# Running to t2 in one go and running to t1, writing a restart file, then
+# picking it up and continuing to t2 must give the same answer. That exercises
+# a path nothing else does: WriteRestartFile -> StoreGridInfo -> the restart
+# branch of runManta -> Grid(CellBoundaries) -> setRestartValues, including the
+# DOF bookkeeping for nVars, nAux and nScalars.
+#
+# It is also the check that caught the clustered-grid contiguity defect: the
+# grid rebuilt from a restart file has to compare *equal* to the one that wrote
+# it, and a 1e-16 gap at a cell face was enough to break that.
+
+
+def config_variant( source_prefix, target_prefix, **overrides ):
+    """Copy a .conf, replacing keys in [configuration] (adding them if absent).
+
+    MaNTA names its output after the config file's stem, so a variant with a
+    distinct name writes distinct .nc/.dat/.restart.nc files and cannot collide
+    with the checked-in references.
+    """
+    text = open( source_prefix + ".conf" ).read()
+
+    # Everything before the first [section] after [configuration] is the general
+    # section; keys are inserted there.
+    for key, value in overrides.items():
+        pattern = re.compile( r"^\s*" + re.escape( key ) + r"\s*=.*$", re.MULTILINE )
+        replacement = "{} = {}".format( key, value )
+        if pattern.search( text ):
+            text = pattern.sub( replacement, text, count = 1 )
+        else:
+            text = text.replace( "[configuration]", "[configuration]\n" + replacement, 1 )
+
+    open( target_prefix + ".conf", "w" ).write( text )
+
+
+def final_slice( filename, var_index ):
+    nc_root = Dataset( filename, "r", format = "NETCDF4" )
+    x = np.array( nc_root.variables["x"][:] )
+    u = np.array( nc_root.groups["Var" + str( var_index )].variables["u"][-1, :] )
+    return x, u
+
+
+def test_final_slices_match( filename, other_filename, tolerance ):
+    """Compare the last timeslice of two runs, variable by variable.
+
+    The reference comparison above walks every output time; here the two runs
+    have different output schedules by construction, so only the end state is
+    comparable.
+    """
+    nc_root = Dataset( filename, "r", format = "NETCDF4" )
+    n_vars = int( nc_root.variables["nVariables"][0] )
+
+    for v_idx in range( n_vars ):
+        x, u = final_slice( filename, v_idx )
+        x_other, u_other = final_slice( other_filename, v_idx )
+
+        if not np.allclose( x, x_other ):
+            print( "Error: output grids differ between " + filename + " and " + other_filename )
+            sys.exit( 1 )
+
+        diff2 = np.trapezoid( ( u - u_other ) ** 2, x )
+        norm2 = np.trapezoid( u_other ** 2, x )
+
+        l2diff = np.sqrt( diff2 )
+        l2ref  = np.sqrt( norm2 )
+        diff = abs( l2diff / l2ref ) if l2ref > 1e-12 else abs( l2diff )
+
+        if diff > tolerance:
+            print( "Error: restart round trip differs by L_2 norm ", diff,
+                   " ( ref is ", l2ref, " ) for Var" + str( v_idx ),
+                   " which is greater than ", tolerance )
+            sys.exit( 1 )
+
+
+def check_restart_round_trip( prefix, t_split, rtol = 1.0e-6, atol = 1.0e-8 ):
+    """Run prefix.conf to its own t_final, split at t_split, compare.
+
+    All three runs are done at `rtol`/`atol` rather than at whatever the case
+    normally uses. That is not cosmetic: a restart re-initialises the
+    integrator, so the two routes take genuinely different step sequences, and
+    at AuxVarTest's usual 1e-2 tolerances they legitimately disagree by about
+    0.7% -- more than the comparison tolerance, and not a defect. Tightening
+    until the answer is determined well below the comparison threshold is what
+    makes the round trip a test of the restart mechanism rather than of the
+    time integrator's step choices.
+
+    The tolerance cannot be tightened without limit, though: see the table
+    beside the calls below.
+    """
+    print( "Checking restart round trip for " + prefix + ".conf (split at t = "
+           + str( t_split ) + ")" )
+
+    source = open( prefix + ".conf" ).read()
+    t_final = float( re.search( r"^\s*t_final\s*=\s*(\S+)", source, re.MULTILINE ).group( 1 ) )
+
+    whole   = prefix + "_restart_whole"
+    part    = prefix + "_restart_part"
+    resumed = prefix + "_restart_resumed"
+
+    # The default MinStepSize of 1e-7 is too coarse for these tolerances; IDA
+    # stalls at t = 0 with "|h| = hmin" rather than saying so.
+    accurate = dict( Relative_tolerance = rtol,
+                     Absolute_tolerance = atol,
+                     MinStepSize = 1.0e-12 )
+
+    try:
+        config_variant( prefix, whole, **accurate )
+        run_manta( whole + ".conf" )
+
+        config_variant( prefix, part, t_final = t_split, **accurate )
+        run_manta( part + ".conf" )
+
+        config_variant(
+            prefix, resumed,
+            restart = "true",
+            RestartFile = '"' + part + '.restart.nc"',
+            t_initial = t_split,
+            t_final = t_final,
+            **accurate
+        )
+        run_manta( resumed + ".conf" )
+
+        test_final_slices_match( resumed + ".nc", whole + ".nc", TOLERANCE )
+    finally:
+        for name in ( whole, part, resumed ):
+            if os.path.exists( name + ".conf" ):
+                os.unlink( name + ".conf" )
+            if os.path.exists( name + ".nc" ):
+                cleanup( name )
+            if os.path.exists( name + ".restart.nc" ):
+                os.unlink( name + ".restart.nc" )
+
+
+print( "Checking Restart Round Trips" )
+
+# One variable, two variables, and one auxiliary variable: the three shapes the
+# restart DOF arithmetic has to get right.
+#
+# KNOWN LIMITATION -- each case is run at the tightest tolerance at which the
+# restart actually completes, and those differ. Measured, holding everything
+# else fixed, as (uninterrupted run) / (restart and continue):
+#
+#   rtol / atol      LinearDiffusion   MatTest        AuxVarTest
+#   1e-3 / 1e-5      ok / ok           ok / ok        ok / ok
+#   1e-4 / 1e-6      ok / ok           ok / ok        ok / IDASolve -4
+#   1e-6 / 1e-8      ok / ok           ok / -6        ok / IDASolve -4
+#
+# The uninterrupted run succeeds in every cell of that table, so this is the
+# restart path specifically, not the cases being hard to integrate. After a
+# restart IDACalcIC needs an order of magnitude more residual evaluations than
+# from a cold start (~1400 vs ~100 for AuxVarTest), so the state the restart
+# hands it is a long way from consistent -- most likely because
+# setInitialConditions recomputes sigma and lambda from the restored u and q
+# and discards the restored dY/dt entirely.
+#
+# The failure signature on the aux case, "the corrector convergence failed
+# repeatedly", is the same one JAXAuxTest is xfail on. That may or may not be
+# the same underlying problem.
+#
+# Tighten these once the above is fixed; the numbers here are a floor, not a
+# target.
+check_restart_round_trip( "LinearDiffusion", 0.25, rtol = 1.0e-6, atol = 1.0e-8 )
+check_restart_round_trip( "MatTest", 0.25, rtol = 1.0e-4, atol = 1.0e-6 )
+check_restart_round_trip( "AuxVarTest", 0.6, rtol = 1.0e-3, atol = 1.0e-5 )
+
 
 print("\n\n----------------")
 print("All Tests Passed")

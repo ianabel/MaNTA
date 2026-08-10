@@ -382,7 +382,7 @@ void MirrorPlasma::initialiseDiagnostics(NetCDFIO &nc)
     nc.AddVariable("Heating", "AlphaHeating", "Alpha heat source", "-", AlphaHeating);
     nc.AddVariable("Heating", "ViscousHeating", "Viscous heat source", "-", VisHeating);
     nc.AddVariable("Heating", "RadiationLosses", "Bremsstrahlung heat losses", "-", RadiationLosses);
-    nc.AddVariable("Heating", "EnergyExchange", "Collisional ion-electron energy exhange", "-", EnergyExchange);
+    nc.AddVariable("Heating", "EnergyExchange", "Collisional ion-electron energy exchange", "-", EnergyExchange);
     nc.AddVariable("Heating", "IonPotentialHeating", "Ion potential heating", "-", IonPotentialHeatingWrapper);
     nc.AddVariable("Heating", "ElectronPotentialHeating", "Ion potential heating", "-", ElectronPotentialHeatingWrapper);
     nc.AddVariable("Heating", "CyclotronLosses", "Cyclotron heat losses", "-", [&](double V)

@@ -29,7 +29,32 @@ compile_commands.json
 tags
 *.h5
 venv
+.venv/
 gmon.out
 *.sh
 slurm-*.out
+
+# Compiler-generated header dependency files (-MMD -MP)
+*.d
+
+# Editor swap files
+*.swp
+
+# Coverage (make coverage)
+*.gcda
+*.gcno
+*.gcov
+coverage/
+
+# Sphinx (docs/), built locally with
+#   sphinx-build -W -b html docs docs/_build/html
+docs/_build/
+
+# Local scratch / run output
+Plots/
+runs-for-bhavin/
+scalar-tests/
+toy-model/
+__pycache__/
+.pytest_cache/
 *.pkl

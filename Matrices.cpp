@@ -63,6 +63,33 @@ void SystemSolver::DerivativeSubMatrix(Matrix &mat, std::vector<Eigen::Ref<Matri
 	}
 }
 
+// See the declaration in SystemSolver.hpp for what the chain matrix is and why
+// the q column needs two calls.
+void SystemSolver::accumulateStarBlocks(MatrixRef mat,
+										std::vector<Eigen::Ref<Matrix>> const &dX_dZ,
+										Matrix const &chain, Index nX, Index nZ,
+										Index intervalIndex) const
+{
+	assert(mat.rows() == nX * (k + 1));
+	assert(mat.cols() == nZ * (k + 1));
+	assert(chain.rows() == k + 2);
+	assert(chain.cols() == k + 1);
+
+	Matrix const &A9 = postprocessor->A9(intervalIndex);
+
+	for (Index XVar = 0; XVar < nX; XVar++)
+	{
+		for (Index ZVar = 0; ZVar < nZ; ZVar++)
+		{
+			// Materialised because asDiagonal() on a transposed row of an
+			// Eigen::Ref is fragile to alias analysis, and this is k+2 doubles.
+			const Vector d = dX_dZ[XVar].row(ZVar).transpose();
+			mat.block(XVar * (k + 1), ZVar * (k + 1), k + 1, k + 1) +=
+				(A9 * d.asDiagonal()) * chain;
+		}
+	}
+}
+
 void SystemSolver::DerivativeSubMatrix( Matrix& mat, void ( TransportSystem::*dX_dZ )( Index, VectorRef, const State&, Position, double ), DGSoln const& Y, Index intervalIndex )
 {
 	// ASSERT mat.shape == ( nVars * ( k + 1) , nVars * ( k + 1 ) )
@@ -112,10 +139,7 @@ void SystemSolver::dSourcedsigma_Mat( Matrix& dSourcedsigmaMatrix, DGSoln const&
 
 void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Index intervalIndex )
 {
-    Interval const &I( grid[ intervalIndex ] );
-	auto const& x_vals = y.getBasis().abscissae();
-	auto const& x_wgts = y.getBasis().weights();
-	const size_t n_abscissa = x_vals.size();
+	Interval const &I( grid[ intervalIndex ] );
 
 	// ASSERT mat.shape == ( nVars * ( k + 1) , nScalars )
 	assert( mat.rows() == nVars * ( k + 1 ) );
@@ -123,41 +147,73 @@ void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Index in
 
 	mat.setZero();
 
-	// Phi are basis fn's
-	// M( nVars * K + k, nVars * J + j ) = Int_I ( d sigma_fn_K / d u_J * Phi_k * Phi_j )
+	// This is the derivative of the source term as the *residual* forms it, so
+	// it has to be built the same way the residual builds it. residual() uses
+	//
+	//     res.u += ... - InterpolateOntoBasis( I, S( nodes ) )
+	//
+	// i.e. the projection of the *interpolant* of S, so the derivative is the
+	// projection of the interpolant of dS/dmu -- the same
+	// `Mass * (values at nodes)` form every other Jacobian block in this file
+	// uses (c.f. https://arxiv.org/pdf/1811.09667 eq 3.16ff).
+	//
+	// This used to integrate dS/dmu exactly by Gauss quadrature instead. The two
+	// agree only when dS/dmu is a polynomial the basis represents: for
+	// ScalarTestLD3, whose dS/dJ is a narrow Gaussian, they differed by 7% of
+	// the residual at k = 2 on 4 cells (falling to 6e-9 by k = 6 on 32 cells, as
+	// the interpolation error dies away). The Jacobian is never assembled, so
+	// the only symptom was degraded Newton convergence.
+	Values dSdS( nScalars );
+	Matrix nodal( nScalars, k + 1 );
 
 	for ( Index XVar = 0; XVar < nVars; XVar++ )
 	{
-		Values dSdS_vals1( nScalars );
-		Values dSdS_vals2( nScalars );
-		for ( size_t i=0; i < n_abscissa; ++i ) {
-			// Pull the loop over the gaussian integration points
-			// outside so we can evaluate u, q, dX_dZ once and store the values
-			
-			// All for loops inside here can be parallelised as they all
-			// write to separate entries in mat
-			
-			double wgt = x_wgts[ i ]*( I.h()/2.0 );
-
-			double y_plus  = I.x_l + ( 1.0 + x_vals[ i ] )*( I.h()/2.0 );
-			double y_minus = I.x_l + ( 1.0 - x_vals[ i ] )*( I.h()/2.0 );
-
-			State Y_plus = Y.eval( y_plus ), Y_minus = Y.eval( y_minus );
-
-			problem->dSources_dScalars( XVar, dSdS_vals1, Y_plus, y_plus, jt );
-			problem->dSources_dScalars( XVar, dSdS_vals2, Y_minus, y_minus, jt );
-
-			for(Index iScalar = 0; iScalar < nScalars; iScalar++)
-			{
-				for ( Index j=0; j < k + 1; ++j )
-				{
-					mat( XVar * ( k + 1 ) + j, iScalar ) +=
-						wgt * dSdS_vals1[ iScalar ] * y.getBasis().Evaluate( I, j, y_plus );
-					mat( XVar * ( k + 1 ) + j, iScalar ) +=
-						wgt * dSdS_vals2[ iScalar ] * y.getBasis().Evaluate( I, j, y_minus );
-				}
-			}
+		for ( Index j = 0; j < k + 1; ++j )
+		{
+			dSdS.setZero();
+			double x_j = I.fromRef( Y.getBasis().Nodes( j ) );
+			State s = Y.evalOnNode( intervalIndex, j );
+			problem->dSources_dScalars( XVar, dSdS, s, x_j, jt );
+			nodal.col( j ) = dSdS;
 		}
+
+		for ( Index iScalar = 0; iScalar < nScalars; ++iScalar )
+		{
+			Vector vals = nodal.row( iScalar ).transpose();
+			mat.block( XVar * ( k + 1 ), iScalar, k + 1, 1 ) =
+				Y.getBasis().InterpolateOntoBasis( I, vals );
+		}
+	}
+}
+
+void SystemSolver::dSources_dScalars_StarMat(Matrix &mat, GlobalState const &states,
+											 std::vector<Position> const &points,
+											 Index intervalIndex)
+{
+	assert(mat.rows() == nVars * (k + 1));
+	assert(mat.cols() == nScalars);
+
+	mat.setZero();
+
+	const Index nStar = k + 2;
+	Matrix const &A9 = postprocessor->A9(intervalIndex);
+
+	Values dSdS(nScalars);
+	Matrix nodal(nScalars, nStar);
+
+	for (Index XVar = 0; XVar < nVars; XVar++)
+	{
+		for (Index m = 0; m < nStar; ++m)
+		{
+			dSdS.setZero();
+			const Index g = intervalIndex * nStar + m;
+			problem->dSources_dScalars(XVar, dSdS, states[g], points[g], jt);
+			nodal.col(m) = dSdS;
+		}
+
+		for (Index iScalar = 0; iScalar < nScalars; ++iScalar)
+			mat.block(XVar * (k + 1), iScalar, k + 1, 1) =
+				A9 * Vector(nodal.row(iScalar).transpose());
 	}
 }
 
@@ -250,35 +306,56 @@ void SystemSolver::dAux_Mat(Eigen::Ref<Matrix> mat, GlobalStateMatrix& dAux, DGS
 	mat.setZero();
 
 	// With interpolation we have Mass * diagonal( F'(nodes) ) (c.f. https://arxiv.org/pdf/1811.09667 eq 3.16ff)
-  const auto dG_du = dAux.Variable(intervalIndex);
-  const auto dG_dq = dAux.Derivative(intervalIndex);
-  const auto dG_dsigma= dAux.Flux(intervalIndex);
-  const auto dG_dphi = dAux.Aux(intervalIndex);
+	//
+	// The column layout is the one MX uses throughout: [ sigma | q | u | phi ],
+	// each of the first three nVars*(k+1) wide and phi nAux*(k+1) wide. See
+	// updateMatricesForJacSolve, which writes NLq at column nVars*(k+1) and NLu
+	// at 2*nVars*(k+1), and the sibling overload below, which integrates the
+	// same quantities against the same layout.
+	//
+	// This used to write dG/du into column j, dG/dq into ZVar*(k+1)+j and
+	// dG/dsigma into 2*ZVar*(k+1)+j -- three different derivatives piled into
+	// the sigma column block, with dG/du assigned rather than accumulated so
+	// only the last variable's value survived. For a case like AuxVarTest,
+	// whose only nonzero aux derivatives are dG/du and dG/dphi, that dropped
+	// dG/du from the Jacobian entirely. The residual was unaffected, so the
+	// answer stayed correct and only Newton convergence suffered -- which is
+	// why no regression test noticed. The M application below was also missing
+	// the q and u column blocks, and its inner loop shadowed `Aux`.
+	const auto dG_du = dAux.Variable(intervalIndex);
+	const auto dG_dq = dAux.Derivative(intervalIndex);
+	const auto dG_dsigma = dAux.Flux(intervalIndex);
+	const auto dG_dphi = dAux.Aux(intervalIndex);
+
+	const Index sigmaBlock = 0;
+	const Index qBlock = nVars * (k + 1);
+	const Index uBlock = 2 * nVars * (k + 1);
+	const Index phiBlock = 3 * nVars * (k + 1);
+
+	const Matrix M = Y.getBasis().MassMatrix(grid[intervalIndex]);
+
 	for (Index Aux = 0; Aux < nAux; Aux++)
 	{
-		Matrix M = Y.getBasis().MassMatrix(grid[intervalIndex]);
-    
 		for (Index j = 0; j < k + 1; ++j)
 		{
-			Vector vals(nVars);
-			vals.setZero();
 			for (Index ZVar = 0; ZVar < nVars; ZVar++)
 			{
-				mat(Aux * (k + 1) + j, j) = dG_du[Aux](ZVar, j);
-				mat(Aux * (k + 1) + j, ZVar * (k + 1) + j) += dG_dq[Aux](ZVar, j);
-				mat(Aux * (k + 1) + j, 2 * ZVar * (k + 1) + j) += dG_dsigma[Aux](ZVar, j);
+				mat(Aux * (k + 1) + j, sigmaBlock + ZVar * (k + 1) + j) += dG_dsigma[Aux](ZVar, j);
+				mat(Aux * (k + 1) + j, qBlock + ZVar * (k + 1) + j) += dG_dq[Aux](ZVar, j);
+				mat(Aux * (k + 1) + j, uBlock + ZVar * (k + 1) + j) += dG_du[Aux](ZVar, j);
 			}
-      for (Index A2 = 0; A2 < nAux; A2++)
-				mat(Aux * (k + 1) + j, (3 * nVars + A2) * (k + 1) + j) += dG_dphi[Aux](A2, j);
+			for (Index A2 = 0; A2 < nAux; A2++)
+				mat(Aux * (k + 1) + j, phiBlock + A2 * (k + 1) + j) += dG_dphi[Aux](A2, j);
 		}
+
 		for (Index ZVar = 0; ZVar < nVars; ZVar++)
 		{
-			mat.block(Aux * (k + 1), ZVar * (k + 1), k + 1, k + 1).applyOnTheLeft(M);
+			mat.block(Aux * (k + 1), sigmaBlock + ZVar * (k + 1), k + 1, k + 1).applyOnTheLeft(M);
+			mat.block(Aux * (k + 1), qBlock + ZVar * (k + 1), k + 1, k + 1).applyOnTheLeft(M);
+			mat.block(Aux * (k + 1), uBlock + ZVar * (k + 1), k + 1, k + 1).applyOnTheLeft(M);
 		}
-    for (Index Aux = 0; Aux < nAux; Aux++)
-    {
-			mat.block(Aux * (k + 1), (3 * nVars + Aux) * (k + 1), k + 1, k + 1).applyOnTheLeft(M);
-    }
+		for (Index A2 = 0; A2 < nAux; A2++)
+			mat.block(Aux * (k + 1), phiBlock + A2 * (k + 1), k + 1, k + 1).applyOnTheLeft(M);
 	}
 }
 void SystemSolver::dAux_Mat( Eigen::Ref<Matrix> mat, DGSoln const& Y, Index intervalIndex )

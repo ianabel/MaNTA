@@ -1,4 +1,5 @@
 #include "PlasmaConstants.hpp"
+#include <print>
 
 // Just normalize the fusion rate from the ion class
 Real PlasmaConstants::FusionRate(Real n, Real pi) const {
@@ -31,19 +32,16 @@ Real PlasmaConstants::CyclotronLosses(Real V, Real n, Real Te) const {
   Real B_z = B->B(B->Psi_V(V), 0.0) * B0; // in Tesla
   Real P_vacuum = 6.21 * n_e20 * Te_eV * B_z * B_z;
 
-  // Characteristic absorption length
-  // lambda_0 = (Electron Inertial Lenght) / ( Plasma Frequency / Cyclotron
-  // Frequency )  ; Eq (4) of Tamor
-  //				= (5.31 * 10^-4 / (n_e20)^1/2) / ( 3.21 *
-  //(n_e20)^1/2 / B ) ; From NRL Formulary, converted to our units (Tesla for B
-  //& 10^20 /m^3 for n_e)
-  Real LambdaZero = (5.31e-4 / 3.21) * (B_z / n_e20);
-  double WallReflectivity = 0.95;
-  Real OpticalThickness = (PlasmaWidth / (1.0 - WallReflectivity)) / LambdaZero;
-  // This is the Phi introduced by Trubnikov and later approximated by Tamor
-  Real TransparencyFactor = pow(Te, 1.5) / (200.0 * sqrt(OpticalThickness));
-  // Moderate the vacuum emission by the transparency factor
-  Real Normalization = n0 * T0 / NormalizingTime();
+    // Characteristic absorption length
+    // lambda_0 = (Electron Inertial Length) / ( Plasma Frequency / Cyclotron Frequency )  ; Eq (4) of Tamor
+    //				= (5.31 * 10^-4 / (n_e20)^1/2) / ( 3.21 * (n_e20)^1/2 / B ) ; From NRL Formulary, converted to our units (Tesla for B & 10^20 /m^3 for n_e)
+    Real LambdaZero = (5.31e-4 / 3.21) * (B_z / n_e20);
+    double WallReflectivity = 0.95;
+    Real OpticalThickness = (PlasmaWidth / (1.0 - WallReflectivity)) / LambdaZero;
+    // This is the Phi introduced by Trubnikov and later approximated by Tamor
+    Real TransparencyFactor = pow(Te, 1.5) / (200.0 * sqrt(OpticalThickness));
+    // Moderate the vacuum emission by the transparency factor
+    Real Normalization = n0 * T0 / NormalizingTime();
 
   Real P_cy = P_vacuum * TransparencyFactor / Normalization;
   return P_cy;
@@ -62,19 +60,18 @@ Real PlasmaConstants::IonizationRate(Real n, Real NeutralDensity, Real v,
         },
         v, Ti, IonMass(), 200.0);
 
-    Real ElectronIntegral = NeutralProcess(
-        [this](double Energy) {
-          return Plasma->electronImpactIonizationCrossSection(Energy);
-        },
-        v, Te, ElectronMass, 13.6);
-    Real R = n_m3 * n_neutrals * (IonIntegral + ElectronIntegral);
-    return R;
-  } catch (...) {
-    std::cerr << Ti << std::endl;
-    std::cerr << Te << std::endl;
-    throw ::std::runtime_error(
-        "Caught exception while trying to calculate ionization rate");
-  }
+        Real ElectronIntegral = NeutralProcess([this](double Energy)
+                                               { return Plasma->electronImpactIonizationCrossSection(Energy); }, v, Te, ElectronMass, 13.6);
+        Real R = n_m3 * n_neutrals * (IonIntegral + ElectronIntegral);
+        return R;
+    }
+    catch (...)
+    {
+        // .val: autodiff duals have an operator<< but no std::formatter.
+        std::println(stderr, "Ti = {:g}", Ti.val);
+        std::println(stderr, "Te = {:g}", Te.val);
+        throw ::std::runtime_error("Caught exception while trying to calculate ionization rate");
+    }
 }
 
 // Returns the charge exchange loss rate in 1/(m^3 s)

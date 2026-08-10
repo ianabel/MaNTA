@@ -2,6 +2,7 @@
 #define LD2_HPP
 
 #include "PhysicsCases.hpp"
+#include <print>
 
 /*
 	Linear Diffusion Test Case, showcasing how to write a physics case that is compiled
@@ -16,9 +17,9 @@ class LD2 : public TransportSystem {
 		explicit LD2( toml::value const& config, Grid const& );
 
         virtual ~LD2() {
-            std::cout << "During scope existence, Sigma was called " << nSigmaCalls << " times;" << std::endl;
-            std::cout << "During scope existence, Sources was called " << nSourceCalls << " times;" << std::endl;
-            std::cout << "During scope existence, Derivative was called " << nDerivCalls << " times;" << std::endl;
+            std::println("During scope existence, Sigma was called {} times;", nSigmaCalls);
+            std::println("During scope existence, Sources was called {} times;", nSourceCalls);
+            std::println("During scope existence, Derivative was called {} times;", nDerivCalls);
             return;
         }
 

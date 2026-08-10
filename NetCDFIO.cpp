@@ -167,12 +167,22 @@ void SystemSolver::initialiseNetCDF(std::string const &NetcdfOutputFile, size_t 
 
 	nc_output.AddScalarVariable("nVariables", "Number of independent variables", "", static_cast<double>(nVars));
 
+	// u_star is the element-local postprocessed value: superconvergent where the
+	// theory applies, and in any case a strictly better representation of u than
+	// u itself. Absent when k = 0, where there is no reconstruction to do.
+	if (postprocessor)
+		postprocessor->computeUStar(y);
+
 	for (Index i = 0; i < nVars; ++i)
 	{
 		nc_output.AddGroup(problem->getVariableName(i), problem->getVariableDescription(i));
 		nc_output.AddVariable(problem->getVariableName(i), "u", "Value", problem->getVariableUnits(i), y.u(i));
 		nc_output.AddVariable(problem->getVariableName(i), "q", "Derivative", problem->getVariableUnits(i), y.q(i));
 		nc_output.AddVariable(problem->getVariableName(i), "sigma", "Flux", problem->getVariableUnits(i), y.sigma(i));
+		if (postprocessor)
+			nc_output.AddVariable(problem->getVariableName(i), "u_star",
+								  "Postprocessed value", problem->getVariableUnits(i),
+								  postprocessor->uStar(i));
 	}
 
 	for (Index i = 0; i < nScalars; ++i)
@@ -192,9 +202,15 @@ void SystemSolver::WriteTimeslice(double tNew)
 {
 	size_t tIndex = nc_output.AddTimeSlice(tNew);
 
+	if (postprocessor)
+		postprocessor->computeUStar(y);
+
 	for (Index i = 0; i < nVars; ++i)
 	{
 		nc_output.AppendToGroup<DGSoln::DGApprox>(problem->getVariableName(i), tIndex, {{"u", y.u(i)}, {"q", y.q(i)}, {"sigma", y.sigma(i)}});
+		if (postprocessor)
+			nc_output.AppendToGroup<DGSoln::DGApprox>(problem->getVariableName(i), tIndex,
+													  "u_star", postprocessor->uStar(i));
 	}
 
 	for (Index i = 0; i < nAux; ++i)
@@ -252,12 +268,19 @@ void SystemSolver::WriteRestartFile(std::string const &fname, N_Vector const &Y,
 
 	restart_file.AddScalarVariable("nVariables", "Number of independent variables", "", static_cast<double>(nVars));
 
+	if (postprocessor)
+		postprocessor->computeUStar(y);
+
 	for (Index i = 0; i < nVars; ++i)
 	{
 		restart_file.AddGroup(problem->getVariableName(i), problem->getVariableDescription(i));
 		restart_file.AddVariable(problem->getVariableName(i), "u", "Value", problem->getVariableUnits(i), y.u(i));
 		restart_file.AddVariable(problem->getVariableName(i), "q", "Derivative", problem->getVariableUnits(i), y.q(i));
 		restart_file.AddVariable(problem->getVariableName(i), "sigma", "Flux", problem->getVariableUnits(i), y.sigma(i));
+		if (postprocessor)
+			restart_file.AddVariable(problem->getVariableName(i), "u_star",
+									 "Postprocessed value", problem->getVariableUnits(i),
+									 postprocessor->uStar(i));
 	}
 
 	for (Index i = 0; i < nScalars; ++i)

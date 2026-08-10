@@ -1,5 +1,6 @@
 
 #include "ScalarTestLD3.hpp"
+#include "Logging.hpp"
 #include <boost/math/quadrature/gauss_kronrod.hpp>
 #include <cmath>
 #include <numbers>
@@ -48,7 +49,7 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
 	nVars = 1;
 	nScalars = 3;
 
-	// Construst your problem from user-specified config
+	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
 	// here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 
@@ -66,10 +67,13 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
 	u0 = toml::find_or(DiffConfig, "u0", 0.1);
 
 	M0 = 2 * u0 + 4 * beta / std::numbers::pi;
-	std::cerr << "M0 : " << M0 << std::endl;
+	// Was an unconditional std::cerr, which printed once per construction --
+	// eight times in a `make test` run, and once per regression case. INFO is
+	// compiled out of a release build and still available with VERBOSE.
+	logmsg<LOG_LEVEL::INFO>("ScalarTestLD3 target mass M0 = {}", M0);
 }
 
-// Dirichlet Boundary Conditon
+// Dirichlet Boundary Condition
 Value ScalarTestLD3::LowerBoundary(Index, Time) const
 {
 	return u0;
@@ -166,7 +170,7 @@ Value ScalarTestLD3::ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dyd
     if( s == 0 ) {
         // E = (M0 - M)
         // => G_0 = E - (M-M0)
-        double M = boost::math::quadrature::gauss_kronrod<double, 31>::integrate( [ & ]( double x ){ return y.u( 0 )( x );}, -1, 1 );
+        double M = Mass( y, 0 );
         return E - (M0-M);
     } else if ( s == 1 ) {
         // J = gamma * E + gamma_d * dE/dt + gamma_I * I + [ sigma(x = +1) - sigma(x = -1) ]
@@ -187,9 +191,14 @@ void ScalarTestLD3::ScalarGPrimeExtended( Index scalarIndex, State &s, State &ou
 	if ( scalarIndex == 0 ) {
 		s.Flux[ 0 ] = 0.0; // d G_0 / d sigma
 		s.Derivative[ 0 ] = 0.0; // d G_0 / d (u')
-		// dG_0 / du = - dM/du (as functional derivative, taken as an inner product with P)
+		// G_0 = E - (M0 - M) = E - M0 + M, so dG_0/du = +dM/du (as a functional
+		// derivative, taken as an inner product with P). This was -P_mass. The
+		// sign is not confined to the scalar rows: w enters solveJacEq's
+		// bordered elimination, so getting it wrong corrupts the whole solve.
+		// PIDTest could not catch it -- a wrong Jacobian only slows Newton, it
+		// still converges to the right answer.
 		double P_mass = boost::math::quadrature::gauss_kronrod<double, 31>::integrate( P, I.x_l, I.x_u );
-		s.Variable[ 0 ] = -P_mass;
+		s.Variable[ 0 ] = P_mass;
 		s.Scalars[ 0 ] = 1.0; // dG_0/dE
 		s.Scalars[ 1 ] = 0.0; // dG_0/dJ
 	} else if ( scalarIndex == 1 ) {
@@ -204,6 +213,9 @@ void ScalarTestLD3::ScalarGPrimeExtended( Index scalarIndex, State &s, State &ou
 		s.Scalars[ 0 ] = -gamma;
 		// dG_1/dJ
 		s.Scalars[ 1 ] = 1.0;
+		// dG_1/dI. G_1 carries a -gamma_I * I term but this was never
+		// differentiated; latent only because gamma_I defaults to 0.
+		s.Scalars[ 2 ] = -gamma_I;
         out_dt.Scalars[ 0 ] = -gamma_d;
 	} else if ( scalarIndex == 2 ) {
         // G_2 = I-dot - E
@@ -218,13 +230,24 @@ void ScalarTestLD3::ScalarGPrimeExtended( Index scalarIndex, State &s, State &ou
 
 void ScalarTestLD3::dSources_dScalars(Index i, VectorRef v, const State &, Position x, Time)
 {
+	// setZero() first: the i == 0 branch used to assign v[0] and v[1] and leave
+	// v[2] (dS/dI) alone. dSources_dScalars_Mat hands this an uninitialised
+	// Eigen vector, so that entry was whatever was in the buffer -- undefined
+	// behaviour, and it put a garbage column into the scalar coupling matrix v,
+	// which corrupts the *field* rows of the bordered solve.
+	v.setZero();
 	if (i == 0)
-	{
-		v[0] = 0.0;
-		v[1] = ScaledSource(x);
-	}
-	else
-		v.setZero();
+		v[1] = ScaledSource(x); // S_0 depends on the scalars only through J
+}
+
+double ScalarTestLD3::Mass( DGSoln const &y, Index var )
+{
+	double total = 0.0;
+	Grid const &grid = y.getGrid();
+	for ( Index i = 0; i < static_cast<Index>( grid.getNCells() ); ++i )
+		total += boost::math::quadrature::gauss_kronrod<double, 31>::integrate(
+			[ & ]( double x ){ return y.u( var )( x ); }, grid[ i ].x_l, grid[ i ].x_u );
+	return total;
 }
 
 Value ScalarTestLD3::InitialScalarValue(Index s) const
@@ -245,7 +268,7 @@ Value ScalarTestLD3::InitialScalarDerivative(Index s, const DGSoln &y, const DGS
 	// Our job to make sure this is consistent!
 	if( s == 0 ) // dE/dt at t=0
     {
-        double Mdot = boost::math::quadrature::gauss_kronrod<double, 31>::integrate( [ & ]( double x ){ return dydt.u( 0 )( x );}, -1, 1 );
+        double Mdot = Mass( dydt, 0 );
         return Mdot;
     } else if ( s == 2 ) {
         double E = y.Scalar(0);
@@ -261,7 +284,6 @@ void ScalarTestLD3::initialiseDiagnostics(NetCDFIO &nc)
 
 void ScalarTestLD3::writeDiagnostics(DGSoln const &y, double, NetCDFIO &nc, size_t tIndex)
 {
-	double mass = boost::math::quadrature::gauss_kronrod<double, 31>::integrate([&](double x)
-																				{ return y.u(0)(x); }, -1, 1);
+	double mass = Mass( y, 0 );
 	nc.AppendToTimeSeries("Mass", mass, tIndex);
 }

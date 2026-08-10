@@ -220,11 +220,17 @@ public:
         return *this;
     }
 
+    // Lambdas rather than std::bind for the same reason the callers use them
+    // rather than std::bind_front: the bind family's call operators are where
+    // libstdc++ and clang disagree (see SystemSolver::setInitialConditions).
+    // Capturing by reference is safe -- the parameter outlives the loop, and
+    // DGApproxImpl::operator= projects onto the basis immediately rather than
+    // storing the callable.
     void AssignU(std::function<double(Index, double)> u_fn)
     {
         for (Index i = 0; i < nVars; ++i)
         {
-            u_[i] = std::bind(u_fn, i, std::placeholders::_1);
+            u_[i] = [&u_fn, i](double x) { return u_fn(i, x); };
         }
     };
 
@@ -232,7 +238,7 @@ public:
     {
         for (Index i = 0; i < nVars; ++i)
         {
-            q_[i] = std::bind(q_fn, i, std::placeholders::_1);
+            q_[i] = [&q_fn, i](double x) { return q_fn(i, x); };
         }
     };
 
@@ -240,7 +246,7 @@ public:
     {
         for (Index i = 0; i < nAux; ++i)
         {
-            aux_[i] = std::bind(phi_fn, i, std::placeholders::_1);
+            aux_[i] = [&phi_fn, i](double x) { return phi_fn(i, x); };
         }
     };
 

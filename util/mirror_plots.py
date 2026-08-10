@@ -488,7 +488,7 @@ fig.set_size_inches(height, height)
 plt.title("Fluxes showing added artificial diffusion")
 
 # %% [markdown]
-# Compute averaged quantites
+# Compute averaged quantities
 
 # %%
 

@@ -6,7 +6,8 @@
 #include <Eigen/Core>
 #include <Eigen/Dense>
 #include <toml.hpp>
-#include <iostream>
+#include <ostream>
+#include <print>
 
 #include "State.hpp"
 #include "Types.hpp"
@@ -96,11 +97,17 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     }
     else
     {
-        // slightly minging syntax. blame C++
-        auto initial_u = std::bind_front(&TransportSystem::InitialValue, problem);
-        auto initial_q = std::bind_front(&TransportSystem::InitialDerivative, problem);
-        y.AssignU(initial_u);
-        y.AssignQ(initial_q);
+        // Lambdas rather than std::bind_front. libstdc++ gives _Bind_front two
+        // implementations of operator(), chosen by #if
+        // __cpp_explicit_this_parameter -- four cv/ref-qualified overloads, or one
+        // with an explicit object parameter. clang only defines that macro from
+        // clang 20, and in libstdc++ before 14.4 the deducing-this overload fails
+        // std::function's _Callable check when the _Bind_front is converted as an
+        // lvalue. So (clang >= 20, libstdc++ < 14.4) rejected these three calls,
+        // which is exactly what ubuntu-24.04 gives CI's clang legs. Nothing here
+        // needed bind_front, so the portable spelling is also the clearer one.
+        y.AssignU([this](Index i, Position x) { return problem->InitialValue(i, x); });
+        y.AssignQ([this](Index i, Position x) { return problem->InitialDerivative(i, x); });
 
         for (Index s = 0; s < nScalars; ++s)
         {
@@ -109,8 +116,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
         if (nAux > 0)
         {
-            auto initial_aux = std::bind_front(&TransportSystem::InitialAuxValue, problem);
-            y.AssignAux(initial_aux);
+            y.AssignAux([this](Index i, Position x) { return problem->InitialAuxValue(i, x); });
         }
 
         ApplyDirichletBCs(y);
@@ -187,6 +193,17 @@ void SystemSolver::ApplyDirichletBCs(DGSoln &Y)
 
 void SystemSolver::initialiseMatrices()
 {
+    // The postprocessed u* is reported in every output, so the reconstruction is
+    // built whether or not the superconvergent residual is switched on. k = 0 is
+    // the exception: the degree-0 NodalBasis returns from its constructor before
+    // building Vandermonde or BarycentricWeights (Basis.hpp:369-377), so it
+    // cannot be evaluated off-node and there is nothing to reconstruct.
+    if (k >= 1)
+        postprocessor = std::make_unique<Postprocessor>(grid, k, nVars, nScalars, nAux);
+    else if (superconvergent)
+        throw std::invalid_argument(
+            "Superconvergent postprocessing requires Polynomial_degree >= 1");
+
     // These are temporary working space
     // Matrices we need per cell
     Eigen::MatrixXd A(nVars * (k + 1), nVars * (k + 1));
@@ -571,30 +588,6 @@ void SystemSolver::updateBoundaryConditions(double t)
     }
 }
 
-Vector SystemSolver::resEval(std::vector<Vector> resTerms)
-{
-    Vector maxTerms, res;
-    maxTerms.resize(resTerms[0].size());
-    res.resize(resTerms[0].size());
-    maxTerms.setZero();
-    res.setZero();
-    for (auto term : resTerms)
-    {
-        res += term;
-        for (int i = 0; i < term.size(); i++)
-        {
-            if (std::abs(term[i]) > maxTerms[i])
-                maxTerms[i] = std::abs(term[i]);
-        }
-    }
-    for (int i = 0; i < resTerms[0].size(); i++)
-    {
-        if (res[i] < maxTerms[i] * 10e-10)
-            res[i] = 0.0;
-    }
-    return res;
-}
-
 void SystemSolver::resetCoeffs()
 {
     y.zeroCoeffs();
@@ -610,16 +603,30 @@ void SystemSolver::updateMatricesForJacSolve()
     GlobalStateMatrix dSource_vals(nVars);
     GlobalStateMatrix dAux_vals(nAux);
 
-    const auto points = yJac.getPoints();
-    const auto states = yJac.evalOnNodes();
+    // With the superconvergent scheme the derivatives are wanted at the star
+    // nodes and evaluated with u* in place of u_h, exactly as the residual does
+    // -- a Jacobian consistent with a different residual is the one failure mode
+    // this solver cannot detect from its answers, only from its iteration counts.
+    if (superconvergent)
+        postprocessor->computeUStar(yJac);
+
+    const std::vector<Position> points =
+        superconvergent ? postprocessor->starPoints() : yJac.getPoints();
+    const GlobalState states =
+        superconvergent ? postprocessor->evalOnStarNodes(yJac) : yJac.evalOnNodes();
+
+    // GlobalState's second argument is a per-cell dof count minus one; passing
+    // k+1 is what makes cellwise*() hand back the k+2 star values.
+    const Index derivK = superconvergent ? k + 1 : k;
+
     for (Index var = 0; var < nVars; var++)
     {
-      dSigma_vals.add(nCells, k, nVars, nScalars, nAux);
-      dSource_vals.add(nCells, k, nVars, nScalars, nAux);
+      dSigma_vals.add(nCells, derivK, nVars, nScalars, nAux);
+      dSource_vals.add(nCells, derivK, nVars, nScalars, nAux);
     }
     for (Index aux = 0; aux < nAux; aux++)
     {
-      dAux_vals.add(nCells, k, nVars, nScalars, nAux);
+      dAux_vals.add(nCells, derivK, nVars, nScalars, nAux);
     }
 
     problem->ComputePhysicsDerivatives({dSigma_vals, dSource_vals, dAux_vals}, states, points, jt);
@@ -654,6 +661,73 @@ void SystemSolver::updateMatricesForJacSolve()
         }
         MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += X;
 
+        if (superconvergent)
+        {
+            Postprocessor const &pp = *postprocessor;
+
+            // sigma_hat's dependence on q is twofold: directly, and through u*,
+            // which the reconstruction builds from q as well as u. B11 carries
+            // the second path -- it is the only genuinely new coupling the
+            // superconvergent scheme introduces.
+            NLq.setZero();
+            accumulateStarBlocks(NLq, dSigma_vals.Derivative(i), pp.V(i), nVars, nVars, i);
+            accumulateStarBlocks(NLq, dSigma_vals.Variable(i), pp.B11(i), nVars, nVars, i);
+            MX.block(0, nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLq;
+
+            NLu.setZero();
+            accumulateStarBlocks(NLu, dSigma_vals.Variable(i), pp.B12(i), nVars, nVars, i);
+            MX.block(0, 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLu;
+
+            if (nAux > 0)
+            {
+                Sigma_phi.setZero();
+                accumulateStarBlocks(Sigma_phi, dSigma_vals.Aux(i), pp.V(i), nVars, nAux, i);
+                MX.block(0, 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) = Sigma_phi;
+            }
+
+            Ssig.setZero();
+            accumulateStarBlocks(Ssig, dSource_vals.Flux(i), pp.V(i), nVars, nVars, i);
+            MX.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) -= Ssig;
+
+            Sq.setZero();
+            accumulateStarBlocks(Sq, dSource_vals.Derivative(i), pp.V(i), nVars, nVars, i);
+            accumulateStarBlocks(Sq, dSource_vals.Variable(i), pp.B11(i), nVars, nVars, i);
+            MX.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Sq;
+
+            Su.setZero();
+            accumulateStarBlocks(Su, dSource_vals.Variable(i), pp.B12(i), nVars, nVars, i);
+            MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
+
+            if (nAux > 0)
+            {
+                Sphi.setZero();
+                accumulateStarBlocks(Sphi, dSource_vals.Aux(i), pp.V(i), nVars, nAux, i);
+                MX.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
+
+                // The aux constraint rows, in MX's [ sigma | q | u | phi ] column
+                // order. Same four chains as above.
+                auto auxRows = MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1),
+                                        (3 * nVars + nAux) * (k + 1));
+                auxRows.setZero();
+                const Index sigmaBlock = 0;
+                const Index qBlock = nVars * (k + 1);
+                const Index uBlock = 2 * nVars * (k + 1);
+                const Index phiBlock = 3 * nVars * (k + 1);
+
+                accumulateStarBlocks(auxRows.middleCols(sigmaBlock, nVars * (k + 1)),
+                                     dAux_vals.Flux(i), pp.V(i), nAux, nVars, i);
+                accumulateStarBlocks(auxRows.middleCols(qBlock, nVars * (k + 1)),
+                                     dAux_vals.Derivative(i), pp.V(i), nAux, nVars, i);
+                accumulateStarBlocks(auxRows.middleCols(qBlock, nVars * (k + 1)),
+                                     dAux_vals.Variable(i), pp.B11(i), nAux, nVars, i);
+                accumulateStarBlocks(auxRows.middleCols(uBlock, nVars * (k + 1)),
+                                     dAux_vals.Variable(i), pp.B12(i), nAux, nVars, i);
+                accumulateStarBlocks(auxRows.middleCols(phiBlock, nAux * (k + 1)),
+                                     dAux_vals.Aux(i), pp.V(i), nAux, nAux, i);
+            }
+        }
+        else
+        {
         // NLq Matrix
         DerivativeSubMatrix(NLq, dSigma_vals.Derivative(i), yJac, i);
         MX.block(0, nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLq;
@@ -682,6 +756,7 @@ void SystemSolver::updateMatricesForJacSolve()
 
         // Set Parts of Matrix due to aux variables
         dAux_Mat(MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), dAux_vals, yJac, i);
+        }
 
         MXSolvers[ i ].compute(MX);
     }
@@ -698,7 +773,10 @@ void SystemSolver::updateMatricesForJacSolve()
       for (Index i = 0; i < nCells; ++i)
       {
           Matrix v_tmp(nVars * U_DOF, nScalars);
-          dSources_dScalars_Mat(v_tmp, yJac, i);
+          if (superconvergent)
+              dSources_dScalars_StarMat(v_tmp, states, points, i);
+          else
+              dSources_dScalars_Mat(v_tmp, yJac, i);
           for (Index j = 0; j < nScalars; ++j)
               for (Index v = 0; v < nVars; ++v)
                   v_map[j].u(v).getCoeff(i).second = v_tmp.block(v * U_DOF, j, U_DOF, 1);
@@ -775,7 +853,7 @@ void SystemSolver::setJacEvalY(N_Vector yy, N_Vector yp)
     dydtJac.copy(ypMap); // Deep copy
 }
 
-// Over-arching Jacobian function. If there's no coupled B-field solve, or auxiliar variables, then just do the
+// Over-arching Jacobian function. If there's no coupled B-field solve, or auxiliary variables, then just do the
 // HDG Jacobian solve
 void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 {
@@ -976,7 +1054,7 @@ int static_residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval
     }
     catch (std::exception &e)
     {
-        std::cout << "Caught exception : " << e.what() << " ; Retrying. " << std::endl;
+        std::println("Caught exception : {} ; Retrying. ", e.what());
         return 1;
     }
 }
@@ -993,12 +1071,36 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 
     resVec.setZero();
 
-    const auto points = Y_h.getPoints();
+    // With the superconvergent scheme the physics is evaluated at the k+2 nodes
+    // of the degree-(k+1) basis, with the postprocessed u* standing in for u_h,
+    // and the resulting P_{k+1} interpolant is projected onto the P_k test space
+    // by A9 instead of by the mass matrix InterpolateOntoBasis applies. Both
+    // halves matter: interpolating a non-polynomial into P_k contributes an
+    // O(h^(k+1)) consistency error with no orthogonality against the test space,
+    // and that alone caps the rate at k+1. See Postprocessing.hpp.
+    if (superconvergent)
+        postprocessor->computeUStar(Y_h);
 
-    const auto states = Y_h.evalOnNodes();
+    const Index physicsDoF = superconvergent ? k + 2 : k + 1;
 
-    
+    const std::vector<Position> points =
+        superconvergent ? postprocessor->starPoints() : Y_h.getPoints();
+
+    const GlobalState states = superconvergent ? postprocessor->evalOnStarNodes(Y_h)
+                                               : Y_h.evalOnNodes();
+
     auto values = problem->ComputePhysics(states, points, tres);
+
+    // ( X, phi_i )_K for a physics value X sampled on the cell's nodes: A9 times
+    // the star-node values with the superconvergent scheme, the interpolatory
+    // mass-matrix form of arXiv:1811.09667 otherwise.
+    auto projectOntoTestSpace = [&](Index cell, Interval const &I,
+                                    auto const &vals) -> Eigen::VectorXd
+    {
+        if (superconvergent)
+            return postprocessor->A9(cell) * vals;
+        return y.getBasis().InterpolateOntoBasis(I, vals);
+    };
 
     std::vector<Values> Sigma_vals = std::move(values[0]);
     std::vector<Values> Source_vals = std::move(values[1]);
@@ -1042,12 +1144,12 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
             //     State s = Y_h.eval(x);
             //     return problem->Sources(var, s, x, tres);
             // };
-            auto ind = Eigen::seq(i * (k + 1), (i + 1) * (k + 1) - 1);
+            auto ind = Eigen::seq(i * physicsDoF, (i + 1) * physicsDoF - 1);
             // Evaluate Diffusion Function
-            Eigen::VectorXd kappa_cellwise = y.getBasis().InterpolateOntoBasis( I, Sigma_vals[var](ind) );
+            Eigen::VectorXd kappa_cellwise = projectOntoTestSpace(i, I, Sigma_vals[var](ind));
 
             // Evaluate Source Function
-            Eigen::VectorXd S_cellwise = y.getBasis().InterpolateOntoBasis(I, Source_vals[var](ind) );
+            Eigen::VectorXd S_cellwise = projectOntoTestSpace(i, I, Source_vals[var](ind));
 
             auto const &lambda = lamCell.segment<2>(2 * var);
 
@@ -1072,8 +1174,8 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
             // For the auxiliary variable bits
             // Set (res_aux_i)_j = < G_i, phi_j >
             // so we enforce G = 0 by projection
-            auto ind = Eigen::seq(i * (k + 1), (i + 1) * (k + 1) - 1);
-            res.Aux(aux).getCoeff(i).second = y.getBasis().InterpolateOntoBasis(I, Aux_vals[aux](ind));
+            auto ind = Eigen::seq(i * physicsDoF, (i + 1) * physicsDoF - 1);
+            res.Aux(aux).getCoeff(i).second = projectOntoTestSpace(i, I, Aux_vals[aux](ind));
         }
     }
 
@@ -1088,20 +1190,77 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 
 void SystemSolver::initializeMatricesForAdjointSolve()
 {
-    GlobalState dGdvars(grid.getNCells(), k, nVars, nScalars, nAux);
-    const auto points = y.getPoints();
-    const auto states = y.evalOnNodes();
+    // With the superconvergent scheme the objective is a functional of u*, so
+    // dG/dy runs through the reconstruction just as the residual's Jacobian does.
+    // See the G_y assembly below for why the u and q rows contract with the star
+    // mass matrix rather than with A9.
+    if (superconvergent)
+        postprocessor->computeUStar(y);
+
+    const Index derivK = superconvergent ? k + 1 : k;
+
+    GlobalState dGdvars(grid.getNCells(), derivK, nVars, nScalars, nAux);
+    const std::vector<Position> points =
+        superconvergent ? postprocessor->starPoints() : y.getPoints();
+    const GlobalState states =
+        superconvergent ? postprocessor->evalOnStarNodes(y) : y.evalOnNodes();
     adjointProblem->dg(0, dGdvars, states, points);
     Vector dGdu(nVars * (k + 1));
     Vector dGdq(nVars * (k + 1));
     Vector dGdsigma(nVars * (k + 1));
-    
+
     Vector dGdaux(nAux * (k + 1));
 
     for (Index i = 0; i < nCells; ++i)
     {
         G_y.emplace_back(3 * nVars * (k + 1) + nAux * (k + 1));
 
+        if (superconvergent)
+        {
+            // The exact derivative of the objective AdjointProblem::GFn's
+            // superconvergent form computes, G = b1 . g over the star nodes:
+            //
+            //     dG/dZ = chain^T diag( dg/dW ) b1
+            //
+            // with the same chain matrices the residual's Jacobian uses -- V where
+            // the field is simply sampled at the star nodes, B12 for the u
+            // coefficients, and B11 for the q coefficients' path through u*.
+            // Because this is the exact derivative of the reported objective and
+            // not merely a consistent discretisation of it, the finite-difference
+            // gradient check has nothing to absorb.
+            Postprocessor const &pp = *postprocessor;
+            const Vector &b1 = pp.starWeights(i);
+
+            G_y[i].setZero();
+
+            auto dFlux = dGdvars.cellwiseFlux(i);
+            auto dDeriv = dGdvars.cellwiseDerivative(i);
+            auto dVar = dGdvars.cellwiseVariable(i);
+
+            for (Index var = 0; var < nVars; ++var)
+            {
+                const Vector w_sigma = dFlux.row(var).transpose().cwiseProduct(b1);
+                const Vector w_q = dDeriv.row(var).transpose().cwiseProduct(b1);
+                const Vector w_u = dVar.row(var).transpose().cwiseProduct(b1);
+
+                G_y[i].segment(var * (k + 1), k + 1) = pp.V(i).transpose() * w_sigma;
+                G_y[i].segment(nVars * (k + 1) + var * (k + 1), k + 1) =
+                    pp.V(i).transpose() * w_q + pp.B11(i).transpose() * w_u;
+                G_y[i].segment(2 * nVars * (k + 1) + var * (k + 1), k + 1) =
+                    pp.B12(i).transpose() * w_u;
+            }
+
+            if (nAux > 0)
+            {
+                auto dAux = dGdvars.cellwiseAux(i);
+                for (Index a = 0; a < nAux; ++a)
+                    G_y[i].segment(3 * nVars * (k + 1) + a * (k + 1), k + 1) =
+                        pp.V(i).transpose() *
+                        Vector(dAux.row(a).transpose().cwiseProduct(b1));
+            }
+        }
+        else
+        {
         DerivativeSubVector(0, dGdsigma, dGdvars.cellwiseFlux(i), y, i);
         G_y[i].block(0, 0, nVars * (k + 1), 1) = dGdsigma;
 
@@ -1116,6 +1275,7 @@ void SystemSolver::initializeMatricesForAdjointSolve()
             dGdaux_Vec(0, dGdaux, y, i);
             G_y[i].block(3 * nVars * (k + 1), 0, nAux * (k + 1), 1) = dGdaux;
         }
+        }
     }
 
 
@@ -1125,12 +1285,12 @@ void SystemSolver::initializeMatricesForAdjointSolve()
 
     for (Index var = 0; var < nVars; var++)
     {
-      dSigma_vals.add(nCells, k, nVars, nScalars, nAux);
-      dSource_vals.add(nCells, k, nVars, nScalars, nAux);
+      dSigma_vals.add(nCells, derivK, nVars, nScalars, nAux);
+      dSource_vals.add(nCells, derivK, nVars, nScalars, nAux);
     }
     for (Index aux = 0; aux < nAux; aux++)
     {
-      dAux_vals.add(nCells, k, nVars, nScalars, nAux);
+      dAux_vals.add(nCells, derivK, nVars, nScalars, nAux);
     }
 
     problem->ComputePhysicsDerivatives({dSigma_vals, dSource_vals, dAux_vals}, states, points, jt);
@@ -1146,8 +1306,45 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         Eigen::MatrixXd Sq(nVars * (k + 1), nVars * (k + 1));
         Eigen::MatrixXd Su(nVars * (k + 1), nVars * (k + 1));
 
+        Eigen::MatrixXd Sigma_phi(nVars * (k + 1), nAux * (k + 1));
         Eigen::MatrixXd Sphi(nVars * (k + 1), nAux * (k + 1));
 
+        if (superconvergent)
+        {
+            // The same blocks updateMatricesForJacSolve builds; M below is their
+            // transpose, so keeping the two in step is what keeps the adjoint the
+            // adjoint of the residual actually being solved.
+            Postprocessor const &pp = *postprocessor;
+
+            NLq.setZero();
+            accumulateStarBlocks(NLq, dSigma_vals.Derivative(i), pp.V(i), nVars, nVars, i);
+            accumulateStarBlocks(NLq, dSigma_vals.Variable(i), pp.B11(i), nVars, nVars, i);
+
+            NLu.setZero();
+            accumulateStarBlocks(NLu, dSigma_vals.Variable(i), pp.B12(i), nVars, nVars, i);
+
+            Ssig.setZero();
+            accumulateStarBlocks(Ssig, dSource_vals.Flux(i), pp.V(i), nVars, nVars, i);
+
+            Sq.setZero();
+            accumulateStarBlocks(Sq, dSource_vals.Derivative(i), pp.V(i), nVars, nVars, i);
+            accumulateStarBlocks(Sq, dSource_vals.Variable(i), pp.B11(i), nVars, nVars, i);
+
+            Su.setZero();
+            accumulateStarBlocks(Su, dSource_vals.Variable(i), pp.B12(i), nVars, nVars, i);
+
+            // phi is not reconstructed -- u* stands in for u only -- so both
+            // auxiliary columns take the plain evaluation chain A9 diag(dX/dphi) V.
+            Sigma_phi.setZero();
+            Sphi.setZero();
+            if (nAux > 0)
+            {
+                accumulateStarBlocks(Sigma_phi, dSigma_vals.Aux(i), pp.V(i), nVars, nAux, i);
+                accumulateStarBlocks(Sphi, dSource_vals.Aux(i), pp.V(i), nVars, nAux, i);
+            }
+        }
+        else
+        {
         // NLq Matrix
         DerivativeSubMatrix(NLq, dSigma_vals.Derivative(i), yJac, i);
 
@@ -1162,8 +1359,7 @@ void SystemSolver::initializeMatricesForAdjointSolve()
 
         // S_u Matrix
         DerivativeSubMatrix(Su, dSource_vals.Variable(i), yJac, i);
-
-        dSourcedPhi_Mat(Sphi, yJac, i);
+        }
 
         // M is the local DG Matrix
         Eigen::MatrixXd M(localDOF, localDOF);
@@ -1188,14 +1384,65 @@ void SystemSolver::initializeMatricesForAdjointSolve()
 
         if (nAux > 0)
         {
-            dSourcedPhi_Mat(Sphi, y, i);
+            // Both auxiliary column blocks, in either discretisation. The
+            // dSigma/dPhi one at row 1 was missing entirely: M is zeroed and
+            // nothing ever wrote column block 3 of row 1, so whenever the flux
+            // depended on an auxiliary variable the matrix stored here was not
+            // the transpose of the forward Jacobian that
+            // updateMatricesForJacSolve builds (which does write it, above).
+            //
+            // On the forward side an inconsistent Jacobian only costs Newton
+            // iterations. Here it costs correctness: M.transpose() *is* the
+            // adjoint operator, so a missing block gives a silently wrong
+            // gradient. Nothing caught it because no adjoint test had nAux > 0;
+            // python/Tests/test_adjoint_aux.py now does.
+
+            if (superconvergent)
+            {
+                // Sigma_phi and Sphi already hold their star forms from above;
+                // recomputing them here would discard the chain rule.
+                Postprocessor const &pp = *postprocessor;
+                M.block(0, 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) = Sigma_phi;
+                M.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
+
+                auto auxRows = M.block(3 * nVars * (k + 1), 0, nAux * (k + 1),
+                                       (3 * nVars + nAux) * (k + 1));
+                auxRows.setZero();
+                const Index qBlock = nVars * (k + 1);
+                const Index uBlock = 2 * nVars * (k + 1);
+                const Index phiBlock = 3 * nVars * (k + 1);
+
+                accumulateStarBlocks(auxRows.middleCols(0, nVars * (k + 1)),
+                                     dAux_vals.Flux(i), pp.V(i), nAux, nVars, i);
+                accumulateStarBlocks(auxRows.middleCols(qBlock, nVars * (k + 1)),
+                                     dAux_vals.Derivative(i), pp.V(i), nAux, nVars, i);
+                accumulateStarBlocks(auxRows.middleCols(qBlock, nVars * (k + 1)),
+                                     dAux_vals.Variable(i), pp.B11(i), nAux, nVars, i);
+                accumulateStarBlocks(auxRows.middleCols(uBlock, nVars * (k + 1)),
+                                     dAux_vals.Variable(i), pp.B12(i), nAux, nVars, i);
+                accumulateStarBlocks(auxRows.middleCols(phiBlock, nAux * (k + 1)),
+                                     dAux_vals.Aux(i), pp.V(i), nAux, nAux, i);
+            }
+            else
+            {
+            // dPhi_Mat, not dSourcedPhi_Mat: the residual interpolates the
+            // sources onto the basis, so the consistent block is the
+            // interpolatory Mass * diag(dX/dphi at the nodes), which is what the
+            // forward Jacobian uses. dSourcedPhi_Mat integrates by quadrature
+            // and also re-evaluates the physics hooks that
+            // ComputePhysicsDerivatives has already batched into dSource_vals.
+            dPhi_Mat(Sigma_phi, dSigma_vals.Aux(i), yJac, i);
+            M.block(0, 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) = Sigma_phi;
+
+            dPhi_Mat(Sphi, dSource_vals.Aux(i), yJac, i);
             M.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
 
             // Set Parts of Matrix due to aux variables
 
-            dAux_Mat(M.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), dAux_vals, y, i);
+            dAux_Mat(M.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), dAux_vals, yJac, i);
 
             // TODO: Consider factorization here (is M sparse enough to warrant a sparse implementation?)
+            }
         }
 
         // Note we save the transpose for adjoints
@@ -1317,23 +1564,40 @@ void SystemSolver::computeAdjointGradients()
     GlobalStateMatrix dSourcedp(nVars);
     GlobalStateMatrix dAuxdp(nAux);
 
-    const auto points = y.getPoints();
-    const auto states = y.evalOnNodes();
+    // Spatial adjoint parameters index the parameter vector by node, so the star
+    // node set would silently redefine how many parameters there are. Combined
+    // with the fact that spatial adjoint output has never worked (WriteAdjoints
+    // is disabled for exactly that reason, Solver.cpp:350), refusing is better
+    // than producing a gradient whose meaning is unclear.
+    if (superconvergent && adjointProblem->areParametersSpatial())
+        throw std::invalid_argument(
+            "Superconvergent postprocessing is not supported with spatial adjoint "
+            "parameters");
+
+    if (superconvergent)
+        postprocessor->computeUStar(y);
+
+    const std::vector<Position> points =
+        superconvergent ? postprocessor->starPoints() : y.getPoints();
+    const GlobalState states =
+        superconvergent ? postprocessor->evalOnStarNodes(y) : y.evalOnNodes();
+
+    const Index derivK = superconvergent ? k + 1 : k;
 
     const Index np_internal = adjointProblem->getNpInternal();
     logmsg<LOG_LEVEL::INFO>("Computing adjoints for {} parameters.", adjointProblem->getNp());
     for (Index var = 0; var < nVars; var++)
     {
-      dSigmadp.add(nCells, k, np_internal, nScalars, np_internal);
-      dSourcedp.add(nCells, k, np_internal, nScalars, np_internal);
+      dSigmadp.add(nCells, derivK, np_internal, nScalars, np_internal);
+      dSourcedp.add(nCells, derivK, np_internal, nScalars, np_internal);
     }
     for (Index aux = 0; aux < nAux; aux++)
     {
-      dAuxdp.add(nCells, k, np_internal, nScalars, np_internal);
+      dAuxdp.add(nCells, derivK, np_internal, nScalars, np_internal);
     }
     adjointProblem->ComputePhysicsDerivatives({dSigmadp, dSourcedp, dAuxdp}, states, points);
     
-    // Spatial paramters effectively mean we have nCells * np parameters, but we store as a matrix to make output easier to interpret
+    // Spatial parameters effectively mean we have nCells * np parameters, but we store as a matrix to make output easier to interpret
     if (adjointProblem->areParametersSpatial())
         G_p.resize(adjointProblem->getNg() * nCells * (k + 1), adjointProblem->getNp());
     else 
@@ -1406,20 +1670,28 @@ void SystemSolver::computeAdjointGradients()
                 }
                 else
                 {
+                    // Same projection the residual uses for these terms: A9 over
+                    // the star nodes with the superconvergent scheme, the
+                    // interpolatory mass-matrix form otherwise. The parameters do
+                    // not enter u*, so there is no chain matrix here.
                     dkappa_dp_phi.setZero();
                     if( adjointProblem->isAdjointIndexInternal( pIndex ) )
                     {
                         const auto dSigmadp_cell = dSigmadp.Variable(i)[var];
-                        dkappa_dp_phi = y.getBasis().InterpolateOntoBasis( I, dSigmadp_cell(pIndex, Eigen::all) );
+                        dkappa_dp_phi = superconvergent
+                            ? Vector(postprocessor->A9(i) * Vector(dSigmadp_cell(pIndex, Eigen::all)))
+                            : y.getBasis().InterpolateOntoBasis( I, dSigmadp_cell(pIndex, Eigen::all) );
                     }
 
                     // Evaluate Source Function
-               
+
                     dSdp_cellwise.setZero();
                     if( adjointProblem->isAdjointIndexInternal( pIndex ) )
                     {
                         const auto dSourcedp_cell = dSourcedp.Variable(i)[var];
-                        dSdp_cellwise = y.getBasis().InterpolateOntoBasis( I, dSourcedp_cell(pIndex, Eigen::all) );
+                        dSdp_cellwise = superconvergent
+                            ? Vector(postprocessor->A9(i) * Vector(dSourcedp_cell(pIndex, Eigen::all)))
+                            : y.getBasis().InterpolateOntoBasis( I, dSourcedp_cell(pIndex, Eigen::all) );
                     }
 
                 
@@ -1495,79 +1767,98 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
 {
     DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY), nScalars, nAux);
 
-    out << "# t = " << t << std::endl;
+    std::println(out, "# t = {:g}", t);
     for (Index v = 0; v < nVars; ++v)
     {
-        out << "# Lambda (" << v << ") = ";
+        std::print(out, "# Lambda ({}) = ", v);
         for (Index i = 0; i < nCells; ++i)
-            out << tmp_y.lambda(v)[i] << ", ";
-        out << tmp_y.lambda(v)[nCells] << std::endl;
+            std::print(out, "{:g}, ", tmp_y.lambda(v)[i]);
+        std::println(out, "{:g}", tmp_y.lambda(v)[nCells]);
     }
 
     if (nScalars > 0)
     {
-        out << "# Scalars : ";
+        std::print(out, "# Scalars : ");
         for (Index i = 0; i < nScalars - 1; ++i)
-            out << tmp_y.Scalar(i) << ", ";
-        out << tmp_y.Scalar(nScalars - 1) << std::endl;
+            std::print(out, "{:g}, ", tmp_y.Scalar(i));
+        std::println(out, "{:g}", tmp_y.Scalar(nScalars - 1));
     }
 
     double delta_x = (grid.upperBoundary() - grid.lowerBoundary()) * (1.0 / (nOut - 1.0));
 
-    // Sources are vectorized so we interpolate to the output grid
+    // Sources are vectorized so we interpolate to the output grid.
+    //
+    // The cache holds one value per node of whichever basis the residual last
+    // evaluated the physics on: k+1 per cell normally, k+2 with the
+    // superconvergent scheme. Wrapping it in a view of the wrong order reads
+    // across cell boundaries, so the order and stride follow the scheme.
+    const NodalBasis &sourceBasis =
+        superconvergent ? postprocessor->getStarBasis() : y.getBasis();
+    const size_t sourceStride = superconvergent ? k + 2 : k + 1;
+
     std::vector<DGApproxImpl<NodalBasis>> source_interp;
     if (printSources)
     {
         for (Index v = 0; v < nVars; ++v)
        {
           auto& Source_vals = problem->getSourceCache(v);
-          source_interp.emplace_back(grid, y.getBasis(), Source_vals.data(), static_cast<size_t>(k + 1));
+          source_interp.emplace_back(grid, sourceBasis, Source_vals.data(), sourceStride);
        }
     }
+
+    if (postprocessor)
+        postprocessor->computeUStar(tmp_y);
 
     for (int i = 0; i < nOut; ++i)
     {
         double x = static_cast<double>(i) * delta_x + grid.lowerBoundary();
-        out << x;
+        std::print(out, "{:g}", x);
         State s = tmp_y.eval(x);
         for (Index v = 0; v < nVars; ++v)
         {
-            out << "\t" << s.Variable[v] << "\t" << s.Derivative[v] << "\t" << s.Flux[v];
+            std::print(out, "\t{:g}\t{:g}\t{:g}", s.Variable[v], s.Derivative[v], s.Flux[v]);
+            std::print(out, "\t{:g}", postprocessor ? postprocessor->uStar(v)(x) : s.Variable[v]);
             if (printSources)
-                out << "\t" << source_interp[v](x);
+                std::print(out, "\t{:g}", source_interp[v](x));
         }
 
         for (Index a = 0; a < nAux; ++a)
-            out << "\t" << s.Aux[a];
+            std::print(out, "\t{:g}", s.Aux[a]);
 
-        out << std::endl;
+        std::println(out, "");
     }
-    out << std::endl;
-    out << std::endl;
+    std::println(out, "");
+    std::println(out, "");
 }
 
 void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSources)
 {
 
-    out << "# t = " << t << std::endl;
+    std::println(out, "# t = {:g}", t);
     for (Index v = 0; v < nVars; ++v)
     {
-        out << "# Lambda (" << v << ") = ";
+        std::print(out, "# Lambda ({}) = ", v);
         for (Index i = 0; i < nCells; ++i)
-            out << y.lambda(v)[i] << ", ";
-        out << y.lambda(v)[nCells] << std::endl;
+            std::print(out, "{:g}, ", y.lambda(v)[i]);
+        std::println(out, "{:g}", y.lambda(v)[nCells]);
     }
 
     if (nScalars > 0)
     {
-        out << "# Scalars : ";
+        std::print(out, "# Scalars : ");
         for (Index i = 0; i < nScalars - 1; ++i)
-            out << y.Scalar(i) << ", ";
-        out << y.Scalar(nScalars - 1) << std::endl;
+            std::print(out, "{:g}, ", y.Scalar(i));
+        std::println(out, "{:g}", y.Scalar(nScalars - 1));
     }
 
     double delta_x = (grid.upperBoundary() - grid.lowerBoundary()) * (1.0 / (nOut - 1.0));
 
+
+    // See the sibling overload above for why the basis and stride follow the
+    // scheme rather than being fixed at k+1.
+    const NodalBasis &sourceBasis =
+        superconvergent ? postprocessor->getStarBasis() : y.getBasis();
+    const size_t sourceStride = superconvergent ? k + 2 : k + 1;
 
     std::vector<DGApproxImpl<NodalBasis>> source_interp;
     if (printSources)
@@ -1575,49 +1866,54 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
         for (Index v = 0; v < nVars; ++v)
        {
           auto& Source_vals = problem->getSourceCache(v);
-          source_interp.emplace_back(grid, y.getBasis(), Source_vals.data(), static_cast<size_t>(k + 1));
+          source_interp.emplace_back(grid, sourceBasis, Source_vals.data(), sourceStride);
        }
     }
+
+    if (postprocessor)
+        postprocessor->computeUStar(y);
+
     for (int i = 0; i < nOut; ++i)
     {
         double x = static_cast<double>(i) * delta_x + grid.lowerBoundary();
-        out << x;
+        std::print(out, "{:g}", x);
         State s = y.eval(x);
         for (Index v = 0; v < nVars; ++v)
         {
-            out << "\t" << s.Variable[v] << "\t" << s.Derivative[v] << "\t" << s.Flux[v];
+            std::print(out, "\t{:g}\t{:g}\t{:g}", s.Variable[v], s.Derivative[v], s.Flux[v]);
+            std::print(out, "\t{:g}", postprocessor ? postprocessor->uStar(v)(x) : s.Variable[v]);
             if (printSources)
-                out << "\t" << source_interp[v](x);
+                std::print(out, "\t{:g}", source_interp[v](x));
         }
 
         for (Index a = 0; a < nAux; ++a)
-            out << "\t" << s.Aux[a];
+            std::print(out, "\t{:g}", s.Aux[a]);
 
-        out << std::endl;
+        std::println(out, "");
     }
-    out << std::endl;
-    out << std::endl; // Two blank lines needed to make gnuplot happy
+    std::println(out, "");
+    std::println(out, ""); // Two blank lines needed to make gnuplot happy
 }
 
 void SystemSolver::printOnNodes(std::ostream &out, double t, N_Vector const& tempY, bool printSources)
 {
 
     DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY), nScalars, nAux);
-    out << "# t = " << t << std::endl;
+    std::println(out, "# t = {:g}", t);
     for (Index v = 0; v < nVars; ++v)
     {
-        out << "# Lambda (" << v << ") = ";
+        std::print(out, "# Lambda ({}) = ", v);
         for (Index i = 0; i < nCells; ++i)
-            out << tmp_y.lambda(v)[i] << ", ";
-        out << tmp_y.lambda(v)[nCells] << std::endl;
+            std::print(out, "{:g}, ", tmp_y.lambda(v)[i]);
+        std::println(out, "{:g}", tmp_y.lambda(v)[nCells]);
     }
 
     if (nScalars > 0)
     {
-        out << "# Scalars : ";
+        std::print(out, "# Scalars : ");
         for (Index i = 0; i < nScalars - 1; ++i)
-            out << tmp_y.Scalar(i) << ", ";
-        out << tmp_y.Scalar(nScalars - 1) << std::endl;
+            std::print(out, "{:g}, ", tmp_y.Scalar(i));
+        std::println(out, "{:g}", tmp_y.Scalar(nScalars - 1));
     }
 
     std::vector<Values> sources(nVars);
@@ -1630,26 +1926,31 @@ void SystemSolver::printOnNodes(std::ostream &out, double t, N_Vector const& tem
     }
     const auto states = tmp_y.evalOnNodes();
     const auto points = tmp_y.getPoints();
+
+    if (postprocessor)
+        postprocessor->computeUStar(tmp_y);
+
     for (size_t i = 0; i < points.size(); ++i)
     {
         const auto& x = points[i];
         const State s = states[i];
 
-        out << x;
-         for (Index v = 0; v < nVars; ++v)
+        std::print(out, "{:g}", x);
+        for (Index v = 0; v < nVars; ++v)
         {
-            out << "\t" << s.Variable[v] << "\t" << s.Derivative[v] << "\t" << s.Flux[v];
+            std::print(out, "\t{:g}\t{:g}\t{:g}", s.Variable[v], s.Derivative[v], s.Flux[v]);
+            std::print(out, "\t{:g}", postprocessor ? postprocessor->uStar(v)(x) : s.Variable[v]);
             if (printSources)
-                out << "\t" << sources[v](i);
+                std::print(out, "\t{:g}", sources[v](i));
         }
         for (Index a = 0; a < nAux; ++a)
-            out << "\t" << s.Aux[a];
+            std::print(out, "\t{:g}", s.Aux[a]);
 
-        out << std::endl;
+        std::println(out, "");
        
     }
-    out << std::endl;
-    out << std::endl; // Two blank lines needed to make gnuplot happy
+    std::println(out, "");
+    std::println(out, ""); // Two blank lines needed to make gnuplot happy
 }
 
 int SystemSolver::getErrorWeights(N_Vector y_sundials, N_Vector ewt_sundials)
@@ -1717,8 +2018,14 @@ void SystemSolver::PrintDebugInfo()
     initialiseMatrices();
     for (Index i = 0; i < nCells; i++)
     {
-        std::cout << "Cell " << i << " M Matrix: " << std::endl;
-        std::cout << MBlocks[i] << std::endl
-                  << std::endl;
+        std::println("Cell {} M Matrix: ", i);
+        // Eigen has no std::formatter, so write the block out row by row.
+        for (Index r = 0; r < MBlocks[i].rows(); ++r)
+        {
+            for (Index c = 0; c < MBlocks[i].cols(); ++c)
+                std::print("{:g} ", MBlocks[i](r, c));
+            std::println("");
+        }
+        std::println("");
     }
 }

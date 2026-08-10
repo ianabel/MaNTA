@@ -77,6 +77,12 @@ public:
     double *data = static_cast<double *>(info.ptr);
     value.Scalars() = Eigen::Map<Vector>(data, info.size);
 
+    // PYBIND11_TYPE_CASTER default-constructs `value`, so its size members are
+    // whatever the default constructor left them. Derive them from the arrays
+    // just assigned; without this, size() and operator[] on a GlobalState that
+    // came from Python read uninitialised state.
+    value.setShapeFromData();
+
     return true;
   }
 
@@ -257,8 +263,10 @@ PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used()) {
       .def("configure", &PyRunner::configure)
       .def("run", &PyRunner::run)
       .def("run_ss", &PyRunner::run_ss)
+      .def("G", &PyRunner::G)
       .def("getAdjointGradients", &PyRunner::getAdjointGradients)
       .def("getSolution", &PyRunner::getSolution)
+      .def("getPostprocessedSolution", &PyRunner::getPostprocessedSolution)
       .def("get_address", [](const PyRunner &runner) // needed for xla interface
            { return reinterpret_cast<std::uint64_t>(&runner); });
 #ifdef XLA_FFI

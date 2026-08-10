@@ -1,4 +1,3 @@
-#include <iostream>
 #include <memory>
 #include <boost/math/tools/roots.hpp>
 #include <toml.hpp>
@@ -6,6 +5,7 @@
 
 #include "SystemSolver.hpp"
 #include "PhysicsCases.hpp"
+#include "Config.hpp"
 
 // Load restart data into vectors
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vector<double> &dYdt)
@@ -23,69 +23,6 @@ int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vect
 	restart_file.close();
 
 	return nDOF;
-}
-
-double getFloatWithDefault(std::string const &name, toml::value const &config, double defaultValue)
-{
-	auto confCount = config.count(name);
-	if (confCount == 0)
-	{
-    logmsg<LOG_LEVEL::INFO>("Using default value {} for configuration option {}", defaultValue, name);
-		return defaultValue;
-	}
-	else if (confCount > 1)
-	{
-		throw std::invalid_argument(name + " was multiply specified.");
-	}
-
-	auto configElement = toml::find(config, name);
-
-	if (configElement.is_integer())
-		return static_cast<double>(configElement.as_floating());
-	else if (configElement.is_floating())
-		return static_cast<double>(configElement.as_floating());
-	else
-		throw std::invalid_argument(name + " specified incorrrectly");
-	return 0.0;
-}
-
-double getFloat(std::string const &name, toml::value const &config)
-{
-	auto confCount = config.count(name);
-	if (confCount == 0)
-		throw std::invalid_argument(name + " was not specified.");
-	else if (confCount > 1)
-		throw std::invalid_argument(name + " was multiply specified.");
-
-	auto configElement = toml::find(config, name);
-	if (configElement.is_integer())
-		return static_cast<double>(configElement.as_floating());
-	else if (configElement.is_floating())
-		return static_cast<double>(configElement.as_floating());
-	else
-		throw std::invalid_argument(name + " specified incorrrectly");
-	return 0.0;
-}
-
-int getIntWithDefault(std::string const &name, toml::value const &config, int defaultValue)
-{
-	auto confCount = config.count(name);
-	if (confCount == 0)
-	{
-    logmsg<LOG_LEVEL::INFO>("Using default value {} for configuration option {}", defaultValue, name);
-		return defaultValue;
-	}
-	else if (confCount > 1)
-	{
-		throw std::invalid_argument(name + " was multiply specified.");
-	}
-
-	auto configElement = toml::find(config, name);
-	if (configElement.is_integer())
-		return static_cast<int>(configElement.as_integer());
-	else
-		throw std::invalid_argument(name + " specified incorrrectly");
-	return 0;
 }
 
 int runManta(std::string const &fname)
@@ -165,27 +102,33 @@ int runManta(std::string const &fname)
 			nCells = numberOfCells.as_integer();
 
 		if (nCells < 4 && highGridBoundary)
-			throw std::invalid_argument("Grid size must exceed 4 cells in order to implemet dense boundaries");
+			throw std::invalid_argument("Grid size must exceed 4 cells in order to implement dense boundaries");
 
+		// The is_integer() branches called as_floating(), which throws
+		// toml::type_error on an integer node -- so `Lower_boundary = 0` failed
+		// with "as_floating(): bad_cast" despite the branch existing precisely
+		// to accept it. Same defect as the one fixed in Config.cpp; these two
+		// were missed because they are open-coded here rather than going
+		// through getFloat.
 		auto lowerBoundary = toml::find(config, "Lower_boundary");
 		if (config.count("Lower_boundary") != 1)
 			throw std::invalid_argument("Lower_boundary unspecified or specified more than once");
 		else if (lowerBoundary.is_integer())
-			lBound = static_cast<double>(lowerBoundary.as_floating());
+			lBound = static_cast<double>(lowerBoundary.as_integer());
 		else if (lowerBoundary.is_floating())
 			lBound = static_cast<double>(lowerBoundary.as_floating());
 		else
-			throw std::invalid_argument("Lower_boundary specified incorrrectly");
+			throw std::invalid_argument("Lower_boundary specified incorrectly");
 
 		auto upperBoundary = toml::find(config, "Upper_boundary");
 		if (config.count("Upper_boundary") != 1)
 			throw std::invalid_argument("Upper_boundary unspecified or specified more than once");
 		else if (upperBoundary.is_integer())
-			uBound = static_cast<double>(upperBoundary.as_floating());
+			uBound = static_cast<double>(upperBoundary.as_integer());
 		else if (upperBoundary.is_floating())
 			uBound = static_cast<double>(upperBoundary.as_floating());
 		else
-			throw std::invalid_argument("Upper_boundary specified incorrrectly");
+			throw std::invalid_argument("Upper_boundary specified incorrectly");
 
 		grid = std::make_unique<Grid>(lBound, uBound, nCells, highGridBoundary, lowerBoundaryFraction, upperBoundaryFraction);
 	}
@@ -252,6 +195,21 @@ int runManta(std::string const &fname)
 
 	std::unique_ptr<TransportSystem> pProblem = PhysicsCases::InstantiateProblem(ProblemName, configFile, *grid);
 
+	// This check has to come before the first use of pProblem. InstantiateProblem
+	// returns nullptr for an unrecognised name, and both the adjoint setup and
+	// the restart block below dereference it -- so an unknown TransportSystem
+	// used to segfault instead of printing the list of available models.
+	if (pProblem == nullptr)
+	{
+		logmsg<LOG_LEVEL::ERROR>("Could not instantiate a physics model for TransportSystem = {}\n  Available physics models include:  ", ProblemName);
+		for (auto pair : *PhysicsCases::map)
+		{
+			std::println(stderr, "\t{}", pair.first);
+		}
+		std::println(stderr, "");
+		return 1;
+	}
+
 	std::unique_ptr<AdjointProblem> adjoint = nullptr;
 	if (solveAdjoint)
 		adjoint = pProblem->createAdjointProblem();
@@ -271,17 +229,6 @@ int runManta(std::string const &fname)
 		pProblem->setRestartValues(Y, dYdt, *grid, k);
 	}
 
-	if (pProblem == nullptr)
-	{
-    logmsg<LOG_LEVEL::ERROR>("Could not instantiate a physics model for TransportSystem = {}\n  Available physics models include:  ", ProblemName); 
-		for (auto pair : *PhysicsCases::map)
-		{
-			std::cerr << '\t' << pair.first << std::endl;
-		}
-		std::cerr << std::endl;
-		return 1;
-	}
-
 	system = std::make_shared<SystemSolver>(*grid, k, pProblem.get());
 
 
@@ -297,10 +244,27 @@ int runManta(std::string const &fname)
 	system->setNOutput(nOutput);
 	system->setMinStepSize(dt_min);
 
+	// netCDF is the default output. The plain-text .dat files are a gnuplot
+	// convenience and are written only when asked for.
+	system->setWriteDatFile(toml::find_or(config, "WriteDatFile", false));
+	system->setWriteDebugDatFiles(toml::find_or(config, "WriteDebugDatFiles", false));
+
+	// Off by default: with it off the discretisation is unchanged, so existing
+	// configs reproduce their reference solutions exactly. See
+	// SystemSolver::setSuperconvergent.
+	system->setSuperconvergent(toml::find_or(config, "Superconvergent", false));
+
+	// Let IDA grow the timestep by up to 10x rather than 2x between steps.
+	system->setAggressiveTimesteps(toml::find_or(config, "AggressiveTimesteps", false));
+
 	if (config.count("SteadyStateTolerance") == 1)
 	{
-		double sst = toml::find<double>(config, "SteadyStateTolerance");
-    logmsg<LOG_LEVEL::INFO>("Running until steady state achieved (variation below {}) or end time reached.", sst);
+		double sst = getFloat("SteadyStateTolerance", config);
+		logmsg<LOG_LEVEL::INFO>("Running until steady state achieved (variation below {}) or end time reached.", sst);
+		// Without this the option was inert: the value was read and logged but
+		// never reached the solver, so TerminateOnSteadyState stayed false and
+		// the run always went to t_final.
+		system->setSteadyStateTolerance(sst);
 	}
 
 	system->runSolver(tFinal);
@@ -309,6 +273,6 @@ int runManta(std::string const &fname)
 	// this will call the correct inherited destructor
 
 	//delete grid;
-	std::cout << "Done." << std::endl;
+	std::println("Done.");
 	return 0;
 }

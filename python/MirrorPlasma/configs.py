@@ -8,7 +8,7 @@ CMFX = MirrorPlasmaConfig(
     0.35,
     gamma=5e4,
     gamma_d=10.0,
-    gamma_h=1e5,
+    gamma_h=1e6,
     EdgeDensity=1e-2,
     InitialIonTemperatureHeight=0.2,
     InitialElectronTemperatureHeight=0.2,
@@ -23,8 +23,8 @@ CMFX = MirrorPlasmaConfig(
     ParticleSourceCenter=0.2,
     MagneticFieldSlope=0.0,
     PlasmaVoltage=80e3,
-    ADCoefficient=0.1,
-    ADFinalCoeffs=[0.1, 0.1, 0.05, 0.1],
+    ADCoefficient=0.2,
+    ADFinalCoeffs=[0.1, 0.01, 0.05, 0.1],
 )
 
 CMFX1keV = MirrorPlasmaConfig(

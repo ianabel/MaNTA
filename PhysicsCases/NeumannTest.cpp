@@ -16,7 +16,7 @@ NeumannTest::NeumannTest(toml::value const &config, Grid const &grid)
     xL = grid.lowerBoundary();
     xR = grid.upperBoundary();
 
-    // Construst your problem from user-specified config
+    // Construct your problem from user-specified config
     // throw an exception if you can't. NEVER leave a part-constructed object around
     // here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 
@@ -38,7 +38,7 @@ NeumannTest::NeumannTest(toml::value const &config, Grid const &grid)
     upperNeumann = toml::find_or(DiffConfig, "UpperNeumann", false);
 }
 
-// Dirichlet Boundary Conditon
+// Dirichlet Boundary Condition
 Value NeumannTest::LowerBoundary(Index, Time) const
 {
     if (lowerNeumann)

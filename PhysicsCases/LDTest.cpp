@@ -18,7 +18,7 @@ LDTest::LDTest(toml::value const &config, Grid const& )
 	EdgeValue = 0.3;
 }
 
-// Dirichlet Boundary Conditon
+// Dirichlet Boundary Condition
 Value LDTest::LowerBoundary(Index, Time) const
 {
 	return EdgeValue;

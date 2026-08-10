@@ -51,11 +51,11 @@ class State(eqx.Module):
     def to_manta(self):
         Scalars_out = []
         if self.Scalars is not None:
-            if jnp.ndim(self.Scalars) == 2:
-                Scalars_out = self.Scalars[0, :]
-            else:
-                Scalars_out = self.Scalars
-
+            # from_manta broadcasts Scalars to (nPoints, nScalars); undo that.
+            # atleast_2d handles the empty case too -- special-casing size == 0
+            # here would leak a 2-D (1, 0) array out to the pointwise State
+            # caster, which expects a 1-D Vector.
+            Scalars_out = jnp.atleast_2d(self.Scalars)[0, :]
         return {
             "Variable": np.asarray(self.Variable),
             "Derivative": np.asarray(self.Derivative),

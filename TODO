@@ -1,0 +1,55 @@
+Clean up python (make clean should remove python stuff, as should clean_coverage).
+
+Make python interface deployable so python drivers don't have to live in our tree
+
+Investigate IDACalcIC taking too many steps at initial time.
+
+Investigate occasional wiggles in outputs.
+
+Superconvergence follow-ons (see Tests/README.md for what is already verified):
+
+  - Paper II's HDG(ABC) / HDG+ family: W_h = P_{k+1} with tau ~ 1/h makes u_h
+    itself superconverge, with no postprocessing, and reaches k+2 at k = 0 too.
+    Needs mixed polynomial degrees across fields, which the single-k assumption in
+    DGSoln::Map, every block in Matrices.cpp, AdjointVectors.cpp, the pybind11
+    casters and the restart format all rest on. tau ~ 1/h also changes every
+    existing run.
+
+  - An order study for a general nonlinear flux sigma_hat(u, q). Paper I covers
+    -Laplacian u + F(u) only, and names F(grad u, u) as open, so the k+2 rate for
+    MaNTA's flux is currently unasserted. SolveJacTests covers the Jacobian for
+    such a flux; only the rate is missing.
+
+  - Order studies with nAux > 0 and nScalars > 0 under Superconvergent = true.
+    The Jacobian handles both; nothing measures the rate.
+
+  - Spatial adjoint parameters with Superconvergent = true currently throw. They
+    index the parameter vector by node, so the star node set would redefine how
+    many parameters there are.
+
+
+Diagnose why a second integration on the same SystemSolver fails. IDASolve
+returns IDA_ERR_FAIL (-3) on the first step of the second run, whether via a
+second runSolver() or a second initialize()/integrate() pair, and whether or not
+the first run completed. Pre-existing -- b7d8031 fails identically -- and hidden
+because PyRunner::configure builds a fresh SystemSolver every time. Candidates:
+state a completed run leaves in RF_cellwise / updateBoundaryConditions, and the
+nc_output time index. Tests/README.md has the detail.
+
+Design a dG/dt early-exit gate for optimisation runs. origin/optimize-mode has
+one (commit e024294) and the initialize/integrate/destroySundials split exists
+partly to serve it, but it was not ported: it evaluates the objective functional
+on the time derivative, which equals dG/dt only if g is linear in the state; it
+scales the result by the netCDF output cadence, so an I/O setting decides whether
+a step is rejected (and setOutputCadence(0.0) disables the gate silently); and
+its thresholds are hardcoded. Wants an explicit dG/dt hook on AdjointProblem and
+a configurable tolerance.
+
+From the origin/optimize-mode review, still unmerged and worth taking:
+  - shard_inputs as a per-hook decorator in python/Stellarator2.py (but keep
+    MaNTA_Decorator sharding, or every hook needs the new decorator)
+  - the Python drivers: StellaratorState.py, desc-optimize-bfgs.py, scan_eq.py,
+    scan_eq_ambipolar.py, yancc_gpu_test.py
+  - why the branch removed both `#pragma omp parallel for` from
+    TransportSystem.hpp's batched defaults -- ask eatocco; may be a real finding
+    about OpenMP against a Python trampoline

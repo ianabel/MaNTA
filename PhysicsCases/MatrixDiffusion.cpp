@@ -10,7 +10,7 @@ REGISTER_PHYSICS_IMPL(MatrixDiffusion);
 MatrixDiffusion::MatrixDiffusion(toml::value const &config, Grid const &)
 {
 
-	// Construst your problem from user-specified config
+	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
 	// here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 
@@ -40,7 +40,7 @@ MatrixDiffusion::MatrixDiffusion(toml::value const &config, Grid const &)
 	//	Kappa = Matrix::Identity(nVars, nVars);
 }
 
-// Dirichlet Boundary Conditon
+// Dirichlet Boundary Condition
 Value MatrixDiffusion::LowerBoundary(Index, Time) const
 {
 	return 0.0;

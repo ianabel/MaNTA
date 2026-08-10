@@ -121,13 +121,21 @@ public:
     checkShapeAndSet(m_Flux, other.Flux(), "Flux");
     if (nAux > 0) // Don't bother with Aux if nAux = 0
       checkShapeAndSet(m_Aux, other.Aux(), "Aux");
+    // Guard-clause form, and braced. The `else` used to hang off the inner `if`
+    // -- which is what was meant, so the behaviour here is unchanged -- but with
+    // two unbraced nested ifs that is only true by the standard's
+    // nearest-enclosing rule, not by anything the reader can see. gcc's
+    // -Wdangling-else lives inside -Wparentheses, which Makefile.config disables
+    // globally, so only clang reports it. It was the sole thing standing between
+    // this codebase and a clean clang build.
     if (nScalars > 0)
-      if (m_Scalars.size() == other.Scalars().size())
-        m_Scalars = other.Scalars();
-      else
+    {
+      if (m_Scalars.size() != other.Scalars().size())
         throw std::runtime_error("Shape of input scalar array must match "
                                  "nScalars (length of input = " +
                                  std::to_string(other.Scalars().size()) + ")");
+      m_Scalars = other.Scalars();
+    }
     return *this;
   }
 
@@ -190,6 +198,28 @@ public:
   Index cellDOF() const { return k; };
   Index getNCells() const { return nCells; };
 
+  /// Recover the shape from the arrays themselves.
+  ///
+  /// Only for the pybind11 type_caster<GlobalState>: PYBIND11_TYPE_CASTER
+  /// default-constructs the value and `load` then assigns the matrices, so
+  /// without this the size members stay indeterminate and size()/operator[]
+  /// read uninitialised memory. The solver never noticed because it only ever
+  /// *assigns* a Python-loaded GlobalState into one it built itself, and
+  /// operator= copies the arrays and not the sizes.
+  ///
+  /// A dict of (nPoints, nVars) arrays does not say how the points are shared
+  /// out between cells, so this records nCells = nPoints and k = 0: size() is
+  /// then correct and operator[] works, but cellwise* is meaningless on such an
+  /// object.
+  void setShapeFromData()
+  {
+    nVars = m_Variable.rows();
+    nAux = m_Aux.rows();
+    nScalars = m_Scalars.size();
+    nCells = m_Variable.cols();
+    k = 0;
+  }
+
   friend class GlobalStateMatrix;
 
 private:
@@ -199,8 +229,10 @@ private:
   // Scalars are global so this is just a vector
   Vector m_Scalars;
 
-  // Hold sizes internally for checking & preallocating memory
-  Index nCells, k, nVars, nScalars, nAux;
+  // Hold sizes internally for checking & preallocating memory.
+  // Initialised here because the default constructor is used by the pybind11
+  // type caster; leaving them indeterminate made size() unpredictable.
+  Index nCells = 0, k = 0, nVars = 0, nScalars = 0, nAux = 0;
 };
 
 // Wrapper class to make Jacobian computation cleaner

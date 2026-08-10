@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "../../PhysicsCases/LinearDiffSourceTest.hpp"
+#include "TestPaths.hpp"
 #include "Types.hpp"
 #include <toml.hpp>
 
@@ -22,20 +23,19 @@ Kappa = [1.0,0.0,
 
 )"_toml;
 
-const toml::value config_snippet_nc_file = u8R"(
-[LinearDiffSourceTest]
-nVars = 2
-useNcFile = true
-InitialConditionFilename = "./Tests/UnitTests/testic.nc"
-
-SourceStrength = [1.0,1.0]
-
-InitialHeight = [1.0,0.5]
-
-Kappa = [1.0,0.0,
-        0.0,1.0]
-
-)"_toml;
+// Built at runtime rather than as a _toml literal so the fixture path can come
+// from TEST_DATA_DIR and the test does not depend on the working directory.
+const toml::value config_snippet_nc_file = toml::parse_str(
+    "[LinearDiffSourceTest]\n"
+    "nVars = 2\n"
+    "useNcFile = true\n"
+    "InitialConditionFilename = \"" +
+    testDataPath("testic.nc") +
+    "\"\n"
+    "SourceStrength = [1.0,1.0]\n"
+    "InitialHeight = [1.0,0.5]\n"
+    "Kappa = [1.0,0.0,\n"
+    "        0.0,1.0]\n");
 
 BOOST_AUTO_TEST_SUITE(autodiff_test_suite, *boost::unit_test::tolerance(1e-3))
 

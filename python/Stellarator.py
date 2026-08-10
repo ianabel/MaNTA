@@ -214,7 +214,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     
     """
-    Sigma and source, and auxilliary functions to be overloaded in derived classes
+    Sigma and source, and auxiliary functions to be overloaded in derived classes
 
     Parameters
     ----------

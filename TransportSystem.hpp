@@ -13,6 +13,20 @@
         a_i d_t u_i + d_x ( sigma_i ) = S_i( u(x), q(x), x, t ) ; S_i can depend on the entire u & q vector, but only locally.
         sigma_i = sigma_hat_i( u( x ), q( x ), x, t ) ; so can sigma_hat_i
 
+    The second line is a sign convention, not an identity. SigmaFn returns
+    sigma_hat, but the solver stores sigma_i = -sigma_hat_i: residual() forms the
+    flux row as ( sigma_h + I_h sigma_hat, phi ) = 0. So the equation actually
+    integrated is
+
+        a_i d_t u_i - d_x[ sigma_hat_i( u, q, x, t ) ] = S_i
+
+    Two things follow for anyone writing a case here. A manufactured source must
+    carry that minus sign -- get it backwards and the case converges at the right
+    rate to the wrong function, which no order study can detect. And State::Flux[i],
+    which the hooks below receive, holds the negated sigma_h rather than the
+    sigma_hat that SigmaFn returned.
+
+    See CLAUDE.md, "The equation being solved".
  */
 
 
@@ -33,9 +47,13 @@ public:
 
   virtual void setRestartValues(const std::vector<double> &y, const std::vector<double> &dydt, const Grid &grid, Index k)
   {
-    // need to copy data into vectors owned by TransportSystem
-    restart_Y_data = std::move(y);
-    restart_dYdt_data = std::move(dydt);
+    // Copy into vectors owned by TransportSystem. (These were written as
+    // std::move(y), but y is a const lvalue reference -- std::move on it yields
+    // a const rvalue, which binds to copy-assignment, not move-assignment. So
+    // it was always a copy; the std::move only misled the reader. A copy is
+    // what we want here, since the caller keeps ownership of its vectors.)
+    restart_Y_data = y;
+    restart_dYdt_data = dydt;
 
     // Create DGSolns to wrap restart data
     restart_Y = std::make_shared<DGSoln>(nVars, grid, k, restart_Y_data.data(), nScalars, nAux);
@@ -71,7 +89,7 @@ public:
   virtual Value SigmaFn(Index i, const State &s, Position x, Time t) = 0;
   virtual Value Sources(Index i, const State &s, Position x, Time t) = 0;
 
-  // This determines the a_i functions. Only one with a default option, but can be overriden
+  // This determines the a_i functions. Only one with a default option, but can be overridden
   virtual Value aFn(Index i, Position x) { return 1.0; };
 
   // We need derivatives of the flux functions
@@ -89,7 +107,7 @@ public:
  */
   virtual PhysicsOutput ComputePhysics(GlobalState const &states, std::vector<Position> const & abscissae, Time time)
 {
-    m_sourceCache.resize(nVars); // make sure we have enought elements in cache
+    m_sourceCache.resize(nVars); // make sure we have enough elements in cache
     PhysicsOutput out;
     out[0].resize(nVars);
     out[1].resize(nVars);

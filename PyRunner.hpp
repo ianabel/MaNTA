@@ -47,15 +47,30 @@ public:
   // Runs solver to steady state
   void run_ss(void);
 
+  // The objective alone, without an adjoint solve. Needs solveAdjoint = True
+  // (that is what constructs the AdjointProblem that defines G) but not the
+  // gradient machinery.
+  Vector G(void);
+
   // Run adjoint solver and return tuple (G, G_p)
   py::tuple getAdjointGradients(void);
 
   Vector getSolution(Index var,
                      std::optional<std::vector<Position>> const &points);
 
+  // The element-local postprocessed solution u* in P_{k+1}, sampled the same way
+  // getSolution samples u. Available for any k >= 1 regardless of whether the
+  // superconvergent scheme is switched on.
+  Vector getPostprocessedSolution(Index var,
+                                  std::optional<std::vector<Position>> const &points);
+
 private:
   std::shared_ptr<TransportSystem> pProblem = nullptr;
   std::unique_ptr<AdjointProblem> adjoint = nullptr;
+  // Built on demand by G() when solveAdjoint is false, purely to evaluate the
+  // objective. Kept separate from `adjoint` so that its presence cannot be
+  // mistaken for "the gradients have been computed".
+  std::unique_ptr<AdjointProblem> objectiveOnlyAdjoint = nullptr;
 
   // Ownership of objects handled by C++
   std::unique_ptr<SystemSolver> system;

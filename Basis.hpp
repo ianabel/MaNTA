@@ -7,6 +7,11 @@
 
 #include "Types.hpp"
 #include "gridStructures.hpp"
+// NodalBasis inverts the Vandermonde matrices below. Types.hpp only pulls in
+// Eigen/Core, which declares MatrixBase::inverse() without defining it, so
+// without Eigen/LU this header only compiles when something else has already
+// included Eigen/Dense.
+#include <Eigen/LU>
 #include <boost/math/special_functions/legendre.hpp>
 #include <boost/math/special_functions/binomial.hpp>
 

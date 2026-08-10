@@ -2,6 +2,7 @@
 #include "Logging.hpp"
 #include <pybind11/eigen.h>
 #include <string>
+#include <print>
 // Load restart data into vectors
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y,
                  std::vector<double> &dYdt);
@@ -28,6 +29,17 @@ static const map_t params = {
     {"Grid_points",
      Parameter<std::vector<double>>{.required = false, ._default = {}}},
     //
+    // Needed whenever Grid_points is not supplied. They cannot be marked
+    // required here because the Grid_points path legitimately omits them, so
+    // configure() checks for them explicitly on the branch that uses them.
+    // Without these entries getValueWithDefault fell through to params.at(),
+    // which threw out_of_range and was reported as the thoroughly misleading
+    // "Failed to retrieve default value for key: Lower_boundary; possible type
+    // mismatch."
+    {"Lower_boundary", Parameter<double>{.required = false, ._default = 0.0}},
+    //
+    {"Upper_boundary", Parameter<double>{.required = false, ._default = 1.0}},
+    //
     {"tau", Parameter<double>{.required = false, ._default = 1.0}},
     //
     {"delta_t", Parameter<double>{.required = true}},
@@ -53,9 +65,29 @@ static const map_t params = {
     //
     {"WriteOutput", Parameter<bool>{.required = false, ._default = true}},
     //
+    // netCDF is the default output; the plain-text .dat files are opt-in.
+    // WriteDatFile controls <stem>.dat, WriteDebugDatFiles the .dydt.dat and
+    // .res.dat pair (which additionally need a PHYSICS_DEBUG build).
+    {"WriteDatFile", Parameter<bool>{.required = false, ._default = false}},
+    //
+    {"WriteDebugDatFiles",
+     Parameter<bool>{.required = false, ._default = false}},
+    //
+    // Switches the residual and Jacobian to the superconvergent interpolatory
+    // scheme; see SystemSolver::setSuperconvergent. Off by default so existing
+    // configurations are unaffected.
+    {"Superconvergent", Parameter<bool>{.required = false, ._default = false}},
+    //
     {"zeroFlux", Parameter<bool>{.required = false, ._default = false}},
     //
-    {"initialTimestep", Parameter<double>{.required = false, ._default = 0.0}}};
+    {"initialTimestep", Parameter<double>{.required = false, ._default = 0.0}},
+    //
+    // Let IDA grow the step by up to 10x rather than 2x between steps. Useful
+    // for an optimisation driver calling run_ss() in a loop, where the transient
+    // is not the interesting part; off by default because it makes IDA more
+    // likely to overshoot and retry.
+    {"aggressiveTimesteps",
+     Parameter<bool>{.required = false, ._default = false}}};
 
 template <typename T>
 T getValueWithDefault(std::string_view key, const py::dict &d) {
@@ -66,7 +98,7 @@ T getValueWithDefault(std::string_view key, const py::dict &d) {
       return val;
     } catch (const std::exception &e) {
       throw std::runtime_error(
-          "The following error occured while trying to get the value of key: " +
+          "The following error occurred while trying to get the value of key: " +
           std::string(key) + " from config:\n" + e.what() + "\n");
     }
   } else {
@@ -147,6 +179,17 @@ void PyRunner::configure(const py::dict &config) {
       int nCells;
       highGridBoundary =
           getValueWithDefault<bool>("High_Grid_Boundary", config);
+
+      // Required on this branch, but not listed as required in `params`
+      // because the Grid_points branch above does not need them -- so the
+      // up-front required-parameter check cannot catch them. Say so clearly
+      // rather than silently defaulting the domain to [0, 1].
+      if (!config.contains("Lower_boundary") ||
+          !config.contains("Upper_boundary"))
+        throw std::runtime_error(
+            "Required parameter(s): Lower_boundary, Upper_boundary must be "
+            "given unless Grid_points is supplied.");
+
       lBound = getValueWithDefault<double>("Lower_boundary", config);
       uBound = getValueWithDefault<double>("Upper_boundary", config);
 
@@ -226,6 +269,13 @@ void PyRunner::configure(const py::dict &config) {
   system->setNOutput(nOutput);
   system->setMinStepSize(dt_min);
   system->setZeroFlux(getValueWithDefault<bool>("zeroFlux", config));
+  system->setSuperconvergent(
+      getValueWithDefault<bool>("Superconvergent", config));
+  system->setWriteDatFile(getValueWithDefault<bool>("WriteDatFile", config));
+  system->setWriteDebugDatFiles(
+      getValueWithDefault<bool>("WriteDebugDatFiles", config));
+  system->setAggressiveTimesteps(
+      getValueWithDefault<bool>("aggressiveTimesteps", config));
 
   bool writeOutput = getValueWithDefault<bool>("WriteOutput", config);
 
@@ -246,7 +296,7 @@ void PyRunner::run(double tFinal) {
   }
   system->runSolver(tFinal);
 
-  std::cout << "Done." << std::endl;
+  std::println("Done.");
 }
 
 void PyRunner::run_ss() {
@@ -257,7 +307,43 @@ void PyRunner::run_ss() {
   system->setSteadyStateTolerance(steady_state_tolerance);
   system->runSolver(0);
 
-  std::cout << "Done." << std::endl;
+  std::println("Done.");
+}
+
+Vector PyRunner::G(void) {
+  if (!configured)
+    throw std::runtime_error(
+        "Error: Runner must be configured before evaluating G.");
+
+  // The objective without the gradient, for a driver that only needs G: a
+  // finite-difference reference, a line search, a gradient-free optimiser.
+  //
+  // The saving is in the *run*, not here. SystemSolver::integrate calls
+  // runAdjointSolve() whenever solveAdjoint is set, so with solveAdjoint = True
+  // the gradients are already computed by the time the run returns and
+  // getAdjointGradients() merely reads G_p. Configure with solveAdjoint = False
+  // and the run skips the adjoint solve entirely -- and this is then the way to
+  // get the objective out.
+  //
+  // Which means G() has to be able to work without a configured adjoint. The
+  // AdjointProblem is what *defines* G, so build one on demand.
+  if (adjoint == nullptr && objectiveOnlyAdjoint == nullptr)
+    objectiveOnlyAdjoint = pProblem->createAdjointProblem();
+
+  // Deliberately not handed to the SystemSolver via setAdjointProblem: that
+  // would make getAdjointGradients() pass its null check and hand back a G_p
+  // that was never computed.
+  AdjointProblem *ap =
+      adjoint != nullptr ? adjoint.get() : objectiveOnlyAdjoint.get();
+
+  // GFn reads yJac, which holds the initial condition from initialize() and the
+  // final solution after a run. So this does not run the solver -- call run() or
+  // run_ss() first, exactly as for getAdjointGradients().
+  Vector Gout(ap->getNg());
+  for (Index i = 0; i < ap->getNg(); i++)
+    Gout(i) = ap->GFn(i, system->yJac);
+
+  return Gout;
 }
 
 py::tuple PyRunner::getAdjointGradients(void) {
@@ -281,8 +367,18 @@ py::tuple PyRunner::getAdjointGradients(void) {
   }
 
   Vector G(adjoint->getNg());
-  for (Index i = 0; i < adjoint->getNg(); i++)
-    G(i) = adjoint->GFn(i, system->yJac);
+  if (system->isSuperconvergent()) {
+    // G_p above is the gradient of the u*-based objective, so the value reported
+    // alongside it has to be that same objective -- otherwise a finite-difference
+    // check compares the derivative of one functional against differences of
+    // another.
+    system->postprocessor->computeUStar(system->yJac);
+    for (Index i = 0; i < adjoint->getNg(); i++)
+      G(i) = adjoint->GFn(i, system->yJac, *system->postprocessor);
+  } else {
+    for (Index i = 0; i < adjoint->getNg(); i++)
+      G(i) = adjoint->GFn(i, system->yJac);
+  }
 
   return py::make_tuple(G, gp);
 }
@@ -303,7 +399,16 @@ PyRunner::getSolution(Index var,
     }
     return sol;
   } else {
-    const auto points = system->y.getPoints();
+    // Read yJac, not y. `y` is a non-owning DGSoln view over the N_Vector that
+    // runSolver allocates and then destroys before returning, so sampling it
+    // after a run reads freed memory -- and it disagreed with the branch above,
+    // which has always used yJac. yJac is owned by the SystemSolver (yJacMem)
+    // and stays valid.
+    //
+    // yJac holds the state as of the last Jacobian evaluation rather than the
+    // final step, so both branches can lag the very last correction slightly;
+    // that is pre-existing and applies equally to getAdjointGradients.
+    const auto points = system->yJac.getPoints();
     Vector sol(points.size());
     for (size_t i = 0; i < points.size(); i++) {
       const auto &p = points[i];
@@ -311,8 +416,35 @@ PyRunner::getSolution(Index var,
       if (p < grid->lowerBoundary() || p > grid->upperBoundary())
         throw std::out_of_range("Requested point outside of grid boundaries");
 
-      sol(i) = system->y.u(var)(p);
+      sol(i) = system->yJac.u(var)(p);
     }
     return sol;
   }
+}
+
+Vector PyRunner::getPostprocessedSolution(
+    Index var, std::optional<std::vector<Position>> const &points) {
+  Postprocessor const *pp = system->getPostprocessor();
+  if (pp == nullptr)
+    throw std::runtime_error("No postprocessed solution is available: it "
+                             "requires Polynomial_degree >= 1 and a solver that "
+                             "has been run at least once");
+
+  // computeUStar is what fills the reconstruction, and it is driven by output
+  // writing -- so it has already run against yJac's contents only if this run
+  // wrote output. Recompute from yJac here so the answer does not depend on
+  // whether WriteOutput was set. Same yJac-vs-final-step caveat as getSolution.
+  system->postprocessor->computeUStar(system->yJac);
+
+  const std::vector<Position> xs =
+      points ? points.value() : system->yJac.getPoints();
+
+  Vector sol(xs.size());
+  for (size_t i = 0; i < xs.size(); i++) {
+    const auto &p = xs[i];
+    if (p < grid->lowerBoundary() || p > grid->upperBoundary())
+      throw std::out_of_range("Requested point outside of grid boundaries");
+    sol(i) = pp->uStar(var)(p);
+  }
+  return sol;
 }

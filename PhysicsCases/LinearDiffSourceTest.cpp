@@ -27,10 +27,6 @@ LinearDiffSourceTest::LinearDiffSourceTest(toml::value const &config, Grid const
 
         nSources = toml::find_or(InternalConfig, "nSources", nVars);
 
-        useMMS = toml::find_or(InternalConfig, "useMMS", false);
-        growth = toml::find_or(InternalConfig, "growth", 1.0);
-        growth_rate = toml::find_or(InternalConfig, "growth_rate", 0.5);
-
         SourceWidth.resize(nSources);
         SourceStrength.resize(nSources);
         SourceCenter.resize(nSources);
@@ -105,11 +101,6 @@ Real2nd LinearDiffSourceTest::InitialFunction(Index i, Real2nd x, Real2nd t) con
     return InitialHeight[i] * exp(-shape * (x - center) * (x - center));
 };
 
-Real2nd LinearDiffSourceTest::MMS_Solution(Index i, Real2nd x, Real2nd t)
-{
-    return (1 + growth * tanh(growth_rate * t)) * InitialFunction(i, x, t);
-}
-
 Real LinearDiffSourceTest::Flux(Index i, RealVector u, RealVector q, Real x, Time t)
 {
     RealVector sigma = Kappa * q;
@@ -166,15 +157,15 @@ bool LinearDiffSourceTest::isUpperBoundaryDirichlet(Index i) const
 
 void LinearDiffSourceTest::initialiseDiagnostics(NetCDFIO &nc)
 {
-    nc.AddGroup("MMS", "Manufactured solutions");
+    nc.AddGroup("InitialProfile", "Initial profile, for reference");
     for (int j = 0; j < nVars; ++j)
-        nc.AddVariable("MMS", "Var" + std::to_string(j), "Manufactured solution", "-", [this, j](double V)
+        nc.AddVariable("InitialProfile", "Var" + std::to_string(j), "Initial profile", "-", [this, j](double V)
                        { return this->InitialFunction(j, V, 0.0).val.val; });
 }
 
 void LinearDiffSourceTest::writeDiagnostics(DGSoln const &y, DGSoln const&, Time t, NetCDFIO &nc, size_t tIndex)
 {
     for (Index j = 0; j < nVars; ++j)
-        nc.AppendToGroup("MMS", tIndex, "Var" + std::to_string(j), [this, j, t](double x)
-                         { return this->MMS_Solution(j, x, t).val.val; });
+        nc.AppendToGroup("InitialProfile", tIndex, "Var" + std::to_string(j), [this, j, t](double x)
+                         { return this->InitialFunction(j, x, t).val.val; });
 }
