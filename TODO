@@ -1,5 +1,3 @@
-Clean up python (make clean should remove python stuff, as should clean_coverage).
-
 Investigate IDACalcIC taking too many steps at initial time.
 
 Investigate occasional wiggles in outputs.
@@ -52,16 +50,6 @@ landed; these are the pieces that were deliberately not done, with the reason.
     in ScalarJacobianTests.cpp would check its Jacobian against a finite
     difference of its own ScalarG for free, given a fixture that configures it.
 
-  - Physics cases now name their own variables, and netCDF groups take those
-    names. Two consequences for anything written earlier: an analysis script
-    that reads MirrorPlasma output by "Var0".."Var3" needs the channel names
-    instead (Density, IonEnergy, ElectronEnergy, AngularMomentum), and a
-    netCDF initial-condition file saved before the rename has groups the case no
-    longer looks for -- LoadDataToSpline reads getVariableName(i) now and will
-    say so rather than silently mis-load. Cases whose width comes from the
-    config (MatrixDiffusion, MatrixDiffusionTest, LinearDiffSourceTest) keep the
-    numbered placeholder names, which is why testic.nc is still valid.
-
 
 Superconvergence follow-ons (see Tests/README.md for what is already verified):
 
@@ -72,16 +60,12 @@ Superconvergence follow-ons (see Tests/README.md for what is already verified):
     casters and the restart format all rest on. tau ~ 1/h also changes every
     existing run.
 
-  - DONE: order studies for a general nonlinear flux sigma_hat(u, q), for
-    nAux > 0 and for nScalars > 0 (algebraic and differential). See
-    Tests/README.md for the measured table; MMSAuxScalarTests.cpp and the
-    nonlinear-flux case in MMSConvergenceTests.cpp. u* reaches k+2 with the flag
-    on in all of them. The nonlinear flux turned out to be the case where the
-    flag matters most: with it off, u* superconverges over coarse grids and then
-    stops, so a sweep ending at n = 32 reports a rate the method does not keep.
-
-    Still open from that work: no case has more than one aux variable or more
-    than one scalar, and none has both at once.
+  - No manufactured case has more than one aux variable, more than one scalar, or
+    both at once. The order studies cover nAux = 1 and nScalars = 1 separately, so
+    a block-indexing error that only appears at the second of either would not
+    show up in them. SystemSolverMatrixTests.cpp covers the layout with two
+    scalars and one aux, and ScalarJacobianTests.cpp with three scalars, but
+    neither measures a rate.
 
   - Spatial adjoint parameters with Superconvergent = true currently throw. They
     index the parameter vector by node, so the star node set would redefine how
