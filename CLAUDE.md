@@ -465,14 +465,29 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
 * **The top-level Makefile has a bare `export`.** A recursive `$(MAKE)` inherits
   the already-computed release `CXXFLAGS`, which is why the `coverage` target
   runs `env -u CXXFLAGS -u LDFLAGS $(MAKE) COVERAGE=on`.
-* **`-Wno-parentheses` is global, and on gcc it takes `-Wdangling-else` with it.**
-  So gcc will not tell you about a dangling `else`; clang will, because it treats
-  `-Wdangling-else` as a separate warning. Build with clang occasionally — that is
-  what CI's clang matrix legs are for. The same applies in reverse: gcc never diagnoses a
-  polymorphic base with a non-virtual destructor, clang does
+* **gcc and clang do not diagnose the same things, so build with clang
+  occasionally** — that is what CI's clang matrix legs are for. gcc never
+  diagnoses a polymorphic base with a non-virtual destructor; clang does
   (`-Wdelete-non-abstract-non-virtual-dtor`), and it reports it at the point of
   *destruction* inside libstdc++, once per instantiating translation unit, which
-  makes the message look like a standard-library problem rather than yours.
+  makes the message look like a standard-library problem rather than yours. That is
+  how `MagneticField`'s missing virtual destructor was found.
+
+  Until `283b9a3` this entry also warned that `-Wno-parentheses` was applied
+  globally and that on gcc it silently takes `-Wdangling-else` with it, so gcc
+  could not report a dangling `else` and only clang would. **That suppression is
+  gone**, along with `-Wno-deprecated-literal-operator`; `-Wall` enables
+  `-Wparentheses`, so gcc now diagnoses a dangling `else` like everything else,
+  and under `-Werror` it is an error rather than a warning.
+
+  Worth keeping the reason they went, because it generalises. Both existed to
+  silence *third-party* headers — `-Wno-deprecated-literal-operator` for toml11's
+  `operator""_toml`, declared without the space C++23 wants — and both became
+  unnecessary once those headers moved to `-isystem`, which suppresses their
+  warnings at source. What they went on doing in the meantime was hiding defects
+  in *our* code: a global `-Wno-` outlives whatever it was added for, and nothing
+  reports that it has stopped earning its place. Prefer `-isystem` on the
+  dependency to a blanket suppression on the project.
 * **With clang, the libstdc++ version is part of the configuration.** clang selects
   the newest GCC installation on the box, so a local clang build and CI's clang
   legs need not use the same standard library: CI gets the `ubuntu-24.04` image's

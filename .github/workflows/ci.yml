@@ -17,8 +17,11 @@ jobs:
   # One job per compiler, because conformance bugs and gcc-specific flag
   # assumptions should be caught here rather than discovered by whoever next
   # builds without gcc. Two real issues turned up when clang was first added: a
-  # dangling `else` in State.hpp that gcc hides inside -Wno-parentheses, and
-  # MagneticField's missing virtual destructor, which only clang diagnoses.
+  # dangling `else` in State.hpp, which gcc could not report at the time because
+  # -Wno-parentheses was applied globally and on gcc that takes -Wdangling-else
+  # with it -- that suppression is gone as of 283b9a3, so -Wall catches it on
+  # either compiler now -- and MagneticField's missing virtual destructor, which
+  # only clang diagnoses at all.
   #
   # Every leg runs the full suite, not just the build. Two reasons that matters
   # beyond compiling clean:
