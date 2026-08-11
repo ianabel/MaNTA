@@ -85,14 +85,6 @@ Superconvergence follow-ons (see Tests/README.md for what is already verified):
     many parameters there are.
 
 
-Diagnose why a second integration on the same SystemSolver fails. IDASolve
-returns IDA_ERR_FAIL (-3) on the first step of the second run, whether via a
-second runSolver() or a second initialize()/integrate() pair, and whether or not
-the first run completed. Pre-existing -- b7d8031 fails identically -- and hidden
-because PyRunner::configure builds a fresh SystemSolver every time. Candidates:
-state a completed run leaves in RF_cellwise / updateBoundaryConditions, and the
-nc_output time index. Tests/README.md has the detail.
-
 dG/dt at t0 covers only the differential part of the state. The gate assembles a
 full chain rule over u, q, sigma and phi -- SystemSolver::dGdt, verified against a
 finite difference of a real objective functional in AdjointProblemTests.cpp -- but

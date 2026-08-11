@@ -512,4 +512,55 @@ BOOST_AUTO_TEST_CASE(d_aux_mat_puts_each_derivative_in_the_right_column_block)
                "phi block");
 }
 
+BOOST_FIXTURE_TEST_CASE(initialiseMatrices_rebuilds_rather_than_grows, MatrixFixture)
+{
+    // Every cellwise container is filled by emplace_back, so initialiseMatrices()
+    // has to clear them first or a second call appends a second set. It clears
+    // through clearCellwiseVecs(), whose list used to omit D_cellwise, CEBlocks and
+    // MXSolvers -- and appending to those is worse than a leak, because indices run
+    // 0..nCells-1 and so keep reaching the *stale* front half.
+    //
+    // The fixture has already called initialiseMatrices() once, so this is the
+    // second call. It is not a hypothetical route: PrintDebugInfo() calls it
+    // unguarded on an already-initialised solver.
+    sys.initialiseMatrices();
+
+    auto sizes = {std::pair{"XMats", sys.XMats.size()},
+                  std::pair{"MBlocks", sys.MBlocks.size()},
+                  std::pair{"CG_cellwise", sys.CG_cellwise.size()},
+                  std::pair{"RF_cellwise", sys.RF_cellwise.size()},
+                  std::pair{"A_cellwise", sys.A_cellwise.size()},
+                  std::pair{"B_cellwise", sys.B_cellwise.size()},
+                  std::pair{"D_cellwise", sys.D_cellwise.size()},
+                  std::pair{"E_cellwise", sys.E_cellwise.size()},
+                  std::pair{"C_cellwise", sys.C_cellwise.size()},
+                  std::pair{"G_cellwise", sys.G_cellwise.size()},
+                  std::pair{"H_cellwise", sys.H_cellwise.size()},
+                  std::pair{"Csigma_cellwise", sys.Csigma_cellwise.size()},
+                  std::pair{"Cq_cellwise", sys.Cq_cellwise.size()},
+                  std::pair{"CEBlocks", sys.CEBlocks.size()},
+                  std::pair{"MXSolvers", sys.MXSolvers.size()}};
+
+    for (auto const &[name, size] : sizes)
+        BOOST_TEST(size == static_cast<size_t>(nCells),
+                   name << " holds " << size << " entries after two "
+                        << "initialiseMatrices() calls, expected " << nCells);
+
+    // And every surviving entry is properly shaped. Weaker than the size checks
+    // above -- dropping any of the three clear() calls is caught by those, not by
+    // these -- but it is what would catch MXSolvers being sized somewhere other
+    // than the emplace_back in initialiseMatrices, which is how it came to hold
+    // 2 * nCells entries with default-constructed (rows() == 0) ones at the front.
+    for (Index i = 0; i < nCells; ++i)
+    {
+        BOOST_TEST(sys.MXSolvers[i].rows() == sys.MBlocks[i].rows(),
+                   "cell " << i << " MX solver is " << sys.MXSolvers[i].rows()
+                           << " rows, expected " << sys.MBlocks[i].rows());
+        BOOST_TEST(sys.CEBlocks[i].rows() == sys.MBlocks[i].rows(),
+                   "cell " << i << " CEBlock has the wrong height");
+        BOOST_TEST(sys.D_cellwise[i].rows() == problem.getNumVars() * (k + 1),
+                   "cell " << i << " D block has the wrong height");
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

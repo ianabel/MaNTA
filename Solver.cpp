@@ -346,7 +346,15 @@ void SystemSolver::initialize()
 	// differential derivatives, not the other way round. That is structural, not the
 	// old wrong id vector -- see at_t0_only_the_differential_part_of_dydt_exists --
 	// and it is why the dG/dt gate differentiates through u alone.
-	IDAGetConsistentIC(IDA_mem, Y, dYdt);
+	//
+	// Checked, unlike every other use of it in this file's history: it fails with
+	// IDA_ILL_INPUT if IDA has already taken a step, and on failure it leaves Y and
+	// dYdt holding their *pre*-CalcIC values rather than reporting anything. That is
+	// the same silent-failure shape as the `retval = 0` described above, and it
+	// would show up as a run whose initial condition is quietly the uncorrected one.
+	retval = IDAGetConsistentIC(IDA_mem, Y, dYdt);
+	if (ErrorChecker::check_retval(&retval, "IDAGetConsistentIC", 1))
+		throw std::runtime_error("Could not retrieve the corrected initial condition");
 
 	if (writeDatFile)
 		print(out0, t0, nOut, true);

@@ -534,6 +534,19 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
   hard error, and `make coverage` fails with exit 64 on CI while passing locally.
   Anything that reads `.gcno`/`.gcda` must come from the same toolchain version
   that wrote them.
+* **`RF_cellwise` and `L_global` hold *time-dependent* boundary data, and only
+  `updateBoundaryConditions(t)` may fill them.** `initialiseMatrices` sizes and
+  zeroes them; `setInitialConditions` calls `updateBoundaryConditions(t0)` before
+  solving the initial `dydt` out of them, and `residual` / `updateMatricesForJacSolve`
+  refresh them at their own time. `initialiseMatrices` used to fill them itself at
+  a hardcoded `t = 0.0`, which was wrong twice over: a run with `t0 != 0` built its
+  initial condition from the wrong boundaries, and because `initialize()` skips
+  `initialiseMatrices` when already initialised, a second run on the same solver
+  solved its initial `dydt` out of the *previous run's final-time* boundary values.
+  That second effect is half of what made a second integration fail — see
+  `Tests/README.md`. Nothing in the tree notices a `t0` error, because every
+  fixture starts at zero, so `the_initial_condition_uses_boundary_data_at_t0` is
+  the only thing standing between that and a silent return.
 * **Output filenames come from the config file's *stem*** (`Solver.cpp` uses
   `inputFilePath.stem()`), so `.nc` / `.dat` / `.restart.nc` land in the current
   directory regardless of any path in `OutputFilename`.
@@ -595,14 +608,6 @@ These are deliberate and documented, not oversights — see `Tests/README.md` an
   adjoint output. The gradients themselves are verified through
   `PyRunner::getAdjointGradients` in `python/Tests/test_adjoint.py` and
   `test_adjoint_aux.py`.
-* **A second *integration* on the same `SystemSolver` does not work.** `IDASolve`
-  fails with `IDA_ERR_FAIL` (-3) on the first step of the second run. This is not
-  a consequence of the three-phase split — `main` before it failed identically
-  through two `runSolver` calls — it has simply never been exercised, because
-  `PyRunner::configure` builds a fresh `SystemSolver` and the standalone binary
-  runs once and exits. Calling `initialize` again after `destroySundials` *does*
-  work, and rebuilds the initial condition; it is completing a second time loop
-  that fails. Undiagnosed; `Tests/README.md` has the detail.
 * Restarting is fragile at tight tolerances, more so with `nAux > 0`; each
   regression round-trip case runs at the tightest tolerance that completes.
 * `python/Tests/test_reference_solutions.py::test_jax_aux_test` is a `strict=True`
