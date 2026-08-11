@@ -121,6 +121,11 @@ config keys are ignored on this path.
    the resumed run. If a restart fails where the original run succeeded, loosen
    the tolerances before looking for a deeper cause.
 
+   Such a failure now reports itself: ``IDACalcIC could not complete``. It did not
+   used to — the return value was overwritten before it was checked, so a failed
+   initial-condition calculation carried on into the time loop with whatever
+   partial state IDA had reached, and the symptom appeared later and elsewhere.
+
 The three phases
 ----------------
 

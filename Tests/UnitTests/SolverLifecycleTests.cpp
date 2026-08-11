@@ -453,6 +453,49 @@ BOOST_AUTO_TEST_CASE(the_dGdt_gate_skips_the_time_loop_without_disturbing_an_ung
     removeOutput("lifecycle_gate_ic");
 }
 
+BOOST_AUTO_TEST_CASE(the_id_vector_marks_u_differential_and_nothing_else)
+{
+    // IDASetId tells IDA which components are differential and which algebraic,
+    // and IDA_YA_YDP_INIT uses that to decide which parts of y to solve for and
+    // which parts of y' to compute. Getting it wrong does not fail loudly -- it
+    // just initialises a different problem.
+    //
+    // Which is what happened. initialize() built the vector with
+    //
+    //     isDifferential.u(v).getCoeff(i).second.Constant(k + 1, 1.0);
+    //
+    // and Eigen's Constant is a *static factory*: legal through an instance,
+    // returns a fresh expression, result discarded. So the loop did nothing, `id`
+    // kept the zeros from zeroCoeffs(), and IDA was told the whole system was
+    // algebraic. Nothing warned, because Constant is not [[nodiscard]] and the
+    // statement declares no unused variable -- so the only thing that can catch a
+    // repeat is a test that looks at the vector.
+    //
+    // Exact counts, not just "nonzero": u contributes one per coefficient per cell
+    // and everything else -- q, sigma, lambda, and the aux and scalar blocks -- has
+    // to stay algebraic, so the L1 norm pins both halves at once.
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, "lifecycle_id");
+
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+    }
+
+    // TestDiffusion is one variable with no scalars and no aux variables.
+    const double expected = 1.0 * nCells * (k + 1);
+    BOOST_TEST(N_VL1Norm(sys.id) == expected, boost::test_tools::tolerance(0.0));
+    BOOST_TEST(N_VMaxNorm(sys.id) == 1.0, boost::test_tools::tolerance(0.0));
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+    removeOutput("lifecycle_id");
+}
+
 BOOST_AUTO_TEST_CASE(at_t0_only_the_differential_part_of_dydt_exists)
 {
     // A known gap, pinned so that it is visible rather than assumed away, and so
@@ -466,18 +509,17 @@ BOOST_AUTO_TEST_CASE(at_t0_only_the_differential_part_of_dydt_exists)
     // sigma and phi terms contribute nothing -- an objective depending on those is
     // differentiated only through its u dependence.
     //
-    // Two separate reasons, and both have to go for this to change:
+    // The reason is structural rather than a bug: q, sigma and phi are algebraic in
+    // this formulation, and IDA's IDA_YA_YDP_INIT computes algebraic *values* and
+    // differential *derivatives* -- there is no y' for an algebraic component to
+    // fetch. Their true time derivatives follow from differentiating the algebraic
+    // constraints, which nothing here does.
     //
-    //   * q, sigma and phi are algebraic in this formulation, and IDA's
-    //     IDA_YA_YDP_INIT computes algebraic *values* and differential
-    //     *derivatives* -- there is no y' for an algebraic component to fetch.
-    //     Their true time derivatives follow from differentiating the algebraic
-    //     constraints, which nothing here does.
-    //   * IDASetId is handed an all-zero id anyway. Solver.cpp builds it with
-    //     `isDifferential.u(v).getCoeff(i).second.Constant(k + 1, 1.0)`, and
-    //     Eigen's Constant is a *static factory* whose result is discarded, so
-    //     that line is a no-op and IDA is told the entire system is algebraic.
-    //     See TODO.
+    // Worth being precise about, because there *was* also a wrong id vector telling
+    // IDA the whole system was algebraic, and it would have been reasonable to
+    // expect that to be the cause. It is not: the id vector is correct now (see
+    // the_id_vector_marks_u_differential_and_nothing_else) and these blocks are
+    // still exactly zero.
     //
     // This is still strictly better than origin/optimize-mode's gate, which
     // evaluated the objective functional on the derivative vector and so was wrong

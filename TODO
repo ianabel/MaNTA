@@ -93,36 +93,23 @@ because PyRunner::configure builds a fresh SystemSolver every time. Candidates:
 state a completed run leaves in RF_cellwise / updateBoundaryConditions, and the
 nc_output time index. Tests/README.md has the detail.
 
-Fix the id vector: IDA is told the whole system is algebraic. Solver.cpp's
-initialize() means to mark u as differential and writes
-
-    isDifferential.u(v).getCoeff(i).second.Constant(k + 1, 1.0);
-
-but Eigen's Constant is a *static factory* -- the call is legal through an
-instance, returns a fresh expression and discards it, so the line is a no-op and
-`id` keeps the zeros zeroCoeffs() left. Verified directly: N_VL1Norm(id) is 0
-after initialize(). Wants .setConstant(1.0). Nothing warns, because Constant is
-not [[nodiscard]] and the statement has no unused *variable* for -Wall to notice.
-
-Consequences are not obvious and want measuring before the one-word fix lands:
-IDASetId feeds IDA_YA_YDP_INIT, which uses id to decide which components of y to
-solve for and which components of y' to compute, so at present IDACalcIC is doing
-something other than intended for every run in the tree -- and every checked-in
-.ref.nc was generated that way. Expect the regression references to move, and
-budget for deciding whether the new answers are the right ones rather than
-regenerating on sight. The dG/dt gate below is the first thing to re-examine
-afterwards, since what it can see depends on this.
-
 dG/dt at t0 covers only the differential part of the state. The gate assembles a
 full chain rule over u, q, sigma and phi -- SystemSolver::dGdt, verified against a
 finite difference of a real objective functional in AdjointProblemTests.cpp -- but
 at t0 the q, sigma and phi blocks of dydt are identically zero, so those terms
 contribute nothing and an objective is differentiated through its u dependence
-alone. Two causes: those fields are algebraic, and IDA_YA_YDP_INIT computes
-algebraic values and differential derivatives, so there is no y' for them to
-fetch; and the id bug above means IDA's idea of which is which is wrong anyway.
-Pinned by at_t0_only_the_differential_part_of_dydt_exists in
-SolverLifecycleTests.cpp, which fails if either changes.
+alone. The cause is structural: those fields are algebraic, and IDA_YA_YDP_INIT
+computes algebraic values and differential derivatives, so there is no y' for them
+to fetch. It is *not* the id vector, which was also wrong and is now fixed -- the
+blocks are still exactly zero with a correct id, which
+at_t0_only_the_differential_part_of_dydt_exists in SolverLifecycleTests.cpp pins.
+
+Closing it means getting the algebraic time derivatives, which are determined by
+differentiating the constraints -- q' = d(u')/dx, sigma' from differentiating
+SigmaFn, phi' from differentiating AuxG -- i.e. one linear solve against the same
+Jacobian the forward solve already builds. The cheaper alternative is to move the
+gate after IDA's first step, where dYdt is fully populated, trading one step for
+completeness. Neither is done.
 
 Closing it means getting the algebraic time derivatives, which are determined by
 differentiating the constraints -- q' = d(u')/dx, sigma' from differentiating
@@ -137,15 +124,6 @@ netCDF is the pre-CalcIC one, differing from the corrected state by around 1e-8
 relative on the regression cases. The gate fetches the corrected state only when
 it is armed, specifically so that ungated output stays bit-for-bit unchanged; if
 the answer is that t0 should report the corrected state, that condition can go.
-
-IDACalcIC's return value is discarded. Solver.cpp reads
-
-    retval = IDACalcIC(...);
-    retval = 0;
-
-so the "IDACalcIC could not complete" throw below it can never fire and a failed
-IDACalcIC carries on silently. Matters for the dG/dt gate in particular, which
-would then be testing a meaningless initial condition.
 
 From the origin/optimize-mode review, still unmerged and worth taking:
   - shard_inputs as a per-hook decorator in python/Stellarator2.py (but keep

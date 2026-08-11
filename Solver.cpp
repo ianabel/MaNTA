@@ -169,12 +169,20 @@ void SystemSolver::initialize()
 	if (ErrorChecker::check_retval((void *)id, "N_VClone", 0))
 		throw std::runtime_error("Sundials initialization Error, run in debug to find");
 
+	// setConstant, not Constant. Eigen's Constant is a *static factory*: calling it
+	// through an instance is legal, builds a fresh constant expression and discards
+	// it, so the line this replaces did nothing at all and `id` kept the zeros
+	// zeroCoeffs() left. N_VL1Norm(id) was 0 here, which told IDA the entire system
+	// was algebraic -- so IDASetId, and therefore the IDA_YA_YDP_INIT call below,
+	// have been solving a different initialisation problem from the intended one
+	// for as long as this code has existed. Nothing warns: Constant is not
+	// [[nodiscard]] and the statement declares no unused variable.
 	DGSoln isDifferential(nVars, grid, k, nScalars, nAux);
 	isDifferential.Map(N_VGetArrayPointer(id));
 	isDifferential.zeroCoeffs();
 	for (Index v = 0; v < nVars; ++v)
 		for (Index i = 0; i < nCells; ++i)
-			isDifferential.u(v).getCoeff(i).second.Constant(k + 1, 1.0);
+			isDifferential.u(v).getCoeff(i).second.setConstant(1.0);
 
 	for (Index s = 0; s < nScalars; ++s)
 	{
@@ -300,9 +308,14 @@ void SystemSolver::initialize()
 	//------------------------------Solve------------------------------
 	// Update initial solution to be within tolerance of the residual equation
 
+	// The `retval = 0` that used to sit between these two lines made the check
+	// below unreachable: IDACalcIC's status was overwritten before it was read, so
+	// a failed initial-condition calculation carried on silently into the time
+	// loop with whatever partial state IDA had reached. The name passed to
+	// check_retval said "IDASolve" too, so even the message would have pointed at
+	// the wrong call.
 	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, dt0 > 0.0 ? dt0 : dt);
-	retval = 0;
-	if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
+	if (ErrorChecker::check_retval(&retval, "IDACalcIC", 1))
 	{
 		throw std::runtime_error("IDACalcIC could not complete");
 	}
@@ -344,10 +357,14 @@ void SystemSolver::initialize()
 	// stay zero: q, sigma and phi are algebraic here, and IDA_YA_YDP_INIT computes
 	// algebraic values and differential derivatives, not the other way round. So
 	// the gate differentiates through u alone. That is a real limitation, pinned by
-	// at_t0_only_the_differential_part_of_dydt_exists and recorded in TODO -- and
-	// it is compounded by IDASetId above being handed an all-zero id, because the
-	// line that should mark u differential calls Eigen's static Constant factory
-	// and discards the result.
+	// at_t0_only_the_differential_part_of_dydt_exists and recorded in TODO. It is
+	// not a consequence of the id vector being wrong -- that is fixed above, and
+	// the algebraic blocks are still zero, which is the point of that test.
+	//
+	// What the id fix does buy here is that u' is now IDA's, computed by CalcIC for
+	// the differential block. Before it, nothing was marked differential, so IDA
+	// computed no derivative at all and this fetched back whatever guess
+	// setInitialConditions had left.
 	//
 	// Conditional on the gate rather than unconditional, which is the one
 	// compromise here. Doing it always would be tidier -- Y and dYdt would then
