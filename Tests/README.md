@@ -241,7 +241,7 @@ postprocessed `u*` in place of `u_h`, and interpolated into `P_{k+1}` rather tha
 every run with `k >= 1`, flag or no flag, so `u_star` appears in the netCDF
 output and in the `.dat` files unconditionally.
 
-Three tests carry this, in increasing order of scope.
+Four files carry this, in increasing order of scope.
 
 **`PostprocessingTests.cpp`** pins the four per-cell operators. The anchor is
 polynomial exactness: fed the `u_h` and `q_h` of a polynomial of degree `<= k+1`,
@@ -260,8 +260,11 @@ case cannot see the `B11` term at all, which is the one genuinely new coupling
 the scheme introduces. Measured `||J dy - g|| / ||g||` is 2e-10 to 5e-10 for
 `k = 1, 2, 3`.
 
-**`MMSConvergenceTests.cpp`** measures the observed orders, flag off and flag on,
-for `u` and for `u*`:
+**`MMSConvergenceTests.cpp`** and **`MMSAuxScalarTests.cpp`** measure the observed
+orders, flag off and flag on, for `u` and for `u*`. The shared sweep, the
+least-squares fit and the exact solution live in `MMSHarness.hpp`; the first file
+holds the problems with no couplings, the second the ones with `nAux > 0` or
+`nScalars > 0`.
 
 | case | k | flag off: u, u* | flag on: u, u* |
 |---|---|---|---|
@@ -269,27 +272,113 @@ for `u` and for `u*`:
 | linear, constant kappa | 2 | 2.97, 4.08 | 2.97, 4.03 |
 | nonlinear reaction `u^3 - u` | 1 | 1.96, 2.23 | 1.97, **3.07** |
 | nonlinear reaction `u^3 - u` | 2 | 2.95, 4.10 | 2.97, 4.03 |
+| nonlinear flux `(1+u^2) q` | 1 | 1.96, *2.81* | 1.92, **3.08** |
+| nonlinear flux `(1+u^2) q` | 2 | 2.94, 4.20 | 2.92, 4.42 |
+| aux `phi = u^2`, `(1+phi) q` | 1 | 1.85, *2.69* | 1.89, **3.18** |
+| aux `phi = u^2`, `(1+phi) q` | 2 | 2.89, 4.12 | 2.89, 4.59 |
+| algebraic scalar `mu = Int u dx` | 1 | 1.96, 2.16 | 1.96, **3.08** |
+| algebraic scalar `mu = Int u dx` | 2 | 2.97, 4.07 | 2.97, 4.03 |
+| differential scalar `mu' = Int u dx` | 1 | 1.96, 2.17 | 1.96, **3.08** |
+| differential scalar `mu' = Int u dx` | 2 | 2.97, 4.07 | 2.97, 4.03 |
 
-Read that table carefully, because it is not what a first reading of the papers
-predicts. With the flag on, `u*` reaches `k+2` in every case and `u_h` keeps its
-optimal `k+1`. With the flag off, `u*` superconverges at `k = 2` but *not* at
-`k = 1`, and this is true whether or not the source is nonlinear. So the flag
-restores the extra order at `k = 1` and preserves it at `k = 2`.
+and the coupled quantities themselves:
 
-In particular the loss is not driven by the nonlinearity here, as the papers'
-analysis of `I_h F(u_h)` would suggest. Interpolating a *known* smooth source at
-the Chebyshev nodes leaves an error that is very nearly `L2`-orthogonal to `P_k`,
-so it does not pollute the duality argument the way evaluating `F` at the
-`O(h^(k+1))`-accurate `u_h` does. The tests therefore assert what is measured --
-`u*` reaches `k+2` with the flag on, and `u_h` does not regress -- and do not
-assert that the flag improves on the flag-off rate, because for these problems
-there is not always anything to improve.
+| case | k | flag off | flag on |
+|---|---|---|---|
+| aux `phi` | 1 | 1.91 | 2.00 |
+| aux `phi` | 2 | 2.78 | 2.98 |
+| scalar `mu`, algebraic | 1 | 2.15 | **3.09** |
+| scalar `mu`, differential | 1 | 2.26 | **2.96** |
+
+Read the first table carefully, because it is not what a first reading of the
+papers predicts. With the flag on, `u*` reaches `k+2` in every case and `u_h`
+keeps its optimal `k+1`. With the flag off, `u*` superconverges at `k = 2` but
+*not* at `k = 1`, and this is true whether or not the source is nonlinear. So the
+flag restores the extra order at `k = 1` and preserves it at `k = 2`.
+
+For the linear and reaction cases the loss is not driven by the nonlinearity, as
+the papers' analysis of `I_h F(u_h)` would suggest. Interpolating a *known* smooth
+source at the Chebyshev nodes leaves an error that is very nearly
+`L2`-orthogonal to `P_k`, so it does not pollute the duality argument the way
+evaluating `F` at the `O(h^(k+1))`-accurate `u_h` does.
+
+**The two italicised flag-off entries are fits through a rate that is still
+falling, and are the reason the flag earns its keep.** For the nonlinear flux at
+`k = 1`, flag off, `u*` falls 4.55e-2, 6.58e-3, 5.60e-4, 6.18e-5, 2.74e-5 --
+ratios 6.9, 11.7, 9.1, then 2.3. It superconverges over the coarse grids and then
+stops. A sweep ending at `n = 32` reports 3.21 and looks superconvergent; the
+2.81 above only appears because that case runs to `n = 64`. With the flag on the
+same column falls by 8.5, 8.7, 8.4, 8.2 -- `2^3` every time. The aux case, which
+is the same PDE with `(1+u^2)` routed through `phi`, behaves the same way. So for
+a flux outside the papers' theory the postprocessing gain is real but transient
+without the flag, and durable with it.
+
+**That does not, however, explain away the `k = 1` / `k = 2` split in the linear
+rows, and it was worth checking that it did not.** The obvious suspicion is that
+the linear `k = 2` flag-off entry (4.08 over `n = 4, 8, 16`) is the same transient
+caught before it breaks. `the_flag_off_superconvergence_at_k2_is_genuine_not_pre_asymptotic`
+refines that sweep to `n = 64` and refutes it:
+
+| n | flag-off u* | local order |
+|---|---|---|
+| 4 | 2.101e-04 | |
+| 8 | 1.228e-05 | 4.10 |
+| 16 | 7.387e-07 | 4.05 |
+| 32 | 4.516e-08 | 4.03 |
+| 64 | 2.739e-09 | 4.04 |
+
+Four consecutive refinements at `k+2`, with none of the decay the nonlinear flux
+shows by its third. So the two phenomena are distinct and both real: for a linear
+flux at `k = 2` the interpolatory scheme keeps the extra order without the flag,
+and for a nonlinear flux it loses it. The `k = 1` / `k = 2` anomaly stands
+unexplained.
+
+That last point is worth 2.7e-9, close enough to the 1e-9 relative tolerance to
+ask whether it is measuring space at all, so the test carries a control:
+loosening the tolerance tenfold moves `u*` from 2.739e-9 to 2.718e-9, about 1%,
+where a tolerance-limited error would move by ten. `Tolerances` is a parameter of
+`solveAndMeasureBoth` for exactly this purpose. **Prefer the local orders in the
+per-`n` output to the single fitted slope** -- a fit averages a changing rate away,
+which is how the nonlinear-flux breakdown hid at `n <= 32`.
+
+The tests assert what is measured -- `u*` reaches `k+2` with the flag on, `u_h`
+does not regress, and the coupled quantity keeps `k+1` -- and do not assert that
+the flag improves on the flag-off rate, because for the linear problems there is
+not always anything to improve.
+
+**Scalars never see `u*`.** `ScalarG` and `ScalarGPrime` are evaluated on
+`Y_h.evalOnNodes()`, the element nodes with `u_h`, in both the residual
+(`SystemSolver.cpp:1194-1201`) and the Jacobian (`SystemSolver.cpp:815-818`),
+regardless of the flag -- by design, since the scalars do not enter the
+postprocessing. So a scalar cannot superconverge *through* the reconstruction,
+and no test claims one does. What the second table shows is subtler and worth
+keeping: `mu` still gains an order with the flag on, because it is a linear
+functional of `u_h`, the flag changes what `u_h` is, and the functional error of
+the flag-on solution is an order better than its `L2` error even though the two
+solutions share an `L2` rate. The `k = 2` `mu` figures are omitted from that
+table deliberately -- those errors reach 1e-8, within about an order of the 1e-9
+relative integration tolerance, so the fits sit on the temporal noise floor and
+the apparent `k+3` there is not a rate.
+
+`phi` is capped at `k+1` and is not expected to do better: it is a `P_k` field
+whatever it is constrained to equal, so interpolating a `k+2`-accurate `u*^2`
+back into `P_k` gains nothing.
+
+One trap worth stating, because it silently produces a vacuous test. The
+`ManufacturedReaction` device of writing `Sources = f(x,t) - F(u)` so that the
+compensating term vanishes at the exact solution **does not work against an
+auxiliary variable**. `residual` evaluates `Sources` and `AuxG` on the same
+states at the same abscissae and pushes both through the same
+`projectOntoTestSpace` (`SystemSolver.cpp:1104`), so `Sources = S - G` gives
+`S_cellwise = P(S) - res.Aux` exactly, and adding the term is precisely the row
+operation `res.u += res.Aux`. The discrete solution set is unchanged at every
+`h`, in both modes, and the study measures the uncoupled problem while looking
+entirely healthy. `ManufacturedAux` therefore compensates against
+`uExact(x,t)`, a known function of `x` and `t`, which cannot cancel against any
+residual row.
 
 ### What is not covered
 
-* **A general nonlinear flux `sigma_hat(u, q)` is outside the papers' theory.**
-  Their conclusion names `F(grad u, u)` as open. `SolveJacTests.cpp` shows the
-  Jacobian is right for such a flux, but no order study asserts `k+2` for one.
 * **`k = 0`** is rejected (`std::invalid_argument`). The degree-0 `NodalBasis`
   returns from its constructor before building `Vandermonde` or
   `BarycentricWeights` (`Basis.hpp:369-377`), so it cannot be evaluated off-node.
@@ -297,8 +386,11 @@ there is not always anything to improve.
 * **Spatial adjoint parameters** are rejected with the flag on: they index the
   parameter vector by node, so the star node set would silently redefine how many
   parameters there are.
-* **`nAux > 0` and `nScalars > 0`** are handled by the flag-on Jacobian, but no
-  order study covers them.
+* **More than one aux variable or scalar at a time.** Every manufactured case
+  here has `nAux <= 1` and `nScalars <= 1`, so a block-indexing error that only
+  appears at the second one would not show. `SystemSolverMatrixTests.cpp` covers
+  the layout with two scalars and `ScalarJacobianTests.cpp` with three.
+* **`nAux > 0` together with `nScalars > 0`.** The two are measured separately.
 * `dSourcedPhi_Mat` (`Matrices.cpp`) and the second `dAux_Mat` overload build
   their blocks by Gauss quadrature while the residual interpolates, so for
   `nAux > 0` they were *already* inconsistent with the residual before this work.

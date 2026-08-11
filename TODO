@@ -72,13 +72,16 @@ Superconvergence follow-ons (see Tests/README.md for what is already verified):
     casters and the restart format all rest on. tau ~ 1/h also changes every
     existing run.
 
-  - An order study for a general nonlinear flux sigma_hat(u, q). Paper I covers
-    -Laplacian u + F(u) only, and names F(grad u, u) as open, so the k+2 rate for
-    MaNTA's flux is currently unasserted. SolveJacTests covers the Jacobian for
-    such a flux; only the rate is missing.
+  - DONE: order studies for a general nonlinear flux sigma_hat(u, q), for
+    nAux > 0 and for nScalars > 0 (algebraic and differential). See
+    Tests/README.md for the measured table; MMSAuxScalarTests.cpp and the
+    nonlinear-flux case in MMSConvergenceTests.cpp. u* reaches k+2 with the flag
+    on in all of them. The nonlinear flux turned out to be the case where the
+    flag matters most: with it off, u* superconverges over coarse grids and then
+    stops, so a sweep ending at n = 32 reports a rate the method does not keep.
 
-  - Order studies with nAux > 0 and nScalars > 0 under Superconvergent = true.
-    The Jacobian handles both; nothing measures the rate.
+    Still open from that work: no case has more than one aux variable or more
+    than one scalar, and none has both at once.
 
   - Spatial adjoint parameters with Superconvergent = true currently throw. They
     index the parameter vector by node, so the star node set would redefine how

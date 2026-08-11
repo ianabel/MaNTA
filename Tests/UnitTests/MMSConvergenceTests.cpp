@@ -7,20 +7,12 @@
 // single block still converges -- to the wrong answer -- but it does not
 // converge at the right *rate* to the right limit.
 //
-// The manufactured solution here is
+// The manufactured solution, the sweep and the least-squares fit are shared with
+// the aux/scalar studies and live in MMSHarness.hpp. This file holds the
+// problems with no aux variables and no global scalars; MMSAuxScalarTests.cpp
+// holds the coupled ones.
 //
-//     u(x, t) = sin(pi x) * (1 + t)      on [0, 1]
-//
-// which vanishes at both ends for every t, so it is consistent with the
-// homogeneous Dirichlet boundary conditions. That matters: an MMS whose exact
-// solution does not satisfy the boundary conditions imposed by the physics case
-// converges at the wrong rate, or not at all. `LinearDiffusion` used to carry a
-// built-in `UseMMS` option with exactly that problem -- its manufactured solution
-// was the initial Gaussian, about 0.29 at the domain edge against a boundary
-// condition of 0 -- and it has been removed rather than fixed. The manufactured
-// problems in this file are self-contained and never used it.
-//
-// Substituting into d_t u = d_x( kappa d_x u ) + S gives
+// Substituting u = sin(pi x)(1 + t) into d_t u = d_x( kappa d_x u ) + S gives
 //
 //     S(x, t) = sin(pi x) * ( 1 + kappa pi^2 (1 + t) )
 //
@@ -28,28 +20,20 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include "CapturedOutput.hpp"
-#include "SystemSolver.hpp"
-#include "Types.hpp"
-
-#include <boost/math/quadrature/gauss.hpp>
+#include "MMSHarness.hpp"
 
 #include <cmath>
-#include <cstdio>
-#include <numbers>
+#include <format>
 #include <string>
-#include <typeinfo>
+#include <utility>
 #include <vector>
 
 namespace
 {
 
-using std::numbers::pi;
+using namespace mms;
 
 constexpr double KAPPA = 0.7;
-
-double exactSolution(double x, double t) { return std::sin(pi * x) * (1.0 + t); }
-double exactDerivative(double x, double t) { return pi * std::cos(pi * x) * (1.0 + t); }
 
 class ManufacturedDiffusion : public TransportSystem
 {
@@ -169,119 +153,76 @@ public:
     }
 };
 
-// Cell-by-cell Gauss-30 quadrature of (f - u_exact)^2. Independent of the
-// basis's own integration weights, which are part of what is under test.
-double l2ErrorOf(std::function<double(double)> f, Grid const &grid, double t)
+// A genuinely nonlinear *flux*, sigma_hat = (1 + u^2) q.
+//
+// This is the case the theory does not cover. Paper I treats -Laplacian u + F(u)
+// and names F(grad u, u) as open in its conclusion, so the k+2 rate here is a
+// measurement rather than a confirmation. It is also the configuration that puts
+// *all* of the u-dependence in the flux: the source below is a function of x and
+// t alone, so every dSources_* is zero and the only route from u to the residual
+// is through sigma_hat.
+//
+// With A = 1 + t, s = sin(pi x), c = cos(pi x), the exact solution u = A s has
+//
+//     d_x[ (1 + u^2) u_x ] = -A pi^2 s (1 + A^2 s^2) + 2 A^3 pi^2 s c^2
+//
+// and MaNTA integrates u_t - d_x[sigma_hat] = S, so
+//
+//     S = s + A pi^2 s (1 + A^2 s^2) - 2 A^3 pi^2 s c^2
+//
+// Note the sign: the stored sigma is -sigma_hat, and a source derived from
+// u_t + d_x[sigma_hat] would give an anti-diffusion equation that still
+// converges, at the right rate, to the wrong function.
+class ManufacturedNonlinearFlux : public TransportSystem
 {
-    boost::math::quadrature::gauss<double, 30> gauss;
-    double total = 0.0;
-    for (size_t cell = 0; cell < grid.getNCells(); ++cell)
+public:
+    ManufacturedNonlinearFlux() : TransportSystem({.variables = numberedFields(1)}) {}
+
+    Value LowerBoundary(Index, Time) const override { return 0.0; }
+    Value UpperBoundary(Index, Time) const override { return 0.0; }
+
+    Value SigmaFn(Index, const State &st, Position, Time) override
     {
-        Interval const &I = grid[cell];
-        auto integrand = [&](double x)
-        {
-            const double d = f(x) - exactSolution(x, t);
-            return d * d;
-        };
-        total += gauss.integrate(integrand, I.x_l, I.x_u);
+        return (1.0 + st.u(0) * st.u(0)) * st.q(0);
     }
-    return std::sqrt(total);
-}
 
-double l2Error(SystemSolver &sys, Grid const &grid, double t)
-{
-    return l2ErrorOf([&](double x) { return sys.yJac.u(0)(x); }, grid, t);
-}
+    Value Sources(Index, const State &, Position x, Time t) override
+    {
+        return nonlinearFluxSource(x, t);
+    }
 
-// The two errors every run reports: the solution's own and the postprocessed
-// one. HDG gives k+1 for the first; the second is k+2 when the method is
-// superconvergent, and that difference is the whole point of the feature.
-struct Errors
-{
-    double u;
-    double uStar;
+    void dSigmaFn_dq(Index, VectorRef v, const State &st, Position, Time) override
+    {
+        v[0] = 1.0 + st.u(0) * st.u(0);
+    }
+    void dSigmaFn_du(Index, VectorRef v, const State &st, Position, Time) override
+    {
+        v[0] = 2.0 * st.u(0) * st.q(0);
+    }
+    void dSources_du(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+    void dSources_dq(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+    void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+
+    Value InitialValue(Index, Position x) const override { return exactSolution(x, 0.0); }
+    Value InitialDerivative(Index, Position x) const override
+    {
+        return exactDerivative(x, 0.0);
+    }
 };
 
-// Run to tFinal on a uniform grid of nCells cells at degree k, and return the L2
-// errors of the final solution and of its postprocessing.
-//
-// runSolver writes <stem>.nc / .dat / .restart.nc into the working directory,
-// so the output name is unique per case and the files are removed afterwards.
-template <class Problem = ManufacturedDiffusion>
-Errors solveAndMeasureBoth(Index k, Index nCells, double tFinal,
-                           bool superconvergent = false)
-{
-    Grid grid(0.0, 1.0, nCells);
-    Problem problem;
-
-    SystemSolver sys(grid, k, &problem);
-    sys.setTau(1.0);
-    sys.setSuperconvergent(superconvergent);
-    sys.resetCoeffs();
-
-    const std::string stem = "mms_" + std::string(typeid(Problem).name()) + "_k" +
-                             std::to_string(k) + "_n" + std::to_string(nCells) +
-                             (superconvergent ? "_sc" : "");
-    sys.setInputFile(stem);
-
-    sys.setOutputCadence(tFinal);
-    sys.setNOutput(11);
-    sys.setInitialTime(0.0);
-    sys.setMinStepSize(1e-14);
-    // Tight enough that the temporal error is far below the spatial error even
-    // on the finest grid here (the smallest spatial error in the sweep is about
-    // 1e-6, at k = 3 with 16 cells), so the measured rate is the spatial one.
-    //
-    // Not tighter: at 1e-12 IDA cannot get off the ground for k >= 2, failing
-    // at t = 0 with "the error test failed repeatedly or with |h| = hmin". That
-    // is a real limit of this solver, not of the manufactured problem.
-    sys.setTolerances({1e-11}, 1e-9);
-
-    {
-        // runSolver reports its step counts and IDACalcIC warnings; sixteen
-        // integrations of that is a hundred lines of noise around a passing
-        // test. The measured orders are reported by BOOST_TEST_MESSAGE instead.
-        CapturedOutput quiet;
-        sys.runSolver(tFinal);
-    }
-
-    // u* was last reconstructed from `y`, whose N_Vector runSolver has since
-    // destroyed. Rebuild it from yJac, which the solver owns.
-    sys.postprocessor->computeUStar(sys.yJac);
-
-    const Errors err{
-        l2Error(sys, grid, tFinal),
-        l2ErrorOf([&](double x) { return sys.getPostprocessor()->uStar(0)(x); },
-                  grid, tFinal)};
-
-    for (const char *suffix : {".nc", ".dat", ".restart.nc"})
-        std::remove((stem + suffix).c_str());
-
-    return err;
-}
-
-// The u-only form the existing cases below are written against.
+/// The u-only form the existing cases below are written against.
 double solveAndMeasure(Index k, Index nCells, double tFinal)
 {
-    return solveAndMeasureBoth(k, nCells, tFinal).u;
-}
-
-// Least-squares slope of log(error) against log(1/nCells) -- the observed order.
-double observedOrder(std::vector<Index> const &cellCounts,
-                     std::vector<double> const &errors)
-{
-    const size_t n = cellCounts.size();
-    double sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
-    for (size_t i = 0; i < n; ++i)
-    {
-        const double x = std::log(1.0 / static_cast<double>(cellCounts[i]));
-        const double y = std::log(errors[i]);
-        sx += x;
-        sy += y;
-        sxx += x * x;
-        sxy += x * y;
-    }
-    return (n * sxy - sx * sy) / (n * sxx - sx * sx);
+    return solveAndMeasureBoth<ManufacturedDiffusion>(k, nCells, tFinal).u;
 }
 
 } // namespace
@@ -416,43 +357,6 @@ BOOST_AUTO_TEST_CASE(the_solution_is_accurate_at_a_later_time_too)
 
 // --------------------------------------------------------- superconvergence --
 
-namespace
-{
-struct Rates
-{
-    double uOff, starOff, uOn, starOn;
-};
-
-// Refine, fit both orders, flag off and flag on, and report all four.
-template <class Problem>
-Rates measureRates(Index k, std::vector<Index> const &cells, double tFinal)
-{
-    std::vector<double> uOff, starOff, uOn, starOn;
-    for (Index n : cells)
-    {
-        const Errors off = solveAndMeasureBoth<Problem>(k, n, tFinal, false);
-        const Errors on = solveAndMeasureBoth<Problem>(k, n, tFinal, true);
-        uOff.push_back(off.u);
-        starOff.push_back(off.uStar);
-        uOn.push_back(on.u);
-        starOn.push_back(on.uStar);
-    }
-    return {observedOrder(cells, uOff), observedOrder(cells, starOff),
-            observedOrder(cells, uOn), observedOrder(cells, starOn)};
-}
-
-std::string report(Index k, Rates const &r)
-{
-    std::string s = "k = " + std::to_string(k) + ":  flag off  u " +
-                    std::to_string(r.uOff) + "  u* " + std::to_string(r.starOff) +
-                    "   |   flag on  u " + std::to_string(r.uOn) + "  u* " +
-                    std::to_string(r.starOn) + "   (u should be " +
-                    std::to_string(k + 1) + ", u* with the flag on " +
-                    std::to_string(k + 2) + ")";
-    return s;
-}
-} // namespace
-
 BOOST_AUTO_TEST_CASE(the_postprocessing_superconverges_with_the_flag_on)
 {
     // The headline result: with the flag on, u* converges at k+2 while u_h keeps
@@ -531,6 +435,201 @@ BOOST_AUTO_TEST_CASE(the_flag_restores_superconvergence_for_a_nonlinear_reaction
                           << ": u* is no better than u with the flag on (u "
                           << r.uOn << ", u* " << r.starOn << ")");
     }
+}
+
+// ------------------------------------------------------- nonlinear flux --
+
+BOOST_AUTO_TEST_CASE(the_nonlinear_flux_source_is_consistent_with_the_exact_solution)
+{
+    // Same guard as for the diffusion case, against the harder algebra:
+    // u_t - d_x[ (1 + u^2) u_x ] must equal S at the exact solution. Getting the
+    // sign of the divergence term wrong here produces an anti-diffusion problem
+    // that still converges at k+1, to the wrong function.
+    ManufacturedNonlinearFlux problem;
+    const double t = 0.37, h = 1e-5;
+
+    auto flux = [&](double x)
+    {
+        const double u = exactSolution(x, t);
+        return (1.0 + u * u) * exactDerivative(x, t);
+    };
+
+    for (double x : {0.13, 0.5, 0.81})
+    {
+        const double dFluxdx = (flux(x + h) - flux(x - h)) / (2.0 * h);
+        const double dudt = (exactSolution(x, t + h) - exactSolution(x, t - h)) / (2.0 * h);
+
+        State s(1);
+        s.u(0) = exactSolution(x, t);
+        s.q(0) = exactDerivative(x, t);
+
+        const double S = problem.Sources(0, s, x, t);
+        BOOST_TEST(dudt - dFluxdx == S, boost::test_tools::tolerance(1e-5));
+
+        // ...and that the flux hook really is the function the source was
+        // derived for, rather than the source matching a different sigma_hat.
+        BOOST_TEST(problem.SigmaFn(0, s, x, t) == flux(x),
+                   boost::test_tools::tolerance(1e-12));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(the_flux_derivatives_agree_with_a_finite_difference)
+{
+    // dSigmaFn_du = 2 u q and dSigmaFn_dq = 1 + u^2 are the only route from u to
+    // the residual in this problem, so a mistake in either is a mistake in the
+    // whole Jacobian. Central-difference the case's own SigmaFn against them --
+    // no solver involved, so this fails before the order study does and says
+    // something much more specific when it does.
+    ManufacturedNonlinearFlux problem;
+    const double t = 0.37, h = 1e-6;
+
+    for (double x : {0.13, 0.5, 0.81})
+    {
+        const double u = exactSolution(x, t), q = exactDerivative(x, t);
+
+        auto sigmaAt = [&](double uu, double qq)
+        {
+            State s(1);
+            s.u(0) = uu;
+            s.q(0) = qq;
+            return problem.SigmaFn(0, s, x, t);
+        };
+
+        State s(1);
+        s.u(0) = u;
+        s.q(0) = q;
+
+        Vector du(1), dq(1);
+        du.setZero();
+        dq.setZero();
+        problem.dSigmaFn_du(0, du, s, x, t);
+        problem.dSigmaFn_dq(0, dq, s, x, t);
+
+        BOOST_TEST(du[0] == (sigmaAt(u + h, q) - sigmaAt(u - h, q)) / (2.0 * h),
+                   boost::test_tools::tolerance(1e-6));
+        BOOST_TEST(dq[0] == (sigmaAt(u, q + h) - sigmaAt(u, q - h)) / (2.0 * h),
+                   boost::test_tools::tolerance(1e-6));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(the_order_survives_a_nonlinear_flux)
+{
+    // sigma_hat(u, q) is outside the papers' theory -- their conclusion names
+    // F(grad u, u) as open -- so this study is a measurement, not a check of a
+    // predicted rate. SolveJacTests already shows the flag-on Jacobian is right
+    // for such a flux; what was missing was whether u* still gains an order.
+    //
+    // Measured, on the sweep below:
+    //
+    //     k = 1:  flag off  u 1.96  u* 2.81   |   flag on  u 1.92  u* 3.08
+    //     k = 2:  flag off  u 2.94  u* 4.20   |   flag on  u 2.92  u* 4.42
+    //
+    // and this is the one case in the file where the flag is doing something the
+    // flag-off path does not eventually do by itself. Read the per-n errors, not
+    // the fitted slope: at k = 1 with the flag *off*, u* falls
+    //
+    //     4.55e-2  6.58e-3  5.60e-4  6.18e-5  2.74e-5
+    //
+    // -- ratios 6.9, 11.7, 9.1, and then 2.3. It superconverges over the coarse
+    // grids and then stops, so the 2.81 above is a fit through a rate that is
+    // still falling; a sweep stopping at n = 32 reports 3.21 and looks
+    // superconvergent. With the flag *on* the same column falls by 8.5, 8.7, 8.4,
+    // 8.2 -- 2^3 every time, k+2 and asymptotic.
+    //
+    // That is the result. For a flux the theory does not cover, the interpolatory
+    // scheme's postprocessing gain is real but transient without the flag, and
+    // durable with it. It is also why this sweep runs to n = 64 rather than
+    // stopping at 32 like its neighbours: at 32 the two columns are
+    // indistinguishable and the case would assert nothing the linear one does not.
+    const double tFinal = 0.25;
+
+    for (auto const &c : std::vector<std::pair<Index, std::vector<Index>>>{
+             {1, {4, 8, 16, 32, 64}}, {2, {4, 8, 16, 32}}})
+    {
+        const Rates r = measureRates<ManufacturedNonlinearFlux>(c.first, c.second, tFinal);
+        BOOST_TEST_MESSAGE("nonlinear flux, " + report(c.first, r));
+
+        BOOST_TEST(r.uOff > c.first + 1 - 0.2,
+                   "k = " << c.first << ": u lost its rate with the flag off ("
+                          << r.uOff << ")");
+        BOOST_TEST(r.uOn > c.first + 1 - 0.2,
+                   "k = " << c.first << ": u lost its rate with the flag on ("
+                          << r.uOn << ")");
+        BOOST_TEST(r.starOn > c.first + 2 - 0.35,
+                   "k = " << c.first << ": u* did not reach k+2 = " << c.first + 2
+                          << " with the flag on (observed " << r.starOn << ")");
+        BOOST_TEST(r.starOn > r.uOn + 0.5,
+                   "k = " << c.first
+                          << ": u* is no better than u with the flag on (u "
+                          << r.uOn << ", u* " << r.starOn << ")");
+    }
+}
+
+BOOST_AUTO_TEST_CASE(the_flag_off_superconvergence_at_k2_is_genuine_not_pre_asymptotic)
+{
+    // Settles a specific doubt about the k = 1 / k = 2 split recorded above.
+    //
+    // The nonlinear-flux case shows that flag-off postprocessing can superconverge
+    // over coarse grids and then stop, so the obvious suspicion is that the linear
+    // k = 2 flag-off entry (u* = 4.08 over n = 4, 8, 16) is the same transient
+    // caught before it breaks, and that the anomaly is an artefact of where each
+    // sweep happens to end. Refining to n = 64 says otherwise:
+    //
+    //     n=4    u* 2.101e-04
+    //     n=8    u* 1.228e-05    local order 4.10
+    //     n=16   u* 7.387e-07    local order 4.05
+    //     n=32   u* 4.516e-08    local order 4.03
+    //     n=64   u* 2.739e-09    local order 4.04
+    //
+    // Four consecutive refinements at k+2, with no sign of the decay the nonlinear
+    // flux shows by its third. So the linear k = 2 flag-off superconvergence is
+    // real and durable, the anomaly is not a pre-asymptotic artefact, and the two
+    // phenomena are distinct: the interpolatory scheme keeps the extra order here
+    // and loses it for a nonlinear flux.
+    //
+    // The last point is worth 2.7e-9, close enough to the 1e-9 relative tolerance
+    // to ask whether it is measuring space at all. The control below says it is:
+    // loosening the tolerance tenfold moves u* by about 1%, where a
+    // tolerance-limited error would move by ten.
+    const double tFinal = 0.25;
+    const std::vector<Index> cells = {4, 8, 16, 32, 64};
+
+    const Rates r = measureRates<ManufacturedDiffusion>(2, cells, tFinal);
+    BOOST_TEST_MESSAGE("refined linear k=2, " + report(2, r));
+
+    // The substantive claim: every step of the sweep holds k+2, flag off. A
+    // single fitted slope would average a breakdown away, which is exactly the
+    // failure this test exists to detect.
+    for (size_t i = 1; i < cells.size(); ++i)
+    {
+        BOOST_TEST(r.localStarOff(i) > 4.0 - 0.35,
+                   "flag-off u* lost k+2 between n=" << cells[i - 1] << " and n="
+                                                     << cells[i] << " (local order "
+                                                     << r.localStarOff(i) << ")");
+        BOOST_TEST(r.localStarOn(i) > 4.0 - 0.35,
+                   "flag-on u* lost k+2 between n=" << cells[i - 1] << " and n="
+                                                    << cells[i] << " (local order "
+                                                    << r.localStarOn(i) << ")");
+    }
+
+    // The control that makes the above mean anything: if the finest error were
+    // set by the time integration rather than by h, changing the tolerance would
+    // move it in proportion.
+    const Errors dflt =
+        solveAndMeasureBoth<ManufacturedDiffusion>(2, 64, tFinal, false, {});
+    const Errors loose =
+        solveAndMeasureBoth<ManufacturedDiffusion>(2, 64, tFinal, false, {1e-10, 1e-8});
+    const Errors tight =
+        solveAndMeasureBoth<ManufacturedDiffusion>(2, 64, tFinal, false, {3e-12, 1e-10});
+
+    BOOST_TEST_MESSAGE(std::format(
+        "  n=64 flag off u*:  default {:.6e}  looser(x10) {:.6e}  tighter {:.6e}",
+        dflt.uStar, loose.uStar, tight.uStar));
+
+    BOOST_TEST(std::abs(loose.uStar - tight.uStar) / dflt.uStar < 0.1,
+               "the finest u* moves with the time tolerance ("
+                   << loose.uStar << " vs " << tight.uStar
+                   << "), so that point measures the integrator, not the mesh");
 }
 
 BOOST_AUTO_TEST_CASE(the_flag_is_rejected_at_degree_zero)

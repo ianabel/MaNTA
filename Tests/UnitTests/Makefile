@@ -3,7 +3,7 @@
 all: UnitTests
 .PHONY: all clean
 
-TEST_SOURCES = DGTests.cpp SystemSolverTests.cpp AutodiffTest.cpp MirrorPlasmaTest.cpp AdjointTests.cpp IntegratorTest.cpp GridTests.cpp ConfigTests.cpp MagneticFieldTest.cpp PyIntegratorTests.cpp DGSolnTests.cpp SolveJacTests.cpp NetCDFIOTests.cpp UtilityTests.cpp SolverPlumbingTests.cpp SystemSolverMatrixTests.cpp ResidualTests.cpp MMSConvergenceTests.cpp ScalarJacobianTests.cpp TransportSystemTests.cpp AdjointProblemTests.cpp PhysicsRegistryTests.cpp PostprocessingTests.cpp SolverLifecycleTests.cpp
+TEST_SOURCES = DGTests.cpp SystemSolverTests.cpp AutodiffTest.cpp MirrorPlasmaTest.cpp AdjointTests.cpp IntegratorTest.cpp GridTests.cpp ConfigTests.cpp MagneticFieldTest.cpp PyIntegratorTests.cpp DGSolnTests.cpp SolveJacTests.cpp NetCDFIOTests.cpp UtilityTests.cpp SolverPlumbingTests.cpp SystemSolverMatrixTests.cpp ResidualTests.cpp MMSConvergenceTests.cpp MMSAuxScalarTests.cpp ScalarJacobianTests.cpp TransportSystemTests.cpp AdjointProblemTests.cpp PhysicsRegistryTests.cpp PostprocessingTests.cpp SolverLifecycleTests.cpp
 
 # Every header the tests can reach, so that editing one rebuilds the binary.
 # The old prerequisite list named only TestDiffusion.hpp, which meant a
