@@ -65,3 +65,9 @@ python/*.egg-info/
 python/manta/_manta*.so
 python/manta/_manta*.d
 docs/_build/
+
+# Reference papers. refs/Refs.md is the tracked index -- it lists each paper with
+# its doi and the filename it is expected under -- but the PDFs themselves are
+# copyrighted publisher material and several MB each, so they stay out of the
+# repository. Fetch them from the dois in Refs.md.
+refs/*.pdf

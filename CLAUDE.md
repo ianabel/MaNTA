@@ -148,7 +148,8 @@ MaNTA *is* an interpolatory HDG method: `residual` evaluates `SigmaFn`, `Sources
 and `AuxG` at the `k+1` nodes of the degree-`k` nodal basis and applies
 `InterpolateOntoBasis`, i.e. `I_h F(u_h)` with `I_h` mapping into `W_h = P_k`.
 `Matrices.cpp` cites arXiv:1811.09667 for the Jacobian form, which is exactly the
-paper that method comes from. Its two sequels (`SuperconvergentHDG-I/II.pdf`)
+paper that method comes from. Its two sequels (`refs/SuperconvergentHDG-I/II.pdf`, indexed with their dois in
+`refs/Refs.md`; the PDFs are gitignored, so fetch them if you need them)
 exist because that scheme loses the `k+2` superconvergence of the postprocessed
 solution, and paper I's fix is what the flag implements.
 
