@@ -47,6 +47,21 @@ public:
   // Runs solver to steady state
   void run_ss(void);
 
+  // Whether the last run was abandoned by the dG/dt gate instead of integrated,
+  // i.e. whether ObjectiveDecreaseTolerance was set and the objective was already
+  // falling faster than it at the initial condition. Always false when the gate
+  // is not configured.
+  //
+  // run() and run_ss() stay void, so an existing driver is unaffected; one that
+  // cares asks this. Note that a rejected step deliberately does not synthesise
+  // an objective value -- G() reports G at the initial condition, which is the
+  // state the solver is actually in, and what a rejected step means for the
+  // search is the driver's decision, not this class's.
+  bool wasRejected(void) const;
+
+  // The dG/dt values behind that decision, one per objective.
+  Vector lastDGdt(void) const;
+
   // The objective alone, without an adjoint solve. Needs solveAdjoint = True
   // (that is what constructs the AdjointProblem that defines G) but not the
   // gradient machinery.

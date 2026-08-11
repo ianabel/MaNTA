@@ -1,5 +1,6 @@
 
 #include <cassert>
+#include <stdexcept>
 
 #include <Eigen/Dense>
 #include <Eigen/Core>
@@ -81,6 +82,108 @@ void SystemSolver::dGdq_Vec(Index gIndex, Vector &Vec, DGSoln const &Y, Index I)
 void SystemSolver::dGdsigma_Vec(Index gIndex, Vector &Vec, DGSoln const &Y, Index I)
 {
     DerivativeSubVector(gIndex, Vec, &AdjointProblem::dgFn_dsigma, Y, I);
+}
+
+// dG/dt for one objective, by the chain rule
+//
+//     dG/dt = Int ( dg/du . u' + dg/dq . q' + dg/dsigma . sigma' + dg/dphi . phi' ) dx
+//
+// DerivativeSubVector turns the nodal values of one dg/dZ into
+// dG/d(coefficients) for that field in one cell -- the projection against every
+// basis function -- so contracting each with the matching block of Ydot and
+// summing over cells is the whole derivative. It is the same quantity the adjoint
+// solve assembles into G_y, reused rather than rebuilt.
+//
+// Assembled here rather than asked of AdjointProblem because it needs the grid,
+// the basis and the projection, none of which AdjointProblem can reach; what it
+// does own -- dg, giving dg/dZ at the nodes -- is already required of every
+// adjoint case, so nothing has to implement anything new. Going through the
+// derivatives rather than through the objective functional is also what makes
+// this correct for a g that is nonlinear in the state: evaluating the functional
+// *on* the derivative vector instead, as origin/optimize-mode's version did,
+// gives Int g(u',q',...) dx, which coincides with dG/dt only when g is linear.
+//
+// Three limits worth knowing.
+//
+// There is no scalar term, because AdjointProblem has no dgFn_dscalars to go with
+// the other four -- an objective depending on the global scalars mu loses that
+// contribution silently. This also inherits AdjointProblem's standing assumption
+// that G = Int g dx (AdjointProblem.hpp).
+//
+// And the caller decides how much of the sum is real, by what it puts in Ydot. At
+// t0 in particular only the differential part of dydt carries anything: q, sigma
+// and phi are algebraic, IDA's IDA_YA_YDP_INIT produces no derivative for an
+// algebraic component, and setInitialConditions leaves those blocks at zero. So
+// the dG/dt gate, which runs there, is differentiating through the u dependence
+// alone -- correctly, including for a nonlinear g, but not completely. The
+// function itself is the full chain rule and is tested as such; see
+// at_t0_only_the_differential_part_of_dydt_exists in SolverLifecycleTests.cpp for
+// the gap and TODO for what closing it needs.
+Value SystemSolver::dGdt(Index gIndex, DGSoln const &Y, DGSoln const &Ydot)
+{
+    if (!adjointProblem)
+        throw std::logic_error("dG/dt requested with no AdjointProblem set; there is no objective to differentiate.");
+
+    // Superconvergence changes both the node count dg is sampled on and the
+    // projection the adjoint assembly uses (the pp.V / pp.B11 / pp.B12 branch of
+    // initializeMatricesForAdjointSolve). None of that is handled here, and a
+    // quietly inconsistent dG/dt is worse than none.
+    if (superconvergent)
+        throw std::logic_error("dG/dt is not implemented for Superconvergent = true; the objective would be differentiated through the wrong projection.");
+
+    // Via the *batched* dg hook and the interpolatory DerivativeSubVector, which
+    // is the same route initializeMatricesForAdjointSolve takes to build G_y.
+    //
+    // Not the quadrature overload and the pointwise dgFn_du/dq/dsigma/dphi hooks
+    // behind it, even though those give the exact integral rather than the
+    // integral of an interpolant. Two reasons, and the first is decisive: a Python
+    // AdjointProblem does not implement the pointwise hooks at all -- the
+    // trampoline raises "Individual derivative function \"dgFn_du\" deprecated;
+    // use vectorized version dg instead" -- so the quadrature route works only for
+    // C++ cases. The second is consistency: the adjoint operator is built from the
+    // interpolatory form, so a gate built from the quadrature form would answer a
+    // slightly different question from the gradients beside it.
+    GlobalState dGdvars(nCells, k, nVars, nScalars, nAux);
+    adjointProblem->dg(gIndex, dGdvars, Y.evalOnNodes(), Y.getPoints());
+
+    Vector projected(nVars * (k + 1));
+    Value total = 0.0;
+
+    for (Index i = 0; i < nCells; ++i)
+    {
+        DerivativeSubVector(gIndex, projected, dGdvars.cellwiseVariable(i), Y, i);
+        for (Index var = 0; var < nVars; ++var)
+            total += projected(Eigen::seqN(var * (k + 1), k + 1))
+                         .dot(Ydot.u(var).getCoeff(i).second);
+
+        DerivativeSubVector(gIndex, projected, dGdvars.cellwiseDerivative(i), Y, i);
+        for (Index var = 0; var < nVars; ++var)
+            total += projected(Eigen::seqN(var * (k + 1), k + 1))
+                         .dot(Ydot.q(var).getCoeff(i).second);
+
+        DerivativeSubVector(gIndex, projected, dGdvars.cellwiseFlux(i), Y, i);
+        for (Index var = 0; var < nVars; ++var)
+            total += projected(Eigen::seqN(var * (k + 1), k + 1))
+                         .dot(Ydot.sigma(var).getCoeff(i).second);
+
+        // Aux is projected here rather than through DerivativeSubVector because
+        // that function's loop is hardcoded to nVars, and there are nAux of these.
+        // The two coincide in every fixture except test_adjoint_aux, which is how
+        // dGdaux_Vec came to carry two confusions between them.
+        if (nAux > 0)
+        {
+            Interval const &I(grid[i]);
+            auto dAux = dGdvars.cellwiseAux(i);
+            for (Index a = 0; a < nAux; ++a)
+            {
+                Vector const nodal = dAux.row(a).transpose();
+                total += Y.getBasis().InterpolateOntoBasis(I, nodal)
+                             .dot(Ydot.Aux(a).getCoeff(i).second);
+            }
+        }
+    }
+
+    return total;
 }
 
 void SystemSolver::dGdaux_Vec(Index gIndex, Vector &Vec, DGSoln const &Y, Index intervalIndex)

@@ -34,6 +34,18 @@ int JacSetup(sunrealtype tt, sunrealtype cj, N_Vector yy, N_Vector yp, N_Vector 
 void SystemSolver::runSolver(double tFinal)
 {
 	initialize();
+
+	// The dG/dt gate, which is why the three phases are separate: the objective's
+	// time derivative is a property of the initial condition, so it can be asked
+	// after initialize() and answered before paying for integrate(). Disarmed
+	// unless setObjectiveDecreaseTolerance has been called, in which case this is
+	// false and the run proceeds exactly as before.
+	if (objectiveIsDecreasing())
+	{
+		destroySundials();
+		return;
+	}
+
 	try
 	{
 		integrate(tFinal);
@@ -46,9 +58,54 @@ void SystemSolver::runSolver(double tFinal)
 	destroySundials();
 }
 
+// Does the objective get worse from here?
+//
+// Every objective must clear the bar: one that is falling faster than the
+// tolerance rejects the step even if the others improve, which is the
+// all-must-improve rule origin/optimize-mode used and worth keeping -- a sweep
+// that accepts a step because two of three objectives improved is not maximising
+// anything in particular.
+//
+// The sign convention is that optimisation *maximises* G, so a decrease is the
+// bad direction. The tolerance is one-sided slack on that: dG/dt may dip by up to
+// objective_decrease_tol before the step is called bad, which leaves room for a
+// transient that recovers, and keeps quadrature noise about zero from rejecting a
+// run that is really flat.
+bool SystemSolver::objectiveIsDecreasing()
+{
+	if (!CheckObjectiveDecrease)
+		return false;
+
+	if (!adjointProblem)
+		throw std::logic_error("ObjectiveDecreaseTolerance is set but no AdjointProblem is; there is no objective to test. Set solveAdjoint, or drop the tolerance.");
+
+	const Index ng = adjointProblem->getNg();
+	last_dGdt.resize(ng);
+
+	bool decreasing = false;
+	for (Index gIndex = 0; gIndex < ng; ++gIndex)
+	{
+		last_dGdt(gIndex) = dGdt(gIndex);
+		if (last_dGdt(gIndex) < -objective_decrease_tol)
+			decreasing = true;
+	}
+
+	if (decreasing)
+		logmsg<LOG_LEVEL::WARNING>("Objective is decreasing at t = {}: dG/dt = {}, tolerance {}. Abandoning this run without integrating.",
+								   t0, last_dGdt(0), objective_decrease_tol);
+	else
+		logmsg<LOG_LEVEL::INFO>("dG/dt gate passed at t = {}: dG/dt = {}.", t0, last_dGdt(0));
+
+	objective_rejected = decreasing;
+	return decreasing;
+}
+
 void SystemSolver::initialize()
 {
 	int retval;
+
+	// A fresh run: whatever the gate concluded about the last one does not apply.
+	objective_rejected = false;
 
 	if (!initialised)
 		initialiseMatrices();
@@ -277,6 +334,33 @@ void SystemSolver::initialize()
 		printOnNodes(res_out, t0, res);
 	}
 
+	// Fetch the corrected initial condition into Y and dYdt, for the dG/dt gate.
+	//
+	// IDACalcIC keeps its result inside IDA and hands it over only on request, so
+	// without this Y holds the *pre*-CalcIC state and the gate would evaluate
+	// dg/du, dg/dq and the rest at a point the solver has already moved away from.
+	//
+	// What this does *not* buy is a complete derivative. dYdt's algebraic blocks
+	// stay zero: q, sigma and phi are algebraic here, and IDA_YA_YDP_INIT computes
+	// algebraic values and differential derivatives, not the other way round. So
+	// the gate differentiates through u alone. That is a real limitation, pinned by
+	// at_t0_only_the_differential_part_of_dydt_exists and recorded in TODO -- and
+	// it is compounded by IDASetId above being handed an all-zero id, because the
+	// line that should mark u differential calls Eigen's static Constant factory
+	// and discards the result.
+	//
+	// Conditional on the gate rather than unconditional, which is the one
+	// compromise here. Doing it always would be tidier -- Y and dYdt would then
+	// mean the same thing whatever the options -- but it also shifts the t0
+	// timeslice initialiseNetCDF writes just below, by about 1e-8 relative on the
+	// regression cases, since that slice currently reports the state before CalcIC
+	// corrected it. Small and arguably an improvement, but not this change's
+	// business: an ungated run stays bit-for-bit what it was.
+	//
+	// Harmless if the debugDat branch above already did it: this is a vector copy.
+	if (CheckObjectiveDecrease)
+		IDAGetConsistentIC(IDA_mem, Y, dYdt);
+
 	// This also writes the t0 timeslice
 	initialiseNetCDF(baseName + ".nc", nOut);
 
@@ -477,6 +561,17 @@ void SystemSolver::destroySundials()
 	for (std::ofstream *stream : {&out0, &dydt_out, &res_out})
 		if (stream->is_open())
 			stream->close();
+
+	// And the netCDF file, for the same reason and with a sharper symptom.
+	// initialize() opens it via initialiseNetCDF; only integrate() used to close
+	// it, so any path that allocates and then does not complete a time loop left
+	// it open -- the dG/dt gate rejecting a run, or integrate() throwing and
+	// runSolver catching. The next run in the same process then fails inside
+	// netCDF trying to create a file this process still holds, and reports
+	// "Permission denied", which reads like a filesystem problem rather than a
+	// handle we never released. Close() just clears the name and closes the file,
+	// so calling it here as well as at the end of integrate() is harmless.
+	nc_output.Close();
 
 	// `ctx` is deliberately NOT freed here. It belongs to the SystemSolver: it is
 	// created in the constructor (SystemSolver.cpp:18) and freed in the

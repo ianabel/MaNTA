@@ -124,6 +124,15 @@ Time integration
      - *unset*
      - If present, the run terminates when :math:`\mathrm{d}y/\mathrm{d}t` falls
        below this rather than at ``t_final``.
+   * - ``ObjectiveDecreaseTolerance``
+     - *unset*
+     - If present, the run is abandoned before the time loop when
+       :math:`\mathrm{d}G/\mathrm{d}t < -` this at the initial condition. For an
+       optimisation sweep that turns a step which was going to make the objective
+       worse into the cost of initialisation alone. Requires ``solveAdjoint``,
+       since the adjoint problem is what defines :math:`G`. Absolute, not
+       relative — it carries the units of the objective over time, which is why
+       there is no default. See :doc:`adjoints`.
    * - ``tau``
      - ``1.0``
      - The HDG stabilisation parameter. Constant across the domain.
@@ -245,6 +254,10 @@ the TOML reader, and the two lists of keys have drifted:
    * - ``SteadyStateTolerance``
      - absent means "integrate to ``t_final``"
      - always present, default ``1e-3``; ``run_ss`` is what uses it
+   * - ``ObjectiveDecreaseTolerance``
+     - absent means the gate is off
+     - always present, default ``0.0``, which also means off; a negative value is
+       an error rather than a quiet "off"
 
 Everything else is shared, with the same name and the same default:
 ``restart``, ``RestartFile``, ``High_Grid_Boundary``,

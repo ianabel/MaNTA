@@ -80,6 +80,12 @@ Module contents
      - The objective value, without gradients.
    * - ``getAdjointGradients()``
      - :math:`\mathrm{d}G/\mathrm{d}p`.
+   * - ``wasRejected()``
+     - Whether the last run was abandoned by the ``ObjectiveDecreaseTolerance``
+       gate instead of integrated. Always ``False`` when that is not configured.
+   * - ``lastDGdt()``
+     - The :math:`\mathrm{d}G/\mathrm{d}t` values behind that decision, one per
+       objective.
 
 ``configure`` building a fresh solver each time is load-bearing rather than
 incidental: it is what makes ``Runner`` the only route that supports repeated

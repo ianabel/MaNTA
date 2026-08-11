@@ -350,6 +350,8 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def("configure", &PyRunner::configure)
       .def("run", &PyRunner::run)
       .def("run_ss", &PyRunner::run_ss)
+      .def("wasRejected", &PyRunner::wasRejected)
+      .def("lastDGdt", &PyRunner::lastDGdt)
       .def("G", &PyRunner::G)
       .def("getAdjointGradients", &PyRunner::getAdjointGradients)
       .def("getSolution", &PyRunner::getSolution)

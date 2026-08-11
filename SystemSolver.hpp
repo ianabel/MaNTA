@@ -58,6 +58,22 @@ class SystemSolver
             steady_state_tol = ss_tol;
             TerminateOnSteadyState = true;
         };
+
+        // Arm the dG/dt early-exit gate: after the initial condition is built,
+        // abandon the run rather than integrate it if the objective is already
+        // getting worse. For an optimisation sweep that turns a wasted transport
+        // solve into the cost of initialisation alone.
+        //
+        // An absolute threshold on a dimensional quantity has no sensible
+        // default, so the gate is off until this is called -- like
+        // setSteadyStateTolerance above, which this deliberately mirrors.
+        void setObjectiveDecreaseTolerance(double dGdt_tol)
+        {
+            if (dGdt_tol <= 0)
+                throw std::logic_error("Tolerance for objective-decrease termination cannot be zero or negative.");
+            objective_decrease_tol = dGdt_tol;
+            CheckObjectiveDecrease = true;
+        };
         void setNOutput(int nO)
         {
             if (nO <= 0)
@@ -139,6 +155,24 @@ class SystemSolver
         void integrate(double tFinal);
         void destroySundials();
         void runSolver(double tFinal);
+
+        // The dG/dt gate, asked between initialize() and integrate() -- which is
+        // the reason the split has to exist for it. Returns false when the gate
+        // is disarmed, so an unconfigured caller sees no behaviour change.
+        //
+        // Only meaningful after initialize(): it reads y and dydt, which map the
+        // live SUNDIALS vectors, and it needs the *post*-IDACalcIC derivative.
+        // Before initialize() there is nothing mapped; after destroySundials()
+        // they dangle.
+        bool objectiveIsDecreasing();
+
+        // Whether the gate rejected the run, i.e. runSolver() skipped the time
+        // loop. Cleared at the top of every initialize().
+        bool wasRejected() const { return objective_rejected; };
+
+        // The dG/dt values the last objectiveIsDecreasing() computed, one per
+        // objective. For diagnostics and for the tests.
+        Vector const &lastDGdt() const { return last_dGdt; };
 
         void setAdjointProblem(AdjointProblem *ap) { adjointProblem = ap; };
         void runAdjointSolve();
@@ -344,6 +378,12 @@ class SystemSolver
         void dGdsigma_Vec(Index, Vector &, DGSoln const &, Index);
         void dGdaux_Vec(Index, Vector &, DGSoln const &, Index);
 
+        // The time derivative of the objective, by the chain rule over the four
+        // vectors above. See AdjointVectors.cpp for why it is assembled here
+        // rather than asked of AdjointProblem.
+        Value dGdt(Index gIndex, DGSoln const &Y, DGSoln const &Ydot);
+        Value dGdt(Index gIndex) { return dGdt(gIndex, y, dydt); };
+
         double resNorm = 0.0; // Exclusively for unit testing purposes
 
         double dt;
@@ -395,6 +435,15 @@ class SystemSolver
 
         bool TerminateOnSteadyState = false;
         double steady_state_tol = 1e-3;
+
+        // Off unless setObjectiveDecreaseTolerance arms it. There is no default
+        // worth having: dG/dt carries the units of the objective over time, so
+        // any number here would be meaningful for one case and nonsense for the
+        // next.
+        bool CheckObjectiveDecrease = false;
+        double objective_decrease_tol = 0.0;
+        bool objective_rejected = false;
+        Vector last_dGdt;
 #ifdef PHYSICS_DEBUG
         constexpr static bool physics_debug = true;
 #else

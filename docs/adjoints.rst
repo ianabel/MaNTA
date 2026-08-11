@@ -126,3 +126,54 @@ Limitations
   ``Superconvergent`` is set, because the postprocessed node set would silently
   redefine how many parameters there are. See :doc:`superconvergence`.
 * Anything indexed per auxiliary variable is sized ``nAux``, not ``nVars``.
+
+The dG/dt early-exit gate
+-------------------------
+
+An optimisation sweep spends most of its time on steps that turn out to be bad.
+``ObjectiveDecreaseTolerance`` lets the solver notice some of them before paying
+for the transport solve: after the initial condition is built, it evaluates
+
+.. math::
+
+   \frac{\mathrm{d}G}{\mathrm{d}t} = \int \left(
+       \frac{\partial g}{\partial u} \dot u
+     + \frac{\partial g}{\partial q} \dot q
+     + \frac{\partial g}{\partial \sigma} \dot \sigma
+     + \frac{\partial g}{\partial \phi} \dot \phi \right) \mathrm{d}x
+
+and, if any objective is falling faster than the tolerance, abandons the run
+without integrating. The convention is that :math:`G` is **maximised**, so a
+decrease is the bad direction, and the tolerance is one-sided slack on that.
+
+This works between ``initialize()`` and ``integrate()``, which is why those are
+separate phases. From Python, ``Runner.wasRejected()`` reports the verdict and
+``Runner.lastDGdt()`` the values behind it; a rejected run leaves the solver at
+the initial condition, so ``G()`` still reads, and reports :math:`G(t_0)` rather
+than a synthesised value. What a rejected step means for the search is the
+driver's decision.
+
+The derivatives come from the same ``dg`` hook and the same projection the adjoint
+solve uses to build :math:`G_y`, so the gate and the gradients beside it answer
+consistent questions, and no case has to implement anything new.
+
+.. warning::
+
+   **At :math:`t_0` only the differential part of the derivative exists**, so in
+   practice the sum above is currently differentiating through :math:`u` alone.
+   :math:`q`, :math:`\sigma` and :math:`\phi` are algebraic here, and IDA's
+   ``IDA_YA_YDP_INIT`` computes algebraic *values* and differential
+   *derivatives* — there is no :math:`\dot q` to fetch. An objective that depends
+   on those is therefore differentiated incompletely.
+
+   Use the gate as a cheap filter on obviously-bad steps, not as a precise
+   predictor, and prefer an objective whose :math:`u` dependence carries the
+   signal. ``TODO`` records what closing the gap needs; note also that an
+   objective linear in the state is the only kind whose :math:`\mathrm{d}G/\mathrm{d}t`
+   is nonzero at a uniform initial condition — :math:`\int \tfrac{1}{2} u^2`
+   has :math:`\partial g/\partial u = u`, which vanishes where :math:`u = 0`.
+
+The gate is unavailable with ``Superconvergent`` set — it throws rather than
+differentiate through the wrong projection — and it has no term for the global
+scalars, because ``AdjointProblem`` has no ``dgFn_dscalars`` to go with the other
+four.

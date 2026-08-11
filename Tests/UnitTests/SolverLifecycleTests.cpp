@@ -78,6 +78,49 @@ Vector sample(SystemSolver &sys)
     return out;
 }
 
+// The smallest objective that will drive the dG/dt gate: G = sign * Int u dx over
+// TestDiffusion's single variable, so dG/dt = sign * Int u' dx and the two signs
+// give opposite verdicts on the same run. Which of them rejects depends on which
+// way the diffusion problem's initial condition is relaxing, and the test does
+// not need to know -- it asserts that exactly one does.
+class SignedIntegralObjective : public AdjointProblem
+{
+public:
+    explicit SignedIntegralObjective(double s) : sign(s)
+    {
+        ng = 1;
+        np = 1;
+        np_boundary = 0;
+    }
+
+    using AdjointProblem::gFn;
+
+    Value gFn(Index, const State &s, Position) const override { return sign * s.u(0); }
+
+    Value GFn(Index, DGSoln &) const override
+    {
+        // Never called: the gate goes through dGdt, and solveAdjoint is off, so
+        // nothing asks for G itself here.
+        throw std::logic_error("GFn is not part of what this fixture exercises.");
+    }
+    Value dGFndp(Index, Index, DGSoln &) const override { return 0.0; }
+
+    void dgFn_du(Index, VectorRef v, const State &, Position) override
+    {
+        v.setZero();
+        v[0] = sign;
+    }
+    void dgFn_dq(Index, VectorRef v, const State &, Position) override { v.setZero(); }
+    void dgFn_dsigma(Index, VectorRef v, const State &, Position) override { v.setZero(); }
+    void dgFn_dphi(Index, VectorRef v, const State &, Position) override { v.setZero(); }
+
+    void dSigmaFn_dp(Index, Index, Value &out, const State &, Position) override { out = 0.0; }
+    void dSources_dp(Index, Index, Value &out, const State &, Position) override { out = 0.0; }
+
+private:
+    double sign;
+};
+
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(solver_lifecycle_tests)
@@ -329,6 +372,189 @@ BOOST_AUTO_TEST_CASE(aggressive_timesteps_is_accepted_and_gives_the_same_answer)
 
     removeOutput("lifecycle_eta_default");
     removeOutput("lifecycle_eta_aggressive");
+}
+
+BOOST_AUTO_TEST_CASE(the_dGdt_gate_skips_the_time_loop_without_disturbing_an_ungated_run)
+{
+    // End to end through runSolver, which is the whole point of the gate: a step
+    // whose objective is already getting worse should cost initialisation and
+    // nothing more.
+    //
+    // Observed through the solution rather than through IDA's step counter,
+    // because IDA_mem is gone by the time runSolver returns. integrate() ends by
+    // leaving the final solution in yJac, so a run that was skipped leaves yJac
+    // holding the initial condition instead -- and that is also the assertion
+    // that would catch a gate which "rejects" but integrates anyway.
+    Grid grid(0.0, 1.0, nCells);
+
+    // The initial condition alone, for comparison: initialize() seeds yJac with
+    // it, so stopping there gives the state a rejected run should be left in.
+    TestDiffusion icProblem(lifecycle_config);
+    SystemSolver icOnly(grid, k, &icProblem);
+    configure(icOnly, "lifecycle_gate_ic");
+    {
+        CapturedOutput quiet;
+        icOnly.initialize();
+    }
+    const Vector initial = sample(icOnly);
+    {
+        CapturedOutput quiet;
+        icOnly.destroySundials();
+    }
+    BOOST_TEST(initial.norm() > 1e-8);
+
+    // Which sign of the objective is falling is a property of the problem, not
+    // something to hardcode: run both and require exactly one rejection.
+    int rejections = 0;
+    for (double sign : {1.0, -1.0})
+    {
+        const std::string stem = sign > 0 ? "lifecycle_gate_pos" : "lifecycle_gate_neg";
+
+        TestDiffusion problem(lifecycle_config);
+        SignedIntegralObjective objective(sign);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        sys.setAdjointProblem(&objective);
+
+        // Armed tight enough that the sign of dG/dt decides, rather than the
+        // slack swamping it.
+        sys.setObjectiveDecreaseTolerance(1e-12);
+
+        {
+            CapturedOutput quiet;
+            sys.runSolver(T_FINAL);
+        }
+
+        const Vector after = sample(sys);
+
+        if (sys.wasRejected())
+        {
+            ++rejections;
+            // Skipped, so the solution never moved.
+            for (Index i = 0; i < after.size(); ++i)
+                BOOST_TEST(after(i) == initial(i), boost::test_tools::tolerance(0.0));
+            BOOST_TEST(sys.lastDGdt()(0) < 0.0);
+        }
+        else
+        {
+            // Ran, so it did. If this ever coincides with the rejected branch's
+            // values the test above has stopped meaning anything.
+            BOOST_TEST((after - initial).norm() > 1e-8,
+                       "an accepted run left the solution where it started");
+            BOOST_TEST(sys.lastDGdt()(0) >= 0.0);
+        }
+
+        removeOutput(stem);
+    }
+
+    BOOST_TEST(rejections == 1,
+               "expected exactly one of the two objective signs to be rejected, got " << rejections);
+
+    removeOutput("lifecycle_gate_ic");
+}
+
+BOOST_AUTO_TEST_CASE(at_t0_only_the_differential_part_of_dydt_exists)
+{
+    // A known gap, pinned so that it is visible rather than assumed away, and so
+    // that whoever closes it is told the gate depends on it.
+    //
+    // dG/dt is assembled as a full chain rule over u, q, sigma and phi, and
+    // AdjointProblemTests proves that assembly correct. But at t0 the only part of
+    // dydt that carries anything is the differential one: setInitialConditions
+    // zeroes dydt and writes just dydt.u and the differential scalars, and
+    // IDACalcIC does not fill in the rest. So at the point the gate runs, the q,
+    // sigma and phi terms contribute nothing -- an objective depending on those is
+    // differentiated only through its u dependence.
+    //
+    // Two separate reasons, and both have to go for this to change:
+    //
+    //   * q, sigma and phi are algebraic in this formulation, and IDA's
+    //     IDA_YA_YDP_INIT computes algebraic *values* and differential
+    //     *derivatives* -- there is no y' for an algebraic component to fetch.
+    //     Their true time derivatives follow from differentiating the algebraic
+    //     constraints, which nothing here does.
+    //   * IDASetId is handed an all-zero id anyway. Solver.cpp builds it with
+    //     `isDifferential.u(v).getCoeff(i).second.Constant(k + 1, 1.0)`, and
+    //     Eigen's Constant is a *static factory* whose result is discarded, so
+    //     that line is a no-op and IDA is told the entire system is algebraic.
+    //     See TODO.
+    //
+    // This is still strictly better than origin/optimize-mode's gate, which
+    // evaluated the objective functional on the derivative vector and so was wrong
+    // about the u term too whenever g was nonlinear. But it is less than the full
+    // derivative, and the comment on SystemSolver::dGdt says so.
+    Grid grid(0.0, 1.0, nCells);
+
+    TestDiffusion problem(lifecycle_config);
+    SignedIntegralObjective objective(1.0);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, "lifecycle_gate_consistent");
+    sys.setAdjointProblem(&objective);
+    sys.setObjectiveDecreaseTolerance(1e-12);
+
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+    }
+
+    double uNorm = 0.0, qNorm = 0.0, sigmaNorm = 0.0;
+    for (Index i = 0; i < nCells; ++i)
+    {
+        uNorm += sys.dydt.u(0).getCoeff(i).second.norm();
+        qNorm += sys.dydt.q(0).getCoeff(i).second.norm();
+        sigmaNorm += sys.dydt.sigma(0).getCoeff(i).second.norm();
+    }
+
+    // The differential part is real, so the gate has something to work with.
+    BOOST_TEST(uNorm > 1e-8);
+
+    // The algebraic parts are not. If either of these ever becomes nonzero the gap
+    // above has closed, and the gate's coverage should be re-examined and this
+    // test rewritten rather than relaxed.
+    BOOST_TEST(qNorm == 0.0, boost::test_tools::tolerance(0.0));
+    BOOST_TEST(sigmaNorm == 0.0, boost::test_tools::tolerance(0.0));
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+    removeOutput("lifecycle_gate_consistent");
+}
+
+BOOST_AUTO_TEST_CASE(an_unarmed_gate_leaves_runSolver_bit_for_bit_unchanged)
+{
+    // The no-regression guarantee. An AdjointProblem may be attached for other
+    // reasons -- solveAdjoint, PyRunner::G -- and with no tolerance set that must
+    // not change the run at all, not even by the extra objective evaluations the
+    // gate would make.
+    Grid grid(0.0, 1.0, nCells);
+
+    TestDiffusion plainProblem(lifecycle_config);
+    SystemSolver plain(grid, k, &plainProblem);
+    configure(plain, "lifecycle_gate_off_plain");
+
+    TestDiffusion attachedProblem(lifecycle_config);
+    SignedIntegralObjective objective(1.0);
+    SystemSolver attached(grid, k, &attachedProblem);
+    configure(attached, "lifecycle_gate_off_attached");
+    attached.setAdjointProblem(&objective);
+
+    {
+        CapturedOutput quiet;
+        plain.runSolver(T_FINAL);
+        attached.runSolver(T_FINAL);
+    }
+
+    BOOST_TEST(!plain.wasRejected());
+    BOOST_TEST(!attached.wasRejected());
+
+    const Vector a = sample(plain), b = sample(attached);
+    for (Index i = 0; i < a.size(); ++i)
+        BOOST_TEST(a(i) == b(i), boost::test_tools::tolerance(0.0));
+    BOOST_TEST(a.norm() > 1e-8);
+
+    removeOutput("lifecycle_gate_off_plain");
+    removeOutput("lifecycle_gate_off_attached");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

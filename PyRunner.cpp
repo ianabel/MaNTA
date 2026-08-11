@@ -63,6 +63,14 @@ static const map_t params = {
     {"SteadyStateTolerance",
      Parameter<double>{.required = false, ._default = 1e-3}},
     //
+    // The dG/dt early-exit gate. Zero -- the default -- leaves it off, which is
+    // the only defaultable value: the tolerance is absolute and carries the units
+    // of the objective over time, so no number here could suit two cases. A
+    // negative value is rejected by setObjectiveDecreaseTolerance rather than
+    // quietly treated as off.
+    {"ObjectiveDecreaseTolerance",
+     Parameter<double>{.required = false, ._default = 0.0}},
+    //
     {"WriteOutput", Parameter<bool>{.required = false, ._default = true}},
     //
     // netCDF is the default output; the plain-text .dat files are opt-in.
@@ -277,6 +285,12 @@ void PyRunner::configure(const py::dict &config) {
   system->setAggressiveTimesteps(
       getValueWithDefault<bool>("aggressiveTimesteps", config));
 
+  // Off at zero, which is the default; the setter rejects anything negative.
+  double objective_decrease_tolerance =
+      getValueWithDefault<double>("ObjectiveDecreaseTolerance", config);
+  if (objective_decrease_tolerance != 0.0)
+    system->setObjectiveDecreaseTolerance(objective_decrease_tolerance);
+
   bool writeOutput = getValueWithDefault<bool>("WriteOutput", config);
 
   configured = true;
@@ -308,6 +322,20 @@ void PyRunner::run_ss() {
   system->runSolver(0);
 
   std::println("Done.");
+}
+
+bool PyRunner::wasRejected() const {
+  if (!configured)
+    throw std::runtime_error(
+        "Error: Runner must be configured before asking about the dG/dt gate.");
+  return system->wasRejected();
+}
+
+Vector PyRunner::lastDGdt() const {
+  if (!configured)
+    throw std::runtime_error(
+        "Error: Runner must be configured before asking about the dG/dt gate.");
+  return system->lastDGdt();
 }
 
 Vector PyRunner::G(void) {

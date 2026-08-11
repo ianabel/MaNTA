@@ -289,6 +289,18 @@ int runManta(std::string const &fname)
 		system->setSteadyStateTolerance(sst);
 	}
 
+	// Arm the dG/dt early-exit gate. Absent, the gate stays off and the run is
+	// unaffected; present, a run whose objective is already falling faster than
+	// this is abandoned after the initial condition is built rather than
+	// integrated. Needs an AdjointProblem to define the objective, so
+	// solveAdjoint has to be set too -- objectiveIsDecreasing says so if not.
+	if (config.count("ObjectiveDecreaseTolerance") == 1)
+	{
+		double odt = getFloat("ObjectiveDecreaseTolerance", config);
+		logmsg<LOG_LEVEL::INFO>("Abandoning the run if dG/dt falls below {} at the initial condition.", -odt);
+		system->setObjectiveDecreaseTolerance(odt);
+	}
+
 	system->runSolver(tFinal);
 
 	// For compiled-in TransportSystems we have the type information and
