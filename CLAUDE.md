@@ -432,6 +432,23 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
   then corrupts the heap. It cost an afternoon in `Postprocessing.cpp`, where the
   symptom was a SIGSEGV inside `free()` in an unrelated static's destructor.
   Assign to a `Matrix` first, then slice.
+* **Eigen 3.4.x and 5.0.x are both supported, and `EIGEN_VERSION_AT_LEAST` cannot
+  tell them apart.** Eigen 5.0 moved to semver by keeping `EIGEN_WORLD_VERSION` at
+  3 forever and renumbering the rest, so `EIGEN_MAJOR_VERSION` went 4 -> 5 and the
+  macro's arguments changed meaning underneath it: it compares
+  `(WORLD, MAJOR, MINOR)` in 3.4 and `(MAJOR, MINOR, PATCH)` in 5.0. So
+  `EIGEN_VERSION_AT_LEAST(3, 3, 90)` is *true* under Eigen 5 — it reduces to
+  `5 > 3` — which is how `extern/autodiff` came to compile a block guarded against
+  old Eigens into a version that cannot accept it. **Use `EIGEN_MAJOR_VERSION >= 5`
+  to branch on the major version**, never `EIGEN_VERSION_AT_LEAST`.
+
+  Two things moved that MaNTA cared about. `Eigen::all` is now only
+  `Eigen::placeholders::all`, and in 3.4 that spelling exists but is
+  `EIGEN_DEPRECATED` — so with `-Werror` neither spelling compiles on both, and the
+  warning fires at *our* call site, where `-isystem` cannot suppress it. Every use
+  was a `.row()`, `.middleCols()` or `.leftCols()` written the long way and is now
+  spelled that way, so no version branch is needed in this tree. And
+  `internal::SingleRange` became a template, which is the autodiff patch above.
 * **Include `<Eigen/Core>` and `<Eigen/Dense>` before the project headers**, the
   way `SystemSolver.hpp` does. The build defines `EIGEN_USE_BLAS`, which swaps in
   BLAS-backed product specialisations; a header that reaches Eigen only through

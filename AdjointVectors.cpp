@@ -13,7 +13,7 @@ void SystemSolver::DerivativeSubVector(Index gIndex, Vector &Vec, Eigen::Ref<Mat
     Interval const &I(grid[intervalIndex]);
     for (Index XVar = 0; XVar < nVars; XVar++)
     {
-        auto const &dX_dZ_vec = dX_dZ(XVar, Eigen::all);
+        auto const &dX_dZ_vec = dX_dZ.row(XVar);
         Vec.block(XVar * (k + 1), 0, (k + 1), 1) = Y.getBasis().InterpolateOntoBasis(I, dX_dZ_vec);
     }
 }

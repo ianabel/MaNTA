@@ -253,8 +253,7 @@ public:
   // Grabs data on a whole cell for Jacobian computation, **implicitly assumes
   // we're doing interpolation
   Eigen::Ref<Matrix> cellwiseVariable(Index cell) {
-    return m_Variable(Eigen::all,
-                      Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
+    return m_Variable.middleCols(cell * (k + 1), k + 1);
   }
 
   /*
@@ -264,8 +263,7 @@ public:
   const Matrix &Derivative() const { return m_Derivative; }
   VectorRef Derivative(Index i) { return m_Derivative.col(i); }
   Eigen::Ref<Matrix> cellwiseDerivative(Index cell) {
-    return m_Derivative(Eigen::all,
-                        Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
+    return m_Derivative.middleCols(cell * (k + 1), k + 1);
   }
 
   /*
@@ -275,8 +273,7 @@ public:
   const Matrix &Flux() const { return m_Flux; }
   VectorRef Flux(Index i) { return m_Flux.col(i); }
   Eigen::Ref<Matrix> cellwiseFlux(Index cell) {
-    return m_Flux(Eigen::all,
-                  Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
+    return m_Flux.middleCols(cell * (k + 1), k + 1);
   }
 
   /*
@@ -286,8 +283,7 @@ public:
   const Matrix &Aux() const { return m_Aux; }
   VectorRef Aux(Index i) { return m_Aux.col(i); }
   Eigen::Ref<Matrix> cellwiseAux(Index cell) {
-    return m_Aux(Eigen::all,
-                 Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
+    return m_Aux.middleCols(cell * (k + 1), k + 1);
   }
 
   /*

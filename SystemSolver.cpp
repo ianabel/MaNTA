@@ -104,7 +104,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         for (Index var = 0; var < nVars; var++)
         {
             // set flux for each variable, casting to a row vector and making sure to remember minus sign
-            initialState.Flux()(var, Eigen::all) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(physics_vals[0][var]);
+            initialState.Flux().row(var) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(physics_vals[0][var]);
         }
         y.AssignSigma(initialState);
 
@@ -145,7 +145,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         for (Index var = 0; var < nVars; var++)
         {
             // set flux for each variable, casting to a row vector and making sure to remember minus sign
-            initialState.Flux()(var, Eigen::all) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(physics_vals[0][var]);
+            initialState.Flux().row(var) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(physics_vals[0][var]);
         }
         y.AssignSigma(initialState);
 
@@ -1695,8 +1695,8 @@ void SystemSolver::computeAdjointGradients()
                     {
                         const auto dSigmadp_cell = dSigmadp.Variable(i)[var];
                         dkappa_dp_phi = superconvergent
-                            ? Vector(postprocessor->A9(i) * Vector(dSigmadp_cell(pIndex, Eigen::all)))
-                            : y.getBasis().InterpolateOntoBasis( I, dSigmadp_cell(pIndex, Eigen::all) );
+                            ? Vector(postprocessor->A9(i) * Vector(dSigmadp_cell.row(pIndex)))
+                            : y.getBasis().InterpolateOntoBasis( I, dSigmadp_cell.row(pIndex) );
                     }
 
                     // Evaluate Source Function
@@ -1706,8 +1706,8 @@ void SystemSolver::computeAdjointGradients()
                     {
                         const auto dSourcedp_cell = dSourcedp.Variable(i)[var];
                         dSdp_cellwise = superconvergent
-                            ? Vector(postprocessor->A9(i) * Vector(dSourcedp_cell(pIndex, Eigen::all)))
-                            : y.getBasis().InterpolateOntoBasis( I, dSourcedp_cell(pIndex, Eigen::all) );
+                            ? Vector(postprocessor->A9(i) * Vector(dSourcedp_cell.row(pIndex)))
+                            : y.getBasis().InterpolateOntoBasis( I, dSourcedp_cell.row(pIndex) );
                     }
 
                 

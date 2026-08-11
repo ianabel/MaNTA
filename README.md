@@ -41,7 +41,10 @@ To compile and use MaNTA you will need a system with the following
    function is never constant-evaluated, which clang 18 does not implement. That
    `constexpr` could never have done anything and is now `inline`.
  - The Boost C++ Template Library
- - The Eigen linear algebra template library
+ - The Eigen linear algebra template library, either 3.4.x or 5.0.x. Both are
+   supported and tested; point `EIGEN_DIR` at whichever you have. Note that
+   Eigen 5.0 needs the `extern/autodiff` submodule this tree pins, which
+   carries a patch upstream does not have yet -- see `.gitmodules`.
  - The SUNDIALS library, Version 7.1.0 or newer. Not 6.x: MaNTA links
    `sundials_core` and uses `SUNContext`, neither of which exists before v7.
  - NETCDF C and NETCDF C++ 4.3 or newer (depends upon netcdf C interface 4.6.0 or newer)

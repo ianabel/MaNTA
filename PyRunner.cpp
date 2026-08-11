@@ -383,14 +383,14 @@ py::tuple PyRunner::getAdjointGradients(void) {
 
   auto np_internal = adjoint->getNpInternal();
 
-  Matrix G_p = system->G_p(Eigen::all, Eigen::seq(0, np_internal - 1));
+  Matrix G_p = system->G_p.leftCols(np_internal);
 
   // Create output to pass back to Python
   using namespace pybind11::literals;
   py::dict gp("G_p"_a = G_p);
   if (adjoint->getNpBoundary() > 0) {
     Matrix G_p_boundary =
-        system->G_p(Eigen::all, Eigen::seq(np_internal, adjoint->getNp() - 1));
+        system->G_p.middleCols(np_internal, adjoint->getNp() - np_internal);
     gp["G_p_boundary"] = G_p_boundary;
   }
 
