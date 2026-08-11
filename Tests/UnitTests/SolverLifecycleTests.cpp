@@ -27,6 +27,8 @@
 #include "TestDiffusion.hpp"
 #include "Types.hpp"
 
+#include <ida/ida.h>
+
 #include <exception>
 #include <filesystem>
 #include <stdexcept>
@@ -496,6 +498,52 @@ BOOST_AUTO_TEST_CASE(the_id_vector_marks_u_differential_and_nothing_else)
     removeOutput("lifecycle_id");
 }
 
+BOOST_AUTO_TEST_CASE(initialize_leaves_the_corrected_initial_condition_in_Y)
+{
+    // t0 output reports the state the time integration actually starts from, which
+    // means the CalcIC-corrected one, not the guess fed to CalcIC.
+    //
+    // IDACalcIC keeps its answer inside IDA; Y and dYdt only receive it when
+    // IDAGetConsistentIC is called. That call used to happen inside the debugDat
+    // branch and, later, for an armed dG/dt gate -- so the t0 timeslice reported the
+    // pre-CalcIC state on an ordinary run and the corrected one under
+    // WriteDebugDatFiles. It is unconditional now, and this pins that: asking IDA
+    // again must produce no further change, because Y already holds what IDA has.
+    //
+    // The difference is confined to the algebraic fields. u is differential, so
+    // CalcIC holds it fixed and the u in t0 output is unchanged by any of this --
+    // which is why the regression suite, which compares only u, cannot see the
+    // change at all.
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, "lifecycle_consistent_ic");
+
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+    }
+
+    N_Vector Ycheck = N_VClone(sys.Y), dYcheck = N_VClone(sys.dYdt);
+    IDAGetConsistentIC(sys.IDA_mem, Ycheck, dYcheck);
+
+    N_VLinearSum(1.0, sys.Y, -1.0, Ycheck, Ycheck);
+    N_VLinearSum(1.0, sys.dYdt, -1.0, dYcheck, dYcheck);
+
+    const double dY = N_VMaxNorm(Ycheck), ddY = N_VMaxNorm(dYcheck);
+    N_VDestroy(Ycheck);
+    N_VDestroy(dYcheck);
+
+    BOOST_TEST(dY == 0.0, boost::test_tools::tolerance(0.0));
+    BOOST_TEST(ddY == 0.0, boost::test_tools::tolerance(0.0));
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+    removeOutput("lifecycle_consistent_ic");
+}
+
 BOOST_AUTO_TEST_CASE(at_t0_only_the_differential_part_of_dydt_exists)
 {
     // A known gap, pinned so that it is visible rather than assumed away, and so
@@ -525,14 +573,14 @@ BOOST_AUTO_TEST_CASE(at_t0_only_the_differential_part_of_dydt_exists)
     // evaluated the objective functional on the derivative vector and so was wrong
     // about the u term too whenever g was nonlinear. But it is less than the full
     // derivative, and the comment on SystemSolver::dGdt says so.
+    //
+    // No gate armed and no objective attached: IDAGetConsistentIC is unconditional,
+    // so this holds for every run rather than only for a gated one.
     Grid grid(0.0, 1.0, nCells);
 
     TestDiffusion problem(lifecycle_config);
-    SignedIntegralObjective objective(1.0);
     SystemSolver sys(grid, k, &problem);
     configure(sys, "lifecycle_gate_consistent");
-    sys.setAdjointProblem(&objective);
-    sys.setObjectiveDecreaseTolerance(1e-12);
 
     {
         CapturedOutput quiet;

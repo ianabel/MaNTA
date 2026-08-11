@@ -111,19 +111,16 @@ Jacobian the forward solve already builds. The cheaper alternative is to move th
 gate after IDA's first step, where dYdt is fully populated, trading one step for
 completeness. Neither is done.
 
-Closing it means getting the algebraic time derivatives, which are determined by
-differentiating the constraints -- q' = d(u')/dx, sigma' from differentiating
-SigmaFn, phi' from differentiating AuxG -- i.e. one linear solve against the same
-Jacobian the forward solve already builds. The cheaper alternative is to move the
-gate after IDA's first step, where dYdt is fully populated, trading one step for
-completeness. Neither is done.
-
-Which state should t0 output report? initialiseNetCDF writes its t0 timeslice from
-Y before IDAGetConsistentIC has been called, so the "initial condition" in the
-netCDF is the pre-CalcIC one, differing from the corrected state by around 1e-8
-relative on the regression cases. The gate fetches the corrected state only when
-it is armed, specifically so that ungated output stays bit-for-bit unchanged; if
-the answer is that t0 should report the corrected state, that condition can go.
+The regression suite compares only `u`. test_ref_soln_l2 in TestSolutions.py reads
+`groups[name].variables["u"]`, so the `q`, `sigma` and `u_star` that every run also
+writes are never compared against a reference. That is not hypothetical slack:
+making t0 output report the CalcIC-corrected state moved the t0 `sigma` of
+AuxVarTest by 2.3e-2 and the t0 `q` of nonlin by 1.2e-3, and the suite could not
+see any of it -- the change is invisible in `u` because u is differential and
+CalcIC holds it fixed. Comparing the other three would mean regenerating the
+references (they hold the pre-CalcIC t0 values) and picking tolerances for fields
+that are one derivative rougher than u, so it is a real piece of work rather than
+a line in the harness. Tests/README.md is the place to record the gap if it stays.
 
 From the origin/optimize-mode review, still unmerged and worth taking:
   - shard_inputs as a per-hook decorator in python/Stellarator2.py (but keep

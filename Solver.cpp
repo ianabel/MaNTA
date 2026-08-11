@@ -327,11 +327,31 @@ void SystemSolver::initialize()
 	if (nresevals > 10)
     logmsg<LOG_LEVEL::WARNING>("IDACalcIC required {} residual evaluations. Check settings in {}", nresevals, std::string(inputFilePath));
 
+	// Take IDACalcIC's result. It keeps the corrected initial condition inside IDA
+	// and hands it over only on request, so without this Y and dYdt still hold the
+	// state that was *fed* to CalcIC rather than the one it computed.
+	//
+	// Here, once, before anything reads Y or writes output. Everything downstream
+	// then means the same thing by "the initial condition": the t0 timeslice
+	// initialiseNetCDF writes below, the t0 block of the .dat file, the residual the
+	// debug path evaluates, and the state the dG/dt gate differentiates. It used to
+	// be fetched in two places for two reasons -- inside the debugDat branch, and
+	// again for the gate when armed -- which meant the t0 output reported the
+	// pre-CalcIC state on an ordinary run and the corrected one under
+	// WriteDebugDatFiles, so a discrepancy could reproduce only with debug output
+	// switched on.
+	//
+	// Note what this does *not* fix. dYdt's algebraic blocks stay zero: q, sigma and
+	// phi are algebraic, and IDA_YA_YDP_INIT computes algebraic values and
+	// differential derivatives, not the other way round. That is structural, not the
+	// old wrong id vector -- see at_t0_only_the_differential_part_of_dydt_exists --
+	// and it is why the dG/dt gate differentiates through u alone.
+	IDAGetConsistentIC(IDA_mem, Y, dYdt);
+
 	if (writeDatFile)
 		print(out0, t0, nOut, true);
 	if (debugDat)
 	{
-		IDAGetConsistentIC(IDA_mem, Y, dYdt);
 		residual(t0, Y, dYdt, res);
 		std::println(dydt_out, "# After CalcIC ");
 		printOnNodes(dydt_out, t0, dYdt);
@@ -347,38 +367,7 @@ void SystemSolver::initialize()
 		printOnNodes(res_out, t0, res);
 	}
 
-	// Fetch the corrected initial condition into Y and dYdt, for the dG/dt gate.
-	//
-	// IDACalcIC keeps its result inside IDA and hands it over only on request, so
-	// without this Y holds the *pre*-CalcIC state and the gate would evaluate
-	// dg/du, dg/dq and the rest at a point the solver has already moved away from.
-	//
-	// What this does *not* buy is a complete derivative. dYdt's algebraic blocks
-	// stay zero: q, sigma and phi are algebraic here, and IDA_YA_YDP_INIT computes
-	// algebraic values and differential derivatives, not the other way round. So
-	// the gate differentiates through u alone. That is a real limitation, pinned by
-	// at_t0_only_the_differential_part_of_dydt_exists and recorded in TODO. It is
-	// not a consequence of the id vector being wrong -- that is fixed above, and
-	// the algebraic blocks are still zero, which is the point of that test.
-	//
-	// What the id fix does buy here is that u' is now IDA's, computed by CalcIC for
-	// the differential block. Before it, nothing was marked differential, so IDA
-	// computed no derivative at all and this fetched back whatever guess
-	// setInitialConditions had left.
-	//
-	// Conditional on the gate rather than unconditional, which is the one
-	// compromise here. Doing it always would be tidier -- Y and dYdt would then
-	// mean the same thing whatever the options -- but it also shifts the t0
-	// timeslice initialiseNetCDF writes just below, by about 1e-8 relative on the
-	// regression cases, since that slice currently reports the state before CalcIC
-	// corrected it. Small and arguably an improvement, but not this change's
-	// business: an ungated run stays bit-for-bit what it was.
-	//
-	// Harmless if the debugDat branch above already did it: this is a vector copy.
-	if (CheckObjectiveDecrease)
-		IDAGetConsistentIC(IDA_mem, Y, dYdt);
-
-	// This also writes the t0 timeslice
+	// This also writes the t0 timeslice -- the corrected one, per the fetch above
 	initialiseNetCDF(baseName + ".nc", nOut);
 
 	IDASetMaxNumSteps(IDA_mem, 50000);
