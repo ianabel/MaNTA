@@ -140,8 +140,14 @@ condition and integrating:
    * - Step
      - What it does
    * - ``initialize``
-     - Allocates the SUNDIALS objects, builds the initial condition, opens the
-       output files, runs ``IDACalcIC``.
+     - Allocates the SUNDIALS objects, builds the initial condition, runs
+       ``IDACalcIC``, takes its corrected result back, and opens the output files.
+       So the :math:`t_0` slice of every output is the **corrected** initial
+       condition — the state the time loop actually starts from, rather than the
+       guess handed to ``IDACalcIC``. The two differ only in the algebraic fields
+       (:math:`q`, :math:`\sigma`, the auxiliary variables, and :math:`u^\star`
+       through :math:`q`); :math:`u` is differential, so ``IDACalcIC`` holds it
+       fixed and it is the same either way.
    * - ``integrate(tFinal)``
      - The time loop, then the adjoint solve if requested, then the final netCDF
        and restart output.

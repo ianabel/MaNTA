@@ -395,26 +395,33 @@ These are deliberate and tracked, not oversights:
   So the C++ `nAux > 0` path is sound and the fault is specific to the JAX
   fixture or to `JAXTransportSystem`'s aux hooks. That is where to look next.
 
-* **A second *integration* on the same `SystemSolver` fails.** `IDASolve` returns
-  `IDA_ERR_FAIL` (-3) -- "the error test failed repeatedly or with |h| = hmin" --
-  on the first step of the second run, whether the second run is a second
-  `runSolver()` or a second `initialize()`/`integrate()` pair, and whether or not
-  the first run completed.
+* **A second integration on the same `SystemSolver` now works**, and
+  `SolverLifecycleTests.cpp::a_second_integration_on_one_solver_matches_a_fresh_one`
+  pins it -- three consecutive `runSolver()` calls on one object, compared bit for
+  bit against a fresh solver. It used to fail with `IDA_ERR_FAIL` (-3) on the
+  first step of the second run. Two defects combined, and it needed both:
 
-  This is *not* a consequence of splitting `runSolver` into
-  `initialize`/`integrate`/`destroySundials`. It was verified against `main` at
-  `b7d8031` by building that tree in a worktree and calling `runSolver` twice on
-  one solver: it fails identically. Nothing had exercised it, because
-  `PyRunner::configure` builds a fresh `SystemSolver` every time
-  (`PyRunner.cpp:117`) and the standalone binary runs once and exits. The `ctx`
-  double-free that used to make a second run fail at `IDACreate` is a *different*,
-  already-fixed bug; fixing it moved the failure later rather than removing it.
+  * `id` was all zeros, so IDA was told the whole system was algebraic and
+    `IDA_YA_YDP_INIT` solved the wrong initialisation problem; and `IDACalcIC`'s
+    return value was discarded, so a failure there carried on into the time loop
+    from IDA's partial state. Since the algebraic components are in IDA's error
+    test and their error estimate is then independent of `h`, no step was small
+    enough to pass -- ten error-test failures, then `IDA_ERR_FAIL`. Both fixed in
+    `536d856`, which is *after* the note recording the failure was written
+    (`c9f175d`); nobody re-tested it.
+  * What made the second run differ from the first: `initialiseMatrices` filled
+    `RF_cellwise` and `L_global` at a hardcoded `t = 0.0` and `initialize()`
+    skips it when already initialised, so a re-initialise solved its initial
+    `dydt` out of the *previous run's final-time* boundary data. Those arrays are
+    now sized there and filled by `updateBoundaryConditions(t0)`.
 
-  `SolverLifecycleTests.cpp::initialize_can_be_called_again_after_destroy` pins
-  what does work -- allocating again on the same object, and rebuilding the
-  initial condition -- and stops short of the second time loop. Undiagnosed;
-  candidates are state a completed run leaves in `RF_cellwise` /
-  `updateBoundaryConditions`, and the `nc_output` time index.
+  The second defect is worth knowing about beyond this bug, for two reasons.
+  With the `id` fix alone the second run completed and looked right to any
+  reasonable tolerance -- it was off by 1.7e-10, which is why the pinning test
+  compares bit for bit rather than approximately. And the hardcoded `0.0` was
+  independently wrong for any run with `t0 != 0`;
+  `the_initial_condition_uses_boundary_data_at_t0` covers that separately,
+  because every other fixture in the tree starts at zero.
 
 * **`PhysicsCases/CurvedMirrorPlasma/` is excluded from the build.** It is
   unfinished (commit `c17fa42`, "start to add in curved stuff (doesn't

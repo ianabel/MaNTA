@@ -18,7 +18,7 @@
 #include "PyIntegrator.hpp"
 
 SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *transpSystem)
-    : grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars(transpSystem->getNumScalars()), nAux(transpSystem->getNumAux()), MXSolvers(Grid.getNCells()), y(nVars, grid, k, nScalars, nAux), dydt(nVars, grid, k, nScalars, nAux), yJac(nVars, grid, k, nScalars, nAux), dydtJac(nVars, grid, k, nScalars, nAux), problem(transpSystem)
+    : grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars(transpSystem->getNumScalars()), nAux(transpSystem->getNumAux()), y(nVars, grid, k, nScalars, nAux), dydt(nVars, grid, k, nScalars, nAux), yJac(nVars, grid, k, nScalars, nAux), dydtJac(nVars, grid, k, nScalars, nAux), problem(transpSystem)
 {
     if (SUNContext_Create(SUN_COMM_NULL, &ctx) < 0)
         throw std::runtime_error("Unable to allocate SUNDIALS Context, aborting.");
@@ -80,6 +80,17 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     resetCoeffs();
     if (!initialised)
         throw std::logic_error("setInitialConditions can only be called after initialising the matrices");
+
+    // The initial dydt below is solved out of the residual equation, which reads
+    // RF_cellwise and L_global -- the Dirichlet and Neumann boundary data. Both
+    // are functions of time, and nothing else has evaluated them at t0 yet:
+    // initialiseMatrices only sizes them, and on a *second* initialize() it is
+    // skipped entirely, so they would otherwise still hold whatever the previous
+    // run's last residual evaluation left behind -- its final-time boundary
+    // values. That made the initial condition of every run after the first
+    // subtly wrong, and was the difference that turned the once-broken
+    // IDACalcIC (see Solver.cpp) into a hard failure on the second run only.
+    updateBoundaryConditions(t0);
 
     if (problem->isRestarting())
     {
@@ -340,38 +351,19 @@ void SystemSolver::initialiseMatrices()
         C_cellwise.emplace_back(C);
         E_cellwise.emplace_back(E);
 
-        // To store the RHS
+        // To store the RHS. Sized and zeroed here; the boundary data that goes in
+        // it is *time dependent*, so filling it is updateBoundaryConditions's job
+        // and setInitialConditions calls that for t0 before reading it. This used
+        // to carry a third copy of that loop, evaluated at a hardcoded t = 0.0 --
+        // wrong for any run with t0 != 0, and stale on a second initialize(),
+        // where initialiseMatrices is skipped and RF_cellwise still held the
+        // previous run's final-time boundary values.
         RF_cellwise.emplace_back(nVars * 2 * (k + 1));
 
         // R is composed of parts of the values of
         // u on the total domain boundary
         // don't need to do RHS terms here, those are now in 'Sources'
-        // (should we double check that RF_cellwise[ i ] == RF_cellwise.back()?
         RF_cellwise[i].setZero();
-
-        for (Index var = 0; var < nVars; var++)
-        {
-            if (I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryDirichlet(var))
-            {
-                for (Eigen::Index j = 0; j < k + 1; j++)
-                {
-                    // < g_D , v . n > ~= g_D( x_0 ) * phi_j( x_0 ) * ( n_x = -1 )
-                    RF_cellwise[i](j + var * (k + 1)) += -y.getBasis().Evaluate(I, j, I.x_l) * (-1) * problem->LowerBoundary(var, 0.0);
-                    // < ( tau ) g_D, w >
-                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_l) * tau(I.x_l) * problem->LowerBoundary(var, 0.0);
-                }
-            }
-
-            if (I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(var))
-            {
-                for (Eigen::Index j = 0; j < k + 1; j++)
-                {
-                    // < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 )
-                    RF_cellwise[i](j + var * (k + 1)) += -y.getBasis().Evaluate(I, j, I.x_u) * (+1) * problem->UpperBoundary(var, 0.0);
-                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_u) * tau(I.x_u) * problem->UpperBoundary(var, 0.0);
-                }
-            }
-        }
 
         // For Neumann, need a structure more like
         // If (boundary cell)
@@ -492,14 +484,9 @@ void SystemSolver::initialiseMatrices()
 
         H_cellwise.emplace_back(H);
 
-        // Finally fill L
-        for (Index var = 0; var < nVars; var++)
-        {
-            if (I.x_l == grid.lowerBoundary() && /* is b.d. Neumann at lower boundary */ !problem->isLowerBoundaryDirichlet(var))
-                L_global(var * (nCells + 1) + i) += -problem->LowerBoundary(var, 0.0);
-            if (I.x_u == grid.upperBoundary() && /* is b.d. Neumann at upper boundary */ !problem->isUpperBoundaryDirichlet(var))
-                L_global(var * (nCells + 1) + i + 1) += problem->UpperBoundary(var, 0.0);
-        }
+        // L is the Neumann counterpart of RF_cellwise above, and equally time
+        // dependent: updateBoundaryConditions fills it. It was zeroed before the
+        // loop and stays zero until then.
 
         Eigen::MatrixXd X(nVars * (k + 1), nVars * (k + 1));
         X.setZero();
@@ -512,6 +499,12 @@ void SystemSolver::initialiseMatrices()
         }
         XMats.emplace_back(X);
     
+        // The solver for this cell's MX block, pre-sized so that the compute() in
+        // updateMatricesForJacSolve does not have to reallocate. This is the only
+        // place MXSolvers is sized: the constructor used to size it to nCells as
+        // well, so it ended up 2 * nCells long with the *default-constructed*
+        // entries at the front -- which are the ones every index reaches, making
+        // the pre-sizing here dead and the compute() reallocate after all.
         Eigen::Index nDof = nVars * SQU_DOF + nAux * AUX_DOF;
         MXSolvers.emplace_back( nDof, nDof );
     }
@@ -532,6 +525,13 @@ void SystemSolver::initialiseMatrices()
     initialised = true;
 }
 
+// Every per-cell container initialiseMatrices() appends to, so that calling it a
+// second time rebuilds rather than grows. That has to be *all* of them: the list
+// used to omit D_cellwise, CEBlocks and MXSolvers, so a second initialiseMatrices
+// left those three holding 2 * nCells entries with the stale ones at the front --
+// which is where every index into them lands. Only PrintDebugInfo() calls it
+// unguarded today, so nothing had reached it, but the coupling is invisible from
+// the append site. If you add a cellwise vector, add it here.
 void SystemSolver::clearCellwiseVecs()
 {
     XMats.clear();
@@ -540,12 +540,15 @@ void SystemSolver::clearCellwiseVecs()
     RF_cellwise.clear();
     A_cellwise.clear();
     B_cellwise.clear();
+    D_cellwise.clear();
     E_cellwise.clear();
     C_cellwise.clear();
     G_cellwise.clear();
     H_cellwise.clear();
     Csigma_cellwise.clear();
     Cq_cellwise.clear();
+    CEBlocks.clear();
+    MXSolvers.clear();
 }
 
 // Memory Layout for a sundials Y is, if i indexes the components of u / q / sigma
