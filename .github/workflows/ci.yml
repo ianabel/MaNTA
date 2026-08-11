@@ -32,13 +32,14 @@ jobs:
   #
   # fail-fast is off on purpose: when one compiler breaks, the others' results
   # are exactly what tells you whether it is a real bug or that compiler's
-  # opinion. Two legs can also fail for reasons that have nothing to do with this
-  # code, because their compiler comes from outside the runner image: g++-15 from
-  # the toolchain PPA, and clang++-21 from apt.llvm.org.
+  # opinion. Three legs can also fail for reasons that have nothing to do with this
+  # code, because their compiler comes from outside the runner image: g++-15 and
+  # g++-16 from the toolchain PPA, and clang++-21 from apt.llvm.org. The Eigen 5 leg
+  # makes four, for the same reason one step down: its Eigen comes from gitlab.
   #
-  # g++-14, clang++-19 and clang++-21 were each verified by hand --
+  # g++-14, g++-16, clang++-19 and clang++-21 were each verified by hand --
   # full build, both C++ suites, the pybind11 module and the Python suite -- before
-  # this matrix landed. g++-15 and clang++-20 were not, because neither is packaged
+  # being added here. g++-15 and clang++-20 were not, because neither is packaged
   # for the Debian box this was written on, so CI is their first real run.
   #
   # Read that claim narrowly. A local clang build is NOT the same test as the clang
@@ -50,8 +51,20 @@ jobs:
   # rejects before 14.4; see the comment in SystemSolver::setInitialConditions.
   # Testing against the *older* library is the point -- it is what finds this
   # class of bug -- so do not "fix" a leg by pulling in a newer libstdc++.
+  #
+  # The matrix has a second, sparse dimension: `eigen`. Unset means the distro's
+  # libeigen3-dev, which on noble is 3.4.0; set means that tagged release is
+  # fetched from gitlab and EIGEN_DIR points at it. MaNTA supports 3.4.x and
+  # 5.0.x, and the two differ enough to need guarding -- Eigen::all moved
+  # namespace and internal::SingleRange became a template -- but the difference is
+  # in Eigen, not in the compiler, so it gets *one* leg rather than a full cross
+  # product. If that leg fails while the others pass, Eigen is the variable.
+  #
+  # `label` exists so adding that leg does not rename the existing ones: the job
+  # name is part of a required-check name, and legs whose name changes stop
+  # counting as the check they used to be.
   build-and-test:
-    name: Build + tests (${{ matrix.cxx }})
+    name: Build + tests (${{ matrix.label || matrix.cxx }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -73,10 +86,17 @@ jobs:
           #                 guarded -- expect it to rot.
           - cxx: g++-14
             pkg: g++-14
-          # Not in the noble archive (which stops at g++-14), so this leg needs the
-          # toolchain PPA -- g++-15 there is 15.2.0-14ubuntu1~24~ppa1.
+          # Not in the noble archive (which stops at g++-14), so these two legs need
+          # the toolchain PPA -- g++-15 there is 15.2.0-14ubuntu1~24~ppa1 and
+          # g++-16 is 16-20260315-1ubuntu1~24~ppa1, a snapshot rather than a
+          # release. g++-16 is the compiler this tree is developed against, so it
+          # is the one leg where a warning that only the newest gcc emits will be
+          # found by CI rather than by whoever next runs a local build.
           - cxx: g++-15
             pkg: g++-15
+            ppa: ubuntu-toolchain-r/test
+          - cxx: g++-16
+            pkg: g++-16
             ppa: ubuntu-toolchain-r/test
           # The ubuntu-24.04 image itself carries only clang 16/17/18, but noble's
           # universe repo packages clang-19 (1:19.1.1) and clang-20 (1:20.1.2), so
@@ -90,6 +110,14 @@ jobs:
           - cxx: clang++-21
             pkg: clang-21
             llvm_version: '21'
+          # The Eigen 5 leg. On the baseline compiler deliberately: this leg exists
+          # to vary Eigen and nothing else, so g++-14 keeps it comparable with the
+          # first leg above. Pinned to the 5.0.1 tag rather than a branch, so the
+          # leg does not start failing because upstream master moved.
+          - cxx: g++-14
+            pkg: g++-14
+            eigen: 5.0.1
+            label: g++-14, Eigen 5.0.1
     steps:
       - uses: actions/checkout@v4
         with:
@@ -149,13 +177,38 @@ jobs:
         if: steps.cache-sundials.outputs.cache-hit != 'true'
         run: ./build_sundials
 
+      # Only for a leg that names an `eigen` version; the rest use libeigen3-dev,
+      # installed above. Header-only, so this is a download and an untar rather
+      # than a build, and not worth caching.
+      #
+      # The tag is checked after unpacking. A wrong or moved tag would otherwise
+      # give a perfectly green leg that silently tested the version it was meant
+      # to be an alternative to, which is the one failure this leg cannot afford.
+      - name: Install Eigen ${{ matrix.eigen }}
+        if: matrix.eigen != ''
+        run: |
+          wget -q "https://gitlab.com/libeigen/eigen/-/archive/${{ matrix.eigen }}/eigen-${{ matrix.eigen }}.tar.gz"
+          tar xzf "eigen-${{ matrix.eigen }}.tar.gz"
+          dir="$PWD/eigen-${{ matrix.eigen }}"
+          got=$(sed -n 's/^#define EIGEN_VERSION_STRING "\(.*\)"$/\1/p' "$dir/Eigen/Version")
+          if [ "$got" != "${{ matrix.eigen }}" ]; then
+            echo "::error::unpacked Eigen reports '$got', expected '${{ matrix.eigen }}'"
+            exit 1
+          fi
+          echo "Eigen $got in $dir"
+          echo "EIGEN_DIR=$dir" >> "$GITHUB_ENV"
+
+      # Unquoted heredoc, so EIGEN_DIR from the step above is substituted; it falls
+      # back to the distro headers for every other leg. matrix.cxx is expanded by
+      # Actions before the shell ever sees it either way.
       - name: Configure Makefile.local
         run: |
-          cat > Makefile.local <<'EOF'
+          cat > Makefile.local <<EOF
           CXX = ${{ matrix.cxx }}
           SUNDIALS_DIR = ./sundials/install
-          EIGEN_DIR = /usr/include/eigen3
+          EIGEN_DIR = ${EIGEN_DIR:-/usr/include/eigen3}
           EOF
+          cat Makefile.local
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -182,13 +235,14 @@ jobs:
 
       # One leg only: neither the generated stub nor the type check varies by
       # compiler, and running them five times would just be five ways to learn
-      # the same thing.
+      # the same thing. The Eigen version is excluded too, not just the compiler --
+      # there are two g++-14 legs now, and neither check varies by Eigen either.
       - name: Stubs are up to date
-        if: matrix.cxx == 'g++-14'
+        if: matrix.cxx == 'g++-14' && matrix.eigen == ''
         run: make stubs-check
 
       - name: Type check the manta package
-        if: matrix.cxx == 'g++-14'
+        if: matrix.cxx == 'g++-14' && matrix.eigen == ''
         run: make typecheck
 
       # Naming a prefix the compiler already searches must be a no-op. It was not:
