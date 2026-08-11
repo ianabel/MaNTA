@@ -120,6 +120,18 @@ Every SUNDIALS handle is a member, not a local, so those three can be split.
 `ctx` is the exception: it belongs to the `SystemSolver`, not to a run, and
 `destroySundials` must not touch it.
 
+**The three can be run again on the same object**, and a reused solver gives the
+same answer as a fresh one *bit for bit*. That is pinned by
+`a_second_integration_on_one_solver_matches_a_fresh_one`, at exactly zero
+tolerance, and the tolerance is the point: the last defect here left the second
+run completing, plausible, and wrong in the eleventh digit. Anything that reuses
+a solver — a `PyRunner` that stopped rebuilding one, an optimisation driver — is
+resting on that test, so do not relax it to something approximate. Note that
+`initialize` skips `initialiseMatrices` when `initialised` is already set, so
+anything that function computes *once* must either be genuinely run-independent or
+be refreshed per run; getting that wrong is what broke reuse before (see the
+`RF_cellwise` trap below).
+
 IDA is handed a **custom `SUNLinearSolver`** (`SunLinSolWrapper`) plus a
 **deliberately empty `SUNMatrix`** (`SunMatrixWrapper`) whose only job is to
 convince IDA it has a matrix-based direct solver; the Jacobian is never
@@ -141,6 +153,32 @@ answer — only slow Newton convergence**. That is why several defects in this a
 survived a passing regression suite for months, and why the tests that matter here
 are `SolveJacTests.cpp` (finite-difference the residual, require `J dy = g`) and
 `MMSConvergenceTests.cpp` (observed order of accuracy).
+
+**When IDA does give up, get its own account of the step before theorising.**
+SUNDIALS is built here with `SUNDIALS_LOGGING_LEVEL 4`, and `SUNContext_Create`
+builds its logger from the environment (`sundials_context.c` calls
+`SUNLogger_CreateFromEnv`), so
+
+```sh
+SUNLOGGER_INFO_FILENAME=/tmp/ida-info.log SUNLOGGER_DEBUG_FILENAME=/tmp/ida-debug.log ./MaNTA foo.conf
+```
+
+yields IDA's per-attempt record — step size, order, `dsm`, and whether the attempt
+died in the error test or the nonlinear solve — for no code change at all. Write it
+to a file rather than to `stderr` if a test is running, because `CapturedOutput`
+redirects the standard descriptors.
+
+Two return codes worth being able to read without looking them up:
+
+* **`IDA_ERR_FAIL` (-3) on the *first* step means the initial condition violates
+  the algebraic constraints.** It takes ten error-test failures in one step attempt
+  to produce it, and each one cuts `h`; a local error estimate that will not shrink
+  with `h` is the signature of an inconsistent state, because `IDASetSuppressAlg`
+  is never called and so `sigma`, `q`, `lambda` and `phi` are all in the error
+  test. Look at what `IDACalcIC` was given, not at the time loop.
+* **`IDA_CONV_FAIL` (-4) from `IDACalcIC`** is the same problem one stage earlier:
+  the Newton/linesearch could not reach a consistent state from the guess
+  `setInitialConditions` built. The guess is worth suspecting before the solver is.
 
 ### Superconvergence (`Superconvergent = true`)
 
@@ -433,6 +471,18 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
   then corrupts the heap. It cost an afternoon in `Postprocessing.cpp`, where the
   symptom was a SIGSEGV inside `free()` in an unrelated static's destructor.
   Assign to a `Matrix` first, then slice.
+* **`extern/autodiff` points at a fork, and `git submodule update --remote` would
+  silently undo that.** Upstream `autodiff/autodiff` specialises `VectorTraits` on
+  `Eigen::internal::SingleRange` as a plain type, which Eigen 5.0 made a template,
+  so upstream does not compile against Eigen 5 *at all* — and its `main` has not
+  moved since January 2025, i.e. predates Eigen 5. The submodule therefore tracks
+  `ianabel/autodiff` branch `eigen-5-singlerange`, which carries that one patch;
+  `.gitmodules` records why. Upstream PR autodiff/autodiff#397 is the thing to
+  watch: when it merges, point the submodule back and delete the fork. Until then
+  a plain `--remote` update reverts to a commit that cannot build with Eigen 5,
+  and the failure appears as a wall of template errors inside a third-party
+  header rather than as anything about submodules.
+
 * **Eigen 3.4.x and 5.0.x are both supported, and `EIGEN_VERSION_AT_LEAST` cannot
   tell them apart.** Eigen 5.0 moved to semver by keeping `EIGEN_WORLD_VERSION` at
   3 forever and renumbering the rest, so `EIGEN_MAJOR_VERSION` went 4 -> 5 and the
@@ -466,7 +516,11 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
   the already-computed release `CXXFLAGS`, which is why the `coverage` target
   runs `env -u CXXFLAGS -u LDFLAGS $(MAKE) COVERAGE=on`.
 * **gcc and clang do not diagnose the same things, so build with clang
-  occasionally** — that is what CI's clang matrix legs are for. gcc never
+  occasionally** — that is what CI's clang matrix legs are for. (CI is seven
+  `build-and-test` legs: g++-14/15/16 and clang++-19/20/21 against the distro's
+  Eigen 3.4.0, plus g++-14 against Eigen 5.0.1; then a Fedora container job that
+  only *compiles*, to keep the build's notions of a system prefix — `/usr/lib64`,
+  pkg-config-discovered netCDF — from quietly becoming Ubuntu-specific.) gcc never
   diagnoses a polymorphic base with a non-virtual destructor; clang does
   (`-Wdelete-non-abstract-non-virtual-dtor`), and it reports it at the point of
   *destruction* inside libstdc++, once per instantiating translation unit, which
