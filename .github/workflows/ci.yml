@@ -270,6 +270,103 @@ jobs:
           make Config.o NETCDF_DIR=/usr
           rm -f Config.o
 
+  # A non-Debian distro, in a container, to check that the build's assumptions about
+  # where a system installation puts things are actually assumptions about POSIX and
+  # not about Ubuntu. Two are worth naming:
+  #
+  #   - Fedora puts libraries in /usr/lib64. Makefile.config's `syslibdir` picks
+  #     lib or lib64 by testing which one holds the library, and until now nothing
+  #     exercised the lib64 side of that; every other leg is multiarch Debian.
+  #   - netCDF is found through pkg-config here, with NETCDF_DIR unset, and the
+  #     Fedora .pc files are laid out differently from noble's.
+  #
+  # Compilation only, deliberately -- `make MaNTA` and `make python`, no suites.
+  # The point is to find configuration that is wrong outside Debian, and running
+  # the numerics as well would add failure modes (a differently-tuned BLAS, say)
+  # that say nothing about that. The other seven legs cover behaviour.
+  #
+  # `make python` is in scope because it is the only translation unit that pulls in
+  # Eigen's SparseCore, which is where -isystem mistakes surface (see CLAUDE.md).
+  #
+  # This is a separate job rather than another entry in build-and-test because it
+  # shares almost none of that job's steps: dnf rather than apt, no sudo, no
+  # setup-python, and git has to exist *before* actions/checkout or the submodules
+  # are silently skipped. It carries its own one-element matrix so a second distro
+  # is one line.
+  #
+  # Unverified locally -- there is no container runtime on the box this was written
+  # on -- so CI is its first real run, exactly as for g++-15 and clang++-20 above.
+  compile-on-other-distros:
+    name: Compile (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: fedora:latest
+    container: ${{ matrix.image }}
+    steps:
+      # Before the checkout, and the reason this job cannot just reuse the matrix
+      # above. actions/checkout falls back to downloading a tarball through the REST
+      # API when git is missing, and that path cannot fetch submodules -- so the
+      # build would fail much later, on a missing toml11 header, with nothing
+      # pointing at the real cause.
+      - name: Install git, so the checkout can fetch submodules
+        run: dnf -y install --setopt=install_weak_deps=False git
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          dnf -y install --setopt=install_weak_deps=False \
+            gcc-c++ cmake make wget tar gzip \
+            boost-devel \
+            eigen3-devel \
+            netcdf-devel netcdf-cxx4-devel \
+            blas-devel \
+            python3-devel
+          # Diagnostics only -- which Eigen Fedora shipped is the interesting
+          # part, and it moved header between 3.4 and 5.0. `|| true` because run
+          # steps use `bash -e` and grep exits non-zero on no match, which would
+          # fail the step over a log line.
+          echo "--- versions ---"
+          g++ --version | head -1
+          grep -rhE 'define EIGEN_(WORLD|MAJOR|MINOR|PATCH)_VERSION' \
+            /usr/include/eigen3/Eigen/src/Core/util/Macros.h \
+            /usr/include/eigen3/Eigen/Version 2>/dev/null || true
+
+      # A key of its own: this SUNDIALS is built in a Fedora container against a
+      # different libc and libstdc++ from the ubuntu legs', and the two must not
+      # restore each other's.
+      - name: Cache SUNDIALS
+        id: cache-sundials
+        uses: actions/cache@v4
+        with:
+          path: sundials/install
+          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ matrix.image }}
+
+      - name: Build SUNDIALS
+        if: steps.cache-sundials.outputs.cache-hit != 'true'
+        run: ./build_sundials
+
+      # NETCDF_DIR deliberately unset, so Makefile.config asks pkg-config.
+      - name: Configure Makefile.local
+        run: |
+          cat > Makefile.local <<'EOF'
+          CXX = g++
+          SUNDIALS_DIR = ./sundials/install
+          EIGEN_DIR = /usr/include/eigen3
+          EOF
+          cat Makefile.local
+
+      - name: Build solver
+        run: make MaNTA -j$(nproc)
+
+      - name: Build Python module
+        run: make python -j$(nproc)
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
