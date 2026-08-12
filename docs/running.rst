@@ -160,15 +160,36 @@ condition and integrating:
      - Frees all of it. Idempotent, and safe to call with no preceding
        ``initialize``.
 
-.. warning::
+Reusing a solver
+~~~~~~~~~~~~~~~~
 
-   **A second integration on the same solver object does not work.** ``IDASolve``
-   fails with ``IDA_ERR_FAIL`` on the first step of the second run. Calling
-   ``initialize`` again after ``destroySundials`` *does* work and rebuilds the
-   initial condition; it is completing a second time loop that fails. This is
-   undiagnosed. It does not affect the Python ``Runner``, whose ``configure``
-   builds a fresh solver every time, which is exactly why the loop-over-runs
-   pattern in the optimisation drivers is safe.
+**The three phases can be run again on the same object**, and a reused solver
+gives the same answer a fresh one would — *bit for bit*. That is pinned by
+``a_second_integration_on_one_solver_matches_a_fresh_one`` in
+``Tests/UnitTests/SolverLifecycleTests.cpp``, at exactly zero tolerance.
+
+The tolerance is the point rather than a flourish. A second integration used to
+fail outright, with ``IDASolve`` returning ``IDA_ERR_FAIL`` on its first step,
+and two defects had to combine to produce it: ``id`` was left all zeros, so IDA
+was told the whole system was algebraic and ``IDACalcIC``'s return value was
+discarded when it failed; and ``initialiseMatrices``, which ``initialize`` skips
+when it has already run, filled the boundary arrays at a hardcoded
+:math:`t = 0`, so a second run solved its initial :math:`\mathrm{d}y/\mathrm{d}t`
+out of the *previous* run's final-time boundary values. Once the first was
+fixed, the second run completed and looked right — and was wrong in the eleventh
+digit. An approximate comparison would not have caught it.
+
+.. note::
+
+   Anything that reuses a solver rests on that test, so do not relax it to
+   something approximate. Note also that ``initialize`` skips
+   ``initialiseMatrices`` when the solver is already initialised: anything that
+   function computes *once* must either be genuinely run-independent or be
+   refreshed per run.
+
+The Python ``Runner`` is unaffected either way — ``configure`` builds a fresh
+solver every time — which is why the loop-over-runs pattern in the optimisation
+drivers was always safe.
 
 If you hold on to the solution after a run, note that the object mapping the
 live SUNDIALS vector dangles once the run is freed; the separately owned
