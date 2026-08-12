@@ -14,6 +14,10 @@ python3 -m venv /tmp/docsvenv
 /tmp/docsvenv/bin/sphinx-build -W -b html docs docs/_build/html
 ```
 
+Configuration keys are declared once, in `ConfigSchema.cpp`, and read from there by
+both the config file and `Runner.configure`; `./MaNTA --list-options` prints the
+current list with types, defaults and a line of description for each.
+
 ## Getting Started
 
 You will need to download this codebase and compile it in order to run MaNTA
