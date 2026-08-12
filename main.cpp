@@ -1,6 +1,7 @@
 
 #include <string>
 #include <print>
+#include <stdexcept>
 
 int runManta( std::string const& );
 
@@ -15,5 +16,17 @@ int main( int argc, char** argv )
 		return 1;
 	}
 
-	return runManta( fname );
+	// runManta lets a bad configuration propagate, so that `manta.run()` raises
+	// in Python rather than returning a code a caller can ignore. On the command
+	// line that would reach std::terminate and print nothing useful, so it is
+	// caught here and reported as one line.
+	try
+	{
+		return runManta( fname );
+	}
+	catch ( std::exception const &e )
+	{
+		std::println(stderr, "ERROR: {}", e.what());
+		return 1;
+	}
 }

@@ -46,7 +46,7 @@ ConfigSchema::Value TomlConfigSource::get(std::string_view key, Type t) const
     auto const &node = config.at(std::string(key));
     auto bad = [&](const char *wanted) {
         return std::invalid_argument("Configuration key '" + std::string(key) +
-                                     "' must be a " + wanted + ".");
+                                     "' must be " + wanted + ".");
     };
 
     switch (t)
@@ -120,7 +120,7 @@ ConfigSchema::Value TomlConfigSource::get(std::string_view key, Type t) const
         return out;
     }
     }
-    throw bad("recognised type");
+    throw bad("of a recognised type");
 }
 
 // --- loadSolverConfig -------------------------------------------------------
@@ -283,6 +283,10 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     // always available on the surface where a file exists. Keying this on the
     // reader rather than on the emptiness of the fallback is what keeps the
     // message ("no config file to take a name from") true wherever it fires.
+    // The schema marks OutputFilename required for the dict reader, so an
+    // *absent* key is already reported alongside every other missing one --
+    // reporting it separately here would mean fixing a config one key per run.
+    // This catches the remaining case: the key given, but empty.
     if (reader == Reader::Dict && c.OutputFilename.empty())
         throw std::invalid_argument(
             "Missing required configuration key: OutputFilename -- there is no "

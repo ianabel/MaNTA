@@ -37,7 +37,7 @@ const std::vector<Entry> &table()
          "Interval between output timeslices."},
         {"t_initial", {"tZero"}, Type::Double, Category::Solver, false, false, 0.0,
          "Time the integration starts from."},
-        {"t_final", {}, Type::Double, Category::Solver, false, false, 0.0,
+        {"t_final", {}, Type::Double, Category::Solver, true, false, 0.0,
          "Time the integration ends at; Runner.run(tFinal) overrides it."},
         {"Relative_tolerance", {}, Type::Double, Category::Solver, false, false, 1e-3,
          "IDA relative error tolerance."},
@@ -50,7 +50,7 @@ const std::vector<Entry> &table()
          "First timestep to attempt; zero lets IDA choose."},
         {"OutputPoints", {}, Type::Int, Category::Solver, false, false, 301,
          "Number of spatial points written to the output files."},
-        {"OutputFilename", {}, Type::String, Category::Solver, false, false, std::string{},
+        {"OutputFilename", {}, Type::String, Category::Solver, false, true, std::string{},
          "Base name for output files; defaults to the config file's stem."},
         {"solveAdjoint", {}, Type::Bool, Category::Solver, false, false, false,
          "Build the adjoint problem and solve for dG/dp after the integration."},
@@ -157,15 +157,18 @@ const char *typeName(Type t)
 {
     switch (t)
     {
-    case Type::Bool:       return "boolean";
-    case Type::Int:        return "integer";
-    case Type::UInt:       return "non-negative integer";
-    case Type::Double:     return "number";
-    case Type::String:     return "string";
-    case Type::DoubleList: return "number, or array of numbers";
-    case Type::StringList: return "array of strings";
+    // The article is part of the name: the callers splice this straight into
+    // "Configuration key 'X' must be ...", and picking a/an at the call site
+    // got "a integer" wrong.
+    case Type::Bool:       return "a boolean";
+    case Type::Int:        return "an integer";
+    case Type::UInt:       return "a non-negative integer";
+    case Type::Double:     return "a number";
+    case Type::String:     return "a string";
+    case Type::DoubleList: return "a number, or an array of numbers";
+    case Type::StringList: return "an array of strings";
     }
-    return "unknown";
+    return "of an unrecognised type";
 }
 
 } // namespace ConfigSchema

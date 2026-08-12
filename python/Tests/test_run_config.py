@@ -266,12 +266,12 @@ def test_a_missing_restart_file_returns_one(tmp_path):
 
 
 def test_a_non_integer_polynomial_degree_is_rejected(tmp_path):
-    with pytest.raises(ValueError, match="Polynomial_degree must be specified"):
+    with pytest.raises(ValueError, match="Polynomial_degree.*must be a non-negative integer"):
         MaNTA.run(write_config(tmp_path, Polynomial_degree="2.5"))
 
 
 def test_a_non_integer_grid_size_is_rejected(tmp_path):
-    with pytest.raises(ValueError, match="Grid_size must be specified"):
+    with pytest.raises(ValueError, match="Grid_size.*must be an integer"):
         MaNTA.run(write_config(tmp_path, Grid_size="6.0"))
 
 
@@ -283,31 +283,31 @@ def test_a_small_grid_with_dense_boundaries_is_rejected(tmp_path):
 
 @pytest.mark.parametrize("key", ["Lower_boundary", "Upper_boundary"])
 def test_a_non_numeric_boundary_is_rejected(tmp_path, key):
-    with pytest.raises(ValueError, match=f"{key} specified incorrectly"):
+    with pytest.raises(ValueError, match=f"{key}.*must be a number"):
         MaNTA.run(write_config(tmp_path, **{key: '"not a number"'}))
 
 
 def test_a_missing_transport_system_is_rejected(tmp_path):
-    with pytest.raises(ValueError, match="TransportSystem needs to specified"):
+    with pytest.raises(ValueError, match="Missing required configuration key.*TransportSystem"):
         MaNTA.run(write_config(tmp_path, drop=("TransportSystem",)))
 
 
 @pytest.mark.parametrize("key", ["delta_t", "t_final"])
 def test_a_missing_required_float_is_named(tmp_path, key):
     """getFloat has no default to fall back on, so it says which key is absent."""
-    with pytest.raises(ValueError, match=f"{key} was not specified"):
+    with pytest.raises(ValueError, match=f"Missing required configuration key.*{key}"):
         MaNTA.run(write_config(tmp_path, drop=(key,)))
 
 
 @pytest.mark.parametrize("key", ["tau", "Relative_tolerance", "MinStepSize"])
 def test_a_non_numeric_optional_float_is_named(tmp_path, key):
-    with pytest.raises(ValueError, match=f"{key} specified incorrectly"):
+    with pytest.raises(ValueError, match=f"{key}.*must be a number"):
         MaNTA.run(write_config(tmp_path, **{key: '"text"'}))
 
 
 def test_a_non_integer_output_point_count_is_rejected(tmp_path):
     """getIntWithDefault takes integers only -- 301.0 is not one."""
-    with pytest.raises(ValueError, match="OutputPoints specified incorrectly"):
+    with pytest.raises(ValueError, match="OutputPoints.*must be an integer"):
         MaNTA.run(write_config(tmp_path, OutputPoints="301.0"))
 
 

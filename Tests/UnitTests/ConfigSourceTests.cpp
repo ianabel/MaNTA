@@ -263,4 +263,80 @@ BOOST_AUTO_TEST_CASE(an_explicit_output_filename_wins_over_the_stem)
     BOOST_TEST(c.OutputFilename == "chosen");
 }
 
+// The test this whole change exists for.
+//
+// Two sources carrying the same configuration must produce the same
+// SolverConfig, field for field. Every drift that prompted this work -- two
+// names for the initial time, two defaults for Absolute_tolerance, four keys on
+// one side only -- would have failed here.
+//
+// MapConfigSource stands in for the dict: DictConfigSource needs pybind11 and
+// cannot link into these tests, and what matters is not pybind's casting but
+// the shared machinery above it. python/Tests/test_run_config.py covers the
+// real dict.
+BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
+{
+    const std::string body = minimal +
+        "tau = 2.5\n"
+        "Relative_tolerance = 1e-6\n"
+        "Absolute_tolerance = [1e-7, 1e-8]\n"
+        "t_initial = 0.25\n"
+        "OutputPoints = 51\n"
+        "Superconvergent = true\n"
+        "AggressiveTimesteps = true\n"
+        "zeroFlux = true\n"
+        "WriteOutput = false\n"
+        "SteadyStateTolerance = 1e-5\n"
+        "OutputFilename = \"shared\"\n";
+
+    auto v = toml::parse_str(body);
+    TomlConfigSource toml_src(v, "/tmp/ignored.conf");
+    auto fromToml = loadSolverConfig(toml_src, ConfigSchema::Reader::Toml);
+
+    // Each entry must hold exactly the alternative the schema declares --
+    // MapConfigSource returns the variant as stored rather than converting, so
+    // `8` and `8u` are not interchangeable here.
+    MapConfigSource map_src;
+    map_src.values = {
+        {"Polynomial_degree", 2u}, {"Grid_size", 8}, {"delta_t", 0.1},
+        {"t_final", 1.0}, {"Lower_boundary", 0.0}, {"Upper_boundary", 1.0},
+        {"tau", 2.5}, {"Relative_tolerance", 1e-6},
+        {"Absolute_tolerance", std::vector<double>{1e-7, 1e-8}},
+        {"t_initial", 0.25}, {"OutputPoints", 51},
+        {"Superconvergent", true}, {"AggressiveTimesteps", true},
+        {"zeroFlux", true}, {"WriteOutput", false},
+        {"SteadyStateTolerance", 1e-5}, {"OutputFilename", std::string("shared")},
+    };
+    auto fromMap = loadSolverConfig(map_src, ConfigSchema::Reader::Dict);
+
+    BOOST_TEST(fromToml.Polynomial_degree == fromMap.Polynomial_degree);
+    BOOST_TEST(fromToml.Grid_size == fromMap.Grid_size);
+    BOOST_TEST(fromToml.delta_t == fromMap.delta_t);
+    BOOST_TEST(fromToml.tau == fromMap.tau);
+    BOOST_TEST(fromToml.t_initial == fromMap.t_initial);
+    BOOST_TEST(fromToml.Relative_tolerance == fromMap.Relative_tolerance);
+    BOOST_TEST(fromToml.Absolute_tolerance == fromMap.Absolute_tolerance,
+               boost::test_tools::per_element());
+    BOOST_TEST(fromToml.OutputPoints == fromMap.OutputPoints);
+    BOOST_TEST(fromToml.OutputFilename == fromMap.OutputFilename);
+    BOOST_TEST(fromToml.Superconvergent == fromMap.Superconvergent);
+    BOOST_TEST(fromToml.AggressiveTimesteps == fromMap.AggressiveTimesteps);
+    BOOST_TEST(fromToml.zeroFlux == fromMap.zeroFlux);
+    BOOST_TEST(fromToml.WriteOutput == fromMap.WriteOutput);
+    BOOST_TEST(fromToml.MinStepSize == fromMap.MinStepSize);
+    BOOST_TEST(fromToml.initialTimestep == fromMap.initialTimestep);
+    BOOST_TEST(fromToml.WriteDatFile == fromMap.WriteDatFile);
+    BOOST_TEST(fromToml.WriteDebugDatFiles == fromMap.WriteDebugDatFiles);
+    BOOST_TEST(fromToml.Lower_boundary == fromMap.Lower_boundary);
+    BOOST_TEST(fromToml.Upper_boundary == fromMap.Upper_boundary);
+    BOOST_TEST(fromToml.restart == fromMap.restart);
+    BOOST_TEST(fromToml.solveAdjoint == fromMap.solveAdjoint);
+    BOOST_REQUIRE(fromToml.SteadyStateTolerance.has_value());
+    BOOST_REQUIRE(fromMap.SteadyStateTolerance.has_value());
+    BOOST_TEST(*fromToml.SteadyStateTolerance == *fromMap.SteadyStateTolerance);
+    BOOST_REQUIRE(fromToml.t_final.has_value());
+    BOOST_REQUIRE(fromMap.t_final.has_value());
+    BOOST_TEST(*fromToml.t_final == *fromMap.t_final);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

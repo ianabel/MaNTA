@@ -43,25 +43,19 @@ int runManta(std::string const &fname)
 	const auto configFile = toml::parse(fname);
 	const auto configuration = toml::find<toml::value>(configFile, "configuration");
 
-	SolverConfig config;
-	try
-	{
-		TomlConfigSource source(configuration, fname);
-		config = loadSolverConfig(source, ConfigSchema::Reader::Toml);
-	}
-	catch (std::invalid_argument const &e)
-	{
-		logmsg<LOG_LEVEL::ERROR>("{}", e.what());
-		return 1;
-	}
+	// Deliberately not wrapped in a try/catch. A bad configuration has always
+	// propagated out of here: pybind translates it for `manta.run()`, so a
+	// Python caller gets an exception rather than a return code it can ignore,
+	// and main() catches it for the command line.
+	TomlConfigSource source(configuration, fname);
+	SolverConfig config = loadSolverConfig(source, ConfigSchema::Reader::Toml);
 
-	// Required of a config file, but not of a dict -- a Runner is told the end
-	// time by run(tFinal). The schema records the key; the requirement is here.
+	// t_final is required of a config file and not of a dict -- a Runner is told
+	// the end time by run(tFinal) -- which the schema records per reader, so
+	// loadSolverConfig has already reported it alongside any other missing key
+	// rather than in a message of its own.
 	if (!config.t_final)
-	{
-		logmsg<LOG_LEVEL::ERROR>("Missing required configuration key: t_final.");
-		return 1;
-	}
+		throw std::logic_error("t_final is required of the TOML reader but was not set.");
 
 	netCDF::NcFile restart_file;
 	if (config.restart)
