@@ -65,10 +65,13 @@ Module contents
    * - Method
      - Does
    * - ``configure(problem, dict)``
-     - Builds a **fresh** solver and applies the settings. The parameter table is
-       in :ref:`config-divergences` — it is not identical to the TOML keys.
+     - Builds a **fresh** solver and applies the settings. The keys are the ones
+       a config file uses — both read one schema; see :ref:`config-divergences`
+       for the two deliberate exceptions.
    * - ``run(tFinal)``
      - Integrates to ``tFinal``.
+   * - ``run()``
+     - Integrates to the configuration's ``t_final``; an error if it had none.
    * - ``run_ss()``
      - Integrates until :math:`\mathrm{d}y/\mathrm{d}t` falls below
        ``SteadyStateTolerance``.

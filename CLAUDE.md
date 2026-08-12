@@ -31,6 +31,8 @@ make clean                # also sweeps orphaned PhysicsCases/*.o and .d files,
 make clean_data           # run output (.nc/.restart.nc/.dat) at the root and in
                           # Tests/RegressionTests, python/Tests/ and each
                           # directory under python-examples/
+
+./MaNTA --list-options    # every configuration key, straight from ConfigSchema.cpp
 ```
 
 The regression and Python suites need `requirements.txt` installed and the
@@ -181,6 +183,63 @@ Two return codes worth being able to read without looking them up:
 * **`IDA_CONV_FAIL` (-4) from `IDACalcIC`** is the same problem one stage earlier:
   the Newton/linesearch could not reach a consistent state from the guess
   `setInitialConditions` built. The guess is worth suspecting before the solver is.
+
+### Configuration
+
+**Every key MaNTA accepts is declared once**, in `ConfigSchema.cpp`: canonical
+name, deprecated aliases, type, category, per-reader requiredness, default and a
+line of documentation. `./MaNTA --list-options` prints the table. There used to
+be two — `runManta` open-coded ~120 lines of `toml::find_or`, `PyRunner::configure`
+carried its own `params` list — and they had drifted: two names for the initial
+time (`t_initial`/`tZero`), two defaults for `Absolute_tolerance` (`1e-2` against
+`1e-3`), and six keys that existed on one surface only. Nothing reported any of
+it, and `docs/configuration.rst` carried a hand-maintained table of the
+differences.
+
+The path is `ConfigSource` -> `loadSolverConfig` -> `SolverConfig` -> `makeGrid`
+and `applySolverConfig`. `ConfigSource` is the only piece that differs between
+the surfaces: `TomlConfigSource` (in `SolverConfig.cpp`) and `DictConfigSource`
+(in `PyConfigSource.hpp`). What to know before editing any of it:
+
+* **`ConfigSchema.hpp`, `SolverConfig.hpp` and their `.cpp` files must stay
+  pybind11-free.** They link into `MaNTA`, `libmanta.so` and `Tests/UnitTests`.
+  `DictConfigSource` is the python-side half and lives in a header `PyRunner.cpp`
+  alone includes. Neither header is in `INSTALL_HEADERS`, and neither belongs
+  there: an out-of-tree case is handed the parsed `toml::value` and reads its own
+  table through toml11, never through the solver's schema.
+* **`applySolverConfig` is the single point at which a configuration reaches the
+  solver.** That is what stops the two surfaces configuring differently, and it
+  is also why a `set*` call dropped from it un-configures *both* at once, where
+  the same slip used to cost one. `both_sources_produce_the_same_solver_config`
+  compares `SolverConfig`s, not solvers, so it would not notice.
+* **`Category` and `Reader` are two different enums.** `Category` says what a key
+  *is* (`Solver`, `ProblemSelection`, `Cli`); `Reader` says who is asking
+  (`Toml`, `Dict`). Requiredness differs by reader for exactly three keys:
+  `t_final` and `TransportSystem` are required of a config file only,
+  `OutputFilename` of a dict only — a file falls back to its own stem.
+* **Presence, not value, is the signal for `t_final` and `SteadyStateTolerance`**,
+  which are `std::optional` in `SolverConfig`. A present `SteadyStateTolerance`
+  arms steady-state termination on both surfaces; `run_ss()` arms it regardless,
+  falling back to `1e-3`. `Runner.run()` with no argument uses `t_final`, and
+  `run(tFinal)` overrides it.
+* **An unknown key is an error, with the nearest schema entry suggested.** The
+  sweep sees `[configuration]` only — a physics case's own table is read by the
+  case and checked against nothing. The three `PythonModule*` keys are in the
+  schema as `Category::Cli` purely so the eight config files carrying them are
+  not rejected; the solver never reads them. Conversely `TransportSystem` and
+  `PhysicsPlugins` are `Category::ProblemSelection` and are an *error* in a dict,
+  rather than being accepted and ignored.
+* **Configuration errors propagate.** `loadSolverConfig` throws
+  `std::invalid_argument`, which pybind maps to `ValueError` for `manta.run()`;
+  `main()` catches it and prints one line for the command line.
+  `PyRunner::configure` re-throws it as `std::runtime_error` so that surface goes
+  on raising `RuntimeError`, which is what it always has. "Could not start"
+  conditions — no such config file, an unknown `TransportSystem`, an unopenable
+  restart file — still make `runManta` log and return 1.
+* **The naming style is deliberately not unified.** `delta_t`, `MinStepSize` and
+  `solveAdjoint` keep their inconsistent spellings; only the two genuine name
+  *conflicts* were resolved, because regularising the rest would churn every
+  config file in the tree for no functional gain.
 
 ### Superconvergence (`Superconvergent = true`)
 
@@ -672,9 +731,17 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
   `Tests/README.md`. Nothing in the tree notices a `t0` error, because every
   fixture starts at zero, so `the_initial_condition_uses_boundary_data_at_t0` is
   the only thing standing between that and a silent return.
-* **Output filenames come from the config file's *stem*** (`Solver.cpp` uses
-  `inputFilePath.stem()`), so `.nc` / `.dat` / `.restart.nc` land in the current
-  directory regardless of any path in `OutputFilename`.
+* **`OutputFilename` names the output, and only its *basename* survives.**
+  `loadSolverConfig` fills it from the config file's stem when the key is absent,
+  so a run still defaults to `myrun.conf` -> `myrun.nc`; `Solver.cpp` then takes
+  `inputFilePath.filename()` of it. `filename()`, **not** `stem()`: the value it
+  is given is already a base name, and stemming it a second time would turn
+  `run.v2.conf` into `run.nc`. The directory part is dropped, so `.nc` / `.dat` /
+  `.restart.nc` still land in the current directory whatever path
+  `OutputFilename` carries — `OutputFilename = "runs/case7"` writes `./case7.nc`.
+  That is pinned by `test_output_filename_keeps_only_the_basename`, which records
+  it as behaviour to change deliberately rather than by accident. An explicit
+  `RestartFile` is *not* filtered that way and is opened as given.
 * **Not every `.nc` in the tree is output.** `clean_data` sweeps generated data
   from the directories in `CLEAN_DATA_DIRS`, sparing `*.ref.nc` / `*.ref.dat`.
   `Tests/UnitTests` is deliberately absent: its data files are tracked test
@@ -696,11 +763,16 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
   rather than `k+1`, so `SystemSolver::print` picks its basis and stride from the
   flag; hardcoding `k+1` there reads across cell boundaries.
 * **netCDF is the default output; the `.dat` files are opt-in.** A run writes
-  `<stem>.nc` and `<stem>.restart.nc` unconditionally. The plain-text gnuplot
-  output needs `WriteDatFile = true`, and `<stem>.dydt.dat` / `<stem>.res.dat`
-  need `WriteDebugDatFiles = true` *and* a `PHYSICS_DEBUG` build. Both options
-  default to false and are accepted by `runManta` and `PyRunner::configure`
-  alike.
+  `<stem>.nc` and `<stem>.restart.nc` unless `WriteOutput = false`, which gates
+  every netCDF and restart write in `Solver.cpp`. The plain-text gnuplot output
+  needs `WriteDatFile = true`, and `<stem>.dydt.dat` / `<stem>.res.dat` need
+  `WriteDebugDatFiles = true` *and* a `PHYSICS_DEBUG` build. Those two are
+  deliberately **not** nested under `WriteOutput`: they are opt-in already, so a
+  config asking only for `WriteDatFile` gets it. All three are accepted by
+  `runManta` and `PyRunner::configure` alike — `WriteOutput` was read into an
+  unused local on the Python side and read by nothing at all on the TOML side
+  until the schema landed, while nine test call sites passed `WriteOutput: False`
+  and went on writing the files they believed they had suppressed.
 * **Tests reach private `SystemSolver` members** through `MANTA_TEST_PRIVATE`,
   which a `-DTEST` build widens to `public`. No friend declarations needed.
 * **The extension's ABI suffix comes from `PYTHON_CONFIG`, and the venv need not

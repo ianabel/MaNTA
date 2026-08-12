@@ -348,7 +348,10 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
   py::class_<PyRunner, py::smart_holder>(m, "Runner")
       .def(py::init<std::shared_ptr<TransportSystem>>())
       .def("configure", &PyRunner::configure)
-      .def("run", &PyRunner::run)
+      // Two overloads: run(tFinal) is the usual way in, run() uses the
+      // configuration's t_final -- the same key a config file must carry.
+      .def("run", static_cast<void (PyRunner::*)(double)>(&PyRunner::run))
+      .def("run", static_cast<void (PyRunner::*)()>(&PyRunner::run))
       .def("run_ss", &PyRunner::run_ss)
       .def("wasRejected", &PyRunner::wasRejected)
       .def("lastDGdt", &PyRunner::lastDGdt)

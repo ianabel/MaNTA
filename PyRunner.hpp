@@ -6,6 +6,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <optional>
 #include <string_view>
 #include <variant>
 
@@ -43,6 +44,8 @@ public:
 
   // Runs solver to time tFinal
   void run(double tFinal);
+  // Runs to the configuration's t_final. Throws if it had none.
+  void run();
 
   // Runs solver to steady state
   void run_ss(void);
@@ -93,6 +96,12 @@ private:
 
   bool configured = false;
   double steady_state_tolerance;
+
+  // t_final from the configuration, if it had one. A dict need not carry it --
+  // run(tFinal) is the usual way in, and a driver legitimately runs one
+  // configuration to many end times -- so run() with no argument is what needs
+  // it, and says so when it is absent.
+  std::optional<double> configured_t_final;
 };
 
 #endif
