@@ -2,10 +2,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import manta as MaNTA
-from JAXAdjointProblem import JAXAdjointProblem
+from .adjoint_problem import JAXAdjointProblem
 from typing import NamedTuple, Any
 from functools import partial
-from State import Physics_Decorator, State
+from .state import Physics_Decorator, State
 from abc import abstractmethod
 import equinox as eqx
 

@@ -1,8 +1,10 @@
 import enum
-import os
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".9"
+
+# The three os.environ writes that used to sit here -- TF_CPP_MIN_LOG_LEVEL,
+# HDF5_USE_FILE_LOCKING and XLA_PYTHON_CLIENT_MEM_FRACTION -- moved out to the
+# drivers under python-examples/ when this became library code. Process-wide
+# policy set as a side effect of importing a library is a trap: it applies to
+# every caller, including ones that wanted the opposite.
 import jax
 import manta as MaNTA
 import jax.numpy as jnp

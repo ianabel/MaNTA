@@ -4,7 +4,7 @@ import equinox as eqx
 import manta as MaNTA
 from functools import partial
 
-from State import State, MaNTA_Decorator, Physics_Decorator
+from .state import State, MaNTA_Decorator, Physics_Decorator
 
 from jax.flatten_util import ravel_pytree
 

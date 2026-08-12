@@ -3,7 +3,7 @@ import jax
 from jaxtyping import Array, ArrayLike, Float, Int
 import jax.numpy as jnp
 import numpy as np
-from Integrator import Integrator
+from .integrator import Integrator
 
 """
 Wrapper class for MaNTA State

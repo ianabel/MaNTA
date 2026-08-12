@@ -1,10 +1,7 @@
 from typing import NamedTuple
-import sys
-sys.path.insert(0, '../')  # To find MaNTA module
 
 import manta as MaNTA
-from JAXTransportSystem import JAXTransportSystem
-from JAXAdjointProblem import JAXAdjointProblem
+from manta.jax import JAXTransportSystem, JAXAdjointProblem
 import jax.numpy as jnp
 
 class LinearDiffusionParams(NamedTuple):

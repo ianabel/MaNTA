@@ -1,14 +1,11 @@
-import os
-os.environ['JAX_PLATFORM_NAME'] = 'cpu'
-
 import jax
-import jax.numpy as jnp
 import numpy as np
 import manta as MaNTA
-from JAXAdjointProblem import JAXAdjointProblem
-from typing import NamedTuple, Any
+from typing import NamedTuple
 from abc import abstractmethod
-from State import State, MaNTA_Decorator
+
+from .adjoint_problem import JAXAdjointProblem
+from .state import MaNTA_Decorator
 
 """
 JAX-based transport system base class that overloads MaNTA TransportSystem.
@@ -160,110 +157,3 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     """
     def createAdjointProblem(self):
         pass
-
-
-# Need PyTree structure for class parameters to be able to compute adjoints
-
-class NonlinearDiffusionParams(NamedTuple):
-    SourceCentre: float
-    D: float
-    T_s: float
-    a: float
-    SourceWidth: float
-   
-    @classmethod
-    def make(cls, config: MaNTA.TomlValue) -> 'NonlinearDiffusionParams':
-        return cls(
-             SourceCentre = config["SourceCentre"],
-             D = config["D"],
-             T_s = 50.0,
-             a = config["a"],
-             SourceWidth = 0.02
-        )
-
-class JAXNonlinearDiffusion(JAXTransportSystem):
-    def __init__(self, config: MaNTA.TomlValue, grid: MaNTA.Grid):
-        super().__init__(MaNTA.numbered_spec(1, lower=MaNTA.Neumann))
-
-        # This object will be passed to sigma and source functions
-        self.params = NonlinearDiffusionParams.make(config)
-
-    def g(self, state, x, params: NonlinearDiffusionParams):
-        u = state.Variable[0]
-        return 0.5 * u * u
-    
-    def sigma( self, index, state, x, t, params: NonlinearDiffusionParams ):
-        u = state.Variable[0]
-        q = state.Derivative[0]
-        return params.D*(u ** params.a) * q
-
-    def source( self, index, state, x, t, params: NonlinearDiffusionParams ):
-        y = x - params.SourceCentre
-        return params.T_s*jnp.exp(-y*y/params.SourceWidth)
-
-
-    def LowerBoundary(self, index, t):
-        return 0.0
-
-    def UpperBoundary(self, index, t):
-        return 0.3
-    
-    def InitialValue(self, index, x):
-        return 0.3
-    
-    def createAdjointProblem(self):
-        adjointProblem = JAXAdjointProblem(self, self.g)
-        adjointProblem.addUpperBoundarySensitivity(0)
-        return adjointProblem
-    
-class JAXAuxTest(JAXTransportSystem):
-    def __init__(self, config: MaNTA.TomlValue, grid: MaNTA.Grid):
-        super().__init__(MaNTA.numbered_spec(1, nAux=1, lower=MaNTA.Neumann))
-
-        # This object will be passed to sigma and source functions
-        self.params = NonlinearDiffusionParams.make(config)
-
-    def g(self, state, x, params: NonlinearDiffusionParams):
-        u = state.Variable[0]
-        return 0.5 * u * u
-    
-    def sigma( self, index, state, x, t, params: NonlinearDiffusionParams ):
-        
-        u = state.Variable[0]
-        q = state.Derivative[0]
-        return params.D*(u ** params.a) * q
-    
-    def aux( self, index ,state, x, t, params):
-        a = state.Aux[0]
-        u = state.Variable[0]
-        return a - params.D*u*u
-
-    def source( self, index, state, x, t, params: NonlinearDiffusionParams ):
-        y = x - params.SourceCentre
-        u = state.Variable[0]
-        a = state.Aux[0]
-        return params.T_s*jnp.exp(-y*y/params.SourceWidth) + a - params.D*u*u
-
-    def LowerBoundary(self, index, t):
-        return 0.0
-
-    def UpperBoundary(self, index, t):
-        return 0.3
-    
-    def InitialValue(self, index, x):
-        return 0.3
-    
-    def InitialAuxValue(self, index, x):
-        u0 = self.InitialValue(index, x)
-        return self.params.D*u0*u0
-    
-    def createAdjointProblem(self):
-        adjointProblem = JAXAdjointProblem(self, self.g)
-        adjointProblem.addUpperBoundarySensitivity(0)
-        return adjointProblem
-
-def registerTransportSystems():
-
-    MaNTA.registerPhysicsCase("JAXNonlinearDiffusion", JAXNonlinearDiffusion)
-    MaNTA.registerPhysicsCase("JAXAuxTest", JAXAuxTest)
-

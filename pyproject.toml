@@ -11,6 +11,13 @@ requires-python = ">=3.11"
 license = { file = "LICENCE.md" }
 dependencies = ["numpy"]
 
+# manta.jax is the only part of the package that needs JAX, so it is an extra
+# rather than a dependency: `import manta` stays numpy-only for a C++-case user
+# or a plain-Python case, and nothing in manta/__init__.py may import the
+# subpackage or that guarantee is gone.
+[project.optional-dependencies]
+jax = ["jax", "equinox", "jaxtyping"]
+
 [project.scripts]
 manta = "manta.cli:main"
 
