@@ -201,6 +201,12 @@ class SystemSolver
         // off-node and there is nothing to reconstruct from.
         Postprocessor const *getPostprocessor() const { return postprocessor.get(); };
 
+        // Gates the netCDF output and the restart file -- <stem>.nc and
+        // <stem>.restart.nc. The .dat flags below are deliberately *not* nested
+        // under this one: they are opt-in already, so folding them in would
+        // change what a configuration setting only WriteDatFile does.
+        void setWriteOutput(bool in) { writeOutput = in; };
+
         // The plain-text .dat files are a gnuplot convenience, not the primary
         // output -- netCDF is. Both default to off so a run writes only its
         // .nc; ask for them explicitly when you want to plot.
@@ -395,6 +401,7 @@ class SystemSolver
         bool zeroFlux = false; // used to switch between zero-flux and zero-gradient BCs
 
         // Text output is opt-in; netCDF is what a run produces by default.
+        bool writeOutput = true;
         bool writeDatFile = false;
         bool writeDebugDatFiles = false;
 
