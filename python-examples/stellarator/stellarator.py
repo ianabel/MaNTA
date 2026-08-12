@@ -1,9 +1,15 @@
 import manta as MaNTA
 import os
+# These two used to be set by FFIRunner at import. They moved here when that
+# module became library code inside the package: process-wide policy set as a
+# side effect of importing a library applies to every caller, including ones
+# that wanted the opposite.
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 # os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".2"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 # os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
-from FFIRunner import FFIRunner
+from manta.jax import FFIRunner
 import jax
 # jax.config.update("jax_enable_compilation_cache", False)
 # jax.config.update('jax_cpu_enable_async_dispatch', False)
@@ -33,7 +39,7 @@ static_sharding = NamedSharding(mesh, P())
 from yancc.species import LocalMaxwellian
 from yancc.solve import solve_dke
 
-from State import State
+from manta.jax import State
 
 def MaNTA_Decorator(func):
     """

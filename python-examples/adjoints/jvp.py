@@ -4,9 +4,7 @@ from typing import NamedTuple
 
 from functools import partial
 
-from VectorizedTransportSystem import VectorizedTransportSystem
-from JAXAdjointProblem import JAXAdjointProblem
-from FFIRunner import FFIRunner
+from manta.jax import VectorizedTransportSystem, JAXAdjointProblem, FFIRunner
 
 import jax.numpy as jnp
 

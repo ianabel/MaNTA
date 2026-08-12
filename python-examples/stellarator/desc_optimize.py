@@ -1,4 +1,4 @@
-from Stellarator2 import StellaratorTransport
+from stellarator2 import StellaratorTransport
 import matplotlib.pyplot as plt
 from desc.profiles import SplineProfile
 from desc.plotting import plot_boozer_surface, plot_boundaries, plot_qs_error
@@ -28,7 +28,7 @@ import yancc
 import jax.numpy as jnp
 import numpy as np
 import jax
-from Objective2 import make_objective
+from objective2 import make_objective
 import manta as MaNTA
 set_device("gpu")
 

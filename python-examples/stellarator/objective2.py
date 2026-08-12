@@ -2,7 +2,7 @@ from jax.experimental import io_callback
 from desc.backend import tree_unstack
 from yancc_wrapper2 import yancc_data
 import yancc
-from Stellarator2 import StellaratorTransport
+from stellarator2 import StellaratorTransport
 import functools
 import equinox as eqx
 import jax.numpy as jnp

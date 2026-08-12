@@ -68,3 +68,21 @@ def test_ffi_runner_is_not_imported_eagerly():
     assert "manta.jax.ffi_runner" not in sys.modules
     with pytest.raises(AttributeError):
         manta.jax.NoSuchName
+
+
+def test_ffi_runner_says_which_build_it_needs():
+    """On a build without XLA_FFI, asking for FFIRunner should say so.
+
+    Left to itself the module dies on `AttributeError: module 'manta' has no
+    attribute 'runner_ffi_ops'` from inside a registration loop, which reads as
+    a broken package rather than as a feature this build was not compiled with.
+    """
+    import importlib
+
+    if hasattr(manta._manta, "runner_ffi_ops"):
+        pytest.skip("this is an XLA_FFI build, so FFIRunner imports for real")
+
+    # importlib rather than an `import manta.jax.ffi_runner` statement, which
+    # would bind `manta` as a local and shadow the module-level name above it.
+    with pytest.raises(ImportError, match="XLA_FFI"):
+        importlib.import_module("manta.jax.ffi_runner")

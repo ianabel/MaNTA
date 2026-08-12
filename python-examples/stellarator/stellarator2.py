@@ -1,9 +1,16 @@
 from functools import partial
-from FFIRunner import FFIRunner
+import os
+# These two used to be set by FFIRunner at import. They moved here when that
+# module became library code inside the package: process-wide policy set as a
+# side effect of importing a library applies to every caller, including ones
+# that wanted the opposite.
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+from manta.jax import FFIRunner
 from typing import NamedTuple
 import yancc
 from yancc_wrapper2 import yancc_data
-from State import State
+from manta.jax import State
 from yancc.solve import solve_dke
 from yancc.species import LocalMaxwellian
 from desc.backend import tree_unstack

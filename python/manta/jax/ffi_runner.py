@@ -8,6 +8,20 @@ import enum
 import jax
 import manta as MaNTA
 import jax.numpy as jnp
+
+# The FFI bindings this module registers are compiled in only under XLA_FFI
+# (Python.cpp:361). Without them the registration loop below dies on an
+# AttributeError naming `runner_ffi_ops`, which reads as a bug in the package
+# rather than as a build that was not asked for the feature.
+if not hasattr(MaNTA, "runner_ffi_ops"):
+    raise ImportError(
+        "manta.jax.ffi_runner needs an XLA_FFI build of the extension: "
+        "manta.runner_ffi_ops is absent. Rebuild with `make python XLA_FFI=on` "
+        "-- it needs the jaxlib headers -- and add CUDA=on for the GPU targets. "
+        "The rest of manta.jax does not require it."
+    )
+
+
 class Platform(enum.IntEnum):
     CPU = 0
     GPU = 1

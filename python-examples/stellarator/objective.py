@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 import functools
-from Stellarator import StellaratorTransport
+from stellarator import StellaratorTransport
 import yancc
 from yancc_wrapper import yancc_data
 

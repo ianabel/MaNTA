@@ -3,8 +3,7 @@ from typing import NamedTuple
 from functools import partial
 
 import manta as MaNTA
-from VectorizedTransportSystem import VectorizedTransportSystem
-from JAXAdjointProblem import JAXAdjointProblem
+from manta.jax import VectorizedTransportSystem, JAXAdjointProblem
 import jax.numpy as jnp
 
 class NonlinearDiffusionParams(NamedTuple):
