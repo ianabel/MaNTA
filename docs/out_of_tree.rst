@@ -12,6 +12,12 @@ Python: install the package
 
    make python          # builds python/manta/_manta<abi>.so
    pip install .        # installs the `manta` package and the `manta` command
+   pip install .[jax]   # ...and the JAX layer, if you want manta.jax
+
+``python-examples/`` is the worked version of everything in this section. Each
+directory there holds a case, its config and a README, and imports ``manta``
+exactly as your own package would — copy one out of the repository and it still
+runs. ``python-examples/linear-diffusion`` is the place to start.
 
 Then a case in your own package imports ``manta`` like any other dependency:
 

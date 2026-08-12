@@ -124,7 +124,7 @@ MaNTA has three test suites, all driven from the top-level Makefile:
 |---|---|
 | `make test` | Boost.Test C++ unit tests (`Tests/UnitTests`) |
 | `make regression_tests` | Runs the solver over `Tests/RegressionTests/*.conf` and compares against checked-in `.ref.nc` references |
-| `make python_tests` | pytest suite for the pybind11 module (`python/Tests`); needs `make python` first |
+| `make python_tests` | pytest suite for the `manta` package (`python/Tests`); needs `make python` first |
 
 The regression and Python suites need the Python dependencies. On distributions
 where the system Python is externally managed (Debian, Ubuntu), that means a
@@ -145,6 +145,23 @@ symlink to a new release the environment's packages are stranded in the old
 `make venv VENV=/path/to/env`.
 
 All three suites can be run from any working directory.
+
+### Writing a physics case in Python
+
+A case and the driver that runs it do not have to live in this repository:
+
+```sh
+make python          # builds python/manta/_manta<abi>.so
+pip install .        # the `manta` package and the `manta` command
+pip install .[jax]   # ...and manta.jax, for cases written as JAX functions
+```
+
+A case is then a subclass of `manta.TransportSystem` in your own package, run
+with `manta myrun.conf`. `python-examples/` holds a worked directory per
+example — the case, its config and a README — each importing `manta` exactly as
+code outside this tree would, so one can be copied out and still run. Start with
+`python-examples/linear-diffusion`; `docs/out_of_tree.rst` covers both languages,
+including C++ cases built as `PhysicsPlugins` shared objects.
 
 #### Coverage
 

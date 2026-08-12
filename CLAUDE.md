@@ -19,16 +19,18 @@ make regression_tests     # solver over Tests/RegressionTests/*.conf vs checked-
 make python               # the manta package, python/manta/_manta<suffix>.so
 make install PREFIX=...   # headers under include/manta, libmanta.so, manta.pc
 pip install .             # the `manta` package and the `manta` console script
+pip install .[jax]        # ...and manta.jax (jax, equinox, jaxtyping)
 make python_tests         # pytest suite for that extension
 make coverage             # rebuild instrumented, run all three suites, write coverage/
 make stubs                # regenerate python/manta/_manta.pyi from the module
 make stubs-check          # fail if the committed stub is stale (CI runs this)
 make typecheck            # mypy over the manta package
 make clean                # also sweeps orphaned PhysicsCases/*.o and .d files,
-                          # python/ modules of every ABI suffix, the bytecode
-                          # and pytest caches, and clean_data below
+                          # python/manta modules of every ABI suffix, the
+                          # bytecode and pytest caches, and clean_data below
 make clean_data           # run output (.nc/.restart.nc/.dat) at the root and in
-                          # Tests/RegressionTests, python/, python/Tests/
+                          # Tests/RegressionTests, python/Tests/ and each
+                          # directory under python-examples/
 ```
 
 The regression and Python suites need `requirements.txt` installed and the
@@ -379,13 +381,49 @@ scalar system converges slowly. `python/Tests/test_scalars.py` exercises the
 Python side against a closed form, algebraic and differential.
 
 * **`manta.cli`** is the `manta` console script: it reads the config, imports the
-  module named by its `PythonModule` key (for the side effect of that module's
-  `registerPhysicsCase` call), and hands over to the same `runManta` the binary
-  uses. That is what lets a Python case and its driver live outside this tree.
+  physics module it names, and hands over to the same `runManta` the binary uses.
+  That is what lets a Python case and its driver live outside this tree.
+  `load_physics_modules` accepts **two forms**, and `python/Tests/util.py`
+  delegates to it so the rule has one implementation:
 
-JAX physics cases (`python/JAXTransportSystem.py`, `python/State.py`) wrap the
-dict interface in equinox modules via the `MaNTA_Decorator` / `Physics_Decorator`
-adapters.
+  * `PythonModule` — an importable dotted name, the documented form.
+  * `PythonModuleFile` (+ optional `PythonModuleName`) — a path, **resolved
+    relative to the config file, not the cwd**. Every config in the tree is
+    written as though that were true; the retired `PyManta` resolved against the
+    cwd, which is why they only ran from one directory.
+
+  Either way the module is imported for its registrations, and if it defines
+  `registerTransportSystems()` that is called afterwards. Registering at import
+  via `registerPhysicsCase` is the documented convention; the hook is what every
+  example under `python-examples/` actually uses, and without honouring it none
+  of those configs run.
+
+JAX physics cases use **`manta.jax`** (`python/manta/jax/`), which wraps the dict
+interface in equinox modules via the `MaNTA_Decorator` / `Physics_Decorator`
+adapters. It was six flat modules in `python/` until the examples split, and
+three properties of the subpackage are load-bearing rather than stylistic:
+
+* **`manta/__init__.py` must never import `.jax`.** JAX is an optional extra
+  (`pip install manta[jax]`), so a top-level re-export would make it mandatory
+  for every user of the solver — and it would turn the subpackage's relative
+  imports into a cycle, since `transport_system.py` does `import manta`.
+  `test_jax_layer.py` AST-scans `__init__.py` for exactly this.
+* **`manta/jax/__init__.py` must not import `ffi_runner` eagerly.** That module
+  registers XLA FFI targets at module scope, and the bindings it looks for —
+  `runner_ffi_ops`, `runner_ffi_ops_cuda` — are `#ifdef XLA_FFI`
+  (`Python.cpp:361`). Eager, it would take `from manta.jax import State` down on
+  every default build. A module-level `__getattr__` serves `FFIRunner`,
+  `Platform` and the two `register_ffi_*` helpers instead, and the module itself
+  raises an `ImportError` naming the flag rather than an `AttributeError` from
+  inside a loop.
+* **No module in the layer may write `os.environ` at import.** `FFIRunner.py`
+  set three variables and `JAXTransportSystem.py` forced
+  `JAX_PLATFORM_NAME=cpu`; as library code that last one would have disabled the
+  GPU path `ffi_runner` exists to provide. Those writes live in the drivers under
+  `python-examples/` now.
+
+`python/` holds exactly two things: `manta/` and `Tests/`. Every driver, config
+and notebook is under `python-examples/`, one self-contained directory each.
 
 ### Type stubs
 
@@ -644,7 +682,15 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
   (`SystemSolverTests.cpp:378`) — and the second has no `.ref.` in its name, so
   the keep-pattern would not save it. Check tracked status, not the filename,
   before adding a directory there. Unit-test output itself lands at the repo
-  root, because `make test` runs the binary from there.
+  root, because `make test` runs the binary from there. `python` is absent for a
+  different reason: since the drivers moved to `python-examples/`, nothing writes
+  output there.
+* **Unanchored `.gitignore` patterns match at every depth.** The root scratch
+  entries (`Plots/`, `runs-for-bhavin/`, `scalar-tests/`, `toy-model/`) are
+  written with a leading slash for that reason: unanchored, `toy-model/` also
+  ignored `python-examples/toy-model/`, so the example was left out of a commit
+  with nothing to say so. `git check-ignore -v <path>` names the line
+  responsible.
 * **`printSources` reads the source cache through a basis of the residual's
   order.** With `Superconvergent = true` the cache holds `k+2` values per cell
   rather than `k+1`, so `SystemSolver::print` picks its basis and stride from the
