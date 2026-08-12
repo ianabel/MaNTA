@@ -1,8 +1,7 @@
 from typing import NamedTuple
 
 import manta as MaNTA
-from JAXTransportSystem import JAXTransportSystem
-from JAXAdjointProblem import JAXAdjointProblem
+from manta.jax import JAXTransportSystem, JAXAdjointProblem
 import jax.numpy as jnp
 
 class LinearDiffusionParams(NamedTuple):

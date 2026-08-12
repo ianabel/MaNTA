@@ -1,8 +1,7 @@
 import jax.numpy as jnp
 import manta as MaNTA
-from JAXAdjointProblem import JAXAdjointProblem
+from manta.jax import VectorizedTransportSystem, JAXAdjointProblem
 from typing import NamedTuple
-from VectorizedTransportSystem import VectorizedTransportSystem
 
 # Need PyTree structure for class parameters to be able to compute adjoints
 
