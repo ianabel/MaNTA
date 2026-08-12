@@ -8,13 +8,17 @@ Running MaNTA, and its output
 Output file names
 -----------------
 
+Output names default to the **stem of the configuration file**, and
+``OutputFilename`` overrides that on both surfaces.
+
 .. warning::
 
-   Output names come from the **stem of the configuration file**, and the files
-   land in the **current working directory** regardless of any path in the config
-   file's own name. ``./MaNTA runs/case7.conf`` writes ``./case7.nc``, not
-   ``runs/case7.nc``. There is no config key that changes this — the TOML
-   interface does not read ``OutputFilename`` at all.
+   Whichever name is used, the files land in the **current working directory**:
+   any directory part is dropped. ``./MaNTA runs/case7.conf`` writes
+   ``./case7.nc``, not ``runs/case7.nc``, and setting
+   ``OutputFilename = "out/case7"`` still writes ``./case7.nc``. Two drivers
+   running in different directories under the same base name will overwrite each
+   other.
 
 A run writes:
 
@@ -26,10 +30,10 @@ A run writes:
      - When
      - Contents
    * - ``<stem>.nc``
-     - always
+     - ``WriteOutput``
      - The solution at every output time. See the layout below.
    * - ``<stem>.restart.nc``
-     - always
+     - ``WriteOutput``
      - The final state, in enough detail to resume from.
    * - ``<stem>.dat``
      - ``WriteDatFile``
@@ -100,7 +104,8 @@ Any netCDF reader will do. From Python:
 Restarting
 ----------
 
-Every run leaves a ``<stem>.restart.nc``. To resume, point a config file at it:
+A run leaves a ``<stem>.restart.nc`` unless ``WriteOutput`` is false. To resume,
+point a config file at it:
 
 .. code-block:: toml
 
