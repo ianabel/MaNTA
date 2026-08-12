@@ -50,11 +50,14 @@ coverage/
 #   sphinx-build -W -b html docs docs/_build/html
 docs/_build/
 
-# Local scratch / run output
-Plots/
-runs-for-bhavin/
-scalar-tests/
-toy-model/
+# Local scratch / run output. Anchored with a leading slash because these are
+# root-level scratch directories, and an unanchored pattern matches at every
+# depth: `toy-model/` was quietly swallowing python-examples/toy-model/, so the
+# example was ignored rather than committed and nothing said so.
+/Plots/
+/runs-for-bhavin/
+/scalar-tests/
+/toy-model/
 __pycache__/
 .pytest_cache/
 
