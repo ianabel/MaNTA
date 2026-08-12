@@ -6,7 +6,7 @@
 
 #include "SystemSolver.hpp"
 #include "PhysicsCases.hpp"
-#include "Config.hpp"
+#include "SolverConfig.hpp"
 
 // Load restart data into vectors
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vector<double> &dYdt)
@@ -35,162 +35,54 @@ int runManta(std::string const &fname)
 		return 1;
 	}
 
-	const auto configObject = toml::parse(fname);
-
-	std::shared_ptr<SystemSolver> system;
-
-	// Parse config file for generic configuration options (not physics specific ones)
+	// Every configuration key MaNTA accepts is declared once, in
+	// ConfigSchema.cpp, and read the same way here and in PyRunner::configure.
+	// This function used to open-code ~120 lines of toml::find_or against a
+	// separate list, which is how the two surfaces came to disagree about the
+	// name of the initial time and the default absolute tolerance.
 	const auto configFile = toml::parse(fname);
-	const auto config = toml::find<toml::value>(configFile, "configuration");
+	const auto configuration = toml::find<toml::value>(configFile, "configuration");
 
-	bool isRestarting = toml::find_or(config, "restart", false);
-	netCDF::NcFile restart_file;
-
-	if (isRestarting)
+	SolverConfig config;
+	try
 	{
-		std::string fbase = std::filesystem::path(fname).stem();
-		std::string fileName = toml::find_or(config, "RestartFile", fbase + ".restart.nc");
+		TomlConfigSource source(configuration, fname);
+		config = loadSolverConfig(source, ConfigSchema::Reader::Toml);
+	}
+	catch (std::invalid_argument const &e)
+	{
+		logmsg<LOG_LEVEL::ERROR>("{}", e.what());
+		return 1;
+	}
+
+	// Required of a config file, but not of a dict -- a Runner is told the end
+	// time by run(tFinal). The schema records the key; the requirement is here.
+	if (!config.t_final)
+	{
+		logmsg<LOG_LEVEL::ERROR>("Missing required configuration key: t_final.");
+		return 1;
+	}
+
+	netCDF::NcFile restart_file;
+	if (config.restart)
+	{
+		std::string fileName = config.RestartFile.empty()
+								   ? config.OutputFilename + ".restart.nc"
+								   : config.RestartFile;
 		try
 		{
 			restart_file.open(fileName, netCDF::NcFile::FileMode::read);
 		}
 		catch (...)
 		{
-      logmsg<LOG_LEVEL::ERROR>("Failed to open restart netCDF file at: {}", std::string(std::filesystem::absolute(std::filesystem::path(fileName))));
-      return 1;
+			logmsg<LOG_LEVEL::ERROR>("Failed to open restart netCDF file at: {}",
+									 std::string(std::filesystem::absolute(std::filesystem::path(fileName))));
+			return 1;
 		}
 	}
 
-	std::unique_ptr<Grid> grid;
-
-	//Grid *grid;
 	unsigned int k = 1;
-	if (!isRestarting)
-	{
-
-		// Solver parameters
-		double lBound, uBound, lowerBoundaryFraction, upperBoundaryFraction;
-		bool highGridBoundary;
-		int nCells;
-
-		auto polyDegree = toml::find(config, "Polynomial_degree");
-		if (config.count("Polynomial_degree") != 1)
-			throw std::invalid_argument("Polynomial_degree unspecified or specified more than once");
-		else if (!polyDegree.is_integer())
-			throw std::invalid_argument("Polynomial_degree must be specified as an integer");
-		else
-			k = polyDegree.as_integer();
-
-		if (config.count("High_Grid_Boundary") != 1)
-		{
-			highGridBoundary = false;
-			lowerBoundaryFraction = 0.0;
-			upperBoundaryFraction = 0.0;
-		}
-		else
-		{
-			highGridBoundary = config.at("High_Grid_Boundary").as_boolean();
-			lowerBoundaryFraction = toml::find_or(config, "Lower_Boundary_Fraction", 0.2);
-			upperBoundaryFraction = toml::find_or(config, "Upper_Boundary_Fraction", 0.2);
-		}
-
-		auto numberOfCells = toml::find(config, "Grid_size");
-		if (config.count("Grid_size") != 1)
-			throw std::invalid_argument("Grid_size unspecified or specified more than once");
-		if (!numberOfCells.is_integer())
-			throw std::invalid_argument("Grid_size must be specified as an integer");
-		else
-			nCells = numberOfCells.as_integer();
-
-		if (nCells < 4 && highGridBoundary)
-			throw std::invalid_argument("Grid size must exceed 4 cells in order to implement dense boundaries");
-
-		// The is_integer() branches called as_floating(), which throws
-		// toml::type_error on an integer node -- so `Lower_boundary = 0` failed
-		// with "as_floating(): bad_cast" despite the branch existing precisely
-		// to accept it. Same defect as the one fixed in Config.cpp; these two
-		// were missed because they are open-coded here rather than going
-		// through getFloat.
-		auto lowerBoundary = toml::find(config, "Lower_boundary");
-		if (config.count("Lower_boundary") != 1)
-			throw std::invalid_argument("Lower_boundary unspecified or specified more than once");
-		else if (lowerBoundary.is_integer())
-			lBound = static_cast<double>(lowerBoundary.as_integer());
-		else if (lowerBoundary.is_floating())
-			lBound = static_cast<double>(lowerBoundary.as_floating());
-		else
-			throw std::invalid_argument("Lower_boundary specified incorrectly");
-
-		auto upperBoundary = toml::find(config, "Upper_boundary");
-		if (config.count("Upper_boundary") != 1)
-			throw std::invalid_argument("Upper_boundary unspecified or specified more than once");
-		else if (upperBoundary.is_integer())
-			uBound = static_cast<double>(upperBoundary.as_integer());
-		else if (upperBoundary.is_floating())
-			uBound = static_cast<double>(upperBoundary.as_floating());
-		else
-			throw std::invalid_argument("Upper_boundary specified incorrectly");
-
-		grid = std::make_unique<Grid>(lBound, uBound, nCells, highGridBoundary, lowerBoundaryFraction, upperBoundaryFraction);
-	}
-	else
-	{
-		// Load grid from restart file
-		netCDF::NcGroup GridGroup = restart_file.getGroup("Grid");
-		auto nPoints = GridGroup.getDim("Index").getSize();
-		std::vector<Position> CellBoundaries(nPoints);
-
-		GridGroup.getVar("CellBoundaries").getVar(CellBoundaries.data());
-
-		grid = std::make_unique<Grid>(CellBoundaries);
-
-		GridGroup.getVar("PolyOrder").getVar(&k);
-	}
-
-	double tau = getFloatWithDefault("tau", config, 1.0);
-	double delta_t = getFloat("delta_t", config);
-	double tZero = getFloatWithDefault("t_initial", config, 0.0);
-	double tFinal = getFloat("t_final", config);
-	double rtol = getFloatWithDefault("Relative_tolerance", config, 1e-3);
-
-	std::vector<double> absTol;
-
-	if (config.count("Absolute_tolerance") == 1)
-	{
-		auto atol_toml = toml::find(config, "Absolute_tolerance");
-		if (atol_toml.is_array())
-			absTol = toml::get<std::vector<double>>(atol_toml);
-		else
-		{
-			absTol.resize(1);
-			if (atol_toml.is_integer())
-				absTol[0] = static_cast<double>(toml::get<int>(atol_toml));
-			else
-				absTol[0] = toml::get<double>(atol_toml);
-		}
-	}
-	else if (config.count("Absolute_tolerance") == 0)
-	{
-		absTol.resize(1);
-		absTol[0] = 1e-2;
-	}
-	else
-	{
-		throw std::invalid_argument("Absolute_tolerance was specified more than once");
-	}
-
-	double dt_min = getFloatWithDefault("MinStepSize", config, 1e-7);
-
-	int nOutput = getIntWithDefault("OutputPoints", config, 301);
-
-	bool solveAdjoint = false;
-	if (config.count("solveAdjoint") == 1)
-		solveAdjoint = config.at("solveAdjoint").as_boolean();
-
-	if (config.count("TransportSystem") != 1)
-		throw std::invalid_argument("TransportSystem needs to specified exactly once in the general configuration section");
-
-	std::string ProblemName = config.at("TransportSystem").as_string();
+	std::unique_ptr<Grid> grid = makeGrid(config, config.restart ? &restart_file : nullptr, k);
 
 	// Physics cases built outside this tree.
 	//
@@ -199,23 +91,17 @@ int runManta(std::string const &fname)
 	// inserts into the same process-global map the built-in cases use. This has
 	// to happen before InstantiateProblem, and duplicate names now throw rather
 	// than being dropped, so a plugin colliding with a built-in says so.
-	if (config.count("PhysicsPlugins") == 1)
+	for (auto const &path : config.PhysicsPlugins)
 	{
-		for (auto const &entry : config.at("PhysicsPlugins").as_array())
+		// RTLD_GLOBAL so a plugin can be linked against another plugin's
+		// symbols; RTLD_NOW so an unresolved symbol is reported here rather
+		// than at the first call into the case.
+		if (dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL) == nullptr)
 		{
-			const std::string path = entry.as_string();
-			// RTLD_GLOBAL so a plugin can be linked against another plugin's
-			// symbols; RTLD_NOW so an unresolved symbol is reported here rather
-			// than at the first call into the case.
-			if (dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL) == nullptr)
-			{
-				logmsg<LOG_LEVEL::ERROR>("Could not load physics plugin {}: {}", path, dlerror());
-				return 1;
-			}
+			logmsg<LOG_LEVEL::ERROR>("Could not load physics plugin {}: {}", path, dlerror());
+			return 1;
 		}
 	}
-
-	// Convert string to TransportSystem* instance
 
 	// InstantiateProblem throws for an unrecognised name, with the list of what
 	// is registered in the message. Caught here so the standalone binary still
@@ -224,26 +110,30 @@ int runManta(std::string const &fname)
 	std::unique_ptr<TransportSystem> pProblem;
 	try
 	{
-		pProblem = PhysicsCases::InstantiateProblem(ProblemName, configFile, *grid);
+		pProblem = PhysicsCases::InstantiateProblem(config.TransportSystem, configFile, *grid);
 	}
 	catch (std::invalid_argument const &e)
 	{
-		logmsg<LOG_LEVEL::ERROR>("Could not instantiate a physics model for TransportSystem = {}\n  {}", ProblemName, e.what());
+		logmsg<LOG_LEVEL::ERROR>("Could not instantiate a physics model for TransportSystem = {}\n  {}",
+								 config.TransportSystem, e.what());
 		return 1;
 	}
 
 	std::unique_ptr<AdjointProblem> adjoint = nullptr;
-	if (solveAdjoint)
+	if (config.solveAdjoint)
 		adjoint = pProblem->createAdjointProblem();
 
-	if (isRestarting)
+	if (config.restart)
 	{
 		std::vector<double> Y, dYdt;
 		Index nDOF_file = LoadFromFile(restart_file, Y, dYdt);
 
 		// Make sure degrees of freedom are consistent with restart file
 		const Index nCells = grid->getNCells();
-		const Index nDOF = pProblem->getNumVars() * 3 * nCells * (k + 1) + pProblem->getNumVars() * (nCells + 1) + pProblem->getNumScalars() + pProblem->getNumAux() * nCells * (k + 1);
+		const Index nDOF = pProblem->getNumVars() * 3 * nCells * (k + 1) +
+						   pProblem->getNumVars() * (nCells + 1) +
+						   pProblem->getNumScalars() +
+						   pProblem->getNumAux() * nCells * (k + 1);
 
 		if (nDOF_file != nDOF)
 			throw std::invalid_argument("nVars/nAux/nScalars in restart file inconsistent with physics case");
@@ -251,57 +141,13 @@ int runManta(std::string const &fname)
 		pProblem->setRestartValues(Y, dYdt, *grid, k);
 	}
 
-	system = std::make_shared<SystemSolver>(*grid, k, pProblem.get());
+	auto system = std::make_shared<SystemSolver>(*grid, k, pProblem.get());
 
-
-	system->setOutputCadence(delta_t);
-	system->setTolerances(absTol, rtol);
-	system->setTau(tau);
-	system->setInitialTime(tZero);
-	system->setInputFile(fname);
-	system->setSolveAdjoint(solveAdjoint);
-	if (solveAdjoint)
+	applySolverConfig(config, *system);
+	if (config.solveAdjoint)
 		system->setAdjointProblem(adjoint.get());
 
-	system->setNOutput(nOutput);
-	system->setMinStepSize(dt_min);
-
-	// netCDF is the default output. The plain-text .dat files are a gnuplot
-	// convenience and are written only when asked for.
-	system->setWriteDatFile(toml::find_or(config, "WriteDatFile", false));
-	system->setWriteDebugDatFiles(toml::find_or(config, "WriteDebugDatFiles", false));
-
-	// Off by default: with it off the discretisation is unchanged, so existing
-	// configs reproduce their reference solutions exactly. See
-	// SystemSolver::setSuperconvergent.
-	system->setSuperconvergent(toml::find_or(config, "Superconvergent", false));
-
-	// Let IDA grow the timestep by up to 10x rather than 2x between steps.
-	system->setAggressiveTimesteps(toml::find_or(config, "AggressiveTimesteps", false));
-
-	if (config.count("SteadyStateTolerance") == 1)
-	{
-		double sst = getFloat("SteadyStateTolerance", config);
-		logmsg<LOG_LEVEL::INFO>("Running until steady state achieved (variation below {}) or end time reached.", sst);
-		// Without this the option was inert: the value was read and logged but
-		// never reached the solver, so TerminateOnSteadyState stayed false and
-		// the run always went to t_final.
-		system->setSteadyStateTolerance(sst);
-	}
-
-	// Arm the dG/dt early-exit gate. Absent, the gate stays off and the run is
-	// unaffected; present, a run whose objective is already falling faster than
-	// this is abandoned after the initial condition is built rather than
-	// integrated. Needs an AdjointProblem to define the objective, so
-	// solveAdjoint has to be set too -- objectiveIsDecreasing says so if not.
-	if (config.count("ObjectiveDecreaseTolerance") == 1)
-	{
-		double odt = getFloat("ObjectiveDecreaseTolerance", config);
-		logmsg<LOG_LEVEL::INFO>("Abandoning the run if dG/dt falls below {} at the initial condition.", -odt);
-		system->setObjectiveDecreaseTolerance(odt);
-	}
-
-	system->runSolver(tFinal);
+	system->runSolver(*config.t_final);
 
 	// For compiled-in TransportSystems we have the type information and
 	// this will call the correct inherited destructor

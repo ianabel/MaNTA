@@ -2,6 +2,14 @@
 
 #include "Logging.hpp"
 
+// makeGrid and applySolverConfig need the concrete types the header only
+// forward-declares, so the weight of <netcdf>, the grid and the solver lands
+// here rather than on every consumer of SolverConfig.hpp.
+#include <netcdf>
+
+#include "SystemSolver.hpp"
+#include "gridStructures.hpp"
+
 #include <set>
 #include <stdexcept>
 
@@ -281,4 +289,86 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
             "config file to take a name from.");
 
     return c;
+}
+
+// --- makeGrid ---------------------------------------------------------------
+
+std::unique_ptr<Grid> makeGrid(SolverConfig const &config,
+                               netCDF::NcFile *restart, unsigned int &k)
+{
+    if (config.restart)
+    {
+        if (restart == nullptr)
+            throw std::invalid_argument("restart is set but no restart file was opened.");
+
+        netCDF::NcGroup GridGroup = restart->getGroup("Grid");
+        auto nPoints = GridGroup.getDim("Index").getSize();
+        std::vector<Position> CellBoundaries(nPoints);
+        GridGroup.getVar("CellBoundaries").getVar(CellBoundaries.data());
+        GridGroup.getVar("PolyOrder").getVar(&k);
+        return std::make_unique<Grid>(CellBoundaries);
+    }
+
+    k = config.Polynomial_degree;
+
+    if (!config.Grid_points.empty())
+        return std::make_unique<Grid>(config.Grid_points);
+
+    if (config.Grid_size < 4 && config.High_Grid_Boundary)
+        throw std::invalid_argument(
+            "Grid size must exceed 4 cells in order to implement dense boundaries");
+
+    // Grid ignores both fractions when High_Grid_Boundary is false
+    // (gridStructures.hpp:81), so passing them unconditionally is what the two
+    // old readers did between them -- MaNTA.cpp zeroed them, PyRunner did not,
+    // and the grids came out identical either way. Worth stating because it
+    // looks like a divergence somebody should fix.
+    return std::make_unique<Grid>(config.Lower_boundary, config.Upper_boundary,
+                                  config.Grid_size, config.High_Grid_Boundary,
+                                  config.Lower_Boundary_Fraction,
+                                  config.Upper_Boundary_Fraction);
+}
+
+// --- applySolverConfig ------------------------------------------------------
+
+void applySolverConfig(SolverConfig const &config, SystemSolver &system)
+{
+    // The only place a configuration reaches the solver. That is the point --
+    // it is what stops the TOML path and the dict path configuring differently
+    // -- but it also means a block dropped from here un-configures *both*
+    // surfaces at once, where the same slip used to affect one.
+    system.setOutputCadence(config.delta_t);
+    system.setTolerances(config.Absolute_tolerance, config.Relative_tolerance);
+    system.setTau(config.tau);
+    system.setInitialTime(config.t_initial);
+    system.setInitialTimestep(config.initialTimestep);
+    system.setInputFile(config.OutputFilename);
+    system.setSolveAdjoint(config.solveAdjoint);
+    system.setNOutput(config.OutputPoints);
+    system.setMinStepSize(config.MinStepSize);
+    system.setZeroFlux(config.zeroFlux);
+    system.setSuperconvergent(config.Superconvergent);
+    system.setWriteOutput(config.WriteOutput);
+    system.setWriteDatFile(config.WriteDatFile);
+    system.setWriteDebugDatFiles(config.WriteDebugDatFiles);
+    system.setAggressiveTimesteps(config.AggressiveTimesteps);
+
+    // Presence arms it, which is what the TOML reader has always done;
+    // setSteadyStateTolerance also sets TerminateOnSteadyState.
+    if (config.SteadyStateTolerance)
+    {
+        logmsg<LOG_LEVEL::INFO>(
+            "Running until steady state achieved (variation below {}) or end time reached.",
+            *config.SteadyStateTolerance);
+        system.setSteadyStateTolerance(*config.SteadyStateTolerance);
+    }
+
+    // Zero is off, and the setter rejects anything negative.
+    if (config.ObjectiveDecreaseTolerance != 0.0)
+    {
+        logmsg<LOG_LEVEL::INFO>(
+            "Abandoning the run if dG/dt falls below {} at the initial condition.",
+            -config.ObjectiveDecreaseTolerance);
+        system.setObjectiveDecreaseTolerance(config.ObjectiveDecreaseTolerance);
+    }
 }

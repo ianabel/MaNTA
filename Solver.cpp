@@ -264,7 +264,13 @@ void SystemSolver::initialize()
 
 	IDASetMaxNonlinIters(IDA_mem, 10);
 
-	std::string baseName = inputFilePath.stem();
+	// filename(), not stem(): inputFilePath now holds the configuration's
+	// OutputFilename, which is already a base name -- the TOML source seeds it
+	// from the config file's stem. Stemming it a second time would turn a
+	// config named run.v2.conf into output called run.nc. filename() also keeps
+	// the long-standing behaviour that output lands in the current directory
+	// rather than beside any path given in OutputFilename.
+	std::string baseName = inputFilePath.filename().string();
 
 	// The .dat files are opt-in; netCDF below is what a run produces by
 	// default. Nothing is opened unless asked for, so a plain run leaves no
@@ -402,7 +408,13 @@ void SystemSolver::initialize()
 void SystemSolver::integrate(double tFinal)
 {
 	int retval;
-	std::string baseName = inputFilePath.stem();
+	// filename(), not stem(): inputFilePath now holds the configuration's
+	// OutputFilename, which is already a base name -- the TOML source seeds it
+	// from the config file's stem. Stemming it a second time would turn a
+	// config named run.v2.conf into output called run.nc. filename() also keeps
+	// the long-standing behaviour that output lands in the current directory
+	// rather than beside any path given in OutputFilename.
+	std::string baseName = inputFilePath.filename().string();
 
 	if (IDA_mem == nullptr)
 		throw std::logic_error("integrate() called before initialize()");
