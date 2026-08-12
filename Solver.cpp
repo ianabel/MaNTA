@@ -382,7 +382,15 @@ void SystemSolver::initialize()
 	}
 
 	// This also writes the t0 timeslice -- the corrected one, per the fetch above
-	initialiseNetCDF(baseName + ".nc", nOut);
+	//
+	// writeOutput gates every netCDF and restart write in this file. nc_output is
+	// never opened when it is false, and NcFile::close() on an unopened file is a
+	// no-op -- the destructor's `filename != ""` guard relies on the same thing --
+	// but the Close() calls are guarded too, so the reason is visible where it
+	// applies rather than resting on netCDF's behaviour. The .dat flags are
+	// separate and stay separate: they are opt-in already.
+	if (writeOutput)
+		initialiseNetCDF(baseName + ".nc", nOut);
 
 	IDASetMaxNumSteps(IDA_mem, 50000);
 
@@ -450,10 +458,12 @@ void SystemSolver::integrate(double tFinal)
         printOnNodes(res_out, tret, res);
         printOnNodes(dydt_out, tret, dYdt);
       }
-			WriteTimeslice(tret);
+			if (writeOutput)
+				WriteTimeslice(tret);
 			if (writeDatFile)
 				out0.close();
-			nc_output.Close();
+			if (writeOutput)
+				nc_output.Close();
 
 			throw std::runtime_error("IDASolve could not complete");
 		}
@@ -472,7 +482,8 @@ void SystemSolver::integrate(double tFinal)
 						 N_VWrmsNorm(res, wgt));
 			printOnNodes(res_out, tret, res);
 		}
-		WriteTimeslice(tret);
+		if (writeOutput)
+			WriteTimeslice(tret);
 
 		// Check if steady-state is achieved (test the lambda points)
 		if (TerminateOnSteadyState)
@@ -513,7 +524,8 @@ void SystemSolver::integrate(double tFinal)
 		// WriteAdjoints();
 	}
 
-	problem->finaliseDiagnostics(nc_output);
+	if (writeOutput)
+		problem->finaliseDiagnostics(nc_output);
 	if (writeDatFile)
 		out0.close();
 	if (debugDat)
@@ -521,9 +533,11 @@ void SystemSolver::integrate(double tFinal)
 		dydt_out.close();
 		res_out.close();
 	}
-	nc_output.Close();
+	if (writeOutput)
+		nc_output.Close();
 
-	WriteRestartFile(baseName + ".restart.nc", Y, dYdt, nOut);
+	if (writeOutput)
+		WriteRestartFile(baseName + ".restart.nc", Y, dYdt, nOut);
 
 	// Leave yJac holding the *final* solution. It is the only copy that outlives
 	// destroySundials() -- `y` is a non-owning view over Y -- and it is what
@@ -536,7 +550,8 @@ void SystemSolver::integrate(double tFinal)
 	// change the gradients.
 	setJacEvalY(Y, dYdt);
 
-	nc_output.Close();
+	if (writeOutput)
+		nc_output.Close();
 }
 
 void SystemSolver::destroySundials()
@@ -597,7 +612,8 @@ void SystemSolver::destroySundials()
 	// "Permission denied", which reads like a filesystem problem rather than a
 	// handle we never released. Close() just clears the name and closes the file,
 	// so calling it here as well as at the end of integrate() is harmless.
-	nc_output.Close();
+	if (writeOutput)
+		nc_output.Close();
 
 	// `ctx` is deliberately NOT freed here. It belongs to the SystemSolver: it is
 	// created in the constructor (SystemSolver.cpp:18) and freed in the
