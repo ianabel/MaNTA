@@ -138,7 +138,7 @@ Build targets
    * - ``make``
      - The solver, the Python module, and then the test suites.
    * - ``make python``
-     - The pybind11 extension, ``python/MaNTA<suffix>.so``.
+     - The pybind11 extension, ``python/manta/_manta<suffix>.so``.
    * - ``make test``
      - The Boost.Test C++ unit tests.
    * - ``make regression_tests``
@@ -152,11 +152,12 @@ Build targets
      - Creates ``.venv`` and installs the Python dependencies into it. See below.
    * - ``make clean``
      - Also sweeps orphaned ``PhysicsCases/*.o`` and ``.d`` files, every
-       ABI-suffixed module under ``python/``, the bytecode and pytest caches,
-       and — via ``clean_data`` — the run output.
+       ABI-suffixed module under ``python/manta``, the bytecode and pytest
+       caches, and — via ``clean_data`` — the run output.
    * - ``make clean_data``
      - Just the run output: ``.nc``, ``.restart.nc`` and ``.dat`` at the repo
-       root and in ``Tests/RegressionTests``, ``python`` and ``python/Tests``.
+       root and in ``Tests/RegressionTests``, ``python/Tests`` and each
+       directory under ``python-examples``.
 
 .. warning::
 

@@ -37,7 +37,7 @@ class JAXLinearDiffusion(JAXTransportSystem):
     
     def source( self, index, state, x, t, params ):
         return 10.0
-    
+  
     def LowerBoundary(self, index, t):
         return 0.0
 

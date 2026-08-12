@@ -308,14 +308,30 @@ Note that ``dSources_dScalars`` is indexed by **scalar**, not by variable.
 JAX
 ---
 
-``python/JAXTransportSystem.py`` and ``python/State.py`` wrap the dict interface
-in `equinox <https://github.com/patrick-kidger/equinox>`_ modules, so a physics
+``manta.jax`` wraps the dict interface in
+`equinox <https://github.com/patrick-kidger/equinox>`_ modules, so a physics
 case can be written as JAX functions and have its derivatives supplied by
 ``jax.grad`` rather than by hand. The adapters ``MaNTA_Decorator`` and
 ``Physics_Decorator`` handle the conversion. Such a case is a *vectorised*
 subclass in the sense above: it overrides ``ComputePhysics`` and
 ``ComputePhysicsDerivatives`` and is called once per batch.
 
+It is the only part of the package that needs JAX, so it is an optional extra
+rather than a dependency — ``import manta`` stays numpy-only::
+
+   pip install manta[jax]
+
+``manta.jax.JAXTransportSystem`` is the pointwise base class and
+``manta.jax.VectorizedTransportSystem`` the batched one;
+``manta.jax.JAXAdjointProblem`` supplies the objective and its parameter
+derivatives. Worked examples are in ``python-examples/jax-diffusion``,
+``python-examples/jax-linear-diffusion`` and
+``python-examples/jax-nonlinear-adjoint``.
+
 An ``XLA_FFI`` build additionally exposes the solver itself as a JAX foreign
 function, so a whole MaNTA run can sit inside a JAX computation. That path needs
-jaxlib headers at build time.
+jaxlib headers at build time, and is reached through ``manta.jax.FFIRunner``.
+That one name is imported on demand rather than with the rest of the layer,
+because the bindings it registers exist only in such a build; on any other it
+raises an ``ImportError`` naming the flag, leaving the rest of ``manta.jax``
+usable. ``python-examples/adjoints/jvp.py`` is the worked example.

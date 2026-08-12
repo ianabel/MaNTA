@@ -4,7 +4,6 @@ The tests need three things that used to be supplied implicitly by running
 `pytest` from inside this directory:
 
   * the built pybind11 module, python/manta/_manta<suffix>.so, on sys.path
-  * the JAX transport-system modules in python/ on sys.path
   * a cwd of python/Tests, because the .conf inputs name their
     PythonModuleFile relatively and the solver writes output beside them
 
