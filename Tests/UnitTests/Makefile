@@ -1,5 +1,21 @@
 
 
+# Not a standalone Makefile. CXX, CXXFLAGS, LDFLAGS and every dependency include
+# path come from the variables the top-level Makefile exports with its bare
+# `export`. Run bare, this gets none of them, so the first test source dies on
+#
+#   ../../gridStructures.hpp:2:10: fatal error:
+#       sundials/sundials_linearsolver.h: No such file or directory
+#
+# which reads as a broken SUNDIALS install rather than as the wrong entry point.
+# SOLVER is defined in the top-level Makefile and exported, so its absence is a
+# reliable marker of a direct invocation. The parent's own `$(MAKE) -C` calls --
+# `all` from the test target, `clean` from clean -- carry it and pass.
+ifndef SOLVER
+$(error Run make from the repo root ("make test"), not from this directory: \
+this Makefile needs the flags the top-level make exports)
+endif
+
 all: UnitTests
 .PHONY: all clean
 
@@ -23,6 +39,34 @@ TEST_SOURCES = DGTests.cpp SystemSolverTests.cpp AutodiffTest.cpp MirrorPlasmaTe
 CXXFLAGS += -I../../ -DTEST -DTEST_DATA_DIR='"$(CURDIR)/"'
 
 REQUIRED_OBJECTS = ../../Config.o ../../SunLinSolWrapper.o ../../SunMatrixWrapper.o ../../ErrorChecker.o ../../Solver.o ../../PhysicsCases/ScalarTestLD3.o ../../PhysicsCases/MagneticFields.o ../../DGStatic.o ../../SystemSolver.o ../../Matrices.o ../../NetCDFIO.o ../../PhysicsCases/AutodiffTransportSystem.o ../../PhysicsCases.o ../../PhysicsCases/MatrixDiffusion.o ../../PhysicsCases/LinearDiffSourceTest.o ../../PhysicsCases/MirrorPlasma/PlasmaConstants.o ../../PhysicsCases/AutodiffAdjointProblem.o ../../PhysicsCases/AdjointTestProblem.o ../../AdjointVectors.o ../../Postprocessing.o ../../AlgebraicDerivatives.o ../../ConfigSchema.o ../../SolverConfig.o
+
+# Those objects belong to the parent build, and this Makefile must never compile
+# one. CXXFLAGS here carries -DTEST, which widens MANTA_TEST_PRIVATE from private
+# to public, so an object built in this directory is not the object the solver
+# wants -- and nothing would say so. Left to itself make is perfectly willing:
+# `%.o: %.cpp` above matches ../../Solver.o with a stem of ../../Solver, and the
+# built-in rule did before that rule existed. The result would be a -DTEST
+# Solver.o sitting at the repo root, newer than its source, which the next
+# `make MaNTA` links into the solver without recompiling.
+#
+# It cannot happen through `make test`, because Tests/UnitTests/UnitTests depends
+# on $(SOLVER) in the top-level Makefile and so everything here is already built
+# and current. It is a bare `make -C Tests/UnitTests` on a clean or half-built
+# tree that does it. This turns that into an error naming the fix.
+#
+# A static pattern rule rather than a bare `$(REQUIRED_OBJECTS):`, so it fires on
+# a stale object as well as a missing one: with no prerequisite, make calls an
+# existing file up to date and would link yesterday's object instead.
+$(REQUIRED_OBJECTS): %.o: %.cpp
+	@echo "$@ is missing or older than $<." >&2
+	@echo "" >&2
+	@echo "It belongs to the parent build, and compiling it here would use" >&2
+	@echo "this directory's CXXFLAGS -- which carry -DTEST. Build from the" >&2
+	@echo "repo root instead:" >&2
+	@echo "" >&2
+	@echo "    make -C $(realpath ../..) test" >&2
+	@echo "" >&2
+	@exit 1
 
 # One object per test source, rather than handing all 29 .cpp files to a single
 # $(CXX). That invocation compiled them serially whatever -j was asked for: a
