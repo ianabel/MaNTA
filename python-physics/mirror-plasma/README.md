@@ -63,7 +63,7 @@ needs `desc` and `optimistix`, which that suite does not. Run it directly:
 
     cd python-physics/mirror-plasma && pytest test_mirror.py
 
-7 tests and 12 subtests, all passing.
+8 tests and 12 subtests, all passing.
 
 ## State of it
 
@@ -72,23 +72,38 @@ The structural migration is done and verified: the case imports, builds its
 the aux constraint, the scalar hooks, `dSources_dScalars` — dispatches through
 the trampolines correctly.
 
-**With `useConstantVoltage = False` it runs.** 32 cells, degree 5, 135 timesteps
-to t = 0.1, output written.
+**It runs with the voltage controller on or off.** 32 cells, degree 5, 148
+timesteps to t = 0.1 with `useConstantVoltage = True`, 135 with it off.
 
-**With `useConstantVoltage = True` — which is what every config in `configs.py`
-sets — `IDACalcIC` fails with `IDA_LINESEARCH_FAIL` (-13)**, meaning the initial
-condition solve cannot reach a state consistent with the algebraic constraints
-from the guess it starts at. The failure is insensitive to the grid: 8 cells at
-degree 3 and 32 at degree 5 fail identically. Since dropping the three control
-scalars is the single change that makes it run, they are where to look —
-`InitialScalarValue`, `InitialScalarDerivative` and `ScalarG` in
-`mirror_plasma.py`, and whether the initial `RadialCurrent` is consistent with
-the momentum equation it is supposed to satisfy.
+Until recently the controller could not start at all: `IDACalcIC` failed with
+`IDA_LINESEARCH_FAIL` (-13), insensitive to the grid, and so did the C++
+`MirrorPlasma` before it — nothing in either tree ever ran that mode. **The
+cause was `VoltageError` being declared differential.** Its constraint is the
+plain definition `E = V0/omega0 - Phi(u)`, containing no `dE/dt`; declared
+differential, `IDA_YA_YDP_INIT` froze both `E` and `u` and solved only for
+`dE/dt`, which appears nowhere at `t = 0` because `tanh(t/CurrentDecay)`
+switches the controller off there. That left the row a constant residual —
+4.3e-6, the gap between `InitialScalarValue` integrating `Phi` by trapezoid and
+`ScalarG` integrating it with the solver's quadrature weights — and a
+linesearch cannot reduce a constant. Declared algebraic, `CalcIC` solves `E`
+from its own constraint and the residual is zero by construction.
 
-`Tests/UnitTests/ScalarJacobianTests.cpp` documents the C++ side of this: a
-case whose `ScalarGPrime` disagrees with its own `ScalarG` converges slowly or
-not at all, and finite-differencing one against the other is the first thing to
-try.
+`test_a_differential_scalars_constraint_reaches_a_calcic_unknown` pins the
+general rule, which is worth knowing before adding a scalar: **a scalar
+declared differential must have some `ydot` in its `G`.** If it does not, the
+symptom is not a wrong answer but `IDACalcIC` refusing to start, and the
+message points at the linesearch rather than at the declaration.
+
+The controller demonstrably works, which completing a solve does not by itself
+show: over a run to t = 0.1 it holds `Phi` to within 0.5% of `V0/omega0`, where
+the same run with the controller off drifts 56% away.
+
+`Tests/UnitTests/ScalarJacobianTests.cpp` documents the neighbouring failure
+mode: a case whose `ScalarGPrime` disagrees with its own `ScalarG` converges
+slowly or not at all, and finite-differencing one against the other is the
+first thing to try. That was checked here and is *not* the problem — this
+case's scalar Jacobian agrees with finite differences to 1e-5 relative across
+every field, at both ends of the domain and at cell boundaries.
 
 ## A note on variable order
 

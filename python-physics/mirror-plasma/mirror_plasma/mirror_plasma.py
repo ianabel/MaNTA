@@ -65,12 +65,33 @@ def buildSpec(config: MirrorPlasmaConfig) -> MaNTA.SystemSpec:
         )
     ]
 
-    # Scalar's order. Error and Integral are differential -- G depends on their
-    # time derivatives -- and Current is algebraic, which is what
-    # isScalarDifferential used to report.
+    # Scalar's order. Only Integral is differential: its constraint is
+    # d(Integral)/dt = Error, which is the one of the three that contains a time
+    # derivative of the scalar it constrains.
+    #
+    # VoltageError is *algebraic*, and used to be declared differential -- as the
+    # C++ MirrorPlasma declared it too. Its constraint is the plain definition
+    # E = V0/omega0 - Phi(u), with no dE/dt anywhere in it. Declared
+    # differential, IDACalcIC (IDA_YA_YDP_INIT, Solver.cpp:328) held E fixed as a
+    # differential value and solved only for dE/dt, which appears in no equation
+    # at t = 0 because tanh(t/CurrentDecay) switches the controller off there. So
+    # every quantity in that row was frozen and its residual was a constant: 4.3e-6,
+    # the gap between InitialScalarValue integrating Phi by trapezoid and ScalarG
+    # integrating it with the solver's quadrature weights. The linesearch cannot
+    # reduce a constant, so useConstantVoltage died in IDACalcIC with
+    # IDA_LINESEARCH_FAIL (-13) before the first step -- which is why neither this
+    # case nor the C++ one ever completed a run with the controller on.
+    #
+    # Algebraic, CalcIC solves E from its own constraint and the residual is zero
+    # by construction, whatever quadrature the initial guess used. The controller's
+    # derivative term still gets a dE/dt: IDA carries y' for every component, and
+    # for an algebraic one that is the BDF difference rather than a solved
+    # quantity. It is only ever read multiplied by tanh(t/CurrentDecay), which is
+    # zero at t0 -- the one point where an algebraic variable's derivative is not
+    # meaningful.
     scalars = (
         [
-            MaNTA.Scalar("VoltageError", "V0 minus the achieved voltage", "", True),
+            MaNTA.Scalar("VoltageError", "V0 minus the achieved voltage", "", False),
             MaNTA.Scalar(
                 "VoltageErrorIntegral", "time integral of the error", "", True
             ),
@@ -610,6 +631,15 @@ class MirrorPlasma(VectorizedTransportSystem):
         return Itot
 
     def InitialScalarValue(self, s):
+        # The trapezoid rule below is *not* the quadrature ScalarG uses -- that
+        # one contracts with the solver's own integration weights, and the two
+        # differ by 4.3e-6 on the CMFX config. That gap is what made
+        # useConstantVoltage fail in IDACalcIC while VoltageError was declared
+        # differential (see buildSpec). Now that it is algebraic, every value
+        # here is a starting guess CalcIC solves away, so the disagreement is
+        # harmless -- and it cannot be removed anyway: this hook is handed only
+        # the scalar index, with no integrator and no weights, so a case has
+        # nothing else to integrate with.
         def omega(x):
             R = self.params.MagneticField.R_x(x) / self.params.Constants.a
             VPrime = self.params.Constants.MagneticField.VPrime(x)

@@ -185,6 +185,21 @@ Two return codes worth being able to read without looking them up:
 * **`IDA_CONV_FAIL` (-4) from `IDACalcIC`** is the same problem one stage earlier:
   the Newton/linesearch could not reach a consistent state from the guess
   `setInitialConditions` built. The guess is worth suspecting before the solver is.
+* **`IDA_LINESEARCH_FAIL` (-13) from `IDACalcIC` means some residual row cannot be
+  reduced *at all*, which is usually a declaration error rather than a bad guess.**
+  `IDA_YA_YDP_INIT` solves for algebraic *values* and differential *derivatives*,
+  so it holds every differential value fixed. A row whose only unknowns are
+  differential values is therefore a constant, no Newton direction touches it, and
+  the backtracking loop runs to exhaustion. The way to get one is to declare a
+  scalar differential whose `ScalarG` contains no time derivative: the constraint
+  is then algebraic in a quantity `CalcIC` has frozen. That is exactly what kept
+  `python-physics/mirror-plasma`'s voltage controller from ever starting — and the
+  C++ `MirrorPlasma` had the same misdeclaration, so neither implementation ever
+  ran with `useConstantVoltage`. **Before theorising about the guess, ask which
+  unknowns each failing row can actually reach**: print `ScalarGPrime`'s `dGdot`
+  and check it is nonzero for every differential scalar. The trap is that the
+  residual can be tiny — 4.3e-6 there, just the difference between two quadrature
+  rules for the same integral — and still fatal, because irreducible beats small.
 
 ### Configuration
 

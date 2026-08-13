@@ -45,15 +45,39 @@ landed; these are the pieces that were deliberately not done, with the reason.
     venv. Both are slow enough to want their own CI job rather than a place in
     `make test`.
 
-  - The mirror plasma's useConstantVoltage scalars are unexercised, and are now
-    the thing standing between python-physics/mirror-plasma and a run: with the
-    controller on, IDACalcIC fails with IDA_LINESEARCH_FAIL; with it off the
-    case integrates. The C++ implementation carried the same three scalars and
-    the same gap -- nothing in any suite ever turned that mode on -- and has
-    since been removed, so the Python one is where to fix it.
-    checkScalarDerivative in ScalarJacobianTests.cpp is the C++ technique;
-    the equivalent on the Python side is to finite-difference the case's own
-    ScalarG against its ScalarGPrime.
+  - python-examples/adjoints/spatial_adjoints.py aborts inside Eigen:
+
+      Eigen/src/Core/DenseBase.h:261: DenseBase<Derived>::resize(Index, Index)
+      [Derived = Eigen::Block<Eigen::Matrix<double, -1, -1>, -1, -1, false>]:
+      Assertion `rows == this->rows() && cols == this->cols() &&
+                 "DenseBase::resize() does not actually allow one to resize."'
+      failed.
+
+    A resize of a fixed-size block somewhere in the spatial-parameter adjoint
+    path. Reproduced on pristine origin/main in a throwaway worktree with only
+    the constructor fix (fed7a3b) applied, so it predates the python-examples
+    split rather than coming from it.
+
+    Two reasons it survived: the example's constructor had been broken since
+    that split, so it died before reaching the solver, and it is the only thing
+    in the tree that passes spatialParameters=True -- python/Tests covers the
+    scalar-parameter adjoint path only. Anything that fixes this should leave a
+    test behind in python/Tests, because otherwise the next regression is
+    equally invisible.
+
+  - No C++ test asserts that a scalar declared differential has a time
+    derivative in its G. Without one, IDACalcIC is handed a row whose every
+    quantity it holds fixed, and it fails with IDA_LINESEARCH_FAIL (-13) before
+    the first step -- a message about the linesearch, for a defect in the
+    declaration. That is what kept python-physics/mirror-plasma's voltage
+    controller from ever starting, and the C++ MirrorPlasma carried the same
+    misdeclaration before it was removed, so this is not specific to the Python
+    surface. The Python side now pins it in
+    test_a_differential_scalars_constraint_reaches_a_calcic_unknown; the C++
+    equivalent belongs next to checkScalarDerivative in ScalarJacobianTests.cpp
+    and is cheap -- call ScalarGPrime and assert dGdot is not identically zero
+    for each differential scalar. Two of the three fixtures there would have to
+    be checked against it first.
 
 
 Superconvergence follow-ons (see Tests/README.md for what is already verified):

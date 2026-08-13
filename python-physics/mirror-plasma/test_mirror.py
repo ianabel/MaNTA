@@ -526,6 +526,73 @@ def test_length_normalization(x, MP, MP_unnorm, atol, subtests):
         ) == pytest.approx(0.0, abs=atol)
 
 
+def scalar_hook_arguments(MP):
+    """The six arguments the solver hands ScalarG and ScalarGPrime.
+
+    The weights and phiBoundary are synthetic rather than the basis's own --
+    there is no binding that exposes those to Python, and the structural
+    question these tests ask (which terms exist in the constraint) does not
+    depend on their values, only on their shapes.
+    """
+    pts = jnp.asarray(MP.points)
+    nPoints = len(pts)
+
+    # Both hooks are pointwise -- InitialDerivative is a jax.grad of a
+    # scalar-output function -- so they are mapped over the nodes, not handed
+    # the whole array.
+    val = jax.vmap(MP.InitialValue, in_axes=(None, 0))
+    der = jax.vmap(MP.InitialDerivative, in_axes=(None, 0))
+    u = jnp.stack([val(i, pts) for i in range(MP.nVars)]).transpose()
+    q = jnp.stack([der(i, pts) for i in range(MP.nVars)]).transpose()
+    y = {
+        "Variable": np.asarray(u),
+        "Derivative": np.asarray(q),
+        "Flux": np.zeros((nPoints, MP.nVars)),
+        "Aux": np.zeros((nPoints, MP.nAux)),
+        "Scalars": np.asarray(
+            [float(MP.InitialScalarValue(s)) for s in range(MP.nScalars)]
+        ),
+    }
+    ydot = {k: np.zeros_like(v) for k, v in y.items()}
+    weights = np.full((nPoints,), 1.0 / nPoints)
+    phib = np.ones((MP.k + 1, 2))
+    return y, ydot, list(np.asarray(pts)), weights, phib, 0.0
+
+
+def test_a_differential_scalars_constraint_reaches_a_calcic_unknown(MP):
+    """A differential scalar's G must contain some time derivative.
+
+    Solver.cpp calls IDACalcIC with IDA_YA_YDP_INIT, which solves for algebraic
+    *values* and differential *derivatives* while holding differential values
+    fixed. So if a scalar is declared differential and its constraint reaches
+    no ydot at all, every quantity in that row is frozen: the residual is a
+    constant, no Newton direction can reduce it, and IDACalcIC backtracks to
+    IDA_LINESEARCH_FAIL (-13) before the first step is ever attempted.
+
+    That is what useConstantVoltage did. G_Error is the algebraic relation
+    E = V0/omega0 - Phi(u), with E and u both differential, so its residual --
+    4.3e-6, the gap between InitialScalarValue integrating Phi by trapezoid and
+    ScalarG integrating it with the solver's quadrature weights -- was
+    irreducible. The C++ MirrorPlasma carried the same declaration and the same
+    two quadratures, and nothing ever ran that mode.
+    """
+    if MP.nScalars == 0:
+        pytest.skip("this config has no controller scalars")
+
+    y, ydot, absc, weights, phib, t = scalar_hook_arguments(MP)
+    _, dGdot = MP.ScalarGPrime(y, ydot, absc, weights, phib, t)
+
+    for s, spec in enumerate(MP.spec.scalars):
+        if not spec.differential:
+            continue
+        reach = max(float(np.abs(np.asarray(v)).max()) for v in dGdot[s].values())
+        assert reach > 0.0, (
+            f"scalar {s} ({spec.name}) is declared differential, but its "
+            f"constraint contains no time derivative -- IDACalcIC cannot "
+            f"satisfy it. Either give it one or declare it algebraic."
+        )
+
+
 def test_sources(psi, x, MP, B, C, VPrime, atol):
 
     mirror_state = make_mirror_state(x, MP)

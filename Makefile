@@ -327,12 +327,19 @@ clean_data:
 	       ! -name '*.ref.nc' ! -name '*.ref.dat' -delete; \
 	done
 
+# Three extensions, not two. .gcno is written by the compiler and .gcda by the
+# instrumented run, but gcov also drops a .gcov *report* next to each source, and
+# those were never swept: 184 of them accumulated in PhysicsCases/ before anyone
+# noticed. They are gitignored, so `git status` says nothing about them and the
+# only symptom is an unreadable `ls`. Spelling the directories and the extensions
+# as two lists rather than as thirty hand-written globs is what stops the next
+# extension being forgotten in the same way.
+COVERAGE_DIRS = . PhysicsCases $(wildcard PhysicsCases/*/) \
+                Tests/UnitTests python python/manta
+COVERAGE_ARTEFACTS = gcda gcno gcov
+
 clean_coverage:
-	rm -f *.gcda *.gcno PhysicsCases/*.gcda PhysicsCases/*.gcno \
-	      PhysicsCases/*/*.gcda PhysicsCases/*/*.gcno \
-	      Tests/UnitTests/*.gcda Tests/UnitTests/*.gcno \
-	      python/*.gcda python/*.gcno \
-	      python/manta/*.gcda python/manta/*.gcno
+	rm -f $(foreach d,$(COVERAGE_DIRS),$(foreach e,$(COVERAGE_ARTEFACTS),$(d)/*.$(e)))
 	rm -rf coverage
 
 regression_tests: $(SOLVER)
