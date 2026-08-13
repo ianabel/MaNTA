@@ -111,6 +111,21 @@ class SystemSolver
         // Factorization of these matrices is done here
         void updateMatricesForJacSolve();
 
+        // Fill the algebraic blocks of dydtComplete -- q', sigma', phi' and
+        // lambda' -- by differentiating the constraints that define them.
+        //
+        // IDA never computes them: IDA_YA_YDP_INIT produces algebraic *values*
+        // and differential *derivatives*, so at t0 those blocks of its dYdt are
+        // identically zero and anything differentiating the solution in time sees
+        // only the u term. Differentiating the algebraic residual rows gives
+        // dF/dy . ydot = -dF/dt, which is a linear system in exactly those
+        // unknowns once u' -- which IDA does have -- is treated as data.
+        //
+        // Reads Y and dYdt, so it is only meaningful after initialize(). Writes
+        // dydtComplete and nothing else; IDA's own dYdt is the state it takes its
+        // first step from and must not be touched.
+        void computeAlgebraicTimeDerivatives();
+
         // Solves the Jy = g equation
         void solveJacEq(N_Vector g, N_Vector delY);
         // Solves the HDG part of Jy = g
@@ -311,9 +326,22 @@ class SystemSolver
 
         double *yJacMem = nullptr;
         double *dydtJacMem = nullptr;
+        // The time derivative with its algebraic blocks filled in.
+        //
+        // IDA's dYdt has zeros in q, sigma and phi at t0: IDA_YA_YDP_INIT
+        // computes algebraic *values* and differential *derivatives*, so there
+        // is no y' for them to fetch. computeAlgebraicTimeDerivatives() solves
+        // the differentiated constraints for them and writes the answer here.
+        //
+        // Here rather than into dYdt because dYdt is the state IDA takes its
+        // first step from: changing its algebraic entries after IDACalcIC would
+        // alter the integration, and the symptom would be a step-size failure
+        // somewhere later rather than anything pointing back here.
+        double *dydtCompleteMem = nullptr;
 
         DGSoln yJac; // memory owned by us
         DGSoln dydtJac; // memory owned by us
+        DGSoln dydtComplete; // memory owned by us; see dydtCompleteMem above
 
         // Built in initialiseMatrices(), once the polynomial degree and grid are
         // fixed. Non-copyable and holds a reference to `grid`, hence the pointer.
@@ -321,6 +349,81 @@ class SystemSolver
         bool superconvergent = false;
 
         Matrix G_p; // gradients computed by adjoint state method
+
+        // Where the physics derivatives were evaluated: the k+2 star nodes with
+        // the superconvergent scheme, the k+1 cell nodes otherwise. Returned
+        // together because the two must agree -- the scalar columns are built on
+        // the same node set as the rest of the Jacobian, and re-deriving it at
+        // each use is how the two would drift apart.
+        struct PhysicsNodes
+        {
+            std::vector<Position> points;
+            GlobalState states;
+        };
+
+        // Size and fill the three derivative blocks at the state Y and time
+        // tEval, and report the nodes they were evaluated on.
+        PhysicsNodes evaluatePhysicsDerivatives(DGSoln const &Y, Time tEval,
+                                                GlobalStateMatrix &dSigma_vals,
+                                                GlobalStateMatrix &dSource_vals,
+                                                GlobalStateMatrix &dAux_vals);
+
+        // One cell's Jacobian block, [ sigma | q | u | aux ] by
+        // [ sigma | q | u | aux ], from derivative blocks evaluatePhysicsDerivatives
+        // has filled.
+        //
+        // alphaValue scales the mass term in the u row -- IDA's cj for the
+        // forward solve, and 0 where dF/dy alone is wanted, which is what makes
+        // this shareable with computeAlgebraicTimeDerivatives(). It is the *only*
+        // place this block layout is written down for the forward direction;
+        // initializeMatricesForAdjointSolve holds the transposed copy and has to
+        // be kept in step with it block for block.
+        Matrix assembleCellMatrix(Index i, DGSoln const &Y,
+                                  GlobalStateMatrix &dSigma_vals,
+                                  GlobalStateMatrix &dSource_vals,
+                                  GlobalStateMatrix &dAux_vals, double alphaValue);
+
+        // The scalar coupling: v (how the HDG rows depend on the scalars) and w
+        // (how the scalar constraints depend on the HDG unknowns), plus the
+        // scalar-scalar matrix N. Written through the caller's storage rather
+        // than into the members, so that a second consumer can assemble its own
+        // copy without disturbing the forward solve's.
+        void assembleScalarCoupling(DGSoln const &Y, DGSoln const &Ydot,
+                                    PhysicsNodes const &nodes, Time tEval,
+                                    double alphaValue, std::vector<DGSoln> &v_map,
+                                    std::vector<DGSoln> &w_map, Matrix &N_out);
+
+        // The whole Jacobian, densely, in the solution vector's own ordering:
+        // [ sigma | q | u | aux ] per cell, then all of lambda, then mu. Built
+        // from the same blocks the forward solve applies without ever forming --
+        // assembleCellMatrix, CEBlocks, CG_cellwise, H_cellwise and the scalar
+        // coupling -- so it cannot drift from them.
+        //
+        // Only computeAlgebraicTimeDerivatives() and the tests want this; the
+        // forward path never assembles a Jacobian and never should.
+        Matrix assembleDenseJacobian(DGSoln const &Y, DGSoln const &Ydot, Time tEval,
+                                     double alphaValue);
+
+        // The central-difference step: cbrt(eps) scaled by |t|. That is the
+        // exponent that balances a *central* difference's truncation against its
+        // round-off; sqrt(eps) is the one-sided choice and costs 2.5 decimal
+        // places here. See the note on the definition.
+        static double timeDifferenceStep(Time tEval);
+
+        // dF/dt at fixed state, by central difference of residual() in t alone.
+        // This is the whole right-hand side of the algebraic-derivative solve, and
+        // it is the only place the explicit time dependence of the boundary data,
+        // the flux, the sources and the aux constraint enters -- none of which has
+        // an analytic derivative anywhere in the tree.
+        //
+        // Exactly zero, bit for bit, for an autonomous case: residual() is a
+        // function of t only through those, so the two evaluations return
+        // identical vectors rather than nearly identical ones.
+        //
+        // Puts RF_cellwise and L_global back at tEval however it returns -- both
+        // residual() calls leave them at tEval - h, and they are what the forward
+        // residual reads.
+        Vector differenceResidualInTime(Time tEval, double h);
 
         void NLqMat(Matrix &, DGSoln const &, Index);
         void NLuMat(Matrix &, DGSoln const &, Index);
@@ -360,7 +463,10 @@ class SystemSolver
                                   Matrix const &chain, Index nX, Index nZ,
                                   Index intervalIndex) const;
 
-        void dSources_dScalars_Mat(Matrix &, DGSoln const &, Index );
+        // Takes the evaluation time rather than reading `jt`: this is now called
+        // from the algebraic-derivative solve as well, which is not a Jacobian
+        // evaluation and so does not set it.
+        void dSources_dScalars_Mat(Matrix &, DGSoln const &, Index, Time );
 
         // Superconvergent counterpart. The scalars do not enter the
         // postprocessing, so there is no chain matrix -- only the star nodes and
@@ -368,7 +474,7 @@ class SystemSolver
         // caller already has rather than re-deriving them from a DGSoln, which it
         // could not do for the star nodes anyway.
         void dSources_dScalars_StarMat(Matrix &, GlobalState const &,
-                                       std::vector<Position> const &, Index);
+                                       std::vector<Position> const &, Index, Time);
 
         void dSourcedPhi_Mat(Matrix &, DGSoln const &, Index );
         void dPhi_Mat(Matrix &, std::vector<Eigen::Ref<Matrix>> const dX_dZ, DGSoln const &, Index );

@@ -625,6 +625,13 @@ struct DGdtFixture
         N_VConst(0.0, dYdt);
         sys.setInitialConditions(Y, dYdt);
         fillWithNonzeroPattern(dYdt);
+
+        // Stand in for what initialize() does: seed dydtComplete from the
+        // derivative. The gate reads dydtComplete, not dydt, because at t0 the
+        // latter's algebraic blocks are empty -- see
+        // computeAlgebraicTimeDerivatives. Here the two are the same vector, so
+        // these tests go on measuring what they always measured.
+        sys.dydtComplete.copy(sys.dydt);
     }
 
     ~DGdtFixture()

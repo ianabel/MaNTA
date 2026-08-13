@@ -157,21 +157,53 @@ The derivatives come from the same ``dg`` hook and the same projection the adjoi
 solve uses to build :math:`G_y`, so the gate and the gradients beside it answer
 consistent questions, and no case has to implement anything new.
 
-.. warning::
+Where the algebraic derivatives come from
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-   **At :math:`t_0` only the differential part of the derivative exists**, so in
-   practice the sum above is currently differentiating through :math:`u` alone.
-   :math:`q`, :math:`\sigma` and :math:`\phi` are algebraic here, and IDA's
-   ``IDA_YA_YDP_INIT`` computes algebraic *values* and differential
-   *derivatives* — there is no :math:`\dot q` to fetch. An objective that depends
-   on those is therefore differentiated incompletely.
+Three of the four terms above are not IDA's to give. :math:`q`, :math:`\sigma`
+and :math:`\phi` are algebraic, and ``IDA_YA_YDP_INIT`` computes algebraic
+*values* and differential *derivatives* — so at :math:`t_0` those blocks of IDA's
+``dydt`` are identically zero, and a gate reading it would differentiate every
+objective through its :math:`u` dependence alone. An objective depending on
+:math:`q` alone would score exactly zero and could never be rejected.
 
-   Use the gate as a cheap filter on obviously-bad steps, not as a precise
-   predictor, and prefer an objective whose :math:`u` dependence carries the
-   signal. ``TODO`` records what closing the gap needs; note also that an
-   objective linear in the state is the only kind whose :math:`\mathrm{d}G/\mathrm{d}t`
-   is nonzero at a uniform initial condition — :math:`\int \tfrac{1}{2} u^2`
-   has :math:`\partial g/\partial u = u`, which vanishes where :math:`u = 0`.
+They are **solved for rather than read**.
+``SystemSolver::computeAlgebraicTimeDerivatives()`` differentiates the algebraic
+residual rows in :math:`t`, which gives
+
+.. math::
+
+   \frac{\partial F}{\partial y} \, \dot y = -\frac{\partial F}{\partial t}
+
+— a linear system in :math:`(\dot\sigma, \dot q, \dot\phi, \dot\lambda)` once
+:math:`\dot u`, which IDA *does* have, is treated as data. The matrix is the
+residual Jacobian with no mass term; the rows for the differential unknowns are
+replaced by the identity, with the known derivative on the right, and one dense
+factorisation finishes it. The answer goes to a separate ``dydtComplete`` vector,
+never into IDA's own ``dYdt``, which is the state the integration starts from.
+
+The gate therefore still evaluates at the initial condition, between
+``initialize()`` and ``integrate()`` — no step is taken and the run's trajectory
+is untouched — but it now evaluates the whole chain rule there. It costs one
+assembly and factorisation of the whole system, once, and only on a run that arms
+the gate.
+
+.. note::
+
+   :math:`-\partial F/\partial t` is the *explicit* time derivative of the
+   residual, and nothing in the tree exposes it analytically:
+   ``TransportSystem::LowerBoundary`` has no derivative counterpart and there is
+   no ``dSigmaFn_dt`` or ``dAuxG_dt``. It is obtained by central-differencing
+   ``residual()`` in :math:`t` with the state held fixed, so the algebraic
+   derivatives are second order in the differencing step for a case with explicit
+   time dependence and exact for an autonomous one. Measured against a
+   manufactured solution the error is around :math:`10^{-11}`, against
+   :math:`10^{-14}` for :math:`\dot u`, which is data rather than a difference.
+
+   Note also that an objective linear in the state is the only kind whose
+   :math:`\mathrm{d}G/\mathrm{d}t` is nonzero at a uniform initial condition —
+   :math:`\int \tfrac{1}{2} u^2` has :math:`\partial g/\partial u = u`, which
+   vanishes where :math:`u = 0`.
 
 The gate is unavailable with ``Superconvergent`` set — it throws rather than
 differentiate through the wrong projection — and it has no term for the global

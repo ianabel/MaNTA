@@ -85,7 +85,12 @@ bool SystemSolver::objectiveIsDecreasing()
 	bool decreasing = false;
 	for (Index gIndex = 0; gIndex < ng; ++gIndex)
 	{
-		last_dGdt(gIndex) = dGdt(gIndex);
+		// dydtComplete, not IDA's dydt. At t0 the latter's q, sigma and phi
+		// blocks are identically zero, so three of dGdt's four terms would
+		// multiply by nothing and the objective would be judged on its u
+		// dependence alone -- an objective depending only on q would score
+		// exactly zero. computeAlgebraicTimeDerivatives() fills them in.
+		last_dGdt(gIndex) = dGdt(gIndex, y, dydtComplete);
 		if (last_dGdt(gIndex) < -objective_decrease_tol)
 			decreasing = true;
 	}
@@ -351,7 +356,9 @@ void SystemSolver::initialize()
 	// phi are algebraic, and IDA_YA_YDP_INIT computes algebraic values and
 	// differential derivatives, not the other way round. That is structural, not the
 	// old wrong id vector -- see at_t0_only_the_differential_part_of_dydt_exists --
-	// and it is why the dG/dt gate differentiates through u alone.
+	// and it stays that way, because dYdt is the state IDA takes its first step
+	// from. The gate reads dydtComplete instead, which the two blocks below seed
+	// from this and then fill in.
 	//
 	// Checked, unlike every other use of it in this file's history: it fails with
 	// IDA_ILL_INPUT if IDA has already taken a step, and on failure it leaves Y and
@@ -361,6 +368,28 @@ void SystemSolver::initialize()
 	retval = IDAGetConsistentIC(IDA_mem, Y, dYdt);
 	if (ErrorChecker::check_retval(&retval, "IDAGetConsistentIC", 1))
 		throw std::runtime_error("Could not retrieve the corrected initial condition");
+
+	// Seed the complete derivative from IDA's. Its algebraic blocks are zero at
+	// this point; computeAlgebraicTimeDerivatives() fills them when the gate is
+	// armed, and nothing else reads them.
+	//
+	// Here rather than beside setJacEvalY above, because until the fetch on the
+	// line before this dYdt still holds the *guess* setInitialConditions built
+	// rather than the derivative IDACalcIC corrected it to. Seeding from the guess
+	// left dydtComplete's u block disagreeing with the state it is meant to
+	// describe by a fraction of a percent -- small enough to look like round-off
+	// and quite large enough to matter to anything differentiating the solution.
+	{
+		DGSoln idaDerivative(nVars, grid, k, nScalars, nAux);
+		idaDerivative.Map(N_VGetArrayPointer(dYdt));
+		dydtComplete.copy(idaDerivative);
+	}
+
+	// Only when the gate is armed: this is a dense assembly and factorisation of
+	// the whole system, and nothing but the gate reads the algebraic blocks. A
+	// run with the gate disarmed pays nothing and is unchanged.
+	if (CheckObjectiveDecrease)
+		computeAlgebraicTimeDerivatives();
 
 	if (writeDatFile)
 		print(out0, t0, nOut, true);
