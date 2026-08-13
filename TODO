@@ -138,8 +138,28 @@ a line in the harness. Tests/README.md is the place to record the gap if it stay
 From the origin/optimize-mode review, still unmerged and worth taking:
   - shard_inputs as a per-hook decorator in python/Stellarator2.py (but keep
     MaNTA_Decorator sharding, or every hook needs the new decorator)
-  - the Python drivers: StellaratorState.py, desc-optimize-bfgs.py, scan_eq.py,
-    scan_eq_ambipolar.py, yancc_gpu_test.py
+  - the multi-channel Stellarator2 rewrite: density, ion energy and electron
+    energy evolved together with an ambipolar Er. This is the substantial
+    piece. python-physics/stellarator/stellarator_state.py (its state module)
+    and its two drivers (scan_eq_ambipolar.py, stellarator_example.py) are
+    already merged and are waiting on it -- their st_config names that
+    rewrite's parameters and so cannot construct the single-channel
+    stellarator2.py we have. The blocker is that
+    the branch's version is written against the pre-SystemSpec interface
+    (TransportSystem.__init__(self), then assigning nVars/nAux and
+    isUpperDirichlet/isLowerDirichlet), which main has removed. Porting it means
+    building a SystemSpec whose width depends on evolveDensity -- the
+    `: TransportSystem(buildSpec(config))` static-helper pattern -- not
+    reverting the migration. python-physics/mirror-plasma/mirror_plasma.py does
+    exactly that and is the model to copy.
   - why the branch removed both `#pragma omp parallel for` from
     TransportSystem.hpp's batched defaults -- ask eatocco; may be a real finding
     about OpenMP against a Python trampoline
+
+  Done: the Python drivers (desc_optimize_bfgs.py, scan_eq.py,
+  scan_eq_ambipolar.py, stellarator_example.py, yancc_gpu_test.py,
+  stellarator_state.py) are in
+  python-physics/stellarator/ with their imports repointed at the manta
+  package. None has been run -- desc/yancc/interpax are not installable here --
+  and that README says which are close to working and which are waiting on the
+  rewrite above.

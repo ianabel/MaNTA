@@ -37,7 +37,52 @@ Three specific things to expect:
 | `objective.py`, `objective2.py` | The optimisation objective, as a DESC objective |
 | `desc_optimize.py` | The driver: build an equilibrium, optimise it against the objective |
 | `desc_optimize-vp.ipynb` | The same, interactively, with plots |
+| `desc_optimize_bfgs.py` | Optimise with BFGS rather than DESC's default, with the dG/dt gate armed |
+| `scan_eq.py` | Scan an equilibrium parameter, solving transport at each point |
+| `scan_eq_ambipolar.py` | The same scan for the multi-channel ambipolar case |
+| `stellarator_example.py` | One multi-channel solve, no scan — the smallest example of that case |
+| `yancc_gpu_test.py` | A `yancc` GPU sharding benchmark; touches no transport case |
+| `stellarator_state.py` | Named accessors for a multi-channel state. Orphaned — see below |
 
 The notebook lives here rather than in a notebooks directory of its own because
 it imports `stellarator2`, `objective2` and `yancc_wrapper2` — it has to sit
 beside them.
+
+## The six files taken from `origin/optimize-mode`
+
+The bottom six rows came from `python/` on that branch, which forked at
+`9af1105` (2026-07-27) — before `python/` became the `manta` package. Their
+imports were repointed (`from State import State` → `from manta.jax import
+State`, `Stellarator2`/`Objective2` → the lowercase modules here, `import
+MaNTA` → `import manta as MaNTA`) and they were parse-checked. Like everything
+else here, **they have not been run.**
+
+They are *not* equally close to working, and the differences are not visible
+from the imports:
+
+| | against this directory's `stellarator2.py` |
+|---|---|
+| `yancc_gpu_test.py` | Closest. Uses `manta.jax.State` and `yancc_wrapper2` only — no transport case, so nothing below applies to it |
+| `scan_eq.py` | Config matches `StellaratorParams.from_config`. Needed `use_chunking`, which `stellarator2.py` reads and the branch had no notion of; added as `False`, which is what it ran with |
+| `desc_optimize_bfgs.py` | As above, and its `"optimizeMode": True` became `"ObjectiveDecreaseTolerance": 0.05` — see the comment at that line |
+| `scan_eq_ambipolar.py`, `stellarator_example.py` | **Cannot run as they stand.** Their `st_config` is written against `stellarator_state.StellaratorParams` (`ParticleSourceCenter`, `HeatSourceCenter`, …, `evolveDensity: True`), not the `SourceCenter`/`SourceHeight`/`SourceWidth` that `stellarator2.py` reads, so construction fails on the first missing key |
+| `stellarator_state.py` | Imported by nothing. It belongs to the branch's rewritten `Stellarator2.py` |
+
+The last three go together: the branch rewrote `Stellarator2.py` to evolve
+density, ion energy and electron energy with an ambipolar Er, and
+`stellarator_state.py`, `scan_eq_ambipolar.py` and `stellarator_example.py` are
+that rewrite's state module and its two drivers. **The rewrite itself was
+deliberately not merged** — it is written against the pre-`SystemSpec` interface
+main has removed, so taking it would undo that migration. `TODO` records what
+taking it properly would involve.
+
+`scan_eq_ambipolar.py` was left as found rather than repointed at
+`stellarator2.py`'s parameter names, for the same reason `run.conf` was: the
+config it asks for describes physics (a split particle and heat source, three
+evolved channels) that `stellarator2.py` does not have, so translating the key
+names would produce something that runs and does not mean what it says.
+
+`optimizeMode` was translated rather than left, because unlike the above it is a
+plain rename: main has the same dG/dt early-exit gate, keyed
+`ObjectiveDecreaseTolerance` and with the branch's hardcoded `stoptol = 0.05`
+exposed as the value.
