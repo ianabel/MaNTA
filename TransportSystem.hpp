@@ -267,7 +267,7 @@ public:
           multiplies.
 
         * `abscissae` gives the position of each node, for a constraint whose
-          integrand depends on x itself -- MirrorPlasma's needs the magnetic
+          integrand depends on x itself -- a mirror plasma's needs the magnetic
           geometry at each point. Same vector the flux and source hooks get.
 
         * `weights` holds one quadrature weight per node, so an integral over

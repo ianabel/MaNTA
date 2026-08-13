@@ -13,9 +13,12 @@
 // regenerating the fixture in the new format; see Tests/README.md.
 //
 // What is covered here instead is StraightMagneticField, which is fully
-// analytic, needs no fixture, and is the implementation MirrorPlasma actually
-// uses. The assertions are the internal identities the class must satisfy, so
-// they stay meaningful if the formulas are refactored.
+// analytic and needs no fixture. Note that since the C++ MirrorPlasma was
+// removed, nothing in the tree *instantiates* either field -- AdjointPlasma
+// includes MagneticFields.hpp but its member is commented out -- so this file
+// is the whole of the coverage rather than a supplement to a case that
+// exercises them. The assertions are the internal identities the class must
+// satisfy, so they stay meaningful if the formulas are refactored.
 
 #include <boost/test/unit_test.hpp>
 
@@ -143,8 +146,9 @@ BOOST_AUTO_TEST_CASE(straight_field_Rmin_Rmax_relation)
 
 BOOST_AUTO_TEST_CASE(straight_field_autodiff_gradients_match_finite_differences)
 {
-    // MirrorPlasma differentiates through these via autodiff, so the dual-number
-    // overloads must carry correct gradients, not just correct values.
+    // A case built on AutodiffTransportSystem differentiates through these, so
+    // the dual-number overloads must carry correct gradients, not just correct
+    // values.
     StraightMagneticField B(L_z, B_z, Rm, 0.0, 0.05);
     const MagneticField &Bbase = B;
 

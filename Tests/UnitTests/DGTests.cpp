@@ -7,7 +7,7 @@
 #include <cmath>
 #include <vector>
 
-// Defines the entry point and a simple set of functional tests for the MirrorPlasma class
+// Functional tests for the DG machinery: the basis, DGApprox and DGSoln.
 
 // This defines the name of the test suite and causes
 // the default behaviour of the BOOST_TEST macros to compare

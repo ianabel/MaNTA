@@ -225,7 +225,9 @@ Two things make this work, and both are easy to get wrong when adding a case:
   `LinearDiffSourceTest`'s was worse -- it read `useMMS` and never applied
   `MMS_Source`, so the option silently did nothing. Both are gone; the
   manufactured problems here are self-contained and never depended on them.
-  `MirrorPlasma` keeps its own MMS, which is a deliberate implementation.
+  `AutodiffTransportSystem::MMS_Solution` is still there, but nothing overrides
+  it any more: the C++ `MirrorPlasma`, its only user, has been removed in favour
+  of `python-physics/mirror-plasma`.
 * **The time-integration tolerance must be well below the spatial error, but not
   so tight that IDA cannot start.** At 1e-12 it fails at `t = 0` for `k >= 2`
   with "the error test failed repeatedly or with |h| = hmin"; 1e-9 leaves three
@@ -515,11 +517,24 @@ These are deliberate and tracked, not oversights:
   `the_initial_condition_uses_boundary_data_at_t0` covers that separately,
   because every other fixture in the tree starts at zero.
 
-* **`PhysicsCases/CurvedMirrorPlasma/` is excluded from the build.** It is
-  unfinished (commit `c17fa42`, "start to add in curved stuff (doesn't
-  compile)") and has never compiled: 49 errors, including references to a
-  `CurvedMagneticField` class and a `PlasmaTypes` enum that were never written.
-  Adding it to `PHYSICS_SOURCES` breaks `make` for everyone.
+* **The C++ mirror plasma is gone.** `PhysicsCases/MirrorPlasma.{cpp,hpp}`,
+  `PhysicsCases/MirrorPlasma/` and `PhysicsCases/CurvedMirrorPlasma/` were
+  removed in favour of `python-physics/mirror-plasma`, which is the
+  implementation that is developed now. `MirrorPlasmaTest.cpp` went with them:
+  two cases, `plasma_init_tests` and `neutral_model_tests`, both of which
+  constructed a `PlasmaConstants` and checked collision times and neutral rates
+  against hand values. Nothing replaces them here — the equivalent checks are
+  `python-physics/mirror-plasma/test_mirror.py`, which is not run by
+  `make python_tests` (`pytest.ini` is `testpaths = python/Tests`) and needs
+  `desc` and `optimistix`. That is a real reduction in what CI covers, recorded
+  here rather than left to be discovered.
+
+  `CurvedMirrorPlasma/` had never compiled in any case (commit `c17fa42`,
+  "start to add in curved stuff (doesn't compile)"): 49 errors, including
+  references to a `CurvedMagneticField` class and a `PlasmaTypes` enum that were
+  never written. It was excluded from `PHYSICS_SOURCES` for that reason, and it
+  depended on `MirrorPlasma` and `PlasmaConstants`, so it could not have
+  outlived them.
 
 * **`PhysicsCases/` is reported but not gated.** It is exercised as test
-  fixtures; `MirrorPlasma` and the plasma diagnostics are not a coverage target.
+  fixtures rather than as a coverage target in its own right.

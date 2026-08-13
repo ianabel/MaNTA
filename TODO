@@ -22,8 +22,9 @@ landed; these are the pieces that were deliberately not done, with the reason.
     sigma_hat while the solver wants d/d(stored sigma).
 
     The reason this is not already done: *nothing in the tree reads the incoming
-    sigma at all*. MirrorPlasma and AdjointPlasma thread it into
-    Sn/Spi/Spe/Somega without using it, and every dSources_dsigma is identically
+    sigma at all*. AdjointPlasma threads it into Sn/Spi/Spe without using it --
+    as the C++ MirrorPlasma did before it was removed -- and every
+    dSources_dsigma is identically
     zero. So the change is unobservable today and no test would catch getting it
     wrong -- which is exactly why it should not be made blind. Write a physics
     case with a genuinely sigma-dependent source first, check it against a
@@ -44,11 +45,15 @@ landed; these are the pieces that were deliberately not done, with the reason.
     venv. Both are slow enough to want their own CI job rather than a place in
     `make test`.
 
-  - MirrorPlasma's useConstantVoltage scalars are unexercised. The port from
-    nested adaptive quadrature to the framework's node quadrature rests on the
-    algebra alone: nothing in any suite turns that mode on. checkScalarDerivative
-    in ScalarJacobianTests.cpp would check its Jacobian against a finite
-    difference of its own ScalarG for free, given a fixture that configures it.
+  - The mirror plasma's useConstantVoltage scalars are unexercised, and are now
+    the thing standing between python-physics/mirror-plasma and a run: with the
+    controller on, IDACalcIC fails with IDA_LINESEARCH_FAIL; with it off the
+    case integrates. The C++ implementation carried the same three scalars and
+    the same gap -- nothing in any suite ever turned that mode on -- and has
+    since been removed, so the Python one is where to fix it.
+    checkScalarDerivative in ScalarJacobianTests.cpp is the C++ technique;
+    the equivalent on the Python side is to finite-difference the case's own
+    ScalarG against its ScalarGPrime.
 
 
 Superconvergence follow-ons (see Tests/README.md for what is already verified):

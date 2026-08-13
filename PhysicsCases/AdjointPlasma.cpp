@@ -104,11 +104,11 @@ AdjointPlasma::AdjointPlasma(toml::value const &config, Grid const &grid)
     }
     else if (config.count("AdjointPlasma") == 0)
     {
-        throw std::invalid_argument("To use the Mirror Plasma physics model, a [MirrorPlasma] configuration section is required.");
+        throw std::invalid_argument("To use the AdjointPlasma physics model, an [AdjointPlasma] configuration section is required.");
     }
     else
     {
-        throw std::invalid_argument("Unable to find unique [MirrorPlasma] configuration section in configuration file.");
+        throw std::invalid_argument("Unable to find unique [AdjointPlasma] configuration section in configuration file.");
     }
 }
 

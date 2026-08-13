@@ -104,8 +104,8 @@ the wrong function, at the right rate — so an order study will not catch it, o
 a closed-form comparison will. And the stored flux a hook reads
 carries the negated `sigma_h`: `State::sigma(i)` is that stored value,
 `State::sigmaHat(i)` the physical flux `SigmaFn` returned. Nothing in the tree
-reads the incoming sigma at all — `MirrorPlasma` and `AdjointPlasma` thread it
-into `Sn`/`Spi`/`Spe`/`Somega` without using it, and every `dSources_dsigma` is
+reads the incoming sigma at all — `AdjointPlasma` threads it into
+`Sn`/`Spi`/`Spe` without using it, and every `dSources_dsigma` is
 zero — so a case that starts using it is the first to care, and no test would
 catch a sign error there.
 
@@ -864,12 +864,30 @@ These are deliberate and documented, not oversights — see `Tests/README.md` an
 * `python/Tests/test_reference_solutions.py::test_jax_aux_test` is a `strict=True`
   xfail. The C++ `nAux > 0` path is known good (`python/Tests/test_aux.py`), so
   the fault is in the JAX fixture or `JAXTransportSystem`'s aux hooks.
-* `PhysicsCases/CurvedMirrorPlasma/` has never compiled and is excluded from
-  `PHYSICS_SOURCES`.
+* **There is no C++ mirror plasma any more.** `PhysicsCases/MirrorPlasma.{cpp,hpp}`,
+  `PhysicsCases/MirrorPlasma/` (`AmbipolarPhi`, `ConstantVoltage`,
+  `PlasmaConstants`, `PlasmaDiagnostics`) and `PhysicsCases/CurvedMirrorPlasma/`
+  were removed: `python-physics/mirror-plasma` is the implementation that is
+  developed now, and two of them was one too many. `MirrorPlasmaTest.cpp`, the
+  nine `Config/*.conf` files that selected it, `CylindricalMagneticField.py` (it
+  generated the `Bfield.nc` only `useNcBField` read) and `util/mirror_plots.py`
+  (it read `Var0`-style groups, so it had already been broken by the
+  name-your-own-variables change) went with it.
+
+  Three things survive that were shared. `PhysicsCases/MagneticFields.{cpp,hpp}`
+  stays — `AdjointPlasma` includes it, though its field member is commented out,
+  and `MagneticFieldTest.cpp` is now the *whole* of its coverage rather than a
+  supplement, since nothing instantiates either field class. `AdjointPlasma`
+  itself is untouched: every `PlasmaConstants` use in it was already commented
+  out. And `AutodiffTransportSystem::MMS_Solution` remains as a facility with no
+  overrider left — `MirrorPlasma` was the only one.
+
+  The cost is real and worth naming: `plasma_init_tests` and
+  `neutral_model_tests` are gone from CI, and the Python case's own suite is not
+  run by `make python_tests` (`pytest.ini` is `testpaths = python/Tests`) because
+  it needs `desc` and `optimistix`. `Tests/README.md` records this.
 * The `UseMMS` options on `LinearDiffusion` and `LinearDiffSourceTest` have been
   removed: the first's manufactured solution did not satisfy its own boundary
-  conditions, and the second never applied `MMS_Source` at all. `MirrorPlasma`
-  still implements `MMS_Solution` against `AutodiffTransportSystem`'s facility,
-  which is deliberate and untouched. Order of accuracy is measured by
-  `Tests/UnitTests/MMSConvergenceTests.cpp`, which builds its own manufactured
-  problems.
+  conditions, and the second never applied `MMS_Source` at all. Order of accuracy
+  is measured by `Tests/UnitTests/MMSConvergenceTests.cpp`, which builds its own
+  manufactured problems.

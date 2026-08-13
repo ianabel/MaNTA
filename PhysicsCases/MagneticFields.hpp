@@ -103,7 +103,10 @@ private:
 };
 
 // Just a uniform magnetic field
-// Leave these template functions for now so we don't break MirrorPlasma
+// The template functions were kept for the C++ MirrorPlasma, which has since
+// been removed in favour of python-physics/mirror-plasma. They are now used only
+// by MagneticFieldTest.cpp; AdjointPlasma includes this header but its field
+// member is commented out.
 class StraightMagneticField : public MagneticField
 {
 public:

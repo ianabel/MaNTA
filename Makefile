@@ -15,13 +15,13 @@ HEADERS = Config.hpp Logging.hpp gridStructures.hpp SunLinSolWrapper.hpp SunMatr
 
 OBJECTS = $(patsubst %.cpp,%.o,$(SOURCES))
 
-# NOTE: PhysicsCases/CurvedMirrorPlasma/ is deliberately NOT in this wildcard.
-# It is unfinished work (commit c17fa42, "start to add in curved stuff (doesn't
-# compile)") and has never built: 49 compile errors, including references to a
-# CurvedMagneticField class and a PlasmaTypes enum that were never written.
-# Add it back here once those exist -- until then it would break `make` for
-# everyone.
-PHYSICS_SOURCES = $(wildcard PhysicsCases/*.cpp PhysicsCases/MirrorPlasma/*.cpp)
+# A flat wildcard, and PhysicsCases/ is flat again for the first time in a while:
+# the MirrorPlasma subdirectory went with the C++ mirror plasma, and so did
+# CurvedMirrorPlasma/, which this comment used to exist to explain the exclusion
+# of. If a case ever needs a subdirectory again, add its glob here -- a source
+# that is not matched produces no compile error, only an unregistered case and a
+# link failure at the point something names it.
+PHYSICS_SOURCES = $(wildcard PhysicsCases/*.cpp)
 PHYSICS_OBJECTS = $(patsubst %.cpp,%.o,$(PHYSICS_SOURCES))
 
 CXXFLAGS += -I.
