@@ -53,15 +53,21 @@ The paper also inverts its similarity variable `eta = x^4 / (64 D0 t)` as
 `eta_f = 3.339` reproduces the paper's own tabulated front positions (0.785,
 0.618, 0.321) to three figures; as printed it is out by 3-8%.
 
-## Why n_b is not zero here
+## Why n_b is not zero here, and why it needs SuppressAlgebraicError
 
-Shestakov's Section 2.1 sets `n_b = 0`, and MaNTA cannot integrate that: as
-`u -> 0` the flux `D0 q^3 / u^2` is a 0/0 whose Jacobian entry
-`d(sigma_hat)/du = -2 D0 q^3 / u^3` diverges, and `sigma` sits in IDA's error
-test. His Section 2.2 relaxes it to `c1 = 0.001` for the harder coupled
-problem; that value runs here only in a narrow tolerance window, and 0.1 runs
-comfortably. `benchmark.py` maps where the boundary is and README.md explains
-what is really failing -- it is never the nonlinear solve.
+Shestakov's Section 2.1 sets `n_b = 0`. As `u -> 0` the flux `D0 q^3 / u^2` is a
+0/0 -- finite in the true solution -- whose Jacobian entry
+`d(sigma_hat)/du = -2 D0 q^3 / u^3` diverges outright, and `sigma` sits in IDA's
+local error test. The step then dies in the error test however small `h` gets,
+with the Newton converging happily each time.
+
+`SuppressAlgebraicError = true` takes `sigma`, `q`, `lambda` and `phi` out of
+that test and is what makes this problem runnable at all. It moves the wall a
+long way but does not remove it: `n_b >= 1e-2` then works at every resolution
+tried, where without it nothing below 0.07 works anywhere; his Section 2.2 value
+of 1e-3 works at most resolutions; and `n_b = 0` runs at exactly one, so it is
+widened rather than cured. `benchmark.py` maps the whole grid, and the key costs
+restart fidelity and aux accuracy -- see docs/running.rst.
 """
 
 import numpy as np
@@ -72,7 +78,7 @@ S0 = 1.0                  # Shestakov's source strength
 SOURCE_WIDTH = 0.1        # ... his d
 D0 = 1.0                  # ... his D_0
 LX = 1.0                  # ... his L_x
-BOUNDARY_DENSITY = 0.1    # ... his n(Lx); his Sec 2.1 uses 0, which see above
+BOUNDARY_DENSITY = 0.01   # ... his n(Lx); his Sec 2.1 uses 0, which see above
 
 
 def ExactSolution(x, n_b=BOUNDARY_DENSITY):
