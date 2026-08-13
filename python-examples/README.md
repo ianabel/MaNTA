@@ -24,15 +24,18 @@ Install first, from the repository root:
 | `adjoints/` | Driving the solver from Python through `manta.Runner`; JVP and spatial adjoints | `manta[jax]`; `jvp.py` also needs an `XLA_FFI` build |
 | `park-convergence/` | Benchmark: spatial accuracy per flux call, against Park's IDO scheme | — |
 | `jardin-critical-gradient/` | Benchmark: the nonlinear solve on a stiff gradient-dependent diffusivity | — |
+| `shestakov-nonlinear/` | Benchmark: degenerate diffusion, and a boundary MaNTA cannot cross | — |
 
-The last two are a different kind of thing and are marked **Benchmark** above.
+The last three are a different kind of thing and are marked **Benchmark** above.
 They exist to *measure* rather than to demonstrate: each reproduces a problem
 from a paper in [`../refs/`](../refs/Refs.md) that has a closed-form solution,
 and each ships a `benchmark.py` reporting accuracy against the number of calls
 into the `TransportSystem` — the metric [`../PERFORMANCE.md`](../PERFORMANCE.md)
 asks MaNTA to be judged by, and compared against the algorithms it names.
-Nothing in CI runs them (`pytest.ini` is `testpaths = python/Tests`), so their
-READMEs carry the measured numbers.
+`shestakov-nonlinear/` is the odd one: the problem as its paper states it is one
+MaNTA cannot integrate, so its `benchmark.py` maps where the tractable region
+ends and identifies what stops it. Nothing in CI runs any of them (`pytest.ini`
+is `testpaths = python/Tests`), so their READMEs carry the measured numbers.
 
 A config-driven example runs with the `manta` command from inside its own
 directory:
