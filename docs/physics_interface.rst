@@ -179,7 +179,27 @@ can depend on :math:`t`:
    Value LowerBoundary(Index i, Time t) const override;
    Value UpperBoundary(Index i, Time t) const override;
 
-A Dirichlet boundary fixes :math:`u`; a Neumann boundary fixes the flux.
+A Dirichlet boundary fixes :math:`u`. **A Neumann boundary fixes** :math:`q`,
+the gradient — *not* the flux :math:`\hat\sigma`, which this said until it was
+measured. The two coincide only when :math:`\hat\sigma = q`, which is every case
+in this tree that uses a nonzero value, so nothing noticed. For
+:math:`\hat\sigma = \kappa q` the boundary value must be
+:math:`\hat\sigma_{\text{wanted}}/\kappa`, and for a flux with a spatially
+varying coefficient there is no single factor to divide by.
+
+.. warning::
+
+   Because it is a condition on :math:`q`, a problem whose flux vanishes at a
+   boundary *by degeneracy* — :math:`\hat\sigma = x\,\chi(q)\,q` at :math:`x=0`,
+   say — cannot be expressed by asking for a zero Neumann value. Doing so
+   imposes :math:`q = 0` there, which is an extra condition the original problem
+   does not have, and it is generally false: the true :math:`q` at such a
+   boundary is whatever regularity demands, not zero. The symptom is a
+   first-order error, independent of polynomial degree, from a one-cell layer at
+   that boundary. ``python-examples/jardin-critical-gradient`` documents a worked
+   case, where supplying the correct gradient instead takes the error from
+   ``7e-4`` to machine precision at every resolution.
+
 ``aFn(i, x)`` supplies the coefficient :math:`a_i` multiplying
 :math:`\partial_t u_i`, and defaults to 1.
 
