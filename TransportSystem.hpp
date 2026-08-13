@@ -118,9 +118,16 @@ public:
   DGSoln &getRestartY() { return *restart_Y; };
   DGSoln &getRestartdYdt() { return *restart_dYdt; };
 
-  // Function for passing boundary conditions to the solver
-  virtual Value LowerBoundary(Index i, Time t) const { return uL[i]; };
-  virtual Value UpperBoundary(Index i, Time t) const { return uR[i]; };
+  // Function for passing boundary conditions to the solver.
+  //
+  // The defaults read uL/uR, which nothing fills unless the case is restarting
+  // (setRestartValues above) or is an AutodiffTransportSystem, which loads them
+  // from its own [AutodiffTransportSystem] uL/uR keys. A case that is neither
+  // and overrides neither used to index an empty vector -- undefined behaviour,
+  // and in practice a core dump inside the first residual evaluation, with
+  // nothing pointing at the boundary conditions. It says so now.
+  virtual Value LowerBoundary(Index i, Time t) const { return boundaryFallback(uL, i, "LowerBoundary", "uL"); };
+  virtual Value UpperBoundary(Index i, Time t) const { return boundaryFallback(uR, i, "UpperBoundary", "uR"); };
 
   // Not virtual: the boundary *kind* is part of what a case is, and lives in the
   // spec. Only the boundary *values* above depend on t and stay overridable.
@@ -451,6 +458,23 @@ public:
   virtual std::string getAdjointNames(Index pIndex) const { return "p" + std::to_string(pIndex); }
 
   Values& getSourceCache(Index var) { return m_sourceCache[var]; }
+
+private:
+  // Shared by the two boundary defaults above. Not .at(): out_of_range names a
+  // vector, not the thing the case has to do about it.
+  Value boundaryFallback(std::vector<Value> const &values, Index i,
+                         char const *hook, char const *key) const
+  {
+    if (i < 0 || static_cast<std::size_t>(i) >= values.size())
+      throw std::runtime_error(
+          std::string("This physics case does not override ") + hook +
+          "(), and has no fallback boundary values for variable " +
+          std::to_string(i) + ". The default reads a table that only a restart "
+          "fills, or that AutodiffTransportSystem loads from its "
+          "[AutodiffTransportSystem] '" + key + "' key. Override " + hook +
+          "(), or supply '" + key + "' with one entry per variable.");
+    return values[i];
+  }
 
 protected:
   bool restarting = false;

@@ -158,11 +158,19 @@ class scope and passes a spec instead:
 
    manta.TransportSystem.__init__(self, manta.numbered_spec(nVars, nAux=1))
 
-Only ``SigmaFn`` and ``Sources`` are required. **The derivative hooks are
-optional**: an absent one means that block is identically zero, which is what
-the framework's zeroed output buffer already provides. Before this, the simplest
-possible case had to write four functions returning ``np.zeros(nVars)`` before
-it would run.
+``SigmaFn`` and ``Sources`` are required, and so are ``LowerBoundary`` and
+``UpperBoundary`` — this said "only ``SigmaFn`` and ``Sources``" until a case
+that took it literally was tried. A case that omits the boundary hooks has
+nowhere to get its boundary values from and is rejected when the solver first
+asks for one, naming the hook it wants. (The base-class defaults exist for two
+narrower situations: a restart, which recovers the values from the stored
+profile, and ``AutodiffTransportSystem``, which reads them from its own
+``uL``/``uR`` config keys.)
+
+**The derivative hooks are optional**: an absent one means that block is
+identically zero, which is what the framework's zeroed output buffer already
+provides. Before this, the simplest possible case had to write four functions
+returning ``np.zeros(nVars)`` before it would run.
 
 The subclass is inspected **once**, when it is first used, and classified as
 either *pointwise* or *vectorised*. The vectorised path requires **both**
