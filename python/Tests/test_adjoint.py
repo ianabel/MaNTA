@@ -874,20 +874,27 @@ def test_the_spatial_gradient_sums_to_the_closed_form(tmp_path):
 def test_spatial_adjoint_gradient_matches_finite_differences(tmp_path):
     """dG/dp at a node, from the adjoint, against re-running the solver.
 
-    Compared against the largest entry rather than each node's own, because the
-    discrepancy is uniform in *absolute* terms -- at the resolutions measured it
-    is the same number at every node to seven figures -- while the gradient
-    itself spans two orders of magnitude, being ~1e-5 at the nodes next to the
-    Dirichlet boundaries and ~5e-4 mid-domain. A per-node relative test would
-    therefore be a test of the two boundary nodes and nothing else.
+    To machine precision, and the tolerance is the point. This used to be a
+    thousand times looser, because the assembled dG/dZ applied the cell mass
+    matrix to dg/dZ where the objective demands the integration weights: GFn
+    reports sum_m w_m g(Z_m), whose exact derivative in the nodal coefficient
+    Z_i is w_i dg/dZ|_i, and M is not diag(w). Since M 1 = w exactly, the two
+    agree whenever dg/dZ is constant over a cell and differ by
+    (M - diag(w)) dg/dZ otherwise -- an operator that annihilates constants, so
+    the error summed to zero over every cell and left all of `G_p.sum()`, the
+    scalar-parameter path and the closed-form checks intact. It was visible only
+    per node, i.e. only through spatial parameters, as an error set purely by the
+    intra-cell node index and decaying as O(h^4).
 
-    That absolute offset is a discretisation error and converges: 1.549e-07 at
-    nCells = 4 against 3.091e-08 at nCells = 6, a ratio of 5.01 for a mesh ratio
-    of 1.5, i.e. O(h^4). It is not the non-spatial behaviour, where the same
-    machinery agrees with finite differences to 2e-8 and with the closed form to
-    7e-16 -- so the spatial gradient is consistent rather than exact, and the
-    total is exact regardless (see the sum test above). Worth knowing before
-    trusting a single node of it.
+    So a loose tolerance here does not degrade gracefully -- it stops testing the
+    thing that was wrong. 1e-10 of the largest entry is ~400x the round-off this
+    actually achieves and ~3e6 times tighter than the defect it replaced.
+
+    Compared against the largest entry rather than each node's own because the
+    gradient spans two orders of magnitude across the domain -- ~1e-5 at the
+    nodes next to the Dirichlet boundaries against ~1.3e-3 mid-domain -- so a
+    per-node relative test would weight the two boundary nodes far above
+    everything else.
 
     Only a few nodes are differenced -- each costs two steady-state solves --
     chosen either side of a cell boundary, which is where a layout error in the
@@ -910,7 +917,7 @@ def test_spatial_adjoint_gradient_matches_finite_differences(tmp_path):
         G_minus, _ = spatial_solve(points, minus, tmp_path / f"m{j}")
         fd = (G_plus - G_minus) / (2.0 * h)
 
-        assert abs(adjoint_grad[j] - fd) < 1e-3 * scale, (
+        assert abs(adjoint_grad[j] - fd) < 1e-10 * scale, (
             f"node {j} (x = {points[j]:.4f}): adjoint = {adjoint_grad[j]}, "
             f"finite-difference = {fd}, largest gradient entry = {scale}"
         )

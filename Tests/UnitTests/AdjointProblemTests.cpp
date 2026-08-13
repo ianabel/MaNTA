@@ -192,14 +192,10 @@ public:
 
     using AdjointProblem::gFn;
 
-    // Every term is quadratic at worst, so that each of the four derivatives is
-    // degree k or less and the interpolant of that derivative *is* the derivative.
-    // dGdt projects with InterpolateOntoBasis rather than integrating exactly --
-    // the route the adjoint assembly takes, and the only one a Python case can
-    // support -- so the two agree here for the right reason. A cubic term (phi^3
-    // was one) makes its derivative degree 2k, which P_k cannot represent, and the
-    // comparison against an exactly-integrated GFn then fails on the interpolation
-    // error rather than on anything about the chain rule.
+    // Every term is quadratic at worst, so each of the four derivatives is degree
+    // k or less. That mattered more when GFn below integrated exactly; it is kept
+    // because it also keeps every derivative representable, so a failure here is
+    // about the chain rule rather than about interpolation.
     Value gFn(Index, const State &s, Position x) const override
     {
         return s.u(0) * s.u(0)              // nonlinear in u
@@ -211,17 +207,35 @@ public:
 
     Value GFn(Index gIndex, DGSoln &Y) const override
     {
-        // Independent of the solver's own quadrature: a 30-point rule per cell,
-        // where dGdt goes through the basis's rule. If the two agree to
-        // finite-difference accuracy the assembly is right for the reason we want
-        // rather than because both share a mistake.
-        auto integrator = boost::math::quadrature::gauss<double, 30>();
+        // sum_m w_m g(Z_m) -- the objective every GFn in the tree reports, and
+        // therefore the one dGdt and the adjoint gradient have to differentiate.
+        //
+        // This used to be a 30-point Gauss rule per cell, chosen so the reference
+        // shared no quadrature with the assembly and could not agree with it by
+        // sharing a mistake. The trouble is that it made *this fixture* report a
+        // different functional from every real one: Int g dx rather than
+        // Int I_h[g] dx. The assembly used to match it, by applying the mass
+        // matrix, and that was the defect -- invisible in every aggregate,
+        // because (M - diag(w)) annihilates constants, and caught only by a
+        // per-node spatial gradient. Pinning the exact integral here would pin
+        // the defect.
+        //
+        // Independence is kept where it can be: this is a separate
+        // implementation, summing the basis's weights against gFn directly
+        // rather than going anywhere near DerivativeSubVector. What it no longer
+        // does is choose the quadrature independently, because the quadrature is
+        // the definition of G rather than an approximation to it.
         Value total = 0.0;
+        auto const &points = Y.getPoints();
         for (Grid::Index i = 0; i < grid.getNCells(); ++i)
         {
             Interval const &I = grid[i];
-            auto integrand = [&](double x) { return gFn(gIndex, Y.eval(x), x); };
-            total += integrator.integrate(integrand, I.x_l, I.x_u);
+            const Vector w = Y.getBasis().getIntegrationWeights(I);
+            for (Index j = 0; j < w.size(); ++j)
+            {
+                const Position x = points[i * w.size() + j];
+                total += w(j) * gFn(gIndex, Y.eval(x), x);
+            }
         }
         return total;
     }
@@ -500,12 +514,17 @@ BOOST_AUTO_TEST_CASE(missing_aux_parameter_derivative_is_reported)
 
 BOOST_AUTO_TEST_CASE(adjoint_derivative_vectors_match_gauss_quadrature)
 {
-    // dGdu_Vec / dGdq_Vec / dGdsigma_Vec / dGdaux_Vec each compute
-    //     Vec(var*(k+1) + j) = Int_I dg/dZ_var * phi_j dx
-    // by the basis's own Gauss rule. AdjointTests.cpp checks dGdu_Vec this way
-    // but only asserts the other three are *zero*, which they are for its
-    // fixture; here all four integrands are nonzero and each is compared with
-    // an independent 30-point rule.
+    // dGdaux_Vec computes
+    //     Vec(a*(k+1) + j) = Int_I dg/dphi_a * phi_j dx
+    // by the basis's own Gauss rule, and is compared here with an independent
+    // 30-point one.
+    //
+    // It used to have three siblings -- dGdu_Vec, dGdq_Vec, dGdsigma_Vec -- which
+    // this case covered too. They are gone: no solve called them, and the
+    // quantity they computed is the derivative of Int g dx rather than of the
+    // sum_m w_m g_m that GFn reports. dGdaux_Vec still computes that same wrong
+    // functional and is still live, which is in TODO; this case pins what it
+    // does today so that changing it has to be deliberate.
     const Index k = 2, nCells = 4, nVars = 2, nAux = 1;
     Grid grid(0.0, 1.0, nCells);
     AdjointHostSystem problem;
@@ -557,21 +576,6 @@ BOOST_AUTO_TEST_CASE(adjoint_derivative_vectors_match_gauss_quadrature)
                 }
             return ref;
         };
-
-        sys.dGdu_Vec(gIndex, actual, sys.y, cell);
-        BOOST_TEST((actual - reference(&AdjointProblem::dgFn_du, nVars)).norm() < 1e-10,
-                   "dGdu_Vec, cell " << cell);
-        BOOST_TEST(actual.norm() > 1e-6);
-
-        sys.dGdq_Vec(gIndex, actual, sys.y, cell);
-        BOOST_TEST((actual - reference(&AdjointProblem::dgFn_dq, nVars)).norm() < 1e-10,
-                   "dGdq_Vec, cell " << cell);
-        BOOST_TEST(actual.norm() > 1e-6);
-
-        sys.dGdsigma_Vec(gIndex, actual, sys.y, cell);
-        BOOST_TEST((actual - reference(&AdjointProblem::dgFn_dsigma, nVars)).norm() < 1e-10,
-                   "dGdsigma_Vec, cell " << cell);
-        BOOST_TEST(actual.norm() > 1e-6);
 
         // dGdaux_Vec writes one block per *auxiliary* variable, so its result is
         // nAux*(k+1) long -- which for this fixture (nVars = 2, nAux = 1) is not
@@ -795,13 +799,22 @@ BOOST_AUTO_TEST_CASE(the_gate_does_not_depend_on_the_output_cadence)
     }
 }
 
-BOOST_AUTO_TEST_CASE(the_interpolatory_derivative_sub_vector_agrees_with_the_quadrature_one)
+BOOST_AUTO_TEST_CASE(the_derivative_sub_vector_weights_dg_by_the_integration_weights)
 {
-    // DerivativeSubVector has the same two-overload structure as
-    // DerivativeSubMatrix: one integrates the hook by quadrature, the other
-    // projects precomputed nodal values. They differ in general (interpolation
-    // versus exact integration) but must agree when the integrand is a
-    // polynomial the basis represents -- dgFn_dq here is affine in x.
+    // DerivativeSubVector must produce w_j * dg/dZ|_j and nothing else.
+    //
+    // This replaces a case that asserted the nodal route agreed with a
+    // quadrature one. They did agree -- both computed Int dg/dZ phi_j dx, and
+    // they coincide whenever dg/dZ is a polynomial the basis represents, which
+    // MockAdjoint's affine dgFn_dq is. The trouble was that neither is the
+    // derivative of the objective GFn reports: G = sum_m w_m g(Z_m) gives
+    // dG/dZ_i = w_i dg/dZ|_i. Applying the mass matrix instead was wrong by
+    // (M - diag(w)) dg/dZ, which annihilates constants and so vanished from
+    // every aggregate -- the reason it took a per-node spatial gradient to see.
+    //
+    // So the reference here is built straight from the weights rather than by a
+    // second quadrature: the point is to pin which operator this is, and two
+    // integration routines agreeing was exactly the evidence that misled before.
     const Index k = 2, nCells = 3, nVars = 2;
     Grid grid(0.0, 1.0, nCells);
     AdjointHostSystem problem;
@@ -825,18 +838,21 @@ BOOST_AUTO_TEST_CASE(the_interpolatory_derivative_sub_vector_agrees_with_the_qua
     GlobalState dGdvars(nCells, k, nVars, 0, 1);
     adjoint.dg(1, dGdvars, sys.y.evalOnNodes(), sys.y.getPoints());
 
-    Vector viaQuadrature(nVars * (k + 1)), viaNodes(nVars * (k + 1));
+    Vector viaNodes(nVars * (k + 1)), expected(nVars * (k + 1));
     for (Index cell = 0; cell < nCells; ++cell)
     {
-        sys.dGdq_Vec(1, viaQuadrature, sys.y, cell);
         sys.DerivativeSubVector(1, viaNodes, dGdvars.cellwiseDerivative(cell), sys.y, cell);
 
-        // InterpolateOntoBasis reproduces an affine integrand exactly, so the
-        // two routes coincide to round-off here. A tolerance any looser would
-        // stop distinguishing "same formula" from "same ballpark".
-        BOOST_TEST((viaQuadrature - viaNodes).norm() < 1e-10,
-                   "cell " << cell << ": quadrature and nodal forms differ by "
-                           << (viaQuadrature - viaNodes).norm());
+        const Vector weights = sys.y.getBasis().getIntegrationWeights(grid[cell]);
+        auto const dgdq = dGdvars.cellwiseDerivative(cell);
+        for (Index var = 0; var < nVars; ++var)
+            for (Index j = 0; j < k + 1; ++j)
+                expected(var * (k + 1) + j) = weights(j) * dgdq(var, j);
+
+        BOOST_TEST((viaNodes - expected).norm() < 1e-14,
+                   "cell " << cell << ": assembled dG/dq is not diag(w) dg/dq, "
+                           << "differing by " << (viaNodes - expected).norm());
+        BOOST_TEST(viaNodes.norm() > 1e-6);
     }
 
     N_VDestroy(Y);

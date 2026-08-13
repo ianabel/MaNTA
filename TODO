@@ -45,28 +45,30 @@ landed; these are the pieces that were deliberately not done, with the reason.
     venv. Both are slow enough to want their own CI job rather than a place in
     `make test`.
 
-  - The spatial adjoint gradient is consistent but not exact, and the
-    non-spatial one is exact, so the difference is worth understanding rather
-    than living with. Measured in
-    test_spatial_adjoint_gradient_matches_finite_differences: against finite
-    differences, every node is off by the *same absolute amount* -- 1.549e-07 at
-    nCells = 4 and 3.091e-08 at nCells = 6, a ratio of 5.01 for a mesh ratio of
-    1.5, i.e. O(h^4). Summed over the nodes the error vanishes exactly:
-    sum_j dG/dp_j is the closed-form dG/dS to 14 digits, which is what
-    test_the_spatial_gradient_sums_to_the_closed_form pins.
+  - dGdaux_Vec still differentiates the wrong functional. It is the last piece
+    of the mass-matrix/quadrature-weight confusion that DerivativeSubVector
+    carried: GFn reports G = sum_m w_m g(Z_m), so dG/dphi_i is w_i dg/dphi|_i,
+    but dGdaux_Vec computes Int dg/dphi phi_i dx with the basis's Gauss rule.
+    Same class of error as the one fixed for u, q and sigma -- invisible in every
+    aggregate, because the discrepancy annihilates constants, and visible only
+    per node.
 
-    For comparison the scalar-parameter path on the same physics agrees with
-    finite differences to 2e-8 and with the closed form to 7e-16, so this is not
-    the adjoint solve being approximate in general -- something in the per-node
-    distribution inside the pIndex/j loop of computeAdjointGradients is. The
-    uniform-in-absolute-terms signature is the clue: it looks like a term that
-    should be weighted per node and is instead spread evenly.
+    Left alone for now because it is not reachable the same way. Spatial adjoint
+    parameters are what exposed the u/q/sigma version, and there is no
+    per-node aux gradient to compare against finite differences; and unlike the
+    three it replaces, dGdaux_Vec is *live* -- dgFn_dphi is the only pointwise dg
+    hook a case can still reach, python/Tests/test_adjoint_aux.py overrides it,
+    and adjoint_derivative_vectors_match_gauss_quadrature pins the current
+    behaviour deliberately.
 
-    It matters most where the gradient is small. At nCells = 6 the error is 6e-5
-    of the largest entry, but the nodes next to the Dirichlet boundaries carry
-    gradients of ~1e-5, so *there* it is a 1.4e-2 relative error. An
-    optimisation driver that trusts individual boundary-adjacent nodes is the
-    thing that would notice.
+    Fixing it means either weighting dgFn_dphi at the nodes instead of
+    integrating it, or moving aux onto the batched dg hook the way the
+    superconvergent branch already has (SystemSolver.cpp:1320 does
+    cwiseProduct(b1) on dGdvars.cellwiseAux). The second is tidier and drops a
+    hook; the first keeps dgFn_dphi working for cases that override it. Either
+    way the test above has to change with it, and something has to be built that
+    can actually see the difference -- an nAux > 0 case with spatial parameters
+    would do it.
 
   - No C++ test asserts that a scalar declared differential has a time
     derivative in its G. Without one, IDACalcIC is handed a row whose every

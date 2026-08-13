@@ -482,12 +482,18 @@ class SystemSolver
         void dAux_Mat(Eigen::Ref<Matrix>, DGSoln const &, Index );
         void dAux_Mat(Eigen::Ref<Matrix>, GlobalStateMatrix&, DGSoln const &, Index );
 
-        void DerivativeSubVector(Index, Vector &, void (AdjointProblem::*dX_dZ)(Index, VectorRef, const State &, Position), DGSoln const &Y, Index I);
+        // Takes the nodal values of one dg/dZ, batched, and weights them. The
+        // pointwise sibling that took a member-function pointer and integrated it
+        // with the basis's Gauss rule is gone, along with the dGdu_Vec/dGdq_Vec/
+        // dGdsigma_Vec wrappers over it: it computed Int dg/dZ phi_i dx, which is
+        // the derivative of Int g dx and not of the sum_m w_m g_m that GFn
+        // actually reports, and no solve ever called it -- only a pair of
+        // "does not throw" assertions did.
         void DerivativeSubVector(Index, Vector &, Eigen::Ref<Matrix> const dX_dZ, DGSoln const &, Index intervalIndex);
 
-        void dGdu_Vec(Index, Vector &, DGSoln const &, Index);
-        void dGdq_Vec(Index, Vector &, DGSoln const &, Index);
-        void dGdsigma_Vec(Index, Vector &, DGSoln const &, Index);
+        // Still on that Gauss rule, and so still the derivative of the wrong
+        // functional -- see the TODO entry. It is live, unlike the four above,
+        // because dgFn_dphi is the only pointwise dg hook a case can still reach.
         void dGdaux_Vec(Index, Vector &, DGSoln const &, Index);
 
         // The time derivative of the objective, by the chain rule over the four

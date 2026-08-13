@@ -604,13 +604,35 @@ asserts as much), so this is a trampoline concern rather than a solver one.
 `Superconvergent = true` with spatial parameters throws rather than guessing —
 the star node set would redefine how many parameters there are.
 
-Two things to know before trusting a spatial gradient, both measured in
-`test_adjoint.py`: summed over nodes it is exact (`sum_j dG/dp_j` matches the
-closed-form `dG/dS` to 14 digits), but *per node* it carries an O(h^4) error
-that is uniform in absolute terms — so it is worst, relatively, exactly where
-the gradient is smallest, which is the nodes next to a Dirichlet boundary. The
-scalar-parameter path on the same physics is exact to 7e-16, so this is specific
-to the per-node distribution and is in `TODO`.
+The spatial gradient is now exact per node as well as in total, both pinned in
+`test_adjoint.py`. Getting there turned up the more general trap below.
+
+**The adjoint's `dG/dZ` is `diag(w)`, not the mass matrix, and the difference is
+invisible in every aggregate.** `GFn` reports `G = Σ_m w_m g(Z_m)` — the
+interpolatory quadrature, `∫ I_h[g] dx` — so the exact derivative in the nodal
+coefficient `Z_i` is `w_i dg/dZ|_i`. `DerivativeSubVector` used to apply
+`InterpolateOntoBasis`, i.e. the cell mass matrix `M`. Since **`M·1 = w`
+exactly** — a mass matrix's row sums *are* the quadrature weights — the two
+agree whenever `dg/dZ` is constant across a cell and otherwise differ by
+`(M − diag(w))·dg/dZ`, an operator that annihilates constants.
+
+That last property is the whole reason it survived: the error summed to zero
+over every cell, so `G_p.sum()`, the scalar-parameter gradient (exact to 7e-16
+against a closed form) and every finite-difference check in the suite were
+untouched. It was reachable *only* per node — i.e. only through spatial adjoint
+parameters — where it appeared as an error set purely by the intra-cell node
+index, symmetric and alternating in sign, decaying as O(h^4). That decay is a
+convergence rate of an inconsistency, not a discretisation order: refining the
+mesh hid it and nothing removed it. The generalisation worth keeping is that
+**two quadratures agreeing is not evidence either is right** — the fixture that
+should have caught this instead pinned the defect, because it differenced an
+exactly-integrated `GFn` that no real case reports.
+
+`dGdaux_Vec` is the one piece still on the old footing, and is in `TODO`; it is
+live because `dgFn_dphi` is the only pointwise `dg` hook a case can still reach.
+The pointwise `DerivativeSubVector` overload and the `dGdu_Vec`/`dGdq_Vec`/
+`dGdsigma_Vec` wrappers over it are gone — they computed `∫ dg/dZ φ_i dx`, the
+derivative of `∫ g dx`, and no solve ever called them.
 
 ## Traps worth knowing before you edit
 

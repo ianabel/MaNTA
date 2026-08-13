@@ -164,14 +164,13 @@ def fd_jvp(tangent):
     # truncation error, and at dT = 0.1 * ||T_p|| -- about 13, on a parameter of
     # norm ~129 -- that error was most of the 2% the check then reported: a
     # measurement of the step size rather than of the gradient. Central
-    # differencing makes it O(dT^2), and with float64 and the tolerances above
-    # the answer is now flat to six figures for every dT between 1e-1 and 3e-3
-    # of ||T_p||, so the step is no longer what limits the comparison.
+    # differencing makes it O(dT^2), and float64 leaves room to shrink the step.
     #
-    # What is left is ~1.3e-3, and it is real: the spatial gradient carries a
-    # discretisation error that a coarse grid like this one shows plainly.
-    # python/Tests/test_adjoint.py measures it -- uniform in absolute terms,
-    # O(h^4), and exactly zero once summed over the nodes.
+    # 1e-2 of ||T_p|| is the optimum and not much of a compromise: the agreement
+    # is ~7e-7 there, against ~2e-6 at 1e-3 and ~1e-2 at 1e-6, where the
+    # steady state's own round-off takes over. Both ends of that curve are the
+    # measurement rather than the gradient, which is the state a finite-difference
+    # check should be in.
     dT = 1e-2 * jnp.linalg.norm(T_p)
 
     direction = tangent / jnp.linalg.norm(tangent)

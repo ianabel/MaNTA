@@ -8,81 +8,44 @@
 #include "Types.hpp"
 #include "SystemSolver.hpp"
 
-void SystemSolver::DerivativeSubVector(Index gIndex, Vector &Vec, Eigen::Ref<Matrix> const dX_dZ, DGSoln const &Y, Index intervalIndex)
+// dG/dZ for one cell: the integration weights, elementwise.
+//
+// This used to apply InterpolateOntoBasis -- the mass matrix -- and the
+// distinction is not cosmetic. GFn reports
+//
+//     G = Int I_h[g] dx = sum_m w_m g(Z_m)
+//
+// so the exact derivative with respect to the nodal coefficient Z_i is
+// w_i dg/dZ|_i, i.e. diag(w) dg/dZ. InterpolateOntoBasis gives M dg/dZ instead.
+// M 1 = w exactly -- a mass matrix's row sums *are* the quadrature weights -- so
+// the two agree whenever dg/dZ is constant across a cell and differ otherwise by
+// (M - diag(w)) dg/dZ, an operator that annihilates constants.
+//
+// That last property is why this survived: the discrepancy sums to zero over
+// each cell, so every aggregate stayed exact. The scalar-parameter gradient
+// agreed with finite differences to 2e-8 and with a closed form to 7e-16, and
+// nothing else in the suite looks at anything finer. It is visible only per
+// node, which means only through spatial adjoint parameters, where it showed as
+// an error depending solely on the intra-cell node index -- symmetric,
+// alternating in sign, summing to zero -- and decaying as O(h^4) because a
+// refined cell is one across which dg/dZ varies less. A convergence rate of an
+// inconsistency, not a discretisation order: refining hid it, nothing removed it.
+//
+// The superconvergent branch of initializeMatricesForAdjointSolve already did
+// this correctly (`cwiseProduct(b1)` against the star weights), and
+// AdjointProblem::GFn's comment already promised it -- "the same quadrature is
+// what initializeMatricesForAdjointSolve differentiates to build G_y, so the
+// reported objective and the reported gradient are exactly a function and its
+// derivative". This is the plain branch keeping that promise.
+void SystemSolver::DerivativeSubVector(Index, Vector &Vec, Eigen::Ref<Matrix> const dX_dZ, DGSoln const &Y, Index intervalIndex)
 {
     Interval const &I(grid[intervalIndex]);
+    const Vector weights = Y.getBasis().getIntegrationWeights(I);
     for (Index XVar = 0; XVar < nVars; XVar++)
-    {
-        auto const &dX_dZ_vec = dX_dZ.row(XVar);
-        Vec.block(XVar * (k + 1), 0, (k + 1), 1) = Y.getBasis().InterpolateOntoBasis(I, dX_dZ_vec);
-    }
+        Vec.block(XVar * (k + 1), 0, (k + 1), 1) =
+            dX_dZ.row(XVar).transpose().cwiseProduct(weights);
 }
 
-void SystemSolver::DerivativeSubVector(Index gIndex, Vector &Vec, void (AdjointProblem::*dX_dZ)(Index, VectorRef, const State &, Position), DGSoln const &Y, Index intervalIndex)
-{
-    Interval const &I(grid[intervalIndex]);
-    auto const &x_vals = y.getBasis().abscissae();
-    auto const &x_wgts = y.getBasis().weights();
-    const size_t n_abscissa = x_vals.size();
-
-    // ASSERT vec.shape == ( nVars * ( k + 1) )
-    assert(Vec.size() == nVars * (k + 1));
-
-    Vec.setZero();
-
-    // Phi are basis fn's
-    // M( nVars * K + k, nVars * J + j ) = Int_I ( d sigma_fn_K / d u_J * Phi_k * Phi_j )
-
-    for (Index XVar = 0; XVar < nVars; XVar++)
-    {
-        Values dX_dZ_vals1(nVars);
-        Values dX_dZ_vals2(nVars);
-        dX_dZ_vals1.setZero();
-        dX_dZ_vals2.setZero();
-
-        for (size_t i = 0; i < n_abscissa; ++i)
-        {
-            // Pull the loop over the gaussian integration points
-            // outside so we can evaluate u, q, dX_dZ once and store the values
-
-            // All for loops inside here can be parallelised as they all
-            // write to separate entries in mat
-
-            double wgt = x_wgts[i] * (I.h() / 2.0);
-
-            double y_plus = I.x_l + (1.0 + x_vals[i]) * (I.h() / 2.0);
-            double y_minus = I.x_l + (1.0 - x_vals[i]) * (I.h() / 2.0);
-
-            State Y_plus = Y.eval(y_plus), Y_minus = Y.eval(y_minus);
-
-            (adjointProblem->*dX_dZ)(gIndex, dX_dZ_vals1, Y_plus, y_plus);
-            (adjointProblem->*dX_dZ)(gIndex, dX_dZ_vals2, Y_minus, y_minus);
-
-            for (Index j = 0; j < k + 1; ++j)
-            {
-                Vec(XVar * (k + 1) + j) +=
-                    wgt * dX_dZ_vals1[XVar] * y.getBasis().Evaluate(I, j, y_plus);
-                Vec(XVar * (k + 1) + j) +=
-                    wgt * dX_dZ_vals2[XVar] * y.getBasis().Evaluate(I, j, y_minus);
-            }
-        }
-    }
-}
-
-void SystemSolver::dGdu_Vec(Index gIndex, Vector &Vec, DGSoln const &Y, Index I)
-{
-    DerivativeSubVector(gIndex, Vec, &AdjointProblem::dgFn_du, Y, I);
-}
-
-void SystemSolver::dGdq_Vec(Index gIndex, Vector &Vec, DGSoln const &Y, Index I)
-{
-    DerivativeSubVector(gIndex, Vec, &AdjointProblem::dgFn_dq, Y, I);
-}
-
-void SystemSolver::dGdsigma_Vec(Index gIndex, Vector &Vec, DGSoln const &Y, Index I)
-{
-    DerivativeSubVector(gIndex, Vec, &AdjointProblem::dgFn_dsigma, Y, I);
-}
 
 // dG/dt for one objective, by the chain rule
 //
