@@ -184,7 +184,7 @@ Compute fluxes using yancc given the MaNTA state
 Parameters
 ----------
 state : dict
-    Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar"
+    Dictionary containing "Variable", "Derivative", "Flux", "Aux", and "Scalars"
 Returns
 -------
 dict

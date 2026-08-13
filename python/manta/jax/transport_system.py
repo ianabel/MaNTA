@@ -5,7 +5,7 @@ from typing import NamedTuple
 from abc import abstractmethod
 
 from .adjoint_problem import JAXAdjointProblem
-from .state import MaNTA_Decorator
+from .state import MaNTA_Decorator, ShiftedState_Decorator
 
 """
 JAX-based transport system base class that overloads MaNTA TransportSystem.
@@ -50,7 +50,7 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     index : int
         Variable index
     state : dict
-        Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
+        Dictionary containing "Variable", "Derivative", "Flux", "Aux", and "Scalars" arrays
     x : float
         Spatial location
     t : float
@@ -108,24 +108,29 @@ class JAXTransportSystem(MaNTA.TransportSystem):
         return self.aux(index, state, x, t, self.params)
     
     """
-    Compute derivative of auxiliary functions
+    Compute the derivatives of the auxiliary constraint G_index.
 
-     Parameters
+    The one hook here that fills a buffer rather than returning a value: `out`
+    is a non-owning window onto the solver's State, and it arrives zeroed, so
+    only the nonzero entries need writing. That extra argument sits *ahead of*
+    the state, which is why this takes ShiftedState_Decorator -- MaNTA_Decorator
+    would convert `out` and hand the state to jnp.array().
+
+    Parameters
     ----------
     index : int
-        Variable index
-    state : dict
-        Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
+        Auxiliary variable index
+    out : manta.State
+        Written in place; out.u[j], out.q[j] and out.phi[j] receive dG/du_j,
+        dG/dq_j and dG/dphi_j
+    state : State
+        The solution at this point
     x : float
         Spatial location
     t : float
         Time
-    Returns
-    -------
-    state : dict
-        Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
     """
-    @MaNTA_Decorator
+    @ShiftedState_Decorator
     def AuxGPrime( self, index, out, state, x, t):
         d = self.dAuxdvars(index, state, x, t, self.params)
         for j, v in enumerate(np.asarray(d.Variable)):

@@ -927,9 +927,14 @@ These are deliberate and documented, not oversights — see `Tests/README.md` an
   `test_adjoint_aux.py`.
 * Restarting is fragile at tight tolerances, more so with `nAux > 0`; each
   regression round-trip case runs at the tightest tolerance that completes.
-* `python/Tests/test_reference_solutions.py::test_jax_aux_test` is a `strict=True`
-  xfail. The C++ `nAux > 0` path is known good (`python/Tests/test_aux.py`), so
-  the fault is in the JAX fixture or `JAXTransportSystem`'s aux hooks.
+* ~~`python/Tests/test_reference_solutions.py::test_jax_aux_test` is a
+  `strict=True` xfail.~~ Fixed. It was four faults in `manta.jax`, all reachable
+  only with `nAux > 0`: `AuxGPrime` and `dAux_dp` take an extra argument ahead
+  of the state and so need `ShiftedState_Decorator` rather than
+  `MaNTA_Decorator`; `dgFn_dphi` was undecorated and indexed its result as a
+  dict; and `JAXAdjointProblem` never bound `transport_system.aux`. See
+  `Tests/README.md`, and note that the symptom the xfail *recorded* was not the
+  symptom it *had* by the time it was fixed — re-run before theorising.
 * **There is no C++ mirror plasma any more.** `PhysicsCases/MirrorPlasma.{cpp,hpp}`,
   `PhysicsCases/MirrorPlasma/` (`AmbipolarPhi`, `ConstantVoltage`,
   `PlasmaConstants`, `PlasmaDiagnostics`) and `PhysicsCases/CurvedMirrorPlasma/`

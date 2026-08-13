@@ -469,25 +469,45 @@ These are deliberate and tracked, not oversights:
   two lengths. The extra auxiliary variable (`phi_u - u = 0`) is otherwise
   unused.
 
-* **`python/Tests/test_reference_solutions.py::test_jax_aux_test` is xfail
-  (strict).** The Python `nAux > 0` path returns demonstrably correct
-  derivatives but IDA's corrector will not converge at t=0. Ruled out: float32
-  precision, tolerance/polynomial degree/grid size/timestep, and
-  source-constraint degeneracy. The fixture is unchanged since `1a369d7`
-  (2026-02-05), when it generated the committed reference, so this is a
-  regression in the aux path rather than a bad fixture. `strict=True` means the
-  suite will fail if it starts passing -- that is the signal to remove the mark.
+* **`python/Tests/test_reference_solutions.py::test_jax_aux_test` passed and the
+  xfail is gone.** It had been `strict=True` xfail since `fdd5ee1`. The
+  conclusion the note above reached -- that the C++ `nAux > 0` path was sound
+  and the fault lay in `manta.jax` -- was right, and there were four faults, all
+  reachable only with `nAux > 0`, which no other JAX fixture has:
 
-  **Narrowed since.** Two candidate causes have now been eliminated:
+  * `AuxGPrime(i, out, state, x, t)` and `dAux_dp(i, pIndex, state, x)` carry an
+    extra argument *ahead of* the state, and both were decorated with
+    `MaNTA_Decorator`, whose wrapper is `(self, index, states, positions,
+    *args)`. So it converted the extra argument as though it were the state and
+    passed the state to `jnp.array()`. They take `ShiftedState_Decorator` now.
+  * `dgFn_dphi` was not decorated at all, so it was handed a raw `manta.State`
+    inside a `jax.jit`, and it indexed its result `["Aux"]` -- left from when a
+    State crossed as a dict, where `jax.grad` now returns the State module.
+  * `JAXAdjointProblem.__init__` bound `sigma` and `source` but not `aux`, so
+    `dAux()` raised `AttributeError` on the third branch of
+    `ComputePhysicsDerivatives`.
 
-  * the `dAux_Mat` column-layout defect (which dropped `dG/du` from the
-    Jacobian entirely) is fixed, and the xfail is unchanged;
-  * `python/Tests/test_aux.py` runs the *same* reaction-diffusion problem with
-    `nAux = 1` through the same C++ trampoline in plain numpy, and it converges
-    and satisfies `a = u^2` against an independent Newton solve.
+  Two things about the diagnosis are worth keeping. The symptom the mark
+  recorded -- "IDA's corrector will not converge at t = 0" -- was **not** the
+  symptom by the time it was fixed; it had become a `TypeError` out of
+  `AuxGPrime`. The first fault hit changes as the surrounding code moves, so an
+  xfail *reason* ages badly in a way an xfail *mark* does not, and re-running
+  before theorising was what showed it. And the reference the run is compared
+  against was generated in February, before any of this broke: the solution
+  reproduces it to 1e-2 relative L2 at every output time, so the fixture really
+  was innocent all along.
 
-  So the C++ `nAux > 0` path is sound and the fault is specific to the JAX
-  fixture or to `JAXTransportSystem`'s aux hooks. That is where to look next.
+  `python/Tests/test_jax_aux.py` now catches three of the four directly, against
+  hand-differentiated closed forms rather than against another autodiff run. The
+  fourth, `dgFn_dphi`, needs a `State`, which has no constructor on the Python
+  side -- the solve remains its only cover.
+
+* **`AuxG_v` was bound to the pointwise `AuxG`** (`Python.cpp`), where
+  `SigmaFn_v` and `Sources_v` name the batched `(GlobalState, positions)`
+  overload. That made it an exact duplicate of `AuxG` and left the aux path the
+  only one a test could not drive through the C++ serial loop -- which is how
+  the pointwise hooks are exercised from Python, a `State` having no constructor
+  there. Fixed, and pinned by `test_aux.py::test_auxg_v_is_the_batched_overload`.
 
 * **A second integration on the same `SystemSolver` now works**, and
   `SolverLifecycleTests.cpp::a_second_integration_on_one_solver_matches_a_fresh_one`

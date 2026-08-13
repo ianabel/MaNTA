@@ -70,6 +70,24 @@ landed; these are the pieces that were deliberately not done, with the reason.
     can actually see the difference -- an nAux > 0 case with spatial parameters
     would do it.
 
+  - PyAdjointProblem::dAux disagrees with the Python dAux it calls. The
+    trampoline (PyAdjointProblem.hpp:217) hands the Python method a raw
+    GlobalState, but JAXAdjointProblem.dAux expects a converted jax State,
+    because the only caller that matters -- ComputePhysicsDerivatives, which is
+    what SystemSolver.cpp:1661 invokes -- is @Physics_Decorator and converts
+    before calling it. So `AdjointProblem.dAux(...)` from Python raises a vmap
+    in_axes error, while the path the solver takes works. dSigma and dSources
+    have the same shape and presumably the same split.
+
+    Harmless today: nothing in the tree calls the trampoline. Left alone
+    because fixing it means choosing which contract the Python dAux has, and
+    the decorated-state one is load-bearing for ComputePhysicsDerivatives --
+    so the honest fix is probably to stop binding these three, the way
+    ScalarGPrime and ComputePhysicsDerivatives already are not. Found while
+    fixing the JAXAuxTest xfail; it cost a wrong turn there, because a test
+    driving AdjointProblem.dAux looks like it exercises the solver's path and
+    does not.
+
   - No C++ test asserts that a scalar declared differential has a time
     derivative in its G. Without one, IDACalcIC is handed a row whose every
     quantity it holds fixed, and it fails with IDA_LINESEARCH_FAIL (-13) before

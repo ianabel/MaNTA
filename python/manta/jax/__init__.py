@@ -34,6 +34,7 @@ from .state import (  # noqa: F401
     Physics_Decorator,
     ScalarG_Decorator,
     ScalarGPrime_Decorator,
+    ShiftedState_Decorator,
     State,
 )
 from .integrator import Integrator  # noqa: F401
@@ -52,6 +53,7 @@ __all__ = [
     "Platform",
     "ScalarG_Decorator",
     "ScalarGPrime_Decorator",
+    "ShiftedState_Decorator",
     "State",
     "VectorizedTransportSystem",
     "register_ffi_cpu",

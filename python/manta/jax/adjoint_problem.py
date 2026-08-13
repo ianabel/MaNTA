@@ -4,7 +4,7 @@ import equinox as eqx
 import manta as MaNTA
 from functools import partial
 
-from .state import State, MaNTA_Decorator, Physics_Decorator
+from .state import State, MaNTA_Decorator, Physics_Decorator, ShiftedState_Decorator
 
 from jax.flatten_util import ravel_pytree
 
@@ -26,6 +26,11 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
 
         self.sigma = transport_system.sigma
         self.source = transport_system.source
+        # dAux() differentiates this the way dSigma()/dSources() do the other
+        # two. It was the one of the three never bound, so the batched aux
+        # branch of ComputePhysicsDerivatives raised AttributeError -- reachable
+        # only with nAux > 0, which no other JAX fixture has.
+        self.aux = transport_system.aux
 
         self.daux_dp = jax.jit(jax.grad(transport_system.aux, argnums=4))
 
@@ -106,10 +111,17 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
         )
         return out
 
+    # Pointwise, unlike every other dg hook here: dgFn_du/dq/dsigma were
+    # replaced by the vectorised `dg`, but PyAdjointProblem still calls this one
+    # per point, so it needs its state converting like the batched ones.
+    # `.Aux`, not `["Aux"]` -- the subscript is left from when a State crossed
+    # as a dict, and jax.grad returns the State module the input was.
+    @MaNTA_Decorator
     @partial(jax.jit, static_argnums=(0,))
     def dgFn_dphi(self, i, state, x):
-        return jax.grad(self.g, argnums=0)(state, x, self.params)["Aux"]
+        return jax.grad(self.g, argnums=0)(state, x, self.params).Aux
 
+    @ShiftedState_Decorator
     def dAux_dp(self, index, pIndex, state, x):
         return self.daux_dp(index, state, x, 0.0, self.params)[pIndex]
 

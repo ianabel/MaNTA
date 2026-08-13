@@ -249,8 +249,15 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def("InitialAuxValue", &TransportSystem::InitialAuxValue)
       .def("AuxG", py::overload_cast<Index, const State &, Position, Time>(
                        &TransportSystem::AuxG))
-      .def("AuxG_v", py::overload_cast<Index, const State &, Position, Time>(
-                         &TransportSystem::AuxG))
+      // The batched overload, as SigmaFn_v and Sources_v are. This was bound to
+      // the pointwise one, which made AuxG_v an exact duplicate of AuxG and
+      // left the aux path the only one with no way to reach the C++ serial
+      // loop from Python -- which is how a test drives a pointwise hook, since
+      // a State cannot be constructed on the Python side.
+      .def("AuxG_v",
+           py::overload_cast<Index, GlobalState const &,
+                             std::vector<Position> const &, Time>(
+               &TransportSystem::AuxG))
       .def("AuxGPrime",
            py::overload_cast<Index, State &, const State &, Position, Time>(
                &TransportSystem::AuxGPrime))

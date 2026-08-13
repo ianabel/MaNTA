@@ -262,6 +262,36 @@ class AuxWithoutDerivative(MaNTA.TransportSystem):
         return 0.0
 
 
+def test_auxg_v_is_the_batched_overload(tmp_path):
+    """AuxG_v was bound to the *pointwise* AuxG, making it an exact duplicate.
+
+    SigmaFn_v and Sources_v name the (GlobalState, positions) overload;
+    Python.cpp named the (State, x) one for this, so the aux path was the only
+    one with no way to reach the C++ serial loop from Python -- which is how a
+    test drives a pointwise hook, a State having no constructor on this side.
+    Calling it with a GlobalState raised TypeError before the fix.
+    """
+    system = AuxDiffusion()
+    nPoints = 4
+    u = np.array([0.25, 0.5, 0.75, 1.0])
+    states = {
+        "Variable": u[:, None].copy(),
+        "Derivative": np.zeros((nPoints, 1)),
+        "Flux": np.zeros((nPoints, 1)),
+        "Aux": np.arange(1.0, nPoints + 1.0)[:, None],
+        "Scalars": np.zeros(0),
+    }
+    positions = [0.1 * (j + 1) for j in range(nPoints)]
+
+    out = np.asarray(
+        MaNTA.TransportSystem.AuxG_v(system, 0, states, positions, 0.0)
+    )
+
+    # One value per point, not one per call: G = a - u^2.
+    assert out.shape == (nPoints,)
+    assert out == pytest.approx(states["Aux"][:, 0] - u**2)
+
+
 def test_an_aux_system_missing_auxgprime_fails_rather_than_guessing(tmp_path):
     """nAux > 0 with no AuxGPrime cannot produce a Jacobian; say which method.
 

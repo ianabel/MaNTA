@@ -24,6 +24,7 @@ EAGER = [
     "Physics_Decorator",
     "ScalarG_Decorator",
     "ScalarGPrime_Decorator",
+    "ShiftedState_Decorator",
 ]
 
 

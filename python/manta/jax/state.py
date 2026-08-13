@@ -122,6 +122,38 @@ def MaNTA_Decorator(func):
     return wrapper
 
 
+def ShiftedState_Decorator(func):
+    """MaNTA_Decorator for the two hooks whose state is one argument later.
+
+    Both of these are pointwise-only, and both carry an extra argument ahead of
+    the state:
+
+        AuxGPrime(i, out, state, x, t)    fills a buffer instead of returning
+        dAux_dp(i, pIndex, state, x)      selects one parameter
+
+    MaNTA_Decorator's `(self, index, states, positions, *args)` therefore bound
+    `states` to the extra argument and `positions` to the state, so the state
+    reached jnp.array() -- a TypeError on a manta.State, "dtype object is not a
+    valid JAX array type". Both had raised that since the C++ side adopted these
+    signatures, and neither had ever been called in anger, because nAux is zero
+    in every JAX fixture but one. They were two of the four faults behind the
+    JAXAuxTest xfail; see Tests/README.md for the others.
+
+    The extra argument is passed through untouched, which for AuxGPrime is the
+    point: `out` is a window onto solver memory the hook writes through, and a
+    converted copy would be discarded when the hook returned.
+    """
+
+    def wrapper(self, index, extra, states, positions, *args):
+        states_, _ = eqx.partition(State.from_manta(states), lambda x: x.size > 0)
+        positions_ = jnp.array(positions)
+        # No State ever comes back out of these two -- AuxGPrime returns nothing
+        # and dAux_dp a scalar -- so there is nothing to eqx.combine.
+        return func(self, index, extra, states_, positions_, *args)
+
+    return wrapper
+
+
 def ScalarG_Decorator(func):
     def wrapper(self, index, states, states_dt, abscissae, weights, phi_boundary, t):
         del abscissae  # the node positions; a case has its own self.points

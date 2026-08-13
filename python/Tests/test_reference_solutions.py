@@ -126,16 +126,15 @@ def test_jax_linear_diffusion():
     compare_solution("JAXLinearDiffusion")
 
 
-@pytest.mark.xfail(
-    reason="Python nAux>0 path: IDA corrector fails to converge at t=0. "
-    "AuxG and AuxGPrime return values verified correct against hand-computed "
-    "derivatives (dG/du = -2*D*u, dG/dAux = 1), and the failure is insensitive "
-    "to tolerance, polynomial degree, grid size, timestep, and float64. The "
-    "fixture is unchanged since 1a369d7 (2026-02-05) when it produced the "
-    "checked-in reference, so this is a regression in the aux path between "
-    "then and now, not a bad fixture. See Tests/README.md.",
-    strict=True,
-)
 def test_jax_aux_test():
-    """Python TransportSystem with nAux = 1, exercising the auxiliary-variable path."""
+    """Python TransportSystem with nAux = 1, exercising the auxiliary-variable path.
+
+    Was a strict xfail for months. The fixture was fine and so was the C++ aux
+    plumbing (python/Tests/test_aux.py drives the same path in plain numpy);
+    every fault was in manta.jax, and every one of them was reachable only with
+    nAux > 0, which no other JAX fixture has. test_jax_aux.py catches them one
+    hook at a time -- this one is worth keeping as well, because it is the only
+    thing that reaches dgFn_dphi, and because it compares against a reference
+    generated before any of it broke.
+    """
     compare_solution("JAXAuxTest")

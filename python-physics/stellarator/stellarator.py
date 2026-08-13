@@ -223,7 +223,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
     index : int
         Variable index
     state : dict
-        Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
+        Dictionary containing "Variable", "Derivative", "Flux", "Aux", and "Scalars" arrays
     x : float
         Spatial location
     t : float
