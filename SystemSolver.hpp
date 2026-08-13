@@ -238,6 +238,13 @@ class SystemSolver
         // overshoot and have to retry, so it is off by default.
         void setAggressiveTimesteps(bool in) { aggressiveTimesteps = in; };
 
+        // IDASetSuppressAlg: take sigma, q, lambda and phi out of IDA's local
+        // error test, leaving only u and the differential scalars in it. Off by
+        // default, and the default is load-bearing rather than conservative --
+        // turning it on is measurably not answer-preserving. See
+        // setSuppressAlgebraicError's use in Solver.cpp and docs/running.rst.
+        void setSuppressAlgebraicError(bool in) { suppressAlgebraicError = in; };
+
         void setJacEvalY( N_Vector, N_Vector );
         int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
 
@@ -520,6 +527,9 @@ class SystemSolver
         // IDASetEtaMax(10.0) rather than IDA's default 2.0. See
         // setAggressiveTimesteps.
         bool aggressiveTimesteps = false;
+
+        // IDASetSuppressAlg. See setSuppressAlgebraicError.
+        bool suppressAlgebraicError = false;
 
         double alpha = 1.0;
         bool testing = false;

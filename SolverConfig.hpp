@@ -62,6 +62,7 @@ struct SolverConfig
     bool                     Superconvergent;
     bool                     zeroFlux;
     bool                     AggressiveTimesteps;
+    bool                     SuppressAlgebraicError;
     std::string              TransportSystem;
     std::vector<std::string> PhysicsPlugins;
 
