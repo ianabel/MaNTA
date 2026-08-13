@@ -502,7 +502,7 @@ BOOST_AUTO_TEST_CASE(set_restart_values_takes_ownership_and_derives_the_boundari
     struct RestartSystem : public MinimalSystem
     {
         // Dirichlet below, Neumann above, so setRestartValues has to read u at
-        // one end and sigma at the other.
+        // one end and q at the other.
         RestartSystem()
             : MinimalSystem(SystemSpec{.variables = numberedFields(1, BoundaryKind::Dirichlet,
                                                                    BoundaryKind::Neumann)})
@@ -516,7 +516,9 @@ BOOST_AUTO_TEST_CASE(set_restart_values_takes_ownership_and_derives_the_boundari
     std::vector<double> Ydata(shape.getDoF(), 0.0);
     std::vector<double> dYdata(shape.getDoF(), 0.0);
 
-    // Fill with a known profile: u = 2 + 3x, sigma = -0.5.
+    // Fill with a known profile: u = 2 + 3x, q = 3, sigma = -0.5. q and sigma
+    // are deliberately different numbers -- that is what lets the assertions
+    // below say which of them a Neumann boundary actually gets.
     {
         DGSoln tmp(nVars, grid, k, Ydata.data());
         tmp.AssignU([](Index, double x) { return 2.0 + 3.0 * x; });
@@ -536,8 +538,15 @@ BOOST_AUTO_TEST_CASE(set_restart_values_takes_ownership_and_derives_the_boundari
 
     // Lower boundary is Dirichlet, so uL comes from u(x_l) = 2.
     BOOST_TEST(sys.LowerBoundary(0, 0.0) == 2.0, boost::test_tools::tolerance(1e-12));
-    // Upper boundary is not, so uR comes from sigma(x_u) = -0.5.
-    BOOST_TEST(sys.UpperBoundary(0, 0.0) == -0.5, boost::test_tools::tolerance(1e-12));
+    // Upper boundary is Neumann, so uR comes from q(x_u) = 3 -- *not* from
+    // sigma, which this asserted until the two were told apart. A Neumann
+    // boundary value is applied to q (SystemSolver.cpp's L_global assembly),
+    // so seeding it from sigma resumed the run against the wrong quantity, and
+    // against the wrong sign too, the stored sigma being -sigma_hat. -0.5 here
+    // means that regression is back.
+    // test_a_restart_carries_a_neumann_boundary_as_q_not_sigma in
+    // python/Tests/test_runner.py is the end-to-end half of this.
+    BOOST_TEST(sys.UpperBoundary(0, 0.0) == 3.0, boost::test_tools::tolerance(1e-12));
 }
 
 // ------------------------------------------------- State as an out-parameter --

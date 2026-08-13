@@ -465,6 +465,105 @@ def test_a_run_can_be_restarted_from_its_own_output():
         _cleanup(ref_name, split_name)
 
 
+class NeumannFlux(MaNTA.TransportSystem):
+    """sigma_hat = 2q with a *nonzero* Neumann value on the lower boundary.
+
+    The factor of two is the whole point: it separates q from sigma_hat, which
+    coincide in every other case in this suite, and the stored sigma is -sigma_hat
+    again, so the three candidate quantities at the boundary are V, 2V and -2V.
+    """
+
+    variables = [MaNTA.Field("u", "u", "", lower=MaNTA.Neumann,
+                             upper=MaNTA.Dirichlet)]
+    GRADIENT = 0.3
+
+    def __init__(self):
+        super().__init__()
+
+    def UpperBoundary(self, i, t):
+        return 0.0
+
+    def SigmaFn(self, i, state, x, t):
+        return 2.0 * state.q[i]
+
+    def Sources(self, i, state, x, t):
+        return 0.0
+
+    def dSigmaFn_dq(self, i, state, x, t):
+        return np.array([2.0])
+
+    def InitialValue(self, i, x):
+        return 0.5 * self.GRADIENT * (x - 1.0)
+
+    def InitialDerivative(self, i, x):
+        return 0.5 * self.GRADIENT
+
+
+class NeumannFluxStated(NeumannFlux):
+    """Supplies the boundary value itself, so it never reads uL/uR."""
+
+    def LowerBoundary(self, i, t):
+        return self.GRADIENT
+
+
+def _gradient_at_origin(runner):
+    h = 1.0e-6
+    u = np.asarray(runner.getSolution(0, [0.0, h])).reshape(-1)
+    return float((u[1] - u[0]) / h)
+
+
+def test_a_restart_carries_a_neumann_boundary_as_q_not_sigma():
+    """setRestartValues must seed a Neumann boundary from q, not from sigma.
+
+    A Neumann boundary value is applied to q (SystemSolver.cpp's L_global
+    assembly), but setRestartValues used to read it back from restart_Y->sigma.
+    The stored sigma is -sigma_hat, so a resumed run got -kappa*q where it wanted
+    q -- a sign flip even at kappa = 1, and a factor of -2 here.
+
+    Three things have to line up for it to be visible, which is why it survived:
+    a Neumann boundary, a *nonzero* value on it, and a case that does not
+    override LowerBoundary. An overriding case never reads uL at all, and every
+    other case in the tree uses zero, where every candidate quantity agrees.
+    """
+    stated, resumed = "restart_neumann_stated", "restart_neumann_resumed"
+    try:
+        first = MaNTA.Runner(NeumannFluxStated())
+        first.configure(_cwd_config(OutputFilename=stated, WriteOutput=True,
+                                    t_final=0.4))
+        first.run(0.4)
+        before = np.asarray(first.getSolution(0, XS_RESTART))
+        # 1e-2 is loose next to the finite difference below, and still far
+        # tighter than it needs to be: the candidates are 0.3, 0.6 and -0.6.
+        assert _gradient_at_origin(first) == pytest.approx(
+            NeumannFlux.GRADIENT, abs=1e-2
+        ), "the stated run should hold q at the boundary value"
+
+        # No LowerBoundary override, so the value comes from the restart file.
+        second = MaNTA.Runner(NeumannFlux())
+        second.configure(_cwd_config(
+            OutputFilename=resumed, WriteOutput=True, restart=True,
+            RestartFile=stated + ".restart.nc", t_initial=0.4, t_final=0.5,
+        ))
+        second.run(0.5)
+
+        q = _gradient_at_origin(second)
+        assert q == pytest.approx(NeumannFlux.GRADIENT, abs=1e-2), (
+            f"resumed q(0) = {q}; wanted {NeumannFlux.GRADIENT}. "
+            f"{-2 * NeumannFlux.GRADIENT} means it came from the stored sigma, "
+            f"{2 * NeumannFlux.GRADIENT} from sigma_hat."
+        )
+
+        # And the solution must continue rather than turn round: with the wrong
+        # sign it crossed zero within one output interval.
+        after = np.asarray(second.getSolution(0, XS_RESTART))
+        assert np.all(after < 0.0), f"resumed solution changed sign: {after}"
+        assert np.allclose(after, before, rtol=0.1, atol=0.05), (
+            f"before={before}\nafter={after}"
+        )
+    finally:
+        _cleanup(stated, resumed)
+
+
 def test_a_restart_with_the_wrong_variable_count_is_rejected():
     """The DOF check in configure guards against restarting the wrong physics.
 
