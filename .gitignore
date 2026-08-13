@@ -31,6 +31,8 @@ tags
 *.h5
 venv
 .venv/
+# `make docs` builds this from docs/requirements.txt.
+.venv-docs/
 gmon.out
 *.sh
 slurm-*.out
@@ -47,8 +49,7 @@ slurm-*.out
 *.gcov
 coverage/
 
-# Sphinx (docs/), built locally with
-#   sphinx-build -W -b html docs docs/_build/html
+# Sphinx (docs/), built locally with `make docs`.
 docs/_build/
 
 # Local scratch / run output. Anchored with a leading slash because these are

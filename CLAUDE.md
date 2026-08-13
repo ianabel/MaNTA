@@ -22,6 +22,8 @@ pip install .             # the `manta` package and the `manta` console script
 pip install .[jax]        # ...and manta.jax (jax, equinox, jaxtyping)
 make python_tests         # pytest suite for that extension
 make coverage             # rebuild instrumented, run all three suites, write coverage/
+make docs                 # docs/_build/html, via .venv-docs built from
+                          # docs/requirements.txt; -W, as Read the Docs runs it
 make stubs                # regenerate python/manta/_manta.pyi from the module
 make stubs-check          # fail if the committed stub is stale (CI runs this)
 make typecheck            # mypy over the manta package

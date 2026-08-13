@@ -9,10 +9,12 @@ every configuration key, the output format, the adjoint interface, and how to wr
 Python. The sources live in [`docs/`](docs/index.rst); build them locally with
 
 ```sh
-python3 -m venv /tmp/docsvenv
-/tmp/docsvenv/bin/pip install -r docs/requirements.txt
-/tmp/docsvenv/bin/sphinx-build -W -b html docs docs/_build/html
+make docs      # -> docs/_build/html/index.html
 ```
+
+which creates `.venv-docs` from `docs/requirements.txt` the first time and reuses it
+after. It builds with `-W`, the same as Read the Docs, so a local build that passes is
+one that will publish.
 
 Configuration keys are declared once, in `ConfigSchema.cpp`, and read from there by
 both the config file and `Runner.configure`; `./MaNTA --list-options` prints the
