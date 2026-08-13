@@ -1,9 +1,9 @@
 """The JAX layer is part of the installed package, not a sys.path accident.
 
-Every example under python-examples/ imports it the way an out-of-tree user
-would -- `from manta.jax import ...` -- so what this file pins is that the
-subpackage is importable with nothing on sys.path but the package itself, and
-that it exposes the names those examples name.
+Everything under python-examples/ and python-physics/ imports it the way an
+out-of-tree user would -- `from manta.jax import ...` -- so what this file pins
+is that the subpackage is importable with nothing on sys.path but the package
+itself, and that it exposes the names those callers name.
 """
 
 import pytest

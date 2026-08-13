@@ -169,6 +169,10 @@ code outside this tree would, so one can be copied out and still run. Start with
 `python-examples/linear-diffusion`; `docs/out_of_tree.rst` covers both languages,
 including C++ cases built as `PhysicsPlugins` shared objects.
 
+`python-physics/` follows the same convention for the systems that are run to
+get physics rather than to demonstrate the framework — the centrifugal mirror
+and the DESC/yancc stellarator.
+
 #### Coverage
 
 ```sh

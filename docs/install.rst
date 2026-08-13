@@ -157,7 +157,7 @@ Build targets
    * - ``make clean_data``
      - Just the run output: ``.nc``, ``.restart.nc`` and ``.dat`` at the repo
        root and in ``Tests/RegressionTests``, ``python/Tests`` and each
-       directory under ``python-examples``.
+       directory under ``python-examples`` and ``python-physics``.
 
 .. warning::
 

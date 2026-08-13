@@ -32,7 +32,7 @@ make clean                # also sweeps orphaned PhysicsCases/*.o and .d files,
                           # bytecode and pytest caches, and clean_data below
 make clean_data           # run output (.nc/.restart.nc/.dat) at the root and in
                           # Tests/RegressionTests, python/Tests/ and each
-                          # directory under python-examples/
+                          # directory under python-examples/ and python-physics/
 
 ./MaNTA --list-options    # every configuration key, straight from ConfigSchema.cpp
 ```
@@ -457,7 +457,8 @@ Python side against a closed form, algebraic and differential.
   `registerTransportSystems()` that is called afterwards. Registering at import
   via `registerPhysicsCase` is the documented convention; the hook is what every
   example under `python-examples/` actually uses, and without honouring it none
-  of those configs run.
+  of those configs run. `python-physics/` is neither: both systems there build a
+  `manta.Runner` in Python and register nothing.
 
 JAX physics cases use **`manta.jax`** (`python/manta/jax/`), which wraps the dict
 interface in equinox modules via the `MaNTA_Decorator` / `Physics_Decorator`
@@ -480,11 +481,20 @@ three properties of the subpackage are load-bearing rather than stylistic:
 * **No module in the layer may write `os.environ` at import.** `FFIRunner.py`
   set three variables and `JAXTransportSystem.py` forced
   `JAX_PLATFORM_NAME=cpu`; as library code that last one would have disabled the
-  GPU path `ffi_runner` exists to provide. Those writes live in the drivers under
-  `python-examples/` now.
+  GPU path `ffi_runner` exists to provide. Those writes live in the drivers that
+  need them now — `python-physics/stellarator/`.
 
 `python/` holds exactly two things: `manta/` and `Tests/`. Every driver, config
-and notebook is under `python-examples/`, one self-contained directory each.
+and notebook is one self-contained directory under either **`python-examples/`**
+or **`python-physics/`**, and the split between those two is *purpose*, not
+mechanism. Both import `manta` and `manta.jax` absolutely, the way out-of-tree
+code does; both survive being copied elsewhere. An example is written to be
+read — small, one idea each, no dependency outside `requirements.txt`. A system
+under `python-physics/` is run to get physics: `mirror-plasma/` (a package, its
+own tests, needs `optimistix`) and `stellarator/` (DESC, yancc, interpax, and an
+`XLA_FFI` build). Neither `python-physics/` system is reached by
+`make python_tests` — `pytest.ini` is `testpaths = python/Tests` — so nothing in
+CI runs them, and their READMEs carry the status instead.
 
 ### Type stubs
 
@@ -783,8 +793,11 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
   the keep-pattern would not save it. Check tracked status, not the filename,
   before adding a directory there. Unit-test output itself lands at the repo
   root, because `make test` runs the binary from there. `python` is absent for a
-  different reason: since the drivers moved to `python-examples/`, nothing writes
-  output there.
+  different reason: since the drivers moved out to `python-examples/` and
+  `python-physics/`, nothing writes output there. `.h5` and `.pkl` are not in the
+  pattern list either — the DESC equilibria under `python-physics/stellarator/`
+  are expensive, and `python-physics/mirror-plasma/land.pkl` is generated once by
+  `landremann.py` rather than by a run.
 * **Unanchored `.gitignore` patterns match at every depth.** The root scratch
   entries (`Plots/`, `runs-for-bhavin/`, `scalar-tests/`, `toy-model/`) are
   written with a leading slash for that reason: unanchored, `toy-model/` also

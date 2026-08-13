@@ -5,6 +5,11 @@ and a README. Nothing in them reaches into the MaNTA source tree — they import
 `manta` and `manta.jax` the way any code outside this repository would, which is
 the point. Copy one somewhere else and it still runs.
 
+**These exist to show how the framework is used, not to produce physics.** They
+are small enough to read in one sitting and are deliberately kept that way. The
+real simulations live in [`../python-physics/`](../python-physics/), which
+follows the same self-contained-directory convention.
+
 Install first, from the repository root:
 
     pip install .              # or `pip install .[jax]` for the JAX examples
@@ -17,8 +22,6 @@ Install first, from the repository root:
 | `jax-linear-diffusion/` | The same, with `solveAdjoint = true` | `manta[jax]` |
 | `jax-nonlinear-adjoint/` | `manta.jax.VectorizedTransportSystem`, the batched interface | `manta[jax]` |
 | `adjoints/` | Driving the solver from Python through `manta.Runner`; JVP and spatial adjoints | `manta[jax]`; `jvp.py` also needs an `XLA_FFI` build |
-| `mirror-plasma/` | Four channels, an aux variable and a scalar voltage controller. **Work in progress** — see its README | `manta[jax]`, `optimistix` |
-| `stellarator/` | Stellarator transport coupled to DESC and yancc. **Unverified** | `manta[jax]`, `desc`, `yancc`, `interpax` |
 
 A config-driven example runs with the `manta` command from inside its own
 directory:
@@ -26,9 +29,8 @@ directory:
     cd linear-diffusion && manta run.conf
 
 Output lands beside the config, named after the config's stem — `run.nc` and
-`run.restart.nc`. The `adjoints/`, `mirror-plasma/` and `stellarator/` scripts
-are not config-driven; they build a runner in Python and are run with
-`python <file>`.
+`run.restart.nc`. The `adjoints/` scripts are not config-driven; they build a
+runner in Python and are run with `python <file>`.
 
 ## Two ways a config names its case
 

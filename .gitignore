@@ -22,6 +22,8 @@ python/Tests/__pycache__/
 python/Tests/.pytest_cache/
 python-examples/.ipynb_checkpoints/
 python-examples/*/.ipynb_checkpoints/
+python-physics/.ipynb_checkpoints/
+python-physics/*/.ipynb_checkpoints/
 python/random/
 .clangd
 .clang-format
@@ -63,7 +65,7 @@ docs/_build/
 __pycache__/
 .pytest_cache/
 
-# Cached polynomial fits, pickled by python-examples/mirror-plasma/landremann.py
+# Cached polynomial fits, pickled by python-physics/mirror-plasma/landremann.py
 # for its constants.py to read back: build output, not input.
 *.pkl
 

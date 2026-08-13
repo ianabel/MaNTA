@@ -20,7 +20,7 @@ conclusions from a run.
 
     pip install .[jax]         # from the repository root, once
     pip install optimistix     # not a MaNTA dependency; see "What it needs"
-    cd python-examples/mirror-plasma
+    cd python-physics/mirror-plasma
     python landremann.py       # once, writes land.pkl
     python run.py
 
@@ -61,7 +61,7 @@ its defining equation — and the flux normalisations. It is **not** collected b
 `make python_tests`: `pytest.ini` sets `testpaths = python/Tests`, and this file
 needs `desc` and `optimistix`, which that suite does not. Run it directly:
 
-    cd python-examples/mirror-plasma && pytest test_mirror.py
+    cd python-physics/mirror-plasma && pytest test_mirror.py
 
 7 tests and 12 subtests, all passing.
 
