@@ -100,8 +100,17 @@ public:
 
     for (Index i = 0; i < nVars; ++i)
     {
-      uL[i] = isLowerBoundaryDirichlet(i) ? restart_Y->u(i)(xL) : restart_Y->sigma(i)(xL);
-      uR[i] = isUpperBoundaryDirichlet(i) ? restart_Y->u(i)(xR) : restart_Y->sigma(i)(xR);
+      // q, not sigma. A Neumann boundary value is applied to q -- see
+      // SystemSolver.cpp's L_global assembly and docs/physics_interface.rst --
+      // so seeding it from sigma handed the resumed run the wrong quantity, and
+      // with the wrong sign into the bargain, since the stored sigma is
+      // -sigma_hat. For sigma_hat = kappa q that made the resumed boundary
+      // -kappa q rather than q: a sign flip even at kappa = 1. It stayed hidden
+      // because it needs three things at once -- a Neumann boundary, a *nonzero*
+      // value on it, and a case that does not override LowerBoundary, since an
+      // overriding case never reads these at all.
+      uL[i] = isLowerBoundaryDirichlet(i) ? restart_Y->u(i)(xL) : restart_Y->q(i)(xL);
+      uR[i] = isUpperBoundaryDirichlet(i) ? restart_Y->u(i)(xR) : restart_Y->q(i)(xR);
     }
   }
 
