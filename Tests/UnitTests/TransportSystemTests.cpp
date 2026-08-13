@@ -493,6 +493,37 @@ BOOST_AUTO_TEST_CASE(scalar_defaults_and_naming_are_what_the_output_writer_expec
 // the case's own ScalarG and compares every entry rather than checking that
 // plumbing forwards.
 
+BOOST_AUTO_TEST_CASE(a_case_with_no_boundary_hooks_and_no_restart_says_so)
+{
+    // The LowerBoundary/UpperBoundary defaults read uL/uR, and nothing fills
+    // those unless the case is restarting or is an AutodiffTransportSystem
+    // loading them from its own config keys. A case that is neither and
+    // overrides neither used to index an empty std::vector -- undefined
+    // behaviour, and in practice a core dump inside the first residual
+    // evaluation, with nothing to connect it to the boundary conditions.
+    //
+    // docs/python.rst said "only SigmaFn and Sources are required" until a case
+    // that took it at its word was tried.
+    MinimalSystem sys(1);
+
+    BOOST_CHECK_THROW(sys.LowerBoundary(0, 0.0), std::runtime_error);
+    BOOST_CHECK_THROW(sys.UpperBoundary(0, 0.0), std::runtime_error);
+
+    // The message has to name the hook to override, not the container that
+    // happened to be short.
+    try
+    {
+        sys.LowerBoundary(0, 0.0);
+        BOOST_FAIL("LowerBoundary should have thrown");
+    }
+    catch (std::runtime_error const &e)
+    {
+        std::string const msg = e.what();
+        BOOST_TEST(msg.find("LowerBoundary") != std::string::npos);
+        BOOST_TEST(msg.find("uL") != std::string::npos);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(set_restart_values_takes_ownership_and_derives_the_boundaries)
 {
     // The restart path reads back a stored solution and must (a) own its own
