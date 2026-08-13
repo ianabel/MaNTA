@@ -42,8 +42,9 @@ class NonlinearDiffusionParams(NamedTuple):
 
 class JAXNonlinearDiffusion(VectorizedTransportSystem):
     def __init__(self, config):
-        super().__init__(spatialParameters=True)
-        super().__init__(MaNTA.numbered_spec(1, lower=MaNTA.Neumann))
+        super().__init__(
+            MaNTA.numbered_spec(1, lower=MaNTA.Neumann), spatialParameters=True
+        )
 
         solver_config = config["solver"]
 
