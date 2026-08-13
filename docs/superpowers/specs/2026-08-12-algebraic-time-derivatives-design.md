@@ -61,33 +61,66 @@ Jacobian at `alpha = 0`.
 
 ## Decisions taken
 
-1. **Substitute the `u` row with an identity and reuse `solveJacEq`.**
+1. **Assemble the analytic blocks into one dense global matrix and solve it
+   directly**, with no static condensation.
 2. **Obtain the explicit `d/dt` terms by central difference**, with the state
    held fixed.
+3. **Guard the assembly with a finite difference of `residual()`**, as a test.
 
 ## 1. The linear solve
 
-The system above omits the `u` *row* — differentiating `res.u` would bring in
-`u''` — while keeping the `u` *column* as data. So it is a sub-block of `MX`,
-not `MX`. Rather than write a second condensation path, the system is made
-square in the shape `solveHDGJac` already handles:
+### Why not reuse `solveJacEq`
 
-* assemble the blocks with `alpha = 0`, so the `X` mass term drops out and what
-  is left is `dF/dy`;
-* per cell, overwrite the `u` row of `MX` with the identity;
-* put the known `u'` into the `u` row of the right-hand side.
+An earlier draft of this design substituted an identity for the `u` row of `MX`
+and reused the existing static condensation. That does not work, and the reason
+is worth recording so it is not tried again: the cell system is not `MX` alone
+but `MX` together with `CEBlocks[i]`, the coupling to `lambda`
+(`SystemSolver.cpp:353`, used at `:983`). The `u` row of that coupling carries
+`E_cellwise * lambda` and is nonzero for any real problem, so zeroing `MX`'s `u`
+row leaves the coupling live and the solved `u` block does not come back as
+`u'`. `CEBlocks` is built once in `initialiseMatrices` and shared with the
+forward solve, so it cannot be modified in place; making it work would mean a
+mode flag threaded through both `updateMatricesForJacSolve` and `solveHDGJac`,
+i.e. a branch in the two hottest functions in the solver.
 
-`solveHDGJac`'s static condensation onto `lambda` and its back-substitution are
-then reused verbatim, and `solveJacEq`'s Woodbury border still handles the
-global scalars. The `u` row solves trivially and returns `u'` unchanged, which
-is also a free self-check: if the returned `u` block differs from the `u'` that
-went in, the substitution or the condensation is wrong.
+### What is done instead
 
-**This is not the forward solve's factorisation.** TODO's "one linear solve
-against the same Jacobian the forward solve already builds" means the same
-*blocks*, not the same *factors* — the forward factorisation is at `alpha = cj`,
-and this one is at `alpha = 0` with a modified row. It needs its own assembly
-and factorisation pass.
+This computation runs **once per armed run**, so its cost does not matter. The
+analytic blocks are assembled into a single dense global matrix and solved with
+a plain `Eigen::FullPivLU`. No condensation, no `CEBlocks`, no branch in the
+forward path, and no `alpha` to save and restore.
+
+The global matrix is `dF/dy` — the residual Jacobian with no mass term, i.e. the
+`alpha = 0` case — laid out in the solution vector's own ordering:
+`[sigma | q | u | aux]` per cell, then all of `lambda`, then `mu`.
+
+Rows for the **differential** unknowns are replaced by the identity, and the
+corresponding entry of the right-hand side holds the known derivative:
+
+* the `u` rows get `u'` from IDA's `dYdt`;
+* a scalar declared `differential` gets its `mu'` the same way.
+
+Differentiating those rows instead would bring in `u''`, which is not available
+and not wanted. Every other row is the time-differentiated constraint, whose
+right-hand side is `-dF/dt` — see section 2.
+
+**The `u` block round-tripping is a free self-check**: the identity rows must
+return exactly the `u'` that went in.
+
+### The drift guard
+
+This is the third place the block layout is written down, after `Matrices.cpp`
+and `initializeMatricesForAdjointSolve`. CLAUDE.md records that those two must be
+kept in step block for block, and that a block missing from the adjoint
+assembly produced a silently wrong gradient that cost nothing visible until a
+test was written for it. A third copy is a third opportunity for that.
+
+So the assembly is pinned against a reference that cannot drift from it: a
+finite difference of `residual()` itself. `SolveJacTests.cpp` already uses that
+construction as ground truth for the forward Jacobian, so the machinery and the
+precedent both exist. The comparison is **test-only** — production code keeps
+the exact analytic blocks — and it is what turns a missing block from a silent
+wrong answer into a failing test.
 
 ## 2. The explicit d/dt terms
 
@@ -154,9 +187,13 @@ Around it:
 * **A q-only objective gives a nonzero dG/dt at `t0`.** This is the direct
   statement of the change: today it is exactly zero. The `QIntegralObjective`
   written for the reverted branch is reused.
-* **The `u` block round-trips.** The identity substitution must return the `u'`
-  that went in, bit for bit. Cheap, and it catches a condensation error that
-  would otherwise show up only as a wrong gradient.
+* **The assembled matrix equals a finite difference of `residual()`.** The drift
+  guard from section 1, and the most valuable test here: it is what stops the
+  third copy of the block layout diverging from the first two. Entry by entry,
+  to finite-difference tolerance, with `alpha = 0`.
+* **The `u` block round-trips.** The identity rows must return the `u'` that
+  went in, bit for bit. Cheap, and it catches an assembly error that would
+  otherwise show up only as a wrong gradient.
 * **A manufactured solution.** For `u(x,t)` known in closed form, `q' = d(u')/dx`
   and `sigma'` follow analytically; `MMSConvergenceTests.cpp` already has the
   machinery to build such a case. This is the only test that checks the computed
@@ -190,19 +227,21 @@ is set.
 
 ## Risks
 
-* **Re-factorising the blocks may disturb the forward solve.**
-  `updateMatricesForJacSolve` factorises `MX` in place. This computation
-  re-assembles at `alpha = 0` and factorises, destroying whatever factors were
-  there. It runs once, at the end of `initialize()`, before IDA has taken a
-  step — and IDA calls `JacSetup` before its first Newton solve — so it should
-  be harmless. "Should be" is doing work in that sentence: the failure mode is
-  slow Newton convergence rather than a wrong answer, which is exactly the class
-  of defect this codebase has been bitten by before. The bit-identical
-  regression requirement is what would catch it, and the `alpha = 0` assembly
-  should use its own storage if it does not.
-* **The identity substitution is a trick.** A reader who sees `MX` with an
-  identity row will reasonably wonder whether the matrix is still the Jacobian.
-  It is not, and the comment must say so.
+* **A third copy of the block layout.** The accepted cost of this approach, and
+  the reason the finite-difference guard in section 1 is not optional. Without
+  it, a block omitted here behaves exactly like the `dSigma/dPhi` block that was
+  missing from `initializeMatricesForAdjointSolve`: a perfectly good-looking
+  answer that is wrong.
+* **A dense factorisation of the whole system.** For a large case this is a big
+  matrix — `nVars * 3 * nCells * (k+1) + nVars * (nCells+1) + nScalars + nAux *
+  nCells * (k+1)` square. It is built and factorised once per armed run and never
+  in the time loop, which is why the cost is acceptable, but it is memory the
+  solver did not previously allocate. If it ever becomes a problem the answer is
+  a sparse solver, not the condensation.
+* **Nothing in the forward path changes**, which is the compensating benefit of
+  the dense route: no `alpha` to save and restore, no in-place refactorisation of
+  `MX`, no branch in `solveHDGJac`. The bit-identical regression requirement
+  should hold trivially rather than by argument.
 * **Second-order accuracy, not exactness**, for any case with explicit time
-  dependence. Stated in the docs rather than hidden; the manufactured-solution
-  test is what bounds it.
+  dependence, because the `d/dt` terms are differenced. Stated in the docs
+  rather than hidden; the manufactured-solution test is what bounds it.

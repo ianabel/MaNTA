@@ -4,7 +4,7 @@
 
 **Goal:** Compute `q'`, `sigma'` and `phi'` at `t0` by differentiating the algebraic constraints, so `SystemSolver::dGdt` — and therefore the dG/dt early-exit gate — sees all four terms of its chain rule instead of only the `u` one.
 
-**Architecture:** A new `computeAlgebraicTimeDerivatives()` assembles the per-cell blocks at `alpha = 0`, substitutes an identity for the `u` row, builds a right-hand side from the known `u'` and central-differenced explicit `d/dt` terms, and solves through the existing `solveJacEq`. The result lands in new `dydtComplete` storage, never in IDA's `dYdt`.
+**Architecture:** A new `computeAlgebraicTimeDerivatives()` assembles `dF/dy` into one dense global matrix, replaces the differential rows with the identity, builds a right-hand side from the known `u'` and central-differenced explicit `d/dt` terms, and solves with a dense LU. No static condensation and no change to the forward path. The result lands in new `dydtComplete` storage, never in IDA's `dYdt`.
 
 **Tech Stack:** C++23, SUNDIALS IDA, Eigen, Boost.Test.
 
@@ -14,7 +14,7 @@ Spec: `docs/superpowers/specs/2026-08-12-algebraic-time-derivatives-design.md`.
 
 - **Never write into IDA's `dYdt`.** It is the state IDA takes its first step from; changing its algebraic entries after `IDA_YA_YDP_INIT` would alter the integration and surface later as a step-size or convergence problem. All results go to `dydtComplete`.
 - **`updateBoundaryConditions(t)` must be restored to the original `t`** after every difference. It writes `RF_cellwise` and `L_global` in place and those are what the forward residual reads — CLAUDE.md already records this trap.
-- **The regression suite must be bit-identical.** Nothing in the forward path changes and no config arms the gate, so any movement is a defect in this change — most likely the factorisation risk below.
+- **The regression suite must be bit-identical.** Nothing in the forward path changes at all on the dense route — no `alpha` to save and restore, no in-place refactorisation of `MX`, no branch in `solveHDGJac` — so this should hold trivially rather than by argument.
 - **`computeAlgebraicTimeDerivatives()` runs only when `CheckObjectiveDecrease` is set.** A run with the gate disarmed pays nothing.
 - Central-difference step is `h = sqrt(eps) * max(1.0, |t|)`.
 - The gate stays between `initialize()` and `integrate()`. This plan does not move it.
@@ -315,46 +315,41 @@ Expected: compile error, `computeAlgebraicTimeDerivatives` not a member.
 
 Add `AlgebraicDerivatives.cpp` to `SOURCES` (`Makefile:12`) and
 `../../AlgebraicDerivatives.o` to `REQUIRED_OBJECTS`
-(`Tests/UnitTests/Makefile:23`). The function has four parts, in order:
+(`Tests/UnitTests/Makefile:23`).
 
-1. **Central-difference the explicit `d/dt` terms.** For the boundary data:
+**Do not reuse `solveJacEq`.** An earlier draft substituted an identity for the
+`u` row of `MX` and reused the static condensation; it does not work, because the
+cell system is `MX` *plus* `CEBlocks[i]`, whose `u` row carries `E_cellwise *
+lambda` and is nonzero for any real problem. `CEBlocks` is shared with the
+forward solve and cannot be modified in place. The spec's section 1 records this
+so it is not attempted again.
 
-```cpp
-	const double h = std::sqrt(std::numeric_limits<double>::epsilon()) *
-	                 std::max(1.0, std::abs(t0));
+Instead, assemble one dense global matrix and solve it directly. This runs once
+per armed run, so the cost does not matter and the clarity does.
 
-	updateBoundaryConditions(t0 + h);
-	const auto RF_plus = RF_cellwise;
-	const auto L_plus = L_global;
+The function has four parts:
 
-	updateBoundaryConditions(t0 - h);
-	const auto RF_minus = RF_cellwise;
-	const auto L_minus = L_global;
+1. **Assemble `dF/dy` densely**, in the solution vector's own ordering:
+   `[sigma | q | u | aux]` per cell, then all of `lambda`, then `mu`. Place the
+   same blocks `updateMatricesForJacSolve` builds -- `MBlocks[i]` gives the
+   per-cell part directly, `CEBlocks[i]` the `lambda` coupling, and the
+   `lambda`-row blocks come from the same place `initialiseMatrices` builds them.
+   **Assemble with no mass term**: this is `alpha = 0`, so the `X` contribution
+   at `SystemSolver.cpp:672` is simply not added.
 
-	// Restore. These two arrays are what the forward residual reads, and
-	// leaving them at t0 - h would corrupt the run -- see CLAUDE.md on
-	// RF_cellwise and L_global.
-	updateBoundaryConditions(t0);
-```
+2. **Replace the differential rows with the identity.** The `u` rows for every
+   variable, and any scalar for which `problem->isScalarDifferential(s)`.
 
-with `dRF_dt = (RF_plus - RF_minus) / (2h)` and likewise for `L`. Do the same
-for `sigmaHat` and `AuxG` by evaluating the physics hooks at `t0 ± h` with the
-state held at `yJac`.
+3. **Build the right-hand side.** Zero, except: the differential rows hold the
+   known derivative from IDA's `dYdt`, and every other row holds `-dF/dt`, which
+   is the central difference of `residual()` in `t` with `Y` and `dYdt` held
+   fixed. Note what is *not* here: the `dSigmaHat/du u'`, `B^T u'` and `G_c u'`
+   terms are already in the matrix, and are supplied automatically once `u'` is
+   pinned by the identity rows. Putting them in the RHS as well would double
+   them.
 
-2. **Assemble at `alpha = 0`.** Save `alpha`, `setAlpha(0.0)`, call
-   `updateMatricesForJacSolve()`, and restore `alpha` afterwards. That drops the
-   `X` mass term, leaving `dF/dy`.
-
-3. **Substitute the identity.** Per cell, zero the `u` row of `MX` and put the
-   identity in its `u` column. **Mirror the block indices from
-   `updateMatricesForJacSolve`; do not retype them from this plan** — the layout
-   is `[sigma | q | u | aux]` and the `u` row starts at `2 * nVars * (k+1)`.
-
-4. **Build the RHS and solve.** Per the spec's four equations: the `sigma` row
-   gets `-Pi(dSigmaHat/du u' + dSigmaHat/dt)`, the `q` row `B^T u' + dRF/dt`, the
-   `aux` row `-Pi(dG/du u' + dG/dt)`, the `u` row the known `u'` itself, and the
-   `lambda` row `-G_c u' + dL/dt`. Then `solveJacEq(rhs, out)` and copy `out`
-   into `dydtComplete`.
+4. **Solve and scatter.** `Eigen::FullPivLU` on the dense matrix, then copy the
+   solution into `dydtComplete`.
 
 - [ ] **Step 4: Run the tests**
 
@@ -366,17 +361,15 @@ Expected: both new cases pass. If `the_u_block_round_trips_through_the_identity_
 fails, the identity substitution or the condensation is wrong — fix that before
 looking at the algebraic blocks, whose values depend on it.
 
-- [ ] **Step 5: Check the factorisation risk**
+- [ ] **Step 5: Confirm the forward path is untouched**
 
 ```sh
 make regression_tests 2>&1 | tail -4
 ```
 
-Expected: bit-identical. This is where the spec's main risk shows up:
-`updateMatricesForJacSolve` factorises `MX` in place, so assembling at
-`alpha = 0` destroys the forward factors. It runs before IDA's first Newton
-solve and IDA calls `JacSetup` again, so it should be harmless — if regression
-moves, give the `alpha = 0` assembly its own storage rather than reusing `MX`.
+Expected: bit-identical, and on the dense route this should be uninteresting --
+nothing in the forward solve is touched. If it moves, the assembly is reaching
+into shared state it should be copying.
 
 - [ ] **Step 6: Commit**
 
