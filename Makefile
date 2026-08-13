@@ -56,22 +56,25 @@ PYTHON_SUFFIX := $(shell $(PYTHON_CONFIG) --extension-suffix)
 
 # Header dependencies come from the .d files gcc writes via -MMD -MP; $(HEADERS)
 # is kept only so a fresh tree still orders correctly before any .d exists.
-# The python rule compiles and links in one step, so -MMD names the dep file
-# after the *output*, not after each source -- `Python.d`/`PyRunner.d` are never
-# written. (Only the last source's dependencies survive into it, which is why
-# PYTHON_HEADERS is still listed as a prerequisite of the .so; headers shared
-# with the core are covered transitively through $(OBJECTS).)
 PYTHON_PACKAGE = python/manta
 PYTHON_NAME = $(PYTHON_PACKAGE)/_manta$(PYTHON_SUFFIX)
 PYTHON_OUTPUT = $(PYTHON_NAME)
-# Substituting .so, not $(PYTHON_SUFFIX). -MMD strips only the *last* suffix of
-# the output name, so it writes python/MaNTA.cpython-313-<abi>.d; stripping the
-# whole suffix instead names python/MaNTA.d, which nothing ever creates. That is
-# what this said until now, so the -include below had nothing to include and the
-# real file was never cleaned -- the .so's header dependencies rested entirely on
-# the $(PYTHON_HEADERS) prerequisite of its rule.
-PYTHON_DEPFILE = $(PYTHON_NAME:.so=.d)
-DEPFILES = $(OBJECTS:.o=.d) $(PHYSICS_OBJECTS:.o=.d) main.d MaNTA.d $(PYTHON_DEPFILE)
+
+# Defined here rather than beside the rule below, because DEPFILES expands
+# PYTHON_OBJS and the `-include $(DEPFILES)` a few lines down is what expands
+# DEPFILES. Defined after that point it would still parse, and quietly
+# contribute nothing.
+#
+# The extension used to be compiled and linked in one step. -MMD names the dep
+# file after the *output* rather than after each source, so that wrote
+# python/manta/_manta.cpython-<abi>.d holding only the last source's
+# dependencies, and Python.d / PyRunner.d were never written at all -- which is
+# why PYTHON_HEADERS had to be named as a prerequisite of the .so by hand. Both
+# are ordinary objects now, so each gets a correct .d and the .so rule is a pure
+# link.
+PYTHON_SOURCES = Python.cpp PyRunner.cpp
+PYTHON_OBJS = $(PYTHON_SOURCES:.cpp=.o)
+DEPFILES = $(OBJECTS:.o=.d) $(PHYSICS_OBJECTS:.o=.d) main.d MaNTA.d $(PYTHON_OBJS:.o=.d)
 
 %.o: %.cpp
 	$(CXX) -c $(CXXFLAGS) -o $@ $<
@@ -99,16 +102,28 @@ test: $(SOLVER) Tests/UnitTests/UnitTests
 
 python: $(PYTHON_OUTPUT)
 
+# These two need pybind11, the interpreter's own headers and hidden visibility,
+# none of which the generic %.o rule above carries -- hence a static pattern
+# rule of their own rather than a place in $(OBJECTS). Compiling them separately
+# rather than feeding both to the link lets make build them at the same time
+# (42s to 33s for `make -j16 python` from clean) and stops an edit to one
+# recompiling the other.
+PYTHON_COMPILE_FLAGS = $(PYTHON_FLAGS) $$($(PYTHON_CONFIG) --includes) \
+                       $(JAX_XLA_INCLUDES) \
+                       -isystem $(realpath extern/pybind11/include) \
+                       -fPIC -fvisibility=hidden
+
+$(PYTHON_OBJS): %.o: %.cpp $(PYTHON_HEADERS)
+	$(CXX) -c $(CXXFLAGS) $(PYTHON_COMPILE_FLAGS) -o $@ $<
+
 # MaNTA.o has to be a prerequisite, not just a link-line entry: it is not part
 # of $(OBJECTS) (the solver rule at the top names it separately alongside
 # main.o), so without it here `make python` never noticed a change to
 # MaNTA.cpp and quietly relinked the old object. That is the stale-binary
 # failure mode again -- a fix to runManta appeared to have no effect, and a
 # test written against it would have reported success on the previous code.
-# Python.cpp and PyRunner.cpp are compiled inline by this rule, so they are
-# prerequisites too; their headers come in via $(PYTHON_HEADERS).
-$(PYTHON_OUTPUT): Python.cpp PyRunner.cpp MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(PYTHON_HEADERS) $(PYTHON_OBJECTS)
-	$(CXX) $(CXXFLAGS) $(PYTHON_FLAGS) $$($(PYTHON_CONFIG) --includes) $(JAX_XLA_INCLUDES) -isystem $(realpath extern/pybind11/include) -shared -fPIC -fvisibility=hidden -o $@ Python.cpp PyRunner.cpp MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
+$(PYTHON_OUTPUT): $(PYTHON_OBJS) MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS)
+	$(CXX) $(CXXFLAGS) $(PYTHON_FLAGS) -shared -fPIC -o $@ $(PYTHON_OBJS) MaNTA.o $(OBJECTS) $(PHYSICS_OBJECTS) $(LDFLAGS)
 
 # ------------------------------------------------------------------ stubs --
 #
@@ -234,7 +249,7 @@ uninstall:
 
 clean: clean_data
 	$(MAKE) -C Tests/UnitTests clean
-	rm -f $(SOLVER) main.o MaNTA.o $(OBJECTS) $(DEPFILES)
+	rm -f $(SOLVER) main.o MaNTA.o $(OBJECTS) $(PYTHON_OBJS) $(DEPFILES)
 	rm -f $(LIBMANTA) manta.pc
 	# Wildcards, not the PHYSICS_OBJECTS variable: sweeps up orphaned .o files
 	# left behind by physics cases whose sources have since been deleted. (Named
