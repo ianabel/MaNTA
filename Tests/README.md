@@ -76,6 +76,18 @@ against a closed-form analytic solution, against a steady state, against a
 checked-in `<name>.ref.nc`, and -- for three cases -- against itself via a
 restart round trip. Tolerance is 5e-3, overridable with `--tolerance`.
 
+**It compares only `u`.** `test_ref_soln_l2` reads
+`groups[name].variables["u"]`, so the `q`, `sigma` and `u_star` that every run
+also writes are never checked against a reference. That is not hypothetical
+slack: making t0 output report the CalcIC-corrected state moved the t0 `sigma`
+of `AuxVarTest` by 2.3e-2 and the t0 `q` of `nonlin` by 1.2e-3, and the suite
+could not see either -- the change is invisible in `u` precisely because `u` is
+differential and `IDACalcIC` holds it fixed, so the fields that move are the
+ones nothing looks at. Closing it means regenerating the references, which hold
+the pre-CalcIC t0 values, and picking tolerances for three fields that are a
+derivative rougher than `u`; it is a piece of work rather than a line in the
+harness, which is why it is in `TODO` and recorded here rather than done.
+
 The restart round trip runs to `t_final` in one go, then again in two halves via
 a `.restart.nc` file, and requires the final states to match. It is the only
 test of `WriteRestartFile` -> `StoreGridInfo` -> the restart branch of
