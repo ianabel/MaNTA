@@ -34,34 +34,31 @@ import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
-
 st_config = {
     "ParticleSourceCenter": 0.1,
-    "ParticleSourceHeight": 0.01,
-    "ParticleSourceWidth": 0.1,
+    "ParticleSourceHeight": 0.005,
+    "ParticleSourceWidth": 0.4,
     "HeatSourceCenter": 0.1,
-    "HeatSourceHeight": 0.1,
-    "HeatSourceWidth": 0.1,
+    "HeatSourceHeight": 0.05,
+    "HeatSourceWidth": 0.2,
     "EdgeTemperature": 0.2,
     "EdgeDensity": 0.2,
     "n0": 0.5,
     "evolveDensity": True,
 }
-# runner = MaNTA.Runner(st)
-
 rho_upper = 1.0
 rtol = 1e-2
-atol = 1e-2
+atol = 1e-3
 # nodes = [0.0,0.5, 0.75, 0.9, 1.0]
 npoints = 5
 degree = 3
-base = 1.6
+base = 2.0
 tau = 10.0
 nodes = 1 - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 1)
 nodes = np.concatenate(([0], nodes, [1]))
 # # %%
 solver_config = {
-    "OutputFilename": "stellarator_w7x",
+    "OutputFilename": "out",
     "Polynomial_degree": degree,
     "Grid_points": nodes,
     "tau": tau,
@@ -69,12 +66,12 @@ solver_config = {
     "Upper_boundary": rho_upper,
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
-    "delta_t": 1.0,
-    # "initialTimestep": 1e-3,
+    "delta_t": 0.01,
+    "initialTimestep": 1e-6,
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 1e-2,
-    "aggressiveTimesteps": True,
-    "restart": True,
+    "aggressiveTimesteps": False,
+    "restart": False,
     "zeroFlux": True,
     "solveAdjoint": False,
 }
@@ -110,9 +107,9 @@ eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
 eq = eq.solve(x_scale="ess")[0]
 eq_init = eq.copy()
 yancc_wrapper = yancc_data.from_eq(
-    points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
+    points, eq=eq_init, scale=1e-3, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
-# with jax.log_compiles(True):
 st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-
-st.run()
+jax.config.update("jax_explain_cache_misses", True)
+with jax.log_compiles(True):
+    st.run()

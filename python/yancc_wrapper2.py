@@ -64,6 +64,7 @@ class yancc_data(eqx.Module):
     nx: int
     na: int
     tnorm: float
+    scale: float  # default we use gyrobohm scaling, however this can result in very small fluxes for eq's close to QS, so we can scale tnorm to make solving easier
 
     def __init__(
         self,
@@ -76,6 +77,7 @@ class yancc_data(eqx.Module):
         Tnorm: Optional[float] = 1e3,
         nx: Optional[int] = 5,
         na: Optional[int] = 65,
+        scale: Optional[float] = 1.0,
     ):
 
         self.fields = fields
@@ -102,7 +104,9 @@ class yancc_data(eqx.Module):
         # tau_c = 12.0 * jnp.pi ** (3./2.) *jnp.sqrt(electron_mass) * (elementary_charge * self.Tnorm) * mu_0 **2 / (jnp.sqrt(2) * self.nNorm * elementary_charge ** 4 * log_lambda_ref)
         # tau_norm = Cs0 / rho_star # gyro Bohm scaling
         #
-        self.tnorm = 1.0 / (Cs0 / Lnorm * rho_star**2)
+        self.scale = scale
+        self.tnorm = Lnorm / (Cs0 * rho_star**2 * self.scale)
+        print(f"Normalizing time = {self.tnorm}")
         self.speedgrid = MaxwellSpeedGrid(nx)
         self.pitchgrid = UniformPitchAngleGrid(na)
 
@@ -118,6 +122,7 @@ class yancc_data(eqx.Module):
         rho: Float[ArrayLike, "..."],
         nNorm: Optional[float] = 1e20,
         Tnorm: Optional[float] = 1e3,
+        scale: Optional[float] = 1.0,
         nx: Optional[int] = 5,
         na: Optional[int] = 43,
         nt: Optional[int] = 17,
@@ -155,6 +160,7 @@ class yancc_data(eqx.Module):
             nx=nx,
             na=na,
             rho=rho,
+            scale=scale,
         )
 
     # for constructing from data passed by DESC
