@@ -72,50 +72,6 @@ Superconvergence follow-ons (see Tests/README.md for what is already verified):
     many parameters there are.
 
 
-dG/dt at t0 is complete -- DONE, and here is what it does and does not buy.
-
-The gate assembles a full chain rule over u, q, sigma and phi
-(SystemSolver::dGdt, verified against a finite difference of a real objective
-functional in AdjointProblemTests.cpp), but IDA's dydt has zeros in the last three
-of those at t0. That is structural rather than a defect in the id vector: those
-fields are algebraic and IDA_YA_YDP_INIT computes algebraic *values* and
-differential *derivatives*, so there is no y' for it to fetch, which
-at_t0_only_the_differential_part_of_dydt_exists in SolverLifecycleTests.cpp pins.
-The gate was therefore differentiating every objective through its u dependence
-alone, and an objective depending on q alone scored exactly zero.
-
-SystemSolver::computeAlgebraicTimeDerivatives (AlgebraicDerivatives.cpp) now
-solves for them. Differentiating the algebraic residual rows in t gives
-dF/dy . ydot = -dF/dt, a linear system in (sigma', q', phi', lambda') once u' --
-which IDA does have -- is treated as data; the matrix is the residual Jacobian
-with no mass term, the differential rows are replaced by the identity with the
-known derivative on the right, and one dense factorisation finishes it. The answer
-goes to dydtComplete, never to IDA's dYdt, and objectiveIsDecreasing() reads it.
-
-What it does not buy: exactness. -dF/dt is the *explicit* time derivative of the
-residual, and nothing exposes it analytically -- TransportSystem::LowerBoundary has
-no derivative counterpart and there is no dSigmaFn_dt or dAuxG_dt -- so it is a
-central difference of residual() in t at fixed state. The result is therefore
-second order in the differencing step for a case with explicit time dependence,
-and exact to round-off for an autonomous one, where the two evaluations are
-bit-identical and difference to a true zero. In practice the accuracy is set by
-round-off rather than by truncation: with h = cbrt(eps) the manufactured case in
-AlgebraicDerivativeTests.cpp gets q' right to 6e-11 where u', which comes back out
-of the identity rows untouched, is right to 1e-14. If a case ever needs better,
-explicit d/dt hooks on TransportSystem are the upgrade path and
-differenceResidualInTime is where they would slot in.
-
-The cheaper alternative -- move the gate after one IDA step, where dYdt is fully
-populated -- was implemented and reverted; branch dgdt-gate-after-step is kept as
-the record. It answers a different question (dG/dt of the *stepped* state rather
-than of the initial condition), it costs a step on every armed run even when the
-run passes, and taking that step changes the run's own trajectory, because IDA
-seeds h0 from the distance to the requested output time and the gate has to ask
-for a different one. It is not wasted: it is an entirely independent route to the
-same number, and it_agrees_with_the_derivative_one_ida_step_in checks the two
-against each other -- they agree to 3.7e-7 relative at a step of 3e-7, first order
-in the step, which is the only check in the suite that is not self-consistency.
-
 The regression suite compares only `u`. test_ref_soln_l2 in TestSolutions.py reads
 `groups[name].variables["u"]`, so the `q`, `sigma` and `u_star` that every run also
 writes are never compared against a reference. That is not hypothetical slack:
