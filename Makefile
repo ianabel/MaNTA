@@ -192,7 +192,15 @@ $(LIBMANTA): $(OBJECTS) $(PHYSICS_OBJECTS) MaNTA.o
 # -march=native is deliberately recorded as the *concrete* architecture the core
 # was built for, so a plugin compiled on a different machine is rejected by the
 # compiler rather than mis-aligned at run time.
-MANTA_ABI_FLAGS = -DEIGEN_USE_BLAS -march=$(shell $(CXX) -march=native -Q --help=target 2>/dev/null | awk '/^  -march=/{print $$2; exit}')
+#
+# := because this file has a bare `export` at the top. Make builds the
+# environment afresh for every recipe it runs, expanding each exported
+# recursively-expanded variable as it goes, so with = the probe below forks
+# `$(CXX) -march=native -Q --help=target` once per compile rather than once per
+# build -- for a variable only `manta.pc` ever reads. It is 7ms a time, so this
+# is tidiness rather than a rescue, but it is the same trap the flag-composition
+# variables in Makefile.config were memoised for in cc592e7.
+MANTA_ABI_FLAGS := -DEIGEN_USE_BLAS -march=$(shell $(CXX) -march=native -Q --help=target 2>/dev/null | awk '/^  -march=/{print $$2; exit}')
 
 manta.pc: Makefile
 	@printf 'prefix=%s\n' "$(PREFIX)" > $@
