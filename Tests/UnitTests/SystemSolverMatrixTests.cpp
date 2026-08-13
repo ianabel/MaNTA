@@ -371,7 +371,7 @@ BOOST_AUTO_TEST_CASE(d_sources_d_scalars_mat_is_the_projected_derivative)
     for (Index cell = 0; cell < MatrixFixture::nCells; ++cell)
     {
         Matrix mat(nVars * (k + 1), nScalars);
-        f.sys.dSources_dScalars_Mat(mat, f.sys.yJac, cell);
+        f.sys.dSources_dScalars_Mat(mat, f.sys.yJac, cell, 0.0);
 
         Interval const &I = f.grid[cell];
         auto const &basis = f.sys.yJac.getBasis();

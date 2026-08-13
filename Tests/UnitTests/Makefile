@@ -20,7 +20,7 @@ TEST_HEADERS = $(wildcard *.hpp) \
 # "./Tests/UnitTests/..." and only worked when run from the repo root).
 CXXFLAGS += -I../../ -DTEST -DTEST_DATA_DIR='"$(CURDIR)/"'
 
-REQUIRED_OBJECTS = ../../Config.o ../../SunLinSolWrapper.o ../../SunMatrixWrapper.o ../../ErrorChecker.o ../../Solver.o ../../PhysicsCases/ScalarTestLD3.o ../../PhysicsCases/MagneticFields.o ../../DGStatic.o ../../SystemSolver.o ../../Matrices.o ../../NetCDFIO.o ../../PhysicsCases/AutodiffTransportSystem.o ../../PhysicsCases.o ../../PhysicsCases/MatrixDiffusion.o ../../PhysicsCases/LinearDiffSourceTest.o ../../PhysicsCases/MirrorPlasma/PlasmaConstants.o ../../PhysicsCases/AutodiffAdjointProblem.o ../../PhysicsCases/AdjointTestProblem.o ../../AdjointVectors.o ../../Postprocessing.o ../../ConfigSchema.o ../../SolverConfig.o
+REQUIRED_OBJECTS = ../../Config.o ../../SunLinSolWrapper.o ../../SunMatrixWrapper.o ../../ErrorChecker.o ../../Solver.o ../../PhysicsCases/ScalarTestLD3.o ../../PhysicsCases/MagneticFields.o ../../DGStatic.o ../../SystemSolver.o ../../Matrices.o ../../NetCDFIO.o ../../PhysicsCases/AutodiffTransportSystem.o ../../PhysicsCases.o ../../PhysicsCases/MatrixDiffusion.o ../../PhysicsCases/LinearDiffSourceTest.o ../../PhysicsCases/MirrorPlasma/PlasmaConstants.o ../../PhysicsCases/AutodiffAdjointProblem.o ../../PhysicsCases/AdjointTestProblem.o ../../AdjointVectors.o ../../Postprocessing.o ../../AlgebraicDerivatives.o ../../ConfigSchema.o ../../SolverConfig.o
 
 UnitTests: main.cpp $(TEST_SOURCES) $(TEST_HEADERS) $(REQUIRED_OBJECTS) Makefile
 	$(CXX) $(CXXFLAGS) -o $@ main.cpp $(TEST_SOURCES) $(REQUIRED_OBJECTS) $(LDFLAGS)

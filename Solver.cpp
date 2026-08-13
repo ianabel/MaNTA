@@ -147,15 +147,6 @@ void SystemSolver::initialize()
 	// also called directly by tests that size their own N_Vectors.
 	setJacEvalY(Y, dYdt);
 
-	// Seed the complete derivative from IDA's. Its algebraic blocks are zero at
-	// this point; computeAlgebraicTimeDerivatives() fills them when the gate is
-	// armed, and nothing else reads them.
-	{
-		DGSoln idaDerivative(nVars, grid, k, nScalars, nAux);
-		idaDerivative.Map(N_VGetArrayPointer(dYdt));
-		dydtComplete.copy(idaDerivative);
-	}
-
 	// ----------------- Allocate and initialize all other sun-vectors. -------------
 	//
 	// Note the `throw` on each of these checks. They used to construct a
@@ -370,6 +361,22 @@ void SystemSolver::initialize()
 	retval = IDAGetConsistentIC(IDA_mem, Y, dYdt);
 	if (ErrorChecker::check_retval(&retval, "IDAGetConsistentIC", 1))
 		throw std::runtime_error("Could not retrieve the corrected initial condition");
+
+	// Seed the complete derivative from IDA's. Its algebraic blocks are zero at
+	// this point; computeAlgebraicTimeDerivatives() fills them when the gate is
+	// armed, and nothing else reads them.
+	//
+	// Here rather than beside setJacEvalY above, because until the fetch on the
+	// line before this dYdt still holds the *guess* setInitialConditions built
+	// rather than the derivative IDACalcIC corrected it to. Seeding from the guess
+	// left dydtComplete's u block disagreeing with the state it is meant to
+	// describe by a fraction of a percent -- small enough to look like round-off
+	// and quite large enough to matter to anything differentiating the solution.
+	{
+		DGSoln idaDerivative(nVars, grid, k, nScalars, nAux);
+		idaDerivative.Map(N_VGetArrayPointer(dYdt));
+		dydtComplete.copy(idaDerivative);
+	}
 
 	if (writeDatFile)
 		print(out0, t0, nOut, true);
