@@ -85,7 +85,12 @@ bool SystemSolver::objectiveIsDecreasing()
 	bool decreasing = false;
 	for (Index gIndex = 0; gIndex < ng; ++gIndex)
 	{
-		last_dGdt(gIndex) = dGdt(gIndex);
+		// dydtComplete, not IDA's dydt. At t0 the latter's q, sigma and phi
+		// blocks are identically zero, so three of dGdt's four terms would
+		// multiply by nothing and the objective would be judged on its u
+		// dependence alone -- an objective depending only on q would score
+		// exactly zero. computeAlgebraicTimeDerivatives() fills them in.
+		last_dGdt(gIndex) = dGdt(gIndex, y, dydtComplete);
 		if (last_dGdt(gIndex) < -objective_decrease_tol)
 			decreasing = true;
 	}
@@ -377,6 +382,12 @@ void SystemSolver::initialize()
 		idaDerivative.Map(N_VGetArrayPointer(dYdt));
 		dydtComplete.copy(idaDerivative);
 	}
+
+	// Only when the gate is armed: this is a dense assembly and factorisation of
+	// the whole system, and nothing but the gate reads the algebraic blocks. A
+	// run with the gate disarmed pays nothing and is unchanged.
+	if (CheckObjectiveDecrease)
+		computeAlgebraicTimeDerivatives();
 
 	if (writeDatFile)
 		print(out0, t0, nOut, true);

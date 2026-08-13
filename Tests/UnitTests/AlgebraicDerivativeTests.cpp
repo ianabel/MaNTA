@@ -239,6 +239,92 @@ public:
     Value InitialScalarValue(Index) const override { return BETA / 6.0; }
 };
 
+// An objective that depends on q and nothing else.
+//
+// This is the one that shows what the whole exercise bought. dG/dt for it is
+// Int q' dx, and IDA leaves the q block of dydt identically zero at t0 -- so a
+// gate reading IDA's derivative computes exactly 0.0 and can never reject, no
+// matter how badly the objective is falling. Reading dydtComplete instead, the
+// number is real.
+//
+// All four dgFn_d* are pure virtual on AdjointProblem, so the three this does
+// not depend on are spelled out as zero rather than inherited. That is what
+// makes it genuinely q-only, and therefore evidence.
+class QIntegralObjective : public AdjointProblem
+{
+public:
+    explicit QIntegralObjective(double s) : sign(s)
+    {
+        ng = 1;
+        np = 1;
+        np_boundary = 0;
+    }
+
+    using AdjointProblem::gFn;
+
+    Value gFn(Index, const State &s, Position) const override { return sign * s.q(0); }
+
+    Value GFn(Index, DGSoln &) const override
+    {
+        throw std::logic_error("GFn is not part of what this fixture exercises.");
+    }
+    Value dGFndp(Index, Index, DGSoln &) const override { return 0.0; }
+
+    void dgFn_du(Index, VectorRef v, const State &, Position) override { v.setZero(); }
+    void dgFn_dq(Index, VectorRef v, const State &, Position) override
+    {
+        v.setZero();
+        v[0] = sign;
+    }
+    void dgFn_dsigma(Index, VectorRef v, const State &, Position) override { v.setZero(); }
+    void dgFn_dphi(Index, VectorRef v, const State &, Position) override { v.setZero(); }
+
+    void dSigmaFn_dp(Index, Index, Value &out, const State &, Position) override { out = 0.0; }
+    void dSources_dp(Index, Index, Value &out, const State &, Position) override { out = 0.0; }
+
+private:
+    double sign;
+};
+
+// The same, depending on u alone. Its dg/dq, dg/dsigma and dg/dphi are zero, so
+// completing the derivative cannot change its dG/dt -- which is what makes it
+// the control for the q-only case.
+class UIntegralObjective : public AdjointProblem
+{
+public:
+    explicit UIntegralObjective(double s) : sign(s)
+    {
+        ng = 1;
+        np = 1;
+        np_boundary = 0;
+    }
+
+    using AdjointProblem::gFn;
+
+    Value gFn(Index, const State &s, Position) const override { return sign * s.u(0); }
+
+    Value GFn(Index, DGSoln &) const override
+    {
+        throw std::logic_error("GFn is not part of what this fixture exercises.");
+    }
+    Value dGFndp(Index, Index, DGSoln &) const override { return 0.0; }
+
+    void dgFn_du(Index, VectorRef v, const State &, Position) override
+    {
+        v.setZero();
+        v[0] = sign;
+    }
+    void dgFn_dq(Index, VectorRef v, const State &, Position) override { v.setZero(); }
+    void dgFn_dsigma(Index, VectorRef v, const State &, Position) override { v.setZero(); }
+    void dgFn_dphi(Index, VectorRef v, const State &, Position) override { v.setZero(); }
+
+    void dSigmaFn_dp(Index, Index, Value &out, const State &, Position) override { out = 0.0; }
+    void dSources_dp(Index, Index, Value &out, const State &, Position) override { out = 0.0; }
+
+private:
+    double sign;
+};
+
 // The state a Jacobian is assembled at, without going near IDA: initialiseMatrices
 // plus setInitialConditions is all the assembly needs, and it keeps the fixtures
 // above out of IDACalcIC's way.
@@ -497,6 +583,72 @@ BOOST_AUTO_TEST_CASE(the_algebraic_blocks_stop_being_zero)
                "solve is empty");
     BOOST_TEST(blockNorm(sys.dydtComplete, nCells, 's') > 1e-8,
                "sigma' is still zero after solving for it");
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+}
+
+BOOST_AUTO_TEST_CASE(the_gate_sees_a_q_only_objective)
+{
+    // The change, stated as a measurement. g depends on q alone, so
+    // dG/dt = Int q' dx -- exactly zero when read from IDA's dydt at t0, because
+    // that block is empty. A gate reading it could never reject such a run
+    // however badly its objective were falling.
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(alg_config);
+    QIntegralObjective objective(1.0);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, "algderiv_qgate");
+    sys.setAdjointProblem(&objective);
+    sys.setObjectiveDecreaseTolerance(1e-12);
+
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+        sys.objectiveIsDecreasing();
+    }
+
+    BOOST_TEST(sys.lastDGdt()(0) != 0.0,
+               "dG/dt for a q-only objective came out exactly zero, so the gate is "
+               "reading IDA's dydt rather than the completed one");
+
+    // And what it read is the value the solve produced, not something else.
+    const Value fromComplete = sys.dGdt(0, sys.y, sys.dydtComplete);
+    BOOST_TEST(sys.lastDGdt()(0) == fromComplete, boost::test_tools::tolerance(1e-12));
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+}
+
+BOOST_AUTO_TEST_CASE(a_u_only_objective_is_unchanged_by_the_completed_derivative)
+{
+    // The converse, and the guard against the previous test passing for the
+    // wrong reason. An objective depending only on u cannot be affected by
+    // filling in q', sigma' and phi' -- its dg/dq, dg/dsigma and dg/dphi are all
+    // zero -- so the gate must give exactly what IDA's own derivative gives.
+    //
+    // If this ever differs, the solve is perturbing the u block, which the
+    // round-trip test says it must not.
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(alg_config);
+    UIntegralObjective objective(1.0);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, "algderiv_ugate");
+    sys.setAdjointProblem(&objective);
+    sys.setObjectiveDecreaseTolerance(1e-12);
+
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+        sys.objectiveIsDecreasing();
+    }
+
+    const Value fromIDA = sys.dGdt(0, sys.y, sys.dydtJac);
+    BOOST_TEST(sys.lastDGdt()(0) == fromIDA, boost::test_tools::tolerance(1e-10));
 
     {
         CapturedOutput quiet;
