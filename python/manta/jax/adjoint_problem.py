@@ -83,7 +83,6 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
 
         for i in range(0, self.nAux):
             aux.append(self.dAux(i, states, positions))
-        print(fluxes)
         return [fluxes, sources, aux]
 
     @eqx.filter_jit

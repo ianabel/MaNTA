@@ -45,25 +45,28 @@ landed; these are the pieces that were deliberately not done, with the reason.
     venv. Both are slow enough to want their own CI job rather than a place in
     `make test`.
 
-  - python-examples/adjoints/spatial_adjoints.py aborts inside Eigen:
+  - The spatial adjoint gradient is consistent but not exact, and the
+    non-spatial one is exact, so the difference is worth understanding rather
+    than living with. Measured in
+    test_spatial_adjoint_gradient_matches_finite_differences: against finite
+    differences, every node is off by the *same absolute amount* -- 1.549e-07 at
+    nCells = 4 and 3.091e-08 at nCells = 6, a ratio of 5.01 for a mesh ratio of
+    1.5, i.e. O(h^4). Summed over the nodes the error vanishes exactly:
+    sum_j dG/dp_j is the closed-form dG/dS to 14 digits, which is what
+    test_the_spatial_gradient_sums_to_the_closed_form pins.
 
-      Eigen/src/Core/DenseBase.h:261: DenseBase<Derived>::resize(Index, Index)
-      [Derived = Eigen::Block<Eigen::Matrix<double, -1, -1>, -1, -1, false>]:
-      Assertion `rows == this->rows() && cols == this->cols() &&
-                 "DenseBase::resize() does not actually allow one to resize."'
-      failed.
+    For comparison the scalar-parameter path on the same physics agrees with
+    finite differences to 2e-8 and with the closed form to 7e-16, so this is not
+    the adjoint solve being approximate in general -- something in the per-node
+    distribution inside the pIndex/j loop of computeAdjointGradients is. The
+    uniform-in-absolute-terms signature is the clue: it looks like a term that
+    should be weighted per node and is instead spread evenly.
 
-    A resize of a fixed-size block somewhere in the spatial-parameter adjoint
-    path. Reproduced on pristine origin/main in a throwaway worktree with only
-    the constructor fix (fed7a3b) applied, so it predates the python-examples
-    split rather than coming from it.
-
-    Two reasons it survived: the example's constructor had been broken since
-    that split, so it died before reaching the solver, and it is the only thing
-    in the tree that passes spatialParameters=True -- python/Tests covers the
-    scalar-parameter adjoint path only. Anything that fixes this should leave a
-    test behind in python/Tests, because otherwise the next regression is
-    equally invisible.
+    It matters most where the gradient is small. At nCells = 6 the error is 6e-5
+    of the largest entry, but the nodes next to the Dirichlet boundaries carry
+    gradients of ~1e-5, so *there* it is a 1.4e-2 relative error. An
+    optimisation driver that trusts individual boundary-adjacent nodes is the
+    thing that would notice.
 
   - No C++ test asserts that a scalar declared differential has a time
     derivative in its G. Without one, IDACalcIC is handed a row whose every

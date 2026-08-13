@@ -84,9 +84,14 @@ public:
     // domain to get the total sensitivity with respect to that
     // parameter.
     if (areParametersSpatial()) {
+      // Transposed on the way out. dgFndp is (np, nPoints) -- that is the
+      // orientation the non-spatial branch below indexes as dgdp(p, ind) --
+      // while computeAdjointGradients assigns this into a
+      // (nCells * (k + 1), np) block of G_p. Returned raw it aborted inside
+      // Eigen's assignment, and would have silently transposed the gradient
+      // rather than aborting had np ever equalled the node count.
       Matrix retval = dgFndp(gIndex, states, points);
-      return retval;
-      // out.resize(1, np * y.getGrid().getNCells());
+      return retval.transpose();
     } else {
       out.resize(1, np);
     }

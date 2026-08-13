@@ -583,6 +583,35 @@ Anything indexed per auxiliary variable is sized `nAux`, not `nVars`. Those
 coincide in every fixture except `test_adjoint_aux.py`, so a confusion between
 them is invisible in the rest of the suite; `dGdaux_Vec` had two.
 
+**With `spatialParameters = true` the parameter vector is indexed by node, and
+`G_p` is `(ng * nCells * (k+1), np)` — one row per (objective, node), one column
+per parameter *field*.** Two places in `computeAdjointGradients` fill that matrix
+and they have to agree on the orientation: the explicit term assigns `dGFndp`
+into a `(nPoints, np)` block (`SystemSolver.cpp:1675`), and the adjoint term
+writes `G_p(gIndex * nPoints + node, pIndex)` (`SystemSolver.cpp:1814`). The
+Python hook underneath, `dgFndp`, returns the *other* orientation, `(np,
+nPoints)` — which is what the non-spatial branch of `PyAdjointProblem::dGFndp`
+indexes as `dgdp(p, ind)` — so the spatial branch has to transpose, and for a
+long time did not. Every spatial run aborted inside Eigen's assignment, and
+would have transposed the gradient *silently* had `np` ever equalled the node
+count. Note `checkShapeAndSet` is a plain assignment outside a `DEBUG` build, so
+the only diagnostic was Eigen's own `resize()` assertion, naming
+`Block<Matrix<double,-1,-1>,-1,-1,false>` and nothing about MaNTA.
+
+Only Python can set the flag (`Python.cpp:307` exposes it on
+`PyAdjointProblem`; the C++ base defaults false and `AdjointProblemTests.cpp:322`
+asserts as much), so this is a trampoline concern rather than a solver one.
+`Superconvergent = true` with spatial parameters throws rather than guessing —
+the star node set would redefine how many parameters there are.
+
+Two things to know before trusting a spatial gradient, both measured in
+`test_adjoint.py`: summed over nodes it is exact (`sum_j dG/dp_j` matches the
+closed-form `dG/dS` to 14 digits), but *per node* it carries an O(h^4) error
+that is uniform in absolute terms — so it is worst, relatively, exactly where
+the gradient is smallest, which is the nodes next to a Dirichlet boundary. The
+scalar-parameter path on the same physics is exact to 7e-16, so this is specific
+to the per-node distribution and is in `TODO`.
+
 ## Traps worth knowing before you edit
 
 * **autodiff expression templates hold references to their operands.** A lambda

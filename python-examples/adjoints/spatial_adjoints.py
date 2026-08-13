@@ -10,6 +10,13 @@ import jax
 from jaxtyping import Array, ArrayLike, Float, Int
 import equinox as eqx
 
+# Float64, before any array is built. JAX defaults to float32, which caps a
+# gradient check at about six digits and makes the finite-difference reference
+# the least accurate thing in the comparison rather than the most. The solver
+# tolerances below are tightened to match -- there is no point differencing an
+# objective to 1e-10 if the steady state it comes from is only converged to 1e-2.
+jax.config.update("jax_enable_x64", True)
+
 
 class NonlinearDiffusionParams(NamedTuple):
     T_s: Float[ArrayLike, "..."]
@@ -118,7 +125,20 @@ solver_config = {
     "tau": 1.0,
     "Lower_boundary": 0.0,
     "Upper_boundary": 1.0,
-    "Relative_tolerance": 0.01,
+    # Tight, so the finite-difference reference is limited by its step size
+    # rather than by how well the steady state was resolved. MinStepSize has to
+    # come down with them: the 1e-7 default is one IDA hits while still at
+    # t = 0 at these tolerances, and it reports that as a repeated error-test
+    # failure rather than as anything about the step floor. 1e-8 / 1e-10 is a
+    # step too far on this 4-cell grid -- IDASolve gives up with IDA_ERR_FAIL.
+    "Relative_tolerance": 1e-7,
+    "Absolute_tolerance": [1e-9],
+    "MinStepSize": 1e-12,
+    # run_ss() arms steady-state termination whatever the config says, but
+    # falls back to 1e-3, and that -- not Relative_tolerance -- is then the
+    # floor on how well G is determined. Left at the default it swamps any
+    # finite difference worth taking.
+    "SteadyStateTolerance": 1e-9,
     "delta_t": 1.0,
     "restart": False,
     "solveAdjoint": True,
@@ -140,11 +160,24 @@ G_p_fd = []
 
 
 def fd_jvp(tangent):
-    dT = 0.001 + 0.1 * jnp.linalg.norm(T_p)
+    # Central. The one-sided difference this used to take had an O(dT)
+    # truncation error, and at dT = 0.1 * ||T_p|| -- about 13, on a parameter of
+    # norm ~129 -- that error was most of the 2% the check then reported: a
+    # measurement of the step size rather than of the gradient. Central
+    # differencing makes it O(dT^2), and with float64 and the tolerances above
+    # the answer is now flat to six figures for every dT between 1e-1 and 3e-3
+    # of ||T_p||, so the step is no longer what limits the comparison.
+    #
+    # What is left is ~1.3e-3, and it is real: the spatial gradient carries a
+    # discretisation error that a coarse grid like this one shows plainly.
+    # python/Tests/test_adjoint.py measures it -- uniform in absolute terms,
+    # O(h^4), and exactly zero once summed over the nodes.
+    dT = 1e-2 * jnp.linalg.norm(T_p)
 
-    T_in = T_p + dT * (tangent / jnp.linalg.norm(tangent))
-    G_2 = f(T_in)[0]
-    return (G_2 - G) / dT
+    direction = tangent / jnp.linalg.norm(tangent)
+    G_plus = f(T_p + dT * direction)[0]
+    G_minus = f(T_p - dT * direction)[0]
+    return (G_plus - G_minus) / (2.0 * dT)
 
 
 def adj_jvp(tangent):

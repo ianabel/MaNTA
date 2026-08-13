@@ -626,3 +626,291 @@ def test_the_gate_verdict_does_not_depend_on_the_output_cadence(tmp_path):
 
     assert verdicts[0] == verdicts[1], verdicts
     assert all(verdicts), "a worsening objective should be rejected at either cadence"
+
+
+# --------------------------------------------------- spatial parameters --
+#
+# `spatialParameters = True` indexes the parameter vector by node: `G_p` becomes
+# `(ng * nCells * (k + 1), np)`, one row per (objective, node) and one column per
+# parameter *field*. Two places in computeAdjointGradients build that matrix and
+# they have to agree on its orientation -- the explicit term assigns `dGFndp`
+# into a `(nPoints, np)` block (SystemSolver.cpp:1675), and the adjoint term
+# writes `G_p(gIndex * nPoints + node, pIndex)` (SystemSolver.cpp:1814).
+#
+# PyAdjointProblem::dGFndp returned `dgFndp` raw in the spatial branch. That is
+# `(np, nPoints)` -- the orientation the non-spatial branch immediately below it
+# indexes as `dgdp(p, ind)` -- so every run with spatial parameters aborted
+# inside Eigen's assignment, with `checkShapeAndSet` reduced to a plain
+# assignment in a release build and so contributing no message of its own.
+#
+# Nothing here covered it: every other adjoint fixture in this file sets
+# `spatialParameters = False`, and python-examples/adjoints/spatial_adjoints.py,
+# the only thing in the tree that sets it True, is collected by no suite. That
+# example could not have caught the *orientation* in any case, only the shape --
+# its `g` ignores its parameters, so its `dgFndp` is identically zero.
+
+NP_SPATIAL = 3
+
+
+def spatial_marker(np_, nPoints):
+    """A dgFndp with every entry distinct, so orientation is observable.
+
+    Deliberately neither symmetric nor square: a transposed G_p fails here on
+    shape, and would still fail on values if nPoints ever equalled np_.
+    """
+    p = np.arange(np_).reshape(np_, 1)
+    j = np.arange(nPoints).reshape(1, nPoints)
+    return 1.0 + p + 100.0 * j
+
+
+class SpatialObjectiveAdjoint(MaNTA.AdjointProblem):
+    """dG/dp is a known matrix and nothing else contributes.
+
+    `dSigma` and `dSources` are zero, so `F_p` is zero and the adjoint term adds
+    nothing at all -- `G_p` is then exactly `dgFndp` transposed, which makes the
+    assertion an equality rather than a tolerance.
+    """
+
+    def __init__(self):
+        MaNTA.AdjointProblem.__init__(self)
+        self.ng = 1
+        self.np = NP_SPATIAL
+        self.np_boundary = 0
+        self.spatialParameters = True
+
+    def gFn(self, gIndex, states, positions):
+        u = np.asarray(states["Variable"])[:, 0]
+        return 0.5 * u * u
+
+    def dgFndp(self, gIndex, states, positions):
+        return spatial_marker(self.np, len(positions))
+
+    def dg(self, gIndex, states, positions):
+        V = np.asarray(states["Variable"])
+        zeros = np.zeros_like(V)
+        return {
+            "Variable": V.copy(),
+            "Derivative": zeros,
+            "Flux": zeros,
+            "Aux": np.zeros((len(positions), 0)),
+            "Scalars": np.zeros(0),
+        }
+
+    def dSigma(self, i, states, positions):
+        return np.zeros((self.np, len(positions)))
+
+    def dSources(self, i, states, positions):
+        return np.zeros((self.np, len(positions)))
+
+    def getName(self, pIndex):
+        return f"field{pIndex}"
+
+
+def test_spatial_gradients_keep_dgdp_in_the_layout_G_p_uses(tmp_path):
+    """G_p is (nPoints, np), and dGFndp has to arrive that way round."""
+    system = ParametricDiffusion(np.array([KAPPA0, SOURCE0]))
+    cfg = adjoint_config(tmp_path, Polynomial_degree=3, Grid_size=4)
+    nPoints = cfg["Grid_size"] * (cfg["Polynomial_degree"] + 1)
+
+    adjoint = SpatialObjectiveAdjoint()
+    system.createAdjointProblem = lambda: adjoint
+
+    runner = MaNTA.Runner(system)
+    runner.configure(cfg)
+    runner.run(T_FINAL)
+    _, gradients = runner.getAdjointGradients()
+    G_p = np.asarray(gradients["G_p"])
+
+    assert G_p.shape == (nPoints, NP_SPATIAL), G_p.shape
+    np.testing.assert_allclose(
+        G_p, spatial_marker(NP_SPATIAL, nPoints).T, rtol=0.0, atol=0.0
+    )
+
+
+# The value tests. A parameter field the *physics* depends on, so the gradient
+# comes out of the adjoint solve rather than out of dgFndp.
+
+SPATIAL_KAPPA = 1.0
+SPATIAL_S0 = 2.0
+SPATIAL_K = 4
+SPATIAL_NCELLS = 6
+
+
+class NodalSourceDiffusion(MaNTA.TransportSystem):
+    """-d_x(kappa d_x u) = S, with S given by one value per node.
+
+    The hooks are evaluated at the k+1 nodes of each cell, which is exactly the
+    array `MaNTA.getNodes` returns, so `Sources` can look its value up by
+    position. `argmin` rather than an equality test because the position makes a
+    round trip through C++ as a double.
+    """
+
+    def __init__(self, points, source_nodes):
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1))
+        self.points = np.asarray(points, dtype=float)
+        self.source_nodes = np.asarray(source_nodes, dtype=float)
+
+    def Sources(self, i, state, x, t):
+        return float(self.source_nodes[np.argmin(np.abs(self.points - x))])
+
+    def SigmaFn(self, i, state, x, t):
+        return SPATIAL_KAPPA * state.q[i]
+
+    def dSigmaFn_dq(self, i, state, x, t):
+        return np.full(self.nVars, SPATIAL_KAPPA)
+
+    def dSigmaFn_du(self, i, state, x, t):
+        return np.zeros(self.nVars)
+
+    def dSources_du(self, i, state, x, t):
+        return np.zeros(self.nVars)
+
+    def dSources_dq(self, i, state, x, t):
+        return np.zeros(self.nVars)
+
+    def dSources_dsigma(self, i, state, x, t):
+        return np.zeros(self.nVars)
+
+    def LowerBoundary(self, i, t):
+        return 0.0
+
+    def UpperBoundary(self, i, t):
+        return 0.0
+
+    def InitialValue(self, i, x):
+        return 0.0
+
+    def InitialDerivative(self, i, x):
+        return 0.0
+
+    def createAdjointProblem(self):
+        return NodalSourceAdjoint()
+
+
+class NodalSourceAdjoint(MaNTA.AdjointProblem):
+    """G = int 0.5 u^2 dx against the one nodal source field.
+
+    `np` is 1 -- one *field* -- and its per-node structure is what
+    `spatialParameters` expresses. dS/dp is 1 at every node, because the value
+    at node j is the parameter at node j.
+    """
+
+    def __init__(self):
+        MaNTA.AdjointProblem.__init__(self)
+        self.ng = 1
+        self.np = 1
+        self.np_boundary = 0
+        self.spatialParameters = True
+
+    def gFn(self, gIndex, states, positions):
+        u = np.asarray(states["Variable"])[:, 0]
+        return 0.5 * u * u
+
+    def dgFndp(self, gIndex, states, positions):
+        # g has no explicit parameter dependence: the whole gradient comes out
+        # of the adjoint term.
+        return np.zeros((self.np, len(positions)))
+
+    def dg(self, gIndex, states, positions):
+        V = np.asarray(states["Variable"])
+        zeros = np.zeros_like(V)
+        return {
+            "Variable": V.copy(),
+            "Derivative": zeros,
+            "Flux": zeros,
+            "Aux": np.zeros((len(positions), 0)),
+            "Scalars": np.zeros(0),
+        }
+
+    def dSigma(self, i, states, positions):
+        return np.zeros((self.np, len(positions)))
+
+    def dSources(self, i, states, positions):
+        return np.ones((self.np, len(positions)))
+
+    def getName(self, pIndex):
+        return "S"
+
+
+def spatial_points():
+    return np.asarray(
+        MaNTA.getNodes(0.0, 1.0, SPATIAL_NCELLS, SPATIAL_K), dtype=float
+    )
+
+
+def spatial_solve(points, source_nodes, tmp_path):
+    system = NodalSourceDiffusion(points, source_nodes)
+    runner = MaNTA.Runner(system)
+    runner.configure(
+        adjoint_config(
+            tmp_path, Polynomial_degree=SPATIAL_K, Grid_size=SPATIAL_NCELLS
+        )
+    )
+    runner.run(T_FINAL)
+    G, gradients = runner.getAdjointGradients()
+    return float(np.asarray(G)[0]), np.asarray(gradients["G_p"])
+
+
+def test_the_spatial_gradient_sums_to_the_closed_form(tmp_path):
+    """Summed over nodes, the spatial gradient is the scalar one.
+
+    With the field uniform at S0, perturbing every node together is exactly
+    perturbing the scalar source, and G is quadratic in the parameters, so
+    sum_j dG/dp_j is dG/dS = S / (120 kappa^2) with no discretisation error at
+    all. This holds to machine precision and is the tightest statement
+    available about the spatial path: it pins the total, the node ordering's
+    completeness, and the quadrature weighting inside F_p all at once.
+    """
+    points = spatial_points()
+    _, G_p = spatial_solve(points, SPATIAL_S0 * np.ones(len(points)), tmp_path)
+
+    exact = SPATIAL_S0 / (120.0 * SPATIAL_KAPPA**2)
+    assert G_p.shape == (len(points), 1), G_p.shape
+    assert G_p[:, 0].sum() == pytest.approx(exact, rel=1e-12), (
+        f"sum = {G_p[:, 0].sum()}, expected {exact}"
+    )
+
+
+def test_spatial_adjoint_gradient_matches_finite_differences(tmp_path):
+    """dG/dp at a node, from the adjoint, against re-running the solver.
+
+    Compared against the largest entry rather than each node's own, because the
+    discrepancy is uniform in *absolute* terms -- at the resolutions measured it
+    is the same number at every node to seven figures -- while the gradient
+    itself spans two orders of magnitude, being ~1e-5 at the nodes next to the
+    Dirichlet boundaries and ~5e-4 mid-domain. A per-node relative test would
+    therefore be a test of the two boundary nodes and nothing else.
+
+    That absolute offset is a discretisation error and converges: 1.549e-07 at
+    nCells = 4 against 3.091e-08 at nCells = 6, a ratio of 5.01 for a mesh ratio
+    of 1.5, i.e. O(h^4). It is not the non-spatial behaviour, where the same
+    machinery agrees with finite differences to 2e-8 and with the closed form to
+    7e-16 -- so the spatial gradient is consistent rather than exact, and the
+    total is exact regardless (see the sum test above). Worth knowing before
+    trusting a single node of it.
+
+    Only a few nodes are differenced -- each costs two steady-state solves --
+    chosen either side of a cell boundary, which is where a layout error in the
+    per-node loop would show.
+    """
+    points = spatial_points()
+    p0 = SPATIAL_S0 * np.ones(len(points))
+
+    _, G_p = spatial_solve(points, p0, tmp_path / "base")
+    adjoint_grad = G_p[:, 0]
+    scale = np.abs(adjoint_grad).max()
+
+    probe = [0, SPATIAL_K, SPATIAL_K + 1, len(points) // 2, len(points) - 1]
+    h = 0.1 * SPATIAL_S0  # G is quadratic in p, so a central difference is exact
+    for j in probe:
+        plus, minus = p0.copy(), p0.copy()
+        plus[j] += h
+        minus[j] -= h
+        G_plus, _ = spatial_solve(points, plus, tmp_path / f"p{j}")
+        G_minus, _ = spatial_solve(points, minus, tmp_path / f"m{j}")
+        fd = (G_plus - G_minus) / (2.0 * h)
+
+        assert abs(adjoint_grad[j] - fd) < 1e-3 * scale, (
+            f"node {j} (x = {points[j]:.4f}): adjoint = {adjoint_grad[j]}, "
+            f"finite-difference = {fd}, largest gradient entry = {scale}"
+        )
