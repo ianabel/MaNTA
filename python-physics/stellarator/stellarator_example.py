@@ -45,7 +45,7 @@ st_config = {
     "EdgeTemperature": 0.2,
     "EdgeDensity": 0.2,
     "n0": 0.5,
-    "evolveDensity": True,
+    "evolveDensity": False,
 }
 # runner = MaNTA.Runner(st)
 
@@ -64,6 +64,7 @@ solver_config = {
     "OutputFilename": "stellarator_w7x",
     "Polynomial_degree": degree,
     "Grid_points": nodes,
+    "Grid_size": len(nodes) - 1,
     "tau": tau,
     "Lower_boundary": 0.0,
     "Upper_boundary": rho_upper,
@@ -73,8 +74,8 @@ solver_config = {
     # "initialTimestep": 1e-3,
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 1e-2,
-    "aggressiveTimesteps": True,
-    "restart": True,
+    "AggressiveTimesteps": False,
+    "restart": False,
     "zeroFlux": True,
     "solveAdjoint": False,
 }

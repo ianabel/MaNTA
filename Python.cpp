@@ -10,8 +10,8 @@
 #include "PyAdjointProblem.hpp"
 #include "PyGrid.hpp"
 #include "PyIntegrator.hpp"
-#include "PyState.hpp"
 #include "PyRunner.hpp"
+#include "PyState.hpp"
 #include "PyTransportSystem.hpp"
 #include "State.hpp"
 #include "TransportSystem.hpp"
@@ -37,9 +37,10 @@ int runManta(std::string const &);
 // if the python dict has the right keys in it
 namespace pybind11 {
 namespace detail {
-// State no longer crosses the boundary as a dict -- see PyState.hpp. GlobalState
-// still does: it is the vectorised/JAX path's currency, where a dict of
-// (nPoints, nVars) arrays is what the numpy and JAX code actually wants.
+// State no longer crosses the boundary as a dict -- see PyState.hpp.
+// GlobalState still does: it is the vectorised/JAX path's currency, where a
+// dict of (nPoints, nVars) arrays is what the numpy and JAX code actually
+// wants.
 template <> struct type_caster<GlobalState> {
 public:
   PYBIND11_TYPE_CASTER(GlobalState, const_name("dict[Sequence[float]]"));
@@ -112,7 +113,8 @@ py::object cast_toml(toml::value v) {
 // re-exports it and adds the parts that are more naturally written in Python
 // (the declarative class-attribute spec, chiefly). Users import `manta`.
 PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
-  m.doc() = "Compiled core of the MaNTA Python package; import `manta` instead.";
+  m.doc() =
+      "Compiled core of the MaNTA Python package; import `manta` instead.";
 
   m.def("run", runManta, py::return_value_policy::reference,
         "Runs the MaNTA suite using given configuration file");
@@ -137,10 +139,12 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
   m.attr("Neumann") = BoundaryKind::Neumann;
 
   py::class_<FieldSpec>(m, "Field")
-      .def(py::init([](std::string name, std::string description, std::string units,
-                       BoundaryKind lower, BoundaryKind upper)
-                    { return FieldSpec{std::move(name), std::move(description),
-                                       std::move(units), lower, upper}; }),
+      .def(py::init([](std::string name, std::string description,
+                       std::string units, BoundaryKind lower,
+                       BoundaryKind upper) {
+             return FieldSpec{std::move(name), std::move(description),
+                              std::move(units), lower, upper};
+           }),
            py::arg("name"), py::arg("description") = "", py::arg("units") = "",
            py::arg("lower") = BoundaryKind::Dirichlet,
            py::arg("upper") = BoundaryKind::Dirichlet)
@@ -151,10 +155,11 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def_readwrite("upper", &FieldSpec::upper);
 
   py::class_<ScalarSpec>(m, "Scalar")
-      .def(py::init([](std::string name, std::string description, std::string units,
-                       bool differential)
-                    { return ScalarSpec{std::move(name), std::move(description),
-                                        std::move(units), differential}; }),
+      .def(py::init([](std::string name, std::string description,
+                       std::string units, bool differential) {
+             return ScalarSpec{std::move(name), std::move(description),
+                               std::move(units), differential};
+           }),
            py::arg("name"), py::arg("description") = "", py::arg("units") = "",
            py::arg("differential") = false)
       .def_readwrite("name", &ScalarSpec::name)
@@ -163,9 +168,11 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def_readwrite("differential", &ScalarSpec::differential);
 
   py::class_<AuxSpec>(m, "Aux")
-      .def(py::init([](std::string name, std::string description, std::string units)
-                    { return AuxSpec{std::move(name), std::move(description),
-                                     std::move(units)}; }),
+      .def(py::init([](std::string name, std::string description,
+                       std::string units) {
+             return AuxSpec{std::move(name), std::move(description),
+                            std::move(units)};
+           }),
            py::arg("name"), py::arg("description") = "", py::arg("units") = "")
       .def_readwrite("name", &AuxSpec::name)
       .def_readwrite("description", &AuxSpec::description)
@@ -178,22 +185,26 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
   // should name its variables instead.
   m.def(
       "numbered_spec",
-      [](Index nVars, Index nScalars, Index nAux, BoundaryKind lower, BoundaryKind upper,
-         bool differential)
-      {
-        return SystemSpec{numberedFields(nVars, lower, upper), numberedScalars(nScalars, differential),
+      [](Index nVars, Index nScalars, Index nAux, BoundaryKind lower,
+         BoundaryKind upper, bool differential) {
+        return SystemSpec{numberedFields(nVars, lower, upper),
+                          numberedScalars(nScalars, differential),
                           numberedAux(nAux)};
       },
       py::arg("nVars"), py::arg("nScalars") = 0, py::arg("nAux") = 0,
-      py::arg("lower") = BoundaryKind::Dirichlet, py::arg("upper") = BoundaryKind::Dirichlet,
+      py::arg("lower") = BoundaryKind::Dirichlet,
+      py::arg("upper") = BoundaryKind::Dirichlet,
       py::arg("differential") = false,
-      "A SystemSpec using the historical placeholder names (Var0, Scalar0, AuxVariable0).");
+      "A SystemSpec using the historical placeholder names (Var0, Scalar0, "
+      "AuxVariable0).");
 
   py::class_<SystemSpec>(m, "SystemSpec")
-      .def(py::init([](std::vector<FieldSpec> variables, std::vector<ScalarSpec> scalars,
-                       std::vector<AuxSpec> aux)
-                    { return SystemSpec{std::move(variables), std::move(scalars),
-                                        std::move(aux)}; }),
+      .def(py::init([](std::vector<FieldSpec> variables,
+                       std::vector<ScalarSpec> scalars,
+                       std::vector<AuxSpec> aux) {
+             return SystemSpec{std::move(variables), std::move(scalars),
+                               std::move(aux)};
+           }),
            py::arg("variables"), py::arg("scalars") = std::vector<ScalarSpec>{},
            py::arg("aux") = std::vector<AuxSpec>{})
       .def_readwrite("variables", &SystemSpec::variables)
@@ -209,10 +220,12 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       // The same thing spelled out, so a case can say what it is at the point
       // it calls up without building a SystemSpec first:
       //     super().__init__(variables=[manta.Field("n", lower=manta.Neumann)])
-      .def(py::init([](std::vector<FieldSpec> variables, std::vector<ScalarSpec> scalars,
-                       std::vector<AuxSpec> aux)
-                    { return new PyTransportSystem(SystemSpec{
-                          std::move(variables), std::move(scalars), std::move(aux)}); }),
+      .def(py::init([](std::vector<FieldSpec> variables,
+                       std::vector<ScalarSpec> scalars,
+                       std::vector<AuxSpec> aux) {
+             return new PyTransportSystem(SystemSpec{
+                 std::move(variables), std::move(scalars), std::move(aux)});
+           }),
            py::arg("variables"), py::arg("scalars") = std::vector<ScalarSpec>{},
            py::arg("aux") = std::vector<AuxSpec>{})
       .def("LowerBoundary", &TransportSystem::LowerBoundary)
@@ -254,10 +267,9 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       // left the aux path the only one with no way to reach the C++ serial
       // loop from Python -- which is how a test drives a pointwise hook, since
       // a State cannot be constructed on the Python side.
-      .def("AuxG_v",
-           py::overload_cast<Index, GlobalState const &,
-                             std::vector<Position> const &, Time>(
-               &TransportSystem::AuxG))
+      .def("AuxG_v", py::overload_cast<Index, GlobalState const &,
+                                       std::vector<Position> const &, Time>(
+                         &TransportSystem::AuxG))
       .def("AuxGPrime",
            py::overload_cast<Index, State &, const State &, Position, Time>(
                &TransportSystem::AuxGPrime))
@@ -325,7 +337,6 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def("__getitem__", [](const toml::value &v, const std::string &key) {
         auto temp = v;
 
-
         py::object result = py::none();
         if (!v.contains(key)) {
           for (auto &[k, val] : temp.as_table()) {
@@ -348,8 +359,8 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
   // def(), so binding this earlier left the raw
   // `toml::toml11_4_4_0::basic_value<...>` in the docstring -- and hence in the
   // generated stub, where it is not valid Python typing syntax.
-  m.def("registerPhysicsCase", &PhysicsCases::RegisterPhysicsCase, py::arg("name"),
-        py::arg("factory"), py::return_value_policy::reference,
+  m.def("registerPhysicsCase", &PhysicsCases::RegisterPhysicsCase,
+        py::arg("name"), py::arg("factory"), py::return_value_policy::reference,
         "Register a physics case under the name a config file can ask for.");
 
   py::class_<PyRunner, py::smart_holder>(m, "Runner")
@@ -374,6 +385,7 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
     ffi_ops["get_solution_ffi"] = EncapsulateFfiCall(get_solution_ffi_ops);
     ffi_ops["get_adjoint_gradients_ffi"] =
         EncapsulateFfiCall(get_adjoint_gradients_ffi_ops);
+    ffi_ops["get_g_val"] = EncapsulateFfiCall(get_g_val_ffi_ops);
     ffi_ops["run_ffi"] = EncapsulateFfiCall(run_ffi_ops);
     ffi_ops["run_ss_ffi"] = EncapsulateFfiCall(run_ss_ffi_ops);
     return ffi_ops;

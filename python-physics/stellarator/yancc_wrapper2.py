@@ -1,6 +1,7 @@
-import os 
+import os
 import jax
-os.environ.pop("LD_LIBRARY_PATH", None) # Required for Perlmutter to work properly
+
+os.environ.pop("LD_LIBRARY_PATH", None)  # Required for Perlmutter to work properly
 
 import yancc
 from yancc.field import Field
@@ -26,11 +27,12 @@ import desc
 
 import interpax
 
-Lnorm = 1.0 # Normalization length in meters
-Bnorm = 1.0 # Normalization magnetic field in Tesla
+Lnorm = 1.0  # Normalization length in meters
+Bnorm = 1.0  # Normalization magnetic field in Tesla
 
 # Takes input MaNTA state, performs normalizations, returns fluxes
 # Hold DESC equilibrium as well
+
 
 class yancc_data(eqx.Module):
     """
@@ -47,91 +49,119 @@ class yancc_data(eqx.Module):
     """
 
     fields: eqx.Module
-    fields_unstacked: list[eqx.Module] # list of field objects at each radial point 
+    fields_unstacked: list[eqx.Module]  # list of field objects at each radial point
     grid: eqx.Module
     pitchgrid: eqx.Module
     speedgrid: eqx.Module
-    Vp: Float[ArrayLike, '...'] # dV/dr normalized by V[-1], function of volume only for now but can be more general in the future
-    Vpp: Float[ArrayLike, '...']
-    rho: Float[ArrayLike, '...']
-    nNorm: float 
+    Vp: Float[
+        ArrayLike, "..."
+    ]  # dV/dr normalized by V[-1], function of volume only for now but can be more general in the future
+    Vpp: Float[ArrayLike, "..."]
+    rho: Float[ArrayLike, "..."]
+    nNorm: float
     Tnorm: float
+    Tnorm_eV: float
     nx: int
-    na: int 
-    FluxNorm: float
+    na: int
+    tnorm: float
+    scale: float  # default we use gyrobohm scaling, however this can result in very small fluxes for eq's close to QS, so we can scale tnorm to make solving easier
 
     def __init__(
-            self, 
-            fields,
-            grid, 
-            Vp,
-            Vpp,
-            rho,  
-            nNorm: Optional[float] = 1e20, 
-            Tnorm: Optional[float] = 1e3, 
-            nx: Optional[int] = 5, 
-            na: Optional[int] = 65): 
+        self,
+        fields,
+        grid,
+        Vp,
+        Vpp,
+        rho,
+        nNorm: Optional[float] = 1e20,
+        Tnorm: Optional[float] = 1e3,
+        nx: Optional[int] = 5,
+        na: Optional[int] = 65,
+        scale: Optional[float] = 1.0,
+    ):
 
         self.fields = fields
         self.grid = grid
         self.Vp = Vp
         self.Vpp = Vpp
-        self.rho= rho
+        self.rho = rho
         self.nx = nx
         self.na = na
 
         self.nNorm = nNorm
-        self.Tnorm = Tnorm
+        self.Tnorm_eV = Tnorm
+        self.Tnorm = elementary_charge * Tnorm
 
-        Cs0 = jnp.sqrt(2 * Tnorm * elementary_charge / proton_mass)     # Normalization sound speed
-        rho_star = (proton_mass * Cs0 / (elementary_charge * Bnorm)) / Lnorm  # Gyroradius
+        Cs0 = jnp.sqrt(
+            2 * Tnorm * elementary_charge / proton_mass
+        )  # Normalization sound speed
+        rho_star = (
+            proton_mass * Cs0 / (elementary_charge * Bnorm)
+        ) / Lnorm  # Gyroradius
 
-       # tau_norm = rho_star ** 2 * Cs0 / rho_star                          # Time normalization
+        # tau_norm = rho_star ** 2 * Cs0 / rho_star                          # Time normalization
         # log_lambda_ref = 24.0 - jnp.log(self.nNorm * 1.0e-6)/ 2.0 + jnp.log(self.Tnorm)
         # tau_c = 12.0 * jnp.pi ** (3./2.) *jnp.sqrt(electron_mass) * (elementary_charge * self.Tnorm) * mu_0 **2 / (jnp.sqrt(2) * self.nNorm * elementary_charge ** 4 * log_lambda_ref)
-       # tau_norm = Cs0 / rho_star # gyro Bohm scaling
-        self.FluxNorm = nNorm * elementary_charge * Tnorm * Cs0 * rho_star ** 2#Cs0 * rho_star #nNorm * elementary_charge * Tnorm / tau_norm
-        print("Flux norm : " + str(self.FluxNorm))
+        # tau_norm = Cs0 / rho_star # gyro Bohm scaling
+        #
+        self.scale = scale
+        self.tnorm = Lnorm / (Cs0 * rho_star**2 * self.scale)
+        print(f"Normalizing time = {self.tnorm}")
         self.speedgrid = MaxwellSpeedGrid(nx)
         self.pitchgrid = UniformPitchAngleGrid(na)
 
         self.fields_unstacked = desc.backend.tree_unstack(fields)
-        
-        print(f"yancc_wrapper initialized successfully with resolution na={self.na}, nx={self.nx}.")
+
+        print(
+            f"yancc_wrapper initialized successfully with resolution na={self.na}, nx={self.nx}."
+        )
 
     @classmethod
-    def from_eq(cls, 
-            rho: Float[ArrayLike, '...'],
-            nNorm: Optional[float] = 1e20, 
-            Tnorm: Optional[float] = 1e3, 
-            nx: Optional[int] = 5, 
-            na: Optional[int] = 43, 
-            nt: Optional[int] = 17,
-            nz: Optional[int] = 33,
-            eq = None,
-            grid = None):
-        
+    def from_eq(
+        cls,
+        rho: Float[ArrayLike, "..."],
+        nNorm: Optional[float] = 1e20,
+        Tnorm: Optional[float] = 1e3,
+        scale: Optional[float] = 1.0,
+        nx: Optional[int] = 5,
+        na: Optional[int] = 43,
+        nt: Optional[int] = 17,
+        nz: Optional[int] = 33,
+        eq=None,
+        grid=None,
+    ):
+
         print("Initializing yancc wrapper")
-        if (eq is None):
+        if eq is None:
             print("No equilibrium passed, using W7-X example")
             eq = desc.examples.get("W7-X")
 
-        if (grid is None):
+        if grid is None:
             grid = desc.grid.LinearGrid(rho=rho, M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP)
-       
 
         desc_data = eq.compute(["V(r)", "V_r(r)", "V_rr(r)"], grid=grid)
-        V = grid.compress(desc_data['V(r)'])
-        V_r = grid.compress(desc_data['V_r(r)'])/V[-1]
-        V_rr = grid.compress(desc_data['V_rr(r)'])/V[-1]
-        
+        V = grid.compress(desc_data["V(r)"])
+        V_r = grid.compress(desc_data["V_r(r)"]) / V[-1]
+        V_rr = grid.compress(desc_data["V_rr(r)"]) / V[-1]
+
         fields = []
         for r in rho:
             fields.append(Field.from_desc(eq, r, nt, nz))
 
         fields = tree_map(lambda *vals: jnp.stack(vals), *fields)
-    
-        return cls(fields=fields, grid = grid, Vp=V_r, Vpp=V_rr, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na, rho=rho)
+
+        return cls(
+            fields=fields,
+            grid=grid,
+            Vp=V_r,
+            Vpp=V_rr,
+            nNorm=nNorm,
+            Tnorm=Tnorm,
+            nx=nx,
+            na=na,
+            rho=rho,
+            scale=scale,
+        )
 
     # for constructing from data passed by DESC
     @classmethod
@@ -159,24 +189,55 @@ class yancc_data(eqx.Module):
         yancc_dat["R_major"] = jnp.full(grid.num_rho, data["R0"])
         yancc_dat["iota"] = grid.compress(data["iota"], surface_label="rho")
         yancc_dat["rho"] = grid.compress(grid.nodes[:, 0], surface_label="rho")
-        
-        V = grid.compress(data['V(r)'])
-        V_r = grid.compress(data['V_r(r)'])/V[-1]
-        V_rr = grid.compress(data['V_rr(r)'])/V[-1]
+
+        V = grid.compress(data["V(r)"])
+        V_r = grid.compress(data["V_r(r)"]) / V[-1]
+        V_rr = grid.compress(data["V_rr(r)"]) / V[-1]
 
         fields = jax.vmap(lambda d: yancc.field.Field(**d, NFP=grid.NFP))(yancc_dat)
-        return cls(fields=fields, grid=grid,rho=yancc_dat["rho"], Vp=V_r, Vpp=V_rr, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
+        return cls(
+            fields=fields,
+            grid=grid,
+            rho=yancc_dat["rho"],
+            Vp=V_r,
+            Vpp=V_rr,
+            nNorm=nNorm,
+            Tnorm=Tnorm,
+            nx=nx,
+            na=na,
+        )
 
     @classmethod
     def from_fields(cls, fields, grid, V_r, V_rr, nNorm=1e20, Tnorm=1e3, nx=5, na=43):
-        return cls(fields=fields, grid=grid, rho=fields.rho, Vp = V_r, Vpp = V_rr, nNorm=nNorm, Tnorm=Tnorm, nx=nx, na=na)
+        return cls(
+            fields=fields,
+            grid=grid,
+            rho=fields.rho,
+            Vp=V_r,
+            Vpp=V_rr,
+            nNorm=nNorm,
+            Tnorm=Tnorm,
+            nx=nx,
+            na=na,
+        )
 
-    @classmethod 
+    @classmethod
     def from_other(cls, fields_, grid_, other):
-        return cls(fields=fields_, grid=grid_, Vp = other.Vp, Vpp = other.Vpp, rho=other.rho, nNorm=other.nNorm, Tnorm=other.Tnorm, nx=other.nx, na=other.na)
+        return cls(
+            fields=fields_,
+            grid=grid_,
+            Vp=other.Vp,
+            Vpp=other.Vpp,
+            rho=other.rho,
+            nNorm=other.nNorm,
+            Tnorm=other.Tnorm,
+            nx=other.nx,
+            na=other.na,
+        )
 
     def get_fields(self):
         return self.fields, self.Vp, self.Vpp
+
 
 # to avoid any surprises with jitting, we pass all the data as arguments rather than storing anything in the wrapper object
 """
@@ -184,42 +245,46 @@ Compute fluxes using yancc given the MaNTA state
 Parameters
 ----------
 state : dict
-    Dictionary containing "Variable", "Derivative", "Flux", "Aux", and "Scalars"
+    Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar"
 Returns
 -------
 dict
     Fluxes computed by yancc, normalized to be dimensionless
 """
+
+
 # @eqx.filter_jit
 def flux(state, x, field, Vprim, n, nprime, yancc_params: yancc_data):
     # For now we only evolve the ion energy
     # print("tracing flux")
-    p_i = 2. / 3. * state.Variable[0]
-    p_i_prime = 2. / 3. * state.Derivative[0]
+    p_i = 2.0 / 3.0 * state.Variable[0]
+    p_i_prime = 2.0 / 3.0 * state.Derivative[0]
 
     dndrho = nprime * Vprim
     Erho = 0.0
     Ti = p_i / n
-    dTidrho = (p_i_prime*Vprim - Ti*dndrho) / n
+    dTidrho = (p_i_prime * Vprim - Ti * dndrho) / n
     species = [
-    LocalMaxwellian(
-        # can just give mass and charge in units of proton mass and elementary charge
-        yancc.species.Species(1,1), 
-        temperature=Ti * yancc_params.Tnorm, 
-        density=n * yancc_params.nNorm, 
-        dTdrho=dTidrho * yancc_params.Tnorm, 
-        dndrho=dndrho * yancc_params.nNorm),
+        LocalMaxwellian(
+            # can just give mass and charge in units of proton mass and elementary charge
+            yancc.species.Species(1, 1),
+            temperature=Ti * yancc_params.Tnorm,
+            density=n * yancc_params.nNorm,
+            dTdrho=dTidrho * yancc_params.Tnorm,
+            dndrho=dndrho * yancc_params.nNorm,
+        ),
     ]
-    _, _, fluxes, _  = solve_dke(field, yancc_params.pitchgrid, yancc_params.speedgrid, species, Erho, verbose = False)
-    #assert stats['res'] < 1e-5
+    _, _, fluxes, _ = solve_dke(
+        field,
+        yancc_params.pitchgrid,
+        yancc_params.speedgrid,
+        species,
+        Erho,
+        verbose=False,
+    )
+    # assert stats['res'] < 1e-5
     # print(fluxes)
-    fout = fluxes['<heat_flux>'][0] * Vprim / (yancc_params.FluxNorm)
+    fout = fluxes["<heat_flux>"][0] * Vprim / (yancc_params.FluxNorm)
 
     return fout
-    
-
-
-
-
-
 

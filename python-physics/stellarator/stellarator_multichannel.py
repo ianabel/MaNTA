@@ -27,11 +27,15 @@ this repository is tested in; see the README.
 """
 
 import os
-os.environ["XLA_FLAGS"] = "--xla_gpu_unsupported_enable_triton_multi_output_fusion=false --xla_cpu_multi_thread_eigen=true"
+
+os.environ["XLA_FLAGS"] = (
+    "--xla_gpu_unsupported_enable_triton_multi_output_fusion=false --xla_cpu_multi_thread_eigen=true"
+)
 os.environ["JAX_COMPILATION_CACHE_ALLOW_HOST_CALLBACKS"] = "true"
 
 from functools import partial
 import os
+
 # These two used to be set by FFIRunner at import. They moved here when that
 # module became library code inside the package: process-wide policy set as a
 # side effect of importing a library applies to every caller, including ones
@@ -199,18 +203,14 @@ def buildSpec(params: StellaratorParams) -> MaNTA.SystemSpec:
 
     if not params.evolveDensity:
         return MaNTA.SystemSpec(
-            variables=[
-                MaNTA.Field("IonEnergy", "ion energy density", "n0 T0", **bcs)
-            ]
+            variables=[MaNTA.Field("IonEnergy", "ion energy density", "n0 T0", **bcs)]
         )
 
     return MaNTA.SystemSpec(
         variables=[
             MaNTA.Field("Density", "particle density", "n0", **bcs),
             MaNTA.Field("IonEnergy", "ion energy density", "n0 T0", **bcs),
-            MaNTA.Field(
-                "ElectronEnergy", "electron energy density", "n0 T0", **bcs
-            ),
+            MaNTA.Field("ElectronEnergy", "electron energy density", "n0 T0", **bcs),
         ],
         aux=[
             MaNTA.Aux(
@@ -234,13 +234,11 @@ class StellaratorTransport(MaNTA.TransportSystem):
         MaNTA.TransportSystem.__init__(self, buildSpec(params))
         self.params = params
 
-        self.points = yancc_wrapper.rho
-        # self.points = MaNTA.getNodes(solver_config["Lower_boundary"], solver_config["Upper_boundary"], solver_config["Grid_size"], solver_config["Polynomial_degree"])
-
         self.xL = solver_config["Lower_boundary"]
         self.xR = solver_config["Upper_boundary"]
         # jax.device_put(yancc_wrapper, data_sharding)
         self.yancc_wrapper = yancc_wrapper
+        self.points = yancc_wrapper.rho
 
         self.pnorm = 1e20 * elementary_charge * 1e3
         self.field, self.vp, self.vpp = self.yancc_wrapper.get_fields()
@@ -289,7 +287,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
     @Physics_Decorator
     @shard_inputs
     def ComputePhysics(self, states, positions, t):
-        dke_data = eqx.filter_vmap(self.compute_dke_sol, in_axes=vmap_axes_wfield)(
+        dke_data = eqx.filter_jit(
+            eqx.filter_vmap(self.compute_dke_sol, in_axes=vmap_axes_wfield)
+        )(
             states,
             positions,
             t,
@@ -298,7 +298,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.vpp_shard,
             self.params,
         )
-        sources = eqx.filter_vmap(self.compute_sources, in_axes=vmap_axes_wfield)(
+        sources = eqx.filter_jit(
+            eqx.filter_vmap(self.compute_sources, in_axes=vmap_axes_wfield)
+        )(
             states,
             positions,
             t,
@@ -313,8 +315,10 @@ class StellaratorTransport(MaNTA.TransportSystem):
     @Physics_Decorator
     @shard_inputs
     def ComputePhysicsDerivatives(self, states, positions, t):
-        ddke_data = eqx.filter_vmap(
-            eqx.filter_jacrev(self.compute_dke_sol), in_axes=vmap_axes_wfield
+        ddke_data = eqx.filter_jit(
+            eqx.filter_vmap(
+                eqx.filter_jacrev(self.compute_dke_sol), in_axes=vmap_axes_wfield
+            )
         )(
             states,
             positions,
@@ -324,8 +328,10 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.vpp_shard,
             self.params,
         )
-        dsources = eqx.filter_vmap(
-            eqx.filter_jacrev(self.compute_sources), in_axes=vmap_axes_wfield
+        dsources = eqx.filter_jit(
+            eqx.filter_vmap(
+                eqx.filter_jacrev(self.compute_sources), in_axes=vmap_axes_wfield
+            )
         )(
             states,
             positions,
@@ -370,7 +376,6 @@ class StellaratorTransport(MaNTA.TransportSystem):
         self, state: StellaratorState, x, t, field, vp, vpp, params: StellaratorParams
     ):
 
-        @jax.jit
         def constant_density(state, x, t, field, vp, vpp, params):
             Erho = jnp.array(0.0)
 
@@ -384,7 +389,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
                 ),
             ]
 
-            sol, info =solve_dke(
+            sol, info = solve_dke(
                 put_on_gpu(field),
                 self.yancc_wrapper.pitchgrid,
                 self.yancc_wrapper.speedgrid,
@@ -392,7 +397,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
                 put_on_gpu(Erho),
                 # m=50,
                 rtol=1e-3,
-                multigrid_options={"smooth_solver": "banded"},
+                verbose=0,
+                multigrid_options={"smooth_solver": "banded", "max_grids": 2},
             )
             flux = (
                 -sol.get("<heat_flux>")[0]
@@ -406,7 +412,6 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
             return [flux], []
 
-        @jax.jit
         def ambipolar(state, x, t, field, vp, vpp, params):
             species = [
                 LocalMaxwellian(
@@ -433,7 +438,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
                 state.Er * self.yancc_wrapper.Tnorm_eV,
                 # m=50,
                 rtol=1e-3,
-                multigrid_options={"smooth_solver": "banded"},
+                verbose=0,
+                multigrid_options={"smooth_solver": "banded", "max_grids": 2},
             )
 
             particle_flux = (
@@ -469,7 +475,6 @@ class StellaratorTransport(MaNTA.TransportSystem):
         else:
             return constant_density(state, x, t, field, vp, vpp, params)
 
-    @partial(jax.jit, static_argnums=(0,))
     @StellaratorDecorator
     def compute_sources(
         self, state: StellaratorState, x, t, field, vp, vpp, params: StellaratorParams
@@ -492,24 +497,34 @@ class StellaratorTransport(MaNTA.TransportSystem):
                 -((x - params.ParticleSourceCenter) ** 2)
                 / (2 * params.ParticleSourceWidth**2)
             )
-        )
+        ) / self.yancc_wrapper.scale
 
     def Spi(self, state, x, t, vp, params):
-        return vp * (
-            params.HeatSourceHeight
-            * jnp.exp(
-                -((x - params.HeatSourceCenter) ** 2) / (2 * params.HeatSourceWidth**2)
+        return (
+            vp
+            * (
+                params.HeatSourceHeight
+                * jnp.exp(
+                    -((x - params.HeatSourceCenter) ** 2)
+                    / (2 * params.HeatSourceWidth**2)
+                )
+                + self.CollisionalEnergyExchange(state)
             )
-            + self.CollisionalEnergyExchange(state)
+            / self.yancc_wrapper.scale
         )
 
     def Spe(self, state, x, t, vp, params):
-        return vp * (
-            params.HeatSourceHeight
-            * jnp.exp(
-                -((x - params.HeatSourceCenter) ** 2) / (2 * params.HeatSourceWidth**2)
+        return (
+            vp
+            * (
+                params.HeatSourceHeight
+                * jnp.exp(
+                    -((x - params.HeatSourceCenter) ** 2)
+                    / (2 * params.HeatSourceWidth**2)
+                )
+                - self.CollisionalEnergyExchange(state)
             )
-            - self.CollisionalEnergyExchange(state)
+            / self.yancc_wrapper.scale
         )
 
     def CollisionalEnergyExchange(self, state):
@@ -526,7 +541,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         else:
             return state.Variable[0]
 
-    @eqx.filter_jit
+    @partial(jax.jit, static_argnums=(0,))
     def InitialValue(self, index, x):
         def constant_density(index, x):
             n = StellaratorState.initial_profile(
@@ -563,7 +578,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.params.evolveDensity, ambipolar, constant_density, index, x
         )
 
-    @eqx.filter_jit
+    @partial(jax.jit, static_argnums=(0,))
     def InitialDerivative(self, index, x):
         return jax.grad(self.InitialValue, argnums=1)(index, x)
 
@@ -616,12 +631,12 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         self.compute_sources = transport_system.compute_sources
 
         self.params = transport_system.params
-        # From the spec, not re-derived from evolveDensity. These are plain
-        # attributes here -- AdjointProblem binds np/np_boundary/ng and nothing
-        # else -- but the transport system's are read-only and authoritative,
-        # so asking it is what keeps the two from drifting apart.
-        self.nVars = transport_system.nVars
-        self.nAux = transport_system.nAux
+        if self.params.evolveDensity:
+            self.nVars = 3
+            self.nAux = 1
+        else:
+            self.nVars = 1
+            self.nAux = 0
 
         self.UpperBoundarySensitivities = {}
         self.LowerBoundarySensitivities = {}
@@ -670,11 +685,15 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
                 states, x, 0, tree[0], tree[1], tree[2], self.params
             )
 
-        ddke_data = eqx.filter_vmap(
-            eqx.filter_jacrev(dke_sol), in_axes=(0, State.vmap_axes(), 0)
+        ddke_data = eqx.filter_jit(
+            eqx.filter_vmap(
+                eqx.filter_jacrev(dke_sol), in_axes=(0, State.vmap_axes(), 0)
+            )
         )(tree_in, states, positions)
-        dsources = eqx.filter_vmap(
-            eqx.filter_jacrev(sources), in_axes=(0, State.vmap_axes(), 0)
+        dsources = eqx.filter_jit(
+            eqx.filter_vmap(
+                eqx.filter_jacrev(sources), in_axes=(0, State.vmap_axes(), 0)
+            )
         )(tree_in, states, positions)
 
         def unravel(grad_out):
@@ -723,6 +742,3 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         self.LowerBoundarySensitivities[(i, self.np)] = True
         self.np += 1
         self.np_boundary += 1
-
-
-# %%
