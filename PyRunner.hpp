@@ -6,6 +6,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <optional>
 #include <string_view>
 #include <variant>
 
@@ -43,9 +44,26 @@ public:
 
   // Runs solver to time tFinal
   void run(double tFinal);
+  // Runs to the configuration's t_final. Throws if it had none.
+  void run();
 
   // Runs solver to steady state
   void run_ss(void);
+
+  // Whether the last run was abandoned by the dG/dt gate instead of integrated,
+  // i.e. whether ObjectiveDecreaseTolerance was set and the objective was already
+  // falling faster than it at the initial condition. Always false when the gate
+  // is not configured.
+  //
+  // run() and run_ss() stay void, so an existing driver is unaffected; one that
+  // cares asks this. Note that a rejected step deliberately does not synthesise
+  // an objective value -- G() reports G at the initial condition, which is the
+  // state the solver is actually in, and what a rejected step means for the
+  // search is the driver's decision, not this class's.
+  bool wasRejected(void) const;
+
+  // The dG/dt values behind that decision, one per objective.
+  Vector lastDGdt(void) const;
 
   // The objective alone, without an adjoint solve. Needs solveAdjoint = True
   // (that is what constructs the AdjointProblem that defines G) but not the
@@ -78,6 +96,12 @@ private:
 
   bool configured = false;
   double steady_state_tolerance;
+
+  // t_final from the configuration, if it had one. A dict need not carry it --
+  // run(tFinal) is the usual way in, and a driver legitimately runs one
+  // configuration to many end times -- so run() with no argument is what needs
+  // it, and says so when it is absent.
+  std::optional<double> configured_t_final;
 };
 
 #endif

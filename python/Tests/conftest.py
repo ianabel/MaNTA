@@ -3,8 +3,7 @@
 The tests need three things that used to be supplied implicitly by running
 `pytest` from inside this directory:
 
-  * the built pybind11 module, python/MaNTA<suffix>.so, on sys.path
-  * the JAX transport-system modules in python/ on sys.path
+  * the built pybind11 module, python/manta/_manta<suffix>.so, on sys.path
   * a cwd of python/Tests, because the .conf inputs name their
     PythonModuleFile relatively and the solver writes output beside them
 
@@ -30,17 +29,18 @@ for _p in (_PYTHON_DIR, _HERE):
 def _check_extension_built():
     """Fail loudly and usefully if the pybind11 module has not been built.
 
-    The repo directory is itself named MaNTA, so if its parent is on sys.path
-    Python happily imports it as an empty *namespace package* that shadows the
-    real extension. The symptom is a baffling
-    ``AttributeError: module 'MaNTA' has no attribute 'AdjointProblem'``
-    rather than a clean ImportError.
+    The extension now lives inside the `manta` package rather than being a
+    bare `MaNTA` module, which also retires the old trap here: the repo
+    directory is itself named MaNTA, so with its parent on sys.path Python
+    would import *that* as an empty namespace package shadowing the real
+    extension, and the symptom was a baffling AttributeError rather than a
+    clean ImportError.
     """
     try:
-        import MaNTA
+        import manta as MaNTA
     except ImportError:
         pytest.exit(
-            "MaNTA extension module not found. Build it with `make python`.",
+            "manta package not importable. Build it with `make python`.",
             returncode=1,
         )
     if not hasattr(MaNTA, "TransportSystem"):

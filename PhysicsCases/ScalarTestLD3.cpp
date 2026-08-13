@@ -44,11 +44,13 @@
 REGISTER_PHYSICS_IMPL(ScalarTestLD3);
 
 ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
+	// E and I are differential -- G_0 and G_2 depend explicitly on dE/dt and
+	// dI/dt -- while J is algebraic. This was isScalarDifferential(s).
+	: TransportSystem({.variables = {{"u", "the diffused quantity", ""}},
+					   .scalars = {{"E", "mass error, M0 - M", "", true},
+								   {"J", "source strength from the PID controller", "", false},
+								   {"I", "integral of the error", "", true}}})
 {
-	// Always set nVars in a derived constructor
-	nVars = 1;
-	nScalars = 3;
-
 	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
 	// here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
@@ -84,12 +86,9 @@ Value ScalarTestLD3::UpperBoundary(Index, Time) const
 	return u0;
 }
 
-bool ScalarTestLD3::isLowerBoundaryDirichlet(Index) const { return true; };
-bool ScalarTestLD3::isUpperBoundaryDirichlet(Index) const { return true; };
-
 Value ScalarTestLD3::SigmaFn(Index i, const State &s, Position x, Time)
 {
-	return kappa * s.Derivative[i];
+	return kappa * s.q(i);
 }
 
 Value ScalarTestLD3::ScaledSource(Position x) const
@@ -102,7 +101,7 @@ Value ScalarTestLD3::Sources(Index i, const State &s, Position x, Time)
 {
 	if (i == 0)
 	{
-		double J = s.Scalars[1];
+		double J = s.scalar(1);
 		return J * ScaledSource(x) + 0.5 * std::cos(std::numbers::pi * x);
 	}
 	else if (i == 1)
@@ -152,80 +151,80 @@ Value ScalarTestLD3::InitialDerivative(Index, Position x) const
 	return -(beta * std::numbers::pi / 2.0) * std::sin(std::numbers::pi * x / 2.0);
 }
 
-bool ScalarTestLD3::isScalarDifferential(Index s)
+Value ScalarTestLD3::ScalarG(Index s, GlobalState const &y, GlobalState const &ydot,
+                             std::vector<Position> const &, Values const &weights,
+                             Matrix const &phiBoundary, Time)
 {
-    if( s == 0 || s == 2) 
-        return true; // E & I are differential, as we depend on d{E,I}/dt expliticly
-    else
-        return false; // J is not differential
-}
+    using namespace ScalarHooks;
 
-Value ScalarTestLD3::ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt, Time)
-{
-    double dEdt = dydt.Scalar(0);
-    double dIdt = dydt.Scalar(2);
-    double E = y.Scalar(0);
-    double J = y.Scalar(1);
-    double I = y.Scalar(2);
-    if( s == 0 ) {
-        // E = (M0 - M)
-        // => G_0 = E - (M-M0)
-        double M = Mass( y, 0 );
-        return E - (M0-M);
-    } else if ( s == 1 ) {
-        // J = gamma * E + gamma_d * dE/dt + gamma_I * I + [ sigma(x = +1) - sigma(x = -1) ]
-        // => G_1 = J - gamma * E - gamma_d * dE/dt - gamma_I * I - [ sigma(x = +1) - sigma(x = -1) ]
-        return J - gamma * E - gamma_d * dEdt - gamma_I * I - ( y.sigma( 0 )( 1 ) - y.sigma( 0 )( -1 ) );
-    } else if ( s == 2 ) {
-        // dI/dt = E <=> I = Int_0^{t} E
+    const double dEdt = ydot.Scalars()(0);
+    const double dIdt = ydot.Scalars()(2);
+    const double E = y.Scalars()(0);
+    const double J = y.Scalars()(1);
+    const double I = y.Scalars()(2);
+
+    if (s == 0)
+    {
+        // E = (M0 - M) => G_0 = E - (M - M0).
+        //
+        // The mass is the framework's quadrature of the nodal values. It used
+        // to be a global adaptive Kronrod rule applied to y.u(0) cell by cell,
+        // which is not a smooth function of the coefficients -- the
+        // finite-difference reference in ScalarJacobianTests disagreed with the
+        // exact Int phi by 8% at k = 4 on 16 cells.
+        const double M = integrate(y.Variable().row(0), weights);
+        return E - (M0 - M);
+    }
+    else if (s == 1)
+    {
+        // J = gamma E + gamma_d dE/dt + gamma_I I + [ sigma(+1) - sigma(-1) ]
+        const double sigmaUpper = boundaryValue(y.Flux().row(0), phiBoundary, Upper);
+        const double sigmaLower = boundaryValue(y.Flux().row(0), phiBoundary, Lower);
+        return J - gamma * E - gamma_d * dEdt - gamma_I * I - (sigmaUpper - sigmaLower);
+    }
+    else if (s == 2)
+    {
+        // dI/dt = E <=> I = Int_0^t E
         return dIdt - E;
-    } else {
+    }
+    else
+    {
         throw std::logic_error("scalar index > nScalars");
     }
 }
 
-void ScalarTestLD3::ScalarGPrimeExtended( Index scalarIndex, State &s, State &out_dt, const DGSoln &y, const DGSoln & dydt, std::function<double( double )> P, Interval I, Time )
+void ScalarTestLD3::ScalarGPrime(GlobalStateMatrix &dG, GlobalStateMatrix &dGdot,
+                                 GlobalState const &, GlobalState const &,
+                                 std::vector<Position> const &, Values const &weights,
+                                 Matrix const &phiBoundary, Time)
 {
-    s.zero();
-    out_dt.zero();
-	if ( scalarIndex == 0 ) {
-		s.Flux[ 0 ] = 0.0; // d G_0 / d sigma
-		s.Derivative[ 0 ] = 0.0; // d G_0 / d (u')
-		// G_0 = E - (M0 - M) = E - M0 + M, so dG_0/du = +dM/du (as a functional
-		// derivative, taken as an inner product with P). This was -P_mass. The
-		// sign is not confined to the scalar rows: w enters solveJacEq's
-		// bordered elimination, so getting it wrong corrupts the whole solve.
-		// PIDTest could not catch it -- a wrong Jacobian only slows Newton, it
-		// still converges to the right answer.
-		double P_mass = boost::math::quadrature::gauss_kronrod<double, 31>::integrate( P, I.x_l, I.x_u );
-		s.Variable[ 0 ] = P_mass;
-		s.Scalars[ 0 ] = 1.0; // dG_0/dE
-		s.Scalars[ 1 ] = 0.0; // dG_0/dJ
-	} else if ( scalarIndex == 1 ) {
-		// dG_1 / d sigma = -[ delta(x-1) - delta(x + 1) ] ;
-		// return as functional derivative acting on P
-		s.Flux[ 0 ] = 0.0;
-		if ( abs( I.x_u - 1 ) < 1e-9 )
-			s.Flux[ 0 ] -= P( I.x_u );
-		if ( abs( I.x_l + 1 ) < 1e-9 )
-			s.Flux[ 0 ] += P( I.x_l );
-		// dG_1/dE
-		s.Scalars[ 0 ] = -gamma;
-		// dG_1/dJ
-		s.Scalars[ 1 ] = 1.0;
-		// dG_1/dI. G_1 carries a -gamma_I * I term but this was never
-		// differentiated; latent only because gamma_I defaults to 0.
-		s.Scalars[ 2 ] = -gamma_I;
-        out_dt.Scalars[ 0 ] = -gamma_d;
-	} else if ( scalarIndex == 2 ) {
-        // G_2 = I-dot - E
-        // dG_2/dE = -1 
-        s.Scalars[ 0 ] = -1.0;
-        // dG_2/dIdot = 1
-        out_dt.Scalars[ 2 ] = 1.0;
-    } else {
-		throw std::logic_error("scalar index > nScalars");
-	}
+    using namespace ScalarHooks;
+
+    // All three scalars at once. dG[s] and dGdot[s] arrive zeroed.
+
+    // G_0 = E - M0 + M, so dG_0/du_j = +dM/du_j = +weights(j). This was
+    // negated, and the sign is not confined to the scalar rows: w enters
+    // solveJacEq's bordered elimination, so getting it wrong corrupts the whole
+    // solve. A wrong Jacobian only slows Newton, so the run still converged to
+    // the right answer and no regression case could see it.
+    dG[0].Variable().row(0) = weights.transpose();
+    dG[0].Scalars()(0) = 1.0; // dG_0/dE
+
+    // G_1: dG_1/dsigma = -[ delta(x - 1) - delta(x + 1) ], which as a
+    // derivative with respect to the flux degrees of freedom is the boundary
+    // basis values at either end.
+    addBoundaryDerivative(dG[1].Flux().row(0), phiBoundary, Upper, -1.0);
+    addBoundaryDerivative(dG[1].Flux().row(0), phiBoundary, Lower, +1.0);
+    dG[1].Scalars()(0) = -gamma;
+    dG[1].Scalars()(1) = 1.0;
+    // dG_1/dI. G_1 carries a -gamma_I * I term that was never differentiated;
+    // latent only because gamma_I defaults to 0.
+    dG[1].Scalars()(2) = -gamma_I;
+    dGdot[1].Scalars()(0) = -gamma_d;
+
+    // G_2 = dI/dt - E
+    dG[2].Scalars()(0) = -1.0;
+    dGdot[2].Scalars()(2) = 1.0;
 }
 
 void ScalarTestLD3::dSources_dScalars(Index i, VectorRef v, const State &, Position x, Time)

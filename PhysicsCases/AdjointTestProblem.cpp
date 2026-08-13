@@ -4,7 +4,7 @@
 REGISTER_PHYSICS_IMPL(AdjointTestProblem);
 
 AdjointTestProblem::AdjointTestProblem(toml::value const &config, Grid const &grid)
-    : AutodiffTransportSystem(config, grid, 1, 0, 0) // Configure a blank autodiff system with three variables and no scalars
+    : AutodiffTransportSystem(config, grid, {.variables = {{"u", "the diffused quantity", ""}}})
 {
     if (config.count("AdjointTestProblem") != 1)
     {

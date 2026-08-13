@@ -30,11 +30,10 @@ REGISTER_PHYSICS_IMPL(AuxVarTest);
 
 const double AuxNorm = 1.0;
 AuxVarTest::AuxVarTest(toml::value const &config, Grid const &)
+    : TransportSystem({.variables = {{"u", "reaction-diffusion variable", ""},
+                                     {"v", "plain diffusion variable", ""}},
+                       .aux = {{"a", "the auxiliary a = u * u", ""}}})
 {
-    // Always set nVars in a derived constructor
-    nVars = 2;
-    nAux = 1;
-
     // Construct your problem from user-specified config
     // throw an exception if you can't. NEVER leave a part-constructed object around
     // here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
@@ -61,21 +60,18 @@ Value AuxVarTest::UpperBoundary(Index, Time t) const
     return 0.0;
 }
 
-bool AuxVarTest::isLowerBoundaryDirichlet(Index) const { return true; };
-bool AuxVarTest::isUpperBoundaryDirichlet(Index) const { return true; };
-
 Value AuxVarTest::SigmaFn(Index i, const State &s, Position, Time)
 {
-    double a = s.Aux[0];
-    double u = s.Variable[0];
-    return kappa * s.Derivative[i] + (a - u * u );
+    double a = s.phi(0);
+    double u = s.u(0);
+    return kappa * s.q(i) + (a - u * u );
 }
 
 //
 Value AuxVarTest::Sources(Index i, const State &st, Position x, Time)
 {
     double U = ::cos(M_PI_2 * x);
-    double a = st.Aux[0];
+    double a = st.phi(0);
     switch ( i ) {
       case 0:
         return kappa * M_PI_2 * M_PI_2 * U + (a - U * U);
@@ -99,7 +95,7 @@ void AuxVarTest::dSigmaFn_dq(Index i, VectorRef v, const State &s, Position, Tim
 
 void AuxVarTest::dSigmaFn_du(Index i, VectorRef v, const State &s, Position, Time)
 {
-    double u = s.Variable[0];
+    double u = s.u(0);
     v.setZero();
     v[0] =( -2.0 * u );
 };
@@ -127,14 +123,14 @@ Value AuxVarTest::InitialAuxValue(Index i, Position x) const
 
 Value AuxVarTest::AuxG(Index, const State &st, Position x, Time t)
 {
-    double a = st.Aux[0];
-    double u = st.Variable[0];
+    double a = st.phi(0);
+    double u = st.u(0);
     return -(a - u * u);
 }
 
 void AuxVarTest::AuxGPrime(Index iAux, State &out, const State &st, Position, Time)
 {
-    double u = st.Variable[0];
+    double u = st.u(0);
 
     if (iAux != 0)
     {
@@ -143,9 +139,9 @@ void AuxVarTest::AuxGPrime(Index iAux, State &out, const State &st, Position, Ti
     // most derivatives are zero
     out.zero();
     // dG/du = -2.0 * u
-    out.Variable[0] = -AuxNorm * (-2.0 * u);
+    out.u(0) = -AuxNorm * (-2.0 * u);
     // dG/da = 1.0
-    out.Aux[0] = -AuxNorm * (1.0);
+    out.phi(0) = -AuxNorm * (1.0);
 
     return;
 }

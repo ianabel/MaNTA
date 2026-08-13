@@ -12,9 +12,13 @@
 #include "State.hpp"
 #include "Types.hpp"
 #include "gridStructures.hpp"
+// The scalar hooks are handed the quadrature weights and the boundary basis
+// values, so the case does not have to pick a rule of its own. Both are cached
+// here, keyed on basis order and grid.
+#include "PyIntegrator.hpp"
 
 SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *transpSystem)
-    : grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars(transpSystem->getNumScalars()), nAux(transpSystem->getNumAux()), MXSolvers(Grid.getNCells()), y(nVars, grid, k, nScalars, nAux), dydt(nVars, grid, k, nScalars, nAux), yJac(nVars, grid, k, nScalars, nAux), dydtJac(nVars, grid, k, nScalars, nAux), problem(transpSystem)
+    : grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars(transpSystem->getNumScalars()), nAux(transpSystem->getNumAux()), y(nVars, grid, k, nScalars, nAux), dydt(nVars, grid, k, nScalars, nAux), yJac(nVars, grid, k, nScalars, nAux), dydtJac(nVars, grid, k, nScalars, nAux), dydtComplete(nVars, grid, k, nScalars, nAux), problem(transpSystem)
 {
     if (SUNContext_Create(SUN_COMM_NULL, &ctx) < 0)
         throw std::runtime_error("Unable to allocate SUNDIALS Context, aborting.");
@@ -22,6 +26,8 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSyst
     yJac.Map(yJacMem);
     dydtJacMem = new double[yJac.getDoF()];
     dydtJac.Map(dydtJacMem);
+    dydtCompleteMem = new double[yJac.getDoF()];
+    dydtComplete.Map(dydtCompleteMem);
     S_DOF = k + 1;
     U_DOF = k + 1;
     Q_DOF = k + 1;
@@ -53,6 +59,7 @@ SystemSolver::~SystemSolver()
 {
     delete[] yJacMem;
     delete[] dydtJacMem;
+    delete[] dydtCompleteMem;
     if (nScalars > 0)
     {
         for (Index i = 0; i < nScalars; ++i)
@@ -77,6 +84,17 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     if (!initialised)
         throw std::logic_error("setInitialConditions can only be called after initialising the matrices");
 
+    // The initial dydt below is solved out of the residual equation, which reads
+    // RF_cellwise and L_global -- the Dirichlet and Neumann boundary data. Both
+    // are functions of time, and nothing else has evaluated them at t0 yet:
+    // initialiseMatrices only sizes them, and on a *second* initialize() it is
+    // skipped entirely, so they would otherwise still hold whatever the previous
+    // run's last residual evaluation left behind -- its final-time boundary
+    // values. That made the initial condition of every run after the first
+    // subtly wrong, and was the difference that turned the once-broken
+    // IDACalcIC (see Solver.cpp) into a hard failure on the second run only.
+    updateBoundaryConditions(t0);
+
     if (problem->isRestarting())
     {
         // Copy restart values into y
@@ -89,7 +107,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         for (Index var = 0; var < nVars; var++)
         {
             // set flux for each variable, casting to a row vector and making sure to remember minus sign
-            initialState.Flux()(var, Eigen::all) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(physics_vals[0][var]);
+            initialState.Flux().row(var) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(physics_vals[0][var]);
         }
         y.AssignSigma(initialState);
 
@@ -130,7 +148,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         for (Index var = 0; var < nVars; var++)
         {
             // set flux for each variable, casting to a row vector and making sure to remember minus sign
-            initialState.Flux()(var, Eigen::all) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(physics_vals[0][var]);
+            initialState.Flux().row(var) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(physics_vals[0][var]);
         }
         y.AssignSigma(initialState);
 
@@ -336,38 +354,19 @@ void SystemSolver::initialiseMatrices()
         C_cellwise.emplace_back(C);
         E_cellwise.emplace_back(E);
 
-        // To store the RHS
+        // To store the RHS. Sized and zeroed here; the boundary data that goes in
+        // it is *time dependent*, so filling it is updateBoundaryConditions's job
+        // and setInitialConditions calls that for t0 before reading it. This used
+        // to carry a third copy of that loop, evaluated at a hardcoded t = 0.0 --
+        // wrong for any run with t0 != 0, and stale on a second initialize(),
+        // where initialiseMatrices is skipped and RF_cellwise still held the
+        // previous run's final-time boundary values.
         RF_cellwise.emplace_back(nVars * 2 * (k + 1));
 
         // R is composed of parts of the values of
         // u on the total domain boundary
         // don't need to do RHS terms here, those are now in 'Sources'
-        // (should we double check that RF_cellwise[ i ] == RF_cellwise.back()?
         RF_cellwise[i].setZero();
-
-        for (Index var = 0; var < nVars; var++)
-        {
-            if (I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryDirichlet(var))
-            {
-                for (Eigen::Index j = 0; j < k + 1; j++)
-                {
-                    // < g_D , v . n > ~= g_D( x_0 ) * phi_j( x_0 ) * ( n_x = -1 )
-                    RF_cellwise[i](j + var * (k + 1)) += -y.getBasis().Evaluate(I, j, I.x_l) * (-1) * problem->LowerBoundary(var, 0.0);
-                    // < ( tau ) g_D, w >
-                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_l) * tau(I.x_l) * problem->LowerBoundary(var, 0.0);
-                }
-            }
-
-            if (I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(var))
-            {
-                for (Eigen::Index j = 0; j < k + 1; j++)
-                {
-                    // < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 )
-                    RF_cellwise[i](j + var * (k + 1)) += -y.getBasis().Evaluate(I, j, I.x_u) * (+1) * problem->UpperBoundary(var, 0.0);
-                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_u) * tau(I.x_u) * problem->UpperBoundary(var, 0.0);
-                }
-            }
-        }
 
         // For Neumann, need a structure more like
         // If (boundary cell)
@@ -488,14 +487,9 @@ void SystemSolver::initialiseMatrices()
 
         H_cellwise.emplace_back(H);
 
-        // Finally fill L
-        for (Index var = 0; var < nVars; var++)
-        {
-            if (I.x_l == grid.lowerBoundary() && /* is b.d. Neumann at lower boundary */ !problem->isLowerBoundaryDirichlet(var))
-                L_global(var * (nCells + 1) + i) += -problem->LowerBoundary(var, 0.0);
-            if (I.x_u == grid.upperBoundary() && /* is b.d. Neumann at upper boundary */ !problem->isUpperBoundaryDirichlet(var))
-                L_global(var * (nCells + 1) + i + 1) += problem->UpperBoundary(var, 0.0);
-        }
+        // L is the Neumann counterpart of RF_cellwise above, and equally time
+        // dependent: updateBoundaryConditions fills it. It was zeroed before the
+        // loop and stays zero until then.
 
         Eigen::MatrixXd X(nVars * (k + 1), nVars * (k + 1));
         X.setZero();
@@ -508,6 +502,12 @@ void SystemSolver::initialiseMatrices()
         }
         XMats.emplace_back(X);
     
+        // The solver for this cell's MX block, pre-sized so that the compute() in
+        // updateMatricesForJacSolve does not have to reallocate. This is the only
+        // place MXSolvers is sized: the constructor used to size it to nCells as
+        // well, so it ended up 2 * nCells long with the *default-constructed*
+        // entries at the front -- which are the ones every index reaches, making
+        // the pre-sizing here dead and the compute() reallocate after all.
         Eigen::Index nDof = nVars * SQU_DOF + nAux * AUX_DOF;
         MXSolvers.emplace_back( nDof, nDof );
     }
@@ -528,6 +528,13 @@ void SystemSolver::initialiseMatrices()
     initialised = true;
 }
 
+// Every per-cell container initialiseMatrices() appends to, so that calling it a
+// second time rebuilds rather than grows. That has to be *all* of them: the list
+// used to omit D_cellwise, CEBlocks and MXSolvers, so a second initialiseMatrices
+// left those three holding 2 * nCells entries with the stale ones at the front --
+// which is where every index into them lands. Only PrintDebugInfo() calls it
+// unguarded today, so nothing had reached it, but the coupling is invisible from
+// the append site. If you add a cellwise vector, add it here.
 void SystemSolver::clearCellwiseVecs()
 {
     XMats.clear();
@@ -536,12 +543,15 @@ void SystemSolver::clearCellwiseVecs()
     RF_cellwise.clear();
     A_cellwise.clear();
     B_cellwise.clear();
+    D_cellwise.clear();
     E_cellwise.clear();
     C_cellwise.clear();
     G_cellwise.clear();
     H_cellwise.clear();
     Csigma_cellwise.clear();
     Cq_cellwise.clear();
+    CEBlocks.clear();
+    MXSolvers.clear();
 }
 
 // Memory Layout for a sundials Y is, if i indexes the components of u / q / sigma
@@ -594,26 +604,23 @@ void SystemSolver::resetCoeffs()
     dydt.zeroCoeffs();
 }
 
-void SystemSolver::updateMatricesForJacSolve()
+// Where and at what state the physics derivatives are evaluated. Shared with the
+// algebraic-derivative solve, which has to make exactly the same choice: a
+// Jacobian consistent with a different residual is the one failure mode this
+// solver cannot detect from its answers, only from its iteration counts.
+SystemSolver::PhysicsNodes
+SystemSolver::evaluatePhysicsDerivatives(DGSoln const &Y, Time tEval,
+                                         GlobalStateMatrix &dSigma_vals,
+                                         GlobalStateMatrix &dSource_vals,
+                                         GlobalStateMatrix &dAux_vals)
 {
-    updateBoundaryConditions(jt);
-    // We know where the jacobian is to be evaluated -- yJac
-    // std::cerr << "Updating Jacobian at t=" << jt << std::endl;
-    GlobalStateMatrix dSigma_vals(nVars);
-    GlobalStateMatrix dSource_vals(nVars);
-    GlobalStateMatrix dAux_vals(nAux);
-
     // With the superconvergent scheme the derivatives are wanted at the star
-    // nodes and evaluated with u* in place of u_h, exactly as the residual does
-    // -- a Jacobian consistent with a different residual is the one failure mode
-    // this solver cannot detect from its answers, only from its iteration counts.
+    // nodes and evaluated with u* in place of u_h, exactly as the residual does.
     if (superconvergent)
-        postprocessor->computeUStar(yJac);
+        postprocessor->computeUStar(Y);
 
-    const std::vector<Position> points =
-        superconvergent ? postprocessor->starPoints() : yJac.getPoints();
-    const GlobalState states =
-        superconvergent ? postprocessor->evalOnStarNodes(yJac) : yJac.evalOnNodes();
+    PhysicsNodes nodes{superconvergent ? postprocessor->starPoints() : Y.getPoints(),
+                       superconvergent ? postprocessor->evalOnStarNodes(Y) : Y.evalOnNodes()};
 
     // GlobalState's second argument is a per-cell dof count minus one; passing
     // k+1 is what makes cellwise*() hand back the k+2 star values.
@@ -629,204 +636,243 @@ void SystemSolver::updateMatricesForJacSolve()
       dAux_vals.add(nCells, derivK, nVars, nScalars, nAux);
     }
 
-    problem->ComputePhysicsDerivatives({dSigma_vals, dSource_vals, dAux_vals}, states, points, jt);
-#pragma omp parallel for
-    for (unsigned int i = 0; i < nCells; i++)
+    problem->ComputePhysicsDerivatives({dSigma_vals, dSource_vals, dAux_vals}, nodes.states,
+                                       nodes.points, tEval);
+
+    return nodes;
+}
+
+// One cell's Jacobian block. See the declaration for what alphaValue is; there is
+// no other difference between the forward solve's block and the one the
+// algebraic-derivative solve wants.
+Matrix SystemSolver::assembleCellMatrix(Index i, DGSoln const &Y,
+                                        GlobalStateMatrix &dSigma_vals,
+                                        GlobalStateMatrix &dSource_vals,
+                                        GlobalStateMatrix &dAux_vals, double alphaValue)
+{
+    Eigen::MatrixXd X(nVars * (k + 1), nVars * (k + 1));
+    Eigen::MatrixXd NLq(nVars * (k + 1), nVars * (k + 1));
+    Eigen::MatrixXd NLu(nVars * (k + 1), nVars * (k + 1));
+    Eigen::MatrixXd Ssig(nVars * (k + 1), nVars * (k + 1));
+    Eigen::MatrixXd Sq(nVars * (k + 1), nVars * (k + 1));
+    Eigen::MatrixXd Su(nVars * (k + 1), nVars * (k + 1));
+
+
+    Eigen::MatrixXd Sigma_phi(nVars * (k + 1), nAux * (k + 1));
+    Eigen::MatrixXd Sphi(nVars * (k + 1), nAux * (k + 1));
+
+    Interval const &I(grid[i]);
+    Eigen::MatrixXd MX(nVars * SQU_DOF + nAux * AUX_DOF, nVars * SQU_DOF + nAux * AUX_DOF);
+    MX = MBlocks[i];
+
+    // X matrix
+    X.setZero();
+    for (Index var = 0; var < nVars; var++)
     {
+        std::function<double(double)> alphaF = [=, this](double x)
+        { return alphaValue * problem->aFn(var, x); };
+        Eigen::MatrixXd Xsubmat((k + 1), (k + 1));
+        Y.getBasis().MassMatrix(I, Xsubmat, alphaF);
+        X.block(var * (k + 1), var * (k + 1), k + 1, k + 1) = Xsubmat;
+    }
+    MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += X;
 
-        Eigen::MatrixXd X(nVars * (k + 1), nVars * (k + 1));
-        Eigen::MatrixXd NLq(nVars * (k + 1), nVars * (k + 1));
-        Eigen::MatrixXd NLu(nVars * (k + 1), nVars * (k + 1));
-        Eigen::MatrixXd Ssig(nVars * (k + 1), nVars * (k + 1));
-        Eigen::MatrixXd Sq(nVars * (k + 1), nVars * (k + 1));
-        Eigen::MatrixXd Su(nVars * (k + 1), nVars * (k + 1));
+    if (superconvergent)
+    {
+        Postprocessor const &pp = *postprocessor;
 
+        // sigma_hat's dependence on q is twofold: directly, and through u*,
+        // which the reconstruction builds from q as well as u. B11 carries
+        // the second path -- it is the only genuinely new coupling the
+        // superconvergent scheme introduces.
+        NLq.setZero();
+        accumulateStarBlocks(NLq, dSigma_vals.Derivative(i), pp.V(i), nVars, nVars, i);
+        accumulateStarBlocks(NLq, dSigma_vals.Variable(i), pp.B11(i), nVars, nVars, i);
+        MX.block(0, nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLq;
 
-        Eigen::MatrixXd Sigma_phi(nVars * (k + 1), nAux * (k + 1));
-        Eigen::MatrixXd Sphi(nVars * (k + 1), nAux * (k + 1));
+        NLu.setZero();
+        accumulateStarBlocks(NLu, dSigma_vals.Variable(i), pp.B12(i), nVars, nVars, i);
+        MX.block(0, 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLu;
 
-        Interval const &I(grid[i]);
-        Eigen::MatrixXd MX(nVars * SQU_DOF + nAux * AUX_DOF, nVars * SQU_DOF + nAux * AUX_DOF);
-        MX = MBlocks[i];
-
-        // X matrix
-        X.setZero();
-        for (Index var = 0; var < nVars; var++)
+        if (nAux > 0)
         {
-            std::function<double(double)> alphaF = [=, this](double x)
-            { return alpha * problem->aFn(var, x); };
-            Eigen::MatrixXd Xsubmat((k + 1), (k + 1));
-            y.getBasis().MassMatrix(I, Xsubmat, alphaF);
-            X.block(var * (k + 1), var * (k + 1), k + 1, k + 1) = Xsubmat;
+            Sigma_phi.setZero();
+            accumulateStarBlocks(Sigma_phi, dSigma_vals.Aux(i), pp.V(i), nVars, nAux, i);
+            MX.block(0, 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) = Sigma_phi;
         }
-        MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += X;
 
-        if (superconvergent)
+        Ssig.setZero();
+        accumulateStarBlocks(Ssig, dSource_vals.Flux(i), pp.V(i), nVars, nVars, i);
+        MX.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) -= Ssig;
+
+        Sq.setZero();
+        accumulateStarBlocks(Sq, dSource_vals.Derivative(i), pp.V(i), nVars, nVars, i);
+        accumulateStarBlocks(Sq, dSource_vals.Variable(i), pp.B11(i), nVars, nVars, i);
+        MX.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Sq;
+
+        Su.setZero();
+        accumulateStarBlocks(Su, dSource_vals.Variable(i), pp.B12(i), nVars, nVars, i);
+        MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
+
+        if (nAux > 0)
         {
-            Postprocessor const &pp = *postprocessor;
+            Sphi.setZero();
+            accumulateStarBlocks(Sphi, dSource_vals.Aux(i), pp.V(i), nVars, nAux, i);
+            MX.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
 
-            // sigma_hat's dependence on q is twofold: directly, and through u*,
-            // which the reconstruction builds from q as well as u. B11 carries
-            // the second path -- it is the only genuinely new coupling the
-            // superconvergent scheme introduces.
-            NLq.setZero();
-            accumulateStarBlocks(NLq, dSigma_vals.Derivative(i), pp.V(i), nVars, nVars, i);
-            accumulateStarBlocks(NLq, dSigma_vals.Variable(i), pp.B11(i), nVars, nVars, i);
-            MX.block(0, nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLq;
+            // The aux constraint rows, in MX's [ sigma | q | u | phi ] column
+            // order. Same four chains as above.
+            auto auxRows = MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1),
+                                    (3 * nVars + nAux) * (k + 1));
+            auxRows.setZero();
+            const Index sigmaBlock = 0;
+            const Index qBlock = nVars * (k + 1);
+            const Index uBlock = 2 * nVars * (k + 1);
+            const Index phiBlock = 3 * nVars * (k + 1);
 
-            NLu.setZero();
-            accumulateStarBlocks(NLu, dSigma_vals.Variable(i), pp.B12(i), nVars, nVars, i);
-            MX.block(0, 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLu;
-
-            if (nAux > 0)
-            {
-                Sigma_phi.setZero();
-                accumulateStarBlocks(Sigma_phi, dSigma_vals.Aux(i), pp.V(i), nVars, nAux, i);
-                MX.block(0, 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) = Sigma_phi;
-            }
-
-            Ssig.setZero();
-            accumulateStarBlocks(Ssig, dSource_vals.Flux(i), pp.V(i), nVars, nVars, i);
-            MX.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) -= Ssig;
-
-            Sq.setZero();
-            accumulateStarBlocks(Sq, dSource_vals.Derivative(i), pp.V(i), nVars, nVars, i);
-            accumulateStarBlocks(Sq, dSource_vals.Variable(i), pp.B11(i), nVars, nVars, i);
-            MX.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Sq;
-
-            Su.setZero();
-            accumulateStarBlocks(Su, dSource_vals.Variable(i), pp.B12(i), nVars, nVars, i);
-            MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
-
-            if (nAux > 0)
-            {
-                Sphi.setZero();
-                accumulateStarBlocks(Sphi, dSource_vals.Aux(i), pp.V(i), nVars, nAux, i);
-                MX.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
-
-                // The aux constraint rows, in MX's [ sigma | q | u | phi ] column
-                // order. Same four chains as above.
-                auto auxRows = MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1),
-                                        (3 * nVars + nAux) * (k + 1));
-                auxRows.setZero();
-                const Index sigmaBlock = 0;
-                const Index qBlock = nVars * (k + 1);
-                const Index uBlock = 2 * nVars * (k + 1);
-                const Index phiBlock = 3 * nVars * (k + 1);
-
-                accumulateStarBlocks(auxRows.middleCols(sigmaBlock, nVars * (k + 1)),
-                                     dAux_vals.Flux(i), pp.V(i), nAux, nVars, i);
-                accumulateStarBlocks(auxRows.middleCols(qBlock, nVars * (k + 1)),
-                                     dAux_vals.Derivative(i), pp.V(i), nAux, nVars, i);
-                accumulateStarBlocks(auxRows.middleCols(qBlock, nVars * (k + 1)),
-                                     dAux_vals.Variable(i), pp.B11(i), nAux, nVars, i);
-                accumulateStarBlocks(auxRows.middleCols(uBlock, nVars * (k + 1)),
-                                     dAux_vals.Variable(i), pp.B12(i), nAux, nVars, i);
-                accumulateStarBlocks(auxRows.middleCols(phiBlock, nAux * (k + 1)),
-                                     dAux_vals.Aux(i), pp.V(i), nAux, nAux, i);
-            }
+            accumulateStarBlocks(auxRows.middleCols(sigmaBlock, nVars * (k + 1)),
+                                 dAux_vals.Flux(i), pp.V(i), nAux, nVars, i);
+            accumulateStarBlocks(auxRows.middleCols(qBlock, nVars * (k + 1)),
+                                 dAux_vals.Derivative(i), pp.V(i), nAux, nVars, i);
+            accumulateStarBlocks(auxRows.middleCols(qBlock, nVars * (k + 1)),
+                                 dAux_vals.Variable(i), pp.B11(i), nAux, nVars, i);
+            accumulateStarBlocks(auxRows.middleCols(uBlock, nVars * (k + 1)),
+                                 dAux_vals.Variable(i), pp.B12(i), nAux, nVars, i);
+            accumulateStarBlocks(auxRows.middleCols(phiBlock, nAux * (k + 1)),
+                                 dAux_vals.Aux(i), pp.V(i), nAux, nAux, i);
         }
-        else
-        {
+    }
+    else
+    {
         // NLq Matrix
-        DerivativeSubMatrix(NLq, dSigma_vals.Derivative(i), yJac, i);
+        DerivativeSubMatrix(NLq, dSigma_vals.Derivative(i), Y, i);
         MX.block(0, nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLq;
 
         // NLu Matrix
-        DerivativeSubMatrix(NLu, dSigma_vals.Variable(i), yJac, i);
+        DerivativeSubMatrix(NLu, dSigma_vals.Variable(i), Y, i);
         MX.block(0, 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = NLu;
 
-        dPhi_Mat(Sigma_phi, dSigma_vals.Aux(i), yJac, i);
+        dPhi_Mat(Sigma_phi, dSigma_vals.Aux(i), Y, i);
         MX.block(0, 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) = Sigma_phi;
 
         // S_sig Matrix
-        DerivativeSubMatrix(Ssig, dSource_vals.Flux(i), yJac, i);
+        DerivativeSubMatrix(Ssig, dSource_vals.Flux(i), Y, i);
         MX.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) -= Ssig;
 
         // S_q Matrix
-        DerivativeSubMatrix(Sq, dSource_vals.Derivative(i), yJac, i);
+        DerivativeSubMatrix(Sq, dSource_vals.Derivative(i), Y, i);
         MX.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Sq;
 
         // S_u Matrix
-        DerivativeSubMatrix(Su, dSource_vals.Variable(i), yJac, i);
+        DerivativeSubMatrix(Su, dSource_vals.Variable(i), Y, i);
         MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
 
-        dPhi_Mat(Sphi, dSource_vals.Aux(i), yJac, i);
+        dPhi_Mat(Sphi, dSource_vals.Aux(i), Y, i);
         MX.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
 
         // Set Parts of Matrix due to aux variables
-        dAux_Mat(MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), dAux_vals, yJac, i);
+        dAux_Mat(MX.block(3 * nVars * (k + 1), 0, nAux * (k + 1), (3 * nVars + nAux) * (k + 1)), dAux_vals, Y, i);
+    }
+
+    return MX;
+}
+
+// The scalar coupling blocks. See the declaration for why they are written
+// through the caller's storage rather than straight into v, w and N_global.
+void SystemSolver::assembleScalarCoupling(DGSoln const &Y, DGSoln const &Ydot,
+                                          PhysicsNodes const &nodes, Time tEval,
+                                          double alphaValue, std::vector<DGSoln> &v_map,
+                                          std::vector<DGSoln> &w_map, Matrix &N_out)
+{
+    // The N_HDG_DOF x N_Scalar matrix v, which contains the effect of the scalars
+    // on the main variables (through the sources. nothing else is allowed to
+    // depend on scalars)
+    for (Index i = 0; i < nCells; ++i)
+    {
+        Matrix v_tmp(nVars * U_DOF, nScalars);
+        if (superconvergent)
+            dSources_dScalars_StarMat(v_tmp, nodes.states, nodes.points, i, tEval);
+        else
+            dSources_dScalars_Mat(v_tmp, Y, i, tEval);
+        for (Index j = 0; j < nScalars; ++j)
+            for (Index v = 0; v < nVars; ++v)
+                v_map[j].u(v).getCoeff(i).second = v_tmp.block(v * U_DOF, j, U_DOF, 1);
+    }
+
+    // The N_Scalar x N_HDG_DOF matrix w, which contains the Jacobian of the
+    // scalars with respect to the other variables; also the scalar-scalar
+    // coupling matrix N.
+    for (Index j = 0; j < nScalars; ++j)
+        w_map[j].zeroCoeffs();
+
+    GlobalStateMatrix ScalarG_vals(nScalars);
+    GlobalStateMatrix ScalarG_dt_vals(nScalars);
+    for (Index s = 0; s < nScalars; s++)
+    {
+      ScalarG_vals.add(nCells, k, nVars, nScalars, nAux);
+      ScalarG_dt_vals.add(nCells, k, nVars, nScalars, nAux);
+    }
+
+    problem->ScalarGPrime(ScalarG_vals, ScalarG_dt_vals, Y.evalOnNodes(), Ydot.evalOnNodes(),
+                          Y.getPoints(),
+                          Integrator::getIntegrationWeights(Y.getBasis(), grid),
+                          Integrator::getPhiBoundary(Y.getBasis(), grid), tEval);
+
+    for ( Index j = 0; j < nScalars; ++j ) {
+        const auto& s = ScalarG_vals[j];
+        const auto& s_dt = ScalarG_dt_vals[j];
+        for (Index i = 0; i < nCells; ++i)
+        {
+            for ( Index l = 0; l < k + 1; ++l ) {
+                for ( Index v = 0; v < nVars; ++v ) {
+                    w_map[ j ].sigma( v ).getCoeff( i ).second( l ) = s[i * (k + 1) + l].sigma(v)       + alphaValue * s_dt[i * (k + 1) + l].sigma(v);
+                    w_map[ j ].q( v ).getCoeff( i ).second( l )     = s[i * (k + 1) + l].q(v) + alphaValue * s_dt[i * (k + 1) + l].q(v);
+                    w_map[ j ].u( v ).getCoeff( i ).second( l )     = s[i * (k + 1) + l].u(v)   + alphaValue * s_dt[i * (k + 1) + l].u(v);
+                }
+                for (Index a = 0; a < nAux; ++a)
+                    w_map[j].Aux(a).getCoeff(i).second(l) = s[i * (k + 1) + l].phi(a) + alphaValue * s_dt[i * (k + 1) + l].phi(a);
+            }
+            for (Index m = 0; m < nScalars; ++m)
+                N_out(j, m) = s.Scalars()[m] + alphaValue * s_dt.Scalars()[m];
         }
-
-        MXSolvers[ i ].compute(MX);
     }
+}
 
-    // Construct the N_HDG_DOF x N_Scalar matrix v which
-    // contains the effect of the scalars on the main variables (through the sources. nothing else is allowed to depend on scalars)
+void SystemSolver::updateMatricesForJacSolve()
+{
+    updateBoundaryConditions(jt);
+    // We know where the jacobian is to be evaluated -- yJac
+    // std::cerr << "Updating Jacobian at t=" << jt << std::endl;
+    GlobalStateMatrix dSigma_vals(nVars);
+    GlobalStateMatrix dSource_vals(nVars);
+    GlobalStateMatrix dAux_vals(nAux);
+
+    const PhysicsNodes nodes =
+        evaluatePhysicsDerivatives(yJac, jt, dSigma_vals, dSource_vals, dAux_vals);
+
+    // Cell-independent: iteration i reads MBlocks[i] and grid[i] and writes only
+    // MXSolvers[i]. The quadrature `assembleCellMatrix` reaches through
+    // Basis::MassMatrix is a boost::math::quadrature::gauss<double, 30>, whose
+    // integrate() is const over static tables, so the shared static integrator is
+    // not a race either.
+#pragma omp parallel for
+    for (unsigned int i = 0; i < nCells; i++)
+    {
+        MXSolvers[i].compute(
+            assembleCellMatrix(i, yJac, dSigma_vals, dSource_vals, dAux_vals, alpha));
+    }
 
     if (nScalars > 0)
     {
-      std::vector<DGSoln> v_map;
+      std::vector<DGSoln> v_map, w_map;
       for (Index i = 0; i < nScalars; ++i)
+      {
           v_map.emplace_back(nVars, grid, k, N_VGetArrayPointer(v[i]), nScalars, nAux);
-
-      for (Index i = 0; i < nCells; ++i)
-      {
-          Matrix v_tmp(nVars * U_DOF, nScalars);
-          if (superconvergent)
-              dSources_dScalars_StarMat(v_tmp, states, points, i);
-          else
-              dSources_dScalars_Mat(v_tmp, yJac, i);
-          for (Index j = 0; j < nScalars; ++j)
-              for (Index v = 0; v < nVars; ++v)
-                  v_map[j].u(v).getCoeff(i).second = v_tmp.block(v * U_DOF, j, U_DOF, 1);
-      }
-      v_map.clear();
-    }
-
-    // Construct N_Scalar x N_HDG_DOF matrix w which contains the Jacobian
-    // of the scalars with respect to the other variables
-    // also construct the scalar-scalar coupling matrix N
-
-    if (nScalars > 0)
-    {
-      std::vector<DGSoln> w_map;
-      for (Index i = 0; i < nScalars; ++i)
-      {
           w_map.emplace_back(nVars, grid, k, N_VGetArrayPointer(w[i]), nScalars, nAux);
-          w_map.back().zeroCoeffs();
       }
 
-      GlobalStateMatrix ScalarG_vals(nScalars);
-      GlobalStateMatrix ScalarG_dt_vals(nScalars);
-      for (Index s = 0; s < nScalars; s++) 
-      {
-        ScalarG_vals.add(nCells, k, nVars, nScalars, nAux);
-        ScalarG_dt_vals.add(nCells, k, nVars, nScalars, nAux);
-      }
-
-      problem->ScalarGPrimeExtended(ScalarG_vals, ScalarG_dt_vals, yJac, dydtJac, jt);
-    
-      for ( Index j = 0; j < nScalars; ++j ) {
-          const auto& s = ScalarG_vals[j];
-          const auto& s_dt = ScalarG_dt_vals[j];
-          for (Index i = 0; i < nCells; ++i)
-          {
-              for ( Index l = 0; l < k + 1; ++l ) {
-                  for ( Index v = 0; v < nVars; ++v ) {
-                      w_map[ j ].sigma( v ).getCoeff( i ).second( l ) = s[i * (k + 1) + l].Flux[ v ]       + alpha * s_dt[i * (k + 1) + l].Flux[ v ];
-                      w_map[ j ].q( v ).getCoeff( i ).second( l )     = s[i * (k + 1) + l].Derivative[ v ] + alpha * s_dt[i * (k + 1) + l].Derivative[ v ];
-                      w_map[ j ].u( v ).getCoeff( i ).second( l )     = s[i * (k + 1) + l].Variable[ v ]   + alpha * s_dt[i * (k + 1) + l].Variable[ v ];
-                  }
-                  for (Index a = 0; a < nAux; ++a)
-                      w_map[j].Aux(a).getCoeff(i).second(l) = s[i * (k + 1) + l].Aux[a] + alpha * s_dt[i * (k + 1) + l].Aux[a];
-              }
-              for (Index m = 0; m < nScalars; ++m)
-                  N_global(j, m) = s.Scalars()[m] + alpha * s_dt.Scalars()[m];
-          }
-      }
-      w_map.clear();
-  }
+      assembleScalarCoupling(yJac, dydtJac, nodes, jt, alpha, v_map, w_map, N_global);
+    }
 }
 
 void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorWrapper &lam, sunrealtype *const &Y) const
@@ -957,8 +1003,11 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
 
     std::vector<Eigen::VectorXd> SQU_f(nCells);
     std::vector<Eigen::MatrixXd> SQU_0(nCells);
+    std::vector<Eigen::MatrixXd> K_cell(nCells);
 
-
+    // The two back-substitutions are the expensive part and are cell-independent,
+    // so they parallelise; the assembly into K_global below does not, and the two
+    // are separate loops for that reason. See the comment there.
 #pragma omp parallel for
     for (Index i = 0; i < nCells; i++)
     {
@@ -975,14 +1024,19 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
         // std::cerr << SQU_0[i] << std::endl << std::endl;
         // std::cerr << CE << std::endl << std::endl;
 
-        Eigen::MatrixXd K_cell(nVars * 2, nVars * 2);
-        K_cell = H_cellwise[i] - CG_cellwise[i] * SQU_0[i];
+        K_cell[i] = H_cellwise[i] - CG_cellwise[i] * SQU_0[i];
+    }
 
-        // K
+    // Serial, and it has to be: lambda lives on cell *faces*, so cell i's 2x2
+    // block starts at trace index i and cell i+1's at i+1 -- they overlap in the
+    // face they share, and two threads would `+=` into it at once. The work here
+    // is 4 * nVars^2 adds per cell against two dense solves above, so nothing is
+    // lost by leaving it out of the parallel region.
+    // K
+    for (Index i = 0; i < nCells; i++)
         for (Index varI = 0; varI < nVars; varI++)
             for (Index varJ = 0; varJ < nVars; varJ++)
-                K_global.block<2, 2>(varI * (nCells + 1) + i, varJ * (nCells + 1) + i) += K_cell.block<2, 2>(varI * 2, varJ * 2);
-    }
+                K_global.block<2, 2>(varI * (nCells + 1) + i, varJ * (nCells + 1) + i) += K_cell[i].block<2, 2>(varI * 2, varJ * 2);
 
     // Construct the RHS of K Lambda = F
     Eigen::VectorXd F(nVars * (nCells + 1));
@@ -1180,9 +1234,18 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
     }
 
 
-    for (Index j = 0; j < nScalars; j++)
+    if (nScalars > 0)
     {
-        res.Scalar(j) = problem->ScalarGExtended(j, Y_h, dYdt_h, tres);
+        // Sampled once for all the scalars, not once each: evalOnNodes walks
+        // every cell and node, and the scalars all see the same state.
+        const GlobalState scalarStates = Y_h.evalOnNodes();
+        const GlobalState scalarStates_dt = dYdt_h.evalOnNodes();
+        const Vector &weights = Integrator::getIntegrationWeights(Y_h.getBasis(), grid);
+        const Matrix &phiBoundary = Integrator::getPhiBoundary(Y_h.getBasis(), grid);
+
+        for (Index j = 0; j < nScalars; j++)
+            res.Scalar(j) = problem->ScalarG(j, scalarStates, scalarStates_dt, Y_h.getPoints(),
+                                             weights, phiBoundary, tres);
     }
 
     return 0;
@@ -1679,8 +1742,8 @@ void SystemSolver::computeAdjointGradients()
                     {
                         const auto dSigmadp_cell = dSigmadp.Variable(i)[var];
                         dkappa_dp_phi = superconvergent
-                            ? Vector(postprocessor->A9(i) * Vector(dSigmadp_cell(pIndex, Eigen::all)))
-                            : y.getBasis().InterpolateOntoBasis( I, dSigmadp_cell(pIndex, Eigen::all) );
+                            ? Vector(postprocessor->A9(i) * Vector(dSigmadp_cell.row(pIndex)))
+                            : y.getBasis().InterpolateOntoBasis( I, dSigmadp_cell.row(pIndex) );
                     }
 
                     // Evaluate Source Function
@@ -1690,8 +1753,8 @@ void SystemSolver::computeAdjointGradients()
                     {
                         const auto dSourcedp_cell = dSourcedp.Variable(i)[var];
                         dSdp_cellwise = superconvergent
-                            ? Vector(postprocessor->A9(i) * Vector(dSourcedp_cell(pIndex, Eigen::all)))
-                            : y.getBasis().InterpolateOntoBasis( I, dSourcedp_cell(pIndex, Eigen::all) );
+                            ? Vector(postprocessor->A9(i) * Vector(dSourcedp_cell.row(pIndex)))
+                            : y.getBasis().InterpolateOntoBasis( I, dSourcedp_cell.row(pIndex) );
                     }
 
                 
@@ -1816,14 +1879,14 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
         State s = tmp_y.eval(x);
         for (Index v = 0; v < nVars; ++v)
         {
-            std::print(out, "\t{:g}\t{:g}\t{:g}", s.Variable[v], s.Derivative[v], s.Flux[v]);
-            std::print(out, "\t{:g}", postprocessor ? postprocessor->uStar(v)(x) : s.Variable[v]);
+            std::print(out, "\t{:g}\t{:g}\t{:g}", s.u(v), s.q(v), s.sigma(v));
+            std::print(out, "\t{:g}", postprocessor ? postprocessor->uStar(v)(x) : s.u(v));
             if (printSources)
                 std::print(out, "\t{:g}", source_interp[v](x));
         }
 
         for (Index a = 0; a < nAux; ++a)
-            std::print(out, "\t{:g}", s.Aux[a]);
+            std::print(out, "\t{:g}", s.phi(a));
 
         std::println(out, "");
     }
@@ -1880,14 +1943,14 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
         State s = y.eval(x);
         for (Index v = 0; v < nVars; ++v)
         {
-            std::print(out, "\t{:g}\t{:g}\t{:g}", s.Variable[v], s.Derivative[v], s.Flux[v]);
-            std::print(out, "\t{:g}", postprocessor ? postprocessor->uStar(v)(x) : s.Variable[v]);
+            std::print(out, "\t{:g}\t{:g}\t{:g}", s.u(v), s.q(v), s.sigma(v));
+            std::print(out, "\t{:g}", postprocessor ? postprocessor->uStar(v)(x) : s.u(v));
             if (printSources)
                 std::print(out, "\t{:g}", source_interp[v](x));
         }
 
         for (Index a = 0; a < nAux; ++a)
-            std::print(out, "\t{:g}", s.Aux[a]);
+            std::print(out, "\t{:g}", s.phi(a));
 
         std::println(out, "");
     }
@@ -1938,13 +2001,13 @@ void SystemSolver::printOnNodes(std::ostream &out, double t, N_Vector const& tem
         std::print(out, "{:g}", x);
         for (Index v = 0; v < nVars; ++v)
         {
-            std::print(out, "\t{:g}\t{:g}\t{:g}", s.Variable[v], s.Derivative[v], s.Flux[v]);
-            std::print(out, "\t{:g}", postprocessor ? postprocessor->uStar(v)(x) : s.Variable[v]);
+            std::print(out, "\t{:g}\t{:g}\t{:g}", s.u(v), s.q(v), s.sigma(v));
+            std::print(out, "\t{:g}", postprocessor ? postprocessor->uStar(v)(x) : s.u(v));
             if (printSources)
                 std::print(out, "\t{:g}", sources[v](i));
         }
         for (Index a = 0; a < nAux; ++a)
-            std::print(out, "\t{:g}", s.Aux[a]);
+            std::print(out, "\t{:g}", s.phi(a));
 
         std::println(out, "");
        

@@ -335,7 +335,7 @@ BOOST_AUTO_TEST_CASE(eval_and_get_points_agree_with_the_nodal_values)
 
     for (auto x : pts)
         for (Index v = 0; v < nVars; ++v)
-            BOOST_TEST(y.eval(x).Variable[v] == f(v, x), boost::test_tools::tolerance(1e-9));
+            BOOST_TEST(y.eval(x).u(v) == f(v, x), boost::test_tools::tolerance(1e-9));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

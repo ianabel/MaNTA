@@ -9,10 +9,16 @@ every configuration key, the output format, the adjoint interface, and how to wr
 Python. The sources live in [`docs/`](docs/index.rst); build them locally with
 
 ```sh
-python3 -m venv /tmp/docsvenv
-/tmp/docsvenv/bin/pip install -r docs/requirements.txt
-/tmp/docsvenv/bin/sphinx-build -W -b html docs docs/_build/html
+make docs      # -> docs/_build/html/index.html
 ```
+
+which creates `.venv-docs` from `docs/requirements.txt` the first time and reuses it
+after. It builds with `-W`, the same as Read the Docs, so a local build that passes is
+one that will publish.
+
+Configuration keys are declared once, in `ConfigSchema.cpp`, and read from there by
+both the config file and `Runner.configure`; `./MaNTA --list-options` prints the
+current list with types, defaults and a line of description for each.
 
 ## Getting Started
 
@@ -41,7 +47,10 @@ To compile and use MaNTA you will need a system with the following
    function is never constant-evaluated, which clang 18 does not implement. That
    `constexpr` could never have done anything and is now `inline`.
  - The Boost C++ Template Library
- - The Eigen linear algebra template library
+ - The Eigen linear algebra template library, either 3.4.x or 5.0.x. Both are
+   supported and tested; point `EIGEN_DIR` at whichever you have. Note that
+   Eigen 5.0 needs the `extern/autodiff` submodule this tree pins, which
+   carries a patch upstream does not have yet -- see `.gitmodules`.
  - The SUNDIALS library, Version 7.1.0 or newer. Not 6.x: MaNTA links
    `sundials_core` and uses `SUNContext`, neither of which exists before v7.
  - NETCDF C and NETCDF C++ 4.3 or newer (depends upon netcdf C interface 4.6.0 or newer)
@@ -97,7 +106,18 @@ If you're happy with this, let's proceed!
  3. Install [SUNDIALS](https://computing.llnl.gov/projects/sundials) and edit Makefile.local to set `SUNDIALS_DIR` to the location you have installed the Sundials library in. If you are only using SUNDIALS for MaNTA, a quick intro to installing SUNDIALS is included below.
  4. Install [NETCDF C and NETCDF C++](https://www.unidata.ucar.edu/software/netcdf/). On Ubuntu or Debian these can be installed from the package manager: `apt-get install libnetcdf-dev libnetcdff-dev libnetcdf-c++4-dev libnetcdf-c++4-1`. 
  On MacOS, you can use either `brew install netcdf` or `conda install -c anaconda netcdf4` to install the C version, and `conda install -c conda-forge netcdf-cxx4` to install the C++ version. 
- Please specify in `Makefile.local` where these libraries are installed. For example, `NETCDF_DIR = /usr/local/Cellar/netcdf/4.8.0_2` and `NETCDF_CXX_DIR = /Users/<username>/miniconda3` if you used `brew` and `conda` to install on MacOS.
+
+    A package-manager install needs no `Makefile.local` entry at all: it lands in
+    `/usr`, which every compiler already searches, and `Makefile.config` asks
+    `pkg-config` for the rest. Set `NETCDF_DIR` (and `NETCDF_CXX_DIR`, if the C++
+    binding is under a different prefix) only for an install somewhere the compiler
+    would not find on its own -- for example `NETCDF_DIR =
+    /usr/local/Cellar/netcdf/4.8.0_2` and `NETCDF_CXX_DIR =
+    /Users/<username>/miniconda3` if you used `brew` and `conda` on MacOS.
+
+    Naming a prefix the compiler already searches is harmless, but it used to break
+    the build outright, so `NETCDF_DIR = /usr` in an old `Makefile.local` can simply
+    be deleted.
  5. Set any other options, e.g. setting the variable `DEBUG` to any value will build a version that you can use to develop MaNTA and that includes debug information.
  6. Run `make`.
  7. Check the unit tests with `make test`. 
@@ -110,7 +130,7 @@ MaNTA has three test suites, all driven from the top-level Makefile:
 |---|---|
 | `make test` | Boost.Test C++ unit tests (`Tests/UnitTests`) |
 | `make regression_tests` | Runs the solver over `Tests/RegressionTests/*.conf` and compares against checked-in `.ref.nc` references |
-| `make python_tests` | pytest suite for the pybind11 module (`python/Tests`); needs `make python` first |
+| `make python_tests` | pytest suite for the `manta` package (`python/Tests`); needs `make python` first |
 
 The regression and Python suites need the Python dependencies. On distributions
 where the system Python is externally managed (Debian, Ubuntu), that means a
@@ -131,6 +151,23 @@ symlink to a new release the environment's packages are stranded in the old
 `make venv VENV=/path/to/env`.
 
 All three suites can be run from any working directory.
+
+### Writing a physics case in Python
+
+A case and the driver that runs it do not have to live in this repository:
+
+```sh
+make python          # builds python/manta/_manta<abi>.so
+pip install .        # the `manta` package and the `manta` command
+pip install .[jax]   # ...and manta.jax, for cases written as JAX functions
+```
+
+A case is then a subclass of `manta.TransportSystem` in your own package, run
+with `manta myrun.conf`. `python-examples/` holds a worked directory per
+example — the case, its config and a README — each importing `manta` exactly as
+code outside this tree would, so one can be copied out and still run. Start with
+`python-examples/linear-diffusion`; `docs/out_of_tree.rst` covers both languages,
+including C++ cases built as `PhysicsPlugins` shared objects.
 
 #### Coverage
 

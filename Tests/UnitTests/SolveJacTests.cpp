@@ -294,43 +294,36 @@ namespace
 class NonlinearDiffusion : public TransportSystem
 {
 public:
-    NonlinearDiffusion()
-    {
-        nVars = 1;
-        isLowerDirichlet = true;
-        isUpperDirichlet = true;
-    }
+    NonlinearDiffusion() : TransportSystem({.variables = numberedFields(1)}) {}
 
     Value LowerBoundary(Index, Time) const override { return 0.0; }
     Value UpperBoundary(Index, Time) const override { return 0.0; }
-    bool isLowerBoundaryDirichlet(Index) const override { return true; }
-    bool isUpperBoundaryDirichlet(Index) const override { return true; }
 
     // sigma_hat = ( 1 + u^2 ) q
     Value SigmaFn(Index, const State &s, Position, Time) override
     {
-        const double u = s.Variable[0];
-        return (1.0 + u * u) * s.Derivative[0];
+        const double u = s.u(0);
+        return (1.0 + u * u) * s.q(0);
     }
     void dSigmaFn_du(Index, VectorRef v, const State &s, Position, Time) override
     {
-        v[0] = 2.0 * s.Variable[0] * s.Derivative[0];
+        v[0] = 2.0 * s.u(0) * s.q(0);
     }
     void dSigmaFn_dq(Index, VectorRef v, const State &s, Position, Time) override
     {
-        const double u = s.Variable[0];
+        const double u = s.u(0);
         v[0] = 1.0 + u * u;
     }
 
     // S = 1 + u - u^3 + 0.3 q, so the source depends on u and on q directly.
     Value Sources(Index, const State &s, Position x, Time) override
     {
-        const double u = s.Variable[0];
-        return 1.0 + u - u * u * u + 0.3 * s.Derivative[0] + std::sin(3.0 * x);
+        const double u = s.u(0);
+        return 1.0 + u - u * u * u + 0.3 * s.q(0) + std::sin(3.0 * x);
     }
     void dSources_du(Index, VectorRef v, const State &s, Position, Time) override
     {
-        const double u = s.Variable[0];
+        const double u = s.u(0);
         v[0] = 1.0 - 3.0 * u * u;
     }
     void dSources_dq(Index, VectorRef v, const State &, Position, Time) override

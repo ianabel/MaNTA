@@ -13,11 +13,55 @@ const std::string B_file = "./Bfield.nc";
 
 template <typename T> T sign(T x) { return x >= 0 ? 1 : -1; }
 
-MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid) {
-  nVars = 4;
-  nScalars = 0;
-  nAux = 0;
+// Four channels always; the auxiliary variable and the three control scalars
+// are switched on by config. All of that has to be settled before the base
+// class exists, so it is read here rather than assigned part-way down the
+// constructor body -- which is where `nAux = 1` and `nScalars = 3` used to sit,
+// some sixty lines apart.
+SystemSpec MirrorPlasma::buildSpec(toml::value const &config) {
+  // The Channel enum's order, which is what every index in this case means.
+  auto spec = SystemSpec{
+      .variables = {{"Density", "particle density", "n0"},
+                    {"IonEnergy", "ion energy density", "n0 T0"},
+                    {"ElectronEnergy", "electron energy density", "n0 T0"},
+                    {"AngularMomentum", "angular momentum density",
+                     "n0 T0 / c_s0"}}};
 
+  if (config.count("MirrorPlasma") != 1)
+    return spec;
+
+  auto const &InternalConfig = config.at("MirrorPlasma");
+
+  const auto lower = toml::find_or(InternalConfig, "lowerBoundaryConditions",
+                                   std::vector<bool>(4, true));
+  const auto upper = toml::find_or(InternalConfig, "upperBoundaryConditions",
+                                   std::vector<bool>(4, true));
+  for (Index i = 0; i < 4; ++i) {
+    spec.variables[i].lower =
+        lower[i] ? BoundaryKind::Dirichlet : BoundaryKind::Neumann;
+    spec.variables[i].upper =
+        upper[i] ? BoundaryKind::Dirichlet : BoundaryKind::Neumann;
+  }
+
+  if (toml::find_or(InternalConfig, "useAmbipolarPhi", false))
+    spec.aux = {{"AmbipolarPhi",
+                 "electrostatic potential enforcing zero parallel current",
+                 "T0/e"}};
+
+  // Error and Integral are differential -- G depends explicitly on dE/dt and
+  // dI/dt -- Current is algebraic. This was MirrorPlasma::isScalarDifferential
+  // in ConstantVoltage.cpp.
+  if (toml::find_or(InternalConfig, "useConstantVoltage", false))
+    spec.scalars = {{"VoltageError", "V0 minus the achieved voltage", "", true},
+                    {"VoltageErrorIntegral", "time integral of the error", "",
+                     true},
+                    {"RadialCurrent", "radial current", "I0", false}};
+
+  return spec;
+}
+
+MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid)
+    : AutodiffTransportSystem(config, grid, buildSpec(config)) {
   xL = grid.lowerBoundary();
   xR = grid.upperBoundary();
 
@@ -33,16 +77,6 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid) {
 
     uL.resize(nVars);
     uR.resize(nVars);
-
-    lowerBoundaryConditions.resize(nVars);
-    upperBoundaryConditions.resize(nVars);
-
-    lowerBoundaryConditions =
-        toml::find_or(InternalConfig, "lowerBoundaryConditions",
-                      std::vector<bool>(nVars, true));
-    upperBoundaryConditions =
-        toml::find_or(InternalConfig, "upperBoundaryConditions",
-                      std::vector<bool>(nVars, true));
 
     evolveLogDensity = toml::find_or(InternalConfig, "LogDensity", false);
 
@@ -73,8 +107,6 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid) {
 
     // Compute phi to satisfy zero parallel current
     useAmbipolarPhi = toml::find_or(InternalConfig, "useAmbipolarPhi", false);
-    if (useAmbipolarPhi)
-      nAux = 1;
 
     // Integrate over momentum equation for constant voltage
     useConstantVoltage =
@@ -89,7 +121,6 @@ MirrorPlasma::MirrorPlasma(toml::value const &config, Grid const &grid) {
       gamma_d = toml::find_or(InternalConfig, "gamma_d", 0.0);
       gamma_h = toml::find_or(InternalConfig, "gamma_h", 0.0);
       growth = 0.0;
-      nScalars = 3;
     }
 
     // Add floor for computed densities and temperatures
@@ -360,14 +391,6 @@ Real MirrorPlasma::Source(Index i, RealVector u, RealVector q, RealVector sigma,
 
 Value MirrorPlasma::LowerBoundary(Index i, Time t) const { return uL[i]; }
 Value MirrorPlasma::UpperBoundary(Index i, Time t) const { return uR[i]; }
-
-bool MirrorPlasma::isLowerBoundaryDirichlet(Index i) const {
-  return lowerBoundaryConditions[i];
-}
-
-bool MirrorPlasma::isUpperBoundaryDirichlet(Index i) const {
-  return upperBoundaryConditions[i];
-}
 
 Real2nd MirrorPlasma::MMS_Solution(Index i, Real2nd x, Real2nd t) {
   return InitialFunction(i, x, t);

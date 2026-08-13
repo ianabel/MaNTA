@@ -14,6 +14,22 @@
 # Points to an installation of SUNDIALS, v7.1.0 or above
 SUNDIALS_DIR= ../sundials/install
 
-# If Eigen is not in /usr/include, you need to specify this
+# Where Eigen's own header directory lives -- the parent of Eigen/, not the
+# directory holding Eigen/ itself if that is already on the compiler's default
+# search path. Distributions put it in a subdirectory, hence eigen3 below.
+#
+# Either Eigen 3.4.x or 5.0.x works; nothing else here changes between them. Do
+# not set this to a directory the compiler already searches -- EIGEN_DIR=/usr/include
+# breaks every translation unit, for the reason Makefile.config explains at the top.
 EIGEN_DIR = /usr/include/eigen3
+# ...or a source checkout, which is how Eigen 5 is most easily had today:
+# EIGEN_DIR = ../eigen
+
+# netCDF needs nothing here for a package-manager install: apt's libnetcdf-dev and
+# libnetcdf-c++4-dev land in /usr, which the compiler already searches, and
+# Makefile.config asks pkg-config for the rest. Set these only for an install the
+# compiler would not find on its own -- a brew/conda MacOS install, or an HPC
+# module that does not export NETCDF_DIR itself.
+# NETCDF_DIR = /usr/local/Cellar/netcdf/4.8.0_2
+# NETCDF_CXX_DIR = /Users/<username>/miniconda3
 

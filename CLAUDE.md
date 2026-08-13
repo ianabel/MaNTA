@@ -16,14 +16,25 @@ in detail — read it before adding tests or interpreting a coverage number.
 make MaNTA                # the solver only (bare `make` also builds python + runs tests)
 make test                 # Boost.Test C++ unit tests
 make regression_tests     # solver over Tests/RegressionTests/*.conf vs checked-in .ref.nc
-make python               # the pybind11 extension, python/MaNTA<suffix>.so
+make python               # the manta package, python/manta/_manta<suffix>.so
+make install PREFIX=...   # headers under include/manta, libmanta.so, manta.pc
+pip install .             # the `manta` package and the `manta` console script
+pip install .[jax]        # ...and manta.jax (jax, equinox, jaxtyping)
 make python_tests         # pytest suite for that extension
 make coverage             # rebuild instrumented, run all three suites, write coverage/
+make docs                 # docs/_build/html, via .venv-docs built from
+                          # docs/requirements.txt; -W, as Read the Docs runs it
+make stubs                # regenerate python/manta/_manta.pyi from the module
+make stubs-check          # fail if the committed stub is stale (CI runs this)
+make typecheck            # mypy over the manta package
 make clean                # also sweeps orphaned PhysicsCases/*.o and .d files,
-                          # python/ modules of every ABI suffix, the bytecode
-                          # and pytest caches, and clean_data below
+                          # python/manta modules of every ABI suffix, the
+                          # bytecode and pytest caches, and clean_data below
 make clean_data           # run output (.nc/.restart.nc/.dat) at the root and in
-                          # Tests/RegressionTests, python/, python/Tests/
+                          # Tests/RegressionTests, python/Tests/ and each
+                          # directory under python-examples/
+
+./MaNTA --list-options    # every configuration key, straight from ConfigSchema.cpp
 ```
 
 The regression and Python suites need `requirements.txt` installed and the
@@ -90,8 +101,13 @@ sign — the check is `ManufacturedDiffusion` in `MMSConvergenceTests.cpp`, whos
 is `u_t - kappa u_xx` for `u = sin(pi x)(1+t)`: a diffusion equation, not the
 anti-diffusion `+` would give. Get it backwards and the case still converges, to
 the wrong function, at the right rate — so an order study will not catch it, only
-a closed-form comparison will. And `State::Flux[i]`, which physics hooks read,
-carries the negated `sigma_h`, not `sigma_hat`.
+a closed-form comparison will. And the stored flux a hook reads
+carries the negated `sigma_h`: `State::sigma(i)` is that stored value,
+`State::sigmaHat(i)` the physical flux `SigmaFn` returned. Nothing in the tree
+reads the incoming sigma at all — `MirrorPlasma` and `AdjointPlasma` thread it
+into `Sn`/`Spi`/`Spe`/`Somega` without using it, and every `dSources_dsigma` is
+zero — so a case that starts using it is the first to care, and no test would
+catch a sign error there.
 
 ### Solve path
 
@@ -109,6 +125,18 @@ called separately:
 Every SUNDIALS handle is a member, not a local, so those three can be split.
 `ctx` is the exception: it belongs to the `SystemSolver`, not to a run, and
 `destroySundials` must not touch it.
+
+**The three can be run again on the same object**, and a reused solver gives the
+same answer as a fresh one *bit for bit*. That is pinned by
+`a_second_integration_on_one_solver_matches_a_fresh_one`, at exactly zero
+tolerance, and the tolerance is the point: the last defect here left the second
+run completing, plausible, and wrong in the eleventh digit. Anything that reuses
+a solver — a `PyRunner` that stopped rebuilding one, an optimisation driver — is
+resting on that test, so do not relax it to something approximate. Note that
+`initialize` skips `initialiseMatrices` when `initialised` is already set, so
+anything that function computes *once* must either be genuinely run-independent or
+be refreshed per run; getting that wrong is what broke reuse before (see the
+`RF_cellwise` trap below).
 
 IDA is handed a **custom `SUNLinearSolver`** (`SunLinSolWrapper`) plus a
 **deliberately empty `SUNMatrix`** (`SunMatrixWrapper`) whose only job is to
@@ -132,13 +160,97 @@ survived a passing regression suite for months, and why the tests that matter he
 are `SolveJacTests.cpp` (finite-difference the residual, require `J dy = g`) and
 `MMSConvergenceTests.cpp` (observed order of accuracy).
 
+**When IDA does give up, get its own account of the step before theorising.**
+SUNDIALS is built here with `SUNDIALS_LOGGING_LEVEL 4`, and `SUNContext_Create`
+builds its logger from the environment (`sundials_context.c` calls
+`SUNLogger_CreateFromEnv`), so
+
+```sh
+SUNLOGGER_INFO_FILENAME=/tmp/ida-info.log SUNLOGGER_DEBUG_FILENAME=/tmp/ida-debug.log ./MaNTA foo.conf
+```
+
+yields IDA's per-attempt record — step size, order, `dsm`, and whether the attempt
+died in the error test or the nonlinear solve — for no code change at all. Write it
+to a file rather than to `stderr` if a test is running, because `CapturedOutput`
+redirects the standard descriptors.
+
+Two return codes worth being able to read without looking them up:
+
+* **`IDA_ERR_FAIL` (-3) on the *first* step means the initial condition violates
+  the algebraic constraints.** It takes ten error-test failures in one step attempt
+  to produce it, and each one cuts `h`; a local error estimate that will not shrink
+  with `h` is the signature of an inconsistent state, because `IDASetSuppressAlg`
+  is never called and so `sigma`, `q`, `lambda` and `phi` are all in the error
+  test. Look at what `IDACalcIC` was given, not at the time loop.
+* **`IDA_CONV_FAIL` (-4) from `IDACalcIC`** is the same problem one stage earlier:
+  the Newton/linesearch could not reach a consistent state from the guess
+  `setInitialConditions` built. The guess is worth suspecting before the solver is.
+
+### Configuration
+
+**Every key MaNTA accepts is declared once**, in `ConfigSchema.cpp`: canonical
+name, deprecated aliases, type, category, per-reader requiredness, default and a
+line of documentation. `./MaNTA --list-options` prints the table. There used to
+be two — `runManta` open-coded ~120 lines of `toml::find_or`, `PyRunner::configure`
+carried its own `params` list — and they had drifted: two names for the initial
+time (`t_initial`/`tZero`), two defaults for `Absolute_tolerance` (`1e-2` against
+`1e-3`), and six keys that existed on one surface only. Nothing reported any of
+it, and `docs/configuration.rst` carried a hand-maintained table of the
+differences.
+
+The path is `ConfigSource` -> `loadSolverConfig` -> `SolverConfig` -> `makeGrid`
+and `applySolverConfig`. `ConfigSource` is the only piece that differs between
+the surfaces: `TomlConfigSource` (in `SolverConfig.cpp`) and `DictConfigSource`
+(in `PyConfigSource.hpp`). What to know before editing any of it:
+
+* **`ConfigSchema.hpp`, `SolverConfig.hpp` and their `.cpp` files must stay
+  pybind11-free.** They link into `MaNTA`, `libmanta.so` and `Tests/UnitTests`.
+  `DictConfigSource` is the python-side half and lives in a header `PyRunner.cpp`
+  alone includes. Neither header is in `INSTALL_HEADERS`, and neither belongs
+  there: an out-of-tree case is handed the parsed `toml::value` and reads its own
+  table through toml11, never through the solver's schema.
+* **`applySolverConfig` is the single point at which a configuration reaches the
+  solver.** That is what stops the two surfaces configuring differently, and it
+  is also why a `set*` call dropped from it un-configures *both* at once, where
+  the same slip used to cost one. `both_sources_produce_the_same_solver_config`
+  compares `SolverConfig`s, not solvers, so it would not notice.
+* **`Category` and `Reader` are two different enums.** `Category` says what a key
+  *is* (`Solver`, `ProblemSelection`, `Cli`); `Reader` says who is asking
+  (`Toml`, `Dict`). Requiredness differs by reader for exactly three keys:
+  `t_final` and `TransportSystem` are required of a config file only,
+  `OutputFilename` of a dict only — a file falls back to its own stem.
+* **Presence, not value, is the signal for `t_final` and `SteadyStateTolerance`**,
+  which are `std::optional` in `SolverConfig`. A present `SteadyStateTolerance`
+  arms steady-state termination on both surfaces; `run_ss()` arms it regardless,
+  falling back to `1e-3`. `Runner.run()` with no argument uses `t_final`, and
+  `run(tFinal)` overrides it.
+* **An unknown key is an error, with the nearest schema entry suggested.** The
+  sweep sees `[configuration]` only — a physics case's own table is read by the
+  case and checked against nothing. The three `PythonModule*` keys are in the
+  schema as `Category::Cli` purely so the eight config files carrying them are
+  not rejected; the solver never reads them. Conversely `TransportSystem` and
+  `PhysicsPlugins` are `Category::ProblemSelection` and are an *error* in a dict,
+  rather than being accepted and ignored.
+* **Configuration errors propagate.** `loadSolverConfig` throws
+  `std::invalid_argument`, which pybind maps to `ValueError` for `manta.run()`;
+  `main()` catches it and prints one line for the command line.
+  `PyRunner::configure` re-throws it as `std::runtime_error` so that surface goes
+  on raising `RuntimeError`, which is what it always has. "Could not start"
+  conditions — no such config file, an unknown `TransportSystem`, an unopenable
+  restart file — still make `runManta` log and return 1.
+* **The naming style is deliberately not unified.** `delta_t`, `MinStepSize` and
+  `solveAdjoint` keep their inconsistent spellings; only the two genuine name
+  *conflicts* were resolved, because regularising the rest would churn every
+  config file in the tree for no functional gain.
+
 ### Superconvergence (`Superconvergent = true`)
 
 MaNTA *is* an interpolatory HDG method: `residual` evaluates `SigmaFn`, `Sources`
 and `AuxG` at the `k+1` nodes of the degree-`k` nodal basis and applies
 `InterpolateOntoBasis`, i.e. `I_h F(u_h)` with `I_h` mapping into `W_h = P_k`.
 `Matrices.cpp` cites arXiv:1811.09667 for the Jacobian form, which is exactly the
-paper that method comes from. Its two sequels (`SuperconvergentHDG-I/II.pdf`)
+paper that method comes from. Its two sequels (`refs/SuperconvergentHDG-I/II.pdf`, indexed with their dois in
+`refs/Refs.md`; the PDFs are gitignored, so fetch them if you need them)
 exist because that scheme loses the `k+2` superconvergence of the postprocessed
 solution, and paper I's fix is what the flag implements.
 
@@ -197,14 +309,44 @@ side effects: `REGISTER_PHYSICS_HEADER(T)` in the header plus
 whose constructor inserts a factory. Consequences:
 
 * A case only appears if its object file is linked in — nothing references it
-  directly, so a missing entry is a link-line problem with no compile error.
-* `RegisterPhysicsCase` uses `map::insert`, so a **duplicate name is silently
-  ignored and the first registration wins**.
+  directly, so a missing entry is a link-line problem with no compile error. An
+  unknown name now throws from `InstantiateProblem` with the list of what *is*
+  registered, rather than returning `nullptr` for every caller to check.
+* A **duplicate name throws**. It used to be a bare `map::insert`, so the first
+  registration silently won and the second case was unreachable.
 * The map is never reset, so tests must use unique throwaway names.
+* A case can live **outside this tree**: build it as a shared object against the
+  installed headers and name it in the config's `PhysicsPlugins` array, which
+  `runManta` dlopens before instantiating. See "Out-of-tree builds" below.
+
+**A case declares itself as data.** `TransportSystem`'s only constructor takes a
+`SystemSpec` (`SystemSpec.hpp`): the variables, scalars and aux variables with
+their names, descriptions, units, per-end `BoundaryKind` and the differential
+flag. `nVars`/`nScalars`/`nAux` are `const` and derived from it; the spec is
+validated in the constructor, so a part-built case cannot exist. This replaced
+assigning `nVars` in a constructor body, nine naming virtuals,
+`isLower/isUpperBoundaryDirichlet`, `isScalarDifferential`, and a pair of
+uninitialised bools the boundary virtuals read. A case whose shape depends on its
+config builds the spec in a static helper: `: TransportSystem(buildSpec(config))`.
+`numberedFields/Scalars/Aux` produce the placeholder names
+`Var0`/`Scalar0`/`AuxVariable0`, and are for a case whose width comes from its
+config and so has no names to give — `MatrixDiffusion`, `MatrixDiffusionTest`
+and `LinearDiffSourceTest`. Every other case names its variables, and the netCDF
+groups take those names, so nothing reads output by `Var0` any more: the
+regression harness finds a variable's group by its holding a `u`, and
+`LoadDataToSpline` reads back `getVariableName(i)`.
 
 Two layers sit above `TransportSystem`: cases may implement its virtuals
 directly, or derive from `AutodiffTransportSystem` and supply `Flux`/`Source` in
 terms of `autodiff` types, which then derives every Jacobian entry automatically.
+Its constructor is `(config, grid, SystemSpec)`.
+
+**Derivative out-parameters arrive zeroed.** `State` and `GlobalState` zero
+themselves on construction, so a hook assigns only its nonzero entries; an
+omitted one is zero rather than uninitialised heap. `State`'s vectors are private; reach them
+through `u(i)`/`q(i)`/`sigma(i)`/`sigmaHat(i)`/`phi(i)`/`scalar(i)` for an entry,
+bounds-checked under `DEBUG`, or the same names with no argument for the whole
+vector (`s.u()`), which is what the autodiff layer builds its RealVectors from.
 
 **Every physics hook exists in two forms**: pointwise (`SigmaFn(i, State, x, t)`)
 and batched (`SigmaFn(i, GlobalState, positions, t)`). The batched defaults in
@@ -213,7 +355,24 @@ and batched (`SigmaFn(i, GlobalState, positions, t)`). The batched defaults in
 
 ### Python layer
 
-`Python.cpp` defines the `MaNTA` module. Three pieces to know:
+`Python.cpp` defines `_manta`, the compiled core of the **`manta` package**;
+`python/manta/__init__.py` re-exports it and adds the parts better written in
+Python. Users `import manta`, and `pip install .` makes that work from anywhere
+(the build shells out to `make python`, so it still needs `Makefile.local`).
+A Python case declares itself with class attributes:
+
+```python
+class MyCase(manta.TransportSystem):
+    variables = [manta.Field("n", "density", "m^-3", lower=manta.Neumann)]
+    def __init__(self, config, grid):
+        super().__init__()          # reads the class attributes
+```
+
+`super().__init__(spec)` and `super().__init__(variables=[...])` also work, for a
+case whose shape depends on its config. `nVars`/`nScalars`/`nAux` are read-only.
+**Only `SigmaFn` and `Sources` are required**: an absent derivative hook means
+that block is identically zero, which is what the zeroed out-parameter already
+gives. Four pieces to know:
 
 * **Trampolines.** `PyTransportSystem` / `PyAdjointProblem` dispatch each virtual
   to a Python override. `PyTransportSystem::initializeOverrides` probes the
@@ -222,11 +381,18 @@ and batched (`SigmaFn(i, GlobalState, positions, t)`). The batched defaults in
   enforces the extra hooks required when `nScalars > 0` or `nAux > 0`. Look up
   overrides with `override_for(name)`, never `method_overrides[name]` — the
   latter default-constructs a null `py::function` and calling it segfaults.
-* **Type casters.** `State` ↔ `dict` of 1-D arrays;
-  `GlobalState` ↔ `dict` of `(nPoints, nVars)` arrays. **The `GlobalState` caster
+* **State is a view, GlobalState is a dict.** A pointwise `State` reaches Python
+  as a non-owning window onto solver memory (`PyState.hpp`) with named fields —
+  `s.u`, `s.q`, `s.sigma`, `s.sigmaHat`, `s.phi`, `s.scalars` — each indexable by
+  position or by declared name. It is valid only inside the call; `np.array(v,
+  copy=True)` to keep anything, and note that `__array__` has to honour `copy`
+  or numpy hands back a view of a destroyed temporary. There is no way to build
+  one from Python, which is why the tests drive the pointwise path through the
+  batched entry point. `GlobalState` still crosses as a `dict` of
+  `(nPoints, nVars)` arrays — what the JAX path wants — and **its caster
   transposes in both directions** (C++ stores `(nVars, nPoints)`), so a
-  round-trip test cannot detect a missing transpose on its own — check the
-  orientation from inside a batched call instead.
+  round-trip test cannot detect a missing transpose; check the orientation from
+  inside a batched call instead.
 * **`PyRunner`** (`configure(dict)` / `run` / `run_ss` / `getSolution` / `G` /
   `getAdjointGradients`) is the API the optimisation drivers use, and the only
   route supporting repeated configure/run cycles in one process — it works by
@@ -243,32 +409,132 @@ and batched (`SigmaFn(i, GlobalState, positions, t)`). The batched defaults in
   separate member from `adjoint` so its presence can never be mistaken for "the
   gradients have been computed".
 
-**The scalar hooks' Python signatures are not the C++ ones.** `ScalarGExtended`
-and friends take `DGSoln` and `Interval`, which have no Python representation, so
-`PyTransportSystem` evaluates on the nodes and passes a `GlobalState` plus the
-quadrature data instead. What Python must implement:
+**The scalar hooks are one name each, and the same in both languages.** There
+used to be four names and five signatures — `ScalarG`, `ScalarGExtended`,
+`ScalarGPrime` and two `ScalarGPrimeExtended` overloads, one taking a
+`std::function` test function and an `Interval` and asking the case to integrate
+against them — plus a *different*, flatter set on the Python side that the
+trampoline translated to. The flat one won:
 
 ```
-InitialScalarValue(s)                                    -> float
-InitialScalarDerivative(s, states, states_dot, weights)  -> float
-isScalarDifferential(i)                                  -> bool
-ScalarG(s, states, states_dot, weights, t)               -> float
-ScalarGPrime(states, states_dot, weights, phi_boundary, t)
-    -> (list of nScalars GlobalState dicts,   d G_s / d state
-        list of nScalars GlobalState dicts)   d G_s / d state_dot
-dSources_dScalars(s, state, x, t)  -> vector of length nScalars
+ScalarG(s, y, ydot, abscissae, weights, phiBoundary, t)          -> Value
+ScalarGPrime(dG, dGdot, y, ydot, abscissae, weights, phiBoundary, t)
+InitialScalarValue(s)                                            -> Value
+InitialScalarDerivative(s, y, dydt)   [C++ takes DGSoln; Python takes nodal data]
+dSources_dScalars(s, out, state, x, t)   — indexed by *scalar*, not by variable
 ```
 
-`weights` is one quadrature weight per node (`nCells*(k+1)`), so an integral over
-the domain is `weights @ u`; `phi_boundary` is `(k+1, 2)`. Note
-`dSources_dScalars` is indexed by *scalar*, not by variable, and that
-`InitialScalarDerivative` is only consulted for scalars where
-`isScalarDifferential` is true. `python/Tests/test_scalars.py` exercises all of
-it against a closed form, in both the algebraic and differential cases.
+`y`/`ydot` are the solution sampled on the element nodes; `weights` is one
+quadrature weight per node, so `Int u dx` is `ScalarHooks::integrate(...)` and
+its derivative with respect to node j is `weights(j)`. **A case must use these
+weights rather than a rule of its own** — `ScalarTestLD3` used a global adaptive
+Kronrod rule over a piecewise polynomial, which is not a smooth function of the
+coefficients, and disagreed with its own Jacobian by 8%. `phiBoundary` is
+`(k+1, 2)` and is the *only* way to reach a boundary point value, because the
+nodes are Chebyshev points of the first kind and strictly interior;
+`ScalarHooks::boundaryValue` / `addBoundaryDerivative` do that contraction.
+`ScalarGPrime` reports every scalar at once, as d/d(DOF), into buffers that
+arrive zeroed.
 
-JAX physics cases (`python/JAXTransportSystem.py`, `python/State.py`) wrap the
-dict interface in equinox modules via the `MaNTA_Decorator` / `Physics_Decorator`
-adapters.
+`checkScalarDerivative` in `ScalarJacobianTests.cpp` finite-differences a case's
+own `ScalarG` against its `ScalarGPrime` and is the first thing to run when a
+scalar system converges slowly. `python/Tests/test_scalars.py` exercises the
+Python side against a closed form, algebraic and differential.
+
+* **`manta.cli`** is the `manta` console script: it reads the config, imports the
+  physics module it names, and hands over to the same `runManta` the binary uses.
+  That is what lets a Python case and its driver live outside this tree.
+  `load_physics_modules` accepts **two forms**, and `python/Tests/util.py`
+  delegates to it so the rule has one implementation:
+
+  * `PythonModule` — an importable dotted name, the documented form.
+  * `PythonModuleFile` (+ optional `PythonModuleName`) — a path, **resolved
+    relative to the config file, not the cwd**. Every config in the tree is
+    written as though that were true; the retired `PyManta` resolved against the
+    cwd, which is why they only ran from one directory.
+
+  Either way the module is imported for its registrations, and if it defines
+  `registerTransportSystems()` that is called afterwards. Registering at import
+  via `registerPhysicsCase` is the documented convention; the hook is what every
+  example under `python-examples/` actually uses, and without honouring it none
+  of those configs run.
+
+JAX physics cases use **`manta.jax`** (`python/manta/jax/`), which wraps the dict
+interface in equinox modules via the `MaNTA_Decorator` / `Physics_Decorator`
+adapters. It was six flat modules in `python/` until the examples split, and
+three properties of the subpackage are load-bearing rather than stylistic:
+
+* **`manta/__init__.py` must never import `.jax`.** JAX is an optional extra
+  (`pip install manta[jax]`), so a top-level re-export would make it mandatory
+  for every user of the solver — and it would turn the subpackage's relative
+  imports into a cycle, since `transport_system.py` does `import manta`.
+  `test_jax_layer.py` AST-scans `__init__.py` for exactly this.
+* **`manta/jax/__init__.py` must not import `ffi_runner` eagerly.** That module
+  registers XLA FFI targets at module scope, and the bindings it looks for —
+  `runner_ffi_ops`, `runner_ffi_ops_cuda` — are `#ifdef XLA_FFI`
+  (`Python.cpp:361`). Eager, it would take `from manta.jax import State` down on
+  every default build. A module-level `__getattr__` serves `FFIRunner`,
+  `Platform` and the two `register_ffi_*` helpers instead, and the module itself
+  raises an `ImportError` naming the flag rather than an `AttributeError` from
+  inside a loop.
+* **No module in the layer may write `os.environ` at import.** `FFIRunner.py`
+  set three variables and `JAXTransportSystem.py` forced
+  `JAX_PLATFORM_NAME=cpu`; as library code that last one would have disabled the
+  GPU path `ffi_runner` exists to provide. Those writes live in the drivers under
+  `python-examples/` now.
+
+`python/` holds exactly two things: `manta/` and `Tests/`. Every driver, config
+and notebook is under `python-examples/`, one self-contained directory each.
+
+### Type stubs
+
+`python/manta/_manta.pyi` is **generated** by `make stubs`; `make stubs-check`
+diffs it against a fresh generation and is what CI runs, because a stale stub is
+worse than none — it reports the old signature as fact.
+`python/manta/__init__.pyi` is hand-written and covers the Python layer, chiefly
+the hook signatures a case implements.
+
+Three things to know:
+
+* Every hook declaration carries `# type: ignore[override]`, and that is load
+  bearing rather than a workaround. The bound base method's signature is the C++
+  one — the derivative hooks take a `VectorRef` out-parameter, and pybind11
+  widens `int` to `SupportsInt | SupportsIndex` — while a Python case writes
+  `(i, state, x, t)` and *returns* the vector. The declarations are what a
+  user's subclass is checked against, which is the point; `warn_unused_ignores`
+  is on, so the ignores cannot outlive the asymmetry.
+* `check_untyped_defs` is what makes any of this bite. A physics case is
+  unannotated Python and mypy skips unannotated defs without it.
+* Two bindings were removed to keep the generated stub valid:
+  `TransportSystem::ScalarGPrime` and `ComputePhysicsDerivatives` both take
+  `GlobalStateMatrix`, which has no Python type, so the bound base methods were
+  never callable from Python — they only put unresolvable names in the stub.
+  `registerPhysicsCase` is `def`d after `TomlValue` for the same reason:
+  pybind11 renders a `std::function` parameter from the types registered at that
+  point, and binding it earlier left the raw toml11 C++ name in the signature.
+
+### Out-of-tree builds
+
+`make install PREFIX=...` installs the headers under `$PREFIX/include/manta`,
+`libmanta.so`, and `manta.pc`. A physics case built as a shared object and named
+in the config's `PhysicsPlugins` array is dlopened by `runManta` before
+`InstantiateProblem`; its static initialiser registers it into the same
+process-global map. Two traps, neither of which is a link error:
+
+* **A plugin must be compiled with the flags `pkg-config --cflags manta`
+  reports.** Eigen aligns its types to the widest vector unit the compiler knows
+  about and inlines its expression templates into both sides of the boundary, so
+  a plugin built without the core's `-march=` faults inside an aligned AVX-512
+  load (`_mm512_load_pd`) the first time the solver touches its state. `manta.pc`
+  records the *concrete* architecture (`-march=znver4`, not `native`) so a
+  mismatch is a compile error rather than a run-time crash. `-DEIGEN_USE_BLAS`
+  travels for the same reason.
+* **A plugin must not link `-lmanta`.** The solver links the core objects
+  directly, so a plugin that also pulled in `libmanta.so` would get a second copy
+  of `PhysicsCases::map` and register into a map the solver never reads —
+  silently. Compile against the headers alone and let the loader bind the MaNTA
+  symbols to the host, which is linked `-rdynamic` for exactly that.
+  `libmanta.so` is for embedding the solver in another program.
 
 ### Adjoints
 
@@ -304,6 +570,35 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
   then corrupts the heap. It cost an afternoon in `Postprocessing.cpp`, where the
   symptom was a SIGSEGV inside `free()` in an unrelated static's destructor.
   Assign to a `Matrix` first, then slice.
+* **`extern/autodiff` points at a fork, and `git submodule update --remote` would
+  silently undo that.** Upstream `autodiff/autodiff` specialises `VectorTraits` on
+  `Eigen::internal::SingleRange` as a plain type, which Eigen 5.0 made a template,
+  so upstream does not compile against Eigen 5 *at all* — and its `main` has not
+  moved since January 2025, i.e. predates Eigen 5. The submodule therefore tracks
+  `ianabel/autodiff` branch `eigen-5-singlerange`, which carries that one patch;
+  `.gitmodules` records why. Upstream PR autodiff/autodiff#397 is the thing to
+  watch: when it merges, point the submodule back and delete the fork. Until then
+  a plain `--remote` update reverts to a commit that cannot build with Eigen 5,
+  and the failure appears as a wall of template errors inside a third-party
+  header rather than as anything about submodules.
+
+* **Eigen 3.4.x and 5.0.x are both supported, and `EIGEN_VERSION_AT_LEAST` cannot
+  tell them apart.** Eigen 5.0 moved to semver by keeping `EIGEN_WORLD_VERSION` at
+  3 forever and renumbering the rest, so `EIGEN_MAJOR_VERSION` went 4 -> 5 and the
+  macro's arguments changed meaning underneath it: it compares
+  `(WORLD, MAJOR, MINOR)` in 3.4 and `(MAJOR, MINOR, PATCH)` in 5.0. So
+  `EIGEN_VERSION_AT_LEAST(3, 3, 90)` is *true* under Eigen 5 — it reduces to
+  `5 > 3` — which is how `extern/autodiff` came to compile a block guarded against
+  old Eigens into a version that cannot accept it. **Use `EIGEN_MAJOR_VERSION >= 5`
+  to branch on the major version**, never `EIGEN_VERSION_AT_LEAST`.
+
+  Two things moved that MaNTA cared about. `Eigen::all` is now only
+  `Eigen::placeholders::all`, and in 3.4 that spelling exists but is
+  `EIGEN_DEPRECATED` — so with `-Werror` neither spelling compiles on both, and the
+  warning fires at *our* call site, where `-isystem` cannot suppress it. Every use
+  was a `.row()`, `.middleCols()` or `.leftCols()` written the long way and is now
+  spelled that way, so no version branch is needed in this tree. And
+  `internal::SingleRange` became a template, which is the autodiff patch above.
 * **Include `<Eigen/Core>` and `<Eigen/Dense>` before the project headers**, the
   way `SystemSolver.hpp` does. The build defines `EIGEN_USE_BLAS`, which swaps in
   BLAS-backed product specialisations; a header that reaches Eigen only through
@@ -319,14 +614,33 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
 * **The top-level Makefile has a bare `export`.** A recursive `$(MAKE)` inherits
   the already-computed release `CXXFLAGS`, which is why the `coverage` target
   runs `env -u CXXFLAGS -u LDFLAGS $(MAKE) COVERAGE=on`.
-* **`-Wno-parentheses` is global, and on gcc it takes `-Wdangling-else` with it.**
-  So gcc will not tell you about a dangling `else`; clang will, because it treats
-  `-Wdangling-else` as a separate warning. Build with clang occasionally — that is
-  what CI's clang matrix legs are for. The same applies in reverse: gcc never diagnoses a
-  polymorphic base with a non-virtual destructor, clang does
+* **gcc and clang do not diagnose the same things, so build with clang
+  occasionally** — that is what CI's clang matrix legs are for. (CI is seven
+  `build-and-test` legs: g++-14/15/16 and clang++-19/20/21 against the distro's
+  Eigen 3.4.0, plus g++-14 against Eigen 5.0.1; then a Fedora container job that
+  only *compiles*, to keep the build's notions of a system prefix — `/usr/lib64`,
+  pkg-config-discovered netCDF — from quietly becoming Ubuntu-specific.) gcc never
+  diagnoses a polymorphic base with a non-virtual destructor; clang does
   (`-Wdelete-non-abstract-non-virtual-dtor`), and it reports it at the point of
   *destruction* inside libstdc++, once per instantiating translation unit, which
-  makes the message look like a standard-library problem rather than yours.
+  makes the message look like a standard-library problem rather than yours. That is
+  how `MagneticField`'s missing virtual destructor was found.
+
+  Until `283b9a3` this entry also warned that `-Wno-parentheses` was applied
+  globally and that on gcc it silently takes `-Wdangling-else` with it, so gcc
+  could not report a dangling `else` and only clang would. **That suppression is
+  gone**, along with `-Wno-deprecated-literal-operator`; `-Wall` enables
+  `-Wparentheses`, so gcc now diagnoses a dangling `else` like everything else,
+  and under `-Werror` it is an error rather than a warning.
+
+  Worth keeping the reason they went, because it generalises. Both existed to
+  silence *third-party* headers — `-Wno-deprecated-literal-operator` for toml11's
+  `operator""_toml`, declared without the space C++23 wants — and both became
+  unnecessary once those headers moved to `-isystem`, which suppresses their
+  warnings at source. What they went on doing in the meantime was hiding defects
+  in *our* code: a global `-Wno-` outlives whatever it was added for, and nothing
+  reports that it has stopped earning its place. Prefer `-isystem` on the
+  dependency to a blanket suppression on the project.
 * **With clang, the libstdc++ version is part of the configuration.** clang selects
   the newest GCC installation on the box, so a local clang build and CI's clang
   legs need not use the same standard library: CI gets the `ubuntu-24.04` image's
@@ -348,6 +662,48 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
   `-Werror` is on, and Eigen's own headers do trip `-Wunused-but-set-variable`
   under clang — reachable only from the pybind11 build, which pulls in
   `SparseCore`. Adding a dependency with `-I` re-arms that.
+* **...but never `-isystem` a directory the compiler already searches.** Go through
+  `$(call sysinclude,DIR)` in `Makefile.config`, never a bare `-isystem`. Passing a
+  default system directory is not a no-op: gcc and clang both de-duplicate it,
+  dropping the directory from its proper place at the *end* of the system chain and
+  searching it where the `-isystem` appeared — ahead of the libstdc++ headers.
+  `<cstdlib>` then does `#include_next <stdlib.h>`, which only considers directories
+  *after* the one holding it, so every translation unit dies with
+
+  ```
+  /usr/include/c++/16/cstdlib:83:15: fatal error: stdlib.h: No such file or directory
+     83 | #include_next <stdlib.h>
+  ```
+
+  `NETCDF_DIR=/usr` did exactly that, which is what a package-manager install means
+  on Debian/Ubuntu, and `EIGEN_DIR=/usr/include` does the same. Note the asymmetry:
+  `-I` is safe here — gcc documents that an `-I` naming a standard system directory
+  "is ignored. The directory is still searched but as a system directory at its
+  normal position" — so the fix is to filter, not to downgrade to `-I`, which would
+  re-arm the `-Werror` problem above. **`NETCDF_DIR`/`NETCDF_CXX_DIR` should be
+  unset for a system install**; with neither set, `Makefile.config` asks pkg-config.
+  `sysinclude` compares canonically because clang reports its C++ directories as
+  `/usr/lib/gcc/x86_64-linux-gnu/16/../../../../include/c++/16` where gcc reports
+  `/usr/include/c++/16`, and a probe that fails filters nothing — degrading to the
+  old behaviour rather than to a new error. It cannot be replaced by a "does this
+  directory hold the header we want" test: `/usr/include` really does hold
+  `netcdf.h`. CI's `Makefile.local` leaves `NETCDF_DIR` unset, which is the one
+  configuration where this is invisible, so a workflow step compiles one object with
+  `NETCDF_DIR=/usr` on every matrix leg — on every leg because the probe is a
+  compiler command whose output format differs between gcc and clang.
+* **A comma inside `$(if ...)` is an argument separator, not text.** `syslibdir` in
+  `Makefile.config` writes `-Wl$(comma)-rpath` rather than a literal `-Wl,-rpath`
+  for that reason. Spelled literally, make reads the body of
+  `$(if $(strip $(1)),-L$(1) -Wl,-rpath $(1))` as *then:* `-L$(1) -Wl` and *else:*
+  `-rpath $(1)`, so an empty argument emitted a bare `-rpath` that swallowed the
+  next flag and a real one silently lost its rpath. The `$(comma)` looks like
+  clutter and is load-bearing; don't inline it.
+* **`make -B` does not work in this tree.** `--always-make` tries to remake every
+  target including the included `Makefile.local`, whose rule is a bare
+  `$(error You need to provide a Makefile.local...)`, so `-B` fails immediately with
+  that message no matter what you asked for. To see the recipe for an
+  already-built target, delete it, or read the expanded variables from a throwaway
+  makefile that `include`s `Makefile.config` and `$(info)`s them.
 * **`COMPILER_ID` in `Makefile.config`** distinguishes gcc from clang for the few
   flags that differ: `-fprofile-abs-path` (gcc-only, a hard error on clang),
   `-fno-inline-small-functions` / `-fno-default-inline` (gcc-only, ignored with a
@@ -364,9 +720,61 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
   hard error, and `make coverage` fails with exit 64 on CI while passing locally.
   Anything that reads `.gcno`/`.gcda` must come from the same toolchain version
   that wrote them.
-* **Output filenames come from the config file's *stem*** (`Solver.cpp` uses
-  `inputFilePath.stem()`), so `.nc` / `.dat` / `.restart.nc` land in the current
-  directory regardless of any path in `OutputFilename`.
+* **`RF_cellwise` and `L_global` hold *time-dependent* boundary data, and only
+  `updateBoundaryConditions(t)` may fill them.** `initialiseMatrices` sizes and
+  zeroes them; `setInitialConditions` calls `updateBoundaryConditions(t0)` before
+  solving the initial `dydt` out of them, and `residual` / `updateMatricesForJacSolve`
+  refresh them at their own time. `initialiseMatrices` used to fill them itself at
+  a hardcoded `t = 0.0`, which was wrong twice over: a run with `t0 != 0` built its
+  initial condition from the wrong boundaries, and because `initialize()` skips
+  `initialiseMatrices` when already initialised, a second run on the same solver
+  solved its initial `dydt` out of the *previous run's final-time* boundary values.
+  That second effect is half of what made a second integration fail — see
+  `Tests/README.md`. Nothing in the tree notices a `t0` error, because every
+  fixture starts at zero, so `the_initial_condition_uses_boundary_data_at_t0` is
+  the only thing standing between that and a silent return.
+* **`dydtComplete` is deliberately not IDA's `dYdt`, and the duplication is the
+  point.** `AlgebraicDerivatives.cpp` solves the differentiated algebraic
+  constraints for `q'`, `sigma'`, `phi'` and `lambda'` — IDA never computes them,
+  because `IDA_YA_YDP_INIT` produces algebraic *values* and differential
+  *derivatives* — and writes the answer into its own vector. Folding it back into
+  `dYdt`, which is the obvious tidy-up, would change the state IDA takes its first
+  step from: the surviving symptom would be a step-size or convergence failure
+  somewhere later in the run, pointing nowhere near here. Only
+  `objectiveIsDecreasing()` reads it, and only a run that arms the gate pays for
+  it, so nothing else notices either way.
+* **The differential rows of that solve are the identity on purpose**, and so are
+  the Dirichlet trace rows. `u'` and a differential scalar's `mu'` are *data* —
+  IDA has them — so their rows carry `1` and the known derivative rather than a
+  differentiated equation, which would bring in `u''`. The Dirichlet trace rows
+  look like a redundant special case and are not: `residual` never writes them
+  (`lambda = g_D(t)` is imposed inside the linear solve, which is also why a
+  finite-differenced Jacobian is rank-deficient by exactly the number of Dirichlet
+  boundaries), so without their own identity row and `dg_D/dt` the matrix is
+  singular by that same count. `the_u_block_round_trips_through_the_identity_row`
+  covers the first; the second is what
+  `the_derivatives_match_a_manufactured_solution` checks through `lambda'`.
+* **The central-difference step there is `cbrt(eps)`, not `sqrt(eps)`.** `sqrt(eps)`
+  is the *one-sided* choice, where truncation is `O(h F'')`; a central difference
+  has truncation `O(h^2 F''')` against round-off `O(eps |F| / h)`, and those
+  balance at `eps^(1/3)`. Using `sqrt(eps)` leaves round-off at `eps/h = 1.5e-8`
+  against a truncation of `2e-16` — eight orders apart rather than comparable — and
+  it measurably costs 2.5 decimal places: the manufactured case gets `q'` to 3.4e-8
+  with `sqrt(eps)` and to 5.6e-11 with `cbrt(eps)`, on a problem whose explicit
+  time dependence is linear in `t` and therefore has *no* truncation error at any
+  step. The design document specified `sqrt(eps)` and called it the central
+  choice; it isn't.
+* **`OutputFilename` names the output, and only its *basename* survives.**
+  `loadSolverConfig` fills it from the config file's stem when the key is absent,
+  so a run still defaults to `myrun.conf` -> `myrun.nc`; `Solver.cpp` then takes
+  `inputFilePath.filename()` of it. `filename()`, **not** `stem()`: the value it
+  is given is already a base name, and stemming it a second time would turn
+  `run.v2.conf` into `run.nc`. The directory part is dropped, so `.nc` / `.dat` /
+  `.restart.nc` still land in the current directory whatever path
+  `OutputFilename` carries — `OutputFilename = "runs/case7"` writes `./case7.nc`.
+  That is pinned by `test_output_filename_keeps_only_the_basename`, which records
+  it as behaviour to change deliberately rather than by accident. An explicit
+  `RestartFile` is *not* filtered that way and is opened as given.
 * **Not every `.nc` in the tree is output.** `clean_data` sweeps generated data
   from the directories in `CLEAN_DATA_DIRS`, sparing `*.ref.nc` / `*.ref.dat`.
   `Tests/UnitTests` is deliberately absent: its data files are tracked test
@@ -374,19 +782,57 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
   (`SystemSolverTests.cpp:378`) — and the second has no `.ref.` in its name, so
   the keep-pattern would not save it. Check tracked status, not the filename,
   before adding a directory there. Unit-test output itself lands at the repo
-  root, because `make test` runs the binary from there.
+  root, because `make test` runs the binary from there. `python` is absent for a
+  different reason: since the drivers moved to `python-examples/`, nothing writes
+  output there.
+* **Unanchored `.gitignore` patterns match at every depth.** The root scratch
+  entries (`Plots/`, `runs-for-bhavin/`, `scalar-tests/`, `toy-model/`) are
+  written with a leading slash for that reason: unanchored, `toy-model/` also
+  ignored `python-examples/toy-model/`, so the example was left out of a commit
+  with nothing to say so. `git check-ignore -v <path>` names the line
+  responsible.
 * **`printSources` reads the source cache through a basis of the residual's
   order.** With `Superconvergent = true` the cache holds `k+2` values per cell
   rather than `k+1`, so `SystemSolver::print` picks its basis and stride from the
   flag; hardcoding `k+1` there reads across cell boundaries.
 * **netCDF is the default output; the `.dat` files are opt-in.** A run writes
-  `<stem>.nc` and `<stem>.restart.nc` unconditionally. The plain-text gnuplot
-  output needs `WriteDatFile = true`, and `<stem>.dydt.dat` / `<stem>.res.dat`
-  need `WriteDebugDatFiles = true` *and* a `PHYSICS_DEBUG` build. Both options
-  default to false and are accepted by `runManta` and `PyRunner::configure`
-  alike.
+  `<stem>.nc` and `<stem>.restart.nc` unless `WriteOutput = false`, which gates
+  every netCDF and restart write in `Solver.cpp`. The plain-text gnuplot output
+  needs `WriteDatFile = true`, and `<stem>.dydt.dat` / `<stem>.res.dat` need
+  `WriteDebugDatFiles = true` *and* a `PHYSICS_DEBUG` build. Those two are
+  deliberately **not** nested under `WriteOutput`: they are opt-in already, so a
+  config asking only for `WriteDatFile` gets it. All three are accepted by
+  `runManta` and `PyRunner::configure` alike — `WriteOutput` was read into an
+  unused local on the Python side and read by nothing at all on the TOML side
+  until the schema landed, while nine test call sites passed `WriteOutput: False`
+  and went on writing the files they believed they had suppressed.
 * **Tests reach private `SystemSolver` members** through `MANTA_TEST_PRIVATE`,
   which a `-DTEST` build widens to `public`. No friend declarations needed.
+* **The extension's ABI suffix comes from `PYTHON_CONFIG`, and the venv need not
+  agree with it.** `make python` names the module from
+  `$(PYTHON_CONFIG) --extension-suffix` and takes its headers from the same
+  program, so the two always match each other — but not necessarily the interpreter
+  that will import them. `PYTHON_CONFIG` prefers a `pythonX.Y-config` matching
+  `.venv`, and falls back to plain `python3-config` when there is none; that follows
+  the distribution's unversioned `python3` symlink. On a box whose `python3` has
+  moved ahead of the venv, the fallback builds `_manta.cpython-314-*.so` while
+  `.venv` runs 3.13, and `make python` *succeeds* while `python_tests`,
+  `stubs-check` and `typecheck` all fail — each with a message pointing somewhere
+  else. pytest exits "manta package not importable. Build it with `make python`",
+  which you just did. `typecheck` reports an `ImportError` for `_manta` dressed up
+  as "most likely due to a circular import", which sends you into `__init__.py`.
+  `stubs-check` is the worst of the three: regenerating the stub needs the import
+  too, so it fails to write one and then reports `_manta.pyi is stale -- run 'make
+  stubs' and commit the result`, which is a claim about a committed file that is
+  in fact fine. Check `ls python/manta/*.so` against
+  `python3 -c 'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX"))'`
+  before believing any of those three failures. The fix is the matching
+  `pythonX.Y-dev` package, or `make venv VENV_PYTHON=... VENV_CREATE_FLAGS=--clear`;
+  the header directory alone is not enough, since a `/usr/include/python3.13` left
+  behind by other packages can exist with no `Python.h` in it. `Makefile:34-51`
+  documents the mechanism, and `make python PYTHON_CONFIG=pythonX.Y-config`
+  overrides it — but only if that program is installed, because `pythonX.Y-config`
+  derives its prefix from `argv[0]`.
 * **gcov counts a templated line once per instantiation**, which makes
   `NetCDFIO.hpp` and `util/trapezoid.hpp` look far worse than they are. Judge
   those by distinct uncovered lines; `Tests/README.md` has the numbers.
@@ -400,14 +846,6 @@ These are deliberate and documented, not oversights — see `Tests/README.md` an
   adjoint output. The gradients themselves are verified through
   `PyRunner::getAdjointGradients` in `python/Tests/test_adjoint.py` and
   `test_adjoint_aux.py`.
-* **A second *integration* on the same `SystemSolver` does not work.** `IDASolve`
-  fails with `IDA_ERR_FAIL` (-3) on the first step of the second run. This is not
-  a consequence of the three-phase split — `main` before it failed identically
-  through two `runSolver` calls — it has simply never been exercised, because
-  `PyRunner::configure` builds a fresh `SystemSolver` and the standalone binary
-  runs once and exits. Calling `initialize` again after `destroySundials` *does*
-  work, and rebuilds the initial condition; it is completing a second time loop
-  that fails. Undiagnosed; `Tests/README.md` has the detail.
 * Restarting is fragile at tight tolerances, more so with `nAux > 0`; each
   regression round-trip case runs at the tightest tolerance that completes.
 * `python/Tests/test_reference_solutions.py::test_jax_aux_test` is a `strict=True`

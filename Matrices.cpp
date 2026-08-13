@@ -137,7 +137,7 @@ void SystemSolver::dSourcedsigma_Mat( Matrix& dSourcedsigmaMatrix, DGSoln const&
 	DerivativeSubMatrix( dSourcedsigmaMatrix, &TransportSystem::dSources_dsigma, Y, I );
 }
 
-void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Index intervalIndex )
+void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Index intervalIndex, Time tEval )
 {
 	Interval const &I( grid[ intervalIndex ] );
 
@@ -173,7 +173,7 @@ void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Index in
 			dSdS.setZero();
 			double x_j = I.fromRef( Y.getBasis().Nodes( j ) );
 			State s = Y.evalOnNode( intervalIndex, j );
-			problem->dSources_dScalars( XVar, dSdS, s, x_j, jt );
+			problem->dSources_dScalars( XVar, dSdS, s, x_j, tEval );
 			nodal.col( j ) = dSdS;
 		}
 
@@ -188,7 +188,7 @@ void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Index in
 
 void SystemSolver::dSources_dScalars_StarMat(Matrix &mat, GlobalState const &states,
 											 std::vector<Position> const &points,
-											 Index intervalIndex)
+											 Index intervalIndex, Time tEval)
 {
 	assert(mat.rows() == nVars * (k + 1));
 	assert(mat.cols() == nScalars);
@@ -207,7 +207,7 @@ void SystemSolver::dSources_dScalars_StarMat(Matrix &mat, GlobalState const &sta
 		{
 			dSdS.setZero();
 			const Index g = intervalIndex * nStar + m;
-			problem->dSources_dScalars(XVar, dSdS, states[g], points[g], jt);
+			problem->dSources_dScalars(XVar, dSdS, states[g], points[g], tEval);
 			nodal.col(m) = dSdS;
 		}
 
@@ -397,16 +397,16 @@ void SystemSolver::dAux_Mat( Eigen::Ref<Matrix> mat, DGSoln const& Y, Index inte
 
       State dG1( nVars, nScalars, nAux ),dG2( nVars, nScalars, nAux );
       ( problem->AuxGPrime )( Aux, dG1, Y_plus, y_plus, jt );
-      dG_du_vals1 = dG1.Variable;
-      dG_dq_vals1 = dG1.Derivative;
-      dG_dsigma_vals1 = dG1.Flux;
-      dG_dPhi_vals1 = dG1.Aux;
+      dG_du_vals1 = dG1.u();
+      dG_dq_vals1 = dG1.q();
+      dG_dsigma_vals1 = dG1.sigma();
+      dG_dPhi_vals1 = dG1.phi();
 
       ( problem->AuxGPrime )( Aux, dG2, Y_minus, y_minus, jt );
-      dG_du_vals2 = dG2.Variable;
-      dG_dq_vals2 = dG2.Derivative;
-      dG_dsigma_vals2 = dG2.Flux;
-      dG_dPhi_vals2 = dG2.Aux;
+      dG_du_vals2 = dG2.u();
+      dG_dq_vals2 = dG2.q();
+      dG_dsigma_vals2 = dG2.sigma();
+      dG_dPhi_vals2 = dG2.phi();
 
 
 

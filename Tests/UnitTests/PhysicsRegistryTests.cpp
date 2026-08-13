@@ -34,9 +34,9 @@ const toml::value empty_config = u8R"(
 class RegisteredProbe : public TransportSystem
 {
 public:
-    RegisteredProbe(toml::value const &config, Grid const &g) : lower(g.lowerBoundary())
+    RegisteredProbe(toml::value const &config, Grid const &g)
+        : TransportSystem({.variables = numberedFields(1)}), lower(g.lowerBoundary())
     {
-        nVars = 1;
         // Read something from the config so a test can prove the value really
         // reached the constructor rather than being defaulted.
         if (config.count("Registered") == 1)
@@ -45,7 +45,7 @@ public:
 
     Value SigmaFn(Index, const State &s, Position, Time) override
     {
-        return s.Derivative[0];
+        return s.q(0);
     }
     Value Sources(Index, const State &, Position, Time) override { return 0.0; }
     void dSigmaFn_du(Index, VectorRef v, const State &, Position, Time) override
@@ -75,12 +75,13 @@ public:
     double lower;
 };
 
-// A second, distinguishable type for the duplicate-name test.
+// A second, distinguishable type for the duplicate-name test. It used to
+// override getVariableName to tell itself apart; names come from the spec now,
+// so the dynamic_cast at the assertion is the whole discriminator.
 class OtherProbe : public RegisteredProbe
 {
 public:
     using RegisteredProbe::RegisteredProbe;
-    std::string getVariableName(Index) override { return "other"; }
 };
 
 // Registered the way real physics cases are: by a namespace-scope object whose
@@ -130,32 +131,45 @@ BOOST_AUTO_TEST_CASE(explicit_registration_round_trips_config_and_grid)
     BOOST_TEST(probe->lower == -2.5);
 }
 
-BOOST_AUTO_TEST_CASE(an_unknown_name_returns_null_rather_than_throwing)
+BOOST_AUTO_TEST_CASE(an_unknown_name_throws_and_names_what_is_available)
 {
-    // MaNTA.cpp relies on the null return to print the list of available
-    // models. It used to dereference the result first (fixed in Stage 3), so
-    // this contract is load-bearing.
+    // This used to return nullptr, leaving every caller to remember the check;
+    // the one that forgot dereferenced it, so an unrecognised TransportSystem
+    // segfaulted. The list of registered names travels in the message because
+    // the usual cause is a case whose object file was never linked in.
     Grid grid(0.0, 1.0, 4);
-    BOOST_TEST(PhysicsCases::InstantiateProblem("NoSuchPhysicsCase", empty_config, grid) ==
-               nullptr);
+    BOOST_CHECK_THROW(PhysicsCases::InstantiateProblem("NoSuchPhysicsCase", empty_config, grid),
+                      std::invalid_argument);
+
+    try
+    {
+        PhysicsCases::InstantiateProblem("NoSuchPhysicsCase", empty_config, grid);
+    }
+    catch (std::invalid_argument const &e)
+    {
+        const std::string what(e.what());
+        BOOST_TEST(what.find("NoSuchPhysicsCase") != std::string::npos);
+        // A name that is definitely registered, from the fixture above.
+        BOOST_TEST(what.find("UnitTestAutoRegisteredProbe") != std::string::npos);
+    }
 }
 
-BOOST_AUTO_TEST_CASE(a_duplicate_name_does_not_displace_the_first_registration)
+BOOST_AUTO_TEST_CASE(a_duplicate_name_is_rejected_rather_than_silently_dropped)
 {
-    // RegisterPhysicsCase uses map::insert, which is a no-op when the key
-    // exists -- so the *first* registration wins and a later one is silently
-    // ignored. That is worth pinning either way: someone adding a physics case
-    // whose name collides with an existing one would otherwise be baffled to
-    // find their class never instantiated.
+    // map::insert is a no-op when the key exists, so the *first* registration
+    // used to win and the second was dropped without a word -- leaving someone
+    // whose case name collided with an existing one to wonder why their class
+    // was never instantiated. It is an error now.
     PhysicsCases::RegisterPhysicsCase("UnitTestDuplicateProbe",
                                       &createTransportSystem<RegisteredProbe>);
-    PhysicsCases::RegisterPhysicsCase("UnitTestDuplicateProbe",
-                                      &createTransportSystem<OtherProbe>);
+    BOOST_CHECK_THROW(PhysicsCases::RegisterPhysicsCase("UnitTestDuplicateProbe",
+                                                        &createTransportSystem<OtherProbe>),
+                      std::invalid_argument);
 
+    // The first registration is still intact and still instantiable.
     Grid grid(0.0, 1.0, 4);
     auto p = PhysicsCases::InstantiateProblem("UnitTestDuplicateProbe", empty_config, grid);
     BOOST_TEST_REQUIRE(p != nullptr);
-    BOOST_TEST(p->getVariableName(0) == "Var0");
     BOOST_TEST(dynamic_cast<OtherProbe *>(p.get()) == nullptr);
 }
 

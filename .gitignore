@@ -20,7 +20,8 @@ python/__pycache__/
 build/
 python/Tests/__pycache__/
 python/Tests/.pytest_cache/
-python/.ipynb_checkpoints/
+python-examples/.ipynb_checkpoints/
+python-examples/*/.ipynb_checkpoints/
 python/random/
 .clangd
 .clang-format
@@ -30,6 +31,8 @@ tags
 *.h5
 venv
 .venv/
+# `make docs` builds this from docs/requirements.txt.
+.venv-docs/
 gmon.out
 *.sh
 slurm-*.out
@@ -46,15 +49,34 @@ slurm-*.out
 *.gcov
 coverage/
 
-# Sphinx (docs/), built locally with
-#   sphinx-build -W -b html docs docs/_build/html
+# Sphinx (docs/), built locally with `make docs`.
 docs/_build/
 
-# Local scratch / run output
-Plots/
-runs-for-bhavin/
-scalar-tests/
-toy-model/
+# Local scratch / run output. Anchored with a leading slash because these are
+# root-level scratch directories, and an unanchored pattern matches at every
+# depth: `toy-model/` was quietly swallowing python-examples/toy-model/, so the
+# example was ignored rather than committed and nothing said so.
+/Plots/
+/runs-for-bhavin/
+/scalar-tests/
+/toy-model/
 __pycache__/
 .pytest_cache/
+
+# Cached polynomial fits, pickled by python-examples/mirror-plasma/landremann.py
+# for its constants.py to read back: build output, not input.
 *.pkl
+
+# Build artefacts of `make install` / `pip install .`
+libmanta.so
+manta.pc
+python/*.egg-info/
+python/manta/_manta*.so
+python/manta/_manta*.d
+docs/_build/
+
+# Reference papers. refs/Refs.md is the tracked index -- it lists each paper with
+# its doi and the filename it is expected under -- but the PDFs themselves are
+# copyrighted publisher material and several MB each, so they stay out of the
+# repository. Fetch them from the dois in Refs.md.
+refs/*.pdf

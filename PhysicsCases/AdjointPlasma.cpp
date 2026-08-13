@@ -31,12 +31,22 @@ constexpr static double C5 = 1.05060e-5;
 constexpr static double C6 = 0.0;
 constexpr static double C7 = 0.0;
 
-AdjointPlasma::AdjointPlasma(toml::value const &config, Grid const &grid)
+SystemSpec AdjointPlasma::buildSpec(toml::value const &)
 {
-    nVars = 2;
-    nScalars = 0;
-    nAux = 0;
+    // Two channels: ion energy and electron energy. There was a third, density,
+    // behind `if (evolveDensity) nVars++;` -- but evolveDensity is a hardcoded
+    // false that nothing in this case or its config ever writes, so that branch
+    // has never run. If it is ever wired up, the count has to be decided here,
+    // before the object exists, and the matching uL/uR entries with it.
+    return {.variables = {{"IonEnergy", "ion energy density", "n0 T0",
+                           BoundaryKind::Neumann, BoundaryKind::Dirichlet},
+                          {"ElectronEnergy", "electron energy density", "n0 T0",
+                           BoundaryKind::Neumann, BoundaryKind::Dirichlet}}};
+}
 
+AdjointPlasma::AdjointPlasma(toml::value const &config, Grid const &grid)
+    : AutodiffTransportSystem(config, grid, buildSpec(config))
+{
     xL = grid.lowerBoundary();
     xR = grid.upperBoundary();
 
@@ -91,12 +101,6 @@ AdjointPlasma::AdjointPlasma(toml::value const &config, Grid const &grid)
         uL[Channel::ElectronEnergy] = (3. / 2.) * InitialPeakDensity * InitialPeakTe;
         uR[Channel::ElectronEnergy] = (3. / 2.) * nEdge * TeEdge;
 
-        if (evolveDensity)
-        {
-            nVars++;
-            uL.push_back(nEdge);
-            uR.push_back(nEdge);
-        }
     }
     else if (config.count("AdjointPlasma") == 0)
     {
@@ -259,16 +263,6 @@ Value AdjointPlasma::LowerBoundary(Index i, Time t) const
 Value AdjointPlasma::UpperBoundary(Index i, Time t) const
 {
     return uR[i];
-}
-
-bool AdjointPlasma::isLowerBoundaryDirichlet(Index i) const
-{
-    return false;
-}
-
-bool AdjointPlasma::isUpperBoundaryDirichlet(Index i) const
-{
-    return true;
 }
 
 Real AdjointPlasma::Gamma(RealVector u, RealVector q, Real x, Time t) const

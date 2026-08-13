@@ -1,15 +1,20 @@
 Configuration
 =============
 
-There are two ways to configure a run, and they are **not the same interface**:
+There are two ways to configure a run:
 
 * a **TOML file** given to the ``MaNTA`` binary, described here and read by
   ``runManta`` in ``MaNTA.cpp``;
 * a **Python dict** passed to ``Runner.configure``, read by ``PyRunner.cpp``.
 
-Most keys are common to both. Those that are not, and those whose names or
-defaults differ, are collected in :ref:`config-divergences` below — check there
-before assuming a key carries across.
+They are the **same set of keys**, declared once in ``ConfigSchema.cpp`` and read
+by both through ``loadSolverConfig``. A key has the same name, the same type and
+the same default whichever way it arrives. The few places the two surfaces still
+differ are deliberate, and are listed in :ref:`config-divergences` below.
+
+``./MaNTA --list-options`` prints the current schema — every key, its type, its
+default and a line of description — straight from the table this page is written
+from.
 
 A minimal file
 --------------
@@ -40,13 +45,18 @@ A minimal file
 its own parameters from its own table beside it — the name of that table is the
 case's business, not the solver's.
 
-.. warning::
+.. note::
 
-   **Unknown keys are silently ignored.** Every optional key is read through
-   ``toml::find_or``, so a misspelled or obsolete key is inert rather than an
-   error. If a setting appears to have no effect, check its spelling and its
-   capitalisation first: ``AggressiveTimesteps`` and ``aggressiveTimesteps`` are
-   different keys on different interfaces, and neither warns about the other.
+   **An unknown key in** ``[configuration]`` **is an error**, and the message
+   names the nearest key in the schema::
+
+      ERROR: Unknown configuration key 'Superconvergnet'. Did you mean 'Superconvergent'?
+
+   That sweep covers ``[configuration]`` only. A physics case's own table is the
+   case's business and is not checked against anything.
+
+   A missing required key is an error too, and every one missing is reported in
+   the same message rather than one per run.
 
 Problem definition
 ------------------
@@ -59,10 +69,15 @@ Problem definition
      - Default
      - Meaning
    * - ``TransportSystem``
-     - *required*
+     - *required, file only*
      - Name of the physics case to instantiate, as registered by
-       ``REGISTER_PHYSICS_IMPL``. An unrecognised name is an error. Not used by
-       the Python interface, which is handed the object directly.
+       ``REGISTER_PHYSICS_IMPL``. An unrecognised name is an error. A ``Runner``
+       is handed the object instead, so passing this key to ``configure`` is an
+       error rather than being ignored.
+   * - ``PhysicsPlugins``
+     - ``[]``, *file only*
+     - Shared objects to ``dlopen`` before instantiating, for cases built
+       outside this tree. See :doc:`out_of_tree`.
    * - ``Polynomial_degree``
      - *required*
      - The degree :math:`k` of the per-cell polynomial basis; each field carries
@@ -73,7 +88,18 @@ Problem definition
      - Number of cells.
    * - ``Lower_boundary``, ``Upper_boundary``
      - *required*
-     - The ends of the domain.
+     - The ends of the domain. Required unless ``Grid_points`` is given or the
+       run is a restart, both of which supply the cell boundaries themselves.
+   * - ``Grid_points``
+     - ``[]``
+     - Explicit cell boundaries, as an array. Supersedes ``Lower_boundary``,
+       ``Upper_boundary`` and ``Grid_size``.
+   * - ``zeroFlux``
+     - ``false``
+     - What a **Neumann** boundary condition constrains: with this off the case's
+       boundary value is imposed on the gradient :math:`q` (zero-gradient), with
+       it on it is imposed on the flux :math:`\sigma` (zero-flux). Dirichlet
+       boundaries are unaffected either way.
    * - ``High_Grid_Boundary``
      - ``false``
      - Refine the grid towards both ends instead of spacing cells uniformly.
@@ -93,11 +119,14 @@ Time integration
      - Default
      - Meaning
    * - ``t_final``
-     - *required*
-     - Time to integrate to.
+     - *required in a file*
+     - Time to integrate to. Optional in a dict, where ``Runner.run(tFinal)``
+       supplies it; ``Runner.run()`` with no argument uses this key and raises
+       if it was not given.
    * - ``t_initial``
      - ``0.0``
-     - Time the run starts at.
+     - Time the run starts at. ``tZero`` is a deprecated spelling of this and
+       still works, with a warning.
    * - ``delta_t``
      - *required*
      - **The output interval, not the timestep.** The loop advances ``tout`` by
@@ -108,22 +137,37 @@ Time integration
      - ``1e-3``
      - IDA's relative tolerance.
    * - ``Absolute_tolerance``
-     - ``1e-2``
+     - ``1e-3``
      - IDA's absolute tolerance. Either a single value or an array with one
-       entry per variable. Note the default differs between the two interfaces —
-       see :ref:`config-divergences`.
+       entry per variable.
    * - ``MinStepSize``
      - ``1e-7``
      - Steps smaller than this end the run.
+   * - ``initialTimestep``
+     - ``0.0``
+     - First step to attempt. Zero lets IDA pick one.
    * - ``AggressiveTimesteps``
      - ``false``
      - Let IDA grow the step by up to 10× rather than 2× between steps. Useful
        when the transient is not the interesting part, at the cost of making IDA
-       more likely to overshoot and retry.
+       more likely to overshoot and retry. ``aggressiveTimesteps`` is a
+       deprecated spelling of this and still works, with a warning.
    * - ``SteadyStateTolerance``
      - *unset*
      - If present, the run terminates when :math:`\mathrm{d}y/\mathrm{d}t` falls
-       below this rather than at ``t_final``.
+       below this rather than at ``t_final``. It is the key's **presence** that
+       arms that, not its value, on both surfaces. ``Runner.run_ss()`` arms it
+       whether or not the key was given, and falls back to ``1e-3``.
+   * - ``ObjectiveDecreaseTolerance``
+     - ``0.0`` — off
+     - If nonzero, the run is abandoned before the time loop when
+       :math:`\mathrm{d}G/\mathrm{d}t < -` this at the initial condition. For an
+       optimisation sweep that turns a step which was going to make the objective
+       worse into the cost of initialisation alone. Requires ``solveAdjoint``,
+       since the adjoint problem is what defines :math:`G`. Absolute, not
+       relative — it carries the units of the objective over time, so there is no
+       number worth defaulting to and zero means "off". A negative value is an
+       error rather than a quiet "off". See :doc:`adjoints`.
    * - ``tau``
      - ``1.0``
      - The HDG stabilisation parameter. Constant across the domain.
@@ -138,11 +182,20 @@ Output
    * - Key
      - Default
      - Meaning
+   * - ``OutputFilename``
+     - the config file's stem
+     - Base name for every file the run writes. A dict has no file to take a
+       name from, so this key is **required** by ``Runner.configure``.
    * - ``OutputPoints``
      - ``301``
      - Number of **spatial** points at which the solution is sampled for output.
        Independent of ``Grid_size``: the solution is a polynomial per cell, so it
        can be sampled as finely as you like.
+   * - ``WriteOutput``
+     - ``true``
+     - Write ``<stem>.nc`` and ``<stem>.restart.nc``. Turn it off for a run whose
+       result is read out of the process rather than off disk — an optimisation
+       sweep evaluating an objective, say.
    * - ``WriteDatFile``
      - ``false``
      - Also write the plain-text gnuplot output ``<stem>.dat``.
@@ -151,8 +204,13 @@ Output
      - Also write ``<stem>.dydt.dat`` and ``<stem>.res.dat``. Additionally
        requires a ``PHYSICS_DEBUG`` build (``make DEBUG=on``).
 
-netCDF output is written unconditionally and is not configurable here; the file
-names come from the *config file's stem*. See :doc:`running`.
+``<stem>`` throughout is ``OutputFilename``. The two ``.dat`` options are
+deliberately **not** nested under ``WriteOutput``: they are opt-in already, so a
+config that asks only for ``WriteDatFile`` gets what it asked for.
+
+Output lands in the **current working directory** whatever directory
+``OutputFilename`` names — only the file-name part of it is used, so
+``OutputFilename = "runs/case7"`` writes ``./case7.nc``. See :doc:`running`.
 
 Restarting
 ----------
@@ -169,7 +227,8 @@ Restarting
      - Resume from a restart file instead of building an initial condition.
    * - ``RestartFile``
      - ``<stem>.restart.nc``
-     - Which file to resume from.
+     - Which file to resume from. Unlike the output names, a path given here is
+       used as it stands.
 
 .. note::
 
@@ -199,60 +258,86 @@ Adjoints and superconvergence
        scheme. Requires :math:`k \ge 1`, and is incompatible with spatial adjoint
        parameters. See :doc:`superconvergence`.
 
+.. The label is `config-divergences` for historical reasons: it named a section
+   listing how the two readers disagreed, and docs/python.rst links to it.
+
 .. _config-divergences:
 
-Differences between the TOML file and ``Runner.configure``
-----------------------------------------------------------
+One schema, two surfaces
+------------------------
 
-The Python interface takes a dict rather than a file. It is not a wrapper around
-the TOML reader, and the two lists of keys have drifted:
+Both readers work from the same table. It is declared once, in
+``ConfigSchema.cpp``, and read by ``loadSolverConfig`` (``SolverConfig.cpp``)
+through a ``ConfigSource`` — ``TomlConfigSource`` for a file,
+``DictConfigSource`` for a dict — after which one function,
+``applySolverConfig``, applies the result to the solver. So a key has the same
+name, the same type and the same default whichever surface it arrives on, and
+an option cannot exist on one and not the other.
+
+Deprecated spellings
+~~~~~~~~~~~~~~~~~~~~
+
+Two keys used to have a different name on each side, which is the sort of thing
+one table prevents and two tables did not. Both old spellings still work, and
+warn::
+
+   WARNING: Configuration key 'tZero' is deprecated; use 't_initial'. Both are accepted for now.
 
 .. list-table::
    :header-rows: 1
-   :widths: 24 38 38
+   :widths: 34 34 32
 
-   * -
-     - TOML file
-     - ``Runner.configure`` dict
-   * - initial time
-     - ``t_initial``
+   * - Canonical
+     - Deprecated
+     - Which reader wanted it
+   * - ``t_initial``
      - ``tZero``
-   * - aggressive stepping
-     - ``AggressiveTimesteps``
+     - ``Runner.configure``
+   * - ``AggressiveTimesteps``
      - ``aggressiveTimesteps``
-   * - final time
-     - ``t_final``, a required key
-     - not a key — an argument to ``run(tFinal)``
-   * - physics case
-     - ``TransportSystem``, required
-     - not a key — the object is passed to ``configure``
-   * - ``Absolute_tolerance`` default
-     - ``1e-2``
-     - ``1e-3``
-   * - output file name
-     - not read at all; names derive from the config file's stem
-     - ``OutputFilename``, **required**
-   * - explicit cell boundaries
-     - not supported
-     - ``Grid_points``, a list of boundaries; ``Lower_boundary`` and
-       ``Upper_boundary`` are then unused
-   * - ``WriteOutput``
-     - not read (output is always written)
-     - supported, default ``true``
-   * - ``zeroFlux``, ``initialTimestep``
-     - not read
-     - supported
-   * - ``SteadyStateTolerance``
-     - absent means "integrate to ``t_final``"
-     - always present, default ``1e-3``; ``run_ss`` is what uses it
+     - ``Runner.configure``
 
-Everything else is shared, with the same name and the same default:
-``restart``, ``RestartFile``, ``High_Grid_Boundary``,
-``Lower_Boundary_Fraction``, ``Upper_Boundary_Fraction``, ``Polynomial_degree``,
-``Grid_size``, ``Lower_boundary``, ``Upper_boundary``, ``tau``, ``delta_t``,
-``Relative_tolerance``, ``MinStepSize``, ``OutputPoints``, ``solveAdjoint``,
-``WriteDatFile``, ``WriteDebugDatFiles`` and ``Superconvergent``.
+Giving a key under both spellings at once is an error rather than a silent
+preference for one of them.
 
-The dict interface is declarative — ``PyRunner.cpp`` opens with a table of
-``Parameter`` entries carrying ``.required`` and ``._default`` — so that table is
-the authority on the Python side, as ``MaNTA.cpp`` is on the TOML side.
+What is still asymmetric
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Three things, all deliberate:
+
+* ``TransportSystem`` and ``PhysicsPlugins`` select the physics case. A
+  ``Runner`` is handed the object instead, so passing either to ``configure``
+  is an **error naming the reason**, rather than being accepted and ignored.
+* ``t_final`` is required in a config file, which has nothing else to supply the
+  end time with. It is optional in a dict: ``Runner.run(tFinal)`` overrides it,
+  and ``Runner.run()`` with no argument uses it — a driver legitimately runs one
+  configuration to many end times.
+* ``OutputFilename`` falls back to the config file's stem when it is read from a
+  file, and is required in a dict, where there is no file to take a name from.
+
+The three ``PythonModule`` keys are a fourth, smaller case: they are read by the
+``manta`` command rather than by the solver, and are in the schema so that a
+config file carrying them is not rejected. See :doc:`out_of_tree`.
+
+How a bad configuration is reported
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A configuration error is an exception, not a return code:
+
+* ``manta.run("myrun.conf")`` raises ``ValueError``;
+* ``Runner.configure`` raises ``RuntimeError``, which is what it has always
+  raised — a driver already catching it goes on working;
+* the ``MaNTA`` binary catches the same exception, prints one line to standard
+  error and exits 1.
+
+Conditions that are not about the configuration's *contents* keep reporting as
+they did. ``runManta`` — the binary, and ``manta.run`` — logs an error and
+returns 1 for a config file that does not exist, an unrecognised
+``TransportSystem``, or a restart file that will not open; that number is the
+binary's exit status and ``manta.run``'s return value. ``Runner.configure``,
+which has no exit status to hand back, raises ``RuntimeError`` for the restart
+file too.
+
+Finally, ``./MaNTA --list-options`` prints the schema as it actually stands —
+every key, its type, its default and a line of description. Prefer it to this
+page when the two disagree, and fix the page.

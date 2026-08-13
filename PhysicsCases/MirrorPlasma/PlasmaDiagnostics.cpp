@@ -1,4 +1,5 @@
 #include "../MirrorPlasma.hpp"
+#include "PyIntegrator.hpp"
 
 // omega & n are callables
 template <typename T1, typename T2>
@@ -536,7 +537,18 @@ void MirrorPlasma::writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t,
     else
         Iout = IRadial * I0;
     nc.AppendToTimeSeries("Current", Iout, tIndex);
-    nc.AppendToTimeSeries("ComputedCurrent", TotalCurrent(y, t) * I0, tIndex);
+    // Same nodal quadrature as the Current constraint uses, so the reported
+    // number is the one the solver is actually driving to zero rather than a
+    // more accurate one it never sees.
+    {
+        const Grid &g = y.getGrid();
+        nc.AppendToTimeSeries("ComputedCurrent",
+                              TotalCurrent(y.evalOnNodes(), y.getPoints(),
+                                           Integrator::getIntegrationWeights(y.getBasis(), g),
+                                           Integrator::getPhiBoundary(y.getBasis(), g), t) *
+                                  I0,
+                              tIndex);
+    }
 
     // Wrap DGApprox with lambdas for heating functions
     Fn VisHeating = [&](double V)

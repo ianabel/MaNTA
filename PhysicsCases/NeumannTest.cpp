@@ -8,11 +8,23 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(NeumannTest);
 
-NeumannTest::NeumannTest(toml::value const &config, Grid const &grid)
+SystemSpec NeumannTest::buildSpec(toml::value const &config)
 {
-    // Always set nVars in a derived constructor
-    nVars = 1;
+    bool lowerNeumann = false, upperNeumann = false;
+    if (config.count("DiffusionProblem") == 1)
+    {
+        auto const &DiffConfig = config.at("DiffusionProblem");
+        lowerNeumann = toml::find_or(DiffConfig, "LowerNeumann", false);
+        upperNeumann = toml::find_or(DiffConfig, "UpperNeumann", false);
+    }
+    return {.variables = {{"u", "the diffused quantity", "",
+                           lowerNeumann ? BoundaryKind::Neumann : BoundaryKind::Dirichlet,
+                           upperNeumann ? BoundaryKind::Neumann : BoundaryKind::Dirichlet}}};
+}
 
+NeumannTest::NeumannTest(toml::value const &config, Grid const &grid)
+    : TransportSystem(buildSpec(config))
+{
     xL = grid.lowerBoundary();
     xR = grid.upperBoundary();
 
@@ -34,14 +46,14 @@ NeumannTest::NeumannTest(toml::value const &config, Grid const &grid)
     growth = toml::find_or(DiffConfig, "growth", 1.0);
     growth_rate = toml::find_or(DiffConfig, "growth_rate", 0.5);
 
-    lowerNeumann = toml::find_or(DiffConfig, "LowerNeumann", false);
-    upperNeumann = toml::find_or(DiffConfig, "UpperNeumann", false);
 }
 
-// Dirichlet Boundary Condition
+// A Neumann boundary fixes the flux, a Dirichlet one fixes u, so which of the
+// two this returns follows from the boundary kind. That now comes from the spec
+// rather than from a second pair of bools parsed out of the same config keys.
 Value NeumannTest::LowerBoundary(Index, Time) const
 {
-    if (lowerNeumann)
+    if (!isLowerBoundaryDirichlet(0))
         return InitialDerivative(0, xL);
     else
         return InitialValue(0, xL);
@@ -49,23 +61,20 @@ Value NeumannTest::LowerBoundary(Index, Time) const
 
 Value NeumannTest::UpperBoundary(Index, Time) const
 {
-    if (upperNeumann)
+    if (!isUpperBoundaryDirichlet(0))
         return InitialDerivative(0, xR);
     else
         return InitialValue(0, xR);
 }
 
-bool NeumannTest::isLowerBoundaryDirichlet(Index) const { return !lowerNeumann; };
-bool NeumannTest::isUpperBoundaryDirichlet(Index) const { return !upperNeumann; };
-
 Value NeumannTest::SigmaFn(Index, const State &s, Position x, Time)
 {
-    return kappa * s.Derivative[0];
+    return kappa * s.q(0);
 }
 
 Value NeumannTest::Sources(Index, const State &s, Position x, Time t)
 {
-    // double u = s.Variable[0];
+    // double u = s.u(0);
     double S = SourceStrength;
 
     return S;

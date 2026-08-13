@@ -715,7 +715,7 @@ BOOST_AUTO_TEST_CASE( dg_soln_construction )
     BOOST_TEST( single_var.lambda( 0 )( 5 ) == 1.0 );
 
     single_var.AssignSigma( []( Index, const State& s, Position x, Time ) {
-            double u = s.Variable[0], q = s.Derivative[0];
+            double u = s.u(0), q = s.q(0);
             return (2 * u - x) * ( 1.0 - q*q );
             } );
 
@@ -731,7 +731,7 @@ BOOST_AUTO_TEST_CASE( dg_soln_construction )
     other_var.EvaluateLambda();
 
     other_var.AssignSigma( []( Index, const State& s, Position x, Time ) {
-            double u = s.Variable[0];
+            double u = s.u(0);
             return 1.0 - u * u;
             } );
 

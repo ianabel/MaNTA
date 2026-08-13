@@ -34,6 +34,18 @@ int JacSetup(sunrealtype tt, sunrealtype cj, N_Vector yy, N_Vector yp, N_Vector 
 void SystemSolver::runSolver(double tFinal)
 {
 	initialize();
+
+	// The dG/dt gate, which is why the three phases are separate: the objective's
+	// time derivative is a property of the initial condition, so it can be asked
+	// after initialize() and answered before paying for integrate(). Disarmed
+	// unless setObjectiveDecreaseTolerance has been called, in which case this is
+	// false and the run proceeds exactly as before.
+	if (objectiveIsDecreasing())
+	{
+		destroySundials();
+		return;
+	}
+
 	try
 	{
 		integrate(tFinal);
@@ -46,9 +58,59 @@ void SystemSolver::runSolver(double tFinal)
 	destroySundials();
 }
 
+// Does the objective get worse from here?
+//
+// Every objective must clear the bar: one that is falling faster than the
+// tolerance rejects the step even if the others improve, which is the
+// all-must-improve rule origin/optimize-mode used and worth keeping -- a sweep
+// that accepts a step because two of three objectives improved is not maximising
+// anything in particular.
+//
+// The sign convention is that optimisation *maximises* G, so a decrease is the
+// bad direction. The tolerance is one-sided slack on that: dG/dt may dip by up to
+// objective_decrease_tol before the step is called bad, which leaves room for a
+// transient that recovers, and keeps quadrature noise about zero from rejecting a
+// run that is really flat.
+bool SystemSolver::objectiveIsDecreasing()
+{
+	if (!CheckObjectiveDecrease)
+		return false;
+
+	if (!adjointProblem)
+		throw std::logic_error("ObjectiveDecreaseTolerance is set but no AdjointProblem is; there is no objective to test. Set solveAdjoint, or drop the tolerance.");
+
+	const Index ng = adjointProblem->getNg();
+	last_dGdt.resize(ng);
+
+	bool decreasing = false;
+	for (Index gIndex = 0; gIndex < ng; ++gIndex)
+	{
+		// dydtComplete, not IDA's dydt. At t0 the latter's q, sigma and phi
+		// blocks are identically zero, so three of dGdt's four terms would
+		// multiply by nothing and the objective would be judged on its u
+		// dependence alone -- an objective depending only on q would score
+		// exactly zero. computeAlgebraicTimeDerivatives() fills them in.
+		last_dGdt(gIndex) = dGdt(gIndex, y, dydtComplete);
+		if (last_dGdt(gIndex) < -objective_decrease_tol)
+			decreasing = true;
+	}
+
+	if (decreasing)
+		logmsg<LOG_LEVEL::WARNING>("Objective is decreasing at t = {}: dG/dt = {}, tolerance {}. Abandoning this run without integrating.",
+								   t0, last_dGdt(0), objective_decrease_tol);
+	else
+		logmsg<LOG_LEVEL::INFO>("dG/dt gate passed at t = {}: dG/dt = {}.", t0, last_dGdt(0));
+
+	objective_rejected = decreasing;
+	return decreasing;
+}
+
 void SystemSolver::initialize()
 {
 	int retval;
+
+	// A fresh run: whatever the gate concluded about the last one does not apply.
+	objective_rejected = false;
 
 	if (!initialised)
 		initialiseMatrices();
@@ -112,12 +174,20 @@ void SystemSolver::initialize()
 	if (ErrorChecker::check_retval((void *)id, "N_VClone", 0))
 		throw std::runtime_error("Sundials initialization Error, run in debug to find");
 
+	// setConstant, not Constant. Eigen's Constant is a *static factory*: calling it
+	// through an instance is legal, builds a fresh constant expression and discards
+	// it, so the line this replaces did nothing at all and `id` kept the zeros
+	// zeroCoeffs() left. N_VL1Norm(id) was 0 here, which told IDA the entire system
+	// was algebraic -- so IDASetId, and therefore the IDA_YA_YDP_INIT call below,
+	// have been solving a different initialisation problem from the intended one
+	// for as long as this code has existed. Nothing warns: Constant is not
+	// [[nodiscard]] and the statement declares no unused variable.
 	DGSoln isDifferential(nVars, grid, k, nScalars, nAux);
 	isDifferential.Map(N_VGetArrayPointer(id));
 	isDifferential.zeroCoeffs();
 	for (Index v = 0; v < nVars; ++v)
 		for (Index i = 0; i < nCells; ++i)
-			isDifferential.u(v).getCoeff(i).second.Constant(k + 1, 1.0);
+			isDifferential.u(v).getCoeff(i).second.setConstant(1.0);
 
 	for (Index s = 0; s < nScalars; ++s)
 	{
@@ -199,7 +269,13 @@ void SystemSolver::initialize()
 
 	IDASetMaxNonlinIters(IDA_mem, 10);
 
-	std::string baseName = inputFilePath.stem();
+	// filename(), not stem(): inputFilePath now holds the configuration's
+	// OutputFilename, which is already a base name -- the TOML source seeds it
+	// from the config file's stem. Stemming it a second time would turn a
+	// config named run.v2.conf into output called run.nc. filename() also keeps
+	// the long-standing behaviour that output lands in the current directory
+	// rather than beside any path given in OutputFilename.
+	std::string baseName = inputFilePath.filename().string();
 
 	// The .dat files are opt-in; netCDF below is what a run produces by
 	// default. Nothing is opened unless asked for, so a plain run leaves no
@@ -243,9 +319,14 @@ void SystemSolver::initialize()
 	//------------------------------Solve------------------------------
 	// Update initial solution to be within tolerance of the residual equation
 
+	// The `retval = 0` that used to sit between these two lines made the check
+	// below unreachable: IDACalcIC's status was overwritten before it was read, so
+	// a failed initial-condition calculation carried on silently into the time
+	// loop with whatever partial state IDA had reached. The name passed to
+	// check_retval said "IDASolve" too, so even the message would have pointed at
+	// the wrong call.
 	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, dt0 > 0.0 ? dt0 : dt);
-	retval = 0;
-	if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
+	if (ErrorChecker::check_retval(&retval, "IDACalcIC", 1))
 	{
 		throw std::runtime_error("IDACalcIC could not complete");
 	}
@@ -257,11 +338,63 @@ void SystemSolver::initialize()
 	if (nresevals > 10)
     logmsg<LOG_LEVEL::WARNING>("IDACalcIC required {} residual evaluations. Check settings in {}", nresevals, std::string(inputFilePath));
 
+	// Take IDACalcIC's result. It keeps the corrected initial condition inside IDA
+	// and hands it over only on request, so without this Y and dYdt still hold the
+	// state that was *fed* to CalcIC rather than the one it computed.
+	//
+	// Here, once, before anything reads Y or writes output. Everything downstream
+	// then means the same thing by "the initial condition": the t0 timeslice
+	// initialiseNetCDF writes below, the t0 block of the .dat file, the residual the
+	// debug path evaluates, and the state the dG/dt gate differentiates. It used to
+	// be fetched in two places for two reasons -- inside the debugDat branch, and
+	// again for the gate when armed -- which meant the t0 output reported the
+	// pre-CalcIC state on an ordinary run and the corrected one under
+	// WriteDebugDatFiles, so a discrepancy could reproduce only with debug output
+	// switched on.
+	//
+	// Note what this does *not* fix. dYdt's algebraic blocks stay zero: q, sigma and
+	// phi are algebraic, and IDA_YA_YDP_INIT computes algebraic values and
+	// differential derivatives, not the other way round. That is structural, not the
+	// old wrong id vector -- see at_t0_only_the_differential_part_of_dydt_exists --
+	// and it stays that way, because dYdt is the state IDA takes its first step
+	// from. The gate reads dydtComplete instead, which the two blocks below seed
+	// from this and then fill in.
+	//
+	// Checked, unlike every other use of it in this file's history: it fails with
+	// IDA_ILL_INPUT if IDA has already taken a step, and on failure it leaves Y and
+	// dYdt holding their *pre*-CalcIC values rather than reporting anything. That is
+	// the same silent-failure shape as the `retval = 0` described above, and it
+	// would show up as a run whose initial condition is quietly the uncorrected one.
+	retval = IDAGetConsistentIC(IDA_mem, Y, dYdt);
+	if (ErrorChecker::check_retval(&retval, "IDAGetConsistentIC", 1))
+		throw std::runtime_error("Could not retrieve the corrected initial condition");
+
+	// Seed the complete derivative from IDA's. Its algebraic blocks are zero at
+	// this point; computeAlgebraicTimeDerivatives() fills them when the gate is
+	// armed, and nothing else reads them.
+	//
+	// Here rather than beside setJacEvalY above, because until the fetch on the
+	// line before this dYdt still holds the *guess* setInitialConditions built
+	// rather than the derivative IDACalcIC corrected it to. Seeding from the guess
+	// left dydtComplete's u block disagreeing with the state it is meant to
+	// describe by a fraction of a percent -- small enough to look like round-off
+	// and quite large enough to matter to anything differentiating the solution.
+	{
+		DGSoln idaDerivative(nVars, grid, k, nScalars, nAux);
+		idaDerivative.Map(N_VGetArrayPointer(dYdt));
+		dydtComplete.copy(idaDerivative);
+	}
+
+	// Only when the gate is armed: this is a dense assembly and factorisation of
+	// the whole system, and nothing but the gate reads the algebraic blocks. A
+	// run with the gate disarmed pays nothing and is unchanged.
+	if (CheckObjectiveDecrease)
+		computeAlgebraicTimeDerivatives();
+
 	if (writeDatFile)
 		print(out0, t0, nOut, true);
 	if (debugDat)
 	{
-		IDAGetConsistentIC(IDA_mem, Y, dYdt);
 		residual(t0, Y, dYdt, res);
 		std::println(dydt_out, "# After CalcIC ");
 		printOnNodes(dydt_out, t0, dYdt);
@@ -277,8 +410,16 @@ void SystemSolver::initialize()
 		printOnNodes(res_out, t0, res);
 	}
 
-	// This also writes the t0 timeslice
-	initialiseNetCDF(baseName + ".nc", nOut);
+	// This also writes the t0 timeslice -- the corrected one, per the fetch above
+	//
+	// writeOutput gates every netCDF and restart write in this file. nc_output is
+	// never opened when it is false, and NcFile::close() on an unopened file is a
+	// no-op -- the destructor's `filename != ""` guard relies on the same thing --
+	// but the Close() calls are guarded too, so the reason is visible where it
+	// applies rather than resting on netCDF's behaviour. The .dat flags are
+	// separate and stay separate: they are opt-in already.
+	if (writeOutput)
+		initialiseNetCDF(baseName + ".nc", nOut);
 
 	IDASetMaxNumSteps(IDA_mem, 50000);
 
@@ -304,7 +445,13 @@ void SystemSolver::initialize()
 void SystemSolver::integrate(double tFinal)
 {
 	int retval;
-	std::string baseName = inputFilePath.stem();
+	// filename(), not stem(): inputFilePath now holds the configuration's
+	// OutputFilename, which is already a base name -- the TOML source seeds it
+	// from the config file's stem. Stemming it a second time would turn a
+	// config named run.v2.conf into output called run.nc. filename() also keeps
+	// the long-standing behaviour that output lands in the current directory
+	// rather than beside any path given in OutputFilename.
+	std::string baseName = inputFilePath.filename().string();
 
 	if (IDA_mem == nullptr)
 		throw std::logic_error("integrate() called before initialize()");
@@ -340,10 +487,12 @@ void SystemSolver::integrate(double tFinal)
         printOnNodes(res_out, tret, res);
         printOnNodes(dydt_out, tret, dYdt);
       }
-			WriteTimeslice(tret);
+			if (writeOutput)
+				WriteTimeslice(tret);
 			if (writeDatFile)
 				out0.close();
-			nc_output.Close();
+			if (writeOutput)
+				nc_output.Close();
 
 			throw std::runtime_error("IDASolve could not complete");
 		}
@@ -362,7 +511,8 @@ void SystemSolver::integrate(double tFinal)
 						 N_VWrmsNorm(res, wgt));
 			printOnNodes(res_out, tret, res);
 		}
-		WriteTimeslice(tret);
+		if (writeOutput)
+			WriteTimeslice(tret);
 
 		// Check if steady-state is achieved (test the lambda points)
 		if (TerminateOnSteadyState)
@@ -403,7 +553,8 @@ void SystemSolver::integrate(double tFinal)
 		// WriteAdjoints();
 	}
 
-	problem->finaliseDiagnostics(nc_output);
+	if (writeOutput)
+		problem->finaliseDiagnostics(nc_output);
 	if (writeDatFile)
 		out0.close();
 	if (debugDat)
@@ -411,9 +562,11 @@ void SystemSolver::integrate(double tFinal)
 		dydt_out.close();
 		res_out.close();
 	}
-	nc_output.Close();
+	if (writeOutput)
+		nc_output.Close();
 
-	WriteRestartFile(baseName + ".restart.nc", Y, dYdt, nOut);
+	if (writeOutput)
+		WriteRestartFile(baseName + ".restart.nc", Y, dYdt, nOut);
 
 	// Leave yJac holding the *final* solution. It is the only copy that outlives
 	// destroySundials() -- `y` is a non-owning view over Y -- and it is what
@@ -426,7 +579,8 @@ void SystemSolver::integrate(double tFinal)
 	// change the gradients.
 	setJacEvalY(Y, dYdt);
 
-	nc_output.Close();
+	if (writeOutput)
+		nc_output.Close();
 }
 
 void SystemSolver::destroySundials()
@@ -477,6 +631,18 @@ void SystemSolver::destroySundials()
 	for (std::ofstream *stream : {&out0, &dydt_out, &res_out})
 		if (stream->is_open())
 			stream->close();
+
+	// And the netCDF file, for the same reason and with a sharper symptom.
+	// initialize() opens it via initialiseNetCDF; only integrate() used to close
+	// it, so any path that allocates and then does not complete a time loop left
+	// it open -- the dG/dt gate rejecting a run, or integrate() throwing and
+	// runSolver catching. The next run in the same process then fails inside
+	// netCDF trying to create a file this process still holds, and reports
+	// "Permission denied", which reads like a filesystem problem rather than a
+	// handle we never released. Close() just clears the name and closes the file,
+	// so calling it here as well as at the end of integrate() is harmless.
+	if (writeOutput)
+		nc_output.Close();
 
 	// `ctx` is deliberately NOT freed here. It belongs to the SystemSolver: it is
 	// created in the constructor (SystemSolver.cpp:18) and freed in the

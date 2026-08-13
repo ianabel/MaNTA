@@ -13,7 +13,8 @@ keep it out of the way of real physics cases and of repeated test runs.
 import numpy as np
 import pytest
 
-import MaNTA
+import manta as MaNTA
+
 
 # What the factory saw, per registered name. Module-level because the registry
 # outlives any one test.
@@ -24,12 +25,7 @@ class Registered(MaNTA.TransportSystem):
     """Minimal working physics case that records its construction arguments."""
 
     def __init__(self, config, grid):
-        MaNTA.TransportSystem.__init__(self)
-        self.nVars = 1
-        self.nScalars = 0
-        self.nAux = 0
-        self.isLowerDirichlet = True
-        self.isUpperDirichlet = True
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1))
 
         # Every TOML node type, read back through cast_toml.
         CAPTURED["values"] = {
@@ -44,7 +40,7 @@ class Registered(MaNTA.TransportSystem):
         self.kappa = float(config["kappa"])
 
     def SigmaFn(self, i, state, x, t):
-        return self.kappa * state["Derivative"][i]
+        return self.kappa * state.q[i]
 
     def Sources(self, i, state, x, t):
         return 1.0
@@ -186,8 +182,7 @@ def test_a_missing_toml_key_raises_out_of_range(tmp_path):
 
     class MissingKey(Registered):
         def __init__(self, config, grid):
-            MaNTA.TransportSystem.__init__(self)
-            self.nVars = 1
+            MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1))
             CAPTURED["error"] = None
             try:
                 config["NoSuchKeyAnywhere"]
@@ -209,35 +204,35 @@ def test_a_missing_toml_key_raises_out_of_range(tmp_path):
 
 
 def test_an_unregistered_name_is_reported_not_crashed(tmp_path):
-    """InstantiateProblem returns nullptr; runManta must return 1, not segfault.
+    """InstantiateProblem throws; runManta catches it and returns 1.
 
-    This used to dereference the null unique_ptr before reaching the check
-    (fixed in an earlier pass); the null return contract is what the fix rests
-    on, so it is worth holding from the Python side too.
+    This used to dereference a null unique_ptr before reaching the check, so an
+    unrecognised name segfaulted. The contract is an exception now rather than a
+    null return, but what matters from here is unchanged: a clean 1, no crash.
     """
     path = tmp_path / "unknown.conf"
     path.write_text(CONFIG_TEMPLATE.format(name="NoSuchPhysicsCaseAtAll"))
     assert MaNTA.run(str(path)) == 1
 
 
-def test_a_duplicate_registration_keeps_the_first_class(tmp_path):
-    """registerPhysicsCase uses map::insert, so a repeat name is ignored.
+def test_a_duplicate_registration_is_rejected(tmp_path):
+    """registerPhysicsCase refuses a name that is already taken.
 
     Worth pinning from Python because this is where it will bite: two modules
     registering the same name is far more likely than two C++ physics cases
-    doing so.
+    doing so. It used to be a silent no-op, which left the second module's case
+    unreachable with nothing said.
     """
     CAPTURED.clear()
     name = "UnitTestDuplicateRegistrationCase"
     MaNTA.registerPhysicsCase(name, Registered)
-    MaNTA.registerPhysicsCase(name, SecondRegistered)
 
+    with pytest.raises(ValueError, match=name):
+        MaNTA.registerPhysicsCase(name, SecondRegistered)
+
+    # The first registration survives and is still the one that runs.
     MaNTA.run(write_config(tmp_path, name))
-
-    assert "which" not in CAPTURED, (
-        "the second registration displaced the first; map::insert should have "
-        "been a no-op"
-    )
+    assert "which" not in CAPTURED
 
 
 def test_a_nonexistent_config_file_returns_one(tmp_path):

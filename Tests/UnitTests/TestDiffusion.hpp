@@ -17,16 +17,15 @@ class TestDiffusion : public TransportSystem {
 	public:
 		// Must provide a constructor that constructs from a toml configuration snippet
 		// you can ignore it, or read problem-dependent parameters from the configuration file
-		explicit TestDiffusion( toml::value const& config ){
-			// Always set nVars in a derived constructor
-			nVars = 1;
-
+		explicit TestDiffusion( toml::value const& config )
+			: TransportSystem({.variables = numberedFields(1)})
+		{
 			// Construct your problem from user-specified config
 			// throw an exception if you can't. NEVER leave a part-constructed object around
 			// here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 
 			if ( config.count( "DiffusionProblem" ) != 1 )
-				throw std::invalid_argument( "There should be a [DiffusionProblem] section if you are using the LienarDiffusion physics model." );
+				throw std::invalid_argument( "There should be a [DiffusionProblem] section if you are using the LinearDiffusion physics model." );
 
 			auto const& DiffConfig = config.at( "DiffusionProblem" );
 
@@ -40,14 +39,11 @@ class TestDiffusion : public TransportSystem {
 		Value LowerBoundary( Index, Time t ) const override { return ExactSolution( 0.0, t );};
 		Value UpperBoundary( Index, Time t ) const override { return ExactSolution( 1.0, t );};
 
-		bool isLowerBoundaryDirichlet( Index ) const override { return true;};
-		bool isUpperBoundaryDirichlet( Index ) const override { return true;};
-
 		// The guts of the physics problem (these are non-const as they
 		// are allowed to alter internal state such as to store computations
 		// for future calls)
 		Value SigmaFn( Index, const State &s, Position, Time ) override {
-			return kappa * s.Derivative[ 0 ];
+			return kappa * s.q(0);
 		};
 		Value Sources( Index, const State&, Position, Time ) override {
 			return 0.0;

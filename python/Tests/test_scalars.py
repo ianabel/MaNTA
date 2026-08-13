@@ -11,16 +11,20 @@ The scalar hooks are the most awkward part of the interface, because the C++
 signatures take `DGSoln` and `Interval`, which have no Python representation.
 `PyTransportSystem` bridges that: it evaluates the solution on the nodes and
 passes a `GlobalState` plus the quadrature data the hook needs. The resulting
-Python signatures are *not* the C++ ones, and are worth stating explicitly:
+The Python signatures are now the C++ ones, argument for argument -- the two
+used to differ, because the C++ hooks took DGSoln, a std::function test
+function and an Interval, none of which have a Python representation:
 
     InitialScalarValue(s)                                     -> float
     InitialScalarDerivative(s, states, states_dot, weights)   -> float
-    isScalarDifferential(i)                                   -> bool
-    ScalarG(s, states, states_dot, weights, t)                -> float
-    ScalarGPrime(states, states_dot, weights, phi_boundary, t)
+    ScalarG(s, states, states_dot, abscissae, weights, phi_boundary, t) -> float
+    ScalarGPrime(states, states_dot, abscissae, weights, phi_boundary, t)
         -> (list of nScalars GlobalState dicts,   d G_s / d state
             list of nScalars GlobalState dicts)   d G_s / d state_dot
     dSources_dScalars(s, state, x, t)  -> vector of length nScalars
+
+Whether a scalar is differential is spec data (`MaNTA.Scalar(..., differential=True)`)
+rather than an isScalarDifferential hook.
 
 `weights` is the global quadrature weight per node, length nCells*(k+1), so an
 integral over the domain is just `weights @ u`. `phi_boundary` is (k+1, 2): the
@@ -51,8 +55,7 @@ untouched. Here both change the field.
 import numpy as np
 import pytest
 
-import MaNTA
-
+import manta as MaNTA
 KAPPA = 1.5
 S0 = 2.0
 N_SCALARS = 1
@@ -69,29 +72,24 @@ def exact_u(x):
 class ScalarDiffusion(MaNTA.TransportSystem):
     """Linear diffusion coupled to one algebraic global scalar."""
 
-    def __init__(self):
-        MaNTA.TransportSystem.__init__(self)
-        self.nVars = 1
-        self.nScalars = N_SCALARS
-        self.nAux = 0
-        self.isLowerDirichlet = True
-        self.isUpperDirichlet = True
+    def __init__(self, differential=False):
+        MaNTA.TransportSystem.__init__(
+            self, MaNTA.numbered_spec(1, nScalars=N_SCALARS, differential=differential))
         self.calls = {
             "ScalarG": 0,
             "ScalarGPrime": 0,
             "InitialScalarValue": 0,
             "InitialScalarDerivative": 0,
-            "isScalarDifferential": 0,
             "dSources_dScalars": 0,
         }
 
     # --- flux and sources ------------------------------------------------
     def SigmaFn(self, i, state, x, t):
-        return KAPPA * state["Derivative"][i]
+        return KAPPA * state.q[i]
 
     def Sources(self, i, state, x, t):
         # The scalar raises the source uniformly.
-        return S0 + state["Scalars"][0]
+        return S0 + state.scalars[0]
 
     def dSigmaFn_du(self, i, state, x, t):
         return np.zeros(self.nVars)
@@ -115,18 +113,13 @@ class ScalarDiffusion(MaNTA.TransportSystem):
         return np.ones(self.nScalars)
 
     # --- the scalar constraint  G_0 = mu - int u dx = 0 -------------------
-    def isScalarDifferential(self, i):
-        # Algebraic: G_0 does not involve dmu/dt.
-        self.calls["isScalarDifferential"] += 1
-        return False
-
-    def ScalarG(self, s, states, states_dot, weights, t):
+    def ScalarG(self, s, states, states_dot, abscissae, weights, phi_boundary, t):
         self.calls["ScalarG"] += 1
         u = np.asarray(states["Variable"])[:, 0]
         mu = np.asarray(states["Scalars"])[0]
         return float(mu - np.dot(np.asarray(weights), u))
 
-    def ScalarGPrime(self, states, states_dot, weights, phi_boundary, t):
+    def ScalarGPrime(self, states, states_dot, abscissae, weights, phi_boundary, t):
         # Two lists of nScalars GlobalState dicts: dG/dstate and dG/dstate_dot.
         #
         # G_0 = mu - sum_j w_j u_j, so dG_0/du_j = -w_j -- the quadrature weight
@@ -199,9 +192,10 @@ class DifferentialScalarDiffusion(ScalarDiffusion):
 
     MU0 = 0.5
 
-    def isScalarDifferential(self, i):
-        self.calls["isScalarDifferential"] += 1
-        return True
+    # Differential, so the base's spec is built with differential=True. This
+    # was an isScalarDifferential override; the flag is spec data now.
+    def __init__(self):
+        super().__init__(differential=True)
 
     def InitialScalarValue(self, s):
         self.calls["InitialScalarValue"] += 1
@@ -215,14 +209,14 @@ class DifferentialScalarDiffusion(ScalarDiffusion):
         mu = np.asarray(states["Scalars"])[0]
         return float(np.dot(np.asarray(weights), u) - mu)
 
-    def ScalarG(self, s, states, states_dot, weights, t):
+    def ScalarG(self, s, states, states_dot, abscissae, weights, phi_boundary, t):
         self.calls["ScalarG"] += 1
         u = np.asarray(states["Variable"])[:, 0]
         mu = np.asarray(states["Scalars"])[0]
         mu_dot = np.asarray(states_dot["Scalars"])[0]
         return float(mu_dot - (np.dot(np.asarray(weights), u) - mu))
 
-    def ScalarGPrime(self, states, states_dot, weights, phi_boundary, t):
+    def ScalarGPrime(self, states, states_dot, abscissae, weights, phi_boundary, t):
         # G_0 = mu' - int u dx + mu, so d/du_j = -w_j, d/dmu = +1, and the
         # state_dot half is d/dmu' = 1.
         self.calls["ScalarGPrime"] += 1
@@ -380,15 +374,10 @@ def test_a_scalar_system_missing_its_hooks_is_reported(tmp_path):
 
     class NoScalarHooks(MaNTA.TransportSystem):
         def __init__(self):
-            MaNTA.TransportSystem.__init__(self)
-            self.nVars = 1
-            self.nScalars = 1
-            self.nAux = 0
-            self.isLowerDirichlet = True
-            self.isUpperDirichlet = True
+            MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1, nScalars=1))
 
         def SigmaFn(self, i, state, x, t):
-            return KAPPA * state["Derivative"][i]
+            return KAPPA * state.q[i]
 
         def Sources(self, i, state, x, t):
             return S0

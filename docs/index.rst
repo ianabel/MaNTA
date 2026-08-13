@@ -76,6 +76,7 @@ subtly wrong — read :doc:`formulation` first.
 
    physics_interface
    python
+   out_of_tree
    adjoints
 
 .. toctree::

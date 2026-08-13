@@ -14,8 +14,8 @@ Value MirrorPlasma::InitialDensityTimeDerivative(RealVector u, RealVector q, Pos
         auto [uval, qval, d2udx2val] = derivatives([this, j](Real2nd x)
                                                    { return InitialFunction(j, x, 0.0); }, wrt(Vval, Vval), at(Vval));
 
-        s.Variable(j) = uval;
-        s.Derivative(j) = qval;
+        s.u(j) = uval;
+        s.q(j) = qval;
         d2udx2(j) = d2udx2val;
     }
 
@@ -42,7 +42,7 @@ Value MirrorPlasma::InitialDensityTimeDerivative(RealVector u, RealVector q, Pos
 
     for (Index j = 0; j < nVars; ++j)
     {
-        dSigma_dx += s.Derivative[j] * gradu[j] + d2udx2[j] * gradq[j];
+        dSigma_dx += s.q(j) * gradu[j] + d2udx2[j] * gradq[j];
     }
 
     sigma.setZero();
@@ -68,28 +68,6 @@ Value MirrorPlasma::InitialCurrent(Time t) const
     {
         return -IRadial * (1 + tanh(-t / CurrentDecay));
     }
-}
-
-Value MirrorPlasma::TotalCurrent(DGSoln const &y, Time t)
-{
-    Value FluxTerm = y.sigma(Channel::AngularMomentum)(xR) - y.sigma(Channel::AngularMomentum)(xL); // SigmaFn(Channel::AngularMomentum, y.eval(xL), xL, t) - SigmaFn(Channel::AngularMomentum, y.eval(xR), xR, t);
-
-    Value SourceTerm = integrator::integrate(
-        [&](Position V)
-        {
-            State state = y.eval(V);
-            Values pScalar(nScalars);
-            pScalar.setZero();
-            return Source(Channel::AngularMomentum, state.Variable, state.Derivative, state.Flux, state.Aux, pScalar, V, t).val;
-
-        },
-        xL, xR, max_depth);
-
-    Value dPsi = integrator::integrate([&](double V)
-                                       { return 1 / B->VPrime(V); }, xL, xR, max_depth);
-    Value Itot = 1 / dPsi * (FluxTerm - SourceTerm);
-
-    return Itot;
 }
 
 Value MirrorPlasma::InitialScalarValue(Index s) const
@@ -152,193 +130,170 @@ Value MirrorPlasma::InitialScalarDerivative(Index s, const DGSoln &y, const DGSo
     }
 }
 
-bool MirrorPlasma::isScalarDifferential(Index s)
+// The scalar constraints, on the nodal quadrature.
+//
+// These used to be handed a std::function test function P and a single cell's
+// Interval, and integrated against them with nested adaptive Gauss-Kronrod --
+// including Phi_V, an integral from xL to a *variable* upper limit evaluated
+// inside another integral. They now use the framework's node quadrature, the
+// same one the residual projects sources with:
+//
+//     Int f dV  ->  sum_j weights(j) * f(V_j)
+//
+// and the cumulative Phi at node m is the partial sum of that up to m. Two
+// consequences worth stating plainly. The quadrature is no longer adaptive, so
+// the value of Phi differs from the old one by the interpolation error of the
+// integrand -- for a well-resolved run that is small, but it is not zero. And
+// the derivative is now exactly the derivative of the quantity G actually uses,
+// which the adaptive version was not: that mismatch is precisely the defect
+// that cost ScalarTestLD3 a 7% error in its own Jacobian.
+//
+// Nothing in any test suite exercises useConstantVoltage, so this port rests on
+// the algebra rather than on a measurement.
+Value MirrorPlasma::ScalarG(Index s, GlobalState const &y, GlobalState const &ydot,
+                            std::vector<Position> const &abscissae, Values const &weights,
+                            Matrix const &phiBoundary, Time t)
 {
+    using namespace ScalarHooks;
+
+    const Value dEdt = ydot.Scalars()(Scalar::Error);
+    const Value E = y.Scalars()(Scalar::Error);
+    const Value tfac = restarting ? 1.0 : tanh(t / CurrentDecay);
+
     switch (static_cast<Scalar>(s))
     {
     case Scalar::Error:
-        return true;
+        // E = V0 - Phi(xR), with Phi(xR) = Int omega / VPrime dV over the domain.
+        return E - (V0 - PhiAtUpperBoundary(y, abscissae, weights));
+
     case Scalar::Integral:
-        return true;
-    default:
-        return false;
-    }
-}
+        return ydot.Scalars()(Scalar::Integral) - E;
 
-Value MirrorPlasma::ScalarGExtended(Index s, const DGSoln &y, const DGSoln &dydt, Time t)
-{
-    Value dEdt = dydt.Scalar(Scalar::Error);
-    Value E = y.Scalar(Scalar::Error);
-
-    auto n = [&](Position V)
-    { return uToDensity(y.u(Channel::Density)(V)).val; };
-    auto L = [&](Position V)
-    { return y.u(Channel::AngularMomentum)(V); };
-    auto omega = [&](Position V)
-    {
-        Value R = B->R_V(V, 0.0);
-        Value w = L(V) / (n(V) * R * R);
-        return w;
-    };
-
-    Value tfac = restarting ? 1.0 : tanh(t / CurrentDecay);
-    // auto dJdt = [&](Position V)
-    // {
-    //     Value R = B->R_V(V,0.0);
-    //     return R * R * dydt.u(Channel::Density)(V);
-    // };
-    // auto dJprimedt = [&](Position V)
-    // {
-    //     Value R = B->R_V(V,0.0);
-    //     return 2 * R * dydt.u(Channel::Density)(V) + R * R * dydt.q(Channel::Density)(V);
-    // };
-    // auto n0 = [&](Position V)
-    // {
-    //     return InitialValue(Channel::Density, V);
-    // };
-    // Value N0 = integrator::integrate(n0, xL, xR);
-    auto Phi_V = [&](Position V)
-    {
-        Value phi = integrator::integrate([&](double V)
-                                          { return omega(V) / B->VPrime(V); }, xL, V, max_depth);
-        return phi;
-    };
-    switch (static_cast<Scalar>(s))
-    {
-    case Scalar::Error:
-    {
-        Value res = (E - (V0 - Phi_V(xR)));
-        return res;
-    }
-    case Scalar::Integral:
-    {
-        Value dIdt = dydt.Scalar(Scalar::Integral);
-        Value res = (dIdt - E);
-        return res;
-    }
     case Scalar::Current:
     {
-        Value Integral = y.Scalar(Scalar::Integral);
-        Value Current = y.Scalar(Scalar::Current);
-
-        Value res = Current - InitialCurrent(t) - tfac * (TotalCurrent(y, t) + gamma * E + gamma_d * dEdt + gamma_h * Integral);
-        return res;
+        const Value Integral = y.Scalars()(Scalar::Integral);
+        const Value Current = y.Scalars()(Scalar::Current);
+        return Current - InitialCurrent(t) -
+               tfac * (TotalCurrent(y, abscissae, weights, phiBoundary, t) + gamma * E +
+                       gamma_d * dEdt + gamma_h * Integral);
     }
     default:
         throw std::logic_error("scalar index > nScalars");
     }
 }
-void MirrorPlasma::ScalarGPrimeExtended(Index scalarIndex, State &s, State &out_dt, const DGSoln &y, const DGSoln &dydt, std::function<double(double)> P, Interval I, Time t)
+
+Value MirrorPlasma::PhiAtUpperBoundary(GlobalState const &y, std::vector<Position> const &abscissae,
+                                       Values const &weights) const
 {
-    s.zero();
-    out_dt.zero();
-
-    auto n = [&](Position V)
-    { return uToDensity(y.u(Channel::Density)(V)).val; };
-    // // auto dndt = [&](Position V)
-    // // { return dydt.u(Channel::Density)(V); };
-    auto L = [&](Position V)
-    { return y.u(Channel::AngularMomentum)(V); };
-
-    Value tfac = restarting ? 1.0 : tanh(t / CurrentDecay);
-
-    switch (static_cast<Scalar>(scalarIndex))
+    Value Phi = 0.0;
+    for (size_t j = 0; j < y.size(); ++j)
     {
-    case Scalar::Error:
-    {
-        double P_L = integrator::integrate(
-            [&](Position V)
-            {
-                Position R = B->R_V(V, 0.0);
-                return (P(V) / B->VPrime(V)) / (n(V) * R * R);
-            },
-            I.x_l, I.x_u, max_depth);
-        double P_n = integrator::integrate(
-            [&](Position V)
-            {
-                Position R = B->R_V(V, 0.0);
-                Value nv = n(V);
-                Value I = -(P(V) / B->VPrime(V)) * L(V) / (nv * nv * R * R);
-                if (evolveLogDensity)
-                    I *= nv;
-                return I;
-            },
-            I.x_l, I.x_u, max_depth);
-        s.Variable(Channel::AngularMomentum) = P_L;
-        s.Variable(Channel::Density) = P_n;
-        s.Scalars(Scalar::Error) = 1.0; // dG_0/dE
-        break;
+        const Position V = abscissae[j];
+        const Value R = B->R_V(V, 0.0);
+        const Value n = uToDensity(y.Variable()(Channel::Density, j)).val;
+        const Value L = y.Variable()(Channel::AngularMomentum, j);
+        Phi += weights(j) * (L / (n * R * R)) / B->VPrime(V);
     }
-    case Scalar::Integral:
-    {
-        s.Scalars(Scalar::Error) = -1.0;
-        out_dt.Scalars(Scalar::Integral) = 1.0;
-        break;
-    }
-    case Scalar::Current:
-    {
-        Value dPsi = integrator::integrate([&](double V)
-                                           { return 1 / B->VPrime(V); }, xL, xR, max_depth);
-        Values grad(nVars);
-        Values grad_temp(nVars);
-        for (Index i = 0; i < nVars; ++i)
-            grad(i) = integrator::integrate(
-                [&](Position V)
-                {
-                    State yval = y.eval(V);
-                    yval.Scalars.setZero(); // we don't want the part of the source that depends on Scalars
-                    dSources_du(Channel::AngularMomentum, grad_temp, yval, V, t);
-                    return grad_temp(i) * P(V);
-                },
-                I.x_l, I.x_u, max_depth);
-        s.Variable = 1 / dPsi * grad * tfac;
-        grad.resize(nAux);
-        grad_temp.resize(nAux);
-        for (Index i = 0; i < nAux; ++i)
-            grad(i) = integrator::integrate(
-                [&](Position V)
-                {
-                    State yval = y.eval(V);
-                    yval.Scalars.setZero();
-                    dSources_dPhi(Channel::AngularMomentum, grad_temp, yval, V, t);
-                    return grad_temp(i) * P(V);
-                },
-                I.x_l, I.x_u, max_depth);
-
-        s.Aux = 1 / dPsi * grad * tfac;
-
-        s.Scalars(Scalar::Error) = -gamma * tfac;
-        out_dt.Scalars(Scalar::Error) = -gamma_d * tfac;
-        s.Scalars(Scalar::Integral) = -gamma_h * tfac;
-        s.Scalars(Scalar::Current) = 1.0;
-
-        // s.Variable(Channel::AngularMomentum) += 1 / dPsi * integrator::integrate([&](Position V)
-        //                                                                          {
-        //     Position R = B->R_V(V,0.0);
-        //     return P(V) / (R * R * n(V)) * dJdt(V); }, I.x_l, I.x_u);
-
-        if (abs(I.x_u - xR) < 1e-10)
-            s.Flux(Channel::AngularMomentum) += -1.0 / dPsi * P(I.x_u) * tfac;
-        if (abs(I.x_l - xL) < 1e-10)
-            s.Flux(Channel::AngularMomentum) -= -1.0 / dPsi * P(I.x_l) * tfac;
-        break;
-    }
-    default:
-        break;
-    }
-
-    // s.Variable(Channel::Density) += 1 / dPsi * integrator::integrate([&](Position V)
-    //                                                                  { return P(V) * L(V) * dndt(V) / (n(V) * n(V)); }, I.x_l, I.x_u);
-
-    // out_dt.Variable(Channel::Density) = 1 / dPsi * integrator::integrate([&](Position V)
-    //                                                                      {
-    //     Position R = B->R_V(V,0.0);
-    //          return P(V) * R * R * omega(V); }, I.x_l, I.x_u);
-
-    // if (abs(I.x_u - xR) < 1e-9)
-    //     out_dt.Variable(Channel::Density) += B->VPrime(xR) * Phi_V(xR) * P(I.x_u);
-
-    // out_dt.Derivative(Channel::Density) = -1 / dPsi * integrator::integrate([&](Position V)
-    //                                                                         { Position R = B->R_V(V,0.0);
-    //     return P(V) * R * R * omega(V); }, I.x_l, I.x_u);
+    return Phi;
 }
+
+Value MirrorPlasma::TotalCurrent(GlobalState const &y, std::vector<Position> const &abscissae,
+                                 Values const &weights, Matrix const &phiBoundary, Time t)
+{
+    using namespace ScalarHooks;
+
+    const Value FluxTerm = boundaryValue(y.Flux().row(Channel::AngularMomentum), phiBoundary, Upper) -
+                           boundaryValue(y.Flux().row(Channel::AngularMomentum), phiBoundary, Lower);
+
+    Value SourceTerm = 0.0;
+    Values noScalars(nScalars);
+    noScalars.setZero();
+    for (size_t j = 0; j < y.size(); ++j)
+    {
+        State st = y[j];
+        SourceTerm += weights(j) * Source(Channel::AngularMomentum, st.u(), st.q(),
+                                          st.sigma(), st.phi(), noScalars, abscissae[j], t)
+                                       .val;
+    }
+
+    return (FluxTerm - SourceTerm) / dPsi();
+}
+
+/// Int 1/VPrime dV over the domain. Pure geometry -- no solution dependence, so
+/// it does not enter any derivative and keeps its adaptive rule.
+Value MirrorPlasma::dPsi() const
+{
+    return integrator::integrate([&](double V)
+                                 { return 1 / B->VPrime(V); }, xL, xR, max_depth);
+}
+
+void MirrorPlasma::ScalarGPrime(GlobalStateMatrix &dG, GlobalStateMatrix &dGdot,
+                                GlobalState const &y, GlobalState const &,
+                                std::vector<Position> const &abscissae, Values const &weights,
+                                Matrix const &phiBoundary, Time t)
+{
+    using namespace ScalarHooks;
+
+    const Value tfac = restarting ? 1.0 : tanh(t / CurrentDecay);
+    const Value invPsi = 1.0 / dPsi();
+
+    // ---- G_Error = E - V0 + Phi(xR) -------------------------------------
+    //
+    // d/d(DOF j) of the nodal quadrature above is just weights(j) times the
+    // integrand's derivative at node j.
+    for (size_t j = 0; j < y.size(); ++j)
+    {
+        const Position V = abscissae[j];
+        const Value R = B->R_V(V, 0.0);
+        const Value n = uToDensity(y.Variable()(Channel::Density, j)).val;
+        const Value L = y.Variable()(Channel::AngularMomentum, j);
+        const Value w = weights(j) / B->VPrime(V);
+
+        dG[Scalar::Error].Variable()(Channel::AngularMomentum, j) = w / (n * R * R);
+
+        Value dPhi_dn = -w * L / (n * n * R * R);
+        if (evolveLogDensity)
+            dPhi_dn *= n; // u is log n, so d/du = n d/dn
+        dG[Scalar::Error].Variable()(Channel::Density, j) = dPhi_dn;
+    }
+    dG[Scalar::Error].Scalars()(Scalar::Error) = 1.0;
+
+    // ---- G_Integral = dI/dt - E -----------------------------------------
+    dG[Scalar::Integral].Scalars()(Scalar::Error) = -1.0;
+    dGdot[Scalar::Integral].Scalars()(Scalar::Integral) = 1.0;
+
+    // ---- G_Current ------------------------------------------------------
+    //
+    // G = Current - InitialCurrent - tfac * ( (FluxTerm - SourceTerm)/dPsi + ... ),
+    // so dG/dSourceTerm = +tfac/dPsi and dG/dFluxTerm = -tfac/dPsi.
+    Values grad_u(nVars), grad_phi(nAux);
+    for (size_t j = 0; j < y.size(); ++j)
+    {
+        // The part of the source that depends on the scalars is excluded: it is
+        // accounted for by the explicit scalar entries below.
+        State st = y[j];
+        st.scalars().setZero();
+
+        dSources_du(Channel::AngularMomentum, grad_u, st, abscissae[j], t);
+        for (Index v = 0; v < nVars; ++v)
+            dG[Scalar::Current].Variable()(v, j) = invPsi * tfac * weights(j) * grad_u(v);
+
+        if (nAux > 0)
+        {
+            dSources_dPhi(Channel::AngularMomentum, grad_phi, st, abscissae[j], t);
+            for (Index a = 0; a < nAux; ++a)
+                dG[Scalar::Current].Aux()(a, j) = invPsi * tfac * weights(j) * grad_phi(a);
+        }
+    }
+
+    addBoundaryDerivative(dG[Scalar::Current].Flux().row(Channel::AngularMomentum), phiBoundary,
+                          Upper, -invPsi * tfac);
+    addBoundaryDerivative(dG[Scalar::Current].Flux().row(Channel::AngularMomentum), phiBoundary,
+                          Lower, +invPsi * tfac);
+
+    dG[Scalar::Current].Scalars()(Scalar::Error) = -gamma * tfac;
+    dGdot[Scalar::Current].Scalars()(Scalar::Error) = -gamma_d * tfac;
+    dG[Scalar::Current].Scalars()(Scalar::Integral) = -gamma_h * tfac;
+    dG[Scalar::Current].Scalars()(Scalar::Current) = 1.0;
+}
+

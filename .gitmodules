@@ -8,5 +8,10 @@
     branch = main
 [submodule "extern/autodiff"]
 	path = extern/autodiff
-	url = https://github.com/autodiff/autodiff.git
-    branch = main
+	# A fork, for one patch: upstream's VectorTraits specialisations name
+	# Eigen::internal::SingleRange as a type, which Eigen 5.0 made a template, so
+	# upstream does not compile against Eigen 5 at all. Upstream main has been
+	# untouched since January 2025, i.e. predates Eigen 5. Drop the fork and come
+	# back to autodiff/autodiff once the equivalent change is merged there.
+	url = https://github.com/ianabel/autodiff.git
+    branch = eigen-5-singlerange

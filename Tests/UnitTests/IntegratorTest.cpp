@@ -92,9 +92,8 @@ Vector nodalJacTest(std::function<double(double)> const &f,
   Vector cellProducts(nCells * (k + 1));
   cellProducts.setZero();
   for (Index i = 0; i < nCells; i++) {
-    const auto ind = Eigen::seq(i * (k + 1), (i + 1) * (k + 1) - 1);
-    integrator_tests::getPhiCell(globalCellWeights(Eigen::all, ind), &basis,
-                                 grid[i]);
+    integrator_tests::getPhiCell(globalCellWeights.middleCols(i * (k + 1), k + 1),
+                                 &basis, grid[i]);
     const auto cellWeights = basis.getIntegrationWeights(grid[i]);
 
     auto nodes = basis.getNodes();

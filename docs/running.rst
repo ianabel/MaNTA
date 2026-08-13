@@ -8,13 +8,17 @@ Running MaNTA, and its output
 Output file names
 -----------------
 
+Output names default to the **stem of the configuration file**, and
+``OutputFilename`` overrides that on both surfaces.
+
 .. warning::
 
-   Output names come from the **stem of the configuration file**, and the files
-   land in the **current working directory** regardless of any path in the config
-   file's own name. ``./MaNTA runs/case7.conf`` writes ``./case7.nc``, not
-   ``runs/case7.nc``. There is no config key that changes this — the TOML
-   interface does not read ``OutputFilename`` at all.
+   Whichever name is used, the files land in the **current working directory**:
+   any directory part is dropped. ``./MaNTA runs/case7.conf`` writes
+   ``./case7.nc``, not ``runs/case7.nc``, and setting
+   ``OutputFilename = "out/case7"`` still writes ``./case7.nc``. Two drivers
+   running in different directories under the same base name will overwrite each
+   other.
 
 A run writes:
 
@@ -26,10 +30,10 @@ A run writes:
      - When
      - Contents
    * - ``<stem>.nc``
-     - always
+     - ``WriteOutput``
      - The solution at every output time. See the layout below.
    * - ``<stem>.restart.nc``
-     - always
+     - ``WriteOutput``
      - The final state, in enough detail to resume from.
    * - ``<stem>.dat``
      - ``WriteDatFile``
@@ -100,7 +104,8 @@ Any netCDF reader will do. From Python:
 Restarting
 ----------
 
-Every run leaves a ``<stem>.restart.nc``. To resume, point a config file at it:
+A run leaves a ``<stem>.restart.nc`` unless ``WriteOutput`` is false. To resume,
+point a config file at it:
 
 .. code-block:: toml
 
@@ -121,6 +126,11 @@ config keys are ignored on this path.
    the resumed run. If a restart fails where the original run succeeded, loosen
    the tolerances before looking for a deeper cause.
 
+   Such a failure now reports itself: ``IDACalcIC could not complete``. It did not
+   used to — the return value was overwritten before it was checked, so a failed
+   initial-condition calculation carried on into the time loop with whatever
+   partial state IDA had reached, and the symptom appeared later and elsewhere.
+
 The three phases
 ----------------
 
@@ -135,8 +145,14 @@ condition and integrating:
    * - Step
      - What it does
    * - ``initialize``
-     - Allocates the SUNDIALS objects, builds the initial condition, opens the
-       output files, runs ``IDACalcIC``.
+     - Allocates the SUNDIALS objects, builds the initial condition, runs
+       ``IDACalcIC``, takes its corrected result back, and opens the output files.
+       So the :math:`t_0` slice of every output is the **corrected** initial
+       condition — the state the time loop actually starts from, rather than the
+       guess handed to ``IDACalcIC``. The two differ only in the algebraic fields
+       (:math:`q`, :math:`\sigma`, the auxiliary variables, and :math:`u^\star`
+       through :math:`q`); :math:`u` is differential, so ``IDACalcIC`` holds it
+       fixed and it is the same either way.
    * - ``integrate(tFinal)``
      - The time loop, then the adjoint solve if requested, then the final netCDF
        and restart output.
@@ -144,15 +160,36 @@ condition and integrating:
      - Frees all of it. Idempotent, and safe to call with no preceding
        ``initialize``.
 
-.. warning::
+Reusing a solver
+~~~~~~~~~~~~~~~~
 
-   **A second integration on the same solver object does not work.** ``IDASolve``
-   fails with ``IDA_ERR_FAIL`` on the first step of the second run. Calling
-   ``initialize`` again after ``destroySundials`` *does* work and rebuilds the
-   initial condition; it is completing a second time loop that fails. This is
-   undiagnosed. It does not affect the Python ``Runner``, whose ``configure``
-   builds a fresh solver every time, which is exactly why the loop-over-runs
-   pattern in the optimisation drivers is safe.
+**The three phases can be run again on the same object**, and a reused solver
+gives the same answer a fresh one would — *bit for bit*. That is pinned by
+``a_second_integration_on_one_solver_matches_a_fresh_one`` in
+``Tests/UnitTests/SolverLifecycleTests.cpp``, at exactly zero tolerance.
+
+The tolerance is the point rather than a flourish. A second integration used to
+fail outright, with ``IDASolve`` returning ``IDA_ERR_FAIL`` on its first step,
+and two defects had to combine to produce it: ``id`` was left all zeros, so IDA
+was told the whole system was algebraic and ``IDACalcIC``'s return value was
+discarded when it failed; and ``initialiseMatrices``, which ``initialize`` skips
+when it has already run, filled the boundary arrays at a hardcoded
+:math:`t = 0`, so a second run solved its initial :math:`\mathrm{d}y/\mathrm{d}t`
+out of the *previous* run's final-time boundary values. Once the first was
+fixed, the second run completed and looked right — and was wrong in the eleventh
+digit. An approximate comparison would not have caught it.
+
+.. note::
+
+   Anything that reuses a solver rests on that test, so do not relax it to
+   something approximate. Note also that ``initialize`` skips
+   ``initialiseMatrices`` when the solver is already initialised: anything that
+   function computes *once* must either be genuinely run-independent or be
+   refreshed per run.
+
+The Python ``Runner`` is unaffected either way — ``configure`` builds a fresh
+solver every time — which is why the loop-over-runs pattern in the optimisation
+drivers was always safe.
 
 If you hold on to the solution after a run, note that the object mapping the
 live SUNDIALS vector dangles once the run is freed; the separately owned

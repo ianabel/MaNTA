@@ -6,7 +6,7 @@
 #include <stdexcept>
 
 /*
- * Postprocessing algorithm derived from SuperconvergentHDG-I.pdf, variable names
+ * Postprocessing algorithm derived from refs/SuperconvergentHDG-I.pdf, variable names
  * correspond to matrices from that paper (referred to as paper I below)
  */
 

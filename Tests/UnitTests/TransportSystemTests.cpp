@@ -43,7 +43,18 @@ namespace
 class MinimalSystem : public TransportSystem
 {
 public:
-    explicit MinimalSystem(Index nv = 2) { nVars = nv; }
+    // The counts are constructor arguments because the subclasses below vary
+    // them; they used to be assigned into the base after the fact.
+    explicit MinimalSystem(Index nv = 2, Index ns = 0, Index na = 0)
+        : TransportSystem({.variables = numberedFields(nv),
+                           .scalars = numberedScalars(ns),
+                           .aux = numberedAux(na)})
+    {
+    }
+
+    // For subclasses that need something the count triple cannot say, such as
+    // a non-default boundary kind.
+    explicit MinimalSystem(SystemSpec spec) : TransportSystem(std::move(spec)) {}
 
     // Overriding the pointwise SigmaFn/Sources would otherwise hide the
     // batched overloads of the same name -- which are exactly the defaults
@@ -54,12 +65,12 @@ public:
     Value SigmaFn(Index i, const State &s, Position x, Time t) override
     {
         ++sigmaCalls;
-        return 1.0 + 10.0 * i + 100.0 * x + 3.0 * s.Variable[i] + 5.0 * s.Derivative[i] + t;
+        return 1.0 + 10.0 * i + 100.0 * x + 3.0 * s.u(i) + 5.0 * s.q(i) + t;
     }
     Value Sources(Index i, const State &s, Position x, Time t) override
     {
         ++sourceCalls;
-        return -2.0 - 7.0 * i + 13.0 * x + s.Variable[0] * s.Derivative[i] - 0.5 * t;
+        return -2.0 - 7.0 * i + 13.0 * x + s.u(0) * s.q(i) - 0.5 * t;
     }
 
     void dSigmaFn_du(Index i, VectorRef v, const State &, Position x, Time) override
@@ -105,18 +116,14 @@ public:
 class UnderSpecifiedSystem : public MinimalSystem
 {
 public:
-    UnderSpecifiedSystem()
-    {
-        nScalars = 2;
-        nAux = 1;
-    }
+    UnderSpecifiedSystem() : MinimalSystem(2, 2, 1) {}
 };
 
 // Provides the aux hooks so the batched aux wrappers can be driven.
 class AuxSystem : public MinimalSystem
 {
 public:
-    AuxSystem() { nAux = 2; }
+    AuxSystem() : MinimalSystem(2, 0, 2) {}
 
     using TransportSystem::AuxG;
     using TransportSystem::AuxGPrime;
@@ -124,15 +131,15 @@ public:
     Value AuxG(Index i, const State &s, Position x, Time t) override
     {
         ++auxCalls;
-        return 1000.0 * (i + 1) + 17.0 * x + s.Aux[i] - s.Variable[0] + 0.25 * t;
+        return 1000.0 * (i + 1) + 17.0 * x + s.phi(i) - s.u(0) + 0.25 * t;
     }
     void AuxGPrime(Index i, State &out, const State &s, Position x, Time) override
     {
         out.zero();
-        out.Variable[0] = -1.0 - i;
-        out.Derivative[0] = 2.0 * x;
-        out.Flux[0] = 3.0 + i;
-        out.Aux[i] = 1.0;
+        out.u(0) = -1.0 - i;
+        out.q(0) = 2.0 * x;
+        out.sigma(0) = 3.0 + i;
+        out.phi(i) = 1.0;
     }
     void dSources_dPhi(Index i, VectorRef v, const State &, Position x, Time) override
     {
@@ -159,14 +166,14 @@ GlobalState makeStates(Index nCells, Index k, Index nVars, Index nScalars, Index
         State s(nVars, nScalars, nAux);
         for (Index v = 0; v < nVars; ++v)
         {
-            s.Variable[v] = 0.1 * (j + 1) + v;
-            s.Derivative[v] = -0.3 * (j + 1) + 2.0 * v;
-            s.Flux[v] = 0.7 * (j + 1) - v;
+            s.u(v) = 0.1 * (j + 1) + v;
+            s.q(v) = -0.3 * (j + 1) + 2.0 * v;
+            s.sigma(v) = 0.7 * (j + 1) - v;
         }
         for (Index a = 0; a < nAux; ++a)
-            s.Aux[a] = 0.05 * (j + 1) * (a + 2);
+            s.phi(a) = 0.05 * (j + 1) * (a + 2);
         for (Index c = 0; c < nScalars; ++c)
-            s.Scalars[c] = 1.5 + c;
+            s.scalar(c) = 1.5 + c;
         g.setWithState(j, s);
     }
     return g;
@@ -258,8 +265,8 @@ BOOST_AUTO_TEST_CASE(compute_physics_fills_every_slot_and_caches_the_sources)
 
 BOOST_AUTO_TEST_CASE(compute_physics_derivatives_fills_the_right_state_slices)
 {
-    // dSigma writes into out.Variable/Derivative (and Aux when nAux > 0);
-    // dSources additionally writes out.Flux. Getting these slices crossed
+    // dSigma writes into out.u()/Derivative (and Aux when nAux > 0);
+    // dSources additionally writes out.sigma(). Getting these slices crossed
     // would put dS/dq where dS/du belongs in every Jacobian block.
     AuxSystem sys;
     const Index nCells = 2, k = 2, nVars = 2, nAux = 2;
@@ -310,10 +317,10 @@ BOOST_AUTO_TEST_CASE(compute_physics_derivatives_fills_the_right_state_slices)
         {
             State expected(nVars, 0, nAux);
             sys.AuxGPrime(a, expected, states[j], points[j], t);
-            BOOST_TEST((dAux[a].Variable(j) - expected.Variable).norm() < 1e-14);
-            BOOST_TEST((dAux[a].Derivative(j) - expected.Derivative).norm() < 1e-14);
-            BOOST_TEST((dAux[a].Flux(j) - expected.Flux).norm() < 1e-14);
-            BOOST_TEST((dAux[a].Aux(j) - expected.Aux).norm() < 1e-14);
+            BOOST_TEST((dAux[a].Variable(j) - expected.u()).norm() < 1e-14);
+            BOOST_TEST((dAux[a].Derivative(j) - expected.q()).norm() < 1e-14);
+            BOOST_TEST((dAux[a].Flux(j) - expected.sigma()).norm() < 1e-14);
+            BOOST_TEST((dAux[a].Aux(j) - expected.phi()).norm() < 1e-14);
         }
 }
 
@@ -354,8 +361,8 @@ BOOST_AUTO_TEST_CASE(batched_aux_wrappers_match_the_scalar_versions)
         {
             State expected(nVars, 0, nAux);
             sys.AuxGPrime(a, expected, states[j], points[j], t);
-            BOOST_TEST((out.Variable(j) - expected.Variable).norm() < 1e-14);
-            BOOST_TEST((out.Aux(j) - expected.Aux).norm() < 1e-14);
+            BOOST_TEST((out.Variable(j) - expected.u()).norm() < 1e-14);
+            BOOST_TEST((out.Aux(j) - expected.phi()).norm() < 1e-14);
         }
     }
 }
@@ -386,10 +393,21 @@ BOOST_AUTO_TEST_CASE(optional_hooks_throw_when_the_case_declares_scalars_or_aux)
     // guard fires before it is touched.
     Grid g(0.0, 1.0, 2);
     DGSoln dummy(2, g, 1, Index(2), Index(1));
-    BOOST_CHECK_THROW(sys.ScalarG(0, dummy, 0.0), std::logic_error);
-    BOOST_CHECK_THROW(sys.ScalarGPrime(0, out, dummy, [](double) { return 0.0; },
-                                       Interval(0.0, 1.0), 0.0),
+    GlobalState nodal(2, 1, 2, 2, 1), nodal_dt(2, 1, 2, 2, 1);
+    std::vector<Position> abscissae(nodal.size(), 0.0);
+    Vector weights = Vector::Zero(nodal.size());
+    Matrix phiBoundary = Matrix::Zero(2, 2);
+    GlobalStateMatrix dG(2), dGdot(2);
+    for (Index i = 0; i < 2; ++i)
+    {
+        dG.add(2, 1, 2, 2, 1);
+        dGdot.add(2, 1, 2, 2, 1);
+    }
+    BOOST_CHECK_THROW(sys.ScalarG(0, nodal, nodal_dt, abscissae, weights, phiBoundary, 0.0),
                       std::logic_error);
+    BOOST_CHECK_THROW(
+        sys.ScalarGPrime(dG, dGdot, nodal, nodal_dt, abscissae, weights, phiBoundary, 0.0),
+        std::logic_error);
 }
 
 BOOST_AUTO_TEST_CASE(the_same_hooks_are_silent_when_there_are_no_scalars_or_aux)
@@ -410,20 +428,33 @@ BOOST_AUTO_TEST_CASE(the_same_hooks_are_silent_when_there_are_no_scalars_or_aux)
 
     Grid g(0.0, 1.0, 2);
     DGSoln dummy(2, g, 1);
-    BOOST_TEST(sys.ScalarG(0, dummy, 0.0) == 0.0);
+    GlobalState nodal(2, 1, 2), nodal_dt(2, 1, 2);
+    std::vector<Position> abscissae(nodal.size(), 0.0);
+    Vector weights = Vector::Zero(nodal.size());
+    Matrix phiBoundary = Matrix::Zero(2, 2);
+    BOOST_TEST(sys.ScalarG(0, nodal, nodal_dt, abscissae, weights, phiBoundary, 0.0) == 0.0);
     BOOST_TEST(sys.InitialScalarDerivative(0, dummy, dummy) == 0.0);
-    BOOST_TEST(sys.isScalarDifferential(0) == false);
+
+    // isScalarDifferential is not in the list above. It used to answer `false`
+    // for any index, including on a case with no scalars at all; it is a spec
+    // lookup now, and asking about scalar 0 of a system that declares none is a
+    // question with no answer rather than a hook that should stay quiet. The
+    // solver only ever asks under `for (s = 0; s < nScalars; ++s)`.
+    BOOST_CHECK_THROW(sys.isScalarDifferential(0), std::out_of_range);
 }
 
 // -------------------------------------------------------- small defaults --
 
 BOOST_AUTO_TEST_CASE(scalar_defaults_and_naming_are_what_the_output_writer_expects)
 {
-    MinimalSystem sys(3);
+    // Scalars and aux are populated here because the names now come from the
+    // spec: asking a system with no scalars for the name of scalar 1 used to
+    // fabricate "Scalar1", and is an out-of-range read on an empty vector now.
+    MinimalSystem sys(3, 2, 1);
 
     BOOST_TEST(sys.getNumVars() == 3);
-    BOOST_TEST(sys.getNumScalars() == 0);
-    BOOST_TEST(sys.getNumAux() == 0);
+    BOOST_TEST(sys.getNumScalars() == 2);
+    BOOST_TEST(sys.getNumAux() == 1);
 
     // aFn is the coefficient of du/dt; the default is 1 everywhere.
     for (Index i = 0; i < 3; ++i)
@@ -449,89 +480,18 @@ BOOST_AUTO_TEST_CASE(scalar_defaults_and_naming_are_what_the_output_writer_expec
     BOOST_TEST(sys.isRestarting() == false);
 }
 
-BOOST_AUTO_TEST_CASE(scalar_g_extended_defaults_to_scalar_g)
-{
-    // ScalarGExtended is what the residual calls; cases that have no dY'/dt
-    // dependence only override ScalarG, and the default must forward.
-    struct ScalarSystem : public MinimalSystem
-    {
-        ScalarSystem() { nScalars = 1; }
-        Value ScalarG(Index i, const DGSoln &, Time t) override { return 42.0 + i + t; }
-    } sys;
-
-    Grid g(0.0, 1.0, 2);
-    DGSoln dummy(2, g, 1, Index(1), Index(0));
-    BOOST_TEST(sys.ScalarGExtended(0, dummy, dummy, 0.5) == 42.5);
-
-    // The extended derivative forwards to ScalarGPrime and zeroes the dY'/dt
-    // part, which is what makes alpha * (dG/dY') vanish for algebraic scalars.
-    State out(2, 1, 0), out_dt(2, 1, 0);
-    out_dt.Variable[0] = 999.0;
-    struct WithPrime : public ScalarSystem
-    {
-        void ScalarGPrime(Index, State &o, const DGSoln &, std::function<double(double)>,
-                          Interval, Time) override
-        {
-            o.zero();
-            o.Variable[0] = 7.0;
-        }
-    } sys2;
-    sys2.ScalarGPrimeExtended(0, out, out_dt, dummy, dummy, [](double) { return 1.0; },
-                              Interval(0.0, 1.0), 0.0);
-    BOOST_TEST(out.Variable[0] == 7.0);
-    BOOST_TEST(out_dt.Variable[0] == 0.0);
-}
-
-BOOST_AUTO_TEST_CASE(batched_scalar_g_prime_extended_walks_every_basis_function)
-{
-    // The batched ScalarGPrimeExtended loops cells x basis functions and packs
-    // the result at index cell*(k+1) + j. That flattening is the same one the
-    // Jacobian's w-vectors are read back with, so an off-by-one would silently
-    // attribute a scalar's sensitivity to the wrong node.
-    struct ProbeSystem : public MinimalSystem
-    {
-        ProbeSystem() { nScalars = 1; }
-        // Report the value of the test function at the cell's left endpoint, so
-        // the answer identifies exactly which (cell, j) pair produced it.
-        void ScalarGPrime(Index, State &o, const DGSoln &, std::function<double(double)> phi,
-                          Interval I, Time) override
-        {
-            o.zero();
-            o.Variable[0] = phi(I.x_l);
-            o.Derivative[0] = phi(I.x_u);
-        }
-    } sys;
-
-    const Index nCells = 3, k = 2, nVars = 2;
-    Grid grid(0.0, 1.0, nCells);
-    DGSoln shape(nVars, grid, k, Index(1), Index(0));
-    std::vector<double> mem(shape.getDoF(), 0.0), memdt(shape.getDoF(), 0.0);
-    DGSoln y(nVars, grid, k, mem.data(), Index(1), Index(0));
-    DGSoln dydt(nVars, grid, k, memdt.data(), Index(1), Index(0));
-
-    GlobalStateMatrix out(1), out_dt(1);
-    out.add(nCells, k, nVars, 1, 0);
-    out_dt.add(nCells, k, nVars, 1, 0);
-
-    sys.ScalarGPrimeExtended(out, out_dt, y, dydt, 0.0);
-
-    auto const &basis = y.getBasis();
-    for (Index cell = 0; cell < nCells; ++cell)
-        for (Index j = 0; j < k + 1; ++j)
-        {
-            const Index slot = cell * (k + 1) + j;
-            BOOST_TEST(out[0].Variable(slot)(0) ==
-                           basis.Evaluate(grid[cell], j, grid[cell].x_l),
-                       boost::test_tools::tolerance(1e-12));
-            BOOST_TEST(out[0].Derivative(slot)(0) ==
-                           basis.Evaluate(grid[cell], j, grid[cell].x_u),
-                       boost::test_tools::tolerance(1e-12));
-            // The dY'/dt half is zeroed by the default extended prime.
-            BOOST_TEST(out_dt[0].Variable(slot)(0) == 0.0);
-        }
-}
-
-// ------------------------------------------------------ setRestartValues --
+// The two tests that stood here -- scalar_g_extended_defaults_to_scalar_g and
+// batched_scalar_g_prime_extended_walks_every_basis_function -- pinned the
+// forwarding machinery of the old scalar interface: ScalarGExtended defaulting
+// to ScalarG, and the base class loop that called a per-(cell, basis function)
+// hook and packed the answers at cell*(k+1) + j. There is no forwarding now and
+// no loop; a case fills the whole array itself.
+//
+// What they were really protecting -- that the flattening a case writes is the
+// one the solver reads back into its w vectors -- is covered more strongly by
+// checkScalarDerivative in ScalarJacobianTests.cpp, which finite-differences
+// the case's own ScalarG and compares every entry rather than checking that
+// plumbing forwards.
 
 BOOST_AUTO_TEST_CASE(set_restart_values_takes_ownership_and_derives_the_boundaries)
 {
@@ -541,9 +501,13 @@ BOOST_AUTO_TEST_CASE(set_restart_values_takes_ownership_and_derives_the_boundari
     // rather than from the config.
     struct RestartSystem : public MinimalSystem
     {
-        RestartSystem() { nVars = 1; }
-        bool isLowerBoundaryDirichlet(Index) const override { return true; }
-        bool isUpperBoundaryDirichlet(Index) const override { return false; }
+        // Dirichlet below, Neumann above, so setRestartValues has to read u at
+        // one end and sigma at the other.
+        RestartSystem()
+            : MinimalSystem(SystemSpec{.variables = numberedFields(1, BoundaryKind::Dirichlet,
+                                                                   BoundaryKind::Neumann)})
+        {
+        }
     } sys;
 
     const Index nCells = 3, k = 2, nVars = 1;
@@ -574,6 +538,82 @@ BOOST_AUTO_TEST_CASE(set_restart_values_takes_ownership_and_derives_the_boundari
     BOOST_TEST(sys.LowerBoundary(0, 0.0) == 2.0, boost::test_tools::tolerance(1e-12));
     // Upper boundary is not, so uR comes from sigma(x_u) = -0.5.
     BOOST_TEST(sys.UpperBoundary(0, 0.0) == -0.5, boost::test_tools::tolerance(1e-12));
+}
+
+// ------------------------------------------------- State as an out-parameter --
+
+BOOST_AUTO_TEST_CASE(a_state_is_born_zeroed_not_merely_sized)
+{
+    // The derivative hooks receive these as out-parameters. Eigen's resize()
+    // leaves the memory indeterminate, which made an opening setZero() the
+    // caller's responsibility in every physics case -- and a case that assigned
+    // only its nonzero entries, which is the natural way to write one, got
+    // whatever was in the buffer for the rest. That is defect (2) of the
+    // ScalarTestLD3 post-mortem in Tests/README.md.
+    //
+    // Heap contents are not deterministic, so this cannot prove the old code
+    // was wrong; what it pins is that nothing reintroduces a bare resize().
+    for (int trial = 0; trial < 8; ++trial)
+    {
+        State s(4, 3, 2);
+        BOOST_TEST(s.u().isZero());
+        BOOST_TEST(s.q().isZero());
+        BOOST_TEST(s.sigma().isZero());
+        BOOST_TEST(s.phi().isZero());
+        BOOST_TEST(s.scalars().isZero());
+    }
+}
+
+BOOST_AUTO_TEST_CASE(a_global_state_is_born_zeroed_too)
+{
+    // SystemSolver builds a fresh GlobalStateMatrix for every Jacobian
+    // evaluation and hands its columns straight to the hooks.
+    GlobalState g(3, 2, 4, 3, 2);
+    BOOST_TEST(g.Variable().isZero());
+    BOOST_TEST(g.Derivative().isZero());
+    BOOST_TEST(g.Flux().isZero());
+    BOOST_TEST(g.Aux().isZero());
+    BOOST_TEST(g.Scalars().isZero());
+}
+
+BOOST_AUTO_TEST_CASE(sigma_hat_is_the_physical_flux_and_sigma_is_what_is_stored)
+{
+    // The solver stores sigma = -sigma_hat. `Flux` holds the stored value, so
+    // a case reading it gets the negative of what its own SigmaFn returned --
+    // the trap documented at the top of TransportSystem.hpp. sigmaHat() names
+    // the physical quantity so that the negation is visible in the source
+    // rather than remembered.
+    State s(2);
+    s.sigma(0) = -3.25; // as the solver stores it
+    s.sigma(1) = 1.5;
+
+    BOOST_TEST(s.sigma(0) == -3.25);
+    BOOST_TEST(s.sigmaHat(0) == 3.25);
+    BOOST_TEST(s.sigmaHat(1) == -1.5);
+
+    // The named accessors and the raw vectors are two views of one buffer.
+    BOOST_TEST(s.sigma(0) == -3.25);
+}
+
+BOOST_AUTO_TEST_CASE(named_accessors_reach_the_same_storage_as_the_raw_vectors)
+{
+    State s(3, 2, 1);
+    s.u(0) = 1.0;
+    s.q(2) = 2.0;
+    s.phi(0) = 3.0;
+    s.scalar(1) = 4.0;
+
+    BOOST_TEST(s.u(0) == 1.0);
+    BOOST_TEST(s.q(2) == 2.0);
+    BOOST_TEST(s.phi(0) == 3.0);
+    BOOST_TEST(s.scalar(1) == 4.0);
+
+    // Aux is sized nAux and Variable nVars, and confusing the two is a
+    // documented source of bugs here; under DEBUG the accessors say so rather
+    // than reading past the end. (This build is not a DEBUG build, so only the
+    // sizes are asserted.)
+    BOOST_TEST(s.phi().size() == 1);
+    BOOST_TEST(s.u().size() == 3);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

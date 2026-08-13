@@ -54,52 +54,50 @@ class MatrixMock : public TransportSystem
 {
 public:
     MatrixMock()
+        : TransportSystem({.variables = numberedFields(2),
+                           .scalars = numberedScalars(2),
+                           .aux = numberedAux(1)})
     {
-        nVars = 2;
-        nScalars = 2;
-        nAux = 1;
     }
 
     Value LowerBoundary(Index, Time) const override { return 0.0; }
     Value UpperBoundary(Index, Time) const override { return 0.0; }
-    bool isLowerBoundaryDirichlet(Index) const override { return true; }
-    bool isUpperBoundaryDirichlet(Index) const override { return true; }
 
     Value SigmaFn(Index i, const State &s, Position x, Time) override
     {
-        return (1.0 + 0.3 * i) * s.Derivative[i] + 0.2 * s.Variable[0] * s.Variable[0] +
-               0.5 * s.Aux[0] * x;
+        return (1.0 + 0.3 * i) * s.q(i) + 0.2 * s.u(0) * s.u(0) +
+               0.5 * s.phi(0) * x;
     }
     Value Sources(Index i, const State &s, Position x, Time) override
     {
-        return 0.7 * s.Variable[i] + 0.1 * x + 0.4 * s.Scalars[0];
+        return 0.7 * s.u(i) + 0.1 * x + 0.4 * s.scalar(0);
     }
 
     // d(sigma_i)/dq_j -- varies with x and with the state.
     void dSigmaFn_dq(Index i, VectorRef v, const State &s, Position x, Time) override
     {
         for (Index j = 0; j < nVars; ++j)
-            v[j] = 0.31 + 0.11 * (i * nVars + j) + 0.7 * x + 0.13 * s.Variable[j];
+            v[j] = 0.31 + 0.11 * (i * nVars + j) + 0.7 * x + 0.13 * s.u(j);
     }
     void dSigmaFn_du(Index i, VectorRef v, const State &s, Position x, Time) override
     {
         for (Index j = 0; j < nVars; ++j)
-            v[j] = 0.17 + 0.23 * (i * nVars + j) - 0.5 * x + 0.09 * s.Derivative[j];
+            v[j] = 0.17 + 0.23 * (i * nVars + j) - 0.5 * x + 0.09 * s.q(j);
     }
     void dSources_du(Index i, VectorRef v, const State &s, Position x, Time) override
     {
         for (Index j = 0; j < nVars; ++j)
-            v[j] = 1.3 + 0.19 * (i * nVars + j) + 0.4 * x * x + 0.07 * s.Variable[j];
+            v[j] = 1.3 + 0.19 * (i * nVars + j) + 0.4 * x * x + 0.07 * s.u(j);
     }
     void dSources_dq(Index i, VectorRef v, const State &s, Position x, Time) override
     {
         for (Index j = 0; j < nVars; ++j)
-            v[j] = -0.6 + 0.29 * (i * nVars + j) + 0.8 * x - 0.05 * s.Derivative[j];
+            v[j] = -0.6 + 0.29 * (i * nVars + j) + 0.8 * x - 0.05 * s.q(j);
     }
     void dSources_dsigma(Index i, VectorRef v, const State &s, Position x, Time) override
     {
         for (Index j = 0; j < nVars; ++j)
-            v[j] = 0.43 - 0.07 * (i * nVars + j) + 0.25 * x + 0.02 * s.Flux[j];
+            v[j] = 0.43 - 0.07 * (i * nVars + j) + 0.25 * x + 0.02 * s.sigma(j);
     }
 
     // Constant, so the interpolatory and quadrature builders must agree exactly.
@@ -121,7 +119,7 @@ public:
 
     Value AuxG(Index, const State &s, Position, Time) override
     {
-        return s.Aux[0] - s.Variable[0] * s.Variable[0];
+        return s.phi(0) - s.u(0) * s.u(0);
     }
 
     // Distinct primes in every slot: if a builder puts dG/du where dG/dq
@@ -129,13 +127,13 @@ public:
     void AuxGPrime(Index, State &out, const State &, Position, Time) override
     {
         out.zero();
-        out.Variable[0] = 2.0;
-        out.Variable[1] = 3.0;
-        out.Derivative[0] = 5.0;
-        out.Derivative[1] = 7.0;
-        out.Flux[0] = 11.0;
-        out.Flux[1] = 13.0;
-        out.Aux[0] = 17.0;
+        out.u(0) = 2.0;
+        out.u(1) = 3.0;
+        out.q(0) = 5.0;
+        out.q(1) = 7.0;
+        out.sigma(0) = 11.0;
+        out.sigma(1) = 13.0;
+        out.phi(0) = 17.0;
     }
 
     Value InitialValue(Index i, Position x) const override
@@ -149,7 +147,12 @@ public:
     Value InitialAuxValue(Index, Position x) const override { return 0.25 + x * x; }
     Value InitialScalarValue(Index s) const override { return 0.5 + 0.25 * s; }
 
-    Value ScalarG(Index s, const DGSoln &y, Time) override { return y.Scalar(s) - 1.0; }
+    Value ScalarG(Index s, GlobalState const &y, GlobalState const &,
+                  std::vector<Position> const &, Values const &, Matrix const &,
+                  Time) override
+    {
+        return y.Scalars()(s) - 1.0;
+    }
 };
 
 // Everything a matrix test needs: a solver with matrices built, initial
@@ -368,7 +371,7 @@ BOOST_AUTO_TEST_CASE(d_sources_d_scalars_mat_is_the_projected_derivative)
     for (Index cell = 0; cell < MatrixFixture::nCells; ++cell)
     {
         Matrix mat(nVars * (k + 1), nScalars);
-        f.sys.dSources_dScalars_Mat(mat, f.sys.yJac, cell);
+        f.sys.dSources_dScalars_Mat(mat, f.sys.yJac, cell, 0.0);
 
         Interval const &I = f.grid[cell];
         auto const &basis = f.sys.yJac.getBasis();
@@ -507,6 +510,57 @@ BOOST_AUTO_TEST_CASE(d_aux_mat_puts_each_derivative_in_the_right_column_block)
 
     BOOST_TEST((mat.block(0, 3 * nVars * (k + 1), k + 1, k + 1) - dG_dphi * M).norm() < 1e-10,
                "phi block");
+}
+
+BOOST_FIXTURE_TEST_CASE(initialiseMatrices_rebuilds_rather_than_grows, MatrixFixture)
+{
+    // Every cellwise container is filled by emplace_back, so initialiseMatrices()
+    // has to clear them first or a second call appends a second set. It clears
+    // through clearCellwiseVecs(), whose list used to omit D_cellwise, CEBlocks and
+    // MXSolvers -- and appending to those is worse than a leak, because indices run
+    // 0..nCells-1 and so keep reaching the *stale* front half.
+    //
+    // The fixture has already called initialiseMatrices() once, so this is the
+    // second call. It is not a hypothetical route: PrintDebugInfo() calls it
+    // unguarded on an already-initialised solver.
+    sys.initialiseMatrices();
+
+    auto sizes = {std::pair{"XMats", sys.XMats.size()},
+                  std::pair{"MBlocks", sys.MBlocks.size()},
+                  std::pair{"CG_cellwise", sys.CG_cellwise.size()},
+                  std::pair{"RF_cellwise", sys.RF_cellwise.size()},
+                  std::pair{"A_cellwise", sys.A_cellwise.size()},
+                  std::pair{"B_cellwise", sys.B_cellwise.size()},
+                  std::pair{"D_cellwise", sys.D_cellwise.size()},
+                  std::pair{"E_cellwise", sys.E_cellwise.size()},
+                  std::pair{"C_cellwise", sys.C_cellwise.size()},
+                  std::pair{"G_cellwise", sys.G_cellwise.size()},
+                  std::pair{"H_cellwise", sys.H_cellwise.size()},
+                  std::pair{"Csigma_cellwise", sys.Csigma_cellwise.size()},
+                  std::pair{"Cq_cellwise", sys.Cq_cellwise.size()},
+                  std::pair{"CEBlocks", sys.CEBlocks.size()},
+                  std::pair{"MXSolvers", sys.MXSolvers.size()}};
+
+    for (auto const &[name, size] : sizes)
+        BOOST_TEST(size == static_cast<size_t>(nCells),
+                   name << " holds " << size << " entries after two "
+                        << "initialiseMatrices() calls, expected " << nCells);
+
+    // And every surviving entry is properly shaped. Weaker than the size checks
+    // above -- dropping any of the three clear() calls is caught by those, not by
+    // these -- but it is what would catch MXSolvers being sized somewhere other
+    // than the emplace_back in initialiseMatrices, which is how it came to hold
+    // 2 * nCells entries with default-constructed (rows() == 0) ones at the front.
+    for (Index i = 0; i < nCells; ++i)
+    {
+        BOOST_TEST(sys.MXSolvers[i].rows() == sys.MBlocks[i].rows(),
+                   "cell " << i << " MX solver is " << sys.MXSolvers[i].rows()
+                           << " rows, expected " << sys.MBlocks[i].rows());
+        BOOST_TEST(sys.CEBlocks[i].rows() == sys.MBlocks[i].rows(),
+                   "cell " << i << " CEBlock has the wrong height");
+        BOOST_TEST(sys.D_cellwise[i].rows() == problem.getNumVars() * (k + 1),
+                   "cell " << i << " D block has the wrong height");
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

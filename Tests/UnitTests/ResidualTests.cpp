@@ -20,6 +20,7 @@
 
 #include "../../PhysicsCases/ScalarTestLD3.hpp"
 #include "CapturedOutput.hpp"
+#include "PyIntegrator.hpp"
 #include "SystemSolver.hpp"
 #include "TestDiffusion.hpp"
 #include "Types.hpp"
@@ -67,16 +68,17 @@ const toml::value scalar_config = u8R"(
 class PolynomialDiffusion : public TransportSystem
 {
 public:
-    explicit PolynomialDiffusion(double kappa_ = 1.3) : kappa(kappa_) { nVars = 1; }
+    explicit PolynomialDiffusion(double kappa_ = 1.3)
+        : TransportSystem({.variables = numberedFields(1)}), kappa(kappa_)
+    {
+    }
 
     Value LowerBoundary(Index, Time) const override { return 0.0; }
     Value UpperBoundary(Index, Time) const override { return 0.0; }
-    bool isLowerBoundaryDirichlet(Index) const override { return true; }
-    bool isUpperBoundaryDirichlet(Index) const override { return true; }
 
     Value SigmaFn(Index, const State &s, Position, Time) override
     {
-        return kappa * s.Derivative[0];
+        return kappa * s.q(0);
     }
     Value Sources(Index, const State &, Position x, Time) override
     {
@@ -131,18 +133,15 @@ class AuxResidualMock : public TransportSystem
 {
 public:
     AuxResidualMock()
+        : TransportSystem({.variables = numberedFields(1), .aux = numberedAux(1)})
     {
-        nVars = 1;
-        nAux = 1;
     }
 
     Value LowerBoundary(Index, Time) const override { return 0.0; }
     Value UpperBoundary(Index, Time) const override { return 0.0; }
-    bool isLowerBoundaryDirichlet(Index) const override { return true; }
-    bool isUpperBoundaryDirichlet(Index) const override { return true; }
 
-    Value SigmaFn(Index, const State &s, Position, Time) override { return s.Derivative[0]; }
-    Value Sources(Index, const State &s, Position, Time) override { return s.Aux[0]; }
+    Value SigmaFn(Index, const State &s, Position, Time) override { return s.q(0); }
+    Value Sources(Index, const State &s, Position, Time) override { return s.phi(0); }
 
     void dSigmaFn_dq(Index, VectorRef v, const State &, Position, Time) override { v[0] = 1.0; }
     void dSigmaFn_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
@@ -163,13 +162,13 @@ public:
 
     Value AuxG(Index, const State &s, Position, Time) override
     {
-        return s.Aux[0] - auxCoeff * s.Variable[0];
+        return s.phi(0) - auxCoeff * s.u(0);
     }
     void AuxGPrime(Index, State &out, const State &, Position, Time) override
     {
         out.zero();
-        out.Variable[0] = -auxCoeff;
-        out.Aux[0] = 1.0;
+        out.u(0) = -auxCoeff;
+        out.phi(0) = 1.0;
     }
 
     Value InitialValue(Index, Position x) const override { return x * (1.0 - x); }
@@ -374,9 +373,9 @@ BOOST_AUTO_TEST_CASE(residual_is_affine_for_a_linear_problem)
     SUNContext_Free(&ctx);
 }
 
-BOOST_AUTO_TEST_CASE(residual_scalar_rows_are_scalar_g_extended)
+BOOST_AUTO_TEST_CASE(residual_scalar_rows_are_scalar_g)
 {
-    // res.Scalar(j) = ScalarGExtended(j, Y, dYdt, t), verbatim. Cheap to pin,
+    // res.Scalar(j) = ScalarG(j, ...), verbatim. Cheap to pin,
     // and it is the row block the Woodbury elimination borders onto.
     const Index k = 2, nCells = 4;
     Grid grid(-1.0, 1.0, nCells);
@@ -414,8 +413,11 @@ BOOST_AUTO_TEST_CASE(residual_scalar_rows_are_scalar_g_extended)
     DGSoln res_h(problem.getNumVars(), grid, k, N_VGetArrayPointer(res),
                  problem.getNumScalars(), problem.getNumAux());
 
+    const Vector &weights = Integrator::getIntegrationWeights(Y_h.getBasis(), grid);
+    const Matrix &phiBoundary = Integrator::getPhiBoundary(Y_h.getBasis(), grid);
     for (Index j = 0; j < problem.getNumScalars(); ++j)
-        BOOST_TEST(res_h.Scalar(j) == problem.ScalarGExtended(j, Y_h, dY_h, 0.5),
+        BOOST_TEST(res_h.Scalar(j) == problem.ScalarG(j, Y_h.evalOnNodes(), dY_h.evalOnNodes(),
+                                                      Y_h.getPoints(), weights, phiBoundary, 0.5),
                    boost::test_tools::tolerance(1e-14));
 
     N_VDestroy(Y);
@@ -426,7 +428,7 @@ BOOST_AUTO_TEST_CASE(residual_scalar_rows_are_scalar_g_extended)
 
 BOOST_AUTO_TEST_CASE(residual_aux_rows_are_the_projected_constraint)
 {
-    // The aux rows enforce G = 0 by projection: res.Aux = P_h G(Y). With a
+    // The aux rows enforce G = 0 by projection: res.phi() = P_h G(Y). With a
     // linear constraint the projection is exact, so the residual coefficients
     // must equal the basis coefficients of a - c*u computed directly.
     const Index k = 3, nCells = 4;
@@ -604,14 +606,12 @@ BOOST_AUTO_TEST_CASE(error_weights_use_a_per_variable_atol_when_one_is_supplied)
 
     struct TwoVar : public TransportSystem
     {
-        TwoVar() { nVars = 2; }
+        TwoVar() : TransportSystem({.variables = numberedFields(2)}) {}
         Value LowerBoundary(Index, Time) const override { return 0.0; }
         Value UpperBoundary(Index, Time) const override { return 0.0; }
-        bool isLowerBoundaryDirichlet(Index) const override { return true; }
-        bool isUpperBoundaryDirichlet(Index) const override { return true; }
         Value SigmaFn(Index i, const State &s, Position, Time) override
         {
-            return s.Derivative[i];
+            return s.q(i);
         }
         Value Sources(Index, const State &, Position, Time) override { return 0.0; }
         void dSigmaFn_dq(Index i, VectorRef v, const State &, Position, Time) override

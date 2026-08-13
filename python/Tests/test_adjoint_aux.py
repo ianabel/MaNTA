@@ -46,8 +46,7 @@ independent reference:
 import numpy as np
 import pytest
 
-import MaNTA
-
+import manta as MaNTA
 KAPPA0 = 1.5
 SOURCE0 = 2.0
 
@@ -78,19 +77,14 @@ class AuxParametricDiffusion(MaNTA.TransportSystem):
     """Linear diffusion whose flux is written in terms of an auxiliary variable."""
 
     def __init__(self, p):
-        MaNTA.TransportSystem.__init__(self)
-        self.nVars = 1
-        self.nScalars = 0
-        self.nAux = N_AUX
-        self.isLowerDirichlet = True
-        self.isUpperDirichlet = True
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1, nAux=N_AUX))
         self.p = np.asarray(p, dtype=float)
 
     # --- flux and sources ------------------------------------------------
     def SigmaFn(self, i, state, x, t):
         # Note: phi_q, not Derivative. This is what puts the flux's dependence
         # on q behind the auxiliary constraint.
-        return self.p[P_KAPPA] * state["Aux"][A_Q]
+        return self.p[P_KAPPA] * state.phi[A_Q]
 
     def Sources(self, i, state, x, t):
         return self.p[P_SOURCE]
@@ -122,25 +116,15 @@ class AuxParametricDiffusion(MaNTA.TransportSystem):
     # --- the auxiliary constraints:  phi_q - q = 0,  phi_u - u = 0 --------
     def AuxG(self, i, state, x, t):
         if i == A_Q:
-            return state["Aux"][A_Q] - state["Derivative"][0]
-        return state["Aux"][A_U] - state["Variable"][0]
+            return state.phi[A_Q] - state.q[0]
+        return state.phi[A_U] - state.u[0]
 
-    def AuxGPrime(self, i, state, x, t):
-        variable = np.zeros(self.nVars)
-        derivative = np.zeros(self.nVars)
-        aux = np.zeros(self.nAux)
-        aux[i] = 1.0
+    def AuxGPrime(self, i, out, state, x, t):
+        out.phi[i] = 1.0
         if i == A_Q:
-            derivative[0] = -1.0
+            out.q[0] = -1.0
         else:
-            variable[0] = -1.0
-        return {
-            "Variable": variable,
-            "Derivative": derivative,
-            "Flux": np.zeros(self.nVars),
-            "Aux": aux,
-            "Scalars": np.zeros(0),
-        }
+            out.u[0] = -1.0
 
     # --- boundaries and initial data -------------------------------------
     def LowerBoundary(self, i, t):

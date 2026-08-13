@@ -9,10 +9,9 @@
 REGISTER_PHYSICS_IMPL( AdjointPoster );
 
 AdjointPoster::AdjointPoster( toml::value const& config, Grid const & )
+	: TransportSystem({.variables = {{"u", "the diffused quantity", "",
+									 BoundaryKind::Neumann, BoundaryKind::Dirichlet}}})
 {
-	// Always set nVars in a derived constructor
-	nVars = 1;
-
 	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
 
@@ -34,13 +33,10 @@ Value AdjointPoster::UpperBoundary( Index, Time t ) const
 	return 0.3;
 }
 
-bool AdjointPoster::isLowerBoundaryDirichlet( Index ) const { return false; };
-bool AdjointPoster::isUpperBoundaryDirichlet( Index ) const { return true; };
-
 
 Value AdjointPoster::SigmaFn( Index, const State &s, Position, Time )
 {
-	double u = s.Variable[ 0 ],q = s.Derivative[ 0 ];
+	double u = s.u(0),q = s.q(0);
 
 	double NonlinearKappa = a / ::pow( u, 1.5 );
 	return NonlinearKappa * q;
@@ -54,14 +50,14 @@ Value AdjointPoster::Sources( Index, const State &, Position x, Time )
 
 void AdjointPoster::dSigmaFn_dq( Index, VectorRef v, const State &s, Position, Time )
 {
-	double u = s.Variable[ 0 ];
+	double u = s.u(0);
 	double NonlinearKappa = a / ::pow( u, 1.5 );
 	v[ 0 ] = NonlinearKappa;
 };
 
 void AdjointPoster::dSigmaFn_du( Index, VectorRef v, const State& s, Position, Time )
 {
-	double u = s.Variable[ 0 ], q = s.Derivative[ 0 ];
+	double u = s.u(0), q = s.q(0);
 	v[ 0 ] = -( 3.0/2.0 )*( a / ::pow( u, 2.5 ) )*q;
 };
 

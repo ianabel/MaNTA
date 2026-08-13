@@ -7,7 +7,16 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(MatrixDiffusion);
 
+SystemSpec MatrixDiffusion::buildSpec(toml::value const &config)
+{
+	Index nVars = 1;
+	if (config.count("DiffusionProblem") == 1)
+		nVars = toml::find_or(config.at("DiffusionProblem"), "nVars", 1);
+	return {.variables = numberedFields(nVars)};
+}
+
 MatrixDiffusion::MatrixDiffusion(toml::value const &config, Grid const &)
+	: TransportSystem(buildSpec(config))
 {
 
 	// Construct your problem from user-specified config
@@ -19,7 +28,6 @@ MatrixDiffusion::MatrixDiffusion(toml::value const &config, Grid const &)
 
 	auto const &DiffConfig = config.at("DiffusionProblem");
 
-	nVars = toml::find_or(DiffConfig, "nVars", 1);
 	InitialWidth = toml::find_or(DiffConfig, "InitialWidth", 0.2);
 	Centre = toml::find_or(DiffConfig, "Centre", 0.0);
 
@@ -51,12 +59,9 @@ Value MatrixDiffusion::UpperBoundary(Index, Time) const
 	return 0.0;
 }
 
-bool MatrixDiffusion::isLowerBoundaryDirichlet(Index) const { return true; };
-bool MatrixDiffusion::isUpperBoundaryDirichlet(Index) const { return true; };
-
 Value MatrixDiffusion::SigmaFn(Index i, const State &s, Position, Time)
 {
-	auto sigma = Kappa * s.Derivative;
+	auto sigma = Kappa * s.q();
 
 	return sigma(i);
 }

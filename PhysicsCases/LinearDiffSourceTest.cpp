@@ -3,18 +3,36 @@
 
 REGISTER_PHYSICS_IMPL(LinearDiffSourceTest);
 
+SystemSpec LinearDiffSourceTest::buildSpec(toml::value const &config)
+{
+    if (config.count("LinearDiffSourceTest") != 1)
+        return {.variables = numberedFields(1)};
+
+    auto const &InternalConfig = config.at("LinearDiffSourceTest");
+    const Index nVars = toml::find_or(InternalConfig, "nVars", 1);
+
+    // Per-variable, unlike the single-flag [AutodiffTransportSystem] keys.
+    const auto lower = toml::find_or(InternalConfig, "LowerBoundaryConditions", std::vector<bool>(nVars, true));
+    const auto upper = toml::find_or(InternalConfig, "UpperBoundaryConditions", std::vector<bool>(nVars, true));
+
+    auto spec = SystemSpec{.variables = numberedFields(nVars)};
+    for (Index i = 0; i < nVars; ++i)
+    {
+        spec.variables[i].lower = lower[i] ? BoundaryKind::Dirichlet : BoundaryKind::Neumann;
+        spec.variables[i].upper = upper[i] ? BoundaryKind::Dirichlet : BoundaryKind::Neumann;
+    }
+    return spec;
+}
+
 LinearDiffSourceTest::LinearDiffSourceTest(toml::value const &config, Grid const &grid)
+    : AutodiffTransportSystem(config, grid, buildSpec(config))
 {
     xL = grid.lowerBoundary();
     xR = grid.upperBoundary();
 
-    nScalars = 0;
-    nAux = 0;
-
     if (config.count("LinearDiffSourceTest") == 1)
     {
         auto const &InternalConfig = config.at("LinearDiffSourceTest");
-        nVars = toml::find_or(InternalConfig, "nVars", 1);
         if (InternalConfig.count("Kappa") != 1)
             Kappa = Matrix::Identity(nVars, nVars);
         else
@@ -85,8 +103,6 @@ LinearDiffSourceTest::LinearDiffSourceTest(toml::value const &config, Grid const
 
         InitialWidth = toml::find_or(InternalConfig, "InitialWidth", std::vector<double>(nVars, 0.1));
         InitialHeight = toml::find_or(InternalConfig, "InitialHeight", std::vector<double>(nVars, 1.0));
-        lowerBoundaryConditions = toml::find_or(InternalConfig, "LowerBoundaryConditions", std::vector<bool>(nVars, true));
-        upperBoundaryConditions = toml::find_or(InternalConfig, "UpperBoundaryConditions", std::vector<bool>(nVars, true));
     }
     else
     {
@@ -143,16 +159,6 @@ Value LinearDiffSourceTest::LowerBoundary(Index i, Time t) const
 Value LinearDiffSourceTest::UpperBoundary(Index i, Time t) const
 {
     return uR[i];
-}
-
-bool LinearDiffSourceTest::isLowerBoundaryDirichlet(Index i) const
-{
-    return lowerBoundaryConditions[i];
-}
-
-bool LinearDiffSourceTest::isUpperBoundaryDirichlet(Index i) const
-{
-    return upperBoundaryConditions[i];
 }
 
 void LinearDiffSourceTest::initialiseDiagnostics(NetCDFIO &nc)

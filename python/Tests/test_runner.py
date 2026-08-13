@@ -16,7 +16,7 @@ import os
 import numpy as np
 import pytest
 
-import MaNTA
+import manta as MaNTA
 
 
 class LinearDiffusion(MaNTA.TransportSystem):
@@ -26,19 +26,16 @@ class LinearDiffusion(MaNTA.TransportSystem):
     exactly -- which is the point: any error is in the plumbing, not here.
     """
 
-    def __init__(self, kappa=1.0, source=1.0):
-        MaNTA.TransportSystem.__init__(self)
-        self.nVars = 1
-        self.nScalars = 0
-        self.nAux = 0
-        self.isLowerDirichlet = True
-        self.isUpperDirichlet = True
+    def __init__(self, kappa=1.0, source=1.0, spec=None):
+        # spec is an argument so the two-variable subclass below can widen it.
+        # That used to be `self.nVars = 2` after construction.
+        MaNTA.TransportSystem.__init__(self, spec or MaNTA.numbered_spec(1))
         self.kappa = kappa
         self.source = source
 
     # --- required scalar interface -------------------------------------
     def SigmaFn(self, i, state, x, t):
-        return self.kappa * state["Derivative"][i]
+        return self.kappa * state.q[i]
 
     def Sources(self, i, state, x, t):
         return self.source
@@ -397,7 +394,7 @@ def test_output_filename_keeps_only_the_basename(tmp_path):
     """Pins current behaviour: the directory part of OutputFilename is dropped.
 
     PyRunner passes OutputFilename to `setInputFile`, and Solver.cpp does
-    `baseName = inputFilePath.stem()` -- so `/some/where/run1` writes `run1.nc`
+    `baseName = inputFilePath.filename()` -- so `/some/where/run1` writes `run1.nc`
     and `run1.restart.nc` into the *current* directory, not into
     `/some/where/`. That is reasonable for the standalone binary, where the
     argument is a config file and the output is meant to land beside you, but
@@ -455,7 +452,7 @@ def test_a_run_can_be_restarted_from_its_own_output():
                 WriteOutput=True,
                 restart=True,
                 RestartFile=split_name + ".restart.nc",
-                tZero=0.2,
+                t_initial=0.2,
             )
         )
         second.run(0.4)
@@ -477,8 +474,7 @@ def test_a_restart_with_the_wrong_variable_count_is_rejected():
 
     class TwoVariable(LinearDiffusion):
         def __init__(self):
-            super().__init__()
-            self.nVars = 2
+            super().__init__(spec=MaNTA.numbered_spec(2))
 
     name = "restart_dofmismatch"
     try:
@@ -539,3 +535,39 @@ def _cleanup(*names):
     for name in names:
         for suffix in (".nc", ".dat", ".restart.nc", ".dydt.dat", ".res.dat"):
             _unlink(name + suffix)
+
+
+# --------------------------------------------------------- output gating --
+
+
+def test_write_output_false_leaves_no_netcdf_behind(tmp_path, monkeypatch):
+    """WriteOutput: False must actually suppress the output files.
+
+    It was read into an unused local in PyRunner and not read at all by the
+    TOML reader, while nine call sites in this suite passed False and went on
+    writing the files they believed they had turned off.
+
+    cwd matters: output lands in the current directory under the *base name* of
+    OutputFilename, not beside any path in it.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    runner = MaNTA.Runner(LinearDiffusion())
+    runner.configure(base_config(tmp_path, OutputFilename="suppressed",
+                                 WriteOutput=False))
+    runner.run(0.1)
+
+    assert not (tmp_path / "suppressed.nc").exists()
+    assert not (tmp_path / "suppressed.restart.nc").exists()
+
+
+def test_write_output_true_still_writes(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    runner = MaNTA.Runner(LinearDiffusion())
+    runner.configure(base_config(tmp_path, OutputFilename="written",
+                                 WriteOutput=True))
+    runner.run(0.1)
+
+    assert (tmp_path / "written.nc").exists()
+    assert (tmp_path / "written.restart.nc").exists()

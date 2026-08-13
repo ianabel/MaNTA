@@ -3,6 +3,7 @@
 
 #include "State.hpp"
 #include "Types.hpp"
+#include "SystemSpec.hpp"
 #include "DGSoln.hpp"
 #include "NetCDFIO.hpp"
 #include "AdjointProblem.hpp"
@@ -34,12 +35,42 @@ class TransportSystem : public std::enable_shared_from_this<TransportSystem>
 {
 
 protected:
-  Index nVars;
-  Index nScalars = 0;
-  Index nAux = 0;
+  /// A case describes itself once, as data, and cannot be built without one.
+  ///
+  /// There is deliberately no default constructor. A case whose shape depends
+  /// on its configuration builds the spec in a static helper and passes it up:
+  ///
+  ///     MyCase::MyCase(toml::value const &config, Grid const &grid)
+  ///         : TransportSystem(buildSpec(config)) { ... }
+  ///
+  /// which is what forces the description to be complete before any hook can
+  /// be called, rather than assembled by assignment part-way through a
+  /// constructor body.
+  explicit TransportSystem(SystemSpec spec)
+      : m_spec(validated(std::move(spec))),
+        nVars(m_spec.numVars()), nScalars(m_spec.numScalars()), nAux(m_spec.numAux())
+  {
+  }
+
+  static SystemSpec validated(SystemSpec spec)
+  {
+    spec.validate();
+    return spec;
+  }
+
+  const SystemSpec m_spec;
+
+  // Derived from the spec, never assigned. They are const so that the old
+  // `nVars = 2;` in a constructor body is a compile error rather than a second
+  // source of truth.
+  const Index nVars;
+  const Index nScalars;
+  const Index nAux;
 
 public:
   virtual ~TransportSystem() = default;
+
+  SystemSpec const &spec() const { return m_spec; }
 
   Index getNumVars() const { return nVars; };
   Index getNumScalars() const { return nScalars; };
@@ -82,8 +113,20 @@ public:
   virtual Value LowerBoundary(Index i, Time t) const { return uL[i]; };
   virtual Value UpperBoundary(Index i, Time t) const { return uR[i]; };
 
-  virtual bool isLowerBoundaryDirichlet(Index i) const { return isLowerDirichlet; };
-  virtual bool isUpperBoundaryDirichlet(Index i) const { return isUpperDirichlet; };
+  // Not virtual: the boundary *kind* is part of what a case is, and lives in the
+  // spec. Only the boundary *values* above depend on t and stay overridable.
+  // This is also what retired the pair of uninitialised bools these used to
+  // read, which a case that overrode neither function would silently consult.
+  //
+  // .at(), here and in the lookups below, deliberately. The old versions
+  // answered for any index -- getScalarName(1) on a case with no scalars
+  // returned "Scalar1", and isScalarDifferential(0) returned false -- so a
+  // caller that had confused nAux with nVars, or looped to the wrong bound, got
+  // a plausible answer instead of a complaint. That confusion is a documented
+  // source of bugs here (dGdaux_Vec carried two of them). These are integer
+  // lookups next to matrix solves; the bounds check is not measurable.
+  bool isLowerBoundaryDirichlet(Index i) const { return m_spec.variables.at(i).lower == BoundaryKind::Dirichlet; };
+  bool isUpperBoundaryDirichlet(Index i) const { return m_spec.variables.at(i).upper == BoundaryKind::Dirichlet; };
 
   // The same for the flux and source functions -- the vectors have length nVars
   virtual Value SigmaFn(Index i, const State &s, Position x, Time t) = 0;
@@ -209,58 +252,79 @@ public:
     return 0.0;
   }
 
-  // Scalar functions
-  virtual Value ScalarG(Index, const DGSoln &, Time)
+  /*
+      The global (non-spatial) scalar constraints, G_s( mu, y, dy/dt, t ) = 0.
+
+      There were four names and five signatures here: ScalarG, ScalarGExtended,
+      ScalarGPrime and two ScalarGPrimeExtended overloads, one of which handed
+      the case a std::function test function and an Interval and asked it to
+      integrate against them with a quadrature rule of its own choosing. Two
+      pieces:
+
+        * `y` and `ydot` are the solution and its time derivative sampled on the
+          element nodes -- the same GlobalState the flux and source hooks see.
+          The basis is interpolatory, so a nodal value *is* the coefficient it
+          multiplies.
+
+        * `abscissae` gives the position of each node, for a constraint whose
+          integrand depends on x itself -- MirrorPlasma's needs the magnetic
+          geometry at each point. Same vector the flux and source hooks get.
+
+        * `weights` holds one quadrature weight per node, so an integral over
+          the whole domain is `weights.dot(y.Variable().row(i))`. Using the
+          framework's weights rather than a rule of your own is not a
+          convenience: ScalarTestLD3 integrated its own mass with a global
+          adaptive Kronrod rule over a piecewise polynomial, which is not a
+          smooth function of the coefficients, and its finite-difference
+          reference disagreed with the exact answer by 8% at k = 4 on 16 cells.
+
+      This is the shape the Python trampoline already flattened these into, and
+      it is now the one contract rather than a translation of another one.
+
+        * `phiBoundary` is (k+1) x 2: the basis functions of the first and last
+          cells evaluated at the two ends of the domain. It is what makes a
+          constraint on a boundary *point* expressible at all -- MaNTA's nodes
+          are Chebyshev points of the first kind, which are strictly interior,
+          so sigma(x_R) cannot be read off the nodal values. boundaryValue() in
+          State.hpp does that contraction. (The Python trampoline passed
+          phiBoundary only to the derivative, so a Python case could not write
+          such a constraint at all; both hooks take it now.)
+  */
+  virtual Value ScalarG(Index s, GlobalState const &y, GlobalState const &ydot,
+                        std::vector<Position> const &abscissae, Values const &weights,
+                        Matrix const &phiBoundary, Time t)
   {
     if (nScalars != 0)
       throw std::logic_error("nScalars > 0 but no scalar G provided");
     return 0.0;
   }
 
-  virtual Value ScalarGExtended(Index i, const DGSoln &y, const DGSoln &dydt, Time t)
+  /*
+      dG_s/d(state) and dG_s/d(state_dot), for every s at once.
+
+      Each is written as the derivative with respect to the *degrees of
+      freedom*, not as a function of x: for G = mu - Int u dx the u entry at
+      node j is -weights(j), because that is d/du_j of the integral. That is
+      why `weights` is passed to the derivative as well as to G itself.
+
+      `phiBoundary` is (k+1) x 2: the basis functions of the first and last
+      cells evaluated at the two ends of the domain. It is what makes point
+      functionals expressible -- a constraint involving sigma(x_R) has
+      d/d(sigma DOF j of the last cell) = phiBoundary(j, 1) -- since the nodes
+      need not include the endpoints.
+  */
+  virtual void ScalarGPrime(GlobalStateMatrix &dG, GlobalStateMatrix &dGdot,
+                            GlobalState const &y, GlobalState const &ydot,
+                            std::vector<Position> const &abscissae, Values const &weights,
+                            Matrix const &phiBoundary, Time t)
   {
-    return ScalarG(i, y, t);
+    if (nScalars != 0)
+      throw std::logic_error("nScalars > 0 but no scalar G derivative provided");
   }
 
-  virtual void ScalarGPrime(Index i, State &out, const DGSoln &y, std::function<double(double)> phi, Interval I, Time t)
-  {
-    throw std::logic_error("nScalars > 0 but no scalar G derivative provided");
-  }
-
-  virtual void ScalarGPrimeExtended(GlobalStateMatrix& out, GlobalStateMatrix& out_dt, const DGSoln &y, const DGSoln &dydt, Time t)
-  {
-    const Grid& grid = y.getGrid();
-    const Index k = y.getBasis().Order();
-
-    State s_temp( nVars, nScalars, nAux );
-    State s_dt_temp( nVars, nScalars, nAux );
-    for (Index s = 0; s < nScalars; ++s)
-    {
-      GlobalState& out_s = out[s];
-      GlobalState& out_dt_s = out_dt[s];
-      for (size_t i = 0; i < grid.getNCells(); ++i)
-      {
-        Interval const& I( grid[ i ] );
-        for (Index j = 0; j < k + 1; j++) 
-        {
-            ScalarGPrimeExtended( s, s_temp, s_dt_temp, y, dydt , [&]( double x ){ return y.getBasis().Evaluate( I, j, x ); }, I, t );
-            out_s.setWithState(i * (k + 1) + j, s_temp);
-            out_dt_s.setWithState(i * (k + 1) + j, s_dt_temp);
-        }
-      }
-    }
-  }
-
-  virtual void ScalarGPrimeExtended(Index i, State &out, State &out_dt, const DGSoln &y, const DGSoln &dydt, std::function<double(double)> phi, Interval I, Time t)
-  {
-    out_dt.zero();
-    ScalarGPrime(i, out, y, phi, I, t);
-  }
-
-  virtual bool isScalarDifferential(Index i)
-  {
-    return false;
-  }
+  // Also spec data. Consulted to decide whether InitialScalarDerivative is
+  // asked for this scalar, and whether G_s carries an alpha * dG/dmu' term.
+  bool isScalarDifferential(Index i) const { return m_spec.scalars.at(i).differential; }
 
   virtual void dSources_dScalars(Index, VectorRef, const State &, Position, Time)
   {
@@ -305,11 +369,16 @@ public:
 
   virtual void AuxGPrime(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
-    State temp(nVars, nScalars, nAux);
 #pragma omp parallel for
     for (size_t j = 0; j < states.size(); ++j)
     {
-      AuxGPrime(i,temp, states[j], abscissae[j], time);
+      // Declared inside the loop, not outside it. One State shared across a
+      // `#pragma omp parallel for` is a data race under OMP=on -- every thread
+      // writing its own point's derivatives into the same vectors -- and it
+      // also carried one point's values into the next when a hook wrote only
+      // its nonzero entries. Per-iteration, it is private and starts zeroed.
+      State temp(nVars, nScalars, nAux);
+      AuxGPrime(i, temp, states[j], abscissae[j], time);
       out.setWithState(j, temp);
     }
   }
@@ -331,50 +400,20 @@ public:
     throw std::logic_error("Adjoint problem not implemented for this physics case");
   }
 
-  virtual std::string getVariableName(Index i)
-  {
-    return std::string("Var") + std::to_string(i);
-  }
+  // Nine virtuals' worth of naming, now one lookup each. These are what key the
+  // netCDF groups and time series, so they are the case's own names for things
+  // rather than Var0/Scalar1/AuxVariable2.
+  std::string const &getVariableName(Index i) const { return m_spec.variables.at(i).name; }
+  std::string const &getScalarName(Index i) const { return m_spec.scalars.at(i).name; }
+  std::string const &getAuxVarName(Index i) const { return m_spec.aux.at(i).name; }
 
-  virtual std::string getScalarName(Index i)
-  {
-    return std::string("Scalar") + std::to_string(i);
-  }
+  std::string const &getVariableDescription(Index i) const { return m_spec.variables.at(i).description; }
+  std::string const &getScalarDescription(Index i) const { return m_spec.scalars.at(i).description; }
+  std::string const &getAuxDescription(Index i) const { return m_spec.aux.at(i).description; }
 
-  virtual std::string getAuxVarName(Index i)
-  {
-    return std::string("AuxVariable") + std::to_string(i);
-  }
-
-  virtual std::string getVariableDescription(Index i)
-  {
-    return std::string("Variable ") + std::to_string(i);
-  }
-
-  virtual std::string getScalarDescription(Index i)
-  {
-    return std::string("Scalar ") + std::to_string(i);
-  }
-
-  virtual std::string getAuxDescription(Index i)
-  {
-    return std::string("Auxiliary Variable ") + std::to_string(i);
-  }
-
-  virtual std::string getVariableUnits(Index i)
-  {
-    return std::string("");
-  }
-
-  virtual std::string getScalarUnits(Index i)
-  {
-    return std::string("");
-  }
-
-  virtual std::string getAuxUnits(Index i)
-  {
-    return std::string("");
-  }
+  std::string const &getVariableUnits(Index i) const { return m_spec.variables.at(i).units; }
+  std::string const &getScalarUnits(Index i) const { return m_spec.scalars.at(i).units; }
+  std::string const &getAuxUnits(Index i) const { return m_spec.aux.at(i).units; }
 
   // Hooks for adding extra NetCDF outputs
   virtual void initialiseDiagnostics(NetCDFIO &)
@@ -414,7 +453,6 @@ protected:
   std::vector<Values> m_sourceCache; // since sources might be expensive to calculate, cache them for use in outputs
 
   std::vector<Value> uL, uR;
-  bool isUpperDirichlet, isLowerDirichlet;
 };
 
 #endif // TRANSPORTSYSTEM_HPP

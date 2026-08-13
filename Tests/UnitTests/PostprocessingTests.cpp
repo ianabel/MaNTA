@@ -363,14 +363,14 @@ BOOST_AUTO_TEST_CASE(eval_on_star_nodes_carries_every_field)
         const State st = gs[i];
         for (Index v = 0; v < nVars; ++v)
         {
-            BOOST_TEST(st.Variable[v] == pp.uStar(v)(x),
+            BOOST_TEST(st.u(v) == pp.uStar(v)(x),
                        boost::test_tools::tolerance(1e-12));
-            BOOST_TEST(st.Derivative[v] == s.y.q(v)(x),
+            BOOST_TEST(st.q(v) == s.y.q(v)(x),
                        boost::test_tools::tolerance(1e-12));
-            BOOST_TEST(st.Flux[v] == s.y.sigma(v)(x),
+            BOOST_TEST(st.sigma(v) == s.y.sigma(v)(x),
                        boost::test_tools::tolerance(1e-12));
         }
-        BOOST_TEST(st.Aux[0] == s.y.Aux(0)(x), boost::test_tools::tolerance(1e-12));
+        BOOST_TEST(st.phi(0) == s.y.Aux(0)(x), boost::test_tools::tolerance(1e-12));
     }
 
     // u* is a genuinely different field from u_h -- if this were not so the test

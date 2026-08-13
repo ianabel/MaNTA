@@ -1,10 +1,7 @@
 from typing import NamedTuple
-import sys
-sys.path.insert(0, '../')  # To find MaNTA module
 
-import MaNTA
-from JAXTransportSystem import JAXTransportSystem
-from JAXAdjointProblem import JAXAdjointProblem
+import manta as MaNTA
+from manta.jax import JAXTransportSystem, JAXAdjointProblem
 import jax.numpy as jnp
 
 class NonlinearDiffusionParams(NamedTuple):
@@ -27,11 +24,7 @@ class NonlinearDiffusionParams(NamedTuple):
 
 class JAXAuxTest(JAXTransportSystem):
     def __init__(self, config: MaNTA.TomlValue, grid: MaNTA.Grid):
-        super().__init__()
-        self.nVars = 1
-        self.nAux = 1
-        self.isUpperDirichlet  = True
-        self.isLowerDirichlet  = False
+        super().__init__(MaNTA.numbered_spec(1, nAux=1, lower=MaNTA.Neumann))
 
         # This object will be passed to sigma and source functions
         self.params = NonlinearDiffusionParams.make(config)

@@ -10,10 +10,8 @@
 REGISTER_PHYSICS_IMPL( LD2 );
 
 LD2::LD2( toml::value const& config, Grid const& )
+	: TransportSystem({.variables = {{"u", "the diffused quantity", ""}}})
 {
-	// Always set nVars in a derived constructor
-	nVars = 1;
-
 	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
 	// here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
@@ -45,14 +43,11 @@ Value LD2::UpperBoundary( Index, Time t ) const
 	return ExactSolution( 1.0, t );
 }
 
-bool LD2::isLowerBoundaryDirichlet( Index ) const { return true; };
-bool LD2::isUpperBoundaryDirichlet( Index ) const { return true; };
-
 
 Value LD2::SigmaFn( Index, const State &s, Position, Time )
 {
     ++nSigmaCalls;
-	return kappa * s.Derivative[ 0 ];
+	return kappa * s.q(0);
 }
 
 Value LD2::Sources( Index, const State &, Position, Time )

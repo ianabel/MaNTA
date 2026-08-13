@@ -53,6 +53,15 @@ BOOST_AUTO_TEST_CASE(setters_reject_invalid_values)
     BOOST_CHECK_THROW(sys.setSteadyStateTolerance(0.0), std::logic_error);
     BOOST_CHECK_THROW(sys.setSteadyStateTolerance(-1.0), std::logic_error);
 
+    // Objective-decrease tolerance, likewise. Zero has to throw rather than mean
+    // "off": the gate is off by *absence*, and a caller that reaches the setter
+    // has said it wants the gate, so a zero here is a mistake worth reporting
+    // instead of a silently disarmed gate -- which is the failure mode the
+    // output-cadence version of this had on origin/optimize-mode.
+    BOOST_CHECK_NO_THROW(sys.setObjectiveDecreaseTolerance(1e-3));
+    BOOST_CHECK_THROW(sys.setObjectiveDecreaseTolerance(0.0), std::logic_error);
+    BOOST_CHECK_THROW(sys.setObjectiveDecreaseTolerance(-1.0), std::logic_error);
+
     // Number of output points must be strictly positive.
     BOOST_CHECK_NO_THROW(sys.setNOutput(1));
     BOOST_CHECK_THROW(sys.setNOutput(0), std::logic_error);

@@ -21,14 +21,14 @@ public:
     void writeDiagnostics(DGSoln const &y, DGSoln const &dydt, Time t, NetCDFIO &nc, size_t tIndex) override;
 
 private:
+    static SystemSpec buildSpec(toml::value const &config);
+
     Real Flux(Index, RealVector, RealVector, Real, Time) override;
     Real Source(Index, RealVector, RealVector, RealVector, RealVector, RealVector, Real, Time) override;
 
     Value LowerBoundary(Index i, Time t) const override;
     Value UpperBoundary(Index i, Time t) const override;
 
-    virtual bool isLowerBoundaryDirichlet(Index i) const override;
-    virtual bool isUpperBoundaryDirichlet(Index i) const override;
 
     Real Gamma(RealVector u, RealVector q, Real x, Time t) const;
     Real qe(RealVector u, RealVector q, Real x, Time t) const;
@@ -65,7 +65,6 @@ private:
     // std::shared_ptr<MagneticField> B = nullptr;
 
     //
-    bool evolveDensity = false;
     Real grad_n;
 
     Real R0 = 3.0;

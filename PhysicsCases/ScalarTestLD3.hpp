@@ -19,9 +19,6 @@ public:
 	Value LowerBoundary(Index, Time) const override;
 	Value UpperBoundary(Index, Time) const override;
 
-	bool isLowerBoundaryDirichlet(Index) const override;
-	bool isUpperBoundaryDirichlet(Index) const override;
-
 	// The guts of the physics problem (these are non-const as they
 	// are allowed to alter internal state such as to store computations
 	// for future calls)
@@ -35,8 +32,11 @@ public:
 	void dSources_dq(Index, VectorRef v, const State &, Position, Time) override;
 	void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override;
 
-	Value ScalarGExtended(Index, const DGSoln &, const DGSoln &, Time) override;
-	void ScalarGPrimeExtended(Index, State &, State &, const DGSoln &, const DGSoln &, std::function<double(double)>, Interval, Time) override;
+	Value ScalarG(Index, GlobalState const &, GlobalState const &,
+				  std::vector<Position> const &, Values const &, Matrix const &, Time) override;
+	void ScalarGPrime(GlobalStateMatrix &, GlobalStateMatrix &, GlobalState const &,
+					  GlobalState const &, std::vector<Position> const &, Values const &,
+					  Matrix const &, Time) override;
 	void dSources_dScalars(Index, VectorRef, const State &, Position, Time) override;
 
 	// Finally one has to provide initial conditions for u & q
@@ -49,7 +49,6 @@ public:
 	void initialiseDiagnostics(NetCDFIO &nc) override;
 	void writeDiagnostics(DGSoln const &, double, NetCDFIO &, size_t) override;
         
-    bool isScalarDifferential( Index ) override;
 
 private:
 	// Put class-specific data here

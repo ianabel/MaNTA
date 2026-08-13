@@ -10,6 +10,8 @@ public:
     virtual Real2nd InitialFunction(Index i, Real2nd x, Real2nd t) const override;
 
 private:
+    static SystemSpec buildSpec(toml::value const &config);
+
     enum Sources : int
     {
         PeakedEdge = 0,
@@ -31,13 +33,9 @@ private:
     Value LowerBoundary(Index i, Time t) const override;
     Value UpperBoundary(Index i, Time t) const override;
 
-    virtual bool isLowerBoundaryDirichlet(Index i) const override;
-    virtual bool isUpperBoundaryDirichlet(Index i) const override;
-
     std::vector<double> uL, uR, SourceStrength, SourceWidth, SourceCenter, InitialWidth, InitialHeight;
     std::vector<Sources> SourceTypes;
     Index nSources;
-    std::vector<bool> upperBoundaryConditions, lowerBoundaryConditions;
     Matrix Kappa;
 
     void initialiseDiagnostics(NetCDFIO &nc) override;
