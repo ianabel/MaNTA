@@ -81,6 +81,7 @@ BOOST_AUTO_TEST_CASE(a_minimal_config_loads_with_every_default_applied)
     BOOST_TEST(!c.WriteDatFile);
     BOOST_TEST(!c.Superconvergent);
     BOOST_TEST(!c.AggressiveTimesteps);
+    BOOST_TEST(!c.SuppressAlgebraicError);
 }
 
 BOOST_AUTO_TEST_CASE(absolute_tolerance_defaults_to_1e_3)
@@ -284,6 +285,7 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         "OutputPoints = 51\n"
         "Superconvergent = true\n"
         "AggressiveTimesteps = true\n"
+        "SuppressAlgebraicError = true\n"
         "zeroFlux = true\n"
         "WriteOutput = false\n"
         "SteadyStateTolerance = 1e-5\n"
@@ -304,6 +306,7 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         {"Absolute_tolerance", std::vector<double>{1e-7, 1e-8}},
         {"t_initial", 0.25}, {"OutputPoints", 51},
         {"Superconvergent", true}, {"AggressiveTimesteps", true},
+        {"SuppressAlgebraicError", true},
         {"zeroFlux", true}, {"WriteOutput", false},
         {"SteadyStateTolerance", 1e-5}, {"OutputFilename", std::string("shared")},
     };
@@ -321,6 +324,7 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     BOOST_TEST(fromToml.OutputFilename == fromMap.OutputFilename);
     BOOST_TEST(fromToml.Superconvergent == fromMap.Superconvergent);
     BOOST_TEST(fromToml.AggressiveTimesteps == fromMap.AggressiveTimesteps);
+    BOOST_TEST(fromToml.SuppressAlgebraicError == fromMap.SuppressAlgebraicError);
     BOOST_TEST(fromToml.zeroFlux == fromMap.zeroFlux);
     BOOST_TEST(fromToml.WriteOutput == fromMap.WriteOutput);
     BOOST_TEST(fromToml.MinStepSize == fromMap.MinStepSize);

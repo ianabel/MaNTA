@@ -70,6 +70,9 @@ const std::vector<Entry> &table()
          "Impose zero flux at both boundaries."},
         {"AggressiveTimesteps", {"aggressiveTimesteps"}, Type::Bool, Category::Solver, false, false, false,
          "Let IDA grow the step by 10x rather than 2x between steps."},
+        {"SuppressAlgebraicError", {}, Type::Bool, Category::Solver, false, false, false,
+         "Drop sigma, q, lambda and phi from IDA's local error test (IDASetSuppressAlg). "
+         "Costs restart fidelity and aux-variable accuracy; see docs/running.rst."},
         {"TransportSystem", {}, Type::String, Category::ProblemSelection, true, false, std::string{},
          "Name of the registered physics case to run."},
         {"PhysicsPlugins", {}, Type::StringList, Category::ProblemSelection, false, false,

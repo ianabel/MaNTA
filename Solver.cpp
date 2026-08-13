@@ -201,6 +201,28 @@ void SystemSolver::initialize()
 	if (ErrorChecker::check_retval(&retval, "IDASetId", 1))
 		throw std::runtime_error("Sundials initialization Error, run in debug to find");
 
+	// Optionally take the algebraic rows out of IDA's local error test. `id`
+	// above is what makes this meaningful: u and the differential scalars carry
+	// 1.0, everything else 0.0, and IDASetSuppressAlg drops exactly the zeros.
+	//
+	// It is off by default because it is *not* answer-preserving, however much
+	// the direct-run numbers suggest otherwise. On a single run to a steady
+	// state it reproduces the same answer to five significant figures for
+	// 13-44% fewer calls into the physics, and it dissolves the
+	// Absolute_tolerance cliff that otherwise makes atol <= 1e-7 fail on the
+	// first step. But sigma, q, lambda and phi are then controlled only by the
+	// Newton tolerance, and two things read them: a restart file serialises the
+	// whole DOF vector, and phi is a physics quantity in its own right when
+	// nAux > 0. Measured, a restart round trip degrades from 1.9e-6 to 8.6e-4
+	// and the AuxVarTest regression case drifts 1.0% against a 0.84% tolerance.
+	// Turning it on is a trade, not an improvement.
+	if (suppressAlgebraicError)
+	{
+		retval = IDASetSuppressAlg(IDA_mem, SUNTRUE);
+		if (ErrorChecker::check_retval(&retval, "IDASetSuppressAlg", 1))
+			throw std::runtime_error("Sundials initialization Error, run in debug to find");
+	}
+
 	// Initialise IDA
 	retval = IDAInit(IDA_mem, static_residual, t0, Y, dYdt);
 	if (ErrorChecker::check_retval(&retval, "IDAInit", 1))

@@ -131,6 +131,45 @@ config keys are ignored on this path.
    initial-condition calculation carried on into the time loop with whatever
    partial state IDA had reached, and the symptom appeared later and elsewhere.
 
+   :ref:`suppress-algebraic-error` makes this *worse*, not better: it is the
+   accuracy of the algebraic components that a restart resumes from.
+
+.. _suppress-algebraic-error:
+
+Dropping the algebraic rows from the error test
+-----------------------------------------------
+
+``SuppressAlgebraicError = true`` calls SUNDIALS' ``IDASetSuppressAlg``, which
+takes ``sigma``, ``q``, ``lambda`` and ``phi`` out of IDA's local error test and
+leaves only ``u`` and the differential scalars in it. It is **off by default**,
+and this is a trade rather than an improvement.
+
+What it buys. Any problem whose flux grows steeply — a degenerate diffusivity, a
+critical-gradient model near its kink — puts a large ``sigma`` into an error test
+that no reduction in step size can satisfy, because the offending component is
+algebraic. The signature is an ``IDA_ERR_FAIL`` (-3) whose ``dsm`` in the
+SUNDIALS log is *identical* as ``h`` shrinks, with the Newton converging happily
+each time. Setting this key is the direct fix, and it also dissolves the
+``Absolute_tolerance`` floor that otherwise makes ``atol <= 1e-7`` fail on the
+first step of such a problem. Measured on the benchmarks under
+``python-examples/``, it costs 13–44% *fewer* calls into the physics and moves
+the answer of a direct run by nothing at five significant figures.
+
+What it costs. ``sigma``, ``q``, ``lambda`` and ``phi`` are then controlled only
+by the Newton tolerance, and two things read them:
+
+* **Restart files serialise the whole DOF vector.** A round trip that agreed to
+  ``1.9e-6`` degrades to ``8.6e-4`` with this on — see the warning above, which
+  this key makes worse rather than better.
+* **``phi`` is a physics quantity when ``nAux > 0``**, not merely an
+  intermediate. The ``AuxVarTest`` regression case drifts 1.0% against its
+  reference with this on, past its 0.84% tolerance.
+
+So it is the right key for a hard steady-state or transient solve whose output is
+``u``, and the wrong one if you intend to restart from the result or care about
+the auxiliary variables. ``python-examples/shestakov-nonlinear`` is a problem
+that cannot be integrated at all without it.
+
 The three phases
 ----------------
 

@@ -252,6 +252,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(Superconvergent, bool);
     READ(zeroFlux, bool);
     READ(AggressiveTimesteps, bool);
+    READ(SuppressAlgebraicError, bool);
     READ(TransportSystem, std::string);
     READ(PhysicsPlugins, std::vector<std::string>);
 #undef READ
@@ -356,6 +357,7 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     system.setWriteDatFile(config.WriteDatFile);
     system.setWriteDebugDatFiles(config.WriteDebugDatFiles);
     system.setAggressiveTimesteps(config.AggressiveTimesteps);
+    system.setSuppressAlgebraicError(config.SuppressAlgebraicError);
 
     // Presence arms it, which is what the TOML reader has always done;
     // setSteadyStateTolerance also sets TerminateOnSteadyState.
