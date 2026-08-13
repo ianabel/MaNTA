@@ -147,6 +147,15 @@ void SystemSolver::initialize()
 	// also called directly by tests that size their own N_Vectors.
 	setJacEvalY(Y, dYdt);
 
+	// Seed the complete derivative from IDA's. Its algebraic blocks are zero at
+	// this point; computeAlgebraicTimeDerivatives() fills them when the gate is
+	// armed, and nothing else reads them.
+	{
+		DGSoln idaDerivative(nVars, grid, k, nScalars, nAux);
+		idaDerivative.Map(N_VGetArrayPointer(dYdt));
+		dydtComplete.copy(idaDerivative);
+	}
+
 	// ----------------- Allocate and initialize all other sun-vectors. -------------
 	//
 	// Note the `throw` on each of these checks. They used to construct a

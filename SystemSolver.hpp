@@ -311,9 +311,22 @@ class SystemSolver
 
         double *yJacMem = nullptr;
         double *dydtJacMem = nullptr;
+        // The time derivative with its algebraic blocks filled in.
+        //
+        // IDA's dYdt has zeros in q, sigma and phi at t0: IDA_YA_YDP_INIT
+        // computes algebraic *values* and differential *derivatives*, so there
+        // is no y' for them to fetch. computeAlgebraicTimeDerivatives() solves
+        // the differentiated constraints for them and writes the answer here.
+        //
+        // Here rather than into dYdt because dYdt is the state IDA takes its
+        // first step from: changing its algebraic entries after IDACalcIC would
+        // alter the integration, and the symptom would be a step-size failure
+        // somewhere later rather than anything pointing back here.
+        double *dydtCompleteMem = nullptr;
 
         DGSoln yJac; // memory owned by us
         DGSoln dydtJac; // memory owned by us
+        DGSoln dydtComplete; // memory owned by us; see dydtCompleteMem above
 
         // Built in initialiseMatrices(), once the polynomial degree and grid are
         // fixed. Non-copyable and holds a reference to `grid`, hence the pointer.
