@@ -142,6 +142,15 @@ to round-off rather than to noise.
 `h` is `sqrt(eps) * max(1, |t|)`, the standard central-difference choice, which
 makes the truncation and round-off contributions comparable.
 
+> **Corrected during implementation.** That is wrong: `sqrt(eps)` is the
+> *one-sided* choice, where the truncation is `O(h F'')`. A central difference has
+> truncation `O(h^2 F''')` against round-off `O(eps |F| / h)`, and those balance at
+> `eps^(1/3)`, not `eps^(1/2)`. With `sqrt(eps)` the round-off term is `eps/h =
+> 1.5e-8` and the truncation `2e-16` — eight orders apart rather than comparable.
+> `SystemSolver::timeDifferenceStep` therefore uses `cbrt(eps)`, which measured
+> 2.5 decimal places better on the manufactured case: `q'` right to 5.6e-11 rather
+> than 3.4e-8. The rest of this section stands.
+
 **`updateBoundaryConditions(t)` must be called again with the original `t`
 afterwards.** It writes `RF_cellwise` and `L_global` in place, and those are what
 the forward residual reads; leaving them at `t + h` would corrupt the run. This

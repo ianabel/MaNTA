@@ -110,15 +110,17 @@ void SystemSolver::dGdsigma_Vec(Index gIndex, Vector &Vec, DGSoln const &Y, Inde
 // contribution silently. This also inherits AdjointProblem's standing assumption
 // that G = Int g dx (AdjointProblem.hpp).
 //
-// And the caller decides how much of the sum is real, by what it puts in Ydot. At
-// t0 in particular only the differential part of dydt carries anything: q, sigma
-// and phi are algebraic, IDA's IDA_YA_YDP_INIT produces no derivative for an
-// algebraic component, and setInitialConditions leaves those blocks at zero. So
-// the dG/dt gate, which runs there, is differentiating through the u dependence
-// alone -- correctly, including for a nonlinear g, but not completely. The
-// function itself is the full chain rule and is tested as such; see
-// at_t0_only_the_differential_part_of_dydt_exists in SolverLifecycleTests.cpp for
-// the gap and TODO for what closing it needs.
+// And the caller decides how much of the sum is real, by what it puts in Ydot.
+// IDA's own dydt is not enough at t0: q, sigma and phi are algebraic, IDA's
+// IDA_YA_YDP_INIT produces no derivative for an algebraic component, and those
+// blocks are exactly zero there -- so three quarters of the chain rule below
+// multiply by nothing, and an objective depending on q alone comes out at exactly
+// 0.0. That is what at_t0_only_the_differential_part_of_dydt_exists in
+// SolverLifecycleTests.cpp pins, and why the gate passes dydtComplete rather than
+// dydt: computeAlgebraicTimeDerivatives() solves the differentiated constraints
+// for the missing blocks. Pass IDA's dydt here and the result is still correct,
+// including for a nonlinear g -- it is just answering about a derivative with
+// three of its four parts set to zero.
 Value SystemSolver::dGdt(Index gIndex, DGSoln const &Y, DGSoln const &Ydot)
 {
     if (!adjointProblem)

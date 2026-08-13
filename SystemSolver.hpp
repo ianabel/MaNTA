@@ -404,6 +404,27 @@ class SystemSolver
         Matrix assembleDenseJacobian(DGSoln const &Y, DGSoln const &Ydot, Time tEval,
                                      double alphaValue);
 
+        // The central-difference step: cbrt(eps) scaled by |t|. That is the
+        // exponent that balances a *central* difference's truncation against its
+        // round-off; sqrt(eps) is the one-sided choice and costs 2.5 decimal
+        // places here. See the note on the definition.
+        static double timeDifferenceStep(Time tEval);
+
+        // dF/dt at fixed state, by central difference of residual() in t alone.
+        // This is the whole right-hand side of the algebraic-derivative solve, and
+        // it is the only place the explicit time dependence of the boundary data,
+        // the flux, the sources and the aux constraint enters -- none of which has
+        // an analytic derivative anywhere in the tree.
+        //
+        // Exactly zero, bit for bit, for an autonomous case: residual() is a
+        // function of t only through those, so the two evaluations return
+        // identical vectors rather than nearly identical ones.
+        //
+        // Puts RF_cellwise and L_global back at tEval however it returns -- both
+        // residual() calls leave them at tEval - h, and they are what the forward
+        // residual reads.
+        Vector differenceResidualInTime(Time tEval, double h);
+
         void NLqMat(Matrix &, DGSoln const &, Index);
         void NLuMat(Matrix &, DGSoln const &, Index);
         void NLphiMat(Matrix &, DGSoln const &, Index);

@@ -160,6 +160,66 @@ Matrix SystemSolver::assembleDenseJacobian(DGSoln const &Y, DGSoln const &Ydot, 
     return J;
 }
 
+double SystemSolver::timeDifferenceStep(Time tEval)
+{
+    // cbrt(eps), not sqrt(eps).
+    //
+    // A central difference has truncation O(h^2 F''') and round-off O(eps |F| /
+    // h), and the two balance at h ~ eps^(1/3) -- giving an error of order
+    // eps^(2/3), about 4e-11. sqrt(eps) is the *one-sided* choice, where the
+    // truncation is O(h F'') instead; used here it leaves round-off at eps / h =
+    // 1.5e-8 against a truncation of 2e-16, eight orders apart rather than
+    // comparable, and the design document that specified it said "comparable".
+    //
+    // It is worth 2.5 orders of magnitude and it is measured, not argued:
+    // the_derivatives_match_a_manufactured_solution reports q' off its closed
+    // form by 3.4e-8 (k = 2) and 2.5e-8 (k = 3) with sqrt(eps), and by 5.6e-11 and
+    // 8.8e-12 with this -- on a problem whose explicit time dependence is linear
+    // in t and therefore has no truncation error at any step at all, so what
+    // shrank is entirely the round-off.
+    //
+    // Scaled by |t| so that h is a relative perturbation once t is large, and
+    // floored at 1 so it does not collapse near t = 0.
+    return std::cbrt(std::numeric_limits<double>::epsilon()) *
+           std::max(1.0, std::abs(tEval));
+}
+
+// The explicit d/dt terms, with the state held fixed.
+//
+// Nothing exposes them analytically: TransportSystem::LowerBoundary has no
+// derivative counterpart and there is no dSigmaFn_dt or dAuxG_dt. Differencing
+// residual() itself picks up all of them at once -- RF, L, sigmaHat, the sources
+// and the aux constraint -- and asks nothing of the physics case.
+Vector SystemSolver::differenceResidualInTime(Time tEval, double h)
+{
+    const Index n = static_cast<Index>(y.getDoF());
+
+    // residual() calls updateBoundaryConditions(t) on the way in, so both calls
+    // below leave RF_cellwise and L_global at tEval - h.
+    ScopeGuard restoreBoundaries([this, tEval] { updateBoundaryConditions(tEval); });
+
+    N_Vector fPlus = N_VClone(Y);
+    N_Vector fMinus = N_VClone(Y);
+    ScopeGuard freeVectors(
+        [&]
+        {
+            N_VDestroy(fPlus);
+            N_VDestroy(fMinus);
+        });
+
+    residual(tEval + h, Y, dYdt, fPlus);
+    residual(tEval - h, Y, dYdt, fMinus);
+
+    const double *fp = N_VGetArrayPointer(fPlus);
+    const double *fm = N_VGetArrayPointer(fMinus);
+
+    Vector dFdt(n);
+    for (Index i = 0; i < n; ++i)
+        dFdt(i) = (fp[i] - fm[i]) / (2.0 * h);
+
+    return dFdt;
+}
+
 void SystemSolver::computeAlgebraicTimeDerivatives()
 {
     if (Y == nullptr || dYdt == nullptr)
@@ -174,42 +234,10 @@ void SystemSolver::computeAlgebraicTimeDerivatives()
     const Index scalarOffset = lambdaOffset + static_cast<Index>(nVars) * (nCells + 1);
 
     const double tNow = t;
-
-    // The standard central-difference step: truncation and round-off contribute
-    // comparably, so the result is second order in h rather than exact -- and
-    // exact, to round-off, for the autonomous case, which is most of them.
-    const double h =
-        std::sqrt(std::numeric_limits<double>::epsilon()) * std::max(1.0, std::abs(tNow));
+    const double h = timeDifferenceStep(tNow);
 
     // ---- the explicit d/dt terms, with the state held fixed.
-    //
-    // Nothing exposes them analytically: TransportSystem::LowerBoundary has no
-    // derivative counterpart and there is no dSigmaFn_dt or dAuxG_dt. Differencing
-    // residual() itself picks up all of them at once -- RF, L, sigmaHat, the
-    // sources and the aux constraint -- and asks nothing of the physics case.
-    Vector dFdt = Vector::Zero(n);
-    {
-        // residual() calls updateBoundaryConditions(t) on the way in, so both
-        // calls below leave RF_cellwise and L_global at t - h.
-        ScopeGuard restoreBoundaries([this, tNow] { updateBoundaryConditions(tNow); });
-
-        N_Vector fPlus = N_VClone(Y);
-        N_Vector fMinus = N_VClone(Y);
-        ScopeGuard freeVectors(
-            [&]
-            {
-                N_VDestroy(fPlus);
-                N_VDestroy(fMinus);
-            });
-
-        residual(tNow + h, Y, dYdt, fPlus);
-        residual(tNow - h, Y, dYdt, fMinus);
-
-        const double *fp = N_VGetArrayPointer(fPlus);
-        const double *fm = N_VGetArrayPointer(fMinus);
-        for (Index i = 0; i < n; ++i)
-            dFdt(i) = (fp[i] - fm[i]) / (2.0 * h);
-    }
+    const Vector dFdt = differenceResidualInTime(tNow, h);
 
     // ---- dF/dy, with no mass term. That is what alpha = 0 means here: the only
     // place alpha enters the block assembly is the X matrix in the u row.

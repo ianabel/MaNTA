@@ -16,6 +16,7 @@
 #include "TestDiffusion.hpp"
 #include "Types.hpp"
 
+#include <ida/ida.h>
 #include <nvector/nvector_serial.h>
 #include <sundials/sundials_context.h>
 
@@ -239,6 +240,209 @@ public:
     Value InitialScalarValue(Index) const override { return BETA / 6.0; }
 };
 
+// ------------------------------------------------ a manufactured solution --
+//
+// The only fixture here that says what the answer *should* be, rather than that
+// it is nonzero, self-consistent or close to an independent estimate.
+//
+//     u(x, t) = (1 + t) p(x),        p(x) = 0.5 + 0.3 x - x^2
+//
+// p is a quadratic, so for k >= 2 the nodal basis reproduces it exactly, every
+// interpolation the residual performs is exact, and the discrete solution *is*
+// the manufactured one to round-off -- which is what makes the closed-form
+// derivatives a legitimate reference rather than an O(h^(k+1)) approximation to
+// one. The test asserts that premise before it asserts anything else.
+//
+// Solving u_t - kappa u_xx = S on it gives S = p(x) + 2 kappa (1 + t), and the
+// derivatives follow:
+//
+//     u'      = p(x)
+//     q'      = p'(x) = 0.3 - 2x
+//     sigma'  = -kappa p'(x)              <-- note the sign
+//     lambda' = p(x_face)
+//
+// The sign is the trap CLAUDE.md records. MaNTA stores -sigmaHat: res.sigma is
+// A sigma_h + Pi(sigmaHat), so what it enforces is sigma_h = -Pi(sigmaHat), and
+// the stored flux derivative is minus the physical one. Getting it backwards
+// leaves a case converging at the right rate to the wrong function, so only a
+// closed-form comparison like this one can catch it.
+//
+// Both boundaries are Dirichlet and both move in t, so the Dirichlet trace rows
+// -- which the residual does not constrain at all, and which get their own
+// identity row and dg_D/dt inside the solve -- are exercised rather than
+// trivially zero.
+constexpr double MMS_KAPPA = 0.8;
+
+double mmsP(Position x) { return 0.5 + 0.3 * x - x * x; }
+double mmsPPrime(Position x) { return 0.3 - 2.0 * x; }
+double mmsU(Position x, Time t) { return (1.0 + t) * mmsP(x); }
+double mmsQ(Position x, Time t) { return (1.0 + t) * mmsPPrime(x); }
+
+class ManufacturedInTime : public TransportSystem
+{
+public:
+    ManufacturedInTime() : TransportSystem({.variables = numberedFields(1)}) {}
+
+    Value LowerBoundary(Index, Time t) const override { return mmsU(0.0, t); }
+    Value UpperBoundary(Index, Time t) const override { return mmsU(1.0, t); }
+
+    Value SigmaFn(Index, const State &s, Position, Time) override
+    {
+        return MMS_KAPPA * s.q(0);
+    }
+    // u_t - kappa u_xx on the exact solution, written out rather than
+    // differenced so the test does not lean on the machinery it is testing.
+    Value Sources(Index, const State &, Position x, Time t) override
+    {
+        return mmsP(x) + 2.0 * MMS_KAPPA * (1.0 + t);
+    }
+
+    void dSigmaFn_dq(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = MMS_KAPPA;
+    }
+    void dSigmaFn_du(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+    void dSources_du(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+    void dSources_dq(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+    void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+
+    Value InitialValue(Index, Position x) const override { return mmsU(x, 0.0); }
+    Value InitialDerivative(Index, Position x) const override { return mmsQ(x, 0.0); }
+};
+
+// ------------------------------------------------------ autonomous, and not --
+//
+// Nothing in this depends on t: constant Dirichlet ends, a flux and a source that
+// ignore their Time argument. residual(t + h) and residual(t - h) are then the
+// same function of the same data, so their difference is zero bit for bit rather
+// than 1e-9 -- which is the claim an_autonomous_case_differences_to_exactly_zero
+// makes, and it is a stronger one than "small".
+constexpr double AUTONOMOUS_KAPPA = 0.6;
+
+class AutonomousDiffusion : public TransportSystem
+{
+public:
+    AutonomousDiffusion() : TransportSystem({.variables = numberedFields(1)}) {}
+
+    Value LowerBoundary(Index, Time) const override { return 0.3; }
+    Value UpperBoundary(Index, Time) const override { return 0.1; }
+
+    Value SigmaFn(Index, const State &s, Position, Time) override
+    {
+        return AUTONOMOUS_KAPPA * s.q(0);
+    }
+    Value Sources(Index, const State &, Position x, Time) override
+    {
+        return std::sin(3.0 * x);
+    }
+
+    void dSigmaFn_dq(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = AUTONOMOUS_KAPPA;
+    }
+    void dSigmaFn_du(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+    void dSources_du(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+    void dSources_dq(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+    void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+
+    Value InitialValue(Index, Position x) const override
+    {
+        return 0.3 - 0.2 * x + 0.5 * std::sin(std::numbers::pi * x);
+    }
+    Value InitialDerivative(Index, Position x) const override
+    {
+        return -0.2 + 0.5 * std::numbers::pi * std::cos(std::numbers::pi * x);
+    }
+};
+
+// The converse: a case whose *only* explicit time dependence is in the boundary
+// data, one end Neumann and one Dirichlet, so the two arrays
+// updateBoundaryConditions writes in place are both live.
+//
+//   lower, Neumann:   L_global(node 0) = -g_N(t),  and res.lambda subtracts it,
+//                     so d res.lambda(0) / dt = +dg_N/dt exactly -- a closed form
+//                     to check the differencing against, with no basis functions
+//                     in it.
+//   upper, Dirichlet: RF_cellwise[last] carries g_D(t) into the q and u rows of
+//                     that cell.
+constexpr double DRIFT_KAPPA = 0.9, NEUMANN_RATE = 0.4, DIRICHLET_RATE = 0.3;
+
+class DriftingBoundary : public TransportSystem
+{
+public:
+    DriftingBoundary()
+        : TransportSystem({.variables = numberedFields(1, BoundaryKind::Neumann,
+                                                      BoundaryKind::Dirichlet)})
+    {
+    }
+
+    // The imposed flux at the lower end, and the imposed value at the upper.
+    Value LowerBoundary(Index, Time t) const override
+    {
+        return 0.35 + NEUMANN_RATE * std::sin(t);
+    }
+    Value UpperBoundary(Index, Time t) const override
+    {
+        return 0.2 + DIRICHLET_RATE * t;
+    }
+
+    // Autonomous physics, so the boundaries are the only route from t into the
+    // residual and the checks below can name what they are measuring.
+    Value SigmaFn(Index, const State &s, Position, Time) override
+    {
+        return DRIFT_KAPPA * s.q(0);
+    }
+    Value Sources(Index, const State &, Position, Time) override { return 0.0; }
+
+    void dSigmaFn_dq(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = DRIFT_KAPPA;
+    }
+    void dSigmaFn_du(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+    void dSources_du(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+    void dSources_dq(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+    void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+
+    Value InitialValue(Index, Position x) const override { return 0.2 + 0.1 * x; }
+    Value InitialDerivative(Index, Position) const override { return 0.1; }
+};
+
 // An objective that depends on q and nothing else.
 //
 // This is the one that shows what the whole exercise bought. dG/dt for it is
@@ -416,6 +620,128 @@ double assemblyDrift(TransportSystem &problem, Index order, Index cells, double 
                                             << Jasm(worstRow, worstCol) << " vs differenced "
                                             << Jfd(worstRow, worstCol));
     return worst / std::max(1.0, scale);
+}
+
+// ---------------------------------------------- the two independent routes --
+
+// This one: differentiate the constraints at t0 and read Int q' dx off the
+// answer.
+double dGdtFromTheConstraints()
+{
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(alg_config);
+    QIntegralObjective objective(1.0);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, "algderiv_constraints");
+    sys.setAdjointProblem(&objective);
+
+    Value value = 0.0;
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+        sys.computeAlgebraicTimeDerivatives();
+        value = sys.dGdt(0, sys.y, sys.dydtComplete);
+        sys.destroySundials();
+    }
+    return value;
+}
+
+// The other: take one IDA step and read IDA's own now-populated dYdt. This is
+// what branch dgdt-gate-after-step did, and it shares no code with the route
+// above -- IDA's derivative comes out of its BDF formula, not out of any
+// assembly of ours.
+double dGdtOneStepIn(double step, double &tReached)
+{
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(alg_config);
+    QIntegralObjective objective(1.0);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, "algderiv_onestep");
+    sys.setAdjointProblem(&objective);
+
+    Value value = 0.0;
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+
+        // Pin the step rather than let IDA choose it: the comparison is first
+        // order in the step, so it has to be a *known* number for the residual
+        // between the two routes to mean anything.
+        //
+        // Here rather than through setInitialTimestep, which would also reach
+        // IDACalcIC -- Solver.cpp hands dt0 to it as the scale for the initial
+        // correction -- and the two routes must start from the same initial
+        // condition or the difference measured is not the one intended.
+        IDASetInitStep(sys.IDA_mem, step);
+
+        sunrealtype tret = 0.0;
+        IDASolve(sys.IDA_mem, 1.0, &tret, sys.Y, sys.dYdt, IDA_ONE_STEP);
+        tReached = tret;
+
+        // sys.dydt, not dydtComplete: the point is to use IDA's own derivative,
+        // which one step in is populated in every block.
+        value = sys.dGdt(0, sys.y, sys.dydt);
+        sys.destroySundials();
+    }
+    return value;
+}
+
+// ------------------------------------------- the manufactured comparison --
+
+// The worst absolute error in each block, against the closed forms above.
+struct ManufacturedErrors
+{
+    double u = 0.0, q = 0.0, sigma = 0.0;             // of the derivative
+    double stateU = 0.0, stateQ = 0.0, stateS = 0.0;  // of the state itself
+    double lambda = 0.0;
+};
+
+ManufacturedErrors manufacturedErrors(Index order, Index cells)
+{
+    Grid grid(0.0, 1.0, cells);
+    ManufacturedInTime problem;
+    SystemSolver sys(grid, order, &problem);
+    configure(sys, "algderiv_mms");
+
+    ManufacturedErrors e;
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+        sys.computeAlgebraicTimeDerivatives();
+    }
+
+    auto worst = [](double &into, double a, double b) { into = std::max(into, std::abs(a - b)); };
+
+    // Interior sample points, three per cell: operator() has to decide which
+    // interval a position belongs to, and a cell boundary is ambiguous.
+    for (Index i = 0; i < cells; ++i)
+    {
+        Interval const &I = grid[i];
+        for (Index j = 0; j < 3; ++j)
+        {
+            const Position x = I.x_l + (j + 0.5) / 3.0 * (I.x_u - I.x_l);
+
+            worst(e.stateU, sys.y.u(0)(x), mmsU(x, 0.0));
+            worst(e.stateQ, sys.y.q(0)(x), mmsQ(x, 0.0));
+            worst(e.stateS, sys.y.sigma(0)(x), -MMS_KAPPA * mmsQ(x, 0.0));
+
+            worst(e.u, sys.dydtComplete.u(0)(x), mmsP(x));
+            worst(e.q, sys.dydtComplete.q(0)(x), mmsPPrime(x));
+            worst(e.sigma, sys.dydtComplete.sigma(0)(x), -MMS_KAPPA * mmsPPrime(x));
+        }
+    }
+
+    for (Index i = 0; i <= cells; ++i)
+    {
+        const Position x = (i < cells) ? grid[i].x_l : grid[cells - 1].x_u;
+        worst(e.lambda, sys.dydtComplete.lambda(0)(i), mmsP(x));
+    }
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+    return e;
 }
 } // namespace
 
@@ -649,6 +975,244 @@ BOOST_AUTO_TEST_CASE(a_u_only_objective_is_unchanged_by_the_completed_derivative
 
     const Value fromIDA = sys.dGdt(0, sys.y, sys.dydtJac);
     BOOST_TEST(sys.lastDGdt()(0) == fromIDA, boost::test_tools::tolerance(1e-10));
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+}
+
+BOOST_AUTO_TEST_CASE(it_agrees_with_the_derivative_one_ida_step_in)
+{
+    // The only check in this file against a *different method*. Everything else
+    // here is self-consistency: the assembly against a difference of the same
+    // residual, the u block against the u block that went in, the gate against
+    // the vector it was pointed at.
+    //
+    // This one takes one IDASolve in IDA_ONE_STEP mode and reads IDA's own dYdt,
+    // which one step in is populated in every block -- the route branch
+    // dgdt-gate-after-step took, and the reason this fix was worth preferring to
+    // it. Nothing is shared: that derivative comes out of IDA's BDF formula, this
+    // one out of a dense solve against blocks we assemble.
+    //
+    // They differ at O(step), from two sources that both shrink with it: IDA's
+    // value is a backward difference rather than a derivative, and it is the
+    // derivative at t0 + step rather than at t0. So the check is a *rate* rather
+    // than a fixed tolerance -- the discrepancy per unit step must be the same at
+    // both steps, which is what a truncation error does and a wrong q' does not.
+    //
+    // Measured, at the time of writing: dG/dt = 2.4674011003 from the
+    // constraints; one step to 3e-7 gives 2.4674001874 and one to 3e-8 gives
+    // 2.4674009913, i.e. relative discrepancies of 3.7e-7 and 4.4e-8 for a
+    // tenfold change in step.
+    //
+    // The step is asked for rather than commanded: IDA halves an initial step
+    // that fails its error test, and on this problem it will not take more than
+    // about 5e-7 whatever it is offered -- which is why the assertions below are
+    // on the step it *reached* rather than on the one requested.
+    const double atT0 = dGdtFromTheConstraints();
+    BOOST_TEST(atT0 != 0.0, "the constraint route gave exactly zero, so there is nothing "
+                            "to compare");
+
+    double tCoarse = 0.0, tFine = 0.0;
+    const double coarse = dGdtOneStepIn(3e-7, tCoarse);
+    const double fine = dGdtOneStepIn(3e-8, tFine);
+
+    const double errCoarse = std::abs(coarse - atT0);
+    const double errFine = std::abs(fine - atT0);
+
+    BOOST_TEST_MESSAGE("dG/dt from the constraints at t0: " << atT0);
+    BOOST_TEST_MESSAGE("  one step to t = " << tCoarse << ": " << coarse << " (error "
+                                            << errCoarse << ", relative "
+                                            << errCoarse / std::abs(atT0) << ")");
+    BOOST_TEST_MESSAGE("  one step to t = " << tFine << ": " << fine << " (error " << errFine
+                                            << ", relative " << errFine / std::abs(atT0)
+                                            << ")");
+    BOOST_TEST_MESSAGE("  error ratio " << errCoarse / errFine << " for a step ratio of "
+                                        << tCoarse / tFine);
+
+    // A real separation between the two, or the rate below means nothing.
+    BOOST_TEST(tCoarse > 5.0 * tFine,
+               "IDA clipped the two initial steps to within a factor of "
+                   << tCoarse / tFine << ", so there is no rate to measure");
+
+    // Agreement to the step. dG/dt is O(1) here, so a relative discrepancy of
+    // more than a few times the step is a disagreement rather than a truncation
+    // error.
+    BOOST_TEST(errCoarse / std::abs(atT0) < 10.0 * tCoarse,
+               "the two routes to dG/dt disagree by "
+                   << errCoarse / std::abs(atT0) << " relative, at a step of " << tCoarse);
+
+    // And it is first order in the step actually taken, which is what says the
+    // difference *is* the step. A wrong q' would leave a step-independent floor,
+    // and the two rates below would then differ by the ratio of the steps rather
+    // than agree.
+    const double rateCoarse = errCoarse / tCoarse;
+    const double rateFine = errFine / tFine;
+    BOOST_TEST_MESSAGE("  discrepancy per unit step: " << rateCoarse << " and " << rateFine);
+    BOOST_TEST(rateCoarse / rateFine > 0.5,
+               "the disagreement per unit step is not constant (" << rateCoarse << " vs "
+                                                                  << rateFine << ")");
+    BOOST_TEST(rateCoarse / rateFine < 2.0,
+               "the disagreement per unit step is not constant (" << rateCoarse << " vs "
+                                                                  << rateFine << ")");
+}
+
+BOOST_AUTO_TEST_CASE(the_derivatives_match_a_manufactured_solution)
+{
+    // The only test here that checks the derivatives are *right*. Every other one
+    // checks they are nonzero, self-consistent, or close to an independent
+    // estimate; a uniformly wrong scale factor would pass all of them.
+    //
+    // u = (1 + t)(0.5 + 0.3x - x^2) is a quadratic in x, so for k >= 2 the
+    // discrete solution is the exact one to round-off and the closed-form
+    // derivatives are a real reference rather than an O(h^(k+1)) approximation to
+    // one. The state assertions come first because that premise is what the rest
+    // rests on: if the discrete solution were not exact, a derivative error and a
+    // discretisation error would be indistinguishable here.
+    for (Index order : {2, 3})
+    {
+        const ManufacturedErrors e = manufacturedErrors(order, nCells);
+
+        BOOST_TEST_MESSAGE("k = " << order << ": state errors u " << e.stateU << ", q "
+                                  << e.stateQ << ", sigma " << e.stateS);
+        BOOST_TEST_MESSAGE("  derivative errors u' " << e.u << ", q' " << e.q << ", sigma' "
+                                                     << e.sigma << ", lambda' " << e.lambda);
+
+        BOOST_TEST(e.stateU < 1e-12,
+                   "the discrete solution is not the manufactured one at k = "
+                       << order << " (u off by " << e.stateU
+                       << "), so the closed-form derivatives are not a valid reference");
+        BOOST_TEST(e.stateQ < 1e-10, "q_h is off the exact q by " << e.stateQ);
+
+        // The sign convention, pinned on the state before it is relied on for the
+        // derivative: MaNTA stores -sigmaHat, so sigma_h is -kappa q_h.
+        BOOST_TEST(e.stateS < 1e-10,
+                   "sigma_h is not -kappa q_h at k = "
+                       << order << " (off by " << e.stateS
+                       << "); either the stored flux is not negated or kappa is wrong");
+
+        // u' comes back out of the identity rows untouched, with no differencing
+        // anywhere near it, so it is exact: 1e-14 measured. q', sigma' and lambda'
+        // are solved for against a differenced right-hand side and sit at that
+        // difference's round-off floor -- 5.6e-11, 4.5e-11 and 2.0e-12 at k = 2,
+        // 8.8e-12, 7.0e-12 and 2.0e-12 at k = 3. The floor is eps^(2/3), which is
+        // what timeDifferenceStep's cbrt(eps) buys; with the sqrt(eps) the design
+        // specified, the k = 2 numbers were 3.4e-8, 2.7e-8 and 7.5e-10.
+        //
+        // sigma' is exactly -kappa q', including in the error, which is the sign
+        // convention holding. Drop the minus and this reports 2.59 -- 2 kappa
+        // max|p'| -- rather than 4.5e-11, so it is not a delicate check.
+        BOOST_TEST(e.u < 1e-12, "u' is off its closed form by " << e.u << " at k = " << order);
+        BOOST_TEST(e.q < 1e-9, "q' is off its closed form by " << e.q << " at k = " << order);
+        BOOST_TEST(e.sigma < 1e-9, "sigma' is off its closed form by "
+                                       << e.sigma << " at k = " << order
+                                       << "; check the sign -- the stored flux is -sigmaHat");
+        BOOST_TEST(e.lambda < 1e-10, "lambda' is off its closed form by "
+                                         << e.lambda << " at k = " << order);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(an_autonomous_case_differences_to_exactly_zero)
+{
+    // Not "small": zero, bit for bit. residual() reaches t only through the
+    // boundary data and the physics hooks; this case's boundaries are constants
+    // and its hooks ignore their Time argument, so the two evaluations are the
+    // same arithmetic on the same doubles and their difference is an exact 0.0.
+    //
+    // Asserted exactly rather than to a tolerance because that is the whole
+    // claim. A differenced quantity is normally noise at 1e-11 or so -- see the
+    // manufactured case -- and a tolerance of 1e-9 here would pass whether the
+    // case were autonomous or merely nearly so, which is not the property being
+    // stated.
+    Grid grid(0.0, 1.0, nCells);
+    AutonomousDiffusion problem;
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, "algderiv_autonomous");
+
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+    }
+
+    const double h = SystemSolver::timeDifferenceStep(0.0);
+    Vector dFdt;
+    {
+        CapturedOutput quiet;
+        dFdt = sys.differenceResidualInTime(0.0, h);
+    }
+
+    BOOST_TEST(dFdt.size() > 0);
+    BOOST_TEST(dFdt.cwiseAbs().maxCoeff() == 0.0, boost::test_tools::tolerance(0.0));
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+}
+
+BOOST_AUTO_TEST_CASE(a_time_dependent_boundary_reaches_the_right_hand_side)
+{
+    // The converse of the case above, and the check on the restore.
+    //
+    // DriftingBoundary's physics is autonomous and its boundaries are not, so
+    // every nonzero entry of dF/dt below came from RF_cellwise or L_global -- the
+    // two arrays updateBoundaryConditions writes *in place*, which is the trap
+    // CLAUDE.md records: residual() leaves them at t - h, and anything reading
+    // them afterwards would be reading boundary data from the wrong time with
+    // nothing to say so.
+    Grid grid(0.0, 1.0, nCells);
+    DriftingBoundary problem;
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, "algderiv_drifting");
+
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+    }
+
+    const std::vector<Vector> rfBefore = sys.RF_cellwise;
+    const Vector lBefore = sys.L_global;
+
+    const double h = SystemSolver::timeDifferenceStep(0.0);
+    Vector dFdt;
+    {
+        CapturedOutput quiet;
+        dFdt = sys.differenceResidualInTime(0.0, h);
+    }
+
+    // Picked up at all.
+    BOOST_TEST(dFdt.cwiseAbs().maxCoeff() > 1e-6,
+               "a case whose boundaries move in t differenced to zero, so the explicit "
+               "time dependence is not reaching the right-hand side");
+
+    // And picked up correctly. res.lambda subtracts L_global, and for a Neumann
+    // lower end L_global(node 0) is -g_N(t), so that row's explicit derivative is
+    // exactly dg_N/dt -- no basis functions and no quadrature in it.
+    const Index lambdaRow = static_cast<Index>(nCells) * (3 * (k + 1));
+    const double expected = NEUMANN_RATE * std::cos(0.0);
+    BOOST_TEST_MESSAGE("Neumann lambda row: differenced " << dFdt(lambdaRow) << ", exact "
+                                                          << expected);
+    BOOST_TEST(dFdt(lambdaRow) == expected, boost::test_tools::tolerance(1e-9));
+
+    // The Dirichlet end feeds RF_cellwise, and that reaches the q row of the last
+    // cell rather than a trace row -- the trace row there is not in the residual
+    // at all.
+    const Index lastCellQ = (static_cast<Index>(nCells) - 1) * (3 * (k + 1)) + (k + 1);
+    BOOST_TEST(dFdt.segment(lastCellQ, k + 1).cwiseAbs().maxCoeff() > 1e-6,
+               "the moving Dirichlet end left no trace in the q row of the cell it "
+               "borders, so RF_cellwise is not being differenced");
+
+    // Restored, bit for bit. A ScopeGuard rather than a trailing call, so that an
+    // exception out of residual() cannot leave them at t - h either.
+    BOOST_TEST(sys.RF_cellwise.size() == rfBefore.size());
+    for (size_t i = 0; i < rfBefore.size(); ++i)
+        BOOST_TEST((sys.RF_cellwise[i] - rfBefore[i]).cwiseAbs().maxCoeff() == 0.0,
+                   "RF_cellwise[" << i
+                                  << "] was left at t - h, so every later residual "
+                                     "evaluation reads the wrong boundary data");
+    BOOST_TEST((sys.L_global - lBefore).cwiseAbs().maxCoeff() == 0.0,
+               "L_global was left at t - h");
 
     {
         CapturedOutput quiet;

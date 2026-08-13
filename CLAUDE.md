@@ -731,6 +731,37 @@ them is invisible in the rest of the suite; `dGdaux_Vec` had two.
   `Tests/README.md`. Nothing in the tree notices a `t0` error, because every
   fixture starts at zero, so `the_initial_condition_uses_boundary_data_at_t0` is
   the only thing standing between that and a silent return.
+* **`dydtComplete` is deliberately not IDA's `dYdt`, and the duplication is the
+  point.** `AlgebraicDerivatives.cpp` solves the differentiated algebraic
+  constraints for `q'`, `sigma'`, `phi'` and `lambda'` — IDA never computes them,
+  because `IDA_YA_YDP_INIT` produces algebraic *values* and differential
+  *derivatives* — and writes the answer into its own vector. Folding it back into
+  `dYdt`, which is the obvious tidy-up, would change the state IDA takes its first
+  step from: the surviving symptom would be a step-size or convergence failure
+  somewhere later in the run, pointing nowhere near here. Only
+  `objectiveIsDecreasing()` reads it, and only a run that arms the gate pays for
+  it, so nothing else notices either way.
+* **The differential rows of that solve are the identity on purpose**, and so are
+  the Dirichlet trace rows. `u'` and a differential scalar's `mu'` are *data* —
+  IDA has them — so their rows carry `1` and the known derivative rather than a
+  differentiated equation, which would bring in `u''`. The Dirichlet trace rows
+  look like a redundant special case and are not: `residual` never writes them
+  (`lambda = g_D(t)` is imposed inside the linear solve, which is also why a
+  finite-differenced Jacobian is rank-deficient by exactly the number of Dirichlet
+  boundaries), so without their own identity row and `dg_D/dt` the matrix is
+  singular by that same count. `the_u_block_round_trips_through_the_identity_row`
+  covers the first; the second is what
+  `the_derivatives_match_a_manufactured_solution` checks through `lambda'`.
+* **The central-difference step there is `cbrt(eps)`, not `sqrt(eps)`.** `sqrt(eps)`
+  is the *one-sided* choice, where truncation is `O(h F'')`; a central difference
+  has truncation `O(h^2 F''')` against round-off `O(eps |F| / h)`, and those
+  balance at `eps^(1/3)`. Using `sqrt(eps)` leaves round-off at `eps/h = 1.5e-8`
+  against a truncation of `2e-16` — eight orders apart rather than comparable — and
+  it measurably costs 2.5 decimal places: the manufactured case gets `q'` to 3.4e-8
+  with `sqrt(eps)` and to 5.6e-11 with `cbrt(eps)`, on a problem whose explicit
+  time dependence is linear in `t` and therefore has *no* truncation error at any
+  step. The design document specified `sqrt(eps)` and called it the central
+  choice; it isn't.
 * **`OutputFilename` names the output, and only its *basename* survives.**
   `loadSolverConfig` fills it from the config file's stem when the key is absent,
   so a run still defaults to `myrun.conf` -> `myrun.nc`; `Solver.cpp` then takes
