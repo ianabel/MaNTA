@@ -17,6 +17,7 @@ Install first, from the repository root:
 | `jax-linear-diffusion/` | The same, with `solveAdjoint = true` | `manta[jax]` |
 | `jax-nonlinear-adjoint/` | `manta.jax.VectorizedTransportSystem`, the batched interface | `manta[jax]` |
 | `adjoints/` | Driving the solver from Python through `manta.Runner`; JVP and spatial adjoints | `manta[jax]`; `jvp.py` also needs an `XLA_FFI` build |
+| `mirror-plasma/` | Four channels, an aux variable and a scalar voltage controller. **Work in progress** — see its README | `manta[jax]`, `optimistix` |
 | `stellarator/` | Stellarator transport coupled to DESC and yancc. **Unverified** | `manta[jax]`, `desc`, `yancc`, `interpax` |
 
 A config-driven example runs with the `manta` command from inside its own
@@ -25,8 +26,9 @@ directory:
     cd linear-diffusion && manta run.conf
 
 Output lands beside the config, named after the config's stem — `run.nc` and
-`run.restart.nc`. The `adjoints/` and `stellarator/` scripts are not
-config-driven; they build a runner in Python and are run with `python <file>`.
+`run.restart.nc`. The `adjoints/`, `mirror-plasma/` and `stellarator/` scripts
+are not config-driven; they build a runner in Python and are run with
+`python <file>`.
 
 ## Two ways a config names its case
 

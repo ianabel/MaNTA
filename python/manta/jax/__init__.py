@@ -29,6 +29,7 @@ except ImportError as _e:  # pragma: no cover -- depends on the environment
     ) from _e
 
 from .state import (  # noqa: F401
+    InitialScalarDerivative_Decorator,
     MaNTA_Decorator,
     Physics_Decorator,
     ScalarG_Decorator,
@@ -42,6 +43,7 @@ from .vectorized import VectorizedTransportSystem  # noqa: F401
 
 __all__ = [
     "FFIRunner",
+    "InitialScalarDerivative_Decorator",
     "Integrator",
     "JAXAdjointProblem",
     "JAXTransportSystem",

@@ -6,22 +6,19 @@ import numpy as np
 import equinox as eqx
 import pytest
 import matplotlib.pyplot as plt
-import sys
 
-sys.path.append("..")
-
-from MirrorPlasma.Constants import PlasmaConstants
-from MirrorPlasma.MagneticField import StraightMagneticField
-from MirrorPlasma.IonSpecies import Hydrogen
-from MirrorPlasma.MirrorPlasma import MirrorPlasma
-from MirrorPlasma.PlasmaState import (
+from mirror_plasma.constants import PlasmaConstants
+from mirror_plasma.magnetic_field import StraightMagneticField
+from mirror_plasma.ion_species import Hydrogen
+from mirror_plasma.mirror_plasma import MirrorPlasma
+from mirror_plasma.plasma_state import (
     MirrorPlasmaConfig,
     MirrorPlasmaState,
     MirrorPlasmaParams,
     Channel,
 )
-from MirrorPlasma.ParallelPhysics import CentrifugalPotential, InitialPhiValue
-from MirrorPlasma.ParallelPhysics import (
+from mirror_plasma.parallel_physics import CentrifugalPotential, InitialPhiValue
+from mirror_plasma.parallel_physics import (
     ParallelCurrent,
     IonPastukhovLossRate,
     ElectronPastukhovLossRate,
@@ -30,8 +27,8 @@ from MirrorPlasma.ParallelPhysics import (
 from desc.backend import tree_unstack
 from scipy.special import gammaincc
 
-from State import State
-import MaNTA
+from manta.jax import State
+import manta as MaNTA
 
 # # B = StraightMagneticField(_m=0.5, _Rmin=0.01, _Rmax=0.2)
 H = Hydrogen()
@@ -59,14 +56,17 @@ def atol():
     return 1e-6
 
 
+CONFIG_ARGS = {
+    "Rmin": 0.1,
+    "Rmax": 0.4,
+    "MagneticFieldStrength": 0.34,
+    "ADCoefficient": 0.0,
+}
+
+
 @pytest.fixture
 def config():
-    Rmin = 0.1
-    Rmax = 0.4
-    B_z = 0.34
-    args = {"MagneticFieldStrength": B_z, "ADCoefficient": 0.0}
-
-    return MirrorPlasmaConfig(Rmin, Rmax, **args)
+    return MirrorPlasmaConfig(**CONFIG_ARGS)
 
 
 @pytest.fixture
@@ -117,8 +117,11 @@ def MP(config, solver_config):
 
 
 @pytest.fixture
-def MP_unnorm(config, solver_config):
-    config_unnorm = eqx.tree_at(lambda c: c.NormalizeToR, config, False)
+def MP_unnorm(solver_config):
+    # A second config rather than eqx.tree_at on the first: NormalizeToR is an
+    # eqx.field(static=True), so it is not a leaf of the pytree and tree_at
+    # raises "Operation undefined, True is not a leaf of the pytree".
+    config_unnorm = MirrorPlasmaConfig(**CONFIG_ARGS, NormalizeToR=False)
     return MirrorPlasma(config=config_unnorm, solver_config=solver_config)
 
 

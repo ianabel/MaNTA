@@ -5,6 +5,7 @@ import scipy.sparse as sp
 import scipy.integrate
 import equinox as eqx
 from jaxtyping import Float, ArrayLike
+import pathlib
 import pickle
 
 N = 20
@@ -91,9 +92,15 @@ fland = np.dot(ftest(abscissae), w0)
 testsol = scipy.integrate.quad(lambda x: ftest(x) * np.exp(-(x**2)), 0.0, np.inf)[0]
 
 print(fland / testsol)
-with open("land.pkl", "wb") as file:
+# Beside this file, which is where mirror_plasma/constants.py looks for it --
+# not in the cwd. The two used to disagree: this wrote ./land.pkl and constants
+# opened ./util/land.pkl, so PlasmaConstants raised FileNotFoundError from its
+# constructor whichever directory you ran from.
+LAND_PKL = pathlib.Path(__file__).resolve().parent / "land.pkl"
+with open(LAND_PKL, "wb") as file:
     pickle.dump(abscissae, file)
     pickle.dump(w0, file)
+print(f"wrote {LAND_PKL}")
 
 
 # for i in range(0, 5):

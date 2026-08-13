@@ -1,8 +1,8 @@
 import jax
 
 jax.config.update("jax_enable_x64", True)
-from MirrorPlasma.MirrorPlasma import MirrorPlasma
-import MirrorPlasma.configs as config
+from mirror_plasma import MirrorPlasma
+from mirror_plasma import configs as config
 import numpy as np
 
 nCells = 32

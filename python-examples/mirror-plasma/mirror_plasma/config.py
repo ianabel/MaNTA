@@ -1,9 +1,9 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from MirrorPlasma.Constants import PlasmaConstants
-from MirrorPlasma.MagneticField import _MagneticField, StraightMagneticField
-from MirrorPlasma.IonSpecies import _IonSpecies, Hydrogen
+from .constants import PlasmaConstants
+from .magnetic_field import _MagneticField, StraightMagneticField
+from .ion_species import _IonSpecies, Hydrogen
 
 from jaxtyping import Float, ArrayLike, Bool
 

@@ -1,19 +1,16 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from MirrorPlasma.Constants import PlasmaConstants
-from MirrorPlasma.MagneticField import _MagneticField
-from MirrorPlasma.IonSpecies import _IonSpecies
-from MirrorPlasma.Config import MirrorPlasmaConfig
+from .constants import PlasmaConstants
+from .magnetic_field import _MagneticField
+from .ion_species import _IonSpecies
+from .config import MirrorPlasmaConfig
 
 from jaxtyping import Float, ArrayLike, Bool
 import enum
-import sys
 
 
-sys.path.append("..")
-
-from State import State
+from manta.jax import State
 
 
 class MirrorPlasmaParams(eqx.Module):

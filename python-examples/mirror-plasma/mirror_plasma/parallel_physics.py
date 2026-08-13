@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-from MirrorPlasma.PlasmaState import (
+from .plasma_state import (
     MirrorPlasmaParams,
     MirrorPlasmaState,
 )

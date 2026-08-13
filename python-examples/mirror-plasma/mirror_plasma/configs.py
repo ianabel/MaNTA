@@ -1,6 +1,5 @@
-from MirrorPlasma.Config import MirrorPlasmaConfig
-from MirrorPlasma.IonSpecies import Hydrogen, DeuteriumTritium
-from python.MirrorPlasma import IonSpecies
+from .config import MirrorPlasmaConfig
+from .ion_species import DeuteriumTritium
 import numpy as np
 
 CMFX = MirrorPlasmaConfig(

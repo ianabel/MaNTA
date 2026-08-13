@@ -5,10 +5,11 @@ import equinox as eqx
 import jax.numpy as jnp
 from jaxtyping import ArrayLike, Float, Int
 import enum
-from MirrorPlasma.MagneticField import _MagneticField
-from MirrorPlasma.IonSpecies import _IonSpecies
+from .magnetic_field import _MagneticField
+from .ion_species import _IonSpecies
 import matplotlib.pyplot as plt
 import numpy as np
+import pathlib
 import pickle
 
 
@@ -65,7 +66,17 @@ class PlasmaConstants(eqx.Module):
         a, w = np.polynomial.hermite.hermgauss(19)
         self.herm = (a, w)
 
-        with open("util/land.pkl", "rb") as file:
+        # ../land.pkl, beside landremann.py which writes it, rather than
+        # "util/land.pkl" relative to the cwd -- a path that resolved to nothing
+        # from any directory, so this constructor always raised.
+        land_pkl = pathlib.Path(__file__).resolve().parent.parent / "land.pkl"
+        if not land_pkl.exists():
+            raise FileNotFoundError(
+                f"{land_pkl} not found. It holds the Pastukhov quadrature nodes "
+                "and weights, and is generated rather than checked in: run "
+                f"`python {land_pkl.parent / 'landremann.py'}` once."
+            )
+        with open(land_pkl, "rb") as file:
             a = pickle.load(file)
             w = jnp.array(pickle.load(file))
             self.land = (a, w)

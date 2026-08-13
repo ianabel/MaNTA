@@ -123,14 +123,43 @@ def MaNTA_Decorator(func):
 
 
 def ScalarG_Decorator(func):
-    def wrapper(self, index, states, states_dt, weights, *args):
+    def wrapper(self, index, states, states_dt, abscissae, weights, phi_boundary, t):
+        del abscissae  # the node positions; a case has its own self.points
         states_, empty = eqx.partition(State.from_manta(states), lambda x: x.size > 0)
         states_dt_, empty = eqx.partition(
             State.from_manta(states_dt), lambda x: x.size > 0
         )
 
+        integrator = Integrator(self.k, self.nCells, weights, phi_boundary)
+        res = func(self, index, states_, states_dt_, integrator, t)
+
+        if isinstance(res, State):
+            return eqx.combine(res, empty).to_manta()
+        else:
+            return res
+
+    return wrapper
+
+
+def InitialScalarDerivative_Decorator(func):
+    """The 4-argument shape: PyTransportSystem hands this one nodal data only.
+
+    This is what ScalarG_Decorator used to be, and for a while all three hooks
+    shared it. The C++ side then adopted the flat interface, which gave ScalarG
+    and ScalarGPrime abscissae, phiBoundary and t; InitialScalarDerivative kept
+    the short form, so it needs a decorator of its own rather than the same one.
+    """
+
+    def wrapper(self, index, states, states_dt, weights):
+        states_, empty = eqx.partition(State.from_manta(states), lambda x: x.size > 0)
+        states_dt_, empty = eqx.partition(
+            State.from_manta(states_dt), lambda x: x.size > 0
+        )
+
+        # No phiBoundary in this signature, so integrator.phiL()/phiR() are not
+        # available here -- only the quadrature.
         integrator = Integrator(self.k, self.nCells, weights, None)
-        res = func(self, index, states_, states_dt_, integrator, *args)
+        res = func(self, index, states_, states_dt_, integrator)
 
         if isinstance(res, State):
             return eqx.combine(res, empty).to_manta()
@@ -141,14 +170,15 @@ def ScalarG_Decorator(func):
 
 
 def ScalarGPrime_Decorator(func):
-    def wrapper(self, states, states_dt, weights, phi_boundary, *args):
+    def wrapper(self, states, states_dt, abscissae, weights, phi_boundary, t):
+        del abscissae  # as above
         states_, empty = eqx.partition(State.from_manta(states), lambda x: x.size > 0)
         states_dt_, empty = eqx.partition(
             State.from_manta(states_dt), lambda x: x.size > 0
         )
 
         integrator = Integrator(self.k, self.nCells, weights, phi_boundary)
-        result = func(self, states_, states_dt_, integrator, *args)
+        result = func(self, states_, states_dt_, integrator, t)
 
         for i in range(0, len(result)):
             for j in range(0, len(result[i])):

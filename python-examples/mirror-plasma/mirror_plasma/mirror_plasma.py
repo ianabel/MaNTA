@@ -1,17 +1,15 @@
 import jax
 import jax.numpy as jnp
 import equinox as eqx
-from MirrorPlasma.Config import MirrorPlasmaConfig
-from MirrorPlasma.PlasmaState import (
+from .config import MirrorPlasmaConfig
+from .plasma_state import (
     MirrorPlasmaDecorator,
     MirrorPlasmaParams,
     MirrorPlasmaState,
     Channel,
     Scalar,
 )
-import sys
-
-from MirrorPlasma.ParallelPhysics import (
+from .parallel_physics import (
     InitialPhiValue,
     ParallelCurrent,
     ElectronPastukhovLossRate,
@@ -22,23 +20,86 @@ from MirrorPlasma.ParallelPhysics import (
 
 from functools import partial
 
-sys.path.append("..")
-from VectorizedTransportSystem import VectorizedTransportSystem
-from State import State, ScalarG_Decorator, ScalarGPrime_Decorator
-import MaNTA
+from manta.jax import (
+    InitialScalarDerivative_Decorator,
+    ScalarG_Decorator,
+    ScalarGPrime_Decorator,
+    State,
+    VectorizedTransportSystem,
+)
+import manta as MaNTA
+
+
+def buildSpec(config: MirrorPlasmaConfig) -> MaNTA.SystemSpec:
+    """The four channels, the ambipolar potential, and the voltage controller.
+
+    Whether the controller's three scalars exist depends on the config, so the
+    spec has to be built before the base class does -- `nVars`, `nAux` and
+    `nScalars` are read-only, derived from what is passed to `__init__`, and
+    cannot be assigned in the constructor body the way they were.
+
+    The variable order is `Channel`'s, which is *not* the C++ MirrorPlasma's:
+    this one is (Density, AngularMomentum, IonEnergy, ElectronEnergy), that one
+    (Density, IonEnergy, ElectronEnergy, AngularMomentum). The two cases are
+    independent implementations and no index is shared between them.
+    """
+    variables = [
+        # Density is Neumann at both ends; the other three are Dirichlet.
+        MaNTA.Field(
+            "Density",
+            "particle density",
+            "n0",
+            lower=MaNTA.Neumann,
+            upper=MaNTA.Neumann,
+        ),
+        MaNTA.Field("AngularMomentum", "angular momentum density", "n0 T0 / c_s0"),
+        MaNTA.Field("IonEnergy", "ion energy density", "n0 T0"),
+        MaNTA.Field("ElectronEnergy", "electron energy density", "n0 T0"),
+    ]
+
+    aux = [
+        MaNTA.Aux(
+            "AmbipolarPhi",
+            "electrostatic potential enforcing zero parallel current",
+            "T0/e",
+        )
+    ]
+
+    # Scalar's order. Error and Integral are differential -- G depends on their
+    # time derivatives -- and Current is algebraic, which is what
+    # isScalarDifferential used to report.
+    scalars = (
+        [
+            MaNTA.Scalar("VoltageError", "V0 minus the achieved voltage", "", True),
+            MaNTA.Scalar(
+                "VoltageErrorIntegral", "time integral of the error", "", True
+            ),
+            MaNTA.Scalar("RadialCurrent", "radial current", "I0", False),
+        ]
+        if config.useConstantVoltage
+        else []
+    )
+
+    return MaNTA.SystemSpec(variables=variables, scalars=scalars, aux=aux)
 
 
 class MirrorPlasma(VectorizedTransportSystem):
     def __init__(self, config: MirrorPlasmaConfig, solver_config):
-        super().__init__()
-        self.nVars = 4
-        self.nAux = 1
-        if config.useConstantVoltage:
-            self.nScalars = 3
-        else:
-            self.nScalars = 0
-        self.upper_bcs = jnp.array([False, True, True, True])
-        self.lower_bcs = jnp.array([False, True, True, True])
+        spec = buildSpec(config)
+        super().__init__(spec)
+
+        # The same booleans the spec carries, as a jnp array. LowerBoundary and
+        # UpperBoundary are jitted, so `index` reaches them as a tracer, and the
+        # base class's isLowerBoundaryDirichlet is a bound C++ method that wants
+        # a concrete int. Derived from the spec rather than written out again,
+        # so there is still one source of truth.
+        self.lower_bcs = jnp.array(
+            [f.lower == MaNTA.Dirichlet for f in spec.variables]
+        )
+        self.upper_bcs = jnp.array(
+            [f.upper == MaNTA.Dirichlet for f in spec.variables]
+        )
+
         self.params = MirrorPlasmaParams.make(config)
         self.nCells = solver_config["Grid_size"]
         self.k = solver_config["Polynomial_degree"]
@@ -69,9 +130,7 @@ class MirrorPlasma(VectorizedTransportSystem):
         def neumann(index):
             return self.InitialDerivative(index, 0.0)
 
-        return jax.lax.cond(
-            self.isLowerBoundaryDirichlet(index), dirichlet, neumann, index
-        )
+        return jax.lax.cond(self.lower_bcs[index], dirichlet, neumann, index)
 
     @partial(jax.jit, static_argnames=("self",))
     def UpperBoundary(self, index, t):
@@ -81,17 +140,7 @@ class MirrorPlasma(VectorizedTransportSystem):
         def neumann(index):
             return self.InitialDerivative(index, 1.0)
 
-        return jax.lax.cond(
-            self.isUpperBoundaryDirichlet(index), dirichlet, neumann, index
-        )
-
-    @partial(jax.jit, static_argnames=("self",))
-    def isLowerBoundaryDirichlet(self, index):
-        return self.lower_bcs[index]
-
-    @partial(jax.jit, static_argnames=("self",))
-    def isUpperBoundaryDirichlet(self, index):
-        return self.upper_bcs[index]
+        return jax.lax.cond(self.upper_bcs[index], dirichlet, neumann, index)
 
     @partial(jax.jit, static_argnames=("self",))
     def InitialValue(self, index, x):
@@ -588,7 +637,7 @@ class MirrorPlasma(VectorizedTransportSystem):
             case Scalar.Current:
                 return self.InitialCurrent(0.0)
 
-    @ScalarG_Decorator
+    @InitialScalarDerivative_Decorator
     def InitialScalarDerivative(
         self, i, states_: State, states_dot_: State, integrator
     ):
@@ -613,18 +662,8 @@ class MirrorPlasma(VectorizedTransportSystem):
             case Scalar.Integral:
                 return self.InitialScalarValue(Scalar.Error)
 
-    @partial(jax.jit, static_argnames=("self",))
-    def isScalarDifferential(self, s) -> bool:
-        def sError():
-            return True
-
-        def sIntegral():
-            return True
-
-        def sCurrent():
-            return False
-
-        return jax.lax.switch(s, [sError, sIntegral, sCurrent])
+    # isScalarDifferential is gone: `differential` is a field of MaNTA.Scalar
+    # now, and buildSpec above sets it.
 
     @ScalarG_Decorator
     def ScalarG(self, i, states_, states_dot_, integrator, t):
@@ -744,7 +783,13 @@ class MirrorPlasma(VectorizedTransportSystem):
             [sZero, derivs_dt_Integral, derivs_dt_Current],
         ]
 
-    @partial(jax.jit, static_argnames=("self",))
+    # The conversion happens outside the jit, the way ScalarG/_ScalarG above are
+    # split. A pointwise hook is handed a manta.State -- a non-owning view, not
+    # a pytree of arrays -- so tracing through State.from_manta is what jax
+    # rejects with "Error interpreting argument ... as an abstract array".
     def dSources_dScalars(self, i, _state, x, t):
-        state = State.from_manta(_state)
+        return self._dSources_dScalars(i, State.from_manta(_state), x, t)
+
+    @partial(jax.jit, static_argnames=("self",))
+    def _dSources_dScalars(self, i, state, x, t):
         return jax.grad(self.source, argnums=1)(i, state, x, t, self.params).Scalars
