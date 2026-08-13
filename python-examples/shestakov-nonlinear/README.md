@@ -36,8 +36,11 @@ singular-matrix warning needs `D` to change sign, which a square cannot.
 
     pip install .            # from the repository root, once
     cd python-examples/shestakov-nonlinear
-    manta run.conf           # 10 cells, k = 2, n(Lx) = 0.1
+    manta run.conf           # 10 cells, k = 2, n(Lx) = 0.01
     python benchmark.py      # cost, the tractability wall, and the diagnosis
+
+`run.conf` sets `SuppressAlgebraicError = true`, without which this problem does
+not run at all — see below, and `docs/running.rst` for what that key costs.
 
 ## Two misprints in the paper
 
@@ -62,15 +65,29 @@ reproduces the paper's own tabulated front positions — 0.785, 0.618, 0.321 —
 three figures; as printed it is out by 3–8%. So `eta_f` is right and the
 inversion is misprinted.
 
-## Where MaNTA gives out
+## Where MaNTA gives out, and what moves the wall
 
-Shestakov's Section 2.1 sets `n_b = 0`. **MaNTA cannot integrate that at any
-resolution or tolerance tried.** `benchmark.py` maps the wall, at 10 cells and
-k = 2:
+Shestakov's Section 2.1 sets `n_b = 0`, and **that remains out of reach**: it
+runs at exactly one of the five resolutions tried, and only with
+`SuppressAlgebraicError`. What that key does buy is most of the way there.
+`benchmark.py`'s second table, relative L1 error against the closed form:
 
-| `n(Lx)` | 0.2 | 0.1 | 0.07 | 0.05 | 0.03 | 0.01 | 1e-3 | 0 |
-|---|---|---|---|---|---|---|---|---|
-| | ok | ok | ok | fail | fail | fail | fail | fail |
+| `n(Lx)` | flag | 10c/k1 | 10c/k2 | 10c/k3 | 20c/k2 | 20c/k3 |
+|---|---|---|---|---|---|---|
+| 0 | off | fail | fail | fail | fail | fail |
+| 0 | **on** | fail | 2.55e-2 | fail | fail | fail |
+| 1e-3 | off | fail | fail | fail | fail | fail |
+| 1e-3 | **on** | fail | 3.30e-2 | 1.85e-2 | 1.64e-2 | 5.32e-2 |
+| 1e-2 | off | fail | fail | fail | fail | fail |
+| 1e-2 | **on** | 4.66e-2 | 1.99e-2 | 1.11e-2 | 9.83e-3 | 5.52e-3 |
+| 0.1 | off | 2.55e-2 | 1.06e-2 | 5.87e-3 | 5.21e-3 | 2.90e-3 |
+| 0.1 | **on** | 2.55e-2 | 1.06e-2 | 5.87e-3 | 5.21e-3 | 2.90e-3 |
+
+So `n_b >= 1e-2` goes from failing everywhere to working everywhere, the paper's
+own Section 2.2 value of 1e-3 becomes usable at most resolutions, and Section
+2.1's zero is widened into rather than cured. Note the last two rows: where both
+settings work the flag changes the answer by **nothing at all** — every digit
+printed agrees.
 
 Two separate obstructions, and neither is the nonlinear solve.
 
@@ -100,33 +117,39 @@ with `h` is the signature of an algebraic component in the error test, and
 `IDASetSuppressAlg` is never called, so `sigma` is in it. Since `sigma` is what
 grows without bound here, the error test is unsatisfiable however small the step.
 
-That diagnosis predicts a cure, and it works: at the paper's Section 2.2 value
-`n_b = 1e-3`, loosening `Absolute_tolerance` alone admits the problem —
+That diagnosis predicts two cures, and both work. Loosening `Absolute_tolerance`
+alone admits the paper's Section 2.2 value, in a narrow window — at `n_b = 1e-3`,
+`atol = 1e0` runs where `1e-1` and `1e1` do not, the upper end failing because
+too loose lets the solution wander to where the flux blows up anyway.
 
-| `atol` | 1e-3 | 1e-1 | **1e0** | 1e1 | 1e2 |
-|---|---|---|---|---|---|
-| | fail | fail | **ok, err 3.3e-2** | fail | fail |
-
-— and only within a window, because too loose lets the solution wander to where
-the flux blows up anyway. This is the same `Absolute_tolerance` sensitivity the
-other two benchmarks note, but here it is coupled to the physics rather than
-being a free choice.
+The better one is to take the algebraic rows out of the test altogether, which
+is what `SuppressAlgebraicError = true` does (`IDASetSuppressAlg`). `run.conf`
+sets it, and at this case's `BOUNDARY_DENSITY` of 0.01 the problem does not run
+at all without it. **It is off by default in MaNTA and should stay that way**:
+`sigma`, `q`, `lambda` and `phi` are then controlled only by the Newton
+tolerance, a restart file serialises all of them — a round trip degrades from
+`1.9e-6` to `8.6e-4` — and `phi` is a physics quantity in its own right when
+`nAux > 0`, where the `AuxVarTest` regression case drifts 1.0% past its 0.84%
+tolerance. `docs/running.rst` has the full account.
 
 ## Cost where it is tractable
 
-At `n(Lx) = 0.1`, in PERFORMANCE.md's units:
+At `n(Lx) = 0.05` with the flag on, in PERFORMANCE.md's units:
 
 | cells | k | points | flux calls | deriv pts | visits/point | error |
 |---|---|---|---|---|---|---|
-| 10 | 1 | 20 | 5380 | 780 | 308 | 2.55e-2 |
-| 10 | 2 | 30 | 9420 | 1200 | 354 | 1.06e-2 |
-| 10 | 3 | 40 | 12800 | 1760 | 364 | 5.87e-3 |
-| 20 | 2 | 60 | 19140 | 2760 | 365 | 5.21e-3 |
-| 20 | 3 | 80 | 26160 | 3760 | 374 | 2.90e-3 |
+| 10 | 1 | 20 | 4040 | 660 | 235 | 3.06e-2 |
+| 10 | 2 | 30 | 5580 | 900 | 216 | 1.29e-2 |
+| 10 | 3 | 40 | 8880 | 1360 | 256 | 7.17e-3 |
+| 20 | 2 | 60 | 12180 | 2040 | 237 | 6.35e-3 |
+| 20 | 3 | 80 | 14480 | 2960 | 218 | 3.55e-3 |
 
-Two things to read here. The **visit count is 300–375**, against ~120 for Park's
-problem and ~200 for Jardin's — this is much the hardest of the three for the
-time integrator, which is the point of it.
+Two things to read here. The **visit count is 216–256**, against ~120 for Park's
+problem and ~200 for Jardin's — this is still the hardest of the three for the
+time integrator, which is the point of it. It was 308–375 before
+`SuppressAlgebraicError`: dropping the algebraic rows from the error test buys
+roughly a third off the call count as well as admitting the problem at all,
+which is the same 13–44% saving the other two benchmarks show.
 
 And the **error is ~1e-2 and falls slowly, which is the solution's regularity
 rather than the scheme**. `n_e` carries an `x^(4/3)` at the axis, whose second
@@ -135,10 +158,17 @@ is 10 in `run.conf` so a cell boundary falls on that kink; nothing can be done
 about the axis. An order study on this problem will not measure what it looks
 like it measures.
 
-## What would close the gap
+## What would close the remaining gap
 
-Nothing here is a defect to be fixed by tuning. Getting `n_b = 0` would need one
-of the things Shestakov's scheme has and MaNTA does not — a positivity-preserving
-discretisation, a lagged-diffusivity iteration that never differentiates the
-flux, or `IDASetSuppressAlg` so the algebraic rows leave the error test. The
-last is a one-line experiment and is the obvious first thing to try.
+Of the three things Shestakov's scheme has and MaNTA does not, one has now been
+tried. `IDASetSuppressAlg` is in the tree as `SuppressAlgebraicError`, and it
+moved the wall from `n_b >= 0.07` to `n_b >= 1e-2` while making the runs a third
+cheaper — but it did not reach `n_b = 0`, and it is not free, so it is off by
+default.
+
+The two that remain are the ones that would: a **positivity-preserving
+discretisation**, which is what Shestakov's lumped M-matrix construction gives
+him and what stops `u` ever reaching the region where `q^3/u^2` is meaningless;
+or a **lagged-diffusivity iteration** that never differentiates the flux at all,
+which is what makes his scheme indifferent to a Jacobian entry that diverges.
+Neither is a small change, and neither is a defect to be fixed by tuning.
