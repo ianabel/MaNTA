@@ -136,22 +136,21 @@ that are one derivative rougher than u, so it is a real piece of work rather tha
 a line in the harness. Tests/README.md is the place to record the gap if it stays.
 
 From the origin/optimize-mode review, still unmerged and worth taking:
-  - shard_inputs as a per-hook decorator in python/Stellarator2.py (but keep
-    MaNTA_Decorator sharding, or every hook needs the new decorator)
-  - the multi-channel Stellarator2 rewrite: density, ion energy and electron
-    energy evolved together with an ambipolar Er. This is the substantial
-    piece. python-physics/stellarator/stellarator_state.py (its state module)
-    and its two drivers (scan_eq_ambipolar.py, stellarator_example.py) are
-    already merged and are waiting on it -- their st_config names that
-    rewrite's parameters and so cannot construct the single-channel
-    stellarator2.py we have. The blocker is that
-    the branch's version is written against the pre-SystemSpec interface
-    (TransportSystem.__init__(self), then assigning nVars/nAux and
-    isUpperDirichlet/isLowerDirichlet), which main has removed. Porting it means
-    building a SystemSpec whose width depends on evolveDensity -- the
-    `: TransportSystem(buildSpec(config))` static-helper pattern -- not
-    reverting the migration. python-physics/mirror-plasma/mirror_plasma.py does
-    exactly that and is the model to copy.
+  - the branch's Objective2.py changes. Two of them: grad_solver_config gains
+    "solveAdjoint" = True, and the primal path stops going through
+    StellaratorFun and builds the case directly for G and the pressure. Small,
+    but objective2.py also does `from stellarator2 import StellaratorTransport`
+    hardwired, which is the reason scan_eq_ambipolar.py is not yet coherent:
+    it constructs stellarator_multichannel directly *and* calls make_objective,
+    which builds the single-channel case. Making the class injectable -- a
+    keyword defaulting to the present one -- would fix that without touching the
+    four consumers configured the old way, but it is a design change on code
+    nothing here can run, so it wants a decision rather than a guess.
+  - promoting stellarator_multichannel.py over stellarator2.py, if that is
+    wanted. It is a rename plus the st_config of objective2.py,
+    desc_optimize.py, scan_eq.py, desc_optimize_bfgs.py and the notebook:
+    SourceCenter/SourceHeight/SourceWidth -> HeatSourceCenter/Height/Width.
+    Mechanical, but unverifiable here, so it was not done on spec.
   - why the branch removed both `#pragma omp parallel for` from
     TransportSystem.hpp's batched defaults -- ask eatocco; may be a real finding
     about OpenMP against a Python trampoline
@@ -163,3 +162,12 @@ From the origin/optimize-mode review, still unmerged and worth taking:
   package. None has been run -- desc/yancc/interpax are not installable here --
   and that README says which are close to working and which are waiting on the
   rewrite above.
+
+  Done: the multi-channel rewrite is python-physics/stellarator/
+  stellarator_multichannel.py, ported to SystemSpec by three-way merge against
+  the common ancestor so it keeps both the branch's physics and main's
+  interface migration. buildSpec() replaces the nVars/nAux/isUpperDirichlet
+  assignments and was actually exercised -- it needs only manta -- against the
+  branch's shape, the Channel ordering and the read-only-ness of nVars.
+  shard_inputs came with it, which closes the first item this list used to
+  carry.

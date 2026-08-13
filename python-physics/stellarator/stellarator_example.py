@@ -1,4 +1,4 @@
-from stellarator2 import StellaratorTransport
+from stellarator_multichannel import StellaratorTransport
 from yancc_wrapper2 import yancc_data
 import yancc
 import jax.numpy as jnp

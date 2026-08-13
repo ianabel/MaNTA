@@ -1,25 +1,21 @@
-"""Named accessors for a multi-channel stellarator state. Nothing imports this yet.
+"""Named accessors for a multi-channel stellarator state.
 
-Brought over from `origin/optimize-mode`, where it is a dependency of that
-branch's rewritten `Stellarator2.py` -- the version that evolves density, ion
-energy and electron energy together with an ambipolar Er, rather than the single
-channel `stellarator2.py` here carries. That rewrite is *not* merged: it is
-written against the pre-`SystemSpec` interface (`TransportSystem.__init__(self)`
-followed by assigning `self.nVars` and `self.isUpperDirichlet`), which main has
-removed, so taking it wholesale would undo the migration.
+Used by `stellarator_multichannel.py`, which evolves density, ion energy and
+electron energy together with an ambipolar Er -- not by `stellarator2.py`, which
+is the single-channel case and has a `StellaratorParams` of its own.
 
-So this module is here to keep the work from rotting on a stale branch, not
-because anything calls it. Two things to know before wiring it up:
+The two parameter classes are deliberately different: this one splits
+`stellarator2.py`'s single `SourceCenter`/`SourceHeight`/`SourceWidth` into
+separate particle and heat sources and adds `evolveDensity`. A config written
+for one will not construct the other, which is why the drivers come in two sets.
 
-  * its `StellaratorParams` is a different class from the one in
-    `stellarator2.py`, and deliberately so -- it splits the single
-    `SourceCenter`/`SourceHeight`/`SourceWidth` into separate particle and heat
-    sources and adds `evolveDensity`. `scan_eq_ambipolar.py` is configured
-    against *this* one, which is why that driver cannot run against
-    `stellarator2.py` as it stands.
-  * `StellaratorDecorator` assumes the hook signature
-    `(self, state, x, t, field, vp, vpp, params)`, which is the branch's
-    `Stellarator2`, not this directory's.
+`StellaratorDecorator` assumes the hook signature
+`(self, state, x, t, field, vp, vpp, params)`, which is
+`stellarator_multichannel.py`'s, not `stellarator2.py`'s.
+
+`Channel` is the variable order, and `stellarator_multichannel.buildSpec` names
+its fields to match. The two have to agree: `from_state` indexes the solution by
+this enum.
 """
 
 import jax
