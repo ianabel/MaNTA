@@ -16,7 +16,7 @@ In the conservative form MaNTA integrates, `a d_t u - d_x[sigma_hat] = S`:
     chi(q) = chi0 + kappa (|q| - qc)^alpha    for |q| > qc
            = chi0                             otherwise
 
-    sigma_hat(0) = 0                     (Neumann; automatic, sigma_hat = x chi q)
+    q(0) = -g                            (Neumann -- see below, it fixes q)
     u(1) = 0                             (Dirichlet)
 
 with Jardin's chi0 = 1, kappa = 10, alpha = 0.5, qc = 0.5. The initial
@@ -33,7 +33,17 @@ this solver runs at, so the benchmark measures the *nonlinear* solve rather
 than the spatial discretisation -- the complement of
 `../park-convergence/`, which measures the other half.
 
-Two things worth knowing before using this as a test of anything.
+**The boundary condition is the trap here, not the stiffness.** Jardin's problem
+has *no* condition on the axis: sigma_hat = x chi(q) q vanishes there for any q,
+so regularity alone picks the solution. MaNTA's Neumann boundary does not
+express that -- it fixes `q` -- so asking for a zero Neumann value imposes
+q(0) = 0, an extra condition, and a false one. That is a wrong problem, not a
+hard one, and it shows up as a first-order error independent of polynomial
+degree, from a one-cell layer on the axis. Supplying the true gradient -g
+instead takes the error from 7e-4 to machine precision at every resolution. See
+README.md; docs/physics_interface.rst carries the general warning.
+
+Three more things worth knowing before using this as a test of anything.
 
 `g` sits only 0.009 above the critical gradient `qc`, and dchi/dq diverges
 there, so the steady state lives right against the kink. Starting a run *from*
@@ -113,8 +123,16 @@ class JardinCriticalGradient(manta.TransportSystem):
         self.nDeriv = 0       # derivative point-evaluations
 
     # --- boundaries --------------------------------------------------------
+    # A Neumann boundary in MaNTA fixes `q`, the gradient -- *not* the flux.
+    # That matters here more than anywhere: the physical condition on the axis
+    # is that sigma_hat = x chi(q) q vanishes, which it does for *any* q, so the
+    # original problem has no condition there at all. Asking for a zero Neumann
+    # value does not express that; it imposes q(0) = 0, which is an extra
+    # constraint and a false one -- the true gradient on the axis is -g. Getting
+    # this wrong costs a factor of 1e12 in accuracy and looks like a
+    # discretisation defect. See README.md.
     def LowerBoundary(self, index, t):
-        return 0.0            # zero flux on the axis
+        return -CriticalGradient()
 
     def UpperBoundary(self, index, t):
         return 0.0

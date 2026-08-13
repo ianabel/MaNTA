@@ -20,9 +20,10 @@ the algorithms in `refs/`. This is that comparison for the **nonlinear solve**;
     chi(q) = chi0 + kappa (|q| - qc)^alpha    for |q| > qc
            = chi0                             otherwise
 
-with Jardin's `chi0 = 1, kappa = 10, alpha = 0.5, qc = 0.5`, zero flux on the
-axis, `u(1) = 0`, and his initial condition `u = 1 - x` (the steady state of the
-same problem with `chi` held at `chi0`).
+with Jardin's `chi0 = 1, kappa = 10, alpha = 0.5, qc = 0.5`, `u(1) = 0`, his
+initial condition `u = 1 - x` (the steady state of the same problem with `chi`
+held at `chi0`), and on the axis — read the next section before assuming — a
+Neumann value of `-g`, not zero.
 
 This is the shape that defeats a plain implicit time step. Jardin shows backward
 Euler oscillating and needing a step some **four orders of magnitude smaller**
@@ -52,16 +53,17 @@ lines interleave, so the tables are collected and printed at the end.
 
 ## What it measures
 
-MaNTA converges at every resolution tried — the nonlinear solve is robust
-against a diffusivity whose derivative diverges at the critical gradient, which
-is exactly the failure the paper is about. What it costs:
+MaNTA reproduces the stiff steady state **to round-off at every resolution**,
+which is the right answer rather than an impressive one: `u = g(1-x)` is degree
+1 and lies in `P_k` for every `k` here, so any correct scheme must give it
+exactly. The table therefore measures cost alone:
 
 | cells | k | points | flux calls | deriv pts | visits/point | error |
 |---|---|---|---|---|---|---|
-| 4 | 2 | 12 | 1932 | 468 | 200 | 5.78e-3 |
-| 4 | 3 | 16 | 2640 | 640 | 205 | 2.64e-3 |
-| 10 | 3 | 40 | 7640 | 1560 | 230 | 7.49e-4 |
-| 10 | 5 | 60 | 11160 | 2580 | 229 | 2.89e-4 |
+| 4 | 2 | 12 | 1896 | 456 | 196 | 3.0e-16 |
+| 4 | 3 | 16 | 3088 | 576 | 229 | 4.7e-16 |
+| 10 | 3 | 40 | 7160 | 1640 | 220 | 8.0e-16 |
+| 10 | 5 | 60 | 11700 | 2400 | 235 | 1.1e-15 |
 
 For comparison, on a problem of this kind:
 
@@ -85,26 +87,56 @@ column. MaNTA relaxes onto the steady state in time (`TerminateOnSteadyState` is
 a stopping test on the time-marching loop, `Solver.cpp:470`) rather than solving
 for it directly, and that is where the ~200× against Park's ~15 lives.
 
-## An unexplained result, and a reproducer for it
+## The trap: a Neumann boundary fixes q, not the flux
 
-The steady-state error does **not** fall to round-off, even though the exact
-answer is a degree-1 polynomial and so is exactly representable. It falls only
-about first order — `5.8e-3` at 4 cells/`k=2` down to `2.9e-4` at 10 cells/`k=5`
-— and it is concentrated at the degenerate axis, where `sigma_hat = x chi q`
-vanishes identically, but has a bulk floor around `3e-4` as well.
+This example shipped with the axis boundary value at zero, on the reasoning that
+the physical condition there is zero flux. That reasoning is wrong twice over,
+and it cost a factor of `1e12` in accuracy.
 
-It is not a stopping artefact. `benchmark.py`'s second table gives the same
-number to four figures at `t_final` of `1e4`, `1e6` and `1e8`.
+**MaNTA's Neumann boundary fixes `q`, the gradient — not the flux.** The two
+coincide only when `sigma_hat = q`, which is every other case in this tree, so
+nothing had ever exercised the difference. Measured directly: with
+`sigma_hat = 2q` and a Neumann value of `0.3`, the converged solution has
+`q = 0.3` and `sigma_hat = 0.6`.
 
-The obvious next check — start the run *from* the exact steady state and see
-whether it stays — cannot be made: `IDACalcIC` fails there with `IDA_CONV_FAIL`
-(-4). `g = 0.50928` sits only `0.009` above the critical gradient `qc = 0.5`,
-where `dchi/dq` diverges, so any Newton step that pushes `|q|` below `qc` lands
-in the flat `chi = chi0` region where the flux relation is entirely different,
-and the linesearch runs out. `benchmark.py`'s third block demonstrates this.
+**And Jardin's problem has no condition on the axis at all.** `sigma_hat = x
+chi(q) q` vanishes at `x = 0` for *any* `q`, so the flux condition is satisfied
+identically and regularity alone selects the solution. Asking for a zero Neumann
+value does not express that; it imposes `q(0) = 0`, which is an extra constraint,
+and a false one — the true gradient on the axis is `-g = -0.509`.
 
-So whether the exact solution is a fixed point of MaNTA's discrete equations is
-open. It is recorded here rather than guessed at.
+What that looked like, before the cause was known:
+
+| cells | k | error, `q(0) = 0` | error, `q(0) = -g` |
+|---|---|---|---|
+| 4 | 2 | 5.78e-3 | 3.0e-16 |
+| 10 | 3 | 7.49e-4 | 8.0e-16 |
+| 20 | 3 | 3.33e-4 | — |
+| 40 | 3 | 1.58e-4 | — |
+
+Exactly first order in `h` and **independent of `k`** — `k = 5` bought no rate
+at all over `k = 3`. That combination is the tell: a genuine discretisation
+limit improves with order, and a wrong boundary condition does not. The error
+was a one-cell layer on the axis where `q` was dragged from `-0.509` to `0`,
+which also explains why it sat in `chi`'s flat branch there (`|q| < qc`) and why
+the layer's width tracked `h`.
+
+It also explains a second symptom that had been recorded as separate and
+unexplained: starting the run *from* the exact steady state used to fail in
+`IDACalcIC` with `IDA_CONV_FAIL`. Of course it did — `q = -g` everywhere
+directly contradicts the imposed `q(0) = 0`, so there is no consistent initial
+state to find. With the boundary value corrected, both starting points converge
+to round-off.
+
+Two things worth taking from this beyond the one example. `docs/physics_interface.rst`
+said "a Neumann boundary fixes the flux" until this was measured, and now
+carries the correction and a warning. And a problem whose flux vanishes at a
+boundary *by degeneracy* cannot be posed to MaNTA as a zero Neumann value at
+all: the correct gradient there is whatever regularity demands, which in general
+you do not know without solving the problem. Here it is `-g`, which the closed
+form supplies; `../park-convergence/` and `../shestakov-nonlinear/` both
+genuinely have `q = 0` on the axis, so both were right by luck of the physics
+rather than by reasoning.
 
 ## A limiter MaNTA does not have
 
