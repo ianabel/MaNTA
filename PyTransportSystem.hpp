@@ -211,6 +211,17 @@ public:
     return it->second;
   }
 
+  // The coefficient of du/dt. Optional, like the two below: PYBIND11_OVERRIDE
+  // falls back to the base implementation when a subclass does not define it, and
+  // the base returns 1.0 -- so a case that says nothing gets the equation it
+  // expects, and initializeOverrides deliberately does not require it.
+  //
+  // Not routed through override_for, which *throws* when a method is absent. That
+  // is right for a hook MaNTA cannot proceed without and wrong for one with a
+  // default.
+  Value aFn(Index i, Position x) override {
+    PYBIND11_OVERRIDE(Value, TransportSystem, aFn, i, x);
+  };
   Value LowerBoundary(Index i, Time t) const override {
     PYBIND11_OVERRIDE(Value, TransportSystem, LowerBoundary, i, t);
   };

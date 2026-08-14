@@ -400,32 +400,31 @@ void SystemSolver::initialiseMatrices()
                 Csigma_var(1, i) = y.getBasis().Evaluate(I, i, I.x_u);
                 Csigma_var(0, i) = -y.getBasis().Evaluate(I, i, I.x_l);
 
-                // If we have neumann boundaries, need to also set the boundary parameters for q
+                // Every non-Dirichlet end, Neumann and Mixed alike, is assembled
+                // from the same two lines. The row this face contributes is
+                //     (b q + d sigma).n + tau (u - lambda) + n a lambda = n c
+                // so dividing by the outward normal leaves the case author's
+                // `a u + b q + d sigma = c` with no normals in it -- the
+                // convention today's Neumann already follows, the +-phi here and
+                // the +-c in L_global cancelling to give `q = g` at both ends.
+                //
+                // Neumann arrives here as b = 1, or d = 1 under zeroFlux, through
+                // effectiveLowerBoundary; that is the whole of what the flag
+                // means, and it is now the only place the flag is read. The two
+                // hand-written branches this replaces said the same thing in four
+                // copies, one per (end, flag) pair, with the zeroFlux arms
+                // restating an assignment made three lines above.
                 if (I.x_l == grid.lowerBoundary() && !problem->isLowerBoundaryDirichlet(var))
                 {
-                    if (zeroFlux)
-                    {
-                        Csigma_var(0, i) = -y.getBasis().Evaluate(I, i, I.x_l); // Treat sigma as neumann
-                        Cq_var(0, i) = 0.0;
-                    }
-                    else
-                    {
-                        Csigma_var(0, i) = 0.0; // Treat sigma as dirichlet
-                        Cq_var(0, i) = -y.getBasis().Evaluate(I, i, I.x_l); // Treat Q as neumann
-                    }
+                    auto const bc = effectiveLowerBoundary(var);
+                    Csigma_var(0, i) = -bc.d * y.getBasis().Evaluate(I, i, I.x_l);
+                    Cq_var(0, i) = -bc.b * y.getBasis().Evaluate(I, i, I.x_l);
                 }
                 if (I.x_u == grid.upperBoundary() && !problem->isUpperBoundaryDirichlet(var))
                 {
-                    if (zeroFlux)
-                    {
-                        Csigma_var(1, i) = y.getBasis().Evaluate(I, i, I.x_u); // Treat sigma as neumann
-                        Cq_var(1, i) = 0.0;
-                    }
-                    else
-                    {
-                        Csigma_var(1, i) = 0.0; // Treat sigma as dirichlet
-                        Cq_var(1, i) = y.getBasis().Evaluate(I, i, I.x_u); // Treat q as neumann
-                    }
+                    auto const bc = effectiveUpperBoundary(var);
+                    Csigma_var(1, i) = bc.d * y.getBasis().Evaluate(I, i, I.x_u);
+                    Cq_var(1, i) = bc.b * y.getBasis().Evaluate(I, i, I.x_u);
                 }
 
                 Gvar(0, i) = tau(I.x_l) * y.getBasis().Evaluate(I, i, I.x_l);
@@ -475,11 +474,24 @@ void SystemSolver::initialiseMatrices()
             Hvar(0, 1) = 0.0;
             Hvar(1, 1) = -tau(I.x_u);
 
+            // A Mixed end's `a` coefficient lives here, on the lambda column,
+            // rather than in G on the interior u. That is the form the HDG
+            // literature uses -- the condition relates the *numerical flux* to
+            // the *trace unknown*, not to the interior trace (Cui & Zhang,
+            // refs/HDG-Helmholtz-Robin.pdf eq. 2.3 and its impedance condition)
+            // -- and it is what keeps the row solvable for lambda when b = d = 0
+            // is the only thing left. It carries the outward normal, so that
+            // dividing the row through by n leaves a plain `a u` for the case
+            // author: -a below, +a above.
             if (I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryDirichlet(var))
                 Hvar(0, 0) = 0.0;
+            else if (I.x_l == grid.lowerBoundary())
+                Hvar(0, 0) = -tau(I.x_l) - effectiveLowerBoundary(var).a;
 
             if (I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(var))
                 Hvar(1, 1) = 0.0;
+            else if (I.x_u == grid.upperBoundary())
+                Hvar(1, 1) = -tau(I.x_u) + effectiveUpperBoundary(var).a;
 
             H.block(2 * var, 2 * var, 2, 2) = Hvar;
             HGlobalMat.block(var * (nCells + 1) + i, var * (nCells + 1) + i, 2, 2) += Hvar;
@@ -1769,8 +1781,26 @@ void SystemSolver::computeAdjointGradients()
 
                 // Boundary conditions
                 // p = g_D in this case, so the derivatives are just the basis functions
+                //
+                // "in this case" is load bearing, and is now enforced. This term is
+                // the derivative of a *Dirichlet* datum, which reaches the residual
+                // through RF_cellwise in the cell rows. A Neumann or Mixed datum
+                // reaches it through L_global in the lambda row instead, and F_p has
+                // no lambda rows at all -- it is 3*nVars*(k+1) + nAux*(k+1) tall, and
+                // the lambda contribution exists only as the commented-out block
+                // further down. So a boundary parameter on such an end would be
+                // handed a Dirichlet-shaped derivative and return a plausible wrong
+                // gradient with a perfectly good G, which is the failure mode this
+                // file's dSigma/dPhi comment records. Refuse it instead.
                 if (I.x_l == grid.lowerBoundary() && adjointProblem->computeLowerBoundarySensitivity(var, pIndex))
                 {
+                    if (!problem->isLowerBoundaryDirichlet(var))
+                        throw std::logic_error(
+                            "Adjoint parameter " + std::to_string(pIndex) + " is declared a lower "
+                            "boundary sensitivity for variable '" + problem->getVariableName(var) +
+                            "', whose lower boundary is not Dirichlet. Only a Dirichlet datum has a "
+                            "derivative here: a Neumann or Mixed one enters through L_global in the "
+                            "trace row, which F_p does not represent.");
                     for (Eigen::Index j = 0; j < k + 1; j++)
                     {
                         F_p(nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_l);
@@ -1779,6 +1809,13 @@ void SystemSolver::computeAdjointGradients()
 
                 if (I.x_u == grid.upperBoundary() && adjointProblem->computeUpperBoundarySensitivity(var, pIndex))
                 {
+                    if (!problem->isUpperBoundaryDirichlet(var))
+                        throw std::logic_error(
+                            "Adjoint parameter " + std::to_string(pIndex) + " is declared an upper "
+                            "boundary sensitivity for variable '" + problem->getVariableName(var) +
+                            "', whose upper boundary is not Dirichlet. Only a Dirichlet datum has a "
+                            "derivative here: a Neumann or Mixed one enters through L_global in the "
+                            "trace row, which F_p does not represent.");
                     for (Eigen::Index j = 0; j < k + 1; j++)
                     {
                         // < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 )

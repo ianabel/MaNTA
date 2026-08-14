@@ -154,7 +154,7 @@ def ic_w_ramp(n_b, a, slope=None):
 
 # -------------------------------------------------------------------- solving
 def configure(case, k=2, ncells=None, pts=None, suppress=True, write=False,
-              npoints=1001, tag="diagnostics"):
+              npoints=1001, tag="diagnostics", zero_flux=False):
     runner = manta.Runner(case)
     cfg = {
         "OutputFilename": tag,
@@ -167,6 +167,9 @@ def configure(case, k=2, ncells=None, pts=None, suppress=True, write=False,
         # Pinned so every table measures one algorithm; see README.md.
         "SteadyStateSolver": "TimeMarch",
         "SuppressAlgebraicError": suppress,
+        # Which quantity a Neumann boundary constrains: q (false, the default and
+        # what this case ships with) or sigma (true). Section 9 is the only user.
+        "zeroFlux": zero_flux,
         "OutputPoints": npoints,
         "WriteOutput": write,
         "WriteDatFile": False,
@@ -588,8 +591,111 @@ def section8():
     print("   fractional power* is.")
 
 
+# ------------------------------------------------------------------ section 9
+def kink_aligned(ncells):
+    """ncells cells, near-uniform, with one cell boundary exactly at x = d."""
+    n_in = max(1, int(round(ncells * d / LX)))
+    return np.concatenate([np.linspace(0.0, d, n_in + 1),
+                           np.linspace(d, LX, ncells - n_in + 1)[1:]])
+
+
+def axis_flux_stats(ncells, k, zero_flux):
+    """(rel L1 error, offset/Gamma_wall, sigma(0), x(Gamma_h=0)/x1)."""
+    x, u, q, sig = solve_fields(ShestakovNonlinear(n_b=N_B), ncells=ncells, k=k,
+                               npoints=20001, tag="diag_zf",
+                               zero_flux=zero_flux)
+    ue = np.asarray(ExactSolution(x, N_B))
+    rel = np.sum(np.abs(u - ue)) / np.sum(np.abs(ue))
+    off = np.mean((sig - S0 * np.minimum(x, d))[x > d])
+    h = LX / ncells
+    s = sig[x < 3.0 * h]
+    idx = np.where(np.sign(s[:-1]) != np.sign(s[1:]))[0]
+    if len(idx):
+        i = idx[0]
+        x0 = x[i] - s[i] * (x[i + 1] - x[i]) / (s[i + 1] - s[i])
+    else:
+        x0 = np.nan               # no crossing: Gamma_h already ~0 at the axis
+    return rel, off / GAMMA_WALL, sig[0], x0 / node_inset(h, k)
+
+
+def section9():
+    rule("9. Imposing the axis condition on sigma instead of on q")
+    print("   Sections 5-6 diagnosed the error as a flux deficit: Gamma_h")
+    print("   vanishes at the innermost collocation node rather than at x = 0,")
+    print("   because a zero-*gradient* condition says nothing about the flux")
+    print("   where the flux degenerates. `zeroFlux = true` imposes the case's")
+    print("   boundary value on sigma instead, which is a one-key test of that")
+    print("   diagnosis. Note the case asks for 'zero flux on the axis' in so")
+    print("   many words (shestakov_nonlinear.py) -- it is the solver that has")
+    print("   been reading the request as a gradient.")
+    print()
+    print(f"   {'cells':>6} {'k':>2} {'zeroFlux':>9} {'rel L1':>11} "
+          f"{'offset/Gamma':>13} {'sigma(0)':>11} {'x0/x1':>7}")
+    for ncells, k in [(10, 1), (10, 2), (10, 3), (10, 5), (40, 2), (80, 2)]:
+        for zf in (False, True):
+            got, why = attempt(axis_flux_stats, ncells, k, zf)
+            if got is None:
+                print(f"   {ncells:6d} {k:2d} {str(zf):>9}   fail: {why}")
+                continue
+            rel, off, s0, x0 = got
+            print(f"   {ncells:6d} {k:2d} {str(zf):>9} {rel:11.4e} "
+                  f"{off:13.4e} {s0:11.3e} {x0:7.3f}")
+        print()
+    print("   The offset goes to round-off, sigma(0) to ~1e-5, and the zero")
+    print("   crossing disappears entirely (nan = no sign change near the axis).")
+    print("   The error falls by two to three orders. The diagnosis holds.")
+    print()
+    print("   Two things this then exposes, both previously masked.")
+    print()
+    print("   (a) The source kink is *not* harmless in general. Sections 5-6 used")
+    print("       10/20/40/80 cells, where x = d = 0.1 is always a cell boundary,")
+    print("       and concluded the kink costs nothing. True there -- but with the")
+    print("       axis term removed, a kink inside a cell is what is left, and it")
+    print("       is the same size as the axis term used to be.")
+    print()
+    print(f"   {'cells':>6} {'uniform':>12} {'kink-aligned':>14}")
+    for ncells in (12, 14, 19, 24):
+        a, _ = attempt(axis_flux_stats, ncells, 2, True)
+        got, why = attempt(
+            lambda n: solve(ShestakovNonlinear(n_b=N_B), pts=kink_aligned(n),
+                            k=2, zero_flux=True)[1], ncells)
+        lhs = f"{a[0]:12.4e}" if a else f"{'fail':>12}"
+        rhs = f"{got:14.4e}" if got is not None else f"{'fail':>14}"
+        print(f"   {ncells:6d} {lhs} {rhs}")
+    print()
+    print("       Aligning one cell boundary with x = d is worth 100-400x at")
+    print("       these resolutions, and lands every one of them on ~2e-5.")
+    print()
+    print("   (b) A pure flux condition is less robust. The axis gradient is")
+    print("       then only weakly determined: sigma_hat = D0 q^3/u^2 has a")
+    print("       *triple* root at the q(0) = 0 the solution is heading for, so")
+    print("       the sole constraint on q(0) weakens as q(0) approaches it.")
+    print("       Measured, q(0) wanders and changes sign where the gradient")
+    print("       condition pins it at ~5e-5, and some resolutions stop")
+    print("       converging altogether -- an h-independent corrector failure,")
+    print("       with u nowhere near zero. It is erratic in both cells and k")
+    print("       rather than a threshold, and it is deterministic.")
+    print()
+    print(f"   {'cells':>6} {'k':>2}  {'zeroFlux = true':<34}")
+    for ncells, k in [(10, 2), (18, 2), (20, 2), (20, 5), (30, 2), (40, 2),
+                      (60, 2), (80, 2)]:
+        got, why = attempt(axis_flux_stats, ncells, k, True)
+        note = f"ok, rel L1 {got[0]:.3e}" if got else f"FAILS ({why})"
+        print(f"   {ncells:6d} {k:2d}  {note:<34}")
+    print()
+    print("   So the flux form is the right condition and not yet a usable one on")
+    print("   its own. What it wants is a *mixed* row, a q + b sigma = c: a small")
+    print("   gradient term restores a non-vanishing derivative in the boundary")
+    print("   row while the flux term still pins the flux. That is FEATURES.md's")
+    print("   first item, and this section is the measurement that motivates it.")
+    print()
+    print("   None of this changes run.conf. The benchmark records what MaNTA")
+    print("   does on Shestakov's problem as stated.")
+
+
 SECTIONS = {1: section1, 2: section2, 3: section3, 4: section4,
-            5: section5, 6: section6, 7: section7, 8: section8}
+            5: section5, 6: section6, 7: section7, 8: section8,
+            9: section9}
 
 
 def main(argv):

@@ -109,8 +109,28 @@ public:
       // because it needs three things at once -- a Neumann boundary, a *nonzero*
       // value on it, and a case that does not override LowerBoundary, since an
       // overriding case never reads these at all.
-      uL[i] = isLowerBoundaryDirichlet(i) ? restart_Y->u(i)(xL) : restart_Y->q(i)(xL);
-      uR[i] = isUpperBoundaryDirichlet(i) ? restart_Y->u(i)(xR) : restart_Y->q(i)(xR);
+      // A Mixed end has one datum to recover and it is c, so evaluate the row's
+      // own left-hand side on the restarted profile. Note `d` multiplies the
+      // *stored* sigma, which is -sigma_hat, because that is what the assembly
+      // multiplies -- reading the other one here is exactly the defect above,
+      // one level up.
+      auto recover = [&](BoundaryCondition const &bc, Position x)
+      {
+        switch (bc.kind)
+        {
+        case BoundaryKind::Dirichlet:
+          return restart_Y->u(i)(x);
+        case BoundaryKind::Neumann:
+          return restart_Y->q(i)(x);
+        case BoundaryKind::Mixed:
+          return bc.a * restart_Y->u(i)(x) + bc.b * restart_Y->q(i)(x) +
+                 bc.d * restart_Y->sigma(i)(x);
+        }
+        return restart_Y->q(i)(x);
+      };
+
+      uL[i] = recover(lowerBoundaryCondition(i), xL);
+      uR[i] = recover(upperBoundaryCondition(i), xR);
     }
   }
 
@@ -141,8 +161,24 @@ public:
   // a plausible answer instead of a complaint. That confusion is a documented
   // source of bugs here (dGdaux_Vec carried two of them). These are integer
   // lookups next to matrix solves; the bounds check is not measurable.
-  bool isLowerBoundaryDirichlet(Index i) const { return m_spec.variables.at(i).lower == BoundaryKind::Dirichlet; };
-  bool isUpperBoundaryDirichlet(Index i) const { return m_spec.variables.at(i).upper == BoundaryKind::Dirichlet; };
+  bool isLowerBoundaryDirichlet(Index i) const { return m_spec.variables.at(i).lower.kind == BoundaryKind::Dirichlet; };
+  bool isUpperBoundaryDirichlet(Index i) const { return m_spec.variables.at(i).upper.kind == BoundaryKind::Dirichlet; };
+
+  // The kind itself, and the whole condition including a Mixed end's
+  // coefficients. These exist because the two predicates above are *booleans*:
+  // every `!isLowerBoundaryDirichlet(var)` in the solver has meant "Neumann"
+  // since there were only two kinds, and now silently means "Neumann or Mixed".
+  // Anything that has to tell those apart must ask here rather than negate a
+  // predicate. The predicates stay because they are bound into Python and
+  // asserted in python/Tests/test_package_api.py.
+  BoundaryKind lowerBoundaryKind(Index i) const { return m_spec.variables.at(i).lower.kind; };
+  BoundaryKind upperBoundaryKind(Index i) const { return m_spec.variables.at(i).upper.kind; };
+
+  bool isLowerBoundaryMixed(Index i) const { return lowerBoundaryKind(i) == BoundaryKind::Mixed; };
+  bool isUpperBoundaryMixed(Index i) const { return upperBoundaryKind(i) == BoundaryKind::Mixed; };
+
+  BoundaryCondition const &lowerBoundaryCondition(Index i) const { return m_spec.variables.at(i).lower; };
+  BoundaryCondition const &upperBoundaryCondition(Index i) const { return m_spec.variables.at(i).upper; };
 
   // The same for the flux and source functions -- the vectors have length nVars
   virtual Value SigmaFn(Index i, const State &s, Position x, Time t) = 0;

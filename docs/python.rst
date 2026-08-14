@@ -148,7 +148,9 @@ were read uninitialised if a case forgot them. ``nVars``, ``nScalars`` and
 ``nAux`` are read-only properties derived from the declaration.
 
 ``manta.Field(name, description, units, lower=..., upper=...)`` takes
-``manta.Dirichlet`` (the default) or ``manta.Neumann`` per end;
+``manta.Dirichlet`` (the default), ``manta.Neumann``, or
+``manta.Mixed(a=, b=, d=)`` per end -- see
+:ref:`mixed boundary conditions <mixed-boundaries>`;
 ``manta.Scalar(name, ..., differential=True)`` marks a scalar whose constraint
 involves the time derivative; ``manta.Aux(name, ...)`` declares an auxiliary
 variable. A case whose shape depends on its configuration cannot write that at
@@ -166,6 +168,16 @@ asks for one, naming the hook it wants. (The base-class defaults exist for two
 narrower situations: a restart, which recovers the values from the stored
 profile, and ``AutodiffTransportSystem``, which reads them from its own
 ``uL``/``uR`` config keys.)
+
+``aFn(i, x)`` is optional and different in kind from those: it is the
+coefficient :math:`a_i(x)` on :math:`\partial_t u_i`, and the base returns
+``1.0``, so a case that says nothing gets
+:math:`\partial_t u - \partial_x \hat\sigma = S`. Return something else to weight
+the time derivative — a cylindrical or toroidal volume element, say, where the
+conserved quantity is :math:`\int a_i u_i \, \mathrm{d}x` rather than
+:math:`\int u_i \, \mathrm{d}x`. It is integrated against the basis rather than
+sampled, so a position-dependent :math:`a_i` is exact to the quadrature and not
+to :math:`O(h^2)`.
 
 **The derivative hooks are optional**: an absent one means that block is
 identically zero, which is what the framework's zeroed output buffer already

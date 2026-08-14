@@ -336,9 +336,39 @@ whose constructor inserts a factory. Consequences:
 
 **A case declares itself as data.** `TransportSystem`'s only constructor takes a
 `SystemSpec` (`SystemSpec.hpp`): the variables, scalars and aux variables with
-their names, descriptions, units, per-end `BoundaryKind` and the differential
+their names, descriptions, units, per-end `BoundaryCondition` and the differential
 flag. `nVars`/`nScalars`/`nAux` are `const` and derived from it; the spec is
-validated in the constructor, so a part-built case cannot exist. This replaced
+validated in the constructor, so a part-built case cannot exist.
+
+**There are three boundary kinds, and the solver only has two booleans.**
+`BoundaryKind` is `Dirichlet | Neumann | Mixed`, and a `BoundaryCondition` carries
+the coefficients of `a u + b q + d sigma = c` for the last of them (`c` is what
+`LowerBoundary`/`UpperBoundary` returns, so the coefficients are data and only the
+datum depends on `t`). But `isLower/isUpperBoundaryDirichlet` are the only
+interface `SystemSolver` uses, so **every `!isLowerBoundaryDirichlet(var)` means
+"Neumann *or* Mixed"** — ask `lowerBoundaryKind` / `isLowerBoundaryMixed` /
+`lowerBoundaryCondition` where the difference matters. In the assembly it usually
+does not: `effectiveBoundaryCondition` turns a Neumann end into `b = 1` (or
+`d = 1` under `zeroFlux`, which is now the flag's only reader), so both kinds go
+through one path. Three properties are load-bearing and easy to lose:
+
+* **Neumann *is* `b = 1`, bit for bit.** `zeroFlux` is `d = 1`. That equivalence
+  is what licensed reimplementing the flag, and it was checked by building the
+  previous binary and diffing the netCDF output byte for byte, because the
+  regression suite compares at 1e-2 and no config sets `zeroFlux` at all.
+* **Dirichlet is *not* `a = 1`.** It is an identically zero trace row *and*
+  column with the datum substituted into the cell rows; `a = 1` is a weakly
+  imposed Dirichlet. `validate()` refuses `b = d = 0` for that reason.
+* **`a` goes on the `H` diagonal (the lambda column), carrying the outward
+  normal** — `-a` below, `+a` above. The HDG literature imposes a boundary
+  condition as a relation between the *numerical flux* and the *trace unknown*
+  (`refs/HDG-Helmholtz-Robin.pdf` eq. 2.3), not the interior `u`. A sign error
+  here converges at the right rate to the wrong function, so it is pinned by
+  closed-form tests at each end separately rather than by an order study.
+
+`docs/physics_interface.rst` has the stability constraint on the signs of `a` and
+`b`, which is a real restriction rather than advice: the wrong pairing is
+anti-dissipative and the run diverges. This replaced
 assigning `nVars` in a constructor body, nine naming virtuals,
 `isLower/isUpperBoundaryDirichlet`, `isScalarDifferential`, and a pair of
 uninitialised bools the boundary virtuals read. A case whose shape depends on its

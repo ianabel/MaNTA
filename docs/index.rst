@@ -14,7 +14,7 @@ For each of ``nVars`` variables :math:`u_i(x, t)` it advances
        = S_i(u, q, \sigma, \phi, x, t),
    \qquad q_i = \partial_x u_i,
 
-subject to Dirichlet or Neumann conditions at each end of the domain. Alongside
+subject to Dirichlet, Neumann or mixed conditions at each end of the domain. Alongside
 those it can carry ``nAux`` algebraic auxiliary fields :math:`\phi_j`, defined
 pointwise by constraints :math:`G_j = 0`, and ``nScalars`` global unknowns
 :math:`\mu` that are not functions of :math:`x` at all — a total plasma current,

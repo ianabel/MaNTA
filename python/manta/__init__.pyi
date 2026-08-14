@@ -26,9 +26,11 @@ from typing import Any
 from ._manta import (
     AdjointProblem as AdjointProblem,
     Aux as Aux,
+    BoundaryCondition as BoundaryCondition,
     BoundaryKind as BoundaryKind,
     Field as Field,
     Grid as Grid,
+    Mixed as Mixed,
     Runner as Runner,
     Scalar as Scalar,
     State as State,
@@ -100,6 +102,7 @@ class TransportSystem(_TransportSystem):
     def dSources_du(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
     def dSources_dq(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
     def dSources_dsigma(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
+    def aFn(self, i: int, x: float) -> float: ...  # type: ignore[override]
     def LowerBoundary(self, i: int, t: float) -> float: ...  # type: ignore[override]
     def UpperBoundary(self, i: int, t: float) -> float: ...  # type: ignore[override]
     def InitialValue(self, i: int, x: float) -> float: ...  # type: ignore[override]

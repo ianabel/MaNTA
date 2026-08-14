@@ -16,7 +16,10 @@ In the conservative form MaNTA integrates, `a d_t u - d_x[sigma_hat] = S`:
     chi(q) = chi0 + kappa (|q| - qc)^alpha    for |q| > qc
            = chi0                             otherwise
 
-    q(0) = -g                            (Neumann -- see below, it fixes q)
+    sigma(0) = 0                         (mixed, d = 1 -- zero *flux*, which is
+                                          the only condition this problem has;
+                                          see below, and note that a Neumann end
+                                          would constrain q instead)
     u(1) = 0                             (Dirichlet)
 
 with Jardin's chi0 = 1, kappa = 10, alpha = 0.5, qc = 0.5. The initial
@@ -106,7 +109,11 @@ def ExactSolution(x):
 
 
 class JardinCriticalGradient(manta.TransportSystem):
-    variables = [manta.Field("T", "temperature", "", lower=manta.Neumann,
+    # The axis condition is on the *flux*, which is what this problem actually
+    # has: sigma_hat = x chi(q) q vanishes at x = 0 for any q. `Mixed(d=1)` with
+    # a value of zero says exactly that and nothing more, so the run finds the
+    # axis gradient itself instead of being told it. See README.md.
+    variables = [manta.Field("T", "temperature", "", lower=manta.Mixed(d=1.0),
                              upper=manta.Dirichlet)]
 
     # A registered case is built by the factory as `(config, grid)`; both are
@@ -123,16 +130,21 @@ class JardinCriticalGradient(manta.TransportSystem):
         self.nDeriv = 0       # derivative point-evaluations
 
     # --- boundaries --------------------------------------------------------
-    # A Neumann boundary in MaNTA fixes `q`, the gradient -- *not* the flux.
-    # That matters here more than anywhere: the physical condition on the axis
-    # is that sigma_hat = x chi(q) q vanishes, which it does for *any* q, so the
-    # original problem has no condition there at all. Asking for a zero Neumann
-    # value does not express that; it imposes q(0) = 0, which is an extra
-    # constraint and a false one -- the true gradient on the axis is -g. Getting
-    # this wrong costs a factor of 1e12 in accuracy and looks like a
-    # discretisation defect. See README.md.
+    # Zero *flux* on the axis, as a mixed condition with d = 1. This problem has
+    # no condition there in the usual sense: sigma_hat = x chi(q) q vanishes at
+    # x = 0 for any q whatever, so the flux condition holds identically and
+    # regularity alone selects the solution. `d sigma = 0` says that and nothing
+    # more.
+    #
+    # The history is worth keeping, because both of the wrong answers look
+    # reasonable. A *Neumann* boundary in MaNTA fixes `q`, not the flux, so
+    # asking for a zero Neumann value imposes q(0) = 0 -- an extra condition, and
+    # a false one, the true axis gradient being -g. That cost a factor of 1e12 in
+    # accuracy and looked like a discretisation defect. Supplying -g instead fixed
+    # the accuracy but required *knowing the answer*, which a problem without a
+    # closed form does not offer. This form needs neither.
     def LowerBoundary(self, index, t):
-        return -CriticalGradient()
+        return 0.0
 
     def UpperBoundary(self, index, t):
         return 0.0

@@ -656,4 +656,119 @@ BOOST_AUTO_TEST_CASE(named_accessors_reach_the_same_storage_as_the_raw_vectors)
     BOOST_TEST(s.u().size() == 3);
 }
 
+// ---------------------------------------------------------------- mixed BCs
+
+BOOST_AUTO_TEST_CASE(a_bare_boundary_kind_still_declares_a_whole_condition)
+{
+    // FieldSpec::lower/upper are BoundaryCondition now, not BoundaryKind. The
+    // implicit converting constructor is what keeps every existing spec in the
+    // tree compiling, so this test is as much about the line below compiling as
+    // about what it asserts.
+    struct S : public MinimalSystem
+    {
+        S() : MinimalSystem(SystemSpec{.variables = numberedFields(1, BoundaryKind::Neumann,
+                                                                  BoundaryKind::Dirichlet)}) {}
+    } sys;
+
+    BOOST_TEST(!sys.isLowerBoundaryDirichlet(0));
+    BOOST_TEST(sys.isUpperBoundaryDirichlet(0));
+    BOOST_TEST((sys.lowerBoundaryKind(0) == BoundaryKind::Neumann));
+    BOOST_TEST((sys.upperBoundaryKind(0) == BoundaryKind::Dirichlet));
+    BOOST_TEST(!sys.isLowerBoundaryMixed(0));
+}
+
+BOOST_AUTO_TEST_CASE(a_mixed_end_carries_its_coefficients)
+{
+    struct S : public MinimalSystem
+    {
+        S() : MinimalSystem(SystemSpec{
+                  .variables = {{"u", "the diffused quantity", "",
+                                 BoundaryCondition::mixed(2.0, 3.0, 5.0),
+                                 BoundaryKind::Dirichlet}}}) {}
+    } sys;
+
+    BOOST_TEST(sys.isLowerBoundaryMixed(0));
+    BOOST_TEST((sys.lowerBoundaryKind(0) == BoundaryKind::Mixed));
+    BOOST_TEST(sys.lowerBoundaryCondition(0).a == 2.0);
+    BOOST_TEST(sys.lowerBoundaryCondition(0).b == 3.0);
+    BOOST_TEST(sys.lowerBoundaryCondition(0).d == 5.0);
+
+    // The point of the new accessors. isLowerBoundaryDirichlet is a *boolean*,
+    // so every `!isLowerBoundaryDirichlet(var)` in the solver has meant
+    // "Neumann" since there were two kinds and now cannot tell Neumann from
+    // Mixed. Anything that must distinguish them has to ask for the kind.
+    BOOST_TEST(!sys.isLowerBoundaryDirichlet(0));
+    BOOST_TEST(sys.upperBoundaryCondition(0).a == 0.0);
+}
+
+BOOST_AUTO_TEST_CASE(a_mixed_end_must_constrain_a_derivative)
+{
+    // b = d = 0 constrains only u, which is a *weakly imposed* Dirichlet rather
+    // than the Dirichlet kind -- a different discretisation reaching the same
+    // answer. Rejecting it keeps a case from spelling Dirichlet two
+    // inequivalent ways by accident and getting no complaint.
+    auto build = [](double a, double b, double d)
+    {
+        return MinimalSystem(SystemSpec{
+            .variables = {{"u", "", "", BoundaryCondition::mixed(a, b, d), BoundaryKind::Dirichlet}}});
+    };
+
+    BOOST_CHECK_THROW(build(1.0, 0.0, 0.0), std::invalid_argument);
+    BOOST_CHECK_THROW(build(0.0, 0.0, 0.0), std::invalid_argument);
+
+    // Either derivative term alone is enough, with or without the u term.
+    BOOST_CHECK_NO_THROW(build(0.0, 1.0, 0.0));
+    BOOST_CHECK_NO_THROW(build(0.0, 0.0, 1.0));
+    BOOST_CHECK_NO_THROW(build(1.0, 0.0, 1.0));
+
+    // And the message has to name the way out, not just the rule.
+    try
+    {
+        build(1.0, 0.0, 0.0);
+        BOOST_FAIL("expected a throw");
+    }
+    catch (std::invalid_argument const &e)
+    {
+        std::string const what(e.what());
+        BOOST_TEST(what.find("Dirichlet") != std::string::npos);
+        BOOST_TEST(what.find("lower") != std::string::npos);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(the_upper_end_is_validated_too)
+{
+    // The lower end is the one every fixture varies, so a validation loop that
+    // checked only that end would pass the whole suite.
+    BOOST_CHECK_THROW(MinimalSystem(SystemSpec{
+                          .variables = {{"u", "", "", BoundaryKind::Dirichlet,
+                                         BoundaryCondition::mixed(1.0, 0.0, 0.0)}}}),
+                      std::invalid_argument);
+    try
+    {
+        MinimalSystem(SystemSpec{.variables = {{"u", "", "", BoundaryKind::Dirichlet,
+                                                BoundaryCondition::mixed(1.0, 0.0, 0.0)}}});
+    }
+    catch (std::invalid_argument const &e)
+    {
+        BOOST_TEST(std::string(e.what()).find("upper") != std::string::npos);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(comparing_an_end_against_a_kind_ignores_the_coefficients)
+{
+    BoundaryCondition const mixed = BoundaryCondition::mixed(1.0, 2.0, 3.0);
+    BOOST_TEST((mixed == BoundaryKind::Mixed));
+    BOOST_TEST(!(mixed == BoundaryKind::Neumann));
+
+    // C++20 synthesises the reversed form; TransportSystem.hpp and
+    // python-physics' mirror_plasma both rely on this reading.
+    BOOST_TEST((BoundaryKind::Mixed == mixed));
+
+    BoundaryCondition const plain = BoundaryKind::Neumann;
+    BOOST_TEST((plain == BoundaryKind::Neumann));
+    BOOST_TEST(plain.a == 0.0);
+    BOOST_TEST(plain.b == 0.0);
+    BOOST_TEST(plain.d == 0.0);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
