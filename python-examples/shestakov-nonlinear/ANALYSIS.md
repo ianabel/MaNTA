@@ -28,6 +28,13 @@ Shestakov's `0` — is forced, and section 5 below says why it cannot be removed
   one fails.
 * `n_b = 0` is out of reach for a reason no initial condition or mesh can
   address.
+* Imposing the axis condition on `sigma` rather than on `q` — one existing
+  config key — **confirms the diagnosis and removes the offset to round-off**,
+  taking the error down by two to three orders. It also exposes two things it had
+  been masking: the source kink costs as much as the axis term did whenever it
+  falls inside a cell, and a *pure* flux condition leaves `q(0)` weakly
+  determined, so some resolutions stop converging. Hence a mixed row rather than
+  a flux switch (section 8).
 
 ## 1. The initial condition (`diagnostics.py 1`)
 
@@ -300,6 +307,91 @@ The two things that would close the gap are the ones `README.md` already names:
 a positivity-preserving discretisation, or a lagged-diffusivity iteration that
 never forms the divergent derivative. Both are properties of the scheme.
 
+## 8. Imposing the condition on the flux (`diagnostics.py 9`)
+
+Sections 5–6 concluded that the error is a flux deficit: a zero-*gradient*
+condition constrains nothing about the flux where the flux degenerates, so
+`Gamma_h` is free to vanish at the innermost collocation node instead of at
+`x = 0`. That is testable without touching MaNTA. `zeroFlux = true` imposes the
+case's boundary value on `sigma` rather than on `q`
+(`SystemSolver.cpp:406-410`), and nothing here had tried it.
+
+| cells | k | on `q` (shipped) | on `sigma` | offset/`Gamma_wall` | `sigma(0)` |
+|------:|--:|-----------------:|-----------:|--------------------:|-----------:|
+|    10 | 1 |         4.65e-02 |   9.59e-04 | −1.47e-01 → 1.7e-07 | −1.4e-02 → 2.8e-04 |
+|    10 | 2 |         1.98e-02 |   9.96e-05 | −6.54e-02 → −4.6e-13 | −6.4e-03 → 6.1e-05 |
+|    10 | 3 |         1.11e-02 |   3.24e-05 | −3.68e-02 → 9.9e-16 | −3.6e-03 → 2.0e-05 |
+|    10 | 5 |         4.90e-03 |   7.52e-06 | −1.63e-02 → 1.1e-15 | −1.6e-03 → 5.1e-06 |
+|    40 | 2 |         4.87e-03 |   6.14e-06 | −1.63e-02 → 6.7e-09 | −1.6e-03 → −7.0e-07 |
+|    80 | 2 |         2.43e-03 |   8.70e-07 | −8.12e-03 → −7.2e-14 | −8.0e-04 → 3.5e-06 |
+
+**The diagnosis holds exactly.** The constant offset goes to round-off for
+`k >= 2`, `sigma(0)` from `-6.4e-3` to `6.1e-5`, and the zero crossing that
+section 6 measured at `0.956–0.981 x1` disappears — the root finder reports no
+sign change near the axis at all. The error falls by two to three orders, up to
+2800x at 80 cells.
+
+The most direct statement of the defect is the pair of numbers at one resolution:
+with the condition on `q`, the axis gradient is `4.8e-5` — zero, as asked — and
+the axis flux is `-3.3e-3`, which is not. With it on `sigma`, `sigma(0)` is
+`1e-5` and `q(0)` floats. **`shestakov_nonlinear.py` asks for "zero flux on the
+axis" in those words.** The comment was right and the solver was reading the
+request as a gradient.
+
+Two things this exposes, both of which the axis term had been masking because
+they are the same size as it.
+
+**(a) The source kink is not harmless in general.** Section 5 checked that
+`x = d = 0.1` falls on a cell boundary at 10/20/40/80 cells and concluded the
+kink costs nothing. That is true at those resolutions and was the right control
+to run — but they are precisely the multiples of ten, and with the axis term gone
+a kink *inside* a cell is what is left:
+
+| cells | uniform | one boundary at `x = d` |
+|------:|--------:|------------------------:|
+|    12 | 8.80e-03 |               1.04e-04 |
+|    14 | 3.86e-02 |               1.04e-04 |
+|    19 | 1.91e-02 |               2.33e-05 |
+|    24 | 2.21e-02 |               2.32e-05 |
+
+100–400x, and every aligned mesh lands on ~2e-5. So the honest version of
+section 5's finding is that the kink was *exonerated for the meshes used*, not in
+general; it is a second error source of comparable size, and the two could not be
+separated while the first was present.
+
+**(b) A pure flux condition is not yet usable on its own.** With it, `q(0)` is
+only weakly determined: `sigma_hat = D0 q^3/u^2` has a **triple root** at exactly
+the `q(0) = 0` the solution is approaching, so the only thing constraining `q(0)`
+weakens as `q(0)` gets closer to it. Measured, `q(0)` wanders and changes sign
+(`-0.064, -0.028, -0.046, -0.020, -0.001`) where the gradient condition holds it
+at `5e-5` monotonically, and some resolutions stop converging:
+
+| cells | k | `zeroFlux = true` |
+|------:|--:|-------------------|
+| 10, 30, 40, 80 | 2 | converge |
+| 18, 20, 60 | 2 | `IDA_CONV_FAIL` |
+| 20 | 1, 3, 4 | converge |
+| 20 | 2, 5 | `IDA_CONV_FAIL` |
+
+Deterministic — 20 cells fails three times out of three. What it is *not*: a
+step-size problem (`h` falls `1.9e-5 → 2.9e-7` across five attempts and Newton
+fails at ten iterations on every one, which is the signature of a state that
+cannot be solved rather than a step that is too long); a positivity problem
+(`min u` sits at the wall value `1.0e-2` throughout, and `q`, `sigma` and
+`u(axis)` are all decreasing smoothly right up to the failing step); or a
+threshold in the vanishing derivative (40 cells reaches `dsigma_hat/dq = 1.5e-4`,
+an order of magnitude *smaller* than the `1.2e-1` at which 20 cells dies, and
+survives). It is a near-degenerate direction whose effect is mesh-dependent.
+
+Which is an argument for the *mixed* form rather than a flux switch. A row
+`b q + d sigma = c` with a small `b` keeps a non-vanishing `q`-derivative in the
+boundary row while `d` still pins the flux; a pure `d` cannot, because the
+physics has arranged for its only lever to vanish at the answer. That is
+`FEATURES.md`'s first item, and this section is its measurement.
+
+**None of this is in `run.conf`.** As with section 6, what section 9 establishes
+is a diagnosis and a direction for MaNTA, not a setting for this benchmark.
+
 ## What this corrected in `README.md`
 
 * *"nothing can be done about the axis"* — wrong. Section 6: two orders of
@@ -310,8 +402,11 @@ never forms the divergent derivative. Both are properties of the scheme.
   in L1 from best approximation on the boundary cell; the observed `h^1` is
   worse, because the local error is amplified into a global flux deficit. And
   `(k+1)^-2` is a node position, not a regularity exponent.
-* The kink at `x = d` is **exonerated**: it lies on a cell boundary at every
-  resolution used here and costs nothing.
+* The kink at `x = d` is **exonerated for the resolutions used here**: it lies on
+  a cell boundary at all of 10/20/40/80 cells and costs nothing there. Section 9
+  qualifies this — on a mesh where it falls *inside* a cell it costs about as
+  much as the axis term did, which is why the two could not be separated until
+  the axis term was removed.
 * `run.conf`'s claim that the problem "does not run at all" without
   `SuppressAlgebraicError` is a property of the shipped initial condition
   (section 2), which is why the comment there now says so.
