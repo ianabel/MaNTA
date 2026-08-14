@@ -253,6 +253,9 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(zeroFlux, bool);
     READ(AggressiveTimesteps, bool);
     READ(SuppressAlgebraicError, bool);
+    READ(SteadyStateSolver, std::string);
+    READ(PseudoTransientInitialStep, double);
+    READ(PseudoTransientMaxStep, double);
     READ(TransportSystem, std::string);
     READ(PhysicsPlugins, std::vector<std::string>);
 #undef READ
@@ -358,6 +361,24 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     system.setWriteDebugDatFiles(config.WriteDebugDatFiles);
     system.setAggressiveTimesteps(config.AggressiveTimesteps);
     system.setSuppressAlgebraicError(config.SuppressAlgebraicError);
+
+    // Rejected here rather than defaulted, because a typo in this key would
+    // otherwise silently pick a different algorithm.
+    if (config.SteadyStateSolver == "PseudoTransient")
+        system.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    else if (config.SteadyStateSolver == "TimeMarch")
+        system.setSteadyMode(SystemSolver::SteadyMode::TimeMarch);
+    else if (config.SteadyStateSolver == "Newton")
+        system.setSteadyMode(SystemSolver::SteadyMode::Newton);
+    else
+        throw std::invalid_argument(
+            "SteadyStateSolver must be \"PseudoTransient\", \"TimeMarch\" or "
+            "\"Newton\"; got \"" + config.SteadyStateSolver + "\".");
+
+    if (config.PseudoTransientInitialStep > 0.0)
+        system.setPseudoTransientInitialStep(config.PseudoTransientInitialStep);
+    if (config.PseudoTransientMaxStep > 0.0)
+        system.setPseudoTransientMaxStep(config.PseudoTransientMaxStep);
 
     // Presence arms it, which is what the TOML reader has always done;
     // setSteadyStateTolerance also sets TerminateOnSteadyState.

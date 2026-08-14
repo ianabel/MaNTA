@@ -40,7 +40,7 @@ def park_error(runner, postprocessed=False):
     return np.sum(np.abs(u - EXACT)) / np.sum(np.abs(EXACT))
 
 
-def solve(ncells, k, superconvergent=False):
+def solve(ncells, k, superconvergent=False, mode="TimeMarch"):
     case = ParkConvergence()
     runner = manta.Runner(case)
     runner.configure({
@@ -55,6 +55,9 @@ def solve(ncells, k, superconvergent=False):
         "delta_t": 1.0e4,
         "t_final": 1.0e4,
         "SteadyStateTolerance": 1.0e-11,
+        # Defaulted to TimeMarch so the tables below keep measuring one
+        # algorithm; the three-mode comparison at the end varies it.
+        "SteadyStateSolver": mode,
         "Superconvergent": superconvergent,
         "WriteOutput": False,
         "WriteDatFile": False,
@@ -136,6 +139,23 @@ def main():
     print("  Superconvergence costs the extra node, (k+2)/(k+1). Compare rows")
     print("  of near-equal cost rather than equal (cells, k): on this problem")
     print("  raising k wins at k = 2-3 and the flag wins at k >= 4.")
+    print()
+
+    print("How the steady state is reached, at 4 cells k=3")
+    print(f"  {'SteadyStateSolver':>18} {'flux calls':>11} {'visits':>7} {'error':>12}")
+    for mode in ("TimeMarch", "PseudoTransient", "Newton"):
+        case, runner = solve(4, 3, mode=mode)
+        points = 4 * (3 + 1)
+        print(f"  {mode:>18} {case.nFlux:11d} "
+              f"{(case.nFlux + case.nDeriv) // points:7d} {park_error(runner):12.4e}")
+    print()
+    print("  Same answer to every digit, an order of magnitude apart in cost.")
+    print("  TimeMarch sizes each step from a local error estimate on a transient")
+    print("  that is thrown away; the other two size it from the residual, and")
+    print("  Newton drops the pseudo-time term altogether. Park's own solver")
+    print("  reaches this state in 9-15 iterations, which is where Newton lands.")
+    print("  It does not always go this way -- see ../shestakov-nonlinear/, where")
+    print("  continuation costs 2.5x what time marching does.")
 
 
 if __name__ == "__main__":

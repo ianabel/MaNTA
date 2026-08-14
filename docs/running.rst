@@ -134,6 +134,81 @@ config keys are ignored on this path.
    :ref:`suppress-algebraic-error` makes this *worse*, not better: it is the
    accuracy of the algebraic components that a restart resumes from.
 
+.. _steady-state-solver:
+
+Reaching a steady state
+-----------------------
+
+When only the final state matters, ``SteadyStateSolver`` chooses how to get
+there. It applies whenever steady-state termination is armed — ``run_ss()``, or a
+config carrying ``SteadyStateTolerance`` — and is ignored by a plain
+``run(tFinal)``, where the transient *is* the answer.
+
+``PseudoTransient`` (the default)
+   Pseudo-transient continuation, after Kelley and Keyes. A backward-Euler mass
+   term is kept purely as damping and the pseudo-time step is sized from the
+   *residual* rather than from a local error estimate: on each accepted step
+   ``dt`` grows by ``||F_prev||/||F_now||`` (Switched Evolution Relaxation, with
+   a floor of 2), and a step that increases the residual is rejected outright —
+   the state is restored and ``dt`` cut by four. ``PseudoTransientInitialStep``
+   sets the first step, defaulting to ``initialTimestep`` and then ``delta_t``;
+   ``PseudoTransientMaxStep`` caps it.
+
+``Newton``
+   The same code with an infinite first step, so the damping term is absent from
+   the outset and this is Newton's method on the steady problem. Cheapest when
+   it works; it has no globalisation, so it wants a decent starting state. A
+   rejected step drops it to a finite ``dt`` and it continues as continuation.
+
+``TimeMarch``
+   The original behaviour: integrate with IDA until ``dY/dt`` falls below
+   ``SteadyStateTolerance``. Slower, and the only one of the three that selects
+   a solution *branch* by following the physics — which matters for a problem
+   with more than one steady state, such as a transport model with a barrier
+   bifurcation.
+
+Measured on the benchmarks under ``python-examples/``, in the units
+``PERFORMANCE.md`` asks for — evaluations of the physics per point, for an
+answer identical in every digit printed:
+
+.. list-table::
+   :header-rows: 1
+
+   * - benchmark
+     - ``TimeMarch``
+     - ``PseudoTransient``
+     - ``Newton``
+   * - ``park-convergence``
+     - 113
+     - **19**
+     - **11**
+   * - ``jardin-critical-gradient``
+     - 212
+     - **127**
+     - 152
+   * - ``shestakov-nonlinear``
+     - **283**
+     - 705
+     - 731
+
+Park's own solver reaches that state in 9–15 iterations, which is where
+``Newton`` lands. The last row is the counter-example and is why ``TimeMarch``
+stays: that problem's flux ``D0 q^3/u^2`` is degenerate, the mass term
+continuation exists to shed is what was damping it, and as ``dt`` grows the inner
+solve starts rejecting steps. Its ``run.conf`` therefore pins ``TimeMarch``.
+
+.. note::
+
+   A steady solve is also *better* for adjoints, not merely cheaper. The adjoint
+   state method assumes ``F(y, p) = 0``; ``TimeMarch`` only approximates that
+   through a ``dY/dt`` threshold, while these two enforce it. On the
+   ``test_adjoint.py`` fixture the gradient moves from ``2e-5`` to ``2e-8``
+   against a finite-difference reference — the same accuracy as integrating far
+   past the transient, for a fraction of the work.
+
+   Explicitly time-dependent data — boundary values, sources — is frozen at
+   ``t_initial``. There is no time axis to evaluate it on.
+
 .. _suppress-algebraic-error:
 
 Dropping the algebraic rows from the error test

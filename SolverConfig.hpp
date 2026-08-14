@@ -63,6 +63,9 @@ struct SolverConfig
     bool                     zeroFlux;
     bool                     AggressiveTimesteps;
     bool                     SuppressAlgebraicError;
+    std::string              SteadyStateSolver;
+    double                   PseudoTransientInitialStep;
+    double                   PseudoTransientMaxStep;
     std::string              TransportSystem;
     std::vector<std::string> PhysicsPlugins;
 

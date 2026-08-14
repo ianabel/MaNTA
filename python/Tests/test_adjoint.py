@@ -270,6 +270,60 @@ def test_adjoint_gradient_matches_finite_differences(tmp_path):
     )
 
 
+def _solve_steady(p, tmp_path, mode):
+    """As solve(), but reaching the final state through run_ss()."""
+    system = ParametricDiffusion(p)
+    runner = MaNTA.Runner(system)
+    runner.configure(adjoint_config(
+        tmp_path, SteadyStateSolver=mode, SteadyStateTolerance=1e-11
+    ))
+    runner.run_ss()
+    G, gradients = runner.getAdjointGradients()
+    return float(np.asarray(G)[0]), np.asarray(gradients["G_p"]).reshape(-1)
+
+
+def _fd_gradient(tmp_path, mode):
+    p0 = np.array([KAPPA0, SOURCE0])
+    fd = np.zeros(NP)
+    for i in range(NP):
+        h = 1e-4 * abs(p0[i])
+        p_plus, p_minus = p0.copy(), p0.copy()
+        p_plus[i] += h
+        p_minus[i] -= h
+        fd[i] = (
+            _solve_steady(p_plus, tmp_path / f"p{i}", mode)[0]
+            - _solve_steady(p_minus, tmp_path / f"m{i}", mode)[0]
+        ) / (2.0 * h)
+    return fd
+
+
+@pytest.mark.parametrize("mode", ["PseudoTransient", "Newton"])
+def test_a_steady_solve_gives_the_adjoint_a_better_state_than_time_marching(tmp_path, mode):
+    """The adjoint wants F(y, p) = 0; a steady solve enforces it.
+
+    solve() above reaches its state by integrating to T_FINAL = 15, which its
+    own comment explains is chosen so that "the diffusive transient is
+    thoroughly dead: the adjoint state method assumes F(y, p) = 0, which only
+    holds once du/dt has decayed". run_ss() with TimeMarch stops on a dY/dt
+    threshold instead, which is a proxy for the same thing and a looser one --
+    it lands the gradient about 2e-5 from the finite-difference reference where
+    the long integration reaches 2e-8.
+
+    The pseudo-transient and Newton solvers drive the residual to zero directly,
+    so they recover the full 2e-8 while doing a fraction of the work. That makes
+    this a correctness argument for the steady path and not only a cost one.
+    """
+    p0 = np.array([KAPPA0, SOURCE0])
+    _, adjoint_grad = _solve_steady(p0, tmp_path / "base", mode)
+    fd = _fd_gradient(tmp_path, mode)
+
+    rel = np.abs(adjoint_grad - fd) / np.maximum(np.abs(fd), 1e-300)
+    assert np.all(rel < 1e-6), (
+        f"mode={mode}\nadjoint={adjoint_grad}\nfinite-difference={fd}\n"
+        f"relative error={rel}"
+    )
+
+
 def objective_only_superconvergent(p, tmp_path):
     G, _, _, _ = solve(p, tmp_path, Superconvergent=True)
     return float(G[0])

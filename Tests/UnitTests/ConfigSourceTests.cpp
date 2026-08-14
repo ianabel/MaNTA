@@ -82,6 +82,11 @@ BOOST_AUTO_TEST_CASE(a_minimal_config_loads_with_every_default_applied)
     BOOST_TEST(!c.Superconvergent);
     BOOST_TEST(!c.AggressiveTimesteps);
     BOOST_TEST(!c.SuppressAlgebraicError);
+    // PseudoTransient, not TimeMarch: run_ss() and a config carrying
+    // SteadyStateTolerance both take the continuation path unless told not to.
+    BOOST_TEST(c.SteadyStateSolver == "PseudoTransient");
+    BOOST_TEST(c.PseudoTransientInitialStep == 0.0);
+    BOOST_TEST(c.PseudoTransientMaxStep == 0.0);
 }
 
 BOOST_AUTO_TEST_CASE(absolute_tolerance_defaults_to_1e_3)
@@ -286,6 +291,9 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         "Superconvergent = true\n"
         "AggressiveTimesteps = true\n"
         "SuppressAlgebraicError = true\n"
+        "SteadyStateSolver = \"Newton\"\n"
+        "PseudoTransientInitialStep = 0.25\n"
+        "PseudoTransientMaxStep = 1e6\n"
         "zeroFlux = true\n"
         "WriteOutput = false\n"
         "SteadyStateTolerance = 1e-5\n"
@@ -307,6 +315,8 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         {"t_initial", 0.25}, {"OutputPoints", 51},
         {"Superconvergent", true}, {"AggressiveTimesteps", true},
         {"SuppressAlgebraicError", true},
+        {"SteadyStateSolver", std::string("Newton")},
+        {"PseudoTransientInitialStep", 0.25}, {"PseudoTransientMaxStep", 1e6},
         {"zeroFlux", true}, {"WriteOutput", false},
         {"SteadyStateTolerance", 1e-5}, {"OutputFilename", std::string("shared")},
     };
@@ -325,6 +335,9 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     BOOST_TEST(fromToml.Superconvergent == fromMap.Superconvergent);
     BOOST_TEST(fromToml.AggressiveTimesteps == fromMap.AggressiveTimesteps);
     BOOST_TEST(fromToml.SuppressAlgebraicError == fromMap.SuppressAlgebraicError);
+    BOOST_TEST(fromToml.SteadyStateSolver == fromMap.SteadyStateSolver);
+    BOOST_TEST(fromToml.PseudoTransientInitialStep == fromMap.PseudoTransientInitialStep);
+    BOOST_TEST(fromToml.PseudoTransientMaxStep == fromMap.PseudoTransientMaxStep);
     BOOST_TEST(fromToml.zeroFlux == fromMap.zeroFlux);
     BOOST_TEST(fromToml.WriteOutput == fromMap.WriteOutput);
     BOOST_TEST(fromToml.MinStepSize == fromMap.MinStepSize);
