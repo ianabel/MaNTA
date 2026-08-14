@@ -109,8 +109,28 @@ public:
       // because it needs three things at once -- a Neumann boundary, a *nonzero*
       // value on it, and a case that does not override LowerBoundary, since an
       // overriding case never reads these at all.
-      uL[i] = isLowerBoundaryDirichlet(i) ? restart_Y->u(i)(xL) : restart_Y->q(i)(xL);
-      uR[i] = isUpperBoundaryDirichlet(i) ? restart_Y->u(i)(xR) : restart_Y->q(i)(xR);
+      // A Mixed end has one datum to recover and it is c, so evaluate the row's
+      // own left-hand side on the restarted profile. Note `d` multiplies the
+      // *stored* sigma, which is -sigma_hat, because that is what the assembly
+      // multiplies -- reading the other one here is exactly the defect above,
+      // one level up.
+      auto recover = [&](BoundaryCondition const &bc, Position x)
+      {
+        switch (bc.kind)
+        {
+        case BoundaryKind::Dirichlet:
+          return restart_Y->u(i)(x);
+        case BoundaryKind::Neumann:
+          return restart_Y->q(i)(x);
+        case BoundaryKind::Mixed:
+          return bc.a * restart_Y->u(i)(x) + bc.b * restart_Y->q(i)(x) +
+                 bc.d * restart_Y->sigma(i)(x);
+        }
+        return restart_Y->q(i)(x);
+      };
+
+      uL[i] = recover(lowerBoundaryCondition(i), xL);
+      uR[i] = recover(upperBoundaryCondition(i), xR);
     }
   }
 
