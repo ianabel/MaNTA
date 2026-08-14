@@ -30,11 +30,6 @@ public:
                                  " not overridden in Python subclass");
       }
     };
-    method_overrides.insert(
-        std::make_pair("dgFn_dphi", make_override("dgFn_dphi")));
-    method_overrides.insert(
-        std::make_pair("dAux_dp", make_override("dAux_dp")));
-
     initialized = true;
   }
   // PyTransportSystem(TransportSystem &&base) : Tr
@@ -159,10 +154,9 @@ public:
     // x).cast<Values>();
   };
   void dgFn_dphi(Index i, VectorRef out, const State &s, Position x) override {
-    if (!initialized)
-      initializeOverrides();
-    out = method_overrides["dgFn_dphi"](i, StateView(const_cast<State &>(s)), x).cast<Values>();
-  };
+    throw std::runtime_error("Individual derivative function \"dgFn_dphi\" "
+                             "deprecated; use vectorized version dg instead.");
+      };
 
   void dg(Index gIndex, GlobalState &out, GlobalState const &states,
           std::vector<Position> const &abscissae) override {

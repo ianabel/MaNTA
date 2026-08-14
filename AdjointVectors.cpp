@@ -47,6 +47,17 @@ void SystemSolver::DerivativeSubVector(Index, Vector &Vec, Eigen::Ref<Matrix> co
 }
 
 
+void SystemSolver::dGdaux_Vec(Index, Vector &Vec, Eigen::Ref<Matrix> const dX_dZ, DGSoln const &Y, Index intervalIndex)
+{
+  Interval const &I(grid[intervalIndex]);
+    const Vector weights = Y.getBasis().getIntegrationWeights(I);
+    for (Index XAux = 0; XAux < nAux; XAux++)
+        Vec.block(XAux * (k + 1), 0, (k + 1), 1) =
+            dX_dZ.row(XAux).transpose().cwiseProduct(weights);
+
+}
+
+
 // dG/dt for one objective, by the chain rule
 //
 //     dG/dt = Int ( dg/du . u' + dg/dq . q' + dg/dsigma . sigma' + dg/dphi . phi' ) dx

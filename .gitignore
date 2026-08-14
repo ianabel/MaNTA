@@ -83,3 +83,5 @@ docs/_build/
 # copyrighted publisher material and several MB each, so they stay out of the
 # repository. Fetch them from the dois in Refs.md.
 refs/*.pdf
+
+python-physics/stellarator/figs/

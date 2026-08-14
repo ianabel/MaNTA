@@ -1333,11 +1333,12 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         DerivativeSubVector(0, dGdu, dGdvars.cellwiseVariable(i), y, i);
         G_y[i].block(2 * nVars * (k + 1), 0, nVars * (k + 1), 1) = dGdu;
 
-        if (nAux > 0)
-        {
-            dGdaux_Vec(0, dGdaux, y, i);
-            G_y[i].block(3 * nVars * (k + 1), 0, nAux * (k + 1), 1) = dGdaux;
-        }
+
+         if (nAux > 0)
+         {
+             dGdaux_Vec(0, dGdaux, dGdvars.cellwiseAux(i), y, i);
+             G_y[i].block(3 * nVars * (k + 1), 0, nAux * (k + 1), 1) = dGdaux;
+         }
         }
     }
 
@@ -1789,17 +1790,35 @@ void SystemSolver::computeAdjointGradients()
             }
             for (Index aux = 0; aux < nAux; ++aux)
             {
-                if( adjointProblem->isAdjointIndexInternal( pIndex ) )
+
+                Eigen::VectorXd daux_dp_phi(k + 1);
+                if (adjointProblem->areParametersSpatial())
                 {
-                    auto dAuxdp = [&](double x)
+                  for (Index j = 0; j < k + 1; j++)
+                  {
+                    daux_dp_phi.setZero();
+                    if( adjointProblem->isAdjointIndexInternal( pIndex ) )
                     {
-                        State s = y.eval(x);
-                        Value grad;
-                        adjointProblem->dAux_dp(aux, pIndex, grad, s, x);
-                        return grad;
-                    };
-                    Eigen::VectorXd dAux_dp_cellwise = y.getBasis().ProjectOntoBasis(I, dAuxdp);
-                    F_p.block(3 * nVars * (k + 1) + aux * (k + 1), 0, k + 1, 1) = dAux_dp_cellwise;
+                        const auto dAuxdp_cell = dAuxdp.Variable(i)[aux];
+                        Vector temp(k + 1);
+                        temp.setZero();
+                        temp(j) = dAuxdp_cell(pIndex, j);
+                        daux_dp_phi = y.getBasis().InterpolateOntoBasis(I, temp);
+                    }
+                    F_p.block(3 * nVars * (k + 1) + aux * (k + 1), j, k + 1, 1) = daux_dp_phi;
+                  }
+                }
+                else
+                {
+                  daux_dp_phi.setZero();
+                  if( adjointProblem->isAdjointIndexInternal( pIndex ) )
+                  {
+                      const auto dAuxdp_cell = dAuxdp.Variable(i)[aux];
+                      daux_dp_phi = superconvergent
+                          ? Vector(postprocessor->A9(i) * Vector(dAuxdp_cell.row(pIndex)))
+                          : y.getBasis().InterpolateOntoBasis( I, dAuxdp_cell.row(pIndex) );
+                  }
+                  F_p.block(3 * nVars * (k + 1) + aux * (k + 1), 0, k + 1, 1) = daux_dp_phi;
                 }
             }
 

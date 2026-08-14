@@ -547,6 +547,7 @@ class SystemSolver
         // Still on that Gauss rule, and so still the derivative of the wrong
         // functional -- see the TODO entry. It is live, unlike the four above,
         // because dgFn_dphi is the only pointwise dg hook a case can still reach.
+        void dGdaux_Vec(Index, Vector &, Eigen::Ref<Matrix> const dX_dZ, DGSoln const &, Index intervalIndex);
         void dGdaux_Vec(Index, Vector &, DGSoln const &, Index);
 
         // The time derivative of the objective, by the chain rule over the four

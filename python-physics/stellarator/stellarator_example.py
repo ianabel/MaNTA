@@ -38,20 +38,20 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 st_config = {
     "ParticleSourceCenter": 0.1,
     "ParticleSourceHeight": 0.01,
-    "ParticleSourceWidth": 0.1,
+    "ParticleSourceWidth": 0.3,
     "HeatSourceCenter": 0.1,
-    "HeatSourceHeight": 0.1,
-    "HeatSourceWidth": 0.1,
+    "HeatSourceHeight": 0.05,
+    "HeatSourceWidth": 0.3,
     "EdgeTemperature": 0.2,
-    "EdgeDensity": 0.2,
+    "EdgeDensity": 0.3,
     "n0": 0.5,
-    "evolveDensity": False,
+    "evolveDensity": True,
 }
 # runner = MaNTA.Runner(st)
 
 rho_upper = 1.0
 rtol = 1e-2
-atol = 1e-2
+atol = 1e-4
 # nodes = [0.0,0.5, 0.75, 0.9, 1.0]
 npoints = 5
 degree = 3
@@ -75,9 +75,10 @@ solver_config = {
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 1e-2,
     "AggressiveTimesteps": False,
+    "WriteDatFile": True,
     "restart": False,
     "zeroFlux": True,
-    "solveAdjoint": False,
+    "solveAdjoint": True,
 }
 
 
@@ -97,7 +98,7 @@ yancc_rho = jnp.array(points)
 yancc_ntheta = 17
 yancc_nzeta = 31
 
-yancc_res = {"na": 55, "nx": 5}
+yancc_res = {"na": 45, "nx": 5}
 ## to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
 # + axis and lcfs
 # initial pressure is all zeros, can change this if desired
