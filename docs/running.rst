@@ -243,7 +243,11 @@ by the Newton tolerance, and two things read them:
 So it is the right key for a hard steady-state or transient solve whose output is
 ``u``, and the wrong one if you intend to restart from the result or care about
 the auxiliary variables. ``python-examples/shestakov-nonlinear`` is a problem
-that cannot be integrated at all without it.
+that cannot be integrated at all without it — though that turns out to depend on
+the initial condition rather than on the formulation, which is worth knowing
+before reaching for this key. A start whose flux is badly scaled needs it; the
+same problem from a physically scaled start does not. That example's
+``ANALYSIS.md`` measures both.
 
 The three phases
 ----------------

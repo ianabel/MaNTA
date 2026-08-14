@@ -38,9 +38,17 @@ singular-matrix warning needs `D` to change sign, which a square cannot.
     cd python-examples/shestakov-nonlinear
     manta run.conf           # 10 cells, k = 2, n(Lx) = 0.01
     python benchmark.py      # cost, the tractability wall, and the diagnosis
+    python diagnostics.py    # why the error is what it is; see ANALYSIS.md
 
 `run.conf` sets `SuppressAlgebraicError = true`, without which this problem does
-not run at all — see below, and `docs/running.rst` for what that key costs.
+not run at all *from the initial condition this case uses* — that qualification
+matters and is measured in [`ANALYSIS.md`](ANALYSIS.md) §2. See
+`docs/running.rst` for what the key costs.
+
+[`ANALYSIS.md`](ANALYSIS.md) is the companion to this file: where the error
+actually comes from, what the initial condition does and does not control, and
+why none of it is tuned away. Read it before drawing conclusions from the tables
+below.
 
 ## Two misprints in the paper
 
@@ -100,6 +108,18 @@ with algebraic trace rows cannot start there. This case therefore keeps his
 `n(0) = 1` and zero axis flux but meets the Dirichlet value and vanishes like
 `(Lx − x)^3`, so the flux stays finite at the wall as the true solution does.
 
+That last clause is true only in the weak sense that the flux is *bounded*: the
+amplitude of the `(Lx − x)^3` is set by `n(0) = 1` rather than by the physics, and
+comes out **1080× too large**, so the initial flux is up to 400× the steady one.
+This is what makes `SuppressAlgebraicError` load-bearing here, and correcting the
+amplitude alone removes the need for it at `n_b ≥ 1e-3` — while *costing* the one
+resolution at which `n_b = 0` runs. Both are measured in
+[`ANALYSIS.md`](ANALYSIS.md) §1–2, along with the obvious repairs to
+`n0 ≡ 1` (a piecewise-linear ramp fails outright; the same ramp taken in
+`w = n^{1/3}` is the cheapest start found). The case keeps the initial condition
+it has, because the benchmark exists to record what MaNTA does on Shestakov's
+problem rather than to be tuned for it.
+
 **The flux is unbounded as the wall density falls.** `sigma_hat = D0 q^3/u^2` is
 a 0/0 at `u = 0` — finite in the exact solution, where `n ~ (Lx−x)^3` and
 `q ~ (Lx−x)^2` — but unbounded in a perturbed one, and the Jacobian entry
@@ -151,12 +171,33 @@ time integrator, which is the point of it. It was 308–375 before
 roughly a third off the call count as well as admitting the problem at all,
 which is the same 13–44% saving the other two benchmarks show.
 
-And the **error is ~1e-2 and falls slowly, which is the solution's regularity
-rather than the scheme**. `n_e` carries an `x^(4/3)` at the axis, whose second
-derivative is unbounded, and the step source puts a kink at `x = d`. `Grid_size`
-is 10 in `run.conf` so a cell boundary falls on that kink; nothing can be done
-about the axis. An order study on this problem will not measure what it looks
-like it measures.
+And the **error is ~1e-2 and falls as `h^1` however large `k` is** — an order
+study on this problem will not measure what it looks like it measures.
+[`ANALYSIS.md`](ANALYSIS.md) §5 localises it, and the answer is more specific
+than regularity:
+
+* it is a **constant offset in the flux** — `sigma` is wrong by the same amount
+  in every cell, to round-off for `k ≥ 3` — equal to the flux the source deposits
+  between the axis and the innermost collocation node, `x_1 ≈ π²h/16(k+1)²`.
+  `Gamma_h` vanishes *there* rather than at `x = 0`, and conservation spreads the
+  deficit over the whole domain. That single length is where both the `O(h)` and
+  the `O((k+1)^{-2})` come from;
+* it is made **entirely in the boundary cell**. Refining that cell alone, with
+  the other nine left at `h = 0.1`, takes the error from 1.99e-2 to 4.4e-6 —
+  **so something certainly can be done about the axis**, and uniform refinement
+  was simply the wrong lever (160 uniform cells fails outright);
+* it needs *both* a flux that degenerates at the boundary — `q(0) = 0` then says
+  nothing about `sigma` there, since any `q` gives zero flux — and the `x^(4/3)`
+  in `n_e`, which no polynomial resolves on that cell. Keeping the degeneracy and
+  removing the fractional power restores full order (2.96, 4.12, and exact at
+  `k = 6`), so neither alone is enough;
+* the kink at `x = d` costs **nothing**: it lies on a cell boundary at every
+  resolution used here.
+
+Regularity alone would predict `h^(7/3)` in L1 from best approximation on the
+boundary cell. The observed `h^1` is worse than that, because a local error is
+being amplified into a global one — which is a statement about the scheme's
+treatment of a degenerate flux boundary, not about `n_e`.
 
 ## The one benchmark where a steady solve does not pay
 
@@ -185,3 +226,13 @@ him and what stops `u` ever reaching the region where `q^3/u^2` is meaningless;
 or a **lagged-diffusivity iteration** that never differentiates the flux at all,
 which is what makes his scheme indifferent to a Jacobian entry that diverges.
 Neither is a small change, and neither is a defect to be fixed by tuning.
+
+Those two are about *tractability*. The accuracy has a separate and narrower
+gap, now identified: a **zero-flux boundary condition at a point where the flux
+degenerates constrains nothing**, so `Gamma_h` is free to vanish at the innermost
+collocation node instead of at the boundary. Imposing the condition on the flux
+rather than on `q` where the two differ, or collocating at a node set that
+includes the cell ends, would each address it; both are changes to MaNTA, which
+is why neither is a change to this directory. See
+[`ANALYSIS.md`](ANALYSIS.md) §5–7 for the evidence and for why `n_b = 0` is
+beyond all of it.
