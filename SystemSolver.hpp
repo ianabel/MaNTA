@@ -563,7 +563,35 @@ class SystemSolver
         // Really we should do init in the constructor and not need this flag. TODO
         bool initialised = false;
 
-        bool zeroFlux = false; // used to switch between zero-flux and zero-gradient BCs
+        // Which quantity a *Neumann* end constrains: q (false) or sigma (true).
+        // Read in exactly one place, effectiveBoundaryCondition below, which
+        // expresses it as the equivalent Mixed coefficients.
+        bool zeroFlux = false;
+
+        // The boundary condition an end is *assembled* as, which is not always the
+        // one the case declared: a Neumann end is a Mixed one with b = 1, or with
+        // d = 1 when zeroFlux is set, that flag's entire meaning. Returning the
+        // coefficients rather than branching on the kind is what gives the
+        // assembly one path for both, so a fix to one cannot miss the other.
+        //
+        // Dirichlet is passed through unchanged and handled separately: it is not
+        // a Mixed row at all but an identically zero one, with the datum
+        // substituted into the cell rows instead.
+        BoundaryCondition effectiveBoundaryCondition(BoundaryCondition const &declared) const
+        {
+                if (declared.kind != BoundaryKind::Neumann)
+                        return declared;
+                return zeroFlux ? BoundaryCondition::mixed(0.0, 0.0, 1.0)
+                                : BoundaryCondition::mixed(0.0, 1.0, 0.0);
+        }
+        BoundaryCondition effectiveLowerBoundary(Index var) const
+        {
+                return effectiveBoundaryCondition(problem->lowerBoundaryCondition(var));
+        }
+        BoundaryCondition effectiveUpperBoundary(Index var) const
+        {
+                return effectiveBoundaryCondition(problem->upperBoundaryCondition(var));
+        }
 
         // Text output is opt-in; netCDF is what a run produces by default.
         bool writeOutput = true;

@@ -14,9 +14,18 @@
 //  * `Mixed(a=0, b=1, d=0)` must reproduce Neumann **exactly**, and
 //    `Mixed(0, 0, 1)` must reproduce Neumann under `zeroFlux`. Not to a
 //    tolerance: the same numbers, because the coefficients multiply the same
-//    basis evaluations. That equivalence is the whole safety argument for the
-//    change, and it is what licenses reimplementing `zeroFlux` in terms of this
-//    path rather than hoping the two agree.
+//    basis evaluations.
+//
+//    Read what those two now prove carefully. They were written before the
+//    Neumann path was expressed in terms of this one, when they compared two
+//    independent pieces of assembly; that is what licensed the reimplementation.
+//    Since it landed, both kinds go through the same two lines, so what survives
+//    is a check on the *coefficient mapping* -- that a Neumann end becomes b = 1,
+//    and d = 1 rather than b = 1 when `zeroFlux` is set. Still worth having, and
+//    still load bearing: reversing the mapping fails both. But the independent
+//    check that the flag's behaviour did not move is the end-to-end one, in
+//    python-examples/shestakov-nonlinear (ANALYSIS.md section 8), whose numbers
+//    were measured before any of this existed.
 //
 //  * The `a` coefficient goes on the *lambda* column (H), not on the interior u
 //    (G), and carries the normal. Both halves are easy to get wrong and neither
