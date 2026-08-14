@@ -400,55 +400,31 @@ void SystemSolver::initialiseMatrices()
                 Csigma_var(1, i) = y.getBasis().Evaluate(I, i, I.x_u);
                 Csigma_var(0, i) = -y.getBasis().Evaluate(I, i, I.x_l);
 
-                // A Mixed end scales the same two entries by its own coefficients.
-                // The row this face contributes is
+                // Every non-Dirichlet end, Neumann and Mixed alike, is assembled
+                // from the same two lines. The row this face contributes is
                 //     (b q + d sigma).n + tau (u - lambda) + n a lambda = n c
                 // so dividing by the outward normal leaves the case author's
-                // `a u + b q + d sigma = c` with no normals in it -- which is the
+                // `a u + b q + d sigma = c` with no normals in it -- the
                 // convention today's Neumann already follows, the +-phi here and
                 // the +-c in L_global cancelling to give `q = g` at both ends.
-                // b = 1 therefore reproduces Neumann exactly, and d = 1
-                // reproduces it under zeroFlux; both are asserted, because that
-                // equivalence is what licenses reimplementing the flag in terms
-                // of this path.
-                if (I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryMixed(var))
+                //
+                // Neumann arrives here as b = 1, or d = 1 under zeroFlux, through
+                // effectiveLowerBoundary; that is the whole of what the flag
+                // means, and it is now the only place the flag is read. The two
+                // hand-written branches this replaces said the same thing in four
+                // copies, one per (end, flag) pair, with the zeroFlux arms
+                // restating an assignment made three lines above.
+                if (I.x_l == grid.lowerBoundary() && !problem->isLowerBoundaryDirichlet(var))
                 {
-                    auto const &bc = problem->lowerBoundaryCondition(var);
+                    auto const bc = effectiveLowerBoundary(var);
                     Csigma_var(0, i) = -bc.d * y.getBasis().Evaluate(I, i, I.x_l);
                     Cq_var(0, i) = -bc.b * y.getBasis().Evaluate(I, i, I.x_l);
                 }
-                // If we have neumann boundaries, need to also set the boundary parameters for q
-                else if (I.x_l == grid.lowerBoundary() && !problem->isLowerBoundaryDirichlet(var))
+                if (I.x_u == grid.upperBoundary() && !problem->isUpperBoundaryDirichlet(var))
                 {
-                    if (zeroFlux)
-                    {
-                        Csigma_var(0, i) = -y.getBasis().Evaluate(I, i, I.x_l); // Treat sigma as neumann
-                        Cq_var(0, i) = 0.0;
-                    }
-                    else
-                    {
-                        Csigma_var(0, i) = 0.0; // Treat sigma as dirichlet
-                        Cq_var(0, i) = -y.getBasis().Evaluate(I, i, I.x_l); // Treat Q as neumann
-                    }
-                }
-                if (I.x_u == grid.upperBoundary() && problem->isUpperBoundaryMixed(var))
-                {
-                    auto const &bc = problem->upperBoundaryCondition(var);
+                    auto const bc = effectiveUpperBoundary(var);
                     Csigma_var(1, i) = bc.d * y.getBasis().Evaluate(I, i, I.x_u);
                     Cq_var(1, i) = bc.b * y.getBasis().Evaluate(I, i, I.x_u);
-                }
-                else if (I.x_u == grid.upperBoundary() && !problem->isUpperBoundaryDirichlet(var))
-                {
-                    if (zeroFlux)
-                    {
-                        Csigma_var(1, i) = y.getBasis().Evaluate(I, i, I.x_u); // Treat sigma as neumann
-                        Cq_var(1, i) = 0.0;
-                    }
-                    else
-                    {
-                        Csigma_var(1, i) = 0.0; // Treat sigma as dirichlet
-                        Cq_var(1, i) = y.getBasis().Evaluate(I, i, I.x_u); // Treat q as neumann
-                    }
                 }
 
                 Gvar(0, i) = tau(I.x_l) * y.getBasis().Evaluate(I, i, I.x_l);
@@ -507,15 +483,15 @@ void SystemSolver::initialiseMatrices()
             // is the only thing left. It carries the outward normal, so that
             // dividing the row through by n leaves a plain `a u` for the case
             // author: -a below, +a above.
-            if (I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryMixed(var))
-                Hvar(0, 0) = -tau(I.x_l) - problem->lowerBoundaryCondition(var).a;
-            else if (I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryDirichlet(var))
+            if (I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryDirichlet(var))
                 Hvar(0, 0) = 0.0;
+            else if (I.x_l == grid.lowerBoundary())
+                Hvar(0, 0) = -tau(I.x_l) - effectiveLowerBoundary(var).a;
 
-            if (I.x_u == grid.upperBoundary() && problem->isUpperBoundaryMixed(var))
-                Hvar(1, 1) = -tau(I.x_u) + problem->upperBoundaryCondition(var).a;
-            else if (I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(var))
+            if (I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(var))
                 Hvar(1, 1) = 0.0;
+            else if (I.x_u == grid.upperBoundary())
+                Hvar(1, 1) = -tau(I.x_u) + effectiveUpperBoundary(var).a;
 
             H.block(2 * var, 2 * var, 2, 2) = Hvar;
             HGlobalMat.block(var * (nCells + 1) + i, var * (nCells + 1) + i, 2, 2) += Hvar;

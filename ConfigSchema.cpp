@@ -74,7 +74,8 @@ const std::vector<Entry> &table()
         {"Superconvergent", {}, Type::Bool, Category::Solver, false, false, false,
          "Use the superconvergent interpolatory scheme; needs k >= 1."},
         {"zeroFlux", {}, Type::Bool, Category::Solver, false, false, false,
-         "Impose zero flux at both boundaries."},
+         "Apply a Neumann boundary value to sigma rather than to q. Equivalent to "
+         "declaring those ends Mixed with d = 1; Dirichlet ends are unaffected."},
         {"AggressiveTimesteps", {"aggressiveTimesteps"}, Type::Bool, Category::Solver, false, false, false,
          "Let IDA grow the step by 10x rather than 2x between steps."},
         {"SuppressAlgebraicError", {}, Type::Bool, Category::Solver, false, false, false,
