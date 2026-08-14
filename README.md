@@ -192,6 +192,13 @@ attribution), runs all three suites, and writes:
 If you are only building a version of SUNDIALS for use with MaNTA the included script `build_sundials` should provide
 the minimal needed installation of SUNDIALS. If using MacOS, `coreutils` and `cmake` must be installed to run the build script.
 
+MaNTA needs **IDA and KINSOL** — the second drives the steady-state solver, so a
+SUNDIALS built without it fails at `kinsol/kinsol.h`, three files into the build,
+rather than at the link step. `build_sundials` enables both. If you have an
+install from a copy of that script predating the steady-state solver, rerun it;
+a SUNDIALS built by hand from the instructions below has every solver already,
+that being the cmake default.
+
 If this is your first use of SUNDIALS, and you want a custom install, a quick guide to installing the base libraries follows here.
 
 Pick where you want the sundials sources / build tree / compiled libraries to go. We will call these directories

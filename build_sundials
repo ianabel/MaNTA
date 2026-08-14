@@ -26,7 +26,15 @@ tar xzf "sundials-${SUNDIALS_VERSION}.tar.gz"
 mkdir -p build
 cd build
 
-# MaNTA only uses IDA and the serial N_Vector; the rest is dead weight.
+# MaNTA uses IDA, KINSOL and the serial N_Vector; the rest is dead weight.
+#
+# KINSOL is what SteadyStateSolver drives for the PseudoTransient and Newton
+# paths, so it has to be ON. The list below must stay in step with
+# SUN_LINK_FLAGS in Makefile.config: a library MaNTA links and this script
+# switches off is not a link error here but a missing header three files into
+# the build, and only for someone whose SUNDIALS came from this script. Anyone
+# who followed README.md's manual instructions instead has every solver, that
+# being the SUNDIALS default, and so cannot reproduce it.
 cmake "../sundials-${SUNDIALS_VERSION}/" \
 	-DCMAKE_INSTALL_PREFIX="$SUNDIALS_ROOT/install" \
 	-DCMAKE_BUILD_TYPE=Release \
@@ -38,7 +46,7 @@ cmake "../sundials-${SUNDIALS_VERSION}/" \
 	-DBUILD_CVODE=OFF \
 	-DBUILD_CVODES=OFF \
 	-DBUILD_IDAS=OFF \
-	-DBUILD_KINSOL=OFF
+	-DBUILD_KINSOL=ON
 
 make -j"$(nproc)" install
 

@@ -169,12 +169,20 @@ jobs:
       # with the image's default cc no matter which compiler this leg uses; and
       # SUNDIALS is a C library MaNTA only links against. Whichever job runs
       # first populates it, and the losers of that race just restore it.
+      #
+      # The key hashes build_sundials, so changing *what* is built invalidates
+      # every cache that predates the change. The version alone is not enough:
+      # turning on a solver MaNTA had started linking left every leg restoring
+      # an install that did not have it, and the flag change then looked like it
+      # had no effect at all -- the "Build SUNDIALS" step is skipped on a hit, so
+      # nothing reruns cmake to notice. hashFiles keeps that from recurring
+      # without anyone having to remember to bump a key by hand.
       - name: Cache SUNDIALS
         id: cache-sundials
         uses: actions/cache@v4
         with:
           path: sundials/install
-          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ runner.os }}-gcc14
+          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ runner.os }}-gcc14-${{ hashFiles('build_sundials') }}
 
       - name: Build SUNDIALS
         if: steps.cache-sundials.outputs.cache-hit != 'true'
@@ -339,13 +347,14 @@ jobs:
 
       # A key of its own: this SUNDIALS is built in a Fedora container against a
       # different libc and libstdc++ from the ubuntu legs', and the two must not
-      # restore each other's.
+      # restore each other's. Hashed on build_sundials for the reason given on
+      # the ubuntu leg's key.
       - name: Cache SUNDIALS
         id: cache-sundials
         uses: actions/cache@v4
         with:
           path: sundials/install
-          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ matrix.image }}
+          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ matrix.image }}-${{ hashFiles('build_sundials') }}
 
       - name: Build SUNDIALS
         if: steps.cache-sundials.outputs.cache-hit != 'true'
@@ -385,12 +394,13 @@ jobs:
             libnetcdf-dev libnetcdf-c++4-dev \
             libblas-dev
 
+      # Shares the build legs' key deliberately -- same image, same install.
       - name: Cache SUNDIALS
         id: cache-sundials
         uses: actions/cache@v4
         with:
           path: sundials/install
-          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ runner.os }}-gcc14
+          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ runner.os }}-gcc14-${{ hashFiles('build_sundials') }}
 
       - name: Build SUNDIALS
         if: steps.cache-sundials.outputs.cache-hit != 'true'
