@@ -11,6 +11,32 @@ it under the file name given.
 | Journal of Scientific Computing (2019) 81:2188–2212 | https://doi.org/10.1007/s10915-019-01081-3 | Superconvergence algorithm for interpolatory HDG methods | SuperconvergentHDG-I.pdf |
 | Communications on Applied Mathematics and Computation (2022) 4:477–499 | https://doi.org/10.1007/s42967-021-00128-3 | Superconvergence algorithm without postprocessing | SuperconvergentHDG-II.pdf |
 
+## Boundary conditions in HDG
+
+Gathered while planning mixed/Robin boundary conditions (`FEATURES.md`). The
+useful finding is a negative one worth recording so nobody repeats the search:
+**none of these treats a general mixed condition `a u + b q + d sigma = c` for a
+diffusion problem with `q` carried as an unknown**, which is MaNTA's formulation.
+The Robin literature is almost entirely Helmholtz, where the condition is an
+impedance/absorbing one and the coefficient is `i kappa` rather than free.
+
+What they do settle is the *structure*, and it is the one MaNTA already has. A
+boundary condition is imposed on the **numerical flux** `q_hat . n = q . n + tau
+(u - lambda)`, as a linear relation between that and the **trace unknown**
+`lambda` — not between it and the interior `u`. So the `a` coefficient belongs on
+the `H` diagonal (the lambda column), which is where `SystemSolver.cpp` keeps
+`-tau`. Cui & Zhang is the clearest statement: their eq. (2.3) defines the flux and
+the impedance condition relates it to `u_hat` with the datum on the right.
+
+| Reference | URL (doi or arxiv) | Short Description | File Name |
+| --- | --- | --- | --- |
+| IMA Journal of Numerical Analysis (2014) 34:279–295 | https://doi.org/10.1093/imanum/drt005 | Cui & Zhang, HDG for Helmholtz with a first-order absorbing (Robin) boundary condition. **The closest thing to a house reference for the mixed row**: the condition is imposed on the numerical flux against the trace unknown, and `tau` stays in the row. An author copy is free from polyu.edu.hk | HDG-Helmholtz-Robin.pdf |
+| Journal of Computational Physics 228 (2009) 3232–3254 | https://doi.org/10.1016/j.jcp.2009.01.030 | Nguyen, Peraire & Cockburn on HDG for linear convection–diffusion. The canonical statement of imposing boundary conditions through the numerical flux, for exactly MaNTA's `(u, q, sigma_hat)` triple. Paywalled | HDG-ConvDiff-BCs.pdf |
+| SIAM Journal on Numerical Analysis (2009) 47:1319–1365 | https://doi.org/10.1137/070706616 | Cockburn, Gopalakrishnan & Lazarov, the unified hybridization framework — where the trace equation and `tau` come from. Paywalled; a free copy is on PDXScholar | HDG-UnifiedHybridization.pdf |
+| arXiv:1811.00737 | https://arxiv.org/abs/1811.00737 | Oikawa, a flux-based HDG method: hybridizes the *flux* trace rather than the solution trace, so the local problem carries the Neumann condition, and studies the `tau -> infinity` limit. Structurally the dual of MaNTA's `d sigma` term. Dirichlet only | HDG-FluxBased.pdf |
+| arXiv:2212.11529 | https://arxiv.org/abs/2212.11529 | Modave & Chaumont-Frelet, HDG with characteristic variables for Helmholtz — hybridizes *Robin traces*. Its Remark 2.10 is worth reading before trusting a pure flux condition: local problems with Robin data are always well posed where Dirichlet ones need not be | HDG-CharacteristicVariables.pdf |
+| arXiv:2503.19684 | https://arxiv.org/abs/2503.19684 | Ellmenreich, Lederer, Giacomini & Huerta, characteristic (non-reflecting) boundary conditions for HDG, in a framework where the common HDG conditions are special cases. Compressible Euler rather than diffusion, so the machinery transfers and the conditions do not | HDG-CharacteristicBCs.pdf |
+
 ## Stiff transport solvers
 
 The problem MaNTA exists to solve: a 1-D transport equation whose diffusivity
