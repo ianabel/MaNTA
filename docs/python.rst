@@ -148,7 +148,9 @@ were read uninitialised if a case forgot them. ``nVars``, ``nScalars`` and
 ``nAux`` are read-only properties derived from the declaration.
 
 ``manta.Field(name, description, units, lower=..., upper=...)`` takes
-``manta.Dirichlet`` (the default) or ``manta.Neumann`` per end;
+``manta.Dirichlet`` (the default), ``manta.Neumann``, or
+``manta.Mixed(a=, b=, d=)`` per end -- see
+:ref:`mixed boundary conditions <mixed-boundaries>`;
 ``manta.Scalar(name, ..., differential=True)`` marks a scalar whose constraint
 involves the time derivative; ``manta.Aux(name, ...)`` declares an auxiliary
 variable. A case whose shape depends on its configuration cannot write that at
