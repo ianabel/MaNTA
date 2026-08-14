@@ -209,6 +209,10 @@ solve starts rejecting steps. Its ``run.conf`` therefore pins ``TimeMarch``.
    Explicitly time-dependent data — boundary values, sources — is frozen at
    ``t_initial``. There is no time axis to evaluate it on.
 
+The inner solve for both modes is **KINSOL**, driving the same static
+condensation IDA does, so MaNTA links ``sundials_kinsol`` whichever mode a run
+selects — see :doc:`install` if the build stops at ``kinsol/kinsol.h``.
+
 .. _suppress-algebraic-error:
 
 Dropping the algebraic rows from the error test

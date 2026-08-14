@@ -50,8 +50,10 @@ System libraries, which you install yourself:
      - Dense linear algebra throughout. Set ``EIGEN_DIR`` if it is not in
        ``/usr/include``.
    * - SUNDIALS
-     - **7.1.0 or newer.** Not 6.x — MaNTA links ``sundials_core`` and uses
-       ``SUNContext``, neither of which exists before v7.
+     - **7.1.0 or newer**, built with **IDA and KINSOL**. Not 6.x — MaNTA links
+       ``sundials_core`` and uses ``SUNContext``, neither of which exists before
+       v7. KINSOL drives the steady-state solver; without it the build stops at
+       ``kinsol/kinsol.h`` rather than at the link step.
    * - netCDF C and netCDF C++
      - 4.3 or newer for the C++ interface, which needs netCDF C 4.6.0 or newer.
    * - BLAS
@@ -114,7 +116,8 @@ Installing SUNDIALS
 -------------------
 
 The included ``build_sundials`` script fetches and builds a minimal SUNDIALS
-(IDA and the serial ``N_Vector`` only, no examples) into ``./sundials/install``:
+(IDA, KINSOL and the serial ``N_Vector`` only, no examples) into
+``./sundials/install``:
 
 .. code-block:: sh
 
@@ -123,6 +126,13 @@ The included ``build_sundials`` script fetches and builds a minimal SUNDIALS
 
 Override the version with ``SUNDIALS_VERSION=7.4.0 ./build_sundials``. On macOS
 the script needs ``coreutils`` and ``cmake``.
+
+.. note::
+
+   An install from a copy of that script predating the steady-state solver has
+   no KINSOL — it passed ``-DBUILD_KINSOL=OFF`` — so rerun the script if the
+   build stops at ``kinsol/kinsol.h``. A SUNDIALS built by hand has every solver
+   already, that being the cmake default.
 
 Build targets
 -------------
