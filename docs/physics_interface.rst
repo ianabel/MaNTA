@@ -134,6 +134,26 @@ Derive from ``TransportSystem``. The pure virtuals you must implement:
    * - ``InitialValue(i, x)``, ``InitialDerivative(i, x)``
      - The initial condition and its :math:`x` derivative.
 
+One more is **optional**, and is the only hook with a default rather than a pure
+virtual:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 42 58
+
+   * - Hook
+     - Returns
+   * - ``aFn(i, x)``
+     - :math:`a_i(x)`, the coefficient on :math:`\partial_t u_i`. Defaults to
+       ``1.0``.
+
+Override it where the conserved quantity is :math:`\int a_i u_i \,\mathrm{d}x`
+rather than :math:`\int u_i \,\mathrm{d}x` — a geometric volume element, for
+instance. It is a *weight on the mass matrix*, :math:`\int a_i \phi_j \phi_l
+\,\mathrm{d}x`, integrated rather than sampled, so a position-dependent
+:math:`a_i` costs no accuracy. ``ADTestProblem`` is the case in the tree that
+uses it, and it is available from Python as well.
+
 Reading the ``State``
 ~~~~~~~~~~~~~~~~~~~~~
 

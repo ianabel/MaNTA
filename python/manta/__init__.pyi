@@ -100,6 +100,7 @@ class TransportSystem(_TransportSystem):
     def dSources_du(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
     def dSources_dq(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
     def dSources_dsigma(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
+    def aFn(self, i: int, x: float) -> float: ...  # type: ignore[override]
     def LowerBoundary(self, i: int, t: float) -> float: ...  # type: ignore[override]
     def UpperBoundary(self, i: int, t: float) -> float: ...  # type: ignore[override]
     def InitialValue(self, i: int, x: float) -> float: ...  # type: ignore[override]

@@ -228,6 +228,9 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
            }),
            py::arg("variables"), py::arg("scalars") = std::vector<ScalarSpec>{},
            py::arg("aux") = std::vector<AuxSpec>{})
+      // a_i(x), the coefficient of du_i/dt. Optional: the base returns 1.0, so a
+      // case that does not define it gets a d_t u - d_x sigma_hat = S.
+      .def("aFn", &TransportSystem::aFn)
       .def("LowerBoundary", &TransportSystem::LowerBoundary)
       .def("UpperBoundary", &TransportSystem::UpperBoundary)
       .def("isLowerBoundaryDirichlet",
