@@ -220,6 +220,19 @@ varying coefficient there is no single factor to divide by.
    case, where supplying the correct gradient instead takes the error from
    ``7e-4`` to machine precision at every resolution.
 
+   There is a partial escape, and its limits are measured. ``zeroFlux`` (see
+   :doc:`configuration`) imposes the boundary value on
+   :math:`\sigma` rather than on :math:`q`, which is the condition such a problem
+   actually has; ``python-examples/shestakov-nonlinear``'s ``ANALYSIS.md`` §8
+   reports the flux offset falling to round-off and the error by two to three
+   orders. Two caveats keep it from being the answer. It is a **global** flag, so
+   it cannot express one condition at one end; and a *pure* flux condition can
+   leave the boundary gradient weakly determined — where
+   :math:`\hat\sigma \sim q^3`, the only constraint on :math:`q` at that boundary
+   vanishes along with :math:`q` itself, and some resolutions stop converging
+   outright. A mixed form, :math:`a u + b q + d \sigma = c`, is what the case
+   wants; it is the first item in ``FEATURES.md``.
+
 ``aFn(i, x)`` supplies the coefficient :math:`a_i` multiplying
 :math:`\partial_t u_i`, and defaults to 1.
 

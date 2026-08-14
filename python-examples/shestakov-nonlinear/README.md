@@ -39,6 +39,7 @@ singular-matrix warning needs `D` to change sign, which a square cannot.
     manta run.conf           # 10 cells, k = 2, n(Lx) = 0.01
     python benchmark.py      # cost, the tractability wall, and the diagnosis
     python diagnostics.py    # why the error is what it is; see ANALYSIS.md
+    python diagnostics.py 9  # one section: the axis condition on sigma vs on q
 
 `run.conf` sets `SuppressAlgebraicError = true`, without which this problem does
 not run at all *from the initial condition this case uses* — that qualification
@@ -228,11 +229,24 @@ which is what makes his scheme indifferent to a Jacobian entry that diverges.
 Neither is a small change, and neither is a defect to be fixed by tuning.
 
 Those two are about *tractability*. The accuracy has a separate and narrower
-gap, now identified: a **zero-flux boundary condition at a point where the flux
-degenerates constrains nothing**, so `Gamma_h` is free to vanish at the innermost
-collocation node instead of at the boundary. Imposing the condition on the flux
-rather than on `q` where the two differ, or collocating at a node set that
-includes the cell ends, would each address it; both are changes to MaNTA, which
-is why neither is a change to this directory. See
-[`ANALYSIS.md`](ANALYSIS.md) §5–7 for the evidence and for why `n_b = 0` is
-beyond all of it.
+gap, now identified and **measured**: a **zero-flux boundary condition at a point
+where the flux degenerates constrains nothing**, so `Gamma_h` is free to vanish at
+the innermost collocation node instead of at the boundary.
+
+Imposing the condition on `sigma` instead — which `zeroFlux = true` already does
+— confirms it directly: the flux offset falls to round-off, `sigma(0)` from
+`-6.4e-3` to `6.1e-5`, and the error by two to three orders (`1.98e-2` to
+`9.96e-5` at 10 cells `k=2`; `2.43e-3` to `8.70e-7` at 80). This case asks for
+"zero flux on the axis" in those words, and the solver has been reading it as a
+gradient.
+
+That is not a setting for this benchmark, for two reasons. It is a *global* flag,
+so it cannot express a per-end condition; and a pure flux condition is not yet
+robust here — `sigma_hat = D0 q^3/u^2` has a triple root at the `q(0) = 0` the
+solution approaches, leaving `q(0)` weakly determined, and 18, 20 and 60 cells
+stop converging. What the problem wants is a **mixed** row, `b q + d sigma = c`,
+which is `FEATURES.md`'s first item. Collocating at a node set that includes the
+cell ends would address the same thing differently.
+
+See [`ANALYSIS.md`](ANALYSIS.md) §5–8 for the evidence — §8 for the measurement
+above — and §7 for why `n_b = 0` is beyond all of it.
