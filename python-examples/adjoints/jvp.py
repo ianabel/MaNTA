@@ -73,8 +73,7 @@ class JAXAuxTest(VectorizedTransportSystem):
         return G, G_p
 
     def g(self, state, x, params: NonlinearDiffusionParams):
-        u = state.Variable[0]
-        return 0.5 * u * u * params.D
+        return 0.5 * state.Aux[0]
 
     def sigma(self, index, state, x, t, params: NonlinearDiffusionParams):
 

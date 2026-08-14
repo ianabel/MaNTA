@@ -289,10 +289,9 @@ public:
 
   void dAux_dp(Index i, Index pIndex, Value &out, const State &s,
                Position x) override {
-    if (!initialized)
-      initializeOverrides();
-    out = method_overrides["dAux_dp"](i, pIndex, StateView(const_cast<State &>(s)), x)
-              .cast<Value>();
+
+    throw std::runtime_error("Individual derivative functions deprecated; use "
+                             "vectorized version ComputePhysicsDerivatives instead.");
   }
 
   std::string getName(Index pIndex) const override {
