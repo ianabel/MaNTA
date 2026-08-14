@@ -17,26 +17,6 @@ class PyAdjointProblem : public AdjointProblem,
 public:
   using AdjointProblem::AdjointProblem;
 
-  void initializeOverrides() {
-    auto make_override = [this](const char *method_name) {
-      py::gil_scoped_acquire gil;
-      py::function _override = py::get_override(this, method_name);
-
-      if (_override) {
-        return _override;
-      } else {
-        throw std::runtime_error(std::string("Pure virtual method ") +
-                                 method_name +
-                                 " not overridden in Python subclass");
-      }
-    };
-    initialized = true;
-  }
-  // PyTransportSystem(TransportSystem &&base) : Tr
-
-  using IntegratorType = boost::math::quadrature::gauss<double, 30>;
-  static IntegratorType integrator;
-
   // We don't have the DGSoln object in Python, so we implement GFn and
   // dGFndp here
   Value GFn(Index gIndex, DGSoln &y) const override {
