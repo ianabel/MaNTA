@@ -23,7 +23,8 @@ the algorithms in `refs/`. This is that comparison for the **nonlinear solve**;
 with Jardin's `chi0 = 1, kappa = 10, alpha = 0.5, qc = 0.5`, `u(1) = 0`, his
 initial condition `u = 1 - x` (the steady state of the same problem with `chi`
 held at `chi0`), and on the axis — read the next section before assuming — a
-Neumann value of `-g`, not zero.
+**zero-flux** condition, expressed as a mixed boundary with `d = 1`, rather
+than a Neumann one.
 
 This is the shape that defeats a plain implicit time step. Jardin shows backward
 Euler oscillating and needing a step some **four orders of magnitude smaller**
@@ -107,14 +108,23 @@ identically and regularity alone selects the solution. Asking for a zero Neumann
 value does not express that; it imposes `q(0) = 0`, which is an extra constraint,
 and a false one — the true gradient on the axis is `-g = -0.509`.
 
-What that looked like, before the cause was known:
+What that looked like, before the cause was known, and what the case does now:
 
-| cells | k | error, `q(0) = 0` | error, `q(0) = -g` |
-|---|---|---|---|
-| 4 | 2 | 5.78e-3 | 3.0e-16 |
-| 10 | 3 | 7.49e-4 | 8.0e-16 |
-| 20 | 3 | 3.33e-4 | — |
-| 40 | 3 | 1.58e-4 | — |
+| cells | k | `q(0) = 0` | `q(0) = -g` | `sigma(0) = 0` |
+|---|---|---|---|---|
+| 4 | 2 | 5.78e-3 | 3.0e-16 | 3.25e-16 |
+| 10 | 3 | 7.49e-4 | 8.0e-16 | 7.03e-16 |
+| 20 | 3 | 3.33e-4 | — | — |
+| 40 | 3 | 1.58e-4 | — | — |
+
+The third column is what ships. Note that it is *not* more accurate than the
+second — both are at round-off, and on this problem nothing could be better.
+**What it buys is not having to know `-g`.** That value comes from the closed
+form, and a problem that had one would not need MaNTA; a real case would have to
+guess it, and guessing zero is the first column. `sigma(0) = 0` is a statement
+about the equations rather than about the answer, and the run recovers the axis
+gradient itself. It is also slightly cheaper — 182 visits per point against 220
+at 10 cells `k = 3` — though that is a side effect rather than the point.
 
 Exactly first order in `h` and **independent of `k`** — `k = 5` bought no rate
 at all over `k = 3`. That combination is the tell: a genuine discretisation
@@ -130,15 +140,26 @@ directly contradicts the imposed `q(0) = 0`, so there is no consistent initial
 state to find. With the boundary value corrected, both starting points converge
 to round-off.
 
-Two things worth taking from this beyond the one example. `docs/physics_interface.rst`
-said "a Neumann boundary fixes the flux" until this was measured, and now
-carries the correction and a warning. And a problem whose flux vanishes at a
-boundary *by degeneracy* cannot be posed to MaNTA as a zero Neumann value at
-all: the correct gradient there is whatever regularity demands, which in general
-you do not know without solving the problem. Here it is `-g`, which the closed
-form supplies; `../park-convergence/` and `../shestakov-nonlinear/` both
-genuinely have `q = 0` on the axis, so both were right by luck of the physics
-rather than by reasoning.
+Three things worth taking from this beyond the one example.
+`docs/physics_interface.rst` said "a Neumann boundary fixes the flux" until this
+was measured, and now carries the correction and a warning. A problem whose flux
+vanishes at a boundary *by degeneracy* cannot be posed as a zero **Neumann**
+value at all: the correct gradient there is whatever regularity demands, which in
+general you do not know without solving the problem. And the way to say what you
+*do* know is a mixed condition on the flux, which is why this case now uses one —
+`../park-convergence/` and `../shestakov-nonlinear/` both genuinely have
+`q = 0` on the axis, so both were right by luck of the physics rather than by
+reasoning.
+
+One caveat, because the same repair does not transfer. A pure flux condition
+works cleanly here because the degeneracy is an explicit factor of `x`:
+`sigma_hat(0) = 0` for *any* `q`, so the trace row reduces to `lambda = u(0)` and
+is perfectly well conditioned. Where the degeneracy is instead a power of `q` —
+`../shestakov-nonlinear/`, whose `sigma_hat = D0 q^3/u^2` has a triple root at
+the `q(0) = 0` its solution approaches — the row's sensitivity to `q` vanishes
+*with* `q`, leaving it weakly determined; that case's `ANALYSIS.md` §8 measures
+resolutions where the corrector then stops converging. Same form of condition,
+opposite outcome, and the distinction is where the `x` sits.
 
 ## A limiter MaNTA does not have
 

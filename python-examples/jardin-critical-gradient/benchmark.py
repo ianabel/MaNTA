@@ -81,15 +81,28 @@ def main():
         cost.append((ncells, k, points, case.nFlux, case.nDeriv,
                      (case.nFlux + case.nDeriv) // points, err))
 
-    # The boundary condition is the whole story on this problem. MaNTA's Neumann
-    # boundary fixes q, not the flux, so a zero value imposes q(0) = 0 -- an
-    # extra condition Jardin's problem does not have, and a false one, since the
-    # true gradient on the axis is -g.
+    # The boundary condition is the whole story on this problem, and the case now
+    # states it correctly -- zero *flux*, as Mixed(d=1). To keep the trap
+    # measurable, this block reconstructs the plausible mistake explicitly: a
+    # *Neumann* end, which fixes q rather than the flux, with the same zero value.
+    # That imposes q(0) = 0, an extra condition Jardin's problem does not have and
+    # a false one, since the true axis gradient is -g.
     wrong = []
     for ncells, k in [(4, 2), (10, 3), (20, 3), (40, 3)]:
         case = JardinCriticalGradient()
-        case.LowerBoundary = lambda index, t: 0.0     # the plausible mistake
+        case.spec.variables[0].lower = manta.Neumann   # fixes q, not the flux
+        case.LowerBoundary = lambda index, t: 0.0
         wrong.append((ncells, k) + (measure(case, ncells, k)[1],))
+
+    # And the middle ground the case used to ship: the right quantity is still q,
+    # but supplied with the value only a closed form provides.
+    told = []
+    for ncells, k in [(10, 3), (10, 5)]:
+        case = JardinCriticalGradient()
+        case.spec.variables[0].lower = manta.Neumann
+        g = CriticalGradient()
+        case.LowerBoundary = lambda index, t, g=g: -g
+        told.append((ncells, k) + (measure(case, ncells, k)[1],))
 
     starts = []
     for label, es in (("Jardin's u = 1 - x", False),
@@ -101,7 +114,7 @@ def main():
             starts.append((label, f"{type(e).__name__}: {e}"))
 
     print()
-    print("Cost to relax onto the stiff steady state, q(0) = -g")
+    print("Cost to relax onto the stiff steady state, zero flux on the axis")
     print(f"  {'cells':>5} {'k':>2} {'points':>7} {'flux calls':>11} "
           f"{'deriv pts':>10} {'visits':>7} {'error':>11}")
     for row in cost:
@@ -115,7 +128,7 @@ def main():
     print("  cost no flux evaluations at all -- the derivative is analytic.")
     print()
 
-    print("The same case with the boundary value left at zero")
+    print("The same value on a Neumann end instead -- i.e. imposed on q")
     print(f"  {'cells':>5} {'k':>2} {'error':>11}")
     for ncells, k, err in wrong:
         print(f"  {ncells:5d} {k:2d} {err:11.3e}")
@@ -123,18 +136,29 @@ def main():
     print("  First order in h, and independent of k -- 40 cells at k=3 is no")
     print("  better than the rate suggests. That is the signature of a wrong")
     print("  boundary condition, not of a discretisation limit: q(0) = 0 forces")
-    print("  a one-cell layer on the axis where the true q is -0.509. MaNTA's")
-    print("  Neumann boundary fixes q, and Jardin's problem constrains only the")
-    print("  flux -- which vanishes on the axis for any q at all.")
+    print("  a one-cell layer on the axis where the true q is -0.509. A Neumann")
+    print("  boundary fixes q, and Jardin's problem constrains only the flux --")
+    print("  which vanishes on the axis for any q at all.")
+    print()
+
+    print("A Neumann end given the *correct* gradient, -g, as this case used to")
+    print(f"  {'cells':>5} {'k':>2} {'error':>11}")
+    for ncells, k, err in told:
+        print(f"  {ncells:5d} {k:2d} {err:11.3e}")
+    print()
+    print("  Also at round-off, so accuracy is not what the mixed form buys. What")
+    print("  it buys is not having to know -g: that value comes from the closed")
+    print("  form, which a real problem does not supply. Zero flux is a statement")
+    print("  about the equations, and the run finds the axis gradient itself.")
     print()
 
     print("Starting point (10 cells, k=3):")
     for label, result in starts:
         print(f"  from {label:24s} {result}")
     print()
-    print("  Both work. With the boundary value at zero the exact steady state")
-    print("  was not even a usable initial condition -- IDACalcIC failed on it,")
-    print("  because q = -g everywhere contradicts the imposed q(0) = 0.")
+    print("  Both work. On a Neumann end with the value at zero the exact steady")
+    print("  state was not even a usable initial condition -- IDACalcIC failed on")
+    print("  it, because q = -g everywhere contradicts the imposed q(0) = 0.")
 
 
 if __name__ == "__main__":
