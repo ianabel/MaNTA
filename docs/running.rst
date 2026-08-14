@@ -183,9 +183,9 @@ answer identical in every digit printed:
      - **19**
      - **11**
    * - ``jardin-critical-gradient``
-     - 212
-     - **127**
-     - 152
+     - 176
+     - **92**
+     - 117
    * - ``shestakov-nonlinear``
      - **283**
      - 705
