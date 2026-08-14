@@ -1780,8 +1780,26 @@ void SystemSolver::computeAdjointGradients()
 
                 // Boundary conditions
                 // p = g_D in this case, so the derivatives are just the basis functions
+                //
+                // "in this case" is load bearing, and is now enforced. This term is
+                // the derivative of a *Dirichlet* datum, which reaches the residual
+                // through RF_cellwise in the cell rows. A Neumann or Mixed datum
+                // reaches it through L_global in the lambda row instead, and F_p has
+                // no lambda rows at all -- it is 3*nVars*(k+1) + nAux*(k+1) tall, and
+                // the lambda contribution exists only as the commented-out block
+                // further down. So a boundary parameter on such an end would be
+                // handed a Dirichlet-shaped derivative and return a plausible wrong
+                // gradient with a perfectly good G, which is the failure mode this
+                // file's dSigma/dPhi comment records. Refuse it instead.
                 if (I.x_l == grid.lowerBoundary() && adjointProblem->computeLowerBoundarySensitivity(var, pIndex))
                 {
+                    if (!problem->isLowerBoundaryDirichlet(var))
+                        throw std::logic_error(
+                            "Adjoint parameter " + std::to_string(pIndex) + " is declared a lower "
+                            "boundary sensitivity for variable '" + problem->getVariableName(var) +
+                            "', whose lower boundary is not Dirichlet. Only a Dirichlet datum has a "
+                            "derivative here: a Neumann or Mixed one enters through L_global in the "
+                            "trace row, which F_p does not represent.");
                     for (Eigen::Index j = 0; j < k + 1; j++)
                     {
                         F_p(nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_l);
@@ -1790,6 +1808,13 @@ void SystemSolver::computeAdjointGradients()
 
                 if (I.x_u == grid.upperBoundary() && adjointProblem->computeUpperBoundarySensitivity(var, pIndex))
                 {
+                    if (!problem->isUpperBoundaryDirichlet(var))
+                        throw std::logic_error(
+                            "Adjoint parameter " + std::to_string(pIndex) + " is declared an upper "
+                            "boundary sensitivity for variable '" + problem->getVariableName(var) +
+                            "', whose upper boundary is not Dirichlet. Only a Dirichlet datum has a "
+                            "derivative here: a Neumann or Mixed one enters through L_global in the "
+                            "trace row, which F_p does not represent.");
                     for (Eigen::Index j = 0; j < k + 1; j++)
                     {
                         // < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 )

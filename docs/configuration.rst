@@ -100,10 +100,10 @@ Problem definition
        boundary value is imposed on the gradient :math:`q` (zero-gradient), with
        it on it is imposed on the flux :math:`\sigma` (zero-flux). Dirichlet
        boundaries are unaffected either way. It is a *global* flag, and it is now
-       implemented as one: a Neumann end is assembled as a mixed condition with
-       :math:`d = 1` when it is set and :math:`b = 1` when it is not, so the
-       per-variable, per-end version of the same choice is available to a case
-       through its own spec.
+       implemented as one: a Neumann end is assembled as a
+       :ref:`mixed condition <mixed-boundaries>` with :math:`d = 1` when it is set
+       and :math:`b = 1` when it is not, so the per-variable, per-end version of
+       the same choice is available to a case through its own spec.
    * - ``High_Grid_Boundary``
      - ``false``
      - Refine the grid towards both ends instead of spacing cells uniformly.

@@ -220,18 +220,84 @@ varying coefficient there is no single factor to divide by.
    case, where supplying the correct gradient instead takes the error from
    ``7e-4`` to machine precision at every resolution.
 
-   There is a partial escape, and its limits are measured. ``zeroFlux`` (see
-   :doc:`configuration`) imposes the boundary value on
-   :math:`\sigma` rather than on :math:`q`, which is the condition such a problem
-   actually has; ``python-examples/shestakov-nonlinear``'s ``ANALYSIS.md`` §8
-   reports the flux offset falling to round-off and the error by two to three
-   orders. Two caveats keep it from being the answer. It is a **global** flag, so
-   it cannot express one condition at one end; and a *pure* flux condition can
-   leave the boundary gradient weakly determined — where
-   :math:`\hat\sigma \sim q^3`, the only constraint on :math:`q` at that boundary
-   vanishes along with :math:`q` itself, and some resolutions stop converging
-   outright. A mixed form, :math:`a u + b q + d \sigma = c`, is what the case
-   wants; it is the first item in ``FEATURES.md``.
+   The way to express such a boundary is a
+   :ref:`mixed condition <mixed-boundaries>` below, which can constrain the flux
+   directly. ``python-examples/shestakov-nonlinear``'s ``ANALYSIS.md`` §8 measures
+   what that is worth on a worked case: the flux offset falls to round-off and the
+   error by two to three orders.
+
+.. _mixed-boundaries:
+
+Mixed (Robin) boundaries
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+A **mixed** end imposes one scalar equation per variable per end,
+
+.. math::
+
+   a\,u + b\,q + d\,\sigma = c,
+
+with :math:`a`, :math:`b`, :math:`d` declared in the spec and :math:`c` returned
+by the same ``LowerBoundary`` / ``UpperBoundary`` hook as any other kind — so the
+coefficients are data and only the datum may depend on :math:`t`:
+
+.. code-block:: cpp
+
+   {"n", "density", "m^-3",
+    BoundaryCondition::mixed(/* a */ 2.0, /* b */ -1.0, /* d */ 0.0),
+    BoundaryKind::Dirichlet}
+
+.. code-block:: python
+
+   variables = [manta.Field("n", "density", "m^-3",
+                            lower=manta.Mixed(a=2.0, b=-1.0),
+                            upper=manta.Dirichlet)]
+
+Four things to know before using it.
+
+**Neumann is the** :math:`b = 1` **case; Dirichlet is not the** :math:`a = 1`
+**case.** A Neumann end is assembled as exactly this row with :math:`b = 1` — or
+:math:`d = 1` under :doc:`zeroFlux <configuration>` — and reproduces it bit for
+bit. A Dirichlet end is imposed by a different mechanism: an identically zero
+trace row *and* column, with the datum substituted into the cell rows. Asking for
+:math:`a = 1` alone gives a *weakly imposed* Dirichlet instead, a different
+discretisation reaching the same answer, so the spec validation refuses
+:math:`b = d = 0` and points at ``BoundaryKind::Dirichlet``.
+
+**Only one of** :math:`b` **and** :math:`d` **may be zero**, for the same reason:
+the row has to constrain something other than :math:`u`.
+
+**The** :math:`d` **coefficient multiplies the stored** :math:`\sigma`, which is
+:math:`-\hat\sigma` — see :ref:`the sign convention <sign-convention>`. A
+homogeneous flux condition is unambiguous, but a nonzero :math:`c` with
+:math:`d \neq 0` inherits that sign.
+
+.. warning::
+
+   **The signs of** :math:`a` **and** :math:`b` **are not free if the run has to
+   be stable.** The energy identity for a diffusion problem is
+   :math:`\frac{d}{dt}\int u^2/2 = [u q] - \int q^2`, so the boundary term at the
+   *lower* end is :math:`-u q`, and a homogeneous :math:`a u + b q = 0` there
+   contributes :math:`+(a/b)\,u^2`. Dissipation therefore wants :math:`a` and
+   :math:`b` of **opposite** signs at the lower end and of the **same** sign at
+   the upper one. Choosing them the other way round is not a discretisation
+   problem but an anti-dissipative boundary condition, and the symptom is a run
+   that diverges rather than one that is merely inaccurate.
+
+.. note::
+
+   A **pure** flux condition (:math:`b = 0`) can leave the boundary gradient only
+   weakly determined when the flux degenerates. Where
+   :math:`\hat\sigma \sim q^3`, the sole constraint on :math:`q` at that boundary
+   vanishes along with :math:`q` itself, and the corrector can stop converging at
+   some resolutions and not others; ``ANALYSIS.md`` §8 measures this. A small
+   :math:`b` alongside :math:`d` restores a non-vanishing derivative in the row
+   while :math:`d` still pins the flux, which is the case such a problem wants.
+
+   An adjoint **boundary parameter** is refused on a non-Dirichlet end. Only a
+   Dirichlet datum has a derivative in ``F_p``, which has no trace rows; a mixed
+   or Neumann datum enters through ``L_global`` in the trace row instead. The run
+   throws rather than returning a plausible wrong gradient.
 
 ``aFn(i, x)`` supplies the coefficient :math:`a_i` multiplying
 :math:`\partial_t u_i`, and defaults to 1.
