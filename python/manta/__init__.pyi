@@ -26,9 +26,11 @@ from typing import Any
 from ._manta import (
     AdjointProblem as AdjointProblem,
     Aux as Aux,
+    BoundaryCondition as BoundaryCondition,
     BoundaryKind as BoundaryKind,
     Field as Field,
     Grid as Grid,
+    Mixed as Mixed,
     Runner as Runner,
     Scalar as Scalar,
     State as State,

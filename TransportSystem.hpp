@@ -141,8 +141,24 @@ public:
   // a plausible answer instead of a complaint. That confusion is a documented
   // source of bugs here (dGdaux_Vec carried two of them). These are integer
   // lookups next to matrix solves; the bounds check is not measurable.
-  bool isLowerBoundaryDirichlet(Index i) const { return m_spec.variables.at(i).lower == BoundaryKind::Dirichlet; };
-  bool isUpperBoundaryDirichlet(Index i) const { return m_spec.variables.at(i).upper == BoundaryKind::Dirichlet; };
+  bool isLowerBoundaryDirichlet(Index i) const { return m_spec.variables.at(i).lower.kind == BoundaryKind::Dirichlet; };
+  bool isUpperBoundaryDirichlet(Index i) const { return m_spec.variables.at(i).upper.kind == BoundaryKind::Dirichlet; };
+
+  // The kind itself, and the whole condition including a Mixed end's
+  // coefficients. These exist because the two predicates above are *booleans*:
+  // every `!isLowerBoundaryDirichlet(var)` in the solver has meant "Neumann"
+  // since there were only two kinds, and now silently means "Neumann or Mixed".
+  // Anything that has to tell those apart must ask here rather than negate a
+  // predicate. The predicates stay because they are bound into Python and
+  // asserted in python/Tests/test_package_api.py.
+  BoundaryKind lowerBoundaryKind(Index i) const { return m_spec.variables.at(i).lower.kind; };
+  BoundaryKind upperBoundaryKind(Index i) const { return m_spec.variables.at(i).upper.kind; };
+
+  bool isLowerBoundaryMixed(Index i) const { return lowerBoundaryKind(i) == BoundaryKind::Mixed; };
+  bool isUpperBoundaryMixed(Index i) const { return upperBoundaryKind(i) == BoundaryKind::Mixed; };
+
+  BoundaryCondition const &lowerBoundaryCondition(Index i) const { return m_spec.variables.at(i).lower; };
+  BoundaryCondition const &upperBoundaryCondition(Index i) const { return m_spec.variables.at(i).upper; };
 
   // The same for the flux and source functions -- the vectors have length nVars
   virtual Value SigmaFn(Index i, const State &s, Position x, Time t) = 0;

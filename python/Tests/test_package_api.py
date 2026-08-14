@@ -163,3 +163,64 @@ def test_omitted_derivative_hooks_are_treated_as_zero(tmp_path):
 
     u = np.asarray(runner.getSolution(0, [0.0, 0.5, 1.0]))
     assert np.all(np.isfinite(u))
+
+
+def test_a_bare_boundary_kind_still_works_where_a_condition_is_wanted():
+    """`lower=manta.Neumann` and `f.lower == manta.Dirichlet` both still work.
+
+    FieldSpec's ends are BoundaryCondition now rather than BoundaryKind. Every
+    case in the tree, every example and both python-physics systems write the
+    kind, so the implicit conversion is what keeps them working -- and
+    python-physics/mirror-plasma reads its kinds back out by comparing an end
+    against a kind, which is why __eq__ is bound.
+    """
+    field = manta.Field("n", "density", "m^-3", lower=manta.Neumann)
+
+    assert field.lower == manta.Neumann
+    assert field.upper == manta.Dirichlet          # the default
+    assert field.lower.kind == manta.BoundaryKind.Neumann
+    assert (field.lower.a, field.lower.b, field.lower.d) == (0.0, 0.0, 0.0)
+
+    # Assignment through the property too: stellarator_multichannel builds a
+    # dict of kinds and writes them into an already-built spec.
+    field.upper = manta.Neumann
+    assert field.upper == manta.Neumann
+
+
+def test_a_mixed_end_carries_its_coefficients():
+    field = manta.Field("n", "density", "m^-3", lower=manta.Mixed(b=0.5, d=1.0))
+
+    assert field.lower == manta.BoundaryKind.Mixed
+    assert field.lower.b == 0.5
+    assert field.lower.d == 1.0
+    assert field.lower.a == 0.0
+    assert "Mixed" in repr(field.lower)
+
+
+def test_a_mixed_end_that_constrains_only_u_is_refused():
+    """b = d = 0 is a weakly imposed Dirichlet, not the Dirichlet kind.
+
+    Accepting it would give two inequivalent spellings of the same intent, so
+    the spec validation refuses it and names the way out. The check happens in
+    the TransportSystem constructor, which is where the spec is validated.
+    """
+
+    class OnlyU(manta.TransportSystem):
+        variables = [manta.Field("u", "u", "", lower=manta.Mixed(a=1.0))]
+
+        def SigmaFn(self, i, s, x, t):
+            return s.q[i]
+
+        def Sources(self, i, s, x, t):
+            return 0.0
+
+    with pytest.raises(ValueError, match="Dirichlet"):
+        OnlyU()
+
+
+def test_mixed_is_reachable_through_numbered_spec():
+    spec = manta.numbered_spec(2, lower=manta.Mixed(b=1.0, d=1.0))
+    assert all(v.lower == manta.BoundaryKind.Mixed for v in spec.variables)
+    assert spec.variables[0].lower.b == 1.0
+    assert spec.variables[0].lower.d == 1.0
+    assert all(v.upper == manta.Dirichlet for v in spec.variables)
