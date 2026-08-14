@@ -6,7 +6,7 @@ import collections.abc
 import numpy
 import numpy.typing
 import typing
-__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryKind', 'Dirichlet', 'Field', 'Grid', 'Neumann', 'Runner', 'Scalar', 'State', 'StateField', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'numbered_spec', 'registerPhysicsCase', 'run']
+__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'Field', 'Grid', 'Mixed', 'Neumann', 'Runner', 'Scalar', 'State', 'StateField', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'numbered_spec', 'registerPhysicsCase', 'run']
 class AdjointProblem:
     spatialParameters: bool
     def __init__(self) -> None:
@@ -57,6 +57,26 @@ class Aux:
     units: str
     def __init__(self, name: str, description: str = '', units: str = '') -> None:
         ...
+class BoundaryCondition:
+    __hash__: typing.ClassVar[None] = None
+    def __eq__(self, arg0: BoundaryKind) -> bool:
+        ...
+    def __init__(self, kind: BoundaryKind) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    @property
+    def a(self) -> float:
+        ...
+    @property
+    def b(self) -> float:
+        ...
+    @property
+    def d(self) -> float:
+        ...
+    @property
+    def kind(self) -> BoundaryKind:
+        ...
 class BoundaryKind:
     """
     Members:
@@ -64,10 +84,13 @@ class BoundaryKind:
       Dirichlet
     
       Neumann
+    
+      Mixed
     """
     Dirichlet: typing.ClassVar[BoundaryKind]  # value = <BoundaryKind.Dirichlet: 0>
+    Mixed: typing.ClassVar[BoundaryKind]  # value = <BoundaryKind.Mixed: 2>
     Neumann: typing.ClassVar[BoundaryKind]  # value = <BoundaryKind.Neumann: 1>
-    __members__: typing.ClassVar[dict[str, BoundaryKind]]  # value = {'Dirichlet': <BoundaryKind.Dirichlet: 0>, 'Neumann': <BoundaryKind.Neumann: 1>}
+    __members__: typing.ClassVar[dict[str, BoundaryKind]]  # value = {'Dirichlet': <BoundaryKind.Dirichlet: 0>, 'Neumann': <BoundaryKind.Neumann: 1>, 'Mixed': <BoundaryKind.Mixed: 2>}
     def __eq__(self, other: typing.Any) -> bool:
         ...
     def __getstate__(self) -> int:
@@ -96,11 +119,11 @@ class BoundaryKind:
         ...
 class Field:
     description: str
-    lower: BoundaryKind
+    lower: BoundaryCondition
     name: str
     units: str
-    upper: BoundaryKind
-    def __init__(self, name: str, description: str = '', units: str = '', lower: BoundaryKind = BoundaryKind.Dirichlet, upper: BoundaryKind = BoundaryKind.Dirichlet) -> None:
+    upper: BoundaryCondition
+    def __init__(self, name: str, description: str = '', units: str = '', lower: BoundaryCondition = ..., upper: BoundaryCondition = ...) -> None:
         ...
 class Grid:
     @typing.overload
@@ -304,6 +327,10 @@ class TransportSystem:
     @property
     def spec(self) -> SystemSpec:
         ...
+def Mixed(a: typing.SupportsFloat | typing.SupportsIndex = 0.0, b: typing.SupportsFloat | typing.SupportsIndex = 0.0, d: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> BoundaryCondition:
+    """
+    A mixed/Robin boundary condition a u + b q + d sigma = c, where c is what LowerBoundary/UpperBoundary returns. sigma is the stored flux, which is -sigma_hat. At least one of b and d must be nonzero.
+    """
 @typing.overload
 def getNodes(arg0: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], arg1: typing.SupportsInt | typing.SupportsIndex) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
     """
@@ -314,7 +341,7 @@ def getNodes(arg0: typing.SupportsFloat | typing.SupportsIndex, arg1: typing.Sup
     """
     Get the points of a grid
     """
-def numbered_spec(nVars: typing.SupportsInt | typing.SupportsIndex, nScalars: typing.SupportsInt | typing.SupportsIndex = 0, nAux: typing.SupportsInt | typing.SupportsIndex = 0, lower: BoundaryKind = BoundaryKind.Dirichlet, upper: BoundaryKind = BoundaryKind.Dirichlet, differential: bool = False) -> SystemSpec:
+def numbered_spec(nVars: typing.SupportsInt | typing.SupportsIndex, nScalars: typing.SupportsInt | typing.SupportsIndex = 0, nAux: typing.SupportsInt | typing.SupportsIndex = 0, lower: BoundaryCondition = ..., upper: BoundaryCondition = ..., differential: bool = False) -> SystemSpec:
     """
     A SystemSpec using the historical placeholder names (Var0, Scalar0, AuxVariable0).
     """

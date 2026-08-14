@@ -133,21 +133,67 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
 
   py::enum_<BoundaryKind>(m, "BoundaryKind")
       .value("Dirichlet", BoundaryKind::Dirichlet)
-      .value("Neumann", BoundaryKind::Neumann);
+      .value("Neumann", BoundaryKind::Neumann)
+      .value("Mixed", BoundaryKind::Mixed);
   // Also as bare module attributes, so a case reads `lower=manta.Neumann`.
   m.attr("Dirichlet") = BoundaryKind::Dirichlet;
   m.attr("Neumann") = BoundaryKind::Neumann;
 
+  // A whole boundary condition, which for a Mixed end carries the coefficients
+  // of `a u + b q + d sigma = c`. `manta.Mixed(...)` is the way to build one;
+  // manta.Dirichlet and manta.Neumann stay BoundaryKind values, and the
+  // implicitly_convertible registration below is what lets them go on being
+  // passed wherever a BoundaryCondition is now wanted -- `lower=manta.Neumann`,
+  // and `spec.variables[i].lower = manta.Neumann`, both unchanged.
+  py::class_<BoundaryCondition>(m, "BoundaryCondition")
+      // This constructor is what makes implicitly_convertible below work:
+      // pybind11 implements the conversion by *calling* it, so without a bound
+      // init from BoundaryKind every `lower=manta.Neumann` fails to match.
+      .def(py::init([](BoundaryKind k) { return BoundaryCondition(k); }),
+           py::arg("kind"))
+      .def_readonly("kind", &BoundaryCondition::kind)
+      .def_readonly("a", &BoundaryCondition::a)
+      .def_readonly("b", &BoundaryCondition::b)
+      .def_readonly("d", &BoundaryCondition::d)
+      // So `f.lower == manta.Dirichlet` keeps working; python-physics'
+      // mirror_plasma reads its boundary kinds back out that way.
+      .def("__eq__",
+           [](BoundaryCondition const &bc, BoundaryKind k) {
+             return bc.kind == k;
+           },
+           py::is_operator())
+      .def("__repr__", [](BoundaryCondition const &bc) {
+        switch (bc.kind)
+        {
+        case BoundaryKind::Dirichlet:
+          return std::string("BoundaryCondition(Dirichlet)");
+        case BoundaryKind::Neumann:
+          return std::string("BoundaryCondition(Neumann)");
+        case BoundaryKind::Mixed:
+          return "BoundaryCondition(Mixed, a=" + std::to_string(bc.a) +
+                 ", b=" + std::to_string(bc.b) + ", d=" + std::to_string(bc.d) +
+                 ")";
+        }
+        return std::string("BoundaryCondition(?)");
+      });
+  py::implicitly_convertible<BoundaryKind, BoundaryCondition>();
+
+  m.def("Mixed", &BoundaryCondition::mixed, py::arg("a") = 0.0,
+        py::arg("b") = 0.0, py::arg("d") = 0.0,
+        "A mixed/Robin boundary condition a u + b q + d sigma = c, where c is "
+        "what LowerBoundary/UpperBoundary returns. sigma is the stored flux, "
+        "which is -sigma_hat. At least one of b and d must be nonzero.");
+
   py::class_<FieldSpec>(m, "Field")
       .def(py::init([](std::string name, std::string description,
-                       std::string units, BoundaryKind lower,
-                       BoundaryKind upper) {
+                       std::string units, BoundaryCondition lower,
+                       BoundaryCondition upper) {
              return FieldSpec{std::move(name), std::move(description),
                               std::move(units), lower, upper};
            }),
            py::arg("name"), py::arg("description") = "", py::arg("units") = "",
-           py::arg("lower") = BoundaryKind::Dirichlet,
-           py::arg("upper") = BoundaryKind::Dirichlet)
+           py::arg("lower") = BoundaryCondition(BoundaryKind::Dirichlet),
+           py::arg("upper") = BoundaryCondition(BoundaryKind::Dirichlet))
       .def_readwrite("name", &FieldSpec::name)
       .def_readwrite("description", &FieldSpec::description)
       .def_readwrite("units", &FieldSpec::units)
@@ -185,15 +231,15 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
   // should name its variables instead.
   m.def(
       "numbered_spec",
-      [](Index nVars, Index nScalars, Index nAux, BoundaryKind lower,
-         BoundaryKind upper, bool differential) {
+      [](Index nVars, Index nScalars, Index nAux, BoundaryCondition lower,
+         BoundaryCondition upper, bool differential) {
         return SystemSpec{numberedFields(nVars, lower, upper),
                           numberedScalars(nScalars, differential),
                           numberedAux(nAux)};
       },
       py::arg("nVars"), py::arg("nScalars") = 0, py::arg("nAux") = 0,
-      py::arg("lower") = BoundaryKind::Dirichlet,
-      py::arg("upper") = BoundaryKind::Dirichlet,
+      py::arg("lower") = BoundaryCondition(BoundaryKind::Dirichlet),
+      py::arg("upper") = BoundaryCondition(BoundaryKind::Dirichlet),
       py::arg("differential") = false,
       "A SystemSpec using the historical placeholder names (Var0, Scalar0, "
       "AuxVariable0).");

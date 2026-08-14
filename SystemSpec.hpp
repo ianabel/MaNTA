@@ -27,16 +27,70 @@
 enum class BoundaryKind
 {
     Dirichlet, // fixes u
-    Neumann,   // fixes the flux
+    Neumann,   // fixes q, the gradient -- *not* the flux; see docs/physics_interface.rst
+    Mixed,     // a u + b q + d sigma = c, with the coefficients below
 };
+
+/*
+    A boundary condition: the kind, plus the three coefficients a Mixed one needs.
+
+    The row a Mixed end imposes is
+
+        a u + b q + d sigma = c
+
+    where c is what LowerBoundary/UpperBoundary returns -- so the coefficients are
+    spec data and only the datum varies with t, which is the split
+    docs/physics_interface.rst already describes. `sigma` is the *stored* flux,
+    which is -sigma_hat (docs/formulation.rst); `d` multiplies that, because that
+    is what the assembly multiplies.
+
+    Neumann is the b = 1 case and Dirichlet is *not* the a = 1 case: a Dirichlet
+    end is imposed by a different mechanism -- an identically zero trace row and
+    column, with the datum substituted into the cell rows -- where a = 1 gives a
+    weakly imposed (penalised) Dirichlet. Same solution, same order, different
+    discretisation. Do not treat them as interchangeable.
+
+    The converting constructor is load bearing rather than a convenience: it is
+    what keeps every existing `{"n", "density", "m^-3", BoundaryKind::Neumann,
+    BoundaryKind::Dirichlet}` spec, and the four `v.lower = someBoundaryKind`
+    assignments in PhysicsCases/, compiling unchanged. Its cost is that
+    BoundaryCondition is not an aggregate, so designated initialisers do not work
+    on it -- hence `mixed()`.
+ */
+struct BoundaryCondition
+{
+    BoundaryKind kind = BoundaryKind::Dirichlet;
+    double a = 0.0, b = 0.0, d = 0.0; // read only when kind == Mixed
+
+    constexpr BoundaryCondition() = default;
+    constexpr BoundaryCondition(BoundaryKind k) : kind(k) {} // implicit, deliberately
+
+    static constexpr BoundaryCondition mixed(double a, double b, double d)
+    {
+        BoundaryCondition bc;
+        bc.kind = BoundaryKind::Mixed;
+        bc.a = a;
+        bc.b = b;
+        bc.d = d;
+        return bc;
+    }
+};
+
+/// Compare an end against a kind, ignoring the coefficients.
+///
+/// C++20 synthesises the reversed form, so `BoundaryKind::Mixed == bc` works too.
+/// There is deliberately no BoundaryCondition == BoundaryCondition: a defaulted
+/// one would compare coefficients, and "is this end Neumann" is the only question
+/// anything in the tree asks.
+constexpr bool operator==(BoundaryCondition const &bc, BoundaryKind k) { return bc.kind == k; }
 
 struct FieldSpec
 {
     std::string name;
     std::string description;
     std::string units;
-    BoundaryKind lower = BoundaryKind::Dirichlet;
-    BoundaryKind upper = BoundaryKind::Dirichlet;
+    BoundaryCondition lower = BoundaryKind::Dirichlet;
+    BoundaryCondition upper = BoundaryKind::Dirichlet;
 };
 
 struct ScalarSpec
@@ -100,6 +154,33 @@ struct SystemSpec
             check(s.name, "scalar");
         for (auto const &a : aux)
             check(a.name, "auxiliary variable");
+
+        // A Mixed end has to constrain a derivative quantity. Rejecting b = d = 0
+        // keeps there from being two inequivalent spellings of a Dirichlet
+        // boundary reached by accident: `mixed(1, 0, 0)` is a *weakly* imposed
+        // Dirichlet, which converges to the same answer by a different
+        // discretisation, and a case that wanted the real thing and wrote this
+        // would get no complaint and a different set of numbers.
+        auto checkMixed = [](BoundaryCondition const &bc, std::string const &name, char const *end)
+        {
+            if (bc.kind != BoundaryKind::Mixed)
+                return;
+            if (bc.a == 0.0 && bc.b == 0.0 && bc.d == 0.0)
+                throw std::invalid_argument("Variable '" + name + "' declares a Mixed " + end +
+                                            " boundary with a = b = d = 0, which constrains nothing");
+            if (bc.b == 0.0 && bc.d == 0.0)
+                throw std::invalid_argument("Variable '" + name + "' declares a Mixed " + end +
+                                            " boundary with b = d = 0, so it constrains only u. That is a"
+                                            " weakly imposed Dirichlet condition rather than the Dirichlet"
+                                            " kind; use BoundaryKind::Dirichlet if that is what you meant,"
+                                            " or give b or d a nonzero coefficient");
+        };
+
+        for (auto const &v : variables)
+        {
+            checkMixed(v.lower, v.name, "lower");
+            checkMixed(v.upper, v.name, "upper");
+        }
     }
 
     /// Index of a variable / scalar / auxiliary variable by name, or -1.
@@ -131,9 +212,11 @@ private:
     reads `{"Var0", "Variable 0", ""}` in a physics case and takes it for the
     house style. A case written from scratch should name its variables.
  */
+// BoundaryCondition rather than BoundaryKind, so a Mixed end is expressible here
+// too; BoundaryKind converts, so every existing call is unchanged.
 inline std::vector<FieldSpec> numberedFields(Index n,
-                                             BoundaryKind lower = BoundaryKind::Dirichlet,
-                                             BoundaryKind upper = BoundaryKind::Dirichlet)
+                                             BoundaryCondition lower = BoundaryKind::Dirichlet,
+                                             BoundaryCondition upper = BoundaryKind::Dirichlet)
 {
     std::vector<FieldSpec> out;
     out.reserve(static_cast<size_t>(n));
