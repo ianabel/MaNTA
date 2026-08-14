@@ -13,6 +13,7 @@
 
 #include "Logging.hpp"
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <optional>
 
@@ -58,6 +59,38 @@ class SystemSolver
             steady_state_tol = ss_tol;
             TerminateOnSteadyState = true;
         };
+
+        // How a steady state is reached. TimeMarch is the original behaviour --
+        // integrate until dY/dt is small -- and is kept because it is the only
+        // one that picks a branch by physics rather than by wherever Newton
+        // lands. The other two are one algorithm: pseudo-transient continuation
+        // keeps the 1/dt mass term purely as damping and grows dt from the
+        // residual, and Newton is its dt = infinity limit, taken from the start.
+        //
+        // Both freeze explicitly time-dependent data -- boundary values, sources
+        // -- at t_initial. There is no time axis to evaluate them on.
+        enum class SteadyMode
+        {
+            TimeMarch,
+            PseudoTransient,
+            Newton,
+        };
+
+        void setSteadyMode(SteadyMode mode) { steadyMode = mode; };
+        SteadyMode getSteadyMode() const { return steadyMode; };
+        void setPseudoTransientInitialStep(double dt) { ptcInitialStep = dt; };
+        void setPseudoTransientMaxStep(double dt) { ptcMaxStep = dt; };
+
+        // Drive the state to a steady one without integrating to it. Assumes
+        // initialize() has run, so Y/dYdt/LS/sunMat exist and Y holds a
+        // consistent initial condition. Leaves the converged state in Y and in
+        // yJac, which is what the adjoint solve and the output path read.
+        void solveSteadyState();
+
+        // The two KINSOL callbacks, public because the C shims in
+        // SteadyState.cpp reach them through the user_data pointer.
+        int steadyResidual(N_Vector u, N_Vector fval);
+        void steadyJacSetup(N_Vector u);
 
         // Arm the dG/dt early-exit gate: after the initial condition is built,
         // abandon the run rather than integrate it if the objective is already
@@ -310,6 +343,19 @@ class SystemSolver
         void *IDA_mem = nullptr;      // IDA memory structure
         SUNLinearSolver LS = nullptr; // linear solver memory structure
         SUNMatrix sunMat = nullptr;   // the deliberately-empty matrix IDA needs
+
+        // Pseudo-transient continuation. kinLS is a second wrapper over the same
+        // solveJacEq rather than a share of LS, so the two owners never argue
+        // over one object's lifetime; sunMat is stateless and is shared.
+        void *kin_mem = nullptr;
+        SUNLinearSolver kinLS = nullptr;
+        N_Vector uPrev = nullptr;    // previous PTC iterate
+        N_Vector ptcDYdt = nullptr;  // id * (u - uPrev)/dt, the damping term
+        N_Vector kinScale = nullptr; // unit scaling; KINSol requires a vector
+        SteadyMode steadyMode = SteadyMode::TimeMarch;
+        double ptcInitialStep = 0.0; // 0 means "use dt0"
+        double ptcMaxStep = std::numeric_limits<double>::infinity();
+        double ptcStep = 0.0;        // the current dt; infinite in Newton mode
         N_Vector Y = nullptr;         // solution
         N_Vector dYdt = nullptr;      // time derivative of the solution
         N_Vector constraints = nullptr;

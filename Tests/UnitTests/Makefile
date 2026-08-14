@@ -38,7 +38,7 @@ TEST_SOURCES = DGTests.cpp SystemSolverTests.cpp AutodiffTest.cpp AdjointTests.c
 # "./Tests/UnitTests/..." and only worked when run from the repo root).
 CXXFLAGS += -I../../ -DTEST -DTEST_DATA_DIR='"$(CURDIR)/"'
 
-REQUIRED_OBJECTS = ../../Config.o ../../SunLinSolWrapper.o ../../SunMatrixWrapper.o ../../ErrorChecker.o ../../Solver.o ../../PhysicsCases/ScalarTestLD3.o ../../PhysicsCases/MagneticFields.o ../../DGStatic.o ../../SystemSolver.o ../../Matrices.o ../../NetCDFIO.o ../../PhysicsCases/AutodiffTransportSystem.o ../../PhysicsCases.o ../../PhysicsCases/MatrixDiffusion.o ../../PhysicsCases/LinearDiffSourceTest.o ../../PhysicsCases/AutodiffAdjointProblem.o ../../PhysicsCases/AdjointTestProblem.o ../../AdjointVectors.o ../../Postprocessing.o ../../AlgebraicDerivatives.o ../../ConfigSchema.o ../../SolverConfig.o
+REQUIRED_OBJECTS = ../../Config.o ../../SunLinSolWrapper.o ../../SunMatrixWrapper.o ../../ErrorChecker.o ../../Solver.o ../../PhysicsCases/ScalarTestLD3.o ../../PhysicsCases/MagneticFields.o ../../DGStatic.o ../../SystemSolver.o ../../Matrices.o ../../NetCDFIO.o ../../PhysicsCases/AutodiffTransportSystem.o ../../PhysicsCases.o ../../PhysicsCases/MatrixDiffusion.o ../../PhysicsCases/LinearDiffSourceTest.o ../../PhysicsCases/AutodiffAdjointProblem.o ../../PhysicsCases/AdjointTestProblem.o ../../AdjointVectors.o ../../Postprocessing.o ../../AlgebraicDerivatives.o ../../SteadyState.o ../../ConfigSchema.o ../../SolverConfig.o
 
 # Those objects belong to the parent build, and this Makefile must never compile
 # one. CXXFLAGS here carries -DTEST, which widens MANTA_TEST_PRIVATE from private

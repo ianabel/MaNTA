@@ -52,6 +52,9 @@ def measure(case, ncells, k, t_final=1.0e4):
         "delta_t": t_final,
         "t_final": t_final,
         "SteadyStateTolerance": 1.0e-11,
+        # Pinned, so the tables below keep measuring one algorithm. The
+        # three-mode comparison is a separate block at the end.
+        "SteadyStateSolver": "TimeMarch",
         "WriteOutput": False,
         "WriteDatFile": False,
     })

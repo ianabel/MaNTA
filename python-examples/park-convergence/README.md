@@ -64,14 +64,22 @@ second-order finite differences: 16 points reach what IDO reaches in 11, and
 what the FD scheme needs 101 for. That is the HDG discretisation earning its
 keep at exactly the resolutions `PERFORMANCE.md` targets.
 
-**MaNTA visits each point ~120 times where the others visit once.** That is the
-whole of the difference, and it is structural rather than a tuning problem:
-`TerminateOnSteadyState` is a stopping test on the time-marching loop
-(`Solver.cpp:470`), so MaNTA *relaxes onto* the steady state. Park solves for it
-directly by setting `1/dt = 0`; LoDestro sets `dt = 1e10`; TRINITY converges in
-10–15 transport steps. Note this is the price of *steady-state* runs only — for
-a genuine transient, adaptive BDF1–5 with error control is doing more work than
-any of them, not less.
+**Time marching visits each point ~120 times where the others visit once**, and
+that was the whole of the difference. It is not structural: `SteadyStateSolver`
+now chooses how the steady state is reached, and the table `benchmark.py` prints
+last is
+
+| `SteadyStateSolver` | flux calls | visits/point | error |
+|---|---|---|---|
+| `TimeMarch` | 1504 | 119 | 7.5503e-05 |
+| `PseudoTransient` (default) | 176 | **19** | 7.5503e-05 |
+| `Newton` | 128 | **11** | 7.5503e-05 |
+
+Same answer to every digit, an order of magnitude apart in cost, and `Newton`
+lands exactly where Park's own 9–15 iterations do. `TimeMarch` sizes each step
+from a local error estimate on a transient that is then discarded; the other two
+size it from the residual. See `docs/running.rst`, and
+`../shestakov-nonlinear/` for the problem where this goes the other way.
 
 Also worth noting: every point on the cost/accuracy Pareto frontier used **4
 cells**, the coarsest tried. Refining the mesh never paid; raising `k` always

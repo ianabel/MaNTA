@@ -42,6 +42,9 @@ def solve(n_b, ncells, k, suppress=True, atol=1.0e-3, t_final=1.0e3):
         "delta_t": t_final,
         "t_final": t_final,
         "SteadyStateTolerance": 1.0e-11,
+        # Pinned, so the tables below keep measuring one algorithm. The
+        # three-mode comparison is a separate block at the end.
+        "SteadyStateSolver": "TimeMarch",
         "SuppressAlgebraicError": suppress,
         "WriteOutput": False,
         "WriteDatFile": False,

@@ -158,6 +158,19 @@ is 10 in `run.conf` so a cell boundary falls on that kink; nothing can be done
 about the axis. An order study on this problem will not measure what it looks
 like it measures.
 
+## The one benchmark where a steady solve does not pay
+
+`SteadyStateSolver` defaults to `PseudoTransient`, and this example's `run.conf`
+overrides it back to `TimeMarch`. Measured at 10 cells, `k = 2`, `n(Lx) = 0.01`,
+for the same answer: time marching 283 visits per point, pseudo-transient 705,
+Newton 731 — **2.5× worse**, where Park's benchmark goes 113 → 19.
+
+The reason is the same degeneracy the rest of this file is about. Continuation
+exists to shed the `alpha/dt` mass term, and on a flux of `D0 q^3/u^2` that term
+is doing useful damping: as `dt` grows the inner Newton starts rejecting steps,
+and the continuation spends its iterations backing off rather than converging.
+This is the counter-example that keeps `TimeMarch` in the tree.
+
 ## What would close the remaining gap
 
 Of the three things Shestakov's scheme has and MaNTA does not, one has now been

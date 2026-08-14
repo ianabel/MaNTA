@@ -1,4 +1,5 @@
 #include <ida/ida.h>				  /* prototypes for IDA fcts., consts.    */
+#include <kinsol/kinsol.h>			  /* KINFree, for the steady-state path   */
 #include <nvector/nvector_serial.h>	  /* access to serial N_Vector            */
 #include <sunmatrix/sunmatrix_band.h> /* access to band SUNMatrix             */
 #include <sunlinsol/sunlinsol_band.h> /* access to band SUNLinearSolver       */
@@ -488,6 +489,22 @@ void SystemSolver::integrate(double tFinal)
 		throw std::runtime_error("Simulation ends before it begins.");
 	}
 
+	// Two routes to a final state. TimeMarch integrates to it and is the only one
+	// that selects a branch by physics rather than by wherever Newton lands; the
+	// other two drive the residual to zero directly. Both leave the answer in Y
+	// and yJac, so everything below this block -- the adjoint solve, the output,
+	// the restart file -- is common.
+	//
+	// Gated on TerminateOnSteadyState, not on steadyMode alone. SteadyStateSolver
+	// defaults to PseudoTransient, and without this a plain run(tFinal) -- a
+	// transient, where the whole point is the path -- would jump to the end state
+	// and report it as the answer at tFinal.
+	if (TerminateOnSteadyState && steadyMode != SteadyMode::TimeMarch)
+	{
+		solveSteadyState();
+	}
+	else
+	{
 	// Solving Loop
 	while (tFinal - tret > min_step_size || TerminateOnSteadyState)
 	{
@@ -568,6 +585,7 @@ void SystemSolver::integrate(double tFinal)
 	std::println("Total Number of Timesteps             :{}", nsteps);
 	std::println("Total Number of Residual Evaluations  :{}", nresevals);
 	std::println("Total Number of Jacobian Computations :{}", njacevals);
+	}
 
 	if (solveAdjoint)
 	{
@@ -618,6 +636,19 @@ void SystemSolver::destroySundials()
 		LS = nullptr;
 	}
 
+	// Before sunMat, which KINSOL shares rather than owns.
+	if (kinLS)
+	{
+		SUNLinSolFree(kinLS);
+		kinLS = nullptr;
+	}
+
+	if (kin_mem)
+	{
+		KINFree(&kin_mem); // as IDAFree, nulls its argument
+		kin_mem = nullptr; // ... belt and braces, since we test the pointer
+	}
+
 	if (sunMat)
 	{
 		MatDestroy(sunMat);
@@ -637,7 +668,8 @@ void SystemSolver::destroySundials()
 		wgt = nullptr;
 	}
 
-	for (N_Vector *vec : {&Y, &dYdt, &constraints, &id, &res, &absTolVec})
+	for (N_Vector *vec : {&Y, &dYdt, &constraints, &id, &res, &absTolVec,
+	                      &uPrev, &ptcDYdt, &kinScale})
 	{
 		if (*vec)
 		{

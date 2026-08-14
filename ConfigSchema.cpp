@@ -56,6 +56,13 @@ const std::vector<Entry> &table()
          "Build the adjoint problem and solve for dG/dp after the integration."},
         {"SteadyStateTolerance", {}, Type::Double, Category::Solver, false, false, 1e-3,
          "Stop once the solution stops changing by this much; presence arms it."},
+        {"SteadyStateSolver", {}, Type::String, Category::Solver, false, false, std::string{"PseudoTransient"},
+         "How a steady state is reached: PseudoTransient (default), TimeMarch (integrate to it), "
+         "or Newton (pseudo-transient with an infinite first step). See docs/running.rst."},
+        {"PseudoTransientInitialStep", {}, Type::Double, Category::Solver, false, false, 0.0,
+         "First pseudo-time step for SteadyStateSolver = PseudoTransient; 0 means use delta_t."},
+        {"PseudoTransientMaxStep", {}, Type::Double, Category::Solver, false, false, 0.0,
+         "Cap on the pseudo-time step; 0 means uncapped."},
         {"ObjectiveDecreaseTolerance", {}, Type::Double, Category::Solver, false, false, 0.0,
          "Abandon a run whose dG/dt is already below -this at t0; zero is off."},
         {"WriteOutput", {}, Type::Bool, Category::Solver, false, false, true,
