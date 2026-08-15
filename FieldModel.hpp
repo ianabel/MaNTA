@@ -121,4 +121,52 @@ protected:
     Eigen::PartialPivLU<Matrix> Blu;
 };
 
+#include "gridStructures.hpp"
+#include <toml.hpp>
+
+#include <functional>
+#include <map>
+
+template <typename T>
+std::unique_ptr<FieldModel> createFieldModel(toml::value const &config, Grid const &grid)
+{
+    return std::make_unique<T>(config, grid);
+}
+
+struct FieldModels
+{
+public:
+    typedef std::function<std::unique_ptr<FieldModel>(toml::value const &, Grid const &)> function_type;
+    typedef std::map<std::string, function_type> map_type;
+
+    static std::unique_ptr<FieldModel> InstantiateFieldModel(std::string const &s,
+                                                             toml::value const &config,
+                                                             Grid const &grid);
+
+    // Throws on a duplicate name rather than quietly keeping the first, which
+    // is what a bare map::insert would do -- a model whose name collided would
+    // simply never be instantiated, with nothing said at build or run time.
+    static void RegisterFieldModel(std::string const &s, function_type creator);
+
+protected:
+    static map_type *getMap();
+
+public:
+    static map_type *map;
+};
+
+template <typename T>
+struct FieldModelRegister
+{
+    explicit FieldModelRegister(std::string const &name)
+    {
+        FieldModels::RegisterFieldModel(name, createFieldModel<T>);
+    }
+};
+
+// A model only appears if its object file is linked in -- nothing references it
+// directly, so a missing entry is a link-line problem with no compile error.
+#define REGISTER_FIELD_MODEL_HEADER(T) static FieldModelRegister<T> registerFieldModel_##T;
+#define REGISTER_FIELD_MODEL_IMPL(T) FieldModelRegister<T> T::registerFieldModel_##T(#T);
+
 #endif // FIELDMODEL_HPP
