@@ -81,9 +81,12 @@ the steady-state mode; its ref. [29] (Smooke & Mattheij, Appl. Numer. Math. 1
 
 ## Mesh adaptivity
 
-For `FEATURES.md`'s first item. The section above has one half of the prior art —
-Ψtc run on each level of a mesh-sequenced solve — and this is the other: an error
-indicator that says *where* to refine.
+For `FEATURES.md`'s first item, which is in two halves — adapt against the PTC
+steady solve first, then work out whether it can be done during a real
+`TimeMarch` — and so are these. Capasso says *where* to refine; Levý & May say how
+to carry the solution *across* a remesh while time is still being resolved. The
+mesh-sequencing argument in the section above is the third piece, and belongs to
+the steady half.
 
 **The reason to read Capasso first is that MaNTA already computes what its
 indicator is made of.** The strategy is built on the elementwise difference
@@ -95,9 +98,10 @@ the postprocessor regardless of the `Superconvergent` flag, and `NetCDFIO.cpp:17
 writes `u_star` into the output. So the expensive ingredient of the indicator is
 present and tested; what is missing is the mesh machinery that would act on it.
 
-Two caveats. It is a 2D unstructured code and MaNTA is 1D on an interval, so the
-indicator transfers and the remeshing does not — refining a 1-D `Grid` is a much
-smaller problem than theirs, and none of their geometry handling applies.
+Two caveats on Capasso. It is a 2D unstructured code and MaNTA is 1D on an
+interval, so the indicator transfers and the remeshing does not — refining a 1-D
+`Grid` is a much smaller problem than theirs, and none of their geometry handling
+applies.
 
 The second is sharper, and is the interpolatory question the HDG section is
 already about. The indicator's worth rests on `u*` being a genuinely better
@@ -111,9 +115,24 @@ sensor — but it is not the `p`-against-`p+1` gap the paper's error analysis
 assumes. Anything calibrated rather than used as a relative ranking should be
 built on a superconvergent run.
 
+**Levý & May integrate with DIRK, and that is exactly the difficulty `FEATURES.md`
+names.** A diagonally implicit Runge–Kutta method is one-step: it carries no
+history, so a remesh has only to move the current state, and their transfer
+operator is complete for their setting. IDA is BDF — multistep — so adapting
+during a real `TimeMarch` has to transfer the *stored history* as well, which is
+the "requires interpolating history … and requires the hooks for that to be in
+SUNDIALS" half of that entry. So this gives the transfer operator and leaves the
+harder question untouched. Two MaNTA-specific pieces come with it: an index-1 DAE
+has to be made *consistent* on the new mesh, not merely interpolated onto it —
+`sigma`, `q`, `phi` and `lambda` are algebraic, so a transfer would be followed by
+something like a fresh `IDACalcIC`, with the failure modes CLAUDE.md catalogues —
+and MaNTA carries auxiliary variables and global scalars that their `(q, w, λ)`
+triple has no analogue for.
+
 | Reference | URL (doi or arxiv) | Short Description | File Name |
 | --- | --- | --- | --- |
 | Int. J. Numer. Methods Eng. 126 (2025) e70107 | https://doi.org/10.1002/nme.70107 | Capasso, Kudashev, Schwander & Serre, h-adaptivity for HDG applied to **fluid transport in a tokamak** — MaNTA's problem class, in SolEdge-HDG's 2D fluid-drift Braginskii setting. The indicator is the order-`p` against post-processed order-`p+1` difference, i.e. `u*`, which MaNTA already builds; it drives coarsening as well as refinement, and their §1 surveys the alternatives (residual-based indicators, a jump sensor on the trace). Open access, CC-BY | HDG-hAdaptivity.pdf |
+| Computers and Fluids 301 (2025) 106792 | https://doi.org/10.1016/j.compfluid.2025.106792 | Levý & May, anisotropic adaptation for HDG on **time-dependent** problems, and the reason to have it is their second contribution rather than the first: a *bounded* solution-transfer operator between meshes. The Galerkin L2 projection over a supermesh is optimal in the norm but overshoots at extrema; theirs preserves local minima and maxima while keeping the order where the solution is smooth. Their §1 is also the short survey of why remeshing every m > 1 steps is not the cheap fix it looks like. Note they integrate with DIRK — see the caveat below. Paywalled | HDG-UnsteadyAdaptivity.pdf |
 
 ## Coupling to a magnetic field solver
 
