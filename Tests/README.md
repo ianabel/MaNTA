@@ -511,8 +511,9 @@ These are deliberate and tracked, not oversights:
 
   `python/Tests/test_jax_aux.py` now catches three of the four directly, against
   hand-differentiated closed forms rather than against another autodiff run. The
-  fourth, `dgFn_dphi`, needs a `State`, which has no constructor on the Python
-  side -- the solve remains its only cover.
+  fourth, `dgFn_dphi`, is gone from `manta.jax` since: `dg/dphi` arrives with the
+  rest of the batched `dg`, and `PyAdjointProblem::dgFn_dphi` raises rather than
+  dispatching to Python at all.
 
 * **`AuxG_v` was bound to the pointwise `AuxG`** (`Python.cpp`), where
   `SigmaFn_v` and `Sources_v` name the batched `(GlobalState, positions)`

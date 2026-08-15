@@ -544,11 +544,12 @@ class SystemSolver
         // "does not throw" assertions did.
         void DerivativeSubVector(Index, Vector &, Eigen::Ref<Matrix> const dX_dZ, DGSoln const &, Index intervalIndex);
 
-        // Still on that Gauss rule, and so still the derivative of the wrong
-        // functional -- see the TODO entry. It is live, unlike the four above,
-        // because dgFn_dphi is the only pointwise dg hook a case can still reach.
+        // The same operator over the auxiliary variables: separate only because
+        // there are nAux of these where DerivativeSubVector's loop runs to nVars.
+        // The overload that integrated the pointwise dgFn_dphi on the basis's
+        // Gauss rule -- the last of the family above, and the last differentiating
+        // Int g dx rather than what GFn reports -- is gone with them.
         void dGdaux_Vec(Index, Vector &, Eigen::Ref<Matrix> const dX_dZ, DGSoln const &, Index intervalIndex);
-        void dGdaux_Vec(Index, Vector &, DGSoln const &, Index);
 
         // The time derivative of the objective, by the chain rule over the four
         // vectors above. See AdjointVectors.cpp for why it is assembled here
