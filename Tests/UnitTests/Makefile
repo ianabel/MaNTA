@@ -19,7 +19,7 @@ endif
 all: UnitTests
 .PHONY: all clean
 
-TEST_SOURCES = DGTests.cpp SystemSolverTests.cpp AutodiffTest.cpp AdjointTests.cpp IntegratorTest.cpp GridTests.cpp ConfigTests.cpp MagneticFieldTest.cpp PyIntegratorTests.cpp DGSolnTests.cpp SolveJacTests.cpp NetCDFIOTests.cpp UtilityTests.cpp SolverPlumbingTests.cpp SystemSolverMatrixTests.cpp ResidualTests.cpp MMSConvergenceTests.cpp MMSAuxScalarTests.cpp ScalarJacobianTests.cpp TransportSystemTests.cpp AdjointProblemTests.cpp PhysicsRegistryTests.cpp PostprocessingTests.cpp SolverLifecycleTests.cpp AlgebraicDerivativeTests.cpp ConfigSchemaTests.cpp ConfigSourceTests.cpp AFnTests.cpp MixedBoundaryTests.cpp FieldModelSpecTests.cpp FieldRegistryTests.cpp StateGeometryTests.cpp
+TEST_SOURCES = DGTests.cpp SystemSolverTests.cpp AutodiffTest.cpp AdjointTests.cpp IntegratorTest.cpp GridTests.cpp ConfigTests.cpp MagneticFieldTest.cpp PyIntegratorTests.cpp DGSolnTests.cpp SolveJacTests.cpp NetCDFIOTests.cpp UtilityTests.cpp SolverPlumbingTests.cpp SystemSolverMatrixTests.cpp ResidualTests.cpp MMSConvergenceTests.cpp MMSAuxScalarTests.cpp ScalarJacobianTests.cpp TransportSystemTests.cpp AdjointProblemTests.cpp PhysicsRegistryTests.cpp PostprocessingTests.cpp SolverLifecycleTests.cpp AlgebraicDerivativeTests.cpp ConfigSchemaTests.cpp ConfigSourceTests.cpp AFnTests.cpp MixedBoundaryTests.cpp FieldModelSpecTests.cpp FieldRegistryTests.cpp StateGeometryTests.cpp FieldDoFLayoutTests.cpp
 
 # Header dependencies come from the .d files -MMD -MP writes beside each object,
 # so editing a header rebuilds exactly the test sources that include it --
