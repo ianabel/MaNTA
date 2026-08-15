@@ -37,6 +37,13 @@
 #define MANTA_TEST_PRIVATE private
 #endif
 
+// Forward-declared rather than included: FieldModel.hpp pulls in toml11 for the
+// registry at its foot, and SystemSolver.hpp reaches 25 translation units that
+// have no other reason to parse it. A shared_ptr to an incomplete type is fine
+// as long as its destructor is instantiated where the type is complete, which
+// is ~SystemSolver in SystemSolver.cpp.
+class FieldModel;
+
 class SystemSolver
 {
     public:
@@ -281,6 +288,39 @@ class SystemSolver
         void setJacEvalY( N_Vector, N_Vector );
         int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
 
+        // Couple this solver to a magnetic-field model, whose unknowns join the
+        // solution vector after the global scalars and whose geometry reaches
+        // the physics through State::geom.
+        //
+        // Must be called before initialize(), and refuses afterwards: it
+        // reshapes the five DGSoln members and reallocates the three that own
+        // their memory, and there is no way to do that safely to a live run.
+        // Passing nullptr detaches, which is what every existing run already is.
+        void setFieldModel(std::shared_ptr<FieldModel> model);
+
+        FieldModel *getFieldModel() const { return fieldModel.get(); };
+        Index getFieldDOF() const { return nField; };
+        Index getGeometrySlots() const { return nGeom; };
+
+        // The solution as it stands. `y` is a non-owning view over memory
+        // SUNDIALS owns and dangles after destroySundials(), so yJac is the only
+        // copy that outlives a run; initialize() seeds it with the initial
+        // condition, so this is meaningful between the two phases as well.
+        DGSoln const &getSolution() const { return yJac; };
+
+        // Fill the geometry rows of `states` from the field model, at the points
+        // those states were sampled on. A no-op with no model attached.
+        //
+        // Called once per residual and once per Jacobian update, never once per
+        // variable: geometry does not depend on which equation is being
+        // assembled.
+        //
+        // With Superconvergent = true the points are the k+2 star nodes rather
+        // than the k+1 basis nodes, which needs no special case here -- geometry
+        // is a function of (psi, x) and star nodes are just more x.
+        void evaluateGeometry(DGSoln const &Y, std::vector<Position> const &points,
+                              GlobalState &states, Time t);
+
         // Adjoints
         void setSolveAdjoint(bool a) { solveAdjoint = a; }
 
@@ -302,7 +342,15 @@ class SystemSolver
         unsigned int nScalars; // Any global scalars
         unsigned int nAux;	   // Any auxiliary constraints
 
-        unsigned int nP;       // Number of parameters to compute for adjoint sensitivity problem 
+        // The field model's unknowns, and the geometry slots derived from them.
+        // Both are zero until setFieldModel attaches a model, which is every
+        // existing run. Declared here, ahead of the DGSoln members below,
+        // because they are arguments to those members' constructors and member
+        // initialisation follows declaration order.
+        Index nField = 0;
+        Index nGeom = 0;
+
+        unsigned int nP;       // Number of parameters to compute for adjoint sensitivity problem
 
         using EigenCellwiseSolver = Eigen::FullPivLU<Matrix>;
         using EigenGlobalSolver = Eigen::FullPivLU<Matrix>;
@@ -445,6 +493,29 @@ class SystemSolver
                                     PhysicsNodes const &nodes, Time tEval,
                                     double alphaValue, std::vector<DGSoln> &v_map,
                                     std::vector<DGSoln> &w_map, Matrix &N_out);
+
+        // The field model's own diagonal block, B = dR/dpsi + alpha dR/d(psi').
+        //
+        // This is *not* one of the coupling blocks: A1 (how the transport rows
+        // see psi) and A2 (how the field rows see the transport) are a later
+        // piece of work, and until they exist the Jacobian is block diagonal --
+        // a block-Jacobi approximation, which costs Newton iterations and
+        // nothing else, because the Jacobian is never assembled and IDA only
+        // ever asks for its action.
+        //
+        // B itself is not optional in the same way. Without it the linear solve
+        // returns dpsi = 0 for every right-hand side: no Newton direction
+        // touches psi at all, so it stays at its initial value for the whole run
+        // while the field rows of the residual grow without bound -- and IDA's
+        // nonlinear convergence test is on the *correction* norm, so it would
+        // not notice.
+        void updateFieldBlock(DGSoln const &Y, DGSoln const &Ydot, Time tEval,
+                              double alphaValue);
+
+        // Allocate (or reallocate) the three buffers yJac, dydtJac and
+        // dydtComplete map. Called from the constructor, and again from
+        // setFieldModel, which changes how long they have to be.
+        void allocateJacobianStorage();
 
         // The whole Jacobian, densely, in the solution vector's own ordering:
         // [ sigma | q | u | aux ] per cell, then all of lambda, then mu. Built
@@ -615,7 +686,12 @@ class SystemSolver
 
         // Hide all physics-specific info in here
         TransportSystem *problem = nullptr;
-   
+
+        // Null when no field model is configured, which is every existing run.
+        // Held by shared_ptr because the adjoint solve and the Python layer both
+        // need to reach it and neither owns the solver.
+        std::shared_ptr<FieldModel> fieldModel = nullptr;
+
         AdjointProblem *adjointProblem = nullptr;
 
         // Tau

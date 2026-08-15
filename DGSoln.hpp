@@ -100,6 +100,20 @@ public:
 
     Index getFieldDOF() const { return nField; };
 
+    /// Attach (or resize) the field block after construction.
+    ///
+    /// Every other part of a DGSoln's shape is fixed at construction and stays
+    /// that way. This one cannot be: SystemSolver builds y, dydt, yJac, dydtJac
+    /// and dydtComplete in its constructor initialiser list, and a field model
+    /// arrives later -- setFieldModel() is what a configuration calls, and a
+    /// configuration cannot run before the object it configures exists.
+    ///
+    /// The field block is last in the layout, so nothing before it moves. What
+    /// does move is getDoF(): any memory already mapped is now the wrong length,
+    /// so re-Map() after calling this, and re-allocate first if the DGSoln owns
+    /// what it maps.
+    void setFieldDOF(Index n) { nField = n; };
+
     double Field(Index j) const { return psi_[j]; };
     double &Field(Index j) { return psi_[j]; };
 
@@ -388,7 +402,8 @@ private:
     const Grid &grid;
     const Index k;
     const Index nScalars, nAux;
-    const Index nField;
+    // Not const, unlike everything above it: see setFieldDOF.
+    Index nField;
     std::vector<DGApprox> u_;
     std::vector<DGApprox> q_;
     std::vector<DGApprox> sigma_;

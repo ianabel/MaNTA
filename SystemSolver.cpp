@@ -9,6 +9,7 @@
 #include <ostream>
 #include <print>
 
+#include "FieldModel.hpp"
 #include "State.hpp"
 #include "Types.hpp"
 #include "gridStructures.hpp"
@@ -18,16 +19,11 @@
 #include "PyIntegrator.hpp"
 
 SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *transpSystem)
-    : grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars(transpSystem->getNumScalars()), nAux(transpSystem->getNumAux()), y(nVars, grid, k, nScalars, nAux), dydt(nVars, grid, k, nScalars, nAux), yJac(nVars, grid, k, nScalars, nAux), dydtJac(nVars, grid, k, nScalars, nAux), dydtComplete(nVars, grid, k, nScalars, nAux), problem(transpSystem)
+    : grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars(transpSystem->getNumScalars()), nAux(transpSystem->getNumAux()), y(nVars, grid, k, nScalars, nAux, nField), dydt(nVars, grid, k, nScalars, nAux, nField), yJac(nVars, grid, k, nScalars, nAux, nField), dydtJac(nVars, grid, k, nScalars, nAux, nField), dydtComplete(nVars, grid, k, nScalars, nAux, nField), problem(transpSystem)
 {
     if (SUNContext_Create(SUN_COMM_NULL, &ctx) < 0)
         throw std::runtime_error("Unable to allocate SUNDIALS Context, aborting.");
-    yJacMem = new double[yJac.getDoF()];
-    yJac.Map(yJacMem);
-    dydtJacMem = new double[yJac.getDoF()];
-    dydtJac.Map(dydtJacMem);
-    dydtCompleteMem = new double[yJac.getDoF()];
-    dydtComplete.Map(dydtCompleteMem);
+    allocateJacobianStorage();
     S_DOF = k + 1;
     U_DOF = k + 1;
     Q_DOF = k + 1;
@@ -73,6 +69,108 @@ SystemSolver::~SystemSolver()
     SUNContext_Free(&ctx);
 }
 
+// yJac, dydtJac and dydtComplete own what they map, unlike y and dydt, which are
+// views over memory SUNDIALS allocates per run. Their length depends on nField,
+// so attaching a field model has to redo this.
+void SystemSolver::allocateJacobianStorage()
+{
+    delete[] yJacMem;
+    delete[] dydtJacMem;
+    delete[] dydtCompleteMem;
+
+    const size_t dof = yJac.getDoF();
+    yJacMem = new double[dof]();
+    yJac.Map(yJacMem);
+    dydtJacMem = new double[dof]();
+    dydtJac.Map(dydtJacMem);
+    dydtCompleteMem = new double[dof]();
+    dydtComplete.Map(dydtCompleteMem);
+}
+
+void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
+{
+    // Not after initialise: the five DGSoln members change shape below and three
+    // of them are reallocated, so anything already mapping them -- IDA's Y and
+    // dYdt above all -- would be reading a vector of the wrong length with
+    // nothing to say so.
+    if (initialised)
+        throw std::logic_error(
+            "setFieldModel must be called before the solver is initialised: the field "
+            "unknowns are part of the solution vector, whose length is fixed by then.");
+
+    fieldModel = std::move(model);
+    nField = fieldModel ? fieldModel->nFieldDOF() : 0;
+    nGeom = fieldModel ? fieldModel->nGeometry() : 0;
+
+    for (DGSoln *soln : {&y, &dydt, &yJac, &dydtJac, &dydtComplete})
+        soln->setFieldDOF(nField);
+
+    // y and dydt are re-Map()ped by setInitialConditions once SUNDIALS has
+    // allocated their vectors; these three are ours.
+    allocateJacobianStorage();
+
+    // The scalar bordering's work vectors span the whole solution vector, so
+    // they are the wrong length too. Rebuilt rather than resized: an N_Vector's
+    // length is fixed at creation.
+    for (Index i = 0; i < nScalars; ++i)
+    {
+        N_VDestroy(v[i]);
+        N_VDestroy(w[i]);
+        v[i] = N_VNew_Serial(y.getDoF(), ctx);
+        w[i] = N_VNew_Serial(y.getDoF(), ctx);
+    }
+}
+
+// See the declaration for why this is once per residual rather than once per
+// variable, and why the superconvergent star nodes need no special case.
+void SystemSolver::evaluateGeometry(DGSoln const &Y, std::vector<Position> const &points,
+                                    GlobalState &states, Time t_eval)
+{
+    if (!fieldModel)
+        return;
+
+    // The states arrive from DGSoln::evalOnNodes or evalOnStarNodes, neither of
+    // which knows about geometry, so the rows have to be made before they can be
+    // filled.
+    states.setGeometrySlots(nGeom);
+
+    const Vector psi = Y.getField();
+    Vector g(nGeom);
+    for (size_t j = 0; j < points.size(); ++j)
+    {
+        g.setZero();
+        fieldModel->Geometry(g, psi, points[j], t_eval);
+        states.setGeometry(static_cast<Index>(j), g);
+    }
+}
+
+// See the declaration: this is the field model's own block and not a coupling
+// block, and it is what gives the Newton solve a direction for psi at all.
+void SystemSolver::updateFieldBlock(DGSoln const &Y, DGSoln const &Ydot, Time tEval,
+                                    double alphaValue)
+{
+    GlobalStateMatrix dR(nField), dRdot(nField);
+    for (Index f = 0; f < nField; ++f)
+    {
+        dR.add(nCells, k, nVars, nScalars, nAux);
+        dRdot.add(nCells, k, nVars, nScalars, nAux);
+    }
+    Matrix dRdpsi = Matrix::Zero(nField, nField);
+    Matrix dRddpsidt = Matrix::Zero(nField, nField);
+
+    fieldModel->FieldResidualPrime(dR, dRdot, dRdpsi, dRddpsidt,
+                                   Vector(Y.getField()), Vector(Ydot.getField()),
+                                   Y.evalOnNodes(), Y.getPoints(),
+                                   Integrator::getIntegrationWeights(Y.getBasis(), grid),
+                                   tEval);
+
+    // dR and dRdot are filled and discarded here. They are the A2 coupling row
+    // and belong in the Jacobian, which is a later piece of work; asking for
+    // them now is what keeps this one call rather than two, since a model that
+    // solves a coupled system internally reports every row at once.
+    fieldModel->updateFieldJacobian(dRdpsi, dRddpsidt, alphaValue);
+}
+
 void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 {
     logmsg<LOG_LEVEL::INFO>("Setting initial conditions");
@@ -95,6 +193,21 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     // IDACalcIC (see Solver.cpp) into a hard failure on the second run only.
     updateBoundaryConditions(t0);
 
+    // The field unknowns first: geometry is a function of psi, so every physics
+    // evaluation below -- starting with the initial flux -- needs them set.
+    if (fieldModel)
+    {
+        if (problem->isRestarting())
+            throw std::logic_error(
+                "Restarting a run with a field model attached is not supported yet: the "
+                "restart file carries no field block, so there is nothing to resume psi "
+                "from.");
+
+        Vector psi0 = Vector::Zero(nField);
+        fieldModel->InitialFieldValue(psi0);
+        y.getField() = psi0;
+    }
+
     if (problem->isRestarting())
     {
         // Copy restart values into y
@@ -103,6 +216,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
         GlobalState initialState = y.evalOnNodes(); // only need u and q so this is ok
         const auto points = y.getPoints();
+        evaluateGeometry(y, points, initialState, t);
         auto physics_vals = problem->ComputePhysics(initialState, points, t);
         for (Index var = 0; var < nVars; var++)
         {
@@ -144,6 +258,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         // Vectorize initial flux calculation
         GlobalState initialState = y.evalOnNodes(); // only need u and q so this is ok
         const auto points = y.getPoints();
+        evaluateGeometry(y, points, initialState, t);
         auto physics_vals = problem->ComputePhysics(initialState, points, t);
         for (Index var = 0; var < nVars; var++)
         {
@@ -157,7 +272,10 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
     dydt.zeroCoeffs();
 
-    auto Source_vals = problem->ComputePhysics(y.evalOnNodes(), y.getPoints(), t)[1];
+    GlobalState sourceStates = y.evalOnNodes();
+    const auto sourcePoints = y.getPoints();
+    evaluateGeometry(y, sourcePoints, sourceStates, t);
+    auto Source_vals = problem->ComputePhysics(sourceStates, sourcePoints, t)[1];
     for (Index var = 0; var < nVars; var++)
     {
         // Solver For dudt with dudt = X^-1( -B*Sig - D*U - E*Lam + F )
@@ -634,6 +752,11 @@ SystemSolver::evaluatePhysicsDerivatives(DGSoln const &Y, Time tEval,
     PhysicsNodes nodes{superconvergent ? postprocessor->starPoints() : Y.getPoints(),
                        superconvergent ? postprocessor->evalOnStarNodes(Y) : Y.evalOnNodes()};
 
+    // Before ComputePhysicsDerivatives, for the same reason residual() fills it
+    // before ComputePhysics: a derivative hook reads State::geom just as its
+    // value hook does, and the two have to see the same metric.
+    evaluateGeometry(Y, nodes.points, nodes.states, tEval);
+
     // GlobalState's second argument is a per-cell dof count minus one; passing
     // k+1 is what makes cellwise*() hand back the k+2 star values.
     const Index derivK = superconvergent ? k + 1 : k;
@@ -879,12 +1002,15 @@ void SystemSolver::updateMatricesForJacSolve()
       std::vector<DGSoln> v_map, w_map;
       for (Index i = 0; i < nScalars; ++i)
       {
-          v_map.emplace_back(nVars, grid, k, N_VGetArrayPointer(v[i]), nScalars, nAux);
-          w_map.emplace_back(nVars, grid, k, N_VGetArrayPointer(w[i]), nScalars, nAux);
+          v_map.emplace_back(nVars, grid, k, N_VGetArrayPointer(v[i]), nScalars, nAux, nField);
+          w_map.emplace_back(nVars, grid, k, N_VGetArrayPointer(w[i]), nScalars, nAux, nField);
       }
 
       assembleScalarCoupling(yJac, dydtJac, nodes, jt, alpha, v_map, w_map, N_global);
     }
+
+    if (fieldModel)
+        updateFieldBlock(yJac, dydtJac, jt, alpha);
 }
 
 void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorWrapper &lam, sunrealtype *const &Y) const
@@ -900,12 +1026,12 @@ void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorW
 
 void SystemSolver::setJacEvalY(N_Vector yy, N_Vector yp)
 {
-    DGSoln yyMap(nVars, grid, k, nScalars, nAux);
+    DGSoln yyMap(nVars, grid, k, nScalars, nAux, nField);
     assert(static_cast<size_t>(N_VGetLength(yy)) == yyMap.getDoF());
     yyMap.Map(N_VGetArrayPointer(yy));
     yJac.copy(yyMap); // Deep copy -- yyMap only aliases the N_Vector, this copies the data
 
-    DGSoln ypMap(nVars, grid, k, nScalars, nAux);
+    DGSoln ypMap(nVars, grid, k, nScalars, nAux, nField);
     assert(static_cast<size_t>(N_VGetLength(yp)) == ypMap.getDoF());
     ypMap.Map(N_VGetArrayPointer(yp));
     dydtJac.copy(ypMap); // Deep copy
@@ -928,9 +1054,9 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 
         N_Vector g = N_VClone(delY);
 
-        DGSoln res_g_map(nVars, grid, k, N_VGetArrayPointer(res_g), nScalars, nAux);
+        DGSoln res_g_map(nVars, grid, k, N_VGetArrayPointer(res_g), nScalars, nAux, nField);
 
-        DGSoln del_y(nVars, grid, k, N_VGetArrayPointer(delY), nScalars, nAux);
+        DGSoln del_y(nVars, grid, k, N_VGetArrayPointer(delY), nScalars, nAux, nField);
 
         // Let A be the HDG linear operator solved in solveHDGJac
 
@@ -982,6 +1108,29 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
     {
         solveHDGJac(res_g, delY);
     }
+
+    if (fieldModel)
+    {
+        // The field block, on its own diagonal: B dpsi = r_psi, with the
+        // couplings between psi and the transport unknowns still absent from the
+        // Jacobian. That makes this block Jacobi -- IDA pays for it in Newton
+        // iterations, which is the only currency an approximate Jacobian is
+        // spent in here, because the operator is never assembled and only its
+        // action is ever asked for.
+        //
+        // What it is not is optional. solveHDGJac zeroes the whole increment
+        // vector and writes nothing past lambda, so without this dpsi is
+        // identically zero for every right-hand side and psi never leaves its
+        // initial value -- silently, since IDA's nonlinear convergence test is
+        // on the size of the correction and a correction that is structurally
+        // zero passes it every time.
+        DGSoln rhs(nVars, grid, k, N_VGetArrayPointer(res_g), nScalars, nAux, nField);
+        DGSoln out(nVars, grid, k, N_VGetArrayPointer(delY), nScalars, nAux, nField);
+
+        Vector dpsi = Vector::Zero(nField);
+        fieldModel->solveB(dpsi, Vector(rhs.getField()));
+        out.getField() = dpsi;
+    }
 }
 
 // Solve the HDG part of the Jacobian
@@ -990,10 +1139,10 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
 {
     // DGsoln object that will map the data from delY
-    DGSoln del_y(nVars, grid, k, nScalars, nAux);
+    DGSoln del_y(nVars, grid, k, nScalars, nAux, nField);
 #ifdef DEBUG
     // Provide view on g for debugging
-    DGSoln gMap(nVars, grid, k, nScalars, nAux);
+    DGSoln gMap(nVars, grid, k, nScalars, nAux, nField);
     assert(static_cast<size_t>(N_VGetLength(g)) == gMap.getDoF());
     gMap.Map(N_VGetArrayPointer(g));
 #endif
@@ -1129,9 +1278,9 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 {
     updateBoundaryConditions(tres);
 
-    DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux);
-    DGSoln dYdt_h(nVars, grid, k, N_VGetArrayPointer(dYdt), nScalars, nAux);
-    DGSoln res(nVars, grid, k, N_VGetArrayPointer(resval), nScalars, nAux);
+    DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux, nField);
+    DGSoln dYdt_h(nVars, grid, k, N_VGetArrayPointer(dYdt), nScalars, nAux, nField);
+    DGSoln res(nVars, grid, k, N_VGetArrayPointer(resval), nScalars, nAux, nField);
 
     VectorWrapper resVec(N_VGetArrayPointer(resval), N_VGetLength(resval));
 
@@ -1152,8 +1301,13 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
     const std::vector<Position> points =
         superconvergent ? postprocessor->starPoints() : Y_h.getPoints();
 
-    const GlobalState states = superconvergent ? postprocessor->evalOnStarNodes(Y_h)
-                                               : Y_h.evalOnNodes();
+    GlobalState states = superconvergent ? postprocessor->evalOnStarNodes(Y_h)
+                                         : Y_h.evalOnNodes();
+
+    // The metric the physics is about to be evaluated on, from the field model
+    // at this state's psi. A no-op with no model attached, which is what keeps
+    // an uncoupled run bit-for-bit what it was.
+    evaluateGeometry(Y_h, points, states, tres);
 
     auto values = problem->ComputePhysics(states, points, tres);
 
@@ -1258,6 +1412,23 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
         for (Index j = 0; j < nScalars; j++)
             res.Scalar(j) = problem->ScalarG(j, scalarStates, scalarStates_dt, Y_h.getPoints(),
                                              weights, phiBoundary, tres);
+    }
+
+    if (fieldModel)
+    {
+        // Sampled once, like the scalars: every field row sees the same state.
+        //
+        // On the k+1 basis nodes even under the superconvergent scheme, because
+        // `weights` is the interpolatory quadrature of *that* basis and a field
+        // row's integrals are taken against it. The star nodes are a device for
+        // the transport residual's projection, not a different set of unknowns.
+        const GlobalState fieldStates = Y_h.evalOnNodes();
+        const Vector &weights = Integrator::getIntegrationWeights(Y_h.getBasis(), grid);
+
+        Vector fieldRes = Vector::Zero(nField);
+        fieldModel->FieldResidual(fieldRes, Vector(Y_h.getField()), Vector(dYdt_h.getField()),
+                                  fieldStates, Y_h.getPoints(), weights, tres);
+        res.getField() = fieldRes;
     }
 
     return 0;
@@ -1865,7 +2036,7 @@ void SystemSolver::computeAdjointGradients()
 
 void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &tempY, bool printSources)
 {
-    DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY), nScalars, nAux);
+    DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY), nScalars, nAux, nField);
 
     std::println(out, "# t = {:g}", t);
     for (Index v = 0; v < nVars; ++v)
@@ -1998,7 +2169,7 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
 void SystemSolver::printOnNodes(std::ostream &out, double t, N_Vector const& tempY, bool printSources)
 {
 
-    DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY), nScalars, nAux);
+    DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY), nScalars, nAux, nField);
     std::println(out, "# t = {:g}", t);
     for (Index v = 0; v < nVars; ++v)
     {
@@ -2016,16 +2187,21 @@ void SystemSolver::printOnNodes(std::ostream &out, double t, N_Vector const& tem
         std::println(out, "{:g}", tmp_y.Scalar(nScalars - 1));
     }
 
+    // Built before the sources rather than after: Sources reads State::geom, so
+    // it has to be handed a state the field model has filled in, not a fresh
+    // temporary with no geometry rows at all.
+    auto states = tmp_y.evalOnNodes();
+    const auto points = tmp_y.getPoints();
+    evaluateGeometry(tmp_y, points, states, t);
+
     std::vector<Values> sources(nVars);
-    if (printSources) 
+    if (printSources)
     {
         for (Index v = 0; v < nVars; ++v)
         {
-            sources[v] = problem->Sources(v, tmp_y.evalOnNodes(), tmp_y.getPoints(), t);
+            sources[v] = problem->Sources(v, states, points, t);
         }
     }
-    const auto states = tmp_y.evalOnNodes();
-    const auto points = tmp_y.getPoints();
 
     if (postprocessor)
         postprocessor->computeUStar(tmp_y);
@@ -2055,8 +2231,8 @@ void SystemSolver::printOnNodes(std::ostream &out, double t, N_Vector const& tem
 
 int SystemSolver::getErrorWeights(N_Vector y_sundials, N_Vector ewt_sundials)
 {
-    DGSoln y(nVars, grid, k, N_VGetArrayPointer(y_sundials), nScalars, nAux);
-    DGSoln ewt(nVars, grid, k, N_VGetArrayPointer(ewt_sundials), nScalars, nAux);
+    DGSoln y(nVars, grid, k, N_VGetArrayPointer(y_sundials), nScalars, nAux, nField);
+    DGSoln ewt(nVars, grid, k, N_VGetArrayPointer(ewt_sundials), nScalars, nAux, nField);
     for (Index i = 0; i < nCells; ++i)
     {
         double absTol = 1e-8;
@@ -2103,6 +2279,17 @@ int SystemSolver::getErrorWeights(N_Vector y_sundials, N_Vector ewt_sundials)
     {
         double absTol = atol[0];
         ewt.Scalar(i) = ::sqrt(localDOF * nCells) / (rtol * abs(y.Scalar(i)) + absTol);
+    }
+
+    // The field unknowns, weighted like the scalars and for the same reason:
+    // there is one of each against localDOF * nCells spatial coefficients, so
+    // without the sqrt(N) they would contribute essentially nothing to the WRMS
+    // norm IDA tests against. A zero weight here is worse than a badly chosen
+    // one -- N_VWrmsNorm divides by it.
+    for (Index i = 0; i < nField; ++i)
+    {
+        double absTol = atol[0];
+        ewt.Field(i) = ::sqrt(localDOF * nCells) / (rtol * abs(y.Field(i)) + absTol);
     }
 
     return 0;

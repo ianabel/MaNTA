@@ -10,8 +10,12 @@
 #include <memory>
 
 #include "Types.hpp"
+#include "FieldModel.hpp"
 #include "SystemSolver.hpp"
 #include "gridStructures.hpp"
+// The field hooks are handed the same quadrature weights the scalar ones are,
+// so the model does not have to pick a rule of its own; they are cached here.
+#include "PyIntegrator.hpp"
 #include "SunLinSolWrapper.hpp"
 #include "SunMatrixWrapper.hpp"
 #include "ErrorChecker.hpp"
@@ -113,6 +117,14 @@ void SystemSolver::initialize()
 	// A fresh run: whatever the gate concluded about the last one does not apply.
 	objective_rejected = false;
 
+	// ...and whatever the field model cached about it does not either. This has
+	// to be here rather than in initialiseMatrices(), which is skipped entirely
+	// when `initialised` is already set: that is the RF_cellwise trap, where the
+	// second run on a reused solver solved its initial dydt out of the previous
+	// run's final-time boundary data.
+	if (fieldModel)
+		fieldModel->resetForRun();
+
 	if (!initialised)
 		initialiseMatrices();
 
@@ -129,7 +141,9 @@ void SystemSolver::initialize()
 	//-----------------------------Initial conditions-------------------------------
 
 	// Set original vector lengths
-	Y = N_VNew_Serial(nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1), ctx);
+	// The field model's unknowns go last, after the scalars, so nothing before
+	// them moves. nField is zero unless setFieldModel has attached a model.
+	Y = N_VNew_Serial(nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1) + nField, ctx);
 	if (ErrorChecker::check_retval((void *)Y, "N_VNew_Serial", 0))
 		throw std::runtime_error("Sundials Initialization Error");
 
@@ -152,6 +166,45 @@ void SystemSolver::initialize()
 	// asserts the vector length matches the full DoF, and setInitialConditions is
 	// also called directly by tests that size their own N_Vectors.
 	setJacEvalY(Y, dYdt);
+
+	// A field DOF declared differential whose residual carries no d/dt is a row
+	// every unknown of which IDA_YA_YDP_INIT holds fixed: no Newton direction
+	// touches it, so the backtracking loop runs to exhaustion and IDA reports
+	// IDA_LINESEARCH_FAIL (-13) -- a message about the linesearch for a defect in
+	// the declaration. That is exactly what kept python-physics/mirror-plasma's
+	// voltage controller from ever starting, and the residual there was 4.3e-6:
+	// irreducible beats small, so there is no threshold to test against. Ask
+	// instead which unknowns each row can reach, here, where the answer can name
+	// the DOF.
+	//
+	// After setJacEvalY, because that is what puts the initial condition into
+	// yJac and dydtJac, and before IDACalcIC, which is what would otherwise fail.
+	if (fieldModel)
+	{
+		GlobalStateMatrix dR(nField), dRdot(nField);
+		for (Index f = 0; f < nField; ++f)
+		{
+			dR.add(nCells, k, nVars, nScalars, nAux);
+			dRdot.add(nCells, k, nVars, nScalars, nAux);
+		}
+		Matrix dRdpsi = Matrix::Zero(nField, nField);
+		Matrix dRddpsidt = Matrix::Zero(nField, nField);
+
+		fieldModel->FieldResidualPrime(dR, dRdot, dRdpsi, dRddpsidt,
+									   Vector(yJac.getField()), Vector(dydtJac.getField()),
+									   yJac.evalOnNodes(), yJac.getPoints(),
+									   Integrator::getIntegrationWeights(yJac.getBasis(), grid),
+									   t0);
+
+		for (Index f = 0; f < nField; ++f)
+			if (fieldModel->isFieldDOFDifferential(f) && dRddpsidt.row(f).isZero(0.0))
+				throw std::invalid_argument(
+					"Field DOF '" + fieldModel->getSpec().dofs[f].name +
+					"' is declared differential but its residual row carries no time "
+					"derivative. IDACalcIC holds every differential value fixed, so this row "
+					"is irreducible and the initialisation would fail with "
+					"IDA_LINESEARCH_FAIL.");
+	}
 
 	// ----------------- Allocate and initialize all other sun-vectors. -------------
 	//
@@ -183,7 +236,7 @@ void SystemSolver::initialize()
 	// have been solving a different initialisation problem from the intended one
 	// for as long as this code has existed. Nothing warns: Constant is not
 	// [[nodiscard]] and the statement declares no unused variable.
-	DGSoln isDifferential(nVars, grid, k, nScalars, nAux);
+	DGSoln isDifferential(nVars, grid, k, nScalars, nAux, nField);
 	isDifferential.Map(N_VGetArrayPointer(id));
 	isDifferential.zeroCoeffs();
 	for (Index v = 0; v < nVars; ++v)
@@ -197,6 +250,16 @@ void SystemSolver::initialize()
 			isDifferential.Scalar(s) = 1.0;
 		}
 	}
+
+	// nField is only ever nonzero with a model attached, but the guard keeps that
+	// invariant visible where the pointer is dereferenced rather than three
+	// hundred lines away in setFieldModel.
+	if (fieldModel)
+		for (Index f = 0; f < nField; ++f)
+		{
+			if (fieldModel->isFieldDOFDifferential(f))
+				isDifferential.Field(f) = 1.0;
+		}
 
 	retval = IDASetId(IDA_mem, id);
 	if (ErrorChecker::check_retval(&retval, "IDASetId", 1))
@@ -236,7 +299,7 @@ void SystemSolver::initialize()
 	VectorWrapper absTolVals(N_VGetArrayPointer(absTolVec), N_VGetLength(absTolVec));
 	absTolVals.setZero();
 
-	DGSoln tolerances(nVars, grid, k, nScalars, nAux);
+	DGSoln tolerances(nVars, grid, k, nScalars, nAux, nField);
 	tolerances.Map(N_VGetArrayPointer(absTolVec));
 	for (Index i = 0; i < nCells; ++i)
 	{
@@ -271,6 +334,9 @@ void SystemSolver::initialize()
 
 	for (Index i = 0; i < nScalars; ++i)
 		tolerances.Scalar(i) = atol[0];
+
+	for (Index i = 0; i < nField; ++i)
+		tolerances.Field(i) = atol[0];
 
 	retval = IDAWFtolerances(IDA_mem, SystemSolver::getErrorWeights_static);
 	if (ErrorChecker::check_retval(&retval, "IDAWFtolerances", 1))
@@ -403,7 +469,7 @@ void SystemSolver::initialize()
 	// describe by a fraction of a percent -- small enough to look like round-off
 	// and quite large enough to matter to anything differentiating the solution.
 	{
-		DGSoln idaDerivative(nVars, grid, k, nScalars, nAux);
+		DGSoln idaDerivative(nVars, grid, k, nScalars, nAux, nField);
 		idaDerivative.Map(N_VGetArrayPointer(dYdt));
 		dydtComplete.copy(idaDerivative);
 	}

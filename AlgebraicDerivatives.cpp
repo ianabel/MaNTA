@@ -228,6 +228,17 @@ void SystemSolver::computeAlgebraicTimeDerivatives()
             "current state, so it can only be called between initialize() and "
             "destroySundials()");
 
+    // assembleDenseJacobian sizes J from y.getDoF(), so with a field model
+    // attached it has nField rows and columns that nothing fills: the matrix is
+    // singular by exactly that count, and the factorisation below would return
+    // garbage rather than fail. Refuse instead of guessing -- the field rows and
+    // their couplings are a later piece of work, and only the dG/dt gate reaches
+    // this at all.
+    if (fieldModel)
+        throw std::logic_error(
+            "The objective-decrease gate is not supported with a field model attached: "
+            "the algebraic-derivative solve has no rows for the field unknowns.");
+
     const Index n = static_cast<Index>(y.getDoF());
     const Index cellDoF = static_cast<Index>(localDOF);
     const Index lambdaOffset = cellDoF * static_cast<Index>(nCells);

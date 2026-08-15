@@ -236,6 +236,24 @@ public:
   Vector Geometry(Index node) const { return m_Geometry.col(node); }
   void setGeometry(Index node, Vector const &g) { m_Geometry.col(node) = g; }
 
+  /// Give this state geometry rows after construction.
+  ///
+  /// The GlobalStates the physics is evaluated on come from
+  /// DGSoln::evalOnNodes and Postprocessor::evalOnStarNodes, and neither knows
+  /// how many geometry slots a field model declares: geometry is a function of
+  /// (psi, x), not part of the DOF layout, so a DGSoln has no business knowing
+  /// about it. SystemSolver::evaluateGeometry sizes the rows here and then
+  /// fills them.
+  ///
+  /// nGeom, not just the matrix. operator[] builds its State with nGeom, so
+  /// resizing the storage alone would hand out States with nowhere to copy the
+  /// values to -- and State::geom(i) on an empty vector is an out-of-range read
+  /// in any build without DEBUG.
+  void setGeometrySlots(Index ngeom) {
+    nGeom = ngeom;
+    m_Geometry.setZero(ngeom, m_Variable.cols());
+  }
+
   Matrix &GeometryMatrix() { return m_Geometry; }
   Matrix const &GeometryMatrix() const { return m_Geometry; }
 
