@@ -191,6 +191,8 @@ public:
   void dAux(Index i, GlobalState &out, GlobalState const &states,
             std::vector<Position> const &abscissae) override {
     std::string method_name = "dAux";
+  using IntegratorType = boost::math::quadrature::gauss<double, 30>;
+  static IntegratorType integrator;
     py::gil_scoped_acquire gil;
     py::function _override = py::get_override(this, method_name.c_str());
 
@@ -294,9 +296,6 @@ public:
 
   using AdjointProblem::spatialParameters;
 
-private:
-  bool initialized = false;
-  std::map<std::string, py::function> method_overrides;
 };
 
 #endif // PYADJOINTPROBLEM_HPP
