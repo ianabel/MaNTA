@@ -184,6 +184,14 @@ class SystemSolver
         // tool rather than a production path.
         void solveCoupledJacExact(N_Vector g, N_Vector delY);
 
+        // Block Gauss-Seidel between the transport and field blocks: one
+        // transport solve and one field solve per sweep, against the exact
+        // path's nField + 1 transport solves. The production path -- safe
+        // because the Jacobian is never assembled, so an under-converged sweep
+        // costs Newton iterations rather than correctness. Returns its last
+        // iterate on non-convergence rather than throwing; see the definition.
+        void solveCoupledJacIterative(N_Vector g, N_Vector delY);
+
         // Solves the HDG part of Jy = g
         void solveHDGJac(N_Vector g, N_Vector delY);
 
@@ -591,6 +599,14 @@ class SystemSolver
         // field block, so that the transport solve it is fed to cannot mistake
         // it for a right-hand side for psi.
         void scatterA1Column(Index m, N_Vector out) const;
+
+        // work's cellwise [sigma | q | u | aux] segment gets A1_cellwise[i]*dpsi
+        // subtracted, cell by cell -- the A1 dpsi term of the block
+        // Gauss-Seidel sweep in solveCoupledJacIterative. A1_cellwise already
+        // carries d(res)/d(psi) with its own sign baked in (see
+        // dPhysics_dField_Mat), so this is a plain subtraction with no sign of
+        // its own; the lambda, scalar and field segments of work are untouched.
+        void subtractA1Times(Vector const &dpsi, N_Vector work) const;
 
         // Allocate (or reallocate) the three buffers yJac, dydtJac and
         // dydtComplete map. Called from the constructor, and again from

@@ -219,9 +219,12 @@ void SystemSolver::initialize()
 				nField + 1);
 		else
 			logmsg<LOG_LEVEL::WARNING>(
-				"FieldSolve = iterative is not implemented yet; falling back to the exact "
-				"Schur complement, which costs {} transport solves per Jacobian solve.",
-				nField + 1);
+				"FieldSolve = iterative: block Gauss-Seidel between the transport and field "
+				"blocks, one transport solve per sweep against exact's {} per Jacobian solve. "
+				"Converges to FieldSolveTolerance = {} in at most FieldSolveMaxSweeps = {} "
+				"sweeps, and returns its last iterate rather than failing otherwise -- costing "
+				"Newton speed, not correctness.",
+				nField + 1, fieldSolveTolerance, fieldSolveMaxSweeps);
 	}
 
 	// ----------------- Allocate and initialize all other sun-vectors. -------------

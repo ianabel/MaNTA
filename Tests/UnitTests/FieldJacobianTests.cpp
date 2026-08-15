@@ -15,6 +15,7 @@
 
 #include "CapturedOutput.hpp"
 #include "FiniteDifferenceJacobian.hpp"
+#include "MMSHarness.hpp"
 #include "ManufacturedFields.hpp"
 #include "../../SystemSolver.hpp"
 #include "../../Types.hpp"
@@ -437,6 +438,115 @@ void configureQuietly(SystemSolver &sys, std::string const &stem)
     sys.setWriteDatFile(false);
 }
 
+// ------------------------------------------------------ the iterative path --
+//
+// A pseudo-random right-hand side, the full length of the coupled vector --
+// deliberately not shaped like a residual, so agreeing on it is a statement
+// about the linear solve alone.
+N_Vector randomRHS(SystemSolver &sys)
+{
+    const Index n = static_cast<Index>(sys.getSolution().getDoF());
+    N_Vector g = N_VNew_Serial(n, sys.ctx);
+    double *a = N_VGetArrayPointer(g);
+    for (Index i = 0; i < n; ++i)
+        a[i] = std::sin(0.37 + 1.618 * static_cast<double>(i)) *
+               (1.0 + 0.1 * static_cast<double>(i % 7));
+    return g;
+}
+
+/// ||a - b|| / max(||a||, 1) -- for comparing two solves against each other
+/// rather than against a finite-differenced Jacobian.
+double relativeDifference(N_Vector a, N_Vector b)
+{
+    const Vector va = fdjac::toVector(a);
+    const Vector vb = fdjac::toVector(b);
+    return (va - vb).norm() / std::max(va.norm(), 1.0);
+}
+
+// A local copy of CoupledResidualTests.cpp's manufactured coupled problem --
+// same exact solution, u = sin(pi x)(1+t) and psi = Int u dx = (2/pi)(1+t) --
+// kept here rather than shared, the way this file's own configureQuietly
+// already duplicates that file's, so an end-to-end run on the iterative path
+// can be checked against the same closed form the exact path already reaches.
+inline Value manufacturedCoupledSource(Position x, Time t)
+{
+    const double A = 1.0 + t;
+    const double s = std::sin(pi * x), c = std::cos(pi * x);
+    const double psi = manufacturedPsiExact(t);
+    return s + A * pi * pi * s * (1.0 + 2.0 * psi * c);
+}
+
+class ManufacturedCoupledDiffusion : public TransportSystem
+{
+public:
+    ManufacturedCoupledDiffusion()
+        : TransportSystem({.variables = {{"u", "the diffused quantity", "",
+                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}}})
+    {
+    }
+
+    Value SigmaFn(Index, const State &s, Position, Time) override { return s.geom(0) * s.q(0); }
+    Value Sources(Index, const State &, Position x, Time t) override
+    {
+        return manufacturedCoupledSource(x, t);
+    }
+
+    void dSigmaFn_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSigmaFn_dq(Index, VectorRef v, const State &s, Position, Time) override
+    {
+        v[0] = s.geom(0);
+    }
+    void dSources_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSources_dq(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+
+    Value InitialValue(Index, Position x) const override { return manufacturedU(x, 0.0); }
+    Value InitialDerivative(Index, Position x) const override { return pi * std::cos(pi * x); }
+
+    Value LowerBoundary(Index, Time) const override { return 0.0; }
+    Value UpperBoundary(Index, Time) const override { return 0.0; }
+};
+
+/// Integrate the manufactured coupled problem to tFinal under a chosen
+/// FieldSolve mode, and hand back the run. This file's whole reason to exist is
+/// comparing Iterative against Exact, so the mode is a parameter here rather
+/// than fixed the way CoupledResidualTests.cpp's own runCoupledToTime is.
+CoupledSolver runCoupledToTime(Index nCells, Index k, double tFinal,
+                               std::string const &fieldSolve)
+{
+    CoupledSolver h;
+    h.problem = std::make_unique<ManufacturedCoupledDiffusion>();
+    h.field = std::make_shared<ManufacturedField>(toml::value{}, scratchGrid());
+    h.grid = std::make_unique<Grid>(0.0, 1.0, nCells);
+    h.sys = std::make_unique<SystemSolver>(*h.grid, k, h.problem.get());
+    configureQuietly(*h.sys, "field_jac_iterative_mms_k" + std::to_string(k) + "_n" +
+                                 std::to_string(nCells));
+    h.sys->setOutputCadence(tFinal);
+    h.sys->setFieldModel(h.field);
+    h.sys->resetCoeffs();
+    h.sys->setFieldSolveMode(fieldSolve == "exact" ? SystemSolver::FieldSolveMode::Exact
+                                                    : SystemSolver::FieldSolveMode::Iterative);
+
+    {
+        // runSolver reports its step counts and IDACalcIC warnings; quiet the
+        // same way CoupledResidualTests.cpp's runCoupledToTime does.
+        CapturedOutput quiet;
+        h.sys->initialize();
+        h.sys->integrate(tFinal);
+        h.sys->destroySundials();
+    }
+    return h;
+}
+
+/// L2 error of u against the manufactured solution -- the same rule
+/// CoupledResidualTests.cpp's uError and MMSConvergenceTests measure with.
+double uError(SystemSolver &sys, double t)
+{
+    return mms::l2ErrorAgainst([&](double x) { return sys.getSolution().u(0)(x); },
+                               [](double x, double tt) { return manufacturedU(x, tt); },
+                               sys.getSolution().getGrid(), t);
+}
+
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(field_jacobian_tests)
@@ -648,6 +758,94 @@ BOOST_AUTO_TEST_CASE(selecting_the_exact_solve_warns)
 
     BOOST_TEST(defaultLog.find("FieldSolve = exact") == std::string::npos);
     BOOST_TEST(defaultLog.find("FieldSolve = iterative") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(the_iterative_solve_agrees_with_the_exact_one)
+{
+    // Not to roundoff: the iterative path stops at FieldSolveTolerance, so the
+    // agreement is to that tolerance and no better. What this pins is that the
+    // two are solving the same system -- a sign error in either path's use of
+    // A1 or A2 separates them immediately.
+    auto solver = singleDofFixture(/*nCells=*/6, /*k=*/2);
+    N_Vector g = randomRHS(*solver);
+
+    N_Vector exact = N_VClone(g), iterative = N_VClone(g);
+    solver->solveCoupledJacExact(g, exact);
+    solver->solveCoupledJacIterative(g, iterative);
+
+    const double diff = relativeDifference(exact, iterative);
+    BOOST_TEST_MESSAGE("single-DOF field, iterative vs exact: relative difference = " << diff);
+    BOOST_CHECK_SMALL(diff, 1e-6);
+
+    N_VDestroy(g);
+    N_VDestroy(exact);
+    N_VDestroy(iterative);
+}
+
+BOOST_AUTO_TEST_CASE(the_iterative_solve_agrees_for_a_multi_dof_block_too)
+{
+    auto solver = multiDofFixture(/*nCells=*/6, /*k=*/2);
+    N_Vector g = randomRHS(*solver);
+
+    N_Vector exact = N_VClone(g), iterative = N_VClone(g);
+    solver->solveCoupledJacExact(g, exact);
+    solver->solveCoupledJacIterative(g, iterative);
+
+    const double diff = relativeDifference(exact, iterative);
+    BOOST_TEST_MESSAGE("5-DOF field, iterative vs exact: relative difference = " << diff);
+    BOOST_CHECK_SMALL(diff, 1e-6);
+
+    N_VDestroy(g);
+    N_VDestroy(exact);
+    N_VDestroy(iterative);
+}
+
+BOOST_AUTO_TEST_CASE(solve_jac_eq_dispatches_to_the_iterative_solve_by_default)
+{
+    // The other half of solve_jac_eq_dispatches_to_the_exact_solve: with no mode
+    // set explicitly, solveJacEq must reach solveCoupledJacIterative and
+    // reproduce it bit for bit, not silently fall back to the exact path the
+    // way it did before this task.
+    auto solver = singleDofFixture(/*nCells=*/4, /*k=*/1);
+    SystemSolver &sys = *solver;
+    BOOST_REQUIRE(sys.getFieldSolveMode() == SystemSolver::FieldSolveMode::Iterative);
+
+    const Index n = static_cast<Index>(sys.getSolution().getDoF());
+    N_Vector g = N_VNew_Serial(n, sys.ctx);
+    N_Vector viaDispatch = N_VClone(g), viaIterative = N_VClone(g);
+    double *ga = N_VGetArrayPointer(g);
+    for (Index i = 0; i < n; ++i)
+        ga[i] = std::cos(0.3 * static_cast<double>(i));
+
+    sys.solveJacEq(g, viaDispatch);
+    sys.solveCoupledJacIterative(g, viaIterative);
+
+    const double *a = N_VGetArrayPointer(viaDispatch);
+    const double *b = N_VGetArrayPointer(viaIterative);
+    for (Index i = 0; i < n; ++i)
+        BOOST_TEST(a[i] == b[i]);
+
+    N_VDestroy(g);
+    N_VDestroy(viaDispatch);
+    N_VDestroy(viaIterative);
+}
+
+BOOST_AUTO_TEST_CASE(a_coupled_run_on_the_iterative_path_reaches_the_manufactured_solution)
+{
+    // The iterative solve is an *approximation to the Jacobian*, so an
+    // under-converged sweep costs Newton iterations and nothing else. This
+    // checks the answer is unmoved: same tolerances as
+    // CoupledResidualTests.cpp's a_coupled_run_reaches_the_manufactured_solution,
+    // which runs the same problem on FieldSolveMode::Exact.
+    auto solver = runCoupledToTime(/*nCells=*/16, /*k=*/3, /*tFinal=*/0.5, "iterative");
+
+    const double eu = uError(*solver, 0.5);
+    const double epsi = std::abs(solver->getSolution().Field(0) - manufacturedPsiExact(0.5));
+    BOOST_TEST_MESSAGE("iterative coupled MMS at t = 0.5, k = 3, nCells = 16:  |u| error "
+                       << eu << ",  |psi| error " << epsi);
+
+    BOOST_CHECK_SMALL(eu, 1e-4);
+    BOOST_CHECK_SMALL(epsi, 1e-5);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

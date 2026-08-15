@@ -300,6 +300,15 @@ void SystemSolver::scatterA1Column(Index m, N_Vector out) const
         v.segment(i * localDOF, localDOF) = A1_cellwise[i].col(m);
 }
 
+// See the declaration: the A1 dpsi term of the block Gauss-Seidel sweep, applied
+// in place to work's cellwise [sigma | q | u | aux] segments.
+void SystemSolver::subtractA1Times(Vector const &dpsi, N_Vector work) const
+{
+    VectorWrapper w(N_VGetArrayPointer(work), N_VGetLength(work));
+    for (Index i = 0; i < nCells; ++i)
+        w.segment(i * localDOF, localDOF) -= A1_cellwise[i] * dpsi;
+}
+
 void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 {
     logmsg<LOG_LEVEL::INFO>("Setting initial conditions");
@@ -1192,10 +1201,7 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
         solveCoupledJacExact(res_g, delY);
         return;
     case FieldSolveMode::Iterative:
-        // The block Gauss-Seidel sweep is not written yet, so the default mode
-        // resolves to the exact solve: correct, and merely expensive.
-        // initialize() says so once per run rather than once per Jacobian.
-        solveCoupledJacExact(res_g, delY);
+        solveCoupledJacIterative(res_g, delY);
         return;
     }
 }
@@ -1353,6 +1359,63 @@ void SystemSolver::solveCoupledJacExact(N_Vector res_g, N_Vector delY)
         N_VDestroy(AinvA1[m]);
     N_VDestroy(col);
     N_VDestroy(Ainv_r1);
+}
+
+// Block Gauss-Seidel on the coupled Jacobian:
+//
+//     A dx^{k+1}   = r1 - A1 dpsi^k
+//     B dpsi^{k+1} = r2 - A2 dx^{k+1}
+//
+// One transport solve and one field solve per sweep, against the exact path's
+// nField + 1 transport solves per Jacobian solve.
+//
+// This is safe in a way a lagged *residual* would not be. The Jacobian is never
+// assembled and IDA tolerates an inexact linear solve, so an error here costs
+// Newton speed rather than correctness -- which is why Serino et al.'s
+// block-triangular preconditioners can drop the Schur complement outright and
+// still converge (15-176 FGMRES iterations, in their numbers). Accuracy comes
+// from the residual, which is exact.
+//
+// Consequently this does not fail on non-convergence: it returns its last
+// iterate, which for a Jacobian solve is legitimate -- an under-converged sweep
+// is merely a worse search direction. Task 10's adjoint version has to do the
+// opposite, because a wrong gradient with a perfectly good G is exactly the
+// failure mode nothing else would catch.
+void SystemSolver::solveCoupledJacIterative(N_Vector res_g, N_Vector delY)
+{
+    DGSoln rhs(nVars, grid, k, N_VGetArrayPointer(res_g), nScalars, nAux, nField);
+    DGSoln out(nVars, grid, k, N_VGetArrayPointer(delY), nScalars, nAux, nField);
+
+    N_Vector work = N_VClone(delY);
+    Vector dpsi = Vector::Zero(nField);
+    Vector dpsiPrev = Vector::Zero(nField);
+
+    for (Index sweep = 0; sweep < fieldSolveMaxSweeps; ++sweep)
+    {
+        // work <- r1 - A1 dpsi
+        N_VScale(1.0, res_g, work);
+        subtractA1Times(dpsi, work);
+
+        // dx <- A^-1 work. solveTransportJac zeroes the whole increment (see
+        // solveHDGJac), so delY's field entries come back zero regardless of
+        // what work's field segment held -- untouched above, and unread by
+        // solveTransportJac either way.
+        solveTransportJac(work, delY);
+
+        // dpsi <- B^-1 ( r2 - A2 dx )
+        Vector r2 = rhs.getField();
+        for (Index f = 0; f < nField; ++f)
+            r2(f) -= N_VDotProd(a2[f], delY);
+
+        dpsiPrev = dpsi;
+        fieldModel->solveB(dpsi, r2);
+
+        if ((dpsi - dpsiPrev).norm() <= fieldSolveTolerance * std::max(1.0, dpsi.norm()))
+            break;
+    }
+
+    out.getField() = dpsi;
+    N_VDestroy(work);
 }
 
 // Solve the HDG part of the Jacobian
