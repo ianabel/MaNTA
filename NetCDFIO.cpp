@@ -296,7 +296,16 @@ void SystemSolver::WriteRestartFile(std::string const &fname, N_Vector const &Y,
 	// Save N_Vector directly
 	NcGroup RestartGroup = restart_file.CreateGroup("RestartData", "Restart group");
 
-	const size_t nDOF = nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1);
+	// Asked of the DGSoln rather than open-coded, which is what this line used to
+	// be. There were three copies of this formula -- here, the N_VNew_Serial in
+	// Solver.cpp and the read-side consistency check in MaNTA.cpp -- and a field
+	// model lengthens the vector, so a copy that did not know about nField wrote
+	// a *short* file: psi dropped, and an nDOF recorded that matches the
+	// uncoupled formula, so the truncated file would read back as consistent.
+	// Under-writing rather than overrunning is what makes that silent. The
+	// solver's own `y` maps the vector being written, so it is the authority on
+	// how long it is; there is now one fewer place for the two to disagree.
+	const size_t nDOF = y.getDoF();
 	NcDim yDim = RestartGroup.addDim("nDOF", nDOF);
 	RestartGroup.addVar("nVars", netCDF::NcInt()).putVar(&nVars);
 	RestartGroup.addVar("nAux", netCDF::NcInt()).putVar(&nAux);

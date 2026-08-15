@@ -496,6 +496,14 @@ class SystemSolver
 
         // The field model's own diagonal block, B = dR/dpsi + alpha dR/d(psi').
         //
+        // TASK 8: delete this, and its call in updateMatricesForJacSolve.
+        // assembleFieldCoupling subsumes it -- it makes the same
+        // FieldResidualPrime call, keeps dR and dRdot as A2 instead of
+        // discarding them, and ends with the same updateFieldJacobian. Keeping
+        // both would call FieldResidualPrime twice per Jacobian and factorise B
+        // twice, and a model that solves a coupled system internally is entitled
+        // to assume it is asked once.
+        //
         // This is *not* one of the coupling blocks: A1 (how the transport rows
         // see psi) and A2 (how the field rows see the transport) are a later
         // piece of work, and until they exist the Jacobian is block diagonal --

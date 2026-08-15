@@ -228,6 +228,69 @@ public:
     }
 };
 
+// The same psi(t) = (2/pi)(1 + t) that ManufacturedField constrains
+// algebraically, expressed instead as the differential row
+//
+//     R = dpsi/dt - 2/pi ,     psi(0) = 2/pi
+//
+// so `differential = true` is the *correct* declaration and dR/d(dpsi/dt) = 1.
+//
+// This exists because the `id` vector is the one thing the brief singled out
+// that nothing else reaches: BadlyDeclaredDifferentialField is refused before
+// IDASetId is called, and ManufacturedField is algebraic, so
+// `isDifferential.Field(f) = 1.0` -- writing the wrong slot, writing Scalar(f),
+// or the loop not running at all -- would pass the whole suite. Marking psi
+// algebraic here is not a small error either: IDA_YA_YDP_INIT would then solve
+// for its *value* against a row with dR/dpsi = 0, which is irreducible, and the
+// run dies in the linesearch.
+//
+// A controlled comparison rather than a separate problem: same exact solution,
+// same geometry, same transport case and the same discretisation as the
+// algebraic end-to-end test, so the two answers are directly comparable.
+class DifferentialManufacturedField : public FieldModel
+{
+public:
+    DifferentialManufacturedField() : FieldModel(buildSpec()) {}
+
+    static FieldModelSpec buildSpec()
+    {
+        FieldModelSpec s;
+        s.dofs = {{"psi", "the manufactured field unknown", "1", /* differential */ true}};
+        s.geometry = {{"g", "metric factor multiplying the diffusivity", "1"}};
+        s.label = "x";
+        return s;
+    }
+
+    void FieldResidual(VectorRef out, Vector const &, Vector const &dpsidt,
+                       GlobalState const &, std::vector<Position> const &, Vector const &,
+                       Time) override
+    {
+        out(0) = dpsidt(0) - 2.0 / pi;
+    }
+
+    void Geometry(VectorRef out, Vector const &psi, Position x, Time) override
+    {
+        out(0) = 1.0 + psi(0) * manufacturedC(x);
+    }
+
+    void dGeometry_dpsi(MatrixRef out, Vector const &, Position x, Time) override
+    {
+        out(0, 0) = manufacturedC(x);
+    }
+
+    // dR/dpsi is identically zero; the whole block is dR/d(dpsi/dt), which is
+    // what makes B = alpha and what the refusal in initialize() checks for.
+    void FieldResidualPrime(GlobalStateMatrix &, GlobalStateMatrix &, MatrixRef,
+                            MatrixRef dRddpsidt, Vector const &, Vector const &,
+                            GlobalState const &, std::vector<Position> const &,
+                            Vector const &, Time) override
+    {
+        dRddpsidt(0, 0) = 1.0;
+    }
+
+    void InitialFieldValue(VectorRef out) override { out(0) = manufacturedPsiExact(0.0); }
+};
+
 // Refuses to be evaluated. A model that cannot evaluate at the state it is given
 // -- no x-point, a boundary that has left the domain -- is required to throw,
 // and static_residual is required to turn that into IDA's recoverable-error
@@ -390,12 +453,17 @@ CoupledFixture makeCoupledSolverWithThrowingField(Index nCells, Index k)
 }
 
 /// Integrate the manufactured coupled problem to tFinal and hand back the run.
-SolverHandle runCoupledToTime(Index nCells, Index k, double tFinal)
+///
+/// The field model is a parameter so the algebraic and differential statements
+/// of the same psi(t) can be run at the same discretisation and their answers
+/// compared directly.
+SolverHandle runCoupledToTime(Index nCells, Index k, double tFinal,
+                              std::shared_ptr<FieldModel> model,
+                              std::string const &tag = "")
 {
     SolverHandle h = makeSolverWithModel(
-        std::make_unique<ManufacturedCoupledDiffusion>(),
-        std::make_shared<ManufacturedField>(toml::value{}, scratchGrid()), nCells, k,
-        "coupled_mms_k" + std::to_string(k) + "_n" + std::to_string(nCells));
+        std::make_unique<ManufacturedCoupledDiffusion>(), std::move(model), nCells, k,
+        "coupled_mms" + tag + "_k" + std::to_string(k) + "_n" + std::to_string(nCells));
     h.sys->setOutputCadence(tFinal);
 
     {
@@ -407,6 +475,12 @@ SolverHandle runCoupledToTime(Index nCells, Index k, double tFinal)
         h.sys->destroySundials();
     }
     return h;
+}
+
+SolverHandle runCoupledToTime(Index nCells, Index k, double tFinal)
+{
+    return runCoupledToTime(nCells, k, tFinal,
+                            std::make_shared<ManufacturedField>(toml::value{}, scratchGrid()));
 }
 
 /// L2 error of u against the manufactured solution, by a quadrature independent
@@ -514,6 +588,44 @@ BOOST_AUTO_TEST_CASE(a_correctly_declared_algebraic_field_dof_is_not_refused)
     BOOST_CHECK_NO_THROW(solver->initialize());
 }
 
+BOOST_AUTO_TEST_CASE(a_legitimately_differential_field_dof_is_not_refused)
+{
+    // The refusal must also let through a DOF that is differential *and* says
+    // so with a residual carrying d/dt. Without this the check could be an
+    // unconditional throw on `differential == true` and nothing would notice.
+    auto solver = makeSolverWithModel(std::make_shared<DifferentialManufacturedField>());
+    CapturedOutput quiet;
+    BOOST_CHECK_NO_THROW(solver->initialize());
+}
+
+BOOST_AUTO_TEST_CASE(a_differential_field_dof_reaches_the_id_vector)
+{
+    // The `id` vector IDASetId receives, read back directly.
+    //
+    // This is the one line the brief singled out and the only thing that reads
+    // it: writing the wrong slot, writing Scalar(f) instead, or not running the
+    // loop at all is invisible everywhere else, because IDA answers a wrong id
+    // with a different *initialisation problem* rather than an error.
+    auto differential = makeSolverWithModel(std::make_shared<DifferentialManufacturedField>());
+    {
+        CapturedOutput quiet;
+        differential->initialize();
+    }
+    DGSoln idMap = mapSoln(*differential, differential->id);
+    BOOST_CHECK_EQUAL(idMap.Field(0), 1.0);
+
+    // ...and an algebraic DOF must leave it zero, or IDA_YA_YDP_INIT would be
+    // asked for a derivative it has no equation for.
+    auto algebraic = makeSolverWithModel(
+        std::make_shared<ManufacturedField>(toml::value{}, scratchGrid()));
+    {
+        CapturedOutput quiet;
+        algebraic->initialize();
+    }
+    DGSoln algebraicId = mapSoln(*algebraic, algebraic->id);
+    BOOST_CHECK_EQUAL(algebraicId.Field(0), 0.0);
+}
+
 BOOST_AUTO_TEST_CASE(a_field_model_that_throws_is_a_recoverable_error)
 {
     // static_residual catches and returns 1, which IDA treats as recoverable
@@ -539,6 +651,31 @@ BOOST_AUTO_TEST_CASE(a_coupled_run_reaches_the_manufactured_solution)
     const double eu = uError(*solver, 0.5);
     const double epsi = std::abs(solver->getSolution().Field(0) - manufacturedPsiExact(0.5));
     BOOST_TEST_MESSAGE("coupled MMS at t = 0.5, k = 3, nCells = 16:  |u| error "
+                       << eu << ",  |psi| error " << epsi);
+
+    BOOST_CHECK_SMALL(eu, 1e-4);
+    BOOST_CHECK_SMALL(epsi, 1e-5);
+}
+
+BOOST_AUTO_TEST_CASE(a_differential_field_dof_integrates_to_the_same_solution)
+{
+    // The same run with psi stated as an ODE instead of an algebraic identity.
+    // Same exact solution, same discretisation, same bounds -- so this is a
+    // controlled comparison against the case above rather than a second problem
+    // with tolerances of its own.
+    //
+    // What it exercises that nothing else does: the `id` slot in the integration
+    // rather than in isolation, IDACalcIC's differential branch (it solves for
+    // dpsi/dt here, not for psi), the field entry of getErrorWeights -- psi is
+    // now in IDA's local error test, and a zero weight there is a division by
+    // zero rather than a loose tolerance -- and B = alpha rather than B = 1, so
+    // solveB is applied to a matrix that changes with the step size.
+    auto solver = runCoupledToTime(/*nCells=*/16, /*k=*/3, /*tFinal=*/0.5,
+                                   std::make_shared<DifferentialManufacturedField>(), "_diff");
+
+    const double eu = uError(*solver, 0.5);
+    const double epsi = std::abs(solver->getSolution().Field(0) - manufacturedPsiExact(0.5));
+    BOOST_TEST_MESSAGE("differential-psi coupled MMS at t = 0.5, k = 3, nCells = 16:  |u| error "
                        << eu << ",  |psi| error " << epsi);
 
     BOOST_CHECK_SMALL(eu, 1e-4);

@@ -98,6 +98,23 @@ void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
             "setFieldModel must be called before the solver is initialised: the field "
             "unknowns are part of the solution vector, whose length is fixed by then.");
 
+    // Not alongside global scalars yet, and the reason is a disagreement between
+    // two branches rather than a missing feature. dSources_dScalars_Mat builds
+    // its State from DGSoln::evalOnNode, which has no geometry rows, while its
+    // superconvergent twin dSources_dScalars_StarMat reads the states
+    // evaluatePhysicsDerivatives has already filled. So a case that reads
+    // geometry in dSources_dScalars works with Superconvergent = true and reads
+    // out of bounds with it off -- a branch-dependent out-of-bounds read, which
+    // is exactly the kind of defect that surfaces long after the change that
+    // caused it. Refused here, at the earliest point where the combination is
+    // known, rather than filled: filling is three lines but there is no fixture
+    // in the tree that would exercise either branch of it.
+    if (model && nScalars > 0)
+        throw std::logic_error(
+            "A field model cannot yet be attached to a system with global scalars: the "
+            "scalar coupling's non-superconvergent branch evaluates dSources_dScalars on "
+            "states that carry no geometry.");
+
     fieldModel = std::move(model);
     nField = fieldModel ? fieldModel->nFieldDOF() : 0;
     nGeom = fieldModel ? fieldModel->nGeometry() : 0;
@@ -112,6 +129,18 @@ void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
     // The scalar bordering's work vectors span the whole solution vector, so
     // they are the wrong length too. Rebuilt rather than resized: an N_Vector's
     // length is fixed at creation.
+    //
+    // Discarding their contents costs nothing, and the argument is stronger than
+    // "nothing has run yet". setFieldModel refuses once `initialised` is set,
+    // and initialiseMatrices ends by doing N_VConst(0.0, ...) on both of them --
+    // so whatever order a caller chooses, v and w are zeroed after this and
+    // before the first updateMatricesForJacSolve fills them. There is no
+    // sequence in which this throws data away.
+    //
+    // With the refusal above, the only path that reaches this loop today is
+    // *detaching* a model from a scalar system, where the length is unchanged
+    // and the rebuild is a no-op. It is here for the moment that refusal lifts,
+    // which is the moment it stops being one.
     for (Index i = 0; i < nScalars; ++i)
     {
         N_VDestroy(v[i]);
@@ -1111,6 +1140,16 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 
     if (fieldModel)
     {
+        // TASK 8: delete this block. solveCoupledJacExact computes dpsi from the
+        // Schur complement and writes the field block itself, so this would
+        // overwrite it with the block-Jacobi answer.
+        //
+        // It must end up on the *solveJacEq* side of the solveTransportJac
+        // rename, never inside solveTransportJac: the exact solve calls that
+        // function nField + 1 times as its inner transport solve, and a field
+        // write in there would corrupt every one of them. That is also why it
+        // sits here rather than in solveHDGJac.
+        //
         // The field block, on its own diagonal: B dpsi = r_psi, with the
         // couplings between psi and the transport unknowns still absent from the
         // Jacobian. That makes this block Jacobi -- IDA pays for it in Newton
