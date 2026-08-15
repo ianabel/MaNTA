@@ -3,6 +3,10 @@ Lists upcoming features that are in development or being thought about
 
 - Explore adaptive mesh-refinement schemes; first to the PTC steady-state algorithm or possibly the direct newton solve as well; then work out if it's possible to add to the real TimeMarch (requires interpolating history to allow IDA's BDF methods to work, and requires the hooks for that to be in SUNDIALS)
 
+  `MESH-REFINEMENT.md` has the exploratory measurements so far — chiefly that
+  the degree, not the mesh, is the lever that pays here — and `refs/Refs.md`
+  ("Mesh adaptivity") indexes the papers.
+
 - Scope out coupling to a magnetic field solver. From an algorithmic point of view, a self-consistent magnetic field is just a large set of algebraic constraints, which IDA / KINSOL already handle. However, because this can be a large degree of freedom system (N_{magnetics} >> N_{HDG}) we should take care about the Jacobian solve. 
 Assume that the coupled magnetic field solve is a differentiable solver, and so will provide both a nonlinear solution B to
 
