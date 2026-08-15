@@ -212,45 +212,38 @@ void AutodiffTransportSystem::dSources_dGeometry(Index i, VectorRef grad, const 
 			 wrt(geom), at(u, q, sigma, phi, Scalar, geom, x, t), uout, grad);
 }
 
-// TODO(Task 10): this differentiates the 4-arg (geometry-blind) Flux
-// overload, not the geometry-aware one SigmaFn/dSigmaFn_du/dq/dGeometry all
-// evaluate through. Harmless today only because no case gives the two
-// overloads different content. The 4-arg overload is still the mandatory pure
-// virtual, so a future geometry-dependent case is *forced* to write some body
-// for it to compile -- and whatever that body computes (a placeholder, or a
-// geometry evaluated at some fixed default) is what this function will
-// silently differentiate instead of the real, geometry-dependent flux. The
-// symptom is a wrong dSigmaFn_dp for exactly the cases that read geometry,
-// with a perfectly plausible G alongside it -- the same failure shape
-// CLAUDE.md documents for a missing adjoint block. Fix by building `geom`
-// from `s.geom()` here (as every other hook in this file now does) and
-// evaluating through the geometry-aware Flux overload instead.
+// Through the *geometry-aware* Flux overload, like every other hook here.
+//
+// This differentiated the 4-arg one until the adjoint learned about the field
+// coupling, and the difference was not academic. The 4-arg overload is the
+// mandatory pure virtual, so a geometry-dependent case is forced to write some
+// body for it to compile at all; whatever that stand-in computes is what this
+// function would have differentiated, rather than the real flux. dSigmaFn_dp
+// feeds F_p in computeAdjointGradients, so the symptom would have been a wrong
+// gradient beside a perfectly good G -- the one failure shape the adjoint has
+// nothing to report it with.
 void AutodiffTransportSystem::dSigmaFn_dp(Index i, Index pIndex, Value &grad, const State &s, Position x, Time t)
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
+	RealVector geom(s.geom());
 	// make sure all gradients are zero
 	Real p = getPval(pIndex);
 
 	grad = autodiff::derivative(
-		[this, i, pIndex](Real p, RealVector uD, RealVector qD, Position X, Time T)
+		[this, i, pIndex](Real p, RealVector uD, RealVector qD, RealVector geomD, Position X, Time T)
 		{
 			setPval(pIndex, p);
-			return Flux(i, uD, qD, X, T);
+			return Flux(i, uD, qD, geomD, X, T);
 		},
-		wrt(p), at(p, u, q, x, t));
+		wrt(p), at(p, u, q, geom, x, t));
 
 	clearGradients();
 }
 
-// TODO(Task 10): same defect as dSigmaFn_dp above, for Source. This
-// differentiates the 8-arg (geometry-blind) Source overload rather than the
-// 9-arg geometry-aware one Sources/dSources_du/dq/dsigma/dPhi/dScalars/dGeometry
-// all evaluate through, so a future geometry-dependent case's dSources_dp will
-// silently differentiate whatever stand-in body that case had to write to
-// satisfy the still-mandatory 8-arg overload, not its real source. Fix by
-// building `geom` from `s.geom()` and evaluating through the geometry-aware
-// Source overload instead.
+// The same fix as dSigmaFn_dp above, for Source: the 9-arg geometry-aware
+// overload, not the 8-arg one every geometry-dependent case would only have
+// written to satisfy the compiler.
 void AutodiffTransportSystem::dSources_dp(Index i, Index pIndex, Value &grad, const State &s, Position x, Time t)
 {
 	RealVector u(s.u());
@@ -258,17 +251,18 @@ void AutodiffTransportSystem::dSources_dp(Index i, Index pIndex, Value &grad, co
 	RealVector sigma(s.sigma());
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
+	RealVector geom(s.geom());
 
 	Real p = getPval(pIndex);
 
 	grad = autodiff::derivative(
-		[this, i, pIndex](Real p, RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)
+		[this, i, pIndex](Real p, RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, RealVector geomD, Position X, Time T)
 		{
 			setPval(pIndex, p);
-			Real S = Source(i, uD, qD, sD, phiD, ScalarD, X, T);
+			Real S = Source(i, uD, qD, sD, phiD, ScalarD, geomD, X, T);
 			return S;
 		},
-		wrt(p), at(p, u, q, sigma, phi, Scalar, x, t));
+		wrt(p), at(p, u, q, sigma, phi, Scalar, geom, x, t));
 
 	// make sure all gradients are zero
 	clearGradients();
@@ -450,21 +444,27 @@ Real2nd AutodiffTransportSystem::MMS_Solution(Index i, Real2nd x, Real2nd t)
 	return S;
 }
 
-// TODO(Task 10): the direct Flux(...)/Source(...) calls below (building
-// `sigma`/`dSigma_dx`/`S`) go through the geometry-blind overloads, not the
-// geometry-aware ones dSigmaFn_du/dq above already use via `s.geom()` -- so
-// this function is internally inconsistent about which overload it evaluates.
-// Harmless today because `s` here is a bare State(nVars, nScalars) with no
-// geometry rows (ngeom = 0 by default) and no case yet gives the two Flux/
-// Source overloads different content, so both paths agree. It will stop
-// agreeing the moment a geometry-dependent case tries useMMS: the
-// manufactured source would then be built against a flux that ignores
-// geometry while the solver's actual residual uses one that does not, which
-// is exactly the "manufactured source differentiated with the wrong function"
-// trap this file's own header comment warns about for the sign convention --
-// same shape, different cause. Fix by threading a real (nonzero-width) geom
-// through `s` and every direct Flux/Source call here, the way SigmaFn/Sources
-// do.
+// TODO(manufactured coupled sources): the direct Flux(...)/Source(...) calls
+// below (building `sigma`/`dSigma_dx`/`S`) go through the geometry-blind
+// overloads, not the geometry-aware ones dSigmaFn_du/dq above already use via
+// `s.geom()` -- so this function is internally inconsistent about which overload
+// it evaluates. Harmless today because `s` here is a bare State(nVars,
+// nScalars) with no geometry rows (ngeom = 0 by default) and no case yet gives
+// the two Flux/Source overloads different content, so both paths agree. It will
+// stop agreeing the moment a geometry-dependent case tries useMMS: the
+// manufactured source would then be built against a flux that ignores geometry
+// while the solver's actual residual uses one that does not, which is exactly
+// the "manufactured source differentiated with the wrong function" trap this
+// file's own header comment warns about for the sign convention -- same shape,
+// different cause.
+//
+// The two markers this sat beside -- on dSigmaFn_dp and dSources_dp -- are gone,
+// fixed with the adjoint transposes, because those two feed F_p and so were an
+// adjoint defect. This one is not, and it is not a two-line fix either: MMS_Source
+// is handed (i, x, t) and nothing else, so there is no psi to evaluate geometry
+// at. AutodiffTransportSystem holds no field model and has no way to reach the
+// solver's. Threading one in is a change to the manufactured-solution facility,
+// which is what the coupled order study owns.
 Value AutodiffTransportSystem::MMS_Source(Index i, Position x, Time t)
 {
 	Real2nd xval = x;

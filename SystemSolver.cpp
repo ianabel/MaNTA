@@ -6,6 +6,7 @@
 #include <Eigen/Core>
 #include <Eigen/Dense>
 #include <toml.hpp>
+#include <format>
 #include <ostream>
 #include <print>
 
@@ -1744,11 +1745,33 @@ void SystemSolver::initializeMatricesForAdjointSolve()
 
     const Index derivK = superconvergent ? k + 1 : k;
 
+    // Rebuild rather than grow. Every container filled below is appended to, so
+    // a second adjoint solve on one solver used to leave them holding 2 * nCells
+    // entries with the stale ones at the front -- which is where every index
+    // into them lands. clearCellwiseVecs() carries the same note for the forward
+    // containers; these four are its adjoint counterpart.
+    G_y.clear();
+    adjoint_CEBlocks.clear();
+    adjoint_CGBlocks.clear();
+    A1_transpose_cellwise.clear();
+    A2_transpose_cellwise.clear();
+
     GlobalState dGdvars(grid.getNCells(), derivK, nVars, nScalars, nAux);
-    const std::vector<Position> points =
-        superconvergent ? postprocessor->starPoints() : y.getPoints();
-    const GlobalState states =
-        superconvergent ? postprocessor->evalOnStarNodes(y) : y.evalOnNodes();
+
+    // The nodes, and the geometry on them.
+    //
+    // Both the objective's dg and the case's own ComputePhysicsDerivatives are
+    // evaluated on these states, and with a field model attached a hook reads
+    // State::geom just as it does in the forward Jacobian -- which is why this
+    // is evaluatePhysicsDerivatives' first act too. Without it dSigmaFn_dq on a
+    // geometry-dependent case indexes slot 0 of a zero-length vector.
+    PhysicsNodes nodes{superconvergent ? postprocessor->starPoints() : y.getPoints(),
+                       superconvergent ? postprocessor->evalOnStarNodes(y) : y.evalOnNodes()};
+    evaluateGeometry(y, nodes.points, nodes.states, jt);
+
+    std::vector<Position> const &points = nodes.points;
+    GlobalState const &states = nodes.states;
+
     adjointProblem->dg(0, dGdvars, states, points);
     Vector dGdu(nVars * (k + 1));
     Vector dGdq(nVars * (k + 1));
@@ -1923,8 +1946,26 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         M.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = -B.transpose();
 
         // row3
+        //
+        // -Sq, not +Sq. The u row of the residual is `... - Pi(S)`, so every
+        // source derivative enters it negated: assembleCellMatrix writes
+        // `MX.block(u, sigma) -= Ssig`, `-= Sq` and `-= Su` in turn, onto a
+        // MBlocks whose (u, q) block is identically zero. The two neighbours
+        // here carry that minus (`B - Ssig`, `D - Su`) because their MBlocks
+        // entries are nonzero and had to be written out; the middle one did not,
+        // and lost it.
+        //
+        // Unreachable by anything in the tree until now, which is why it
+        // survived: every adjoint fixture that exists -- AdjointTestProblem, the
+        // Python ParametricDiffusion, test_adjoint_aux's case -- has
+        // dSources_dq identically zero, so Sq is the zero matrix and its sign
+        // does not matter. A case whose source reads q got a silently wrong
+        // gradient beside a perfectly good G, exactly the failure mode this
+        // function's dSigma/dPhi comment below records. Caught by
+        // the_transpose_check_reaches_every_coupled_block, whose fixture has
+        // dSources_dq = 0.2.
         M.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) = B - Ssig;
-        M.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = Sq;
+        M.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = -Sq;
         M.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = (D - Su);
 
         if (nAux > 0)
@@ -2018,55 +2059,78 @@ void SystemSolver::initializeMatricesForAdjointSolve()
 
     // no computation of scalars
 
+    // The right-hand-side-independent half of the transposed HDG solve, built
+    // once here because the coupled adjoint paths apply A^-T nField + 1 times
+    // (exact) or once per sweep (iterative).
+    factoriseAdjointTrace();
+
+    // ---- the field coupling, transposed.
+    //
+    // Re-assembled here rather than reused from the forward solve, and at
+    // alpha = 0, because that is what M above is: the block loop builds its rows
+    // from A_cellwise / B_cellwise / D_cellwise directly and never adds
+    // assembleCellMatrix's alpha-weighted mass term X. So this is dF/dy at
+    // alpha = 0 -- the steady adjoint -- and the field blocks have to be the
+    // same operator's. B = dRdpsi + alpha dRddpsidt would otherwise carry
+    // whichever cj IDA last handed the forward Jacobian, which for a
+    // *differential* field DOF is a different matrix entirely, and A2 carries
+    // alpha * dRdot for the same reason. Keeping the two in step block for block
+    // is the whole discipline of this function; alpha is one of those blocks.
+    if (fieldModel)
+    {
+        G_field = Vector::Zero(nField);
+        adjoint_field = Vector::Zero(nField);
+        assembleFieldCoupling(y, dydt, nodes, jt, 0.0);
+        transposeFieldCoupling();
+    }
+    else
+    {
+        G_field.resize(0);
+        adjoint_field.resize(0);
+    }
+
     initialised = true;
 }
 
-void SystemSolver::solveAdjointState(Index gIndex)
+// See the declaration. Split out of solveAdjointState so the repeated A^-T
+// applications the coupled paths need do not refactorise the trace operator
+// once per right-hand side.
+void SystemSolver::factoriseAdjointTrace()
 {
-
     K_global.setZero();
+    adjoint_SQU_0.assign(nCells, Matrix());
 
-    std::vector<Eigen::VectorXd> SQU_f(nCells);
-    std::vector<Eigen::MatrixXd> SQU_0(nCells);
     for (Index i = 0; i < nCells; i++)
     {
-        // Interval const& I( grid[ i ] );
+        adjoint_SQU_0[i] = MXSolvers[i].solve(adjoint_CGBlocks[i]);
 
-        // SQU_f
-        Vector g1g2g3 = G_y[i];
+        const Matrix K_cell = H_cellwise[i].transpose() - adjoint_CEBlocks[i] * adjoint_SQU_0[i];
 
-        SQU_f[i] = MXSolvers[i].solve(g1g2g3);
-
-        // SQU_0
-        Eigen::MatrixXd const &CG = adjoint_CGBlocks[i];
-        SQU_0[i] = MXSolvers[i].solve(CG);
-        // std::cerr << SQU_0[i] << std::endl << std::endl;
-        // std::cerr << CE << std::endl << std::endl;
-
-        Eigen::MatrixXd K_cell(nVars * 2, nVars * 2);
-        K_cell = H_cellwise[i].transpose() - adjoint_CEBlocks[i] * SQU_0[i];
-
-        // K
         for (Index varI = 0; varI < nVars; varI++)
             for (Index varJ = 0; varJ < nVars; varJ++)
-                K_global.block<2, 2>(varI * (nCells + 1) + i, varJ * (nCells + 1) + i) += K_cell.block<2, 2>(varI * 2, varJ * 2);
+                K_global.block<2, 2>(varI * (nCells + 1) + i, varJ * (nCells + 1) + i) +=
+                    K_cell.block<2, 2>(varI * 2, varJ * 2);
     }
+
+    adjoint_K.compute(K_global);
+}
+
+// See the declaration: A^-T applied to a cellwise right-hand side.
+void SystemSolver::solveTransportAdjoint(std::vector<Vector> const &rhs,
+                                         std::vector<Vector> &squOut, Vector &lambdaOut)
+{
+    std::vector<Vector> SQU_f(nCells);
 
     // Construct the RHS of K Lambda = F
-    Eigen::VectorXd F(nVars * (nCells + 1));
-    F.setZero();
+    Vector F = Vector::Zero(nVars * (nCells + 1));
     for (Index i = 0; i < nCells; i++)
     {
+        SQU_f[i] = MXSolvers[i].solve(rhs[i]);
+
+        const Vector CEf = adjoint_CEBlocks[i] * SQU_f[i];
         for (Index var = 0; var < nVars; var++)
-        {
-            F.block<2, 1>(var * (nCells + 1) + i, 0) -= (adjoint_CEBlocks[i] * SQU_f[i]).block(var * 2, 0, 2, 1);
-        }
+            F.segment(var * (nCells + 1) + i, 2) -= CEf.segment(var * 2, 2);
     }
-
-    // Factorise the global matrix ( size n_cells * n_variables )
-    EigenGlobalSolver globalKSolver(K_global);
-
-    adjoint_lambdas = globalKSolver.solve(F);
 
     /*
      * We really should do something here.
@@ -2079,27 +2143,231 @@ void SystemSolver::solveAdjointState(Index gIndex)
     }
     */
 
-    // Now find del sigma, del q and del u to eventually find del Y
-    // this can be done in parallel over each cell
+    lambdaOut = adjoint_K.solve(F);
+
+    // Now find the cellwise part, which can be done in parallel over each cell
+    squOut.assign(nCells, Vector());
     for (Index i = 0; i < nCells; i++)
     {
-
         // Reorganise the data from variable-major to cell-major
         Vector LambdaCell(2 * nVars);
-
         for (Index var = 0; var < nVars; var++)
-        {
-            LambdaCell.block<2, 1>(2 * var, 0) = adjoint_lambdas.segment(var * (nCells + 1) + i, 2);
-        }
+            LambdaCell.segment(2 * var, 2) = lambdaOut.segment(var * (nCells + 1) + i, 2);
 
-        /*
-        // Try mapping the memory by using the magic runes (future update)
-        Eigen::Map< Vector, 0, Eigen::InnerStride<nCells + 1> >
-        delLambdaCell( delYVec.data() + LambdaOffset + i, 2 * nVars, Eigen::InnerStride<nCells + 1> );
-        */
-
-        adjoint_squ.emplace_back(SQU_f[i] - SQU_0[i] * LambdaCell);
+        squOut[i] = SQU_f[i] - adjoint_SQU_0[i] * LambdaCell;
     }
+}
+
+// See the declaration. Materialising both transposes is what lets a test zero
+// one of them and require the gradient check to fail; see
+// dropping_a_transposed_coupling_block_makes_the_gradient_wrong.
+void SystemSolver::transposeFieldCoupling()
+{
+    const Index cellDOF = static_cast<Index>(localDOF);
+    const Index nTransport = static_cast<Index>(nCells) * cellDOF;
+
+    A1_transpose_cellwise.clear();
+    A2_transpose_cellwise.clear();
+    A1_transpose_cellwise.reserve(nCells);
+    A2_transpose_cellwise.reserve(nCells);
+
+    for (Index f = 0; f < nField; ++f)
+    {
+        // A2 is stored as a full-length solution vector so that contracting it
+        // forwards is one N_VDotProd, but the transposed solve reads it cell by
+        // cell and so cannot see anything past the cellwise blocks. Nothing can
+        // put something there today -- FieldResidualPrime is handed a
+        // GlobalState, which has no trace slot, and a field model alongside
+        // global scalars is refused in setFieldModel -- but "nothing can" is
+        // exactly the assumption that goes stale silently, and the cost of
+        // being wrong is a dropped term in the gradient with a good G. So check.
+        const VectorWrapper row(N_VGetArrayPointer(a2[f]), N_VGetLength(a2[f]));
+        if (row.size() > nTransport &&
+            row.tail(row.size() - nTransport).cwiseAbs().maxCoeff() != 0.0)
+            throw std::logic_error(
+                "Field residual row " + std::to_string(f) +
+                " depends on a trace, scalar or field unknown through A2. The transposed "
+                "adjoint solve reads A2 cell by cell and would drop that term silently, "
+                "so it is an error rather than an approximation.");
+    }
+
+    for (Index i = 0; i < nCells; ++i)
+    {
+        A1_transpose_cellwise.emplace_back(A1_cellwise[i].transpose());
+
+        Matrix a2Cell(cellDOF, nField);
+        for (Index f = 0; f < nField; ++f)
+        {
+            const VectorWrapper row(N_VGetArrayPointer(a2[f]), N_VGetLength(a2[f]));
+            a2Cell.col(f) = row.segment(i * cellDOF, cellDOF);
+        }
+        A2_transpose_cellwise.emplace_back(std::move(a2Cell));
+    }
+}
+
+// J^T z = dG/dy. Without a field model this is the transposed transport solve
+// and nothing else, which is what keeps every existing adjoint run what it was.
+void SystemSolver::solveAdjointState(Index)
+{
+    if (!fieldModel)
+    {
+        solveTransportAdjoint(G_y, adjoint_squ, adjoint_lambdas);
+        return;
+    }
+
+    switch (fieldSolveMode)
+    {
+    case FieldSolveMode::Exact:
+        solveCoupledAdjointExact();
+        return;
+    case FieldSolveMode::Iterative:
+        solveCoupledAdjointIterative();
+        return;
+    }
+}
+
+// The exact transposed Schur complement. See the declaration for the algebra.
+void SystemSolver::solveCoupledAdjointExact()
+{
+    // A^-T G_y, kept because the back-substitution needs it.
+    std::vector<Vector> squ0;
+    Vector lam0;
+    solveTransportAdjoint(G_y, squ0, lam0);
+
+    // A^-T applied to each column of A2^T, one transposed transport solve per
+    // field DOF.
+    std::vector<std::vector<Vector>> squCol(nField);
+    std::vector<Vector> lamCol(nField);
+    Matrix S = Matrix::Zero(nField, nField);
+
+    std::vector<Vector> col(nCells);
+    for (Index m = 0; m < nField; ++m)
+    {
+        for (Index i = 0; i < nCells; ++i)
+            col[i] = A2_transpose_cellwise[i].col(m);
+
+        solveTransportAdjoint(col, squCol[m], lamCol[m]);
+
+        for (Index i = 0; i < nCells; ++i)
+            S.col(m) += A1_transpose_cellwise[i] * squCol[m][i];
+    }
+
+    // B^T densely, through the model's own transposed apply. A model with a
+    // structured block overrides applyBTranspose rather than exposing the
+    // matrix, so this is the only way to ask for its columns -- and nField is
+    // small wherever this mode is used.
+    Matrix BT = Matrix::Zero(nField, nField);
+    for (Index m = 0; m < nField; ++m)
+    {
+        Vector e = Vector::Unit(nField, m), BTe = Vector::Zero(nField);
+        fieldModel->applyBTranspose(BTe, e);
+        BT.col(m) = BTe;
+    }
+    const Matrix Schur = BT - S;
+
+    Vector r = G_field;
+    for (Index i = 0; i < nCells; ++i)
+        r -= A1_transpose_cellwise[i] * squ0[i];
+
+    // Assign to a Vector before touching it: lu.solve() returns a lazy Solve<>
+    // expression with no coefficient accessor.
+    const Vector zpsi = Schur.partialPivLu().solve(r);
+
+    adjoint_squ = squ0;
+    adjoint_lambdas = lam0;
+    for (Index m = 0; m < nField; ++m)
+    {
+        for (Index i = 0; i < nCells; ++i)
+            adjoint_squ[i] -= zpsi(m) * squCol[m][i];
+        adjoint_lambdas -= zpsi(m) * lamCol[m];
+    }
+    adjoint_field = zpsi;
+}
+
+// The transposed block Gauss-Seidel sweep:
+//
+//     A^T z_x^{n+1}   = G_y    - A2^T z_psi^n
+//     B^T z_psi^{n+1} = G_psi  - A1^T z_x^{n+1}
+//
+// one transposed transport solve and one B^T solve per sweep, against the exact
+// path's nField + 1.
+//
+// **This throws when it does not converge, and solveCoupledJacIterative does
+// not.** The asymmetry is the point. Forwards, the Jacobian is never assembled
+// and IDA tolerates an inexact linear solve, so an under-converged sweep is
+// merely a worse search direction and the answer is unmoved -- returning the
+// last iterate is legitimate there. Here the solve *is* the answer: an
+// under-converged adjoint returns a wrong gradient beside a perfectly good
+// objective, with nothing failing and no iteration count to notice it in. So
+// there is no "close enough" to fall back on, and no last iterate worth
+// handing back.
+//
+// The stopping test is a relative *backward error*, not the increment test the
+// forward sweep uses. It can be, because the residual of the coupled adjoint
+// system at the end of a sweep is available in closed form: row two is zero by
+// construction, and row one is
+//
+//     A^T z_x + A2^T z_psi - G_y = A2^T ( z_psi^{n+1} - z_psi^n )
+//
+// since z_x was solved against z_psi^n. So ||A2^T dz_psi|| is the exact
+// residual of the pair actually returned, and comparing it to ||g|| is the
+// standard backward-error test rather than a proxy for one. The degenerate
+// g = 0 case needs no clamp: every iterate is zero, the residual is exactly
+// zero, and 0 <= tol * 0 holds.
+void SystemSolver::solveCoupledAdjointIterative()
+{
+    double rhsNorm2 = G_field.squaredNorm();
+    for (Index i = 0; i < nCells; ++i)
+        rhsNorm2 += G_y[i].squaredNorm();
+    const double rhsNorm = std::sqrt(rhsNorm2);
+
+    Vector zpsi = Vector::Zero(nField), zpsiPrev = Vector::Zero(nField);
+    std::vector<Vector> rhs(nCells);
+
+    bool converged = false;
+    double residualNorm = std::numeric_limits<double>::infinity();
+
+    for (int sweep = 0; sweep < fieldSolveMaxSweeps; ++sweep)
+    {
+        for (Index i = 0; i < nCells; ++i)
+            rhs[i] = G_y[i] - A2_transpose_cellwise[i] * zpsi;
+
+        solveTransportAdjoint(rhs, adjoint_squ, adjoint_lambdas);
+
+        Vector r = G_field;
+        for (Index i = 0; i < nCells; ++i)
+            r -= A1_transpose_cellwise[i] * adjoint_squ[i];
+
+        zpsiPrev = zpsi;
+        fieldModel->solveBTranspose(zpsi, r);
+
+        const Vector dz = zpsi - zpsiPrev;
+        double residual2 = 0.0;
+        for (Index i = 0; i < nCells; ++i)
+            residual2 += (A2_transpose_cellwise[i] * dz).squaredNorm();
+        residualNorm = std::sqrt(residual2);
+
+        if (residualNorm <= fieldSolveTolerance * rhsNorm)
+        {
+            converged = true;
+            break;
+        }
+    }
+
+    // std::format, not std::to_string: the latter is fixed to six decimals, so a
+    // tolerance of 1e-8 prints as "0.000000" and a residual of 3.7e-5 as
+    // "0.000037" -- a message about convergence that cannot show the numbers it
+    // is about.
+    if (!converged)
+        throw std::runtime_error(std::format(
+            "The coupled adjoint solve did not converge in {} sweeps (residual {:g} against "
+            "a tolerance of {:g} times a right-hand side of norm {:g}). Unlike the forward "
+            "Jacobian, an under-converged adjoint returns a wrong gradient with a correct "
+            "objective, so this is an error rather than a warning. Raise FieldSolveMaxSweeps "
+            "or use FieldSolve = exact.",
+            fieldSolveMaxSweeps, residualNorm, fieldSolveTolerance, rhsNorm));
+
+    adjoint_field = zpsi;
 }
 
 void SystemSolver::computeAdjointGradients()
@@ -2124,8 +2392,15 @@ void SystemSolver::computeAdjointGradients()
 
     const std::vector<Position> points =
         superconvergent ? postprocessor->starPoints() : y.getPoints();
-    const GlobalState states =
+    GlobalState states =
         superconvergent ? postprocessor->evalOnStarNodes(y) : y.evalOnNodes();
+
+    // dF/dp is evaluated at the same state, and with the same geometry, as the
+    // residual it differentiates: dSigmaFn_dp on a geometry-dependent case reads
+    // State::geom exactly as SigmaFn does. Without this the adjoint's F_p is the
+    // derivative of a different function from the one the solver converged, and
+    // the symptom is a plausible wrong gradient beside a correct G.
+    evaluateGeometry(y, points, states, jt);
 
     const Index derivK = superconvergent ? k + 1 : k;
 
@@ -2160,6 +2435,15 @@ void SystemSolver::computeAdjointGradients()
             G_p.row(i) = adjointProblem->dGFndp(i, y);
     }
     
+    // The gradient is dG/dp = dG/dp|explicit - z^T dF/dp, and with a field model
+    // attached both halves of z exist. Only z_x appears below, and that is not
+    // an omission: dF/dp splits as ( F_p ; dR/dp ), and dR/dp is identically
+    // zero because a FieldModel has no notion of an adjoint parameter to depend
+    // on -- there is no hook a model author could fill and therefore no term to
+    // drop. The coupling reaches the gradient entirely through z_x, which
+    // solveAdjointState has already solved coupled: the field block changes the
+    // adjoint *state*, not the contraction below.
+    //
     //Index np = adjointProblem->areParametersSpatial() ? np_internal * nCells * (k + 1) + adjointProblem->getNpBoundary() : adjointProblem->getNp();
     for (Index pIndex = 0; pIndex < adjointProblem->getNp(); ++pIndex)
     {
@@ -2298,9 +2582,20 @@ void SystemSolver::computeAdjointGradients()
             {
                 if( adjointProblem->isAdjointIndexInternal( pIndex ) )
                 {
-                    auto dAuxdp = [&](double x)
+                    auto dAuxdp = [&, psi = Vector(y.getField())](double x)
                     {
                         State s = y.eval(x);
+                        // A State built from a DGSoln carries no geometry rows,
+                        // and dAux_dp reads them exactly as the case's own AuxG
+                        // does. evaluateGeometry cannot serve here: this one is
+                        // integrated by ProjectOntoBasis, so it is asked at
+                        // quadrature points rather than at the nodes the batched
+                        // hooks were filled on.
+                        if (fieldModel)
+                        {
+                            s.geom().setZero(nGeom);
+                            fieldModel->Geometry(s.geom(), psi, x, jt);
+                        }
                         Value grad;
                         adjointProblem->dAux_dp(aux, pIndex, grad, s, x);
                         return grad;

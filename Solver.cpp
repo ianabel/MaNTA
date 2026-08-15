@@ -797,26 +797,20 @@ void SystemSolver::destroySundials()
 
 void SystemSolver::runAdjointSolve()
 {
-	// The third of the three "a later task owns this" refusals, beside the ones
-	// in setInitialConditions (restart) and computeAlgebraicTimeDerivatives (the
-	// dG/dt gate). Uniformity is the point: an unguarded hole beside two guarded
-	// ones is worse than either.
+	// This used to refuse a field model outright, because the adjoint matrices
+	// carried neither geometry nor a transpose of the coupling and so would have
+	// returned a silently wrong gradient beside a perfectly good G. Both are now
+	// here: initializeMatricesForAdjointSolve fills geometry before it evaluates
+	// anything and stores A1^T and A2^T beside M^T, and solveAdjointState
+	// eliminates them exactly (FieldSolve = exact) or sweeps to a checked
+	// backward error that *throws* if it is not reached.
 	//
-	// initializeMatricesForAdjointSolve and computeAdjointGradients both build
-	// their GlobalState from y.evalOnNodes()/evalOnStarNodes and hand it to
-	// ComputePhysicsDerivatives without evaluateGeometry, so the *case's* own
-	// dSigmaFn_dq -- not merely a dg hook -- would read index 0 of a zero-length
-	// geometry vector. Filling it would not be enough on its own: the adjoint
-	// operator is the transpose of the forward one block for block, and the
-	// dGeometry/dpsi coupling is not in either yet, so a filled-but-untransposed
-	// adjoint would return a silently wrong gradient with a perfectly good G.
-	// That is the failure mode CLAUDE.md records for this file, and refusing is
-	// the only honest answer until the transposes land.
-	if (fieldModel)
-		throw std::logic_error(
-			"The adjoint solve is not supported with a field model attached: the adjoint "
-			"matrices carry no geometry and no transpose of the field coupling, so the "
-			"gradient would be wrong rather than absent.");
+	// Two limits survive the lifting and are deliberate rather than overlooked.
+	// An objective whose integrand reads State::geom directly loses its dG/dpsi
+	// term, because AdjointProblem reports four state derivatives and geometry
+	// is not among them; and a FieldModel cannot depend on an adjoint parameter
+	// at all, so dR/dp is zero by construction rather than by assumption. Both
+	// are recorded in SystemSolver.hpp beside G_field and in TODO.
 
 	if (solveAdjoint)
 	{

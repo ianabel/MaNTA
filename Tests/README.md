@@ -481,6 +481,36 @@ These are deliberate and tracked, not oversights:
   two lengths. The extra auxiliary variable (`phi_u - u = 0`) is otherwise
   unused.
 
+* **The coupled adjoint is C++-only, and the Python surface cannot reach it.**
+  `Tests/UnitTests/FieldAdjointTests.cpp` covers the field coupling's adjoint end
+  to end -- against a closed-form `dG/dp`, against finite differences, and
+  against the transpose of a finite-differenced coupled Jacobian -- but there is
+  no Python equivalent, and that is a gap in the *bindings* rather than in the
+  tests. `FieldModel` has no pybind11 class, so a Python case cannot define one;
+  the `FieldModel` configuration key names a *registered* model, and no field
+  model is registered anywhere in the tree (both manufactured ones live under
+  `Tests/UnitTests` and are deliberately unregistered). So there is nothing a
+  `python/Tests/test_adjoint.py` fixture could attach. Adding the coupled Python
+  check means first registering a production field model or binding `FieldModel`
+  to Python -- neither of which the adjoint work owns.
+
+  Two limits of the coupled adjoint itself are structural rather than untested,
+  and are recorded in `TODO` and beside `G_field` in `SystemSolver.hpp`: an
+  objective whose integrand reads `State::geom` directly loses its `dG/dpsi`
+  term, because `AdjointProblem` reports four state derivatives and geometry is
+  not among them; and a `FieldModel` cannot depend on an adjoint parameter at
+  all, so `d(field residual)/dp` is zero by construction.
+
+  One defect that fixture found was **not** in the coupling. The adjoint's local
+  matrix stored `+Sq` where the forward Jacobian builds `-Sq` -- the `u` row's
+  `q` column, i.e. `dSources_dq` -- so `initializeMatricesForAdjointSolve` had
+  not been the transpose of `assembleCellMatrix` for any case whose source reads
+  `q`. Every adjoint fixture in the tree has `dSources_dq` identically zero, so
+  `Sq` was the zero matrix and its sign never mattered; the coupled fixture
+  carries `dSources_dq = 0.2` and put the gradient 0.48% out. The `J^T z = g`
+  check is what localised it to the operator rather than to `F_p` or to a state
+  that was not quite steady.
+
 * **`python/Tests/test_reference_solutions.py::test_jax_aux_test` passed and the
   xfail is gone.** It had been `strict=True` xfail since `fdd5ee1`. The
   conclusion the note above reached -- that the C++ `nAux > 0` path was sound

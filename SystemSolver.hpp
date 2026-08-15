@@ -392,7 +392,30 @@ class SystemSolver
 
         void initializeMatricesForAdjointSolve();
 
+        // Solve J^T z = dG/dy at the state the matrices above were built from.
+        // Dispatches on whether a field model is attached, exactly as solveJacEq
+        // does forwards: without one this *is* solveTransportAdjoint.
         void solveAdjointState(Index i);
+
+        // The transpose of solveCoupledJacExact. The block elimination runs the
+        // other way round, so the Schur complement onto psi is
+        //
+        //     ( B^T - A1^T A^-T A2^T ) z_psi = G_psi - A1^T A^-T G_y
+        //     A^T z_x                        = G_y - A2^T z_psi
+        //
+        // which is why FieldModel declares applyBTranspose and solveBTranspose
+        // beside the forward pair: a model that supplied only one direction
+        // cannot be silently accommodated here.
+        //
+        // Costs nField + 1 transposed transport solves, the same as the forward
+        // exact path, and is a verification tool for the same reason.
+        void solveCoupledAdjointExact();
+
+        // The transposed block Gauss-Seidel sweep. Unlike
+        // solveCoupledJacIterative this one THROWS on non-convergence rather
+        // than returning its last iterate: see the definition for why the
+        // asymmetry is the point rather than an inconsistency.
+        void solveCoupledAdjointIterative();
 
         void computeAdjointGradients();
 
@@ -439,6 +462,47 @@ class SystemSolver
         std::vector<Vector> G_y;
         Vector adjoint_lambdas;
         std::vector<Vector> adjoint_squ;
+
+        // The right-hand-side-independent half of the transposed HDG solve:
+        // M^-T CG^T per cell, and the condensed trace operator factorised.
+        //
+        // Hoisted out of solveAdjointState because the coupled paths apply A^-T
+        // repeatedly -- nField + 1 times for the exact Schur complement, once
+        // per sweep for the iterative one -- and neither of these depends on the
+        // right-hand side. Filled by initializeMatricesForAdjointSolve, which is
+        // also the only place MXSolvers holds M^T.
+        std::vector<Matrix> adjoint_SQU_0;
+        EigenGlobalSolver adjoint_K;
+
+        // The coupling blocks as the adjoint needs them: transposed, stored,
+        // and used only from here.
+        //
+        //   A1_transpose_cellwise[i]  (nField, localDOF)  -- A1_cellwise[i]^T
+        //   A2_transpose_cellwise[i]  (localDOF, nField)  -- column f is cell
+        //                             i's [ sigma | q | u | aux ] segment of
+        //                             the A2 row a2[f]
+        //
+        // Materialised rather than transposed at each use so that a test can
+        // zero one of them and require the gradient to go wrong: without that
+        // guard a gradient check passes on an objective that never sees the
+        // coupling. Stored transposed for the same reason M is -- the adjoint
+        // operator *is* the transpose, so keeping the two shapes side by side
+        // is what makes a missing block visible in review.
+        std::vector<Matrix> A1_transpose_cellwise;
+        std::vector<Matrix> A2_transpose_cellwise;
+
+        // The field block of the adjoint state, z_psi, and of the adjoint
+        // right-hand side, dG/dpsi.
+        //
+        // G_field is identically zero and that is a *limit*, not a fact about
+        // the discretisation: AdjointProblem reports dg/du, dg/dq, dg/dsigma and
+        // dg/dphi and has no geometry hook, so an objective whose integrand
+        // reads State::geom directly loses that term. It cannot be detected from
+        // here -- the same standing limit AdjointVectors.cpp records for the
+        // absent dgFn_dscalars -- so it is named here and in TODO rather than
+        // left as an unremarked zero.
+        Vector adjoint_field;
+        Vector G_field;
 
         SUNContext ctx;
         N_Vector *v, *w;
@@ -602,6 +666,31 @@ class SystemSolver
         // field block, so that the transport solve it is fed to cannot mistake
         // it for a right-hand side for psi.
         void scatterA1Column(Index m, N_Vector out) const;
+
+        // Apply A^-T: the transpose of the uncoupled transport operator, by the
+        // same static condensation solveHDGJac performs forwards.
+        //
+        // `rhs` is one vector per cell in the [ sigma | q | u | aux ] ordering
+        // and the trace rows' right-hand side is identically zero. That is a
+        // property of everything that reaches here rather than a simplification:
+        // the objective has no trace dependence (AdjointProblem::dg reports four
+        // blocks, none of them lambda), and neither has A2 -- a field residual
+        // is handed a GlobalState, which has no trace slot at all.
+        // initializeMatricesForAdjointSolve *checks* the second of those rather
+        // than assuming it.
+        //
+        // Needs adjoint_SQU_0 and adjoint_K, so only meaningful after
+        // initializeMatricesForAdjointSolve.
+        void solveTransportAdjoint(std::vector<Vector> const &rhs,
+                                   std::vector<Vector> &squOut, Vector &lambdaOut);
+
+        // Fill adjoint_SQU_0 and factorise adjoint_K -- the part of the
+        // transposed solve that does not depend on the right-hand side.
+        void factoriseAdjointTrace();
+
+        // Transpose A1 and A2 into A1_transpose_cellwise / A2_transpose_cellwise,
+        // and refuse an A2 row with anything outside the cellwise blocks.
+        void transposeFieldCoupling();
 
         // work's cellwise [sigma | q | u | aux] segment gets A1_cellwise[i]*dpsi
         // subtracted, cell by cell -- the A1 dpsi term of the block

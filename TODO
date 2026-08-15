@@ -105,33 +105,31 @@ reason it was not made:
     for each differential scalar. Two of the three fixtures there would have to
     be checked against it first.
 
-  - AutodiffTransportSystem::dSigmaFn_dp, dSources_dp and MMS_Source
-    (PhysicsCases/AutodiffTransportSystem.cpp) still evaluate the plain,
-    geometry-blind Flux/Source overloads directly, while every other hook --
-    SigmaFn, Sources, AuxG, and every dSigmaFn_.../dSources_.../dAuxG_...
-    derivative -- now goes exclusively through the geometry-aware overloads
-    added for the field-model coupling. The two sets agree today only because
-    the plain overload is still what every case's Flux/Source body actually
-    is: nothing yet gives the geometry-aware overload content that differs
-    from it. That stops being true the moment a case's real physics genuinely
-    depends on geometry, because the plain overload is the mandatory pure
-    virtual -- such a case is *forced* to write some body for it just to
-    compile, and dSigmaFn_dp/dSources_dp will silently differentiate that
-    fictional, geometry-blind stand-in instead of the real flux/source, while
-    MMS_Source will manufacture a source against the wrong equation entirely.
-    Same failure shape as a missing adjoint block: a perfectly plausible G (or
-    a manufactured solution that still converges, at the right rate, to the
-    wrong function) with nothing pointing at why.
+  - AutodiffTransportSystem::MMS_Source (PhysicsCases/AutodiffTransportSystem.cpp)
+    still evaluates the plain, geometry-blind Flux/Source overloads directly,
+    while every other hook -- SigmaFn, Sources, AuxG, and every
+    dSigmaFn_.../dSources_.../dAuxG_... derivative -- goes exclusively through
+    the geometry-aware overloads added for the field-model coupling. The two
+    sets agree today only because the plain overload is still what every case's
+    Flux/Source body actually is: nothing yet gives the geometry-aware overload
+    content that differs from it. That stops being true the moment a case's real
+    physics genuinely depends on geometry, because the plain overload is the
+    mandatory pure virtual -- such a case is *forced* to write some body for it
+    just to compile, and MMS_Source will manufacture a source against that
+    fictional, geometry-blind stand-in rather than against the equation the
+    solver integrates. A manufactured solution that still converges, at the
+    right rate, to the wrong function, with nothing pointing at why.
 
-    Left for Task 10, which owns the adjoint's geometry coupling and is the
-    first place a case combining dSigmaFn_dp/dSources_dp (or useMMS) with a
-    real geometry dependence would actually appear. The fix in each case is to
-    build `geom` from `s.geom()` (dSigmaFn_dp/dSources_dp) or thread a
-    nonzero-width geom through the local `State` and every direct Flux/Source
-    call (MMS_Source), the way SigmaFn/Sources/every other hook in that file
-    already do, and then write the case that would have caught the old
-    behaviour being wrong before changing it.
-
+    dSigmaFn_dp and dSources_dp carried the same defect and are fixed: they
+    feed F_p in computeAdjointGradients, so there it was a wrong gradient beside
+    a perfectly good G, which is the adjoint's own failure mode and belonged
+    with the transposes. MMS_Source is not on that path and is not the same
+    two-line change: it is handed (i, x, t) and nothing else, so there is no psi
+    to evaluate geometry at, and AutodiffTransportSystem holds no field model
+    and no route to the solver's. Threading one in is a change to the
+    manufactured-solution facility, which the coupled order study owns. Write
+    the manufactured coupled case that would catch the old behaviour being wrong
+    before changing it.
 
   - FieldModel::FieldResidual receives no `states_dot`, so a field row cannot
     depend on the transport time derivatives -- and FieldResidualPrime's `dRdot`
@@ -158,6 +156,62 @@ reason it was not made:
     against a closed form first: the same "write the case that would catch it
     being wrong before changing it" rule the autodiff-sigma entry above records.
 
+
+  - The coupled adjoint has two structurally missing terms, both zero today by
+    construction rather than by assumption, and both named in code beside the
+    zero (SystemSolver.hpp, at G_field).
+
+    dG/dpsi. AdjointProblem reports dg/du, dg/dq, dg/dsigma and dg/dphi; there is
+    no dg/dgeometry. So the field row of the adjoint right-hand side, G_field, is
+    identically zero, and an objective whose integrand reads State::geom directly
+    loses that contribution -- a wrong gradient beside a good G. It is not
+    detectable from the solver: geometry is filled on the states the objective is
+    evaluated on (it has to be, or a *physics* hook reads a zero-length vector),
+    so a g that reads it gets a correct value and an incomplete derivative. The
+    same standing limit AdjointVectors.cpp records for the absent dgFn_dscalars,
+    and the fix is the same shape: a dg/dgeometry hook with a zero default, plus
+    a Python trampoline for it. Wants an objective that genuinely depends on
+    geometry, checked against a closed form, written first.
+
+    d(field residual)/dp. FieldModel has no notion of an adjoint parameter, so
+    dR/dp is zero because there is no hook a model author could fill -- not
+    because the term is small. A coil current or a boundary flux that appeared in
+    both the field residual and the parameter vector would need one, and
+    computeAdjointGradients would then contract it with adjoint_field, which the
+    coupled solve already computes and currently uses only inside the elimination.
+
+  - solveCoupledJacIterative returns its last iterate when it does not converge,
+    and that is safe only while the sweep is converging *slowly*. It is not safe
+    when the sweep is not converging at all, and at least one fixture is in that
+    regime.
+
+    FieldAdjointTests' RichGeometricDiffusion -- geometry in the flux, the source
+    and the aux constraint, against an A2 row reading all four slots -- cannot be
+    integrated on FieldSolve = iterative: IDA reduces h to the floor over five
+    attempts at the first step, reporting Newton update norms of order 1e10 each
+    time, and gives up with "IDASolve could not complete". The same run on
+    FieldSolve = exact completes and reaches the finite-difference gradient to
+    1e-10, which is what says the fault is in the sweep and not in the physics.
+    The inference from those update norms is that the last iterate handed back is
+    itself of order 1e10, i.e. the sweep is diverging; the plausible mechanism is
+    that at large cj the transport inverse damps only the u direction, so the loop
+    gain through sigma, q and phi -- the slots this fixture's A2 row reads and no
+    other fixture's does -- exceeds one. Not measured directly.
+
+    Loud rather than silent, so not urgent. But the diagnosis points nowhere near
+    the sweep, and the fixture that exposed it had to be written for the adjoint.
+    The cheap mitigation is to keep the best iterate rather than the last, judged
+    by the same closed-form residual the adjoint sweep already computes
+    (A1 (dpsi^{n+1} - dpsi^n) in the transport rows, zero in the field rows); the
+    real one is a Krylov acceleration or the block-triangular preconditioner
+    Serino et al. use. Belongs with the iterative solve, not with the adjoint.
+
+    Separately and much more mildly, ManufacturedFieldVector's five-unknown block
+    does not reach FieldSolveTolerance in the default twenty sweeps -- it is
+    converging, just not fast enough -- which the adjoint reports as a refusal.
+    That is the design, not a defect, and
+    a_sweep_that_needs_more_than_the_default_cap_refuses_at_the_default_cap pins
+    it.
 
 Superconvergence follow-ons (see Tests/README.md for what is already verified):
 

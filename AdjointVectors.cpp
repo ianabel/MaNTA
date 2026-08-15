@@ -6,6 +6,9 @@
 #include <Eigen/Core>
 
 #include "Types.hpp"
+// SystemSolver.hpp forward-declares FieldModel and holds it by shared_ptr, so
+// the definition has to come from here for dGdaux_Vec's geometry fill below.
+#include "FieldModel.hpp"
 #include "SystemSolver.hpp"
 
 // dG/dZ for one cell: the integration weights, elementwise.
@@ -200,6 +203,19 @@ void SystemSolver::dGdaux_Vec(Index gIndex, Vector &Vec, DGSoln const &Y, Index 
             double y_minus = I.x_l + (1.0 - x_vals[i]) * (I.h() / 2.0);
 
             State Y_plus = Y.eval(y_plus), Y_minus = Y.eval(y_minus);
+
+            // A State built from a DGSoln has no geometry rows, and dgFn_dphi
+            // reads them exactly as a physics hook does. Filled here rather than
+            // by evaluateGeometry because this integrates by Gauss quadrature
+            // and so asks off the nodes the batched fill covers.
+            if (fieldModel)
+            {
+                const Vector psi = Y.getField();
+                for (State *s : {&Y_plus, &Y_minus})
+                    s->geom().setZero(nGeom);
+                fieldModel->Geometry(Y_plus.geom(), psi, y_plus, jt);
+                fieldModel->Geometry(Y_minus.geom(), psi, y_minus, jt);
+            }
 
             (adjointProblem->dgFn_dphi)(gIndex, dX_dZ_vals1, Y_plus, y_plus);
             (adjointProblem->dgFn_dphi)(gIndex, dX_dZ_vals2, Y_minus, y_minus);
