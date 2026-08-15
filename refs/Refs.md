@@ -52,6 +52,33 @@ implicit time step. These are the established ways of coping.
 | Computer Physics Communications 214 (2017) 1–5 | https://doi.org/10.1016/j.cpc.2016.12.018 | FASTRAN: 4th-order Interpolated Differential Operator scheme plus a root-finding nonlinear iteration; solves for the gradient as an independent unknown, as MaNTA's `q` is | ParkEfficientSolver.pdf |
 
 
+## Reaching a steady state without integrating to one
+
+The theory behind `SteadyState.cpp`. That file attributes pseudo-transient
+continuation to "Kelley & Keyes", which is the 1998 paper below — and the useful
+thing to know is that **the 1998 result does not cover MaNTA**. Its global
+convergence proof is for `u' = -V^{-1} F(u)`, an ODE or a method-of-lines
+semidiscretisation of one. MaNTA is an index-1 DAE: `sigma`, `q`, `phi` and
+`lambda` are algebraic, which is the whole reason IDA is the integrator. The 2003
+paper is the extension of that result to index-1 DAEs, so it is the one that
+actually applies, and it is the house reference for the mode.
+
+Two further things in it are load-bearing here. Its eq. (1.3) is the SER schedule
+`SteadyState.cpp:15` implements, `dt <- dt ||F_prev||/||F_now||`, which it
+attributes to Mulder & van Leer (its ref. [23], J. Comput. Phys. 59 (1985)
+232–246). And its §1 advocates **mesh sequencing** — solve on a coarse mesh,
+interpolate to the next, run Ψtc on each level — as the primary strategy for a
+highly resolved nonlinear problem, calling that combination "particularly
+effective". `FEATURES.md`'s first entry proposes adaptive mesh refinement against
+the PTC solve specifically, so this is prior art for that entry and not only for
+the steady-state mode; its ref. [29] (Smooke & Mattheij, Appl. Numer. Math. 1
+(1985) 463–487) is the mesh-sequencing citation to follow next.
+
+| Reference | URL (doi or arxiv) | Short Description | File Name |
+| --- | --- | --- | --- |
+| SIAM J. Sci. Comput. 25 (2003) 553–569 | https://doi.org/10.1137/S106482750241044X | Coffey, Kelley & Keyes, pseudo-transient continuation for **index-1 DAEs** — global convergence where the 1998 result assumes an ODE, so this is the one covering MaNTA's formulation. Also the source of the SER rule the code uses and of the mesh-sequencing argument. Paywalled, but free as CRSC tech report TR02-18 from crsc.ncsu.edu | PseudoTransientDAE.pdf |
+| SIAM J. Numer. Anal. 35 (1998) 508–523 | https://doi.org/10.1137/S0036142996304796 | Kelley & Keyes, the original convergence analysis of Ψtc, and what `SteadyState.cpp:10` names. Reference [16] of the above, which reviews its results in §1.1 and states its hypotheses — those are ODE ones, so read it alongside the 2003 paper rather than instead of it. Paywalled | PseudoTransientConvergence.pdf |
+
 ## Coupling to a magnetic field solver
 
 For `FEATURES.md`'s third item. A self-consistent field is, algorithmically, a
