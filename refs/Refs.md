@@ -79,6 +79,42 @@ the steady-state mode; its ref. [29] (Smooke & Mattheij, Appl. Numer. Math. 1
 | SIAM J. Sci. Comput. 25 (2003) 553–569 | https://doi.org/10.1137/S106482750241044X | Coffey, Kelley & Keyes, pseudo-transient continuation for **index-1 DAEs** — global convergence where the 1998 result assumes an ODE, so this is the one covering MaNTA's formulation. Also the source of the SER rule the code uses and of the mesh-sequencing argument. Paywalled, but free as CRSC tech report TR02-18 from crsc.ncsu.edu | PseudoTransientDAE.pdf |
 | SIAM J. Numer. Anal. 35 (1998) 508–523 | https://doi.org/10.1137/S0036142996304796 | Kelley & Keyes, the original convergence analysis of Ψtc, and what `SteadyState.cpp:10` names. Reference [16] of the above, which reviews its results in §1.1 and states its hypotheses — those are ODE ones, so read it alongside the 2003 paper rather than instead of it. Paywalled | PseudoTransientConvergence.pdf |
 
+## Mesh adaptivity
+
+For `FEATURES.md`'s first item. The section above has one half of the prior art —
+Ψtc run on each level of a mesh-sequenced solve — and this is the other: an error
+indicator that says *where* to refine.
+
+**The reason to read Capasso first is that MaNTA already computes what its
+indicator is made of.** The strategy is built on the elementwise difference
+between the solution at order `p` and the post-processed solution at order
+`p + 1`, with the latter taken as the reference `u_ref` in `||u_ref - u_h||` over
+each element. That post-processed field is `u*`, and `Postprocessor::computeUStar`
+already produces it on *every* run with `k >= 1` — `SystemSolver.cpp:219` builds
+the postprocessor regardless of the `Superconvergent` flag, and `NetCDFIO.cpp:174`
+writes `u_star` into the output. So the expensive ingredient of the indicator is
+present and tested; what is missing is the mesh machinery that would act on it.
+
+Two caveats. It is a 2D unstructured code and MaNTA is 1D on an interval, so the
+indicator transfers and the remeshing does not — refining a 1-D `Grid` is a much
+smaller problem than theirs, and none of their geometry handling applies.
+
+The second is sharper, and is the interpolatory question the HDG section is
+already about. The indicator's worth rests on `u*` being a genuinely better
+reference than `u_h`, which is the `k+2` superconvergence the paper cites. MaNTA
+builds `u*` by the same local Neumann problem they do (`Postprocessing.hpp`, paper
+I eqs. (6)–(7)), but **paper I exists because the plain interpolatory HDG scheme
+loses that superconvergence**, and recovering it is exactly what
+`Superconvergent = true` switches on. So with the flag off, `u*` is still computed
+and still written out, and `||u* - u_h||` is still a reasonable smoothness
+sensor — but it is not the `p`-against-`p+1` gap the paper's error analysis
+assumes. Anything calibrated rather than used as a relative ranking should be
+built on a superconvergent run.
+
+| Reference | URL (doi or arxiv) | Short Description | File Name |
+| --- | --- | --- | --- |
+| Int. J. Numer. Methods Eng. 126 (2025) e70107 | https://doi.org/10.1002/nme.70107 | Capasso, Kudashev, Schwander & Serre, h-adaptivity for HDG applied to **fluid transport in a tokamak** — MaNTA's problem class, in SolEdge-HDG's 2D fluid-drift Braginskii setting. The indicator is the order-`p` against post-processed order-`p+1` difference, i.e. `u*`, which MaNTA already builds; it drives coarsening as well as refinement, and their §1 surveys the alternatives (residual-based indicators, a jump sensor on the trace). Open access, CC-BY | HDG-hAdaptivity.pdf |
+
 ## Coupling to a magnetic field solver
 
 For `FEATURES.md`'s third item. A self-consistent field is, algorithmically, a
