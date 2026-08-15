@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <numbers>
 #include <string>
@@ -454,13 +455,20 @@ N_Vector randomRHS(SystemSolver &sys)
     return g;
 }
 
-/// ||a - b|| / max(||a||, 1) -- for comparing two solves against each other
-/// rather than against a finite-differenced Jacobian.
+/// ||a - b|| / ||a||, for comparing two solves against each other rather than
+/// against a finite-differenced Jacobian.
+///
+/// The floor is the smallest positive double, there only to keep a genuinely
+/// zero `a` from dividing by zero -- not `max(.., 1.0)`. A fixed floor of 1
+/// is the same shape of bug the iterative solve's own stopping criterion had
+/// (Task 9 review, finding 1): it silently turns a *relative* comparison into
+/// an *absolute* one for any `a` smaller than the floor, which is exactly the
+/// small-correction regime this solve exists to be checked in.
 double relativeDifference(N_Vector a, N_Vector b)
 {
     const Vector va = fdjac::toVector(a);
     const Vector vb = fdjac::toVector(b);
-    return (va - vb).norm() / std::max(va.norm(), 1.0);
+    return (va - vb).norm() / std::max(va.norm(), std::numeric_limits<double>::min());
 }
 
 // A local copy of CoupledResidualTests.cpp's manufactured coupled problem --
@@ -499,6 +507,18 @@ public:
     void dSources_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
     void dSources_dq(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
     void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+
+    // SigmaFn reads geometry (s.geom(0) * s.q(0)), so this case has a nonzero
+    // A1 block -- without this override d(sigma_hat)/dg is the TransportSystem
+    // default of zero, which makes A1_cellwise identically zero for this
+    // fixture and silently turns the iterative solve's end-to-end run into one
+    // with no coupling to get wrong. d(g q)/dg = q; Sources and AuxG have no
+    // geometry dependence, so their _dGeometry hooks stay at the base class's
+    // zero default.
+    void dSigmaFn_dGeometry(Index, VectorRef v, const State &s, Position, Time) override
+    {
+        v[0] = s.q(0);
+    }
 
     Value InitialValue(Index, Position x) const override { return manufacturedU(x, 0.0); }
     Value InitialDerivative(Index, Position x) const override { return pi * std::cos(pi * x); }
@@ -793,6 +813,41 @@ BOOST_AUTO_TEST_CASE(the_iterative_solve_agrees_for_a_multi_dof_block_too)
 
     const double diff = relativeDifference(exact, iterative);
     BOOST_TEST_MESSAGE("5-DOF field, iterative vs exact: relative difference = " << diff);
+    BOOST_CHECK_SMALL(diff, 1e-6);
+
+    N_VDestroy(g);
+    N_VDestroy(exact);
+    N_VDestroy(iterative);
+}
+
+BOOST_AUTO_TEST_CASE(the_iterative_solve_agrees_at_the_scale_a_newton_step_lives_at)
+{
+    // The two tests above use a RHS whose converged |dpsi| happens to land
+    // above 1, so `tol * max(1, |dpsi|)` and `tol * |dpsi|` coincide there and
+    // neither test would have caught Task 9 review finding 1: the original
+    // stopping criterion used `max(1, |dpsi|)` rather than `|dpsi|` alone, which
+    // is an *absolute* magnitude test of `FieldSolveTolerance` whenever the
+    // converged |dpsi| is below 1 -- exactly the regime a real Newton
+    // correction lives in, where it declared convergence after the raw first
+    // iterate regardless of how wrong that iterate was (measured at 38.6%
+    // relative error on this same fixture before the fix). Scaling the RHS down
+    // so |dpsi| is far below 1 is what exercises that regime; this is the
+    // guard against reintroducing it.
+    auto solver = singleDofFixture(/*nCells=*/6, /*k=*/2);
+    N_Vector g = randomRHS(*solver);
+    N_VScale(1e-9, g, g);
+
+    N_Vector exact = N_VClone(g), iterative = N_VClone(g);
+    solver->solveCoupledJacExact(g, exact);
+    solver->solveCoupledJacIterative(g, iterative);
+
+    // relativeDifference's floor is the smallest positive double, not 1 -- see
+    // its own comment -- so this is a genuine relative check even down here.
+    BOOST_REQUIRE_GT(fdjac::toVector(exact).norm(), 0.0);
+    const double diff = relativeDifference(exact, iterative);
+    BOOST_TEST_MESSAGE("single-DOF field, RHS scaled by 1e-9, iterative vs exact: "
+                       "relative difference = "
+                       << diff);
     BOOST_CHECK_SMALL(diff, 1e-6);
 
     N_VDestroy(g);

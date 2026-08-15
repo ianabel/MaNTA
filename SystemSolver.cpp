@@ -1410,7 +1410,21 @@ void SystemSolver::solveCoupledJacIterative(N_Vector res_g, N_Vector delY)
         dpsiPrev = dpsi;
         fieldModel->solveB(dpsi, r2);
 
-        if ((dpsi - dpsiPrev).norm() <= fieldSolveTolerance * std::max(1.0, dpsi.norm()))
+        // A relative test, not `tol * max(1, |dpsi|)`. That clamp was reviewed
+        // out: on sweep 0, dpsiPrev is the Vector::Zero() above it started from,
+        // so the test would be |dpsi_1| <= tol * max(1, |dpsi_1|), which is an
+        // *absolute* magnitude test of 1e-8 whenever |dpsi_1| < 1 -- not a
+        // convergence test at all, and the regime it fires in by construction is
+        // exactly the small-correction regime Newton lives in. A linear solve
+        // is not homogeneous under that criterion: solve(c*g) != c*solve(g) for
+        // small c, because the absolute floor stops the sweep after the very
+        // first iterate regardless of how far from converged it is.
+        //
+        // dpsi.isZero() is the explicit degenerate case the plain relative test
+        // cannot handle on its own (0/0), rather than a clamp reintroducing the
+        // same bug: it only fires when the sweep has *exactly* nothing left to
+        // do, not merely something small.
+        if (dpsi.isZero() || (dpsi - dpsiPrev).norm() <= fieldSolveTolerance * dpsi.norm())
             break;
     }
 

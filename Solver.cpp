@@ -221,9 +221,9 @@ void SystemSolver::initialize()
 			logmsg<LOG_LEVEL::WARNING>(
 				"FieldSolve = iterative: block Gauss-Seidel between the transport and field "
 				"blocks, one transport solve per sweep against exact's {} per Jacobian solve. "
-				"Converges to FieldSolveTolerance = {} in at most FieldSolveMaxSweeps = {} "
-				"sweeps, and returns its last iterate rather than failing otherwise -- costing "
-				"Newton speed, not correctness.",
+				"Stops once the relative change in psi is below FieldSolveTolerance = {}, up to "
+				"FieldSolveMaxSweeps = {} sweeps -- and returns its last iterate rather than "
+				"failing if that cap is reached first, costing Newton speed, not correctness.",
 				nField + 1, fieldSolveTolerance, fieldSolveMaxSweeps);
 	}
 

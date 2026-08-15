@@ -186,10 +186,13 @@ class SystemSolver
 
         // Block Gauss-Seidel between the transport and field blocks: one
         // transport solve and one field solve per sweep, against the exact
-        // path's nField + 1 transport solves. The production path -- safe
-        // because the Jacobian is never assembled, so an under-converged sweep
-        // costs Newton iterations rather than correctness. Returns its last
-        // iterate on non-convergence rather than throwing; see the definition.
+        // path's nField + 1 transport solves. Stops once the relative change in
+        // psi between sweeps is below FieldSolveTolerance, up to
+        // FieldSolveMaxSweeps -- neither is a guarantee the sweep converges in
+        // that many steps. The production path -- safe because the Jacobian is
+        // never assembled, so an under-converged sweep costs Newton iterations
+        // rather than correctness. Returns its last iterate when the cap is
+        // reached first, rather than throwing; see the definition.
         void solveCoupledJacIterative(N_Vector g, N_Vector delY);
 
         // Solves the HDG part of Jy = g
