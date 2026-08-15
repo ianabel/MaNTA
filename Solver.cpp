@@ -5,6 +5,7 @@
 #include <sunlinsol/sunlinsol_band.h> /* access to band SUNLinearSolver       */
 #include <sundials/sundials_types.h>  /* definition of type sunrealtype          */
 #include <toml.hpp>
+#include <exception>
 #include <fstream>
 #include <print>
 #include <memory>
@@ -674,10 +675,44 @@ void SystemSolver::integrate(double tFinal)
 	std::println("Total Number of Jacobian Computations :{}", njacevals);
 	}
 
+	// The adjoint solve is allowed to fail, and its failure must not take the
+	// forward run's output with it.
+	//
+	// The coupled adjoint sweep throws on non-convergence rather than returning
+	// its last iterate -- deliberately, because an under-converged adjoint is a
+	// wrong gradient beside a correct objective. But this call sits *before*
+	// finaliseDiagnostics, nc_output.Close() and WriteRestartFile, and
+	// runSolver's catch(...) rethrows, so an unguarded throw here destroyed the
+	// netCDF and the restart file of a run that had integrated perfectly. The
+	// gradient is the optional half of the run; the solution is not, and losing
+	// hours of transport solve because a Schur sweep would not converge is a
+	// worse failure than the one being reported.
+	//
+	// So: log it where it happened, in order, then finish the output, then
+	// rethrow. The caller still learns the gradient was refused and why -- twice,
+	// which is the right number here, since the log line is what survives into a
+	// batch run's transcript and the exception is what a driver can catch.
+	//
+	// Held as an exception_ptr rather than by moving the call after the output
+	// block, because setJacEvalY below must still run after the adjoint solve:
+	// the gradients are defined at the state the adjoint matrices were built
+	// from. See its own comment.
+	std::exception_ptr adjointFailure;
 	if (solveAdjoint)
 	{
-		runAdjointSolve();
-		// WriteAdjoints();
+		try
+		{
+			runAdjointSolve();
+			// WriteAdjoints();
+		}
+		catch (std::exception const &e)
+		{
+			adjointFailure = std::current_exception();
+			logmsg<LOG_LEVEL::ERROR>(
+				"The adjoint solve failed; the gradients are unavailable. The forward "
+				"solution and its output files are unaffected and are being written now.\n  {}",
+				e.what());
+		}
 	}
 
 	if (writeOutput)
@@ -708,6 +743,13 @@ void SystemSolver::integrate(double tFinal)
 
 	if (writeOutput)
 		nc_output.Close();
+
+	// Now that everything is on disk. G_p holds whatever the failed solve left
+	// there, which is why this rethrows rather than returning quietly: a caller
+	// that went on to read getAdjointGradients() would get a plausible matrix
+	// that is not the gradient of anything.
+	if (adjointFailure)
+		std::rethrow_exception(adjointFailure);
 }
 
 void SystemSolver::destroySundials()

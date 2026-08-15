@@ -31,6 +31,7 @@
 #include "../../Types.hpp"
 
 #include <cmath>
+#include <filesystem>
 #include <memory>
 #include <numbers>
 #include <string>
@@ -97,6 +98,24 @@ Vector exactGradient(double kappa, double s0)
     return g;
 }
 
+/// The gradient of the *same* objective with psi frozen at its fixed-point
+/// value, i.e. the answer a zero A1 or A2 gives:
+///
+///     G_frozen(p) = (s0/kappa) ( 1/12 + psi/24 ),   psi held fixed
+///
+/// Exactly 2/3 of exactGradient in both components at (KAPPA0, S0_0). This is
+/// what the vacuity guard measures against: "the gradient moved" is a much
+/// weaker statement than "the gradient moved to precisely the value dropping the
+/// coupling predicts".
+Vector frozenPsiGradient(double kappa, double s0)
+{
+    const double c = 1.0 / 12.0 + exactPsi(kappa, s0) / 24.0;
+    Vector g(NP);
+    g(P_KAPPA) = -s0 * c / (kappa * kappa);
+    g(P_S0) = c / kappa;
+    return g;
+}
+
 /// sigma_hat = kappa q,  S = s0 g. Geometry enters the source alone, which is
 /// what keeps the exact solution polynomial: a geometry-dependent diffusivity
 /// would make it a quadrature of 1/g and the closed form would go.
@@ -160,6 +179,77 @@ public:
     }
     /// Zero rather than ManufacturedField's (2/pi): u starts at zero here, and a
     /// psi inconsistent with it is only work for IDACalcIC.
+    void InitialFieldValue(VectorRef out) override { out(0) = 0.0; }
+};
+
+/// The same constraint made *differential*:
+///
+///     R = dpsi/dt + psi - Int u dx
+///
+/// so dRdpsi = 1 and dRddpsidt = 1, the steady state is the same fixed point as
+/// LinearGeometryField's, and the closed-form G and dG/dp above apply unchanged.
+/// A controlled comparison, not a second problem.
+///
+/// This exists for one line of the solver. initializeMatricesForAdjointSolve
+/// re-assembles the field coupling at **alpha = 0** rather than reusing the
+/// forward solve's blocks, because the M it builds beside them omits
+/// assembleCellMatrix's alpha-weighted mass term and so is the *steady*
+/// Jacobian. B = dRdpsi + alpha dRddpsidt is where that bites: for an algebraic
+/// DOF dRddpsidt is zero and alpha is multiplied by nothing, so the choice is
+/// unobservable -- and every other field model in the tree, including every one
+/// this file's other tests use, is algebraic. Passing IDA's last cj instead of
+/// zero leaves the whole suite green and puts this fixture's gradient 33% out,
+/// beside a G correct to seven figures. Which is the failure this file exists to
+/// prevent, sitting on the subtlest decision in the code it tests.
+class DifferentialLinearGeometryField : public FieldModel
+{
+public:
+    DifferentialLinearGeometryField() : FieldModel(buildSpec()) {}
+
+    static FieldModelSpec buildSpec()
+    {
+        FieldModelSpec s;
+        s.dofs = {{"psi", "a differential manufactured field unknown", "1",
+                   /* differential */ true}};
+        s.geometry = {{"g", "metric factor multiplying the source", "1"}};
+        s.label = "x";
+        return s;
+    }
+
+    void FieldResidual(VectorRef out, Vector const &psi, Vector const &dpsidt,
+                       GlobalState const &states, std::vector<Position> const &,
+                       Vector const &weights, Time) override
+    {
+        double integral = 0.0;
+        for (Index j = 0; j < weights.size(); ++j)
+            integral += weights(j) * states[j].u(0);
+        out(0) = dpsidt(0) + psi(0) - integral;
+    }
+
+    void Geometry(VectorRef out, Vector const &psi, Position x, Time) override
+    {
+        out(0) = 1.0 + psi(0) * x;
+    }
+    void dGeometry_dpsi(MatrixRef out, Vector const &, Position x, Time) override
+    {
+        out(0, 0) = x;
+    }
+
+    void FieldResidualPrime(GlobalStateMatrix &dR, GlobalStateMatrix &, MatrixRef dRdpsi,
+                            MatrixRef dRddpsidt, Vector const &, Vector const &,
+                            GlobalState const &, std::vector<Position> const &,
+                            Vector const &weights, Time) override
+    {
+        dRdpsi(0, 0) = 1.0;
+        // The block that makes alpha observable, and the one initialize()
+        // requires a differential DOF to have.
+        dRddpsidt(0, 0) = 1.0;
+        dR[0].Variable().row(0) = -weights.transpose();
+    }
+
+    /// Consistent with u = 0 at t = 0: dpsi/dt = -psi + Int u dx is then zero, so
+    /// IDACalcIC -- which holds a differential *value* fixed -- has nothing to
+    /// fight.
     void InitialFieldValue(VectorRef out) override { out(0) = 0.0; }
 };
 
@@ -457,7 +547,7 @@ public:
 AdjointStateFixture makeAdjointStateFixture(std::unique_ptr<TransportSystem> problem,
                                             std::unique_ptr<AdjointProblem> adjoint,
                                             std::shared_ptr<FieldModel> field, Index nCells,
-                                            Index k)
+                                            Index k, bool superconvergent = false)
 {
     AdjointStateFixture h;
     h.problem = std::move(problem);
@@ -467,6 +557,7 @@ AdjointStateFixture makeAdjointStateFixture(std::unique_ptr<TransportSystem> pro
     h.sys = std::make_unique<SystemSolver>(*h.grid, k, h.problem.get());
     h.sys->setTau(0.75);
     h.sys->setInitialTime(0.0);
+    h.sys->setSuperconvergent(superconvergent);
     h.sys->setAdjointProblem(h.adjoint.get());
     h.sys->setFieldModel(h.field);
     h.sys->resetCoeffs();
@@ -640,6 +731,19 @@ AdjointRun multiDofRun(Vector const &p, Index nCells, Index k, std::string const
                     nCells, k, stem, mode);
 }
 
+/// The closed-form problem again, with the field DOF declared *differential*.
+/// Same fixed point, same closed-form G and dG/dp; the only thing that changes is
+/// that B = dRdpsi + alpha dRddpsidt now depends on alpha, which is what makes
+/// initializeMatricesForAdjointSolve's choice of alpha = 0 observable at all.
+AdjointRun differentialRun(Vector const &p, Index nCells, Index k, std::string const &stem,
+                           SystemSolver::FieldSolveMode mode =
+                               SystemSolver::FieldSolveMode::Iterative)
+{
+    return buildRun(std::make_unique<ClosedFormCoupledDiffusion>(p),
+                    std::make_unique<ClosedFormAdjoint>(),
+                    std::make_shared<DifferentialLinearGeometryField>(), nCells, k, stem, mode);
+}
+
 using RunFactory = AdjointRun (*)(Vector const &, Index, Index, std::string const &);
 
 AdjointRun closedFormFactory(Vector const &p, Index nCells, Index k, std::string const &stem)
@@ -650,11 +754,16 @@ AdjointRun richFactory(Vector const &p, Index nCells, Index k, std::string const
 {
     return richRun(p, nCells, k, stem);
 }
+AdjointRun differentialFactory(Vector const &p, Index nCells, Index k, std::string const &stem)
+{
+    return differentialRun(p, nCells, k, stem);
+}
 
 /// Central differences of the objective, computed by re-running the solver.
 /// Nothing about the adjoint is reused.
 Vector finiteDifferenceGradient(RunFactory factory, Vector const &p0, Index nCells, Index k,
-                                std::string const &stem, double hRel = 1e-5)
+                                std::string const &stem, double hRel = 1e-5,
+                                double tFinal = T_FINAL)
 {
     Vector fd(NP);
     for (Index i = 0; i < NP; ++i)
@@ -665,9 +774,9 @@ Vector finiteDifferenceGradient(RunFactory factory, Vector const &p0, Index nCel
         minus(i) -= h;
 
         AdjointRun a = factory(plus, nCells, k, stem + "_p" + std::to_string(i));
-        integrateQuietly(a);
+        integrateQuietly(a, tFinal);
         AdjointRun b = factory(minus, nCells, k, stem + "_m" + std::to_string(i));
-        integrateQuietly(b);
+        integrateQuietly(b, tFinal);
 
         fd(i) = (a.objective() - b.objective()) / (2.0 * h);
     }
@@ -754,12 +863,7 @@ BOOST_AUTO_TEST_CASE(the_uncoupled_gradient_is_a_third_wrong_here)
     //
     // and at these parameters that is 2/3 of the true derivative in both
     // components.
-    const double psi = exactPsi(KAPPA0, S0_0);
-    const double c = 1.0 / 12.0 + psi / 24.0;
-    Vector frozen(NP);
-    frozen(P_KAPPA) = -S0_0 * c / (KAPPA0 * KAPPA0);
-    frozen(P_S0) = c / KAPPA0;
-
+    const Vector frozen = frozenPsiGradient(KAPPA0, S0_0);
     const Vector truth = exactGradient(KAPPA0, S0_0);
     BOOST_TEST_MESSAGE("frozen-psi gradient " << frozen.transpose() << " against the true "
                                               << truth.transpose() << ": relative error "
@@ -783,6 +887,9 @@ BOOST_AUTO_TEST_CASE(dropping_a_transposed_coupling_block_makes_the_gradient_wro
     const Vector good = run.gradient();
     BOOST_REQUIRE(relativeError(good, exactGradient(KAPPA0, S0_0)) < 1e-7);
 
+    // What dropping the coupling *should* give, in closed form.
+    const Vector frozen = frozenPsiGradient(KAPPA0, S0_0);
+
     // ---- A1^T
     for (Matrix &block : run->A1_transpose_cellwise)
     {
@@ -793,8 +900,15 @@ BOOST_AUTO_TEST_CASE(dropping_a_transposed_coupling_block_makes_the_gradient_wro
     run->computeAdjointGradients();
     const Vector noA1 = run.gradient();
     BOOST_TEST_MESSAGE("with A1^T zeroed: " << noA1.transpose() << " against " << good.transpose()
-                                            << ", relative error " << relativeError(noA1, good));
+                                            << ", relative error " << relativeError(noA1, good)
+                                            << "; against the frozen-psi closed form "
+                                            << relativeError(noA1, frozen));
     BOOST_TEST(relativeError(noA1, good) > 1e-2);
+
+    // ...and not merely wrong: wrong by exactly the amount freezing psi
+    // predicts. That is what says the coupling contributes what the mathematics
+    // says it should, rather than merely contributing something.
+    BOOST_TEST(relativeError(noA1, frozen) < 1e-7);
 
     // ...restored, which also says initializeMatricesForAdjointSolve rebuilds
     // rather than grows the containers it appends to.
@@ -814,8 +928,11 @@ BOOST_AUTO_TEST_CASE(dropping_a_transposed_coupling_block_makes_the_gradient_wro
     run->computeAdjointGradients();
     const Vector noA2 = run.gradient();
     BOOST_TEST_MESSAGE("with A2^T zeroed: " << noA2.transpose() << ", relative error "
-                                            << relativeError(noA2, good));
+                                            << relativeError(noA2, good)
+                                            << "; against the frozen-psi closed form "
+                                            << relativeError(noA2, frozen));
     BOOST_TEST(relativeError(noA2, good) > 1e-2);
+    BOOST_TEST(relativeError(noA2, frozen) < 1e-7);
 
     run->initializeMatricesForAdjointSolve();
     run->solveAdjointState(0);
@@ -896,6 +1013,67 @@ BOOST_AUTO_TEST_CASE(an_unconverged_adjoint_sweep_throws_rather_than_returning)
     BOOST_TEST(relativeError(run.gradient(), exactGradient(KAPPA0, S0_0)) < 1e-7);
 }
 
+BOOST_AUTO_TEST_CASE(a_refused_gradient_does_not_destroy_the_runs_output)
+{
+    // runAdjointSolve is called from integrate() *before* finaliseDiagnostics,
+    // nc_output.Close() and WriteRestartFile, and runSolver's catch(...)
+    // rethrows. So the refusal this task introduced would have thrown away the
+    // netCDF and the restart file of a run that had integrated perfectly -- the
+    // gradient is the optional half of a run, and the solution is not.
+    //
+    // integrate() now logs the failure where it happens, finishes the output,
+    // and rethrows. This checks all three: the files exist, and the exception
+    // still reaches the caller.
+    const std::string stem = "field_adjoint_output_survives";
+    const std::filesystem::path nc = stem + ".nc";
+    const std::filesystem::path restart = stem + ".restart.nc";
+
+    // Removed first, so a file left by an earlier run cannot make this pass
+    // without anything having been written.
+    std::filesystem::remove(nc);
+    std::filesystem::remove(restart);
+
+    auto run = closedFormRun(baseParameters(), /*nCells=*/4, /*k=*/3, stem,
+                             SystemSolver::FieldSolveMode::Iterative);
+    run->setWriteOutput(true);
+    run->setOutputCadence(5.0);
+
+    bool threw = false;
+    std::string message;
+    {
+        CapturedOutput quiet;
+        run->initialize();
+        // Tightened after initialize() so the forward solve is untouched: this
+        // is a test of what happens when the *adjoint* refuses, not of whether
+        // IDA copes with a one-sweep Jacobian.
+        run->setFieldSolveMaxSweeps(1);
+        run->setFieldSolveTolerance(1e-14);
+        try
+        {
+            run->integrate(T_FINAL);
+        }
+        catch (std::runtime_error const &e)
+        {
+            threw = true;
+            message = e.what();
+        }
+    }
+
+    BOOST_TEST(threw);
+    BOOST_TEST_MESSAGE("refusal reached the caller: " << message);
+    BOOST_TEST(std::filesystem::exists(nc));
+    BOOST_TEST(std::filesystem::exists(restart));
+    BOOST_TEST(std::filesystem::file_size(nc) > 0u);
+
+    // Swept here rather than left for `make clean_data`, because the output
+    // lands in whatever directory the binary was launched from, and
+    // CLEAN_DATA_DIRS deliberately excludes Tests/UnitTests -- its .nc files are
+    // tracked test *inputs*. Running one test from that directory is the
+    // documented way to run one test, so this must not leave litter there.
+    std::filesystem::remove(nc);
+    std::filesystem::remove(restart);
+}
+
 BOOST_AUTO_TEST_CASE(a_sweep_that_needs_more_than_the_default_cap_refuses_at_the_default_cap)
 {
     // The case above manufactures non-convergence by setting the cap to one.
@@ -967,6 +1145,77 @@ BOOST_AUTO_TEST_CASE(the_gradient_matches_finite_differences_through_every_a1_ro
     BOOST_TEST(relativeError(adjointGrad, fd) < 1e-5);
 }
 
+BOOST_AUTO_TEST_CASE(a_differential_field_dof_is_differentiated_at_alpha_zero)
+{
+    // The one line of the solver nothing else here can reach.
+    //
+    // initializeMatricesForAdjointSolve calls assembleFieldCoupling with an
+    // explicit 0.0 rather than with `alpha`, because the M it builds beside the
+    // field blocks omits assembleCellMatrix's alpha-weighted mass term and so is
+    // the *steady* Jacobian. B = dRdpsi + alpha dRddpsidt is where that choice
+    // becomes visible -- and only for a *differential* field DOF, because an
+    // algebraic one has dRddpsidt identically zero and multiplies alpha by
+    // nothing.
+    //
+    // Every other field model in this file, and every field model on any adjoint
+    // path in the tree, is algebraic. So passing IDA's last cj instead of zero
+    // leaves the entire suite green and puts this fixture's gradient 33% out,
+    // beside a G correct to seven figures. This fixture is that mutation's only
+    // detector, which is the whole reason it is here: same closed form, one
+    // declaration changed.
+    const Vector p0 = baseParameters();
+    const Index nCells = 4, k = 3;
+
+    // Longer than T_FINAL, and the reason is the fixture rather than the
+    // tolerance. Making psi differential gives the problem a genuine slow mode:
+    // dpsi/dt = -psi + Int u dx, and Int u dx itself carries psi with gain
+    // s0/(24 kappa) = 1/3, so the linearised rate is 2/3 rather than 1. At
+    // T_FINAL = 20 that leaves exp(-2*20/3) = 1.6e-6 of transient, which is
+    // exactly the 1.8e-6 the adjoint and the closed form then disagree by -- an
+    // error in the *state*, visible in G to the same figure, not in the adjoint.
+    // The adjoint state method assumes F(y, p) = 0, so the honest fix is to make
+    // that true rather than to widen the tolerance around its being false; at
+    // t = 40 the residual transient is exp(-26.7) = 2.6e-12.
+    const double tSteady = 40.0;
+
+    for (auto mode : {SystemSolver::FieldSolveMode::Iterative,
+                      SystemSolver::FieldSolveMode::Exact})
+    {
+        const bool exact = mode == SystemSolver::FieldSolveMode::Exact;
+        auto run = differentialRun(p0, nCells, k,
+                                   std::string("field_adjoint_diff_") +
+                                       (exact ? "exact" : "iter"),
+                                   mode);
+        BOOST_REQUIRE(run->getFieldModel()->isFieldDOFDifferential(0));
+        integrateQuietly(run, tSteady);
+
+        const Vector adjointGrad = run.gradient();
+        const Vector analytic = exactGradient(KAPPA0, S0_0);
+        BOOST_TEST_MESSAGE("differential field DOF, FieldSolve = "
+                           << (exact ? "exact" : "iterative") << ": G = " << run.objective()
+                           << " (exact " << exactG(KAPPA0, S0_0) << "), gradient "
+                           << adjointGrad.transpose() << " against " << analytic.transpose()
+                           << ", relative error " << relativeError(adjointGrad, analytic));
+
+        // Six orders of magnitude of headroom against the 33% that passing
+        // `alpha` instead of 0.0 produces, so this is not a tolerance chosen to
+        // pass.
+        BOOST_TEST(relativeError(adjointGrad, analytic) < 1e-7);
+    }
+
+    // ...and against finite differences of the same runs, which assume nothing
+    // about the steady state at all.
+    auto base = differentialRun(p0, nCells, k, "field_adjoint_diff_base");
+    integrateQuietly(base, tSteady);
+    const Vector fd = finiteDifferenceGradient(&differentialFactory, p0, nCells, k,
+                                               "field_adjoint_diff_fd", 1e-5, tSteady);
+    BOOST_TEST_MESSAGE("differential field DOF, adjoint " << base.gradient().transpose()
+                                                          << " vs finite difference "
+                                                          << fd.transpose() << ", relative error "
+                                                          << relativeError(base.gradient(), fd));
+    BOOST_TEST(relativeError(base.gradient(), fd) < 1e-6);
+}
+
 BOOST_AUTO_TEST_CASE(the_adjoint_solve_inverts_the_transpose_of_the_jacobian)
 {
     // The operator, on its own. Every other test here goes through a run, an
@@ -1014,6 +1263,41 @@ BOOST_AUTO_TEST_CASE(the_transpose_check_reaches_every_coupled_block)
         const double rm = checkAdjointTranspose(multi, trial);
         BOOST_TEST_MESSAGE("5-DOF field, trial " << trial << ": ||J^T z - g||/||g|| = " << rm);
         BOOST_TEST(rm < 1e-7);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(the_superconvergent_transpose_is_checked_the_same_way)
+{
+    // With Superconvergent = true the physics is evaluated at the k+2 star nodes
+    // with u* in place of u_h, A9 replaces InterpolateOntoBasis, and every block
+    // gains a chain factor -- including A1, through dPhysics_dField_StarMat, and
+    // the adjoint's own M through accumulateStarBlocks. field_jacobian_tests
+    // covers the forward side of that (the_superconvergent_coupling_is_checked
+    // _the_same_way); this is the transposed half, which nothing reached.
+    //
+    // The state fixture is the right vehicle rather than an end-to-end run: it
+    // asks about the operator directly, which is what the star chain changes.
+    for (int trial = 0; trial < 2; ++trial)
+    {
+        auto h = makeAdjointStateFixture(
+            std::make_unique<ClosedFormCoupledDiffusion>(baseParameters()),
+            std::make_unique<ClosedFormAdjoint>(), std::make_shared<LinearGeometryField>(),
+            /*nCells=*/5, /*k=*/2, /*superconvergent=*/true);
+        BOOST_REQUIRE(h->isSuperconvergent());
+        const double r = checkAdjointTranspose(h, trial);
+        BOOST_TEST_MESSAGE("superconvergent single-DOF field, trial "
+                           << trial << ": ||J^T z - g||/||g|| = " << r);
+        BOOST_TEST(r < 1e-7);
+
+        auto rich = makeAdjointStateFixture(
+            std::make_unique<RichGeometricDiffusion>((Vector(NP) << 1.0, 1.0).finished()),
+            std::make_unique<RichAdjoint>(), std::make_shared<EverySlotField>(),
+            /*nCells=*/5, /*k=*/2, /*superconvergent=*/true);
+        rich->setFieldSolveMode(SystemSolver::FieldSolveMode::Exact);
+        const double rr = checkAdjointTranspose(rich, trial);
+        BOOST_TEST_MESSAGE("superconvergent rich fixture, trial "
+                           << trial << ": ||J^T z - g||/||g|| = " << rr);
+        BOOST_TEST(rr < 1e-7);
     }
 }
 

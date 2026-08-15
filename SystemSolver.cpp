@@ -2076,6 +2076,18 @@ void SystemSolver::initializeMatricesForAdjointSolve()
     // *differential* field DOF is a different matrix entirely, and A2 carries
     // alpha * dRdot for the same reason. Keeping the two in step block for block
     // is the whole discipline of this function; alpha is one of those blocks.
+    //
+    // Note what that costs, because it is new and it is invisible: this
+    // *overwrites* the forward solve's own blocks. A1_cellwise and a2 are
+    // rewritten at alpha = 0, and updateFieldJacobian refactorises the model's B
+    // and Blu there too -- so after an adjoint solve the field model's stored
+    // factorisation is the steady one, not IDA's. Harmless as the solver is used
+    // today, for the same reason MXSolvers holding M^T rather than M is harmless:
+    // runAdjointSolve is the last thing integrate() does, and the next forward
+    // Jacobian solve is preceded by updateMatricesForJacSolve, which rebuilds all
+    // four. Anything that starts interleaving forward and adjoint solves -- a
+    // checkpointed transient adjoint, say -- has to refresh them, and will find
+    // no diagnostic if it does not.
     if (fieldModel)
     {
         G_field = Vector::Zero(nField);

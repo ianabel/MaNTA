@@ -192,19 +192,41 @@ reason it was not made:
     time, and gives up with "IDASolve could not complete". The same run on
     FieldSolve = exact completes and reaches the finite-difference gradient to
     1e-10, which is what says the fault is in the sweep and not in the physics.
-    The inference from those update norms is that the last iterate handed back is
-    itself of order 1e10, i.e. the sweep is diverging; the plausible mechanism is
-    that at large cj the transport inverse damps only the u direction, so the loop
-    gain through sigma, q and phi -- the slots this fixture's A2 row reads and no
-    other fixture's does -- exceeds one. Not measured directly.
+
+    **It is not a large-cj effect, and the earlier version of this entry said it
+    was.** The block Gauss-Seidel iteration matrix G = B^-1 A2 A^-1 A1, formed
+    exactly at the real state, has spectral radius 1.611 at cj = 0 and 1.571 at
+    cj = 1e8 -- it moves by 2% across eight decades. It is already above one at
+    cj = 0. Small time steps do not rescue it and large ones do not cause it: rho
+    is a property of the coupling, not of the time step, and the guess that the
+    transport inverse damps only the u direction at large cj was wrong.
+
+    Two consequences worth keeping, both from that spectrum.
+
+    The dominant eigenvalue is real and *negative*, -1.611. Damped Gauss-Seidel
+    gives eigenvalue 1 - omega(1 - lambda) = 1 - 2.611 omega, so any
+    omega in (0, 0.766) converges here. That is luck rather than design: had
+    lambda been +1.61, no omega in (0, 1] could have fixed it, and a relaxation
+    parameter would have been the wrong tool. Anything that reaches for damping
+    should check the sign of the dominant eigenvalue first, not assume it.
+
+    And the adjoint sweep has the *same* spectrum -- it is the transpose, so the
+    eigenvalues are identical -- but always runs at cj = 0, where rho is largest.
+    For the algebraic fixtures that is 1e7 times the rho at IDA's working cj. So
+    the transposed sweep is strictly the harder of the two directions, and this
+    task's decision to throw rather than return the last iterate is better
+    founded than the argument originally given for it: it is not only that a
+    wrong adjoint is silent where a wrong Jacobian is not, it is also that the
+    adjoint sweep is the one more likely to need the refusal.
 
     Loud rather than silent, so not urgent. But the diagnosis points nowhere near
     the sweep, and the fixture that exposed it had to be written for the adjoint.
-    The cheap mitigation is to keep the best iterate rather than the last, judged
-    by the same closed-form residual the adjoint sweep already computes
-    (A1 (dpsi^{n+1} - dpsi^n) in the transport rows, zero in the field rows); the
-    real one is a Krylov acceleration or the block-triangular preconditioner
-    Serino et al. use. Belongs with the iterative solve, not with the adjoint.
+    Candidate fixes, in order of effort: keep the best iterate rather than the
+    last, judged by the closed-form residual the adjoint sweep already computes
+    (A1 (dpsi^{n+1} - dpsi^n) in the transport rows, zero in the field rows);
+    damped Gauss-Seidel with omega chosen against the measured spectrum; a Krylov
+    acceleration, or the block-triangular preconditioner Serino et al. use.
+    Belongs with the iterative solve, not with the adjoint.
 
     Separately and much more mildly, ManufacturedFieldVector's five-unknown block
     does not reach FieldSolveTolerance in the default twenty sweeps -- it is
