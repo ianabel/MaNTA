@@ -81,23 +81,41 @@ Read the live rule rather than trusting this paragraph —
   are, and a workflow that works for `ianabel` is not evidence it works for
   anyone else.
 
-**The one required status check is named `Build + C++ tests`, and nothing
-publishes that context.** `.github/workflows/ci.yml`'s job is
-`name: Build + tests (${{ matrix.label || matrix.cxx }})`, so what CI actually
-reports is `Build + tests (g++-14)`, `Build + tests (clang++-21)`,
-`Build + tests (g++-14, Eigen 5.0.1)` and so on — seven contexts, none of them
-equal to the required string, which differs both in wording and in carrying no
-matrix suffix. GitHub matches required contexts exactly, so the check never
-arrives and a PR sits at "Expected — Waiting for status to be reported"
-indefinitely. The green ticks beside it are the *other* legs, which are not
-required.
+**All nine contexts `ci.yml` publishes are required**, each pinned to app 15368
+(GitHub Actions), so a status of that name from anything else does not count:
 
-The effect is that the protection blocks everyone who is not an admin and blocks
-nothing that CI would have caught, which is the opposite of the intent. Fixing
-it means either renaming the job to match, or — better, since a matrix job
-cannot publish an unsuffixed context — replacing the required contexts with the
-seven that exist. Until then, expect the merge button to stay disabled and the
-bypass to be an admin one.
+```
+Build + tests (g++-14)                 Build + tests (clang++-19)
+Build + tests (g++-15)                 Build + tests (clang++-20)
+Build + tests (g++-16)                 Build + tests (clang++-21)
+Build + tests (g++-14, Eigen 5.0.1)    Compile (fedora:latest)
+Coverage
+```
+
+**Those strings are the job's *rendered* name, and that couples the rule to the
+matrix.** The job is `name: Build + tests (${{ matrix.label || matrix.cxx }})`,
+so adding, removing or relabelling a leg renames its context — and a required
+context that nothing publishes is not an error anywhere. GitHub matches exactly;
+the check simply never arrives, the PR sits at "Expected — waiting for status to
+be reported", and the green ticks beside it are the legs that *are* reporting.
+That is not hypothetical: the rule required `Build + C++ tests` — a name no job
+has ever published, differing both in wording and in carrying no matrix suffix —
+so until it was corrected the protection blocked every non-admin and gated
+nothing CI would have caught.
+
+**So whenever a leg is added, dropped or relabelled, update the required list in
+the same change**, and check the two agree afterwards rather than assuming:
+
+```sh
+gh api repos/ianabel/MaNTA/branches/main/protection/required_status_checks -q '.contexts[]' | sort > /tmp/req
+gh pr view <N> --json statusCheckRollup -q '.statusCheckRollup[].name' | sort > /tmp/got
+diff /tmp/req /tmp/got     # left-only = required but impossible; right-only = ungated
+```
+
+`Coverage` is in the list deliberately. It has no percentage threshold — it runs
+`make coverage`, i.e. all three suites under an instrumented build, and fails
+only if the build or a suite does — so it gates on the same thing the others do
+and costs the slowest leg's wall-clock.
 
 ## Architecture
 
