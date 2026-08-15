@@ -316,6 +316,13 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def("dSources_du", &TransportSystem::dSources_du)
       .def("dSources_dq", &TransportSystem::dSources_dq)
       .def("dSources_dsigma", &TransportSystem::dSources_dsigma)
+      // Derivatives with respect to a field model's geometry slots. Optional,
+      // like the five above: absent means an identically zero coupling block,
+      // which is what every case gets until Task 8 wires the A1 assembly up to
+      // read these.
+      .def("dSigmaFn_dGeometry", &TransportSystem::dSigmaFn_dGeometry)
+      .def("dSources_dGeometry", &TransportSystem::dSources_dGeometry)
+      .def("dAuxG_dGeometry", &TransportSystem::dAuxG_dGeometry)
       .def("dSigma", &TransportSystem::dSigma)
       .def("dSources", &TransportSystem::dSources)
       .def("InitialValue", &TransportSystem::InitialValue)

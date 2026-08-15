@@ -274,6 +274,12 @@ public:
     }
   }
 
+  // Geometry does not join this batched wrapper, or dSigma's above: both loop
+  // over GlobalStateMatrix's Variable/Derivative/Flux/Aux slices, and there is
+  // deliberately no Geometry slice yet -- see the comment on
+  // GlobalState::Geometry in State.hpp. dSigmaFn_dGeometry/dSources_dGeometry
+  // are pointwise-only for now; whatever assembles the A1 coupling block calls
+  // them directly rather than through here.
   virtual void dSources(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
 #pragma omp parallel for
@@ -383,6 +389,23 @@ public:
     if (nScalars != 0)
       throw std::logic_error("nScalars > 0 but no coupling function provided");
   }
+
+  /*
+      Derivatives with respect to the geometry slots a field model supplies.
+
+      Each `out` is length nGeometry and arrives zeroed, so a case that does not
+      read geometry may leave all three unimplemented and contributes an
+      identically zero coupling block -- which is exactly right, because it does
+      not couple.
+
+      These are the first factor of A1; the second, dGeometry/dpsi, is the field
+      model's. Note that q has no geometry dependence (q = d_x u is a definition,
+      not a physical relation) and neither do the trace rows, so there is no
+      hook for either -- a geometry-dependent boundary condition is out of scope.
+  */
+  virtual void dSigmaFn_dGeometry(Index, VectorRef, const State &, Position, Time) {}
+  virtual void dSources_dGeometry(Index, VectorRef, const State &, Position, Time) {}
+  virtual void dAuxG_dGeometry(Index, VectorRef, const State &, Position, Time) {}
 
   // Auxiliary variable functions
 

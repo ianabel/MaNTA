@@ -61,8 +61,9 @@ Value AutodiffTransportSystem::SigmaFn(Index i, const State &s, Position x, Time
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
+	RealVector geom(s.geom());
 
-	return Flux(i, u, q, x, t).val;
+	return Flux(i, u, q, geom, x, t).val;
 }
 
 Value AutodiffTransportSystem::Sources(Index i, const State &s, Position x, Time t)
@@ -72,8 +73,9 @@ Value AutodiffTransportSystem::Sources(Index i, const State &s, Position x, Time
 	RealVector sigma(s.sigma());
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
+	RealVector geom(s.geom());
 
-	return Source(i, u, q, sigma, phi, Scalar, x, t).val;
+	return Source(i, u, q, sigma, phi, Scalar, geom, x, t).val;
 }
 
 // We need derivatives of the flux functions
@@ -81,22 +83,36 @@ void AutodiffTransportSystem::dSigmaFn_du(Index i, VectorRef grad, const State &
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
+	RealVector geom(s.geom());
 
 	Real uout;
 
-	autodiff::gradient([this, i](RealVector uD, RealVector qD, Position X, Time T)
-					   { return this->Flux(i, uD, qD, X, T); }, wrt(u), at(u, q, x, t), uout, grad);
+	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector geomD, Position X, Time T)
+					   { return this->Flux(i, uD, qD, geomD, X, T); }, wrt(u), at(u, q, geom, x, t), uout, grad);
 }
 
 void AutodiffTransportSystem::dSigmaFn_dq(Index i, VectorRef grad, const State &s, Position x, Time t)
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
+	RealVector geom(s.geom());
 
 	Real uout;
 
-	autodiff::gradient([this, i](RealVector uD, RealVector qD, Position X, Time T)
-					   { return this->Flux(i, uD, qD, X, T); }, wrt(q), at(u, q, x, t), uout, grad);
+	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector geomD, Position X, Time T)
+					   { return this->Flux(i, uD, qD, geomD, X, T); }, wrt(q), at(u, q, geom, x, t), uout, grad);
+}
+
+void AutodiffTransportSystem::dSigmaFn_dGeometry(Index i, VectorRef grad, const State &s, Position x, Time t)
+{
+	RealVector u(s.u());
+	RealVector q(s.q());
+	RealVector geom(s.geom());
+
+	Real uout;
+
+	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector geomD, Position X, Time T)
+					   { return this->Flux(i, uD, qD, geomD, X, T); }, wrt(geom), at(u, q, geom, x, t), uout, grad);
 }
 
 // and for the sources
@@ -107,12 +123,13 @@ void AutodiffTransportSystem::dSources_du(Index i, VectorRef grad, const State &
 	RealVector sigma(s.sigma());
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
+	RealVector geom(s.geom());
 
 	Real uout;
 
-	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)
-			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, X, T); },
-			 wrt(u), at(u, q, sigma, phi, Scalar, x, t), uout, grad);
+	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, RealVector geomD, Position X, Time T)
+			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, geomD, X, T); },
+			 wrt(u), at(u, q, sigma, phi, Scalar, geom, x, t), uout, grad);
 }
 
 void AutodiffTransportSystem::dSources_dq(Index i, VectorRef grad, const State &s, Position x, Time t)
@@ -122,12 +139,13 @@ void AutodiffTransportSystem::dSources_dq(Index i, VectorRef grad, const State &
 	RealVector sigma(s.sigma());
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
+	RealVector geom(s.geom());
 
 	Real uout;
 
-	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)
-			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, X, T); },
-			 wrt(q), at(u, q, sigma, phi, Scalar, x, t), uout, grad);
+	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, RealVector geomD, Position X, Time T)
+			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, geomD, X, T); },
+			 wrt(q), at(u, q, sigma, phi, Scalar, geom, x, t), uout, grad);
 }
 
 void AutodiffTransportSystem::dSources_dsigma(Index i, VectorRef grad, const State &s, Position x, Time t)
@@ -137,12 +155,13 @@ void AutodiffTransportSystem::dSources_dsigma(Index i, VectorRef grad, const Sta
 	RealVector sigma(s.sigma());
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
+	RealVector geom(s.geom());
 
 	Real uout;
 
-	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)
-			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, X, T); },
-			 wrt(sigma), at(u, q, sigma, phi, Scalar, x, t), uout, grad);
+	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, RealVector geomD, Position X, Time T)
+			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, geomD, X, T); },
+			 wrt(sigma), at(u, q, sigma, phi, Scalar, geom, x, t), uout, grad);
 }
 
 void AutodiffTransportSystem::dSources_dPhi(Index i, VectorRef grad, const State &s, Position x, Time t)
@@ -152,12 +171,13 @@ void AutodiffTransportSystem::dSources_dPhi(Index i, VectorRef grad, const State
 	RealVector sigma(s.sigma());
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
+	RealVector geom(s.geom());
 	// phi.resize(nVars);
 	Real uout;
 
-	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)
-			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, X, T); },
-			 wrt(phi), at(u, q, sigma, phi, Scalar, x, t), uout, grad);
+	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, RealVector geomD, Position X, Time T)
+			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, geomD, X, T); },
+			 wrt(phi), at(u, q, sigma, phi, Scalar, geom, x, t), uout, grad);
 }
 
 void AutodiffTransportSystem::dSources_dScalars(Index i, VectorRef grad, const State &s, Position x, Time t)
@@ -167,12 +187,29 @@ void AutodiffTransportSystem::dSources_dScalars(Index i, VectorRef grad, const S
 	RealVector sigma(s.sigma());
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
+	RealVector geom(s.geom());
 
 	Real uout;
 
-	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)
-			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, X, T); },
-			 wrt(Scalar), at(u, q, sigma, phi, Scalar, x, t), uout, grad);
+	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, RealVector geomD, Position X, Time T)
+			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, geomD, X, T); },
+			 wrt(Scalar), at(u, q, sigma, phi, Scalar, geom, x, t), uout, grad);
+}
+
+void AutodiffTransportSystem::dSources_dGeometry(Index i, VectorRef grad, const State &s, Position x, Time t)
+{
+	RealVector u(s.u());
+	RealVector q(s.q());
+	RealVector sigma(s.sigma());
+	RealVector phi(s.phi());
+	RealVector Scalar(s.scalars());
+	RealVector geom(s.geom());
+
+	Real uout;
+
+	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, RealVector geomD, Position X, Time T)
+			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, geomD, X, T); },
+			 wrt(geom), at(u, q, sigma, phi, Scalar, geom, x, t), uout, grad);
 }
 
 void AutodiffTransportSystem::dSigmaFn_dp(Index i, Index pIndex, Value &grad, const State &s, Position x, Time t)
@@ -222,8 +259,9 @@ Value AutodiffTransportSystem::AuxG(Index i, const State &s, Position x, Time t)
 	RealVector q(s.q());
 	RealVector sigma(s.sigma());
 	RealVector phi(s.phi());
+	RealVector geom(s.geom());
 
-	return GFunc(i, u, q, sigma, phi, x, t).val;
+	return GFunc(i, u, q, sigma, phi, geom, x, t).val;
 }
 
 void AutodiffTransportSystem::AuxGPrime(Index i, State &out, const State &s, Position x, Time t)
@@ -232,20 +270,35 @@ void AutodiffTransportSystem::AuxGPrime(Index i, State &out, const State &s, Pos
 	RealVector q(s.q());
 	RealVector sigma(s.sigma());
 	RealVector phi(s.phi());
+	RealVector geom(s.geom());
 
 	Real uout;
 
-	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, Position X, Time T)
-					   { return this->GFunc(i, uD, qD, sD, phiD, X, T); }, wrt(u), at(u, q, sigma, phi, x, t), uout, out.u());
+	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector geomD, Position X, Time T)
+					   { return this->GFunc(i, uD, qD, sD, phiD, geomD, X, T); }, wrt(u), at(u, q, sigma, phi, geom, x, t), uout, out.u());
 
-	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, Position X, Time T)
-					   { return this->GFunc(i, uD, qD, sD, phiD, X, T); }, wrt(q), at(u, q, sigma, phi, x, t), uout, out.q());
+	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector geomD, Position X, Time T)
+					   { return this->GFunc(i, uD, qD, sD, phiD, geomD, X, T); }, wrt(q), at(u, q, sigma, phi, geom, x, t), uout, out.q());
 
-	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, Position X, Time T)
-					   { return this->GFunc(i, uD, qD, sD, phiD, X, T); }, wrt(sigma), at(u, q, sigma, phi, x, t), uout, out.sigma());
+	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector geomD, Position X, Time T)
+					   { return this->GFunc(i, uD, qD, sD, phiD, geomD, X, T); }, wrt(sigma), at(u, q, sigma, phi, geom, x, t), uout, out.sigma());
 
-	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, Position X, Time T)
-					   { return this->GFunc(i, uD, qD, sD, phiD, X, T); }, wrt(phi), at(u, q, sigma, phi, x, t), uout, out.phi());
+	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector geomD, Position X, Time T)
+					   { return this->GFunc(i, uD, qD, sD, phiD, geomD, X, T); }, wrt(phi), at(u, q, sigma, phi, geom, x, t), uout, out.phi());
+}
+
+void AutodiffTransportSystem::dAuxG_dGeometry(Index i, VectorRef grad, const State &s, Position x, Time t)
+{
+	RealVector u(s.u());
+	RealVector q(s.q());
+	RealVector sigma(s.sigma());
+	RealVector phi(s.phi());
+	RealVector geom(s.geom());
+
+	Real uout;
+
+	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector geomD, Position X, Time T)
+					   { return this->GFunc(i, uD, qD, sD, phiD, geomD, X, T); }, wrt(geom), at(u, q, sigma, phi, geom, x, t), uout, grad);
 }
 
 // and initial conditions for u & q
