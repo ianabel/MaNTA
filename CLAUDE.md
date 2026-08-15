@@ -62,6 +62,61 @@ becomes shape-checking rather than a plain assignment), `OMP` (enables the
 `#pragma omp parallel for` in the batched physics wrappers), `COVERAGE`,
 `VERBOSE`, `XLA_FFI`/`CUDA` (JAX FFI, needs jaxlib headers).
 
+## Branch protection on `main`
+
+**`main` is protected: work goes on a branch and merges through a pull request.**
+Read the live rule rather than trusting this paragraph —
+`gh api repos/ianabel/MaNTA/branches/main/protection` — but as it stands:
+
+* **No approving review is required** (`required_approving_review_count: 0`), so
+  a PR can be merged by its own author as soon as the checks are green. The PR
+  is a gate for CI, not for review.
+* **`strict: true`**, so a branch has to be up to date with `main` before it can
+  merge. If `main` moves while a PR is open, rebase or merge it in and let CI
+  run again.
+* **Force-pushes and deletions of `main` are refused**, and there is no linear
+  history requirement, so an ordinary merge commit is fine.
+* **`enforce_admins` is off**, so the repo owner can still push straight to
+  `main`. "Protected" therefore means something different depending on who you
+  are, and a workflow that works for `ianabel` is not evidence it works for
+  anyone else.
+
+**All nine contexts `ci.yml` publishes are required**, each pinned to app 15368
+(GitHub Actions), so a status of that name from anything else does not count:
+
+```
+Build + tests (g++-14)                 Build + tests (clang++-19)
+Build + tests (g++-15)                 Build + tests (clang++-20)
+Build + tests (g++-16)                 Build + tests (clang++-21)
+Build + tests (g++-14, Eigen 5.0.1)    Compile (fedora:latest)
+Coverage
+```
+
+**Those strings are the job's *rendered* name, and that couples the rule to the
+matrix.** The job is `name: Build + tests (${{ matrix.label || matrix.cxx }})`,
+so adding, removing or relabelling a leg renames its context — and a required
+context that nothing publishes is not an error anywhere. GitHub matches exactly;
+the check simply never arrives, the PR sits at "Expected — waiting for status to
+be reported", and the green ticks beside it are the legs that *are* reporting.
+That is not hypothetical: the rule required `Build + C++ tests` — a name no job
+has ever published, differing both in wording and in carrying no matrix suffix —
+so until it was corrected the protection blocked every non-admin and gated
+nothing CI would have caught.
+
+**So whenever a leg is added, dropped or relabelled, update the required list in
+the same change**, and check the two agree afterwards rather than assuming:
+
+```sh
+gh api repos/ianabel/MaNTA/branches/main/protection/required_status_checks -q '.contexts[]' | sort > /tmp/req
+gh pr view <N> --json statusCheckRollup -q '.statusCheckRollup[].name' | sort > /tmp/got
+diff /tmp/req /tmp/got     # left-only = required but impossible; right-only = ungated
+```
+
+`Coverage` is in the list deliberately. It has no percentage threshold — it runs
+`make coverage`, i.e. all three suites under an instrumented build, and fails
+only if the build or a suite does — so it gates on the same thing the others do
+and costs the slowest leg's wall-clock.
+
 ## Architecture
 
 ### The equation being solved
@@ -658,11 +713,28 @@ mesh hid it and nothing removed it. The generalisation worth keeping is that
 should have caught this instead pinned the defect, because it differenced an
 exactly-integrated `GFn` that no real case reports.
 
-`dGdaux_Vec` is the one piece still on the old footing, and is in `TODO`; it is
-live because `dgFn_dphi` is the only pointwise `dg` hook a case can still reach.
 The pointwise `DerivativeSubVector` overload and the `dGdu_Vec`/`dGdq_Vec`/
 `dGdsigma_Vec` wrappers over it are gone — they computed `∫ dg/dZ φ_i dx`, the
-derivative of `∫ g dx`, and no solve ever called them.
+derivative of `∫ g dx`, and no solve ever called them. `dGdaux_Vec` was the last
+one left and is now the same operator over `nAux` blocks: it takes the nodal
+`dg/dphi` from the batched `dg` and weights it, and `dGdt` goes through it too
+rather than applying the mass matrix inline. A C++ case's `dgFn_dphi` still
+reaches it, through `AdjointProblem::dg`'s default, which samples the hook at the
+nodes; a Python case supplies `dg` and `PyAdjointProblem::dgFn_dphi` raises.
+
+**Beware how nearly `diag(w)` and `M` agree — it is far more than the constants
+the argument above needs.** `(M v)_i = ∫ φ_i v` and `(diag(w) v)_i = v_i ∫ φ_i`,
+so they coincide whenever the interpolatory rule integrates `φ_i v` exactly; on
+`k+1` Chebyshev points of the first kind that rule is symmetric, hence exact to
+degree `k+1` for even `k`. At `k = 2` — which is what the adjoint fixtures use —
+that covers every *affine* `dg/dZ`, and the mocks' hooks are affine in `x`. Both
+`the_derivative_sub_vector_weights_dg_by_the_integration_weights` and its aux
+sibling therefore passed with the mass matrix reinstated, by 3e-16 and 5e-16,
+until each was given a second half driven by a synthetic degree-`k` `dg/dZ` and a
+guard that the two operators still differ on it. Before that the only case in the
+suite that noticed at all was `dGdt_matches_a_finite_difference_of_the_objective`,
+at a relative 6e-6 against a 1e-6 tolerance. A reference built "straight from the
+weights" pins the formula, not the operator, if the data cannot tell them apart.
 
 ## Traps worth knowing before you edit
 
