@@ -135,4 +135,127 @@ BOOST_AUTO_TEST_CASE(the_vector_model_has_a_nonscalar_b_block)
     BOOST_CHECK_SMALL((back - rhs).norm(), 1e-12);
 }
 
+// The three tests below close a coverage gap the vector model's own test
+// above doesn't touch: everything up there exercises only the *inherited*
+// dense-LU block solve (FieldModel.hpp:89-109), never ManufacturedFieldVector's
+// own FieldResidual/FieldResidualPrime/Geometry/dGeometry_dpsi. Because five
+// later tasks measure against this fixture rather than against the solver, a
+// transcription slip here -- a swapped m/j index, a dropped minus sign,
+// points[m] where points[j] was meant -- would be invisible until one of those
+// tasks' own numbers looked wrong, a long way from this file.
+//
+// Mirroring test 3 the naive way -- calling the private basis() to compute the
+// expected value -- would only prove FieldResidualPrime agrees with itself.
+// The way out is the same one test 4 above already gets for free from a
+// closed-form c(x): evaluate at the hat functions' own nodes, where the
+// partition-of-unity property pins the answer to 0 or 1 without touching
+// basis() at all. `d >= 1.0 ? 0.0 : ...` makes node(m) exactly the boundary of
+// every other hat's support, so basis(m', node(m)) is the Kronecker delta
+// delta_{m,m'} -- not approximately, because node spacing (1/(N-1) = 0.25) and
+// every node(m) are exactly representable in double precision, so d lands on
+// an exact integer.
+
+BOOST_AUTO_TEST_CASE(the_vector_models_residual_vanishes_at_the_exact_solution)
+{
+    ManufacturedFieldVector model{toml::value{}, Grid(0.0, 1.0, 16)};
+    constexpr Index N = ManufacturedFieldVector::N;
+    const Time t = 0.3;
+
+    auto [states, points, weights] = sampleExactOnNodes(Grid(0.0, 1.0, 16), 3, t);
+
+    // psiExact is a genuinely independent computation from FieldResidual's own
+    // f() -- a fine Simpson rule against u_exact, not the solver's
+    // interpolatory quadrature against the discrete state -- so this is the
+    // same kind of check as the_residual_vanishes_at_the_exact_solution above,
+    // not a comparison of the fixture to itself.
+    Vector psi = model.psiExact(t);
+    Vector dpsidt = Vector::Zero(N);
+
+    Vector out = Vector::Zero(N);
+    model.FieldResidual(out, psi, dpsidt, states, points, weights, t);
+
+    // Not exactly zero, for the same reason as the scalar model's version:
+    // fExact's Simpson rule and f()'s interpolatory quadrature integrate the
+    // same integrand to different accuracies.
+    BOOST_CHECK_SMALL(out.norm(), 1e-6);
+}
+
+BOOST_AUTO_TEST_CASE(the_vector_models_dR_dpsi_is_L_and_dR_dstate_matches_the_hat_functions_at_their_own_nodes)
+{
+    // FieldResidualPrime doesn't read the state at all -- R = L psi - f(state)
+    // is linear in u, so its derivative doesn't depend on the state's actual
+    // values -- so a default-constructed, empty GlobalState is a legitimate
+    // stand-in for that (unnamed) parameter: nothing in the implementation
+    // touches it.
+    ManufacturedFieldVector model{toml::value{}, Grid(0.0, 1.0, 4)};
+    constexpr Index N = ManufacturedFieldVector::N;
+
+    std::vector<Position> points(N);
+    for (Index m = 0; m < N; ++m)
+        points[static_cast<size_t>(m)] = ManufacturedFieldVector::node(m);
+    // Distinct, arbitrary weights -- not the solver's real quadrature -- so a
+    // transposed m/j index would show up as a mismatch rather than hiding
+    // behind a repeated value.
+    Vector weights = Vector::LinSpaced(N, 1.0, 5.0);
+
+    GlobalStateMatrix dR(N), dRdot(N);
+    for (Index m = 0; m < N; ++m)
+    {
+        dR.add(N, 0, 1, 0, 0);
+        dRdot.add(N, 0, 1, 0, 0);
+    }
+    Matrix dRdpsi = Matrix::Zero(N, N), dRddpsidt = Matrix::Zero(N, N);
+
+    GlobalState unused;
+    Vector psi = Vector::Zero(N), dpsidt = Vector::Zero(N);
+
+    model.FieldResidualPrime(dR, dRdot, dRdpsi, dRddpsidt, psi, dpsidt, unused,
+                             points, weights, 0.0);
+
+    Matrix const L = manufacturedL(N);
+    for (Index i = 0; i < N; ++i)
+        for (Index jx = 0; jx < N; ++jx)
+            BOOST_CHECK_EQUAL(dRdpsi(i, jx), L(i, jx));
+    BOOST_CHECK_SMALL(dRddpsidt.norm(), 1e-15);
+
+    for (Index m = 0; m < N; ++m)
+        for (Index j = 0; j < N; ++j)
+        {
+            if (m == j)
+                BOOST_CHECK_CLOSE(dR[m].Variable()(0, j), -weights(j), 1e-12);
+            else
+                BOOST_CHECK_SMALL(dR[m].Variable()(0, j), 1e-12);
+        }
+}
+
+BOOST_AUTO_TEST_CASE(the_vector_models_geometry_and_derivative_agree_with_the_hat_interpolant)
+{
+    ManufacturedFieldVector model{toml::value{}, Grid(0.0, 1.0, 4)};
+    constexpr Index N = ManufacturedFieldVector::N;
+
+    Vector psi(N);
+    psi << 2.0, -1.0, 3.0, 0.5, -4.0;
+
+    for (Index m = 0; m < N; ++m)
+    {
+        const Position x = ManufacturedFieldVector::node(m);
+
+        // interpolate(psi, node(m)) picks out psi(m) exactly: the hat
+        // functions are a partition of unity that peaks at its own node.
+        Vector g = Vector::Zero(1);
+        model.Geometry(g, psi, x, 0.0);
+        BOOST_CHECK_CLOSE(g(0), 1.0 + psi(m), 1e-12);
+
+        Matrix dg = Matrix::Zero(1, N);
+        model.dGeometry_dpsi(dg, psi, x, 0.0);
+        for (Index m2 = 0; m2 < N; ++m2)
+        {
+            if (m2 == m)
+                BOOST_CHECK_CLOSE(dg(0, m2), 1.0, 1e-12);
+            else
+                BOOST_CHECK_SMALL(dg(0, m2), 1e-12);
+        }
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()
