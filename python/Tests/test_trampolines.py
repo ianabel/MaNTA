@@ -225,6 +225,125 @@ def test_incomplete_subclass_is_rejected_with_a_useful_message(tmp_path):
     ), message
 
 
+# ---------------------------------------------------- geometry derivatives --
+#
+# dSigmaFn_dGeometry has no way to be driven from Python the way SigmaFn is
+# in test_scalar_and_vectorised_paths_agree above: nothing in the solver
+# calls it yet (Task 8 wires the coupling block up to it), so there is no
+# real Runner solve that reaches it. What TransportSystem does give it is a
+# batched (GlobalState-based) entry point in the same spirit as AuxG_v just
+# above -- a State cannot be constructed from Python, so this is how these
+# two tests reach the pointwise C++ trampoline (PyTransportSystem.hpp's
+# dSigmaFn_dGeometry dispatcher, optional_override lookup, and the Values
+# cast) at all.
+
+
+class GeometryReader(MaNTA.TransportSystem):
+    """Overrides dSigmaFn_dGeometry with a value that depends on both the
+    geometry it was handed and the position, so a transposed or constant-
+    filled dispatch could not agree with the expected answer by accident.
+    """
+
+    def __init__(self):
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1))
+
+    def SigmaFn(self, i, state, x, t):
+        return state.q[i]
+
+    def Sources(self, i, state, x, t):
+        return 0.0
+
+    def dSigmaFn_dGeometry(self, i, state, x, t):
+        return np.array([state.geom[0], state.geom[1] + x])
+
+    def LowerBoundary(self, i, t):
+        return 0.0
+
+    def UpperBoundary(self, i, t):
+        return 0.0
+
+    def InitialValue(self, i, x):
+        return 0.0
+
+    def InitialDerivative(self, i, x):
+        return 0.0
+
+
+class GeometryBlind(MaNTA.TransportSystem):
+    """Same required hooks as GeometryReader, minus dSigmaFn_dGeometry --
+    deliberately its own class rather than a subclass of GeometryReader,
+    which would inherit the very override this fixture must not have.
+    Pins the convention this task rests on: an absent geometry-derivative
+    hook is an identically zero block.
+    """
+
+    def __init__(self):
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1))
+
+    def SigmaFn(self, i, state, x, t):
+        return state.q[i]
+
+    def Sources(self, i, state, x, t):
+        return 0.0
+
+    def LowerBoundary(self, i, t):
+        return 0.0
+
+    def UpperBoundary(self, i, t):
+        return 0.0
+
+    def InitialValue(self, i, x):
+        return 0.0
+
+    def InitialDerivative(self, i, x):
+        return 0.0
+
+
+def _geometry_states(geometry):
+    """A GlobalState dict for nVars=1, nAux=0, nScalars=0, with the given
+    (nPoints, nGeom) geometry array."""
+    nPoints = geometry.shape[0]
+    return {
+        "Variable": np.zeros((nPoints, 1)),
+        "Derivative": np.zeros((nPoints, 1)),
+        "Flux": np.zeros((nPoints, 1)),
+        "Aux": np.zeros((nPoints, 0)),
+        "Geometry": geometry,
+        "Scalars": np.zeros(0),
+    }
+
+
+def test_dsigma_fn_dgeometry_v_dispatches_to_the_python_override():
+    system = GeometryReader()
+    positions = [0.1, 0.2, 0.3]
+    geometry = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+    states = _geometry_states(geometry)
+
+    out = MaNTA.TransportSystem.dSigmaFn_dGeometry_v(system, 0, states, positions, 0.0)
+
+    assert len(out) == len(positions)
+    for j, x in enumerate(positions):
+        expected = [geometry[j, 0], geometry[j, 1] + x]
+        assert np.asarray(out[j]) == pytest.approx(expected), (j, out[j])
+
+
+def test_an_absent_dsigma_fn_dgeometry_is_identically_zero():
+    """The whole convention this task rests on: an absent hook means the
+    caller's zeroed out-parameter comes back untouched, not that nothing
+    is returned or that the call fails.
+    """
+    system = GeometryBlind()
+    positions = [0.1, 0.2]
+    geometry = np.array([[7.0, 8.0], [9.0, 10.0]])
+    states = _geometry_states(geometry)
+
+    out = MaNTA.TransportSystem.dSigmaFn_dGeometry_v(system, 0, states, positions, 0.0)
+
+    assert len(out) == len(positions)
+    for j in range(len(positions)):
+        assert np.asarray(out[j]) == pytest.approx([0.0, 0.0])
+
+
 # ------------------------------------------------------- PyGrid / getNodes --
 
 

@@ -407,6 +407,31 @@ public:
   virtual void dSources_dGeometry(Index, VectorRef, const State &, Position, Time) {}
   virtual void dAuxG_dGeometry(Index, VectorRef, const State &, Position, Time) {}
 
+  /*
+      Batched, node-by-node evaluation of dSigmaFn_dGeometry -- an
+      evaluate-and-collect loop in the same spirit as SigmaFn/Sources/AuxG's
+      own batched defaults higher up, *not* a Jacobian-block assembly (that is
+      Task 8's, and a different shape entirely: dense per-cell blocks rather
+      than one vector per node). It exists because a `State` cannot be
+      constructed standalone from Python (see PyState.hpp), so this is also
+      the entry point a Python subclass's pointwise override is tested
+      through: this default's loop calls the pointwise virtual below, which
+      PyTransportSystem overrides, so ordinary virtual dispatch reaches
+      Python without PyTransportSystem needing an override of its own.
+  */
+  virtual std::vector<Vector> dSigmaFn_dGeometry(Index i, GlobalState const &states,
+                                                 std::vector<Position> const &abscissae, Time time)
+  {
+    std::vector<Vector> out(states.size());
+    for (size_t j = 0; j < states.size(); ++j)
+    {
+      const State s = states[j];
+      out[j] = Vector::Zero(s.geom().size());
+      dSigmaFn_dGeometry(i, out[j], s, abscissae[j], time);
+    }
+    return out;
+  }
+
   // Auxiliary variable functions
 
   virtual Value InitialAuxValue(Index i, Position x) const

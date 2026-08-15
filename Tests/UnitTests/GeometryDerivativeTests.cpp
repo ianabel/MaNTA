@@ -137,16 +137,24 @@ BOOST_AUTO_TEST_SUITE(geometry_derivative_tests)
 
 BOOST_AUTO_TEST_CASE(the_default_hooks_leave_the_block_zero)
 {
+    // Seeded with a nonzero sentinel and never zeroed by the test itself: the
+    // point is to distinguish "the default is a genuine no-op" from "the
+    // default writes zero", which a pre-zeroed `out` cannot tell apart. In
+    // production `out` does arrive zeroed (State/GlobalState are born that
+    // way -- see State.hpp), so the no-op default and an explicit zero write
+    // are equivalent there; here they are not, and a no-op is what the
+    // default virtuals in TransportSystem.hpp actually are.
     MinimalCase sys;               // implements only SigmaFn and Sources
     State s(1, 0, 0, 2);
-    Vector out = Vector::Constant(2, 99.0);
-    out.setZero();
+    const Vector sentinel = Vector::Constant(2, 99.0);
 
+    Vector out = sentinel;
     sys.dSigmaFn_dGeometry(0, out, s, 0.5, 0.0);
-    BOOST_CHECK_EQUAL(out.norm(), 0.0);
+    BOOST_CHECK_EQUAL((out - sentinel).norm(), 0.0);
 
+    out = sentinel;
     sys.dSources_dGeometry(0, out, s, 0.5, 0.0);
-    BOOST_CHECK_EQUAL(out.norm(), 0.0);
+    BOOST_CHECK_EQUAL((out - sentinel).norm(), 0.0);
 }
 
 BOOST_AUTO_TEST_CASE(a_case_that_overrides_them_is_dispatched_to)

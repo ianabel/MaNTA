@@ -320,9 +320,19 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       // like the five above: absent means an identically zero coupling block,
       // which is what every case gets until Task 8 wires the A1 assembly up to
       // read these.
-      .def("dSigmaFn_dGeometry", &TransportSystem::dSigmaFn_dGeometry)
+      .def("dSigmaFn_dGeometry",
+           py::overload_cast<Index, VectorRef, const State &, Position, Time>(
+               &TransportSystem::dSigmaFn_dGeometry))
       .def("dSources_dGeometry", &TransportSystem::dSources_dGeometry)
       .def("dAuxG_dGeometry", &TransportSystem::dAuxG_dGeometry)
+      // The batched overload, as SigmaFn_v/Sources_v/AuxG_v are: a State
+      // cannot be constructed from Python, so this is how a test drives the
+      // pointwise dispatch above -- the default loops over a GlobalState,
+      // builds a State per node, and calls the pointwise virtual, which
+      // PyTransportSystem overrides.
+      .def("dSigmaFn_dGeometry_v",
+           py::overload_cast<Index, GlobalState const &, std::vector<Position> const &, Time>(
+               &TransportSystem::dSigmaFn_dGeometry))
       .def("dSigma", &TransportSystem::dSigma)
       .def("dSources", &TransportSystem::dSources)
       .def("InitialValue", &TransportSystem::InitialValue)

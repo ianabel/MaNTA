@@ -105,6 +105,33 @@ reason it was not made:
     for each differential scalar. Two of the three fixtures there would have to
     be checked against it first.
 
+  - AutodiffTransportSystem::dSigmaFn_dp, dSources_dp and MMS_Source
+    (PhysicsCases/AutodiffTransportSystem.cpp) still evaluate the plain,
+    geometry-blind Flux/Source overloads directly, while every other hook --
+    SigmaFn, Sources, AuxG, and every dSigmaFn_.../dSources_.../dAuxG_...
+    derivative -- now goes exclusively through the geometry-aware overloads
+    added for the field-model coupling. The two sets agree today only because
+    the plain overload is still what every case's Flux/Source body actually
+    is: nothing yet gives the geometry-aware overload content that differs
+    from it. That stops being true the moment a case's real physics genuinely
+    depends on geometry, because the plain overload is the mandatory pure
+    virtual -- such a case is *forced* to write some body for it just to
+    compile, and dSigmaFn_dp/dSources_dp will silently differentiate that
+    fictional, geometry-blind stand-in instead of the real flux/source, while
+    MMS_Source will manufacture a source against the wrong equation entirely.
+    Same failure shape as a missing adjoint block: a perfectly plausible G (or
+    a manufactured solution that still converges, at the right rate, to the
+    wrong function) with nothing pointing at why.
+
+    Left for Task 10, which owns the adjoint's geometry coupling and is the
+    first place a case combining dSigmaFn_dp/dSources_dp (or useMMS) with a
+    real geometry dependence would actually appear. The fix in each case is to
+    build `geom` from `s.geom()` (dSigmaFn_dp/dSources_dp) or thread a
+    nonzero-width geom through the local `State` and every direct Flux/Source
+    call (MMS_Source), the way SigmaFn/Sources/every other hook in that file
+    already do, and then write the case that would have caught the old
+    behaviour being wrong before changing it.
+
 
 Superconvergence follow-ons (see Tests/README.md for what is already verified):
 
