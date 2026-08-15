@@ -744,6 +744,124 @@ BOOST_AUTO_TEST_CASE(the_initial_condition_uses_boundary_data_at_t0)
     removeOutput("lifecycle_t0_boundaries");
 }
 
+BOOST_AUTO_TEST_CASE(a_steady_solve_writes_its_answer_to_the_output_file)
+{
+    // Every output call used to live inside the time loop, so a PseudoTransient
+    // or Newton run wrote nothing at all: the .nc held the single t0 timeslice
+    // that initialiseNetCDF puts there during initialize(), which is the
+    // *initial condition*, and the .dat held one block of the same. The answer
+    // reached yJac and the restart file's Y, so the Python surface -- which
+    // reads yJac -- always looked right and only the files were wrong. Every
+    // steady run in this tree is driven from Python, which is how it survived.
+    //
+    // TestDiffusion is kappa u_xx = 0 with Dirichlet ends frozen at t0, and
+    // Centre = 0 puts those at u(0) = cos(0) = 1 and u(1) = cos(pi/2) = 0. The
+    // steady state is therefore u = 1 - x exactly -- degree 1, so it sits in P_k
+    // with room to spare and can be checked against the closed form rather than
+    // against itself.
+    const std::string stem = "lifecycle_steady_output";
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, stem);
+    sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    sys.setSteadyStateTolerance(1e-10);
+
+    {
+        CapturedOutput quiet;
+        sys.runSolver(T_FINAL);
+    }
+
+    // The solver reached the right answer, so anything missing below is the
+    // output path rather than the solve.
+    const Vector u = sample(sys);
+    for (Index i = 0; i < u.size(); ++i)
+    {
+        const double x = 0.1 + 0.2 * i;
+        BOOST_TEST(u(i) == 1.0 - x, boost::test_tools::tolerance(1e-8));
+    }
+
+    netCDF::NcFile out;
+    BOOST_CHECK_NO_THROW(out.open(stem + ".nc", netCDF::NcFile::FileMode::read));
+
+    // Two slices: the initial condition, and the converged state.
+    const size_t nSlices = out.getDim("t").getSize();
+    BOOST_TEST(nSlices == 2u);
+
+    std::vector<double> t(nSlices);
+    out.getVar("t").getVar(t.data());
+    BOOST_TEST(t[0] == 0.0, boost::test_tools::tolerance(0.0));
+    BOOST_TEST(t[1] == SystemSolver::STEADY_STATE_TIME, boost::test_tools::tolerance(0.0));
+
+    const size_t nX = out.getDim("x").getSize();
+    std::vector<double> x(nX);
+    out.getVar("x").getVar(x.data());
+
+    // The last slice, read back through the same (t, x) layout WriteTimeslice
+    // wrote it in.
+    std::vector<double> uOut(nX), uInitial(nX);
+    netCDF::NcVar uVar = out.getGroup(problem.getVariableName(0)).getVar("u");
+    uVar.getVar({nSlices - 1, 0}, {1, nX}, uOut.data());
+    uVar.getVar({0, 0}, {1, nX}, uInitial.data());
+
+    for (size_t i = 0; i < nX; ++i)
+        BOOST_TEST(uOut[i] == 1.0 - x[i], boost::test_tools::tolerance(1e-8));
+
+    // Not vacuous: the two slices really are different states, so a regression
+    // that wrote the initial condition twice would fail here rather than pass.
+    double spread = 0.0;
+    for (size_t i = 0; i < nX; ++i)
+        spread = std::max(spread, std::abs(uOut[i] - uInitial[i]));
+    BOOST_TEST(spread > 1e-2,
+               "the two timeslices are indistinguishable; the converged state was not written");
+
+    out.close();
+    removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(a_converged_steady_state_leaves_no_stale_derivative)
+{
+    // solveSteadyState damps through a scratch vector and never touched dYdt, so
+    // on return it still held whatever IDACalcIC left at t0. Two things read it
+    // afterwards: WriteRestartFile, so a restart resumed from a state whose y
+    // was the steady one and whose y' was the initial one, and a physics case's
+    // writeDiagnostics. Measured on AdjointPoster before the fix, ||dYdt|| was
+    // 103.4 at a converged steady state.
+    //
+    // Stops before destroySundials(), which nulls dYdt -- the point is the state
+    // integrate() leaves behind, not what cleanup does to it.
+    const std::string stem = "lifecycle_steady_dydt";
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, stem);
+    sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    sys.setSteadyStateTolerance(1e-10);
+
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+    }
+
+    // Not vacuous: at t0 the derivative is genuinely nonzero, so zeroing it is a
+    // change rather than a coincidence of this fixture.
+    BOOST_TEST(N_VMaxNorm(sys.dYdt) > 1e-3);
+
+    {
+        CapturedOutput quiet;
+        sys.integrate(T_FINAL);
+    }
+
+    // Exactly zero, not merely small: it is set rather than converged to.
+    BOOST_TEST(N_VMaxNorm(sys.dYdt) == 0.0, boost::test_tools::tolerance(0.0));
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+    removeOutput(stem);
+}
+
 BOOST_AUTO_TEST_CASE(an_unarmed_gate_leaves_runSolver_bit_for_bit_unchanged)
 {
     // The no-regression guarantee. An AdjointProblem may be attached for other

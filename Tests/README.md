@@ -550,6 +550,44 @@ These are deliberate and tracked, not oversights:
   `the_initial_condition_uses_boundary_data_at_t0` covers that separately,
   because every other fixture in the tree starts at zero.
 
+* **`SteadyState.cpp` is barely covered, and what covers it now is its output
+  rather than its algorithm.** Until recently nothing called `solveSteadyState`
+  from a test at all -- the only mentions of it under `Tests/` were config
+  parsing in `ConfigSourceTests.cpp` and the tolerance setter in
+  `SolverPlumbingTests.cpp`. Two cases in `SolverLifecycleTests.cpp` now drive it
+  end to end, both provoked by defects rather than written for coverage:
+
+  * `a_steady_solve_writes_its_answer_to_the_output_file`. Every output call
+    lived inside the time loop, which `PseudoTransient` and `Newton` skip, so a
+    steady run's `.nc` held exactly one timeslice -- the `t0` one
+    `initialiseNetCDF` writes during `initialize()`, i.e. the *initial
+    condition* -- and its `.dat` one block of the same. The converged state
+    reached `yJac` and the restart file's `Y`, so `getSolution` was always right;
+    only the files were wrong, and every steady run in this tree is driven from
+    Python, which reads `yJac`. `writeDiagnostics` is called from
+    `WriteTimeslice` and nowhere else, so a physics case's per-slice diagnostics
+    were never called at all while `initialiseDiagnostics` and
+    `finaliseDiagnostics` both ran -- the scaffolding at both ends with nothing
+    hung on it. The converged state is now stamped
+    `SystemSolver::STEADY_STATE_TIME` (1.0, a label rather than a time -- see
+    `docs/running.rst`), and the test checks it against the closed form `u = 1-x`
+    as well as requiring the two slices to differ.
+  * `a_converged_steady_state_leaves_no_stale_derivative`. `solveSteadyState`
+    damps through a scratch vector and never wrote back to `dYdt`, so on return
+    it still held the `t0` derivative `IDACalcIC` left -- 103.4 in norm on
+    `AdjointPoster` at a converged steady state, where the defining property of
+    the answer is that it vanishes. `WriteRestartFile` and `writeDiagnostics`
+    both read it, so a restart from a steady run resumed with a `y` and a `y'`
+    that did not belong together. The check is exactly zero, not merely small: it
+    is set rather than converged to.
+
+  What is still uncovered is the algorithm itself -- the SER schedule, step
+  rejection, `Newton` mode, the `KINSetMaxNewtonStep` clamp, and every failure
+  path. In particular the flat unweighted `steadyNorm` (`SteadyState.cpp:188`)
+  is untested, and both the convergence test and the SER ratio read it, so
+  anything that changes how it is normalised changes the stopping test and the
+  step schedule together.
+
 * **The C++ mirror plasma is gone.** `PhysicsCases/MirrorPlasma.{cpp,hpp}`,
   `PhysicsCases/MirrorPlasma/` and `PhysicsCases/CurvedMirrorPlasma/` were
   removed in favour of `python-physics/mirror-plasma`, which is the

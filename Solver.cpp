@@ -502,6 +502,35 @@ void SystemSolver::integrate(double tFinal)
 	if (TerminateOnSteadyState && steadyMode != SteadyMode::TimeMarch)
 	{
 		solveSteadyState();
+
+		// Write the converged state. Every output call used to live inside the
+		// time loop below, so a PseudoTransient or Newton run produced a .nc
+		// holding one timeslice -- the t0 one initialiseNetCDF wrote during
+		// initialize() -- and a .dat holding one block, both of them the
+		// *initial condition*. The answer reached the restart file (from Y) and
+		// yJac, which is why the Python surface always looked right and only
+		// the files were wrong.
+		//
+		// A physics case's writeDiagnostics is called from WriteTimeslice and
+		// nowhere else, so it was never called at all on this path:
+		// initialiseDiagnostics and finaliseDiagnostics ran and the case got to
+		// write the scaffolding at both ends with nothing hung on it.
+		//
+		// STEADY_STATE_TIME, not tret: see its definition. Deliberately no
+		// IDAGetNumSteps report -- IDA never ran.
+		if (writeDatFile)
+			print(out0, STEADY_STATE_TIME, nOut, Y, true);
+		if (debugDat)
+		{
+			printOnNodes(dydt_out, STEADY_STATE_TIME, dYdt);
+			residual(t0, Y, dYdt, res);
+			IDAEwtSet(Y, wgt, IDA_mem);
+			std::println(res_out, "# Residual norm at steady state is {:g}",
+						 N_VWrmsNorm(res, wgt));
+			printOnNodes(res_out, STEADY_STATE_TIME, res);
+		}
+		if (writeOutput)
+			WriteTimeslice(STEADY_STATE_TIME);
 	}
 	else
 	{

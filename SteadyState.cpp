@@ -238,6 +238,24 @@ void SystemSolver::solveSteadyState()
             // and the output path both read it.
             N_VConst(0.0, ptcDYdt);
             setJacEvalY(Y, ptcDYdt);
+
+            // dYdt is IDA's derivative vector, and nothing in this function has
+            // touched it -- the damping above runs on the scratch ptcDYdt. So on
+            // return it still holds whatever IDACalcIC left at t0, which for a
+            // converged steady state is simply wrong: the defining property of
+            // the answer is that dy/dt vanishes. Two things read it afterwards
+            // and both were getting the t0 derivative -- WriteRestartFile
+            // (Solver.cpp), so a restart resumed from a state whose y was the
+            // steady one and whose y' was not, and writeDiagnostics, which a
+            // physics case is entitled to differentiate. Measured before the
+            // fix on AdjointPoster: ||dYdt|| = 103.4 at convergence.
+            //
+            // Zeroed here rather than at either reader, because integrate()
+            // ends with its own setJacEvalY(Y, dYdt) (Solver.cpp) -- so the
+            // zero setJacEvalY just put in dydtJac was overwritten on the way
+            // out with the stale value anyway. Fixing the vector is what makes
+            // all three agree.
+            N_VConst(0.0, dYdt);
             return;
         }
 

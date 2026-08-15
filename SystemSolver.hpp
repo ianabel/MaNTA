@@ -76,6 +76,23 @@ class SystemSolver
             Newton,
         };
 
+        // The time a converged steady state is stamped with in the output, on
+        // the two modes that do not integrate. It is a label, not a physical
+        // time: PseudoTransient and Newton drive the residual to zero without
+        // advancing anything, so there is no elapsed time to report, and every
+        // time-dependent input was frozen at t_initial (see SteadyMode above).
+        //
+        // 1.0 rather than t0 or tFinal, and the choice is forced. tret never
+        // leaves t0 on this path, so stamping with it would give the file two
+        // slices both at t0 -- and tFinal is no better, because PyRunner's
+        // run_ss() calls runSolver(0), which is the path every steady run in
+        // this tree takes. A fixed label separates the converged state from
+        // the initial condition in every case, and reads as the flag it is.
+        //
+        // So a steady run's .nc holds exactly two slices: t = 0, the initial
+        // condition, and t = 1, the answer. docs/running.rst says so.
+        static constexpr double STEADY_STATE_TIME = 1.0;
+
         void setSteadyMode(SteadyMode mode) { steadyMode = mode; };
         SteadyMode getSteadyMode() const { return steadyMode; };
         void setPseudoTransientInitialStep(double dt) { ptcInitialStep = dt; };

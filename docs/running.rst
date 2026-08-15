@@ -118,6 +118,12 @@ point a config file at it:
 The grid and polynomial degree come from the restart file, so the corresponding
 config keys are ignored on this path.
 
+A restart written by a steady solve carries ``dYdt = 0``, which is the defining
+property of the state it holds. It used to carry the ``t_initial`` derivative
+instead — ``solveSteadyState`` damps through a scratch vector and never wrote
+back to the one the restart file is built from — so a resumed run started from a
+solution and a time derivative that did not belong together.
+
 .. warning::
 
    Restarting is **fragile at tight tolerances**, and more so with ``nAux > 0``.
@@ -208,6 +214,49 @@ solve starts rejecting steps. Its ``run.conf`` therefore pins ``TimeMarch``.
 
    Explicitly time-dependent data — boundary values, sources — is frozen at
    ``t_initial``. There is no time axis to evaluate it on.
+
+Output from a steady solve
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``PseudoTransient`` and ``Newton`` do not advance time, so there is no elapsed
+time to report and no series of timeslices to write. A run in either mode
+produces **exactly two** slices:
+
+.. list-table::
+   :header-rows: 1
+
+   * - ``t``
+     - what it holds
+   * - ``0`` (strictly, ``t_initial``)
+     - the initial condition, written by ``initialize()``
+   * - ``1``
+     - the converged steady state
+
+**The second stamp is a label, not a time.** It is
+``SystemSolver::STEADY_STATE_TIME``, fixed at ``1.0`` whatever ``t_initial`` and
+``t_final`` are, and it carries no physical meaning: every time-dependent input
+was frozen at ``t_initial``, as above. A fixed label is what separates the
+answer from the initial condition in the file — the alternatives do not, since
+the solver's clock never leaves ``t_initial`` on this path, and ``run_ss()``
+calls the solver with ``tFinal = 0``. So read a steady run's answer as *the last
+slice*, and do not difference the two for a rate of change.
+
+``WriteDatFile`` output follows the same shape: two blocks, the second being the
+converged state.
+
+``TimeMarch`` is unaffected — it writes a slice per output cadence at real times
+and stops when ``dY/dt`` falls below the tolerance, so its last slice carries the
+time the state was actually reached.
+
+.. note::
+
+   Before this was fixed, a ``PseudoTransient`` or ``Newton`` run wrote **only**
+   the ``t = 0`` slice: every output call lived inside the time loop, which
+   those two modes skip. The converged state still reached ``getSolution()`` and
+   the ``.restart.nc``, so the Python API was correct and only the files were
+   wrong. A physics case's ``writeDiagnostics`` hook is called from the same
+   place and so was never called at all, which is why a steady run's diagnostic
+   groups were empty.
 
 The inner solve for both modes is **KINSOL**, driving the same static
 condensation IDA does, so MaNTA links ``sundials_kinsol`` whichever mode a run
