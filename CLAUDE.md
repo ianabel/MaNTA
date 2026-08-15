@@ -658,11 +658,28 @@ mesh hid it and nothing removed it. The generalisation worth keeping is that
 should have caught this instead pinned the defect, because it differenced an
 exactly-integrated `GFn` that no real case reports.
 
-`dGdaux_Vec` is the one piece still on the old footing, and is in `TODO`; it is
-live because `dgFn_dphi` is the only pointwise `dg` hook a case can still reach.
 The pointwise `DerivativeSubVector` overload and the `dGdu_Vec`/`dGdq_Vec`/
 `dGdsigma_Vec` wrappers over it are gone — they computed `∫ dg/dZ φ_i dx`, the
-derivative of `∫ g dx`, and no solve ever called them.
+derivative of `∫ g dx`, and no solve ever called them. `dGdaux_Vec` was the last
+one left and is now the same operator over `nAux` blocks: it takes the nodal
+`dg/dphi` from the batched `dg` and weights it, and `dGdt` goes through it too
+rather than applying the mass matrix inline. A C++ case's `dgFn_dphi` still
+reaches it, through `AdjointProblem::dg`'s default, which samples the hook at the
+nodes; a Python case supplies `dg` and `PyAdjointProblem::dgFn_dphi` raises.
+
+**Beware how nearly `diag(w)` and `M` agree — it is far more than the constants
+the argument above needs.** `(M v)_i = ∫ φ_i v` and `(diag(w) v)_i = v_i ∫ φ_i`,
+so they coincide whenever the interpolatory rule integrates `φ_i v` exactly; on
+`k+1` Chebyshev points of the first kind that rule is symmetric, hence exact to
+degree `k+1` for even `k`. At `k = 2` — which is what the adjoint fixtures use —
+that covers every *affine* `dg/dZ`, and the mocks' hooks are affine in `x`. Both
+`the_derivative_sub_vector_weights_dg_by_the_integration_weights` and its aux
+sibling therefore passed with the mass matrix reinstated, by 3e-16 and 5e-16,
+until each was given a second half driven by a synthetic degree-`k` `dg/dZ` and a
+guard that the two operators still differ on it. Before that the only case in the
+suite that noticed at all was `dGdt_matches_a_finite_difference_of_the_objective`,
+at a relative 6e-6 against a 1e-6 tolerance. A reference built "straight from the
+weights" pins the formula, not the operator, if the data cannot tell them apart.
 
 ## Traps worth knowing before you edit
 
