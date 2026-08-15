@@ -1306,7 +1306,7 @@ public:
                        GlobalState const &states, std::vector<Position> const &points,
                        Vector const &weights, Time t) override
     {
-        out = L * psi - f(states, points, weights, t);
+        out = L * psi - f(states, points, weights);
     }
 
     void Geometry(VectorRef out, Vector const &psi, Position x, Time) override
@@ -1365,18 +1365,22 @@ private:
         return v;
     }
 
+    /// The residual's own term: f_m = Int c_m(x) u(x) dx against the *discrete*
+    /// state, which is what the constraint L psi = f(state) means.
     Vector f(GlobalState const &states, std::vector<Position> const &points,
-             Vector const &weights, Time t) const
+             Vector const &weights) const
     {
         Vector out = Vector::Zero(N);
         for (Index m = 0; m < N; ++m)
             for (Index j = 0; j < weights.size(); ++j)
                 out(m) += weights(j) * basis(m, points[j]) * states[j].u(0);
-        // Compensated against u_exact, not against the discrete state -- see
-        // the header comment.
         return out;
     }
 
+    /// The same integral against u_exact, for psiExact and the initial value.
+    /// This -- not f() above -- is the "compensate against u_exact" the header
+    /// comment describes: it is what the order study compares to, so it must
+    /// not be a function of the discrete state.
     Vector fExact(Time t) const
     {
         // Int c_m(x) sin(pi x)(1+t) dx, by a fine Simpson rule; the constraint
@@ -1955,8 +1959,15 @@ BOOST_AUTO_TEST_CASE(a_sign_error_in_a1_would_be_caught)
     // Guard against the test passing vacuously: perturb A1 and require the
     // check to fail. If this does not fail, the coupling is not being exercised
     // and neither of the two tests above means anything.
+    //
+    // The perturbation reaches A1_cellwise directly rather than through a
+    // production mutator: this is a -DTEST build, where MANTA_TEST_PRIVATE has
+    // widened SystemSolver's private members to public. Nothing test-only is
+    // added to the shipped class.
     auto solver = makeCoupledSolverAtState(6, 2, ManufacturedFieldTag{});
-    solver->flipA1SignForTesting();
+    solver->updateMatricesForJacSolve();
+    for (auto &block : solver->A1_cellwise)
+        block *= -1.0;
 
     const Matrix J = finiteDifferenceCoupledJacobian(*solver);
     Vector dy = Vector::Random(J.cols());
@@ -2412,8 +2423,13 @@ BOOST_AUTO_TEST_CASE(dropping_the_coupling_block_makes_the_gradient_wrong)
 {
     // The guard: without it, a zero A1^T would pass the test above if the
     // objective happened not to see the coupling.
+    //
+    // Reached directly through MANTA_TEST_PRIVATE, as in field_jacobian_tests:
+    // this is a -DTEST build, so no test-only method is added to SystemSolver.
     auto solver = makeCoupledAdjointProblem(8, 2);
-    solver->zeroAdjointCouplingForTesting();
+    solver->initializeMatricesForAdjointSolve();
+    for (auto &block : solver->A1_transpose_cellwise)
+        block.setZero();
     const Vector analytic = solver->getAdjointGradients();
     const Vector fd = finiteDifferenceGradient(*solver, 1e-6);
 
@@ -2685,9 +2701,11 @@ done
 
 Expected: no output. Not "within 1e-2" — the regression suite's tolerance is far too loose to see a change of this kind, which is exactly how the `zeroFlux` reimplementation was verified.
 
-- [ ] **Step 6: Add a coupled regression case**
+- [ ] **Step 6: Record that there is no coupled regression case**
 
-`Tests/RegressionTests/coupled-field.conf` selecting a registered field model, with a checked-in `.ref.nc`. This needs a *production* field model, so register `ManufacturedField` under a clearly non-physical name (`ManufacturedFieldBenchmark`) in `PhysicsCases/`, or skip this step and record in `Tests/README.md` that the coupled path has unit coverage only.
+There is deliberately **no** `Tests/RegressionTests/coupled-field.conf`. A regression case would need a field model registered in `PhysicsCases/` and therefore present in the shipped binary, and the only model that exists is a manufactured fixture with no physics in it. Add a paragraph to `Tests/README.md`'s coverage section saying so, and saying what does cover the coupled path instead: the MMS order study (Task 11), the coupled Jacobian check (Task 8), the adjoint gradient check (Task 10) and the restart round trip (Step 4 above).
+
+Name the gap this leaves, rather than implying there is none: nothing exercises the coupled path through a `.conf` file, so the config plumbing added in Task 8 and the netCDF group added in Step 3 are covered by unit tests only.
 
 - [ ] **Step 7: Write the documentation**
 
