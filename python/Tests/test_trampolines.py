@@ -227,15 +227,23 @@ def test_incomplete_subclass_is_rejected_with_a_useful_message(tmp_path):
 
 # ---------------------------------------------------- geometry derivatives --
 #
-# dSigmaFn_dGeometry has no way to be driven from Python the way SigmaFn is
-# in test_scalar_and_vectorised_paths_agree above: nothing in the solver
-# calls it yet (Task 8 wires the coupling block up to it), so there is no
-# real Runner solve that reaches it. What TransportSystem does give it is a
-# batched (GlobalState-based) entry point in the same spirit as AuxG_v just
-# above -- a State cannot be constructed from Python, so this is how these
-# two tests reach the pointwise C++ trampoline (PyTransportSystem.hpp's
-# dSigmaFn_dGeometry dispatcher, optional_override lookup, and the Values
-# cast) at all.
+# dSigmaFn_dGeometry has no way to be driven from Python the way SigmaFn is in
+# test_scalar_and_vectorised_paths_agree above: nothing in the solver calls it
+# yet (assembling the A1 coupling block is Task 8's job, not this one's), so
+# there is no real Runner solve that reaches it, and unlike SigmaFn/Sources/
+# AuxG it has no batched (GlobalState-taking) entry point either -- adding one
+# just to test through was tried and reverted, because it would have been a
+# new virtual on TransportSystem's public interface, inheritable and
+# overridable by any physics case, existing for no reason but this test.
+#
+# manta._manta._test_dSigmaFn_dGeometry is the narrower alternative: a free
+# function (Python.cpp), not a TransportSystem method, that builds a State in
+# C++ and calls the pointwise dispatcher directly -- the same thing a C++
+# unit test does, and the same boundary (PyTransportSystem.hpp's
+# dSigmaFn_dGeometry dispatcher, its optional_override lookup, and the Values
+# cast) a real caller will eventually cross. It is test support only and not
+# re-exported by manta/__init__.py, reachable only via manta._manta, the same
+# way test_jax_layer.py already reaches manta._manta.runner_ffi_ops directly.
 
 
 class GeometryReader(MaNTA.TransportSystem):
@@ -299,32 +307,21 @@ class GeometryBlind(MaNTA.TransportSystem):
         return 0.0
 
 
-def _geometry_states(geometry):
-    """A GlobalState dict for nVars=1, nAux=0, nScalars=0, with the given
-    (nPoints, nGeom) geometry array."""
-    nPoints = geometry.shape[0]
-    return {
-        "Variable": np.zeros((nPoints, 1)),
-        "Derivative": np.zeros((nPoints, 1)),
-        "Flux": np.zeros((nPoints, 1)),
-        "Aux": np.zeros((nPoints, 0)),
-        "Geometry": geometry,
-        "Scalars": np.zeros(0),
-    }
-
-
-def test_dsigma_fn_dgeometry_v_dispatches_to_the_python_override():
+def test_dsigma_fn_dgeometry_dispatches_to_the_python_override():
     system = GeometryReader()
-    positions = [0.1, 0.2, 0.3]
-    geometry = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
-    states = _geometry_states(geometry)
+    geom = np.array([1.0, 2.0])
+    x = 0.3
 
-    out = MaNTA.TransportSystem.dSigmaFn_dGeometry_v(system, 0, states, positions, 0.0)
+    out = np.asarray(MaNTA._manta._test_dSigmaFn_dGeometry(system, 0, geom, x, 0.0))
 
-    assert len(out) == len(positions)
-    for j, x in enumerate(positions):
-        expected = [geometry[j, 0], geometry[j, 1] + x]
-        assert np.asarray(out[j]) == pytest.approx(expected), (j, out[j])
+    assert out == pytest.approx([geom[0], geom[1] + x])
+
+    # A second point, so this is a statement about the function rather than
+    # one lucky coincidence of numbers.
+    geom2 = np.array([5.0, -3.0])
+    x2 = -1.25
+    out2 = np.asarray(MaNTA._manta._test_dSigmaFn_dGeometry(system, 0, geom2, x2, 0.0))
+    assert out2 == pytest.approx([geom2[0], geom2[1] + x2])
 
 
 def test_an_absent_dsigma_fn_dgeometry_is_identically_zero():
@@ -333,15 +330,11 @@ def test_an_absent_dsigma_fn_dgeometry_is_identically_zero():
     is returned or that the call fails.
     """
     system = GeometryBlind()
-    positions = [0.1, 0.2]
-    geometry = np.array([[7.0, 8.0], [9.0, 10.0]])
-    states = _geometry_states(geometry)
+    geom = np.array([7.0, 8.0])
 
-    out = MaNTA.TransportSystem.dSigmaFn_dGeometry_v(system, 0, states, positions, 0.0)
+    out = np.asarray(MaNTA._manta._test_dSigmaFn_dGeometry(system, 0, geom, 0.2, 0.0))
 
-    assert len(out) == len(positions)
-    for j in range(len(positions)):
-        assert np.asarray(out[j]) == pytest.approx([0.0, 0.0])
+    assert out == pytest.approx([0.0, 0.0])
 
 
 # ------------------------------------------------------- PyGrid / getNodes --

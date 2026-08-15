@@ -300,8 +300,6 @@ class TransportSystem:
         ...
     def dSigmaFn_dGeometry(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]", "flags.writeable"], arg2: State, arg3: typing.SupportsFloat | typing.SupportsIndex, arg4: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
-    def dSigmaFn_dGeometry_v(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: dict[typing.Sequence[float]], arg2: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], arg3: typing.SupportsFloat | typing.SupportsIndex) -> list[typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]]:
-        ...
     def dSigmaFn_dq(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]", "flags.writeable"], arg2: State, arg3: typing.SupportsFloat | typing.SupportsIndex, arg4: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     def dSigmaFn_du(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]", "flags.writeable"], arg2: State, arg3: typing.SupportsFloat | typing.SupportsIndex, arg4: typing.SupportsFloat | typing.SupportsIndex) -> None:
@@ -343,6 +341,10 @@ class TransportSystem:
 def Mixed(a: typing.SupportsFloat | typing.SupportsIndex = 0.0, b: typing.SupportsFloat | typing.SupportsIndex = 0.0, d: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> BoundaryCondition:
     """
     A mixed/Robin boundary condition a u + b q + d sigma = c, where c is what LowerBoundary/UpperBoundary returns. sigma is the stored flux, which is -sigma_hat. At least one of b and d must be nonzero.
+    """
+def _test_dSigmaFn_dGeometry(sys: TransportSystem, i: typing.SupportsInt | typing.SupportsIndex, geom: typing.Annotated[numpy.typing.ArrayLike, numpy.float64, "[m, 1]"], x: typing.SupportsFloat | typing.SupportsIndex, t: typing.SupportsFloat | typing.SupportsIndex) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
+    """
+    Test support only: builds a State carrying the given geometry and calls the pointwise dSigmaFn_dGeometry dispatcher directly.
     """
 @typing.overload
 def getNodes(arg0: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], arg1: typing.SupportsInt | typing.SupportsIndex) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:

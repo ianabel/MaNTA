@@ -320,19 +320,9 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       // like the five above: absent means an identically zero coupling block,
       // which is what every case gets until Task 8 wires the A1 assembly up to
       // read these.
-      .def("dSigmaFn_dGeometry",
-           py::overload_cast<Index, VectorRef, const State &, Position, Time>(
-               &TransportSystem::dSigmaFn_dGeometry))
+      .def("dSigmaFn_dGeometry", &TransportSystem::dSigmaFn_dGeometry)
       .def("dSources_dGeometry", &TransportSystem::dSources_dGeometry)
       .def("dAuxG_dGeometry", &TransportSystem::dAuxG_dGeometry)
-      // The batched overload, as SigmaFn_v/Sources_v/AuxG_v are: a State
-      // cannot be constructed from Python, so this is how a test drives the
-      // pointwise dispatch above -- the default loops over a GlobalState,
-      // builds a State per node, and calls the pointwise virtual, which
-      // PyTransportSystem overrides.
-      .def("dSigmaFn_dGeometry_v",
-           py::overload_cast<Index, GlobalState const &, std::vector<Position> const &, Time>(
-               &TransportSystem::dSigmaFn_dGeometry))
       .def("dSigma", &TransportSystem::dSigma)
       .def("dSources", &TransportSystem::dSources)
       .def("InitialValue", &TransportSystem::InitialValue)
@@ -440,6 +430,41 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
   m.def("registerPhysicsCase", &PhysicsCases::RegisterPhysicsCase,
         py::arg("name"), py::arg("factory"), py::return_value_policy::reference,
         "Register a physics case under the name a config file can ask for.");
+
+  // Test support only -- not part of the public API. manta/__init__.py does
+  // not re-export this, so it is reachable only as
+  // manta._manta._test_dSigmaFn_dGeometry, the same way python/Tests already
+  // reaches manta._manta.runner_ffi_ops directly rather than through the
+  // curated `manta` surface.
+  //
+  // It exists because dSigmaFn_dGeometry has no batched (GlobalState-taking)
+  // entry point the way SigmaFn/Sources/AuxG do -- nothing in the solver
+  // calls it yet, since assembling the A1 coupling block is Task 8's job, not
+  // this one's -- and a State cannot be constructed standalone from Python
+  // (see PyState.hpp), so python/Tests/test_trampolines.py had no way at all
+  // to drive PyTransportSystem.hpp's pointwise dSigmaFn_dGeometry dispatcher,
+  // its optional_override lookup, and the Values cast.
+  //
+  // A free function rather than a TransportSystem method, deliberately: it
+  // adds nothing inheritable or overridable to the interface a physics case
+  // implements, unlike a batched virtual would. It builds a State carrying
+  // only the given geometry (u/q/sigma/phi are left zero, since this is
+  // about the geometry dispatch, not the physics) and calls the pointwise
+  // hook directly -- exactly what a C++ test does, and what a real caller
+  // (Task 8's assembly) will do too.
+  m.def(
+      "_test_dSigmaFn_dGeometry",
+      [](TransportSystem &sys, Index i, Vector const &geom, Position x, Time t) {
+        State s(sys.getNumVars(), sys.getNumScalars(), sys.getNumAux(),
+                static_cast<Index>(geom.size()));
+        s.geom() = geom;
+        Vector out = Vector::Zero(geom.size());
+        sys.dSigmaFn_dGeometry(i, out, s, x, t);
+        return out;
+      },
+      py::arg("sys"), py::arg("i"), py::arg("geom"), py::arg("x"), py::arg("t"),
+      "Test support only: builds a State carrying the given geometry and calls "
+      "the pointwise dSigmaFn_dGeometry dispatcher directly.");
 
   py::class_<PyRunner, py::smart_holder>(m, "Runner")
       .def(py::init<std::shared_ptr<TransportSystem>>())
