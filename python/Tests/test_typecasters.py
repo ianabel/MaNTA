@@ -407,9 +407,17 @@ def test_global_state_survives_a_range_of_point_counts(nPoints):
 
 
 def test_geometry_reaches_a_batched_call_with_the_right_orientation():
-    """The GlobalState caster transposes in both directions, so a round trip
-    cannot detect a missing transpose. Check the orientation from inside a
-    batched call, where the (nPoints, nGeom) shape is observable."""
+    """A load()-then-cast() round trip through the GlobalState caster.
+
+    GeometryProbe overrides ComputePhysics, so PyTransportSystem::ComputePhysics
+    converts the already-loaded C++ GlobalState straight back to a Python dict
+    via cast() before this override ever sees it -- both caster directions run.
+    That confirms "Geometry" survives the round trip with the right shape, but
+    -- like any round trip -- it cannot rule out two *compensating* missing
+    transposes, one in load() and one in cast(), which would cancel exactly and
+    still look correct here. test_geometry_is_transposed_on_the_way_into_cpp
+    below is the one-directional check that can catch that.
+    """
     seen = {}
 
     class GeometryProbe(MaNTA.TransportSystem):
@@ -438,3 +446,43 @@ def test_geometry_reaches_a_batched_call_with_the_right_orientation():
 
     assert seen["shape"] == (NPOINTS, n_geom)
     assert seen["shape"][0] == seen["npoints"]
+
+
+def test_geometry_is_transposed_on_the_way_into_cpp():
+    """The orientation check a round trip cannot fake.
+
+    Mirrors test_global_state_is_transposed_on_the_way_into_cpp: SigmaFn_v with
+    no vectorised override forces the C++ serial fallback, which slices the
+    already-loaded GlobalState internally via operator[] -- load() only, never
+    cast() -- and hands a per-point StateView to the pointwise SigmaFn. A
+    load() that dropped its transpose (with or without a matching drop in
+    cast()) cannot hide here: state.geom at point j is checked against
+    states["Geometry"][j, :] directly, and with n_geom != NPOINTS a transposed
+    load would not even produce a vector of the right length.
+    """
+    seen = []
+
+    class GeometryProbe(MaNTA.TransportSystem):
+        variables = [MaNTA.Field("n", "density", "m^-3")]
+
+        def SigmaFn(self, i, state, x, t):
+            seen.append(np.array(state.geom, copy=True))
+            return 0.0
+
+        def Sources(self, i, state, x, t):
+            return 0.0
+
+    system = GeometryProbe()
+    n_geom = 4  # deliberately != NPOINTS, so a transpose cannot hide
+    states = make_global_state(nVars=1, nAux=0, nScalars=0)
+    states["Geometry"] = (
+        np.arange(NPOINTS)[:, None] * 10.0 + np.arange(n_geom)[None, :]
+    )
+
+    MaNTA.TransportSystem.SigmaFn_v(system, 0, states, POSITIONS, 0.0)
+
+    assert len(seen) == NPOINTS
+    for j, geom in enumerate(seen):
+        assert np.allclose(geom, states["Geometry"][j, :]), (
+            f"point {j}: got {geom}, want {states['Geometry'][j, :]}"
+        )
