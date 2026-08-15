@@ -66,7 +66,23 @@ SystemSolver::~SystemSolver()
         delete[] v;
         delete[] w;
     }
+    freeFieldWorkVectors();
     SUNContext_Free(&ctx);
+}
+
+// a2 belongs to the *solver*, not to a run: it is sized by nField, which
+// setFieldModel fixes and nothing afterwards changes. So it is freed here and in
+// setFieldModel, and deliberately not in destroySundials -- which frees what
+// initialize() allocated, and would otherwise leave a dangling pointer for the
+// next Jacobian assembly on a reused solver.
+void SystemSolver::freeFieldWorkVectors()
+{
+    if (a2 == nullptr)
+        return;
+    for (Index f = 0; f < nField; ++f)
+        N_VDestroy(a2[f]);
+    delete[] a2;
+    a2 = nullptr;
 }
 
 // yJac, dydtJac and dydtComplete own what they map, unlike y and dydt, which are
@@ -115,6 +131,9 @@ void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
             "scalar coupling's non-superconvergent branch evaluates dSources_dScalars on "
             "states that carry no geometry.");
 
+    // Before nField moves: the count of vectors to destroy is the old one.
+    freeFieldWorkVectors();
+
     fieldModel = std::move(model);
     nField = fieldModel ? fieldModel->nFieldDOF() : 0;
     nGeom = fieldModel ? fieldModel->nGeometry() : 0;
@@ -148,6 +167,16 @@ void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
         v[i] = N_VNew_Serial(y.getDoF(), ctx);
         w[i] = N_VNew_Serial(y.getDoF(), ctx);
     }
+
+    // The A2 rows. One per field DOF, each as long as the whole solution vector
+    // -- which is why they cannot be allocated in the constructor: nField is
+    // zero there for every solver, and becomes known here.
+    if (nField > 0)
+    {
+        a2 = new N_Vector[nField];
+        for (Index f = 0; f < nField; ++f)
+            a2[f] = N_VNew_Serial(y.getDoF(), ctx);
+    }
 }
 
 // See the declaration for why this is once per residual rather than once per
@@ -173,10 +202,10 @@ void SystemSolver::evaluateGeometry(DGSoln const &Y, std::vector<Position> const
     }
 }
 
-// See the declaration: this is the field model's own block and not a coupling
-// block, and it is what gives the Newton solve a direction for psi at all.
-void SystemSolver::updateFieldBlock(DGSoln const &Y, DGSoln const &Ydot, Time tEval,
-                                    double alphaValue)
+// All three field blocks, from one FieldResidualPrime call. See the declaration.
+void SystemSolver::assembleFieldCoupling(DGSoln const &Y, DGSoln const &Ydot,
+                                         PhysicsNodes const &nodes, Time tEval,
+                                         double alphaValue)
 {
     GlobalStateMatrix dR(nField), dRdot(nField);
     for (Index f = 0; f < nField; ++f)
@@ -187,17 +216,83 @@ void SystemSolver::updateFieldBlock(DGSoln const &Y, DGSoln const &Ydot, Time tE
     Matrix dRdpsi = Matrix::Zero(nField, nField);
     Matrix dRddpsidt = Matrix::Zero(nField, nField);
 
+    // On the k+1 basis nodes even under the superconvergent scheme, and with no
+    // geometry on the states -- both because that is how residual() evaluates
+    // FieldResidual, and a derivative that is not the derivative of the residual
+    // that is actually evaluated is simply a different matrix.
     fieldModel->FieldResidualPrime(dR, dRdot, dRdpsi, dRddpsidt,
                                    Vector(Y.getField()), Vector(Ydot.getField()),
                                    Y.evalOnNodes(), Y.getPoints(),
                                    Integrator::getIntegrationWeights(Y.getBasis(), grid),
                                    tEval);
 
-    // dR and dRdot are filled and discarded here. They are the A2 coupling row
-    // and belong in the Jacobian, which is a later piece of work; asking for
-    // them now is what keeps this one call rather than two, since a model that
-    // solves a coupled system internally reports every row at once.
+    // ---- A2: one full-length row vector per field row.
+    //
+    // Laid out as a DGSoln view over a2[f], the way the scalar bordering lays
+    // out `w`, so that contracting it with a solution vector is one N_VDotProd.
+    //
+    // Only the sigma, q, u and aux entries are written; the lambda, scalar and
+    // field entries keep the zero row.zeroCoeffs() left them at. That is not an
+    // omission: GlobalState has no trace slot, so a field residual has no way to
+    // depend on lambda, and its dependence on psi is B rather than A2.
+    //
+    // The `alphaValue * dRdot` term mirrors what the scalar `w` vectors carry,
+    // and is *currently unreachable*: FieldResidual is handed `states` but no
+    // `states_dot` -- unlike ScalarG, which takes both -- so a field row cannot
+    // depend on the transport time derivatives in the first place and dRdot
+    // comes back zero for every model that can exist today. It is written this
+    // way because FieldResidualPrime declares the slot, so the day the value
+    // hook gains ydot the derivative is already right rather than silently one
+    // term short. Nothing tests it, and nothing can until then.
+    for (Index f = 0; f < nField; ++f)
+    {
+        DGSoln row(nVars, grid, k, N_VGetArrayPointer(a2[f]), nScalars, nAux, nField);
+        row.zeroCoeffs();
+
+        GlobalState const &s = dR[f];
+        GlobalState const &s_dt = dRdot[f];
+
+        for (Index i = 0; i < nCells; ++i)
+            for (Index l = 0; l < k + 1; ++l)
+            {
+                // GlobalState::operator[] builds a State by *value*, so this is
+                // read-only -- which is all that is wanted here, and is why it
+                // is hoisted rather than called once per variable.
+                const State sg = s[i * (k + 1) + l];
+                const State sg_dt = s_dt[i * (k + 1) + l];
+
+                for (Index v = 0; v < nVars; ++v)
+                {
+                    row.sigma(v).getCoeff(i).second(l) =
+                        sg.sigma(v) + alphaValue * sg_dt.sigma(v);
+                    row.q(v).getCoeff(i).second(l) = sg.q(v) + alphaValue * sg_dt.q(v);
+                    row.u(v).getCoeff(i).second(l) = sg.u(v) + alphaValue * sg_dt.u(v);
+                }
+                for (Index a = 0; a < nAux; ++a)
+                    row.Aux(a).getCoeff(i).second(l) = sg.phi(a) + alphaValue * sg_dt.phi(a);
+            }
+    }
+
+    // ---- B: the model's own block, which it factorises for itself.
     fieldModel->updateFieldJacobian(dRdpsi, dRddpsidt, alphaValue);
+
+    // ---- A1, cell by cell.
+    for (Index i = 0; i < nCells; ++i)
+    {
+        if (superconvergent)
+            dPhysics_dField_StarMat(A1_cellwise[i], Y, nodes.states, nodes.points, i, tEval);
+        else
+            dPhysics_dField_Mat(A1_cellwise[i], Y, nodes.states, nodes.points, i, tEval);
+    }
+}
+
+// See the declaration: A1's column m as a full-length vector.
+void SystemSolver::scatterA1Column(Index m, N_Vector out) const
+{
+    VectorWrapper v(N_VGetArrayPointer(out), N_VGetLength(out));
+    v.setZero();
+    for (Index i = 0; i < nCells; ++i)
+        v.segment(i * localDOF, localDOF) = A1_cellwise[i].col(m);
 }
 
 void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
@@ -669,6 +764,14 @@ void SystemSolver::initialiseMatrices()
         // the pre-sizing here dead and the compute() reallocate after all.
         Eigen::Index nDof = nVars * SQU_DOF + nAux * AUX_DOF;
         MXSolvers.emplace_back( nDof, nDof );
+
+        // This cell's block of A1. Sized and zeroed here and filled by
+        // assembleFieldCoupling, which is the pattern RF_cellwise follows and
+        // for the same reason: what goes in it depends on the state and the
+        // time, so initialiseMatrices has no business computing it. Empty when
+        // no field model is attached -- nField is zero, so the block has no
+        // columns and scatterA1Column is never called.
+        A1_cellwise.emplace_back(Matrix::Zero(nDof, nField));
     }
     // Factorise the global H matrix
     H_global.compute(HGlobalMat);
@@ -711,6 +814,7 @@ void SystemSolver::clearCellwiseVecs()
     Cq_cellwise.clear();
     CEBlocks.clear();
     MXSolvers.clear();
+    A1_cellwise.clear();
 }
 
 // Memory Layout for a sundials Y is, if i indexes the components of u / q / sigma
@@ -1039,7 +1143,7 @@ void SystemSolver::updateMatricesForJacSolve()
     }
 
     if (fieldModel)
-        updateFieldBlock(yJac, dydtJac, jt, alpha);
+        assembleFieldCoupling(yJac, dydtJac, nodes, jt, alpha);
 }
 
 void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorWrapper &lam, sunrealtype *const &Y) const
@@ -1066,9 +1170,41 @@ void SystemSolver::setJacEvalY(N_Vector yy, N_Vector yp)
     dydtJac.copy(ypMap); // Deep copy
 }
 
-// Over-arching Jacobian function. If there's no coupled B-field solve, or auxiliary variables, then just do the
-// HDG Jacobian solve
+// The Jacobian solve IDA asks for. Without a field model this is exactly the
+// transport operator, which is what keeps every existing run bit-for-bit what it
+// was; with one, the coupling is folded in here and nowhere below.
 void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
+{
+    if (!fieldModel)
+    {
+        solveTransportJac(res_g, delY);
+        return;
+    }
+
+    switch (fieldSolveMode)
+    {
+    case FieldSolveMode::Exact:
+        solveCoupledJacExact(res_g, delY);
+        return;
+    case FieldSolveMode::Iterative:
+        // The block Gauss-Seidel sweep is not written yet, so the default mode
+        // resolves to the exact solve: correct, and merely expensive.
+        // initialize() says so once per run rather than once per Jacobian.
+        solveCoupledJacExact(res_g, delY);
+        return;
+    }
+}
+
+// The uncoupled transport operator: static condensation onto lambda, wrapped in
+// the Woodbury/bordered elimination when there are global scalars.
+//
+// This is the whole of what solveJacEq used to be, minus the field block Task 6
+// added at its foot. That block wrote dpsi from B alone -- the block-Jacobi
+// approximation that was the only thing giving Newton a direction for psi before
+// A1 and A2 existed -- and it cannot survive here, because solveCoupledJacExact
+// calls this function nField + 1 times as its inner solve and a field write in
+// any of them would corrupt the Schur complement being built from them.
+void SystemSolver::solveTransportJac(N_Vector res_g, N_Vector delY)
 {
     if (nScalars > 0)
     {
@@ -1137,39 +1273,81 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
     {
         solveHDGJac(res_g, delY);
     }
+}
 
-    if (fieldModel)
+// The exact Schur complement onto psi:
+//
+//     ( B - A2 A^-1 A1 ) dpsi = r2 - A2 A^-1 r1
+//     A dx                    = r1 - A1 dpsi
+//
+// with A the uncoupled transport operator above -- HDG condensation plus the
+// scalar bordering.
+//
+// It costs nField + 1 applications of A^-1, so it is affordable only for a small
+// field block, and that is the point of it rather than a defect: SolveJacTests'
+// method -- finite-difference the residual, require J dy = g -- extends to the
+// coupled system only if an *exact* coupled solve exists. The Jacobian is never
+// assembled anywhere in this solver, so a wrong coupling block produces a
+// correct answer and a slower Newton, and nothing but this test would ever
+// report it. It is also the oracle the iterative path is checked against.
+void SystemSolver::solveCoupledJacExact(N_Vector res_g, N_Vector delY)
+{
+    DGSoln rhs(nVars, grid, k, N_VGetArrayPointer(res_g), nScalars, nAux, nField);
+    DGSoln out(nVars, grid, k, N_VGetArrayPointer(delY), nScalars, nAux, nField);
+
+    // A^-1 A1, one transport solve per field DOF, kept because the
+    // back-substitution needs the same vectors the Schur complement was built
+    // from.
+    N_Vector col = N_VClone(delY);
+    Matrix S = Matrix::Zero(nField, nField);
+    std::vector<N_Vector> AinvA1(nField);
+
+    for (Index m = 0; m < nField; ++m)
     {
-        // TASK 8: delete this block. solveCoupledJacExact computes dpsi from the
-        // Schur complement and writes the field block itself, so this would
-        // overwrite it with the block-Jacobi answer.
-        //
-        // It must end up on the *solveJacEq* side of the solveTransportJac
-        // rename, never inside solveTransportJac: the exact solve calls that
-        // function nField + 1 times as its inner transport solve, and a field
-        // write in there would corrupt every one of them. That is also why it
-        // sits here rather than in solveHDGJac.
-        //
-        // The field block, on its own diagonal: B dpsi = r_psi, with the
-        // couplings between psi and the transport unknowns still absent from the
-        // Jacobian. That makes this block Jacobi -- IDA pays for it in Newton
-        // iterations, which is the only currency an approximate Jacobian is
-        // spent in here, because the operator is never assembled and only its
-        // action is ever asked for.
-        //
-        // What it is not is optional. solveHDGJac zeroes the whole increment
-        // vector and writes nothing past lambda, so without this dpsi is
-        // identically zero for every right-hand side and psi never leaves its
-        // initial value -- silently, since IDA's nonlinear convergence test is
-        // on the size of the correction and a correction that is structurally
-        // zero passes it every time.
-        DGSoln rhs(nVars, grid, k, N_VGetArrayPointer(res_g), nScalars, nAux, nField);
-        DGSoln out(nVars, grid, k, N_VGetArrayPointer(delY), nScalars, nAux, nField);
-
-        Vector dpsi = Vector::Zero(nField);
-        fieldModel->solveB(dpsi, Vector(rhs.getField()));
-        out.getField() = dpsi;
+        AinvA1[m] = N_VClone(delY);
+        scatterA1Column(m, col);
+        solveTransportJac(col, AinvA1[m]);
+        for (Index f = 0; f < nField; ++f)
+            S(f, m) = N_VDotProd(a2[f], AinvA1[m]);
     }
+
+    // B densely, through the model's own apply. A model with a structured block
+    // overrides applyB rather than exposing the matrix, so this is the only way
+    // to ask for its columns -- and nField is small wherever this mode is used.
+    Matrix Bdense = Matrix::Zero(nField, nField);
+    for (Index m = 0; m < nField; ++m)
+    {
+        Vector e = Vector::Unit(nField, m), Be = Vector::Zero(nField);
+        fieldModel->applyB(Be, e);
+        Bdense.col(m) = Be;
+    }
+    const Matrix Schur = Bdense - S;
+
+    N_Vector Ainv_r1 = N_VClone(delY);
+    solveTransportJac(res_g, Ainv_r1);
+
+    Vector r2 = rhs.getField();
+    for (Index f = 0; f < nField; ++f)
+        r2(f) -= N_VDotProd(a2[f], Ainv_r1);
+
+    // Assign to a Vector before touching it. lu.solve() returns a lazy Solve<>
+    // expression with no coefficient accessor, and slicing one compiles and then
+    // corrupts the heap -- the afternoon Postprocessing.cpp cost.
+    const Vector dpsi = Schur.partialPivLu().solve(r2);
+
+    // dx = A^-1 r1 - sum_m dpsi_m (A^-1 A1)(:, m). solveTransportJac zeroes the
+    // whole increment and writes nothing past lambda, so the field entries of
+    // every vector in this sum are zero and the assignment below is the only
+    // thing that writes them.
+    N_VScale(1.0, Ainv_r1, delY);
+    for (Index m = 0; m < nField; ++m)
+        N_VLinearSum(1.0, delY, -dpsi(m), AinvA1[m], delY);
+    out.getField() = dpsi;
+
+    for (Index m = 0; m < nField; ++m)
+        N_VDestroy(AinvA1[m]);
+    N_VDestroy(col);
+    N_VDestroy(Ainv_r1);
 }
 
 // Solve the HDG part of the Jacobian

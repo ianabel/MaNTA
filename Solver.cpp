@@ -204,6 +204,24 @@ void SystemSolver::initialize()
 					"derivative. IDACalcIC holds every differential value fixed, so this row "
 					"is irreducible and the initialisation would fail with "
 					"IDA_LINESEARCH_FAIL.");
+
+		// What the chosen coupled solve costs, said once per run rather than
+		// once per Jacobian. Here rather than in applySolverConfig because
+		// nField is only known once a model is attached, and warning about the
+		// cost of a solve that will never happen -- FieldSolve set on a run with
+		// no field model -- is noise.
+		if (fieldSolveMode == FieldSolveMode::Exact)
+			logmsg<LOG_LEVEL::WARNING>(
+				"FieldSolve = exact forms the Schur complement onto the field block, which "
+				"costs one full transport solve per field degree of freedom: {} transport "
+				"solves per Jacobian solve where the iterative path costs one. It is a "
+				"verification tool and is not intended for production runs.",
+				nField + 1);
+		else
+			logmsg<LOG_LEVEL::WARNING>(
+				"FieldSolve = iterative is not implemented yet; falling back to the exact "
+				"Schur complement, which costs {} transport solves per Jacobian solve.",
+				nField + 1);
 	}
 
 	// ----------------- Allocate and initialize all other sun-vectors. -------------

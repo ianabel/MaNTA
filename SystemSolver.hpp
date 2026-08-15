@@ -166,8 +166,24 @@ class SystemSolver
         // first step from and must not be touched.
         void computeAlgebraicTimeDerivatives();
 
-        // Solves the Jy = g equation
+        // Solves the Jy = g equation. Dispatches on whether a field model is
+        // attached: without one this *is* solveTransportJac, bit for bit.
         void solveJacEq(N_Vector g, N_Vector delY);
+
+        // The uncoupled transport operator: HDG static condensation plus the
+        // scalar bordering, and nothing about the field.
+        //
+        // Kept separate from solveJacEq because solveCoupledJacExact applies it
+        // nField + 1 times as its *inner* solve. Anything that wrote the field
+        // block in here -- as Task 6's block-Jacobi psi solve did, before this
+        // split -- would corrupt every one of those.
+        void solveTransportJac(N_Vector g, N_Vector delY);
+
+        // Exact Schur complement onto psi. See the definition; costs one
+        // transport solve per field degree of freedom, so it is a verification
+        // tool rather than a production path.
+        void solveCoupledJacExact(N_Vector g, N_Vector delY);
+
         // Solves the HDG part of Jy = g
         void solveHDGJac(N_Vector g, N_Vector delY);
 
@@ -302,6 +318,45 @@ class SystemSolver
         Index getFieldDOF() const { return nField; };
         Index getGeometrySlots() const { return nGeom; };
 
+        // How the coupled Jacobian is solved once a field model is attached.
+        //
+        //   Iterative -- block Gauss-Seidel between the transport block and the
+        //                field block. The production path, and the default.
+        //   Exact     -- the Schur complement onto psi, formed by applying the
+        //                transport inverse to every column of A1. That is
+        //                nField + 1 transport solves per Jacobian solve, so it
+        //                is a verification tool: it is what makes the coupled
+        //                system checkable by SolveJacTests' method (finite
+        //                difference the residual, require J dy = g), and it is
+        //                the oracle the iterative path is compared against.
+        //
+        // Consulted by initialize(), which says once per run what the choice
+        // costs, and by solveJacEq.
+        enum class FieldSolveMode
+        {
+            Iterative,
+            Exact,
+        };
+
+        void setFieldSolveMode(FieldSolveMode m) { fieldSolveMode = m; };
+        FieldSolveMode getFieldSolveMode() const { return fieldSolveMode; };
+
+        void setFieldSolveTolerance(double tol)
+        {
+            if (tol <= 0)
+                throw std::logic_error("Field solve tolerance cannot be zero or negative.");
+            fieldSolveTolerance = tol;
+        };
+        double getFieldSolveTolerance() const { return fieldSolveTolerance; };
+
+        void setFieldSolveMaxSweeps(int n)
+        {
+            if (n < 1)
+                throw std::logic_error("Field solve sweep cap must be at least one.");
+            fieldSolveMaxSweeps = n;
+        };
+        int getFieldSolveMaxSweeps() const { return fieldSolveMaxSweeps; };
+
         // The solution as it stands. `y` is a non-owning view over memory
         // SUNDIALS owns and dangles after destroySundials(), so yJac is the only
         // copy that outlives a run; initialize() seeds it with the initial
@@ -376,6 +431,23 @@ class SystemSolver
 
         SUNContext ctx;
         N_Vector *v, *w;
+
+        // The field coupling.
+        //
+        //   A1_cellwise[i]  one cell's ( (3 nVars + nAux)(k+1), nField ) block of
+        //                   d(transport residual)/d(psi), in MX's row order
+        //                   [ sigma | q | u | aux ]. Sized in initialiseMatrices,
+        //                   filled by assembleFieldCoupling.
+        //   a2[f]           field row f of d(field residual)/d(transport DOF),
+        //                   as a full-length vector so it contracts with a
+        //                   solution vector by a plain dot product -- the shape
+        //                   the scalar bordering's `w` already uses.
+        //
+        // a2 is allocated by setFieldModel rather than by the constructor,
+        // because that is where nField -- and so both the count and the length
+        // of these vectors -- becomes known. Null with no model attached.
+        std::vector<Matrix> A1_cellwise;
+        N_Vector *a2 = nullptr;
 
         // ---- state of one run, owned between initialize() and destroySundials()
         //
@@ -494,36 +566,40 @@ class SystemSolver
                                     double alphaValue, std::vector<DGSoln> &v_map,
                                     std::vector<DGSoln> &w_map, Matrix &N_out);
 
-        // The field model's own diagonal block, B = dR/dpsi + alpha dR/d(psi').
+        // The three field blocks, from one FieldResidualPrime call.
         //
-        // TASK 8: delete this, and its call in updateMatricesForJacSolve.
-        // assembleFieldCoupling subsumes it -- it makes the same
-        // FieldResidualPrime call, keeps dR and dRdot as A2 instead of
-        // discarding them, and ends with the same updateFieldJacobian. Keeping
-        // both would call FieldResidualPrime twice per Jacobian and factorise B
-        // twice, and a model that solves a coupled system internally is entitled
-        // to assume it is asked once.
+        //   A1 (per cell, into A1_cellwise) -- how the transport rows see psi,
+        //      by the chain rule through the case's geometry hooks and the
+        //      model's dGeometry/dpsi.
+        //   A2 (into a2)                    -- how the field rows see the
+        //      transport unknowns, weighted by alpha exactly as the scalar `w`
+        //      vectors are.
+        //   B  (into the model)             -- dR/dpsi + alpha dR/d(psi'), which
+        //      the model assembles and factorises for itself.
         //
-        // This is *not* one of the coupling blocks: A1 (how the transport rows
-        // see psi) and A2 (how the field rows see the transport) are a later
-        // piece of work, and until they exist the Jacobian is block diagonal --
-        // a block-Jacobi approximation, which costs Newton iterations and
-        // nothing else, because the Jacobian is never assembled and IDA only
-        // ever asks for its action.
-        //
-        // B itself is not optional in the same way. Without it the linear solve
-        // returns dpsi = 0 for every right-hand side: no Newton direction
-        // touches psi at all, so it stays at its initial value for the whole run
-        // while the field rows of the residual grow without bound -- and IDA's
-        // nonlinear convergence test is on the *correction* norm, so it would
-        // not notice.
-        void updateFieldBlock(DGSoln const &Y, DGSoln const &Ydot, Time tEval,
-                              double alphaValue);
+        // One call is deliberate: a model that solves a coupled system
+        // internally reports every row at once, and is entitled to be asked
+        // once per Jacobian. This replaced updateFieldBlock, which made the
+        // same call, threw dR and dRdot away, and left the Jacobian block
+        // diagonal.
+        void assembleFieldCoupling(DGSoln const &Y, DGSoln const &Ydot,
+                                   PhysicsNodes const &nodes, Time tEval,
+                                   double alphaValue);
+
+        // Column m of A1, scattered into a full-length solution vector: each
+        // cell's block at its own offset, zero everywhere else -- including the
+        // field block, so that the transport solve it is fed to cannot mistake
+        // it for a right-hand side for psi.
+        void scatterA1Column(Index m, N_Vector out) const;
 
         // Allocate (or reallocate) the three buffers yJac, dydtJac and
         // dydtComplete map. Called from the constructor, and again from
         // setFieldModel, which changes how long they have to be.
         void allocateJacobianStorage();
+
+        // Free the a2 vectors, using the *current* nField as the count -- so
+        // call it before changing nField, not after.
+        void freeFieldWorkVectors();
 
         // The whole Jacobian, densely, in the solution vector's own ordering:
         // [ sigma | q | u | aux ] per cell, then all of lambda, then mu. Built
@@ -607,6 +683,44 @@ class SystemSolver
         // could not do for the star nodes anyway.
         void dSources_dScalars_StarMat(Matrix &, GlobalState const &,
                                        std::vector<Position> const &, Index, Time);
+
+        // One cell's block of A1: d(sigma, u and aux residual rows)/d(psi), by
+        // the chain rule
+        //
+        //     d(row)/d(psi_m) = sum_g d(row)/d(geometry_g) . d(geometry_g)/d(psi_m)
+        //
+        // The first factor is the case's, the second the field model's. The q
+        // rows and the trace rows have no geometry dependence and stay zero.
+        //
+        // Shape ( (3 nVars + nAux)(k+1), nField ), laid out [ sigma | q | u | aux ]
+        // to match assembleCellMatrix's rows.
+        //
+        // `states` must be the ones evaluatePhysicsDerivatives filled -- they
+        // carry geometry, and a hook may read it (d/dg of g^2 q is 2 g q). That
+        // is why this takes them rather than calling DGSoln::evalOnNode the way
+        // dSources_dScalars_Mat does: a State built from a DGSoln has no
+        // geometry rows at all.
+        void dPhysics_dField_Mat(Matrix &mat, DGSoln const &Y, GlobalState const &states,
+                                 std::vector<Position> const &points, Index intervalIndex,
+                                 Time tEval);
+
+        // Superconvergent counterpart: the k+2 star nodes and A9 in place of
+        // InterpolateOntoBasis. There is no chain matrix -- geometry is a
+        // function of (psi, x), and u* does not enter it.
+        void dPhysics_dField_StarMat(Matrix &mat, DGSoln const &Y, GlobalState const &states,
+                                     std::vector<Position> const &points, Index intervalIndex,
+                                     Time tEval);
+
+        // d(one physics value)/d(psi_m) at each node of one cell, (nField, nNodes):
+        // the case's dX/dgeometry there contracted with the model's
+        // dGeometry/dpsi. The part the two functions above share; they differ
+        // only in how they project the result onto the test space.
+        void fieldChainOnNodes(Matrix &nodal, Index XVar,
+                               void (TransportSystem::*dX_dGeom)(Index, VectorRef, const State &,
+                                                                 Position, Time),
+                               Vector const &psi, GlobalState const &states,
+                               std::vector<Position> const &points, Index intervalIndex,
+                               Index nNodes, Time tEval);
 
         void dSourcedPhi_Mat(Matrix &, DGSoln const &, Index );
         void dPhi_Mat(Matrix &, std::vector<Eigen::Ref<Matrix>> const dX_dZ, DGSoln const &, Index );
@@ -699,6 +813,13 @@ class SystemSolver
         // Held by shared_ptr because the adjoint solve and the Python layer both
         // need to reach it and neither owns the solver.
         std::shared_ptr<FieldModel> fieldModel = nullptr;
+
+        // Iterative to match the FieldSolve default, so there is one default
+        // rather than two that can drift. Read by solveJacEq and by
+        // initialize(), which reports what the choice costs.
+        FieldSolveMode fieldSolveMode = FieldSolveMode::Iterative;
+        double fieldSolveTolerance = 1e-8;
+        int fieldSolveMaxSweeps = 20;
 
         AdjointProblem *adjointProblem = nullptr;
 

@@ -34,7 +34,7 @@
 // This was very nearly justified on a different and false ground. CLAUDE.md
 // describes the Dirichlet constraints as "imposed inside the linear solve",
 // which would make ||F|| blind to a Dirichlet violation and rule out any merit
-// function built on it. The code says otherwise: the block in solveJacEq that
+// function built on it. The code says otherwise: the block in solveHDGJac that
 // would force del_y.lambda to (boundary value - current lambda) is commented
 // out, above the words "We really should do something here", and the boundary
 // data reaches the residual instead -- Dirichlet through RF_cellwise into the
