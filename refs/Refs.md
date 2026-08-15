@@ -129,10 +129,40 @@ something like a fresh `IDACalcIC`, with the failure modes CLAUDE.md catalogues 
 and MaNTA carries auxiliary variables and global scalars that their `(q, w, λ)`
 triple has no analogue for.
 
+**Giorgiani is the one to read first, because measured on MaNTA the degree is by
+far the stronger lever.** On `Tests/RegressionTests/nonlin_ss.conf`
+(`AdjointPoster`, whose steady state is analytic), at a matched ~130 degrees of
+freedom and equal cost in physics evaluations: `k = 3` on 32 cells gives
+3.6e-6, and `k = 10` on 12 cells gives **4.7e-13**. Seven orders. Adaptive
+*h*-refinement at the same budget reached 2.0e-6 — i.e. one degree bump beats
+the entire h-adaptive machinery by seven orders at equal cost.
+
+The counter-case is in the tree too, and it is why this wants to be *hp* rather
+than *p*. Holding 10 cells and raising `k` from 2 to 12, `AdjointPoster` falls
+eleven orders while `python-examples/shestakov-nonlinear` falls 19× and stops —
+its `x^(4/3)` axis behaviour caps the regularity, and 19 is not a coincidence:
+`ANALYSIS.md` fits that benchmark's error to `1.8 h0/(k+1)^2`, and
+`(13/3)^2 = 18.8` against 19.1 measured. So MaNTA has one benchmark on each
+side of the classical hp criterion, and choosing between the two levers needs a
+*smoothness* sensor — which is what Capasso's oscillation indicator (§4.1,
+modal decay) is, and the accuracy indicator is not.
+
+One practical consequence worth recording before any of it is built: **most of
+the p gain here needs no per-cell degree at all.** For a smooth solution the
+best `(k, nCells)` at every budget was a high `k` on few cells, uniformly, so
+simply choosing the *global* `k` by Giorgiani's rule reached 2.8e-9 at 90 DoF
+in two iterations and 3060 physics evaluations — against 2.0e-6 at 128 DoF for
+16672 with adaptive h. Genuine per-cell degrees are a much larger change:
+`DGSolnImpl` holds one `k` and one basis by value, and there are ~320 `(k+1)`
+sites in the core, 200 of them in `SystemSolver.cpp` and 74 in `Matrices.cpp`.
+That is the same single-`k` assumption `TODO` already records as the blocker
+for paper II's HDG+ family.
+
 | Reference | URL (doi or arxiv) | Short Description | File Name |
 | --- | --- | --- | --- |
 | Int. J. Numer. Methods Eng. 126 (2025) e70107 | https://doi.org/10.1002/nme.70107 | Capasso, Kudashev, Schwander & Serre, h-adaptivity for HDG applied to **fluid transport in a tokamak** — MaNTA's problem class, in SolEdge-HDG's 2D fluid-drift Braginskii setting. The indicator is the order-`p` against post-processed order-`p+1` difference, i.e. `u*`, which MaNTA already builds; it drives coarsening as well as refinement, and their §1 surveys the alternatives (residual-based indicators, a jump sensor on the trace). Open access, CC-BY | HDG-hAdaptivity.pdf |
 | Computers and Fluids 301 (2025) 106792 | https://doi.org/10.1016/j.compfluid.2025.106792 | Levý & May, anisotropic adaptation for HDG on **time-dependent** problems, and the reason to have it is their second contribution rather than the first: a *bounded* solution-transfer operator between meshes. The Galerkin L2 projection over a supermesh is optimal in the norm but overshoots at extrema; theirs preserves local minima and maxima while keeping the order where the solution is smooth. Their §1 is also the short survey of why remeshing every m > 1 steps is not the cheap fix it looks like. Note they integrate with DIRK — see the caveat below. Paywalled | HDG-UnsteadyAdaptivity.pdf |
+| Computers & Fluids 98 (2014) 196–208 | https://doi.org/10.1016/j.compfluid.2014.01.011 | Giorgiani, Fernández-Méndez & Huerta, **degree** adaptivity for HDG. The estimator is the same one as Capasso's — their eq. (8) is `E_i^2 = (1/\|Ω_i\|) ∫ (u* − u)^2`, and they stress the division by the element measure as "crucial for non-uniform meshes" — but the rule it drives is `Δk_i = ceil(log_b(E_i/ε_i))` with `10 ≤ b ≤ 100` (their eq. 10), which assumes **no convergence order at all**. That is the property to steal: the Richardson h-rule needs `u*` to be exactly one order better, which `Tests/README.md:300-330` says is false at `k = 1` with the flag off. Their steady loop is solve → estimate → update degrees → project → repeat, with time-marching used only for the *first* solve and Newton directly thereafter. Paywalled | HDG-pAdaptivity.pdf |
 
 ## Coupling to a magnetic field solver
 
