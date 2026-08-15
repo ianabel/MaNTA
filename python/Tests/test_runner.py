@@ -238,6 +238,54 @@ def test_solution_converges_towards_the_steady_state(tmp_path):
     assert np.allclose(u, exact, atol=1e-3), f"got {u}, want {exact}"
 
 
+def test_get_derivative_returns_q_against_the_closed_form(tmp_path):
+    """u = S x(1-x)/(2 kappa), so q = du/dx = S(1-2x)/(2 kappa).
+
+    kappa = 2 deliberately, and that is the whole point of the test. With
+    kappa = 1 the three candidates a mis-wired binding could return are hard to
+    tell apart; here q = (1-2x)/4 while sigma_hat = kappa q = (1-2x)/2 and the
+    *stored* sigma is -sigma_hat, so reading the wrong field is off by a factor
+    of two, a sign, or both. That is not a hypothetical confusion -- resuming a
+    Neumann boundary from sigma rather than q is a defect this suite already
+    carries a test for.
+    """
+    kappa, source = 2.0, 1.0
+    runner = MaNTA.Runner(LinearDiffusion(kappa=kappa, source=source))
+    runner.configure(base_config(tmp_path, Polynomial_degree=3, Grid_size=16))
+    runner.run(3.0)
+
+    xs = [0.125 * i for i in range(1, 8)]
+    q = np.asarray(runner.getDerivative(0, xs))
+    exact = np.array([source * (1.0 - 2.0 * x) / (2.0 * kappa) for x in xs])
+
+    assert np.allclose(q, exact, atol=1e-3), f"got {q}, want {exact}"
+    # Antisymmetric about the midpoint, and zero at the peak of u.
+    assert q[0] > 0 and q[-1] < 0, f"gradient has the wrong sign: {q}"
+    assert abs(q[3]) < 1e-3, f"q(0.5) should vanish, got {q[3]}"
+
+
+def test_get_derivative_samples_the_nodes_like_get_solution(tmp_path):
+    """With no explicit points both read the same abscissae, so they must agree
+    in length -- a driver zips them together."""
+    runner = MaNTA.Runner(LinearDiffusion())
+    runner.configure(base_config(tmp_path, Polynomial_degree=3, Grid_size=8))
+    runner.run(0.1)
+
+    u = np.asarray(runner.getSolution(0, None))
+    q = np.asarray(runner.getDerivative(0, None))
+    assert q.shape == u.shape, f"{q.shape} against {u.shape}"
+    assert np.all(np.isfinite(q))
+
+
+def test_get_derivative_rejects_points_outside_the_grid(tmp_path):
+    runner = MaNTA.Runner(LinearDiffusion())
+    runner.configure(base_config(tmp_path, Polynomial_degree=2, Grid_size=4))
+    runner.run(0.05)
+
+    with pytest.raises(IndexError):
+        runner.getDerivative(0, [1.5])
+
+
 def test_run_ss_reaches_the_same_steady_state(tmp_path):
     kappa, source = 1.0, 1.0
     runner = MaNTA.Runner(LinearDiffusion(kappa=kappa, source=source))
