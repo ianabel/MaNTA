@@ -222,6 +222,27 @@ py::tuple PyRunner::getAdjointGradients(void) {
 }
 
 Vector
+PyRunner::getDerivative(Index var,
+                        std::optional<std::vector<Position>> const &points) {
+  // Same shape as getSolution below, reading yJac.q rather than yJac.u -- and
+  // for the same reason: q is a DGApprox over the solver's own basis, so it
+  // evaluates at any x directly. The alternative a caller had before this
+  // existed was to fit something to getSolution's samples and differentiate
+  // that, which is a different function.
+  const std::vector<Position> xs =
+      points ? points.value() : system->yJac.getPoints();
+
+  Vector sol(xs.size());
+  for (size_t i = 0; i < xs.size(); i++) {
+    const auto &p = xs[i];
+    if (p < grid->lowerBoundary() || p > grid->upperBoundary())
+      throw std::out_of_range("Requested point outside of grid boundaries");
+    sol(i) = system->yJac.q(var)(p);
+  }
+  return sol;
+}
+
+Vector
 PyRunner::getSolution(Index var,
                       std::optional<std::vector<Position>> const &points) {
   if (points) {
