@@ -2193,6 +2193,13 @@ void SystemSolver::solveCoupledJacExact(N_Vector res_g, N_Vector delY)
 
 Rename the existing body of `solveJacEq` to `solveTransportJac` and have `solveJacEq` dispatch: no field model, call `solveTransportJac`; `FieldSolve = exact`, call `solveCoupledJacExact`.
 
+**Delete Task 6's block-Jacobi field solve as part of this rename — do not carry it across.** Task 6 added the field model's own diagonal block (`updateFieldBlock`, and a `solveB` call inside `solveJacEq`) because without it `dpsi` is *structurally* zero: `solveHDGJac` begins with `delYVec.setZero()` over the whole increment and writes nothing past `lambda`, so no Newton direction for `psi` exists at all — and IDA cannot report it, because `acor = y_n - y_pred` is identically zero for an unknown whose predictor is constant. That made it a prerequisite for Task 6 running, and it makes it an obstacle here. Two concrete reasons it must go rather than stay:
+
+* `solveTransportJac` is called *inside* `solveCoupledJacExact` (once per field DOF for the `A1` columns, once for `r1`). A block-Jacobi `psi` solve living in there would contaminate every inner solve. It happens to be harmless today — `a2`'s field entries are zeroed by `row.zeroCoeffs()` and `out.getField() = dpsi` overwrites the result — but harmless-by-accident is not a property to ship into a Schur complement.
+* `updateFieldBlock` duplicates the whole prologue of `assembleFieldCoupling`: the same `dR`/`dRdot` construction, the same `FieldResidualPrime` call, the same `updateFieldJacobian`. Keeping both evaluates `FieldResidualPrime` twice per Jacobian update.
+
+So `solveTransportJac` must be the *uncoupled* operator — HDG condensation plus the scalar bordering, and nothing about the field.
+
 - [ ] **Step 6: Add the config keys and the warning**
 
 In `ConfigSchema.cpp`, beside the entries at `:57`:
