@@ -69,6 +69,16 @@ struct SolverConfig
     std::string              TransportSystem;
     std::vector<std::string> PhysicsPlugins;
 
+    // The magnetic-field coupling. FieldModel names a registered model and is
+    // applied by runManta rather than by applySolverConfig, which has neither
+    // the parsed config a model reads its own table from nor the grid; the
+    // other three are plain solver options and go through applySolverConfig
+    // like everything else.
+    std::string              FieldModel;
+    std::string              FieldSolve;
+    double                   FieldSolveTolerance;
+    int                      FieldSolveMaxSweeps;
+
     // Presence, not value, carries the meaning for these two.
     //
     //   t_final              -- runManta errors when unset; Runner.run() uses

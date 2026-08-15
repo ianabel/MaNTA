@@ -8,6 +8,10 @@
 #include <boost/test/unit_test.hpp>
 
 #include "SolverConfig.hpp"
+// applySolverConfig is the single point at which a configuration reaches the
+// solver, so the tests below build a real one and read the settings back.
+#include "SystemSolver.hpp"
+#include "TestDiffusion.hpp"
 
 #include <map>
 #include <stdexcept>
@@ -226,6 +230,84 @@ BOOST_AUTO_TEST_CASE(a_problem_selection_key_is_fine_for_the_toml_reader)
     BOOST_TEST(load(minimal).TransportSystem == "LinearDiffusion");
 }
 
+BOOST_AUTO_TEST_CASE(the_field_model_key_is_problem_selection_too)
+{
+    // Same treatment as TransportSystem: a config file names a registered model
+    // and runManta instantiates it; a dict has no equivalent and must be told
+    // so rather than have the key quietly ignored.
+    BOOST_TEST(load(minimal).FieldModel == "");
+    BOOST_TEST(load(minimal + "FieldModel = \"SomeModel\"\n").FieldModel == "SomeModel");
+
+    MapConfigSource src;
+    src.values = {
+        {"Polynomial_degree", 2u}, {"Grid_size", 8}, {"delta_t", 0.1},
+        {"Lower_boundary", 0.0},   {"Upper_boundary", 1.0},
+        {"OutputFilename", std::string("out")},
+        {"FieldModel", std::string("SomeModel")},
+    };
+    BOOST_CHECK_THROW(loadSolverConfig(src, ConfigSchema::Reader::Dict),
+                      std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(the_field_solve_defaults_are_the_ones_the_solver_starts_with)
+{
+    // Two defaults that have to agree: the schema's, and SystemSolver's own
+    // member initialisers. They are separate declarations, so nothing but a
+    // test connects them.
+    auto c = load(minimal);
+    BOOST_TEST(c.FieldSolve == "iterative");
+    BOOST_TEST(c.FieldSolveTolerance == 1e-8);
+    BOOST_TEST(c.FieldSolveMaxSweeps == 20);
+
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
+    SystemSolver sys(grid, 1, &problem);
+    BOOST_TEST((sys.getFieldSolveMode() == SystemSolver::FieldSolveMode::Iterative));
+    BOOST_TEST(sys.getFieldSolveTolerance() == 1e-8);
+    BOOST_TEST(sys.getFieldSolveMaxSweeps() == 20);
+}
+
+BOOST_AUTO_TEST_CASE(apply_solver_config_carries_the_field_solve_settings_through)
+{
+    // The one thing a SolverConfig comparison cannot check. applySolverConfig is
+    // where a configuration reaches the solver, so a set* call dropped from it
+    // un-configures *both* surfaces at once and
+    // both_sources_produce_the_same_solver_config would go on passing --
+    // it compares SolverConfigs, not solvers.
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
+    SystemSolver sys(grid, 1, &problem);
+
+    applySolverConfig(load(minimal + "FieldSolve = \"exact\"\nFieldSolveTolerance = 1e-11\n"
+                                     "FieldSolveMaxSweeps = 3\n"),
+                      sys);
+
+    BOOST_TEST((sys.getFieldSolveMode() == SystemSolver::FieldSolveMode::Exact));
+    BOOST_TEST(sys.getFieldSolveTolerance() == 1e-11);
+    BOOST_TEST(sys.getFieldSolveMaxSweeps() == 3);
+}
+
+BOOST_AUTO_TEST_CASE(an_unrecognised_field_solve_is_rejected_rather_than_defaulted)
+{
+    // As for SteadyStateSolver: a typo would otherwise silently pick a
+    // different algorithm.
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
+    SystemSolver sys(grid, 1, &problem);
+
+    try
+    {
+        applySolverConfig(load(minimal + "FieldSolve = \"schur\"\n"), sys);
+        BOOST_FAIL("expected a throw");
+    }
+    catch (std::invalid_argument const &e)
+    {
+        std::string msg = e.what();
+        BOOST_TEST(msg.find("FieldSolve") != std::string::npos);
+        BOOST_TEST(msg.find("schur") != std::string::npos);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(boundaries_are_required_unless_grid_points_is_given)
 {
     const std::string noBounds =
@@ -297,6 +379,9 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         "zeroFlux = true\n"
         "WriteOutput = false\n"
         "SteadyStateTolerance = 1e-5\n"
+        "FieldSolve = \"exact\"\n"
+        "FieldSolveTolerance = 1e-10\n"
+        "FieldSolveMaxSweeps = 7\n"
         "OutputFilename = \"shared\"\n";
 
     auto v = toml::parse_str(body);
@@ -319,6 +404,8 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         {"PseudoTransientInitialStep", 0.25}, {"PseudoTransientMaxStep", 1e6},
         {"zeroFlux", true}, {"WriteOutput", false},
         {"SteadyStateTolerance", 1e-5}, {"OutputFilename", std::string("shared")},
+        {"FieldSolve", std::string("exact")}, {"FieldSolveTolerance", 1e-10},
+        {"FieldSolveMaxSweeps", 7},
     };
     auto fromMap = loadSolverConfig(map_src, ConfigSchema::Reader::Dict);
 
@@ -348,6 +435,12 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     BOOST_TEST(fromToml.Upper_boundary == fromMap.Upper_boundary);
     BOOST_TEST(fromToml.restart == fromMap.restart);
     BOOST_TEST(fromToml.solveAdjoint == fromMap.solveAdjoint);
+    BOOST_TEST(fromToml.FieldSolve == fromMap.FieldSolve);
+    BOOST_TEST(fromToml.FieldSolveTolerance == fromMap.FieldSolveTolerance);
+    BOOST_TEST(fromToml.FieldSolveMaxSweeps == fromMap.FieldSolveMaxSweeps);
+    // FieldModel is ProblemSelection, so it is an error in a dict and cannot be
+    // compared across the two -- the same asymmetry TransportSystem has.
+    BOOST_TEST(fromToml.FieldModel == "");
     BOOST_REQUIRE(fromToml.SteadyStateTolerance.has_value());
     BOOST_REQUIRE(fromMap.SteadyStateTolerance.has_value());
     BOOST_TEST(*fromToml.SteadyStateTolerance == *fromMap.SteadyStateTolerance);

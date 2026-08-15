@@ -7,6 +7,7 @@
 #include "SystemSolver.hpp"
 #include "PhysicsCases.hpp"
 #include "SolverConfig.hpp"
+#include "FieldModel.hpp"
 
 // Load restart data into vectors
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vector<double> &dYdt)
@@ -136,6 +137,26 @@ int runManta(std::string const &fname)
 	}
 
 	auto system = std::make_shared<SystemSolver>(*grid, k, pProblem.get());
+
+	// A field model is selected by name from the same process-global registry
+	// pattern the physics cases use, and is handed the parsed config file so it
+	// can read its own table. Before applySolverConfig, and necessarily before
+	// runSolver: setFieldModel reshapes the solution vector and refuses once the
+	// solver is initialised.
+	if (!config.FieldModel.empty())
+	{
+		try
+		{
+			system->setFieldModel(
+				FieldModels::InstantiateFieldModel(config.FieldModel, configFile, *grid));
+		}
+		catch (std::invalid_argument const &e)
+		{
+			logmsg<LOG_LEVEL::ERROR>("Could not instantiate a field model for FieldModel = {}\n  {}",
+									 config.FieldModel, e.what());
+			return 1;
+		}
+	}
 
 	applySolverConfig(config, *system);
 	if (config.solveAdjoint)

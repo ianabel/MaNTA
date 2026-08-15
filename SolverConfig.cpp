@@ -258,6 +258,10 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(PseudoTransientMaxStep, double);
     READ(TransportSystem, std::string);
     READ(PhysicsPlugins, std::vector<std::string>);
+    READ(FieldModel, std::string);
+    READ(FieldSolve, std::string);
+    READ(FieldSolveTolerance, double);
+    READ(FieldSolveMaxSweeps, int);
 #undef READ
 
     // The two whose presence is the signal.
@@ -374,6 +378,20 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         throw std::invalid_argument(
             "SteadyStateSolver must be \"PseudoTransient\", \"TimeMarch\" or "
             "\"Newton\"; got \"" + config.SteadyStateSolver + "\".");
+
+    // Rejected rather than defaulted, for the same reason SteadyStateSolver is:
+    // a typo here would otherwise silently pick a different algorithm. The
+    // FieldModel key is not applied here -- see SolverConfig.hpp.
+    if (config.FieldSolve == "iterative")
+        system.setFieldSolveMode(SystemSolver::FieldSolveMode::Iterative);
+    else if (config.FieldSolve == "exact")
+        system.setFieldSolveMode(SystemSolver::FieldSolveMode::Exact);
+    else
+        throw std::invalid_argument(
+            "FieldSolve must be \"iterative\" or \"exact\"; got \"" + config.FieldSolve + "\".");
+
+    system.setFieldSolveTolerance(config.FieldSolveTolerance);
+    system.setFieldSolveMaxSweeps(config.FieldSolveMaxSweeps);
 
     if (config.PseudoTransientInitialStep > 0.0)
         system.setPseudoTransientInitialStep(config.PseudoTransientInitialStep);
