@@ -62,6 +62,43 @@ becomes shape-checking rather than a plain assignment), `OMP` (enables the
 `#pragma omp parallel for` in the batched physics wrappers), `COVERAGE`,
 `VERBOSE`, `XLA_FFI`/`CUDA` (JAX FFI, needs jaxlib headers).
 
+## Branch protection on `main`
+
+**`main` is protected: work goes on a branch and merges through a pull request.**
+Read the live rule rather than trusting this paragraph —
+`gh api repos/ianabel/MaNTA/branches/main/protection` — but as it stands:
+
+* **No approving review is required** (`required_approving_review_count: 0`), so
+  a PR can be merged by its own author as soon as the checks are green. The PR
+  is a gate for CI, not for review.
+* **`strict: true`**, so a branch has to be up to date with `main` before it can
+  merge. If `main` moves while a PR is open, rebase or merge it in and let CI
+  run again.
+* **Force-pushes and deletions of `main` are refused**, and there is no linear
+  history requirement, so an ordinary merge commit is fine.
+* **`enforce_admins` is off**, so the repo owner can still push straight to
+  `main`. "Protected" therefore means something different depending on who you
+  are, and a workflow that works for `ianabel` is not evidence it works for
+  anyone else.
+
+**The one required status check is named `Build + C++ tests`, and nothing
+publishes that context.** `.github/workflows/ci.yml`'s job is
+`name: Build + tests (${{ matrix.label || matrix.cxx }})`, so what CI actually
+reports is `Build + tests (g++-14)`, `Build + tests (clang++-21)`,
+`Build + tests (g++-14, Eigen 5.0.1)` and so on — seven contexts, none of them
+equal to the required string, which differs both in wording and in carrying no
+matrix suffix. GitHub matches required contexts exactly, so the check never
+arrives and a PR sits at "Expected — Waiting for status to be reported"
+indefinitely. The green ticks beside it are the *other* legs, which are not
+required.
+
+The effect is that the protection blocks everyone who is not an admin and blocks
+nothing that CI would have caught, which is the opposite of the intent. Fixing
+it means either renaming the job to match, or — better, since a matrix job
+cannot publish an unsuffixed context — replacing the required contexts with the
+seven that exist. Until then, expect the merge button to stay disabled and the
+bypass to be an admin one.
+
 ## Architecture
 
 ### The equation being solved
