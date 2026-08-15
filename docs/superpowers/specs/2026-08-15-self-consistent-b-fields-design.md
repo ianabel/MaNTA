@@ -48,6 +48,13 @@ demonstrates is narrower than it looks: a differentiable *residual* driving a
 Newton solve, with end-to-end sensitivity unimplemented, forward-mode, and
 deferred.
 
+**This is not a cheaper first version of what is specified below, and should not
+be read as one.** Evolving `psi` on a frozen geometry leaves the field not
+responding to the plasma at all — the metric coefficients are the same numbers
+at the end of the run as at the start. The geometry response *is* the object of
+the exercise, so TORAX's step is a different exercise rather than a smaller one,
+and the fact that it is cheap does not make it a stepping stone.
+
 **`refs/JETTO.pdf`** — Cenacchi & Taroni, the prior art. First-order Lie
 splitting: transport on the old geometry for a macro-step, then one equilibrium
 solve, then the next transport step. The cadence `Delta t_eq` is a literal list
@@ -363,9 +370,9 @@ Each is a separate spec, and none is blocked by this one:
 * **DESC as a provider.** Needs a Python-implemented field model and packages CI
   cannot install.
 * **A current-diffusion physics case** — `psi` as an ordinary transport
-  variable, TORAX-style, on frozen geometry. This needs *none* of this
-  machinery and is worth doing on its own merits; it is the cheapest useful
-  self-consistent field in the tree and should not wait behind this.
+  variable, TORAX-style, on frozen geometry. It needs none of this machinery,
+  and it is not a cheaper first cut at it: see above. Recorded here so that its
+  absence reads as a decision rather than an oversight.
 * **Remapping between equilibria.** Not needed while the provider declares a
   fixed label, which is JETTO's own resolution of the question.
 * **Free-boundary shape calculus.**
