@@ -127,6 +127,24 @@ private:
     double sign;
 };
 
+// TestDiffusion, counting physics evaluations. That is the unit PERFORMANCE.md
+// asks for, and the only one in which the SER knobs below can be shown to do
+// anything: they change how many continuation steps a solve takes, not what it
+// converges to, and nothing exposes the step count.
+class CountingDiffusion : public TestDiffusion
+{
+public:
+    using TestDiffusion::TestDiffusion;
+
+    Value SigmaFn(Index i, const State &s, Position x, Time t) override
+    {
+        ++calls;
+        return TestDiffusion::SigmaFn(i, s, x, t);
+    }
+
+    int calls = 0;
+};
+
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(solver_lifecycle_tests)
@@ -860,6 +878,75 @@ BOOST_AUTO_TEST_CASE(a_converged_steady_state_leaves_no_stale_derivative)
         sys.destroySundials();
     }
     removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(the_SER_rate_and_floor_change_the_cost_and_not_the_answer)
+{
+    // PseudoTransientSERFloor is the least dt may grow on a step that reduced
+    // the residual, and it exists because plain SER is self-perpetuating from a
+    // conservative dt0: the ratio is only as large as the residual reduction,
+    // and the reduction is only as large as dt allows. So the floor should be
+    // visible as *cost* and invisible in the answer, and both halves are worth
+    // pinning -- an option that changed the converged state would be a bug, and
+    // one that changed nothing at all would be inert.
+    //
+    // Floor 1.0 is plain SER, i.e. no floor. The starting step is pinned so the
+    // comparison is between schedules rather than between starting points.
+    auto solve = [](double rate, double floorValue, int &calls)
+    {
+        Grid grid(0.0, 1.0, nCells);
+        CountingDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, "lifecycle_ser");
+        sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+        sys.setSteadyStateTolerance(1e-10);
+        sys.setPseudoTransientInitialStep(1e-3);
+        sys.setPseudoTransientSERRate(rate);
+        sys.setPseudoTransientSERFloor(floorValue);
+
+        {
+            CapturedOutput quiet;
+            sys.runSolver(T_FINAL);
+        }
+        calls = problem.calls;
+        return sample(sys);
+    };
+
+    int floored = 0, plain = 0, steeper = 0;
+    const Vector withFloor = solve(1.0, 2.0, floored);
+    const Vector withoutFloor = solve(1.0, 1.0, plain);
+
+    // The rate, isolated: with the floor out of the way at 1.0, leaning harder
+    // on the residual ratio is the only thing left that can grow dt.
+    solve(2.0, 1.0, steeper);
+
+    BOOST_TEST_MESSAGE("physics evaluations -- rate 1 floor 2 (defaults): " << floored
+                       << "; rate 1 floor 1 (plain SER): " << plain
+                       << "; rate 2 floor 1: " << steeper);
+
+    // Same steady state either way -- u = 1 - x, from Dirichlet ends of 1 and 0
+    // frozen at t0.
+    for (Index i = 0; i < withFloor.size(); ++i)
+    {
+        const double x = 0.1 + 0.2 * i;
+        BOOST_TEST(withFloor(i) == 1.0 - x, boost::test_tools::tolerance(1e-8));
+        BOOST_TEST(withoutFloor(i) == 1.0 - x, boost::test_tools::tolerance(1e-8));
+    }
+
+    // ...reached more cheaply with the floor. If this ever inverts, the floor is
+    // no longer earning its default and the default should move, not the test.
+    BOOST_TEST(floored < plain,
+               "the SER floor cost " << floored << " evaluations against plain SER's "
+               << plain << "; it is meant to be the cheaper of the two");
+
+    // And a steeper rate is cheaper than plain SER for the same reason, by a
+    // different route: measured 1704 against 3540 here, where the floor gets it
+    // to 552. Both knobs reach the schedule, which is the claim.
+    BOOST_TEST(steeper < plain,
+               "SER rate 2 cost " << steeper << " evaluations against rate 1's " << plain
+               << "; leaning harder on the residual ratio should grow dt faster");
+
+    removeOutput("lifecycle_ser");
 }
 
 BOOST_AUTO_TEST_CASE(an_unarmed_gate_leaves_runSolver_bit_for_bit_unchanged)

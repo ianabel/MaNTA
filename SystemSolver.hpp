@@ -98,6 +98,36 @@ class SystemSolver
         void setPseudoTransientInitialStep(double dt) { ptcInitialStep = dt; };
         void setPseudoTransientMaxStep(double dt) { ptcMaxStep = dt; };
 
+        // The SER schedule on an accepted step:
+        //
+        //     dt <- dt * max( (||F_prev|| / ||F_now||)^rate , floor )
+        //
+        // rate = 1 and floor = 2 are what this has always done; both defaults
+        // are repeated in ConfigSchema.cpp and must move together.
+        //
+        // rate is the exponent, so it says how hard dt leans on the residual
+        // reduction: 0 ignores it and grows at the floor alone, 1 is plain SER,
+        // above 1 is more aggressive. Negative would shrink dt as the residual
+        // falls, which is backwards, so it is refused.
+        //
+        // floor is the least dt may grow on a step that made progress. It is
+        // the reason plain SER is not enough here -- see solveSteadyState. A
+        // value below 1 can never bind (this branch runs only when the residual
+        // fell, so the ratio already exceeds 1) and is refused rather than
+        // silently ignored; 1 exactly is "no floor", which is plain SER.
+        void setPseudoTransientSERRate(double rate)
+        {
+            if (rate < 0.0)
+                throw std::logic_error("The SER rate cannot be negative: dt would shrink as the residual falls.");
+            ptcSERRate = rate;
+        };
+        void setPseudoTransientSERFloor(double floorValue)
+        {
+            if (floorValue < 1.0)
+                throw std::logic_error("The SER floor cannot be below 1: it is a growth factor on an accepted step, and would never bind.");
+            ptcSERFloor = floorValue;
+        };
+
         // Drive the state to a steady one without integrating to it. Assumes
         // initialize() has run, so Y/dYdt/LS/sunMat exist and Y holds a
         // consistent initial condition. Leaves the converged state in Y and in
@@ -373,6 +403,8 @@ class SystemSolver
         double ptcInitialStep = 0.0; // 0 means "use dt0"
         double ptcMaxStep = std::numeric_limits<double>::infinity();
         double ptcStep = 0.0;        // the current dt; infinite in Newton mode
+        double ptcSERRate = 1.0;     // exponent on the residual ratio
+        double ptcSERFloor = 2.0;    // least growth on an accepted step
         N_Vector Y = nullptr;         // solution
         N_Vector dYdt = nullptr;      // time derivative of the solution
         N_Vector constraints = nullptr;

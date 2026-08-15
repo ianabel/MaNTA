@@ -66,6 +66,8 @@ struct SolverConfig
     std::string              SteadyStateSolver;
     double                   PseudoTransientInitialStep;
     double                   PseudoTransientMaxStep;
+    double                   PseudoTransientSERRate;
+    double                   PseudoTransientSERFloor;
     std::string              TransportSystem;
     std::vector<std::string> PhysicsPlugins;
 

@@ -160,6 +160,53 @@ config carrying ``SteadyStateTolerance`` — and is ignored by a plain
    sets the first step, defaulting to ``initialTimestep`` and then ``delta_t``;
    ``PseudoTransientMaxStep`` caps it.
 
+   The schedule itself is adjustable. On an accepted step,
+
+   .. math::
+
+      dt \leftarrow dt \cdot \max\!\left[
+         \left( \frac{\|F_\mathrm{prev}\|}{\|F_\mathrm{now}\|} \right)^{r},\ f
+      \right]
+
+   with ``PseudoTransientSERRate`` the exponent :math:`r` (default 1) and
+   ``PseudoTransientSERFloor`` the floor :math:`f` (default 2).
+
+   ``r`` says how hard ``dt`` leans on the residual reduction: 0 ignores it and
+   grows at the floor alone, 1 is plain SER, above 1 is more aggressive. It may
+   not be negative — that would shrink ``dt`` as the residual falls.
+
+   ``f`` is the least ``dt`` may grow on a step that made progress, and is why
+   plain SER is not enough on its own: the ratio is only as large as the
+   residual reduction, and the reduction is only as large as ``dt`` allows, so a
+   conservative first step is self-perpetuating. ``f = 1`` is "no floor", i.e.
+   plain SER; below 1 is refused, since this branch runs only when the residual
+   fell and so the ratio already exceeds 1 — a smaller floor could never bind.
+
+   Both are worth reaching for when a problem sits at either extreme. Measured
+   on the unit-test diffusion problem from ``dt = 1e-3``, in physics
+   evaluations:
+
+   .. list-table::
+      :header-rows: 1
+
+      * - ``r``
+        - ``f``
+        - evaluations
+      * - 1
+        - 2 *(defaults)*
+        - **552**
+      * - 1
+        - 1 *(plain SER)*
+        - 3540
+      * - 2
+        - 1
+        - 1704
+
+   The converged state is identical in every case; only the number of
+   continuation steps differs. Growing ``dt`` faster is not free, though — on a
+   degenerate flux such as ``shestakov-nonlinear``'s it is what makes the inner
+   solve start rejecting steps, which is the trade-off these two expose.
+
 ``Newton``
    The same code with an infinite first step, so the damping term is absent from
    the outset and this is Newton's method on the steady problem. Cheapest when

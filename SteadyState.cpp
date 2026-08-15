@@ -269,9 +269,21 @@ void SystemSolver::solveSteadyState()
             // and took 62 continuation steps; doubling on any step that made
             // progress brings that to 15, and costs nothing in safety because a
             // step that fails is rejected outright below.
+            //
+            // Both numbers are configurable -- PseudoTransientSERRate and
+            // PseudoTransientSERFloor -- because what they trade off is
+            // problem-dependent: the measurement above is Park's, and
+            // Shestakov's degenerate flux is the case where growing dt fast is
+            // exactly what makes the inner solve start rejecting steps.
+            // Defaults 1.0 and 2.0, which is what this line has always done.
             if (std::isfinite(ptcStep))
             {
-                ptcStep *= std::max(Fprev / Fnow, 2.0);
+                // pow(x, 1.0) is exact for the default, so the ordinary path is
+                // bit for bit what the plain ratio gave.
+                const double growth = ptcSERRate == 1.0
+                                          ? Fprev / Fnow
+                                          : std::pow(Fprev / Fnow, ptcSERRate);
+                ptcStep *= std::max(growth, ptcSERFloor);
                 if (ptcStep > ptcMaxStep)
                     ptcStep = ptcMaxStep;
             }
