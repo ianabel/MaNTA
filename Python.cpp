@@ -51,6 +51,17 @@ public:
     value.Derivative() = py::cast<Matrix>(d["Derivative"]).transpose();
     value.Flux() = py::cast<Matrix>(d["Flux"]).transpose();
     value.Aux() = py::cast<Matrix>(d["Aux"]).transpose();
+    // Geometry is optional on the way in: every physics case and test fixture
+    // that predates field models builds a dict with no "Geometry" key, and
+    // GlobalState defaults to zero geometry slots, so a missing key means the
+    // same thing an explicitly empty one would. Still size it to (0, nPoints)
+    // rather than leave it at PYBIND11_TYPE_CASTER's default-constructed 0x0:
+    // operator[] slices every field's column i unconditionally, and a matrix
+    // with zero *columns* fails that where zero *rows* would not.
+    if (d.contains("Geometry"))
+      value.GeometryMatrix() = py::cast<Matrix>(d["Geometry"]).transpose();
+    else
+      value.GeometryMatrix().setZero(0, value.Variable().cols());
 
     auto scalars = py::cast<py::array_t<double>>(d["Scalars"]);
     py::buffer_info info = scalars.request();
@@ -73,6 +84,7 @@ public:
     d["Derivative"] = src.Derivative().transpose();
     d["Flux"] = src.Flux().transpose();
     d["Aux"] = src.Aux().transpose();
+    d["Geometry"] = src.GeometryMatrix().transpose();
     d["Scalars"] = src.Scalars();
     return d.release();
   }

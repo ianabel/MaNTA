@@ -404,3 +404,37 @@ def test_global_state_survives_a_range_of_point_counts(nPoints):
     )
     assert out.shape == (nPoints,)
     assert np.allclose(out, states["Variable"][:, 1])
+
+
+def test_geometry_reaches_a_batched_call_with_the_right_orientation():
+    """The GlobalState caster transposes in both directions, so a round trip
+    cannot detect a missing transpose. Check the orientation from inside a
+    batched call, where the (nPoints, nGeom) shape is observable."""
+    seen = {}
+
+    class GeometryProbe(MaNTA.TransportSystem):
+        variables = [MaNTA.Field("n", "density", "m^-3")]
+
+        def ComputePhysics(self, states, positions, t):
+            seen["shape"] = states["Geometry"].shape
+            seen["npoints"] = len(positions)
+            n = len(positions)
+            return [[np.zeros(n)], [np.zeros(n)], []]
+
+        def ComputePhysicsDerivatives(self, states, positions, t):
+            return {}
+
+    system = GeometryProbe()
+    n_geom = 4  # deliberately != NPOINTS, so a transpose cannot hide
+    states = make_global_state(nVars=1, nAux=0, nScalars=0)
+    # "Geometry" is optional on the way into C++ (every fixture above omits
+    # it), but once loaded it must survive the round trip back out to the
+    # override with the (nPoints, nGeom) orientation every other key has.
+    states["Geometry"] = (
+        np.arange(NPOINTS)[:, None] * 10.0 + np.arange(n_geom)[None, :]
+    )
+
+    MaNTA.TransportSystem.ComputePhysics(system, states, POSITIONS, 0.0)
+
+    assert seen["shape"] == (NPOINTS, n_geom)
+    assert seen["shape"][0] == seen["npoints"]

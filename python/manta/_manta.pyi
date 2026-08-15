@@ -175,6 +175,11 @@ class State:
     def __repr__(self) -> str:
         ...
     @property
+    def geom(self) -> StateField:
+        """
+        the field model's geometry (derived, not an unknown)
+        """
+    @property
     def phi(self) -> StateField:
         """
         the auxiliary variables
