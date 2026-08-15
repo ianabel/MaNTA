@@ -244,6 +244,11 @@ void SystemSolver::assembleFieldCoupling(DGSoln const &Y, DGSoln const &Ydot,
     // way because FieldResidualPrime declares the slot, so the day the value
     // hook gains ydot the derivative is already right rather than silently one
     // term short. Nothing tests it, and nothing can until then.
+    //
+    // The hazard is not here but at the declaration -- a model author who finds
+    // dRdot unfillable and writes d/d(psi') into it instead of into dRddpsidt
+    // corrupts this row silently. FieldModel.hpp says so where that mistake
+    // would be made; TODO carries the interface fix.
     for (Index f = 0; f < nField; ++f)
     {
         DGSoln row(nVars, grid, k, N_VGetArrayPointer(a2[f]), nScalars, nAux, nField);

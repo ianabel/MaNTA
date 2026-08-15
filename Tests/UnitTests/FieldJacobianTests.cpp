@@ -179,6 +179,71 @@ Grid const &scratchGrid()
     return g;
 }
 
+// ------------------------------------------------------------- field models --
+
+// A2 has four slots -- sigma, q, u and aux -- and every FieldResidualPrime in
+// the tree writes only the u one. ManufacturedField and ManufacturedFieldVector
+// both constrain psi to an integral of u; DifferentialManufacturedField and the
+// registry probe write no state derivative at all. So the other three lines of
+// the A2 assembly are identically zero in every other fixture, and replacing
+// them with `= 0.0` leaves the whole suite green -- exactly the
+// plausible-block-nothing-can-catch failure this task exists to close, sitting
+// inside the block its own guard is meant to protect.
+// (a_sign_error_in_a2_would_be_caught negates whatever is *in* a2, so it
+// certifies the u slot and nothing else.)
+//
+// This model constrains psi to an integral that reads all four:
+//
+//     R = psi - Int ( u + 1/2 sigma + 1/4 q + 3/4 phi ) dx
+//
+// so d R / d(DOF) is a nonzero multiple of the quadrature weights in each, and
+// the existing J dy = g machinery reaches them with no new check.
+//
+// The coefficients are distinct and none is 1, so a slot sourced from the wrong
+// `dR` field -- Flux where Derivative was meant, say -- is a wrong *number*
+// rather than an accidentally right one.
+//
+// Only usable with a physics case carrying nAux >= 1: `s.phi(0)` is
+// bounds-checked under DEBUG only. Hence a local fixture beside
+// GeometricAuxDiffusion rather than an addition to ManufacturedFields.hpp,
+// which two other test files share.
+class ManufacturedFieldEverySlot : public ManufacturedField
+{
+public:
+    ManufacturedFieldEverySlot() : ManufacturedField(toml::value{}, scratchGrid()) {}
+
+    static constexpr double wSigma = 0.5, wQ = 0.25, wPhi = 0.75;
+
+    void FieldResidual(VectorRef out, Vector const &psi, Vector const &,
+                       GlobalState const &states, std::vector<Position> const &,
+                       Vector const &weights, Time) override
+    {
+        double integral = 0.0;
+        for (Index j = 0; j < weights.size(); ++j)
+        {
+            const State s = states[j];
+            integral += weights(j) *
+                        (s.u(0) + wSigma * s.sigma(0) + wQ * s.q(0) + wPhi * s.phi(0));
+        }
+        out(0) = psi(0) - integral;
+    }
+
+    void FieldResidualPrime(GlobalStateMatrix &dR, GlobalStateMatrix &, MatrixRef dRdpsi,
+                            MatrixRef, Vector const &, Vector const &, GlobalState const &,
+                            std::vector<Position> const &, Vector const &weights, Time) override
+    {
+        dRdpsi(0, 0) = 1.0;
+
+        // Through GlobalState's whole-matrix accessors, not dR[0][j].u(0):
+        // operator[](Index) returns a State by value, so writing through it
+        // compiles and modifies nothing. See ManufacturedField's own comment.
+        dR[0].Variable().row(0) = -weights.transpose();
+        dR[0].Flux().row(0) = -wSigma * weights.transpose();
+        dR[0].Derivative().row(0) = -wQ * weights.transpose();
+        dR[0].Aux().row(0) = -wPhi * weights.transpose();
+    }
+};
+
 // Everything one Jacobian evaluation needs, in one owner.
 //
 // Declaration order is load bearing: the destructor body frees the two
@@ -267,6 +332,12 @@ CoupledSolver singleDofFixture(Index nCells, Index k, bool superconvergent = fal
         std::make_shared<ManufacturedField>(toml::value{}, scratchGrid()), superconvergent);
 }
 
+CoupledSolver everySlotFixture(Index nCells, Index k)
+{
+    return makeCoupledSolverAtState(nCells, k, std::make_unique<GeometricAuxDiffusion>(),
+                                    std::make_shared<ManufacturedFieldEverySlot>());
+}
+
 CoupledSolver multiDofFixture(Index nCells, Index k)
 {
     return makeCoupledSolverAtState(
@@ -343,6 +414,15 @@ SolveReport checkExactSolve(CoupledSolver &h, int trial)
             static_cast<Index>(dead.size())};
 }
 
+/// The largest coefficient of one field of a DGSoln, over every cell.
+double maxAbs(DGSoln::DGApprox &f, Index nCells)
+{
+    double m = 0.0;
+    for (Index i = 0; i < nCells; ++i)
+        m = std::max(m, f.getCoeff(i).second.cwiseAbs().maxCoeff());
+    return m;
+}
+
 /// Configure far enough for initialize() to run, but not to write anything.
 void configureQuietly(SystemSolver &sys, std::string const &stem)
 {
@@ -390,6 +470,49 @@ BOOST_AUTO_TEST_CASE(the_same_holds_for_a_multi_dof_field_block)
     {
         const SolveReport r = checkExactSolve(solver, trial);
         BOOST_TEST_MESSAGE("5-DOF field, k = 2, nCells = 6, trial "
+                           << trial << ": ||dy* - dy||/||dy|| = " << r.solutionError
+                           << ", ||J dy* - g||/||g|| = " << r.residual);
+        BOOST_TEST(r.solutionError < 1e-7);
+        BOOST_TEST(r.residual < 1e-7);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(the_a2_row_reaches_the_sigma_q_and_aux_slots)
+{
+    // Three quarters of the A2 assembly is unreached by every other fixture in
+    // the tree, because every FieldResidualPrime that exists constrains psi to
+    // an integral of u alone. Replacing the sigma, q and aux lines of
+    // assembleFieldCoupling with `= 0.0` leaves the rest of this file and
+    // coupled_residual_tests green. This is what closes that.
+    const Index nCells = 6, k = 2;
+    auto solver = everySlotFixture(nCells, k);
+
+    // Structural first, so the check below cannot go quietly vacuous again the
+    // way it did before: every slot of the A2 row must actually carry
+    // something. The expected magnitude is the model's coefficient times a
+    // quadrature weight, so this is a statement about which slot was written
+    // and not only about whether anything was.
+    DGSoln a2Map(solver->nVars, *solver.grid, k, N_VGetArrayPointer(solver->a2[0]),
+                 solver->nScalars, solver->nAux, solver->getFieldDOF());
+    const double u = maxAbs(a2Map.u(0), nCells);
+    BOOST_REQUIRE_GT(u, 0.0);
+    BOOST_TEST_MESSAGE("A2 row 0, largest coefficient by slot: u = "
+                       << u << ", sigma = " << maxAbs(a2Map.sigma(0), nCells)
+                       << ", q = " << maxAbs(a2Map.q(0), nCells)
+                       << ", aux = " << maxAbs(a2Map.Aux(0), nCells));
+    BOOST_TEST(maxAbs(a2Map.sigma(0), nCells) ==
+                   ManufacturedFieldEverySlot::wSigma * u,
+               boost::test_tools::tolerance(1e-12));
+    BOOST_TEST(maxAbs(a2Map.q(0), nCells) == ManufacturedFieldEverySlot::wQ * u,
+               boost::test_tools::tolerance(1e-12));
+    BOOST_TEST(maxAbs(a2Map.Aux(0), nCells) == ManufacturedFieldEverySlot::wPhi * u,
+               boost::test_tools::tolerance(1e-12));
+
+    // ...and then the same J dy = g check, which now exercises all four.
+    for (int trial = 0; trial < 3; ++trial)
+    {
+        const SolveReport r = checkExactSolve(solver, trial);
+        BOOST_TEST_MESSAGE("every-slot A2, k = 2, nCells = 6, trial "
                            << trial << ": ||dy* - dy||/||dy|| = " << r.solutionError
                            << ", ||J dy* - g||/||g|| = " << r.residual);
         BOOST_TEST(r.solutionError < 1e-7);

@@ -68,6 +68,21 @@ public:
     ///
     /// All four arrive zeroed. Reporting every row at once is deliberate: it is
     /// what lets a model that solves a coupled system internally do so once.
+    ///
+    /// **dRdot cannot be filled today, and leaving it zero is correct.**
+    /// FieldResidual above receives `states` and no `states_dot` -- unlike
+    /// ScalarG, which takes both y and ydot -- so a field row has no way to
+    /// depend on the transport time derivatives in the first place. The slot is
+    /// here because the coupling assembly already weights it by alpha, so the
+    /// day the value hook gains ydot the derivative is right rather than
+    /// silently one term short.
+    ///
+    /// What a model author must *not* do on finding it unfillable is put
+    /// d(row)/d(psi') there instead. That belongs in dRddpsidt, which is the
+    /// block IDA's alpha multiplies and which initialize() checks a
+    /// differential DOF against; written into dRdot it would land in the A2
+    /// coupling row at the wrong DOFs entirely, and nothing would say so --
+    /// A2 is only ever applied, never assembled or printed. See the TODO entry.
     virtual void FieldResidualPrime(GlobalStateMatrix &dR, GlobalStateMatrix &dRdot,
                                     MatrixRef dRdpsi, MatrixRef dRddpsidt,
                                     Vector const &psi, Vector const &dpsidt,

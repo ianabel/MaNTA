@@ -133,6 +133,32 @@ reason it was not made:
     behaviour being wrong before changing it.
 
 
+  - FieldModel::FieldResidual receives no `states_dot`, so a field row cannot
+    depend on the transport time derivatives -- and FieldResidualPrime's `dRdot`
+    out-parameter, which is meant to be exactly that derivative, is therefore
+    unfillable by any model that can exist. Every consistent model returns it
+    zero, so the `alpha * dRdot` term the A2 assembly carries
+    (SystemSolver::assembleFieldCoupling) is provably inert rather than wrong,
+    and no test reaches it or can.
+
+    Not merely a dead slot, though. A model author who finds it unfillable and
+    reaches for the nearest thing that fits -- putting d(row)/d(psi') in `dRdot`
+    rather than in `dRddpsidt` -- writes a psi derivative into the coupling row
+    against the transport DOFs, at the wrong indices entirely. A2 is only ever
+    applied, never assembled or printed, so the symptom would be slow Newton
+    convergence on a coupled run and nothing else. FieldModel.hpp now says so at
+    the declaration, which is where the mistake would be made.
+
+    The fix is to give FieldResidual a `states_dot` argument, matching ScalarG,
+    which takes both y and ydot for the same reason. That is an interface change
+    to the FieldModel value hook, and no task in the self-consistent-B-fields
+    plan owns that signature -- Task 8 assembled the coupling, Task 9 owns the
+    iterative solve, Task 10 the adjoint transposes. Doing it wants a field model
+    whose residual genuinely carries d/dt of a transport quantity, checked
+    against a closed form first: the same "write the case that would catch it
+    being wrong before changing it" rule the autodiff-sigma entry above records.
+
+
 Superconvergence follow-ons (see Tests/README.md for what is already verified):
 
   - Paper II's HDG(ABC) / HDG+ family: W_h = P_{k+1} with tau ~ 1/h makes u_h
