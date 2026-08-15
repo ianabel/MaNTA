@@ -158,11 +158,45 @@ sites in the core, 200 of them in `SystemSolver.cpp` and 74 in `Matrices.cpp`.
 That is the same single-`k` assumption `TODO` already records as the blocker
 for paper II's HDG+ family.
 
+**Woopen supplies the piece the other three leave out: how to choose between
+the two levers.** Their §4.3 takes Persson & Peraire's modal-decay sensor,
+
+```
+S_K = ( w - w_H , w - w_H )_K / ( w , w )_K
+```
+
+with `w_H` the projection of `w` onto `P_{p-1}`, and switches on a threshold —
+smooth enough, raise `p`; otherwise refine `h`. That is *the same expression*
+as Capasso's eq. (13), which they use to trigger refinement for Newton
+robustness rather than as a switch, so one sensor serves both purposes and
+MaNTA wants it for both.
+
+**It is nearly free here, which is not obvious.** Woopen call the projection
+cheap because they use a hierarchical basis, and MaNTA's is nodal — but
+`NodalBasis` is *built* from `LegendreBasis`: `Basis.hpp:391` fills
+`Vandermonde(i,j) = P_j(x_i)` and keeps it as a member (`:363`). So nodal to
+modal is `V^-1`, truncation to `P_{k-1}` is dropping the top Legendre
+coefficient, and by orthogonality the sensor is a closed-form ratio of modal
+coefficients on the reference cell — one matrix, already built, shared by every
+cell.
+
+Their other half is target-based: a discrete adjoint drives the marking, which
+is interesting for MaNTA because it already *has* an adjoint solver. Two
+caveats are recorded in their §4.2 and both bite. The adjoint has to be
+evaluated in a **richer space** than the primal or the weighted residual
+vanishes by Galerkin orthogonality — MaNTA's `Postprocessor` already produces
+exactly that `k+1` space, but its adjoint solve does not use it. And they
+deliberately **drop the trace adjoint's contribution**, having found that
+including it "overly penalized" interface jumps, noting it "deserves a more
+in-depth analysis". So goal-oriented adaptivity is reachable here but is not
+simply a matter of reusing `G_y`.
+
 | Reference | URL (doi or arxiv) | Short Description | File Name |
 | --- | --- | --- | --- |
 | Int. J. Numer. Methods Eng. 126 (2025) e70107 | https://doi.org/10.1002/nme.70107 | Capasso, Kudashev, Schwander & Serre, h-adaptivity for HDG applied to **fluid transport in a tokamak** — MaNTA's problem class, in SolEdge-HDG's 2D fluid-drift Braginskii setting. The indicator is the order-`p` against post-processed order-`p+1` difference, i.e. `u*`, which MaNTA already builds; it drives coarsening as well as refinement, and their §1 surveys the alternatives (residual-based indicators, a jump sensor on the trace). Open access, CC-BY | HDG-hAdaptivity.pdf |
 | Computers and Fluids 301 (2025) 106792 | https://doi.org/10.1016/j.compfluid.2025.106792 | Levý & May, anisotropic adaptation for HDG on **time-dependent** problems, and the reason to have it is their second contribution rather than the first: a *bounded* solution-transfer operator between meshes. The Galerkin L2 projection over a supermesh is optimal in the norm but overshoots at extrema; theirs preserves local minima and maxima while keeping the order where the solution is smooth. Their §1 is also the short survey of why remeshing every m > 1 steps is not the cheap fix it looks like. Note they integrate with DIRK — see the caveat below. Paywalled | HDG-UnsteadyAdaptivity.pdf |
 | Computers & Fluids 98 (2014) 196–208 | https://doi.org/10.1016/j.compfluid.2014.01.011 | Giorgiani, Fernández-Méndez & Huerta, **degree** adaptivity for HDG. The estimator is the same one as Capasso's — their eq. (8) is `E_i^2 = (1/\|Ω_i\|) ∫ (u* − u)^2`, and they stress the division by the element measure as "crucial for non-uniform meshes" — but the rule it drives is `Δk_i = ceil(log_b(E_i/ε_i))` with `10 ≤ b ≤ 100` (their eq. 10), which assumes **no convergence order at all**. That is the property to steal: the Richardson h-rule needs `u*` to be exactly one order better, which `Tests/README.md:300-330` says is false at `k = 1` with the flag off. Their steady loop is solve → estimate → update degrees → project → repeat, with time-marching used only for the *first* solve and Newton directly thereafter. Paywalled | HDG-pAdaptivity.pdf |
+| Computers & Fluids 98 (2014) 3–16 | https://doi.org/10.1016/j.compfluid.2014.03.023 | Woopen, Balan, May & Schütz, target-based **hp**-adaptation, comparing hybridized against standard DG. Same issue as Giorgiani. Two things to take: their §4.3 is the h-versus-p switch — Persson & Peraire's modal-decay sensor against a threshold — which is the piece the other three papers leave out and which MaNTA can build almost for free from the Vandermonde `NodalBasis` already stores; and their §4.2 is adjoint-based marking, relevant because MaNTA has an adjoint, with the two caveats above. Their headline conclusions match what is measured here: "hp-adaptation proves to be superior to pure h-adaptation if discontinuous or singular flow features are involved", and "in all cases, a higher polynomial degree turns out to be beneficial". Paywalled | HDG-hpAdaptivity.pdf |
 
 ## Coupling to a magnetic field solver
 
