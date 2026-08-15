@@ -4,7 +4,7 @@
 
 **Goal:** Couple MaNTA's HDG transport solve to a pluggable magnetic-field model whose degrees of freedom live in the IDA vector and whose residual is evaluated on every residual call, so the field responds to the plasma inside the DAE rather than beside it.
 
-**Architecture:** A `FieldModel` declares itself as data (`FieldSpec`) and owns `nFieldDOF` unknowns appended to the solution vector after the global scalars. Geometry is *derived* — a function of `(psi, x)` evaluated at the physics nodes and cached per residual, reaching physics cases through a new `State::geom(g)` accessor so no existing hook signature changes. The coupling blocks are assembled outside the cell-local `MX` block, and the coupled Jacobian is solved either by an exact Schur complement onto `psi` (verification) or by block Gauss–Seidel (production).
+**Architecture:** A `FieldModel` declares itself as data (`FieldModelSpec`) and owns `nFieldDOF` unknowns appended to the solution vector after the global scalars. Geometry is *derived* — a function of `(psi, x)` evaluated at the physics nodes and cached per residual, reaching physics cases through a new `State::geom(g)` accessor so no existing hook signature changes. The coupling blocks are assembled outside the cell-local `MX` block, and the coupled Jacobian is solved either by an exact Schur complement onto `psi` (verification) or by block Gauss–Seidel (production).
 
 **Tech Stack:** C++23, Eigen 3.4/5.0, SUNDIALS IDA, Boost.Test, pybind11, toml11, netCDF.
 
@@ -25,48 +25,49 @@
 - **`make -B` does not work in this tree.** To force a rebuild, delete the target.
 - Build and test with `export PATH="$PWD/.venv/bin:$PATH"` on `PATH`.
 - **Fix typos on sight**, anywhere in the repo, whether or not the file is otherwise in scope.
+- **The magnetic-field spec type is `FieldModelSpec`, in `FieldModelSpec.hpp`, and must not be shortened to `FieldSpec`.** `SystemSpec.hpp:87` already defines a global `struct FieldSpec` — the per-*transport-variable* descriptor, bound to Python as `manta.Field` and asserted by `python/Tests/test_package_api.py`. The two are unrelated types, and the collision is not a compile error at the point of definition: it surfaces at link time as `-Werror=odr`, with nothing built. Note also that "field" in MaNTA already means a transport variable, so the longer name is the accurate one and not merely the available one.
 
 **The zero-coupling invariant, which every task must preserve:** with no `FieldModel` configured, output must be identical to `main` at `07dd6ab` *bit for bit*. This is checked once in Task 12, but a task that breaks it has broken it silently, so run `make test && make regression_tests` at the end of every task.
 
 ---
 
-### Task 1: `FieldSpec` and the `FieldModel` base class
+### Task 1: `FieldModelSpec` and the `FieldModel` base class
 
 Declares what a field model *is*, as validated data — the pattern `SystemSpec.hpp` already established, where a part-built description cannot exist.
 
 **Files:**
-- Create: `FieldSpec.hpp`
+- Create: `FieldModelSpec.hpp`
 - Create: `FieldModel.hpp`
 - Create: `FieldModel.cpp`
-- Create: `Tests/UnitTests/FieldSpecTests.cpp`
-- Modify: `Tests/UnitTests/Makefile:22` (add `FieldSpecTests.cpp` to `TEST_SOURCES`)
+- Create: `Tests/UnitTests/FieldModelSpecTests.cpp`
+- Modify: `Tests/UnitTests/Makefile:22` (add `FieldModelSpecTests.cpp` to `TEST_SOURCES`)
 - Modify: `Tests/UnitTests/Makefile:41` (add `../../FieldModel.o` to `REQUIRED_OBJECTS`)
 - Modify: `Makefile` (add `FieldModel.o` to the object list beside `Postprocessing.o`)
 
 **Interfaces:**
 - Consumes: `Types.hpp` (`Index`, `Value`, `Vector`, `Matrix`, `VectorRef`, `MatrixRef`, `Position`, `Time`), `State.hpp` (`GlobalState`, `GlobalStateMatrix`).
-- Produces: `struct FieldDOF`, `struct FieldSlot`, `class FieldSpec` with `validate()`, `class FieldModel` with the pure-virtual hooks listed below. Tasks 5–12 all build on these exact names.
+- Produces: `struct FieldDOF`, `struct FieldSlot`, `class FieldModelSpec` with `validate()`, `class FieldModel` with the pure-virtual hooks listed below. Tasks 5–12 all build on these exact names.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `Tests/UnitTests/FieldSpecTests.cpp`:
+Create `Tests/UnitTests/FieldModelSpecTests.cpp`:
 
 ```cpp
-// A FieldSpec is validated once, in the FieldModel constructor, so a half-built
+// A FieldModelSpec is validated once, in the FieldModel constructor, so a half-built
 // field model cannot exist -- the same contract SystemSpec has. These tests pin
 // the refusals, because every one of them is a configuration error that would
 // otherwise surface much later as an assembly shape mismatch or an IDA failure
 // code with nothing pointing back here.
 #include <boost/test/unit_test.hpp>
 
-#include "../../FieldSpec.hpp"
+#include "../../FieldModelSpec.hpp"
 #include "../../FieldModel.hpp"
 
-BOOST_AUTO_TEST_SUITE(field_spec_tests)
+BOOST_AUTO_TEST_SUITE(field_model_spec_tests)
 
-static FieldSpec twoDofOneSlot()
+static FieldModelSpec twoDofOneSlot()
 {
-    FieldSpec spec;
+    FieldModelSpec spec;
     spec.dofs = {{"psi0", "flux at the axis", "Wb", false},
                  {"psi1", "flux at the edge", "Wb", false}};
     spec.geometry = {{"Vprime", "flux surface volume derivative", "m^3"}};
@@ -83,7 +84,7 @@ BOOST_AUTO_TEST_CASE(a_well_formed_spec_validates)
 
 BOOST_AUTO_TEST_CASE(a_spec_with_no_dofs_is_refused)
 {
-    FieldSpec spec = twoDofOneSlot();
+    FieldModelSpec spec = twoDofOneSlot();
     spec.dofs.clear();
     BOOST_CHECK_THROW(spec.validate(), std::invalid_argument);
 }
@@ -92,18 +93,18 @@ BOOST_AUTO_TEST_CASE(a_spec_with_no_geometry_slots_is_refused)
 {
     // A field model that exposes no geometry cannot affect the transport at
     // all: geometry is the only channel from psi into the physics.
-    FieldSpec spec = twoDofOneSlot();
+    FieldModelSpec spec = twoDofOneSlot();
     spec.geometry.clear();
     BOOST_CHECK_THROW(spec.validate(), std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_CASE(duplicate_names_are_refused)
 {
-    FieldSpec spec = twoDofOneSlot();
+    FieldModelSpec spec = twoDofOneSlot();
     spec.dofs[1].name = "psi0";
     BOOST_CHECK_THROW(spec.validate(), std::invalid_argument);
 
-    FieldSpec spec2 = twoDofOneSlot();
+    FieldModelSpec spec2 = twoDofOneSlot();
     spec2.geometry.push_back({"Vprime", "again", "m^3"});
     BOOST_CHECK_THROW(spec2.validate(), std::invalid_argument);
 }
@@ -112,14 +113,14 @@ BOOST_AUTO_TEST_CASE(an_empty_name_is_refused)
 {
     // Names become netCDF group names in Task 12, where an empty one is a
     // failure a long way from here.
-    FieldSpec spec = twoDofOneSlot();
+    FieldModelSpec spec = twoDofOneSlot();
     spec.dofs[0].name = "";
     BOOST_CHECK_THROW(spec.validate(), std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_CASE(an_empty_label_is_refused)
 {
-    FieldSpec spec = twoDofOneSlot();
+    FieldModelSpec spec = twoDofOneSlot();
     spec.label = "";
     BOOST_CHECK_THROW(spec.validate(), std::invalid_argument);
 }
@@ -130,12 +131,12 @@ BOOST_AUTO_TEST_SUITE_END()
 - [ ] **Step 2: Run test to verify it fails**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=field_spec_tests
+cd Tests/UnitTests && make -j && ./UnitTests --run_test=field_model_spec_tests
 ```
 
-Expected: compilation failure, `FieldSpec.hpp: No such file or directory`.
+Expected: compilation failure, `FieldModelSpec.hpp: No such file or directory`.
 
-- [ ] **Step 3: Write `FieldSpec.hpp`**
+- [ ] **Step 3: Write `FieldModelSpec.hpp`**
 
 ```cpp
 #ifndef FIELDSPEC_HPP
@@ -195,7 +196,7 @@ struct FieldSlot
     std::string units;
 };
 
-class FieldSpec
+class FieldModelSpec
 {
 public:
     std::vector<FieldDOF> dofs;
@@ -208,13 +209,13 @@ public:
     void validate() const
     {
         if (dofs.empty())
-            throw std::invalid_argument("FieldSpec: a field model must declare at least one degree of freedom");
+            throw std::invalid_argument("FieldModelSpec: a field model must declare at least one degree of freedom");
         if (geometry.empty())
             throw std::invalid_argument(
-                "FieldSpec: a field model must declare at least one geometry slot; "
+                "FieldModelSpec: a field model must declare at least one geometry slot; "
                 "geometry is the only channel from the field DOFs into the transport physics");
         if (label.empty())
-            throw std::invalid_argument("FieldSpec: the spatial label must be named");
+            throw std::invalid_argument("FieldModelSpec: the spatial label must be named");
 
         checkNames(dofs, "degree of freedom");
         checkNames(geometry, "geometry slot");
@@ -226,12 +227,12 @@ private:
     {
         for (auto const &e : v)
             if (e.name.empty())
-                throw std::invalid_argument(std::string("FieldSpec: an unnamed ") + what);
+                throw std::invalid_argument(std::string("FieldModelSpec: an unnamed ") + what);
 
         for (size_t i = 0; i < v.size(); ++i)
             for (size_t j = i + 1; j < v.size(); ++j)
                 if (v[i].name == v[j].name)
-                    throw std::invalid_argument(std::string("FieldSpec: duplicate ") + what + " name '" + v[i].name + "'");
+                    throw std::invalid_argument(std::string("FieldModelSpec: duplicate ") + what + " name '" + v[i].name + "'");
     }
 };
 
@@ -247,7 +248,7 @@ private:
 #include <Eigen/Core>
 #include <Eigen/Dense>
 
-#include "FieldSpec.hpp"
+#include "FieldModelSpec.hpp"
 #include "State.hpp"
 #include "Types.hpp"
 
@@ -267,14 +268,14 @@ private:
 class FieldModel
 {
 public:
-    explicit FieldModel(FieldSpec spec_) : spec(std::move(spec_))
+    explicit FieldModel(FieldModelSpec spec_) : spec(std::move(spec_))
     {
         spec.validate();
         B.setZero(spec.nFieldDOF(), spec.nFieldDOF());
     }
     virtual ~FieldModel() = default;
 
-    FieldSpec const &getSpec() const { return spec; }
+    FieldModelSpec const &getSpec() const { return spec; }
     Index nFieldDOF() const { return spec.nFieldDOF(); }
     Index nGeometry() const { return spec.nGeometry(); }
     bool isFieldDOFDifferential(Index i) const { return spec.dofs[i].differential; }
@@ -359,7 +360,7 @@ public:
     virtual void resetForRun() {}
 
 protected:
-    FieldSpec spec;
+    FieldModelSpec spec;
     Matrix B;
     Eigen::PartialPivLU<Matrix> Blu;
 };
@@ -382,12 +383,12 @@ The class is header-only for now, but the translation unit exists so the object 
 
 - [ ] **Step 6: Wire the build**
 
-In `Tests/UnitTests/Makefile:22`, append `FieldSpecTests.cpp` to `TEST_SOURCES`. In `Tests/UnitTests/Makefile:41`, append `../../FieldModel.o` to `REQUIRED_OBJECTS`. In the top-level `Makefile`, add `FieldModel.o` to the same list that carries `Postprocessing.o`.
+In `Tests/UnitTests/Makefile:22`, append `FieldModelSpecTests.cpp` to `TEST_SOURCES`. In `Tests/UnitTests/Makefile:41`, append `../../FieldModel.o` to `REQUIRED_OBJECTS`. In the top-level `Makefile`, add `FieldModel.o` to the same list that carries `Postprocessing.o`.
 
 - [ ] **Step 7: Run the tests**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=field_spec_tests
+cd Tests/UnitTests && make -j && ./UnitTests --run_test=field_model_spec_tests
 ```
 
 Expected: 6 test cases, all passing.
@@ -396,7 +397,7 @@ Expected: 6 test cases, all passing.
 
 ```sh
 make test
-git add FieldSpec.hpp FieldModel.hpp FieldModel.cpp Tests/UnitTests/FieldSpecTests.cpp Tests/UnitTests/Makefile Makefile
+git add FieldModelSpec.hpp FieldModel.hpp FieldModel.cpp Tests/UnitTests/FieldModelSpecTests.cpp Tests/UnitTests/Makefile Makefile
 git commit -m "A field model declares itself as data, and is validated once"
 ```
 
@@ -411,7 +412,7 @@ git commit -m "A field model declares itself as data, and is validated once"
 - Modify: `Tests/UnitTests/Makefile:22`
 
 **Interfaces:**
-- Consumes: `FieldModel`, `FieldSpec` from Task 1.
+- Consumes: `FieldModel`, `FieldModelSpec` from Task 1.
 - Produces: `FieldModels::InstantiateFieldModel(std::string const&, toml::value const&, Grid const&) -> std::unique_ptr<FieldModel>`; the macros `REGISTER_FIELD_MODEL_HEADER(T)` and `REGISTER_FIELD_MODEL_IMPL(T)`.
 
 - [ ] **Step 1: Write the failing test**
@@ -439,9 +440,9 @@ namespace
     public:
         RegistryProbeField(toml::value const &, Grid const &) : FieldModel(makeSpec()) {}
 
-        static FieldSpec makeSpec()
+        static FieldModelSpec makeSpec()
         {
-            FieldSpec s;
+            FieldModelSpec s;
             s.dofs = {{"p", "probe", "1", false}};
             s.geometry = {{"g", "probe", "1"}};
             s.label = "x";
@@ -1045,7 +1046,7 @@ Test fixtures, not production models. `ManufacturedField` is the cheapest config
 - Modify: `Tests/UnitTests/Makefile:22`
 
 **Interfaces:**
-- Consumes: `FieldModel`, `FieldSpec` (Task 1); `GlobalState` with geometry (Task 3).
+- Consumes: `FieldModel`, `FieldModelSpec` (Task 1); `GlobalState` with geometry (Task 3).
 - Produces: `class ManufacturedField`, `class ManufacturedFieldVector`, and the free functions `manufacturedU(Position x, Time t)`, `manufacturedPsiExact(Time t)`. Tasks 6, 8, 9, 10 and 11 all use these.
 
 - [ ] **Step 1: Write the failing test**
@@ -1236,9 +1237,9 @@ class ManufacturedField : public FieldModel
 public:
     ManufacturedField(toml::value const &, Grid const &) : FieldModel(buildSpec()) {}
 
-    static FieldSpec buildSpec()
+    static FieldModelSpec buildSpec()
     {
-        FieldSpec s;
+        FieldModelSpec s;
         s.dofs = {{"psi", "the manufactured field unknown", "1", false}};
         s.geometry = {{"g", "metric factor multiplying the diffusivity", "1"}};
         s.label = "x";
@@ -1287,9 +1288,9 @@ public:
 
     ManufacturedFieldVector(toml::value const &, Grid const &) : FieldModel(buildSpec()), L(manufacturedL(N)) {}
 
-    static FieldSpec buildSpec()
+    static FieldModelSpec buildSpec()
     {
-        FieldSpec s;
+        FieldModelSpec s;
         s.geometry = {{"g", "metric factor multiplying the diffusivity", "1"}};
         s.label = "x";
         for (Index m = 0; m < N; ++m)
@@ -2729,7 +2730,7 @@ git commit -m "Serialise the coupled field, and document what it is"
 
 ## Self-Review
 
-**Spec coverage.** Every section of the spec maps to a task: the `FieldSpec`/`FieldModel` abstraction → Tasks 1–2; geometry derived and reaching cases through `State` → Task 3; the DOF layout → Task 4; the manufactured clients → Task 5; the coupled residual, `id` vector and recoverable failure → Task 6; the geometry derivative hooks → Task 7; `A1`/`A2`/`B` and the exact Schur, plus the config keys and the exact-solve warning → Task 8; block Gauss–Seidel → Task 9; the adjoint transposes and the loud-failure asymmetry → Task 10; the order study including the superconvergent case → Task 11; output, restart, docs and the zero-coupling invariant → Task 12. The two named traps (the differential-without-`d/dt` refusal, per-run state in `initialiseMatrices`) are Task 6 Steps 6–7, checked in Tasks 6 and 12.
+**Spec coverage.** Every section of the spec maps to a task: the `FieldModelSpec`/`FieldModel` abstraction → Tasks 1–2; geometry derived and reaching cases through `State` → Task 3; the DOF layout → Task 4; the manufactured clients → Task 5; the coupled residual, `id` vector and recoverable failure → Task 6; the geometry derivative hooks → Task 7; `A1`/`A2`/`B` and the exact Schur, plus the config keys and the exact-solve warning → Task 8; block Gauss–Seidel → Task 9; the adjoint transposes and the loud-failure asymmetry → Task 10; the order study including the superconvergent case → Task 11; output, restart, docs and the zero-coupling invariant → Task 12. The two named traps (the differential-without-`d/dt` refusal, per-run state in `initialiseMatrices`) are Task 6 Steps 6–7, checked in Tasks 6 and 12.
 
 **Two known soft spots, called out rather than hidden.**
 

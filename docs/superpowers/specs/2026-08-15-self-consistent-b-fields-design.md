@@ -167,7 +167,7 @@ exact, aux included.
 
 ### The field model declares itself as data
 
-A `FieldSpec`, built once, validated once, handed to the `FieldModel`
+A `FieldModelSpec`, built once, validated once, handed to the `FieldModel`
 constructor, immutable after — the way `SystemSpec` already works, so a
 part-built model cannot exist. It carries:
 
@@ -261,7 +261,7 @@ no `d/dt` is a row every unknown of which `IDA_YA_YDP_INIT` holds fixed, so no
 Newton direction touches it and the backtracking loop runs to exhaustion —
 `IDA_LINESEARCH_FAIL (-13)`, a message about the linesearch for a defect in the
 declaration. That is what kept `python-physics/mirror-plasma`'s voltage
-controller from ever starting. `FieldSpec::validate` refuses it at construction.
+controller from ever starting. `FieldModelSpec::validate` refuses it at construction.
 
 **Per-run state in `initialiseMatrices`.** `initialize` skips
 `initialiseMatrices` when `initialised` is already set, so anything the field
@@ -310,7 +310,7 @@ the uncoupled problem. The field constraint is therefore compensated against
 Also:
 
 * Exact and iterative field solves agree on both manufactured clients.
-* `FieldSpec::validate` refuses a differential DOF whose residual has no `d/dt`.
+* `FieldModelSpec::validate` refuses a differential DOF whose residual has no `d/dt`.
 * Bit-for-bit solver reuse with a field model attached, at zero tolerance.
 * `Superconvergent = true` with coupling armed. Geometry is a function of
   `(psi, x)` and star nodes are just more points, so it should work through
