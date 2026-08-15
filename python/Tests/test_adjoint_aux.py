@@ -164,7 +164,6 @@ class AuxDiffusionAdjoint(MaNTA.AdjointProblem):
             "dSigma": 0,
             "dSources": 0,
             "dAux": 0,
-            "dgFn_dphi": 0,
         }
 
     # --- the objective and its explicit parameter derivative -------------
@@ -213,15 +212,11 @@ class AuxDiffusionAdjoint(MaNTA.AdjointProblem):
         self.call_counts["dAux"] += 1
         return np.zeros((self.np, len(positions)))
 
-    def dgFn_dphi(self, gIndex, state, x):
-        # Pointwise, and the return value *is* the derivative vector -- unlike
-        # the C++ signature (Index, VectorRef, State, Position), the trampoline
-        # does not pass the output reference through to Python.
-        self.call_counts["dgFn_dphi"] += 1
-        return np.zeros(self.ts.nAux)
-
-    def dAux_dp(self, i, pIndex, state, x):
-        return 0.0
+    # No dgFn_dphi and no dAux_dp. Both were pointwise hooks a Python adjoint
+    # used to have to supply, and PyAdjointProblem now raises from each of them
+    # rather than dispatching: dg/dphi reaches G_y through the batched `dg`
+    # above, and dAux/dp through the batched `dAux`. Defining them here would be
+    # dead code that reads as though it were part of the contract.
 
     def getName(self, pIndex):
         return ("kappa", "source")[pIndex]
@@ -374,8 +369,10 @@ def test_adjoint_gradient_matches_the_closed_form(tmp_path, scheme):
 def test_the_aux_adjoint_hooks_are_all_exercised(tmp_path):
     """Guard against the gradient being right for the wrong reason.
 
-    `dAux` and `dgFn_dphi` are reached only when nAux > 0, so this is the only
-    place they are known to be called at all.
+    `dAux` is reached only when nAux > 0, so this is the only place it is known
+    to be called at all. It used to check `dgFn_dphi` alongside it; that hook is
+    unreachable from Python now -- the trampoline raises rather than dispatching,
+    because dg/dphi arrives with the rest of `dg`.
     """
     ts = AuxParametricDiffusion(np.array([KAPPA0, SOURCE0]))
     adjoint = AuxDiffusionAdjoint(ts)
