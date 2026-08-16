@@ -9,8 +9,15 @@
 #include "SolverConfig.hpp"
 #include "FieldModel.hpp"
 
-// Load restart data into vectors
-int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vector<double> &dYdt)
+// Load restart data into vectors. `nField` is filled with how many of the
+// trailing entries of Y are a field model's psi, so the caller can shape the
+// DGSoln that wraps them.
+//
+// A file written before the field block existed has no nField variable, and
+// reads back as zero rather than as an error: every such file was written by a
+// run with no field model, so zero is the truth about it rather than a guess.
+int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vector<double> &dYdt,
+				 Index &nField)
 {
 	netCDF::NcGroup RestartGroup = restart_file.getGroup("RestartData");
 
@@ -21,6 +28,15 @@ int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vect
 
 	RestartGroup.getVar("Y").getVar(Y.data());
 	RestartGroup.getVar("dYdt").getVar(dYdt.data());
+
+	nField = 0;
+	netCDF::NcVar nFieldVar = RestartGroup.getVar("nField");
+	if (!nFieldVar.isNull())
+	{
+		int stored = 0;
+		nFieldVar.getVar(&stored);
+		nField = stored;
+	}
 
 	restart_file.close();
 
@@ -118,37 +134,20 @@ int runManta(std::string const &fname)
 	if (config.solveAdjoint)
 		adjoint = pProblem->createAdjointProblem();
 
-	if (config.restart)
-	{
-		std::vector<double> Y, dYdt;
-		Index nDOF_file = LoadFromFile(restart_file, Y, dYdt);
-
-		// Make sure degrees of freedom are consistent with restart file
-		const Index nCells = grid->getNCells();
-		const Index nDOF = pProblem->getNumVars() * 3 * nCells * (k + 1) +
-						   pProblem->getNumVars() * (nCells + 1) +
-						   pProblem->getNumScalars() +
-						   pProblem->getNumAux() * nCells * (k + 1);
-
-		if (nDOF_file != nDOF)
-			throw std::invalid_argument("nVars/nAux/nScalars in restart file inconsistent with physics case");
-
-		pProblem->setRestartValues(Y, dYdt, *grid, k);
-	}
-
-	auto system = std::make_shared<SystemSolver>(*grid, k, pProblem.get());
-
 	// A field model is selected by name from the same process-global registry
 	// pattern the physics cases use, and is handed the parsed config file so it
-	// can read its own table. Before applySolverConfig, and necessarily before
-	// runSolver: setFieldModel reshapes the solution vector and refuses once the
-	// solver is initialised.
+	// can read its own table. After the plugin dlopens above, since a model may
+	// come from one; and *before* the restart block below, because the field
+	// block is part of the solution vector and its length is what the restart
+	// file has to be checked against and the restart DGSoln shaped by. It is
+	// attached to the solver further down -- setFieldModel needs a solver, and a
+	// solver cannot exist until the restart values are in the problem.
+	std::shared_ptr<FieldModel> fieldModel;
 	if (!config.FieldModel.empty())
 	{
 		try
 		{
-			system->setFieldModel(
-				FieldModels::InstantiateFieldModel(config.FieldModel, configFile, *grid));
+			fieldModel = FieldModels::InstantiateFieldModel(config.FieldModel, configFile, *grid);
 		}
 		catch (std::invalid_argument const &e)
 		{
@@ -157,6 +156,45 @@ int runManta(std::string const &fname)
 			return 1;
 		}
 	}
+	const Index nField = fieldModel ? fieldModel->nFieldDOF() : 0;
+
+	if (config.restart)
+	{
+		std::vector<double> Y, dYdt;
+		Index nField_file = 0;
+		Index nDOF_file = LoadFromFile(restart_file, Y, dYdt, nField_file);
+
+		// Make sure degrees of freedom are consistent with restart file
+		const Index nCells = grid->getNCells();
+		const Index nDOF = pProblem->getNumVars() * 3 * nCells * (k + 1) +
+						   pProblem->getNumVars() * (nCells + 1) +
+						   pProblem->getNumScalars() +
+						   pProblem->getNumAux() * nCells * (k + 1) +
+						   nField;
+
+		// Two checks, not one, because nDOF alone cannot separate them: a file
+		// with one extra field unknown and one fewer scalar has exactly the
+		// right total length, and would be read back with psi in the scalar
+		// slot. The field count is the cheaper thing to be sure of, so it is
+		// reported first and by name.
+		if (nField_file != nField)
+			throw std::invalid_argument(
+				"Restart file carries " + std::to_string(nField_file) +
+				" field unknowns but the configured FieldModel declares " +
+				std::to_string(nField) + ".");
+
+		if (nDOF_file != nDOF)
+			throw std::invalid_argument("nVars/nAux/nScalars in restart file inconsistent with physics case");
+
+		pProblem->setRestartValues(Y, dYdt, *grid, k, nField);
+	}
+
+	auto system = std::make_shared<SystemSolver>(*grid, k, pProblem.get());
+
+	// Before applySolverConfig, and necessarily before runSolver: setFieldModel
+	// reshapes the solution vector and refuses once the solver is initialised.
+	if (fieldModel)
+		system->setFieldModel(fieldModel);
 
 	applySolverConfig(config, *system);
 	if (config.solveAdjoint)

@@ -40,6 +40,13 @@
     against. MaNTA does not interpret it -- the provider declares its own label
     and supplies the metric on it -- but it is recorded in the output so a run
     says what its x meant.
+
+    `name` is the netCDF group a coupled run writes psi and the geometry slots
+    into. It defaults rather than being required, because the registered name a
+    config selects the model by is a property of the *configuration* and the
+    solver never sees it: SystemSolver holds a FieldModel, not the string
+    FieldModels::InstantiateFieldModel was given. A model that wants its output
+    labelled says so here.
  */
 
 struct FieldDOF
@@ -70,6 +77,7 @@ public:
     std::vector<FieldDOF> dofs;
     std::vector<FieldSlot> geometry;
     std::string label;
+    std::string name = "Field";
 
     Index nFieldDOF() const { return static_cast<Index>(dofs.size()); }
     Index nGeometry() const { return static_cast<Index>(geometry.size()); }
@@ -84,6 +92,11 @@ public:
                 "geometry is the only channel from the field DOFs into the transport physics");
         if (label.empty())
             throw std::invalid_argument("FieldModelSpec: the spatial label must be named");
+        // Only reachable by clearing the default, which is the one way to ask
+        // for a netCDF group with no name -- netCDF accepts that and produces a
+        // file whose field group cannot be looked up.
+        if (name.empty())
+            throw std::invalid_argument("FieldModelSpec: the output group name cannot be empty");
 
         checkNames(dofs, "degree of freedom");
         checkNames(geometry, "geometry slot");

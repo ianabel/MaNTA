@@ -354,6 +354,49 @@ arrive zeroed. ``ScalarHooks::addBoundaryDerivative`` is the counterpart of
    8% at :math:`k = 4` on 16 cells. The weights you are handed are the ones the
    solver integrates with.
 
+.. _geometry-derivatives:
+
+Reading the magnetic geometry
+-----------------------------
+
+When a :doc:`field model <field_coupling>` is attached, the metric fields it
+derives from its own unknowns reach a physics case through ``State::geom(s)``,
+slot by slot, exactly as ``u``, ``q``, ``sigma`` and ``phi`` do. Nothing else
+changes: geometry is a function of :math:`(\psi, x)` evaluated at the same
+nodes, cached per residual, in the same standing as :math:`\hat\sigma`.
+
+Reading it in a value hook is all that is needed for the *residual* to be
+right. For the *Jacobian* to be right, a case that reads geometry must also say
+how it depends on it:
+
+.. code-block:: cpp
+
+   void dSigmaFn_dGeometry(Index i, VectorRef out, const State &s, Position x, Time t);
+   void dSources_dGeometry(Index i, VectorRef out, const State &s, Position x, Time t);
+   void dAuxG_dGeometry   (Index i, VectorRef out, const State &s, Position x, Time t);
+
+Each ``out`` is length ``nGeometry`` and, like every other derivative
+out-parameter, **arrives zeroed** — so a hook assigns only its nonzero entries.
+These are the first factor of the coupling block :math:`A_1`; the second,
+:math:`\partial g/\partial\psi`, is the field model's.
+
+**An absent hook is an identically zero block, and that is correct rather than
+approximate** for a case that does not read geometry: it does not couple. It is
+*not* correct for a case that does. Getting this wrong has the usual asymmetric
+consequence — the Jacobian is never assembled, so a missing block costs Newton
+iterations and nothing else in a forward run, but the adjoint operator *is* the
+transpose and a missing block there is a silently wrong gradient beside a
+perfectly good :math:`G`.
+
+There is deliberately no hook for :math:`\partial q/\partial g` or for the trace
+rows. :math:`q = \partial_x u` is a definition rather than a physical relation,
+and a geometry-dependent boundary condition is out of scope.
+
+The three hooks are **pointwise only**. ``dSigma`` and ``dSources``, the batched
+wrappers below, loop over ``GlobalStateMatrix``'s ``Variable``/``Derivative``/
+``Flux``/``Aux`` slices and there is no ``Geometry`` slice; the coupling
+assembly calls the pointwise hooks directly instead.
+
 Pointwise and batched
 ---------------------
 

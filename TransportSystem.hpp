@@ -76,7 +76,13 @@ public:
   Index getNumScalars() const { return nScalars; };
   Index getNumAux() const { return nAux; };
 
-  virtual void setRestartValues(const std::vector<double> &y, const std::vector<double> &dydt, const Grid &grid, Index k)
+  // `nField` is how many of the trailing entries of `y` are the field model's
+  // psi. It defaults to zero, which is every caller that has no field model --
+  // PyRunner, and the tests that build a restart vector by hand. It is not
+  // optional for one that does: the field block is last in the layout, so a
+  // DGSoln built without it maps a *shorter* vector, and DGSoln::copy would then
+  // be asked to assign a length-zero psi onto a length-nField one.
+  virtual void setRestartValues(const std::vector<double> &y, const std::vector<double> &dydt, const Grid &grid, Index k, Index nField = 0)
   {
     // Copy into vectors owned by TransportSystem. (These were written as
     // std::move(y), but y is a const lvalue reference -- std::move on it yields
@@ -87,8 +93,8 @@ public:
     restart_dYdt_data = dydt;
 
     // Create DGSolns to wrap restart data
-    restart_Y = std::make_shared<DGSoln>(nVars, grid, k, restart_Y_data.data(), nScalars, nAux);
-    restart_dYdt = std::make_shared<DGSoln>(nVars, grid, k, restart_dYdt_data.data(), nScalars, nAux);
+    restart_Y = std::make_shared<DGSoln>(nVars, grid, k, restart_Y_data.data(), nScalars, nAux, nField);
+    restart_dYdt = std::make_shared<DGSoln>(nVars, grid, k, restart_dYdt_data.data(), nScalars, nAux, nField);
     restarting = true;
 
     // Pull boundary conditions directly from restart values

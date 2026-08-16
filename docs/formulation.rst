@@ -32,6 +32,20 @@ in the whole solution, so it may contain integrals over the domain — and each 
 be algebraic or differential (carrying :math:`\dot\mu`), which is declared per
 scalar through ``isScalarDifferential``.
 
+A fourth family is present only when a :doc:`field model <field_coupling>` is
+attached:
+
+.. math::
+
+   R_m(\psi, \dot\psi, u, q, \sigma, \phi, t) = 0,
+   \qquad m = 1 \ldots \texttt{nFieldDOF}
+
+with the ``nFieldDOF`` unknowns :math:`\psi` reaching the transport equations
+only through the *geometry slots* :math:`g_s(\psi, x, t)` the model derives from
+them, which a physics case reads as ``State::geom(s)``. Like the scalars, each
+:math:`\psi_m` may be algebraic or differential. Everything below holds with
+``nFieldDOF = 0``, which is every run that does not set ``FieldModel``.
+
 .. _sign-convention:
 
 The flux sign convention
@@ -88,11 +102,19 @@ The layout of the global solution vector is
    [ sigma | q | u | aux ]   per cell, for each cell in turn
    [ lambda ]                all face traces
    [ mu ]                    all global scalars
+   [ psi ]                   the field model's unknowns, if there is one
 
 This ordering is shared by the solution vector (``DGSoln::Map``) and by the
 per-cell Jacobian block ``MX``. Getting a column index wrong in that layout is
 the most common way to break the solver silently, because — see below — a wrong
 Jacobian does not produce a wrong answer.
+
+The field block is **last** so that attaching a model moves nothing before it,
+which is what makes the whole coupling inert when it is absent. ``DGSoln::getDoF()``
+is the one authority on the total length: the formula was open-coded in three
+places, and a copy that did not know about the field block wrote a *short*
+restart file whose recorded ``nDOF`` matched the uncoupled formula — so the
+truncated file read back as consistent.
 
 ``DGSoln`` and ``DGApprox`` are **views**, ``Eigen::Map`` objects over memory
 SUNDIALS owns, not containers. That matters if you hold one across a solve; see
@@ -115,6 +137,10 @@ supplies it in an unusual way:
   condenses the cell-local unknowns onto :math:`\lambda` and back-substitutes,
   and ``solveJacEq`` wraps that in a Woodbury/bordered elimination to account for
   the global scalars :math:`\mu`.
+* With a field model attached, ``solveJacEq`` wraps *that* in a second block
+  elimination onto :math:`\psi` — exactly, or by an accelerated block
+  Gauss–Seidel sweep that escalates to the exact form rather than returning an
+  under-converged answer. See :ref:`field-solve`.
 
 Static condensation is what makes HDG attractive here: the only globally coupled
 system is the one for :math:`\lambda`, whose size is (number of faces) ×

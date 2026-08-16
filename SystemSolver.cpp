@@ -335,14 +335,14 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
     // The field unknowns first: geometry is a function of psi, so every physics
     // evaluation below -- starting with the initial flux -- needs them set.
-    if (fieldModel)
+    //
+    // Not on a restart, where the block below copies psi out of the restart file
+    // instead. Calling InitialFieldValue there would be harmless in the sense
+    // that the copy overwrites it, and wrong in the sense that a model whose
+    // starting guess is expensive or unavailable away from t = 0 would be asked
+    // for one it does not have.
+    if (fieldModel && !problem->isRestarting())
     {
-        if (problem->isRestarting())
-            throw std::logic_error(
-                "Restarting a run with a field model attached is not supported yet: the "
-                "restart file carries no field block, so there is nothing to resume psi "
-                "from.");
-
         Vector psi0 = Vector::Zero(nField);
         fieldModel->InitialFieldValue(psi0);
         y.getField() = psi0;

@@ -214,6 +214,14 @@ public:
             throw std::invalid_argument("Cannot add two DGSoln's with different numbers of variables");
         if (grid != other.grid)
             throw std::invalid_argument("Cannot add two DGSoln's with different grids");
+        // psi_ is an Eigen::Map, so `psi_ = other.psi_` at a different length is
+        // not a resize -- it is an assertion under a debug Eigen and undefined
+        // behaviour without one. The way to get here is a restart whose file was
+        // written by a run with a different field model, or with none; that is a
+        // configuration error and it says so rather than corrupting the block
+        // after the one it was aimed at.
+        if (nField != other.nField)
+            throw std::invalid_argument("Cannot copy two DGSoln's with different numbers of field unknowns");
         for (Index i = 0; i < nVars; ++i)
         {
             u_[i].copy(other.u_[i]);

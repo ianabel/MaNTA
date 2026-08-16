@@ -405,6 +405,48 @@ carries no information whatever about the equations.
   to do with the coupling -- and the source-consistency check would still pass,
   since it samples away from the kinks by more than the stencil's reach.
 
+### There is no coupled regression case, deliberately
+
+`Tests/RegressionTests/` has no `coupled-field.conf` and is not going to get one
+until a field model with physics in it exists. A regression case selects its
+model by name from `[configuration] FieldModel`, which resolves against the
+process-global registry, so the model would have to live in `PhysicsCases/` and
+be linked into the shipped binary. The only two models that exist are
+manufactured fixtures with no physics in them -- `ManufacturedField` and
+`ManufacturedFieldVector`, both under `Tests/UnitTests` and both deliberately
+unregistered -- and registering a fixture into the production binary to give the
+regression suite something to point at is a worse trade than the gap it closes.
+
+What covers the coupled path instead, and what each catches:
+
+| test | what only it sees |
+|---|---|
+| `MMSFieldTests.cpp` (order study) | an error in the coupled *equations*: a sign or a factor in the residual, which converges at the right rate to the wrong function |
+| `FieldJacobianTests.cpp` | an error in `A1` or `A2`, which costs Newton iterations and nothing else, since the coupled Jacobian is never assembled |
+| `FieldAdjointTests.cpp` | an error in the *transpose* of either, which is a silently wrong gradient beside a perfectly good `G` |
+| `SolverLifecycleTests.cpp::psi_round_trips_through_a_restart` | psi missing from, or misread out of, `<stem>.restart.nc` |
+| `SolverLifecycleTests.cpp::a_coupled_solver_reused_matches_a_fresh_one_bit_for_bit` | a field model that caches across runs, or an `initialize()` that stops calling `resetForRun` |
+| `SolverLifecycleTests.cpp::a_coupled_run_writes_the_field_group` | the netCDF group: its name, its `label`, and psi and geometry written to the wrong shape |
+
+**The gap that leaves is real and is not covered by any of the above: nothing
+exercises the coupled path through a `.conf` file.** The config plumbing --
+`FieldModel` reaching `FieldModels::InstantiateFieldModel`, `FieldSolve` and the
+three sweep keys reaching the solver through `applySolverConfig`, and the
+restart branch of `runManta` shaping its `DGSoln` from `RestartData/nField` --
+is covered by unit tests only. So is the netCDF group. The nearest thing to
+end-to-end cover is the zero-coupling check below, which runs the binary over
+every regression config and proves the coupling is *inert*, not that it works.
+
+**The zero-coupling invariant is checked by hand, not asserted.** Every existing
+config has no field model, so every one of them must produce output identical to
+the same run built before the branch. Run each `Tests/RegressionTests/*.conf`
+under both binaries from the same directory and `cmp` the results -- netCDF
+files carry no timestamp of their own, so a byte comparison is legitimate, and
+the regression suite's own 5e-3 is far too loose to see a change of this kind.
+Measured at the point the serialisation landed: **all 14 `.nc` files byte
+identical**, and all 14 `.restart.nc` files identical apart from the one
+deliberately added `int nField = 0`.
+
 ## Superconvergence
 
 `Superconvergent = true` switches the residual and Jacobian to the interpolatory

@@ -27,12 +27,17 @@
 #include "SystemSolver.hpp"
 #include "TestDiffusion.hpp"
 #include "Types.hpp"
+#include "../../FieldModel.hpp"
 
 #include <ida/ida.h>
+#include <netcdf>
 
+#include <algorithm>
 #include <cmath>
 #include <exception>
 #include <filesystem>
+#include <memory>
+#include <numbers>
 #include <print>
 #include <stdexcept>
 #include <string>
@@ -126,6 +131,199 @@ public:
 private:
     double sign;
 };
+
+// ------------------------------------------------------------ the coupled pair --
+//
+// The lifecycle properties above have to hold with a field model attached too,
+// and two of them are only reachable that way: a model may cache things across
+// a run, and psi has to survive a restart.
+
+// Linear diffusion whose diffusivity *is* the field model's geometry slot. The
+// coupling has to reach u, or a difference in psi would leave the solution
+// alone and the comparisons below would be measuring the uncoupled problem.
+class GeometricDiffusion : public TransportSystem
+{
+public:
+    GeometricDiffusion()
+        : TransportSystem({.variables = {{"u", "the diffused quantity", "",
+                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}}})
+    {
+    }
+
+    Value SigmaFn(Index, const State &s, Position, Time) override { return s.geom(0) * s.q(0); }
+    Value Sources(Index, const State &, Position, Time) override { return 0.0; }
+
+    void dSigmaFn_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSigmaFn_dq(Index, VectorRef v, const State &s, Position, Time) override
+    {
+        v[0] = s.geom(0);
+    }
+    void dSources_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSources_dq(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+
+    void dSigmaFn_dGeometry(Index, VectorRef v, const State &s, Position, Time) override
+    {
+        v[0] = s.q(0);
+    }
+
+    Value InitialValue(Index, Position x) const override
+    {
+        return std::sin(std::numbers::pi * x);
+    }
+    Value InitialDerivative(Index, Position x) const override
+    {
+        return std::numbers::pi * std::cos(std::numbers::pi * x);
+    }
+
+    Value LowerBoundary(Index, Time) const override { return 0.0; }
+    Value UpperBoundary(Index, Time) const override { return 0.0; }
+};
+
+// A field model that warm-starts from the psi it last saw, and clears that cache
+// in resetForRun().
+//
+//     R = dpsi/dt - ( Int u dx - psi ),     psi(0) = 0.5
+//
+// Three properties, each load-bearing for one of the two cases below.
+//
+// **The row is differential**, so IDA_YA_YDP_INIT holds psi's *value* fixed and
+// whatever InitialFieldValue (or a restart file) supplies is the answer rather
+// than a guess. An algebraic psi would be re-solved out of the restored
+// transport state by IDACalcIC, and the restart case would then pass without
+// ever reading psi off disk -- vacuously, and invisibly so.
+//
+// **It reads the transport state**, so the coupling is two-way: dR/du is the
+// quadrature weights, exactly as ManufacturedField's is.
+//
+// **The cache is a tripwire.** initialize() calls resetForRun() and *then*
+// setInitialConditions, so with the reset honoured the warm start never fires
+// and the model is a pure function of its declaration -- which is the point. A
+// resetForRun() that did nothing would hand the second run its predecessor's
+// final psi, which is the RF_cellwise trap one level out. Nothing else in the
+// suite would notice: the run completes, and the answer is plausible.
+class WarmStartingField : public FieldModel
+{
+public:
+    static constexpr double PSI0 = 0.5;
+
+    WarmStartingField() : FieldModel(buildSpec()) {}
+
+    static FieldModelSpec buildSpec()
+    {
+        FieldModelSpec s;
+        s.dofs = {{"psi", "the field unknown", "1", /* differential */ true}};
+        s.geometry = {{"g", "metric factor multiplying the diffusivity", "1"}};
+        s.label = "x";
+        // Not the default "Field": the netCDF case below has to be able to tell
+        // a group named from the spec from one named by a string literal.
+        s.name = "WarmStart";
+        return s;
+    }
+
+    void FieldResidual(VectorRef out, Vector const &psi, Vector const &dpsidt,
+                       GlobalState const &states, std::vector<Position> const &,
+                       Vector const &weights, Time) override
+    {
+        double integral = 0.0;
+        for (Index j = 0; j < weights.size(); ++j)
+            integral += weights(j) * states[j].u(0);
+        out(0) = dpsidt(0) - (integral - psi(0));
+
+        lastPsi = psi(0);
+        warm = true;
+    }
+
+    void Geometry(VectorRef out, Vector const &psi, Position x, Time) override
+    {
+        out(0) = 1.0 + psi(0) * std::cos(std::numbers::pi * x);
+    }
+
+    void dGeometry_dpsi(MatrixRef out, Vector const &, Position x, Time) override
+    {
+        out(0, 0) = std::cos(std::numbers::pi * x);
+    }
+
+    void FieldResidualPrime(GlobalStateMatrix &dR, GlobalStateMatrix &, MatrixRef dRdpsi,
+                            MatrixRef dRddpsidt, Vector const &, Vector const &,
+                            GlobalState const &, std::vector<Position> const &,
+                            Vector const &weights, Time) override
+    {
+        dRdpsi(0, 0) = 1.0;
+        dRddpsidt(0, 0) = 1.0;
+        // Through Variable(), the whole (nVars, nPoints) matrix: dR[0][j] hands
+        // back a State *by value* and the write would be discarded.
+        dR[0].Variable().row(0) = -weights.transpose();
+    }
+
+    void InitialFieldValue(VectorRef out) override { out(0) = warm ? lastPsi : PSI0; }
+
+    void resetForRun() override
+    {
+        warm = false;
+        lastPsi = 0.0;
+    }
+
+    /// True once a residual has been evaluated in this run, i.e. the tripwire is
+    /// armed. Asked between runs, so that a reuse test cannot go quietly vacuous
+    /// if the model stops being consulted at all.
+    bool isWarm() const { return warm; }
+
+private:
+    bool warm = false;
+    double lastPsi = 0.0;
+};
+
+/// Everything a coupled run owns, in destruction order: the solver first, so its
+/// SUNContext outlives nothing that was made in it.
+struct CoupledSolver
+{
+    std::unique_ptr<Grid> grid;
+    std::unique_ptr<GeometricDiffusion> problem;
+    std::shared_ptr<WarmStartingField> field;
+    std::unique_ptr<SystemSolver> sys;
+};
+
+/// A coupled solver configured like `configure` above, plus the field model.
+CoupledSolver makeCoupledSolver(Index cells, Index order, std::string const &stem)
+{
+    CoupledSolver c;
+    c.grid = std::make_unique<Grid>(0.0, 1.0, cells);
+    c.problem = std::make_unique<GeometricDiffusion>();
+    c.field = std::make_shared<WarmStartingField>();
+    c.sys = std::make_unique<SystemSolver>(*c.grid, order, c.problem.get());
+
+    c.sys->setTau(1.0);
+    c.sys->resetCoeffs();
+    c.sys->setInputFile(stem);
+    c.sys->setOutputCadence(T_FINAL);
+    c.sys->setNOutput(11);
+    c.sys->setInitialTime(0.0);
+    c.sys->setMinStepSize(1e-12);
+    c.sys->setTolerances({1e-8}, 1e-6);
+    c.sys->setFieldModel(c.field);
+    return c;
+}
+
+/// u at five interior points followed by every field unknown, out of yJac -- the
+/// only copy of the solution that outlives destroySundials(). psi is in here
+/// deliberately: a defect that moved only the field block and left u alone would
+/// otherwise be invisible.
+Vector coupledSample(SystemSolver &sys)
+{
+    Vector out(5 + sys.getFieldDOF());
+    for (Index i = 0; i < 5; ++i)
+        out(i) = sys.getSolution().u(0)(0.1 + 0.2 * i);
+    for (Index f = 0; f < sys.getFieldDOF(); ++f)
+        out(5 + f) = sys.getSolution().Field(f);
+    return out;
+}
+
+double maxAbsDifference(Vector const &a, Vector const &b)
+{
+    BOOST_REQUIRE_EQUAL(a.size(), b.size());
+    return (a - b).cwiseAbs().maxCoeff();
+}
 
 } // namespace
 
@@ -778,6 +976,243 @@ BOOST_AUTO_TEST_CASE(an_unarmed_gate_leaves_runSolver_bit_for_bit_unchanged)
 
     removeOutput("lifecycle_gate_off_plain");
     removeOutput("lifecycle_gate_off_attached");
+}
+
+BOOST_AUTO_TEST_CASE(a_coupled_solver_reused_matches_a_fresh_one_bit_for_bit)
+{
+    // At exactly zero tolerance, like the uncoupled version above. The tolerance
+    // is the point: the last defect there left the second run completing,
+    // plausible, and wrong in the eleventh digit. A field model that caches
+    // anything across runs and does not reset it fails here and nowhere else --
+    // initialize() skips initialiseMatrices() when already initialised, so
+    // resetForRun() is called from the unconditional part of it instead, and
+    // nothing but this says that it is.
+    //
+    // WarmStartingField is exactly that model: it remembers the psi it last saw
+    // and starts from it. With resetForRun() honoured the memory is cleared
+    // before setInitialConditions asks, so the second run starts from PSI0 like
+    // the first; without it the second run starts from the first run's *final*
+    // psi, which is measurably different -- see the report for this task.
+    auto fresh = makeCoupledSolver(8, 2, "lifecycle_coupled_fresh");
+    auto reused = makeCoupledSolver(8, 2, "lifecycle_coupled_reused");
+
+    bool armedBetweenRuns = false;
+    {
+        CapturedOutput quiet;
+        fresh.sys->runSolver(T_FINAL);
+
+        // Three runs, not two: the second is the one a missing reset breaks, and
+        // a third catches anything that accumulates rather than simply differing
+        // from the first.
+        reused.sys->runSolver(T_FINAL);
+
+        // The cache really was populated by the run that just finished, so the
+        // next initialize() has something to clear. Without this the case would
+        // go quietly vacuous the day FieldResidual stops being called.
+        armedBetweenRuns = reused.field->isWarm();
+
+        reused.sys->runSolver(T_FINAL);
+        reused.sys->runSolver(T_FINAL);
+    }
+
+    BOOST_TEST(armedBetweenRuns,
+               "the field model's per-run cache was never populated, so this case would "
+               "pass whether or not resetForRun() is called");
+
+    BOOST_TEST(maxAbsDifference(coupledSample(*reused.sys), coupledSample(*fresh.sys)) == 0.0,
+               boost::test_tools::tolerance(0.0));
+
+    // Not vacuous, and the coupling is live: psi has moved away from its initial
+    // value, so geometry -- and therefore u -- is not the same as an uncoupled
+    // run's would have been.
+    const Vector want = coupledSample(*fresh.sys);
+    BOOST_TEST(want.head(5).norm() > 1e-8);
+    BOOST_TEST(std::abs(want(5) - WarmStartingField::PSI0) > 1e-8);
+
+    removeOutput("lifecycle_coupled_fresh");
+    removeOutput("lifecycle_coupled_reused");
+}
+
+BOOST_AUTO_TEST_CASE(psi_round_trips_through_a_restart)
+{
+    // The restart file has carried psi since the DoF accounting stopped being
+    // open-coded -- Y is written at y.getDoF() bytes and the field block is last.
+    // What it did not carry was any record of *how much* of Y that is, so the
+    // reader could not shape a DGSoln over it and setInitialConditions refused
+    // the combination outright. RestartData/nField is that record.
+    //
+    // The field DOF is differential, which is what stops this passing vacuously:
+    // IDA_YA_YDP_INIT solves for algebraic *values*, so an algebraic psi would be
+    // recomputed from the restored transport state and would come back right
+    // whatever the file said. A differential value is held fixed, so the number
+    // compared below is the number that was read off disk.
+    const std::string stem = "lifecycle_coupled_restart";
+    const double T_RESTART = 0.25;
+
+    auto original = makeCoupledSolver(8, 2, stem);
+    original.sys->setOutputCadence(T_RESTART);
+
+    {
+        CapturedOutput quiet;
+        original.sys->initialize();
+        original.sys->integrate(T_RESTART);
+    }
+    const double psiBefore = original.sys->getSolution().Field(0);
+    const Vector uBefore = coupledSample(*original.sys).head(5);
+    {
+        CapturedOutput quiet;
+        original.sys->destroySundials();
+    }
+
+    // Not the initial value: a run that never moved psi would round-trip through
+    // anything, including a file that stored nothing at all.
+    BOOST_TEST(std::abs(psiBefore - WarmStartingField::PSI0) > 1e-6);
+
+    // ---- read it back the way runManta does ----------------------------------
+
+    netCDF::NcFile restartFile;
+    BOOST_REQUIRE_NO_THROW(
+        restartFile.open(stem + ".restart.nc", netCDF::NcFile::FileMode::read));
+
+    netCDF::NcGroup gridGroup = restartFile.getGroup("Grid");
+    std::vector<Position> cellBoundaries(gridGroup.getDim("Index").getSize());
+    gridGroup.getVar("CellBoundaries").getVar(cellBoundaries.data());
+    Index order = 0;
+    gridGroup.getVar("PolyOrder").getVar(&order);
+
+    netCDF::NcGroup restartGroup = restartFile.getGroup("RestartData");
+    const size_t nDOF_file = restartGroup.getDim("nDOF").getSize();
+    std::vector<double> Y(nDOF_file), dYdt(nDOF_file);
+    restartGroup.getVar("Y").getVar(Y.data());
+    restartGroup.getVar("dYdt").getVar(dYdt.data());
+
+    // The point of the format change. Without it a reader has to infer nField by
+    // subtracting the uncoupled DoF formula from nDOF, which is the arithmetic
+    // that was wrong in three places before y.getDoF() became the authority.
+    netCDF::NcVar nFieldVar = restartGroup.getVar("nField");
+    BOOST_REQUIRE(!nFieldVar.isNull());
+    int nField_file = -1;
+    nFieldVar.getVar(&nField_file);
+    restartFile.close();
+
+    BOOST_TEST(nField_file == 1);
+
+    Grid restartGrid(cellBoundaries);
+    GeometricDiffusion restartedProblem;
+    restartedProblem.setRestartValues(Y, dYdt, restartGrid, order, nField_file);
+
+    auto field = std::make_shared<WarmStartingField>();
+    SystemSolver restarted(restartGrid, order, &restartedProblem);
+    restarted.setTau(1.0);
+    restarted.resetCoeffs();
+    restarted.setInputFile(stem + "_resumed");
+    // Not T_RESTART, and this is a trap rather than a preference. Solver.cpp
+    // hands the output *cadence* to IDACalcIC's `tout1` parameter, which
+    // SUNDIALS documents as the first output *time* -- it uses it only for the
+    // direction and rough scale of t, and the two coincide only when t0 is zero.
+    // Every fixture in the tree starts at zero, so nothing notices; a resumed run
+    // whose cadence equals its t_initial gets tdist = 0 and IDACalcIC returns
+    // IDA_ILL_INPUT (-22), "tout1 too close to t0". That is not about field
+    // models -- it reproduces on main with no coupling at all, from any config
+    // with `t_initial = delta_t` -- so it is reported rather than fixed here.
+    restarted.setOutputCadence(T_RESTART / 5.0);
+    restarted.setNOutput(11);
+    restarted.setInitialTime(T_RESTART);
+    restarted.setMinStepSize(1e-12);
+    restarted.setTolerances({1e-8}, 1e-6);
+    restarted.setWriteOutput(false);
+    restarted.setFieldModel(field);
+
+    // initialize() alone: yJac holds the initial condition after it, and the
+    // initial condition is what a restart is. Integrating further would only add
+    // the resumed run's own error to the comparison.
+    {
+        CapturedOutput quiet;
+        restarted.initialize();
+    }
+
+    // 1e-12 is slack, not a measured bound: this comes back *bit* exact, and
+    // structurally so. psi is a differential value, IDA_YA_YDP_INIT holds every
+    // differential value fixed, and netCDF stores a double as a double -- so the
+    // number below is the one the file carries, not one re-derived from it. If
+    // this ever stops being exact, something is recomputing psi rather than
+    // resuming it, and the tolerance is not the thing to adjust.
+    BOOST_CHECK_SMALL(std::abs(restarted.getSolution().Field(0) - psiBefore), 1e-12);
+
+    // ...and the transport state came back with it, so the psi above is the psi
+    // of the same solution rather than of some other one.
+    for (Index i = 0; i < 5; ++i)
+        BOOST_CHECK_SMALL(std::abs(restarted.getSolution().u(0)(0.1 + 0.2 * i) - uBefore(i)),
+                          1e-10);
+
+    {
+        CapturedOutput quiet;
+        restarted.destroySundials();
+    }
+    removeOutput(stem);
+    removeOutput(stem + "_resumed");
+}
+
+BOOST_AUTO_TEST_CASE(a_coupled_run_writes_the_field_group)
+{
+    // The netCDF group is the only part of the coupling a user ever sees, and
+    // there is deliberately no regression case that would exercise it -- no field
+    // model is registered, so no `.conf` can select one. This is its cover.
+    const std::string stem = "lifecycle_coupled_output";
+    auto run = makeCoupledSolver(8, 2, stem);
+
+    {
+        CapturedOutput quiet;
+        run.sys->runSolver(T_FINAL);
+    }
+
+    netCDF::NcFile out;
+    BOOST_REQUIRE_NO_THROW(out.open(stem + ".nc", netCDF::NcFile::FileMode::read));
+
+    // Named from the spec, not from a string literal in NetCDFIO.cpp.
+    netCDF::NcGroup group = out.getGroup("WarmStart");
+    BOOST_REQUIRE(!group.isNull());
+
+    // The coordinate the geometry is expressed against, so a run records what its
+    // x meant.
+    std::string label;
+    group.getAtt("label").getValues(label);
+    BOOST_TEST(label == "x");
+
+    // psi is a time series -- it has no x dependence -- and the geometry slot is
+    // a spatial field, like u. Getting those two the wrong way round is the
+    // mistake this checks: both would still be "present".
+    netCDF::NcVar psi = group.getVar("psi");
+    BOOST_REQUIRE(!psi.isNull());
+    BOOST_TEST(psi.getDimCount() == 1);
+
+    netCDF::NcVar g = group.getVar("g");
+    BOOST_REQUIRE(!g.isNull());
+    BOOST_TEST(g.getDimCount() == 2);
+
+    std::string units;
+    psi.getAtt("units").getValues(units);
+    BOOST_TEST(units == "1");
+
+    const size_t nTimes = psi.getDim(0).getSize();
+    BOOST_TEST(nTimes >= 2u);
+
+    std::vector<double> psiSeries(nTimes);
+    psi.getVar(psiSeries.data());
+    BOOST_TEST(psiSeries[0] == WarmStartingField::PSI0, boost::test_tools::tolerance(1e-12));
+    BOOST_TEST(std::abs(psiSeries[nTimes - 1] - WarmStartingField::PSI0) > 1e-8);
+
+    // g = 1 + psi cos(pi x) at the final psi, sampled at the output grid. Checked
+    // at the ends, where cos(pi x) is +-1 and the two would differ by 2 psi if
+    // the geometry were written at the wrong time or the wrong psi.
+    const size_t nx = g.getDim(1).getSize();
+    std::vector<double> gFinal(nx);
+    g.getVar({nTimes - 1, 0}, {1, nx}, gFinal.data());
+    BOOST_TEST(gFinal.front() == 1.0 + psiSeries[nTimes - 1], boost::test_tools::tolerance(1e-12));
+    BOOST_TEST(gFinal.back() == 1.0 - psiSeries[nTimes - 1], boost::test_tools::tolerance(1e-12));
+
+    out.close();
+    removeOutput(stem);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

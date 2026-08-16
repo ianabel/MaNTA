@@ -1019,6 +1019,20 @@ class SystemSolver
         void WriteRestartFile(std::string const &fname, N_Vector const &Y, N_Vector const &dYdt, size_t nOut);
         void WriteAdjoints();
 
+        // The field model's own netCDF group: one time series per FieldDOF, one
+        // spatial variable per FieldSlot, and the spec's `label` as an attribute
+        // so a run records what its x meant. No-ops with no model attached, and
+        // reached only from the three functions above -- all of which Solver.cpp
+        // already gates on writeOutput.
+        //
+        // Both take the file, because the same group is written to <stem>.nc and
+        // to <stem>.restart.nc, and both take the time, because geometry is a
+        // function of (psi, x, t) and the two files are written at different
+        // times: the t0 slice against t0, a timeslice against its own tNew, the
+        // restart file against the time the run reached.
+        void initialiseFieldOutput(NetCDFIO &file, Time tEval);
+        void writeFieldTimeslice(NetCDFIO &file, size_t tIndex, Time tEval);
+
         size_t S_DOF,
         U_DOF, Q_DOF, AUX_DOF, SQU_DOF;
         size_t localDOF;
