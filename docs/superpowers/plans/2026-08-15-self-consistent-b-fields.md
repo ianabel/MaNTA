@@ -2735,9 +2735,694 @@ git commit -m "Serialise the coupled field, and document what it is"
 
 ---
 
+### Task 13: An accelerated sweep that cannot be wrong
+
+**Run this task after Task 10 and before Task 11.** It changes the iteration
+Task 11's order study will measure, and it removes the failure mode Task 12
+would otherwise have to document. The number is 13 rather than 11 because
+Tasks 11 and 12 were already numbered when this was added; the ledger records
+the execution order.
+
+**Why this exists.** Task 10's review measured the spectral radius of the block
+Gauss–Seidel iteration matrix `M = B⁻¹ A2 A⁻¹ A1` on `RichGeometricDiffusion`:
+**ρ = 1.611 at `cj = 0` and 1.571 at `cj = 1e8`** — it moves 2% across eight
+decades, so it is a property of the *coupling*, not of the time step. A field
+residual that reads `sigma`, `q` and `phi` as well as `u` makes the plain sweep
+divergent at every step size, and the adjoint sweep always runs at `cj = 0`,
+where ρ is largest. The dominant eigenvalue there is real and **negative**
+(−1.611), so a damped sweep with iteration matrix `(1−ω)I + ωM` has eigenvalues
+`1 − 2.611ω` and any `ω ∈ (0, 0.766)` would converge — but for a real `λ > 1`
+no `ω > 0` works at all, and no one can pick ω in advance. That rules out SOR
+as the primary fix.
+
+**Files:**
+- Modify: `SystemSolver.hpp` (`ironsTuck`, the adjoint cap, the counters, `FieldSweepStats`)
+- Modify: `SystemSolver.cpp` (`solveCoupledJacIterative`, `solveCoupledAdjointIterative`)
+- Modify: `ConfigSchema.cpp`, `SolverConfig.hpp`, `SolverConfig.cpp`
+- Modify: `Solver.cpp` (the `initialize()` warning text, the end-of-run report)
+- Modify: `Tests/UnitTests/FieldJacobianTests.cpp`, `Tests/UnitTests/FieldAdjointTests.cpp`, `Tests/UnitTests/ConfigSourceTests.cpp`
+- Modify: `TODO`
+
+**Interfaces:**
+- Consumes: Task 8's `solveCoupledJacExact`, `subtractA1Times`, `a2`,
+  `solveTransportJac`; Task 9's `solveCoupledJacIterative`; Task 10's
+  `solveCoupledAdjointExact`, `solveCoupledAdjointIterative`,
+  `A1_transpose_cellwise`, `A2_transpose_cellwise`, `solveTransportAdjoint`.
+- Produces: `SystemSolver::ironsTuck` (private static),
+  `SystemSolver::setFieldSolveMaxAdjointSweeps(int)` /
+  `getFieldSolveMaxAdjointSweeps()`, `SystemSolver::FieldSweepStats` and
+  `getFieldSweepStats()`, config key `FieldSolveMaxAdjointSweeps`.
+
+#### The three invariants this task must preserve
+
+1. **Acceleration changes only the *next* iterate, never the accepted one.**
+   Both sweeps' stopping tests are derived from the structure of a plain
+   Gauss–Seidel step, and both derivations survive verbatim if and only if the
+   iterate that gets accepted is the unaccelerated `G(p_k)`. Forwards, the
+   returned pair `(dx, dpsi)` is consistent because `dx` was solved against the
+   `p_k` that produced the accepted `G(p_k)`, so row one is off by `A1·Δ`, i.e.
+   by the tolerance. Backwards, Task 10's identity
+   `Aᵀ z_x + A2ᵀ z_psi − G_y = A2ᵀ (z_psi^{n+1} − z_psi^n)` is an *exact*
+   backward error only because row two holds exactly — which it does when
+   `z_psi^{n+1}` came from `solveBTranspose` against this sweep's `z_x`, and
+   does **not** if an extrapolated value is returned instead. Accepting an
+   accelerated iterate would silently turn a backward-error test into a proxy.
+   Cost: one extra sweep to certify, which is what certification always costs.
+
+2. **The fallback makes agreement tests vacuous, so every test must assert the
+   sweep converged on its own.** Once `solveCoupledJacIterative` escalates to
+   `solveCoupledJacExact` on failure, "iterative agrees with exact" passes
+   whether or not the iteration works at all — including with the acceleration
+   deleted. Every test in this task therefore asserts `fieldSweepFallbacks`
+   explicitly, and the mutation experiments in Step 8 are what prove it.
+
+3. **Scale equivariance survives.** Task 9's fix made the stopping test
+   scale-equivariant — `solve(c·g) == c·solve(g)` to 8 digits at `c = 1e-9`.
+   Irons–Tuck is homogeneous in the affine problem's data (μ is a ratio of
+   inner products of quantities that all scale by `c`), so the property should
+   hold unchanged. The existing test must be re-run, not relaxed.
+
+- [ ] **Step 1: Add the accelerator, with its own unit tests first**
+
+Declare it as a **private static member** of `SystemSolver` so
+`MANTA_TEST_PRIVATE` exposes it directly — the guards below are much easier to
+test on the function than through a solve.
+
+```cpp
+// Irons-Tuck vector acceleration: Aitken's Delta^2 generalised to vectors.
+//
+// Both coupled sweeps are affine fixed-point iterations on the field block
+// alone. Writing G for one sweep, G(p) = c + M p with M = B^-1 A2 A^-1 A1
+// forwards and its transpose backwards, so the plain sweep converges only for
+// rho(M) < 1 -- and rho is a property of the coupling rather than of the time
+// step: 1.611 at cj = 0 against 1.571 at cj = 1e8 for RichGeometricDiffusion.
+//
+// Given the two most recent increments D_k = G(p_k) - p_k and D_{k-1}:
+//
+//     mu  = D_k . (D_k - D_{k-1}) / |D_k - D_{k-1}|^2
+//     p*  = G(p_k) - mu D_k
+//
+// which is the secant (rank-one quasi-Newton) step on F(p) = G(p) - p. For
+// nField == 1 and an affine G it lands on the fixed point *exactly*, in one
+// step, for every m -- including m > 1, where no relaxation parameter helps at
+// all: D_k = m D_{k-1} gives mu = m/(m-1) and p* = p_k + D_k/(1-m), and
+// D_k = (1-m)(p_fix - p_k), so p* = p_fix. That exactness for a divergent
+// scalar map is why this rather than SOR, whose eigenvalues 1 - w + w*lambda
+// cannot be brought inside the unit circle by any w > 0 when lambda > 1.
+//
+// For nField > 1 it is a rank-one approximation: it removes the dominant
+// eigendirection and leaves the rest, which is why the caller still needs the
+// exact fallback. Anderson acceleration -- equivalently GMRES on the Schur
+// complement, since the map is affine -- is the depth-m generalisation and is
+// in TODO.
+static Vector ironsTuck(const Vector &g, const Vector &delta, const Vector &deltaPrev);
+```
+
+```cpp
+Vector SystemSolver::ironsTuck(const Vector &g, const Vector &delta, const Vector &deltaPrev)
+{
+    const Vector secant = delta - deltaPrev;
+
+    // Relative, not absolute. The secant is compared against the increments it
+    // was differenced from, so this fires when the two increments agree to
+    // rounding -- for an affine map, m == 1, a pure translation with no fixed
+    // point -- and not merely when both are small, which is the regime the
+    // sweep spends its last iterations in. An absolute floor here would
+    // reintroduce exactly the scale-dependence Task 9's review removed from the
+    // stopping criterion. Written as !(x > y) so a NaN secant takes this branch.
+    const double scale = std::max(delta.norm(), deltaPrev.norm());
+    if (!(secant.norm() > 1e-12 * scale))
+        return g;
+
+    const Vector accelerated = g - (delta.dot(secant) / secant.squaredNorm()) * delta;
+
+    // The guard above bounds the denominator relative to the numerator, so this
+    // is the residual case -- an overflow in the dot product, or a non-finite g
+    // handed in. Returning g is the plain sweep, which the caller may take.
+    return accelerated.allFinite() ? accelerated : g;
+}
+```
+
+Tests, in `Tests/UnitTests/FieldJacobianTests.cpp`:
+
+```cpp
+BOOST_AUTO_TEST_CASE(irons_tuck_is_exact_for_a_scalar_affine_map)
+{
+    // p_{k+1} = c + m p_k, fixed point c/(1-m). Two plain steps from p_0 = 0,
+    // then one accelerated step must land on it exactly -- for a contraction
+    // and, the point of the exercise, for a divergent map too. m = -1.611 is
+    // the measured dominant eigenvalue of RichGeometricDiffusion's coupling.
+    for (double m : {0.33, -1.611, 2.5})
+    {
+        const double c = 0.7;
+        auto G = [&](const Vector &p) { return Vector::Constant(1, c + m * p(0)); };
+
+        Vector p0 = Vector::Zero(1);
+        Vector g0 = G(p0), d0 = g0 - p0;
+        Vector p1 = g0;
+        Vector g1 = G(p1), d1 = g1 - p1;
+
+        Vector acc = SystemSolver::ironsTuck(g1, d1, d0);
+        BOOST_CHECK_CLOSE(acc(0), c / (1.0 - m), 1e-10);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(irons_tuck_declines_when_the_secant_vanishes)
+{
+    // Equal increments mean m == 1: a translation, no fixed point, and a zero
+    // denominator. The plain iterate must come back, not a NaN.
+    Vector g = Vector::Constant(3, 2.0), d = Vector::Constant(3, 0.5);
+    Vector out = SystemSolver::ironsTuck(g, d, d);
+    BOOST_CHECK(out.isApprox(g));
+
+    // ...and the guard is relative: increments of 1e-30 that differ by 1e-31
+    // are a perfectly good secant, not a vanishing one.
+    Vector small = Vector::Constant(3, 1e-30), smaller = Vector::Constant(3, 9e-31);
+    Vector accelerated = SystemSolver::ironsTuck(Vector::Constant(3, 1e-30), small, smaller);
+    BOOST_CHECK(accelerated.allFinite());
+    BOOST_CHECK(!accelerated.isApprox(Vector::Constant(3, 1e-30)));
+}
+```
+
+Run: `Tests/UnitTests/UnitTests --run_test=field_jacobian_tests --log_level=message`
+Expected: FAIL to compile (`ironsTuck` not declared), then PASS.
+
+- [ ] **Step 2: Restructure the forward sweep**
+
+`solveCoupledJacIterative` becomes: apply the map, test the *unaccelerated*
+iterate, accept it or accelerate the next starting point; on exhausting the
+cap, escalate to the exact solve. Replace the body's loop and tail with:
+
+```cpp
+    N_Vector work = N_VClone(delY);
+    Vector dpsi = Vector::Zero(nField);
+    Vector delta = Vector::Zero(nField), deltaPrev = Vector::Zero(nField);
+    bool haveDeltaPrev = false, converged = false;
+
+    ++fieldSweepSolves;
+
+    for (Index sweep = 0; sweep < fieldSolveMaxSweeps; ++sweep)
+    {
+        ++fieldSweepIterations;
+
+        // work <- r1 - A1 dpsi, then dx <- A^-1 work. The pair (dx, dpsi) is
+        // consistent here and stays so: everything below changes only what the
+        // *next* sweep starts from. solveTransportJac zeroes the whole
+        // increment (see solveHDGJac), so delY's field entries come back zero
+        // regardless of what work's field segment held.
+        N_VScale(1.0, res_g, work);
+        subtractA1Times(dpsi, work);
+        solveTransportJac(work, delY);
+
+        // g <- B^-1 ( r2 - A2 dx ): one application of the fixed-point map.
+        Vector r2 = rhs.getField();
+        for (Index f = 0; f < nField; ++f)
+            r2(f) -= N_VDotProd(a2[f], delY);
+        Vector g(nField);
+        fieldModel->solveB(g, r2);
+
+        deltaPrev = delta;
+        delta = g - dpsi;
+
+        // The acceptance test is on the UNACCELERATED iterate, and is the same
+        // relative test Task 9's review arrived at -- not `tol * max(1, |g|)`,
+        // whose absolute floor stopped the sweep after the first iterate
+        // whenever |g| < 1, i.e. throughout the small-correction regime Newton
+        // lives in. Accepting only g is also what keeps the returned pair
+        // consistent: dx was solved against the dpsi that produced this g, so
+        // row one of the coupled system is off by A1 . delta, which is the
+        // tolerance. An extrapolated dpsi would be off by the length of the
+        // extrapolation instead, and nothing downstream would report it.
+        //
+        // isZero(0.0), not the default: Eigen's dummy_precision is ~1e-12, so
+        // the bare call was an absolute magnitude test wearing a degenerate
+        // case's clothing. This fires only when the increment is exactly zero,
+        // which is the 0/0 the relative test genuinely cannot handle.
+        if (delta.isZero(0.0) || delta.norm() <= fieldSolveTolerance * g.norm())
+        {
+            dpsi = g;
+            converged = true;
+            break;
+        }
+
+        dpsi = haveDeltaPrev ? ironsTuck(g, delta, deltaPrev) : g;
+        haveDeltaPrev = true;
+    }
+
+    N_VDestroy(work);
+
+    if (converged)
+    {
+        out.getField() = dpsi;
+        return;
+    }
+
+    // Escalate rather than return the last iterate. Task 9 returned it, on the
+    // argument that an under-converged Jacobian solve is merely a worse search
+    // direction -- true, and still true. What changed is the price of being
+    // right: the exact Schur solve costs nField + 1 transport solves, against
+    // the cap's fieldSolveMaxSweeps, and for the large nField this path exists
+    // to serve the escalation is *cheaper* than the sweeps already spent. So
+    // there is no longer a reason to hand back a direction we know is bad, and
+    // with the escalation in place the iterative mode can no longer be wrong at
+    // all -- only slower. That is what makes it a safe default.
+    //
+    // Counted, not warned: a warning here would fire once per Jacobian solve.
+    // The count is reported once per run, in Solver.cpp.
+    ++fieldSweepFallbacks;
+    solveCoupledJacExact(res_g, delY);
+```
+
+Note `solveCoupledJacExact` overwrites the whole of `delY` including the field
+block, so nothing written above needs undoing.
+
+- [ ] **Step 3: Restructure the adjoint sweep, and delete its throw**
+
+Same shape. `solveCoupledAdjointIterative` keeps its backward-error test
+verbatim — see invariant 1 for why that is legitimate — and replaces the
+`throw` with an escalation to `solveCoupledAdjointExact()`.
+
+```cpp
+        Vector g(nField);
+        fieldModel->solveBTranspose(g, r);
+
+        deltaPrev = delta;
+        delta = g - zpsi;
+
+        double residual2 = 0.0;
+        for (Index i = 0; i < nCells; ++i)
+            residual2 += (A2_transpose_cellwise[i] * delta).squaredNorm();
+        residualNorm = std::sqrt(residual2);
+
+        if (residualNorm <= fieldSolveTolerance * rhsNorm)
+        {
+            zpsi = g;
+            converged = true;
+            break;
+        }
+
+        zpsi = haveDeltaPrev ? ironsTuck(g, delta, deltaPrev) : g;
+        haveDeltaPrev = true;
+```
+
+and the tail:
+
+```cpp
+    if (converged)
+    {
+        adjoint_field = zpsi;
+        return;
+    }
+
+    // Task 10 threw here, on the argument that an under-converged adjoint is a
+    // wrong gradient beside a correct objective and there is no "close enough"
+    // to fall back on. The argument was right and the remedy is now better: the
+    // exact transposed Schur solve gives the same guarantee without failing the
+    // run. Escalating is strictly stronger than throwing -- the caller gets a
+    // correct gradient instead of an exception -- so the exception_ptr guard in
+    // Solver.cpp that stops a refusal from eating the forward run's output is
+    // now unreachable from this path. Leave it: solveCoupledAdjointExact can
+    // still throw out of the field model, and the guard is what keeps a netCDF
+    // file from dying with it.
+    //
+    // Warned, not counted: unlike the forward Jacobian this runs once per run,
+    // so once per occurrence *is* once per run, and the cost of the escalation
+    // is worth a line.
+    fieldAdjointFellBack = true;
+    logmsg<LOG_LEVEL::WARNING>(
+        "The coupled adjoint sweep did not converge in {} sweeps (backward error {:g} "
+        "against a tolerance of {:g} times a right-hand side of norm {:g}); falling back "
+        "to the exact transposed Schur solve, which costs {} transposed transport solves. "
+        "The gradient is correct either way. Raise FieldSolveMaxAdjointSweeps to try "
+        "longer, or set FieldSolve = exact to skip the sweep.",
+        fieldSolveMaxAdjointSweeps, residualNorm, fieldSolveTolerance, rhsNorm, nField + 1);
+    solveCoupledAdjointExact();
+```
+
+Verify that `solveCoupledAdjointExact()` writes `adjoint_squ`, `adjoint_lambdas`
+*and* `adjoint_field` — if it leaves any of them holding the sweep's last
+iterate, the gradient is a mixture of the two solves. Say in the report which
+you checked and how.
+
+Keep `std::format`'s `{:g}` and the reason recorded in Task 10's comment (
+`std::to_string` is fixed to six decimals, so `1e-8` prints as `0.000000`).
+
+- [ ] **Step 4: The separate adjoint cap**
+
+The adjoint sweep always runs at `cj = 0`, where ρ is largest — it is strictly
+the harder direction, so it gets its own cap rather than inheriting the
+forward one. `ConfigSchema.cpp`, beside the other three field keys:
+
+```cpp
+{"FieldSolveMaxAdjointSweeps", {}, Type::Int, Category::Solver, false, false, 100,
+ "Sweep cap for the coupled adjoint solve. Separate from FieldSolveMaxSweeps, and "
+ "larger, because the adjoint always runs at cj = 0 where the coupling is stiffest. "
+ "Exceeding it falls back to the exact transposed solve, not to a wrong gradient."},
+```
+
+Mirror `FieldSolveMaxSweeps` exactly: a field on `SolverConfig`, a `READ` in
+`loadSolverConfig`, a `setFieldSolveMaxAdjointSweeps` call in
+`applySolverConfig`, and the setter/getter pair on `SystemSolver` with the same
+`n < 1` `std::logic_error`. Default `100` in both the schema and the member
+initialiser, for the reason the existing comment gives: one default, not two
+that can drift.
+
+`Tests/UnitTests/ConfigSourceTests.cpp` needs the key in **four** places — the
+defaults check near line 260, the explicit-value TOML near line 282, and the
+TOML/dict pair plus the comparison in `both_sources_produce_the_same_solver_config`
+near lines 384–440. That last test compares `SolverConfig`s field by field, so
+a key added to the struct and not to the comparison is silently unchecked.
+
+- [ ] **Step 5: Counters and the once-per-run report**
+
+On `SystemSolver`, private:
+
+```cpp
+// Diagnostics for the coupled sweeps, zeroed per run. Nothing here feeds the
+// answer, so none of it can disturb the bit-for-bit reuse invariant that
+// a_second_integration_on_one_solver_matches_a_fresh_one pins -- but it is
+// zeroed per run all the same, because a cumulative count reported as a
+// per-run one is a lie a second run would tell silently.
+long fieldSweepSolves = 0;
+long fieldSweepIterations = 0;
+long fieldSweepFallbacks = 0;
+long fieldAdjointSweeps = 0;
+bool fieldAdjointFellBack = false;
+```
+
+Zero them beside the `fieldModel->resetForRun()` call at `Solver.cpp:127`. If
+that call sits inside a branch a reused solver skips, zero them in the
+unconditional part of `initialize()` instead and say so in a comment — the
+`initialised` guard around `initialiseMatrices` is exactly the trap that broke
+solver reuse before (see `RF_cellwise` in `CLAUDE.md`).
+
+Public, so `Solver.cpp` can read them without `MANTA_TEST_PRIVATE`:
+
+```cpp
+struct FieldSweepStats
+{
+    long solves, iterations, fallbacks, adjointSweeps;
+    bool adjointFellBack;
+};
+FieldSweepStats getFieldSweepStats() const
+{
+    return {fieldSweepSolves, fieldSweepIterations, fieldSweepFallbacks,
+            fieldAdjointSweeps, fieldAdjointFellBack};
+};
+```
+
+In `Solver.cpp`, in the block that prints the IDA totals, matching its
+`std::println` style:
+
+```cpp
+if (nField > 0 && system.getFieldSolveMode() == SystemSolver::FieldSolveMode::Iterative)
+{
+    auto fs = system.getFieldSweepStats();
+    std::println("Coupled field sweeps                  :{} over {} solves ({} exact fallbacks)",
+                 fs.iterations, fs.solves, fs.fallbacks);
+    // This is the only signal a user has that the coupling is not converging.
+    // The run is still correct -- the fallback is the exact solve -- so this is
+    // a cost report, not an error, and it says what to do about it.
+    if (fs.fallbacks > 0)
+        logmsg<LOG_LEVEL::WARNING>(
+            "{} of {} coupled Jacobian solves exhausted FieldSolveMaxSweeps = {} and fell "
+            "back to the exact Schur solve, at {} transport solves each. The answers are "
+            "correct; the run is paying for both. Raise FieldSolveMaxSweeps, or set "
+            "FieldSolve = exact and skip the sweeps.",
+            fs.fallbacks, fs.solves, fieldSolveMaxSweeps, nField + 1);
+}
+```
+
+This closes the Task 9 deferred minor "nothing reports that the sweep cap was
+hit; a once-per-run summary is the only signal a user would have that the
+coupling is not converging."
+
+- [ ] **Step 6: Correct the `initialize()` warning**
+
+The iterative branch of the warning at `Solver.cpp:222` currently ends
+"...and returns its last iterate rather than failing if that cap is reached
+first, costing Newton speed, not correctness." That is no longer what happens.
+Replace that clause with the escalation, and name the accelerator:
+
+```cpp
+logmsg<LOG_LEVEL::WARNING>(
+    "FieldSolve = iterative: block Gauss-Seidel between the transport and field "
+    "blocks with Irons-Tuck acceleration, one transport solve per sweep against "
+    "exact's {} per Jacobian solve. Stops once the relative change in psi is below "
+    "FieldSolveTolerance = {}, up to FieldSolveMaxSweeps = {} sweeps ({} for the "
+    "adjoint); a sweep that reaches its cap falls back to the exact solve, so this "
+    "mode costs more than exact in the worst case and never less accuracy.",
+    nField + 1, fieldSolveTolerance, fieldSolveMaxSweeps, fieldSolveMaxAdjointSweeps);
+```
+
+- [ ] **Step 7: A fixture whose divergence is measured, not assumed**
+
+`FieldJacobianTests.cpp` has no fixture known to be divergent — the ρ = 1.611
+measurement was made on `RichGeometricDiffusion` in `FieldAdjointTests.cpp`.
+Rather than move that fixture or assume a pairing is hard enough, give the
+coupling a **strength dial** and have the test *measure* ρ, so a fixture that
+silently stops being divergent fails loudly instead of passing vacuously.
+
+Add a coupling-strength constructor parameter to a copy of
+`ManufacturedFieldEverySlot` (nField == 1) and of `ManufacturedFieldVector`
+(nField == 5) — `R = psi − c·∫(u + σ/2 + q/4 + 3φ/4) dx` and its vector
+analogue. `B` is unchanged by `c` and `A2 ∝ c`, so `ρ(M) ∝ c` and the dial is
+linear and predictable. Pair each with `GeometricDiffusion`, which has a
+nonzero `dSigmaFn_dGeometry` (Task 9's fix — confirm before relying on it, and
+say in the report what `max|A1_cellwise|` came out as).
+
+The measurement, in the test itself — no production code needed, since
+`subtractA1Times`, `solveTransportJac`, `a2` and `fieldModel` are all reachable
+under `MANTA_TEST_PRIVATE`:
+
+```cpp
+// Power-iterate M = B^-1 A2 A^-1 A1. With a zero right-hand side the affine
+// map's constant term vanishes and one sweep is exactly one application of M,
+// so the ratio of successive norms converges to |lambda_max|. This is the same
+// operator solveCoupledJacIterative iterates, reached the same way, rather than
+// a reimplementation of it that could agree with a wrong original.
+double spectralRadius(CoupledSolver &solver, int iterations = 60)
+{
+    const Index nField = solver->nField;
+    N_Vector zero = N_VClone(solver->y_vec()), work = N_VClone(zero), dx = N_VClone(zero);
+    N_VConst(0.0, zero);
+
+    Vector p = Vector::Ones(nField).normalized();
+    double ratio = 0.0;
+    for (int it = 0; it < iterations; ++it)
+    {
+        N_VScale(1.0, zero, work);
+        solver->subtractA1Times(p, work);
+        solver->solveTransportJac(work, dx);
+
+        Vector r2 = Vector::Zero(nField);
+        for (Index f = 0; f < nField; ++f)
+            r2(f) -= N_VDotProd(solver->a2[f], dx);
+
+        Vector next(nField);
+        solver->fieldModel->solveB(next, r2);
+        ratio = next.norm() / p.norm();
+        p = next.normalized();
+    }
+    N_VDestroy(zero); N_VDestroy(work); N_VDestroy(dx);
+    return ratio;
+}
+```
+
+Adapt the vector accessors to whatever `CoupledSolver` (`FieldJacobianTests.cpp:255`)
+actually exposes; the algebra above is the specification.
+
+- [ ] **Step 8: The tests that discriminate**
+
+Each of these asserts `fieldSweepFallbacks` explicitly. Per invariant 2, one
+that only checks agreement with the exact solve proves nothing now.
+
+```cpp
+BOOST_AUTO_TEST_CASE(acceleration_converges_a_sweep_that_plainly_diverges)
+{
+    // First: prove the fixture is what it claims. If a later change makes the
+    // coupling weak, this fails here rather than turning the test below into a
+    // statement about a contraction.
+    auto solver = makeCoupledSolverAtState(6, 2, EverySlotStrengthTag{2.0});
+    const double rho = spectralRadius(*solver);
+    BOOST_TEST_MESSAGE("rho(M) = " << rho);
+    BOOST_CHECK_GT(rho, 1.2);
+
+    N_Vector g = randomRHS(*solver);
+    N_Vector exact = N_VClone(g), iterative = N_VClone(g);
+    solver->solveCoupledJacExact(g, exact);
+    solver->solveCoupledJacIterative(g, iterative);
+
+    // The agreement is necessary but not sufficient -- solveCoupledJacIterative
+    // now escalates to solveCoupledJacExact, so this line passes with the
+    // acceleration deleted. The fallback count is the assertion that matters.
+    BOOST_CHECK_SMALL(relativeDifference(exact, iterative), 1e-6);
+    BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks, 0);
+    BOOST_CHECK_LE(solver->fieldSweepIterations, 12);
+}
+
+BOOST_AUTO_TEST_CASE(the_fallback_returns_the_exact_solve_bit_for_bit)
+{
+    // A cap of one sweep cannot converge anything that needs two, so this
+    // reaches the escalation deterministically without needing a pathological
+    // fixture. Bit-for-bit, not to a tolerance: the escalation does not blend
+    // the sweep's last iterate with the exact answer, it discards it.
+    auto solver = makeCoupledSolverAtState(6, 2, EverySlotStrengthTag{2.0});
+    solver->setFieldSolveMaxSweeps(1);
+
+    N_Vector g = randomRHS(*solver);
+    N_Vector exact = N_VClone(g), iterative = N_VClone(g);
+    solver->solveCoupledJacExact(g, exact);
+    solver->solveCoupledJacIterative(g, iterative);
+
+    BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks, 1);
+    BOOST_CHECK_EQUAL(relativeDifference(exact, iterative), 0.0);
+}
+
+BOOST_AUTO_TEST_CASE(acceleration_does_not_disturb_a_contraction)
+{
+    // The risk in adding an extrapolation is that it destabilises the cases
+    // that were already fine. rho < 1 here, and the sweep must still converge,
+    // still without falling back, and in no more sweeps than the plain
+    // iteration needed (2, recorded in Task 9's review).
+    auto solver = makeCoupledSolverAtState(6, 2, EverySlotStrengthTag{0.25});
+    BOOST_CHECK_LT(spectralRadius(*solver), 1.0);
+
+    N_Vector g = randomRHS(*solver);
+    N_Vector out = N_VClone(g);
+    solver->solveCoupledJacIterative(g, out);
+
+    BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks, 0);
+    BOOST_CHECK_LE(solver->fieldSweepIterations, 4);
+}
+
+BOOST_AUTO_TEST_CASE(the_accelerated_sweep_is_still_scale_equivariant)
+{
+    // Task 9's property, re-run rather than assumed: mu is a ratio of inner
+    // products of quantities that all scale with the right-hand side, so
+    // Irons-Tuck is homogeneous and solve(c g) == c solve(g) should survive it.
+    // The scale that broke the old criterion was 1e-9; use it again.
+    auto solver = makeCoupledSolverAtState(6, 2, EverySlotStrengthTag{2.0});
+    N_Vector g = randomRHS(*solver), gSmall = N_VClone(g);
+    N_VScale(1e-9, g, gSmall);
+
+    N_Vector big = N_VClone(g), small = N_VClone(g);
+    solver->solveCoupledJacIterative(g, big);
+    solver->solveCoupledJacIterative(gSmall, small);
+    N_VScale(1e9, small, small);
+
+    BOOST_CHECK_SMALL(relativeDifference(big, small), 1e-8);
+}
+```
+
+In `FieldAdjointTests.cpp`, the two that matter for the gradient. The existing
+non-convergence test — the one that asserted the throw at
+`FieldAdjointTests.cpp:981` with `setFieldSolveMaxAdjointSweeps`'s predecessor
+set to 1 — must be **rewritten, not deleted**: the same forcing condition now
+has to produce a correct gradient rather than an exception.
+
+```cpp
+BOOST_AUTO_TEST_CASE(the_adjoint_sweep_converges_on_the_rich_fixture)
+{
+    // RichGeometricDiffusion is where rho = 1.611 was measured, at cj = 0,
+    // which is where every adjoint solve runs. Before this task the sweep
+    // needed ~42 iterations against a cap of 20 and threw.
+    auto run = makeRichAdjointRun();
+    run->integrate();
+    auto stats = run->solver().getFieldSweepStats();
+    BOOST_CHECK(!stats.adjointFellBack);
+    checkGradientAgainstFiniteDifferences(*run, 1e-6);
+}
+
+BOOST_AUTO_TEST_CASE(an_exhausted_adjoint_sweep_still_gives_the_right_gradient)
+{
+    // The replacement for the throw. One sweep cannot converge, the escalation
+    // fires, and the gradient is the exact one -- which is the whole point of
+    // escalating rather than failing: the caller loses time, never accuracy.
+    auto run = makeRichAdjointRun();
+    run->solver().setFieldSolveMaxAdjointSweeps(1);
+    run->integrate();
+    BOOST_CHECK(run->solver().getFieldSweepStats().adjointFellBack);
+    checkGradientAgainstFiniteDifferences(*run, 1e-6);
+}
+```
+
+Adapt the fixture-construction calls to whatever `AdjointRun` /
+`AdjointStateFixture` (`FieldAdjointTests.cpp:480`, `:522`) provide.
+
+**Mutation experiments — run these and report what happened.** A test that
+passes under the mutation is not testing what it says.
+
+1. Replace `haveDeltaPrev ? ironsTuck(...) : g` with plain `g` in the forward
+   sweep. `acceleration_converges_a_sweep_that_plainly_diverges` must fail on
+   the fallback count, and must still pass its `relativeDifference` line —
+   that contrast is the demonstration of invariant 2.
+2. Accept the accelerated iterate instead of `g` (invariant 1): set
+   `dpsi = ironsTuck(...)` and break on it. Report whether any test notices.
+   If none does, that is a gap to close before the task is finished, because
+   the returned pair is then inconsistent by the length of the extrapolation.
+3. In the adjoint, do the same as (2) and check the backward-error test: it
+   should now be a proxy rather than an exact residual, so
+   `the_adjoint_sweep_converges_on_the_rich_fixture`'s gradient check should
+   degrade. Report the measured gradient error either way.
+4. Change `secant.norm() > 1e-12 * scale` to `secant.norm() > 1e-12`.
+   `irons_tuck_declines_when_the_secant_vanishes`'s second half must fail.
+
+- [ ] **Step 9: `TODO`, and the note for Task 12**
+
+Replace the Task 9/10 Gauss–Seidel entry with what is now true, and add the
+successor:
+
+```
+- The coupled sweep uses Irons-Tuck, a rank-one secant acceleration. It is
+  exact in one step for nField == 1 and any spectrum, and removes the dominant
+  eigendirection for nField > 1 -- but only that one, so a coupling with two
+  comparable eigenvalues outside the unit circle still falls back to the exact
+  Schur solve. The depth-m generalisation is Anderson acceleration, which for
+  an affine map is GMRES on the Schur complement; that is the right answer for
+  the large nField this path exists to serve, and is a separate piece of work.
+  rho(M) was measured at 1.611 (cj = 0) and 1.571 (cj = 1e8) on
+  RichGeometricDiffusion: a property of the coupling, not of the time step.
+
+- Nothing latches the fallback. A genuinely divergent coupling pays
+  FieldSolveMaxSweeps sweeps *and* the exact solve on every Jacobian solve for
+  the whole run. Latching after N consecutive fallbacks would fix it, but N is
+  a number nobody can presently justify, and rho does drift with cj even if
+  only by 2% in the one case measured. The end-of-run count is the signal for
+  now.
+```
+
+Add a line to Task 12's documentation step (`docs/running.rst` and the
+`CLAUDE.md` section): `FieldSolve = iterative` is a *cost* choice, not an
+accuracy one — the sweep escalates to the exact solve rather than returning an
+under-converged answer, in both directions — and `FieldSolveMaxAdjointSweeps`
+exists because the adjoint runs at `cj = 0` where the coupling is stiffest.
+
+- [ ] **Step 10: Run everything and commit**
+
+```sh
+export PATH="$PWD/.venv/bin:$PATH"
+make test && make regression_tests && make python_tests && make stubs-check && make typecheck
+git add -A
+git commit -m "Accelerate the coupled sweep, and escalate rather than guess"
+```
+
+`make test` must show the full case count, not a subset. State the count in the
+report, along with the ρ measured for each new fixture and the sweep counts
+observed.
+
+---
+
 ## Self-Review
 
 **Spec coverage.** Every section of the spec maps to a task: the `FieldModelSpec`/`FieldModel` abstraction → Tasks 1–2; geometry derived and reaching cases through `State` → Task 3; the DOF layout → Task 4; the manufactured clients → Task 5; the coupled residual, `id` vector and recoverable failure → Task 6; the geometry derivative hooks → Task 7; `A1`/`A2`/`B` and the exact Schur, plus the config keys and the exact-solve warning → Task 8; block Gauss–Seidel → Task 9; the adjoint transposes and the loud-failure asymmetry → Task 10; the order study including the superconvergent case → Task 11; output, restart, docs and the zero-coupling invariant → Task 12. The two named traps (the differential-without-`d/dt` refusal, per-run state in `initialiseMatrices`) are Task 6 Steps 6–7, checked in Tasks 6 and 12.
+
+Task 13 was added during execution, after Task 10's review measured the block
+Gauss–Seidel spectral radius at 1.611 for a coupling that reads `sigma`, `q`
+and `phi`. It is not new scope: it is the spec's "iterate, assuming the
+coupling is weak" made safe for a coupling that is not. **Execution order is
+1–10, 13, 11, 12** — Task 13 changes the iteration Task 11 measures and removes
+the failure mode Task 12 would document.
 
 **Two known soft spots, called out rather than hidden.**
 
