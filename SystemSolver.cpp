@@ -1478,12 +1478,28 @@ void SystemSolver::solveCoupledJacIterative(N_Vector res_g, N_Vector delY)
     // Escalate rather than return the last iterate. Task 9 returned it, on the
     // argument that an under-converged Jacobian solve is merely a worse search
     // direction -- true, and still true. What changed is the price of being
-    // right: the exact Schur solve costs nField + 1 transport solves, against
-    // the cap's fieldSolveMaxSweeps, and for the large nField this path exists
-    // to serve the escalation is *cheaper* than the sweeps already spent. So
-    // there is no longer a reason to hand back a direction we know is bad, and
-    // with the escalation in place the iterative mode can no longer be wrong at
-    // all -- only slower. That is what makes it a safe default.
+    // right: with the escalation in place the iterative mode can no longer be
+    // wrong at all, only slower, and that is what makes it a safe default. So
+    // there is no longer a reason to hand back a direction we know is bad.
+    //
+    // **Say the cost arithmetic in full, because the flattering half of it is
+    // misleading on its own.** One sweep is one transport solve; the exact Schur
+    // complement is nField + 1 of them plus a dense nField^3 factorisation. So
+    // the break-even is
+    //
+    //     #sweeps  <  nField + 1
+    //
+    // and *no fixture in this tree is on the winning side of it*: at nField == 1
+    // the sweep takes 3 against exact's 2, and at nField == 5 it takes 13 to 38
+    // against exact's 6. Measured, the iterative path is 1.5x more expensive than
+    // exact at nField == 1 and 2-6x more expensive at nField == 5, for the same
+    // answer -- and an escalation pays fieldSolveMaxSweeps *plus* the exact solve
+    // on top. That is not a defect: this path is a bet on N_magnetics >> N_HDG,
+    // where nField + 1 transport solves and an O(nField^3) dense solve are
+    // hopeless and one sweep per iteration is the only affordable option. It is
+    // a bet, though, and not a free improvement, which is why it is written down
+    // here, in the initialize() warning, and in TODO rather than left to be
+    // rediscovered.
     //
     // Counted, not warned: a warning here would fire once per Jacobian solve.
     // The count is reported once per run, in Solver.cpp.

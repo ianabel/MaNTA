@@ -234,8 +234,13 @@ void SystemSolver::initialize()
 				"exact's {} per Jacobian solve. Stops once the relative change in psi is below "
 				"FieldSolveTolerance = {}, up to FieldSolveMaxSweeps = {} sweeps ({} for the "
 				"adjoint); a sweep that reaches its cap falls back to the exact solve, so this "
-				"mode costs more than exact in the worst case and never less accuracy.",
-				nField + 1, fieldSolveTolerance, fieldSolveMaxSweeps, fieldSolveMaxAdjointSweeps);
+				"mode costs more than exact in the worst case and never less accuracy. It is "
+				"only *cheaper* than exact when the sweep converges in fewer than {} sweeps, "
+				"which no test fixture in this tree manages -- it is a bet on a field block "
+				"far larger than the transport one, not a free improvement. Watch the "
+				"\"Coupled field sweeps\" line at the end of the run.",
+				nField + 1, fieldSolveTolerance, fieldSolveMaxSweeps, fieldSolveMaxAdjointSweeps,
+				nField + 1);
 	}
 
 	// ----------------- Allocate and initialize all other sun-vectors. -------------
@@ -705,9 +710,12 @@ void SystemSolver::integrate(double tFinal)
 	// The adjoint solve is allowed to fail, and its failure must not take the
 	// forward run's output with it.
 	//
-	// The coupled adjoint sweep throws on non-convergence rather than returning
-	// its last iterate -- deliberately, because an under-converged adjoint is a
-	// wrong gradient beside a correct objective. But this call sits *before*
+	// The coupled adjoint sweep no longer throws on non-convergence -- it
+	// escalates to the exact transposed Schur solve, which is strictly stronger
+	// than refusing, since the caller gets a correct gradient rather than an
+	// exception. What reaches this catch is therefore a throw out of the *field
+	// model* itself: from solveCoupledAdjointExact, or from the sweep's own
+	// solveBTranspose before it. But this call sits *before*
 	// finaliseDiagnostics, nc_output.Close() and WriteRestartFile, and
 	// runSolver's catch(...) rethrows, so an unguarded throw here destroyed the
 	// netCDF and the restart file of a run that had integrated perfectly. The

@@ -504,14 +504,27 @@ void configureQuietly(SystemSolver &sys, std::string const &stem)
 // A pseudo-random right-hand side, the full length of the coupled vector --
 // deliberately not shaped like a residual, so agreeing on it is a statement
 // about the linear solve alone.
-N_Vector randomRHS(SystemSolver &sys)
+//
+// `seed` changes the *direction*, not the magnitude: it moves the phase and the
+// frequency of the sine and the offset of the modulation. That distinction is
+// the point rather than a flourish. Scaling the right-hand side cannot change
+// how the sweep behaves at all -- the solve is homogeneous, which
+// the_accelerated_sweep_is_still_scale_equivariant asserts to eight digits at
+// 1e-9 -- so a "different" right-hand side obtained by scaling takes the
+// identical number of sweeps and tells you nothing. Only a genuinely different
+// direction moves the count, and for five field unknowns it moves it by a
+// factor of three.
+//
+// Seed 0 reproduces the original single-right-hand-side generator exactly, so
+// every call site that predates the parameter is unchanged.
+N_Vector randomRHS(SystemSolver &sys, int seed = 0)
 {
     const Index n = static_cast<Index>(sys.getSolution().getDoF());
     N_Vector g = N_VNew_Serial(n, sys.ctx);
     double *a = N_VGetArrayPointer(g);
     for (Index i = 0; i < n; ++i)
-        a[i] = std::sin(0.37 + 1.618 * static_cast<double>(i)) *
-               (1.0 + 0.1 * static_cast<double>(i % 7));
+        a[i] = std::sin(0.37 + 0.911 * seed + (1.618 + 0.13 * seed) * static_cast<double>(i)) *
+               (1.0 + 0.1 * static_cast<double>((i + seed) % 7));
     return g;
 }
 
@@ -1121,44 +1134,70 @@ BOOST_AUTO_TEST_CASE(a_divergent_five_dof_coupling_is_still_solved_exactly)
     // what makes iterative safe as a default. Then the measurement, with a cap
     // that has room for the observed spread -- the default 20 does *not*, which
     // is why this raises it rather than pretending otherwise.
-    auto solver = multiDofFixture(6, 2, 10.0);
-    const double rho = spectralRadius(solver);
+    auto probe = multiDofFixture(6, 2, 10.0);
+    const double rho = spectralRadius(probe);
     BOOST_TEST_MESSAGE("five-DOF, strength 10: rho(M) = " << rho
-                       << ", max|A1_cellwise| = " << maxAbsA1(solver));
-    BOOST_REQUIRE_GT(maxAbsA1(solver), 0.0);
+                       << ", max|A1_cellwise| = " << maxAbsA1(probe));
+    BOOST_REQUIRE_GT(maxAbsA1(probe), 0.0);
     BOOST_CHECK_GT(rho, 1.2);
 
-    N_Vector g = randomRHS(*solver);
-    N_Vector exact = N_VClone(g), iterative = N_VClone(g);
-    solver->solveCoupledJacExact(g, exact);
+    // Six right-hand *directions* -- see randomRHS on why scaling would not do.
+    // The sweep count varies by a factor of three across them, which is the
+    // whole reason one right-hand side is not a measurement.
+    int convergedAtDefault = 0, escalatedAtDefault = 0;
+    std::string atDefault, atSixty;
 
-    // ---- the guarantee, at the default cap.
-    solver->solveCoupledJacIterative(g, iterative);
-    BOOST_CHECK_SMALL(relativeDifference(exact, iterative), 1e-6);
-    BOOST_TEST_MESSAGE("five-DOF at the default cap: fallbacks = "
-                       << solver->fieldSweepFallbacks
-                       << ", sweeps = " << solver->fieldSweepIterations);
+    for (int seed = 0; seed < 6; ++seed)
+    {
+        auto solver = multiDofFixture(6, 2, 10.0);
+        BOOST_REQUIRE_EQUAL(solver->getFieldSolveMaxSweeps(), 20); // the shipped default
 
-    // ---- and the route, given the sweeps. A fresh fixture rather than a reset,
-    // because the counters accumulate over solves and only initialize() zeroes
-    // them.
-    auto roomy = multiDofFixture(6, 2, 10.0);
-    roomy->setFieldSolveMaxSweeps(60);
-    N_Vector g2 = randomRHS(*roomy), exact2 = N_VClone(g2), iterative2 = N_VClone(g2);
-    roomy->solveCoupledJacExact(g2, exact2);
-    roomy->solveCoupledJacIterative(g2, iterative2);
+        N_Vector g = randomRHS(*solver, seed);
+        N_Vector exact = N_VClone(g), iterative = N_VClone(g);
+        solver->solveCoupledJacExact(g, exact);
 
-    BOOST_TEST_MESSAGE("five-DOF at a cap of 60: fallbacks = " << roomy->fieldSweepFallbacks
-                       << ", sweeps = " << roomy->fieldSweepIterations);
-    BOOST_CHECK_EQUAL(roomy->fieldSweepFallbacks, 0);
-    BOOST_CHECK_SMALL(relativeDifference(exact2, iterative2), 1e-6);
+        // ---- the guarantee, at the shipped default cap. True by construction
+        // whichever route the solve took, and the only claim here that survives
+        // any change to the accelerator.
+        solver->solveCoupledJacIterative(g, iterative);
+        BOOST_CHECK_SMALL(relativeDifference(exact, iterative), 1e-6);
 
-    N_VDestroy(g);
-    N_VDestroy(exact);
-    N_VDestroy(iterative);
-    N_VDestroy(g2);
-    N_VDestroy(exact2);
-    N_VDestroy(iterative2);
+        const long sweeps = solver->fieldSweepIterations;
+        const long fellBack = solver->fieldSweepFallbacks;
+        (fellBack > 0 ? escalatedAtDefault : convergedAtDefault)++;
+        atDefault += " " + std::to_string(sweeps) + (fellBack > 0 ? "*" : "");
+
+        // ---- and the route, given room. Same solver, so the counts are read as
+        // deltas: only initialize() zeroes them, and these fixtures never call it.
+        solver->setFieldSolveMaxSweeps(60);
+        solver->solveCoupledJacIterative(g, iterative);
+        BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks - fellBack, 0);
+        BOOST_CHECK_SMALL(relativeDifference(exact, iterative), 1e-6);
+        atSixty += " " + std::to_string(solver->fieldSweepIterations - sweeps);
+
+        N_VDestroy(g);
+        N_VDestroy(exact);
+        N_VDestroy(iterative);
+    }
+
+    BOOST_TEST_MESSAGE("five-DOF sweeps by right-hand side, cap 20 (* = escalated):"
+                       << atDefault << "\n  the same at cap 60:" << atSixty);
+
+    // The accelerator does cope with five divergent field unknowns -- every
+    // right-hand side converges once there is room for it.
+    BOOST_CHECK_EQUAL(escalatedAtDefault + convergedAtDefault, 6);
+
+    // ...but FieldSolveMaxSweeps = 20 is **not enough** for half of them, and
+    // that is a statement about the shipped default rather than about this
+    // fixture. Asserted as a tripwire, deliberately: if the accelerator is ever
+    // improved to the point where all six fit in twenty sweeps, this fails, and
+    // the right response is to update it together with the TODO entry that
+    // records the same measurement -- not to have the default quietly become
+    // adequate with nothing saying so.
+    BOOST_TEST_MESSAGE("of six right-hand sides, " << escalatedAtDefault
+                       << " needed more than the default cap of 20");
+    BOOST_CHECK_GT(convergedAtDefault, 0);
+    BOOST_CHECK_GT(escalatedAtDefault, 0);
 }
 
 BOOST_AUTO_TEST_CASE(the_accepted_iterate_leaves_the_field_row_exact)

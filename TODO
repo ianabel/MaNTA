@@ -204,20 +204,57 @@ reason it was not made:
     of 400 -- converge every time, in 13 to 38 sweeps depending on the
     right-hand side. The steps are rank one individually but not the *same*
     rank-one direction, so the iteration is not confined to the two-dimensional
-    subspace the pessimistic argument assumes. What the spread does mean is that
-    FieldSolveMaxSweeps = 20 is not always enough for five field unknowns:
-    a_divergent_five_dof_coupling_is_still_solved_exactly raises the cap to 60
-    for its fallbacks == 0 assertion and asserts only the guarantee at the
-    default. No fixture has yet been found where the acceleration fails outright.
+    subspace the pessimistic argument assumes. No fixture has yet been found
+    where the acceleration fails outright.
+
+    What the spread does mean is that **FieldSolveMaxSweeps = 20 is not enough
+    for five field unknowns**: over six right-hand side *directions* at
+    strength 10 (rho = 1.57) the counts are 13, 33, 38, 21, 17, 19, so three of
+    the six escalate at the shipped default and all six converge at 60.
+    a_divergent_five_dof_coupling_is_still_solved_exactly measures exactly that
+    and asserts it, as a tripwire: it requires both some to converge and some to
+    escalate, so raising the default or improving the accelerator has to update
+    the test and this entry together. Note the counts cannot be varied by
+    *scaling* the right-hand side -- the solve is homogeneous -- so a
+    single-right-hand-side measurement of this is not a measurement.
+
+  - **The iterative path is a bet on a large field block, not a free
+    improvement, and the arithmetic should be stated before anyone reads the
+    fallback count as the only cost.** One sweep is one transport solve; the
+    exact Schur complement is nField + 1 of them plus a dense nField^3
+    factorisation. The break-even is therefore
+
+        #sweeps  <  nField + 1
+
+    and **no fixture in this tree is on the winning side of it.** At nField == 1
+    the sweep takes 3 against exact's 2 (1.5x worse); at nField == 5 it takes 13
+    to 38 against exact's 6 (2-6x worse), for the same answer, and an escalation
+    pays FieldSolveMaxSweeps *plus* the exact solve on top. The design target is
+    N_magnetics >> N_HDG, where exact's nField + 1 transport solves and its
+    O(nField^3) dense solve are hopeless and one sweep per iteration is the only
+    affordable option -- but nothing in the tree exercises that regime yet, so
+    every measurement available today says exact is cheaper. Said in three
+    places so it cannot be lost: solveCoupledJacIterative's escalation comment,
+    the FieldSolve = iterative warning initialize() prints, and here.
 
   - Nothing latches the fallback. A genuinely divergent coupling pays
     FieldSolveMaxSweeps sweeps *and* the exact solve on every Jacobian solve for
-    the whole run. Latching after N consecutive fallbacks would fix it, but N is
-    a number nobody can presently justify, and rho does drift with cj even if
-    only by 2% in the one case measured. The end-of-run count is the signal for
-    now -- and it is printed only on the time-marching path, beside IDA's own
-    totals, so a steady-state run (SteadyStateSolver, which does not go through
-    IDASolve) reports nothing.
+    the whole run. Two candidate fixes, neither taken here:
+
+      * Latch after N consecutive fallbacks. N is a number nobody can presently
+        justify, and rho does drift with cj even if only by 2% in the one case
+        measured.
+      * Latch on *cost* rather than on failure: switch to exact once the running
+        mean sweep count exceeds nField + 1, which is the break-even above. This
+        is the better-founded of the two -- the threshold is derived rather than
+        picked -- and it would also catch the case the fallback latch misses, a
+        sweep that converges every time and still costs more than exact. It is a
+        behavioural change to the default mode, so it wants deciding rather than
+        slipping in beside an accelerator.
+
+    The end-of-run count is the signal for now -- and it is printed only on the
+    time-marching path, beside IDA's own totals, so a steady-state run
+    (SteadyStateSolver, which does not go through IDASolve) reports nothing.
 
 Superconvergence follow-ons (see Tests/README.md for what is already verified):
 

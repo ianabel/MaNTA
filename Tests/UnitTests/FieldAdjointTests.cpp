@@ -1128,8 +1128,10 @@ BOOST_AUTO_TEST_CASE(a_failing_field_model_does_not_destroy_the_runs_output)
     // gradient is the optional half of a run, and the solution is not.
     //
     // integrate() logs the failure where it happens, finishes the output, and
-    // rethrows. This checks all three: the files are complete, and the exception
-    // still reaches the caller.
+    // rethrows. This checks that the restart file is written and complete and
+    // that the exception still reaches the caller. It deliberately says nothing
+    // about the .nc; see the comment on the assertions below for the measurement
+    // behind that.
     //
     // **The forcing condition changed with this task and the test had to be
     // re-armed rather than deleted.** It used to force a refusal with
@@ -1177,23 +1179,38 @@ BOOST_AUTO_TEST_CASE(a_failing_field_model_does_not_destroy_the_runs_output)
     // is what says the sweep was running rather than being refused outright.
     BOOST_TEST(field->calls >= 2);
 
-    BOOST_TEST(std::filesystem::exists(nc));
-    BOOST_TEST(std::filesystem::exists(restart));
-
-    // exists() and a nonzero size are *not* enough, and this is the Task 10
-    // deferred minor: timeslices are written during the run, so the .nc is on
-    // disk with content whether or not Close() ever ran. Removing the guard
-    // entirely left both of those passing and only exists(restart) failing.
-    // Reading the file back is what distinguishes a cleanly closed file from a
-    // truncated one.
+    // **There are deliberately no assertions about the .nc, and that is the
+    // honest answer to the Task 10 deferred minor rather than a weaker one.**
+    //
+    // The minor said the netCDF assertions were vacuous, and the fix attempted
+    // here first was to read the file back. That is no better, and it was
+    // measured rather than argued: with the guard in Solver.cpp replaced by a
+    // bare `throw;`, so that finaliseDiagnostics, nc_output.Close() and
+    // WriteRestartFile are all skipped, the .nc still opens for read and is
+    // *indistinguishable* from the guarded one through every netCDF-visible
+    // property --
+    //
+    //     2 dims, 3 top-level vars (nVariables, t, x), 2 groups
+    //     Grid: CellBoundaries[5] Index[5] PolyOrder[]
+    //     u:    q[5,11] sigma[5,11] u[5,11] u_star[5,11]
+    //     t = { 0, 5, 10, 15, 20 },  last u slice max|u| = 1.4999999999999989
+    //
+    // identical on both sides, because netCDF flushes each record as
+    // WriteTimeslice writes it and nothing is appended to the file after the
+    // adjoint solve. The only difference is the file's size on disk -- 26099
+    // against 28715 bytes -- which is HDF5 bookkeeping written at close and
+    // carries no readable content, so no content assertion can reach it.
+    //
+    // A test dressed up to look discriminating when it cannot be is worse than
+    // one that admits its scope. The restart file is written by an explicit call
+    // *after* the guard, so it is the thing that actually distinguishes the two,
+    // and it carries the test alone.
+    //
+    // REQUIRE, not TEST: file_size() throws filesystem_error on a missing file,
+    // so a non-fatal existence check here aborts the case on the very mutation
+    // this test exists to catch, taking every later assertion with it.
+    BOOST_REQUIRE(std::filesystem::exists(restart));
     BOOST_TEST(std::filesystem::file_size(restart) > 0u);
-    {
-        netCDF::NcFile f(nc.string(), netCDF::NcFile::FileMode::read);
-        BOOST_REQUIRE(!f.getVar("t").isNull());
-        double t0 = -1.0;
-        f.getVar("t").getVar({0}, {1}, &t0);
-        BOOST_TEST(t0 == 0.0);
-    }
     {
         netCDF::NcFile f(restart.string(), netCDF::NcFile::FileMode::read);
         netCDF::NcVar Y = f.getGroup("RestartData").getVar("Y");
