@@ -2621,6 +2621,28 @@ Derive it symbolically and check it: a unit test that evaluates `u_t - d_x[g kap
 
 Run the fourth test. If `u*` reaches `k+2`, keep the assertion. If it does not, replace the test with one asserting that `Superconvergent = true` together with a field model **throws**, and record the measured rates in `Tests/README.md` — following the precedent that spatial adjoint parameters with `Superconvergent = true` throw rather than guessing.
 
+- [ ] **Step 5a: Measure on both solve modes, and say the fallback count**
+
+Task 13 gave `solveCoupledJacIterative` an escalation to the exact solve, so an
+order study run on the default `FieldSolve = iterative` cannot tell you which
+method produced the numbers — a sweep that never converges yields exactly the
+exact path's answer, silently. Run `the_coupled_problem_converges_at_k_plus_one_in_u`
+on **both** modes and require the local orders to agree, and report
+`getFieldSweepStats().fallbacks` for the iterative run. If it is nonzero at any
+refinement, say so in `Tests/README.md`: the rate is then partly a measurement
+of the exact path wearing the iterative path's name.
+
+This is a cross-check, not a tolerance concern. `FieldSolveTolerance` cannot
+floor the measured order — the sweep solves the *Jacobian*, IDA's Newton test
+is on the exact residual, and accuracy is set by the integrator tolerances — so
+if the two modes disagree in the third digit of a rate, that is a defect and
+not the linear solve showing through.
+
+Note also that `ManufacturedField` and `ManufacturedFieldVector` gained a
+trailing coupling-strength constructor argument in Task 13, defaulting to
+`1.0`. Existing construction is unchanged; the harness needs nothing new unless
+you want to vary it.
+
 - [ ] **Step 6: Record the numbers and commit**
 
 Add a section to `Tests/README.md` with the measured local orders, exactly as the existing superconvergence tables do, and say which assertions are pinned to them.
