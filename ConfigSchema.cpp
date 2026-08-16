@@ -72,6 +72,10 @@ const std::vector<Entry> &table()
         {"SteadyStateDiagnostics", {}, Type::Bool, Category::Solver, false, false, false,
          "Report the work a steady solve did: continuation steps, Newton iterations, "
          "residual evaluations, Jacobian builds and solves. Printed on failure too."},
+        {"SteadyStateSolve", {}, Type::Bool, Category::Solver, false, false, false,
+         "Run to a steady state using the default tolerance. SteadyStateTolerance "
+         "does the same and names the tolerance; either arms it, and giving both "
+         "uses the tolerance."},
         {"DegreeAdaptation", {}, Type::Bool, Category::Solver, false, false, false,
          "Choose the global polynomial degree by solving, estimating the error from "
          "u* - u_h, and re-solving at a higher degree. Steady solves only; implies "
@@ -83,6 +87,10 @@ const std::vector<Entry> &table()
         {"MaxPolynomialDegree", {}, Type::UInt, Category::Solver, false, false, 10u,
          "Ceiling on the degree DegreeAdaptation may reach. Reaching it warns and "
          "returns the best result available rather than failing."},
+        {"MaxDegreeIncrement", {}, Type::UInt, Category::Solver, false, false, 3u,
+         "Most degrees DegreeAdaptation may add in a single step. Giorgiani's rule is "
+         "free to ask for a large jump from a coarse first solve; this keeps the loop "
+         "taking informative steps rather than clearing the ceiling in one. Minimum 1."},
         {"DegreeAdaptationBase", {}, Type::Double, Category::Solver, false, false, 10.0,
          "How much error one extra degree is assumed to buy, in Giorgiani's rule "
          "dk = ceil(log_base(E/tolerance)). 10 is cautious, 100 aggressive; must be "

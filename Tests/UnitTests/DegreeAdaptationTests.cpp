@@ -20,6 +20,7 @@
 #include <limits>
 #include <numbers>
 #include <stdexcept>
+#include <cstdio>
 #include <string>
 
 using std::numbers::pi;
@@ -56,7 +57,7 @@ const toml::value diffusion_config = toml::parse_str(
 // A configuration for a steady solve, built through the real loader so that the
 // validation under test here is the validation a run gets.
 SolverConfig steadyConfig(std::string const &extra, unsigned int k = 2,
-                          int cells = 8)
+                          int cells = 8, bool steadyTolerance = true)
 {
     const std::string body =
         "Polynomial_degree = " + std::to_string(k) + "\n"
@@ -68,9 +69,11 @@ SolverConfig steadyConfig(std::string const &extra, unsigned int k = 2,
         "TransportSystem = \"LinearDiffusion\"\n"
         "OutputFilename = \"degree_adaptation_test\"\n"
         "WriteOutput = false\n"
-        "SteadyStateTolerance = 1.0e-11\n"
         "MinStepSize = 1.0e-12\n"
         "Absolute_tolerance = 1.0e-10\n" +
+        // Omitting this is what leaves steady-state termination unarmed, so it
+        // has to be optional here for the case that checks the refusal.
+        (steadyTolerance ? "SteadyStateTolerance = 1.0e-11\n" : "") +
         // Only when the caller has not asked for something else: toml11 rejects
         // a duplicate key outright rather than letting the later one win, so a
         // test overriding this would fail on a syntax error rather than on what
@@ -338,6 +341,55 @@ BOOST_AUTO_TEST_CASE(a_solution_the_space_cannot_hold_raises_the_degree_until_it
     removeOutput();
 }
 
+BOOST_AUTO_TEST_CASE(the_degree_rises_in_bounded_steps)
+{
+    // Giorgiani's rule asks for as many degrees as the shortfall implies, which
+    // from a coarse first solve can be most of the budget in one go -- k = 1
+    // against a 1e-9 target is +8 at base 10. MaxDegreeIncrement caps that, so
+    // the loop takes steps it can report on rather than clearing the ceiling
+    // blind. Default 3.
+    Grid grid(0.0, 1.0, 6);
+    SineSource problem(diffusion_config);
+
+    const SolverConfig cfg = steadyConfig(
+        "DegreeAdaptation = true\n"
+        "DegreeTolerance = 1.0e-9\n"
+        "MaxDegreeIncrement = 2\n"
+        "MaxPolynomialDegree = 12\n", 1, 6);
+
+    std::string log;
+    std::unique_ptr<SystemSolver> sys;
+    {
+        CapturedOutput capture;
+        sys = runAdaptiveDegree(cfg, problem, nullptr, grid, 1, 1.0);
+        log = capture.text();
+    }
+    BOOST_TEST_MESSAGE(log);
+
+    // The cap bound at least once, and said so.
+    BOOST_TEST(log.find("capped at +2") != std::string::npos, log);
+
+    // Every step was at most 2. Reading them out of the log is the only way to
+    // see the intermediate degrees, which is exactly what the cap is for.
+    unsigned int previous = 1;
+    for (size_t at = log.find("raising k from"); at != std::string::npos;
+         at = log.find("raising k from", at + 1))
+    {
+        unsigned int from = 0, to = 0;
+        if (std::sscanf(log.c_str() + at, "raising k from %u to %u", &from, &to) == 2)
+        {
+            BOOST_TEST(to - from <= 2u, "step from " << from << " to " << to);
+            BOOST_TEST(from == previous);
+            previous = to;
+        }
+    }
+
+    BOOST_TEST(sys->getOrder() == previous);
+    BOOST_TEST(sys->accuracyEstimate(0).globalL2 < 1e-8);
+
+    removeOutput();
+}
+
 BOOST_AUTO_TEST_CASE(the_ceiling_is_reported_rather_than_thrown)
 {
     // A tolerance nothing can reach at any allowed degree. The answer at the
@@ -432,6 +484,19 @@ BOOST_AUTO_TEST_CASE(degree_adaptation_refuses_configurations_it_cannot_serve)
                                    "SteadyStateSolver = \"TimeMarch\"\n"),
                       std::invalid_argument);
 
+    // Naming a steady mode is *not* enough, and this is the case that got
+    // through. SteadyStateSolver defaults to "PseudoTransient", but the mode is
+    // only consulted once steady-state termination is armed, and arming happens
+    // through the presence of SteadyStateTolerance. A config that simply omits
+    // it passed validation and then time-marched every level -- each one
+    // starting from the previous level's *final* state and integrating the same
+    // interval again, so the run evolved twice. Measured on NonlinDiffTest at
+    // k = 4: u(0.9) = 0.4048 against a fixed-degree run's 0.3767.
+    BOOST_CHECK_THROW(steadyConfig("DegreeAdaptation = true\n"
+                                   "SteadyStateSolver = \"PseudoTransient\"\n",
+                                   2, 8, /*steadyTolerance=*/false),
+                      std::invalid_argument);
+
     // Giorgiani's range for how much a degree may be assumed to buy. Outside it
     // the rule either creeps up one degree at a time or clears the ceiling in a
     // single step.
@@ -448,6 +513,11 @@ BOOST_AUTO_TEST_CASE(degree_adaptation_refuses_configurations_it_cannot_serve)
                                    "DegreeTolerance = 0.0\n"),
                       std::invalid_argument);
 
+    // Zero would leave the loop re-solving a degree it is not allowed to raise.
+    BOOST_CHECK_THROW(steadyConfig("DegreeAdaptation = true\n"
+                                   "MaxDegreeIncrement = 0\n"),
+                      std::invalid_argument);
+
     // A ceiling below the starting degree leaves the loop nothing to do.
     BOOST_CHECK_THROW(steadyConfig("DegreeAdaptation = true\n"
                                    "MaxPolynomialDegree = 1\n", 3),
@@ -461,13 +531,44 @@ BOOST_AUTO_TEST_CASE(degree_adaptation_refuses_configurations_it_cannot_serve)
                                       "Superconvergent = false\n", 3));
 }
 
+BOOST_AUTO_TEST_CASE(a_steady_solve_can_be_asked_for_without_naming_a_tolerance)
+{
+    // SteadyStateSolve exists because arming a steady solve used to be a *side
+    // effect* of choosing a tolerance, so asking for one meant having an opinion
+    // about how tight it should be -- and a config naming SteadyStateSolver but
+    // omitting SteadyStateTolerance looked like a steady solve and time-marched.
+    Grid grid(0.0, 1.0, 8);
+    TestDiffusion problem(diffusion_config);
+
+    SystemSolver bare(grid, 2, &problem);
+    applySolverConfig(steadyConfig("", 2, 8, /*steadyTolerance=*/false), bare);
+    BOOST_TEST(!bare.solvesForSteadyState());
+
+    SystemSolver asked(grid, 2, &problem);
+    applySolverConfig(steadyConfig("SteadyStateSolve = true\n", 2, 8, false), asked);
+    BOOST_TEST(asked.solvesForSteadyState());
+
+    // Naming a tolerance still arms it on its own, as every existing config
+    // relies on.
+    SystemSolver named(grid, 2, &problem);
+    applySolverConfig(steadyConfig("", 2, 8, true), named);
+    BOOST_TEST(named.solvesForSteadyState());
+
+    // And it satisfies degree adaptation's requirement, which is the same
+    // condition asked a different way.
+    BOOST_CHECK_NO_THROW(steadyConfig("DegreeAdaptation = true\n"
+                                      "SteadyStateSolve = true\n", 2, 8, false));
+}
+
 BOOST_AUTO_TEST_CASE(the_degree_keys_default_to_something_usable)
 {
     const SolverConfig c = steadyConfig("");
     BOOST_TEST(!c.DegreeAdaptation);
     BOOST_TEST(c.DegreeTolerance == 1.0e-6);
     BOOST_TEST(c.MaxPolynomialDegree == 10u);
+    BOOST_TEST(c.MaxDegreeIncrement == 3u);
     BOOST_TEST(c.DegreeAdaptationBase == 10.0);
+    BOOST_TEST(!c.SteadyStateSolve);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -174,6 +174,26 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
         system = std::make_unique<SystemSolver>(grid, k, &problem);
         applySolverConfig(config, *system);
 
+        // Checked here, against the solver, because this is the point of truth
+        // and a proxy for it is what let a transient through: loadSolverConfig
+        // refuses SteadyStateSolver = "TimeMarch", but that key defaults to
+        // "PseudoTransient" and the mode is only consulted once termination is
+        // *armed*. A configuration that simply never set SteadyStateTolerance
+        // therefore passed validation and then time-marched every level.
+        //
+        // That is not a scope question, it is a wrong answer. Each level would
+        // take the previous one's state at t_final as its initial condition at
+        // t_initial and integrate the same interval again -- so the run has
+        // evolved twice. Measured on NonlinDiffTest at k = 4: u(0.9) came out
+        // 0.4048 against a plain fixed-degree run's 0.3767, 7.5% apart, where
+        // two runs at the same degree should agree to discretisation error.
+        if (level == 0 && !system->solvesForSteadyState())
+            throw std::invalid_argument(
+                "DegreeAdaptation needs a steady solve, but this configuration "
+                "time-marches: SteadyStateTolerance is absent, so steady-state "
+                "termination is never armed and SteadyStateSolver is not "
+                "consulted. Set SteadyStateTolerance, or call run_ss().");
+
         // A fresh solver has no adjoint problem. Forgetting this is silent: the
         // run completes and the gradients are simply never computed.
         if (adjoint != nullptr)
@@ -220,8 +240,20 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
             break;
         }
 
-        const unsigned int next = std::min(k + bump, kMax);
-        std::println("  raising k from {} to {}", k, next);
+        // Capped, then clamped to the ceiling. Giorgiani's rule is free to ask
+        // for a very large jump from a coarse first solve -- k = 1 with a 1e-8
+        // target asks for 7 at base 10, which on NonlinDiffTest cleared a
+        // ceiling of 8 in one step and learned nothing between the two. Taking
+        // it in bounded steps costs solves but each one reports where it got to,
+        // which is what makes a run diagnosable.
+        const unsigned int capped = std::min(bump, config.MaxDegreeIncrement);
+        const unsigned int next = std::min(k + capped, kMax);
+
+        if (capped < bump)
+            std::println("  raising k from {} to {} (the rule asked for +{}, capped at +{})",
+                         k, next, bump, config.MaxDegreeIncrement);
+        else
+            std::println("  raising k from {} to {}", k, next);
 
         // Hand the state on. setRestartValues copies both the vector and the
         // Grid, so nothing here points into the solver about to be destroyed --

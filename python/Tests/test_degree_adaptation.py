@@ -150,6 +150,65 @@ def test_a_second_run_after_an_adaptive_one_does_not_resume_from_it(tmp_path):
     np.testing.assert_allclose(first, second, atol=1e-12)
 
 
+def test_a_transient_run_is_refused_rather_than_silently_made_steady(tmp_path):
+    """run() means "integrate the transient"; adaptation is steady-only.
+
+    Refusing rather than quietly doing a steady solve, because run() already
+    does the opposite for a config carrying SteadyStateTolerance -- it clears
+    the flag and warns, on the grounds that the caller asked for the path and
+    not the endpoint. Silently contradicting that would be worse than an error.
+    """
+    runner = MaNTA.Runner(SineSource())
+    runner.configure(adaptive_config(tmp_path))
+    with pytest.raises(RuntimeError, match="run_ss"):
+        runner.run(0.1)
+
+
+def test_adaptation_without_steady_termination_is_refused(tmp_path):
+    """The hole that let a transient through, from the dict surface.
+
+    SteadyStateSolver defaults to "PseudoTransient", but the mode is only
+    consulted once steady-state termination is *armed*, and arming happens
+    through the presence of SteadyStateTolerance. A configuration that simply
+    omits it names a steady mode and time-marches anyway.
+
+    On this surface run_ss() supplies its own fallback tolerance, so the
+    configuration alone cannot tell -- which is why runAdaptiveDegree checks the
+    built solver rather than the config. Reached here through run(), the one
+    route that leaves it unarmed.
+    """
+    cfg = adaptive_config(tmp_path)
+    del cfg["SteadyStateTolerance"]
+
+    runner = MaNTA.Runner(SineSource())
+    runner.configure(cfg)
+
+    # run() refuses first, being the blunter of the two checks.
+    with pytest.raises(RuntimeError):
+        runner.run(0.1)
+
+    # ...and run_ss() arms its own tolerance, so it works -- but to that
+    # tolerance, the 1e-3 fallback, and not to the 1e-9 DegreeTolerance the
+    # config names. The two measure different things: DegreeTolerance is how well
+    # *resolved* the answer must be, SteadyStateTolerance how far the solve is
+    # driven towards the fixed point, and no amount of the first makes up for a
+    # loose second.
+    #
+    # Measured 3.7e-7 out, against the 1e-8 the same problem reaches when a
+    # tolerance is named. Not a large gap -- ||F|| = 1e-3 is a tighter statement
+    # about u than it looks on this problem -- but a real one, and the guard
+    # below is what keeps this case honest about which of the two it is testing.
+    runner.run_ss()
+    got = runner.getSolution(0, [0.5])[0]
+    exact = SineSource.exact(np.array([0.5]))[0]
+    assert got == pytest.approx(exact, abs=1e-6)
+    assert abs(got - exact) > 1e-8, (
+        "run_ss() without SteadyStateTolerance now converges as tightly as a "
+        "named one; if the fallback changed, say so here rather than loosening "
+        "the assertion above"
+    )
+
+
 @pytest.mark.parametrize(
     "override, fragment",
     [

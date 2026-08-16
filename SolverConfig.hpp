@@ -68,9 +68,11 @@ struct SolverConfig
     double                   PseudoTransientSERRate;
     double                   PseudoTransientSERFloor;
     bool                     SteadyStateDiagnostics;
+    bool                     SteadyStateSolve;
     bool                     DegreeAdaptation;
     double                   DegreeTolerance;
     unsigned int             MaxPolynomialDegree;
+    unsigned int             MaxDegreeIncrement;
     double                   DegreeAdaptationBase;
     std::string              TransportSystem;
     std::vector<std::string> PhysicsPlugins;

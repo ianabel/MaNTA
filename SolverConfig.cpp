@@ -258,9 +258,11 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(PseudoTransientSERRate, double);
     READ(PseudoTransientSERFloor, double);
     READ(SteadyStateDiagnostics, bool);
+    READ(SteadyStateSolve, bool);
     READ(DegreeAdaptation, bool);
     READ(DegreeTolerance, double);
     READ(MaxPolynomialDegree, unsigned);
+    READ(MaxDegreeIncrement, unsigned);
     READ(DegreeAdaptationBase, double);
     READ(TransportSystem, std::string);
     READ(PhysicsPlugins, std::vector<std::string>);
@@ -327,12 +329,32 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
 
         // Re-solving a transient from t_initial at a higher degree would mix
         // spatial and temporal error in an estimate that cannot tell them
-        // apart, and the transfer between levels drops the BDF history.
+        // apart, and each level would take the previous one's *final* state as
+        // its initial condition and integrate the same interval again -- a
+        // wrong answer rather than a poorly-justified one.
+        //
+        // Two conditions, because naming the mode is not enough: the mode is
+        // only consulted once steady-state termination is armed, and arming
+        // happens through the presence of SteadyStateTolerance. A config that
+        // simply omits it gets the default "PseudoTransient" and time-marches
+        // anyway, which is exactly how a transient got through this.
         if (c.SteadyStateSolver == "TimeMarch")
             throw std::invalid_argument(
                 "DegreeAdaptation = true is for steady solves, but "
                 "SteadyStateSolver = \"TimeMarch\". Use \"PseudoTransient\" or "
                 "\"Newton\".");
+
+        // Only of a config file. run_ss() arms termination itself, falling back
+        // to 1e-3, so a dict legitimately need not carry the key -- and
+        // runAdaptiveDegree checks the solver directly, which catches the dict
+        // surface's remaining route in (calling run() rather than run_ss()).
+        if (reader == Reader::Toml && !c.SteadyStateTolerance && !c.SteadyStateSolve)
+            throw std::invalid_argument(
+                "DegreeAdaptation = true needs a steady solve: set "
+                "SteadyStateSolve = true, or SteadyStateTolerance to name a "
+                "tolerance. Without either, steady-state termination is never "
+                "armed, SteadyStateSolver is not consulted, and the run "
+                "time-marches every degree.");
 
         if (c.DegreeTolerance <= 0.0)
             throw std::invalid_argument(
@@ -345,6 +367,14 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
                 "Giorgiani gives for how much one extra degree may be assumed to "
                 "buy. Outside it the rule either creeps up one degree at a time "
                 "or overshoots the ceiling in a single step.");
+
+        // Zero would leave the loop asking for a bump it is not allowed to
+        // take, so it would re-solve the same degree until the ceiling stopped
+        // it -- or forever, if the ceiling is where it already is.
+        if (c.MaxDegreeIncrement < 1)
+            throw std::invalid_argument(
+                "MaxDegreeIncrement must be at least 1: at zero the loop could "
+                "never raise the degree and would re-solve the same one.");
 
         if (c.MaxPolynomialDegree < c.Polynomial_degree)
             throw std::invalid_argument(
@@ -478,13 +508,27 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     }
 
     // Presence arms it, which is what the TOML reader has always done;
-    // setSteadyStateTolerance also sets TerminateOnSteadyState.
+    // Two ways to ask for a steady solve, and they compose: SteadyStateTolerance
+    // names a tolerance and arms termination with it, while SteadyStateSolve
+    // arms termination and takes the default. A config giving both gets the
+    // tolerance it asked for; one giving neither time-marches.
+    //
+    // The second key exists because arming used to be a side effect of choosing
+    // a tolerance, so asking for a steady solve meant having an opinion about
+    // how tight it should be -- and a config that named SteadyStateSolver but
+    // omitted the tolerance looked like a steady solve and was not one.
     if (config.SteadyStateTolerance)
     {
         logmsg<LOG_LEVEL::INFO>(
             "Running until steady state achieved (variation below {}) or end time reached.",
             *config.SteadyStateTolerance);
         system.setSteadyStateTolerance(*config.SteadyStateTolerance);
+    }
+    else if (config.SteadyStateSolve)
+    {
+        logmsg<LOG_LEVEL::INFO>(
+            "Running until steady state achieved (default tolerance) or end time reached.");
+        system.setSteadyStateTermination(true);
     }
 
     // Zero is off, and the setter rejects anything negative.

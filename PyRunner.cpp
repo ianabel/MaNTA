@@ -125,13 +125,16 @@ void PyRunner::run(double tFinal) {
         "Error: Runner must be configured before running solver.");
   }
   if (cfg.DegreeAdaptation) {
-    // A steady-only feature, and loadSolverConfig has already refused
-    // TimeMarch, so reaching run() rather than run_ss() means the caller wants
-    // the configured steady solve at a chosen degree. tFinal is passed through
-    // for the same reason runSolver takes it: it is ignored on the steady path.
-    adaptDegree(tFinal);
-    std::println("Done.");
-    return;
+    // run() means "integrate the transient", and degree adaptation is a
+    // steady-only feature -- so this is refused rather than quietly turned into
+    // a steady solve. Note what run() does two lines below when the config
+    // carries SteadyStateTolerance: it *clears* the flag and warns, because the
+    // caller asked for the path rather than the endpoint. Silently doing the
+    // opposite here would contradict it.
+    throw std::runtime_error(
+        "DegreeAdaptation is for steady solves; call run_ss() rather than "
+        "run(). Adapting the degree across a transient would restart each "
+        "level from the previous one's final state.");
   }
   if (system->TerminateOnSteadyState) {
     logmsg<LOG_LEVEL::WARNING>(

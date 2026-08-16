@@ -175,10 +175,23 @@ solution and a time derivative that did not belong together.
 Reaching a steady state
 -----------------------
 
-When only the final state matters, ``SteadyStateSolver`` chooses how to get
-there. It applies whenever steady-state termination is armed — ``run_ss()``, or a
-config carrying ``SteadyStateTolerance`` — and is ignored by a plain
-``run(tFinal)``, where the transient *is* the answer.
+When only the final state matters, ``SteadyStateSolve = true`` asks for a steady
+solve and ``SteadyStateSolver`` chooses how to reach one. Naming a
+``SteadyStateTolerance`` asks for the same thing and sets the tolerance with it;
+either arms it, and giving both uses the tolerance.
+
+.. warning::
+
+   ``SteadyStateSolver`` alone does **not** arm a steady solve. It names the
+   *method*, and the method is only consulted once termination is armed — so a
+   config setting ``SteadyStateSolver = "Newton"`` and nothing else time-marches,
+   which is not what it looks like. That is why ``SteadyStateSolve`` exists:
+   arming used to be a side effect of choosing a tolerance, so asking for a
+   steady solve meant having an opinion about how tight it should be.
+
+Steady-state termination is also armed by ``run_ss()``, which supplies its own
+fallback tolerance, and is ignored by a plain ``run(tFinal)``, where the
+transient *is* the answer.
 
 ``PseudoTransient`` (the default)
    Pseudo-transient continuation, after Kelley and Keyes. A backward-Euler mass
@@ -403,9 +416,10 @@ until it is good enough:
    DegreeAdaptation = true
    DegreeTolerance = 1.0e-9       # relative L2 error to reach
    MaxPolynomialDegree = 12       # where to give up
+   MaxDegreeIncrement = 3         # most degrees to add at once (the default)
 
-On ``AdjointPoster`` at 6 cells that is three solves — ``k`` = 2, 9, 10 — taking
-the estimated error from 2.1e-3 to 2.0e-10.
+On ``AdjointPoster`` at 6 cells that is four solves — ``k`` = 2, 5, 8, 10 —
+taking the estimated error 2.1e-3, 8.6e-6, 1.6e-8, 2.0e-10.
 
 The estimate is the gap between the solution and its own postprocessing,
 :math:`E_K^2 = \|u^* - u_h\|^2_{L^2(K)} / |K|` per cell (Capasso *et al.*
@@ -429,6 +443,14 @@ asks for *fewer* of them. The rule assumes no convergence *order* at all, which
 is deliberate: :math:`u^*`'s observed rate is not dependable enough to calibrate
 against — see :doc:`superconvergence`.
 
+``MaxDegreeIncrement`` then caps each step, at 3 by default. The rule is free to
+ask for a large jump from a coarse first solve — the run above asked for +7 from
+``k`` = 2 — and taking it would clear most of the budget without reporting
+anything on the way. The cap costs solves and buys a legible trajectory; when it
+binds, the run says so::
+
+   raising k from 2 to 5 (the rule asked for +7, capped at +3)
+
 Four things worth knowing:
 
 * **It implies** ``Superconvergent = true``. The whole estimate rests on
@@ -447,7 +469,12 @@ Four things worth knowing:
 * **The ceiling warns rather than failing.** Reaching ``MaxPolynomialDegree``
   without meeting the tolerance leaves the best available answer in the output
   and logs a warning. A run that stopped there did not converge, whatever the
-  files look like.
+  files look like — and it may be telling you something: an endpoint
+  singularity is exactly what raising the degree cannot fix. ``NonlinDiffTest``
+  climbs to the ceiling because its steady state behaves like
+  :math:`(1-x)^{1/3}` at the upper boundary, and the estimate falls only like
+  :math:`1/k`. A graded mesh is the answer to that, not a higher degree; the
+  *worst cell* line tells you where to put one.
 
 Each level writes output, so the files left behind are the final level's. Levels
 after the first start from the previous one's solution, projected onto the new

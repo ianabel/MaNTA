@@ -459,7 +459,10 @@ These are deliberate and tracked, not oversights:
   and the gradients are simply never computed.
 
   Two numbers worth keeping. On `AdjointPoster` at 6 cells the loop runs
-  `k` = 2, 9, 10 and takes the estimate from 2.1e-3 to 2.0e-10 in three solves.
+  `k` = 2, 5, 8, 10 and takes the estimate 2.1e-3, 8.6e-6, 1.6e-8, 2.0e-10 --
+  four solves under the default `MaxDegreeIncrement = 3`. Without the cap it is
+  three solves, 2, 9, 10, reaching the same place with nothing to read in
+  between.
   On `NonlinDiffTest` it climbs to the ceiling and stops, because that case's
   exact solution is `(1 - x/sqrt(t))^(1/n)` — a square-root branch point sitting
   on the upper boundary, inside the last cell — and the estimate falls like
