@@ -282,26 +282,47 @@ Measured local orders, `t = 0.25`, grids 4, 8, 16, 32, `Superconvergent = false`
 | `ManufacturedField` (1 DOF) | 3 | 3.96, 3.99, 4.00 | 4.99, 4.89, 4.71 | 5.12, 4.37, 4.10 |
 | `ManufacturedFieldVector` (5 DOF) | 2 | 2.93, 2.98, 2.99 | 4.04, 4.01, 4.00 | 4.03, 4.01, 4.00 |
 
-and with `Superconvergent = true`, `ManufacturedField` at `k = 2`:
-`u` 2.92, 2.97, 2.99 and `u*` **4.24, 3.99, 3.97**.
+and `u*` with the flag off against the flag on, `ManufacturedField`:
+
+| k | `u` flag on | `u*` flag off | `u*` flag on |
+|---|---|---|---|
+| 1 | 1.87, 1.96, 1.98 | 2.21, 2.09, 2.05 | **3.12, 3.05, 3.01** |
+| 2 | 2.92, 2.97, 2.99 | 4.47, 4.08, 3.96 | 4.24, 3.99, 3.97 |
+| 3 | 3.94, 3.98, 3.99 | 4.99, 4.89, 4.71 | 5.27, 4.98, 4.94 |
 
 Three things to read out of that.
 
 * `u_h` holds `k+1` at every degree and on both models, which is the headline.
-* **`psi` converges at `k+2`, not at the `k+1` the plan expected.** That is not
-  luck: the field quadrature is exact on a degree-`k` field, so `psi_h` is
-  exactly `Int u_h dx` and its error is `Int (u_h - u) dx` -- a linear functional
-  of the error, which superconverges by the usual duality argument rather than
-  tracking the `L2` norm. The multi-DOF model lands on `4.00` three times over,
-  which is the same statement for `L psi = f(u_h)`.
-* **`u*` reaches `k+2` with the flag on, so the fourth test asserts it** rather
-  than asserting that the flag throws. Geometry is a function of `(psi, x)` and
-  the star nodes are just more `x`, so the coupling needs no special case in
-  `ComputePhysics`'s `states.size()` loop -- and does not get one. Note that at
-  `k = 2` the flag-off column already reaches `k+2` here, exactly as it does for
-  the uncoupled linear problem, so the flag is preserving the extra order rather
-  than restoring it; the `k = 1` case, where the uncoupled study shows the flag
-  restoring an order it had lost, is not measured with a field attached.
+* **`u*` reaches `k+2` with the flag on at every degree, so the fourth test
+  asserts it** rather than asserting that the flag throws. Geometry is a function
+  of `(psi, x)` and the star nodes are just more `x`, so the coupling needs no
+  special case in `ComputePhysics`'s `states.size()` loop -- and does not get one.
+
+  **`k = 1` is the row that earns the test**: it is the only configuration in the
+  file where the flag-on assertion is not also satisfied flag-off, i.e. the only
+  one showing the flag *doing* something rather than failing to break something,
+  and it is asserted as such. That is not a new phenomenon -- it reproduces,
+  under coupling, the `k = 1` / `k = 2` split the uncoupled study measures and
+  the next section records as unexplained: flag off, the interpolatory scheme's
+  postprocessing superconverges at `k = 2` but not at `k = 1`. The coupling
+  neither causes nor cures it. The `k = 3` flag-off row is the one genuinely new
+  number, and it *decays* -- 4.99, 4.89, 4.71 -- the same shape as the nonlinear
+  flux's transient superconvergence below, where the flag-on column does not.
+* **`psi` starts above `k+1` and slows down**, which is why the assertion is at
+  `k+1` and why the extra order is not claimed. `k = 2` gives 4.82, 3.93, 3.87
+  and `k = 3` gives 5.12, 4.37, 4.10. There *is* a mechanism for `k+2` -- the
+  field quadrature is exact on a degree-`k` field, so `psi_h` is exactly
+  `Int u_h dx` and its error is `Int (u_h - u) dx`, a linear functional of the
+  error rather than its `L2` norm, which superconverges by the usual duality
+  argument -- but a falling rate at `n = 32` is precisely the pattern this
+  codebase has already measured and been caught by. See "the two italicised
+  flag-off entries" below: the nonlinear flux's `u*` fell by 6.9, 11.7, 9.1 and
+  then 2.3, so a sweep ending at `n = 32` reported 3.21 and looked perfectly
+  healthy. Until this sweep is refined far enough to tell a settled `k+2` from a
+  pre-asymptotic transient, `k+1` is what the evidence supports. The multi-DOF
+  model's `psi` is the one column that does *not* decay (4.03, 4.01, 4.00), and
+  it is asserted at `k+1` too, on the same three-refinements-is-not-settled
+  grounds.
 
 ### Which solve produced these numbers
 
@@ -320,32 +341,55 @@ disagreement between two solves of the same equations would be an order of 0.1 o
 worse.
 
 **`getFieldSweepStats().fallbacks` is zero at every refinement, on every case in
-the file**, so no measurement here is the exact path wearing the iterative path's
-name. The sweep runs 2.5 to 3.6 iterations per Jacobian solve. One outlier is
-worth recording so it is not mistaken for a defect later: the multi-DOF case at
-`n = 8` takes 1591 field solves and 4877 sweeps where its neighbours take ~200
-and ~700. That is IDA working harder over that particular step sequence, not the
-sweep failing -- the fallback count is still zero and the local order is 2.93.
+the file, and that is asserted rather than printed** (`checkNoFallbacks`). The
+distinction is the whole finding: forcing an escalation by capping the sweep at
+one iteration leaves every local order in the file *bit for bit unchanged* -- the
+escalation returns the exact path's answer -- and drives the two-mode gap from
+1.3e-7 to **exactly zero**, so the agreement check passes more strongly while the
+study has stopped measuring the iterative mode at all. Only the fallback count
+tells the difference, and only if something checks it.
 
-**These tests are not vacuous, and that was checked rather than assumed.** Two
+The sweep runs 2.5 to 3.6 iterations per Jacobian solve here. Read that beside
+`FieldJacobianTests.cpp`'s 13 to 38 sweeps on *random* right-hand sides, where
+three of six exhaust the shipped cap of 20: the two are not in tension, and the
+contrast is the explanation for why that cap is adequate in a real run. Newton's
+right-hand sides are small, smooth corrections about a nearby state; a random
+vector is the hard case. Neither number says anything about the cap on its own.
+
+One outlier is worth recording so it is not mistaken for a defect later: the
+multi-DOF case at `n = 8` takes 1591 field solves and 4877 sweeps where its
+neighbours take ~200 and ~700. That is IDA working harder over that particular
+step sequence, not the sweep failing -- the fallback count is still zero and the
+ratio, 3.07 sweeps per solve, is inside the band every other row sits in.
+
+**These tests are not vacuous, and that was checked rather than assumed.** Three
 mutations, applied and reverted:
 
 | mutation | effect |
 |---|---|
 | `SigmaFn` drops `s.geom(0)`, i.e. the geometry never reaches the physics | the flux check fails at every sample point; both single-DOF studies die with `IDASolve could not complete`; the multi-DOF orders collapse to -0.001, -0.000, -0.000 |
 | `ManufacturedField::FieldResidual` becomes `psi - 1.05 Int u dx`, a 5% error in the field row -- not even a sign error | `k = 1` orders fall to 1.79, 0.85, 0.07; `k = 2` to 0.26, 0.00, -0.00; `k = 3` to 0.005, 0.000, 0.000; `psi` to -0.007 |
+| `FieldSolveMaxSweeps` capped at 1, so every Jacobian solve escalates | every order unchanged, the two-mode gap improves to exactly zero, and only `checkNoFallbacks` fires -- 382 fallbacks in 382 solves at `k = 1, n = 4` |
 
-The second is the one that matters: it is the failure mode the whole file exists
-for, and the study loses the rate entirely rather than degrading by an order.
-Note also that the two solve modes still agreed to 1e-8 under both mutations,
-which is the point of that cross-check -- it is a statement about the linear
-solve, and carries no information about the equations.
+The second is the one that matters for the equations: it is the failure mode the
+whole file exists for, and the study loses the rate entirely rather than
+degrading by an order. The third is the one that matters for the *method*, and it
+is why the fallback count is asserted.
+
+Note that the two solve modes still agreed -- to 1e-8 under the first two
+mutations, and exactly under the third. That is the point of the cross-check
+rather than a weakness in it: it is a statement about the linear solve, and
+carries no information whatever about the equations.
 
 ### What the coupled study does not cover
 
-* **`Superconvergent = true` at `k = 1` and `k = 3`.** Only `k = 2` is measured
-  with a field attached, so the one configuration where the uncoupled study shows
-  the flag *restoring* a lost order -- `k = 1` -- is untested under coupling.
+* **`Superconvergent = true` on the multi-DOF model.** The flag is measured at
+  `k = 1, 2, 3`, but only against `ManufacturedField`; nothing runs the star nodes
+  against a geometry with five field unknowns behind it.
+* **A settled rate for `psi`, or for `u*` at `k = 3`.** Both sweeps stop at
+  `n = 32` and both are still moving there. Refuting a pre-asymptotic transient
+  takes `n = 64`, as `the_flag_off_superconvergence_at_k2_is_genuine_not_pre_asymptotic`
+  had to do for the uncoupled case.
 * **A differential field DOF.** Both manufactured models are algebraic here.
   `CoupledResidualTests.cpp` runs the differential declaration end to end at one
   grid and compares its answer to the algebraic one, but nothing measures its

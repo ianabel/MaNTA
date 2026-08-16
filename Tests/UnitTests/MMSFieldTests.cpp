@@ -18,6 +18,7 @@
 #include "ManufacturedFields.hpp"
 
 #include <cmath>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -30,9 +31,9 @@ using namespace mms;
 /// evaluated on the *exact* solution. Independent of the solver and of the
 /// physics case -- the case is checked against it below.
 template <ManufacturedFieldModel M>
-double exactFlux(double x, double t)
+double exactFlux(M const &model, double x, double t)
 {
-    return coupledKappa * M::geometryExact(x, t) * exactDerivative(x, t);
+    return coupledKappa * model.geometryExact(x, t) * exactDerivative(x, t);
 }
 
 /// d(exactFlux)/dx by the six-point central stencil, which is O(h^6).
@@ -53,12 +54,12 @@ double exactFlux(double x, double t)
 /// far from a kink in the vector model's piecewise linear geometry -- see
 /// kVectorSampleX.
 template <ManufacturedFieldModel M>
-double dFluxdx(double x, double t)
+double dFluxdx(M const &m, double x, double t)
 {
     constexpr double h = 2e-3;
-    return (-1.0 * exactFlux<M>(x - 3.0 * h, t) + 9.0 * exactFlux<M>(x - 2.0 * h, t) -
-            45.0 * exactFlux<M>(x - h, t) + 45.0 * exactFlux<M>(x + h, t) -
-            9.0 * exactFlux<M>(x + 2.0 * h, t) + 1.0 * exactFlux<M>(x + 3.0 * h, t)) /
+    return (-1.0 * exactFlux(m, x - 3.0 * h, t) + 9.0 * exactFlux(m, x - 2.0 * h, t) -
+            45.0 * exactFlux(m, x - h, t) + 45.0 * exactFlux(m, x + h, t) -
+            9.0 * exactFlux(m, x + 2.0 * h, t) + 1.0 * exactFlux(m, x + 3.0 * h, t)) /
            (60.0 * h);
 }
 
@@ -66,11 +67,11 @@ double dFluxdx(double x, double t)
 /// right. u = sin(pi x)(1 + t) is linear in t, so the central difference in time
 /// is exact to round-off and contributes nothing to the tolerance.
 template <ManufacturedFieldModel M>
-double sourceResidual(double x, double t)
+double sourceResidual(M const &m, double x, double t)
 {
     constexpr double ht = 1e-3;
     const double dudt = (exactSolution(x, t + ht) - exactSolution(x, t - ht)) / (2.0 * ht);
-    return dudt - dFluxdx<M>(x, t) - coupledSource<M>(x, t);
+    return dudt - dFluxdx(m, x, t) - coupledSource(m, x, t);
 }
 
 /// The scatter of x the single-DOF model is checked at, and the t values both
@@ -107,6 +108,42 @@ std::string sweepStats(Rates const &r)
     return s;
 }
 
+/// Every refinement of an iterative-mode sweep solved its Jacobian by sweeping.
+///
+/// **This has to be asserted, not merely printed.** solveCoupledJacIterative
+/// escalates to the exact Schur solve on exhausting FieldSolveMaxSweeps, and the
+/// escalation returns the exact path's answer bit for bit -- so a change that
+/// made the sweep stop converging would leave every order in this file
+/// unchanged, make the two-mode agreement check pass *more* strongly, and
+/// silently stop measuring the iterative mode at all. The fallback count is the
+/// only thing that can tell the difference, and a count that is looked at but
+/// not checked is the same vacuity in a different place.
+void checkNoFallbacks(Rates const &r)
+{
+    for (size_t i = 0; i < r.cells.size(); ++i)
+        BOOST_TEST(r.fallbacks[i] == 0L,
+                   "the sweep escalated to the exact solve at n="
+                       << r.cells[i] << " (" << r.fallbacks[i] << " fallbacks in "
+                       << r.fieldSolves[i]
+                       << " solves), so this refinement measures the exact path");
+}
+
+/// The flag-off, iterative-mode sweep at degree k, computed once.
+///
+/// the_coupled_problem_converges_at_k_plus_one_in_u and psi_converges_too both
+/// want the k = 2 column and each sweep is four full integrations, so it is
+/// computed on first use and kept. A std::map rather than a vector because the
+/// reference must stay valid as later degrees are added: map nodes are stable,
+/// vector elements are not.
+Rates const &iterativeSweep(Index k)
+{
+    static std::map<Index, Rates> cache;
+    auto it = cache.find(k);
+    if (it == cache.end())
+        it = cache.emplace(k, solveCoupledAndMeasure<ManufacturedField>(k, kCells)).first;
+    return it->second;
+}
+
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(mms_field_tests)
@@ -117,15 +154,18 @@ BOOST_AUTO_TEST_CASE(the_manufactured_source_is_consistent_with_the_exact_soluti
     // below would still converge -- to a different function -- and the rate
     // would look fine, so this is the half of the split that an order study
     // cannot do. It also costs nothing: no solver is involved.
+    const ManufacturedField scalarModel;
+    const ManufacturedFieldVector vectorModel;
+
     double worstScalar = 0.0, worstVector = 0.0;
     for (double t : kSampleT)
     {
         for (double x : kSampleX)
             worstScalar =
-                std::max(worstScalar, std::abs(sourceResidual<ManufacturedField>(x, t)));
+                std::max(worstScalar, std::abs(sourceResidual(scalarModel, x, t)));
         for (double x : kVectorSampleX)
-            worstVector = std::max(
-                worstVector, std::abs(sourceResidual<ManufacturedFieldVector>(x, t)));
+            worstVector =
+                std::max(worstVector, std::abs(sourceResidual(vectorModel, x, t)));
     }
 
     BOOST_TEST_MESSAGE(std::format(
@@ -142,7 +182,8 @@ BOOST_AUTO_TEST_CASE(the_physics_case_computes_the_flux_the_source_was_derived_f
     // source if SigmaFn really is kappa g q. A case whose flux disagreed with it
     // would converge to the wrong function at the right rate, exactly as a sign
     // error would.
-    ManufacturedGeometricDiffusion<ManufacturedField> problem;
+    const ManufacturedField model;
+    ManufacturedGeometricDiffusion<ManufacturedField> problem(model);
     const double t = 0.17;
 
     for (double x : kSampleX)
@@ -150,9 +191,9 @@ BOOST_AUTO_TEST_CASE(the_physics_case_computes_the_flux_the_source_was_derived_f
         State s(1, 0, 0, 1);
         s.u(0) = exactSolution(x, t);
         s.q(0) = exactDerivative(x, t);
-        s.geom(0) = ManufacturedField::geometryExact(x, t);
+        s.geom(0) = model.geometryExact(x, t);
 
-        BOOST_TEST(problem.SigmaFn(0, s, x, t) == exactFlux<ManufacturedField>(x, t),
+        BOOST_TEST(problem.SigmaFn(0, s, x, t) == exactFlux(model, x, t),
                    boost::test_tools::tolerance(1e-13));
 
         // ...and the geometry derivative that A1 is built from is the derivative
@@ -183,7 +224,7 @@ BOOST_AUTO_TEST_CASE(the_coupled_problem_converges_at_k_plus_one_in_u)
     // than the 0.25 of headroom the rate assertion itself carries.
     for (Index k = 1; k <= 3; ++k)
     {
-        const Rates iterative = solveCoupledAndMeasure<ManufacturedField>(k, kCells);
+        const Rates &iterative = iterativeSweep(k);
         const Rates exact = solveCoupledAndMeasure<ManufacturedField>(
             k, kCells, false, SystemSolver::FieldSolveMode::Exact);
 
@@ -203,6 +244,11 @@ BOOST_AUTO_TEST_CASE(the_coupled_problem_converges_at_k_plus_one_in_u)
         for (double o : exact.localU)
             BOOST_CHECK_GT(o, k + 1 - 0.25);
 
+        // ...and that the iterative column really was measured on the iterative
+        // path. Without this the agreement check above is satisfied *best* by
+        // the sweep failing completely.
+        checkNoFallbacks(iterative);
+
         for (size_t i = 0; i < iterative.localU.size(); ++i)
             BOOST_TEST(std::abs(iterative.localU[i] - exact.localU[i]) < 0.01,
                        "k = " << k << ": the two solve modes disagree between n="
@@ -217,17 +263,24 @@ BOOST_AUTO_TEST_CASE(psi_converges_too)
     // psi = Int u dx, so its error is the quadrature error of an O(h^{k+1})
     // function and should fall at least as fast.
     //
-    // Measured, it falls *faster*: 4.82, 3.93, 3.87 at k = 2, i.e. k+2 rather
-    // than the k+1 asserted. That is not luck. The field quadrature is exact on
-    // a degree-k field, so psi_h is exactly Int u_h dx and its error is
-    // Int (u_h - u) dx -- a linear functional of the error, which superconverges
-    // by the usual duality argument rather than tracking the L2 norm. The
-    // assertion stays at k+1 because that is what the discretisation guarantees;
-    // the extra order is recorded in Tests/README.md, not pinned here.
-    const Rates r = solveCoupledAndMeasure<ManufacturedField>(2, kCells);
+    // Measured, it starts faster and slows down: 4.82, 3.93, 3.87 at k = 2 and
+    // 5.12, 4.37, 4.10 at k = 3. There is a mechanism for an extra order -- the
+    // field quadrature is exact on a degree-k field, so psi_h is exactly
+    // Int u_h dx and its error is Int (u_h - u) dx, a linear functional of the
+    // error rather than its L2 norm -- but that is not what is asserted here,
+    // because the sweep does not show a *settled* k+2.
+    //
+    // A rate that is still falling at n = 32 is the pattern the nonlinear-flux
+    // postprocessing already showed in this codebase (Tests/README.md, "the two
+    // italicised flag-off entries"): u* fell by 6.9, 11.7, 9.1 and then 2.3, so
+    // a sweep ending at n = 32 reported 3.21 and looked perfectly healthy. Until
+    // this one is refined far enough to distinguish a genuine k+2 from a
+    // pre-asymptotic transient, k+1 is the claim the evidence supports.
+    const Rates &r = iterativeSweep(2);
     BOOST_TEST_MESSAGE("local orders in psi: " << format(r.localExtra) << r.detail);
     for (double o : r.localExtra)
         BOOST_CHECK_GT(o, 2.75);
+    checkNoFallbacks(r);
 }
 
 BOOST_AUTO_TEST_CASE(the_multi_dof_field_converges_the_same_way)
@@ -244,10 +297,13 @@ BOOST_AUTO_TEST_CASE(the_multi_dof_field_converges_the_same_way)
 
     // psi too: five DOFs constrained by L psi = f(u_h) rather than one, which is
     // the case where a row or column confusion in the field block would show.
-    // Measured 4.03, 4.01, 4.00 -- k+2, for the same reason the single-DOF psi
-    // superconverges -- but asserted at k+1.
+    // Measured 4.03, 4.01, 4.00 -- and this one does *not* decay over the sweep,
+    // unlike the single-DOF psi above. Still asserted at k+1: three refinements
+    // is not enough to call it settled either.
     for (double o : r.localExtra)
         BOOST_CHECK_GT(o, 2.75);
+
+    checkNoFallbacks(r);
 }
 
 BOOST_AUTO_TEST_CASE(superconvergent_coupling_reaches_k_plus_two)
@@ -256,21 +312,73 @@ BOOST_AUTO_TEST_CASE(superconvergent_coupling_reaches_k_plus_two)
     // this should work through ComputePhysics's states.size() loop with no
     // special case.
     //
-    // It does: u* reaches 4.24, 3.99, 3.97 at k = 2, so this asserts k+2 rather
-    // than asserting that the flag throws with a field attached -- which was the
-    // alternative, following the precedent that spatial adjoint parameters with
+    // It does, at every degree, so this asserts k+2 rather than asserting that
+    // the flag throws with a field attached -- which was the alternative,
+    // following the precedent that spatial adjoint parameters with
     // Superconvergent = true throw rather than silently redefining the answer.
     //
-    // Note what this does *not* show. At k = 2 the flag-off column already
-    // reaches k+2 here (4.47, 4.08, 3.96, from psi_converges_too's run), exactly
-    // as it does for the uncoupled linear problem, so the flag is preserving the
-    // extra order rather than restoring it. The k = 1 case, where the uncoupled
-    // study shows a genuine restoration, is not measured with a field attached.
-    const Rates r = solveCoupledAndMeasure<ManufacturedField>(2, kCells, /*superconvergent=*/true);
-    BOOST_TEST_MESSAGE("local orders in u*: " << format(r.localStar)
-                                              << "  u: " << format(r.localU) << r.detail);
-    for (double o : r.localStar)
-        BOOST_CHECK_GT(o, 3.75);
+    // **k = 1 is the row that earns the test.** It is the only configuration in
+    // this file where the flag-on assertion is not also satisfied flag-off, i.e.
+    // the only one showing the flag *doing* something rather than failing to
+    // break something:
+    //
+    //     k = 1:  flag off  u* 2.21, 2.09, 2.05   |   flag on  u* 3.12, 3.05, 3.01
+    //     k = 2:  flag off  u* 4.47, 4.08, 3.96   |   flag on  u* 4.24, 3.99, 3.97
+    //     k = 3:  flag off  u* 4.99, 4.89, 4.71   |   flag on  u* 5.27, 4.98, 4.94
+    //
+    // That is not a new phenomenon: it reproduces, under coupling, the split
+    // MMSConvergenceTests measures without one and Tests/README.md records as
+    // unexplained -- flag off, the interpolatory scheme's postprocessing
+    // superconverges at k = 2 but not at k = 1, and the flag restores it at
+    // k = 1 and preserves it at k = 2. The coupling neither causes nor cures it.
+    //
+    // The k = 3 flag-off row is the one genuinely new number, and it decays:
+    // 4.99, 4.89, 4.71, the same shape as the nonlinear flux's transient
+    // superconvergence. The flag-on column does not (5.27, 4.98, 4.94).
+    const std::vector<double> floorFor = {0.0, 2.75, 3.75, 4.65};
+
+    for (Index k = 1; k <= 3; ++k)
+    {
+        const Rates on = solveCoupledAndMeasure<ManufacturedField>(k, kCells,
+                                                                   /*superconvergent=*/true);
+        const Rates &off = iterativeSweep(k);
+
+        BOOST_TEST_MESSAGE("k = " << k << " local orders in u*: flag off "
+                                  << format(off.localStar) << "  flag on "
+                                  << format(on.localStar) << "   (u, flag on: "
+                                  << format(on.localU) << ")" << on.detail);
+
+        // k+2, at every step of the sweep. k = 3 gets 0.35 of headroom rather
+        // than 0.25 because its finest u* is ~2e-9, within about an order of the
+        // 1e-9 relative integration tolerance, so that point is the closest in
+        // the file to measuring the integrator rather than the mesh.
+        for (double o : on.localStar)
+            BOOST_CHECK_GT(o, floorFor[static_cast<size_t>(k)]);
+
+        // u* must be worth having: better than u_h itself, which is the
+        // assertion MMSConvergenceTests makes for the uncoupled problems.
+        for (size_t i = 0; i < on.localStar.size(); ++i)
+            BOOST_TEST(on.localStar[i] > on.localU[i] + 0.5,
+                       "k = " << k << ": u* is no better than u between n="
+                              << on.cells[i] << " and n=" << on.cells[i + 1] << " (u "
+                              << on.localU[i] << ", u* " << on.localStar[i] << ")");
+
+        checkNoFallbacks(on);
+
+        // ...and the demonstration itself, at the one degree where there is one
+        // to make. Asserted rather than left to the message above, because a
+        // change that quietly cost the flag its k = 1 restoration would
+        // otherwise show up nowhere: every other assertion in this file is
+        // satisfied flag-off as well as flag-on.
+        if (k == 1)
+            for (size_t i = 0; i < on.localStar.size(); ++i)
+                BOOST_TEST(on.localStar[i] > off.localStar[i] + 0.5,
+                           "k = 1: the flag no longer restores the postprocessing's extra "
+                           "order between n="
+                               << on.cells[i] << " and n=" << on.cells[i + 1]
+                               << " (flag off " << off.localStar[i] << ", flag on "
+                               << on.localStar[i] << ")");
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

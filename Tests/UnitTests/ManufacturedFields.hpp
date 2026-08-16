@@ -76,8 +76,12 @@ public:
     // *not* used by the model itself -- FieldResidual is compensated against the
     // discrete state, as the header comment above insists -- so nothing here can
     // make the constraint measure itself.
+    //
+    // Instance methods, not statics, and that is load-bearing rather than
+    // stylistic -- see the note on ManufacturedFieldVector's, where a model
+    // parameter makes the difference between a right and a wrong oracle.
 
-    static Vector fieldExact(Time t)
+    Vector fieldExact(Time t) const
     {
         Vector psi(1);
         psi(0) = manufacturedPsiExact(t);
@@ -85,13 +89,13 @@ public:
     }
 
     /// g(x, t) = 1 + psi_exact(t) c(x).
-    static Value geometryExact(Position x, Time t)
+    Value geometryExact(Position x, Time t) const
     {
         return 1.0 + manufacturedPsiExact(t) * manufacturedC(x);
     }
 
     /// d g / d x, with c(x) = cos(pi x) so c'(x) = -pi sin(pi x).
-    static Value dGeometryExact_dx(Position x, Time t)
+    Value dGeometryExact_dx(Position x, Time t) const
     {
         return -manufacturedPsiExact(t) * M_PI * std::sin(M_PI * x);
     }
@@ -223,46 +227,30 @@ public:
                 dR[m].Variable()(0, j) = -strength * weights(j) * basis(m, points[j]);
     }
 
-    void InitialFieldValue(VectorRef out) override
-    {
-        // The exact psi at t = 0, from L psi = strength * f(u_exact).
-        Vector rhs = strength * fExact(0.0);
-        Vector x = L.partialPivLu().solve(rhs);
-        out = x;
-    }
-
-    /// The exact psi at time t, for the order study to compare against.
-    ///
-    /// L psi = strength f, and L is fixed, so this is strength times the
-    /// unit-strength solution rather than a second solve -- one implementation
-    /// of the oracle, which is what keeps psiExact and fieldExact from drifting.
-    Vector psiExact(Time t) const { return strength * fieldExact(t); }
+    /// The exact psi at t = 0, from L psi = strength * f(u_exact) -- through the
+    /// oracle above rather than a third solve of the same system.
+    void InitialFieldValue(VectorRef out) override { out = fieldExact(0.0); }
 
     // ---- the exact solution, for a study to compare against ----------------
     //
-    // The same three the single-DOF model declares. `fieldExact` is the
-    // *unit-strength* psi, so it is the oracle for a default-constructed model;
-    // a study that dials the coupling up must scale it the way psiExact does.
+    // The same three the single-DOF model declares, and the reason all six are
+    // instance methods rather than statics. `strength` is a *constructor
+    // argument*, so the exact psi is a property of the object and not of the
+    // type: a static oracle would silently be the strength-1 answer, and an
+    // order study that dialled the coupling up would derive its manufactured
+    // source from the wrong geometry. That is the right rate to the wrong
+    // function -- exactly the failure the study exists to catch, arriving
+    // through the study's own fixture. As instance methods the mistake is not
+    // available to make.
 
-    /// psi_exact(t) at strength 1, i.e. L^-1 f(u_exact(., t)).
+    /// The exact psi at time t, for the order study to compare against.
     ///
-    /// u_exact is (1 + t) times its t = 0 shape and both f and L^-1 are linear,
-    /// so the whole t-dependence is that factor. Computed once: the transport
-    /// source calls this at every node of every residual evaluation, and fExact
-    /// is a 4001-point Simpson rule per field DOF.
-    static Vector fieldExact(Time t)
-    {
-        static const Vector unit = []
-        {
-            // Never slice an Eigen solve() result -- assign it first.
-            Vector x = manufacturedL(N).partialPivLu().solve(fExact(0.0));
-            return x;
-        }();
-        return (1.0 + t) * unit;
-    }
+    /// L psi = strength f and L is fixed, so this is strength times the
+    /// unit-strength solution rather than a second solve.
+    Vector fieldExact(Time t) const { return strength * unitField(t); }
 
     /// g(x, t) = 1 + (the hat interpolant of psi_exact) at x.
-    static Value geometryExact(Position x, Time t)
+    Value geometryExact(Position x, Time t) const
     {
         return 1.0 + interpolate(fieldExact(t), x);
     }
@@ -273,7 +261,7 @@ public:
     /// model must refine on grids whose cell boundaries include them -- any
     /// multiple of N-1 = 4 cells -- or the discontinuity falls inside a cell and
     /// the order collapses for a reason that has nothing to do with the coupling.
-    static Value dGeometryExact_dx(Position x, Time t)
+    Value dGeometryExact_dx(Position x, Time t) const
     {
         const Vector psi = fieldExact(t);
         const double h = 1.0 / static_cast<double>(N - 1);
@@ -283,6 +271,23 @@ public:
     }
 
 private:
+    /// psi_exact(t) at strength 1, i.e. L^-1 f(u_exact(., t)).
+    ///
+    /// u_exact is (1 + t) times its t = 0 shape and both f and L^-1 are linear,
+    /// so the whole t-dependence is that factor. Computed once: the transport
+    /// source calls fieldExact at every node of every residual evaluation, and
+    /// fExact is a 4001-point Simpson rule per field DOF.
+    static Vector unitField(Time t)
+    {
+        static const Vector unit = []
+        {
+            // Never slice an Eigen solve() result -- assign it first.
+            Vector x = manufacturedL(N).partialPivLu().solve(fExact(0.0));
+            return x;
+        }();
+        return (1.0 + t) * unit;
+    }
+
     /// The hat function centred on node m, evaluated at x.
     static double basis(Index m, Position x)
     {

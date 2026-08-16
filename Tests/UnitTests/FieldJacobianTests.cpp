@@ -1183,6 +1183,14 @@ BOOST_AUTO_TEST_CASE(a_divergent_five_dof_coupling_is_still_solved_exactly)
     BOOST_TEST_MESSAGE("five-DOF sweeps by right-hand side, cap 20 (* = escalated):"
                        << atDefault << "\n  the same at cap 60:" << atSixty);
 
+    // Read these 13-38 sweeps beside MMSFieldTests.cpp, which measures 2.5 to 3.6
+    // sweeps per Jacobian solve over four full integrations and never escalates
+    // once. The two are not in tension and the contrast is the point: a *random*
+    // right-hand side is the hard case, while Newton's are small, smooth
+    // corrections about a nearby state, and that is why the shipped cap of 20 is
+    // adequate in a real run despite being provably inadequate here. Neither
+    // number means anything about the cap on its own.
+
     // The accelerator does cope with five divergent field unknowns -- every
     // right-hand side converges once there is room for it.
     BOOST_CHECK_EQUAL(escalatedAtDefault + convergedAtDefault, 6);

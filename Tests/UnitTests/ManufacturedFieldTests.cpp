@@ -163,12 +163,12 @@ BOOST_AUTO_TEST_CASE(the_vector_models_residual_vanishes_at_the_exact_solution)
 
     auto [states, points, weights] = sampleExactOnNodes(Grid(0.0, 1.0, 16), 3, t);
 
-    // psiExact is a genuinely independent computation from FieldResidual's own
+    // fieldExact is a genuinely independent computation from FieldResidual's own
     // f() -- a fine Simpson rule against u_exact, not the solver's
     // interpolatory quadrature against the discrete state -- so this is the
     // same kind of check as the_residual_vanishes_at_the_exact_solution above,
     // not a comparison of the fixture to itself.
-    Vector psi = model.psiExact(t);
+    Vector psi = model.fieldExact(t);
     Vector dpsidt = Vector::Zero(N);
 
     Vector out = Vector::Zero(N);

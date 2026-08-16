@@ -397,11 +397,19 @@ inline std::string report(Index k, Rates const &r, const char *extraName = nullp
 /// The three are the *exact* field solution and the geometry it produces. They
 /// are what the manufactured source is differentiated from, and they must not be
 /// functions of the discrete state -- see above.
+///
+/// They are asked for on an *instance* rather than on the type. A model whose
+/// exact solution depends on a constructor argument -- ManufacturedFieldVector's
+/// coupling strength -- cannot answer statically, and a static oracle would
+/// quietly answer for the default instead: the manufactured source would then be
+/// derived from a geometry the model does not have, which converges at the right
+/// rate to the wrong function. That is the one failure this whole study exists to
+/// catch, so it must not be reachable through the study's own fixtures.
 template <class M>
-concept ManufacturedFieldModel = requires(Time t, Position x) {
-    { M::fieldExact(t) } -> std::convertible_to<Vector>;
-    { M::geometryExact(x, t) } -> std::convertible_to<double>;
-    { M::dGeometryExact_dx(x, t) } -> std::convertible_to<double>;
+concept ManufacturedFieldModel = requires(M const &m, Time t, Position x) {
+    { m.fieldExact(t) } -> std::convertible_to<Vector>;
+    { m.geometryExact(x, t) } -> std::convertible_to<double>;
+    { m.dGeometryExact_dx(x, t) } -> std::convertible_to<double>;
 };
 
 /// Not 1: geometry *multiplies* the diffusivity rather than being it, and a
@@ -418,23 +426,29 @@ inline constexpr double coupledKappa = 0.7;
 /// general form because the two manufactured models have different geometries
 /// and one derivation is easier to check than two.
 template <ManufacturedFieldModel M>
-inline double coupledSource(Position x, Time t)
+inline double coupledSource(M const &model, Position x, Time t)
 {
     const double A = 1.0 + t;
     const double s = std::sin(pi * x), c = std::cos(pi * x);
-    const double g = M::geometryExact(x, t), dg = M::dGeometryExact_dx(x, t);
+    const double g = model.geometryExact(x, t), dg = model.dGeometryExact_dx(x, t);
     return s - coupledKappa * A * pi * (dg * c - g * pi * s);
 }
 
 /// sigma_hat = g kappa q, S as above. Homogeneous Dirichlet at both ends, which
 /// the manufactured solution satisfies for every t.
+///
+/// Holds the model it was built against, so the source can only ever be the
+/// source for the geometry that model actually has -- see the concept above.
+/// The reference has to outlive the case, which in solveCoupledOnce it does:
+/// the model is declared first and so destroyed last.
 template <ManufacturedFieldModel M>
 class ManufacturedGeometricDiffusion : public TransportSystem
 {
 public:
-    ManufacturedGeometricDiffusion()
+    explicit ManufacturedGeometricDiffusion(M const &model_)
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
-                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}}})
+                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}}}),
+          model(model_)
     {
     }
 
@@ -444,7 +458,7 @@ public:
     }
     Value Sources(Index, const State &, Position x, Time t) override
     {
-        return coupledSource<M>(x, t);
+        return coupledSource(model, x, t);
     }
 
     void dSigmaFn_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
@@ -475,6 +489,9 @@ public:
 
     Value LowerBoundary(Index, Time) const override { return 0.0; }
     Value UpperBoundary(Index, Time) const override { return 0.0; }
+
+private:
+    M const &model;
 };
 
 /// What one coupled run reports.
@@ -495,8 +512,11 @@ CoupledErrors solveCoupledOnce(Index k, Index nCells, double tFinal, bool superc
                                SystemSolver::FieldSolveMode mode, Tolerances tol = {})
 {
     Grid grid(0.0, 1.0, nCells);
-    ManufacturedGeometricDiffusion<M> problem;
+
+    // The model first: the physics case below holds a reference to it, and
+    // locals are destroyed in reverse order of declaration.
     auto model = std::make_shared<M>();
+    ManufacturedGeometricDiffusion<M> problem(*model);
 
     SystemSolver sys(grid, k, &problem);
     sys.setTau(1.0);
@@ -528,7 +548,7 @@ CoupledErrors solveCoupledOnce(Index k, Index nCells, double tFinal, bool superc
     // destroyed. Rebuild it from yJac, which the solver owns.
     sys.postprocessor->computeUStar(sys.yJac);
 
-    const Vector psiExact = M::fieldExact(tFinal);
+    const Vector psiExact = model->fieldExact(tFinal);
     const Vector psi = sys.getSolution().getField();
     const SystemSolver::FieldSweepStats stats = sys.getFieldSweepStats();
 
