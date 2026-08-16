@@ -191,6 +191,23 @@ public:
     void dSources_dq(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
     void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
 
+    // SigmaFn reads geometry (s.geom(0) * s.q(0)), so this case has a nonzero
+    // A1 block -- without this override d(sigma_hat)/dg is the TransportSystem
+    // default of zero, A1_cellwise is identically zero for this fixture, and
+    // the coupled Jacobian solve is handed a problem with no coupling in it.
+    // d(g q)/dg = q; Sources and AuxG have no geometry dependence, so their
+    // _dGeometry hooks stay at the base class's zero default.
+    //
+    // Kept identical to FieldJacobianTests.cpp's copy of this case. That file
+    // needs it because a zero A1 would turn its iterative-versus-exact
+    // comparison into a comparison of two uncoupled solves; here it only costs
+    // Newton iterations, but the two copies having the same Jacobian is what
+    // makes "a local copy of the same case" true.
+    void dSigmaFn_dGeometry(Index, VectorRef v, const State &s, Position, Time) override
+    {
+        v[0] = s.q(0);
+    }
+
     Value InitialValue(Index, Position x) const override { return manufacturedU(x, 0.0); }
     Value InitialDerivative(Index, Position x) const override
     {
