@@ -513,6 +513,63 @@ def test_a_run_can_be_restarted_from_its_own_output():
         _cleanup(ref_name, split_name)
 
 
+def test_reconfiguring_without_restart_clears_the_restart_state():
+    """A restart must not stick to the runner's next configuration.
+
+    Every other restart test above builds a *fresh* Runner for the resumed run,
+    which is why this survived: `restarting` is a sticky bool on the
+    TransportSystem (TransportSystem.hpp) that nothing ever cleared, so a second
+    configure() on the same runner went on taking the restart branch of
+    setInitialConditions and resumed from the previous file instead of from
+    InitialValue.
+
+    It is also a use-after-free. setRestartValues built restart_Y as a DGSoln
+    over the `Grid const&` it was handed, DGSolnImpl stores that as a reference
+    (DGSoln.hpp), and PyRunner passes *its own* unique_ptr's referent -- which
+    configure() nulls at the top of the very next call. So the stale branch
+    dereferences a freed Grid in DGSolnImpl::copy's `grid != other.grid`.
+
+    Driven through the observable consequence rather than the dangling read,
+    because the freed Grid usually still compares equal to the new one and the
+    corruption is silent: run to 0.2 from a restart at 0.2 and you get back the
+    restart state, where a fresh configuration integrates from zero.
+    """
+    seed = "reuse_probe"
+    try:
+        first = MaNTA.Runner(LinearDiffusion())
+        first.configure(_cwd_config(OutputFilename=seed, WriteOutput=True))
+        first.run(0.2)
+
+        reused = MaNTA.Runner(LinearDiffusion())
+        reused.configure(
+            _cwd_config(
+                OutputFilename=seed,
+                restart=True,
+                RestartFile=seed + ".restart.nc",
+                t_initial=0.2,
+            )
+        )
+        reused.run(0.4)
+
+        # The same runner, reconfigured as an ordinary run. This must behave
+        # exactly as a runner that had never seen a restart file.
+        reused.configure(_cwd_config(OutputFilename=seed))
+        reused.run(0.2)
+        after_reuse = np.asarray(reused.getSolution(0, XS_RESTART))
+
+        fresh = MaNTA.Runner(LinearDiffusion())
+        fresh.configure(_cwd_config(OutputFilename=seed))
+        fresh.run(0.2)
+        expected = np.asarray(fresh.getSolution(0, XS_RESTART))
+
+        assert np.allclose(after_reuse, expected, rtol=1e-8, atol=1e-10), (
+            "reconfiguring without restart still resumed from the restart file\n"
+            f"fresh runner = {expected}\nreused runner = {after_reuse}"
+        )
+    finally:
+        _cleanup(seed)
+
+
 class NeumannFlux(MaNTA.TransportSystem):
     """sigma_hat = 2q with a *nonzero* Neumann value on the lower boundary.
 
