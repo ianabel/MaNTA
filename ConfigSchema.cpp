@@ -63,6 +63,15 @@ const std::vector<Entry> &table()
          "First pseudo-time step for SteadyStateSolver = PseudoTransient; 0 means use delta_t."},
         {"PseudoTransientMaxStep", {}, Type::Double, Category::Solver, false, false, 0.0,
          "Cap on the pseudo-time step; 0 means uncapped."},
+        {"PseudoTransientSERRate", {}, Type::Double, Category::Solver, false, false, 1.0,
+         "Exponent on the residual ratio in the SER schedule: dt *= max((|F_prev|/|F_now|)^rate, floor). "
+         "0 grows at the floor alone, 1 is plain SER. Must not be negative."},
+        {"PseudoTransientSERFloor", {}, Type::Double, Category::Solver, false, false, 2.0,
+         "Least the pseudo-time step may grow on a step that reduced the residual. "
+         "1 means no floor. Must not be below 1."},
+        {"SteadyStateDiagnostics", {}, Type::Bool, Category::Solver, false, false, false,
+         "Report the work a steady solve did: continuation steps, Newton iterations, "
+         "residual evaluations, Jacobian builds and solves. Printed on failure too."},
         {"ObjectiveDecreaseTolerance", {}, Type::Double, Category::Solver, false, false, 0.0,
          "Abandon a run whose dG/dt is already below -this at t0; zero is off."},
         {"WriteOutput", {}, Type::Bool, Category::Solver, false, false, true,
