@@ -131,7 +131,7 @@ BOOST_AUTO_TEST_SUITE_END()
 - [ ] **Step 2: Run test to verify it fails**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=field_model_spec_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=field_model_spec_tests
 ```
 
 Expected: compilation failure, `FieldModelSpec.hpp: No such file or directory`.
@@ -388,7 +388,7 @@ In `Tests/UnitTests/Makefile:22`, append `FieldModelSpecTests.cpp` to `TEST_SOUR
 - [ ] **Step 7: Run the tests**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=field_model_spec_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=field_model_spec_tests
 ```
 
 Expected: 6 test cases, all passing.
@@ -508,7 +508,7 @@ BOOST_AUTO_TEST_SUITE_END()
 - [ ] **Step 2: Run test to verify it fails**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=field_registry_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=field_registry_tests
 ```
 
 Expected: compilation failure, `'FieldModels' has not been declared`.
@@ -616,7 +616,7 @@ std::unique_ptr<FieldModel> FieldModels::InstantiateFieldModel(std::string const
 Append `FieldRegistryTests.cpp` to `TEST_SOURCES` in `Tests/UnitTests/Makefile:22`, then:
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=field_registry_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=field_registry_tests
 ```
 
 Expected: 3 test cases, all passing.
@@ -736,7 +736,7 @@ BOOST_AUTO_TEST_SUITE_END()
 - [ ] **Step 2: Run test to verify it fails**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=state_geometry_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=state_geometry_tests
 ```
 
 Expected: compilation failure, `'class State' has no member named 'geom'`.
@@ -827,7 +827,7 @@ Add `m_Geometry` to the private members beside `m_Aux`, and `nGeom` beside `nAux
 - [ ] **Step 5: Run the C++ test**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=state_geometry_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=state_geometry_tests
 ```
 
 Expected: 7 test cases, all passing.
@@ -971,7 +971,7 @@ BOOST_AUTO_TEST_SUITE_END()
 - [ ] **Step 2: Run test to verify it fails**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=field_dof_layout_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=field_dof_layout_tests
 ```
 
 Expected: compilation failure, no matching constructor taking six arguments.
@@ -1019,7 +1019,7 @@ Extend `copy`, `zeroCoeffs` and any other whole-object operation in the class to
 - [ ] **Step 4: Run the test**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=field_dof_layout_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=field_dof_layout_tests
 ```
 
 Expected: 4 test cases, all passing.
@@ -1167,7 +1167,7 @@ BOOST_AUTO_TEST_SUITE_END()
 - [ ] **Step 2: Run test to verify it fails**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=manufactured_field_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=manufactured_field_tests
 ```
 
 Expected: compilation failure, `ManufacturedFields.hpp: No such file or directory`.
@@ -1440,7 +1440,7 @@ sampleExactOnNodes(Grid const &grid, Index k, Time t)
 Append `ManufacturedFieldTests.cpp` to `TEST_SOURCES`, then:
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=manufactured_field_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=manufactured_field_tests
 ```
 
 Expected: 5 test cases, all passing.
@@ -1569,7 +1569,7 @@ The fixture helpers (`makeCoupledSolver`, `mapSoln`, `GeometryProbeCase`, `Badly
 - [ ] **Step 2: Run test to verify it fails**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=coupled_residual_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=coupled_residual_tests
 ```
 
 Expected: compilation failure, `'class SystemSolver' has no member named 'setFieldModel'`.
@@ -1727,7 +1727,7 @@ and at the top of `SystemSolver::initialize`, before anything else:
 - [ ] **Step 8: Run the coupled tests**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=coupled_residual_tests --log_level=message
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=coupled_residual_tests --log_level=message
 ```
 
 Expected: 5 test cases, all passing. The end-to-end one is slow relative to the others because IDA has no coupling blocks yet and will take extra Newton iterations; that is expected and is what Task 8 fixes.
@@ -1829,7 +1829,7 @@ BOOST_AUTO_TEST_SUITE_END()
 - [ ] **Step 2: Run test to verify it fails**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=geometry_derivative_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=geometry_derivative_tests
 ```
 
 Expected: compilation failure, `'class TransportSystem' has no member named 'dSigmaFn_dGeometry'`.
@@ -1868,7 +1868,7 @@ In `PyTransportSystem.hpp:35`, add `"dSigmaFn_dGeometry"`, `"dSources_dGeometry"
 - [ ] **Step 6: Run everything**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=geometry_derivative_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=geometry_derivative_tests
 cd ../.. && make test && make python && make stubs && make stubs-check && make typecheck && make python_tests
 ```
 
@@ -1996,7 +1996,7 @@ BOOST_AUTO_TEST_SUITE_END()
 - [ ] **Step 2: Run test to verify it fails**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=field_jacobian_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=field_jacobian_tests
 ```
 
 Expected: compilation failure, no `solveCoupledJacExact`.
@@ -2236,7 +2236,7 @@ Add a coupled case to the existing suite so the uncoupled and coupled checks liv
 - [ ] **Step 8: Run and commit**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=field_jacobian_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=field_jacobian_tests
 cd ../.. && make test && make regression_tests && ./MaNTA --list-options | grep -i field
 ```
 
@@ -2308,7 +2308,7 @@ BOOST_AUTO_TEST_CASE(a_coupled_run_on_the_iterative_path_reaches_the_manufacture
 - [ ] **Step 2: Run test to verify it fails**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=field_jacobian_tests/the_iterative_solve_agrees_with_the_exact_one
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=field_jacobian_tests/the_iterative_solve_agrees_with_the_exact_one
 ```
 
 Expected: compilation failure, no `solveCoupledJacIterative`.
@@ -2374,7 +2374,7 @@ In `solveJacEq`: no field model → `solveTransportJac`; `exact` → `solveCoupl
 - [ ] **Step 5: Run and commit**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=field_jacobian_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=field_jacobian_tests
 cd ../.. && make test && make regression_tests
 git add SystemSolver.hpp SystemSolver.cpp Tests/UnitTests/FieldJacobianTests.cpp
 git commit -m "Iterate the coupled Jacobian solve, which is the production path"
@@ -2463,7 +2463,7 @@ BOOST_AUTO_TEST_SUITE_END()
 - [ ] **Step 2: Run test to verify it fails**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=field_adjoint_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=field_adjoint_tests
 ```
 
 Expected: the first test fails — a wrong gradient, because the coupling blocks are absent from the adjoint matrix.
@@ -2508,7 +2508,7 @@ Add a coupled case to `python/Tests/test_adjoint.py` mirroring the existing grad
 - [ ] **Step 5: Run and commit**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=field_adjoint_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=field_adjoint_tests
 cd ../.. && make test && make python_tests
 git add SystemSolver.cpp SystemSolver.hpp AdjointVectors.cpp \
         Tests/UnitTests/FieldAdjointTests.cpp Tests/UnitTests/Makefile python/Tests/test_adjoint.py
@@ -2596,7 +2596,7 @@ BOOST_AUTO_TEST_SUITE_END()
 - [ ] **Step 2: Run test to verify it fails**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=mms_field_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=mms_field_tests
 ```
 
 Expected: compilation failure, no `solveCoupledAndMeasure`.
@@ -2648,7 +2648,7 @@ you want to vary it.
 Add a section to `Tests/README.md` with the measured local orders, exactly as the existing superconvergence tables do, and say which assertions are pinned to them.
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=mms_field_tests --log_level=message
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=mms_field_tests --log_level=message
 cd ../.. && make test
 git add Tests/UnitTests/MMSHarness.hpp Tests/UnitTests/MMSFieldTests.cpp Tests/UnitTests/Makefile Tests/README.md
 git commit -m "Measure the coupled problem's order of accuracy, and record it"
@@ -2698,7 +2698,7 @@ BOOST_AUTO_TEST_CASE(psi_round_trips_through_a_restart)
 - [ ] **Step 2: Run test to verify it fails**
 
 ```sh
-cd Tests/UnitTests && make -j && ./UnitTests --run_test=solver_lifecycle_tests
+make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=solver_lifecycle_tests
 ```
 
 Expected: the restart test fails — `psi` is not serialised.
