@@ -27,14 +27,7 @@ this repository is tested in; see the README.
 """
 
 import os
-
-os.environ["XLA_FLAGS"] = (
-    "--xla_gpu_unsupported_enable_triton_multi_output_fusion=false --xla_cpu_multi_thread_eigen=true"
-)
-os.environ["JAX_COMPILATION_CACHE_ALLOW_HOST_CALLBACKS"] = "true"
-
 from functools import partial
-import os
 
 # These two used to be set by FFIRunner at import. They moved here when that
 # module became library code inside the package: process-wide policy set as a
@@ -67,6 +60,7 @@ import jax.numpy as jnp
 import equinox as eqx
 import jax
 import manta as MaNTA
+from partial import HashablePartial
 
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".9"
 # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -315,19 +309,28 @@ class StellaratorTransport(MaNTA.TransportSystem):
     @Physics_Decorator
     @shard_inputs
     def ComputePhysicsDerivatives(self, states, positions, t):
-        ddke_data = eqx.filter_jit(
-            eqx.filter_vmap(
-                eqx.filter_jacrev(self.compute_dke_sol), in_axes=vmap_axes_wfield
+
+        # map only takes one argument, so pack everything into a tuple
+        def dke_grad(args):
+            (states, x, field, vp, vpp) = args
+            return eqx.filter_jacrev(self.compute_dke_sol)(
+                states, x, t, field, vp, vpp, self.params
             )
-        )(
-            states,
-            positions,
-            t,
-            self.field_shard,
-            self.vp_shard,
-            self.vpp_shard,
-            self.params,
+
+        ddke_data = eqx.filter_jit(jax.lax.map)(
+            HashablePartial(dke_grad),
+            (states, positions, self.field_shard, self.vp_shard, self.vpp_shard),
+            batch_size=4,
         )
+        # ddke_data = eqx.filter_jit(eqx.filter_vmap())(
+        #     states,
+        #     positions,
+        #     t,
+        #     self.field_shard,
+        #     self.vp_shard,
+        #     self.vpp_shard,
+        #     self.params,
+        # )
         dsources = eqx.filter_jit(
             eqx.filter_vmap(
                 eqx.filter_jacrev(self.compute_sources), in_axes=vmap_axes_wfield
@@ -601,7 +604,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
 class StellaratorAdjointProblem(MaNTA.AdjointProblem):
     def __init__(
         self,
-        transport_system: MaNTA.TransportSystem,
+        transport_system: StellaratorTransport,
         g,
         yancc_data: yancc_data,
         npoints,
@@ -660,7 +663,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         )
         grad_w_vprime = jnp.pad(grad_unraveled, ((0, 0), (0, 2)), mode="constant")
 
-        return grad_w_vprime
+        return grad_w_vprime.transpose()
 
     @MaNTA_Decorator
     def dg(self, i, states, positions):
@@ -675,21 +678,27 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
 
         tree_in = (self.field_shard, self.vp_shard, self.vpp_shard)
 
-        def dke_sol(tree, states, x):
-            return self.compute_dke(
-                states, x, 0, tree[0], tree[1], tree[2], self.params
-            )
+        def dke_grad(args):
+            (tree, states, x) = args
+
+            def dke_sol(tree, states, x):
+                return self.compute_dke(
+                    states, x, 0, tree[0], tree[1], tree[2], self.params
+                )
+
+            return eqx.filter_jacrev(dke_sol)(tree, states, x)
+
+        ddke_data = eqx.filter_jit(jax.lax.map)(
+            HashablePartial(dke_grad),
+            (tree_in, states, positions),
+            batch_size=4,
+        )
 
         def sources(tree, states, x):
             return self.compute_sources(
                 states, x, 0, tree[0], tree[1], tree[2], self.params
             )
 
-        ddke_data = eqx.filter_jit(
-            eqx.filter_vmap(
-                eqx.filter_jacrev(dke_sol), in_axes=(0, State.vmap_axes(), 0)
-            )
-        )(tree_in, states, positions)
         dsources = eqx.filter_jit(
             eqx.filter_vmap(
                 eqx.filter_jacrev(sources), in_axes=(0, State.vmap_axes(), 0)

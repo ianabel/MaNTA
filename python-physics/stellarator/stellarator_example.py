@@ -98,7 +98,7 @@ yancc_rho = jnp.array(points)
 yancc_ntheta = 17
 yancc_nzeta = 31
 
-yancc_res = {"na": 45, "nx": 5}
+yancc_res = {"na": 65, "nx": 5}
 ## to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
 # + axis and lcfs
 # initial pressure is all zeros, can change this if desired
@@ -114,7 +114,7 @@ eq_init = eq.copy()
 yancc_wrapper = yancc_data.from_eq(
     points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
-# with jax.log_compiles(True):
 st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
 
-st.run()
+with jax.log_compiles(True):
+    st.run()

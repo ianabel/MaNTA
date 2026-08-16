@@ -208,7 +208,7 @@ class yancc_data(eqx.Module):
         )
 
     @classmethod
-    def from_fields(cls, fields, grid, V_r, V_rr, nNorm=1e20, Tnorm=1e3, nx=5, na=43):
+    def from_fields(cls, fields, grid, V_r, V_rr, scale = 1.0, nNorm=1e20, Tnorm=1e3, nx=5, na=43):
         return cls(
             fields=fields,
             grid=grid,
@@ -219,6 +219,7 @@ class yancc_data(eqx.Module):
             Tnorm=Tnorm,
             nx=nx,
             na=na,
+            scale=scale,
         )
 
     @classmethod

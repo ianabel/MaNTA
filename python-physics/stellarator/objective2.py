@@ -31,21 +31,6 @@ def abstract_eval(yin):
         jax.ShapeDtypeStruct((npoints,), jnp.float32),
     )
 
-
-def abstract_eval(yin):
-    boundary_field = yin.fields_unstacked[-1]
-
-    flat, _ = jax.flatten_util.ravel_pytree((eqx.filter(boundary_field, eqx.is_array)))
-    npoints = yin.grid.num_rho
-    np = len(flat) - 1 + 1 + 1
-
-    return (
-        jax.ShapeDtypeStruct((), jnp.float32),
-        jax.ShapeDtypeStruct((npoints, np), jnp.float32),
-        jax.ShapeDtypeStruct((npoints,), jnp.float32),
-    )
-
-
 def make_objective(config, yancc_res=None):
     """Make an external (python) function work with JAX.
 
@@ -73,9 +58,7 @@ def make_objective(config, yancc_res=None):
     #        return wrapper
     solver_config = config["Solver"]
     grad_solver_config = solver_config.copy()
-    grad_solver_config["delta_t"] = 1e-6  # solver_config["delta_t"] / 10000.0
     # solver_config["delta_t"] / 10000.0
-    grad_solver_config["initialTimestep"] = 1e-6
     grad_solver_config["restart"] = True
     grad_solver_config["solveAdjoint"] = True
 

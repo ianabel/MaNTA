@@ -28,22 +28,22 @@ from desc.grid import Grid, LinearGrid
 from desc.geometry import FourierRZToroidalSurface
 from desc.equilibrium import Equilibrium, EquilibriaFamily
 import desc.io
-from desc import set_device
 from scipy.constants import mu_0
 import os
 
+os.environ["JAX_ENABLE_PINNED_HOST_TRANSFER"] = "0"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
 st_config = {
     "ParticleSourceCenter": 0.1,
     "ParticleSourceHeight": 0.01,
-    "ParticleSourceWidth": 0.3,
+    "ParticleSourceWidth": 0.4,
     "HeatSourceCenter": 0.1,
-    "HeatSourceHeight": 0.05,
-    "HeatSourceWidth": 0.3,
+    "HeatSourceHeight": 0.1,
+    "HeatSourceWidth": 0.2,
     "EdgeTemperature": 0.2,
-    "EdgeDensity": 0.4,
+    "EdgeDensity": 0.3,
     "n0": 0.5,
     "evolveDensity": True,
 }
@@ -51,10 +51,10 @@ st_config = {
 
 rho_upper = 1.0
 rtol = 1e-2
-atol = 1e-4
+atol = 1e-5
 # nodes = [0.0,0.5, 0.75, 0.9, 1.0]
-npoints = 5
-degree = 3
+npoints = 4
+degree = 5
 base = 1.6
 tau = 10.0
 nodes = 1 - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 1)
@@ -71,12 +71,11 @@ solver_config = {
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
-    # "initialTimestep": 1e-3,
+    "initialTimestep": 1e-2,
     "MinStepSize": 1e-9,
-    "SteadyStateTolerance": 1e-2,
+    "SteadyStateTolerance": 1e-3,
     "AggressiveTimesteps": False,
     "WriteDatFile": True,
-    "restart": False,
     "zeroFlux": True,
     "solveAdjoint": False,
 }
@@ -95,7 +94,7 @@ points = MaNTA.getNodes(
 
 yancc_rho = jnp.array(points)
 yancc_ntheta = 17
-yancc_nzeta = 31
+yancc_nzeta = 23
 
 yancc_res = {"na": 45, "nx": 5}
 
@@ -111,11 +110,14 @@ eq = desc.examples.get("W7-X")
 eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
 eq = eq.solve(x_scale="ess")[0]
 eq_init = eq.copy()
+scale = 1.0
 yancc_wrapper = yancc_data.from_eq(
-    points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
+    points, scale=scale, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
+
 # st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-# st.run()
+# with jax.log_compiles(True):
+#     st.run()
 
 
 def make_tangent(params, idx, key="Rb_lmn"):
@@ -154,7 +156,7 @@ solver_config = {
     "delta_t": 1.0,
     # "initialTimestep": 1e-3,
     "MinStepSize": 1e-9,
-    "SteadyStateTolerance": 1e-2,
+    "SteadyStateTolerance": 1e-3,
     "AggressiveTimesteps": False,
     "WriteDatFile": True,
     "restart": True,
@@ -291,12 +293,13 @@ start = v0 - delta
 end = v0 + delta
 # start = -0.04
 # end = 0.02
-sweep = jnp.linspace(start, end, 6)
+sweep = jnp.linspace(start, end, 4)
 df = sweep[1] - sweep[0]
 
 
 eq_init = eq.copy()
 x_init = obj.x(eq_init)
+
 
 for i in range(0, len(sweep)):
     print(f"--------------------------\n Iteration {i} \n--------------------------\n")
