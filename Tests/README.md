@@ -550,6 +550,58 @@ These are deliberate and tracked, not oversights:
   `the_initial_condition_uses_boundary_data_at_t0` covers that separately,
   because every other fixture in the tree starts at zero.
 
+* **`SteadyState.cpp` is barely covered, and what covers it now is its output
+  rather than its algorithm.** Until recently nothing called `solveSteadyState`
+  from a test at all -- the only mentions of it under `Tests/` were config
+  parsing in `ConfigSourceTests.cpp` and the tolerance setter in
+  `SolverPlumbingTests.cpp`. Two cases in `SolverLifecycleTests.cpp` now drive it
+  end to end, both provoked by defects rather than written for coverage:
+
+  * `a_steady_solve_writes_its_answer_to_the_output_file`. Every output call
+    lived inside the time loop, which `PseudoTransient` and `Newton` skip, so a
+    steady run's `.nc` held exactly one timeslice -- the `t0` one
+    `initialiseNetCDF` writes during `initialize()`, i.e. the *initial
+    condition* -- and its `.dat` one block of the same. The converged state
+    reached `yJac` and the restart file's `Y`, so `getSolution` was always right;
+    only the files were wrong, and every steady run in this tree is driven from
+    Python, which reads `yJac`. `writeDiagnostics` is called from
+    `WriteTimeslice` and nowhere else, so a physics case's per-slice diagnostics
+    were never called at all while `initialiseDiagnostics` and
+    `finaliseDiagnostics` both ran -- the scaffolding at both ends with nothing
+    hung on it. The converged state is now stamped
+    `SystemSolver::STEADY_STATE_TIME` (1.0, a label rather than a time -- see
+    `docs/running.rst`), and the test checks it against the closed form `u = 1-x`
+    as well as requiring the two slices to differ.
+  * `a_converged_steady_state_leaves_no_stale_derivative`. `solveSteadyState`
+    damps through a scratch vector and never wrote back to `dYdt`, so on return
+    it still held the `t0` derivative `IDACalcIC` left -- 103.4 in norm on
+    `AdjointPoster` at a converged steady state, where the defining property of
+    the answer is that it vanishes. `WriteRestartFile` and `writeDiagnostics`
+    both read it, so a restart from a steady run resumed with a `y` and a `y'`
+    that did not belong together. The check is exactly zero, not merely small: it
+    is set rather than converged to.
+
+  Three more cases have landed since, each also provoked by a defect:
+
+  * `the_SER_rate_and_floor_change_the_cost_and_not_the_answer` measures the schedule through physics evaluations -- 552 at the defaults, 3540 with the floor at 1, 1704 with the floor at 1 and the rate at 2 -- and requires the converged state to be identical in all three. An option that changed the answer would be a bug; one that changed nothing would be inert.
+  * `the_steady_diagnostics_count_the_whole_solve_not_the_last_step`. **KINSOL zeroes its own counters at the top of every `KINSol` call**, so the continuation loop has to sum them as it goes; reading them once at the end -- the obvious thing, and what this did first -- reported 1 Newton iteration against 5 continuation steps and 35 Jacobian solves. Self-evidently impossible, and it still looks like a number, which is why the test asserts invariants (`newtonIters >= steps`, `residualEvals == kinFuncEvals + steps + 1`) rather than values. The second of those also pins the counter snapshot being taken before the first `steadyNorm()`, which it was not to begin with.
+  * `a_failed_steady_solve_still_writes_the_last_state_it_reached`, using a tolerance nothing can reach so the solve stalls at ~1e-16 and exits by the "ran out of continuation steps" path.
+
+  What is still uncovered is the rest of the algorithm -- step rejection,
+  `Newton` mode, the `KINSetMaxNewtonStep` clamp, and the hard-`KINSol`-failure
+  path (the ordinary exhaustion path above shares its `catch (...)` in
+  `Solver.cpp`, but not the code that reaches it). In particular the flat
+  unweighted `steadyNorm` (`SteadyState.cpp`) is untested, and both the
+  convergence test and the SER ratio read it, so anything that changes how it is
+  normalised changes the stopping test and the step schedule together.
+
+  Note also what the fixture cannot show: `TestDiffusion` is *linear*, so each
+  inner solve converges in one Newton iteration and Jacobian builds equal
+  Jacobian solves. The separation those two counters exist to report only
+  appears on a nonlinear problem -- `AdjointPoster` at `k = 3` on 6 cells pays 7
+  builds against 35 solves. An assertion of `builds < solves` was written here
+  first and failed for exactly that reason.
+
 * **The C++ mirror plasma is gone.** `PhysicsCases/MirrorPlasma.{cpp,hpp}`,
   `PhysicsCases/MirrorPlasma/` and `PhysicsCases/CurvedMirrorPlasma/` were
   removed in favour of `python-physics/mirror-plasma`, which is the

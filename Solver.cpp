@@ -501,7 +501,68 @@ void SystemSolver::integrate(double tFinal)
 	// and report it as the answer at tFinal.
 	if (TerminateOnSteadyState && steadyMode != SteadyMode::TimeMarch)
 	{
-		solveSteadyState();
+		try
+		{
+			solveSteadyState();
+		}
+		catch (...)
+		{
+			// A failed steady solve is exactly when the state is worth looking
+			// at, and until now it was the one case that produced nothing: the
+			// throw propagates to runSolver, which frees everything. The time
+			// loop already does this for a failed IDASolve, and this is the same
+			// bargain -- write what there is, close the files, then rethrow.
+			//
+			// Y holds the last iterate. On the "ran out of continuation steps"
+			// path that is the last *accepted* one, since a rejected step
+			// restores uPrev before damping; on a hard KINSol failure it is
+			// whatever KINSOL left, which is the honest thing to show. dYdt is
+			// still the t0 derivative either way -- solveSteadyState only zeroes
+			// it on success -- so a diagnostic hook differentiating it here is
+			// reading the initial condition's rate of change, not this state's.
+			//
+			// Stamped STEADY_STATE_TIME like a converged one. Nothing in the
+			// file distinguishes the two; the exception and the exit status do.
+			logmsg<LOG_LEVEL::ERROR>("Steady solve failed; writing the last state reached to the output.");
+			if (writeDatFile)
+				print(out0, STEADY_STATE_TIME, nOut, Y, true);
+			if (writeOutput)
+				WriteTimeslice(STEADY_STATE_TIME);
+			if (writeDatFile)
+				out0.close();
+			if (writeOutput)
+				nc_output.Close();
+			throw;
+		}
+
+		// Write the converged state. Every output call used to live inside the
+		// time loop below, so a PseudoTransient or Newton run produced a .nc
+		// holding one timeslice -- the t0 one initialiseNetCDF wrote during
+		// initialize() -- and a .dat holding one block, both of them the
+		// *initial condition*. The answer reached the restart file (from Y) and
+		// yJac, which is why the Python surface always looked right and only
+		// the files were wrong.
+		//
+		// A physics case's writeDiagnostics is called from WriteTimeslice and
+		// nowhere else, so it was never called at all on this path:
+		// initialiseDiagnostics and finaliseDiagnostics ran and the case got to
+		// write the scaffolding at both ends with nothing hung on it.
+		//
+		// STEADY_STATE_TIME, not tret: see its definition. Deliberately no
+		// IDAGetNumSteps report -- IDA never ran.
+		if (writeDatFile)
+			print(out0, STEADY_STATE_TIME, nOut, Y, true);
+		if (debugDat)
+		{
+			printOnNodes(dydt_out, STEADY_STATE_TIME, dYdt);
+			residual(t0, Y, dYdt, res);
+			IDAEwtSet(Y, wgt, IDA_mem);
+			std::println(res_out, "# Residual norm at steady state is {:g}",
+						 N_VWrmsNorm(res, wgt));
+			printOnNodes(res_out, STEADY_STATE_TIME, res);
+		}
+		if (writeOutput)
+			WriteTimeslice(STEADY_STATE_TIME);
 	}
 	else
 	{

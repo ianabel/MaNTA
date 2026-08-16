@@ -76,10 +76,96 @@ class SystemSolver
             Newton,
         };
 
+        // The time a converged steady state is stamped with in the output, on
+        // the two modes that do not integrate. It is a label, not a physical
+        // time: PseudoTransient and Newton drive the residual to zero without
+        // advancing anything, so there is no elapsed time to report, and every
+        // time-dependent input was frozen at t_initial (see SteadyMode above).
+        //
+        // 1.0 rather than t0 or tFinal, and the choice is forced. tret never
+        // leaves t0 on this path, so stamping with it would give the file two
+        // slices both at t0 -- and tFinal is no better, because PyRunner's
+        // run_ss() calls runSolver(0), which is the path every steady run in
+        // this tree takes. A fixed label separates the converged state from
+        // the initial condition in every case, and reads as the flag it is.
+        //
+        // So a steady run's .nc holds exactly two slices: t = 0, the initial
+        // condition, and t = 1, the answer. docs/running.rst says so.
+        static constexpr double STEADY_STATE_TIME = 1.0;
+
         void setSteadyMode(SteadyMode mode) { steadyMode = mode; };
         SteadyMode getSteadyMode() const { return steadyMode; };
         void setPseudoTransientInitialStep(double dt) { ptcInitialStep = dt; };
         void setPseudoTransientMaxStep(double dt) { ptcMaxStep = dt; };
+
+        // The SER schedule on an accepted step:
+        //
+        //     dt <- dt * max( (||F_prev|| / ||F_now||)^rate , floor )
+        //
+        // rate = 1 and floor = 2 are what this has always done; both defaults
+        // are repeated in ConfigSchema.cpp and must move together.
+        //
+        // rate is the exponent, so it says how hard dt leans on the residual
+        // reduction: 0 ignores it and grows at the floor alone, 1 is plain SER,
+        // above 1 is more aggressive. Negative would shrink dt as the residual
+        // falls, which is backwards, so it is refused.
+        //
+        // floor is the least dt may grow on a step that made progress. It is
+        // the reason plain SER is not enough here -- see solveSteadyState. A
+        // value below 1 can never bind (this branch runs only when the residual
+        // fell, so the ratio already exceeds 1) and is refused rather than
+        // silently ignored; 1 exactly is "no floor", which is plain SER.
+        void setPseudoTransientSERRate(double rate)
+        {
+            if (rate < 0.0)
+                throw std::logic_error("The SER rate cannot be negative: dt would shrink as the residual falls.");
+            ptcSERRate = rate;
+        };
+        void setPseudoTransientSERFloor(double floorValue)
+        {
+            if (floorValue < 1.0)
+                throw std::logic_error("The SER floor cannot be below 1: it is a growth factor on an accepted step, and would never bind.");
+            ptcSERFloor = floorValue;
+        };
+
+        // Report the work a steady solve did: continuation steps, KINSOL Newton
+        // iterations, residual evaluations, Jacobian builds and Jacobian solves.
+        // Off by default, unlike the time loop's equivalent summary, which is
+        // unconditional -- a steady solve is often run in a loop by an
+        // optimisation driver, where one block per solve is noise rather than
+        // information.
+        void setSteadyStateDiagnostics(bool on) { steadyDiagnostics = on; };
+
+        // What one steady solve cost. The two halves are gathered differently
+        // and it matters which is which:
+        //
+        //  * MaNTA's counters (nResidualEvals and friends) are monotonic over
+        //    the solver's lifetime, and IDA writes to them too, so these fields
+        //    are filled by differencing against a snapshot taken on entry.
+        //  * **KINSOL resets its own counters at the start of every KINSol
+        //    call**, so they are per-call, not per-solver. Differencing them
+        //    across the continuation loop reports the last inner solve alone --
+        //    which on a converged run is a plausible-looking 1 Newton iteration
+        //    for 35 Jacobian solves. They are summed after each call instead.
+        struct SteadyStats
+        {
+            int  steps = 0;         // continuation steps taken
+            int  rejected = 0;      // of those, rejected and damped
+            long newtonIters = 0;   // KINSOL Newton iterations, summed
+            long kinFuncEvals = 0;  // residual evaluations KINSOL made, summed
+            long kinJacEvals = 0;   // Jacobian setups KINSOL asked for, summed
+            long residualEvals = 0; // every residual call, KINSOL's and the merit function's
+            long jacBuilds = 0;     // updateMatricesForJacSolve calls
+            long jacSolves = 0;     // solveJacEq calls
+        };
+        void accumulateKinStats(SteadyStats &s) const;
+        void reportSteadyStats(std::string_view outcome, SteadyStats const &s) const;
+
+        // What the last steady solve cost, whether or not it was printed and
+        // whether or not it converged -- a failed solve fills this in before
+        // throwing. Zeroed only by construction, so it survives the throw for a
+        // caller that wants the numbers rather than the log line.
+        SteadyStats lastSteadyStats() const { return steadyStats; };
 
         // Drive the state to a steady one without integrating to it. Assumes
         // initialize() has run, so Y/dYdt/LS/sunMat exist and Y holds a
@@ -356,6 +442,23 @@ class SystemSolver
         double ptcInitialStep = 0.0; // 0 means "use dt0"
         double ptcMaxStep = std::numeric_limits<double>::infinity();
         double ptcStep = 0.0;        // the current dt; infinite in Newton mode
+        double ptcSERRate = 1.0;     // exponent on the residual ratio
+        double ptcSERFloor = 2.0;    // least growth on an accepted step
+
+        // Work counters, monotonic over the solver's lifetime. solveSteadyState
+        // snapshots them on entry and reports the difference, which is what
+        // makes them meaningful when one solver is run more than once -- the
+        // pattern PyRunner depends on. IDA has its own equivalents
+        // (IDAGetNumResEvals and friends) and the time loop prints those; these
+        // count MaNTA's own entry points, so they cover both drivers and they
+        // separate the two costs a steady solve actually pays: building the
+        // per-cell blocks and factorising them (nJacBuilds) against the static
+        // condensation that reuses them (nJacSolves).
+        long nResidualEvals = 0;
+        long nJacBuilds = 0;
+        long nJacSolves = 0;
+        bool steadyDiagnostics = false;
+        SteadyStats steadyStats;
         N_Vector Y = nullptr;         // solution
         N_Vector dYdt = nullptr;      // time derivative of the solution
         N_Vector constraints = nullptr;
