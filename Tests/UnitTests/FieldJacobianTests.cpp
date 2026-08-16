@@ -900,8 +900,24 @@ BOOST_AUTO_TEST_CASE(selecting_the_exact_solve_warns)
         other->destroySundials();
     }
 
-    BOOST_TEST(defaultLog.find("FieldSolve") == std::string::npos);
-    BOOST_TEST(defaultLog.find("WARNING") == std::string::npos);
+    // Guarded by build variant, following UtilityTests.cpp's logging test. The
+    // iterative branch is INFO, which Logging.hpp compiles out below WARNING --
+    // so "the default run says nothing about FieldSolve" is true of a release
+    // build and false of `make DEBUG=on test` and `make VERBOSE=on test`, both
+    // of which are documented variants that no CI leg covers. Asserting the
+    // release form unconditionally would have left them failing here, findable
+    // only by someone already debugging something else.
+#if defined(DEBUG) || defined(VERBOSE)
+    BOOST_TEST(defaultLog.find("FieldSolve = iterative") != std::string::npos, defaultLog);
+#else
+    BOOST_TEST(defaultLog.find("FieldSolve") == std::string::npos, defaultLog);
+#endif
+
+    // Unguarded, and the assertion that actually matters: whatever the build
+    // level, the default configuration must not emit a WARNING, so the genuine
+    // one -- the fallback count at the end of a run -- cannot be drowned by a
+    // message that fires every time.
+    BOOST_TEST(defaultLog.find("WARNING") == std::string::npos, defaultLog);
 }
 
 BOOST_AUTO_TEST_CASE(the_iterative_solve_agrees_with_the_exact_one)
