@@ -132,7 +132,12 @@ int runManta(std::string const &fname)
 		if (nDOF_file != nDOF)
 			throw std::invalid_argument("nVars/nAux/nScalars in restart file inconsistent with physics case");
 
+		// The file's own degree, which is what its DOF are laid out at.
 		pProblem->setRestartValues(Y, dYdt, *grid, k);
+
+		// The run's degree, which may differ. setInitialConditions projects
+		// across the difference; equal degrees keep the copy path.
+		k = restartRunOrder(config, k);
 	}
 
 	auto system = std::make_shared<SystemSolver>(*grid, k, pProblem.get());

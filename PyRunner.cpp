@@ -79,7 +79,12 @@ void PyRunner::configure(const py::dict &config) {
       throw std::invalid_argument(
           "nVars/nAux/nScalars in restart file inconsistent with physics case");
 
+    // The file's own degree, which is what its DOF are laid out at.
     pProblem->setRestartValues(Y, dYdt, *grid, k);
+
+    // The run's degree, which may differ. setInitialConditions projects across
+    // the difference; equal degrees keep the copy path.
+    k = restartRunOrder(cfg, k);
   }
 
   system = std::make_unique<SystemSolver>(*grid, k, pProblem.get());

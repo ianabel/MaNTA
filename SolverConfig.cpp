@@ -340,6 +340,27 @@ std::unique_ptr<Grid> makeGrid(SolverConfig const &config,
                                   config.Upper_Boundary_Fraction);
 }
 
+// --- restartRunOrder --------------------------------------------------------
+
+unsigned int restartRunOrder(SolverConfig const &config, unsigned int fileOrder)
+{
+    if (!config.restart || config.Polynomial_degree == fileOrder)
+        return fileOrder;
+
+    // Loud rather than silent, in both directions. Refining puts the stored
+    // solution inside the new space and loses nothing; coarsening is a genuine
+    // approximation, and a user who reached this by copying a config from
+    // elsewhere should be told which number won.
+    logmsg<LOG_LEVEL::WARNING>(
+        "Restart file was written at Polynomial_degree = {}, but the "
+        "configuration asks for {}. The state will be projected onto the new "
+        "space rather than copied{}.",
+        fileOrder, config.Polynomial_degree,
+        config.Polynomial_degree < fileOrder ? ", which discards information at this resolution" : "");
+
+    return config.Polynomial_degree;
+}
+
 // --- applySolverConfig ------------------------------------------------------
 
 void applySolverConfig(SolverConfig const &config, SystemSolver &system)

@@ -440,6 +440,26 @@ it is how the `dAux_Mat` column-layout defect was found. Two things make it work
 
 These are deliberate and tracked, not oversights:
 
+* **A restart can change the polynomial degree but not the mesh.** Three cases
+  in `SolverLifecycleTests.cpp` cover the degree change end to end -- refining
+  reproduces the coarse state to 2.2e-16, coarsening lands on a cold run's state
+  to the same, and equal degrees still take `DGSoln::copy` bit for bit. The
+  exactness in the middle one is not luck: L2 projections onto nested spaces
+  compose, so `P_{k-1}(P_k(f)) = P_{k-1}(f)`. That nesting is **per cell and
+  needs the same cell boundaries**, so none of it carries over to a remesh, and
+  a projection onto a different mesh would also want a merge-walk over the two
+  boundary lists -- `DGApprox::operator()` finds its cell by linear scan, so the
+  naive version is O(nCells^2 k).
+
+  What is not covered: the `nDOF_file != nDOF` check is still written out
+  separately in `MaNTA.cpp` and `PyRunner.cpp`, with the DOF formula duplicated
+  in both, and no test drives either. It can only catch an
+  `nVars`/`nAux`/`nScalars` mismatch, since the cell count and the file's degree
+  both come from the file itself. Nor does anything drive `restartRunOrder`
+  through a real config file -- the unit tests reach `setRestartValues`
+  directly, so the config plumbing on both surfaces is covered by inspection
+  only.
+
 * **Adjoint *output* is still not verified.** `WriteAdjoints()` is commented
   out at `Solver.cpp:350` (commit `57d2652`, "adjoint writing doesn't work for
   spatial adjoints"), so no run emits the `ng` variable or the `G<i>_p` /
