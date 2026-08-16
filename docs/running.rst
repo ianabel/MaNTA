@@ -385,6 +385,86 @@ The inner solve for both modes is **KINSOL**, driving the same static
 condensation IDA does, so MaNTA links ``sundials_kinsol`` whichever mode a run
 selects — see :doc:`install` if the build stops at ``kinsol/kinsol.h``.
 
+.. _degree-adaptation:
+
+Choosing the polynomial degree
+------------------------------
+
+``DegreeAdaptation = true`` picks the global polynomial degree by solving,
+measuring how well resolved the answer is, and re-solving at a higher degree
+until it is good enough:
+
+.. code-block:: toml
+
+   [configuration]
+   SteadyStateSolver = "Newton"
+   SteadyStateTolerance = 1.0e-10
+   Polynomial_degree = 2          # where to start
+   DegreeAdaptation = true
+   DegreeTolerance = 1.0e-9       # relative L2 error to reach
+   MaxPolynomialDegree = 12       # where to give up
+
+On ``AdjointPoster`` at 6 cells that is three solves — ``k`` = 2, 9, 10 — taking
+the estimated error from 2.1e-3 to 2.0e-10.
+
+The estimate is the gap between the solution and its own postprocessing,
+:math:`E_K^2 = \|u^* - u_h\|^2_{L^2(K)} / |K|` per cell (Capasso *et al.*
+eq. 15). Every level reports two aggregates:
+
+.. code-block:: text
+
+   k = 2: relative L2 error 2.103e-03 (variable 0), absolute 1.244e-03,
+          worst cell 2.535e-03 at cell 1
+
+The **relative L2 error** drives the decision, because it is the quantity the
+benchmarks quote. The **worst cell** is the binding constraint on a *single*
+global degree, and is the one to look at if the loop converges while some corner
+of the domain is plainly unresolved — a graded mesh, not a higher degree, is the
+answer to that.
+
+The degree rises by Giorgiani's rule, :math:`\Delta k = \lceil \log_b(E/\epsilon)
+\rceil`, with :math:`b` = ``DegreeAdaptationBase`` between 10 and 100. A larger
+base is a more aggressive assumption about what one extra degree buys, so it
+asks for *fewer* of them. The rule assumes no convergence *order* at all, which
+is deliberate: :math:`u^*`'s observed rate is not dependable enough to calibrate
+against — see :doc:`superconvergence`.
+
+Four things worth knowing:
+
+* **It implies** ``Superconvergent = true``. The whole estimate rests on
+  :math:`u^*` being the better of the two approximations, which is only assured
+  with the superconvergent scheme on. Setting ``Superconvergent = false``
+  alongside it is refused rather than silently overridden; leave the key out and
+  it is enabled for you.
+* **Steady solves only.** ``SteadyStateSolver = "TimeMarch"`` is refused: the
+  estimate cannot separate spatial from temporal error, and the transfer between
+  levels drops the BDF history.
+* **The tolerance is relative**, to each variable's own :math:`L^2` norm, so one
+  number means the same thing for variables in different units. It is floored by
+  ``Absolute_tolerance``, which is what stops a solution that is *identically
+  zero* — ``LinearDiffusion`` with zero Dirichlet data at both ends, say — from
+  dividing one round-off by another and climbing to the ceiling for nothing.
+* **The ceiling warns rather than failing.** Reaching ``MaxPolynomialDegree``
+  without meeting the tolerance leaves the best available answer in the output
+  and logs a warning. A run that stopped there did not converge, whatever the
+  files look like.
+
+Each level writes output, so the files left behind are the final level's. Levels
+after the first start from the previous one's solution, projected onto the new
+space; see `Restarting`_ for what that projection costs, which for refining is
+nothing.
+
+.. note::
+
+   The degree is **global**. Per-cell degrees are a much larger change than they
+   look — ``DGSolnImpl`` holds one ``k`` and one basis by value, and there are
+   some 320 ``(k+1)`` sites in the core — and the measurements in
+   ``MESH-REFINEMENT.md`` say most of the available win does not need them.
+
+   Adaptation is also refused alongside spatial adjoint parameters, for the same
+   reason ``Superconvergent`` already is: those are indexed by node, so changing
+   the degree changes how many parameters there are.
+
 .. _suppress-algebraic-error:
 
 Dropping the algebraic rows from the error test

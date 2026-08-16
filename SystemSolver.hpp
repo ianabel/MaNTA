@@ -335,6 +335,31 @@ class SystemSolver
         // off-node and there is nothing to reconstruct from.
         Postprocessor const *getPostprocessor() const { return postprocessor.get(); };
 
+        // The polynomial degree this solver was built at. Fixed for its
+        // lifetime -- DGSolnImpl holds k by value and the basis with it, so
+        // changing it means a new solver. That is what runAdaptiveDegree does,
+        // and its caller needs this to find out where it landed.
+        unsigned int getOrder() const { return k; };
+
+        // How well resolved the run's answer is, for one variable, from the gap
+        // between u_h and its own postprocessing u*. Reconstructs u* from yJac
+        // first, so this is valid after destroySundials() -- yJac owns its
+        // memory and the postprocessor is a member, where Y does not and is not.
+        //
+        // A method rather than something a caller assembles, because assembling
+        // it means reaching yJac and the postprocessor, both of which are
+        // private for good reason.
+        AccuracyEstimate accuracyEstimate(Index var);
+
+        // The converged state as plain vectors, independent of SUNDIALS and of
+        // this object's lifetime. This is what TransportSystem::setRestartValues
+        // wants, and taking a copy is what lets a caller destroy this solver
+        // before building the next one -- which anything driving a sequence of
+        // solves must do, since Integrator's weight cache is a process global
+        // keyed on (order, grid).
+        std::vector<double> stateVector() const;
+        std::vector<double> derivativeVector() const;
+
         // Gates the netCDF output and the restart file -- <stem>.nc and
         // <stem>.restart.nc. The .dat flags below are deliberately *not* nested
         // under this one: they are opt-in already, so folding them in would

@@ -249,7 +249,6 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(WriteOutput, bool);
     READ(WriteDatFile, bool);
     READ(WriteDebugDatFiles, bool);
-    READ(Superconvergent, bool);
     READ(zeroFlux, bool);
     READ(AggressiveTimesteps, bool);
     READ(SuppressAlgebraicError, bool);
@@ -259,15 +258,21 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(PseudoTransientSERRate, double);
     READ(PseudoTransientSERFloor, double);
     READ(SteadyStateDiagnostics, bool);
+    READ(DegreeAdaptation, bool);
+    READ(DegreeTolerance, double);
+    READ(MaxPolynomialDegree, unsigned);
+    READ(DegreeAdaptationBase, double);
     READ(TransportSystem, std::string);
     READ(PhysicsPlugins, std::vector<std::string>);
 #undef READ
 
-    // The two whose presence is the signal.
+    // Those whose presence, rather than value, is the signal.
     if (auto s = spelling("t_final"))
         c.t_final = std::get<double>(source.get(*s, Type::Double));
     if (auto s = spelling("SteadyStateTolerance"))
         c.SteadyStateTolerance = std::get<double>(source.get(*s, Type::Double));
+    if (auto s = spelling("Superconvergent"))
+        c.Superconvergent = std::get<bool>(source.get(*s, Type::Bool));
 
     if (c.OutputFilename.empty())
         c.OutputFilename = source.outputFilenameFallback();
@@ -298,6 +303,54 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
         throw std::invalid_argument(
             "Missing required configuration key: OutputFilename -- there is no "
             "config file to take a name from.");
+
+    if (c.DegreeAdaptation)
+    {
+        // The whole estimate is the gap between u_h and u*, which is only a
+        // *better* approximation when the superconvergent scheme is on:
+        // docs/superconvergence.rst measures u* failing to superconverge at
+        // k = 1 with the flag off, and doing so only transiently for a
+        // nonlinear flux -- 6.9, 11.7, 9.1, then 2.3. A loop calibrated against
+        // that meets its tolerance on the coarse grids and then stops
+        // improving. So asking for adaptation turns the flag on, and asking for
+        // it *off* at the same time is a contradiction rather than a
+        // preference. Refusing beats silently overriding a key the user wrote.
+        if (c.Superconvergent && !*c.Superconvergent)
+            throw std::invalid_argument(
+                "DegreeAdaptation = true needs Superconvergent = true, but the "
+                "configuration sets Superconvergent = false. The error estimate "
+                "is the gap between u_h and its postprocessing u*, which is only "
+                "the better of the two when the superconvergent scheme is on. "
+                "Remove Superconvergent to have it enabled automatically.");
+
+        c.Superconvergent = true;
+
+        // Re-solving a transient from t_initial at a higher degree would mix
+        // spatial and temporal error in an estimate that cannot tell them
+        // apart, and the transfer between levels drops the BDF history.
+        if (c.SteadyStateSolver == "TimeMarch")
+            throw std::invalid_argument(
+                "DegreeAdaptation = true is for steady solves, but "
+                "SteadyStateSolver = \"TimeMarch\". Use \"PseudoTransient\" or "
+                "\"Newton\".");
+
+        if (c.DegreeTolerance <= 0.0)
+            throw std::invalid_argument(
+                "DegreeTolerance must be positive; it is a relative L2 error the "
+                "loop is trying to get below.");
+
+        if (c.DegreeAdaptationBase < 10.0 || c.DegreeAdaptationBase > 100.0)
+            throw std::invalid_argument(
+                "DegreeAdaptationBase must be between 10 and 100 -- the range "
+                "Giorgiani gives for how much one extra degree may be assumed to "
+                "buy. Outside it the rule either creeps up one degree at a time "
+                "or overshoots the ceiling in a single step.");
+
+        if (c.MaxPolynomialDegree < c.Polynomial_degree)
+            throw std::invalid_argument(
+                "MaxPolynomialDegree is below Polynomial_degree, so degree "
+                "adaptation has nothing it is allowed to do.");
+    }
 
     return c;
 }
@@ -379,7 +432,10 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     system.setNOutput(config.OutputPoints);
     system.setMinStepSize(config.MinStepSize);
     system.setZeroFlux(config.zeroFlux);
-    system.setSuperconvergent(config.Superconvergent);
+    // Absent means off, as it always has. loadSolverConfig has already turned
+    // it on when DegreeAdaptation asked for it, so by here the optional carries
+    // the decision rather than the raw key.
+    system.setSuperconvergent(config.Superconvergent.value_or(false));
     system.setWriteOutput(config.WriteOutput);
     system.setWriteDatFile(config.WriteDatFile);
     system.setWriteDebugDatFiles(config.WriteDebugDatFiles);

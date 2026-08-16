@@ -1,5 +1,6 @@
 #include "PyRunner.hpp"
 #include "Logging.hpp"
+#include "DegreeAdaptation.hpp"
 #include "PyConfigSource.hpp"
 #include <pybind11/eigen.h>
 #include <string>
@@ -28,7 +29,7 @@ void PyRunner::configure(const py::dict &config) {
   // wanted `t_initial`, and to default Absolute_tolerance to a different
   // number.
   DictConfigSource source(config);
-  SolverConfig cfg = [&] {
+  cfg = [&] {
     try
     {
       return loadSolverConfig(source, ConfigSchema::Reader::Dict);
@@ -58,7 +59,7 @@ void PyRunner::configure(const py::dict &config) {
     }
   }
 
-  unsigned int k = 1;
+  k = 1;
   grid = makeGrid(cfg, cfg.restart ? &restart_file : nullptr, k);
 
   if (cfg.solveAdjoint)
@@ -106,10 +107,31 @@ void PyRunner::configure(const py::dict &config) {
   logmsg<LOG_LEVEL::INFO>("Configuration done.");
 }
 
+// Replace `system` with the one an adaptive run settles on.
+//
+// The solver being destroyed is the argument's own, so it goes before the next
+// is built -- runAdaptiveDegree does that internally, and this only has to not
+// keep the old one alive alongside the new. `grid`, `adjoint` and `pProblem`
+// are untouched; the driver re-attaches the adjoint problem and replays the
+// configuration against every level it builds.
+void PyRunner::adaptDegree(double tFinal) {
+  system.reset();
+  system = runAdaptiveDegree(cfg, *pProblem, adjoint.get(), *grid, k, tFinal);
+}
+
 void PyRunner::run(double tFinal) {
   if (!configured) {
     throw std::runtime_error(
         "Error: Runner must be configured before running solver.");
+  }
+  if (cfg.DegreeAdaptation) {
+    // A steady-only feature, and loadSolverConfig has already refused
+    // TimeMarch, so reaching run() rather than run_ss() means the caller wants
+    // the configured steady solve at a chosen degree. tFinal is passed through
+    // for the same reason runSolver takes it: it is ignored on the steady path.
+    adaptDegree(tFinal);
+    std::println("Done.");
+    return;
   }
   if (system->TerminateOnSteadyState) {
     logmsg<LOG_LEVEL::WARNING>(
@@ -138,6 +160,16 @@ void PyRunner::run_ss() {
   if (!configured) {
     throw std::runtime_error(
         "Error: Runner must be configured before running solver.");
+  }
+  if (cfg.DegreeAdaptation) {
+    // run_ss() arms steady-state termination whether or not the key was
+    // present, so the tolerance has to reach every level rather than the one
+    // configure() built. Writing it into the config the driver replays is what
+    // does that -- setting it on `system` here would be lost with that solver.
+    cfg.SteadyStateTolerance = steady_state_tolerance;
+    adaptDegree(0);
+    std::println("Done.");
+    return;
   }
   system->setSteadyStateTolerance(steady_state_tolerance);
   system->runSolver(0);

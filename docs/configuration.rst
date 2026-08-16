@@ -264,7 +264,28 @@ Adjoints and superconvergence
      - ``false``
      - Switch the residual and Jacobian to the superconvergent interpolatory
        scheme. Requires :math:`k \ge 1`, and is incompatible with spatial adjoint
-       parameters. See :doc:`superconvergence`.
+       parameters. See :doc:`superconvergence`. ``DegreeAdaptation`` turns this
+       on; setting it to ``false`` alongside that is refused rather than
+       overridden, so leave it out if you want the default.
+   * - ``DegreeAdaptation``
+     - ``false``
+     - Choose the global polynomial degree by solving, estimating the error from
+       :math:`u^* - u_h`, and re-solving at a higher degree. Steady solves only.
+       See :ref:`degree-adaptation`.
+   * - ``DegreeTolerance``
+     - ``1e-6``
+     - Target for ``DegreeAdaptation``: the estimated :math:`L^2` error relative
+       to the solution's own :math:`L^2` norm, worst variable, floored by
+       ``Absolute_tolerance``.
+   * - ``MaxPolynomialDegree``
+     - ``10``
+     - Ceiling on the degree ``DegreeAdaptation`` may reach. Reaching it warns
+       and returns the best result available rather than failing.
+   * - ``DegreeAdaptationBase``
+     - ``10``
+     - How much error one extra degree is assumed to buy, in
+       :math:`\Delta k = \lceil \log_b(E/\epsilon) \rceil`. Between 10 and 100;
+       larger is more aggressive and so asks for fewer degrees.
 
 .. The label is `config-divergences` for historical reasons: it named a section
    listing how the two readers disagreed, and docs/python.rst links to it.

@@ -72,6 +72,21 @@ const std::vector<Entry> &table()
         {"SteadyStateDiagnostics", {}, Type::Bool, Category::Solver, false, false, false,
          "Report the work a steady solve did: continuation steps, Newton iterations, "
          "residual evaluations, Jacobian builds and solves. Printed on failure too."},
+        {"DegreeAdaptation", {}, Type::Bool, Category::Solver, false, false, false,
+         "Choose the global polynomial degree by solving, estimating the error from "
+         "u* - u_h, and re-solving at a higher degree. Steady solves only; implies "
+         "Superconvergent."},
+        {"DegreeTolerance", {}, Type::Double, Category::Solver, false, false, 1.0e-6,
+         "Target for DegreeAdaptation: the estimated L2 error relative to the "
+         "solution's own L2 norm, worst variable. Relative so that one number means "
+         "the same thing for variables in different units."},
+        {"MaxPolynomialDegree", {}, Type::UInt, Category::Solver, false, false, 10u,
+         "Ceiling on the degree DegreeAdaptation may reach. Reaching it warns and "
+         "returns the best result available rather than failing."},
+        {"DegreeAdaptationBase", {}, Type::Double, Category::Solver, false, false, 10.0,
+         "How much error one extra degree is assumed to buy, in Giorgiani's rule "
+         "dk = ceil(log_base(E/tolerance)). 10 is cautious, 100 aggressive; must be "
+         "between 10 and 100."},
         {"ObjectiveDecreaseTolerance", {}, Type::Double, Category::Solver, false, false, 0.0,
          "Abandon a run whose dG/dt is already below -this at t0; zero is off."},
         {"WriteOutput", {}, Type::Bool, Category::Solver, false, false, true,
