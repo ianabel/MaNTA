@@ -2719,8 +2719,9 @@ Name the gap this leaves, rather than implying there is none: nothing exercises 
 
 - `docs/formulation.rst`: the coupled system, the DOF layout with the field block last, and the sign conventions.
 - `docs/physics_interface.rst`: the three geometry derivative hooks, and that an absent one is a zero block.
-- `docs/configuration.rst`: the four keys, and that `FieldSolve = exact` is a verification tool.
-- `docs/running.rst`: what a coupled run writes.
+- `docs/configuration.rst`: the five keys, and that `FieldSolve = exact` is a verification tool.
+- `docs/running.rst`: what a coupled run writes, plus the end-of-run "Coupled field sweeps" line and what a nonzero fallback count means.
+- **From Task 13**: `FieldSolve = iterative` is a *cost* choice, not an accuracy one — the sweep escalates to the exact solve rather than returning an under-converged answer, in **both** directions, so the mode can be slower than `exact` in the worst case and never less accurate. And `FieldSolveMaxAdjointSweeps` exists, separate from `FieldSolveMaxSweeps` and defaulting larger (100 against 20), because the adjoint always runs at `cj = 0` where the coupling is stiffest; five field unknowns have been measured needing 13–38 sweeps. Both belong in `docs/running.rst` and in the `CLAUDE.md` section.
 - A new `docs/field_coupling.rst` for the `FieldModel` interface itself, added to `docs/index.rst`.
 - `FEATURES.md`: replace the roadmap entry with a pointer to the implemented feature and to what remains (2-D Grad–Shafranov, DESC).
 - `CLAUDE.md`: a section on the coupling, the three-way split of which test catches which failure class, and the adjoint asymmetry.

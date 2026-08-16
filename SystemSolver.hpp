@@ -184,15 +184,16 @@ class SystemSolver
         // tool rather than a production path.
         void solveCoupledJacExact(N_Vector g, N_Vector delY);
 
-        // Block Gauss-Seidel between the transport and field blocks: one
-        // transport solve and one field solve per sweep, against the exact
-        // path's nField + 1 transport solves. Stops once the relative change in
-        // psi between sweeps is below FieldSolveTolerance, up to
-        // FieldSolveMaxSweeps -- neither is a guarantee the sweep converges in
-        // that many steps. The production path -- safe because the Jacobian is
-        // never assembled, so an under-converged sweep costs Newton iterations
-        // rather than correctness. Returns its last iterate when the cap is
-        // reached first, rather than throwing; see the definition.
+        // Block Gauss-Seidel between the transport and field blocks, with
+        // Irons-Tuck acceleration: one transport solve and one field solve per
+        // sweep, against the exact path's nField + 1 transport solves. Stops
+        // once the relative change in psi between sweeps is below
+        // FieldSolveTolerance, up to FieldSolveMaxSweeps.
+        //
+        // Reaching that cap **escalates to solveCoupledJacExact** rather than
+        // returning the last iterate, so this mode can no longer be wrong, only
+        // slower -- which is what makes it a safe default. The escalation is
+        // counted in fieldSweepFallbacks and reported once per run.
         void solveCoupledJacIterative(N_Vector g, N_Vector delY);
 
         // Solves the HDG part of Jy = g
@@ -368,6 +369,31 @@ class SystemSolver
         };
         int getFieldSolveMaxSweeps() const { return fieldSolveMaxSweeps; };
 
+        // The adjoint sweep's own cap, separate from the forward one and larger.
+        // The transposed iteration has the same spectrum -- it is the transpose --
+        // but always runs at cj = 0, where rho is largest, so it is strictly the
+        // harder direction and inheriting the forward cap would under-serve it.
+        void setFieldSolveMaxAdjointSweeps(int n)
+        {
+            if (n < 1)
+                throw std::logic_error("Field solve adjoint sweep cap must be at least one.");
+            fieldSolveMaxAdjointSweeps = n;
+        };
+        int getFieldSolveMaxAdjointSweeps() const { return fieldSolveMaxAdjointSweeps; };
+
+        // What the coupled sweeps cost, and whether either had to escalate.
+        // Zeroed per run by initialize(); nothing here feeds the answer.
+        struct FieldSweepStats
+        {
+            long solves, iterations, fallbacks, adjointSweeps;
+            bool adjointFellBack;
+        };
+        FieldSweepStats getFieldSweepStats() const
+        {
+            return {fieldSweepSolves, fieldSweepIterations, fieldSweepFallbacks,
+                    fieldAdjointSweeps, fieldAdjointFellBack};
+        };
+
         // The solution as it stands. `y` is a non-owning view over memory
         // SUNDIALS owns and dangles after destroySundials(), so yJac is the only
         // copy that outlives a run; initialize() seeds it with the initial
@@ -411,10 +437,12 @@ class SystemSolver
         // exact path, and is a verification tool for the same reason.
         void solveCoupledAdjointExact();
 
-        // The transposed block Gauss-Seidel sweep. Unlike
-        // solveCoupledJacIterative this one THROWS on non-convergence rather
-        // than returning its last iterate: see the definition for why the
-        // asymmetry is the point rather than an inconsistency.
+        // The transposed block Gauss-Seidel sweep, Irons-Tuck accelerated like
+        // its forward twin, and capped by FieldSolveMaxAdjointSweeps rather than
+        // FieldSolveMaxSweeps. Reaching that cap escalates to
+        // solveCoupledAdjointExact -- it used to throw, and escalating is
+        // strictly stronger: the caller gets a correct gradient rather than an
+        // exception. Warned once, and recorded in fieldAdjointFellBack.
         void solveCoupledAdjointIterative();
 
         void computeAdjointGradients();
@@ -928,6 +956,52 @@ class SystemSolver
         FieldSolveMode fieldSolveMode = FieldSolveMode::Iterative;
         double fieldSolveTolerance = 1e-8;
         int fieldSolveMaxSweeps = 20;
+        // Larger than the forward cap, and for the reason the setter gives: the
+        // adjoint runs at cj = 0, where the coupling is stiffest. One default,
+        // matching ConfigSchema's, rather than two that can drift.
+        int fieldSolveMaxAdjointSweeps = 100;
+
+        // Diagnostics for the coupled sweeps, zeroed per run. Nothing here feeds
+        // the answer, so none of it can disturb the bit-for-bit reuse invariant
+        // that a_second_integration_on_one_solver_matches_a_fresh_one pins -- but
+        // it is zeroed per run all the same, because a cumulative count reported
+        // as a per-run one is a lie a second run would tell silently.
+        long fieldSweepSolves = 0;
+        long fieldSweepIterations = 0;
+        long fieldSweepFallbacks = 0;
+        long fieldAdjointSweeps = 0;
+        bool fieldAdjointFellBack = false;
+
+        // Irons-Tuck vector acceleration: Aitken's Delta^2 generalised to
+        // vectors.
+        //
+        // Both coupled sweeps are affine fixed-point iterations on the field
+        // block alone. Writing G for one sweep, G(p) = c + M p with
+        // M = B^-1 A2 A^-1 A1 forwards and its transpose backwards, so the plain
+        // sweep converges only for rho(M) < 1 -- and rho is a property of the
+        // coupling rather than of the time step: 1.611 at cj = 0 against 1.571
+        // at cj = 1e8 for RichGeometricDiffusion.
+        //
+        // Given the two most recent increments D_k = G(p_k) - p_k and D_{k-1}:
+        //
+        //     mu  = D_k . (D_k - D_{k-1}) / |D_k - D_{k-1}|^2
+        //     p*  = G(p_k) - mu D_k
+        //
+        // which is the secant (rank-one quasi-Newton) step on F(p) = G(p) - p.
+        // For nField == 1 and an affine G it lands on the fixed point *exactly*,
+        // in one step, for every m -- including m > 1, where no relaxation
+        // parameter helps at all: D_k = m D_{k-1} gives mu = m/(m-1) and
+        // p* = p_k + D_k/(1-m), and D_k = (1-m)(p_fix - p_k), so p* = p_fix.
+        // That exactness for a divergent scalar map is why this rather than SOR,
+        // whose eigenvalues 1 - w + w*lambda cannot be brought inside the unit
+        // circle by any w > 0 when lambda > 1.
+        //
+        // For nField > 1 it is a rank-one approximation: it removes the dominant
+        // eigendirection and leaves the rest, which is why the caller still needs
+        // the exact fallback. Anderson acceleration -- equivalently GMRES on the
+        // Schur complement, since the map is affine -- is the depth-m
+        // generalisation and is in TODO.
+        static Vector ironsTuck(const Vector &g, const Vector &delta, const Vector &deltaPrev);
 
         AdjointProblem *adjointProblem = nullptr;
 

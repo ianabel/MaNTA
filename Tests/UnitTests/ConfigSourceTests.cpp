@@ -258,6 +258,7 @@ BOOST_AUTO_TEST_CASE(the_field_solve_defaults_are_the_ones_the_solver_starts_wit
     BOOST_TEST(c.FieldSolve == "iterative");
     BOOST_TEST(c.FieldSolveTolerance == 1e-8);
     BOOST_TEST(c.FieldSolveMaxSweeps == 20);
+    BOOST_TEST(c.FieldSolveMaxAdjointSweeps == 100);
 
     Grid grid(0.0, 1.0, 4);
     TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
@@ -265,6 +266,7 @@ BOOST_AUTO_TEST_CASE(the_field_solve_defaults_are_the_ones_the_solver_starts_wit
     BOOST_TEST((sys.getFieldSolveMode() == SystemSolver::FieldSolveMode::Iterative));
     BOOST_TEST(sys.getFieldSolveTolerance() == 1e-8);
     BOOST_TEST(sys.getFieldSolveMaxSweeps() == 20);
+    BOOST_TEST(sys.getFieldSolveMaxAdjointSweeps() == 100);
 }
 
 BOOST_AUTO_TEST_CASE(apply_solver_config_carries_the_field_solve_settings_through)
@@ -279,12 +281,14 @@ BOOST_AUTO_TEST_CASE(apply_solver_config_carries_the_field_solve_settings_throug
     SystemSolver sys(grid, 1, &problem);
 
     applySolverConfig(load(minimal + "FieldSolve = \"exact\"\nFieldSolveTolerance = 1e-11\n"
-                                     "FieldSolveMaxSweeps = 3\n"),
+                                     "FieldSolveMaxSweeps = 3\n"
+                                     "FieldSolveMaxAdjointSweeps = 9\n"),
                       sys);
 
     BOOST_TEST((sys.getFieldSolveMode() == SystemSolver::FieldSolveMode::Exact));
     BOOST_TEST(sys.getFieldSolveTolerance() == 1e-11);
     BOOST_TEST(sys.getFieldSolveMaxSweeps() == 3);
+    BOOST_TEST(sys.getFieldSolveMaxAdjointSweeps() == 9);
 }
 
 BOOST_AUTO_TEST_CASE(an_unrecognised_field_solve_is_rejected_rather_than_defaulted)
@@ -382,6 +386,7 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         "FieldSolve = \"exact\"\n"
         "FieldSolveTolerance = 1e-10\n"
         "FieldSolveMaxSweeps = 7\n"
+        "FieldSolveMaxAdjointSweeps = 31\n"
         "OutputFilename = \"shared\"\n";
 
     auto v = toml::parse_str(body);
@@ -405,7 +410,7 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         {"zeroFlux", true}, {"WriteOutput", false},
         {"SteadyStateTolerance", 1e-5}, {"OutputFilename", std::string("shared")},
         {"FieldSolve", std::string("exact")}, {"FieldSolveTolerance", 1e-10},
-        {"FieldSolveMaxSweeps", 7},
+        {"FieldSolveMaxSweeps", 7}, {"FieldSolveMaxAdjointSweeps", 31},
     };
     auto fromMap = loadSolverConfig(map_src, ConfigSchema::Reader::Dict);
 
@@ -438,6 +443,7 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     BOOST_TEST(fromToml.FieldSolve == fromMap.FieldSolve);
     BOOST_TEST(fromToml.FieldSolveTolerance == fromMap.FieldSolveTolerance);
     BOOST_TEST(fromToml.FieldSolveMaxSweeps == fromMap.FieldSolveMaxSweeps);
+    BOOST_TEST(fromToml.FieldSolveMaxAdjointSweeps == fromMap.FieldSolveMaxAdjointSweeps);
     // FieldModel is ProblemSelection, so it is an error in a dict and cannot be
     // compared across the two -- the same asymmetry TransportSystem has.
     BOOST_TEST(fromToml.FieldModel == "");

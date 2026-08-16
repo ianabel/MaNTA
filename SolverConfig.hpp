@@ -78,6 +78,7 @@ struct SolverConfig
     std::string              FieldSolve;
     double                   FieldSolveTolerance;
     int                      FieldSolveMaxSweeps;
+    int                      FieldSolveMaxAdjointSweeps;
 
     // Presence, not value, carries the meaning for these two.
     //

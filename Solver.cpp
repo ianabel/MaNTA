@@ -126,6 +126,15 @@ void SystemSolver::initialize()
 	if (fieldModel)
 		fieldModel->resetForRun();
 
+	// ...and neither do the sweep counts. Here, in the unconditional part of
+	// initialize() and beside resetForRun() for the same reason: a cumulative
+	// count reported as a per-run one is a lie a second run would tell silently.
+	fieldSweepSolves = 0;
+	fieldSweepIterations = 0;
+	fieldSweepFallbacks = 0;
+	fieldAdjointSweeps = 0;
+	fieldAdjointFellBack = false;
+
 	if (!initialised)
 		initialiseMatrices();
 
@@ -221,11 +230,12 @@ void SystemSolver::initialize()
 		else
 			logmsg<LOG_LEVEL::WARNING>(
 				"FieldSolve = iterative: block Gauss-Seidel between the transport and field "
-				"blocks, one transport solve per sweep against exact's {} per Jacobian solve. "
-				"Stops once the relative change in psi is below FieldSolveTolerance = {}, up to "
-				"FieldSolveMaxSweeps = {} sweeps -- and returns its last iterate rather than "
-				"failing if that cap is reached first, costing Newton speed, not correctness.",
-				nField + 1, fieldSolveTolerance, fieldSolveMaxSweeps);
+				"blocks with Irons-Tuck acceleration, one transport solve per sweep against "
+				"exact's {} per Jacobian solve. Stops once the relative change in psi is below "
+				"FieldSolveTolerance = {}, up to FieldSolveMaxSweeps = {} sweeps ({} for the "
+				"adjoint); a sweep that reaches its cap falls back to the exact solve, so this "
+				"mode costs more than exact in the worst case and never less accuracy.",
+				nField + 1, fieldSolveTolerance, fieldSolveMaxSweeps, fieldSolveMaxAdjointSweeps);
 	}
 
 	// ----------------- Allocate and initialize all other sun-vectors. -------------
@@ -673,6 +683,23 @@ void SystemSolver::integrate(double tFinal)
 	std::println("Total Number of Timesteps             :{}", nsteps);
 	std::println("Total Number of Residual Evaluations  :{}", nresevals);
 	std::println("Total Number of Jacobian Computations :{}", njacevals);
+
+	if (nField > 0 && getFieldSolveMode() == SystemSolver::FieldSolveMode::Iterative)
+	{
+		auto fs = getFieldSweepStats();
+		std::println("Coupled field sweeps                  :{} over {} solves ({} exact fallbacks)",
+					 fs.iterations, fs.solves, fs.fallbacks);
+		// This is the only signal a user has that the coupling is not converging.
+		// The run is still correct -- the fallback is the exact solve -- so this is
+		// a cost report, not an error, and it says what to do about it.
+		if (fs.fallbacks > 0)
+			logmsg<LOG_LEVEL::WARNING>(
+				"{} of {} coupled Jacobian solves exhausted FieldSolveMaxSweeps = {} and fell "
+				"back to the exact Schur solve, at {} transport solves each. The answers are "
+				"correct; the run is paying for both. Raise FieldSolveMaxSweeps, or set "
+				"FieldSolve = exact and skip the sweeps.",
+				fs.fallbacks, fs.solves, fieldSolveMaxSweeps, nField + 1);
+	}
 	}
 
 	// The adjoint solve is allowed to fail, and its failure must not take the

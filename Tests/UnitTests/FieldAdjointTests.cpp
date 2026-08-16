@@ -27,13 +27,17 @@
 #include "FiniteDifferenceJacobian.hpp"
 #include "ManufacturedFields.hpp"
 #include "../../AdjointProblem.hpp"
+#include "../../NetCDFIO.hpp"
 #include "../../SystemSolver.hpp"
 #include "../../Types.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <numbers>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -180,6 +184,34 @@ public:
     /// Zero rather than ManufacturedField's (2/pi): u starts at zero here, and a
     /// psi inconsistent with it is only work for IDACalcIC.
     void InitialFieldValue(VectorRef out) override { out(0) = 0.0; }
+};
+
+/// LinearGeometryField whose transposed field solve fails partway through the
+/// adjoint sweep.
+///
+/// The only way left to reach Solver.cpp's exception_ptr guard, and it has to be
+/// kept reachable: solveCoupledAdjointIterative no longer throws on
+/// non-convergence -- it escalates to the exact transposed solve -- but
+/// solveCoupledAdjointExact can still throw out of the field model, and the
+/// guard is what stops a netCDF file dying with it.
+///
+/// The *second* call, not the first, because solveBTranspose is reached only
+/// from the iterative adjoint sweep -- the forward solve uses solveB and the
+/// exact adjoint uses applyBTranspose -- so the forward run completes untouched
+/// and it is the adjoint alone that fails. Failing on the second call rather
+/// than the first also means the escalation has genuinely been entered rather
+/// than the very first sweep having been refused.
+class FailingTransposeField : public LinearGeometryField
+{
+public:
+    void solveBTranspose(VectorRef out, Vector const &rhs) const override
+    {
+        if (++calls >= 2)
+            throw std::runtime_error("the field model refuses to solve B^T");
+        LinearGeometryField::solveBTranspose(out, rhs);
+    }
+
+    mutable int calls = 0;
 };
 
 /// The same constraint made *differential*:
@@ -715,13 +747,14 @@ AdjointRun richRun(Vector const &p, Index nCells, Index k, std::string const &st
                     nCells, k, stem, mode);
 }
 
-/// FieldSolve = exact, and not by preference. The transposed block Gauss-Seidel
-/// sweep does not reach FieldSolveTolerance within the default twenty sweeps on
-/// this fixture -- five field unknowns whose geometry interpolant reaches every
-/// cell -- so the iterative adjoint throws here rather than returning a wrong
-/// gradient. That is the design working;
-/// a_sweep_that_needs_more_than_the_default_cap_refuses_at_the_default_cap uses
-/// this fixture to say so, and this is the remedy the thrown message names.
+/// FieldSolve = exact by default, so that the finite-difference references built
+/// from this factory are independent of the sweep under test. Five field
+/// unknowns whose geometry interpolant reaches every cell is the hardest coupled
+/// fixture here: before Task 13 the transposed sweep could not reach
+/// FieldSolveTolerance within the default twenty sweeps and the iterative
+/// adjoint threw, which is what
+/// a_five_dof_adjoint_reaches_the_same_gradient_either_way used to pin. It now
+/// escalates instead, and that test says so.
 AdjointRun multiDofRun(Vector const &p, Index nCells, Index k, std::string const &stem,
                        SystemSolver::FieldSolveMode mode = SystemSolver::FieldSolveMode::Exact)
 {
@@ -781,6 +814,38 @@ Vector finiteDifferenceGradient(RunFactory factory, Vector const &p0, Index nCel
         fd(i) = (a.objective() - b.objective()) / (2.0 * h);
     }
     return fd;
+}
+
+/// The residual of the *field* row of the transposed coupled system for the
+/// adjoint state a solve left behind:
+///
+///     || G_psi - A1^T z_x - B^T z_psi ||   relative to the largest term in it.
+///
+/// Not "small": **exactly zero, to roundoff**, and that is the whole of
+/// invariant 1. Task 10's stopping test is a relative *backward error* rather
+/// than a proxy for one precisely because this row holds identically -- the
+/// residual of the pair returned is then A2^T (z_psi^{n+1} - z_psi^n) in row one
+/// and nothing in row two, which is what makes ||A2^T dz|| the exact backward
+/// error. That derivation survives the Irons-Tuck acceleration if and only if
+/// the iterate *accepted* is the unaccelerated solveBTranspose output; returning
+/// an extrapolated z_psi instead leaves this row off by B^T mu delta and turns
+/// an exact residual into an estimate, with nothing downstream to say so.
+///
+/// The gradient itself barely moves -- the extrapolation at the stopping point
+/// is second order in the increment -- so no gradient check separates the two.
+/// This does.
+double adjointFieldRowResidual(SystemSolver &sys)
+{
+    Vector r = sys.G_field;
+    for (Index i = 0; i < static_cast<Index>(sys.nCells); ++i)
+        r -= sys.A1_transpose_cellwise[i] * sys.adjoint_squ[i];
+
+    Vector BTz = Vector::Zero(sys.getFieldDOF());
+    sys.getFieldModel()->applyBTranspose(BTz, sys.adjoint_field);
+
+    const double scale = std::max({sys.G_field.norm(), (sys.G_field - r).norm(), BTz.norm(),
+                                   std::numeric_limits<double>::min()});
+    return (r - BTz).norm() / scale;
 }
 
 double relativeError(Vector const &a, Vector const &b) { return (a - b).norm() / b.norm(); }
@@ -961,69 +1026,118 @@ BOOST_AUTO_TEST_CASE(the_exact_and_iterative_adjoint_solves_agree)
     BOOST_TEST(diff < 1e-7);
 }
 
-BOOST_AUTO_TEST_CASE(an_unconverged_adjoint_sweep_throws_rather_than_returning)
+BOOST_AUTO_TEST_CASE(an_exhausted_adjoint_sweep_still_gives_the_right_gradient)
 {
-    // The asymmetry with the forward path, and the reason it exists: an
-    // under-converged forward Jacobian costs Newton iterations, an
-    // under-converged adjoint returns a wrong gradient beside a good G. So the
-    // adjoint sweep may not silently hand back its last iterate.
+    // The replacement for the throw this used to assert, and the reason the
+    // throw could go. One sweep cannot converge, the escalation to the exact
+    // transposed Schur solve fires, and the gradient is the exact one -- which
+    // is the whole point of escalating rather than failing: the caller loses
+    // time, never accuracy. Escalating is strictly stronger than refusing.
     //
-    // The run itself is done with solveAdjoint off, so the sweep cap below is
-    // imposed on the *adjoint* alone and not on the forward solve that produced
-    // the state -- otherwise this would be a test of whether IDA copes with a
+    // The run itself is done with solveAdjoint off, so the cap below is imposed
+    // on the *adjoint* alone and not on the forward solve that produced the
+    // state -- otherwise this would be a test of whether IDA copes with a
     // one-sweep Jacobian.
     const Vector p0 = baseParameters();
-    auto run = closedFormRun(p0, /*nCells=*/4, /*k=*/3, "field_adjoint_throw",
+    auto run = closedFormRun(p0, /*nCells=*/4, /*k=*/3, "field_adjoint_escalate",
                              SystemSolver::FieldSolveMode::Iterative, /*solveAdjoint=*/false);
     integrateQuietly(run);
 
     run->setSolveAdjoint(true);
-    run->setFieldSolveMaxSweeps(1);
+    run->setFieldSolveMaxAdjointSweeps(1);
     run->setFieldSolveTolerance(1e-14);
 
-    std::string message;
+    std::string log;
     {
-        CapturedOutput quiet;
-        try
-        {
-            run->runAdjointSolve();
-        }
-        catch (std::runtime_error const &e)
-        {
-            message = e.what();
-        }
-    }
-    BOOST_REQUIRE(!message.empty());
-    BOOST_TEST_MESSAGE("refusal: " << message);
-
-    // The message has to be able to show the numbers it is about. std::to_string
-    // is fixed to six decimals, so it printed this tolerance as "0.000000" and a
-    // residual of 3.7e-5 as "0.000037" -- a convergence report with the
-    // convergence redacted.
-    BOOST_TEST(message.find("1e-14") != std::string::npos);
-
-    // ...and it is the cap that did it, not something that always throws. Note
-    // the tolerance stays at 1e-14: what the sweep could not reach in one step
-    // it reaches in several, and lands on the closed-form gradient.
-    {
-        CapturedOutput quiet;
-        run->setFieldSolveMaxSweeps(200);
+        CapturedOutput capture;
         BOOST_CHECK_NO_THROW(run->runAdjointSolve());
+        log = capture.text();
     }
+    BOOST_TEST_MESSAGE("escalation: " << log);
+
+    // The count, not the agreement, is the assertion that matters: the gradient
+    // check below passes whether or not the escalation ever ran.
+    BOOST_TEST(run->getFieldSweepStats().adjointFellBack);
     BOOST_TEST(relativeError(run.gradient(), exactGradient(KAPPA0, S0_0)) < 1e-7);
+
+    // The warning has to be able to show the numbers it is about. std::to_string
+    // is fixed to six decimals, so it would print this tolerance as "0.000000"
+    // and a residual of 3.7e-5 as "0.000037" -- a convergence report with the
+    // convergence redacted.
+    BOOST_TEST(log.find("1e-14") != std::string::npos);
+    BOOST_TEST(log.find("FieldSolveMaxAdjointSweeps") != std::string::npos);
+
+    // ...and it is the cap that did it, not something that always escalates.
+    // A fresh run rather than a second runAdjointSolve on this one, because
+    // adjointFellBack is a per-*run* flag and only initialize() clears it.
+    auto again = closedFormRun(p0, /*nCells=*/4, /*k=*/3, "field_adjoint_escalate_room",
+                               SystemSolver::FieldSolveMode::Iterative, /*solveAdjoint=*/false);
+    integrateQuietly(again);
+    again->setSolveAdjoint(true);
+    again->setFieldSolveTolerance(1e-14);
+    {
+        CapturedOutput quiet;
+        BOOST_CHECK_NO_THROW(again->runAdjointSolve());
+    }
+    BOOST_TEST(!again->getFieldSweepStats().adjointFellBack);
+    BOOST_TEST_MESSAGE("at the default adjoint cap: "
+                       << again->getFieldSweepStats().adjointSweeps << " sweeps");
+    BOOST_TEST(relativeError(again.gradient(), exactGradient(KAPPA0, S0_0)) < 1e-7);
 }
 
-BOOST_AUTO_TEST_CASE(a_refused_gradient_does_not_destroy_the_runs_output)
+BOOST_AUTO_TEST_CASE(the_adjoint_sweep_converges_on_the_rich_fixture)
+{
+    // RichGeometricDiffusion is where rho = 1.611 was measured, at cj = 0, which
+    // is where every adjoint solve runs. Before this task the plain sweep
+    // diverged there: the forward run could not be integrated on
+    // FieldSolve = iterative at all -- IDA cut h to the floor over five attempts
+    // at the first step, reporting Newton update norms of order 1e10 -- and the
+    // adjoint threw. Both halves are checked here, and the fallback counts are
+    // what say the acceleration did the work rather than the escalation.
+    const Vector p0 = (Vector(NP) << 1.0, 1.0).finished();
+    const Index nCells = 6, k = 2;
+
+    auto run = richRun(p0, nCells, k, "field_adjoint_rich_iter",
+                       SystemSolver::FieldSolveMode::Iterative);
+    BOOST_CHECK_NO_THROW(integrateQuietly(run));
+
+    const auto stats = run->getFieldSweepStats();
+    BOOST_TEST_MESSAGE("rich fixture on iterative: " << stats.iterations
+                       << " forward sweeps over " << stats.solves << " solves ("
+                       << stats.fallbacks << " forward fallbacks), " << stats.adjointSweeps
+                       << " adjoint sweeps, adjointFellBack = " << stats.adjointFellBack);
+    BOOST_TEST(!stats.adjointFellBack);
+    BOOST_TEST(stats.fallbacks == 0L);
+
+    // The finite-difference reference runs on FieldSolve = exact -- richFactory's
+    // default -- so it is independent of everything under test here.
+    const Vector fd =
+        finiteDifferenceGradient(&richFactory, p0, nCells, k, "field_adjoint_rich_iter_fd");
+    BOOST_TEST_MESSAGE("rich iterative gradient " << run.gradient().transpose()
+                       << " against finite difference " << fd.transpose() << ", relative error "
+                       << relativeError(run.gradient(), fd));
+    BOOST_TEST(relativeError(run.gradient(), fd) < 1e-5);
+}
+
+BOOST_AUTO_TEST_CASE(a_failing_field_model_does_not_destroy_the_runs_output)
 {
     // runAdjointSolve is called from integrate() *before* finaliseDiagnostics,
     // nc_output.Close() and WriteRestartFile, and runSolver's catch(...)
-    // rethrows. So the refusal this task introduced would have thrown away the
-    // netCDF and the restart file of a run that had integrated perfectly -- the
+    // rethrows. So a throw out of the adjoint would have thrown away the netCDF
+    // and the restart file of a run that had integrated perfectly -- the
     // gradient is the optional half of a run, and the solution is not.
     //
-    // integrate() now logs the failure where it happens, finishes the output,
-    // and rethrows. This checks all three: the files exist, and the exception
+    // integrate() logs the failure where it happens, finishes the output, and
+    // rethrows. This checks all three: the files are complete, and the exception
     // still reaches the caller.
+    //
+    // **The forcing condition changed with this task and the test had to be
+    // re-armed rather than deleted.** It used to force a refusal with
+    // setFieldSolveMaxSweeps(1) and a tolerance of 1e-14 -- but that now
+    // escalates to the exact transposed solve instead of throwing, so the test
+    // would have passed while asserting nothing at all. The guard is still
+    // needed, because solveCoupledAdjointExact can throw out of the field model,
+    // so the mechanism is now a field model that refuses to solve B^T.
     const std::string stem = "field_adjoint_output_survives";
     const std::filesystem::path nc = stem + ".nc";
     const std::filesystem::path restart = stem + ".restart.nc";
@@ -1033,8 +1147,10 @@ BOOST_AUTO_TEST_CASE(a_refused_gradient_does_not_destroy_the_runs_output)
     std::filesystem::remove(nc);
     std::filesystem::remove(restart);
 
-    auto run = closedFormRun(baseParameters(), /*nCells=*/4, /*k=*/3, stem,
-                             SystemSolver::FieldSolveMode::Iterative);
+    auto field = std::make_shared<FailingTransposeField>();
+    auto run = buildRun(std::make_unique<ClosedFormCoupledDiffusion>(baseParameters()),
+                        std::make_unique<ClosedFormAdjoint>(), field, /*nCells=*/4, /*k=*/3, stem,
+                        SystemSolver::FieldSolveMode::Iterative);
     run->setWriteOutput(true);
     run->setOutputCadence(5.0);
 
@@ -1043,11 +1159,6 @@ BOOST_AUTO_TEST_CASE(a_refused_gradient_does_not_destroy_the_runs_output)
     {
         CapturedOutput quiet;
         run->initialize();
-        // Tightened after initialize() so the forward solve is untouched: this
-        // is a test of what happens when the *adjoint* refuses, not of whether
-        // IDA copes with a one-sweep Jacobian.
-        run->setFieldSolveMaxSweeps(1);
-        run->setFieldSolveTolerance(1e-14);
         try
         {
             run->integrate(T_FINAL);
@@ -1060,10 +1171,38 @@ BOOST_AUTO_TEST_CASE(a_refused_gradient_does_not_destroy_the_runs_output)
     }
 
     BOOST_TEST(threw);
-    BOOST_TEST_MESSAGE("refusal reached the caller: " << message);
+    BOOST_TEST_MESSAGE("failure reached the caller: " << message);
+    // The forward run reached solveB, never solveBTranspose, so the failure is
+    // the adjoint's alone -- and it took more than one sweep to get there, which
+    // is what says the sweep was running rather than being refused outright.
+    BOOST_TEST(field->calls >= 2);
+
     BOOST_TEST(std::filesystem::exists(nc));
     BOOST_TEST(std::filesystem::exists(restart));
-    BOOST_TEST(std::filesystem::file_size(nc) > 0u);
+
+    // exists() and a nonzero size are *not* enough, and this is the Task 10
+    // deferred minor: timeslices are written during the run, so the .nc is on
+    // disk with content whether or not Close() ever ran. Removing the guard
+    // entirely left both of those passing and only exists(restart) failing.
+    // Reading the file back is what distinguishes a cleanly closed file from a
+    // truncated one.
+    BOOST_TEST(std::filesystem::file_size(restart) > 0u);
+    {
+        netCDF::NcFile f(nc.string(), netCDF::NcFile::FileMode::read);
+        BOOST_REQUIRE(!f.getVar("t").isNull());
+        double t0 = -1.0;
+        f.getVar("t").getVar({0}, {1}, &t0);
+        BOOST_TEST(t0 == 0.0);
+    }
+    {
+        netCDF::NcFile f(restart.string(), netCDF::NcFile::FileMode::read);
+        netCDF::NcVar Y = f.getGroup("RestartData").getVar("Y");
+        BOOST_REQUIRE(!Y.isNull());
+        // The whole DOF vector, psi included: a restart file written from the
+        // uncoupled length formula would be one entry short and would read back
+        // as consistent, which is why the length is what is checked.
+        BOOST_TEST(Y.getDim(0).getSize() == run->getSolution().getDoF());
+    }
 
     // Swept here rather than left for `make clean_data`, because the output
     // lands in whatever directory the binary was launched from, and
@@ -1074,39 +1213,97 @@ BOOST_AUTO_TEST_CASE(a_refused_gradient_does_not_destroy_the_runs_output)
     std::filesystem::remove(restart);
 }
 
-BOOST_AUTO_TEST_CASE(a_sweep_that_needs_more_than_the_default_cap_refuses_at_the_default_cap)
+BOOST_AUTO_TEST_CASE(a_five_dof_adjoint_reaches_the_same_gradient_either_way)
 {
-    // The case above manufactures non-convergence by setting the cap to one.
-    // This one does not touch the cap at all: the five-unknown field block, whose
-    // geometry interpolant couples every cell to every field unknown, does not
-    // reach FieldSolveTolerance within the default twenty sweeps. Forwards that
-    // is invisible -- solveCoupledJacIterative returns its last iterate and IDA
-    // absorbs the worse search direction -- and here it is a refusal, which is
-    // the whole asymmetry.
+    // What this test used to assert was the refusal: the five-unknown field
+    // block, whose geometry interpolant couples every cell to every field
+    // unknown, could not reach FieldSolveTolerance within the default twenty
+    // sweeps, and the iterative adjoint threw rather than returning a wrong
+    // gradient. Rewritten rather than deleted, because the same forcing
+    // condition now has to produce a correct gradient instead of an exception.
     //
-    // The remedy the thrown message names is what multiDofRun uses, and this
-    // checks that the remedy works on the very same state rather than taking it
-    // on trust.
+    // The comparison is against the *exact* transposed Schur solve on the very
+    // same state -- one integration, two adjoint solves -- so nothing about the
+    // forward run or the finite-difference step can enter the difference.
     const Vector p0 = baseParameters();
     auto run = multiDofRun(p0, /*nCells=*/4, /*k=*/3, "field_adjoint_nocontract",
                            SystemSolver::FieldSolveMode::Exact);
     integrateQuietly(run);
-    BOOST_REQUIRE_EQUAL(run->getFieldSolveMaxSweeps(), 20);
+    BOOST_REQUIRE_EQUAL(run->getFieldDOF(), ManufacturedFieldVector::N);
+    BOOST_REQUIRE_EQUAL(run->getFieldSolveMaxAdjointSweeps(), 100);
+
+    {
+        CapturedOutput quiet;
+        run->runAdjointSolve();
+    }
+    const Vector exactGrad = run.gradient();
+    BOOST_REQUIRE_GT(exactGrad.norm(), 0.0);
 
     {
         CapturedOutput quiet;
         run->setFieldSolveMode(SystemSolver::FieldSolveMode::Iterative);
-        BOOST_CHECK_THROW(run->runAdjointSolve(), std::runtime_error);
-    }
-
-    // ...and the exact path, on the same state, does not -- and lands on the
-    // gradient the finite-difference test below confirms.
-    {
-        CapturedOutput quiet;
-        run->setFieldSolveMode(SystemSolver::FieldSolveMode::Exact);
         BOOST_CHECK_NO_THROW(run->runAdjointSolve());
     }
-    BOOST_TEST(run.gradient().norm() > 0.0);
+    const auto stats = run->getFieldSweepStats();
+    BOOST_TEST_MESSAGE("five-DOF adjoint on iterative: " << stats.adjointSweeps
+                       << " sweeps, adjointFellBack = " << stats.adjointFellBack);
+
+    // The count first: with the escalation in place, agreement alone would pass
+    // even if the sweep never converged, because the fallback *is* the exact
+    // solve this is being compared against.
+    BOOST_TEST(!stats.adjointFellBack);
+    BOOST_TEST(relativeError(run.gradient(), exactGrad) < 1e-7);
+
+    // ...and the escalation is still reachable and still correct, forced by a
+    // cap of one on a fresh run -- the same state cannot be reused, because
+    // adjointFellBack is per-run.
+    auto capped = multiDofRun(p0, /*nCells=*/4, /*k=*/3, "field_adjoint_nocontract_capped",
+                              SystemSolver::FieldSolveMode::Exact);
+    integrateQuietly(capped);
+    capped->setFieldSolveMode(SystemSolver::FieldSolveMode::Iterative);
+    capped->setFieldSolveMaxAdjointSweeps(1);
+    {
+        CapturedOutput quiet;
+        BOOST_CHECK_NO_THROW(capped->runAdjointSolve());
+    }
+    BOOST_TEST(capped->getFieldSweepStats().adjointFellBack);
+    BOOST_TEST(relativeError(capped.gradient(), exactGrad) < 1e-7);
+}
+
+BOOST_AUTO_TEST_CASE(the_accepted_adjoint_iterate_leaves_the_field_row_exact)
+{
+    // Invariant 1, backwards, where it is load bearing rather than tidy: the
+    // sweep's stopping test is an *exact* backward error only because row two of
+    // the transposed system holds identically, and it does so only when the
+    // iterate accepted is the one solveBTranspose produced against this sweep's
+    // z_x. Accepting the extrapolation instead moves the gradient by less than
+    // any check here can see -- measured, the rich fixture's gradient does not
+    // change in a single one of its sixteen digits -- while quietly demoting the
+    // stopping test to a proxy.
+    //
+    // Five field unknowns, because that is where the accelerator is genuinely
+    // approximate. With nField == 1 Irons-Tuck lands on the fixed point exactly,
+    // the increment at the stopping sweep is driven to *zero*, and the
+    // extrapolation is then identically the plain iterate -- so a single-DOF
+    // fixture cannot tell the two apart at all.
+    const Vector p0 = baseParameters();
+    auto run = multiDofRun(p0, /*nCells=*/4, /*k=*/3, "field_adjoint_rowtwo",
+                           SystemSolver::FieldSolveMode::Exact);
+    integrateQuietly(run);
+    BOOST_REQUIRE_EQUAL(run->getFieldDOF(), ManufacturedFieldVector::N);
+
+    {
+        CapturedOutput quiet;
+        run->setFieldSolveMode(SystemSolver::FieldSolveMode::Iterative);
+        run->runAdjointSolve();
+    }
+    const double r = adjointFieldRowResidual(*run);
+    BOOST_TEST_MESSAGE("five-DOF adjoint, transposed field-row residual = " << r);
+
+    // The sweep, not the escalation: the exact transposed solve satisfies this
+    // row by construction, so a fallback would make the check vacuous.
+    BOOST_TEST(!run->getFieldSweepStats().adjointFellBack);
+    BOOST_CHECK_SMALL(r, 1e-14);
 }
 
 BOOST_AUTO_TEST_CASE(the_gradient_matches_finite_differences_through_every_a1_row_block)

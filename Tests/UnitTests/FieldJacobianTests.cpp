@@ -209,10 +209,21 @@ Grid const &scratchGrid()
 // bounds-checked under DEBUG only. Hence a local fixture beside
 // GeometricAuxDiffusion rather than an addition to ManufacturedFields.hpp,
 // which two other test files share.
+// The `strength` dial multiplies the whole integral, so the constraint is
+//
+//     R = psi - strength * Int ( u + 1/2 sigma + 1/4 q + 3/4 phi ) dx
+//
+// and B = dRdpsi = 1 is untouched by it while A2 is proportional to it. The block
+// Gauss-Seidel iteration matrix M = B^-1 A2 A^-1 A1 is therefore linear in it:
+// the dial is predictable, so a test can *measure* rho and assert the fixture is
+// the regime it claims rather than assuming a pairing is hard enough.
 class ManufacturedFieldEverySlot : public ManufacturedField
 {
 public:
-    ManufacturedFieldEverySlot() : ManufacturedField(toml::value{}, scratchGrid()) {}
+    explicit ManufacturedFieldEverySlot(double strength_ = 1.0)
+        : ManufacturedField(toml::value{}, scratchGrid()), strength(strength_)
+    {
+    }
 
     static constexpr double wSigma = 0.5, wQ = 0.25, wPhi = 0.75;
 
@@ -227,7 +238,7 @@ public:
             integral += weights(j) *
                         (s.u(0) + wSigma * s.sigma(0) + wQ * s.q(0) + wPhi * s.phi(0));
         }
-        out(0) = psi(0) - integral;
+        out(0) = psi(0) - strength * integral;
     }
 
     void FieldResidualPrime(GlobalStateMatrix &dR, GlobalStateMatrix &, MatrixRef dRdpsi,
@@ -239,11 +250,14 @@ public:
         // Through GlobalState's whole-matrix accessors, not dR[0][j].u(0):
         // operator[](Index) returns a State by value, so writing through it
         // compiles and modifies nothing. See ManufacturedField's own comment.
-        dR[0].Variable().row(0) = -weights.transpose();
-        dR[0].Flux().row(0) = -wSigma * weights.transpose();
-        dR[0].Derivative().row(0) = -wQ * weights.transpose();
-        dR[0].Aux().row(0) = -wPhi * weights.transpose();
+        dR[0].Variable().row(0) = -strength * weights.transpose();
+        dR[0].Flux().row(0) = -strength * wSigma * weights.transpose();
+        dR[0].Derivative().row(0) = -strength * wQ * weights.transpose();
+        dR[0].Aux().row(0) = -strength * wPhi * weights.transpose();
     }
+
+private:
+    double strength;
 };
 
 // Everything one Jacobian evaluation needs, in one owner.
@@ -334,17 +348,63 @@ CoupledSolver singleDofFixture(Index nCells, Index k, bool superconvergent = fal
         std::make_shared<ManufacturedField>(toml::value{}, scratchGrid()), superconvergent);
 }
 
-CoupledSolver everySlotFixture(Index nCells, Index k)
+CoupledSolver everySlotFixture(Index nCells, Index k, double strength = 1.0)
 {
     return makeCoupledSolverAtState(nCells, k, std::make_unique<GeometricAuxDiffusion>(),
-                                    std::make_shared<ManufacturedFieldEverySlot>());
+                                    std::make_shared<ManufacturedFieldEverySlot>(strength));
 }
 
-CoupledSolver multiDofFixture(Index nCells, Index k)
+CoupledSolver multiDofFixture(Index nCells, Index k, double strength = 1.0)
 {
     return makeCoupledSolverAtState(
         nCells, k, std::make_unique<GeometricDiffusion>(),
-        std::make_shared<ManufacturedFieldVector>(toml::value{}, scratchGrid()));
+        std::make_shared<ManufacturedFieldVector>(toml::value{}, scratchGrid(), strength));
+}
+
+/// |lambda_max| of the block Gauss-Seidel iteration matrix M = B^-1 A2 A^-1 A1,
+/// by power iteration.
+///
+/// With a zero right-hand side the affine map's constant term vanishes and one
+/// sweep is exactly one application of M, so the ratio of successive norms
+/// converges to |lambda_max|. Built from the same four calls
+/// solveCoupledJacIterative makes, in the same order, rather than from a second
+/// implementation that could agree with a wrong original.
+double spectralRadius(CoupledSolver const &solver, int iterations = 60)
+{
+    const Index nField = solver->getFieldDOF();
+    N_Vector work = N_VClone(solver.Y), dx = N_VClone(solver.Y);
+
+    Vector p = Vector::Ones(nField).normalized();
+    double ratio = 0.0;
+    for (int it = 0; it < iterations; ++it)
+    {
+        N_VConst(0.0, work);
+        solver->subtractA1Times(p, work);
+        solver->solveTransportJac(work, dx);
+
+        Vector r2 = Vector::Zero(nField);
+        for (Index f = 0; f < nField; ++f)
+            r2(f) -= N_VDotProd(solver->a2[f], dx);
+
+        Vector next(nField);
+        solver->fieldModel->solveB(next, r2);
+        ratio = next.norm(); // p is a unit vector on every pass
+        p = next.normalized();
+    }
+    N_VDestroy(work);
+    N_VDestroy(dx);
+    return ratio;
+}
+
+/// The largest coefficient anywhere in A1, over every cell. A zero A1 is how
+/// Task 9's sign experiment came to be a statement about a zero matrix, so every
+/// fixture that claims a coupling reports this.
+double maxAbsA1(CoupledSolver const &solver)
+{
+    double m = 0.0;
+    for (Matrix const &block : solver->A1_cellwise)
+        m = std::max(m, block.cwiseAbs().maxCoeff());
+    return m;
 }
 
 /// The components of the increment the finite-differenced Jacobian says nothing
@@ -565,6 +625,43 @@ double uError(SystemSolver &sys, double t)
     return mms::l2ErrorAgainst([&](double x) { return sys.getSolution().u(0)(x); },
                                [](double x, double tt) { return manufacturedU(x, tt); },
                                sys.getSolution().getGrid(), t);
+}
+
+/// The residual of the *field* row of the coupled system for the pair a solve
+/// returned:  || r2 - A2 dx - B dpsi ||  /  || r2 ||.
+///
+/// Not "small": **exactly zero, to roundoff**, and that is a far stronger
+/// statement. It is the structural half of invariant 1 -- dpsi is accepted only
+/// as B^-1(r2 - A2 dx) for the dx returned beside it, so row two holds
+/// identically and row one is off by A1 . delta, i.e. by the tolerance. Returning
+/// an *extrapolated* dpsi instead leaves row two off by B mu delta, which no
+/// agreement-with-exact check can see -- the extrapolation is second order in
+/// the increment at the point the sweep stops, so it moves the answer by far
+/// less than the tolerance the comparison is made at, while destroying the
+/// identity the adjoint's backward-error test is derived from. Only a residual
+/// measured against roundoff separates the two.
+///
+/// a2 carries nothing past the cellwise transport blocks -- transposeFieldCoupling
+/// throws if it ever does -- so the dot product below cannot pick up dpsi itself.
+double fieldRowResidual(CoupledSolver const &solver, N_Vector rhsVec, N_Vector outVec)
+{
+    SystemSolver &sys = *solver;
+    const Index nField = sys.getFieldDOF();
+    DGSoln rhs(sys.nVars, *solver.grid, sys.k, N_VGetArrayPointer(rhsVec), sys.nScalars,
+               sys.nAux, nField);
+    DGSoln out(sys.nVars, *solver.grid, sys.k, N_VGetArrayPointer(outVec), sys.nScalars,
+               sys.nAux, nField);
+
+    Vector r2 = rhs.getField();
+    for (Index f = 0; f < nField; ++f)
+        r2(f) -= N_VDotProd(sys.a2[f], outVec);
+
+    const Vector dpsi = out.getField();
+    Vector Bdpsi = Vector::Zero(nField);
+    sys.fieldModel->applyB(Bdpsi, dpsi);
+
+    return (r2 - Bdpsi).norm() / std::max(rhs.getField().norm(),
+                                          std::numeric_limits<double>::min());
 }
 
 } // namespace
@@ -883,6 +980,331 @@ BOOST_AUTO_TEST_CASE(solve_jac_eq_dispatches_to_the_iterative_solve_by_default)
     N_VDestroy(g);
     N_VDestroy(viaDispatch);
     N_VDestroy(viaIterative);
+}
+
+// ------------------------------------------------------- the accelerator --
+
+BOOST_AUTO_TEST_CASE(irons_tuck_is_exact_for_a_scalar_affine_map)
+{
+    // p_{k+1} = c + m p_k, fixed point c/(1-m). Two plain steps from p_0 = 0,
+    // then one accelerated step must land on it exactly -- for a contraction
+    // and, the point of the exercise, for a divergent map too. m = -1.611 is
+    // the measured dominant eigenvalue of RichGeometricDiffusion's coupling.
+    for (double m : {0.33, -1.611, 2.5})
+    {
+        const double c = 0.7;
+        auto G = [&](const Vector &p) { return Vector::Constant(1, c + m * p(0)); };
+
+        Vector p0 = Vector::Zero(1);
+        Vector g0 = G(p0), d0 = g0 - p0;
+        Vector p1 = g0;
+        Vector g1 = G(p1), d1 = g1 - p1;
+
+        Vector acc = SystemSolver::ironsTuck(g1, d1, d0);
+        BOOST_CHECK_CLOSE(acc(0), c / (1.0 - m), 1e-10);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(irons_tuck_declines_when_the_secant_vanishes)
+{
+    // Equal increments mean m == 1: a translation, no fixed point, and a zero
+    // denominator. The plain iterate must come back, not a NaN.
+    Vector g = Vector::Constant(3, 2.0), d = Vector::Constant(3, 0.5);
+    Vector out = SystemSolver::ironsTuck(g, d, d);
+    BOOST_CHECK(out.isApprox(g));
+
+    // ...and the guard is relative: increments of 1e-30 that differ by 1e-31
+    // are a perfectly good secant, not a vanishing one.
+    Vector small = Vector::Constant(3, 1e-30), smaller = Vector::Constant(3, 9e-31);
+    Vector accelerated = SystemSolver::ironsTuck(Vector::Constant(3, 1e-30), small, smaller);
+    BOOST_CHECK(accelerated.allFinite());
+    BOOST_CHECK(!accelerated.isApprox(Vector::Constant(3, 1e-30)));
+}
+
+BOOST_AUTO_TEST_CASE(acceleration_converges_a_sweep_that_plainly_diverges)
+{
+    // First: prove the fixture is what it claims. If a later change makes the
+    // coupling weak, this fails here rather than turning the test below into a
+    // statement about a contraction.
+    auto solver = everySlotFixture(6, 2, 2.0);
+    const double rho = spectralRadius(solver);
+    BOOST_TEST_MESSAGE("every-slot, strength 2: rho(M) = " << rho
+                       << ", max|A1_cellwise| = " << maxAbsA1(solver));
+    BOOST_REQUIRE_GT(maxAbsA1(solver), 0.0);
+    BOOST_CHECK_GT(rho, 1.2);
+
+    N_Vector g = randomRHS(*solver);
+    N_Vector exact = N_VClone(g), iterative = N_VClone(g);
+    solver->solveCoupledJacExact(g, exact);
+    solver->solveCoupledJacIterative(g, iterative);
+
+    // The agreement is necessary but not sufficient -- solveCoupledJacIterative
+    // now escalates to solveCoupledJacExact, so this line passes with the
+    // acceleration deleted. The fallback count is the assertion that matters.
+    BOOST_CHECK_SMALL(relativeDifference(exact, iterative), 1e-6);
+    BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks, 0);
+    BOOST_TEST_MESSAGE("sweeps taken: " << solver->fieldSweepIterations);
+    BOOST_CHECK_LE(solver->fieldSweepIterations, 12);
+
+    N_VDestroy(g);
+    N_VDestroy(exact);
+    N_VDestroy(iterative);
+}
+
+BOOST_AUTO_TEST_CASE(the_fallback_returns_the_exact_solve_bit_for_bit)
+{
+    // A cap of one sweep cannot converge anything that needs two, so this
+    // reaches the escalation deterministically without needing a pathological
+    // fixture. Bit-for-bit, not to a tolerance: the escalation does not blend
+    // the sweep's last iterate with the exact answer, it discards it.
+    auto solver = everySlotFixture(6, 2, 2.0);
+    solver->setFieldSolveMaxSweeps(1);
+
+    N_Vector g = randomRHS(*solver);
+    N_Vector exact = N_VClone(g), iterative = N_VClone(g);
+    solver->solveCoupledJacExact(g, exact);
+    solver->solveCoupledJacIterative(g, iterative);
+
+    BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks, 1);
+    BOOST_CHECK_EQUAL(relativeDifference(exact, iterative), 0.0);
+
+    N_VDestroy(g);
+    N_VDestroy(exact);
+    N_VDestroy(iterative);
+}
+
+BOOST_AUTO_TEST_CASE(acceleration_does_not_disturb_a_contraction)
+{
+    // The risk in adding an extrapolation is that it destabilises the cases
+    // that were already fine. rho < 1 here, and the sweep must still converge,
+    // still without falling back, and in no more sweeps than the plain
+    // iteration needed (2, recorded in Task 9's review).
+    auto solver = everySlotFixture(6, 2, 0.25);
+    const double rho = spectralRadius(solver);
+    BOOST_TEST_MESSAGE("every-slot, strength 0.25: rho(M) = " << rho
+                       << ", max|A1_cellwise| = " << maxAbsA1(solver));
+    BOOST_CHECK_LT(rho, 1.0);
+
+    N_Vector g = randomRHS(*solver);
+    N_Vector out = N_VClone(g);
+    solver->solveCoupledJacIterative(g, out);
+
+    BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks, 0);
+    BOOST_TEST_MESSAGE("sweeps taken: " << solver->fieldSweepIterations);
+    BOOST_CHECK_LE(solver->fieldSweepIterations, 4);
+
+    N_VDestroy(g);
+    N_VDestroy(out);
+}
+
+BOOST_AUTO_TEST_CASE(a_divergent_five_dof_coupling_is_still_solved_exactly)
+{
+    // The case Irons-Tuck was not expected to fix. rank(M) <= nField = 5 here --
+    // A1 accumulates a different rank-one term per quadrature point, because
+    // dGeometry_dpsi is a function of x -- and a rank-one secant removes one
+    // eigendirection, so a spectrum with several eigenvalues outside the unit
+    // circle should defeat it.
+    //
+    // **Measured, it does not.** At strength 10 the iteration matrix has
+    // rho = 1.57 -- within 3% of the 1.611 measured on RichGeometricDiffusion --
+    // and the accelerated sweep still reaches FieldSolveTolerance, in 13 to 38
+    // sweeps depending on the right-hand side against a plain sweep that
+    // diverges. The secant is rank one per *step*, but the steps are not the
+    // same rank-one direction, so the iteration is not confined to a
+    // two-dimensional subspace the way the pessimistic argument assumes. Scanned
+    // over strengths from 1 to 1e5 -- rho saturating just under 2 -- and over six
+    // right-hand sides, it never once failed to converge given the sweeps.
+    //
+    // So both halves are asserted. The guarantee, first, because it is true by
+    // construction and survives any change to the accelerator: whichever way
+    // solveCoupledJacIterative got there, the answer is the exact one, which is
+    // what makes iterative safe as a default. Then the measurement, with a cap
+    // that has room for the observed spread -- the default 20 does *not*, which
+    // is why this raises it rather than pretending otherwise.
+    auto solver = multiDofFixture(6, 2, 10.0);
+    const double rho = spectralRadius(solver);
+    BOOST_TEST_MESSAGE("five-DOF, strength 10: rho(M) = " << rho
+                       << ", max|A1_cellwise| = " << maxAbsA1(solver));
+    BOOST_REQUIRE_GT(maxAbsA1(solver), 0.0);
+    BOOST_CHECK_GT(rho, 1.2);
+
+    N_Vector g = randomRHS(*solver);
+    N_Vector exact = N_VClone(g), iterative = N_VClone(g);
+    solver->solveCoupledJacExact(g, exact);
+
+    // ---- the guarantee, at the default cap.
+    solver->solveCoupledJacIterative(g, iterative);
+    BOOST_CHECK_SMALL(relativeDifference(exact, iterative), 1e-6);
+    BOOST_TEST_MESSAGE("five-DOF at the default cap: fallbacks = "
+                       << solver->fieldSweepFallbacks
+                       << ", sweeps = " << solver->fieldSweepIterations);
+
+    // ---- and the route, given the sweeps. A fresh fixture rather than a reset,
+    // because the counters accumulate over solves and only initialize() zeroes
+    // them.
+    auto roomy = multiDofFixture(6, 2, 10.0);
+    roomy->setFieldSolveMaxSweeps(60);
+    N_Vector g2 = randomRHS(*roomy), exact2 = N_VClone(g2), iterative2 = N_VClone(g2);
+    roomy->solveCoupledJacExact(g2, exact2);
+    roomy->solveCoupledJacIterative(g2, iterative2);
+
+    BOOST_TEST_MESSAGE("five-DOF at a cap of 60: fallbacks = " << roomy->fieldSweepFallbacks
+                       << ", sweeps = " << roomy->fieldSweepIterations);
+    BOOST_CHECK_EQUAL(roomy->fieldSweepFallbacks, 0);
+    BOOST_CHECK_SMALL(relativeDifference(exact2, iterative2), 1e-6);
+
+    N_VDestroy(g);
+    N_VDestroy(exact);
+    N_VDestroy(iterative);
+    N_VDestroy(g2);
+    N_VDestroy(exact2);
+    N_VDestroy(iterative2);
+}
+
+BOOST_AUTO_TEST_CASE(the_accepted_iterate_leaves_the_field_row_exact)
+{
+    // Invariant 1, checked where it can actually be seen. The sweep may
+    // extrapolate as much as it likes, but only the *unaccelerated* iterate may
+    // be accepted, because that is the one for which
+    //
+    //     B dpsi + A2 dx = r2
+    //
+    // holds identically rather than approximately. Both stopping tests are
+    // derived from that identity -- forwards it is what makes the returned pair
+    // consistent to within A1 . delta, and backwards it is what makes
+    // ||A2^T dz|| the *exact* backward error rather than a proxy for one.
+    //
+    // Accepting the accelerated iterate instead is invisible to every other test
+    // in this file, and measurably so: the extrapolation at the point the sweep
+    // stops is second order in the increment, so the answer moves by roughly
+    // 1e-12 relative -- six orders inside the 1e-6 the agreement checks use, and
+    // four orders outside roundoff. Only this residual separates them.
+    for (double strength : {0.25, 2.0})
+    {
+        auto solver = everySlotFixture(6, 2, strength);
+        N_Vector g = randomRHS(*solver);
+        N_Vector out = N_VClone(g);
+        solver->solveCoupledJacIterative(g, out);
+
+        const double r = fieldRowResidual(solver, g, out);
+        BOOST_TEST_MESSAGE("every-slot, strength " << strength
+                           << ": field-row residual = " << r);
+        BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks, 0);
+        BOOST_CHECK_SMALL(r, 1e-14);
+
+        N_VDestroy(g);
+        N_VDestroy(out);
+    }
+
+    // The five-DOF block, where the accelerator is genuinely approximate and the
+    // increment at the stopping point is not driven to exactly zero -- which is
+    // what makes this the copy that discriminates.
+    auto multi = multiDofFixture(6, 2, 10.0);
+    multi->setFieldSolveMaxSweeps(60);
+    N_Vector g = randomRHS(*multi);
+    N_Vector out = N_VClone(g);
+    multi->solveCoupledJacIterative(g, out);
+
+    const double r = fieldRowResidual(multi, g, out);
+    BOOST_TEST_MESSAGE("five-DOF, strength 10: field-row residual = " << r);
+    BOOST_CHECK_EQUAL(multi->fieldSweepFallbacks, 0);
+    BOOST_CHECK_SMALL(r, 1e-14);
+
+    N_VDestroy(g);
+    N_VDestroy(out);
+}
+
+BOOST_AUTO_TEST_CASE(the_accelerated_sweep_is_still_scale_equivariant)
+{
+    // Task 9's property, re-run rather than assumed: mu is a ratio of inner
+    // products of quantities that all scale with the right-hand side, so
+    // Irons-Tuck is homogeneous and solve(c g) == c solve(g) should survive it.
+    // The scale that broke the old criterion was 1e-9; use it again.
+    auto solver = everySlotFixture(6, 2, 2.0);
+    N_Vector g = randomRHS(*solver), gSmall = N_VClone(g);
+    N_VScale(1e-9, g, gSmall);
+
+    N_Vector big = N_VClone(g), small = N_VClone(g);
+    solver->solveCoupledJacIterative(g, big);
+    solver->solveCoupledJacIterative(gSmall, small);
+    N_VScale(1e9, small, small);
+
+    // Neither solve may have escalated: the fallback is the exact solve, which
+    // is scale-equivariant by construction, so a fallback would make this a
+    // statement about the LU factorisation rather than about the sweep.
+    BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks, 0);
+    const double diff = relativeDifference(big, small);
+    BOOST_TEST_MESSAGE("scale equivariance at 1e-9: relative difference " << diff);
+    BOOST_CHECK_SMALL(diff, 1e-8);
+
+    N_VDestroy(g);
+    N_VDestroy(gSmall);
+    N_VDestroy(big);
+    N_VDestroy(small);
+}
+
+BOOST_AUTO_TEST_CASE(the_end_of_run_report_counts_the_sweeps_and_names_the_fallbacks)
+{
+    // The only signal a user has that the coupling is not converging, and the
+    // Task 9 deferred minor this closes: the sweep used to hit its cap silently,
+    // once per Jacobian solve, with nothing anywhere saying so. The run is still
+    // correct -- the fallback is the exact solve -- so this is a cost report
+    // rather than an error, and it has to say what to do about it.
+    CoupledSolver h;
+    h.problem = std::make_unique<ManufacturedCoupledDiffusion>();
+    h.field = std::make_shared<ManufacturedField>(toml::value{}, scratchGrid());
+    h.grid = std::make_unique<Grid>(0.0, 1.0, 8);
+    h.sys = std::make_unique<SystemSolver>(*h.grid, 2, h.problem.get());
+    configureQuietly(*h.sys, "field_jac_sweep_report");
+    h.sys->setOutputCadence(0.1);
+    h.sys->setFieldModel(h.field);
+    h.sys->resetCoeffs();
+
+    // One sweep can never satisfy a relative increment test from a zero start, so
+    // every Jacobian solve escalates -- IDACalcIC's included, which is why the
+    // cap is set before initialize() rather than after: the two runs below have
+    // to be configured identically for their counts to be comparable.
+    h.sys->setFieldSolveMaxSweeps(1);
+
+    std::string log;
+    {
+        CapturedOutput capture;
+        h.sys->initialize();
+        h.sys->integrate(0.1);
+        log = capture.text();
+    }
+
+    const auto capped = h.sys->getFieldSweepStats();
+    BOOST_TEST_MESSAGE("capped run: " << capped.iterations << " sweeps over " << capped.solves
+                       << " solves, " << capped.fallbacks << " fallbacks");
+    BOOST_REQUIRE_GT(capped.fallbacks, 0L);
+    BOOST_TEST(log.find("Coupled field sweeps") != std::string::npos);
+    BOOST_TEST(log.find("exact fallbacks") != std::string::npos);
+    BOOST_TEST(log.find("Raise FieldSolveMaxSweeps") != std::string::npos);
+
+    // ...and the counts are per *run*, not cumulative. A second integration on
+    // the same solver must not report the first one's sweeps as its own -- which
+    // is why they are zeroed in the unconditional part of initialize() rather
+    // than in initialiseMatrices(), the function the `initialised` guard skips.
+    h.sys->destroySundials();
+    {
+        CapturedOutput capture;
+        h.sys->initialize();
+        h.sys->integrate(0.1);
+        log = capture.text();
+        h.sys->destroySundials();
+    }
+    const auto second = h.sys->getFieldSweepStats();
+    BOOST_TEST_MESSAGE("second run: " << second.iterations << " sweeps over " << second.solves
+                       << " solves, " << second.fallbacks << " fallbacks");
+    BOOST_TEST(second.solves == capped.solves);
+    BOOST_TEST(second.iterations == capped.iterations);
+    BOOST_TEST(second.fallbacks == capped.fallbacks);
+
+    // ...and with the cap back at its default this fixture never escalates, so
+    // the warning is the cap's doing rather than something always printed.
+    auto clean = runCoupledToTime(/*nCells=*/8, /*k=*/2, /*tFinal=*/0.1, "iterative");
+    BOOST_TEST(clean->getFieldSweepStats().fallbacks == 0L);
 }
 
 BOOST_AUTO_TEST_CASE(a_coupled_run_on_the_iterative_path_reaches_the_manufactured_solution)

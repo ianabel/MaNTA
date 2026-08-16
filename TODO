@@ -180,60 +180,44 @@ reason it was not made:
     computeAdjointGradients would then contract it with adjoint_field, which the
     coupled solve already computes and currently uses only inside the elimination.
 
-  - solveCoupledJacIterative returns its last iterate when it does not converge,
-    and that is safe only while the sweep is converging *slowly*. It is not safe
-    when the sweep is not converging at all, and at least one fixture is in that
-    regime.
+  - The coupled sweep uses Irons-Tuck, a rank-one secant acceleration. It is
+    exact in one step for nField == 1 and any spectrum, and removes the dominant
+    eigendirection for nField > 1 -- but only that one, so a coupling with two
+    comparable eigenvalues outside the unit circle can still fall back to the
+    exact Schur solve. The depth-m generalisation is Anderson acceleration, which
+    for an affine map is GMRES on the Schur complement; that is the right answer
+    for the large nField this path exists to serve, and is a separate piece of
+    work.
 
-    FieldAdjointTests' RichGeometricDiffusion -- geometry in the flux, the source
-    and the aux constraint, against an A2 row reading all four slots -- cannot be
-    integrated on FieldSolve = iterative: IDA reduces h to the floor over five
-    attempts at the first step, reporting Newton update norms of order 1e10 each
-    time, and gives up with "IDASolve could not complete". The same run on
-    FieldSolve = exact completes and reaches the finite-difference gradient to
-    1e-10, which is what says the fault is in the sweep and not in the physics.
+    rho(M) was measured at 1.611 (cj = 0) and 1.571 (cj = 1e8) on
+    RichGeometricDiffusion: a property of the coupling, not of the time step.
+    That fixture could not be integrated on FieldSolve = iterative at all before
+    the acceleration -- IDA cut h to the floor over five attempts at the first
+    step, with Newton update norms of order 1e10 -- and now completes with zero
+    fallbacks over ~2000 Jacobian solves and reaches the finite-difference
+    gradient to 1e-10.
 
-    **It is not a large-cj effect, and the earlier version of this entry said it
-    was.** The block Gauss-Seidel iteration matrix G = B^-1 A2 A^-1 A1, formed
-    exactly at the real state, has spectral radius 1.611 at cj = 0 and 1.571 at
-    cj = 1e8 -- it moves by 2% across eight decades. It is already above one at
-    cj = 0. Small time steps do not rescue it and large ones do not cause it: rho
-    is a property of the coupling, not of the time step, and the guess that the
-    transport inverse damps only the u direction at large cj was wrong.
+    **Measured, the rank-one step copes better than the argument above predicts,
+    and the successor is a scaling concern rather than a known gap.**
+    ManufacturedFieldVector's five unknowns, scanned over coupling strengths from
+    1 to 1e5 -- rho rising to just under 2 and never falling back within a cap
+    of 400 -- converge every time, in 13 to 38 sweeps depending on the
+    right-hand side. The steps are rank one individually but not the *same*
+    rank-one direction, so the iteration is not confined to the two-dimensional
+    subspace the pessimistic argument assumes. What the spread does mean is that
+    FieldSolveMaxSweeps = 20 is not always enough for five field unknowns:
+    a_divergent_five_dof_coupling_is_still_solved_exactly raises the cap to 60
+    for its fallbacks == 0 assertion and asserts only the guarantee at the
+    default. No fixture has yet been found where the acceleration fails outright.
 
-    Two consequences worth keeping, both from that spectrum.
-
-    The dominant eigenvalue is real and *negative*, -1.611. Damped Gauss-Seidel
-    gives eigenvalue 1 - omega(1 - lambda) = 1 - 2.611 omega, so any
-    omega in (0, 0.766) converges here. That is luck rather than design: had
-    lambda been +1.61, no omega in (0, 1] could have fixed it, and a relaxation
-    parameter would have been the wrong tool. Anything that reaches for damping
-    should check the sign of the dominant eigenvalue first, not assume it.
-
-    And the adjoint sweep has the *same* spectrum -- it is the transpose, so the
-    eigenvalues are identical -- but always runs at cj = 0, where rho is largest.
-    For the algebraic fixtures that is 1e7 times the rho at IDA's working cj. So
-    the transposed sweep is strictly the harder of the two directions, and this
-    task's decision to throw rather than return the last iterate is better
-    founded than the argument originally given for it: it is not only that a
-    wrong adjoint is silent where a wrong Jacobian is not, it is also that the
-    adjoint sweep is the one more likely to need the refusal.
-
-    Loud rather than silent, so not urgent. But the diagnosis points nowhere near
-    the sweep, and the fixture that exposed it had to be written for the adjoint.
-    Candidate fixes, in order of effort: keep the best iterate rather than the
-    last, judged by the closed-form residual the adjoint sweep already computes
-    (A1 (dpsi^{n+1} - dpsi^n) in the transport rows, zero in the field rows);
-    damped Gauss-Seidel with omega chosen against the measured spectrum; a Krylov
-    acceleration, or the block-triangular preconditioner Serino et al. use.
-    Belongs with the iterative solve, not with the adjoint.
-
-    Separately and much more mildly, ManufacturedFieldVector's five-unknown block
-    does not reach FieldSolveTolerance in the default twenty sweeps -- it is
-    converging, just not fast enough -- which the adjoint reports as a refusal.
-    That is the design, not a defect, and
-    a_sweep_that_needs_more_than_the_default_cap_refuses_at_the_default_cap pins
-    it.
+  - Nothing latches the fallback. A genuinely divergent coupling pays
+    FieldSolveMaxSweeps sweeps *and* the exact solve on every Jacobian solve for
+    the whole run. Latching after N consecutive fallbacks would fix it, but N is
+    a number nobody can presently justify, and rho does drift with cj even if
+    only by 2% in the one case measured. The end-of-run count is the signal for
+    now -- and it is printed only on the time-marching path, beside IDA's own
+    totals, so a steady-state run (SteadyStateSolver, which does not go through
+    IDASolve) reports nothing.
 
 Superconvergence follow-ons (see Tests/README.md for what is already verified):
 

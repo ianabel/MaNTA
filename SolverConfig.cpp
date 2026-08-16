@@ -262,6 +262,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(FieldSolve, std::string);
     READ(FieldSolveTolerance, double);
     READ(FieldSolveMaxSweeps, int);
+    READ(FieldSolveMaxAdjointSweeps, int);
 #undef READ
 
     // The two whose presence is the signal.
@@ -392,6 +393,7 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
 
     system.setFieldSolveTolerance(config.FieldSolveTolerance);
     system.setFieldSolveMaxSweeps(config.FieldSolveMaxSweeps);
+    system.setFieldSolveMaxAdjointSweeps(config.FieldSolveMaxAdjointSweeps);
 
     if (config.PseudoTransientInitialStep > 0.0)
         system.setPseudoTransientInitialStep(config.PseudoTransientInitialStep);

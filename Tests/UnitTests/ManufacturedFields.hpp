@@ -111,15 +111,25 @@ public:
     void InitialFieldValue(VectorRef out) override { out(0) = manufacturedPsiExact(0.0); }
 };
 
-/// nFieldDOF = n:  L psi = f(state), with f_m sampling the transport solution.
+/// nFieldDOF = n:  L psi = strength * f(state), f_m sampling the transport solution.
 /// B = L is tridiagonal and dGeometry/dpsi is dense, because geometry at x
 /// interpolates every entry of psi.
+///
+/// `strength` is the coupling dial: B = L is untouched by it and A2 is
+/// proportional to it, so the block Gauss-Seidel iteration matrix
+/// M = B^-1 A2 A^-1 A1 is linear in it. That is what lets a test *measure* the
+/// spectral radius and assert the fixture is in the regime it claims, rather
+/// than assuming a pairing is divergent and having the assertion go vacuous when
+/// it stops being.
 class ManufacturedFieldVector : public FieldModel
 {
 public:
     static constexpr Index N = 5;
 
-    ManufacturedFieldVector(toml::value const &, Grid const &) : FieldModel(buildSpec()), L(manufacturedL(N)) {}
+    ManufacturedFieldVector(toml::value const &, Grid const &, double strength_ = 1.0)
+        : FieldModel(buildSpec()), strength(strength_), L(manufacturedL(N))
+    {
+    }
 
     static FieldModelSpec buildSpec()
     {
@@ -140,7 +150,7 @@ public:
                        GlobalState const &states, std::vector<Position> const &points,
                        Vector const &weights, Time) override
     {
-        out = L * psi - f(states, points, weights);
+        out = L * psi - strength * f(states, points, weights);
     }
 
     void Geometry(VectorRef out, Vector const &psi, Position x, Time) override
@@ -166,13 +176,13 @@ public:
         // would silently discard the write instead.
         for (Index m = 0; m < N; ++m)
             for (Index j = 0; j < weights.size(); ++j)
-                dR[m].Variable()(0, j) = -weights(j) * basis(m, points[j]);
+                dR[m].Variable()(0, j) = -strength * weights(j) * basis(m, points[j]);
     }
 
     void InitialFieldValue(VectorRef out) override
     {
-        // The exact psi at t = 0, from L psi = f(u_exact).
-        Vector rhs = fExact(0.0);
+        // The exact psi at t = 0, from L psi = strength * f(u_exact).
+        Vector rhs = strength * fExact(0.0);
         Vector x = L.partialPivLu().solve(rhs);
         out = x;
     }
@@ -180,7 +190,7 @@ public:
     /// The exact psi at time t, for the order study to compare against.
     Vector psiExact(Time t) const
     {
-        Vector rhs = fExact(t);
+        Vector rhs = strength * fExact(t);
         Vector x = L.partialPivLu().solve(rhs);
         return x;
     }
@@ -239,6 +249,7 @@ private:
         return out;
     }
 
+    double strength;
     Matrix L;
 };
 

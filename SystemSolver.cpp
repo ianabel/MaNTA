@@ -6,6 +6,7 @@
 #include <Eigen/Core>
 #include <Eigen/Dense>
 #include <toml.hpp>
+#include <algorithm>
 #include <format>
 #include <ostream>
 #include <print>
@@ -1362,7 +1363,31 @@ void SystemSolver::solveCoupledJacExact(N_Vector res_g, N_Vector delY)
     N_VDestroy(Ainv_r1);
 }
 
-// Block Gauss-Seidel on the coupled Jacobian:
+// See the declaration for the algebra and for why this rather than SOR.
+Vector SystemSolver::ironsTuck(const Vector &g, const Vector &delta, const Vector &deltaPrev)
+{
+    const Vector secant = delta - deltaPrev;
+
+    // Relative, not absolute. The secant is compared against the increments it
+    // was differenced from, so this fires when the two increments agree to
+    // rounding -- for an affine map, m == 1, a pure translation with no fixed
+    // point -- and not merely when both are small, which is the regime the
+    // sweep spends its last iterations in. An absolute floor here would
+    // reintroduce exactly the scale-dependence Task 9's review removed from the
+    // stopping criterion. Written as !(x > y) so a NaN secant takes this branch.
+    const double scale = std::max(delta.norm(), deltaPrev.norm());
+    if (!(secant.norm() > 1e-12 * scale))
+        return g;
+
+    const Vector accelerated = g - (delta.dot(secant) / secant.squaredNorm()) * delta;
+
+    // The guard above bounds the denominator relative to the numerator, so this
+    // is the residual case -- an overflow in the dot product, or a non-finite g
+    // handed in. Returning g is the plain sweep, which the caller may take.
+    return accelerated.allFinite() ? accelerated : g;
+}
+
+// Block Gauss-Seidel on the coupled Jacobian, Irons-Tuck accelerated:
 //
 //     A dx^{k+1}   = r1 - A1 dpsi^k
 //     B dpsi^{k+1} = r2 - A2 dx^{k+1}
@@ -1377,11 +1402,11 @@ void SystemSolver::solveCoupledJacExact(N_Vector res_g, N_Vector delY)
 // still converge (15-176 FGMRES iterations, in their numbers). Accuracy comes
 // from the residual, which is exact.
 //
-// Consequently this does not fail on non-convergence: it returns its last
-// iterate, which for a Jacobian solve is legitimate -- an under-converged sweep
-// is merely a worse search direction. Task 10's adjoint version has to do the
-// opposite, because a wrong gradient with a perfectly good G is exactly the
-// failure mode nothing else would catch.
+// The plain sweep is nonetheless *divergent* for a realistic coupling --
+// rho(M) = 1.611 on RichGeometricDiffusion, and rho is a property of the
+// coupling rather than of the time step -- so the accelerator is not a speedup,
+// it is what makes the mode usable at all. Where even that is not enough the
+// tail escalates to the exact solve.
 void SystemSolver::solveCoupledJacIterative(N_Vector res_g, N_Vector delY)
 {
     DGSoln rhs(nVars, grid, k, N_VGetArrayPointer(res_g), nScalars, nAux, nField);
@@ -1389,48 +1414,84 @@ void SystemSolver::solveCoupledJacIterative(N_Vector res_g, N_Vector delY)
 
     N_Vector work = N_VClone(delY);
     Vector dpsi = Vector::Zero(nField);
-    Vector dpsiPrev = Vector::Zero(nField);
+    Vector delta = Vector::Zero(nField), deltaPrev = Vector::Zero(nField);
+    bool haveDeltaPrev = false, converged = false;
+
+    ++fieldSweepSolves;
 
     for (Index sweep = 0; sweep < fieldSolveMaxSweeps; ++sweep)
     {
-        // work <- r1 - A1 dpsi
+        ++fieldSweepIterations;
+
+        // work <- r1 - A1 dpsi, then dx <- A^-1 work. The pair (dx, dpsi) is
+        // consistent here and stays so: everything below changes only what the
+        // *next* sweep starts from. solveTransportJac zeroes the whole
+        // increment (see solveHDGJac), so delY's field entries come back zero
+        // regardless of what work's field segment held.
         N_VScale(1.0, res_g, work);
         subtractA1Times(dpsi, work);
-
-        // dx <- A^-1 work. solveTransportJac zeroes the whole increment (see
-        // solveHDGJac), so delY's field entries come back zero regardless of
-        // what work's field segment held -- untouched above, and unread by
-        // solveTransportJac either way.
         solveTransportJac(work, delY);
 
-        // dpsi <- B^-1 ( r2 - A2 dx )
+        // g <- B^-1 ( r2 - A2 dx ): one application of the fixed-point map.
         Vector r2 = rhs.getField();
         for (Index f = 0; f < nField; ++f)
             r2(f) -= N_VDotProd(a2[f], delY);
+        Vector g(nField);
+        fieldModel->solveB(g, r2);
 
-        dpsiPrev = dpsi;
-        fieldModel->solveB(dpsi, r2);
+        deltaPrev = delta;
+        delta = g - dpsi;
 
-        // A relative test, not `tol * max(1, |dpsi|)`. That clamp was reviewed
-        // out: on sweep 0, dpsiPrev is the Vector::Zero() above it started from,
-        // so the test would be |dpsi_1| <= tol * max(1, |dpsi_1|), which is an
-        // *absolute* magnitude test of 1e-8 whenever |dpsi_1| < 1 -- not a
-        // convergence test at all, and the regime it fires in by construction is
-        // exactly the small-correction regime Newton lives in. A linear solve
-        // is not homogeneous under that criterion: solve(c*g) != c*solve(g) for
-        // small c, because the absolute floor stops the sweep after the very
-        // first iterate regardless of how far from converged it is.
+        // The acceptance test is on the UNACCELERATED iterate, and is the same
+        // relative test Task 9's review arrived at -- not `tol * max(1, |g|)`,
+        // whose absolute floor stopped the sweep after the first iterate
+        // whenever |g| < 1, i.e. throughout the small-correction regime Newton
+        // lives in. Accepting only g is also what keeps the returned pair
+        // consistent: dx was solved against the dpsi that produced this g, so
+        // row one of the coupled system is off by A1 . delta, which is the
+        // tolerance. An extrapolated dpsi would be off by the length of the
+        // extrapolation instead, and nothing downstream would report it.
         //
-        // dpsi.isZero() is the explicit degenerate case the plain relative test
-        // cannot handle on its own (0/0), rather than a clamp reintroducing the
-        // same bug: it only fires when the sweep has *exactly* nothing left to
-        // do, not merely something small.
-        if (dpsi.isZero() || (dpsi - dpsiPrev).norm() <= fieldSolveTolerance * dpsi.norm())
+        // isZero(0.0), not the default: Eigen's dummy_precision is ~1e-12, so
+        // the bare call was an absolute magnitude test wearing a degenerate
+        // case's clothing. This fires only when the increment is exactly zero,
+        // which is the 0/0 the relative test genuinely cannot handle.
+        if (delta.isZero(0.0) || delta.norm() <= fieldSolveTolerance * g.norm())
+        {
+            dpsi = g;
+            converged = true;
             break;
+        }
+
+        dpsi = haveDeltaPrev ? ironsTuck(g, delta, deltaPrev) : g;
+        haveDeltaPrev = true;
     }
 
-    out.getField() = dpsi;
     N_VDestroy(work);
+
+    if (converged)
+    {
+        out.getField() = dpsi;
+        return;
+    }
+
+    // Escalate rather than return the last iterate. Task 9 returned it, on the
+    // argument that an under-converged Jacobian solve is merely a worse search
+    // direction -- true, and still true. What changed is the price of being
+    // right: the exact Schur solve costs nField + 1 transport solves, against
+    // the cap's fieldSolveMaxSweeps, and for the large nField this path exists
+    // to serve the escalation is *cheaper* than the sweeps already spent. So
+    // there is no longer a reason to hand back a direction we know is bad, and
+    // with the escalation in place the iterative mode can no longer be wrong at
+    // all -- only slower. That is what makes it a safe default.
+    //
+    // Counted, not warned: a warning here would fire once per Jacobian solve.
+    // The count is reported once per run, in Solver.cpp.
+    //
+    // solveCoupledJacExact overwrites the whole of delY including the field
+    // block, so nothing written above needs undoing.
+    ++fieldSweepFallbacks;
+    solveCoupledJacExact(res_g, delY);
 }
 
 // Solve the HDG part of the Jacobian
@@ -2304,15 +2365,11 @@ void SystemSolver::solveCoupledAdjointExact()
 // one transposed transport solve and one B^T solve per sweep, against the exact
 // path's nField + 1.
 //
-// **This throws when it does not converge, and solveCoupledJacIterative does
-// not.** The asymmetry is the point. Forwards, the Jacobian is never assembled
-// and IDA tolerates an inexact linear solve, so an under-converged sweep is
-// merely a worse search direction and the answer is unmoved -- returning the
-// last iterate is legitimate there. Here the solve *is* the answer: an
-// under-converged adjoint returns a wrong gradient beside a perfectly good
-// objective, with nothing failing and no iteration count to notice it in. So
-// there is no "close enough" to fall back on, and no last iterate worth
-// handing back.
+// Irons-Tuck accelerated, like its forward twin, and for the same reason: the
+// transposed iteration has the *same* spectrum -- transposition preserves
+// eigenvalues -- but always runs at cj = 0, where rho is largest. It is
+// therefore the strictly harder of the two directions, which is also why it has
+// its own, larger cap in FieldSolveMaxAdjointSweeps.
 //
 // The stopping test is a relative *backward error*, not the increment test the
 // forward sweep uses. It can be, because the residual of the coupled adjoint
@@ -2326,6 +2383,14 @@ void SystemSolver::solveCoupledAdjointExact()
 // standard backward-error test rather than a proxy for one. The degenerate
 // g = 0 case needs no clamp: every iterate is zero, the residual is exactly
 // zero, and 0 <= tol * 0 holds.
+//
+// **That derivation is why the accepted iterate is the unaccelerated one.** Row
+// two holds exactly only because z_psi^{n+1} came from solveBTranspose against
+// this sweep's z_x; returning an extrapolated value instead would leave the pair
+// inconsistent by the length of the extrapolation and silently turn an exact
+// backward error into a proxy. So the acceleration changes only what the *next*
+// sweep starts from, at a cost of one extra sweep to certify -- which is what
+// certification always costs.
 void SystemSolver::solveCoupledAdjointIterative()
 {
     double rhsNorm2 = G_field.squaredNorm();
@@ -2333,14 +2398,17 @@ void SystemSolver::solveCoupledAdjointIterative()
         rhsNorm2 += G_y[i].squaredNorm();
     const double rhsNorm = std::sqrt(rhsNorm2);
 
-    Vector zpsi = Vector::Zero(nField), zpsiPrev = Vector::Zero(nField);
+    Vector zpsi = Vector::Zero(nField);
+    Vector delta = Vector::Zero(nField), deltaPrev = Vector::Zero(nField);
+    bool haveDeltaPrev = false, converged = false;
     std::vector<Vector> rhs(nCells);
 
-    bool converged = false;
     double residualNorm = std::numeric_limits<double>::infinity();
 
-    for (int sweep = 0; sweep < fieldSolveMaxSweeps; ++sweep)
+    for (int sweep = 0; sweep < fieldSolveMaxAdjointSweeps; ++sweep)
     {
+        ++fieldAdjointSweeps;
+
         for (Index i = 0; i < nCells; ++i)
             rhs[i] = G_y[i] - A2_transpose_cellwise[i] * zpsi;
 
@@ -2350,36 +2418,66 @@ void SystemSolver::solveCoupledAdjointIterative()
         for (Index i = 0; i < nCells; ++i)
             r -= A1_transpose_cellwise[i] * adjoint_squ[i];
 
-        zpsiPrev = zpsi;
-        fieldModel->solveBTranspose(zpsi, r);
+        Vector g(nField);
+        fieldModel->solveBTranspose(g, r);
 
-        const Vector dz = zpsi - zpsiPrev;
+        deltaPrev = delta;
+        delta = g - zpsi;
+
         double residual2 = 0.0;
         for (Index i = 0; i < nCells; ++i)
-            residual2 += (A2_transpose_cellwise[i] * dz).squaredNorm();
+            residual2 += (A2_transpose_cellwise[i] * delta).squaredNorm();
         residualNorm = std::sqrt(residual2);
 
         if (residualNorm <= fieldSolveTolerance * rhsNorm)
         {
+            zpsi = g;
             converged = true;
             break;
         }
+
+        zpsi = haveDeltaPrev ? ironsTuck(g, delta, deltaPrev) : g;
+        haveDeltaPrev = true;
     }
 
+    if (converged)
+    {
+        adjoint_field = zpsi;
+        return;
+    }
+
+    // Task 10 threw here, on the argument that an under-converged adjoint is a
+    // wrong gradient beside a correct objective and there is no "close enough"
+    // to fall back on. The argument was right and the remedy is now better: the
+    // exact transposed Schur solve gives the same guarantee without failing the
+    // run. Escalating is strictly stronger than throwing -- the caller gets a
+    // correct gradient instead of an exception -- so the exception_ptr guard in
+    // Solver.cpp that stops a refusal from eating the forward run's output is
+    // now unreachable from this path. Leave it: solveCoupledAdjointExact can
+    // still throw out of the field model, and the guard is what keeps a netCDF
+    // file from dying with it.
+    //
+    // solveCoupledAdjointExact overwrites adjoint_squ, adjoint_lambdas *and*
+    // adjoint_field, so the sweep's last iterate is discarded rather than blended
+    // into the answer.
+    //
+    // Warned, not counted: unlike the forward Jacobian this runs once per run,
+    // so once per occurrence *is* once per run, and the cost of the escalation
+    // is worth a line.
+    //
     // std::format, not std::to_string: the latter is fixed to six decimals, so a
     // tolerance of 1e-8 prints as "0.000000" and a residual of 3.7e-5 as
     // "0.000037" -- a message about convergence that cannot show the numbers it
     // is about.
-    if (!converged)
-        throw std::runtime_error(std::format(
-            "The coupled adjoint solve did not converge in {} sweeps (residual {:g} against "
-            "a tolerance of {:g} times a right-hand side of norm {:g}). Unlike the forward "
-            "Jacobian, an under-converged adjoint returns a wrong gradient with a correct "
-            "objective, so this is an error rather than a warning. Raise FieldSolveMaxSweeps "
-            "or use FieldSolve = exact.",
-            fieldSolveMaxSweeps, residualNorm, fieldSolveTolerance, rhsNorm));
-
-    adjoint_field = zpsi;
+    fieldAdjointFellBack = true;
+    logmsg<LOG_LEVEL::WARNING>(
+        "The coupled adjoint sweep did not converge in {} sweeps (backward error {:g} "
+        "against a tolerance of {:g} times a right-hand side of norm {:g}); falling back "
+        "to the exact transposed Schur solve, which costs {} transposed transport solves. "
+        "The gradient is correct either way. Raise FieldSolveMaxAdjointSweeps to try "
+        "longer, or set FieldSolve = exact to skip the sweep.",
+        fieldSolveMaxAdjointSweeps, residualNorm, fieldSolveTolerance, rhsNorm, nField + 1);
+    solveCoupledAdjointExact();
 }
 
 void SystemSolver::computeAdjointGradients()

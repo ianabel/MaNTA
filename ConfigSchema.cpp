@@ -88,6 +88,10 @@ const std::vector<Entry> &table()
          "Convergence tolerance for FieldSolve = iterative."},
         {"FieldSolveMaxSweeps", {}, Type::Int, Category::Solver, false, false, 20,
          "Sweep cap for FieldSolve = iterative."},
+        {"FieldSolveMaxAdjointSweeps", {}, Type::Int, Category::Solver, false, false, 100,
+         "Sweep cap for the coupled adjoint solve. Separate from FieldSolveMaxSweeps, and "
+         "larger, because the adjoint always runs at cj = 0 where the coupling is stiffest. "
+         "Exceeding it falls back to the exact transposed solve, not to a wrong gradient."},
         {"TransportSystem", {}, Type::String, Category::ProblemSelection, true, false, std::string{},
          "Name of the registered physics case to run."},
         // ProblemSelection, beside TransportSystem and for the same reason: it
