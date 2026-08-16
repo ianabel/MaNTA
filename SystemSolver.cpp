@@ -1251,8 +1251,8 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 // The uncoupled transport operator: static condensation onto lambda, wrapped in
 // the Woodbury/bordered elimination when there are global scalars.
 //
-// This is the whole of what solveJacEq used to be, minus the field block Task 6
-// added at its foot. That block wrote dpsi from B alone -- the block-Jacobi
+// This is the whole of what solveJacEq used to be, minus the field block that
+// used to sit at its foot. That block wrote dpsi from B alone -- the block-Jacobi
 // approximation that was the only thing giving Newton a direction for psi before
 // A1 and A2 existed -- and it cannot survive here, because solveCoupledJacExact
 // calls this function nField + 1 times as its inner solve and a field write in
@@ -1413,8 +1413,9 @@ Vector SystemSolver::ironsTuck(const Vector &g, const Vector &delta, const Vecto
     // rounding -- for an affine map, m == 1, a pure translation with no fixed
     // point -- and not merely when both are small, which is the regime the
     // sweep spends its last iterations in. An absolute floor here would
-    // reintroduce exactly the scale-dependence Task 9's review removed from the
-    // stopping criterion. Written as !(x > y) so a NaN secant takes this branch.
+    // reintroduce exactly the scale-dependence that the stopping criterion in
+    // solveCoupledJacIterative is written to avoid -- see the note there on
+    // `tol * max(1, |g|)`. Written as !(x > y) so a NaN secant takes this branch.
     const double scale = std::max(delta.norm(), deltaPrev.norm());
     if (!(secant.norm() > 1e-12 * scale))
         return g;
@@ -1482,8 +1483,8 @@ void SystemSolver::solveCoupledJacIterative(N_Vector res_g, N_Vector delY)
         deltaPrev = delta;
         delta = g - dpsi;
 
-        // The acceptance test is on the UNACCELERATED iterate, and is the same
-        // relative test Task 9's review arrived at -- not `tol * max(1, |g|)`,
+        // The acceptance test is on the UNACCELERATED iterate, and is purely
+        // relative -- deliberately not `tol * max(1, |g|)`,
         // whose absolute floor stopped the sweep after the first iterate
         // whenever |g| < 1, i.e. throughout the small-correction regime Newton
         // lives in. Accepting only g is also what keeps the returned pair
@@ -1515,9 +1516,9 @@ void SystemSolver::solveCoupledJacIterative(N_Vector res_g, N_Vector delY)
         return;
     }
 
-    // Escalate rather than return the last iterate. Task 9 returned it, on the
-    // argument that an under-converged Jacobian solve is merely a worse search
-    // direction -- true, and still true. What changed is the price of being
+    // Escalate rather than return the last iterate. This sweep used to return
+    // it, on the argument that an under-converged Jacobian solve is merely a
+    // worse search direction -- true, and still true. What changed is the price of being
     // right: with the escalation in place the iterative mode can no longer be
     // wrong at all, only slower, and that is what makes it a safe default. So
     // there is no longer a reason to hand back a direction we know is bad.
@@ -2502,7 +2503,7 @@ void SystemSolver::solveCoupledAdjointIterative()
         return;
     }
 
-    // Task 10 threw here, on the argument that an under-converged adjoint is a
+    // This used to throw, on the argument that an under-converged adjoint is a
     // wrong gradient beside a correct objective and there is no "close enough"
     // to fall back on. The argument was right and the remedy is now better: the
     // exact transposed Schur solve gives the same guarantee without failing the

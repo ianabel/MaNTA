@@ -60,8 +60,11 @@ struct FieldDOF
     // when the row has no time derivative is the IDA_LINESEARCH_FAIL (-13)
     // misdeclaration: IDA_YA_YDP_INIT holds every differential *value* fixed,
     // so a row reaching no unknown it may move is irreducible and the
-    // backtracking loop runs to exhaustion. Task 6 refuses it at run time,
-    // where the residual can actually be interrogated.
+    // backtracking loop runs to exhaustion. SystemSolver::initialize refuses
+    // it by name -- it calls FieldResidualPrime once, before IDACalcIC, and
+    // throws for any DOF declared differential whose dRddpsidt row is zero.
+    // The check has to be there rather than here, because it is the residual
+    // and not the declaration that has the answer.
     bool differential = false;
 };
 

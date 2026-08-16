@@ -317,9 +317,10 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def("dSources_dq", &TransportSystem::dSources_dq)
       .def("dSources_dsigma", &TransportSystem::dSources_dsigma)
       // Derivatives with respect to a field model's geometry slots. Optional,
-      // like the five above: absent means an identically zero coupling block,
-      // which is what every case gets until Task 8 wires the A1 assembly up to
-      // read these.
+      // like the five above: absent means an identically zero column of the A1
+      // coupling block, which is exactly right for a case that does not read
+      // geometry. They are live -- Matrices.cpp's fieldChainOnNodes calls all
+      // three, once per node, whenever a field model is attached.
       .def("dSigmaFn_dGeometry", &TransportSystem::dSigmaFn_dGeometry)
       .def("dSources_dGeometry", &TransportSystem::dSources_dGeometry)
       .def("dAuxG_dGeometry", &TransportSystem::dAuxG_dGeometry)
@@ -438,20 +439,21 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
   // curated `manta` surface.
   //
   // It exists because dSigmaFn_dGeometry has no batched (GlobalState-taking)
-  // entry point the way SigmaFn/Sources/AuxG do -- nothing in the solver
-  // calls it yet, since assembling the A1 coupling block is Task 8's job, not
-  // this one's -- and a State cannot be constructed standalone from Python
-  // (see PyState.hpp), so python/Tests/test_trampolines.py had no way at all
-  // to drive PyTransportSystem.hpp's pointwise dSigmaFn_dGeometry dispatcher,
-  // its optional_override lookup, and the Values cast.
+  // entry point the way SigmaFn/Sources/AuxG do -- the A1 assembly in
+  // Matrices.cpp calls the *pointwise* hook per node through a member pointer
+  // -- and a State cannot be constructed standalone from Python (see
+  // PyState.hpp), so python/Tests/test_trampolines.py had no way at all to
+  // drive PyTransportSystem.hpp's pointwise dSigmaFn_dGeometry dispatcher, its
+  // optional_override lookup, and the Values cast.
   //
   // A free function rather than a TransportSystem method, deliberately: it
   // adds nothing inheritable or overridable to the interface a physics case
   // implements, unlike a batched virtual would. It builds a State carrying
   // only the given geometry (u/q/sigma/phi are left zero, since this is
   // about the geometry dispatch, not the physics) and calls the pointwise
-  // hook directly -- exactly what a C++ test does, and what a real caller
-  // (Task 8's assembly) will do too.
+  // hook directly -- exactly what a C++ test does, and what the real caller
+  // does: Matrices.cpp's fieldChainOnNodes builds the A1 column the same way,
+  // one pointwise call per node.
   m.def(
       "_test_dSigmaFn_dGeometry",
       [](TransportSystem &sys, Index i, Vector const &geom, Position x, Time t) {

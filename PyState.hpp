@@ -193,10 +193,11 @@ public:
         return {m_state->phi().data(), m_state->phi().size(), &auxNames(), false};
     }
     /// The field model's geometry -- a derived metric field, not an unknown.
-    /// Indexable by position only for now: the names would come from the
-    /// field model's own spec, and no field model is attached to a
-    /// TransportSystem's SystemSpec yet. Name indexing arrives with Task 6,
-    /// once a field model contributes named geometry fields to look up.
+    /// Indexable by position only, and still is: the slot names live in the
+    /// field model's own FieldModelSpec, while this view takes its names from
+    /// the TransportSystem's SystemSpec, which knows nothing about whichever
+    /// model happens to be attached. There is no route from one to the other,
+    /// so there is nothing to look a name up in. See TODO for the entry.
     StateField geom() const
     {
         return {m_state->geom().data(), m_state->geom().size(), &noNames(), false};

@@ -175,8 +175,8 @@ class SystemSolver
         //
         // Kept separate from solveJacEq because solveCoupledJacExact applies it
         // nField + 1 times as its *inner* solve. Anything that wrote the field
-        // block in here -- as Task 6's block-Jacobi psi solve did, before this
-        // split -- would corrupt every one of those.
+        // block in here -- as the block-Jacobi psi solve that preceded this
+        // split did -- would corrupt every one of those. See the definition.
         void solveTransportJac(N_Vector g, N_Vector delY);
 
         // Exact Schur complement onto psi. See the definition; costs one
@@ -331,16 +331,12 @@ class SystemSolver
         Index getGeometrySlots() const { return nGeom; };
 
         // How the coupled Jacobian is solved once a field model is attached.
-        //
-        //   Iterative -- block Gauss-Seidel between the transport block and the
-        //                field block. The production path, and the default.
-        //   Exact     -- the Schur complement onto psi, formed by applying the
-        //                transport inverse to every column of A1. That is
-        //                nField + 1 transport solves per Jacobian solve, so it
-        //                is a verification tool: it is what makes the coupled
-        //                system checkable by SolveJacTests' method (finite
-        //                difference the residual, require J dy = g), and it is
-        //                the oracle the iterative path is compared against.
+        // Iterative is block Gauss-Seidel and is the default; Exact is the
+        // Schur complement onto psi, and is a verification tool rather than a
+        // production path -- it is the oracle the iterative path is compared
+        // against, and what makes the coupled system checkable by SolveJacTests'
+        // method. See solveCoupledJacIterative and solveCoupledJacExact above
+        // for what each costs.
         //
         // Consulted by initialize(), which says once per run what the choice
         // costs, and by solveJacEq.

@@ -228,20 +228,23 @@ def test_incomplete_subclass_is_rejected_with_a_useful_message(tmp_path):
 # ---------------------------------------------------- geometry derivatives --
 #
 # dSigmaFn_dGeometry has no way to be driven from Python the way SigmaFn is in
-# test_scalar_and_vectorised_paths_agree above: nothing in the solver calls it
-# yet (assembling the A1 coupling block is Task 8's job, not this one's), so
-# there is no real Runner solve that reaches it, and unlike SigmaFn/Sources/
-# AuxG it has no batched (GlobalState-taking) entry point either -- adding one
-# just to test through was tried and reverted, because it would have been a
-# new virtual on TransportSystem's public interface, inheritable and
-# overridable by any physics case, existing for no reason but this test.
+# test_scalar_and_vectorised_paths_agree above. The solver does call it -- the
+# A1 coupling block is assembled from it, in Matrices.cpp -- but only on a run
+# with a field model attached, and no Python surface can attach one: a field
+# model is selected by the config's FieldModel key from a C++ registry, and
+# Runner.configure rejects that key outright. So there is no Runner solve
+# reachable from here that reaches the hook. Unlike SigmaFn/Sources/AuxG it has
+# no batched (GlobalState-taking) entry point either -- adding one just to test
+# through was tried and reverted, because it would have been a new virtual on
+# TransportSystem's public interface, inheritable and overridable by any
+# physics case, existing for no reason but this test.
 #
 # manta._manta._test_dSigmaFn_dGeometry is the narrower alternative: a free
 # function (Python.cpp), not a TransportSystem method, that builds a State in
 # C++ and calls the pointwise dispatcher directly -- the same thing a C++
 # unit test does, and the same boundary (PyTransportSystem.hpp's
 # dSigmaFn_dGeometry dispatcher, its optional_override lookup, and the Values
-# cast) a real caller will eventually cross. It is test support only and not
+# cast) the A1 assembly crosses, once per node. It is test support only and not
 # re-exported by manta/__init__.py, reachable only via manta._manta, the same
 # way test_jax_layer.py already reaches manta._manta.runner_ffi_ops directly.
 

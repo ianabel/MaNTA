@@ -750,7 +750,8 @@ AdjointRun richRun(Vector const &p, Index nCells, Index k, std::string const &st
 /// FieldSolve = exact by default, so that the finite-difference references built
 /// from this factory are independent of the sweep under test. Five field
 /// unknowns whose geometry interpolant reaches every cell is the hardest coupled
-/// fixture here: before Task 13 the transposed sweep could not reach
+/// fixture here: before the Irons-Tuck acceleration and the escalation to the
+/// exact solve, the transposed sweep could not reach
 /// FieldSolveTolerance within the default twenty sweeps and the iterative
 /// adjoint threw, which is what
 /// a_five_dof_adjoint_reaches_the_same_gradient_either_way used to pin. It now
@@ -822,7 +823,8 @@ Vector finiteDifferenceGradient(RunFactory factory, Vector const &p0, Index nCel
 ///     || G_psi - A1^T z_x - B^T z_psi ||   relative to the largest term in it.
 ///
 /// Not "small": **exactly zero, to roundoff**, and that is the whole of
-/// invariant 1. Task 10's stopping test is a relative *backward error* rather
+/// invariant 1. solveCoupledAdjointIterative's stopping test is a relative
+/// *backward error* rather
 /// than a proxy for one precisely because this row holds identically -- the
 /// residual of the pair returned is then A2^T (z_psi^{n+1} - z_psi^n) in row one
 /// and nothing in row two, which is what makes ||A2^T dz|| the exact backward
@@ -940,7 +942,9 @@ BOOST_AUTO_TEST_CASE(dropping_a_transposed_coupling_block_makes_the_gradient_wro
 {
     // The vacuity guard. Without it, the gradient checks above would pass on an
     // objective that never saw the coupling -- which is exactly how a zero-A1
-    // fixture made "the sweep converged" trivially true in Task 9.
+    // fixture once made "the sweep converged" trivially true, in the forward
+    // solve's own tests. maxAbsA1 in field_jacobian_tests exists for the same
+    // reason.
     //
     // Reached through MANTA_TEST_PRIVATE, as in field_jacobian_tests: this is a
     // -DTEST build, so nothing test-only is added to SystemSolver.
@@ -1180,9 +1184,10 @@ BOOST_AUTO_TEST_CASE(a_failing_field_model_does_not_destroy_the_runs_output)
     BOOST_TEST(field->calls >= 2);
 
     // **There are deliberately no assertions about the .nc, and that is the
-    // honest answer to the Task 10 deferred minor rather than a weaker one.**
+    // honest answer to a review finding rather than a weaker one.**
     //
-    // The minor said the netCDF assertions were vacuous, and the fix attempted
+    // The finding was that the netCDF assertions this test used to carry were
+    // vacuous, and the fix attempted
     // here first was to read the file back. That is no better, and it was
     // measured rather than argued: with the guard in Solver.cpp replaced by a
     // bare `throw;`, so that finaliseDiagnostics, nc_output.Close() and

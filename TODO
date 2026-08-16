@@ -149,9 +149,9 @@ reason it was not made:
 
     The fix is to give FieldResidual a `states_dot` argument, matching ScalarG,
     which takes both y and ydot for the same reason. That is an interface change
-    to the FieldModel value hook, and no task in the self-consistent-B-fields
-    plan owns that signature -- Task 8 assembled the coupling, Task 9 owns the
-    iterative solve, Task 10 the adjoint transposes. Doing it wants a field model
+    to the FieldModel value hook, which nothing in the coupling as built owns:
+    the assembly, the iterative solve and the adjoint transposes all consume the
+    signature rather than setting it. Doing it wants a field model
     whose residual genuinely carries d/dt of a transport quantity, checked
     against a closed form first: the same "write the case that would catch it
     being wrong before changing it" rule the autodiff-sigma entry above records.
@@ -233,9 +233,17 @@ reason it was not made:
     N_magnetics >> N_HDG, where exact's nField + 1 transport solves and its
     O(nField^3) dense solve are hopeless and one sweep per iteration is the only
     affordable option -- but nothing in the tree exercises that regime yet, so
-    every measurement available today says exact is cheaper. Said in three
-    places so it cannot be lost: solveCoupledJacIterative's escalation comment,
-    the FieldSolve = iterative warning initialize() prints, and here.
+    every measurement available today says exact is cheaper.
+
+    Said in **five** places, which is three more than a fact needs and is worth
+    knowing before adding a sixth: solveCoupledJacIterative's escalation comment
+    (SystemSolver.cpp), the FieldSolve = iterative message initialize() logs,
+    CLAUDE.md's field section, docs/field_coupling.rst, and here.
+    docs/running.rst and FEATURES.md state it in a clause and point at
+    field_coupling for the arithmetic, which is the pattern to follow -- when
+    this entry is closed, or the measurement changes, all five have to move
+    together, and the count is here so that is a known cost rather than a
+    surprise.
 
   - Nothing latches the fallback. A genuinely divergent coupling pays
     FieldSolveMaxSweeps sweeps *and* the exact solve on every Jacobian solve for
@@ -255,6 +263,31 @@ reason it was not made:
     The end-of-run count is the signal for now -- and it is printed only on the
     time-marching path, beside IDA's own totals, so a steady-state run
     (SteadyStateSolver, which does not go through IDASolve) reports nothing.
+
+  - **No Python surface can reach the geometry, in either of the two layers, and
+    both gaps are latent rather than visible.** Nothing exercises them because
+    nothing can: a field model is selected by the config's FieldModel key from a
+    C++ registry, Runner.configure rejects that key as ProblemSelection, and
+    there is no pybind11 class for a FieldModel to hand over instead. So a
+    Python or JAX case can be *written* against geometry today and will read
+    zeros. Two separate pieces:
+
+      * manta.jax.State has no Geometry field, while the GlobalState caster
+        (Python.cpp) puts a "Geometry" key in the dict unconditionally. State
+        .from_manta drops it, so a JAX case cannot read geometry at all. Adding
+        the field is small; what makes it more than a one-liner is that State is
+        an equinox Module with a vmap_axes() pytree and a make_zero, and an
+        nGeom == 0 run has to keep giving the same pytree structure it does now
+        -- the Aux and Scalars fields already carry that None-for-empty pattern.
+      * manta.State.geom is indexable by position only (PyState.hpp). The slot
+        names live in the field model's FieldModelSpec and this view takes its
+        names from the TransportSystem's SystemSpec, so there is nothing to look
+        a name up in. Every other field on the view -- u, q, sigma, phi, scalars
+        -- accepts a declared name, so the asymmetry will be noticed. Fixing it
+        means giving PyState a route to the attached model's spec, which the
+        solver does not currently offer a State.
+
+    Both want a Python-attachable field model first, or they are untestable.
 
 Superconvergence follow-ons (see Tests/README.md for what is already verified):
 
