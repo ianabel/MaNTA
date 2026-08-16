@@ -411,6 +411,9 @@ It follows the physics-case pattern throughout — a validated spec, a
 process-global registry with the same two throws, its own toml table, selected
 by name from the config. `docs/field_coupling.rst` is the interface document and
 `--list-options` prints the five keys; what follows is what neither says.
+`docs/superpowers/notes/2026-08-16-self-consistent-b-fields-design-notes.md`
+records why the design has this shape, where it departed from its own spec, and
+every number quoted below.
 
 **The geometry slots are the only channel into the transport physics**, and they
 are not unknowns: they are a function of `(psi, x)` evaluated at the physics
