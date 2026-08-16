@@ -15,6 +15,12 @@ void PyRunner::configure(const py::dict &config) {
   // Set stored problem to null to allow reconfiguration after object creation
   system = nullptr;
   grid = nullptr;
+  // ...and with the grid goes anything holding it. The restart DGSolns took a
+  // reference to *grid until they started copying it, and `restarting` is
+  // sticky, so a configuration that does not ask for a restart has to say so
+  // rather than inherit the last one. Cleared here, before the config is even
+  // parsed, so it holds on the throwing paths too.
+  pProblem->clearRestart();
 
   // Every key this accepts is declared in ConfigSchema.cpp, the same table
   // runManta reads. This function used to carry its own `params` list and its
@@ -219,6 +225,27 @@ py::tuple PyRunner::getAdjointGradients(void) {
   }
 
   return py::make_tuple(G, gp);
+}
+
+Vector
+PyRunner::getDerivative(Index var,
+                        std::optional<std::vector<Position>> const &points) {
+  // Same shape as getSolution below, reading yJac.q rather than yJac.u -- and
+  // for the same reason: q is a DGApprox over the solver's own basis, so it
+  // evaluates at any x directly. The alternative a caller had before this
+  // existed was to fit something to getSolution's samples and differentiate
+  // that, which is a different function.
+  const std::vector<Position> xs =
+      points ? points.value() : system->yJac.getPoints();
+
+  Vector sol(xs.size());
+  for (size_t i = 0; i < xs.size(); i++) {
+    const auto &p = xs[i];
+    if (p < grid->lowerBoundary() || p > grid->upperBoundary())
+      throw std::out_of_range("Requested point outside of grid boundaries");
+    sol(i) = system->yJac.q(var)(p);
+  }
+  return sol;
 }
 
 Vector
