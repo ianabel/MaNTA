@@ -21,8 +21,8 @@ and the retractions are recorded deliberately.
 | Phase 1 (into the solver) | **the plan as written should not be built** — see "What the measurements changed". Working through the revised order at the end of this file instead. |
 | Landed on `main` | both side quests: **#13** restart use-after-free, **#14** `getDerivative` |
 | Landed since | **#15** steady-state output, PTC diagnostics and the SER config keys — most of step 2 below |
-| On this branch | steps 1 and 2 below: `Grid` validation, and the merit function named and measured |
-| Next | step 3, the modal sensor |
+| On this branch | steps 1–3 below: `Grid` validation, the merit function named and measured, and the modal sensor built |
+| Next | step 4, global-`k` selection by Giorgiani's rule — the measured win |
 
 ## 1. The loop runs with zero core changes
 
@@ -304,7 +304,14 @@ Against it:
 
 1. ~~**`Grid(std::vector<Position>)` validation**~~ — **done on this branch.** It checked only `size() >= 2`, and `Interval(a,b)` silently swaps when `a > b` (`gridStructures.hpp:28-32`), so an out-of-order list built overlapping cells and a repeated point built a zero-width one — whose `MassMatrix` is `(h/2)·RefMass`, identically zero (`Basis.hpp:548-551`), and whose `toRef` divides by `h`. Now: finite, then strictly increasing, then the same `1e-14` total-span rule the `(lBound, uBound, nCells)` constructor already applies, so `Grid_points` cannot build what `Grid_size` would reject. Three cases in `GridTests.cpp`.
 2. ~~**A PTC unit test**~~ — **done.** #15 added five cases driving `solveSteadyState` plus work counters (`SteadyStats`) that make the cost of a change *measurable*; this branch adds three more covering the merit function itself, which is now the named `SystemSolver::steadyResidualNorm` rather than an unreachable lambda. The `sqrt(h)` scaling above is what came out of it. Step rejection, the `KINSetMaxNewtonStep` clamp and the hard-`KINSol`-failure path are still uncovered.
-3. **The modal sensor** (§7) — small, self-contained, testable against these two benchmarks *without* a solve, and it is the piece all four papers' strategies need and only one of them supplies.
+3. ~~**The modal sensor** (§7)~~ — **done on this branch**, as `SmoothnessSensor.{hpp,cpp}` over a new `NodalBasis::ToModal`. It went in as designed and §7's prediction about the implementation held: the nodal→modal map is the stored `Vandermonde` inverted once per order, no quadrature. Three things came out of building it that the spike had not shown, all in `SmoothnessSensorTests.cpp`:
+   * **A floored coefficient must not be *fitted*, only skipped.** A function even about a cell centre has every odd Legendre coefficient identically zero. Pinning those at the round-off floor and running the least-squares line through the resulting alternating sequence gives `s = -8.3` at `k = 6` for `|x|^{4/3}` — a *negative* rate, i.e. the opposite of the truth, on the sharpest feature in the tree. Skipping them gives **2.4047**, against the `j^{-(a+1)} = j^{-7/3} = 2.333` that theory predicts for `|x|^{4/3}`. That 3% agreement is the strongest evidence here that the fit measures decay rather than merely avoiding the defect.
+   * **The floor is `(k+1)·eps`, not `eps`,** and it has to be: each `û_j` is a length-`(k+1)` dot product, so its round-off is bounded by `(k+1)·eps·scale`. At one epsilon exactly one structural zero survived the filter (`û_1/scale = 2.56e-16`) and that one mode caused the whole defect above. The two populations are eleven orders apart, so the exact position in the gap does not matter — but being on the correct side of it does.
+   * **§7's caveat about low `k` applies to the decay rate too, not only to `S_K`.** At `k = 2` neither indicator separates `exp(x)` from a singular function, and both get the *sign* wrong — the singular one reads as smoother on both measures. Two modes cannot see a singularity whichever quantity is formed from them.
+
+   What does hold, and is the real argument for the rate: on one unchanged function `S_K` runs 3.3e-3 / 8.0e-7 / 3.8e-11 at `k` = 2 / 4 / 6 — nearly eight orders — while `s` runs 2.04 / 3.63 / 5.39. `S_K` is an energy share with no fixed scale, so any threshold on it is a per-degree quantity; `s` is an exponent, so a rule like "`s < 4` is rough" means the same thing at every degree. Persson & Peraire's `S* ~ 1/k^4` is exactly such a per-degree calibration, and for shock capture rather than for this.
+
+   The localisation claim reproduces end to end: `x^{4/3}` on 10 cells at `k = 4` gives decay rates 3.93, 6.73, 7.83, … 10.65 — monotone away from the singular cell, which is cell 0, the one `ANALYSIS.md` §7 identifies.
 4. **Global-`k` selection by Giorgiani's rule** — 2.8e-9 at 90 DOF against 2.0e-6 at 128, no per-cell machinery, and it is the measured win.
 5. Only then per-cell `p` (the ~320-site blocker) or `h`.
 

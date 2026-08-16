@@ -440,6 +440,29 @@ it is how the `dAux_Mat` column-layout defect was found. Two things make it work
 
 These are deliberate and tracked, not oversights:
 
+* **The smoothness sensor has no consumer.** `SmoothnessSensor.{hpp,cpp}` and
+  the `NodalBasis::ToModal` it is built on are covered by
+  `SmoothnessSensorTests.cpp` -- against polynomials whose Legendre
+  coefficients are known exactly, against the `j^-(a+1)` decay theory predicts
+  for `|x|^a`, and end to end over a grid -- but nothing in the solver calls
+  any of it. There is no config key, no output, and no adaptive loop; it is a
+  measurement waiting for step 4 of `MESH-REFINEMENT.md`. So its *unit*
+  coverage is good and its *integration* coverage is nil, and the usual
+  reassurance that the regression suite would catch a mistake does not apply
+  here, because no regression case executes a line of it.
+
+  Two specifics worth knowing. The `DGSoln` overload is only ever exercised on
+  `u`, though it takes any variable index, and the sensor is built for a single
+  cell at a time with no state, so `q` or `sigma` would work identically and
+  are simply not measured. And the whole thing rests on the modal coefficients
+  being separable from round-off: the floor is `(k+1)*eps` of the cell's
+  largest coefficient, a bound on the transform's own error rather than a
+  physical threshold, and the case that pins it
+  (`a_spectrum_with_structural_zeros_is_not_fitted_through_the_gaps`) checks
+  *both* populations -- that the structural zeros are below 1e-14 and the real
+  modes above 1e-3 -- because a fixture whose two populations had drifted
+  together would keep passing while testing nothing.
+
 * **Adjoint *output* is still not verified.** `WriteAdjoints()` is commented
   out at `Solver.cpp:350` (commit `57d2652`, "adjoint writing doesn't work for
   spatial adjoints"), so no run emits the `ng` variable or the `G<i>_p` /
