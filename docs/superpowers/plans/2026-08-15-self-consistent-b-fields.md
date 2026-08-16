@@ -2661,9 +2661,12 @@ git commit -m "Measure the coupled problem's order of accuracy, and record it"
 **Files:**
 - Modify: `NetCDFIO.{hpp,cpp}`, `Solver.cpp` (output and restart)
 - Modify: `docs/formulation.rst`, `docs/physics_interface.rst`, `docs/configuration.rst`, `docs/running.rst`
-- Modify: `FEATURES.md`, `CLAUDE.md`
-- Create: `Tests/RegressionTests/coupled-field.conf` and its reference
+- Modify: `FEATURES.md`, `CLAUDE.md`, `Tests/README.md`
 - Modify: `Tests/UnitTests/SolverLifecycleTests.cpp`
+
+There is deliberately **no** new regression case — see Step 6. An earlier draft
+of this list said to create one; that was settled the other way before
+execution began.
 
 **Interfaces:**
 - Consumes: everything.
@@ -2695,6 +2698,15 @@ BOOST_AUTO_TEST_CASE(psi_round_trips_through_a_restart)
 }
 ```
 
+**None of `integrateTwice` / `integrateOnce` / `maxAbsDifference` /
+`makeCoupledSolver` / `runCoupledToTime` / `writeRestart` / `restartFrom`
+exists** — the two cases above are written in terms of the shape the test
+should have, not of an existing API. Model them on
+`a_second_integration_on_one_solver_matches_a_fresh_one`
+(`SolverLifecycleTests.cpp:613`), which is the uncoupled precedent for the
+first and already does the whole initialize/integrate/destroy dance at zero
+tolerance. Reuse its machinery rather than building a parallel set.
+
 - [ ] **Step 2: Run test to verify it fails**
 
 ```sh
@@ -2702,6 +2714,14 @@ make Tests/UnitTests/UnitTests && Tests/UnitTests/UnitTests --run_test=solver_li
 ```
 
 Expected: the restart test fails — `psi` is not serialised.
+
+Watch for the *first* test passing vacuously. `a_second_integration...` is
+pinned at exactly zero tolerance for a reason recorded in `CLAUDE.md`: the last
+defect there left the second run completing, plausible, and wrong in the
+eleventh digit. A coupled version that never attaches a field model, or attaches
+one whose `resetForRun()` has nothing to reset, tests nothing. Confirm it
+discriminates by giving a field model some per-run state, failing to reset it,
+and watching the test fail.
 
 - [ ] **Step 3: Write `psi` and the geometry to netCDF**
 
@@ -2713,23 +2733,45 @@ Serialise the field block in `<stem>.restart.nc` and read it back. Restarting is
 
 - [ ] **Step 5: Prove the zero-coupling invariant**
 
-The strongest guard available, and the one that must be run by hand rather than asserted:
+The strongest guard available, and the one that must be run by hand rather than
+asserted: **a run with no field model attached must produce byte-identical
+output to the same run before this branch existed.** Every existing config is
+in that class, so this is the check that the whole coupling is inert when
+unused.
+
+The baseline is `main`, not a stash — all of this branch's work is committed.
+Build it in a throwaway worktree, remembering that `Makefile.local` is
+gitignored and so must be copied across:
 
 ```sh
-git stash
-make MaNTA && cp MaNTA /tmp/MaNTA-baseline
-git stash pop
-make MaNTA
+git worktree add /tmp/manta-baseline main
+cp Makefile.local /tmp/manta-baseline/
+make -C /tmp/manta-baseline MaNTA -j
+make MaNTA -j
 
-for conf in Tests/RegressionTests/*.conf; do
-    /tmp/MaNTA-baseline "$conf" && mv "$(basename "${conf%.conf}").nc" /tmp/baseline-$(basename "${conf%.conf}").nc
-    ./MaNTA "$conf"
-    cmp "/tmp/baseline-$(basename "${conf%.conf}").nc" "$(basename "${conf%.conf}").nc" \
-      || echo "DIFFERS: $conf"
+mkdir -p /tmp/zero-coupling && cd /tmp/zero-coupling
+for conf in "$OLDPWD"/Tests/RegressionTests/*.conf; do
+    stem=$(basename "${conf%.conf}")
+    /tmp/manta-baseline/MaNTA "$conf" && mv "$stem.nc" "$stem.baseline.nc"
+    "$OLDPWD"/MaNTA "$conf"
+    cmp "$stem.baseline.nc" "$stem.nc" || echo "DIFFERS: $stem"
 done
+cd "$OLDPWD" && git worktree remove /tmp/manta-baseline
 ```
 
-Expected: no output. Not "within 1e-2" — the regression suite's tolerance is far too loose to see a change of this kind, which is exactly how the `zeroFlux` reimplementation was verified.
+Expected: no `DIFFERS` line. **Not "within 1e-2"** — the regression suite's
+tolerance is far too loose to see a change of this kind, which is exactly how
+the `zeroFlux` reimplementation was verified.
+
+Two ways this can report a false difference, both worth ruling out before
+believing a real one. netCDF files carry no timestamp of their own, so a plain
+`cmp` is legitimate here — but if one does differ, check whether the two
+binaries were built with the same flags before concluding the solver changed.
+And run both from the same directory: output lands in the working directory,
+and only `OutputFilename`'s basename survives.
+
+Record the result in the report either way. A difference here is a Critical
+finding, not something to investigate quietly.
 
 - [ ] **Step 6: Record that there is no coupled regression case**
 
