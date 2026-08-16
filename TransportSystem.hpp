@@ -78,6 +78,12 @@ public:
 
   virtual void setRestartValues(const std::vector<double> &y, const std::vector<double> &dydt, const Grid &grid, Index k)
   {
+    // Drop any previous restart before the buffers under it move: reassigning
+    // restart_Y_data below can reallocate, and the old DGSolns are mapped over
+    // it.
+    restart_Y.reset();
+    restart_dYdt.reset();
+
     // Copy into vectors owned by TransportSystem. (These were written as
     // std::move(y), but y is a const lvalue reference -- std::move on it yields
     // a const rvalue, which binds to copy-assignment, not move-assignment. So
@@ -86,14 +92,24 @@ public:
     restart_Y_data = y;
     restart_dYdt_data = dydt;
 
+    // Take our own copy of the grid. DGSolnImpl stores it as `const Grid &`
+    // (DGSoln.hpp), so binding the caller's costs a use-after-free the moment
+    // that caller moves on: PyRunner hands us the referent of its own
+    // unique_ptr and nulls it at the top of the very next configure(), leaving
+    // restart_Y pointing at freed memory. DGSolnImpl::copy then compares
+    // `grid != other.grid` against whatever now occupies it -- which is not a
+    // crash but a wrong answer, and was observed reporting two identical
+    // eight-cell grids as different.
+    restart_grid = std::make_unique<Grid>(grid);
+
     // Create DGSolns to wrap restart data
-    restart_Y = std::make_shared<DGSoln>(nVars, grid, k, restart_Y_data.data(), nScalars, nAux);
-    restart_dYdt = std::make_shared<DGSoln>(nVars, grid, k, restart_dYdt_data.data(), nScalars, nAux);
+    restart_Y = std::make_shared<DGSoln>(nVars, *restart_grid, k, restart_Y_data.data(), nScalars, nAux);
+    restart_dYdt = std::make_shared<DGSoln>(nVars, *restart_grid, k, restart_dYdt_data.data(), nScalars, nAux);
     restarting = true;
 
     // Pull boundary conditions directly from restart values
-    Position xL = grid.lowerBoundary();
-    Position xR = grid.upperBoundary();
+    Position xL = restart_grid->lowerBoundary();
+    Position xR = restart_grid->upperBoundary();
 
     uL.resize(nVars);
     uR.resize(nVars);
@@ -137,6 +153,23 @@ public:
   bool isRestarting() const { return restarting; };
   DGSoln &getRestartY() { return *restart_Y; };
   DGSoln &getRestartdYdt() { return *restart_dYdt; };
+
+  // Forget any restart state. A restart belongs to one *configuration*, but a
+  // TransportSystem outlives configurations -- PyRunner keeps one across every
+  // configure() call, rebuilding only the solver and the grid -- so without
+  // this `restarting` is sticky and the run after a restart resumes from the
+  // previous file instead of from InitialValue. Nothing cleared it until
+  // test_reconfiguring_without_restart_clears_the_restart_state was written,
+  // because every other restart test builds a fresh Runner.
+  void clearRestart()
+  {
+    restarting = false;
+    restart_Y.reset();
+    restart_dYdt.reset();
+    restart_grid.reset();
+    restart_Y_data.clear();
+    restart_dYdt_data.clear();
+  }
 
   // Function for passing boundary conditions to the solver.
   //
@@ -516,9 +549,13 @@ protected:
   bool restarting = false;
   std::vector<double> restart_Y_data;
   std::vector<double> restart_dYdt_data;
+  // Declared *before* restart_Y/restart_dYdt, and that ordering is load-bearing:
+  // members are destroyed in reverse declaration order, so the two DGSolns --
+  // which hold this grid by reference -- die before it does.
+  std::unique_ptr<Grid> restart_grid = nullptr;
   std::shared_ptr<DGSoln> restart_Y = nullptr;
   std::shared_ptr<DGSoln> restart_dYdt = nullptr;
-  
+
   std::vector<Values> m_sourceCache; // since sources might be expensive to calculate, cache them for use in outputs
 
   std::vector<Value> uL, uR;

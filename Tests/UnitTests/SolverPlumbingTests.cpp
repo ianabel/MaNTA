@@ -53,6 +53,21 @@ BOOST_AUTO_TEST_CASE(setters_reject_invalid_values)
     BOOST_CHECK_THROW(sys.setSteadyStateTolerance(0.0), std::logic_error);
     BOOST_CHECK_THROW(sys.setSteadyStateTolerance(-1.0), std::logic_error);
 
+    // The SER rate is an exponent on the residual ratio, so zero is meaningful
+    // -- grow at the floor alone -- and only a negative value is wrong, since
+    // that would shrink dt as the residual falls.
+    BOOST_CHECK_NO_THROW(sys.setPseudoTransientSERRate(0.0));
+    BOOST_CHECK_NO_THROW(sys.setPseudoTransientSERRate(2.0));
+    BOOST_CHECK_THROW(sys.setPseudoTransientSERRate(-1e-12), std::logic_error);
+
+    // The floor is a growth factor on a step that reduced the residual, so the
+    // ratio already exceeds 1 and anything below 1 could never bind. Refused
+    // rather than accepted and ignored; 1 exactly is "no floor".
+    BOOST_CHECK_NO_THROW(sys.setPseudoTransientSERFloor(1.0));
+    BOOST_CHECK_NO_THROW(sys.setPseudoTransientSERFloor(10.0));
+    BOOST_CHECK_THROW(sys.setPseudoTransientSERFloor(0.999), std::logic_error);
+    BOOST_CHECK_THROW(sys.setPseudoTransientSERFloor(0.0), std::logic_error);
+
     // Objective-decrease tolerance, likewise. Zero has to throw rather than mean
     // "off": the gate is off by *absence*, and a caller that reaches the setter
     // has said it wants the gate, so a zero here is a mistake worth reporting

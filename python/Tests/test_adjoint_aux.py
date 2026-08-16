@@ -164,7 +164,6 @@ class AuxDiffusionAdjoint(MaNTA.AdjointProblem):
             "dSigma": 0,
             "dSources": 0,
             "dAux": 0,
-            "dgFn_dphi": 0,
         }
 
     # --- the objective and its explicit parameter derivative -------------
@@ -213,15 +212,11 @@ class AuxDiffusionAdjoint(MaNTA.AdjointProblem):
         self.call_counts["dAux"] += 1
         return np.zeros((self.np, len(positions)))
 
-    def dgFn_dphi(self, gIndex, state, x):
-        # Pointwise, and the return value *is* the derivative vector -- unlike
-        # the C++ signature (Index, VectorRef, State, Position), the trampoline
-        # does not pass the output reference through to Python.
-        self.call_counts["dgFn_dphi"] += 1
-        return np.zeros(self.ts.nAux)
-
-    def dAux_dp(self, i, pIndex, state, x):
-        return 0.0
+    # No dgFn_dphi and no dAux_dp. Both were pointwise hooks a Python adjoint
+    # used to have to supply, and PyAdjointProblem now raises from each of them
+    # rather than dispatching: dg/dphi reaches G_y through the batched `dg`
+    # above, and dAux/dp through the batched `dAux`. Defining them here would be
+    # dead code that reads as though it were part of the contract.
 
     def getName(self, pIndex):
         return ("kappa", "source")[pIndex]
@@ -374,8 +369,10 @@ def test_adjoint_gradient_matches_the_closed_form(tmp_path, scheme):
 def test_the_aux_adjoint_hooks_are_all_exercised(tmp_path):
     """Guard against the gradient being right for the wrong reason.
 
-    `dAux` and `dgFn_dphi` are reached only when nAux > 0, so this is the only
-    place they are known to be called at all.
+    `dAux` is reached only when nAux > 0, so this is the only place it is known
+    to be called at all. It used to check `dgFn_dphi` alongside it; that hook is
+    unreachable from Python now -- the trampoline raises rather than dispatching,
+    because dg/dphi arrives with the rest of `dg`.
     """
     ts = AuxParametricDiffusion(np.array([KAPPA0, SOURCE0]))
     adjoint = AuxDiffusionAdjoint(ts)
@@ -388,3 +385,421 @@ def test_the_aux_adjoint_hooks_are_all_exercised(tmp_path):
 
     for name, n in adjoint.call_counts.items():
         assert n > 0, f"{name} was never called; counts = {adjoint.call_counts}"
+
+
+# ------------------------------------------- F_p's auxiliary block, dAux/dp --
+#
+# Everything above leaves that block identically zero: `dAux` returns zeros,
+# because neither constraint in AuxParametricDiffusion mentions kappa or S. So
+# the fixtures cover the aux column of the adjoint *matrix* and say nothing at
+# all about the aux rows of F_p -- the dF/dp side, which
+# computeAdjointGradients fills from the batched dAux and contracts with the
+# adjoint state. Dropping that block, or giving it the wrong sign, is invisible
+# to every test above and to every test in test_adjoint.py, where nAux is zero.
+#
+# Both fixtures below move a parameter *out* of a hook that is already covered
+# and into a constraint, leaving the continuous problem alone. The closed forms
+# at the top of this file therefore still apply, and a wrong aux block moves the
+# gradient while G stays exactly right -- the same asymmetry the module
+# docstring relies on for dSigma/dPhi.
+
+
+class ConstraintParametricDiffusion(MaNTA.TransportSystem):
+    """kappa moved out of the flux and into the auxiliary constraint.
+
+        sigma_hat = phi_q,   phi_q - kappa q = 0,   phi_u - u = 0,   source = S
+
+    phi_q is still kappa q, so this is the same diffusion equation as
+    AuxParametricDiffusion, with the same steady state and the same closed
+    forms. What moves is where kappa reaches the residual: dSigma/dkappa is now
+    identically zero and dAux/dkappa = -q, so the whole of dG/dkappa arrives
+    through F_p's auxiliary block. dG/dS still comes through the source block,
+    which is the control -- a dropped or mis-signed aux block moves one
+    component of the gradient and leaves the other alone.
+    """
+
+    def __init__(self, p):
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1, nAux=N_AUX))
+        self.p = np.asarray(p, dtype=float)
+
+    def SigmaFn(self, i, state, x, t):
+        return state.phi[A_Q]
+
+    def Sources(self, i, state, x, t):
+        return self.p[P_SOURCE]
+
+    def dSigmaFn_du(self, i, state, x, t):
+        return np.zeros(self.nVars)
+
+    def dSigmaFn_dq(self, i, state, x, t):
+        return np.zeros(self.nVars)
+
+    def dSources_du(self, i, state, x, t):
+        return np.zeros(self.nVars)
+
+    def dSources_dq(self, i, state, x, t):
+        return np.zeros(self.nVars)
+
+    def dSources_dsigma(self, i, state, x, t):
+        return np.zeros(self.nVars)
+
+    def dSigma_dPhi(self, i, state, x, t):
+        out = np.zeros(self.nAux)
+        # One, not kappa: the flux is phi_q itself now.
+        out[A_Q] = 1.0
+        return out
+
+    def dSources_dPhi(self, i, state, x, t):
+        return np.zeros(self.nAux)
+
+    def AuxG(self, i, state, x, t):
+        if i == A_Q:
+            return state.phi[A_Q] - self.p[P_KAPPA] * state.q[0]
+        return state.phi[A_U] - state.u[0]
+
+    def AuxGPrime(self, i, out, state, x, t):
+        out.phi[i] = 1.0
+        if i == A_Q:
+            out.q[0] = -self.p[P_KAPPA]
+        else:
+            out.u[0] = -1.0
+
+    def LowerBoundary(self, i, t):
+        return 0.0
+
+    def UpperBoundary(self, i, t):
+        return 0.0
+
+    def InitialValue(self, i, x):
+        return 0.0
+
+    def InitialDerivative(self, i, x):
+        return 0.0
+
+    def InitialAuxValue(self, i, x):
+        return 0.0
+
+    def createAdjointProblem(self):
+        return ConstraintParametricAdjoint(self)
+
+
+class ConstraintParametricAdjoint(MaNTA.AdjointProblem):
+    """The same objective, with kappa's dF/dp now living in dAux."""
+
+    def __init__(self, transport_system):
+        MaNTA.AdjointProblem.__init__(self)
+        self.ts = transport_system
+        self.ng = 1
+        self.np = NP
+        self.np_boundary = 0
+        self.spatialParameters = False
+
+    def gFn(self, gIndex, states, positions):
+        u = np.asarray(states["Variable"])[:, 0]
+        return 0.5 * u * u
+
+    def dgFndp(self, gIndex, states, positions):
+        return np.zeros((self.np, len(positions)))
+
+    def dg(self, gIndex, states, positions):
+        V = np.asarray(states["Variable"])
+        zeros = np.zeros_like(V)
+        return {
+            "Variable": V.copy(),
+            "Derivative": zeros,
+            "Flux": zeros,
+            "Aux": np.zeros((len(positions), self.ts.nAux)),
+            "Scalars": np.zeros(0),
+        }
+
+    def dSigma(self, i, states, positions):
+        # Identically zero: kappa has left the flux.
+        return np.zeros((self.np, len(positions)))
+
+    def dSources(self, i, states, positions):
+        out = np.zeros((self.np, len(positions)))
+        out[P_SOURCE, :] = 1.0
+        return out
+
+    def dAux(self, i, states, positions):
+        out = np.zeros((self.np, len(positions)))
+        if i == A_Q:
+            # d(phi_q - kappa q)/d kappa = -q. Indexed by *aux*, so the decoy
+            # constraint keeps its zero row and a block written at the wrong aux
+            # offset lands on it.
+            out[P_KAPPA, :] = -np.asarray(states["Derivative"])[:, 0]
+        return out
+
+    def getName(self, pIndex):
+        return ("kappa", "source")[pIndex]
+
+
+def constraint_solve(p, tmp_path, **overrides):
+    system = ConstraintParametricDiffusion(p)
+    runner = MaNTA.Runner(system)
+    runner.configure(aux_adjoint_config(tmp_path, **overrides))
+    runner.run(T_FINAL)
+    G, gradients = runner.getAdjointGradients()
+    return np.asarray(G), np.asarray(gradients["G_p"]).reshape(-1)
+
+
+def test_the_constraint_route_puts_kappa_only_in_dAux():
+    """The premise, asserted directly, the way the dSigma/dPhi one is above."""
+    system = ConstraintParametricDiffusion(np.array([KAPPA0, SOURCE0]))
+    adjoint = ConstraintParametricAdjoint(system)
+    states = {
+        "Variable": np.array([[0.3]]),
+        "Derivative": np.array([[0.7]]),
+        "Flux": np.array([[0.0]]),
+        "Aux": np.array([[0.7 * KAPPA0, 0.3]]),
+        "Scalars": np.zeros(0),
+    }
+    positions = [0.5]
+
+    assert np.all(adjoint.dSigma(0, states, positions) == 0.0), (
+        "kappa still reaches the flux, so the aux block is not the only route"
+    )
+    assert adjoint.dSources(0, states, positions)[P_KAPPA, 0] == 0.0
+
+    dphi_q = adjoint.dAux(A_Q, states, positions)
+    assert dphi_q[P_KAPPA, 0] == pytest.approx(-0.7)
+    assert dphi_q[P_SOURCE, 0] == 0.0
+    assert np.all(adjoint.dAux(A_U, states, positions) == 0.0)
+
+
+def test_the_objective_is_unchanged_by_the_constraint_route(tmp_path):
+    """Same problem, so a wrong aux block has to show in the gradient alone."""
+    p = np.array([KAPPA0, SOURCE0])
+    G, _ = constraint_solve(p, tmp_path)
+    assert G[0] == pytest.approx(exact_G(*p), rel=1e-6)
+
+
+@pytest.mark.parametrize("scheme", SCHEMES)
+def test_the_aux_parameter_block_matches_the_closed_form(tmp_path, scheme):
+    """dG/dkappa now comes entirely out of F_p's auxiliary rows.
+
+    With that block dropped, dG/dkappa collapses to zero -- nothing else in the
+    problem depends on kappa -- while dG/dS and G itself stay exactly right.
+    Both schemes, because the superconvergent branch takes A9 over the star
+    nodes rather than the interpolatory projection and has its own line here.
+    """
+    p = np.array([KAPPA0, SOURCE0])
+    _, grad = constraint_solve(p, tmp_path, **scheme)
+
+    expected = exact_dG(*p)
+    assert grad == pytest.approx(expected, rel=5e-3), (
+        f"adjoint={grad}, closed form={expected}"
+    )
+    assert abs(grad[P_KAPPA]) > 1e-3, (
+        "dG/dkappa is ~zero, which is what a missing aux block looks like"
+    )
+
+
+# ------------------------------------ ...and the same block, indexed by node --
+#
+# The spatial branch is a separate loop: it fills one F_p column per node rather
+# than one vector per cell, and nothing reached it before -- test_adjoint.py's
+# spatial fixtures have nAux = 0, and every fixture with nAux > 0 sets
+# spatialParameters False. Superconvergent is refused with spatial parameters,
+# so there is only the one path to cover here.
+
+SPATIAL_KAPPA = 1.0
+SPATIAL_S0 = 2.0
+SPATIAL_K = 4
+SPATIAL_NCELLS = 6
+
+# Auxiliary layout for the spatial fixture: phi_S carries the source, phi_u is
+# the decoy that keeps nAux != nVars.
+A_S = 0
+
+
+class NodalConstraintSource(MaNTA.TransportSystem):
+    """-d_x(kappa d_x u) = S(x), with S delivered through a constraint.
+
+        source = phi_S,   phi_S - S(x) = 0,   phi_u - u = 0
+
+    The parameter is one field of nodal values, so dAux/dp is -1 at the node
+    that owns the point and zero elsewhere -- which the solver expresses by
+    handing the hook one column per node. Routing it through phi rather than
+    returning it from Sources is the whole difference from
+    test_adjoint.py::NodalSourceDiffusion, whose gradient is checked there
+    against both a closed form and node-by-node finite differences.
+    """
+
+    def __init__(self, points, source_nodes):
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1, nAux=2))
+        self.points = np.asarray(points, dtype=float)
+        self.source_nodes = np.asarray(source_nodes, dtype=float)
+
+    def _S(self, x):
+        return float(self.source_nodes[np.argmin(np.abs(self.points - x))])
+
+    def SigmaFn(self, i, state, x, t):
+        return SPATIAL_KAPPA * state.q[i]
+
+    def Sources(self, i, state, x, t):
+        return state.phi[A_S]
+
+    def dSigmaFn_dq(self, i, state, x, t):
+        return np.full(self.nVars, SPATIAL_KAPPA)
+
+    def dSigmaFn_du(self, i, state, x, t):
+        return np.zeros(self.nVars)
+
+    def dSources_du(self, i, state, x, t):
+        return np.zeros(self.nVars)
+
+    def dSources_dq(self, i, state, x, t):
+        return np.zeros(self.nVars)
+
+    def dSources_dsigma(self, i, state, x, t):
+        return np.zeros(self.nVars)
+
+    def dSigma_dPhi(self, i, state, x, t):
+        return np.zeros(self.nAux)
+
+    def dSources_dPhi(self, i, state, x, t):
+        out = np.zeros(self.nAux)
+        out[A_S] = 1.0
+        return out
+
+    def AuxG(self, i, state, x, t):
+        if i == A_S:
+            return state.phi[A_S] - self._S(x)
+        return state.phi[1] - state.u[0]
+
+    def AuxGPrime(self, i, out, state, x, t):
+        out.phi[i] = 1.0
+        if i != A_S:
+            out.u[0] = -1.0
+
+    def LowerBoundary(self, i, t):
+        return 0.0
+
+    def UpperBoundary(self, i, t):
+        return 0.0
+
+    def InitialValue(self, i, x):
+        return 0.0
+
+    def InitialDerivative(self, i, x):
+        return 0.0
+
+    def InitialAuxValue(self, i, x):
+        # phi_S = S(x) and phi_u = u = 0: both constraints hold at t = 0.
+        return self._S(x) if i == A_S else 0.0
+
+    def createAdjointProblem(self):
+        return NodalConstraintAdjoint(self)
+
+
+class NodalConstraintAdjoint(MaNTA.AdjointProblem):
+    """One parameter *field*, reaching the residual only through phi_S."""
+
+    def __init__(self, transport_system):
+        MaNTA.AdjointProblem.__init__(self)
+        self.ts = transport_system
+        self.ng = 1
+        self.np = 1
+        self.np_boundary = 0
+        self.spatialParameters = True
+
+    def gFn(self, gIndex, states, positions):
+        u = np.asarray(states["Variable"])[:, 0]
+        return 0.5 * u * u
+
+    def dgFndp(self, gIndex, states, positions):
+        return np.zeros((self.np, len(positions)))
+
+    def dg(self, gIndex, states, positions):
+        V = np.asarray(states["Variable"])
+        zeros = np.zeros_like(V)
+        return {
+            "Variable": V.copy(),
+            "Derivative": zeros,
+            "Flux": zeros,
+            "Aux": np.zeros((len(positions), self.ts.nAux)),
+            "Scalars": np.zeros(0),
+        }
+
+    def dSigma(self, i, states, positions):
+        return np.zeros((self.np, len(positions)))
+
+    def dSources(self, i, states, positions):
+        # Zero, unlike the direct route: the source is phi_S, not the parameter.
+        return np.zeros((self.np, len(positions)))
+
+    def dAux(self, i, states, positions):
+        out = np.zeros((self.np, len(positions)))
+        if i == A_S:
+            # d(phi_S - S)/dS = -1 at the node this point *is*; the per-node
+            # structure is what spatialParameters expresses, so the hook reports
+            # -1 everywhere and the solver places it.
+            out[0, :] = -1.0
+        return out
+
+    def getName(self, pIndex):
+        return "S"
+
+
+def spatial_aux_solve(source_nodes, tmp_path):
+    points = np.asarray(
+        MaNTA.getNodes(0.0, 1.0, SPATIAL_NCELLS, SPATIAL_K), dtype=float
+    )
+    system = NodalConstraintSource(points, source_nodes)
+    runner = MaNTA.Runner(system)
+    runner.configure(
+        aux_adjoint_config(
+            tmp_path, Polynomial_degree=SPATIAL_K, Grid_size=SPATIAL_NCELLS
+        )
+    )
+    runner.run(T_FINAL)
+    G, gradients = runner.getAdjointGradients()
+    return float(np.asarray(G)[0]), np.asarray(gradients["G_p"]), points
+
+
+def test_the_spatial_aux_gradient_sums_to_the_closed_form(tmp_path):
+    """Perturbing every node together is perturbing the scalar source.
+
+    G is quadratic in the parameters, so the sum is dG/dS = S / (120 kappa^2)
+    with no discretisation error -- the same statement
+    test_adjoint.py::test_the_spatial_gradient_sums_to_the_closed_form makes
+    about the direct route, and it holds here only if the aux rows of F_p carry
+    the right weighting and the right sign.
+    """
+    nodes = SPATIAL_S0 * np.ones(SPATIAL_NCELLS * (SPATIAL_K + 1))
+    G, G_p, _ = spatial_aux_solve(nodes, tmp_path)
+
+    assert G_p.shape == (len(nodes), 1), G_p.shape
+    assert G == pytest.approx(SPATIAL_S0**2 / (240.0 * SPATIAL_KAPPA**2), rel=1e-6)
+    assert G_p.sum() == pytest.approx(
+        SPATIAL_S0 / (120.0 * SPATIAL_KAPPA**2), rel=1e-6
+    )
+
+
+def test_the_spatial_aux_gradient_is_right_node_by_node(tmp_path):
+    """The sum is blind to node ordering; central differences are not.
+
+    The aux branch places its result at F_p.col(j) inside a loop over the
+    intra-cell node index, so a gradient whose entries are permuted or shifted
+    within a cell still sums correctly. Difference the objective one node at a
+    time instead. A non-uniform field, so the answer varies from node to node
+    and a constant-per-cell result would be visible.
+    """
+    n = SPATIAL_NCELLS * (SPATIAL_K + 1)
+    base = SPATIAL_S0 * (1.0 + 0.25 * np.cos(np.arange(n)))
+
+    _, G_p, _ = spatial_aux_solve(base, tmp_path / "base")
+    adjoint = G_p.reshape(-1)
+
+    h = 1e-4 * SPATIAL_S0
+    fd = np.zeros(n)
+    for j in range(n):
+        plus, minus = base.copy(), base.copy()
+        plus[j] += h
+        minus[j] -= h
+        G_plus, _, _ = spatial_aux_solve(plus, tmp_path / f"p{j}")
+        G_minus, _, _ = spatial_aux_solve(minus, tmp_path / f"m{j}")
+        fd[j] = (G_plus - G_minus) / (2.0 * h)
+
+    np.testing.assert_allclose(adjoint, fd, rtol=2e-3, atol=1e-12)

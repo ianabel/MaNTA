@@ -580,6 +580,56 @@ BOOST_AUTO_TEST_CASE(set_restart_values_takes_ownership_and_derives_the_boundari
     BOOST_TEST(sys.UpperBoundary(0, 0.0) == 3.0, boost::test_tools::tolerance(1e-12));
 }
 
+BOOST_AUTO_TEST_CASE(the_restart_state_owns_its_grid_and_can_be_cleared)
+{
+    // The test above pins that the restart *data* is copied. The grid was the
+    // piece that was not: DGSolnImpl holds `const Grid &` (DGSoln.hpp), so
+    // restart_Y bound the caller's, and PyRunner's caller is a unique_ptr it
+    // nulls at the top of the next configure(). DGSolnImpl::copy then reads
+    // `grid != other.grid` out of freed memory -- silently, and observed
+    // reporting two identical eight-cell grids as different.
+    struct RestartSystem : public MinimalSystem
+    {
+        RestartSystem()
+            : MinimalSystem(SystemSpec{.variables = numberedFields(1, BoundaryKind::Dirichlet,
+                                                                   BoundaryKind::Neumann)})
+        {
+        }
+    } sys;
+
+    const Index nCells = 3, k = 2, nVars = 1;
+    Grid shapeGrid(0.0, 1.0, nCells);
+    DGSoln shape(nVars, shapeGrid, k);
+    std::vector<double> Ydata(shape.getDoF(), 0.0);
+    std::vector<double> dYdata(shape.getDoF(), 0.0);
+    {
+        DGSoln tmp(nVars, shapeGrid, k, Ydata.data());
+        tmp.AssignU([](Index, double x) { return 2.0 + 3.0 * x; });
+        tmp.AssignQ([](Index, double) { return 3.0; });
+        tmp.EvaluateLambda();
+    }
+
+    // The caller's grid is heap-allocated and freed while the restart state is
+    // still live -- which is exactly the PyRunner sequence.
+    {
+        auto callersGrid = std::make_unique<Grid>(0.0, 1.0, nCells);
+        sys.setRestartValues(Ydata, dYdata, *callersGrid, k);
+        BOOST_TEST(&sys.getRestartY().getGrid() != callersGrid.get(),
+                   "the restart DGSoln still references the caller's grid");
+        callersGrid.reset();
+    }
+
+    // Deterministic without relying on what happens to land in the freed block:
+    // the copy is a distinct object, so it stays readable and equal.
+    BOOST_TEST((sys.getRestartY().getGrid() == shapeGrid),
+               "the restart grid did not survive its caller");
+    BOOST_TEST(sys.getRestartY().u(0)(0.5) == 3.5, boost::test_tools::tolerance(1e-12));
+
+    // And a restart belongs to one configuration, not to the case.
+    sys.clearRestart();
+    BOOST_TEST(sys.isRestarting() == false);
+}
+
 // ------------------------------------------------- State as an out-parameter --
 
 BOOST_AUTO_TEST_CASE(a_state_is_born_zeroed_not_merely_sized)

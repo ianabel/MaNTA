@@ -22,8 +22,13 @@ because `nAux` is zero in all of them:
   * `JAXAdjointProblem.__init__` bound `sigma` and `source` but not `aux`, so
     its `dAux()` raised AttributeError.
 
-These check the two that can be driven directly. `dgFn_dphi` needs a State,
-which cannot be constructed from Python, so the solve is still its only cover.
+These check the two that can be driven directly. `dgFn_dphi` needed a State,
+which cannot be constructed from Python, so the solve was its only cover -- and
+it has since gone from `manta.jax` entirely, along with `dAux_dp`:
+`PyAdjointProblem` raises from both rather than dispatching, because dg/dphi now
+arrives with the rest of the batched `dg` and dAux/dp with the batched `dAux`.
+The decorator test at the bottom still earns its place, because `AuxGPrime`
+remains on `ShiftedState_Decorator`.
 """
 
 import numpy as np
@@ -191,11 +196,13 @@ def test_the_jax_adjoint_differentiates_aux_by_its_parameters():
 def test_the_shifted_decorator_converts_the_state_not_the_extra_argument():
     """The misalignment itself, at the decorator rather than through a hook.
 
-    dAux_dp is the second user of ShiftedState_Decorator and cannot be reached
-    from Python: PyAdjointProblem hands it a State, which has no constructor on
-    this side, and the batched wrapper that would loop over it is overridden by
-    the trampoline. A solve is its only end-to-end cover, so pin the argument
-    order here, where both hooks' shape is the thing under test.
+    `AuxGPrime` is the one user of ShiftedState_Decorator now -- `dAux_dp` was
+    the other, and is gone -- and it cannot be driven from Python: the
+    trampoline hands it a State, which has no constructor on this side, and the
+    batched wrapper that would loop over it is overridden. A solve is its only
+    end-to-end cover, so pin the argument order here, where the shape of a
+    state-one-argument-later hook is the thing under test rather than any one
+    hook that has it.
     """
     seen = {}
 

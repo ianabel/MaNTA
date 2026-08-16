@@ -512,19 +512,33 @@ BOOST_AUTO_TEST_CASE(missing_aux_parameter_derivative_is_reported)
 
 // -------------------------------- the adjoint vectors SystemSolver builds --
 
-BOOST_AUTO_TEST_CASE(adjoint_derivative_vectors_match_gauss_quadrature)
+BOOST_AUTO_TEST_CASE(the_aux_derivative_sub_vector_weights_dg_by_the_integration_weights)
 {
-    // dGdaux_Vec computes
-    //     Vec(a*(k+1) + j) = Int_I dg/dphi_a * phi_j dx
-    // by the basis's own Gauss rule, and is compared here with an independent
-    // 30-point one.
+    // dGdaux_Vec must produce w_j * dg/dphi_a|_j and nothing else -- the same
+    // operator as DerivativeSubVector, over nAux blocks rather than nVars.
     //
-    // It used to have three siblings -- dGdu_Vec, dGdq_Vec, dGdsigma_Vec -- which
-    // this case covered too. They are gone: no solve called them, and the
-    // quantity they computed is the derivative of Int g dx rather than of the
-    // sum_m w_m g_m that GFn reports. dGdaux_Vec still computes that same wrong
-    // functional and is still live, which is in TODO; this case pins what it
-    // does today so that changing it has to be deliberate.
+    // This replaces a case that compared it against an independent 30-point Gauss
+    // rule. They agreed, because both computed Int dg/dphi phi_j dx; neither is
+    // the derivative of the objective GFn reports, which is sum_m w_m g(Z_m) and
+    // so has dG/dZ_i = w_i dg/dZ|_i. See the comment on the sibling case below:
+    // two integration routines agreeing was exactly the evidence that misled
+    // before, so the reference here is built from the weights directly.
+    //
+    // Which is necessary but not sufficient, and the second half of this case is
+    // the part that bites. M and diag(w) agree on far more than the constants the
+    // sibling comment names: (M v)_i = Int phi_i v and (diag(w) v)_i = v_i Int
+    // phi_i, so they coincide whenever the interpolatory rule integrates phi_i * v
+    // exactly. On k+1 Chebyshev points of the first kind that rule is symmetric,
+    // so for even k it is exact to degree k+1 -- and at k = 2 that covers every
+    // *affine* dg/dphi, which is what MockAdjoint's is. Reintroducing
+    // InterpolateOntoBasis here therefore passes a check driven through dg alone,
+    // measured: it moves the answer by 5e-16. Distinguishing them needs a dg/dphi
+    // of degree k, and a guard that it stays one.
+    //
+    // nVars = 2 with nAux = 1 deliberately: the output is nAux*(k+1) long, which
+    // for this fixture is not the length an nVars-shaped one would be, so a loop
+    // bound or a size that has drifted back to nVars fails here rather than
+    // silently agreeing.
     const Index k = 2, nCells = 4, nVars = 2, nAux = 1;
     Grid grid(0.0, 1.0, nCells);
     AdjointHostSystem problem;
@@ -545,49 +559,62 @@ BOOST_AUTO_TEST_CASE(adjoint_derivative_vectors_match_gauss_quadrature)
     N_VConst(0.0, dYdt);
     sys.setInitialConditions(Y, dYdt);
 
-    auto integrator = boost::math::quadrature::gauss<double, 30>();
     const Index gIndex = 1;
 
-    Vector actual(nVars * (k + 1));
+    // The route the solver takes: the batched dg hook -- whose default loops over
+    // MockAdjoint's pointwise dgFn_dphi at the nodes -- then dGdaux_Vec over the
+    // Aux slice of the result. Driving it any other way would test a path
+    // initializeMatricesForAdjointSolve does not use.
+    GlobalState dGdvars(nCells, k, nVars, 0, nAux);
+    adjoint.dg(gIndex, dGdvars, sys.y.evalOnNodes(), sys.y.getPoints());
+
+    // Nodal values of a genuine degree-k polynomial, for the discriminating half.
+    // Not affine: with these, phi_i * v has degree 2k and the two operators part
+    // company.
+    Matrix synthetic(nAux, k + 1);
+    for (Index a = 0; a < nAux; ++a)
+        for (Index j = 0; j < k + 1; ++j)
+            synthetic(a, j) = 1.0 + a + (j == 1 ? 6.0 : -2.0 * j);
+
+    Vector actualAux(nAux * (k + 1)), expected(nAux * (k + 1));
     for (Index cell = 0; cell < nCells; ++cell)
     {
-        Interval const &I = grid[cell];
+        const Vector weights = sys.y.getBasis().getIntegrationWeights(grid[cell]);
 
-        auto reference = [&](void (AdjointProblem::*hook)(Index, VectorRef, const State &,
-                                                          Position),
-                             Index nComponents)
-        {
-            // Sized by nComponents, not nVars: dGdaux_Vec's output has one
-            // block per auxiliary variable, so for it the two differ.
-            Vector ref(nComponents * (k + 1));
-            ref.setZero();
-            for (Index var = 0; var < nComponents; ++var)
-                for (Index j = 0; j < k + 1; ++j)
-                {
-                    auto integrand = [&](double x)
-                    {
-                        Values grad(std::max(nVars, nComponents));
-                        grad.setZero();
-                        State s = sys.y.eval(x);
-                        (adjoint.*hook)(gIndex, grad, s, x);
-                        return grad(var) * sys.y.getBasis().Evaluate(I, j, x);
-                    };
-                    ref(var * (k + 1) + j) = integrator.integrate(integrand, I.x_l, I.x_u);
-                }
-            return ref;
-        };
+        sys.dGdaux_Vec(gIndex, actualAux, dGdvars.cellwiseAux(cell), sys.y, cell);
 
-        // dGdaux_Vec writes one block per *auxiliary* variable, so its result is
-        // nAux*(k+1) long -- which for this fixture (nVars = 2, nAux = 1) is not
-        // the same length as the other three. Passing the nVars-sized `actual`
-        // used to be accepted only because the size assert inside read nVars;
-        // it now demands nAux, matching what the solver's own call site in
-        // initializeMatricesForAdjointSolve supplies.
-        Vector actualAux(nAux * (k + 1));
-        sys.dGdaux_Vec(gIndex, actualAux, sys.y, cell);
-        BOOST_TEST((actualAux - reference(&AdjointProblem::dgFn_dphi, nAux)).norm() < 1e-10,
-                   "dGdaux_Vec, cell " << cell);
+        auto const dgdphi = dGdvars.cellwiseAux(cell);
+        for (Index a = 0; a < nAux; ++a)
+            for (Index j = 0; j < k + 1; ++j)
+                expected(a * (k + 1) + j) = weights(j) * dgdphi(a, j);
+
+        BOOST_TEST((actualAux - expected).norm() < 1e-14,
+                   "cell " << cell << ": assembled dG/dphi is not diag(w) dg/dphi, "
+                           << "differing by " << (actualAux - expected).norm());
         BOOST_TEST(actualAux.norm() > 1e-6);
+
+        // The same identity on data the mass matrix cannot fake. The first check
+        // is that the fixture still tells the two apart -- without it this half
+        // could go quietly vacuous the way the route above already is.
+        for (Index a = 0; a < nAux; ++a)
+        {
+            const Vector nodal = synthetic.row(a).transpose();
+            const Vector viaWeights = nodal.cwiseProduct(weights);
+            const Vector viaMass =
+                sys.y.getBasis().InterpolateOntoBasis(grid[cell], nodal);
+
+            BOOST_TEST((viaMass - viaWeights).norm() > 1e-4,
+                       "cell " << cell << ", aux " << a << ": diag(w) and the mass "
+                               << "matrix agree on this dg/dphi, so the check below "
+                               << "cannot tell them apart");
+
+            expected.segment(a * (k + 1), k + 1) = viaWeights;
+        }
+
+        sys.dGdaux_Vec(gIndex, actualAux, synthetic, sys.y, cell);
+        BOOST_TEST((actualAux - expected).norm() < 1e-14,
+                   "cell " << cell << ": dGdaux_Vec is not diag(w) on a degree-k "
+                           << "dg/dphi, differing by " << (actualAux - expected).norm());
     }
 
     N_VDestroy(Y);
@@ -815,6 +842,18 @@ BOOST_AUTO_TEST_CASE(the_derivative_sub_vector_weights_dg_by_the_integration_wei
     // So the reference here is built straight from the weights rather than by a
     // second quadrature: the point is to pin which operator this is, and two
     // integration routines agreeing was exactly the evidence that misled before.
+    //
+    // "Annihilates constants" understates how close the two are, and the second
+    // half below exists because of it. (M v)_i = Int phi_i v while
+    // (diag(w) v)_i = v_i Int phi_i, so they agree whenever the interpolatory
+    // rule integrates phi_i * v exactly -- and on k+1 Chebyshev points of the
+    // first kind that rule is symmetric, hence exact to degree k+1 for even k.
+    // At k = 2 that covers every affine dg/dZ, which is what MockAdjoint's
+    // dgFn_dq is: restoring InterpolateOntoBasis moves the check above by 3e-16
+    // and it goes on passing. Measured, not deduced -- and until this half was
+    // added, the only case in the suite that noticed the regression at all was
+    // dGdt_matches_a_finite_difference_of_the_objective, at a relative 6e-6
+    // against its 1e-6 tolerance.
     const Index k = 2, nCells = 3, nVars = 2;
     Grid grid(0.0, 1.0, nCells);
     AdjointHostSystem problem;
@@ -838,12 +877,20 @@ BOOST_AUTO_TEST_CASE(the_derivative_sub_vector_weights_dg_by_the_integration_wei
     GlobalState dGdvars(nCells, k, nVars, 0, 1);
     adjoint.dg(1, dGdvars, sys.y.evalOnNodes(), sys.y.getPoints());
 
+    // Nodal values of a genuine degree-k polynomial: phi_i * v is then degree 2k,
+    // past what the rule integrates exactly, and the two operators part company.
+    Matrix synthetic(nVars, k + 1);
+    for (Index var = 0; var < nVars; ++var)
+        for (Index j = 0; j < k + 1; ++j)
+            synthetic(var, j) = 1.0 + var + (j == 1 ? 6.0 : -2.0 * j);
+
     Vector viaNodes(nVars * (k + 1)), expected(nVars * (k + 1));
     for (Index cell = 0; cell < nCells; ++cell)
     {
+        const Vector weights = sys.y.getBasis().getIntegrationWeights(grid[cell]);
+
         sys.DerivativeSubVector(1, viaNodes, dGdvars.cellwiseDerivative(cell), sys.y, cell);
 
-        const Vector weights = sys.y.getBasis().getIntegrationWeights(grid[cell]);
         auto const dgdq = dGdvars.cellwiseDerivative(cell);
         for (Index var = 0; var < nVars; ++var)
             for (Index j = 0; j < k + 1; ++j)
@@ -853,6 +900,29 @@ BOOST_AUTO_TEST_CASE(the_derivative_sub_vector_weights_dg_by_the_integration_wei
                    "cell " << cell << ": assembled dG/dq is not diag(w) dg/dq, "
                            << "differing by " << (viaNodes - expected).norm());
         BOOST_TEST(viaNodes.norm() > 1e-6);
+
+        // The same identity on data the mass matrix cannot fake, guarded by a
+        // check that this fixture still tells the two apart at all.
+        for (Index var = 0; var < nVars; ++var)
+        {
+            const Vector nodal = synthetic.row(var).transpose();
+            const Vector viaWeights = nodal.cwiseProduct(weights);
+            const Vector viaMass =
+                sys.y.getBasis().InterpolateOntoBasis(grid[cell], nodal);
+
+            BOOST_TEST((viaMass - viaWeights).norm() > 1e-4,
+                       "cell " << cell << ", var " << var << ": diag(w) and the mass "
+                               << "matrix agree on this dg/dZ, so the check below "
+                               << "cannot tell them apart");
+
+            expected.segment(var * (k + 1), k + 1) = viaWeights;
+        }
+
+        sys.DerivativeSubVector(1, viaNodes, synthetic, sys.y, cell);
+        BOOST_TEST((viaNodes - expected).norm() < 1e-14,
+                   "cell " << cell << ": DerivativeSubVector is not diag(w) on a "
+                           << "degree-k dg/dZ, differing by "
+                           << (viaNodes - expected).norm());
     }
 
     N_VDestroy(Y);

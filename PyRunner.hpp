@@ -76,6 +76,14 @@ public:
   Vector getSolution(Index var,
                      std::optional<std::vector<Position>> const &points);
 
+  // q, sampled exactly as getSolution samples u. q is an unknown of the system
+  // in its own right, not a derivative to be recovered after the fact, and
+  // there was no way to read it from Python at all -- so a caller wanting
+  // d_x u had to differentiate a fit to getSolution's output, which is neither
+  // the solver's q nor as accurate as it.
+  Vector getDerivative(Index var,
+                       std::optional<std::vector<Position>> const &points);
+
   // The element-local postprocessed solution u* in P_{k+1}, sampled the same way
   // getSolution samples u. Available for any k >= 1 regardless of whether the
   // superconvergent scheme is switched on.

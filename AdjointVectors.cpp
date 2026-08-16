@@ -47,14 +47,29 @@ void SystemSolver::DerivativeSubVector(Index, Vector &Vec, Eigen::Ref<Matrix> co
 }
 
 
+// The same operator as DerivativeSubVector, over the auxiliary variables. It is a
+// separate function only because the loop bound differs: there are nAux of these
+// and DerivativeSubVector runs to nVars. The two coincide in every fixture except
+// test_adjoint_aux.py, which is how the version this replaced came to carry two
+// confusions between them.
+//
+// That version integrated the *pointwise* dgFn_dphi against the basis functions
+// on the basis's own Gauss rule -- Int dg/dphi phi_j dx, the derivative of
+// Int g dx and so of a functional GFn does not report, the last survivor of the
+// family the comment above describes. A C++ case's dgFn_dphi still reaches this
+// via AdjointProblem::dg's default, which samples it at the nodes; a Python case
+// supplies dg directly.
 void SystemSolver::dGdaux_Vec(Index, Vector &Vec, Eigen::Ref<Matrix> const dX_dZ, DGSoln const &Y, Index intervalIndex)
 {
-  Interval const &I(grid[intervalIndex]);
+    // One (k+1)-block per auxiliary variable, which is what
+    // initializeMatricesForAdjointSolve and dGdt both size their vectors for.
+    assert(Vec.size() == nAux * (k + 1));
+
+    Interval const &I(grid[intervalIndex]);
     const Vector weights = Y.getBasis().getIntegrationWeights(I);
     for (Index XAux = 0; XAux < nAux; XAux++)
         Vec.block(XAux * (k + 1), 0, (k + 1), 1) =
             dX_dZ.row(XAux).transpose().cwiseProduct(weights);
-
 }
 
 
@@ -123,6 +138,7 @@ Value SystemSolver::dGdt(Index gIndex, DGSoln const &Y, DGSoln const &Ydot)
     adjointProblem->dg(gIndex, dGdvars, Y.evalOnNodes(), Y.getPoints());
 
     Vector projected(nVars * (k + 1));
+    Vector projectedAux(nAux * (k + 1));
     Value total = 0.0;
 
     for (Index i = 0; i < nCells; ++i)
@@ -142,89 +158,24 @@ Value SystemSolver::dGdt(Index gIndex, DGSoln const &Y, DGSoln const &Ydot)
             total += projected(Eigen::seqN(var * (k + 1), k + 1))
                          .dot(Ydot.sigma(var).getCoeff(i).second);
 
-        // Aux is projected here rather than through DerivativeSubVector because
-        // that function's loop is hardcoded to nVars, and there are nAux of these.
-        // The two coincide in every fixture except test_adjoint_aux, which is how
-        // dGdaux_Vec came to carry two confusions between them.
+        // Through dGdaux_Vec, which is DerivativeSubVector over nAux rather than
+        // nVars. This used to apply InterpolateOntoBasis inline -- the mass
+        // matrix, i.e. the discrepancy the comment at the top of this file
+        // describes, in the one block that had not been converted. It differed
+        // from the rest of the chain rule by (M - diag(w)) dg/dphi and so
+        // answered a slightly different question from the gradients beside it.
         if (nAux > 0)
         {
-            Interval const &I(grid[i]);
-            auto dAux = dGdvars.cellwiseAux(i);
+            dGdaux_Vec(gIndex, projectedAux, dGdvars.cellwiseAux(i), Y, i);
             for (Index a = 0; a < nAux; ++a)
-            {
-                Vector const nodal = dAux.row(a).transpose();
-                total += Y.getBasis().InterpolateOntoBasis(I, nodal)
+                total += projectedAux(Eigen::seqN(a * (k + 1), k + 1))
                              .dot(Ydot.Aux(a).getCoeff(i).second);
-            }
         }
     }
 
     return total;
 }
 
-void SystemSolver::dGdaux_Vec(Index gIndex, Vector &Vec, DGSoln const &Y, Index intervalIndex)
-{
-    Interval const &I(grid[intervalIndex]);
-    auto const &x_vals = y.getBasis().abscissae();
-    auto const &x_wgts = y.getBasis().weights();
-    const size_t n_abscissa = x_vals.size();
-
-    // This writes one (k+1)-block per *auxiliary* variable (the loop below runs
-    // to nAux), and its only caller sizes the vector nAux * (k + 1) --
-    // initializeMatricesForAdjointSolve in SystemSolver.cpp. The bound here read
-    // nVars, so a system with nAux != nVars aborted on a correctly-sized
-    // vector. Nothing defines NDEBUG in any build variant, so that abort was
-    // live in release builds too; it went unnoticed because every aux case in
-    // the suite happens to have nAux == nVars.
-    assert(Vec.size() == nAux * (k + 1));
-
-    Vec.setZero();
-
-    // Phi are basis fn's
-    // M( nVars * K + k, nVars * J + j ) = Int_I ( d sigma_fn_K / d u_J * Phi_k * Phi_j )
-
-    for (Index XVar = 0; XVar < nAux; XVar++)
-    {
-        // nAux, not nVars: dgFn_dphi fills one entry per auxiliary variable, and
-        // the reads below index these with XVar, which runs to nAux. Sized nVars
-        // this read past the end whenever nAux > nVars, and -- because the hook
-        // takes a VectorRef -- an implementation that assigns the whole vector
-        // rather than writing elementwise tripped Eigen's "Ref cannot be
-        // resized" assert instead. The C++ mocks in the unit tests all write
-        // elementwise and have nAux <= nVars, so neither symptom appeared there.
-        Values dX_dZ_vals1(nAux);
-        Values dX_dZ_vals2(nAux);
-        dX_dZ_vals1.setZero();
-        dX_dZ_vals2.setZero();
-
-        for (size_t i = 0; i < n_abscissa; ++i)
-        {
-            // Pull the loop over the gaussian integration points
-            // outside so we can evaluate u, q, dX_dZ once and store the values
-
-            // All for loops inside here can be parallelised as they all
-            // write to separate entries in mat
-
-            double wgt = x_wgts[i] * (I.h() / 2.0);
-
-            double y_plus = I.x_l + (1.0 + x_vals[i]) * (I.h() / 2.0);
-            double y_minus = I.x_l + (1.0 - x_vals[i]) * (I.h() / 2.0);
-
-            State Y_plus = Y.eval(y_plus), Y_minus = Y.eval(y_minus);
-
-            (adjointProblem->dgFn_dphi)(gIndex, dX_dZ_vals1, Y_plus, y_plus);
-            (adjointProblem->dgFn_dphi)(gIndex, dX_dZ_vals2, Y_minus, y_minus);
-
-            for (Index j = 0; j < k + 1; ++j)
-            {
-                Vec(XVar * (k + 1) + j) +=
-                    wgt * dX_dZ_vals1[XVar] * y.getBasis().Evaluate(I, j, y_plus);
-                Vec(XVar * (k + 1) + j) +=
-                    wgt * dX_dZ_vals2[XVar] * y.getBasis().Evaluate(I, j, y_minus);
-            }
-        }
-    }
-}
 // void SystemSolver::dSigmadp_Vec(Index i, Vector &Vec, DGSoln const &Y, Index I)
 // {
 //     DerivativeSubVector(i, Vec, &AdjointProblem::dSigmaFn_dp, Y, I);

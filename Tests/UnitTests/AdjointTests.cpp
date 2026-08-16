@@ -151,13 +151,15 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests) {
   // functions, which differentiates Int g dx rather than the sum_m w_m g_m that
   // GFn reports, and nothing in a solve ever called them.
   for (Index i = 0; i < nGrid; ++i) {
-    // AdjointTestProblem has nAux == 0, so dGdaux_Vec's output is empty --
-    // it writes one block per auxiliary variable, not per variable. This is
-    // therefore only a "does not throw" check; the substantive comparison
-    // against quadrature lives in AdjointProblemTests.cpp, whose fixture has
-    // nAux == 1 with nVars == 2 and so distinguishes the two lengths.
+    // AdjointTestProblem has nAux == 0, so both dGdaux_Vec's output and the
+    // dg/dphi slice it reads are empty -- it writes one block per auxiliary
+    // variable, not per variable. This is therefore only a "does not throw"
+    // check; the substantive comparison lives in AdjointProblemTests.cpp, whose
+    // fixture has nAux == 1 with nVars == 2 and so distinguishes the two
+    // lengths.
     Vector aux_Vec(0);
-    BOOST_CHECK_NO_THROW(system->dGdaux_Vec(0, aux_Vec, system->y, i));
+    Matrix no_aux(0, k + 1);
+    BOOST_CHECK_NO_THROW(system->dGdaux_Vec(0, aux_Vec, no_aux, system->y, i));
   }
 
   BOOST_CHECK_NO_THROW(system->initializeMatricesForAdjointSolve());

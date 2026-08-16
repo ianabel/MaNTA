@@ -256,6 +256,9 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(SteadyStateSolver, std::string);
     READ(PseudoTransientInitialStep, double);
     READ(PseudoTransientMaxStep, double);
+    READ(PseudoTransientSERRate, double);
+    READ(PseudoTransientSERFloor, double);
+    READ(SteadyStateDiagnostics, bool);
     READ(TransportSystem, std::string);
     READ(PhysicsPlugins, std::vector<std::string>);
 #undef READ
@@ -379,6 +382,23 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         system.setPseudoTransientInitialStep(config.PseudoTransientInitialStep);
     if (config.PseudoTransientMaxStep > 0.0)
         system.setPseudoTransientMaxStep(config.PseudoTransientMaxStep);
+
+    // Unconditional, unlike the two above: those use 0 as "unset", which works
+    // because a zero step is meaningless, but a zero SER *rate* is a legitimate
+    // setting -- grow at the floor alone. So the schema's defaults are the real
+    // ones and are applied every time. The setters throw std::logic_error on a
+    // bad value; loadSolverConfig's contract is std::invalid_argument, so
+    // rewrap rather than letting a different exception type escape this path.
+    try
+    {
+        system.setPseudoTransientSERRate(config.PseudoTransientSERRate);
+        system.setPseudoTransientSERFloor(config.PseudoTransientSERFloor);
+        system.setSteadyStateDiagnostics(config.SteadyStateDiagnostics);
+    }
+    catch (std::logic_error const &e)
+    {
+        throw std::invalid_argument(e.what());
+    }
 
     // Presence arms it, which is what the TOML reader has always done;
     // setSteadyStateTolerance also sets TerminateOnSteadyState.

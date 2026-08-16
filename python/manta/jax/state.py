@@ -123,13 +123,13 @@ def MaNTA_Decorator(func):
 
 
 def ShiftedState_Decorator(func):
-    """MaNTA_Decorator for the two hooks whose state is one argument later.
+    """MaNTA_Decorator for a hook whose state is one argument later.
 
-    Both of these are pointwise-only, and both carry an extra argument ahead of
-    the state:
-
-        AuxGPrime(i, out, state, x, t)    fills a buffer instead of returning
-        dAux_dp(i, pIndex, state, x)      selects one parameter
+    `AuxGPrime(i, out, state, x, t)` is the one left: pointwise-only, and
+    carrying an extra argument ahead of the state -- `out`, a buffer it fills
+    instead of returning. `dAux_dp(i, pIndex, state, x)` had the same shape and
+    was the other user, until dAux/dp moved onto the batched `dAux` and
+    PyAdjointProblem began raising from the pointwise hook.
 
     MaNTA_Decorator's `(self, index, states, positions, *args)` therefore bound
     `states` to the extra argument and `positions` to the state, so the state
@@ -139,6 +139,11 @@ def ShiftedState_Decorator(func):
     in every JAX fixture but one. They were two of the four faults behind the
     JAXAuxTest xfail; see Tests/README.md for the others.
 
+    The extra argument's position is what this pins, not any one hook that has
+    it: `test_the_shifted_decorator_converts_the_state_not_the_extra_argument`
+    drives a stand-in, because AuxGPrime itself needs a State the Python side
+    cannot build.
+
     The extra argument is passed through untouched, which for AuxGPrime is the
     point: `out` is a window onto solver memory the hook writes through, and a
     converted copy would be discarded when the hook returned.
@@ -147,8 +152,8 @@ def ShiftedState_Decorator(func):
     def wrapper(self, index, extra, states, positions, *args):
         states_, _ = eqx.partition(State.from_manta(states), lambda x: x.size > 0)
         positions_ = jnp.array(positions)
-        # No State ever comes back out of these two -- AuxGPrime returns nothing
-        # and dAux_dp a scalar -- so there is nothing to eqx.combine.
+        # No State ever comes back out -- AuxGPrime returns nothing, and neither
+        # did dAux_dp -- so there is nothing to eqx.combine.
         return func(self, index, extra, states_, positions_, *args)
 
     return wrapper

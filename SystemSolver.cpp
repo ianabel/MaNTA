@@ -852,6 +852,7 @@ void SystemSolver::assembleScalarCoupling(DGSoln const &Y, DGSoln const &Ydot,
 
 void SystemSolver::updateMatricesForJacSolve()
 {
+    ++nJacBuilds;
     updateBoundaryConditions(jt);
     // We know where the jacobian is to be evaluated -- yJac
     // std::cerr << "Updating Jacobian at t=" << jt << std::endl;
@@ -915,6 +916,7 @@ void SystemSolver::setJacEvalY(N_Vector yy, N_Vector yp)
 // HDG Jacobian solve
 void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 {
+    ++nJacSolves;
     if (nScalars > 0)
     {
         // TODO: move temporaries into private variables of the class and allocate/destroy once
@@ -1127,6 +1129,7 @@ int static_residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval
 
 int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval)
 {
+    ++nResidualEvals;
     updateBoundaryConditions(tres);
 
     DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux);

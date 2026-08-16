@@ -133,8 +133,11 @@ def test_jax_aux_test():
     plumbing (python/Tests/test_aux.py drives the same path in plain numpy);
     every fault was in manta.jax, and every one of them was reachable only with
     nAux > 0, which no other JAX fixture has. test_jax_aux.py catches them one
-    hook at a time -- this one is worth keeping as well, because it is the only
-    thing that reaches dgFn_dphi, and because it compares against a reference
-    generated before any of it broke.
+    hook at a time -- this one is worth keeping as well, because it compares
+    against a reference generated before any of it broke, and because it is the
+    only end-to-end run of the aux adjoint path: solveAdjoint is on in
+    JAXAuxTest.conf, so it exercises dGdaux_Vec and F_p's auxiliary rows through
+    a real solve rather than a fixture. It used to be the only thing reaching
+    dgFn_dphi as well; that hook has no route to Python any longer.
     """
     compare_solution("JAXAuxTest")
