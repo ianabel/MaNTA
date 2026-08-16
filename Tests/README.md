@@ -584,16 +584,43 @@ These are deliberate and tracked, not oversights:
   Three more cases have landed since, each also provoked by a defect:
 
   * `the_SER_rate_and_floor_change_the_cost_and_not_the_answer` measures the schedule through physics evaluations -- 552 at the defaults, 3540 with the floor at 1, 1704 with the floor at 1 and the rate at 2 -- and requires the converged state to be identical in all three. An option that changed the answer would be a bug; one that changed nothing would be inert.
-  * `the_steady_diagnostics_count_the_whole_solve_not_the_last_step`. **KINSOL zeroes its own counters at the top of every `KINSol` call**, so the continuation loop has to sum them as it goes; reading them once at the end -- the obvious thing, and what this did first -- reported 1 Newton iteration against 5 continuation steps and 35 Jacobian solves. Self-evidently impossible, and it still looks like a number, which is why the test asserts invariants (`newtonIters >= steps`, `residualEvals == kinFuncEvals + steps + 1`) rather than values. The second of those also pins the counter snapshot being taken before the first `steadyNorm()`, which it was not to begin with.
+  * `the_steady_diagnostics_count_the_whole_solve_not_the_last_step`. **KINSOL zeroes its own counters at the top of every `KINSol` call**, so the continuation loop has to sum them as it goes; reading them once at the end -- the obvious thing, and what this did first -- reported 1 Newton iteration against 5 continuation steps and 35 Jacobian solves. Self-evidently impossible, and it still looks like a number, which is why the test asserts invariants (`newtonIters >= steps`, `residualEvals == kinFuncEvals + steps + 1`) rather than values. The second of those also pins the counter snapshot being taken before the first `steadyResidualNorm()`, which it was not to begin with.
   * `a_failed_steady_solve_still_writes_the_last_state_it_reached`, using a tolerance nothing can reach so the solve stalls at ~1e-16 and exits by the "ran out of continuation steps" path.
 
-  What is still uncovered is the rest of the algorithm -- step rejection,
-  `Newton` mode, the `KINSetMaxNewtonStep` clamp, and the hard-`KINSol`-failure
-  path (the ordinary exhaustion path above shares its `catch (...)` in
-  `Solver.cpp`, but not the code that reaches it). In particular the flat
-  unweighted `steadyNorm` (`SteadyState.cpp`) is untested, and both the
-  convergence test and the SER ratio read it, so anything that changes how it is
-  normalised changes the stopping test and the step schedule together.
+  And three cover the merit function, which was the largest of the remaining
+  gaps: everything the solve decides is decided by comparing that one number
+  against `steady_state_tol` or against its own previous value, and it used to
+  be a lambda inside `solveSteadyState` that nothing could reach. It is now
+  `SystemSolver::steadyResidualNorm`.
+
+  * `the_steady_merit_function_is_the_undamped_residual_two_norm` recomputes it
+    from outside -- zero derivative, `residual` at `t0` and `Y`, flat Euclidean
+    2-norm over every row -- and requires exact equality, then sets a distant
+    `uPrev` and `ptcStep = 1e-4` and requires the value not to move while the
+    damped residual KINSOL sees moves by more than 10x. That second half is the
+    part worth having: a merit function that included the damping could be
+    driven to zero by shrinking `dt` without the state going anywhere.
+  * `the_steady_merit_function_depends_on_the_mesh` is the finding. Same
+    physics, same `k`, same initial function, 4 / 8 / 16 cells: `‖F‖` is
+    0.5557 / 0.3935 / 0.2784 while the state itself agrees to 1.0e-3. The ratio
+    is **1/sqrt(2) per doubling** -- 0.70806 then 0.70742 against 0.70711 -- which
+    names the mechanism rather than merely recording it: the rows carry a mass
+    factor going like `h` and the DOF count goes like `1/h`, so a flat 2-norm
+    over the lot goes like `sqrt(h)`. That is why `steady_state_tol` means
+    something different on every mesh and why `dt` cannot be carried across a
+    remesh, and it is the factor whoever normalises this needs.
+  * `KINSOL_measures_the_same_thing_the_continuation_loop_does` pins the
+    coupling that makes a one-sided fix wrong. `KINSetFuncNormTol` is handed the
+    same `steady_state_tol`, and KINSOL's own test is `N_VWL2Norm(fval, fscale)`
+    with `kinScale` all ones -- the identical flat 2-norm. In `Newton` mode the
+    damping term is identically zero, so the two are the same number: measured
+    bit-identical at 7.055e-16. Normalise one side alone and the inner and outer
+    stopping tests differ by `sqrt(N)` with nothing reporting it.
+
+  What is still uncovered is the rest of the algorithm -- step rejection, the
+  `KINSetMaxNewtonStep` clamp, and the hard-`KINSol`-failure path (the ordinary
+  exhaustion path above shares its `catch (...)` in `Solver.cpp`, but not the
+  code that reaches it).
 
   Note also what the fixture cannot show: `TestDiffusion` is *linear*, so each
   inner solve converges in one Newton iteration and Jacobian builds equal

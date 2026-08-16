@@ -178,6 +178,26 @@ class SystemSolver
         int steadyResidual(N_Vector u, N_Vector fval);
         void steadyJacSetup(N_Vector u);
 
+        // The merit function the whole steady solve is measured against: the
+        // *undamped* residual at the current Y, so it does not vanish simply by
+        // taking a small enough step the way the damped one KINSOL sees does.
+        // Both the convergence test and the SER ratio read this.
+        //
+        // It is a named function rather than the lambda it used to be because
+        // nothing could otherwise pin what it returns, and what it returns is
+        // mesh-dependent -- a flat unweighted 2-norm over a DOF vector whose
+        // length and per-row mass factor both change with the mesh. That is the
+        // one property standing between the steady solve and a driver that
+        // remeshes between solves, since steady_state_tol and dt would both mean
+        // something different on the far side. See
+        // Tests/UnitTests/SolverLifecycleTests.cpp, which measures it, and note
+        // that KINSetFuncNormTol is handed this same tolerance against KINSOL's
+        // own norm of the same vector: normalising here alone would decouple the
+        // inner and outer stopping tests by sqrt(N).
+        //
+        // Costs one residual evaluation, and counts as one.
+        double steadyResidualNorm();
+
         // Arm the dG/dt early-exit gate: after the initial condition is built,
         // abandon the run rather than integrate it if the objective is already
         // getting worse. For an optimisation sweep that turns a wasted transport
@@ -438,6 +458,10 @@ class SystemSolver
         N_Vector uPrev = nullptr;    // previous PTC iterate
         N_Vector ptcDYdt = nullptr;  // id * (u - uPrev)/dt, the damping term
         N_Vector kinScale = nullptr; // unit scaling; KINSol requires a vector
+
+        // Clones the three above on first use. Called by both solveSteadyState
+        // and steadyResidualNorm, since either may be the first to need them.
+        void allocateSteadyScratch();
         SteadyMode steadyMode = SteadyMode::TimeMarch;
         double ptcInitialStep = 0.0; // 0 means "use dt0"
         double ptcMaxStep = std::numeric_limits<double>::infinity();

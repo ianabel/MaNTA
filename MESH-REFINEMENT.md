@@ -20,8 +20,9 @@ and the retractions are recorded deliberately.
 | Phase 0 (spike) | done, on three benchmarks |
 | Phase 1 (into the solver) | **the plan as written should not be built** — see "What the measurements changed". Working through the revised order at the end of this file instead. |
 | Landed on `main` | both side quests: **#13** restart use-after-free, **#14** `getDerivative` |
-| In flight | **#15** steady-state output, PTC diagnostics and the SER config keys — which is most of step 2 below |
-| On this branch | step 1 below (`Grid` validation) |
+| Landed since | **#15** steady-state output, PTC diagnostics and the SER config keys — most of step 2 below |
+| On this branch | steps 1 and 2 below: `Grid` validation, and the merit function named and measured |
+| Next | step 3, the modal sensor |
 
 ## 1. The loop runs with zero core changes
 
@@ -292,14 +293,17 @@ Against it:
 * **The transfer design was right** (§4), and is the one piece to keep verbatim.
 * **The Richardson exponent is out**, replaced by budgeted equidistribution or Giorgiani's order-free degree rule (§2).
 * **`Superconvergent = true` becomes a prerequisite, not an option** (§2).
-* **The `steadyNorm` work is unchanged and still blocked on the same thing**: `SteadyState.cpp:188-193` is a flat unweighted `sqrt(N_VDotProd(res,res))` read by the convergence test (`:198`, `:234`) *and* the SER ratio (`:256`), so `steady_state_tol` means something different on every mesh and `dt` cannot cross a remesh. `KINSetFuncNormTol` (`:154`) is handed the same flat norm, so normalising one alone decouples the inner and outer tests by `sqrt(N)`; and the loosened early-return at `:198` is hit *first on every level* right after a transfer. **`solveSteadyState` has no test at all** — `grep -rl` over `Tests/` finds only config parsing (`ConfigSourceTests.cpp`) and the tolerance setter (`SolverPlumbingTests.cpp:52-54`); nothing calls the function. A PTC unit test lands before that norm is touched, and `:154`/`:198`/`:234` move together or not at all.
+* **The `steadyNorm` work is now measured rather than asserted.** It was a lambda inside `solveSteadyState` that nothing could reach; it is now `SystemSolver::steadyResidualNorm`, with three cases in `SolverLifecycleTests.cpp`. What they establish:
+  * **It goes like `sqrt(h)`.** 4 / 8 / 16 cells on the same problem and the same initial function gives `‖F‖` = 0.5557 / 0.3935 / 0.2784 — a ratio of 0.70806 then 0.70742 against `1/sqrt(2) = 0.70711` — while the state itself agrees to 1.0e-3. The rows carry a mass factor going like `h`, the DOF count goes like `1/h`. **That is the factor a mesh-independent norm has to divide out**, and it was a guess before.
+  * **KINSOL is measuring the identical quantity**, not merely a comparable one. `KINSetFuncNormTol` gets the same `steady_state_tol`, KINSOL's test is `N_VWL2Norm(fval, fscale)` and `kinScale` is all ones, so in `Newton` mode (where the damping is identically zero) the two agree *bit for bit* — 7.055e-16. So `:154` and the convergence test still move together or not at all; that part of the plan stands, and is now pinned rather than argued.
+  * The early-return an adaptive driver hits first on every level, right after a transfer, is still the risk it always was. Nothing here changes that.
 * **Never two solvers alive at once.** `Integrator`'s cache (`PyIntegrator.hpp:16-43`) is process-global and keyed on one `(order, grid)` pair, and `residual()` calls `invalidateIfStale` on every evaluation (`SystemSolver.cpp:1255`). Two live solvers with different grids thrash it, and `getIntegrationWeights` returns a reference *into* the map `clear()` destroys. Extract grid + a `std::vector<double>` of `yJac`, destroy, then build — `PyRunner::configure`'s own discipline.
 * **Adaptivity with `spatialParameters = true` must throw**, for the identical reason `Superconvergent = true` already does at `SystemSolver.cpp:1650`: a remesh redefines how many parameters there are.
 
 ## If picking this up again — suggested order
 
 1. ~~**`Grid(std::vector<Position>)` validation**~~ — **done on this branch.** It checked only `size() >= 2`, and `Interval(a,b)` silently swaps when `a > b` (`gridStructures.hpp:28-32`), so an out-of-order list built overlapping cells and a repeated point built a zero-width one — whose `MassMatrix` is `(h/2)·RefMass`, identically zero (`Basis.hpp:548-551`), and whose `toRef` divides by `h`. Now: finite, then strictly increasing, then the same `1e-14` total-span rule the `(lBound, uBound, nCells)` constructor already applies, so `Grid_points` cannot build what `Grid_size` would reject. Three cases in `GridTests.cpp`.
-2. **A PTC unit test** — **largely done in #15**, which added five cases driving `solveSteadyState` through `SolverLifecycleTests.cpp` plus work counters (`SteadyStats`) that make the cost of a change to the norm *measurable*. What is still missing is the norm's own test: nothing pins what `steadyNorm` returns, so `:154`/`:198`/`:234` still move together or not at all.
+2. ~~**A PTC unit test**~~ — **done.** #15 added five cases driving `solveSteadyState` plus work counters (`SteadyStats`) that make the cost of a change *measurable*; this branch adds three more covering the merit function itself, which is now the named `SystemSolver::steadyResidualNorm` rather than an unreachable lambda. The `sqrt(h)` scaling above is what came out of it. Step rejection, the `KINSetMaxNewtonStep` clamp and the hard-`KINSol`-failure path are still uncovered.
 3. **The modal sensor** (§7) — small, self-contained, testable against these two benchmarks *without* a solve, and it is the piece all four papers' strategies need and only one of them supplies.
 4. **Global-`k` selection by Giorgiani's rule** — 2.8e-9 at 90 DOF against 2.0e-6 at 128, no per-cell machinery, and it is the measured win.
 5. Only then per-cell `p` (the ~320-site blocker) or `h`.

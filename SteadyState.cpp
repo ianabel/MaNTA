@@ -143,21 +143,40 @@ void SystemSolver::reportSteadyStats(std::string_view outcome, SteadyStats const
     std::println("  Jacobian solves         : {}", s.jacSolves);
 }
 
+// Scratch vectors live as long as the solver so a second call reuses them,
+// which is what keeps repeated configure/run cycles cheap.
+void SystemSolver::allocateSteadyScratch()
+{
+    if (uPrev != nullptr)
+        return;
+
+    uPrev = N_VClone(Y);
+    ptcDYdt = N_VClone(Y);
+    kinScale = N_VClone(Y);
+    if (uPrev == nullptr || ptcDYdt == nullptr || kinScale == nullptr)
+        throw std::runtime_error("N_VClone failed in solveSteadyState");
+}
+
+double SystemSolver::steadyResidualNorm()
+{
+    if (!initialised)
+        throw std::runtime_error("steadyResidualNorm called before initialize()");
+
+    allocateSteadyScratch();
+
+    // Zeroing ptcDYdt is what makes this the steady residual rather than the
+    // damped one: no backward-Euler term, whatever ptcStep currently is.
+    N_VConst(0.0, ptcDYdt);
+    residual(t0, Y, ptcDYdt, res);
+    return std::sqrt(N_VDotProd(res, res));
+}
+
 void SystemSolver::solveSteadyState()
 {
     if (!initialised)
         throw std::runtime_error("solveSteadyState called before initialize()");
 
-    // Scratch vectors live as long as the solver so a second call reuses them,
-    // which is what keeps repeated configure/run cycles cheap.
-    if (uPrev == nullptr)
-    {
-        uPrev = N_VClone(Y);
-        ptcDYdt = N_VClone(Y);
-        kinScale = N_VClone(Y);
-        if (uPrev == nullptr || ptcDYdt == nullptr || kinScale == nullptr)
-            throw std::runtime_error("N_VClone failed in solveSteadyState");
-    }
+    allocateSteadyScratch();
     N_VConst(1.0, kinScale); // no scaling; the DOFs are already commensurate
 
     if (kin_mem == nullptr)
@@ -220,28 +239,18 @@ void SystemSolver::solveSteadyState()
 
     N_VScale(1.0, Y, uPrev);
 
-    // The steady residual, which is what convergence is measured against
-    // throughout -- not the damped one KINSOL sees, which vanishes at any dt
-    // simply by taking a small enough step.
-    auto steadyNorm = [&]() -> double
-    {
-        N_VConst(0.0, ptcDYdt);
-        residual(t0, Y, ptcDYdt, res);
-        return std::sqrt(N_VDotProd(res, res));
-    };
-
     // What this call costs. MaNTA's counters are monotonic over the solver --
     // IDA writes to them too -- so they are differenced against here, which is
     // also what makes a second solve on one object report its own cost.
     //
-    // Snapshotted *before* the first steadyNorm() below, or that evaluation goes
+    // Snapshotted *before* the first steadyResidualNorm() below, or that goes
     // unreported: the merit function is part of what a steady solve pays for,
     // and it costs one residual per continuation step plus this one.
     SteadyStats stats;
     const long residualEvals0 = nResidualEvals, jacBuilds0 = nJacBuilds,
                jacSolves0 = nJacSolves;
 
-    double Fprev = steadyNorm();
+    double Fprev = steadyResidualNorm();
 
     auto finish = [&](std::string_view outcome, int steps, int rejected)
     {
@@ -307,7 +316,7 @@ void SystemSolver::solveSteadyState()
                 retval, step, ptcStep, Fprev));
         }
 
-        const double Fnow = steadyNorm();
+        const double Fnow = steadyResidualNorm();
         logmsg<LOG_LEVEL::INFO>("Steady solve: step {}, dt = {:g}, ||F|| = {:g}",
                                 step, ptcStep, Fnow);
 
