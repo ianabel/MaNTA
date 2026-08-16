@@ -12,6 +12,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 BOOST_AUTO_TEST_SUITE(grid_tests, *boost::unit_test::tolerance(1e-12))
@@ -260,6 +261,60 @@ BOOST_AUTO_TEST_CASE(grid_from_points_rejects_too_few_points)
 
     // Two points is the smallest valid grid.
     BOOST_CHECK_NO_THROW(Grid(std::vector<Grid::Position>{0.0, 1.0}));
+}
+
+BOOST_AUTO_TEST_CASE(grid_from_points_rejects_a_list_that_is_not_strictly_increasing)
+{
+    // Interval(a, b) swaps when a > b, so none of these were reported before:
+    // out-of-order points gave overlapping cells, and a repeated point gave a
+    // zero-width cell whose mass matrix is (h/2) * RefMass = 0.
+    using P = std::vector<Grid::Position>;
+
+    BOOST_CHECK_THROW(Grid(P{0.0, 0.5, 0.2, 1.0}), std::invalid_argument); // out of order
+    BOOST_CHECK_THROW(Grid(P{1.0, 0.5, 0.0}), std::invalid_argument);      // descending
+    BOOST_CHECK_THROW(Grid(P{0.0, 0.5, 0.5, 1.0}), std::invalid_argument); // repeated
+    BOOST_CHECK_THROW(Grid(P{0.0, 0.0}), std::invalid_argument);           // degenerate domain
+
+    // A graded mesh -- the thing this constructor exists for -- is fine.
+    BOOST_CHECK_NO_THROW(Grid(P{0.0, 0.01, 0.05, 0.2, 0.6, 1.0}));
+}
+
+BOOST_AUTO_TEST_CASE(grid_from_points_rejects_values_that_are_not_finite)
+{
+    // Checked before monotonicity, and deliberately: a NaN compares false
+    // against everything, so an ordering test alone would blame the ordering.
+    using P = std::vector<Grid::Position>;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+
+    BOOST_CHECK_THROW(Grid(P{0.0, nan, 1.0}), std::invalid_argument);
+    BOOST_CHECK_THROW(Grid(P{0.0, 0.5, inf}), std::invalid_argument);
+    BOOST_CHECK_THROW(Grid(P{-inf, 0.0, 1.0}), std::invalid_argument);
+
+    // The message should name the offending boundary rather than the ordering.
+    try
+    {
+        Grid(P{0.0, nan, 1.0});
+        BOOST_FAIL("expected an exception");
+    }
+    catch (std::invalid_argument const &e)
+    {
+        BOOST_TEST(std::string(e.what()).find("finite") != std::string::npos);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(grid_from_points_holds_a_narrow_domain_to_the_same_rule_as_the_other_constructor)
+{
+    // Grid(0.0, 1e-15, 4) throws and Grid(0.0, 1e-13, 4) does not; a config
+    // supplying Grid_points instead of Grid_size should not be able to build
+    // what Grid_size would reject.
+    using P = std::vector<Grid::Position>;
+
+    BOOST_CHECK_THROW(Grid(0.0, 1e-15, 4), std::invalid_argument);
+    BOOST_CHECK_THROW(Grid(P{0.0, 0.5e-15, 1e-15}), std::invalid_argument);
+
+    BOOST_CHECK_NO_THROW(Grid(0.0, 1e-13, 4));
+    BOOST_CHECK_NO_THROW(Grid(P{0.0, 0.5e-13, 1e-13}));
 }
 
 // --------------------------------------------------------- Grid equality --

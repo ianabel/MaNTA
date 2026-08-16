@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <boost/math/quadrature/gauss.hpp>
 #include <cmath>
+#include <format>
+#include <stdexcept>
 #include <vector>
 #include <iostream>
 
@@ -155,6 +157,36 @@ public:
 		// points.front() on an empty vector is undefined behaviour).
 		if (points.size() < 2)
 			throw std::invalid_argument("At least two cell boundaries are required to construct a grid.");
+
+		// Everything below this line is about what Interval will *not* tell
+		// you. Interval(a, b) silently swaps when a > b, so a descending or
+		// out-of-order list yields a grid of plausible-looking cells that
+		// overlap, with lowerBound/upperBound taken from the ends of the list
+		// as given; and a repeated point yields a cell of zero width, whose
+		// MassMatrix is (h/2) * RefMass -- identically zero -- and whose
+		// toRef() divides by h. Neither reports anything here. The first
+		// surfaces as a wrong answer, the second as a singular per-cell
+		// FullPivLU somewhere inside the solve.
+		//
+		// Finiteness is checked first because a NaN compares false against
+		// everything, so it would otherwise be reported as "not increasing" --
+		// true, but pointing at the wrong problem.
+		for (Index i = 0; i < points.size(); ++i)
+			if (!std::isfinite(points[i]))
+				throw std::invalid_argument(std::format("Cell boundary {} is not a finite number ({}).", i, points[i]));
+
+		for (Index i = 0; i + 1 < points.size(); ++i)
+			if (!(points[i] < points[i + 1]))
+				throw std::invalid_argument(std::format("Cell boundaries must be strictly increasing, but boundary {} ({}) does not precede boundary {} ({}).", i, points[i], i + 1, points[i + 1]));
+
+		// The same rule the (lBound, uBound, nCells) constructor applies to its
+		// domain, so that the two agree on what a grid is: a config supplying
+		// Grid_points should not be able to build what Grid_size would reject.
+		// Individual cells are held only to strict increase -- an absolute
+		// width is the wrong test for one cell of an arbitrary domain, and a
+		// narrow-but-positive cell is merely expensive, not degenerate.
+		if (points.back() - points.front() < 1e-14)
+			throw std::invalid_argument("Cell boundaries span too small a domain for representation by double.");
 
 		auto nCells = points.size() - 1;
 		gridCells.reserve(nCells);
