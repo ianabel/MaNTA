@@ -405,27 +405,23 @@ and batched (`SigmaFn(i, GlobalState, positions, t)`). The batched defaults in
 
 ### Self-consistent magnetic fields (`FieldModel`)
 
-A `FieldModel` (`FieldModel.hpp`) contributes `nFieldDOF` unknowns `psi` and one
-residual row each, and derives `nGeometry` *geometry slots* `g_s(psi, x, t)`
-from them. The slots are not unknowns — they are a function of `(psi, x)`
-evaluated at the physics nodes and cached per residual, in the same standing as
-`sigmaHat` — and they are the only channel into the transport physics, which
-reads them as `State::geom(s)`. `docs/field_coupling.rst` is the interface
-document.
+A `FieldModel` (`FieldModel.hpp`) contributes `nFieldDOF` unknowns `psi`, one
+residual row each, and `nGeometry` derived *geometry slots* `g_s(psi, x, t)`.
+It follows the physics-case pattern throughout — a validated spec, a
+process-global registry with the same two throws, its own toml table, selected
+by name from the config. `docs/field_coupling.rst` is the interface document and
+`--list-options` prints the five keys; what follows is what neither says.
 
-It follows the physics-case pattern in three respects and it is worth knowing
-they are deliberate: declared as data through a validated `FieldModelSpec`
-(`REGISTER_FIELD_MODEL_HEADER/IMPL`, a process-global map, duplicate names
-throw, unknown names throw with the list); its own toml table; and it can be
-selected by name from the config. **`FieldModelSpec` is not `FieldSpec`** —
-`SystemSpec.hpp` already defines a global `struct FieldSpec`, the
-per-transport-variable descriptor bound to Python as `manta.Field`, and reusing
-the name compiles every translation unit cleanly and fails only at link time as
-an ODR violation naming neither type. Do not shorten it back.
+**The geometry slots are the only channel into the transport physics**, and they
+are not unknowns: they are a function of `(psi, x)` evaluated at the physics
+nodes and cached per residual, in the same standing as `sigmaHat`. A case reads
+them as `State::geom(s)`. Nothing else crosses in either direction.
 
-Five config keys: `FieldModel` (`Category::ProblemSelection`, so it is an
-*error* in a `Runner.configure` dict), and `FieldSolve`, `FieldSolveTolerance`,
-`FieldSolveMaxSweeps`, `FieldSolveMaxAdjointSweeps` (all `Category::Solver`).
+**`FieldModelSpec` is not `FieldSpec`.** `SystemSpec.hpp` already defines a
+global `struct FieldSpec`, the per-transport-variable descriptor bound to Python
+as `manta.Field`. Reusing the name compiles every translation unit cleanly and
+fails only at link time, as an ODR violation naming neither type. Do not shorten
+it back.
 
 **The whole thing is inert when unused, and that is checked by hand rather than
 asserted.** `psi` goes *last* in the layout so nothing before it moves, and

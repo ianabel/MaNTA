@@ -108,8 +108,10 @@ Problem definition
      - ``""``, *file only*
      - Name of a registered magnetic-field model to couple to, as registered by
        ``REGISTER_FIELD_MODEL_IMPL``. Absent — the default — means no coupling,
-       and a run with no coupling is bit-for-bit what it was before the feature
-       existed. An unrecognised name is an error listing what *is* registered;
+       and an uncoupled run's ``.nc`` is bit-for-bit what it was before the
+       feature existed. Its ``.restart.nc`` is not, by exactly one scalar:
+       ``RestartData/nField`` is written on every run, and reads back as ``0``.
+       An unrecognised name is an error listing what *is* registered;
        note that no field model is registered in this tree yet. Like
        ``TransportSystem`` this is a ``ProblemSelection`` key, so passing it to
        ``Runner.configure`` is an error rather than being ignored. See
@@ -295,7 +297,17 @@ the coupling on.
        Jacobian solve.
    * - ``FieldSolveTolerance``
      - ``1e-8``
-     - Relative change in :math:`\psi` at which the sweep stops.
+     - Where the sweep stops — **one key, two tests**, because the two
+       directions have different things available to measure. Forward, it is a
+       relative *change*: the sweep stops once
+       :math:`\|\delta\psi\| \le \texttt{tol}\,\|\psi\|` for the unaccelerated
+       iterate. In the adjoint it is a relative *backward error*: the field row
+       of the transposed system holds identically at every iterate, so the
+       residual of the pair returned is exactly
+       :math:`A_2^{T}\,\delta z_\psi`, and the sweep stops once that is below
+       ``tol`` times the norm of the right-hand side. Both are scale
+       equivariant, so neither has an absolute floor, and neither returns an
+       under-converged answer — reaching the cap escalates to the exact solve.
    * - ``FieldSolveMaxSweeps``
      - ``20``
      - Sweep cap for the forward solve. Reaching it escalates to the exact

@@ -13,7 +13,13 @@ iteration, rather than in an outer loop.
 Nothing about this is on unless a run asks for it. With no field model attached
 — which is every run that predates this feature and every configuration that
 does not set ``FieldModel`` — the solution vector, the Jacobian solve, the
-adjoint solve and the output are unchanged, bit for bit.
+adjoint solve and the ``.nc`` output are unchanged, bit for bit. The one
+exception is the restart file, which gains ``RestartData/nField`` on every run,
+coupled or not, so that a reader can tell "no field model" from "written before
+the field block existed"; see :ref:`coupled-output`.
+Measured over all 14 ``Tests/RegressionTests/*.conf``: every ``.nc`` byte
+identical, every ``.restart.nc`` differing by exactly that one
+``int nField = 0``.
 
 The coupled system
 ------------------
@@ -298,6 +304,18 @@ beside the forward pair: a model supplying only one direction cannot be silently
 accommodated. ``FieldSolveMaxAdjointSweeps`` is separate from
 ``FieldSolveMaxSweeps`` and defaults larger — 100 against 20 — because the
 adjoint always runs at :math:`c_j = 0`, where the coupling is stiffest.
+
+``FieldSolveTolerance``, though, is shared, and it does not mean the same thing
+in the two directions. Forward it bounds the relative *change* in :math:`\psi`
+between sweeps; here it bounds a relative *backward error*. The field row above
+holds identically at every iterate, so the residual of the pair the sweep
+returns is exactly :math:`A_2^T \, \delta z_\psi` in the first row and nothing in
+the second — which makes :math:`\|A_2^T \delta z_\psi\|`, compared against the
+norm of the right-hand side, the backward error itself rather than a proxy for
+it. That derivation is why the iterate *accepted* has to be the unaccelerated
+``solveBTranspose`` output: returning an extrapolated :math:`z_\psi` leaves the
+field row off by :math:`B^T \mu \, \delta`, and the stopping test silently
+becomes an estimate.
 
 Two limits are structural rather than untested, and both are zero today by
 construction rather than by assumption:
