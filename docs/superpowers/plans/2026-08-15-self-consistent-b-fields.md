@@ -3183,35 +3183,65 @@ Rather than move that fixture or assume a pairing is hard enough, give the
 coupling a **strength dial** and have the test *measure* ρ, so a fixture that
 silently stops being divergent fails loudly instead of passing vacuously.
 
-Add a coupling-strength constructor parameter to a copy of
-`ManufacturedFieldEverySlot` (nField == 1) and of `ManufacturedFieldVector`
-(nField == 5) — `R = psi − c·∫(u + σ/2 + q/4 + 3φ/4) dx` and its vector
-analogue. `B` is unchanged by `c` and `A2 ∝ c`, so `ρ(M) ∝ c` and the dial is
-linear and predictable. Pair each with `GeometricDiffusion`, which has a
-nonzero `dSigmaFn_dGeometry` (Task 9's fix — confirm before relying on it, and
-say in the report what `max|A1_cellwise|` came out as).
+Give the coupling a strength parameter. `ManufacturedFieldEverySlot`
+(`FieldJacobianTests.cpp:212`, nField == 1) currently has a no-argument
+constructor; give it `explicit ManufacturedFieldEverySlot(double strength = 1.0)`
+and multiply the integral by it, so `R = psi − c·∫(u + σ/2 + q/4 + 3φ/4) dx`.
+Do the same for `ManufacturedFieldVector` (`ManufacturedFields.hpp:117`,
+nField == 5). `B` is unchanged by `c` and `A2 ∝ c`, so `ρ(M) ∝ c`: the dial is
+linear and predictable. Thread it through the existing makers as a defaulted
+trailing argument, so no existing call site changes:
 
-The measurement, in the test itself — no production code needed, since
+```cpp
+CoupledSolver everySlotFixture(Index nCells, Index k, double strength = 1.0)
+{
+    return makeCoupledSolverAtState(nCells, k, std::make_unique<GeometricAuxDiffusion>(),
+                                    std::make_shared<ManufacturedFieldEverySlot>(strength));
+}
+
+CoupledSolver multiDofFixture(Index nCells, Index k, double strength = 1.0)
+{
+    return makeCoupledSolverAtState(
+        nCells, k, std::make_unique<GeometricDiffusion>(),
+        std::make_shared<ManufacturedFieldVector>(toml::value{}, scratchGrid(), strength));
+}
+```
+
+`GeometricDiffusion` and `GeometricAuxDiffusion` both have a nonzero
+`dSigmaFn_dGeometry` — Task 9's fix. Confirm it before relying on it and report
+what `max|A1_cellwise|` came out as; a zero `A1` is how Task 9's sign
+experiment came to be a statement about a zero matrix.
+
+**`A1` is not rank-one, and the difference decides what these tests can
+assert.** `nGeometry()` is 1 for both models, so `dGeometry_dpsi` is a
+`(1 × nField)` row — but it is a *different* row at every quadrature point,
+because geometry is a field over `x` (`ManufacturedFields.hpp:134`: psi is
+sampled at N points and geometry at `x` interpolates them). `A1` accumulates a
+distinct rank-one term per node, so `rank(M) ≤ nField`, not 1. Irons–Tuck is
+therefore exact for `ManufacturedFieldEverySlot` and genuinely approximate for
+`ManufacturedFieldVector` — which is why both appear below, and why the
+five-DOF case asserts the guarantee rather than the route.
+
+The measurement, in the test file — no production code needed, since
 `subtractA1Times`, `solveTransportJac`, `a2` and `fieldModel` are all reachable
-under `MANTA_TEST_PRIVATE`:
+under `MANTA_TEST_PRIVATE`, and `CoupledSolver` exposes `Y` and `operator->`:
 
 ```cpp
 // Power-iterate M = B^-1 A2 A^-1 A1. With a zero right-hand side the affine
 // map's constant term vanishes and one sweep is exactly one application of M,
-// so the ratio of successive norms converges to |lambda_max|. This is the same
-// operator solveCoupledJacIterative iterates, reached the same way, rather than
-// a reimplementation of it that could agree with a wrong original.
-double spectralRadius(CoupledSolver &solver, int iterations = 60)
+// so the ratio of successive norms converges to |lambda_max|. Built from the
+// same four calls solveCoupledJacIterative makes, in the same order, rather
+// than from a second implementation that could agree with a wrong original.
+double spectralRadius(CoupledSolver const &solver, int iterations = 60)
 {
     const Index nField = solver->nField;
-    N_Vector zero = N_VClone(solver->y_vec()), work = N_VClone(zero), dx = N_VClone(zero);
-    N_VConst(0.0, zero);
+    N_Vector work = N_VClone(solver.Y), dx = N_VClone(solver.Y);
 
     Vector p = Vector::Ones(nField).normalized();
     double ratio = 0.0;
     for (int it = 0; it < iterations; ++it)
     {
-        N_VScale(1.0, zero, work);
+        N_VConst(0.0, work);
         solver->subtractA1Times(p, work);
         solver->solveTransportJac(work, dx);
 
@@ -3221,16 +3251,14 @@ double spectralRadius(CoupledSolver &solver, int iterations = 60)
 
         Vector next(nField);
         solver->fieldModel->solveB(next, r2);
-        ratio = next.norm() / p.norm();
+        ratio = next.norm();          // p is a unit vector on every pass
         p = next.normalized();
     }
-    N_VDestroy(zero); N_VDestroy(work); N_VDestroy(dx);
+    N_VDestroy(work);
+    N_VDestroy(dx);
     return ratio;
 }
 ```
-
-Adapt the vector accessors to whatever `CoupledSolver` (`FieldJacobianTests.cpp:255`)
-actually exposes; the algebra above is the specification.
 
 - [ ] **Step 8: The tests that discriminate**
 
@@ -3243,8 +3271,8 @@ BOOST_AUTO_TEST_CASE(acceleration_converges_a_sweep_that_plainly_diverges)
     // First: prove the fixture is what it claims. If a later change makes the
     // coupling weak, this fails here rather than turning the test below into a
     // statement about a contraction.
-    auto solver = makeCoupledSolverAtState(6, 2, EverySlotStrengthTag{2.0});
-    const double rho = spectralRadius(*solver);
+    auto solver = everySlotFixture(6, 2, 2.0);
+    const double rho = spectralRadius(solver);
     BOOST_TEST_MESSAGE("rho(M) = " << rho);
     BOOST_CHECK_GT(rho, 1.2);
 
@@ -3267,7 +3295,7 @@ BOOST_AUTO_TEST_CASE(the_fallback_returns_the_exact_solve_bit_for_bit)
     // reaches the escalation deterministically without needing a pathological
     // fixture. Bit-for-bit, not to a tolerance: the escalation does not blend
     // the sweep's last iterate with the exact answer, it discards it.
-    auto solver = makeCoupledSolverAtState(6, 2, EverySlotStrengthTag{2.0});
+    auto solver = everySlotFixture(6, 2, 2.0);
     solver->setFieldSolveMaxSweeps(1);
 
     N_Vector g = randomRHS(*solver);
@@ -3285,8 +3313,8 @@ BOOST_AUTO_TEST_CASE(acceleration_does_not_disturb_a_contraction)
     // that were already fine. rho < 1 here, and the sweep must still converge,
     // still without falling back, and in no more sweeps than the plain
     // iteration needed (2, recorded in Task 9's review).
-    auto solver = makeCoupledSolverAtState(6, 2, EverySlotStrengthTag{0.25});
-    BOOST_CHECK_LT(spectralRadius(*solver), 1.0);
+    auto solver = everySlotFixture(6, 2, 0.25);
+    BOOST_CHECK_LT(spectralRadius(solver), 1.0);
 
     N_Vector g = randomRHS(*solver);
     N_Vector out = N_VClone(g);
@@ -3296,13 +3324,37 @@ BOOST_AUTO_TEST_CASE(acceleration_does_not_disturb_a_contraction)
     BOOST_CHECK_LE(solver->fieldSweepIterations, 4);
 }
 
+BOOST_AUTO_TEST_CASE(a_divergent_five_dof_coupling_is_still_solved_exactly)
+{
+    // The case Irons-Tuck cannot be expected to fix. rank(M) <= nField = 5 here
+    // -- A1 accumulates a different rank-one term per quadrature point, because
+    // dGeometry_dpsi is a function of x -- and a rank-one secant removes one
+    // eigendirection, so a spectrum with two eigenvalues outside the unit circle
+    // defeats it. This test therefore asserts the *guarantee* rather than the
+    // route: whichever way solveCoupledJacIterative got there, the answer is the
+    // exact one. That is the property that makes iterative safe as a default,
+    // and it is the only assertion available here that is true by construction
+    // rather than by measurement.
+    auto solver = multiDofFixture(6, 2, 3.0);
+    BOOST_CHECK_GT(spectralRadius(solver), 1.0);
+
+    N_Vector g = randomRHS(*solver);
+    N_Vector exact = N_VClone(g), iterative = N_VClone(g);
+    solver->solveCoupledJacExact(g, exact);
+    solver->solveCoupledJacIterative(g, iterative);
+
+    BOOST_CHECK_SMALL(relativeDifference(exact, iterative), 1e-6);
+    BOOST_TEST_MESSAGE("five-DOF: fallbacks = " << solver->fieldSweepFallbacks
+                       << ", sweeps = " << solver->fieldSweepIterations);
+}
+
 BOOST_AUTO_TEST_CASE(the_accelerated_sweep_is_still_scale_equivariant)
 {
     // Task 9's property, re-run rather than assumed: mu is a ratio of inner
     // products of quantities that all scale with the right-hand side, so
     // Irons-Tuck is homogeneous and solve(c g) == c solve(g) should survive it.
     // The scale that broke the old criterion was 1e-9; use it again.
-    auto solver = makeCoupledSolverAtState(6, 2, EverySlotStrengthTag{2.0});
+    auto solver = everySlotFixture(6, 2, 2.0);
     N_Vector g = randomRHS(*solver), gSmall = N_VClone(g);
     N_VScale(1e-9, g, gSmall);
 
@@ -3410,6 +3462,15 @@ git commit -m "Accelerate the coupled sweep, and escalate rather than guess"
 `make test` must show the full case count, not a subset. State the count in the
 report, along with the ρ measured for each new fixture and the sweep counts
 observed.
+
+**One measurement decides a loose end.** If
+`a_divergent_five_dof_coupling_is_still_solved_exactly` reports
+`fallbacks = 0` — i.e. the rank-one secant *does* cope with a five-DOF
+divergent coupling — tighten it to assert that, and say so in the `TODO` entry:
+the Anderson/GMRES successor is then a scaling concern rather than a known
+gap. If it reports a fallback, leave the assertion as the guarantee and record
+the ρ at which Irons–Tuck stopped coping, which is the number that tells the
+next person how much headroom the rank-one step buys.
 
 ---
 
