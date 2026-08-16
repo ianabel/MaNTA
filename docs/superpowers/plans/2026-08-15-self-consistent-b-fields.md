@@ -3067,6 +3067,27 @@ you checked and how.
 Keep `std::format`'s `{:g}` and the reason recorded in Task 10's comment (
 `std::to_string` is fixed to six decimals, so `1e-8` prints as `0.000000`).
 
+**`a_refused_gradient_does_not_destroy_the_runs_output` breaks, and must be
+re-armed rather than deleted.** That test (`FieldAdjointTests.cpp:1015`) forces
+a refusal with `setFieldSolveMaxSweeps(1)` and a tolerance of `1e-14`, then
+checks that the exception reaches the caller *and* that the netCDF and restart
+files survive. After this task that forcing condition escalates instead of
+throwing, so the test would pass while asserting nothing. The guard in
+`Solver.cpp` is still needed — `solveCoupledAdjointExact` can throw out of the
+field model — so give the test a mechanism that still reaches it: a field model
+whose `solveBTranspose` throws `std::runtime_error` on the *second* call, so
+the forward run completes and the adjoint fails. Rename it to say what now
+refuses.
+
+While in that function, close the Task 10 deferred minor it carries: **its
+netCDF assertions are vacuous.** The re-reviewer removed the guard entirely and
+`exists(nc)` and `file_size(nc) > 0` both still passed — only
+`exists(restart)` failed — because timeslices are written during the run, so
+the file is on disk whether or not `Close()` ever runs. Add
+`file_size(restart) > 0`, and open the `.nc` back with the project's netCDF
+reader and read one variable, which is what actually distinguishes a cleanly
+closed file from a truncated one.
+
 - [ ] **Step 4: The separate adjoint cap**
 
 The adjoint sweep always runs at `cj = 0`, where ρ is largest — it is strictly
