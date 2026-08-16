@@ -7,6 +7,7 @@
 #include "../../FieldModel.hpp"
 #include "../../gridStructures.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <tuple>
 
@@ -59,6 +60,41 @@ class ManufacturedField : public FieldModel
 {
 public:
     ManufacturedField(toml::value const &, Grid const &) : FieldModel(buildSpec()) {}
+
+    /// The order study builds its models with no arguments, because MMSHarness.hpp
+    /// is deliberately free of toml11 -- SystemSolver.hpp forward-declares
+    /// FieldModel rather than including it, and `toml::value{}` inside a harness
+    /// template is a non-dependent name that would have to resolve at the point
+    /// of definition.
+    ManufacturedField() : FieldModel(buildSpec()) {}
+
+    // ---- the exact solution, for a study to compare against ----------------
+    //
+    // These three are the contract MMSHarness.hpp's ManufacturedFieldModel
+    // concept asks for: the exact psi(t), and the geometry it produces, which is
+    // what the manufactured transport source is differentiated from. They are
+    // *not* used by the model itself -- FieldResidual is compensated against the
+    // discrete state, as the header comment above insists -- so nothing here can
+    // make the constraint measure itself.
+
+    static Vector fieldExact(Time t)
+    {
+        Vector psi(1);
+        psi(0) = manufacturedPsiExact(t);
+        return psi;
+    }
+
+    /// g(x, t) = 1 + psi_exact(t) c(x).
+    static Value geometryExact(Position x, Time t)
+    {
+        return 1.0 + manufacturedPsiExact(t) * manufacturedC(x);
+    }
+
+    /// d g / d x, with c(x) = cos(pi x) so c'(x) = -pi sin(pi x).
+    static Value dGeometryExact_dx(Position x, Time t)
+    {
+        return -manufacturedPsiExact(t) * M_PI * std::sin(M_PI * x);
+    }
 
     static FieldModelSpec buildSpec()
     {
@@ -131,6 +167,14 @@ public:
     {
     }
 
+    /// The no-argument form the order study builds: see ManufacturedField's.
+    /// Not ambiguous with the three-argument constructor, whose Grid parameter
+    /// has no default.
+    explicit ManufacturedFieldVector(double strength_ = 1.0)
+        : FieldModel(buildSpec()), strength(strength_), L(manufacturedL(N))
+    {
+    }
+
     static FieldModelSpec buildSpec()
     {
         FieldModelSpec s;
@@ -188,11 +232,54 @@ public:
     }
 
     /// The exact psi at time t, for the order study to compare against.
-    Vector psiExact(Time t) const
+    ///
+    /// L psi = strength f, and L is fixed, so this is strength times the
+    /// unit-strength solution rather than a second solve -- one implementation
+    /// of the oracle, which is what keeps psiExact and fieldExact from drifting.
+    Vector psiExact(Time t) const { return strength * fieldExact(t); }
+
+    // ---- the exact solution, for a study to compare against ----------------
+    //
+    // The same three the single-DOF model declares. `fieldExact` is the
+    // *unit-strength* psi, so it is the oracle for a default-constructed model;
+    // a study that dials the coupling up must scale it the way psiExact does.
+
+    /// psi_exact(t) at strength 1, i.e. L^-1 f(u_exact(., t)).
+    ///
+    /// u_exact is (1 + t) times its t = 0 shape and both f and L^-1 are linear,
+    /// so the whole t-dependence is that factor. Computed once: the transport
+    /// source calls this at every node of every residual evaluation, and fExact
+    /// is a 4001-point Simpson rule per field DOF.
+    static Vector fieldExact(Time t)
     {
-        Vector rhs = strength * fExact(t);
-        Vector x = L.partialPivLu().solve(rhs);
-        return x;
+        static const Vector unit = []
+        {
+            // Never slice an Eigen solve() result -- assign it first.
+            Vector x = manufacturedL(N).partialPivLu().solve(fExact(0.0));
+            return x;
+        }();
+        return (1.0 + t) * unit;
+    }
+
+    /// g(x, t) = 1 + (the hat interpolant of psi_exact) at x.
+    static Value geometryExact(Position x, Time t)
+    {
+        return 1.0 + interpolate(fieldExact(t), x);
+    }
+
+    /// d g / d x. The interpolant is piecewise linear, so this is piecewise
+    /// *constant*, with jumps at the hat nodes 0, 0.25, 0.5, 0.75, 1. The
+    /// manufactured source therefore has jumps there too, and a study using this
+    /// model must refine on grids whose cell boundaries include them -- any
+    /// multiple of N-1 = 4 cells -- or the discontinuity falls inside a cell and
+    /// the order collapses for a reason that has nothing to do with the coupling.
+    static Value dGeometryExact_dx(Position x, Time t)
+    {
+        const Vector psi = fieldExact(t);
+        const double h = 1.0 / static_cast<double>(N - 1);
+        Index m = static_cast<Index>(std::floor(x / h));
+        m = std::max<Index>(0, std::min<Index>(m, N - 2));
+        return (psi(m + 1) - psi(m)) / h;
     }
 
 private:
@@ -228,7 +315,7 @@ private:
     /// This -- not f() above -- is the "compensate against u_exact" the header
     /// comment describes: it is what the order study compares to, so it must
     /// not be a function of the discrete state.
-    Vector fExact(Time t) const
+    static Vector fExact(Time t)
     {
         // Int c_m(x) sin(pi x)(1+t) dx, by a fine Simpson rule; the constraint
         // only has to be *consistent*, not analytic, for the order study.

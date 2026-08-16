@@ -245,6 +245,122 @@ Two things make this work, and both are easy to get wrong when adding a case:
   with "the error test failed repeatedly or with |h| = hmin"; 1e-9 leaves three
   orders of margin over the smallest spatial error in the sweep.
 
+## Order of accuracy with a field model coupled
+
+`Tests/UnitTests/MMSFieldTests.cpp` is the same instrument pointed at the
+self-consistent field coupling, and it is the only test class that can catch an
+error in the coupled *equations*. The split is worth restating, because the two
+halves catch disjoint things:
+
+* The coupled Jacobian is never assembled, so a wrong `A1` or `A2` costs Newton
+  iterations and nothing else. Only `FieldJacobianTests.cpp` sees that.
+* A sign error in the coupled *residual* converges at the right rate to the
+  wrong function. Only a closed-form comparison sees that -- which is this file.
+
+The problem is `u_t - d_x[ g(x; psi) kappa u_x ] = S` with `kappa = 0.7`,
+`u = sin(pi x)(1 + t)` and `g` supplied by the field model, all in `MMSHarness.hpp`
+alongside the uncoupled sweeps. `kappa != 1` deliberately: a case that used the
+geometry slot *as* the diffusivity rather than as a factor multiplying it would
+be indistinguishable at `kappa = 1`.
+
+**The manufactured source is checked before the solver is.** `S` is derived
+symbolically as `u_t - kappa (g' u_x + g u_xx)`, and
+`the_manufactured_source_is_consistent_with_the_exact_solution` evaluates
+`u_t - d_x[kappa g u_x] - S` at 21 and 30 `(x, t)` points respectively. Both
+models come back at **5e-13**, against a 1e-10 threshold. The derivative there is
+a six-point `O(h^6)` stencil at `h = 2e-3`, not a plain central difference: the
+flux carries `cos^2(pi x)`, so its seventh derivative goes as `(2 pi)^7` and the
+obvious `h = 5e-3` lands at 4e-11 -- close enough to the threshold to be worth
+not doing.
+
+Measured local orders, `t = 0.25`, grids 4, 8, 16, 32, `Superconvergent = false`:
+
+| model | k | u | u* | psi |
+|---|---|---|---|---|
+| `ManufacturedField` (1 DOF) | 1 | 1.90, 1.96, 1.98 | 2.21, 2.09, 2.05 | 2.09, 2.07, 2.04 |
+| `ManufacturedField` (1 DOF) | 2 | 2.95, 2.98, 2.99 | 4.47, 4.08, 3.96 | 4.82, 3.93, 3.87 |
+| `ManufacturedField` (1 DOF) | 3 | 3.96, 3.99, 4.00 | 4.99, 4.89, 4.71 | 5.12, 4.37, 4.10 |
+| `ManufacturedFieldVector` (5 DOF) | 2 | 2.93, 2.98, 2.99 | 4.04, 4.01, 4.00 | 4.03, 4.01, 4.00 |
+
+and with `Superconvergent = true`, `ManufacturedField` at `k = 2`:
+`u` 2.92, 2.97, 2.99 and `u*` **4.24, 3.99, 3.97**.
+
+Three things to read out of that.
+
+* `u_h` holds `k+1` at every degree and on both models, which is the headline.
+* **`psi` converges at `k+2`, not at the `k+1` the plan expected.** That is not
+  luck: the field quadrature is exact on a degree-`k` field, so `psi_h` is
+  exactly `Int u_h dx` and its error is `Int (u_h - u) dx` -- a linear functional
+  of the error, which superconverges by the usual duality argument rather than
+  tracking the `L2` norm. The multi-DOF model lands on `4.00` three times over,
+  which is the same statement for `L psi = f(u_h)`.
+* **`u*` reaches `k+2` with the flag on, so the fourth test asserts it** rather
+  than asserting that the flag throws. Geometry is a function of `(psi, x)` and
+  the star nodes are just more `x`, so the coupling needs no special case in
+  `ComputePhysics`'s `states.size()` loop -- and does not get one. Note that at
+  `k = 2` the flag-off column already reaches `k+2` here, exactly as it does for
+  the uncoupled linear problem, so the flag is preserving the extra order rather
+  than restoring it; the `k = 1` case, where the uncoupled study shows the flag
+  restoring an order it had lost, is not measured with a field attached.
+
+### Which solve produced these numbers
+
+`solveCoupledJacIterative` escalates to the exact Schur solve when it exhausts
+`FieldSolveMaxSweeps`, so a sweep that never converged would yield exactly the
+exact path's answer with nothing in the result to say so.
+`the_coupled_problem_converges_at_k_plus_one_in_u` therefore runs the whole `k =
+1, 2, 3` study on **both** modes and requires the local orders to agree.
+
+They do, to **1.8e-9, 3.2e-8 and 1.3e-7** at `k = 1, 2, 3` -- so the numbers above
+are the iterative mode's own, and the table would be unchanged had it been the
+exact mode's. The assertion is pinned at 0.01, the brief's "third digit of a
+rate", rather than at the measured gap: the gap is set by where IDA's Newton
+lands inside its own tolerance, which is not a portable quantity, while a real
+disagreement between two solves of the same equations would be an order of 0.1 or
+worse.
+
+**`getFieldSweepStats().fallbacks` is zero at every refinement, on every case in
+the file**, so no measurement here is the exact path wearing the iterative path's
+name. The sweep runs 2.5 to 3.6 iterations per Jacobian solve. One outlier is
+worth recording so it is not mistaken for a defect later: the multi-DOF case at
+`n = 8` takes 1591 field solves and 4877 sweeps where its neighbours take ~200
+and ~700. That is IDA working harder over that particular step sequence, not the
+sweep failing -- the fallback count is still zero and the local order is 2.93.
+
+**These tests are not vacuous, and that was checked rather than assumed.** Two
+mutations, applied and reverted:
+
+| mutation | effect |
+|---|---|
+| `SigmaFn` drops `s.geom(0)`, i.e. the geometry never reaches the physics | the flux check fails at every sample point; both single-DOF studies die with `IDASolve could not complete`; the multi-DOF orders collapse to -0.001, -0.000, -0.000 |
+| `ManufacturedField::FieldResidual` becomes `psi - 1.05 Int u dx`, a 5% error in the field row -- not even a sign error | `k = 1` orders fall to 1.79, 0.85, 0.07; `k = 2` to 0.26, 0.00, -0.00; `k = 3` to 0.005, 0.000, 0.000; `psi` to -0.007 |
+
+The second is the one that matters: it is the failure mode the whole file exists
+for, and the study loses the rate entirely rather than degrading by an order.
+Note also that the two solve modes still agreed to 1e-8 under both mutations,
+which is the point of that cross-check -- it is a statement about the linear
+solve, and carries no information about the equations.
+
+### What the coupled study does not cover
+
+* **`Superconvergent = true` at `k = 1` and `k = 3`.** Only `k = 2` is measured
+  with a field attached, so the one configuration where the uncoupled study shows
+  the flag *restoring* a lost order -- `k = 1` -- is untested under coupling.
+* **A differential field DOF.** Both manufactured models are algebraic here.
+  `CoupledResidualTests.cpp` runs the differential declaration end to end at one
+  grid and compares its answer to the algebraic one, but nothing measures its
+  order.
+* **`nAux > 0` with a field.** Measured separately: `FieldJacobianTests.cpp`'s
+  `GeometricAuxDiffusion` has both, but that is a Jacobian check, not an order
+  study. `nScalars > 0` with a field is refused by `setFieldModel` outright.
+* **A geometry that is not a smooth function of `x` within a cell.**
+  `ManufacturedFieldVector`'s hat interpolant is only piecewise linear, so `g'`
+  jumps at 0, 0.25, 0.5, 0.75, 1 and the manufactured source jumps with it. Every
+  grid in the sweep is a multiple of 4, so those land on cell boundaries. A grid
+  that put one *inside* a cell would lose the rate for a reason that has nothing
+  to do with the coupling -- and the source-consistency check would still pass,
+  since it samples away from the kinks by more than the stencil's reach.
+
 ## Superconvergence
 
 `Superconvergent = true` switches the residual and Jacobian to the interpolatory
