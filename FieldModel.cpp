@@ -1,9 +1,14 @@
 #include "FieldModel.hpp"
 
-// FieldModel is currently header-only. This translation unit exists so that
+// FieldModel itself is header-only. This translation unit exists so that
 // FieldModel.o is a real object the link lines can name, and so the registry
-// in Task 2 and the out-of-line pieces later tasks add have a home that does
+// below -- and any out-of-line piece added to it later -- has a home that does
 // not force a rebuild of every includer.
+//
+// The throws below are std::invalid_argument, not std::runtime_error, to match
+// PhysicsCases.cpp: this registry mirrors that one, MaNTA.cpp catches the two
+// the same way, and a caller distinguishing them would be distinguishing a
+// difference that means nothing.
 
 #include <stdexcept>
 
@@ -22,7 +27,7 @@ void FieldModels::RegisterFieldModel(std::string const &s, function_type creator
 {
     auto *m = getMap();
     if (m->count(s) > 0)
-        throw std::runtime_error("Duplicate field model name '" + s + "'");
+        throw std::invalid_argument("Duplicate field model name '" + s + "'");
     m->insert(std::make_pair(s, creator));
 }
 
@@ -37,8 +42,8 @@ std::unique_ptr<FieldModel> FieldModels::InstantiateFieldModel(std::string const
         std::string known;
         for (auto const &e : *m)
             known += (known.empty() ? "" : ", ") + e.first;
-        throw std::runtime_error("Unknown field model '" + s + "'. Registered field models are: " +
-                                 (known.empty() ? "(none)" : known));
+        throw std::invalid_argument("Unknown field model '" + s + "'. Registered field models are: " +
+                                    (known.empty() ? "(none)" : known));
     }
     return it->second(config, grid);
 }

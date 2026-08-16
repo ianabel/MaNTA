@@ -56,9 +56,12 @@ BOOST_AUTO_TEST_CASE(a_registered_model_can_be_instantiated_by_name)
 BOOST_AUTO_TEST_CASE(a_duplicate_name_throws)
 {
     FieldModels::RegisterFieldModel("RegistryProbeFieldB", createFieldModel<RegistryProbeField>);
+    // std::invalid_argument, as PhysicsCases::RegisterPhysicsCase throws: the
+    // exception type is part of what "mirrors PhysicsCases::map" means, and
+    // MaNTA.cpp catches both registries the same way.
     BOOST_CHECK_THROW(
         FieldModels::RegisterFieldModel("RegistryProbeFieldB", createFieldModel<RegistryProbeField>),
-        std::runtime_error);
+        std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_CASE(an_unknown_name_throws_and_names_what_is_registered)
@@ -72,7 +75,7 @@ BOOST_AUTO_TEST_CASE(an_unknown_name_throws_and_names_what_is_registered)
         FieldModels::InstantiateFieldModel("NoSuchFieldModel", config, grid);
         BOOST_FAIL("expected InstantiateFieldModel to throw");
     }
-    catch (std::runtime_error const &e)
+    catch (std::invalid_argument const &e)
     {
         std::string const msg = e.what();
         BOOST_CHECK(msg.find("NoSuchFieldModel") != std::string::npos);
