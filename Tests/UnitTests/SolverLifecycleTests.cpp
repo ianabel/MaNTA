@@ -949,6 +949,177 @@ BOOST_AUTO_TEST_CASE(the_SER_rate_and_floor_change_the_cost_and_not_the_answer)
     removeOutput("lifecycle_ser");
 }
 
+BOOST_AUTO_TEST_CASE(a_steady_solve_says_what_it_is_about_to_do)
+{
+    // The entry banner is unconditional, because TimeMarch's equivalent is:
+    // "Writing output at ..." per slice, then three IDA totals. A steady run
+    // printed nothing at all. The INFO-level logmsg calls inside the loop are
+    // not a substitute -- Logging.hpp gates max_log_level at compile time, and
+    // it is WARNING unless the build sets VERBOSE or DEBUG, so in an ordinary
+    // build they emit nothing.
+    //
+    // Diagnostics deliberately left off here: this is the part that does not
+    // need asking for.
+    const std::string stem = "lifecycle_steady_banner";
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, stem);
+    sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    sys.setSteadyStateTolerance(1e-10);
+
+    std::string log;
+    {
+        CapturedOutput capture;
+        sys.runSolver(T_FINAL);
+        log = capture.text();
+    }
+
+    BOOST_TEST(log.find("Steady solve: PseudoTransient") != std::string::npos, log);
+    BOOST_TEST(log.find("initial ||F||") != std::string::npos, log);
+    BOOST_TEST(log.find("SER rate") != std::string::npos, log);
+    BOOST_TEST(log.find("converged") != std::string::npos, log);
+
+    // Off by default, and this is what says so.
+    BOOST_TEST(log.find("Steady solve statistics") == std::string::npos, log);
+
+    removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(the_steady_diagnostics_count_the_whole_solve_not_the_last_step)
+{
+    // KINSOL zeroes its own counters at the top of every KINSol call, so the
+    // continuation loop has to sum them as it goes. Reading them once at the end
+    // -- the obvious thing, and what this did first -- reports the final inner
+    // solve alone: 1 Newton iteration against 5 continuation steps and 35
+    // Jacobian solves, which is self-evidently impossible but looks like a
+    // number. The invariants below are what makes that visible.
+    const std::string stem = "lifecycle_steady_stats";
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, stem);
+    sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    sys.setSteadyStateTolerance(1e-10);
+    sys.setSteadyStateDiagnostics(true);
+
+    std::string log;
+    {
+        CapturedOutput capture;
+        sys.runSolver(T_FINAL);
+        log = capture.text();
+    }
+
+    BOOST_TEST(log.find("Steady solve statistics -- converged") != std::string::npos, log);
+    BOOST_TEST(log.find("KINSOL Newton iterations") != std::string::npos, log);
+    BOOST_TEST(log.find("Jacobian solves") != std::string::npos, log);
+
+    const auto s = sys.lastSteadyStats();
+    BOOST_TEST_MESSAGE("steps " << s.steps << ", newton " << s.newtonIters
+                       << ", residual " << s.residualEvals << " (KINSOL " << s.kinFuncEvals
+                       << "), jac builds " << s.jacBuilds << ", jac solves " << s.jacSolves);
+
+    BOOST_TEST(s.steps > 0);
+    BOOST_TEST(s.rejected == 0);
+
+    // Each continuation step is one KINSol call, and a KINSol call that returns
+    // has taken at least one Newton iteration. This is the invariant the
+    // per-call reset broke.
+    BOOST_TEST(s.newtonIters >= s.steps,
+               "only " << s.newtonIters << " Newton iterations for " << s.steps
+               << " continuation steps; the KINSOL counters are being read once "
+               "rather than accumulated");
+
+    // The merit function costs one residual per step plus one on entry, and
+    // those are MaNTA's, not KINSOL's -- so the total strictly exceeds KINSOL's
+    // own count by exactly that. Pins the snapshot being taken before the first
+    // steadyNorm(), which it was not to begin with.
+    BOOST_TEST(s.residualEvals == s.kinFuncEvals + s.steps + 1);
+
+    // One linear solve per Newton iteration, with a direct solver.
+    BOOST_TEST(s.jacSolves == s.newtonIters);
+
+    // Every Jacobian build here came from KINSOL asking for one, and a build is
+    // never gratuitous: KINSOL reuses a factorisation across iterations, so
+    // builds are at most solves. They are *equal* on this fixture, which is the
+    // uninteresting case rather than the general one -- TestDiffusion is linear,
+    // so each KINSol converges in a single Newton iteration and there is nothing
+    // to reuse across. The separation appears on a nonlinear problem:
+    // AdjointPoster at k = 3 on 6 cells gives 7 builds against 35 solves, which
+    // is what makes the two counts worth reporting separately at all.
+    BOOST_TEST(s.jacBuilds == s.kinJacEvals);
+    BOOST_TEST(s.jacBuilds <= s.jacSolves);
+
+    removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(a_failed_steady_solve_still_writes_the_last_state_it_reached)
+{
+    // A failed steady solve is exactly when the state is worth looking at, and
+    // it was the one case that produced nothing: solveSteadyState threw, the
+    // throw reached runSolver, and runSolver freed everything without writing.
+    // The time loop has done this for a failed IDASolve all along.
+    //
+    // Provoked with a tolerance nothing can reach. The solve gets to ~1e-16 and
+    // then stalls, which is the ordinary "ran out of continuation steps" exit --
+    // deliberately that path rather than a KINSol crash, because it is
+    // deterministic and the Solver.cpp catch is `catch (...)` either way.
+    const std::string stem = "lifecycle_steady_failed";
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, stem);
+    sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    sys.setSteadyStateTolerance(1e-30);
+
+    std::string message;
+    {
+        CapturedOutput quiet;
+        try
+        {
+            sys.runSolver(T_FINAL);
+        }
+        catch (std::runtime_error const &e)
+        {
+            message = e.what();
+        }
+    }
+    BOOST_TEST(message.find("Steady solve did not converge") != std::string::npos, message);
+
+    // The stats survive the throw, which is half the point of filling them in
+    // before it.
+    BOOST_TEST(sys.lastSteadyStats().steps > 1);
+
+    netCDF::NcFile out;
+    BOOST_CHECK_NO_THROW(out.open(stem + ".nc", netCDF::NcFile::FileMode::read));
+
+    const size_t nSlices = out.getDim("t").getSize();
+    BOOST_TEST(nSlices == 2u);
+
+    const size_t nX = out.getDim("x").getSize();
+    std::vector<double> uOut(nX), uInitial(nX), x(nX);
+    out.getVar("x").getVar(x.data());
+    netCDF::NcVar uVar = out.getGroup(problem.getVariableName(0)).getVar("u");
+    uVar.getVar({nSlices - 1, 0}, {1, nX}, uOut.data());
+    uVar.getVar({0, 0}, {1, nX}, uInitial.data());
+
+    // It got most of the way there before running out of steps, so the state
+    // written is the near-converged one rather than the initial condition. A
+    // loose tolerance: the assertion is "this is the solve's own state", not
+    // "it converged".
+    double worst = 0.0, spread = 0.0;
+    for (size_t i = 0; i < nX; ++i)
+    {
+        worst = std::max(worst, std::abs(uOut[i] - (1.0 - x[i])));
+        spread = std::max(spread, std::abs(uOut[i] - uInitial[i]));
+    }
+    BOOST_TEST(worst < 1e-6, "last state written is " << worst << " from u = 1 - x");
+    BOOST_TEST(spread > 1e-2, "the two timeslices are indistinguishable");
+
+    out.close();
+    removeOutput(stem);
+}
+
 BOOST_AUTO_TEST_CASE(an_unarmed_gate_leaves_runSolver_bit_for_bit_unchanged)
 {
     // The no-regression guarantee. An AdjointProblem may be attached for other

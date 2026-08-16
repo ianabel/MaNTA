@@ -68,6 +68,7 @@ struct SolverConfig
     double                   PseudoTransientMaxStep;
     double                   PseudoTransientSERRate;
     double                   PseudoTransientSERFloor;
+    bool                     SteadyStateDiagnostics;
     std::string              TransportSystem;
     std::vector<std::string> PhysicsPlugins;
 

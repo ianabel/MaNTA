@@ -69,6 +69,9 @@ const std::vector<Entry> &table()
         {"PseudoTransientSERFloor", {}, Type::Double, Category::Solver, false, false, 2.0,
          "Least the pseudo-time step may grow on a step that reduced the residual. "
          "1 means no floor. Must not be below 1."},
+        {"SteadyStateDiagnostics", {}, Type::Bool, Category::Solver, false, false, false,
+         "Report the work a steady solve did: continuation steps, Newton iterations, "
+         "residual evaluations, Jacobian builds and solves. Printed on failure too."},
         {"ObjectiveDecreaseTolerance", {}, Type::Double, Category::Solver, false, false, 0.0,
          "Abandon a run whose dG/dt is already below -this at t0; zero is off."},
         {"WriteOutput", {}, Type::Bool, Category::Solver, false, false, true,

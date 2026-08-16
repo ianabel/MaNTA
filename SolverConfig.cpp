@@ -258,6 +258,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(PseudoTransientMaxStep, double);
     READ(PseudoTransientSERRate, double);
     READ(PseudoTransientSERFloor, double);
+    READ(SteadyStateDiagnostics, bool);
     READ(TransportSystem, std::string);
     READ(PhysicsPlugins, std::vector<std::string>);
 #undef READ
@@ -392,6 +393,7 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     {
         system.setPseudoTransientSERRate(config.PseudoTransientSERRate);
         system.setPseudoTransientSERFloor(config.PseudoTransientSERFloor);
+        system.setSteadyStateDiagnostics(config.SteadyStateDiagnostics);
     }
     catch (std::logic_error const &e)
     {

@@ -295,6 +295,52 @@ converged state.
 and stops when ``dY/dt`` falls below the tolerance, so its last slice carries the
 time the state was actually reached.
 
+**A failed steady solve writes its last state too**, at the same ``t = 1``,
+before the error propagates — which is exactly the run whose state is worth
+looking at. On the "ran out of continuation steps" path that is the last
+*accepted* iterate; after a hard ``KINSol`` failure it is whatever KINSOL left.
+Note two things about it: ``dYdt`` is still the ``t_initial`` derivative, since
+only a converged solve zeroes it, so a diagnostic hook differentiating it there
+is reading the initial condition's rate of change; and **nothing in the file
+distinguishes a failed last slice from a converged one** — the exception, the
+logged error and the exit status do.
+
+What the solve did
+~~~~~~~~~~~~~~~~~~
+
+Every steady solve prints what it is about to do — mode, mesh, tolerance,
+starting ``||F||`` and ``dt``, and the SER settings — then how it ended. That is
+unconditional, matching ``TimeMarch``, which prints a line per output slice and
+three IDA totals at the end.
+
+``SteadyStateDiagnostics = true`` adds the cost:
+
+.. code-block:: text
+
+   Steady solve: PseudoTransient on 6 cells at k = 3, tolerance 1e-10
+     initial ||F|| = 4.74756, dt = 0.05, SER rate 1, floor 2, max step inf
+     converged: ||F|| = 1.67044e-13 after 5 continuation steps.
+   Steady solve statistics -- converged
+     continuation steps      : 5  (0 rejected)
+     KINSOL Newton iterations: 35
+     residual evaluations    : 46  (of which KINSOL: 40)
+     Jacobian builds         : 7  (KINSOL asked for 7)
+     Jacobian solves         : 35
+
+It is off by default because a steady solve is often run in a loop by an
+optimisation driver, where a block per solve is noise. It prints on **failure**
+as well, labelled with which failure — that is the case it is most useful in.
+
+Reading the numbers:
+
+* **continuation steps** are outer iterations, one ``KINSol`` call each. A rejected one restored the state and cut ``dt``; a run that rejects most of its steps is one whose ``dt`` is growing faster than the problem will take, so lower ``PseudoTransientSERFloor``.
+* **residual evaluations** are the true total, KINSOL's own plus the merit function's — the latter costs one per continuation step plus one on entry, and is the number ``PERFORMANCE.md`` cares about.
+* **Jacobian builds against solves** is the useful split. A build assembles and factorises the per-cell blocks; a solve is the static condensation that reuses them. KINSOL keeps a factorisation across Newton iterations, so on a nonlinear problem builds are far fewer — ``AdjointPoster`` above pays 7 against 35. On a *linear* problem each inner solve converges in one iteration and the two coincide.
+
+The same numbers are available programmatically from
+``SystemSolver::lastSteadyStats()``, filled in whether or not they were printed
+and whether or not the solve converged.
+
 .. note::
 
    Before this was fixed, a ``PseudoTransient`` or ``Newton`` run wrote **only**

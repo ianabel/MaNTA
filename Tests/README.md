@@ -581,12 +581,26 @@ These are deliberate and tracked, not oversights:
     that did not belong together. The check is exactly zero, not merely small: it
     is set rather than converged to.
 
-  What is still uncovered is the algorithm itself -- the SER schedule, step
-  rejection, `Newton` mode, the `KINSetMaxNewtonStep` clamp, and every failure
-  path. In particular the flat unweighted `steadyNorm` (`SteadyState.cpp:188`)
-  is untested, and both the convergence test and the SER ratio read it, so
-  anything that changes how it is normalised changes the stopping test and the
-  step schedule together.
+  Three more cases have landed since, each also provoked by a defect:
+
+  * `the_SER_rate_and_floor_change_the_cost_and_not_the_answer` measures the schedule through physics evaluations -- 552 at the defaults, 3540 with the floor at 1, 1704 with the floor at 1 and the rate at 2 -- and requires the converged state to be identical in all three. An option that changed the answer would be a bug; one that changed nothing would be inert.
+  * `the_steady_diagnostics_count_the_whole_solve_not_the_last_step`. **KINSOL zeroes its own counters at the top of every `KINSol` call**, so the continuation loop has to sum them as it goes; reading them once at the end -- the obvious thing, and what this did first -- reported 1 Newton iteration against 5 continuation steps and 35 Jacobian solves. Self-evidently impossible, and it still looks like a number, which is why the test asserts invariants (`newtonIters >= steps`, `residualEvals == kinFuncEvals + steps + 1`) rather than values. The second of those also pins the counter snapshot being taken before the first `steadyNorm()`, which it was not to begin with.
+  * `a_failed_steady_solve_still_writes_the_last_state_it_reached`, using a tolerance nothing can reach so the solve stalls at ~1e-16 and exits by the "ran out of continuation steps" path.
+
+  What is still uncovered is the rest of the algorithm -- step rejection,
+  `Newton` mode, the `KINSetMaxNewtonStep` clamp, and the hard-`KINSol`-failure
+  path (the ordinary exhaustion path above shares its `catch (...)` in
+  `Solver.cpp`, but not the code that reaches it). In particular the flat
+  unweighted `steadyNorm` (`SteadyState.cpp`) is untested, and both the
+  convergence test and the SER ratio read it, so anything that changes how it is
+  normalised changes the stopping test and the step schedule together.
+
+  Note also what the fixture cannot show: `TestDiffusion` is *linear*, so each
+  inner solve converges in one Newton iteration and Jacobian builds equal
+  Jacobian solves. The separation those two counters exist to report only
+  appears on a nonlinear problem -- `AdjointPoster` at `k = 3` on 6 cells pays 7
+  builds against 35 solves. An assertion of `builds < solves` was written here
+  first and failed for exactly that reason.
 
 * **The C++ mirror plasma is gone.** `PhysicsCases/MirrorPlasma.{cpp,hpp}`,
   `PhysicsCases/MirrorPlasma/` and `PhysicsCases/CurvedMirrorPlasma/` were
