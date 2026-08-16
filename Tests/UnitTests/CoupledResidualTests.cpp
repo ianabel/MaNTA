@@ -578,6 +578,68 @@ BOOST_AUTO_TEST_CASE(a_differential_field_dof_with_no_time_derivative_is_refused
     BOOST_CHECK_THROW(solver->initialize(), std::invalid_argument);
 }
 
+BOOST_AUTO_TEST_CASE(an_output_group_colliding_with_a_transport_group_is_refused)
+{
+    // The field model's group and the transport variables' groups sit side by
+    // side at the top level of the netCDF file, and netCDF-4 gives groups and
+    // variables one namespace -- both are HDF5 links in the same parent. So a
+    // collision is an NcNameInUse thrown from ncGroup.cpp at the *first write*,
+    // hours into a run, naming netCDF's own source and not the spec.
+    //
+    // FieldModelSpec::validate() cannot catch it: it knows nothing about the
+    // physics case. setFieldModel is the earliest point where both are known,
+    // which is the same argument the nScalars refusal beside it makes.
+    //
+    // PlainDiffusion's one variable is named "u".
+    struct CollidingField : public ManufacturedField
+    {
+        CollidingField() : ManufacturedField(toml::value{}, scratchGrid()) { spec.name = "u"; }
+    };
+
+    Grid grid(0.0, 1.0, 4);
+    PlainDiffusion problem;
+    SystemSolver sys(grid, 2, &problem);
+    configureQuietly(sys, "coupled_group_collision");
+
+    BOOST_CHECK_THROW(sys.setFieldModel(std::make_shared<CollidingField>()), std::logic_error);
+
+    // And the message names the group and points at the fix.
+    try
+    {
+        sys.setFieldModel(std::make_shared<CollidingField>());
+        BOOST_FAIL("a field group colliding with a transport variable was accepted");
+    }
+    catch (std::logic_error const &e)
+    {
+        const std::string what = e.what();
+        BOOST_TEST(what.find("'u'") != std::string::npos, what);
+        BOOST_TEST(what.find("FieldModelSpec::name") != std::string::npos, what);
+    }
+
+    // Discriminating, not an unconditional throw: the same model with the
+    // default group name attaches.
+    BOOST_CHECK_NO_THROW(
+        sys.setFieldModel(std::make_shared<ManufacturedField>(toml::value{}, scratchGrid())));
+}
+
+BOOST_AUTO_TEST_CASE(an_output_group_colliding_with_a_solver_group_is_refused)
+{
+    // Not only the case's names. "Grid" and "RestartData" are groups the solver
+    // writes itself, and "x", "t" and "nVariables" are top-level variables --
+    // collisions all, for the one-namespace reason above.
+    struct GridNamedField : public ManufacturedField
+    {
+        GridNamedField() : ManufacturedField(toml::value{}, scratchGrid()) { spec.name = "Grid"; }
+    };
+
+    Grid grid(0.0, 1.0, 4);
+    PlainDiffusion problem;
+    SystemSolver sys(grid, 2, &problem);
+    configureQuietly(sys, "coupled_group_reserved");
+
+    BOOST_CHECK_THROW(sys.setFieldModel(std::make_shared<GridNamedField>()), std::logic_error);
+}
+
 BOOST_AUTO_TEST_CASE(a_correctly_declared_algebraic_field_dof_is_not_refused)
 {
     // The other half of the refusal above: it has to discriminate. The identical

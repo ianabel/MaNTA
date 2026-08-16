@@ -133,6 +133,46 @@ void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
             "scalar coupling's non-superconvergent branch evaluates dSources_dScalars on "
             "states that carry no geometry.");
 
+    // The model's output group must not collide with anything else at the top
+    // level of the netCDF file. FieldModelSpec::validate() cannot see this --
+    // it knows nothing about the physics case -- and neither can NetCDFIO,
+    // which would find out at the first write and throw NcNameInUse from
+    // ncGroup.cpp: a message naming netCDF's own source, hours into a run, for
+    // a mistake that was knowable here. Same reasoning as the nScalars refusal
+    // above, so it goes in the same place.
+    //
+    // Groups and variables share one namespace in netCDF-4 -- both are HDF5
+    // links in the same parent -- so the reserved variables are collisions too,
+    // not just the Grid and RestartData groups.
+    if (model)
+    {
+        auto refuse = [&](std::string const &what)
+        {
+            throw std::logic_error(
+                "The field model's output group is named '" + model->getSpec().name +
+                "', which is already " + what +
+                " in the netCDF output. Rename it through FieldModelSpec::name.");
+        };
+
+        for (char const *reserved : {"Grid", "RestartData", "x", "t", "nVariables"})
+            if (model->getSpec().name == reserved)
+                refuse("written by the solver itself");
+
+        for (Index i = 0; i < nVars; ++i)
+            if (model->getSpec().name == problem->getVariableName(i))
+                refuse("the group of transport variable " + std::to_string(i));
+
+        for (Index i = 0; i < nAux; ++i)
+            if (model->getSpec().name == problem->getAuxVarName(i))
+                refuse("auxiliary variable " + std::to_string(i));
+
+        // Unreachable while the refusal above stands, and here for the day it
+        // lifts rather than as a live check.
+        for (Index i = 0; i < nScalars; ++i)
+            if (model->getSpec().name == problem->getScalarName(i))
+                refuse("scalar " + std::to_string(i));
+    }
+
     // Before nField moves: the count of vectors to destroy is the old one.
     freeFieldWorkVectors();
 

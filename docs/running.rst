@@ -156,14 +156,26 @@ run therefore needs the same ``FieldModel`` line the original run had.
 
 .. warning::
 
-   ``IDACalcIC`` is handed the output cadence ``delta_t`` where SUNDIALS wants
-   the first output *time*. Those coincide only at :math:`t_0 = 0`, so a resumed
-   run whose ``t_initial`` **equals** its ``delta_t`` fails immediately with
-   ``IDA_ILL_INPUT`` (-22) and ``tout1 too close to t0``, and one whose
-   ``t_initial`` exceeds it gets a negative scale for the initial-condition
-   step. Nothing else in MaNTA starts at a nonzero time, which is why this has
-   gone unnoticed. Until it is fixed, keep ``delta_t`` well below ``t_initial``
-   on a restart.
+   **Keep** ``delta_t`` **well below** ``t_initial`` **on a restart.** Two
+   places read the output cadence as something it is not, and a resumed run is
+   the only run in MaNTA that starts at a nonzero time, which is why neither has
+   been noticed:
+
+   * ``IDACalcIC`` is handed ``delta_t`` where SUNDIALS wants the first output
+     *time*. So ``t_initial == delta_t`` fails immediately with
+     ``IDA_ILL_INPUT`` (-22) and ``tout1 too close to t0``, and
+     ``t_initial > delta_t`` makes IDA size the initial-condition step as though
+     it were integrating backwards.
+   * On a restart, ``IDASetInitStep`` is given ``delta_t`` as the **first step**,
+     on the reading that a resumed run should continue at the same step it left
+     off with.
+
+   Those pull in opposite directions, so raising ``delta_t`` above ``t_initial``
+   to escape the first walks into the second: IDA is handed a first step that
+   can exceed the whole remaining integration, and the error test fails
+   repeatedly until it gives up with ``IDA_ERR_FAIL`` (-3). A cadence
+   comfortably below ``t_initial`` is both the working choice and the one a real
+   resumed run has anyway.
 
 .. warning::
 

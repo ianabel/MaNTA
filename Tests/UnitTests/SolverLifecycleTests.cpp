@@ -1047,7 +1047,7 @@ BOOST_AUTO_TEST_CASE(psi_round_trips_through_a_restart)
     // whatever the file said. A differential value is held fixed, so the number
     // compared below is the number that was read off disk.
     const std::string stem = "lifecycle_coupled_restart";
-    const double T_RESTART = 0.25;
+    const double T_RESTART = 0.25, T_LATER = 0.5;
 
     auto original = makeCoupledSolver(8, 2, stem);
     original.sys->setOutputCadence(T_RESTART);
@@ -1063,10 +1063,6 @@ BOOST_AUTO_TEST_CASE(psi_round_trips_through_a_restart)
         CapturedOutput quiet;
         original.sys->destroySundials();
     }
-
-    // Not the initial value: a run that never moved psi would round-trip through
-    // anything, including a file that stored nothing at all.
-    BOOST_TEST(std::abs(psiBefore - WarmStartingField::PSI0) > 1e-6);
 
     // ---- read it back the way runManta does ----------------------------------
 
@@ -1097,6 +1093,28 @@ BOOST_AUTO_TEST_CASE(psi_round_trips_through_a_restart)
 
     BOOST_TEST(nField_file == 1);
 
+    // **The oracle is the file, not getSolution().**
+    //
+    // psiBefore above comes from yJac, which setJacEvalY fills with
+    // DGSoln::copy -- the very function this task taught to carry the field
+    // block. Comparing yJac against yJac therefore agrees perfectly when
+    // `psi_ = other.psi_` is deleted: both sides are zero, the case passes, and
+    // a regression in the field block of copy() ships silently. Verified by
+    // deleting that line, which leaves the earlier form of this test green.
+    //
+    // Y is the raw array out of the netCDF file and has been nowhere near
+    // DGSoln. The field block is last in the layout, so with nField_file == 1
+    // the last entry is psi.
+    const double psiFromFile = Y[nDOF_file - 1];
+    BOOST_TEST(psiFromFile == psiBefore, boost::test_tools::tolerance(0.0));
+
+    // Not vacuous, twice over. `!= PSI0` says the run actually moved psi, so a
+    // file that stored nothing would not round-trip through this by accident --
+    // but PSI0 is 0.5, so that distance is *satisfied by zero*, and a guard a
+    // zeroed value satisfies is not a guard. Hence the second line.
+    BOOST_TEST(std::abs(psiFromFile - WarmStartingField::PSI0) > 1e-6);
+    BOOST_TEST(std::abs(psiFromFile) > 1e-6);
+
     Grid restartGrid(cellBoundaries);
     GeometricDiffusion restartedProblem;
     restartedProblem.setRestartValues(Y, dYdt, restartGrid, order, nField_file);
@@ -1106,15 +1124,27 @@ BOOST_AUTO_TEST_CASE(psi_round_trips_through_a_restart)
     restarted.setTau(1.0);
     restarted.resetCoeffs();
     restarted.setInputFile(stem + "_resumed");
-    // Not T_RESTART, and this is a trap rather than a preference. Solver.cpp
-    // hands the output *cadence* to IDACalcIC's `tout1` parameter, which
-    // SUNDIALS documents as the first output *time* -- it uses it only for the
-    // direction and rough scale of t, and the two coincide only when t0 is zero.
-    // Every fixture in the tree starts at zero, so nothing notices; a resumed run
-    // whose cadence equals its t_initial gets tdist = 0 and IDACalcIC returns
-    // IDA_ILL_INPUT (-22), "tout1 too close to t0". That is not about field
-    // models -- it reproduces on main with no coupling at all, from any config
-    // with `t_initial = delta_t` -- so it is reported rather than fixed here.
+    // Well below T_RESTART, and the choice is forced. Two places treat the
+    // output cadence as something it is not, and on a restart -- the only run in
+    // this tree that starts at t0 != 0 -- they pull in opposite directions:
+    //
+    //   * IDACalcIC is handed `dt` as its `tout1`, which SUNDIALS documents as
+    //     the first output *time*, not a delta. A delta equals a time only at
+    //     t0 = 0. So cadence == t_initial gives tdist = 0 and IDA_ILL_INPUT
+    //     (-22), "tout1 too close to t0"; cadence < t_initial makes IDA
+    //     conclude it is integrating backwards and sign hh accordingly.
+    //   * `if (problem->isRestarting()) IDASetInitStep(IDA_mem, dt)` makes the
+    //     cadence the *first step*, on the reading that a resumed run should
+    //     "continue at the same delta t".
+    //
+    // So there is no cadence that avoids both: above t_initial escapes the first
+    // and hands IDA an initial step longer than the whole remaining integration,
+    // which here fails the error test ten times over and dies IDA_ERR_FAIL (-3)
+    // at h = 1.1e-6; below it takes the second, harmlessly, and completes. A
+    // small cadence is also what a resumed run really has, so this is the honest
+    // configuration rather than a dodge. Neither trap is about field models --
+    // both reproduce on main with no coupling, from a config with
+    // `restart = true` -- so both are reported rather than fixed here.
     restarted.setOutputCadence(T_RESTART / 5.0);
     restarted.setNOutput(11);
     restarted.setInitialTime(T_RESTART);
@@ -1137,7 +1167,7 @@ BOOST_AUTO_TEST_CASE(psi_round_trips_through_a_restart)
     // number below is the one the file carries, not one re-derived from it. If
     // this ever stops being exact, something is recomputing psi rather than
     // resuming it, and the tolerance is not the thing to adjust.
-    BOOST_CHECK_SMALL(std::abs(restarted.getSolution().Field(0) - psiBefore), 1e-12);
+    BOOST_CHECK_SMALL(std::abs(restarted.getSolution().Field(0) - psiFromFile), 1e-12);
 
     // ...and the transport state came back with it, so the psi above is the psi
     // of the same solution rather than of some other one.
@@ -1145,12 +1175,53 @@ BOOST_AUTO_TEST_CASE(psi_round_trips_through_a_restart)
         BOOST_CHECK_SMALL(std::abs(restarted.getSolution().u(0)(0.1 + 0.2 * i) - uBefore(i)),
                           1e-10);
 
+    // ---- and the resumed state is usable, not merely readable ----------------
+    //
+    // Everything above says psi came back. It does not say the run can go on
+    // from there: a state that is read correctly and then cannot be integrated
+    // is a restart that does not work. So continue to T_LATER and compare
+    // against a single uninterrupted run to the same time.
+    //
+    // Not bit for bit, and it cannot be: the two routes re-initialise the
+    // integrator at different points and take genuinely different step
+    // sequences, which is why the regression suite's round trips compare in L2
+    // at a tolerance too. Measured, at atol 1e-8 / rtol 1e-6, they agree to
+    // 1.0e-8 in psi and 6.4e-8 in u -- so the 1e-6 below carries about a
+    // decade and a half of slack, which is the right amount for a quantity
+    // set by where two different step sequences land inside their own
+    // tolerance.
+    {
+        CapturedOutput quiet;
+        restarted.integrate(T_LATER);
+    }
+
+    auto straight = makeCoupledSolver(8, 2, stem + "_straight");
+    straight.sys->setOutputCadence(T_LATER);
+    straight.sys->setWriteOutput(false);
+    {
+        CapturedOutput quiet;
+        straight.sys->runSolver(T_LATER);
+    }
+
+    BOOST_CHECK_SMALL(std::abs(restarted.getSolution().Field(0) -
+                               straight.sys->getSolution().Field(0)),
+                      1e-6);
+    for (Index i = 0; i < 5; ++i)
+        BOOST_CHECK_SMALL(std::abs(restarted.getSolution().u(0)(0.1 + 0.2 * i) -
+                                   straight.sys->getSolution().u(0)(0.1 + 0.2 * i)),
+                          1e-6);
+
+    // The continuation actually went somewhere, so the agreement above is not
+    // two runs sitting still together.
+    BOOST_TEST(std::abs(restarted.getSolution().Field(0) - psiFromFile) > 1e-4);
+
     {
         CapturedOutput quiet;
         restarted.destroySundials();
     }
     removeOutput(stem);
     removeOutput(stem + "_resumed");
+    removeOutput(stem + "_straight");
 }
 
 BOOST_AUTO_TEST_CASE(a_coupled_run_writes_the_field_group)

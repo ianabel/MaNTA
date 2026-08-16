@@ -56,8 +56,8 @@ BOOST_AUTO_TEST_CASE(duplicate_names_are_refused)
 
 BOOST_AUTO_TEST_CASE(an_empty_name_is_refused)
 {
-    // Names become netCDF group names in Task 12, where an empty one is a
-    // failure a long way from here.
+    // Names become netCDF variable names, where an empty one is a failure a
+    // long way from here.
     FieldModelSpec spec = twoDofOneSlot();
     spec.dofs[0].name = "";
     BOOST_CHECK_THROW(spec.validate(), std::invalid_argument);
@@ -68,6 +68,90 @@ BOOST_AUTO_TEST_CASE(an_empty_label_is_refused)
     FieldModelSpec spec = twoDofOneSlot();
     spec.label = "";
     BOOST_CHECK_THROW(spec.validate(), std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(the_output_group_defaults_to_Field_and_may_not_be_empty)
+{
+    BOOST_CHECK_EQUAL(twoDofOneSlot().name, "Field");
+
+    FieldModelSpec spec = twoDofOneSlot();
+    spec.name = "";
+    BOOST_CHECK_THROW(spec.validate(), std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(a_dof_and_a_slot_may_not_share_a_name)
+{
+    // New with the netCDF group, and *only* reachable because of it: a DOF and
+    // a geometry slot used to be written nowhere near each other, and now they
+    // are variables in the same group. checkNames compares each list with
+    // itself and cannot see this, so netCDF would be the first to notice --
+    // NcNameInUse, thrown from ncGroup.cpp, naming neither MaNTA nor the spec.
+    FieldModelSpec spec = twoDofOneSlot();
+    spec.geometry[0].name = "psi1";
+    BOOST_CHECK_THROW(spec.validate(), std::invalid_argument);
+
+    // ...and the message says which name and why.
+    try
+    {
+        spec.validate();
+        BOOST_FAIL("a name shared between a DOF and a slot was accepted");
+    }
+    catch (std::invalid_argument const &e)
+    {
+        const std::string what = e.what();
+        BOOST_TEST(what.find("psi1") != std::string::npos, what);
+        BOOST_TEST(what.find("geometry slot") != std::string::npos, what);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(a_name_netcdf_would_reject_is_refused_here_instead)
+{
+    // Each of these dies inside netCDF otherwise, as an NcBadName naming
+    // ncGroup.cpp and a line number. The point of catching them here is the
+    // message: it says which string, and why.
+    auto refused = [](FieldModelSpec const &spec, char const *expectedFragment)
+    {
+        try
+        {
+            spec.validate();
+            BOOST_FAIL("a name netCDF cannot use was accepted");
+        }
+        catch (std::invalid_argument const &e)
+        {
+            const std::string what = e.what();
+            BOOST_TEST(what.find("FieldModelSpec") != std::string::npos, what);
+            BOOST_TEST(what.find(expectedFragment) != std::string::npos, what);
+        }
+    };
+
+    FieldModelSpec slash = twoDofOneSlot();
+    slash.name = "bad/name";
+    refused(slash, "path separator");
+
+    FieldModelSpec slashDof = twoDofOneSlot();
+    slashDof.dofs[0].name = "psi/0";
+    refused(slashDof, "path separator");
+
+    FieldModelSpec control = twoDofOneSlot();
+    control.geometry[0].name = "V\tprime";
+    refused(control, "control character");
+
+    FieldModelSpec spaced = twoDofOneSlot();
+    spaced.name = "Equilibrium ";
+    refused(spaced, "whitespace");
+
+    FieldModelSpec leading = twoDofOneSlot();
+    leading.name = "-equilibrium";
+    refused(leading, "letter, a digit or an underscore");
+
+    // And the shapes that are fine stay fine: a leading underscore, a digit, and
+    // a multi-byte UTF-8 lead byte are all names netCDF accepts.
+    for (char const *ok : {"_psi", "2nd_field", "\xcf\x88"})
+    {
+        FieldModelSpec spec = twoDofOneSlot();
+        spec.name = ok;
+        BOOST_CHECK_NO_THROW(spec.validate());
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

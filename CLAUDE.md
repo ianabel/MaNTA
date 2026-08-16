@@ -485,14 +485,32 @@ because the adjoint always runs at `cj = 0`, where the coupling is stiffest.
 `TODO` records two candidate latches for a run that falls back on every solve;
 neither is implemented.
 
-Three refusals, each at the earliest point the combination is known:
+The refusals, each at the earliest point the combination is known:
 `nScalars > 0` with a field model (`setFieldModel` — the non-superconvergent
 `dSources_dScalars` branch builds its `State` from `DGSoln::evalOnNode`, which
 has no geometry rows, so a case reading geometry there would work with
 `Superconvergent = true` and read out of bounds with it off); a field DOF
 declared differential whose row carries no `d/dt` (`initialize`, naming the DOF,
-because left to IDA it is `IDA_LINESEARCH_FAIL`); and a restart whose file's
-`nField` disagrees with the configured model's.
+because left to IDA it is `IDA_LINESEARCH_FAIL`); a restart whose file's
+`nField` disagrees with the configured model's; and **four naming refusals that
+exist because the spec's names are now netCDF names** — a name netCDF would
+reject, and a DOF sharing a name with a geometry slot, both in
+`FieldModelSpec::validate()`; a group name colliding with a transport variable,
+an aux variable or one of `Grid`/`RestartData`/`x`/`t`/`nVariables`, in
+`setFieldModel`, which is the earliest point that knows both. Left to netCDF
+these are an `NcBadName` or `NcNameInUse` out of `ncGroup.cpp` at the *first
+write*, naming netCDF's source and a line number and neither MaNTA nor the
+spec. The DOF-versus-slot one is new with this layout: the two lists used to be
+written nowhere near each other and now share one group, and `checkNames`
+compares each list only with itself.
+
+**The restart test's oracle is the raw netCDF array, not `getSolution()`.**
+`yJac` is filled through `DGSoln::copy`, which is the function that carries the
+field block — so a comparison rooted in `getSolution()` on both sides agrees at
+zero when `psi_ = other.psi_` is deleted, and the case passes while `psi` is not
+being copied at all. Measured: green under that deletion with the old oracle,
+three failures with the new one. The same trap applies to any future check of a
+quantity `copy` moves.
 
 ### Python layer
 
@@ -950,6 +968,18 @@ derivative of `∫ g dx`, and no solve ever called them.
   tree, precisely because they all start at zero, but there is nothing that
   would catch a mistake in it. `psi_round_trips_through_a_restart` works around
   it with a comment, and `docs/running.rst` warns about it under Restarting.
+
+  **And `delta_t` is misread a second time on the same path**, which is what
+  stops "use a cadence above `t_initial`" being the workaround:
+  `if (problem->isRestarting()) IDASetInitStep(IDA_mem, dt)` makes the output
+  cadence the *first step*, on the reading that a resumed run should "continue
+  at the same delta t". So the two pull opposite ways — a cadence above
+  `t_initial` satisfies `tout1` and hands IDA an initial step longer than the
+  remaining integration, which failed the error test ten times over and died
+  `IDA_ERR_FAIL` (-3) at `h = 1.1e-6` in the restart test; a cadence below it
+  takes the backwards-`hh` branch of the first trap, harmlessly, and completes.
+  There is no cadence that avoids both, and the small one is what a resumed run
+  really has.
 * **`dydtComplete` is deliberately not IDA's `dYdt`, and the duplication is the
   point.** `AlgebraicDerivatives.cpp` solves the differentiated algebraic
   constraints for `q'`, `sigma'`, `phi'` and `lambda'` — IDA never computes them,

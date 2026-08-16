@@ -4,6 +4,7 @@
 #include "Types.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -100,6 +101,55 @@ public:
 
         checkNames(dofs, "degree of freedom");
         checkNames(geometry, "geometry slot");
+        checkNetCDFName(name, "output group name");
+
+        // Across the two lists, not just within each. This one is new with the
+        // netCDF group: a DOF and a slot used to be written nowhere near each
+        // other, and now they are variables in the *same* group, so a shared
+        // name is an NcNameInUse thrown from inside netCDF -- a message naming
+        // ncGroup.cpp and neither MaNTA nor the spec. checkNames above compares
+        // each list only with itself and cannot see it.
+        for (auto const &d : dofs)
+            for (auto const &g : geometry)
+                if (d.name == g.name)
+                    throw std::invalid_argument(
+                        "FieldModelSpec: '" + d.name +
+                        "' is both a degree of freedom and a geometry slot. They share one "
+                        "output group, so the two lists may not overlap.");
+    }
+
+    /// Would netCDF accept this as a variable or group name? Asked here so the
+    /// answer arrives as a MaNTA error naming the string and the reason, rather
+    /// than as an NcBadName from inside ncGroup.cpp at the first write --
+    /// several hours into a run, and pointing at netCDF's source rather than at
+    /// the spec that is wrong. These are libnetcdf's own rules (NC_check_name).
+    static void checkNetCDFName(std::string const &n, char const *what)
+    {
+        auto reject = [&](char const *why)
+        {
+            throw std::invalid_argument(std::string("FieldModelSpec: the ") + what + " '" + n +
+                                        "' is not a usable netCDF name: " + why + ".");
+        };
+
+        if (n.find('/') != std::string::npos)
+            reject("it contains '/', which netCDF reserves as a path separator");
+
+        for (unsigned char c : n)
+            if (c < 0x20 || c == 0x7f)
+                reject("it contains a control character");
+
+        // Leading and trailing whitespace are both rejected by netCDF, and both
+        // are far more likely to be a stray character in a literal than a
+        // deliberate name.
+        if (std::isspace(static_cast<unsigned char>(n.front())) ||
+            std::isspace(static_cast<unsigned char>(n.back())))
+            reject("it begins or ends with whitespace");
+
+        // The first character must be alphanumeric or '_'; a multi-byte UTF-8
+        // lead byte (>= 0x80) is allowed, as netCDF allows it.
+        const unsigned char first = static_cast<unsigned char>(n.front());
+        if (first < 0x80 && !std::isalnum(first) && first != '_')
+            reject("it must begin with a letter, a digit or an underscore");
     }
 
 private:
@@ -114,6 +164,9 @@ private:
             for (size_t j = i + 1; j < v.size(); ++j)
                 if (v[i].name == v[j].name)
                     throw std::invalid_argument(std::string("FieldModelSpec: duplicate ") + what + " name '" + v[i].name + "'");
+
+        for (auto const &e : v)
+            checkNetCDFName(e.name, what);
     }
 };
 

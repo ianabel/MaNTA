@@ -424,9 +424,20 @@ What covers the coupled path instead, and what each catches:
 | `MMSFieldTests.cpp` (order study) | an error in the coupled *equations*: a sign or a factor in the residual, which converges at the right rate to the wrong function |
 | `FieldJacobianTests.cpp` | an error in `A1` or `A2`, which costs Newton iterations and nothing else, since the coupled Jacobian is never assembled |
 | `FieldAdjointTests.cpp` | an error in the *transpose* of either, which is a silently wrong gradient beside a perfectly good `G` |
-| `SolverLifecycleTests.cpp::psi_round_trips_through_a_restart` | psi missing from, or misread out of, `<stem>.restart.nc` |
+| `SolverLifecycleTests.cpp::psi_round_trips_through_a_restart` | psi missing from, or misread out of, `<stem>.restart.nc`, and a resumed state that cannot be integrated on |
 | `SolverLifecycleTests.cpp::a_coupled_solver_reused_matches_a_fresh_one_bit_for_bit` | a field model that caches across runs, or an `initialize()` that stops calling `resetForRun` |
 | `SolverLifecycleTests.cpp::a_coupled_run_writes_the_field_group` | the netCDF group: its name, its `label`, and psi and geometry written to the wrong shape |
+| `FieldModelSpecTests.cpp` (two name cases) + `CoupledResidualTests.cpp` (two collision cases) | a spec whose names netCDF cannot use, which is otherwise an `NcBadName`/`NcNameInUse` out of `ncGroup.cpp` at the first write |
+
+**The restart case's oracle is the raw netCDF array, not `getSolution()`, and
+that is load bearing.** `yJac` is filled by `DGSoln::copy` — the function this
+work taught to carry the field block — so comparing `getSolution()` on both
+sides of the round trip agrees perfectly when `psi_ = other.psi_` is deleted:
+both are zero. Measured: with the oracle rooted in `getSolution()` that deletion
+left the case *green*; rooted in `Y[nDOF - 1]` it fails three ways, the first
+being `0.4421 != 0`. The vacuity guard has to exclude zero explicitly too — the
+"psi actually moved away from `PSI0`" guard is satisfied by zero, since `PSI0`
+is 0.5.
 
 **The gap that leaves is real and is not covered by any of the above: nothing
 exercises the coupled path through a `.conf` file.** The config plumbing --

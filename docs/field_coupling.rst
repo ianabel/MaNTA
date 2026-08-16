@@ -124,6 +124,24 @@ metric on it — but it is recorded in the output so a run says what its :math:`
 meant. ``name`` is the netCDF group psi and the geometry slots are written to,
 and defaults to ``Field``.
 
+.. note::
+
+   **Names become netCDF names, and are checked as such where the check can say
+   something useful.** ``validate()`` refuses a name netCDF would reject — one
+   containing ``/`` or a control character, one padded with whitespace, one not
+   beginning with a letter, digit or underscore — and refuses a DOF and a
+   geometry slot that share a name, because the two lists go into *one* group.
+   ``setFieldModel`` additionally refuses a group name that collides with a
+   transport variable's group, an auxiliary variable, or one of the names the
+   solver writes itself (``Grid``, ``RestartData``, ``x``, ``t``,
+   ``nVariables``) — netCDF-4 gives groups and variables a single namespace, so
+   those are collisions too.
+
+   All of these are otherwise an ``NcBadName`` or ``NcNameInUse`` thrown from
+   inside ``ncGroup.cpp`` at the *first write*, naming netCDF's own source and a
+   line number rather than the spec that is wrong — and, for a long run, hours
+   after the point where it was knowable.
+
 The hooks
 ~~~~~~~~~
 
