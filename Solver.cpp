@@ -220,6 +220,20 @@ void SystemSolver::initialize()
 		// nField is only known once a model is attached, and warning about the
 		// cost of a solve that will never happen -- FieldSolve set on a run with
 		// no field model -- is noise.
+		//
+		// **The two levels differ, and deliberately.** Exact is a WARNING: the
+		// user asked for a verification tool and is about to pay nField + 1
+		// transport solves per Jacobian solve for it in what may be a production
+		// run, which is a choice worth interrupting. Iterative is INFO, because
+		// it describes what the *default* does -- it fired on every coupled run
+		// including every unconfigured one, and a warning that always fires
+		// teaches a reader to skip warnings, which is a real cost given the
+		// genuine one this function's caller prints at the end of a run when
+		// fallbacks > 0. INFO is compiled out below WARNING (Logging.hpp), so
+		// this text is reachable on a VERBOSE or DEBUG build; the permanent
+		// homes for it are docs/running.rst and docs/field_coupling.rst, and
+		// what a release build reports about the sweep is the "Coupled field
+		// sweeps" line, which is measurement rather than description.
 		if (fieldSolveMode == FieldSolveMode::Exact)
 			logmsg<LOG_LEVEL::WARNING>(
 				"FieldSolve = exact forms the Schur complement onto the field block, which "
@@ -228,7 +242,7 @@ void SystemSolver::initialize()
 				"verification tool and is not intended for production runs.",
 				nField + 1);
 		else
-			logmsg<LOG_LEVEL::WARNING>(
+			logmsg<LOG_LEVEL::INFO>(
 				"FieldSolve = iterative: block Gauss-Seidel between the transport and field "
 				"blocks with Irons-Tuck acceleration, one transport solve per sweep against "
 				"exact's {} per Jacobian solve. Stops once the relative change in psi is below "

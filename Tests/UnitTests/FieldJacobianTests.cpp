@@ -396,8 +396,9 @@ double spectralRadius(CoupledSolver const &solver, int iterations = 60)
     return ratio;
 }
 
-/// The largest coefficient anywhere in A1, over every cell. A zero A1 is how
-/// Task 9's sign experiment came to be a statement about a zero matrix, so every
+/// The largest coefficient anywhere in A1, over every cell. A zero A1 is how a
+/// sign experiment on the coupling once came to be a statement about a zero
+/// matrix -- every assertion it made held, and held vacuously -- so every
 /// fixture that claims a coupling reports this.
 double maxAbsA1(CoupledSolver const &solver)
 {
@@ -534,7 +535,8 @@ N_Vector randomRHS(SystemSolver &sys, int seed = 0)
 /// The floor is the smallest positive double, there only to keep a genuinely
 /// zero `a` from dividing by zero -- not `max(.., 1.0)`. A fixed floor of 1
 /// is the same shape of bug the iterative solve's own stopping criterion had
-/// (Task 9 review, finding 1): it silently turns a *relative* comparison into
+/// before `tol * max(1, |g|)` was dropped from it: it silently turns a
+/// *relative* comparison into
 /// an *absolute* one for any `a` smaller than the floor, which is exactly the
 /// small-correction regime this solve exists to be checked in.
 double relativeDifference(N_Vector a, N_Vector b)
@@ -549,6 +551,11 @@ double relativeDifference(N_Vector a, N_Vector b)
 // kept here rather than shared, the way this file's own configureQuietly
 // already duplicates that file's, so an end-to-end run on the iterative path
 // can be checked against the same closed form the exact path already reaches.
+//
+// It is a copy in the strict sense: hook for hook, dSigmaFn_dGeometry included.
+// The two drifted apart once, this file gaining the geometry derivative and the
+// other not, which left "a local copy" describing two cases with different
+// Jacobians. If you change one, change the other.
 inline Value manufacturedCoupledSource(Position x, Time t)
 {
     const double A = 1.0 + t;
@@ -824,8 +831,8 @@ BOOST_AUTO_TEST_CASE(solve_jac_eq_dispatches_to_the_exact_solve)
 {
     // The dispatcher, not the solve: solveJacEq must route a coupled system to
     // solveCoupledJacExact and reproduce it bit for bit. Anything left in
-    // solveJacEq that touched the field block afterwards -- Task 6's
-    // block-Jacobi solveB call, for instance -- would show up here and nowhere
+    // solveJacEq that touched the field block afterwards -- the block-Jacobi
+    // solveB call it used to end with, for instance -- would show up here and nowhere
     // else, because every other test in this file calls the exact solve
     // directly.
     auto solver = singleDofFixture(/*nCells=*/4, /*k=*/1);
@@ -873,7 +880,14 @@ BOOST_AUTO_TEST_CASE(selecting_the_exact_solve_warns)
     BOOST_TEST(log.find("FieldSolve = exact") != std::string::npos);
     BOOST_TEST(log.find("verification") != std::string::npos);
 
-    // ...and it has to discriminate: the default mode says something different.
+    // ...and it has to discriminate: the *default* mode must not warn at all.
+    //
+    // That is the whole point of the split. The iterative branch describes what
+    // an unconfigured coupled run already does, so it is INFO -- compiled out
+    // below WARNING by Logging.hpp's max_log_level, and this build carries
+    // neither -DVERBOSE nor -DDEBUG. As a WARNING it fired on every coupled run
+    // there is, which trains a reader to skip the level the genuine
+    // fallbacks > 0 report is printed at.
     auto other = singleDofFixture(/*nCells=*/4, /*k=*/1);
     configureQuietly(*other, "field_jac_warning_default");
     BOOST_REQUIRE(other->getFieldSolveMode() == SystemSolver::FieldSolveMode::Iterative);
@@ -886,8 +900,8 @@ BOOST_AUTO_TEST_CASE(selecting_the_exact_solve_warns)
         other->destroySundials();
     }
 
-    BOOST_TEST(defaultLog.find("FieldSolve = exact") == std::string::npos);
-    BOOST_TEST(defaultLog.find("FieldSolve = iterative") != std::string::npos);
+    BOOST_TEST(defaultLog.find("FieldSolve") == std::string::npos);
+    BOOST_TEST(defaultLog.find("WARNING") == std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(the_iterative_solve_agrees_with_the_exact_one)
@@ -934,8 +948,8 @@ BOOST_AUTO_TEST_CASE(the_iterative_solve_agrees_at_the_scale_a_newton_step_lives
 {
     // The two tests above use a RHS whose converged |dpsi| happens to land
     // above 1, so `tol * max(1, |dpsi|)` and `tol * |dpsi|` coincide there and
-    // neither test would have caught Task 9 review finding 1: the original
-    // stopping criterion used `max(1, |dpsi|)` rather than `|dpsi|` alone, which
+    // neither test would have caught the defect this one exists for: the
+    // original stopping criterion used `max(1, |dpsi|)` rather than `|dpsi|` alone, which
     // is an *absolute* magnitude test of `FieldSolveTolerance` whenever the
     // converged |dpsi| is below 1 -- exactly the regime a real Newton
     // correction lives in, where it declared convergence after the raw first
@@ -1091,7 +1105,8 @@ BOOST_AUTO_TEST_CASE(acceleration_does_not_disturb_a_contraction)
     // The risk in adding an extrapolation is that it destabilises the cases
     // that were already fine. rho < 1 here, and the sweep must still converge,
     // still without falling back, and in no more sweeps than the plain
-    // iteration needed (2, recorded in Task 9's review).
+    // iteration needed on this fixture (2, measured before the acceleration
+    // was added).
     auto solver = everySlotFixture(6, 2, 0.25);
     const double rho = spectralRadius(solver);
     BOOST_TEST_MESSAGE("every-slot, strength 0.25: rho(M) = " << rho
@@ -1263,7 +1278,8 @@ BOOST_AUTO_TEST_CASE(the_accepted_iterate_leaves_the_field_row_exact)
 
 BOOST_AUTO_TEST_CASE(the_accelerated_sweep_is_still_scale_equivariant)
 {
-    // Task 9's property, re-run rather than assumed: mu is a ratio of inner
+    // A property of the plain sweep, re-run rather than assumed to survive the
+    // acceleration: mu is a ratio of inner
     // products of quantities that all scale with the right-hand side, so
     // Irons-Tuck is homogeneous and solve(c g) == c solve(g) should survive it.
     // The scale that broke the old criterion was 1e-9; use it again.
@@ -1293,7 +1309,7 @@ BOOST_AUTO_TEST_CASE(the_accelerated_sweep_is_still_scale_equivariant)
 BOOST_AUTO_TEST_CASE(the_end_of_run_report_counts_the_sweeps_and_names_the_fallbacks)
 {
     // The only signal a user has that the coupling is not converging, and the
-    // Task 9 deferred minor this closes: the sweep used to hit its cap silently,
+    // gap this closes: the sweep used to hit its cap silently,
     // once per Jacobian solve, with nothing anywhere saying so. The run is still
     // correct -- the fallback is the exact solve -- so this is a cost report
     // rather than an error, and it has to say what to do about it.
