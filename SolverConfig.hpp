@@ -123,9 +123,24 @@ SolverConfig loadSolverConfig(ConfigSource const &source, ConfigSchema::Reader r
 
 // The grid the configuration asks for. `restart` is the opened restart file
 // when config.restart is set, nullptr otherwise; k is written with the
-// polynomial degree, which comes from the restart file on that path.
+// polynomial degree the *file* was written at, which is also the degree it must
+// be read back at -- see restartRunOrder for the degree the run then uses.
 std::unique_ptr<Grid> makeGrid(SolverConfig const &config,
                                netCDF::NcFile *restart, unsigned int &k);
+
+// The polynomial degree a restarted run should use, given the degree its restart
+// file was written at.
+//
+// A restart used to take its degree from the file and ignore
+// Polynomial_degree outright, even though the schema makes that key required of
+// every config on both readers -- so a user was obliged to write a number that
+// was then silently discarded. This honours it, and warns when the two differ,
+// because the state is projected across the degree change rather than copied.
+//
+// Equal degrees return the file's, so every existing restart takes the copy
+// path in setInitialConditions and is bit for bit unchanged. Shared by both
+// surfaces so they cannot drift on it.
+unsigned int restartRunOrder(SolverConfig const &config, unsigned int fileOrder);
 
 // Every config-derived set* call on the solver, in one place.
 void applySolverConfig(SolverConfig const &config, SystemSolver &system);

@@ -236,10 +236,14 @@ Restarting
 
 .. note::
 
-   On a restart the grid and the polynomial degree are read from the restart
-   file, not from the config file — ``Grid_size``, ``Polynomial_degree``,
-   ``Lower_boundary`` and ``Upper_boundary`` are ignored on that path. Changing
-   them in the config will not change the resumed run.
+   On a restart the grid is read from the restart file, not from the config
+   file — ``Grid_size``, ``Grid_points``, ``Lower_boundary`` and
+   ``Upper_boundary`` are ignored on that path.
+
+   ``Polynomial_degree`` is honoured. It defaults to the degree the file was
+   written at, and a different value resumes at that degree, projecting the
+   stored state across the change and logging a warning. See
+   :doc:`running` for what refining and coarsening each cost.
 
 Adjoints and superconvergence
 -----------------------------

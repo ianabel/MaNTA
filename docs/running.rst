@@ -115,8 +115,38 @@ point a config file at it:
    t_initial = 0.5
    t_final = 1.0
 
-The grid and polynomial degree come from the restart file, so the corresponding
-config keys are ignored on this path.
+The grid comes from the restart file, so ``Grid_size``, ``Grid_points``,
+``Lower_boundary`` and ``Upper_boundary`` are ignored on this path.
+
+``Polynomial_degree`` is **not** ignored. It defaults to the degree the file was
+written at, and setting it to something else resumes the run at that degree
+instead, projecting the stored state onto the new space:
+
+.. code-block:: toml
+
+   [configuration]
+   restart = true
+   RestartFile = "case7.restart.nc"   # written at Polynomial_degree = 2
+   Polynomial_degree = 3              # resume at 3
+
+Refining loses nothing — a degree-*k* element polynomial lies inside the
+degree-(*k*\ +1) space, so the projection reproduces it exactly. Coarsening
+discards what the lower space cannot hold, and nothing else: projections onto
+nested spaces compose, so a state taken from *k* down to *k*\ −1 lands precisely
+where a cold run at *k*\ −1 would. Both are pinned to round-off by
+``a_restart_at_a_higher_degree_reproduces_the_state_exactly`` and its sibling.
+Equal degrees take a straight copy, bit for bit, as they always have.
+
+A degree change is logged at ``WARNING``, in both directions — the key is
+required of every config, so a mismatch is as likely to be a config copied from
+elsewhere as a deliberate request.
+
+.. note::
+
+   The *mesh* still cannot be changed on a restart. The nesting argument above
+   is per cell and needs the same cell boundaries, and a physics case is
+   constructed with the grid where nothing hands it the degree, so changing the
+   mesh changes what the case was built against.
 
 A restart written by a steady solve carries ``dYdt = 0``, which is the defining
 property of the state it holds. It used to carry the ``t_initial`` derivative

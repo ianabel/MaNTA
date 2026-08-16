@@ -1121,6 +1121,156 @@ BOOST_AUTO_TEST_CASE(a_failed_steady_solve_still_writes_the_last_state_it_reache
     removeOutput(stem);
 }
 
+// ------------------------------------ restarting at a different degree ----
+//
+// A restart used to require the run's discretisation to match the file's
+// exactly, and could not do otherwise: makeGrid reads both CellBoundaries and
+// PolyOrder from the file and ignored Polynomial_degree, so the degrees always
+// agreed and DGSoln::copy -- which throws on a different order -- was never
+// asked for anything else. The config's degree is honoured now, and
+// setInitialConditions projects rather than copies when it differs.
+
+namespace
+{
+// Initialise a solver at degree `order`, optionally from a state left by an
+// earlier one, and return its u sampled at five interior points along with the
+// state it finished with.
+struct RestartSnapshot
+{
+    Vector sampled;
+    std::vector<double> Y, dYdt;
+};
+
+RestartSnapshot initialiseAt(TestDiffusion &problem, Grid const &grid, Index order,
+                             std::string const &stem)
+{
+    SystemSolver sys(grid, order, &problem);
+    configure(sys, stem);
+
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+    }
+
+    RestartSnapshot out;
+    out.sampled = sample(sys);
+
+    const size_t nDOF = sys.yJac.getDoF();
+    out.Y.assign(sys.yJacMem, sys.yJacMem + nDOF);
+    out.dYdt.assign(sys.dydtJacMem, sys.dydtJacMem + nDOF);
+
+    sys.destroySundials();
+    return out;
+}
+} // namespace
+
+BOOST_AUTO_TEST_CASE(a_restart_at_a_higher_degree_reproduces_the_state_exactly)
+{
+    // The sharp case, and the reason a projection is the right transfer rather
+    // than a resampling: a degree-2 element polynomial lies *inside* the
+    // degree-3 space, so the L2 projection onto it is not an approximation at
+    // all. The refined run must reproduce the coarse state to round-off.
+    //
+    // Note what this compares. TestDiffusion's initial condition is
+    // cos((x - Centre) * pi/2), which neither space represents exactly -- so
+    // the assertion is against the *coarse run's own* state, not against the
+    // exact function. Comparing to cos would be a discretisation test wearing a
+    // transfer test's clothes, and would pass just as well if the transfer did
+    // nothing at all and the refined run simply re-projected cos itself.
+    const std::string stem = "lifecycle_restart_refine";
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+
+    const RestartSnapshot coarse = initialiseAt(problem, grid, 2, stem);
+
+    problem.setRestartValues(coarse.Y, coarse.dYdt, grid, 2);
+    BOOST_TEST(problem.isRestarting());
+
+    const RestartSnapshot refined = initialiseAt(problem, grid, 3, stem);
+
+    double worst = 0.0;
+    for (Index i = 0; i < coarse.sampled.size(); ++i)
+        worst = std::max(worst, std::abs(refined.sampled(i) - coarse.sampled(i)));
+
+    BOOST_TEST_MESSAGE("k = 2 -> 3 transfer, worst |du| at five interior points: " << worst);
+    BOOST_TEST(worst < 1e-12,
+               "the refined run differs from the coarse state it was given by " << worst
+               << "; a degree-2 polynomial is in the degree-3 space and the transfer "
+               "should be exact");
+
+    problem.clearRestart();
+    removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(a_restart_at_a_lower_degree_lands_where_a_fresh_run_would)
+{
+    // Coarsening loses information -- a degree-3 polynomial does not fit in the
+    // degree-2 space -- but it loses *only* that, and the statement is exact:
+    // L2 projections onto nested spaces compose, so P2(P3(f)) = P2(f) whenever
+    // V2 is contained in V3. Transferring a k = 3 state down to k = 2 therefore
+    // lands on precisely the state a cold k = 2 run builds, to round-off, and
+    // the transfer contributes no error of its own.
+    //
+    // That nesting is per cell and needs the same mesh. A projection onto a
+    // *different* mesh would not compose, and this test would not hold -- worth
+    // knowing before anyone extends the transfer to a remesh.
+    const std::string stem = "lifecycle_restart_coarsen";
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+
+    const RestartSnapshot cold2 = initialiseAt(problem, grid, 2, stem);
+    const RestartSnapshot fine3 = initialiseAt(problem, grid, 3, stem);
+
+    problem.setRestartValues(fine3.Y, fine3.dYdt, grid, 3);
+    const RestartSnapshot coarsened = initialiseAt(problem, grid, 2, stem);
+
+    double worst = 0.0, spread = 0.0;
+    for (Index i = 0; i < cold2.sampled.size(); ++i)
+    {
+        worst = std::max(worst, std::abs(coarsened.sampled(i) - cold2.sampled(i)));
+        spread = std::max(spread, std::abs(fine3.sampled(i) - cold2.sampled(i)));
+    }
+
+    BOOST_TEST_MESSAGE("k = 3 -> 2 transfer differs from a cold k = 2 run by " << worst
+                       << "; the k=3 and k=2 spaces differ by " << spread);
+
+    // Guard first: if the two spaces did not visibly differ on this problem the
+    // assertion below would hold for the wrong reason. Measured 2.8e-4.
+    BOOST_TEST(spread > 1e-6,
+               "k = 2 and k = 3 agree to " << spread << " here, so this fixture "
+               "cannot tell a working transfer from a broken one");
+
+    BOOST_TEST(worst < 1e-12,
+               "coarsening moved the state " << worst << " away from where a cold "
+               "k = 2 run lands; nested projections compose, so this should be exact");
+
+    problem.clearRestart();
+    removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(a_restart_at_the_same_degree_still_takes_the_copy_path)
+{
+    // The no-regression half. Equal degrees must keep going through
+    // DGSoln::copy, bit for bit -- that is what the restart round-trip cases in
+    // the regression suite compare, and it is why restartRunOrder returns the
+    // file's order unchanged when the two agree rather than dropping everyone
+    // into the projection.
+    const std::string stem = "lifecycle_restart_same";
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+
+    const RestartSnapshot first = initialiseAt(problem, grid, 2, stem);
+
+    problem.setRestartValues(first.Y, first.dYdt, grid, 2);
+    const RestartSnapshot second = initialiseAt(problem, grid, 2, stem);
+
+    for (Index i = 0; i < first.sampled.size(); ++i)
+        BOOST_TEST(second.sampled(i) == first.sampled(i));
+
+    problem.clearRestart();
+    removeOutput(stem);
+}
+
 // ------------------------------------------- the steady merit function ----
 //
 // steadyResidualNorm is what the whole steady solve is measured against: the
