@@ -1274,16 +1274,16 @@ BOOST_AUTO_TEST_CASE(a_restart_at_the_same_degree_still_takes_the_copy_path)
 // ------------------------------------------- the steady merit function ----
 //
 // steadyResidualNorm is what the whole steady solve is measured against: the
-// early return, the convergence test and the SER ratio all read it, and
-// KINSetFuncNormTol hands KINSOL the same tolerance against KINSOL's own norm
-// of the same vector. Nothing pinned what it returns, which is what has been
-// blocking any change to it -- and a change is wanted, because it is
-// mesh-dependent and that is what stops a driver carrying dt or
-// steady_state_tol across a remesh.
+// early return, the convergence test and the SER ratio all read it, and KINSOL
+// is handed the same tolerance against its own norm of the same vector.
 //
-// The three below split into what it *is* (a formula, pinned exactly), what it
-// *is not* (damped), and what it *does* (varies with the mesh, and agrees with
-// KINSOL). Only the last two would survive a rewrite of the first.
+// It used to be a flat 2-norm, which went like sqrt(h) -- so steady_state_tol
+// meant a different thing on every mesh and dt could not be carried across a
+// remesh. It is now weighted by 1/sqrt(h) on the rows that are pairings against
+// the basis, which is the discrete L2 norm of the equation residual. The four
+// below split into what it *is* (a formula, pinned exactly), what it *is not*
+// (damped), what it *does* (does not move with the mesh, and agrees with
+// KINSOL), and where that claim stops holding.
 
 BOOST_AUTO_TEST_CASE(the_steady_merit_function_is_the_undamped_residual_two_norm)
 {
@@ -1299,32 +1299,44 @@ BOOST_AUTO_TEST_CASE(the_steady_merit_function_is_the_undamped_residual_two_norm
 
     const double norm = sys.steadyResidualNorm();
 
-    // Recomputed from the outside: zero derivative, residual at t0 and Y, flat
-    // Euclidean 2-norm over the whole DOF vector -- every row, no weighting by
-    // cell width and no division by the DOF count. Exact equality, because it
-    // is the same arithmetic on the same data; this pins the formula and
-    // nothing more, which is why the two cases after it exist.
+    // Recomputed from the outside: zero derivative, residual at t0 and Y, then
+    // sum (w_i F_i)^2 with the weights written out here rather than read from the
+    // solver -- 1/sqrt(h) on the cell rows, 1 on the lambda rows and the scalars.
+    // Exact equality, because it is the same arithmetic on the same data.
+    //
+    // Written out by hand deliberately. Reading resScale back and reusing it
+    // would pin the *contraction* and say nothing about the weights, which are
+    // the whole content of the change; this way a wrong weight fails here.
     N_Vector zero = N_VClone(sys.Y);
     N_Vector scratch = N_VClone(sys.Y);
     N_VConst(0.0, zero);
     sys.residual(sys.t0, sys.Y, zero, scratch);
 
     const sunindextype n = N_VGetLength(sys.Y);
-    double sumsq = 0.0;
+    const Index perCell = 3 * (k + 1); // nVars = 1, nAux = 0
+    const double h = 1.0 / static_cast<double>(nCells);
+
+    double sumsq = 0.0, flat = 0.0;
     double *data = N_VGetArrayPointer(scratch);
     for (sunindextype i = 0; i < n; ++i)
-        sumsq += data[i] * data[i];
+    {
+        const double w = (i < nCells * perCell) ? 1.0 / std::sqrt(h) : 1.0;
+        sumsq += (w * data[i]) * (w * data[i]);
+        flat += data[i] * data[i];
+    }
 
     BOOST_TEST(norm == std::sqrt(sumsq));
     BOOST_TEST(norm > 0.0, "the initial condition is already a steady state; "
                            "this fixture cannot say anything about the norm");
 
-    // Not an RMS norm. Trivial arithmetic -- they differ by exactly sqrt(N) --
-    // but it records which of the two steady_state_tol is quoted in, and N is 41
-    // here against 81 on twice the cells, so the choice is not cosmetic.
-    BOOST_TEST_MESSAGE("||F|| = " << norm << " over " << n << " DOF; RMS would be "
-                       << norm / std::sqrt(static_cast<double>(n)));
-    BOOST_TEST(norm != norm / std::sqrt(static_cast<double>(n)));
+    // ...and it is not the flat norm, nor an RMS one. Trivial arithmetic, but it
+    // records which of the three steady_state_tol is quoted in, and a fixture
+    // where they happened to coincide would test nothing. h = 0.25 here, so the
+    // weighted norm is 2x the flat one.
+    BOOST_TEST_MESSAGE("weighted ||F|| = " << norm << "; flat would be " << std::sqrt(flat)
+                       << ", RMS " << std::sqrt(flat / static_cast<double>(n)));
+    BOOST_TEST(norm != std::sqrt(flat));
+    BOOST_TEST(norm != std::sqrt(flat / static_cast<double>(n)));
 
     // Undamped, whatever the continuation step currently is. steadyResidual --
     // the one KINSOL calls -- adds id*(u - uPrev)/dt, so setting a small dt and
@@ -1350,17 +1362,23 @@ BOOST_AUTO_TEST_CASE(the_steady_merit_function_is_the_undamped_residual_two_norm
     removeOutput("lifecycle_norm_formula");
 }
 
-BOOST_AUTO_TEST_CASE(the_steady_merit_function_depends_on_the_mesh)
+BOOST_AUTO_TEST_CASE(the_steady_merit_function_does_not_move_with_the_mesh)
 {
-    // The headline property, and the reason the norm is worth a test before it
-    // is touched. Same physics, same order, same t0, same initial *function* --
-    // only the mesh differs, and ||F|| changes. So steady_state_tol means a
-    // different thing on every mesh, and dt cannot be carried across a remesh:
-    // SER's ratio would compare two norms measured in different units.
+    // The headline property, and the whole object of weighting the norm. Same
+    // physics, same order, same t0, same initial *function* -- only the mesh
+    // differs, and ||F|| must not change. That is what lets steady_state_tol mean
+    // one thing on every mesh and lets dt cross a remesh, since SER's ratio would
+    // otherwise compare two norms measured in different units.
+    //
+    // This case used to assert the opposite, that the ratios were 1/sqrt(2) --
+    // measured 0.70806 and 0.70742 against a flat 2-norm -- and said in its own
+    // comment that it should be rewritten to say this once the norm was
+    // normalised. It has been. The sqrt(h) it recorded is now divided out by
+    // residualWeights().
     //
     // Both halves are asserted, because either alone is worthless. That the
     // states agree is what makes "the same physical state" true; that the norms
-    // disagree is the finding.
+    // agree is then a statement about the operator rather than about the state.
     auto normOn = [](Index cells, Vector &state)
     {
         Grid grid(0.0, 1.0, cells);
@@ -1397,23 +1415,34 @@ BOOST_AUTO_TEST_CASE(the_steady_merit_function_depends_on_the_mesh)
         BOOST_TEST(coarseState(i) == fineState(i), boost::test_tools::tolerance(5e-3));
     }
 
-    // ...and a different number for it, by 29% per refinement against a state
-    // that moved by 0.1%. So this is the operator and not the state.
+    // ...and the same number for it. Measured 1.111452 / 1.112943 / 1.113438 over
+    // a 4x refinement: ratios 1.00134 and 1.00044, i.e. converging on a limit
+    // rather than merely being close. Extended to 64 cells while this was being
+    // written it reaches 1.111452, 1.112943, 1.113438, 1.113577, 1.113613, whose
+    // departures from that last value fall by 3.2, 3.8 then 4.8 -- so the residue
+    // is second-order discretisation error in the state, not a leftover mesh
+    // factor, and the limit is real.
     //
-    // The factor is 1/sqrt(2) per doubling -- measured 0.70806 then 0.70742,
-    // converging on 0.70711 -- and that identifies the mechanism rather than
-    // merely recording it: the residual rows carry a mass factor that scales
-    // like h while the DOF count scales like 1/h, so a flat 2-norm over the lot
-    // goes like sqrt(h). Which is the number whoever makes this mesh-independent
-    // needs, and the reason a tolerance quoted at one resolution cannot be
-    // quoted at another.
-    //
-    // Held to 2% so it is a statement about sqrt(h) rather than about these
-    // three meshes. When the norm is normalised these ratios become 1 and this
-    // test should be rewritten to say so -- at which point steady_state_tol and
-    // the SER ratio can both cross a remesh, which is the whole object.
-    BOOST_TEST(mid / coarse == std::sqrt(0.5), boost::test_tools::tolerance(0.02));
-    BOOST_TEST(fine / mid == std::sqrt(0.5), boost::test_tools::tolerance(0.02));
+    // Held to 1%, which is twenty times tighter than the sqrt(h) it replaced
+    // could pass -- a flat norm gives 0.708 here, so this discriminates by a
+    // factor of 300 against the defect it was written for. Not tightened to the
+    // measured 0.13%, because the residue *is* the state's discretisation error
+    // and a finer or coarser fixture would legitimately differ.
+    BOOST_TEST(mid / coarse == 1.0, boost::test_tools::tolerance(0.01));
+    BOOST_TEST(fine / mid == 1.0, boost::test_tools::tolerance(0.01));
+
+    // The successive departures shrink -- measured by a factor of 3.0 here -- which
+    // is what separates "converging on a limit" from "close on these three
+    // meshes". A norm still carrying a fractional power of h would hold the ratio
+    // constant instead, and the 1% window alone would not always catch that.
+    const double first = std::abs(mid / coarse - 1.0);
+    const double second = std::abs(fine / mid - 1.0);
+    BOOST_TEST_MESSAGE("departures from 1: " << first << " then " << second
+                       << ", shrinking by " << first / second);
+    BOOST_TEST(second < 0.6 * first,
+               "the departure from mesh-independence is not shrinking with h ("
+               << first << " then " << second << "), so what is left is a mesh "
+               "factor rather than discretisation error in the state");
 
     removeOutput("lifecycle_norm_mesh");
 }
@@ -1421,10 +1450,12 @@ BOOST_AUTO_TEST_CASE(the_steady_merit_function_depends_on_the_mesh)
 BOOST_AUTO_TEST_CASE(KINSOL_measures_the_same_thing_the_continuation_loop_does)
 {
     // The coupling that makes normalising steadyResidualNorm alone a mistake.
-    // KINSetFuncNormTol is given steady_state_tol, and KINSOL's own stopping
-    // test is N_VWL2Norm(fval, fscale) -- the same flat 2-norm of the same
-    // vector, because kinScale is all ones. Change one side and the inner and
-    // outer tests differ by sqrt(N) without anything reporting it.
+    // KINSetFuncNormTol is given steady_state_tol, and KINSOL's own stopping test
+    // is N_VWL2Norm(fval, fscale). So the way to keep the inner and outer tests
+    // measuring one quantity is to hand KINSOL the *same weights* as f_scale
+    // rather than to normalise one side -- which is what solveSteadyState does,
+    // passing resScale where it used to pass kinScale twice. The agreement is
+    // then structural instead of a coincidence that held while both were flat.
     //
     // Newton mode is what makes this checkable exactly: dt is infinite, so
     // steadyResidual's damping term is identically zero and KINSOL's residual
@@ -1445,11 +1476,22 @@ BOOST_AUTO_TEST_CASE(KINSOL_measures_the_same_thing_the_continuation_loop_does)
         sys.solveSteadyState();
     }
 
-    // All ones: the assumption the paragraph above rests on, and the one thing
-    // here that a future change could quietly break.
-    double *scale = N_VGetArrayPointer(sys.kinScale);
+    // The two vectors are different things and both matter. u_scale stays unit --
+    // KINSOL uses it for the step-length test and the Newton step clamp, which are
+    // about the solution's units -- while f_scale carries the residual weights.
+    // Conflating them is the easy mistake here, and the previous version of this
+    // case asserted all-ones on the one vector that then served as both.
+    double *uScale = N_VGetArrayPointer(sys.kinScale);
     for (sunindextype i = 0; i < N_VGetLength(sys.kinScale); ++i)
-        BOOST_TEST(scale[i] == 1.0);
+        BOOST_TEST(uScale[i] == 1.0);
+
+    // ...and f_scale is not all ones, or this case would be checking that two flat
+    // norms agree, which they did before the change and would prove nothing about
+    // it. h = 0.25 on this fixture, so the cell rows carry 2.
+    double *fScale = N_VGetArrayPointer(sys.resScale);
+    const Index perCell = 3 * (k + 1);
+    BOOST_TEST(fScale[0] == 2.0);
+    BOOST_TEST(fScale[nCells * perCell] == 1.0); // the first lambda row
 
     double kinNorm = -1.0;
     BOOST_TEST(KINGetFuncNorm(sys.kin_mem, &kinNorm) == KIN_SUCCESS);
@@ -1457,19 +1499,84 @@ BOOST_AUTO_TEST_CASE(KINSOL_measures_the_same_thing_the_continuation_loop_does)
     const double ourNorm = sys.steadyResidualNorm();
     BOOST_TEST_MESSAGE("KINSOL's ||F|| = " << kinNorm << "; ours = " << ourNorm);
 
-    // Same vector, same norm, same point: measured bit-identical at
-    // 7.0552922348065448e-16. Held to a relative tolerance rather than to
-    // equality only because that agreement is not something the code promises.
+    // Same vector, same weights, same norm, same point: measured bit-identical.
+    // Held to a relative tolerance rather than to equality only because that
+    // agreement is not something the code promises.
     //
     // Both are at round-off because TestDiffusion is linear and Newton reaches
     // the answer in one step whatever the tolerance says, so this is not a test
-    // that ||F|| is *small*. It is a test of units, and it still discriminates
-    // at round-off: RMS against flat would put a factor of sqrt(41) = 6.4
-    // between these two.
+    // that ||F|| is *small*. It is a test of units, and it still discriminates at
+    // round-off: an unweighted KINSOL against a weighted merit function would put
+    // the factor of 2 above between these two.
     BOOST_TEST(kinNorm == ourNorm, boost::test_tools::tolerance(1e-10));
 
     sys.destroySundials();
     removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(the_weighted_norm_is_mesh_independent_only_near_a_solution)
+{
+    // Where the case above stops holding, pinned so that nobody reads
+    // "mesh-independent" as more than it is -- including whoever carries dt across
+    // a remesh on the strength of it.
+    //
+    // The weights turn a pairing <R, phi_i> ~ h R(x_i) back into a density, which
+    // is right for a row that *is* such a pairing. Not every row is. Overwrite u
+    // with a fixed function and leave sigma, q and lambda stale, and the q and
+    // lambda rows hold the trace and derivative terms of the weak form instead --
+    // O(1) per row, with no h to divide out, because the 1/h from phi' cancels the
+    // h from the measure. Then the flat norm *grows* like 1/sqrt(h) and the
+    // weighted one like 1/h, so weighting makes that state worse rather than
+    // better.
+    //
+    // Measured, flat, on 4/8/16/32/64 cells: 4.275, 6.166, 8.834, 12.58, 17.86 --
+    // ratios of sqrt(2) up, against sqrt(2) *down* for the consistent state in the
+    // case above. Two mechanisms, opposite signs, and which dominates is a
+    // property of the state. So no fixed row weighting is mesh-independent
+    // everywhere, and this one is not claimed to be: what it fixes is the regime
+    // the convergence test fires in, which is the one where the residual is small.
+    auto normOn = [](Index cells)
+    {
+        Grid grid(0.0, 1.0, cells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, "lifecycle_norm_farfield");
+
+        {
+            CapturedOutput quiet;
+            sys.initialize();
+        }
+
+        // u alone, so the algebraic rows are left inconsistent. sigma is untouched
+        // by this on purpose and stays satisfied -- TestDiffusion's sigma_hat is
+        // kappa*q, which does not see u -- so what this exercises is the q and
+        // lambda rows specifically.
+        sys.y.AssignU([](Index, Position x) { return 0.1 * std::sin(2.0 * M_PI * x); });
+
+        const double norm = sys.steadyResidualNorm();
+        sys.destroySundials();
+        return norm;
+    };
+
+    const double coarse = normOn(nCells);
+    const double mid = normOn(2 * nCells);
+    const double fine = normOn(4 * nCells);
+
+    BOOST_TEST_MESSAGE("weighted ||F|| far from a solution, "
+                       << nCells << "/" << 2 * nCells << "/" << 4 * nCells
+                       << " cells: " << coarse << " / " << mid << " / " << fine
+                       << "; ratios " << mid / coarse << ", " << fine / mid);
+
+    // Growing, and by about 2 per doubling: the weighted norm goes like 1/h here.
+    // Asserted as a bound rather than as a value, because the exact constant is
+    // this fixture's and the *direction* is the finding.
+    BOOST_TEST(mid > 1.5 * coarse,
+               "the far-field norm is not growing with refinement (" << coarse
+               << " then " << mid << "), so this fixture no longer separates the "
+               "two regimes and the case above is claiming more than is measured");
+    BOOST_TEST(fine > 1.5 * mid);
+
+    removeOutput("lifecycle_norm_farfield");
 }
 
 BOOST_AUTO_TEST_CASE(an_unarmed_gate_leaves_runSolver_bit_for_bit_unchanged)

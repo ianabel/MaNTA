@@ -158,10 +158,13 @@ Time integration
        deprecated spelling of this and still works, with a warning.
    * - ``SteadyStateTolerance``
      - *unset*
-     - If present, the run terminates when :math:`\mathrm{d}y/\mathrm{d}t` falls
-       below this rather than at ``t_final``. It is the key's **presence** that
-       arms that, not its value, on both surfaces. ``Runner.run_ss()`` arms it
-       whether or not the key was given, and falls back to ``1e-3``.
+     - If present, the run terminates on reaching a steady state rather than at
+       ``t_final``. It is the key's **presence** that arms that, not its value, on
+       both surfaces. ``Runner.run_ss()`` arms it whether or not the key was
+       given, and falls back to ``1e-3``. What it is compared against depends on
+       ``SteadyStateSolver``: :math:`\mathrm{d}y/\mathrm{d}t` under ``TimeMarch``,
+       and a mesh-independent weighted norm of the steady residual under the two
+       continuation modes — see :ref:`steady-merit-function`.
    * - ``ObjectiveDecreaseTolerance``
      - ``0.0`` — off
      - If nonzero, the run is abandoned before the time loop when

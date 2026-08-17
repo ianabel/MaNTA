@@ -153,8 +153,67 @@ void SystemSolver::allocateSteadyScratch()
     uPrev = N_VClone(Y);
     ptcDYdt = N_VClone(Y);
     kinScale = N_VClone(Y);
-    if (uPrev == nullptr || ptcDYdt == nullptr || kinScale == nullptr)
+    resScale = N_VClone(Y);
+    if (uPrev == nullptr || ptcDYdt == nullptr || kinScale == nullptr ||
+        resScale == nullptr)
         throw std::runtime_error("N_VClone failed in solveSteadyState");
+
+    // The grid cannot change under a live solver, so these are filled once. Note
+    // that a *second* run on the same solver reuses them, which is only safe
+    // because of that -- see the RF_cellwise trap in CLAUDE.md for the version of
+    // this that was not.
+    residualWeights();
+}
+
+// Why the merit function is weighted at all, and why by this.
+//
+// The residual's cell rows are pairings against the basis: residual() forms them
+// through the cell mass matrix, so row i holds <R, phi_i> ~ h * R(x_i) for a
+// residual density R. A flat 2-norm over nCells*(k+1) such rows therefore goes
+// like sqrt((1/h) * h^2) = sqrt(h) -- measured on TestDiffusion at 4/8/16/32/64
+// cells as 0.5557, 0.3935, 0.2784, 0.1969, 0.1392, ratios converging on
+// 1/sqrt(2). Dividing each by sqrt(h) recovers sqrt(sum h R_i^2), the discrete
+// L2 norm of the equation residual, which is a property of the *function* and not
+// of the mesh: the same five runs give 1.11145, 1.11294, 1.11344, 1.11358,
+// 1.11361, converging at O(h^2) over a 16x refinement.
+//
+// The lambda rows are not pairings -- lambda is a trace unknown and its row is a
+// flux condition at a single face, with no h in it -- so they are left at 1
+// rather than given a weight there is no argument for. The same goes for the
+// global scalars, whose rows are not spatial at all. Near a solution this makes
+// no measurable difference either way, because those rows are the algebraic
+// constraints and the solve has driven them to round-off: 1.4e-24 of the total
+// on the fixture above. It matters for honesty rather than for the number.
+//
+// What this does *not* do, and it is worth being exact about it because the
+// obvious reading of "mesh-independent norm" is stronger than what is on offer:
+// the sqrt(h) above is the scaling near a solution, where the algebraic rows are
+// satisfied and the u row carries the residual. Far from one it is not. Overwrite
+// u with a fixed function and leave sigma/q/lambda stale -- the q and lambda rows
+// then hold the O(1) trace and derivative terms rather than an O(h) pairing, and
+// the flat norm *grows* like 1/sqrt(h) instead: 4.275, 6.166, 8.834, 12.58, 17.86
+// on those same meshes. The weight below makes that case worse, not better. So no
+// fixed row weighting makes this norm mesh-independent for every state, because
+// the two mechanisms scale oppositely and which dominates is a property of the
+// state. What is fixed here is the regime the *tolerance* is tested in -- the
+// convergence test fires when the residual is small, which is the sqrt(h) regime
+// -- and that is the claim the tests pin.
+void SystemSolver::residualWeights()
+{
+    double *w = N_VGetArrayPointer(resScale);
+    const Index perCell = (3 * nVars + nAux) * (k + 1);
+
+    for (Index c = 0; c < static_cast<Index>(nCells); ++c)
+    {
+        const double scale = 1.0 / std::sqrt(grid[c].h());
+        for (Index j = 0; j < perCell; ++j)
+            w[c * perCell + j] = scale;
+    }
+
+    // lambda, then the scalars: everything after the cell blocks.
+    for (sunindextype i = static_cast<sunindextype>(nCells) * perCell;
+         i < N_VGetLength(resScale); ++i)
+        w[i] = 1.0;
 }
 
 double SystemSolver::steadyResidualNorm()
@@ -168,7 +227,10 @@ double SystemSolver::steadyResidualNorm()
     // damped one: no backward-Euler term, whatever ptcStep currently is.
     N_VConst(0.0, ptcDYdt);
     residual(t0, Y, ptcDYdt, res);
-    return std::sqrt(N_VDotProd(res, res));
+
+    // The same norm KINSOL forms from the same weights, which is what keeps the
+    // inner and outer stopping tests measuring one quantity.
+    return N_VWL2Norm(res, resScale);
 }
 
 void SystemSolver::solveSteadyState()
@@ -177,7 +239,11 @@ void SystemSolver::solveSteadyState()
         throw std::runtime_error("solveSteadyState called before initialize()");
 
     allocateSteadyScratch();
-    N_VConst(1.0, kinScale); // no scaling; the DOFs are already commensurate
+
+    // u_scale stays unit: KINSOL uses it for the step-length test and the max
+    // Newton step clamp, which are about the solution's units and not the
+    // residual's. Only f_scale carries the residual weights, and it is resScale.
+    N_VConst(1.0, kinScale);
 
     if (kin_mem == nullptr)
     {
@@ -294,7 +360,12 @@ void SystemSolver::solveSteadyState()
         // to fall back to if the attempt makes things worse.
         N_VScale(1.0, Y, uPrev);
 
-        const int retval = KINSol(kin_mem, Y, KIN_NONE, kinScale, kinScale);
+        // kinScale for u, resScale for F. Passing kinScale for both is what made
+        // steady_state_tol mean one thing to KINSOL and another to the loop below
+        // the moment the merit function stopped being flat -- KINSOL's func norm
+        // is N_VWL2Norm(F, f_scale), so handing it the same weights is what keeps
+        // the two the identical quantity rather than one that happens to agree.
+        const int retval = KINSol(kin_mem, Y, KIN_NONE, kinScale, resScale);
 
         // Immediately: KINSOL zeroes its counters at the top of each KINSol.
         accumulateKinStats(stats);

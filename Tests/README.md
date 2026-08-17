@@ -630,35 +630,69 @@ These are deliberate and tracked, not oversights:
   * `the_steady_diagnostics_count_the_whole_solve_not_the_last_step`. **KINSOL zeroes its own counters at the top of every `KINSol` call**, so the continuation loop has to sum them as it goes; reading them once at the end -- the obvious thing, and what this did first -- reported 1 Newton iteration against 5 continuation steps and 35 Jacobian solves. Self-evidently impossible, and it still looks like a number, which is why the test asserts invariants (`newtonIters >= steps`, `residualEvals == kinFuncEvals + steps + 1`) rather than values. The second of those also pins the counter snapshot being taken before the first `steadyResidualNorm()`, which it was not to begin with.
   * `a_failed_steady_solve_still_writes_the_last_state_it_reached`, using a tolerance nothing can reach so the solve stalls at ~1e-16 and exits by the "ran out of continuation steps" path.
 
-  And three cover the merit function, which was the largest of the remaining
+  And four cover the merit function, which was the largest of the remaining
   gaps: everything the solve decides is decided by comparing that one number
   against `steady_state_tol` or against its own previous value, and it used to
   be a lambda inside `solveSteadyState` that nothing could reach. It is now
-  `SystemSolver::steadyResidualNorm`.
+  `SystemSolver::steadyResidualNorm`, and **weighted** rather than flat --
+  `1/sqrt(h_K)` on the rows that are pairings against the basis, 1 on the trace
+  rows and the scalars, from `SystemSolver::residualWeights`.
 
   * `the_steady_merit_function_is_the_undamped_residual_two_norm` recomputes it
-    from outside -- zero derivative, `residual` at `t0` and `Y`, flat Euclidean
-    2-norm over every row -- and requires exact equality, then sets a distant
-    `uPrev` and `ptcStep = 1e-4` and requires the value not to move while the
-    damped residual KINSOL sees moves by more than 10x. That second half is the
-    part worth having: a merit function that included the damping could be
-    driven to zero by shrinking `dt` without the state going anywhere.
-  * `the_steady_merit_function_depends_on_the_mesh` is the finding. Same
+    from outside -- zero derivative, `residual` at `t0` and `Y`, then the weights
+    **written out by hand** rather than read back from `resScale`, since reusing
+    the solver's own vector would pin the contraction and say nothing about the
+    weights. Exact equality, and separately that the result is neither the flat
+    norm nor an RMS one. Then it sets a distant `uPrev` and `ptcStep = 1e-4` and
+    requires the value not to move while the damped residual KINSOL sees moves by
+    more than 10x. That last half is the part worth having: a merit function that
+    included the damping could be driven to zero by shrinking `dt` without the
+    state going anywhere.
+  * `the_steady_merit_function_does_not_move_with_the_mesh` is the property the
+    weights exist for, and it **replaces a case that asserted the opposite**. Same
     physics, same `k`, same initial function, 4 / 8 / 16 cells: `‖F‖` is
-    0.5557 / 0.3935 / 0.2784 while the state itself agrees to 1.0e-3. The ratio
-    is **1/sqrt(2) per doubling** -- 0.70806 then 0.70742 against 0.70711 -- which
-    names the mechanism rather than merely recording it: the rows carry a mass
-    factor going like `h` and the DOF count goes like `1/h`, so a flat 2-norm
-    over the lot goes like `sqrt(h)`. That is why `steady_state_tol` means
-    something different on every mesh and why `dt` cannot be carried across a
-    remesh, and it is the factor whoever normalises this needs.
-  * `KINSOL_measures_the_same_thing_the_continuation_loop_does` pins the
-    coupling that makes a one-sided fix wrong. `KINSetFuncNormTol` is handed the
-    same `steady_state_tol`, and KINSOL's own test is `N_VWL2Norm(fval, fscale)`
-    with `kinScale` all ones -- the identical flat 2-norm. In `Newton` mode the
-    damping term is identically zero, so the two are the same number: measured
-    bit-identical at 7.055e-16. Normalise one side alone and the inner and outer
-    stopping tests differ by `sqrt(N)` with nothing reporting it.
+    1.11145 / 1.11294 / 1.11344, ratios 1.00134 and 1.00044, where the flat norm
+    gave 0.5557 / 0.3935 / 0.2784 and a ratio of 1/sqrt(2). Held to 1%, which
+    discriminates against the old behaviour by a factor of 300, plus a second
+    assertion that the departure from 1 *shrinks* with `h` -- measured by 3.0 over
+    one refinement, and extended to 64 cells the sequence reaches 1.113613 with
+    departures falling by 3.2, 3.8, 4.8. That is what separates converging on a
+    limit from being close on three meshes; a norm still carrying a fractional
+    power of `h` would hold the ratio constant and could slip through the window
+    alone.
+  * `the_weighted_norm_is_mesh_independent_only_near_a_solution` is the honest
+    limit of that claim, and it is the finding this work turned up. Overwrite `u`
+    with a fixed function and leave `sigma`, `q` and `lambda` stale, and the `q`
+    and `lambda` rows hold the `O(1)` trace and derivative terms of the weak form
+    rather than an `O(h)` pairing -- the `1/h` from `phi'` cancels the `h` from the
+    measure. The flat norm then **grows** like `1/sqrt(h)` (4.275, 6.166, 8.834,
+    12.58, 17.86 on 4 to 64 cells) where the consistent state fell like `sqrt(h)`,
+    and the weighted norm grows like `1/h` (7.495, 14.57, 28.74, ratios 1.94 and
+    1.97). Two mechanisms, opposite signs, and which dominates is a property of
+    the *state* -- so **no fixed row weighting is mesh-independent everywhere**,
+    and this one does not claim to be. What it fixes is the regime the convergence
+    test fires in, which is the one where the residual is small.
+  * `KINSOL_measures_the_same_thing_the_continuation_loop_does` pins the coupling
+    that makes a one-sided fix wrong. `KINSetFuncNormTol` is handed the same
+    `steady_state_tol` and KINSOL's own test is `N_VWL2Norm(fval, fscale)`, so the
+    fix is to hand KINSOL the *same weights* as `f_scale` rather than to normalise
+    one side -- `solveSteadyState` passes `resScale` where it used to pass
+    `kinScale` twice, and the agreement is structural instead of a coincidence
+    that held while both were flat. In `Newton` mode the damping term is
+    identically zero, so the two are the same number: measured bit-identical at
+    1.302e-15. The case asserts `u_scale` is still unit *and* that `f_scale` is
+    not, because those are different vectors -- `u_scale` drives the step-length
+    test and the Newton step clamp -- and a version checking only the first would
+    pass while comparing two flat norms.
+
+  Verified against the two configs in the tree that arm a continuation solve, at
+  `SteadyStateTolerance = 1.0e-11`: the initial `‖F‖` rises by exactly `1/sqrt(h)`
+  -- park-convergence 0.553794 to 1.10759 on 4 cells (2.0000 against 2.0000),
+  jardin-critical-gradient 1.23603 to 3.90868 on 10 (3.1622 against 3.1623) --
+  and **neither run's continuation step count changes**, 3 and 5 respectively,
+  both still converging to round-off. `shestakov-nonlinear` is unaffected because
+  it pins `TimeMarch`, whose stopping test is on `dY/dt` and does not go through
+  this function at all.
 
   What is still uncovered is the rest of the algorithm -- step rejection, the
   `KINSetMaxNewtonStep` clamp, and the hard-`KINSol`-failure path (the ordinary

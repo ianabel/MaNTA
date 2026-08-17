@@ -183,17 +183,17 @@ class SystemSolver
         // taking a small enough step the way the damped one KINSOL sees does.
         // Both the convergence test and the SER ratio read this.
         //
-        // It is a named function rather than the lambda it used to be because
-        // nothing could otherwise pin what it returns, and what it returns is
-        // mesh-dependent -- a flat unweighted 2-norm over a DOF vector whose
-        // length and per-row mass factor both change with the mesh. That is the
-        // one property standing between the steady solve and a driver that
-        // remeshes between solves, since steady_state_tol and dt would both mean
-        // something different on the far side. See
-        // Tests/UnitTests/SolverLifecycleTests.cpp, which measures it, and note
-        // that KINSetFuncNormTol is handed this same tolerance against KINSOL's
-        // own norm of the same vector: normalising here alone would decouple the
-        // inner and outer stopping tests by sqrt(N).
+        // Weighted, not flat: sqrt(sum_i (w_i F_i)^2) with the weights
+        // residualWeights() builds. A flat 2-norm over this DOF vector is
+        // mesh-dependent, because the cell rows are pairings against the basis
+        // and so carry a mass factor going like h while the row count goes like
+        // 1/h -- measured at exactly sqrt(h) near a solution. steady_state_tol
+        // then means a different thing on every mesh, which is what stands
+        // between this and a driver that remeshes between solves.
+        //
+        // KINSOL is handed the same weights as its f_scale, so its own stopping
+        // test and this one stay the identical quantity rather than decoupling by
+        // whatever the normalisation is worth. See residualWeights().
         //
         // Costs one residual evaluation, and counts as one.
         double steadyResidualNorm();
@@ -457,11 +457,19 @@ class SystemSolver
         SUNLinearSolver kinLS = nullptr;
         N_Vector uPrev = nullptr;    // previous PTC iterate
         N_Vector ptcDYdt = nullptr;  // id * (u - uPrev)/dt, the damping term
-        N_Vector kinScale = nullptr; // unit scaling; KINSol requires a vector
+        N_Vector kinScale = nullptr; // unit scaling on u; KINSol requires a vector
+        N_Vector resScale = nullptr; // residual weights, from residualWeights()
 
-        // Clones the three above on first use. Called by both solveSteadyState
-        // and steadyResidualNorm, since either may be the first to need them.
+        // Clones the four above on first use, and fills resScale. Called by both
+        // solveSteadyState and steadyResidualNorm, since either may be the first
+        // to need them.
         void allocateSteadyScratch();
+
+        // Fill resScale with 1/sqrt(h) on every row that is a pairing against the
+        // basis -- sigma, q, u and aux, at their own cell's width -- and 1 on the
+        // rows that are not: lambda, which is a flux condition at a face, and the
+        // global scalars. Depends on the grid alone, so it is filled once.
+        void residualWeights();
         SteadyMode steadyMode = SteadyMode::TimeMarch;
         double ptcInitialStep = 0.0; // 0 means "use dt0"
         double ptcMaxStep = std::numeric_limits<double>::infinity();

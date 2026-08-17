@@ -55,7 +55,9 @@ const std::vector<Entry> &table()
         {"solveAdjoint", {}, Type::Bool, Category::Solver, false, false, false,
          "Build the adjoint problem and solve for dG/dp after the integration."},
         {"SteadyStateTolerance", {}, Type::Double, Category::Solver, false, false, 1e-3,
-         "Stop once the solution stops changing by this much; presence arms it."},
+         "Stop once the solution stops changing by this much; presence arms it. "
+         "Compared against dy/dt under TimeMarch, and against a mesh-independent "
+         "weighted norm of the steady residual otherwise."},
         {"SteadyStateSolver", {}, Type::String, Category::Solver, false, false, std::string{"PseudoTransient"},
          "How a steady state is reached: PseudoTransient (default), TimeMarch (integrate to it), "
          "or Newton (pseudo-transient with an infinite first step). See docs/running.rst."},

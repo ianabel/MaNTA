@@ -730,7 +730,7 @@ void SystemSolver::destroySundials()
 	}
 
 	for (N_Vector *vec : {&Y, &dYdt, &constraints, &id, &res, &absTolVec,
-	                      &uPrev, &ptcDYdt, &kinScale})
+	                      &uPrev, &ptcDYdt, &kinScale, &resScale})
 	{
 		if (*vec)
 		{
