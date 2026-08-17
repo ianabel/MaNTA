@@ -23,7 +23,7 @@ and the retractions are recorded deliberately.
 | Landed on `main` | the two side quests, **#13** restart use-after-free and **#14** `getDerivative`; then **#15** steady-state output, PTC diagnostics and the SER config keys — most of step 2 below; then **#16**, a restart that can resume at a different polynomial degree, which is step 4's state transfer |
 | On this branch | steps 1–3 below: `Grid` validation, the merit function named and measured, and the modal sensor built — plus the merit function now **weighted** so the tolerance is mesh-independent near a solution, which is what step 2 was measuring towards. Merged up to `main` at `c585326`; no PR yet. |
 | In review | **#17**, step 4 — global-`k` by Giorgiani's rule, plus `SteadyStateSolve`. Built on `feature-degree-adaptivity`, branched from `main` rather than from here, so none of it is below. |
-| Next | step 5 is **scoped but gated** — see "Step 5" at the end of this file, which asks for one measurement before ~200 sites are touched. Otherwise open: a consumer for the sensor, and carrying `dt` across a remesh now that the norm allows it. |
+| Next | **§8**: grading towards Shestakov's singularity is worth 14900× at matched DOF, and it is `h` rather than per-cell `p` — which the gate measured as buying a few percent against a 3× bar, so "Per-cell degree" at the end of this file is now a scoping record rather than a plan. The build is a sensor-driven split of the singular cell, which also gives the sensor its first consumer. Also open: carrying `dt` across a remesh, now that the norm allows it. |
 
 ## 1. The loop runs with zero core changes
 
@@ -73,7 +73,14 @@ the gain and then spends its whole cell budget missing the target. Giorgiani's
 degree rule (`Δk_i = ceil(log_b(E_i/ε_i))`, `10 ≤ b ≤ 100`) is the property to
 steal instead: it assumes no convergence order at all.
 
-## 3. h-adaptivity does not pay on any benchmark in this tree
+## 3. *Indicator-driven* h-adaptivity does not pay on any benchmark in this tree
+
+**Read §8 before acting on this section.** Everything measured here stands, but
+its heading originally read "h-adaptivity does not pay" without the qualifier, and
+that generalised too far: §8 measures a *hand-graded* mesh on Shestakov at 14900×
+the accuracy of a uniform one at matched DOF. What does not pay is the
+equidistribution loop below, driven by the accuracy indicator — and §3's own
+second measurement trap says why, which is the part that turned out to matter.
 
 Flag on, matched DOF, cost in physics visits (the unit `PERFORMANCE.md` uses).
 
@@ -178,7 +185,11 @@ newton solve as well" looks like the better first target, and it comes free
 either way: `SteadyMode::Newton` is `solveSteadyState` with
 `ptcStep = infinity` and no separate path (`SteadyState.cpp:17-19`).
 
-## 6. p beats h by seven orders, and hp needs a smoothness sensor
+## 6. p beats h by seven orders *on a smooth problem*, and hp needs a smoothness sensor
+
+The qualifier is §8's, added after it measured `h` beating `p` by 14900× on
+Shestakov. Both results stand: the lever depends on the regularity, which is the
+whole reason a smoothness sensor is what decides between them.
 
 On `AdjointPoster` at a matched ~130 DOF and equal cost: `k = 3` on 32 cells
 gives 3.6e-6; `k = 10` on 12 cells gives **4.7e-13**. Adaptive *h* at the same
@@ -285,6 +296,120 @@ P = np.stack([np.polynomial.legendre.Legendre.basis(j)(xg) for j in range(k + 1)
 uhat = ((2 * np.arange(k + 1) + 1) / 2.0)[None, :] * ((u * wg[None, :]) @ P.T)
 ```
 
+## 8. Grading towards Shestakov's singularity is worth 14900×, and it is `h` not `p`
+
+This is the gate measurement "Per-cell degree" asks for, run on the one benchmark here that
+global `k` cannot serve. It came back decisively — and pointing at a different
+lever from the one the gate was written to test. Throwaway Python driving
+`manta.Runner` through `Grid_points`, `TimeMarch` as `run.conf` pins, the
+benchmark's own relative-L1 metric against `ExactSolution` on 201 points, plus a
+relative L2 on 2400 points including a geometric fan into the axis (a uniform
+sample puts only three points inside the innermost cell of a graded mesh, so a
+metric built on it could miss the error there entirely; the two agree throughout).
+
+**Why this problem is the clean test.** Its exact steady state is
+`[w0 + (1/3)(S0 d/D0)^{1/3}(Lx - x)]^3` for `x >= d = 0.1` — a **cubic in x**, so
+any cell lying entirely outside the source is represented exactly at `k >= 3`. The
+inner branch carries `0.75(d^{4/3} - x^{4/3})` cubed, i.e. powers `x^{4/3}`,
+`x^{8/3}`, `x^4`, and the first has an unbounded second derivative at the axis.
+One singular point, at a known location, with the rest of the domain a polynomial.
+
+### One law covers both mesh families
+
+Meshes graded geometrically towards `x = 0` — `n_in` cells at `d*sigma^j`, then
+`n_out` uniform on `[d, Lx]`. At `k = 5`, with `h0` the innermost cell's width:
+
+| mesh | `h0` | rel L1 | `error / h0` |
+| --- | --- | --- | --- |
+| uniform 10 | 1.000e-01 | 4.908e-03 | 0.04908 |
+| uniform 20 | 5.000e-02 | 2.446e-03 | 0.04892 |
+| uniform 30 | 3.333e-02 | 1.629e-03 | 0.04887 |
+| uniform 40 | 2.500e-02 | 1.221e-03 | 0.04884 |
+| graded 4+3 `s=0.3` | 2.700e-03 | 1.316e-04 | 0.04874 |
+| graded 5+3 | 8.100e-04 | 3.946e-05 | 0.04872 |
+| graded 6+3 | 2.430e-04 | 1.183e-05 | 0.04868 |
+| graded 7+3 | 7.290e-05 | 3.551e-06 | 0.04871 |
+| graded 8+3 | 2.187e-05 | 1.066e-06 | 0.04874 |
+
+**`error = 0.0487 h0`, to 0.5% across a 4600× range of `h0` and across both
+families.** So the mesh does not matter and the *number of cells* does not matter:
+only the width of the cell touching the singularity does. The law predicted the
+best run before it was made — `graded 9+1` has `h0 = 6.56e-6`, predicting
+3.195e-07 against 3.292e-07 measured, 3% out.
+
+Which turns the whole question into "how cheaply can `h0` be made small":
+
+* uniform gives `h0 = (k+1)/DOF` — **algebraic**;
+* graded at `sigma = 0.3` gives `h0 = d sigma^{n_in - 1}` — **exponential in DOF**.
+
+At 60 DOF and `k = 5`, that is `h0 = 0.1` against `6.56e-6`, a factor 15200 —
+against a measured error ratio of **14900×** (4.908e-03 uniform, 3.292e-07
+graded). Extrapolating the law, matching the graded run's error on a uniform mesh
+needs ~148000 cells, **889000 DOF against 60**. Against the best uniform run
+actually measured — 40 cells at `k = 5`, 240 DOF, 91680 visits, 1.221e-03 — the
+graded one is 3700× more accurate for 4× fewer DOF and 4.9× less cost.
+
+### It is `h`, not per-cell `p`, and that is measured rather than argued
+
+Three results, and together they answer that gate in the negative:
+
+* **The outer region contributes nothing, so there is nothing for per-cell `p` to
+  win there.** `graded 9+1`, `9+3` and `9+5` at `k = 5` give **identical** errors —
+  3.292e-07 and 4.832e-07 on both metrics, to every digit — so 24 of the 84 DOF in
+  the widest one are pure waste. That is a 29% DOF saving, and it is available by
+  *choosing fewer outer cells*, with no per-cell machinery at all.
+* **The outer region contributes nothing even at `k = 2`**, which was the
+  hypothesis this was meant to test and it failed. Holding `n_in = 5` and taking
+  `n_out` from 5 to 40 moves the error by 0.3% and then not at all: 1.573e-04,
+  1.578e-04, 1.578e-04, 1.578e-04. At `k = 3`, 8.875e-05 four times over,
+  unchanged to every digit. So the degrees a per-cell rule would shave off the
+  smooth region were never buying anything to begin with.
+* **`p` is not what is capped — it is what makes the `h0` law hold.** At `k = 5`
+  the law is exact over five gradings. At `k = 2` it breaks once `h0` is small:
+  7+5 gives 2.666e-05 and 9+5 only 2.247e-05, a 1.19× gain for a 11× smaller
+  `h0`. Not the outer region (above), so it is the *other* inner cells — at `k = 2`
+  they resolve `x^{4/3}` badly enough to floor the total. So a global `k` of about
+  4 is a prerequisite for grading to pay, and beyond that more degree buys
+  nothing: the singular cell's `O(h0)` is insensitive to it.
+
+So per-cell degrees buy a few percent of DOF on this problem, against a gate of
+3×. **Per-cell degree as scoped should not be built.** What should is the thing §3's loop
+failed at for a reason §3 itself identified: putting the small cells in the right
+place.
+
+### And §7's sensor is exactly what picks the place
+
+§3's equidistribution loop got 1.5× here because it was driven by the accuracy
+indicator, which §3 measured as blind on this problem — rank correlation +0.41,
++0.23 even with `Superconvergent` on, because the error is one global mode living
+in `sigma` and the indicator finds where error is *made*, not where it lands.
+§7's modal sensor is not blind: it puts the singular cell at `x ≈ 0.05` with a
+**2.1e24** ratio across the domain, and the decay rate falls monotonically towards
+it (3.93, 6.73, 7.83, … 10.65). One cell, unambiguously, and it is the right one.
+
+The rule that follows needs no indicator calibration and no target-size formula:
+**find the cell the sensor says is singular, split it geometrically towards the
+singular end, repeat.** `error = 0.0487 h0` says each split at `sigma` multiplies
+the error by `sigma` for one extra cell, which is exponential convergence for a
+linear DOF cost, and the constant is measurable on the fly.
+
+### The binding constraint is robustness, and it is now the whole ceiling
+
+§5 recorded this for PTC. It holds for `TimeMarch` too, on hand-graded meshes, and
+it is what stops this being an open-ended win. Of 52 runs in the first sweep, **15
+failed** — `IDASolve` corrector failures at `h = 1e-7`, and two `IDACalcIC`
+failures. One of the fifteen is a *uniform* mesh, 40 cells at `k = 3`, so this is
+not a grading artefact. The pattern is not monotone in anything: `9+1` and `9+3` at `k = 5`
+both succeed with identical answers while `9+2` at `k = 5` fails, every
+`sigma = 0.15` mesh fails at every `k` tried, and `9+2` succeeds at `k = 3` and
+`k = 4` but not at 2, 5, 6, 7 or 8.
+
+So the reachable floor is `h0 ~ 7e-6`, i.e. an error of ~3e-7 — which is where the
+best run above sits, and it is a solver limit rather than a method one. **Any
+h-adaptive loop here will hit this before it runs out of accuracy to gain**, and
+will need to treat a failed level as a rejected step rather than as a fatal error.
+Worth knowing before the loop is written, not after.
+
 ## What the measurements changed about the plan
 
 The approved plan is `~/.claude/plans/add-mnt-c-users-ian-downloads-crsc-tr02-humming-lake.md`.
@@ -326,7 +451,17 @@ Against it:
    * **The error scale cannot be purely relative.** `LinearDiffusion`'s exact steady state is `u = 0`, so the ratio was round-off over round-off — `1.6e-16 / 2.6e-15`, a meaningless 6.2e-2 — and the loop climbed to the degree ceiling on a problem it had solved exactly at `k = 1`. A `> 0` guard does not catch it. `Absolute_tolerance` is the right floor and costs no new key, and on a problem with a real solution it changes nothing (NonlinDiffTest 1.510e-2 → 1.508e-2).
    * **Order the non-finite check before the stopping test.** A NaN compares false against everything, so `!(E > eps)` is *true* for one, and the rule reported a solve that produced garbage as converged.
    * **"Steady solves only" has to be checked against `solvesForSteadyState()`, not against the `SteadyStateSolver` key.** That key defaults to `PseudoTransient` and is only consulted once termination is *armed*, by the presence of `SteadyStateTolerance` — so a config that simply never set it passed validation and time-marched every level, each one restarting from the last one's final state and integrating the interval again. Measured 7.5% off a fixed-degree run on NonlinDiffTest at `k = 4`. Anything that adapts between solves needs the same guard, this one included.
-5. **Per-cell `p`** — scoped below. `h` is not the sequel; see "Why not `h`".
+5. **Sensor-driven `h` grading at the singular cell** — §8. `error = 0.0487 h0` on
+   Shestakov, set by the width of the one cell touching the singularity and
+   nothing else, so splitting that cell geometrically multiplies the error by
+   `sigma` for one extra cell: exponential convergence for a linear DOF cost, and
+   14900× measured against a uniform mesh at matched DOF. Needs §7's sensor to
+   pick the cell — §3's indicator is blind here — a global `k` of about 4 or more,
+   and a loop that treats a failed level as a rejected step, because §8's ceiling
+   is solver robustness rather than accuracy.
+6. **Per-cell `p`** — scoped below, and **gated no** by §8. Kept as a scoping
+   record; the structural finding in it is worth having if paper II's HDG+ family
+   ever revives the question.
 
 Two side quests this turned up, both worth doing regardless of AMR, and both
 now merged:
@@ -335,13 +470,37 @@ now merged:
 * PR **#14** — `getDerivative`. `PyRunner` still binds nothing for `sigma`,
   `lambda` or `aux`, which will matter for `nAux > 0` and for the scalars.
 
-## Step 5 — per-cell degree, scoped
+## Per-cell degree — scoped, and gated *no*
 
 The design, at the depth the earlier sections were measured to. Nothing here is
-built. Read "The gate" first: this is the largest change in the sequence and the
-measurements in §3 and §6 do not yet justify starting it.
+built and — after §8 — **nothing here should be built for adaptivity**. Read "The
+gate" immediately below for the measurement that closed it. What is kept is the
+scoping: it is an accurate account of what per-cell degrees would cost, and the
+structural finding in it is the useful part if the question ever returns for
+another reason.
 
-### The gate — what would justify beginning
+### The gate — asked, and answered: no
+
+**§8 ran this and per-cell `p` does not clear it.** The measurement is there; the
+result is that on Shestakov the whole error is `0.0487 h0`, set by the width of
+the one cell touching the singularity and nothing else — so the smooth region's
+degrees, which are all a per-cell rule could economise, were measured to buy
+*nothing at all* (identical errors to every digit across 1, 3 and 5 outer cells at
+`k = 5`, and across 5 to 40 outer cells at `k = 2`). A few percent of DOF, against
+the 3× this section asked for.
+
+What cleared it instead was `h`: a hand-graded mesh at **14900×** the accuracy of a
+uniform one at matched DOF, and the loop that would find such a mesh needs §7's
+sensor rather than the accuracy indicator §3's loop used. That is the next thing to
+build, and it is a much smaller change than what follows here.
+
+**So the rest of this section is kept as a scoping record, not as a plan.** It is
+still the right analysis of what per-cell degrees would cost, and the structural
+finding below — that the global condensed system is `k`-free — is worth having
+whenever this comes back, e.g. for paper II's HDG+ family, which `TODO` records as
+blocked on the same single-`k` assumption. It should not be started for adaptivity.
+
+### What would have justified beginning
 
 Global `k` reached 2.8e-9 at 90 DOF in two iterations and 3060 physics visits
 (§6). Adaptive `h` at 128 DOF reached 2.0e-6 for 16672. So the *global* degree
@@ -365,7 +524,7 @@ the singular cell, raise `k` globally — and compare error against DOF and agai
 physics visits with the best global-`k` result at matched cost. A hand-chosen
 sequence is at least as good as any rule would pick, so what comes out is an
 upper bound on per-cell `p`. **If the bound is under about 3× it is not worth 200
-changed sites**, and step 5 should stay unbuilt with that number recorded here.
+changed sites**, and per-cell degree should stay unbuilt with that number recorded here.
 
 The reason this is a bound rather than the answer: a graded mesh at uniform `k`
 spends degrees on the smooth cells that per-cell `p` would spend only where they
@@ -476,17 +635,26 @@ having whether or not per-cell degrees are ever built:
   argument it rests on is per cell, so it extends to per-cell degrees on the same
   mesh but not to a remesh.
 
-### Why not `h`
+### Why not `h` — **retracted for Shestakov by §8**
 
-§3 measured h-adaptivity as a net loss on all three benchmarks — Park 1.35× error
-for 3.2× the visits, `AdjointPoster` 1.8–2.6× for 2.8×, Shestakov a 27% DOF saving
-for 44% more visits — and §6 measured one degree bump beating the whole h-adaptive
-machinery by seven orders. §3 also recorded *why* it will not improve with effort
-on Shestakov: the error there is one global mode living in `sigma`, so an indicator
-that finds where error is *made* structurally cannot see where it *lands* (rank
-correlation +0.41).
+This section argued that `h` was not the sequel. On Park and `AdjointPoster` that
+still holds and the measurements behind it are unchanged: §3 has Park at 1.35×
+error for 3.2× the visits and `AdjointPoster` at 1.8–2.6× for 2.8×, and §6 has one
+degree bump beating the whole h-adaptive machinery by seven orders on the latter.
+Both are smooth problems, and `p` is the right lever on a smooth problem.
 
-So `h` is not the sequel to this. It re-enters only as the `p`-refusal branch of
-the hp switch in step 5.5 above — refining the one cell whose regularity caps the
-degree — which is a much narrower use than the equidistribution loop Phase 1
-proposed, and needs no target-size rule at all.
+**On Shestakov it is wrong, and §8 measures it as wrong by 14900×.** The error
+argued from here — §3's 27% DOF saving for 44% more visits — was the
+*equidistribution loop's* result, and §3's own second measurement trap says why
+that loop underperformed: the accuracy indicator cannot see this error, because it
+is one global mode living in `sigma` and the indicator finds where error is *made*
+rather than where it lands (rank correlation +0.41). Reading that as a statement
+about `h` rather than about the indicator was the mistake, and it survived here
+because no hand-graded mesh had been tried.
+
+What §8 measures instead: `error = 0.0487 h0`, set by the width of the one cell
+touching the singularity and nothing else, so grading geometrically towards it
+converts an algebraic `O(1/N)` into an exponential. §7's sensor localises that cell
+with a 2.1e24 margin, which is what the indicator could not do. The rule needs no
+target-size formula, and it is the *smaller* of the two changes rather than the
+narrower use this paragraph imagined.
