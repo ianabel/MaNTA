@@ -246,10 +246,10 @@ def scalar_config(tmp_path, **overrides):
     cfg = {
         # k = 4: the steady state is a quadratic, so it is represented exactly and
         # the closed form above is a reference rather than an approximation.
-        "Polynomial_degree": 4,
-        "Grid_size": 6,
-        "Lower_boundary": 0.0,
-        "Upper_boundary": 1.0,
+        "PolynomialDegree": 4,
+        "GridSize": 6,
+        "LowerBoundary": 0.0,
+        "UpperBoundary": 1.0,
         "delta_t": 0.5,
         "Relative_tolerance": 1e-8,
         "Absolute_tolerance": [1e-10],

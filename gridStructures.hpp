@@ -67,7 +67,7 @@ public:
 	using Index = size_t;
 	using Position = double;
 	Grid() = default;
-	Grid(Position lBound, Position uBound, Index nCells, bool highGridBoundary = false, double lowerBoundaryFraction = 0.2, double upperBoundaryFraction = 0.2)
+	Grid(Position lBound, Position uBound, Index nCells)
 		: upperBound(uBound), lowerBound(lBound)
 	{
 		// Users eh?
@@ -80,72 +80,23 @@ public:
 		if (nCells == 0)
 			throw std::invalid_argument("Strictly positive number of cells required to construct grid.");
 
-		if (!highGridBoundary)
-		{
-			Position cellLength = abs(upperBound - lowerBound) / static_cast<double>(nCells);
-			for (Index i = 0; i < nCells - 1; i++)
-				gridCells.emplace_back(lowerBound + i * cellLength, lowerBound + (i + 1) * cellLength);
-			gridCells.emplace_back(lowerBound + (nCells - 1) * cellLength, upperBound);
+		// Uniform, and only uniform. This constructor used to take a
+		// `highGridBoundary` flag and two fractions and build a cosine-spaced
+		// boundary layer at each end; that is gone, replaced by the geometric
+		// grading in gradedMeshPoints below, which is measured rather than assumed
+		// (MESH-REFINEMENT.md §8-9) and which reaches the same shapes through the
+		// Grid(std::vector<Position>) constructor, where the validation lives.
+		//
+		// Deliberately a signature change rather than a silent reinterpretation of
+		// the flag: this header is installed, so an out-of-tree caller passing the
+		// old arguments should fail to compile rather than quietly get a different
+		// mesh.
+		Position cellLength = std::abs(upperBound - lowerBound) / static_cast<double>(nCells);
+		gridCells.reserve(nCells);
+		for (Index i = 0; i < nCells - 1; i++)
+			gridCells.emplace_back(lowerBound + i * cellLength, lowerBound + (i + 1) * cellLength);
+		gridCells.emplace_back(lowerBound + (nCells - 1) * cellLength, upperBound);
 
-			if (gridCells.size() != nCells)
-				throw std::runtime_error("Unable to construct grid.");
-		}
-		else
-		{
-			// [ 20 % ] [ 60 % ] [ 20 % ] with 1/3rd cells in each
-			double lBoundaryFraction = lowerBoundaryFraction;
-			double uBoundaryFraction = upperBoundaryFraction;
-			double lBoundaryWidth = (upperBound - lowerBound) * (lBoundaryFraction);
-			double uBoundaryWidth = (upperBound - lowerBound) * (uBoundaryFraction);
-			double lBoundaryLayer = lowerBound + lBoundaryWidth;
-			double uBoundaryLayer = upperBound - uBoundaryWidth;
-
-			unsigned int BoundaryCells = nCells / 3;
-			unsigned int BulkCells = nCells - 2 * BoundaryCells;
-
-			double bulkCellLength = (uBoundaryLayer - lBoundaryLayer) / static_cast<double>(BulkCells);
-
-			// Build the full list of cell boundaries first, then form cells
-			// from consecutive entries. Constructing each cell from its own
-			// independently-computed endpoints (as this used to) left the two
-			// sides of a shared face differing in the last bits -- the bulk
-			// accumulated lBoundaryLayer + i*bulkCellLength while the upper
-			// layer started from uBoundaryLayer computed directly, so the grid
-			// was not exactly contiguous. That is invisible to a tolerance
-			// comparison but makes Grid::operator== false, which breaks the
-			// restart round trip (StoreGridInfo writes one boundary per face,
-			// so the rebuilt grid silently closes the gap and compares
-			// unequal to the grid it came from).
-			std::vector<Position> boundaries;
-			boundaries.reserve(nCells + 1);
-			boundaries.push_back(lowerBound);
-
-			// Chebyshev locations for edge nodes
-			for (Index i = 0; i < BoundaryCells; i++)
-			{
-				double cellRight = (i == BoundaryCells - 1)
-									   ? lBoundaryLayer
-									   : lBoundaryLayer - lBoundaryWidth * cos((pi * (i + 1)) / (2.0 * BoundaryCells - 1.0));
-				boundaries.push_back(cellRight);
-			}
-			for (Index i = 0; i < BulkCells; i++)
-			{
-				double cellRight = (i == BulkCells - 1)
-									   ? uBoundaryLayer
-									   : lBoundaryLayer + (i + 1) * bulkCellLength;
-				boundaries.push_back(cellRight);
-			}
-			for (Index i = 0; i < BoundaryCells; i++)
-			{
-				double cellRight = (i == BoundaryCells - 1)
-									   ? upperBound
-									   : uBoundaryLayer + uBoundaryWidth * cos(pi * (BoundaryCells - i - 1) / (2.0 * BoundaryCells - 1.0));
-				boundaries.push_back(cellRight);
-			}
-
-			for (Index i = 0; i + 1 < boundaries.size(); ++i)
-				gridCells.emplace_back(boundaries[i], boundaries[i + 1]);
-		}
 		if (gridCells.size() != nCells)
 			throw std::runtime_error("Unable to construct grid.");
 	}
@@ -224,11 +175,21 @@ private:
 	double upperBound, lowerBound;
 };
 
-// Cell boundaries for a mesh graded geometrically into one end of the domain.
+// Which end (or ends) a graded mesh refines into.
+enum class GradedEnd
+{
+	Lower,
+	Upper,
+	Both,
+};
+
+// Cell boundaries for a mesh graded geometrically into one or both ends.
 //
-// `gradedCells` cells cover the layer of width `fraction * (uBound - lBound)`
-// against the graded end, each `1/ratio` times the width of the one before it;
-// the remaining `nCells - gradedCells` are uniform over the rest.
+// `gradedCells` cells cover the layer against each graded end -- of width
+// `lowerFraction * span` at the bottom and `upperFraction * span` at the top --
+// each `1/ratio` times the width of the one before it; the remainder are uniform
+// over what is left. With `GradedEnd::Both` that is `nCells - 2*gradedCells`
+// cells in the middle, and only the fraction belonging to a graded end is read.
 //
 // Hand it to Grid(std::vector<Position>), which is where the validation lives.
 // Returning points rather than a Grid is deliberate: it is a pure function of
@@ -246,18 +207,36 @@ private:
 // every later one is 1/ratio. That is what makes h0 the clean expression above.
 inline std::vector<Grid::Position> gradedMeshPoints(
 	Grid::Position lBound, Grid::Position uBound, Grid::Index nCells,
-	Grid::Index gradedCells, double fraction, double ratio, bool gradeUpperEnd)
+	Grid::Index gradedCells, double lowerFraction, double upperFraction,
+	double ratio, GradedEnd end)
 {
+	const bool gradeLower = end != GradedEnd::Upper;
+	const bool gradeUpper = end != GradedEnd::Lower;
+	const Grid::Index layers = (end == GradedEnd::Both) ? 2 : 1;
+
 	if (!(ratio > 0.0) || !(ratio < 1.0))
 		throw std::invalid_argument(std::format(
 			"A graded mesh needs a ratio strictly between 0 and 1; got {}. At 1 "
 			"every boundary lands on the same point, and above it the cells grow "
 			"towards the end being refined rather than shrinking.", ratio));
 
-	if (!(fraction > 0.0) || !(fraction < 1.0))
+	// Only the fractions actually read are checked, so a config that leaves the
+	// other at something silly while grading one end is not refused for it.
+	if (gradeLower && (!(lowerFraction > 0.0) || !(lowerFraction < 1.0)))
 		throw std::invalid_argument(std::format(
-			"A graded mesh needs a layer fraction strictly between 0 and 1; got {}.",
-			fraction));
+			"A graded mesh needs a lower layer fraction strictly between 0 and 1; "
+			"got {}.", lowerFraction));
+
+	if (gradeUpper && (!(upperFraction > 0.0) || !(upperFraction < 1.0)))
+		throw std::invalid_argument(std::format(
+			"A graded mesh needs an upper layer fraction strictly between 0 and 1; "
+			"got {}.", upperFraction));
+
+	if (end == GradedEnd::Both && lowerFraction + upperFraction >= 1.0)
+		throw std::invalid_argument(std::format(
+			"Grading both ends needs the two layers to leave something between "
+			"them, but the fractions sum to {} >= 1.",
+			lowerFraction + upperFraction));
 
 	if (gradedCells < 2)
 		throw std::invalid_argument(std::format(
@@ -265,60 +244,58 @@ inline std::vector<Grid::Position> gradedMeshPoints(
 			"With one there is no ratio between neighbours and nothing is graded.",
 			gradedCells));
 
-	if (gradedCells >= nCells)
+	if (layers * gradedCells >= nCells)
 		throw std::invalid_argument(std::format(
-			"A graded mesh needs at least one cell outside the graded layer, so "
-			"the graded count ({}) must be below the total ({}).",
-			gradedCells, nCells));
-
-	if (gradeUpperEnd)
-	{
-		// One caveat, and it is arithmetic rather than this code: the narrowest
-		// cell's *width* at the upper end is a difference of two numbers near
-		// uBound, so it carries an absolute error of eps(uBound) and a relative
-		// one of eps(uBound)/h0 -- 3.4e-11 for h0 = 6.6e-6 on [0, 1]. Building the
-		// mesh directly as uBound - layer*ratio^j has the identical cancellation,
-		// so nothing is lost by reflecting. It bites only at very hard gradings,
-		// where the boundary eventually coincides with uBound and Grid rejects the
-		// zero-width cell.
-		//
-		// Built by reflecting the lower-end mesh, so the two ends are exactly
-		// symmetric rather than nearly so, and one implementation is tested.
-		auto lower = gradedMeshPoints(lBound, uBound, nCells, gradedCells,
-									  fraction, ratio, false);
-		std::vector<Grid::Position> points;
-		points.reserve(lower.size());
-		for (auto it = lower.rbegin(); it != lower.rend(); ++it)
-			points.push_back(lBound + uBound - *it);
-
-		// The reflection is a rounding operation, and the *endpoints* have to be
-		// exact: Grid::operator== compares them, and the restart round trip
-		// rebuilds a grid from the boundaries it wrote and requires equality.
-		// Interior points may sit a bit off with no consequence, because the
-		// cells are formed from consecutive entries of one list and so stay
-		// contiguous whatever the values are.
-		points.front() = lBound;
-		points.back() = uBound;
-		return points;
-	}
+			"A graded mesh needs at least one cell outside the graded layer{}, so "
+			"{} x {} graded cells does not fit in a grid of {}.",
+			layers == 2 ? "s" : "", layers, gradedCells, nCells));
 
 	const double span = uBound - lBound;
-	const double layer = fraction * span;
-	const Grid::Index bulkCells = nCells - gradedCells;
 
+	// Built from the axis outwards in one pass, so the cells come from
+	// consecutive entries of a single list and are contiguous by construction --
+	// which is what Grid::operator== and the restart round trip need. Boundaries
+	// are absolute positions; only the two endpoints are pinned exactly.
 	std::vector<Grid::Position> points;
 	points.reserve(nCells + 1);
-
 	points.push_back(lBound);
-	for (Grid::Index j = gradedCells; j-- > 0;)
-		points.push_back(lBound + layer * std::pow(ratio, static_cast<double>(j)));
 
-	// points.back() is now lBound + layer, the far edge of the graded layer.
+	if (gradeLower)
+	{
+		const double layer = lowerFraction * span;
+		for (Grid::Index j = gradedCells; j-- > 0;)
+			points.push_back(lBound + layer * std::pow(ratio, static_cast<double>(j)));
+	}
+
+	// The uniform stretch between whatever the graded layers left.
 	const double bulkStart = points.back();
-	const double bulkLength = (uBound - bulkStart) / static_cast<double>(bulkCells);
+	const double bulkEnd = gradeUpper ? uBound - upperFraction * span : uBound;
+	const Grid::Index bulkCells = nCells - layers * gradedCells;
+	const double bulkLength = (bulkEnd - bulkStart) / static_cast<double>(bulkCells);
 	for (Grid::Index i = 1; i <= bulkCells; ++i)
-		points.push_back(i == bulkCells ? uBound : bulkStart + i * bulkLength);
+		points.push_back(i == bulkCells ? bulkEnd : bulkStart + i * bulkLength);
 
+	if (gradeUpper)
+	{
+		// The mirror of the lower layer: widths in the same geometric sequence,
+		// laid out shrinking towards uBound.
+		//
+		// One caveat, and it is arithmetic rather than this code: the narrowest
+		// cell's *width* here is a difference of two numbers near uBound, so it
+		// carries an absolute error of eps(uBound) and a relative one of
+		// eps(uBound)/h0 -- 3.4e-11 for h0 = 6.6e-6 on [0, 1]. No construction
+		// avoids it. It bites only at very hard gradings, where the boundary
+		// eventually coincides with uBound and Grid rejects the zero-width cell.
+		const double layer = upperFraction * span;
+		for (Grid::Index j = 1; j < gradedCells; ++j)
+			points.push_back(uBound - layer * std::pow(ratio, static_cast<double>(j)));
+		points.push_back(uBound);
+	}
+
+	// Exact, because Grid::operator== compares them and the restart round trip
+	// rebuilds a grid from the boundaries it wrote.
+	points.front() = lBound;
+	points.back() = uBound;
 	return points;
 }
 

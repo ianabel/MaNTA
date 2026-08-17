@@ -9,7 +9,7 @@ discretisation.
 ``u_star``
 ----------
 
-For any run with ``Polynomial_degree`` :math:`\ge 1`, each variable's output group
+For any run with ``PolynomialDegree`` :math:`\ge 1`, each variable's output group
 gains a field ``u_star``: the postprocessed solution
 :math:`u^\star \in P_{k+1}`, reconstructed cell by cell from :math:`(u_h, q_h)`.
 

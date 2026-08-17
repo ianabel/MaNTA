@@ -115,10 +115,10 @@ point a config file at it:
    t_initial = 0.5
    t_final = 1.0
 
-The grid comes from the restart file, so ``Grid_size``, ``Grid_points``,
-``Lower_boundary`` and ``Upper_boundary`` are ignored on this path.
+The grid comes from the restart file, so ``GridSize``, ``GridPoints``,
+``LowerBoundary`` and ``UpperBoundary`` are ignored on this path.
 
-``Polynomial_degree`` is **not** ignored. It defaults to the degree the file was
+``PolynomialDegree`` is **not** ignored. It defaults to the degree the file was
 written at, and setting it to something else resumes the run at that degree
 instead, projecting the stored state onto the new space:
 
@@ -126,8 +126,8 @@ instead, projecting the stored state onto the new space:
 
    [configuration]
    restart = true
-   RestartFile = "case7.restart.nc"   # written at Polynomial_degree = 2
-   Polynomial_degree = 3              # resume at 3
+   RestartFile = "case7.restart.nc"   # written at PolynomialDegree = 2
+   PolynomialDegree = 3              # resume at 3
 
 Refining loses nothing — a degree-*k* element polynomial lies inside the
 degree-(*k*\ +1) space, so the projection reproduces it exactly. Coarsening

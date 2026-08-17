@@ -143,14 +143,23 @@ BOOST_AUTO_TEST_CASE(grid_rejects_degenerate_construction)
 }
 
 // --------------------------------------- Grid, clustered boundary layers --
+//
+// These three used to drive the `highGridBoundary` flag on Grid's uniform
+// constructor, which spaced each boundary layer by a cosine rule. That
+// constructor is gone and the layers are graded geometrically now
+// (MESH-REFINEMENT.md §8-9 measures why), but the properties asserted here are
+// the *contract* -- a partition, layers of the width asked for, cells shrinking
+// towards each wall -- and they survived the change, so the cases survived it
+// too, rebuilt on gradedMeshPoints. Only the spacing rule inside a layer moved.
 
-BOOST_AUTO_TEST_CASE(grid_high_boundary_partitions_domain)
+BOOST_AUTO_TEST_CASE(grid_graded_both_ends_partitions_domain)
 {
-    // BoundaryCells = nCells/3 at each end, the rest in the bulk. Use multiples
-    // of 3 so the split is unambiguous.
+    // nCells/3 per layer, the rest in the bulk -- the split High_Grid_Boundary
+    // used, and what GradingCells defaults to for GradingEnd = "Both". Multiples
+    // of 3 so it is unambiguous.
     for (Grid::Index n : {6u, 9u, 12u, 30u})
     {
-        Grid g(0.0, 1.0, n, true, 0.2, 0.2);
+        Grid g(gradedMeshPoints(0.0, 1.0, n, n / 3, 0.2, 0.2, 0.3, GradedEnd::Both));
 
         BOOST_TEST(g.getNCells() == n);
         BOOST_TEST(g[0].x_l == 0.0);
@@ -180,11 +189,13 @@ BOOST_AUTO_TEST_CASE(grid_high_boundary_partitions_domain)
     }
 }
 
-BOOST_AUTO_TEST_CASE(grid_high_boundary_respects_layer_fractions)
+BOOST_AUTO_TEST_CASE(grid_graded_both_ends_respects_layer_fractions)
 {
+    // Distinct fractions, so a construction that read one where it meant the other
+    // would still produce a plausible graded mesh and fail here.
     const Grid::Index n = 12;
     const double lowerFrac = 0.2, upperFrac = 0.3;
-    Grid g(0.0, 1.0, n, true, lowerFrac, upperFrac);
+    Grid g(gradedMeshPoints(0.0, 1.0, n, n / 3, lowerFrac, upperFrac, 0.3, GradedEnd::Both));
 
     const Grid::Index boundaryCells = n / 3;
 
@@ -195,11 +206,11 @@ BOOST_AUTO_TEST_CASE(grid_high_boundary_respects_layer_fractions)
     BOOST_TEST(g[n - boundaryCells].x_l == 1.0 - upperFrac);
 }
 
-BOOST_AUTO_TEST_CASE(grid_high_boundary_clusters_cells_towards_walls)
+BOOST_AUTO_TEST_CASE(grid_graded_both_ends_clusters_cells_towards_walls)
 {
     // The point of the mode: cells must get smaller approaching each wall.
     const Grid::Index n = 30;
-    Grid g(0.0, 1.0, n, true, 0.2, 0.2);
+    Grid g(gradedMeshPoints(0.0, 1.0, n, n / 3, 0.2, 0.2, 0.3, GradedEnd::Both));
     const Grid::Index boundaryCells = n / 3;
 
     // Within the lower layer, cells shrink towards x = 0, so the first cell is
@@ -306,8 +317,8 @@ BOOST_AUTO_TEST_CASE(grid_from_points_rejects_values_that_are_not_finite)
 BOOST_AUTO_TEST_CASE(grid_from_points_holds_a_narrow_domain_to_the_same_rule_as_the_other_constructor)
 {
     // Grid(0.0, 1e-15, 4) throws and Grid(0.0, 1e-13, 4) does not; a config
-    // supplying Grid_points instead of Grid_size should not be able to build
-    // what Grid_size would reject.
+    // supplying GridPoints instead of GridSize should not be able to build
+    // what GridSize would reject.
     using P = std::vector<Grid::Position>;
 
     BOOST_CHECK_THROW(Grid(0.0, 1e-15, 4), std::invalid_argument);
@@ -352,7 +363,7 @@ BOOST_AUTO_TEST_CASE(a_graded_mesh_puts_the_layer_cells_in_a_geometric_progressi
 {
     // 9 cells over the lower 10% of [0, 1] at ratio 0.3, then one uniform cell.
     // The mesh MESH-REFINEMENT.md §9 measured at 14900x a uniform 10.
-    auto p = gradedMeshPoints(0.0, 1.0, 10, 9, 0.1, 0.3, false);
+    auto p = gradedMeshPoints(0.0, 1.0, 10, 9, 0.1, 0.2, 0.3, GradedEnd::Lower);
 
     BOOST_TEST(p.size() == 11u);
     BOOST_TEST(p.front() == 0.0);
@@ -393,7 +404,7 @@ BOOST_AUTO_TEST_CASE(a_graded_mesh_is_uniform_outside_the_layer)
     // 4 graded + 6 uniform. The uniform part must be uniform: the bulk length is
     // measured from the layer's far edge rather than from the domain, and using
     // the domain would leave the first bulk cell the wrong width.
-    auto p = gradedMeshPoints(0.0, 1.0, 10, 4, 0.2, 0.5, false);
+    auto p = gradedMeshPoints(0.0, 1.0, 10, 4, 0.2, 0.2, 0.5, GradedEnd::Lower);
 
     BOOST_TEST(p.size() == 11u);
     BOOST_TEST(p[4] == 0.2);
@@ -408,8 +419,8 @@ BOOST_AUTO_TEST_CASE(grading_the_upper_end_is_the_exact_mirror_of_the_lower)
     // Built by reflection so the two ends cannot drift apart, and the endpoints
     // are pinned afterwards because Grid::operator== compares them exactly and
     // the restart round trip rebuilds a grid from the boundaries it wrote.
-    auto lo = gradedMeshPoints(0.0, 1.0, 10, 9, 0.1, 0.3, false);
-    auto hi = gradedMeshPoints(0.0, 1.0, 10, 9, 0.1, 0.3, true);
+    auto lo = gradedMeshPoints(0.0, 1.0, 10, 9, 0.1, 0.2, 0.3, GradedEnd::Lower);
+    auto hi = gradedMeshPoints(0.0, 1.0, 10, 9, 0.2, 0.1, 0.3, GradedEnd::Upper);
 
     BOOST_TEST(hi.size() == lo.size());
     BOOST_TEST(hi.front() == 0.0);
@@ -447,8 +458,8 @@ BOOST_AUTO_TEST_CASE(a_graded_mesh_is_offset_and_scaled_with_the_domain)
 {
     // Nothing in the construction may assume [0, 1]. Same shape on [-3, 5]:
     // widths scale with the span and the layer sits against the lower end.
-    auto unit = gradedMeshPoints(0.0, 1.0, 8, 5, 0.25, 0.4, false);
-    auto wide = gradedMeshPoints(-3.0, 5.0, 8, 5, 0.25, 0.4, false);
+    auto unit = gradedMeshPoints(0.0, 1.0, 8, 5, 0.25, 0.2, 0.4, GradedEnd::Lower);
+    auto wide = gradedMeshPoints(-3.0, 5.0, 8, 5, 0.25, 0.2, 0.4, GradedEnd::Lower);
 
     BOOST_TEST(wide.front() == -3.0);
     BOOST_TEST(wide.back() == 5.0);
@@ -466,7 +477,7 @@ BOOST_AUTO_TEST_CASE(a_graded_mesh_builds_a_grid_of_the_size_asked_for)
         {
             if (g >= n)
                 continue;
-            Grid grid(gradedMeshPoints(0.0, 1.0, n, g, 0.1, 0.5, false));
+            Grid grid(gradedMeshPoints(0.0, 1.0, n, g, 0.1, 0.2, 0.5, GradedEnd::Lower));
             BOOST_TEST(grid.getNCells() == n);
             BOOST_TEST(grid.lowerBoundary() == 0.0);
             BOOST_TEST(grid.upperBoundary() == 1.0);
@@ -479,28 +490,28 @@ BOOST_AUTO_TEST_CASE(a_graded_mesh_refuses_geometry_that_would_not_grade)
     // point -- a zero-width cell, whose MassMatrix is identically zero -- and
     // above it the cells grow towards the end being refined, which is the
     // opposite of the request.
-    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 10, 5, 0.1, 1.0, false), std::invalid_argument);
-    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 10, 5, 0.1, 1.5, false), std::invalid_argument);
-    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 10, 5, 0.1, 0.0, false), std::invalid_argument);
-    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 10, 5, 0.1, -0.5, false), std::invalid_argument);
+    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 10, 5, 0.1, 0.2, 1.0, GradedEnd::Lower), std::invalid_argument);
+    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 10, 5, 0.1, 0.2, 1.5, GradedEnd::Lower), std::invalid_argument);
+    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 10, 5, 0.1, 0.2, 0.0, GradedEnd::Lower), std::invalid_argument);
+    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 10, 5, 0.1, 0.2, -0.5, GradedEnd::Lower), std::invalid_argument);
 
     // fraction outside (0, 1): a zero-width layer, or one that swallows the domain
     // and leaves the uniform cells nothing.
-    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 10, 5, 0.0, 0.3, false), std::invalid_argument);
-    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 10, 5, 1.0, 0.3, false), std::invalid_argument);
+    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 10, 5, 0.0, 0.2, 0.3, GradedEnd::Lower), std::invalid_argument);
+    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 10, 5, 1.0, 0.2, 0.3, GradedEnd::Lower), std::invalid_argument);
 
     // Fewer than two cells in the layer: there is no ratio between neighbours.
-    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 10, 1, 0.1, 0.3, false), std::invalid_argument);
-    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 10, 0, 0.1, 0.3, false), std::invalid_argument);
+    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 10, 1, 0.1, 0.2, 0.3, GradedEnd::Lower), std::invalid_argument);
+    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 10, 0, 0.1, 0.2, 0.3, GradedEnd::Lower), std::invalid_argument);
 
     // ...and no cells left outside it, which would leave [layer, upper] uncovered.
-    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 5, 5, 0.1, 0.3, false), std::invalid_argument);
-    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 5, 6, 0.1, 0.3, false), std::invalid_argument);
+    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 5, 5, 0.1, 0.2, 0.3, GradedEnd::Lower), std::invalid_argument);
+    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 5, 6, 0.1, 0.2, 0.3, GradedEnd::Lower), std::invalid_argument);
 
     // Both of the above also hold for the reflected path, which recurses through
     // the same checks rather than repeating them.
-    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 10, 5, 0.1, 1.0, true), std::invalid_argument);
-    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 5, 5, 0.1, 0.3, true), std::invalid_argument);
+    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 10, 5, 0.2, 0.1, 1.0, GradedEnd::Upper), std::invalid_argument);
+    BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 5, 5, 0.2, 0.1, 0.3, GradedEnd::Upper), std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

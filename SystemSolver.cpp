@@ -259,7 +259,7 @@ void SystemSolver::initialiseMatrices()
         postprocessor = std::make_unique<Postprocessor>(grid, k, nVars, nScalars, nAux);
     else if (superconvergent)
         throw std::invalid_argument(
-            "Superconvergent postprocessing requires Polynomial_degree >= 1");
+            "Superconvergent postprocessing requires PolynomialDegree >= 1");
 
     // These are temporary working space
     // Matrices we need per cell

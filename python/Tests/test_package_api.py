@@ -150,10 +150,10 @@ def test_omitted_derivative_hooks_are_treated_as_zero(tmp_path):
     runner = manta.Runner(DeclarativeDiffusion())
     runner.configure(
         {
-            "Polynomial_degree": 2,
-            "Grid_size": 8,
-            "Lower_boundary": 0.0,
-            "Upper_boundary": 1.0,
+            "PolynomialDegree": 2,
+            "GridSize": 8,
+            "LowerBoundary": 0.0,
+            "UpperBoundary": 1.0,
             "delta_t": 0.05,
             "OutputFilename": str(tmp_path / "declarative"),
             "WriteOutput": False,

@@ -230,7 +230,7 @@ Example configurations live in the `examples/` subdirectory.
 
 ### Superconvergence
 
-Every run with `Polynomial_degree >= 1` reports an extra field per variable,
+Every run with `PolynomialDegree >= 1` reports an extra field per variable,
 `u_star`, in its netCDF output and in the `.dat` files: the element-local
 postprocessed solution in `P_{k+1}`, reconstructed from `u` and `q`.
 

@@ -61,10 +61,10 @@ Run it with the ``manta`` command, naming the module that registers it:
    [configuration]
    TransportSystem = "MyDiffusion"
    PythonModule = "mypackage.mycase"
-   Polynomial_degree = 2
-   Grid_size = 8
-   Lower_boundary = 0.0
-   Upper_boundary = 1.0
+   PolynomialDegree = 2
+   GridSize = 8
+   LowerBoundary = 0.0
+   UpperBoundary = 1.0
    delta_t = 0.05
    t_final = 0.2
 

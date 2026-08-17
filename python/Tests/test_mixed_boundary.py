@@ -64,10 +64,10 @@ def relaxed(system, tmp_path, xs, stem="mixed_py"):
     """Relax to steady state; return u at xs."""
     runner = manta.Runner(system)
     runner.configure({
-        "Polynomial_degree": 3,
-        "Grid_size": 6,
-        "Lower_boundary": 0.0,
-        "Upper_boundary": 1.0,
+        "PolynomialDegree": 3,
+        "GridSize": 6,
+        "LowerBoundary": 0.0,
+        "UpperBoundary": 1.0,
         "delta_t": 10.0,
         "Relative_tolerance": 1e-8,
         "Absolute_tolerance": [1e-9],
@@ -224,10 +224,10 @@ def test_a_boundary_sensitivity_on_a_mixed_end_is_refused(tmp_path):
     system = AdjointOnMixed()
     runner = manta.Runner(system)
     runner.configure({
-        "Polynomial_degree": 2,
-        "Grid_size": 4,
-        "Lower_boundary": 0.0,
-        "Upper_boundary": 1.0,
+        "PolynomialDegree": 2,
+        "GridSize": 4,
+        "LowerBoundary": 0.0,
+        "UpperBoundary": 1.0,
         "delta_t": 0.5,
         "Relative_tolerance": 1e-6,
         "Absolute_tolerance": [1e-8],

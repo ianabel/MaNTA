@@ -1125,7 +1125,7 @@ BOOST_AUTO_TEST_CASE(a_failed_steady_solve_still_writes_the_last_state_it_reache
 //
 // A restart used to require the run's discretisation to match the file's
 // exactly, and could not do otherwise: makeGrid reads both CellBoundaries and
-// PolyOrder from the file and ignored Polynomial_degree, so the degrees always
+// PolyOrder from the file and ignored PolynomialDegree, so the degrees always
 // agreed and DGSoln::copy -- which throws on a different order -- was never
 // asked for anything else. The config's degree is honoured now, and
 // setInitialConditions projects rather than copies when it differs.

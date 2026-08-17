@@ -84,10 +84,10 @@ class SecondRegistered(Registered):
 CONFIG_TEMPLATE = """
 [configuration]
 TransportSystem = "{name}"
-Polynomial_degree = 2
-Grid_size = 5
-Lower_boundary = 0.0
-Upper_boundary = 1.0
+PolynomialDegree = 2
+GridSize = 5
+LowerBoundary = 0.0
+UpperBoundary = 1.0
 t_final = 0.2
 delta_t = 0.1
 Relative_tolerance = 1.0e-4
@@ -173,7 +173,7 @@ def test_toml_lookup_searches_the_subtables(tmp_path):
 
     # "kappa" lives under [Registered], never at the document root.
     assert CAPTURED["values"]["kappa"] == pytest.approx(0.75)
-    # "Polynomial_degree" lives under [configuration]; same mechanism.
+    # "PolynomialDegree" lives under [configuration]; same mechanism.
     assert "count" in CAPTURED["values"]
 
 
@@ -244,11 +244,15 @@ def test_a_nonexistent_config_file_returns_one(tmp_path):
 
 def test_grid_bindings():
     """MaNTA.Grid is what a registered factory receives as its second argument."""
-    uniform = MaNTA.Grid(0.0, 1.0, 7, False, 0.0, 0.0)
+    uniform = MaNTA.Grid(0.0, 1.0, 7)
     assert uniform.getNCells() == 7
 
-    clustered = MaNTA.Grid(-1.0, 2.0, 9, True, 0.25, 0.25)
-    assert clustered.getNCells() == 9
+    # A non-uniform mesh comes from explicit boundaries now. The constructor used
+    # to take a `highGridBoundary` flag and two layer fractions and space a
+    # cosine-clustered layer at each end; that is gone, and GradedGridBoundary --
+    # or GridPoints, which this binding is -- replaces it.
+    graded = MaNTA.Grid([-1.0, -0.9, -0.5, 0.5, 1.5, 1.9, 2.0])
+    assert graded.getNCells() == 6
 
     # The default constructor exists for the same reason py::init<>() does on
     # TransportSystem: pybind needs it to build the holder.

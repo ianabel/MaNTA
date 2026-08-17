@@ -22,7 +22,7 @@ Postprocessor::Postprocessor(Grid const &Grid_, unsigned int Order, Index n_var,
     // superconvergence anyway.
     if (k < 1)
         throw std::invalid_argument(
-            "Superconvergent postprocessing requires Polynomial_degree >= 1");
+            "Superconvergent postprocessing requires PolynomialDegree >= 1");
 
     const Index nCells = grid.getNCells();
     const Index nStar = k + 2; // dofs per cell in P_{k+1}

@@ -15,40 +15,42 @@ const std::vector<Entry> &table()
          "Resume from a restart file instead of building an initial condition."},
         {"RestartFile", {}, Type::String, Category::Solver, false, false, std::string{},
          "Restart file to resume from; defaults to <stem>.restart.nc."},
-        {"High_Grid_Boundary", {}, Type::Bool, Category::Solver, false, false, false,
-         "Concentrate cells near both ends of the domain, on a cosine spacing."},
-        {"Lower_Boundary_Fraction", {}, Type::Double, Category::Solver, false, false, 0.2,
-         "Fraction of the domain in the dense lower region; read by High_Grid_Boundary, and "
-         "by Graded_Grid_Boundary when Grading_End is \"Lower\"."},
-        {"Upper_Boundary_Fraction", {}, Type::Double, Category::Solver, false, false, 0.2,
-         "Fraction of the domain in the dense upper region; read by High_Grid_Boundary, and "
-         "by Graded_Grid_Boundary when Grading_End is \"Upper\"."},
-        {"Graded_Grid_Boundary", {}, Type::Bool, Category::Solver, false, false, false,
-         "Grade the mesh geometrically into one end of the domain: Grading_Cells cells "
-         "over the dense layer, each Grading_Ratio times the width of its outward "
-         "neighbour, then the rest uniform. For a solution with a singularity at that "
-         "end this is worth orders of magnitude at a fixed cell count -- see "
-         "docs/configuration.rst. Mutually exclusive with High_Grid_Boundary."},
-        {"Grading_Ratio", {}, Type::Double, Category::Solver, false, false, 0.3,
-         "Width ratio between neighbouring cells in the graded layer, strictly between "
-         "0 and 1. Smaller grades harder: the cell touching the graded end has width "
-         "fraction * span * ratio^(Grading_Cells - 1), which is what sets the error."},
-        {"Grading_Cells", {}, Type::Int, Category::Solver, false, false, 0,
-         "Cells in the graded layer; at least 2, and below Grid_size so something is "
-         "left outside it. 0 means half of Grid_size."},
-        {"Grading_End", {}, Type::String, Category::Solver, false, false, std::string{"Lower"},
-         "Which end Graded_Grid_Boundary refines into: \"Lower\" (default) or \"Upper\". "
-         "For both ends at once use High_Grid_Boundary or give Grid_points outright."},
-        {"Polynomial_degree", {}, Type::UInt, Category::Solver, true, true, 1u,
+        {"GradedGridBoundary", {"High_Grid_Boundary"}, Type::Bool, Category::Solver, false, false, false,
+         "Grade the mesh geometrically towards the ends of the domain: GradingCells cells "
+         "over each dense layer, each GradingRatio times the width of its inward neighbour, "
+         "then the rest uniform between them. For a solution that is singular at an end this "
+         "is worth orders of magnitude at a fixed cell count -- see docs/configuration.rst. "
+         "Replaces High_Grid_Boundary, which spaced those cells by a cosine rule instead; "
+         "that spelling still works and warns, but the mesh it now builds is the geometric one."},
+        {"GradingRatio", {}, Type::Double, Category::Solver, false, false, 0.3,
+         "Width ratio between neighbouring cells in a graded layer, strictly between 0 and 1. "
+         "Smaller grades harder: the cell touching a graded end has width "
+         "fraction * span * ratio^(GradingCells - 1), which is what sets the error."},
+        {"GradingCells", {}, Type::Int, Category::Solver, false, false, 0,
+         "Cells in each graded layer; at least 2, and few enough to leave one cell outside "
+         "them. 0 means a third of GridSize per layer when grading both ends, half when "
+         "grading one."},
+        {"GradingEnd", {}, Type::String, Category::Solver, false, false, std::string{"Both"},
+         "Which end GradedGridBoundary refines into: \"Both\" (default), \"Lower\" or "
+         "\"Upper\"."},
+        {"LowerBoundaryFraction", {"Lower_Boundary_Fraction"}, Type::Double, Category::Solver, false, false, 0.2,
+         "Fraction of the domain in the dense lower region; read when GradedGridBoundary is "
+         "set and GradingEnd is \"Lower\" or \"Both\"."},
+        {"UpperBoundaryFraction", {"Upper_Boundary_Fraction"}, Type::Double, Category::Solver, false, false, 0.2,
+         "Fraction of the domain in the dense upper region; read when GradedGridBoundary is "
+         "set and GradingEnd is \"Upper\" or \"Both\"."},
+        {"PolynomialDegree", {"Polynomial_degree"}, Type::UInt, Category::Solver, true, true, 1u,
          "Degree k of the nodal basis in each cell."},
-        {"Grid_size", {}, Type::Int, Category::Solver, true, true, 0,
-         "Number of cells."},
-        {"Grid_points", {}, Type::DoubleList, Category::Solver, false, false, std::vector<double>{},
-         "Explicit cell boundaries; supersedes Lower_boundary/Upper_boundary/Grid_size."},
-        {"Lower_boundary", {}, Type::Double, Category::Solver, false, false, 0.0,
-         "Lower end of the domain; required unless Grid_points is given."},
-        {"Upper_boundary", {}, Type::Double, Category::Solver, false, false, 1.0,
-         "Upper end of the domain; required unless Grid_points is given."},
+        {"GridSize", {"Grid_size"}, Type::Int, Category::Solver, false, false, 0,
+         "Number of cells; required unless GridPoints is given or the run is a restart."},
+        {"GridPoints", {"Grid_points"}, Type::DoubleList, Category::Solver, false, false, std::vector<double>{},
+         "Explicit cell boundaries, as an array. Supersedes LowerBoundary/UpperBoundary/"
+         "GridSize and every grading key, and is the way to supply a mesh no rule here "
+         "produces."},
+        {"LowerBoundary", {"Lower_boundary"}, Type::Double, Category::Solver, false, false, 0.0,
+         "Lower end of the domain; required unless GridPoints is given."},
+        {"UpperBoundary", {"Upper_boundary"}, Type::Double, Category::Solver, false, false, 1.0,
+         "Upper end of the domain; required unless GridPoints is given."},
         {"tau", {}, Type::Double, Category::Solver, false, false, 1.0,
          "HDG stabilisation parameter."},
         {"delta_t", {}, Type::Double, Category::Solver, true, true, 0.0,

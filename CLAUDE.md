@@ -308,10 +308,29 @@ the surfaces: `TomlConfigSource` (in `SolverConfig.cpp`) and `DictConfigSource`
   on raising `RuntimeError`, which is what it always has. "Could not start"
   conditions — no such config file, an unknown `TransportSystem`, an unopenable
   restart file — still make `runManta` log and return 1.
-* **The naming style is deliberately not unified.** `delta_t`, `MinStepSize` and
-  `solveAdjoint` keep their inconsistent spellings; only the two genuine name
-  *conflicts* were resolved, because regularising the rest would churn every
-  config file in the tree for no functional gain.
+* **`UpperCamelCase` is the convention for new configuration keys, and for
+  renames of existing ones.** It is what the schema already mostly is — measured
+  over `--list-options`, 23 keys are `UpperCamel` against 3 `lowerCamel`
+  (`initialTimestep`, `solveAdjoint`, `zeroFlux`), 2 bare lower-case (`restart`,
+  `tau`) and the remaining stragglers with underscores. So a new key should be
+  `MaxDegreeIncrement`, not `max_degree_increment` or `maxDegreeIncrement`.
+
+  **The rest is not being regularised wholesale.** `delta_t`, `t_initial`,
+  `t_final`, `Relative_tolerance` and `Absolute_tolerance` keep their spellings;
+  churning every config file in the tree for no functional gain is a job for
+  never. What is regularised is a group of keys that is being *changed anyway* —
+  the grid keys went `Grid_size` → `GridSize`, `Lower_boundary` →
+  `LowerBoundary`, `Polynomial_degree` → `PolynomialDegree` and so on alongside
+  the graded-mesh work, since editing them for another reason is the one moment
+  the rename is free.
+
+  **A rename is a deprecated alias, never a removal.** The schema's `aliases`
+  field is what makes that a one-line change: `presentSpelling` warns when the
+  old name is used, and refuses a config that gives both. So every existing
+  `.conf` and every `Runner.configure` dict in and out of the tree keeps working
+  untouched, which is what kept the grid rename from touching 35 Python files.
+  Grep `--list-options` before adding a key, because a rename that forgets the
+  alias is silent for anyone whose config predates it.
 
 ### Superconvergence (`Superconvergent = true`)
 

@@ -76,7 +76,7 @@ Degrees of freedom
 ------------------
 
 Space is divided into cells. On each cell every field is a polynomial of degree
-``Polynomial_degree`` = :math:`k`, expanded in a nodal (Chebyshev-node) basis of
+``PolynomialDegree`` = :math:`k`, expanded in a nodal (Chebyshev-node) basis of
 :math:`k+1` functions. The HDG method adds a *trace* unknown :math:`\lambda`
 living on the cell faces, one value per face per variable, which is what couples
 the cells to one another.

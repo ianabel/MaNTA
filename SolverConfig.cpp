@@ -194,21 +194,54 @@ void rejectUnknownKeys(ConfigSource const &source, Reader reader)
     }
 }
 
+// Present under its canonical name or any alias.
+bool given(ConfigSource const &source, const char *canonical)
+{
+    Entry const *e = findEntry(canonical);
+    if (source.contains(e->name))
+        return true;
+    for (auto const &a : e->aliases)
+        if (source.contains(a))
+            return true;
+    return false;
+}
+
 void checkRequired(ConfigSource const &source, Reader reader)
 {
     std::string missing;
+    auto want = [&](std::string_view name) {
+        missing += (missing.empty() ? "" : ", ") + std::string(name);
+    };
+
     for (auto const &e : schema())
+        if (isRequired(e, reader) && !given(source, e.name.data()))
+            want(e.name);
+
+    // The grid keys, whose requiredness a flat list cannot express: GridPoints
+    // supersedes GridSize, LowerBoundary and UpperBoundary outright -- makeGrid
+    // ignores all three when it is present -- and a restart reads the mesh from its
+    // file. GridSize used to be unconditionally required even so, which meant a run
+    // driven by explicit boundaries had to carry a number that was then discarded;
+    // every graded-mesh spike in MESH-REFINEMENT.md passed a dummy for that reason.
+    //
+    // Folded into this aggregation rather than checked after the parse, so that a
+    // config missing several of these is told about all of them at once. Checked
+    // against the *source* because absent and 0 are the same parsed value and must
+    // not be the same diagnosis.
+    const bool restarting = given(source, "restart") &&
+                            std::get<bool>(source.get("restart", Type::Bool));
+    if (!restarting && !given(source, "GridPoints"))
     {
-        if (!isRequired(e, reader))
-            continue;
-        bool present = source.contains(e.name);
-        for (auto const &a : e.aliases)
-            present = present || source.contains(a);
-        if (!present)
-            missing += (missing.empty() ? "" : ", ") + std::string(e.name);
+        for (const char *key : {"GridSize", "LowerBoundary", "UpperBoundary"})
+            if (!given(source, key))
+                want(key);
     }
+
     if (!missing.empty())
-        throw std::invalid_argument("Missing required configuration key(s): " + missing + ".");
+        throw std::invalid_argument(
+            "Missing required configuration key(s): " + missing +
+            ". The grid keys among those are not needed if GridPoints is given, or "
+            "on a restart, which reads its mesh from the file.");
 }
 
 } // namespace
@@ -227,18 +260,17 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
 #define READ(field, T) c.field = read<T>(source, E(#field), spelling(#field))
     READ(restart, bool);
     READ(RestartFile, std::string);
-    READ(High_Grid_Boundary, bool);
-    READ(Lower_Boundary_Fraction, double);
-    READ(Upper_Boundary_Fraction, double);
-    READ(Graded_Grid_Boundary, bool);
-    READ(Grading_Ratio, double);
-    READ(Grading_Cells, int);
-    READ(Grading_End, std::string);
-    READ(Polynomial_degree, unsigned);
-    READ(Grid_size, int);
-    READ(Grid_points, std::vector<double>);
-    READ(Lower_boundary, double);
-    READ(Upper_boundary, double);
+    READ(LowerBoundaryFraction, double);
+    READ(UpperBoundaryFraction, double);
+    READ(GradedGridBoundary, bool);
+    READ(GradingRatio, double);
+    READ(GradingCells, int);
+    READ(GradingEnd, std::string);
+    READ(PolynomialDegree, unsigned);
+    READ(GridSize, int);
+    READ(GridPoints, std::vector<double>);
+    READ(LowerBoundary, double);
+    READ(UpperBoundary, double);
     READ(tau, double);
     READ(delta_t, double);
     READ(t_initial, double);
@@ -276,56 +308,54 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     if (c.OutputFilename.empty())
         c.OutputFilename = source.outputFilenameFallback();
 
-    // The two mesh-shaping flags reshape the same boundary list from different
-    // rules, so exactly one may be on. Caught here rather than by having one win,
-    // because either silent order of precedence gives a mesh the user did not ask
-    // for and nothing would say so.
-    if (c.Graded_Grid_Boundary && c.High_Grid_Boundary)
-        throw std::invalid_argument(
-            "High_Grid_Boundary and Graded_Grid_Boundary both shape the mesh and "
-            "cannot both be set: the first puts cosine-spaced cells against *both* "
-            "ends, the second grades geometrically into one. Pick one, or give "
-            "Grid_points outright.");
+    // The alias machinery warns that the *name* changed. It cannot know that the
+    // *mesh* changed too, and it did: High_Grid_Boundary spaced its boundary-layer
+    // cells by a cosine rule, and this grades them geometrically. A file saying
+    // nothing but High_Grid_Boundary = true keeps its layer widths and its
+    // one-third-per-layer split and gets different cells inside them, so it will
+    // produce a different answer than an older MaNTA did. Silence would be wrong.
+    if (source.contains("High_Grid_Boundary"))
+        logmsg<LOG_LEVEL::WARNING>(
+            "High_Grid_Boundary now grades its boundary layers geometrically rather "
+            "than by the cosine rule it used to, so this run's mesh differs from the "
+            "one an older MaNTA built from the same file. GradingRatio (default {}) "
+            "sets the spacing; GridPoints reproduces a specific mesh exactly.",
+            c.GradingRatio);
 
-    if (c.Graded_Grid_Boundary)
+    if (c.GradedGridBoundary)
     {
-        if (c.Grading_End != "Lower" && c.Grading_End != "Upper")
+        if (c.GradingEnd != "Lower" && c.GradingEnd != "Upper" && c.GradingEnd != "Both")
             throw std::invalid_argument(
-                "Grading_End must be \"Lower\" or \"Upper\"; got \"" + c.Grading_End +
-                "\". There is no \"Both\": use High_Grid_Boundary for both ends, or "
-                "give Grid_points.");
+                "GradingEnd must be \"Both\", \"Lower\" or \"Upper\"; got \"" +
+                c.GradingEnd + "\".");
 
-        // Defaulted from Grid_size rather than in the schema, since the schema's
-        // default cannot see another key. Half is the unsurprising choice; note
-        // that MESH-REFINEMENT.md §9 measures *more* graded cells as better on the
-        // one problem where this was studied -- 9 of 10 beat 5 of 10 by 48x -- so
-        // this default is conservative rather than optimal.
-        if (c.Grading_Cells == 0)
-            c.Grading_Cells = c.Grid_size / 2;
+        // Defaulted from GridSize rather than in the schema, because a schema
+        // default cannot see another key. A third per layer when grading both ends
+        // is what High_Grid_Boundary did, so a config that only ever said
+        // High_Grid_Boundary = true gets the same *split* it always had -- the
+        // spacing within each layer is what has changed. Half for a single layer.
+        //
+        // Both are conservative rather than optimal: MESH-REFINEMENT.md §9 measures
+        // more graded cells as better on the one problem where this was studied,
+        // 9 of 10 beating 5 of 10 by 48x.
+        if (c.GradingCells == 0)
+            c.GradingCells = (c.GradingEnd == "Both") ? c.GridSize / 3 : c.GridSize / 2;
 
-        // The rest of the geometry is validated inside gradedMeshPoints, which is
-        // where it can be tested without building a configuration. Only the pieces
-        // involving *other* keys are checked here.
-        if (c.Grid_size < 3)
+        // The geometry proper is validated inside gradedMeshPoints, which is where
+        // it can be tested without building a configuration. Only what involves
+        // *other* keys is checked here.
+        const int layers = (c.GradingEnd == "Both") ? 2 : 1;
+        const int least = 2 * layers + 1;
+        if (c.GridSize < least)
             throw std::invalid_argument(std::format(
-                "Graded_Grid_Boundary needs at least 3 cells -- two in the graded "
-                "layer and one outside it -- but Grid_size is {}.", c.Grid_size));
+                "GradedGridBoundary with GradingEnd = \"{}\" needs at least {} cells "
+                "-- two per graded layer and one outside them -- but GridSize is {}.",
+                c.GradingEnd, least, c.GridSize));
 
-        if (!c.Grid_points.empty())
+        if (!c.GridPoints.empty())
             logmsg<LOG_LEVEL::WARNING>(
-                "Graded_Grid_Boundary is set but Grid_points was given too; the "
+                "GradedGridBoundary is set but GridPoints was given too; the "
                 "explicit boundaries win and the grading is ignored.");
-    }
-
-    // Conditional rules a flat required-list cannot express.
-    if (!c.restart && c.Grid_points.empty())
-    {
-        bool haveLower = source.contains("Lower_boundary");
-        bool haveUpper = source.contains("Upper_boundary");
-        if (!haveLower || !haveUpper)
-            throw std::invalid_argument(
-                "Missing required configuration key(s): Lower_boundary, Upper_boundary "
-                "-- required unless Grid_points is given or the run is a restart.");
     }
 
     // Only the dict surface has no file to fall back on. A TomlConfigSource
@@ -365,26 +395,23 @@ std::unique_ptr<Grid> makeGrid(SolverConfig const &config,
         return std::make_unique<Grid>(CellBoundaries);
     }
 
-    k = config.Polynomial_degree;
+    k = config.PolynomialDegree;
 
-    if (!config.Grid_points.empty())
-        return std::make_unique<Grid>(config.Grid_points);
+    if (!config.GridPoints.empty())
+        return std::make_unique<Grid>(config.GridPoints);
 
-    if (config.Grid_size < 4 && config.High_Grid_Boundary)
-        throw std::invalid_argument(
-            "Grid size must exceed 4 cells in order to implement dense boundaries");
-
-    if (config.Graded_Grid_Boundary)
+    if (config.GradedGridBoundary)
     {
-        const bool upper = config.Grading_End == "Upper";
-        const double fraction = upper ? config.Upper_Boundary_Fraction
-                                      : config.Lower_Boundary_Fraction;
+        const GradedEnd end = config.GradingEnd == "Lower"   ? GradedEnd::Lower
+                              : config.GradingEnd == "Upper" ? GradedEnd::Upper
+                                                             : GradedEnd::Both;
 
         auto points = gradedMeshPoints(
-            config.Lower_boundary, config.Upper_boundary,
-            static_cast<Grid::Index>(config.Grid_size),
-            static_cast<Grid::Index>(config.Grading_Cells),
-            fraction, config.Grading_Ratio, upper);
+            config.LowerBoundary, config.UpperBoundary,
+            static_cast<Grid::Index>(config.GridSize),
+            static_cast<Grid::Index>(config.GradingCells),
+            config.LowerBoundaryFraction, config.UpperBoundaryFraction,
+            config.GradingRatio, end);
 
         // The narrowest cell, relative to the domain, and the reason to say so.
         // MESH-REFINEMENT.md §9 measured the solver -- not the method -- as the
@@ -393,11 +420,16 @@ std::unique_ptr<Grid> makeGrid(SolverConfig const &config,
         // the narrowest cell was around 1e-6 of the span, and below about 1e-7 no
         // setting of any key got through. The law that makes grading worth doing
         // was still holding at the last mesh that converged, so a run that dies
-        // here has not run out of accuracy to gain and the failure will point at
+        // here has not run out of accuracy to gain, and the failure will point at
         // IDA rather than at the mesh.
-        const double span = config.Upper_boundary - config.Lower_boundary;
-        const double narrowest = upper ? points.back() - points[points.size() - 2]
-                                       : points[1] - points[0];
+        //
+        // Taken as a min over every cell rather than from whichever end is graded,
+        // so it stays right for Both and cannot be wrong for one end.
+        const double span = config.UpperBoundary - config.LowerBoundary;
+        double narrowest = span;
+        for (std::size_t i = 0; i + 1 < points.size(); ++i)
+            narrowest = std::min(narrowest, points[i + 1] - points[i]);
+
         if (span > 0.0 && narrowest / span < 1.0e-6)
             logmsg<LOG_LEVEL::WARNING>(
                 "The graded mesh's narrowest cell is {:.2e} of the domain. Past "
@@ -409,22 +441,15 @@ std::unique_ptr<Grid> makeGrid(SolverConfig const &config,
         return std::make_unique<Grid>(points);
     }
 
-    // Grid ignores both fractions when High_Grid_Boundary is false
-    // (gridStructures.hpp:81), so passing them unconditionally is what the two
-    // old readers did between them -- MaNTA.cpp zeroed them, PyRunner did not,
-    // and the grids came out identical either way. Worth stating because it
-    // looks like a divergence somebody should fix.
-    return std::make_unique<Grid>(config.Lower_boundary, config.Upper_boundary,
-                                  config.Grid_size, config.High_Grid_Boundary,
-                                  config.Lower_Boundary_Fraction,
-                                  config.Upper_Boundary_Fraction);
+    return std::make_unique<Grid>(config.LowerBoundary, config.UpperBoundary,
+                                  config.GridSize);
 }
 
 // --- restartRunOrder --------------------------------------------------------
 
 unsigned int restartRunOrder(SolverConfig const &config, unsigned int fileOrder)
 {
-    if (!config.restart || config.Polynomial_degree == fileOrder)
+    if (!config.restart || config.PolynomialDegree == fileOrder)
         return fileOrder;
 
     // Loud rather than silent, in both directions. Refining puts the stored
@@ -432,13 +457,13 @@ unsigned int restartRunOrder(SolverConfig const &config, unsigned int fileOrder)
     // approximation, and a user who reached this by copying a config from
     // elsewhere should be told which number won.
     logmsg<LOG_LEVEL::WARNING>(
-        "Restart file was written at Polynomial_degree = {}, but the "
+        "Restart file was written at PolynomialDegree = {}, but the "
         "configuration asks for {}. The state will be projected onto the new "
         "space rather than copied{}.",
-        fileOrder, config.Polynomial_degree,
-        config.Polynomial_degree < fileOrder ? ", which discards information at this resolution" : "");
+        fileOrder, config.PolynomialDegree,
+        config.PolynomialDegree < fileOrder ? ", which discards information at this resolution" : "");
 
-    return config.Polynomial_degree;
+    return config.PolynomialDegree;
 }
 
 // --- applySolverConfig ------------------------------------------------------

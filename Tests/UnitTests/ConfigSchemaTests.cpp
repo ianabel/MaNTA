@@ -65,7 +65,7 @@ BOOST_AUTO_TEST_CASE(no_alias_collides_with_a_name_or_another_alias)
 
 BOOST_AUTO_TEST_CASE(find_entry_resolves_canonical_names)
 {
-    auto const *e = findEntry("Polynomial_degree");
+    auto const *e = findEntry("PolynomialDegree");
     BOOST_REQUIRE(e != nullptr);
     BOOST_TEST(e->type == Type::UInt);
     BOOST_TEST(isRequired(*e, Reader::Toml));
@@ -91,7 +91,7 @@ BOOST_AUTO_TEST_CASE(find_entry_returns_null_for_an_unknown_key)
 BOOST_AUTO_TEST_CASE(nearest_key_suggests_the_obvious_typo)
 {
     BOOST_TEST(nearestKey("Superconvergnet") == "Superconvergent");
-    BOOST_TEST(nearestKey("Poly_degree") == "Polynomial_degree");
+    BOOST_TEST(nearestKey("Poly_degree") == "PolynomialDegree");
     BOOST_TEST(nearestKey("delta_T") == "delta_t");
 }
 

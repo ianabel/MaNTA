@@ -31,7 +31,7 @@ G = int 0.5 u^2 dx,
     dG/dkappa = -S^2 / (120 kappa^3)
     dG/dS     =  S   / (120 kappa^2)
 
-u is a quadratic and 0.5 u^2 a quartic, so at Polynomial_degree = 4 both the
+u is a quadratic and 0.5 u^2 a quartic, so at PolynomialDegree = 4 both the
 solution and the objective's quadrature are exact and the closed form is a
 legitimate reference rather than an approximation.
 """
@@ -178,10 +178,10 @@ def adjoint_config(tmp_path, **overrides):
     cfg = {
         # k = 4 makes both the quadratic solution and the quartic objective
         # integrand exact, so the closed-form reference is meaningful.
-        "Polynomial_degree": 4,
-        "Grid_size": 6,
-        "Lower_boundary": 0.0,
-        "Upper_boundary": 1.0,
+        "PolynomialDegree": 4,
+        "GridSize": 6,
+        "LowerBoundary": 0.0,
+        "UpperBoundary": 1.0,
         "delta_t": 0.5,
         # Tight, so the finite-difference reference is limited by the step size
         # rather than by integration error.
@@ -763,8 +763,8 @@ class SpatialObjectiveAdjoint(MaNTA.AdjointProblem):
 def test_spatial_gradients_keep_dgdp_in_the_layout_G_p_uses(tmp_path):
     """G_p is (nPoints, np), and dGFndp has to arrive that way round."""
     system = ParametricDiffusion(np.array([KAPPA0, SOURCE0]))
-    cfg = adjoint_config(tmp_path, Polynomial_degree=3, Grid_size=4)
-    nPoints = cfg["Grid_size"] * (cfg["Polynomial_degree"] + 1)
+    cfg = adjoint_config(tmp_path, PolynomialDegree=3, GridSize=4)
+    nPoints = cfg["GridSize"] * (cfg["PolynomialDegree"] + 1)
 
     adjoint = SpatialObjectiveAdjoint()
     system.createAdjointProblem = lambda: adjoint
@@ -897,7 +897,7 @@ def spatial_solve(points, source_nodes, tmp_path):
     runner = MaNTA.Runner(system)
     runner.configure(
         adjoint_config(
-            tmp_path, Polynomial_degree=SPATIAL_K, Grid_size=SPATIAL_NCELLS
+            tmp_path, PolynomialDegree=SPATIAL_K, GridSize=SPATIAL_NCELLS
         )
     )
     runner.run(T_FINAL)

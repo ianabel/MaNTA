@@ -297,7 +297,7 @@ Vector PyRunner::getPostprocessedSolution(
   Postprocessor const *pp = system->getPostprocessor();
   if (pp == nullptr)
     throw std::runtime_error("No postprocessed solution is available: it "
-                             "requires Polynomial_degree >= 1 and a solver that "
+                             "requires PolynomialDegree >= 1 and a solver that "
                              "has been run at least once");
 
   // computeUStar is what fills the reconstruction, and it is driven by output

@@ -71,10 +71,10 @@ class LinearDiffusion(MaNTA.TransportSystem):
 
 def base_config(tmp_path, **overrides):
     cfg = {
-        "Polynomial_degree": 2,
-        "Grid_size": 8,
-        "Lower_boundary": 0.0,
-        "Upper_boundary": 1.0,
+        "PolynomialDegree": 2,
+        "GridSize": 8,
+        "LowerBoundary": 0.0,
+        "UpperBoundary": 1.0,
         "delta_t": 0.05,
         "OutputFilename": str(tmp_path / "runner_test"),
         "WriteOutput": False,
@@ -89,52 +89,52 @@ def base_config(tmp_path, **overrides):
 def test_missing_required_parameters_are_all_reported(tmp_path):
     runner = MaNTA.Runner(LinearDiffusion())
 
-    # Polynomial_degree, Grid_size, delta_t and OutputFilename are required.
+    # PolynomialDegree, GridSize, delta_t and OutputFilename are required.
     with pytest.raises(RuntimeError) as excinfo:
         runner.configure({})
 
     message = str(excinfo.value)
-    for key in ("Polynomial_degree", "Grid_size", "delta_t", "OutputFilename"):
+    for key in ("PolynomialDegree", "GridSize", "delta_t", "OutputFilename"):
         assert key in message, f"{key} missing from error: {message}"
 
 
 def test_one_missing_required_parameter_is_named(tmp_path):
     runner = MaNTA.Runner(LinearDiffusion())
     cfg = base_config(tmp_path)
-    del cfg["Grid_size"]
+    del cfg["GridSize"]
 
     with pytest.raises(RuntimeError) as excinfo:
         runner.configure(cfg)
-    assert "Grid_size" in str(excinfo.value)
+    assert "GridSize" in str(excinfo.value)
 
 
 def test_boundaries_are_required_without_grid_points(tmp_path):
-    """Lower_boundary/Upper_boundary are needed unless Grid_points is given.
+    """LowerBoundary/UpperBoundary are needed unless GridPoints is given.
 
     They are absent from the `params` table, so the up-front required-parameter
     check cannot see them. Omitting them used to surface as "Failed to retrieve
-    default value for key: Lower_boundary; possible type mismatch" -- an error
+    default value for key: LowerBoundary; possible type mismatch" -- an error
     naming a cause that had nothing to do with the problem.
     """
     runner = MaNTA.Runner(LinearDiffusion())
     cfg = base_config(tmp_path)
-    del cfg["Lower_boundary"]
-    del cfg["Upper_boundary"]
+    del cfg["LowerBoundary"]
+    del cfg["UpperBoundary"]
 
     with pytest.raises(RuntimeError) as excinfo:
         runner.configure(cfg)
     message = str(excinfo.value)
-    assert "Lower_boundary" in message
+    assert "LowerBoundary" in message
     assert "type mismatch" not in message
 
 
 def test_wrong_parameter_type_is_rejected(tmp_path):
     runner = MaNTA.Runner(LinearDiffusion())
-    cfg = base_config(tmp_path, Grid_size="not an integer")
+    cfg = base_config(tmp_path, GridSize="not an integer")
 
     with pytest.raises(RuntimeError) as excinfo:
         runner.configure(cfg)
-    assert "Grid_size" in str(excinfo.value)
+    assert "GridSize" in str(excinfo.value)
 
 
 def test_configure_accepts_the_minimal_required_set(tmp_path):
@@ -156,9 +156,12 @@ def test_configure_accepts_the_minimal_required_set(tmp_path):
         ("WriteOutput", False),
         ("zeroFlux", False),
         ("initialTimestep", 0.0),
-        ("High_Grid_Boundary", False),
-        ("Lower_Boundary_Fraction", 0.25),
-        ("Upper_Boundary_Fraction", 0.25),
+        ("GradedGridBoundary", False),
+        ("GradingRatio", 0.4),
+        ("GradingCells", 2),
+        ("GradingEnd", "Lower"),
+        ("LowerBoundaryFraction", 0.25),
+        ("UpperBoundaryFraction", 0.25),
         ("restart", False),
     ],
 )
@@ -172,26 +175,45 @@ def test_every_optional_parameter_is_accepted(tmp_path, key, value):
     runner.configure(base_config(tmp_path, **{key: value}))
 
 
-def test_high_grid_boundary_builds_a_clustered_grid(tmp_path):
+def test_a_graded_grid_runs_through_the_dict_surface(tmp_path):
+    """Both ends graded, which is what High_Grid_Boundary now means."""
     runner = MaNTA.Runner(LinearDiffusion())
     runner.configure(
         base_config(
             tmp_path,
-            Grid_size=9,
-            High_Grid_Boundary=True,
-            Lower_Boundary_Fraction=0.2,
-            Upper_Boundary_Fraction=0.2,
+            GridSize=9,
+            GradedGridBoundary=True,
+            LowerBoundaryFraction=0.2,
+            UpperBoundaryFraction=0.2,
         )
     )
     runner.run(0.05)
 
 
+def test_the_retired_cosine_spelling_still_configures(tmp_path):
+    """High_Grid_Boundary is a deprecated alias of GradedGridBoundary.
+
+    The alias is why the rename touched no driver in the tree, and it has to work
+    on the dict surface as well as the TOML one -- they share the schema, but only
+    a test says so.
+    """
+    runner = MaNTA.Runner(LinearDiffusion())
+    runner.configure(base_config(tmp_path, GridSize=9, High_Grid_Boundary=True))
+    runner.run(0.05)
+
+
+def test_a_grid_key_given_under_both_spellings_is_refused(tmp_path):
+    runner = MaNTA.Runner(LinearDiffusion())
+    with pytest.raises(RuntimeError, match="more than one spelling"):
+        runner.configure(base_config(tmp_path, GridSize=9, Grid_size=9))
+
+
 def test_explicit_grid_points_are_honoured(tmp_path):
     points = [0.0, 0.1, 0.3, 0.6, 1.0]
     runner = MaNTA.Runner(LinearDiffusion())
-    cfg = base_config(tmp_path, Grid_size=len(points) - 1, Grid_points=points)
-    del cfg["Lower_boundary"]
-    del cfg["Upper_boundary"]
+    cfg = base_config(tmp_path, GridSize=len(points) - 1, GridPoints=points)
+    del cfg["LowerBoundary"]
+    del cfg["UpperBoundary"]
     runner.configure(cfg)
     runner.run(0.05)
 
@@ -228,7 +250,7 @@ def test_solution_converges_towards_the_steady_state(tmp_path):
     """-kappa u'' = S with u(0) = u(1) = 0 has u = S x (1-x) / (2 kappa)."""
     kappa, source = 1.0, 1.0
     runner = MaNTA.Runner(LinearDiffusion(kappa=kappa, source=source))
-    runner.configure(base_config(tmp_path, Polynomial_degree=3, Grid_size=16))
+    runner.configure(base_config(tmp_path, PolynomialDegree=3, GridSize=16))
     runner.run(3.0)  # long enough to be near steady state
 
     xs = [0.125 * i for i in range(1, 8)]
@@ -251,7 +273,7 @@ def test_get_derivative_returns_q_against_the_closed_form(tmp_path):
     """
     kappa, source = 2.0, 1.0
     runner = MaNTA.Runner(LinearDiffusion(kappa=kappa, source=source))
-    runner.configure(base_config(tmp_path, Polynomial_degree=3, Grid_size=16))
+    runner.configure(base_config(tmp_path, PolynomialDegree=3, GridSize=16))
     runner.run(3.0)
 
     xs = [0.125 * i for i in range(1, 8)]
@@ -268,7 +290,7 @@ def test_get_derivative_samples_the_nodes_like_get_solution(tmp_path):
     """With no explicit points both read the same abscissae, so they must agree
     in length -- a driver zips them together."""
     runner = MaNTA.Runner(LinearDiffusion())
-    runner.configure(base_config(tmp_path, Polynomial_degree=3, Grid_size=8))
+    runner.configure(base_config(tmp_path, PolynomialDegree=3, GridSize=8))
     runner.run(0.1)
 
     u = np.asarray(runner.getSolution(0, None))
@@ -279,7 +301,7 @@ def test_get_derivative_samples_the_nodes_like_get_solution(tmp_path):
 
 def test_get_derivative_rejects_points_outside_the_grid(tmp_path):
     runner = MaNTA.Runner(LinearDiffusion())
-    runner.configure(base_config(tmp_path, Polynomial_degree=2, Grid_size=4))
+    runner.configure(base_config(tmp_path, PolynomialDegree=2, GridSize=4))
     runner.run(0.05)
 
     with pytest.raises(IndexError):
@@ -290,7 +312,7 @@ def test_run_ss_reaches_the_same_steady_state(tmp_path):
     kappa, source = 1.0, 1.0
     runner = MaNTA.Runner(LinearDiffusion(kappa=kappa, source=source))
     runner.configure(
-        base_config(tmp_path, Polynomial_degree=3, Grid_size=16, SteadyStateTolerance=1e-4)
+        base_config(tmp_path, PolynomialDegree=3, GridSize=16, SteadyStateTolerance=1e-4)
     )
     runner.run_ss()
 
@@ -321,7 +343,7 @@ def test_reconfigure_and_rerun_in_one_process(tmp_path):
 
     for grid_size, degree in [(8, 2), (17, 3), (11, 4)]:
         runner.configure(
-            base_config(tmp_path, Grid_size=grid_size, Polynomial_degree=degree)
+            base_config(tmp_path, GridSize=grid_size, PolynomialDegree=degree)
         )
         runner.run(3.0)
         u = np.asarray(runner.getSolution(0, xs))
@@ -361,7 +383,7 @@ def test_get_solution_without_points_uses_the_output_grid(tmp_path):
 
     everywhere = np.asarray(runner.getSolution(0, None))
 
-    # Grid_size cells at Polynomial_degree k give nCells * (k + 1) nodes.
+    # GridSize cells at PolynomialDegree k give nCells * (k + 1) nodes.
     assert everywhere.shape == (8 * (2 + 1),)
     assert np.all(np.isfinite(everywhere))
 
@@ -717,10 +739,10 @@ XS_RESTART = [0.125 * i for i in range(1, 8)]
 def _cwd_config(**overrides):
     """base_config, but with output names left relative to the cwd."""
     cfg = {
-        "Polynomial_degree": 2,
-        "Grid_size": 8,
-        "Lower_boundary": 0.0,
-        "Upper_boundary": 1.0,
+        "PolynomialDegree": 2,
+        "GridSize": 8,
+        "LowerBoundary": 0.0,
+        "UpperBoundary": 1.0,
         "delta_t": 0.05,
         "WriteOutput": False,
     }

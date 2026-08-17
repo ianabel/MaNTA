@@ -66,10 +66,10 @@ MaNTA.registerPhysicsCase(CASE_NAME, Diffusion)
 
 BASE = {
     "TransportSystem": f'"{CASE_NAME}"',
-    "Polynomial_degree": "2",
-    "Grid_size": "6",
-    "Lower_boundary": "0.0",
-    "Upper_boundary": "1.0",
+    "PolynomialDegree": "2",
+    "GridSize": "6",
+    "LowerBoundary": "0.0",
+    "UpperBoundary": "1.0",
     "t_final": "0.1",
     "delta_t": "0.1",
     "OutputPoints": "11",
@@ -106,11 +106,11 @@ def test_the_baseline_config_runs():
     [
         # TOML distinguishes 1 from 1.0. A config author writing an integer
         # means the number, and every float-valued option has an is_integer()
-        # branch to accept it -- but Lower_boundary/Upper_boundary called
+        # branch to accept it -- but LowerBoundary/UpperBoundary called
         # as_floating() inside that branch and threw toml::type_error. The
         # equivalent defect in getFloat/getFloatWithDefault was fixed earlier;
         # these two are open-coded in runManta and were missed.
-        {"Lower_boundary": "0", "Upper_boundary": "1"},
+        {"LowerBoundary": "0", "UpperBoundary": "1"},
         {"tau": "1"},
         {"t_final": "1", "delta_t": "1"},
         {"Relative_tolerance": "1"},
@@ -167,10 +167,10 @@ def test_a_wrong_length_absolute_tolerance_is_silently_ignored(tmp_path):
 def test_high_grid_boundary_is_accepted_with_enough_cells(tmp_path):
     cfg = write_config(
         tmp_path,
-        Grid_size=12,
+        GridSize=12,
         High_Grid_Boundary="true",
-        Lower_Boundary_Fraction="0.25",
-        Upper_Boundary_Fraction="0.25",
+        LowerBoundaryFraction="0.25",
+        UpperBoundaryFraction="0.25",
     )
     assert MaNTA.run(cfg) == 0
 
@@ -228,10 +228,10 @@ def test_the_runner_also_defaults_dat_output_off(tmp_path):
         runner = MaNTA.Runner(Diffusion(None, None))
         runner.configure(
             {
-                "Polynomial_degree": 2,
-                "Grid_size": 6,
-                "Lower_boundary": 0.0,
-                "Upper_boundary": 1.0,
+                "PolynomialDegree": 2,
+                "GridSize": 6,
+                "LowerBoundary": 0.0,
+                "UpperBoundary": 1.0,
                 "delta_t": 0.1,
                 "OutputFilename": "runner_dat_default",
             }
@@ -266,22 +266,37 @@ def test_a_missing_restart_file_returns_one(tmp_path):
 
 
 def test_a_non_integer_polynomial_degree_is_rejected(tmp_path):
-    with pytest.raises(ValueError, match="Polynomial_degree.*must be a non-negative integer"):
-        MaNTA.run(write_config(tmp_path, Polynomial_degree="2.5"))
+    with pytest.raises(ValueError, match="PolynomialDegree.*must be a non-negative integer"):
+        MaNTA.run(write_config(tmp_path, PolynomialDegree="2.5"))
 
 
 def test_a_non_integer_grid_size_is_rejected(tmp_path):
-    with pytest.raises(ValueError, match="Grid_size.*must be an integer"):
-        MaNTA.run(write_config(tmp_path, Grid_size="6.0"))
+    with pytest.raises(ValueError, match="GridSize.*must be an integer"):
+        MaNTA.run(write_config(tmp_path, GridSize="6.0"))
 
 
 def test_a_small_grid_with_dense_boundaries_is_rejected(tmp_path):
-    """The clustered grid divides nCells into three, so it needs at least four."""
-    with pytest.raises(ValueError, match="Grid size must exceed 4 cells"):
-        MaNTA.run(write_config(tmp_path, Grid_size=3, High_Grid_Boundary="true"))
+    """Grading both ends needs two cells per layer plus one between them."""
+    with pytest.raises(ValueError, match="needs at least 5 cells"):
+        MaNTA.run(write_config(tmp_path, GridSize=4, GradedGridBoundary="true"))
 
 
-@pytest.mark.parametrize("key", ["Lower_boundary", "Upper_boundary"])
+def test_the_retired_cosine_spelling_is_accepted_as_an_alias(tmp_path):
+    """High_Grid_Boundary now means GradedGridBoundary, and still loads.
+
+    The alias is why this rename touched no config file in the tree. Its *mesh*
+    changed from cosine-spaced to geometrically graded, which the solver warns
+    about separately; what is asserted here is only that the key still works.
+    """
+    MaNTA.run(write_config(tmp_path, GridSize=9, High_Grid_Boundary="true"))
+
+
+def test_a_key_given_under_both_spellings_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="more than one spelling"):
+        MaNTA.run(write_config(tmp_path, GridSize=9, Grid_size=9))
+
+
+@pytest.mark.parametrize("key", ["LowerBoundary", "UpperBoundary"])
 def test_a_non_numeric_boundary_is_rejected(tmp_path, key):
     with pytest.raises(ValueError, match=f"{key}.*must be a number"):
         MaNTA.run(write_config(tmp_path, **{key: '"not a number"'}))

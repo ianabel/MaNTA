@@ -376,8 +376,12 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
 
   py::class_<Grid>(m, "Grid")
       .def(py::init<>(), py::return_value_policy::reference)
-      .def(py::init<Grid::Position, Grid::Position, Grid::Index, bool, double,
-                    double>(),
+      .def(py::init<Grid::Position, Grid::Position, Grid::Index>(),
+           py::return_value_policy::reference)
+      // Explicit boundaries, which is how a Python caller reaches a non-uniform
+      // mesh now that the `highGridBoundary` flag on the constructor above is
+      // gone. Configure a Runner with GridPoints for the same thing from a dict.
+      .def(py::init<std::vector<Grid::Position> const &>(),
            py::return_value_policy::reference)
       .def("getNCells", &Grid::getNCells);
 

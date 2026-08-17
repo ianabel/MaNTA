@@ -116,10 +116,10 @@ XS = [0.125, 0.25, 0.5, 0.75, 0.875]
 def solved(system, t_final, tmp_path, stem):
     runner = manta.Runner(system)
     runner.configure({
-        "Polynomial_degree": 4,
-        "Grid_size": 8,
-        "Lower_boundary": 0.0,
-        "Upper_boundary": 1.0,
+        "PolynomialDegree": 4,
+        "GridSize": 8,
+        "LowerBoundary": 0.0,
+        "UpperBoundary": 1.0,
         "delta_t": t_final,
         "Relative_tolerance": 1e-11,
         "Absolute_tolerance": [1e-12],
@@ -256,8 +256,8 @@ def test_the_hook_receives_the_variable_index(tmp_path):
     system = TwoVar()
     runner = manta.Runner(system)
     runner.configure({
-        "Polynomial_degree": 4, "Grid_size": 8,
-        "Lower_boundary": 0.0, "Upper_boundary": 1.0,
+        "PolynomialDegree": 4, "GridSize": 8,
+        "LowerBoundary": 0.0, "UpperBoundary": 1.0,
         "delta_t": T, "Relative_tolerance": 1e-11,
         "Absolute_tolerance": [1e-12], "MinStepSize": 1e-14,
         "OutputFilename": str(tmp_path / "afn_py_2var"), "WriteOutput": False,

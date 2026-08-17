@@ -25,10 +25,10 @@ A minimal file
 
    TransportSystem = "LinearDiffusion"
 
-   Polynomial_degree = 3
-   Grid_size = 30
-   Lower_boundary = -1.0
-   Upper_boundary =  1.0
+   PolynomialDegree = 3
+   GridSize = 30
+   LowerBoundary = -1.0
+   UpperBoundary =  1.0
 
    t_final = 1.0
    delta_t = 0.1
@@ -78,22 +78,22 @@ Problem definition
      - ``[]``, *file only*
      - Shared objects to ``dlopen`` before instantiating, for cases built
        outside this tree. See :doc:`out_of_tree`.
-   * - ``Polynomial_degree``
+   * - ``PolynomialDegree``
      - *required*
      - The degree :math:`k` of the per-cell polynomial basis; each field carries
        :math:`k+1` coefficients per cell. ``Superconvergent`` requires
        :math:`k \ge 1`.
-   * - ``Grid_size``
+   * - ``GridSize``
      - *required*
      - Number of cells.
-   * - ``Lower_boundary``, ``Upper_boundary``
+   * - ``LowerBoundary``, ``UpperBoundary``
      - *required*
-     - The ends of the domain. Required unless ``Grid_points`` is given or the
+     - The ends of the domain. Required unless ``GridPoints`` is given or the
        run is a restart, both of which supply the cell boundaries themselves.
-   * - ``Grid_points``
+   * - ``GridPoints``
      - ``[]``
-     - Explicit cell boundaries, as an array. Supersedes ``Lower_boundary``,
-       ``Upper_boundary`` and ``Grid_size``.
+     - Explicit cell boundaries, as an array. Supersedes ``LowerBoundary``,
+       ``UpperBoundary`` and ``GridSize``.
    * - ``zeroFlux``
      - ``false``
      - What a **Neumann** boundary condition constrains: with this off the case's
@@ -104,79 +104,105 @@ Problem definition
        :ref:`mixed condition <mixed-boundaries>` with :math:`d = 1` when it is set
        and :math:`b = 1` when it is not, so the per-variable, per-end version of
        the same choice is available to a case through its own spec.
-   * - ``High_Grid_Boundary``
+   * - ``GradedGridBoundary``
      - ``false``
-     - Refine the grid towards both ends instead of spacing cells uniformly, on a
-       cosine spacing. Mutually exclusive with ``Graded_Grid_Boundary``.
-   * - ``Graded_Grid_Boundary``
-     - ``false``
-     - Grade the grid *geometrically* into one end. See
-       :ref:`graded-meshes` — on a problem whose solution is singular at that end
-       this is worth orders of magnitude at an unchanged cell count.
-   * - ``Grading_Ratio``
+     - Grade the grid *geometrically* towards the ends of the domain instead of
+       spacing cells uniformly. See :ref:`graded-meshes` — on a problem whose
+       solution is singular at an end this is worth orders of magnitude at an
+       unchanged cell count. Replaces ``High_Grid_Boundary``, which spaced the same
+       boundary layers by a cosine rule; that spelling still works and warns, but
+       **the mesh it builds has changed**.
+   * - ``GradingRatio``
      - ``0.3``
-     - Width ratio between neighbouring cells in the graded layer, strictly
-       between 0 and 1. Smaller grades harder.
-   * - ``Grading_Cells``
+     - Width ratio between neighbouring cells in a graded layer, strictly between
+       0 and 1. Smaller grades harder.
+   * - ``GradingCells``
      - ``0``
-     - Cells inside the graded layer; at least 2, and below ``Grid_size``. ``0``
-       means half of ``Grid_size``.
-   * - ``Grading_End``
-     - ``"Lower"``
-     - Which end ``Graded_Grid_Boundary`` refines into, ``"Lower"`` or
-       ``"Upper"``. There is no ``"Both"``: use ``High_Grid_Boundary``, or give
-       ``Grid_points``.
-   * - ``Lower_Boundary_Fraction``, ``Upper_Boundary_Fraction``
+     - Cells in *each* graded layer; at least 2, and few enough to leave one cell
+       outside them. ``0`` means a third of ``GridSize`` per layer for ``"Both"``,
+       half for a single end.
+   * - ``GradingEnd``
+     - ``"Both"``
+     - Which end ``GradedGridBoundary`` refines into: ``"Both"``, ``"Lower"`` or
+       ``"Upper"``.
+   * - ``LowerBoundaryFraction``, ``UpperBoundaryFraction``
      - ``0.2``
-     - The fraction of the domain at each end that is refined. Read by
-       ``High_Grid_Boundary`` for both ends, and by ``Graded_Grid_Boundary`` for
-       whichever end ``Grading_End`` names.
+     - The fraction of the domain at each end that is refined. Only the one
+       belonging to a graded end is read, so the other may be left alone.
 
 .. _graded-meshes:
 
-Grading the mesh into one end
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Grading the mesh towards the ends
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``Graded_Grid_Boundary`` puts ``Grading_Cells`` cells over the layer of width
-``Lower_Boundary_Fraction × (Upper_boundary − Lower_boundary)`` against the graded
-end, each ``Grading_Ratio`` times the width of its outward neighbour, and spaces
-the remaining ``Grid_size − Grading_Cells`` uniformly over the rest:
+``GradedGridBoundary`` puts ``GradingCells`` cells over the layer of width
+``LowerBoundaryFraction × (UpperBoundary − LowerBoundary)`` against each graded
+end, each ``GradingRatio`` times the width of its inward neighbour, and spaces the
+remaining cells uniformly over what is left. ``GradingEnd`` chooses which ends
+get a layer; the default is both.
+
+.. warning::
+
+   The default, ``GradingEnd = "Both"``, is what ``High_Grid_Boundary`` meant and
+   is not tuned to any particular problem — it is a boundary-layer mesh, not an
+   optimised one. On Shestakov's problem, where the feature is at the lower end
+   alone, the defaults at ``GridSize = 10`` give a **worse** answer than a uniform
+   mesh (1.65e-02 against 4.91e-03) for two reasons worth knowing: half the graded
+   cells are spent at the regular upper end, and the four remaining bulk cells no
+   longer put a boundary on the source kink at :math:`x = 0.1`. Cell alignment with
+   a kink is worth a factor of 4–7 on its own.
+
+   So grading is a tool to aim, not a switch to flip. Name the end, and choose
+   ``LowerBoundaryFraction`` so a cell boundary lands on any interior feature.
+
+Grading one end, which is the configuration the measurements below were taken on:
 
 .. code-block:: toml
 
    [configuration]
-   Grid_size = 10
-   Graded_Grid_Boundary = true
-   Grading_Cells = 9              # nine cells inside the layer, one outside
-   Grading_Ratio = 0.3
-   Lower_Boundary_Fraction = 0.1  # the layer is the lower 10% of the domain
+   GridSize = 10
+   GradedGridBoundary = true
+   GradingEnd = "Lower"
+   GradingCells = 9              # nine cells inside the layer, one outside
+   GradingRatio = 0.3
+   LowerBoundaryFraction = 0.1   # the layer is the lower 10% of the domain
 
 On ``[0, 1]`` that gives cell boundaries at 0, 6.56e-06, 2.19e-05, 7.29e-05,
 2.43e-04, 8.10e-04, 2.70e-03, 9.00e-03, 0.03, 0.1, 1 — ten cells, the narrowest
 against the axis and 137000 times narrower than the widest.
 
-**The cell touching the graded end is the whole point, and its width is**
+**The cell touching a graded end is the whole point, and its width is**
 
 .. math::
 
    h_0 = \mathtt{fraction} \times (\mathtt{Upper} - \mathtt{Lower})
-         \times \mathtt{Grading\_Ratio}^{\,\mathtt{Grading\_Cells} - 1}
+         \times \mathtt{GradingRatio}^{\,\mathtt{GradingCells} - 1}
 
 Note this is *not* a pure geometric progression. That closing cell runs all the
 way to the end, so it is :math:`1/(1-r)` wider than continuing the progression
 would give; the first width ratio inside the layer is :math:`(1-r)/r` and every
 later one is :math:`1/r`. That is what makes :math:`h_0` the clean expression
-above, and it is what the tolerance in
+above, and it is what
 ``a_graded_mesh_puts_the_layer_cells_in_a_geometric_progression`` pins.
 
 **Why bother.** On Shestakov's problem — an ``x^{4/3}`` singularity at the axis —
 the error was measured to be :math:`0.0487\,h_0` and to depend on **nothing else**,
 not even on the cell count, over a 4600× range of :math:`h_0` and across both
-uniform and graded meshes. At a fixed 10 cells and ``Polynomial_degree = 5``, i.e.
+uniform and graded meshes. At a fixed 10 cells and ``PolynomialDegree = 5``, i.e.
 an unchanged 60 degrees of freedom, that takes the relative error from 4.91e-03 to
 3.29e-07: a factor of **14900**, for 1.5× the physics evaluations. For comparison,
 *quadrupling* the budget to 40 uniform cells buys 4.0×. Redistributing cells is
 worth far more here than adding them. ``MESH-REFINEMENT.md`` has the measurements.
+
+.. note::
+
+   **This replaced** ``High_Grid_Boundary``, which put a cosine-spaced layer
+   against each end. That spelling is a deprecated alias of
+   ``GradedGridBoundary`` and still loads, keeping its layer widths and its
+   one-third-of-the-cells-per-layer split — but the cells *inside* each layer are
+   now spaced geometrically, so **a file that used it will produce a different
+   answer than it did before**. The run says so at ``WARNING``. Give
+   ``GridPoints`` to reproduce a specific old mesh exactly.
 
 Three things to expect:
 
@@ -194,7 +220,7 @@ Three things to expect:
   :math:`10^{-6}` saying so, because the failure that follows points at IDA rather
   than at the mesh.
 * **Grading into the upper end is slightly less exact than into the lower**, and
-  irreducibly so: the boundary next to ``Upper_boundary`` is a number near it, so
+  irreducibly so: the boundary next to ``UpperBoundary`` is a number near it, so
   the narrowest cell's *width* is a difference of nearly equal numbers and carries
   a relative error of about :math:`\varepsilon / h_0`. It is 3e-11 at the grading
   above and only matters at far harder ones.
@@ -283,7 +309,7 @@ Output
    * - ``OutputPoints``
      - ``301``
      - Number of **spatial** points at which the solution is sampled for output.
-       Independent of ``Grid_size``: the solution is a polynomial per cell, so it
+       Independent of ``GridSize``: the solution is a polynomial per cell, so it
        can be sampled as finely as you like.
    * - ``WriteOutput``
      - ``true``
@@ -327,10 +353,10 @@ Restarting
 .. note::
 
    On a restart the grid is read from the restart file, not from the config
-   file — ``Grid_size``, ``Grid_points``, ``Lower_boundary`` and
-   ``Upper_boundary`` are ignored on that path.
+   file — ``GridSize``, ``GridPoints``, ``LowerBoundary`` and
+   ``UpperBoundary`` are ignored on that path.
 
-   ``Polynomial_degree`` is honoured. It defaults to the degree the file was
+   ``PolynomialDegree`` is honoured. It defaults to the degree the file was
    written at, and a different value resumes at that degree, projecting the
    stored state across the change and logging a warning. See
    :doc:`running` for what refining and coarsening each cost.

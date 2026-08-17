@@ -145,10 +145,10 @@ class IncompleteSystem(MaNTA.TransportSystem):
 
 def config(tmp_path, **overrides):
     cfg = {
-        "Polynomial_degree": 3,
-        "Grid_size": 8,
-        "Lower_boundary": 0.0,
-        "Upper_boundary": 1.0,
+        "PolynomialDegree": 3,
+        "GridSize": 8,
+        "LowerBoundary": 0.0,
+        "UpperBoundary": 1.0,
         "delta_t": 0.1,
         "OutputFilename": str(tmp_path / "trampoline"),
         "WriteOutput": False,
