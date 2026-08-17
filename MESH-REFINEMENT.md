@@ -23,7 +23,7 @@ and the retractions are recorded deliberately.
 | Landed on `main` | the two side quests, **#13** restart use-after-free and **#14** `getDerivative`; then **#15** steady-state output, PTC diagnostics and the SER config keys — most of step 2 below; then **#16**, a restart that can resume at a different polynomial degree, which is step 4's state transfer |
 | On this branch | steps 1–3 below: `Grid` validation, the merit function named and measured, and the modal sensor built — plus the merit function now **weighted** so the tolerance is mesh-independent near a solution, which is what step 2 was measuring towards. Merged up to `main` at `c585326`; no PR yet. |
 | In review | **#17**, step 4 — global-`k` by Giorgiani's rule, plus `SteadyStateSolve`. Built on `feature-degree-adaptivity`, branched from `main` rather than from here, so none of it is below. |
-| Next | **§8**: grading towards Shestakov's singularity is worth 14900× at matched DOF, and it is `h` rather than per-cell `p` — which the gate measured as buying a few percent against a 3× bar, so "Per-cell degree" at the end of this file is now a scoping record rather than a plan. The build is a sensor-driven split of the singular cell, which also gives the sensor its first consumer. Also open: carrying `dt` across a remesh, now that the norm allows it. |
+| Next | **§8 and §9.** Grading towards Shestakov's singularity is worth 14900× **at a fixed cell count and fixed DOF** — so the build is a fixed-budget *moving* mesh (`r`-adaptivity), not refinement and not per-cell `p`, which the gate measured as buying a few percent against a 3× bar. That is also the smallest of the three changes: the DOF count never moves, so the layout, the restart format and the allocation are all untouched, and §7's sensor picks the cell. Also open: carrying `dt` across a remesh, now that the norm allows it. |
 
 ## 1. The loop runs with zero core changes
 
@@ -399,16 +399,132 @@ linear DOF cost, and the constant is measurable on the fly.
 it is what stops this being an open-ended win. Of 52 runs in the first sweep, **15
 failed** — `IDASolve` corrector failures at `h = 1e-7`, and two `IDACalcIC`
 failures. One of the fifteen is a *uniform* mesh, 40 cells at `k = 3`, so this is
-not a grading artefact. The pattern is not monotone in anything: `9+1` and `9+3` at `k = 5`
-both succeed with identical answers while `9+2` at `k = 5` fails, every
+not a grading artefact. The pattern is not monotone in anything: `9+1` and `9+3`
+at `k = 5` both succeed with identical answers while `9+2` at `k = 5` fails, every
 `sigma = 0.15` mesh fails at every `k` tried, and `9+2` succeeds at `k = 3` and
 `k = 4` but not at 2, 5, 6, 7 or 8.
 
 So the reachable floor is `h0 ~ 7e-6`, i.e. an error of ~3e-7 — which is where the
-best run above sits, and it is a solver limit rather than a method one. **Any
-h-adaptive loop here will hit this before it runs out of accuracy to gain**, and
-will need to treat a failed level as a rejected step rather than as a fatal error.
-Worth knowing before the loop is written, not after.
+best run above sits. **Any h-adaptive loop here will hit this before it runs out of
+accuracy to gain**, and will need to treat a failed level as a rejected step rather
+than as a fatal error. Worth knowing before the loop is written, not after.
+
+**§9 refines this in two ways and one of them corrects it.** The `h = 1e-7` in
+those corrector failures is the *default* `MinStepSize`, so the solver is hitting a
+configured floor rather than diverging; setting it to `1e-12` buys exactly one more
+rung, to 1.385e-07. And this paragraph originally called it "a solver limit rather
+than a method one", which overstates: at that rung `err/h0` has risen from 0.0487
+to 0.0908, so the `h0` law is breaking at about the same place the solver gives up.
+Both walls, near 1e-7, together.
+
+## 9. It should move cells, not add them: `r`-adaptivity at fixed DOF
+
+§8 established `error = 0.0487 h0` with no dependence on the cell count. Taken
+seriously that says the useful move is *redistribution* at a fixed budget rather
+than refinement — and §8's own headline run was already exactly that without
+saying so. `graded 9+1` is **10 cells and 60 DOF, the same as `uniform 10`**. The
+14900× was bought by moving boundaries, not by adding any.
+
+Measured deliberately, uniform against the best redistribution at an identical cell
+count and identical DOF, `k = 5`:
+
+| N | DOF | uniform | best graded, same N | gain | winning mesh |
+| --- | --- | --- | --- | --- | --- |
+| 10 | 60 | 4.908e-03 | **3.292e-07** | **14900×** | 9+1 `s=0.3` |
+| 10 | 40 (`k=3`) | 1.112e-02 | 2.268e-06 | 4900× | 9+1 `s=0.25` |
+
+Only `N = 10` and 20 are quoted because only they are kink-aligned, and §3's first
+trap is that misalignment swings the uniform baseline 4–7×. The misaligned budgets
+give larger numbers — 245× at `N = 5`, 1190× at `N = 8` with `k = 3`, 50169× at
+`N = 8` with `k = 5`, 13714× at `N = 15` with `k = 3` — and they are *not* quoted as
+the result, because a chunk of each is the baseline being handicapped. At `N = 20`
+every grading tried failed to solve, so there is no number.
+
+### Against which, refinement at a fixed distribution is nearly worthless
+
+The comparison that makes the case. Uniform, `k = 5`, quadrupling the budget:
+10 → 40 cells is 60 → 240 DOF and 4.908e-03 → 1.221e-03, a gain of **4.0×** — which
+is just `error = 0.0487 h0` with `h0 = 1/N`, i.e. the DOF and the accuracy trade
+one for one.
+
+So **4× the DOF buys 4×, and 0× extra DOF buys 14900×.** That is the whole finding,
+and it is why the loop wants to move boundaries rather than split cells.
+
+### Which is a much smaller change than h-refinement
+
+Worth stating plainly, because it is the practical payoff of the above. A fixed-DOF
+remesh does not change the DOF count, so none of what made Phase 1 "Route A"
+awkward applies: no reallocation of `Y` and its clones, no change to the layout
+formula duplicated across five files, no restart-format change, no new
+`SystemSolver`. `Grid_points` already accepts an arbitrary mesh, `DGSoln::copy`
+still refuses a different grid but the projection transfer §4 settled is what a
+remesh wants anyway, and `Integrator`'s cache invalidates on the grid as it should.
+
+And the target is forgiving. Down the whole working range the error is *monotone*
+in `sigma` with no optimum to find — 1.902e-05, 8.187e-06, 3.190e-06, 1.094e-06,
+3.292e-07 at `sigma` = 0.5, 0.45, 0.4, 0.35, 0.3 — so the rule is "grade as hard as
+the solver tolerates", not "hit the right grading". A crude rule loses very little.
+
+Redistribution is not free in *cost*, only in DOF: the winning mesh takes 18660
+physics visits against uniform-10's 12240, 1.52× for 14900×.
+
+### Warm starting buys cost, not reach — and the wall is not a bad guess
+
+The obvious hypothesis for the §8 ceiling was that it is a globalisation problem:
+each mesh is solved cold, an adaptive loop grades gradually, so sequencing might
+walk through it. §4 supports it — "uniform-22 converges warm and fails cold".
+
+**Tested and refuted.** A ladder at fixed `9+1`, 60 DOF, `sigma` from 0.5 down,
+each rung started from the previous rung's `u` and `q` (each from its own element
+polynomials, per §4), **fails at `sigma = 0.3`, which the cold start solves.** So
+the wall is not distance from the answer, and mesh sequencing does not lift it. The
+likely reason warm was *worse* there is §4's other warning: the transfer is a cubic
+spline through the singular region, and an interpolant that overshoots `x^{4/3}`
+gives a state whose inconsistency is not the kind Newton walks off.
+
+What the ladder does buy is cost, and a lot of it — per rung, warm against cold:
+
+| `sigma` | error (both) | cold cost | warm cost |
+| --- | --- | --- | --- |
+| 0.45 | 8.187e-06 | 16080 | **2880** |
+| 0.40 | 3.190e-06 | 25380 | **3060** |
+| 0.35 | 1.094e-06 | 18780 | **4020** |
+
+**5–6× cheaper per level, for an answer identical to four significant figures** —
+which is §4's finding again ("accuracy is bit-identical at every level; only cost
+differs"). But the *cumulative* ladder is 26280 to reach 1.094e-06 where one cold
+solve on that mesh costs 18780, so sequencing loses unless the intermediate levels
+were wanted anyway. Also §4's finding, and it means an adaptive loop should expect
+to pay about what a direct solve would.
+
+### The ceiling is two limits arriving together at ~1e-7
+
+Diagnosed one config key at a time on the meshes that failed, at `9+1`, `k = 5`:
+
+* **`MinStepSize` is a real part of it, and buys exactly one more rung.** The
+  failure is `IDASolve` reporting corrector failure at `h = 1e-07`, which is the
+  *default* `MinStepSize` — so it is hitting the floor rather than diverging. Set
+  it to `1e-12` and `sigma = 0.25` solves, reaching **1.385e-07** at 60 DOF. `1e-16`
+  gives the identical answer, so 1e-12 is not the binding constraint.
+* **Then it is hard.** At `sigma = 0.2` every variant tried fails: `MinStepSize`
+  1e-12 and 1e-16, `SuppressAlgebraicError = false`, `atol = 1e-6`,
+  `rtol = 1e-10`, `Newton`, `PseudoTransient`. At `sigma <= 0.15` the failure moves
+  from `IDASolve` to **`IDACalcIC`** — the initial condition cannot be made
+  consistent at all, which is a different and worse problem.
+* **The law is breaking at the same place**, so this is not purely a solver
+  ceiling. `err/h0` runs 0.04870, 0.04869, 0.04868, 0.04857 for `sigma` 0.5 to
+  0.35, then 0.05018 at 0.3 and **0.09075** at 0.25 — nearly double. Part of that
+  is the metric: the relative-L1 sample is 201 uniform points whose first interior
+  one is at `x = 0.005`, so past `sigma ≈ 0.35` it never looks inside the innermost
+  cells and is measuring the error those cells *propagate* rather than the error
+  they contain. Either way there is a floor near 1e-7 in the quantity anyone would
+  quote, and it arrives just as the solver does.
+
+So the reachable gain from redistribution on this problem is a little over four
+orders of magnitude at fixed DOF, and both walls sit at about the same place. **A
+loop should therefore treat a failed grading as a rejected step and back off**,
+which is also what §8 concluded, and it should not expect to be limited by its
+rule — it will be limited by the solver first.
 
 ## What the measurements changed about the plan
 
@@ -451,14 +567,18 @@ Against it:
    * **The error scale cannot be purely relative.** `LinearDiffusion`'s exact steady state is `u = 0`, so the ratio was round-off over round-off — `1.6e-16 / 2.6e-15`, a meaningless 6.2e-2 — and the loop climbed to the degree ceiling on a problem it had solved exactly at `k = 1`. A `> 0` guard does not catch it. `Absolute_tolerance` is the right floor and costs no new key, and on a problem with a real solution it changes nothing (NonlinDiffTest 1.510e-2 → 1.508e-2).
    * **Order the non-finite check before the stopping test.** A NaN compares false against everything, so `!(E > eps)` is *true* for one, and the rule reported a solve that produced garbage as converged.
    * **"Steady solves only" has to be checked against `solvesForSteadyState()`, not against the `SteadyStateSolver` key.** That key defaults to `PseudoTransient` and is only consulted once termination is *armed*, by the presence of `SteadyStateTolerance` — so a config that simply never set it passed validation and time-marched every level, each one restarting from the last one's final state and integrating the interval again. Measured 7.5% off a fixed-degree run on NonlinDiffTest at `k = 4`. Anything that adapts between solves needs the same guard, this one included.
-5. **Sensor-driven `h` grading at the singular cell** — §8. `error = 0.0487 h0` on
-   Shestakov, set by the width of the one cell touching the singularity and
-   nothing else, so splitting that cell geometrically multiplies the error by
-   `sigma` for one extra cell: exponential convergence for a linear DOF cost, and
-   14900× measured against a uniform mesh at matched DOF. Needs §7's sensor to
-   pick the cell — §3's indicator is blind here — a global `k` of about 4 or more,
-   and a loop that treats a failed level as a rejected step, because §8's ceiling
-   is solver robustness rather than accuracy.
+5. **A sensor-driven moving mesh at fixed DOF** — §8 and §9. `error = 0.0487 h0` on
+   Shestakov, set by the width of the one cell touching the singularity and by
+   nothing else — not by the cell count, which is what makes this a redistribution
+   rather than a refinement. **14900× at an identical 10 cells and 60 DOF**, against
+   4.0× for spending 4× the DOF on uniform refinement. Needs §7's sensor to pick the
+   cell (§3's indicator is blind here), a global `k` of 4 or more, and a loop that
+   treats a failed grading as a rejected step, because §9's ceiling is the solver
+   before it is the rule. The target is forgiving: error is monotone in the grading
+   with no optimum to hit, so "grade as hard as the solver tolerates" is the rule.
+   Do **not** reach for h-refinement to get it — §9 records why the fixed-DOF version
+   is a far smaller change, and warm starting is worth 5–6× on cost but nothing on
+   reach.
 6. **Per-cell `p`** — scoped below, and **gated no** by §8. Kept as a scoping
    record; the structural finding in it is worth having if paper II's HDG+ family
    ever revives the question.
