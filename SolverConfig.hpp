@@ -59,7 +59,6 @@ struct SolverConfig
     bool                     WriteOutput;
     bool                     WriteDatFile;
     bool                     WriteDebugDatFiles;
-    bool                     Superconvergent;
     bool                     zeroFlux;
     bool                     AggressiveTimesteps;
     bool                     SuppressAlgebraicError;
@@ -69,6 +68,12 @@ struct SolverConfig
     double                   PseudoTransientSERRate;
     double                   PseudoTransientSERFloor;
     bool                     SteadyStateDiagnostics;
+    bool                     SteadyStateSolve;
+    bool                     DegreeAdaptation;
+    double                   DegreeTolerance;
+    unsigned int             MaxPolynomialDegree;
+    unsigned int             MaxDegreeIncrement;
+    double                   DegreeAdaptationBase;
     std::string              TransportSystem;
     std::vector<std::string> PhysicsPlugins;
 
@@ -81,6 +86,14 @@ struct SolverConfig
     //                           arms it regardless.
     std::optional<double> t_final;
     std::optional<double> SteadyStateTolerance;
+
+    // Presence, not value, is the signal -- as for the two above. DegreeAdaptation
+    // implies the superconvergent scheme, so an absent key is defaulted to true on
+    // that path and left false otherwise; an *explicit* false alongside it is a
+    // contradiction rather than a preference, and loadSolverConfig refuses it. That
+    // distinction is impossible to draw from a plain bool carrying the schema's
+    // default.
+    std::optional<bool> Superconvergent;
 };
 
 // The one thing that differs between the two surfaces.

@@ -2190,3 +2190,33 @@ void SystemSolver::PrintDebugInfo()
         std::println("");
     }
 }
+
+AccuracyEstimate SystemSolver::accuracyEstimate(Index var)
+{
+    if (postprocessor == nullptr)
+        throw std::runtime_error(
+            "No postprocessed solution to estimate an error from: u* is not "
+            "built at k = 0.");
+
+    if (yJacMem == nullptr)
+        throw std::runtime_error(
+            "accuracyEstimate called before initialize(), so there is no "
+            "solution to estimate the error of.");
+
+    postprocessor->computeUStar(yJac);
+    return postprocessor->accuracyIndicator(yJac, var);
+}
+
+std::vector<double> SystemSolver::stateVector() const
+{
+    if (yJacMem == nullptr)
+        throw std::runtime_error("stateVector called before initialize().");
+    return std::vector<double>(yJacMem, yJacMem + yJac.getDoF());
+}
+
+std::vector<double> SystemSolver::derivativeVector() const
+{
+    if (dydtJacMem == nullptr)
+        throw std::runtime_error("derivativeVector called before initialize().");
+    return std::vector<double>(dydtJacMem, dydtJacMem + dydtJac.getDoF());
+}

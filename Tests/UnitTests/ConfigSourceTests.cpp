@@ -79,7 +79,11 @@ BOOST_AUTO_TEST_CASE(a_minimal_config_loads_with_every_default_applied)
     BOOST_TEST(c.OutputPoints == 301);
     BOOST_TEST(c.WriteOutput);
     BOOST_TEST(!c.WriteDatFile);
-    BOOST_TEST(!c.Superconvergent);
+    // Superconvergent is a std::optional: absent, rather than present-and-false.
+    // Presence is the signal, because DegreeAdaptation defaults it to true and
+    // has to be able to tell "not asked for" from "asked against".
+    const bool superconvergentAbsent = !c.Superconvergent.has_value();
+    BOOST_TEST(superconvergentAbsent);
     BOOST_TEST(!c.AggressiveTimesteps);
     BOOST_TEST(!c.SuppressAlgebraicError);
     // PseudoTransient, not TimeMarch: run_ss() and a config carrying
@@ -344,7 +348,10 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
                boost::test_tools::per_element());
     BOOST_TEST(fromToml.OutputPoints == fromMap.OutputPoints);
     BOOST_TEST(fromToml.OutputFilename == fromMap.OutputFilename);
-    BOOST_TEST(fromToml.Superconvergent == fromMap.Superconvergent);
+    // Wrapped: std::optional has no operator<< for Boost.Test to print.
+    const bool superconvergentAgrees =
+        fromToml.Superconvergent == fromMap.Superconvergent;
+    BOOST_TEST(superconvergentAgrees);
     BOOST_TEST(fromToml.AggressiveTimesteps == fromMap.AggressiveTimesteps);
     BOOST_TEST(fromToml.SuppressAlgebraicError == fromMap.SuppressAlgebraicError);
     BOOST_TEST(fromToml.SteadyStateSolver == fromMap.SteadyStateSolver);

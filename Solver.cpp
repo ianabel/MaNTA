@@ -499,7 +499,7 @@ void SystemSolver::integrate(double tFinal)
 	// defaults to PseudoTransient, and without this a plain run(tFinal) -- a
 	// transient, where the whole point is the path -- would jump to the end state
 	// and report it as the answer at tFinal.
-	if (TerminateOnSteadyState && steadyMode != SteadyMode::TimeMarch)
+	if (solvesForSteadyState())
 	{
 		try
 		{

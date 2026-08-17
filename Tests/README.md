@@ -440,6 +440,36 @@ it is how the `dAux_Mat` column-layout defect was found. Two things make it work
 
 These are deliberate and tracked, not oversights:
 
+* **Degree adaptation is covered in three separable layers, and the gaps are in
+  the physics it has been driven on rather than in the code.**
+  `DegreeAdaptationTests.cpp` splits Giorgiani's rule (arithmetic, no solver),
+  the accuracy indicator (a solution, no loop) and the driver (both), so a
+  failure says which of the three moved; `python/Tests/test_degree_adaptation.py`
+  covers the ownership change that only the Python surface has, where `run_ss()`
+  replaces the solver `configure()` built.
+
+  What no test reaches: **`nAux > 0` and `nScalars > 0`**. The indicator is
+  formed per *variable* and the auxiliary variables are not looked at, which is
+  a real question rather than a missing line — an under-resolved `phi` would not
+  raise the degree. Nor is a **multi-variable** case exercised, so the "worst
+  variable wins" reduction and the per-variable `Absolute_tolerance` floor are
+  covered by inspection only. And nothing drives it with an **adjoint problem
+  attached**, so `setAdjointProblem` being re-applied to each level's solver is
+  untested — which matters, because forgetting it is silent: the run completes
+  and the gradients are simply never computed.
+
+  Two numbers worth keeping. On `AdjointPoster` at 6 cells the loop runs
+  `k` = 2, 5, 8, 10 and takes the estimate 2.1e-3, 8.6e-6, 1.6e-8, 2.0e-10 --
+  four solves under the default `MaxDegreeIncrement = 3`. Without the cap it is
+  three solves, 2, 9, 10, reaching the same place with nothing to read in
+  between.
+  On `NonlinDiffTest` it climbs to the ceiling and stops, because that case's
+  exact solution is `(1 - x/sqrt(t))^(1/n)` — a square-root branch point sitting
+  on the upper boundary, inside the last cell — and the estimate falls like
+  `1/k` exactly. That is the *right* answer on a problem p-refinement cannot
+  fix, and it is the same regularity cap `MESH-REFINEMENT.md` records for
+  Shestakov. Worth knowing before reading a climb to the ceiling as a defect.
+
 * **A restart can change the polynomial degree but not the mesh.** Three cases
   in `SolverLifecycleTests.cpp` cover the degree change end to end -- refining
   reproduces the coarse state to 2.2e-16, coarsening lands on a cold run's state

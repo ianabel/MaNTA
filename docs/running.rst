@@ -175,10 +175,23 @@ solution and a time derivative that did not belong together.
 Reaching a steady state
 -----------------------
 
-When only the final state matters, ``SteadyStateSolver`` chooses how to get
-there. It applies whenever steady-state termination is armed — ``run_ss()``, or a
-config carrying ``SteadyStateTolerance`` — and is ignored by a plain
-``run(tFinal)``, where the transient *is* the answer.
+When only the final state matters, ``SteadyStateSolve = true`` asks for a steady
+solve and ``SteadyStateSolver`` chooses how to reach one. Naming a
+``SteadyStateTolerance`` asks for the same thing and sets the tolerance with it;
+either arms it, and giving both uses the tolerance.
+
+.. warning::
+
+   ``SteadyStateSolver`` alone does **not** arm a steady solve. It names the
+   *method*, and the method is only consulted once termination is armed — so a
+   config setting ``SteadyStateSolver = "Newton"`` and nothing else time-marches,
+   which is not what it looks like. That is why ``SteadyStateSolve`` exists:
+   arming used to be a side effect of choosing a tolerance, so asking for a
+   steady solve meant having an opinion about how tight it should be.
+
+Steady-state termination is also armed by ``run_ss()``, which supplies its own
+fallback tolerance, and is ignored by a plain ``run(tFinal)``, where the
+transient *is* the answer.
 
 ``PseudoTransient`` (the default)
    Pseudo-transient continuation, after Kelley and Keyes. A backward-Euler mass
@@ -384,6 +397,100 @@ and whether or not the solve converged.
 The inner solve for both modes is **KINSOL**, driving the same static
 condensation IDA does, so MaNTA links ``sundials_kinsol`` whichever mode a run
 selects — see :doc:`install` if the build stops at ``kinsol/kinsol.h``.
+
+.. _degree-adaptation:
+
+Choosing the polynomial degree
+------------------------------
+
+``DegreeAdaptation = true`` picks the global polynomial degree by solving,
+measuring how well resolved the answer is, and re-solving at a higher degree
+until it is good enough:
+
+.. code-block:: toml
+
+   [configuration]
+   SteadyStateSolver = "Newton"
+   SteadyStateTolerance = 1.0e-10
+   Polynomial_degree = 2          # where to start
+   DegreeAdaptation = true
+   DegreeTolerance = 1.0e-9       # relative L2 error to reach
+   MaxPolynomialDegree = 12       # where to give up
+   MaxDegreeIncrement = 3         # most degrees to add at once (the default)
+
+On ``AdjointPoster`` at 6 cells that is four solves — ``k`` = 2, 5, 8, 10 —
+taking the estimated error 2.1e-3, 8.6e-6, 1.6e-8, 2.0e-10.
+
+The estimate is the gap between the solution and its own postprocessing,
+:math:`E_K^2 = \|u^* - u_h\|^2_{L^2(K)} / |K|` per cell (Capasso *et al.*
+eq. 15). Every level reports two aggregates:
+
+.. code-block:: text
+
+   k = 2: relative L2 error 2.103e-03 (variable 0), absolute 1.244e-03,
+          worst cell 2.535e-03 at cell 1
+
+The **relative L2 error** drives the decision, because it is the quantity the
+benchmarks quote. The **worst cell** is the binding constraint on a *single*
+global degree, and is the one to look at if the loop converges while some corner
+of the domain is plainly unresolved — a graded mesh, not a higher degree, is the
+answer to that.
+
+The degree rises by Giorgiani's rule, :math:`\Delta k = \lceil \log_b(E/\epsilon)
+\rceil`, with :math:`b` = ``DegreeAdaptationBase`` between 10 and 100. A larger
+base is a more aggressive assumption about what one extra degree buys, so it
+asks for *fewer* of them. The rule assumes no convergence *order* at all, which
+is deliberate: :math:`u^*`'s observed rate is not dependable enough to calibrate
+against — see :doc:`superconvergence`.
+
+``MaxDegreeIncrement`` then caps each step, at 3 by default. The rule is free to
+ask for a large jump from a coarse first solve — the run above asked for +7 from
+``k`` = 2 — and taking it would clear most of the budget without reporting
+anything on the way. The cap costs solves and buys a legible trajectory; when it
+binds, the run says so::
+
+   raising k from 2 to 5 (the rule asked for +7, capped at +3)
+
+Four things worth knowing:
+
+* **It implies** ``Superconvergent = true``. The whole estimate rests on
+  :math:`u^*` being the better of the two approximations, which is only assured
+  with the superconvergent scheme on. Setting ``Superconvergent = false``
+  alongside it is refused rather than silently overridden; leave the key out and
+  it is enabled for you.
+* **Steady solves only.** ``SteadyStateSolver = "TimeMarch"`` is refused: the
+  estimate cannot separate spatial from temporal error, and the transfer between
+  levels drops the BDF history.
+* **The tolerance is relative**, to each variable's own :math:`L^2` norm, so one
+  number means the same thing for variables in different units. It is floored by
+  ``Absolute_tolerance``, which is what stops a solution that is *identically
+  zero* — ``LinearDiffusion`` with zero Dirichlet data at both ends, say — from
+  dividing one round-off by another and climbing to the ceiling for nothing.
+* **The ceiling warns rather than failing.** Reaching ``MaxPolynomialDegree``
+  without meeting the tolerance leaves the best available answer in the output
+  and logs a warning. A run that stopped there did not converge, whatever the
+  files look like — and it may be telling you something: an endpoint
+  singularity is exactly what raising the degree cannot fix. ``NonlinDiffTest``
+  climbs to the ceiling because its steady state behaves like
+  :math:`(1-x)^{1/3}` at the upper boundary, and the estimate falls only like
+  :math:`1/k`. A graded mesh is the answer to that, not a higher degree; the
+  *worst cell* line tells you where to put one.
+
+Each level writes output, so the files left behind are the final level's. Levels
+after the first start from the previous one's solution, projected onto the new
+space; see `Restarting`_ for what that projection costs, which for refining is
+nothing.
+
+.. note::
+
+   The degree is **global**. Per-cell degrees are a much larger change than they
+   look — ``DGSolnImpl`` holds one ``k`` and one basis by value, and there are
+   some 320 ``(k+1)`` sites in the core — and the measurements in
+   ``MESH-REFINEMENT.md`` say most of the available win does not need them.
+
+   Adaptation is also refused alongside spatial adjoint parameters, for the same
+   reason ``Superconvergent`` already is: those are indexed by node, so changing
+   the degree changes how many parameters there are.
 
 .. _suppress-algebraic-error:
 
