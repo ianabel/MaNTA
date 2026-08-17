@@ -10,6 +10,7 @@
 #include <string_view>
 #include <variant>
 
+#include "SolverConfig.hpp"
 #include "SystemSolver.hpp"
 
 #include "PhysicsCases.hpp"
@@ -90,6 +91,16 @@ public:
   Vector getPostprocessedSolution(Index var,
                                   std::optional<std::vector<Position>> const &points);
 
+  // The cell boundaries of the mesh the run actually used -- nCells + 1 of them,
+  // ascending, the ends being the domain.
+  //
+  // Needed because the mesh is no longer necessarily the one the caller described:
+  // MeshAdaptation decides whether to grade and at which end, so "what mesh did I
+  // get" became a question a driver can only answer by asking. Uniform spacing in
+  // the answer is how a caller learns the grading decision came back negative,
+  // without parsing the log.
+  std::vector<Position> getCellBoundaries() const;
+
 private:
   std::shared_ptr<TransportSystem> pProblem = nullptr;
   std::unique_ptr<AdjointProblem> adjoint = nullptr;
@@ -98,9 +109,31 @@ private:
   // mistaken for "the gradients have been computed".
   std::unique_ptr<AdjointProblem> objectiveOnlyAdjoint = nullptr;
 
-  // Ownership of objects handled by C++
+  // Ownership of objects handled by C++.
+  //
+  // configure() builds the first `system`; with DegreeAdaptation armed, run()
+  // and run_ss() *replace* it, once per polynomial degree. Only this pointer
+  // moves -- `grid`, `adjoint` and `pProblem` are the same objects at every
+  // level, which is what makes adapting the degree cheap where adapting the
+  // mesh would not be. Everything crossing to Python does so by value, so no
+  // caller can be left holding a reference into a replaced solver.
+  //
+  // The order of these two matters on teardown and in configure(): a
+  // SystemSolver holds Grid const&, so `system` is nulled before `grid`.
   std::unique_ptr<SystemSolver> system;
   std::unique_ptr<Grid> grid;
+
+  // Kept, not just consumed. Every set* in applySolverConfig configures the
+  // *solver*, so a solver built later in run() needs the configuration replayed
+  // against it; a fresh one has defaults.
+  SolverConfig cfg;
+
+  // The degree configure() built at, which is where an adaptive run starts.
+  unsigned int k = 1;
+
+  // Hand off to runAdaptiveDegree and adopt the solver it settles on. Shared by
+  // run() and run_ss() so the two cannot diverge on the sequencing.
+  void adaptDegree(double tFinal);
 
   bool configured = false;
   double steady_state_tolerance;

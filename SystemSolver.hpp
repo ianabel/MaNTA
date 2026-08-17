@@ -60,6 +60,17 @@ class SystemSolver
             TerminateOnSteadyState = true;
         };
 
+        // Ask for a steady solve without naming a tolerance, leaving whatever
+        // setSteadyStateTolerance last set -- or steady_state_tol's own default
+        // if nothing did, which is the same 1e-3 run_ss() falls back to.
+        //
+        // Arming and choosing a tolerance were one operation, so the only way to
+        // ask for a steady solve was to have an opinion about how tight it
+        // should be. That is why SteadyStateTolerance's *presence* was the
+        // signal, and why a configuration naming SteadyStateSolver but omitting
+        // the tolerance quietly time-marched.
+        void setSteadyStateTermination(bool on) { TerminateOnSteadyState = on; };
+
         // How a steady state is reached. TimeMarch is the original behaviour --
         // integrate until dY/dt is small -- and is kept because it is the only
         // one that picks a branch by physics rather than by wherever Newton
@@ -354,6 +365,65 @@ class SystemSolver
         // Null when k = 0, where the degree-0 NodalBasis cannot be evaluated
         // off-node and there is nothing to reconstruct from.
         Postprocessor const *getPostprocessor() const { return postprocessor.get(); };
+
+        // The polynomial degree this solver was built at. Fixed for its
+        // lifetime -- DGSolnImpl holds k by value and the basis with it, so
+        // changing it means a new solver. That is what runAdaptiveDegree does,
+        // and its caller needs this to find out where it landed.
+        unsigned int getOrder() const { return k; };
+
+        // Whether a run will take the steady path rather than the time loop.
+        //
+        // Two conditions, and the pairing is easy to get wrong: SteadyStateSolver
+        // names the *mode*, but the mode is only consulted once termination is
+        // armed, and arming happens through the presence of SteadyStateTolerance.
+        // So a configuration naming PseudoTransient -- which is the default, and
+        // therefore what a config that says nothing gets -- still time-marches
+        // unless a tolerance was given. Checking the mode alone reads as a steady
+        // solve and is not one.
+        //
+        // Solver.cpp's branch and every caller that needs to know go through
+        // this, so the rule is written once.
+        bool solvesForSteadyState() const
+        {
+            return TerminateOnSteadyState && steadyMode != SteadyMode::TimeMarch;
+        };
+
+        // How well resolved the run's answer is, for one variable, from the gap
+        // between u_h and its own postprocessing u*. Reconstructs u* from yJac
+        // first, so this is valid after destroySundials() -- yJac owns its
+        // memory and the postprocessor is a member, where Y does not and is not.
+        //
+        // A method rather than something a caller assembles, because assembling
+        // it means reaching yJac and the postprocessor, both of which are
+        // private for good reason.
+        AccuracyEstimate accuracyEstimate(Index var);
+
+        // The converged state as plain vectors, independent of SUNDIALS and of
+        // this object's lifetime. This is what TransportSystem::setRestartValues
+        // wants, and taking a copy is what lets a caller destroy this solver
+        // before building the next one -- which anything driving a sequence of
+        // solves must do, since Integrator's weight cache is a process global
+        // keyed on (order, grid).
+        std::vector<double> stateVector() const;
+        std::vector<double> derivativeVector() const;
+
+        // The run's answer as a structured view, for anything that needs to read
+        // the solution *by field and cell* rather than as a flat vector -- the
+        // smoothness sensor, chiefly.
+        //
+        // This is yJac and not y, deliberately. `y` maps the N_Vector that
+        // initialize() allocates and destroySundials() frees, so it dangles the
+        // moment a run finishes; yJac owns its own memory (yJacMem) and is what
+        // outlives the solve. initialize() seeds it with the initial condition, so
+        // it is also valid *before* integrate().
+        //
+        // Two things not to do with it. Do not bind `getBasis()` to a reference
+        // that outlives this solver: DGSolnImpl holds its basis by value, so that
+        // reference points into the returned object rather than into a shared
+        // singleton. And do not keep the reference across a rebuild -- anything
+        // that destroys this solver invalidates it.
+        DGSoln const &solution() const { return yJac; };
 
         // Gates the netCDF output and the restart file -- <stem>.nc and
         // <stem>.restart.nc. The .dat flags below are deliberately *not* nested

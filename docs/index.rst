@@ -69,6 +69,7 @@ subtly wrong — read :doc:`formulation` first.
 
    formulation
    superconvergence
+   adaptivity
 
 .. toctree::
    :maxdepth: 2

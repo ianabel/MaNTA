@@ -128,8 +128,9 @@ void SystemSolver::initialize()
 
 	//-----------------------------Initial conditions-------------------------------
 
-	// Set original vector lengths
-	Y = N_VNew_Serial(nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1), ctx);
+	// Set original vector lengths. The layout is DGSoln's, so the length is too --
+	// this used to spell the formula out, as did three other places.
+	Y = N_VNew_Serial(DGSoln::getDoF(nVars, nCells, k, nScalars, nAux), ctx);
 	if (ErrorChecker::check_retval((void *)Y, "N_VNew_Serial", 0))
 		throw std::runtime_error("Sundials Initialization Error");
 
@@ -499,7 +500,7 @@ void SystemSolver::integrate(double tFinal)
 	// defaults to PseudoTransient, and without this a plain run(tFinal) -- a
 	// transient, where the whole point is the path -- would jump to the end state
 	// and report it as the answer at tFinal.
-	if (TerminateOnSteadyState && steadyMode != SteadyMode::TimeMarch)
+	if (solvesForSteadyState())
 	{
 		try
 		{

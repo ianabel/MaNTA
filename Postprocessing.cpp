@@ -3,6 +3,7 @@
 #include <Eigen/Dense>
 #include <Eigen/LU>
 
+#include <cmath>
 #include <stdexcept>
 
 /*
@@ -174,6 +175,63 @@ GlobalState Postprocessor::evalOnStarNodes(DGSoln const &Y) const
 
     for (Index s = 0; s < nScalars; ++s)
         out.Scalars()(s) = Y.Scalar(s);
+
+    return out;
+}
+
+// --- accuracyIndicator ------------------------------------------------------
+
+AccuracyEstimate Postprocessor::accuracyIndicator(DGSoln const &Y, Index var) const
+{
+    if (var < 0 || var >= nVars)
+        throw std::out_of_range("accuracyIndicator asked for a variable this "
+                                "postprocessor was not built for.");
+
+    const Index nCells = grid.getNCells();
+
+    AccuracyEstimate out;
+    out.perCell.resize(nCells);
+
+    // Gauss-30 on each cell, of the same two fields evaluated pointwise. Not
+    // the basis's own interpolatory weights: u* is degree k+1 and u_h degree k,
+    // so their difference squared is degree 2k+2, which no rule built for
+    // degree k integrates exactly. Using one would measure the quadrature's
+    // error alongside the solution's, and the two are the same order.
+    static const NodalBasis::IntegratorType gauss;
+
+    double sumsq = 0.0, solsq = 0.0;
+
+    for (Index cell = 0; cell < nCells; ++cell)
+    {
+        Interval const &I = grid[cell];
+
+        const double cellsq = gauss.integrate(
+            [&](double x)
+            {
+                const double d = uStar_[var](x, I) - Y.u(var)(x, I);
+                return d * d;
+            },
+            I.x_l, I.x_u);
+
+        const double usq = gauss.integrate(
+            [&](double x)
+            {
+                const double u = Y.u(var)(x, I);
+                return u * u;
+            },
+            I.x_l, I.x_u);
+
+        // The per-cell figure is a density -- divided by |K| -- so that a fine
+        // cell is not flattered simply for being short. The global sum below
+        // multiplies it back out, and is the ordinary L2 norm over the domain.
+        out.perCell(cell) = std::sqrt(cellsq / I.h());
+        sumsq += cellsq;
+        solsq += usq;
+    }
+
+    out.worstCell = nCells > 0 ? out.perCell.maxCoeff() : 0.0;
+    out.globalL2 = std::sqrt(sumsq);
+    out.solutionL2 = std::sqrt(solsq);
 
     return out;
 }

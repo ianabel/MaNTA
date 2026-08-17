@@ -285,7 +285,6 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(WriteOutput, bool);
     READ(WriteDatFile, bool);
     READ(WriteDebugDatFiles, bool);
-    READ(Superconvergent, bool);
     READ(zeroFlux, bool);
     READ(AggressiveTimesteps, bool);
     READ(SuppressAlgebraicError, bool);
@@ -295,15 +294,26 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(PseudoTransientSERRate, double);
     READ(PseudoTransientSERFloor, double);
     READ(SteadyStateDiagnostics, bool);
+    READ(SteadyStateSolve, bool);
+    READ(DegreeAdaptation, bool);
+    READ(DegreeTolerance, double);
+    READ(MaxPolynomialDegree, unsigned);
+    READ(MaxDegreeIncrement, unsigned);
+    READ(DegreeAdaptationBase, double);
+    READ(MeshAdaptation, bool);
+    READ(MeshAdaptationThreshold, double);
+    READ(MeshAdaptationAttempts, unsigned);
     READ(TransportSystem, std::string);
     READ(PhysicsPlugins, std::vector<std::string>);
 #undef READ
 
-    // The two whose presence is the signal.
+    // Those whose presence, rather than value, is the signal.
     if (auto s = spelling("t_final"))
         c.t_final = std::get<double>(source.get(*s, Type::Double));
     if (auto s = spelling("SteadyStateTolerance"))
         c.SteadyStateTolerance = std::get<double>(source.get(*s, Type::Double));
+    if (auto s = spelling("Superconvergent"))
+        c.Superconvergent = std::get<bool>(source.get(*s, Type::Bool));
 
     if (c.OutputFilename.empty())
         c.OutputFilename = source.outputFilenameFallback();
@@ -373,6 +383,132 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
         throw std::invalid_argument(
             "Missing required configuration key: OutputFilename -- there is no "
             "config file to take a name from.");
+
+    // MeshAdaptation *is* the p -> h -> p sequence, and its last stage is the
+    // degree loop, so it turns that on rather than requiring the user to ask for
+    // both. Set here so every rule below applies to it unchanged -- the steady-only
+    // requirement, Superconvergent, and the degree keys' own bounds.
+    if (c.MeshAdaptation)
+    {
+        c.DegreeAdaptation = true;
+
+        // Refused rather than clamped, because at k = 2 the grading decision is
+        // *inverted* and not merely uncertain: a two-point fit over the modal
+        // coefficients reads a solution that is flat at a boundary -- which is what
+        // a zero-flux axis gives -- as slowly decaying. Measured on three problems,
+        // it grades the smooth one harder than the singular one. See
+        // docs/adaptivity.rst.
+        if (c.PolynomialDegree < 3)
+            throw std::invalid_argument(std::format(
+                "MeshAdaptation = true needs PolynomialDegree >= 3, but it is {}. "
+                "The decision to grade is read from the decay of the per-cell modal "
+                "coefficients, and two modes are not enough to tell slow decay from "
+                "a solution that is simply flat at that boundary -- the verdict at "
+                "k = 2 is reversed, not merely noisy. 4 or more is better still.",
+                c.PolynomialDegree));
+
+        if (!(c.MeshAdaptationThreshold > 1.0))
+            throw std::invalid_argument(std::format(
+                "MeshAdaptationThreshold is the factor by which an end must be "
+                "rougher than the interior, so it must exceed 1; got {}. At or below "
+                "1 every mesh is graded, including one whose ends are already its "
+                "smoothest cells.", c.MeshAdaptationThreshold));
+
+        if (c.MeshAdaptationAttempts < 1)
+            throw std::invalid_argument(
+                "MeshAdaptationAttempts must be at least 1: it is how many graded "
+                "meshes may be tried, and zero would decide to grade and then never "
+                "attempt it.");
+
+        if (!c.GridPoints.empty())
+            throw std::invalid_argument(
+                "MeshAdaptation builds the mesh itself, at the cell count GridSize "
+                "gives, so it cannot be combined with explicit GridPoints. Drop one "
+                "of the two.");
+
+        if (c.GradedGridBoundary)
+            throw std::invalid_argument(
+                "MeshAdaptation decides whether to grade and at which end, so "
+                "GradedGridBoundary would be deciding the same thing twice and only "
+                "one of them can win. Set GradedGridBoundary to grade a mesh by "
+                "hand, or MeshAdaptation to have it chosen.");
+    }
+
+    if (c.DegreeAdaptation)
+    {
+        // The whole estimate is the gap between u_h and u*, which is only a
+        // *better* approximation when the superconvergent scheme is on:
+        // docs/superconvergence.rst measures u* failing to superconverge at
+        // k = 1 with the flag off, and doing so only transiently for a
+        // nonlinear flux -- 6.9, 11.7, 9.1, then 2.3. A loop calibrated against
+        // that meets its tolerance on the coarse grids and then stops
+        // improving. So asking for adaptation turns the flag on, and asking for
+        // it *off* at the same time is a contradiction rather than a
+        // preference. Refusing beats silently overriding a key the user wrote.
+        if (c.Superconvergent && !*c.Superconvergent)
+            throw std::invalid_argument(
+                "DegreeAdaptation = true needs Superconvergent = true, but the "
+                "configuration sets Superconvergent = false. The error estimate "
+                "is the gap between u_h and its postprocessing u*, which is only "
+                "the better of the two when the superconvergent scheme is on. "
+                "Remove Superconvergent to have it enabled automatically.");
+
+        c.Superconvergent = true;
+
+        // Re-solving a transient from t_initial at a higher degree would mix
+        // spatial and temporal error in an estimate that cannot tell them
+        // apart, and each level would take the previous one's *final* state as
+        // its initial condition and integrate the same interval again -- a
+        // wrong answer rather than a poorly-justified one.
+        //
+        // Two conditions, because naming the mode is not enough: the mode is
+        // only consulted once steady-state termination is armed, and arming
+        // happens through the presence of SteadyStateTolerance. A config that
+        // simply omits it gets the default "PseudoTransient" and time-marches
+        // anyway, which is exactly how a transient got through this.
+        if (c.SteadyStateSolver == "TimeMarch")
+            throw std::invalid_argument(
+                "DegreeAdaptation = true is for steady solves, but "
+                "SteadyStateSolver = \"TimeMarch\". Use \"PseudoTransient\" or "
+                "\"Newton\".");
+
+        // Only of a config file. run_ss() arms termination itself, falling back
+        // to 1e-3, so a dict legitimately need not carry the key -- and
+        // runAdaptiveDegree checks the solver directly, which catches the dict
+        // surface's remaining route in (calling run() rather than run_ss()).
+        if (reader == Reader::Toml && !c.SteadyStateTolerance && !c.SteadyStateSolve)
+            throw std::invalid_argument(
+                "DegreeAdaptation = true needs a steady solve: set "
+                "SteadyStateSolve = true, or SteadyStateTolerance to name a "
+                "tolerance. Without either, steady-state termination is never "
+                "armed, SteadyStateSolver is not consulted, and the run "
+                "time-marches every degree.");
+
+        if (c.DegreeTolerance <= 0.0)
+            throw std::invalid_argument(
+                "DegreeTolerance must be positive; it is a relative L2 error the "
+                "loop is trying to get below.");
+
+        if (c.DegreeAdaptationBase < 10.0 || c.DegreeAdaptationBase > 100.0)
+            throw std::invalid_argument(
+                "DegreeAdaptationBase must be between 10 and 100 -- the range "
+                "Giorgiani gives for how much one extra degree may be assumed to "
+                "buy. Outside it the rule either creeps up one degree at a time "
+                "or overshoots the ceiling in a single step.");
+
+        // Zero would leave the loop asking for a bump it is not allowed to
+        // take, so it would re-solve the same degree until the ceiling stopped
+        // it -- or forever, if the ceiling is where it already is.
+        if (c.MaxDegreeIncrement < 1)
+            throw std::invalid_argument(
+                "MaxDegreeIncrement must be at least 1: at zero the loop could "
+                "never raise the degree and would re-solve the same one.");
+
+        if (c.MaxPolynomialDegree < c.PolynomialDegree)
+            throw std::invalid_argument(
+                "MaxPolynomialDegree is below PolynomialDegree, so degree "
+                "adaptation has nothing it is allowed to do.");
+    }
 
     return c;
 }
@@ -484,7 +620,10 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     system.setNOutput(config.OutputPoints);
     system.setMinStepSize(config.MinStepSize);
     system.setZeroFlux(config.zeroFlux);
-    system.setSuperconvergent(config.Superconvergent);
+    // Absent means off, as it always has. loadSolverConfig has already turned
+    // it on when DegreeAdaptation asked for it, so by here the optional carries
+    // the decision rather than the raw key.
+    system.setSuperconvergent(config.Superconvergent.value_or(false));
     system.setWriteOutput(config.WriteOutput);
     system.setWriteDatFile(config.WriteDatFile);
     system.setWriteDebugDatFiles(config.WriteDebugDatFiles);
@@ -527,13 +666,27 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     }
 
     // Presence arms it, which is what the TOML reader has always done;
-    // setSteadyStateTolerance also sets TerminateOnSteadyState.
+    // Two ways to ask for a steady solve, and they compose: SteadyStateTolerance
+    // names a tolerance and arms termination with it, while SteadyStateSolve
+    // arms termination and takes the default. A config giving both gets the
+    // tolerance it asked for; one giving neither time-marches.
+    //
+    // The second key exists because arming used to be a side effect of choosing
+    // a tolerance, so asking for a steady solve meant having an opinion about
+    // how tight it should be -- and a config that named SteadyStateSolver but
+    // omitted the tolerance looked like a steady solve and was not one.
     if (config.SteadyStateTolerance)
     {
         logmsg<LOG_LEVEL::INFO>(
             "Running until steady state achieved (variation below {}) or end time reached.",
             *config.SteadyStateTolerance);
         system.setSteadyStateTolerance(*config.SteadyStateTolerance);
+    }
+    else if (config.SteadyStateSolve)
+    {
+        logmsg<LOG_LEVEL::INFO>(
+            "Running until steady state achieved (default tolerance) or end time reached.");
+        system.setSteadyStateTermination(true);
     }
 
     // Zero is off, and the setter rejects anything negative.

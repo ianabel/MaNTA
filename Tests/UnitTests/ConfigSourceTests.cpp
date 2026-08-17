@@ -84,7 +84,11 @@ BOOST_AUTO_TEST_CASE(a_minimal_config_loads_with_every_default_applied)
     BOOST_TEST(c.OutputPoints == 301);
     BOOST_TEST(c.WriteOutput);
     BOOST_TEST(!c.WriteDatFile);
-    BOOST_TEST(!c.Superconvergent);
+    // Superconvergent is a std::optional: absent, rather than present-and-false.
+    // Presence is the signal, because DegreeAdaptation defaults it to true and
+    // has to be able to tell "not asked for" from "asked against".
+    const bool superconvergentAbsent = !c.Superconvergent.has_value();
+    BOOST_TEST(superconvergentAbsent);
     BOOST_TEST(!c.AggressiveTimesteps);
     BOOST_TEST(!c.SuppressAlgebraicError);
     // PseudoTransient, not TimeMarch: run_ss() and a config carrying
@@ -349,7 +353,10 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
                boost::test_tools::per_element());
     BOOST_TEST(fromToml.OutputPoints == fromMap.OutputPoints);
     BOOST_TEST(fromToml.OutputFilename == fromMap.OutputFilename);
-    BOOST_TEST(fromToml.Superconvergent == fromMap.Superconvergent);
+    // Wrapped: std::optional has no operator<< for Boost.Test to print.
+    const bool superconvergentAgrees =
+        fromToml.Superconvergent == fromMap.Superconvergent;
+    BOOST_TEST(superconvergentAgrees);
     BOOST_TEST(fromToml.AggressiveTimesteps == fromMap.AggressiveTimesteps);
     BOOST_TEST(fromToml.SuppressAlgebraicError == fromMap.SuppressAlgebraicError);
     BOOST_TEST(fromToml.SteadyStateSolver == fromMap.SteadyStateSolver);
@@ -562,6 +569,10 @@ BOOST_AUTO_TEST_CASE(the_old_snake_case_grid_spellings_still_work)
     // Runner.configure dict written against the old names keeps working, with a
     // deprecation warning. That is what kept this rename from touching 35 Python
     // files and every config in the tree.
+    // Every one of the seven old spellings, in a config that uses no new one --
+    // which is the case a user with an existing file actually has. A blanket
+    // rename over this tree once turned these into the new names, at which point
+    // the test still passed and covered nothing; hence one config, all old.
     auto c = load("Polynomial_degree = 3\nGrid_size = 6\ndelta_t = 0.1\n"
                   "t_final = 1.0\nLower_boundary = -1.0\nUpper_boundary = 2.0\n"
                   "Lower_Boundary_Fraction = 0.3\nUpper_Boundary_Fraction = 0.4\n"
@@ -575,13 +586,13 @@ BOOST_AUTO_TEST_CASE(the_old_snake_case_grid_spellings_still_work)
     BOOST_TEST(c.UpperBoundaryFraction == 0.4);
 
     // Grid_points too, which also has to satisfy the conditional rule above under
-    // its old spelling -- so no Grid_size here.
+    // its old spelling -- so no cell count here at all.
     auto p = load("Polynomial_degree = 2\ndelta_t = 0.1\nt_final = 1.0\n"
                   "TransportSystem = \"LinearDiffusion\"\n"
                   "Grid_points = [0.0, 0.5, 1.0]\n");
     BOOST_TEST(p.GridPoints.size() == 3u);
 
-    // One spelling at a time, whichever pair.
+    // One spelling at a time. `minimal` carries GridSize, so this adds the alias.
     BOOST_CHECK_THROW(load(minimal + "Grid_size = 4\n"), std::invalid_argument);
 }
 

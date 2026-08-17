@@ -296,7 +296,7 @@ void SystemSolver::WriteRestartFile(std::string const &fname, N_Vector const &Y,
 	// Save N_Vector directly
 	NcGroup RestartGroup = restart_file.CreateGroup("RestartData", "Restart group");
 
-	const size_t nDOF = nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1);
+	const size_t nDOF = DGSoln::getDoF(nVars, nCells, k, nScalars, nAux);
 	NcDim yDim = RestartGroup.addDim("nDOF", nDOF);
 	RestartGroup.addVar("nVars", netCDF::NcInt()).putVar(&nVars);
 	RestartGroup.addVar("nAux", netCDF::NcInt()).putVar(&nAux);

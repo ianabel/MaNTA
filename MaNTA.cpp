@@ -7,6 +7,8 @@
 #include "SystemSolver.hpp"
 #include "PhysicsCases.hpp"
 #include "SolverConfig.hpp"
+#include "DegreeAdaptation.hpp"
+#include "MeshAdaptation.hpp"
 
 // Load restart data into vectors
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vector<double> &dYdt)
@@ -123,11 +125,9 @@ int runManta(std::string const &fname)
 		Index nDOF_file = LoadFromFile(restart_file, Y, dYdt);
 
 		// Make sure degrees of freedom are consistent with restart file
-		const Index nCells = grid->getNCells();
-		const Index nDOF = pProblem->getNumVars() * 3 * nCells * (k + 1) +
-						   pProblem->getNumVars() * (nCells + 1) +
-						   pProblem->getNumScalars() +
-						   pProblem->getNumAux() * nCells * (k + 1);
+		const Index nDOF = DGSoln::getDoF(pProblem->getNumVars(), grid->getNCells(), k,
+										  pProblem->getNumScalars(),
+										  pProblem->getNumAux());
 
 		if (nDOF_file != nDOF)
 			throw std::invalid_argument("nVars/nAux/nScalars in restart file inconsistent with physics case");
@@ -140,13 +140,33 @@ int runManta(std::string const &fname)
 		k = restartRunOrder(config, k);
 	}
 
-	auto system = std::make_shared<SystemSolver>(*grid, k, pProblem.get());
+	if (config.MeshAdaptation)
+	{
+		// p -> h -> p. Owns the graded mesh it may build, and its solver points
+		// into that, so the whole result is destroyed together and in the right
+		// order (see AdaptiveMeshResult).
+		auto adapted = runAdaptiveMesh(config, *pProblem, adjoint.get(), *grid, k,
+									   *config.t_final);
+	}
+	else if (config.DegreeAdaptation)
+	{
+		// The driver builds and runs a solver per degree, so it does the
+		// applySolverConfig/setAdjointProblem/runSolver sequence below itself --
+		// for each level, which is the point. It returns the last one so the
+		// object survives to be destroyed here in the usual way.
+		auto system = runAdaptiveDegree(config, *pProblem, adjoint.get(), *grid, k,
+										*config.t_final);
+	}
+	else
+	{
+		auto system = std::make_shared<SystemSolver>(*grid, k, pProblem.get());
 
-	applySolverConfig(config, *system);
-	if (config.solveAdjoint)
-		system->setAdjointProblem(adjoint.get());
+		applySolverConfig(config, *system);
+		if (config.solveAdjoint)
+			system->setAdjointProblem(adjoint.get());
 
-	system->runSolver(*config.t_final);
+		system->runSolver(*config.t_final);
+	}
 
 	// For compiled-in TransportSystems we have the type information and
 	// this will call the correct inherited destructor

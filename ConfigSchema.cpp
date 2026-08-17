@@ -94,6 +94,46 @@ const std::vector<Entry> &table()
         {"SteadyStateDiagnostics", {}, Type::Bool, Category::Solver, false, false, false,
          "Report the work a steady solve did: continuation steps, Newton iterations, "
          "residual evaluations, Jacobian builds and solves. Printed on failure too."},
+        {"SteadyStateSolve", {}, Type::Bool, Category::Solver, false, false, false,
+         "Run to a steady state using the default tolerance. SteadyStateTolerance "
+         "does the same and names the tolerance; either arms it, and giving both "
+         "uses the tolerance."},
+        {"DegreeAdaptation", {}, Type::Bool, Category::Solver, false, false, false,
+         "Choose the global polynomial degree by solving, estimating the error from "
+         "u* - u_h, and re-solving at a higher degree. Steady solves only; implies "
+         "Superconvergent."},
+        {"DegreeTolerance", {}, Type::Double, Category::Solver, false, false, 1.0e-6,
+         "Target for DegreeAdaptation: the estimated L2 error relative to the "
+         "solution's own L2 norm, worst variable. Relative so that one number means "
+         "the same thing for variables in different units."},
+        {"MaxPolynomialDegree", {}, Type::UInt, Category::Solver, false, false, 10u,
+         "Ceiling on the degree DegreeAdaptation may reach. Reaching it warns and "
+         "returns the best result available rather than failing."},
+        {"MaxDegreeIncrement", {}, Type::UInt, Category::Solver, false, false, 3u,
+         "Most degrees DegreeAdaptation may add in a single step. Giorgiani's rule is "
+         "free to ask for a large jump from a coarse first solve; this keeps the loop "
+         "taking informative steps rather than clearing the ceiling in one. Minimum 1."},
+        {"DegreeAdaptationBase", {}, Type::Double, Category::Solver, false, false, 10.0,
+         "How much error one extra degree is assumed to buy, in Giorgiani's rule "
+         "dk = ceil(log_base(E/tolerance)). 10 is cautious, 100 aggressive; must be "
+         "between 10 and 100."},
+        {"MeshAdaptation", {}, Type::Bool, Category::Solver, false, false, false,
+         "Run the p -> h -> p sequence: solve uniform at PolynomialDegree, decide from "
+         "the per-cell modal decay rate whether an end of the domain wants grading, "
+         "regrade at the same cell count if so, then adapt the degree to "
+         "DegreeTolerance. Needs PolynomialDegree >= 3, because at 2 the decision is "
+         "reversed rather than merely noisy. Steady solves only; implies "
+         "DegreeAdaptation and so Superconvergent. See docs/adaptivity.rst."},
+        {"MeshAdaptationThreshold", {}, Type::Double, Category::Solver, false, false, 2.0,
+         "How much rougher than the interior an end must look before MeshAdaptation "
+         "grades it, as a ratio of decay rates. Must exceed 1. Measured on three "
+         "problems at k >= 3: 3.09-6.80 for the one that wants grading against "
+         "0.97-1.19 for the two that do not."},
+        {"MeshAdaptationAttempts", {}, Type::UInt, Category::Solver, false, false, 4u,
+         "How many graded meshes MeshAdaptation may try before giving up and staying "
+         "uniform. A grading that fails to solve is a rejected step: the ratio is "
+         "softened towards 1 and retried, because the ceiling on grading is the time "
+         "integrator rather than the method. Minimum 1."},
         {"ObjectiveDecreaseTolerance", {}, Type::Double, Category::Solver, false, false, 0.0,
          "Abandon a run whose dG/dt is already below -this at t0; zero is off."},
         {"WriteOutput", {}, Type::Bool, Category::Solver, false, false, true,

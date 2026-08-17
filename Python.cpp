@@ -431,6 +431,7 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def("getSolution", &PyRunner::getSolution)
       .def("getDerivative", &PyRunner::getDerivative)
       .def("getPostprocessedSolution", &PyRunner::getPostprocessedSolution)
+      .def("getCellBoundaries", &PyRunner::getCellBoundaries)
       .def("get_address", [](const PyRunner &runner) // needed for xla interface
            { return reinterpret_cast<std::uint64_t>(&runner); });
 #ifdef XLA_FFI
