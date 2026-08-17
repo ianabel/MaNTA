@@ -23,7 +23,7 @@ and the retractions are recorded deliberately.
 | Landed on `main` | the two side quests, **#13** restart use-after-free and **#14** `getDerivative`; then **#15** steady-state output, PTC diagnostics and the SER config keys — most of step 2 below; then **#16**, a restart that can resume at a different polynomial degree, which is step 4's state transfer |
 | On this branch | steps 1–3 below: `Grid` validation, the merit function named and measured, and the modal sensor built — plus the merit function now **weighted** so the tolerance is mesh-independent near a solution, which is what step 2 was measuring towards. Merged up to `main` at `c585326`; no PR yet. |
 | In review | **#17**, step 4 — global-`k` by Giorgiani's rule, plus `SteadyStateSolve`. Built on `feature-degree-adaptivity`, branched from `main` rather than from here, so none of it is below. |
-| Next | **§8 and §9.** Grading towards Shestakov's singularity is worth 14900× **at a fixed cell count and fixed DOF** — so the build is a fixed-budget *moving* mesh (`r`-adaptivity), not refinement and not per-cell `p`, which the gate measured as buying a few percent against a 3× bar. That is also the smallest of the three changes: the DOF count never moves, so the layout, the restart format and the allocation are all untouched, and §7's sensor picks the cell. Also open: carrying `dt` across a remesh, now that the norm allows it. |
+| Next | **§8–§10 settle the whole scheme, and it is buildable from parts that exist.** Solve uniform at `k >= 4`; decide from the per-cell decay rate whether to grade and at which end (§10); if so rebuild at the *same cell count*, graded as hard as the solver tolerates (§9, worth 14900× at fixed DOF); then run global-`k` to tolerance (#17). **The order is forced, not chosen** — at `k = 2` the grading decision is not merely unreliable but *reversed*. The mesh half is now configurable (`GradedGridBoundary`), so what is left to build is the decision and the loop. Per-cell `p` is gated *no*. Also open: carrying `dt` across a remesh, now that the norm allows it. |
 
 ## 1. The loop runs with zero core changes
 
@@ -39,11 +39,12 @@ That validates the plan's Route A — a fresh solver per level, transfer through
 the initial-condition hooks, never an in-place remesh. It is the one part of
 the design that survived contact unchanged.
 
-One wart: `Grid_size` is `requiredToml = requiredDict = true`
-(`ConfigSchema.cpp:26`) even when `Grid_points` supersedes it entirely
-(`makeGrid` ignores it outright, `SolverConfig.cpp:322`). The spike passed a
-dummy. A conditional rule beside the one at `SolverConfig.cpp:272-281` is the
-tidy fix.
+~~One wart: `Grid_size` is required even when `Grid_points` supersedes it
+entirely, so the spike passed a dummy.~~ **Fixed.** `GridSize`, `LowerBoundary`
+and `UpperBoundary` are now required only when `GridPoints` is absent and the run
+is not a restart, and the rule lives inside `checkRequired`'s aggregation so a
+config missing several of them hears about all of them at once. The keys are
+`UpperCamelCase` now, with the old spellings kept as deprecated aliases.
 
 ## 2. `Superconvergent = true` is a prerequisite for the indicator, not a refinement
 
@@ -526,6 +527,111 @@ loop should therefore treat a failed grading as a rejected step and back off**,
 which is also what §8 concluded, and it should not expect to be limited by its
 rule — it will be limited by the solver first.
 
+## 10. The decision is decidable, and it forces p before h
+
+§9 says grading is the win and §7 says the sensor localises the singularity. Neither
+asked the question a driver actually has to answer: **from a uniform solve, should
+this mesh be graded at all, and at which end?** That is not the localisation
+question. §7 compared two benchmarks' worst cells against *each other*; a rule needs
+to compare one problem's end cells against *its own interior*, and to stay quiet on a
+problem that wants nothing.
+
+Rule under test, from a uniform 10-cell solve with `Superconvergent = true`: fit the
+per-cell decay rate `s` (§7), then **grade whichever end's cell is rougher than the
+interior median by 2x or more; otherwise leave the mesh alone.** Compared against the
+interior rather than a fixed threshold, because §7 measured a fixed threshold as
+unsafe across degrees.
+
+| | k = 2 | k = 3 | k = 4 | k = 5 |
+| --- | --- | --- | --- | --- |
+| **Shestakov** — wants Lower | grade Lower, 2.69x | grade Lower, 3.09x | grade Lower, **6.80x** | grade Lower, 6.44x |
+| **Park** — wants nothing | **grade Lower, 3.63x** | uniform, 0.99 | uniform, 1.19 | uniform, 1.01 |
+| **Jardin** — wants nothing | uniform, 0.97 | uniform, 1.00 | uniform, 0.97 | uniform, 1.15 |
+
+**At `k >= 3` it is clean, and the margin grows.** Shestakov 3.09-6.80 against Park
+and Jardin 0.97-1.19, so any threshold in (1.2, 3.0) separates them, with 5.7x of
+headroom at `k >= 4`. "Which end" is unambiguous where it fires: Shestakov's ends read
+2.85 and 19.2 at `k = 4`, and Park's read 6.66 and 7.98 with a median of 7.95.
+
+**At `k = 2` it is not merely blind, it is inverted.** Park's ratio (3.63) *exceeds*
+Shestakov's (2.69), so no threshold works at all: the rule would grade the entire
+function harder than the singular one. §7 recorded that two modes cannot see a
+singularity; this is worse than that, and the mechanism is specific.
+
+### Why `k = 2` inverts, and why it would keep inverting
+
+The raw spectra of the first cell, normalised to the mean:
+
+| | `û_1` | `û_2` | `û_3` | `û_4` |
+| --- | --- | --- | --- | --- |
+| Shestakov, `k = 4` | 4.76e-02 | 6.81e-03 | 1.90e-03 | 9.72e-04 |
+| Park, `k = 4` | 7.92e-03 | 2.63e-03 | **7.91e-06** | 1.14e-06 |
+
+Shestakov decays by 7.0x, 3.6x, 2.0x -- slow and algebraic, all the way out. Park
+decays by **3.0x and then 332x**: its spectrum has a *knee*, and the honest decay only
+starts at `j = 3`. A two-point fit over `j = 1, 2` sees the knee and reports
+`log(2.63/7.92)/log 2 = 1.575`, which is the 1.576 measured. Nothing about roughness.
+
+**The knee is not an accident of this problem, it is what a Neumann axis does.** Park
+is even about `x = 0` and the axis is zero-flux, so the solution is locally flat there
+and its *linear* content on the first cell is suppressed relative to its quadratic
+content. Every MaNTA problem with a zero-flux axis has that, on the very cell the
+question is being asked about. So a two-point fit does not fail at random on a smooth
+problem -- it fails **systematically, in the direction of a false positive, at exactly
+the boundary a driver is interrogating.** `k >= 3` is the fix, and `k >= 4` puts two
+genuinely decaying modes into the fit rather than one.
+
+### Drive it from the decay rate, not from the accuracy indicator
+
+The indicator `e_K = ||u* - u_h||/sqrt|K|` has far more *contrast* --
+`e(cell 0) / e(worst interior)` is 5.6e11, 1.5e11, 9.8e10 for Shestakov at
+`k = 3, 4, 5` against 1.16, 0.21, 1.22 for Park -- eleven orders against about one.
+Tempting, and the wrong choice, for three measured reasons:
+
+* **Its denominator vanishes.** Shestakov's exact solution is a cubic outside the
+  source (§8), so at `k >= 3` every interior cell is *exact* and `e(interior)` is
+  round-off, 2.4e-17. The eleven orders are partly that. Jardin is worse: its steady
+  state is degree 1, so `e` is ~5e-16 **everywhere** and the ratio 1.57-2.06 is
+  round-off over round-off -- the identical trap that made degree adaptation climb to
+  its ceiling on `LinearDiffusion` (see step 4 above), arriving from a different
+  direction.
+* **`s` has a fixed scale and `e` does not.** `s` is an exponent, so "rougher by 2x"
+  means the same thing at every degree and on every problem; `e` carries the
+  solution's units and its own convergence order.
+* **`s = infinity` is a *meaningful* verdict.** Jardin's first cell has nothing above
+  the round-off floor at `k = 2, 3, 4`, and the fit correctly returns infinity: as
+  smooth as representable. The rule reads that as "do not grade". The indicator has no
+  such answer -- it returns noise.
+
+### Which forces the order of an hp scheme, and the answer is p first
+
+Two independent measurements, from opposite directions, say the same thing:
+
+* **§9:** `k >= 4` is a prerequisite for grading to *pay*. At `k = 2` the
+  `error = 0.0487 h0` law breaks once `h0` is small -- an 11x reduction bought 1.19x --
+  because the non-innermost cells stop resolving the singularity.
+* **§10, above:** `k >= 3` is a prerequisite for the grading *decision to be correct*,
+  and at `k = 2` it is not merely uncertain but reversed.
+
+So the scheme is:
+
+1. **Solve uniform at `k >= 4`.** Cheap, and both of the above need it.
+2. **Decide from the per-cell decay rate**: grade an end, or leave the mesh alone.
+3. **If grading, rebuild at the same cell count** and grade as hard as the solver
+   tolerates -- §9 measured the error monotone in the ratio with no optimum to find,
+   so there is nothing to calibrate.
+4. **Then global-`k` adaptation to tolerance** (step 4 above, #17) on that mesh.
+
+Doing it the other way round -- grade first from a cheap low-order solve -- grades the
+wrong problem at the wrong end. That is the whole content of the `k = 2` row.
+
+**Scope, stated plainly.** Three problems, one of which wants grading, and one
+threshold picked from the gap between 1.19 and 3.09. That is enough to establish the
+mechanism and the ordering; it is not a calibration. A milder singularity than
+`x^{4/3}` would sit closer to the smooth population, and the honest response is that
+the threshold should be recorded as a config key with this measurement beside it
+rather than buried.
+
 ## What the measurements changed about the plan
 
 The approved plan is `~/.claude/plans/add-mnt-c-users-ian-downloads-crsc-tr02-humming-lake.md`.
@@ -551,7 +657,7 @@ Against it:
 3. ~~**The modal sensor** (§7)~~ — **done on this branch**, as `SmoothnessSensor.{hpp,cpp}` over a new `NodalBasis::ToModal`. It went in as designed and §7's prediction about the implementation held: the nodal→modal map is the stored `Vandermonde` inverted once per order, no quadrature. Three things came out of building it that the spike had not shown, all in `SmoothnessSensorTests.cpp`:
    * **A floored coefficient must not be *fitted*, only skipped.** A function even about a cell centre has every odd Legendre coefficient identically zero. Pinning those at the round-off floor and running the least-squares line through the resulting alternating sequence gives `s = -8.3` at `k = 6` for `|x|^{4/3}` — a *negative* rate, i.e. the opposite of the truth, on the sharpest feature in the tree. Skipping them gives **2.4047**, against the `j^{-(a+1)} = j^{-7/3} = 2.333` that theory predicts for `|x|^{4/3}`. That 3% agreement is the strongest evidence here that the fit measures decay rather than merely avoiding the defect.
    * **The floor is `(k+1)·eps`, not `eps`,** and it has to be: each `û_j` is a length-`(k+1)` dot product, so its round-off is bounded by `(k+1)·eps·scale`. At one epsilon exactly one structural zero survived the filter (`û_1/scale = 2.56e-16`) and that one mode caused the whole defect above. The two populations are eleven orders apart, so the exact position in the gap does not matter — but being on the correct side of it does.
-   * **§7's caveat about low `k` applies to the decay rate too, not only to `S_K`.** At `k = 2` neither indicator separates `exp(x)` from a singular function, and both get the *sign* wrong — the singular one reads as smoother on both measures. Two modes cannot see a singularity whichever quantity is formed from them.
+   * **§7's caveat about low `k` applies to the decay rate too, not only to `S_K`.** At `k = 2` neither indicator separates `exp(x)` from a singular function, and both get the *sign* wrong — the singular one reads as smoother on both measures. Two modes cannot see a singularity whichever quantity is formed from them. **§10 found the specific mechanism, and it is worse than blindness:** a two-point fit cannot tell a spectral *knee* from slow decay, and a zero-flux axis puts a knee on the first cell of essentially every problem here — so the failure is a systematic false positive at exactly the boundary a driver would be interrogating.
 
    What does hold, and is the real argument for the rate: on one unchanged function `S_K` runs 3.3e-3 / 8.0e-7 / 3.8e-11 at `k` = 2 / 4 / 6 — nearly eight orders — while `s` runs 2.04 / 3.63 / 5.39. `S_K` is an energy share with no fixed scale, so any threshold on it is a per-degree quantity; `s` is an exponent, so a rule like "`s < 4` is rough" means the same thing at every degree. Persson & Peraire's `S* ~ 1/k^4` is exactly such a per-degree calibration, and for shock capture rather than for this.
 
@@ -567,7 +673,9 @@ Against it:
    * **The error scale cannot be purely relative.** `LinearDiffusion`'s exact steady state is `u = 0`, so the ratio was round-off over round-off — `1.6e-16 / 2.6e-15`, a meaningless 6.2e-2 — and the loop climbed to the degree ceiling on a problem it had solved exactly at `k = 1`. A `> 0` guard does not catch it. `Absolute_tolerance` is the right floor and costs no new key, and on a problem with a real solution it changes nothing (NonlinDiffTest 1.510e-2 → 1.508e-2).
    * **Order the non-finite check before the stopping test.** A NaN compares false against everything, so `!(E > eps)` is *true* for one, and the rule reported a solve that produced garbage as converged.
    * **"Steady solves only" has to be checked against `solvesForSteadyState()`, not against the `SteadyStateSolver` key.** That key defaults to `PseudoTransient` and is only consulted once termination is *armed*, by the presence of `SteadyStateTolerance` — so a config that simply never set it passed validation and time-marched every level, each one restarting from the last one's final state and integrating the interval again. Measured 7.5% off a fixed-degree run on NonlinDiffTest at `k = 4`. Anything that adapts between solves needs the same guard, this one included.
-5. **A sensor-driven moving mesh at fixed DOF** — §8 and §9. `error = 0.0487 h0` on
+5. **A sensor-driven moving mesh at fixed DOF** — §8, §9 and §10. The decision is
+   measured in §10 and the mesh is now a config option, so this is a driver, not new
+   numerics. `error = 0.0487 h0` on
    Shestakov, set by the width of the one cell touching the singularity and by
    nothing else — not by the cell count, which is what makes this a redistribution
    rather than a refinement. **14900× at an identical 10 cells and 60 DOF**, against
