@@ -23,7 +23,7 @@ and the retractions are recorded deliberately.
 | Landed on `main` | the two side quests, **#13** restart use-after-free and **#14** `getDerivative`; then **#15** steady-state output, PTC diagnostics and the SER config keys — most of step 2 below; then **#16**, a restart that can resume at a different polynomial degree, which is step 4's state transfer |
 | On this branch | steps 1–3 below: `Grid` validation, the merit function named and measured, and the modal sensor built — plus the merit function now **weighted** so the tolerance is mesh-independent near a solution, which is what step 2 was measuring towards. Merged up to `main` at `c585326`; no PR yet. |
 | In review | **#17**, step 4 — global-`k` by Giorgiani's rule, plus `SteadyStateSolve`. Built on `feature-degree-adaptivity`, branched from `main` rather than from here, so none of it is below. |
-| Next | **§8–§10 settle the whole scheme, and it is buildable from parts that exist.** Solve uniform at `k >= 4`; decide from the per-cell decay rate whether to grade and at which end (§10); if so rebuild at the *same cell count*, graded as hard as the solver tolerates (§9, worth 14900× at fixed DOF); then run global-`k` to tolerance (#17). **The order is forced, not chosen** — at `k = 2` the grading decision is not merely unreliable but *reversed*. The mesh half is now configurable (`GradedGridBoundary`), so what is left to build is the decision and the loop. Per-cell `p` is gated *no*. Also open: carrying `dt` across a remesh, now that the norm allows it. |
+| Next | **Built.** `MeshAdaptation` runs the p → h → p sequence (`MeshAdaptation.{hpp,cpp}`, `docs/adaptivity.rst`), and **§11** removed the last blocker: `KINSol -7` treated as fatal was the whole of §5's "PTC cannot do Shestakov", so the driver now runs that problem at 262×. What is open: the two cell counts §11 leaves unexplained, carrying `dt` across a remesh, and TimeMarch. Everything below §8 settles the scheme; it is now description rather than plan. Formerly:** Solve uniform at `k >= 4`; decide from the per-cell decay rate whether to grade and at which end (§10); if so rebuild at the *same cell count*, graded as hard as the solver tolerates (§9, worth 14900× at fixed DOF); then run global-`k` to tolerance (#17). **The order is forced, not chosen** — at `k = 2` the grading decision is not merely unreliable but *reversed*. The mesh half is now configurable (`GradedGridBoundary`), so what is left to build is the decision and the loop. Per-cell `p` is gated *no*. Also open: carrying `dt` across a remesh, now that the norm allows it. |
 
 ## 1. The loop runs with zero core changes
 
@@ -163,7 +163,18 @@ differs. But a **single** 12→32 cell jump still loses to a cold start (7680
 against 6272) — mesh sequencing pays because each level starts from one only
 slightly coarser, not because transferred states are good.
 
-## 5. The binding constraint is robustness, not accuracy
+## 5. ~~The binding constraint is robustness, not accuracy~~ — **retracted; it was one return code**
+
+**Read §11 first.** The conclusion below — that PTC has an intrinsic limitation on
+Shestakov's degenerate flux — is wrong, and every `KINSol -7` in this section is the
+same defect: the continuation loop treated that return code as fatal when it means
+"this dt was too ambitious", which is exactly what the loop already handled for
+`KIN_MAXITER_REACHED`. One line, and PTC now converges on Shestakov at 5, 8, 10, 12,
+20, 25, 30, 40 and 50 cells, at every degree and with `Superconvergent` either way.
+
+The measurements are kept because they are what a reader of this section will find
+and because the *warm-start* observation in them stands. But do not conclude
+anything about PTC's limits from them.
 
 PTC fails on Shestakov past ~15 cells, and it is neither the adapted mesh nor
 the warm start:
@@ -631,6 +642,89 @@ mechanism and the ordering; it is not a calibration. A milder singularity than
 `x^{4/3}` would sit closer to the smooth population, and the honest response is that
 the threshold should be recorded as a config key with this measurement beside it
 rather than buried.
+
+## 11. Shestakov was never PTC's limit — it was one return code treated as fatal
+
+§5 concluded that pseudo-transient continuation had an intrinsic limitation on
+Shestakov's degenerate `D0 q^3/u^2` flux. That is retracted. Re-measured after #15,
+#16, #17 and this branch's weighted merit function had all landed, the whole thing
+was `KINSol` returning `KIN_MXNEWT_5X_EXCEEDED` (-7) and `solveSteadyState`
+treating it as a hard error.
+
+### The diagnosis: every schedule lever was inert
+
+The tell was not the failure but its *invariance*. At 20 cells and `k = 2`, all of
+these failed at the **same continuation step with the same residual**:
+
+* `PseudoTransientMaxStep` at infinity, 1e4, 1e3, 1e2, 10, 1;
+* `PseudoTransientSERRate`/`Floor` at (1, 2), (0.5, 1.2), (0.25, 1.1), (0, 1.1);
+* `PseudoTransientInitialStep` at 1e3, 1, 1e-2, **1e-4**;
+* `SteadyStateTolerance` at 1e-11, 1e-8, 1e-5, 1e-3.
+
+An initial `dt` of 1e-4 makes the damping term `id*(u - uPrev)/dt` enormous, so the
+Newton step should be tiny; it failed identically anyway. **A failure that does not
+move when the schedule moves was never a schedule failure**, and that is what
+redirected attention from the continuation to the error handling.
+
+### The fix
+
+`-7` is KINSOL's report that five consecutive Newton steps hit the maximum length.
+`KINSetMaxNewtonStep` is 1e10 here, so the direction really is that long — but that
+is a statement about the *iteration*, not about the problem, and the loop already
+had the right response for `KIN_MAXITER_REACHED`: restore the state, damp, retry.
+The comment beside that check even argued the case in general terms — "the ordinary
+way an attempt at too large a dt ends" — and then omitted this code.
+
+`SteadyState.cpp` now tolerates `-7` alongside `-6`. What it was worth on
+Shestakov at `k = 2`:
+
+| cells | `-7` fatal | `-7` a rejected step |
+| --- | --- | --- |
+| 5, 8, 12, 20, 25, 30, 40, 50 | **fail** | converge |
+| 10 | converge | converge |
+| 6, 15 | fail | fail, differently — see below |
+
+And with `Superconvergent` on, which `MeshAdaptation` requires, **every**
+combination of `k` = 2…5 at 10 and 20 cells went from failing to converging. That
+flag had been the second blocker: at `k = 2` on 10 cells the run converged with it
+off and threw `-7` with it on, which is why the driver could not touch this problem.
+
+Also dropped in passing: the same condition excluded `KIN_STEP_LT_STPTOL`, which is
+`+2` — a warning-level return that cannot reach a `retval < 0` branch. It never did
+anything and looked load-bearing.
+
+### The driver now runs it, at 262×
+
+Which was the point. `MeshAdaptation` on Shestakov, 10 cells, `k = 3`:
+
+| | relative L1 |
+| --- | --- |
+| uniform | 1.989e-02 |
+| **p → h → p** | **7.603e-05** |
+
+Same cell count, same DOF. This is the problem every measurement in §8–§10 came
+from and that the driver was documented as unable to run.
+
+### What still fails, and what it is not
+
+6 and 15 cells still fail, and with a *different* symptom: the loop exhausts its 200
+continuation steps rather than hitting a hard `KINSol` error. Both are rescued by
+putting a cell boundary on the source kink at `x = 0.1` through `GridPoints`, which
+drops each to the 10-cell error exactly.
+
+**Cell-boundary alignment is not the rule, though.** It was the obvious hypothesis
+and it is wrong: 5, 8, 12 and 25 cells are all misaligned and all converge. So the
+kink is implicated in those two cases without explaining them, and the remaining
+failure is unexplained rather than understood. Recorded as such.
+
+### The general lesson
+
+The 15 failures out of 52 in §8, and the ceiling §9 attributed to the time
+integrator, are now suspect in the same way. §9's `MinStepSize` finding stands on its
+own evidence — the failure there was `IDASolve` at `|h| = MinStepSize` and lowering
+the key bought a level — but "the solver cannot do this" deserves the same test that
+broke this one open: **change the schedule and see whether the failure moves.** If it
+does not, the schedule is not what is failing.
 
 ## What the measurements changed about the plan
 

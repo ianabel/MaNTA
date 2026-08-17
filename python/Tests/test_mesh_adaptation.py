@@ -42,14 +42,15 @@ class SineSource(LinearDiffusion):
 class AxisSingular(LinearDiffusion):
     """Steady state u = x - x^(4/3): an x^(4/3) singularity at the lower end.
 
-    The *positive* control, and it had to be built rather than borrowed. Shestakov's
-    problem is where every grading measurement in MESH-REFINEMENT.md came from, and
-    the driver cannot run on it: the sequence needs a continuation mode, and neither
-    PseudoTransient nor Newton converges on that degenerate `D0 q^3/u^2` flux -- it
-    fails with KINSol -7 even at 10 cells, which is why its own config pins
-    TimeMarch. So no benchmark in the tree exercises this path.
+    The *positive* control. Built rather than borrowed because Shestakov's problem --
+    where every grading measurement in MESH-REFINEMENT.md came from -- lives under
+    python-examples/ and pytest.ini keeps this suite to python/Tests, not because the
+    driver cannot run it: since KINSol's -7 became a rejected step rather than a
+    fatal error, continuation converges on Shestakov and the driver takes 1.99e-02 to
+    7.60e-05 there at 10 cells. That measurement is in docs/adaptivity.rst.
 
-    This one does, and is linear so that Newton reaches it in a single step. MaNTA
+    This case is linear, so Newton reaches it in a single step, which keeps the test
+    fast and its failure attributable to the driver rather than to a hard solve. MaNTA
     integrates a d_t u - d_x[sigma_hat] = S with sigma_hat = kappa q, so the steady
     state solves -kappa u'' = S; with kappa = 1 and S = (4/9) x^(-2/3),
 

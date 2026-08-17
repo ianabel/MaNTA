@@ -776,6 +776,23 @@ These are deliberate and tracked, not oversights:
   exhaustion path above shares its `catch (...)` in `Solver.cpp`, but not the
   code that reaches it).
 
+  **That gap has now cost something, so it is worth stating what it cost.** Which
+  `KINSol` return codes the loop tolerates is decided in one condition and no test
+  reaches it. `KIN_MXNEWT_5X_EXCEEDED` (-7) was treated as fatal where
+  `KIN_MAXITER_REACHED` was treated as "this dt was too ambitious, damp and retry",
+  and under continuation those are the same signal -- so pseudo-transient
+  continuation appeared to have an intrinsic limitation on `shestakov-nonlinear`
+  that it did not have. `MESH-REFINEMENT.md` §5 recorded that as a property of the
+  method for months; §11 has the retraction and the measurements. The same
+  condition also excluded `KIN_STEP_LT_STPTOL`, which is `+2` and therefore cannot
+  reach a `retval < 0` branch at all -- dead for as long as it had been there.
+
+  Covering it needs a case whose Newton direction genuinely diverges, which
+  `TestDiffusion` cannot supply and none of the registered C++ cases does either.
+  The behaviour is exercised only by `python-examples/shestakov-nonlinear`, which
+  `make python_tests` does not run (`pytest.ini` is `testpaths = python/Tests`), so
+  **nothing in CI would catch a regression here.** That is the honest status.
+
   Note also what the fixture cannot show: `TestDiffusion` is *linear*, so each
   inner solve converges in one Newton iteration and Jacobian builds equal
   Jacobian solves. The separation those two counters exist to report only

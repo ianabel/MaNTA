@@ -415,22 +415,55 @@ larger one. The decision on that problem reads a lower-end decay rate of 1.20
 against an interior median of 7.83 and an upper end of 9.63 — 6.51× rougher at the
 axis, three times the margin it needed.
 
-.. warning::
+And on Shestakov's problem itself, which is where every grading measurement above
+came from: **10 cells at k = 3, relative error 1.99e-02 uniform against 7.60e-05
+adapted — 262×**, again at the same cell count.
 
-   **The driver cannot run on Shestakov's problem, which is where every grading
-   measurement above came from.** The sequence needs a continuation mode, and
-   neither ``PseudoTransient`` nor ``Newton`` converges on that case's degenerate
-   :math:`D_0 q^3/u^2` flux — ``KINSol`` returns −7 even at 10 cells, which is why
-   the benchmark's own config pins ``TimeMarch``. And ``DegreeAdaptation`` refuses
-   ``TimeMarch``, because adapting across a transient would restart each level from
-   the previous one's final state.
+.. note::
 
-   So the problem that motivated all of this is out of reach until either
-   continuation copes with a degenerate flux or degree adaptation learns to work
-   under ``TimeMarch``. No benchmark in the tree exercises the grading path end to
-   end; the table above uses a case built for the purpose, and the *decision* is
-   covered against functions of known smoothness in
-   ``Tests/UnitTests/MeshAdaptationTests.cpp``.
+   That run was impossible until the continuation loop's error handling was
+   corrected, and the correction is worth knowing about because it was a single
+   return code. ``KINSol`` returning ``KIN_MXNEWT_5X_EXCEEDED`` (−7) — "five
+   consecutive Newton steps hit the maximum length" — was treated as fatal, where
+   ``KIN_MAXITER_REACHED`` was already treated as *this dt was too ambitious, damp
+   and retry*. Under pseudo-transient continuation those are the same signal, and
+   the second response is the right one for both.
+
+   What that one line was worth on Shestakov, at k = 2:
+
+   .. list-table::
+      :header-rows: 1
+      :widths: 30 35 35
+
+      * - cells
+        - −7 fatal
+        - −7 a rejected step
+      * - 5, 8, 12, 20, 25, 30, 40, 50
+        - **fail**
+        - converge
+      * - 10
+        - converge
+        - converge
+      * - 6, 15
+        - fail
+        - fail *(differently — see below)*
+
+   And with ``Superconvergent`` on, which ``MeshAdaptation`` requires, every
+   combination of k = 2…5 at 10 and 20 cells went from failing to converging.
+
+   The diagnosis was that **every schedule lever was inert**:
+   ``PseudoTransientMaxStep`` from 1 to infinity, the SER rate and floor, an initial
+   ``dt`` from 1e-4 to 1e3, and the tolerance over eight orders all failed at the
+   *same* continuation step with the *same* residual. A failure that does not move
+   when the schedule moves was never a schedule failure.
+
+   Two counts still fail — 6 and 15 — but with a different and softer symptom: the
+   loop exhausts its 200 continuation steps rather than hitting a hard ``KINSol``
+   error. Both are rescued by putting a cell boundary on the source kink at
+   :math:`x = 0.1` through ``GridPoints``, which drops each to the 10-cell error
+   exactly. Note that cell-boundary alignment does *not* predict failure in general:
+   5, 8, 12 and 25 cells are all misaligned and all converge, so the kink is
+   implicated in those two cases without being the whole rule.
 
 Restrictions, all refused rather than warned about:
 

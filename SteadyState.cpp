@@ -371,13 +371,35 @@ void SystemSolver::solveSteadyState()
         accumulateKinStats(stats);
 
         // Only a genuinely broken solve is fatal. "Ran out of iterations"
-        // (KIN_MAXITER_REACHED) and "the step stopped moving"
-        // (KIN_STEP_LT_STPTOL) are the ordinary way an attempt at too large a dt
-        // ends, and answering them by damping is the entire point of pseudo-
-        // transient continuation. Treating them as failures is what made the
-        // Jardin and Shestakov benchmarks throw at dt = 1000 rather than back
-        // off to a dt they could solve.
-        if (retval < 0 && retval != KIN_MAXITER_REACHED && retval != KIN_STEP_LT_STPTOL)
+        // (KIN_MAXITER_REACHED) and "the Newton direction kept coming back
+        // enormous" (KIN_MXNEWT_5X_EXCEEDED) are both the ordinary way an attempt
+        // at too large a dt ends, and answering them by damping is the entire
+        // point of pseudo-transient continuation. Treating them as failures is
+        // what made the Jardin and Shestakov benchmarks throw at dt = 1000 rather
+        // than back off to a dt they could solve.
+        //
+        // -7 was fatal here until it was measured not to be. It is KINSOL's
+        // report that five consecutive Newton steps hit the maximum length, and
+        // KINSetMaxNewtonStep above is 1e10, so it means the direction really is
+        // that long -- but that is a statement about the *iteration*, not about
+        // the problem, and the response the loop already has for -6 is the right
+        // one. On Shestakov's degenerate D0 q^3/u^2 flux it is the only thing
+        // between a converged answer and an exception: 20 cells at k = 2 threw at
+        // continuation step 12, and every schedule lever -- PseudoTransientMaxStep
+        // from 1 to infinity, the SER rate and floor, an initial dt from 1e-4 to
+        // 1e3, the tolerance over eight orders -- failed at the *same* step with
+        // the *same* residual, which is what says the schedule was never the
+        // problem. Treated as a rejected step it converges.
+        //
+        // KIN_STEP_LT_STPTOL used to be excluded here too and never did anything:
+        // it is +2, a warning-level return, so it cannot reach a `retval < 0`
+        // branch. Dropped rather than left looking load-bearing.
+        //
+        // KIN_LINESEARCH_NONCONV (-5) is the analogue for KIN_LINESEARCH and is
+        // deliberately not listed: this loop passes KIN_NONE, so it cannot occur,
+        // and adding it would imply a globalisation strategy that is not in use.
+        if (retval < 0 && retval != KIN_MAXITER_REACHED &&
+            retval != KIN_MXNEWT_5X_EXCEEDED)
         {
             finish(std::format("FAILED: KINSol returned {}", retval), step, rejected);
             throw std::runtime_error(std::format(
