@@ -23,6 +23,21 @@ what it is as data and implements the flux and the source:
 
 The case and the driver can live in your own repository; nothing needs to be
 inside the MaNTA source tree.
+
+A physics case written in C++ is driven the same way, named rather than
+constructed -- :func:`physics_cases` lists what this build carries, and the
+case's own configuration table goes in the same dict as the solver's keys:
+
+    runner = manta.Runner("LinearDiffusion")
+    runner.configure({
+        "Polynomial_degree": 3, "Grid_size": 20,
+        "Lower_boundary": 0.0, "Upper_boundary": 1.0,
+        "delta_t": 0.05, "OutputFilename": "run",
+        "DiffusionProblem": {"Kappa": 2.0},          # the case's own table
+    })
+    runner.run(1.0)
+
+Use :func:`load_physics_plugin` first for a C++ case built out of tree.
 """
 
 from . import _manta as _core
@@ -45,7 +60,9 @@ from ._manta import (  # noqa: F401
     SystemSpec,
     TomlValue,
     getNodes,
+    load_physics_plugin,
     numbered_spec,
+    physics_cases,
     registerPhysicsCase,
     run,
 )
@@ -66,7 +83,9 @@ __all__ = [
     "TomlValue",
     "TransportSystem",
     "getNodes",
+    "load_physics_plugin",
     "numbered_spec",
+    "physics_cases",
     "registerPhysicsCase",
     "run",
 ]

@@ -52,6 +52,17 @@ std::unique_ptr<TransportSystem> PhysicsCases::InstantiateProblem(std::string co
     return it->second( config, grid );
 }
 
+std::vector<std::string> PhysicsCases::RegisteredNames() {
+    // Sorted, because the map is: what a caller gets is a stable list rather
+    // than an insertion order that depends on static-initialisation order
+    // across translation units.
+    std::vector<std::string> out;
+    out.reserve(getMap()->size());
+    for (auto const &entry : *getMap())
+        out.push_back(entry.first);
+    return out;
+}
+
 PhysicsCases::map_type* PhysicsCases::getMap() {
     // never delete'ed. (exist until program termination)
     // because we can't guarantee correct destruction order
