@@ -230,6 +230,10 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(High_Grid_Boundary, bool);
     READ(Lower_Boundary_Fraction, double);
     READ(Upper_Boundary_Fraction, double);
+    READ(Graded_Grid_Boundary, bool);
+    READ(Grading_Ratio, double);
+    READ(Grading_Cells, int);
+    READ(Grading_End, std::string);
     READ(Polynomial_degree, unsigned);
     READ(Grid_size, int);
     READ(Grid_points, std::vector<double>);
@@ -271,6 +275,47 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
 
     if (c.OutputFilename.empty())
         c.OutputFilename = source.outputFilenameFallback();
+
+    // The two mesh-shaping flags reshape the same boundary list from different
+    // rules, so exactly one may be on. Caught here rather than by having one win,
+    // because either silent order of precedence gives a mesh the user did not ask
+    // for and nothing would say so.
+    if (c.Graded_Grid_Boundary && c.High_Grid_Boundary)
+        throw std::invalid_argument(
+            "High_Grid_Boundary and Graded_Grid_Boundary both shape the mesh and "
+            "cannot both be set: the first puts cosine-spaced cells against *both* "
+            "ends, the second grades geometrically into one. Pick one, or give "
+            "Grid_points outright.");
+
+    if (c.Graded_Grid_Boundary)
+    {
+        if (c.Grading_End != "Lower" && c.Grading_End != "Upper")
+            throw std::invalid_argument(
+                "Grading_End must be \"Lower\" or \"Upper\"; got \"" + c.Grading_End +
+                "\". There is no \"Both\": use High_Grid_Boundary for both ends, or "
+                "give Grid_points.");
+
+        // Defaulted from Grid_size rather than in the schema, since the schema's
+        // default cannot see another key. Half is the unsurprising choice; note
+        // that MESH-REFINEMENT.md §9 measures *more* graded cells as better on the
+        // one problem where this was studied -- 9 of 10 beat 5 of 10 by 48x -- so
+        // this default is conservative rather than optimal.
+        if (c.Grading_Cells == 0)
+            c.Grading_Cells = c.Grid_size / 2;
+
+        // The rest of the geometry is validated inside gradedMeshPoints, which is
+        // where it can be tested without building a configuration. Only the pieces
+        // involving *other* keys are checked here.
+        if (c.Grid_size < 3)
+            throw std::invalid_argument(std::format(
+                "Graded_Grid_Boundary needs at least 3 cells -- two in the graded "
+                "layer and one outside it -- but Grid_size is {}.", c.Grid_size));
+
+        if (!c.Grid_points.empty())
+            logmsg<LOG_LEVEL::WARNING>(
+                "Graded_Grid_Boundary is set but Grid_points was given too; the "
+                "explicit boundaries win and the grading is ignored.");
+    }
 
     // Conditional rules a flat required-list cannot express.
     if (!c.restart && c.Grid_points.empty())
@@ -328,6 +373,41 @@ std::unique_ptr<Grid> makeGrid(SolverConfig const &config,
     if (config.Grid_size < 4 && config.High_Grid_Boundary)
         throw std::invalid_argument(
             "Grid size must exceed 4 cells in order to implement dense boundaries");
+
+    if (config.Graded_Grid_Boundary)
+    {
+        const bool upper = config.Grading_End == "Upper";
+        const double fraction = upper ? config.Upper_Boundary_Fraction
+                                      : config.Lower_Boundary_Fraction;
+
+        auto points = gradedMeshPoints(
+            config.Lower_boundary, config.Upper_boundary,
+            static_cast<Grid::Index>(config.Grid_size),
+            static_cast<Grid::Index>(config.Grading_Cells),
+            fraction, config.Grading_Ratio, upper);
+
+        // The narrowest cell, relative to the domain, and the reason to say so.
+        // MESH-REFINEMENT.md §9 measured the solver -- not the method -- as the
+        // ceiling on how hard this can be graded: on Shestakov's problem IDA's
+        // corrector failed at h = 1e-7, which is MinStepSize's own default, once
+        // the narrowest cell was around 1e-6 of the span, and below about 1e-7 no
+        // setting of any key got through. The law that makes grading worth doing
+        // was still holding at the last mesh that converged, so a run that dies
+        // here has not run out of accuracy to gain and the failure will point at
+        // IDA rather than at the mesh.
+        const double span = config.Upper_boundary - config.Lower_boundary;
+        const double narrowest = upper ? points.back() - points[points.size() - 2]
+                                       : points[1] - points[0];
+        if (span > 0.0 && narrowest / span < 1.0e-6)
+            logmsg<LOG_LEVEL::WARNING>(
+                "The graded mesh's narrowest cell is {:.2e} of the domain. Past "
+                "roughly 1e-6 the time integrator, not the discretisation, is the "
+                "limit: expect IDA corrector failures at |h| = MinStepSize, and try "
+                "lowering MinStepSize (1e-12 bought one more level where this was "
+                "measured) before suspecting the mesh.", narrowest / span);
+
+        return std::make_unique<Grid>(points);
+    }
 
     // Grid ignores both fractions when High_Grid_Boundary is false
     // (gridStructures.hpp:81), so passing them unconditionally is what the two

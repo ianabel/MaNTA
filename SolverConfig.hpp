@@ -40,6 +40,10 @@ struct SolverConfig
     bool                     High_Grid_Boundary;
     double                   Lower_Boundary_Fraction;
     double                   Upper_Boundary_Fraction;
+    bool                     Graded_Grid_Boundary;
+    double                   Grading_Ratio;
+    int                      Grading_Cells;   // 0 means "half of Grid_size"
+    std::string              Grading_End;     // "Lower" or "Upper"
     unsigned                 Polynomial_degree;
     int                      Grid_size;
     std::vector<double>      Grid_points;

@@ -16,11 +16,29 @@ const std::vector<Entry> &table()
         {"RestartFile", {}, Type::String, Category::Solver, false, false, std::string{},
          "Restart file to resume from; defaults to <stem>.restart.nc."},
         {"High_Grid_Boundary", {}, Type::Bool, Category::Solver, false, false, false,
-         "Concentrate cells near both ends of the domain."},
+         "Concentrate cells near both ends of the domain, on a cosine spacing."},
         {"Lower_Boundary_Fraction", {}, Type::Double, Category::Solver, false, false, 0.2,
-         "Fraction of the domain in the dense lower region; ignored unless High_Grid_Boundary."},
+         "Fraction of the domain in the dense lower region; read by High_Grid_Boundary, and "
+         "by Graded_Grid_Boundary when Grading_End is \"Lower\"."},
         {"Upper_Boundary_Fraction", {}, Type::Double, Category::Solver, false, false, 0.2,
-         "Fraction of the domain in the dense upper region; ignored unless High_Grid_Boundary."},
+         "Fraction of the domain in the dense upper region; read by High_Grid_Boundary, and "
+         "by Graded_Grid_Boundary when Grading_End is \"Upper\"."},
+        {"Graded_Grid_Boundary", {}, Type::Bool, Category::Solver, false, false, false,
+         "Grade the mesh geometrically into one end of the domain: Grading_Cells cells "
+         "over the dense layer, each Grading_Ratio times the width of its outward "
+         "neighbour, then the rest uniform. For a solution with a singularity at that "
+         "end this is worth orders of magnitude at a fixed cell count -- see "
+         "docs/configuration.rst. Mutually exclusive with High_Grid_Boundary."},
+        {"Grading_Ratio", {}, Type::Double, Category::Solver, false, false, 0.3,
+         "Width ratio between neighbouring cells in the graded layer, strictly between "
+         "0 and 1. Smaller grades harder: the cell touching the graded end has width "
+         "fraction * span * ratio^(Grading_Cells - 1), which is what sets the error."},
+        {"Grading_Cells", {}, Type::Int, Category::Solver, false, false, 0,
+         "Cells in the graded layer; at least 2, and below Grid_size so something is "
+         "left outside it. 0 means half of Grid_size."},
+        {"Grading_End", {}, Type::String, Category::Solver, false, false, std::string{"Lower"},
+         "Which end Graded_Grid_Boundary refines into: \"Lower\" (default) or \"Upper\". "
+         "For both ends at once use High_Grid_Boundary or give Grid_points outright."},
         {"Polynomial_degree", {}, Type::UInt, Category::Solver, true, true, 1u,
          "Degree k of the nodal basis in each cell."},
         {"Grid_size", {}, Type::Int, Category::Solver, true, true, 0,

@@ -9,6 +9,11 @@
 
 #include "SolverConfig.hpp"
 
+// SolverConfig.hpp only forward-declares Grid, so that it stays cheap to include
+// and pybind11-free. The graded-mesh cases below inspect the Grid makeGrid built,
+// so they need the definition; taken here rather than by widening that header.
+#include "gridStructures.hpp"
+
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -369,6 +374,120 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     BOOST_REQUIRE(fromToml.t_final.has_value());
     BOOST_REQUIRE(fromMap.t_final.has_value());
     BOOST_TEST(*fromToml.t_final == *fromMap.t_final);
+}
+
+// ------------------------------------------- geometric mesh grading ----
+
+BOOST_AUTO_TEST_CASE(graded_grid_defaults_are_off_and_harmless)
+{
+    auto c = load(minimal);
+    BOOST_TEST(c.Graded_Grid_Boundary == false);
+    BOOST_TEST(c.Grading_Ratio == 0.3);
+    BOOST_TEST(c.Grading_Cells == 0);      // 0 means "half of Grid_size"
+    BOOST_TEST(c.Grading_End == "Lower");
+
+    // Off, so the count is left as the sentinel rather than resolved -- which is
+    // the property that keeps a plain config bit for bit what it was.
+    unsigned int k = 0;
+    auto grid = makeGrid(c, nullptr, k);
+    BOOST_TEST(grid->getNCells() == 8u);
+    for (Grid::Index i = 0; i < grid->getNCells(); ++i)
+        BOOST_TEST((*grid)[i].h() == 0.125, boost::test_tools::tolerance(1e-12));
+}
+
+BOOST_AUTO_TEST_CASE(a_graded_grid_config_builds_the_mesh_it_describes)
+{
+    // The end-to-end path: keys -> SolverConfig -> makeGrid -> Grid. The layer
+    // width comes from Lower_Boundary_Fraction, which High_Grid_Boundary also
+    // reads -- one key for one meaning rather than two that would drift.
+    auto c = load(minimal +
+                  "Graded_Grid_Boundary = true\n"
+                  "Grading_Ratio = 0.5\n"
+                  "Grading_Cells = 4\n"
+                  "Lower_Boundary_Fraction = 0.2\n");
+    BOOST_TEST(c.Graded_Grid_Boundary == true);
+    BOOST_TEST(c.Grading_Cells == 4);
+
+    unsigned int k = 0;
+    auto grid = makeGrid(c, nullptr, k);
+    BOOST_TEST(grid->getNCells() == 8u);
+    BOOST_TEST(grid->lowerBoundary() == 0.0);
+    BOOST_TEST(grid->upperBoundary() == 1.0);
+
+    // h0 = fraction * span * ratio^(cells-1) = 0.2 * 0.5^3
+    BOOST_TEST((*grid)[0].h() == 0.2 * 0.125, boost::test_tools::tolerance(1e-12));
+    // ...and the four uniform cells beyond the layer
+    for (Grid::Index i = 4; i < 8; ++i)
+        BOOST_TEST((*grid)[i].h() == 0.8 / 4.0, boost::test_tools::tolerance(1e-12));
+}
+
+BOOST_AUTO_TEST_CASE(grading_the_upper_end_reads_the_upper_fraction)
+{
+    // Which fraction is read depends on Grading_End, and getting that backwards
+    // would still produce a graded mesh -- of the wrong layer width, silently.
+    // Distinct fractions here so the two cannot be confused.
+    auto c = load(minimal +
+                  "Graded_Grid_Boundary = true\n"
+                  "Grading_End = \"Upper\"\n"
+                  "Grading_Ratio = 0.5\n"
+                  "Grading_Cells = 4\n"
+                  "Lower_Boundary_Fraction = 0.4\n"
+                  "Upper_Boundary_Fraction = 0.2\n");
+
+    unsigned int k = 0;
+    auto grid = makeGrid(c, nullptr, k);
+    BOOST_TEST(grid->getNCells() == 8u);
+
+    // The narrow cell is the last one, and its width is set by 0.2 not 0.4.
+    BOOST_TEST((*grid)[7].h() == 0.2 * 0.125, boost::test_tools::tolerance(1e-10));
+    BOOST_TEST((*grid)[0].h() == 0.8 / 4.0, boost::test_tools::tolerance(1e-12));
+}
+
+BOOST_AUTO_TEST_CASE(the_graded_cell_count_defaults_to_half_the_grid)
+{
+    // Resolved in loadSolverConfig rather than in the schema, because a schema
+    // default cannot see another key.
+    auto c = load(minimal + "Graded_Grid_Boundary = true\n");
+    BOOST_TEST(c.Grading_Cells == 4);      // Grid_size is 8
+
+    unsigned int k = 0;
+    auto grid = makeGrid(c, nullptr, k);
+    BOOST_TEST(grid->getNCells() == 8u);
+}
+
+BOOST_AUTO_TEST_CASE(the_two_mesh_shaping_flags_are_mutually_exclusive)
+{
+    // Both reshape the same boundary list from different rules, so a silent
+    // precedence would give a mesh nobody asked for with nothing to say so.
+    BOOST_CHECK_THROW(load(minimal +
+                           "Graded_Grid_Boundary = true\n"
+                           "High_Grid_Boundary = true\n"),
+                      std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(a_graded_grid_config_refuses_geometry_it_cannot_build)
+{
+    BOOST_CHECK_THROW(load(minimal +
+                           "Graded_Grid_Boundary = true\n"
+                           "Grading_End = \"Both\"\n"),
+                      std::invalid_argument);
+
+    // Fewer than three cells cannot carry two graded plus one outside.
+    BOOST_CHECK_THROW(load("Polynomial_degree = 2\nGrid_size = 2\ndelta_t = 0.1\n"
+                           "t_final = 1.0\nLower_boundary = 0.0\nUpper_boundary = 1.0\n"
+                           "TransportSystem = \"LinearDiffusion\"\n"
+                           "Graded_Grid_Boundary = true\n"),
+                      std::invalid_argument);
+
+    // The rest is gradedMeshPoints's own validation, reached through makeGrid --
+    // checked here so the config path is known to surface it rather than to
+    // swallow it.
+    auto c = load(minimal + "Graded_Grid_Boundary = true\nGrading_Ratio = 1.5\n");
+    unsigned int k = 0;
+    BOOST_CHECK_THROW(makeGrid(c, nullptr, k), std::invalid_argument);
+
+    auto c2 = load(minimal + "Graded_Grid_Boundary = true\nGrading_Cells = 8\n");
+    BOOST_CHECK_THROW(makeGrid(c2, nullptr, k), std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

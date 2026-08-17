@@ -106,11 +106,98 @@ Problem definition
        the same choice is available to a case through its own spec.
    * - ``High_Grid_Boundary``
      - ``false``
-     - Refine the grid towards both ends instead of spacing cells uniformly.
+     - Refine the grid towards both ends instead of spacing cells uniformly, on a
+       cosine spacing. Mutually exclusive with ``Graded_Grid_Boundary``.
+   * - ``Graded_Grid_Boundary``
+     - ``false``
+     - Grade the grid *geometrically* into one end. See
+       :ref:`graded-meshes` — on a problem whose solution is singular at that end
+       this is worth orders of magnitude at an unchanged cell count.
+   * - ``Grading_Ratio``
+     - ``0.3``
+     - Width ratio between neighbouring cells in the graded layer, strictly
+       between 0 and 1. Smaller grades harder.
+   * - ``Grading_Cells``
+     - ``0``
+     - Cells inside the graded layer; at least 2, and below ``Grid_size``. ``0``
+       means half of ``Grid_size``.
+   * - ``Grading_End``
+     - ``"Lower"``
+     - Which end ``Graded_Grid_Boundary`` refines into, ``"Lower"`` or
+       ``"Upper"``. There is no ``"Both"``: use ``High_Grid_Boundary``, or give
+       ``Grid_points``.
    * - ``Lower_Boundary_Fraction``, ``Upper_Boundary_Fraction``
      - ``0.2``
-     - With ``High_Grid_Boundary``, the fraction of the domain at each end that
-       is refined.
+     - The fraction of the domain at each end that is refined. Read by
+       ``High_Grid_Boundary`` for both ends, and by ``Graded_Grid_Boundary`` for
+       whichever end ``Grading_End`` names.
+
+.. _graded-meshes:
+
+Grading the mesh into one end
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``Graded_Grid_Boundary`` puts ``Grading_Cells`` cells over the layer of width
+``Lower_Boundary_Fraction × (Upper_boundary − Lower_boundary)`` against the graded
+end, each ``Grading_Ratio`` times the width of its outward neighbour, and spaces
+the remaining ``Grid_size − Grading_Cells`` uniformly over the rest:
+
+.. code-block:: toml
+
+   [configuration]
+   Grid_size = 10
+   Graded_Grid_Boundary = true
+   Grading_Cells = 9              # nine cells inside the layer, one outside
+   Grading_Ratio = 0.3
+   Lower_Boundary_Fraction = 0.1  # the layer is the lower 10% of the domain
+
+On ``[0, 1]`` that gives cell boundaries at 0, 6.56e-06, 2.19e-05, 7.29e-05,
+2.43e-04, 8.10e-04, 2.70e-03, 9.00e-03, 0.03, 0.1, 1 — ten cells, the narrowest
+against the axis and 137000 times narrower than the widest.
+
+**The cell touching the graded end is the whole point, and its width is**
+
+.. math::
+
+   h_0 = \mathtt{fraction} \times (\mathtt{Upper} - \mathtt{Lower})
+         \times \mathtt{Grading\_Ratio}^{\,\mathtt{Grading\_Cells} - 1}
+
+Note this is *not* a pure geometric progression. That closing cell runs all the
+way to the end, so it is :math:`1/(1-r)` wider than continuing the progression
+would give; the first width ratio inside the layer is :math:`(1-r)/r` and every
+later one is :math:`1/r`. That is what makes :math:`h_0` the clean expression
+above, and it is what the tolerance in
+``a_graded_mesh_puts_the_layer_cells_in_a_geometric_progression`` pins.
+
+**Why bother.** On Shestakov's problem — an ``x^{4/3}`` singularity at the axis —
+the error was measured to be :math:`0.0487\,h_0` and to depend on **nothing else**,
+not even on the cell count, over a 4600× range of :math:`h_0` and across both
+uniform and graded meshes. At a fixed 10 cells and ``Polynomial_degree = 5``, i.e.
+an unchanged 60 degrees of freedom, that takes the relative error from 4.91e-03 to
+3.29e-07: a factor of **14900**, for 1.5× the physics evaluations. For comparison,
+*quadrupling* the budget to 40 uniform cells buys 4.0×. Redistributing cells is
+worth far more here than adding them. ``MESH-REFINEMENT.md`` has the measurements.
+
+Three things to expect:
+
+* **A polynomial degree of about 4 or more is a prerequisite.** At ``k = 2`` the
+  law above breaks once :math:`h_0` is small — an 11× reduction bought 1.19× —
+  because the cells that are *not* the innermost stop resolving the singularity
+  well enough to stay negligible.
+* **The time integrator is the ceiling, not the discretisation.** Past roughly
+  :math:`h_0 / \mathrm{span} = 10^{-6}` IDA's corrector starts failing at
+  ``|h| = MinStepSize``, whose default is ``1e-7``; lowering it to ``1e-12`` bought
+  one further level. Below about :math:`10^{-7}` nothing got through — neither
+  ``MinStepSize``, nor ``SuppressAlgebraicError``, nor the tolerances, nor either
+  continuation mode — and below :math:`10^{-8}` ``IDACalcIC`` cannot build a
+  consistent initial condition at all. A warning is logged past
+  :math:`10^{-6}` saying so, because the failure that follows points at IDA rather
+  than at the mesh.
+* **Grading into the upper end is slightly less exact than into the lower**, and
+  irreducibly so: the boundary next to ``Upper_boundary`` is a number near it, so
+  the narrowest cell's *width* is a difference of nearly equal numbers and carries
+  a relative error of about :math:`\varepsilon / h_0`. It is 3e-11 at the grading
+  above and only matters at far harder ones.
 
 Time integration
 ----------------

@@ -436,6 +436,53 @@ it is how the `dAux_Mat` column-layout defect was found. Two things make it work
   quadrature scheme. Give them distinct primes (2, 3, 5, 7, 11, 13, 17) and a
   mis-slotted entry cannot come out right by accident.
 
+## Geometric mesh grading
+
+`gradedMeshPoints` (`gridStructures.hpp`) returns cell boundaries rather than a
+`Grid`, which is what lets the geometry be pinned without constructing anything:
+six cases in `GridTests.cpp` cover it, and six in `ConfigSourceTests.cpp` cover
+the four config keys that reach it. `Grid(std::vector<Position>)` is still where
+the validation of the *result* lives, so a construction that produced an
+out-of-order or zero-width list is caught there.
+
+What the geometry cases pin, and why each is worth a line:
+
+* **The ratio structure, which is the easy thing to get wrong.** It is not a pure
+  geometric progression -- the cell touching the graded end runs all the way to it,
+  so it is `1/(1-r)` wider than continuing the progression would give. The first
+  width ratio inside the layer is `(1-r)/r` and every later one is `1/r`. A pure
+  progression would still look like a graded mesh in a plot, with a different `h0`
+  and so a different answer.
+* **Therefore `h0 = fraction * span * ratio^(cells-1)` in closed form**, checked
+  directly. `MESH-REFINEMENT.md` §8 measures the error on Shestakov's problem as
+  `0.0487 * h0` and as depending on nothing else, so that expression *is* the knob
+  and a test on the widths alone would not pin it.
+* **Uniformity outside the layer**, because the bulk length is measured from the
+  layer's far edge rather than from the domain -- using the domain would leave the
+  first bulk cell the wrong width and nothing else would notice.
+* **Upper-end grading as an exact mirror of lower-end**, which is how it is
+  implemented (reflect, then pin the endpoints, since `Grid::operator==` compares
+  them exactly and the restart round trip rebuilds from what it wrote).
+* **Offset and scale independence**, on `[-3, 5]`, since nothing may assume
+  `[0, 1]`.
+
+One measured limit rather than a gap. **An upper-end grading cannot represent its
+narrowest cell's width to better than about `eps/h0` relative** -- 3.4e-11 for
+`h0 = 6.6e-6` on `[0, 1]`, against 6.0e-12 observed -- because the boundary next to
+`uBound` is a number near `uBound` and the width is a difference of nearly equal
+numbers. That is why
+`grading_the_upper_end_is_the_exact_mirror_of_the_lower` holds `h0` to 1e-10 where
+the lower-end case gets 1e-12. It is not the reflection's doing: building the mesh
+directly as `uBound - layer*ratio^j` has the identical cancellation. It bites only
+at far harder gradings, where the boundary eventually coincides with `uBound` and
+`Grid` rejects the zero-width cell -- which is the right failure and a loud one.
+
+The end-to-end value is verified outside the suite, because it needs a solve on a
+physics case with a closed form: the config keys reproduce the hand-built mesh
+`MESH-REFINEMENT.md` §9 measured, 3.2922e-07 against 4.9080e-03 uniform on the same
+10 cells and 60 DOF. Nothing in `make test` asserts that, so the measurement lives
+in `MESH-REFINEMENT.md` and the suite covers the geometry and the plumbing only.
+
 ## Known gaps
 
 These are deliberate and tracked, not oversights:
