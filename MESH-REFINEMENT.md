@@ -1,10 +1,11 @@
 # Mesh refinement — working notes
 
-Notes for `features/mesh-refinement`, written at a deliberate pause. Nothing in
-this file is implemented. `FEATURES.md:4` is the roadmap entry; `refs/Refs.md`
+Notes for `features/mesh-refinement`, written at a deliberate pause and kept up
+as pieces of it land. `FEATURES.md:4` is the roadmap entry; `refs/Refs.md`
 ("Mesh adaptivity") indexes the four papers and records what each supplies.
 This file records what was **measured** here, which is a different thing, and
-what the measurements changed about the plan.
+what the measurements changed about the plan. The status table says which parts
+have since been built and where they live.
 
 Everything below came from throwaway Python spikes driving `manta.Runner`
 through `Grid_points`, with no change to the core. Those scripts are gone; the
@@ -19,10 +20,10 @@ and the retractions are recorded deliberately.
 | --- | --- |
 | Phase 0 (spike) | done, on three benchmarks |
 | Phase 1 (into the solver) | **the plan as written should not be built** — see "What the measurements changed". Working through the revised order at the end of this file instead. |
-| Landed on `main` | both side quests: **#13** restart use-after-free, **#14** `getDerivative` |
-| Landed since | **#15** steady-state output, PTC diagnostics and the SER config keys — most of step 2 below |
-| On this branch | steps 1–3 below: `Grid` validation, the merit function named and measured, and the modal sensor built |
-| Next | step 4, global-`k` selection by Giorgiani's rule — the measured win |
+| Landed on `main` | the two side quests, **#13** restart use-after-free and **#14** `getDerivative`; then **#15** steady-state output, PTC diagnostics and the SER config keys — most of step 2 below; then **#16**, a restart that can resume at a different polynomial degree, which is step 4's state transfer |
+| On this branch | steps 1–3 below: `Grid` validation, the merit function named and measured, and the modal sensor built — plus the merit function now **weighted** so the tolerance is mesh-independent near a solution, which is what step 2 was measuring towards. Merged up to `main` at `c585326`; no PR yet. |
+| In review | **#17**, step 4 — global-`k` by Giorgiani's rule, plus `SteadyStateSolve`. Built on `feature-degree-adaptivity`, branched from `main` rather than from here, so none of it is below. |
+| Next | step 5 is **scoped but gated** — see "Step 5" at the end of this file, which asks for one measurement before ~200 sites are touched. Otherwise open: a consumer for the sensor, and carrying `dt` across a remesh now that the norm allows it. |
 
 ## 1. The loop runs with zero core changes
 
@@ -293,17 +294,19 @@ Against it:
 * **The transfer design was right** (§4), and is the one piece to keep verbatim.
 * **The Richardson exponent is out**, replaced by budgeted equidistribution or Giorgiani's order-free degree rule (§2).
 * **`Superconvergent = true` becomes a prerequisite, not an option** (§2).
-* **The `steadyNorm` work is now measured rather than asserted.** It was a lambda inside `solveSteadyState` that nothing could reach; it is now `SystemSolver::steadyResidualNorm`, with three cases in `SolverLifecycleTests.cpp`. What they establish:
-  * **It goes like `sqrt(h)`.** 4 / 8 / 16 cells on the same problem and the same initial function gives `‖F‖` = 0.5557 / 0.3935 / 0.2784 — a ratio of 0.70806 then 0.70742 against `1/sqrt(2) = 0.70711` — while the state itself agrees to 1.0e-3. The rows carry a mass factor going like `h`, the DOF count goes like `1/h`. **That is the factor a mesh-independent norm has to divide out**, and it was a guess before.
-  * **KINSOL is measuring the identical quantity**, not merely a comparable one. `KINSetFuncNormTol` gets the same `steady_state_tol`, KINSOL's test is `N_VWL2Norm(fval, fscale)` and `kinScale` is all ones, so in `Newton` mode (where the damping is identically zero) the two agree *bit for bit* — 7.055e-16. So `:154` and the convergence test still move together or not at all; that part of the plan stands, and is now pinned rather than argued.
-  * The early-return an adaptive driver hits first on every level, right after a transfer, is still the risk it always was. Nothing here changes that.
+* **The `steadyNorm` work is measured, and now done.** It was a lambda inside `solveSteadyState` that nothing could reach; it is `SystemSolver::steadyResidualNorm`, weighted by `residualWeights()`, with four cases in `SolverLifecycleTests.cpp`. What they establish:
+  * **Flat, it went like `sqrt(h)`.** 4 / 8 / 16 cells on the same problem and the same initial function gave `‖F‖` = 0.5557 / 0.3935 / 0.2784 — a ratio of 0.70806 then 0.70742 against `1/sqrt(2) = 0.70711` — while the state itself agreed to 1.0e-3. The cell rows are pairings against the basis, so each carries a mass factor going like `h`, and the row count goes like `1/h`. **Weighted by `1/sqrt(h_K)` per cell row** the same five meshes give 1.11145 / 1.11294 / 1.11344 / 1.11358 / 1.11361, departures from the limit falling by 3.2, 3.8, 4.8 — so what is left is second-order discretisation error in the state, not a mesh factor. The trace rows keep weight 1: a `lambda` row is a flux condition at one face and has no `h` in it.
+  * **KINSOL is measuring the identical quantity**, and now by construction rather than by coincidence. `KINSetFuncNormTol` gets the same `steady_state_tol` and KINSOL's test is `N_VWL2Norm(fval, fscale)`, so it is handed *the same weights* as `f_scale` — `solveSteadyState` passes `resScale` where it used to pass `kinScale` twice. In `Newton` mode (damping identically zero) the two agree bit for bit, 1.302e-15. `u_scale` stays unit; that one drives the step-length test and the Newton step clamp.
+  * **The `sqrt(h)` finding was only half the story, and the other half is a caution.** That scaling holds *near a solution*, where the algebraic rows are satisfied and the `u` row carries the residual. Far from one the `q` and `lambda` rows hold the `O(1)` trace and derivative terms of the weak form instead — the `1/h` from `phi'` cancels the `h` from the measure — and the flat norm **grows** like `1/sqrt(h)`: 4.275, 6.166, 8.834, 12.58, 17.86 on 4 to 64 cells, against `sqrt(h)` *down* for the consistent state. Weighting makes that regime worse, not better (measured `1/h`). Two mechanisms, opposite signs, and which dominates is a property of the state, so **no fixed row weighting is mesh-independent everywhere**. What is fixed is the regime the convergence test fires in. A reported starting `‖F‖` is still not comparable across meshes, which matters for the next bullet.
+  * The early-return an adaptive driver hits first on every level, right after a transfer, is still a risk — but a *smaller* one now, and in the safe direction. A transferred state is far from a solution, so it sits in the regime where the weighted norm is larger than the flat one was; the early return therefore fires less often than before rather than more. It is not eliminated, and nothing yet tests it.
+  * Verified on the two configs in the tree that arm a continuation solve, both at `1.0e-11`: the initial `‖F‖` rises by exactly `1/sqrt(h)` — park-convergence 0.553794 → 1.10759 on 4 cells, jardin-critical-gradient 1.23603 → 3.90868 on 10 — and **neither run's step count changes**, 3 and 5. `shestakov-nonlinear` pins `TimeMarch`, whose test is on `dY/dt` and never reaches this function.
 * **Never two solvers alive at once.** `Integrator`'s cache (`PyIntegrator.hpp:16-43`) is process-global and keyed on one `(order, grid)` pair, and `residual()` calls `invalidateIfStale` on every evaluation (`SystemSolver.cpp:1255`). Two live solvers with different grids thrash it, and `getIntegrationWeights` returns a reference *into* the map `clear()` destroys. Extract grid + a `std::vector<double>` of `yJac`, destroy, then build — `PyRunner::configure`'s own discipline.
-* **Adaptivity with `spatialParameters = true` must throw**, for the identical reason `Superconvergent = true` already does at `SystemSolver.cpp:1650`: a remesh redefines how many parameters there are.
+* **Adaptivity with `spatialParameters = true` must throw**, for the identical reason `Superconvergent = true` already does at `SystemSolver.cpp:1690`: a remesh redefines how many parameters there are.
 
 ## If picking this up again — suggested order
 
 1. ~~**`Grid(std::vector<Position>)` validation**~~ — **done on this branch.** It checked only `size() >= 2`, and `Interval(a,b)` silently swaps when `a > b` (`gridStructures.hpp:28-32`), so an out-of-order list built overlapping cells and a repeated point built a zero-width one — whose `MassMatrix` is `(h/2)·RefMass`, identically zero (`Basis.hpp:548-551`), and whose `toRef` divides by `h`. Now: finite, then strictly increasing, then the same `1e-14` total-span rule the `(lBound, uBound, nCells)` constructor already applies, so `Grid_points` cannot build what `Grid_size` would reject. Three cases in `GridTests.cpp`.
-2. ~~**A PTC unit test**~~ — **done.** #15 added five cases driving `solveSteadyState` plus work counters (`SteadyStats`) that make the cost of a change *measurable*; this branch adds three more covering the merit function itself, which is now the named `SystemSolver::steadyResidualNorm` rather than an unreachable lambda. The `sqrt(h)` scaling above is what came out of it. Step rejection, the `KINSetMaxNewtonStep` clamp and the hard-`KINSol`-failure path are still uncovered.
+2. ~~**A PTC unit test**~~, ~~**then the mesh-independent norm**~~ — **both done.** #15 added five cases driving `solveSteadyState` plus work counters (`SteadyStats`) that make the cost of a change *measurable*; this branch adds four more covering the merit function itself, which is the named `SystemSolver::steadyResidualNorm` rather than an unreachable lambda. The `sqrt(h)` scaling those measured is now divided out — see the bullet above for what that does and does not buy. Step rejection, the `KINSetMaxNewtonStep` clamp and the hard-`KINSol`-failure path are still uncovered, and so is the early return after a transfer.
 3. ~~**The modal sensor** (§7)~~ — **done on this branch**, as `SmoothnessSensor.{hpp,cpp}` over a new `NodalBasis::ToModal`. It went in as designed and §7's prediction about the implementation held: the nodal→modal map is the stored `Vandermonde` inverted once per order, no quadrature. Three things came out of building it that the spike had not shown, all in `SmoothnessSensorTests.cpp`:
    * **A floored coefficient must not be *fitted*, only skipped.** A function even about a cell centre has every odd Legendre coefficient identically zero. Pinning those at the round-off floor and running the least-squares line through the resulting alternating sequence gives `s = -8.3` at `k = 6` for `|x|^{4/3}` — a *negative* rate, i.e. the opposite of the truth, on the sharpest feature in the tree. Skipping them gives **2.4047**, against the `j^{-(a+1)} = j^{-7/3} = 2.333` that theory predicts for `|x|^{4/3}`. That 3% agreement is the strongest evidence here that the fit measures decay rather than merely avoiding the defect.
    * **The floor is `(k+1)·eps`, not `eps`,** and it has to be: each `û_j` is a length-`(k+1)` dot product, so its round-off is bounded by `(k+1)·eps·scale`. At one epsilon exactly one structural zero survived the filter (`û_1/scale = 2.56e-16`) and that one mode caused the whole defect above. The two populations are eleven orders apart, so the exact position in the gap does not matter — but being on the correct side of it does.
@@ -312,8 +315,18 @@ Against it:
    What does hold, and is the real argument for the rate: on one unchanged function `S_K` runs 3.3e-3 / 8.0e-7 / 3.8e-11 at `k` = 2 / 4 / 6 — nearly eight orders — while `s` runs 2.04 / 3.63 / 5.39. `S_K` is an energy share with no fixed scale, so any threshold on it is a per-degree quantity; `s` is an exponent, so a rule like "`s < 4` is rough" means the same thing at every degree. Persson & Peraire's `S* ~ 1/k^4` is exactly such a per-degree calibration, and for shock capture rather than for this.
 
    The localisation claim reproduces end to end: `x^{4/3}` on 10 cells at `k = 4` gives decay rates 3.93, 6.73, 7.83, … 10.65 — monotone away from the singular cell, which is cell 0, the one `ANALYSIS.md` §7 identifies.
-4. **Global-`k` selection by Giorgiani's rule** — 2.8e-9 at 90 DOF against 2.0e-6 at 128, no per-cell machinery, and it is the measured win.
-5. Only then per-cell `p` (the ~320-site blocker) or `h`.
+4. ~~**Global-`k` selection by Giorgiani's rule**~~ — **built, as #17, on a
+   branch off `main` rather than off here**, so none of it is on this branch.
+   The spike's case for it held: 2.8e-9 at 90 DOF against 2.0e-6 at 128, and no
+   per-cell machinery. §2's conclusion was acted on rather than merely recorded —
+   `Superconvergent` is required and defaulted on, and asking for it off is a
+   configuration error. The state transfer between levels is #16, and needed no
+   adaptivity-specific code. Three things came out of building it that the spike
+   had not shown:
+   * **The error scale cannot be purely relative.** `LinearDiffusion`'s exact steady state is `u = 0`, so the ratio was round-off over round-off — `1.6e-16 / 2.6e-15`, a meaningless 6.2e-2 — and the loop climbed to the degree ceiling on a problem it had solved exactly at `k = 1`. A `> 0` guard does not catch it. `Absolute_tolerance` is the right floor and costs no new key, and on a problem with a real solution it changes nothing (NonlinDiffTest 1.510e-2 → 1.508e-2).
+   * **Order the non-finite check before the stopping test.** A NaN compares false against everything, so `!(E > eps)` is *true* for one, and the rule reported a solve that produced garbage as converged.
+   * **"Steady solves only" has to be checked against `solvesForSteadyState()`, not against the `SteadyStateSolver` key.** That key defaults to `PseudoTransient` and is only consulted once termination is *armed*, by the presence of `SteadyStateTolerance` — so a config that simply never set it passed validation and time-marched every level, each one restarting from the last one's final state and integrating the interval again. Measured 7.5% off a fixed-degree run on NonlinDiffTest at `k = 4`. Anything that adapts between solves needs the same guard, this one included.
+5. **Per-cell `p`** — scoped below. `h` is not the sequel; see "Why not `h`".
 
 Two side quests this turned up, both worth doing regardless of AMR, and both
 now merged:
@@ -321,3 +334,159 @@ now merged:
 * PR **#13** — restart use-after-free, live today with no adaptivity involved.
 * PR **#14** — `getDerivative`. `PyRunner` still binds nothing for `sigma`,
   `lambda` or `aux`, which will matter for `nAux > 0` and for the scalars.
+
+## Step 5 — per-cell degree, scoped
+
+The design, at the depth the earlier sections were measured to. Nothing here is
+built. Read "The gate" first: this is the largest change in the sequence and the
+measurements in §3 and §6 do not yet justify starting it.
+
+### The gate — what would justify beginning
+
+Global `k` reached 2.8e-9 at 90 DOF in two iterations and 3060 physics visits
+(§6). Adaptive `h` at 128 DOF reached 2.0e-6 for 16672. So the *global* degree
+already collects most of what is available on the benchmarks in this tree, and
+per-cell degrees have to beat it rather than beat uniform refinement.
+
+There is exactly one case here that global `k` cannot serve, and it is the one to
+measure: **Shestakov**, where §6 recorded the error falling 19× and stopping as
+`k` went 2 to 12 on 10 cells, against eleven orders for `AdjointPoster`.
+`x^{4/3}` caps the regularity, so raising `k` uniformly buys almost nothing —
+while §7 showed the sensor localising that singularity to **one cell** with a
+2.1e24 ratio across the domain. A degree raised everywhere *except* there, with
+that cell refined instead, is the classical hp case and this tree has a benchmark
+sitting in it.
+
+So the gate is a spike, in Python, with no core change — the same way Phase 0
+ran. Per-cell degrees cannot be emulated directly through `Grid_points`, but the
+*payoff* can be bounded without them: solve Shestakov over a sequence of
+`(mesh, global k)` pairs chosen by hand from the sensor's ranking — refine only
+the singular cell, raise `k` globally — and compare error against DOF and against
+physics visits with the best global-`k` result at matched cost. A hand-chosen
+sequence is at least as good as any rule would pick, so what comes out is an
+upper bound on per-cell `p`. **If the bound is under about 3× it is not worth 200
+changed sites**, and step 5 should stay unbuilt with that number recorded here.
+
+The reason this is a bound rather than the answer: a graded mesh at uniform `k`
+spends degrees on the smooth cells that per-cell `p` would spend only where they
+pay, so the emulation is *pessimistic* on cost and optimistic on nothing. If it
+cannot show a win, per-cell `p` will not either.
+
+### Why it is cheaper than the note it replaces said
+
+The previous version of this line called it "the ~320-site blocker". That count
+is real but it is the wrong measure, and the structural fact underneath is much
+more favourable:
+
+**The global condensed system does not involve `k` at all.** `K_global`,
+`L_global` and `HGlobalMat` are `nVars*(nCells+1)` square (`SystemSolver.cpp:280-284`),
+each cell contributes through fixed `2x2` blocks (`:1092`, `:536`), and a cell
+touches exactly two faces whatever its degree. So `solveHDGJac`'s static
+condensation, `solveJacEq`'s Woodbury pass for the global scalars, and the size
+and sparsity of the system actually solved are **untouched** by per-cell degrees.
+That is the property HDG is chosen for, and it holds in this code rather than
+merely in the literature.
+
+What varies is per-cell and dynamically sized already: `MX` is
+`Eigen::MatrixXd M(localDOF, localDOF)` built inside the cell loop
+(`SystemSolver.cpp:327`, `:1483`), `CE_vec` is `localDOF x 2*nVars` (`:348`),
+`CG_cellwise` is `2*nVars x localDOF` (`:493`). None of those needs a new shape,
+only a `localDOF` that is a function of the cell.
+
+Two more pieces are already per-cell and were not expected to be:
+
+* **`DGApproxImpl` holds a `std::vector` of one `VectorWrapper` per cell**, built
+  as `block_data + i * stride` of length `k + 1` (`DGApprox.hpp:34-46`). The
+  per-cell views exist; they are simply all given the same length and a constant
+  stride. Replacing that with an offset table is a change to two constructors and
+  `Map`, not to every reader.
+* **`Integrator`'s weight cache is already keyed on `(order, Interval)`** —
+  `std::map<std::pair<unsigned int, Interval>, Vector>` (`PyIntegrator.hpp:16`).
+  It can hold several orders at once today. Only `cachedOrder`, the scalar
+  `invalidateIfStale` compares against, assumes one.
+
+### What actually blocks it
+
+Counted rather than estimated. `grep -c '(k + 1)\|(k+1)'` over the non-test tree:
+**162 in `SystemSolver.cpp`, 29 in `Matrices.cpp`, 15 in `DGSoln.hpp`, 10 in
+`AdjointVectors.cpp`, 1 in `Basis.hpp`** — 217 sites, against 909 for the looser
+`k *+ *1` pattern that also catches `2*k+1` and friends. Most are a local
+`(k+1)` inside a cell loop and become `(k_i+1)`; the ones that are not are the
+work:
+
+1. **`DGSolnImpl` holds `const Index k` and `const BasisType Basis` by value**
+   (`DGSoln.hpp:19`). Per-cell needs a vector of orders and a vector of bases —
+   cheap, since `BasisType::getBasis(Order)` is a flyweight, but `getBasis()`
+   returning a reference into the `DGSoln` is a documented use-after-free trap
+   (CLAUDE.md) and a per-cell version multiplies the ways to get it wrong.
+2. **`getDoF()` is a closed-form formula assuming uniform `k`**
+   (`DGSoln.hpp:26-33`), and the same expression is duplicated at
+   `Solver.cpp:132`, `NetCDFIO.cpp:299`, `MaNTA.cpp:127` and `PyRunner.cpp:73` —
+   the duplication the AMR plan already flagged. It becomes a prefix sum, and
+   **that sum wants one owner** rather than five.
+3. **`localDOF` is one `size_t` member** (`SystemSolver.hpp:774`) used as a
+   constant stride at `:935`, `:938` and `:1108`. It becomes an offset table, and
+   `Y + nCells * localDOF` — where `lambda` starts — becomes the table's last
+   entry. Getting this wrong is the failure CLAUDE.md names as the most common way
+   to break the solver silently, so it wants its own test before anything else
+   moves.
+4. **The restart format carries one `PolyOrder`** as an `NcInt` in the grid group
+   (`NetCDFIO.cpp:152`, read back at `SolverConfig.cpp:319`). It needs a per-cell
+   array, and the scalar should stay for a uniform run so existing files keep
+   loading — the round-trip regression cases compare bit for bit.
+5. **`Postprocessing` builds its operators once per order** in
+   `initialiseMatrices`, and `Superconvergent` evaluates the physics on `k+2` star
+   nodes per cell. Both become per-order sets. `printSources` already picks its
+   basis and stride from the flag for exactly this reason and would need the same
+   treatment per cell.
+6. **`Integrator::invalidateIfStale`** — see above; the map is fine, the scalar
+   `cachedOrder` is not.
+
+### Order of work
+
+Each step is landable and testable on its own, and the first three are worth
+having whether or not per-cell degrees are ever built:
+
+1. **One owner for the DOF count.** Replace the five copies of the layout formula
+   with a single function, still returning the uniform answer. Pure refactor, and
+   it is what makes everything after it a change in one place.
+2. **An offset table behind `localDOF`**, filled with the uniform values. The
+   layout is unchanged, bit for bit, and the regression suite is the guard;
+   what changes is that the stride is now looked up rather than multiplied.
+3. **A per-cell order vector in `DGSoln`**, all entries equal. Same again: no
+   behaviour change, and `copy()`'s existing refusal on a different order becomes
+   a refusal on a different *vector*.
+4. **Let the entries differ.** This is the real step, and it is where `MX`,
+   `CE_vec`, `CG_cellwise` and the physics evaluation loops become per-cell. The
+   global solve does not move (see above), which is what makes it finite.
+5. **The hp rule**, on top of the sensor already on this branch: Woopen §4.3's
+   switch — decay rate `s` above a threshold means raise `p`, below it means
+   refine `h`. §7 measured `s < 4` separating the two benchmarks here, and
+   recorded honestly that the margin is 1.6× and that at `k = 2` neither
+   indicator separates anything.
+
+### What must refuse rather than guess
+
+* **Spatial adjoint parameters.** `G_p` is `(ng * nCells * (k+1), np)`, indexed by
+  node, so varying degrees redefine how many parameters there are. `Superconvergent`
+  already throws for this at `SystemSolver.cpp:1690` and `runAdaptiveDegree` throws
+  for the same reason; a third instance of the same objection wants the same answer.
+* **A restart whose per-cell orders do not match the run's** — until a transfer
+  exists for it. #16 projects across a *uniform* degree change; the nesting
+  argument it rests on is per cell, so it extends to per-cell degrees on the same
+  mesh but not to a remesh.
+
+### Why not `h`
+
+§3 measured h-adaptivity as a net loss on all three benchmarks — Park 1.35× error
+for 3.2× the visits, `AdjointPoster` 1.8–2.6× for 2.8×, Shestakov a 27% DOF saving
+for 44% more visits — and §6 measured one degree bump beating the whole h-adaptive
+machinery by seven orders. §3 also recorded *why* it will not improve with effort
+on Shestakov: the error there is one global mode living in `sigma`, so an indicator
+that finds where error is *made* structurally cannot see where it *lands* (rank
+correlation +0.41).
+
+So `h` is not the sequel to this. It re-enters only as the `p`-refusal branch of
+the hp switch in step 5.5 above — refining the one cell whose regularity caps the
+degree — which is a much narrower use than the equidistribution loop Phase 1
+proposed, and needs no target-size rule at all.
