@@ -38,6 +38,18 @@ public:
   */
   explicit PyRunner(std::shared_ptr<TransportSystem> problem)
       : pProblem(problem) {};
+
+  // ...or the name of a C++ physics case, as a config file's TransportSystem
+  // key gives it. The object cannot be handed in the way a Python case is,
+  // because a C++ case's constructor takes the Grid -- which configure() is
+  // what builds. So the name is kept and the case is instantiated there, at
+  // the point the grid exists. Its own configuration table travels in the same
+  // dict; see PyToml.hpp.
+  //
+  // The name is checked here rather than at configure() so that a typo fails
+  // where it was written, with the list of what is registered.
+  explicit PyRunner(std::string physicsCase);
+
   ~PyRunner() = default;
 
   // Configure solver from Python
@@ -91,7 +103,17 @@ public:
   Vector getPostprocessedSolution(Index var,
                                   std::optional<std::vector<Position>> const &points);
 
+  // The registered name of the C++ case this Runner drives, or empty when it
+  // was handed a transport system object. Exposed because a driver that was
+  // given a Runner has otherwise no way to ask which of the two it is.
+  std::string const &physicsCase() const { return caseName; }
+
 private:
+  // Empty unless constructed from a name. Non-empty is what makes configure()
+  // build `pProblem` itself, so it is also the flag distinguishing the two
+  // constructors -- there is no separate bool that could disagree with it.
+  std::string caseName;
+
   std::shared_ptr<TransportSystem> pProblem = nullptr;
   std::unique_ptr<AdjointProblem> adjoint = nullptr;
   // Built on demand by G() when solveAdjoint is false, purely to evaluate the
@@ -124,6 +146,11 @@ private:
   // Hand off to runAdaptiveDegree and adopt the solver it settles on. Shared by
   // run() and run_ss() so the two cannot diverge on the sequencing.
   void adaptDegree(double tFinal);
+
+  // Build the case `caseName` names, from the config dict, against `grid`.
+  // Only called when caseName is non-empty, and only from configure(), which
+  // has built the grid by then.
+  void instantiatePhysicsCase(const py::dict &config);
 
   bool configured = false;
   double steady_state_tolerance;

@@ -189,8 +189,10 @@ void rejectUnknownKeys(ConfigSource const &source, Reader reader)
             throw std::invalid_argument(
                 "Configuration key '" + k +
                 "' selects the physics case and has no meaning for "
-                "Runner.configure -- the transport system is passed to the "
-                "Runner as an object. Remove it from the dict.");
+                "Runner.configure -- the physics case is chosen when the Runner "
+                "is built, either as an object or as the name of a C++ case, "
+                "and a plugin is loaded by manta.load_physics_plugin(). Remove "
+                "it from the dict.");
     }
 }
 

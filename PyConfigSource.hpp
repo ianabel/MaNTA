@@ -15,6 +15,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "PyToml.hpp"
 #include "SolverConfig.hpp"
 
 namespace py = pybind11;
@@ -24,16 +25,32 @@ class DictConfigSource : public ConfigSource
 public:
     explicit DictConfigSource(py::dict const &d) : dict(d) {}
 
+    // A physics case's own table is not a solver key, and neither contains()
+    // nor keys() may report it as one: rejectUnknownKeys would refuse a dict
+    // carrying [DiffusionProblem] outright, and it is the only way a C++ case
+    // driven from Python can be configured at all. This is the same latitude
+    // the TOML surface has always had -- the schema sweep there sees
+    // [configuration] and nothing else, so a case's table is read by the case
+    // and checked against nothing.
+    //
+    // Narrow deliberately: only a *dict* under a name the schema has never
+    // heard of. A dict where a solver key is wanted is still that key, so
+    // {"Grid_size": {}} is a type error rather than a physics table, and a
+    // misspelled solver key that is not a dict is still an unknown key.
     bool contains(std::string_view key) const override
     {
-        return dict.contains(std::string(key).c_str());
+        const auto name = std::string(key);
+        if (!dict.contains(name.c_str()))
+            return false;
+        return !isPhysicsTable(py::str(name), dict[name.c_str()]);
     }
 
     std::vector<std::string> keys() const override
     {
         std::vector<std::string> out;
         for (auto const &item : dict)
-            out.push_back(py::cast<std::string>(item.first));
+            if (!isPhysicsTable(item.first, item.second))
+                out.push_back(py::cast<std::string>(item.first));
         return out;
     }
 

@@ -440,6 +440,40 @@ it is how the `dAux_Mat` column-layout defect was found. Two things make it work
 
 These are deliberate and tracked, not oversights:
 
+* **Driving a C++ case from Python is pinned by an exact comparison against the
+  TOML surface, and the gap is plugins.** `python/Tests/test_cpp_cases.py` runs
+  two cases -- `LinearDiffusion` and `AdjointTestProblem` -- twice each, once
+  from a config file it generates and once from the dict that file was generated
+  *from*, and requires the netCDF output to be equal **bit for bit**. That is the
+  whole strength of the file: both surfaces already share
+  `loadSolverConfig`/`applySolverConfig`/`makeGrid`, so a difference can only be
+  in the new half — a physics table that did not arrive, a float that became an
+  integer, a grid handed over after construction — and none of those is small
+  enough to hide under a tolerance. Compared through the netCDF rather than
+  `getSolution` for a reason: both files are written from `y` at the same output
+  times, while `getSolution` reads `yJac`, the state as of the last Jacobian
+  evaluation, which can lag the final step and would force a tolerance back in.
+
+  `AdjointTestProblem` is there to carry what `LinearDiffusion` cannot: **two**
+  physics tables, a case deriving from `AutodiffTransportSystem` (whose
+  constructor is the only in-tree code that actually *reads* the `Grid` it is
+  handed -- `xL`/`xR`), boundary *kinds* set from a table rather than a
+  coefficient, and `solveAdjoint = true`. `ADTestProblem` would have been the
+  closer analogue and cannot be used: `Config/ADTestProblem.conf` does not run on
+  `main` either, dying in `IDACalcIC` with `IDA_ERR_FAIL`. `Config/AuxVarADTest.conf`
+  is likewise broken ("nAux > 0 but no coupling to fluxes provided"). Both
+  predate this work; nothing in CI runs the `Config/` files, which is why neither
+  is noticed.
+
+  What is **not** covered: `load_physics_plugin` on a real plugin. Only the
+  missing-file path is tested. A plugin needs `make install` and a shared object
+  compiled with the flags `pkg-config --cflags manta` reports, which is more than
+  a pytest should build -- and it is the same gap the TOML surface's
+  `PhysicsPlugins` key already has, so the `dlopen` flags and the
+  do-not-link-`-lmanta` rule are covered by inspection on both surfaces. Nor does
+  anything exercise a **restart** through a C++ case named from Python, or a case
+  with `nScalars > 0`.
+
 * **Degree adaptation is covered in three separable layers, and the gaps are in
   the physics it has been driven on rather than in the code.**
   `DegreeAdaptationTests.cpp` splits Giorgiani's rule (arithmetic, no solver),
