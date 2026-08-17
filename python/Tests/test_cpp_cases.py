@@ -417,6 +417,51 @@ def test_the_transport_system_key_is_still_refused_in_a_dict():
         )
 
 
+def test_numpy_scalars_in_a_table_are_accepted():
+    """What an optimiser actually passes.
+
+    np.float64 subclasses Python's float and so would have worked anyway, which
+    is the trap: it makes the common case pass and leaves np.float32 and every
+    np.int* -- which subclass nothing -- rejected. Both are checked here for that
+    reason, and the answer is compared against the plain-Python run rather than
+    merely asserted finite, so a value silently truncated on the way through
+    would fail.
+    """
+
+    def peak(kappa):
+        runner = MaNTA.Runner("LinearDiffusion")
+        runner.configure(
+            dict(
+                LINEAR_DIFFUSION,
+                OutputFilename="cpp_case_numpy",
+                WriteOutput=False,
+                DiffusionProblem=dict(
+                    LINEAR_DIFFUSION["DiffusionProblem"], Kappa=kappa, n=2
+                ),
+            )
+        )
+        runner.run()
+        return np.max(np.asarray(runner.getSolution(0, list(np.linspace(-1, 1, 51)))))
+
+    reference = peak(2.0)
+    for kappa in (np.float64(2.0), np.float32(2.0), np.array(2.0)):
+        assert peak(kappa) == pytest.approx(reference, rel=1e-12), type(kappa)
+
+
+def test_a_physics_table_may_not_be_called_configuration():
+    """It is the slot the solver's own keys occupy, so it cannot be shared.
+
+    Refused rather than merged or silently dropped -- dropped is what a bare
+    map::emplace would have done, leaving a case that reads [configuration]
+    looking at the caller's table instead of the run's settings.
+    """
+    runner = MaNTA.Runner("LinearDiffusion")
+    with pytest.raises(RuntimeError, match="configuration"):
+        runner.configure(
+            dict(LINEAR_DIFFUSION, OutputFilename="x", configuration={"Kappa": 1.0})
+        )
+
+
 # -------------------------------------------------------------- plugins --
 
 

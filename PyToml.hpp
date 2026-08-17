@@ -90,6 +90,19 @@ inline toml::value tomlFromPy(py::handle obj)
         return toml::value(std::move(a));
     }
 
+    // A numpy scalar or 0-d array, unwrapped to the Python type it holds and
+    // re-tested above. This is not an exotic input: the caller for whom driving
+    // a C++ case from Python is worth anything is an optimiser sweeping a
+    // parameter, and `arr[i]` off a numpy array is a numpy scalar.
+    //
+    // np.float64 happens to subclass Python's float and so is caught above
+    // already -- which is the trap, because it makes the common case work and
+    // leaves np.float32 and every np.int* (which subclass nothing) throwing.
+    // Going through item() rather than casting to double keeps the integer /
+    // float distinction TOML cares about.
+    if (py::hasattr(obj, "item"))
+        return tomlFromPy(obj.attr("item")());
+
     throw std::invalid_argument(
         "Cannot express a Python " +
         py::cast<std::string>(py::str(py::type::of(obj).attr("__name__"))) +
@@ -131,6 +144,21 @@ inline toml::value physicsConfigFromDict(py::dict const &d)
     for (auto const &item : d)
     {
         auto const key = py::cast<std::string>(py::str(item.first));
+
+        // `configuration` is where the solver's keys go, so a physics table of
+        // that name would be put in the same slot -- and since toml::table is a
+        // map, the emplace below would then quietly do nothing and a case
+        // reading [configuration] would see the caller's table instead of the
+        // run's settings. Refused rather than merged: there is no reading of
+        // "my case's table is called configuration" that is worth guessing at.
+        if (key == "configuration")
+            throw std::invalid_argument(
+                "'configuration' cannot be a physics case's table name: it is "
+                "where a Runner.configure dict's solver keys go, which is what "
+                "makes the dict look to a physics case like the config file it "
+                "would otherwise have read. Give the table the name the case "
+                "asks for.");
+
         if (isPhysicsTable(item.first, item.second))
             top.emplace(key, tomlFromPy(item.second));
         else
