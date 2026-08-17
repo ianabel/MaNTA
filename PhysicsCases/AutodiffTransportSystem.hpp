@@ -46,6 +46,27 @@ public:
 	void AuxGPrime(Index, State &, const State &, Position, Time) override;
 	void dSources_dPhi(Index, VectorRef, const State &, Position, Time) override;
 
+	// Identically zero, and that is a property of this layer rather than of any
+	// case built on it: `Flux` is declared (Index, u, q, x, t) and takes no phi,
+	// so the flux cannot depend on an auxiliary variable and its derivative
+	// cannot be anything but zero. The out-parameter arrives zeroed, so there is
+	// nothing to do.
+	//
+	// It has to be said explicitly all the same. TransportSystem's default
+	// *throws* when nAux != 0 -- correctly, since the base cannot know a
+	// derivative is structurally zero rather than merely forgotten -- so without
+	// this override every case deriving from this layer with nAux > 0 died with
+	// "nAux > 0 but no coupling to fluxes provided" the moment the Jacobian was
+	// assembled. AuxVarADTest, the only such case in the tree, had therefore
+	// never run; it was not in the regression suite, which is why nothing said
+	// so. AutodiffAuxTests.cpp is now the thing that would.
+	//
+	// The corollary is a real limitation rather than just a missing hook: a case
+	// whose *flux* depends on an auxiliary variable cannot be written on this
+	// layer at all, and must implement TransportSystem directly -- which is what
+	// AuxVarTest does.
+	void dSigma_dPhi(Index, VectorRef, const State &, Position, Time) override {}
+
 	// and initial conditions for u & q
 	virtual Value InitialValue(Index i, Position x) const override;
 	virtual Value InitialDerivative(Index i, Position x) const override;

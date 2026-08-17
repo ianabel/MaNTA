@@ -436,6 +436,68 @@ it is how the `dAux_Mat` column-layout defect was found. Two things make it work
   quadrature scheme. Give them distinct primes (2, 3, 5, 7, 11, 13, 17) and a
   mis-slotted entry cannot come out right by accident.
 
+## Auxiliary variables through the autodiff layer
+
+There is now a third pairing, and it came out of a defect that a pair would have
+caught years earlier. `AuxVarTest` and `AuxVarADTest` are **the same problem
+written twice** --
+
+```
+d_t u - kappa d_xx u = a + f(x),   a = u^2,   f = -kappa U'' - U^2,   U = cos(pi x / 2)
+```
+
+-- once on `TransportSystem` with every derivative by hand, once on
+`AutodiffTransportSystem` with every derivative from autodiff. Both are in the
+regression suite; `AuxVarADTest` additionally checks its steady state against
+that closed form, which no self-generated reference can do.
+
+They were not a pair before, and neither half worked as advertised:
+
+* **`AutodiffTransportSystem` never overrode `dSigma_dPhi`.** It overrides
+  `dSources_dPhi` and stops, so `TransportSystem`'s default stood -- and that
+  default *throws* when `nAux != 0`. Every case on that layer with an auxiliary
+  variable therefore died with "nAux > 0 but no coupling to fluxes provided" as
+  soon as the Jacobian was assembled. The correct override is a **no-op**:
+  `Flux` is declared `(Index, u, q, x, t)` and takes no `phi`, so the derivative
+  is structurally zero. The base cannot know that, which is why it is right to
+  throw and right to say so explicitly here.
+
+  The corollary is a real limitation worth knowing before choosing a layer: **a
+  case whose flux depends on an auxiliary variable cannot be written on
+  `AutodiffTransportSystem` at all** and must implement `TransportSystem`
+  directly, as `AuxVarTest` does.
+
+* **`AuxVarADTest::Source` had dropped the coupling.** It returned
+  `kappa (pi/2)^2 U`, naming `u` and `phi` and using neither, where
+  `AuxVarTest::Sources` returns `kappa (pi/2)^2 U + (a - U^2)`. So even once it
+  could run, every `phi`-coupling block was identically zero and
+  `dSources_dPhi` -- the autodiff gradient at
+  `AutodiffTransportSystem.cpp:148` -- was never evaluated by anything.
+
+**Why a right answer hid it.** The two missing terms cancel at the steady state,
+where `a -> U^2`. The case converged to `U` to 9.9e-05 and satisfied its own
+constraint `a = u^2` to 2.3e-08 with the aux variable an inert passenger. A
+closed-form check on the steady state cannot see this either, and that is why the
+regression case carries a reference comparison as well: the coupling changes the
+*transient*, contributing `u^2 - U^2` -- about -0.5 near `x = 0.5` at `t = 0`,
+against a source of about 1.7 there.
+
+`AutodiffAuxTests.cpp` is the unit-level half, and is the thing that was missing
+rather than a test of the fix: **nothing had ever constructed an
+`AutodiffTransportSystem` with `nAux > 0`.** It finite-differences
+`dSources_dPhi` against `Sources` and all four blocks of `AuxGPrime` against
+`AuxG` (agreeing to ~1e-11, and to the closed forms exactly), checks
+`dSigma_dPhi` returns zero rather than throwing, and -- the part that keeps the
+fix honest -- checks the *base* default still throws, so "the layer defines this"
+and "nothing checks this any more" cannot be confused.
+
+Not covered: a full `J dy = g` check for an aux case on this layer, in the style
+of `SolveJacTests.cpp`. `t_final` in the regression case is 20 rather than the 5
+`Config/AuxVarADTest.conf` uses, because the approach to the steady state is
+exponential -- measured error against `U`: 8.8e-03 at `t = 5`, 7.5e-04 at 10,
+4.7e-05 at 20, 2.3e-06 at 40 -- and tightening the *time* tolerances does not
+improve it (1e-4 gives the same 8.4e-03 at `t = 5`; 1e-6 fails outright).
+
 ## Known gaps
 
 These are deliberate and tracked, not oversights:

@@ -57,8 +57,20 @@ Real AuxVarADTest::Flux(Index i, RealVector, RealVector q, Real, Time)
 
 Real AuxVarADTest::Source(Index, RealVector u, RealVector, RealVector, RealVector phi, Real x, Time)
 {
+    // a + f(x), with f = -kappa U'' - U^2 and U = cos(pi x / 2), so that
+    // -kappa U'' = kappa (pi/2)^2 U. This is AuxVarTest::Sources term for term,
+    // which is the point: the two cases are now the same problem written twice,
+    // once with hand-coded derivatives and once through autodiff.
+    //
+    // The `phi(0) - U*U` half used to be absent, and nothing noticed -- because
+    // the two missing terms cancel at the steady state, where a = u^2 -> U^2.
+    // The run still converged to U (measured: 9.9e-05), still satisfied its own
+    // constraint a = u^2 (2.3e-08), and left every phi-coupling block
+    // identically zero. So dSources_dPhi -- the autodiff gradient at
+    // AutodiffTransportSystem.cpp:148 -- was never evaluated by anything, and a
+    // right answer was not evidence the coupling had been exercised.
     Real U = cos(M_PI_2 * x);
-    return kappa * M_PI_2 * M_PI_2 * U;
+    return phi(0) + kappa * M_PI_2 * M_PI_2 * U - U * U;
 }
 
 Real AuxVarADTest::GFunc(Index, RealVector u, RealVector, RealVector, RealVector phi, Position, Time t)

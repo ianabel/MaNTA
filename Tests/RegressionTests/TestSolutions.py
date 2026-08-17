@@ -249,6 +249,29 @@ run_manta( "nonlin_ss.conf" )
 test_steady_state( "nonlin_ss.nc", nonlin_ss, TOLERANCE )
 cleanup( "nonlin_ss" )
 
+# AuxVarADTest: an auxiliary variable whose every derivative comes from autodiff.
+# The steady state is u = cos(pi x / 2) exactly -- see the .conf for why t_final
+# is 20 rather than 5 -- and this is the only case driving the aux path through
+# AutodiffTransportSystem, which is how that layer came to be missing its
+# dSigma_dPhi override with nothing to say so.
+#
+# Checked twice, deliberately. The closed form is the stronger statement but it
+# cannot see the coupling: the source's `a - U^2` term vanishes at the steady
+# state, where a -> U^2, so u = U is reached whether or not the auxiliary variable
+# feeds back at all -- which is precisely how AuxVarADTest::Source came to be
+# missing that term while still converging to the right answer. What the term
+# changes is the *transient*: at t = 0 it contributes u^2 - U^2, around -0.5 near
+# x = 0.5 against a source of about 1.7 there. So the reference comparison is what
+# holds the coupling in place, and the closed form is what says the answer is
+# right rather than merely unchanged.
+def auxvar_ad_ss( x ):
+    return np.cos( np.pi * x / 2 )
+
+run_manta( "AuxVarADTest.conf" )
+test_steady_state( "AuxVarADTest.nc", auxvar_ad_ss, TOLERANCE )
+test_ref_soln_l2( "AuxVarADTest.nc", "AuxVarADTest.ref.nc", TOLERANCE )
+cleanup( "AuxVarADTest" )
+
 print("Checking Reference Solutions")
 
 check_ref_case( "LinearDiffusion" )

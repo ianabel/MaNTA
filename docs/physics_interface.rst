@@ -308,7 +308,19 @@ Auxiliary variables and global scalars
 Declare ``aux`` in the spec and implement ``AuxG`` (the constraint
 :math:`G_j = 0`) and ``AuxGPrime``, plus ``dSources_dPhi`` and ``dSigma_dPhi``
 so the solver knows how the flux and source depend on :math:`\phi`.
-``InitialAuxValue`` seeds them.
+``InitialAuxValue`` seeds them. Both derivative hooks throw when ``nAux > 0`` and
+they have not been overridden — a zero block has to be *stated*, because the base
+cannot tell a derivative that is structurally zero from one that was forgotten.
+
+.. warning::
+
+   **On** ``AutodiffTransportSystem``\ **, the flux cannot depend on an auxiliary
+   variable.** ``Flux`` is declared ``(Index, u, q, x, t)`` and is given no
+   :math:`\phi`, so :math:`\partial\hat\sigma/\partial\phi` is identically zero
+   and the layer overrides ``dSigma_dPhi`` to say so. A case that needs a flux
+   depending on :math:`\phi` must implement ``TransportSystem`` directly, as
+   ``AuxVarTest`` does. ``Source`` *does* take :math:`\phi`, so source coupling is
+   available on either layer.
 
 Declare ``scalars`` in the spec and implement two hooks, plus
 ``InitialScalarValue``, ``InitialScalarDerivative`` (consulted only for
