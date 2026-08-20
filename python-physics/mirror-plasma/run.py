@@ -5,7 +5,7 @@ from mirror_plasma import MirrorPlasma
 from mirror_plasma import configs as config
 import numpy as np
 
-nCells = 32
+nCells = 22
 
 
 def cheb_nodes(nCells):
@@ -16,20 +16,20 @@ def cheb_nodes(nCells):
 
 
 solver_config = {
-    "restart": False,
+    "restart": True,
     "OutputFilename": "mirror",
     "Grid_points": cheb_nodes(nCells),
-    "Polynomial_degree": 5,
+    "Polynomial_degree": 7,
     "Grid_size": nCells,
     "tau": 100.0,
     "Lower_boundary": 0.0,
     "Upper_boundary": 1.0,
     "Relative_tolerance": 1e-2,
-    "Absolute_tolerance": [1e-4],
+    "Absolute_tolerance": [1e-3],
     "MinStepSize": 1e-12,
     "delta_t": 0.1,
     "Superconvergent": True,
 }
 
-MP = MirrorPlasma(config.CMFX, solver_config=solver_config)
-MP.run(2.0)
+MP = MirrorPlasma(config.Fusion, solver_config=solver_config)
+MP.run(15)

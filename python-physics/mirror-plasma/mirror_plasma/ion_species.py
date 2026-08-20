@@ -145,19 +145,28 @@ class DeuteriumTritium(_IonSpecies):
 
     @override
     def FusionRate(self, n, Ti):
-        Factor = 1e-6 * 3.68e-12
 
-        def truefn(Ti):
-            return (
-                Factor
-                * jnp.pow(Ti, -2.0 / 3.0)
-                * jnp.exp(-19.94 * jnp.pow(Ti, -1.0 / 3.0))
-            )
+        # c.f. H.-S. Bosch and G.M. Hale 1992 Nucl. Fusion 32 611
+        C1 = 5.65718e-12
+        C2 = 3.41267e-3
+        C3 = 1.99167e-3
+        C4 = 0.0
+        C5 = 1.05060e-5
+        C6 = 0.0
+        C7 = 0.0
+        BG = 31.3970
+        mrc2 = 937814
 
-        def falsefn(Ti):
-            return 1e-6 * 2.7e-16
+        theta = Ti / (
+            1
+            - (Ti * (C2 + Ti * (C4 + Ti * C6))) / (1 + Ti * (C3 + Ti * (C5 + Ti * C7)))
+        )
 
-        return 0.25 * n**2 * jax.lax.cond(jax.lax.lt(Ti, 25.0), truefn, falsefn, Ti)
+        xi = (BG**2 / (4 * theta)) ** (1.0 / 3.0)
+
+        sigmav = C1 * theta * jnp.sqrt(xi / (mrc2 * Ti**3)) * jnp.exp(-3 * xi)
+
+        return 0.25 * n**2 * sigmav
 
     @override
     def electronImpactIonizationCrossSection(self, Energy):
