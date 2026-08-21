@@ -322,19 +322,26 @@ void SystemSolver::initialize()
 
 	if (debugDat)
 	{
+		// "pre-calcIC" only when there is going to be one. A steady solve skips
+		// IDACalcIC (see below), so on that path this block and its partner after
+		// the solve would bracket nothing, and the labels would name a correction
+		// that never happened.
+		const char *const icStage =
+			solvesForSteadyState() ? "initial guess" : "pre-calcIC";
+
 		wgt = N_VClone(res);
 		dydt_out.open(baseName + ".dydt.dat");
-		std::println(dydt_out, "# dydt before CalcIC");
+		std::println(dydt_out, "# dydt at the {}", icStage);
 		printOnNodes(dydt_out, t0, dYdt);
 		res_out.open(baseName + ".res.dat");
 		residual(t0, Y, dYdt, res);
 		getErrorWeights(Y, wgt);
 		double residual_val = N_VWrmsNorm(res, wgt);
-		std::println(res_out, "# Residual norm at t = {:g} (pre-calcIC) is {:g}", t0, residual_val);
+		std::println(res_out, "# Residual norm at t = {:g} ({}) is {:g}", t0, icStage, residual_val);
 		printOnNodes(res_out, t0, res);
 		if (writeDatFile)
 		{
-			std::println(out0, "# t = {:g} (pre-calcIC) ", t0);
+			std::println(out0, "# t = {:g} ({}) ", t0, icStage);
 			print(out0, t0, nOut, true);
 		}
 	}
@@ -342,87 +349,121 @@ void SystemSolver::initialize()
 	//------------------------------Solve------------------------------
 	// Update initial solution to be within tolerance of the residual equation
 
-	// The `retval = 0` that used to sit between these two lines made the check
-	// below unreachable: IDACalcIC's status was overwritten before it was read, so
-	// a failed initial-condition calculation carried on silently into the time
-	// loop with whatever partial state IDA had reached. The name passed to
-	// check_retval said "IDASolve" too, so even the message would have pointed at
-	// the wrong call.
+	// ...but only for a run that will time-march. IDACalcIC exists to hand IDA a
+	// state consistent with the algebraic constraints before it takes its first
+	// step, and a steady solve never takes one: solveSteadyState drives the *whole*
+	// residual to zero from Y with KINSOL, so whatever inconsistency the guess
+	// carries is removed by the answer rather than before it, and everything CalcIC
+	// computes is overwritten by the first accepted continuation step.
 	//
-	// tout1 is an absolute *time* -- "the first value of t at which a solution will
-	// be requested" -- and is what IDA takes the direction and rough scale of the
-	// independent variable from. This used to pass the *interval*,
-	// `dt0 > 0 ? dt0 : dt`, which is the same number only when t0 is zero.
+	// Being wasted is the smaller half. IDACalcIC is itself a damped Newton solve,
+	// and it fails on states a steady solve handles without difficulty --
+	// python-examples/jardin-critical-gradient records a case where starting from
+	// the *exact* steady state makes it return IDA_CONV_FAIL (-4), which is the one
+	// initial condition a steady solve would have accepted instantly. So requiring
+	// it ahead of a solve that does not need it converts runs that would have
+	// converged into runs that never start, and reports the failure as if the
+	// answer were unreachable.
 	//
-	// Every fixture in the tree starts at zero, so nothing noticed. Set t_initial
-	// equal to delta_t and the run dies before evaluating a single residual:
+	// The gate is solvesForSteadyState(), i.e. `TerminateOnSteadyState && steadyMode
+	// != TimeMarch`, so a plain transient and an explicit SteadyStateSolver =
+	// "TimeMarch" both keep the call unchanged. Both integrate, and IDA's first step
+	// is only as good as the state it starts from.
 	//
-	//     t_initial = 0.1, delta_t = 0.1   ->  tout1 == t0, IDA_ILL_INPUT (-22),
-	//                                          "tout1 too close to t0", and the
-	//                                          throw below kills the run
-	//
-	// which is a plain configuration, not a corner. A restart is the common way to
-	// reach it, since it resumes at the time the file was written. Other values of
-	// t_initial are wrong in a quieter way -- t_initial > delta_t hands IDA a tout1
-	// *behind* t0, i.e. the wrong direction of integration, which IDA does not
-	// reject.
-	//
-	// The first time integrate() actually asks for is t0 + dt: it sets `tout = t0`
-	// and the loop does `tout += dt` before the first IDASolve.
-	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, t0 + (dt0 > 0.0 ? dt0 : dt));
-	if (ErrorChecker::check_retval(&retval, "IDACalcIC", 1))
+	// Two things read the initial condition rather than the answer, and on the
+	// steady path they now see the guess setInitialConditions built. The t0
+	// timeslice in the netCDF and .dat output is one, and that is the state the run
+	// actually started from, so it is if anything the more honest report. The dG/dt
+	// gate in runSolver is the other: it differentiates the initial condition
+	// through dydtComplete, seeded below. Neither buys back the cost, since the
+	// gate's whole purpose is to abandon a run *before* paying for the solve and a
+	// CalcIC failure would abandon it in a way the gate cannot report.
+	if (!solvesForSteadyState())
 	{
-		throw std::runtime_error("IDACalcIC could not complete");
+		// The `retval = 0` that used to sit between these two lines made the check
+		// below unreachable: IDACalcIC's status was overwritten before it was read, so
+		// a failed initial-condition calculation carried on silently into the time
+		// loop with whatever partial state IDA had reached. The name passed to
+		// check_retval said "IDASolve" too, so even the message would have pointed at
+		// the wrong call.
+		//
+		// tout1 is an absolute *time* -- "the first value of t at which a solution will
+		// be requested" -- and is what IDA takes the direction and rough scale of the
+		// independent variable from. This used to pass the *interval*,
+		// `dt0 > 0 ? dt0 : dt`, which is the same number only when t0 is zero.
+		//
+		// Every fixture in the tree starts at zero, so nothing noticed. Set t_initial
+		// equal to delta_t and the run dies before evaluating a single residual:
+		//
+		//     t_initial = 0.1, delta_t = 0.1   ->  tout1 == t0, IDA_ILL_INPUT (-22),
+		//                                          "tout1 too close to t0", and the
+		//                                          throw below kills the run
+		//
+		// which is a plain configuration, not a corner. A restart is the common way to
+		// reach it, since it resumes at the time the file was written. Other values of
+		// t_initial are wrong in a quieter way -- t_initial > delta_t hands IDA a tout1
+		// *behind* t0, i.e. the wrong direction of integration, which IDA does not
+		// reject.
+		//
+		// The first time integrate() actually asks for is t0 + dt: it sets `tout = t0`
+		// and the loop does `tout += dt` before the first IDASolve.
+		retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, t0 + (dt0 > 0.0 ? dt0 : dt));
+		if (ErrorChecker::check_retval(&retval, "IDACalcIC", 1))
+		{
+			throw std::runtime_error("IDACalcIC could not complete");
+		}
+
+		long int nresevals = 0;
+		IDAGetNumResEvals(IDA_mem, &nresevals);
+		logmsg<LOG_LEVEL::INFO>("Number of Residual Evaluations due to IDACalcIC: {}", nresevals);
+
+		if (nresevals > 10)
+			logmsg<LOG_LEVEL::WARNING>("IDACalcIC required {} residual evaluations. Check settings in {}", nresevals, std::string(inputFilePath));
+
+		// Take IDACalcIC's result. It keeps the corrected initial condition inside
+		// IDA and hands it over only on request, so without this Y and dYdt still
+		// hold the state that was *fed* to CalcIC rather than the one it computed.
+		//
+		// Here, once, before anything reads Y or writes output. Everything
+		// downstream then means the same thing by "the initial condition": the t0
+		// timeslice initialiseNetCDF writes below, the t0 block of the .dat file,
+		// the residual the debug path evaluates, and the state the dG/dt gate
+		// differentiates. It used to be fetched in two places for two reasons --
+		// inside the debugDat branch, and again for the gate when armed -- which
+		// meant the t0 output reported the pre-CalcIC state on an ordinary run and
+		// the corrected one under WriteDebugDatFiles, so a discrepancy could
+		// reproduce only with debug output switched on.
+		//
+		// Note what this does *not* fix. dYdt's algebraic blocks stay zero: q, sigma
+		// and phi are algebraic, and IDA_YA_YDP_INIT computes algebraic values and
+		// differential derivatives, not the other way round. That is structural, not
+		// the old wrong id vector -- see at_t0_only_the_differential_part_of_dydt_exists
+		// -- and it stays that way, because dYdt is the state IDA takes its first
+		// step from. The gate reads dydtComplete instead, which the two blocks below
+		// seed from this and then fill in.
+		//
+		// Checked, unlike every other use of it in this file's history: it fails
+		// with IDA_ILL_INPUT if IDA has already taken a step, and on failure it
+		// leaves Y and dYdt holding their *pre*-CalcIC values rather than reporting
+		// anything. That is the same silent-failure shape as the `retval = 0`
+		// described above, and it would show up as a run whose initial condition is
+		// quietly the uncorrected one.
+		retval = IDAGetConsistentIC(IDA_mem, Y, dYdt);
+		if (ErrorChecker::check_retval(&retval, "IDAGetConsistentIC", 1))
+			throw std::runtime_error("Could not retrieve the corrected initial condition");
 	}
-
-	long int nresevals = 0;
-	IDAGetNumResEvals(IDA_mem, &nresevals);
-  logmsg<LOG_LEVEL::INFO>("Number of Residual Evaluations due to IDACalcIC: {}", nresevals);
-
-	if (nresevals > 10)
-    logmsg<LOG_LEVEL::WARNING>("IDACalcIC required {} residual evaluations. Check settings in {}", nresevals, std::string(inputFilePath));
-
-	// Take IDACalcIC's result. It keeps the corrected initial condition inside IDA
-	// and hands it over only on request, so without this Y and dYdt still hold the
-	// state that was *fed* to CalcIC rather than the one it computed.
-	//
-	// Here, once, before anything reads Y or writes output. Everything downstream
-	// then means the same thing by "the initial condition": the t0 timeslice
-	// initialiseNetCDF writes below, the t0 block of the .dat file, the residual the
-	// debug path evaluates, and the state the dG/dt gate differentiates. It used to
-	// be fetched in two places for two reasons -- inside the debugDat branch, and
-	// again for the gate when armed -- which meant the t0 output reported the
-	// pre-CalcIC state on an ordinary run and the corrected one under
-	// WriteDebugDatFiles, so a discrepancy could reproduce only with debug output
-	// switched on.
-	//
-	// Note what this does *not* fix. dYdt's algebraic blocks stay zero: q, sigma and
-	// phi are algebraic, and IDA_YA_YDP_INIT computes algebraic values and
-	// differential derivatives, not the other way round. That is structural, not the
-	// old wrong id vector -- see at_t0_only_the_differential_part_of_dydt_exists --
-	// and it stays that way, because dYdt is the state IDA takes its first step
-	// from. The gate reads dydtComplete instead, which the two blocks below seed
-	// from this and then fill in.
-	//
-	// Checked, unlike every other use of it in this file's history: it fails with
-	// IDA_ILL_INPUT if IDA has already taken a step, and on failure it leaves Y and
-	// dYdt holding their *pre*-CalcIC values rather than reporting anything. That is
-	// the same silent-failure shape as the `retval = 0` described above, and it
-	// would show up as a run whose initial condition is quietly the uncorrected one.
-	retval = IDAGetConsistentIC(IDA_mem, Y, dYdt);
-	if (ErrorChecker::check_retval(&retval, "IDAGetConsistentIC", 1))
-		throw std::runtime_error("Could not retrieve the corrected initial condition");
 
 	// Seed the complete derivative from IDA's. Its algebraic blocks are zero at
 	// this point; computeAlgebraicTimeDerivatives() fills them when the gate is
 	// armed, and nothing else reads them.
 	//
-	// Here rather than beside setJacEvalY above, because until the fetch on the
-	// line before this dYdt still holds the *guess* setInitialConditions built
-	// rather than the derivative IDACalcIC corrected it to. Seeding from the guess
-	// left dydtComplete's u block disagreeing with the state it is meant to
-	// describe by a fraction of a percent -- small enough to look like round-off
-	// and quite large enough to matter to anything differentiating the solution.
+	// Here rather than beside setJacEvalY above, because on the time-marching path
+	// dYdt holds the *guess* setInitialConditions built until the fetch above
+	// replaces it with the derivative IDACalcIC corrected it to. Seeding from the
+	// guess left dydtComplete's u block disagreeing with the state it is meant to
+	// describe by a fraction of a percent -- small enough to look like round-off and
+	// quite large enough to matter to anything differentiating the solution. On the
+	// steady path there is no fetch and the guess is what there is; see above.
 	{
 		DGSoln idaDerivative(nVars, grid, k, nScalars, nAux);
 		idaDerivative.Map(N_VGetArrayPointer(dYdt));
@@ -440,16 +481,12 @@ void SystemSolver::initialize()
 	if (debugDat)
 	{
 		residual(t0, Y, dYdt, res);
-		std::println(dydt_out, "# After CalcIC ");
+		std::println(dydt_out, "# dydt at the initial condition the run starts from");
 		printOnNodes(dydt_out, t0, dYdt);
-
-	
 
 		IDAEwtSet(Y, wgt, IDA_mem);
 
-
-
-		std::println(res_out, "# Residual norm at t = {:g} (post-CalcIC) is {:g}", t0,
+		std::println(res_out, "# Residual norm at t = {:g} (initial condition) is {:g}", t0,
 					 N_VWrmsNorm(res, wgt));
 		printOnNodes(res_out, t0, res);
 	}

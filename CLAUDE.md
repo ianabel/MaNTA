@@ -170,7 +170,15 @@ catch a sign error there.
 called separately:
 
 * `SystemSolver::initialize` — allocate the SUNDIALS objects, build the initial
-  condition, open the output files, run `IDACalcIC`.
+  condition, open the output files, and -- only when the run will actually
+  time-march -- run `IDACalcIC`. A steady solve skips it: `solveSteadyState`
+  drives the whole residual to zero from `Y` with KINSOL, so a correction made
+  first is discarded by the first accepted continuation step, and `IDACalcIC` is
+  itself a damped Newton solve that fails on states the steady solver handles
+  easily. The gate is `solvesForSteadyState()`, so `SteadyStateSolver =
+  "TimeMarch"` and a plain transient both keep the call. On the steady path the
+  `t0` output slice and the dG/dt gate therefore see the guess
+  `setInitialConditions` built, which is the state the run really started from.
 * `SystemSolver::integrate(tFinal)` — the time loop, then the adjoint solve and
   the final netCDF / restart output.
 * `SystemSolver::destroySundials` — free all of it. Idempotent, and safe with no
