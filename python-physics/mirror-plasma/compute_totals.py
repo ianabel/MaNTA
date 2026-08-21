@@ -96,7 +96,7 @@ solver_config = {
 }
 
 
-MP = MirrorPlasma(Fusion, solver_config)
+MP = MirrorPlasma(CMFX, solver_config)
 
 params = MP.params
 points = MP.points

@@ -16,7 +16,7 @@ def cheb_nodes(nCells):
 
 
 solver_config = {
-    "restart": True,
+    "restart": False,
     "OutputFilename": "mirror",
     "Grid_points": cheb_nodes(nCells),
     "Polynomial_degree": 7,
@@ -25,11 +25,11 @@ solver_config = {
     "Lower_boundary": 0.0,
     "Upper_boundary": 1.0,
     "Relative_tolerance": 1e-2,
-    "Absolute_tolerance": [1e-3],
+    "Absolute_tolerance": [1e-6],
     "MinStepSize": 1e-12,
     "delta_t": 0.1,
     "Superconvergent": True,
 }
 
-MP = MirrorPlasma(config.Fusion, solver_config=solver_config)
-MP.run(15)
+MP = MirrorPlasma(config.CMFX, solver_config=solver_config)
+MP.run(2)

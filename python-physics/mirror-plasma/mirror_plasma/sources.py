@@ -1,8 +1,5 @@
-from atexit import register
-
 import jax
 import jax.numpy as jnp
-import equinox as eqx
 from collections.abc import Callable
 
 from .plasma_state import (
@@ -20,6 +17,7 @@ from .parallel_physics import (
 )
 
 
+# simple class to hold a source, saving the name for analysis
 class _source_base:
     method: Callable
     name: str
@@ -32,6 +30,7 @@ class _source_base:
         return self.method(state, x, t, params)
 
 
+# register sources on input as either sources or sinks, specifying for a given Channel
 source_registry = [[], [], [], []]
 sink_registry = [[], [], [], []]
 
@@ -158,17 +157,7 @@ def JxBForce(state, x, t, params):
 @register_source(Channel.IonEnergy)
 @register_source(Channel.ElectronEnergy)
 def UniformHeatSource(state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
-    Center = params.Config.ParticleSourceCenter / params.Constants.a
-    Width = params.Config.ParticleSourceWidth / params.Constants.a
-    # Height = params.Config.ParticleSourceHeight * params.Constants.a**2
-    return (
-        params.Constants.a**2
-        * 400.0
-        * jnp.exp(-(((state.R - Center) / Width) ** 2))
-        * jnp.exp(-t / 2.0)
-    )
-
-    # return params.Constants.a**2 * 200.0 * jnp.exp(-t / 5.0)
+    return params.Constants.a**2 * 200.0 * jnp.exp(-t / 0.01)
 
 
 @register_source(Channel.IonEnergy)
