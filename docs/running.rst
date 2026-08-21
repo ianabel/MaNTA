@@ -265,7 +265,9 @@ transient *is* the answer.
 
 Measured on the benchmarks under ``python-examples/``, in the units
 ``PERFORMANCE.md`` asks for — evaluations of the physics per point, for an
-answer identical in every digit printed:
+answer identical in every digit printed. The resolution is stated because the
+counts depend on it: ``park-convergence`` at 4 cells, the other two at 10, all
+three at :math:`k = 3`.
 
 .. list-table::
    :header-rows: 1
@@ -275,20 +277,28 @@ answer identical in every digit printed:
      - ``PseudoTransient``
      - ``Newton``
    * - ``park-convergence``
-     - 113
-     - **19**
+     - 119
      - **11**
+     - **7**
    * - ``jardin-critical-gradient``
-     - 176
-     - **92**
-     - 117
+     - 182
+     - **138**
+     - 163
    * - ``shestakov-nonlinear``
-     - **283**
-     - 705
-     - 731
+     - **256**
+     - 622
+     - 648
 
-Park's own solver reaches that state in 9–15 iterations, which is where
-``Newton`` lands. The last row is the counter-example and is why ``TimeMarch``
+A small, uniform part of those two columns is that a steady solve no longer pays
+for ``IDACalcIC`` (see :ref:`the-run-lifecycle` below). Skipping it took
+``PseudoTransient``/``Newton`` from 15/11 to 11/7 on ``park-convergence``, from
+142/167 to 138/163 on ``jardin-critical-gradient`` and from 657/683 to 622/648 on
+``shestakov-nonlinear`` — every converged answer unchanged bit for bit, and
+``TimeMarch``, which still runs it, untouched. It is a constant few evaluations,
+not the order of magnitude in the first row; that is the algorithm.
+
+Park's own solver reaches that state in 9–15 iterations, which ``Newton`` now
+matches or beats. The last row is the counter-example and is why ``TimeMarch``
 stays: that problem's flux ``D0 q^3/u^2`` is degenerate, the mass term
 continuation exists to shed is what was damping it, and as ``dt`` grows the inner
 solve starts rejecting steps. Its ``run.conf`` therefore pins ``TimeMarch``.
@@ -532,6 +542,8 @@ before reaching for this key. A start whose flux is badly scaled needs it; the
 same problem from a physically scaled start does not. That example's
 ``ANALYSIS.md`` measures both.
 
+.. _the-run-lifecycle:
+
 The three phases
 ----------------
 
@@ -554,6 +566,14 @@ condition and integrating:
        (:math:`q`, :math:`\sigma`, the auxiliary variables, and :math:`u^\star`
        through :math:`q`); :math:`u` is differential, so ``IDACalcIC`` holds it
        fixed and it is the same either way.
+
+       **``IDACalcIC`` runs only for a run that will time-march.** A steady solve
+       skips it: ``solveSteadyState`` drives the whole residual to zero from the
+       guess, so a correction made first is discarded by the first accepted
+       continuation step, and ``IDACalcIC`` is itself a damped Newton solve that
+       can fail on initial conditions the steady solver handles easily. On that
+       path the :math:`t_0` slice is therefore the guess — which is the state the
+       run really started from. See :ref:`steady-state-solver`.
    * - ``integrate(tFinal)``
      - The time loop, then the adjoint solve if requested, then the final netCDF
        and restart output.

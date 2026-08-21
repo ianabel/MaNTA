@@ -762,6 +762,135 @@ BOOST_AUTO_TEST_CASE(the_initial_condition_uses_boundary_data_at_t0)
     removeOutput("lifecycle_t0_boundaries");
 }
 
+// How many residual evaluations IDA itself has made. Zero until something asks
+// IDA to solve: IDAInit clears the counter, and nothing else in initialize()
+// goes through IDA. So on a path that skips IDACalcIC this stays at zero, and
+// MaNTA's own nResidualEvals -- which the debug .dat blocks and the steady solve
+// also increment -- would not distinguish the two.
+long idaResidualEvals(SystemSolver &sys)
+{
+    long n = -1;
+    BOOST_REQUIRE(IDAGetNumResEvals(sys.IDA_mem, &n) == IDA_SUCCESS);
+    return n;
+}
+
+BOOST_AUTO_TEST_CASE(only_a_time_marching_run_pays_for_calcic)
+{
+    // IDACalcIC exists to make the state IDA takes its *first step* from
+    // consistent with the algebraic constraints. A PseudoTransient or Newton run
+    // never takes one -- solveSteadyState drives the whole residual to zero from
+    // Y with KINSOL -- so everything CalcIC computes there is overwritten by the
+    // first accepted continuation step.
+    //
+    // It is not free and it is not safe. It is a damped Newton solve in its own
+    // right, and it fails on initial conditions a steady solve handles without
+    // difficulty: python-examples/jardin-critical-gradient records IDA_CONV_FAIL
+    // (-4) from starting at the *exact* steady state, which is the one guess a
+    // steady solve would have accepted immediately. Requiring it ahead of a solve
+    // that does not need it turns runs that would converge into runs that never
+    // start.
+    //
+    // Measured on python-examples/park-convergence at 8 cells, k = 3: 256 -> 192
+    // physics evaluations for Newton and 352 -> 288 for PseudoTransient, with the
+    // converged answer identical bit for bit in both.
+    //
+    // Three solvers, because the condition is solvesForSteadyState() -- the
+    // conjunction of steady-state *termination* and a mode that is not TimeMarch
+    // -- and each half of it has to be shown to matter. Only initialize() is
+    // called: the counter is read before anything can add to it.
+    struct Case
+    {
+        const char *stem;
+        bool armTermination;
+        SystemSolver::SteadyMode mode;
+        bool expectCalcIC;
+    };
+
+    const Case cases[] = {
+        // A plain transient. No termination armed, so the mode is not consulted
+        // at all and the default PseudoTransient must not be read as a steady
+        // solve -- that pairing is the trap solvesForSteadyState() exists for.
+        {"lifecycle_calcic_transient", false, SystemSolver::SteadyMode::PseudoTransient, true},
+        // Termination armed, but the mode says integrate to it. This is
+        // run_ss() with SteadyStateSolver = "TimeMarch", which does take IDA
+        // steps and so still needs a consistent state to start from.
+        {"lifecycle_calcic_timemarch", true, SystemSolver::SteadyMode::TimeMarch, true},
+        // The steady path proper.
+        {"lifecycle_calcic_steady", true, SystemSolver::SteadyMode::PseudoTransient, false},
+    };
+
+    for (Case const &c : cases)
+    {
+        Grid grid(0.0, 1.0, nCells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, c.stem);
+        sys.setSteadyMode(c.mode);
+        if (c.armTermination)
+            sys.setSteadyStateTolerance(1e-10);
+
+        BOOST_TEST(sys.solvesForSteadyState() == !c.expectCalcIC);
+
+        {
+            CapturedOutput quiet;
+            sys.initialize();
+        }
+
+        const long nre = idaResidualEvals(sys);
+        if (c.expectCalcIC)
+            BOOST_TEST(nre > 0,
+                       "" << c.stem << ": IDACalcIC was skipped on a run that "
+                          "will hand the state to IDA");
+        else
+            BOOST_TEST(nre == 0,
+                       "" << c.stem << ": IDA evaluated the residual " << nre
+                          << " times during initialize(), so IDACalcIC still ran "
+                             "on a path that discards its answer");
+
+        {
+            CapturedOutput quiet;
+            sys.destroySundials();
+        }
+        removeOutput(c.stem);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(skipping_calcic_leaves_the_steady_answer_alone)
+{
+    // The other half of the case above: what the steady solve converges to must
+    // not depend on whether a discarded correction was computed first. Same
+    // closed form as a_steady_solve_writes_its_answer_to_the_output_file --
+    // TestDiffusion with Centre = 0 has the exact steady state u = 1 - x, degree
+    // 1 and so exactly representable -- but checked here at both modes, because
+    // Newton starts from an infinite pseudo-timestep and is the mode least
+    // tolerant of a poor initial iterate.
+    for (auto mode : {SystemSolver::SteadyMode::PseudoTransient,
+                      SystemSolver::SteadyMode::Newton})
+    {
+        const std::string stem = "lifecycle_calcic_answer";
+        Grid grid(0.0, 1.0, nCells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        sys.setSteadyMode(mode);
+        sys.setSteadyStateTolerance(1e-10);
+
+        {
+            CapturedOutput quiet;
+            sys.runSolver(T_FINAL);
+        }
+
+        const Vector u = sample(sys);
+        for (Index i = 0; i < u.size(); ++i)
+        {
+            const double x = 0.1 + 0.2 * i;
+            BOOST_TEST(u(i) == 1.0 - x, boost::test_tools::tolerance(1e-8));
+        }
+
+        removeOutput(stem);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(a_steady_solve_writes_its_answer_to_the_output_file)
 {
     // Every output call used to live inside the time loop, so a PseudoTransient

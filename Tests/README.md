@@ -636,9 +636,32 @@ These are deliberate and tracked, not oversights:
   * `the_SER_rate_and_floor_change_the_cost_and_not_the_answer` measures the schedule through physics evaluations -- 552 at the defaults, 3540 with the floor at 1, 1704 with the floor at 1 and the rate at 2 -- and requires the converged state to be identical in all three. An option that changed the answer would be a bug; one that changed nothing would be inert.
   * `the_steady_diagnostics_count_the_whole_solve_not_the_last_step`. **KINSOL zeroes its own counters at the top of every `KINSol` call**, so the continuation loop has to sum them as it goes; reading them once at the end -- the obvious thing, and what this did first -- reported 1 Newton iteration against 5 continuation steps and 35 Jacobian solves. Self-evidently impossible, and it still looks like a number, which is why the test asserts invariants (`newtonIters >= steps`, `residualEvals == kinFuncEvals + steps + 1`) rather than values. The second of those also pins the counter snapshot being taken before the first `steadyNorm()`, which it was not to begin with.
   * `a_failed_steady_solve_still_writes_the_last_state_it_reached`, using a tolerance nothing can reach so the solve stalls at ~1e-16 and exits by the "ran out of continuation steps" path.
+  * `only_a_time_marching_run_pays_for_calcic` and
+    `skipping_calcic_leaves_the_steady_answer_alone`. `initialize()` ran
+    `IDACalcIC` unconditionally, including for a solve that never takes an IDA
+    step and so discards its answer with the first accepted continuation step.
+    Worse than wasted: `IDACalcIC` is a damped Newton solve in its own right and
+    fails on initial conditions the steady solver handles easily --
+    `python-examples/jardin-critical-gradient` records `IDA_CONV_FAIL` (-4) from
+    starting at the *exact* steady state, which is the one guess a steady solve
+    would have taken instantly. The first test reads `IDAGetNumResEvals` straight
+    after `initialize()`, which is zero unless something asked IDA to solve;
+    MaNTA's own `nResidualEvals` would not do, since the debug `.dat` blocks and
+    the steady solve increment it too. It covers three configurations, because
+    the condition is `solvesForSteadyState()` -- the *conjunction* of armed
+    termination and a non-`TimeMarch` mode -- and the trap is reading the default
+    `PseudoTransient` as a steady solve when nothing armed termination. Mutating
+    the gate to a constant fails it in both directions. The second test pins the
+    thing that actually matters: what the solve converges to must not depend on a
+    correction that was going to be thrown away, checked at both steady modes
+    against `TestDiffusion`'s closed form. Measured on the benchmarks, this cut
+    physics evaluations per point from 15 to 11 (`PseudoTransient`) and 11 to 7
+    (`Newton`) on `park-convergence`, 142/167 to 138/163 on
+    `jardin-critical-gradient` and 657/683 to 622/648 on `shestakov-nonlinear`,
+    with every converged answer identical bit for bit and `TimeMarch` untouched.
 
-  What is still uncovered is the rest of the algorithm -- step rejection,
-  `Newton` mode, the `KINSetMaxNewtonStep` clamp, and the hard-`KINSol`-failure
+  What is still uncovered is the rest of the algorithm -- step rejection, the
+  `KINSetMaxNewtonStep` clamp, and the hard-`KINSol`-failure
   path (the ordinary exhaustion path above shares its `catch (...)` in
   `Solver.cpp`, but not the code that reaches it). In particular the flat
   unweighted `steadyNorm` (`SteadyState.cpp`) is untested, and both the

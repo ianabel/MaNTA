@@ -321,8 +321,10 @@ void SystemSolver::solveSteadyState()
 
             // dYdt is IDA's derivative vector, and nothing in this function has
             // touched it -- the damping above runs on the scratch ptcDYdt. So on
-            // return it still holds whatever IDACalcIC left at t0, which for a
-            // converged steady state is simply wrong: the defining property of
+            // return it still holds the t0 derivative initialize() left there,
+            // which since this path skips IDACalcIC (Solver.cpp) is the guess
+            // setInitialConditions solved out of the u row. Either way it is
+            // simply wrong for a converged steady state: the defining property of
             // the answer is that dy/dt vanishes. Two things read it afterwards
             // and both were getting the t0 derivative -- WriteRestartFile
             // (Solver.cpp), so a restart resumed from a state whose y was the

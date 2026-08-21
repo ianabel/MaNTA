@@ -280,7 +280,8 @@ class SystemSolver
         // The run lifecycle, in three phases.
         //
         //   initialize()       allocate the SUNDIALS objects, build the initial
-        //                      condition, open the output files, run IDACalcIC
+        //                      condition, open the output files, and -- only for
+        //                      a run that will time-march -- run IDACalcIC
         //   integrate(tFinal)  the time loop, then the adjoint solve and the
         //                      final netCDF / restart output
         //   destroySundials()  free everything initialize() allocated
@@ -306,9 +307,11 @@ class SystemSolver
         // is disarmed, so an unconfigured caller sees no behaviour change.
         //
         // Only meaningful after initialize(): it reads y and dydt, which map the
-        // live SUNDIALS vectors, and it needs the *post*-IDACalcIC derivative.
-        // Before initialize() there is nothing mapped; after destroySundials()
-        // they dangle.
+        // live SUNDIALS vectors, and it needs the derivative initialize() left
+        // there -- IDACalcIC's on a time-marching run, and setInitialConditions'
+        // guess on a steady one, which skips CalcIC (Solver.cpp). Before
+        // initialize() there is nothing mapped; after destroySundials() they
+        // dangle.
         bool objectiveIsDecreasing();
 
         // Whether the gate rejected the run, i.e. runSolver() skipped the time
