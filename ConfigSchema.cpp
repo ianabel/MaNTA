@@ -133,6 +133,11 @@ const std::vector<Entry> &table()
         {"SuppressAlgebraicError", {}, Type::Bool, Category::Solver, false, false, false,
          "Drop sigma, q, lambda and phi from IDA's local error test (IDASetSuppressAlg). "
          "Costs restart fidelity and aux-variable accuracy; see docs/running.rst."},
+        {"ConsistentICTolerance", {}, Type::Double, Category::Solver, false, false, 0.0,
+         "Skip IDACalcIC when the initial state's weighted residual is already below this. "
+         "0 (the default) always runs it. For warm starts, where the stored state is already "
+         "consistent and IDACalcIC costs two Jacobian builds to discover it -- but see "
+         "docs/running.rst, it is unsafe on some problems with auxiliary variables."},
         {"TransportSystem", {}, Type::String, Category::ProblemSelection, true, false, std::string{},
          "Name of the registered physics case to run."},
         {"PhysicsPlugins", {}, Type::StringList, Category::ProblemSelection, false, false,

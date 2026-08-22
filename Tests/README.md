@@ -671,6 +671,44 @@ These are deliberate and tracked, not oversights:
   `the_initial_condition_uses_boundary_data_at_t0` covers that separately,
   because every other fixture in the tree starts at zero.
 
+* **Warm starts: what a restart hands the solver, and whether `IDACalcIC` has to
+  run.** Two cases in `SolverLifecycleTests.cpp`, and unlike the three
+  degree-transfer cases beside them they go through an actual `.restart.nc`
+  rather than through `setRestartValues` on an in-memory vector -- the netCDF
+  round trip is part of what decides whether the state is still consistent.
+
+  * `the_warm_start_keeps_the_trace_the_file_carries`. `setInitialConditions`
+    finished every restart with `EvaluateLambda()`, which sets `lambda` to
+    `{{u}}` -- the average of the two cell traces -- and that is not the equation
+    `lambda` solves. On a restart it discarded a converged trace and replaced it
+    with something that solves nothing. The test measures both: keeping the trace
+    gives a weighted residual of 2.6e-3, re-averaging it gives 556, a factor of
+    2e5. That is the whole of the gap, and it is what made a restart need about
+    ten times as many residual evaluations inside `IDACalcIC` as a cold start --
+    the effect `TestSolutions.py`'s comment beside `check_restart_round_trip` had
+    already noticed and attributed correctly. On `AuxVarTest`'s round trip
+    keeping the trace takes the resumed run from 1139 residual evaluations to
+    1033.
+  * `a_warm_start_from_a_restart_file_does_not_run_calcic`. `IDACalcIC` has no
+    cheap path -- 2 residual evaluations, 2 Jacobian builds and 2 Jacobian solves
+    even on a state it just converged to, because its test is on the Newton step
+    -- so `ConsistentICTolerance` skips it when the residual says there is
+    nothing to do. The test arms the tolerance explicitly, checks
+    `IDAGetNumResEvals` is zero after `initialize()`, **and integrates**, because
+    the norm alone does not establish that the state can be stepped from. Its
+    control is a cold start of the same problem, three orders further out, which
+    must still be corrected.
+
+  What is *not* covered, and is the reason the key defaults to zero: no threshold
+  is safe across the fixtures. `AuxVarTest` warm-starts at 1.6e-4, below
+  `TestDiffusion`'s 2.6e-3, and skipping there makes the resumed run fail with
+  `IDA_CONV_FAIL` -- while `IDACalcIC` *raises* its residual to 3.8e-4 and the run
+  then works. The ordering is inverted, not merely noisy. The opposite failure is
+  also real and also uncovered: a `TestDiffusion` warm start at rtol 1e-6 / atol
+  1e-8 cannot complete `IDACalcIC` at all, so there the skip is the only thing
+  that lets the restart run. Both are recorded in `docs/running.rst`; neither is
+  pinned by a test, because pinning a failure is not the same as fixing it.
+
 * **`SteadyState.cpp` is barely covered, and what covers it now is its output
   rather than its algorithm.** Until recently nothing called `solveSteadyState`
   from a test at all -- the only mentions of it under `Tests/` were config

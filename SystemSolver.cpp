@@ -150,7 +150,38 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         }
         y.AssignSigma(initialState);
 
-        y.EvaluateLambda();
+        // Keep the trace the file carries, on the path where it is meaningful.
+        //
+        // EvaluateLambda() sets lambda to {{u}}, the DG average of the two cell
+        // traces (DGSoln.hpp). That is a reasonable *guess* and it is not the
+        // equation lambda satisfies -- the HDG trace row is
+        // Csigma sigma + Cq q + G_c u + H lambda = L(t) -- so applying it to a
+        // restart throws away a converged trace and replaces it with something
+        // that does not solve anything. Measured on a TestDiffusion round trip at
+        // Absolute_tolerance = 1e-8, that single call takes the weighted residual
+        // of the stored state from 2.6e-3 to 556, and it is why a restart used to
+        // need about ten times as many residual evaluations inside IDACalcIC as a
+        // cold start (Tests/README.md).
+        //
+        // On the projection path there is no stored trace to keep -- the degrees
+        // differ, so copy() refused and only u, q, aux and the scalars were
+        // transferred -- and {{u}} is then the right guess to build.
+        //
+        // ApplyDirichletBCs stays *above* this rather than below it, which looks
+        // wrong and is not. EvaluateLambda overwrites every entry including the
+        // boundary ones, so in that order the boundary data it writes is
+        // discarded again on the projection path -- but moving it below breaks
+        // the AuxVarTest restart round trip outright (IDA_CONV_FAIL at the first
+        // step of the resumed run). The two differ only in what a Dirichlet end's
+        // trace holds -- the boundary datum, or u's own trace there -- and that
+        // node has an identically zero row and column, so it is not the residual
+        // that notices: it is IDA's error test, which weights lambda like
+        // everything else. That case runs at rtol 1e-6 with nAux > 0, where
+        // restarting is documented as marginal, and it is close enough to the
+        // edge that the difference tips it. Left alone deliberately; changing it
+        // is a separate question from keeping the trace.
+        if (!sameDiscretisation)
+            y.EvaluateLambda();
     }
     else
     {

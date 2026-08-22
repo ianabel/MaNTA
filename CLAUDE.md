@@ -170,14 +170,45 @@ catch a sign error there.
 called separately:
 
 * `SystemSolver::initialize` — allocate the SUNDIALS objects, build the initial
-  condition, open the output files, and -- only when the run will actually
-  time-march -- run `IDACalcIC`. A steady solve skips it: `solveSteadyState`
-  drives the whole residual to zero from `Y` with KINSOL, so a correction made
-  first is discarded by the first accepted continuation step, and `IDACalcIC` is
-  itself a damped Newton solve that fails on states the steady solver handles
-  easily. The gate is `solvesForSteadyState()`, so `SteadyStateSolver =
-  "TimeMarch"` and a plain transient both keep the call. On the steady path the
-  `t0` output slice and the dG/dt gate therefore see the guess
+  condition, open the output files, and *sometimes* run `IDACalcIC`. Two
+  independent reasons not to:
+
+  * **A steady solve skips it outright.** `solveSteadyState` drives the whole
+    residual to zero from `Y` with KINSOL, so a correction made first is
+    discarded by the first accepted continuation step. The gate is
+    `solvesForSteadyState()`, so `SteadyStateSolver = "TimeMarch"` and a plain
+    transient both keep the call.
+  * **A state that is already consistent can skip it too**, on either path, if
+    `ConsistentICTolerance` is set. `IDACalcIC` cannot find that out cheaply: its
+    convergence test is on the Newton *step*, so `IDANewtonIC` calls `lsolve` and
+    only then tests `||J^-1 F|| <= epsNewt` (`ida_ic.c:404-417`), `IDAnlsIC`
+    calls `lsetup` unconditionally first (`ida_ic.c:345`), and the outer loop
+    runs the whole thing twice on success (`ida_ic.c:232`). Measured floor,
+    handed a state it had just converged to: **2 residual evaluations, 2 Jacobian
+    builds, 2 Jacobian solves, 0 Newton iterations** — every time. So
+    `initialize` makes the test IDA declines to: one residual evaluation,
+    WRMS-weighted with `getErrorWeights`, against the key.
+    `getInitialResidualNorm()` reports the number (measured on every
+    time-marching run, armed or not) and `initialConditionWasCorrected()` says
+    whether CalcIC then ran.
+
+    **The key defaults to `0` — off — and that is a measurement, not caution.**
+    TestDiffusion round trips separate cleanly (cold 0.30 at `atol = 1e-3` and
+    417 at `1e-8`; warm 7.7e-4 to 1.9e-2), and `1e-2` works on the
+    `LinearDiffusion` and `MatTest` restart round trips. `AuxVarTest`, the only
+    regression round trip with `nAux > 0`, warm-starts at **1.6e-4** — inside any
+    such threshold — and skipping there makes the resumed run fail with
+    `IDA_CONV_FAIL` at its first step. Worse, `IDACalcIC` *raises* that case's
+    residual, 1.6e-4 to 3.8e-4, and the run works anyway: what it fixes is the
+    algebraic values, which a norm of `F` cannot see when the aux block is stiff.
+    So the ordering is **inverted** — the fixture that must not skip measures
+    lower than the one that may — and no threshold separates them. Set it per
+    problem, and check the resumed run *integrates* rather than only starts.
+    Note the opposite failure too: a TestDiffusion warm start at rtol 1e-6 /
+    atol 1e-8 cannot complete `IDACalcIC` at all, so there the skip is the only
+    way the restart runs.
+
+  On either skip the `t0` output slice and the dG/dt gate see the guess
   `setInitialConditions` built, which is the state the run really started from.
 * `SystemSolver::integrate(tFinal)` — the time loop, then the adjoint solve and
   the final netCDF / restart output.
@@ -976,6 +1007,21 @@ weights" pins the formula, not the operator, if the data cannot tell them apart.
   hard error, and `make coverage` fails with exit 64 on CI while passing locally.
   Anything that reads `.gcno`/`.gcda` must come from the same toolchain version
   that wrote them.
+* **A restart used to have its trace thrown away.** `setInitialConditions`
+  finished every restart with `EvaluateLambda()`, which sets `lambda` to
+  `{{u}}` -- the average of the two cell traces (`DGSoln.hpp`) -- and that is not
+  the equation `lambda` solves. The HDG trace row is
+  `Csigma sigma + Cq q + G_c u + H lambda = L(t)`, so applying the average to a
+  file that already holds a converged trace replaces it with something that
+  solves nothing: measured on a `TestDiffusion` round trip at
+  `Absolute_tolerance = 1e-8`, that one call takes the weighted residual from
+  2.6e-3 to 556. It is why a restart needed roughly ten times as many residual
+  evaluations inside `IDACalcIC` as a cold start. The trace is now kept whenever
+  the discretisation matches; the *projection* path still builds one, because
+  copy() refused the transfer and there is none to keep. Note the reordering that
+  went with it: `ApplyDirichletBCs` now runs *after* the trace is settled, since
+  `EvaluateLambda` overwrites every entry including the boundary ones, so in the
+  old order the Dirichlet data was applied and then immediately discarded.
 * **`RF_cellwise` and `L_global` hold *time-dependent* boundary data, and only
   `updateBoundaryConditions(t)` may fill them.** `initialiseMatrices` sizes and
   zeroes them; `setInitialConditions` calls `updateBoundaryConditions(t0)` before

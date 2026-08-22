@@ -6,6 +6,7 @@
 #include <sundials/sundials_types.h>  /* definition of type sunrealtype          */
 #include <toml.hpp>
 #include <fstream>
+#include <limits>
 #include <print>
 #include <memory>
 
@@ -378,7 +379,47 @@ void SystemSolver::initialize()
 	// through dydtComplete, seeded below. Neither buys back the cost, since the
 	// gate's whole purpose is to abandon a run *before* paying for the solve and a
 	// CalcIC failure would abandon it in a way the gate cannot report.
+	//
+	// ...and only when there is something for it to correct. IDACalcIC has no
+	// cheap path: its convergence test is on the Newton step rather than on the
+	// residual, so it does a Jacobian setup and solve before it can find out that
+	// it had nothing to do, and it repeats the whole thing to refresh the error
+	// weights. Measured floor, on a state it had itself just converged to: two
+	// residual evaluations, two Jacobian builds and two Jacobian solves, with zero
+	// Newton iterations. See setConsistentICTolerance for the source references.
+	//
+	// A residual norm is the test it declines to make and costs one residual
+	// evaluation. That matters most for a warm start: a restart file holds a state
+	// the previous run had already driven onto the constraint manifold, so the
+	// common production case is precisely the one where CalcIC is a no-op that
+	// nonetheless assembles and factorises the whole system twice.
+	//
+	// Measured *before* the branch either way, so the number is available whether
+	// or not CalcIC ran and a caller can see how consistent its own guess was.
+	initial_residual_norm = std::numeric_limits<double>::quiet_NaN();
+	calcICRan = false;
+
 	if (!solvesForSteadyState())
+	{
+		initial_residual_norm = weightedResidualNorm(t0, Y, dYdt);
+
+		// NaN fails this and falls through to IDACalcIC, which is what should
+		// happen: a guess that cannot be evaluated is not a guess to trust.
+		const bool alreadyConsistent =
+			consistent_ic_tol > 0.0 && initial_residual_norm <= consistent_ic_tol;
+
+		// Reported whether or not the skip is armed. The default tolerance is
+		// zero, so without this the number a user needs in order to choose one
+		// would only appear once they had already chosen it.
+		logmsg<LOG_LEVEL::INFO>(
+			"Initial state has a weighted residual of {:g}; ConsistentICTolerance "
+			"is {:g}, so IDACalcIC {}.", initial_residual_norm, consistent_ic_tol,
+			alreadyConsistent ? "is skipped" : "will run");
+
+		calcICRan = !alreadyConsistent;
+	}
+
+	if (calcICRan)
 	{
 		// The `retval = 0` that used to sit between these two lines made the check
 		// below unreachable: IDACalcIC's status was overwritten before it was read, so
@@ -521,6 +562,38 @@ void SystemSolver::initialize()
 	// setAggressiveTimesteps.
 	if (aggressiveTimesteps)
 		IDASetEtaMax(IDA_mem, 10.0);
+}
+
+// ||F(t, Y, dYdt)|| in the WRMS norm with this solver's own error weights.
+//
+// The same measure the WriteDebugDatFiles blocks print, deliberately: the number
+// the initial-condition skip is decided on is then a number a user can already
+// see in the .res.dat rather than one only this function knows.
+//
+// The weights are the state's, not the residual's, which is the scaling IDA
+// itself uses for the quantity this stands in for -- IDACalcIC tests
+// ||J^-1 F||_WRMS, a correction to y, against epsNewt. So the threshold means
+// the same thing at every tolerance setting: tightening Absolute_tolerance
+// tightens what counts as a consistent initial state, exactly as it tightens
+// everything else.
+//
+// One residual evaluation and one error-weight fill; no Jacobian work at all,
+// which is the entire point.
+double SystemSolver::weightedResidualNorm(double t, N_Vector Y_in, N_Vector dYdt_in)
+{
+	if (res == nullptr)
+		throw std::logic_error("weightedResidualNorm needs the SUNDIALS vectors initialize() allocates");
+
+	N_Vector wgtLocal = N_VClone(Y_in);
+	if (ErrorChecker::check_retval((void *)wgtLocal, "N_VClone", 0))
+		throw std::runtime_error("Sundials initialization Error, run in debug to find");
+
+	residual(t, Y_in, dYdt_in, res);
+	getErrorWeights(Y_in, wgtLocal);
+	const double norm = N_VWrmsNorm(res, wgtLocal);
+
+	N_VDestroy(wgtLocal);
+	return norm;
 }
 
 void SystemSolver::integrate(double tFinal)
