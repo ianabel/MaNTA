@@ -187,6 +187,15 @@ Time integration
        relative — it carries the units of the objective over time, so there is no
        number worth defaulting to and zero means "off". A negative value is an
        error rather than a quiet "off". See :doc:`adjoints`.
+
+       .. warning::
+
+          **Do not rely on this together with a steady solve.** The gate
+          differentiates the initial condition, and a steady solve skips
+          ``IDACalcIC``, so what it differentiates is the uncorrected guess — on
+          which :math:`\mathrm{d}G/\mathrm{d}t` can come out with the wrong
+          sign and abandon a run that should have proceeded. Measured cases and
+          the ways out are in ``TODO``.
    * - ``tau``
      - ``1.0``
      - The HDG stabilisation parameter. Constant across the domain.

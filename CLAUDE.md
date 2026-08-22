@@ -208,8 +208,19 @@ called separately:
     atol 1e-8 cannot complete `IDACalcIC` at all, so there the skip is the only
     way the restart runs.
 
-  On either skip the `t0` output slice and the dG/dt gate see the guess
-  `setInitialConditions` built, which is the state the run really started from.
+  On either skip the `t0` output slice sees the guess `setInitialConditions`
+  built, which is the state the run really started from.
+
+  **The dG/dt gate sees it too, and that is a known defect rather than a
+  consequence to accept** — see `TODO`. `objectiveIsDecreasing` differentiates
+  the initial condition through `dydtComplete`, and on the guess it can come out
+  with the wrong *sign*: measured at k = 2 on 4 cells, `AuxDiffusion` with
+  `G = Int u dx` gives +1.654 corrected against −1.769 uncorrected, and
+  `ScalarDiffusion` +2.208 against −1.187. An independent one-IDA-step reference
+  sides with the corrected value every time. The gate rejects on
+  `dGdt < -tol`, so it abandons runs it should accept. Nothing catches it because
+  `TestDiffusion` — the only fixture the gate tests use — agrees to 3.6e-16, and
+  no test combines an armed gate with a steady solve.
 * `SystemSolver::integrate(tFinal)` — the time loop, then the adjoint solve and
   the final netCDF / restart output.
 * `SystemSolver::destroySundials` — free all of it. Idempotent, and safe with no

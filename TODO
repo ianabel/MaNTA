@@ -80,6 +80,55 @@ reason it was not made:
     for each differential scalar. Two of the three fixtures there would have to
     be checked against it first.
 
+  - The dG/dt gate reads an inconsistent state whenever initialize() skips
+    IDACalcIC, and on a steady solve it always does. objectiveIsDecreasing()
+    differentiates the initial condition through dydtComplete, which is seeded
+    from whatever derivative initialize() left; with the skip that is the guess
+    setInitialConditions built rather than the state IDA would have corrected to.
+
+    Not a small effect. Measured at t0 on k = 2, 4 cells, comparing the two
+    states an armed gate can be handed:
+
+        fixture / objective          CalcIC ran   CalcIC skipped   gap
+        TestDiffusion,   Int u dx      2.4674011    2.4674011      3.6e-16
+        AuxDiffusion,    Int u dx     +1.65366     -1.76887        SIGN FLIP
+        AuxDiffusion,    Int sigma    -0.32569     -0.19533        0.40
+        AuxDiffusion,    Int phi      -0.93793     -1.20388        0.28
+        ScalarDiffusion, Int u dx     +2.20796     -1.18664        SIGN FLIP
+        an inconsistent guess, Int u  -8.98921     -0.20000        0.98
+
+    An independent reference -- one IDA step, reading IDA's own BDF dYdt, sharing
+    no code with either route -- sides with CalcIC every time: 1.6536551 and
+    1.6536562 at two step sizes for AuxDiffusion's Int u dx, against CalcIC's
+    1.6536579 and the guess's -1.7689. So the skipped-CalcIC value is wrong, not
+    merely different. The gate rejects on dGdt < -tol, so a sign flip makes it
+    abandon runs it should accept.
+
+    What is *not* wrong is the route to it. Re-solving the u row for u' directly
+    from the state -- X u' = -res_u with dYdt zeroed, i.e. the calculation
+    setInitialConditions already does -- moves dG/dt by at most 1.4e-13 on either
+    path. The gate is already a direct calculation on the state it is given; the
+    problem is which state that is.
+
+    Why nothing catches it: TestDiffusion is the only fixture the existing gate
+    tests use, and there the two states agree to 3.6e-16. No test in the tree
+    combines an armed gate with a steady solve.
+
+    Three ways out, and it wants a decision rather than a guess:
+      * run IDACalcIC whenever CheckObjectiveDecrease is armed, whatever else
+        initialize() would have done. Restores the pre-change numbers exactly;
+        costs 2 Jacobian builds and 2 solves (see ConsistentICTolerance) and
+        re-accepts the CalcIC failure modes on a gated steady run -- which is the
+        one place a gate cannot report them, since its whole purpose is to
+        abandon the run *before* paying for the solve.
+      * have the gate project onto the constraints itself. Same computation as
+        CalcIC, owned by the gate, so it fails where CalcIC fails.
+      * refuse the combination outright: on a steady solve there is no trajectory
+        for dG/dt to be the derivative of.
+
+    The first is a one-line condition and the honest minimum. The third is
+    probably the right answer and is a scope question.
+
 
 Superconvergence follow-ons (see Tests/README.md for what is already verified):
 
