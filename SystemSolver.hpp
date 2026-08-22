@@ -472,10 +472,18 @@ class SystemSolver
         //
         // Only meaningful after initialize(): it reads y and dydt, which map the
         // live SUNDIALS vectors, and it needs the derivative initialize() left
-        // there -- IDACalcIC's on a time-marching run, and setInitialConditions'
-        // guess on a steady one, which skips CalcIC (Solver.cpp). Before
-        // initialize() there is nothing mapped; after destroySundials() they
-        // dangle.
+        // there -- IDACalcIC's when it ran, and setInitialConditions' guess when
+        // it was skipped (Solver.cpp). Before initialize() there is nothing
+        // mapped; after destroySundials() they dangle.
+        //
+        // KNOWN DEFECT, see TODO: on the guess this can come out with the wrong
+        // sign. Measured at k = 2 on 4 cells, AuxDiffusion with G = Int u dx
+        // gives +1.654 from the corrected state and -1.769 from the guess, and
+        // ScalarDiffusion +2.208 against -1.187; a one-IDA-step reference sides
+        // with the corrected value. Since the gate rejects on dGdt < -tol it then
+        // abandons runs it should accept. A steady solve always skips CalcIC, so
+        // arming the gate on one is the reachable case. TestDiffusion, the only
+        // fixture the gate tests use, agrees to 3.6e-16 either way.
         bool objectiveIsDecreasing();
 
         // Whether the gate rejected the run, i.e. runSolver() skipped the time

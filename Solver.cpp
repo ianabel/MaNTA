@@ -73,6 +73,17 @@ void SystemSolver::runSolver(double tFinal)
 // objective_decrease_tol before the step is called bad, which leaves room for a
 // transient that recovers, and keeps quadrature noise about zero from rejecting a
 // run that is really flat.
+//
+// KNOWN DEFECT, recorded in TODO: this reads whatever derivative initialize()
+// left, and when IDACalcIC was skipped -- always, on a steady solve -- that is
+// setInitialConditions' guess rather than a state on the constraint manifold.
+// Measured at k = 2 on 4 cells, AuxDiffusion with G = Int u dx gives +1.654 from
+// the corrected state and -1.769 from the guess, and ScalarDiffusion +2.208
+// against -1.187; a one-IDA-step reference, sharing no code with either route,
+// sides with the corrected value. Since the test below is dGdt < -tol, the sign
+// flip abandons runs that should proceed. The route to dG/dt is not the problem
+// -- re-solving the u row for u' directly from the state moves it by at most
+// 1.4e-13 -- the state is.
 bool SystemSolver::objectiveIsDecreasing()
 {
 	if (!CheckObjectiveDecrease)
