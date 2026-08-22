@@ -170,6 +170,79 @@ solution and a time derivative that did not belong together.
    :ref:`suppress-algebraic-error` makes this *worse*, not better: it is the
    accuracy of the algebraic components that a restart resumes from.
 
+.. _warm-starts:
+
+Warm starts and ``IDACalcIC``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A restart resumes from a state the previous run had already driven onto the
+constraint manifold, so ``IDACalcIC`` — whose job is to put it there — often has
+little to do. **It cannot find that out cheaply.** Its convergence test is on the
+Newton *step* rather than on the residual: ``IDANewtonIC`` calls the linear solve
+and only then tests :math:`\|J^{-1}F\|` against ``epsNewt``
+(``ida_ic.c:404-417``), ``IDAnlsIC`` calls the Jacobian setup unconditionally
+before that (``ida_ic.c:345``), and the outer loop repeats the whole thing on
+success to refresh the error weights (``ida_ic.c:232``). Handed a state it had
+itself just converged to, it still costs **two residual evaluations, two Jacobian
+builds and two Jacobian solves**, with zero Newton iterations — measured on four
+fixtures. For MaNTA a build is ``updateMatricesForJacSolve()``: assemble and
+factorise every per-cell :math:`M_X`.
+
+``ConsistentICTolerance`` makes the test IDA declines to make. ``initialize()``
+evaluates the residual once — no Jacobian work — takes its WRMS norm with the
+solver's own error weights, and skips ``IDACalcIC`` when that is at or below the
+key. The norm is measured on every time-marching run whether or not the skip is
+armed, is logged at ``INFO``, and is readable from C++ through
+``getInitialResidualNorm()``.
+
+.. warning::
+
+   **It defaults to ``0`` — off — and that default is a measurement, not
+   caution.** No single threshold was safe across the cases tried.
+
+   On ``TestDiffusion`` round trips the separation looks clean: a cold start
+   measures 0.30 at ``Absolute_tolerance = 1e-3`` and 417 at ``1e-8``, while a
+   warm start lands between 7.7e-4 and 1.9e-2. Set against that, ``1e-2`` is the
+   obvious choice, and it works on the ``LinearDiffusion`` and ``MatTest``
+   restart round trips.
+
+   ``AuxVarTest`` — the regression suite's only round trip with ``nAux > 0`` —
+   warm-starts at **1.6e-4**, comfortably inside any such threshold, and skipping
+   ``IDACalcIC`` there makes the resumed run fail outright with ``IDA_CONV_FAIL``
+   at its first step. It succeeds when ``IDACalcIC`` runs.
+
+   That case also shows why a residual cannot be the whole test. ``IDACalcIC``
+   *raises* the weighted residual there, from 1.6e-4 to 3.8e-4, and the run works
+   anyway. What it fixes is the algebraic values, and a norm of :math:`F` does not
+   see how far those are from the manifold when the auxiliary block is stiff — so
+   the ordering is not merely noisy, it is **inverted**: the fixture that must not
+   skip measures lower than the one that may.
+
+   So set it per problem, from the number the run reports, and check that a
+   resumed run still integrates rather than only that it started.
+
+**What makes a warm start consistent at all is that the trace is now kept.**
+``setInitialConditions`` used to finish every restart with ``EvaluateLambda()``,
+which sets :math:`\lambda` to :math:`\{\{u\}\}` — the average of the two cell
+traces, not the HDG trace equation
+:math:`C_\sigma \sigma + C_q q + G_c u + H\lambda = L(t)` that :math:`\lambda`
+actually solves. On a restart that discarded a converged trace and replaced it
+with something that solves nothing: measured on a ``TestDiffusion`` round trip at
+``Absolute_tolerance = 1e-8``, that one call took the weighted residual from
+2.6e-3 to 556. It is why a restart used to need about ten times as many residual
+evaluations inside ``IDACalcIC`` as a cold start; on ``AuxVarTest``'s round trip
+keeping the trace takes the resumed run from 1139 residual evaluations to 1033.
+
+The trace is kept whenever the discretisation matches. The degree-change path
+still builds one, because ``copy()`` refused the transfer and there is none to
+keep. ``ApplyDirichletBCs`` deliberately still runs *above* ``EvaluateLambda``
+rather than below it, even though that means the boundary data it writes is
+overwritten again on the projection path: moving it below breaks the
+``AuxVarTest`` round trip on its own, and the only difference is whether a
+Dirichlet end's trace holds the boundary datum or :math:`u`'s trace there — a
+node whose row and column are identically zero, so it is IDA's error test that
+notices rather than the residual.
+
 .. _steady-state-solver:
 
 Reaching a steady state
@@ -567,13 +640,13 @@ condition and integrating:
        through :math:`q`); :math:`u` is differential, so ``IDACalcIC`` holds it
        fixed and it is the same either way.
 
-       **``IDACalcIC`` runs only for a run that will time-march.** A steady solve
-       skips it: ``solveSteadyState`` drives the whole residual to zero from the
-       guess, so a correction made first is discarded by the first accepted
-       continuation step, and ``IDACalcIC`` is itself a damped Newton solve that
-       can fail on initial conditions the steady solver handles easily. On that
-       path the :math:`t_0` slice is therefore the guess — which is the state the
-       run really started from. See :ref:`steady-state-solver`.
+       **``IDACalcIC`` is not always run.** A steady solve skips it outright:
+       ``solveSteadyState`` drives the whole residual to zero from the guess, so
+       a correction made first is discarded by the first accepted continuation
+       step. A time-marching run skips it when the state it was handed is already
+       consistent — see :ref:`warm-starts`, which is the usual case for a
+       restart. Either way the :math:`t_0` slice is then the guess, which is the
+       state the run really started from.
    * - ``integrate(tFinal)``
      - The time loop, then the adjoint solve if requested, then the final netCDF
        and restart output.

@@ -1292,6 +1292,234 @@ RestartSnapshot initialiseAt(TestDiffusion &problem, Grid const &grid, Index ord
 }
 } // namespace
 
+// Everything a restart file carries that a warm start needs.
+//
+// Through the file rather than through setRestartValues on an in-memory vector,
+// which is what the three degree-transfer cases below do. The point here is the
+// production path: the netCDF round trip is part of what decides whether the
+// state the solver is handed is still consistent.
+struct RestartFileData
+{
+    std::vector<double> Y, dYdt;
+    std::vector<Position> cellBoundaries;
+    Index order = 0;
+};
+
+RestartFileData readRestart(std::string const &path)
+{
+    RestartFileData out;
+    netCDF::NcFile f;
+    f.open(path, netCDF::NcFile::FileMode::read);
+
+    netCDF::NcGroup g = f.getGroup("Grid");
+    out.cellBoundaries.resize(g.getDim("Index").getSize());
+    g.getVar("CellBoundaries").getVar(out.cellBoundaries.data());
+    g.getVar("PolyOrder").getVar(&out.order);
+
+    netCDF::NcGroup r = f.getGroup("RestartData");
+    out.Y.resize(r.getDim("nDOF").getSize());
+    out.dYdt.resize(out.Y.size());
+    r.getVar("Y").getVar(out.Y.data());
+    r.getVar("dYdt").getVar(out.dYdt.data());
+    f.close();
+    return out;
+}
+
+BOOST_AUTO_TEST_CASE(a_warm_start_from_a_restart_file_does_not_run_calcic)
+{
+    // IDACalcIC has no cheap path. Its convergence test is on the Newton step,
+    // so IDANewtonIC calls lsolve and only then tests ||J^-1 F|| against epsNewt
+    // (ida_ic.c:404-417); IDAnlsIC calls lsetup unconditionally before that
+    // (ida_ic.c:345); and the outer loop repeats the whole thing on success to
+    // refresh the error weights (ida_ic.c:232). Measured floor, handing it a
+    // state it had itself just converged to: two residual evaluations, two
+    // Jacobian builds and two Jacobian solves, with zero Newton iterations --
+    // every time, whatever the state. A build is updateMatricesForJacSolve(),
+    // i.e. assemble and factorise every per-cell MX.
+    //
+    // A warm start is exactly the case where all of that is wasted, and warm
+    // starts are a large share of production runs. So initialize() now measures
+    // the weighted residual first -- one residual evaluation, no Jacobian work --
+    // and skips IDACalcIC when it is already below ConsistentICTolerance.
+    //
+    // IDAGetNumResEvals is the observable: it counts residuals IDA asked for, and
+    // nothing else in initialize() goes through IDA, so zero means CalcIC never
+    // ran. MaNTA's own nResidualEvals would not do -- the precheck increments it.
+    //
+    // The tolerance is set explicitly because the default is zero: no single
+    // threshold turned out to be safe across the cases measured, and AuxVarTest's
+    // restart is the counter-example -- see setConsistentICTolerance. 1e-2 is the
+    // value TestDiffusion's own numbers support, and the run is integrated below
+    // rather than merely initialised, so this pins that skipping is safe *here*
+    // rather than only that it happened.
+    const std::string stem = "lifecycle_warm_start";
+    const double tSplit = T_FINAL;
+
+    // A real run, and the restart file it leaves behind.
+    {
+        Grid grid(0.0, 1.0, nCells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        CapturedOutput quiet;
+        sys.runSolver(tSplit);
+    }
+
+    const RestartFileData rf = readRestart(stem + ".restart.nc");
+    BOOST_TEST_REQUIRE(rf.order == k);
+    BOOST_TEST_REQUIRE(rf.Y.size() > 0u);
+
+    Grid grid(rf.cellBoundaries);
+    TestDiffusion problem(lifecycle_config);
+    problem.setRestartValues(rf.Y, rf.dYdt, grid, rf.order);
+    BOOST_TEST_REQUIRE(problem.isRestarting());
+
+    SystemSolver sys(grid, rf.order, &problem);
+    configure(sys, stem);
+    sys.setInitialTime(tSplit);   // a restart resumes where the file was written
+    sys.setConsistentICTolerance(1e-2);
+
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+    }
+
+    BOOST_TEST_MESSAGE("warm start: weighted residual " << sys.getInitialResidualNorm()
+                       << " against a tolerance of " << sys.getConsistentICTolerance());
+
+    BOOST_TEST(sys.getInitialResidualNorm() < sys.getConsistentICTolerance(),
+               "the state the restart file was turned into has a weighted residual of "
+                   << sys.getInitialResidualNorm() << ", above the "
+                   << sys.getConsistentICTolerance() << " that would let IDACalcIC be "
+                   "skipped; a warm start is supposed to arrive consistent");
+
+    BOOST_TEST(!sys.initialConditionWasCorrected(),
+               "IDACalcIC ran on a warm start whose residual was already "
+                   << sys.getInitialResidualNorm());
+
+    long idaResEvals = -1;
+    BOOST_REQUIRE(IDAGetNumResEvals(sys.IDA_mem, &idaResEvals) == IDA_SUCCESS);
+    BOOST_TEST(idaResEvals == 0,
+               "IDA evaluated the residual " << idaResEvals
+                   << " times during a warm start's initialize(), so IDACalcIC ran");
+
+    // And the run that follows must actually work. Skipping IDACalcIC is only
+    // sound if the state left behind can be integrated from, and the residual
+    // norm alone does not establish that -- on AuxVarTest it is 1.6e-4, lower
+    // than the number here, and the resumed run fails at its first step unless
+    // CalcIC has run. So this integrates rather than stopping at initialize().
+    {
+        CapturedOutput quiet;
+        BOOST_CHECK_NO_THROW(sys.integrate(2.0 * tSplit));
+    }
+
+    // Not vacuous. A cold start of the same problem is three orders of magnitude
+    // further from consistent and must still be corrected -- otherwise this case
+    // would pass just as well with the check wired to skip everything.
+    {
+        Grid coldGrid(0.0, 1.0, nCells);
+        TestDiffusion coldProblem(lifecycle_config);
+        SystemSolver cold(coldGrid, k, &coldProblem);
+        configure(cold, "lifecycle_warm_start_cold");
+        cold.setConsistentICTolerance(1e-2);
+        {
+            CapturedOutput quiet;
+            cold.initialize();
+        }
+        BOOST_TEST_MESSAGE("cold start: weighted residual " << cold.getInitialResidualNorm());
+        BOOST_TEST(cold.initialConditionWasCorrected(),
+                   "a cold start's residual was " << cold.getInitialResidualNorm()
+                       << ", which the check treated as already consistent");
+        BOOST_TEST(cold.getInitialResidualNorm() > 10.0 * sys.getInitialResidualNorm(),
+                   "the cold and warm starts are only " << cold.getInitialResidualNorm()
+                       << " and " << sys.getInitialResidualNorm() << " apart, so this "
+                       "fixture cannot tell the two apart");
+        {
+            CapturedOutput quiet;
+            cold.destroySundials();
+        }
+        removeOutput("lifecycle_warm_start_cold");
+    }
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+    problem.clearRestart();
+    removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(the_warm_start_keeps_the_trace_the_file_carries)
+{
+    // Why the case above can pass at all. setInitialConditions used to finish
+    // every restart with EvaluateLambda(), which sets lambda to {{u}} -- the DG
+    // average of the two cell traces (DGSoln.hpp), not the HDG trace equation
+    // Csigma sigma + Cq q + G_c u + H lambda = L(t) that lambda actually solves.
+    // On a restart that discards a converged trace and replaces it with
+    // something that solves nothing.
+    //
+    // Measured here: it is the whole of the difference. Keeping the file's trace
+    // takes the warm start's weighted residual from above the tolerance to three
+    // orders below it, and it is why a restart used to need about ten times as
+    // many residual evaluations inside IDACalcIC as a cold start.
+    //
+    // The projection path still builds a trace, because there is none to keep --
+    // copy() refuses a different degree and only u, q, aux and the scalars are
+    // transferred. a_restart_at_a_higher_degree_reproduces_the_state_exactly and
+    // its two siblings cover that path.
+    const std::string stem = "lifecycle_warm_trace";
+    {
+        Grid grid(0.0, 1.0, nCells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        CapturedOutput quiet;
+        sys.runSolver(T_FINAL);
+    }
+
+    const RestartFileData rf = readRestart(stem + ".restart.nc");
+    Grid grid(rf.cellBoundaries);
+    TestDiffusion problem(lifecycle_config);
+    problem.setRestartValues(rf.Y, rf.dYdt, grid, rf.order);
+
+    SystemSolver sys(grid, rf.order, &problem);
+    configure(sys, stem);
+    sys.setInitialTime(T_FINAL);
+
+    // Armed, because this fixture's warm start cannot run IDACalcIC at all:
+    // configure() uses rtol 1e-6 / atol 1e-8, and at that tolerance CalcIC on a
+    // TestDiffusion restart fails with IDA_CONV_FAIL -- before this change as
+    // well as after, so it is the tolerance rather than the trace. Worth
+    // recording beside AuxVarTest, which is the opposite case: there CalcIC is
+    // what makes the resumed run work and skipping it is what breaks it.
+    sys.setConsistentICTolerance(1e-2);
+
+    double kept = 0.0, reAveraged = 0.0;
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+        kept = sys.getInitialResidualNorm();
+
+        // What the old code did, applied to the state it built: re-average the
+        // trace and measure again. Nothing else changes.
+        sys.y.EvaluateLambda();
+        reAveraged = sys.weightedResidualNorm(T_FINAL, sys.Y, sys.dYdt);
+        sys.destroySundials();
+    }
+
+    BOOST_TEST_MESSAGE("warm start weighted residual: trace kept " << kept
+                       << ", trace re-averaged " << reAveraged
+                       << "  (factor " << reAveraged / kept << ")");
+
+    BOOST_TEST(reAveraged > 100.0 * kept,
+               "re-averaging the trace only moved the residual from " << kept << " to "
+                   << reAveraged << "; either the trace is being rebuilt again "
+                   "somewhere or this fixture no longer shows the difference");
+
+    problem.clearRestart();
+    removeOutput(stem);
+}
+
 BOOST_AUTO_TEST_CASE(a_restart_at_a_higher_degree_reproduces_the_state_exactly)
 {
     // The sharp case, and the reason a projection is the right transfer rather

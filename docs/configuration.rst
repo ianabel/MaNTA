@@ -156,6 +156,14 @@ Time integration
        when the transient is not the interesting part, at the cost of making IDA
        more likely to overshoot and retry. ``aggressiveTimesteps`` is a
        deprecated spelling of this and still works, with a warning.
+   * - ``ConsistentICTolerance``
+     - ``0.0`` — off
+     - If nonzero, ``IDACalcIC`` is skipped when the initial state's weighted
+       residual is already below this. It exists because ``IDACalcIC`` costs two
+       Jacobian builds and two solves even when it has nothing to do, which is
+       the usual case for a warm start. **Read** :ref:`warm-starts` **before
+       setting it**: no single value was safe across the cases measured, and the
+       default is that measurement rather than caution.
    * - ``SteadyStateSolve``
      - ``false``
      - Terminate when :math:`\mathrm{d}y/\mathrm{d}t` becomes small rather than at
