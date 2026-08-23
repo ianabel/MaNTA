@@ -85,10 +85,10 @@ Read the live rule rather than trusting this paragraph —
 (GitHub Actions), so a status of that name from anything else does not count:
 
 ```
-Build + tests (g++-14)                 Build + tests (clang++-19)
-Build + tests (g++-15)                 Build + tests (clang++-20)
-Build + tests (g++-16)                 Build + tests (clang++-21)
-Build + tests (g++-14, Eigen 5.0.1)    Compile (fedora:latest)
+Build + tests (g++-15)                    Build + tests (clang++-19)
+Build + tests (g++-16)                    Build + tests (clang++-20)
+Build + tests (g++-15, Eigen 5.0.1)       Build + tests (clang++-21)
+Build + tests (clang++-19, Eigen 5.0.1)   Compile (fedora:latest)
 Coverage
 ```
 
@@ -794,7 +794,8 @@ weights" pins the formula, not the operator, if the data cannot tell them apart.
   runs `env -u CXXFLAGS -u LDFLAGS $(MAKE) COVERAGE=on`.
 * **g++-14 miscompiles this tree at `-O3 -flto -march=native`, and the symptom is
   a wrong number rather than a crash. Do not trust a g++-14 release build.**
-  Measured 2026-08-23 on g++-14.2.0, znver2.
+  Measured 2026-08-23 on g++-14.2.0, znver2. It is no longer a CI leg, and the
+  README's floor for gcc moved to 15 because of it.
 
   The trigger is **any change to `SystemSolver`'s member layout**. Adding one
   inert member — a `bool` and an unused `std::vector<double>`, referenced by no
@@ -843,17 +844,17 @@ weights" pins the formula, not the operator, if the data cannot tell them apart.
   wrong and nothing here has checked the solver's numbers against anything but
   themselves.
 
-  **CI's `Build + tests (g++-14)` and `Build + tests (g++-14, Eigen 5.0.1)` legs
-  are exposed** — they use the release flags, and both are required contexts, so
-  a member added to `SystemSolver` can make a PR intermittently red for reasons
-  that have nothing to do with it. (`Coverage` is `-O0 --coverage` with neither
-  LTO nor `-march=native`, so it is not.) Prefer g++-15 or clang locally; the
-  release build warns when it sees g++-14. `TODO` has the full reproduction.
+  **g++-14 has been dropped from CI entirely** — both build legs and the coverage
+  job, which moved to g++-15 even though at `-O0 --coverage` it was never exposed.
+  The Eigen 5.0.1 leg moved with them and became two, on g++-15 and clang++-19.
+  Count the cost honestly: g++-14 is what Ubuntu noble's archive ships, so the
+  gcc most people have by default is now the one this project tests least. The
+  release build warns when it sees it; `TODO` has the full reproduction.
 
 * **gcc and clang do not diagnose the same things, so build with clang
   occasionally** — that is what CI's clang matrix legs are for. (CI is seven
-  `build-and-test` legs: g++-14/15/16 and clang++-19/20/21 against the distro's
-  Eigen 3.4.0, plus g++-14 against Eigen 5.0.1; then a Fedora container job that
+  `build-and-test` legs: g++-15/16 and clang++-19/20/21 against the distro's
+  Eigen 3.4.0, plus g++-15 and clang++-19 against Eigen 5.0.1; then a Fedora container job that
   only *compiles*, to keep the build's notions of a system prefix — `/usr/lib64`,
   pkg-config-discovered netCDF — from quietly becoming Ubuntu-specific.) gcc never
   diagnoses a polymorphic base with a non-virtual destructor; clang does
@@ -951,7 +952,7 @@ weights" pins the formula, not the operator, if the data cannot tell them apart.
   Deriving it inside that branch left the parent with a bare `gcov` — which is
   gcov-14 on a box whose default compiler is gcc-14, and gcov-13 on
   ubuntu-24.04, where the image ships gcc 12/13/14 with 13 as the default and the
-  workflow builds with `g++-14`. gcov then exits 3 with
+  workflow builds with `g++-15`. gcov then exits 3 with
   `AdjointVectors.gcno:version 'B42*', prefer 'B33*'`, gcovr promotes that to a
   hard error, and `make coverage` fails with exit 64 on CI while passing locally.
   Anything that reads `.gcno`/`.gcda` must come from the same toolchain version
