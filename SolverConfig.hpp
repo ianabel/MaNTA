@@ -68,6 +68,7 @@ struct SolverConfig
     double                   PseudoTransientSERRate;
     double                   PseudoTransientSERFloor;
     bool                     SteadyStateDiagnostics;
+    bool                     SteadyStateStepDiagnostics;
     bool                     SteadyStateSolve;
     bool                     DegreeAdaptation;
     double                   DegreeTolerance;

@@ -98,6 +98,7 @@ BOOST_AUTO_TEST_CASE(a_minimal_config_loads_with_every_default_applied)
     BOOST_TEST(c.PseudoTransientSERRate == 1.0);
     BOOST_TEST(c.PseudoTransientSERFloor == 2.0);
     BOOST_TEST(c.SteadyStateDiagnostics == false);
+    BOOST_TEST(c.SteadyStateStepDiagnostics == false);
 }
 
 BOOST_AUTO_TEST_CASE(absolute_tolerance_defaults_to_1e_3)
@@ -308,6 +309,7 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         "PseudoTransientSERRate = 0.5\n"
         "PseudoTransientSERFloor = 1.5\n"
         "SteadyStateDiagnostics = true\n"
+        "SteadyStateStepDiagnostics = true\n"
         "zeroFlux = true\n"
         "WriteOutput = false\n"
         "SteadyStateTolerance = 1e-5\n"
@@ -333,6 +335,7 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         {"PseudoTransientInitialStep", 0.25}, {"PseudoTransientMaxStep", 1e6},
         {"PseudoTransientSERRate", 0.5}, {"PseudoTransientSERFloor", 1.5},
         {"SteadyStateDiagnostics", true},
+        {"SteadyStateStepDiagnostics", true},
         {"zeroFlux", true}, {"WriteOutput", false},
         {"SteadyStateTolerance", 1e-5}, {"OutputFilename", std::string("shared")},
     };
@@ -360,6 +363,7 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     BOOST_TEST(fromToml.PseudoTransientSERRate == fromMap.PseudoTransientSERRate);
     BOOST_TEST(fromToml.PseudoTransientSERFloor == fromMap.PseudoTransientSERFloor);
     BOOST_TEST(fromToml.SteadyStateDiagnostics == fromMap.SteadyStateDiagnostics);
+    BOOST_TEST(fromToml.SteadyStateStepDiagnostics == fromMap.SteadyStateStepDiagnostics);
     BOOST_TEST(fromToml.zeroFlux == fromMap.zeroFlux);
     BOOST_TEST(fromToml.WriteOutput == fromMap.WriteOutput);
     BOOST_TEST(fromToml.MinStepSize == fromMap.MinStepSize);

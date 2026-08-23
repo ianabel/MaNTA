@@ -260,6 +260,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(PseudoTransientSERRate, double);
     READ(PseudoTransientSERFloor, double);
     READ(SteadyStateDiagnostics, bool);
+    READ(SteadyStateStepDiagnostics, bool);
     READ(SteadyStateSolve, bool);
     READ(DegreeAdaptation, bool);
     READ(DegreeTolerance, double);
@@ -503,6 +504,7 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         system.setPseudoTransientSERRate(config.PseudoTransientSERRate);
         system.setPseudoTransientSERFloor(config.PseudoTransientSERFloor);
         system.setSteadyStateDiagnostics(config.SteadyStateDiagnostics);
+        system.setSteadyStateStepDiagnostics(config.SteadyStateStepDiagnostics);
     }
     catch (std::logic_error const &e)
     {

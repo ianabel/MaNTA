@@ -16,6 +16,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include "gridStructures.hpp"
 #include "TransportSystem.hpp"
@@ -147,6 +148,42 @@ class SystemSolver
         // information.
         void setSteadyStateDiagnostics(bool on) { steadyDiagnostics = on; };
 
+        // Report each KINSol invocation as it returns, one line per continuation
+        // step, rather than only the total. Independent of the summary above --
+        // they compose, and either can be had on its own -- because they answer
+        // different questions. A total says what the solve cost; the per-step
+        // trace says *where*, which is the only way to tell a run that took
+        // twenty cheap steps from one that took three expensive ones. The two
+        // have the same cost when nothing is wrong and diverge sharply when
+        // something is: a solve whose dt has outrun the problem spends its
+        // iterations in steps that are then rejected, and the total cannot show
+        // that.
+        void setSteadyStateStepDiagnostics(bool on) { steadyStepDiagnostics = on; };
+
+        // What one KINSol invocation cost -- one continuation step. KINSOL's own
+        // counters are *already* per-call, since it zeroes them in KINSolInit,
+        // so these are read straight out rather than differenced; MaNTA's
+        // monotonic counters are differenced across the step. The two do not
+        // measure the same span deliberately: `kinFuncEvals` is what KINSOL
+        // asked for, `residualEvals` is what the step actually paid, and the
+        // difference is the merit function -- one steady-residual evaluation per
+        // step, which KINSOL never sees because it is evaluated at dt = infinity
+        // rather than at the damped dt KINSol is solving.
+        struct SteadyStepStats
+        {
+            int  step = 0;          // continuation step index, from zero
+            int  kinRetval = 0;     // what KINSol returned; see kinsol.h
+            bool accepted = false;  // did the step reduce ||F||, or was it rolled back
+            double dt = 0.0;        // the pseudo-time step this call was damped with
+            double residualNorm = 0.0; // steady ||F|| after the call; NaN if it failed
+            long newtonIters = 0;   // KINSOL Newton iterations, this call
+            long kinFuncEvals = 0;  // residual evaluations KINSOL made, this call
+            long kinJacEvals = 0;   // Jacobian setups KINSOL asked for, this call
+            long residualEvals = 0; // every residual call the step made, merit included
+            long jacBuilds = 0;     // updateMatricesForJacSolve calls, this step
+            long jacSolves = 0;     // solveJacEq calls, this step
+        };
+
         // What one steady solve cost. The two halves are gathered differently
         // and it matters which is which:
         //
@@ -157,7 +194,8 @@ class SystemSolver
         //    call**, so they are per-call, not per-solver. Differencing them
         //    across the continuation loop reports the last inner solve alone --
         //    which on a converged run is a plausible-looking 1 Newton iteration
-        //    for 35 Jacobian solves. They are summed after each call instead.
+        //    for 35 Jacobian solves. They are summed from the per-step records
+        //    instead, which is now the only place they are read at all.
         struct SteadyStats
         {
             int  steps = 0;         // continuation steps taken
@@ -168,8 +206,21 @@ class SystemSolver
             long residualEvals = 0; // every residual call, KINSOL's and the merit function's
             long jacBuilds = 0;     // updateMatricesForJacSolve calls
             long jacSolves = 0;     // solveJacEq calls
+
+            // Fold one finished continuation step into the totals. The KINSOL
+            // fields are the only ones that must come through here: the three
+            // MaNTA counters are differenced over the whole solve as well, so
+            // they have an independent value to check these against, and
+            // `steady_step_stats_sum_to_the_totals` does exactly that.
+            void add(SteadyStepStats const &s)
+            {
+                newtonIters += s.newtonIters;
+                kinFuncEvals += s.kinFuncEvals;
+                kinJacEvals += s.kinJacEvals;
+            }
         };
-        void accumulateKinStats(SteadyStats &s) const;
+        void readKinStats(SteadyStepStats &s) const;
+        void reportSteadyStep(SteadyStepStats const &s) const;
         void reportSteadyStats(std::string_view outcome, SteadyStats const &s) const;
 
         // What the last steady solve cost, whether or not it was printed and
@@ -177,6 +228,14 @@ class SystemSolver
         // throwing. Zeroed only by construction, so it survives the throw for a
         // caller that wants the numbers rather than the log line.
         SteadyStats lastSteadyStats() const { return steadyStats; };
+
+        // The same, one entry per KINSol invocation, in the order they ran.
+        // Filled whether or not the per-step lines were printed, so a driver can
+        // have the trace without the output -- and, like the totals, it survives
+        // a failed solve, whose last entry is the call that failed. Cleared at
+        // the top of every solveSteadyState, so it describes one solve rather
+        // than the solver's history.
+        std::vector<SteadyStepStats> const &lastSteadyStepStats() const { return steadyStepStats; };
 
         // Drive the state to a steady one without integrating to it. Assumes
         // initialize() has run, so Y/dYdt/LS/sunMat exist and Y holds a
@@ -511,7 +570,9 @@ class SystemSolver
         long nJacBuilds = 0;
         long nJacSolves = 0;
         bool steadyDiagnostics = false;
+        bool steadyStepDiagnostics = false;
         SteadyStats steadyStats;
+        std::vector<SteadyStepStats> steadyStepStats;
         N_Vector Y = nullptr;         // solution
         N_Vector dYdt = nullptr;      // time derivative of the solution
         N_Vector constraints = nullptr;

@@ -72,6 +72,10 @@ const std::vector<Entry> &table()
         {"SteadyStateDiagnostics", {}, Type::Bool, Category::Solver, false, false, false,
          "Report the work a steady solve did: continuation steps, Newton iterations, "
          "residual evaluations, Jacobian builds and solves. Printed on failure too."},
+        {"SteadyStateStepDiagnostics", {}, Type::Bool, Category::Solver, false, false, false,
+         "Report each KINSol invocation as it returns -- one row per continuation step, "
+         "with its Newton iterations, residual evaluations, Jacobian builds and solves. "
+         "Independent of SteadyStateDiagnostics, which reports only the total."},
         {"SteadyStateSolve", {}, Type::Bool, Category::Solver, false, false, false,
          "Run to a steady state using the default tolerance. SteadyStateTolerance "
          "does the same and names the tolerance; either arms it, and giving both "

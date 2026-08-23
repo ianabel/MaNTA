@@ -384,6 +384,71 @@ The same numbers are available programmatically from
 ``SystemSolver::lastSteadyStats()``, filled in whether or not they were printed
 and whether or not the solve converged.
 
+Per continuation step
+~~~~~~~~~~~~~~~~~~~~~
+
+``SteadyStateStepDiagnostics = true`` reports each ``KINSol`` invocation as it
+returns, one row per continuation step:
+
+.. code-block:: text
+
+   Steady solve: PseudoTransient on 6 cells at k = 3, tolerance 1e-10
+     initial ||F|| = 4.74756, dt = 0.05, SER rate 1, floor 2, max step inf
+     step          dt       ||F||  iters    res    jac  solves  outcome
+        0   5.000e-02   9.359e-01     13     15      2      13  accepted
+        1   2.536e-01   1.105e-01     11     13      2      11  accepted
+        2   2.148e+00   2.108e-03      7      9      1       7  accepted
+        3   1.126e+02   7.974e-07      3      5      1       3  accepted
+        4   2.977e+05   1.653e-13      1      3      1       1  accepted
+     converged: ||F|| = 1.6533e-13 after 5 continuation steps.
+
+That is the same solve the totals above describe — 35 Newton iterations, 46
+residual evaluations, 7 Jacobian builds, 35 solves — and the point of the table
+is what the totals cannot say: **the cost is all in the first two steps.** 24 of
+the 35 Newton iterations go on getting ``||F||`` from 4.7 to 0.11, and the last
+three steps together cost 5. A solve that took twenty cheap steps and one that
+took three expensive ones report similar totals and want opposite things done to
+them, and only the trace distinguishes the two.
+
+The two flags are **independent** and compose: either can be had on its own. A
+trace is the more specialised request, so it is not nested inside the summary.
+
+Reading the columns:
+
+* ``dt`` is the pseudo-time step the call was *damped with*, before SER updates it — so the row shows what was tried, not what will be tried next.
+* ``||F||`` is the **steady** residual after the call, which is not the norm ``KINSol`` converged. KINSOL sees the damped residual, and a small enough ``dt`` makes that small whatever the state; the merit function re-evaluates at ``dt = infinity``. That extra evaluation is why ``res`` exceeds KINSOL's own count by exactly one per step.
+* ``iters``, ``res``, ``jac``, ``solves`` are that step's Newton iterations, residual evaluations, Jacobian builds and Jacobian solves. They sum to the totals, with one documented offset: the merit function is evaluated once *before* the loop, so ``sum(res) + 1`` is the total. ``sum(jac)`` and ``sum(solves)`` are equalities — nothing builds or solves outside the loop.
+* ``outcome`` is ``accepted`` when the step reduced ``||F||``, ``rejected`` when it was rolled back and ``dt`` cut, and ``FAILED (n)`` for the ``KINSol`` return that ends the solve. A failing row is printed before the exception propagates, which is the case the trace is most useful in — and ``||F||`` is ``nan`` there, because no steady residual was evaluated after that call.
+
+``SystemSolver::lastSteadyStepStats()`` returns the same records as a vector, in
+order, **filled whether or not they were printed** — so a driver can have the
+trace without putting it through ``stdout``. It is cleared at the top of every
+``solveSteadyState``, so it describes one solve rather than the solver's history,
+which matters for ``PyRunner``: it runs many solves on one object.
+
+Over a whole run
+~~~~~~~~~~~~~~~~
+
+One run holds one steady solve, except under :ref:`degree adaptation
+<degree-adaptation>`, which builds a solver per level and solves at each. There
+the totals above are *per level*, and ``SteadyStateDiagnostics`` adds a run total
+after the last one:
+
+.. code-block:: text
+
+   Degree adaptation totals -- 4 levels, one steady solve each
+     continuation steps      : 15  (0 rejected)
+     KINSOL Newton iterations: 71
+     residual evaluations    : 105  (of which KINSOL: 86)
+     Jacobian builds         : 19  (KINSOL asked for 19)
+     Jacobian solves         : 71
+
+That is the number to compare against a fixed-degree run, since the whole bet of
+adapting the degree is that the coarse levels are cheap enough to be worth
+paying for. It is printed even at one level, where it duplicates that level's
+own block: a log whose shape depends on how many levels a run happened to take
+is one nothing can read mechanically.
+
 .. note::
 
    Before this was fixed, a ``PseudoTransient`` or ``Newton`` run wrote **only**

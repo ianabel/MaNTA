@@ -1053,6 +1053,129 @@ BOOST_AUTO_TEST_CASE(the_steady_diagnostics_count_the_whole_solve_not_the_last_s
     removeOutput(stem);
 }
 
+BOOST_AUTO_TEST_CASE(the_per_step_records_sum_to_the_totals)
+{
+    // The totals say what a steady solve cost; the per-step records say where.
+    // They are gathered by two different routes -- the totals difference MaNTA's
+    // monotonic counters across the whole solve, each record differences them
+    // across one step -- so agreeing is a real check rather than a restatement,
+    // and it is what would catch a step whose record was never closed. Two of
+    // the three exits from the loop body are a `return` and a `throw`, so that
+    // is not a hypothetical failure mode.
+    const std::string stem = "lifecycle_steady_steps";
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, stem);
+    sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    sys.setSteadyStateTolerance(1e-10);
+
+    {
+        CapturedOutput quiet;
+        sys.runSolver(T_FINAL);
+    }
+
+    const auto total = sys.lastSteadyStats();
+    const auto &steps = sys.lastSteadyStepStats();
+
+    // Filled with neither diagnostic armed. Printing and recording are separate
+    // decisions: a driver that wants the trace should not have to put it through
+    // stdout to get it.
+    BOOST_TEST(steps.size() == static_cast<size_t>(total.steps));
+    BOOST_TEST(steps.size() > 1u);
+
+    long newton = 0, kinFunc = 0, kinJac = 0, residual = 0, builds = 0, solves = 0;
+    for (size_t i = 0; i < steps.size(); ++i)
+    {
+        BOOST_TEST(steps[i].step == static_cast<int>(i),
+                   "record " << i << " is labelled step " << steps[i].step
+                   << "; the records are out of order or one is missing");
+
+        // A KINSol that returned took at least one Newton iteration, and with a
+        // direct solver each one costs exactly one linear solve. The aggregate
+        // versions of both are in the test above; per step they are sharper,
+        // because a missing record would still satisfy the aggregate.
+        BOOST_TEST(steps[i].newtonIters >= 1);
+        BOOST_TEST(steps[i].jacSolves == steps[i].newtonIters);
+        BOOST_TEST(std::isfinite(steps[i].residualNorm));
+
+        newton += steps[i].newtonIters;
+        kinFunc += steps[i].kinFuncEvals;
+        kinJac += steps[i].kinJacEvals;
+        residual += steps[i].residualEvals;
+        builds += steps[i].jacBuilds;
+        solves += steps[i].jacSolves;
+    }
+
+    BOOST_TEST(newton == total.newtonIters);
+    BOOST_TEST(kinFunc == total.kinFuncEvals);
+    BOOST_TEST(kinJac == total.kinJacEvals);
+
+    // Nothing builds or solves outside the continuation loop, so these are
+    // equalities rather than bounds.
+    BOOST_TEST(builds == total.jacBuilds);
+    BOOST_TEST(solves == total.jacSolves);
+
+    // The one deliberate offset: the merit function is evaluated once on entry,
+    // before any step exists to charge it to. Every *other* merit evaluation
+    // falls inside the step that provoked it, which is why the records are
+    // closed after steadyNorm() rather than straight after KINSol.
+    BOOST_TEST(residual + 1 == total.residualEvals,
+               "per-step residual evaluations " << residual << " against a total of "
+               << total.residualEvals << "; the offset should be exactly the one "
+               "merit evaluation made before the loop");
+
+    // Cleared per solve, not appended to. PyRunner runs many solves on one
+    // solver, so a trace that accumulated across them would describe no solve at
+    // all -- and would agree with the totals on neither.
+    {
+        CapturedOutput quiet;
+        sys.runSolver(T_FINAL);
+    }
+    BOOST_TEST(sys.lastSteadyStepStats().size() ==
+               static_cast<size_t>(sys.lastSteadyStats().steps));
+
+    removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(the_per_step_diagnostics_print_without_the_summary)
+{
+    // The two flags are independent, and this is the direction that is easy to
+    // get wrong: a per-step report implemented as extra detail *inside* the
+    // summary would make the trace unreachable without the block, which is
+    // backwards -- the trace is the more specialised request of the two.
+    const std::string stem = "lifecycle_steady_steplog";
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, stem);
+    sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    sys.setSteadyStateTolerance(1e-10);
+    sys.setSteadyStateStepDiagnostics(true);
+
+    std::string log;
+    {
+        CapturedOutput capture;
+        sys.runSolver(T_FINAL);
+        log = capture.text();
+    }
+
+    BOOST_TEST(log.find("outcome") != std::string::npos, log);
+    BOOST_TEST(log.find("accepted") != std::string::npos, log);
+    BOOST_TEST(log.find("Steady solve statistics") == std::string::npos, log);
+
+    // One row per continuation step. Counted from the outcome column rather
+    // than by counting lines, so an extra line printed elsewhere in the run
+    // cannot make this pass.
+    size_t accepted = 0;
+    for (size_t at = log.find("accepted"); at != std::string::npos;
+         at = log.find("accepted", at + 1))
+        ++accepted;
+    BOOST_TEST(accepted == static_cast<size_t>(sys.lastSteadyStats().steps));
+
+    removeOutput(stem);
+}
+
 BOOST_AUTO_TEST_CASE(a_failed_steady_solve_still_writes_the_last_state_it_reached)
 {
     // A failed steady solve is exactly when the state is worth looking at, and
@@ -1089,6 +1212,15 @@ BOOST_AUTO_TEST_CASE(a_failed_steady_solve_still_writes_the_last_state_it_reache
     // The stats survive the throw, which is half the point of filling them in
     // before it.
     BOOST_TEST(sys.lastSteadyStats().steps > 1);
+
+    // So does the per-step trace, and it is complete: the run that failed is the
+    // one whose trace is worth having, and a record closed only at the bottom of
+    // the loop body would drop whichever step went wrong. This exit -- out of
+    // continuation steps -- closes every record normally; the KINSol-failure
+    // exit closes the failing one explicitly on its way past.
+    const auto &steps = sys.lastSteadyStepStats();
+    BOOST_TEST(steps.size() == static_cast<size_t>(sys.lastSteadyStats().steps));
+    BOOST_TEST(steps.back().step == sys.lastSteadyStats().steps - 1);
 
     netCDF::NcFile out;
     BOOST_CHECK_NO_THROW(out.open(stem + ".nc", netCDF::NcFile::FileMode::read));
