@@ -211,16 +211,24 @@ called separately:
   On either skip the `t0` output slice sees the guess `setInitialConditions`
   built, which is the state the run really started from.
 
-  **The dG/dt gate sees it too, and that is a known defect rather than a
-  consequence to accept** — see `TODO`. `objectiveIsDecreasing` differentiates
-  the initial condition through `dydtComplete`, and on the guess it can come out
-  with the wrong *sign*: measured at k = 2 on 4 cells, `AuxDiffusion` with
-  `G = Int u dx` gives +1.654 corrected against −1.769 uncorrected, and
-  `ScalarDiffusion` +2.208 against −1.187. An independent one-IDA-step reference
-  sides with the corrected value every time. The gate rejects on
-  `dGdt < -tol`, so it abandons runs it should accept. Nothing catches it because
-  `TestDiffusion` — the only fixture the gate tests use — agrees to 3.6e-16, and
-  no test combines an armed gate with a steady solve.
+  **The dG/dt gate does not, because an armed gate overrides both skips.** It
+  differentiates the initial condition, and on the guess `dGdt` can come out with
+  the wrong *sign*: at k = 2 on 4 cells, `AuxDiffusion` with `G = Int u dx` gives
+  +1.654 corrected against −1.769 uncorrected, `ScalarDiffusion` +2.208 against
+  −1.187, with a one-IDA-step reference siding with the corrected value both
+  times. Since the gate rejects on `dGdt < -tol` that abandons runs it should
+  accept. So `CheckObjectiveDecrease` forces `IDACalcIC` whatever else
+  `initialize` would have done — one rule covering both skips, because the gate is
+  equally wrong on a time-marching run that skipped for consistency.
+
+  **If that `IDACalcIC` then fails, the run continues and the gate declines.**
+  Forcing it puts `IDACalcIC` on exactly the states it is likeliest to fail on, so
+  a failure there clears `gateUsable`, restores IDA's `phi` with `IDAReInit` — the
+  fallback is then bit for bit the run that would have happened unarmed — and
+  `objectiveIsDecreasing` returns false with a warning. The gate is an
+  optimisation: losing it costs time, where a wrong rejection loses a result.
+  `TestDiffusion`, the only fixture the older gate tests use, agrees to 3.6e-16
+  either way and is why none of this showed up there.
 * `SystemSolver::integrate(tFinal)` — the time loop, then the adjoint solve and
   the final netCDF / restart output.
 * `SystemSolver::destroySundials` — free all of it. Idempotent, and safe with no

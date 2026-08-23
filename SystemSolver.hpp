@@ -476,14 +476,19 @@ class SystemSolver
         // it was skipped (Solver.cpp). Before initialize() there is nothing
         // mapped; after destroySundials() they dangle.
         //
-        // KNOWN DEFECT, see TODO: on the guess this can come out with the wrong
-        // sign. Measured at k = 2 on 4 cells, AuxDiffusion with G = Int u dx
-        // gives +1.654 from the corrected state and -1.769 from the guess, and
-        // ScalarDiffusion +2.208 against -1.187; a one-IDA-step reference sides
-        // with the corrected value. Since the gate rejects on dGdt < -tol it then
-        // abandons runs it should accept. A steady solve always skips CalcIC, so
-        // arming the gate on one is the reachable case. TestDiffusion, the only
-        // fixture the gate tests use, agrees to 3.6e-16 either way.
+        // Arming this makes initialize() run IDACalcIC whatever else it would
+        // have done, because on a state off the constraint manifold dG/dt can
+        // come out with the wrong *sign*: measured at k = 2 on 4 cells,
+        // AuxDiffusion with G = Int u dx gives +1.654 from the corrected state
+        // and -1.769 from the guess, and ScalarDiffusion +2.208 against -1.187,
+        // with a one-IDA-step reference siding with the corrected value both
+        // times. Since the gate rejects on dGdt < -tol, the flip abandons runs
+        // that should proceed. TestDiffusion, the only fixture the gate tests
+        // used, agrees to 3.6e-16 either way and hid it.
+        //
+        // If that IDACalcIC then fails, the run continues and this returns false:
+        // the gate is an optimisation, so losing it costs time where a wrong
+        // rejection would lose a result. See gateUsable.
         bool objectiveIsDecreasing();
 
         // Whether the gate rejected the run, i.e. runSolver() skipped the time
@@ -1059,6 +1064,14 @@ class SystemSolver
         // any number here would be meaningful for one case and nonsense for the
         // next.
         bool CheckObjectiveDecrease = false;
+
+        // Whether initialize() managed to leave a state the gate can be asked
+        // about. Reset true on every initialize(), and cleared only on the one
+        // path that can fail without taking the run down: IDACalcIC failing when
+        // the gate was the only thing that wanted it. A separate flag rather than
+        // clearing CheckObjectiveDecrease, because arming is the caller's
+        // decision and must survive into the next run on a reused solver.
+        bool gateUsable = true;
         double objective_decrease_tol = 0.0;
         bool objective_rejected = false;
         Vector last_dGdt;

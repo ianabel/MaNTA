@@ -74,23 +74,39 @@ void SystemSolver::runSolver(double tFinal)
 // transient that recovers, and keeps quadrature noise about zero from rejecting a
 // run that is really flat.
 //
-// KNOWN DEFECT, recorded in TODO: this reads whatever derivative initialize()
-// left, and when IDACalcIC was skipped -- always, on a steady solve -- that is
-// setInitialConditions' guess rather than a state on the constraint manifold.
-// Measured at k = 2 on 4 cells, AuxDiffusion with G = Int u dx gives +1.654 from
-// the corrected state and -1.769 from the guess, and ScalarDiffusion +2.208
-// against -1.187; a one-IDA-step reference, sharing no code with either route,
-// sides with the corrected value. Since the test below is dGdt < -tol, the sign
-// flip abandons runs that should proceed. The route to dG/dt is not the problem
-// -- re-solving the u row for u' directly from the state moves it by at most
-// 1.4e-13 -- the state is.
+// This reads whatever derivative initialize() left, so it is only as good as the
+// state there -- which is why an armed gate now forces IDACalcIC even on the
+// paths that would otherwise skip it. On the guess instead, dG/dt can come out
+// with the wrong sign: AuxDiffusion with G = Int u dx gives +1.654 corrected and
+// -1.769 uncorrected, ScalarDiffusion +2.208 against -1.187, both at k = 2 on 4
+// cells, with a one-IDA-step reference siding with the corrected value.
+//
+// The route to dG/dt was never the problem: re-solving the u row for u' directly
+// from the state -- the calculation setInitialConditions already does -- moves it
+// by at most 1.4e-13 on either path. The state was.
 bool SystemSolver::objectiveIsDecreasing()
 {
 	if (!CheckObjectiveDecrease)
 		return false;
 
+	// Before the gateUsable check below, deliberately: a missing AdjointProblem is
+	// a configuration error and stays reportable whether or not the state turned
+	// out to be usable. The other order would let a failed IDACalcIC swallow it.
 	if (!adjointProblem)
 		throw std::logic_error("ObjectiveDecreaseTolerance is set but no AdjointProblem is; there is no objective to test. Set solveAdjoint, or drop the tolerance.");
+
+	// Armed and configured, but initialize() could not build a state to ask about
+	// -- IDACalcIC failed on a run that did not otherwise need it. Proceeding
+	// untested is the safe direction; see the fail-open branch in initialize().
+	if (!gateUsable)
+	{
+		logmsg<LOG_LEVEL::WARNING>(
+			"The dG/dt gate is armed but the initial condition was never made "
+			"consistent, so the objective cannot be differentiated there. "
+			"Proceeding without the test.");
+		last_dGdt.resize(0);
+		return false;
+	}
 
 	const Index ng = adjointProblem->getNg();
 	last_dGdt.resize(ng);
@@ -409,8 +425,13 @@ void SystemSolver::initialize()
 	// or not CalcIC ran and a caller can see how consistent its own guess was.
 	initial_residual_norm = std::numeric_limits<double>::quiet_NaN();
 	calcICRan = false;
+	gateUsable = true;
 
-	if (!solvesForSteadyState())
+	// Two reasons a run might skip it: a steady solve never takes an IDA step, and
+	// a state that is already consistent has nothing to correct.
+	bool wouldSkip = solvesForSteadyState();
+
+	if (!wouldSkip)
 	{
 		initial_residual_norm = weightedResidualNorm(t0, Y, dYdt);
 
@@ -427,8 +448,34 @@ void SystemSolver::initialize()
 			"is {:g}, so IDACalcIC {}.", initial_residual_norm, consistent_ic_tol,
 			alreadyConsistent ? "is skipped" : "will run");
 
-		calcICRan = !alreadyConsistent;
+		wouldSkip = alreadyConsistent;
 	}
+
+	// ...and one reason it must not, which overrides both.
+	//
+	// The dG/dt gate differentiates the initial condition, so it needs one that
+	// lies on the constraint manifold. Handed the guess instead it can come out
+	// with the wrong *sign*: measured at k = 2 on 4 cells, AuxDiffusion with
+	// G = Int u dx gives +1.654 from the corrected state and -1.769 from the
+	// guess, and ScalarDiffusion +2.208 against -1.187, with a one-IDA-step
+	// reference -- sharing no code with either route -- siding with the corrected
+	// value both times. The gate rejects on dGdt < -tol, so the flip abandons runs
+	// that should have proceeded.
+	//
+	// Note that this covers *both* skips rather than only the steady one. The gate
+	// is equally wrong on a time-marching run that skipped for consistency, so
+	// making the rule "an armed gate requires a consistent initial condition" is
+	// what closes it; refusing the gate on a steady solve alone would not, and
+	// would also refuse a combination python-physics/stellarator actually uses
+	// (desc_optimize_bfgs.py arms both, and reaches run_ss through
+	// StellaratorTransport.run()).
+	const bool gateForcesCalcIC = wouldSkip && CheckObjectiveDecrease;
+	if (gateForcesCalcIC)
+		logmsg<LOG_LEVEL::INFO>(
+			"IDACalcIC would have been skipped, but the dG/dt gate is armed and "
+			"differentiates the initial condition, so it runs anyway.");
+
+	calcICRan = !wouldSkip || gateForcesCalcIC;
 
 	if (calcICRan)
 	{
@@ -462,8 +509,58 @@ void SystemSolver::initialize()
 		retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, t0 + (dt0 > 0.0 ? dt0 : dt));
 		if (ErrorChecker::check_retval(&retval, "IDACalcIC", 1))
 		{
-			throw std::runtime_error("IDACalcIC could not complete");
+			// Fail open, but only when this run did not need IDACalcIC for
+			// itself. gateForcesCalcIC means the run was going to proceed from
+			// the guess and the gate is the only thing that asked for better --
+			// so a failure there costs the *test*, not the run, and killing the
+			// run would be strictly worse than not testing it. The gate is an
+			// optimisation: skipping it wastes time, while wrongly rejecting a
+			// parameter point loses a result. So the safe direction is to
+			// proceed, loudly.
+			//
+			// This is also the case IDACalcIC is most likely to fail in. It is a
+			// damped Newton solve, and the states that reach here are exactly the
+			// ones a steady solve or a warm start hands it --
+			// python-examples/jardin-critical-gradient records IDA_CONV_FAIL from
+			// starting at the *exact* steady state, and a TestDiffusion warm start
+			// at rtol 1e-6 / atol 1e-8 cannot complete it at all.
+			//
+			// IDAReInit puts phi back to (Y, dYdt). IDACalcIC keeps its iterate in
+			// its own vectors and only publishes it through IDAGetConsistentIC --
+			// which is not called below on this path -- but a failure in the
+			// *second* pass of its nwt loop leaves phi holding the first pass's
+			// answer (ida_ic.c:262-264). Without this the run would integrate from
+			// a state the gate never saw; with it the fallback is bit for bit the
+			// run that would have happened had the gate not been armed.
+			//
+			// It also zeroes nst, nre, ncfn, netf and nni (ida.c:621-625), so the
+			// totals integrate() prints at the end exclude the failed IDACalcIC.
+			// That is the right way round -- they then describe the run that
+			// actually happened -- but it does mean the cost of the attempt is
+			// visible only in the warning above.
+			if (gateForcesCalcIC)
+			{
+				logmsg<LOG_LEVEL::WARNING>(
+					"IDACalcIC failed ({}) on a run that did not otherwise need it. "
+					"Continuing from the initial guess and skipping the dG/dt gate, "
+					"which has no consistent state to differentiate.", retval);
+
+				retval = IDAReInit(IDA_mem, t0, Y, dYdt);
+				if (ErrorChecker::check_retval(&retval, "IDAReInit", 1))
+					throw std::runtime_error("Could not restore the initial condition after IDACalcIC failed");
+
+				gateUsable = false;
+				calcICRan = false;
+			}
+			else
+			{
+				throw std::runtime_error("IDACalcIC could not complete");
+			}
 		}
+	}
+
+	if (calcICRan)
+	{
 
 		long int nresevals = 0;
 		IDAGetNumResEvals(IDA_mem, &nresevals);

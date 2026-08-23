@@ -1811,6 +1811,93 @@ BOOST_AUTO_TEST_CASE(the_warm_start_keeps_the_trace_the_file_carries)
     removeOutput(stem);
 }
 
+BOOST_AUTO_TEST_CASE(a_failed_calcic_that_only_the_gate_wanted_leaves_the_run_alone)
+{
+    // An armed dG/dt gate forces IDACalcIC even where initialize() would have
+    // skipped it, because the gate differentiates the initial condition and needs
+    // one on the constraint manifold. That puts IDACalcIC on exactly the states it
+    // is most likely to fail on -- a steady solve's guess, or a warm start -- and
+    // failing there must not take down a run that was never going to need it.
+    //
+    // So it fails open: the run continues from the guess, bit for bit as it would
+    // have without the gate armed (IDAReInit puts IDA's phi back), and the gate
+    // reports nothing rather than a verdict it cannot support. Losing the test
+    // costs time; a wrong rejection would lose a result.
+    //
+    // Provoked with a warm start at configure()'s rtol 1e-6 / atol 1e-8, where
+    // IDACalcIC on a TestDiffusion restart fails with IDA_CONV_FAIL -- which it
+    // did before any of this work as well as after, so it is the tolerance rather
+    // than anything here. ConsistentICTolerance is armed so that the run would
+    // otherwise have skipped IDACalcIC, which is what makes the failure the
+    // gate's problem rather than the run's.
+    const std::string stem = "lifecycle_gate_calcic_fail";
+    {
+        Grid grid(0.0, 1.0, nCells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        CapturedOutput quiet;
+        sys.runSolver(T_FINAL);
+    }
+
+    const RestartFileData rf = readRestart(stem + ".restart.nc");
+    Grid grid(rf.cellBoundaries);
+    TestDiffusion problem(lifecycle_config);
+    problem.setRestartValues(rf.Y, rf.dYdt, grid, rf.order);
+
+    SignedIntegralObjective objective(1.0);
+    SystemSolver sys(grid, rf.order, &problem);
+    configure(sys, stem);
+    sys.setInitialTime(T_FINAL);
+    sys.setConsistentICTolerance(1e-2);
+    sys.setAdjointProblem(&objective);
+    sys.setObjectiveDecreaseTolerance(1e-3);
+
+    std::string log;
+    {
+        CapturedOutput capture;
+        BOOST_CHECK_NO_THROW(sys.initialize());
+        log = capture.text();
+    }
+
+    BOOST_TEST_MESSAGE("weighted residual " << sys.getInitialResidualNorm()
+                       << ", IDACalcIC ran: " << sys.initialConditionWasCorrected());
+
+    // The premise: the residual said skip, so IDACalcIC ran only for the gate.
+    BOOST_TEST_REQUIRE(sys.getInitialResidualNorm() < sys.getConsistentICTolerance(),
+                       "this warm start no longer qualifies for the skip, so the "
+                       "failure below would be the run's rather than the gate's");
+
+    // And it failed, so the fallback is what we are looking at.
+    BOOST_TEST_REQUIRE(!sys.initialConditionWasCorrected(),
+                       "IDACalcIC succeeded here, so this case no longer exercises "
+                       "the fail-open path at all");
+
+    BOOST_TEST(log.find("IDACalcIC failed") != std::string::npos,
+               "the fallback was taken silently: " << log);
+
+    // The gate declines rather than answering from a state it cannot trust.
+    bool rejected = true;
+    {
+        CapturedOutput capture;
+        rejected = sys.objectiveIsDecreasing();
+        log = capture.text();
+    }
+    BOOST_TEST(!rejected, "the gate rejected the run from an inconsistent state");
+    BOOST_TEST(log.find("Proceeding without the test") != std::string::npos,
+               "the gate answered rather than declining: " << log);
+
+    // And the run itself is unharmed -- which is the whole point of failing open.
+    {
+        CapturedOutput quiet;
+        BOOST_CHECK_NO_THROW(sys.integrate(2.0 * T_FINAL));
+        sys.destroySundials();
+    }
+
+    problem.clearRestart();
+    removeOutput(stem);
+}
+
 BOOST_AUTO_TEST_CASE(a_restart_at_a_higher_degree_reproduces_the_state_exactly)
 {
     // The sharp case, and the reason a projection is the right transfer rather

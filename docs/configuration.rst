@@ -188,14 +188,20 @@ Time integration
        number worth defaulting to and zero means "off". A negative value is an
        error rather than a quiet "off". See :doc:`adjoints`.
 
-       .. warning::
+       .. note::
 
-          **Do not rely on this together with a steady solve.** The gate
-          differentiates the initial condition, and a steady solve skips
-          ``IDACalcIC``, so what it differentiates is the uncorrected guess — on
-          which :math:`\mathrm{d}G/\mathrm{d}t` can come out with the wrong
-          sign and abandon a run that should have proceeded. Measured cases and
-          the ways out are in ``TODO``.
+          Arming this makes ``initialize()`` run ``IDACalcIC`` whatever else it
+          would have done — a steady solve and ``ConsistentICTolerance`` both skip
+          it otherwise, and the gate differentiates the initial condition, so on
+          the uncorrected guess :math:`\mathrm{d}G/\mathrm{d}t` can come out with
+          the wrong sign and abandon a run that should have proceeded. The cost is
+          two Jacobian builds and two solves, paid only on a run that would have
+          skipped; see :ref:`warm-starts`.
+
+          If that ``IDACalcIC`` fails — the states it is forced onto are the ones
+          it is likeliest to fail on — the run continues from the guess and the
+          gate reports nothing, with a warning. The gate is an optimisation, so
+          losing it costs time where a wrong rejection would lose a result.
    * - ``tau``
      - ``1.0``
      - The HDG stabilisation parameter. Constant across the domain.

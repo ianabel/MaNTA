@@ -1220,4 +1220,98 @@ BOOST_AUTO_TEST_CASE(a_time_dependent_boundary_reaches_the_right_hand_side)
     }
 }
 
+BOOST_AUTO_TEST_CASE(an_armed_gate_is_given_a_consistent_initial_condition)
+{
+    // The gate differentiates the initial condition, so it is only as good as the
+    // state initialize() left. Two paths now skip IDACalcIC -- a steady solve
+    // always, and a time-marching run whose residual is already below
+    // ConsistentICTolerance -- and on the uncorrected guess dG/dt can come out
+    // with the wrong *sign*. Since the gate rejects on dGdt < -tol, that abandons
+    // runs which should proceed. So an armed gate forces IDACalcIC whatever else
+    // initialize() would have done.
+    //
+    // AuxDiffusion and ScalarDiffusion are the fixtures where it shows: their
+    // initial conditions contradict their own lower Dirichlet boundary, so
+    // IDACalcIC has real work to do. TestDiffusion does not -- its two states
+    // agree to 3.6e-16 -- which is exactly why the gate tests in
+    // SolverLifecycleTests.cpp, which use it, never noticed.
+    //
+    // Both halves are asserted. That the corrected value is the right one is not
+    // this test's claim to make; it_agrees_with_the_derivative_one_ida_step_in is
+    // the case that compares dG/dt against a different method entirely, and it
+    // was that comparison -- 1.6536551 and 1.6536562 at two step sizes against
+    // +1.65366 corrected and -1.76887 from the guess -- which settled it.
+    auto verdict = [](auto &problem, bool steady, bool armed)
+    {
+        Grid grid(0.0, 1.0, nCells);
+        UIntegralObjective objective(1.0);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, "gate_consistency");
+        sys.setAdjointProblem(&objective);
+        if (armed)
+            sys.setObjectiveDecreaseTolerance(1e-3);
+        if (steady)
+        {
+            sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+            sys.setSteadyStateTolerance(1e-10);
+        }
+
+        struct Result { bool corrected; double dGdt; } out{false, 0.0};
+        {
+            CapturedOutput quiet;
+            sys.initialize();
+            out.corrected = sys.initialConditionWasCorrected();
+            sys.computeAlgebraicTimeDerivatives();
+            out.dGdt = sys.dGdt(0, sys.y, sys.dydtComplete);
+            sys.destroySundials();
+        }
+        return out;
+    };
+
+    {
+        AuxDiffusion timeMarch, steadyArmed, steadyBare;
+        const auto march = verdict(timeMarch, false, true);
+        const auto armed = verdict(steadyArmed, true, true);
+        const auto bare = verdict(steadyBare, true, false);
+
+        BOOST_TEST_MESSAGE("AuxDiffusion, G = Int u dx: time-march " << march.dGdt
+                           << ", steady+gate " << armed.dGdt
+                           << ", steady without the gate " << bare.dGdt);
+
+        BOOST_TEST(march.corrected, "a time-marching run stopped running IDACalcIC");
+        BOOST_TEST(armed.corrected,
+                   "the gate is armed on a steady solve and IDACalcIC was still skipped");
+        BOOST_TEST(!bare.corrected,
+                   "a steady solve with no gate armed ran IDACalcIC, so this case "
+                   "cannot show that the gate is what forces it");
+
+        // The gate now sees what a time-marching run would have seen.
+        BOOST_TEST(armed.dGdt == march.dGdt, boost::test_tools::tolerance(1e-12));
+
+        // Not vacuous: without the gate the two genuinely disagree, in sign.
+        BOOST_TEST(armed.dGdt * bare.dGdt < 0.0,
+                   "the corrected and uncorrected states give " << armed.dGdt << " and "
+                       << bare.dGdt << ", which no longer straddle zero -- this fixture "
+                       "can no longer tell a fixed gate from a broken one");
+    }
+
+    {
+        ScalarDiffusion timeMarch, steadyArmed, steadyBare;
+        const auto march = verdict(timeMarch, false, true);
+        const auto armed = verdict(steadyArmed, true, true);
+        const auto bare = verdict(steadyBare, true, false);
+
+        BOOST_TEST_MESSAGE("ScalarDiffusion, G = Int u dx: time-march " << march.dGdt
+                           << ", steady+gate " << armed.dGdt
+                           << ", steady without the gate " << bare.dGdt);
+
+        BOOST_TEST(armed.corrected);
+        BOOST_TEST(!bare.corrected);
+        BOOST_TEST(armed.dGdt == march.dGdt, boost::test_tools::tolerance(1e-12));
+        BOOST_TEST(armed.dGdt * bare.dGdt < 0.0,
+                   "the corrected and uncorrected states give " << armed.dGdt << " and "
+                       << bare.dGdt << ", which no longer straddle zero");
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -671,6 +671,35 @@ These are deliberate and tracked, not oversights:
   `the_initial_condition_uses_boundary_data_at_t0` covers that separately,
   because every other fixture in the tree starts at zero.
 
+* **The dG/dt gate needs a consistent initial condition, and now forces one.**
+  `an_armed_gate_is_given_a_consistent_initial_condition` in
+  `AlgebraicDerivativeTests.cpp`. Once `initialize()` gained two ways to skip
+  `IDACalcIC` -- a steady solve always, and a residual below
+  `ConsistentICTolerance` -- the gate started differentiating the guess, and on
+  the guess `dG/dt` comes out with the wrong *sign*: `AuxDiffusion` with
+  `G = Int u dx` gives +1.654 corrected against -1.769, `ScalarDiffusion` +2.208
+  against -1.187. The gate rejects on `dGdt < -tol`, so it abandoned runs it
+  should accept.
+
+  The test asserts both halves at both fixtures: that an armed gate on a steady
+  solve does run `IDACalcIC`, that the same solve *without* the gate does not, and
+  that the armed value equals the time-marching one to 1e-12. Its guard is that
+  the armed and unarmed values straddle zero -- so a fixture that stopped
+  distinguishing a fixed gate from a broken one fails rather than passes.
+  `TestDiffusion`, which every older gate test uses, agrees to 3.6e-16 either way
+  and is exactly why this went unnoticed.
+
+  `a_failed_calcic_that_only_the_gate_wanted_leaves_the_run_alone` in
+  `SolverLifecycleTests.cpp` covers the other half. Forcing `IDACalcIC` puts it on
+  the states it is likeliest to fail on, so it fails open: the run continues from
+  the guess, `IDAReInit` restores IDA's `phi` so the fallback is bit for bit the
+  unarmed run, and the gate declines instead of answering. Provoked with a warm
+  start at rtol 1e-6 / atol 1e-8, where `IDACalcIC` on a `TestDiffusion` restart
+  fails with `IDA_CONV_FAIL` -- which it did before any of this work as well as
+  after. Both of its premises are `BOOST_TEST_REQUIRE`, so if the warm start ever
+  stops qualifying for the skip, or `IDACalcIC` starts succeeding there, the case
+  says so rather than passing for the wrong reason.
+
 * **Warm starts: what a restart hands the solver, and whether `IDACalcIC` has to
   run.** Two cases in `SolverLifecycleTests.cpp`, and unlike the three
   degree-transfer cases beside them they go through an actual `.restart.nc`
