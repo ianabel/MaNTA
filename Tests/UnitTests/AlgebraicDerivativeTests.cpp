@@ -1223,9 +1223,9 @@ BOOST_AUTO_TEST_CASE(a_time_dependent_boundary_reaches_the_right_hand_side)
 BOOST_AUTO_TEST_CASE(an_armed_gate_is_given_a_consistent_initial_condition)
 {
     // The gate differentiates the initial condition, so it is only as good as the
-    // state initialize() left. Two paths now skip IDACalcIC -- a steady solve
-    // always, and a time-marching run whose residual is already below
-    // ConsistentICTolerance -- and on the uncorrected guess dG/dt can come out
+    // state initialize() left. Two paths now skip IDACalcIC -- a steady solve and
+    // a restart, unless ForceConsistentIC puts it back -- and on the uncorrected
+    // guess dG/dt can come out
     // with the wrong *sign*. Since the gate rejects on dGdt < -tol, that abandons
     // runs which should proceed. So an armed gate forces IDACalcIC whatever else
     // initialize() would have done.

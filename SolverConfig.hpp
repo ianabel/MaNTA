@@ -62,7 +62,7 @@ struct SolverConfig
     bool                     zeroFlux;
     bool                     AggressiveTimesteps;
     bool                     SuppressAlgebraicError;
-    double                   ConsistentICTolerance;
+    bool                     ForceConsistentIC;
     std::string              SteadyStateSolver;
     double                   PseudoTransientInitialStep;
     double                   PseudoTransientMaxStep;

@@ -254,7 +254,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(zeroFlux, bool);
     READ(AggressiveTimesteps, bool);
     READ(SuppressAlgebraicError, bool);
-    READ(ConsistentICTolerance, double);
+    READ(ForceConsistentIC, bool);
     READ(SteadyStateSolver, std::string);
     READ(PseudoTransientInitialStep, double);
     READ(PseudoTransientMaxStep, double);
@@ -523,10 +523,7 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         system.setSteadyStateDiagnostics(config.SteadyStateDiagnostics);
         system.setSteadyStateStepDiagnostics(config.SteadyStateStepDiagnostics);
 
-        // Here for the same reason: zero is a legitimate setting (always run
-        // IDACalcIC), so the schema default is applied every time, and the
-        // setter refuses a negative with a std::logic_error.
-        system.setConsistentICTolerance(config.ConsistentICTolerance);
+        system.setForceConsistentIC(config.ForceConsistentIC);
     }
     catch (std::logic_error const &e)
     {

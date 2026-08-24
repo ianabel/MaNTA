@@ -597,39 +597,76 @@ class SystemSolver
         // setSuppressAlgebraicError's use in Solver.cpp and docs/running.rst.
         void setSuppressAlgebraicError(bool in) { suppressAlgebraicError = in; };
 
-        // How small the initial state's weighted residual has to be before
-        // initialize() skips IDACalcIC as a no-op. Zero disables the check, so
-        // CalcIC always runs.
+        // Run IDACalcIC on a run that would otherwise skip it.
         //
-        // The check is worth having because IDACalcIC has no cheap path. Its
-        // convergence test is on the *Newton step* -- IDANewtonIC calls lsolve
-        // and only then tests ||J^-1 F|| against epsNewt (ida_ic.c:404-417) --
-        // and IDAnlsIC calls lsetup unconditionally before that (ida_ic.c:345).
-        // The outer loop then runs the whole thing twice on success, to refresh
-        // the error weights at the converged state (ida_ic.c:232). So the floor
-        // is two Jacobian builds and two Jacobian solves *however consistent the
-        // state already is*: measured on four fixtures handed a state CalcIC had
-        // just converged to (||F|| between 6e-15 and 7e-12), it costs 2 residual
-        // evaluations, 2 builds and 2 solves with zero Newton iterations, every
-        // time. For MaNTA a build is updateMatricesForJacSolve() -- assemble and
-        // factorise every per-cell MX -- so that floor is not small.
+        // Two skip by default, for different reasons, and neither is about
+        // saving work:
         //
-        // A residual norm is the check IDA declines to make, and it costs one
-        // residual evaluation and no Jacobian work. It is a *sufficient*
-        // condition rather than an equivalent one: ||J^-1 F|| <= ||J^-1|| ||F||,
-        // so a small residual only implies a small Newton step when J is not
-        // badly conditioned. Err towards running CalcIC: a needless CalcIC costs
-        // what the code did before this existed, while a wrongly skipped one
-        // leaves an inconsistent initial condition, which is silent. That is
-        // also why the default is zero rather than a number -- see
-        // consistent_ic_tol, where the measurements are.
-        void setConsistentICTolerance(double tol)
-        {
-            if (tol < 0)
-                throw std::logic_error("ConsistentICTolerance cannot be negative; use zero to always run IDACalcIC.");
-            consistent_ic_tol = tol;
-        };
-        double getConsistentICTolerance() const { return consistent_ic_tol; };
+        //   * a **steady solve** never takes an IDA step, so solveSteadyState
+        //     drives the whole residual to zero from Y with KINSOL and whatever
+        //     IDACalcIC computed is discarded by the first accepted continuation
+        //     step. Worse, IDACalcIC fails on states a steady solve handles
+        //     without difficulty -- python-examples/jardin-critical-gradient
+        //     returns IDA_CONV_FAIL from the *exact* steady state, the one
+        //     initial condition a steady solve would have accepted instantly.
+        //
+        //   * a **restart** resumes from a state the previous run had already
+        //     driven onto the constraint manifold, so there is nothing to
+        //     correct. getInitialResidualNorm() reports how true that was on the
+        //     run in hand.
+        //
+        // A cold time-marching run always runs IDACalcIC and there is no way to
+        // turn that off. It needs a consistent initial condition and its guess is
+        // not one: IDA_ERR_FAIL (-3) on the first step is what an inconsistent
+        // state looks like, and a local error estimate that will not shrink with
+        // h is not something an option should be able to opt into. A caller who
+        // does not care about the transient wants SteadyStateSolver =
+        // PseudoTransient or Newton, not an uncorrected time march.
+        //
+        // So this key only ever *adds* IDACalcIC. It is the escape hatch for a
+        // restart that is not as consistent as a restart is supposed to be -- a
+        // file written by a different discretisation, say, where
+        // setInitialConditions projects rather than copies and builds the trace
+        // by averaging.
+        //
+        // Cost, for scale. IDACalcIC has no cheap path: its convergence test is
+        // on the *Newton step* -- IDANewtonIC calls lsolve and only then tests
+        // ||J^-1 F|| against epsNewt (ida_ic.c:404-417) -- and IDAnlsIC calls
+        // lsetup unconditionally before that (ida_ic.c:345). The outer loop then
+        // runs the whole thing twice on success, to refresh the error weights at
+        // the converged state (ida_ic.c:232). So the floor is two Jacobian builds
+        // and two Jacobian solves *however consistent the state already is*:
+        // measured on four fixtures handed a state CalcIC had just converged to
+        // (||F|| between 6e-15 and 7e-12), it costs 2 residual evaluations, 2
+        // builds and 2 solves with zero Newton iterations, every time. For MaNTA
+        // a build is updateMatricesForJacSolve() -- assemble and factorise every
+        // per-cell MX. On an already consistent AuxVarTest warm start at rtol
+        // 1e-6 that floor is the whole of the saving: 2 residual evaluations of
+        // 89 and 2 builds of 21.
+        //
+        // **Note what this deliberately is not: a residual threshold.** It
+        // replaced ConsistentICTolerance, which skipped when the initial weighted
+        // residual fell below a number the caller supplied. What IDACalcIC tests
+        // is ||J^-1 F||, a correction to y, and the two are related by a per-row
+        // amplification s_i = ||J^-1 e_i||_wrms that is nowhere near proportional
+        // to the error weights. Measured as s_i/ewt_i on LinearDiffusion, MatTest
+        // and AuxVarTest:
+        //
+        //   sigma, q                 0.6 - 10      about right, and uniform
+        //   u                        2.3e-4 - 2.0  over-weighted up to ~4000x
+        //   lambda, Dirichlet ends   exactly 0     largest weight in the vector,
+        //                                          on rows residual never writes
+        //   aux                      0.9 - 39      under-weighted up to ~10x vs sigma
+        //
+        // The u rows are the differential ones, whose residual IDA absorbs into
+        // u'. The Dirichlet trace rows are imposed inside the linear solve, so
+        // J^-1 e_i is identically zero there and they can only dilute the mean.
+        // Over six AuxVarTest warm-start states -- three tolerances, corrected and
+        // not -- ||J^-1 F|| / ||F|| ran from 15 to 187, for one problem at one
+        // discretisation. There is no number to pick, so the decision is made from
+        // what the run *is* rather than from what its residual measures.
+        void setForceConsistentIC(bool force) { forceConsistentIC = force; };
+        bool getForceConsistentIC() const { return forceConsistentIC; };
 
         // The weighted residual norm initialize() measured at the initial state,
         // and whether it then ran IDACalcIC. NaN and false when nothing was
@@ -1031,30 +1068,12 @@ class SystemSolver
 
         bool TerminateOnSteadyState = false;
 
-        // Off by default, and the default is a measurement rather than caution.
-        //
-        // The separation looks clean at first: on TestDiffusion round trips a
-        // cold start measures 0.30 at Absolute_tolerance = 1e-3 and 417 at 1e-8,
-        // while a warm start lands between 7.7e-4 and 1.9e-2. But AuxVarTest's
-        // restart round trip -- the regression suite's only one with nAux > 0 --
-        // warm-starts at 1.6e-4, well inside any threshold those numbers suggest,
-        // and skipping IDACalcIC there makes the resumed run fail outright with
-        // IDA_CONV_FAIL at its first step. It succeeds when CalcIC runs.
-        //
-        // That case also shows why a residual cannot be the whole test.
-        // IDACalcIC *raises* the weighted residual there, 1.6e-4 to 3.8e-4, and
-        // the run works anyway: what it fixes is the algebraic values, and a
-        // norm of F does not see how far they are from the manifold when the
-        // aux block is stiff. So the ordering is not merely noisy, it is
-        // inverted -- the fixture that must not skip measures lower than the one
-        // that may. No threshold separates them.
-        //
-        // Hence zero. Set it per problem, from the number this run reports:
-        // getInitialResidualNorm() is measured on every time-marching run
-        // whether or not the skip is armed, and is logged at INFO. 1e-2 is the
-        // value the TestDiffusion measurements support, and it works on the
-        // LinearDiffusion and MatTest round trips; AuxVarTest is the warning.
-        double consistent_ic_tol = 0.0;
+        bool forceConsistentIC = false;
+
+        // Set by setInitialConditions: true when a restart had to be *projected*
+        // onto a different discretisation rather than copied. The skip in
+        // initialize() is conditional on it -- see setForceConsistentIC.
+        bool restartWasProjected = false;
         double initial_residual_norm = std::numeric_limits<double>::quiet_NaN();
         bool calcICRan = false;
         double steady_state_tol = 1e-3;

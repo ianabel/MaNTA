@@ -101,6 +101,16 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         const bool sameDiscretisation =
             restart.getBasis().Order() == k && restart.getGrid() == grid;
 
+        // Recorded because initialize() decides whether to skip IDACalcIC from it.
+        // A restart skips by default on the grounds that it resumes from a state
+        // the previous run had already driven onto the constraint manifold -- and
+        // that is only true on the copy path. The projection below transfers u, q,
+        // aux and the scalars and then *rebuilds* sigma and the trace, so the state
+        // it produces is a guess like any other. Measured on AuxVarTest resuming at
+        // a lower degree: skipping there fails with IDA_ERR_FAIL, and running
+        // IDACalcIC completes the run.
+        restartWasProjected = !sameDiscretisation;
+
         if (sameDiscretisation)
         {
             // Copy restart values into y. Bit for bit, which is what the restart

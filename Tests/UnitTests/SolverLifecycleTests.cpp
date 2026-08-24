@@ -118,6 +118,88 @@ public:
     Value InitialDerivative(Index, Position) const override { return -1.0; };
 };
 
+// A declaration error that IDACalcIC cannot solve, and time integration can.
+//
+// IDA_YA_YDP_INIT solves for algebraic *values* and differential *derivatives*,
+// so it holds every differential value fixed. This case declares its scalar
+// differential -- numberedScalars(1, true) -- while its ScalarG contains no time
+// derivative at all, so dGdot is identically zero and the row
+//
+//     mu - beta * Int u dx = 0
+//
+// is algebraic in two quantities CalcIC has frozen (mu, and u through the
+// integral). No Newton direction touches it, the backtracking runs to exhaustion,
+// and IDACalcIC returns IDA_LINESEARCH_FAIL (-13). Time integration is unaffected:
+// its Newton solves the whole system with nothing frozen, and that row determines
+// mu perfectly well.
+//
+// That asymmetry is the point. It is the one class of IDACalcIC failure that is
+// genuinely a property of the *problem* rather than of MaNTA -- CLAUDE.md records
+// it as what kept python-physics/mirror-plasma's voltage controller from ever
+// starting -- so it is what the fail-open case below is provoked with. The
+// provocation it used to use, a TestDiffusion warm start at rtol 1e-6, turned out
+// to be a bug in MaNTA: initialize() passed IDACalcIC an *interval* where tout1
+// wants an absolute time, which on a restart is simply the wrong time and on this
+// fixture landed exactly on t0.
+class MisdeclaredScalar : public TransportSystem
+{
+public:
+    MisdeclaredScalar()
+        : TransportSystem({.variables = numberedFields(1),
+                           .scalars = numberedScalars(1, true)}) {};
+
+    Value LowerBoundary(Index, Time) const override { return 0.0; };
+    Value UpperBoundary(Index, Time) const override { return 0.0; };
+
+    Value SigmaFn(Index, const State &s, Position, Time) override { return s.q(0); };
+    Value Sources(Index, const State &s, Position, Time) override
+    {
+        return 0.05 * s.scalar(0);
+    };
+
+    void dSigmaFn_dq(Index, VectorRef v, const State &, Position, Time) override { v[0] = 1.0; };
+    void dSigmaFn_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; };
+    void dSources_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; };
+    void dSources_dq(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; };
+    void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; };
+    void dSources_dScalars(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.05;
+    };
+
+    // No ydot anywhere: that is the misdeclaration.
+    Value ScalarG(Index, GlobalState const &yy, GlobalState const &,
+                  std::vector<Position> const &, Values const &weights, Matrix const &,
+                  Time) override
+    {
+        return yy.Scalars()(0) - ScalarHooks::integrate(yy.Variable().row(0), weights);
+    };
+    void ScalarGPrime(GlobalStateMatrix &dG, GlobalStateMatrix &, GlobalState const &,
+                      GlobalState const &, std::vector<Position> const &,
+                      Values const &weights, Matrix const &, Time) override
+    {
+        dG[0].Variable().row(0) = -weights.transpose();
+        dG[0].Scalars()(0) = 1.0;
+    };
+
+    Value InitialValue(Index, Position x) const override { return std::sin(M_PI * x); };
+    Value InitialDerivative(Index, Position x) const override
+    {
+        return M_PI * std::cos(M_PI * x);
+    };
+    // Deliberately *not* Int sin(pi x) dx = 2/pi, so the scalar row starts off
+    // the manifold and there is something for IDACalcIC to fail to reduce.
+    //
+    // The offset has to be in a window, which is worth knowing before changing
+    // it. Too small -- the consistent value, say -- and the row is satisfied at
+    // t0, the Newton step is zero, and IDACalcIC *converges*: irreducible only
+    // beats small when there is something to reduce. Too large and the first IDA
+    // step cannot absorb the jump either, the error test rejects it repeatedly,
+    // and the run fails for reasons that have nothing to do with the fail-open
+    // path. 0.6 against 0.6366 is about 6% out, which does both jobs.
+    Value InitialScalarValue(Index) const override { return 0.6; };
+};
+
 // u at a handful of interior points, read out of yJac -- the only copy of the
 // solution that outlives destroySundials().
 Vector sample(SystemSolver &sys)
@@ -1629,20 +1711,20 @@ BOOST_AUTO_TEST_CASE(a_warm_start_from_a_restart_file_does_not_run_calcic)
     // i.e. assemble and factorise every per-cell MX.
     //
     // A warm start is exactly the case where all of that is wasted, and warm
-    // starts are a large share of production runs. So initialize() now measures
-    // the weighted residual first -- one residual evaluation, no Jacobian work --
-    // and skips IDACalcIC when it is already below ConsistentICTolerance.
+    // starts are a large share of production runs. So a restart skips IDACalcIC
+    // *by default*, and this case pins that default -- it sets no key at all.
     //
     // IDAGetNumResEvals is the observable: it counts residuals IDA asked for, and
     // nothing else in initialize() goes through IDA, so zero means CalcIC never
     // ran. MaNTA's own nResidualEvals would not do -- the precheck increments it.
     //
-    // The tolerance is set explicitly because the default is zero: no single
-    // threshold turned out to be safe across the cases measured, and AuxVarTest's
-    // restart is the counter-example -- see setConsistentICTolerance. 1e-2 is the
-    // value TestDiffusion's own numbers support, and the run is integrated below
-    // rather than merely initialised, so this pins that skipping is safe *here*
-    // rather than only that it happened.
+    // The decision is made from what the run *is* rather than from a residual
+    // threshold, because ||F|| cannot be calibrated against what IDACalcIC tests
+    // -- see setForceConsistentIC for the measured per-row amplification. So this
+    // case asserts two separate things: that a restart really does suppress
+    // CalcIC, and that the warm start it suppresses it on was in fact consistent.
+    // The run is integrated below rather than merely initialised, so what is
+    // pinned is that skipping is safe *here*, not only that it happened.
     const std::string stem = "lifecycle_warm_start";
     const double tSplit = T_FINAL;
 
@@ -1668,21 +1750,23 @@ BOOST_AUTO_TEST_CASE(a_warm_start_from_a_restart_file_does_not_run_calcic)
     SystemSolver sys(grid, rf.order, &problem);
     configure(sys, stem);
     sys.setInitialTime(tSplit);   // a restart resumes where the file was written
-    sys.setConsistentICTolerance(1e-2);
 
     {
         CapturedOutput quiet;
         sys.initialize();
     }
 
-    BOOST_TEST_MESSAGE("warm start: weighted residual " << sys.getInitialResidualNorm()
-                       << " against a tolerance of " << sys.getConsistentICTolerance());
+    BOOST_TEST_MESSAGE("warm start: weighted residual " << sys.getInitialResidualNorm());
 
-    BOOST_TEST(sys.getInitialResidualNorm() < sys.getConsistentICTolerance(),
+    // Not what the skip is decided on any more -- the flag is -- but it is what
+    // makes the skip *sound*, so it is still checked. A warm start is supposed to
+    // arrive consistent, and if this ever stops holding the integrate() below is
+    // passing for a reason nobody chose.
+    constexpr double warmStartIsConsistent = 1e-2;
+    BOOST_TEST(sys.getInitialResidualNorm() < warmStartIsConsistent,
                "the state the restart file was turned into has a weighted residual of "
                    << sys.getInitialResidualNorm() << ", above the "
-                   << sys.getConsistentICTolerance() << " that would let IDACalcIC be "
-                   "skipped; a warm start is supposed to arrive consistent");
+                   << warmStartIsConsistent << " a warm start is expected to reach");
 
     BOOST_TEST(!sys.initialConditionWasCorrected(),
                "IDACalcIC ran on a warm start whose residual was already "
@@ -1695,32 +1779,35 @@ BOOST_AUTO_TEST_CASE(a_warm_start_from_a_restart_file_does_not_run_calcic)
                    << " times during a warm start's initialize(), so IDACalcIC ran");
 
     // And the run that follows must actually work. Skipping IDACalcIC is only
-    // sound if the state left behind can be integrated from, and the residual
-    // norm alone does not establish that -- on AuxVarTest it is 1.6e-4, lower
-    // than the number here, and the resumed run fails at its first step unless
-    // CalcIC has run. So this integrates rather than stopping at initialize().
+    // sound if the state left behind can be integrated from, and a residual norm
+    // does not establish that: AuxVarTest used to warm-start at 1.6e-4 -- lower
+    // than the number here -- and fail at its first step unless CalcIC had run.
+    // That case turned out to be a missing Jacobian block in the fixture rather
+    // than a property of the norm, but the norm is still the wrong measure (its
+    // ||J^-1 F|| was 6.3x *worse* where ||F|| was 2.4x better), so this
+    // integrates rather than stopping at initialize().
     {
         CapturedOutput quiet;
         BOOST_CHECK_NO_THROW(sys.integrate(2.0 * tSplit));
     }
 
-    // Not vacuous. A cold start of the same problem is three orders of magnitude
-    // further from consistent and must still be corrected -- otherwise this case
-    // would pass just as well with the check wired to skip everything.
+    // Not vacuous, in two directions. A cold start of the same problem is three
+    // orders of magnitude further from consistent -- so the fixture can tell warm
+    // from cold -- and it *is* corrected, which is what stops this case passing
+    // were the skip wired to happen unconditionally.
     {
         Grid coldGrid(0.0, 1.0, nCells);
         TestDiffusion coldProblem(lifecycle_config);
         SystemSolver cold(coldGrid, k, &coldProblem);
         configure(cold, "lifecycle_warm_start_cold");
-        cold.setConsistentICTolerance(1e-2);
         {
             CapturedOutput quiet;
             cold.initialize();
         }
         BOOST_TEST_MESSAGE("cold start: weighted residual " << cold.getInitialResidualNorm());
         BOOST_TEST(cold.initialConditionWasCorrected(),
-                   "a cold start's residual was " << cold.getInitialResidualNorm()
-                       << ", which the check treated as already consistent");
+                   "IDACalcIC did not run on a cold time-marching start, which is "
+                   "the one case that must always have it");
         BOOST_TEST(cold.getInitialResidualNorm() > 10.0 * sys.getInitialResidualNorm(),
                    "the cold and warm starts are only " << cold.getInitialResidualNorm()
                        << " and " << sys.getInitialResidualNorm() << " apart, so this "
@@ -1736,6 +1823,35 @@ BOOST_AUTO_TEST_CASE(a_warm_start_from_a_restart_file_does_not_run_calcic)
         CapturedOutput quiet;
         sys.destroySundials();
     }
+
+    // And ForceConsistentIC puts it back, on the same restart, which is the whole
+    // of what that key does. Worth pinning separately: the skip is now decided by
+    // what the run *is*, so without this nothing would notice the key being
+    // ignored -- every other case here would pass just as well.
+    {
+        SystemSolver forced(grid, rf.order, &problem);
+        configure(forced, stem);
+        forced.setInitialTime(tSplit);
+        forced.setForceConsistentIC(true);
+        {
+            CapturedOutput quiet;
+            forced.initialize();
+        }
+
+        BOOST_TEST(forced.initialConditionWasCorrected(),
+                   "ForceConsistentIC did not put IDACalcIC back on a restart");
+
+        long forcedResEvals = -1;
+        BOOST_REQUIRE(IDAGetNumResEvals(forced.IDA_mem, &forcedResEvals) == IDA_SUCCESS);
+        BOOST_TEST(forcedResEvals > 0,
+                   "IDA evaluated no residuals, so IDACalcIC did not actually run");
+
+        {
+            CapturedOutput quiet;
+            forced.destroySundials();
+        }
+    }
+
     problem.clearRestart();
     removeOutput(stem);
 }
@@ -1780,10 +1896,11 @@ BOOST_AUTO_TEST_CASE(the_warm_start_keeps_the_trace_the_file_carries)
     // Armed, because this fixture's warm start cannot run IDACalcIC at all:
     // configure() uses rtol 1e-6 / atol 1e-8, and at that tolerance CalcIC on a
     // TestDiffusion restart fails with IDA_CONV_FAIL -- before this change as
-    // well as after, so it is the tolerance rather than the trace. Worth
-    // recording beside AuxVarTest, which is the opposite case: there CalcIC is
-    // what makes the resumed run work and skipping it is what breaks it.
-    sys.setConsistentICTolerance(1e-2);
+    // well as after, so it is the tolerance rather than the trace. AuxVarTest
+    // used to be the opposite case -- CalcIC was what made its resumed run work
+    // -- until the missing dSigma_dPhi block in that fixture was declared; it now
+    // resumes either way, so this is the only direction still exercised.
+    // Nothing to set: a restart skips IDACalcIC by default.
 
     double kept = 0.0, reAveraged = 0.0;
     {
@@ -1824,32 +1941,50 @@ BOOST_AUTO_TEST_CASE(a_failed_calcic_that_only_the_gate_wanted_leaves_the_run_al
     // reports nothing rather than a verdict it cannot support. Losing the test
     // costs time; a wrong rejection would lose a result.
     //
-    // Provoked with a warm start at configure()'s rtol 1e-6 / atol 1e-8, where
-    // IDACalcIC on a TestDiffusion restart fails with IDA_CONV_FAIL -- which it
-    // did before any of this work as well as after, so it is the tolerance rather
-    // than anything here. ConsistentICTolerance is armed so that the run would
-    // otherwise have skipped IDACalcIC, which is what makes the failure the
-    // gate's problem rather than the run's.
+    // Provoked with MisdeclaredScalar, whose differential scalar has no time
+    // derivative in its ScalarG. IDA_YA_YDP_INIT freezes every differential
+    // value, so that row is a constant no Newton direction can touch and
+    // IDACalcIC exhausts its linesearch -- IDA_LINESEARCH_FAIL (-13). Time
+    // integration is unaffected, because its Newton has nothing frozen. That
+    // asymmetry is what this case needs, and it is a property of the declaration
+    // rather than of the solver.
+    //
+    // It used to be provoked with a TestDiffusion warm start at rtol 1e-6, which
+    // was believed to be a hard state and was in fact a MaNTA bug: initialize()
+    // handed IDACalcIC the *interval* dt where tout1 wants an absolute time, and
+    // on this fixture -- t0 = T_FINAL, cadence T_FINAL -- that landed exactly on
+    // t0, so IDA refused the input before evaluating a residual. With tout1
+    // right, that warm start converges in 3 residual evaluations and every other
+    // state in these fixtures converges too, including a degree-projection
+    // restart whose weighted residual is 8.7e3. Do not go looking for a hard
+    // state here again; there isn't one.
+    //
+    // A *steady* solve, and that is not incidental. The fail-open path claims a
+    // failed IDACalcIC can be survived by a run that never needed it, and a steady
+    // solve is the case where that is really true: KINSOL drives the whole
+    // residual to zero from wherever it starts, so an inconsistent initial state
+    // costs it nothing. python-examples/jardin-critical-gradient is the same
+    // shape -- IDACalcIC returns IDA_CONV_FAIL from the *exact* steady state,
+    // which is the one initial condition a steady solve would have accepted
+    // instantly.
+    //
+    // A time-marching run cannot stand in for it. Try the same fixture with
+    // integrate() and the run dies in the error test: mu is differential, so it
+    // is in the local error estimate, and the jump to its consistent value does
+    // not shrink with h. That is the signature of an inconsistent initial
+    // condition, and it is what IDACalcIC exists to prevent -- so "CalcIC failed
+    // but the run was fine" is a much narrower claim than it sounds, and steady
+    // solves are most of what is left of it.
     const std::string stem = "lifecycle_gate_calcic_fail";
-    {
-        Grid grid(0.0, 1.0, nCells);
-        TestDiffusion problem(lifecycle_config);
-        SystemSolver sys(grid, k, &problem);
-        configure(sys, stem);
-        CapturedOutput quiet;
-        sys.runSolver(T_FINAL);
-    }
 
-    const RestartFileData rf = readRestart(stem + ".restart.nc");
-    Grid grid(rf.cellBoundaries);
-    TestDiffusion problem(lifecycle_config);
-    problem.setRestartValues(rf.Y, rf.dYdt, grid, rf.order);
+    Grid grid(0.0, 1.0, nCells);
+    MisdeclaredScalar problem;
 
     SignedIntegralObjective objective(1.0);
-    SystemSolver sys(grid, rf.order, &problem);
+    SystemSolver sys(grid, k, &problem);
     configure(sys, stem);
-    sys.setInitialTime(T_FINAL);
-    sys.setConsistentICTolerance(1e-2);
+    sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    sys.setSteadyStateTolerance(1e-8);
     sys.setAdjointProblem(&objective);
     sys.setObjectiveDecreaseTolerance(1e-3);
 
@@ -1863,10 +1998,11 @@ BOOST_AUTO_TEST_CASE(a_failed_calcic_that_only_the_gate_wanted_leaves_the_run_al
     BOOST_TEST_MESSAGE("weighted residual " << sys.getInitialResidualNorm()
                        << ", IDACalcIC ran: " << sys.initialConditionWasCorrected());
 
-    // The premise: the residual said skip, so IDACalcIC ran only for the gate.
-    BOOST_TEST_REQUIRE(sys.getInitialResidualNorm() < sys.getConsistentICTolerance(),
-                       "this warm start no longer qualifies for the skip, so the "
-                       "failure below would be the run's rather than the gate's");
+    // The premise: a steady solve skips IDACalcIC outright, so it ran only
+    // because the gate asked for it.
+    BOOST_TEST_REQUIRE(sys.solvesForSteadyState(),
+                       "this run does not skip IDACalcIC on its own, so the failure "
+                       "below would be the run's rather than the gate's");
 
     // And it failed, so the fallback is what we are looking at.
     BOOST_TEST_REQUIRE(!sys.initialConditionWasCorrected(),
@@ -1890,11 +2026,10 @@ BOOST_AUTO_TEST_CASE(a_failed_calcic_that_only_the_gate_wanted_leaves_the_run_al
     // And the run itself is unharmed -- which is the whole point of failing open.
     {
         CapturedOutput quiet;
-        BOOST_CHECK_NO_THROW(sys.integrate(2.0 * T_FINAL));
+        BOOST_CHECK_NO_THROW(sys.integrate(T_FINAL));
         sys.destroySundials();
     }
 
-    problem.clearRestart();
     removeOutput(stem);
 }
 
@@ -1979,6 +2114,57 @@ BOOST_AUTO_TEST_CASE(a_restart_at_a_lower_degree_lands_where_a_fresh_run_would)
                "k = 2 run lands; nested projections compose, so this should be exact");
 
     problem.clearRestart();
+    removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(only_a_copied_restart_is_treated_as_already_consistent)
+{
+    // A restart skips IDACalcIC by default, on the grounds that it resumes from a
+    // state the previous run had already driven onto the constraint manifold. That
+    // is true of the *copy* path and not of the projection one: a restart onto a
+    // different degree transfers u, q, aux and the scalars and then rebuilds sigma
+    // and the trace, so what it hands IDA is a guess like any other.
+    //
+    // Skipping there is not a missed optimisation, it is a broken run. Measured on
+    // the AuxVarTest regression case resuming at a lower degree, which fails with
+    // IDA_ERR_FAIL when IDACalcIC is skipped and completes when it runs. So the
+    // default is conditional on the transfer having been a copy, and this pins
+    // both halves of that -- without the second, the projection path would quietly
+    // start from an inconsistent state.
+    const std::string stem = "lifecycle_restart_consistency";
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+
+    const RestartSnapshot source = initialiseAt(problem, grid, k, stem);
+
+    auto calcICRanAt = [&](Index runOrder)
+    {
+        problem.setRestartValues(source.Y, source.dYdt, grid, k);
+        SystemSolver sys(grid, runOrder, &problem);
+        configure(sys, stem);
+        {
+            CapturedOutput quiet;
+            sys.initialize();
+        }
+        const bool ran = sys.initialConditionWasCorrected();
+        {
+            CapturedOutput quiet;
+            sys.destroySundials();
+        }
+        problem.clearRestart();
+        return ran;
+    };
+
+    BOOST_TEST(!calcICRanAt(k),
+               "a restart at the file's own degree took the copy path, so its state "
+               "is the one the previous run converged to and IDACalcIC has nothing "
+               "to do -- but it ran anyway");
+
+    BOOST_TEST(calcICRanAt(k + 1),
+               "a restart at a different degree is projected, not copied, so its "
+               "sigma and trace are rebuilt and the state is not consistent -- "
+               "IDACalcIC must still run there");
+
     removeOutput(stem);
 }
 

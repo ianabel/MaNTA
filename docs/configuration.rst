@@ -156,14 +156,18 @@ Time integration
        when the transient is not the interesting part, at the cost of making IDA
        more likely to overshoot and retry. ``aggressiveTimesteps`` is a
        deprecated spelling of this and still works, with a warning.
-   * - ``ConsistentICTolerance``
-     - ``0.0`` — off
-     - If nonzero, ``IDACalcIC`` is skipped when the initial state's weighted
-       residual is already below this. It exists because ``IDACalcIC`` costs two
-       Jacobian builds and two solves even when it has nothing to do, which is
-       the usual case for a warm start. **Read** :ref:`warm-starts` **before
-       setting it**: no single value was safe across the cases measured, and the
-       default is that measurement rather than caution.
+   * - ``ForceConsistentIC``
+     - ``false``
+     - Run ``IDACalcIC`` on a run that would otherwise skip it. A steady solve
+       skips it because it discards the answer; a restart skips it because it
+       resumes from a state already on the constraint manifold. **A cold
+       time-marching run always runs it and this cannot turn that off** — if you
+       do not care about the transient, use ``SteadyStateSolver =
+       PseudoTransient`` or ``Newton`` rather than an uncorrected time march. The
+       key is therefore one-directional: it only ever adds the call back. The
+       case that needs it is a restart onto a *different* discretisation, which
+       is projected rather than copied and so is not a consistent state. See
+       :ref:`warm-starts`.
    * - ``SteadyStateSolve``
      - ``false``
      - Terminate when :math:`\mathrm{d}y/\mathrm{d}t` becomes small rather than at
@@ -191,8 +195,8 @@ Time integration
        .. note::
 
           Arming this makes ``initialize()`` run ``IDACalcIC`` whatever else it
-          would have done — a steady solve and ``ConsistentICTolerance`` both skip
-          it otherwise, and the gate differentiates the initial condition, so on
+          would have done — a steady solve and a restart both skip it
+          otherwise, and the gate differentiates the initial condition, so on
           the uncorrected guess :math:`\mathrm{d}G/\mathrm{d}t` can come out with
           the wrong sign and abandon a run that should have proceeded. The cost is
           two Jacobian builds and two solves, paid only on a run that would have

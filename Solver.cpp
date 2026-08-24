@@ -242,9 +242,13 @@ void SystemSolver::initialize()
 	// first step. But sigma, q, lambda and phi are then controlled only by the
 	// Newton tolerance, and two things read them: a restart file serialises the
 	// whole DOF vector, and phi is a physics quantity in its own right when
-	// nAux > 0. Measured, a restart round trip degrades from 1.9e-6 to 8.6e-4
-	// and the AuxVarTest regression case drifts 1.0% against a 0.84% tolerance.
-	// Turning it on is a trade, not an improvement.
+	// nAux > 0. Measured, a restart round trip degrades from 1.9e-6 to 8.6e-4,
+	// and on AuxVarTest q and sigma -- the fields the flag drops from the error
+	// test -- land 1.0e-6 from a converged solution against 4.1e-7 with it off.
+	// (This used to cite a 1.0% drift past a 0.84% tolerance on that case. It
+	// was measured when the case ran at rtol = atol = 1e-2, where its own answer
+	// is 4.1% from converged, so the drift was step-sequence noise rather than
+	// the flag.) Turning it on is a trade, not an improvement.
 	if (suppressAlgebraicError)
 	{
 		retval = IDASetSuppressAlg(IDA_mem, SUNTRUE);
@@ -407,48 +411,59 @@ void SystemSolver::initialize()
 	// gate's whole purpose is to abandon a run *before* paying for the solve and a
 	// CalcIC failure would abandon it in a way the gate cannot report.
 	//
-	// ...and only when there is something for it to correct. IDACalcIC has no
-	// cheap path: its convergence test is on the Newton step rather than on the
-	// residual, so it does a Jacobian setup and solve before it can find out that
-	// it had nothing to do, and it repeats the whole thing to refresh the error
-	// weights. Measured floor, on a state it had itself just converged to: two
-	// residual evaluations, two Jacobian builds and two Jacobian solves, with zero
-	// Newton iterations. See setConsistentICTolerance for the source references.
+	// ...and not for a restart either, which resumes from a state the previous run
+	// had already driven onto the constraint manifold. IDACalcIC cannot find that
+	// out cheaply -- its convergence test is on the Newton step rather than on the
+	// residual, so it does a Jacobian setup and solve before it can discover it had
+	// nothing to do, and repeats the whole thing to refresh the error weights.
+	// Measured floor, on a state it had itself just converged to: two residual
+	// evaluations, two Jacobian builds and two Jacobian solves, zero Newton
+	// iterations. See setForceConsistentIC for the source references and for why
+	// this is decided from what the run *is* rather than from a residual threshold.
 	//
-	// A residual norm is the test it declines to make and costs one residual
-	// evaluation. That matters most for a warm start: a restart file holds a state
-	// the previous run had already driven onto the constraint manifold, so the
-	// common production case is precisely the one where CalcIC is a no-op that
-	// nonetheless assembles and factorises the whole system twice.
+	// A cold time-marching run is the case that is left, and it always runs
+	// IDACalcIC. There is deliberately no way to turn that off: its guess is not a
+	// consistent state, IDA_ERR_FAIL on the first step is what starting from one
+	// looks like, and a caller who does not care about the transient wants
+	// SteadyStateSolver = PseudoTransient or Newton rather than an uncorrected
+	// time march. ForceConsistentIC only ever adds the call back.
 	//
-	// Measured *before* the branch either way, so the number is available whether
-	// or not CalcIC ran and a caller can see how consistent its own guess was.
+	// The norm is still *reported* on every time-marching run, armed or not,
+	// because it is how a caller finds out whether the restart they resumed from
+	// was as consistent as a restart is supposed to be.
 	initial_residual_norm = std::numeric_limits<double>::quiet_NaN();
 	calcICRan = false;
 	gateUsable = true;
 
-	// Two reasons a run might skip it: a steady solve never takes an IDA step, and
-	// a state that is already consistent has nothing to correct.
-	bool wouldSkip = solvesForSteadyState();
+	// A restart skips only on the *copy* path. The claim behind the default is
+	// that a restart resumes from a state the previous run had already driven onto
+	// the constraint manifold, and that is true only when the discretisation
+	// matches: a restart at a different degree is projected, which transfers u, q,
+	// aux and the scalars and then rebuilds sigma and the trace, so what it hands
+	// IDA is a guess like any other. Measured on AuxVarTest resuming at a lower
+	// degree, skipping there fails with IDA_ERR_FAIL where running IDACalcIC
+	// completes the run -- so the carve-out is not tidiness.
+	const bool restarting = problem && problem->isRestarting();
+	const bool restartIsConsistent = restarting && !restartWasProjected;
+	bool wouldSkip = solvesForSteadyState() || restartIsConsistent;
 
-	if (!wouldSkip)
+	// One-directional: it adds IDACalcIC where the run would have skipped, and
+	// cannot remove it from the cold time-marching run that needs it.
+	if (forceConsistentIC)
+		wouldSkip = false;
+
+	if (!solvesForSteadyState())
 	{
 		initial_residual_norm = weightedResidualNorm(t0, Y, dYdt);
 
-		// NaN fails this and falls through to IDACalcIC, which is what should
-		// happen: a guess that cannot be evaluated is not a guess to trust.
-		const bool alreadyConsistent =
-			consistent_ic_tol > 0.0 && initial_residual_norm <= consistent_ic_tol;
-
-		// Reported whether or not the skip is armed. The default tolerance is
-		// zero, so without this the number a user needs in order to choose one
-		// would only appear once they had already chosen it.
 		logmsg<LOG_LEVEL::INFO>(
-			"Initial state has a weighted residual of {:g}; ConsistentICTolerance "
-			"is {:g}, so IDACalcIC {}.", initial_residual_norm, consistent_ic_tol,
-			alreadyConsistent ? "is skipped" : "will run");
-
-		wouldSkip = alreadyConsistent;
+			"Initial state has a weighted residual of {:g}, so IDACalcIC {}.",
+			initial_residual_norm,
+			wouldSkip	 ? "is skipped (this run resumes from a restart file)"
+			: !restarting	 ? "will run"
+			: forceConsistentIC ? "will run (ForceConsistentIC)"
+							 : "will run (this restart was projected onto a different "
+							   "discretisation, so it is not a consistent state)");
 	}
 
 	// ...and one reason it must not, which overrides both.
@@ -522,8 +537,16 @@ void SystemSolver::initialize()
 			// damped Newton solve, and the states that reach here are exactly the
 			// ones a steady solve or a warm start hands it --
 			// python-examples/jardin-critical-gradient records IDA_CONV_FAIL from
-			// starting at the *exact* steady state, and a TestDiffusion warm start
-			// at rtol 1e-6 / atol 1e-8 cannot complete it at all.
+			// starting at the *exact* steady state, which is the one initial
+			// condition a steady solve would have accepted instantly.
+			//
+			// Note how narrow "the run did not need it" really is. A time-marching
+			// run that cannot complete IDACalcIC usually cannot integrate either:
+			// the differential values CalcIC failed to reconcile are in IDA's local
+			// error test, and the jump to their consistent values does not shrink
+			// with h, which is IDA_ERR_FAIL on the first step. A steady solve is
+			// where the claim genuinely holds, because KINSOL drives the whole
+			// residual to zero from wherever it starts.
 			//
 			// IDAReInit puts phi back to (Y, dYdt). IDACalcIC keeps its iterate in
 			// its own vectors and only publishes it through IDAGetConsistentIC --

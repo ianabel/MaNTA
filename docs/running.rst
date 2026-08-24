@@ -188,38 +188,123 @@ builds and two Jacobian solves**, with zero Newton iterations — measured on fo
 fixtures. For MaNTA a build is ``updateMatricesForJacSolve()``: assemble and
 factorise every per-cell :math:`M_X`.
 
-``ConsistentICTolerance`` makes the test IDA declines to make. ``initialize()``
-evaluates the residual once — no Jacobian work — takes its WRMS norm with the
-solver's own error weights, and skips ``IDACalcIC`` when that is at or below the
-key. The norm is measured on every time-marching run whether or not the skip is
-armed, is logged at ``INFO``, and is readable from C++ through
-``getInitialResidualNorm()``.
+**So a restart skips it by default**, and integrates from the state the file
+carried. ``initialize()`` still evaluates the residual once — no Jacobian work —
+and takes its WRMS norm with the solver's own error weights, on every
+time-marching run whether or not the skip applies; that number is logged at
+``INFO`` and readable from C++ through ``getInitialResidualNorm()``, so a caller
+can see afterwards how consistent the state they resumed from actually was.
+Measured on an already consistent warm start, skipping saves exactly
+``IDACalcIC``'s floor and nothing more: two residual evaluations and two Jacobian
+builds — 2 of 89 and 2 of 21 on ``AuxVarTest`` at rtol 1e-6.
+
+.. important::
+
+   **Only a restart that was *copied*.** Resuming at a different polynomial degree
+   projects instead: ``setInitialConditions`` transfers :math:`u`, :math:`q`, the
+   auxiliary variables and the scalars, then rebuilds :math:`\sigma` and the trace.
+   What that hands IDA is a guess like any other, and skipping ``IDACalcIC`` there
+   is a broken run rather than a saving — the ``AuxVarTest`` regression case
+   resuming at a lower degree fails with ``IDA_ERR_FAIL`` when it is skipped and
+   completes when it runs. The default is conditional on the transfer having been
+   a copy, so this needs no configuration; ``ForceConsistentIC`` is there for the
+   cases nobody has measured yet.
+
+**A cold time-marching run always runs it, and there is no option to turn that
+off.** Its guess is not a consistent state, ``IDA_ERR_FAIL`` on the first step is
+what starting from one looks like, and a local error estimate that will not shrink
+with :math:`h` is not something a key should let you opt into. A caller who does
+not care about the transient wants ``SteadyStateSolver = PseudoTransient`` or
+``Newton``.
+
+``ForceConsistentIC`` is therefore one-directional: it adds ``IDACalcIC`` back to
+a steady solve or a restart, and cannot remove it from the run that needs it.
 
 .. warning::
 
-   **It defaults to ``0`` — off — and that default is a measurement, not
-   caution.** No single threshold was safe across the cases tried.
+   **The decision is made from what the run is, not from a residual threshold,
+   and that is a measurement.** It replaced ``ConsistentICTolerance``, which
+   skipped when the initial weighted
+   residual fell below a number the caller supplied. That number turned out not
+   to be calibratable. What ``IDACalcIC`` tests is
+   :math:`\|J^{-1}F\|_{\mathrm{wrms}}`, a *correction to* :math:`y`; what that
+   key tested is :math:`\|F\|_{\mathrm{wrms}}`. The two differ by the per-row
+   amplification :math:`s_i = \|J^{-1}e_i\|_{\mathrm{wrms}}`, and that is not
+   close to proportional to the error weights the norm applies. Measured as
+   :math:`s_i/\mathrm{ewt}_i` across ``LinearDiffusion``, ``MatTest`` and
+   ``AuxVarTest``:
 
-   On ``TestDiffusion`` round trips the separation looks clean: a cold start
-   measures 0.30 at ``Absolute_tolerance = 1e-3`` and 417 at ``1e-8``, while a
-   warm start lands between 7.7e-4 and 1.9e-2. Set against that, ``1e-2`` is the
-   obvious choice, and it works on the ``LinearDiffusion`` and ``MatTest``
-   restart round trips.
+   .. list-table::
+      :header-rows: 1
 
-   ``AuxVarTest`` — the regression suite's only round trip with ``nAux > 0`` —
-   warm-starts at **1.6e-4**, comfortably inside any such threshold, and skipping
-   ``IDACalcIC`` there makes the resumed run fail outright with ``IDA_CONV_FAIL``
-   at its first step. It succeeds when ``IDACalcIC`` runs.
+      * - block
+        - ``s/ewt``
+        - reading
+      * - ``sigma``, ``q``
+        - 0.6 – 10
+        - about right, and uniform, so harmless
+      * - ``u``
+        - 2.3e-4 – 2.0
+        - over-weighted by up to ~4000x
+      * - ``lambda``, Dirichlet ends
+        - exactly 0
+        - largest weight in the vector, on rows ``residual`` never writes
+      * - ``aux``
+        - 0.9 – 39
+        - under-weighted by up to ~10x *relative to* ``sigma``
 
-   That case also shows why a residual cannot be the whole test. ``IDACalcIC``
-   *raises* the weighted residual there, from 1.6e-4 to 3.8e-4, and the run works
-   anyway. What it fixes is the algebraic values, and a norm of :math:`F` does not
-   see how far those are from the manifold when the auxiliary block is stiff — so
-   the ordering is not merely noisy, it is **inverted**: the fixture that must not
-   skip measures lower than the one that may.
+   The ``u`` rows are the differential ones, whose residual IDA absorbs into
+   :math:`u'`. The Dirichlet trace rows are imposed inside the linear solve, so
+   :math:`J^{-1}e_i` is identically zero there and they can only dilute the mean.
+   The ``aux`` spread is the one that bites, because it is an error *relative* to
+   the block a corrected state's residual lands in.
 
-   So set it per problem, from the number the run reports, and check that a
-   resumed run still integrates rather than only that it started.
+   **What that costs on the tree as it stands is calibration.** Over six
+   ``AuxVarTest`` warm-start states — three tolerances, corrected and not — the
+   amplification :math:`\|J^{-1}F\|/\|F\|` runs from **15 to 187**, for one
+   problem at one discretisation. A threshold on :math:`\|F\|` therefore means
+   something different at each of them.
+
+   **Until recently it was worse than uncalibrated — it was inverted**, and that
+   is how the underlying defect was found. Before ``AuxVarTest``'s missing
+   ``dSigma_dPhi`` block was declared, a warm start there measured:
+
+   .. list-table::
+      :header-rows: 1
+
+      * - measure
+        - uncorrected
+        - corrected
+        - verdict
+      * - :math:`\|F\|` — what the old key tested
+        - 1.6e-4
+        - 3.8e-4
+        - uncorrected 2.4x *better*
+      * - :math:`\|J^{-1}F\|` — what CalcIC tests
+        - 2.0e-2
+        - 3.1e-3
+        - uncorrected 6.3x *worse*
+
+   The run agreed with the second: skipping failed with ``IDA_CONV_FAIL``,
+   correcting worked. Under ``SUNLOGGER_INFO_FILENAME`` the failing Newton's
+   correction plateaued at 1.98e-2 as :math:`h` fell — which *is*
+   :math:`\|J^{-1}F\|` — while :math:`\|F\|` could not see it. Note that
+   :math:`\|J^{-1}F\|` predicted the failure using the *defective* :math:`J`,
+   which is the point of the quantity: it measures the Newton the solver will
+   actually run, not the one it ought to.
+
+   That particular failure is gone — with the block declared, every restart round
+   trip in the suite completes with the skip armed, and on the current tree the
+   two norms order those states alike. Read it as removing the counter-example
+   rather than as licensing a default: the threshold is unconstrained from below
+   rather than shown safe, and the proxy still varies by an order of magnitude
+   within one problem. Hence no threshold at all: whether a run is a steady solve
+   or a copied restart is something the solver knows exactly, where the residual
+   norm only guesses.
+
+   For scale, on ``TestDiffusion`` round trips a cold start's residual measures
+   0.30 at ``Absolute_tolerance = 1e-3`` and 417 at ``1e-8``, while a warm start
+   lands between 7.7e-4 and 1.9e-2.
 
 **What makes a warm start consistent at all is that the trace is now kept.**
 ``setInitialConditions`` used to finish every restart with ``EvaluateLambda()``,
@@ -882,8 +967,13 @@ by the Newton tolerance, and two things read them:
   ``1.9e-6`` degrades to ``8.6e-4`` with this on — see the warning above, which
   this key makes worse rather than better.
 * **``phi`` is a physics quantity when ``nAux > 0``**, not merely an
-  intermediate. The ``AuxVarTest`` regression case drifts 1.0% against its
-  reference with this on, past its 0.84% tolerance.
+  intermediate, and ``q`` and ``sigma`` are what the flag drops from the error
+  test. On ``AuxVarTest`` those land 1.0e-6 from a converged solution with this
+  on against 4.1e-7 with it off — a factor of 2.5. (This bullet used to claim a
+  1.0% drift past a 0.84% tolerance. That was measured when the case ran at
+  ``rtol = atol = 1e-2``, where its own answer is 4.1% from converged, so the
+  drift was step-sequence noise; at the ``1e-6 / 1e-8`` the case now uses the
+  flag moves ``u`` by 3.5e-7 and passes the regression outright.)
 
 So it is the right key for a hard steady-state or transient solve whose output is
 ``u``, and the wrong one if you intend to restart from the result or care about
