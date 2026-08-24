@@ -95,14 +95,22 @@ test of `WriteRestartFile` -> `StoreGridInfo` -> the restart branch of
 clustered-grid contiguity defect (a grid rebuilt from a restart file must
 compare *equal* to the one that wrote it).
 
-**Restarting is fragile at tight tolerances**, so each case runs at the tightest
-one at which it completes -- see the measured table beside the calls in
-`TestSolutions.py`. Briefly: `LinearDiffusion` survives 1e-6, `MatTest` 1e-4,
-`AuxVarTest` only 1e-3, while the *uninterrupted* run succeeds at every one of
-those. After a restart `IDACalcIC` needs roughly ten times as many residual
-evaluations as from a cold start, which points at `setInitialConditions`
-recomputing sigma and lambda from the restored u and q while discarding the
-restored dY/dt.
+**All three round trips now survive 1e-6 / 1e-8** -- see the measured table
+beside the calls in `TestSolutions.py`. They did not: that table used to read
+`IDASolve -4` for `AuxVarTest` at 1e-4 and tighter, and `-6` for `MatTest` at
+1e-6, and this paragraph used to say restarting was fragile at tight tolerances.
+Two fixes closed it, **neither of them in the restart machinery**:
+`setInitialConditions` finishing every restart with `EvaluateLambda()` and so
+discarding the converged trace the file carried, and `AuxVarTest`'s missing
+`dSigma_dPhi` block (both described below).
+
+What is left is a ceiling belonging to the *cases*, at 1e-8 / 1e-10, where
+`MatTest`'s **uninterrupted** run fails as well -- so the restart is not
+implicated there -- and the other two resume-fail with `IDA_ERR_FAIL` (-3)
+rather than the corrector failure (-4) that used to appear. Only `AuxVarTest`
+was tightened to 1e-6 along with `LinearDiffusion`; `MatTest` stays at 1e-4
+because 1e-6 costs 101 s against 6.0 s for agreement of 2.7e-10 that nothing
+needs.
 
 `.ref.nc` files are committed -- `.gitignore` has `*.nc` with a `!*.ref.nc`
 negation.
@@ -674,8 +682,8 @@ These are deliberate and tracked, not oversights:
 * **The dG/dt gate needs a consistent initial condition, and now forces one.**
   `an_armed_gate_is_given_a_consistent_initial_condition` in
   `AlgebraicDerivativeTests.cpp`. Once `initialize()` gained two ways to skip
-  `IDACalcIC` -- a steady solve always, and a residual below
-  `ConsistentICTolerance` -- the gate started differentiating the guess, and on
+  `IDACalcIC` -- a steady solve, and a restart that was copied rather than
+  projected -- the gate started differentiating the guess, and on
   the guess `dG/dt` comes out with the wrong *sign*: `AuxDiffusion` with
   `G = Int u dx` gives +1.654 corrected against -1.769, `ScalarDiffusion` +2.208
   against -1.187. The gate rejects on `dGdt < -tol`, so it abandoned runs it
@@ -693,12 +701,34 @@ These are deliberate and tracked, not oversights:
   `SolverLifecycleTests.cpp` covers the other half. Forcing `IDACalcIC` puts it on
   the states it is likeliest to fail on, so it fails open: the run continues from
   the guess, `IDAReInit` restores IDA's `phi` so the fallback is bit for bit the
-  unarmed run, and the gate declines instead of answering. Provoked with a warm
-  start at rtol 1e-6 / atol 1e-8, where `IDACalcIC` on a `TestDiffusion` restart
-  fails with `IDA_CONV_FAIL` -- which it did before any of this work as well as
-  after. Both of its premises are `BOOST_TEST_REQUIRE`, so if the warm start ever
-  stops qualifying for the skip, or `IDACalcIC` starts succeeding there, the case
-  says so rather than passing for the wrong reason.
+  unarmed run, and the gate declines instead of answering. Both of its premises
+  are `BOOST_TEST_REQUIRE`, so if the run ever stops skipping `IDACalcIC` on its
+  own, or `IDACalcIC` starts succeeding there, the case says so rather than
+  passing for the wrong reason -- and **that is how the `tout1` bug above was
+  found**: fixing it turned the first guard red, which is what a guard is for.
+
+  Its provocation was rewritten as a result, and the rewrite is worth reading
+  before touching it. It is now a *steady* solve on `MisdeclaredScalar`, whose
+  differential scalar has no time derivative in its `ScalarG`: `IDA_YA_YDP_INIT`
+  freezes every differential value, so that row is a constant no Newton direction
+  can touch and `IDACalcIC` exhausts its linesearch. Both halves of that are
+  load-bearing.
+
+  * **The failure has to be a property of the problem**, not of MaNTA, or the
+    test pins a bug. A declaration error is the one class that qualifies -- it is
+    what kept `python-physics/mirror-plasma`'s voltage controller from ever
+    starting -- and the scalar's initial value has to sit in a window: consistent,
+    and the Newton step is zero so `IDACalcIC` *converges* (irreducible only beats
+    small when there is something to reduce); far out, and nothing downstream
+    survives either.
+  * **The run has to be a steady solve.** A time-marching run that cannot complete
+    `IDACalcIC` usually cannot integrate either -- the differential values it
+    failed to reconcile are in IDA's local error test, and the jump to their
+    consistent values does not shrink with `h`, which is `IDA_ERR_FAIL` on the
+    first step. So "CalcIC failed but the run was fine" is a far narrower claim
+    than it sounds, and a steady solve, where KINSOL drives the whole residual to
+    zero from wherever it starts, is most of what is left of it.
+    `python-examples/jardin-critical-gradient` is the same shape.
 
 * **Warm starts: what a restart hands the solver, and whether `IDACalcIC` has to
   run.** Two cases in `SolverLifecycleTests.cpp`, and unlike the three
@@ -721,22 +751,70 @@ These are deliberate and tracked, not oversights:
   * `a_warm_start_from_a_restart_file_does_not_run_calcic`. `IDACalcIC` has no
     cheap path -- 2 residual evaluations, 2 Jacobian builds and 2 Jacobian solves
     even on a state it just converged to, because its test is on the Newton step
-    -- so `ConsistentICTolerance` skips it when the residual says there is
-    nothing to do. The test arms the tolerance explicitly, checks
+    -- so a restart skips it by default. The test sets no key at all, checks
     `IDAGetNumResEvals` is zero after `initialize()`, **and integrates**, because
-    the norm alone does not establish that the state can be stepped from. Its
-    control is a cold start of the same problem, three orders further out, which
-    must still be corrected.
+    nothing else establishes that the state can be stepped from. It separately
+    checks the warm start's residual really was small, so the integration is not
+    passing for a reason nobody chose; its control is a cold start of the same
+    problem, three orders further out, which is still corrected; and it finishes
+    by setting `ForceConsistentIC` on the same restart and requiring `IDACalcIC`
+    back, which is the only thing that would notice the key being ignored.
 
-  What is *not* covered, and is the reason the key defaults to zero: no threshold
-  is safe across the fixtures. `AuxVarTest` warm-starts at 1.6e-4, below
-  `TestDiffusion`'s 2.6e-3, and skipping there makes the resumed run fail with
-  `IDA_CONV_FAIL` -- while `IDACalcIC` *raises* its residual to 3.8e-4 and the run
-  then works. The ordering is inverted, not merely noisy. The opposite failure is
-  also real and also uncovered: a `TestDiffusion` warm start at rtol 1e-6 / atol
-  1e-8 cannot complete `IDACalcIC` at all, so there the skip is the only thing
-  that lets the restart run. Both are recorded in `docs/running.rst`; neither is
-  pinned by a test, because pinning a failure is not the same as fixing it.
+  * `only_a_copied_restart_is_treated_as_already_consistent`. The default is
+    conditional on the transfer having been a *copy*. A restart onto a different
+    degree is projected -- `setInitialConditions` moves `u`, `q`, aux and the
+    scalars and then rebuilds `sigma` and the trace -- so it is a guess like any
+    other, and skipping there is a broken run rather than a saving: `AuxVarTest`
+    resuming at a lower degree fails with `IDA_ERR_FAIL` when `IDACalcIC` is
+    skipped and completes when it runs. Both halves are asserted, because without
+    the second the projection path would quietly start from an inconsistent state.
+    Note that the three degree-transfer cases beside it only `initialize()` and
+    compare state; none of them integrates, which is why this was not already
+    covered.
+
+  What is *not* covered, and is why the key is a boolean rather than a threshold:
+  **a residual norm is not the quantity that decides the question.** It replaced
+  `ConsistentICTolerance`, which compared the initial weighted residual against a
+  number the caller supplied. `IDACalcIC`'s own test is `||J^-1 F||_wrms` -- a
+  correction to `y` -- and the two differ by the
+  per-row amplification `s_i = ||J^-1 e_i||_wrms`, which is nowhere near
+  proportional to the error weights. Measured as `s_i / ewt_i` on three cases: the
+  `u` rows are over-weighted by up to ~4000x, the Dirichlet `lambda` rows carry
+  the largest weight in the vector on rows whose sensitivity is *exactly zero*
+  (`residual` never writes them), and the `aux` rows are under-weighted by up to
+  ~10x relative to `sigma`. What that costs is calibration: over six `AuxVarTest`
+  warm-start states -- three tolerances, corrected and not -- `||J^-1 F|| / ||F||`
+  runs from **15 to 187**, for one problem at one discretisation.
+
+  It used to be worse than uncalibrated. Before `AuxVarTest`'s missing
+  `dSigma_dPhi` block was declared, `||F||` made that warm start's uncorrected
+  state look 2.4x *better* (1.6e-4 against 3.8e-4) where `||J^-1 F||` made it 6.3x
+  *worse* (2.0e-2 against 3.1e-3) -- and the run agreed with the second, the
+  failing Newton's correction plateauing at 1.98e-2 as `h` fell. `||J^-1 F||`
+  predicted that using the *defective* `J`, which is the point of it: it measures
+  the Newton the solver will actually run. With the block declared every round
+  trip completes with the skip armed and the two norms order those states alike,
+  so there is now **no fixture in the tree that requires `IDACalcIC`** -- which
+  removes the counter-example without establishing that any threshold is safe.
+  Hence a boolean: a caller restarting from a state they know is converged has
+  information the norm does not, and the key is how they say so.
+
+  A correct test costs one residual, one Jacobian build and one Jacobian solve
+  against `IDACalcIC`'s floor of two of each: a factor of two, not the near-free
+  test this is. And the floor is all the skip saves -- measured on an already
+  consistent warm start, 2 residual evaluations and 2 Jacobian builds, which is 2
+  of 89 and 2 of 21 on `AuxVarTest` at rtol 1e-6.
+
+  The opposite failure -- a `TestDiffusion` warm start at rtol 1e-6 that could not
+  complete `IDACalcIC` at all -- **was a MaNTA bug and is fixed**. `initialize()`
+  passed `IDACalcIC` the interval `dt` where `tout1` wants an absolute time; every
+  fixture starts at `t0 = 0` where the two agree, and that one restarts at
+  `t0 = 0.05` with a cadence of `0.05`, so `tout1` landed exactly on `t0` and IDA
+  refused the input. It was never about the tolerance -- it reproduced at every
+  tolerance, and with `tout1 = t0 + dt` that warm start converges in 3 residual
+  evaluations, as does a degree-projection restart at a weighted residual of
+  8.7e3. Two cases had been written around the belief that it was a hard state;
+  both are corrected, and the fail-open case below now says so.
 
 * **`SteadyState.cpp` is barely covered, and what covers it now is its output
   rather than its algorithm.** Until recently nothing called `solveSteadyState`

@@ -178,35 +178,110 @@ called separately:
     discarded by the first accepted continuation step. The gate is
     `solvesForSteadyState()`, so `SteadyStateSolver = "TimeMarch"` and a plain
     transient both keep the call.
-  * **A state that is already consistent can skip it too**, on either path, if
-    `ConsistentICTolerance` is set. `IDACalcIC` cannot find that out cheaply: its
-    convergence test is on the Newton *step*, so `IDANewtonIC` calls `lsolve` and
-    only then tests `||J^-1 F|| <= epsNewt` (`ida_ic.c:404-417`), `IDAnlsIC`
-    calls `lsetup` unconditionally first (`ida_ic.c:345`), and the outer loop
-    runs the whole thing twice on success (`ida_ic.c:232`). Measured floor,
-    handed a state it had just converged to: **2 residual evaluations, 2 Jacobian
-    builds, 2 Jacobian solves, 0 Newton iterations** — every time. So
-    `initialize` makes the test IDA declines to: one residual evaluation,
-    WRMS-weighted with `getErrorWeights`, against the key.
-    `getInitialResidualNorm()` reports the number (measured on every
-    time-marching run, armed or not) and `initialConditionWasCorrected()` says
-    whether CalcIC then ran.
+  * **A restart skips it too, on the copy path.** It resumes from a state the
+    previous run had already driven onto the constraint manifold, and `IDACalcIC`
+    cannot find that out cheaply: its convergence test is on the Newton *step*, so
+    `IDANewtonIC` calls `lsolve` and only then tests `||J^-1 F|| <= epsNewt`
+    (`ida_ic.c:404-417`), `IDAnlsIC` calls `lsetup` unconditionally first
+    (`ida_ic.c:345`), and the outer loop runs the whole thing twice on success
+    (`ida_ic.c:232`). Measured floor, handed a state it had just converged to:
+    **2 residual evaluations, 2 Jacobian builds, 2 Jacobian solves, 0 Newton
+    iterations** — every time, and on an already consistent `AuxVarTest` warm
+    start at rtol 1e-6 that floor is the whole of the saving: 2 residual
+    evaluations of 89 and 2 builds of 21.
 
-    **The key defaults to `0` — off — and that is a measurement, not caution.**
-    TestDiffusion round trips separate cleanly (cold 0.30 at `atol = 1e-3` and
-    417 at `1e-8`; warm 7.7e-4 to 1.9e-2), and `1e-2` works on the
-    `LinearDiffusion` and `MatTest` restart round trips. `AuxVarTest`, the only
-    regression round trip with `nAux > 0`, warm-starts at **1.6e-4** — inside any
-    such threshold — and skipping there makes the resumed run fail with
-    `IDA_CONV_FAIL` at its first step. Worse, `IDACalcIC` *raises* that case's
-    residual, 1.6e-4 to 3.8e-4, and the run works anyway: what it fixes is the
-    algebraic values, which a norm of `F` cannot see when the aux block is stiff.
-    So the ordering is **inverted** — the fixture that must not skip measures
-    lower than the one that may — and no threshold separates them. Set it per
-    problem, and check the resumed run *integrates* rather than only starts.
-    Note the opposite failure too: a TestDiffusion warm start at rtol 1e-6 /
-    atol 1e-8 cannot complete `IDACalcIC` at all, so there the skip is the only
-    way the restart runs.
+    **Only the copy path.** A restart onto a *different* degree is projected —
+    `setInitialConditions` transfers `u`, `q`, aux and the scalars and then
+    rebuilds `sigma` and the trace — so what it hands IDA is a guess like any
+    other, and skipping there is a broken run rather than a saving: `AuxVarTest`
+    resuming at a lower degree fails with `IDA_ERR_FAIL` when `IDACalcIC` is
+    skipped and completes when it runs. `restartWasProjected` carries that from
+    `setInitialConditions` to `initialize`, and
+    `only_a_copied_restart_is_treated_as_already_consistent` pins both halves.
+
+  **A cold time-marching run always runs it, and there is no option to turn that
+  off.** Its guess is not a consistent state, `IDA_ERR_FAIL` on the first step is
+  what starting from one looks like, and a caller who does not care about the
+  transient wants `SteadyStateSolver = PseudoTransient` or `Newton` rather than an
+  uncorrected time march. `ForceConsistentIC` therefore only ever *adds*
+  `IDACalcIC` back — to a steady solve, or to a restart that is not as consistent
+  as a restart is supposed to be. `initialize` evaluates the residual once and
+  reports its WRMS norm through `getInitialResidualNorm()` on every time-marching
+  run, armed or not, so a caller can see how consistent the state they resumed
+  from actually was; `initialConditionWasCorrected()` says whether CalcIC ran.
+
+    **The decision is made from what the run *is*, not from a residual threshold,
+    and that is a measurement.** This replaced `ConsistentICTolerance`, which
+    skipped when the initial weighted residual fell below a number the caller
+    supplied. What `IDACalcIC` tests is
+    `||J^-1 F||_wrms` — a *correction to y* — and `weightedResidualNorm` says as
+    much. The two differ by the per-row amplification `s_i = ||J^-1 e_i||_wrms`,
+    and `s_i` is nowhere near proportional to the `ewt` the norm applies. Measured
+    per block, as `s_i / ewt_i`, on three cases (`LinearDiffusion`, `MatTest`,
+    `AuxVarTest`):
+
+    | block | `s/ewt` | reading |
+    |---|---|---|
+    | `sigma`, `q` | 0.6 – 10 | about right, and uniform, so harmless |
+    | `u` | 2.3e-4 – 2.0 | over-weighted up to ~4000x |
+    | `lambda`, Dirichlet ends | **exactly 0** | weight 1e5–1e8 on rows nothing can reach |
+    | `aux` | 0.9 – 39 | under-weighted up to ~10x *relative to `sigma`* |
+
+    The `u` rows are the differential ones, whose residual IDA absorbs into `u'`;
+    the Dirichlet trace rows are the ones `residual` never writes, so `J^-1 e_i`
+    is identically zero there and they can only dilute the mean. The `aux` row's
+    spread is the one that bites, because it is a *relative* error against the
+    block a corrected state's residual lands in.
+
+    **What that costs, on the tree as it stands, is calibration.** Across six
+    `AuxVarTest` warm-start states — three tolerances, corrected and not — the
+    amplification `||J^-1 F|| / ||F||` runs from **15 to 187**. One problem, one
+    discretisation. A threshold on `||F||` therefore means something different at
+    each of them, which is what makes "set it per problem" honest advice rather
+    than a hedge.
+
+    **Until recently it was worse than uncalibrated — it was inverted**, and that
+    is how the underlying defect was found. Before `AuxVarTest`'s missing
+    `dSigma_dPhi` block was declared, a warm start there measured `||F||` = 1.6e-4
+    uncorrected against 3.8e-4 corrected — the uncorrected state 2.4x *better* —
+    while `||J^-1 F||` made it 2.0e-2 against 3.1e-3, 6.3x *worse*. The run sided
+    with the second: skipping failed with `IDA_CONV_FAIL`, correcting worked. IDA's
+    own log showed why — the failing Newton's correction plateaued at 1.98e-2 as
+    `h` fell, which *is* `||J^-1 F||`, while `||F||` could not see it. Note that
+    `||J^-1 F||` predicted that failure using the *defective* `J`, which is the
+    point of the quantity: it measures the Newton the solver will actually run,
+    not the one it ought to.
+
+    That fixture is fixed. `SigmaFn` adds `(a - u*u)` to both variables' fluxes
+    while the derivative was declared for variable 0 only, so off the manifold —
+    i.e. exactly on a warm start — Newton diverged; finite-differencing put the
+    block out by 98% before and 4.2e-9 after. **Every restart round trip in the
+    suite now completes with the skip armed**, at every tolerance measured, and on
+    the current tree the two norms order those states the same way. So there is no
+    longer a case in the tree that *requires* `IDACalcIC`.
+
+    So there is no number to pick, which is why the decision is now made from what
+    the run *is*. A test that would be correct — `||J^-1 F||` itself — costs one
+    residual, one Jacobian build and one Jacobian solve against `IDACalcIC`'s floor
+    of two of each: a factor of two, not a near-free test, and not obviously worth
+    having when the run already knows whether it is a steady solve or a copied
+    restart.
+
+    ~~Note the opposite failure too: a TestDiffusion warm start at rtol 1e-6 /
+    atol 1e-8 cannot complete `IDACalcIC` at all.~~ **That was a MaNTA bug, and it
+    is fixed.** `initialize` passed `IDACalcIC` the *interval* `dt0 > 0 ? dt0 : dt`
+    where `tout1` wants an absolute time. Every fixture in the tree starts at
+    `t0 = 0`, where the two agree bit for bit, so no cold start ever noticed; a
+    restart resumes at the time the file was written, and that fixture restarts at
+    `t0 = 0.05` with an output cadence of `0.05`, so `tout1` came out *exactly*
+    equal to `t0` and IDA refused the input — `IDA_ILL_INPUT` (-22), before
+    evaluating a single residual. Nothing to do with the tolerance: it reproduced
+    at every tolerance, and with `tout1 = t0 + dt` that same warm start converges
+    in 3 residual evaluations, as does a degree-projection restart whose weighted
+    residual is 8.7e3. Worse was available — a restart with `dt0` set and
+    `t0 > dt0` handed IDA a `tout1` *behind* `t0`, i.e. the wrong direction of
+    integration. For scale, TestDiffusion round trips separate cleanly (cold 0.30
+    at `atol = 1e-3` and 417 at `1e-8`; warm 7.7e-4 to 1.9e-2).
 
   On either skip the `t0` output slice sees the guess `setInitialConditions`
   built, which is the state the run really started from.
@@ -1035,12 +1110,38 @@ weights" pins the formula, not the operator, if the data cannot tell them apart.
   solves nothing: measured on a `TestDiffusion` round trip at
   `Absolute_tolerance = 1e-8`, that one call takes the weighted residual from
   2.6e-3 to 556. It is why a restart needed roughly ten times as many residual
-  evaluations inside `IDACalcIC` as a cold start. The trace is now kept whenever
-  the discretisation matches; the *projection* path still builds one, because
-  copy() refused the transfer and there is none to keep. Note the reordering that
-  went with it: `ApplyDirichletBCs` now runs *after* the trace is settled, since
+  evaluations inside `IDACalcIC` as a cold start. Note the reordering that went
+  with it: `ApplyDirichletBCs` now runs *after* the trace is settled, since
   `EvaluateLambda` overwrites every entry including the boundary ones, so in the
   old order the Dirichlet data was applied and then immediately discarded.
+
+  **The trace is kept whenever the *mesh* matches, not only the discretisation.**
+  `lambda` has no polynomial degree — `DGSoln::Map` gives it `nCells + 1` entries
+  and no basis — so a change of degree leaves it transferable verbatim even though
+  `copy()` refuses the state as a whole. That matters beyond `lambda` itself,
+  because the `q` row carries a `<lambda, v n>` term: on a `LinearDiffusion`
+  restart coarsened from `k = 4` to `k = 3` at `atol = 1e-10`, keeping the trace
+  takes the `q` block from 7.3e7 to 3.2e-7. Only a genuine remesh rebuilds it.
+* **`sigma` is loaded on a copy-path restart, not recomputed, and that is a
+  measurement too.** `DGSoln::copy` brings `sigma` across with everything else and
+  `ApplyDirichletBCs` touches only `lambda`, so `AssignSigma` was rebuilding it
+  from bit-identical inputs — at the price of a full `ComputePhysics` over every
+  node, which is *exactly one residual evaluation's worth of physics*
+  (`residual` makes the same call, `SystemSolver.cpp:1329`). It also evaluates
+  `Sources` for every variable and `AuxG` for every auxiliary one and drops both,
+  since only the flux is used. On a copy-path restart, which now skips
+  `IDACalcIC` entirely, that was half of all the physics `initialize()` did.
+
+  The trade is real and small: a rebuilt `sigma` satisfies its row *exactly*,
+  where the file's satisfies it only as well as the previous run's Newton
+  converged. Measured on the `sigma` row, recomputed against loaded —
+  `LinearDiffusion` 4.3e-19 / 1.5e-18 (both round-off), `AuxVarTest` 6.9e-18 /
+  5.6e-9, `nonlin` 3.5e-18 / 4.1e-7. No outcome moves: the whole restart
+  round-trip tolerance matrix is unchanged. And the loaded value is the more
+  faithful one — it is the `sigma` the previous run was actually integrating with
+  when it wrote the file, where the rebuilt one is a state that run never had.
+  The *projection* path still rebuilds it, because a degree change leaves the
+  stored coefficients in the wrong space.
 * **`RF_cellwise` and `L_global` hold *time-dependent* boundary data, and only
   `updateBoundaryConditions(t)` may fill them.** `initialiseMatrices` sizes and
   zeroes them; `setInitialConditions` calls `updateBoundaryConditions(t0)` before
@@ -1170,8 +1271,14 @@ These are deliberate and documented, not oversights — see `Tests/README.md` an
   adjoint output. The gradients themselves are verified through
   `PyRunner::getAdjointGradients` in `python/Tests/test_adjoint.py` and
   `test_adjoint_aux.py`.
-* Restarting is fragile at tight tolerances, more so with `nAux > 0`; each
-  regression round-trip case runs at the tightest tolerance that completes.
+* ~~Restarting is fragile at tight tolerances, more so with `nAux > 0`.~~ Fixed.
+  All three regression round trips now survive `1e-6 / 1e-8`; the ceiling that
+  remains at `1e-8 / 1e-10` belongs to the cases (`MatTest`'s *uninterrupted* run
+  fails there too) rather than to the restart path. Two fixes closed it, neither
+  in the restart machinery: `setInitialConditions` discarding the converged trace
+  a restart file carries, and `AuxVarTest`'s missing `dSigma_dPhi` block.
+  `MatTest` stays at `1e-4` for cost, not capability — 1e-6 takes 101 s against
+  6.0 s.
 * ~~`python/Tests/test_reference_solutions.py::test_jax_aux_test` is a
   `strict=True` xfail.~~ Fixed. It was four faults in `manta.jax`, all reachable
   only with `nAux > 0`: `AuxGPrime` and `dAux_dp` take an extra argument ahead
