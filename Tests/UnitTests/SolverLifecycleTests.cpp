@@ -30,6 +30,7 @@
 
 #include <ida/ida.h>
 
+#include <algorithm>
 #include <cmath>
 #include <exception>
 #include <filesystem>
@@ -73,6 +74,49 @@ void removeOutput(std::string const &stem)
     for (const char *ext : {".nc", ".restart.nc", ".dat"})
         std::filesystem::remove(stem + ext);
 }
+
+// A nonlinear diffusion, for the tests that need a KINSol call to take more than
+// one Newton iteration.
+//
+// TestDiffusion cannot serve: it is linear, so every inner solve converges in a
+// single iteration and there is never a second one to reuse a Jacobian across.
+// That makes NewtonJacobianReuse unobservable on it -- builds equal solves at
+// every setting, which is exactly the degenerate case CLAUDE.md warns about when
+// reading the steady diagnostics.
+//
+// sigma = (1 + u^2) q is the smallest change that fixes it: the flux depends on u,
+// so dSigma/du is nonzero and the Jacobian genuinely moves between iterations.
+// Dirichlet at both ends, and an initial condition that is not the steady state,
+// so the solve has somewhere to go.
+class NonlinearDiffusion : public TransportSystem
+{
+public:
+    NonlinearDiffusion() : TransportSystem({.variables = numberedFields(1)}) {};
+
+    Value LowerBoundary(Index, Time) const override { return 1.0; };
+    Value UpperBoundary(Index, Time) const override { return 0.0; };
+
+    Value SigmaFn(Index, const State &s, Position, Time) override
+    {
+        return (1.0 + s.u(0) * s.u(0)) * s.q(0);
+    };
+    Value Sources(Index, const State &, Position, Time) override { return 1.0; };
+
+    void dSigmaFn_dq(Index, VectorRef v, const State &s, Position, Time) override
+    {
+        v[0] = 1.0 + s.u(0) * s.u(0);
+    };
+    void dSigmaFn_du(Index, VectorRef v, const State &s, Position, Time) override
+    {
+        v[0] = 2.0 * s.u(0) * s.q(0);
+    };
+    void dSources_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; };
+    void dSources_dq(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; };
+    void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; };
+
+    Value InitialValue(Index, Position x) const override { return 1.0 - x; };
+    Value InitialDerivative(Index, Position) const override { return -1.0; };
+};
 
 // u at a handful of interior points, read out of yJac -- the only copy of the
 // solution that outlives destroySundials().
@@ -1136,6 +1180,121 @@ BOOST_AUTO_TEST_CASE(the_per_step_records_sum_to_the_totals)
                static_cast<size_t>(sys.lastSteadyStats().steps));
 
     removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(newton_jacobian_reuse_trades_builds_for_solves)
+{
+    // KINSOL's msbset, which is what decides whether a Newton iteration reuses
+    // the previous factorisation or asks for a new one. It is the setting the
+    // per-step table's "jac" and "solves" columns measure, so this test reads the
+    // knob through the diagnostics rather than through KINSOL -- there is no
+    // KINGet for msbset, and behaviour is the thing worth pinning anyway.
+    //
+    // Nonlinear on purpose. On a linear problem each inner solve converges in one
+    // iteration, builds equal solves at every setting, and this test would pass
+    // while measuring nothing.
+    auto run = [](long reuse)
+    {
+        const std::string stem = "lifecycle_reuse_" + std::to_string(reuse);
+        Grid grid(0.0, 1.0, nCells);
+        NonlinearDiffusion problem;
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+        sys.setSteadyStateTolerance(1e-10);
+        sys.setNewtonJacobianReuse(reuse);
+        {
+            CapturedOutput quiet;
+            sys.runSolver(T_FINAL);
+        }
+        const auto stats = sys.lastSteadyStats();
+        const Vector u = sample(sys);
+        removeOutput(stem);
+        return std::make_pair(stats, u);
+    };
+
+    const auto [full, uFull] = run(1);
+    const auto [lazy, uLazy] = run(10);
+
+    BOOST_TEST_MESSAGE("reuse=1:  builds " << full.jacBuilds << ", solves " << full.jacSolves
+                       << ", residuals " << full.residualEvals);
+    BOOST_TEST_MESSAGE("reuse=10: builds " << lazy.jacBuilds << ", solves " << lazy.jacSolves
+                       << ", residuals " << lazy.residualEvals);
+
+    // The fixture has to be nonlinear enough to need more than one iteration per
+    // inner solve, or the comparison below is vacuous. Checked rather than
+    // assumed, because a change to the fixture could quietly make it linear.
+    BOOST_TEST(lazy.jacSolves > lazy.steps,
+               "the fixture converges in one Newton iteration per continuation step, "
+               "so Jacobian reuse cannot be observed on it");
+
+    // reuse = 1 is full Newton: a build for every solve.
+    BOOST_TEST(full.jacBuilds == full.jacSolves);
+
+    // reuse = 10 must actually reuse. This is the assertion that fails if the
+    // setting never reaches KINSOL.
+    BOOST_TEST(lazy.jacBuilds < lazy.jacSolves);
+    BOOST_TEST(lazy.jacBuilds < full.jacBuilds);
+
+    // Same answer either way -- this trades work against work, not accuracy.
+    for (Index i = 0; i < uFull.size(); ++i)
+        BOOST_TEST(uFull(i) == uLazy(i), boost::test_tools::tolerance(1e-8));
+}
+
+BOOST_AUTO_TEST_CASE(newton_max_iterations_caps_every_inner_solve)
+{
+    // The hardcoded 20 is now a setting, and this is what says it reaches KINSOL.
+    // Read per step rather than in total: a total could be held down by the solve
+    // simply needing fewer iterations, where a per-step maximum of exactly the cap
+    // can only come from the cap binding.
+    const std::string stem = "lifecycle_maxiter";
+    Grid grid(0.0, 1.0, nCells);
+    NonlinearDiffusion problem;
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, stem);
+    sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    sys.setSteadyStateTolerance(1e-10);
+    sys.setNewtonMaxIterations(1);
+
+    {
+        CapturedOutput quiet;
+        sys.runSolver(T_FINAL);
+    }
+
+    const auto &steps = sys.lastSteadyStepStats();
+    BOOST_TEST(steps.size() > 0u);
+
+    long worst = 0;
+    for (auto const &r : steps)
+        worst = std::max(worst, r.newtonIters);
+    BOOST_TEST_MESSAGE("most Newton iterations in any one KINSol: " << worst
+                       << " over " << steps.size() << " steps");
+    BOOST_TEST(worst == 1, "a cap of 1 let a KINSol take " << worst << " iterations");
+
+    // And the run still reaches a steady state: KIN_MAXITER_REACHED is one of the
+    // two returns the continuation loop treats as ordinary, so capping the inner
+    // solve makes the outer loop work harder rather than making it fail.
+    BOOST_TEST(sys.lastSteadyStats().steps > 0);
+
+    removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(the_newton_settings_refuse_values_that_cannot_work)
+{
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+
+    // Zero iterations cannot make progress; zero reuse is KINSOL's "use the
+    // default" sentinel and would silently mean 10 rather than what was asked.
+    BOOST_CHECK_THROW(sys.setNewtonMaxIterations(0), std::logic_error);
+    BOOST_CHECK_THROW(sys.setNewtonJacobianReuse(0), std::logic_error);
+    BOOST_CHECK_THROW(sys.setNewtonStepTolerance(-1.0), std::logic_error);
+
+    // Zero *is* meaningful for the step tolerance -- it means "KINSOL's default",
+    // which KINSetScaledStepTol implements itself.
+    BOOST_CHECK_NO_THROW(sys.setNewtonStepTolerance(0.0));
+    BOOST_CHECK_NO_THROW(sys.setNewtonJacobianReuse(1));
 }
 
 BOOST_AUTO_TEST_CASE(the_per_step_diagnostics_print_without_the_summary)

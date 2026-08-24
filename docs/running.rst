@@ -463,6 +463,118 @@ The inner solve for both modes is **KINSOL**, driving the same static
 condensation IDA does, so MaNTA links ``sundials_kinsol`` whichever mode a run
 selects — see :doc:`install` if the build stops at ``kinsol/kinsol.h``.
 
+Controlling the inner solve
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Four keys reach KINSOL. They apply to ``PseudoTransient`` and ``Newton`` alike —
+pseudo-transient continuation *is* Newton on a damped residual — and not at all
+to ``TimeMarch``, which never builds a KINSOL object. Every default reproduces
+what the code did when these were hardcoded, so an unconfigured run is unchanged.
+
+``NewtonJacobianReuse``
+   How many Newton iterations may share one Jacobian factorisation (KINSOL's
+   ``msbset``). ``1`` is full Newton; larger is modified Newton. **This is the
+   setting the** ``jac`` **and** ``solves`` **columns above measure**, and the
+   section below is about why it is worth setting per case.
+
+``NewtonMaxIterations``
+   Newton iterations one ``KINSol`` call may take before handing back to the
+   continuation loop. The default is **20 against KINSOL's own 200**, deliberately:
+   an inner solve only has to make progress, because SER re-damps and tries again
+   from a better ``dt``. Raise it for ``SteadyStateSolver = "Newton"``, where
+   there is no outer loop to fall back on.
+
+``NewtonStepTolerance``
+   KINSOL's scaled-step test. A ``KINSol`` below it returns
+   ``KIN_STEP_LT_STPTOL`` — which the continuation loop treats as *ordinary* and
+   answers by damping, not as a failure. So raising it makes inner solves give up
+   sooner and ``dt`` be cut more eagerly: a continuation-schedule control wearing
+   a tolerance's clothing. Zero leaves KINSOL's ``uround^(2/3)`` ≈ 3.7e-11.
+
+``NewtonScaling``
+   ``Unit`` (default) or ``ErrorWeights``. KINSOL's convergence tests are on
+   *scaled* quantities, so unit scaling makes them dimensional: on a case carrying
+   densities near 1e19 beside temperatures near 1e3, one ``SteadyStateTolerance``
+   means something different for each variable and the largest dominates.
+   ``ErrorWeights`` fills the vectors from the same ``1/(rtol|y| + atol)`` weights
+   IDA's WRMS norm uses, refreshed every continuation step because they depend on
+   the state and the state moves a long way. One honest limitation: KINSOL takes
+   separate ``u_scale`` and ``f_scale`` and both get the same vector here, as they
+   already did when both were ones — the residual does not carry the solution's
+   units, so a properly derived ``f_scale`` would be a different vector.
+
+.. _jacobian-reuse-measurement:
+
+What Jacobian reuse actually trades
+"""""""""""""""""""""""""""""""""""
+
+The three costs are not comparable, and the ordering is what makes this worth a
+key rather than a constant:
+
+* **A Jacobian solve is always cheap.** It is a static condensation against a
+  factorisation that already exists.
+* **A Jacobian assembly is at least as expensive as a residual evaluation**, and
+  the ratio is set by *your physics case*, not by the solver. A case whose flux
+  is differentiable — hand-written derivatives, ``AutodiffTransportSystem``, JAX —
+  pays value-and-gradient against value, which is more but not by much. A case
+  whose Jacobian comes from finite-differencing expensive flux calls pays many
+  flux evaluations per assembly, and **assemblies then dominate the run**.
+
+So raising ``NewtonJacobianReuse`` trades assemblies away for extra Newton
+iterations, and each of those costs a residual evaluation plus a (cheap) solve.
+Which side wins is a property of how your flux model is differentiated. **That is
+the whole reason this is configurable**, and it is why there is no default that is
+right for every case.
+
+The default of 10 is KINSOL's. At the cheap-Jacobian end of the range it is
+conservative — measured on ``AdjointPoster``, an analytic flux, at k = 3, driving
+the residual to 1e-10:
+
+.. list-table::
+   :header-rows: 1
+
+   * - ``NewtonJacobianReuse``
+     - 800 cells
+     - builds
+     - solves
+     - residual evals
+   * - 1 (full Newton)
+     - **3.39 s**
+     - 15
+     - 15
+     - 26
+   * - 2
+     - 3.64 s
+     - 10
+     - 17
+     - 28
+   * - 5
+     - 4.94 s
+     - 8
+     - 25
+     - 36
+   * - 10 (default)
+     - 6.21 s
+     - 7
+     - 32
+     - 43
+   * - 20
+     - 8.30 s
+     - 5
+     - 45
+     - 56
+
+Full Newton is 1.8× faster *there*, and the gap widens with the mesh — at 200
+cells it is 0.18 s against 0.21 s. **Do not read that as a recommendation.**
+``AdjointPoster`` differentiates cheaply, so it sits at the end of the range where
+assemblies are nearly free and buying them back with iterations is a bad deal. A
+case with a finite-differenced flux sits at the other end, where the default is
+too *low* rather than too high.
+
+The way to find out is the per-step table, not this one: run the case at two or
+three settings and compare wall-clock against the ``jac`` and ``res`` columns.
+The default is left at 10 so that no existing run changes silently.
+
 .. _degree-adaptation:
 
 Choosing the polynomial degree

@@ -97,6 +97,10 @@ BOOST_AUTO_TEST_CASE(a_minimal_config_loads_with_every_default_applied)
     // schema default is what the solver is configured with every time.
     BOOST_TEST(c.PseudoTransientSERRate == 1.0);
     BOOST_TEST(c.PseudoTransientSERFloor == 2.0);
+    BOOST_TEST(c.NewtonMaxIterations == 20u);
+    BOOST_TEST(c.NewtonJacobianReuse == 10u);
+    BOOST_TEST(c.NewtonStepTolerance == 0.0);
+    BOOST_TEST(c.NewtonScaling == "Unit");
     BOOST_TEST(c.SteadyStateDiagnostics == false);
     BOOST_TEST(c.SteadyStateStepDiagnostics == false);
 }
@@ -308,6 +312,10 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         "PseudoTransientMaxStep = 1e6\n"
         "PseudoTransientSERRate = 0.5\n"
         "PseudoTransientSERFloor = 1.5\n"
+        "NewtonMaxIterations = 7\n"
+        "NewtonJacobianReuse = 3\n"
+        "NewtonStepTolerance = 1e-9\n"
+        "NewtonScaling = \"ErrorWeights\"\n"
         "SteadyStateDiagnostics = true\n"
         "SteadyStateStepDiagnostics = true\n"
         "zeroFlux = true\n"
@@ -334,6 +342,10 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         {"SteadyStateSolver", std::string("Newton")},
         {"PseudoTransientInitialStep", 0.25}, {"PseudoTransientMaxStep", 1e6},
         {"PseudoTransientSERRate", 0.5}, {"PseudoTransientSERFloor", 1.5},
+        {"NewtonMaxIterations", 7u},
+        {"NewtonJacobianReuse", 3u},
+        {"NewtonStepTolerance", 1e-9},
+        {"NewtonScaling", std::string("ErrorWeights")},
         {"SteadyStateDiagnostics", true},
         {"SteadyStateStepDiagnostics", true},
         {"zeroFlux", true}, {"WriteOutput", false},
@@ -362,6 +374,10 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     BOOST_TEST(fromToml.PseudoTransientMaxStep == fromMap.PseudoTransientMaxStep);
     BOOST_TEST(fromToml.PseudoTransientSERRate == fromMap.PseudoTransientSERRate);
     BOOST_TEST(fromToml.PseudoTransientSERFloor == fromMap.PseudoTransientSERFloor);
+    BOOST_TEST(fromToml.NewtonMaxIterations == fromMap.NewtonMaxIterations);
+    BOOST_TEST(fromToml.NewtonJacobianReuse == fromMap.NewtonJacobianReuse);
+    BOOST_TEST(fromToml.NewtonStepTolerance == fromMap.NewtonStepTolerance);
+    BOOST_TEST(fromToml.NewtonScaling == fromMap.NewtonScaling);
     BOOST_TEST(fromToml.SteadyStateDiagnostics == fromMap.SteadyStateDiagnostics);
     BOOST_TEST(fromToml.SteadyStateStepDiagnostics == fromMap.SteadyStateStepDiagnostics);
     BOOST_TEST(fromToml.zeroFlux == fromMap.zeroFlux);

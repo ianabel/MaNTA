@@ -184,7 +184,9 @@ void SystemSolver::solveSteadyState()
         if (uPrev == nullptr || ptcDYdt == nullptr || kinScale == nullptr)
             throw std::runtime_error("N_VClone failed in solveSteadyState");
     }
-    N_VConst(1.0, kinScale); // no scaling; the DOFs are already commensurate
+    // Filled below, once the mode is known: unit scaling is a constant, but the
+    // error weights depend on Y and so are refreshed per continuation step.
+    N_VConst(1.0, kinScale);
 
     if (kin_mem == nullptr)
     {
@@ -215,8 +217,20 @@ void SystemSolver::solveSteadyState()
     // Each inner solve only has to make progress, not converge to the eventual
     // tolerance: SER re-damps and tries again. Asking for the final tolerance at
     // a small dt would burn Newton iterations chasing a heavily damped problem.
+    // That is why NewtonMaxIterations defaults to a tenth of KINSOL's own 200.
+    //
+    // Set on every call rather than once when kin_mem is created: PyRunner
+    // reconfigures and re-runs on one solver, so a value that changed between
+    // runs would otherwise be ignored on the second.
     KINSetFuncNormTol(kin_mem, steady_state_tol);
-    KINSetNumMaxIters(kin_mem, 20);
+    KINSetNumMaxIters(kin_mem, newtonMaxIters);
+
+    // How many Newton iterations may share one Jacobian factorisation, and the
+    // scaled-step stopping test. Both are pass-through: KINSOL restores its own
+    // default when handed zero, which is what newtonStepTol's zero sentinel
+    // relies on.
+    KINSetMaxSetupCalls(kin_mem, newtonJacReuse);
+    KINSetScaledStepTol(kin_mem, newtonStepTol);
 
     // Take KINSOL's step clamp out of the picture. Its default maximum Newton
     // step is 1000*||u_0||, which is *zero* when the initial condition is zero
@@ -356,6 +370,16 @@ void SystemSolver::solveSteadyState()
         // uPrev is both the backward-Euler anchor for this attempt and the state
         // to fall back to if the attempt makes things worse.
         N_VScale(1.0, Y, uPrev);
+
+        // Refreshed here rather than once on entry, because the weights are a
+        // function of Y and Y moves a long way over a continuation run -- on
+        // AdjointPoster ||F|| falls thirteen orders. Scaling fixed at the initial
+        // state would be calibrated for a state the solve left immediately.
+        // KINSol reads the vectors afresh on every call, so changing them between
+        // calls is exactly as intended; within a call they are constant, which is
+        // what KINSOL requires.
+        if (newtonScaling == NewtonScaling::ErrorWeights)
+            getErrorWeights(Y, kinScale);
 
         const int retval = KINSol(kin_mem, Y, KIN_NONE, kinScale, kinScale);
         rec.kinRetval = retval;
