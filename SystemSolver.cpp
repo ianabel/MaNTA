@@ -98,8 +98,8 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     if (problem->isRestarting())
     {
         DGSoln const &restart = problem->getRestartY();
-        const bool sameDiscretisation =
-            restart.getBasis().Order() == k && restart.getGrid() == grid;
+        const bool sameGrid = restart.getGrid() == grid;
+        const bool sameDiscretisation = restart.getBasis().Order() == k && sameGrid;
 
         // Recorded because initialize() decides whether to skip IDACalcIC from it.
         // A restart skips by default on the grounds that it resumes from a state
@@ -146,6 +146,15 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
             // are whatever the degree.
             for (Index s = 0; s < nScalars; ++s)
                 y.Scalar(s) = restart.Scalar(s);
+
+            // Neither does the trace. lambda is one value per face per variable
+            // -- DGSoln::Map gives it nCells + 1 entries and no basis at all --
+            // so a change of *degree* leaves it transferable verbatim even though
+            // copy() refuses the state as a whole. Only a change of mesh makes it
+            // meaningless, and then there is nothing to do but rebuild it.
+            if (sameGrid)
+                for (Index v = 0; v < nVars; ++v)
+                    y.lambda(v) = restart.lambda(v);
         }
 
         ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
@@ -173,9 +182,58 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         // need about ten times as many residual evaluations inside IDACalcIC as a
         // cold start (Tests/README.md).
         //
-        // On the projection path there is no stored trace to keep -- the degrees
-        // differ, so copy() refused and only u, q, aux and the scalars were
-        // transferred -- and {{u}} is then the right guess to build.
+        // The projection path keeps it too, whenever the *mesh* matches. That used
+        // to read "there is no stored trace to keep", which was wrong: lambda has
+        // no polynomial degree -- DGSoln::Map gives it nCells + 1 entries and no
+        // basis -- so a change of degree leaves it transferable verbatim even
+        // though copy() refuses the state as a whole. Only a change of mesh makes
+        // it meaningless, and {{u}} is then the right guess to build.
+        //
+        // It is worth more than it looks. The q row carries a <lambda, v n> term,
+        // so discarding the trace breaks q as well as lambda: on a LinearDiffusion
+        // restart coarsened from k = 4 to k = 3 at atol 1e-10, keeping it takes the
+        // q block from 7.3e7 to 3.2e-7 -- machine zero, the same as the copy path.
+        // That is the L2 projection commuting with the weak q equation, which it
+        // does exactly, and only the trace was standing in the way.
+        //
+        // It does not make a projected restart consistent, and nothing can. A
+        // change of degree changes the *equations*, not just the representation,
+        // and each direction breaks the block whose equation moved:
+        //
+        //   coarsening   q transfers exactly (above), lambda does not -- u and q
+        //                lost information, so the numerical flux at each face
+        //                moved and the stored trace no longer balances it
+        //   refinement   lambda transfers exactly (measured 4e-9, nothing at the
+        //                faces changed) and q does not -- the degree-(k+1) test
+        //                functions impose a q row the coarse state was never asked
+        //                to satisfy
+        //
+        // sigma is never the problem, linear flux or not, because it is not
+        // transferred at all on this path: AssignSigma rebuilds it from the
+        // projected u and q by evaluating the physics at the run's own nodes, so
+        // it satisfies its own row by construction. Measured at 1e-18 in every
+        // direction on both LinearDiffusion and NonlinDiffTest.
+        //
+        // The nonlinearity does show up, but in lambda rather than sigma. On
+        // refinement a linear flux gives sigma = -kappa q, which is embedded
+        // exactly along with q, so the face flux does not move and lambda stays at
+        // 4e-9. A nonlinear sigma_hat interpolated on the *new* node set is a
+        // different polynomial from the old interpolant, so the face flux does
+        // move: NonlinDiffTest refining 3 -> 4 leaves lambda at 4.7e8.
+        //
+        // q on its own can be repaired without any Jacobian. Its row is
+        // A q = -B^T u + C^T lambda - RF with A the cell mass matrix, so given u
+        // and lambda it is one (k+1)x(k+1) dense solve per cell per variable and
+        // touches no physics; tried as an experiment it took q to 5e-15 in every
+        // direction on both cases. It is not done here because it changes no
+        // outcome -- every degree-transfer run tested returns exactly what it did
+        // without it -- and the inconsistency simply migrates into lambda, whose
+        // row then reads off a different q and sigma. lambda is the coupled one:
+        // its row needs sigma, sigma needs q, q needs lambda, so closing the loop
+        // is a nonlinear solve on the algebraic subsystem rather than a
+        // substitution. That is exactly what IDACalcIC does, which is why
+        // initialize() runs it on this path rather than skipping as it does for a
+        // copied restart.
         //
         // ApplyDirichletBCs stays *above* this rather than below it, which looks
         // wrong and is not. EvaluateLambda overwrites every entry including the
@@ -186,11 +244,17 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         // trace holds -- the boundary datum, or u's own trace there -- and that
         // node has an identically zero row and column, so it is not the residual
         // that notices: it is IDA's error test, which weights lambda like
-        // everything else. That case runs at rtol 1e-6 with nAux > 0, where
-        // restarting is documented as marginal, and it is close enough to the
-        // edge that the difference tips it. Left alone deliberately; changing it
-        // is a separate question from keeping the trace.
-        if (!sameDiscretisation)
+        // everything else.
+        //
+        // The reason given for that used to be that the case sat close to the
+        // edge -- rtol 1e-6 with nAux > 0, where restarting was documented as
+        // marginal. That premise is gone: AuxVarTest's missing dSigma_dPhi block
+        // is declared and all three round trips now survive 1e-6 / 1e-8 with the
+        // CalcIC skip armed. So the ordering may no longer be load-bearing at
+        // all. It has not been re-measured since, which is the only reason it is
+        // still written this way; reordering is a behaviour change wanting its
+        // own regression run, and is a separate question from keeping the trace.
+        if (!sameDiscretisation && !sameGrid)
             y.EvaluateLambda();
     }
     else
