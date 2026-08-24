@@ -107,25 +107,62 @@ restored dY/dt.
 `.ref.nc` files are committed -- `.gitignore` has `*.nc` with a `!*.ref.nc`
 negation.
 
-**`AuxVarTest.ref.nc` was regenerated** after the `dAux_Mat` column-layout fix
-(see the paired-implementations section below). The old reference was produced
-by `f35e3ee`, the commit that introduced the defect, so it recorded the
-behaviour of a run whose Jacobian was missing `dG/du` entirely. The case runs at
-`Relative_tolerance = Absolute_tolerance = 1e-2`, loose enough that a different
-Newton path moves the answer by about half a percent -- which is what tripped
-the 5e-3 comparison.
+**`AuxVarTest.ref.nc` has been regenerated twice, both times because the case was
+running too loose to pin a solution at all.** That is the thing to understand
+before touching it again: a reference is only a reference if the run that made it
+is more accurate than the tolerance it is compared at, and for years this one was
+not.
 
-The new output is *closer to the truth*, not merely different. Against a
-tighter-tolerance run of the same discretisation (rtol = atol = 1e-5, which is
-as tight as this case will integrate):
+The first regeneration followed the `dAux_Mat` column-layout fix (see the
+paired-implementations section below); the old reference came from `f35e3ee`, the
+commit that introduced that defect, so it recorded a run whose Jacobian was
+missing `dG/du` entirely.
 
-| | Var0 | Var1 |
-|---|---|---|
-| old reference | 1.56e-2 | 2.72e-2 |
-| new output | 1.01e-2 | 1.37e-2 |
+The second followed a *second* missing Jacobian block in the same case.
+`SigmaFn` adds `(a - u*u)` to **both** variables' fluxes, but `dSigma_dPhi`
+declared the derivative only for variable 0. On the constraint manifold
+`a = u*u`, so the stray term vanishes and nothing notices -- and a warm start is
+precisely the state that is *off* the manifold, where Newton then diverged.
+Finite-differencing `residual` against the assembled Jacobian put the `sigma[1]`
+block out by 98% of the residual scale before the fix and 4.2e-9 after it, every
+other block unchanged. The fix declares the derivative rather than removing the
+term from `SigmaFn`, so the physics -- and the solution -- are untouched.
 
-The pre-fix reference is kept out of the tree; recover it from
-`git show HEAD:Tests/RegressionTests/AuxVarTest.ref.nc` if the comparison ever
+Both times the trigger was the same and was not the fix: at
+`Relative_tolerance = Absolute_tolerance = 1e-2` **the case's own answer is 4.1%
+from the converged one**, against a comparison tolerance of 5e-3. Measured
+against a rtol = 1e-10 run of the same discretisation:
+
+| run | max relative L2 from converged |
+|---|---|
+| the 1e-2 configuration | 4.1e-2 |
+| 1e-4 / 1e-6 | 3.5e-5 |
+| **1e-6 / 1e-8 (now)** | **4.2e-7** |
+
+So any change that moved the Newton path moved the output past the threshold
+without either answer being wrong -- the two 1e-2 answers straddle the converged
+one, each 1-4% out. The reference was pinning a step sequence.
+
+`AuxVarTest.conf` now runs at `1e-6 / 1e-8`, four orders inside the comparison,
+and the reference is a solution. What that buys, measured by forcing different
+step sequences on the tightened configuration (`initialTimestep`, `MinStepSize`
+within its working range, `AggressiveTimesteps`): the answer moves by **at most
+1.8e-6**, where the same class of change used to move it by 0.93% and fail.
+
+Two costs, neither of them free:
+
+* **`MinStepSize` is load-bearing and must stay in the config.** At the default
+  1e-7 the case dies with `IDA_ERR_FAIL` (-3) at these tolerances. The limit is
+  between 1e-8 (fails) and 1e-9 (works); the config sets 1e-12.
+* **An explicit `initialTimestep` above ~1e-4 now fails** where 1e-3 worked at
+  1e-2. Nothing in the tree sets it for this case -- the default of 0 lets IDA
+  choose -- but a first step too large for the requested accuracy is not
+  recoverable, which is the same family as the `MinStepSize` floor.
+
+Runtime went from 0.07 s to 0.15 s.
+
+Earlier references are kept out of the tree; recover one from
+`git show <commit>:Tests/RegressionTests/AuxVarTest.ref.nc` if a comparison ever
 needs repeating.
 
 ## Reading the coverage number

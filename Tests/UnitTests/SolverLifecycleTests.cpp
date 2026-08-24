@@ -1597,4 +1597,61 @@ BOOST_AUTO_TEST_CASE(an_unarmed_gate_leaves_runSolver_bit_for_bit_unchanged)
     removeOutput("lifecycle_gate_off_attached");
 }
 
+BOOST_AUTO_TEST_CASE(initialize_starts_at_a_nonzero_time)
+{
+    // IDACalcIC's tout1 is an absolute *time* -- "the first value of t at which a
+    // solution will be requested" -- and initialize() used to pass the *interval*,
+    // `dt0 > 0 ? dt0 : dt`. Those are the same number only at t0 = 0, which is
+    // where every other fixture in this file starts, so nothing caught it.
+    //
+    // Set the initial time equal to the output cadence and tout1 lands exactly on
+    // t0. IDA rejects that outright -- IDA_ILL_INPUT (-22), "tout1 too close to t0
+    // to attempt initial condition calculation", before it evaluates a single
+    // residual -- and initialize() turns the failure into a throw, so the run dies
+    // with a message pointing into SUNDIALS. A restart is the ordinary way to
+    // reach this, since it resumes at the time the file was written, but nothing
+    // about it needs a restart: t_initial = delta_t is enough.
+    //
+    // Both halves are asserted. The equal case is the one that used to throw; the
+    // larger t0 is the quieter half of the same error, where tout1 came out
+    // *behind* t0 and handed IDA the wrong direction of integration. IDA does not
+    // reject that, so it never announced itself.
+    constexpr double CADENCE = T_FINAL;
+
+    for (double t0 : {CADENCE, 4.0 * CADENCE})
+    {
+        Grid grid(0.0, 1.0, nCells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, "lifecycle_nonzero_t0");
+        sys.setInitialTime(t0);
+
+        // Reached directly: dt is MANTA_TEST_PRIVATE, and the premise of this
+        // case is that the cadence and t0 coincide.
+        BOOST_TEST_REQUIRE(sys.dt == CADENCE,
+                           "configure() no longer sets the cadence this case needs");
+
+        {
+            CapturedOutput quiet;
+            BOOST_CHECK_NO_THROW(sys.initialize());
+        }
+
+        // Not vacuous: IDACalcIC has to have run and done something, or the case
+        // would pass just as well if the call were removed.
+        long idaResEvals = -1;
+        BOOST_REQUIRE(IDAGetNumResEvals(sys.IDA_mem, &idaResEvals) == IDA_SUCCESS);
+        BOOST_TEST(idaResEvals > 0,
+                   "IDACalcIC evaluated no residuals at t0 = " << t0
+                       << ", so it cannot have run");
+
+        {
+            CapturedOutput quiet;
+            BOOST_CHECK_NO_THROW(sys.integrate(t0 + 2.0 * CADENCE));
+            sys.destroySundials();
+        }
+    }
+
+    removeOutput("lifecycle_nonzero_t0");
+}
+
 BOOST_AUTO_TEST_SUITE_END()

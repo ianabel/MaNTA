@@ -348,7 +348,28 @@ void SystemSolver::initialize()
 	// loop with whatever partial state IDA had reached. The name passed to
 	// check_retval said "IDASolve" too, so even the message would have pointed at
 	// the wrong call.
-	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, dt0 > 0.0 ? dt0 : dt);
+	//
+	// tout1 is an absolute *time* -- "the first value of t at which a solution will
+	// be requested" -- and is what IDA takes the direction and rough scale of the
+	// independent variable from. This used to pass the *interval*,
+	// `dt0 > 0 ? dt0 : dt`, which is the same number only when t0 is zero.
+	//
+	// Every fixture in the tree starts at zero, so nothing noticed. Set t_initial
+	// equal to delta_t and the run dies before evaluating a single residual:
+	//
+	//     t_initial = 0.1, delta_t = 0.1   ->  tout1 == t0, IDA_ILL_INPUT (-22),
+	//                                          "tout1 too close to t0", and the
+	//                                          throw below kills the run
+	//
+	// which is a plain configuration, not a corner. A restart is the common way to
+	// reach it, since it resumes at the time the file was written. Other values of
+	// t_initial are wrong in a quieter way -- t_initial > delta_t hands IDA a tout1
+	// *behind* t0, i.e. the wrong direction of integration, which IDA does not
+	// reject.
+	//
+	// The first time integrate() actually asks for is t0 + dt: it sets `tout = t0`
+	// and the loop does `tout += dt` before the first IDASolve.
+	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, t0 + (dt0 > 0.0 ? dt0 : dt));
 	if (ErrorChecker::check_retval(&retval, "IDACalcIC", 1))
 	{
 		throw std::runtime_error("IDACalcIC could not complete");
