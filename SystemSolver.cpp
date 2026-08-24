@@ -18,7 +18,7 @@
 #include "PyIntegrator.hpp"
 
 SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *transpSystem)
-    : grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars(transpSystem->getNumScalars()), nAux(transpSystem->getNumAux()), y(nVars, grid, k, nScalars, nAux), dydt(nVars, grid, k, nScalars, nAux), yJac(nVars, grid, k, nScalars, nAux), dydtJac(nVars, grid, k, nScalars, nAux), dydtComplete(nVars, grid, k, nScalars, nAux), problem(transpSystem)
+    : grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars(transpSystem->getNumScalars()), nAux(transpSystem->getNumAux()), y(nVars, grid, k, nScalars, nAux), dydt(nVars, grid, k, nScalars, nAux), yJac(nVars, grid, k, nScalars, nAux), dydtJac(nVars, grid, k, nScalars, nAux), problem(transpSystem)
 {
     if (SUNContext_Create(SUN_COMM_NULL, &ctx) < 0)
         throw std::runtime_error("Unable to allocate SUNDIALS Context, aborting.");
@@ -26,8 +26,6 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSyst
     yJac.Map(yJacMem);
     dydtJacMem = new double[yJac.getDoF()];
     dydtJac.Map(dydtJacMem);
-    dydtCompleteMem = new double[yJac.getDoF()];
-    dydtComplete.Map(dydtCompleteMem);
     S_DOF = k + 1;
     U_DOF = k + 1;
     Q_DOF = k + 1;
@@ -59,7 +57,6 @@ SystemSolver::~SystemSolver()
 {
     delete[] yJacMem;
     delete[] dydtJacMem;
-    delete[] dydtCompleteMem;
     if (nScalars > 0)
     {
         for (Index i = 0; i < nScalars; ++i)

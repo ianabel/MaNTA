@@ -95,22 +95,19 @@ test of `WriteRestartFile` -> `StoreGridInfo` -> the restart branch of
 clustered-grid contiguity defect (a grid rebuilt from a restart file must
 compare *equal* to the one that wrote it).
 
-**All three round trips now survive 1e-6 / 1e-8** -- see the measured table
-beside the calls in `TestSolutions.py`. They did not: that table used to read
-`IDASolve -4` for `AuxVarTest` at 1e-4 and tighter, and `-6` for `MatTest` at
-1e-6, and this paragraph used to say restarting was fragile at tight tolerances.
-Two fixes closed it, **neither of them in the restart machinery**:
-`setInitialConditions` finishing every restart with `EvaluateLambda()` and so
-discarding the converged trace the file carried, and `AuxVarTest`'s missing
-`dSigma_dPhi` block (both described below).
+**All three round trips survive 1e-6 / 1e-8** -- see the measured table beside
+the calls in `TestSolutions.py`.
 
-What is left is a ceiling belonging to the *cases*, at 1e-8 / 1e-10, where
-`MatTest`'s **uninterrupted** run fails as well -- so the restart is not
-implicated there -- and the other two resume-fail with `IDA_ERR_FAIL` (-3)
-rather than the corrector failure (-4) that used to appear. Only `AuxVarTest`
-was tightened to 1e-6 along with `LinearDiffusion`; `MatTest` stays at 1e-4
-because 1e-6 costs 101 s against 6.0 s for agreement of 2.7e-10 that nothing
-needs.
+The ceiling above that belongs to the *cases*, not to the restart path. At
+1e-8 / 1e-10 `MatTest`'s **uninterrupted** run fails as well, so nothing there
+implicates restarting; the other two resume-fail with `IDA_ERR_FAIL` (-3).
+`LinearDiffusion` and `AuxVarTest` run at 1e-6; `MatTest` stays at 1e-4 because
+1e-6 costs 101 s against 6.0 s for agreement of 2.7e-10 that nothing needs.
+
+Two things are load-bearing for that, and both are easy to undo by accident:
+`setInitialConditions` must keep the trace a restart file carries rather than
+rebuilding it with `EvaluateLambda()`, and `AuxVarTest` must declare
+`dSigma_dPhi` for *both* variables (both described below).
 
 `.ref.nc` files are committed -- `.gitignore` has `*.nc` with a `!*.ref.nc`
 negation.
@@ -678,57 +675,6 @@ These are deliberate and tracked, not oversights:
   independently wrong for any run with `t0 != 0`;
   `the_initial_condition_uses_boundary_data_at_t0` covers that separately,
   because every other fixture in the tree starts at zero.
-
-* **The dG/dt gate needs a consistent initial condition, and now forces one.**
-  `an_armed_gate_is_given_a_consistent_initial_condition` in
-  `AlgebraicDerivativeTests.cpp`. Once `initialize()` gained two ways to skip
-  `IDACalcIC` -- a steady solve, and a restart that was copied rather than
-  projected -- the gate started differentiating the guess, and on
-  the guess `dG/dt` comes out with the wrong *sign*: `AuxDiffusion` with
-  `G = Int u dx` gives +1.654 corrected against -1.769, `ScalarDiffusion` +2.208
-  against -1.187. The gate rejects on `dGdt < -tol`, so it abandoned runs it
-  should accept.
-
-  The test asserts both halves at both fixtures: that an armed gate on a steady
-  solve does run `IDACalcIC`, that the same solve *without* the gate does not, and
-  that the armed value equals the time-marching one to 1e-12. Its guard is that
-  the armed and unarmed values straddle zero -- so a fixture that stopped
-  distinguishing a fixed gate from a broken one fails rather than passes.
-  `TestDiffusion`, which every older gate test uses, agrees to 3.6e-16 either way
-  and is exactly why this went unnoticed.
-
-  `a_failed_calcic_that_only_the_gate_wanted_leaves_the_run_alone` in
-  `SolverLifecycleTests.cpp` covers the other half. Forcing `IDACalcIC` puts it on
-  the states it is likeliest to fail on, so it fails open: the run continues from
-  the guess, `IDAReInit` restores IDA's `phi` so the fallback is bit for bit the
-  unarmed run, and the gate declines instead of answering. Both of its premises
-  are `BOOST_TEST_REQUIRE`, so if the run ever stops skipping `IDACalcIC` on its
-  own, or `IDACalcIC` starts succeeding there, the case says so rather than
-  passing for the wrong reason -- and **that is how the `tout1` bug above was
-  found**: fixing it turned the first guard red, which is what a guard is for.
-
-  Its provocation was rewritten as a result, and the rewrite is worth reading
-  before touching it. It is now a *steady* solve on `MisdeclaredScalar`, whose
-  differential scalar has no time derivative in its `ScalarG`: `IDA_YA_YDP_INIT`
-  freezes every differential value, so that row is a constant no Newton direction
-  can touch and `IDACalcIC` exhausts its linesearch. Both halves of that are
-  load-bearing.
-
-  * **The failure has to be a property of the problem**, not of MaNTA, or the
-    test pins a bug. A declaration error is the one class that qualifies -- it is
-    what kept `python-physics/mirror-plasma`'s voltage controller from ever
-    starting -- and the scalar's initial value has to sit in a window: consistent,
-    and the Newton step is zero so `IDACalcIC` *converges* (irreducible only beats
-    small when there is something to reduce); far out, and nothing downstream
-    survives either.
-  * **The run has to be a steady solve.** A time-marching run that cannot complete
-    `IDACalcIC` usually cannot integrate either -- the differential values it
-    failed to reconcile are in IDA's local error test, and the jump to their
-    consistent values does not shrink with `h`, which is `IDA_ERR_FAIL` on the
-    first step. So "CalcIC failed but the run was fine" is a far narrower claim
-    than it sounds, and a steady solve, where KINSOL drives the whole residual to
-    zero from wherever it starts, is most of what is left of it.
-    `python-examples/jardin-critical-gradient` is the same shape.
 
 * **Warm starts: what a restart hands the solver, and whether `IDACalcIC` has to
   run.** Two cases in `SolverLifecycleTests.cpp`, and unlike the three

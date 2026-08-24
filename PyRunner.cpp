@@ -242,19 +242,7 @@ void PyRunner::run_ss() {
   std::println("Done.");
 }
 
-bool PyRunner::wasRejected() const {
-  if (!configured)
-    throw std::runtime_error(
-        "Error: Runner must be configured before asking about the dG/dt gate.");
-  return system->wasRejected();
-}
 
-Vector PyRunner::lastDGdt() const {
-  if (!configured)
-    throw std::runtime_error(
-        "Error: Runner must be configured before asking about the dG/dt gate.");
-  return system->lastDGdt();
-}
 
 Vector PyRunner::G(void) {
   if (!configured)

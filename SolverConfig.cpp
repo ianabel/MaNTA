@@ -247,7 +247,6 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(OutputPoints, int);
     READ(OutputFilename, std::string);
     READ(solveAdjoint, bool);
-    READ(ObjectiveDecreaseTolerance, double);
     READ(WriteOutput, bool);
     READ(WriteDatFile, bool);
     READ(WriteDebugDatFiles, bool);
@@ -555,11 +554,4 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     }
 
     // Zero is off, and the setter rejects anything negative.
-    if (config.ObjectiveDecreaseTolerance != 0.0)
-    {
-        logmsg<LOG_LEVEL::INFO>(
-            "Abandoning the run if dG/dt falls below {} at the initial condition.",
-            -config.ObjectiveDecreaseTolerance);
-        system.setObjectiveDecreaseTolerance(config.ObjectiveDecreaseTolerance);
-    }
 }

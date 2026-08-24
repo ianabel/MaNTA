@@ -92,15 +92,6 @@ solver_config = {
     "SteadyStateTolerance": 1e-4,
     "restart": False,
     "zeroFlux": True,
-    # Was `"optimizeMode": True` on optimize-mode, where the dG/dt gate was a
-    # bool and the slack a hardcoded `stoptol = 0.05` (Solver.cpp:75 there).
-    # Main took the same gate with the tolerance exposed instead of fixed, so
-    # the key is a rename and 0.05 is the branch's own number. One difference
-    # worth knowing if this is ever retuned: the branch tested `delta_t * dG/dt`
-    # against the tolerance and main tests `dG/dt`, so the effective threshold
-    # here is the branch's divided by delta_t. Main also throws unless an
-    # AdjointProblem is set -- there is no objective to test otherwise.
-    "ObjectiveDecreaseTolerance": 0.05,
 }
 
 
@@ -175,7 +166,6 @@ solver_config = {
     "restart": True,
     "zeroFlux": True,
     "SteadyStateTolerance": 1e-4,
-    "ObjectiveDecreaseTolerance": 0.05,
 }
 
 config = {
@@ -240,7 +230,6 @@ solver_config = {
     "MinStepSize": 1e-10,
     "restart": True,
     "zeroFlux": True,
-    "ObjectiveDecreaseTolerance": 0.05,
     "SteadyStateTolerance": 1e-4,
 }
 config = {

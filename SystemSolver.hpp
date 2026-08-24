@@ -353,21 +353,6 @@ class SystemSolver
         int steadyResidual(N_Vector u, N_Vector fval);
         void steadyJacSetup(N_Vector u);
 
-        // Arm the dG/dt early-exit gate: after the initial condition is built,
-        // abandon the run rather than integrate it if the objective is already
-        // getting worse. For an optimisation sweep that turns a wasted transport
-        // solve into the cost of initialisation alone.
-        //
-        // An absolute threshold on a dimensional quantity has no sensible
-        // default, so the gate is off until this is called -- like
-        // setSteadyStateTolerance above, which this deliberately mirrors.
-        void setObjectiveDecreaseTolerance(double dGdt_tol)
-        {
-            if (dGdt_tol <= 0)
-                throw std::logic_error("Tolerance for objective-decrease termination cannot be zero or negative.");
-            objective_decrease_tol = dGdt_tol;
-            CheckObjectiveDecrease = true;
-        };
         void setNOutput(int nO)
         {
             if (nO <= 0)
@@ -404,21 +389,6 @@ class SystemSolver
         // Creates the MX cellwise matrices used at each Jacobian iteration
         // Factorization of these matrices is done here
         void updateMatricesForJacSolve();
-
-        // Fill the algebraic blocks of dydtComplete -- q', sigma', phi' and
-        // lambda' -- by differentiating the constraints that define them.
-        //
-        // IDA never computes them: IDA_YA_YDP_INIT produces algebraic *values*
-        // and differential *derivatives*, so at t0 those blocks of its dYdt are
-        // identically zero and anything differentiating the solution in time sees
-        // only the u term. Differentiating the algebraic residual rows gives
-        // dF/dy . ydot = -dF/dt, which is a linear system in exactly those
-        // unknowns once u' -- which IDA does have -- is treated as data.
-        //
-        // Reads Y and dYdt, so it is only meaningful after initialize(). Writes
-        // dydtComplete and nothing else; IDA's own dYdt is the state it takes its
-        // first step from and must not be touched.
-        void computeAlgebraicTimeDerivatives();
 
         // Solves the Jy = g equation
         void solveJacEq(N_Vector g, N_Vector delY);
@@ -465,39 +435,6 @@ class SystemSolver
         void integrate(double tFinal);
         void destroySundials();
         void runSolver(double tFinal);
-
-        // The dG/dt gate, asked between initialize() and integrate() -- which is
-        // the reason the split has to exist for it. Returns false when the gate
-        // is disarmed, so an unconfigured caller sees no behaviour change.
-        //
-        // Only meaningful after initialize(): it reads y and dydt, which map the
-        // live SUNDIALS vectors, and it needs the derivative initialize() left
-        // there -- IDACalcIC's when it ran, and setInitialConditions' guess when
-        // it was skipped (Solver.cpp). Before initialize() there is nothing
-        // mapped; after destroySundials() they dangle.
-        //
-        // Arming this makes initialize() run IDACalcIC whatever else it would
-        // have done, because on a state off the constraint manifold dG/dt can
-        // come out with the wrong *sign*: measured at k = 2 on 4 cells,
-        // AuxDiffusion with G = Int u dx gives +1.654 from the corrected state
-        // and -1.769 from the guess, and ScalarDiffusion +2.208 against -1.187,
-        // with a one-IDA-step reference siding with the corrected value both
-        // times. Since the gate rejects on dGdt < -tol, the flip abandons runs
-        // that should proceed. TestDiffusion, the only fixture the gate tests
-        // used, agrees to 3.6e-16 either way and hid it.
-        //
-        // If that IDACalcIC then fails, the run continues and this returns false:
-        // the gate is an optimisation, so losing it costs time where a wrong
-        // rejection would lose a result. See gateUsable.
-        bool objectiveIsDecreasing();
-
-        // Whether the gate rejected the run, i.e. runSolver() skipped the time
-        // loop. Cleared at the top of every initialize().
-        bool wasRejected() const { return objective_rejected; };
-
-        // The dG/dt values the last objectiveIsDecreasing() computed, one per
-        // objective. For diagnostics and for the tests.
-        Vector const &lastDGdt() const { return last_dGdt; };
 
         void setAdjointProblem(AdjointProblem *ap) { adjointProblem = ap; };
         void runAdjointSolve();
@@ -807,22 +744,9 @@ class SystemSolver
 
         double *yJacMem = nullptr;
         double *dydtJacMem = nullptr;
-        // The time derivative with its algebraic blocks filled in.
-        //
-        // IDA's dYdt has zeros in q, sigma and phi at t0: IDA_YA_YDP_INIT
-        // computes algebraic *values* and differential *derivatives*, so there
-        // is no y' for them to fetch. computeAlgebraicTimeDerivatives() solves
-        // the differentiated constraints for them and writes the answer here.
-        //
-        // Here rather than into dYdt because dYdt is the state IDA takes its
-        // first step from: changing its algebraic entries after IDACalcIC would
-        // alter the integration, and the symptom would be a step-size failure
-        // somewhere later rather than anything pointing back here.
-        double *dydtCompleteMem = nullptr;
 
         DGSoln yJac; // memory owned by us
         DGSoln dydtJac; // memory owned by us
-        DGSoln dydtComplete; // memory owned by us; see dydtCompleteMem above
 
         // Built in initialiseMatrices(), once the polynomial degree and grid are
         // fixed. Non-copyable and holds a reference to `grid`, hence the pointer.
@@ -875,15 +799,6 @@ class SystemSolver
                                     std::vector<DGSoln> &w_map, Matrix &N_out);
 
         // The whole Jacobian, densely, in the solution vector's own ordering:
-        // [ sigma | q | u | aux ] per cell, then all of lambda, then mu. Built
-        // from the same blocks the forward solve applies without ever forming --
-        // assembleCellMatrix, CEBlocks, CG_cellwise, H_cellwise and the scalar
-        // coupling -- so it cannot drift from them.
-        //
-        // Only computeAlgebraicTimeDerivatives() and the tests want this; the
-        // forward path never assembles a Jacobian and never should.
-        Matrix assembleDenseJacobian(DGSoln const &Y, DGSoln const &Ydot, Time tEval,
-                                     double alphaValue);
 
         // The central-difference step: cbrt(eps) scaled by |t|. That is the
         // exponent that balances a *central* difference's truncation against its
@@ -979,12 +894,6 @@ class SystemSolver
         // Int g dx rather than what GFn reports -- is gone with them.
         void dGdaux_Vec(Index, Vector &, Eigen::Ref<Matrix> const dX_dZ, DGSoln const &, Index intervalIndex);
 
-        // The time derivative of the objective, by the chain rule over the four
-        // vectors above. See AdjointVectors.cpp for why it is assembled here
-        // rather than asked of AdjointProblem.
-        Value dGdt(Index gIndex, DGSoln const &Y, DGSoln const &Ydot);
-        Value dGdt(Index gIndex) { return dGdt(gIndex, y, dydt); };
-
         double resNorm = 0.0; // Exclusively for unit testing purposes
 
         double dt;
@@ -1078,22 +987,6 @@ class SystemSolver
         bool calcICRan = false;
         double steady_state_tol = 1e-3;
 
-        // Off unless setObjectiveDecreaseTolerance arms it. There is no default
-        // worth having: dG/dt carries the units of the objective over time, so
-        // any number here would be meaningful for one case and nonsense for the
-        // next.
-        bool CheckObjectiveDecrease = false;
-
-        // Whether initialize() managed to leave a state the gate can be asked
-        // about. Reset true on every initialize(), and cleared only on the one
-        // path that can fail without taking the run down: IDACalcIC failing when
-        // the gate was the only thing that wanted it. A separate flag rather than
-        // clearing CheckObjectiveDecrease, because arming is the caller's
-        // decision and must survive into the next run on a reused solver.
-        bool gateUsable = true;
-        double objective_decrease_tol = 0.0;
-        bool objective_rejected = false;
-        Vector last_dGdt;
 #ifdef PHYSICS_DEBUG
         constexpr static bool physics_debug = true;
 #else

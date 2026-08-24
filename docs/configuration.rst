@@ -181,31 +181,6 @@ Time integration
        ``SteadyStateSolve`` simply sets the tolerance.
        ``Runner.run_ss()`` arms it whether or not either key was given, and falls
        back to ``1e-3``.
-   * - ``ObjectiveDecreaseTolerance``
-     - ``0.0`` — off
-     - If nonzero, the run is abandoned before the time loop when
-       :math:`\mathrm{d}G/\mathrm{d}t < -` this at the initial condition. For an
-       optimisation sweep that turns a step which was going to make the objective
-       worse into the cost of initialisation alone. Requires ``solveAdjoint``,
-       since the adjoint problem is what defines :math:`G`. Absolute, not
-       relative — it carries the units of the objective over time, so there is no
-       number worth defaulting to and zero means "off". A negative value is an
-       error rather than a quiet "off". See :doc:`adjoints`.
-
-       .. note::
-
-          Arming this makes ``initialize()`` run ``IDACalcIC`` whatever else it
-          would have done — a steady solve and a restart both skip it
-          otherwise, and the gate differentiates the initial condition, so on
-          the uncorrected guess :math:`\mathrm{d}G/\mathrm{d}t` can come out with
-          the wrong sign and abandon a run that should have proceeded. The cost is
-          two Jacobian builds and two solves, paid only on a run that would have
-          skipped; see :ref:`warm-starts`.
-
-          If that ``IDACalcIC`` fails — the states it is forced onto are the ones
-          it is likeliest to fail on — the run continues from the guess and the
-          gate reports nothing, with a warning. The gate is an optimisation, so
-          losing it costs time where a wrong rejection would lose a result.
    * - ``tau``
      - ``1.0``
      - The HDG stabilisation parameter. Constant across the domain.

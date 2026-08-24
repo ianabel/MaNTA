@@ -115,8 +115,6 @@ const std::vector<Entry> &table()
          "How much error one extra degree is assumed to buy, in Giorgiani's rule "
          "dk = ceil(log_base(E/tolerance)). 10 is cautious, 100 aggressive; must be "
          "between 10 and 100."},
-        {"ObjectiveDecreaseTolerance", {}, Type::Double, Category::Solver, false, false, 0.0,
-         "Abandon a run whose dG/dt is already below -this at t0; zero is off."},
         {"WriteOutput", {}, Type::Bool, Category::Solver, false, false, true,
          "Write <stem>.nc and <stem>.restart.nc."},
         {"WriteDatFile", {}, Type::Bool, Category::Solver, false, false, false,

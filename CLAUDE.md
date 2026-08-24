@@ -286,24 +286,6 @@ called separately:
   On either skip the `t0` output slice sees the guess `setInitialConditions`
   built, which is the state the run really started from.
 
-  **The dG/dt gate does not, because an armed gate overrides both skips.** It
-  differentiates the initial condition, and on the guess `dGdt` can come out with
-  the wrong *sign*: at k = 2 on 4 cells, `AuxDiffusion` with `G = Int u dx` gives
-  +1.654 corrected against −1.769 uncorrected, `ScalarDiffusion` +2.208 against
-  −1.187, with a one-IDA-step reference siding with the corrected value both
-  times. Since the gate rejects on `dGdt < -tol` that abandons runs it should
-  accept. So `CheckObjectiveDecrease` forces `IDACalcIC` whatever else
-  `initialize` would have done — one rule covering both skips, because the gate is
-  equally wrong on a time-marching run that skipped for consistency.
-
-  **If that `IDACalcIC` then fails, the run continues and the gate declines.**
-  Forcing it puts `IDACalcIC` on exactly the states it is likeliest to fail on, so
-  a failure there clears `gateUsable`, restores IDA's `phi` with `IDAReInit` — the
-  fallback is then bit for bit the run that would have happened unarmed — and
-  `objectiveIsDecreasing` returns false with a warning. The gate is an
-  optimisation: losing it costs time, where a wrong rejection loses a result.
-  `TestDiffusion`, the only fixture the older gate tests use, agrees to 3.6e-16
-  either way and is why none of this showed up there.
 * `SystemSolver::integrate(tFinal)` — the time loop, then the adjoint solve and
   the final netCDF / restart output.
 * `SystemSolver::destroySundials` — free all of it. Idempotent, and safe with no
@@ -378,12 +360,12 @@ Two return codes worth being able to read without looking them up:
   is an absolute *time*, "the first value of t at which a solution will be
   requested", and it used to be passed the *interval* `dt0 > 0 ? dt0 : dt`. The
   two agree only at `t0 = 0`, which is where every fixture in the tree starts, so
-  it went unseen for years; `t_initial = delta_t` makes `tout1` land exactly on
-  `t0` and kills the run. Fixed to `t0 + (dt0 > 0 ? dt0 : dt)` —
-  `initialize_starts_at_a_nonzero_time` pins it. Worth knowing because it *looks*
-  like a hard initial condition and is not: a `TestDiffusion` warm start blamed on
-  tolerance for a while turned out to be exactly this, and converges in 3 residual
-  evaluations once `tout1` is right.
+  `t_initial = delta_t` would make `tout1` land exactly on `t0` and kill the run,
+  so it is `t0 + (dt0 > 0 ? dt0 : dt)` — the first time `integrate()` asks for —
+  and `initialize_starts_at_a_nonzero_time` pins that. Worth knowing because the
+  symptom *looks* like a hard initial condition and is not: it reproduces at every
+  tolerance, and a warm start that hits it converges in 3 residual evaluations
+  once `tout1` is right.
 * **`IDA_LINESEARCH_FAIL` (-13) from `IDACalcIC` means some residual row cannot be
   reduced *at all*, which is usually a declaration error rather than a bad guess.**
   `IDA_YA_YDP_INIT` solves for algebraic *values* and differential *derivatives*,
@@ -861,8 +843,7 @@ The pointwise `DerivativeSubVector` overload and the `dGdu_Vec`/`dGdq_Vec`/
 `dGdsigma_Vec` wrappers over it are gone — they computed `∫ dg/dZ φ_i dx`, the
 derivative of `∫ g dx`, and no solve ever called them. `dGdaux_Vec` was the last
 one left and is now the same operator over `nAux` blocks: it takes the nodal
-`dg/dphi` from the batched `dg` and weights it, and `dGdt` goes through it too
-rather than applying the mass matrix inline. A C++ case's `dgFn_dphi` still
+`dg/dphi` from the batched `dg` and weights it. A C++ case's `dgFn_dphi` still
 reaches it, through `AdjointProblem::dg`'s default, which samples the hook at the
 nodes; a Python case supplies `dg` and `PyAdjointProblem::dgFn_dphi` raises.
 
@@ -875,10 +856,9 @@ that covers every *affine* `dg/dZ`, and the mocks' hooks are affine in `x`. Both
 `the_derivative_sub_vector_weights_dg_by_the_integration_weights` and its aux
 sibling therefore passed with the mass matrix reinstated, by 3e-16 and 5e-16,
 until each was given a second half driven by a synthetic degree-`k` `dg/dZ` and a
-guard that the two operators still differ on it. Before that the only case in the
-suite that noticed at all was `dGdt_matches_a_finite_difference_of_the_objective`,
-at a relative 6e-6 against a 1e-6 tolerance. A reference built "straight from the
-weights" pins the formula, not the operator, if the data cannot tell them apart.
+guard that the two operators still differ on it. Those two guards are the whole of
+the coverage, so keep them: a reference built "straight from the weights" pins the
+formula, not the operator, if the data cannot tell them apart.
 
 ## Traps worth knowing before you edit
 
@@ -943,11 +923,17 @@ weights" pins the formula, not the operator, if the data cannot tell them apart.
 
   The trigger is **any change to `SystemSolver`'s member layout**. Adding one
   inert member — a `bool` and an unused `std::vector<double>`, referenced by no
-  code anywhere — takes a clean `main` from 12/12 passing to 8/12 failing on
-  `algebraic_derivative_tests/the_assembled_jacobian_matches_a_finite_difference_of_the_residual`.
-  Only the `AuxDiffusion` cases fail, plain and superconvergent, at every `k`,
-  with a relative drift of about 1.24: an O(1) error, not a tolerance one. No
-  other test in the suite ever fails.
+  code anywhere — took a clean tree from 12/12 passing to 8/12 failing, on a test
+  that densely finite-differenced `residual()` inside the test translation unit.
+  Only the `AuxDiffusion` cases failed, plain and superconvergent, at every `k`,
+  with a relative drift of about 1.24: an O(1) error, not a tolerance one.
+  Nothing else in the suite ever failed.
+
+  **Reproducing it needs a test of that shape**, and the tree currently has none
+  wired for it; `SolveJacTests.cpp` differences the residual the same way and is
+  where to build one. The two ingredients are a dense finite-difference of
+  `residual()` inlined into a test TU and a change to `SystemSolver`'s member
+  layout. The defect was never diagnosed, only bounded, so treat it as live.
 
   What breaks is the **finite-difference reference**, not the assembly. `|J|` of
   the assembled Jacobian is bit-identical every run (7.9144520420784605 at
@@ -1155,37 +1141,6 @@ weights" pins the formula, not the operator, if the data cannot tell them apart.
   `Tests/README.md`. Nothing in the tree notices a `t0` error, because every
   fixture starts at zero, so `the_initial_condition_uses_boundary_data_at_t0` is
   the only thing standing between that and a silent return.
-* **`dydtComplete` is deliberately not IDA's `dYdt`, and the duplication is the
-  point.** `AlgebraicDerivatives.cpp` solves the differentiated algebraic
-  constraints for `q'`, `sigma'`, `phi'` and `lambda'` — IDA never computes them,
-  because `IDA_YA_YDP_INIT` produces algebraic *values* and differential
-  *derivatives* — and writes the answer into its own vector. Folding it back into
-  `dYdt`, which is the obvious tidy-up, would change the state IDA takes its first
-  step from: the surviving symptom would be a step-size or convergence failure
-  somewhere later in the run, pointing nowhere near here. Only
-  `objectiveIsDecreasing()` reads it, and only a run that arms the gate pays for
-  it, so nothing else notices either way.
-* **The differential rows of that solve are the identity on purpose**, and so are
-  the Dirichlet trace rows. `u'` and a differential scalar's `mu'` are *data* —
-  IDA has them — so their rows carry `1` and the known derivative rather than a
-  differentiated equation, which would bring in `u''`. The Dirichlet trace rows
-  look like a redundant special case and are not: `residual` never writes them
-  (`lambda = g_D(t)` is imposed inside the linear solve, which is also why a
-  finite-differenced Jacobian is rank-deficient by exactly the number of Dirichlet
-  boundaries), so without their own identity row and `dg_D/dt` the matrix is
-  singular by that same count. `the_u_block_round_trips_through_the_identity_row`
-  covers the first; the second is what
-  `the_derivatives_match_a_manufactured_solution` checks through `lambda'`.
-* **The central-difference step there is `cbrt(eps)`, not `sqrt(eps)`.** `sqrt(eps)`
-  is the *one-sided* choice, where truncation is `O(h F'')`; a central difference
-  has truncation `O(h^2 F''')` against round-off `O(eps |F| / h)`, and those
-  balance at `eps^(1/3)`. Using `sqrt(eps)` leaves round-off at `eps/h = 1.5e-8`
-  against a truncation of `2e-16` — eight orders apart rather than comparable — and
-  it measurably costs 2.5 decimal places: the manufactured case gets `q'` to 3.4e-8
-  with `sqrt(eps)` and to 5.6e-11 with `cbrt(eps)`, on a problem whose explicit
-  time dependence is linear in `t` and therefore has *no* truncation error at any
-  step. The design document specified `sqrt(eps)` and called it the central
-  choice; it isn't.
 * **`OutputFilename` names the output, and only its *basename* survives.**
   `loadSolverConfig` fills it from the config file's stem when the key is absent,
   so a run still defaults to `myrun.conf` -> `myrun.nc`; `Solver.cpp` then takes

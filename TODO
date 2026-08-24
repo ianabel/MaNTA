@@ -22,6 +22,15 @@ Found 2026-08-23. CLAUDE.md has the summary; this is the reproduction.
     the AuxDiffusion cases, plain and superconvergent, at k = 1, 2 and 3, drift
     ~1.24.
 
+    NOTE: `algebraic_derivative_tests` no longer exists -- it went with the dG/dt
+    gate, the only thing that read the algebraic time derivatives -- so step 3
+    cannot be run as written. The miscompilation was never diagnosed, only
+    bounded, so this needs a fresh reproduction rather than deletion. What
+    mattered was a dense finite-difference of residual() inlined into a test
+    translation unit plus a change to SystemSolver's member layout;
+    SolveJacTests.cpp differences the residual the same way and is where to
+    start.
+
   The signature, which is how to recognise it if it turns up elsewhere: the
   differenced Jacobian loses the column of the first interior trace DOF
   (index 33 / 49 / 65 at k = 1 / 2 / 3, always lambda[1]), giving 0 against a
@@ -152,23 +161,34 @@ reason it was not made:
     for each differential scalar. Two of the three fixtures there would have to
     be checked against it first.
 
-  - Whether the dG/dt gate means anything on a steady solve is still open. The
-    gate is now *correct* there -- arming it forces IDACalcIC, so it reads a state
-    on the constraint manifold rather than the guess, which used to flip its sign
-    on AuxDiffusion and ScalarDiffusion. What it is not is obviously *meaningful*:
-    dG/dt at t0 describes the transient a time-marching run would take, and a
-    steady solve does not take one. It jumps to the fixed point, where the
-    quantity the sweep actually cares about is whether that fixed point is worse,
-    which nothing can know without solving.
+  - The dG/dt gate is gone, and its replacement is not designed yet. It rejected
+    a run when dG/dt at t0 fell below a tolerance, which was unsound three ways
+    over: dG/dt at t0 describes a transient a steady solve never takes; even for a
+    time march it says nothing about G at t_final; and it compared against a fixed
+    number rather than against the incumbent, which is the question an optimisation
+    sweep actually asks.
 
-    So it survives as a heuristic filter rather than as a statement about the run.
-    python-physics/stellarator/desc_optimize_bfgs.py uses exactly that
-    combination -- ObjectiveDecreaseTolerance = 0.05 alongside
-    SteadyStateTolerance = 1e-4, reaching run_ss through
-    StellaratorTransport.run() -- so refusing it outright is not free, and whether
-    the heuristic earns its keep is a question for whoever runs that sweep rather
-    than one answerable here. Nothing is broken either way; this is about whether
-    the gate should decline a question it cannot really answer.
+    It was also broken end to end for its only user. On a rejection integrate() is
+    skipped, so computeAdjointGradients() never runs and G_p is never sized;
+    getAdjointGradients() then indexes a 0x0 matrix and *aborts the process* on an
+    Eigen bounds assertion (there is no -DNDEBUG in this build). The stellarator
+    sweep called exactly that sequence -- objective.py:34 does `st.run()` then
+    `st.getAdjointGradients()` -- and never called wasRejected(), so the first
+    point the gate rejected would have killed the run.
+
+    What is actually wanted is a bound on Delta-G *between steady states*. The
+    shape that looks right: evaluate G along the continuation path in
+    solveSteadyState -- G is a quadrature over nodes and touches no physics, and
+    there is already a per-step point that computes ||F|| -- and abandon only when
+    a *lower bound* on the converged G already exceeds an incumbent the caller
+    passes in. Near convergence |G - G_inf| <~ ||dG/dy|| ||J^-1 F||, and the
+    Jacobian is already factorised at that point in the continuation, so the bound
+    is nearly free. Conservative by construction: a loose bound just means it never
+    abandons.
+
+    Whatever is built, it must not repeat the failure above -- an abandoned run has
+    to leave getAdjointGradients() either meaningful or loudly broken, never
+    reading uninitialised state.
 
 Superconvergence follow-ons (see Tests/README.md for what is already verified):
 
