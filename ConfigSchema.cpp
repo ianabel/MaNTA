@@ -69,9 +69,29 @@ const std::vector<Entry> &table()
         {"PseudoTransientSERFloor", {}, Type::Double, Category::Solver, false, false, 2.0,
          "Least the pseudo-time step may grow on a step that reduced the residual. "
          "1 means no floor. Must not be below 1."},
+        {"NewtonMaxIterations", {}, Type::UInt, Category::Solver, false, false, 20u,
+         "Newton iterations one KINSol call may take before handing back to the continuation "
+         "loop. Applies to PseudoTransient and Newton alike. KINSOL's own default is 200; 20 "
+         "is deliberate, because an inner solve only has to make progress. Minimum 1."},
+        {"NewtonJacobianReuse", {}, Type::UInt, Category::Solver, false, false, 10u,
+         "Newton iterations that may share one Jacobian factorisation (KINSOL's msbset). "
+         "1 is full Newton. Trades assemblies for iterations; which side wins depends on how "
+         "expensive your case's Jacobian is against its residual. Minimum 1."},
+        {"NewtonStepTolerance", {}, Type::Double, Category::Solver, false, false, 0.0,
+         "KINSOL's scaled-step stopping test; a KINSol below it returns KIN_STEP_LT_STPTOL, "
+         "which the continuation loop answers by damping rather than treating as a failure. "
+         "Zero leaves KINSOL's machine-dependent default of uround^(2/3)."},
+        {"NewtonScaling", {}, Type::String, Category::Solver, false, false, std::string{"Unit"},
+         "KINSOL's scaling vectors: Unit (default, what this has always used) or ErrorWeights, "
+         "which fills them from the same 1/(rtol|y|+atol) weights IDA's WRMS norm uses. Unit "
+         "scaling makes the convergence test dimensional, so it favours the largest variable."},
         {"SteadyStateDiagnostics", {}, Type::Bool, Category::Solver, false, false, false,
          "Report the work a steady solve did: continuation steps, Newton iterations, "
          "residual evaluations, Jacobian builds and solves. Printed on failure too."},
+        {"SteadyStateStepDiagnostics", {}, Type::Bool, Category::Solver, false, false, false,
+         "Report each KINSol invocation as it returns -- one row per continuation step, "
+         "with its Newton iterations, residual evaluations, Jacobian builds and solves. "
+         "Independent of SteadyStateDiagnostics, which reports only the total."},
         {"SteadyStateSolve", {}, Type::Bool, Category::Solver, false, false, false,
          "Run to a steady state using the default tolerance. SteadyStateTolerance "
          "does the same and names the tolerance; either arms it, and giving both "

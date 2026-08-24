@@ -67,7 +67,12 @@ struct SolverConfig
     double                   PseudoTransientMaxStep;
     double                   PseudoTransientSERRate;
     double                   PseudoTransientSERFloor;
+    unsigned int             NewtonMaxIterations;
+    unsigned int             NewtonJacobianReuse;
+    double                   NewtonStepTolerance;
+    std::string              NewtonScaling;
     bool                     SteadyStateDiagnostics;
+    bool                     SteadyStateStepDiagnostics;
     bool                     SteadyStateSolve;
     bool                     DegreeAdaptation;
     double                   DegreeTolerance;

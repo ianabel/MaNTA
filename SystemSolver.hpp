@@ -16,6 +16,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include "gridStructures.hpp"
 #include "TransportSystem.hpp"
@@ -139,6 +140,111 @@ class SystemSolver
             ptcSERFloor = floorValue;
         };
 
+        // How KINSOL is driven inside a steady solve. These apply to the inner
+        // Newton solve in *both* SteadyStateSolver modes, not only to "Newton":
+        // PseudoTransient is Newton on a damped residual, so it runs the same
+        // KINSol with a 1/dt term added. The one mode they do not touch is
+        // TimeMarch, which never builds a KINSOL object at all.
+        //
+        // Everything here has a default that reproduces what the code did when
+        // these were hardcoded, so adding them changes no existing run.
+
+        // How many Newton iterations one KINSol call may take before it gives up
+        // and hands back to the continuation loop.
+        //
+        // The default is **20 against KINSOL's own 200**, and that gap is
+        // deliberate rather than an oversight: an inner solve here only has to
+        // make progress, because SER re-damps and tries again from a better dt.
+        // Letting it run to 200 spends iterations converging a heavily damped
+        // problem that is about to be replaced. Raise it for SteadyStateSolver =
+        // "Newton", where there is no outer loop to fall back on and giving up
+        // early is simply a failure.
+        void setNewtonMaxIterations(long iterations)
+        {
+            if (iterations < 1)
+                throw std::logic_error("NewtonMaxIterations must be at least 1: a KINSol call that may take no iterations cannot make progress.");
+            newtonMaxIters = iterations;
+        };
+
+        // How many Newton iterations may reuse one Jacobian factorisation
+        // (KINSOL's msbset). 1 is full Newton -- rebuild every iteration -- and
+        // larger values are modified Newton.
+        //
+        // This is the setting the per-step diagnostics above *measure*: the
+        // "jac" and "solves" columns are builds against reuses, and their ratio
+        // is what this controls. AdjointPoster at k = 3 pays 7 builds for 35
+        // solves at the default; that is this number, not a property of the
+        // problem.
+        //
+        // The three costs are not comparable, and that ordering is why this is a
+        // key rather than a constant. A Jacobian *solve* is always cheap -- a
+        // static condensation against a factorisation that already exists. A
+        // Jacobian *assembly* is at least as expensive as a residual evaluation,
+        // and how much more is a property of the physics case rather than of the
+        // solver: a differentiable flux (hand-written derivatives,
+        // AutodiffTransportSystem, JAX) pays value-and-gradient against value,
+        // which is more but not by much, while a Jacobian finite-differenced from
+        // expensive flux calls costs many evaluations per assembly and can
+        // dominate the run outright.
+        //
+        // So raising this trades assemblies away for extra Newton iterations, and
+        // each of those costs a residual evaluation plus a cheap solve. Which side
+        // wins depends on how the case is differentiated, which is exactly why
+        // there is no setting that is right for every case. docs/running.rst has a
+        // measurement at the cheap-Jacobian end and a warning against reading it
+        // as a recommendation.
+        //
+        // Note KINSOL may rebuild sooner than this on its own: residual
+        // monitoring and a large step both force a setup (kinsol.c:1890, 1897),
+        // so this is a ceiling on reuse rather than a schedule.
+        void setNewtonJacobianReuse(long iterations)
+        {
+            if (iterations < 1)
+                throw std::logic_error("NewtonJacobianReuse must be at least 1; 1 means rebuild the Jacobian every iteration.");
+            newtonJacReuse = iterations;
+        };
+
+        // KINSOL's scaled-step stopping test (scsteptol): a KINSol whose step
+        // falls below this returns KIN_STEP_LT_STPTOL.
+        //
+        // Worth knowing what that return *means here*, because it is not a
+        // failure: solveSteadyState treats it, like KIN_MAXITER_REACHED, as the
+        // ordinary way an attempt at too large a dt ends, and answers it by
+        // damping. So raising this makes inner solves give up sooner and the
+        // outer loop re-damp more eagerly; lowering it does the reverse. It is a
+        // continuation-schedule control wearing a tolerance's clothing.
+        //
+        // Zero means "leave KINSOL's default", which is uround^(2/3) ~ 3.7e-11 --
+        // machine-dependent, which is why the default is a sentinel rather than a
+        // number. KINSetScaledStepTol restores the default when handed zero, so
+        // it is passed through unconditionally.
+        void setNewtonStepTolerance(double tol)
+        {
+            if (tol < 0.0)
+                throw std::logic_error("NewtonStepTolerance cannot be negative; use zero for KINSOL's default.");
+            newtonStepTol = tol;
+        };
+
+        // What KINSOL's scaling vectors hold. Unit is what this has always used.
+        //
+        // KINSOL's convergence tests are on *scaled* quantities, so with unit
+        // scaling they are dimensional: on a case carrying densities near 1e19
+        // beside temperatures near 1e3, one SteadyStateTolerance means something
+        // different for each variable, and the largest simply dominates.
+        // ErrorWeights fills the vectors from getErrorWeights -- the same
+        // 1/(rtol|y| + atol) weights IDA's WRMS norm uses -- which makes the test
+        // relative and puts the variables on comparable footing.
+        //
+        // Off by default because it changes what convergence *means* for every
+        // existing steady run, not because it is worse. Note one honest
+        // limitation: KINSOL takes separate u_scale and f_scale, and both get the
+        // same vector here, as they already did when both were ones. The residual
+        // does not carry the solution's units, so a properly derived f_scale
+        // would be a different vector; this is an improvement on unit scaling
+        // rather than the last word on it.
+        enum class NewtonScaling { Unit, ErrorWeights };
+        void setNewtonScaling(NewtonScaling scaling) { newtonScaling = scaling; };
+
         // Report the work a steady solve did: continuation steps, KINSOL Newton
         // iterations, residual evaluations, Jacobian builds and Jacobian solves.
         // Off by default, unlike the time loop's equivalent summary, which is
@@ -146,6 +252,42 @@ class SystemSolver
         // optimisation driver, where one block per solve is noise rather than
         // information.
         void setSteadyStateDiagnostics(bool on) { steadyDiagnostics = on; };
+
+        // Report each KINSol invocation as it returns, one line per continuation
+        // step, rather than only the total. Independent of the summary above --
+        // they compose, and either can be had on its own -- because they answer
+        // different questions. A total says what the solve cost; the per-step
+        // trace says *where*, which is the only way to tell a run that took
+        // twenty cheap steps from one that took three expensive ones. The two
+        // have the same cost when nothing is wrong and diverge sharply when
+        // something is: a solve whose dt has outrun the problem spends its
+        // iterations in steps that are then rejected, and the total cannot show
+        // that.
+        void setSteadyStateStepDiagnostics(bool on) { steadyStepDiagnostics = on; };
+
+        // What one KINSol invocation cost -- one continuation step. KINSOL's own
+        // counters are *already* per-call, since it zeroes them in KINSolInit,
+        // so these are read straight out rather than differenced; MaNTA's
+        // monotonic counters are differenced across the step. The two do not
+        // measure the same span deliberately: `kinFuncEvals` is what KINSOL
+        // asked for, `residualEvals` is what the step actually paid, and the
+        // difference is the merit function -- one steady-residual evaluation per
+        // step, which KINSOL never sees because it is evaluated at dt = infinity
+        // rather than at the damped dt KINSol is solving.
+        struct SteadyStepStats
+        {
+            int  step = 0;          // continuation step index, from zero
+            int  kinRetval = 0;     // what KINSol returned; see kinsol.h
+            bool accepted = false;  // did the step reduce ||F||, or was it rolled back
+            double dt = 0.0;        // the pseudo-time step this call was damped with
+            double residualNorm = 0.0; // steady ||F|| after the call; NaN if it failed
+            long newtonIters = 0;   // KINSOL Newton iterations, this call
+            long kinFuncEvals = 0;  // residual evaluations KINSOL made, this call
+            long kinJacEvals = 0;   // Jacobian setups KINSOL asked for, this call
+            long residualEvals = 0; // every residual call the step made, merit included
+            long jacBuilds = 0;     // updateMatricesForJacSolve calls, this step
+            long jacSolves = 0;     // solveJacEq calls, this step
+        };
 
         // What one steady solve cost. The two halves are gathered differently
         // and it matters which is which:
@@ -157,7 +299,8 @@ class SystemSolver
         //    call**, so they are per-call, not per-solver. Differencing them
         //    across the continuation loop reports the last inner solve alone --
         //    which on a converged run is a plausible-looking 1 Newton iteration
-        //    for 35 Jacobian solves. They are summed after each call instead.
+        //    for 35 Jacobian solves. They are summed from the per-step records
+        //    instead, which is now the only place they are read at all.
         struct SteadyStats
         {
             int  steps = 0;         // continuation steps taken
@@ -168,8 +311,21 @@ class SystemSolver
             long residualEvals = 0; // every residual call, KINSOL's and the merit function's
             long jacBuilds = 0;     // updateMatricesForJacSolve calls
             long jacSolves = 0;     // solveJacEq calls
+
+            // Fold one finished continuation step into the totals. The KINSOL
+            // fields are the only ones that must come through here: the three
+            // MaNTA counters are differenced over the whole solve as well, so
+            // they have an independent value to check these against, and
+            // `steady_step_stats_sum_to_the_totals` does exactly that.
+            void add(SteadyStepStats const &s)
+            {
+                newtonIters += s.newtonIters;
+                kinFuncEvals += s.kinFuncEvals;
+                kinJacEvals += s.kinJacEvals;
+            }
         };
-        void accumulateKinStats(SteadyStats &s) const;
+        void readKinStats(SteadyStepStats &s) const;
+        void reportSteadyStep(SteadyStepStats const &s) const;
         void reportSteadyStats(std::string_view outcome, SteadyStats const &s) const;
 
         // What the last steady solve cost, whether or not it was printed and
@@ -177,6 +333,14 @@ class SystemSolver
         // throwing. Zeroed only by construction, so it survives the throw for a
         // caller that wants the numbers rather than the log line.
         SteadyStats lastSteadyStats() const { return steadyStats; };
+
+        // The same, one entry per KINSol invocation, in the order they ran.
+        // Filled whether or not the per-step lines were printed, so a driver can
+        // have the trace without the output -- and, like the totals, it survives
+        // a failed solve, whose last entry is the call that failed. Cleared at
+        // the top of every solveSteadyState, so it describes one solve rather
+        // than the solver's history.
+        std::vector<SteadyStepStats> const &lastSteadyStepStats() const { return steadyStepStats; };
 
         // Drive the state to a steady one without integrating to it. Assumes
         // initialize() has run, so Y/dYdt/LS/sunMat exist and Y holds a
@@ -498,6 +662,13 @@ class SystemSolver
         double ptcSERRate = 1.0;     // exponent on the residual ratio
         double ptcSERFloor = 2.0;    // least growth on an accepted step
 
+        // KINSOL's own settings. Every default here is what the code hardcoded
+        // before they were configurable, so an unconfigured run is unchanged.
+        long newtonMaxIters = 20;    // KINSOL's default is 200; see the setter
+        long newtonJacReuse = 10;    // KINSOL's msbset default
+        double newtonStepTol = 0.0;  // 0 = leave KINSOL's uround^(2/3)
+        NewtonScaling newtonScaling = NewtonScaling::Unit;
+
         // Work counters, monotonic over the solver's lifetime. solveSteadyState
         // snapshots them on entry and reports the difference, which is what
         // makes them meaningful when one solver is run more than once -- the
@@ -511,7 +682,9 @@ class SystemSolver
         long nJacBuilds = 0;
         long nJacSolves = 0;
         bool steadyDiagnostics = false;
+        bool steadyStepDiagnostics = false;
         SteadyStats steadyStats;
+        std::vector<SteadyStepStats> steadyStepStats;
         N_Vector Y = nullptr;         // solution
         N_Vector dYdt = nullptr;      // time derivative of the solution
         N_Vector constraints = nullptr;

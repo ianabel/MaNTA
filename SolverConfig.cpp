@@ -259,7 +259,12 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(PseudoTransientMaxStep, double);
     READ(PseudoTransientSERRate, double);
     READ(PseudoTransientSERFloor, double);
+    READ(NewtonMaxIterations, unsigned);
+    READ(NewtonJacobianReuse, unsigned);
+    READ(NewtonStepTolerance, double);
+    READ(NewtonScaling, std::string);
     READ(SteadyStateDiagnostics, bool);
+    READ(SteadyStateStepDiagnostics, bool);
     READ(SteadyStateSolve, bool);
     READ(DegreeAdaptation, bool);
     READ(DegreeTolerance, double);
@@ -476,6 +481,15 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
 
     // Rejected here rather than defaulted, because a typo in this key would
     // otherwise silently pick a different algorithm.
+    if (config.NewtonScaling == "Unit")
+        system.setNewtonScaling(SystemSolver::NewtonScaling::Unit);
+    else if (config.NewtonScaling == "ErrorWeights")
+        system.setNewtonScaling(SystemSolver::NewtonScaling::ErrorWeights);
+    else
+        throw std::invalid_argument(
+            "NewtonScaling must be \"Unit\" or \"ErrorWeights\"; got \"" +
+            config.NewtonScaling + "\".");
+
     if (config.SteadyStateSolver == "PseudoTransient")
         system.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     else if (config.SteadyStateSolver == "TimeMarch")
@@ -502,7 +516,11 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     {
         system.setPseudoTransientSERRate(config.PseudoTransientSERRate);
         system.setPseudoTransientSERFloor(config.PseudoTransientSERFloor);
+        system.setNewtonMaxIterations(config.NewtonMaxIterations);
+        system.setNewtonJacobianReuse(config.NewtonJacobianReuse);
+        system.setNewtonStepTolerance(config.NewtonStepTolerance);
         system.setSteadyStateDiagnostics(config.SteadyStateDiagnostics);
+        system.setSteadyStateStepDiagnostics(config.SteadyStateStepDiagnostics);
     }
     catch (std::logic_error const &e)
     {
