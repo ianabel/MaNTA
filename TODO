@@ -1,3 +1,75 @@
+g++-14 miscompiles this tree at -O3 -flto -march=native. Root cause not found.
+Found 2026-08-23. CLAUDE.md has the summary; this is the reproduction.
+
+  To reproduce, on g++-14 (14.2.0 here) on an AVX2 host:
+
+    1. Check out main. Add one inert member to SystemSolver, in the private
+       block next to `steadyDiagnostics`:
+
+           bool reproPaddingFlag = false;
+           std::vector<double> reproPadding;
+
+       Nothing reads either. Add `#include <vector>` with the other includes.
+    2. `make clean && make test`
+    3. Run the one test in a loop:
+
+           for i in $(seq 1 12); do
+             Tests/UnitTests/UnitTests --run_test=algebraic_derivative_tests/\
+               the_assembled_jacobian_matches_a_finite_difference_of_the_residual
+           done
+
+    Without the member: 12/12 pass. With it: 8/12 fail, always the same way --
+    the AuxDiffusion cases, plain and superconvergent, at k = 1, 2 and 3, drift
+    ~1.24.
+
+  The signature, which is how to recognise it if it turns up elsewhere: the
+  differenced Jacobian loses the column of the first interior trace DOF
+  (index 33 / 49 / 65 at k = 1 / 2 / 3, always lambda[1]), giving 0 against a
+  stable assembled -1.5, so the drift is 1.5 / 1.2071067811865475 =
+  1.2426406871192851. Passing runs are bit-identical to each other; failing runs
+  all differ from each other.
+
+  Established:
+
+  * Needs all three of g++-14, `-flto` and `-march=native` (AVX2, znver2 here).
+    Drop any one -> 10/10 clean. `-O0` clean. g++-15 clean. clang++-19 clean.
+    (g++-13 does not build this tree, so it was not tested.)
+  * Not build staleness, not leftover output files, not ASLR (`setarch -R` with a
+    fixed environment still flakes), not BLAS threading, not uninitialised
+    trivial automatics (`-ftrivial-auto-var-init=zero` and `=pattern` both still
+    flake). AddressSanitizer: 12/12 clean, no invalid access.
+  * The solver binary is *not* observably affected: `MaNTA` on
+    Tests/RegressionTests/AuxVarTest.conf gave bit-identical netCDF over 8 runs
+    with the member in place. `MaNTA` is built without -DTEST from a different
+    object set, which points at the header-only `fdjac::jacobian` inlined into
+    the test TU rather than at the solver.
+
+  The obstacle, and the thing to know before spending an afternoon on it: **every
+  codegen perturbation hides it.** Adding a read of Y, extending an existing
+  BOOST_TEST_MESSAGE, storing into a file-scope array, `-fno-strict-aliasing`,
+  `-fno-tree-vectorize` -- all take it to 10/10 clean. So a flag that "fixes" it
+  is not evidence about the mechanism; `-fno-strict-aliasing` in particular looks
+  like a smoking gun and is not one. The only asymmetric signal is that adding a
+  member to SystemSolver reliably *creates* it.
+
+  Next steps, roughly in order of expected value:
+
+  * Diff the g++-14 assembly for the test TU with and without the inert member,
+    around the inlined `fdjac::jacobian` loop. This is the only route left that
+    does not perturb the thing being measured.
+  * If that shows a genuine miscompile, reduce it and report it upstream; g++-14
+    is still a supported distro compiler and CI has two required legs on it.
+  * If it shows the compiler exploiting UB, the UB is ours and needs fixing
+    regardless of compiler. The placement-new over `mu_` in `DGSolnImpl::Map`
+    (`new (&mu_) VectorWrapper(...)`, then continued use of the name `mu_`) is
+    the one piece of the mapping code that is not obviously well-defined, and is
+    worth reading first even though the failing DOF is a trace rather than a
+    scalar.
+
+  Until then the build warns when it sees g++-14 (Makefile.config), and CI's two
+  g++-14 legs should be treated as capable of failing for reasons unrelated to
+  the change under review.
+
 Investigate occasional wiggles in outputs.
 
 Left over from the TransportSystem interface work. Everything else in that plan
