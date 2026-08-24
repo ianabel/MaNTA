@@ -240,6 +240,17 @@ Two return codes worth being able to read without looking them up:
 * **`IDA_CONV_FAIL` (-4) from `IDACalcIC`** is the same problem one stage earlier:
   the Newton/linesearch could not reach a consistent state from the guess
   `setInitialConditions` built. The guess is worth suspecting before the solver is.
+* **`IDA_ILL_INPUT` (-22) with "tout1 too close to t0" is not about the state at
+  all** — it is `initialize` handing `IDACalcIC` the wrong `tout1`. That argument
+  is an absolute *time*, "the first value of t at which a solution will be
+  requested", and it used to be passed the *interval* `dt0 > 0 ? dt0 : dt`. The
+  two agree only at `t0 = 0`, which is where every fixture in the tree starts, so
+  it went unseen for years; `t_initial = delta_t` makes `tout1` land exactly on
+  `t0` and kills the run. Fixed to `t0 + (dt0 > 0 ? dt0 : dt)` —
+  `initialize_starts_at_a_nonzero_time` pins it. Worth knowing because it *looks*
+  like a hard initial condition and is not: a `TestDiffusion` warm start blamed on
+  tolerance for a while turned out to be exactly this, and converges in 3 residual
+  evaluations once `tout1` is right.
 * **`IDA_LINESEARCH_FAIL` (-13) from `IDACalcIC` means some residual row cannot be
   reduced *at all*, which is usually a declaration error rather than a bad guess.**
   `IDA_YA_YDP_INIT` solves for algebraic *values* and differential *derivatives*,
