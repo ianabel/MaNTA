@@ -159,15 +159,39 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
         ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
 
-        GlobalState initialState = y.evalOnNodes(); // only need u and q so this is ok
-        const auto points = y.getPoints();
-        auto physics_vals = problem->ComputePhysics(initialState, points, t);
-        for (Index var = 0; var < nVars; var++)
+        // sigma is *loaded* on the copy path, not recomputed.
+        //
+        // y.copy() above already brought it across -- DGSoln::copy transfers sigma
+        // along with u, q, lambda, the scalars and aux -- and nothing between here
+        // and there disturbs the inputs it was built from: ApplyDirichletBCs
+        // touches lambda only, and u and q are bit for bit the file's. So
+        // AssignSigma would rebuild sigma from exactly the state the file's sigma
+        // was already built from, at the price of a full ComputePhysics over every
+        // node.
+        //
+        // That price is the point. ComputePhysics evaluates SigmaFn *and* Sources
+        // for every variable and AuxG for every auxiliary one, at every node, and
+        // this block uses only the first of the three -- the sources and the aux
+        // values are computed and dropped. On a case whose flux is expensive that
+        // is a whole physics sweep bought for nothing, on the very path that
+        // exists because the state is already right.
+        //
+        // The projection path still needs it: there sigma was never transferred,
+        // since a degree change leaves the stored coefficients in the wrong space,
+        // and rebuilding it from the projected u and q is what makes the sigma row
+        // exact.
+        if (!sameDiscretisation)
         {
-            // set flux for each variable, casting to a row vector and making sure to remember minus sign
-            initialState.Flux().row(var) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(physics_vals[0][var]);
+            GlobalState initialState = y.evalOnNodes(); // only need u and q so this is ok
+            const auto points = y.getPoints();
+            auto physics_vals = problem->ComputePhysics(initialState, points, t);
+            for (Index var = 0; var < nVars; var++)
+            {
+                // set flux for each variable, casting to a row vector and making sure to remember minus sign
+                initialState.Flux().row(var) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(physics_vals[0][var]);
+            }
+            y.AssignSigma(initialState);
         }
-        y.AssignSigma(initialState);
 
         // Keep the trace the file carries, on the path where it is meaningful.
         //
