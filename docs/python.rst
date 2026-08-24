@@ -34,6 +34,11 @@ Module contents
      - Base class for an objective and its parameter derivatives.
    * - ``manta.registerPhysicsCase(name, factory)``
      - Register a Python case under a name the TOML interface can use.
+   * - ``manta.physics_cases()``
+     - Every case name ``manta.Runner(name)`` will accept, ascending.
+   * - ``manta.load_physics_plugin(path)``
+     - Load a C++ case built outside this tree, so that ``Runner(name)`` can
+       reach it. The dict equivalent of the ``PhysicsPlugins`` config key.
    * - ``manta.getNodes(...)``
      - The positions at which fluxes and sources are evaluated, for a given grid
        and polynomial degree.
@@ -43,11 +48,11 @@ Module contents
 
 .. code-block:: python
 
-   import MaNTA
+   import manta
 
-   problem = MyTransportSystem()           # subclass of MaNTA.TransportSystem
-   runner = MaNTA.Runner()
-   runner.configure(problem, {
+   problem = MyTransportSystem()           # subclass of manta.TransportSystem
+   runner = manta.Runner(problem)
+   runner.configure({
        "Polynomial_degree": 3,
        "Grid_size": 30,
        "Lower_boundary": 0.0,
@@ -64,7 +69,7 @@ Module contents
 
    * - Method
      - Does
-   * - ``configure(problem, dict)``
+   * - ``configure(dict)``
      - Builds a **fresh** solver and applies the settings. The keys are the ones
        a config file uses — both read one schema; see :ref:`config-divergences`
        for the two deliberate exceptions.
@@ -89,6 +94,9 @@ Module contents
    * - ``lastDGdt()``
      - The :math:`\mathrm{d}G/\mathrm{d}t` values behind that decision, one per
        objective.
+   * - ``physics_case``
+     - The registered C++ case name this ``Runner`` was built from, or ``""``
+       when it was handed a transport system object.
 
 ``configure`` building a fresh solver each time is load-bearing rather than
 incidental: it is what makes ``Runner`` the only route that supports repeated
@@ -104,6 +112,97 @@ failure described in :doc:`running`. An optimisation driver that loops over
    reads them back. To actually skip the adjoint solve, configure with
    ``solveAdjoint = False``; ``G`` then builds an adjoint problem on demand purely
    to evaluate the objective.
+
+.. _running-cpp-cases:
+
+Running a C++ case from Python
+------------------------------
+
+A physics case written in C++ is driven the same way, **named** rather than
+constructed:
+
+.. code-block:: python
+
+   import manta
+
+   runner = manta.Runner("LinearDiffusion")     # as TransportSystem = "..." would
+   runner.configure({
+       "Polynomial_degree": 3,
+       "Grid_size": 30,
+       "Lower_boundary": -1.0,
+       "Upper_boundary": 1.0,
+       "delta_t": 0.1,
+       "OutputFilename": "run1",
+
+       "DiffusionProblem": {                    # the case's own table
+           "Kappa": 1.0,
+           "Centre": 0.0,
+           "SourceStrength": 3.5,
+           "InitialWidth": 0.1,
+       },
+   })
+   runner.run(1.0)
+
+``manta.physics_cases()`` lists the names this build accepts. An unknown one is
+refused by the constructor, with that list in the message, rather than at the
+first ``configure``.
+
+The name goes to the ``Runner`` rather than into the dict because
+``TransportSystem`` is still an error there, as it always has been: the physics
+case is chosen when the ``Runner`` is built, and a key that looked like it chose
+one and did not is exactly what the configuration schema exists to prevent.
+
+**Why the case is not handed in as an object.** A C++ case's constructor takes
+the ``Grid``, and building the grid is one of the things ``configure`` does — so
+there is no point at which a caller could construct the case *and* be sure it
+had the mesh the run will use. Keeping the name and instantiating inside
+``configure`` also means a **fresh case per** ``configure``, which is what makes
+a parameter sweep work: a C++ case reads its table in its constructor, so
+
+.. code-block:: python
+
+   runner = manta.Runner("LinearDiffusion")
+   for kappa in (0.5, 1.0, 2.0, 4.0):
+       runner.configure({..., "DiffusionProblem": {"Kappa": kappa}})
+       runner.run(1.0)
+
+really does run four different problems. Instantiating once would have pinned
+the first ``Kappa`` and repeated it silently.
+
+The case's own table
+~~~~~~~~~~~~~~~~~~~~
+
+A ``.conf`` file puts the solver's keys in ``[configuration]`` and the case's own
+keys in a sibling table, and the case is handed the *whole* parsed file — which
+is why it says ``config.at("DiffusionProblem")``. The dict is turned back into
+that shape: **any entry whose value is a dict, under a name the configuration
+schema does not know, is a physics table**; everything else becomes
+``[configuration]``. So a case reads the same table whichever surface drove it,
+and one that reaches into ``[configuration]`` still finds it there.
+
+That is the one place this surface is looser than the schema otherwise is, and
+it is the same latitude the TOML surface already has — the unknown-key sweep
+there sees ``[configuration]`` and nothing else, so a case's table is read by the
+case and validated against nothing. The narrowing keeps the rest strict:
+
+* a misspelled *solver* key is still an unknown key, with a suggestion, because
+  it is not a dict;
+* a schema key given a dict — ``{"Grid_size": {...}}`` — is still that key with
+  the wrong type, because the name is known.
+
+A case that dislikes its table raises from its own constructor, which reaches
+Python as the ``RuntimeError`` any other configuration failure does.
+
+Cases built out of tree
+~~~~~~~~~~~~~~~~~~~~~~~
+
+``manta.load_physics_plugin(path)`` loads a case compiled as a shared object,
+which then registers itself and becomes available to ``Runner(name)``. It is the
+dict equivalent of the ``PhysicsPlugins`` config key and uses the same
+``RTLD_NOW | RTLD_GLOBAL``, deliberately: a plugin must behave the same however
+it was loaded. Both traps in :doc:`out_of_tree` apply unchanged — compile with
+the flags ``pkg-config --cflags manta`` reports, and do **not** link the plugin
+against ``-lmanta``.
 
 Writing physics in Python
 -------------------------

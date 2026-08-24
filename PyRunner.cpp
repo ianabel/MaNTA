@@ -2,6 +2,8 @@
 #include "Logging.hpp"
 #include "DegreeAdaptation.hpp"
 #include "PyConfigSource.hpp"
+#include "PyToml.hpp"
+#include <algorithm>
 #include <pybind11/eigen.h>
 #include <string>
 #include <print>
@@ -9,8 +11,61 @@
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y,
                  std::vector<double> &dYdt);
 
+PyRunner::PyRunner(std::string physicsCase) : caseName(std::move(physicsCase)) {
+  // Rejected here, at the point the name was written, rather than at the first
+  // configure(): the registry is populated by static initialisation, so
+  // whether a name is available is already settled by the time any Python runs
+  // -- barring a later registerPhysicsCase or plugin load, which a caller does
+  // before building a Runner because there is no other useful order.
+  auto const names = PhysicsCases::RegisteredNames();
+  if (std::find(names.begin(), names.end(), caseName) == names.end()) {
+    std::string available;
+    for (auto const &n : names)
+      available += (available.empty() ? "" : ", ") + n;
+    throw std::invalid_argument(
+        "There is no physics case named '" + caseName +
+        "'. Available cases: " +
+        (available.empty() ? "(none -- no physics case object files are linked "
+                             "in)"
+                           : available) +
+        ". manta.physics_cases() lists them, manta.load_physics_plugin() adds "
+        "a case built out of tree, and manta.Runner(system) takes a Python "
+        "case as an object instead.");
+  }
+}
+
+// Build the C++ case named at construction, from the same dict the solver's
+// configuration came out of. Called by configure() once the grid exists.
+//
+// Rebuilt on every configure() rather than once, and that is the point of doing
+// it here at all: a C++ case reads its table in its constructor, so a driver
+// sweeping a physics parameter -- which is the reason to want a C++ case under
+// a Python optimiser -- changes the dict and reconfigures. Instantiating once
+// would silently pin the first call's parameters.
+//
+// Everything derived from the old case goes first. The AdjointProblem an
+// autodiff case hands out holds a raw pointer back to it
+// (AutodiffAdjointProblem::PhysicsProblem), so an adjoint outliving its problem
+// dangles; `system` was already nulled by configure() before this runs.
+void PyRunner::instantiatePhysicsCase(const py::dict &config) {
+  adjoint = nullptr;
+  objectiveOnlyAdjoint = nullptr;
+  pProblem = nullptr;
+
+  try {
+    pProblem = PhysicsCases::InstantiateProblem(
+        caseName, physicsConfigFromDict(config), *grid);
+  } catch (std::invalid_argument const &e) {
+    // configure() has raised RuntimeError for a bad configuration since it
+    // existed, and a case rejecting its own table -- "there should be a
+    // [DiffusionProblem] section" -- is exactly that. Translated for the same
+    // reason the loadSolverConfig call below it is.
+    throw std::runtime_error(e.what());
+  }
+}
+
 void PyRunner::configure(const py::dict &config) {
-  if (!pProblem)
+  if (!pProblem && caseName.empty())
     throw std::runtime_error("Transport system not set. Please set transport "
                              "system before configuring solver.");
   // Set stored problem to null to allow reconfiguration after object creation
@@ -21,7 +76,11 @@ void PyRunner::configure(const py::dict &config) {
   // sticky, so a configuration that does not ask for a restart has to say so
   // rather than inherit the last one. Cleared here, before the config is even
   // parsed, so it holds on the throwing paths too.
-  pProblem->clearRestart();
+  //
+  // A C++ case is rebuilt below rather than cleared, so there may be nothing
+  // here to clear on the first call.
+  if (pProblem)
+    pProblem->clearRestart();
 
   // Every key this accepts is declared in ConfigSchema.cpp, the same table
   // runManta reads. This function used to carry its own `params` list and its
@@ -61,6 +120,9 @@ void PyRunner::configure(const py::dict &config) {
 
   k = 1;
   grid = makeGrid(cfg, cfg.restart ? &restart_file : nullptr, k);
+
+  if (!caseName.empty())
+    instantiatePhysicsCase(config);
 
   if (cfg.solveAdjoint)
     adjoint = pProblem->createAdjointProblem();

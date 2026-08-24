@@ -1,3 +1,4 @@
+#include <dlfcn.h> // physics plugins loaded by load_physics_plugin
 #include <pybind11/functional.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
@@ -12,6 +13,9 @@
 #include "PyIntegrator.hpp"
 #include "PyRunner.hpp"
 #include "PyState.hpp"
+// cast_toml lives here now, alongside the Python -> toml direction PyRunner
+// needs. TODO: check whether pytoml could replace both.
+#include "PyToml.hpp"
 #include "PyTransportSystem.hpp"
 #include "State.hpp"
 #include "TransportSystem.hpp"
@@ -79,34 +83,6 @@ public:
 };
 } // namespace detail
 }; // namespace pybind11
-
-// TODO: Check if we can just use pytoml instead and
-// remove this extra cast
-py::object cast_toml(toml::value v) {
-  if (v.is_boolean())
-    return py::bool_(v.as_boolean());
-  else if (v.is_integer())
-    return py::int_(v.as_integer());
-  else if (v.is_floating())
-    return py::float_(v.as_floating());
-  else if (v.is_string())
-    return py::str(v.as_string());
-  else if (v.is_array()) {
-    py::list lst;
-    for (const auto &elem : v.as_array()) {
-      lst.append(cast_toml(elem));
-    }
-    return lst;
-  } else if (v.is_table()) {
-    py::dict d;
-    for (const auto &[key, val] : v.as_table()) {
-      d[py::str(key)] = cast_toml(val);
-    }
-    return d;
-  } else {
-    return py::none();
-  }
-}
 
 // Defines the MaNTA module and what can be called
 // The extension is private to the `manta` package: python/manta/__init__.py
@@ -412,8 +388,48 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
         py::arg("name"), py::arg("factory"), py::return_value_policy::reference,
         "Register a physics case under the name a config file can ask for.");
 
+  m.def("physics_cases", &PhysicsCases::RegisteredNames,
+        "Every physics case name manta.Runner(name) will accept, ascending. "
+        "Includes the C++ cases compiled into this extension, anything a "
+        "loaded plugin registered, and anything registerPhysicsCase was "
+        "called with.");
+
+  m.def(
+      "load_physics_plugin",
+      [](std::string const &path) {
+        // RTLD_GLOBAL so a plugin can be linked against another plugin's
+        // symbols; RTLD_NOW so an unresolved symbol is reported here rather
+        // than at the first call into the case. Both match what runManta does
+        // for the PhysicsPlugins key, deliberately -- a plugin must behave the
+        // same however it was loaded.
+        //
+        // The registration is a side effect of loading: the case's
+        // PhysicsCaseRegister runs during the shared object's static
+        // initialisation and inserts into the same process-global map the
+        // built-in cases use. So there is nothing to return, and nothing to
+        // keep -- the handle is deliberately not closed, because the map would
+        // then hold a factory pointing into unmapped code.
+        if (dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL) == nullptr)
+          throw std::runtime_error("Could not load physics plugin " + path +
+                                   ": " + dlerror());
+      },
+      py::arg("path"),
+      "Load a physics case built outside the MaNTA tree, so that "
+      "manta.Runner(name) can reach it. The dict equivalent of a config "
+      "file's PhysicsPlugins key. Compile the plugin with the flags "
+      "`pkg-config --cflags manta` reports, and do not link it against "
+      "-lmanta; see the out-of-tree section of the docs.");
+
   py::class_<PyRunner, py::smart_holder>(m, "Runner")
       .def(py::init<std::shared_ptr<TransportSystem>>())
+      // A C++ case by the name a config file's TransportSystem key would give.
+      // Registered second, so a TransportSystem object still binds to the
+      // overload above rather than being str()'d into this one.
+      .def(py::init<std::string>(), py::arg("physics_case"))
+      .def_property_readonly("physics_case", &PyRunner::physicsCase,
+                             "The registered C++ case name this Runner was "
+                             "built from, or \"\" when it was handed a "
+                             "transport system object.")
       .def("configure", &PyRunner::configure)
       // Two overloads: run(tFinal) is the usual way in, run() uses the
       // configuration's t_final -- the same key a config file must carry.

@@ -134,6 +134,12 @@ The solver ``dlopen``\ s each entry before instantiating the problem. The
 plugin's static initialiser runs on load and registers the case into the same
 process-global map the built-in cases use.
 
+From Python, ``manta.load_physics_plugin("./libmycase.so")`` does the same thing,
+and then ``manta.Runner("MyCase")`` reaches the case — see
+:ref:`running-cpp-cases`. ``PhysicsPlugins`` itself is not accepted in a
+``configure`` dict, for the same reason ``TransportSystem`` is not: choosing the
+physics is not a solver setting.
+
 .. warning::
 
    **Compile the plugin with the flags pkg-config reports, and do not link
