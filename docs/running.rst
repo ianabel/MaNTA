@@ -565,15 +565,117 @@ the residual to 1e-10:
      - 56
 
 Full Newton is 1.8× faster *there*, and the gap widens with the mesh — at 200
-cells it is 0.18 s against 0.21 s. **Do not read that as a recommendation.**
-``AdjointPoster`` differentiates cheaply, so it sits at the end of the range where
-assemblies are nearly free and buying them back with iterations is a bad deal. A
-case with a finite-differenced flux sits at the other end, where the default is
-too *low* rather than too high.
+cells it is 0.18 s against 0.21 s. ``AdjointPoster`` differentiates cheaply, so it
+sits at the end of the range where assemblies are nearly free.
 
-The way to find out is the per-step table, not this one: run the case at two or
-three settings and compare wall-clock against the ``jac`` and ``res`` columns.
-The default is left at 10 so that no existing run changes silently.
+Measured on the three benchmarks under ``python-examples/``, in the units
+``PERFORMANCE.md`` uses — calls into the ``TransportSystem``, split into flux
+evaluations (residual cost) and derivative evaluations (assembly cost):
+
+.. list-table::
+   :header-rows: 1
+
+   * - case
+     - mode
+     - reuse
+     - flux calls
+     - derivative calls
+   * - Park
+     - ``TimeMarch``
+     - —
+     - 1504
+     - 400
+   * - Park
+     - ``PseudoTransient``
+     - 10 / 1
+     - 176
+     - 64
+   * - Park
+     - ``Newton``
+     - 10 / 1
+     - **128**
+     - **48**
+   * - Jardin
+     - ``TimeMarch``
+     - —
+     - 4256
+     - 1088
+   * - Jardin
+     - ``PseudoTransient``
+     - 10
+     - 2560
+     - 384
+   * - Jardin
+     - ``PseudoTransient``
+     - 1
+     - 544
+     - 320
+   * - Jardin
+     - ``Newton``
+     - 10
+     - 3264
+     - 480
+   * - Jardin
+     - ``Newton``
+     - 1
+     - **416**
+     - **256**
+   * - Shestakov
+     - ``TimeMarch``
+     - —
+     - 7808
+     - 1216
+   * - Shestakov
+     - ``PseudoTransient``
+     - 10
+     - *fails*
+     - *fails*
+   * - Shestakov
+     - ``PseudoTransient``
+     - 1
+     - 1920
+     - 704
+   * - Shestakov
+     - ``Newton``
+     - 10
+     - *fails*
+     - *fails*
+   * - Shestakov
+     - ``Newton``
+     - 1
+     - **1792**
+     - **640**
+
+Three things to take from it.
+
+**Park does not care, and that is the control.** Its ``chi`` is constant, so the
+flux is linear in the unknowns, every inner solve converges in one Newton
+iteration, and there is never a second iteration to reuse a Jacobian across. A
+setting that changed Park's numbers would be evidence of a bug, not of tuning.
+
+**On the two nonlinear cases, reuse is not a trade — it loses on both axes.**
+Jardin under ``Newton`` costs 416 flux and 256 derivative calls at reuse 1
+against 3264 and 480 at reuse 10. Fewer assemblies *per iteration* bought so many
+extra iterations that the total assembly count went up as well. The trade
+described above is real only while the Jacobian is stable enough that a stale one
+still points somewhere useful; on a strongly nonlinear problem it is not, and the
+extra iterations are pure loss.
+
+**At the default, Shestakov does not converge at all**, in either steady mode,
+returning ``KIN_MXNEWT_5X_EXCEEDED``. A Jacobian ten iterations old gives a bad
+enough direction that the step clamp fires five times running. At reuse 1 both
+modes converge, and ``PseudoTransient`` beats ``TimeMarch`` four to one — which
+reverses the note in ``../shestakov-nonlinear/`` that continuation costs 2.5× what
+time marching does. That measurement was taken at the default and is a statement
+about ``msbset``, not about pseudo-transient continuation.
+
+So the honest summary is that KINSOL's default of 10 suits neither of MaNTA's
+nonlinear benchmarks, and on one of them it is the difference between converging
+and not. It is left in place only because the cost model above says the opposite
+case exists: a physics case whose Jacobian is finite-differenced from expensive
+flux calls pays far more per assembly than these do, and would rather have the
+iterations. **If a steady solve is slow or will not converge,**
+``NewtonJacobianReuse = 1`` **is the first thing to try.**
 
 .. _degree-adaptation:
 
