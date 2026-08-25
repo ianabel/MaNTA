@@ -516,6 +516,95 @@ is reading the initial condition's rate of change; and **nothing in the file
 distinguishes a failed last slice from a converged one** — the exception, the
 logged error and the exit status do.
 
+The step budget, and resuming
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``MaxContinuationSteps`` (default 200) is how many ``KINSol`` calls one steady
+solve may make. Each is a full Newton solve, so a healthy run uses ten or so and
+the default is a runaway backstop rather than a budget.
+
+Lowering it deliberately is how a solve is stopped early enough to be looked at.
+Running out is not a failure of the method — the state reached and the
+pseudo-time step SER has climbed to are both still good — so
+``continueSteadyState()`` picks up both and carries on, where a second
+``solveSteadyState()`` re-enters at ``PseudoTransientInitialStep`` and re-climbs
+the ramp from the bottom.
+
+The difference is the whole solve, not a margin on it. A nonlinear diffusion that
+converges in 15 continuation steps uninterrupted takes **the same 15** in slices
+of three when each slice resumes, and does not converge at all in 40 slices when
+each one starts over.
+
+Resuming drives the phases directly rather than going through ``runSolver()``,
+which frees the state on its way out of a failed solve:
+
+.. code-block:: cpp
+
+   system.setMaxContinuationSteps(slice);
+   system.initialize();
+   for (;;)
+   {
+       try
+       {
+           first ? system.solveSteadyState() : system.continueSteadyState();
+       }
+       catch (std::exception const &)
+       {
+           // Out of steps for this slice. Nothing has been freed; Y still holds
+           // the last accepted iterate and ptcStep the dt it was reached at.
+       }
+       if (system.lastSteadyOutcome() == SystemSolver::SteadyOutcome::Converged)
+           break;
+       // ... inspect lastSteadyStats(), lastObjectiveEstimate(), yJac ...
+   }
+
+``lastSteadyStats()`` describes the slice that just ran, not the solve as a
+whole, so a caller wanting the total sums them. It includes the objective
+estimate's cost when that is armed, so the number a driver reads is the whole of
+what the slice spent.
+
+From Python
+"""""""""""
+
+``manta.SteadySolve`` wraps the same three phases, and is the form to prefer: a
+slice loop owns live SUNDIALS objects that nothing else frees, so leaving the
+block is what guarantees teardown.
+
+.. code-block:: python
+
+   runner.configure({..., "MaxContinuationSteps": 5})
+
+   with manta.SteadySolve(runner, estimate=False) as solve:
+       for outcome, stats in solve:
+           print(stats["residual_norm"], stats["pseudo_transient_step"])
+           if good_enough(runner.getSolution(0, points)):
+               solve.stop()
+
+Iterating yields ``(outcome, stats)`` and ends of its own accord when a slice
+returns anything but ``SteadyOutcome.OutOfSteps``. ``stop()`` ends the loop and
+still writes the result; ``abandon()``, and any exception out of the block, ends
+it and writes nothing. ``runner.configure(...)`` while a loop is live abandons it
+the same way.
+
+``OutOfSteps`` is *returned*, not raised — the budget is spent and nothing is
+wrong. A genuine ``SolverFailed`` raises, having written the last state it
+reached, so a driver tells the two apart without reading a message.
+
+The state between slices is the state reached: each slice refreshes what
+``getSolution``, ``getDerivative`` and ``getPostprocessedSolution`` read. The
+underlying methods are ``start_steady``, ``continue_steady``, ``finish_steady``
+and ``abandon_steady`` for a driver that wants the loop written out.
+
+``estimate`` is a cost knob. Every finished solve estimates the objective and its
+remaining error (``objectiveEstimate()``), which costs a residual, a Jacobian
+build and a solve — charged *per slice*, so a driver reading the estimate only at
+the end should pass ``estimate=False`` and let the last slice produce the one
+that counts. Without ``solveAdjoint`` there is nothing to estimate and nothing to
+pay. ``EstimateObjectiveOnFinish = false`` turns it off for a whole run.
+
+Slicing is refused with ``DegreeAdaptation``: adapting the degree replaces the
+solver, and a slice loop holds the state of the one it started on.
+
 What the solve did
 ~~~~~~~~~~~~~~~~~~
 

@@ -1939,4 +1939,116 @@ BOOST_AUTO_TEST_CASE(initialize_starts_at_a_nonzero_time)
     removeOutput("lifecycle_nonzero_t0");
 }
 
+BOOST_AUTO_TEST_CASE(a_resumed_steady_solve_does_not_re_climb_the_ser_ramp)
+{
+    // A solve stopped by MaxContinuationSteps is stopped by its budget, not by
+    // its method: the state it reached and the pseudo-time step SER climbed to
+    // are both still good, and continueSteadyState() picks up both.
+    //
+    // A fresh solveSteadyState() picks up neither knowingly -- it re-enters at
+    // PseudoTransientInitialStep, so each slice repeats the ramp the previous
+    // one paid for. On a problem whose dt has to climb several orders of
+    // magnitude that ramp *is* the solve, which is why this is measured in
+    // continuation steps against one uninterrupted solve rather than asserted
+    // as an inequality between the two sliced variants.
+    constexpr int SLICE = 3;
+
+    auto build = [](SystemSolver &sys)
+    {
+        configure(sys, "lifecycle_resume");
+        sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+        sys.setSteadyStateTolerance(1e-10);
+        sys.setPseudoTransientInitialStep(1e-4);
+    };
+
+    // The reference: one uninterrupted solve.
+    int wholeSteps = 0;
+    Vector wholeU;
+    {
+        Grid grid(0.0, 1.0, nCells);
+        NonlinearDiffusion problem;
+        SystemSolver sys(grid, k, &problem);
+        build(sys);
+        CapturedOutput quiet;
+        sys.initialize();
+        sys.solveSteadyState();
+        wholeSteps = sys.lastSteadyStats().steps;
+        wholeU = sample(sys);
+        sys.destroySundials();
+    }
+    BOOST_TEST_MESSAGE("uninterrupted: " << wholeSteps << " continuation steps");
+    BOOST_REQUIRE(wholeSteps > 2 * SLICE);
+
+    // The same solve in slices. `resume` chooses between continueSteadyState()
+    // and a fresh solveSteadyState(), which is the whole comparison.
+    auto sliced = [&](bool resume)
+    {
+        Grid grid(0.0, 1.0, nCells);
+        NonlinearDiffusion problem;
+        SystemSolver sys(grid, k, &problem);
+        build(sys);
+        sys.setMaxContinuationSteps(SLICE);
+
+        int total = 0, slices = 0;
+        CapturedOutput quiet;
+        sys.initialize();
+        while (slices < 40)
+        {
+            ++slices;
+            try
+            {
+                if (resume && slices > 1)
+                    sys.continueSteadyState();
+                else
+                    sys.solveSteadyState();
+            }
+            catch (std::exception const &)
+            {
+                // Out of steps for this slice, which is the expected exit until
+                // the last one. The state stays in Y; nothing has been freed,
+                // because this drives the phases rather than runSolver().
+            }
+            total += sys.lastSteadyStats().steps;
+            if (sys.lastSteadyOutcome() == SystemSolver::SteadyOutcome::Converged)
+                break;
+        }
+        const bool converged =
+            (sys.lastSteadyOutcome() == SystemSolver::SteadyOutcome::Converged);
+        Vector u = sample(sys);
+        sys.destroySundials();
+        return std::tuple{converged, total, u};
+    };
+
+    const auto [resumedOK, resumedSteps, resumedU] = sliced(true);
+    const auto [restartedOK, restartedSteps, restartedU] = sliced(false);
+    BOOST_TEST_MESSAGE("resumed:   converged=" << resumedOK << ", "
+                       << resumedSteps << " continuation steps");
+    BOOST_TEST_MESSAGE("restarted: converged=" << restartedOK << ", "
+                       << restartedSteps << " continuation steps");
+
+    // Resuming reaches the same answer, and pays no more than one extra step
+    // per slice for the interruptions -- a slice cut off part way through a
+    // step has that step retried by the next one.
+    BOOST_TEST(resumedOK);
+    const int slicesUsed = (resumedSteps + SLICE - 1) / SLICE;
+    BOOST_TEST(resumedSteps <= wholeSteps + slicesUsed,
+               "resuming cost " << resumedSteps << " steps against "
+                   << wholeSteps << " uninterrupted");
+
+    // Same answer, to the tolerance both solves were converged at.
+    for (Index i = 0; i < wholeU.size(); ++i)
+        BOOST_TEST(std::abs(resumedU(i) - wholeU(i)) < 1e-8,
+                   "u differs at sample " << i << ": resumed " << resumedU(i)
+                       << " against " << wholeU(i));
+
+    // Not vacuous: without the resume the ramp restarts every slice, so the
+    // same budget buys strictly less progress.
+    BOOST_TEST(restartedSteps > resumedSteps,
+               "restarting each slice cost " << restartedSteps
+                   << " steps, no more than resuming's " << resumedSteps
+                   << " -- the SER ramp cannot be being re-climbed");
+
+    removeOutput("lifecycle_resume");
+}
+
 BOOST_AUTO_TEST_SUITE_END()

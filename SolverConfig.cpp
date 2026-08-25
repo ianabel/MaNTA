@@ -259,6 +259,8 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(PseudoTransientMaxStep, double);
     READ(PseudoTransientSERRate, double);
     READ(PseudoTransientSERFloor, double);
+    READ(EstimateObjectiveOnFinish, bool);
+    READ(MaxContinuationSteps, unsigned);
     READ(NewtonMaxIterations, unsigned);
     READ(NewtonJacobianReuse, unsigned);
     READ(NewtonStepTolerance, double);
@@ -516,6 +518,8 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     {
         system.setPseudoTransientSERRate(config.PseudoTransientSERRate);
         system.setPseudoTransientSERFloor(config.PseudoTransientSERFloor);
+        system.setEstimateObjectiveOnFinish(config.EstimateObjectiveOnFinish);
+        system.setMaxContinuationSteps(config.MaxContinuationSteps);
         system.setNewtonMaxIterations(config.NewtonMaxIterations);
         system.setNewtonJacobianReuse(config.NewtonJacobianReuse);
         system.setNewtonStepTolerance(config.NewtonStepTolerance);

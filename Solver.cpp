@@ -534,13 +534,6 @@ double SystemSolver::weightedResidualNorm(double t, N_Vector Y_in, N_Vector dYdt
 void SystemSolver::integrate(double tFinal)
 {
 	int retval;
-	// filename(), not stem(): inputFilePath now holds the configuration's
-	// OutputFilename, which is already a base name -- the TOML source seeds it
-	// from the config file's stem. Stemming it a second time would turn a
-	// config named run.v2.conf into output called run.nc. filename() also keeps
-	// the long-standing behaviour that output lands in the current directory
-	// rather than beside any path given in OutputFilename.
-	std::string baseName = inputFilePath.filename().string();
 
 	if (IDA_mem == nullptr)
 		throw std::logic_error("integrate() called before initialize()");
@@ -594,41 +587,11 @@ void SystemSolver::integrate(double tFinal)
 				print(out0, STEADY_STATE_TIME, nOut, Y, true);
 			if (writeOutput)
 				WriteTimeslice(STEADY_STATE_TIME);
-			if (writeDatFile)
-				out0.close();
-			if (writeOutput)
-				nc_output.Close();
+			closeOutputFiles();
 			throw;
 		}
 
-		// Write the converged state. Every output call used to live inside the
-		// time loop below, so a PseudoTransient or Newton run produced a .nc
-		// holding one timeslice -- the t0 one initialiseNetCDF wrote during
-		// initialize() -- and a .dat holding one block, both of them the
-		// *initial condition*. The answer reached the restart file (from Y) and
-		// yJac, which is why the Python surface always looked right and only
-		// the files were wrong.
-		//
-		// A physics case's writeDiagnostics is called from WriteTimeslice and
-		// nowhere else, so it was never called at all on this path:
-		// initialiseDiagnostics and finaliseDiagnostics ran and the case got to
-		// write the scaffolding at both ends with nothing hung on it.
-		//
-		// STEADY_STATE_TIME, not tret: see its definition. Deliberately no
-		// IDAGetNumSteps report -- IDA never ran.
-		if (writeDatFile)
-			print(out0, STEADY_STATE_TIME, nOut, Y, true);
-		if (debugDat)
-		{
-			printOnNodes(dydt_out, STEADY_STATE_TIME, dYdt);
-			residual(t0, Y, dYdt, res);
-			IDAEwtSet(Y, wgt, IDA_mem);
-			std::println(res_out, "# Residual norm at steady state is {:g}",
-						 N_VWrmsNorm(res, wgt));
-			printOnNodes(res_out, STEADY_STATE_TIME, res);
-		}
-		if (writeOutput)
-			WriteTimeslice(STEADY_STATE_TIME);
+		writeSteadyState();
 	}
 	else
 	{
@@ -714,6 +677,48 @@ void SystemSolver::integrate(double tFinal)
 	std::println("Total Number of Jacobian Computations :{}", njacevals);
 	}
 
+	finishRun();
+}
+
+// The converged state of a steady solve, written at STEADY_STATE_TIME.
+//
+// A physics case's writeDiagnostics is called from WriteTimeslice and nowhere
+// else, so this is also what gives a steady run its diagnostics rather than
+// leaving initialiseDiagnostics and finaliseDiagnostics to bracket nothing.
+//
+// STEADY_STATE_TIME, not tret: see its definition. Deliberately no
+// IDAGetNumSteps report -- IDA never ran.
+void SystemSolver::writeSteadyState()
+{
+	if (writeDatFile)
+		print(out0, STEADY_STATE_TIME, nOut, Y, true);
+	if (debugDat)
+	{
+		printOnNodes(dydt_out, STEADY_STATE_TIME, dYdt);
+		residual(t0, Y, dYdt, res);
+		IDAEwtSet(Y, wgt, IDA_mem);
+		std::println(res_out, "# Residual norm at steady state is {:g}",
+					 N_VWrmsNorm(res, wgt));
+		printOnNodes(res_out, STEADY_STATE_TIME, res);
+	}
+	if (writeOutput)
+		WriteTimeslice(STEADY_STATE_TIME);
+}
+
+// Everything a run does once its final state is in Y, whichever route reached
+// it: the adjoint solve, the output files, the restart file, and the copy into
+// yJac. Shared by integrate() and by a sliced steady solve, so the two cannot
+// drift apart on the sequencing -- which matters most for the last of them.
+void SystemSolver::finishRun()
+{
+	// filename(), not stem(): inputFilePath holds the configuration's
+	// OutputFilename, which is already a base name -- the TOML source seeds it
+	// from the config file's stem. Stemming it a second time would turn a config
+	// named run.v2.conf into output called run.nc. filename() also keeps the
+	// long-standing behaviour that output lands in the current directory rather
+	// than beside any path given in OutputFilename.
+	const std::string baseName = inputFilePath.filename().string();
+
 	if (solveAdjoint)
 	{
 		runAdjointSolve();
@@ -722,6 +727,26 @@ void SystemSolver::integrate(double tFinal)
 
 	if (writeOutput)
 		problem->finaliseDiagnostics(nc_output);
+	closeOutputFiles();
+
+	if (writeOutput)
+		WriteRestartFile(baseName + ".restart.nc", Y, dYdt, nOut);
+
+	// Leave yJac holding the *final* solution. It is the only copy that outlives
+	// destroySundials() -- `y` is a non-owning view over Y -- and it is what
+	// PyRunner::getSolution, getAdjointGradients and G read.
+	//
+	// Deliberately after runAdjointSolve(): the adjoint solve above is defined
+	// at the state its matrices were built from, so moving this earlier would
+	// change the gradients.
+	captureState();
+
+	if (writeOutput)
+		nc_output.Close();
+}
+
+void SystemSolver::closeOutputFiles()
+{
 	if (writeDatFile)
 		out0.close();
 	if (debugDat)
@@ -731,23 +756,11 @@ void SystemSolver::integrate(double tFinal)
 	}
 	if (writeOutput)
 		nc_output.Close();
+}
 
-	if (writeOutput)
-		WriteRestartFile(baseName + ".restart.nc", Y, dYdt, nOut);
-
-	// Leave yJac holding the *final* solution. It is the only copy that outlives
-	// destroySundials() -- `y` is a non-owning view over Y -- and it is what
-	// PyRunner::getSolution, getAdjointGradients and G read. Until now it held
-	// whatever state IDA last evaluated a Jacobian at, which can be several steps
-	// stale, so a caller asking for "the solution" got a slightly earlier one.
-	//
-	// Deliberately after runAdjointSolve(): the adjoint solve above is defined
-	// at the state its matrices were built from, so moving this earlier would
-	// change the gradients.
+void SystemSolver::captureState()
+{
 	setJacEvalY(Y, dYdt);
-
-	if (writeOutput)
-		nc_output.Close();
 }
 
 void SystemSolver::destroySundials()

@@ -69,6 +69,14 @@ const std::vector<Entry> &table()
         {"PseudoTransientSERFloor", {}, Type::Double, Category::Solver, false, false, 2.0,
          "Least the pseudo-time step may grow on a step that reduced the residual. "
          "1 means no floor. Must not be below 1."},
+        {"EstimateObjectiveOnFinish", {}, Type::Bool, Category::Solver, false, false, true,
+         "Estimate the objective and its remaining error at the end of each steady solve. Costs "
+         "one residual, one Jacobian build and one solve, and needs solveAdjoint. Charged per "
+         "solve, so a solve driven in slices pays it per slice."},
+        {"MaxContinuationSteps", {}, Type::UInt, Category::Solver, false, false, 200u,
+         "KINSol calls one steady solve may make before giving up. Each is a full Newton solve, "
+         "so a healthy run uses ten or so and the default is a runaway backstop. Lower it to stop "
+         "a solve early enough to inspect, then resume it. Minimum 1."},
         {"NewtonMaxIterations", {}, Type::UInt, Category::Solver, false, false, 20u,
          "Newton iterations one KINSol call may take before handing back to the continuation "
          "loop. Applies to PseudoTransient and Newton alike. KINSOL's own default is 200; 20 "

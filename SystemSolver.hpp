@@ -108,6 +108,27 @@ class SystemSolver
         void setSteadyMode(SteadyMode mode) { steadyMode = mode; };
         SteadyMode getSteadyMode() const { return steadyMode; };
         void setPseudoTransientInitialStep(double dt) { ptcInitialStep = dt; };
+        // Whether a finished steady solve estimates the objective. One residual,
+        // one Jacobian build and one solve each time, which is nothing against a
+        // whole continuation but is charged *per solve* -- so a solve driven in
+        // slices pays it per slice, and a five-step slice of a fifteen-step
+        // continuation spends a third as much again on estimating as on solving.
+        // A driver that only wants the estimate at the end turns it off for the
+        // slices in between.
+        void setEstimateObjectiveOnFinish(bool on) { estimateObjectiveOnFinish = on; };
+        bool getEstimateObjectiveOnFinish() const { return estimateObjectiveOnFinish; };
+
+        // The pseudo-time step the continuation has climbed to, which is what a
+        // resumed solve picks up. Infinite in Newton mode.
+        double getPseudoTransientStep() const { return ptcStep; };
+
+        void setMaxContinuationSteps(long steps)
+        {
+            if (steps < 1)
+                throw std::logic_error("MaxContinuationSteps must be at least 1: a steady solve that may take no continuation steps cannot make progress.");
+            maxContinuationSteps = steps;
+        };
+        long getMaxContinuationSteps() const { return maxContinuationSteps; };
         void setPseudoTransientMaxStep(double dt) { ptcMaxStep = dt; };
 
         // The SER schedule on an accepted step:
@@ -349,6 +370,11 @@ class SystemSolver
         {
             int  steps = 0;         // continuation steps taken
             int  rejected = 0;      // of those, rejected and damped
+            // The *steady* residual the solve ended on -- not the damped one
+            // KINSol converged, which any small enough dt makes small. This is
+            // the number the tolerance is tested against, and the only measure
+            // of progress a caller driving the solve in slices can see.
+            double residualNorm = std::numeric_limits<double>::quiet_NaN();
             long newtonIters = 0;   // KINSOL Newton iterations, summed
             long kinFuncEvals = 0;  // residual evaluations KINSOL made, summed
             long kinJacEvals = 0;   // Jacobian setups KINSOL asked for, summed
@@ -405,7 +431,41 @@ class SystemSolver
         // initialize() has run, so Y/dYdt/LS/sunMat exist and Y holds a
         // consistent initial condition. Leaves the converged state in Y and in
         // yJac, which is what the adjoint solve and the output path read.
-        void solveSteadyState();
+        void solveSteadyState(bool resume = false);
+
+        // Resume a solve that stopped on its step budget rather than on its
+        // tolerance, from the state and the pseudo-transient step it left
+        // behind. A fresh solveSteadyState() re-enters at
+        // PseudoTransientInitialStep and re-climbs the SER ramp; this does not,
+        // which is the whole saving on a short run driven in slices.
+        //
+        // The solver must still be initialised -- this is a phase of one run,
+        // not a second run -- so a caller wanting it drives initialize() and
+        // solveSteadyState() itself rather than going through runSolver(),
+        // which frees the state on the way out of a failed solve.
+        void continueSteadyState() { solveSteadyState(true); };
+
+        // The two halves of what integrate() does once a steady solve has an
+        // answer in Y. Public because a sliced solve drives the phases itself
+        // and has to reach them; integrate() calls the same two, so the sliced
+        // and unsliced paths cannot drift apart.
+        //
+        // finishRun() is shared with the time-marching branch. Call it once per
+        // run: it closes the output files, so a second call writes nothing.
+        void writeSteadyState();
+        void finishRun();
+
+        // Close every output file the run opened. Idempotent, and called on the
+        // failure paths too -- a run that dies still has to leave a readable
+        // .nc behind.
+        void closeOutputFiles();
+
+        // Copy the current state into yJac, which is where "the solution" is
+        // read from: `y` is a non-owning view over Y and dangles after
+        // destroySundials(). finishRun() does this at the end of a run; a
+        // sliced solve does it per slice, so a driver looking between slices
+        // sees the state it has reached rather than the initial condition.
+        void captureState();
 
         // The two KINSOL callbacks, public because the C shims in
         // SteadyState.cpp reach them through the user_data pointer.
@@ -752,6 +812,12 @@ class SystemSolver
         N_Vector kinScale = nullptr; // unit scaling; KINSol requires a vector
         SteadyMode steadyMode = SteadyMode::TimeMarch;
         double ptcInitialStep = 0.0; // 0 means "use dt0"
+        // How many KINSol calls before giving up. Each is a full Newton solve,
+        // so a healthy run uses ten or so, and the default is a runaway
+        // backstop rather than a budget. Lowering it deliberately is what makes
+        // a solve stop early enough to be looked at and then resumed.
+        long maxContinuationSteps = 200;
+        bool estimateObjectiveOnFinish = true;
         double ptcMaxStep = std::numeric_limits<double>::infinity();
         double ptcStep = 0.0;        // the current dt; infinite in Newton mode
         double ptcSERRate = 1.0;     // exponent on the residual ratio

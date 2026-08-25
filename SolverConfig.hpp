@@ -67,6 +67,8 @@ struct SolverConfig
     double                   PseudoTransientMaxStep;
     double                   PseudoTransientSERRate;
     double                   PseudoTransientSERFloor;
+    bool                     EstimateObjectiveOnFinish;
+    unsigned int             MaxContinuationSteps;
     unsigned int             NewtonMaxIterations;
     unsigned int             NewtonJacobianReuse;
     double                   NewtonStepTolerance;

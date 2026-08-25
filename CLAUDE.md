@@ -292,6 +292,22 @@ called separately:
   preceding `initialize`, which is what lets `runSolver` free on both the normal
   and the exceptional path.
 
+**A steady solve can also be taken in slices.** `MaxContinuationSteps` (default
+200) bounds one `solveSteadyState`; running out of it is a budget exhaustion, not
+a failure of method, and `continueSteadyState()` resumes from the state *and* the
+pseudo-time step SER climbed to. `integrate()`'s tail is factored as
+`writeSteadyState()` + `finishRun()` so a sliced solve ends the same way an
+unsliced one does; `finishRun` is shared with the time-marching branch and closes
+the output files, so it runs once per run. A second `solveSteadyState()` would resume from
+neither — `SteadyState.cpp` re-enters at `PseudoTransientInitialStep` unless the
+`resume` flag says otherwise — and re-climbing the ramp is the whole solve rather
+than a margin on it: a `NonlinearDiffusion` needing 15 continuation steps takes
+the same 15 in slices of three when each resumes, and does not converge in 40
+slices when each starts over
+(`a_resumed_steady_solve_does_not_re_climb_the_ser_ramp`). Slicing requires
+driving the phases directly, because `runSolver` frees the state on its way out
+of a failed solve, so `PyRunner::run_ss()` cannot do it.
+
 Every SUNDIALS handle is a member, not a local, so those three can be split.
 `ctx` is the exception: it belongs to the `SystemSolver`, not to a run, and
 `destroySundials` must not touch it.
@@ -625,6 +641,24 @@ gives. Four pieces to know:
   building a *fresh* `SystemSolver` in every `configure()` (`PyRunner.cpp:117`),
   which is load-bearing; see Known limitations. Its parameter table is
   declarative and lives at the top of `PyRunner.cpp`.
+
+  **A steady solve can be driven in slices from here too**, which is what makes
+  the resumable continuation above reachable from Python: `start_steady` /
+  `continue_steady` / `finish_steady` / `abandon_steady`, wrapped as
+  `manta.SteadySolve`. Three things are load-bearing. `OutOfSteps` is *returned*
+  and a `SolverFailed` throws, so a driver tells a spent budget from a dead solve
+  without reading a message — which relies on `solveSteadyState` clearing
+  `steadyOutcome` on entry, since `finish()` is the only thing that sets it and
+  an exception from inside the residual bypasses it entirely; a stale
+  `OutOfSteps` there is an infinite loop, not a wrong label. Each slice calls
+  `captureState()`, because
+  `getSolution` reads `yJac` and would otherwise hand back the initial condition
+  — silently, since `yJac` is always *a* valid state. And a live loop owns
+  SUNDIALS objects that **nothing else frees** — `~SystemSolver` does not call
+  `destroySundials` — so `configure()`, `~PyRunner` and any exception out of the
+  loop all abandon it explicitly; that is why the context manager is the form to
+  prefer. `DegreeAdaptation` is refused, since adapting the degree replaces the
+  solver the loop is holding.
 
   `G` returns the objective without the gradient. The saving is in the run, not
   in `G` itself: `integrate` calls `runAdjointSolve()` whenever `solveAdjoint` is

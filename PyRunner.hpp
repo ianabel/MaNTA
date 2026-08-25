@@ -50,7 +50,9 @@ public:
   // where it was written, with the list of what is registered.
   explicit PyRunner(std::string physicsCase);
 
-  ~PyRunner() = default;
+  // Not defaulted: a sliced solve the driver walked away from still owns live
+  // SUNDIALS objects, and ~SystemSolver frees none of them.
+  ~PyRunner();
 
   // Configure solver from Python
   void configure(const py::dict &);
@@ -62,6 +64,38 @@ public:
 
   // Runs solver to steady state
   void run_ss(void);
+
+  // A steady solve driven in slices, so a driver can look at the state, the
+  // cost and the objective between them and decide whether to go on.
+  //
+  // start_steady() initialises and takes the first slice; continue_steady()
+  // resumes from the state *and* the pseudo-time step the last one reached, so
+  // slicing costs no extra continuation steps. Each returns why the slice
+  // stopped. OutOfSteps is the ordinary exit -- the step budget
+  // (MaxContinuationSteps) is spent, nothing is wrong -- and is *returned*; a
+  // genuine solver failure throws, having written the last state it reached.
+  //
+  // `estimate` chooses whether the slice estimates the objective on its way
+  // out. That costs one residual, one Jacobian build and one solve per slice,
+  // which is worth suppressing on slices whose answer nobody reads.
+  //
+  // finish_steady() ends the solve: the output files, the restart file and the
+  // adjoint solve, then teardown. It must be called, and calling it twice is an
+  // error rather than a second write.
+  SystemSolver::SteadyOutcome start_steady(bool estimate);
+  SystemSolver::SteadyOutcome continue_steady(bool estimate);
+  void finish_steady(void);
+
+  // End a sliced solve without writing anything: no output slice, no restart
+  // file, no adjoint solve. For a driver abandoning a parameter point, and for
+  // unwinding after its own exception. A no-op when no slice loop is live, so
+  // it is safe in a finally block.
+  void abandon_steady(void) { abandonSlices(); };
+
+  // What the last slice cost and what residual it ended on. Per slice, not
+  // cumulative -- a driver wanting totals sums them, which keeps the more
+  // informative number the primitive one.
+  py::dict steadyStats(void) const;
 
 
   // The objective alone, without an adjoint solve. Needs solveAdjoint = True
@@ -138,6 +172,20 @@ private:
 
   // The degree configure() built at, which is where an adaptive run starts.
   unsigned int k = 1;
+
+  // True between start_steady() and finish_steady(). A sliced solve owns live
+  // SUNDIALS objects that nothing else frees -- ~SystemSolver does not call
+  // destroySundials() -- so this is what lets configure() and the destructor
+  // clean up after a loop the driver walked away from.
+  bool slicing = false;
+
+  // Shared by start_steady and continue_steady, so the two cannot differ on the
+  // outcome policy or on refreshing yJac.
+  SystemSolver::SteadyOutcome runSlice(bool resume, bool estimate);
+
+  // Tear down a slice loop that will not be finished: write nothing, free
+  // everything. Safe when no loop is live.
+  void abandonSlices(void);
 
   // Hand off to runAdaptiveDegree and adopt the solver it settles on. Shared by
   // run() and run_ss() so the two cannot diverge on the sequencing.

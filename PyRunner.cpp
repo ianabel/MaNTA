@@ -68,6 +68,11 @@ void PyRunner::configure(const py::dict &config) {
   if (!pProblem && caseName.empty())
     throw std::runtime_error("Transport system not set. Please set transport "
                              "system before configuring solver.");
+  // Reconfiguring abandons a sliced solve that is still running. ~SystemSolver
+  // does not free the SUNDIALS objects -- only destroySundials() does -- so
+  // dropping the solver without this leaks every one of them, and silently.
+  abandonSlices();
+
   // Set stored problem to null to allow reconfiguration after object creation
   system = nullptr;
   grid = nullptr;
@@ -240,6 +245,111 @@ void PyRunner::run_ss() {
   system->runSolver(0);
 
   std::println("Done.");
+}
+
+PyRunner::~PyRunner() {
+  // A destructor cannot let an exception out, and destroySundials() is not
+  // expected to throw -- but "not expected to" is not a guarantee worth
+  // terminating the interpreter over.
+  try {
+    abandonSlices();
+  } catch (...) {
+  }
+}
+
+SystemSolver::SteadyOutcome PyRunner::runSlice(bool resume, bool estimate) {
+  system->setEstimateObjectiveOnFinish(estimate);
+  try {
+    if (resume)
+      system->continueSteadyState();
+    else
+      system->solveSteadyState();
+  } catch (...) {
+    // OutOfSteps is not a failure: the step budget is spent, the last accepted
+    // iterate is in Y and the pseudo-time step SER climbed to is still on the
+    // solver, so continue_steady() picks up both. Returning it is what lets a
+    // driver tell it apart from a dead solve without reading the message.
+    if (system->lastSteadyOutcome() != SystemSolver::SteadyOutcome::OutOfSteps) {
+      // The same bargain integrate() makes for a failed steady solve: write the
+      // last state reached -- which is exactly the run whose state is worth
+      // looking at -- close the files, then let the caller hear about it. No
+      // adjoint solve, because there is no converged state to define it at.
+      try {
+        system->writeSteadyState();
+        system->closeOutputFiles();
+      } catch (...) {
+        // A failure while reporting a failure. The original is the one worth
+        // propagating, so this one is dropped rather than replacing it.
+      }
+      abandonSlices();
+      throw;
+    }
+  }
+
+  // Leave the state where getSolution() reads it. finishRun() does this at the
+  // end of a run; without it here, a driver looking between slices would be
+  // handed the initial condition -- silently, since yJac is always a valid
+  // state, just not this one.
+  system->captureState();
+  return system->lastSteadyOutcome();
+}
+
+SystemSolver::SteadyOutcome PyRunner::start_steady(bool estimate) {
+  if (!configured)
+    throw std::runtime_error(
+        "Error: Runner must be configured before running solver.");
+  if (slicing)
+    throw std::runtime_error(
+        "start_steady() called while a sliced solve is already running. Use "
+        "continue_steady() to carry on, or finish_steady() to end it.");
+  if (cfg.DegreeAdaptation)
+    throw std::runtime_error(
+        "DegreeAdaptation cannot be combined with a sliced steady solve: "
+        "adapting the degree replaces the solver, and a slice loop holds the "
+        "state of the one it started on. Run one or the other.");
+
+  system->setSteadyStateTolerance(steady_state_tolerance);
+  system->initialize();
+  slicing = true;
+  return runSlice(false, estimate);
+}
+
+SystemSolver::SteadyOutcome PyRunner::continue_steady(bool estimate) {
+  if (!slicing)
+    throw std::runtime_error(
+        "continue_steady() called with no sliced solve running. Call "
+        "start_steady() first.");
+  return runSlice(true, estimate);
+}
+
+void PyRunner::finish_steady(void) {
+  if (!slicing)
+    throw std::runtime_error(
+        "finish_steady() called with no sliced solve running.");
+  slicing = false;
+  system->writeSteadyState();
+  system->finishRun();
+  system->destroySundials();
+  std::println("Done.");
+}
+
+void PyRunner::abandonSlices(void) {
+  if (!slicing)
+    return;
+  slicing = false;
+  if (system != nullptr)
+    system->destroySundials();
+}
+
+py::dict PyRunner::steadyStats(void) const {
+  using namespace pybind11::literals;
+  const auto s = system->lastSteadyStats();
+  return py::dict(
+      "outcome"_a = system->lastSteadyOutcome(), "steps"_a = s.steps,
+      "rejected"_a = s.rejected, "residual_norm"_a = s.residualNorm,
+      "newton_iterations"_a = s.newtonIters, "residual_evaluations"_a = s.residualEvals,
+      "jacobian_builds"_a = s.jacBuilds, "jacobian_solves"_a = s.jacSolves,
+      "pseudo_transient_step"_a = system->getPseudoTransientStep());
 }
 
 
