@@ -61,6 +61,36 @@
  * Because the star basis is nodal at its own k+2 points, u*(x_m) = gamma_m --
  * no evaluation is needed to get u* where the physics is evaluated.
  */
+/*
+ * An a-posteriori error estimate built from the gap between the solution and
+ * its own postprocessing.
+ *
+ * Capasso et al. (refs/HDG-hAdaptivity.pdf) equation (15), per cell:
+ *
+ *     E_K^2 = || u* - u_h ||^2_{L2(K)} / |K|
+ *
+ * i.e. a mean-square error *density*, which is what makes it comparable across
+ * cells of different width. The two aggregates below are the two honest ways to
+ * reduce it to one number, and they answer different questions -- worstCell is
+ * the binding constraint on a single global polynomial degree, globalL2 is the
+ * estimated error of the solution as a whole and is the quantity every
+ * benchmark in this tree quotes.
+ *
+ * Note what this rests on: that u* is a *better* approximation than u_h. That
+ * is only assured when the superconvergent scheme is on -- see
+ * docs/superconvergence.rst, which measures u* failing to superconverge at
+ * k = 1 with the flag off, and worse, doing so transiently for a nonlinear
+ * flux (rates of 6.9, 11.7, 9.1, then 2.3). Anything that calibrates against
+ * this rather than merely ranking with it should require the flag.
+ */
+struct AccuracyEstimate
+{
+    Vector perCell;          // E_K, one entry per cell, in grid order
+    double worstCell = 0.0;  // max_K E_K
+    double globalL2 = 0.0;   // sqrt( sum_K E_K^2 |K| ) = || u* - u_h ||_L2(domain)
+    double solutionL2 = 0.0; // || u_h ||_L2(domain), the scale to make it relative
+};
+
 class Postprocessor
 {
 public:
@@ -103,6 +133,11 @@ public:
     Vector const &starWeights(Index cell) const { return b1_[cell]; }
 
     NodalBasis const &getStarBasis() const { return starBasis; }
+
+    // The estimate above for one variable. Uses the u* from the last
+    // computeUStar() call, so that has to have run against the same solution
+    // Y -- exactly as uStar() and evalOnStarNodes() do.
+    AccuracyEstimate accuracyIndicator(DGSoln const &Y, Index var) const;
 
 private:
     Grid const &grid;
