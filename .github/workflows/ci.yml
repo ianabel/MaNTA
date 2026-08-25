@@ -35,15 +35,15 @@ jobs:
   #
   # fail-fast is off on purpose: when one compiler breaks, the others' results
   # are exactly what tells you whether it is a real bug or that compiler's
-  # opinion. Three legs can also fail for reasons that have nothing to do with this
-  # code, because their compiler comes from outside the runner image: g++-15 and
-  # g++-16 from the toolchain PPA, and clang++-21 from apt.llvm.org. The Eigen 5 leg
-  # makes four, for the same reason one step down: its Eigen comes from gitlab.
+  # opinion. Several legs can also fail for reasons that have nothing to do with
+  # this code, because what they need comes from outside the runner image: g++-15
+  # and g++-16 from the toolchain PPA, clang++-21 from apt.llvm.org, and both
+  # Eigen 5 legs from gitlab.
   #
-  # g++-14, g++-16, clang++-19 and clang++-21 were each verified by hand --
-  # full build, both C++ suites, the pybind11 module and the Python suite -- before
-  # being added here. g++-15 and clang++-20 were not, because neither is packaged
-  # for the Debian box this was written on, so CI is their first real run.
+  # g++-16, clang++-19 and clang++-21 were each verified by hand -- full build,
+  # both C++ suites, the pybind11 module and the Python suite -- before being added
+  # here. g++-15 and clang++-20 were not, because neither is packaged for the
+  # Debian box this was written on, so CI is their first real run.
   #
   # Read that claim narrowly. A local clang build is NOT the same test as the clang
   # legs here, because the standard library differs: clang picks the newest GCC
@@ -60,12 +60,17 @@ jobs:
   # fetched from gitlab and EIGEN_DIR points at it. MaNTA supports 3.4.x and
   # 5.0.x, and the two differ enough to need guarding -- Eigen::all moved
   # namespace and internal::SingleRange became a template -- but the difference is
-  # in Eigen, not in the compiler, so it gets *one* leg rather than a full cross
-  # product. If that leg fails while the others pass, Eigen is the variable.
+  # in Eigen, not in the compiler -- so it gets two legs, one per compiler family,
+  # rather than a full cross product. If those fail while the others pass, Eigen is
+  # the variable.
   #
-  # `label` exists so adding that leg does not rename the existing ones: the job
+  # `label` exists so adding those legs does not rename the existing ones: the job
   # name is part of a required-check name, and legs whose name changes stop
-  # counting as the check they used to be.
+  # counting as the check they used to be. **A leg added, dropped or relabelled
+  # here changes the set of contexts published, so the branch-protection required
+  # list has to be updated in the same change** -- a required context that nothing
+  # publishes never arrives and blocks every non-admin silently. CLAUDE.md has the
+  # two-command diff for checking the rule and the run agree.
   build-and-test:
     name: Build + tests (${{ matrix.label || matrix.cxx }})
     runs-on: ubuntu-latest
@@ -87,8 +92,17 @@ jobs:
           #                 the project to clang-18 -Werror compliance, and P2448R2
           #                 was only the first C++23 gap. It is verified, not
           #                 guarded -- expect it to rot.
-          - cxx: g++-14
-            pkg: g++-14
+          # g++-14 is deliberately absent. It miscompiles this tree at the release
+          # flags -- -O3 -flto -march=native, all three required -- and the symptom
+          # is a wrong number rather than a diagnostic: adding any member to
+          # SystemSolver makes the AuxDiffusion cases of
+          # the_assembled_jacobian_matches_a_finite_difference_of_the_residual fail
+          # about half their runs. See CLAUDE.md and TODO. A leg that fails half the
+          # time for reasons unrelated to the change under review is worse than no
+          # leg, so it is gone rather than marked flaky, and noble's archive
+          # compiler is therefore *not* covered here. That is a real gap: the
+          # nearest thing to it is the Fedora container job, which only compiles.
+          #
           # Not in the noble archive (which stops at g++-14), so these two legs need
           # the toolchain PPA -- g++-15 there is 15.2.0-14ubuntu1~24~ppa1 and
           # g++-16 is 16-20260315-1ubuntu1~24~ppa1, a snapshot rather than a
@@ -113,14 +127,27 @@ jobs:
           - cxx: clang++-21
             pkg: clang-21
             llvm_version: '21'
-          # The Eigen 5 leg. On the baseline compiler deliberately: this leg exists
-          # to vary Eigen and nothing else, so g++-14 keeps it comparable with the
-          # first leg above. Pinned to the 5.0.1 tag rather than a branch, so the
-          # leg does not start failing because upstream master moved.
-          - cxx: g++-14
-            pkg: g++-14
+          # The Eigen 5 legs. Two rather than one, and on one compiler of each
+          # family: with g++-14 gone the "vary Eigen and nothing else" leg lost the
+          # baseline it was comparable against, and Eigen 5 is where the two
+          # compilers are most likely to disagree -- the differences MaNTA guards
+          # are template and namespace changes (Eigen::all moved,
+          # internal::SingleRange became a template), which is exactly the kind of
+          # thing one front end accepts and the other does not. Each has a plain
+          # counterpart above at the same compiler, so a failure here still isolates
+          # to Eigen.
+          #
+          # Pinned to the 5.0.1 tag rather than a branch, so the legs do not start
+          # failing because upstream master moved.
+          - cxx: g++-15
+            pkg: g++-15
+            ppa: ubuntu-toolchain-r/test
             eigen: 5.0.1
-            label: g++-14, Eigen 5.0.1
+            label: g++-15, Eigen 5.0.1
+          - cxx: clang++-19
+            pkg: clang-19
+            eigen: 5.0.1
+            label: clang++-19, Eigen 5.0.1
     steps:
       - uses: actions/checkout@v4
         with:
@@ -182,7 +209,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: sundials/install
-          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ runner.os }}-gcc14-${{ hashFiles('build_sundials') }}
+          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ runner.os }}-cc-default-${{ hashFiles('build_sundials') }}
 
       - name: Build SUNDIALS
         if: steps.cache-sundials.outputs.cache-hit != 'true'
@@ -245,15 +272,18 @@ jobs:
         run: make python_tests
 
       # One leg only: neither the generated stub nor the type check varies by
-      # compiler, and running them five times would just be five ways to learn
+      # compiler, and running them on every leg would just be several ways to learn
       # the same thing. The Eigen version is excluded too, not just the compiler --
-      # there are two g++-14 legs now, and neither check varies by Eigen either.
+      # g++-15 has two legs, and neither check varies by Eigen either. This used to
+      # ride on g++-14, which is why it moved when that leg went; if g++-15 is ever
+      # dropped, these two steps have to move again or they stop running at all,
+      # silently.
       - name: Stubs are up to date
-        if: matrix.cxx == 'g++-14' && matrix.eigen == ''
+        if: matrix.cxx == 'g++-15' && matrix.eigen == ''
         run: make stubs-check
 
       - name: Type check the manta package
-        if: matrix.cxx == 'g++-14' && matrix.eigen == ''
+        if: matrix.cxx == 'g++-15' && matrix.eigen == ''
         run: make typecheck
 
       # Naming a prefix the compiler already searches must be a no-op. It was not:
@@ -384,11 +414,27 @@ jobs:
         with:
           submodules: recursive
 
+      # g++-15 from the toolchain PPA, like the build legs: g++-14 is not used
+      # anywhere in this workflow any more (see the matrix above). This job is at
+      # -O0 --coverage with neither LTO nor -march=native, so it was never exposed
+      # to the g++-14 miscompile -- it moves for consistency and so that no part of
+      # CI is left resting on that compiler.
+      #
+      # Makefile.config derives GCOV from CXX by substitution, so this also makes it
+      # gcov-15 rather than gcov-14. That coupling is load-bearing: gcovr must read
+      # .gcno/.gcda with the same toolchain version that wrote them, or it exits 3
+      # with a version-mismatch error that looks nothing like a coverage problem.
+      - name: Add the toolchain PPA
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends software-properties-common
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            g++-14 cmake wget \
+            g++-15 cmake wget \
             libboost-dev \
             libeigen3-dev \
             libnetcdf-dev libnetcdf-c++4-dev \
@@ -400,7 +446,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: sundials/install
-          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ runner.os }}-gcc14-${{ hashFiles('build_sundials') }}
+          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ runner.os }}-cc-default-${{ hashFiles('build_sundials') }}
 
       - name: Build SUNDIALS
         if: steps.cache-sundials.outputs.cache-hit != 'true'
@@ -409,7 +455,7 @@ jobs:
       - name: Configure Makefile.local
         run: |
           cat > Makefile.local <<'EOF'
-          CXX = g++-14
+          CXX = g++-15
           SUNDIALS_DIR = ./sundials/install
           EIGEN_DIR = /usr/include/eigen3
           EOF

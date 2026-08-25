@@ -7,6 +7,7 @@
 #include "SystemSolver.hpp"
 #include "PhysicsCases.hpp"
 #include "SolverConfig.hpp"
+#include "DegreeAdaptation.hpp"
 
 // Load restart data into vectors
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vector<double> &dYdt)
@@ -132,16 +133,33 @@ int runManta(std::string const &fname)
 		if (nDOF_file != nDOF)
 			throw std::invalid_argument("nVars/nAux/nScalars in restart file inconsistent with physics case");
 
+		// The file's own degree, which is what its DOF are laid out at.
 		pProblem->setRestartValues(Y, dYdt, *grid, k);
+
+		// The run's degree, which may differ. setInitialConditions projects
+		// across the difference; equal degrees keep the copy path.
+		k = restartRunOrder(config, k);
 	}
 
-	auto system = std::make_shared<SystemSolver>(*grid, k, pProblem.get());
+	if (config.DegreeAdaptation)
+	{
+		// The driver builds and runs a solver per degree, so it does the
+		// applySolverConfig/setAdjointProblem/runSolver sequence below itself --
+		// for each level, which is the point. It returns the last one so the
+		// object survives to be destroyed here in the usual way.
+		auto system = runAdaptiveDegree(config, *pProblem, adjoint.get(), *grid, k,
+										*config.t_final);
+	}
+	else
+	{
+		auto system = std::make_shared<SystemSolver>(*grid, k, pProblem.get());
 
-	applySolverConfig(config, *system);
-	if (config.solveAdjoint)
-		system->setAdjointProblem(adjoint.get());
+		applySolverConfig(config, *system);
+		if (config.solveAdjoint)
+			system->setAdjointProblem(adjoint.get());
 
-	system->runSolver(*config.t_final);
+		system->runSolver(*config.t_final);
+	}
 
 	// For compiled-in TransportSystems we have the type information and
 	// this will call the correct inherited destructor
