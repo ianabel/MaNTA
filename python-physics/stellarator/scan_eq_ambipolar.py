@@ -58,7 +58,7 @@ atol = 1e-4
 # nodes = [0.0,0.5, 0.75, 0.9, 1.0]
 npoints = 4
 degree = 4
-base = 1.6
+base = 1.5
 tau = 1000.0
 nodes = 1 - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 1)
 nodes = np.concatenate(([0], nodes, [1]))

@@ -115,23 +115,23 @@ yancc_res = {"na": 43, "nx": 7}
 
 pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
-
-surf = FourierRZToroidalSurface(
-    R_lmn=[1, 0.125, 0.1],
-    Z_lmn=[-0.125, -0.1],
-    modes_R=[[0, 0], [1, 0], [0, 1]],
-    modes_Z=[[-1, 0], [0, -1]],
-    NFP=4,
-)
-# create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
-# default is zero pressure and zero current
-eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
-# this is usually all you need to solve a fixed boundary equilibrium
-eq = eq.solve(x_scale="ess")[0]
-# print(pressure_rho)
-eqs = EquilibriaFamily(eq)
-# eq = desc.io.load("eq_self_consistent_pressure.h5")
+#
+# surf = FourierRZToroidalSurface(
+#     R_lmn=[1, 0.125, 0.1],
+#     Z_lmn=[-0.125, -0.1],
+#     modes_R=[[0, 0], [1, 0], [0, 1]],
+#     modes_Z=[[-1, 0], [0, -1]],
+#     NFP=4,
+# )
+# # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
+# # default is zero pressure and zero current
+# eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
+# # this is usually all you need to solve a fixed boundary equilibrium
+# eq = eq.solve(x_scale="ess")[0]
+# # print(pressure_rho)
+eq = desc.io.load(eq_name + "_all_equilibria.h5")[-1]
 # desc_pressure = eq.get_profile('p')
+eqs = EquilibriaFamily(eq)
 eq_init = eq.copy()
 
 V0 = eq.compute("V")["V"]
@@ -444,6 +444,7 @@ eq, info_out = eq.optimize(
 # %%
 eqfam.append(eq.copy())
 
+eqs.append(eq.copy())
 fig, ax = plot_comparison(eqs=[eq_init, eq], labels=["Initial", "optimized"])
 
 fig.savefig("figs/" + eq_name + "comparison")
