@@ -659,6 +659,12 @@ gives. Four pieces to know:
   loop all abandon it explicitly; that is why the context manager is the form to
   prefer. `DegreeAdaptation` is refused, since adapting the degree replaces the
   solver the loop is holding.
+  The same four names are FFI ops (`ffi.hpp`, CPU only like `run`/`run_ss`), so
+  `manta.SteadySolve(ffi_runner)` works — `steadyStats()` and
+  `objectiveEstimate()` need none, being host-side reads that touch no device
+  memory. The outcome crosses as a concrete `int32`, which forces the sync a
+  Python `while` needs, so a slice loop belongs in eager code or inside an
+  `io_callback` rather than under `jit`.
 
   `G` returns the objective without the gradient. The saving is in the run, not
   in `G` itself: `integrate` calls `runAdjointSolve()` whenever `solveAdjoint` is

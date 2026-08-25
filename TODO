@@ -190,7 +190,11 @@ reason it was not made:
     there is a sweep to measure it on.
 
     The slice loop is reachable from Python as start_steady / continue_steady /
-    finish_steady, wrapped as manta.SteadySolve.
+    finish_steady, wrapped as manta.SteadySolve, and through the JAX FFI on the
+    same names -- so manta.SteadySolve(ffi_runner) works. CPU only, like Run and
+    Run_ss; the outcome is returned as a concrete int32, which forces the sync a
+    Python `while` needs and is why a slice loop belongs in eager code or inside
+    an io_callback rather than under jit.
 
   - Degree adaptation and a sliced steady solve are refused together, and the
     combination that would be worth having is not the one that was refused.

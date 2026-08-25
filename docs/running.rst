@@ -605,6 +605,23 @@ pay. ``EstimateObjectiveOnFinish = false`` turns it off for a whole run.
 Slicing is refused with ``DegreeAdaptation``: adapting the degree replaces the
 solver, and a slice loop holds the state of the one it started on.
 
+Through the JAX FFI
+'''''''''''''''''''
+
+``manta.jax.FFIRunner`` implements the same four names as FFI ops, so
+``manta.SteadySolve(ffi_runner)`` works unchanged. They keep their lowercase
+spelling rather than being disabled the way ``run`` and ``run_ss`` are, because
+that is what the context manager calls.
+
+``steadyStats()`` and ``objectiveEstimate()`` need no FFI op — they read
+host-side state and touch no device memory, so the inherited ``Runner`` methods
+serve.
+
+CPU only, like ``Run`` and ``Run_ss``. The outcome crosses as a concrete
+``int32``, which forces the sync a Python ``while`` needs — so a slice loop
+belongs in eager code, or inside an ``io_callback``, and cannot be written under
+``jit`` where the outcome would be a tracer.
+
 What the solve did
 ~~~~~~~~~~~~~~~~~~
 

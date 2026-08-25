@@ -473,6 +473,10 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
     ffi_ops["get_g_val"] = EncapsulateFfiCall(get_g_val_ffi_ops);
     ffi_ops["run_ffi"] = EncapsulateFfiCall(run_ffi_ops);
     ffi_ops["run_ss_ffi"] = EncapsulateFfiCall(run_ss_ffi_ops);
+    ffi_ops["start_steady_ffi"] = EncapsulateFfiCall(start_steady_ffi_ops);
+    ffi_ops["continue_steady_ffi"] = EncapsulateFfiCall(continue_steady_ffi_ops);
+    ffi_ops["finish_steady_ffi"] = EncapsulateFfiCall(finish_steady_ffi_ops);
+    ffi_ops["abandon_steady_ffi"] = EncapsulateFfiCall(abandon_steady_ffi_ops);
     return ffi_ops;
   });
 #ifdef CUDA
