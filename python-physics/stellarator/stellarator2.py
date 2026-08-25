@@ -373,7 +373,10 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         grad_w_vprime = jnp.pad(
             grad_unraveled, ((0, 0), (0, 2)), mode="constant")
 
-        return grad_w_vprime
+        # (np, nPoints): the parameter is the first axis. grad_unraveled comes out
+        # of the vmap over positions with the point index leading, which is the
+        # other way round from what MaNTA reads.
+        return grad_w_vprime.T
 
     @MaNTA_Decorator
     def dg(self, i, states, positions):

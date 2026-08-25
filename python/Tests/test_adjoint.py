@@ -621,6 +621,45 @@ class SpatialObjectiveAdjoint(MaNTA.AdjointProblem):
         return f"field{pIndex}"
 
 
+def test_a_transposed_dgfndp_is_reported_rather_than_aborting(tmp_path):
+    """A wrong-way-round dgFndp names itself instead of killing the process.
+
+    Neither wrong shape announces itself on its own. `checkShapeAndSet` is a plain
+    assignment outside a DEBUG build, so a mismatched one reaches Eigen and aborts
+    the process naming `Block<Matrix<double,-1,-1>,-1,-1,false>` and nothing about
+    MaNTA -- and where `np` happens to equal the node count nothing aborts at all:
+    the gradient is silently transposed and the run returns a plausible wrong
+    answer. So the orientation is checked where it arrives.
+    """
+
+    class TransposedSpatialAdjoint(SpatialObjectiveAdjoint):
+        def dgFndp(self, gIndex, states, positions):
+            return np.asarray(
+                super().dgFndp(gIndex, states, positions)
+            ).T.copy()
+
+    system = ParametricDiffusion(np.array([KAPPA0, SOURCE0]))
+    cfg = adjoint_config(tmp_path, Polynomial_degree=3, Grid_size=4)
+    nPoints = cfg["Grid_size"] * (cfg["Polynomial_degree"] + 1)
+    assert nPoints != NP_SPATIAL, (
+        "np and nPoints coincide here, so a transpose would be undetectable"
+    )
+
+    adjoint = TransposedSpatialAdjoint()
+    system.createAdjointProblem = lambda: adjoint
+
+    runner = MaNTA.Runner(system)
+    runner.configure(cfg)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        runner.run(T_FINAL)
+
+    message = str(excinfo.value)
+    assert "dgFndp" in message, message
+    assert f"({NP_SPATIAL}, {nPoints})" in message, message
+    assert "transpose" in message, message
+
+
 def test_spatial_gradients_keep_dgdp_in_the_layout_G_p_uses(tmp_path):
     """G_p is (nPoints, np), and dGFndp has to arrive that way round."""
     system = ParametricDiffusion(np.array([KAPPA0, SOURCE0]))

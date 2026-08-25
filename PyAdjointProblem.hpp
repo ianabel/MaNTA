@@ -46,10 +46,38 @@ public:
     throw std::runtime_error("Non-vectorized version of function \"dGFndp\" "
                              "deprecated.");
   };
+  // dgFndp must report (np, nPoints), which is what the non-spatial branch
+  // indexes as dgdp(p, ind) and what the spatial branch transposes into G_p's
+  // (nPoints, np) block.
+  //
+  // Checked rather than assumed, because neither wrong shape announces itself.
+  // checkShapeAndSet is a plain assignment outside a DEBUG build, so a mismatch
+  // reaches Eigen and aborts the process naming
+  // Block<Matrix<double,-1,-1>,-1,-1,false> and nothing about MaNTA -- and where
+  // np happens to equal the node count nothing aborts at all: the gradient is
+  // silently transposed and the run returns a plausible wrong answer.
+  void checkDgFndpShape(Matrix const &dgdp, std::size_t nPoints) const {
+    if (dgdp.rows() == np && dgdp.cols() == static_cast<Eigen::Index>(nPoints))
+      return;
+
+    std::string hint;
+    if (dgdp.rows() == static_cast<Eigen::Index>(nPoints) && dgdp.cols() == np)
+      hint = " It is the transpose of what is wanted: return dgdp.T, or build it "
+             "with the parameter as the first axis.";
+
+    throw std::runtime_error(
+        "Adjoint hook \"dgFndp\" returned a (" + std::to_string(dgdp.rows()) +
+        ", " + std::to_string(dgdp.cols()) + ") array; it must be (np, nPoints) = (" +
+        std::to_string(np) + ", " + std::to_string(nPoints) + ")." + hint);
+  }
+
   Matrix dGFndp(Index gIndex, DGSoln &y) const override {
     const auto states = y.evalOnNodes();
     const auto points = y.getPoints();
     Matrix out;
+
+    Matrix dgdp = dgFndp(gIndex, states, points);
+    checkDgFndpShape(dgdp, points.size());
 
     // If parameters are spatial, int dg/dp dx = int dg/dp_cell
     // delta(x - x_cell) dx, so we just return dg/dp evaluated at
@@ -57,21 +85,15 @@ public:
     // domain to get the total sensitivity with respect to that
     // parameter.
     if (areParametersSpatial()) {
-      // Transposed on the way out. dgFndp is (np, nPoints) -- that is the
-      // orientation the non-spatial branch below indexes as dgdp(p, ind) --
-      // while computeAdjointGradients assigns this into a
-      // (nCells * (k + 1), np) block of G_p. Returned raw it aborted inside
-      // Eigen's assignment, and would have silently transposed the gradient
-      // rather than aborting had np ever equalled the node count.
-      Matrix retval = dgFndp(gIndex, states, points);
-      return retval.transpose();
-    } else {
-      out.resize(1, np);
+      // Transposed on the way out: computeAdjointGradients assigns this into a
+      // (nCells * (k + 1), np) block of G_p, while the hook reports (np,
+      // nPoints) -- the orientation the non-spatial branch below indexes as
+      // dgdp(p, ind).
+      return dgdp.transpose();
     }
 
+    out.resize(1, np);
     out.setZero();
-
-    Matrix dgdp = dgFndp(gIndex, states, points);
 
     for (size_t i = 0; i < y.getGrid().getNCells(); i++) {
       const Interval &I = y.getGrid()[i];
