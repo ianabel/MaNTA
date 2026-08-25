@@ -5,8 +5,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include <boost/math/quadrature/gauss.hpp>
-
 #include "AdjointProblem.hpp"
 #include "PyState.hpp"
 
@@ -16,31 +14,6 @@ class PyAdjointProblem : public AdjointProblem,
                          public py::trampoline_self_life_support {
 public:
   using AdjointProblem::AdjointProblem;
-
-  void initializeOverrides() {
-    auto make_override = [this](const char *method_name) {
-      py::gil_scoped_acquire gil;
-      py::function _override = py::get_override(this, method_name);
-
-      if (_override) {
-        return _override;
-      } else {
-        throw std::runtime_error(std::string("Pure virtual method ") +
-                                 method_name +
-                                 " not overridden in Python subclass");
-      }
-    };
-    method_overrides.insert(
-        std::make_pair("dgFn_dphi", make_override("dgFn_dphi")));
-    method_overrides.insert(
-        std::make_pair("dAux_dp", make_override("dAux_dp")));
-
-    initialized = true;
-  }
-  // PyTransportSystem(TransportSystem &&base) : Tr
-
-  using IntegratorType = boost::math::quadrature::gauss<double, 30>;
-  static IntegratorType integrator;
 
   // We don't have the DGSoln object in Python, so we implement GFn and
   // dGFndp here
@@ -159,10 +132,9 @@ public:
     // x).cast<Values>();
   };
   void dgFn_dphi(Index i, VectorRef out, const State &s, Position x) override {
-    if (!initialized)
-      initializeOverrides();
-    out = method_overrides["dgFn_dphi"](i, StateView(const_cast<State &>(s)), x).cast<Values>();
-  };
+    throw std::runtime_error("Individual derivative function \"dgFn_dphi\" "
+                             "deprecated; use vectorized version dg instead.");
+      };
 
   void dg(Index gIndex, GlobalState &out, GlobalState const &states,
           std::vector<Position> const &abscissae) override {
@@ -295,10 +267,9 @@ public:
 
   void dAux_dp(Index i, Index pIndex, Value &out, const State &s,
                Position x) override {
-    if (!initialized)
-      initializeOverrides();
-    out = method_overrides["dAux_dp"](i, pIndex, StateView(const_cast<State &>(s)), x)
-              .cast<Value>();
+
+    throw std::runtime_error("Individual derivative functions deprecated; use "
+                             "vectorized version ComputePhysicsDerivatives instead.");
   }
 
   std::string getName(Index pIndex) const override {
@@ -321,9 +292,6 @@ public:
 
   using AdjointProblem::spatialParameters;
 
-private:
-  bool initialized = false;
-  std::map<std::string, py::function> method_overrides;
 };
 
 #endif // PYADJOINTPROBLEM_HPP

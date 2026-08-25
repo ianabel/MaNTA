@@ -83,7 +83,11 @@ BOOST_AUTO_TEST_CASE(a_minimal_config_loads_with_every_default_applied)
     BOOST_TEST(c.OutputPoints == 301);
     BOOST_TEST(c.WriteOutput);
     BOOST_TEST(!c.WriteDatFile);
-    BOOST_TEST(!c.Superconvergent);
+    // Superconvergent is a std::optional: absent, rather than present-and-false.
+    // Presence is the signal, because DegreeAdaptation defaults it to true and
+    // has to be able to tell "not asked for" from "asked against".
+    const bool superconvergentAbsent = !c.Superconvergent.has_value();
+    BOOST_TEST(superconvergentAbsent);
     BOOST_TEST(!c.AggressiveTimesteps);
     BOOST_TEST(!c.SuppressAlgebraicError);
     // PseudoTransient, not TimeMarch: run_ss() and a config carrying
@@ -91,6 +95,18 @@ BOOST_AUTO_TEST_CASE(a_minimal_config_loads_with_every_default_applied)
     BOOST_TEST(c.SteadyStateSolver == "PseudoTransient");
     BOOST_TEST(c.PseudoTransientInitialStep == 0.0);
     BOOST_TEST(c.PseudoTransientMaxStep == 0.0);
+
+    // Unlike the two above, these two are real values rather than "unset"
+    // sentinels: a zero SER rate means "grow at the floor alone", so the
+    // schema default is what the solver is configured with every time.
+    BOOST_TEST(c.PseudoTransientSERRate == 1.0);
+    BOOST_TEST(c.PseudoTransientSERFloor == 2.0);
+    BOOST_TEST(c.NewtonMaxIterations == 20u);
+    BOOST_TEST(c.NewtonJacobianReuse == 10u);
+    BOOST_TEST(c.NewtonStepTolerance == 0.0);
+    BOOST_TEST(c.NewtonScaling == "Unit");
+    BOOST_TEST(c.SteadyStateDiagnostics == false);
+    BOOST_TEST(c.SteadyStateStepDiagnostics == false);
 }
 
 BOOST_AUTO_TEST_CASE(absolute_tolerance_defaults_to_1e_3)
@@ -380,6 +396,14 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         "SteadyStateSolver = \"Newton\"\n"
         "PseudoTransientInitialStep = 0.25\n"
         "PseudoTransientMaxStep = 1e6\n"
+        "PseudoTransientSERRate = 0.5\n"
+        "PseudoTransientSERFloor = 1.5\n"
+        "NewtonMaxIterations = 7\n"
+        "NewtonJacobianReuse = 3\n"
+        "NewtonStepTolerance = 1e-9\n"
+        "NewtonScaling = \"ErrorWeights\"\n"
+        "SteadyStateDiagnostics = true\n"
+        "SteadyStateStepDiagnostics = true\n"
         "zeroFlux = true\n"
         "WriteOutput = false\n"
         "SteadyStateTolerance = 1e-5\n"
@@ -407,6 +431,13 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         {"SuppressAlgebraicError", true},
         {"SteadyStateSolver", std::string("Newton")},
         {"PseudoTransientInitialStep", 0.25}, {"PseudoTransientMaxStep", 1e6},
+        {"PseudoTransientSERRate", 0.5}, {"PseudoTransientSERFloor", 1.5},
+        {"NewtonMaxIterations", 7u},
+        {"NewtonJacobianReuse", 3u},
+        {"NewtonStepTolerance", 1e-9},
+        {"NewtonScaling", std::string("ErrorWeights")},
+        {"SteadyStateDiagnostics", true},
+        {"SteadyStateStepDiagnostics", true},
         {"zeroFlux", true}, {"WriteOutput", false},
         {"SteadyStateTolerance", 1e-5}, {"OutputFilename", std::string("shared")},
         {"FieldSolve", std::string("exact")}, {"FieldSolveTolerance", 1e-10},
@@ -424,12 +455,23 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
                boost::test_tools::per_element());
     BOOST_TEST(fromToml.OutputPoints == fromMap.OutputPoints);
     BOOST_TEST(fromToml.OutputFilename == fromMap.OutputFilename);
-    BOOST_TEST(fromToml.Superconvergent == fromMap.Superconvergent);
+    // Wrapped: std::optional has no operator<< for Boost.Test to print.
+    const bool superconvergentAgrees =
+        fromToml.Superconvergent == fromMap.Superconvergent;
+    BOOST_TEST(superconvergentAgrees);
     BOOST_TEST(fromToml.AggressiveTimesteps == fromMap.AggressiveTimesteps);
     BOOST_TEST(fromToml.SuppressAlgebraicError == fromMap.SuppressAlgebraicError);
     BOOST_TEST(fromToml.SteadyStateSolver == fromMap.SteadyStateSolver);
     BOOST_TEST(fromToml.PseudoTransientInitialStep == fromMap.PseudoTransientInitialStep);
     BOOST_TEST(fromToml.PseudoTransientMaxStep == fromMap.PseudoTransientMaxStep);
+    BOOST_TEST(fromToml.PseudoTransientSERRate == fromMap.PseudoTransientSERRate);
+    BOOST_TEST(fromToml.PseudoTransientSERFloor == fromMap.PseudoTransientSERFloor);
+    BOOST_TEST(fromToml.NewtonMaxIterations == fromMap.NewtonMaxIterations);
+    BOOST_TEST(fromToml.NewtonJacobianReuse == fromMap.NewtonJacobianReuse);
+    BOOST_TEST(fromToml.NewtonStepTolerance == fromMap.NewtonStepTolerance);
+    BOOST_TEST(fromToml.NewtonScaling == fromMap.NewtonScaling);
+    BOOST_TEST(fromToml.SteadyStateDiagnostics == fromMap.SteadyStateDiagnostics);
+    BOOST_TEST(fromToml.SteadyStateStepDiagnostics == fromMap.SteadyStateStepDiagnostics);
     BOOST_TEST(fromToml.zeroFlux == fromMap.zeroFlux);
     BOOST_TEST(fromToml.WriteOutput == fromMap.WriteOutput);
     BOOST_TEST(fromToml.MinStepSize == fromMap.MinStepSize);

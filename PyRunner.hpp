@@ -10,6 +10,7 @@
 #include <string_view>
 #include <variant>
 
+#include "SolverConfig.hpp"
 #include "SystemSolver.hpp"
 
 #include "PhysicsCases.hpp"
@@ -37,6 +38,18 @@ public:
   */
   explicit PyRunner(std::shared_ptr<TransportSystem> problem)
       : pProblem(problem) {};
+
+  // ...or the name of a C++ physics case, as a config file's TransportSystem
+  // key gives it. The object cannot be handed in the way a Python case is,
+  // because a C++ case's constructor takes the Grid -- which configure() is
+  // what builds. So the name is kept and the case is instantiated there, at
+  // the point the grid exists. Its own configuration table travels in the same
+  // dict; see PyToml.hpp.
+  //
+  // The name is checked here rather than at configure() so that a typo fails
+  // where it was written, with the list of what is registered.
+  explicit PyRunner(std::string physicsCase);
+
   ~PyRunner() = default;
 
   // Configure solver from Python
@@ -76,13 +89,31 @@ public:
   Vector getSolution(Index var,
                      std::optional<std::vector<Position>> const &points);
 
+  // q, sampled exactly as getSolution samples u. q is an unknown of the system
+  // in its own right, not a derivative to be recovered after the fact, and
+  // there was no way to read it from Python at all -- so a caller wanting
+  // d_x u had to differentiate a fit to getSolution's output, which is neither
+  // the solver's q nor as accurate as it.
+  Vector getDerivative(Index var,
+                       std::optional<std::vector<Position>> const &points);
+
   // The element-local postprocessed solution u* in P_{k+1}, sampled the same way
   // getSolution samples u. Available for any k >= 1 regardless of whether the
   // superconvergent scheme is switched on.
   Vector getPostprocessedSolution(Index var,
                                   std::optional<std::vector<Position>> const &points);
 
+  // The registered name of the C++ case this Runner drives, or empty when it
+  // was handed a transport system object. Exposed because a driver that was
+  // given a Runner has otherwise no way to ask which of the two it is.
+  std::string const &physicsCase() const { return caseName; }
+
 private:
+  // Empty unless constructed from a name. Non-empty is what makes configure()
+  // build `pProblem` itself, so it is also the flag distinguishing the two
+  // constructors -- there is no separate bool that could disagree with it.
+  std::string caseName;
+
   std::shared_ptr<TransportSystem> pProblem = nullptr;
   std::unique_ptr<AdjointProblem> adjoint = nullptr;
   // Built on demand by G() when solveAdjoint is false, purely to evaluate the
@@ -90,9 +121,36 @@ private:
   // mistaken for "the gradients have been computed".
   std::unique_ptr<AdjointProblem> objectiveOnlyAdjoint = nullptr;
 
-  // Ownership of objects handled by C++
+  // Ownership of objects handled by C++.
+  //
+  // configure() builds the first `system`; with DegreeAdaptation armed, run()
+  // and run_ss() *replace* it, once per polynomial degree. Only this pointer
+  // moves -- `grid`, `adjoint` and `pProblem` are the same objects at every
+  // level, which is what makes adapting the degree cheap where adapting the
+  // mesh would not be. Everything crossing to Python does so by value, so no
+  // caller can be left holding a reference into a replaced solver.
+  //
+  // The order of these two matters on teardown and in configure(): a
+  // SystemSolver holds Grid const&, so `system` is nulled before `grid`.
   std::unique_ptr<SystemSolver> system;
   std::unique_ptr<Grid> grid;
+
+  // Kept, not just consumed. Every set* in applySolverConfig configures the
+  // *solver*, so a solver built later in run() needs the configuration replayed
+  // against it; a fresh one has defaults.
+  SolverConfig cfg;
+
+  // The degree configure() built at, which is where an adaptive run starts.
+  unsigned int k = 1;
+
+  // Hand off to runAdaptiveDegree and adopt the solver it settles on. Shared by
+  // run() and run_ss() so the two cannot diverge on the sequencing.
+  void adaptDegree(double tFinal);
+
+  // Build the case `caseName` names, from the config dict, against `grid`.
+  // Only called when caseName is non-empty, and only from configure(), which
+  // has built the grid by then.
+  void instantiatePhysicsCase(const py::dict &config);
 
   bool configured = false;
   double steady_state_tolerance;

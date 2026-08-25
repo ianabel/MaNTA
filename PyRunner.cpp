@@ -1,6 +1,9 @@
 #include "PyRunner.hpp"
 #include "Logging.hpp"
+#include "DegreeAdaptation.hpp"
 #include "PyConfigSource.hpp"
+#include "PyToml.hpp"
+#include <algorithm>
 #include <pybind11/eigen.h>
 #include <string>
 #include <print>
@@ -9,13 +12,76 @@
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y,
                  std::vector<double> &dYdt, Index &nField);
 
+PyRunner::PyRunner(std::string physicsCase) : caseName(std::move(physicsCase)) {
+  // Rejected here, at the point the name was written, rather than at the first
+  // configure(): the registry is populated by static initialisation, so
+  // whether a name is available is already settled by the time any Python runs
+  // -- barring a later registerPhysicsCase or plugin load, which a caller does
+  // before building a Runner because there is no other useful order.
+  auto const names = PhysicsCases::RegisteredNames();
+  if (std::find(names.begin(), names.end(), caseName) == names.end()) {
+    std::string available;
+    for (auto const &n : names)
+      available += (available.empty() ? "" : ", ") + n;
+    throw std::invalid_argument(
+        "There is no physics case named '" + caseName +
+        "'. Available cases: " +
+        (available.empty() ? "(none -- no physics case object files are linked "
+                             "in)"
+                           : available) +
+        ". manta.physics_cases() lists them, manta.load_physics_plugin() adds "
+        "a case built out of tree, and manta.Runner(system) takes a Python "
+        "case as an object instead.");
+  }
+}
+
+// Build the C++ case named at construction, from the same dict the solver's
+// configuration came out of. Called by configure() once the grid exists.
+//
+// Rebuilt on every configure() rather than once, and that is the point of doing
+// it here at all: a C++ case reads its table in its constructor, so a driver
+// sweeping a physics parameter -- which is the reason to want a C++ case under
+// a Python optimiser -- changes the dict and reconfigures. Instantiating once
+// would silently pin the first call's parameters.
+//
+// Everything derived from the old case goes first. The AdjointProblem an
+// autodiff case hands out holds a raw pointer back to it
+// (AutodiffAdjointProblem::PhysicsProblem), so an adjoint outliving its problem
+// dangles; `system` was already nulled by configure() before this runs.
+void PyRunner::instantiatePhysicsCase(const py::dict &config) {
+  adjoint = nullptr;
+  objectiveOnlyAdjoint = nullptr;
+  pProblem = nullptr;
+
+  try {
+    pProblem = PhysicsCases::InstantiateProblem(
+        caseName, physicsConfigFromDict(config), *grid);
+  } catch (std::invalid_argument const &e) {
+    // configure() has raised RuntimeError for a bad configuration since it
+    // existed, and a case rejecting its own table -- "there should be a
+    // [DiffusionProblem] section" -- is exactly that. Translated for the same
+    // reason the loadSolverConfig call below it is.
+    throw std::runtime_error(e.what());
+  }
+}
+
 void PyRunner::configure(const py::dict &config) {
-  if (!pProblem)
+  if (!pProblem && caseName.empty())
     throw std::runtime_error("Transport system not set. Please set transport "
                              "system before configuring solver.");
   // Set stored problem to null to allow reconfiguration after object creation
   system = nullptr;
   grid = nullptr;
+  // ...and with the grid goes anything holding it. The restart DGSolns took a
+  // reference to *grid until they started copying it, and `restarting` is
+  // sticky, so a configuration that does not ask for a restart has to say so
+  // rather than inherit the last one. Cleared here, before the config is even
+  // parsed, so it holds on the throwing paths too.
+  //
+  // A C++ case is rebuilt below rather than cleared, so there may be nothing
+  // here to clear on the first call.
+  if (pProblem)
+    pProblem->clearRestart();
 
   // Every key this accepts is declared in ConfigSchema.cpp, the same table
   // runManta reads. This function used to carry its own `params` list and its
@@ -23,7 +89,7 @@ void PyRunner::configure(const py::dict &config) {
   // wanted `t_initial`, and to default Absolute_tolerance to a different
   // number.
   DictConfigSource source(config);
-  SolverConfig cfg = [&] {
+  cfg = [&] {
     try
     {
       return loadSolverConfig(source, ConfigSchema::Reader::Dict);
@@ -53,8 +119,11 @@ void PyRunner::configure(const py::dict &config) {
     }
   }
 
-  unsigned int k = 1;
+  k = 1;
   grid = makeGrid(cfg, cfg.restart ? &restart_file : nullptr, k);
+
+  if (!caseName.empty())
+    instantiatePhysicsCase(config);
 
   if (cfg.solveAdjoint)
     adjoint = pProblem->createAdjointProblem();
@@ -90,7 +159,12 @@ void PyRunner::configure(const py::dict &config) {
       throw std::invalid_argument(
           "nVars/nAux/nScalars in restart file inconsistent with physics case");
 
+    // The file's own degree, which is what its DOF are laid out at.
     pProblem->setRestartValues(Y, dYdt, *grid, k);
+
+    // The run's degree, which may differ. setInitialConditions projects across
+    // the difference; equal degrees keep the copy path.
+    k = restartRunOrder(cfg, k);
   }
 
   system = std::make_unique<SystemSolver>(*grid, k, pProblem.get());
@@ -112,10 +186,34 @@ void PyRunner::configure(const py::dict &config) {
   logmsg<LOG_LEVEL::INFO>("Configuration done.");
 }
 
+// Replace `system` with the one an adaptive run settles on.
+//
+// The solver being destroyed is the argument's own, so it goes before the next
+// is built -- runAdaptiveDegree does that internally, and this only has to not
+// keep the old one alive alongside the new. `grid`, `adjoint` and `pProblem`
+// are untouched; the driver re-attaches the adjoint problem and replays the
+// configuration against every level it builds.
+void PyRunner::adaptDegree(double tFinal) {
+  system.reset();
+  system = runAdaptiveDegree(cfg, *pProblem, adjoint.get(), *grid, k, tFinal);
+}
+
 void PyRunner::run(double tFinal) {
   if (!configured) {
     throw std::runtime_error(
         "Error: Runner must be configured before running solver.");
+  }
+  if (cfg.DegreeAdaptation) {
+    // run() means "integrate the transient", and degree adaptation is a
+    // steady-only feature -- so this is refused rather than quietly turned into
+    // a steady solve. Note what run() does two lines below when the config
+    // carries SteadyStateTolerance: it *clears* the flag and warns, because the
+    // caller asked for the path rather than the endpoint. Silently doing the
+    // opposite here would contradict it.
+    throw std::runtime_error(
+        "DegreeAdaptation is for steady solves; call run_ss() rather than "
+        "run(). Adapting the degree across a transient would restart each "
+        "level from the previous one's final state.");
   }
   if (system->TerminateOnSteadyState) {
     logmsg<LOG_LEVEL::WARNING>(
@@ -144,6 +242,16 @@ void PyRunner::run_ss() {
   if (!configured) {
     throw std::runtime_error(
         "Error: Runner must be configured before running solver.");
+  }
+  if (cfg.DegreeAdaptation) {
+    // run_ss() arms steady-state termination whether or not the key was
+    // present, so the tolerance has to reach every level rather than the one
+    // configure() built. Writing it into the config the driver replays is what
+    // does that -- setting it on `system` here would be lost with that solver.
+    cfg.SteadyStateTolerance = steady_state_tolerance;
+    adaptDegree(0);
+    std::println("Done.");
+    return;
   }
   system->setSteadyStateTolerance(steady_state_tolerance);
   system->runSolver(0);
@@ -236,6 +344,27 @@ py::tuple PyRunner::getAdjointGradients(void) {
   }
 
   return py::make_tuple(G, gp);
+}
+
+Vector
+PyRunner::getDerivative(Index var,
+                        std::optional<std::vector<Position>> const &points) {
+  // Same shape as getSolution below, reading yJac.q rather than yJac.u -- and
+  // for the same reason: q is a DGApprox over the solver's own basis, so it
+  // evaluates at any x directly. The alternative a caller had before this
+  // existed was to fit something to getSolution's samples and differentiate
+  // that, which is a different function.
+  const std::vector<Position> xs =
+      points ? points.value() : system->yJac.getPoints();
+
+  Vector sol(xs.size());
+  for (size_t i = 0; i < xs.size(); i++) {
+    const auto &p = xs[i];
+    if (p < grid->lowerBoundary() || p > grid->upperBoundary())
+      throw std::out_of_range("Requested point outside of grid boundaries");
+    sol(i) = system->yJac.q(var)(p);
+  }
+  return sol;
 }
 
 Vector

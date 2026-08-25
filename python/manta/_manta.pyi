@@ -6,7 +6,7 @@ import collections.abc
 import numpy
 import numpy.typing
 import typing
-__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'Field', 'Grid', 'Mixed', 'Neumann', 'Runner', 'Scalar', 'State', 'StateField', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'numbered_spec', 'registerPhysicsCase', 'run']
+__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'Field', 'Grid', 'Mixed', 'Neumann', 'Runner', 'Scalar', 'State', 'StateField', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'load_physics_plugin', 'numbered_spec', 'physics_cases', 'registerPhysicsCase', 'run']
 class AdjointProblem:
     spatialParameters: bool
     def __init__(self) -> None:
@@ -137,11 +137,17 @@ class Grid:
 class Runner:
     def G(self) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
         ...
+    @typing.overload
     def __init__(self, arg0: TransportSystem) -> None:
+        ...
+    @typing.overload
+    def __init__(self, physics_case: str) -> None:
         ...
     def configure(self, arg0: dict) -> None:
         ...
     def getAdjointGradients(self) -> tuple:
+        ...
+    def getDerivative(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex] | None) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
         ...
     def getPostprocessedSolution(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex] | None) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
         ...
@@ -161,6 +167,11 @@ class Runner:
         ...
     def wasRejected(self) -> bool:
         ...
+    @property
+    def physics_case(self) -> str:
+        """
+        The registered C++ case name this Runner was built from, or "" when it was handed a transport system object.
+        """
 class Scalar:
     description: str
     differential: bool
@@ -356,9 +367,17 @@ def getNodes(arg0: typing.SupportsFloat | typing.SupportsIndex, arg1: typing.Sup
     """
     Get the points of a grid
     """
+def load_physics_plugin(path: str) -> None:
+    """
+    Load a physics case built outside the MaNTA tree, so that manta.Runner(name) can reach it. The dict equivalent of a config file's PhysicsPlugins key. Compile the plugin with the flags `pkg-config --cflags manta` reports, and do not link it against -lmanta; see the out-of-tree section of the docs.
+    """
 def numbered_spec(nVars: typing.SupportsInt | typing.SupportsIndex, nScalars: typing.SupportsInt | typing.SupportsIndex = 0, nAux: typing.SupportsInt | typing.SupportsIndex = 0, lower: BoundaryCondition = ..., upper: BoundaryCondition = ..., differential: bool = False) -> SystemSpec:
     """
     A SystemSpec using the historical placeholder names (Var0, Scalar0, AuxVariable0).
+    """
+def physics_cases() -> list[str]:
+    """
+    Every physics case name manta.Runner(name) will accept, ascending. Includes the C++ cases compiled into this extension, anything a loaded plugin registered, and anything registerPhysicsCase was called with.
     """
 def registerPhysicsCase(name: str, factory: collections.abc.Callable[[TomlValue, Grid], TransportSystem]) -> None:
     """

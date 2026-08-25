@@ -111,20 +111,6 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
         )
         return out
 
-    # Pointwise, unlike every other dg hook here: dgFn_du/dq/dsigma were
-    # replaced by the vectorised `dg`, but PyAdjointProblem still calls this one
-    # per point, so it needs its state converting like the batched ones.
-    # `.Aux`, not `["Aux"]` -- the subscript is left from when a State crossed
-    # as a dict, and jax.grad returns the State module the input was.
-    @MaNTA_Decorator
-    @partial(jax.jit, static_argnums=(0,))
-    def dgFn_dphi(self, i, state, x):
-        return jax.grad(self.g, argnums=0)(state, x, self.params).Aux
-
-    @ShiftedState_Decorator
-    def dAux_dp(self, index, pIndex, state, x):
-        return self.daux_dp(index, state, x, 0.0, self.params)[pIndex]
-
     def computeUpperBoundarySensitivity(self, i, pIndex):
         if (i, pIndex) in self.UpperBoundarySensitivities:
             return True

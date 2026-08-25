@@ -11,16 +11,27 @@ import jax.numpy as jnp
 import equinox as eqx
 
 
-class LinearDiffusionParams(NamedTuple):
-    Centre: float
-    InitialWidth: float
-    InitialHeight: float
-    kappa: float
+class NonlinearDiffusionParams(NamedTuple):
+    SourceCentre: float
+    D: float
+    T_s: float
+    a: float
+    SourceWidth: float
+
+    @classmethod
+    def make(cls, SourceCentre, D, a ) -> "NonlinearDiffusionParams":
+        return cls(
+            SourceCentre=SourceCentre,
+            D=D,
+            T_s=50.0,
+            a=a,
+            SourceWidth=0.02,
+        )
 
 
-class JAXLinearDiffusion(VectorizedTransportSystem):
+class JAXAuxTest(VectorizedTransportSystem):
     def __init__(self, params):
-        super().__init__(MaNTA.numbered_spec(1))
+        super().__init__(MaNTA.numbered_spec(1, nAux = 1, lower=MaNTA.Neumann))
 
         self.params = params
 
@@ -61,40 +72,48 @@ class JAXLinearDiffusion(VectorizedTransportSystem):
         G, G_p = self.runner.Get_adjoint_gradients()
         return G, G_p
 
-    def g(self, state, x, params):
+    def g(self, state, x, params: NonlinearDiffusionParams):
+        return 0.5 * state.Aux[0]
+
+    def sigma(self, index, state, x, t, params: NonlinearDiffusionParams):
+
         u = state.Variable[0]
-        return 0.5 * u * u
+        q = state.Derivative[0]
+        return params.D * (u**params.a) * q
 
-    def setParams(self, params):
-        self.params = params
+    def aux(self, index, state, x, t, params):
+        a = state.Aux[0]
+        u = state.Variable[0]
+        return a - params.D * u * u
 
-    def sigma(self, index, state, x, t, params):
-        tprime = state.Derivative
-        out = params.kappa * tprime[index]
-        return out
-
-    def source(self, index, state, x, t, params):
-        return 10.0 * (1 - params.Centre)
+    def source(self, index, state, x, t, params: NonlinearDiffusionParams):
+        y = x - params.SourceCentre
+        u = state.Variable[0]
+        a = state.Aux[0]
+        return params.T_s * jnp.exp(-y * y / params.SourceWidth) + a - params.D * u * u
 
     def LowerBoundary(self, index, t):
         return 0.0
 
     def UpperBoundary(self, index, t):
-        return 0.0
+        return 0.3
 
     def InitialValue(self, index, x):
-        alpha = 1 / 0.02
-        y = x - self.params.Centre
-        return self.params.InitialHeight * jnp.exp(-alpha * y * y)
+        return 0.3
+
+    def InitialAuxValue(self, index, x):
+        u0 = self.InitialValue(index, x)
+        return self.params.D * u0 * u0
+
 
     def createAdjointProblem(self):
         return self.adjointProblem
 
 
 def runMaNTA(params):
-    transportSystem = JAXLinearDiffusion(params)
+    transportSystem = JAXAuxTest(params)
 
-    transportSystem.run(tFinal=5.0)
+    transportSystem.run(5.0)
     G, G_p = transportSystem.getAdjointGradients()
     uout = transportSystem.runner.Get_profile(0)
     return G, G_p
@@ -118,6 +137,6 @@ def fun_jvp(primals, tangents):
     return G[0], jnp.dot(G_p[0], params_dot_flatten)
 
 
-params_new = LinearDiffusionParams(0.1, 0.1, 0.0, 2.0)
+params_new = NonlinearDiffusionParams.make(0.1, 0.1, 1.0)
 
 print(jax.grad(fun)(params_new))

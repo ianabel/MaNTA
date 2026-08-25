@@ -107,25 +107,62 @@ restored dY/dt.
 `.ref.nc` files are committed -- `.gitignore` has `*.nc` with a `!*.ref.nc`
 negation.
 
-**`AuxVarTest.ref.nc` was regenerated** after the `dAux_Mat` column-layout fix
-(see the paired-implementations section below). The old reference was produced
-by `f35e3ee`, the commit that introduced the defect, so it recorded the
-behaviour of a run whose Jacobian was missing `dG/du` entirely. The case runs at
-`Relative_tolerance = Absolute_tolerance = 1e-2`, loose enough that a different
-Newton path moves the answer by about half a percent -- which is what tripped
-the 5e-3 comparison.
+**`AuxVarTest.ref.nc` has been regenerated twice, both times because the case was
+running too loose to pin a solution at all.** That is the thing to understand
+before touching it again: a reference is only a reference if the run that made it
+is more accurate than the tolerance it is compared at, and for years this one was
+not.
 
-The new output is *closer to the truth*, not merely different. Against a
-tighter-tolerance run of the same discretisation (rtol = atol = 1e-5, which is
-as tight as this case will integrate):
+The first regeneration followed the `dAux_Mat` column-layout fix (see the
+paired-implementations section below); the old reference came from `f35e3ee`, the
+commit that introduced that defect, so it recorded a run whose Jacobian was
+missing `dG/du` entirely.
 
-| | Var0 | Var1 |
-|---|---|---|
-| old reference | 1.56e-2 | 2.72e-2 |
-| new output | 1.01e-2 | 1.37e-2 |
+The second followed a *second* missing Jacobian block in the same case.
+`SigmaFn` adds `(a - u*u)` to **both** variables' fluxes, but `dSigma_dPhi`
+declared the derivative only for variable 0. On the constraint manifold
+`a = u*u`, so the stray term vanishes and nothing notices -- and a warm start is
+precisely the state that is *off* the manifold, where Newton then diverged.
+Finite-differencing `residual` against the assembled Jacobian put the `sigma[1]`
+block out by 98% of the residual scale before the fix and 4.2e-9 after it, every
+other block unchanged. The fix declares the derivative rather than removing the
+term from `SigmaFn`, so the physics -- and the solution -- are untouched.
 
-The pre-fix reference is kept out of the tree; recover it from
-`git show HEAD:Tests/RegressionTests/AuxVarTest.ref.nc` if the comparison ever
+Both times the trigger was the same and was not the fix: at
+`Relative_tolerance = Absolute_tolerance = 1e-2` **the case's own answer is 4.1%
+from the converged one**, against a comparison tolerance of 5e-3. Measured
+against a rtol = 1e-10 run of the same discretisation:
+
+| run | max relative L2 from converged |
+|---|---|
+| the 1e-2 configuration | 4.1e-2 |
+| 1e-4 / 1e-6 | 3.5e-5 |
+| **1e-6 / 1e-8 (now)** | **4.2e-7** |
+
+So any change that moved the Newton path moved the output past the threshold
+without either answer being wrong -- the two 1e-2 answers straddle the converged
+one, each 1-4% out. The reference was pinning a step sequence.
+
+`AuxVarTest.conf` now runs at `1e-6 / 1e-8`, four orders inside the comparison,
+and the reference is a solution. What that buys, measured by forcing different
+step sequences on the tightened configuration (`initialTimestep`, `MinStepSize`
+within its working range, `AggressiveTimesteps`): the answer moves by **at most
+1.8e-6**, where the same class of change used to move it by 0.93% and fail.
+
+Two costs, neither of them free:
+
+* **`MinStepSize` is load-bearing and must stay in the config.** At the default
+  1e-7 the case dies with `IDA_ERR_FAIL` (-3) at these tolerances. The limit is
+  between 1e-8 (fails) and 1e-9 (works); the config sets 1e-12.
+* **An explicit `initialTimestep` above ~1e-4 now fails** where 1e-3 worked at
+  1e-2. Nothing in the tree sets it for this case -- the default of 0 lets IDA
+  choose -- but a first step too large for the requested accuracy is not
+  recoverable, which is the same family as the `MinStepSize` floor.
+
+Runtime went from 0.07 s to 0.15 s.
+
+Earlier references are kept out of the tree; recover one from
+`git show <commit>:Tests/RegressionTests/AuxVarTest.ref.nc` if a comparison ever
 needs repeating.
 
 ## Reading the coverage number
@@ -653,6 +690,90 @@ it is how the `dAux_Mat` column-layout defect was found. Two things make it work
 
 These are deliberate and tracked, not oversights:
 
+* **Driving a C++ case from Python is pinned by an exact comparison against the
+  TOML surface, and the gap is plugins.** `python/Tests/test_cpp_cases.py` runs
+  two cases -- `LinearDiffusion` and `AdjointTestProblem` -- twice each, once
+  from a config file it generates and once from the dict that file was generated
+  *from*, and requires the netCDF output to be equal **bit for bit**. That is the
+  whole strength of the file: both surfaces already share
+  `loadSolverConfig`/`applySolverConfig`/`makeGrid`, so a difference can only be
+  in the new half — a physics table that did not arrive, a float that became an
+  integer, a grid handed over after construction — and none of those is small
+  enough to hide under a tolerance. Compared through the netCDF rather than
+  `getSolution` for a reason: both files are written from `y` at the same output
+  times, while `getSolution` reads `yJac`, the state as of the last Jacobian
+  evaluation, which can lag the final step and would force a tolerance back in.
+
+  `AdjointTestProblem` is there to carry what `LinearDiffusion` cannot: **two**
+  physics tables, a case deriving from `AutodiffTransportSystem` (whose
+  constructor is the only in-tree code that actually *reads* the `Grid` it is
+  handed -- `xL`/`xR`), boundary *kinds* set from a table rather than a
+  coefficient, and `solveAdjoint = true`. `ADTestProblem` would have been the
+  closer analogue and cannot be used: `Config/ADTestProblem.conf` does not run on
+  `main` either, dying in `IDACalcIC` with `IDA_ERR_FAIL`. `Config/AuxVarADTest.conf`
+  is likewise broken ("nAux > 0 but no coupling to fluxes provided"). Both
+  predate this work; nothing in CI runs the `Config/` files, which is why neither
+  is noticed.
+
+  What is **not** covered: `load_physics_plugin` on a real plugin. Only the
+  missing-file path is tested. A plugin needs `make install` and a shared object
+  compiled with the flags `pkg-config --cflags manta` reports, which is more than
+  a pytest should build -- and it is the same gap the TOML surface's
+  `PhysicsPlugins` key already has, so the `dlopen` flags and the
+  do-not-link-`-lmanta` rule are covered by inspection on both surfaces. Nor does
+  anything exercise a **restart** through a C++ case named from Python, or a case
+  with `nScalars > 0`.
+
+* **Degree adaptation is covered in three separable layers, and the gaps are in
+  the physics it has been driven on rather than in the code.**
+  `DegreeAdaptationTests.cpp` splits Giorgiani's rule (arithmetic, no solver),
+  the accuracy indicator (a solution, no loop) and the driver (both), so a
+  failure says which of the three moved; `python/Tests/test_degree_adaptation.py`
+  covers the ownership change that only the Python surface has, where `run_ss()`
+  replaces the solver `configure()` built.
+
+  What no test reaches: **`nAux > 0` and `nScalars > 0`**. The indicator is
+  formed per *variable* and the auxiliary variables are not looked at, which is
+  a real question rather than a missing line — an under-resolved `phi` would not
+  raise the degree. Nor is a **multi-variable** case exercised, so the "worst
+  variable wins" reduction and the per-variable `Absolute_tolerance` floor are
+  covered by inspection only. And nothing drives it with an **adjoint problem
+  attached**, so `setAdjointProblem` being re-applied to each level's solver is
+  untested — which matters, because forgetting it is silent: the run completes
+  and the gradients are simply never computed.
+
+  Two numbers worth keeping. On `AdjointPoster` at 6 cells the loop runs
+  `k` = 2, 5, 8, 10 and takes the estimate 2.1e-3, 8.6e-6, 1.6e-8, 2.0e-10 --
+  four solves under the default `MaxDegreeIncrement = 3`. Without the cap it is
+  three solves, 2, 9, 10, reaching the same place with nothing to read in
+  between.
+  On `NonlinDiffTest` it climbs to the ceiling and stops, because that case's
+  exact solution is `(1 - x/sqrt(t))^(1/n)` — a square-root branch point sitting
+  on the upper boundary, inside the last cell — and the estimate falls like
+  `1/k` exactly. That is the *right* answer on a problem p-refinement cannot
+  fix, and it is the same regularity cap `MESH-REFINEMENT.md` records for
+  Shestakov. Worth knowing before reading a climb to the ceiling as a defect.
+
+* **A restart can change the polynomial degree but not the mesh.** Three cases
+  in `SolverLifecycleTests.cpp` cover the degree change end to end -- refining
+  reproduces the coarse state to 2.2e-16, coarsening lands on a cold run's state
+  to the same, and equal degrees still take `DGSoln::copy` bit for bit. The
+  exactness in the middle one is not luck: L2 projections onto nested spaces
+  compose, so `P_{k-1}(P_k(f)) = P_{k-1}(f)`. That nesting is **per cell and
+  needs the same cell boundaries**, so none of it carries over to a remesh, and
+  a projection onto a different mesh would also want a merge-walk over the two
+  boundary lists -- `DGApprox::operator()` finds its cell by linear scan, so the
+  naive version is O(nCells^2 k).
+
+  What is not covered: the `nDOF_file != nDOF` check is still written out
+  separately in `MaNTA.cpp` and `PyRunner.cpp`, with the DOF formula duplicated
+  in both, and no test drives either. It can only catch an
+  `nVars`/`nAux`/`nScalars` mismatch, since the cell count and the file's degree
+  both come from the file itself. Nor does anything drive `restartRunOrder`
+  through a real config file -- the unit tests reach `setRestartValues`
+  directly, so the config plumbing on both surfaces is covered by inspection
+  only.
+
 * **Adjoint *output* is still not verified.** `WriteAdjoints()` is commented
   out at `Solver.cpp:350` (commit `57d2652`, "adjoint writing doesn't work for
   spatial adjoints"), so no run emits the `ng` variable or the `G<i>_p` /
@@ -754,8 +875,9 @@ These are deliberate and tracked, not oversights:
 
   `python/Tests/test_jax_aux.py` now catches three of the four directly, against
   hand-differentiated closed forms rather than against another autodiff run. The
-  fourth, `dgFn_dphi`, needs a `State`, which has no constructor on the Python
-  side -- the solve remains its only cover.
+  fourth, `dgFn_dphi`, is gone from `manta.jax` since: `dg/dphi` arrives with the
+  rest of the batched `dg`, and `PyAdjointProblem::dgFn_dphi` raises rather than
+  dispatching to Python at all.
 
 * **`AuxG_v` was bound to the pointwise `AuxG`** (`Python.cpp`), where
   `SigmaFn_v` and `Sources_v` name the batched `(GlobalState, positions)`
@@ -791,6 +913,62 @@ These are deliberate and tracked, not oversights:
   independently wrong for any run with `t0 != 0`;
   `the_initial_condition_uses_boundary_data_at_t0` covers that separately,
   because every other fixture in the tree starts at zero.
+
+* **`SteadyState.cpp` is barely covered, and what covers it now is its output
+  rather than its algorithm.** Until recently nothing called `solveSteadyState`
+  from a test at all -- the only mentions of it under `Tests/` were config
+  parsing in `ConfigSourceTests.cpp` and the tolerance setter in
+  `SolverPlumbingTests.cpp`. Two cases in `SolverLifecycleTests.cpp` now drive it
+  end to end, both provoked by defects rather than written for coverage:
+
+  * `a_steady_solve_writes_its_answer_to_the_output_file`. Every output call
+    lived inside the time loop, which `PseudoTransient` and `Newton` skip, so a
+    steady run's `.nc` held exactly one timeslice -- the `t0` one
+    `initialiseNetCDF` writes during `initialize()`, i.e. the *initial
+    condition* -- and its `.dat` one block of the same. The converged state
+    reached `yJac` and the restart file's `Y`, so `getSolution` was always right;
+    only the files were wrong, and every steady run in this tree is driven from
+    Python, which reads `yJac`. `writeDiagnostics` is called from
+    `WriteTimeslice` and nowhere else, so a physics case's per-slice diagnostics
+    were never called at all while `initialiseDiagnostics` and
+    `finaliseDiagnostics` both ran -- the scaffolding at both ends with nothing
+    hung on it. The converged state is now stamped
+    `SystemSolver::STEADY_STATE_TIME` (1.0, a label rather than a time -- see
+    `docs/running.rst`), and the test checks it against the closed form `u = 1-x`
+    as well as requiring the two slices to differ.
+  * `a_converged_steady_state_leaves_no_stale_derivative`. `solveSteadyState`
+    damps through a scratch vector and never wrote back to `dYdt`, so on return
+    it still held the `t0` derivative `IDACalcIC` left -- 103.4 in norm on
+    `AdjointPoster` at a converged steady state, where the defining property of
+    the answer is that it vanishes. `WriteRestartFile` and `writeDiagnostics`
+    both read it, so a restart from a steady run resumed with a `y` and a `y'`
+    that did not belong together. The check is exactly zero, not merely small: it
+    is set rather than converged to.
+
+  Three more cases have landed since, each also provoked by a defect:
+
+  * `the_SER_rate_and_floor_change_the_cost_and_not_the_answer` measures the schedule through physics evaluations -- 552 at the defaults, 3540 with the floor at 1, 1704 with the floor at 1 and the rate at 2 -- and requires the converged state to be identical in all three. An option that changed the answer would be a bug; one that changed nothing would be inert.
+  * `the_steady_diagnostics_count_the_whole_solve_not_the_last_step`. **KINSOL zeroes its own counters at the top of every `KINSol` call**, so the continuation loop has to sum them as it goes; reading them once at the end -- the obvious thing, and what this did first -- reported 1 Newton iteration against 5 continuation steps and 35 Jacobian solves. Self-evidently impossible, and it still looks like a number, which is why the test asserts invariants (`newtonIters >= steps`, `residualEvals == kinFuncEvals + steps + 1`) rather than values. The second of those also pins the counter snapshot being taken before the first `steadyNorm()`, which it was not to begin with.
+  * `a_failed_steady_solve_still_writes_the_last_state_it_reached`, using a tolerance nothing can reach so the solve stalls at ~1e-16 and exits by the "ran out of continuation steps" path. It also checks the per-step trace survives the throw and is complete, since a run that failed is the one whose trace is worth having.
+  * `the_per_step_records_sum_to_the_totals`. The per-`KINSol` records and the totals are gathered by two different routes -- the totals difference MaNTA's monotonic counters across the whole solve, each record differences them across one step -- so their agreement is a check rather than a restatement. It is what would catch a step whose record was never closed, and two of the three exits from the loop body are a `return` and a `throw`, so that is not hypothetical. The offsets are asserted exactly: `sum(jacBuilds)` and `sum(jacSolves)` *equal* the totals because nothing builds or solves outside the loop, while `sum(residualEvals) + 1` is the total, the one being the merit evaluation made before any step exists to charge it to. It also pins the records being cleared per solve rather than accumulated, which `PyRunner` depends on.
+  * `newton_jacobian_reuse_trades_builds_for_solves` and `newton_max_iterations_caps_every_inner_solve`, which read the two KINSOL settings back through the diagnostics rather than through KINSOL -- there is no `KINGet` for `msbset`, and behaviour is the thing worth pinning anyway. Both need a **nonlinear** fixture, so `SolverLifecycleTests.cpp` carries a small `NonlinearDiffusion` (`sigma = (1 + u^2) q`): on `TestDiffusion` every inner solve converges in one Newton iteration, builds equal solves at every setting, and a reuse test would pass while measuring nothing. That degeneracy is checked for explicitly rather than assumed, so a change to the fixture that quietly made it linear fails the test instead of hollowing it out. Measured: reuse 1 gives 16 builds for 16 solves, reuse 10 gives 7 for 29, and the two agree on the answer to 1e-8. The iteration cap is read per step rather than in total, because a total could be held down by the solve simply needing fewer iterations, where a per-step maximum of exactly the cap can only come from the cap binding.
+  * `the_newton_settings_refuse_values_that_cannot_work`. Zero iterations cannot make progress, and zero *reuse* is KINSOL's "use the default" sentinel -- so passing it through would silently mean 10 rather than what was asked. Zero is meanwhile legitimate for the step tolerance, where KINSOL implements exactly that meaning, and the test pins both readings of zero so they cannot be regularised into one.
+  * `the_per_step_diagnostics_print_without_the_summary`. `SteadyStateStepDiagnostics` and `SteadyStateDiagnostics` are independent; this pins the direction that is easy to get wrong, since a trace implemented as extra detail inside the summary block would make the more specialised request unreachable without the less specialised one. Rows are counted from the outcome column rather than by counting lines, so an unrelated line elsewhere in the run cannot make it pass.
+
+  What is still uncovered is the rest of the algorithm -- step rejection,
+  `Newton` mode, the `KINSetMaxNewtonStep` clamp, and the hard-`KINSol`-failure
+  path (the ordinary exhaustion path above shares its `catch (...)` in
+  `Solver.cpp`, but not the code that reaches it). In particular the flat
+  unweighted `steadyNorm` (`SteadyState.cpp`) is untested, and both the
+  convergence test and the SER ratio read it, so anything that changes how it is
+  normalised changes the stopping test and the step schedule together.
+
+  Note also what the fixture cannot show: `TestDiffusion` is *linear*, so each
+  inner solve converges in one Newton iteration and Jacobian builds equal
+  Jacobian solves. The separation those two counters exist to report only
+  appears on a nonlinear problem -- `AdjointPoster` at `k = 3` on 6 cells pays 7
+  builds against 35 solves. An assertion of `builds < solves` was written here
+  first and failed for exactly that reason.
 
 * **The C++ mirror plasma is gone.** `PhysicsCases/MirrorPlasma.{cpp,hpp}`,
   `PhysicsCases/MirrorPlasma/` and `PhysicsCases/CurvedMirrorPlasma/` were

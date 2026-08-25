@@ -62,6 +62,61 @@ becomes shape-checking rather than a plain assignment), `OMP` (enables the
 `#pragma omp parallel for` in the batched physics wrappers), `COVERAGE`,
 `VERBOSE`, `XLA_FFI`/`CUDA` (JAX FFI, needs jaxlib headers).
 
+## Branch protection on `main`
+
+**`main` is protected: work goes on a branch and merges through a pull request.**
+Read the live rule rather than trusting this paragraph —
+`gh api repos/ianabel/MaNTA/branches/main/protection` — but as it stands:
+
+* **No approving review is required** (`required_approving_review_count: 0`), so
+  a PR can be merged by its own author as soon as the checks are green. The PR
+  is a gate for CI, not for review.
+* **`strict: true`**, so a branch has to be up to date with `main` before it can
+  merge. If `main` moves while a PR is open, rebase or merge it in and let CI
+  run again.
+* **Force-pushes and deletions of `main` are refused**, and there is no linear
+  history requirement, so an ordinary merge commit is fine.
+* **`enforce_admins` is off**, so the repo owner can still push straight to
+  `main`. "Protected" therefore means something different depending on who you
+  are, and a workflow that works for `ianabel` is not evidence it works for
+  anyone else.
+
+**All nine contexts `ci.yml` publishes are required**, each pinned to app 15368
+(GitHub Actions), so a status of that name from anything else does not count:
+
+```
+Build + tests (g++-15)                    Build + tests (clang++-19)
+Build + tests (g++-16)                    Build + tests (clang++-20)
+Build + tests (g++-15, Eigen 5.0.1)       Build + tests (clang++-21)
+Build + tests (clang++-19, Eigen 5.0.1)   Compile (fedora:latest)
+Coverage
+```
+
+**Those strings are the job's *rendered* name, and that couples the rule to the
+matrix.** The job is `name: Build + tests (${{ matrix.label || matrix.cxx }})`,
+so adding, removing or relabelling a leg renames its context — and a required
+context that nothing publishes is not an error anywhere. GitHub matches exactly;
+the check simply never arrives, the PR sits at "Expected — waiting for status to
+be reported", and the green ticks beside it are the legs that *are* reporting.
+That is not hypothetical: the rule required `Build + C++ tests` — a name no job
+has ever published, differing both in wording and in carrying no matrix suffix —
+so until it was corrected the protection blocked every non-admin and gated
+nothing CI would have caught.
+
+**So whenever a leg is added, dropped or relabelled, update the required list in
+the same change**, and check the two agree afterwards rather than assuming:
+
+```sh
+gh api repos/ianabel/MaNTA/branches/main/protection/required_status_checks -q '.contexts[]' | sort > /tmp/req
+gh pr view <N> --json statusCheckRollup -q '.statusCheckRollup[].name' | sort > /tmp/got
+diff /tmp/req /tmp/got     # left-only = required but impossible; right-only = ungated
+```
+
+`Coverage` is in the list deliberately. It has no percentage threshold — it runs
+`make coverage`, i.e. all three suites under an instrumented build, and fails
+only if the build or a suite does — so it gates on the same thing the others do
+and costs the slowest leg's wall-clock.
+
 ## Architecture
 
 ### The equation being solved
@@ -190,6 +245,17 @@ Two return codes worth being able to read without looking them up:
 * **`IDA_CONV_FAIL` (-4) from `IDACalcIC`** is the same problem one stage earlier:
   the Newton/linesearch could not reach a consistent state from the guess
   `setInitialConditions` built. The guess is worth suspecting before the solver is.
+* **`IDA_ILL_INPUT` (-22) with "tout1 too close to t0" is not about the state at
+  all** — it is `initialize` handing `IDACalcIC` the wrong `tout1`. That argument
+  is an absolute *time*, "the first value of t at which a solution will be
+  requested", and it used to be passed the *interval* `dt0 > 0 ? dt0 : dt`. The
+  two agree only at `t0 = 0`, which is where every fixture in the tree starts, so
+  it went unseen for years; `t_initial = delta_t` makes `tout1` land exactly on
+  `t0` and kills the run. Fixed to `t0 + (dt0 > 0 ? dt0 : dt)` —
+  `initialize_starts_at_a_nonzero_time` pins it. Worth knowing because it *looks*
+  like a hard initial condition and is not: a `TestDiffusion` warm start blamed on
+  tolerance for a while turned out to be exactly this, and converges in 3 residual
+  evaluations once `tout1` is right.
 * **`IDA_LINESEARCH_FAIL` (-13) from `IDACalcIC` means some residual row cannot be
   reduced *at all*, which is usually a declaration error rather than a bad guess.**
   `IDA_YA_YDP_INIT` solves for algebraic *values* and differential *derivatives*,
@@ -771,11 +837,28 @@ mesh hid it and nothing removed it. The generalisation worth keeping is that
 should have caught this instead pinned the defect, because it differenced an
 exactly-integrated `GFn` that no real case reports.
 
-`dGdaux_Vec` is the one piece still on the old footing, and is in `TODO`; it is
-live because `dgFn_dphi` is the only pointwise `dg` hook a case can still reach.
 The pointwise `DerivativeSubVector` overload and the `dGdu_Vec`/`dGdq_Vec`/
 `dGdsigma_Vec` wrappers over it are gone — they computed `∫ dg/dZ φ_i dx`, the
-derivative of `∫ g dx`, and no solve ever called them.
+derivative of `∫ g dx`, and no solve ever called them. `dGdaux_Vec` was the last
+one left and is now the same operator over `nAux` blocks: it takes the nodal
+`dg/dphi` from the batched `dg` and weights it, and `dGdt` goes through it too
+rather than applying the mass matrix inline. A C++ case's `dgFn_dphi` still
+reaches it, through `AdjointProblem::dg`'s default, which samples the hook at the
+nodes; a Python case supplies `dg` and `PyAdjointProblem::dgFn_dphi` raises.
+
+**Beware how nearly `diag(w)` and `M` agree — it is far more than the constants
+the argument above needs.** `(M v)_i = ∫ φ_i v` and `(diag(w) v)_i = v_i ∫ φ_i`,
+so they coincide whenever the interpolatory rule integrates `φ_i v` exactly; on
+`k+1` Chebyshev points of the first kind that rule is symmetric, hence exact to
+degree `k+1` for even `k`. At `k = 2` — which is what the adjoint fixtures use —
+that covers every *affine* `dg/dZ`, and the mocks' hooks are affine in `x`. Both
+`the_derivative_sub_vector_weights_dg_by_the_integration_weights` and its aux
+sibling therefore passed with the mass matrix reinstated, by 3e-16 and 5e-16,
+until each was given a second half driven by a synthetic degree-`k` `dg/dZ` and a
+guard that the two operators still differ on it. Before that the only case in the
+suite that noticed at all was `dGdt_matches_a_finite_difference_of_the_objective`,
+at a relative 6e-6 against a 1e-6 tolerance. A reference built "straight from the
+weights" pins the formula, not the operator, if the data cannot tell them apart.
 
 ## Traps worth knowing before you edit
 
@@ -833,10 +916,69 @@ derivative of `∫ g dx`, and no solve ever called them.
 * **The top-level Makefile has a bare `export`.** A recursive `$(MAKE)` inherits
   the already-computed release `CXXFLAGS`, which is why the `coverage` target
   runs `env -u CXXFLAGS -u LDFLAGS $(MAKE) COVERAGE=on`.
+* **g++-14 miscompiles this tree at `-O3 -flto -march=native`, and the symptom is
+  a wrong number rather than a crash. Do not trust a g++-14 release build.**
+  Measured 2026-08-23 on g++-14.2.0, znver2. It is no longer a CI leg, and the
+  README's floor for gcc moved to 15 because of it.
+
+  The trigger is **any change to `SystemSolver`'s member layout**. Adding one
+  inert member — a `bool` and an unused `std::vector<double>`, referenced by no
+  code anywhere — takes a clean `main` from 12/12 passing to 8/12 failing on
+  `algebraic_derivative_tests/the_assembled_jacobian_matches_a_finite_difference_of_the_residual`.
+  Only the `AuxDiffusion` cases fail, plain and superconvergent, at every `k`,
+  with a relative drift of about 1.24: an O(1) error, not a tolerance one. No
+  other test in the suite ever fails.
+
+  What breaks is the **finite-difference reference**, not the assembly. `|J|` of
+  the assembled Jacobian is bit-identical every run (7.9144520420784605 at
+  k = 1); the differenced Jacobian loses the column of the first interior trace
+  DOF — index 33 at k = 1, 49 at k = 2, 65 at k = 3, always `lambda[1]` —
+  differencing it to 0 against an assembled -1.5. The drift is then exactly
+  1.5 / 1.2071067811865475 = 1.2426406871192851, which is how you recognise it.
+
+  **All three of g++-14, `-flto`, and `-march=native` are required.** Drop any
+  one and it is 10/10 clean; so is `-O0`. g++-15 is clean, clang++-19 is clean.
+
+  Ruled out, each by measurement rather than by argument: build staleness;
+  leftover output files; ASLR (`setarch -R` still flakes, and with a fixed
+  environment, which is the odd part — passing runs are bit-identical to each
+  other while failing runs all differ); BLAS threading; uninitialised trivial
+  automatics (`-ftrivial-auto-var-init=zero` *and* `=pattern` both still flake);
+  and anything AddressSanitizer sees — under ASan it is 12/12 clean with no
+  invalid access reported.
+
+  **It is a heisenbug, and that is what makes the usual bisection useless.** Any
+  instrumentation in the affected translation unit makes it vanish: a read of `Y`
+  before the differencing, one extra term in an existing `BOOST_TEST_MESSAGE`, a
+  store into a file-scope array. So do `-fno-strict-aliasing` and
+  `-fno-tree-vectorize` — and **that is the trap**: with *every* codegen
+  perturbation hiding it, "flag X makes it pass" carries almost no information,
+  and reading `-fno-strict-aliasing` as evidence of an aliasing violation would
+  be reading noise. The only reliable signal is the one asymmetry: adding a
+  member to `SystemSolver` reliably *creates* it. Change what is computed, or
+  change the compiler; do not try to print your way to it.
+
+  **Scope, as measured.** `MaNTA` itself — the solver binary, built without
+  `-DTEST` from a different object set — produced **bit-identical netCDF output
+  over 8 runs** of `Tests/RegressionTests/AuxVarTest.conf`, the aux-variable
+  fixture, with the inert member in place. So the run-to-run variation is
+  confined to the unit-test binary, which points at the header-only
+  `fdjac::jacobian` being inlined into the test TU rather than at the solver. That
+  bounds it; it does not clear it, because a deterministic wrong answer is still
+  wrong and nothing here has checked the solver's numbers against anything but
+  themselves.
+
+  **g++-14 has been dropped from CI entirely** — both build legs and the coverage
+  job, which moved to g++-15 even though at `-O0 --coverage` it was never exposed.
+  The Eigen 5.0.1 leg moved with them and became two, on g++-15 and clang++-19.
+  Count the cost honestly: g++-14 is what Ubuntu noble's archive ships, so the
+  gcc most people have by default is now the one this project tests least. The
+  release build warns when it sees it; `TODO` has the full reproduction.
+
 * **gcc and clang do not diagnose the same things, so build with clang
   occasionally** — that is what CI's clang matrix legs are for. (CI is seven
-  `build-and-test` legs: g++-14/15/16 and clang++-19/20/21 against the distro's
-  Eigen 3.4.0, plus g++-14 against Eigen 5.0.1; then a Fedora container job that
+  `build-and-test` legs: g++-15/16 and clang++-19/20/21 against the distro's
+  Eigen 3.4.0, plus g++-15 and clang++-19 against Eigen 5.0.1; then a Fedora container job that
   only *compiles*, to keep the build's notions of a system prefix — `/usr/lib64`,
   pkg-config-discovered netCDF — from quietly becoming Ubuntu-specific.) gcc never
   diagnoses a polymorphic base with a non-virtual destructor; clang does
@@ -934,7 +1076,7 @@ derivative of `∫ g dx`, and no solve ever called them.
   Deriving it inside that branch left the parent with a bare `gcov` — which is
   gcov-14 on a box whose default compiler is gcc-14, and gcov-13 on
   ubuntu-24.04, where the image ships gcc 12/13/14 with 13 as the default and the
-  workflow builds with `g++-14`. gcov then exits 3 with
+  workflow builds with `g++-15`. gcov then exits 3 with
   `AdjointVectors.gcno:version 'B42*', prefer 'B33*'`, gcovr promotes that to a
   hard error, and `make coverage` fails with exit 64 on CI while passing locally.
   Anything that reads `.gcno`/`.gcda` must come from the same toolchain version

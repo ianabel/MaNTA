@@ -168,6 +168,11 @@ void AuxVarTest::dSigma_dPhi(Index i, VectorRef v, const State &st, Position, Ti
         v[0] = AuxNorm * 1.0;
         return;
     case 1:
+        // SigmaFn adds (a - u*u) to *both* variables' fluxes, so variable 1
+        // depends on the auxiliary too and this block is not zero. Declaring the
+        // derivative rather than removing the term from SigmaFn keeps the physics
+        // -- and so the reference solution -- exactly as it was.
+        v[0] = AuxNorm * 1.0;
         return;
     }
 

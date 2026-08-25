@@ -59,13 +59,26 @@ struct SolverConfig
     bool                     WriteOutput;
     bool                     WriteDatFile;
     bool                     WriteDebugDatFiles;
-    bool                     Superconvergent;
     bool                     zeroFlux;
     bool                     AggressiveTimesteps;
     bool                     SuppressAlgebraicError;
     std::string              SteadyStateSolver;
     double                   PseudoTransientInitialStep;
     double                   PseudoTransientMaxStep;
+    double                   PseudoTransientSERRate;
+    double                   PseudoTransientSERFloor;
+    unsigned int             NewtonMaxIterations;
+    unsigned int             NewtonJacobianReuse;
+    double                   NewtonStepTolerance;
+    std::string              NewtonScaling;
+    bool                     SteadyStateDiagnostics;
+    bool                     SteadyStateStepDiagnostics;
+    bool                     SteadyStateSolve;
+    bool                     DegreeAdaptation;
+    double                   DegreeTolerance;
+    unsigned int             MaxPolynomialDegree;
+    unsigned int             MaxDegreeIncrement;
+    double                   DegreeAdaptationBase;
     std::string              TransportSystem;
     std::vector<std::string> PhysicsPlugins;
 
@@ -89,6 +102,14 @@ struct SolverConfig
     //                           arms it regardless.
     std::optional<double> t_final;
     std::optional<double> SteadyStateTolerance;
+
+    // Presence, not value, is the signal -- as for the two above. DegreeAdaptation
+    // implies the superconvergent scheme, so an absent key is defaulted to true on
+    // that path and left false otherwise; an *explicit* false alongside it is a
+    // contradiction rather than a preference, and loadSolverConfig refuses it. That
+    // distinction is impossible to draw from a plain bool carrying the schema's
+    // default.
+    std::optional<bool> Superconvergent;
 };
 
 // The one thing that differs between the two surfaces.
@@ -131,9 +152,24 @@ SolverConfig loadSolverConfig(ConfigSource const &source, ConfigSchema::Reader r
 
 // The grid the configuration asks for. `restart` is the opened restart file
 // when config.restart is set, nullptr otherwise; k is written with the
-// polynomial degree, which comes from the restart file on that path.
+// polynomial degree the *file* was written at, which is also the degree it must
+// be read back at -- see restartRunOrder for the degree the run then uses.
 std::unique_ptr<Grid> makeGrid(SolverConfig const &config,
                                netCDF::NcFile *restart, unsigned int &k);
+
+// The polynomial degree a restarted run should use, given the degree its restart
+// file was written at.
+//
+// A restart used to take its degree from the file and ignore
+// Polynomial_degree outright, even though the schema makes that key required of
+// every config on both readers -- so a user was obliged to write a number that
+// was then silently discarded. This honours it, and warns when the two differ,
+// because the state is projected across the degree change rather than copied.
+//
+// Equal degrees return the file's, so every existing restart takes the copy
+// path in setInitialConditions and is bit for bit unchanged. Shared by both
+// surfaces so they cannot drift on it.
+unsigned int restartRunOrder(SolverConfig const &config, unsigned int fileOrder);
 
 // Every config-derived set* call on the solver, in one place.
 void applySolverConfig(SolverConfig const &config, SystemSolver &system);

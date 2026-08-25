@@ -8,6 +8,7 @@
 #include "PhysicsCases.hpp"
 #include "SolverConfig.hpp"
 #include "FieldModel.hpp"
+#include "DegreeAdaptation.hpp"
 
 // Load restart data into vectors. `nField` is filled with how many of the
 // trailing entries of Y are a field model's psi, so the caller can shape the
@@ -186,21 +187,49 @@ int runManta(std::string const &fname)
 		if (nDOF_file != nDOF)
 			throw std::invalid_argument("nVars/nAux/nScalars in restart file inconsistent with physics case");
 
+		// The file's own degree, which is what its DOF are laid out at.
 		pProblem->setRestartValues(Y, dYdt, *grid, k, nField);
+
+		// The run's degree, which may differ. setInitialConditions projects
+		// across the difference; equal degrees keep the copy path.
+		k = restartRunOrder(config, k);
 	}
 
-	auto system = std::make_shared<SystemSolver>(*grid, k, pProblem.get());
+	// Degree adaptation builds and runs a solver per level itself, and
+	// runAdaptiveDegree has no way to take a field model -- so a field model
+	// would silently never be attached, leaving the run solving the fixed-field
+	// problem while the restart check above has already sized the state for
+	// nField unknowns. Refused rather than ignored, the way a sliced steady
+	// solve refuses it.
+	if (config.DegreeAdaptation && fieldModel)
+		throw std::invalid_argument(
+			"DegreeAdaptation cannot be combined with a FieldModel: the adaptive "
+			"driver builds a solver per degree and cannot carry the field model.");
 
-	// Before applySolverConfig, and necessarily before runSolver: setFieldModel
-	// reshapes the solution vector and refuses once the solver is initialised.
-	if (fieldModel)
-		system->setFieldModel(fieldModel);
+	if (config.DegreeAdaptation)
+	{
+		// The driver builds and runs a solver per degree, so it does the
+		// applySolverConfig/setAdjointProblem/runSolver sequence below itself --
+		// for each level, which is the point. It returns the last one so the
+		// object survives to be destroyed here in the usual way.
+		auto system = runAdaptiveDegree(config, *pProblem, adjoint.get(), *grid, k,
+										*config.t_final);
+	}
+	else
+	{
+		auto system = std::make_shared<SystemSolver>(*grid, k, pProblem.get());
 
-	applySolverConfig(config, *system);
-	if (config.solveAdjoint)
-		system->setAdjointProblem(adjoint.get());
+		// Before applySolverConfig, and necessarily before runSolver: setFieldModel
+		// reshapes the solution vector and refuses once the solver is initialised.
+		if (fieldModel)
+			system->setFieldModel(fieldModel);
 
-	system->runSolver(*config.t_final);
+		applySolverConfig(config, *system);
+		if (config.solveAdjoint)
+			system->setAdjointProblem(adjoint.get());
+
+		system->runSolver(*config.t_final);
+	}
 
 	// For compiled-in TransportSystems we have the type information and
 	// this will call the correct inherited destructor

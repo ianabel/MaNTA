@@ -168,12 +168,19 @@ Time integration
        when the transient is not the interesting part, at the cost of making IDA
        more likely to overshoot and retry. ``aggressiveTimesteps`` is a
        deprecated spelling of this and still works, with a warning.
+   * - ``SteadyStateSolve``
+     - ``false``
+     - Terminate when :math:`\mathrm{d}y/\mathrm{d}t` becomes small rather than at
+       ``t_final``, using the default tolerance. Note that ``SteadyStateSolver``
+       alone does **not** do this — it names the method, which is only consulted
+       once termination is armed.
    * - ``SteadyStateTolerance``
      - *unset*
-     - If present, the run terminates when :math:`\mathrm{d}y/\mathrm{d}t` falls
-       below this rather than at ``t_final``. It is the key's **presence** that
-       arms that, not its value, on both surfaces. ``Runner.run_ss()`` arms it
-       whether or not the key was given, and falls back to ``1e-3``.
+     - The same, naming the tolerance. It is the key's **presence** that arms
+       termination, not its value, on both surfaces; giving it alongside
+       ``SteadyStateSolve`` simply sets the tolerance.
+       ``Runner.run_ss()`` arms it whether or not either key was given, and falls
+       back to ``1e-3``.
    * - ``ObjectiveDecreaseTolerance``
      - ``0.0`` — off
      - If nonzero, the run is abandoned before the time loop when
@@ -248,10 +255,14 @@ Restarting
 
 .. note::
 
-   On a restart the grid and the polynomial degree are read from the restart
-   file, not from the config file — ``Grid_size``, ``Polynomial_degree``,
-   ``Lower_boundary`` and ``Upper_boundary`` are ignored on that path. Changing
-   them in the config will not change the resumed run.
+   On a restart the grid is read from the restart file, not from the config
+   file — ``Grid_size``, ``Grid_points``, ``Lower_boundary`` and
+   ``Upper_boundary`` are ignored on that path.
+
+   ``Polynomial_degree`` is honoured. It defaults to the degree the file was
+   written at, and a different value resumes at that degree, projecting the
+   stored state across the change and logging a warning. See
+   :doc:`running` for what refining and coarsening each cost.
 
 Adjoints and superconvergence
 -----------------------------
@@ -272,7 +283,40 @@ Adjoints and superconvergence
      - ``false``
      - Switch the residual and Jacobian to the superconvergent interpolatory
        scheme. Requires :math:`k \ge 1`, and is incompatible with spatial adjoint
-       parameters. See :doc:`superconvergence`.
+       parameters. See :doc:`superconvergence`. ``DegreeAdaptation`` turns this
+       on; setting it to ``false`` alongside that is refused rather than
+       overridden, so leave it out if you want the default.
+   * - ``SteadyStateSolve``
+     - ``false``
+     - Run to a steady state with the default tolerance. ``SteadyStateTolerance``
+       does the same and names the tolerance; either arms it, and giving both
+       uses the tolerance. Without one of them a run time-marches, whatever
+       ``SteadyStateSolver`` says.
+   * - ``DegreeAdaptation``
+     - ``false``
+     - Choose the global polynomial degree by solving, estimating the error from
+       :math:`u^* - u_h`, and re-solving at a higher degree. Steady solves only.
+       See :ref:`degree-adaptation`.
+   * - ``DegreeTolerance``
+     - ``1e-6``
+     - Target for ``DegreeAdaptation``: the estimated :math:`L^2` error relative
+       to the solution's own :math:`L^2` norm, worst variable, floored by
+       ``Absolute_tolerance``.
+   * - ``MaxPolynomialDegree``
+     - ``10``
+     - Ceiling on the degree ``DegreeAdaptation`` may reach. Reaching it warns
+       and returns the best result available rather than failing.
+   * - ``MaxDegreeIncrement``
+     - ``3``
+     - Most degrees a single step may add. Giorgiani's rule can ask for a large
+       jump from a coarse first solve; capping it keeps the loop taking steps it
+       can report on. Minimum 1 — zero would leave it re-solving a degree it is
+       not allowed to raise.
+   * - ``DegreeAdaptationBase``
+     - ``10``
+     - How much error one extra degree is assumed to buy, in
+       :math:`\Delta k = \lceil \log_b(E/\epsilon) \rceil`. Between 10 and 100;
+       larger is more aggressive and so asks for fewer degrees.
 
 Coupling to a magnetic-field model
 ----------------------------------

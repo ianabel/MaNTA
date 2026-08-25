@@ -189,8 +189,10 @@ void rejectUnknownKeys(ConfigSource const &source, Reader reader)
             throw std::invalid_argument(
                 "Configuration key '" + k +
                 "' selects the physics case and has no meaning for "
-                "Runner.configure -- the transport system is passed to the "
-                "Runner as an object. Remove it from the dict.");
+                "Runner.configure -- the physics case is chosen when the Runner "
+                "is built, either as an object or as the name of a C++ case, "
+                "and a plugin is loaded by manta.load_physics_plugin(). Remove "
+                "it from the dict.");
     }
 }
 
@@ -249,13 +251,26 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(WriteOutput, bool);
     READ(WriteDatFile, bool);
     READ(WriteDebugDatFiles, bool);
-    READ(Superconvergent, bool);
     READ(zeroFlux, bool);
     READ(AggressiveTimesteps, bool);
     READ(SuppressAlgebraicError, bool);
     READ(SteadyStateSolver, std::string);
     READ(PseudoTransientInitialStep, double);
     READ(PseudoTransientMaxStep, double);
+    READ(PseudoTransientSERRate, double);
+    READ(PseudoTransientSERFloor, double);
+    READ(NewtonMaxIterations, unsigned);
+    READ(NewtonJacobianReuse, unsigned);
+    READ(NewtonStepTolerance, double);
+    READ(NewtonScaling, std::string);
+    READ(SteadyStateDiagnostics, bool);
+    READ(SteadyStateStepDiagnostics, bool);
+    READ(SteadyStateSolve, bool);
+    READ(DegreeAdaptation, bool);
+    READ(DegreeTolerance, double);
+    READ(MaxPolynomialDegree, unsigned);
+    READ(MaxDegreeIncrement, unsigned);
+    READ(DegreeAdaptationBase, double);
     READ(TransportSystem, std::string);
     READ(PhysicsPlugins, std::vector<std::string>);
     READ(FieldModel, std::string);
@@ -265,11 +280,13 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(FieldSolveMaxAdjointSweeps, int);
 #undef READ
 
-    // The two whose presence is the signal.
+    // Those whose presence, rather than value, is the signal.
     if (auto s = spelling("t_final"))
         c.t_final = std::get<double>(source.get(*s, Type::Double));
     if (auto s = spelling("SteadyStateTolerance"))
         c.SteadyStateTolerance = std::get<double>(source.get(*s, Type::Double));
+    if (auto s = spelling("Superconvergent"))
+        c.Superconvergent = std::get<bool>(source.get(*s, Type::Bool));
 
     if (c.OutputFilename.empty())
         c.OutputFilename = source.outputFilenameFallback();
@@ -300,6 +317,82 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
         throw std::invalid_argument(
             "Missing required configuration key: OutputFilename -- there is no "
             "config file to take a name from.");
+
+    if (c.DegreeAdaptation)
+    {
+        // The whole estimate is the gap between u_h and u*, which is only a
+        // *better* approximation when the superconvergent scheme is on:
+        // docs/superconvergence.rst measures u* failing to superconverge at
+        // k = 1 with the flag off, and doing so only transiently for a
+        // nonlinear flux -- 6.9, 11.7, 9.1, then 2.3. A loop calibrated against
+        // that meets its tolerance on the coarse grids and then stops
+        // improving. So asking for adaptation turns the flag on, and asking for
+        // it *off* at the same time is a contradiction rather than a
+        // preference. Refusing beats silently overriding a key the user wrote.
+        if (c.Superconvergent && !*c.Superconvergent)
+            throw std::invalid_argument(
+                "DegreeAdaptation = true needs Superconvergent = true, but the "
+                "configuration sets Superconvergent = false. The error estimate "
+                "is the gap between u_h and its postprocessing u*, which is only "
+                "the better of the two when the superconvergent scheme is on. "
+                "Remove Superconvergent to have it enabled automatically.");
+
+        c.Superconvergent = true;
+
+        // Re-solving a transient from t_initial at a higher degree would mix
+        // spatial and temporal error in an estimate that cannot tell them
+        // apart, and each level would take the previous one's *final* state as
+        // its initial condition and integrate the same interval again -- a
+        // wrong answer rather than a poorly-justified one.
+        //
+        // Two conditions, because naming the mode is not enough: the mode is
+        // only consulted once steady-state termination is armed, and arming
+        // happens through the presence of SteadyStateTolerance. A config that
+        // simply omits it gets the default "PseudoTransient" and time-marches
+        // anyway, which is exactly how a transient got through this.
+        if (c.SteadyStateSolver == "TimeMarch")
+            throw std::invalid_argument(
+                "DegreeAdaptation = true is for steady solves, but "
+                "SteadyStateSolver = \"TimeMarch\". Use \"PseudoTransient\" or "
+                "\"Newton\".");
+
+        // Only of a config file. run_ss() arms termination itself, falling back
+        // to 1e-3, so a dict legitimately need not carry the key -- and
+        // runAdaptiveDegree checks the solver directly, which catches the dict
+        // surface's remaining route in (calling run() rather than run_ss()).
+        if (reader == Reader::Toml && !c.SteadyStateTolerance && !c.SteadyStateSolve)
+            throw std::invalid_argument(
+                "DegreeAdaptation = true needs a steady solve: set "
+                "SteadyStateSolve = true, or SteadyStateTolerance to name a "
+                "tolerance. Without either, steady-state termination is never "
+                "armed, SteadyStateSolver is not consulted, and the run "
+                "time-marches every degree.");
+
+        if (c.DegreeTolerance <= 0.0)
+            throw std::invalid_argument(
+                "DegreeTolerance must be positive; it is a relative L2 error the "
+                "loop is trying to get below.");
+
+        if (c.DegreeAdaptationBase < 10.0 || c.DegreeAdaptationBase > 100.0)
+            throw std::invalid_argument(
+                "DegreeAdaptationBase must be between 10 and 100 -- the range "
+                "Giorgiani gives for how much one extra degree may be assumed to "
+                "buy. Outside it the rule either creeps up one degree at a time "
+                "or overshoots the ceiling in a single step.");
+
+        // Zero would leave the loop asking for a bump it is not allowed to
+        // take, so it would re-solve the same degree until the ceiling stopped
+        // it -- or forever, if the ceiling is where it already is.
+        if (c.MaxDegreeIncrement < 1)
+            throw std::invalid_argument(
+                "MaxDegreeIncrement must be at least 1: at zero the loop could "
+                "never raise the degree and would re-solve the same one.");
+
+        if (c.MaxPolynomialDegree < c.Polynomial_degree)
+            throw std::invalid_argument(
+                "MaxPolynomialDegree is below Polynomial_degree, so degree "
+                "adaptation has nothing it is allowed to do.");
+    }
 
     return c;
 }
@@ -342,6 +435,27 @@ std::unique_ptr<Grid> makeGrid(SolverConfig const &config,
                                   config.Upper_Boundary_Fraction);
 }
 
+// --- restartRunOrder --------------------------------------------------------
+
+unsigned int restartRunOrder(SolverConfig const &config, unsigned int fileOrder)
+{
+    if (!config.restart || config.Polynomial_degree == fileOrder)
+        return fileOrder;
+
+    // Loud rather than silent, in both directions. Refining puts the stored
+    // solution inside the new space and loses nothing; coarsening is a genuine
+    // approximation, and a user who reached this by copying a config from
+    // elsewhere should be told which number won.
+    logmsg<LOG_LEVEL::WARNING>(
+        "Restart file was written at Polynomial_degree = {}, but the "
+        "configuration asks for {}. The state will be projected onto the new "
+        "space rather than copied{}.",
+        fileOrder, config.Polynomial_degree,
+        config.Polynomial_degree < fileOrder ? ", which discards information at this resolution" : "");
+
+    return config.Polynomial_degree;
+}
+
 // --- applySolverConfig ------------------------------------------------------
 
 void applySolverConfig(SolverConfig const &config, SystemSolver &system)
@@ -360,7 +474,10 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     system.setNOutput(config.OutputPoints);
     system.setMinStepSize(config.MinStepSize);
     system.setZeroFlux(config.zeroFlux);
-    system.setSuperconvergent(config.Superconvergent);
+    // Absent means off, as it always has. loadSolverConfig has already turned
+    // it on when DegreeAdaptation asked for it, so by here the optional carries
+    // the decision rather than the raw key.
+    system.setSuperconvergent(config.Superconvergent.value_or(false));
     system.setWriteOutput(config.WriteOutput);
     system.setWriteDatFile(config.WriteDatFile);
     system.setWriteDebugDatFiles(config.WriteDebugDatFiles);
@@ -369,6 +486,15 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
 
     // Rejected here rather than defaulted, because a typo in this key would
     // otherwise silently pick a different algorithm.
+    if (config.NewtonScaling == "Unit")
+        system.setNewtonScaling(SystemSolver::NewtonScaling::Unit);
+    else if (config.NewtonScaling == "ErrorWeights")
+        system.setNewtonScaling(SystemSolver::NewtonScaling::ErrorWeights);
+    else
+        throw std::invalid_argument(
+            "NewtonScaling must be \"Unit\" or \"ErrorWeights\"; got \"" +
+            config.NewtonScaling + "\".");
+
     if (config.SteadyStateSolver == "PseudoTransient")
         system.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     else if (config.SteadyStateSolver == "TimeMarch")
@@ -400,14 +526,49 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     if (config.PseudoTransientMaxStep > 0.0)
         system.setPseudoTransientMaxStep(config.PseudoTransientMaxStep);
 
+    // Unconditional, unlike the two above: those use 0 as "unset", which works
+    // because a zero step is meaningless, but a zero SER *rate* is a legitimate
+    // setting -- grow at the floor alone. So the schema's defaults are the real
+    // ones and are applied every time. The setters throw std::logic_error on a
+    // bad value; loadSolverConfig's contract is std::invalid_argument, so
+    // rewrap rather than letting a different exception type escape this path.
+    try
+    {
+        system.setPseudoTransientSERRate(config.PseudoTransientSERRate);
+        system.setPseudoTransientSERFloor(config.PseudoTransientSERFloor);
+        system.setNewtonMaxIterations(config.NewtonMaxIterations);
+        system.setNewtonJacobianReuse(config.NewtonJacobianReuse);
+        system.setNewtonStepTolerance(config.NewtonStepTolerance);
+        system.setSteadyStateDiagnostics(config.SteadyStateDiagnostics);
+        system.setSteadyStateStepDiagnostics(config.SteadyStateStepDiagnostics);
+    }
+    catch (std::logic_error const &e)
+    {
+        throw std::invalid_argument(e.what());
+    }
+
     // Presence arms it, which is what the TOML reader has always done;
-    // setSteadyStateTolerance also sets TerminateOnSteadyState.
+    // Two ways to ask for a steady solve, and they compose: SteadyStateTolerance
+    // names a tolerance and arms termination with it, while SteadyStateSolve
+    // arms termination and takes the default. A config giving both gets the
+    // tolerance it asked for; one giving neither time-marches.
+    //
+    // The second key exists because arming used to be a side effect of choosing
+    // a tolerance, so asking for a steady solve meant having an opinion about
+    // how tight it should be -- and a config that named SteadyStateSolver but
+    // omitted the tolerance looked like a steady solve and was not one.
     if (config.SteadyStateTolerance)
     {
         logmsg<LOG_LEVEL::INFO>(
             "Running until steady state achieved (variation below {}) or end time reached.",
             *config.SteadyStateTolerance);
         system.setSteadyStateTolerance(*config.SteadyStateTolerance);
+    }
+    else if (config.SteadyStateSolve)
+    {
+        logmsg<LOG_LEVEL::INFO>(
+            "Running until steady state achieved (default tolerance) or end time reached.");
+        system.setSteadyStateTermination(true);
     }
 
     // Zero is off, and the setter rejects anything negative.
