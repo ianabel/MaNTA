@@ -16,14 +16,15 @@ CMFX = MirrorPlasmaConfig(
     Current=15.0,
     useConstantVoltage=True,
     useNeutralsModel=True,
-    NeutralDensity=3e14,
+    NeutralDensity=2e14,
     ParticleSourceHeight=10.0,
     ParticleSourceWidth=0.1,
     ParticleSourceCenter=0.2,
     MagneticFieldSlope=0.0,
-    PlasmaVoltage=55e3,
-    ADCoefficient=0.1,
-    ADFinalCoeffs=[0.1, 0.05, 0.05, 0.05],
+    PlasmaVoltage=75e3,
+    ADCoefficient=0.05,
+    ADDecayRates=0.5 * np.ones((4,)),
+    ADFinalCoeffs=[0.5, 0.01, 0.01, 1.0],
 )
 
 CMFX1keV = MirrorPlasmaConfig(

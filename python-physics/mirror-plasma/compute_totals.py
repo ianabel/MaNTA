@@ -136,15 +136,19 @@ Voltage = jax.scipy.integrate.trapezoid(
 print("\n")
 print("MEAN VALUES")
 print("-----------")
-print(f"Density: {jnp.mean(final_state.n) * params.Constants.n0} particles")
-print(f"Ion Temperature: {jnp.mean(final_state.Ti) * params.Constants.T0eV} eV")
-print(f"Electron Temperature: {jnp.mean(final_state.Te) * params.Constants.T0eV} eV")
-print(f"Angular Frequency: {jnp.mean(final_state.omega) * params.Constants.omega0} 1/s")
-print(f"Mach Number: {jnp.mean(final_state.M)}")
+print(f"Density: {jnp.mean(final_state.n) * params.Constants.n0:.3e} particles")
+print(f"Ion Temperature: {jnp.mean(final_state.Ti) * params.Constants.T0eV:.3f} eV")
+print(
+    f"Electron Temperature: {jnp.mean(final_state.Te) * params.Constants.T0eV:.3f} eV"
+)
+print(
+    f"Angular Frequency: {jnp.mean(final_state.omega) * params.Constants.omega0:.3e} 1/s"
+)
+print(f"Mach Number: {jnp.mean(final_state.M):.3f}")
 
-print(f"Current: {final_state.Current[0] * params.Constants.I0()} A")
+print(f"Current: {final_state.Current[0] * params.Constants.I0():.3f} A")
 print(f"Voltage: {Voltage}")
-print(f"Input Power: {Voltage * final_state.Current[0] * params.Constants.I0()}")
+print(f"Input Power: {Voltage * final_state.Current[0] * params.Constants.I0():.3f}")
 
 print("\n")
 print("DENSITY SOURCES")
@@ -159,7 +163,7 @@ for source in source_registry[Channel.Density]:
         * params.Constants.DensityEquationNormalization()
     )
     density_sources += s_int
-    print(f"{split_camel_case(source.name)}: {s_int} #/s")
+    print(f"{split_camel_case(source.name)}: {s_int:.3e} #/s")
 
 print("\n")
 print("DENSITY SINKS")
@@ -174,7 +178,7 @@ for sink in sink_registry[Channel.Density]:
         * params.Constants.DensityEquationNormalization()
     )
     density_sinks += s_int
-    print(f"{split_camel_case(sink.name)}: {s_int} #/s")
+    print(f"{split_camel_case(sink.name)}: {s_int:.3e} #/s")
 
 print("\n")
 print("ANGULAR MOMENTUM SOURCES")
@@ -188,7 +192,7 @@ for source in source_registry[Channel.AngularMomentum]:
         * params.Constants.MomentumEquationNormalization()
     )
     angular_momentum_sources += s_int
-    print(f"{split_camel_case(source.name)}: {s_int} N*m/s")
+    print(f"{split_camel_case(source.name)}: {s_int:.3e} N*m/s")
 
 print("\n")
 print("ANGULAR MOMENTUM SINKS")
@@ -204,7 +208,7 @@ for sink in sink_registry[Channel.AngularMomentum]:
         * params.Constants.MomentumEquationNormalization()
     )
     angular_momentum_sinks += s_int
-    print(f"{split_camel_case(sink.name)}: {s_int} N*m/s")
+    print(f"{split_camel_case(sink.name)}: {s_int:.3e} N*m/s")
 
 
 print("\n")
@@ -220,7 +224,7 @@ for source in source_registry[Channel.IonEnergy]:
         * params.Constants.HeatEquationNormalization()
     )
     ion_energy_sources += s_int
-    print(f"{split_camel_case(source.name)}: {s_int} W")
+    print(f"{split_camel_case(source.name)}: {s_int:.3e} W")
 
 
 print("\n")
@@ -236,7 +240,7 @@ for sink in sink_registry[Channel.IonEnergy]:
         * params.Constants.HeatEquationNormalization()
     )
     ion_energy_sinks += s_int
-    print(f"{split_camel_case(sink.name)}: {s_int} W")
+    print(f"{split_camel_case(sink.name)}: {s_int:.3e} W")
 
 
 print("\n")
@@ -252,7 +256,7 @@ for source in source_registry[Channel.ElectronEnergy]:
         * params.Constants.HeatEquationNormalization()
     )
     electron_energy_sources += s_int
-    print(f"{split_camel_case(source.name)}: {s_int} W")
+    print(f"{split_camel_case(source.name)}: {s_int:.3e} W")
 
 print("\n")
 print("ELECTRON HEAT SINKS")
@@ -267,7 +271,7 @@ for sink in sink_registry[Channel.ElectronEnergy]:
         * params.Constants.HeatEquationNormalization()
     )
     electron_energy_sinks += s_int
-    print(f"{split_camel_case(sink.name)}: {s_int} W")
+    print(f"{split_camel_case(sink.name)}: {s_int:.3e} W")
 
 
 print("\n")
@@ -280,7 +284,7 @@ particle_flux_conservation = (
 
 print("    |xR")
 print(
-    f"V'Γ | - (Sources - Sinks) = {particle_flux_conservation - (density_sources - density_sinks)} #/s"
+    f"V'Γ | - (Sources - Sinks) = {particle_flux_conservation - (density_sources - density_sinks):.3e} #/s"
 )
 print("    |xL")
 
@@ -295,7 +299,7 @@ angular_momentum_flux_conservation = (
 
 print("    |xR")
 print(
-    f"V'π | - (Sources - Sinks) = {angular_momentum_flux_conservation - (angular_momentum_sources - angular_momentum_sinks)} N*m/s"
+    f"V'π | - (Sources - Sinks) = {angular_momentum_flux_conservation - (angular_momentum_sources - angular_momentum_sinks):.3e} N*m/s"
 )
 print("    |xL")
 
@@ -310,7 +314,7 @@ ion_energy_flux_conservation = (
 
 print("    |xR")
 print(
-    f"V'q | - (Sources - Sinks) = {ion_energy_flux_conservation - (jnp.sum(ion_energy_sources) - jnp.sum(ion_energy_sinks))} W"
+    f"V'q | - (Sources - Sinks) = {ion_energy_flux_conservation - (jnp.sum(ion_energy_sources) - jnp.sum(ion_energy_sinks)):.3e} W"
 )
 print("    |xL")
 
@@ -325,6 +329,6 @@ electron_energy_flux_conservation = (
 
 print("    |xR")
 print(
-    f"V'q | - (Sources - Sinks) = {electron_energy_flux_conservation - (electron_energy_sources - electron_energy_sinks)} W"
+    f"V'q | - (Sources - Sinks) = {electron_energy_flux_conservation - (electron_energy_sources - electron_energy_sinks):.3e} W"
 )
 print("    |xL")
