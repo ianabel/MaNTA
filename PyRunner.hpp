@@ -69,6 +69,16 @@ public:
   // gradient machinery.
   Vector G(void);
 
+  // The objective with a first-order correction to the fixed point, and a bound
+  // on what is left. A steady solve stops when ||F|| is small, not when G is, so
+  // a sweep comparing two parameter points needs to know how much of the
+  // difference is the answer moving and how much is each solve stopping short.
+  //
+  // Returned as a dict of "value", "corrected" and "uncertainty", each one entry
+  // per objective. Empty when the run had no AdjointProblem, or when it was not
+  // a steady solve.
+  py::dict objectiveEstimate(void) const;
+
   // Run adjoint solver and return tuple (G, G_p)
   py::tuple getAdjointGradients(void);
 

@@ -332,4 +332,97 @@ BOOST_AUTO_TEST_CASE(each_objective_gets_its_own_gradient) {
   std::filesystem::remove("adjoint_gradient_per_objective.nc");
 }
 
+
+// The corrected objective is worth more than the tolerance it was solved at.
+//
+// A steady solve stops when ||F|| is small, not when G is, so G carries an error
+// that nothing reports. estimateObjective() extrapolates it to the fixed point --
+// G - (dG/dy) . J^-1 F, one Jacobian solve against a whole continuation -- and
+// bounds what is left with ||dG/dy|| ||J^-1 F||.
+//
+// Both halves are checked against a solve two orders tighter, which stands in for
+// the fixed point. The correction has to be a large improvement rather than a
+// small one, or the extra solve is not worth making; the bound has to *hold*,
+// since a bound that can be exceeded is not one.
+BOOST_AUTO_TEST_CASE(the_corrected_objective_beats_the_tolerance_it_was_solved_at) {
+  constexpr Index nCells = 10;
+  constexpr Index order = 3;
+
+  auto solveTo = [&](double steadyTol) {
+    Grid grid(0.0, 1.0, nCells);
+    auto problem = std::make_unique<AdjointTestProblem>(config_snippet, grid);
+    auto adjoint = problem->createAdjointProblem();
+
+    SystemSolver system(grid, order, problem.get());
+    system.setTau(10.0);
+    system.resetCoeffs();
+    system.setInputFile("adjoint_objective_estimate");
+    system.setOutputCadence(0.25);
+    system.setNOutput(2);
+    system.setInitialTime(0.0);
+    system.setMinStepSize(1e-12);
+    system.setTolerances({1e-8}, 1e-6);
+    system.setSteadyStateTolerance(steadyTol);
+    system.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    system.setSolveAdjoint(true);
+    system.setAdjointProblem(adjoint.get());
+    system.setWriteOutput(false);
+    system.setWriteDatFile(false);
+    system.setWriteDebugDatFiles(false);
+    {
+      CapturedOutput quiet;
+      system.initialize();
+      system.integrate(0.0);
+    }
+    const auto estimate = system.lastObjectiveEstimate();
+    const auto outcome = system.lastSteadyOutcome();
+    {
+      CapturedOutput quiet;
+      system.destroySundials();
+    }
+    return std::make_pair(estimate, outcome);
+  };
+
+  const auto [tight, tightOutcome] = solveTo(1e-8);
+  BOOST_TEST_REQUIRE((tightOutcome == SystemSolver::SteadyOutcome::Converged));
+  BOOST_TEST_REQUIRE(tight.valid);
+  const double reference = tight.value(0);
+
+  const auto [loose, looseOutcome] = solveTo(1e-2);
+  BOOST_TEST_REQUIRE((looseOutcome == SystemSolver::SteadyOutcome::Converged));
+  BOOST_TEST_REQUIRE(loose.valid);
+
+  const double rawError = std::abs(loose.value(0) - reference);
+  const double correctedError = std::abs(loose.corrected(0) - reference);
+
+  BOOST_TEST_MESSAGE("loose solve: raw error " << rawError << ", corrected "
+                     << correctedError << ", bound " << loose.uncertainty(0));
+
+  // Not vacuous: the loose solve has to have stopped visibly short, or there is
+  // nothing for the correction to recover.
+  BOOST_TEST_REQUIRE(rawError > 1e-4 * std::abs(reference),
+                     "the loose solve is already accurate to " << rawError
+                         << ", so this fixture cannot show a correction working");
+
+  BOOST_TEST(correctedError < rawError / 100.0,
+             "correcting moved the objective from " << rawError << " to "
+                 << correctedError << " of the reference; it is supposed to be "
+                 "worth orders of magnitude, not a factor");
+
+  BOOST_TEST(loose.uncertainty(0) >= rawError,
+             "the bound is " << loose.uncertainty(0) << " but the error is "
+                 << rawError << ", so it does not bound it");
+
+  // And it is a bound worth reporting rather than a vacuous one.
+  BOOST_TEST(loose.uncertainty(0) < 10.0 * rawError,
+             "the bound is " << loose.uncertainty(0) << " against an error of "
+                 << rawError << ", too loose to tell a caller anything");
+
+  // A converged solve reports a small one, and every objective is estimated.
+  BOOST_TEST(tight.value.size() == 2);
+  BOOST_TEST(tight.uncertainty(0) < 1e-6 * std::abs(reference));
+
+  std::filesystem::remove("adjoint_objective_estimate.nc");
+}
+
 BOOST_AUTO_TEST_SUITE_END()

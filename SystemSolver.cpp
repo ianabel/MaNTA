@@ -1812,6 +1812,85 @@ void SystemSolver::solveAdjointState()
     }
 }
 
+SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
+{
+    ObjectiveEstimate out;
+    if (adjointProblem == nullptr)
+        return out;   // valid stays false: there is no objective to estimate
+
+    const Index ng = adjointProblem->getNg();
+    out.value.setZero(ng);
+    out.corrected.setZero(ng);
+    out.uncertainty.setZero(ng);
+
+    // Restored on the way out. alpha and the factorised MX blocks belong to
+    // whatever is driving the solver -- a continuation step, or IDA -- and this
+    // is meant to be callable from inside that without disturbing it.
+    const double alphaOnEntry = alpha;
+
+    N_Vector zeroDeriv = N_VClone(Y);
+    N_Vector F = N_VClone(Y);
+    N_Vector delta = N_VClone(Y);
+    N_VConst(0.0, zeroDeriv);
+
+    // alpha = 0 is the steady operator dF/dy, with no mass term. That is the
+    // right one whatever the solve was damped with: the fixed point being
+    // extrapolated to is a steady state, not the end of a pseudo-time step.
+    setAlpha(0.0);
+    setJacEvalY(Y, zeroDeriv);
+    updateMatricesForJacSolve();
+    residual(t0, Y, zeroDeriv, F);
+    solveJacEq(F, delta);
+
+    double const *deltaData = N_VGetArrayPointer(delta);
+    double deltaNorm = 0.0;
+    for (Index i = 0; i < static_cast<Index>(nCells); ++i)
+        for (Index j = 0; j < static_cast<Index>(localDOF); ++j)
+        {
+            const double d = deltaData[i * localDOF + j];
+            deltaNorm += d * d;
+        }
+    deltaNorm = std::sqrt(deltaNorm);
+
+    for (Index g = 0; g < ng; ++g)
+    {
+        // y, not yJac: y maps Y, the state the solve is actually in. yJac does not
+        // catch up until the end of integrate(), so reading it here would report
+        // the objective at the initial condition.
+        if (superconvergent)
+            postprocessor->computeUStar(y);
+        out.value(g) = superconvergent
+                           ? adjointProblem->GFn(g, y, *postprocessor)
+                           : adjointProblem->GFn(g, y);
+
+        // G_y is dG/dy for one objective, so it has to be rebuilt per objective.
+        initializeMatricesForAdjointSolve(g);
+
+        double dot = 0.0, dGdyNorm = 0.0;
+        for (Index i = 0; i < static_cast<Index>(nCells); ++i)
+            for (Index j = 0; j < static_cast<Index>(localDOF); ++j)
+            {
+                const double gy = G_y[i](j);
+                const double d = deltaData[i * localDOF + j];
+                dot += gy * d;
+                dGdyNorm += gy * gy;
+            }
+        dGdyNorm = std::sqrt(dGdyNorm);
+
+        // Newton takes y to y - J^-1 F, so the change in G is -(dG/dy).delta.
+        out.corrected(g) = out.value(g) - dot;
+        out.uncertainty(g) = dGdyNorm * deltaNorm;
+    }
+
+    out.valid = true;
+
+    N_VDestroy(zeroDeriv);
+    N_VDestroy(F);
+    N_VDestroy(delta);
+    setAlpha(alphaOnEntry);
+    return out;
+}
+
 void SystemSolver::computeAdjointGradients()
 {
 

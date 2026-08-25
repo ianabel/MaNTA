@@ -438,6 +438,7 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def("run_ss", &PyRunner::run_ss)
       .def("G", &PyRunner::G)
       .def("getAdjointGradients", &PyRunner::getAdjointGradients)
+      .def("objectiveEstimate", &PyRunner::objectiveEstimate)
       .def("getSolution", &PyRunner::getSolution)
       .def("getDerivative", &PyRunner::getDerivative)
       .def("getPostprocessedSolution", &PyRunner::getPostprocessedSolution)

@@ -280,6 +280,15 @@ Vector PyRunner::G(void) {
   return Gout;
 }
 
+py::dict PyRunner::objectiveEstimate(void) const {
+  using namespace pybind11::literals;
+  const auto e = system->lastObjectiveEstimate();
+  if (!e.valid)
+    return py::dict();
+  return py::dict("value"_a = e.value, "corrected"_a = e.corrected,
+                  "uncertainty"_a = e.uncertainty);
+}
+
 py::tuple PyRunner::getAdjointGradients(void) {
   if (adjoint == nullptr)
     throw std::runtime_error(

@@ -126,3 +126,71 @@ Limitations
   ``Superconvergent`` is set, because the postprocessed node set would silently
   redefine how many parameters there are. See :doc:`superconvergence`.
 * Anything indexed per auxiliary variable is sized ``nAux``, not ``nVars``.
+
+The corrected objective and its error bar
+-----------------------------------------
+
+A steady solve stops when :math:`\|F\|` is small, not when :math:`G` is. An
+optimisation sweep comparing :math:`G` at two parameter points therefore needs to
+know how much of the difference is the answer moving and how much is each solve
+stopping short, and ``estimateObjective()`` answers both. Both quantities it needs
+are already assembled — :math:`\partial G/\partial y` is ``G_y``, which
+``initializeMatricesForAdjointSolve`` builds per objective, and the Newton step to
+the solution is :math:`J^{-1}F` from the matrix the solve has already factorised:
+
+.. math::
+
+   G_{\text{corrected}} = G - \frac{\partial G}{\partial y}\cdot J^{-1}F,
+   \qquad
+   G_{\text{err}} = \left\|\frac{\partial G}{\partial y}\right\| \left\|J^{-1}F\right\|
+
+the first a first-order extrapolation to the fixed point, the second a
+Cauchy–Schwarz bound on what is left. The Jacobian is taken at :math:`\alpha = 0`,
+the steady operator, whatever the solve was damped with: the fixed point being
+extrapolated to is a steady state, not the end of a pseudo-time step.
+
+It runs at every exit from ``solveSteadyState``, including the two that then
+throw, so a caught failure still carries a partial answer and a bound saying what
+that answer is worth. ``lastSteadyOutcome()`` says which exit it was.
+``PyRunner::objectiveEstimate()`` returns ``value``, ``corrected`` and
+``uncertainty``, one entry per objective; it is empty when the run had no
+``AdjointProblem``, and it costs nothing in that case.
+
+**Solve looser and correct, rather than converging harder.** Measured on
+``AdjointTestProblem``, against a reference two orders tighter:
+
+.. list-table::
+   :header-rows: 1
+
+   * - ``SteadyStateTolerance``
+     - residuals
+     - raw error
+     - corrected error
+   * - 1e-2
+     - 31
+     - 2.1e-3
+     - **1.7e-6**
+   * - 1e-3
+     - 41
+     - 6.0e-6
+     - < 1e-10
+   * - 1e-4
+     - 47
+     - 5.6e-6
+     - < 1e-10
+   * - 1e-6
+     - 65
+     - < 1e-10
+     - < 1e-10
+
+Correcting a solve at 1e-2 is **34% cheaper and three times more accurate** than
+running one at 1e-4 and taking :math:`G` raw. The bound holds throughout —
+replaying every continuation step of a tight solve, it is 1.04x the true error at
+its tightest and 2.3x at its loosest.
+
+.. warning::
+
+   :math:`G_{\text{err}}` bounds *solver* error only. It says how far this solve
+   stopped short of its own fixed point, not how far that fixed point is from the
+   continuum. It compares two runs at one discretisation and nothing else — which
+   is the sweep's question, and not a discretisation error estimate.

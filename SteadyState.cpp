@@ -287,7 +287,12 @@ void SystemSolver::solveSteadyState()
 
     double Fprev = steadyNorm();
 
-    auto finish = [&](std::string_view outcome, int steps, int rejected)
+    // Every way out of the loop goes through here, including the two that then
+    // throw. That is what lets a caught failure still carry a partial answer:
+    // the objective estimate below is taken at whatever state the solve reached,
+    // and it comes with a bound saying how much that state is worth.
+    auto finish = [&](std::string_view outcome, int steps, int rejected,
+                      SteadyOutcome why)
     {
         stats.steps = steps;
         stats.rejected = rejected;
@@ -295,6 +300,15 @@ void SystemSolver::solveSteadyState()
         stats.jacBuilds = nJacBuilds - jacBuilds0;
         stats.jacSolves = nJacSolves - jacSolves0;
         steadyStats = stats;
+        steadyOutcome = why;
+
+        // Only when there is an objective to estimate, so a run without
+        // solveAdjoint pays nothing. One Jacobian build and one solve against a
+        // whole continuation, and it is what tells a sweep whether a difference
+        // between two parameter points is the answer moving or the solver
+        // stopping short.
+        objectiveEstimate = estimateObjective();
+
         reportSteadyStats(outcome, stats);
     };
 
@@ -317,7 +331,7 @@ void SystemSolver::solveSteadyState()
         logmsg<LOG_LEVEL::INFO>("Steady solve: initial state already converged");
         std::println("  the initial state is already converged; nothing to do.");
         setJacEvalY(Y, ptcDYdt);
-        finish("converged (no continuation steps needed)", 0, 0);
+        finish("converged (no continuation steps needed)", 0, 0, SteadyOutcome::Converged);
         return;
     }
 
@@ -400,7 +414,8 @@ void SystemSolver::solveSteadyState()
             // call, and reporting the previous step's norm as this one's would
             // be a plausible number that is not a measurement.
             closeRecord(std::numeric_limits<double>::quiet_NaN(), false);
-            finish(std::format("FAILED: KINSol returned {}", retval), step, rejected);
+            finish(std::format("FAILED: KINSol returned {}", retval), step, rejected,
+                   SteadyOutcome::SolverFailed);
             throw std::runtime_error(std::format(
                 "Steady solve failed: KINSol returned {} at continuation step {} "
                 "with dt = {:g} and ||F|| = {:g}. Consider SteadyStateSolver = "
@@ -447,7 +462,7 @@ void SystemSolver::solveSteadyState()
 
             std::println("  converged: ||F|| = {:g} after {} continuation steps.",
                          Fnow, step + 1);
-            finish("converged", step + 1, rejected);
+            finish("converged", step + 1, rejected, SteadyOutcome::Converged);
             return;
         }
 
@@ -499,7 +514,8 @@ void SystemSolver::solveSteadyState()
         }
     }
 
-    finish("FAILED: ran out of continuation steps", step, rejected);
+    finish("FAILED: ran out of continuation steps", step, rejected,
+           SteadyOutcome::OutOfSteps);
 
     throw std::runtime_error(std::format(
         "Steady solve did not converge in {} continuation steps: ||F|| = {:g} "

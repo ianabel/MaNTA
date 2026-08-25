@@ -161,69 +161,43 @@ reason it was not made:
     for each differential scalar. Two of the three fixtures there would have to
     be checked against it first.
 
-  - Report a corrected objective and an error bar on it, for optimisation sweeps.
+  - The objective estimate has no in-loop consumer yet.
 
-    An optimisation driver evaluating G at successive parameter points needs to
-    know how much of a difference between two points is real and how much is the
-    solver stopping short. MaNTA can tell it, for about the price of one Jacobian
-    solve, because the two quantities involved are already assembled: dG/dy is
-    G_y, which initializeMatricesForAdjointSolve builds per objective, and the
-    Newton step to the solution is J^-1 F, which solveJacEq gives from the
-    factorised matrix the solve already holds.
+    estimateObjective() is callable at any point and leaves alpha and the
+    factorised blocks as it found them, so a continuation step can ask it. What
+    the loop cannot do is *act* on the answer: solveSteadyState has three ways
+    out and two of them throw, so there is no path for "stop here, this is good
+    enough" or "stop here, this cannot beat the incumbent". SteadyOutcome now
+    records which exit was taken and the estimate is filled before either throw,
+    so a caught failure carries a usable partial answer -- but a clean early
+    return still needs adding, along with whatever criterion would drive it.
 
-        delta   = J^-1 F           at the converged state, alpha = 0
-        G_est   = G - (dG/dy).delta        a first-order correction
-        G_err   = ||dG/dy|| ||delta||      Cauchy-Schwarz, so a genuine bound
+    Before adding one, note what the measurements say about the criterion. An
+    early exit keyed on the *bound* is worth much less than it sounds: the
+    objective's error is proportional to ||J^-1 F||, and driving ||F|| down is the
+    whole of the solve, so there is no tail to cut. Deciding G to 1% still costs
+    95% of the solve and even a 50% decision costs 80%. The win is in solving
+    looser and correcting -- 34% cheaper and three times more accurate than
+    converging two orders harder and taking G raw -- which needs no early exit at
+    all, only a caller willing to set SteadyStateTolerance and read `corrected`.
 
-    Measured on AdjointTestProblem, PseudoTransient to 1e-8, replaying every
-    accepted continuation step. Relative to the converged G:
+    So the in-loop hook is for a criterion nobody has yet: abandoning a parameter
+    point against an incumbent the caller supplies. That is worth building when
+    there is a sweep to measure it on.
 
-        step   %cost   raw |G_k - G|/G   corrected     bound/G
-           6     70%          3.2e-1      4.8e-2        6.5e-1
-           7     80%          1.4e-1      8.0e-3        3.0e-1
-           8     89%          3.0e-2      3.6e-4        6.9e-2
-           9     95%          1.6e-3      1.1e-6        3.8e-3
+  - Two things about the estimate are unmeasured and would change its sizing.
 
-    Two things to take from that. The bound *holds* at every step -- the loosest
-    it ever is against the true error is 2.3x, the tightest 1.04x -- so it is a
-    real error bar and not a heuristic. And the correction is worth two to four
-    orders of magnitude at the same cost: at step 8 it turns a 3% answer into a
-    0.04% one for a single extra solve.
+      * The norm. The bound pairs unweighted 2-norms. Pairing the WRMS norm with
+        its dual should be tighter, and is the norm IDA's own error test would
+        recognise.
+      * Whether it transfers to a time-marching run. Only steady solves were
+        measured, and there G is a property of the fixed point rather than of a
+        path, which is what makes J^-1 F the right correction.
 
-    **Do not build an early exit on this.** The obvious use -- abandon the solve
-    once a bound says G cannot beat the incumbent -- is worth much less than it
-    sounds, because the objective's error is proportional to ||J^-1 F|| and
-    driving ||F|| down is the whole of the solve. There is no long tail to cut:
-    deciding G to 1% still costs 95% of the solve, and even a 50% decision costs
-    80%. Taking the corrected estimate instead of waiting saves 16% of the solve
-    for a 1% answer, 11% for 0.1%. That is the whole prize.
-
-    So the shape is a *report*, not a gate: after a steady solve, alongside G,
-    hand back G_est and G_err per objective. A driver that wants to stop early
-    then has what it needs to decide, and one that does not still gets a better
-    number and knows what it is worth. PyRunner is where it belongs, beside
-    getAdjointGradients.
-
-    Three things are not measured yet and would change the sizing:
-
-      * The stellarator's cost profile. All of the above is one problem at one
-        discretisation, with roughly uniform cost per continuation step. A solve
-        that spends many steps at low residual would make an early exit worth
-        more. The full-resolution case needs ~88 GB for the drift-kinetic solve
-        and the reduced one does not converge, so this needs a bigger machine.
-      * The norm. The bound above pairs unweighted 2-norms. Pairing the WRMS
-        norm with its dual should be tighter, and is what IDA's own error test
-        would recognise.
-      * Whether any of this transfers to a time-marching run. Only steady solves
-        were measured, and there G is a property of the fixed point rather than
-        of a path.
-
-    Whatever is built, an abandoned or partial run must leave getAdjointGradients
-    either meaningful or loudly broken. The gate this replaces skipped
-    integrate() on a rejection, so computeAdjointGradients never ran, G_p was
-    never sized, and getAdjointGradients aborted the process on an Eigen bounds
-    assertion -- silently enough that the stellarator sweep would have died at the
-    first rejected point.
+    The stellarator's cost profile is the other open question -- a solve that
+    spends many steps at low residual would change the arithmetic above -- and
+    needs a machine that can hold the real resolution: the full case wants ~88 GB
+    for the drift-kinetic solve, and the reduced one does not converge.
 
 Superconvergence follow-ons (see Tests/README.md for what is already verified):
 
