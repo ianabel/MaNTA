@@ -1226,10 +1226,10 @@ BOOST_AUTO_TEST_CASE(a_failing_field_model_does_not_destroy_the_runs_output)
         BOOST_TEST(Y.getDim(0).getSize() == run->getSolution().getDoF());
     }
 
-    // Swept here rather than left for `make clean_data`, because the output
-    // lands in whatever directory the binary was launched from, and
-    // CLEAN_DATA_DIRS deliberately excludes Tests/UnitTests -- its .nc files are
-    // tracked test *inputs*. Running one test from that directory is the
+    // Swept here rather than left for the clean_data target, because the output
+    // lands in whatever directory the binary was launched from, and that target
+    // deliberately excludes Tests/UnitTests -- its .nc files are tracked test
+    // *inputs*. Running one test from that directory is the
     // documented way to run one test, so this must not leave litter there.
     std::filesystem::remove(nc);
     std::filesystem::remove(restart);

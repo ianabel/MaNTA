@@ -441,8 +441,9 @@ consequences worth knowing:
 * **A case only appears if its object file is linked in.** Nothing references it
   directly, so a missing entry in the build is a link-line problem that produces
   **no compile error**. An unrecognised ``TransportSystem`` name now throws with
-  the list of what *is* registered, which is usually enough to spot it. Add new
-  files to ``PHYSICS_SOURCES`` in the Makefile, or build the case
+  the list of what *is* registered, which is usually enough to spot it. Every
+  ``.cpp`` in ``PhysicsCases/`` is globbed into the build, so a new file in that
+  directory needs no build edit; anywhere else, build the case
   :doc:`out of tree <out_of_tree>`.
 * **A duplicate name is an error.** Registration used to be a silent no-op that
   kept the first registration, leaving the second case unreachable with nothing

@@ -75,7 +75,8 @@ Found 2026-08-23. CLAUDE.md has the summary; this is the reproduction.
     worth reading first even though the failing DOF is a trace rather than a
     scalar.
 
-  Until then the build warns when it sees g++-14 (Makefile.config), and CI's two
+  Until then the build warns when it sees g++-14 (cmake/MantaCompilerFlags.cmake),
+  and CI's two
   g++-14 legs should be treated as capable of failing for reasons unrelated to
   the change under review.
 

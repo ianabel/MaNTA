@@ -12,9 +12,12 @@ import shutil
 import re
 import scipy
 
-# SOLVER is exported by the top-level Makefile. Default to the usual name so
-# `make -C Tests/RegressionTests` and running ./TestSolutions.py directly work
-# too -- previously either died with KeyError: 'SOLVER'.
+# SOLVER names the solver binary. CTest sets it to the built executable's
+# absolute path, which is what makes an out-of-source build work here: an
+# absolute value discards the earlier components of the join below. The fallback
+# is the repo root, which is where the Makefile used to leave it -- running
+# ./TestSolutions.py by hand against an old in-source build still works, and a
+# missing SOLVER is a clear "no such file" rather than KeyError: 'SOLVER'.
 # Resolve against this script's location, not the caller's cwd.
 _here = os.path.dirname(os.path.abspath(__file__))
 manta_file = os.path.join(_here, "..", "..", os.environ.get("SOLVER", "MaNTA"))

@@ -1,13 +1,17 @@
 # MaNTA test suites
 
-Three suites, all driven from the top-level Makefile and all runnable from any
-working directory.
+Three suites, all registered with CTest (`ctest --test-dir build`) and all
+runnable from any working directory.
 
-| Command | Suite | Location |
+| Test | Suite | Location |
 |---|---|---|
-| `make test` | Boost.Test C++ unit tests | `Tests/UnitTests/` |
-| `make regression_tests` | Solver run against checked-in `.ref.nc` references | `Tests/RegressionTests/` |
-| `make python_tests` | pytest suite for the pybind11 module | `python/Tests/` |
+| `unit` | Boost.Test C++ unit tests | `Tests/UnitTests/` |
+| `regression` | Solver run against checked-in `.ref.nc` references | `Tests/RegressionTests/` |
+| `python` | pytest suite for the pybind11 module | `python/Tests/` |
+
+Each also has a build target of the same name plus `_tests` — `unit_tests`,
+`regression_tests`, `python_tests` — which builds what it needs and runs that one
+suite.
 
 The Python suite writes its solver output into the *current directory*, not into
 pytest's `tmp_path`: `OutputFilename` is passed to `setInputFile`, and
@@ -21,16 +25,22 @@ output at all; `.dat` files need `WriteDatFile` (and `WriteDebugDatFiles` for
 the `.dydt.dat` / `.res.dat` pair), both off by default. Test cleanup code must
 therefore treat `.dat` as optional.
 
-`make coverage` rebuilds with `--coverage -O0`, runs all three, and writes
-`coverage/index.html` (numerical core + Python bindings) and
-`coverage/physics.html` (`PhysicsCases/`, informational). See the README.
+`cmake --preset coverage && cmake --build build-coverage --target coverage`
+builds with `--coverage -O0`, runs all three, and writes
+`build-coverage/coverage/index.html` (numerical core + Python bindings) and
+`.../physics.html` (`PhysicsCases/`, informational). See the README.
+
+Note that the unit tests now run from the **build directory** rather than the
+repo root, because CTest launches them there. Fixtures are unaffected — they are
+reached through the absolute `TEST_DATA_DIR` — but a test that writes output and
+cleans up after itself is doing so in `build/` now.
 
 ## Unit tests
 
 Boost.Test in header-only mode (`boost/test/included/unit_test.hpp`), so there
 is no `-lboost_unit_test_framework` link step -- `libboost-dev` is enough.
 `Tests/UnitTests/main.cpp` defines the module; every other `.cpp` listed in
-`TEST_SOURCES` contributes suites.
+`MANTA_TEST_SOURCES` (`Tests/UnitTests/CMakeLists.txt`) contributes suites.
 
 Two things worth knowing when adding a test:
 
@@ -43,8 +53,9 @@ Two things worth knowing when adding a test:
   every new test.
 * **Fixture paths.** netCDF fixtures (`testic.nc`, `MatrixDiffusion.restart.nc`,
   `Bfield.ref.nc`) must be reached with `testDataPath()` from `TestPaths.hpp`,
-  which resolves against the `TEST_DATA_DIR` baked in by the Makefile. Do not
-  hardcode `./Tests/UnitTests/...`; that only works from the repo root.
+  which resolves against the `TEST_DATA_DIR` baked in by
+  `Tests/UnitTests/CMakeLists.txt`. Do not hardcode `./Tests/UnitTests/...`; that
+  only works from the repo root, which is no longer where the binary runs.
 * **A passing run is silent.** Several tests deliberately provoke output --
   they run the full solver, hand `ErrorChecker` a null pointer, or make the
   physics throw so `static_residual` has to report it. Wrap those calls in a
@@ -721,7 +732,7 @@ These are deliberate and tracked, not oversights:
   is noticed.
 
   What is **not** covered: `load_physics_plugin` on a real plugin. Only the
-  missing-file path is tested. A plugin needs `make install` and a shared object
+  missing-file path is tested. A plugin needs `cmake --install` and a shared object
   compiled with the flags `pkg-config --cflags manta` reports, which is more than
   a pytest should build -- and it is the same gap the TOML surface's
   `PhysicsPlugins` key already has, so the `dlopen` flags and the
@@ -1092,14 +1103,15 @@ These are deliberate and tracked, not oversights:
   constructed a `PlasmaConstants` and checked collision times and neutral rates
   against hand values. Nothing replaces them here — the equivalent checks are
   `python-physics/mirror-plasma/test_mirror.py`, which is not run by
-  `make python_tests` (`pytest.ini` is `testpaths = python/Tests`) and needs
+  the `python` test (`pytest.ini` is `testpaths = python/Tests`) and needs
   `desc` and `optimistix`. That is a real reduction in what CI covers, recorded
   here rather than left to be discovered.
 
   `CurvedMirrorPlasma/` had never compiled in any case (commit `c17fa42`,
   "start to add in curved stuff (doesn't compile)"): 49 errors, including
   references to a `CurvedMagneticField` class and a `PlasmaTypes` enum that were
-  never written. It was excluded from `PHYSICS_SOURCES` for that reason, and it
+  never written. It was excluded from the build's physics sources for that
+  reason, and it
   depended on `MirrorPlasma` and `PlasmaConstants`, so it could not have
   outlived them.
 

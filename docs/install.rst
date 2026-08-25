@@ -4,7 +4,8 @@ Building MaNTA
 Prerequisites
 -------------
 
-A **C++23** compiler: g++ 15 or newer, or clang++ 18 or newer.
+**CMake 3.22 or newer**, with a generator — GNU make or Ninja — and a **C++23**
+compiler: g++ 15 or newer, or clang++ 18 or newer.
 
 .. warning::
 
@@ -65,8 +66,9 @@ System libraries, which you install yourself:
      - Headers only. Boost.Test is used in header-only mode, so there is no
        ``unit_test_framework`` to link.
    * - Eigen
-     - Dense linear algebra throughout. Set ``EIGEN_DIR`` if it is not in
-       ``/usr/include``.
+     - Dense linear algebra throughout. Either 3.4.x or 5.0.x. A packaged Eigen
+       is found with nothing configured; for an unpacked *source* tree, which
+       carries no ``Eigen3Config.cmake``, use ``MANTA_EIGEN_INCLUDE_DIR``.
    * - SUNDIALS
      - **7.1.0 or newer**, built with **IDA and KINSOL**. Not 6.x — MaNTA links
        ``sundials_core`` and uses ``SUNContext``, neither of which exists before
@@ -75,7 +77,8 @@ System libraries, which you install yourself:
    * - netCDF C and netCDF C++
      - 4.3 or newer for the C++ interface, which needs netCDF C 4.6.0 or newer.
    * - BLAS
-     - Eigen is built with ``-DEIGEN_USE_BLAS``.
+     - Eigen is built with ``-DEIGEN_USE_BLAS``. A plain ``-lblas`` by default;
+       see ``MANTA_BLAS_VENDOR`` below before changing that.
 
 Three more libraries are **git submodules** under ``extern/``, so there is
 nothing to install and no path to configure — see below:
@@ -85,7 +88,7 @@ nothing to install and no path to configure — see below:
   differentiation that ``AutodiffTransportSystem`` uses to derive Jacobian
   entries from a flux and a source.
 * `pybind11 <https://github.com/pybind/pybind11>`_ builds the Python module. Only
-  needed for ``make python``.
+  needed for the ``_manta`` target; configure with ``-DMANTA_PYTHON=OFF`` to skip it.
 
 Getting the source
 ------------------
@@ -104,31 +107,152 @@ empty directories and the build will stop at
 
    git submodule update --init
 
-That is the whole of the toml11, autodiff and pybind11 installation.
-``Makefile.config`` already defaults ``TOML11_DIR`` and ``AUTODIFF_DIR`` into
-``extern/``, and the pybind11 include path is not configurable at all, so none
-of the three needs a ``Makefile.local`` entry. Set ``TOML11_DIR`` or
-``AUTODIFF_DIR`` only if you deliberately want to build against your own copy
-elsewhere.
+That is the whole of the toml11, autodiff and pybind11 installation. None of the
+three needs a path configured — the include directories are wired into the build.
+If one is missing, the configure step stops with a message naming the submodule
+and the command above, rather than at ``fatal error: toml.hpp``.
 
-``Makefile.local``
-------------------
+Configuring
+-----------
 
-Every build option lives in ``Makefile.local``, which you must provide.
-``Makefile.local.example`` is a starting point; the Makefile errors out with a
-pointer to it if the file is missing.
+MaNTA builds with CMake, out of source. There is no file you have to write first:
 
-.. code-block:: make
+.. code-block:: sh
 
-   CXX = g++-15
-   SUNDIALS_DIR = ../sundials/install
-   EIGEN_DIR = /usr/include/eigen3
-   # BOOST_DIR = /path/to/boost          # only for a non-system install
-   # NETCDF_DIR = /path/to/netcdf        # ditto
-   # NETCDF_CXX_DIR = /path/to/netcdf-cxx
+   cmake --preset default        # configure  -> build/
+   cmake --build build -j        # compile
+   ctest --test-dir build        # all three suites
 
-Anything set here can be overridden on the make command line, which takes
-precedence — ``make CXX=clang++-19`` for instance.
+In practice one dependency usually needs naming, because distributions rarely
+package SUNDIALS 7 — unless you used the bundled ``build_sundials`` script, which
+installs into ``./sundials/install``, where the configure step looks on its own:
+
+.. code-block:: sh
+
+   cmake --preset default -DSUNDIALS_ROOT=/somewhere/else/sundials/install
+
+Anything else somewhere unusual is named the same way: ``-DEigen3_ROOT``,
+``-DBOOST_ROOT``, or ``-DCMAKE_PREFIX_PATH="/opt/a;/opt/b"`` for several at once.
+The quotes on that last one matter — the semicolon is CMake's list separator, not
+the shell's.
+
+.. note::
+
+   Naming a prefix the compiler already searches is a **no-op**, and that is
+   worth stating because it used not to be. Passing ``-isystem /usr/include``
+   makes gcc and clang drop ``/usr/include`` from the end of the system chain and
+   search it where the flag appeared — ahead of the libstdc++ headers — so
+   ``<cstdlib>``'s ``#include_next <stdlib.h>`` finds nothing and every
+   translation unit fails. ``Makefile.config`` carried a compiler probe and a
+   hand-written filter for exactly that. CMake strips implicit include
+   directories from the flags it generates, so the filter is gone; CI still
+   checks the property holds on both compiler families.
+
+Presets
+~~~~~~~
+
+``CMakePresets.json`` defines four, each with its own build directory so they can
+coexist:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 78
+
+   * - Preset
+     - Effect
+   * - ``default``
+     - Release: ``-O3 -flto=auto -march=native``, into ``build/``.
+   * - ``debug``
+     - ``-O0 -g -DDEBUG -DPHYSICS_DEBUG``, into ``build-debug/``.
+   * - ``coverage``
+     - ``--coverage -O0``, no LTO, no ``-Werror``, into ``build-coverage/``.
+   * - ``portable``
+     - Release without ``-march=native``, into ``build-portable/``.
+
+.. note::
+
+   The Release configuration deliberately does **not** define ``NDEBUG``, which
+   CMake would normally add. ``NDEBUG`` disables ``assert()`` and takes Eigen's
+   own assertions with it, and those are the diagnostic of record for a class of
+   defect here: when the adjoint's spatial-parameter branch wrote a
+   ``(np, nPoints)`` block into an ``(nPoints, np)`` destination, the only thing
+   that reported it was Eigen's ``resize()`` assertion. Under ``NDEBUG`` that run
+   would have silently transposed a gradient instead.
+
+``CMakeUserPresets.json``
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Machine-specific paths belong in ``CMakeUserPresets.json``, which is gitignored
+and is the direct replacement for the old ``Makefile.local``. Copy
+``CMakeUserPresets.json.example`` and edit it; its presets ``inherit`` the ones
+above, so you add only what your machine needs.
+
+.. code-block:: json
+
+   {
+     "version": 3,
+     "configurePresets": [
+       {
+         "name": "local",
+         "inherits": "default",
+         "cacheVariables": {
+           "SUNDIALS_ROOT": "$env{HOME}/sundials/install",
+           "CMAKE_CXX_COMPILER": "g++-15"
+         }
+       }
+     ]
+   }
+
+Then ``cmake --preset local``. Anything on the command line still wins.
+
+Options
+~~~~~~~
+
+``cmake -B build -LH`` lists every option with its description. The MaNTA-specific
+ones:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 32 68
+
+   * - Option
+     - Effect
+   * - ``MANTA_TESTS``
+     - Build the Boost.Test unit tests. ``OFF`` also removes the Boost
+       requirement. Default ``ON``.
+   * - ``MANTA_PYTHON``
+     - Build the ``manta`` Python extension. Default ``ON``.
+   * - ``MANTA_OPENMP``
+     - Enable the ``#pragma omp parallel for`` in the batched physics wrappers.
+   * - ``MANTA_VERBOSE``
+     - Define ``VERBOSE`` — extra solver logging.
+   * - ``MANTA_PHYSICS_DEBUG``
+     - Define ``PHYSICS_DEBUG`` without a full Debug build. Implied by ``Debug``.
+   * - ``MANTA_NATIVE_ARCH``
+     - ``-march=native`` in Release. Default ``ON``.
+   * - ``MANTA_XLA_FFI`` / ``MANTA_CUDA``
+     - The JAX FFI interface. Needs jaxlib headers.
+   * - ``MANTA_EIGEN_INCLUDE_DIR``
+     - Eigen headers, for a source checkout with no ``Eigen3Config.cmake``.
+   * - ``MANTA_BLAS_VENDOR``
+     - ``BLA_VENDOR`` for ``FindBLAS``. ``Generic`` (the default) is a plain
+       ``-lblas``; ``Any`` lets CMake choose.
+   * - ``MANTA_VENV`` / ``MANTA_VENV_PYTHON``
+     - Where the ``venv`` target builds its environment, and with which
+       interpreter.
+
+.. warning::
+
+   ``MANTA_BLAS_VENDOR`` defaults to ``Generic`` — a plain ``-lblas``, which is
+   what the Makefile linked and what the distribution's alternatives symlink
+   points at — rather than letting ``FindBLAS`` choose freely. On a box with
+   Intel's libraries installed, an unconstrained ``FindBLAS`` takes the *layered*
+   MKL link (``mkl_gf_lp64`` + ``mkl_gnu_thread`` + ``mkl_core`` + ``libgomp``).
+   That combination is unsafe to ``dlopen``, and importing a C extension is a
+   ``dlopen``: the Python module built that way dies mid-solve and takes the
+   interpreter with it, while the standalone solver — linked from the very same
+   objects — runs the whole regression suite. Change this deliberately, and test
+   the Python suite if you do.
 
 Installing SUNDIALS
 -------------------
@@ -140,7 +264,7 @@ The included ``build_sundials`` script fetches and builds a minimal SUNDIALS
 .. code-block:: sh
 
    ./build_sundials
-   # then in Makefile.local:  SUNDIALS_DIR = ./sundials/install
+   # then, when configuring:  -DSUNDIALS_ROOT=./sundials/install
 
 Override the version with ``SUNDIALS_VERSION=7.4.0 ./build_sundials``. On macOS
 the script needs ``coreutils`` and ``cmake``.
@@ -155,37 +279,47 @@ the script needs ``coreutils`` and ``cmake``.
 Build targets
 -------------
 
+Built with ``cmake --build build --target <name>``.
+
 .. list-table::
    :header-rows: 1
    :widths: 32 68
 
-   * - Command
+   * - Target
      - What it does
-   * - ``make MaNTA``
-     - The solver binary, and nothing else.
-   * - ``make``
-     - The solver, the Python module, and then the test suites.
-   * - ``make python``
+   * - ``MaNTA``
+     - The solver binary, at ``build/MaNTA``.
+   * - *(none)*
+     - The solver, ``libmanta.so``, the Python module and the unit tests.
+   * - ``_manta``
      - The pybind11 extension, ``python/manta/_manta<suffix>.so``.
-   * - ``make test``
-     - The Boost.Test C++ unit tests.
-   * - ``make regression_tests``
-     - The solver over ``Tests/RegressionTests/*.conf``, compared against
-       checked-in references.
-   * - ``make python_tests``
-     - The pytest suite for the Python module.
-   * - ``make coverage``
-     - Rebuilds instrumented, runs all three suites, writes ``coverage/``.
-   * - ``make venv``
+   * - ``UnitTests``
+     - The Boost.Test binary, at ``build/Tests/UnitTests/UnitTests``.
+   * - ``manta``
+     - ``libmanta.so``, for embedding the solver in another program.
+   * - ``unit_tests`` / ``regression_tests`` / ``python_tests``
+     - Run one suite. ``ctest --test-dir build`` runs all three.
+   * - ``stubs`` / ``stubs-check`` / ``typecheck``
+     - Regenerate ``_manta.pyi``, fail if the committed one is stale, and run
+       mypy over the package.
+   * - ``docs``
+     - Sphinx, into ``docs/_build/html``.
+   * - ``coverage``
+     - Runs all three suites instrumented and writes the gcovr reports. Only
+       does anything in a ``Coverage`` build directory.
+   * - ``venv``
      - Creates ``.venv`` and installs the Python dependencies into it. See below.
-   * - ``make clean``
-     - Also sweeps orphaned ``PhysicsCases/*.o`` and ``.d`` files, every
-       ABI-suffixed module under ``python/manta``, the bytecode and pytest
-       caches, and — via ``clean_data`` — the run output.
-   * - ``make clean_data``
+   * - ``install`` / ``uninstall``
+     - Headers, ``libmanta.so`` and ``manta.pc`` under a prefix.
+   * - ``clean_data``
      - Just the run output: ``.nc``, ``.restart.nc`` and ``.dat`` at the repo
        root and in ``Tests/RegressionTests``, ``python/Tests`` and each
        directory under ``python-examples`` and ``python-physics``.
+   * - ``clean_coverage``
+     - Instrumentation data and the reports, in both the build and source trees.
+
+There is no ``clean`` target to describe, and that is the point of an
+out-of-source build: ``rm -rf build`` is the whole of it.
 
 .. warning::
 
@@ -197,80 +331,75 @@ Build targets
    It also skips ``Tests/UnitTests`` entirely. Every ``.nc`` in there is a
    tracked test *input* rather than output, and one of them —
    ``MatrixDiffusion.restart.nc``, read by ``SystemSolverTests.cpp`` — has no
-   ``.ref.`` in its name, so the keep-pattern would not save it. Nothing is lost
-   by the omission: ``make test`` runs the binary from the repo root, so
-   unit-test output lands there. Keep both facts in mind before adding a
-   directory to ``CLEAN_DATA_DIRS``.
+   ``.ref.`` in its name, so the keep-pattern would not save it. Keep both facts
+   in mind before adding a directory to the list in
+   ``cmake/MantaCleanData.cmake``.
 
-Build variants are set on the command line, for example ``make DEBUG=on test``:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 20 80
-
-   * - Variant
-     - Effect
-   * - ``DEBUG``
-     - ``-O0 -g -DDEBUG -DPHYSICS_DEBUG``. Also makes ``State.hpp``'s
-       ``checkShapeAndSet`` shape-checking rather than a plain assignment, and is
-       required for the debug ``.dat`` output.
-   * - ``OMP``
-     - Enables the ``#pragma omp parallel for`` in the batched physics wrappers.
-   * - ``COVERAGE``
-     - ``--coverage -O0``, no LTO.
-   * - ``VERBOSE``
-     - Extra logging.
-   * - ``XLA_FFI`` / ``CUDA``
-     - The JAX FFI interface. Needs jaxlib headers.
+   The repo root is still swept even though the unit tests now run from the build
+   directory, so a tree carrying output from the Makefile era is tidied rather
+   than stranded.
 
 Python dependencies
 -------------------
 
 The regression and Python suites need the packages in ``requirements.txt``. On
 distributions where the system Python is externally managed that means a
-virtualenv, and ``make venv`` builds one:
+virtualenv, and the ``venv`` target builds one:
 
 .. code-block:: sh
 
-   make venv
-   export PATH="$PWD/.venv/bin:$PATH"
+   cmake --build build --target venv
+   cmake -B build -DPython3_EXECUTABLE="$PWD/.venv/bin/python"
 
-It installs ``requirements.txt`` plus ``gcovr``, so ``make coverage`` works too.
-Putting it on ``PATH`` matters because the regression driver's shebang is
-``env python3``, so it takes whichever ``python3`` comes first.
+It installs ``requirements.txt`` plus ``gcovr``, so ``coverage`` works too.
+
+There is no need to put it on ``PATH``. CMake records which interpreter to use
+and runs the regression driver and pytest with that one, where the Makefile
+relied on ``PATH`` and the regression driver's ``env python3`` shebang. A
+``.venv`` in the repository root is picked up automatically on a fresh configure,
+so the second line above is only needed if you configured before creating it.
 
 .. list-table::
    :header-rows: 1
-   :widths: 40 60
+   :widths: 45 55
 
-   * - Override
+   * - Option
      - Effect
-   * - ``make venv VENV_PYTHON=python3.12``
-     - Build against a different interpreter.
-   * - ``make venv VENV=/path/to/env``
+   * - ``-DMANTA_VENV_PYTHON=python3.12``
+     - Build the environment against a different interpreter.
+   * - ``-DMANTA_VENV=/path/to/env``
      - Put the environment somewhere else.
-   * - ``make venv VENV_CREATE_FLAGS=--clear``
-     - Rebuild an existing environment from scratch.
-   * - ``make venv VENV_EXTRA=``
+   * - ``-DMANTA_VENV_EXTRA=``
      - Skip ``gcovr``.
+   * - ``-DPython3_EXECUTABLE=...``
+     - Which interpreter the extension is built for and the tools run under.
 
 .. note::
 
-   ``make venv`` uses a **versioned** interpreter (``python3.13`` by default)
-   deliberately. A virtualenv records the interpreter it was created with, and
-   ``python3 -m venv`` records the unversioned ``/usr/bin/python3``. When the
-   distribution later moves that symlink to a new release, the environment's
-   ``bin/python3`` follows it while the installed packages stay behind in
-   ``lib/python3.<old>/site-packages``, and every import in the environment fails
-   with ``No module named pytest``. Naming ``python3.13`` records
-   ``python3.13``, and the environment survives the upgrade.
+   The ``venv`` target uses a **versioned** interpreter (``python3.13`` by
+   default) deliberately. A virtualenv records the interpreter it was created
+   with, and ``python3 -m venv`` records the unversioned ``/usr/bin/python3``.
+   When the distribution later moves that symlink to a new release, the
+   environment's ``bin/python3`` follows it while the installed packages stay
+   behind in ``lib/python3.<old>/site-packages``, and every import in the
+   environment fails with ``No module named pytest``. Naming ``python3.13``
+   records ``python3.13``, and the environment survives the upgrade.
 
-   The same upgrade catches ``make python``, which asks ``python3-config`` for the
-   ABI suffix: after the system default moves, it starts building
-   ``MaNTA.cpython-3<new>-*.so`` while the virtualenv still runs the old release
-   and imports whichever stale module is left over — so the tests exercise old
-   code. The Makefile therefore prefers the ``pythonX.Y-config`` matching
-   ``$(VENV)`` when both exist, and falls back to plain ``python3-config``
-   otherwise. Override it with ``make python PYTHON_CONFIG=python3.12-config``.
+.. note::
+
+   The **ABI-mismatch trap is gone**, and it is worth knowing what it was. The
+   Makefile named the module from ``python3-config --extension-suffix`` and took
+   its headers from the same program, so the two matched each other but not
+   necessarily the interpreter that would import them. After the system default
+   moved, ``make python`` built ``_manta.cpython-3<new>-*.so`` while the
+   virtualenv still ran the old release — and ``python_tests``, ``stubs-check``
+   and ``typecheck`` then failed with three messages pointing somewhere else.
+   ``stubs-check`` was the worst: regenerating the stub needs the import too, so
+   it failed to write one and then reported a perfectly good committed file
+   stale.
+
+   CMake finds **one** interpreter and derives the headers, the ABI suffix and
+   every tool command from it, so the three cannot disagree. If you want a
+   different one, name it once with ``-DPython3_EXECUTABLE``.
 
 All three suites can be run from any working directory.

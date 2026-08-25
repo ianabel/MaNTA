@@ -270,9 +270,10 @@ public:
     // -- which is what was meant, so the behaviour here is unchanged -- but with
     // two unbraced nested ifs that is only true by the standard's
     // nearest-enclosing rule, not by anything the reader can see. gcc's
-    // -Wdangling-else lives inside -Wparentheses, which Makefile.config disables
-    // globally, so only clang reports it. It was the sole thing standing between
-    // this codebase and a clean clang build.
+    // -Wdangling-else lives inside -Wparentheses, which the build used to
+    // disable globally, so at the time only clang reported it. It was the sole
+    // thing standing between this codebase and a clean clang build. That blanket
+    // suppression is long gone, and -Wall now catches this on either compiler.
     if (nScalars > 0)
     {
       if (m_Scalars.size() != other.Scalars().size())

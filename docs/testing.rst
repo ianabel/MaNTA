@@ -1,33 +1,42 @@
 Testing
 =======
 
-MaNTA has three suites, all driven from the top-level Makefile:
+MaNTA has three suites, all registered with CTest:
+
+.. code-block:: sh
+
+   ctest --test-dir build                      # all three
+   ctest --test-dir build -R unit              # just one
+   ctest --test-dir build --output-on-failure
 
 .. list-table::
    :header-rows: 1
    :widths: 30 70
 
-   * - Command
+   * - Test
      - What it runs
-   * - ``make test``
+   * - ``unit``
      - Boost.Test C++ unit tests (``Tests/UnitTests``).
-   * - ``make regression_tests``
+   * - ``regression``
      - The solver over ``Tests/RegressionTests/*.conf``, comparing each result
        against a checked-in ``.ref.nc``.
-   * - ``make python_tests``
-     - pytest over the Python module (``python/Tests``). Needs ``make python``
-       first.
+   * - ``python``
+     - pytest over the Python module (``python/Tests``). Needs the ``_manta``
+       target built first.
 
-The regression and Python suites need the packages in ``requirements.txt`` and
-the virtualenv on ``PATH`` — the regression driver's shebang is ``env python3``:
+Each also has a build target of its own — ``unit_tests``, ``regression_tests``,
+``python_tests`` — which builds what it needs and then runs that one suite.
+
+The regression and Python suites need the packages in ``requirements.txt``:
 
 .. code-block:: sh
 
-   make venv                            # once
-   export PATH="$PWD/.venv/bin:$PATH"
+   cmake --build build --target venv           # once
 
-See :doc:`install` for what ``make venv`` does and why it pins a versioned
-interpreter.
+Nothing needs to go on ``PATH``. CMake records which interpreter to use and runs
+the regression driver and pytest with that one, where the Makefile relied on
+``PATH`` and the driver's ``env python3`` shebang. See :doc:`install` for what the
+``venv`` target does and why it pins a versioned interpreter.
 
 All three run from any working directory.
 
@@ -36,16 +45,22 @@ Running one test
 
 .. code-block:: sh
 
-   Tests/UnitTests/UnitTests --run_test=solve_jac_tests --log_level=all
-   Tests/UnitTests/UnitTests --run_test=mms_convergence_tests --log_level=message
+   build/Tests/UnitTests/UnitTests --run_test=solve_jac_tests --log_level=all
+   build/Tests/UnitTests/UnitTests --run_test=mms_convergence_tests --log_level=message
    pytest python/Tests/test_adjoint.py
-   Tests/RegressionTests/TestSolutions.py --tolerance 1e-2
+   SOLVER=$PWD/build/MaNTA Tests/RegressionTests/TestSolutions.py --tolerance 1e-2
 
 ``--log_level=message`` is what shows ``BOOST_TEST_MESSAGE`` output, which is how
 the convergence tests report measured orders.
 
-New unit-test files must be added to ``TEST_SOURCES`` in
-``Tests/UnitTests/Makefile``.
+``TestSolutions.py`` resolves the solver from ``$SOLVER``, falling back to
+``<repo>/MaNTA`` — which an out-of-source build does not produce, hence the
+variable above. CTest sets it for you.
+
+New unit-test files must be added to ``MANTA_TEST_SOURCES`` in
+``Tests/UnitTests/CMakeLists.txt``. That stays an explicit list rather than a
+glob: these are named files with a reason to be built, where ``PhysicsCases/`` is
+a directory whose whole contents are cases and is globbed.
 
 What the suites are actually for
 --------------------------------
@@ -83,19 +98,33 @@ Coverage
 
 .. code-block:: sh
 
-   make coverage
+   cmake --preset coverage
+   cmake --build build-coverage --target coverage
 
-This rebuilds everything with ``--coverage -O0`` — no LTO, which destroys line
-attribution — runs all three suites, and writes:
+Coverage is a build *type*, in a build directory of its own: ``--coverage -O0`` —
+no LTO, which destroys line attribution — and no ``-Werror``. The target runs all
+three suites and writes, under ``build-coverage/coverage/``:
 
-* ``coverage/index.html`` — the numerical core and the Python binding layer;
-* ``coverage/physics.html`` — ``PhysicsCases/``, reported separately because it is
+* ``index.html`` — the numerical core and the Python binding layer;
+* ``physics.html`` — ``PhysicsCases/``, reported separately because it is
   exercised as test fixtures rather than gated on.
 
-``make clean_coverage`` removes the instrumentation data and the report. The
-``coverage`` target ends with a ``make clean`` so the tree is left buildable;
-without it the instrumented objects remain and the next ordinary build fails to
-link with undefined references to ``__gcov_init``.
+There is no percentage threshold: it fails only if the build or a suite does,
+which is the same thing the other CI legs gate on.
+
+``clean_coverage`` removes the instrumentation data and the reports. A separate
+build directory is what makes that all there is to it — under the Makefile this
+was one tree that recursed with ``COVERAGE=on``, needed ``env -u CXXFLAGS -u
+LDFLAGS`` to stop the parent's release flags leaking in, and had to end with a
+``make clean`` or the next ordinary build failed to link with undefined
+references to ``__gcov_init``.
+
+.. warning::
+
+   Both build directories write the Python extension to the same place,
+   ``python/manta/``, because that is where ``import manta`` has to find it. So
+   whichever you built last owns the module: rebuild the ``_manta`` target in
+   ``build/`` when you go back to Release work.
 
 .. note::
 
@@ -105,9 +134,10 @@ link with undefined references to ``__gcov_init``.
    the numbers and the discussion.
 
    Whatever reads the ``.gcno``/``.gcda`` files must come from the same toolchain
-   version that wrote them. ``Makefile.config`` derives ``GCOV`` from ``CXX`` for
-   exactly this reason — a bare ``gcov`` is whatever the system default compiler
-   provides, which need not match the compiler you built with.
+   version that wrote them. ``cmake/MantaCompilerFlags.cmake`` derives
+   ``MANTA_GCOV`` from ``CMAKE_CXX_COMPILER_VERSION`` for exactly this reason — a
+   bare ``gcov`` is whatever the system default compiler provides, which need not
+   match the compiler you built with. Override it with ``-DMANTA_GCOV=...``.
 
 Continuous integration
 ----------------------
