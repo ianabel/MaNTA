@@ -6,6 +6,9 @@
 #include <toml.hpp>
 
 #include "SystemSolver.hpp"
+#include "CapturedOutput.hpp"
+#include <filesystem>
+#include <memory>
 
 #include <nvector/nvector_serial.h> /* access to serial N_Vector            */
 #include <sundials/sundials_linearsolver.h> /* Generic Liner Solver Interface */
@@ -166,6 +169,167 @@ BOOST_AUTO_TEST_CASE(systemsolver_adjoint_tests) {
 
   delete problem;
   delete system;
+}
+
+
+// Every objective gets its own gradient, and each one matches a finite difference.
+//
+// The adjoint of an objective is the solve's answer, not a shared workspace, so
+// each of the ng objectives needs its own dG/dy (G_y), its own adjoint state
+// (adjoint_squ) and its own row of G_p. Two of those three are filled by
+// emplace_back, which makes a stale prefix the natural failure: G_y[cell] and
+// adjoint_squ[cell] index by *cell*, so anything left over from an earlier
+// objective is what every cell reads, and the result is that objective 1 silently
+// receives objective 0's gradient.
+//
+// Nothing about the answer says so -- G is right, the matrix is the right shape,
+// and the rows are merely equal -- which is why this differences the objective
+// itself. AdjointTestProblem is the fixture for it because its two objectives are
+// 0.5 u^2 and 2 u^2: the same functional up to a factor of four, so a gradient
+// that has been copied from the other one is off by exactly that and cannot hide
+// in a tolerance.
+BOOST_AUTO_TEST_CASE(each_objective_gets_its_own_gradient) {
+  constexpr Index nCells = 10;
+  constexpr Index order = 3;
+
+  // One steady solve at a given parameter offset; returns G per objective and,
+  // optionally, the adjoint gradients.
+  auto solveWith = [&](Index pIndex, double delta, Matrix *G_p_out) {
+    Grid grid(0.0, 1.0, nCells);
+    auto problem = std::make_unique<AdjointTestProblem>(config_snippet, grid);
+    if (delta != 0.0)
+      problem->setPval(pIndex, Real(problem->getPval(pIndex).val + delta));
+    auto adjoint = problem->createAdjointProblem();
+
+    SystemSolver system(grid, order, problem.get());
+    system.setTau(10.0);
+    system.resetCoeffs();
+    system.setInputFile("adjoint_gradient_per_objective");
+    system.setOutputCadence(0.25);
+    system.setNOutput(2);
+    system.setInitialTime(0.0);
+    system.setMinStepSize(1e-12);
+    system.setTolerances({1e-8}, 1e-6);
+    system.setSteadyStateTolerance(1e-10);
+    system.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    system.setSolveAdjoint(true);
+    system.setAdjointProblem(adjoint.get());
+    system.setWriteOutput(false);
+    system.setWriteDatFile(false);
+    system.setWriteDebugDatFiles(false);
+
+    {
+      CapturedOutput quiet;
+      system.initialize();
+      system.integrate(0.0);
+    }
+
+    Vector G(adjoint->getNg());
+    for (Index g = 0; g < adjoint->getNg(); ++g)
+      G(g) = adjoint->GFn(g, system.yJac);
+    if (G_p_out)
+      *G_p_out = system.G_p;
+    {
+      CapturedOutput quiet;
+      system.destroySundials();
+    }
+    return G;
+  };
+
+  Matrix G_p;
+  const Vector G0 = solveWith(0, 0.0, &G_p);
+
+  // Computing gradients must leave the case exactly as it found it. dGFndp
+  // differentiates by writing a seeded parameter back through setPval, which
+  // takes a *parameter* index; writing the objective's index there instead
+  // leaves one parameter holding another's value, and every later residual then
+  // evaluates a different problem. Nothing announces that -- G is still a
+  // number, the solve has already finished -- so it is checked directly.
+  {
+    Grid grid(0.0, 1.0, nCells);
+    auto problem = std::make_unique<AdjointTestProblem>(config_snippet, grid);
+    auto adjoint = problem->createAdjointProblem();
+    std::vector<double> before;
+    for (Index p = 0; p < 2; ++p)
+      before.push_back(problem->getPval(p).val);
+    BOOST_TEST_REQUIRE(before[0] != before[1],
+                       "both parameters are " << before[0]
+                           << ", so a swap between them would be invisible");
+
+    SystemSolver system(grid, order, problem.get());
+    system.setTau(10.0);
+    system.resetCoeffs();
+    system.setInputFile("adjoint_gradient_per_objective");
+    system.setOutputCadence(0.25);
+    system.setNOutput(2);
+    system.setInitialTime(0.0);
+    system.setMinStepSize(1e-12);
+    system.setTolerances({1e-8}, 1e-6);
+    system.setSteadyStateTolerance(1e-10);
+    system.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    system.setSolveAdjoint(true);
+    system.setAdjointProblem(adjoint.get());
+    system.setWriteOutput(false);
+    system.setWriteDatFile(false);
+    system.setWriteDebugDatFiles(false);
+
+    N_Vector zero = nullptr, F = nullptr;
+    double residualBefore = 0.0, residualAfter = 0.0;
+    {
+      CapturedOutput quiet;
+      system.initialize();
+      system.integrate(0.0);
+
+      zero = N_VClone(system.Y);
+      F = N_VClone(system.Y);
+      N_VConst(0.0, zero);
+      system.residual(system.t0, system.Y, zero, F);
+      residualBefore = std::sqrt(N_VDotProd(F, F));
+
+      system.runAdjointSolve();
+
+      system.residual(system.t0, system.Y, zero, F);
+      residualAfter = std::sqrt(N_VDotProd(F, F));
+    }
+
+    for (Index p = 0; p < 2; ++p)
+      BOOST_TEST(problem->getPval(p).val == before[p],
+                 "parameter " << p << " moved from " << before[p] << " to "
+                     << problem->getPval(p).val << " while gradients were computed");
+
+    BOOST_TEST(residualAfter == residualBefore,
+               "the residual at an unchanged state went from " << residualBefore
+                   << " to " << residualAfter << " across the gradient computation, "
+                   "so the physics case is no longer the one that was solved");
+
+    N_VDestroy(zero);
+    N_VDestroy(F);
+    {
+      CapturedOutput quiet;
+      system.destroySundials();
+    }
+  }
+  BOOST_TEST_REQUIRE(G0.size() == 2, "this case needs two objectives to say anything");
+
+  // Not vacuous: the two objectives must actually differ, or equal gradient rows
+  // would be the right answer.
+  BOOST_TEST_REQUIRE(std::abs(G0(1) - G0(0)) > 1e-6,
+                     "the two objectives agree to " << std::abs(G0(1) - G0(0))
+                         << ", so this fixture cannot tell a copied gradient apart");
+
+  const double h = 1e-5;
+  for (Index p = 0; p < 2; ++p) {
+    const Vector Gplus = solveWith(p, +h, nullptr);
+    const Vector Gminus = solveWith(p, -h, nullptr);
+    for (Index g = 0; g < G0.size(); ++g) {
+      const double fd = (Gplus(g) - Gminus(g)) / (2.0 * h);
+      BOOST_TEST_MESSAGE("objective " << g << ", parameter " << p
+                         << ": adjoint " << G_p(g, p) << " against " << fd);
+      BOOST_TEST(G_p(g, p) == fd, boost::test_tools::tolerance(2e-4));
+    }
+  }
+
+  std::filesystem::remove("adjoint_gradient_per_objective.nc");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

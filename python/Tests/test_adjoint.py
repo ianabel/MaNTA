@@ -505,10 +505,13 @@ def test_gradients_are_refused_when_no_adjoint_was_configured(tmp_path):
 
 
 def test_a_subclass_missing_the_vectorised_hooks_is_reported(tmp_path):
-    """PyAdjointProblem::dg throws by name when the override is absent.
+    """PyAdjointProblem throws, naming the hook, when an override is absent.
 
     The message matters: these are pure-virtual-in-practice methods with no C++
     fallback, and the failure otherwise surfaces deep inside the solve.
+
+    Which of the three is named is the adjoint solve's business, not this test's
+    -- all three are missing, so whichever it reaches first is the right answer.
     """
 
     class NoVectorisedHooks(MaNTA.AdjointProblem):
@@ -536,7 +539,8 @@ def test_a_subclass_missing_the_vectorised_hooks_is_reported(tmp_path):
 
     with pytest.raises(RuntimeError) as excinfo:
         runner.run(0.5)
-    assert "dg" in str(excinfo.value), str(excinfo.value)
+    message = str(excinfo.value)
+    assert any(hook in message for hook in ("dg", "dSigma", "dSources")), message
 
 
 # --------------------------------------------------- spatial parameters --

@@ -839,8 +839,10 @@ void SystemSolver::runAdjointSolve()
 	if (solveAdjoint)
 	{
     logmsg<LOG_LEVEL::INFO>("Computing adjoints");
-		initializeMatricesForAdjointSolve();
-		solveAdjointState(0);
+		// computeAdjointGradients assembles and solves the adjoint itself, once per
+		// objective. Both halves belong to *one* objective -- G_y is dG/dy for it and
+		// is the solve's right-hand side -- so doing either here would give every
+		// objective the first one's gradient.
 		computeAdjointGradients();
 	}
 	else

@@ -623,9 +623,9 @@ class SystemSolver
         // Adjoints
         void setSolveAdjoint(bool a) { solveAdjoint = a; }
 
-        void initializeMatricesForAdjointSolve();
+        void initializeMatricesForAdjointSolve(Index gIndex = 0);
 
-        void solveAdjointState(Index i);
+        void solveAdjointState();
 
         void computeAdjointGradients();
 
