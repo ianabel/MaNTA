@@ -24,6 +24,7 @@ from jaxtyping import Float, ArrayLike
 import equinox as eqx
 import enum
 from manta.jax import State
+from config import StellaratorParams
 
 
 class Channel(enum.IntEnum):
@@ -39,43 +40,6 @@ def StellaratorDecorator(func):
         return res
 
     return wrapper
-
-
-class StellaratorParams(eqx.Module):
-    ParticleSourceCenter: float
-    ParticleSourceWidth: float
-    ParticleSourceHeight: float
-    HeatSourceCenter: float
-    HeatSourceHeight: float
-    HeatSourceWidth: float
-    EdgeTemperature: float
-    EdgeDensity: float
-    n0: float
-    evolveDensity: bool
-
-    def __init__(
-        self,
-        EdgeTemperature,
-        EdgeDensity,
-        n0,
-        HeatSourceCenter,
-        HeatSourceHeight,
-        HeatSourceWidth,
-        ParticleSourceCenter = 0.0,
-        ParticleSourceWidth = 0.1,
-        ParticleSourceHeight = 1.0,
-        evolveDensity=False,
-    ):
-        self.ParticleSourceCenter = ParticleSourceCenter
-        self.ParticleSourceWidth = ParticleSourceWidth
-        self.ParticleSourceHeight = ParticleSourceHeight
-        self.HeatSourceCenter = HeatSourceCenter
-        self.HeatSourceHeight = HeatSourceHeight
-        self.HeatSourceWidth = HeatSourceWidth
-        self.EdgeTemperature = EdgeTemperature
-        self.EdgeDensity = EdgeDensity
-        self.n0 = n0
-        self.evolveDensity = evolveDensity
 
 
 """
@@ -143,10 +107,10 @@ class StellaratorState(eqx.Module):
     @classmethod
     def from_state(cls, state: State, x, vp, vpp, params: StellaratorParams):
 
-        def constant_density(state, x, vp, vpp, params):
+        def constant_density(state, x, vp, vpp, params: StellaratorParams):
             n, dndrho = jax.value_and_grad(
                 lambda x: StellaratorState.initial_profile(
-                    x, params.EdgeDensity, params.n0
+                    x, params.config.EdgeDensity, params.config.n0
                 )
             )(x)
 
@@ -178,7 +142,7 @@ class StellaratorState(eqx.Module):
                 vpp=vpp,
             )
 
-        def ambipolar(state, x, vp, vpp, params):
+        def ambipolar(state, x, vp, vpp, params: StellaratorParams):
             n = StellaratorState.Vp_u_to_u(Channel.Density, state, x, vp, vpp)
             dndrho = StellaratorState.Vp_up_to_up(Channel.Density, state, x, vp, vpp)
 
@@ -232,7 +196,14 @@ class StellaratorState(eqx.Module):
             )
 
         return jax.lax.cond(
-            params.evolveDensity, ambipolar, constant_density, state, x, vp, vpp, params
+            params.config.evolveDensity,
+            ambipolar,
+            constant_density,
+            state,
+            x,
+            vp,
+            vpp,
+            params,
         )
 
     @staticmethod

@@ -1,3 +1,10 @@
+import os
+
+os.environ["JAX_ENABLE_PINNED_HOST_TRANSFER"] = "0"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+
+
 import jax
 import jax.numpy as jnp
 import equinox as eqx
@@ -7,243 +14,182 @@ from desc import set_device
 from typing import NamedTuple
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 import matplotlib.pyplot as plt
+from stellarator_multichannel import StellaratorTransport
+from netCDF4 import Dataset
+from interpax import Akima1DInterpolator
 
 # explain cache misses
 import yancc
 from yancc.solve import solve_dke
 from yancc.species import LocalMaxwellian
-
-P = PartitionSpec
-devices = jax.devices()
-print(devices)
-mesh = Mesh(devices, ("axis",), axis_types=(jax.sharding.AxisType.Auto,))
-data_sharding = NamedSharding(
-    mesh,
-    P(
-        "axis",
-    ),
-)
-static_sharding = NamedSharding(mesh, P())
-
+import manta as MaNTA
 
 from yancc_wrapper2 import yancc_data
 
 import numpy as np
 
-import os
-
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
-
-vmap_axes = (State.vmap_axes(), 0)
-vmap_axes_wfield = (None, State.vmap_axes(), 0, None, 0, 0, 0, None, None)
-vmap_axes_sources = (None, State.vmap_axes(), 0, None, 0, None)
-set_device("gpu")
-
-st_config = {
-    "SourceCenter": 0.2,
-    "SourceHeight": 10.0,
-    "SourceWidth": 0.4,
-    "EdgeTemperature": 0.2,
-    "EdgeDensity": 0.2,
-    "n0": 1.0,
-    "use_chunking": False,
+plt.rcParams.update({"font.family": "serif", "font.size": 14})
+rho_upper = 1.0
+rtol = 1e-2
+atol = 1e-5
+# nodes = [0.0,0.5, 0.75, 0.9, 1.0]
+npoints = 4
+degree = 4
+base = 1.6
+tau = 10.0
+nodes = 1 - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 1)
+nodes = np.concatenate(([0], nodes, [1]))
+# # %%
+solver_config = {
+    "OutputFilename": "stellarator_gpu_test",
+    "Polynomial_degree": degree,
+    "Grid_points": nodes,
+    "Grid_size": len(nodes) - 1,
+    "tau": tau,
+    "Lower_boundary": 0.0,
+    "Upper_boundary": rho_upper,
+    "Relative_tolerance": rtol,
+    "Absolute_tolerance": [atol],
+    "delta_t": 1.0,
+    "initialTimestep": 1e-2,
+    "MinStepSize": 1e-9,
+    "SteadyStateTolerance": 1e-3,
+    "AggressiveTimesteps": False,
+    "WriteDatFile": True,
+    "zeroFlux": True,
+    "solveAdjoint": False,
 }
 
 
-class StellaratorParams(NamedTuple):
-    SourceCenter: float
-    SourceHeight: float
-    SourceWidth: float
-    EdgeTemperature: float
-    EdgeDensity: float
-    n0: float
-
-    @classmethod
-    def from_config(cls, config):
-        return cls(
-            SourceCenter=config["SourceCenter"],
-            SourceHeight=config["SourceHeight"],
-            SourceWidth=config["SourceWidth"],
-            EdgeTemperature=config["EdgeTemperature"],
-            EdgeDensity=config["EdgeDensity"],
-            n0=config["n0"],
-        )
-
-
-params = StellaratorParams.from_config(st_config)
-rho_upper = 1.0
-rtol = 1e-2
-atol = 1e-3
-# nodes = [0.0,0.5, 0.75, 0.9, 1.0]
-npoints = 20
-
-points = jnp.linspace(0.1, 0.9, 20)
-
-yancc_rho = jnp.array(points)
-yancc_ntheta = 13
-yancc_nzeta = 27
-
-yancc_res = {"na": 43, "nx": 5}
-## to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
-# + axis and lcfs
-# initial pressure is all zeros, can change this if desired
-
+points = MaNTA.getNodes(
+    nodes,
+    solver_config["Polynomial_degree"],
+)
 eq = desc.examples.get("W7-X")
 
-eq.change_resolution(M=4, N=4, L_grid=len(points))
+# Reduce the number of modes (not sure if this is a good thing to do)
+eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
 eq = eq.solve(x_scale="ess")[0]
 eq_init = eq.copy()
-yancc_wrapper = yancc_data.from_eq(
-    points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
-)
 
 
-def initial_profile(x, edge_value, peak_value):
-    return (peak_value - edge_value) * (1 - x**4) + edge_value
+def make_test_state(rho, fname="stellarator_gpu_test"):
+    data = Dataset(fname + ".nc", "r")
+    x = jnp.array(data.variables["x"][:])
+    n = Akima1DInterpolator(
+        x, jnp.array(data.groups["Density"].variables["u"][:][-1, :])
+    )(rho)
+    ui = Akima1DInterpolator(
+        x, jnp.array(data.groups["IonEnergy"].variables["u"][:][-1, :])
+    )(rho)
+    ue = Akima1DInterpolator(
+        x, jnp.array(data.groups["ElectronEnergy"].variables["u"][:][-1, :])
+    )(rho)
+    dndx = Akima1DInterpolator(
+        x, jnp.array(data.groups["Density"].variables["q"][:][-1, :])
+    )(rho)
+    duidx = Akima1DInterpolator(
+        x, jnp.array(data.groups["IonEnergy"].variables["q"][:][-1, :])
+    )(rho)
+    duedx = Akima1DInterpolator(
+        x, jnp.array(data.groups["ElectronEnergy"].variables["q"][:][-1, :])
+    )(rho)
+    Er = Akima1DInterpolator(x, jnp.array(data.variables["Er"][:][-1, :]))(rho)
+    data.close()
+    Variable = jnp.stack([n, ui, ue]).transpose()
+    Derivative = jnp.stack([dndx, duidx, duedx]).transpose()
+    state = {
+        "Variable": Variable,
+        "Derivative": Derivative,
+        "Flux": jnp.zeros(Variable.shape),
+        "Aux": Er,
+        "Scalars": [],
+    }
+    return state
 
 
-def Density(x):
-    return initial_profile(x, params.EdgeDensity, params.n0)
+# test memory constraints for a single gpu
+def test_single_gpu():
+    # rho = jnp.linspace(0.1, 0.9, 4)
+    # states = make_test_state(rho)
+    # out = st.ComputePhysics(states, rho, 0.0)
+    pass
 
 
-def InitialValue(x):
-    return 1.5 * params.EdgeTemperature * Density(x) * yancc_wrapper.Vp
+def test_multi_gpu():
+    pass
 
 
-pi = InitialValue(points)
-grad_pi = jax.grad(InitialValue, argnums=1)(points)
+def run_yancc_at_res(nt, nz, na, nx):
+    print(f"running at resolution nt={nt}, nz={nz}, na={na}, nx={nx}")
+    st_config = {
+        "ParticleSourceCenter": 0.1,
+        "ParticleSourceHeight": 0.01,
+        "ParticleSourceWidth": 0.4,
+        "HeatSourceCenter": 0.1,
+        "HeatSourceHeight": 0.1,
+        "HeatSourceWidth": 0.2,
+        "EdgeTemperature": 0.2,
+        "EdgeDensity": 0.3,
+        "n0": 0.5,
+        "evolveDensity": True,
+    }
 
-s = jax.device_put(State(pi, grad_pi, jnp.zeros(pi.shape), None, None), data_sharding)
+    config = {
+        "Stellarator": st_config,
+        "Solver": solver_config,
+    }
 
+    yancc_res = {"na": na, "nx": nx}
 
-def Vp_u_to_u(index, s, x, vp, vpp):
-    return jax.lax.cond(
-        jax.lax.eq(x, 0.0),
-        lambda state: state.Derivative[index] / vpp,
-        lambda state: state.Variable[index] / vp,
-        s,
+    ## to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
+    # + axis and lcfs
+    # initial pressure is all zeros, can change this if desired
+
+    scale = 1.0
+    yancc_wrapper = yancc_data.from_eq(
+        points, scale=scale, eq=eq_init, nt=nt, nz=nz, **yancc_res
     )
 
-
-def Vp_up_to_up(index, s, x, vp, vpp):
-    return jax.lax.cond(
-        jax.lax.eq(x, 0.0),
-        lambda state: 0.0,
-        lambda state: (
-            (state.Derivative[index] * vp - vpp * state.Variable[index]) / vp**2
-        ),
-        s,
-    )
+    st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+    states = make_test_state(points)
+    return st.ComputePhysics(states, points, 0.0)
 
 
-(field_shard, vp_shard, vpp_shard) = eqx.filter_shard(
-    yancc_wrapper.get_fields(), data_sharding
-)
+def test_yancc_res():
+    low_res = (13, 23, 43, 5)
+    mid_res = (17, 33, 55, 5)
+    high_res = (23, 43, 71, 7)
+    super_high_res = (27, 49, 99, 7)
+
+    test_res = [low_res, mid_res, high_res, super_high_res]
+
+    fig, ax = plt.subplots(1, 4)
+    labels = ("low", "mid", "high", "super")
+    colors = ("r", "g", "b", "y")
+    for res, l, c in zip(test_res, labels, colors):
+        physics = run_yancc_at_res(*res)
+        flux = physics[0]
+        aux = physics[2]
+        ax[0].plot(points, -flux[0], c, label=l)
+        ax[1].plot(points, -flux[1], c, label=l)
+        ax[2].plot(points, -flux[2], c, label=l)
+        ax[3].plot(points, aux[0], c, label=l)
+
+    ax[0].set_ylabel(r"$V'\langle\Gamma \cdot \nabla \rho\rangle / \Gamma_{GB}$")
+    ax[1].set_ylabel(r"$ V' \langle q_i \cdot \nabla \rho\rangle / q_{GB}$")
+    ax[2].set_ylabel(r"$ V' \langle q_e \cdot \nabla \rho\rangle / q_{GB}$")
+    ax[3].set_ylabel(r"$ V' \langle J_\rho \cdot \nabla \rho\rangle / J_{GB}$")
+
+    for a in ax:
+        a.set_box_aspect(1)
+        a.set_xlabel(r"$\rho$")
+        a.legend()
+    fig.set_figwidth(14)
+    fig.tight_layout()
+    fig.savefig("figs/test_res.png", dpi=500)
+
+    plt.show()
 
 
-def SigmaFn_v(index, states: State, positions, t):
-
-    sigma_vmap = eqx.filter_vmap(sigma, in_axes=vmap_axes_wfield)
-    flux, _ = sigma_vmap(
-        index,
-        states,
-        positions,
-        t,
-        field_shard,
-        vp_shard,
-        vpp_shard,
-        params,
-    )
-    return flux
-
-
-def dSigma(index, states: State, positions, t):
-    fgrad = jax.grad(sigma, argnums=1, has_aux=True)
-    fgrad_vmap = eqx.filter_vmap(fgrad, in_axes=vmap_axes_wfield)
-    dflux = fgrad_vmap(
-        index,
-        states,
-        positions,
-        t,
-        field_shard,
-        vp_shard,
-        vpp_shard,
-        params,
-    )[0]
-    return dflux
-
-
-"""
-Sigma and source, and auxilliary functions
-
-Parameters
-----------
-index : int
-    Variable index
-state : dict
-    Dictionary containing "Variable", "Derivative, "Flux", "Aux", and "Scalar" arrays
-x : float
-    Spatial location
-t : float
-    Time
-params : NamedTuple
-    Transport system parameters, passed for JAX PyTree compatibility
-Returns
--------
-float
-    Computed sigma or source term
-"""
-
-
-def sigma(index, state: State, x, t, field, vp, vpp, params, f1_prev=None):
-    n, nprime = jax.value_and_grad(Density)(x)
-
-    p_i = 2.0 / 3.0 * Vp_u_to_u(index, state, x, vp, vpp)
-    p_i_prime = 2.0 / 3.0 * Vp_up_to_up(index, state, x, vp, vpp)
-
-    dndrho = nprime
-    Erho = jnp.array(0.0)
-    Ti = jax.lax.cond(
-        jax.lax.eq(x, 0.0),
-        lambda x: params.EdgeTemperature,
-        lambda x: x[0] / x[1],
-        (p_i, n),
-    )
-
-    dTidrho = (p_i_prime - Ti * dndrho) / n
-
-    species = [
-        LocalMaxwellian(
-            # can just give mass and charge in units of proton mass and elementary charge
-            yancc.species.Species(1, 1),
-            temperature=Ti * yancc_wrapper.Tnorm,
-            density=n * yancc_wrapper.nNorm,
-            dTdrho=dTidrho * yancc_wrapper.Tnorm,
-            dndrho=dndrho * yancc_wrapper.nNorm,
-        ),
-    ]
-    sol, info = jax.jit(solve_dke, static_argnames=["verbose"])(
-        field,
-        yancc_wrapper.pitchgrid,
-        yancc_wrapper.speedgrid,
-        species,
-        Erho,
-        f1=f1_prev,
-    )
-    # nmv
-    # M is the size of krylov space
-    fout = sol.get("<heat_flux>")[0] * vp / (yancc_wrapper.FluxNorm)
-    return -jnp.nan_to_num(fout, nan=0.0, posinf=0.0, neginf=0.0), sol.f1
-
-
-flux_out = SigmaFn_v(0, s, points, 0.0)
-dflux_out = dSigma(0, s, points, 0.0)
-
-fig, ax = plt.subplots()
-ax.plot(points, flux_out)
-
-fig, ax = plt.subplots()
-ax.plot(points, dflux_out.Variable)
-ax.plot(points, dflux_out.Derivative)
-plt.show()
+test_yancc_res()

@@ -28,7 +28,6 @@ from desc.grid import Grid, LinearGrid
 from desc.geometry import FourierRZToroidalSurface
 from desc.equilibrium import Equilibrium, EquilibriaFamily
 import desc.io
-from desc import set_device
 from scipy.constants import mu_0
 import os
 
@@ -36,16 +35,20 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
 st_config = {
-    "ParticleSourceCenter": 0.1,
-    "ParticleSourceHeight": 0.01,
-    "ParticleSourceWidth": 0.3,
-    "HeatSourceCenter": 0.1,
-    "HeatSourceHeight": 0.05,
-    "HeatSourceWidth": 0.3,
+    "ParticleSourceCenter": 0.0,
+    "ParticleSourceHeight": 0.02,
+    "ParticleSourceWidth": 0.25,
+    "NBICenter": 0.0,
+    "NBIPower": 0.15,
+    "NBIWidth": 0.25,
+    "ECHCenter": 0.0,
+    "ECHPower": 0.15,
+    "ECHWidth": 0.25,
     "EdgeTemperature": 0.2,
-    "EdgeDensity": 0.4,
+    "EdgeDensity": 0.3,
     "n0": 0.5,
     "evolveDensity": True,
+    "useBatching": False,
 }
 # runner = MaNTA.Runner(st)
 
@@ -53,12 +56,13 @@ rho_upper = 1.0
 rtol = 1e-2
 atol = 1e-4
 # nodes = [0.0,0.5, 0.75, 0.9, 1.0]
-npoints = 5
-degree = 3
-base = 1.6
-tau = 10.0
+npoints = 4
+degree = 4
+base = 1.5
+tau = 1000.0
 nodes = 1 - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 1)
 nodes = np.concatenate(([0], nodes, [1]))
+print(nodes)
 # # %%
 solver_config = {
     "OutputFilename": "stellarator_w7x",
@@ -71,14 +75,15 @@ solver_config = {
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
-    # "initialTimestep": 1e-3,
+    "initialTimestep": 1e-2,
     "MinStepSize": 1e-9,
-    "SteadyStateTolerance": 1e-2,
+    "SteadyStateTolerance": 2e-3,
     "AggressiveTimesteps": False,
     "WriteDatFile": True,
     "restart": False,
     "zeroFlux": True,
     "solveAdjoint": False,
+    "PseudoTransientSERRate": 2.0,
 }
 
 
@@ -94,11 +99,11 @@ points = MaNTA.getNodes(
 )
 
 yancc_rho = jnp.array(points)
+
 yancc_ntheta = 17
-yancc_nzeta = 31
+yancc_nzeta = 25
 
-yancc_res = {"na": 45, "nx": 5}
-
+yancc_res = {"na": 43, "nx": 7}
 ## to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
 # + axis and lcfs
 # initial pressure is all zeros, can change this if desired
@@ -114,8 +119,10 @@ eq_init = eq.copy()
 yancc_wrapper = yancc_data.from_eq(
     points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
-# st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-# st.run()
+
+st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+with jax.log_compiles(True):
+    st.run()
 
 
 def make_tangent(params, idx, key="Rb_lmn"):
@@ -152,13 +159,16 @@ solver_config = {
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
-    # "initialTimestep": 1e-3,
+    "initialTimestep": 1e-6,
     "MinStepSize": 1e-9,
-    "SteadyStateTolerance": 1e-2,
+    "SteadyStateTolerance": 2e-3,
     "AggressiveTimesteps": False,
+    "solveAdjoint": False,
     "WriteDatFile": True,
     "restart": True,
     "zeroFlux": True,
+    "SteadyStateSolver": "Newton",
+    "PseudoTransientSERRate": 2.0,
 }
 
 
@@ -291,12 +301,13 @@ start = v0 - delta
 end = v0 + delta
 # start = -0.04
 # end = 0.02
-sweep = jnp.linspace(start, end, 6)
+sweep = jnp.linspace(start, end, 5)
 df = sweep[1] - sweep[0]
 
 
 eq_init = eq.copy()
 x_init = obj.x(eq_init)
+
 
 for i in range(0, len(sweep)):
     print(f"--------------------------\n Iteration {i} \n--------------------------\n")
@@ -312,8 +323,9 @@ for i in range(0, len(sweep)):
     t1 = t.at[lp + lc + 1 + idx].set(1.0)
 
     # Compute value of objective
-    G.append(obj.compute_scaled(x_in)[0])
     # Compute gradient
+    G.append(obj.compute_scaled(x_in)[0])
+
     grads.append(obj.jvp_scaled(t1, x_in)[0])
 
 fd_grad = jnp.gradient(jnp.array(G)) / df
