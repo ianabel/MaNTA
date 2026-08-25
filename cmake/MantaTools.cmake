@@ -82,7 +82,22 @@ if(MANTA_COVERAGE_BUILD)
       --exclude "${PROJECT_SOURCE_DIR}/Tools/"
       --exclude "${PROJECT_SOURCE_DIR}/PhysicsCases/")
 
+    # Running the Python suite here is only worth anything if it imports the
+    # module *this* directory built. python/CMakeLists.txt is what arranges that,
+    # and explains at length how it used to go wrong; this is the independent
+    # check that it did, because the claim is a mechanism that could quietly stop
+    # working and an uninstrumented module gives a *passing* suite and a report
+    # that simply does not mention the binding layer. Ahead of the suites, so a
+    # stale module costs a second rather than twenty-three minutes.
+    set(_cov_check)
+    if(TARGET _manta)
+      set(_cov_check
+        COMMAND ${CMAKE_COMMAND} -DMODULE=$<TARGET_FILE:_manta>
+                -P "${PROJECT_SOURCE_DIR}/cmake/MantaCheckInstrumented.cmake")
+    endif()
+
     add_custom_target(coverage
+      ${_cov_check}
       # A failing suite should still produce a report -- see MantaRunSuites.cmake
       # for why that is a -P script rather than `ctest || true`.
       COMMAND ${CMAKE_COMMAND}
@@ -114,6 +129,16 @@ if(MANTA_COVERAGE_BUILD)
       # it cannot run `llvm-cov` with an argument `gcov` it never received.
       VERBATIM
       COMMENT "Running every suite under instrumentation and writing the gcovr reports")
+
+    # A freshly configured Coverage directory should be able to go straight to
+    # this target. Without these, `--target coverage` runs ctest over binaries
+    # nothing has built yet and reports three failures that say nothing about
+    # why.
+    foreach(_t MaNTA UnitTests _manta)
+      if(TARGET ${_t})
+        add_dependencies(coverage ${_t})
+      endif()
+    endforeach()
   endif()
 else()
   add_custom_target(coverage

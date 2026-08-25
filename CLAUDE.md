@@ -1116,9 +1116,45 @@ formula, not the operator, if the data cannot tell them apart.
   date if the file on disk is newer than its objects — even when the file was put
   there by the other build. The symptom is a test suite exercising a module you
   did not build: measured, a Release run reporting a crash that belonged to the
-  instrumented module. `rm -f python/manta/_manta*.so` before rebuilding when in
-  any doubt, and note that `ls -la` on it is the fastest way to tell which build
-  owns it.
+  instrumented module.
+
+  **Each build directory now claims the module, so this is handled rather than
+  remembered.** `manta_claim_module` (`python/CMakeLists.txt`) is an ordering
+  dependency of `_manta`: before any link it checks the file against
+  `<build>/python/manta_module.stamp`, which a POST_BUILD step wrote describing
+  what this directory last linked, and deletes anything it does not recognise —
+  which is what makes the link happen. `cmake/MantaClaimModule.cmake` is both
+  halves. Building the same directory twice does no extra work; a relink happens
+  only when the module really did belong to someone else.
+
+  Both directions were measured, and **both were silent**. A coverage run whose
+  Python suite imported the *Release* module: 133s against 748s for the same
+  tests, `PyRunner.cpp.gcda` left at the previous run's timestamp, and the report
+  still read correctly only because gcov data accumulates and an earlier
+  instrumented run had left some behind. And `cmake --build build --target
+  _manta` reporting `Built target _manta` while leaving the 57MB instrumented
+  module exactly where it was — note what that means: **"rebuild it in `build/`"
+  was never a workaround**, because the rebuild is precisely the thing that does
+  not happen. The docs said it for a while; it was wrong.
+
+  On top of that, `cmake/MantaCheckInstrumented.cmake` runs ahead of the suites
+  in the `coverage` target and refuses to start unless the module carries `.gcda`
+  strings. That is deliberate belt and braces: the claim is a mechanism that
+  could quietly stop working, and the thing it protects — a coverage number —
+  looks equally plausible either way.
+
+  Two details worth keeping if you edit any of it. The claim has to hang off
+  `_manta` rather than off the targets that *use* the module; an
+  `add_dependencies` on `coverage` or on a test would be too late twice over,
+  since that dependency is satisfied before the target's own commands run and is
+  satisfied by exactly the stale comparison at fault. And the path cannot be
+  spelled `$<TARGET_FILE:_manta>` — a `TARGET_FILE` genex in a custom command
+  makes that command depend on the target, and this command is a dependency of
+  it, so CMake refuses the cycle by name. It is assembled from
+  `OUTPUT_NAME`/`PREFIX`/`SUFFIX`, with a configure-time check that the suffix
+  still looks like a module suffix, because a mis-assembled path would delete
+  nothing and restore the original silent bug.
+
 * **g++-14 miscompiles this tree at `-O3 -flto -march=native`, and the symptom is
   a wrong number rather than a crash. Do not trust a g++-14 release build.**
   Measured 2026-08-23 on g++-14.2.0, znver2. It is no longer a CI leg, and the

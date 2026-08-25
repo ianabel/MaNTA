@@ -215,6 +215,18 @@ per-instantiation line records (all three modes give identical output).
 So: treat the headline as a floor, and judge work on this header by the count of
 *distinct* uncovered lines, not by its percentage.
 
+**And a number is only worth reading if the Python suite ran against the
+instrumented module.** The extension lives at `python/manta/_manta<abi>.so` --
+in the source tree, because that is where `import manta` has to find it -- so
+every build directory writes to the same path, and a run once imported the
+Release module while believing otherwise: 133s against 748s for the same tests,
+with the report still looking right because gcov data accumulates. Each build
+directory now claims the module and replaces one it does not recognise, and the
+`coverage` target refuses to start unless what is in place carries
+instrumentation; `python/CMakeLists.txt` has the full account. Nothing is needed
+from you, but if a binding-layer figure ever looks impossibly low, that is the
+first thing to suspect.
+
 ## The scalar (Woodbury) path in solveJacEq
 
 `SolveJacTests.cpp` builds the Jacobian by finite-differencing `residual` under

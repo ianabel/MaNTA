@@ -278,9 +278,11 @@ There is no percentage threshold; it fails only if the build or a suite does.
 `clean_coverage` removes the instrumentation data and the reports.
 
 Note that both build directories write the Python extension to the same place,
-`python/manta/`, because that is where `import manta` has to find it — so
-whichever you built last owns the module. Rebuild the `_manta` target in `build/`
-when you go back to Release work.
+`python/manta/`, because that is where `import manta` has to find it. Each build
+directory records what it linked there and replaces anything it does not
+recognise, so switching between `build/` and `build-coverage/` needs nothing from
+you — the first build after the switch relinks the module, and the `coverage`
+target additionally refuses to start if what is in place is not instrumented.
 
 #### Installing SUNDIALS
 
