@@ -69,6 +69,14 @@ const std::vector<Entry> &table()
         {"PseudoTransientSERFloor", {}, Type::Double, Category::Solver, false, false, 2.0,
          "Least the pseudo-time step may grow on a step that reduced the residual. "
          "1 means no floor. Must not be below 1."},
+        {"EstimateObjectiveOnFinish", {}, Type::Bool, Category::Solver, false, false, true,
+         "Estimate the objective and its remaining error at the end of each steady solve. Costs "
+         "one residual, one Jacobian build and one solve, and needs solveAdjoint. Charged per "
+         "solve, so a solve driven in slices pays it per slice."},
+        {"MaxContinuationSteps", {}, Type::UInt, Category::Solver, false, false, 200u,
+         "KINSol calls one steady solve may make before giving up. Each is a full Newton solve, "
+         "so a healthy run uses ten or so and the default is a runaway backstop. Lower it to stop "
+         "a solve early enough to inspect, then resume it. Minimum 1."},
         {"NewtonMaxIterations", {}, Type::UInt, Category::Solver, false, false, 20u,
          "Newton iterations one KINSol call may take before handing back to the continuation "
          "loop. Applies to PseudoTransient and Newton alike. KINSOL's own default is 200; 20 "
@@ -115,8 +123,6 @@ const std::vector<Entry> &table()
          "How much error one extra degree is assumed to buy, in Giorgiani's rule "
          "dk = ceil(log_base(E/tolerance)). 10 is cautious, 100 aggressive; must be "
          "between 10 and 100."},
-        {"ObjectiveDecreaseTolerance", {}, Type::Double, Category::Solver, false, false, 0.0,
-         "Abandon a run whose dG/dt is already below -this at t0; zero is off."},
         {"WriteOutput", {}, Type::Bool, Category::Solver, false, false, true,
          "Write <stem>.nc and <stem>.restart.nc."},
         {"WriteDatFile", {}, Type::Bool, Category::Solver, false, false, false,
@@ -133,6 +139,10 @@ const std::vector<Entry> &table()
         {"SuppressAlgebraicError", {}, Type::Bool, Category::Solver, false, false, false,
          "Drop sigma, q, lambda and phi from IDA's local error test (IDASetSuppressAlg). "
          "Costs restart fidelity and aux-variable accuracy; see docs/running.rst."},
+        {"ForceConsistentIC", {}, Type::Bool, Category::Solver, false, false, false,
+         "Run IDACalcIC on a steady solve or a restart, which skip it by default -- the first "
+         "discards its answer, the second resumes from a state already on the constraint "
+         "manifold. A cold time-marching run always runs it and this cannot turn that off."},
         {"TransportSystem", {}, Type::String, Category::ProblemSelection, true, false, std::string{},
          "Name of the registered physics case to run."},
         {"PhysicsPlugins", {}, Type::StringList, Category::ProblemSelection, false, false,

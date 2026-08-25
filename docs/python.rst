@@ -88,12 +88,6 @@ Module contents
      - The objective value, without gradients.
    * - ``getAdjointGradients()``
      - :math:`\mathrm{d}G/\mathrm{d}p`.
-   * - ``wasRejected()``
-     - Whether the last run was abandoned by the ``ObjectiveDecreaseTolerance``
-       gate instead of integrated. Always ``False`` when that is not configured.
-   * - ``lastDGdt()``
-     - The :math:`\mathrm{d}G/\mathrm{d}t` values behind that decision, one per
-       objective.
    * - ``physics_case``
      - The registered C++ case name this ``Runner`` was built from, or ``""``
        when it was handed a transport system object.

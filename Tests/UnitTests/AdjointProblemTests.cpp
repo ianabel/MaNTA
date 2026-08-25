@@ -174,10 +174,10 @@ public:
 // finite-difference check needs all of it to line up.
 //
 // g is nonlinear in u and depends on q, sigma and phi as well. Every part of that
-// is load-bearing. A g linear in u cannot tell a correct dG/dt from evaluating
-// the objective functional on the derivative vector, which is what
-// origin/optimize-mode's gate did and which happens to be right only in the
-// linear case. And a g that ignored q, sigma or phi could not tell a full chain
+// is load-bearing. A g linear in u cannot tell a correct chain rule from
+// evaluating the objective functional on the derivative vector, the two
+// coinciding only in the linear case. And a g that ignored q, sigma or phi could
+// not tell a full chain
 // rule from one missing those terms -- the same blind spot that let the gate be
 // evaluated where dydt.q, dydt.sigma and dydt.phi are all still zero.
 class QuadratureAdjoint : public AdjointProblem
@@ -208,7 +208,7 @@ public:
     Value GFn(Index gIndex, DGSoln &Y) const override
     {
         // sum_m w_m g(Z_m) -- the objective every GFn in the tree reports, and
-        // therefore the one dGdt and the adjoint gradient have to differentiate.
+        // therefore the one the adjoint gradient has to differentiate.
         //
         // This used to be a 30-point Gauss rule per cell, chosen so the reference
         // shared no quadrature with the assembly and could not agree with it by
@@ -270,20 +270,6 @@ public:
 private:
     Grid const &grid;
 };
-
-// A deterministic, everywhere-nonzero derivative vector.
-//
-// Deliberately not what setInitialConditions leaves behind: that zeroes dydt and
-// then fills in only the differential part, so dydt.q, dydt.sigma and dydt.phi
-// stay at zero until IDACalcIC runs. Testing the chain rule against that would
-// exercise one of its four terms.
-void fillWithNonzeroPattern(N_Vector v)
-{
-    sunrealtype *p = N_VGetArrayPointer(v);
-    const sunindextype n = N_VGetLength(v);
-    for (sunindextype i = 0; i < n; ++i)
-        p[i] = 0.05 * std::sin(1.0 + 0.7 * static_cast<double>(i)) + 0.11;
-}
 
 GlobalState makeStates(Index nCells, Index k, Index nVars, Index nAux)
 {
@@ -622,209 +608,12 @@ BOOST_AUTO_TEST_CASE(the_aux_derivative_sub_vector_weights_dg_by_the_integration
     SUNContext_Free(&ctx);
 }
 
-// ------------------------------------------------------------------ dG/dt --
+// ------------------------------------------- the derivative sub-vectors --
 
 namespace
 {
 
-// The shared setup for the two dG/dt cases: a solver with a real objective on it,
-// an initial condition, and an everywhere-nonzero dYdt.
-struct DGdtFixture
-{
-    static constexpr Index k = 2, nCells = 4, nVars = 2, nAux = 1;
-
-    Grid grid{0.0, 1.0, nCells};
-    AdjointHostSystem problem;
-    QuadratureAdjoint adjoint{grid};
-    SystemSolver sys{grid, k, &problem};
-    SUNContext ctx = nullptr;
-    N_Vector Y = nullptr, dYdt = nullptr;
-
-    DGdtFixture()
-    {
-        sys.setAdjointProblem(&adjoint);
-        sys.setTau(1.0);
-        sys.resetCoeffs();
-        sys.initialiseMatrices();
-
-        SUNContext_Create(SUN_COMM_NULL, &ctx);
-
-        DGSoln shape(nVars, grid, k, Index(0), Index(nAux));
-        Y = N_VNew_Serial(shape.getDoF(), ctx);
-        dYdt = N_VClone(Y);
-        N_VConst(0.0, Y);
-        N_VConst(0.0, dYdt);
-        sys.setInitialConditions(Y, dYdt);
-        fillWithNonzeroPattern(dYdt);
-
-        // Stand in for what initialize() does: seed dydtComplete from the
-        // derivative. The gate reads dydtComplete, not dydt, because at t0 the
-        // latter's algebraic blocks are empty -- see
-        // computeAlgebraicTimeDerivatives. Here the two are the same vector, so
-        // these tests go on measuring what they always measured.
-        sys.dydtComplete.copy(sys.dydt);
-    }
-
-    ~DGdtFixture()
-    {
-        N_VDestroy(Y);
-        N_VDestroy(dYdt);
-        SUNContext_Free(&ctx);
-    }
-};
-
 } // namespace
-
-BOOST_AUTO_TEST_CASE(dGdt_matches_a_finite_difference_of_the_objective)
-{
-    // dG/dt is the directional derivative of G along dy/dt, so a central
-    // difference of G along that direction has to reproduce it. The state vector
-    // *is* the coefficient vector, which is what makes the comparison exact
-    // rather than approximate: perturbing Y by h*dYdt is precisely the
-    // perturbation the chain rule linearises.
-    DGdtFixture f;
-
-    const Value analytic = f.sys.dGdt(0, f.sys.y, f.sys.dydt);
-
-    N_Vector perturbed = N_VClone(f.Y);
-    DGSoln probe(f.nVars, f.grid, f.k, N_VGetArrayPointer(perturbed), Index(0), Index(f.nAux));
-
-    auto G_at = [&](double h)
-    {
-        N_VLinearSum(1.0, f.Y, h, f.dYdt, perturbed);
-        probe.Map(N_VGetArrayPointer(perturbed));
-        return f.adjoint.GFn(0, probe);
-    };
-
-    const double h = 1e-6;
-    const Value numeric = (G_at(h) - G_at(-h)) / (2.0 * h);
-
-    N_VDestroy(perturbed);
-
-    BOOST_TEST(std::abs(analytic) > 1e-6,
-               "dG/dt is ~zero, so this fixture would pass with any implementation");
-    BOOST_TEST(std::abs(analytic - numeric) < 1e-6 * std::max(1.0, std::abs(numeric)),
-               "dGdt = " << analytic << " but the central difference of G gives " << numeric);
-}
-
-BOOST_AUTO_TEST_CASE(dGdt_accounts_for_q_sigma_and_phi_not_just_u)
-{
-    // The anti-regression for the two defects that made origin/optimize-mode's
-    // gate untrustworthy. Zeroing the q, sigma and aux blocks of dYdt has to move
-    // the answer: if it does not, either those terms are missing from the chain
-    // rule or the derivative being read has nothing in them -- which is exactly
-    // the state dydt is in before IDACalcIC, where that gate was evaluated.
-    DGdtFixture f;
-
-    const Value full = f.sys.dGdt(0, f.sys.y, f.sys.dydt);
-
-    for (Index i = 0; i < f.nCells; ++i)
-    {
-        for (Index var = 0; var < f.nVars; ++var)
-        {
-            f.sys.dydt.q(var).getCoeff(i).second.setZero();
-            f.sys.dydt.sigma(var).getCoeff(i).second.setZero();
-        }
-        for (Index a = 0; a < f.nAux; ++a)
-            f.sys.dydt.Aux(a).getCoeff(i).second.setZero();
-    }
-
-    const Value uOnly = f.sys.dGdt(0, f.sys.y, f.sys.dydt);
-
-    BOOST_TEST(std::abs(full - uOnly) > 1e-6,
-               "dGdt is unchanged when dydt's q, sigma and phi are zeroed, so those terms are not reaching it");
-}
-
-BOOST_AUTO_TEST_CASE(dGdt_without_an_adjoint_problem_is_reported)
-{
-    // The gate is armed by a tolerance and the objective by a separate call, so
-    // the two can disagree. Better a named error than a null dereference.
-    Grid grid(0.0, 1.0, 3);
-    AdjointHostSystem problem;
-    SystemSolver sys(grid, 2, &problem);
-    sys.setTau(1.0);
-    sys.resetCoeffs();
-    sys.initialiseMatrices();
-
-    BOOST_CHECK_THROW(sys.dGdt(0, sys.y, sys.dydt), std::logic_error);
-
-    // And the gate itself, which is the path a user actually reaches it by.
-    sys.setObjectiveDecreaseTolerance(1e-3);
-    BOOST_CHECK_THROW(sys.objectiveIsDecreasing(), std::logic_error);
-}
-
-BOOST_AUTO_TEST_CASE(the_gate_is_off_until_a_tolerance_arms_it)
-{
-    // No tolerance set means no objective evaluation at all -- note this holds
-    // even with no AdjointProblem, so an ordinary run cannot be made to throw by
-    // machinery it never asked for.
-    Grid grid(0.0, 1.0, 3);
-    AdjointHostSystem problem;
-    SystemSolver sys(grid, 2, &problem);
-
-    BOOST_TEST(!sys.objectiveIsDecreasing());
-    BOOST_TEST(!sys.wasRejected());
-}
-
-BOOST_AUTO_TEST_CASE(the_gate_compares_dGdt_against_the_tolerance_it_was_given)
-{
-    // The decision is a one-sided band around zero: reject below -tol, accept
-    // above it. Driving it from both sides with the same state pins the sign
-    // convention (G is maximised, so falling is bad) and the slack.
-    DGdtFixture f;
-
-    const Value dGdt = f.sys.dGdt(0, f.sys.y, f.sys.dydt);
-    BOOST_TEST(std::abs(dGdt) > 1e-6);
-
-    // A tolerance well inside |dG/dt| rejects when dG/dt is negative and accepts
-    // when positive; one well outside it accepts either way.
-    const double tight = std::abs(dGdt) / 2.0;
-    const double loose = std::abs(dGdt) * 2.0;
-
-    f.sys.setObjectiveDecreaseTolerance(tight);
-    BOOST_TEST(f.sys.objectiveIsDecreasing() == (dGdt < 0.0),
-               "dG/dt = " << dGdt << " with tolerance " << tight);
-    BOOST_TEST(f.sys.wasRejected() == (dGdt < 0.0));
-    BOOST_TEST(f.sys.lastDGdt().size() == 1);
-    BOOST_TEST(std::abs(f.sys.lastDGdt()(0) - dGdt) < 1e-12);
-
-    f.sys.setObjectiveDecreaseTolerance(loose);
-    BOOST_TEST(!f.sys.objectiveIsDecreasing(),
-               "tolerance " << loose << " is larger than |dG/dt| so nothing should be rejected");
-    BOOST_TEST(!f.sys.wasRejected());
-}
-
-BOOST_AUTO_TEST_CASE(the_gate_does_not_depend_on_the_output_cadence)
-{
-    // Defect 2's regression test. origin/optimize-mode compared dt * dG/dt against
-    // its threshold, with dt the netCDF output cadence -- so an I/O setting decided
-    // whether a step was rejected, and setOutputCadence(0.0) zeroed the product
-    // and disarmed the gate silently. The verdict must be identical across
-    // cadences, including zero.
-    const double cadences[] = {0.0, 1e-4, 0.25, 1000.0};
-
-    bool verdicts[std::size(cadences)];
-    Value values[std::size(cadences)];
-
-    for (size_t i = 0; i < std::size(cadences); ++i)
-    {
-        DGdtFixture f;
-        f.sys.setOutputCadence(cadences[i]);
-        // Tight enough that the decision is genuinely driven by dG/dt rather than
-        // by slack swamping it.
-        f.sys.setObjectiveDecreaseTolerance(std::abs(f.sys.dGdt(0, f.sys.y, f.sys.dydt)) / 2.0);
-        verdicts[i] = f.sys.objectiveIsDecreasing();
-        values[i] = f.sys.lastDGdt()(0);
-    }
-
-    for (size_t i = 1; i < std::size(cadences); ++i)
-    {
-        BOOST_TEST(verdicts[i] == verdicts[0],
-                   "output cadence " << cadences[i] << " changed the gate's verdict");
-        BOOST_TEST(std::abs(values[i] - values[0]) < 1e-12,
-                   "output cadence " << cadences[i] << " changed dG/dt itself");
-    }
-}
 
 BOOST_AUTO_TEST_CASE(the_derivative_sub_vector_weights_dg_by_the_integration_weights)
 {
@@ -852,7 +641,7 @@ BOOST_AUTO_TEST_CASE(the_derivative_sub_vector_weights_dg_by_the_integration_wei
     // dgFn_dq is: restoring InterpolateOntoBasis moves the check above by 3e-16
     // and it goes on passing. Measured, not deduced -- and until this half was
     // added, the only case in the suite that noticed the regression at all was
-    // dGdt_matches_a_finite_difference_of_the_objective, at a relative 6e-6
+    // the dG/dt check that used to live here, at a relative 6e-6
     // against its 1e-6 tolerance.
     const Index k = 2, nCells = 3, nVars = 2;
     Grid grid(0.0, 1.0, nCells);

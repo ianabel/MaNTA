@@ -18,7 +18,7 @@
 #include "PyIntegrator.hpp"
 
 SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *transpSystem)
-    : grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars(transpSystem->getNumScalars()), nAux(transpSystem->getNumAux()), y(nVars, grid, k, nScalars, nAux), dydt(nVars, grid, k, nScalars, nAux), yJac(nVars, grid, k, nScalars, nAux), dydtJac(nVars, grid, k, nScalars, nAux), dydtComplete(nVars, grid, k, nScalars, nAux), problem(transpSystem)
+    : grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars(transpSystem->getNumScalars()), nAux(transpSystem->getNumAux()), y(nVars, grid, k, nScalars, nAux), dydt(nVars, grid, k, nScalars, nAux), yJac(nVars, grid, k, nScalars, nAux), dydtJac(nVars, grid, k, nScalars, nAux), problem(transpSystem)
 {
     if (SUNContext_Create(SUN_COMM_NULL, &ctx) < 0)
         throw std::runtime_error("Unable to allocate SUNDIALS Context, aborting.");
@@ -26,8 +26,6 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSyst
     yJac.Map(yJacMem);
     dydtJacMem = new double[yJac.getDoF()];
     dydtJac.Map(dydtJacMem);
-    dydtCompleteMem = new double[yJac.getDoF()];
-    dydtComplete.Map(dydtCompleteMem);
     S_DOF = k + 1;
     U_DOF = k + 1;
     Q_DOF = k + 1;
@@ -59,7 +57,6 @@ SystemSolver::~SystemSolver()
 {
     delete[] yJacMem;
     delete[] dydtJacMem;
-    delete[] dydtCompleteMem;
     if (nScalars > 0)
     {
         for (Index i = 0; i < nScalars; ++i)
@@ -98,8 +95,18 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     if (problem->isRestarting())
     {
         DGSoln const &restart = problem->getRestartY();
-        const bool sameDiscretisation =
-            restart.getBasis().Order() == k && restart.getGrid() == grid;
+        const bool sameGrid = restart.getGrid() == grid;
+        const bool sameDiscretisation = restart.getBasis().Order() == k && sameGrid;
+
+        // Recorded because initialize() decides whether to skip IDACalcIC from it.
+        // A restart skips by default on the grounds that it resumes from a state
+        // the previous run had already driven onto the constraint manifold -- and
+        // that is only true on the copy path. The projection below transfers u, q,
+        // aux and the scalars and then *rebuilds* sigma and the trace, so the state
+        // it produces is a guess like any other. Measured on AuxVarTest resuming at
+        // a lower degree: skipping there fails with IDA_ERR_FAIL, and running
+        // IDACalcIC completes the run.
+        restartWasProjected = !sameDiscretisation;
 
         if (sameDiscretisation)
         {
@@ -136,21 +143,140 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
             // are whatever the degree.
             for (Index s = 0; s < nScalars; ++s)
                 y.Scalar(s) = restart.Scalar(s);
+
+            // Neither does the trace. lambda is one value per face per variable
+            // -- DGSoln::Map gives it nCells + 1 entries and no basis at all --
+            // so a change of *degree* leaves it transferable verbatim even though
+            // copy() refuses the state as a whole. Only a change of mesh makes it
+            // meaningless, and then there is nothing to do but rebuild it.
+            if (sameGrid)
+                for (Index v = 0; v < nVars; ++v)
+                    y.lambda(v) = restart.lambda(v);
         }
 
         ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
 
-        GlobalState initialState = y.evalOnNodes(); // only need u and q so this is ok
-        const auto points = y.getPoints();
-        auto physics_vals = problem->ComputePhysics(initialState, points, t);
-        for (Index var = 0; var < nVars; var++)
+        // sigma is *loaded* on the copy path, not recomputed.
+        //
+        // y.copy() above already brought it across -- DGSoln::copy transfers sigma
+        // along with u, q, lambda, the scalars and aux -- and nothing between here
+        // and there disturbs the inputs it was built from: ApplyDirichletBCs
+        // touches lambda only, and u and q are bit for bit the file's. So
+        // AssignSigma would rebuild sigma from exactly the state the file's sigma
+        // was already built from, at the price of a full ComputePhysics over every
+        // node.
+        //
+        // That price is the point. ComputePhysics evaluates SigmaFn *and* Sources
+        // for every variable and AuxG for every auxiliary one, at every node, and
+        // this block uses only the first of the three -- the sources and the aux
+        // values are computed and dropped. On a case whose flux is expensive that
+        // is a whole physics sweep bought for nothing, on the very path that
+        // exists because the state is already right.
+        //
+        // The projection path still needs it: there sigma was never transferred,
+        // since a degree change leaves the stored coefficients in the wrong space,
+        // and rebuilding it from the projected u and q is what makes the sigma row
+        // exact.
+        if (!sameDiscretisation)
         {
-            // set flux for each variable, casting to a row vector and making sure to remember minus sign
-            initialState.Flux().row(var) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(physics_vals[0][var]);
+            GlobalState initialState = y.evalOnNodes(); // only need u and q so this is ok
+            const auto points = y.getPoints();
+            auto physics_vals = problem->ComputePhysics(initialState, points, t);
+            for (Index var = 0; var < nVars; var++)
+            {
+                // set flux for each variable, casting to a row vector and making sure to remember minus sign
+                initialState.Flux().row(var) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(physics_vals[0][var]);
+            }
+            y.AssignSigma(initialState);
         }
-        y.AssignSigma(initialState);
 
-        y.EvaluateLambda();
+        // Keep the trace the file carries, on the path where it is meaningful.
+        //
+        // EvaluateLambda() sets lambda to {{u}}, the DG average of the two cell
+        // traces (DGSoln.hpp). That is a reasonable *guess* and it is not the
+        // equation lambda satisfies -- the HDG trace row is
+        // Csigma sigma + Cq q + G_c u + H lambda = L(t) -- so applying it to a
+        // restart throws away a converged trace and replaces it with something
+        // that does not solve anything. Measured on a TestDiffusion round trip at
+        // Absolute_tolerance = 1e-8, that single call takes the weighted residual
+        // of the stored state from 2.6e-3 to 556, and it is why a restart used to
+        // need about ten times as many residual evaluations inside IDACalcIC as a
+        // cold start (Tests/README.md).
+        //
+        // The projection path keeps it too, whenever the *mesh* matches. That used
+        // to read "there is no stored trace to keep", which was wrong: lambda has
+        // no polynomial degree -- DGSoln::Map gives it nCells + 1 entries and no
+        // basis -- so a change of degree leaves it transferable verbatim even
+        // though copy() refuses the state as a whole. Only a change of mesh makes
+        // it meaningless, and {{u}} is then the right guess to build.
+        //
+        // It is worth more than it looks. The q row carries a <lambda, v n> term,
+        // so discarding the trace breaks q as well as lambda: on a LinearDiffusion
+        // restart coarsened from k = 4 to k = 3 at atol 1e-10, keeping it takes the
+        // q block from 7.3e7 to 3.2e-7 -- machine zero, the same as the copy path.
+        // That is the L2 projection commuting with the weak q equation, which it
+        // does exactly, and only the trace was standing in the way.
+        //
+        // It does not make a projected restart consistent, and nothing can. A
+        // change of degree changes the *equations*, not just the representation,
+        // and each direction breaks the block whose equation moved:
+        //
+        //   coarsening   q transfers exactly (above), lambda does not -- u and q
+        //                lost information, so the numerical flux at each face
+        //                moved and the stored trace no longer balances it
+        //   refinement   lambda transfers exactly (measured 4e-9, nothing at the
+        //                faces changed) and q does not -- the degree-(k+1) test
+        //                functions impose a q row the coarse state was never asked
+        //                to satisfy
+        //
+        // sigma is never the problem, linear flux or not, because it is not
+        // transferred at all on this path: AssignSigma rebuilds it from the
+        // projected u and q by evaluating the physics at the run's own nodes, so
+        // it satisfies its own row by construction. Measured at 1e-18 in every
+        // direction on both LinearDiffusion and NonlinDiffTest.
+        //
+        // The nonlinearity does show up, but in lambda rather than sigma. On
+        // refinement a linear flux gives sigma = -kappa q, which is embedded
+        // exactly along with q, so the face flux does not move and lambda stays at
+        // 4e-9. A nonlinear sigma_hat interpolated on the *new* node set is a
+        // different polynomial from the old interpolant, so the face flux does
+        // move: NonlinDiffTest refining 3 -> 4 leaves lambda at 4.7e8.
+        //
+        // q on its own can be repaired without any Jacobian. Its row is
+        // A q = -B^T u + C^T lambda - RF with A the cell mass matrix, so given u
+        // and lambda it is one (k+1)x(k+1) dense solve per cell per variable and
+        // touches no physics; tried as an experiment it took q to 5e-15 in every
+        // direction on both cases. It is not done here because it changes no
+        // outcome -- every degree-transfer run tested returns exactly what it did
+        // without it -- and the inconsistency simply migrates into lambda, whose
+        // row then reads off a different q and sigma. lambda is the coupled one:
+        // its row needs sigma, sigma needs q, q needs lambda, so closing the loop
+        // is a nonlinear solve on the algebraic subsystem rather than a
+        // substitution. That is exactly what IDACalcIC does, which is why
+        // initialize() runs it on this path rather than skipping as it does for a
+        // copied restart.
+        //
+        // ApplyDirichletBCs stays *above* this rather than below it, which looks
+        // wrong and is not. EvaluateLambda overwrites every entry including the
+        // boundary ones, so in that order the boundary data it writes is
+        // discarded again on the projection path -- but moving it below breaks
+        // the AuxVarTest restart round trip outright (IDA_CONV_FAIL at the first
+        // step of the resumed run). The two differ only in what a Dirichlet end's
+        // trace holds -- the boundary datum, or u's own trace there -- and that
+        // node has an identically zero row and column, so it is not the residual
+        // that notices: it is IDA's error test, which weights lambda like
+        // everything else.
+        //
+        // The reason given for that used to be that the case sat close to the
+        // edge -- rtol 1e-6 with nAux > 0, where restarting was documented as
+        // marginal. That premise is gone: AuxVarTest's missing dSigma_dPhi block
+        // is declared and all three round trips now survive 1e-6 / 1e-8 with the
+        // CalcIC skip armed. So the ordering may no longer be load-bearing at
+        // all. It has not been re-measured since, which is the only reason it is
+        // still written this way; reordering is a behaviour change wanting its
+        // own regression run, and is a separate question from keeping the trace.
+        if (!sameDiscretisation && !sameGrid)
+            y.EvaluateLambda();
     }
     else
     {
@@ -676,6 +802,10 @@ SystemSolver::evaluatePhysicsDerivatives(DGSoln const &Y, Time tEval,
     // GlobalState's second argument is a per-cell dof count minus one; passing
     // k+1 is what makes cellwise*() hand back the k+2 star values.
     const Index derivK = superconvergent ? k + 1 : k;
+
+    // G_y is built by emplace_back below, so it has to start empty: this runs once
+    // per objective and would otherwise grow by nCells entries each time.
+    G_y.clear();
 
     for (Index var = 0; var < nVars; var++)
     {
@@ -1305,7 +1435,7 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
     return 0;
 }
 
-void SystemSolver::initializeMatricesForAdjointSolve()
+void SystemSolver::initializeMatricesForAdjointSolve(Index gIndex)
 {
     // With the superconvergent scheme the objective is a functional of u*, so
     // dG/dy runs through the reconstruction just as the residual's Jacobian does.
@@ -1321,7 +1451,7 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         superconvergent ? postprocessor->starPoints() : y.getPoints();
     const GlobalState states =
         superconvergent ? postprocessor->evalOnStarNodes(y) : y.evalOnNodes();
-    adjointProblem->dg(0, dGdvars, states, points);
+    adjointProblem->dg(gIndex, dGdvars, states, points);
     Vector dGdu(nVars * (k + 1));
     Vector dGdq(nVars * (k + 1));
     Vector dGdsigma(nVars * (k + 1));
@@ -1594,8 +1724,15 @@ void SystemSolver::initializeMatricesForAdjointSolve()
     initialised = true;
 }
 
-void SystemSolver::solveAdjointState(Index gIndex)
+// The objective is whichever one initializeMatricesForAdjointSolve was last given:
+// it is carried by G_y, which is this solve's right-hand side.
+void SystemSolver::solveAdjointState()
 {
+    // adjoint_squ is filled by emplace_back below, so it has to start empty. This
+    // runs once per objective, and a stale prefix would leave adjoint_squ[i]
+    // reading the *previous* objective's adjoint for every cell -- which is the
+    // whole of the answer, since i indexes cells.
+    adjoint_squ.clear();
 
     K_global.setZero();
 
@@ -1675,6 +1812,85 @@ void SystemSolver::solveAdjointState(Index gIndex)
     }
 }
 
+SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
+{
+    ObjectiveEstimate out;
+    if (adjointProblem == nullptr)
+        return out;   // valid stays false: there is no objective to estimate
+
+    const Index ng = adjointProblem->getNg();
+    out.value.setZero(ng);
+    out.corrected.setZero(ng);
+    out.uncertainty.setZero(ng);
+
+    // Restored on the way out. alpha and the factorised MX blocks belong to
+    // whatever is driving the solver -- a continuation step, or IDA -- and this
+    // is meant to be callable from inside that without disturbing it.
+    const double alphaOnEntry = alpha;
+
+    N_Vector zeroDeriv = N_VClone(Y);
+    N_Vector F = N_VClone(Y);
+    N_Vector delta = N_VClone(Y);
+    N_VConst(0.0, zeroDeriv);
+
+    // alpha = 0 is the steady operator dF/dy, with no mass term. That is the
+    // right one whatever the solve was damped with: the fixed point being
+    // extrapolated to is a steady state, not the end of a pseudo-time step.
+    setAlpha(0.0);
+    setJacEvalY(Y, zeroDeriv);
+    updateMatricesForJacSolve();
+    residual(t0, Y, zeroDeriv, F);
+    solveJacEq(F, delta);
+
+    double const *deltaData = N_VGetArrayPointer(delta);
+    double deltaNorm = 0.0;
+    for (Index i = 0; i < static_cast<Index>(nCells); ++i)
+        for (Index j = 0; j < static_cast<Index>(localDOF); ++j)
+        {
+            const double d = deltaData[i * localDOF + j];
+            deltaNorm += d * d;
+        }
+    deltaNorm = std::sqrt(deltaNorm);
+
+    for (Index g = 0; g < ng; ++g)
+    {
+        // y, not yJac: y maps Y, the state the solve is actually in. yJac does not
+        // catch up until the end of integrate(), so reading it here would report
+        // the objective at the initial condition.
+        if (superconvergent)
+            postprocessor->computeUStar(y);
+        out.value(g) = superconvergent
+                           ? adjointProblem->GFn(g, y, *postprocessor)
+                           : adjointProblem->GFn(g, y);
+
+        // G_y is dG/dy for one objective, so it has to be rebuilt per objective.
+        initializeMatricesForAdjointSolve(g);
+
+        double dot = 0.0, dGdyNorm = 0.0;
+        for (Index i = 0; i < static_cast<Index>(nCells); ++i)
+            for (Index j = 0; j < static_cast<Index>(localDOF); ++j)
+            {
+                const double gy = G_y[i](j);
+                const double d = deltaData[i * localDOF + j];
+                dot += gy * d;
+                dGdyNorm += gy * gy;
+            }
+        dGdyNorm = std::sqrt(dGdyNorm);
+
+        // Newton takes y to y - J^-1 F, so the change in G is -(dG/dy).delta.
+        out.corrected(g) = out.value(g) - dot;
+        out.uncertainty(g) = dGdyNorm * deltaNorm;
+    }
+
+    out.valid = true;
+
+    N_VDestroy(zeroDeriv);
+    N_VDestroy(F);
+    N_VDestroy(delta);
+    setAlpha(alphaOnEntry);
+    return out;
+}
+
 void SystemSolver::computeAdjointGradients()
 {
 
@@ -1734,192 +1950,207 @@ void SystemSolver::computeAdjointGradients()
     }
     
     //Index np = adjointProblem->areParametersSpatial() ? np_internal * nCells * (k + 1) + adjointProblem->getNpBoundary() : adjointProblem->getNp();
-    for (Index pIndex = 0; pIndex < adjointProblem->getNp(); ++pIndex)
+    // One adjoint state per objective, and the loop has to be outside pIndex for
+    // that reason: adjoint_squ is what solveAdjointState leaves behind, and it is
+    // the adjoint of *one* objective. Solving once and reusing it across the gIndex
+    // loop below gave every objective the first one's gradient -- on a case whose
+    // second objective is four times its first, both rows of G_p came back
+    // identical, and a finite difference put the second out by exactly that factor
+    // of four.
+    //
+    // F_p does not depend on the objective, so it is rebuilt once per objective
+    // rather than cached. That costs a factor of ng in the parameter-derivative
+    // hooks and nothing at ng = 1, which is every case in the tree bar this one;
+    // caching it would cost np * nCells * localDOF, which with spatial parameters
+    // is not obviously the better trade.
+    for (Index gIndex = 0; gIndex < adjointProblem->getNg(); ++gIndex)
     {
-        for (Index i = 0; i < nCells; ++i)
+        initializeMatricesForAdjointSolve(gIndex);
+        solveAdjointState();
+
+        for (Index pIndex = 0; pIndex < adjointProblem->getNp(); ++pIndex)
         {
-            Matrix F_p;
-            if (adjointProblem->areParametersSpatial())
-                F_p.resize(3 * nVars * (k + 1) + nAux * (k + 1), (k + 1));
-            else
+            for (Index i = 0; i < nCells; ++i)
             {
-                F_p.resize(3 * nVars * (k + 1) + nAux * (k + 1), 1);
-            }
-            F_p.setZero();
-
-            Interval I = grid[i];
-
-            for (Index var = 0; var < nVars; ++var)
-            {
-                
-                Eigen::VectorXd dkappa_dp_phi(k + 1);
-                Eigen::VectorXd dSdp_cellwise(k + 1);
+                Matrix F_p;
                 if (adjointProblem->areParametersSpatial())
+                    F_p.resize(3 * nVars * (k + 1) + nAux * (k + 1), (k + 1));
+                else
                 {
-                    for (Index j = 0; j < k + 1; j++)
+                    F_p.resize(3 * nVars * (k + 1) + nAux * (k + 1), 1);
+                }
+                F_p.setZero();
+
+                Interval I = grid[i];
+
+                for (Index var = 0; var < nVars; ++var)
+                {
+                
+                    Eigen::VectorXd dkappa_dp_phi(k + 1);
+                    Eigen::VectorXd dSdp_cellwise(k + 1);
+                    if (adjointProblem->areParametersSpatial())
                     {
+                        for (Index j = 0; j < k + 1; j++)
+                        {
+                            dkappa_dp_phi.setZero();
+                            if (adjointProblem->isAdjointIndexInternal(pIndex))
+                            {
+                                const auto dSigmadp_cell = dSigmadp.Variable(i)[var];
+                                Vector temp(k + 1);
+                                temp.setZero();
+                                temp(j) = dSigmadp_cell(pIndex, j);
+                                dkappa_dp_phi = y.getBasis().InterpolateOntoBasis(I, temp);
+                            }
+
+                            // Evaluate Source Function
+
+                            dSdp_cellwise.setZero();
+                            if (adjointProblem->isAdjointIndexInternal(pIndex))
+                            {
+                                const auto dSourcedp_cell = dSourcedp.Variable(i)[var];
+                                Vector temp(k + 1);
+                                temp.setZero();
+                                temp(j) = dSourcedp_cell(pIndex, j);
+                                dSdp_cellwise = y.getBasis().InterpolateOntoBasis(I, temp);
+                            }
+
+                 
+                            F_p.block(var * (k + 1), j, k + 1, 1) = dkappa_dp_phi;
+
+                            F_p.block(var * (k + 1) + 2 * nVars * (k + 1), j, k + 1, 1) = -dSdp_cellwise;
+                        }
+                    }
+                    else
+                    {
+                        // Same projection the residual uses for these terms: A9 over
+                        // the star nodes with the superconvergent scheme, the
+                        // interpolatory mass-matrix form otherwise. The parameters do
+                        // not enter u*, so there is no chain matrix here.
                         dkappa_dp_phi.setZero();
-                        if (adjointProblem->isAdjointIndexInternal(pIndex))
+                        if( adjointProblem->isAdjointIndexInternal( pIndex ) )
                         {
                             const auto dSigmadp_cell = dSigmadp.Variable(i)[var];
-                            Vector temp(k + 1);
-                            temp.setZero();
-                            temp(j) = dSigmadp_cell(pIndex, j);
-                            dkappa_dp_phi = y.getBasis().InterpolateOntoBasis(I, temp);
+                            dkappa_dp_phi = superconvergent
+                                ? Vector(postprocessor->A9(i) * Vector(dSigmadp_cell.row(pIndex)))
+                                : y.getBasis().InterpolateOntoBasis( I, dSigmadp_cell.row(pIndex) );
                         }
 
                         // Evaluate Source Function
 
                         dSdp_cellwise.setZero();
-                        if (adjointProblem->isAdjointIndexInternal(pIndex))
+                        if( adjointProblem->isAdjointIndexInternal( pIndex ) )
                         {
                             const auto dSourcedp_cell = dSourcedp.Variable(i)[var];
-                            Vector temp(k + 1);
-                            temp.setZero();
-                            temp(j) = dSourcedp_cell(pIndex, j);
-                            dSdp_cellwise = y.getBasis().InterpolateOntoBasis(I, temp);
+                            dSdp_cellwise = superconvergent
+                                ? Vector(postprocessor->A9(i) * Vector(dSourcedp_cell.row(pIndex)))
+                                : y.getBasis().InterpolateOntoBasis( I, dSourcedp_cell.row(pIndex) );
                         }
 
-                 
-                        F_p.block(var * (k + 1), j, k + 1, 1) = dkappa_dp_phi;
+                
+                        F_p.block(var * (k + 1), 0, k + 1, 1) = dkappa_dp_phi;
 
-                        F_p.block(var * (k + 1) + 2 * nVars * (k + 1), j, k + 1, 1) = -dSdp_cellwise;
-                    }
-                }
-                else
-                {
-                    // Same projection the residual uses for these terms: A9 over
-                    // the star nodes with the superconvergent scheme, the
-                    // interpolatory mass-matrix form otherwise. The parameters do
-                    // not enter u*, so there is no chain matrix here.
-                    dkappa_dp_phi.setZero();
-                    if( adjointProblem->isAdjointIndexInternal( pIndex ) )
-                    {
-                        const auto dSigmadp_cell = dSigmadp.Variable(i)[var];
-                        dkappa_dp_phi = superconvergent
-                            ? Vector(postprocessor->A9(i) * Vector(dSigmadp_cell.row(pIndex)))
-                            : y.getBasis().InterpolateOntoBasis( I, dSigmadp_cell.row(pIndex) );
-                    }
-
-                    // Evaluate Source Function
-
-                    dSdp_cellwise.setZero();
-                    if( adjointProblem->isAdjointIndexInternal( pIndex ) )
-                    {
-                        const auto dSourcedp_cell = dSourcedp.Variable(i)[var];
-                        dSdp_cellwise = superconvergent
-                            ? Vector(postprocessor->A9(i) * Vector(dSourcedp_cell.row(pIndex)))
-                            : y.getBasis().InterpolateOntoBasis( I, dSourcedp_cell.row(pIndex) );
+                        //auto C_cell = C_cellwise[i];
+                        F_p.block(var * (k + 1) + 2 * nVars * (k + 1), 0, k + 1, 1) = -dSdp_cellwise;
                     }
 
                 
-                    F_p.block(var * (k + 1), 0, k + 1, 1) = dkappa_dp_phi;
 
-                    //auto C_cell = C_cellwise[i];
-                    F_p.block(var * (k + 1) + 2 * nVars * (k + 1), 0, k + 1, 1) = -dSdp_cellwise;
-                }
-
-                
-
-                // Boundary conditions
-                // p = g_D in this case, so the derivatives are just the basis functions
-                //
-                // "in this case" is load bearing, and is now enforced. This term is
-                // the derivative of a *Dirichlet* datum, which reaches the residual
-                // through RF_cellwise in the cell rows. A Neumann or Mixed datum
-                // reaches it through L_global in the lambda row instead, and F_p has
-                // no lambda rows at all -- it is 3*nVars*(k+1) + nAux*(k+1) tall, and
-                // the lambda contribution exists only as the commented-out block
-                // further down. So a boundary parameter on such an end would be
-                // handed a Dirichlet-shaped derivative and return a plausible wrong
-                // gradient with a perfectly good G, which is the failure mode this
-                // file's dSigma/dPhi comment records. Refuse it instead.
-                if (I.x_l == grid.lowerBoundary() && adjointProblem->computeLowerBoundarySensitivity(var, pIndex))
-                {
-                    if (!problem->isLowerBoundaryDirichlet(var))
-                        throw std::logic_error(
-                            "Adjoint parameter " + std::to_string(pIndex) + " is declared a lower "
-                            "boundary sensitivity for variable '" + problem->getVariableName(var) +
-                            "', whose lower boundary is not Dirichlet. Only a Dirichlet datum has a "
-                            "derivative here: a Neumann or Mixed one enters through L_global in the "
-                            "trace row, which F_p does not represent.");
-                    for (Eigen::Index j = 0; j < k + 1; j++)
+                    // Boundary conditions
+                    // p = g_D in this case, so the derivatives are just the basis functions
+                    //
+                    // "in this case" is load bearing, and is now enforced. This term is
+                    // the derivative of a *Dirichlet* datum, which reaches the residual
+                    // through RF_cellwise in the cell rows. A Neumann or Mixed datum
+                    // reaches it through L_global in the lambda row instead, and F_p has
+                    // no lambda rows at all -- it is 3*nVars*(k+1) + nAux*(k+1) tall, and
+                    // the lambda contribution exists only as the commented-out block
+                    // further down. So a boundary parameter on such an end would be
+                    // handed a Dirichlet-shaped derivative and return a plausible wrong
+                    // gradient with a perfectly good G, which is the failure mode this
+                    // file's dSigma/dPhi comment records. Refuse it instead.
+                    if (I.x_l == grid.lowerBoundary() && adjointProblem->computeLowerBoundarySensitivity(var, pIndex))
                     {
-                        F_p(nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_l);
+                        if (!problem->isLowerBoundaryDirichlet(var))
+                            throw std::logic_error(
+                                "Adjoint parameter " + std::to_string(pIndex) + " is declared a lower "
+                                "boundary sensitivity for variable '" + problem->getVariableName(var) +
+                                "', whose lower boundary is not Dirichlet. Only a Dirichlet datum has a "
+                                "derivative here: a Neumann or Mixed one enters through L_global in the "
+                                "trace row, which F_p does not represent.");
+                        for (Eigen::Index j = 0; j < k + 1; j++)
+                        {
+                            F_p(nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_l);
+                        }
                     }
-                }
 
-                if (I.x_u == grid.upperBoundary() && adjointProblem->computeUpperBoundarySensitivity(var, pIndex))
-                {
-                    if (!problem->isUpperBoundaryDirichlet(var))
-                        throw std::logic_error(
-                            "Adjoint parameter " + std::to_string(pIndex) + " is declared an upper "
-                            "boundary sensitivity for variable '" + problem->getVariableName(var) +
-                            "', whose upper boundary is not Dirichlet. Only a Dirichlet datum has a "
-                            "derivative here: a Neumann or Mixed one enters through L_global in the "
-                            "trace row, which F_p does not represent.");
-                    for (Eigen::Index j = 0; j < k + 1; j++)
+                    if (I.x_u == grid.upperBoundary() && adjointProblem->computeUpperBoundarySensitivity(var, pIndex))
                     {
-                        // < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 )
-                        F_p(nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_u);
+                        if (!problem->isUpperBoundaryDirichlet(var))
+                            throw std::logic_error(
+                                "Adjoint parameter " + std::to_string(pIndex) + " is declared an upper "
+                                "boundary sensitivity for variable '" + problem->getVariableName(var) +
+                                "', whose upper boundary is not Dirichlet. Only a Dirichlet datum has a "
+                                "derivative here: a Neumann or Mixed one enters through L_global in the "
+                                "trace row, which F_p does not represent.");
+                        for (Eigen::Index j = 0; j < k + 1; j++)
+                        {
+                            // < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 )
+                            F_p(nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_u);
+                        }
                     }
-                }
-                // TODO: implement this 
+                    // TODO: implement this 
                
-            }
-            for (Index aux = 0; aux < nAux; ++aux)
-            {
-
-                Eigen::VectorXd daux_dp_phi(k + 1);
-                if (adjointProblem->areParametersSpatial())
+                }
+                for (Index aux = 0; aux < nAux; ++aux)
                 {
-                  for (Index j = 0; j < k + 1; j++)
-                  {
-                    daux_dp_phi.setZero();
-                    if( adjointProblem->isAdjointIndexInternal( pIndex ) )
+
+                    Eigen::VectorXd daux_dp_phi(k + 1);
+                    if (adjointProblem->areParametersSpatial())
                     {
-                        const auto dAuxdp_cell = dAuxdp.Variable(i)[aux];
-                        Vector temp(k + 1);
-                        temp.setZero();
-                        temp(j) = dAuxdp_cell(pIndex, j);
-                        daux_dp_phi = y.getBasis().InterpolateOntoBasis(I, temp);
+                      for (Index j = 0; j < k + 1; j++)
+                      {
+                        daux_dp_phi.setZero();
+                        if( adjointProblem->isAdjointIndexInternal( pIndex ) )
+                        {
+                            const auto dAuxdp_cell = dAuxdp.Variable(i)[aux];
+                            Vector temp(k + 1);
+                            temp.setZero();
+                            temp(j) = dAuxdp_cell(pIndex, j);
+                            daux_dp_phi = y.getBasis().InterpolateOntoBasis(I, temp);
+                        }
+                        F_p.block(3 * nVars * (k + 1) + aux * (k + 1), j, k + 1, 1) = daux_dp_phi;
+                      }
                     }
-                    F_p.block(3 * nVars * (k + 1) + aux * (k + 1), j, k + 1, 1) = daux_dp_phi;
-                  }
+                    else
+                    {
+                      daux_dp_phi.setZero();
+                      if( adjointProblem->isAdjointIndexInternal( pIndex ) )
+                      {
+                          const auto dAuxdp_cell = dAuxdp.Variable(i)[aux];
+                          daux_dp_phi = superconvergent
+                              ? Vector(postprocessor->A9(i) * Vector(dAuxdp_cell.row(pIndex)))
+                              : y.getBasis().InterpolateOntoBasis( I, dAuxdp_cell.row(pIndex) );
+                      }
+                      F_p.block(3 * nVars * (k + 1) + aux * (k + 1), 0, k + 1, 1) = daux_dp_phi;
+                    }
                 }
-                else
-                {
-                  daux_dp_phi.setZero();
-                  if( adjointProblem->isAdjointIndexInternal( pIndex ) )
-                  {
-                      const auto dAuxdp_cell = dAuxdp.Variable(i)[aux];
-                      daux_dp_phi = superconvergent
-                          ? Vector(postprocessor->A9(i) * Vector(dAuxdp_cell.row(pIndex)))
-                          : y.getBasis().InterpolateOntoBasis( I, dAuxdp_cell.row(pIndex) );
-                  }
-                  F_p.block(3 * nVars * (k + 1) + aux * (k + 1), 0, k + 1, 1) = daux_dp_phi;
-                }
-            }
 
-            // SQU portion
+                // SQU portion
         
-            for (Index gIndex = 0; gIndex < adjointProblem->getNg(); gIndex++)
-            {
                 if (adjointProblem->areParametersSpatial())
                 {
-                    for (Index j = 0; j < k + 1; j ++)
-                    {
-                        G_p(gIndex * nCells * (k + 1) + i * (k + 1) + j, pIndex) -= adjoint_squ[i].transpose() * F_p.col(j);
-                    }
+                    for (Index j = 0; j < k + 1; j++)
+                        G_p(gIndex * nCells * (k + 1) + i * (k + 1) + j, pIndex) -=
+                            adjoint_squ[i].transpose() * F_p.col(j);
                 }
                 else
                     G_p(gIndex, pIndex) -= adjoint_squ[i].transpose() * static_cast<Vector>(F_p);
+
+
+                // Eigen::VectorXd dkappa_lambda = C_cell * dkappa_dp_phi;
+                // // // // // Lambda portion
+                // G_p(pIndex) -= adjoint_lambdas.segment(i, 2).transpose() * dkappa_lambda;
             }
-
-
-            // Eigen::VectorXd dkappa_lambda = C_cell * dkappa_dp_phi;
-            // // // // // Lambda portion
-            // G_p(pIndex) -= adjoint_lambdas.segment(i, 2).transpose() * dkappa_lambda;
         }
     }
 }

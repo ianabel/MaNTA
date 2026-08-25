@@ -128,49 +128,6 @@ Vector sample(SystemSolver &sys)
     return out;
 }
 
-// The smallest objective that will drive the dG/dt gate: G = sign * Int u dx over
-// TestDiffusion's single variable, so dG/dt = sign * Int u' dx and the two signs
-// give opposite verdicts on the same run. Which of them rejects depends on which
-// way the diffusion problem's initial condition is relaxing, and the test does
-// not need to know -- it asserts that exactly one does.
-class SignedIntegralObjective : public AdjointProblem
-{
-public:
-    explicit SignedIntegralObjective(double s) : sign(s)
-    {
-        ng = 1;
-        np = 1;
-        np_boundary = 0;
-    }
-
-    using AdjointProblem::gFn;
-
-    Value gFn(Index, const State &s, Position) const override { return sign * s.u(0); }
-
-    Value GFn(Index, DGSoln &) const override
-    {
-        // Never called: the gate goes through dGdt, and solveAdjoint is off, so
-        // nothing asks for G itself here.
-        throw std::logic_error("GFn is not part of what this fixture exercises.");
-    }
-    Value dGFndp(Index, Index, DGSoln &) const override { return 0.0; }
-
-    void dgFn_du(Index, VectorRef v, const State &, Position) override
-    {
-        v.setZero();
-        v[0] = sign;
-    }
-    void dgFn_dq(Index, VectorRef v, const State &, Position) override { v.setZero(); }
-    void dgFn_dsigma(Index, VectorRef v, const State &, Position) override { v.setZero(); }
-    void dgFn_dphi(Index, VectorRef v, const State &, Position) override { v.setZero(); }
-
-    void dSigmaFn_dp(Index, Index, Value &out, const State &, Position) override { out = 0.0; }
-    void dSources_dp(Index, Index, Value &out, const State &, Position) override { out = 0.0; }
-
-private:
-    double sign;
-};
-
 // TestDiffusion, counting physics evaluations. That is the unit PERFORMANCE.md
 // asks for, and the only one in which the SER knobs below can be shown to do
 // anything: they change how many continuation steps a solve takes, not what it
@@ -435,85 +392,6 @@ BOOST_AUTO_TEST_CASE(aggressive_timesteps_is_accepted_and_gives_the_same_answer)
 
     removeOutput("lifecycle_eta_default");
     removeOutput("lifecycle_eta_aggressive");
-}
-
-BOOST_AUTO_TEST_CASE(the_dGdt_gate_skips_the_time_loop_without_disturbing_an_ungated_run)
-{
-    // End to end through runSolver, which is the whole point of the gate: a step
-    // whose objective is already getting worse should cost initialisation and
-    // nothing more.
-    //
-    // Observed through the solution rather than through IDA's step counter,
-    // because IDA_mem is gone by the time runSolver returns. integrate() ends by
-    // leaving the final solution in yJac, so a run that was skipped leaves yJac
-    // holding the initial condition instead -- and that is also the assertion
-    // that would catch a gate which "rejects" but integrates anyway.
-    Grid grid(0.0, 1.0, nCells);
-
-    // The initial condition alone, for comparison: initialize() seeds yJac with
-    // it, so stopping there gives the state a rejected run should be left in.
-    TestDiffusion icProblem(lifecycle_config);
-    SystemSolver icOnly(grid, k, &icProblem);
-    configure(icOnly, "lifecycle_gate_ic");
-    {
-        CapturedOutput quiet;
-        icOnly.initialize();
-    }
-    const Vector initial = sample(icOnly);
-    {
-        CapturedOutput quiet;
-        icOnly.destroySundials();
-    }
-    BOOST_TEST(initial.norm() > 1e-8);
-
-    // Which sign of the objective is falling is a property of the problem, not
-    // something to hardcode: run both and require exactly one rejection.
-    int rejections = 0;
-    for (double sign : {1.0, -1.0})
-    {
-        const std::string stem = sign > 0 ? "lifecycle_gate_pos" : "lifecycle_gate_neg";
-
-        TestDiffusion problem(lifecycle_config);
-        SignedIntegralObjective objective(sign);
-        SystemSolver sys(grid, k, &problem);
-        configure(sys, stem);
-        sys.setAdjointProblem(&objective);
-
-        // Armed tight enough that the sign of dG/dt decides, rather than the
-        // slack swamping it.
-        sys.setObjectiveDecreaseTolerance(1e-12);
-
-        {
-            CapturedOutput quiet;
-            sys.runSolver(T_FINAL);
-        }
-
-        const Vector after = sample(sys);
-
-        if (sys.wasRejected())
-        {
-            ++rejections;
-            // Skipped, so the solution never moved.
-            for (Index i = 0; i < after.size(); ++i)
-                BOOST_TEST(after(i) == initial(i), boost::test_tools::tolerance(0.0));
-            BOOST_TEST(sys.lastDGdt()(0) < 0.0);
-        }
-        else
-        {
-            // Ran, so it did. If this ever coincides with the rejected branch's
-            // values the test above has stopped meaning anything.
-            BOOST_TEST((after - initial).norm() > 1e-8,
-                       "an accepted run left the solution where it started");
-            BOOST_TEST(sys.lastDGdt()(0) >= 0.0);
-        }
-
-        removeOutput(stem);
-    }
-
-    BOOST_TEST(rejections == 1,
-               "expected exactly one of the two objective signs to be rejected, got " << rejections);
-
-    removeOutput("lifecycle_gate_ic");
 }
 
 BOOST_AUTO_TEST_CASE(the_id_vector_marks_u_differential_and_nothing_else)
@@ -804,6 +682,135 @@ BOOST_AUTO_TEST_CASE(the_initial_condition_uses_boundary_data_at_t0)
         sys.destroySundials();
     }
     removeOutput("lifecycle_t0_boundaries");
+}
+
+// How many residual evaluations IDA itself has made. Zero until something asks
+// IDA to solve: IDAInit clears the counter, and nothing else in initialize()
+// goes through IDA. So on a path that skips IDACalcIC this stays at zero, and
+// MaNTA's own nResidualEvals -- which the debug .dat blocks and the steady solve
+// also increment -- would not distinguish the two.
+long idaResidualEvals(SystemSolver &sys)
+{
+    long n = -1;
+    BOOST_REQUIRE(IDAGetNumResEvals(sys.IDA_mem, &n) == IDA_SUCCESS);
+    return n;
+}
+
+BOOST_AUTO_TEST_CASE(only_a_time_marching_run_pays_for_calcic)
+{
+    // IDACalcIC exists to make the state IDA takes its *first step* from
+    // consistent with the algebraic constraints. A PseudoTransient or Newton run
+    // never takes one -- solveSteadyState drives the whole residual to zero from
+    // Y with KINSOL -- so everything CalcIC computes there is overwritten by the
+    // first accepted continuation step.
+    //
+    // It is not free and it is not safe. It is a damped Newton solve in its own
+    // right, and it fails on initial conditions a steady solve handles without
+    // difficulty: python-examples/jardin-critical-gradient records IDA_CONV_FAIL
+    // (-4) from starting at the *exact* steady state, which is the one guess a
+    // steady solve would have accepted immediately. Requiring it ahead of a solve
+    // that does not need it turns runs that would converge into runs that never
+    // start.
+    //
+    // Measured on python-examples/park-convergence at 8 cells, k = 3: 256 -> 192
+    // physics evaluations for Newton and 352 -> 288 for PseudoTransient, with the
+    // converged answer identical bit for bit in both.
+    //
+    // Three solvers, because the condition is solvesForSteadyState() -- the
+    // conjunction of steady-state *termination* and a mode that is not TimeMarch
+    // -- and each half of it has to be shown to matter. Only initialize() is
+    // called: the counter is read before anything can add to it.
+    struct Case
+    {
+        const char *stem;
+        bool armTermination;
+        SystemSolver::SteadyMode mode;
+        bool expectCalcIC;
+    };
+
+    const Case cases[] = {
+        // A plain transient. No termination armed, so the mode is not consulted
+        // at all and the default PseudoTransient must not be read as a steady
+        // solve -- that pairing is the trap solvesForSteadyState() exists for.
+        {"lifecycle_calcic_transient", false, SystemSolver::SteadyMode::PseudoTransient, true},
+        // Termination armed, but the mode says integrate to it. This is
+        // run_ss() with SteadyStateSolver = "TimeMarch", which does take IDA
+        // steps and so still needs a consistent state to start from.
+        {"lifecycle_calcic_timemarch", true, SystemSolver::SteadyMode::TimeMarch, true},
+        // The steady path proper.
+        {"lifecycle_calcic_steady", true, SystemSolver::SteadyMode::PseudoTransient, false},
+    };
+
+    for (Case const &c : cases)
+    {
+        Grid grid(0.0, 1.0, nCells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, c.stem);
+        sys.setSteadyMode(c.mode);
+        if (c.armTermination)
+            sys.setSteadyStateTolerance(1e-10);
+
+        BOOST_TEST(sys.solvesForSteadyState() == !c.expectCalcIC);
+
+        {
+            CapturedOutput quiet;
+            sys.initialize();
+        }
+
+        const long nre = idaResidualEvals(sys);
+        if (c.expectCalcIC)
+            BOOST_TEST(nre > 0,
+                       "" << c.stem << ": IDACalcIC was skipped on a run that "
+                          "will hand the state to IDA");
+        else
+            BOOST_TEST(nre == 0,
+                       "" << c.stem << ": IDA evaluated the residual " << nre
+                          << " times during initialize(), so IDACalcIC still ran "
+                             "on a path that discards its answer");
+
+        {
+            CapturedOutput quiet;
+            sys.destroySundials();
+        }
+        removeOutput(c.stem);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(skipping_calcic_leaves_the_steady_answer_alone)
+{
+    // The other half of the case above: what the steady solve converges to must
+    // not depend on whether a discarded correction was computed first. Same
+    // closed form as a_steady_solve_writes_its_answer_to_the_output_file --
+    // TestDiffusion with Centre = 0 has the exact steady state u = 1 - x, degree
+    // 1 and so exactly representable -- but checked here at both modes, because
+    // Newton starts from an infinite pseudo-timestep and is the mode least
+    // tolerant of a poor initial iterate.
+    for (auto mode : {SystemSolver::SteadyMode::PseudoTransient,
+                      SystemSolver::SteadyMode::Newton})
+    {
+        const std::string stem = "lifecycle_calcic_answer";
+        Grid grid(0.0, 1.0, nCells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        sys.setSteadyMode(mode);
+        sys.setSteadyStateTolerance(1e-10);
+
+        {
+            CapturedOutput quiet;
+            sys.runSolver(T_FINAL);
+        }
+
+        const Vector u = sample(sys);
+        for (Index i = 0; i < u.size(); ++i)
+        {
+            const double x = 0.1 + 0.2 * i;
+            BOOST_TEST(u(i) == 1.0 - x, boost::test_tools::tolerance(1e-8));
+        }
+
+        removeOutput(stem);
+    }
 }
 
 BOOST_AUTO_TEST_CASE(a_steady_solve_writes_its_answer_to_the_output_file)
@@ -1454,6 +1461,269 @@ RestartSnapshot initialiseAt(TestDiffusion &problem, Grid const &grid, Index ord
 }
 } // namespace
 
+// Everything a restart file carries that a warm start needs.
+//
+// Through the file rather than through setRestartValues on an in-memory vector,
+// which is what the three degree-transfer cases below do. The point here is the
+// production path: the netCDF round trip is part of what decides whether the
+// state the solver is handed is still consistent.
+struct RestartFileData
+{
+    std::vector<double> Y, dYdt;
+    std::vector<Position> cellBoundaries;
+    Index order = 0;
+};
+
+RestartFileData readRestart(std::string const &path)
+{
+    RestartFileData out;
+    netCDF::NcFile f;
+    f.open(path, netCDF::NcFile::FileMode::read);
+
+    netCDF::NcGroup g = f.getGroup("Grid");
+    out.cellBoundaries.resize(g.getDim("Index").getSize());
+    g.getVar("CellBoundaries").getVar(out.cellBoundaries.data());
+    g.getVar("PolyOrder").getVar(&out.order);
+
+    netCDF::NcGroup r = f.getGroup("RestartData");
+    out.Y.resize(r.getDim("nDOF").getSize());
+    out.dYdt.resize(out.Y.size());
+    r.getVar("Y").getVar(out.Y.data());
+    r.getVar("dYdt").getVar(out.dYdt.data());
+    f.close();
+    return out;
+}
+
+BOOST_AUTO_TEST_CASE(a_warm_start_from_a_restart_file_does_not_run_calcic)
+{
+    // IDACalcIC has no cheap path. Its convergence test is on the Newton step,
+    // so IDANewtonIC calls lsolve and only then tests ||J^-1 F|| against epsNewt
+    // (ida_ic.c:404-417); IDAnlsIC calls lsetup unconditionally before that
+    // (ida_ic.c:345); and the outer loop repeats the whole thing on success to
+    // refresh the error weights (ida_ic.c:232). Measured floor, handing it a
+    // state it had itself just converged to: two residual evaluations, two
+    // Jacobian builds and two Jacobian solves, with zero Newton iterations --
+    // every time, whatever the state. A build is updateMatricesForJacSolve(),
+    // i.e. assemble and factorise every per-cell MX.
+    //
+    // A warm start is exactly the case where all of that is wasted, and warm
+    // starts are a large share of production runs. So a restart skips IDACalcIC
+    // *by default*, and this case pins that default -- it sets no key at all.
+    //
+    // IDAGetNumResEvals is the observable: it counts residuals IDA asked for, and
+    // nothing else in initialize() goes through IDA, so zero means CalcIC never
+    // ran. MaNTA's own nResidualEvals would not do -- the precheck increments it.
+    //
+    // The decision is made from what the run *is* rather than from a residual
+    // threshold, because ||F|| cannot be calibrated against what IDACalcIC tests
+    // -- see setForceConsistentIC for the measured per-row amplification. So this
+    // case asserts two separate things: that a restart really does suppress
+    // CalcIC, and that the warm start it suppresses it on was in fact consistent.
+    // The run is integrated below rather than merely initialised, so what is
+    // pinned is that skipping is safe *here*, not only that it happened.
+    const std::string stem = "lifecycle_warm_start";
+    const double tSplit = T_FINAL;
+
+    // A real run, and the restart file it leaves behind.
+    {
+        Grid grid(0.0, 1.0, nCells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        CapturedOutput quiet;
+        sys.runSolver(tSplit);
+    }
+
+    const RestartFileData rf = readRestart(stem + ".restart.nc");
+    BOOST_TEST_REQUIRE(rf.order == k);
+    BOOST_TEST_REQUIRE(rf.Y.size() > 0u);
+
+    Grid grid(rf.cellBoundaries);
+    TestDiffusion problem(lifecycle_config);
+    problem.setRestartValues(rf.Y, rf.dYdt, grid, rf.order);
+    BOOST_TEST_REQUIRE(problem.isRestarting());
+
+    SystemSolver sys(grid, rf.order, &problem);
+    configure(sys, stem);
+    sys.setInitialTime(tSplit);   // a restart resumes where the file was written
+
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+    }
+
+    BOOST_TEST_MESSAGE("warm start: weighted residual " << sys.getInitialResidualNorm());
+
+    // Not what the skip is decided on any more -- the flag is -- but it is what
+    // makes the skip *sound*, so it is still checked. A warm start is supposed to
+    // arrive consistent, and if this ever stops holding the integrate() below is
+    // passing for a reason nobody chose.
+    constexpr double warmStartIsConsistent = 1e-2;
+    BOOST_TEST(sys.getInitialResidualNorm() < warmStartIsConsistent,
+               "the state the restart file was turned into has a weighted residual of "
+                   << sys.getInitialResidualNorm() << ", above the "
+                   << warmStartIsConsistent << " a warm start is expected to reach");
+
+    BOOST_TEST(!sys.initialConditionWasCorrected(),
+               "IDACalcIC ran on a warm start whose residual was already "
+                   << sys.getInitialResidualNorm());
+
+    long idaResEvals = -1;
+    BOOST_REQUIRE(IDAGetNumResEvals(sys.IDA_mem, &idaResEvals) == IDA_SUCCESS);
+    BOOST_TEST(idaResEvals == 0,
+               "IDA evaluated the residual " << idaResEvals
+                   << " times during a warm start's initialize(), so IDACalcIC ran");
+
+    // And the run that follows must actually work. Skipping IDACalcIC is only
+    // sound if the state left behind can be integrated from, and a residual norm
+    // does not establish that: AuxVarTest used to warm-start at 1.6e-4 -- lower
+    // than the number here -- and fail at its first step unless CalcIC had run.
+    // That case turned out to be a missing Jacobian block in the fixture rather
+    // than a property of the norm, but the norm is still the wrong measure (its
+    // ||J^-1 F|| was 6.3x *worse* where ||F|| was 2.4x better), so this
+    // integrates rather than stopping at initialize().
+    {
+        CapturedOutput quiet;
+        BOOST_CHECK_NO_THROW(sys.integrate(2.0 * tSplit));
+    }
+
+    // Not vacuous, in two directions. A cold start of the same problem is three
+    // orders of magnitude further from consistent -- so the fixture can tell warm
+    // from cold -- and it *is* corrected, which is what stops this case passing
+    // were the skip wired to happen unconditionally.
+    {
+        Grid coldGrid(0.0, 1.0, nCells);
+        TestDiffusion coldProblem(lifecycle_config);
+        SystemSolver cold(coldGrid, k, &coldProblem);
+        configure(cold, "lifecycle_warm_start_cold");
+        {
+            CapturedOutput quiet;
+            cold.initialize();
+        }
+        BOOST_TEST_MESSAGE("cold start: weighted residual " << cold.getInitialResidualNorm());
+        BOOST_TEST(cold.initialConditionWasCorrected(),
+                   "IDACalcIC did not run on a cold time-marching start, which is "
+                   "the one case that must always have it");
+        BOOST_TEST(cold.getInitialResidualNorm() > 10.0 * sys.getInitialResidualNorm(),
+                   "the cold and warm starts are only " << cold.getInitialResidualNorm()
+                       << " and " << sys.getInitialResidualNorm() << " apart, so this "
+                       "fixture cannot tell the two apart");
+        {
+            CapturedOutput quiet;
+            cold.destroySundials();
+        }
+        removeOutput("lifecycle_warm_start_cold");
+    }
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+
+    // And ForceConsistentIC puts it back, on the same restart, which is the whole
+    // of what that key does. Worth pinning separately: the skip is now decided by
+    // what the run *is*, so without this nothing would notice the key being
+    // ignored -- every other case here would pass just as well.
+    {
+        SystemSolver forced(grid, rf.order, &problem);
+        configure(forced, stem);
+        forced.setInitialTime(tSplit);
+        forced.setForceConsistentIC(true);
+        {
+            CapturedOutput quiet;
+            forced.initialize();
+        }
+
+        BOOST_TEST(forced.initialConditionWasCorrected(),
+                   "ForceConsistentIC did not put IDACalcIC back on a restart");
+
+        long forcedResEvals = -1;
+        BOOST_REQUIRE(IDAGetNumResEvals(forced.IDA_mem, &forcedResEvals) == IDA_SUCCESS);
+        BOOST_TEST(forcedResEvals > 0,
+                   "IDA evaluated no residuals, so IDACalcIC did not actually run");
+
+        {
+            CapturedOutput quiet;
+            forced.destroySundials();
+        }
+    }
+
+    problem.clearRestart();
+    removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(the_warm_start_keeps_the_trace_the_file_carries)
+{
+    // Why the case above can pass at all. setInitialConditions used to finish
+    // every restart with EvaluateLambda(), which sets lambda to {{u}} -- the DG
+    // average of the two cell traces (DGSoln.hpp), not the HDG trace equation
+    // Csigma sigma + Cq q + G_c u + H lambda = L(t) that lambda actually solves.
+    // On a restart that discards a converged trace and replaces it with
+    // something that solves nothing.
+    //
+    // Measured here: it is the whole of the difference. Keeping the file's trace
+    // takes the warm start's weighted residual from above the tolerance to three
+    // orders below it, and it is why a restart used to need about ten times as
+    // many residual evaluations inside IDACalcIC as a cold start.
+    //
+    // The projection path still builds a trace, because there is none to keep --
+    // copy() refuses a different degree and only u, q, aux and the scalars are
+    // transferred. a_restart_at_a_higher_degree_reproduces_the_state_exactly and
+    // its two siblings cover that path.
+    const std::string stem = "lifecycle_warm_trace";
+    {
+        Grid grid(0.0, 1.0, nCells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        CapturedOutput quiet;
+        sys.runSolver(T_FINAL);
+    }
+
+    const RestartFileData rf = readRestart(stem + ".restart.nc");
+    Grid grid(rf.cellBoundaries);
+    TestDiffusion problem(lifecycle_config);
+    problem.setRestartValues(rf.Y, rf.dYdt, grid, rf.order);
+
+    SystemSolver sys(grid, rf.order, &problem);
+    configure(sys, stem);
+    sys.setInitialTime(T_FINAL);
+
+    // Armed, because this fixture's warm start cannot run IDACalcIC at all:
+    // configure() uses rtol 1e-6 / atol 1e-8, and at that tolerance CalcIC on a
+    // TestDiffusion restart fails with IDA_CONV_FAIL -- before this change as
+    // well as after, so it is the tolerance rather than the trace. AuxVarTest
+    // used to be the opposite case -- CalcIC was what made its resumed run work
+    // -- until the missing dSigma_dPhi block in that fixture was declared; it now
+    // resumes either way, so this is the only direction still exercised.
+    // Nothing to set: a restart skips IDACalcIC by default.
+
+    double kept = 0.0, reAveraged = 0.0;
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+        kept = sys.getInitialResidualNorm();
+
+        // What the old code did, applied to the state it built: re-average the
+        // trace and measure again. Nothing else changes.
+        sys.y.EvaluateLambda();
+        reAveraged = sys.weightedResidualNorm(T_FINAL, sys.Y, sys.dYdt);
+        sys.destroySundials();
+    }
+
+    BOOST_TEST_MESSAGE("warm start weighted residual: trace kept " << kept
+                       << ", trace re-averaged " << reAveraged
+                       << "  (factor " << reAveraged / kept << ")");
+
+    BOOST_TEST(reAveraged > 100.0 * kept,
+               "re-averaging the trace only moved the residual from " << kept << " to "
+                   << reAveraged << "; either the trace is being rebuilt again "
+                   "somewhere or this fixture no longer shows the difference");
+
+    problem.clearRestart();
+    removeOutput(stem);
+}
+
 BOOST_AUTO_TEST_CASE(a_restart_at_a_higher_degree_reproduces_the_state_exactly)
 {
     // The sharp case, and the reason a projection is the right transfer rather
@@ -1538,6 +1808,57 @@ BOOST_AUTO_TEST_CASE(a_restart_at_a_lower_degree_lands_where_a_fresh_run_would)
     removeOutput(stem);
 }
 
+BOOST_AUTO_TEST_CASE(only_a_copied_restart_is_treated_as_already_consistent)
+{
+    // A restart skips IDACalcIC by default, on the grounds that it resumes from a
+    // state the previous run had already driven onto the constraint manifold. That
+    // is true of the *copy* path and not of the projection one: a restart onto a
+    // different degree transfers u, q, aux and the scalars and then rebuilds sigma
+    // and the trace, so what it hands IDA is a guess like any other.
+    //
+    // Skipping there is not a missed optimisation, it is a broken run. Measured on
+    // the AuxVarTest regression case resuming at a lower degree, which fails with
+    // IDA_ERR_FAIL when IDACalcIC is skipped and completes when it runs. So the
+    // default is conditional on the transfer having been a copy, and this pins
+    // both halves of that -- without the second, the projection path would quietly
+    // start from an inconsistent state.
+    const std::string stem = "lifecycle_restart_consistency";
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+
+    const RestartSnapshot source = initialiseAt(problem, grid, k, stem);
+
+    auto calcICRanAt = [&](Index runOrder)
+    {
+        problem.setRestartValues(source.Y, source.dYdt, grid, k);
+        SystemSolver sys(grid, runOrder, &problem);
+        configure(sys, stem);
+        {
+            CapturedOutput quiet;
+            sys.initialize();
+        }
+        const bool ran = sys.initialConditionWasCorrected();
+        {
+            CapturedOutput quiet;
+            sys.destroySundials();
+        }
+        problem.clearRestart();
+        return ran;
+    };
+
+    BOOST_TEST(!calcICRanAt(k),
+               "a restart at the file's own degree took the copy path, so its state "
+               "is the one the previous run converged to and IDACalcIC has nothing "
+               "to do -- but it ran anyway");
+
+    BOOST_TEST(calcICRanAt(k + 1),
+               "a restart at a different degree is projected, not copied, so its "
+               "sigma and trace are rebuilt and the state is not consistent -- "
+               "IDACalcIC must still run there");
+
+    removeOutput(stem);
+}
+
 BOOST_AUTO_TEST_CASE(a_restart_at_the_same_degree_still_takes_the_copy_path)
 {
     // The no-regression half. Equal degrees must keep going through
@@ -1559,42 +1880,6 @@ BOOST_AUTO_TEST_CASE(a_restart_at_the_same_degree_still_takes_the_copy_path)
 
     problem.clearRestart();
     removeOutput(stem);
-}
-
-BOOST_AUTO_TEST_CASE(an_unarmed_gate_leaves_runSolver_bit_for_bit_unchanged)
-{
-    // The no-regression guarantee. An AdjointProblem may be attached for other
-    // reasons -- solveAdjoint, PyRunner::G -- and with no tolerance set that must
-    // not change the run at all, not even by the extra objective evaluations the
-    // gate would make.
-    Grid grid(0.0, 1.0, nCells);
-
-    TestDiffusion plainProblem(lifecycle_config);
-    SystemSolver plain(grid, k, &plainProblem);
-    configure(plain, "lifecycle_gate_off_plain");
-
-    TestDiffusion attachedProblem(lifecycle_config);
-    SignedIntegralObjective objective(1.0);
-    SystemSolver attached(grid, k, &attachedProblem);
-    configure(attached, "lifecycle_gate_off_attached");
-    attached.setAdjointProblem(&objective);
-
-    {
-        CapturedOutput quiet;
-        plain.runSolver(T_FINAL);
-        attached.runSolver(T_FINAL);
-    }
-
-    BOOST_TEST(!plain.wasRejected());
-    BOOST_TEST(!attached.wasRejected());
-
-    const Vector a = sample(plain), b = sample(attached);
-    for (Index i = 0; i < a.size(); ++i)
-        BOOST_TEST(a(i) == b(i), boost::test_tools::tolerance(0.0));
-    BOOST_TEST(a.norm() > 1e-8);
-
-    removeOutput("lifecycle_gate_off_plain");
-    removeOutput("lifecycle_gate_off_attached");
 }
 
 BOOST_AUTO_TEST_CASE(initialize_starts_at_a_nonzero_time)
@@ -1652,6 +1937,118 @@ BOOST_AUTO_TEST_CASE(initialize_starts_at_a_nonzero_time)
     }
 
     removeOutput("lifecycle_nonzero_t0");
+}
+
+BOOST_AUTO_TEST_CASE(a_resumed_steady_solve_does_not_re_climb_the_ser_ramp)
+{
+    // A solve stopped by MaxContinuationSteps is stopped by its budget, not by
+    // its method: the state it reached and the pseudo-time step SER climbed to
+    // are both still good, and continueSteadyState() picks up both.
+    //
+    // A fresh solveSteadyState() picks up neither knowingly -- it re-enters at
+    // PseudoTransientInitialStep, so each slice repeats the ramp the previous
+    // one paid for. On a problem whose dt has to climb several orders of
+    // magnitude that ramp *is* the solve, which is why this is measured in
+    // continuation steps against one uninterrupted solve rather than asserted
+    // as an inequality between the two sliced variants.
+    constexpr int SLICE = 3;
+
+    auto build = [](SystemSolver &sys)
+    {
+        configure(sys, "lifecycle_resume");
+        sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+        sys.setSteadyStateTolerance(1e-10);
+        sys.setPseudoTransientInitialStep(1e-4);
+    };
+
+    // The reference: one uninterrupted solve.
+    int wholeSteps = 0;
+    Vector wholeU;
+    {
+        Grid grid(0.0, 1.0, nCells);
+        NonlinearDiffusion problem;
+        SystemSolver sys(grid, k, &problem);
+        build(sys);
+        CapturedOutput quiet;
+        sys.initialize();
+        sys.solveSteadyState();
+        wholeSteps = sys.lastSteadyStats().steps;
+        wholeU = sample(sys);
+        sys.destroySundials();
+    }
+    BOOST_TEST_MESSAGE("uninterrupted: " << wholeSteps << " continuation steps");
+    BOOST_REQUIRE(wholeSteps > 2 * SLICE);
+
+    // The same solve in slices. `resume` chooses between continueSteadyState()
+    // and a fresh solveSteadyState(), which is the whole comparison.
+    auto sliced = [&](bool resume)
+    {
+        Grid grid(0.0, 1.0, nCells);
+        NonlinearDiffusion problem;
+        SystemSolver sys(grid, k, &problem);
+        build(sys);
+        sys.setMaxContinuationSteps(SLICE);
+
+        int total = 0, slices = 0;
+        CapturedOutput quiet;
+        sys.initialize();
+        while (slices < 40)
+        {
+            ++slices;
+            try
+            {
+                if (resume && slices > 1)
+                    sys.continueSteadyState();
+                else
+                    sys.solveSteadyState();
+            }
+            catch (std::exception const &)
+            {
+                // Out of steps for this slice, which is the expected exit until
+                // the last one. The state stays in Y; nothing has been freed,
+                // because this drives the phases rather than runSolver().
+            }
+            total += sys.lastSteadyStats().steps;
+            if (sys.lastSteadyOutcome() == SystemSolver::SteadyOutcome::Converged)
+                break;
+        }
+        const bool converged =
+            (sys.lastSteadyOutcome() == SystemSolver::SteadyOutcome::Converged);
+        Vector u = sample(sys);
+        sys.destroySundials();
+        return std::tuple{converged, total, u};
+    };
+
+    const auto [resumedOK, resumedSteps, resumedU] = sliced(true);
+    const auto [restartedOK, restartedSteps, restartedU] = sliced(false);
+    BOOST_TEST_MESSAGE("resumed:   converged=" << resumedOK << ", "
+                       << resumedSteps << " continuation steps");
+    BOOST_TEST_MESSAGE("restarted: converged=" << restartedOK << ", "
+                       << restartedSteps << " continuation steps");
+
+    // Resuming reaches the same answer, and pays no more than one extra step
+    // per slice for the interruptions -- a slice cut off part way through a
+    // step has that step retried by the next one.
+    BOOST_TEST(resumedOK);
+    const int slicesUsed = (resumedSteps + SLICE - 1) / SLICE;
+    BOOST_TEST(resumedSteps <= wholeSteps + slicesUsed,
+               "resuming cost " << resumedSteps << " steps against "
+                   << wholeSteps << " uninterrupted");
+
+    // Same answer, to the tolerance both solves were converged at.
+    for (Index i = 0; i < wholeU.size(); ++i)
+        BOOST_TEST(std::abs(resumedU(i) - wholeU(i)) < 1e-8,
+                   "u differs at sample " << i << ": resumed " << resumedU(i)
+                       << " against " << wholeU(i));
+
+    // Not vacuous: without the resume the ramp restarts every slice, so the
+    // same budget buys strictly less progress.
+    BOOST_TEST(restartedSteps > resumedSteps,
+               "restarting each slice cost " << restartedSteps
+                   << " steps, no more than resuming's " << resumedSteps
+                   << " -- the SER ramp cannot be being re-climbed");
+
+    removeOutput("lifecycle_resume");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

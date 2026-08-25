@@ -170,6 +170,164 @@ solution and a time derivative that did not belong together.
    :ref:`suppress-algebraic-error` makes this *worse*, not better: it is the
    accuracy of the algebraic components that a restart resumes from.
 
+.. _warm-starts:
+
+Warm starts and ``IDACalcIC``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A restart resumes from a state the previous run had already driven onto the
+constraint manifold, so ``IDACalcIC`` — whose job is to put it there — often has
+little to do. **It cannot find that out cheaply.** Its convergence test is on the
+Newton *step* rather than on the residual: ``IDANewtonIC`` calls the linear solve
+and only then tests :math:`\|J^{-1}F\|` against ``epsNewt``
+(``ida_ic.c:404-417``), ``IDAnlsIC`` calls the Jacobian setup unconditionally
+before that (``ida_ic.c:345``), and the outer loop repeats the whole thing on
+success to refresh the error weights (``ida_ic.c:232``). Handed a state it had
+itself just converged to, it still costs **two residual evaluations, two Jacobian
+builds and two Jacobian solves**, with zero Newton iterations — measured on four
+fixtures. For MaNTA a build is ``updateMatricesForJacSolve()``: assemble and
+factorise every per-cell :math:`M_X`.
+
+**So a restart skips it by default**, and integrates from the state the file
+carried. ``initialize()`` still evaluates the residual once — no Jacobian work —
+and takes its WRMS norm with the solver's own error weights, on every
+time-marching run whether or not the skip applies; that number is logged at
+``INFO`` and readable from C++ through ``getInitialResidualNorm()``, so a caller
+can see afterwards how consistent the state they resumed from actually was.
+Measured on an already consistent warm start, skipping saves exactly
+``IDACalcIC``'s floor and nothing more: two residual evaluations and two Jacobian
+builds — 2 of 89 and 2 of 21 on ``AuxVarTest`` at rtol 1e-6.
+
+.. important::
+
+   **Only a restart that was *copied*.** Resuming at a different polynomial degree
+   projects instead: ``setInitialConditions`` transfers :math:`u`, :math:`q`, the
+   auxiliary variables and the scalars, then rebuilds :math:`\sigma` and the trace.
+   What that hands IDA is a guess like any other, and skipping ``IDACalcIC`` there
+   is a broken run rather than a saving — the ``AuxVarTest`` regression case
+   resuming at a lower degree fails with ``IDA_ERR_FAIL`` when it is skipped and
+   completes when it runs. The default is conditional on the transfer having been
+   a copy, so this needs no configuration; ``ForceConsistentIC`` is there for the
+   cases nobody has measured yet.
+
+**A cold time-marching run always runs it, and there is no option to turn that
+off.** Its guess is not a consistent state, ``IDA_ERR_FAIL`` on the first step is
+what starting from one looks like, and a local error estimate that will not shrink
+with :math:`h` is not something a key should let you opt into. A caller who does
+not care about the transient wants ``SteadyStateSolver = PseudoTransient`` or
+``Newton``.
+
+``ForceConsistentIC`` is therefore one-directional: it adds ``IDACalcIC`` back to
+a steady solve or a restart, and cannot remove it from the run that needs it.
+
+.. warning::
+
+   **The decision is made from what the run is, not from a residual threshold,
+   and that is a measurement.** It replaced ``ConsistentICTolerance``, which
+   skipped when the initial weighted
+   residual fell below a number the caller supplied. That number turned out not
+   to be calibratable. What ``IDACalcIC`` tests is
+   :math:`\|J^{-1}F\|_{\mathrm{wrms}}`, a *correction to* :math:`y`; what that
+   key tested is :math:`\|F\|_{\mathrm{wrms}}`. The two differ by the per-row
+   amplification :math:`s_i = \|J^{-1}e_i\|_{\mathrm{wrms}}`, and that is not
+   close to proportional to the error weights the norm applies. Measured as
+   :math:`s_i/\mathrm{ewt}_i` across ``LinearDiffusion``, ``MatTest`` and
+   ``AuxVarTest``:
+
+   .. list-table::
+      :header-rows: 1
+
+      * - block
+        - ``s/ewt``
+        - reading
+      * - ``sigma``, ``q``
+        - 0.6 – 10
+        - about right, and uniform, so harmless
+      * - ``u``
+        - 2.3e-4 – 2.0
+        - over-weighted by up to ~4000x
+      * - ``lambda``, Dirichlet ends
+        - exactly 0
+        - largest weight in the vector, on rows ``residual`` never writes
+      * - ``aux``
+        - 0.9 – 39
+        - under-weighted by up to ~10x *relative to* ``sigma``
+
+   The ``u`` rows are the differential ones, whose residual IDA absorbs into
+   :math:`u'`. The Dirichlet trace rows are imposed inside the linear solve, so
+   :math:`J^{-1}e_i` is identically zero there and they can only dilute the mean.
+   The ``aux`` spread is the one that bites, because it is an error *relative* to
+   the block a corrected state's residual lands in.
+
+   **What that costs on the tree as it stands is calibration.** Over six
+   ``AuxVarTest`` warm-start states — three tolerances, corrected and not — the
+   amplification :math:`\|J^{-1}F\|/\|F\|` runs from **15 to 187**, for one
+   problem at one discretisation. A threshold on :math:`\|F\|` therefore means
+   something different at each of them.
+
+   **Until recently it was worse than uncalibrated — it was inverted**, and that
+   is how the underlying defect was found. Before ``AuxVarTest``'s missing
+   ``dSigma_dPhi`` block was declared, a warm start there measured:
+
+   .. list-table::
+      :header-rows: 1
+
+      * - measure
+        - uncorrected
+        - corrected
+        - verdict
+      * - :math:`\|F\|` — what the old key tested
+        - 1.6e-4
+        - 3.8e-4
+        - uncorrected 2.4x *better*
+      * - :math:`\|J^{-1}F\|` — what CalcIC tests
+        - 2.0e-2
+        - 3.1e-3
+        - uncorrected 6.3x *worse*
+
+   The run agreed with the second: skipping failed with ``IDA_CONV_FAIL``,
+   correcting worked. Under ``SUNLOGGER_INFO_FILENAME`` the failing Newton's
+   correction plateaued at 1.98e-2 as :math:`h` fell — which *is*
+   :math:`\|J^{-1}F\|` — while :math:`\|F\|` could not see it. Note that
+   :math:`\|J^{-1}F\|` predicted the failure using the *defective* :math:`J`,
+   which is the point of the quantity: it measures the Newton the solver will
+   actually run, not the one it ought to.
+
+   That particular failure is gone — with the block declared, every restart round
+   trip in the suite completes with the skip armed, and on the current tree the
+   two norms order those states alike. Read it as removing the counter-example
+   rather than as licensing a default: the threshold is unconstrained from below
+   rather than shown safe, and the proxy still varies by an order of magnitude
+   within one problem. Hence no threshold at all: whether a run is a steady solve
+   or a copied restart is something the solver knows exactly, where the residual
+   norm only guesses.
+
+   For scale, on ``TestDiffusion`` round trips a cold start's residual measures
+   0.30 at ``Absolute_tolerance = 1e-3`` and 417 at ``1e-8``, while a warm start
+   lands between 7.7e-4 and 1.9e-2.
+
+**What makes a warm start consistent at all is that the trace is now kept.**
+``setInitialConditions`` used to finish every restart with ``EvaluateLambda()``,
+which sets :math:`\lambda` to :math:`\{\{u\}\}` — the average of the two cell
+traces, not the HDG trace equation
+:math:`C_\sigma \sigma + C_q q + G_c u + H\lambda = L(t)` that :math:`\lambda`
+actually solves. On a restart that discarded a converged trace and replaced it
+with something that solves nothing: measured on a ``TestDiffusion`` round trip at
+``Absolute_tolerance = 1e-8``, that one call took the weighted residual from
+2.6e-3 to 556. It is why a restart used to need about ten times as many residual
+evaluations inside ``IDACalcIC`` as a cold start; on ``AuxVarTest``'s round trip
+keeping the trace takes the resumed run from 1139 residual evaluations to 1033.
+
+The trace is kept whenever the discretisation matches. The degree-change path
+still builds one, because ``copy()`` refused the transfer and there is none to
+keep. ``ApplyDirichletBCs`` deliberately still runs *above* ``EvaluateLambda``
+rather than below it, even though that means the boundary data it writes is
+overwritten again on the projection path: moving it below breaks the
+``AuxVarTest`` round trip on its own, and the only difference is whether a
+Dirichlet end's trace holds the boundary datum or :math:`u`'s trace there — a
+node whose row and column are identically zero, so it is IDA's error test that
+notices rather than the residual.
+
 .. _steady-state-solver:
 
 Reaching a steady state
@@ -265,7 +423,9 @@ transient *is* the answer.
 
 Measured on the benchmarks under ``python-examples/``, in the units
 ``PERFORMANCE.md`` asks for — evaluations of the physics per point, for an
-answer identical in every digit printed:
+answer identical in every digit printed. The resolution is stated because the
+counts depend on it: ``park-convergence`` at 4 cells, the other two at 10, all
+three at :math:`k = 3`.
 
 .. list-table::
    :header-rows: 1
@@ -275,20 +435,28 @@ answer identical in every digit printed:
      - ``PseudoTransient``
      - ``Newton``
    * - ``park-convergence``
-     - 113
-     - **19**
+     - 119
      - **11**
+     - **7**
    * - ``jardin-critical-gradient``
-     - 176
-     - **92**
-     - 117
+     - 182
+     - **138**
+     - 163
    * - ``shestakov-nonlinear``
-     - **283**
-     - 705
-     - 731
+     - **256**
+     - 622
+     - 648
 
-Park's own solver reaches that state in 9–15 iterations, which is where
-``Newton`` lands. The last row is the counter-example and is why ``TimeMarch``
+A small, uniform part of those two columns is that a steady solve no longer pays
+for ``IDACalcIC`` (see :ref:`the-run-lifecycle` below). Skipping it took
+``PseudoTransient``/``Newton`` from 15/11 to 11/7 on ``park-convergence``, from
+142/167 to 138/163 on ``jardin-critical-gradient`` and from 657/683 to 622/648 on
+``shestakov-nonlinear`` — every converged answer unchanged bit for bit, and
+``TimeMarch``, which still runs it, untouched. It is a constant few evaluations,
+not the order of magnitude in the first row; that is the algorithm.
+
+Park's own solver reaches that state in 9–15 iterations, which ``Newton`` now
+matches or beats. The last row is the counter-example and is why ``TimeMarch``
 stays: that problem's flux ``D0 q^3/u^2`` is degenerate, the mass term
 continuation exists to shed is what was damping it, and as ``dt`` grows the inner
 solve starts rejecting steps. Its ``run.conf`` therefore pins ``TimeMarch``.
@@ -347,6 +515,112 @@ only a converged solve zeroes it, so a diagnostic hook differentiating it there
 is reading the initial condition's rate of change; and **nothing in the file
 distinguishes a failed last slice from a converged one** — the exception, the
 logged error and the exit status do.
+
+The step budget, and resuming
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``MaxContinuationSteps`` (default 200) is how many ``KINSol`` calls one steady
+solve may make. Each is a full Newton solve, so a healthy run uses ten or so and
+the default is a runaway backstop rather than a budget.
+
+Lowering it deliberately is how a solve is stopped early enough to be looked at.
+Running out is not a failure of the method — the state reached and the
+pseudo-time step SER has climbed to are both still good — so
+``continueSteadyState()`` picks up both and carries on, where a second
+``solveSteadyState()`` re-enters at ``PseudoTransientInitialStep`` and re-climbs
+the ramp from the bottom.
+
+The difference is the whole solve, not a margin on it. A nonlinear diffusion that
+converges in 15 continuation steps uninterrupted takes **the same 15** in slices
+of three when each slice resumes, and does not converge at all in 40 slices when
+each one starts over.
+
+Resuming drives the phases directly rather than going through ``runSolver()``,
+which frees the state on its way out of a failed solve:
+
+.. code-block:: cpp
+
+   system.setMaxContinuationSteps(slice);
+   system.initialize();
+   for (;;)
+   {
+       try
+       {
+           first ? system.solveSteadyState() : system.continueSteadyState();
+       }
+       catch (std::exception const &)
+       {
+           // Out of steps for this slice. Nothing has been freed; Y still holds
+           // the last accepted iterate and ptcStep the dt it was reached at.
+       }
+       if (system.lastSteadyOutcome() == SystemSolver::SteadyOutcome::Converged)
+           break;
+       // ... inspect lastSteadyStats(), lastObjectiveEstimate(), yJac ...
+   }
+
+``lastSteadyStats()`` describes the slice that just ran, not the solve as a
+whole, so a caller wanting the total sums them. It includes the objective
+estimate's cost when that is armed, so the number a driver reads is the whole of
+what the slice spent.
+
+From Python
+"""""""""""
+
+``manta.SteadySolve`` wraps the same three phases, and is the form to prefer: a
+slice loop owns live SUNDIALS objects that nothing else frees, so leaving the
+block is what guarantees teardown.
+
+.. code-block:: python
+
+   runner.configure({..., "MaxContinuationSteps": 5})
+
+   with manta.SteadySolve(runner, estimate=False) as solve:
+       for outcome, stats in solve:
+           print(stats["residual_norm"], stats["pseudo_transient_step"])
+           if good_enough(runner.getSolution(0, points)):
+               solve.stop()
+
+Iterating yields ``(outcome, stats)`` and ends of its own accord when a slice
+returns anything but ``SteadyOutcome.OutOfSteps``. ``stop()`` ends the loop and
+still writes the result; ``abandon()``, and any exception out of the block, ends
+it and writes nothing. ``runner.configure(...)`` while a loop is live abandons it
+the same way.
+
+``OutOfSteps`` is *returned*, not raised — the budget is spent and nothing is
+wrong. A genuine ``SolverFailed`` raises, having written the last state it
+reached, so a driver tells the two apart without reading a message.
+
+The state between slices is the state reached: each slice refreshes what
+``getSolution``, ``getDerivative`` and ``getPostprocessedSolution`` read. The
+underlying methods are ``start_steady``, ``continue_steady``, ``finish_steady``
+and ``abandon_steady`` for a driver that wants the loop written out.
+
+``estimate`` is a cost knob. Every finished solve estimates the objective and its
+remaining error (``objectiveEstimate()``), which costs a residual, a Jacobian
+build and a solve — charged *per slice*, so a driver reading the estimate only at
+the end should pass ``estimate=False`` and let the last slice produce the one
+that counts. Without ``solveAdjoint`` there is nothing to estimate and nothing to
+pay. ``EstimateObjectiveOnFinish = false`` turns it off for a whole run.
+
+Slicing is refused with ``DegreeAdaptation``: adapting the degree replaces the
+solver, and a slice loop holds the state of the one it started on.
+
+Through the JAX FFI
+'''''''''''''''''''
+
+``manta.jax.FFIRunner`` implements the same four names as FFI ops, so
+``manta.SteadySolve(ffi_runner)`` works unchanged. They keep their lowercase
+spelling rather than being disabled the way ``run`` and ``run_ss`` are, because
+that is what the context manager calls.
+
+``steadyStats()`` and ``objectiveEstimate()`` need no FFI op — they read
+host-side state and touch no device memory, so the inherited ``Runner`` methods
+serve.
+
+CPU only, like ``Run`` and ``Run_ss``. The outcome crosses as a concrete
+``int32``, which forces the sync a Python ``while`` needs — so a slice loop
+belongs in eager code, or inside an ``io_callback``, and cannot be written under
+``jit`` where the outcome would be a tracer.
 
 What the solve did
 ~~~~~~~~~~~~~~~~~~
@@ -799,8 +1073,13 @@ by the Newton tolerance, and two things read them:
   ``1.9e-6`` degrades to ``8.6e-4`` with this on — see the warning above, which
   this key makes worse rather than better.
 * **``phi`` is a physics quantity when ``nAux > 0``**, not merely an
-  intermediate. The ``AuxVarTest`` regression case drifts 1.0% against its
-  reference with this on, past its 0.84% tolerance.
+  intermediate, and ``q`` and ``sigma`` are what the flag drops from the error
+  test. On ``AuxVarTest`` those land 1.0e-6 from a converged solution with this
+  on against 4.1e-7 with it off — a factor of 2.5. (This bullet used to claim a
+  1.0% drift past a 0.84% tolerance. That was measured when the case ran at
+  ``rtol = atol = 1e-2``, where its own answer is 4.1% from converged, so the
+  drift was step-sequence noise; at the ``1e-6 / 1e-8`` the case now uses the
+  flag moves ``u`` by 3.5e-7 and passes the regression outright.)
 
 So it is the right key for a hard steady-state or transient solve whose output is
 ``u``, and the wrong one if you intend to restart from the result or care about
@@ -810,6 +1089,8 @@ the initial condition rather than on the formulation, which is worth knowing
 before reaching for this key. A start whose flux is badly scaled needs it; the
 same problem from a physically scaled start does not. That example's
 ``ANALYSIS.md`` measures both.
+
+.. _the-run-lifecycle:
 
 The three phases
 ----------------
@@ -833,6 +1114,14 @@ condition and integrating:
        (:math:`q`, :math:`\sigma`, the auxiliary variables, and :math:`u^\star`
        through :math:`q`); :math:`u` is differential, so ``IDACalcIC`` holds it
        fixed and it is the same either way.
+
+       **``IDACalcIC`` is not always run.** A steady solve skips it outright:
+       ``solveSteadyState`` drives the whole residual to zero from the guess, so
+       a correction made first is discarded by the first accepted continuation
+       step. A time-marching run skips it when the state it was handed is already
+       consistent — see :ref:`warm-starts`, which is the usual case for a
+       restart. Either way the :math:`t_0` slice is then the guess, which is the
+       state the run really started from.
    * - ``integrate(tFinal)``
      - The time loop, then the adjoint solve if requested, then the final netCDF
        and restart output.

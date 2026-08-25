@@ -247,18 +247,20 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(OutputPoints, int);
     READ(OutputFilename, std::string);
     READ(solveAdjoint, bool);
-    READ(ObjectiveDecreaseTolerance, double);
     READ(WriteOutput, bool);
     READ(WriteDatFile, bool);
     READ(WriteDebugDatFiles, bool);
     READ(zeroFlux, bool);
     READ(AggressiveTimesteps, bool);
     READ(SuppressAlgebraicError, bool);
+    READ(ForceConsistentIC, bool);
     READ(SteadyStateSolver, std::string);
     READ(PseudoTransientInitialStep, double);
     READ(PseudoTransientMaxStep, double);
     READ(PseudoTransientSERRate, double);
     READ(PseudoTransientSERFloor, double);
+    READ(EstimateObjectiveOnFinish, bool);
+    READ(MaxContinuationSteps, unsigned);
     READ(NewtonMaxIterations, unsigned);
     READ(NewtonJacobianReuse, unsigned);
     READ(NewtonStepTolerance, double);
@@ -516,11 +518,15 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     {
         system.setPseudoTransientSERRate(config.PseudoTransientSERRate);
         system.setPseudoTransientSERFloor(config.PseudoTransientSERFloor);
+        system.setEstimateObjectiveOnFinish(config.EstimateObjectiveOnFinish);
+        system.setMaxContinuationSteps(config.MaxContinuationSteps);
         system.setNewtonMaxIterations(config.NewtonMaxIterations);
         system.setNewtonJacobianReuse(config.NewtonJacobianReuse);
         system.setNewtonStepTolerance(config.NewtonStepTolerance);
         system.setSteadyStateDiagnostics(config.SteadyStateDiagnostics);
         system.setSteadyStateStepDiagnostics(config.SteadyStateStepDiagnostics);
+
+        system.setForceConsistentIC(config.ForceConsistentIC);
     }
     catch (std::logic_error const &e)
     {
@@ -552,11 +558,4 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     }
 
     // Zero is off, and the setter rejects anything negative.
-    if (config.ObjectiveDecreaseTolerance != 0.0)
-    {
-        logmsg<LOG_LEVEL::INFO>(
-            "Abandoning the run if dG/dt falls below {} at the initial condition.",
-            -config.ObjectiveDecreaseTolerance);
-        system.setObjectiveDecreaseTolerance(config.ObjectiveDecreaseTolerance);
-    }
 }

@@ -6,7 +6,7 @@ import collections.abc
 import numpy
 import numpy.typing
 import typing
-__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'Field', 'Grid', 'Mixed', 'Neumann', 'Runner', 'Scalar', 'State', 'StateField', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'load_physics_plugin', 'numbered_spec', 'physics_cases', 'registerPhysicsCase', 'run']
+__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'Field', 'Grid', 'Mixed', 'Neumann', 'Runner', 'Scalar', 'State', 'StateField', 'SteadyOutcome', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'load_physics_plugin', 'numbered_spec', 'physics_cases', 'registerPhysicsCase', 'run']
 class AdjointProblem:
     spatialParameters: bool
     def __init__(self) -> None:
@@ -143,7 +143,13 @@ class Runner:
     @typing.overload
     def __init__(self, physics_case: str) -> None:
         ...
+    def abandon_steady(self) -> None:
+        ...
     def configure(self, arg0: dict) -> None:
+        ...
+    def continue_steady(self, estimate: bool = True) -> SteadyOutcome:
+        ...
+    def finish_steady(self) -> None:
         ...
     def getAdjointGradients(self) -> tuple:
         ...
@@ -155,7 +161,7 @@ class Runner:
         ...
     def get_address(self) -> int:
         ...
-    def lastDGdt(self) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
+    def objectiveEstimate(self) -> dict:
         ...
     @typing.overload
     def run(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
@@ -165,7 +171,9 @@ class Runner:
         ...
     def run_ss(self) -> None:
         ...
-    def wasRejected(self) -> bool:
+    def start_steady(self, estimate: bool = True) -> SteadyOutcome:
+        ...
+    def steadyStats(self) -> dict:
         ...
     @property
     def physics_case(self) -> str:
@@ -228,6 +236,51 @@ class StateField:
     def __repr__(self) -> str:
         ...
     def __setitem__(self, arg0: typing.Any, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class SteadyOutcome:
+    """
+    Why a steady solve, or one slice of one, stopped.
+    
+    Members:
+    
+      NotRun : No steady solve has been taken on this solver.
+    
+      Converged : ||F|| fell below SteadyStateTolerance.
+    
+      OutOfSteps : The MaxContinuationSteps budget was spent. Not a failure: the state and the pseudo-time step reached are both good, and continue_steady() resumes from them.
+    
+      SolverFailed : KINSol failed in a way pseudo-transient damping cannot answer.
+    """
+    Converged: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.Converged: 1>
+    NotRun: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.NotRun: 0>
+    OutOfSteps: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.OutOfSteps: 2>
+    SolverFailed: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.SolverFailed: 3>
+    __members__: typing.ClassVar[dict[str, SteadyOutcome]]  # value = {'NotRun': <SteadyOutcome.NotRun: 0>, 'Converged': <SteadyOutcome.Converged: 1>, 'OutOfSteps': <SteadyOutcome.OutOfSteps: 2>, 'SolverFailed': <SteadyOutcome.SolverFailed: 3>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
         ...
 class SystemSpec:
     def __init__(self, variables: collections.abc.Sequence[Field], scalars: collections.abc.Sequence[Scalar] = [], aux: collections.abc.Sequence[Aux] = []) -> None:

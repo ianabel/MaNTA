@@ -156,6 +156,18 @@ Time integration
        when the transient is not the interesting part, at the cost of making IDA
        more likely to overshoot and retry. ``aggressiveTimesteps`` is a
        deprecated spelling of this and still works, with a warning.
+   * - ``ForceConsistentIC``
+     - ``false``
+     - Run ``IDACalcIC`` on a run that would otherwise skip it. A steady solve
+       skips it because it discards the answer; a restart skips it because it
+       resumes from a state already on the constraint manifold. **A cold
+       time-marching run always runs it and this cannot turn that off** — if you
+       do not care about the transient, use ``SteadyStateSolver =
+       PseudoTransient`` or ``Newton`` rather than an uncorrected time march. The
+       key is therefore one-directional: it only ever adds the call back. The
+       case that needs it is a restart onto a *different* discretisation, which
+       is projected rather than copied and so is not a consistent state. See
+       :ref:`warm-starts`.
    * - ``SteadyStateSolve``
      - ``false``
      - Terminate when :math:`\mathrm{d}y/\mathrm{d}t` becomes small rather than at
@@ -169,16 +181,6 @@ Time integration
        ``SteadyStateSolve`` simply sets the tolerance.
        ``Runner.run_ss()`` arms it whether or not either key was given, and falls
        back to ``1e-3``.
-   * - ``ObjectiveDecreaseTolerance``
-     - ``0.0`` — off
-     - If nonzero, the run is abandoned before the time loop when
-       :math:`\mathrm{d}G/\mathrm{d}t < -` this at the initial condition. For an
-       optimisation sweep that turns a step which was going to make the objective
-       worse into the cost of initialisation alone. Requires ``solveAdjoint``,
-       since the adjoint problem is what defines :math:`G`. Absolute, not
-       relative — it carries the units of the objective over time, so there is no
-       number worth defaulting to and zero means "off". A negative value is an
-       error rather than a quiet "off". See :doc:`adjoints`.
    * - ``tau``
      - ``1.0``
      - The HDG stabilisation parameter. Constant across the domain.

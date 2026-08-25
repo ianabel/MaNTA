@@ -95,14 +95,19 @@ test of `WriteRestartFile` -> `StoreGridInfo` -> the restart branch of
 clustered-grid contiguity defect (a grid rebuilt from a restart file must
 compare *equal* to the one that wrote it).
 
-**Restarting is fragile at tight tolerances**, so each case runs at the tightest
-one at which it completes -- see the measured table beside the calls in
-`TestSolutions.py`. Briefly: `LinearDiffusion` survives 1e-6, `MatTest` 1e-4,
-`AuxVarTest` only 1e-3, while the *uninterrupted* run succeeds at every one of
-those. After a restart `IDACalcIC` needs roughly ten times as many residual
-evaluations as from a cold start, which points at `setInitialConditions`
-recomputing sigma and lambda from the restored u and q while discarding the
-restored dY/dt.
+**All three round trips survive 1e-6 / 1e-8** -- see the measured table beside
+the calls in `TestSolutions.py`.
+
+The ceiling above that belongs to the *cases*, not to the restart path. At
+1e-8 / 1e-10 `MatTest`'s **uninterrupted** run fails as well, so nothing there
+implicates restarting; the other two resume-fail with `IDA_ERR_FAIL` (-3).
+`LinearDiffusion` and `AuxVarTest` run at 1e-6; `MatTest` stays at 1e-4 because
+1e-6 costs 101 s against 6.0 s for agreement of 2.7e-10 that nothing needs.
+
+Two things are load-bearing for that, and both are easy to undo by accident:
+`setInitialConditions` must keep the trace a restart file carries rather than
+rebuilding it with `EvaluateLambda()`, and `AuxVarTest` must declare
+`dSigma_dPhi` for *both* variables (both described below).
 
 `.ref.nc` files are committed -- `.gitignore` has `*.nc` with a `!*.ref.nc`
 negation.
@@ -671,6 +676,92 @@ These are deliberate and tracked, not oversights:
   `the_initial_condition_uses_boundary_data_at_t0` covers that separately,
   because every other fixture in the tree starts at zero.
 
+* **Warm starts: what a restart hands the solver, and whether `IDACalcIC` has to
+  run.** Two cases in `SolverLifecycleTests.cpp`, and unlike the three
+  degree-transfer cases beside them they go through an actual `.restart.nc`
+  rather than through `setRestartValues` on an in-memory vector -- the netCDF
+  round trip is part of what decides whether the state is still consistent.
+
+  * `the_warm_start_keeps_the_trace_the_file_carries`. `setInitialConditions`
+    finished every restart with `EvaluateLambda()`, which sets `lambda` to
+    `{{u}}` -- the average of the two cell traces -- and that is not the equation
+    `lambda` solves. On a restart it discarded a converged trace and replaced it
+    with something that solves nothing. The test measures both: keeping the trace
+    gives a weighted residual of 2.6e-3, re-averaging it gives 556, a factor of
+    2e5. That is the whole of the gap, and it is what made a restart need about
+    ten times as many residual evaluations inside `IDACalcIC` as a cold start --
+    the effect `TestSolutions.py`'s comment beside `check_restart_round_trip` had
+    already noticed and attributed correctly. On `AuxVarTest`'s round trip
+    keeping the trace takes the resumed run from 1139 residual evaluations to
+    1033.
+  * `a_warm_start_from_a_restart_file_does_not_run_calcic`. `IDACalcIC` has no
+    cheap path -- 2 residual evaluations, 2 Jacobian builds and 2 Jacobian solves
+    even on a state it just converged to, because its test is on the Newton step
+    -- so a restart skips it by default. The test sets no key at all, checks
+    `IDAGetNumResEvals` is zero after `initialize()`, **and integrates**, because
+    nothing else establishes that the state can be stepped from. It separately
+    checks the warm start's residual really was small, so the integration is not
+    passing for a reason nobody chose; its control is a cold start of the same
+    problem, three orders further out, which is still corrected; and it finishes
+    by setting `ForceConsistentIC` on the same restart and requiring `IDACalcIC`
+    back, which is the only thing that would notice the key being ignored.
+
+  * `only_a_copied_restart_is_treated_as_already_consistent`. The default is
+    conditional on the transfer having been a *copy*. A restart onto a different
+    degree is projected -- `setInitialConditions` moves `u`, `q`, aux and the
+    scalars and then rebuilds `sigma` and the trace -- so it is a guess like any
+    other, and skipping there is a broken run rather than a saving: `AuxVarTest`
+    resuming at a lower degree fails with `IDA_ERR_FAIL` when `IDACalcIC` is
+    skipped and completes when it runs. Both halves are asserted, because without
+    the second the projection path would quietly start from an inconsistent state.
+    Note that the three degree-transfer cases beside it only `initialize()` and
+    compare state; none of them integrates, which is why this was not already
+    covered.
+
+  What is *not* covered, and is why the key is a boolean rather than a threshold:
+  **a residual norm is not the quantity that decides the question.** It replaced
+  `ConsistentICTolerance`, which compared the initial weighted residual against a
+  number the caller supplied. `IDACalcIC`'s own test is `||J^-1 F||_wrms` -- a
+  correction to `y` -- and the two differ by the
+  per-row amplification `s_i = ||J^-1 e_i||_wrms`, which is nowhere near
+  proportional to the error weights. Measured as `s_i / ewt_i` on three cases: the
+  `u` rows are over-weighted by up to ~4000x, the Dirichlet `lambda` rows carry
+  the largest weight in the vector on rows whose sensitivity is *exactly zero*
+  (`residual` never writes them), and the `aux` rows are under-weighted by up to
+  ~10x relative to `sigma`. What that costs is calibration: over six `AuxVarTest`
+  warm-start states -- three tolerances, corrected and not -- `||J^-1 F|| / ||F||`
+  runs from **15 to 187**, for one problem at one discretisation.
+
+  It used to be worse than uncalibrated. Before `AuxVarTest`'s missing
+  `dSigma_dPhi` block was declared, `||F||` made that warm start's uncorrected
+  state look 2.4x *better* (1.6e-4 against 3.8e-4) where `||J^-1 F||` made it 6.3x
+  *worse* (2.0e-2 against 3.1e-3) -- and the run agreed with the second, the
+  failing Newton's correction plateauing at 1.98e-2 as `h` fell. `||J^-1 F||`
+  predicted that using the *defective* `J`, which is the point of it: it measures
+  the Newton the solver will actually run. With the block declared every round
+  trip completes with the skip armed and the two norms order those states alike,
+  so there is now **no fixture in the tree that requires `IDACalcIC`** -- which
+  removes the counter-example without establishing that any threshold is safe.
+  Hence a boolean: a caller restarting from a state they know is converged has
+  information the norm does not, and the key is how they say so.
+
+  A correct test costs one residual, one Jacobian build and one Jacobian solve
+  against `IDACalcIC`'s floor of two of each: a factor of two, not the near-free
+  test this is. And the floor is all the skip saves -- measured on an already
+  consistent warm start, 2 residual evaluations and 2 Jacobian builds, which is 2
+  of 89 and 2 of 21 on `AuxVarTest` at rtol 1e-6.
+
+  The opposite failure -- a `TestDiffusion` warm start at rtol 1e-6 that could not
+  complete `IDACalcIC` at all -- **was a MaNTA bug and is fixed**. `initialize()`
+  passed `IDACalcIC` the interval `dt` where `tout1` wants an absolute time; every
+  fixture starts at `t0 = 0` where the two agree, and that one restarts at
+  `t0 = 0.05` with a cadence of `0.05`, so `tout1` landed exactly on `t0` and IDA
+  refused the input. It was never about the tolerance -- it reproduced at every
+  tolerance, and with `tout1 = t0 + dt` that warm start converges in 3 residual
+  evaluations, as does a degree-projection restart at a weighted residual of
+  8.7e3. Two cases had been written around the belief that it was a hard state;
+  both are corrected, and the fail-open case below now says so.
+
 * **`SteadyState.cpp` is barely covered, and what covers it now is its output
   rather than its algorithm.** Until recently nothing called `solveSteadyState`
   from a test at all -- the only mentions of it under `Tests/` were config
@@ -702,7 +793,7 @@ These are deliberate and tracked, not oversights:
     that did not belong together. The check is exactly zero, not merely small: it
     is set rather than converged to.
 
-  Three more cases have landed since, each also provoked by a defect:
+  More cases have landed since, each also provoked by a defect:
 
   * `the_SER_rate_and_floor_change_the_cost_and_not_the_answer` measures the schedule through physics evaluations -- 552 at the defaults, 3540 with the floor at 1, 1704 with the floor at 1 and the rate at 2 -- and requires the converged state to be identical in all three. An option that changed the answer would be a bug; one that changed nothing would be inert.
   * `the_steady_diagnostics_count_the_whole_solve_not_the_last_step`. **KINSOL zeroes its own counters at the top of every `KINSol` call**, so the continuation loop has to sum them as it goes; reading them once at the end -- the obvious thing, and what this did first -- reported 1 Newton iteration against 5 continuation steps and 35 Jacobian solves. Self-evidently impossible, and it still looks like a number, which is why the test asserts invariants (`newtonIters >= steps`, `residualEvals == kinFuncEvals + steps + 1`) rather than values. The second of those also pins the counter snapshot being taken before the first `steadyNorm()`, which it was not to begin with.
@@ -711,9 +802,32 @@ These are deliberate and tracked, not oversights:
   * `newton_jacobian_reuse_trades_builds_for_solves` and `newton_max_iterations_caps_every_inner_solve`, which read the two KINSOL settings back through the diagnostics rather than through KINSOL -- there is no `KINGet` for `msbset`, and behaviour is the thing worth pinning anyway. Both need a **nonlinear** fixture, so `SolverLifecycleTests.cpp` carries a small `NonlinearDiffusion` (`sigma = (1 + u^2) q`): on `TestDiffusion` every inner solve converges in one Newton iteration, builds equal solves at every setting, and a reuse test would pass while measuring nothing. That degeneracy is checked for explicitly rather than assumed, so a change to the fixture that quietly made it linear fails the test instead of hollowing it out. Measured: reuse 1 gives 16 builds for 16 solves, reuse 10 gives 7 for 29, and the two agree on the answer to 1e-8. The iteration cap is read per step rather than in total, because a total could be held down by the solve simply needing fewer iterations, where a per-step maximum of exactly the cap can only come from the cap binding.
   * `the_newton_settings_refuse_values_that_cannot_work`. Zero iterations cannot make progress, and zero *reuse* is KINSOL's "use the default" sentinel -- so passing it through would silently mean 10 rather than what was asked. Zero is meanwhile legitimate for the step tolerance, where KINSOL implements exactly that meaning, and the test pins both readings of zero so they cannot be regularised into one.
   * `the_per_step_diagnostics_print_without_the_summary`. `SteadyStateStepDiagnostics` and `SteadyStateDiagnostics` are independent; this pins the direction that is easy to get wrong, since a trace implemented as extra detail inside the summary block would make the more specialised request unreachable without the less specialised one. Rows are counted from the outcome column rather than by counting lines, so an unrelated line elsewhere in the run cannot make it pass.
+  * `only_a_time_marching_run_pays_for_calcic` and
+    `skipping_calcic_leaves_the_steady_answer_alone`. `initialize()` ran
+    `IDACalcIC` unconditionally, including for a solve that never takes an IDA
+    step and so discards its answer with the first accepted continuation step.
+    Worse than wasted: `IDACalcIC` is a damped Newton solve in its own right and
+    fails on initial conditions the steady solver handles easily --
+    `python-examples/jardin-critical-gradient` records `IDA_CONV_FAIL` (-4) from
+    starting at the *exact* steady state, which is the one guess a steady solve
+    would have taken instantly. The first test reads `IDAGetNumResEvals` straight
+    after `initialize()`, which is zero unless something asked IDA to solve;
+    MaNTA's own `nResidualEvals` would not do, since the debug `.dat` blocks and
+    the steady solve increment it too. It covers three configurations, because
+    the condition is `solvesForSteadyState()` -- the *conjunction* of armed
+    termination and a non-`TimeMarch` mode -- and the trap is reading the default
+    `PseudoTransient` as a steady solve when nothing armed termination. Mutating
+    the gate to a constant fails it in both directions. The second test pins the
+    thing that actually matters: what the solve converges to must not depend on a
+    correction that was going to be thrown away, checked at both steady modes
+    against `TestDiffusion`'s closed form. Measured on the benchmarks, this cut
+    physics evaluations per point from 15 to 11 (`PseudoTransient`) and 11 to 7
+    (`Newton`) on `park-convergence`, 142/167 to 138/163 on
+    `jardin-critical-gradient` and 657/683 to 622/648 on `shestakov-nonlinear`,
+    with every converged answer identical bit for bit and `TimeMarch` untouched.
 
-  What is still uncovered is the rest of the algorithm -- step rejection,
-  `Newton` mode, the `KINSetMaxNewtonStep` clamp, and the hard-`KINSol`-failure
+  What is still uncovered is the rest of the algorithm -- step rejection, the
+  `KINSetMaxNewtonStep` clamp, and the hard-`KINSol`-failure
   path (the ordinary exhaustion path above shares its `catch (...)` in
   `Solver.cpp`, but not the code that reaches it). In particular the flat
   unweighted `steadyNorm` (`SteadyState.cpp`) is untested, and both the

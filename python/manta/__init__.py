@@ -57,6 +57,7 @@ from ._manta import (  # noqa: F401
     Neumann,
     Runner,
     Scalar,
+    SteadyOutcome,
     SystemSpec,
     TomlValue,
     getNodes,
@@ -79,6 +80,8 @@ __all__ = [
     "Neumann",
     "Runner",
     "Scalar",
+    "SteadyOutcome",
+    "SteadySolve",
     "SystemSpec",
     "TomlValue",
     "TransportSystem",
@@ -89,6 +92,85 @@ __all__ = [
     "registerPhysicsCase",
     "run",
 ]
+
+
+class SteadySolve:
+    """A steady solve driven in slices, so a driver can look between them.
+
+    Each slice runs at most ``MaxContinuationSteps`` continuation steps and then
+    hands back. Resuming carries the state *and* the pseudo-time step the last
+    slice reached, so slicing costs no extra continuation steps -- a solve that
+    takes sixteen uninterrupted takes sixteen in slices of three.
+
+    Iterating yields ``(outcome, stats)`` per slice and stops of its own accord
+    once a slice returns anything but :attr:`SteadyOutcome.OutOfSteps`::
+
+        with manta.SteadySolve(runner) as solve:
+            for outcome, stats in solve:
+                if stats["residual_norm"] < 1e-6:
+                    solve.stop()
+
+    Leaving the block writes the output, the restart file and the adjoint solve,
+    then tears the solve down. Leaving it by an exception -- or by calling
+    :meth:`abandon` -- tears it down and writes nothing. Either way the SUNDIALS
+    objects are freed, which is the reason to use the context manager rather
+    than the Runner methods directly: nothing else frees them.
+
+    Parameters
+    ----------
+    runner:
+        A configured :class:`Runner`. ``DegreeAdaptation`` is refused -- see the
+        note in :meth:`Runner.start_steady`.
+    estimate:
+        Whether each slice estimates the objective on its way out. That costs a
+        residual, a Jacobian build and a solve *per slice* and needs
+        ``solveAdjoint``, so a driver reading the estimate only at the end
+        should pass ``False`` and let :meth:`finish` produce the one that counts.
+    """
+
+    def __init__(self, runner, estimate=True):
+        self._runner = runner
+        self._estimate = estimate
+        self._started = False
+        self._closed = False
+        self._stop = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self._close(write=exc_type is None)
+        return False
+
+    def __iter__(self):
+        while not self._stop:
+            if self._started:
+                outcome = self._runner.continue_steady(self._estimate)
+            else:
+                outcome = self._runner.start_steady(self._estimate)
+                self._started = True
+            yield outcome, self._runner.steadyStats()
+            if outcome != SteadyOutcome.OutOfSteps:
+                return
+
+    def stop(self):
+        """Stop after the current slice, and still write the result."""
+        self._stop = True
+
+    def abandon(self):
+        """Stop after the current slice and write nothing."""
+        self._stop = True
+        self._close(write=False)
+
+    def _close(self, write):
+        if self._closed or not self._started:
+            self._closed = True
+            return
+        self._closed = True
+        if write:
+            self._runner.finish_steady()
+        else:
+            self._runner.abandon_steady()
 
 
 class TransportSystem(_core.TransportSystem):

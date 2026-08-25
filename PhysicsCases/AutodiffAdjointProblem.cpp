@@ -19,6 +19,17 @@ Value AutodiffAdjointProblem::dGFndp(Index i, Index pIndex, DGSoln &y) const
 {
     Real p = PhysicsProblem->getPval(pIndex);
 
+    // setPval takes the *parameter* index. `i` selects the objective, and writing
+    // through it would differentiate with respect to whichever parameter happens
+    // to share the objective's number -- and, because setPval assigns the whole
+    // Real, would leave that parameter holding another one's value once the
+    // integral finished. The physics case would then evaluate a different problem
+    // for the rest of the run.
+    //
+    // Writing pIndex is also what restores it: p is a copy of that parameter's own
+    // value with only its gradient seeded, so the last assignment puts the value
+    // back. clearGradients() below removes the seed. AutodiffTransportSystem's
+    // dSigmaFn_dp and dSources_dp rely on the same property.
     auto g_wrapper = [&](Real p, Position x)
     {
         State s = y.eval(x);
@@ -27,7 +38,7 @@ Value AutodiffAdjointProblem::dGFndp(Index i, Index pIndex, DGSoln &y) const
         RealVector sigma(s.sigma());
         RealVector phi(s.phi());
 
-        PhysicsProblem->setPval(i, p);
+        PhysicsProblem->setPval(pIndex, p);
         return g[i](x, u, q, sigma, phi);
     };
     auto I = integrator::integrate([&](Position x)

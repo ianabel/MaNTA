@@ -9,7 +9,7 @@ export
 
 include Makefile.config
 
-SOURCES = Config.cpp ConfigSchema.cpp SolverConfig.cpp SystemSolver.cpp SunLinSolWrapper.cpp SunMatrixWrapper.cpp ErrorChecker.cpp Solver.cpp Matrices.cpp DGStatic.cpp PhysicsCases.cpp NetCDFIO.cpp AdjointVectors.cpp Postprocessing.cpp AlgebraicDerivatives.cpp SteadyState.cpp DegreeAdaptation.cpp
+SOURCES = Config.cpp ConfigSchema.cpp SolverConfig.cpp SystemSolver.cpp SunLinSolWrapper.cpp SunMatrixWrapper.cpp ErrorChecker.cpp Solver.cpp Matrices.cpp DGStatic.cpp PhysicsCases.cpp NetCDFIO.cpp AdjointVectors.cpp Postprocessing.cpp SteadyState.cpp DegreeAdaptation.cpp
 
 HEADERS = Config.hpp Logging.hpp gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp SystemSolver.hpp ErrorChecker.hpp TransportSystem.hpp PhysicsCases.hpp DGSoln.hpp Basis.hpp AdjointProblem.hpp State.hpp
 
