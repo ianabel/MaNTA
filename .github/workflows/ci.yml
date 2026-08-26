@@ -112,9 +112,14 @@ jobs:
           - cxx: g++-15
             pkg: g++-15
             ppa: ubuntu-toolchain-r/test
+          # ...and this one builds with MANTA_LAPACK=OFF, so the built-in banded
+          # factorisation is what the whole suite runs against on one leg rather
+          # than only in the utility_tests cases that call it directly. The two
+          # give the same answers; that is the claim being tested.
           - cxx: g++-16
             pkg: g++-16
             ppa: ubuntu-toolchain-r/test
+            lapack: 'OFF' 
           # The ubuntu-24.04 image itself carries only clang 16/17/18, but noble's
           # universe repo packages clang-19 (1:19.1.1) and clang-20 (1:20.1.2), so
           # these two legs need nothing but apt.
@@ -148,6 +153,36 @@ jobs:
             pkg: clang-19
             eigen: 5.0.1
             label: clang++-19, Eigen 5.0.1
+          # The OpenMP leg. One is enough -- what it guards is MaNTA's own code,
+          # not a front-end difference -- and it exists because until 2026-08-25
+          # *nothing* built with MANTA_OPENMP=ON, so the pragmas had never been
+          # compiled with -fopenmp by anything automated. What that hid: an
+          # exception thrown by a physics hook inside a parallel loop aborted the
+          # process, because gcc's outlined function has no handler above it and
+          # __cxa_call_terminate runs. It killed the whole unit suite, and MaNTA
+          # treats a throwing hook as a *supported* recoverable error.
+          #
+          # util/ParallelFor.hpp fixed it and utility_tests pins it, but those
+          # cases only bite in a build that sets the option -- which is what this
+          # leg is for. See CLAUDE.md, "Parallelism".
+          - cxx: g++-15
+            pkg: g++-15
+            ppa: ubuntu-toolchain-r/test
+            openmp: 'ON'
+            omp_threads: 4
+            label: g++-15, OpenMP
+    # OMP_NUM_THREADS reaches more than MaNTA: -fopenmp loads libgomp, and that
+    # alone is enough for a dispatching BLAS to start threading itself, which
+    # changes floating-point reduction order. On a box whose libblas.so.3 is
+    # libmkl_rt that was enough to fail a tight-tolerance IDACalcIC test in a
+    # build where none of MaNTA's own loops were even parallel. The runner's
+    # libblas-dev is reference BLAS and single-threaded, so these two pins are a
+    # no-op here -- they are set so the leg keeps meaning "MaNTA's threading" if
+    # the image's BLAS ever changes.
+    env:
+      OMP_NUM_THREADS: ${{ matrix.omp_threads || 1 }}
+      OPENBLAS_NUM_THREADS: 1
+      MKL_NUM_THREADS: 1
     steps:
       - uses: actions/checkout@v4
         with:
@@ -186,7 +221,7 @@ jobs:
             libboost-dev \
             libeigen3-dev \
             libnetcdf-dev libnetcdf-c++4-dev \
-            libblas-dev
+            libblas-dev liblapack-dev
 
       # Boost.Test is used in header-only mode (boost/test/included/unit_test.hpp),
       # so libboost-dev alone is enough -- no unit_test_framework link step.
@@ -267,6 +302,8 @@ jobs:
             -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             -DSUNDIALS_ROOT="$PWD/sundials/install" \
             -DPython3_EXECUTABLE="$(which python)" \
+            -DMANTA_OPENMP=${{ matrix.openmp || 'OFF' }} \
+            -DMANTA_LAPACK=${{ matrix.lapack || 'ON' }} \
             ${EIGEN_DIR:+-DMANTA_EIGEN_INCLUDE_DIR="$EIGEN_DIR"}
 
       # Three build steps rather than one `cmake --build build`, so a failure
@@ -398,7 +435,7 @@ jobs:
             boost-devel \
             eigen3-devel \
             netcdf-devel netcdf-cxx4-devel \
-            blas-devel \
+            blas-devel lapack-devel \
             python3-devel
           # Diagnostics only -- which Eigen Fedora shipped is the interesting
           # part, and it moved header between 3.4 and 5.0. `|| true` because run
@@ -479,7 +516,7 @@ jobs:
             libboost-dev \
             libeigen3-dev \
             libnetcdf-dev libnetcdf-c++4-dev \
-            libblas-dev
+            libblas-dev liblapack-dev
 
       # Shares the build legs' key deliberately -- same image, same install.
       - name: Cache SUNDIALS

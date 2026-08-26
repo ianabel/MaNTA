@@ -403,8 +403,17 @@ Pointwise and batched
 **Every physics hook exists in two forms**: pointwise, taking a ``State`` and one
 position, and batched, taking a ``GlobalState`` and a vector of positions. The
 batched versions have default implementations in ``TransportSystem.hpp`` that are
-serial loops over the pointwise version, several of them under
-``#pragma omp parallel for`` when built with ``OMP=on``.
+loops over the pointwise version, through ``manta::parallel_for`` — serial unless
+the build sets ``MANTA_OPENMP``, and serial regardless below a floor of 64 points,
+which every fixture in this tree is under.
+
+That matters for a case with mutable state. With threading on, the pointwise hook
+is called concurrently for distinct points on one instance, so a hook that writes
+to a member — a cache, a scratch vector — is a data race. The interface has always
+been shaped for this (the derivative out-parameters are per-point, and
+``AuxGPrime``'s ``State`` is constructed inside the loop body for exactly this
+reason), but nothing enforces it. A case that cannot meet it should override the
+batched level and do its own thing there.
 
 A case may override either level. Overriding the batched level is how a
 vectorised implementation — a JAX case, say — avoids being called once per point.

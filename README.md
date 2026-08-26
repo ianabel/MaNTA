@@ -103,9 +103,12 @@ ctest --test-dir build        # all three suites
 `--preset default` is a Release build: `-O3 -flto=auto -march=native`, with
 assertions left **on** — CMake would normally add `-DNDEBUG` to a Release build
 and this one deliberately does not, because Eigen's own assertions are the
-diagnostic of record for a whole class of defect here. The other presets are
-`debug`, `coverage` and `portable` (Release without `-march=native`, for a binary
-that has to run on a different machine).
+diagnostic of record for a whole class of defect here. They cost about 2.5% at
+`Polynomial_degree = 3` and 7–9% at 8–10; `-DMANTA_ASSERTS=OFF` defines `NDEBUG`
+and buys that back, which is worth doing for a long high-degree run and not much
+else. `CLAUDE.md` has the numbers. The other presets are `debug`, `coverage` and
+`portable` (Release without `-march=native`, for a binary that has to run on a
+different machine).
 
 In practice one dependency usually does need naming, because distributions rarely
 package SUNDIALS 7:

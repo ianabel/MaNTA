@@ -7,6 +7,7 @@
 #include <filesystem>
 
 #include "Types.hpp"
+#include "util/BandedMatrix.hpp"
 
 #include <Eigen/Core>
 #include <Eigen/Dense>
@@ -927,14 +928,47 @@ class SystemSolver
 
         unsigned int nP;       // Number of parameters to compute for adjoint sensitivity problem
 
+        // The smallest number of cells worth a parallel region.
+        //
+        // Much lower than TransportSystem::physicsGrain because the iteration is
+        // much bigger: one dense factorisation or two dense solves of a
+        // (3 nVars + nAux)(k+1) square, tens of microseconds by k = 4 against a
+        // few for a fork and join. A floor of 32 would turn parallelism off
+        // entirely for the few-cell high-k runs, which measured 1.61x at
+        // nCells = 20, k = 10 -- the smallest grid here that gains anything.
+        static constexpr Index cellGrain = 4;
+
         using EigenCellwiseSolver = Eigen::FullPivLU<Matrix>;
-        using EigenGlobalSolver = Eigen::FullPivLU<Matrix>;
 
         std::vector<Matrix> XMats;
         std::vector<Matrix> MBlocks;
 
         std::vector<Matrix> CEBlocks;
-        Matrix K_global;
+        // The condensed trace operator, banded.
+        //
+        // This was a dense Matrix handed to a dense FullPivLU on every Newton
+        // iteration, which is O(nCells^3) in the one quantity static condensation
+        // exists to make O(nCells) -- and it was 73-91% of a low-k run. It is
+        // block-tridiagonal by construction: cell i couples only the two faces it
+        // owns, so the only entries are those scatterTraceBlock writes.
+        //
+        // **Banded only in trace-major order.** The solution vector indexes
+        // lambda as var*(nCells+1) + node, and in that order two nodes of
+        // different variables are (nCells+1) apart -- a full-width matrix, not a
+        // banded one. Indexed (node, var) instead, the bandwidth is 2*nVars - 1
+        // either side. So the band form carries its own ordering and the trace
+        // solve permutes in and out of it; the DOF layout, the restart format and
+        // everything else are untouched, which is the point.
+        manta::BandedMatrix K_banded;
+
+        // The same operator transposed, for the adjoint. Kept factorised between
+        // calls because solveTransportAdjoint applies A^-T once per right-hand
+        // side while factoriseAdjointTrace builds it once.
+        manta::BandedMatrix adjoint_K_banded;
+
+        // Trace-major scratch for the permutation above, so the trace solve does
+        // not allocate per Newton iteration. Sized in initialiseMatrices.
+        Vector traceRhs;
         Vector L_global;
         Matrix H_global_mat;
         Eigen::FullPivLU<Matrix> H_global;
@@ -958,7 +992,7 @@ class SystemSolver
         // right-hand side. Filled by initializeMatricesForAdjointSolve, which is
         // also the only place MXSolvers holds M^T.
         std::vector<Matrix> adjoint_SQU_0;
-        EigenGlobalSolver adjoint_K;
+
 
         // The coupling blocks as the adjoint needs them: transposed, stored,
         // and used only from here.
@@ -991,7 +1025,26 @@ class SystemSolver
         Vector G_field;
 
         SUNContext ctx;
-        N_Vector *v, *w;
+
+        // The scalar bordering's work vectors: v and w are the Woodbury update's
+        // columns and rows, and solveScalarD/E/G are solveTransportJac's scratch.
+        //
+        // All of them are as long as the whole solution vector and all of them
+        // have the solver's own lifetime, because nScalars is fixed by the
+        // physics case at construction and never changes afterwards. The scratch
+        // three used to be N_VClone'd and destroyed on *every* call -- so once
+        // per Newton iteration, and nField + 1 times that under
+        // solveCoupledJacExact, for nScalars + 2 vectors of getDoF() doubles
+        // each. Nothing about them was ever per-call except the allocation.
+        //
+        // They are handed out through allocate/freeScalarWorkVectors rather than
+        // written out at each of the three sites that own them (constructor,
+        // setFieldModel, destructor), because five vectors across three sites is
+        // exactly the shape that drifts.
+        N_Vector *v = nullptr, *w = nullptr;
+        N_Vector *solveScalarE = nullptr;   // nScalars of A^-1 v[i]
+        N_Vector solveScalarD = nullptr;    // A^-1 res_g
+        N_Vector solveScalarG = nullptr;    // the combined right-hand side
 
         // The field coupling.
         //
@@ -1215,6 +1268,31 @@ class SystemSolver
         // Free the a2 vectors, using the *current* nField as the count -- so
         // call it before changing nField, not after.
         void freeFieldWorkVectors();
+
+        // Where trace node `node` of variable `var` sits in the *band form's*
+        // ordering, which is not the solution vector's. See K_banded.
+        Index traceDoF(Index node, Index var) const { return node * nVars + var; }
+
+        // Accumulate one cell's 2*nVars square trace block -- H - CG SQU_0, or
+        // its adjoint counterpart -- into a banded global operator.
+        void scatterTraceBlock(manta::BandedMatrix &K, Index cell, Matrix const &block) const;
+
+        // Write the identity on the trace rows a Dirichlet end leaves empty, and
+        // zero the matching right-hand side entries. See the definitions.
+        void imposeDirichletTraceRows(manta::BandedMatrix &K) const;
+        void zeroDirichletTraceRows(Eigen::Ref<Vector> traceMajor) const;
+
+        // The two halves of the permutation between the solution vector's
+        // lambda ordering (var-major) and the band form's (trace-major).
+        void toTraceMajor(Eigen::Ref<const Vector> varMajor, Eigen::Ref<Vector> traceMajor) const;
+        void fromTraceMajor(Eigen::Ref<const Vector> traceMajor, Eigen::Ref<Vector> varMajor) const;
+
+        // Allocate, or free, every vector the scalar bordering owns: v, w and
+        // solveTransportJac's scratch. All are getDoF() long, so setFieldModel
+        // has to free and reallocate them when a field block changes that
+        // length. No-ops when nScalars is zero, and free is idempotent.
+        void allocateScalarWorkVectors();
+        void freeScalarWorkVectors();
 
         // The whole Jacobian, densely, in the solution vector's own ordering:
 
