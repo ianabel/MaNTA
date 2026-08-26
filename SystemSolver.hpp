@@ -6,6 +6,7 @@
 #include <nvector/nvector_serial.h>
 #include <filesystem>
 
+#include "PyIntegrator.hpp"
 #include "Types.hpp"
 #include "util/BandedMatrix.hpp"
 
@@ -1025,6 +1026,13 @@ class SystemSolver
         Vector G_field;
 
         SUNContext ctx;
+
+        // The quadrature weights and boundary basis values the scalar hooks are
+        // handed. An instance rather than the namespace of globals this used to
+        // be -- see Integrator::Cache. Mutable because it is a memo: filling it
+        // does not change what this solver *is*, and the const-ness of the
+        // callers should not have to care.
+        mutable Integrator::Cache integrator;
 
         // The scalar bordering's work vectors: v and w are the Woodbury update's
         // columns and rows, and solveScalarD/E/G are solveTransportJac's scratch.

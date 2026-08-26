@@ -279,7 +279,7 @@ void SystemSolver::assembleFieldCoupling(DGSoln const &Y, DGSoln const &Ydot,
     fieldModel->FieldResidualPrime(dR, dRdot, dRdpsi, dRddpsidt,
                                    Vector(Y.getField()), Vector(Ydot.getField()),
                                    Y.evalOnNodes(), Y.getPoints(),
-                                   Integrator::getIntegrationWeights(Y.getBasis(), grid),
+                                   integrator.integrationWeights(Y.getBasis(), grid),
                                    tEval);
 
     // ---- A2: one full-length row vector per field row.
@@ -1339,8 +1339,8 @@ void SystemSolver::assembleScalarCoupling(DGSoln const &Y, DGSoln const &Ydot,
 
     problem->ScalarGPrime(ScalarG_vals, ScalarG_dt_vals, Y.evalOnNodes(), Ydot.evalOnNodes(),
                           Y.getPoints(),
-                          Integrator::getIntegrationWeights(Y.getBasis(), grid),
-                          Integrator::getPhiBoundary(Y.getBasis(), grid), tEval);
+                          integrator.integrationWeights(Y.getBasis(), grid),
+                          integrator.phiBoundary(Y.getBasis(), grid), tEval);
 
     for ( Index j = 0; j < nScalars; ++j ) {
         const auto& s = ScalarG_vals[j];
@@ -2127,8 +2127,8 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
         // every cell and node, and the scalars all see the same state.
         const GlobalState scalarStates = Y_h.evalOnNodes();
         const GlobalState scalarStates_dt = dYdt_h.evalOnNodes();
-        const Vector &weights = Integrator::getIntegrationWeights(Y_h.getBasis(), grid);
-        const Matrix &phiBoundary = Integrator::getPhiBoundary(Y_h.getBasis(), grid);
+        const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
+        const Matrix &phiBoundary = integrator.phiBoundary(Y_h.getBasis(), grid);
 
         for (Index j = 0; j < nScalars; j++)
             res.Scalar(j) = problem->ScalarG(j, scalarStates, scalarStates_dt, Y_h.getPoints(),
@@ -2144,7 +2144,7 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
         // row's integrals are taken against it. The star nodes are a device for
         // the transport residual's projection, not a different set of unknowns.
         const GlobalState fieldStates = Y_h.evalOnNodes();
-        const Vector &weights = Integrator::getIntegrationWeights(Y_h.getBasis(), grid);
+        const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
 
         Vector fieldRes = Vector::Zero(nField);
         fieldModel->FieldResidual(fieldRes, Vector(Y_h.getField()), Vector(dYdt_h.getField()),

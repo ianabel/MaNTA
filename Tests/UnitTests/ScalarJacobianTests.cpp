@@ -167,6 +167,10 @@ public:
 // the term is identically zero and any handling of it looks correct.
 class DifferentialScalarSystem : public MinimalScalarSystem
 {
+    // Its own, not a process-wide one; see Integrator::Cache. mutable because
+    // InitialScalarDerivative is const and filling a memo is not a change.
+    mutable Integrator::Cache integrator;
+
 public:
     DifferentialScalarSystem() : MinimalScalarSystem(true) {}
 
@@ -190,7 +194,7 @@ public:
         // Still a DGSoln hook, so it samples the nodes itself to reach the same
         // mass the constraint uses.
         return BETA * mass(y.evalOnNodes(),
-                           Integrator::getIntegrationWeights(y.getBasis(), y.getGrid()));
+                           integrator.integrationWeights(y.getBasis(), y.getGrid()));
     }
 };
 

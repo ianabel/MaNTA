@@ -6,6 +6,7 @@
 #include <autodiff/forward/dual/eigen.hpp>
 
 #include "AdjointProblem.hpp"
+#include "PyIntegrator.hpp"
 
 #include <boost/math/interpolators/cardinal_cubic_b_spline.hpp>
 using spline = boost::math::interpolators::cardinal_cubic_b_spline<double>;
@@ -119,6 +120,9 @@ protected:
 	std::vector<std::reference_wrapper<Real>> pvals;
 
 private:
+	// See Integrator::Cache. writeDiagnostics is the only caller here.
+	mutable Integrator::Cache m_integrator;
+
 	// API to underlying flux models
 	virtual Real Flux(Index i, RealVector u, RealVector q, Real x, Time t) = 0;
 
