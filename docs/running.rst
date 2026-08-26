@@ -289,6 +289,7 @@ defect in the declaration.
 A field model that **cannot evaluate at the state it is handed** should throw
 from ``FieldResidual``. That is caught and reported to IDA as a *recoverable*
 error, so the step is retried with a smaller ``h`` rather than the run failing.
+
 .. _warm-starts:
 
 Warm starts and ``IDACalcIC``

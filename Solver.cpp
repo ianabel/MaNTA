@@ -58,11 +58,11 @@ void SystemSolver::initialize()
 {
 	int retval;
 
-	// Whatever the field model cached about the last run does not apply about it does not either. This has
-	// to be here rather than in initialiseMatrices(), which is skipped entirely
-	// when `initialised` is already set: that is the RF_cellwise trap, where the
-	// second run on a reused solver solved its initial dydt out of the previous
-	// run's final-time boundary data.
+	// Whatever the field model cached about the last run does not apply to this
+	// one. This has to be here rather than in initialiseMatrices(), which is
+	// skipped entirely when `initialised` is already set: that is the
+	// RF_cellwise trap, where the second run on a reused solver solved its
+	// initial dydt out of the previous run's final-time boundary data.
 	if (fieldModel)
 		fieldModel->resetForRun();
 
