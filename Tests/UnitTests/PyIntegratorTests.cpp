@@ -146,7 +146,8 @@ BOOST_AUTO_TEST_CASE(two_caches_do_not_share_state)
     // With one process-wide cache, two owners at different orders evicted each
     // other's weights on every call -- silently, since the answers stayed right
     // and only the work was repeated. Worse, it was unsynchronised mutable state
-    // reachable from a module that declares py::mod_gil_not_used().
+    // reachable from Python, safe only because the GIL happened to serialise
+    // every call in -- see the PYBIND11_MODULE note in Python.cpp.
     //
     // Interleaved deliberately: alternating between the two is what a solver and
     // a physics case at different degrees actually did.

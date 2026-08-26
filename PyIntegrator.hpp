@@ -30,10 +30,12 @@ namespace Integrator {
 ///    A solver at k = 3 and a physics case at k = 4 evict each other's weights
 ///    on alternate calls, and nothing says so; it is a silent recomputation, not
 ///    a wrong answer, which is why it could sit there indefinitely.
-///  * It is unsynchronised mutable state reachable from a Python module that
-///    declares `py::mod_gil_not_used()`. On a free-threaded interpreter that
-///    declaration says this module does not need the GIL to be safe, and a
-///    process-wide map being mutated on first touch is not.
+///  * It is unsynchronised mutable state reachable from Python. That does not
+///    race today only because PyRunner never releases the GIL, so the GIL
+///    serialises every call into this module -- see the note on
+///    `PYBIND11_MODULE` in Python.cpp, which is why the free-threading tag is
+///    *not* declared there. Relying on that is fine; relying on it without
+///    knowing you are is how a process-wide map mutated on first touch survives.
 ///
 /// Per-owner instances answer all three: the lifetime is the owner's, two owners
 /// cannot evict each other, and nothing is shared across threads that did not
