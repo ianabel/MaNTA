@@ -403,17 +403,21 @@ Pointwise and batched
 **Every physics hook exists in two forms**: pointwise, taking a ``State`` and one
 position, and batched, taking a ``GlobalState`` and a vector of positions. The
 batched versions have default implementations in ``TransportSystem.hpp`` that are
-loops over the pointwise version, through ``manta::parallel_for`` — serial unless
-the build sets ``MANTA_OPENMP``, and serial regardless below a floor of 64 points,
-which every fixture in this tree is under.
+serial loops over the pointwise version.
 
-That matters for a case with mutable state. With threading on, the pointwise hook
-is called concurrently for distinct points on one instance, so a hook that writes
-to a member — a cache, a scratch vector — is a data race. The interface has always
-been shaped for this (the derivative out-parameters are per-point, and
-``AuxGPrime``'s ``State`` is constructed inside the loop body for exactly this
-reason), but nothing enforces it. A case that cannot meet it should override the
-batched level and do its own thing there.
+**Serial always, including under** ``MANTA_OPENMP``. A case that supplies only
+pointwise hooks is assumed to have a reason, and threading that fallback would
+call arbitrary case code concurrently on one instance — a hook that writes to a
+member, a cache, a scratch vector, would be a data race the solver cannot detect.
+For a Python case it is worse than unsafe: every pointwise trampoline takes the
+GIL, so threads serialise on it and pay a lock handoff per point, which measured
+more than 13x *slower* than running serially.
+
+A case that wants its physics evaluated in parallel overrides the batched level
+and does so on its own terms — which is also where it can cross into Python once
+for the whole grid instead of once per point, as ``manta.jax`` does. The solver's
+own cell loops are threaded either way, so the assembly and the linear solve are
+parallel regardless of which level a case implements.
 
 A case may override either level. Overriding the batched level is how a
 vectorised implementation — a JAX case, say — avoids being called once per point.

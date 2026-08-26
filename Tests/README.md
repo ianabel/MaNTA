@@ -1132,6 +1132,13 @@ These are deliberate and tracked, not oversights:
 
 ## Threading
 
+The physics is never threaded — the batched wrappers that fall back on pointwise
+hooks are serial loops whatever `MANTA_OPENMP` says, because a case that supplies
+only pointwise hooks never agreed to be called concurrently, and because a Python
+case's GIL makes it more than 13x *slower* rather than faster. Only the solver's
+own cell loops are parallel. `docs/physics_interface.rst` states the rule and
+`CLAUDE.md` has the measurements.
+
 `UtilityTests.cpp` carries four `parallel_for` cases. Three of them are near-
 tautologies in an ordinary build — without `MANTA_OPENMP` the helper is a plain
 loop — and they are there because the thing they pin cost a **process abort**: an

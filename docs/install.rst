@@ -190,17 +190,18 @@ coexist:
 Threading (``MANTA_OPENMP``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Off by default. When on, the cell-independent loops — the batched physics
-wrappers, the per-cell factorisation and solves, and both back-substitutions —
-run through ``manta::parallel_for`` in ``util/ParallelFor.hpp``, which is the
-only place in the tree that writes an ``omp`` pragma.
+Off by default. When on, the solver's cell-independent loops — the per-cell
+factorisation and solves, and both back-substitutions — run through
+``manta::parallel_for`` in ``util/ParallelFor.hpp``, which is the only place in
+the tree that writes an ``omp`` pragma. The *physics* is never threaded; see
+:doc:`physics_interface`.
 
-Four threads are worth roughly 1.5-1.7x across the range measured, from
-:math:`k = 3` on 400 cells to :math:`k = 10` on 20. That is a recent state of
-affairs: while the condensed trace matrix was factorised densely it accounted for
-up to 91% of a low-degree run, and threading bought 11% there however many cores
-it was given. Fixing that unlocked the parallelism as well as removing its own
-cost.
+Four threads are worth 1.3x at :math:`k = 3` on 400 cells, rising to 1.78x at
+:math:`k = 10` on 20 — the more work there is per cell, the better it does. That
+is a recent state of affairs: while the condensed trace matrix was factorised
+densely it accounted for up to 91% of a low-degree run, and threading bought 11%
+there however many cores it was given. Fixing that unlocked the parallelism as
+well as removing its own cost.
 
 Two cautions.
 

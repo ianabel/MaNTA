@@ -7,7 +7,8 @@
 // sake -- the pragmas used to be written out at each site, and three properties
 // they all need were present at none of them.
 //
-//  * **Exceptions.** A physics hook may throw: `static_residual` catches it,
+//  * **Exceptions.** Something under one of these loops may throw, and
+//    `static_residual` catches it,
 //    prints, and returns 1, which IDA treats as recoverable and retries with a
 //    smaller step. That is the documented contract, it has a test, and it is how
 //    a Python case's exception reaches the solver. An exception that escapes an
@@ -30,6 +31,13 @@
 //    iteration, keeps the first one, and rethrows on the calling thread once the
 //    region is over.
 //
+//    That particular route is now closed at the source -- the batched physics
+//    wrappers are serial, so a hook is never called from a worker thread; see
+//    TransportSystem.hpp. The machinery stays because the cell loops that remain
+//    can still throw (Eigen, a bad_alloc, a field model), and because "no
+//    exception can reach here" is a property that holds until someone adds a
+//    call. It cost a process abort once already.
+//
 //  * **A trip-count floor.** Forking a team for a handful of iterations costs
 //    more than it saves, and MaNTA's own fixtures are 3-10 cells. `grain` is the
 //    smallest `n` worth a parallel region for *this* loop's body, so a caller
@@ -50,6 +58,12 @@
 // over cells -- but note it stops holding the moment a loop touches `lambda`,
 // `K_global` or `F`, which live on cell *faces* and so are shared between
 // neighbours. Those loops are not candidates and are marked as such at the site.
+//
+// And it stops holding the moment a body calls a *physics case*, whose hooks are
+// arbitrary user code that never agreed to be called concurrently. Nothing under
+// these loops does any more -- evaluatePhysicsDerivatives runs all of it serially
+// beforehand, and assembleCellMatrix reads XMats rather than re-integrating aFn --
+// which is a property to preserve rather than one to rediscover.
 //
 // Nested calls are safe but pointless: OpenMP leaves nested parallelism off by
 // default, so an inner region runs with a team of one.

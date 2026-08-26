@@ -513,42 +513,71 @@ pointwise hook call, `SystemSolver::cellGrain` is 4 because an iteration is a
 dense factorisation. A single value cannot serve both — a floor of 32 on the cell
 loops would have turned off the *only* regime where threading actually pays.
 
-**Which loops, and which deliberately not.** Parallel: the six batched physics
-wrappers (over `nCells * (k+1)`, or `k+2` superconvergent), the per-cell
-factorisation in `updateMatricesForJacSolve`, the per-cell solves in
-`solveHDGJac`, and both back-substitutions (forward and adjoint). Serial, and
-each says so at the site: anything accumulating into `K_global` or `F`, because
+**Only the solver's cell loops are threaded. The physics is never threaded, and
+that is a policy rather than an omission.** The default batched wrappers in
+`TransportSystem.hpp` — the fallback for a case that supplies only pointwise
+hooks — are plain serial loops. A case that has not provided a batched
+implementation is assumed to have a reason, and threading its hooks would call
+arbitrary case code concurrently on one instance, which nothing here can check
+and the case never agreed to. A case that *wants* parallel physics overrides the
+batched level, which is what those methods are virtual for.
+
+For a Python case the rule is not merely prudent but load-bearing. Every
+pointwise trampoline in `PyTransportSystem` takes the GIL, so N threads serialise
+on it and pay a lock handoff *per point*. Measured: with the wrappers threaded,
+`MANTA_OPENMP=ON` at four threads took the Python suite from ~110 s to **over
+1500 s, where it hit ctest's timeout without finishing** — a floor of 13.6x
+slower, not a failure to speed up. It reached CI as a red required leg. With the
+wrappers serial the same suite is **109.6 s at `OMP_NUM_THREADS=4`**, i.e. back
+to indistinguishable from serial. The vectorised path was always right:
+`PyTransportSystem::ComputePhysics` takes the GIL *once* for the whole grid, and
+`manta.jax` goes through it.
+
+Parallel, then: the per-cell factorisation in `updateMatricesForJacSolve`, the
+per-cell solves in `solveHDGJac`, and both back-substitutions. Serial, each
+saying so at the site: anything accumulating into `K_global` or `F`, because
 **lambda lives on cell faces** so neighbours share the block they write; and the
 adjoint's matrix build, which grows `adjoint_CEBlocks`/`adjoint_CGBlocks` with
 `emplace_back` and runs once per run rather than once per Newton iteration.
-`solveHDGJac` now hoists `CG_cellwise[i] * SQU_f[i]` into the parallel loop so
-the serial `F` assembly is left with 2·nVars subtractions per cell.
 
-**What it is worth.** Measured after the trace solve was made banded, which is
-the thing that decides the answer — see "The trace solve" below. `MKL_NUM_THREADS=1`,
+**Nothing under a parallel loop calls into a physics case any more, and getting
+there found real waste.** `assembleCellMatrix` — which *is* inside the threaded
+cell loop — built its `X` block by integrating `alphaValue * aFn` through a
+30-point Gauss rule per entry, per variable, per cell, on every Jacobian build.
+`aFn` is a pointwise hook and `PyTransportSystem` overrides it with
+`PYBIND11_OVERRIDE`, so a Python case's `aFn` was being called from OpenMP worker
+threads, taking the GIL per quadrature point. But `initialiseMatrices` already
+stores exactly that matrix unweighted in `XMats`, `MassMatrix` is linear in its
+weight, and `aFn` takes no time argument — so `alphaValue * XMats[i]` is the same
+quantity for none of the work. Removing the recomputation is worth **24-32%** on
+its own:
+
+| | before | after |
+|---|---|---|
+| k=3, 400 cells | 555 ms | 395 ms |
+| k=4, 200 cells | 2147 ms | 1624 ms |
+| k=8, 50 cells | 1226 ms | 828 ms |
+| k=10, 20 cells | 755 ms | 512 ms |
+
+The general point is worth more than the number: a quantity that depends on
+neither the state nor the time was being rebuilt once per Newton iteration
+because the assembly that needed it was written in terms of the hook rather than
+in terms of the thing already derived from the hook.
+
+**What threading is worth**, with all of the above in place. `MKL_NUM_THREADS=1`,
 best of 3:
 
-| | 1 thread | 2 | 4 |
-|---|---|---|---|
-| k=3, 400 cells | 608 ms | 429 | **401 (1.52x)** |
-| k=4, 200 cells | 2195 ms | 1505 | **1325 (1.66x)** |
-| k=8, 50 cells | 1235 ms | 811 | **723 (1.71x)** |
-| k=10, 20 cells | 716 ms | 553 | **445 (1.61x)** |
+| | 1 thread | 4 threads |
+|---|---|---|
+| k=3, 400 cells | 482 ms | 371 ms (1.30x) |
+| k=4, 200 cells | 2007 ms | 1235 ms (1.63x) |
+| k=8, 50 cells | 1183 ms | 687 ms (1.72x) |
+| k=10, 20 cells | 676 ms | **379 ms (1.78x)** |
 
-**Those numbers are new, and the old ones are worth knowing about because of what
-changed them.** Before the trace solve was fixed, threading was worth 1.81x at
-k=10 and *1.11x* at k=3 and k=4, and the honest conclusion at the time was "worth
-having above about k = 8, worth nothing below it". That was true, and it was an
-artefact: a dense `FullPivLU` of `K_global` was 91% of the k=3 run and 73% of the
-k=4 one, so Amdahl capped what any amount of parallelism could do. Removing it
-did not merely add its own speedup — it *unlocked* the parallelism, which now
-pays 1.5-1.7x across the whole range.
-
-The general lesson, which is the reason this paragraph exists: **a parallel
-speedup is a statement about the serial fraction, so it expires whenever anything
-else in the profile changes.** Re-measure it after any performance work, and do
-not quote a scaling number without saying what the rest of the program was doing
-at the time.
+Note that taking the physics *out* of the parallel region cost nothing and helped
+everywhere: every absolute time above improved, the single-thread baselines
+included, because `parallel_for` was charging its own overhead — an atomic flag, a
+try/catch, an `exception_ptr` — on loops whose bodies were a single hook call.
 
 **Threading changes no answers, and that is checkable rather than hoped for.**
 There is no reduction anywhere in `parallel_for` — every iteration writes its own

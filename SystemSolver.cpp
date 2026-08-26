@@ -1166,7 +1166,6 @@ Matrix SystemSolver::assembleCellMatrix(Index i, DGSoln const &Y,
                                         GlobalStateMatrix &dSource_vals,
                                         GlobalStateMatrix &dAux_vals, double alphaValue)
 {
-    Eigen::MatrixXd X(nVars * (k + 1), nVars * (k + 1));
     Eigen::MatrixXd NLq(nVars * (k + 1), nVars * (k + 1));
     Eigen::MatrixXd NLu(nVars * (k + 1), nVars * (k + 1));
     Eigen::MatrixXd Ssig(nVars * (k + 1), nVars * (k + 1));
@@ -1181,17 +1180,26 @@ Matrix SystemSolver::assembleCellMatrix(Index i, DGSoln const &Y,
     Eigen::MatrixXd MX(nVars * SQU_DOF + nAux * AUX_DOF, nVars * SQU_DOF + nAux * AUX_DOF);
     MX = MBlocks[i];
 
-    // X matrix
-    X.setZero();
-    for (Index var = 0; var < nVars; var++)
-    {
-        std::function<double(double)> alphaF = [=, this](double x)
-        { return alphaValue * problem->aFn(var, x); };
-        Eigen::MatrixXd Xsubmat((k + 1), (k + 1));
-        Y.getBasis().MassMatrix(I, Xsubmat, alphaF);
-        X.block(var * (k + 1), var * (k + 1), k + 1, k + 1) = Xsubmat;
-    }
-    MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += X;
+    // The X matrix: alphaValue times the aFn-weighted mass matrix, which is
+    // exactly what initialiseMatrices already put in XMats[i].
+    //
+    // This used to re-integrate it here, every Jacobian build, through
+    // MassMatrix(I, ., alphaValue * aFn) -- a 30-point Gauss rule per entry per
+    // variable per cell. MassMatrix is linear in its weight, so scaling the
+    // stored matrix is the same quantity for none of the work, and aFn takes no
+    // time argument so XMats cannot go stale within a run.
+    //
+    // **It also takes a physics hook out of a parallel region.** aFn is a
+    // pointwise hook and PyTransportSystem overrides it via PYBIND11_OVERRIDE, so
+    // while this loop recomputed the quadrature a Python case's aFn was being
+    // called from OpenMP worker threads -- taking the GIL once per quadrature
+    // point, and running user Python concurrently on one object, which is the
+    // thing the batched wrappers were made serial to avoid. Reading XMats closes
+    // that: nothing under updateMatricesForJacSolve's parallel loop calls into a
+    // physics case any more, because evaluatePhysicsDerivatives has already done
+    // all of it, serially, before the loop starts.
+    MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) +=
+        alphaValue * XMats[i];
 
     if (superconvergent)
     {

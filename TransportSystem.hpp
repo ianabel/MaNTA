@@ -7,7 +7,6 @@
 #include "DGSoln.hpp"
 #include "NetCDFIO.hpp"
 #include "AdjointProblem.hpp"
-#include "util/ParallelFor.hpp"
 
 /*
     Pure interface class
@@ -262,40 +261,41 @@ public:
       out[2][i] = AuxG(i, states, abscissae, time);
     return out;
   }
-  // The smallest number of physics points worth a parallel region, for the
-  // default batched wrappers below.
-  //
-  // One iteration is a single pointwise hook call, which for an
-  // AutodiffTransportSystem is a handful of microseconds and for a trivial
-  // analytic case is a great deal less -- so the floor is high compared with the
-  // cell loops in SystemSolver, whose iteration is a dense factorisation.
-  // `states.size()` is nCells * (k+1), or (k+2) with the superconvergent scheme,
-  // so every fixture in this tree (3-10 cells at low k) stays serial and only a
-  // real grid pays for a team.
-  //
-  // A case that overrides these wrappers is on its own; that is the point of
-  // them being virtual.
-  static constexpr Index physicsGrain = 64;
-
   // Wrapper functions which serialise batched evaluations
   //
+  // **Serial, deliberately, and not an oversight to be fixed.** These are the
+  // fallback for a case that supplies only pointwise hooks, and a case that has
+  // not provided a batched implementation is assumed to have a reason. Threading
+  // them would call an arbitrary case's hooks concurrently on one instance --
+  // which nothing here can check and the case never agreed to.
+  //
+  // For a Python case it is not merely unsafe but ruinous. Every pointwise
+  // trampoline in PyTransportSystem takes the GIL, so N threads serialise on it
+  // and pay a lock handoff *per point*: measured, MANTA_OPENMP=ON with four
+  // threads took the Python suite from ~110 s to over 1500 s, where it hit
+  // ctest's timeout without finishing. That is a floor of 13.6x slower, not a
+  // failure to speed up.
+  //
+  // A case that wants its physics parallel overrides the batched level, which is
+  // the whole point of these being virtual -- and where it can cross into Python
+  // once for the entire grid rather than once per point, as
+  // PyTransportSystem::ComputePhysics and manta.jax already do. The solver's own
+  // cell loops are still threaded (see util/ParallelFor.hpp), so a case that
+  // takes this path still gets the assembly and solve parallelism, which is
+  // where the time is.
   virtual Values SigmaFn(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
     Values out(states.size());
-    manta::parallel_for(static_cast<Index>(states.size()),
-                        [&](Index j)
-                        { out(j) = SigmaFn(i, states[j], abscissae[j], time); },
-                        physicsGrain);
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
+      out(j) = SigmaFn(i, states[j], abscissae[j], time);
     return out;
   };
 
   virtual Values Sources(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
     Values out(states.size());
-    manta::parallel_for(static_cast<Index>(states.size()),
-                        [&](Index j)
-                        { out(j) = Sources(i, states[j], abscissae[j], time); },
-                        physicsGrain);
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
+      out(j) = Sources(i, states[j], abscissae[j], time);
     return out;
   };
 
@@ -317,16 +317,13 @@ public:
 
   virtual void dSigma(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
-    manta::parallel_for(
-        static_cast<Index>(states.size()),
-        [&](Index j)
-        {
-          dSigmaFn_du(i, out.Variable(j), states[j], abscissae[j], time);
-          dSigmaFn_dq(i, out.Derivative(j), states[j], abscissae[j], time);
-          if (nAux > 0)
-            dSigma_dPhi(i, out.Aux(j), states[j], abscissae[j], time);
-        },
-        physicsGrain);
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
+    {
+      dSigmaFn_du(i, out.Variable(j), states[j], abscissae[j], time);
+      dSigmaFn_dq(i, out.Derivative(j), states[j], abscissae[j], time);
+      if (nAux > 0)
+        dSigma_dPhi(i, out.Aux(j), states[j], abscissae[j], time);
+    }
   }
 
   // Geometry does not join this batched wrapper, or dSigma's above: both loop
@@ -337,17 +334,14 @@ public:
   // them directly rather than through here.
   virtual void dSources(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
-    manta::parallel_for(
-        static_cast<Index>(states.size()),
-        [&](Index j)
-        {
-          dSources_du(i, out.Variable(j), states[j], abscissae[j], time);
-          dSources_dq(i, out.Derivative(j), states[j], abscissae[j], time);
-          dSources_dsigma(i, out.Flux(j), states[j], abscissae[j], time);
-          if (nAux > 0)
-            dSources_dPhi(i, out.Aux(j), states[j], abscissae[j], time);
-        },
-        physicsGrain);
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
+    {
+      dSources_du(i, out.Variable(j), states[j], abscissae[j], time);
+      dSources_dq(i, out.Derivative(j), states[j], abscissae[j], time);
+      dSources_dsigma(i, out.Flux(j), states[j], abscissae[j], time);
+      if (nAux > 0)
+        dSources_dPhi(i, out.Aux(j), states[j], abscissae[j], time);
+    }
   }
 
   // and initial conditions for u & q
@@ -485,10 +479,8 @@ public:
   virtual Values AuxG(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
     Values out(states.size());
-    manta::parallel_for(static_cast<Index>(states.size()),
-                        [&](Index j)
-                        { out(j) = AuxG(i, states[j], abscissae[j], time); },
-                        physicsGrain);
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
+      out(j) = AuxG(i, states[j], abscissae[j], time);
     return out;
   }
 
@@ -500,20 +492,15 @@ public:
 
   virtual void AuxGPrime(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
-    manta::parallel_for(
-        static_cast<Index>(states.size()),
-        [&](Index j)
-        {
-          // Declared inside the loop body, not outside it. One State shared
-          // across the iterations is a data race with threads on -- every one
-          // writing its own point's derivatives into the same vectors -- and it
-          // also carried one point's values into the next when a hook wrote only
-          // its nonzero entries. Per-iteration, it is private and starts zeroed.
-          State temp(nVars, nScalars, nAux);
-          AuxGPrime(i, temp, states[j], abscissae[j], time);
-          out.setWithState(j, temp);
-        },
-        physicsGrain);
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
+    {
+      // Declared inside the loop body, not outside it. Even serially this
+      // matters: a shared State carried one point's values into the next when a
+      // hook wrote only its nonzero entries. Per-iteration, it starts zeroed.
+      State temp(nVars, nScalars, nAux);
+      AuxGPrime(i, temp, states[j], abscissae[j], time);
+      out.setWithState(j, temp);
+    }
   }
 
   virtual void dSources_dPhi(Index, VectorRef, const State &, Position, Time)
