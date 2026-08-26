@@ -25,8 +25,10 @@
 constexpr std::array<std::string_view, 2> required_method_names = {"SigmaFn", "Sources"};
 
 // Looked up, used when present, and silently zero when not.
-constexpr std::array<std::string_view, 5> optional_derivative_names = {
-    "dSigmaFn_du", "dSigmaFn_dq", "dSources_du", "dSources_dq", "dSources_dsigma"};
+constexpr std::array<std::string_view, 8> optional_derivative_names = {
+    "dSigmaFn_du",        "dSigmaFn_dq",        "dSources_du",
+    "dSources_dq",        "dSources_dsigma",    "dSigmaFn_dGeometry",
+    "dSources_dGeometry", "dAuxG_dGeometry"};
 
 constexpr std::array<std::string_view, 2> required_method_names_vectorized = {
     "ComputePhysics", "ComputePhysicsDerivatives"};
@@ -420,6 +422,57 @@ public:
       throw std::runtime_error(
           std::string(
               "Error occurred when trying to calculate dSources_dsigma: ") +
+          e.what());
+    }
+  };
+
+  void dSigmaFn_dGeometry(Index i, VectorRef v, const State &s, Position x,
+                         Time t) override {
+    if (!initialized)
+      initializeOverrides();
+    try {
+      py::gil_scoped_acquire gil;
+      // Absent means identically zero, and v arrives zeroed.
+      if (auto *f = optional_override("dSigmaFn_dGeometry"))
+        v = (*f)(i, view(s), x, t).cast<Values>();
+    } catch (const std::exception &e) {
+      throw std::runtime_error(
+          std::string(
+              "Error occurred when trying to calculate dSigmaFn_dGeometry: ") +
+          e.what());
+    }
+  };
+
+  void dSources_dGeometry(Index i, VectorRef v, const State &s, Position x,
+                          Time t) override {
+    if (!initialized)
+      initializeOverrides();
+    try {
+      py::gil_scoped_acquire gil;
+      // Absent means identically zero, and v arrives zeroed.
+      if (auto *f = optional_override("dSources_dGeometry"))
+        v = (*f)(i, view(s), x, t).cast<Values>();
+    } catch (const std::exception &e) {
+      throw std::runtime_error(
+          std::string(
+              "Error occurred when trying to calculate dSources_dGeometry: ") +
+          e.what());
+    }
+  };
+
+  void dAuxG_dGeometry(Index i, VectorRef v, const State &s, Position x,
+                       Time t) override {
+    if (!initialized)
+      initializeOverrides();
+    try {
+      py::gil_scoped_acquire gil;
+      // Absent means identically zero, and v arrives zeroed.
+      if (auto *f = optional_override("dAuxG_dGeometry"))
+        v = (*f)(i, view(s), x, t).cast<Values>();
+    } catch (const std::exception &e) {
+      throw std::runtime_error(
+          std::string(
+              "Error occurred when trying to calculate dAuxG_dGeometry: ") +
           e.what());
     }
   };

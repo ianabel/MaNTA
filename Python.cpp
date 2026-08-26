@@ -55,6 +55,17 @@ public:
     value.Derivative() = py::cast<Matrix>(d["Derivative"]).transpose();
     value.Flux() = py::cast<Matrix>(d["Flux"]).transpose();
     value.Aux() = py::cast<Matrix>(d["Aux"]).transpose();
+    // Geometry is optional on the way in: every physics case and test fixture
+    // that predates field models builds a dict with no "Geometry" key, and
+    // GlobalState defaults to zero geometry slots, so a missing key means the
+    // same thing an explicitly empty one would. Still size it to (0, nPoints)
+    // rather than leave it at PYBIND11_TYPE_CASTER's default-constructed 0x0:
+    // operator[] slices every field's column i unconditionally, and a matrix
+    // with zero *columns* fails that where zero *rows* would not.
+    if (d.contains("Geometry"))
+      value.GeometryMatrix() = py::cast<Matrix>(d["Geometry"]).transpose();
+    else
+      value.GeometryMatrix().setZero(0, value.Variable().cols());
 
     auto scalars = py::cast<py::array_t<double>>(d["Scalars"]);
     py::buffer_info info = scalars.request();
@@ -77,6 +88,7 @@ public:
     d["Derivative"] = src.Derivative().transpose();
     d["Flux"] = src.Flux().transpose();
     d["Aux"] = src.Aux().transpose();
+    d["Geometry"] = src.GeometryMatrix().transpose();
     d["Scalars"] = src.Scalars();
     return d.release();
   }
@@ -280,6 +292,14 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def("dSources_du", &TransportSystem::dSources_du)
       .def("dSources_dq", &TransportSystem::dSources_dq)
       .def("dSources_dsigma", &TransportSystem::dSources_dsigma)
+      // Derivatives with respect to a field model's geometry slots. Optional,
+      // like the five above: absent means an identically zero column of the A1
+      // coupling block, which is exactly right for a case that does not read
+      // geometry. They are live -- Matrices.cpp's fieldChainOnNodes calls all
+      // three, once per node, whenever a field model is attached.
+      .def("dSigmaFn_dGeometry", &TransportSystem::dSigmaFn_dGeometry)
+      .def("dSources_dGeometry", &TransportSystem::dSources_dGeometry)
+      .def("dAuxG_dGeometry", &TransportSystem::dAuxG_dGeometry)
       .def("dSigma", &TransportSystem::dSigma)
       .def("dSources", &TransportSystem::dSources)
       .def("InitialValue", &TransportSystem::InitialValue)
@@ -387,6 +407,42 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
   m.def("registerPhysicsCase", &PhysicsCases::RegisterPhysicsCase,
         py::arg("name"), py::arg("factory"), py::return_value_policy::reference,
         "Register a physics case under the name a config file can ask for.");
+
+  // Test support only -- not part of the public API. manta/__init__.py does
+  // not re-export this, so it is reachable only as
+  // manta._manta._test_dSigmaFn_dGeometry, the same way python/Tests already
+  // reaches manta._manta.runner_ffi_ops directly rather than through the
+  // curated `manta` surface.
+  //
+  // It exists because dSigmaFn_dGeometry has no batched (GlobalState-taking)
+  // entry point the way SigmaFn/Sources/AuxG do -- the A1 assembly in
+  // Matrices.cpp calls the *pointwise* hook per node through a member pointer
+  // -- and a State cannot be constructed standalone from Python (see
+  // PyState.hpp), so python/Tests/test_trampolines.py had no way at all to
+  // drive PyTransportSystem.hpp's pointwise dSigmaFn_dGeometry dispatcher, its
+  // optional_override lookup, and the Values cast.
+  //
+  // A free function rather than a TransportSystem method, deliberately: it
+  // adds nothing inheritable or overridable to the interface a physics case
+  // implements, unlike a batched virtual would. It builds a State carrying
+  // only the given geometry (u/q/sigma/phi are left zero, since this is
+  // about the geometry dispatch, not the physics) and calls the pointwise
+  // hook directly -- exactly what a C++ test does, and what the real caller
+  // does: Matrices.cpp's fieldChainOnNodes builds the A1 column the same way,
+  // one pointwise call per node.
+  m.def(
+      "_test_dSigmaFn_dGeometry",
+      [](TransportSystem &sys, Index i, Vector const &geom, Position x, Time t) {
+        State s(sys.getNumVars(), sys.getNumScalars(), sys.getNumAux(),
+                static_cast<Index>(geom.size()));
+        s.geom() = geom;
+        Vector out = Vector::Zero(geom.size());
+        sys.dSigmaFn_dGeometry(i, out, s, x, t);
+        return out;
+      },
+      py::arg("sys"), py::arg("i"), py::arg("geom"), py::arg("x"), py::arg("t"),
+      "Test support only: builds a State carrying the given geometry and calls "
+      "the pointwise dSigmaFn_dGeometry dispatcher directly.");
 
   m.def("physics_cases", &PhysicsCases::RegisteredNames,
         "Every physics case name manta.Runner(name) will accept, ascending. "

@@ -9,7 +9,7 @@ export
 
 include Makefile.config
 
-SOURCES = Config.cpp ConfigSchema.cpp SolverConfig.cpp SystemSolver.cpp SunLinSolWrapper.cpp SunMatrixWrapper.cpp ErrorChecker.cpp Solver.cpp Matrices.cpp DGStatic.cpp PhysicsCases.cpp NetCDFIO.cpp AdjointVectors.cpp Postprocessing.cpp SteadyState.cpp DegreeAdaptation.cpp
+SOURCES = Config.cpp ConfigSchema.cpp SolverConfig.cpp SystemSolver.cpp SunLinSolWrapper.cpp SunMatrixWrapper.cpp ErrorChecker.cpp Solver.cpp Matrices.cpp DGStatic.cpp PhysicsCases.cpp NetCDFIO.cpp AdjointVectors.cpp Postprocessing.cpp FieldModel.cpp SteadyState.cpp DegreeAdaptation.cpp
 
 HEADERS = Config.hpp Logging.hpp gridStructures.hpp SunLinSolWrapper.hpp SunMatrixWrapper.hpp SystemSolver.hpp ErrorChecker.hpp TransportSystem.hpp PhysicsCases.hpp DGSoln.hpp Basis.hpp AdjointProblem.hpp State.hpp
 
@@ -184,11 +184,15 @@ LIBMANTA = libmanta.so
 
 # Every header a physics case can reach transitively, keeping the directory
 # layout so the #includes inside them still resolve.
+# FieldModel.hpp and FieldModelSpec.hpp are here for the same reason
+# PhysicsCases.hpp is: the field-model registry, the (toml::value, Grid)
+# constructor and the REGISTER_FIELD_MODEL_* macros exist for out-of-tree
+# models, so a model cannot be built at all without them.
 # sort, for its side effect of removing duplicates: several of these are
 # already in $(HEADERS), and `install` refuses to overwrite a just-created file.
 INSTALL_HEADERS = $(sort $(HEADERS) Types.hpp State.hpp SystemSpec.hpp DGApprox.hpp \
                          PyIntegrator.hpp PyGrid.hpp Postprocessing.hpp NetCDFIO.hpp \
-                         AdjointProblem.hpp)
+                         AdjointProblem.hpp FieldModel.hpp FieldModelSpec.hpp)
 
 $(LIBMANTA): $(OBJECTS) $(PHYSICS_OBJECTS) MaNTA.o
 	$(CXX) $(CXXFLAGS) -shared -fPIC -o $@ $(OBJECTS) $(PHYSICS_OBJECTS) MaNTA.o $(LDFLAGS)

@@ -129,15 +129,20 @@ sigma_i    = sigma_hat_i(u, q, x, t)          # the flux
 q_i        = d_x u_i                          # introduced as an unknown
 G_j(phi, u, q, sigma, x) = 0                  # nAux algebraic auxiliary constraints
 G_s(mu, y, dy/dt, t)     = 0                  # nScalars global (non-spatial) unknowns
+R_m(psi, dpsi/dt, y, t)  = 0                  # nField magnetic-field unknowns
 ```
 
 `sigma`, `q`, `u` and the auxiliary variables `phi` live per cell; `lambda` is
-the HDG trace unknown on cell faces; `mu` are the global scalars. That ordering —
-**`[sigma | q | u | aux]` per cell, then all of `lambda`, then `mu`** — is the
-DOF layout of both the solution vector (`DGSoln::Map`) and the local Jacobian
-block `MX`, and getting a column index wrong there is the most common way to
-break the solver silently. Note that only `PhysicsCases/` may be physics; the
-core is generic.
+the HDG trace unknown on cell faces; `mu` are the global scalars; `psi` are a
+field model's unknowns and are absent unless one is attached. That ordering —
+**`[sigma | q | u | aux]` per cell, then all of `lambda`, then `mu`, then
+`psi`** — is the DOF layout of both the solution vector (`DGSoln::Map`) and the
+local Jacobian block `MX`, and getting a column index wrong there is the most
+common way to break the solver silently. `DGSoln::getDoF()` is the one authority
+on the total length: the formula was open-coded in three places, and the copy
+that did not know about `nField` wrote a *short* restart file whose recorded
+`nDOF` matched the uncoupled formula — so the truncated file read back as
+consistent. Note that only `PhysicsCases/` may be physics; the core is generic.
 
 **The second line above is a sign convention, not an identity: the stored `sigma`
 is `-sigma_hat`.** `residual` forms the flux row as
@@ -594,6 +599,114 @@ vector (`s.u()`), which is what the autodiff layer builds its RealVectors from.
 and batched (`SigmaFn(i, GlobalState, positions, t)`). The batched defaults in
 `TransportSystem.hpp` are serial loops over the pointwise version, several under
 `#pragma omp parallel for`; a case may override either level.
+
+### Self-consistent magnetic fields (`FieldModel`)
+
+A `FieldModel` (`FieldModel.hpp`) contributes `nFieldDOF` unknowns `psi`, one
+residual row each, and `nGeometry` derived *geometry slots* `g_s(psi, x, t)`.
+It follows the physics-case pattern throughout — a validated spec, a
+process-global registry with the same two throws, its own toml table, selected
+by name from the config. `docs/field_coupling.rst` is the interface document and
+`--list-options` prints the five keys; what follows is what neither says.
+`docs/superpowers/notes/2026-08-16-self-consistent-b-fields-design-notes.md`
+records why the design has this shape, where it departed from its own spec, and
+every number quoted below.
+
+**The geometry slots are the only channel into the transport physics**, and they
+are not unknowns: they are a function of `(psi, x)` evaluated at the physics
+nodes and cached per residual, in the same standing as `sigmaHat`. A case reads
+them as `State::geom(s)`. Nothing else crosses in either direction.
+
+**`FieldModelSpec` is not `FieldSpec`.** `SystemSpec.hpp` already defines a
+global `struct FieldSpec`, the per-transport-variable descriptor bound to Python
+as `manta.Field`. Reusing the name compiles every translation unit cleanly and
+fails only at link time, as an ODR violation naming neither type. Do not shorten
+it back.
+
+**The whole thing is inert when unused, and that is checked by hand rather than
+asserted.** `psi` goes *last* in the layout so nothing before it moves, and
+every existing config has no field model. The check is to build `main`, run both
+binaries over every `Tests/RegressionTests/*.conf` from the same directory and
+`cmp` — netCDF files carry no timestamp of their own, so a byte comparison is
+legitimate, and the regression suite's 5e-3 is far too loose to see a change of
+this kind. Last measured: all 14 `.nc` byte identical; all 14 `.restart.nc`
+identical apart from the deliberately added `int nField = 0`. Re-run it after
+anything that touches the DOF layout, the residual or the Jacobian solve.
+
+**Which test catches which failure class — the three-way split is the point.**
+
+* A wrong `A1` or `A2` (the coupling Jacobian blocks) costs Newton iterations
+  and *nothing else*, because the coupled Jacobian is never assembled. Only
+  `FieldJacobianTests.cpp` sees it, by finite-differencing the residual and
+  requiring `J dy = g` with `FieldSolve = exact`.
+* A wrong coupled *residual* — a sign, a factor — converges at the right rate to
+  the wrong function. No Jacobian check sees it; only the closed-form comparison
+  in `MMSFieldTests.cpp` does. A 5% error in the field row, not even a sign
+  error, drops the `k = 2` orders to 0.26, 0.00, -0.00.
+* A wrong *transpose* of either is a silently wrong gradient beside a perfectly
+  good `G`, and only `FieldAdjointTests.cpp` sees that. **This is the adjoint
+  asymmetry, and it is the same one `dSigma/dPhi` demonstrated**:
+  `initializeMatricesForAdjointSolve` stores `A1^T` and `A2^T` beside `M^T`, so
+  a coupling added to `updateMatricesForJacSolve` and not to it degrades a
+  forward run's convergence and corrupts a gradient. They are *materialised*
+  rather than transposed at each use precisely so a test can zero one and
+  require the gradient to go wrong.
+
+Two more properties nothing else pins. `resetForRun()` is called from the
+**unconditional** part of `initialize()` — not from `initialiseMatrices`, which
+`initialize` skips when already initialised: that is the `RF_cellwise` trap, and
+a model caching an equilibrium across runs is exactly the shape that falls into
+it. `a_coupled_solver_reused_matches_a_fresh_one_bit_for_bit` is the only thing
+standing between that and a second run that completes, looks plausible and is
+wrong; breaking either the fixture's `resetForRun` or `initialize`'s call to it
+moves the answer by 3.2e-4. And `psi_round_trips_through_a_restart` uses a
+**differential** field DOF deliberately: `IDA_YA_YDP_INIT` solves for algebraic
+*values*, so an algebraic `psi` would be recomputed from the restored transport
+state and the case would pass without ever reading `psi` off disk.
+
+**`FieldSolve = iterative` is a cost choice, never an accuracy one.** The block
+Gauss-Seidel sweep escalates to the exact Schur solve when it exhausts its cap,
+in *both* the forward and the adjoint directions, so it can be slower than
+`exact` and can never be less accurate. The break-even is
+`#sweeps < nField + 1` — one transport solve per sweep against `nField + 1` for
+the exact solve — and **no fixture in this tree is on the winning side of it**:
+iterative is ~1.5x more expensive at `nField = 1` and 2.2-6.3x at `nField = 5`.
+It is a bet on `N_magnetics >> N_HDG`, which nothing here exercises. Note that
+isolated Jacobian solves with *random* right-hand sides needed 13-38 sweeps at
+`nField = 5`, while a real integration averages 2.5-3.6 and has never hit the
+cap; Newton's right-hand sides are far more benign than random vectors, and
+neither number says anything about the cap on its own.
+`FieldSolveMaxAdjointSweeps` defaults to 100 against `FieldSolveMaxSweeps`'s 20
+because the adjoint always runs at `cj = 0`, where the coupling is stiffest.
+`TODO` records two candidate latches for a run that falls back on every solve;
+neither is implemented.
+
+The refusals, each at the earliest point the combination is known:
+`nScalars > 0` with a field model (`setFieldModel` — the non-superconvergent
+`dSources_dScalars` branch builds its `State` from `DGSoln::evalOnNode`, which
+has no geometry rows, so a case reading geometry there would work with
+`Superconvergent = true` and read out of bounds with it off); a field DOF
+declared differential whose row carries no `d/dt` (`initialize`, naming the DOF,
+because left to IDA it is `IDA_LINESEARCH_FAIL`); a restart whose file's
+`nField` disagrees with the configured model's; and **four naming refusals that
+exist because the spec's names are now netCDF names** — a name netCDF would
+reject, and a DOF sharing a name with a geometry slot, both in
+`FieldModelSpec::validate()`; a group name colliding with a transport variable,
+an aux variable or one of `Grid`/`RestartData`/`x`/`t`/`nVariables`, in
+`setFieldModel`, which is the earliest point that knows both. Left to netCDF
+these are an `NcBadName` or `NcNameInUse` out of `ncGroup.cpp` at the *first
+write*, naming netCDF's source and a line number and neither MaNTA nor the
+spec. The DOF-versus-slot one is new with this layout: the two lists used to be
+written nowhere near each other and now share one group, and `checkNames`
+compares each list only with itself.
+
+**The restart test's oracle is the raw netCDF array, not `getSolution()`.**
+`yJac` is filled through `DGSoln::copy`, which is the function that carries the
+field block — so a comparison rooted in `getSolution()` on both sides agrees at
+zero when `psi_ = other.psi_` is deleted, and the case passes while `psi` is not
+being copied at all. Measured: green under that deletion with the old oracle,
+three failures with the new one. The same trap applies to any future check of a
+quantity `copy` moves.
 
 ### Python layer
 
@@ -1274,6 +1387,21 @@ These are deliberate and documented, not oversights — see `Tests/README.md` an
   a restart file carries, and `AuxVarTest`'s missing `dSigma_dPhi` block.
   `MatTest` stays at `1e-4` for cost, not capability — 1e-6 takes 101 s against
   6.0 s.
+  A coupled restart is not in that class either — `psi` is copied out of the
+  file and, being differential, held fixed by `IDACalcIC`, so it round-trips
+  bit for bit at whatever tolerance the run itself survives.
+* **No field model is registered anywhere in the tree**, so `FieldModel` has
+  nothing to name in the shipped binary and there is no coupled regression case.
+  The two models that exist are unregistered fixtures under `Tests/UnitTests`.
+  `Tests/README.md` names what this leaves uncovered: nothing exercises the
+  coupled path through a `.conf` file, so the config plumbing and the netCDF
+  group have unit-test cover only.
+* **A field model cannot be reached from Python.** `FieldModel` has no pybind11
+  class and `FieldModel` is a `ProblemSelection` key, so it is an error in a
+  `Runner.configure` dict. `PyRunner::configure` therefore *refuses* a restart
+  file whose `nField` is nonzero, by name, rather than reading `psi` into a
+  vector with no field block — which would surface as an `nVars`/`nAux`/
+  `nScalars` length complaint naming three things that are all fine.
 * ~~`python/Tests/test_reference_solutions.py::test_jax_aux_test` is a
   `strict=True` xfail.~~ Fixed. It was four faults in `manta.jax`, all reachable
   only with `nAux > 0`: `AuxGPrime` and `dAux_dp` take an extra argument ahead

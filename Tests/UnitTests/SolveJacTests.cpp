@@ -464,6 +464,74 @@ BOOST_AUTO_TEST_CASE(the_flag_off_jacobian_is_unaffected_by_the_new_code_path)
     }
 }
 
+BOOST_AUTO_TEST_CASE(solve_jac_eq_without_a_field_model_is_the_transport_solve)
+{
+    // The zero-coupling invariant, at the one place the field work edits the
+    // path every existing run takes. solveJacEq now dispatches -- transport
+    // solve, exact Schur solve, or (later) the iterative one -- and with no
+    // field model attached it has to be the first of those *bit for bit*, not
+    // merely to within a tolerance. A dispatcher that dropped through to a
+    // coupled path with nField = 0 would produce the same answer by a different
+    // route and cost every uncoupled run the difference.
+    //
+    // The coupled side of the same dispatch is checked in FieldJacobianTests.
+    const Index k = 2, nCells = 4;
+    const double tau = 0.75, cj = 1.5, t = 0.0;
+
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(diffusion_config);
+
+    SystemSolver sys(grid, k, &problem);
+    sys.setTau(tau);
+    sys.resetCoeffs();
+    sys.initialiseMatrices();
+
+    SUNContext ctx;
+    SUNContext_Create(SUN_COMM_NULL, &ctx);
+
+    DGSoln shape(problem.getNumVars(), grid, k);
+    const Index n = shape.getDoF();
+
+    N_Vector Y = N_VNew_Serial(n, ctx), dYdt = N_VClone(Y);
+    N_VConst(0.0, Y);
+    N_VConst(0.0, dYdt);
+    sys.setInitialConditions(Y, dYdt);
+
+    sys.setJacTime(t);
+    sys.setAlpha(cj);
+    sys.setJacEvalY(Y, dYdt);
+    sys.updateBoundaryConditions(t);
+    sys.updateMatricesForJacSolve();
+
+    N_Vector g = N_VNew_Serial(n, ctx);
+    N_Vector viaJacEq = N_VClone(g), viaTransport = N_VClone(g), viaHDG = N_VClone(g);
+    double *ga = N_VGetArrayPointer(g);
+    for (Index i = 0; i < n; ++i)
+        ga[i] = std::sin(1.0 + i * 0.7);
+
+    sys.solveJacEq(g, viaJacEq);
+    sys.solveTransportJac(g, viaTransport);
+    sys.solveHDGJac(g, viaHDG);
+
+    const double *a = N_VGetArrayPointer(viaJacEq);
+    const double *b = N_VGetArrayPointer(viaTransport);
+    const double *c = N_VGetArrayPointer(viaHDG);
+    for (Index i = 0; i < n; ++i)
+    {
+        BOOST_TEST(a[i] == b[i]);
+        // ...and with no scalars either, the transport solve is solveHDGJac.
+        BOOST_TEST(a[i] == c[i]);
+    }
+
+    N_VDestroy(g);
+    N_VDestroy(viaJacEq);
+    N_VDestroy(viaTransport);
+    N_VDestroy(viaHDG);
+    N_VDestroy(Y);
+    N_VDestroy(dYdt);
+    SUNContext_Free(&ctx);
+}
+
 // ------------------------------------------- the scalar (Woodbury) path --
 //
 // Moved to ScalarJacobianTests.cpp, which settles it properly: the check here

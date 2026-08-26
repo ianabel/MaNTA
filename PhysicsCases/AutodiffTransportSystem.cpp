@@ -61,8 +61,9 @@ Value AutodiffTransportSystem::SigmaFn(Index i, const State &s, Position x, Time
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
+	RealVector geom(s.geom());
 
-	return Flux(i, u, q, x, t).val;
+	return Flux(i, u, q, geom, x, t).val;
 }
 
 Value AutodiffTransportSystem::Sources(Index i, const State &s, Position x, Time t)
@@ -72,8 +73,9 @@ Value AutodiffTransportSystem::Sources(Index i, const State &s, Position x, Time
 	RealVector sigma(s.sigma());
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
+	RealVector geom(s.geom());
 
-	return Source(i, u, q, sigma, phi, Scalar, x, t).val;
+	return Source(i, u, q, sigma, phi, Scalar, geom, x, t).val;
 }
 
 // We need derivatives of the flux functions
@@ -81,22 +83,36 @@ void AutodiffTransportSystem::dSigmaFn_du(Index i, VectorRef grad, const State &
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
+	RealVector geom(s.geom());
 
 	Real uout;
 
-	autodiff::gradient([this, i](RealVector uD, RealVector qD, Position X, Time T)
-					   { return this->Flux(i, uD, qD, X, T); }, wrt(u), at(u, q, x, t), uout, grad);
+	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector geomD, Position X, Time T)
+					   { return this->Flux(i, uD, qD, geomD, X, T); }, wrt(u), at(u, q, geom, x, t), uout, grad);
 }
 
 void AutodiffTransportSystem::dSigmaFn_dq(Index i, VectorRef grad, const State &s, Position x, Time t)
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
+	RealVector geom(s.geom());
 
 	Real uout;
 
-	autodiff::gradient([this, i](RealVector uD, RealVector qD, Position X, Time T)
-					   { return this->Flux(i, uD, qD, X, T); }, wrt(q), at(u, q, x, t), uout, grad);
+	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector geomD, Position X, Time T)
+					   { return this->Flux(i, uD, qD, geomD, X, T); }, wrt(q), at(u, q, geom, x, t), uout, grad);
+}
+
+void AutodiffTransportSystem::dSigmaFn_dGeometry(Index i, VectorRef grad, const State &s, Position x, Time t)
+{
+	RealVector u(s.u());
+	RealVector q(s.q());
+	RealVector geom(s.geom());
+
+	Real uout;
+
+	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector geomD, Position X, Time T)
+					   { return this->Flux(i, uD, qD, geomD, X, T); }, wrt(geom), at(u, q, geom, x, t), uout, grad);
 }
 
 // and for the sources
@@ -107,12 +123,13 @@ void AutodiffTransportSystem::dSources_du(Index i, VectorRef grad, const State &
 	RealVector sigma(s.sigma());
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
+	RealVector geom(s.geom());
 
 	Real uout;
 
-	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)
-			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, X, T); },
-			 wrt(u), at(u, q, sigma, phi, Scalar, x, t), uout, grad);
+	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, RealVector geomD, Position X, Time T)
+			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, geomD, X, T); },
+			 wrt(u), at(u, q, sigma, phi, Scalar, geom, x, t), uout, grad);
 }
 
 void AutodiffTransportSystem::dSources_dq(Index i, VectorRef grad, const State &s, Position x, Time t)
@@ -122,12 +139,13 @@ void AutodiffTransportSystem::dSources_dq(Index i, VectorRef grad, const State &
 	RealVector sigma(s.sigma());
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
+	RealVector geom(s.geom());
 
 	Real uout;
 
-	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)
-			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, X, T); },
-			 wrt(q), at(u, q, sigma, phi, Scalar, x, t), uout, grad);
+	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, RealVector geomD, Position X, Time T)
+			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, geomD, X, T); },
+			 wrt(q), at(u, q, sigma, phi, Scalar, geom, x, t), uout, grad);
 }
 
 void AutodiffTransportSystem::dSources_dsigma(Index i, VectorRef grad, const State &s, Position x, Time t)
@@ -137,12 +155,13 @@ void AutodiffTransportSystem::dSources_dsigma(Index i, VectorRef grad, const Sta
 	RealVector sigma(s.sigma());
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
+	RealVector geom(s.geom());
 
 	Real uout;
 
-	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)
-			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, X, T); },
-			 wrt(sigma), at(u, q, sigma, phi, Scalar, x, t), uout, grad);
+	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, RealVector geomD, Position X, Time T)
+			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, geomD, X, T); },
+			 wrt(sigma), at(u, q, sigma, phi, Scalar, geom, x, t), uout, grad);
 }
 
 void AutodiffTransportSystem::dSources_dPhi(Index i, VectorRef grad, const State &s, Position x, Time t)
@@ -152,12 +171,13 @@ void AutodiffTransportSystem::dSources_dPhi(Index i, VectorRef grad, const State
 	RealVector sigma(s.sigma());
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
+	RealVector geom(s.geom());
 	// phi.resize(nVars);
 	Real uout;
 
-	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)
-			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, X, T); },
-			 wrt(phi), at(u, q, sigma, phi, Scalar, x, t), uout, grad);
+	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, RealVector geomD, Position X, Time T)
+			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, geomD, X, T); },
+			 wrt(phi), at(u, q, sigma, phi, Scalar, geom, x, t), uout, grad);
 }
 
 void AutodiffTransportSystem::dSources_dScalars(Index i, VectorRef grad, const State &s, Position x, Time t)
@@ -167,32 +187,63 @@ void AutodiffTransportSystem::dSources_dScalars(Index i, VectorRef grad, const S
 	RealVector sigma(s.sigma());
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
+	RealVector geom(s.geom());
 
 	Real uout;
 
-	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)
-			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, X, T); },
-			 wrt(Scalar), at(u, q, sigma, phi, Scalar, x, t), uout, grad);
+	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, RealVector geomD, Position X, Time T)
+			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, geomD, X, T); },
+			 wrt(Scalar), at(u, q, sigma, phi, Scalar, geom, x, t), uout, grad);
 }
 
+void AutodiffTransportSystem::dSources_dGeometry(Index i, VectorRef grad, const State &s, Position x, Time t)
+{
+	RealVector u(s.u());
+	RealVector q(s.q());
+	RealVector sigma(s.sigma());
+	RealVector phi(s.phi());
+	RealVector Scalar(s.scalars());
+	RealVector geom(s.geom());
+
+	Real uout;
+
+	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, RealVector geomD, Position X, Time T)
+			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, geomD, X, T); },
+			 wrt(geom), at(u, q, sigma, phi, Scalar, geom, x, t), uout, grad);
+}
+
+// Through the *geometry-aware* Flux overload, like every other hook here.
+//
+// This differentiated the 4-arg one until the adjoint learned about the field
+// coupling, and the difference was not academic. The 4-arg overload is the
+// mandatory pure virtual, so a geometry-dependent case is forced to write some
+// body for it to compile at all; whatever that stand-in computes is what this
+// function would have differentiated, rather than the real flux. dSigmaFn_dp
+// feeds F_p in computeAdjointGradients, so the symptom would have been a wrong
+// gradient beside a perfectly good G -- the one failure shape the adjoint has
+// nothing to report it with.
 void AutodiffTransportSystem::dSigmaFn_dp(Index i, Index pIndex, Value &grad, const State &s, Position x, Time t)
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
+	RealVector geom(s.geom());
 	// make sure all gradients are zero
 	Real p = getPval(pIndex);
 
 	grad = autodiff::derivative(
-		[this, i, pIndex](Real p, RealVector uD, RealVector qD, Position X, Time T)
+		[this, i, pIndex](Real p, RealVector uD, RealVector qD, RealVector geomD, Position X, Time T)
 		{
 			setPval(pIndex, p);
-			return Flux(i, uD, qD, X, T);
+			return Flux(i, uD, qD, geomD, X, T);
 		},
-		wrt(p), at(p, u, q, x, t));
+		wrt(p), at(p, u, q, geom, x, t));
 
 	clearGradients();
 }
 
+// The same fix as dSigmaFn_dp above, for Source: the 9-arg geometry-aware
+// overload, not the 8-arg one every geometry-dependent case would only have
+// written to satisfy the compiler.
 void AutodiffTransportSystem::dSources_dp(Index i, Index pIndex, Value &grad, const State &s, Position x, Time t)
 {
 	RealVector u(s.u());
@@ -200,17 +251,18 @@ void AutodiffTransportSystem::dSources_dp(Index i, Index pIndex, Value &grad, co
 	RealVector sigma(s.sigma());
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
+	RealVector geom(s.geom());
 
 	Real p = getPval(pIndex);
 
 	grad = autodiff::derivative(
-		[this, i, pIndex](Real p, RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, Position X, Time T)
+		[this, i, pIndex](Real p, RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, RealVector geomD, Position X, Time T)
 		{
 			setPval(pIndex, p);
-			Real S = Source(i, uD, qD, sD, phiD, ScalarD, X, T);
+			Real S = Source(i, uD, qD, sD, phiD, ScalarD, geomD, X, T);
 			return S;
 		},
-		wrt(p), at(p, u, q, sigma, phi, Scalar, x, t));
+		wrt(p), at(p, u, q, sigma, phi, Scalar, geom, x, t));
 
 	// make sure all gradients are zero
 	clearGradients();
@@ -222,8 +274,9 @@ Value AutodiffTransportSystem::AuxG(Index i, const State &s, Position x, Time t)
 	RealVector q(s.q());
 	RealVector sigma(s.sigma());
 	RealVector phi(s.phi());
+	RealVector geom(s.geom());
 
-	return GFunc(i, u, q, sigma, phi, x, t).val;
+	return GFunc(i, u, q, sigma, phi, geom, x, t).val;
 }
 
 void AutodiffTransportSystem::AuxGPrime(Index i, State &out, const State &s, Position x, Time t)
@@ -232,20 +285,35 @@ void AutodiffTransportSystem::AuxGPrime(Index i, State &out, const State &s, Pos
 	RealVector q(s.q());
 	RealVector sigma(s.sigma());
 	RealVector phi(s.phi());
+	RealVector geom(s.geom());
 
 	Real uout;
 
-	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, Position X, Time T)
-					   { return this->GFunc(i, uD, qD, sD, phiD, X, T); }, wrt(u), at(u, q, sigma, phi, x, t), uout, out.u());
+	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector geomD, Position X, Time T)
+					   { return this->GFunc(i, uD, qD, sD, phiD, geomD, X, T); }, wrt(u), at(u, q, sigma, phi, geom, x, t), uout, out.u());
 
-	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, Position X, Time T)
-					   { return this->GFunc(i, uD, qD, sD, phiD, X, T); }, wrt(q), at(u, q, sigma, phi, x, t), uout, out.q());
+	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector geomD, Position X, Time T)
+					   { return this->GFunc(i, uD, qD, sD, phiD, geomD, X, T); }, wrt(q), at(u, q, sigma, phi, geom, x, t), uout, out.q());
 
-	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, Position X, Time T)
-					   { return this->GFunc(i, uD, qD, sD, phiD, X, T); }, wrt(sigma), at(u, q, sigma, phi, x, t), uout, out.sigma());
+	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector geomD, Position X, Time T)
+					   { return this->GFunc(i, uD, qD, sD, phiD, geomD, X, T); }, wrt(sigma), at(u, q, sigma, phi, geom, x, t), uout, out.sigma());
 
-	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, Position X, Time T)
-					   { return this->GFunc(i, uD, qD, sD, phiD, X, T); }, wrt(phi), at(u, q, sigma, phi, x, t), uout, out.phi());
+	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector geomD, Position X, Time T)
+					   { return this->GFunc(i, uD, qD, sD, phiD, geomD, X, T); }, wrt(phi), at(u, q, sigma, phi, geom, x, t), uout, out.phi());
+}
+
+void AutodiffTransportSystem::dAuxG_dGeometry(Index i, VectorRef grad, const State &s, Position x, Time t)
+{
+	RealVector u(s.u());
+	RealVector q(s.q());
+	RealVector sigma(s.sigma());
+	RealVector phi(s.phi());
+	RealVector geom(s.geom());
+
+	Real uout;
+
+	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector geomD, Position X, Time T)
+					   { return this->GFunc(i, uD, qD, sD, phiD, geomD, X, T); }, wrt(geom), at(u, q, sigma, phi, geom, x, t), uout, grad);
 }
 
 // and initial conditions for u & q
@@ -376,6 +444,27 @@ Real2nd AutodiffTransportSystem::MMS_Solution(Index i, Real2nd x, Real2nd t)
 	return S;
 }
 
+// TODO(manufactured coupled sources): the direct Flux(...)/Source(...) calls
+// below (building `sigma`/`dSigma_dx`/`S`) go through the geometry-blind
+// overloads, not the geometry-aware ones dSigmaFn_du/dq above already use via
+// `s.geom()` -- so this function is internally inconsistent about which overload
+// it evaluates. Harmless today because `s` here is a bare State(nVars,
+// nScalars) with no geometry rows (ngeom = 0 by default) and no case yet gives
+// the two Flux/Source overloads different content, so both paths agree. It will
+// stop agreeing the moment a geometry-dependent case tries useMMS: the
+// manufactured source would then be built against a flux that ignores geometry
+// while the solver's actual residual uses one that does not, which is exactly
+// the "manufactured source differentiated with the wrong function" trap this
+// file's own header comment warns about for the sign convention -- same shape,
+// different cause.
+//
+// The two markers this sat beside -- on dSigmaFn_dp and dSources_dp -- are gone,
+// fixed with the adjoint transposes, because those two feed F_p and so were an
+// adjoint defect. This one is not, and it is not a two-line fix either: MMS_Source
+// is handed (i, x, t) and nothing else, so there is no psi to evaluate geometry
+// at. AutodiffTransportSystem holds no field model and has no way to reach the
+// solver's. Threading one in is a change to the manufactured-solution facility,
+// which is what the coupled order study owns.
 Value AutodiffTransportSystem::MMS_Source(Index i, Position x, Time t)
 {
 	Real2nd xval = x;

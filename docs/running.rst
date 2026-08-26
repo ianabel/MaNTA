@@ -76,6 +76,39 @@ whatever else it likes through the ``initialiseDiagnostics`` and
 ``writeDiagnostics`` hooks, which is how derived quantities end up in the same
 file.
 
+.. _coupled-output:
+
+What a coupled run adds
+~~~~~~~~~~~~~~~~~~~~~~~
+
+With a :doc:`field model <field_coupling>` attached, both ``<stem>.nc`` and
+``<stem>.restart.nc`` gain **one further group**, named by the model's spec
+(``FieldModelSpec::name``, defaulting to ``Field``), carrying:
+
+* one **time series per field unknown**, named, described and given units by the
+  spec's ``dofs`` — :math:`\psi` has no :math:`x` dependence, so it is written
+  the way a global scalar is;
+* one **spatial variable per geometry slot**, from the spec's ``geometry``,
+  sampled at the same ``OutputPoints`` positions as ``u`` at every output time —
+  these *are* functions of :math:`x`, so they are written the way ``u`` is;
+* a group attribute ``label``, the spec's name for the spatial coordinate its
+  geometry is expressed against. MaNTA does not interpret it; recording it is
+  what lets a reader know what the run's :math:`x` meant.
+
+The restart file additionally records ``RestartData/nField``, which is how many
+of the trailing entries of ``Y`` are :math:`\psi`. It is written on every run,
+so an uncoupled file says ``nField = 0`` rather than leaving a reader to
+distinguish "no field model" from "written before the field block existed"; a
+file predating this is read back as zero, which is the truth about it. Resuming
+a coupled run needs both the file and a config naming a ``FieldModel`` that
+declares the same number of unknowns, and a mismatch is reported by name rather
+than as an ``nVars``/``nAux``/``nScalars`` disagreement.
+
+Everything above is gated on ``WriteOutput``, like the rest of the netCDF and
+restart output. A run with no field model writes exactly what it wrote before
+the feature existed — byte for byte, apart from that one ``nField = 0`` in the
+restart file.
+
 With ``solveAdjoint`` set, the file also carries the scalars ``ng``, ``np`` and
 ``np_boundary``, one ``G<i>`` value per objective, and the groups ``G<i>_p`` and
 ``G<i>_boundary`` holding the gradient with respect to each named parameter.
@@ -148,11 +181,33 @@ elsewhere as a deliberate request.
    constructed with the grid where nothing hands it the degree, so changing the
    mesh changes what the case was built against.
 
+The **field model is not ignored either**: it is named by the config as usual,
+and its declared ``nFieldDOF`` is checked against the ``nField`` the file
+records before anything is read into it. Resuming a coupled run therefore needs
+the same ``FieldModel`` line the original run had.
+
 A restart written by a steady solve carries ``dYdt = 0``, which is the defining
 property of the state it holds. It used to carry the ``t_initial`` derivative
 instead — ``solveSteadyState`` damps through a scratch vector and never wrote
 back to the one the restart file is built from — so a resumed run started from a
 solution and a time derivative that did not belong together.
+
+.. warning::
+
+   **Keep** ``delta_t`` **at a size the resumed run could actually take as its
+   first step.** On a restart, ``IDASetInitStep`` is given ``delta_t`` as the
+   **first step**, on the reading that a resumed run should continue at the same
+   step it left off with. A cadence chosen for output frequency rather than for
+   stability can therefore hand IDA a first step approaching the whole remaining
+   integration, and the error test then fails repeatedly until it gives up with
+   ``IDA_ERR_FAIL`` (-3). Setting ``dt0`` overrides it.
+
+   This warning used to have a second half, about ``t_initial == delta_t``
+   failing with ``IDA_ILL_INPUT`` (-22) and ``tout1 too close to t0``. That was
+   a MaNTA bug — ``IDACalcIC`` was handed the *interval* where SUNDIALS wants
+   the first output *time* — and it is fixed; the two agree only at
+   ``t0 = 0``, which is where every fixture in the tree starts, so no cold run
+   ever noticed.
 
 .. warning::
 
@@ -170,6 +225,70 @@ solution and a time derivative that did not belong together.
    :ref:`suppress-algebraic-error` makes this *worse*, not better: it is the
    accuracy of the algebraic components that a restart resumes from.
 
+.. _coupled-field-sweeps:
+
+What a coupled run reports
+--------------------------
+
+A run with ``FieldModel`` set and ``FieldSolve = iterative`` — the default —
+prints one extra line beside the step and Jacobian counts at the end::
+
+   Coupled field sweeps                  :1043 over 342 solves (0 exact fallbacks)
+
+The ratio is what to read. A sweep is one transport solve; the exact Schur
+complement is :math:`\texttt{nField}+1` of them. So the iterative path is
+*cheaper* only when the mean sweep count is below :math:`\texttt{nField}+1`, and
+on every fixture in this tree it is not — see :doc:`field_coupling` for the
+numbers. Measured in a real integration the sweep runs 2.5 to 3.6 iterations per
+Jacobian solve.
+
+.. important::
+
+   **A nonzero fallback count is a cost report, not an error.** A sweep that
+   exhausts ``FieldSolveMaxSweeps`` escalates to the exact Schur solve, so the
+   answers are correct; the run is simply paying for both, at
+   :math:`\texttt{nField}+1` transport solves on top of the sweeps it already
+   spent. The run says so:
+
+   .. code-block:: text
+
+      WARNING: 17 of 342 coupled Jacobian solves exhausted FieldSolveMaxSweeps = 20
+      and fell back to the exact Schur solve, at 6 transport solves each. The answers
+      are correct; the run is paying for both. Raise FieldSolveMaxSweeps, or set
+      FieldSolve = exact and skip the sweeps.
+
+   Nothing latches that decision, so a genuinely divergent coupling pays both on
+   *every* Jacobian solve for the whole run. If the count is a large fraction of
+   the solve count, ``FieldSolve = exact`` is the cheaper answer.
+
+The escalation runs in **both** directions, forward and adjoint, which is what
+makes ``FieldSolve`` a cost choice and never an accuracy one. The adjoint has its
+own cap, ``FieldSolveMaxAdjointSweeps``, defaulting to 100 against the forward
+20: the transposed iteration has the same spectrum — it *is* the transpose — but
+always runs at :math:`c_j = 0`, where the spectral radius is largest, so it is
+strictly the harder direction. Five field unknowns have been measured needing
+13–38 sweeps on isolated right-hand sides, which is why inheriting the forward
+cap would under-serve it.
+
+.. note::
+
+   The counts are per run. ``initialize`` zeroes them, alongside the field
+   model's own ``resetForRun``, so a second run on a reused solver reports its
+   own numbers rather than a cumulative total.
+
+Two failures worth being able to read
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``initialize`` refuses a **field DOF declared differential whose residual row
+carries no time derivative**, naming the DOF. Left to IDA that is an
+``IDA_LINESEARCH_FAIL`` (-13): ``IDA_YA_YDP_INIT`` holds every differential
+*value* fixed, so a row that reaches no unknown it may move is irreducible and
+the backtracking loop runs to exhaustion — a message about the linesearch for a
+defect in the declaration.
+
+A field model that **cannot evaluate at the state it is handed** should throw
+from ``FieldResidual``. That is caught and reported to IDA as a *recoverable*
+error, so the step is retried with a smaller ``h`` rather than the run failing.
 .. _warm-starts:
 
 Warm starts and ``IDACalcIC``

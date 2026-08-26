@@ -104,6 +104,18 @@ Problem definition
        :ref:`mixed condition <mixed-boundaries>` with :math:`d = 1` when it is set
        and :math:`b = 1` when it is not, so the per-variable, per-end version of
        the same choice is available to a case through its own spec.
+   * - ``FieldModel``
+     - ``""``, *file only*
+     - Name of a registered magnetic-field model to couple to, as registered by
+       ``REGISTER_FIELD_MODEL_IMPL``. Absent — the default — means no coupling,
+       and an uncoupled run's ``.nc`` is bit-for-bit what it was before the
+       feature existed. Its ``.restart.nc`` is not, by exactly one scalar:
+       ``RestartData/nField`` is written on every run, and reads back as ``0``.
+       An unrecognised name is an error listing what *is* registered;
+       note that no field model is registered in this tree yet. Like
+       ``TransportSystem`` this is a ``ProblemSelection`` key, so passing it to
+       ``Runner.configure`` is an error rather than being ignored. See
+       :doc:`field_coupling`.
    * - ``High_Grid_Boundary``
      - ``false``
      - Refine the grid towards both ends instead of spacing cells uniformly.
@@ -307,6 +319,63 @@ Adjoints and superconvergence
      - How much error one extra degree is assumed to buy, in
        :math:`\Delta k = \lceil \log_b(E/\epsilon) \rceil`. Between 10 and 100;
        larger is more aggressive and so asks for fewer degrees.
+
+Coupling to a magnetic-field model
+----------------------------------
+
+These four are read whether or not a model is attached, and do nothing at all
+without one — ``FieldModel``, under *Problem definition* above, is what turns
+the coupling on.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 12 58
+
+   * - Key
+     - Default
+     - Meaning
+   * - ``FieldSolve``
+     - ``"iterative"``
+     - How the coupled Jacobian is solved. ``iterative`` is block Gauss–Seidel
+       between the transport and field blocks with Irons–Tuck acceleration, at
+       one transport solve per sweep. ``exact`` forms the Schur complement onto
+       the field block, at :math:`\texttt{nField}+1` transport solves per
+       Jacobian solve.
+   * - ``FieldSolveTolerance``
+     - ``1e-8``
+     - Where the sweep stops — **one key, two tests**, because the two
+       directions have different things available to measure. Forward, it is a
+       relative *change*: the sweep stops once
+       :math:`\|\delta\psi\| \le \texttt{tol}\,\|\psi\|` for the unaccelerated
+       iterate. In the adjoint it is a relative *backward error*: the field row
+       of the transposed system holds identically at every iterate, so the
+       residual of the pair returned is exactly
+       :math:`A_2^{T}\,\delta z_\psi`, and the sweep stops once that is below
+       ``tol`` times the norm of the right-hand side. Both are scale
+       equivariant, so neither has an absolute floor, and neither returns an
+       under-converged answer — reaching the cap escalates to the exact solve.
+   * - ``FieldSolveMaxSweeps``
+     - ``20``
+     - Sweep cap for the forward solve. Reaching it escalates to the exact
+       solve; it does not return an under-converged answer.
+   * - ``FieldSolveMaxAdjointSweeps``
+     - ``100``
+     - The same cap for the adjoint solve. Separate, and larger, because the
+       adjoint always runs at :math:`c_j = 0` where the coupling is stiffest —
+       five field unknowns have been measured needing 13–38 sweeps.
+
+.. important::
+
+   **``FieldSolve = exact`` is a verification tool, not a slow mode.** It is what
+   makes the coupled system checkable by finite-differencing the residual and
+   requiring :math:`J\,\delta y = g`, and it is the oracle the iterative path is
+   measured against.
+
+   And the choice between them is a **cost** choice, never an accuracy one: the
+   sweep escalates to the exact solve in both directions rather than guessing, so
+   ``iterative`` can be slower than ``exact`` and can never be less accurate. On
+   every fixture in this tree it *is* slower — see :doc:`field_coupling` for the
+   break-even and the measured numbers.
 
 .. The label is `config-divergences` for historical reasons: it named a section
    listing how the two readers disagreed, and docs/python.rst links to it.

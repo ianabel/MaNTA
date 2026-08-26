@@ -5,14 +5,19 @@
 #include <sunlinsol/sunlinsol_band.h> /* access to band SUNLinearSolver       */
 #include <sundials/sundials_types.h>  /* definition of type sunrealtype          */
 #include <toml.hpp>
+#include <exception>
 #include <fstream>
 #include <limits>
 #include <print>
 #include <memory>
 
 #include "Types.hpp"
+#include "FieldModel.hpp"
 #include "SystemSolver.hpp"
 #include "gridStructures.hpp"
+// The field hooks are handed the same quadrature weights the scalar ones are,
+// so the model does not have to pick a rule of its own; they are cached here.
+#include "PyIntegrator.hpp"
 #include "SunLinSolWrapper.hpp"
 #include "SunMatrixWrapper.hpp"
 #include "ErrorChecker.hpp"
@@ -53,6 +58,23 @@ void SystemSolver::initialize()
 {
 	int retval;
 
+	// Whatever the field model cached about the last run does not apply about it does not either. This has
+	// to be here rather than in initialiseMatrices(), which is skipped entirely
+	// when `initialised` is already set: that is the RF_cellwise trap, where the
+	// second run on a reused solver solved its initial dydt out of the previous
+	// run's final-time boundary data.
+	if (fieldModel)
+		fieldModel->resetForRun();
+
+	// ...and neither do the sweep counts. Here, in the unconditional part of
+	// initialize() and beside resetForRun() for the same reason: a cumulative
+	// count reported as a per-run one is a lie a second run would tell silently.
+	fieldSweepSolves = 0;
+	fieldSweepIterations = 0;
+	fieldSweepFallbacks = 0;
+	fieldAdjointSweeps = 0;
+	fieldAdjointFellBack = false;
+
 	if (!initialised)
 		initialiseMatrices();
 
@@ -69,7 +91,9 @@ void SystemSolver::initialize()
 	//-----------------------------Initial conditions-------------------------------
 
 	// Set original vector lengths
-	Y = N_VNew_Serial(nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1), ctx);
+	// The field model's unknowns go last, after the scalars, so nothing before
+	// them moves. nField is zero unless setFieldModel has attached a model.
+	Y = N_VNew_Serial(nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1) + nField, ctx);
 	if (ErrorChecker::check_retval((void *)Y, "N_VNew_Serial", 0))
 		throw std::runtime_error("Sundials Initialization Error");
 
@@ -92,6 +116,86 @@ void SystemSolver::initialize()
 	// asserts the vector length matches the full DoF, and setInitialConditions is
 	// also called directly by tests that size their own N_Vectors.
 	setJacEvalY(Y, dYdt);
+
+	// A field DOF declared differential whose residual carries no d/dt is a row
+	// every unknown of which IDA_YA_YDP_INIT holds fixed: no Newton direction
+	// touches it, so the backtracking loop runs to exhaustion and IDA reports
+	// IDA_LINESEARCH_FAIL (-13) -- a message about the linesearch for a defect in
+	// the declaration. That is exactly what kept python-physics/mirror-plasma's
+	// voltage controller from ever starting, and the residual there was 4.3e-6:
+	// irreducible beats small, so there is no threshold to test against. Ask
+	// instead which unknowns each row can reach, here, where the answer can name
+	// the DOF.
+	//
+	// After setJacEvalY, because that is what puts the initial condition into
+	// yJac and dydtJac, and before IDACalcIC, which is what would otherwise fail.
+	if (fieldModel)
+	{
+		GlobalStateMatrix dR(nField), dRdot(nField);
+		for (Index f = 0; f < nField; ++f)
+		{
+			dR.add(nCells, k, nVars, nScalars, nAux);
+			dRdot.add(nCells, k, nVars, nScalars, nAux);
+		}
+		Matrix dRdpsi = Matrix::Zero(nField, nField);
+		Matrix dRddpsidt = Matrix::Zero(nField, nField);
+
+		fieldModel->FieldResidualPrime(dR, dRdot, dRdpsi, dRddpsidt,
+									   Vector(yJac.getField()), Vector(dydtJac.getField()),
+									   yJac.evalOnNodes(), yJac.getPoints(),
+									   Integrator::getIntegrationWeights(yJac.getBasis(), grid),
+									   t0);
+
+		for (Index f = 0; f < nField; ++f)
+			if (fieldModel->isFieldDOFDifferential(f) && dRddpsidt.row(f).isZero(0.0))
+				throw std::invalid_argument(
+					"Field DOF '" + fieldModel->getSpec().dofs[f].name +
+					"' is declared differential but its residual row carries no time "
+					"derivative. IDACalcIC holds every differential value fixed, so this row "
+					"is irreducible and the initialisation would fail with "
+					"IDA_LINESEARCH_FAIL.");
+
+		// What the chosen coupled solve costs, said once per run rather than
+		// once per Jacobian. Here rather than in applySolverConfig because
+		// nField is only known once a model is attached, and warning about the
+		// cost of a solve that will never happen -- FieldSolve set on a run with
+		// no field model -- is noise.
+		//
+		// **The two levels differ, and deliberately.** Exact is a WARNING: the
+		// user asked for a verification tool and is about to pay nField + 1
+		// transport solves per Jacobian solve for it in what may be a production
+		// run, which is a choice worth interrupting. Iterative is INFO, because
+		// it describes what the *default* does -- it fired on every coupled run
+		// including every unconfigured one, and a warning that always fires
+		// teaches a reader to skip warnings, which is a real cost given the
+		// genuine one this function's caller prints at the end of a run when
+		// fallbacks > 0. INFO is compiled out below WARNING (Logging.hpp), so
+		// this text is reachable on a VERBOSE or DEBUG build; the permanent
+		// homes for it are docs/running.rst and docs/field_coupling.rst, and
+		// what a release build reports about the sweep is the "Coupled field
+		// sweeps" line, which is measurement rather than description.
+		if (fieldSolveMode == FieldSolveMode::Exact)
+			logmsg<LOG_LEVEL::WARNING>(
+				"FieldSolve = exact forms the Schur complement onto the field block, which "
+				"costs one full transport solve per field degree of freedom: {} transport "
+				"solves per Jacobian solve where the iterative path costs one. It is a "
+				"verification tool and is not intended for production runs.",
+				nField + 1);
+		else
+			logmsg<LOG_LEVEL::INFO>(
+				"FieldSolve = iterative: block Gauss-Seidel between the transport and field "
+				"blocks with Irons-Tuck acceleration, one transport solve per sweep against "
+				"exact's {} per Jacobian solve. Stops once the relative change in psi is below "
+				"FieldSolveTolerance = {}, up to FieldSolveMaxSweeps = {} sweeps ({} for the "
+				"adjoint); a sweep that reaches its cap falls back to the exact solve, so this "
+				"mode costs more than exact in the worst case and never less accuracy. It is "
+				"only *cheaper* than exact when the sweep converges in fewer than {} sweeps, "
+				"which no test fixture in this tree manages -- it is a bet on a field block "
+				"far larger than the transport one, not a free improvement. Watch the "
+				"\"Coupled field sweeps\" line at the end of the run.",
+				nField + 1, fieldSolveTolerance, fieldSolveMaxSweeps, fieldSolveMaxAdjointSweeps,
+				nField + 1);
+	}
 
 	// ----------------- Allocate and initialize all other sun-vectors. -------------
 	//
@@ -123,7 +227,7 @@ void SystemSolver::initialize()
 	// have been solving a different initialisation problem from the intended one
 	// for as long as this code has existed. Nothing warns: Constant is not
 	// [[nodiscard]] and the statement declares no unused variable.
-	DGSoln isDifferential(nVars, grid, k, nScalars, nAux);
+	DGSoln isDifferential(nVars, grid, k, nScalars, nAux, nField);
 	isDifferential.Map(N_VGetArrayPointer(id));
 	isDifferential.zeroCoeffs();
 	for (Index v = 0; v < nVars; ++v)
@@ -137,6 +241,16 @@ void SystemSolver::initialize()
 			isDifferential.Scalar(s) = 1.0;
 		}
 	}
+
+	// nField is only ever nonzero with a model attached, but the guard keeps that
+	// invariant visible where the pointer is dereferenced rather than three
+	// hundred lines away in setFieldModel.
+	if (fieldModel)
+		for (Index f = 0; f < nField; ++f)
+		{
+			if (fieldModel->isFieldDOFDifferential(f))
+				isDifferential.Field(f) = 1.0;
+		}
 
 	retval = IDASetId(IDA_mem, id);
 	if (ErrorChecker::check_retval(&retval, "IDASetId", 1))
@@ -180,7 +294,7 @@ void SystemSolver::initialize()
 	VectorWrapper absTolVals(N_VGetArrayPointer(absTolVec), N_VGetLength(absTolVec));
 	absTolVals.setZero();
 
-	DGSoln tolerances(nVars, grid, k, nScalars, nAux);
+	DGSoln tolerances(nVars, grid, k, nScalars, nAux, nField);
 	tolerances.Map(N_VGetArrayPointer(absTolVec));
 	for (Index i = 0; i < nCells; ++i)
 	{
@@ -215,6 +329,9 @@ void SystemSolver::initialize()
 
 	for (Index i = 0; i < nScalars; ++i)
 		tolerances.Scalar(i) = atol[0];
+
+	for (Index i = 0; i < nField; ++i)
+		tolerances.Field(i) = atol[0];
 
 	retval = IDAWFtolerances(IDA_mem, SystemSolver::getErrorWeights_static);
 	if (ErrorChecker::check_retval(&retval, "IDAWFtolerances", 1))
@@ -675,6 +792,23 @@ void SystemSolver::integrate(double tFinal)
 	std::println("Total Number of Timesteps             :{}", nsteps);
 	std::println("Total Number of Residual Evaluations  :{}", nresevals);
 	std::println("Total Number of Jacobian Computations :{}", njacevals);
+
+	if (nField > 0 && getFieldSolveMode() == SystemSolver::FieldSolveMode::Iterative)
+	{
+		auto fs = getFieldSweepStats();
+		std::println("Coupled field sweeps                  :{} over {} solves ({} exact fallbacks)",
+					 fs.iterations, fs.solves, fs.fallbacks);
+		// This is the only signal a user has that the coupling is not converging.
+		// The run is still correct -- the fallback is the exact solve -- so this is
+		// a cost report, not an error, and it says what to do about it.
+		if (fs.fallbacks > 0)
+			logmsg<LOG_LEVEL::WARNING>(
+				"{} of {} coupled Jacobian solves exhausted FieldSolveMaxSweeps = {} and fell "
+				"back to the exact Schur solve, at {} transport solves each. The answers are "
+				"correct; the run is paying for both. Raise FieldSolveMaxSweeps, or set "
+				"FieldSolve = exact and skip the sweeps.",
+				fs.fallbacks, fs.solves, fieldSolveMaxSweeps, nField + 1);
+	}
 	}
 
 	finishRun();
@@ -719,10 +853,42 @@ void SystemSolver::finishRun()
 	// than beside any path given in OutputFilename.
 	const std::string baseName = inputFilePath.filename().string();
 
+	// The adjoint solve is allowed to fail, and its failure must not take the
+	// forward run's output with it.
+	//
+	// The coupled adjoint sweep no longer throws on non-convergence -- it
+	// escalates to the exact transposed Schur solve, which is strictly stronger
+	// than refusing, since the caller gets a correct gradient rather than an
+	// exception. What reaches this catch is therefore a throw out of the *field
+	// model* itself: from solveCoupledAdjointExact, or from the sweep's own
+	// solveBTranspose before it. But this call sits *before* finaliseDiagnostics,
+	// closeOutputFiles() and WriteRestartFile, and runSolver's catch(...)
+	// rethrows, so an unguarded throw here destroyed the netCDF and the restart
+	// file of a run that had integrated perfectly. The gradient is the optional
+	// half of the run; the solution is not, and losing hours of transport solve
+	// because a Schur sweep would not converge is a worse failure than the one
+	// being reported.
+	//
+	// Held as an exception_ptr rather than by moving the call after the output
+	// block, because captureState() below must still run after the adjoint solve:
+	// the gradients are defined at the state the adjoint matrices were built
+	// from. See its own comment.
+	std::exception_ptr adjointFailure;
 	if (solveAdjoint)
 	{
-		runAdjointSolve();
-		// WriteAdjoints();
+		try
+		{
+			runAdjointSolve();
+			// WriteAdjoints();
+		}
+		catch (std::exception const &e)
+		{
+			adjointFailure = std::current_exception();
+			logmsg<LOG_LEVEL::ERROR>(
+				"The adjoint solve failed; the gradients are unavailable. The forward "
+				"solution and its output files are unaffected and are being written now.\n  {}",
+				e.what());
+		}
 	}
 
 	if (writeOutput)
@@ -743,6 +909,13 @@ void SystemSolver::finishRun()
 
 	if (writeOutput)
 		nc_output.Close();
+
+	// Now that everything is on disk. G_p holds whatever the failed solve left
+	// there, which is why this rethrows rather than returning quietly: a caller
+	// that went on to read getAdjointGradients() would get a plausible matrix
+	// that is not the gradient of anything.
+	if (adjointFailure)
+		std::rethrow_exception(adjointFailure);
 }
 
 void SystemSolver::closeOutputFiles()
@@ -849,6 +1022,21 @@ void SystemSolver::destroySundials()
 
 void SystemSolver::runAdjointSolve()
 {
+	// This used to refuse a field model outright, because the adjoint matrices
+	// carried neither geometry nor a transpose of the coupling and so would have
+	// returned a silently wrong gradient beside a perfectly good G. Both are now
+	// here: initializeMatricesForAdjointSolve fills geometry before it evaluates
+	// anything and stores A1^T and A2^T beside M^T, and solveAdjointState
+	// eliminates them exactly (FieldSolve = exact) or sweeps to a checked
+	// backward error that *throws* if it is not reached.
+	//
+	// Two limits survive the lifting and are deliberate rather than overlooked.
+	// An objective whose integrand reads State::geom directly loses its dG/dpsi
+	// term, because AdjointProblem reports four state derivatives and geometry
+	// is not among them; and a FieldModel cannot depend on an adjoint parameter
+	// at all, so dR/dp is zero by construction rather than by assumption. Both
+	// are recorded in SystemSolver.hpp beside G_field and in TODO.
+
 	if (solveAdjoint)
 	{
     logmsg<LOG_LEVEL::INFO>("Computing adjoints");

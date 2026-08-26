@@ -139,12 +139,30 @@ const std::vector<Entry> &table()
         {"SuppressAlgebraicError", {}, Type::Bool, Category::Solver, false, false, false,
          "Drop sigma, q, lambda and phi from IDA's local error test (IDASetSuppressAlg). "
          "Costs restart fidelity and aux-variable accuracy; see docs/running.rst."},
+        {"FieldSolve", {}, Type::String, Category::Solver, false, false, std::string{"iterative"},
+         "How the coupled Jacobian is solved: iterative (block Gauss-Seidel, the default) "
+         "or exact (Schur complement onto the field block; a verification tool, see docs)."},
+        {"FieldSolveTolerance", {}, Type::Double, Category::Solver, false, false, 1e-8,
+         "Convergence tolerance for FieldSolve = iterative."},
+        {"FieldSolveMaxSweeps", {}, Type::Int, Category::Solver, false, false, 20,
+         "Sweep cap for FieldSolve = iterative."},
+        {"FieldSolveMaxAdjointSweeps", {}, Type::Int, Category::Solver, false, false, 100,
+         "Sweep cap for the coupled adjoint solve. Separate from FieldSolveMaxSweeps, and "
+         "larger, because the adjoint always runs at cj = 0 where the coupling is stiffest. "
+         "Exceeding it falls back to the exact transposed solve, not to a wrong gradient."},
         {"ForceConsistentIC", {}, Type::Bool, Category::Solver, false, false, false,
          "Run IDACalcIC on a steady solve or a restart, which skip it by default -- the first "
          "discards its answer, the second resumes from a state already on the constraint "
          "manifold. A cold time-marching run always runs it and this cannot turn that off."},
         {"TransportSystem", {}, Type::String, Category::ProblemSelection, true, false, std::string{},
          "Name of the registered physics case to run."},
+        // ProblemSelection, beside TransportSystem and for the same reason: it
+        // names a registered class that runManta instantiates with the parsed
+        // config and the grid. A dict has no equivalent -- a Runner is handed
+        // objects, not names -- so it is an *error* there rather than being
+        // accepted and ignored.
+        {"FieldModel", {}, Type::String, Category::ProblemSelection, false, false, std::string{},
+         "Name of a registered magnetic-field model to couple to; absent means no coupling."},
         {"PhysicsPlugins", {}, Type::StringList, Category::ProblemSelection, false, false,
          std::vector<std::string>{},
          "Shared objects to dlopen for their physics-case registrations."},
