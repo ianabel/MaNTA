@@ -186,7 +186,40 @@ if(MANTA_EIGEN_INCLUDE_DIR)
   endforeach()
   set(EIGEN3_INCLUDE_DIR "${MANTA_EIGEN_INCLUDE_DIR}")
 else()
-  find_package(Eigen3 3.4 REQUIRED NO_MODULE)
+  # No version in the request, and the check made below instead. That looks lax
+  # and is the opposite: `find_package(Eigen3 3.4)` excludes half of what this
+  # project supports.
+  #
+  # MaNTA builds against Eigen 3.4.x and 5.0.x alike -- CLAUDE.md says so and the
+  # CI matrix has legs for both -- but Eigen ships an Eigen3ConfigVersion.cmake
+  # generated with SameMajorVersion compatibility. To that file a requested "3.4"
+  # is not a *minimum*: it is a major version to match, so 5.0.1 is rejected
+  # outright rather than accepted as newer. CMake then keeps looking, which is
+  # why this stayed invisible on any box that also had a 3.4 installed -- it
+  # silently fell through to the older one.
+  #
+  # Where it is not invisible is a box that has only Eigen 5. fedora:latest
+  # rolled to fc44, whose eigen3-devel is 5.0.1, and the `Compile (fedora:latest)`
+  # leg -- a required check -- went red with nothing in this tree having changed:
+  #
+  #     Could not find a configuration file for package "Eigen3" that is
+  #     compatible with requested version "3.4".
+  #       /usr/share/cmake/eigen3/Eigen3Config.cmake, version: 5.0.1
+  #         The version found is not compatible with the version requested.
+  #
+  # Any distribution moving to Eigen 5 does the same, so this is a floor that
+  # arrives on its own rather than one anybody chooses.
+  #
+  # The MANTA_EIGEN_INCLUDE_DIR branch above has never had the problem: it reads
+  # the version out of the headers and does not consult a config file at all,
+  # which is why the two Eigen 5.0.1 CI legs are green while fedora is not. They
+  # go through that branch.
+  find_package(Eigen3 REQUIRED NO_MODULE)
+  if(Eigen3_VERSION AND Eigen3_VERSION VERSION_LESS 3.4)
+    message(FATAL_ERROR
+      "Eigen ${Eigen3_VERSION} is too old: MaNTA needs 3.4 or newer. 3.4.x and "
+      "5.0.x are both supported and both tested; nothing between them exists.")
+  endif()
   target_link_libraries(manta_deps INTERFACE Eigen3::Eigen)
 endif()
 
