@@ -103,8 +103,8 @@ public:
     /// Attach (or resize) the field block after construction.
     ///
     /// Every other part of a DGSoln's shape is fixed at construction and stays
-    /// that way. This one cannot be: SystemSolver builds y, dydt, yJac, dydtJac
-    /// and dydtComplete in its constructor initialiser list, and a field model
+    /// that way. This one cannot be: SystemSolver builds y, dydt, yJac and
+    /// dydtJac in its constructor initialiser list, and a field model
     /// arrives later -- setFieldModel() is what a configuration calls, and a
     /// configuration cannot run before the object it configures exists.
     ///

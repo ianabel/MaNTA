@@ -346,14 +346,13 @@ def check_restart_round_trip( prefix, t_split, rtol = 1.0e-6, atol = 1.0e-8 ):
     All three runs are done at `rtol`/`atol` rather than at whatever the case
     normally uses. That is not cosmetic: a restart re-initialises the
     integrator, so the two routes take genuinely different step sequences, and
-    at AuxVarTest's usual 1e-2 tolerances they legitimately disagree by about
-    0.7% -- more than the comparison tolerance, and not a defect. Tightening
-    until the answer is determined well below the comparison threshold is what
-    makes the round trip a test of the restart mechanism rather than of the
-    time integrator's step choices.
+    at a loose tolerance they legitimately disagree by more than the comparison
+    threshold without either being wrong. Tightening until the answer is
+    determined well below that threshold is what makes the round trip a test of
+    the restart mechanism rather than of the time integrator's step choices.
 
-    The tolerance cannot be tightened without limit, though: see the table
-    beside the calls below.
+    The tolerance cannot be tightened without limit, and the limit is now the
+    *case*, not the restart: see the table beside the calls below.
     """
     print( "Checking restart round trip for " + prefix + ".conf (split at t = "
            + str( t_split ) + ")" )
@@ -404,32 +403,43 @@ print( "Checking Restart Round Trips" )
 # One variable, two variables, and one auxiliary variable: the three shapes the
 # restart DOF arithmetic has to get right.
 #
-# KNOWN LIMITATION -- each case is run at the tightest tolerance at which the
-# restart actually completes, and those differ. Measured, holding everything
-# else fixed, as (uninterrupted run) / (restart and continue):
+# All three now survive 1e-6 / 1e-8. Measured as (uninterrupted run) / (restart
+# and continue), with the final-slice agreement the round trip actually checks:
 #
-#   rtol / atol      LinearDiffusion   MatTest        AuxVarTest
-#   1e-3 / 1e-5      ok / ok           ok / ok        ok / ok
-#   1e-4 / 1e-6      ok / ok           ok / ok        ok / IDASolve -4
-#   1e-6 / 1e-8      ok / ok           ok / -6        ok / IDASolve -4
+#   rtol / atol      LinearDiffusion   MatTest         AuxVarTest
+#   1e-3 / 1e-5      ok / 8.5e-6       ok / 2.3e-6     ok / 2.1e-4
+#   1e-4 / 1e-6      ok / 1.7e-5       ok / 2.2e-7     ok / 2.2e-5
+#   1e-6 / 1e-8      ok / 6.4e-8       ok / 2.7e-10    ok / 6.4e-7
+#   1e-8 / 1e-10     ok / IDASolve -3  -3 / --         ok / IDASolve -3
 #
-# The uninterrupted run succeeds in every cell of that table, so this is the
-# restart path specifically, not the cases being hard to integrate. After a
-# restart IDACalcIC needs an order of magnitude more residual evaluations than
-# from a cold start (~1400 vs ~100 for AuxVarTest), so the state the restart
-# hands it is a long way from consistent -- most likely because
-# setInitialConditions recomputes sigma and lambda from the restored u and q
-# and discards the restored dY/dt entirely.
+# That table used to read "ok / IDASolve -4" for AuxVarTest at 1e-4 and 1e-6 and
+# "ok / -6" for MatTest at 1e-6. Two fixes closed it, and neither was in the
+# restart machinery:
 #
-# The failure signature on the aux case, "the corrector convergence failed
-# repeatedly", is the same one JAXAuxTest is xfail on. That may or may not be
-# the same underlying problem.
+#   * setInitialConditions used to finish every restart with EvaluateLambda(),
+#     throwing away the converged trace the file carried and replacing it with
+#     {{u}}, which solves nothing. That is what made a restart need ~10x the
+#     residual evaluations of a cold start, and it is what this comment used to
+#     blame -- correctly -- on sigma and lambda being recomputed.
+#   * AuxVarTest::SigmaFn adds (a - u*u) to *both* variables' fluxes while
+#     dSigma_dPhi declared the derivative for variable 0 only. On the manifold
+#     a = u*u the term vanishes; a warm start is precisely the state off the
+#     manifold, and there Newton diverged. This was the whole of the aux case's
+#     "corrector convergence failed repeatedly", which had been suspected of
+#     sharing a cause with the JAXAuxTest xfail. It did not.
 #
-# Tighten these once the above is fixed; the numbers here are a floor, not a
-# target.
+# The wall is now the *case*, not the restart. At 1e-8 / 1e-10 MatTest's
+# uninterrupted run fails too, so the restart is not implicated there at all;
+# LinearDiffusion and AuxVarTest resume-fail with IDA_ERR_FAIL (-3) rather than
+# the corrector failure (-4) that used to appear.
+#
+# Cost is why MatTest is not tightened with the others: at 1e-6 / 1e-8 its three
+# runs take 101 s against 6.0 s at 1e-4, for agreement (2.7e-10) that nothing
+# needs. AuxVarTest tightens for free -- 0.5 s against 0.4 s -- and buys a
+# factor of 330, so it is tightened.
 check_restart_round_trip( "LinearDiffusion", 0.25, rtol = 1.0e-6, atol = 1.0e-8 )
 check_restart_round_trip( "MatTest", 0.25, rtol = 1.0e-4, atol = 1.0e-6 )
-check_restart_round_trip( "AuxVarTest", 0.6, rtol = 1.0e-3, atol = 1.0e-5 )
+check_restart_round_trip( "AuxVarTest", 0.6, rtol = 1.0e-6, atol = 1.0e-8 )
 
 
 print("\n\n----------------")

@@ -669,7 +669,7 @@ double checkAdjointTranspose(AdjointStateFixture &h, int trial)
     if (sys.getFieldDOF() > 0)
         g.tail(sys.getFieldDOF()) = sys.G_field;
 
-    sys.solveAdjointState(0);
+    sys.solveAdjointState();
 
     const Vector z = adjointStateVector(sys, nCells, localDOF);
     return fdjac::relativeResidual(Matrix(J.transpose()), z, g, dead);
@@ -965,8 +965,8 @@ BOOST_AUTO_TEST_CASE(dropping_a_transposed_coupling_block_makes_the_gradient_wro
         BOOST_REQUIRE_GT(block.cwiseAbs().maxCoeff(), 0.0);
         block.setZero();
     }
-    run->solveAdjointState(0);
-    run->computeAdjointGradients();
+    run->solveAdjointState();
+    run->accumulateAdjointGradients(0);
     const Vector noA1 = run.gradient();
     BOOST_TEST_MESSAGE("with A1^T zeroed: " << noA1.transpose() << " against " << good.transpose()
                                             << ", relative error " << relativeError(noA1, good)
@@ -982,7 +982,7 @@ BOOST_AUTO_TEST_CASE(dropping_a_transposed_coupling_block_makes_the_gradient_wro
     // ...restored, which also says initializeMatricesForAdjointSolve rebuilds
     // rather than grows the containers it appends to.
     run->initializeMatricesForAdjointSolve();
-    run->solveAdjointState(0);
+    run->solveAdjointState();
     run->computeAdjointGradients();
     BOOST_TEST(relativeError(run.gradient(), good) < 1e-12);
 
@@ -993,8 +993,8 @@ BOOST_AUTO_TEST_CASE(dropping_a_transposed_coupling_block_makes_the_gradient_wro
         BOOST_REQUIRE_GT(block.cwiseAbs().maxCoeff(), 0.0);
         block.setZero();
     }
-    run->solveAdjointState(0);
-    run->computeAdjointGradients();
+    run->solveAdjointState();
+    run->accumulateAdjointGradients(0);
     const Vector noA2 = run.gradient();
     BOOST_TEST_MESSAGE("with A2^T zeroed: " << noA2.transpose() << ", relative error "
                                             << relativeError(noA2, good)
@@ -1004,7 +1004,7 @@ BOOST_AUTO_TEST_CASE(dropping_a_transposed_coupling_block_makes_the_gradient_wro
     BOOST_TEST(relativeError(noA2, frozen) < 1e-7);
 
     run->initializeMatricesForAdjointSolve();
-    run->solveAdjointState(0);
+    run->solveAdjointState();
     run->computeAdjointGradients();
     BOOST_TEST(relativeError(run.gradient(), good) < 1e-12);
 }

@@ -175,7 +175,34 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.runner.Run(tFinal)
         else:
             self.runner.Run_ss()
-      
+            self._report_objective_estimate()
+
+    def objectiveEstimate(self):
+        """G, its first-order correction to the fixed point, and a bound.
+
+        A steady solve stops when ||F|| is small, not when G is, so a scan
+        differencing G between two configurations is reading the answer moving
+        *plus* each solve stopping short. `uncertainty` is a bound on the
+        second, and is the number that says whether a difference between two
+        points means anything.
+
+        Empty for a time-marching run, and for a run configured without
+        solveAdjoint -- there is no objective to estimate.
+        """
+        return self.runner.objectiveEstimate()
+
+    def _report_objective_estimate(self):
+        estimate = self.objectiveEstimate()
+        if not estimate:
+            return
+        for i, (value, corrected, uncertainty) in enumerate(
+            zip(estimate["value"], estimate["corrected"], estimate["uncertainty"])
+        ):
+            print(
+                f"  G[{i}] = {value:.6e}, corrected {corrected:.6e}, "
+                f"uncertainty {uncertainty:.2e}"
+            )
+
     def getAdjointGradients(self):
         G, G_p = self.runner.Get_adjoint_gradients()
         return G, G_p  
@@ -360,7 +387,10 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         # grad = jnp.expand_dims(grad,1)
         # out = jnp.reshape(grad, (self.npoints, self.np_cell ))
 
-        return grad_w_vprime
+        # (np, nPoints): the parameter is the first axis. grad_unraveled comes out
+        # of the vmap over positions with the point index leading, which is the
+        # other way round from what MaNTA reads.
+        return grad_w_vprime.T
     
     @MaNTA_Decorator
     def dg(self, i, states, positions):

@@ -115,6 +115,27 @@ class SystemSolver
         void setSteadyMode(SteadyMode mode) { steadyMode = mode; };
         SteadyMode getSteadyMode() const { return steadyMode; };
         void setPseudoTransientInitialStep(double dt) { ptcInitialStep = dt; };
+        // Whether a finished steady solve estimates the objective. One residual,
+        // one Jacobian build and one solve each time, which is nothing against a
+        // whole continuation but is charged *per solve* -- so a solve driven in
+        // slices pays it per slice, and a five-step slice of a fifteen-step
+        // continuation spends a third as much again on estimating as on solving.
+        // A driver that only wants the estimate at the end turns it off for the
+        // slices in between.
+        void setEstimateObjectiveOnFinish(bool on) { estimateObjectiveOnFinish = on; };
+        bool getEstimateObjectiveOnFinish() const { return estimateObjectiveOnFinish; };
+
+        // The pseudo-time step the continuation has climbed to, which is what a
+        // resumed solve picks up. Infinite in Newton mode.
+        double getPseudoTransientStep() const { return ptcStep; };
+
+        void setMaxContinuationSteps(long steps)
+        {
+            if (steps < 1)
+                throw std::logic_error("MaxContinuationSteps must be at least 1: a steady solve that may take no continuation steps cannot make progress.");
+            maxContinuationSteps = steps;
+        };
+        long getMaxContinuationSteps() const { return maxContinuationSteps; };
         void setPseudoTransientMaxStep(double dt) { ptcMaxStep = dt; };
 
         // The SER schedule on an accepted step:
@@ -281,6 +302,50 @@ class SystemSolver
         // difference is the merit function -- one steady-residual evaluation per
         // step, which KINSOL never sees because it is evaluated at dt = infinity
         // rather than at the damped dt KINSol is solving.
+        // What a converged objective is worth, per objective.
+        //
+        // A solve stops when ||F|| is small, not when G is: an optimisation sweep
+        // comparing G at two parameter points needs to know how much of the
+        // difference is the answer moving and how much is each solve stopping
+        // short. Both quantities that answer it are already assembled -- dG/dy is
+        // G_y, which initializeMatricesForAdjointSolve builds per objective, and
+        // the Newton step to the solution is J^-1 F from the matrix the solve has
+        // already factorised -- so
+        //
+        //     corrected   = value - (dG/dy) . J^-1 F
+        //     uncertainty = ||dG/dy|| ||J^-1 F||
+        //
+        // the first a first-order extrapolation to the fixed point, the second a
+        // Cauchy-Schwarz bound on what is left. Measured by replaying every
+        // continuation step of a PseudoTransient solve, the bound holds at all of
+        // them -- 1.04x the true error at its tightest, 2.3x at its loosest -- and
+        // the correction is worth two to four orders of magnitude: a state whose
+        // raw G is 3% out reports 0.04% once corrected.
+        //
+        // It bounds *solver* error only. It says how far this solve stopped short
+        // of its own fixed point, not how far that fixed point is from the
+        // continuum, so it compares two runs at one discretisation and nothing
+        // else. That is the sweep's question.
+        // Why a steady solve stopped. The loop has three ways out and two of
+        // them throw, so without this a caller that catches has no way to tell a
+        // solve that ran out of continuation steps -- a partial answer, and often
+        // a usable one -- from one KINSol abandoned outright.
+        enum class SteadyOutcome
+        {
+            NotRun,
+            Converged,
+            OutOfSteps,
+            SolverFailed,
+        };
+
+        struct ObjectiveEstimate
+        {
+            Vector value;        // G as the run actually converged it
+            Vector corrected;    // G extrapolated to the fixed point
+            Vector uncertainty;  // bound on |corrected - value|, and on the error left
+            bool valid = false;  // false when there is no AdjointProblem to ask
+        };
+
         struct SteadyStepStats
         {
             int  step = 0;          // continuation step index, from zero
@@ -312,6 +377,11 @@ class SystemSolver
         {
             int  steps = 0;         // continuation steps taken
             int  rejected = 0;      // of those, rejected and damped
+            // The *steady* residual the solve ended on -- not the damped one
+            // KINSol converged, which any small enough dt makes small. This is
+            // the number the tolerance is tested against, and the only measure
+            // of progress a caller driving the solve in slices can see.
+            double residualNorm = std::numeric_limits<double>::quiet_NaN();
             long newtonIters = 0;   // KINSOL Newton iterations, summed
             long kinFuncEvals = 0;  // residual evaluations KINSOL made, summed
             long kinJacEvals = 0;   // Jacobian setups KINSOL asked for, summed
@@ -341,6 +411,21 @@ class SystemSolver
         // caller that wants the numbers rather than the log line.
         SteadyStats lastSteadyStats() const { return steadyStats; };
 
+        // The estimate at the state the solver is in now. One residual, one
+        // Jacobian build and one solve, plus a dot product per objective; the
+        // Jacobian work is at alpha = 0, the steady operator, whatever the solve
+        // was damped with. Leaves alpha and the factorised blocks as it found
+        // them, so it is safe to call from inside a continuation loop.
+        ObjectiveEstimate estimateObjective();
+
+        // What estimateObjective() last reported, filled at the end of a steady
+        // solve. Invalid when the run had no AdjointProblem.
+        ObjectiveEstimate lastObjectiveEstimate() const { return objectiveEstimate; };
+
+        // Why the last steady solve stopped. Set before either failure path
+        // throws, so it survives being caught.
+        SteadyOutcome lastSteadyOutcome() const { return steadyOutcome; };
+
         // The same, one entry per KINSol invocation, in the order they ran.
         // Filled whether or not the per-step lines were printed, so a driver can
         // have the trace without the output -- and, like the totals, it survives
@@ -353,28 +438,47 @@ class SystemSolver
         // initialize() has run, so Y/dYdt/LS/sunMat exist and Y holds a
         // consistent initial condition. Leaves the converged state in Y and in
         // yJac, which is what the adjoint solve and the output path read.
-        void solveSteadyState();
+        void solveSteadyState(bool resume = false);
+
+        // Resume a solve that stopped on its step budget rather than on its
+        // tolerance, from the state and the pseudo-transient step it left
+        // behind. A fresh solveSteadyState() re-enters at
+        // PseudoTransientInitialStep and re-climbs the SER ramp; this does not,
+        // which is the whole saving on a short run driven in slices.
+        //
+        // The solver must still be initialised -- this is a phase of one run,
+        // not a second run -- so a caller wanting it drives initialize() and
+        // solveSteadyState() itself rather than going through runSolver(),
+        // which frees the state on the way out of a failed solve.
+        void continueSteadyState() { solveSteadyState(true); };
+
+        // The two halves of what integrate() does once a steady solve has an
+        // answer in Y. Public because a sliced solve drives the phases itself
+        // and has to reach them; integrate() calls the same two, so the sliced
+        // and unsliced paths cannot drift apart.
+        //
+        // finishRun() is shared with the time-marching branch. Call it once per
+        // run: it closes the output files, so a second call writes nothing.
+        void writeSteadyState();
+        void finishRun();
+
+        // Close every output file the run opened. Idempotent, and called on the
+        // failure paths too -- a run that dies still has to leave a readable
+        // .nc behind.
+        void closeOutputFiles();
+
+        // Copy the current state into yJac, which is where "the solution" is
+        // read from: `y` is a non-owning view over Y and dangles after
+        // destroySundials(). finishRun() does this at the end of a run; a
+        // sliced solve does it per slice, so a driver looking between slices
+        // sees the state it has reached rather than the initial condition.
+        void captureState();
 
         // The two KINSOL callbacks, public because the C shims in
         // SteadyState.cpp reach them through the user_data pointer.
         int steadyResidual(N_Vector u, N_Vector fval);
         void steadyJacSetup(N_Vector u);
 
-        // Arm the dG/dt early-exit gate: after the initial condition is built,
-        // abandon the run rather than integrate it if the objective is already
-        // getting worse. For an optimisation sweep that turns a wasted transport
-        // solve into the cost of initialisation alone.
-        //
-        // An absolute threshold on a dimensional quantity has no sensible
-        // default, so the gate is off until this is called -- like
-        // setSteadyStateTolerance above, which this deliberately mirrors.
-        void setObjectiveDecreaseTolerance(double dGdt_tol)
-        {
-            if (dGdt_tol <= 0)
-                throw std::logic_error("Tolerance for objective-decrease termination cannot be zero or negative.");
-            objective_decrease_tol = dGdt_tol;
-            CheckObjectiveDecrease = true;
-        };
         void setNOutput(int nO)
         {
             if (nO <= 0)
@@ -411,21 +515,6 @@ class SystemSolver
         // Creates the MX cellwise matrices used at each Jacobian iteration
         // Factorization of these matrices is done here
         void updateMatricesForJacSolve();
-
-        // Fill the algebraic blocks of dydtComplete -- q', sigma', phi' and
-        // lambda' -- by differentiating the constraints that define them.
-        //
-        // IDA never computes them: IDA_YA_YDP_INIT produces algebraic *values*
-        // and differential *derivatives*, so at t0 those blocks of its dYdt are
-        // identically zero and anything differentiating the solution in time sees
-        // only the u term. Differentiating the algebraic residual rows gives
-        // dF/dy . ydot = -dF/dt, which is a linear system in exactly those
-        // unknowns once u' -- which IDA does have -- is treated as data.
-        //
-        // Reads Y and dYdt, so it is only meaningful after initialize(). Writes
-        // dydtComplete and nothing else; IDA's own dYdt is the state it takes its
-        // first step from and must not be touched.
-        void computeAlgebraicTimeDerivatives();
 
         // Solves the Jy = g equation. Dispatches on whether a field model is
         // attached: without one this *is* solveTransportJac, bit for bit.
@@ -479,7 +568,8 @@ class SystemSolver
         // The run lifecycle, in three phases.
         //
         //   initialize()       allocate the SUNDIALS objects, build the initial
-        //                      condition, open the output files, run IDACalcIC
+        //                      condition, open the output files, and -- only for
+        //                      a run that will time-march -- run IDACalcIC
         //   integrate(tFinal)  the time loop, then the adjoint solve and the
         //                      final netCDF / restart output
         //   destroySundials()  free everything initialize() allocated
@@ -499,24 +589,6 @@ class SystemSolver
         void integrate(double tFinal);
         void destroySundials();
         void runSolver(double tFinal);
-
-        // The dG/dt gate, asked between initialize() and integrate() -- which is
-        // the reason the split has to exist for it. Returns false when the gate
-        // is disarmed, so an unconfigured caller sees no behaviour change.
-        //
-        // Only meaningful after initialize(): it reads y and dydt, which map the
-        // live SUNDIALS vectors, and it needs the *post*-IDACalcIC derivative.
-        // Before initialize() there is nothing mapped; after destroySundials()
-        // they dangle.
-        bool objectiveIsDecreasing();
-
-        // Whether the gate rejected the run, i.e. runSolver() skipped the time
-        // loop. Cleared at the top of every initialize().
-        bool wasRejected() const { return objective_rejected; };
-
-        // The dG/dt values the last objectiveIsDecreasing() computed, one per
-        // objective. For diagnostics and for the tests.
-        Vector const &lastDGdt() const { return last_dGdt; };
 
         void setAdjointProblem(AdjointProblem *ap) { adjointProblem = ap; };
         void runAdjointSolve();
@@ -616,6 +688,83 @@ class SystemSolver
         // setSuppressAlgebraicError's use in Solver.cpp and docs/running.rst.
         void setSuppressAlgebraicError(bool in) { suppressAlgebraicError = in; };
 
+        // Run IDACalcIC on a run that would otherwise skip it.
+        //
+        // Two skip by default, for different reasons, and neither is about
+        // saving work:
+        //
+        //   * a **steady solve** never takes an IDA step, so solveSteadyState
+        //     drives the whole residual to zero from Y with KINSOL and whatever
+        //     IDACalcIC computed is discarded by the first accepted continuation
+        //     step. Worse, IDACalcIC fails on states a steady solve handles
+        //     without difficulty -- python-examples/jardin-critical-gradient
+        //     returns IDA_CONV_FAIL from the *exact* steady state, the one
+        //     initial condition a steady solve would have accepted instantly.
+        //
+        //   * a **restart** resumes from a state the previous run had already
+        //     driven onto the constraint manifold, so there is nothing to
+        //     correct. getInitialResidualNorm() reports how true that was on the
+        //     run in hand.
+        //
+        // A cold time-marching run always runs IDACalcIC and there is no way to
+        // turn that off. It needs a consistent initial condition and its guess is
+        // not one: IDA_ERR_FAIL (-3) on the first step is what an inconsistent
+        // state looks like, and a local error estimate that will not shrink with
+        // h is not something an option should be able to opt into. A caller who
+        // does not care about the transient wants SteadyStateSolver =
+        // PseudoTransient or Newton, not an uncorrected time march.
+        //
+        // So this key only ever *adds* IDACalcIC. It is the escape hatch for a
+        // restart that is not as consistent as a restart is supposed to be -- a
+        // file written by a different discretisation, say, where
+        // setInitialConditions projects rather than copies and builds the trace
+        // by averaging.
+        //
+        // Cost, for scale. IDACalcIC has no cheap path: its convergence test is
+        // on the *Newton step* -- IDANewtonIC calls lsolve and only then tests
+        // ||J^-1 F|| against epsNewt (ida_ic.c:404-417) -- and IDAnlsIC calls
+        // lsetup unconditionally before that (ida_ic.c:345). The outer loop then
+        // runs the whole thing twice on success, to refresh the error weights at
+        // the converged state (ida_ic.c:232). So the floor is two Jacobian builds
+        // and two Jacobian solves *however consistent the state already is*:
+        // measured on four fixtures handed a state CalcIC had just converged to
+        // (||F|| between 6e-15 and 7e-12), it costs 2 residual evaluations, 2
+        // builds and 2 solves with zero Newton iterations, every time. For MaNTA
+        // a build is updateMatricesForJacSolve() -- assemble and factorise every
+        // per-cell MX. On an already consistent AuxVarTest warm start at rtol
+        // 1e-6 that floor is the whole of the saving: 2 residual evaluations of
+        // 89 and 2 builds of 21.
+        //
+        // **Note what this deliberately is not: a residual threshold.** It
+        // replaced ConsistentICTolerance, which skipped when the initial weighted
+        // residual fell below a number the caller supplied. What IDACalcIC tests
+        // is ||J^-1 F||, a correction to y, and the two are related by a per-row
+        // amplification s_i = ||J^-1 e_i||_wrms that is nowhere near proportional
+        // to the error weights. Measured as s_i/ewt_i on LinearDiffusion, MatTest
+        // and AuxVarTest:
+        //
+        //   sigma, q                 0.6 - 10      about right, and uniform
+        //   u                        2.3e-4 - 2.0  over-weighted up to ~4000x
+        //   lambda, Dirichlet ends   exactly 0     largest weight in the vector,
+        //                                          on rows residual never writes
+        //   aux                      0.9 - 39      under-weighted up to ~10x vs sigma
+        //
+        // The u rows are the differential ones, whose residual IDA absorbs into
+        // u'. The Dirichlet trace rows are imposed inside the linear solve, so
+        // J^-1 e_i is identically zero there and they can only dilute the mean.
+        // Over six AuxVarTest warm-start states -- three tolerances, corrected and
+        // not -- ||J^-1 F|| / ||F|| ran from 15 to 187, for one problem at one
+        // discretisation. There is no number to pick, so the decision is made from
+        // what the run *is* rather than from what its residual measures.
+        void setForceConsistentIC(bool force) { forceConsistentIC = force; };
+        bool getForceConsistentIC() const { return forceConsistentIC; };
+
+        // The weighted residual norm initialize() measured at the initial state,
+        // and whether it then ran IDACalcIC. NaN and false when nothing was
+        // measured -- a steady solve, which skips CalcIC outright.
+        double getInitialResidualNorm() const { return initial_residual_norm; };
+        bool initialConditionWasCorrected() const { return calcICRan; };
+
         void setJacEvalY( N_Vector, N_Vector );
         int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
 
@@ -711,16 +860,26 @@ class SystemSolver
         // is a function of (psi, x) and star nodes are just more x.
         void evaluateGeometry(DGSoln const &Y, std::vector<Position> const &points,
                               GlobalState &states, Time t);
+        // ||F(t, Y, dYdt)|| in the WRMS norm with this solver's own error
+        // weights -- the same measure the WriteDebugDatFiles output reports, so
+        // the number a user sees in the .res.dat is the number the skip above is
+        // decided on. Costs one residual evaluation and nothing else.
+        double weightedResidualNorm(double t, N_Vector Y_in, N_Vector dYdt_in);
 
         // Adjoints
         void setSolveAdjoint(bool a) { solveAdjoint = a; }
 
-        void initializeMatricesForAdjointSolve();
+        void initializeMatricesForAdjointSolve(Index gIndex = 0);
 
         // Solve J^T z = dG/dy at the state the matrices above were built from.
         // Dispatches on whether a field model is attached, exactly as solveJacEq
         // does forwards: without one this *is* solveTransportAdjoint.
-        void solveAdjointState(Index i);
+        void solveAdjointState();
+
+        // One objective's contribution to G_p, at whatever adjoint state and
+        // adjoint matrices are currently in place. See the definition for why it
+        // is callable separately from computeAdjointGradients().
+        void accumulateAdjointGradients(Index gIndex);
 
         // The transpose of solveCoupledJacExact. The block elimination runs the
         // other way round, so the Schur complement onto psi is
@@ -876,6 +1035,12 @@ class SystemSolver
         N_Vector kinScale = nullptr; // unit scaling; KINSol requires a vector
         SteadyMode steadyMode = SteadyMode::TimeMarch;
         double ptcInitialStep = 0.0; // 0 means "use dt0"
+        // How many KINSol calls before giving up. Each is a full Newton solve,
+        // so a healthy run uses ten or so, and the default is a runaway
+        // backstop rather than a budget. Lowering it deliberately is what makes
+        // a solve stop early enough to be looked at and then resumed.
+        long maxContinuationSteps = 200;
+        bool estimateObjectiveOnFinish = true;
         double ptcMaxStep = std::numeric_limits<double>::infinity();
         double ptcStep = 0.0;        // the current dt; infinite in Newton mode
         double ptcSERRate = 1.0;     // exponent on the residual ratio
@@ -903,6 +1068,8 @@ class SystemSolver
         bool steadyDiagnostics = false;
         bool steadyStepDiagnostics = false;
         SteadyStats steadyStats;
+        ObjectiveEstimate objectiveEstimate;
+        SteadyOutcome steadyOutcome = SteadyOutcome::NotRun;
         std::vector<SteadyStepStats> steadyStepStats;
         N_Vector Y = nullptr;         // solution
         N_Vector dYdt = nullptr;      // time derivative of the solution
@@ -927,22 +1094,9 @@ class SystemSolver
 
         double *yJacMem = nullptr;
         double *dydtJacMem = nullptr;
-        // The time derivative with its algebraic blocks filled in.
-        //
-        // IDA's dYdt has zeros in q, sigma and phi at t0: IDA_YA_YDP_INIT
-        // computes algebraic *values* and differential *derivatives*, so there
-        // is no y' for them to fetch. computeAlgebraicTimeDerivatives() solves
-        // the differentiated constraints for them and writes the answer here.
-        //
-        // Here rather than into dYdt because dYdt is the state IDA takes its
-        // first step from: changing its algebraic entries after IDACalcIC would
-        // alter the integration, and the symptom would be a step-size failure
-        // somewhere later rather than anything pointing back here.
-        double *dydtCompleteMem = nullptr;
 
         DGSoln yJac; // memory owned by us
         DGSoln dydtJac; // memory owned by us
-        DGSoln dydtComplete; // memory owned by us; see dydtCompleteMem above
 
         // Built in initialiseMatrices(), once the polynomial degree and grid are
         // fixed. Non-copyable and holds a reference to `grid`, hence the pointer.
@@ -975,7 +1129,7 @@ class SystemSolver
         //
         // alphaValue scales the mass term in the u row -- IDA's cj for the
         // forward solve, and 0 where dF/dy alone is wanted, which is what makes
-        // this shareable with computeAlgebraicTimeDerivatives(). It is the *only*
+        // it shareable with anything that needs dF/dy alone. It is the *only*
         // place this block layout is written down for the forward direction;
         // initializeMatricesForAdjointSolve holds the transposed copy and has to
         // be kept in step with it block for block.
@@ -1053,9 +1207,9 @@ class SystemSolver
         // its own; the lambda, scalar and field segments of work are untouched.
         void subtractA1Times(Vector const &dpsi, N_Vector work) const;
 
-        // Allocate (or reallocate) the three buffers yJac, dydtJac and
-        // dydtComplete map. Called from the constructor, and again from
-        // setFieldModel, which changes how long they have to be.
+        // Allocate (or reallocate) the two buffers yJac and dydtJac map. Called
+        // from the constructor, and again from setFieldModel, which changes how
+        // long they have to be.
         void allocateJacobianStorage();
 
         // Free the a2 vectors, using the *current* nField as the count -- so
@@ -1063,15 +1217,6 @@ class SystemSolver
         void freeFieldWorkVectors();
 
         // The whole Jacobian, densely, in the solution vector's own ordering:
-        // [ sigma | q | u | aux ] per cell, then all of lambda, then mu. Built
-        // from the same blocks the forward solve applies without ever forming --
-        // assembleCellMatrix, CEBlocks, CG_cellwise, H_cellwise and the scalar
-        // coupling -- so it cannot drift from them.
-        //
-        // Only computeAlgebraicTimeDerivatives() and the tests want this; the
-        // forward path never assembles a Jacobian and never should.
-        Matrix assembleDenseJacobian(DGSoln const &Y, DGSoln const &Ydot, Time tEval,
-                                     double alphaValue);
 
         // The central-difference step: cbrt(eps) scaled by |t|. That is the
         // exponent that balances a *central* difference's truncation against its
@@ -1204,12 +1349,6 @@ class SystemSolver
         // Gauss rule -- the last of the family above, and the last differentiating
         // Int g dx rather than what GFn reports -- is gone with them.
         void dGdaux_Vec(Index, Vector &, Eigen::Ref<Matrix> const dX_dZ, DGSoln const &, Index intervalIndex);
-
-        // The time derivative of the objective, by the chain rule over the four
-        // vectors above. See AdjointVectors.cpp for why it is assembled here
-        // rather than asked of AdjointProblem.
-        Value dGdt(Index gIndex, DGSoln const &Y, DGSoln const &Ydot);
-        Value dGdt(Index gIndex) { return dGdt(gIndex, y, dydt); };
 
         double resNorm = 0.0; // Exclusively for unit testing purposes
 
@@ -1365,16 +1504,17 @@ class SystemSolver
         size_t localDOF;
 
         bool TerminateOnSteadyState = false;
+
+        bool forceConsistentIC = false;
+
+        // Set by setInitialConditions: true when a restart had to be *projected*
+        // onto a different discretisation rather than copied. The skip in
+        // initialize() is conditional on it -- see setForceConsistentIC.
+        bool restartWasProjected = false;
+        double initial_residual_norm = std::numeric_limits<double>::quiet_NaN();
+        bool calcICRan = false;
         double steady_state_tol = 1e-3;
 
-        // Off unless setObjectiveDecreaseTolerance arms it. There is no default
-        // worth having: dG/dt carries the units of the objective over time, so
-        // any number here would be meaningful for one case and nonsense for the
-        // next.
-        bool CheckObjectiveDecrease = false;
-        double objective_decrease_tol = 0.0;
-        bool objective_rejected = false;
-        Vector last_dGdt;
 #ifdef PHYSICS_DEBUG
         constexpr static bool physics_debug = true;
 #else

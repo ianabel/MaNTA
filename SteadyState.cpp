@@ -20,9 +20,8 @@
 //
 // Two pieces of the existing solver make this cheap. setAlpha already scales the
 // mass term in the u row -- IDA's cj for the forward solve, and 0 where dF/dy
-// alone is wanted, which computeAlgebraicTimeDerivatives has relied on for as
-// long as it has existed -- so alpha = 1/dt and alpha = 0 are both already
-// supported and exercised. And SunLinSolWrapper is solver-agnostic: its Setup is
+// alone is wanted -- so alpha = 1/dt and alpha = 0 are both already supported
+// and exercised. And SunLinSolWrapper is solver-agnostic: its Setup is
 // a no-op and its Solve calls solveJacEq, so KINSOL drives the same static
 // condensation IDA does.
 //
@@ -74,9 +73,6 @@ namespace
         return 0;
     }
 
-    // How many KINSol calls before giving up. Each is a full Newton solve, so a
-    // healthy run uses ten or so; this is a runaway backstop, not a budget.
-    constexpr int MaxContinuationSteps = 200;
 } // namespace
 
 int SystemSolver::steadyResidual(N_Vector u, N_Vector fval)
@@ -169,7 +165,7 @@ void SystemSolver::reportSteadyStats(std::string_view outcome, SteadyStats const
     std::println("  Jacobian solves         : {}", s.jacSolves);
 }
 
-void SystemSolver::solveSteadyState()
+void SystemSolver::solveSteadyState(bool resume)
 {
     if (!initialised)
         throw std::runtime_error("solveSteadyState called before initialize()");
@@ -248,9 +244,14 @@ void SystemSolver::solveSteadyState()
     // term NaN and every continuation step a no-op -- which is exactly what it
     // did, silently, until the residual trace showed dt = 0.
     const double fallback = (dt0 > 0.0) ? dt0 : dt;
-    ptcStep = (steadyMode == SteadyMode::Newton)
-                  ? std::numeric_limits<double>::infinity()
-                  : (ptcInitialStep > 0.0 ? ptcInitialStep : fallback);
+    // A resumed solve keeps the step SER has already climbed to. Re-entering at
+    // PseudoTransientInitialStep would repeat the ramp the previous call paid
+    // for, which on a solve that stopped against MaxContinuationSteps rather
+    // than against its tolerance is the entire cost of the previous call.
+    if (!(resume && ptcStep > 0.0))
+        ptcStep = (steadyMode == SteadyMode::Newton)
+                      ? std::numeric_limits<double>::infinity()
+                      : (ptcInitialStep > 0.0 ? ptcInitialStep : fallback);
 
     if (!(ptcStep > 0.0))
         throw std::runtime_error(
@@ -285,16 +286,50 @@ void SystemSolver::solveSteadyState()
     // on one solver.
     steadyStepStats.clear();
 
+    // Likewise the outcome, and for a sharper reason than tidiness: finish()
+    // is the only thing that sets it, so an exception raised from anywhere else
+    // -- a physics case throwing, say -- would otherwise leave the *previous*
+    // solve's verdict standing. A caller classifying that exception by asking
+    // what the outcome was would then be told OutOfSteps, and a driver looping
+    // on OutOfSteps would loop forever.
+    steadyOutcome = SteadyOutcome::NotRun;
+
     double Fprev = steadyNorm();
 
-    auto finish = [&](std::string_view outcome, int steps, int rejected)
+    // Every way out of the loop goes through here, including the two that then
+    // throw. That is what lets a caught failure still carry a partial answer:
+    // the objective estimate below is taken at whatever state the solve reached,
+    // and it comes with a bound saying how much that state is worth.
+    auto finish = [&](std::string_view outcome, int steps, int rejected,
+                      SteadyOutcome why, double Fnorm)
     {
+        steadyOutcome = why;
+
+        // Only when there is an objective to estimate, so a run without
+        // solveAdjoint pays nothing. One Jacobian build and one solve against a
+        // whole continuation, and it is what tells a sweep whether a difference
+        // between two parameter points is the answer moving or the solver
+        // stopping short.
+        //
+        // Charged per *solve*, so a solve driven in slices pays it per slice.
+        // EstimateObjectiveOnFinish turns it off for a driver that only wants
+        // the estimate at the end.
+        //
+        // Before the counters are differenced, so its cost lands in the stats
+        // of the solve that paid it. After them it would fall between two
+        // slices and be charged to neither, which is exactly the number a
+        // driver deciding whether to go on estimating needs to see.
+        if (estimateObjectiveOnFinish)
+            objectiveEstimate = estimateObjective();
+
         stats.steps = steps;
         stats.rejected = rejected;
+        stats.residualNorm = Fnorm;
         stats.residualEvals = nResidualEvals - residualEvals0;
         stats.jacBuilds = nJacBuilds - jacBuilds0;
         stats.jacSolves = nJacSolves - jacSolves0;
         steadyStats = stats;
+
         reportSteadyStats(outcome, stats);
     };
 
@@ -317,7 +352,8 @@ void SystemSolver::solveSteadyState()
         logmsg<LOG_LEVEL::INFO>("Steady solve: initial state already converged");
         std::println("  the initial state is already converged; nothing to do.");
         setJacEvalY(Y, ptcDYdt);
-        finish("converged (no continuation steps needed)", 0, 0);
+        finish("converged (no continuation steps needed)", 0, 0, SteadyOutcome::Converged,
+               Fprev);
         return;
     }
 
@@ -338,7 +374,7 @@ void SystemSolver::solveSteadyState()
 
     int step = 0;
     int rejected = 0;
-    for (; step < MaxContinuationSteps; ++step)
+    for (; step < maxContinuationSteps; ++step)
     {
         // What this one continuation step costs. MaNTA's counters are monotonic,
         // so they are differenced across the whole step body -- not just across
@@ -400,7 +436,9 @@ void SystemSolver::solveSteadyState()
             // call, and reporting the previous step's norm as this one's would
             // be a plausible number that is not a measurement.
             closeRecord(std::numeric_limits<double>::quiet_NaN(), false);
-            finish(std::format("FAILED: KINSol returned {}", retval), step, rejected);
+            finish(std::format("FAILED: KINSol returned {}", retval), step, rejected,
+                   SteadyOutcome::SolverFailed,
+                   std::numeric_limits<double>::quiet_NaN());
             throw std::runtime_error(std::format(
                 "Steady solve failed: KINSol returned {} at continuation step {} "
                 "with dt = {:g} and ||F|| = {:g}. Consider SteadyStateSolver = "
@@ -422,8 +460,10 @@ void SystemSolver::solveSteadyState()
 
             // dYdt is IDA's derivative vector, and nothing in this function has
             // touched it -- the damping above runs on the scratch ptcDYdt. So on
-            // return it still holds whatever IDACalcIC left at t0, which for a
-            // converged steady state is simply wrong: the defining property of
+            // return it still holds the t0 derivative initialize() left there,
+            // which since this path skips IDACalcIC (Solver.cpp) is the guess
+            // setInitialConditions solved out of the u row. Either way it is
+            // simply wrong for a converged steady state: the defining property of
             // the answer is that dy/dt vanishes. Two things read it afterwards
             // and both were getting the t0 derivative -- WriteRestartFile
             // (Solver.cpp), so a restart resumed from a state whose y was the
@@ -445,7 +485,7 @@ void SystemSolver::solveSteadyState()
 
             std::println("  converged: ||F|| = {:g} after {} continuation steps.",
                          Fnow, step + 1);
-            finish("converged", step + 1, rejected);
+            finish("converged", step + 1, rejected, SteadyOutcome::Converged, Fnow);
             return;
         }
 
@@ -497,11 +537,12 @@ void SystemSolver::solveSteadyState()
         }
     }
 
-    finish("FAILED: ran out of continuation steps", step, rejected);
+    finish("FAILED: ran out of continuation steps", step, rejected,
+           SteadyOutcome::OutOfSteps, Fprev);
 
     throw std::runtime_error(std::format(
         "Steady solve did not converge in {} continuation steps: ||F|| = {:g} "
         "against a tolerance of {:g}, with dt = {:g}. The residual is not "
         "falling; SteadyStateSolver = \"TimeMarch\" is the fallback.",
-        MaxContinuationSteps, Fprev, steady_state_tol, ptcStep));
+        maxContinuationSteps, Fprev, steady_state_tol, ptcStep));
 }

@@ -22,6 +22,15 @@ Found 2026-08-23. CLAUDE.md has the summary; this is the reproduction.
     the AuxDiffusion cases, plain and superconvergent, at k = 1, 2 and 3, drift
     ~1.24.
 
+    NOTE: `algebraic_derivative_tests` no longer exists -- it went with the dG/dt
+    gate, the only thing that read the algebraic time derivatives -- so step 3
+    cannot be run as written. The miscompilation was never diagnosed, only
+    bounded, so this needs a fresh reproduction rather than deletion. What
+    mattered was a dense finite-difference of residual() inlined into a test
+    translation unit plus a change to SystemSolver's member layout;
+    SolveJacTests.cpp differences the residual the same way and is where to
+    start.
+
   The signature, which is how to recognise it if it turns up elsewhere: the
   differenced Jacobian loses the column of the first interior trace DOF
   (index 33 / 49 / 65 at k = 1 / 2 / 3, always lambda[1]), giving 0 against a
@@ -335,6 +344,80 @@ reason it was not made:
         solver does not currently offer a State.
 
     Both want a Python-attachable field model first, or they are untestable.
+  - The objective estimate has no in-loop consumer yet.
+
+    estimateObjective() is callable at any point and leaves alpha and the
+    factorised blocks as it found them, so a continuation step can ask it. What
+    the loop cannot do is *act* on the answer: solveSteadyState has three ways
+    out and two of them throw, so there is no path for "stop here, this is good
+    enough" or "stop here, this cannot beat the incumbent". SteadyOutcome records
+    which exit was taken and the estimate is filled before either throw, so a
+    caught failure carries a usable partial answer, and MaxContinuationSteps plus
+    continueSteadyState() turn that into a workable slice-and-inspect loop: a
+    solve cut short resumes at the state and the pseudo-time step it reached, at
+    no measured cost in continuation steps. That is enough for a caller willing
+    to look between slices. A clean early return from *inside* a step still needs
+    adding, along with whatever criterion would drive it.
+
+    Before adding one, note what the measurements say about the criterion. An
+    early exit keyed on the *bound* is worth much less than it sounds: the
+    objective's error is proportional to ||J^-1 F||, and driving ||F|| down is the
+    whole of the solve, so there is no tail to cut. Deciding G to 1% still costs
+    95% of the solve and even a 50% decision costs 80%. The win is in solving
+    looser and correcting -- 34% cheaper and three times more accurate than
+    converging two orders harder and taking G raw -- which needs no early exit at
+    all, only a caller willing to set SteadyStateTolerance and read `corrected`.
+
+    So the in-loop hook is for a criterion nobody has yet: abandoning a parameter
+    point against an incumbent the caller supplies. That is worth building when
+    there is a sweep to measure it on.
+
+    The slice loop is reachable from Python as start_steady / continue_steady /
+    finish_steady, wrapped as manta.SteadySolve, and through the JAX FFI on the
+    same names -- so manta.SteadySolve(ffi_runner) works. CPU only, like Run and
+    Run_ss; the outcome is returned as a concrete int32, which forces the sync a
+    Python `while` needs and is why a slice loop belongs in eager code or inside
+    an io_callback rather than under jit.
+
+  - Degree adaptation and a sliced steady solve are refused together, and the
+    combination that would be worth having is not the one that was refused.
+
+    start_steady() throws when DegreeAdaptation is set. The mechanical reason is
+    that adapting the degree *replaces* the SystemSolver, once per degree
+    (PyRunner::adaptDegree), while a slice loop holds the state of the one it
+    started on -- so the loop would be resuming into a solver that no longer
+    exists. Refusing is right for now: it is one line, and it fails where the
+    mistake was made rather than several slices later.
+
+    What is actually wanted is the other order. Slice to a converged state at the
+    degree you have, raise the degree, and carry on from the answer you already
+    reached -- which is a *restart* rather than a continuation, because the
+    coefficients move to a different space. setInitialConditions already does
+    that transfer for a restart file, and knows the difference: a degree change
+    is projected, so sigma is rebuilt and the state it hands the solver is a
+    guess like any other. The trace survives verbatim, since lambda has no
+    polynomial degree.
+
+    So the pieces exist and the sequencing is the work: after a converged slice,
+    project the state onto the new degree, rebuild the solver, and re-enter the
+    continuation. Note the pseudo-time step should *not* transfer with it -- the
+    projected state is off the manifold in a way the old dt was not chosen for,
+    which is the same reason a projected restart runs IDACalcIC where a copied
+    one does not.
+
+  - Two things about the estimate are unmeasured and would change its sizing.
+
+      * The norm. The bound pairs unweighted 2-norms. Pairing the WRMS norm with
+        its dual should be tighter, and is the norm IDA's own error test would
+        recognise.
+      * Whether it transfers to a time-marching run. Only steady solves were
+        measured, and there G is a property of the fixed point rather than of a
+        path, which is what makes J^-1 F the right correction.
+
+    The stellarator's cost profile is the other open question -- a solve that
+    spends many steps at low residual would change the arithmetic above -- and
+    needs a machine that can hold the real resolution: the full case wants ~88 GB
+    for the drift-kinetic solve, and the reduced one does not converge.
 
 Superconvergence follow-ons (see Tests/README.md for what is already verified):
 

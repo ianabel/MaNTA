@@ -175,12 +175,143 @@ catch a sign error there.
 called separately:
 
 * `SystemSolver::initialize` — allocate the SUNDIALS objects, build the initial
-  condition, open the output files, run `IDACalcIC`.
+  condition, open the output files, and *sometimes* run `IDACalcIC`. Two
+  independent reasons not to:
+
+  * **A steady solve skips it outright.** `solveSteadyState` drives the whole
+    residual to zero from `Y` with KINSOL, so a correction made first is
+    discarded by the first accepted continuation step. The gate is
+    `solvesForSteadyState()`, so `SteadyStateSolver = "TimeMarch"` and a plain
+    transient both keep the call.
+  * **A restart skips it too, on the copy path.** It resumes from a state the
+    previous run had already driven onto the constraint manifold, and `IDACalcIC`
+    cannot find that out cheaply: its convergence test is on the Newton *step*, so
+    `IDANewtonIC` calls `lsolve` and only then tests `||J^-1 F|| <= epsNewt`
+    (`ida_ic.c:404-417`), `IDAnlsIC` calls `lsetup` unconditionally first
+    (`ida_ic.c:345`), and the outer loop runs the whole thing twice on success
+    (`ida_ic.c:232`). Measured floor, handed a state it had just converged to:
+    **2 residual evaluations, 2 Jacobian builds, 2 Jacobian solves, 0 Newton
+    iterations** — every time, and on an already consistent `AuxVarTest` warm
+    start at rtol 1e-6 that floor is the whole of the saving: 2 residual
+    evaluations of 89 and 2 builds of 21.
+
+    **Only the copy path.** A restart onto a *different* degree is projected —
+    `setInitialConditions` transfers `u`, `q`, aux and the scalars and then
+    rebuilds `sigma` and the trace — so what it hands IDA is a guess like any
+    other, and skipping there is a broken run rather than a saving: `AuxVarTest`
+    resuming at a lower degree fails with `IDA_ERR_FAIL` when `IDACalcIC` is
+    skipped and completes when it runs. `restartWasProjected` carries that from
+    `setInitialConditions` to `initialize`, and
+    `only_a_copied_restart_is_treated_as_already_consistent` pins both halves.
+
+  **A cold time-marching run always runs it, and there is no option to turn that
+  off.** Its guess is not a consistent state, `IDA_ERR_FAIL` on the first step is
+  what starting from one looks like, and a caller who does not care about the
+  transient wants `SteadyStateSolver = PseudoTransient` or `Newton` rather than an
+  uncorrected time march. `ForceConsistentIC` therefore only ever *adds*
+  `IDACalcIC` back — to a steady solve, or to a restart that is not as consistent
+  as a restart is supposed to be. `initialize` evaluates the residual once and
+  reports its WRMS norm through `getInitialResidualNorm()` on every time-marching
+  run, armed or not, so a caller can see how consistent the state they resumed
+  from actually was; `initialConditionWasCorrected()` says whether CalcIC ran.
+
+    **The decision is made from what the run *is*, not from a residual threshold,
+    and that is a measurement.** This replaced `ConsistentICTolerance`, which
+    skipped when the initial weighted residual fell below a number the caller
+    supplied. What `IDACalcIC` tests is
+    `||J^-1 F||_wrms` — a *correction to y* — and `weightedResidualNorm` says as
+    much. The two differ by the per-row amplification `s_i = ||J^-1 e_i||_wrms`,
+    and `s_i` is nowhere near proportional to the `ewt` the norm applies. Measured
+    per block, as `s_i / ewt_i`, on three cases (`LinearDiffusion`, `MatTest`,
+    `AuxVarTest`):
+
+    | block | `s/ewt` | reading |
+    |---|---|---|
+    | `sigma`, `q` | 0.6 – 10 | about right, and uniform, so harmless |
+    | `u` | 2.3e-4 – 2.0 | over-weighted up to ~4000x |
+    | `lambda`, Dirichlet ends | **exactly 0** | weight 1e5–1e8 on rows nothing can reach |
+    | `aux` | 0.9 – 39 | under-weighted up to ~10x *relative to `sigma`* |
+
+    The `u` rows are the differential ones, whose residual IDA absorbs into `u'`;
+    the Dirichlet trace rows are the ones `residual` never writes, so `J^-1 e_i`
+    is identically zero there and they can only dilute the mean. The `aux` row's
+    spread is the one that bites, because it is a *relative* error against the
+    block a corrected state's residual lands in.
+
+    **What that costs, on the tree as it stands, is calibration.** Across six
+    `AuxVarTest` warm-start states — three tolerances, corrected and not — the
+    amplification `||J^-1 F|| / ||F||` runs from **15 to 187**. One problem, one
+    discretisation. A threshold on `||F||` therefore means something different at
+    each of them, which is what makes "set it per problem" honest advice rather
+    than a hedge.
+
+    **Until recently it was worse than uncalibrated — it was inverted**, and that
+    is how the underlying defect was found. Before `AuxVarTest`'s missing
+    `dSigma_dPhi` block was declared, a warm start there measured `||F||` = 1.6e-4
+    uncorrected against 3.8e-4 corrected — the uncorrected state 2.4x *better* —
+    while `||J^-1 F||` made it 2.0e-2 against 3.1e-3, 6.3x *worse*. The run sided
+    with the second: skipping failed with `IDA_CONV_FAIL`, correcting worked. IDA's
+    own log showed why — the failing Newton's correction plateaued at 1.98e-2 as
+    `h` fell, which *is* `||J^-1 F||`, while `||F||` could not see it. Note that
+    `||J^-1 F||` predicted that failure using the *defective* `J`, which is the
+    point of the quantity: it measures the Newton the solver will actually run,
+    not the one it ought to.
+
+    That fixture is fixed. `SigmaFn` adds `(a - u*u)` to both variables' fluxes
+    while the derivative was declared for variable 0 only, so off the manifold —
+    i.e. exactly on a warm start — Newton diverged; finite-differencing put the
+    block out by 98% before and 4.2e-9 after. **Every restart round trip in the
+    suite now completes with the skip armed**, at every tolerance measured, and on
+    the current tree the two norms order those states the same way. So there is no
+    longer a case in the tree that *requires* `IDACalcIC`.
+
+    So there is no number to pick, which is why the decision is now made from what
+    the run *is*. A test that would be correct — `||J^-1 F||` itself — costs one
+    residual, one Jacobian build and one Jacobian solve against `IDACalcIC`'s floor
+    of two of each: a factor of two, not a near-free test, and not obviously worth
+    having when the run already knows whether it is a steady solve or a copied
+    restart.
+
+    ~~Note the opposite failure too: a TestDiffusion warm start at rtol 1e-6 /
+    atol 1e-8 cannot complete `IDACalcIC` at all.~~ **That was a MaNTA bug, and it
+    is fixed.** `initialize` passed `IDACalcIC` the *interval* `dt0 > 0 ? dt0 : dt`
+    where `tout1` wants an absolute time. Every fixture in the tree starts at
+    `t0 = 0`, where the two agree bit for bit, so no cold start ever noticed; a
+    restart resumes at the time the file was written, and that fixture restarts at
+    `t0 = 0.05` with an output cadence of `0.05`, so `tout1` came out *exactly*
+    equal to `t0` and IDA refused the input — `IDA_ILL_INPUT` (-22), before
+    evaluating a single residual. Nothing to do with the tolerance: it reproduced
+    at every tolerance, and with `tout1 = t0 + dt` that same warm start converges
+    in 3 residual evaluations, as does a degree-projection restart whose weighted
+    residual is 8.7e3. Worse was available — a restart with `dt0` set and
+    `t0 > dt0` handed IDA a `tout1` *behind* `t0`, i.e. the wrong direction of
+    integration. For scale, TestDiffusion round trips separate cleanly (cold 0.30
+    at `atol = 1e-3` and 417 at `1e-8`; warm 7.7e-4 to 1.9e-2).
+
+  On either skip the `t0` output slice sees the guess `setInitialConditions`
+  built, which is the state the run really started from.
+
 * `SystemSolver::integrate(tFinal)` — the time loop, then the adjoint solve and
   the final netCDF / restart output.
 * `SystemSolver::destroySundials` — free all of it. Idempotent, and safe with no
   preceding `initialize`, which is what lets `runSolver` free on both the normal
   and the exceptional path.
+
+**A steady solve can also be taken in slices.** `MaxContinuationSteps` (default
+200) bounds one `solveSteadyState`; running out of it is a budget exhaustion, not
+a failure of method, and `continueSteadyState()` resumes from the state *and* the
+pseudo-time step SER climbed to. `integrate()`'s tail is factored as
+`writeSteadyState()` + `finishRun()` so a sliced solve ends the same way an
+unsliced one does; `finishRun` is shared with the time-marching branch and closes
+the output files, so it runs once per run. A second `solveSteadyState()` would resume from
+neither — `SteadyState.cpp` re-enters at `PseudoTransientInitialStep` unless the
+`resume` flag says otherwise — and re-climbing the ramp is the whole solve rather
+than a margin on it: a `NonlinearDiffusion` needing 15 continuation steps takes
+the same 15 in slices of three when each resumes, and does not converge in 40
+slices when each starts over
+(`a_resumed_steady_solve_does_not_re_climb_the_ser_ramp`). Slicing requires
+driving the phases directly, because `runSolver` frees the state on its way out
+of a failed solve, so `PyRunner::run_ss()` cannot do it.
 
 Every SUNDIALS handle is a member, not a local, so those three can be split.
 `ctx` is the exception: it belongs to the `SystemSolver`, not to a run, and
@@ -250,12 +381,12 @@ Two return codes worth being able to read without looking them up:
   is an absolute *time*, "the first value of t at which a solution will be
   requested", and it used to be passed the *interval* `dt0 > 0 ? dt0 : dt`. The
   two agree only at `t0 = 0`, which is where every fixture in the tree starts, so
-  it went unseen for years; `t_initial = delta_t` makes `tout1` land exactly on
-  `t0` and kills the run. Fixed to `t0 + (dt0 > 0 ? dt0 : dt)` —
-  `initialize_starts_at_a_nonzero_time` pins it. Worth knowing because it *looks*
-  like a hard initial condition and is not: a `TestDiffusion` warm start blamed on
-  tolerance for a while turned out to be exactly this, and converges in 3 residual
-  evaluations once `tout1` is right.
+  `t_initial = delta_t` would make `tout1` land exactly on `t0` and kill the run,
+  so it is `t0 + (dt0 > 0 ? dt0 : dt)` — the first time `integrate()` asks for —
+  and `initialize_starts_at_a_nonzero_time` pins that. Worth knowing because the
+  symptom *looks* like a hard initial condition and is not: it reproduces at every
+  tolerance, and a warm start that hits it converges in 3 residual evaluations
+  once `tout1` is right.
 * **`IDA_LINESEARCH_FAIL` (-13) from `IDACalcIC` means some residual row cannot be
   reduced *at all*, which is usually a declaration error rather than a bad guess.**
   `IDA_YA_YDP_INIT` solves for algebraic *values* and differential *derivatives*,
@@ -624,6 +755,30 @@ gives. Four pieces to know:
   which is load-bearing; see Known limitations. Its parameter table is
   declarative and lives at the top of `PyRunner.cpp`.
 
+  **A steady solve can be driven in slices from here too**, which is what makes
+  the resumable continuation above reachable from Python: `start_steady` /
+  `continue_steady` / `finish_steady` / `abandon_steady`, wrapped as
+  `manta.SteadySolve`. Three things are load-bearing. `OutOfSteps` is *returned*
+  and a `SolverFailed` throws, so a driver tells a spent budget from a dead solve
+  without reading a message — which relies on `solveSteadyState` clearing
+  `steadyOutcome` on entry, since `finish()` is the only thing that sets it and
+  an exception from inside the residual bypasses it entirely; a stale
+  `OutOfSteps` there is an infinite loop, not a wrong label. Each slice calls
+  `captureState()`, because
+  `getSolution` reads `yJac` and would otherwise hand back the initial condition
+  — silently, since `yJac` is always *a* valid state. And a live loop owns
+  SUNDIALS objects that **nothing else frees** — `~SystemSolver` does not call
+  `destroySundials` — so `configure()`, `~PyRunner` and any exception out of the
+  loop all abandon it explicitly; that is why the context manager is the form to
+  prefer. `DegreeAdaptation` is refused, since adapting the degree replaces the
+  solver the loop is holding.
+  The same four names are FFI ops (`ffi.hpp`, CPU only like `run`/`run_ss`), so
+  `manta.SteadySolve(ffi_runner)` works — `steadyStats()` and
+  `objectiveEstimate()` need none, being host-side reads that touch no device
+  memory. The outcome crosses as a concrete `int32`, which forces the sync a
+  Python `while` needs, so a slice loop belongs in eager code or inside an
+  `io_callback` rather than under `jit`.
+
   `G` returns the objective without the gradient. The saving is in the run, not
   in `G` itself: `integrate` calls `runAdjointSolve()` whenever `solveAdjoint` is
   set, so with `solveAdjoint = True` the gradients are already computed by the
@@ -841,8 +996,7 @@ The pointwise `DerivativeSubVector` overload and the `dGdu_Vec`/`dGdq_Vec`/
 `dGdsigma_Vec` wrappers over it are gone — they computed `∫ dg/dZ φ_i dx`, the
 derivative of `∫ g dx`, and no solve ever called them. `dGdaux_Vec` was the last
 one left and is now the same operator over `nAux` blocks: it takes the nodal
-`dg/dphi` from the batched `dg` and weights it, and `dGdt` goes through it too
-rather than applying the mass matrix inline. A C++ case's `dgFn_dphi` still
+`dg/dphi` from the batched `dg` and weights it. A C++ case's `dgFn_dphi` still
 reaches it, through `AdjointProblem::dg`'s default, which samples the hook at the
 nodes; a Python case supplies `dg` and `PyAdjointProblem::dgFn_dphi` raises.
 
@@ -855,10 +1009,9 @@ that covers every *affine* `dg/dZ`, and the mocks' hooks are affine in `x`. Both
 `the_derivative_sub_vector_weights_dg_by_the_integration_weights` and its aux
 sibling therefore passed with the mass matrix reinstated, by 3e-16 and 5e-16,
 until each was given a second half driven by a synthetic degree-`k` `dg/dZ` and a
-guard that the two operators still differ on it. Before that the only case in the
-suite that noticed at all was `dGdt_matches_a_finite_difference_of_the_objective`,
-at a relative 6e-6 against a 1e-6 tolerance. A reference built "straight from the
-weights" pins the formula, not the operator, if the data cannot tell them apart.
+guard that the two operators still differ on it. Those two guards are the whole of
+the coverage, so keep them: a reference built "straight from the weights" pins the
+formula, not the operator, if the data cannot tell them apart.
 
 ## Traps worth knowing before you edit
 
@@ -923,11 +1076,17 @@ weights" pins the formula, not the operator, if the data cannot tell them apart.
 
   The trigger is **any change to `SystemSolver`'s member layout**. Adding one
   inert member — a `bool` and an unused `std::vector<double>`, referenced by no
-  code anywhere — takes a clean `main` from 12/12 passing to 8/12 failing on
-  `algebraic_derivative_tests/the_assembled_jacobian_matches_a_finite_difference_of_the_residual`.
-  Only the `AuxDiffusion` cases fail, plain and superconvergent, at every `k`,
-  with a relative drift of about 1.24: an O(1) error, not a tolerance one. No
-  other test in the suite ever fails.
+  code anywhere — took a clean tree from 12/12 passing to 8/12 failing, on a test
+  that densely finite-differenced `residual()` inside the test translation unit.
+  Only the `AuxDiffusion` cases failed, plain and superconvergent, at every `k`,
+  with a relative drift of about 1.24: an O(1) error, not a tolerance one.
+  Nothing else in the suite ever failed.
+
+  **Reproducing it needs a test of that shape**, and the tree currently has none
+  wired for it; `SolveJacTests.cpp` differences the residual the same way and is
+  where to build one. The two ingredients are a dense finite-difference of
+  `residual()` inlined into a test TU and a change to `SystemSolver`'s member
+  layout. The defect was never diagnosed, only bounded, so treat it as live.
 
   What breaks is the **finite-difference reference**, not the assembly. `|J|` of
   the assembled Jacobian is bit-identical every run (7.9144520420784605 at
@@ -1081,6 +1240,47 @@ weights" pins the formula, not the operator, if the data cannot tell them apart.
   hard error, and `make coverage` fails with exit 64 on CI while passing locally.
   Anything that reads `.gcno`/`.gcda` must come from the same toolchain version
   that wrote them.
+* **A restart used to have its trace thrown away.** `setInitialConditions`
+  finished every restart with `EvaluateLambda()`, which sets `lambda` to
+  `{{u}}` -- the average of the two cell traces (`DGSoln.hpp`) -- and that is not
+  the equation `lambda` solves. The HDG trace row is
+  `Csigma sigma + Cq q + G_c u + H lambda = L(t)`, so applying the average to a
+  file that already holds a converged trace replaces it with something that
+  solves nothing: measured on a `TestDiffusion` round trip at
+  `Absolute_tolerance = 1e-8`, that one call takes the weighted residual from
+  2.6e-3 to 556. It is why a restart needed roughly ten times as many residual
+  evaluations inside `IDACalcIC` as a cold start. Note the reordering that went
+  with it: `ApplyDirichletBCs` now runs *after* the trace is settled, since
+  `EvaluateLambda` overwrites every entry including the boundary ones, so in the
+  old order the Dirichlet data was applied and then immediately discarded.
+
+  **The trace is kept whenever the *mesh* matches, not only the discretisation.**
+  `lambda` has no polynomial degree — `DGSoln::Map` gives it `nCells + 1` entries
+  and no basis — so a change of degree leaves it transferable verbatim even though
+  `copy()` refuses the state as a whole. That matters beyond `lambda` itself,
+  because the `q` row carries a `<lambda, v n>` term: on a `LinearDiffusion`
+  restart coarsened from `k = 4` to `k = 3` at `atol = 1e-10`, keeping the trace
+  takes the `q` block from 7.3e7 to 3.2e-7. Only a genuine remesh rebuilds it.
+* **`sigma` is loaded on a copy-path restart, not recomputed, and that is a
+  measurement too.** `DGSoln::copy` brings `sigma` across with everything else and
+  `ApplyDirichletBCs` touches only `lambda`, so `AssignSigma` was rebuilding it
+  from bit-identical inputs — at the price of a full `ComputePhysics` over every
+  node, which is *exactly one residual evaluation's worth of physics*
+  (`residual` makes the same call, `SystemSolver.cpp:1329`). It also evaluates
+  `Sources` for every variable and `AuxG` for every auxiliary one and drops both,
+  since only the flux is used. On a copy-path restart, which now skips
+  `IDACalcIC` entirely, that was half of all the physics `initialize()` did.
+
+  The trade is real and small: a rebuilt `sigma` satisfies its row *exactly*,
+  where the file's satisfies it only as well as the previous run's Newton
+  converged. Measured on the `sigma` row, recomputed against loaded —
+  `LinearDiffusion` 4.3e-19 / 1.5e-18 (both round-off), `AuxVarTest` 6.9e-18 /
+  5.6e-9, `nonlin` 3.5e-18 / 4.1e-7. No outcome moves: the whole restart
+  round-trip tolerance matrix is unchanged. And the loaded value is the more
+  faithful one — it is the `sigma` the previous run was actually integrating with
+  when it wrote the file, where the rebuilt one is a state that run never had.
+  The *projection* path still rebuilds it, because a degree change leaves the
+  stored coefficients in the wrong space.
 * **`RF_cellwise` and `L_global` hold *time-dependent* boundary data, and only
   `updateBoundaryConditions(t)` may fill them.** `initialiseMatrices` sizes and
   zeroes them; `setInitialConditions` calls `updateBoundaryConditions(t0)` before
@@ -1094,64 +1294,6 @@ weights" pins the formula, not the operator, if the data cannot tell them apart.
   `Tests/README.md`. Nothing in the tree notices a `t0` error, because every
   fixture starts at zero, so `the_initial_condition_uses_boundary_data_at_t0` is
   the only thing standing between that and a silent return.
-* **`IDACalcIC` is handed the output *cadence* where SUNDIALS wants the first
-  output *time*, and only `t0 == 0` hides it.** `Solver.cpp` passes
-  `dt0 > 0.0 ? dt0 : dt` as `tout1`, which IDA uses for the direction and rough
-  scale of `t`; at `t0 = 0` the delta and the absolute time coincide, and every
-  fixture in the tree starts at zero. A *restart* does not. With
-  `t_initial == delta_t` the distance is exactly zero and `IDACalcIC` returns
-  `IDA_ILL_INPUT` (-22), "tout1 too close to t0" — a message about the output
-  schedule for a run that has not started; with `t_initial > delta_t` IDA
-  concludes it is integrating backwards and gives `hh` the wrong sign.
-  Reproduces on `main` with no field model, from any config with
-  `restart = true` and `t_initial = delta_t`. **Not fixed** — `t0 + (dt0 > 0.0 ?
-  dt0 : dt)` is the correction and would be byte-identical for every run in the
-  tree, precisely because they all start at zero, but there is nothing that
-  would catch a mistake in it. `psi_round_trips_through_a_restart` works around
-  it with a comment, and `docs/running.rst` warns about it under Restarting.
-
-  **And `delta_t` is misread a second time on the same path**, which is what
-  stops "use a cadence above `t_initial`" being the workaround:
-  `if (problem->isRestarting()) IDASetInitStep(IDA_mem, dt)` makes the output
-  cadence the *first step*, on the reading that a resumed run should "continue
-  at the same delta t". So the two pull opposite ways — a cadence above
-  `t_initial` satisfies `tout1` and hands IDA an initial step longer than the
-  remaining integration, which failed the error test ten times over and died
-  `IDA_ERR_FAIL` (-3) at `h = 1.1e-6` in the restart test; a cadence below it
-  takes the backwards-`hh` branch of the first trap, harmlessly, and completes.
-  There is no cadence that avoids both, and the small one is what a resumed run
-  really has.
-* **`dydtComplete` is deliberately not IDA's `dYdt`, and the duplication is the
-  point.** `AlgebraicDerivatives.cpp` solves the differentiated algebraic
-  constraints for `q'`, `sigma'`, `phi'` and `lambda'` — IDA never computes them,
-  because `IDA_YA_YDP_INIT` produces algebraic *values* and differential
-  *derivatives* — and writes the answer into its own vector. Folding it back into
-  `dYdt`, which is the obvious tidy-up, would change the state IDA takes its first
-  step from: the surviving symptom would be a step-size or convergence failure
-  somewhere later in the run, pointing nowhere near here. Only
-  `objectiveIsDecreasing()` reads it, and only a run that arms the gate pays for
-  it, so nothing else notices either way.
-* **The differential rows of that solve are the identity on purpose**, and so are
-  the Dirichlet trace rows. `u'` and a differential scalar's `mu'` are *data* —
-  IDA has them — so their rows carry `1` and the known derivative rather than a
-  differentiated equation, which would bring in `u''`. The Dirichlet trace rows
-  look like a redundant special case and are not: `residual` never writes them
-  (`lambda = g_D(t)` is imposed inside the linear solve, which is also why a
-  finite-differenced Jacobian is rank-deficient by exactly the number of Dirichlet
-  boundaries), so without their own identity row and `dg_D/dt` the matrix is
-  singular by that same count. `the_u_block_round_trips_through_the_identity_row`
-  covers the first; the second is what
-  `the_derivatives_match_a_manufactured_solution` checks through `lambda'`.
-* **The central-difference step there is `cbrt(eps)`, not `sqrt(eps)`.** `sqrt(eps)`
-  is the *one-sided* choice, where truncation is `O(h F'')`; a central difference
-  has truncation `O(h^2 F''')` against round-off `O(eps |F| / h)`, and those
-  balance at `eps^(1/3)`. Using `sqrt(eps)` leaves round-off at `eps/h = 1.5e-8`
-  against a truncation of `2e-16` — eight orders apart rather than comparable — and
-  it measurably costs 2.5 decimal places: the manufactured case gets `q'` to 3.4e-8
-  with `sqrt(eps)` and to 5.6e-11 with `cbrt(eps)`, on a problem whose explicit
-  time dependence is linear in `t` and therefore has *no* truncation error at any
-  step. The design document specified `sqrt(eps)` and called it the central
-  choice; it isn't.
 * **`OutputFilename` names the output, and only its *basename* survives.**
   `loadSolverConfig` fills it from the config file's stem when the key is absent,
   so a run still defaults to `myrun.conf` -> `myrun.nc`; `Solver.cpp` then takes
@@ -1237,11 +1379,17 @@ These are deliberate and documented, not oversights — see `Tests/README.md` an
   adjoint output. The gradients themselves are verified through
   `PyRunner::getAdjointGradients` in `python/Tests/test_adjoint.py` and
   `test_adjoint_aux.py`.
-* Restarting is fragile at tight tolerances, more so with `nAux > 0`; each
-  regression round-trip case runs at the tightest tolerance that completes. A
-  coupled restart is *not* in that class — `psi` is copied out of the file and,
-  being differential, held fixed by `IDACalcIC`, so it round-trips bit for bit
-  at whatever tolerance the run itself survives.
+* ~~Restarting is fragile at tight tolerances, more so with `nAux > 0`.~~ Fixed.
+  All three regression round trips now survive `1e-6 / 1e-8`; the ceiling that
+  remains at `1e-8 / 1e-10` belongs to the cases (`MatTest`'s *uninterrupted* run
+  fails there too) rather than to the restart path. Two fixes closed it, neither
+  in the restart machinery: `setInitialConditions` discarding the converged trace
+  a restart file carries, and `AuxVarTest`'s missing `dSigma_dPhi` block.
+  `MatTest` stays at `1e-4` for cost, not capability — 1e-6 takes 101 s against
+  6.0 s.
+  A coupled restart is not in that class either — `psi` is copied out of the
+  file and, being differential, held fixed by `IDACalcIC`, so it round-trips
+  bit for bit at whatever tolerance the run itself survives.
 * **No field model is registered anywhere in the tree**, so `FieldModel` has
   nothing to name in the shipped binary and there is no coupled regression case.
   The two models that exist are unregistered fixtures under `Tests/UnitTests`.

@@ -90,6 +90,9 @@ BOOST_AUTO_TEST_CASE(a_minimal_config_loads_with_every_default_applied)
     BOOST_TEST(superconvergentAbsent);
     BOOST_TEST(!c.AggressiveTimesteps);
     BOOST_TEST(!c.SuppressAlgebraicError);
+    // Off by default: a steady solve and a restart skip IDACalcIC, and this is
+    // what puts it back. See setForceConsistentIC.
+    BOOST_TEST(!c.ForceConsistentIC);
     // PseudoTransient, not TimeMarch: run_ss() and a config carrying
     // SteadyStateTolerance both take the continuation path unless told not to.
     BOOST_TEST(c.SteadyStateSolver == "PseudoTransient");
@@ -393,6 +396,7 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         "Superconvergent = true\n"
         "AggressiveTimesteps = true\n"
         "SuppressAlgebraicError = true\n"
+        "ForceConsistentIC = true\n"
         "SteadyStateSolver = \"Newton\"\n"
         "PseudoTransientInitialStep = 0.25\n"
         "PseudoTransientMaxStep = 1e6\n"
@@ -428,7 +432,7 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         {"Absolute_tolerance", std::vector<double>{1e-7, 1e-8}},
         {"t_initial", 0.25}, {"OutputPoints", 51},
         {"Superconvergent", true}, {"AggressiveTimesteps", true},
-        {"SuppressAlgebraicError", true},
+        {"SuppressAlgebraicError", true}, {"ForceConsistentIC", true},
         {"SteadyStateSolver", std::string("Newton")},
         {"PseudoTransientInitialStep", 0.25}, {"PseudoTransientMaxStep", 1e6},
         {"PseudoTransientSERRate", 0.5}, {"PseudoTransientSERFloor", 1.5},
@@ -461,6 +465,7 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     BOOST_TEST(superconvergentAgrees);
     BOOST_TEST(fromToml.AggressiveTimesteps == fromMap.AggressiveTimesteps);
     BOOST_TEST(fromToml.SuppressAlgebraicError == fromMap.SuppressAlgebraicError);
+    BOOST_TEST(fromToml.ForceConsistentIC == fromMap.ForceConsistentIC);
     BOOST_TEST(fromToml.SteadyStateSolver == fromMap.SteadyStateSolver);
     BOOST_TEST(fromToml.PseudoTransientInitialStep == fromMap.PseudoTransientInitialStep);
     BOOST_TEST(fromToml.PseudoTransientMaxStep == fromMap.PseudoTransientMaxStep);

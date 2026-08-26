@@ -33,6 +33,7 @@ from ._manta import (
     Mixed as Mixed,
     Runner as Runner,
     Scalar as Scalar,
+    SteadyOutcome as SteadyOutcome,
     State as State,
     StateField as StateField,
     SystemSpec as SystemSpec,
@@ -50,6 +51,17 @@ Dirichlet: BoundaryKind
 Neumann: BoundaryKind
 
 __all__: list[str]
+
+
+class SteadySolve:
+    """A steady solve driven in slices; see manta.SteadySolve."""
+
+    def __init__(self, runner: Runner, estimate: bool = ...) -> None: ...
+    def __enter__(self) -> SteadySolve: ...
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool: ...
+    def __iter__(self) -> Any: ...
+    def stop(self) -> None: ...
+    def abandon(self) -> None: ...
 
 class TransportSystem(_TransportSystem):
     """Base class for a physics case.

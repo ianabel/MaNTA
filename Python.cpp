@@ -476,6 +476,20 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       "`pkg-config --cflags manta` reports, and do not link it against "
       "-lmanta; see the out-of-tree section of the docs.");
 
+  py::enum_<SystemSolver::SteadyOutcome>(
+      m, "SteadyOutcome",
+      "Why a steady solve, or one slice of one, stopped.")
+      .value("NotRun", SystemSolver::SteadyOutcome::NotRun,
+             "No steady solve has been taken on this solver.")
+      .value("Converged", SystemSolver::SteadyOutcome::Converged,
+             "||F|| fell below SteadyStateTolerance.")
+      .value("OutOfSteps", SystemSolver::SteadyOutcome::OutOfSteps,
+             "The MaxContinuationSteps budget was spent. Not a failure: the "
+             "state and the pseudo-time step reached are both good, and "
+             "continue_steady() resumes from them.")
+      .value("SolverFailed", SystemSolver::SteadyOutcome::SolverFailed,
+             "KINSol failed in a way pseudo-transient damping cannot answer.");
+
   py::class_<PyRunner, py::smart_holder>(m, "Runner")
       .def(py::init<std::shared_ptr<TransportSystem>>())
       // A C++ case by the name a config file's TransportSystem key would give.
@@ -492,10 +506,15 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def("run", static_cast<void (PyRunner::*)(double)>(&PyRunner::run))
       .def("run", static_cast<void (PyRunner::*)()>(&PyRunner::run))
       .def("run_ss", &PyRunner::run_ss)
-      .def("wasRejected", &PyRunner::wasRejected)
-      .def("lastDGdt", &PyRunner::lastDGdt)
+      .def("start_steady", &PyRunner::start_steady, py::arg("estimate") = true)
+      .def("continue_steady", &PyRunner::continue_steady,
+           py::arg("estimate") = true)
+      .def("finish_steady", &PyRunner::finish_steady)
+      .def("abandon_steady", &PyRunner::abandon_steady)
+      .def("steadyStats", &PyRunner::steadyStats)
       .def("G", &PyRunner::G)
       .def("getAdjointGradients", &PyRunner::getAdjointGradients)
+      .def("objectiveEstimate", &PyRunner::objectiveEstimate)
       .def("getSolution", &PyRunner::getSolution)
       .def("getDerivative", &PyRunner::getDerivative)
       .def("getPostprocessedSolution", &PyRunner::getPostprocessedSolution)
@@ -510,6 +529,10 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
     ffi_ops["get_g_val"] = EncapsulateFfiCall(get_g_val_ffi_ops);
     ffi_ops["run_ffi"] = EncapsulateFfiCall(run_ffi_ops);
     ffi_ops["run_ss_ffi"] = EncapsulateFfiCall(run_ss_ffi_ops);
+    ffi_ops["start_steady_ffi"] = EncapsulateFfiCall(start_steady_ffi_ops);
+    ffi_ops["continue_steady_ffi"] = EncapsulateFfiCall(continue_steady_ffi_ops);
+    ffi_ops["finish_steady_ffi"] = EncapsulateFfiCall(finish_steady_ffi_ops);
+    ffi_ops["abandon_steady_ffi"] = EncapsulateFfiCall(abandon_steady_ffi_ops);
     return ffi_ops;
   });
 #ifdef CUDA
