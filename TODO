@@ -1,12 +1,21 @@
-Add `Build + tests (g++-15, OpenMP)` to branch protection -- AFTER this lands.
-Raised 2026-08-26, and it is deliberately not done yet.
+Finish the branch-protection move for the Fedora legs -- AFTER this lands.
+Raised 2026-08-26. Two of the three steps are done; this is the third.
 
-  ci.yml publishes ten contexts on this branch; the protection rule on main
-  requires nine. The tenth is the OpenMP leg, and it cannot be required until the
-  leg exists on main, because a required context is matched by name against what
-  a PR's own workflow publishes -- so a PR branched from a main without the leg
-  can never satisfy it and hangs at "Expected" forever. It was required early
-  once, in the change that added the leg, and had to be reverted for that reason.
+  The Fedora job stopped being `Compile (fedora:latest)` and became two legs,
+  `Build + tests (fedora:latest)` and `Build + tests (fedora:latest, OpenMP)`.
+  Renaming a job renames its context, so the sequence is forced and cannot be
+  done in one step:
+
+    1. DONE, before the PR: drop `Compile (fedora:latest)` from the rule. A PR
+       carrying the rename cannot publish that name, so leaving it required would
+       have hung the PR that makes it publishable -- the deadlock this ordering
+       exists to avoid. `Coverage` came off in the same call, and
+       `Build + tests (g++-15, OpenMP)` went on, that leg already being on main.
+    2. DONE: merge the rename.
+    3. TODO: add `Build + tests (fedora:latest)` and
+       `Build + tests (fedora:latest, OpenMP)`, taking the rule to ten of the
+       eleven contexts ci.yml publishes. Until this is done both Fedora legs run
+       and gate nothing, and CLAUDE.md's table is a step ahead of the rule.
 
     gh api repos/ianabel/MaNTA/branches/main/protection/required_status_checks \
       -q '.contexts[]' | sort > /tmp/req
@@ -14,8 +23,8 @@ Raised 2026-08-26, and it is deliberately not done yet.
       -q '.statusCheckRollup[].name' | sort > /tmp/got
     diff /tmp/req /tmp/got
 
-  Left-only is required-but-impossible; right-only is ungated. CLAUDE.md's
-  "Branch protection" section carries the full version.
+  Left-only is required-but-impossible; right-only is ungated. Right-only is the
+  expected state between steps 2 and 3, and is the reason not to leave it there.
 
 
 No CI leg builds the documentation, so a -W failure reaches main unnoticed.

@@ -146,7 +146,7 @@ Read the live rule rather than trusting this paragraph —
   are, and a workflow that works for `ianabel` is not evidence it works for
   anyone else.
 
-**Nine of the ten contexts `ci.yml` publishes are required**, each pinned to app
+**Ten of the eleven contexts `ci.yml` publishes are required**, each pinned to app
 15368 (GitHub Actions), so a status of that name from anything else does not
 count:
 
@@ -154,19 +154,28 @@ count:
 Build + tests (g++-15)                    Build + tests (clang++-19)
 Build + tests (g++-16)                    Build + tests (clang++-20)
 Build + tests (g++-15, Eigen 5.0.1)       Build + tests (clang++-21)
-Build + tests (clang++-19, Eigen 5.0.1)   Compile (fedora:latest)
-                                          Coverage
+Build + tests (clang++-19, Eigen 5.0.1)   Build + tests (fedora:latest)
+Build + tests (g++-15, OpenMP)            Build + tests (fedora:latest, OpenMP)
 ```
 
-**The tenth is `Build + tests (g++-15, OpenMP)`, and adding it to the rule has to
-wait until the branch carrying it is on `main`.** That ordering is not fussiness;
-it is the failure this section already records, approached from the other side. A
-required context is matched by *name* against what a PR's own workflow publishes,
-and a PR branched from a `main` whose `ci.yml` has no OpenMP leg cannot publish
-one. Require it early and every unrelated PR sits at "Expected — waiting for
-status to be reported" indefinitely, while the green ticks beside it say the
-build is fine. It *was* required early once, in the change that added the leg,
-and had to be reverted for exactly that reason.
+**`Coverage` is the one that is deliberately *not* required**, and it is the only
+context here that publishes without gating anything. It runs `make coverage`'s
+successor — all three suites under an instrumented build — so what it would gate
+is what ten other legs already gate, at the cost of the slowest leg's wall-clock
+on every PR. It has no percentage threshold and never did, so it was never
+measuring coverage in the sense of holding a number: it was a duplicate build.
+Removed from the rule 2026-08-26. It still runs, and a red `Coverage` beside ten
+green legs is worth reading — an instrumented `-O0` build failing where the
+optimised ones pass is a real signal — but it does not block a merge.
+
+**A new leg's context can only be required once the leg is on `main`**, and that
+ordering is forced rather than fussy. A required context is matched by *name*
+against what a PR's own workflow publishes, so a PR branched from a `main` whose
+`ci.yml` lacks the leg cannot publish it: require it early and every unrelated PR
+sits at "Expected — waiting for status to be reported" indefinitely, while the
+green ticks beside it say the build is fine. `Build + tests (g++-15, OpenMP)` was
+required early once, in the change that added the leg, and had to be reverted for
+exactly that reason; it was added for real once that branch merged.
 
 So the sequence is: merge the leg, then add the context, then check the two agree
 with the `diff` below rather than assuming. The g++-16 leg builds
@@ -1556,11 +1565,13 @@ formula, not the operator, if the data cannot tell them apart.
   release build warns when it sees it; `TODO` has the full reproduction.
 
 * **gcc and clang do not diagnose the same things, so build with clang
-  occasionally** — that is what CI's clang matrix legs are for. (CI is seven
+  occasionally** — that is what CI's clang matrix legs are for. (CI is eight
   `build-and-test` legs: g++-15/16 and clang++-19/20/21 against the distro's
-  Eigen 3.4.0, plus g++-15 and clang++-19 against Eigen 5.0.1; then a Fedora container job that
-  only *compiles*, to keep the build's notions of a system prefix — `/usr/lib64`,
-  pkg-config-discovered netCDF — from quietly becoming Ubuntu-specific.) gcc never
+  Eigen 3.4.0, plus g++-15 and clang++-19 against Eigen 5.0.1, plus g++-15 with
+  `MANTA_OPENMP=ON`; then two Fedora container legs, with and without OpenMP,
+  which keep the build's notions of a system prefix — `/usr/lib64`,
+  pkg-config-discovered netCDF — from quietly becoming Ubuntu-specific. Those two
+  built and stopped until 2026-08-26 and now run the suites as well.) gcc never
   diagnoses a polymorphic base with a non-virtual destructor; clang does
   (`-Wdelete-non-abstract-non-virtual-dtor`), and it reports it at the point of
   *destruction* inside libstdc++, once per instantiating translation unit, which
