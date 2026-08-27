@@ -903,8 +903,8 @@ BOOST_AUTO_TEST_CASE(selecting_the_exact_solve_warns)
     // Guarded by build variant, following UtilityTests.cpp's logging test. The
     // iterative branch is INFO, which Logging.hpp compiles out below WARNING --
     // so "the default run says nothing about FieldSolve" is true of a release
-    // build and false of `make DEBUG=on test` and `make VERBOSE=on test`, both
-    // of which are documented variants that no CI leg covers. Asserting the
+    // build and false of a Debug build or -DMANTA_VERBOSE=ON, both of which are
+    // documented variants that no CI leg covers. Asserting the
     // release form unconditionally would have left them failing here, findable
     // only by someone already debugging something else.
 #if defined(DEBUG) || defined(VERBOSE)

@@ -1,0 +1,67 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 22, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Release",
+      "description": "-O3 -flto=auto -march=native, asserts left on. What a run's numbers should come from.",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "description": "-O0 -g -DDEBUG -DPHYSICS_DEBUG. State.hpp's checkShapeAndSet becomes shape-checking rather than a plain assignment.",
+      "binaryDir": "${sourceDir}/build-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "coverage",
+      "displayName": "Coverage",
+      "description": "-O0 --coverage -fno-inline, no LTO, no -Werror. Build the `coverage` target here.",
+      "binaryDir": "${sourceDir}/build-coverage",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Coverage"
+      }
+    },
+    {
+      "name": "portable",
+      "displayName": "Release, portable",
+      "description": "Release without -march=native, for a build that has to run on a different machine from the one that compiled it.",
+      "binaryDir": "${sourceDir}/build-portable",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "MANTA_NATIVE_ARCH": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "default", "configurePreset": "default" },
+    { "name": "debug", "configurePreset": "debug" },
+    { "name": "coverage", "configurePreset": "coverage" },
+    { "name": "portable", "configurePreset": "portable" }
+  ],
+  "testPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "unit",
+      "configurePreset": "default",
+      "filter": { "include": { "name": "^unit$" } },
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

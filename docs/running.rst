@@ -3,7 +3,7 @@ Running MaNTA, and its output
 
 .. code-block:: sh
 
-   ./MaNTA myproblem.conf
+   build/MaNTA myproblem.conf
 
 Output file names
 -----------------
@@ -14,7 +14,7 @@ Output names default to the **stem of the configuration file**, and
 .. warning::
 
    Whichever name is used, the files land in the **current working directory**:
-   any directory part is dropped. ``./MaNTA runs/case7.conf`` writes
+   any directory part is dropped. ``build/MaNTA runs/case7.conf`` writes
    ``./case7.nc``, not ``runs/case7.nc``, and setting
    ``OutputFilename = "out/case7"`` still writes ``./case7.nc``. Two drivers
    running in different directories under the same base name will overwrite each
@@ -289,6 +289,7 @@ defect in the declaration.
 A field model that **cannot evaluate at the state it is handed** should throw
 from ``FieldResidual``. That is caught and reported to IDA as a *recoverable*
 error, so the step is retried with a smaller ``h`` rather than the run failing.
+
 .. _warm-starts:
 
 Warm starts and ``IDACalcIC``

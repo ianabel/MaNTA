@@ -58,7 +58,7 @@ this example, the way `desc`/`yancc`/`interpax` belong to `../stellarator/`.
 `test_mirror.py` checks the parallel physics against closed forms — Pastukhov
 loss rates against `scipy.special.gammaincc`, the centrifugal potential against
 its defining equation — and the flux normalisations. It is **not** collected by
-`make python_tests`: `pytest.ini` sets `testpaths = python/Tests`, and this file
+the `python` CTest test: `pytest.ini` sets `testpaths = python/Tests`, and this file
 needs `desc` and `optimistix`, which that suite does not. Run it directly:
 
     cd python-physics/mirror-plasma && pytest test_mirror.py

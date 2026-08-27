@@ -41,6 +41,6 @@ equilibrium code. Each README lists what its directory needs.
 
 ## Tests
 
-`make python_tests` does not reach here — `pytest.ini` sets
+The `python` CTest test does not reach here — `pytest.ini` sets
 `testpaths = python/Tests`, which is the framework's own suite. A directory here
 that has tests says so in its README and how to run them.
