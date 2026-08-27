@@ -4,11 +4,36 @@
 #include <sunmatrix/sunmatrix_band.h>  /* access to band SUNMatrix             */
 #include <sunlinsol/sunlinsol_band.h>  /* access to band SUNLinearSolver       */
 #include <sundials/sundials_types.h>   /* definition of type sunrealtype          */
+#include <exception>
 #include <memory>
+#include <print>
 
+// SUNDIALS calls this through a C function pointer, so an escaping C++ exception
+// is undefined behaviour -- the same hazard static_residual exists to close, and
+// closed the same way. A positive return is a *recoverable* linear solver
+// failure: IDA cuts the step, re-forms the Jacobian and tries again, which is the
+// right response to the one exception this can now see.
+//
+// That exception is new. The banded trace solve reports a singular K_global,
+// where the dense FullPivLU it replaced silently returned the particular solution
+// with the free components zeroed (see CLAUDE.md, "The trace solve"). Nothing in
+// the tree is expected to reach it -- the Dirichlet rows that made K genuinely
+// singular are imposed explicitly now -- but "not expected" is not "cannot", and
+// the alternative is unwinding through SUNDIALS.
+//
+// It also closes a hole that was always here: solveJacEq allocates, and a
+// std::bad_alloc, or anything a field model threw, would have done the same.
 int SunLinSolWrapper::Solve( SUNMatrix A, N_Vector x, N_Vector b )
 {
-	solver->solveJacEq( b, x);
+	try
+	{
+		solver->solveJacEq( b, x);
+	}
+	catch ( std::exception &e )
+	{
+		std::println("Caught exception in the linear solve : {} ; Retrying. ", e.what());
+		return 1;
+	}
 	return 0;
 }
 

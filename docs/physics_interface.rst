@@ -354,14 +354,70 @@ arrive zeroed. ``ScalarHooks::addBoundaryDerivative`` is the counterpart of
    8% at :math:`k = 4` on 16 cells. The weights you are handed are the ones the
    solver integrates with.
 
+.. _geometry-derivatives:
+
+Reading the magnetic geometry
+-----------------------------
+
+When a :doc:`field model <field_coupling>` is attached, the metric fields it
+derives from its own unknowns reach a physics case through ``State::geom(s)``,
+slot by slot, exactly as ``u``, ``q``, ``sigma`` and ``phi`` do. Nothing else
+changes: geometry is a function of :math:`(\psi, x)` evaluated at the same
+nodes, cached per residual, in the same standing as :math:`\hat\sigma`.
+
+Reading it in a value hook is all that is needed for the *residual* to be
+right. For the *Jacobian* to be right, a case that reads geometry must also say
+how it depends on it:
+
+.. code-block:: cpp
+
+   void dSigmaFn_dGeometry(Index i, VectorRef out, const State &s, Position x, Time t);
+   void dSources_dGeometry(Index i, VectorRef out, const State &s, Position x, Time t);
+   void dAuxG_dGeometry   (Index i, VectorRef out, const State &s, Position x, Time t);
+
+Each ``out`` is length ``nGeometry`` and, like every other derivative
+out-parameter, **arrives zeroed** — so a hook assigns only its nonzero entries.
+These are the first factor of the coupling block :math:`A_1`; the second,
+:math:`\partial g/\partial\psi`, is the field model's.
+
+**An absent hook is an identically zero block, and that is correct rather than
+approximate** for a case that does not read geometry: it does not couple. It is
+*not* correct for a case that does. Getting this wrong has the usual asymmetric
+consequence — the Jacobian is never assembled, so a missing block costs Newton
+iterations and nothing else in a forward run, but the adjoint operator *is* the
+transpose and a missing block there is a silently wrong gradient beside a
+perfectly good :math:`G`.
+
+There is deliberately no hook for :math:`\partial q/\partial g` or for the trace
+rows. :math:`q = \partial_x u` is a definition rather than a physical relation,
+and a geometry-dependent boundary condition is out of scope.
+
+The three hooks are **pointwise only**. ``dSigma`` and ``dSources``, the batched
+wrappers below, loop over ``GlobalStateMatrix``'s ``Variable``/``Derivative``/
+``Flux``/``Aux`` slices and there is no ``Geometry`` slice; the coupling
+assembly calls the pointwise hooks directly instead.
+
 Pointwise and batched
 ---------------------
 
 **Every physics hook exists in two forms**: pointwise, taking a ``State`` and one
 position, and batched, taking a ``GlobalState`` and a vector of positions. The
 batched versions have default implementations in ``TransportSystem.hpp`` that are
-serial loops over the pointwise version, several of them under
-``#pragma omp parallel for`` when built with ``OMP=on``.
+serial loops over the pointwise version.
+
+**Serial always, including under** ``MANTA_OPENMP``. A case that supplies only
+pointwise hooks is assumed to have a reason, and threading that fallback would
+call arbitrary case code concurrently on one instance — a hook that writes to a
+member, a cache, a scratch vector, would be a data race the solver cannot detect.
+For a Python case it is worse than unsafe: every pointwise trampoline takes the
+GIL, so threads serialise on it and pay a lock handoff per point, which measured
+more than 13x *slower* than running serially.
+
+A case that wants its physics evaluated in parallel overrides the batched level
+and does so on its own terms — which is also where it can cross into Python once
+for the whole grid instead of once per point, as ``manta.jax`` does. The solver's
+own cell loops are threaded either way, so the assembly and the linear solve are
+parallel regardless of which level a case implements.
 
 A case may override either level. Overriding the batched level is how a
 vectorised implementation — a JAX case, say — avoids being called once per point.
@@ -398,8 +454,9 @@ consequences worth knowing:
 * **A case only appears if its object file is linked in.** Nothing references it
   directly, so a missing entry in the build is a link-line problem that produces
   **no compile error**. An unrecognised ``TransportSystem`` name now throws with
-  the list of what *is* registered, which is usually enough to spot it. Add new
-  files to ``PHYSICS_SOURCES`` in the Makefile, or build the case
+  the list of what *is* registered, which is usually enough to spot it. Every
+  ``.cpp`` in ``PhysicsCases/`` is globbed into the build, so a new file in that
+  directory needs no build edit; anywhere else, build the case
   :doc:`out of tree <out_of_tree>`.
 * **A duplicate name is an error.** Registration used to be a silent no-op that
   kept the first registration, leaving the second case unreachable with nothing

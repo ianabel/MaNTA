@@ -76,7 +76,13 @@ public:
   Index getNumScalars() const { return nScalars; };
   Index getNumAux() const { return nAux; };
 
-  virtual void setRestartValues(const std::vector<double> &y, const std::vector<double> &dydt, const Grid &grid, Index k)
+  // `nField` is how many of the trailing entries of `y` are the field model's
+  // psi. It defaults to zero, which is every caller that has no field model --
+  // PyRunner, and the tests that build a restart vector by hand. It is not
+  // optional for one that does: the field block is last in the layout, so a
+  // DGSoln built without it maps a *shorter* vector, and DGSoln::copy would then
+  // be asked to assign a length-zero psi onto a length-nField one.
+  virtual void setRestartValues(const std::vector<double> &y, const std::vector<double> &dydt, const Grid &grid, Index k, Index nField = 0)
   {
     // Drop any previous restart before the buffers under it move: reassigning
     // restart_Y_data below can reallocate, and the old DGSolns are mapped over
@@ -103,8 +109,8 @@ public:
     restart_grid = std::make_unique<Grid>(grid);
 
     // Create DGSolns to wrap restart data
-    restart_Y = std::make_shared<DGSoln>(nVars, *restart_grid, k, restart_Y_data.data(), nScalars, nAux);
-    restart_dYdt = std::make_shared<DGSoln>(nVars, *restart_grid, k, restart_dYdt_data.data(), nScalars, nAux);
+    restart_Y = std::make_shared<DGSoln>(nVars, *restart_grid, k, restart_Y_data.data(), nScalars, nAux, nField);
+    restart_dYdt = std::make_shared<DGSoln>(nVars, *restart_grid, k, restart_dYdt_data.data(), nScalars, nAux, nField);
     restarting = true;
 
     // Pull boundary conditions directly from restart values
@@ -257,25 +263,39 @@ public:
   }
   // Wrapper functions which serialise batched evaluations
   //
+  // **Serial, deliberately, and not an oversight to be fixed.** These are the
+  // fallback for a case that supplies only pointwise hooks, and a case that has
+  // not provided a batched implementation is assumed to have a reason. Threading
+  // them would call an arbitrary case's hooks concurrently on one instance --
+  // which nothing here can check and the case never agreed to.
+  //
+  // For a Python case it is not merely unsafe but ruinous. Every pointwise
+  // trampoline in PyTransportSystem takes the GIL, so N threads serialise on it
+  // and pay a lock handoff *per point*: measured, MANTA_OPENMP=ON with four
+  // threads took the Python suite from ~110 s to over 1500 s, where it hit
+  // ctest's timeout without finishing. That is a floor of 13.6x slower, not a
+  // failure to speed up.
+  //
+  // A case that wants its physics parallel overrides the batched level, which is
+  // the whole point of these being virtual -- and where it can cross into Python
+  // once for the entire grid rather than once per point, as
+  // PyTransportSystem::ComputePhysics and manta.jax already do. The solver's own
+  // cell loops are still threaded (see util/ParallelFor.hpp), so a case that
+  // takes this path still gets the assembly and solve parallelism, which is
+  // where the time is.
   virtual Values SigmaFn(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
     Values out(states.size());
-#pragma omp parallel for
-    for (size_t j = 0; j < states.size(); ++j)
-    {
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
       out(j) = SigmaFn(i, states[j], abscissae[j], time);
-    }
     return out;
   };
 
   virtual Values Sources(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
     Values out(states.size());
-#pragma omp parallel for
-    for (size_t j = 0; j < states.size(); ++j)
-    {
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
       out(j) = Sources(i, states[j], abscissae[j], time);
-    }
     return out;
   };
 
@@ -297,8 +317,7 @@ public:
 
   virtual void dSigma(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
-#pragma omp parallel for
-    for (size_t j = 0; j < states.size(); ++j)
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
     {
       dSigmaFn_du(i, out.Variable(j), states[j], abscissae[j], time);
       dSigmaFn_dq(i, out.Derivative(j), states[j], abscissae[j], time);
@@ -307,10 +326,15 @@ public:
     }
   }
 
+  // Geometry does not join this batched wrapper, or dSigma's above: both loop
+  // over GlobalStateMatrix's Variable/Derivative/Flux/Aux slices, and there is
+  // deliberately no Geometry slice yet -- see the comment on
+  // GlobalState::Geometry in State.hpp. dSigmaFn_dGeometry/dSources_dGeometry
+  // are pointwise-only for now; whatever assembles the A1 coupling block calls
+  // them directly rather than through here.
   virtual void dSources(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
-#pragma omp parallel for
-    for (size_t j = 0; j < states.size(); ++j)
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
     {
       dSources_du(i, out.Variable(j), states[j], abscissae[j], time);
       dSources_dq(i, out.Derivative(j), states[j], abscissae[j], time);
@@ -417,6 +441,23 @@ public:
       throw std::logic_error("nScalars > 0 but no coupling function provided");
   }
 
+  /*
+      Derivatives with respect to the geometry slots a field model supplies.
+
+      Each `out` is length nGeometry and arrives zeroed, so a case that does not
+      read geometry may leave all three unimplemented and contributes an
+      identically zero coupling block -- which is exactly right, because it does
+      not couple.
+
+      These are the first factor of A1; the second, dGeometry/dpsi, is the field
+      model's. Note that q has no geometry dependence (q = d_x u is a definition,
+      not a physical relation) and neither do the trace rows, so there is no
+      hook for either -- a geometry-dependent boundary condition is out of scope.
+  */
+  virtual void dSigmaFn_dGeometry(Index, VectorRef, const State &, Position, Time) {}
+  virtual void dSources_dGeometry(Index, VectorRef, const State &, Position, Time) {}
+  virtual void dAuxG_dGeometry(Index, VectorRef, const State &, Position, Time) {}
+
   // Auxiliary variable functions
 
   virtual Value InitialAuxValue(Index i, Position x) const
@@ -438,11 +479,8 @@ public:
   virtual Values AuxG(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
     Values out(states.size());
-#pragma omp parallel for
-    for (size_t j = 0; j < states.size(); ++j)
-    {
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
       out(j) = AuxG(i, states[j], abscissae[j], time);
-    }
     return out;
   }
 
@@ -454,14 +492,11 @@ public:
 
   virtual void AuxGPrime(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
-#pragma omp parallel for
-    for (size_t j = 0; j < states.size(); ++j)
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
     {
-      // Declared inside the loop, not outside it. One State shared across a
-      // `#pragma omp parallel for` is a data race under OMP=on -- every thread
-      // writing its own point's derivatives into the same vectors -- and it
-      // also carried one point's values into the next when a hook wrote only
-      // its nonzero entries. Per-iteration, it is private and starts zeroed.
+      // Declared inside the loop body, not outside it. Even serially this
+      // matters: a shared State carried one point's values into the next when a
+      // hook wrote only its nonzero entries. Per-iteration, it starts zeroed.
       State temp(nVars, nScalars, nAux);
       AuxGPrime(i, temp, states[j], abscissae[j], time);
       out.setWithState(j, temp);

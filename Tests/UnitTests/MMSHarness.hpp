@@ -33,9 +33,11 @@
 #include <boost/math/quadrature/gauss.hpp>
 
 #include <cmath>
+#include <concepts>
 #include <cstdio>
 #include <format>
 #include <functional>
+#include <memory>
 #include <numbers>
 #include <string>
 #include <typeinfo>
@@ -225,6 +227,26 @@ inline double observedOrder(std::vector<Index> const &cellCounts,
     return (n * sxy - sx * sy) / (n * sxx - sx * sx);
 }
 
+/// Grid-to-grid local orders of a whole column of errors: one fewer entry than
+/// there are grids, in refinement order.
+inline std::vector<double> localOrders(std::vector<Index> const &cells,
+                                       std::vector<double> const &errors)
+{
+    std::vector<double> out;
+    for (size_t i = 1; i < cells.size(); ++i)
+        out.push_back(localOrder(cells[i - 1], cells[i], errors[i - 1], errors[i]));
+    return out;
+}
+
+/// "2.98, 3.01, 3.00" -- a column of local orders, for BOOST_TEST_MESSAGE.
+inline std::string format(std::vector<double> const &v)
+{
+    std::string s;
+    for (size_t i = 0; i < v.size(); ++i)
+        s += (i ? ", " : "") + std::format("{:.3f}", v[i]);
+    return s;
+}
+
 struct Rates
 {
     double uOff, starOff, uOn, starOn;
@@ -250,6 +272,28 @@ struct Rates
     {
         return localOrder(cells[i - 1], cells[i], starOnErr[i - 1], starOnErr[i]);
     }
+
+    // ---- the single-setting sweep ---------------------------------------
+    //
+    // measureRates() runs the flag off *and* on and fills the four error columns
+    // above, so a local order there needs to say which column it is from.
+    // solveCoupledAndMeasure() runs one setting -- the flag and the field solve
+    // mode are both arguments -- so its local orders are unambiguous and are
+    // handed over as vectors, which is what lets a test assert on every step of
+    // the sweep with a range-for rather than an index loop.
+    //
+    // There is deliberately no fitted slope here to go with them. A fit averages
+    // a changing rate away -- which is how the nonlinear-flux superconvergence
+    // breakdown stayed invisible up to n = 32 -- so offering one would be
+    // offering the weaker number beside the stronger one for no reason.
+    std::vector<double> coupledU, coupledStar, coupledExtra; // errors, per grid
+    std::vector<double> localU, localStar, localExtra;       // orders, grid to grid
+
+    // What the coupled Jacobian solve cost at each refinement, and whether it
+    // had to escalate. An order measured on the iterative mode with a nonzero
+    // fallback count is partly a measurement of the exact path wearing the
+    // iterative path's name, so the study reports this rather than assuming.
+    std::vector<long> fallbacks, sweepIterations, fieldSolves;
 };
 
 /// Refine, fit both orders, flag off and flag on, and report all four (or six).
@@ -323,6 +367,245 @@ inline std::string report(Index k, Rates const &r, const char *extraName = nullp
     s += "   (u should be " + std::to_string(k + 1) + ", u* with the flag on " +
          std::to_string(k + 2) + ")" + r.detail;
     return s;
+}
+
+// ------------------------------------------------------- the coupled sweep --
+//
+// The order study for a problem whose diffusivity is a function of a field
+// model's unknowns. It is the only test class that can catch an error in the
+// coupled *equations*: the Jacobian is never assembled, so a wrong A1 or A2
+// costs Newton speed and nothing else, while a sign error in the residual
+// converges at the right rate to the wrong function and only a closed-form
+// comparison sees that.
+//
+// The problem is
+//
+//     u_t - d_x[ g(x; psi) kappa u_x ] = S ,   u = sin(pi x)(1 + t)
+//
+// with the minus sign the stored-sigma convention gives, and with g supplied by
+// the field model under test. S is compensated against u_exact and psi_exact,
+// never against the state the hook is handed: a compensation written against the
+// discrete state would be an exact row operation -- residual() evaluates the
+// hooks on the same states at the same abscissae and pushes them through the
+// same projection -- so it would cancel identically and the study would silently
+// measure an uncoupled problem.
+
+/// A field model an order study can compare against. Stated as a concept so a
+/// model missing one of the three fails here, naming what it lacks, rather than
+/// somewhere inside the sweep.
+///
+/// The three are the *exact* field solution and the geometry it produces. They
+/// are what the manufactured source is differentiated from, and they must not be
+/// functions of the discrete state -- see above.
+///
+/// They are asked for on an *instance* rather than on the type. A model whose
+/// exact solution depends on a constructor argument -- ManufacturedFieldVector's
+/// coupling strength -- cannot answer statically, and a static oracle would
+/// quietly answer for the default instead: the manufactured source would then be
+/// derived from a geometry the model does not have, which converges at the right
+/// rate to the wrong function. That is the one failure this whole study exists to
+/// catch, so it must not be reachable through the study's own fixtures.
+template <class M>
+concept ManufacturedFieldModel = requires(M const &m, Time t, Position x) {
+    { m.fieldExact(t) } -> std::convertible_to<Vector>;
+    { m.geometryExact(x, t) } -> std::convertible_to<double>;
+    { m.dGeometryExact_dx(x, t) } -> std::convertible_to<double>;
+};
+
+/// Not 1: geometry *multiplies* the diffusivity rather than being it, and a
+/// case that confused the two would be indistinguishable at kappa = 1.
+inline constexpr double coupledKappa = 0.7;
+
+/// S = u_t - kappa d_x[ g u_x ], with u = A sin(pi x), A = 1 + t, so
+/// u_x = A pi cos(pi x) and u_xx = -A pi^2 sin(pi x):
+///
+///     S = sin(pi x) - kappa A pi ( g' cos(pi x) - g pi sin(pi x) )
+///
+/// For g = 1 + psi cos(pi x) this is the familiar
+/// sin(pi x) + kappa A pi^2 sin(pi x) (1 + 2 psi cos(pi x)); it is written in the
+/// general form because the two manufactured models have different geometries
+/// and one derivation is easier to check than two.
+template <ManufacturedFieldModel M>
+inline double coupledSource(M const &model, Position x, Time t)
+{
+    const double A = 1.0 + t;
+    const double s = std::sin(pi * x), c = std::cos(pi * x);
+    const double g = model.geometryExact(x, t), dg = model.dGeometryExact_dx(x, t);
+    return s - coupledKappa * A * pi * (dg * c - g * pi * s);
+}
+
+/// sigma_hat = g kappa q, S as above. Homogeneous Dirichlet at both ends, which
+/// the manufactured solution satisfies for every t.
+///
+/// Holds the model it was built against, so the source can only ever be the
+/// source for the geometry that model actually has -- see the concept above.
+/// The reference has to outlive the case, which in solveCoupledOnce it does:
+/// the model is declared first and so destroyed last.
+template <ManufacturedFieldModel M>
+class ManufacturedGeometricDiffusion : public TransportSystem
+{
+public:
+    explicit ManufacturedGeometricDiffusion(M const &model_)
+        : TransportSystem({.variables = {{"u", "the diffused quantity", "",
+                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}}}),
+          model(model_)
+    {
+    }
+
+    Value SigmaFn(Index, const State &s, Position, Time) override
+    {
+        return s.geom(0) * coupledKappa * s.q(0);
+    }
+    Value Sources(Index, const State &, Position x, Time t) override
+    {
+        return coupledSource(model, x, t);
+    }
+
+    void dSigmaFn_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSigmaFn_dq(Index, VectorRef v, const State &s, Position, Time) override
+    {
+        v[0] = s.geom(0) * coupledKappa;
+    }
+    void dSources_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSources_dq(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v[0] = 0.0;
+    }
+
+    /// The first factor of A1. Without it the coupling block is zero and the
+    /// study still converges -- to the right answer, more slowly -- so this is
+    /// here for the sake of the run, not of the measurement.
+    void dSigmaFn_dGeometry(Index, VectorRef v, const State &s, Position, Time) override
+    {
+        v[0] = coupledKappa * s.q(0);
+    }
+
+    Value InitialValue(Index, Position x) const override { return exactSolution(x, 0.0); }
+    Value InitialDerivative(Index, Position x) const override
+    {
+        return exactDerivative(x, 0.0);
+    }
+
+    Value LowerBoundary(Index, Time) const override { return 0.0; }
+    Value UpperBoundary(Index, Time) const override { return 0.0; }
+
+private:
+    M const &model;
+};
+
+/// What one coupled run reports.
+struct CoupledErrors
+{
+    double u, uStar, field;
+    long solves = 0, iterations = 0, fallbacks = 0;
+};
+
+/// One coupled run: attach the model, integrate to tFinal, and measure u, u* and
+/// psi against the exact solution.
+///
+/// Output is switched off rather than written and deleted, unlike
+/// solveAndMeasureBoth: this sweep is up to twenty-four integrations and the
+/// netCDF write is pure cost here.
+template <ManufacturedFieldModel M>
+CoupledErrors solveCoupledOnce(Index k, Index nCells, double tFinal, bool superconvergent,
+                               SystemSolver::FieldSolveMode mode, Tolerances tol = {})
+{
+    Grid grid(0.0, 1.0, nCells);
+
+    // The model first: the physics case below holds a reference to it, and
+    // locals are destroyed in reverse order of declaration.
+    auto model = std::make_shared<M>();
+    ManufacturedGeometricDiffusion<M> problem(*model);
+
+    SystemSolver sys(grid, k, &problem);
+    sys.setTau(1.0);
+    sys.setSuperconvergent(superconvergent);
+    sys.setFieldModel(model);
+    sys.setFieldSolveMode(mode);
+    sys.resetCoeffs();
+
+    sys.setInputFile("mms_coupled");
+    sys.setOutputCadence(tFinal);
+    sys.setNOutput(11);
+    sys.setInitialTime(0.0);
+    sys.setMinStepSize(1e-14);
+    sys.setTolerances({tol.absolute}, tol.relative);
+    sys.setWriteOutput(false);
+    sys.setWriteDatFile(false);
+
+    {
+        // runSolver reports its step counts, its IDACalcIC warnings and the
+        // sweep statistics; two dozen integrations of that is a wall of noise
+        // around a passing test. The measured orders go out through
+        // BOOST_TEST_MESSAGE instead, and the sweep statistics are read back
+        // from getFieldSweepStats() below.
+        CapturedOutput quiet;
+        sys.runSolver(tFinal);
+    }
+
+    // u* was last reconstructed from `y`, whose N_Vector runSolver has since
+    // destroyed. Rebuild it from yJac, which the solver owns.
+    sys.postprocessor->computeUStar(sys.yJac);
+
+    const Vector psiExact = model->fieldExact(tFinal);
+    const Vector psi = sys.getSolution().getField();
+    const SystemSolver::FieldSweepStats stats = sys.getFieldSweepStats();
+
+    return {l2Error(sys, grid, tFinal),
+            l2ErrorOf([&](double x) { return sys.getPostprocessor()->uStar(0)(x); }, grid,
+                      tFinal),
+            (psi - psiExact).norm(),
+            stats.solves,
+            stats.iterations,
+            stats.fallbacks};
+}
+
+/// Refine, and report the local orders of u, u* and psi.
+///
+/// `superconvergent` and `mode` are both arguments because the study has to say
+/// which method produced its numbers: solveCoupledJacIterative escalates to the
+/// exact Schur solve when it exhausts FieldSolveMaxSweeps, so a sweep that never
+/// converges yields exactly the exact path's answer with nothing in the result
+/// to say so. r.fallbacks is how a test finds out.
+template <ManufacturedFieldModel M>
+Rates solveCoupledAndMeasure(
+    Index k, std::vector<Index> const &cells, bool superconvergent = false,
+    SystemSolver::FieldSolveMode mode = SystemSolver::FieldSolveMode::Iterative,
+    double tFinal = 0.25, Tolerances tol = {})
+{
+    Rates r{0.0, 0.0, 0.0, 0.0};
+    r.cells = cells;
+
+    for (Index n : cells)
+    {
+        const CoupledErrors e =
+            solveCoupledOnce<M>(k, n, tFinal, superconvergent, mode, tol);
+        r.coupledU.push_back(e.u);
+        r.coupledStar.push_back(e.uStar);
+        r.coupledExtra.push_back(e.field);
+        r.fieldSolves.push_back(e.solves);
+        r.sweepIterations.push_back(e.iterations);
+        r.fallbacks.push_back(e.fallbacks);
+    }
+
+    r.localU = localOrders(cells, r.coupledU);
+    r.localStar = localOrders(cells, r.coupledStar);
+    r.localExtra = localOrders(cells, r.coupledExtra);
+
+    for (size_t i = 0; i < cells.size(); ++i)
+    {
+        r.detail += std::format(
+            "\n      n={:<4} u {:.3e} u* {:.3e} psi {:.3e}   ({} field solves, {} sweeps, "
+            "{} fallbacks)",
+            cells[i], r.coupledU[i], r.coupledStar[i], r.coupledExtra[i], r.fieldSolves[i],
+            r.sweepIterations[i], r.fallbacks[i]);
+        if (i > 0)
+            r.detail += std::format("\n            local order: u {:.2f} u* {:.2f} psi {:.2f}",
+                                    r.localU[i - 1], r.localStar[i - 1], r.localExtra[i - 1]);
+    }
+
+    return r;
 }
 
 } // namespace mms

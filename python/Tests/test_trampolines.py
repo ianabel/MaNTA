@@ -225,6 +225,121 @@ def test_incomplete_subclass_is_rejected_with_a_useful_message(tmp_path):
     ), message
 
 
+# ---------------------------------------------------- geometry derivatives --
+#
+# dSigmaFn_dGeometry has no way to be driven from Python the way SigmaFn is in
+# test_scalar_and_vectorised_paths_agree above. The solver does call it -- the
+# A1 coupling block is assembled from it, in Matrices.cpp -- but only on a run
+# with a field model attached, and no Python surface can attach one: a field
+# model is selected by the config's FieldModel key from a C++ registry, and
+# Runner.configure rejects that key outright. So there is no Runner solve
+# reachable from here that reaches the hook. Unlike SigmaFn/Sources/AuxG it has
+# no batched (GlobalState-taking) entry point either -- adding one just to test
+# through was tried and reverted, because it would have been a new virtual on
+# TransportSystem's public interface, inheritable and overridable by any
+# physics case, existing for no reason but this test.
+#
+# manta._manta._test_dSigmaFn_dGeometry is the narrower alternative: a free
+# function (Python.cpp), not a TransportSystem method, that builds a State in
+# C++ and calls the pointwise dispatcher directly -- the same thing a C++
+# unit test does, and the same boundary (PyTransportSystem.hpp's
+# dSigmaFn_dGeometry dispatcher, its optional_override lookup, and the Values
+# cast) the A1 assembly crosses, once per node. It is test support only and not
+# re-exported by manta/__init__.py, reachable only via manta._manta, the same
+# way test_jax_layer.py already reaches manta._manta.runner_ffi_ops directly.
+
+
+class GeometryReader(MaNTA.TransportSystem):
+    """Overrides dSigmaFn_dGeometry with a value that depends on both the
+    geometry it was handed and the position, so a transposed or constant-
+    filled dispatch could not agree with the expected answer by accident.
+    """
+
+    def __init__(self):
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1))
+
+    def SigmaFn(self, i, state, x, t):
+        return state.q[i]
+
+    def Sources(self, i, state, x, t):
+        return 0.0
+
+    def dSigmaFn_dGeometry(self, i, state, x, t):
+        return np.array([state.geom[0], state.geom[1] + x])
+
+    def LowerBoundary(self, i, t):
+        return 0.0
+
+    def UpperBoundary(self, i, t):
+        return 0.0
+
+    def InitialValue(self, i, x):
+        return 0.0
+
+    def InitialDerivative(self, i, x):
+        return 0.0
+
+
+class GeometryBlind(MaNTA.TransportSystem):
+    """Same required hooks as GeometryReader, minus dSigmaFn_dGeometry --
+    deliberately its own class rather than a subclass of GeometryReader,
+    which would inherit the very override this fixture must not have.
+    Pins the convention this task rests on: an absent geometry-derivative
+    hook is an identically zero block.
+    """
+
+    def __init__(self):
+        MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1))
+
+    def SigmaFn(self, i, state, x, t):
+        return state.q[i]
+
+    def Sources(self, i, state, x, t):
+        return 0.0
+
+    def LowerBoundary(self, i, t):
+        return 0.0
+
+    def UpperBoundary(self, i, t):
+        return 0.0
+
+    def InitialValue(self, i, x):
+        return 0.0
+
+    def InitialDerivative(self, i, x):
+        return 0.0
+
+
+def test_dsigma_fn_dgeometry_dispatches_to_the_python_override():
+    system = GeometryReader()
+    geom = np.array([1.0, 2.0])
+    x = 0.3
+
+    out = np.asarray(MaNTA._manta._test_dSigmaFn_dGeometry(system, 0, geom, x, 0.0))
+
+    assert out == pytest.approx([geom[0], geom[1] + x])
+
+    # A second point, so this is a statement about the function rather than
+    # one lucky coincidence of numbers.
+    geom2 = np.array([5.0, -3.0])
+    x2 = -1.25
+    out2 = np.asarray(MaNTA._manta._test_dSigmaFn_dGeometry(system, 0, geom2, x2, 0.0))
+    assert out2 == pytest.approx([geom2[0], geom2[1] + x2])
+
+
+def test_an_absent_dsigma_fn_dgeometry_is_identically_zero():
+    """The whole convention this task rests on: an absent hook means the
+    caller's zeroed out-parameter comes back untouched, not that nothing
+    is returned or that the call fails.
+    """
+    system = GeometryBlind()
+    geom = np.array([7.0, 8.0])
+
+    out = np.asarray(MaNTA._manta._test_dSigmaFn_dGeometry(system, 0, geom, 0.2, 0.0))
+
+    assert out == pytest.approx([0.0, 0.0])
+
+
 # ------------------------------------------------------- PyGrid / getNodes --
 
 

@@ -189,8 +189,10 @@ void rejectUnknownKeys(ConfigSource const &source, Reader reader)
             throw std::invalid_argument(
                 "Configuration key '" + k +
                 "' selects the physics case and has no meaning for "
-                "Runner.configure -- the transport system is passed to the "
-                "Runner as an object. Remove it from the dict.");
+                "Runner.configure -- the physics case is chosen when the Runner "
+                "is built, either as an object or as the name of a C++ case, "
+                "and a plugin is loaded by manta.load_physics_plugin(). Remove "
+                "it from the dict.");
     }
 }
 
@@ -245,19 +247,26 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(OutputPoints, int);
     READ(OutputFilename, std::string);
     READ(solveAdjoint, bool);
-    READ(ObjectiveDecreaseTolerance, double);
     READ(WriteOutput, bool);
     READ(WriteDatFile, bool);
     READ(WriteDebugDatFiles, bool);
     READ(zeroFlux, bool);
     READ(AggressiveTimesteps, bool);
     READ(SuppressAlgebraicError, bool);
+    READ(ForceConsistentIC, bool);
     READ(SteadyStateSolver, std::string);
     READ(PseudoTransientInitialStep, double);
     READ(PseudoTransientMaxStep, double);
     READ(PseudoTransientSERRate, double);
     READ(PseudoTransientSERFloor, double);
+    READ(EstimateObjectiveOnFinish, bool);
+    READ(MaxContinuationSteps, unsigned);
+    READ(NewtonMaxIterations, unsigned);
+    READ(NewtonJacobianReuse, unsigned);
+    READ(NewtonStepTolerance, double);
+    READ(NewtonScaling, std::string);
     READ(SteadyStateDiagnostics, bool);
+    READ(SteadyStateStepDiagnostics, bool);
     READ(SteadyStateSolve, bool);
     READ(DegreeAdaptation, bool);
     READ(DegreeTolerance, double);
@@ -266,6 +275,11 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(DegreeAdaptationBase, double);
     READ(TransportSystem, std::string);
     READ(PhysicsPlugins, std::vector<std::string>);
+    READ(FieldModel, std::string);
+    READ(FieldSolve, std::string);
+    READ(FieldSolveTolerance, double);
+    READ(FieldSolveMaxSweeps, int);
+    READ(FieldSolveMaxAdjointSweeps, int);
 #undef READ
 
     // Those whose presence, rather than value, is the signal.
@@ -474,6 +488,15 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
 
     // Rejected here rather than defaulted, because a typo in this key would
     // otherwise silently pick a different algorithm.
+    if (config.NewtonScaling == "Unit")
+        system.setNewtonScaling(SystemSolver::NewtonScaling::Unit);
+    else if (config.NewtonScaling == "ErrorWeights")
+        system.setNewtonScaling(SystemSolver::NewtonScaling::ErrorWeights);
+    else
+        throw std::invalid_argument(
+            "NewtonScaling must be \"Unit\" or \"ErrorWeights\"; got \"" +
+            config.NewtonScaling + "\".");
+
     if (config.SteadyStateSolver == "PseudoTransient")
         system.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     else if (config.SteadyStateSolver == "TimeMarch")
@@ -484,6 +507,21 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         throw std::invalid_argument(
             "SteadyStateSolver must be \"PseudoTransient\", \"TimeMarch\" or "
             "\"Newton\"; got \"" + config.SteadyStateSolver + "\".");
+
+    // Rejected rather than defaulted, for the same reason SteadyStateSolver is:
+    // a typo here would otherwise silently pick a different algorithm. The
+    // FieldModel key is not applied here -- see SolverConfig.hpp.
+    if (config.FieldSolve == "iterative")
+        system.setFieldSolveMode(SystemSolver::FieldSolveMode::Iterative);
+    else if (config.FieldSolve == "exact")
+        system.setFieldSolveMode(SystemSolver::FieldSolveMode::Exact);
+    else
+        throw std::invalid_argument(
+            "FieldSolve must be \"iterative\" or \"exact\"; got \"" + config.FieldSolve + "\".");
+
+    system.setFieldSolveTolerance(config.FieldSolveTolerance);
+    system.setFieldSolveMaxSweeps(config.FieldSolveMaxSweeps);
+    system.setFieldSolveMaxAdjointSweeps(config.FieldSolveMaxAdjointSweeps);
 
     if (config.PseudoTransientInitialStep > 0.0)
         system.setPseudoTransientInitialStep(config.PseudoTransientInitialStep);
@@ -500,7 +538,15 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     {
         system.setPseudoTransientSERRate(config.PseudoTransientSERRate);
         system.setPseudoTransientSERFloor(config.PseudoTransientSERFloor);
+        system.setEstimateObjectiveOnFinish(config.EstimateObjectiveOnFinish);
+        system.setMaxContinuationSteps(config.MaxContinuationSteps);
+        system.setNewtonMaxIterations(config.NewtonMaxIterations);
+        system.setNewtonJacobianReuse(config.NewtonJacobianReuse);
+        system.setNewtonStepTolerance(config.NewtonStepTolerance);
         system.setSteadyStateDiagnostics(config.SteadyStateDiagnostics);
+        system.setSteadyStateStepDiagnostics(config.SteadyStateStepDiagnostics);
+
+        system.setForceConsistentIC(config.ForceConsistentIC);
     }
     catch (std::logic_error const &e)
     {
@@ -532,11 +578,4 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     }
 
     // Zero is off, and the setter rejects anything negative.
-    if (config.ObjectiveDecreaseTolerance != 0.0)
-    {
-        logmsg<LOG_LEVEL::INFO>(
-            "Abandoning the run if dG/dt falls below {} at the initial condition.",
-            -config.ObjectiveDecreaseTolerance);
-        system.setObjectiveDecreaseTolerance(config.ObjectiveDecreaseTolerance);
-    }
 }

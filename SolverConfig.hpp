@@ -55,19 +55,26 @@ struct SolverConfig
     int                      OutputPoints;
     std::string              OutputFilename;
     bool                     solveAdjoint;
-    double                   ObjectiveDecreaseTolerance;
     bool                     WriteOutput;
     bool                     WriteDatFile;
     bool                     WriteDebugDatFiles;
     bool                     zeroFlux;
     bool                     AggressiveTimesteps;
     bool                     SuppressAlgebraicError;
+    bool                     ForceConsistentIC;
     std::string              SteadyStateSolver;
     double                   PseudoTransientInitialStep;
     double                   PseudoTransientMaxStep;
     double                   PseudoTransientSERRate;
     double                   PseudoTransientSERFloor;
+    bool                     EstimateObjectiveOnFinish;
+    unsigned int             MaxContinuationSteps;
+    unsigned int             NewtonMaxIterations;
+    unsigned int             NewtonJacobianReuse;
+    double                   NewtonStepTolerance;
+    std::string              NewtonScaling;
     bool                     SteadyStateDiagnostics;
+    bool                     SteadyStateStepDiagnostics;
     bool                     SteadyStateSolve;
     bool                     DegreeAdaptation;
     double                   DegreeTolerance;
@@ -76,6 +83,17 @@ struct SolverConfig
     double                   DegreeAdaptationBase;
     std::string              TransportSystem;
     std::vector<std::string> PhysicsPlugins;
+
+    // The magnetic-field coupling. FieldModel names a registered model and is
+    // applied by runManta rather than by applySolverConfig, which has neither
+    // the parsed config a model reads its own table from nor the grid; the
+    // other three are plain solver options and go through applySolverConfig
+    // like everything else.
+    std::string              FieldModel;
+    std::string              FieldSolve;
+    double                   FieldSolveTolerance;
+    int                      FieldSolveMaxSweeps;
+    int                      FieldSolveMaxAdjointSweeps;
 
     // Presence, not value, carries the meaning for these two.
     //

@@ -2,17 +2,78 @@
 #include "Logging.hpp"
 #include "DegreeAdaptation.hpp"
 #include "PyConfigSource.hpp"
+#include "PyToml.hpp"
+#include <algorithm>
 #include <pybind11/eigen.h>
 #include <string>
 #include <print>
-// Load restart data into vectors
+// Load restart data into vectors. Defined in MaNTA.cpp; `nField` comes back as
+// how many trailing entries of Y are a field model's psi.
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y,
-                 std::vector<double> &dYdt);
+                 std::vector<double> &dYdt, Index &nField);
+
+PyRunner::PyRunner(std::string physicsCase) : caseName(std::move(physicsCase)) {
+  // Rejected here, at the point the name was written, rather than at the first
+  // configure(): the registry is populated by static initialisation, so
+  // whether a name is available is already settled by the time any Python runs
+  // -- barring a later registerPhysicsCase or plugin load, which a caller does
+  // before building a Runner because there is no other useful order.
+  auto const names = PhysicsCases::RegisteredNames();
+  if (std::find(names.begin(), names.end(), caseName) == names.end()) {
+    std::string available;
+    for (auto const &n : names)
+      available += (available.empty() ? "" : ", ") + n;
+    throw std::invalid_argument(
+        "There is no physics case named '" + caseName +
+        "'. Available cases: " +
+        (available.empty() ? "(none -- no physics case object files are linked "
+                             "in)"
+                           : available) +
+        ". manta.physics_cases() lists them, manta.load_physics_plugin() adds "
+        "a case built out of tree, and manta.Runner(system) takes a Python "
+        "case as an object instead.");
+  }
+}
+
+// Build the C++ case named at construction, from the same dict the solver's
+// configuration came out of. Called by configure() once the grid exists.
+//
+// Rebuilt on every configure() rather than once, and that is the point of doing
+// it here at all: a C++ case reads its table in its constructor, so a driver
+// sweeping a physics parameter -- which is the reason to want a C++ case under
+// a Python optimiser -- changes the dict and reconfigures. Instantiating once
+// would silently pin the first call's parameters.
+//
+// Everything derived from the old case goes first. The AdjointProblem an
+// autodiff case hands out holds a raw pointer back to it
+// (AutodiffAdjointProblem::PhysicsProblem), so an adjoint outliving its problem
+// dangles; `system` was already nulled by configure() before this runs.
+void PyRunner::instantiatePhysicsCase(const py::dict &config) {
+  adjoint = nullptr;
+  objectiveOnlyAdjoint = nullptr;
+  pProblem = nullptr;
+
+  try {
+    pProblem = PhysicsCases::InstantiateProblem(
+        caseName, physicsConfigFromDict(config), *grid);
+  } catch (std::invalid_argument const &e) {
+    // configure() has raised RuntimeError for a bad configuration since it
+    // existed, and a case rejecting its own table -- "there should be a
+    // [DiffusionProblem] section" -- is exactly that. Translated for the same
+    // reason the loadSolverConfig call below it is.
+    throw std::runtime_error(e.what());
+  }
+}
 
 void PyRunner::configure(const py::dict &config) {
-  if (!pProblem)
+  if (!pProblem && caseName.empty())
     throw std::runtime_error("Transport system not set. Please set transport "
                              "system before configuring solver.");
+  // Reconfiguring abandons a sliced solve that is still running. ~SystemSolver
+  // does not free the SUNDIALS objects -- only destroySundials() does -- so
+  // dropping the solver without this leaks every one of them, and silently.
+  abandonSlices();
+
   // Set stored problem to null to allow reconfiguration after object creation
   system = nullptr;
   grid = nullptr;
@@ -21,7 +82,11 @@ void PyRunner::configure(const py::dict &config) {
   // sticky, so a configuration that does not ask for a restart has to say so
   // rather than inherit the last one. Cleared here, before the config is even
   // parsed, so it holds on the throwing paths too.
-  pProblem->clearRestart();
+  //
+  // A C++ case is rebuilt below rather than cleared, so there may be nothing
+  // here to clear on the first call.
+  if (pProblem)
+    pProblem->clearRestart();
 
   // Every key this accepts is declared in ConfigSchema.cpp, the same table
   // runManta reads. This function used to carry its own `params` list and its
@@ -62,12 +127,31 @@ void PyRunner::configure(const py::dict &config) {
   k = 1;
   grid = makeGrid(cfg, cfg.restart ? &restart_file : nullptr, k);
 
+  if (!caseName.empty())
+    instantiatePhysicsCase(config);
+
   if (cfg.solveAdjoint)
     adjoint = pProblem->createAdjointProblem();
 
   if (cfg.restart) {
     std::vector<double> Y, dYdt;
-    Index nDOF_file = LoadFromFile(restart_file, Y, dYdt);
+    Index nField_file = 0;
+    Index nDOF_file = LoadFromFile(restart_file, Y, dYdt, nField_file);
+
+    // This surface cannot attach a field model at all: FieldModel is
+    // Category::ProblemSelection and so is an *error* in a dict, and there is no
+    // pybind11 class for a FieldModel to hand over instead. So a coupled restart
+    // file is refused rather than silently read with psi landing in the last
+    // nField entries of a vector that has no field block -- which is a length
+    // mismatch reported as an nVars/nAux/nScalars disagreement, three names none
+    // of which is the problem.
+    if (nField_file != 0)
+      throw std::runtime_error(
+          "This restart file was written by a run with a field model (" +
+          std::to_string(nField_file) +
+          " field unknowns), and Runner cannot attach one: FieldModel names a "
+          "registered model and is a config-file key. Resume it with the MaNTA "
+          "binary.");
 
     // Make sure degrees of freedom are consistent with restart file
     const Index nCells = grid->getNCells();
@@ -180,19 +264,112 @@ void PyRunner::run_ss() {
   std::println("Done.");
 }
 
-bool PyRunner::wasRejected() const {
-  if (!configured)
-    throw std::runtime_error(
-        "Error: Runner must be configured before asking about the dG/dt gate.");
-  return system->wasRejected();
+PyRunner::~PyRunner() {
+  // A destructor cannot let an exception out, and destroySundials() is not
+  // expected to throw -- but "not expected to" is not a guarantee worth
+  // terminating the interpreter over.
+  try {
+    abandonSlices();
+  } catch (...) {
+  }
 }
 
-Vector PyRunner::lastDGdt() const {
+SystemSolver::SteadyOutcome PyRunner::runSlice(bool resume, bool estimate) {
+  system->setEstimateObjectiveOnFinish(estimate);
+  try {
+    if (resume)
+      system->continueSteadyState();
+    else
+      system->solveSteadyState();
+  } catch (...) {
+    // OutOfSteps is not a failure: the step budget is spent, the last accepted
+    // iterate is in Y and the pseudo-time step SER climbed to is still on the
+    // solver, so continue_steady() picks up both. Returning it is what lets a
+    // driver tell it apart from a dead solve without reading the message.
+    if (system->lastSteadyOutcome() != SystemSolver::SteadyOutcome::OutOfSteps) {
+      // The same bargain integrate() makes for a failed steady solve: write the
+      // last state reached -- which is exactly the run whose state is worth
+      // looking at -- close the files, then let the caller hear about it. No
+      // adjoint solve, because there is no converged state to define it at.
+      try {
+        system->writeSteadyState();
+        system->closeOutputFiles();
+      } catch (...) {
+        // A failure while reporting a failure. The original is the one worth
+        // propagating, so this one is dropped rather than replacing it.
+      }
+      abandonSlices();
+      throw;
+    }
+  }
+
+  // Leave the state where getSolution() reads it. finishRun() does this at the
+  // end of a run; without it here, a driver looking between slices would be
+  // handed the initial condition -- silently, since yJac is always a valid
+  // state, just not this one.
+  system->captureState();
+  return system->lastSteadyOutcome();
+}
+
+SystemSolver::SteadyOutcome PyRunner::start_steady(bool estimate) {
   if (!configured)
     throw std::runtime_error(
-        "Error: Runner must be configured before asking about the dG/dt gate.");
-  return system->lastDGdt();
+        "Error: Runner must be configured before running solver.");
+  if (slicing)
+    throw std::runtime_error(
+        "start_steady() called while a sliced solve is already running. Use "
+        "continue_steady() to carry on, or finish_steady() to end it.");
+  if (cfg.DegreeAdaptation)
+    throw std::runtime_error(
+        "DegreeAdaptation cannot be combined with a sliced steady solve: "
+        "adapting the degree replaces the solver, and a slice loop holds the "
+        "state of the one it started on. Run one or the other.");
+
+  system->setSteadyStateTolerance(steady_state_tolerance);
+  system->initialize();
+  slicing = true;
+  return runSlice(false, estimate);
 }
+
+SystemSolver::SteadyOutcome PyRunner::continue_steady(bool estimate) {
+  if (!slicing)
+    throw std::runtime_error(
+        "continue_steady() called with no sliced solve running. Call "
+        "start_steady() first.");
+  return runSlice(true, estimate);
+}
+
+void PyRunner::finish_steady(void) {
+  if (!slicing)
+    throw std::runtime_error(
+        "finish_steady() called with no sliced solve running.");
+  slicing = false;
+  system->writeSteadyState();
+  system->finishRun();
+  system->destroySundials();
+  std::println("Done.");
+}
+
+void PyRunner::abandonSlices(void) {
+  if (!slicing)
+    return;
+  slicing = false;
+  if (system != nullptr)
+    system->destroySundials();
+}
+
+py::dict PyRunner::steadyStats(void) const {
+  using namespace pybind11::literals;
+  const auto s = system->lastSteadyStats();
+  return py::dict(
+      "outcome"_a = system->lastSteadyOutcome(), "steps"_a = s.steps,
+      "rejected"_a = s.rejected, "residual_norm"_a = s.residualNorm,
+      "newton_iterations"_a = s.newtonIters, "residual_evaluations"_a = s.residualEvals,
+      "jacobian_builds"_a = s.jacBuilds, "jacobian_solves"_a = s.jacSolves,
+      "pseudo_transient_step"_a = system->getPseudoTransientStep());
+}
+
+
 
 Vector PyRunner::G(void) {
   if (!configured)
@@ -228,6 +405,15 @@ Vector PyRunner::G(void) {
     Gout(i) = ap->GFn(i, system->yJac);
 
   return Gout;
+}
+
+py::dict PyRunner::objectiveEstimate(void) const {
+  using namespace pybind11::literals;
+  const auto e = system->lastObjectiveEstimate();
+  if (!e.valid)
+    return py::dict();
+  return py::dict("value"_a = e.value, "corrected"_a = e.corrected,
+                  "uncertainty"_a = e.uncertainty);
 }
 
 py::tuple PyRunner::getAdjointGradients(void) {

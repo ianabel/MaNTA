@@ -30,20 +30,20 @@ jobs:
   #     numerics agree;
   #   - the pybind11 build is the only translation unit that pulls in Eigen's
   #     SparseCore, which is where -isystem-versus-I mistakes and clang-only
-  #     warnings surface (see CLAUDE.md). `make python` is the step that finds
-  #     those, so it has to run everywhere.
+  #     warnings surface (see CLAUDE.md). Building the _manta target is the step
+  #     that finds those, so it has to run everywhere.
   #
   # fail-fast is off on purpose: when one compiler breaks, the others' results
   # are exactly what tells you whether it is a real bug or that compiler's
-  # opinion. Three legs can also fail for reasons that have nothing to do with this
-  # code, because their compiler comes from outside the runner image: g++-15 and
-  # g++-16 from the toolchain PPA, and clang++-21 from apt.llvm.org. The Eigen 5 leg
-  # makes four, for the same reason one step down: its Eigen comes from gitlab.
+  # opinion. Several legs can also fail for reasons that have nothing to do with
+  # this code, because what they need comes from outside the runner image: g++-15
+  # and g++-16 from the toolchain PPA, clang++-21 from apt.llvm.org, and both
+  # Eigen 5 legs from gitlab.
   #
-  # g++-14, g++-16, clang++-19 and clang++-21 were each verified by hand --
-  # full build, both C++ suites, the pybind11 module and the Python suite -- before
-  # being added here. g++-15 and clang++-20 were not, because neither is packaged
-  # for the Debian box this was written on, so CI is their first real run.
+  # g++-16, clang++-19 and clang++-21 were each verified by hand -- full build,
+  # both C++ suites, the pybind11 module and the Python suite -- before being added
+  # here. g++-15 and clang++-20 were not, because neither is packaged for the
+  # Debian box this was written on, so CI is their first real run.
   #
   # Read that claim narrowly. A local clang build is NOT the same test as the clang
   # legs here, because the standard library differs: clang picks the newest GCC
@@ -60,12 +60,17 @@ jobs:
   # fetched from gitlab and EIGEN_DIR points at it. MaNTA supports 3.4.x and
   # 5.0.x, and the two differ enough to need guarding -- Eigen::all moved
   # namespace and internal::SingleRange became a template -- but the difference is
-  # in Eigen, not in the compiler, so it gets *one* leg rather than a full cross
-  # product. If that leg fails while the others pass, Eigen is the variable.
+  # in Eigen, not in the compiler -- so it gets two legs, one per compiler family,
+  # rather than a full cross product. If those fail while the others pass, Eigen is
+  # the variable.
   #
-  # `label` exists so adding that leg does not rename the existing ones: the job
+  # `label` exists so adding those legs does not rename the existing ones: the job
   # name is part of a required-check name, and legs whose name changes stop
-  # counting as the check they used to be.
+  # counting as the check they used to be. **A leg added, dropped or relabelled
+  # here changes the set of contexts published, so the branch-protection required
+  # list has to be updated in the same change** -- a required context that nothing
+  # publishes never arrives and blocks every non-admin silently. CLAUDE.md has the
+  # two-command diff for checking the rule and the run agree.
   build-and-test:
     name: Build + tests (${{ matrix.label || matrix.cxx }})
     runs-on: ubuntu-latest
@@ -87,8 +92,17 @@ jobs:
           #                 the project to clang-18 -Werror compliance, and P2448R2
           #                 was only the first C++23 gap. It is verified, not
           #                 guarded -- expect it to rot.
-          - cxx: g++-14
-            pkg: g++-14
+          # g++-14 is deliberately absent. It miscompiles this tree at the release
+          # flags -- -O3 -flto -march=native, all three required -- and the symptom
+          # is a wrong number rather than a diagnostic: adding any member to
+          # SystemSolver makes the AuxDiffusion cases of
+          # the_assembled_jacobian_matches_a_finite_difference_of_the_residual fail
+          # about half their runs. See CLAUDE.md and TODO. A leg that fails half the
+          # time for reasons unrelated to the change under review is worse than no
+          # leg, so it is gone rather than marked flaky, and noble's archive
+          # compiler is therefore *not* covered here. That is a real gap: the
+          # nearest thing to it is the Fedora container job, which only compiles.
+          #
           # Not in the noble archive (which stops at g++-14), so these two legs need
           # the toolchain PPA -- g++-15 there is 15.2.0-14ubuntu1~24~ppa1 and
           # g++-16 is 16-20260315-1ubuntu1~24~ppa1, a snapshot rather than a
@@ -98,9 +112,14 @@ jobs:
           - cxx: g++-15
             pkg: g++-15
             ppa: ubuntu-toolchain-r/test
+          # ...and this one builds with MANTA_LAPACK=OFF, so the built-in banded
+          # factorisation is what the whole suite runs against on one leg rather
+          # than only in the utility_tests cases that call it directly. The two
+          # give the same answers; that is the claim being tested.
           - cxx: g++-16
             pkg: g++-16
             ppa: ubuntu-toolchain-r/test
+            lapack: 'OFF' 
           # The ubuntu-24.04 image itself carries only clang 16/17/18, but noble's
           # universe repo packages clang-19 (1:19.1.1) and clang-20 (1:20.1.2), so
           # these two legs need nothing but apt.
@@ -113,14 +132,57 @@ jobs:
           - cxx: clang++-21
             pkg: clang-21
             llvm_version: '21'
-          # The Eigen 5 leg. On the baseline compiler deliberately: this leg exists
-          # to vary Eigen and nothing else, so g++-14 keeps it comparable with the
-          # first leg above. Pinned to the 5.0.1 tag rather than a branch, so the
-          # leg does not start failing because upstream master moved.
-          - cxx: g++-14
-            pkg: g++-14
+          # The Eigen 5 legs. Two rather than one, and on one compiler of each
+          # family: with g++-14 gone the "vary Eigen and nothing else" leg lost the
+          # baseline it was comparable against, and Eigen 5 is where the two
+          # compilers are most likely to disagree -- the differences MaNTA guards
+          # are template and namespace changes (Eigen::all moved,
+          # internal::SingleRange became a template), which is exactly the kind of
+          # thing one front end accepts and the other does not. Each has a plain
+          # counterpart above at the same compiler, so a failure here still isolates
+          # to Eigen.
+          #
+          # Pinned to the 5.0.1 tag rather than a branch, so the legs do not start
+          # failing because upstream master moved.
+          - cxx: g++-15
+            pkg: g++-15
+            ppa: ubuntu-toolchain-r/test
             eigen: 5.0.1
-            label: g++-14, Eigen 5.0.1
+            label: g++-15, Eigen 5.0.1
+          - cxx: clang++-19
+            pkg: clang-19
+            eigen: 5.0.1
+            label: clang++-19, Eigen 5.0.1
+          # The OpenMP leg. One is enough -- what it guards is MaNTA's own code,
+          # not a front-end difference -- and it exists because until 2026-08-25
+          # *nothing* built with MANTA_OPENMP=ON, so the pragmas had never been
+          # compiled with -fopenmp by anything automated. What that hid: an
+          # exception thrown by a physics hook inside a parallel loop aborted the
+          # process, because gcc's outlined function has no handler above it and
+          # __cxa_call_terminate runs. It killed the whole unit suite, and MaNTA
+          # treats a throwing hook as a *supported* recoverable error.
+          #
+          # util/ParallelFor.hpp fixed it and utility_tests pins it, but those
+          # cases only bite in a build that sets the option -- which is what this
+          # leg is for. See CLAUDE.md, "Parallelism".
+          - cxx: g++-15
+            pkg: g++-15
+            ppa: ubuntu-toolchain-r/test
+            openmp: 'ON'
+            omp_threads: 4
+            label: g++-15, OpenMP
+    # OMP_NUM_THREADS reaches more than MaNTA: -fopenmp loads libgomp, and that
+    # alone is enough for a dispatching BLAS to start threading itself, which
+    # changes floating-point reduction order. On a box whose libblas.so.3 is
+    # libmkl_rt that was enough to fail a tight-tolerance IDACalcIC test in a
+    # build where none of MaNTA's own loops were even parallel. The runner's
+    # libblas-dev is reference BLAS and single-threaded, so these two pins are a
+    # no-op here -- they are set so the leg keeps meaning "MaNTA's threading" if
+    # the image's BLAS ever changes.
+    env:
+      OMP_NUM_THREADS: ${{ matrix.omp_threads || 1 }}
+      OPENBLAS_NUM_THREADS: 1
+      MKL_NUM_THREADS: 1
     steps:
       - uses: actions/checkout@v4
         with:
@@ -159,7 +221,7 @@ jobs:
             libboost-dev \
             libeigen3-dev \
             libnetcdf-dev libnetcdf-c++4-dev \
-            libblas-dev
+            libblas-dev liblapack-dev
 
       # Boost.Test is used in header-only mode (boost/test/included/unit_test.hpp),
       # so libboost-dev alone is enough -- no unit_test_framework link step.
@@ -182,7 +244,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: sundials/install
-          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ runner.os }}-gcc14-${{ hashFiles('build_sundials') }}
+          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ runner.os }}-cc-default-${{ hashFiles('build_sundials') }}
 
       - name: Build SUNDIALS
         if: steps.cache-sundials.outputs.cache-hit != 'true'
@@ -209,18 +271,6 @@ jobs:
           echo "Eigen $got in $dir"
           echo "EIGEN_DIR=$dir" >> "$GITHUB_ENV"
 
-      # Unquoted heredoc, so EIGEN_DIR from the step above is substituted; it falls
-      # back to the distro headers for every other leg. matrix.cxx is expanded by
-      # Actions before the shell ever sees it either way.
-      - name: Configure Makefile.local
-        run: |
-          cat > Makefile.local <<EOF
-          CXX = ${{ matrix.cxx }}
-          SUNDIALS_DIR = ./sundials/install
-          EIGEN_DIR = ${EIGEN_DIR:-/usr/include/eigen3}
-          EOF
-          cat Makefile.local
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -229,71 +279,123 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
+      # Everything machine-specific is on this one command line. There is no
+      # Makefile.local any more, and CMakeUserPresets.json is for a developer's
+      # own box rather than for CI.
+      #
+      # Python3_EXECUTABLE is passed explicitly rather than left to FindPython3.
+      # setup-python's interpreter is first on PATH, but FindPython3 has its own
+      # search order and is free to prefer /usr/bin/python3 -- which would build
+      # the extension for one interpreter and run pytest under another. That is
+      # the ABI mismatch the old PYTHON_CONFIG logic existed to avoid, and it is
+      # worth a line to make impossible rather than likely.
+      #
+      # MANTA_EIGEN_INCLUDE_DIR is set only on the Eigen 5 legs. The step above
+      # unpacks a source tarball, which carries Eigen3Config.cmake.in but no
+      # generated Eigen3Config.cmake, so find_package cannot see it however the
+      # path is spelled. Every other leg leaves EIGEN_DIR unset and gets
+      # libeigen3-dev through find_package with nothing configured.
+      - name: Configure
+        run: |
+          cmake -B build -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+            -DSUNDIALS_ROOT="$PWD/sundials/install" \
+            -DPython3_EXECUTABLE="$(which python)" \
+            -DMANTA_OPENMP=${{ matrix.openmp || 'OFF' }} \
+            -DMANTA_LAPACK=${{ matrix.lapack || 'ON' }} \
+            ${EIGEN_DIR:+-DMANTA_EIGEN_INCLUDE_DIR="$EIGEN_DIR"}
+
+      # Three build steps rather than one `cmake --build build`, so a failure
+      # still says which half of the tree broke. They share manta_objects, so the
+      # first does most of the work and the other two are close to free.
       - name: Build solver
-        run: make MaNTA -j$(nproc)
+        run: cmake --build build --target MaNTA -j$(nproc)
 
-      - name: Unit tests
-        run: make test
-
-      - name: Regression tests
-        run: make regression_tests
+      - name: Build unit tests
+        run: cmake --build build --target UnitTests -j$(nproc)
 
       - name: Build Python module
-        run: make python -j$(nproc)
+        run: cmake --build build --target _manta -j$(nproc)
+
+      - name: Unit tests
+        run: ctest --test-dir build -R '^unit$' --output-on-failure
+
+      - name: Regression tests
+        run: ctest --test-dir build -R '^regression$' --output-on-failure
 
       - name: Python tests
-        run: make python_tests
+        run: ctest --test-dir build -R '^python$' --output-on-failure
 
       # One leg only: neither the generated stub nor the type check varies by
-      # compiler, and running them five times would just be five ways to learn
+      # compiler, and running them on every leg would just be several ways to learn
       # the same thing. The Eigen version is excluded too, not just the compiler --
-      # there are two g++-14 legs now, and neither check varies by Eigen either.
+      # g++-15 has two legs, and neither check varies by Eigen either. This used to
+      # ride on g++-14, which is why it moved when that leg went; if g++-15 is ever
+      # dropped, these two steps have to move again or they stop running at all,
+      # silently.
       - name: Stubs are up to date
-        if: matrix.cxx == 'g++-14' && matrix.eigen == ''
-        run: make stubs-check
+        if: matrix.cxx == 'g++-15' && matrix.eigen == ''
+        run: cmake --build build --target stubs-check
 
       - name: Type check the manta package
-        if: matrix.cxx == 'g++-14' && matrix.eigen == ''
-        run: make typecheck
+        if: matrix.cxx == 'g++-15' && matrix.eigen == ''
+        run: cmake --build build --target typecheck
 
-      # Naming a prefix the compiler already searches must be a no-op. It was not:
-      # -isystem /usr/include makes gcc and clang drop /usr/include from the end of
-      # the system chain and search it ahead of the libstdc++ headers, so <cstdlib>'s
-      # `#include_next <stdlib.h>` finds nothing and every translation unit fails.
-      # The Makefile.local written above leaves NETCDF_DIR unset, which is the one
-      # configuration where the bug is invisible -- hence this step.
+      # Naming a prefix the compiler already searches must be a no-op. Under the
+      # Makefile it was not: -isystem /usr/include makes gcc and clang drop
+      # /usr/include from the end of the system chain and search it ahead of the
+      # libstdc++ headers, so <cstdlib>'s `#include_next <stdlib.h>` finds nothing
+      # and every translation unit fails. Makefile.config carried a compiler probe
+      # and a hand-written filter for exactly that.
       #
-      # Every leg, not one: the filter is built from a compiler probe whose output
-      # format differs between gcc and clang, so it has to be exercised on both.
-      # NETCDF_DIR goes on the command line rather than into Makefile.local so the
-      # rest of the configuration is untouched, and Config.o is removed either side
-      # so no later step inherits it.
-      - name: A system-prefix NETCDF_DIR is a no-op
+      # CMake does the filtering itself, by stripping
+      # CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES from the flags it generates. That is
+      # a claim worth testing rather than trusting, so the check stays -- rewritten
+      # against a scratch build directory configured with a system prefix, reading
+      # the compile lines CMake actually emitted rather than a dry run.
+      #
+      # Every leg, not one: the implicit-directory list comes from a compiler probe
+      # whose output format differs between gcc and clang, so it has to be
+      # exercised on both. A separate build directory, so the real one is untouched.
+      - name: A system prefix is a no-op
         run: |
-          rm -f Config.o
-          if make -n MaNTA NETCDF_DIR=/usr | grep -E -- '-isystem /usr/include( |$)'; then
-            echo "::error::NETCDF_DIR=/usr put /usr/include on the compile line as -isystem"
+          cmake -B build-sysprefix -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+            -DSUNDIALS_ROOT="$PWD/sundials/install" \
+            -DPython3_EXECUTABLE="$(which python)" \
+            -DCMAKE_PREFIX_PATH=/usr > /dev/null
+          if grep -E -- '-isystem /usr/include[" ]' build-sysprefix/compile_commands.json; then
+            echo "::error::a /usr prefix put /usr/include on the compile line as -isystem"
             exit 1
           fi
-          make Config.o NETCDF_DIR=/usr
-          rm -f Config.o
+          # And that a translation unit still compiles with that prefix in play,
+          # which is where the old failure actually surfaced. One object, not the
+          # whole target: `Config.o` is a per-source target the Unix Makefiles
+          # generator emits (Ninja spells it `Config.cpp.o`), and this job uses
+          # the default generator. It is the direct successor to the old
+          # `make Config.o NETCDF_DIR=/usr`.
+          cmake --build build-sysprefix --target Config.o > /dev/null
+          rm -rf build-sysprefix
 
   # A non-Debian distro, in a container, to check that the build's assumptions about
   # where a system installation puts things are actually assumptions about POSIX and
   # not about Ubuntu. Two are worth naming:
   #
-  #   - Fedora puts libraries in /usr/lib64. Makefile.config's `syslibdir` picks
-  #     lib or lib64 by testing which one holds the library, and until now nothing
-  #     exercised the lib64 side of that; every other leg is multiarch Debian.
+  #   - Fedora puts libraries in /usr/lib64. Makefile.config used to choose lib or
+  #     lib64 by hand, testing which one held the library; find_package and
+  #     pkg-config do that now. This is still the only leg that exercises the
+  #     lib64 side of it -- every other one is multiarch Debian.
   #   - netCDF is found through pkg-config here, with NETCDF_DIR unset, and the
   #     Fedora .pc files are laid out differently from noble's.
   #
-  # Compilation only, deliberately -- `make MaNTA` and `make python`, no suites.
+  # Compilation only, deliberately -- the MaNTA and _manta targets, no suites.
   # The point is to find configuration that is wrong outside Debian, and running
   # the numerics as well would add failure modes (a differently-tuned BLAS, say)
   # that say nothing about that. The other seven legs cover behaviour.
   #
-  # `make python` is in scope because it is the only translation unit that pulls in
+  # _manta is in scope because it is the only translation unit that pulls in
   # Eigen's SparseCore, which is where -isystem mistakes surface (see CLAUDE.md).
   #
   # This is a separate job rather than another entry in build-and-test because it
@@ -329,11 +431,11 @@ jobs:
       - name: Install build dependencies
         run: |
           dnf -y install --setopt=install_weak_deps=False \
-            gcc-c++ cmake make wget tar gzip \
+            gcc-c++ cmake wget tar gzip \
             boost-devel \
             eigen3-devel \
             netcdf-devel netcdf-cxx4-devel \
-            blas-devel \
+            blas-devel lapack-devel \
             python3-devel
           # Diagnostics only -- which Eigen Fedora shipped is the interesting
           # part, and it moved header between 3.4 and 5.0. `|| true` because run
@@ -360,21 +462,26 @@ jobs:
         if: steps.cache-sundials.outputs.cache-hit != 'true'
         run: ./build_sundials
 
-      # NETCDF_DIR deliberately unset, so Makefile.config asks pkg-config.
-      - name: Configure Makefile.local
+      # Nothing named for netCDF or Eigen, deliberately. Both are package-manager
+      # installs here, so netCDF goes through pkg-config and Eigen through the
+      # Eigen3Config.cmake that eigen3-devel ships -- which is the configuration
+      # this job exists to check, since Fedora lays both out differently from
+      # noble and puts its libraries in lib64.
+      #
+      # MANTA_TESTS=OFF: this job compiles, it does not run anything, and the
+      # unit tests are the only thing that needs Boost.
+      - name: Configure
         run: |
-          cat > Makefile.local <<'EOF'
-          CXX = g++
-          SUNDIALS_DIR = ./sundials/install
-          EIGEN_DIR = /usr/include/eigen3
-          EOF
-          cat Makefile.local
+          cmake -B build -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMANTA_TESTS=OFF \
+            -DSUNDIALS_ROOT="$PWD/sundials/install"
 
       - name: Build solver
-        run: make MaNTA -j$(nproc)
+        run: cmake --build build --target MaNTA -j$(nproc)
 
       - name: Build Python module
-        run: make python -j$(nproc)
+        run: cmake --build build --target _manta -j$(nproc)
 
   coverage:
     name: Coverage
@@ -384,15 +491,32 @@ jobs:
         with:
           submodules: recursive
 
+      # g++-15 from the toolchain PPA, like the build legs: g++-14 is not used
+      # anywhere in this workflow any more (see the matrix above). This job is at
+      # -O0 --coverage with neither LTO nor -march=native, so it was never exposed
+      # to the g++-14 miscompile -- it moves for consistency and so that no part of
+      # CI is left resting on that compiler.
+      #
+      # cmake/MantaCompilerFlags.cmake derives MANTA_GCOV from the compiler's
+      # VERSION, so this also makes it gcov-15. That coupling is load-bearing:
+      # gcovr must read .gcno/.gcda with the same toolchain version that wrote
+      # them, or it exits 3 with a version-mismatch error that looks nothing like
+      # a coverage problem. This image's default gcov is 13.
+      - name: Add the toolchain PPA
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends software-properties-common
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            g++-14 cmake wget \
+            g++-15 cmake wget \
             libboost-dev \
             libeigen3-dev \
             libnetcdf-dev libnetcdf-c++4-dev \
-            libblas-dev
+            libblas-dev liblapack-dev
 
       # Shares the build legs' key deliberately -- same image, same install.
       - name: Cache SUNDIALS
@@ -400,19 +524,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: sundials/install
-          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ runner.os }}-gcc14-${{ hashFiles('build_sundials') }}
+          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ runner.os }}-cc-default-${{ hashFiles('build_sundials') }}
 
       - name: Build SUNDIALS
         if: steps.cache-sundials.outputs.cache-hit != 'true'
         run: ./build_sundials
-
-      - name: Configure Makefile.local
-        run: |
-          cat > Makefile.local <<'EOF'
-          CXX = g++-14
-          SUNDIALS_DIR = ./sundials/install
-          EIGEN_DIR = /usr/include/eigen3
-          EOF
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -422,8 +538,26 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt gcovr
 
+      # A build directory of its own, with CMAKE_BUILD_TYPE=Coverage. Under the
+      # Makefile this was one tree that recursed with COVERAGE=on, which needed
+      # `env -u CXXFLAGS -u LDFLAGS` to stop the parent's release flags leaking
+      # into the child -- -O0 won, but -flto=auto survived and silently ruined
+      # line attribution -- and ended with a `make clean` so the tree was left
+      # buildable afterwards. Separate directories make both unnecessary: there is
+      # no parent to inherit from, and nothing to undo.
+      - name: Configure
+        run: |
+          cmake -B build-coverage -S . \
+            -DCMAKE_BUILD_TYPE=Coverage \
+            -DCMAKE_CXX_COMPILER=g++-15 \
+            -DSUNDIALS_ROOT="$PWD/sundials/install" \
+            -DPython3_EXECUTABLE="$(which python)"
+
+      - name: Build
+        run: cmake --build build-coverage -j$(nproc)
+
       - name: Run coverage
-        run: make coverage -j$(nproc)
+        run: cmake --build build-coverage --target coverage
 
       - name: Summarise
         if: always()
@@ -432,7 +566,7 @@ jobs:
           # coverage step is followed by `tail: cannot open ...: No such file or
           # directory`, and that becomes the *last* error in the log -- burying the
           # real one several hundred lines up.
-          if [ ! -f coverage/summary.txt ]; then
+          if [ ! -f build-coverage/coverage/summary.txt ]; then
             echo 'Coverage report not produced -- see the "Run coverage" step.' \
               >> "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -440,13 +574,13 @@ jobs:
           {
             echo '### Coverage (in-scope: numerical core + Python bindings)'
             echo '```'
-            tail -n 40 coverage/summary.txt
+            tail -n 40 build-coverage/coverage/summary.txt
             echo '```'
             echo '### PhysicsCases (informational)'
             echo '```'
             # That report comes from a `-`-prefixed gcovr in the coverage target,
             # so it is allowed to be absent while the in-scope one succeeded.
-            tail -n 20 coverage/physics.txt 2>/dev/null || echo '(not produced)'
+            tail -n 20 build-coverage/coverage/physics.txt 2>/dev/null || echo '(not produced)'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -455,4 +589,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: coverage/
+          path: build-coverage/coverage/

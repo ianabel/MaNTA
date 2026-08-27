@@ -1,3 +1,194 @@
+Add `Build + tests (g++-15, OpenMP)` to branch protection -- AFTER this lands.
+Raised 2026-08-26, and it is deliberately not done yet.
+
+  ci.yml publishes ten contexts on this branch; the protection rule on main
+  requires nine. The tenth is the OpenMP leg, and it cannot be required until the
+  leg exists on main, because a required context is matched by name against what
+  a PR's own workflow publishes -- so a PR branched from a main without the leg
+  can never satisfy it and hangs at "Expected" forever. It was required early
+  once, in the change that added the leg, and had to be reverted for that reason.
+
+    gh api repos/ianabel/MaNTA/branches/main/protection/required_status_checks \
+      -q '.contexts[]' | sort > /tmp/req
+    gh pr view <N> --json statusCheckRollup \
+      -q '.statusCheckRollup[].name' | sort > /tmp/got
+    diff /tmp/req /tmp/got
+
+  Left-only is required-but-impossible; right-only is ungated. CLAUDE.md's
+  "Branch protection" section carries the full version.
+
+
+No CI leg builds the documentation, so a -W failure reaches main unnoticed.
+Found 2026-08-26, by putting one there.
+
+  The `docs` target builds with -W, as Read the Docs does, and it is the only
+  thing in the tree that would catch a broken reST cross-reference. Nothing runs
+  it: the ten CI contexts are the compiler matrix, the Fedora compile and
+  Coverage. A blank line dropped before `.. _warm-starts:` during a conflict
+  resolution silently deleted the label, `docs/configuration.rst` went on
+  referencing it, and the first thing to notice was a Read the Docs build of main
+  -- one PR later, and only because the CMake branch happened to build docs.
+
+  The job is cheap: `cmake --build build --target docs` needs the .venv-docs
+  built from docs/requirements.txt and no compiler at all. It is a separate leg
+  rather than a step in an existing one precisely because it needs neither the
+  solver nor the matrix, and adding it means adding its context to the protection
+  rule -- in that order, per the entry above.
+
+
+Per-call N_Vector allocation in the coupled Jacobian solve.
+The scalar half of this is fixed (2026-08-25): solveTransportJac used to
+N_VClone and destroy nScalars + 2 full-length vectors on *every* call -- once per
+Newton iteration, and nField + 1 times that under solveCoupledJacExact -- for
+working space whose size is fixed by nScalars at construction. They are now
+members (solveScalarD/E/G), allocated beside v and w by
+allocateScalarWorkVectors() and rebuilt by setFieldModel when getDoF() changes.
+
+  What is left, in the same shape and for the same reason:
+
+    solveCoupledJacExact   N_Vector col, AinvA1[nField], Ainv_r1   (nField + 2)
+    solveCoupledJacIterative  N_Vector work                        (1)
+
+  nField is fixed once setFieldModel has run, exactly as nScalars is fixed at
+  construction, so the same treatment applies -- a2 already demonstrates the
+  pattern for an nField-sized array of full-length vectors.
+
+  Not done because no field model is registered anywhere in the tree, so this is
+  cold code with no fixture that would notice either the saving or a mistake in
+  it. Do it when a model lands, alongside a coupled regression case.
+
+K_global is factorised densely, and it is 73-91% of a low-k run.
+Found 2026-08-25. FIXED the same day -- util/BandedMatrix.hpp, and the entry is
+kept because the measurements are what justify the shape of the fix and the
+numbers are worth not re-deriving.
+
+  solveHDGJac condensed onto lambda and then handed the result to a *dense*
+  Eigen::FullPivLU of side nVars * (nCells + 1), on every Newton iteration. That
+  is O(nCells^3) in the one quantity static condensation exists to make
+  O(nCells). Phase breakdown before the fix, by direct chrono instrumentation:
+
+    400 cells, k=3:  K_global 3.534 s of a 3.9 s run   -- 91%
+    200 cells, k=4:  K_global 14.165 s of a 19.4 s run -- 73%
+     50 cells, k=8:  K_global 0.248 s of 2.1 s         -- 12%
+     20 cells, k=10: K_global 0.023 s of 1.0 s         --  2%
+
+  What it is now: a banded LU with partial pivoting, dgbtrf/dgbtrs when a LAPACK
+  was found and an equivalent built-in when not. Measured, MKL pinned, best of 3:
+
+    400 cells, k=3:  5233 ms -> 555 ms   (9.4x)
+    200 cells, k=4: ~16400 ms -> 2147 ms (7.6x)
+     50 cells, k=8:  1902 ms -> 1226 ms  (1.55x)
+     20 cells, k=10:  976 ms -> 755 ms   (1.29x)
+
+  The k=10 case is the interesting one: the trace solve was 2% of it, so the 1.29x
+  is not the factorisation at all. It is the dense (nCells+1)^2 allocate-and-zero
+  and the FullPivLU's own per-call buffers, 627 times over.
+
+  Two things this turned up that are worth keeping:
+
+  * **K_global is singular, by exactly the number of Dirichlet boundaries**, and
+    the dense FullPivLU was absorbing that silently. A Dirichlet end sets Hvar's
+    diagonal to zero and nothing else writes that trace DOF, so the row and the
+    column are identically zero; FullPivLU returns the particular solution with
+    the free components zeroed, which is the right answer for the wrong reason.
+    imposeDirichletTraceRows writes the constraint down instead. Verified rather
+    than argued: measured rank 3/5 and 4/6 on the fixture solves, and the banded
+    answer agrees with the dense one to 2.7e-15.
+
+  * **It is not bit-identical, and should not be.** Unlike the OpenMP change --
+    same operations, same order, byte-identical output -- this is a different
+    factorisation, so the last bits move and IDA's step sequence moves with them.
+    Measured worst relative difference in the netCDF output: 4.2e-13 (400 cells,
+    k=3) and 2.7e-11 (20 cells, k=10), against run tolerances of 1e-8 and 1e-6.
+
+  Not done, and the obvious next thing if the trace solve ever matters again: the
+  band is 2*nVars - 1 either side only because the trace DOFs are ordered
+  (node, var). Nothing needs the *matrix* ordering to match the solution vector's,
+  which is why the permutation is local to the solve -- but a solution vector that
+  interleaved lambda the same way would remove the gather and scatter entirely.
+
+g++-14 miscompiles this tree at -O3 -flto -march=native. Root cause not found.
+Found 2026-08-23. CLAUDE.md has the summary; this is the reproduction.
+
+  To reproduce, on g++-14 (14.2.0 here) on an AVX2 host:
+
+    1. Check out main. Add one inert member to SystemSolver, in the private
+       block next to `steadyDiagnostics`:
+
+           bool reproPaddingFlag = false;
+           std::vector<double> reproPadding;
+
+       Nothing reads either. Add `#include <vector>` with the other includes.
+    2. `rm -rf build && cmake --preset default && cmake --build build`
+    3. Run the one test in a loop:
+
+           for i in $(seq 1 12); do
+             Tests/UnitTests/UnitTests --run_test=algebraic_derivative_tests/\
+               the_assembled_jacobian_matches_a_finite_difference_of_the_residual
+           done
+
+    Without the member: 12/12 pass. With it: 8/12 fail, always the same way --
+    the AuxDiffusion cases, plain and superconvergent, at k = 1, 2 and 3, drift
+    ~1.24.
+
+    NOTE: `algebraic_derivative_tests` no longer exists -- it went with the dG/dt
+    gate, the only thing that read the algebraic time derivatives -- so step 3
+    cannot be run as written. The miscompilation was never diagnosed, only
+    bounded, so this needs a fresh reproduction rather than deletion. What
+    mattered was a dense finite-difference of residual() inlined into a test
+    translation unit plus a change to SystemSolver's member layout;
+    SolveJacTests.cpp differences the residual the same way and is where to
+    start.
+
+  The signature, which is how to recognise it if it turns up elsewhere: the
+  differenced Jacobian loses the column of the first interior trace DOF
+  (index 33 / 49 / 65 at k = 1 / 2 / 3, always lambda[1]), giving 0 against a
+  stable assembled -1.5, so the drift is 1.5 / 1.2071067811865475 =
+  1.2426406871192851. Passing runs are bit-identical to each other; failing runs
+  all differ from each other.
+
+  Established:
+
+  * Needs all three of g++-14, `-flto` and `-march=native` (AVX2, znver2 here).
+    Drop any one -> 10/10 clean. `-O0` clean. g++-15 clean. clang++-19 clean.
+    (g++-13 does not build this tree, so it was not tested.)
+  * Not build staleness, not leftover output files, not ASLR (`setarch -R` with a
+    fixed environment still flakes), not BLAS threading, not uninitialised
+    trivial automatics (`-ftrivial-auto-var-init=zero` and `=pattern` both still
+    flake). AddressSanitizer: 12/12 clean, no invalid access.
+  * The solver binary is *not* observably affected: `MaNTA` on
+    Tests/RegressionTests/AuxVarTest.conf gave bit-identical netCDF over 8 runs
+    with the member in place. `MaNTA` is built without -DTEST from a different
+    object set, which points at the header-only `fdjac::jacobian` inlined into
+    the test TU rather than at the solver.
+
+  The obstacle, and the thing to know before spending an afternoon on it: **every
+  codegen perturbation hides it.** Adding a read of Y, extending an existing
+  BOOST_TEST_MESSAGE, storing into a file-scope array, `-fno-strict-aliasing`,
+  `-fno-tree-vectorize` -- all take it to 10/10 clean. So a flag that "fixes" it
+  is not evidence about the mechanism; `-fno-strict-aliasing` in particular looks
+  like a smoking gun and is not one. The only asymmetric signal is that adding a
+  member to SystemSolver reliably *creates* it.
+
+  Next steps, roughly in order of expected value:
+
+  * Diff the g++-14 assembly for the test TU with and without the inert member,
+    around the inlined `fdjac::jacobian` loop. This is the only route left that
+    does not perturb the thing being measured.
+  * If that shows a genuine miscompile, reduce it and report it upstream; g++-14
+    is still a supported distro compiler and CI has two required legs on it.
+  * If it shows the compiler exploiting UB, the UB is ours and needs fixing
+    regardless of compiler. The placement-new over `mu_` in `DGSolnImpl::Map`
+    (`new (&mu_) VectorWrapper(...)`, then continued use of the name `mu_`) is
+    the one piece of the mapping code that is not obviously well-defined, and is
+    worth reading first even though the failing DOF is a trace rather than a
+    scalar.
+
+  Until then the build warns when it sees g++-14 (cmake/MantaCompilerFlags.cmake),
+  and CI's two
+  g++-14 legs should be treated as capable of failing for reasons unrelated to
+  the change under review.
+
 Investigate occasional wiggles in outputs.
 
 Left over from the TransportSystem interface work. Everything else in that plan
@@ -38,10 +229,10 @@ landed; these are the pieces that were deliberately not done, with the reason.
     end to end -- a one-file C++ case compiled against the installed headers,
     dlopened via PhysicsPlugins and run; and `pip install .` into a fresh venv
     with a Python case run from the user's own directory through the `manta`
-    command -- but neither is an automated test. The C++ one needs `make
-    install` to a temp prefix and a compiler invocation; the Python one needs a
-    venv. Both are slow enough to want their own CI job rather than a place in
-    `make test`.
+    command -- but neither is an automated test. The C++ one needs
+    `cmake --install build --prefix` to a temp directory and a compiler
+    invocation; the Python one needs a venv. Both are slow enough to want their
+    own CI job rather than a place in `ctest`.
 
 
 Found since, and left undone deliberately rather than overlooked. Each says what
@@ -80,6 +271,263 @@ reason it was not made:
     for each differential scalar. Two of the three fixtures there would have to
     be checked against it first.
 
+  - AutodiffTransportSystem::MMS_Source (PhysicsCases/AutodiffTransportSystem.cpp)
+    still evaluates the plain, geometry-blind Flux/Source overloads directly,
+    while every other hook -- SigmaFn, Sources, AuxG, and every
+    dSigmaFn_.../dSources_.../dAuxG_... derivative -- goes exclusively through
+    the geometry-aware overloads added for the field-model coupling. The two
+    sets agree today only because the plain overload is still what every case's
+    Flux/Source body actually is: nothing yet gives the geometry-aware overload
+    content that differs from it. That stops being true the moment a case's real
+    physics genuinely depends on geometry, because the plain overload is the
+    mandatory pure virtual -- such a case is *forced* to write some body for it
+    just to compile, and MMS_Source will manufacture a source against that
+    fictional, geometry-blind stand-in rather than against the equation the
+    solver integrates. A manufactured solution that still converges, at the
+    right rate, to the wrong function, with nothing pointing at why.
+
+    dSigmaFn_dp and dSources_dp carried the same defect and are fixed: they
+    feed F_p in computeAdjointGradients, so there it was a wrong gradient beside
+    a perfectly good G, which is the adjoint's own failure mode and belonged
+    with the transposes. MMS_Source is not on that path and is not the same
+    two-line change: it is handed (i, x, t) and nothing else, so there is no psi
+    to evaluate geometry at, and AutodiffTransportSystem holds no field model
+    and no route to the solver's. Threading one in is a change to the
+    manufactured-solution facility, which the coupled order study owns. Write
+    the manufactured coupled case that would catch the old behaviour being wrong
+    before changing it.
+
+  - FieldModel::FieldResidual receives no `states_dot`, so a field row cannot
+    depend on the transport time derivatives -- and FieldResidualPrime's `dRdot`
+    out-parameter, which is meant to be exactly that derivative, is therefore
+    unfillable by any model that can exist. Every consistent model returns it
+    zero, so the `alpha * dRdot` term the A2 assembly carries
+    (SystemSolver::assembleFieldCoupling) is provably inert rather than wrong,
+    and no test reaches it or can.
+
+    Not merely a dead slot, though. A model author who finds it unfillable and
+    reaches for the nearest thing that fits -- putting d(row)/d(psi') in `dRdot`
+    rather than in `dRddpsidt` -- writes a psi derivative into the coupling row
+    against the transport DOFs, at the wrong indices entirely. A2 is only ever
+    applied, never assembled or printed, so the symptom would be slow Newton
+    convergence on a coupled run and nothing else. FieldModel.hpp now says so at
+    the declaration, which is where the mistake would be made.
+
+    The fix is to give FieldResidual a `states_dot` argument, matching ScalarG,
+    which takes both y and ydot for the same reason. That is an interface change
+    to the FieldModel value hook, which nothing in the coupling as built owns:
+    the assembly, the iterative solve and the adjoint transposes all consume the
+    signature rather than setting it. Doing it wants a field model
+    whose residual genuinely carries d/dt of a transport quantity, checked
+    against a closed form first: the same "write the case that would catch it
+    being wrong before changing it" rule the autodiff-sigma entry above records.
+
+
+  - The coupled adjoint has two structurally missing terms, both zero today by
+    construction rather than by assumption, and both named in code beside the
+    zero (SystemSolver.hpp, at G_field).
+
+    dG/dpsi. AdjointProblem reports dg/du, dg/dq, dg/dsigma and dg/dphi; there is
+    no dg/dgeometry. So the field row of the adjoint right-hand side, G_field, is
+    identically zero, and an objective whose integrand reads State::geom directly
+    loses that contribution -- a wrong gradient beside a good G. It is not
+    detectable from the solver: geometry is filled on the states the objective is
+    evaluated on (it has to be, or a *physics* hook reads a zero-length vector),
+    so a g that reads it gets a correct value and an incomplete derivative. The
+    same standing limit AdjointVectors.cpp records for the absent dgFn_dscalars,
+    and the fix is the same shape: a dg/dgeometry hook with a zero default, plus
+    a Python trampoline for it. Wants an objective that genuinely depends on
+    geometry, checked against a closed form, written first.
+
+    d(field residual)/dp. FieldModel has no notion of an adjoint parameter, so
+    dR/dp is zero because there is no hook a model author could fill -- not
+    because the term is small. A coil current or a boundary flux that appeared in
+    both the field residual and the parameter vector would need one, and
+    computeAdjointGradients would then contract it with adjoint_field, which the
+    coupled solve already computes and currently uses only inside the elimination.
+
+  - The coupled sweep uses Irons-Tuck, a rank-one secant acceleration. It is
+    exact in one step for nField == 1 and any spectrum, and removes the dominant
+    eigendirection for nField > 1 -- but only that one, so a coupling with two
+    comparable eigenvalues outside the unit circle can still fall back to the
+    exact Schur solve. The depth-m generalisation is Anderson acceleration, which
+    for an affine map is GMRES on the Schur complement; that is the right answer
+    for the large nField this path exists to serve, and is a separate piece of
+    work.
+
+    rho(M) was measured at 1.611 (cj = 0) and 1.571 (cj = 1e8) on
+    RichGeometricDiffusion: a property of the coupling, not of the time step.
+    That fixture could not be integrated on FieldSolve = iterative at all before
+    the acceleration -- IDA cut h to the floor over five attempts at the first
+    step, with Newton update norms of order 1e10 -- and now completes with zero
+    fallbacks over ~2000 Jacobian solves and reaches the finite-difference
+    gradient to 1e-10.
+
+    **Measured, the rank-one step copes better than the argument above predicts,
+    and the successor is a scaling concern rather than a known gap.**
+    ManufacturedFieldVector's five unknowns, scanned over coupling strengths from
+    1 to 1e5 -- rho rising to just under 2 and never falling back within a cap
+    of 400 -- converge every time, in 13 to 38 sweeps depending on the
+    right-hand side. The steps are rank one individually but not the *same*
+    rank-one direction, so the iteration is not confined to the two-dimensional
+    subspace the pessimistic argument assumes. No fixture has yet been found
+    where the acceleration fails outright.
+
+    What the spread does mean is that **FieldSolveMaxSweeps = 20 is not enough
+    for five field unknowns**: over six right-hand side *directions* at
+    strength 10 (rho = 1.57) the counts are 13, 33, 38, 21, 17, 19, so three of
+    the six escalate at the shipped default and all six converge at 60.
+    a_divergent_five_dof_coupling_is_still_solved_exactly measures exactly that
+    and asserts it, as a tripwire: it requires both some to converge and some to
+    escalate, so raising the default or improving the accelerator has to update
+    the test and this entry together. Note the counts cannot be varied by
+    *scaling* the right-hand side -- the solve is homogeneous -- so a
+    single-right-hand-side measurement of this is not a measurement.
+
+  - **The iterative path is a bet on a large field block, not a free
+    improvement, and the arithmetic should be stated before anyone reads the
+    fallback count as the only cost.** One sweep is one transport solve; the
+    exact Schur complement is nField + 1 of them plus a dense nField^3
+    factorisation. The break-even is therefore
+
+        #sweeps  <  nField + 1
+
+    and **no fixture in this tree is on the winning side of it.** At nField == 1
+    the sweep takes 3 against exact's 2 (1.5x worse); at nField == 5 it takes 13
+    to 38 against exact's 6 (2-6x worse), for the same answer, and an escalation
+    pays FieldSolveMaxSweeps *plus* the exact solve on top. The design target is
+    N_magnetics >> N_HDG, where exact's nField + 1 transport solves and its
+    O(nField^3) dense solve are hopeless and one sweep per iteration is the only
+    affordable option -- but nothing in the tree exercises that regime yet, so
+    every measurement available today says exact is cheaper.
+
+    Said in **five** places, which is three more than a fact needs and is worth
+    knowing before adding a sixth: solveCoupledJacIterative's escalation comment
+    (SystemSolver.cpp), the FieldSolve = iterative message initialize() logs,
+    CLAUDE.md's field section, docs/field_coupling.rst, and here.
+    docs/running.rst and FEATURES.md state it in a clause and point at
+    field_coupling for the arithmetic, which is the pattern to follow -- when
+    this entry is closed, or the measurement changes, all five have to move
+    together, and the count is here so that is a known cost rather than a
+    surprise.
+
+  - Nothing latches the fallback. A genuinely divergent coupling pays
+    FieldSolveMaxSweeps sweeps *and* the exact solve on every Jacobian solve for
+    the whole run. Two candidate fixes, neither taken here:
+
+      * Latch after N consecutive fallbacks. N is a number nobody can presently
+        justify, and rho does drift with cj even if only by 2% in the one case
+        measured.
+      * Latch on *cost* rather than on failure: switch to exact once the running
+        mean sweep count exceeds nField + 1, which is the break-even above. This
+        is the better-founded of the two -- the threshold is derived rather than
+        picked -- and it would also catch the case the fallback latch misses, a
+        sweep that converges every time and still costs more than exact. It is a
+        behavioural change to the default mode, so it wants deciding rather than
+        slipping in beside an accelerator.
+
+    The end-of-run count is the signal for now -- and it is printed only on the
+    time-marching path, beside IDA's own totals, so a steady-state run
+    (SteadyStateSolver, which does not go through IDASolve) reports nothing.
+
+  - **No Python surface can reach the geometry, in either of the two layers, and
+    both gaps are latent rather than visible.** Nothing exercises them because
+    nothing can: a field model is selected by the config's FieldModel key from a
+    C++ registry, Runner.configure rejects that key as ProblemSelection, and
+    there is no pybind11 class for a FieldModel to hand over instead. So a
+    Python or JAX case can be *written* against geometry today and will read
+    zeros. Two separate pieces:
+
+      * manta.jax.State has no Geometry field, while the GlobalState caster
+        (Python.cpp) puts a "Geometry" key in the dict unconditionally. State
+        .from_manta drops it, so a JAX case cannot read geometry at all. Adding
+        the field is small; what makes it more than a one-liner is that State is
+        an equinox Module with a vmap_axes() pytree and a make_zero, and an
+        nGeom == 0 run has to keep giving the same pytree structure it does now
+        -- the Aux and Scalars fields already carry that None-for-empty pattern.
+      * manta.State.geom is indexable by position only (PyState.hpp). The slot
+        names live in the field model's FieldModelSpec and this view takes its
+        names from the TransportSystem's SystemSpec, so there is nothing to look
+        a name up in. Every other field on the view -- u, q, sigma, phi, scalars
+        -- accepts a declared name, so the asymmetry will be noticed. Fixing it
+        means giving PyState a route to the attached model's spec, which the
+        solver does not currently offer a State.
+
+    Both want a Python-attachable field model first, or they are untestable.
+  - The objective estimate has no in-loop consumer yet.
+
+    estimateObjective() is callable at any point and leaves alpha and the
+    factorised blocks as it found them, so a continuation step can ask it. What
+    the loop cannot do is *act* on the answer: solveSteadyState has three ways
+    out and two of them throw, so there is no path for "stop here, this is good
+    enough" or "stop here, this cannot beat the incumbent". SteadyOutcome records
+    which exit was taken and the estimate is filled before either throw, so a
+    caught failure carries a usable partial answer, and MaxContinuationSteps plus
+    continueSteadyState() turn that into a workable slice-and-inspect loop: a
+    solve cut short resumes at the state and the pseudo-time step it reached, at
+    no measured cost in continuation steps. That is enough for a caller willing
+    to look between slices. A clean early return from *inside* a step still needs
+    adding, along with whatever criterion would drive it.
+
+    Before adding one, note what the measurements say about the criterion. An
+    early exit keyed on the *bound* is worth much less than it sounds: the
+    objective's error is proportional to ||J^-1 F||, and driving ||F|| down is the
+    whole of the solve, so there is no tail to cut. Deciding G to 1% still costs
+    95% of the solve and even a 50% decision costs 80%. The win is in solving
+    looser and correcting -- 34% cheaper and three times more accurate than
+    converging two orders harder and taking G raw -- which needs no early exit at
+    all, only a caller willing to set SteadyStateTolerance and read `corrected`.
+
+    So the in-loop hook is for a criterion nobody has yet: abandoning a parameter
+    point against an incumbent the caller supplies. That is worth building when
+    there is a sweep to measure it on.
+
+    The slice loop is reachable from Python as start_steady / continue_steady /
+    finish_steady, wrapped as manta.SteadySolve, and through the JAX FFI on the
+    same names -- so manta.SteadySolve(ffi_runner) works. CPU only, like Run and
+    Run_ss; the outcome is returned as a concrete int32, which forces the sync a
+    Python `while` needs and is why a slice loop belongs in eager code or inside
+    an io_callback rather than under jit.
+
+  - Degree adaptation and a sliced steady solve are refused together, and the
+    combination that would be worth having is not the one that was refused.
+
+    start_steady() throws when DegreeAdaptation is set. The mechanical reason is
+    that adapting the degree *replaces* the SystemSolver, once per degree
+    (PyRunner::adaptDegree), while a slice loop holds the state of the one it
+    started on -- so the loop would be resuming into a solver that no longer
+    exists. Refusing is right for now: it is one line, and it fails where the
+    mistake was made rather than several slices later.
+
+    What is actually wanted is the other order. Slice to a converged state at the
+    degree you have, raise the degree, and carry on from the answer you already
+    reached -- which is a *restart* rather than a continuation, because the
+    coefficients move to a different space. setInitialConditions already does
+    that transfer for a restart file, and knows the difference: a degree change
+    is projected, so sigma is rebuilt and the state it hands the solver is a
+    guess like any other. The trace survives verbatim, since lambda has no
+    polynomial degree.
+
+    So the pieces exist and the sequencing is the work: after a converged slice,
+    project the state onto the new degree, rebuild the solver, and re-enter the
+    continuation. Note the pseudo-time step should *not* transfer with it -- the
+    projected state is off the manifold in a way the old dt was not chosen for,
+    which is the same reason a projected restart runs IDACalcIC where a copied
+    one does not.
+
+  - Two things about the estimate are unmeasured and would change its sizing.
+
+      * The norm. The bound pairs unweighted 2-norms. Pairing the WRMS norm with
+        its dual should be tighter, and is the norm IDA's own error test would
+        recognise.
+      * Whether it transfers to a time-marching run. Only steady solves were
+        measured, and there G is a property of the fixed point rather than of a
+        path, which is what makes J^-1 F the right correction.
+
+    The stellarator's cost profile is the other open question -- a solve that
+    spends many steps at low residual would change the arithmetic above -- and
+    needs a machine that can hold the real resolution: the full case wants ~88 GB
+    for the drift-kinetic solve, and the reduced one does not converge.
 
 Superconvergence follow-ons (see Tests/README.md for what is already verified):
 
@@ -124,9 +572,16 @@ From the origin/optimize-mode review, still unmerged and worth taking:
     desc_optimize.py, scan_eq.py, desc_optimize_bfgs.py and the notebook:
     SourceCenter/SourceHeight/SourceWidth -> HeatSourceCenter/Height/Width.
     Mechanical, but unverifiable here, so it was not done on spec.
-  - why the branch removed both `#pragma omp parallel for` from
-    TransportSystem.hpp's batched defaults -- ask eatocco; may be a real finding
-    about OpenMP against a Python trampoline
+  - ANSWERED, and it was a real finding, so there is no need to ask: why the
+    branch removed both `#pragma omp parallel for` from TransportSystem.hpp's
+    batched defaults. Rediscovered independently 2026-08-25 by turning
+    MANTA_OPENMP on in CI. Those pragmas wrap the *pointwise fallbacks*, so for a
+    Python case every iteration acquires and releases the GIL: the Python suite
+    went from ~110 s to over 1500 s, which is ctest's timeout, so it never
+    finished at all. The batched defaults are plain serial loops now and
+    util/ParallelFor.hpp holds the only `#pragma omp` in the tree. CLAUDE.md's
+    "Parallelism" section has the numbers and the argument that a case wanting
+    its batch split is the right place to split it.
 
   The drivers, stellarator_state.py and the multi-channel rewrite itself are in
   python-physics/stellarator/ now; that README says which of them run against

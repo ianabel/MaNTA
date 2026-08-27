@@ -1,4 +1,5 @@
 #include "SystemSolver.hpp"
+#include "util/ParallelFor.hpp"
 #include <sundials/sundials_nvector.h>
 #include <sundials/sundials_linearsolver.h> /* Generic Liner Solver Interface */
 #include <sundials/sundials_types.h>        /* defs of sunrealtype, sunindextype  */
@@ -6,9 +7,12 @@
 #include <Eigen/Core>
 #include <Eigen/Dense>
 #include <toml.hpp>
+#include <algorithm>
+#include <format>
 #include <ostream>
 #include <print>
 
+#include "FieldModel.hpp"
 #include "State.hpp"
 #include "Types.hpp"
 #include "gridStructures.hpp"
@@ -18,16 +22,11 @@
 #include "PyIntegrator.hpp"
 
 SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSystem *transpSystem)
-    : grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars(transpSystem->getNumScalars()), nAux(transpSystem->getNumAux()), y(nVars, grid, k, nScalars, nAux), dydt(nVars, grid, k, nScalars, nAux), yJac(nVars, grid, k, nScalars, nAux), dydtJac(nVars, grid, k, nScalars, nAux), dydtComplete(nVars, grid, k, nScalars, nAux), problem(transpSystem)
+    : grid(Grid), k(polyNum), nCells(Grid.getNCells()), nVars(transpSystem->getNumVars()), nScalars(transpSystem->getNumScalars()), nAux(transpSystem->getNumAux()), y(nVars, grid, k, nScalars, nAux, nField), dydt(nVars, grid, k, nScalars, nAux, nField), yJac(nVars, grid, k, nScalars, nAux, nField), dydtJac(nVars, grid, k, nScalars, nAux, nField), problem(transpSystem)
 {
     if (SUNContext_Create(SUN_COMM_NULL, &ctx) < 0)
         throw std::runtime_error("Unable to allocate SUNDIALS Context, aborting.");
-    yJacMem = new double[yJac.getDoF()];
-    yJac.Map(yJacMem);
-    dydtJacMem = new double[yJac.getDoF()];
-    dydtJac.Map(dydtJacMem);
-    dydtCompleteMem = new double[yJac.getDoF()];
-    dydtComplete.Map(dydtCompleteMem);
+    allocateJacobianStorage();
     S_DOF = k + 1;
     U_DOF = k + 1;
     Q_DOF = k + 1;
@@ -37,40 +36,333 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSyst
     localDOF = nVars * SQU_DOF + nAux * AUX_DOF;
 
     logmsg<LOG_LEVEL::INFO>("Total HDG degrees of freedom {}", (localDOF)*nCells + (nCells + 1) * nVars + nScalars );
-    if (nScalars > 0)
-    {
-        v = new N_Vector[nScalars];
-        w = new N_Vector[nScalars];
-        for (Index i = 0; i < nScalars; ++i)
-        {
-            v[i] = N_VNew_Serial(y.getDoF(), ctx);
-            w[i] = N_VNew_Serial(y.getDoF(), ctx);
-        }
-    }
-    else
-    {
-        v = nullptr;
-        w = nullptr;
-    }
+    allocateScalarWorkVectors();
     initialised = false; // Need to know tau to call this
+}
+
+// See the declaration. Both are no-ops with no scalars, and free() is idempotent
+// and safe to call before any allocate -- which is what lets setFieldModel pair
+// them without knowing whether the constructor got there first.
+void SystemSolver::allocateScalarWorkVectors()
+{
+    if (nScalars < 1)
+        return;
+
+    v = new N_Vector[nScalars];
+    w = new N_Vector[nScalars];
+    solveScalarE = new N_Vector[nScalars];
+    for (Index i = 0; i < nScalars; ++i)
+    {
+        v[i] = N_VNew_Serial(y.getDoF(), ctx);
+        w[i] = N_VNew_Serial(y.getDoF(), ctx);
+        solveScalarE[i] = N_VNew_Serial(y.getDoF(), ctx);
+    }
+    solveScalarD = N_VNew_Serial(y.getDoF(), ctx);
+    solveScalarG = N_VNew_Serial(y.getDoF(), ctx);
+}
+
+void SystemSolver::freeScalarWorkVectors()
+{
+    if (v != nullptr)
+        for (Index i = 0; i < nScalars; ++i)
+            N_VDestroy(v[i]);
+    if (w != nullptr)
+        for (Index i = 0; i < nScalars; ++i)
+            N_VDestroy(w[i]);
+    if (solveScalarE != nullptr)
+        for (Index i = 0; i < nScalars; ++i)
+            N_VDestroy(solveScalarE[i]);
+
+    delete[] v;
+    delete[] w;
+    delete[] solveScalarE;
+    v = w = solveScalarE = nullptr;
+
+    if (solveScalarD != nullptr)
+        N_VDestroy(solveScalarD);
+    if (solveScalarG != nullptr)
+        N_VDestroy(solveScalarG);
+    solveScalarD = solveScalarG = nullptr;
 }
 
 SystemSolver::~SystemSolver()
 {
     delete[] yJacMem;
     delete[] dydtJacMem;
-    delete[] dydtCompleteMem;
-    if (nScalars > 0)
-    {
-        for (Index i = 0; i < nScalars; ++i)
-        {
-            N_VDestroy(v[i]);
-            N_VDestroy(w[i]);
-        }
-        delete[] v;
-        delete[] w;
-    }
+    freeScalarWorkVectors();
+    freeFieldWorkVectors();
     SUNContext_Free(&ctx);
+}
+
+// a2 belongs to the *solver*, not to a run: it is sized by nField, which
+// setFieldModel fixes and nothing afterwards changes. So it is freed here and in
+// setFieldModel, and deliberately not in destroySundials -- which frees what
+// initialize() allocated, and would otherwise leave a dangling pointer for the
+// next Jacobian assembly on a reused solver.
+void SystemSolver::freeFieldWorkVectors()
+{
+    if (a2 == nullptr)
+        return;
+    for (Index f = 0; f < nField; ++f)
+        N_VDestroy(a2[f]);
+    delete[] a2;
+    a2 = nullptr;
+}
+
+// yJac and dydtJac own what they map, unlike y and dydt, which are
+// views over memory SUNDIALS allocates per run. Their length depends on nField,
+// so attaching a field model has to redo this.
+void SystemSolver::allocateJacobianStorage()
+{
+    delete[] yJacMem;
+    delete[] dydtJacMem;
+
+    const size_t dof = yJac.getDoF();
+    yJacMem = new double[dof]();
+    yJac.Map(yJacMem);
+    dydtJacMem = new double[dof]();
+    dydtJac.Map(dydtJacMem);
+}
+
+void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
+{
+    // Not after initialise: the five DGSoln members change shape below and three
+    // of them are reallocated, so anything already mapping them -- IDA's Y and
+    // dYdt above all -- would be reading a vector of the wrong length with
+    // nothing to say so.
+    if (initialised)
+        throw std::logic_error(
+            "setFieldModel must be called before the solver is initialised: the field "
+            "unknowns are part of the solution vector, whose length is fixed by then.");
+
+    // Not alongside global scalars yet, and the reason is a disagreement between
+    // two branches rather than a missing feature. dSources_dScalars_Mat builds
+    // its State from DGSoln::evalOnNode, which has no geometry rows, while its
+    // superconvergent twin dSources_dScalars_StarMat reads the states
+    // evaluatePhysicsDerivatives has already filled. So a case that reads
+    // geometry in dSources_dScalars works with Superconvergent = true and reads
+    // out of bounds with it off -- a branch-dependent out-of-bounds read, which
+    // is exactly the kind of defect that surfaces long after the change that
+    // caused it. Refused here, at the earliest point where the combination is
+    // known, rather than filled: filling is three lines but there is no fixture
+    // in the tree that would exercise either branch of it.
+    if (model && nScalars > 0)
+        throw std::logic_error(
+            "A field model cannot yet be attached to a system with global scalars: the "
+            "scalar coupling's non-superconvergent branch evaluates dSources_dScalars on "
+            "states that carry no geometry.");
+
+    // The model's output group must not collide with anything else at the top
+    // level of the netCDF file. FieldModelSpec::validate() cannot see this --
+    // it knows nothing about the physics case -- and neither can NetCDFIO,
+    // which would find out at the first write and throw NcNameInUse from
+    // ncGroup.cpp: a message naming netCDF's own source, hours into a run, for
+    // a mistake that was knowable here. Same reasoning as the nScalars refusal
+    // above, so it goes in the same place.
+    //
+    // Groups and variables share one namespace in netCDF-4 -- both are HDF5
+    // links in the same parent -- so the reserved variables are collisions too,
+    // not just the Grid and RestartData groups.
+    if (model)
+    {
+        auto refuse = [&](std::string const &what)
+        {
+            throw std::logic_error(
+                "The field model's output group is named '" + model->getSpec().name +
+                "', which is already " + what +
+                " in the netCDF output. Rename it through FieldModelSpec::name.");
+        };
+
+        for (char const *reserved : {"Grid", "RestartData", "x", "t", "nVariables"})
+            if (model->getSpec().name == reserved)
+                refuse("written by the solver itself");
+
+        for (Index i = 0; i < nVars; ++i)
+            if (model->getSpec().name == problem->getVariableName(i))
+                refuse("the group of transport variable " + std::to_string(i));
+
+        for (Index i = 0; i < nAux; ++i)
+            if (model->getSpec().name == problem->getAuxVarName(i))
+                refuse("auxiliary variable " + std::to_string(i));
+
+        // Unreachable while the refusal above stands, and here for the day it
+        // lifts rather than as a live check.
+        for (Index i = 0; i < nScalars; ++i)
+            if (model->getSpec().name == problem->getScalarName(i))
+                refuse("scalar " + std::to_string(i));
+    }
+
+    // Before nField moves: the count of vectors to destroy is the old one.
+    freeFieldWorkVectors();
+
+    fieldModel = std::move(model);
+    nField = fieldModel ? fieldModel->nFieldDOF() : 0;
+    nGeom = fieldModel ? fieldModel->nGeometry() : 0;
+
+    for (DGSoln *soln : {&y, &dydt, &yJac, &dydtJac})
+        soln->setFieldDOF(nField);
+
+    // y and dydt are re-Map()ped by setInitialConditions once SUNDIALS has
+    // allocated their vectors; these three are ours.
+    allocateJacobianStorage();
+
+    // The scalar bordering's work vectors span the whole solution vector, so
+    // they are the wrong length too. Rebuilt rather than resized: an N_Vector's
+    // length is fixed at creation.
+    //
+    // Discarding their contents costs nothing, and the argument is stronger than
+    // "nothing has run yet". setFieldModel refuses once `initialised` is set,
+    // and initialiseMatrices ends by doing N_VConst(0.0, ...) on both of them --
+    // so whatever order a caller chooses, v and w are zeroed after this and
+    // before the first updateMatricesForJacSolve fills them. There is no
+    // sequence in which this throws data away.
+    //
+    // With the refusal above, the only path that reaches this loop today is
+    // *detaching* a model from a scalar system, where the length is unchanged
+    // and the rebuild is a no-op. It is here for the moment that refusal lifts,
+    // which is the moment it stops being one.
+    freeScalarWorkVectors();
+    allocateScalarWorkVectors();
+
+    // The A2 rows. One per field DOF, each as long as the whole solution vector
+    // -- which is why they cannot be allocated in the constructor: nField is
+    // zero there for every solver, and becomes known here.
+    if (nField > 0)
+    {
+        a2 = new N_Vector[nField];
+        for (Index f = 0; f < nField; ++f)
+            a2[f] = N_VNew_Serial(y.getDoF(), ctx);
+    }
+}
+
+// See the declaration for why this is once per residual rather than once per
+// variable, and why the superconvergent star nodes need no special case.
+void SystemSolver::evaluateGeometry(DGSoln const &Y, std::vector<Position> const &points,
+                                    GlobalState &states, Time t_eval)
+{
+    if (!fieldModel)
+        return;
+
+    // The states arrive from DGSoln::evalOnNodes or evalOnStarNodes, neither of
+    // which knows about geometry, so the rows have to be made before they can be
+    // filled.
+    states.setGeometrySlots(nGeom);
+
+    const Vector psi = Y.getField();
+    Vector g(nGeom);
+    for (size_t j = 0; j < points.size(); ++j)
+    {
+        g.setZero();
+        fieldModel->Geometry(g, psi, points[j], t_eval);
+        states.setGeometry(static_cast<Index>(j), g);
+    }
+}
+
+// All three field blocks, from one FieldResidualPrime call. See the declaration.
+void SystemSolver::assembleFieldCoupling(DGSoln const &Y, DGSoln const &Ydot,
+                                         PhysicsNodes const &nodes, Time tEval,
+                                         double alphaValue)
+{
+    GlobalStateMatrix dR(nField), dRdot(nField);
+    for (Index f = 0; f < nField; ++f)
+    {
+        dR.add(nCells, k, nVars, nScalars, nAux);
+        dRdot.add(nCells, k, nVars, nScalars, nAux);
+    }
+    Matrix dRdpsi = Matrix::Zero(nField, nField);
+    Matrix dRddpsidt = Matrix::Zero(nField, nField);
+
+    // On the k+1 basis nodes even under the superconvergent scheme, and with no
+    // geometry on the states -- both because that is how residual() evaluates
+    // FieldResidual, and a derivative that is not the derivative of the residual
+    // that is actually evaluated is simply a different matrix.
+    fieldModel->FieldResidualPrime(dR, dRdot, dRdpsi, dRddpsidt,
+                                   Vector(Y.getField()), Vector(Ydot.getField()),
+                                   Y.evalOnNodes(), Y.getPoints(),
+                                   integrator.integrationWeights(Y.getBasis(), grid),
+                                   tEval);
+
+    // ---- A2: one full-length row vector per field row.
+    //
+    // Laid out as a DGSoln view over a2[f], the way the scalar bordering lays
+    // out `w`, so that contracting it with a solution vector is one N_VDotProd.
+    //
+    // Only the sigma, q, u and aux entries are written; the lambda, scalar and
+    // field entries keep the zero row.zeroCoeffs() left them at. That is not an
+    // omission: GlobalState has no trace slot, so a field residual has no way to
+    // depend on lambda, and its dependence on psi is B rather than A2.
+    //
+    // The `alphaValue * dRdot` term mirrors what the scalar `w` vectors carry,
+    // and is *currently unreachable*: FieldResidual is handed `states` but no
+    // `states_dot` -- unlike ScalarG, which takes both -- so a field row cannot
+    // depend on the transport time derivatives in the first place and dRdot
+    // comes back zero for every model that can exist today. It is written this
+    // way because FieldResidualPrime declares the slot, so the day the value
+    // hook gains ydot the derivative is already right rather than silently one
+    // term short. Nothing tests it, and nothing can until then.
+    //
+    // The hazard is not here but at the declaration -- a model author who finds
+    // dRdot unfillable and writes d/d(psi') into it instead of into dRddpsidt
+    // corrupts this row silently. FieldModel.hpp says so where that mistake
+    // would be made; TODO carries the interface fix.
+    for (Index f = 0; f < nField; ++f)
+    {
+        DGSoln row(nVars, grid, k, N_VGetArrayPointer(a2[f]), nScalars, nAux, nField);
+        row.zeroCoeffs();
+
+        GlobalState const &s = dR[f];
+        GlobalState const &s_dt = dRdot[f];
+
+        for (Index i = 0; i < nCells; ++i)
+            for (Index l = 0; l < k + 1; ++l)
+            {
+                // GlobalState::operator[] builds a State by *value*, so this is
+                // read-only -- which is all that is wanted here, and is why it
+                // is hoisted rather than called once per variable.
+                const State sg = s[i * (k + 1) + l];
+                const State sg_dt = s_dt[i * (k + 1) + l];
+
+                for (Index v = 0; v < nVars; ++v)
+                {
+                    row.sigma(v).getCoeff(i).second(l) =
+                        sg.sigma(v) + alphaValue * sg_dt.sigma(v);
+                    row.q(v).getCoeff(i).second(l) = sg.q(v) + alphaValue * sg_dt.q(v);
+                    row.u(v).getCoeff(i).second(l) = sg.u(v) + alphaValue * sg_dt.u(v);
+                }
+                for (Index a = 0; a < nAux; ++a)
+                    row.Aux(a).getCoeff(i).second(l) = sg.phi(a) + alphaValue * sg_dt.phi(a);
+            }
+    }
+
+    // ---- B: the model's own block, which it factorises for itself.
+    fieldModel->updateFieldJacobian(dRdpsi, dRddpsidt, alphaValue);
+
+    // ---- A1, cell by cell.
+    for (Index i = 0; i < nCells; ++i)
+    {
+        if (superconvergent)
+            dPhysics_dField_StarMat(A1_cellwise[i], Y, nodes.states, nodes.points, i, tEval);
+        else
+            dPhysics_dField_Mat(A1_cellwise[i], Y, nodes.states, nodes.points, i, tEval);
+    }
+}
+
+// See the declaration: A1's column m as a full-length vector.
+void SystemSolver::scatterA1Column(Index m, N_Vector out) const
+{
+    VectorWrapper v(N_VGetArrayPointer(out), N_VGetLength(out));
+    v.setZero();
+    for (Index i = 0; i < nCells; ++i)
+        v.segment(i * localDOF, localDOF) = A1_cellwise[i].col(m);
+}
+
+// See the declaration: the A1 dpsi term of the block Gauss-Seidel sweep, applied
+// in place to work's cellwise [sigma | q | u | aux] segments.
+void SystemSolver::subtractA1Times(Vector const &dpsi, N_Vector work) const
+{
+    VectorWrapper w(N_VGetArrayPointer(work), N_VGetLength(work));
+    for (Index i = 0; i < nCells; ++i)
+        w.segment(i * localDOF, localDOF) -= A1_cellwise[i] * dpsi;
 }
 
 void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
@@ -95,11 +387,36 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     // IDACalcIC (see Solver.cpp) into a hard failure on the second run only.
     updateBoundaryConditions(t0);
 
+    // The field unknowns first: geometry is a function of psi, so every physics
+    // evaluation below -- starting with the initial flux -- needs them set.
+    //
+    // Not on a restart, where the block below copies psi out of the restart file
+    // instead. Calling InitialFieldValue there would be harmless in the sense
+    // that the copy overwrites it, and wrong in the sense that a model whose
+    // starting guess is expensive or unavailable away from t = 0 would be asked
+    // for one it does not have.
+    if (fieldModel && !problem->isRestarting())
+    {
+        Vector psi0 = Vector::Zero(nField);
+        fieldModel->InitialFieldValue(psi0);
+        y.getField() = psi0;
+    }
+
     if (problem->isRestarting())
     {
         DGSoln const &restart = problem->getRestartY();
-        const bool sameDiscretisation =
-            restart.getBasis().Order() == k && restart.getGrid() == grid;
+        const bool sameGrid = restart.getGrid() == grid;
+        const bool sameDiscretisation = restart.getBasis().Order() == k && sameGrid;
+
+        // Recorded because initialize() decides whether to skip IDACalcIC from it.
+        // A restart skips by default on the grounds that it resumes from a state
+        // the previous run had already driven onto the constraint manifold -- and
+        // that is only true on the copy path. The projection below transfers u, q,
+        // aux and the scalars and then *rebuilds* sigma and the trace, so the state
+        // it produces is a guess like any other. Measured on AuxVarTest resuming at
+        // a lower degree: skipping there fails with IDA_ERR_FAIL, and running
+        // IDACalcIC completes the run.
+        restartWasProjected = !sameDiscretisation;
 
         if (sameDiscretisation)
         {
@@ -136,21 +453,141 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
             // are whatever the degree.
             for (Index s = 0; s < nScalars; ++s)
                 y.Scalar(s) = restart.Scalar(s);
+
+            // Neither does the trace. lambda is one value per face per variable
+            // -- DGSoln::Map gives it nCells + 1 entries and no basis at all --
+            // so a change of *degree* leaves it transferable verbatim even though
+            // copy() refuses the state as a whole. Only a change of mesh makes it
+            // meaningless, and then there is nothing to do but rebuild it.
+            if (sameGrid)
+                for (Index v = 0; v < nVars; ++v)
+                    y.lambda(v) = restart.lambda(v);
         }
 
         ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
 
-        GlobalState initialState = y.evalOnNodes(); // only need u and q so this is ok
-        const auto points = y.getPoints();
-        auto physics_vals = problem->ComputePhysics(initialState, points, t);
-        for (Index var = 0; var < nVars; var++)
+        // sigma is *loaded* on the copy path, not recomputed.
+        //
+        // y.copy() above already brought it across -- DGSoln::copy transfers sigma
+        // along with u, q, lambda, the scalars and aux -- and nothing between here
+        // and there disturbs the inputs it was built from: ApplyDirichletBCs
+        // touches lambda only, and u and q are bit for bit the file's. So
+        // AssignSigma would rebuild sigma from exactly the state the file's sigma
+        // was already built from, at the price of a full ComputePhysics over every
+        // node.
+        //
+        // That price is the point. ComputePhysics evaluates SigmaFn *and* Sources
+        // for every variable and AuxG for every auxiliary one, at every node, and
+        // this block uses only the first of the three -- the sources and the aux
+        // values are computed and dropped. On a case whose flux is expensive that
+        // is a whole physics sweep bought for nothing, on the very path that
+        // exists because the state is already right.
+        //
+        // The projection path still needs it: there sigma was never transferred,
+        // since a degree change leaves the stored coefficients in the wrong space,
+        // and rebuilding it from the projected u and q is what makes the sigma row
+        // exact.
+        if (!sameDiscretisation)
         {
-            // set flux for each variable, casting to a row vector and making sure to remember minus sign
-            initialState.Flux().row(var) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(physics_vals[0][var]);
+            GlobalState initialState = y.evalOnNodes(); // only need u and q so this is ok
+            const auto points = y.getPoints();
+            evaluateGeometry(y, points, initialState, t);
+            auto physics_vals = problem->ComputePhysics(initialState, points, t);
+            for (Index var = 0; var < nVars; var++)
+            {
+                // set flux for each variable, casting to a row vector and making sure to remember minus sign
+                initialState.Flux().row(var) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(physics_vals[0][var]);
+            }
+            y.AssignSigma(initialState);
         }
-        y.AssignSigma(initialState);
 
-        y.EvaluateLambda();
+        // Keep the trace the file carries, on the path where it is meaningful.
+        //
+        // EvaluateLambda() sets lambda to {{u}}, the DG average of the two cell
+        // traces (DGSoln.hpp). That is a reasonable *guess* and it is not the
+        // equation lambda satisfies -- the HDG trace row is
+        // Csigma sigma + Cq q + G_c u + H lambda = L(t) -- so applying it to a
+        // restart throws away a converged trace and replaces it with something
+        // that does not solve anything. Measured on a TestDiffusion round trip at
+        // Absolute_tolerance = 1e-8, that single call takes the weighted residual
+        // of the stored state from 2.6e-3 to 556, and it is why a restart used to
+        // need about ten times as many residual evaluations inside IDACalcIC as a
+        // cold start (Tests/README.md).
+        //
+        // The projection path keeps it too, whenever the *mesh* matches. That used
+        // to read "there is no stored trace to keep", which was wrong: lambda has
+        // no polynomial degree -- DGSoln::Map gives it nCells + 1 entries and no
+        // basis -- so a change of degree leaves it transferable verbatim even
+        // though copy() refuses the state as a whole. Only a change of mesh makes
+        // it meaningless, and {{u}} is then the right guess to build.
+        //
+        // It is worth more than it looks. The q row carries a <lambda, v n> term,
+        // so discarding the trace breaks q as well as lambda: on a LinearDiffusion
+        // restart coarsened from k = 4 to k = 3 at atol 1e-10, keeping it takes the
+        // q block from 7.3e7 to 3.2e-7 -- machine zero, the same as the copy path.
+        // That is the L2 projection commuting with the weak q equation, which it
+        // does exactly, and only the trace was standing in the way.
+        //
+        // It does not make a projected restart consistent, and nothing can. A
+        // change of degree changes the *equations*, not just the representation,
+        // and each direction breaks the block whose equation moved:
+        //
+        //   coarsening   q transfers exactly (above), lambda does not -- u and q
+        //                lost information, so the numerical flux at each face
+        //                moved and the stored trace no longer balances it
+        //   refinement   lambda transfers exactly (measured 4e-9, nothing at the
+        //                faces changed) and q does not -- the degree-(k+1) test
+        //                functions impose a q row the coarse state was never asked
+        //                to satisfy
+        //
+        // sigma is never the problem, linear flux or not, because it is not
+        // transferred at all on this path: AssignSigma rebuilds it from the
+        // projected u and q by evaluating the physics at the run's own nodes, so
+        // it satisfies its own row by construction. Measured at 1e-18 in every
+        // direction on both LinearDiffusion and NonlinDiffTest.
+        //
+        // The nonlinearity does show up, but in lambda rather than sigma. On
+        // refinement a linear flux gives sigma = -kappa q, which is embedded
+        // exactly along with q, so the face flux does not move and lambda stays at
+        // 4e-9. A nonlinear sigma_hat interpolated on the *new* node set is a
+        // different polynomial from the old interpolant, so the face flux does
+        // move: NonlinDiffTest refining 3 -> 4 leaves lambda at 4.7e8.
+        //
+        // q on its own can be repaired without any Jacobian. Its row is
+        // A q = -B^T u + C^T lambda - RF with A the cell mass matrix, so given u
+        // and lambda it is one (k+1)x(k+1) dense solve per cell per variable and
+        // touches no physics; tried as an experiment it took q to 5e-15 in every
+        // direction on both cases. It is not done here because it changes no
+        // outcome -- every degree-transfer run tested returns exactly what it did
+        // without it -- and the inconsistency simply migrates into lambda, whose
+        // row then reads off a different q and sigma. lambda is the coupled one:
+        // its row needs sigma, sigma needs q, q needs lambda, so closing the loop
+        // is a nonlinear solve on the algebraic subsystem rather than a
+        // substitution. That is exactly what IDACalcIC does, which is why
+        // initialize() runs it on this path rather than skipping as it does for a
+        // copied restart.
+        //
+        // ApplyDirichletBCs stays *above* this rather than below it, which looks
+        // wrong and is not. EvaluateLambda overwrites every entry including the
+        // boundary ones, so in that order the boundary data it writes is
+        // discarded again on the projection path -- but moving it below breaks
+        // the AuxVarTest restart round trip outright (IDA_CONV_FAIL at the first
+        // step of the resumed run). The two differ only in what a Dirichlet end's
+        // trace holds -- the boundary datum, or u's own trace there -- and that
+        // node has an identically zero row and column, so it is not the residual
+        // that notices: it is IDA's error test, which weights lambda like
+        // everything else.
+        //
+        // The reason given for that used to be that the case sat close to the
+        // edge -- rtol 1e-6 with nAux > 0, where restarting was documented as
+        // marginal. That premise is gone: AuxVarTest's missing dSigma_dPhi block
+        // is declared and all three round trips now survive 1e-6 / 1e-8 with the
+        // CalcIC skip armed. So the ordering may no longer be load-bearing at
+        // all. It has not been re-measured since, which is the only reason it is
+        // still written this way; reordering is a behaviour change wanting its
+        // own regression run, and is a separate question from keeping the trace.
+        if (!sameDiscretisation && !sameGrid)
+            y.EvaluateLambda();
     }
     else
     {
@@ -183,6 +620,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         // Vectorize initial flux calculation
         GlobalState initialState = y.evalOnNodes(); // only need u and q so this is ok
         const auto points = y.getPoints();
+        evaluateGeometry(y, points, initialState, t);
         auto physics_vals = problem->ComputePhysics(initialState, points, t);
         for (Index var = 0; var < nVars; var++)
         {
@@ -196,7 +634,10 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
     dydt.zeroCoeffs();
 
-    auto Source_vals = problem->ComputePhysics(y.evalOnNodes(), y.getPoints(), t)[1];
+    GlobalState sourceStates = y.evalOnNodes();
+    const auto sourcePoints = y.getPoints();
+    evaluateGeometry(y, sourcePoints, sourceStates, t);
+    auto Source_vals = problem->ComputePhysics(sourceStates, sourcePoints, t)[1];
     for (Index var = 0; var < nVars; var++)
     {
         // Solver For dudt with dudt = X^-1( -B*Sig - D*U - E*Lam + F )
@@ -279,8 +720,14 @@ void SystemSolver::initialiseMatrices()
 
     Eigen::MatrixXd HGlobalMat(nVars * (nCells + 1), nVars * (nCells + 1));
     HGlobalMat.setZero();
-    K_global.resize(nVars * (nCells + 1), nVars * (nCells + 1));
-    K_global.setZero();
+    // Banded, in trace-major order: (a - b) * nVars + (varI - varJ) with
+    // a, b in {0, 1} for the two faces a cell owns, so 2 * nVars - 1 either side.
+    // See K_banded's declaration for why the ordering is not the DOF layout's.
+    const Index traceN = nVars * (nCells + 1);
+    const Index traceBand = 2 * nVars - 1;
+    K_banded.resize(traceN, traceBand, traceBand);
+    adjoint_K_banded.resize(traceN, traceBand, traceBand);
+    traceRhs.resize(traceN);
     L_global.resize(nVars * (nCells + 1));
     L_global.setZero();
 
@@ -561,6 +1008,14 @@ void SystemSolver::initialiseMatrices()
         // the pre-sizing here dead and the compute() reallocate after all.
         Eigen::Index nDof = nVars * SQU_DOF + nAux * AUX_DOF;
         MXSolvers.emplace_back( nDof, nDof );
+
+        // This cell's block of A1. Sized and zeroed here and filled by
+        // assembleFieldCoupling, which is the pattern RF_cellwise follows and
+        // for the same reason: what goes in it depends on the state and the
+        // time, so initialiseMatrices has no business computing it. Empty when
+        // no field model is attached -- nField is zero, so the block has no
+        // columns and scatterA1Column is never called.
+        A1_cellwise.emplace_back(Matrix::Zero(nDof, nField));
     }
     // Factorise the global H matrix
     H_global.compute(HGlobalMat);
@@ -603,6 +1058,7 @@ void SystemSolver::clearCellwiseVecs()
     Cq_cellwise.clear();
     CEBlocks.clear();
     MXSolvers.clear();
+    A1_cellwise.clear();
 }
 
 // Memory Layout for a sundials Y is, if i indexes the components of u / q / sigma
@@ -673,9 +1129,18 @@ SystemSolver::evaluatePhysicsDerivatives(DGSoln const &Y, Time tEval,
     PhysicsNodes nodes{superconvergent ? postprocessor->starPoints() : Y.getPoints(),
                        superconvergent ? postprocessor->evalOnStarNodes(Y) : Y.evalOnNodes()};
 
+    // Before ComputePhysicsDerivatives, for the same reason residual() fills it
+    // before ComputePhysics: a derivative hook reads State::geom just as its
+    // value hook does, and the two have to see the same metric.
+    evaluateGeometry(Y, nodes.points, nodes.states, tEval);
+
     // GlobalState's second argument is a per-cell dof count minus one; passing
     // k+1 is what makes cellwise*() hand back the k+2 star values.
     const Index derivK = superconvergent ? k + 1 : k;
+
+    // G_y is built by emplace_back below, so it has to start empty: this runs once
+    // per objective and would otherwise grow by nCells entries each time.
+    G_y.clear();
 
     for (Index var = 0; var < nVars; var++)
     {
@@ -701,7 +1166,6 @@ Matrix SystemSolver::assembleCellMatrix(Index i, DGSoln const &Y,
                                         GlobalStateMatrix &dSource_vals,
                                         GlobalStateMatrix &dAux_vals, double alphaValue)
 {
-    Eigen::MatrixXd X(nVars * (k + 1), nVars * (k + 1));
     Eigen::MatrixXd NLq(nVars * (k + 1), nVars * (k + 1));
     Eigen::MatrixXd NLu(nVars * (k + 1), nVars * (k + 1));
     Eigen::MatrixXd Ssig(nVars * (k + 1), nVars * (k + 1));
@@ -716,17 +1180,26 @@ Matrix SystemSolver::assembleCellMatrix(Index i, DGSoln const &Y,
     Eigen::MatrixXd MX(nVars * SQU_DOF + nAux * AUX_DOF, nVars * SQU_DOF + nAux * AUX_DOF);
     MX = MBlocks[i];
 
-    // X matrix
-    X.setZero();
-    for (Index var = 0; var < nVars; var++)
-    {
-        std::function<double(double)> alphaF = [=, this](double x)
-        { return alphaValue * problem->aFn(var, x); };
-        Eigen::MatrixXd Xsubmat((k + 1), (k + 1));
-        Y.getBasis().MassMatrix(I, Xsubmat, alphaF);
-        X.block(var * (k + 1), var * (k + 1), k + 1, k + 1) = Xsubmat;
-    }
-    MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += X;
+    // The X matrix: alphaValue times the aFn-weighted mass matrix, which is
+    // exactly what initialiseMatrices already put in XMats[i].
+    //
+    // This used to re-integrate it here, every Jacobian build, through
+    // MassMatrix(I, ., alphaValue * aFn) -- a 30-point Gauss rule per entry per
+    // variable per cell. MassMatrix is linear in its weight, so scaling the
+    // stored matrix is the same quantity for none of the work, and aFn takes no
+    // time argument so XMats cannot go stale within a run.
+    //
+    // **It also takes a physics hook out of a parallel region.** aFn is a
+    // pointwise hook and PyTransportSystem overrides it via PYBIND11_OVERRIDE, so
+    // while this loop recomputed the quadrature a Python case's aFn was being
+    // called from OpenMP worker threads -- taking the GIL once per quadrature
+    // point, and running user Python concurrently on one object, which is the
+    // thing the batched wrappers were made serial to avoid. Reading XMats closes
+    // that: nothing under updateMatricesForJacSolve's parallel loop calls into a
+    // physics case any more, because evaluatePhysicsDerivatives has already done
+    // all of it, serially, before the loop starts.
+    MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) +=
+        alphaValue * XMats[i];
 
     if (superconvergent)
     {
@@ -866,8 +1339,8 @@ void SystemSolver::assembleScalarCoupling(DGSoln const &Y, DGSoln const &Ydot,
 
     problem->ScalarGPrime(ScalarG_vals, ScalarG_dt_vals, Y.evalOnNodes(), Ydot.evalOnNodes(),
                           Y.getPoints(),
-                          Integrator::getIntegrationWeights(Y.getBasis(), grid),
-                          Integrator::getPhiBoundary(Y.getBasis(), grid), tEval);
+                          integrator.integrationWeights(Y.getBasis(), grid),
+                          integrator.phiBoundary(Y.getBasis(), grid), tEval);
 
     for ( Index j = 0; j < nScalars; ++j ) {
         const auto& s = ScalarG_vals[j];
@@ -907,24 +1380,29 @@ void SystemSolver::updateMatricesForJacSolve()
     // Basis::MassMatrix is a boost::math::quadrature::gauss<double, 30>, whose
     // integrate() is const over static tables, so the shared static integrator is
     // not a race either.
-#pragma omp parallel for
-    for (unsigned int i = 0; i < nCells; i++)
-    {
-        MXSolvers[i].compute(
-            assembleCellMatrix(i, yJac, dSigma_vals, dSource_vals, dAux_vals, alpha));
-    }
+    manta::parallel_for(
+        nCells,
+        [&](Index i)
+        {
+            MXSolvers[i].compute(
+                assembleCellMatrix(i, yJac, dSigma_vals, dSource_vals, dAux_vals, alpha));
+        },
+        cellGrain);
 
     if (nScalars > 0)
     {
       std::vector<DGSoln> v_map, w_map;
       for (Index i = 0; i < nScalars; ++i)
       {
-          v_map.emplace_back(nVars, grid, k, N_VGetArrayPointer(v[i]), nScalars, nAux);
-          w_map.emplace_back(nVars, grid, k, N_VGetArrayPointer(w[i]), nScalars, nAux);
+          v_map.emplace_back(nVars, grid, k, N_VGetArrayPointer(v[i]), nScalars, nAux, nField);
+          w_map.emplace_back(nVars, grid, k, N_VGetArrayPointer(w[i]), nScalars, nAux, nField);
       }
 
       assembleScalarCoupling(yJac, dydtJac, nodes, jt, alpha, v_map, w_map, N_global);
     }
+
+    if (fieldModel)
+        assembleFieldCoupling(yJac, dydtJac, nodes, jt, alpha);
 }
 
 void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorWrapper &lam, sunrealtype *const &Y) const
@@ -940,38 +1418,73 @@ void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorW
 
 void SystemSolver::setJacEvalY(N_Vector yy, N_Vector yp)
 {
-    DGSoln yyMap(nVars, grid, k, nScalars, nAux);
+    DGSoln yyMap(nVars, grid, k, nScalars, nAux, nField);
     assert(static_cast<size_t>(N_VGetLength(yy)) == yyMap.getDoF());
     yyMap.Map(N_VGetArrayPointer(yy));
     yJac.copy(yyMap); // Deep copy -- yyMap only aliases the N_Vector, this copies the data
 
-    DGSoln ypMap(nVars, grid, k, nScalars, nAux);
+    DGSoln ypMap(nVars, grid, k, nScalars, nAux, nField);
     assert(static_cast<size_t>(N_VGetLength(yp)) == ypMap.getDoF());
     ypMap.Map(N_VGetArrayPointer(yp));
     dydtJac.copy(ypMap); // Deep copy
 }
 
-// Over-arching Jacobian function. If there's no coupled B-field solve, or auxiliary variables, then just do the
-// HDG Jacobian solve
+// The Jacobian solve IDA asks for. Without a field model this is exactly the
+// transport operator, which is what keeps every existing run bit-for-bit what it
+// was; with one, the coupling is folded in here and nowhere below.
 void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 {
+    // Counted here, in the entry point IDA and KINSOL actually call, rather
+    // than in solveTransportJac: solveCoupledJacExact calls that nField + 1
+    // times as its inner solve, so counting there would report the inner
+    // condensations rather than the solves that were asked for. Without a field
+    // model the two are the same call and the count is unchanged.
     ++nJacSolves;
+
+    if (!fieldModel)
+    {
+        solveTransportJac(res_g, delY);
+        return;
+    }
+
+    switch (fieldSolveMode)
+    {
+    case FieldSolveMode::Exact:
+        solveCoupledJacExact(res_g, delY);
+        return;
+    case FieldSolveMode::Iterative:
+        solveCoupledJacIterative(res_g, delY);
+        return;
+    }
+}
+
+// The uncoupled transport operator: static condensation onto lambda, wrapped in
+// the Woodbury/bordered elimination when there are global scalars.
+//
+// This is the whole of what solveJacEq used to be, minus the field block that
+// used to sit at its foot. That block wrote dpsi from B alone -- the block-Jacobi
+// approximation that was the only thing giving Newton a direction for psi before
+// A1 and A2 existed -- and it cannot survive here, because solveCoupledJacExact
+// calls this function nField + 1 times as its inner solve and a field write in
+// any of them would corrupt the Schur complement being built from them.
+void SystemSolver::solveTransportJac(N_Vector res_g, N_Vector delY)
+{
     if (nScalars > 0)
     {
-        // TODO: move temporaries into private variables of the class and allocate/destroy once
-        // allocate temporary working space for gauss elimination of scalars.
+        // The working space for the Gaussian elimination of the scalar rows.
+        // Owned by the solver and allocated once -- these were N_VClone'd and
+        // destroyed on every call, which is once per Newton iteration and
+        // nField + 1 times that under solveCoupledJacExact. Nothing in them
+        // survives a call, so there is nothing to reset: every one is fully
+        // written before it is read (d and e[] by solveHDGJac, g by
+        // N_VLinearCombination, which assigns rather than accumulates).
+        N_Vector d = solveScalarD;
+        N_Vector *e = solveScalarE;
+        N_Vector g = solveScalarG;
 
-        N_Vector d = N_VClone(delY);
+        DGSoln res_g_map(nVars, grid, k, N_VGetArrayPointer(res_g), nScalars, nAux, nField);
 
-        N_Vector *e = new N_Vector[nScalars];
-        for (Index i = 0; i < nScalars; ++i)
-            e[i] = N_VClone(delY);
-
-        N_Vector g = N_VClone(delY);
-
-        DGSoln res_g_map(nVars, grid, k, N_VGetArrayPointer(res_g), nScalars, nAux);
-
-        DGSoln del_y(nVars, grid, k, N_VGetArrayPointer(delY), nScalars, nAux);
+        DGSoln del_y(nVars, grid, k, N_VGetArrayPointer(delY), nScalars, nAux, nField);
 
         // Let A be the HDG linear operator solved in solveHDGJac
 
@@ -984,7 +1497,12 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
             solveHDGJac(v[i], e[i]);
         }
 
-        Vector tmp_N = (N_global.inverse() * res_g_map.Scalars());
+        // One factorisation, not two: this was `N_global.inverse()` here and
+        // again for del_y.Scalars() below, on a matrix that does not change
+        // between them.
+        const Matrix N_global_inv = N_global.inverse();
+
+        Vector tmp_N = (N_global_inv * res_g_map.Scalars());
         N_VLinearCombination(nScalars, tmp_N.data(), e, g); // g = Sum_i tmp_N[i]*e[i]
         N_VLinearSum(1.0, g, 1.0, d, g);                    // g += d;
 
@@ -1011,13 +1529,8 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
         for (Index i = 0; i < nScalars; ++i)
             del_y_scalars(i) = res_g_map.Scalar(i) - N_VDotProd(w[i], delY);
 
-        del_y.Scalars() = N_global.inverse() * del_y_scalars;
+        del_y.Scalars() = N_global_inv * del_y_scalars;
 
-        for (Index i = 0; i < nScalars; ++i)
-            N_VDestroy(e[i]);
-        N_VDestroy(d);
-        N_VDestroy(g);
-        delete[] e;
     }
     else
     {
@@ -1025,16 +1538,303 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
     }
 }
 
+// The exact Schur complement onto psi:
+//
+//     ( B - A2 A^-1 A1 ) dpsi = r2 - A2 A^-1 r1
+//     A dx                    = r1 - A1 dpsi
+//
+// with A the uncoupled transport operator above -- HDG condensation plus the
+// scalar bordering.
+//
+// It costs nField + 1 applications of A^-1, so it is affordable only for a small
+// field block, and that is the point of it rather than a defect: SolveJacTests'
+// method -- finite-difference the residual, require J dy = g -- extends to the
+// coupled system only if an *exact* coupled solve exists. The Jacobian is never
+// assembled anywhere in this solver, so a wrong coupling block produces a
+// correct answer and a slower Newton, and nothing but this test would ever
+// report it. It is also the oracle the iterative path is checked against.
+void SystemSolver::solveCoupledJacExact(N_Vector res_g, N_Vector delY)
+{
+    DGSoln rhs(nVars, grid, k, N_VGetArrayPointer(res_g), nScalars, nAux, nField);
+    DGSoln out(nVars, grid, k, N_VGetArrayPointer(delY), nScalars, nAux, nField);
+
+    // A^-1 A1, one transport solve per field DOF, kept because the
+    // back-substitution needs the same vectors the Schur complement was built
+    // from.
+    N_Vector col = N_VClone(delY);
+    Matrix S = Matrix::Zero(nField, nField);
+    std::vector<N_Vector> AinvA1(nField);
+
+    for (Index m = 0; m < nField; ++m)
+    {
+        AinvA1[m] = N_VClone(delY);
+        scatterA1Column(m, col);
+        solveTransportJac(col, AinvA1[m]);
+        for (Index f = 0; f < nField; ++f)
+            S(f, m) = N_VDotProd(a2[f], AinvA1[m]);
+    }
+
+    // B densely, through the model's own apply. A model with a structured block
+    // overrides applyB rather than exposing the matrix, so this is the only way
+    // to ask for its columns -- and nField is small wherever this mode is used.
+    Matrix Bdense = Matrix::Zero(nField, nField);
+    for (Index m = 0; m < nField; ++m)
+    {
+        Vector e = Vector::Unit(nField, m), Be = Vector::Zero(nField);
+        fieldModel->applyB(Be, e);
+        Bdense.col(m) = Be;
+    }
+    const Matrix Schur = Bdense - S;
+
+    N_Vector Ainv_r1 = N_VClone(delY);
+    solveTransportJac(res_g, Ainv_r1);
+
+    Vector r2 = rhs.getField();
+    for (Index f = 0; f < nField; ++f)
+        r2(f) -= N_VDotProd(a2[f], Ainv_r1);
+
+    // Assign to a Vector before touching it. lu.solve() returns a lazy Solve<>
+    // expression with no coefficient accessor, and slicing one compiles and then
+    // corrupts the heap -- the afternoon Postprocessing.cpp cost.
+    const Vector dpsi = Schur.partialPivLu().solve(r2);
+
+    // dx = A^-1 r1 - sum_m dpsi_m (A^-1 A1)(:, m). solveTransportJac zeroes the
+    // whole increment and writes nothing past lambda, so the field entries of
+    // every vector in this sum are zero and the assignment below is the only
+    // thing that writes them.
+    N_VScale(1.0, Ainv_r1, delY);
+    for (Index m = 0; m < nField; ++m)
+        N_VLinearSum(1.0, delY, -dpsi(m), AinvA1[m], delY);
+    out.getField() = dpsi;
+
+    for (Index m = 0; m < nField; ++m)
+        N_VDestroy(AinvA1[m]);
+    N_VDestroy(col);
+    N_VDestroy(Ainv_r1);
+}
+
+// See the declaration for the algebra and for why this rather than SOR.
+Vector SystemSolver::ironsTuck(const Vector &g, const Vector &delta, const Vector &deltaPrev)
+{
+    const Vector secant = delta - deltaPrev;
+
+    // Relative, not absolute. The secant is compared against the increments it
+    // was differenced from, so this fires when the two increments agree to
+    // rounding -- for an affine map, m == 1, a pure translation with no fixed
+    // point -- and not merely when both are small, which is the regime the
+    // sweep spends its last iterations in. An absolute floor here would
+    // reintroduce exactly the scale-dependence that the stopping criterion in
+    // solveCoupledJacIterative is written to avoid -- see the note there on
+    // `tol * max(1, |g|)`. Written as !(x > y) so a NaN secant takes this branch.
+    const double scale = std::max(delta.norm(), deltaPrev.norm());
+    if (!(secant.norm() > 1e-12 * scale))
+        return g;
+
+    const Vector accelerated = g - (delta.dot(secant) / secant.squaredNorm()) * delta;
+
+    // The guard above bounds the denominator relative to the numerator, so this
+    // is the residual case -- an overflow in the dot product, or a non-finite g
+    // handed in. Returning g is the plain sweep, which the caller may take.
+    return accelerated.allFinite() ? accelerated : g;
+}
+
+// Block Gauss-Seidel on the coupled Jacobian, Irons-Tuck accelerated:
+//
+//     A dx^{k+1}   = r1 - A1 dpsi^k
+//     B dpsi^{k+1} = r2 - A2 dx^{k+1}
+//
+// One transport solve and one field solve per sweep, against the exact path's
+// nField + 1 transport solves per Jacobian solve.
+//
+// This is safe in a way a lagged *residual* would not be. The Jacobian is never
+// assembled and IDA tolerates an inexact linear solve, so an error here costs
+// Newton speed rather than correctness -- which is why Serino et al.'s
+// block-triangular preconditioners can drop the Schur complement outright and
+// still converge (15-176 FGMRES iterations, in their numbers). Accuracy comes
+// from the residual, which is exact.
+//
+// The plain sweep is nonetheless *divergent* for a realistic coupling --
+// rho(M) = 1.611 on RichGeometricDiffusion, and rho is a property of the
+// coupling rather than of the time step -- so the accelerator is not a speedup,
+// it is what makes the mode usable at all. Where even that is not enough the
+// tail escalates to the exact solve.
+void SystemSolver::solveCoupledJacIterative(N_Vector res_g, N_Vector delY)
+{
+    DGSoln rhs(nVars, grid, k, N_VGetArrayPointer(res_g), nScalars, nAux, nField);
+    DGSoln out(nVars, grid, k, N_VGetArrayPointer(delY), nScalars, nAux, nField);
+
+    N_Vector work = N_VClone(delY);
+    Vector dpsi = Vector::Zero(nField);
+    Vector delta = Vector::Zero(nField), deltaPrev = Vector::Zero(nField);
+    bool haveDeltaPrev = false, converged = false;
+
+    ++fieldSweepSolves;
+
+    for (Index sweep = 0; sweep < fieldSolveMaxSweeps; ++sweep)
+    {
+        ++fieldSweepIterations;
+
+        // work <- r1 - A1 dpsi, then dx <- A^-1 work. The pair (dx, dpsi) is
+        // consistent here and stays so: everything below changes only what the
+        // *next* sweep starts from. solveTransportJac zeroes the whole
+        // increment (see solveHDGJac), so delY's field entries come back zero
+        // regardless of what work's field segment held.
+        N_VScale(1.0, res_g, work);
+        subtractA1Times(dpsi, work);
+        solveTransportJac(work, delY);
+
+        // g <- B^-1 ( r2 - A2 dx ): one application of the fixed-point map.
+        Vector r2 = rhs.getField();
+        for (Index f = 0; f < nField; ++f)
+            r2(f) -= N_VDotProd(a2[f], delY);
+        Vector g(nField);
+        fieldModel->solveB(g, r2);
+
+        deltaPrev = delta;
+        delta = g - dpsi;
+
+        // The acceptance test is on the UNACCELERATED iterate, and is purely
+        // relative -- deliberately not `tol * max(1, |g|)`,
+        // whose absolute floor stopped the sweep after the first iterate
+        // whenever |g| < 1, i.e. throughout the small-correction regime Newton
+        // lives in. Accepting only g is also what keeps the returned pair
+        // consistent: dx was solved against the dpsi that produced this g, so
+        // row one of the coupled system is off by A1 . delta, which is the
+        // tolerance. An extrapolated dpsi would be off by the length of the
+        // extrapolation instead, and nothing downstream would report it.
+        //
+        // isZero(0.0), not the default: Eigen's dummy_precision is ~1e-12, so
+        // the bare call was an absolute magnitude test wearing a degenerate
+        // case's clothing. This fires only when the increment is exactly zero,
+        // which is the 0/0 the relative test genuinely cannot handle.
+        if (delta.isZero(0.0) || delta.norm() <= fieldSolveTolerance * g.norm())
+        {
+            dpsi = g;
+            converged = true;
+            break;
+        }
+
+        dpsi = haveDeltaPrev ? ironsTuck(g, delta, deltaPrev) : g;
+        haveDeltaPrev = true;
+    }
+
+    N_VDestroy(work);
+
+    if (converged)
+    {
+        out.getField() = dpsi;
+        return;
+    }
+
+    // Escalate rather than return the last iterate. This sweep used to return
+    // it, on the argument that an under-converged Jacobian solve is merely a
+    // worse search direction -- true, and still true. What changed is the price of being
+    // right: with the escalation in place the iterative mode can no longer be
+    // wrong at all, only slower, and that is what makes it a safe default. So
+    // there is no longer a reason to hand back a direction we know is bad.
+    //
+    // **Say the cost arithmetic in full, because the flattering half of it is
+    // misleading on its own.** One sweep is one transport solve; the exact Schur
+    // complement is nField + 1 of them plus a dense nField^3 factorisation. So
+    // the break-even is
+    //
+    //     #sweeps  <  nField + 1
+    //
+    // and *no fixture in this tree is on the winning side of it*: at nField == 1
+    // the sweep takes 3 against exact's 2, and at nField == 5 it takes 13 to 38
+    // against exact's 6. Measured, the iterative path is 1.5x more expensive than
+    // exact at nField == 1 and 2-6x more expensive at nField == 5, for the same
+    // answer -- and an escalation pays fieldSolveMaxSweeps *plus* the exact solve
+    // on top. That is not a defect: this path is a bet on N_magnetics >> N_HDG,
+    // where nField + 1 transport solves and an O(nField^3) dense solve are
+    // hopeless and one sweep per iteration is the only affordable option. It is
+    // a bet, though, and not a free improvement, which is why it is written down
+    // here, in the initialize() warning, and in TODO rather than left to be
+    // rediscovered.
+    //
+    // Counted, not warned: a warning here would fire once per Jacobian solve.
+    // The count is reported once per run, in Solver.cpp.
+    //
+    // solveCoupledJacExact overwrites the whole of delY including the field
+    // block, so nothing written above needs undoing.
+    ++fieldSweepFallbacks;
+    solveCoupledJacExact(res_g, delY);
+}
+
 // Solve the HDG part of the Jacobian
 // NB: This is called repeatedly, *possibly with the same jacobian*
 // don't do any matrix re-assembly here
+// See the declarations. The loops are written out rather than expressed as an
+// Eigen permutation because the band form is not an Eigen matrix and never
+// materialises the permutation: this is a gather and a scatter over
+// nVars * (nCells + 1) doubles, against a solve that is now O(n * band^2).
+void SystemSolver::scatterTraceBlock(manta::BandedMatrix &K, Index cell,
+                                     Matrix const &block) const
+{
+    for (Index varI = 0; varI < nVars; ++varI)
+        for (Index varJ = 0; varJ < nVars; ++varJ)
+            for (Index a = 0; a < 2; ++a)
+                for (Index b = 0; b < 2; ++b)
+                    K(traceDoF(cell + a, varI), traceDoF(cell + b, varJ)) +=
+                        block(varI * 2 + a, varJ * 2 + b);
+}
+
+void SystemSolver::toTraceMajor(Eigen::Ref<const Vector> varMajor,
+                                Eigen::Ref<Vector> traceMajor) const
+{
+    for (Index var = 0; var < nVars; ++var)
+        for (Index node = 0; node <= static_cast<Index>(nCells); ++node)
+            traceMajor(traceDoF(node, var)) = varMajor(var * (nCells + 1) + node);
+}
+
+void SystemSolver::fromTraceMajor(Eigen::Ref<const Vector> traceMajor,
+                                  Eigen::Ref<Vector> varMajor) const
+{
+    for (Index var = 0; var < nVars; ++var)
+        for (Index node = 0; node <= static_cast<Index>(nCells); ++node)
+            varMajor(var * (nCells + 1) + node) = traceMajor(traceDoF(node, var));
+}
+
+// A Dirichlet end contributes an identically zero trace row *and* column to the
+// condensed operator -- Hvar's diagonal is set to zero in initialiseMatrices and
+// nothing else writes that DOF -- so K is singular by exactly the number of
+// Dirichlet boundaries. See CLAUDE.md, which records the same rank deficiency in
+// the finite-differenced Jacobian.
+//
+// The dense FullPivLU absorbed that silently: for a consistent rank-deficient
+// system it returns the particular solution with the free components set to
+// zero. A banded LU cannot, and should not -- so the constraint that was implicit
+// in the decomposition's behaviour is written down instead. `delta lambda = 0` at
+// a Dirichlet face is the correct increment: lambda is already at g_D(t) there.
+void SystemSolver::imposeDirichletTraceRows(manta::BandedMatrix &K) const
+{
+    for (Index var = 0; var < nVars; ++var)
+    {
+        if (problem->isLowerBoundaryDirichlet(var))
+            K(traceDoF(0, var), traceDoF(0, var)) = 1.0;
+        if (problem->isUpperBoundaryDirichlet(var))
+            K(traceDoF(nCells, var), traceDoF(nCells, var)) = 1.0;
+    }
+}
+
+void SystemSolver::zeroDirichletTraceRows(Eigen::Ref<Vector> traceMajor) const
+{
+    for (Index var = 0; var < nVars; ++var)
+    {
+        if (problem->isLowerBoundaryDirichlet(var))
+            traceMajor(traceDoF(0, var)) = 0.0;
+        if (problem->isUpperBoundaryDirichlet(var))
+            traceMajor(traceDoF(nCells, var)) = 0.0;
+    }
+}
+
 void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
 {
     // DGsoln object that will map the data from delY
-    DGSoln del_y(nVars, grid, k, nScalars, nAux);
+    DGSoln del_y(nVars, grid, k, nScalars, nAux, nField);
 #ifdef DEBUG
     // Provide view on g for debugging
-    DGSoln gMap(nVars, grid, k, nScalars, nAux);
+    DGSoln gMap(nVars, grid, k, nScalars, nAux, nField);
     assert(static_cast<size_t>(N_VGetLength(g)) == gMap.getDoF());
     gMap.Map(N_VGetArrayPointer(g));
 #endif
@@ -1049,7 +1849,7 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
     VectorWrapper delYVec(N_VGetArrayPointer(delY), N_VGetLength(delY));
     delYVec.setZero();
 
-    K_global.setZero();
+    K_banded.setZero();
 
     // Assemble RHS g into cellwise form and solve for SQU blocks
     mapDGtoSundials(g1g2g3_cellwise, g4, N_VGetArrayPointer(g));
@@ -1057,28 +1857,34 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
     std::vector<Eigen::VectorXd> SQU_f(nCells);
     std::vector<Eigen::MatrixXd> SQU_0(nCells);
     std::vector<Eigen::MatrixXd> K_cell(nCells);
+    std::vector<Eigen::VectorXd> CGf(nCells);
 
     // The two back-substitutions are the expensive part and are cell-independent,
     // so they parallelise; the assembly into K_global below does not, and the two
     // are separate loops for that reason. See the comment there.
-#pragma omp parallel for
-    for (Index i = 0; i < nCells; i++)
-    {
-        // Interval const& I( grid[ i ] );
+    //
+    // CGf[i] is computed here rather than in the serial F loop below for the same
+    // reason: it is a matrix-vector product per cell, it depends on nothing but
+    // this cell, and the loop that consumes it cannot be parallel.
+    manta::parallel_for(
+        nCells,
+        [&](Index i)
+        {
+            // Interval const& I( grid[ i ] );
 
-        // SQU_f
-        Eigen::VectorXd const &g1g2g3 = g1g2g3_cellwise[i];
+            // SQU_f
+            Eigen::VectorXd const &g1g2g3 = g1g2g3_cellwise[i];
 
-        SQU_f[i] = MXSolvers[i].solve(g1g2g3);
+            SQU_f[i] = MXSolvers[i].solve(g1g2g3);
 
-        // SQU_0
-        Eigen::MatrixXd const &CE = CEBlocks[i];
-        SQU_0[i] = MXSolvers[i].solve(CE);
-        // std::cerr << SQU_0[i] << std::endl << std::endl;
-        // std::cerr << CE << std::endl << std::endl;
+            // SQU_0
+            Eigen::MatrixXd const &CE = CEBlocks[i];
+            SQU_0[i] = MXSolvers[i].solve(CE);
 
-        K_cell[i] = H_cellwise[i] - CG_cellwise[i] * SQU_0[i];
-    }
+            K_cell[i] = H_cellwise[i] - CG_cellwise[i] * SQU_0[i];
+            CGf[i] = CG_cellwise[i] * SQU_f[i];
+        },
+        cellGrain);
 
     // Serial, and it has to be: lambda lives on cell *faces*, so cell i's 2x2
     // block starts at trace index i and cell i+1's at i+1 -- they overlap in the
@@ -1087,27 +1893,45 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
     // lost by leaving it out of the parallel region.
     // K
     for (Index i = 0; i < nCells; i++)
-        for (Index varI = 0; varI < nVars; varI++)
-            for (Index varJ = 0; varJ < nVars; varJ++)
-                K_global.block<2, 2>(varI * (nCells + 1) + i, varJ * (nCells + 1) + i) += K_cell[i].block<2, 2>(varI * 2, varJ * 2);
+        scatterTraceBlock(K_banded, i, K_cell[i]);
+
+    imposeDirichletTraceRows(K_banded);
 
     // Construct the RHS of K Lambda = F
     Eigen::VectorXd F(nVars * (nCells + 1));
     F = g4;
+    // Serial for the same reason the K_global assembly above is: cell i writes
+    // trace rows i and i+1, so neighbours overlap in the face they share. The
+    // product itself was hoisted into the parallel loop; what is left is 2*nVars
+    // subtractions per cell.
     for (Index i = 0; i < nCells; i++)
     {
         for (Index var = 0; var < nVars; var++)
         {
-            F.block<2, 1>(var * (nCells + 1) + i, 0) -= (CG_cellwise[i] * SQU_f[i]).block(var * 2, 0, 2, 1);
+            F.block<2, 1>(var * (nCells + 1) + i, 0) -= CGf[i].block(var * 2, 0, 2, 1);
         }
     }
 
-    // Factorise the global matrix ( size n_cells * n_variables )
-    EigenGlobalSolver globalKSolver(K_global);
-    // This solves for the lambdas of all variables at once (drop it in the memory sundials reserved for it)
+    // Factorise the global matrix and solve for the lambdas of all variables at
+    // once, dropping the answer in the memory SUNDIALS reserved for it.
+    //
+    // Banded rather than dense: see K_banded. The permutation either side is what
+    // lets the band form use its own ordering without the solution vector's
+    // changing -- F is built above in the DOF layout's var-major order, so it is
+    // gathered into trace-major, solved in place, and scattered back.
     Index LambdaOffset = nCells * localDOF;
 
-    delYVec.segment(LambdaOffset, nVars * (nCells + 1)) = globalKSolver.solve(F);
+    toTraceMajor(F, traceRhs);
+    zeroDirichletTraceRows(traceRhs);
+
+    if (!K_banded.factorize())
+        throw std::runtime_error(
+            "solveHDGJac: the condensed trace matrix is singular. The dense "
+            "FullPivLU this replaced would have returned something for it.");
+    K_banded.solveInPlace(traceRhs);
+
+    auto lambdaOut = delYVec.segment(LambdaOffset, nVars * (nCells + 1));
+    fromTraceMajor(traceRhs, lambdaOut);
 
     /*
      * We really should do something here.
@@ -1120,9 +1944,12 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
     }
     */
 
-    // Now find del sigma, del q and del u to eventually find del Y
-    // this can be done in parallel over each cell
-    for (Index i = 0; i < nCells; i++)
+    // Now find del sigma, del q and del u to eventually find del Y. Cell-
+    // independent: iteration i reads lambda and writes only cell i's own
+    // sigma/q/u/aux coefficients, which are disjoint blocks of the same vector.
+    manta::parallel_for(
+        nCells,
+        [&](Index i)
     {
         Vector delSQU(nVars * SQU_DOF);
 
@@ -1149,7 +1976,8 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
         }
         for (Index aux = 0; aux < nAux; aux++)
             del_y.Aux(aux).getCoeff(i).second = delSQU.segment(nVars * SQU_DOF + aux * AUX_DOF, AUX_DOF);
-    }
+    },
+        cellGrain);
 }
 
 int static_residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval, void *user_data)
@@ -1171,9 +1999,9 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
     ++nResidualEvals;
     updateBoundaryConditions(tres);
 
-    DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux);
-    DGSoln dYdt_h(nVars, grid, k, N_VGetArrayPointer(dYdt), nScalars, nAux);
-    DGSoln res(nVars, grid, k, N_VGetArrayPointer(resval), nScalars, nAux);
+    DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux, nField);
+    DGSoln dYdt_h(nVars, grid, k, N_VGetArrayPointer(dYdt), nScalars, nAux, nField);
+    DGSoln res(nVars, grid, k, N_VGetArrayPointer(resval), nScalars, nAux, nField);
 
     VectorWrapper resVec(N_VGetArrayPointer(resval), N_VGetLength(resval));
 
@@ -1194,8 +2022,13 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
     const std::vector<Position> points =
         superconvergent ? postprocessor->starPoints() : Y_h.getPoints();
 
-    const GlobalState states = superconvergent ? postprocessor->evalOnStarNodes(Y_h)
-                                               : Y_h.evalOnNodes();
+    GlobalState states = superconvergent ? postprocessor->evalOnStarNodes(Y_h)
+                                         : Y_h.evalOnNodes();
+
+    // The metric the physics is about to be evaluated on, from the field model
+    // at this state's psi. A no-op with no model attached, which is what keeps
+    // an uncoupled run bit-for-bit what it was.
+    evaluateGeometry(Y_h, points, states, tres);
 
     auto values = problem->ComputePhysics(states, points, tres);
 
@@ -1294,18 +2127,35 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
         // every cell and node, and the scalars all see the same state.
         const GlobalState scalarStates = Y_h.evalOnNodes();
         const GlobalState scalarStates_dt = dYdt_h.evalOnNodes();
-        const Vector &weights = Integrator::getIntegrationWeights(Y_h.getBasis(), grid);
-        const Matrix &phiBoundary = Integrator::getPhiBoundary(Y_h.getBasis(), grid);
+        const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
+        const Matrix &phiBoundary = integrator.phiBoundary(Y_h.getBasis(), grid);
 
         for (Index j = 0; j < nScalars; j++)
             res.Scalar(j) = problem->ScalarG(j, scalarStates, scalarStates_dt, Y_h.getPoints(),
                                              weights, phiBoundary, tres);
     }
 
+    if (fieldModel)
+    {
+        // Sampled once, like the scalars: every field row sees the same state.
+        //
+        // On the k+1 basis nodes even under the superconvergent scheme, because
+        // `weights` is the interpolatory quadrature of *that* basis and a field
+        // row's integrals are taken against it. The star nodes are a device for
+        // the transport residual's projection, not a different set of unknowns.
+        const GlobalState fieldStates = Y_h.evalOnNodes();
+        const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
+
+        Vector fieldRes = Vector::Zero(nField);
+        fieldModel->FieldResidual(fieldRes, Vector(Y_h.getField()), Vector(dYdt_h.getField()),
+                                  fieldStates, Y_h.getPoints(), weights, tres);
+        res.getField() = fieldRes;
+    }
+
     return 0;
 }
 
-void SystemSolver::initializeMatricesForAdjointSolve()
+void SystemSolver::initializeMatricesForAdjointSolve(Index gIndex)
 {
     // With the superconvergent scheme the objective is a functional of u*, so
     // dG/dy runs through the reconstruction just as the residual's Jacobian does.
@@ -1316,12 +2166,34 @@ void SystemSolver::initializeMatricesForAdjointSolve()
 
     const Index derivK = superconvergent ? k + 1 : k;
 
+    // Rebuild rather than grow. Every container filled below is appended to, so
+    // a second adjoint solve on one solver used to leave them holding 2 * nCells
+    // entries with the stale ones at the front -- which is where every index
+    // into them lands. clearCellwiseVecs() carries the same note for the forward
+    // containers; these four are its adjoint counterpart.
+    G_y.clear();
+    adjoint_CEBlocks.clear();
+    adjoint_CGBlocks.clear();
+    A1_transpose_cellwise.clear();
+    A2_transpose_cellwise.clear();
+
     GlobalState dGdvars(grid.getNCells(), derivK, nVars, nScalars, nAux);
-    const std::vector<Position> points =
-        superconvergent ? postprocessor->starPoints() : y.getPoints();
-    const GlobalState states =
-        superconvergent ? postprocessor->evalOnStarNodes(y) : y.evalOnNodes();
-    adjointProblem->dg(0, dGdvars, states, points);
+
+    // The nodes, and the geometry on them.
+    //
+    // Both the objective's dg and the case's own ComputePhysicsDerivatives are
+    // evaluated on these states, and with a field model attached a hook reads
+    // State::geom just as it does in the forward Jacobian -- which is why this
+    // is evaluatePhysicsDerivatives' first act too. Without it dSigmaFn_dq on a
+    // geometry-dependent case indexes slot 0 of a zero-length vector.
+    PhysicsNodes nodes{superconvergent ? postprocessor->starPoints() : y.getPoints(),
+                       superconvergent ? postprocessor->evalOnStarNodes(y) : y.evalOnNodes()};
+    evaluateGeometry(y, nodes.points, nodes.states, jt);
+
+    std::vector<Position> const &points = nodes.points;
+    GlobalState const &states = nodes.states;
+
+    adjointProblem->dg(gIndex, dGdvars, states, points);
     Vector dGdu(nVars * (k + 1));
     Vector dGdq(nVars * (k + 1));
     Vector dGdsigma(nVars * (k + 1));
@@ -1416,6 +2288,13 @@ void SystemSolver::initializeMatricesForAdjointSolve()
    // We have to remake the M matrices because they're in the wrong order
     // We also need to calculate the dSigmadX and dSourcedX matrices at the same time
 
+    // Serial, unlike its forward twin in updateMatricesForJacSolve, and for a
+    // reason that is about this loop rather than about the mathematics: it grows
+    // adjoint_CEBlocks and adjoint_CGBlocks with emplace_back, so both the
+    // container and the resulting order are shared state. Pre-sizing them and
+    // indexing by i would make it parallelisable -- but this runs once per run,
+    // against updateMatricesForJacSolve's once per Newton iteration, so it has
+    // never been where the time is. Measured breakdown is in TODO.
     for (unsigned int i = 0; i < nCells; i++)
     {
         Eigen::MatrixXd NLq(nVars * (k + 1), nVars * (k + 1));
@@ -1496,8 +2375,26 @@ void SystemSolver::initializeMatricesForAdjointSolve()
         M.block(nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = -B.transpose();
 
         // row3
+        //
+        // -Sq, not +Sq. The u row of the residual is `... - Pi(S)`, so every
+        // source derivative enters it negated: assembleCellMatrix writes
+        // `MX.block(u, sigma) -= Ssig`, `-= Sq` and `-= Su` in turn, onto a
+        // MBlocks whose (u, q) block is identically zero. The two neighbours
+        // here carry that minus (`B - Ssig`, `D - Su`) because their MBlocks
+        // entries are nonzero and had to be written out; the middle one did not,
+        // and lost it.
+        //
+        // Unreachable by anything in the tree until now, which is why it
+        // survived: every adjoint fixture that exists -- AdjointTestProblem, the
+        // Python ParametricDiffusion, test_adjoint_aux's case -- has
+        // dSources_dq identically zero, so Sq is the zero matrix and its sign
+        // does not matter. A case whose source reads q got a silently wrong
+        // gradient beside a perfectly good G, exactly the failure mode this
+        // function's dSigma/dPhi comment below records. Caught by
+        // the_transpose_check_reaches_every_coupled_block, whose fixture has
+        // dSources_dq = 0.2.
         M.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) = B - Ssig;
-        M.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = Sq;
+        M.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = -Sq;
         M.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = (D - Su);
 
         if (nAux > 0)
@@ -1591,55 +2488,98 @@ void SystemSolver::initializeMatricesForAdjointSolve()
 
     // no computation of scalars
 
+    // The right-hand-side-independent half of the transposed HDG solve, built
+    // once here because the coupled adjoint paths apply A^-T nField + 1 times
+    // (exact) or once per sweep (iterative).
+    factoriseAdjointTrace();
+
+    // ---- the field coupling, transposed.
+    //
+    // Re-assembled here rather than reused from the forward solve, and at
+    // alpha = 0, because that is what M above is: the block loop builds its rows
+    // from A_cellwise / B_cellwise / D_cellwise directly and never adds
+    // assembleCellMatrix's alpha-weighted mass term X. So this is dF/dy at
+    // alpha = 0 -- the steady adjoint -- and the field blocks have to be the
+    // same operator's. B = dRdpsi + alpha dRddpsidt would otherwise carry
+    // whichever cj IDA last handed the forward Jacobian, which for a
+    // *differential* field DOF is a different matrix entirely, and A2 carries
+    // alpha * dRdot for the same reason. Keeping the two in step block for block
+    // is the whole discipline of this function; alpha is one of those blocks.
+    //
+    // Note what that costs, because it is new and it is invisible: this
+    // *overwrites* the forward solve's own blocks. A1_cellwise and a2 are
+    // rewritten at alpha = 0, and updateFieldJacobian refactorises the model's B
+    // and Blu there too -- so after an adjoint solve the field model's stored
+    // factorisation is the steady one, not IDA's. Harmless as the solver is used
+    // today, for the same reason MXSolvers holding M^T rather than M is harmless:
+    // runAdjointSolve is the last thing integrate() does, and the next forward
+    // Jacobian solve is preceded by updateMatricesForJacSolve, which rebuilds all
+    // four. Anything that starts interleaving forward and adjoint solves -- a
+    // checkpointed transient adjoint, say -- has to refresh them, and will find
+    // no diagnostic if it does not.
+    if (fieldModel)
+    {
+        G_field = Vector::Zero(nField);
+        adjoint_field = Vector::Zero(nField);
+        assembleFieldCoupling(y, dydt, nodes, jt, 0.0);
+        transposeFieldCoupling();
+    }
+    else
+    {
+        G_field.resize(0);
+        adjoint_field.resize(0);
+    }
+
     initialised = true;
 }
 
-void SystemSolver::solveAdjointState(Index gIndex)
+// See the declaration. Split out of solveAdjointState so the repeated A^-T
+// applications the coupled paths need do not refactorise the trace operator
+// once per right-hand side.
+void SystemSolver::factoriseAdjointTrace()
 {
+    adjoint_K_banded.setZero();
+    adjoint_SQU_0.assign(nCells, Matrix());
 
-    K_global.setZero();
-
-    std::vector<Eigen::VectorXd> SQU_f(nCells);
-    std::vector<Eigen::MatrixXd> SQU_0(nCells);
+    // Serial: the solve is cell-independent but the K_global accumulation below
+    // it is not -- lambda lives on faces, so cell i and cell i+1 both write the
+    // trace block they share. Splitting it into a parallel solve and a serial
+    // accumulation, the way solveHDGJac does, would work; it has not been done
+    // because this runs once per run rather than once per Newton iteration.
     for (Index i = 0; i < nCells; i++)
     {
-        // Interval const& I( grid[ i ] );
+        adjoint_SQU_0[i] = MXSolvers[i].solve(adjoint_CGBlocks[i]);
 
-        // SQU_f
-        Vector g1g2g3 = G_y[i];
+        const Matrix K_cell = H_cellwise[i].transpose() - adjoint_CEBlocks[i] * adjoint_SQU_0[i];
 
-        SQU_f[i] = MXSolvers[i].solve(g1g2g3);
-
-        // SQU_0
-        Eigen::MatrixXd const &CG = adjoint_CGBlocks[i];
-        SQU_0[i] = MXSolvers[i].solve(CG);
-        // std::cerr << SQU_0[i] << std::endl << std::endl;
-        // std::cerr << CE << std::endl << std::endl;
-
-        Eigen::MatrixXd K_cell(nVars * 2, nVars * 2);
-        K_cell = H_cellwise[i].transpose() - adjoint_CEBlocks[i] * SQU_0[i];
-
-        // K
-        for (Index varI = 0; varI < nVars; varI++)
-            for (Index varJ = 0; varJ < nVars; varJ++)
-                K_global.block<2, 2>(varI * (nCells + 1) + i, varJ * (nCells + 1) + i) += K_cell.block<2, 2>(varI * 2, varJ * 2);
+        scatterTraceBlock(adjoint_K_banded, i, K_cell);
     }
+
+    // Same rank deficiency as the forward operator, and for the same reason:
+    // H_cellwise.transpose() carries the same zeroed Dirichlet diagonal.
+    imposeDirichletTraceRows(adjoint_K_banded);
+
+    if (!adjoint_K_banded.factorize())
+        throw std::runtime_error(
+            "factoriseAdjointTrace: the transposed trace matrix is singular.");
+}
+
+// See the declaration: A^-T applied to a cellwise right-hand side.
+void SystemSolver::solveTransportAdjoint(std::vector<Vector> const &rhs,
+                                         std::vector<Vector> &squOut, Vector &lambdaOut)
+{
+    std::vector<Vector> SQU_f(nCells);
 
     // Construct the RHS of K Lambda = F
-    Eigen::VectorXd F(nVars * (nCells + 1));
-    F.setZero();
+    Vector F = Vector::Zero(nVars * (nCells + 1));
     for (Index i = 0; i < nCells; i++)
     {
+        SQU_f[i] = MXSolvers[i].solve(rhs[i]);
+
+        const Vector CEf = adjoint_CEBlocks[i] * SQU_f[i];
         for (Index var = 0; var < nVars; var++)
-        {
-            F.block<2, 1>(var * (nCells + 1) + i, 0) -= (adjoint_CEBlocks[i] * SQU_f[i]).block(var * 2, 0, 2, 1);
-        }
+            F.segment(var * (nCells + 1) + i, 2) -= CEf.segment(var * 2, 2);
     }
-
-    // Factorise the global matrix ( size n_cells * n_variables )
-    EigenGlobalSolver globalKSolver(K_global);
-
-    adjoint_lambdas = globalKSolver.solve(F);
 
     /*
      * We really should do something here.
@@ -1652,35 +2592,361 @@ void SystemSolver::solveAdjointState(Index gIndex)
     }
     */
 
-    // Now find del sigma, del q and del u to eventually find del Y
-    // this can be done in parallel over each cell
-    for (Index i = 0; i < nCells; i++)
-    {
+    // Same permutation as the forward solve; see K_banded.
+    lambdaOut.resize(nVars * (nCells + 1));
+    toTraceMajor(F, traceRhs);
+    zeroDirichletTraceRows(traceRhs);
+    adjoint_K_banded.solveInPlace(traceRhs);
+    fromTraceMajor(traceRhs, lambdaOut);
 
-        // Reorganise the data from variable-major to cell-major
-        Vector LambdaCell(2 * nVars);
-
-        for (Index var = 0; var < nVars; var++)
+    // The cellwise part, cell-independent exactly as solveHDGJac's is: iteration
+    // i reads lambdaOut and writes only squOut[i], which is pre-sized here rather
+    // than grown.
+    squOut.assign(nCells, Vector());
+    manta::parallel_for(
+        nCells,
+        [&](Index i)
         {
-            LambdaCell.block<2, 1>(2 * var, 0) = adjoint_lambdas.segment(var * (nCells + 1) + i, 2);
+            // Reorganise the data from variable-major to cell-major
+            Vector LambdaCell(2 * nVars);
+            for (Index var = 0; var < nVars; var++)
+                LambdaCell.segment(2 * var, 2) = lambdaOut.segment(var * (nCells + 1) + i, 2);
+
+            squOut[i] = SQU_f[i] - adjoint_SQU_0[i] * LambdaCell;
+        },
+        cellGrain);
+}
+
+// See the declaration. Materialising both transposes is what lets a test zero
+// one of them and require the gradient check to fail; see
+// dropping_a_transposed_coupling_block_makes_the_gradient_wrong.
+void SystemSolver::transposeFieldCoupling()
+{
+    const Index cellDOF = static_cast<Index>(localDOF);
+    const Index nTransport = static_cast<Index>(nCells) * cellDOF;
+
+    A1_transpose_cellwise.clear();
+    A2_transpose_cellwise.clear();
+    A1_transpose_cellwise.reserve(nCells);
+    A2_transpose_cellwise.reserve(nCells);
+
+    for (Index f = 0; f < nField; ++f)
+    {
+        // A2 is stored as a full-length solution vector so that contracting it
+        // forwards is one N_VDotProd, but the transposed solve reads it cell by
+        // cell and so cannot see anything past the cellwise blocks. Nothing can
+        // put something there today -- FieldResidualPrime is handed a
+        // GlobalState, which has no trace slot, and a field model alongside
+        // global scalars is refused in setFieldModel -- but "nothing can" is
+        // exactly the assumption that goes stale silently, and the cost of
+        // being wrong is a dropped term in the gradient with a good G. So check.
+        const VectorWrapper row(N_VGetArrayPointer(a2[f]), N_VGetLength(a2[f]));
+        if (row.size() > nTransport &&
+            row.tail(row.size() - nTransport).cwiseAbs().maxCoeff() != 0.0)
+            throw std::logic_error(
+                "Field residual row " + std::to_string(f) +
+                " depends on a trace, scalar or field unknown through A2. The transposed "
+                "adjoint solve reads A2 cell by cell and would drop that term silently, "
+                "so it is an error rather than an approximation.");
+    }
+
+    for (Index i = 0; i < nCells; ++i)
+    {
+        A1_transpose_cellwise.emplace_back(A1_cellwise[i].transpose());
+
+        Matrix a2Cell(cellDOF, nField);
+        for (Index f = 0; f < nField; ++f)
+        {
+            const VectorWrapper row(N_VGetArrayPointer(a2[f]), N_VGetLength(a2[f]));
+            a2Cell.col(f) = row.segment(i * cellDOF, cellDOF);
+        }
+        A2_transpose_cellwise.emplace_back(std::move(a2Cell));
+    }
+}
+
+// J^T z = dG/dy. Without a field model this is the transposed transport solve
+// and nothing else, which is what keeps every existing adjoint run what it was.
+void SystemSolver::solveAdjointState()
+{
+    if (!fieldModel)
+    {
+        solveTransportAdjoint(G_y, adjoint_squ, adjoint_lambdas);
+        return;
+    }
+
+    switch (fieldSolveMode)
+    {
+    case FieldSolveMode::Exact:
+        solveCoupledAdjointExact();
+        return;
+    case FieldSolveMode::Iterative:
+        solveCoupledAdjointIterative();
+        return;
+    }
+}
+
+// The exact transposed Schur complement. See the declaration for the algebra.
+void SystemSolver::solveCoupledAdjointExact()
+{
+    // A^-T G_y, kept because the back-substitution needs it.
+    std::vector<Vector> squ0;
+    Vector lam0;
+    solveTransportAdjoint(G_y, squ0, lam0);
+
+    // A^-T applied to each column of A2^T, one transposed transport solve per
+    // field DOF.
+    std::vector<std::vector<Vector>> squCol(nField);
+    std::vector<Vector> lamCol(nField);
+    Matrix S = Matrix::Zero(nField, nField);
+
+    std::vector<Vector> col(nCells);
+    for (Index m = 0; m < nField; ++m)
+    {
+        for (Index i = 0; i < nCells; ++i)
+            col[i] = A2_transpose_cellwise[i].col(m);
+
+        solveTransportAdjoint(col, squCol[m], lamCol[m]);
+
+        for (Index i = 0; i < nCells; ++i)
+            S.col(m) += A1_transpose_cellwise[i] * squCol[m][i];
+    }
+
+    // B^T densely, through the model's own transposed apply. A model with a
+    // structured block overrides applyBTranspose rather than exposing the
+    // matrix, so this is the only way to ask for its columns -- and nField is
+    // small wherever this mode is used.
+    Matrix BT = Matrix::Zero(nField, nField);
+    for (Index m = 0; m < nField; ++m)
+    {
+        Vector e = Vector::Unit(nField, m), BTe = Vector::Zero(nField);
+        fieldModel->applyBTranspose(BTe, e);
+        BT.col(m) = BTe;
+    }
+    const Matrix Schur = BT - S;
+
+    Vector r = G_field;
+    for (Index i = 0; i < nCells; ++i)
+        r -= A1_transpose_cellwise[i] * squ0[i];
+
+    // Assign to a Vector before touching it: lu.solve() returns a lazy Solve<>
+    // expression with no coefficient accessor.
+    const Vector zpsi = Schur.partialPivLu().solve(r);
+
+    adjoint_squ = squ0;
+    adjoint_lambdas = lam0;
+    for (Index m = 0; m < nField; ++m)
+    {
+        for (Index i = 0; i < nCells; ++i)
+            adjoint_squ[i] -= zpsi(m) * squCol[m][i];
+        adjoint_lambdas -= zpsi(m) * lamCol[m];
+    }
+    adjoint_field = zpsi;
+}
+
+// The transposed block Gauss-Seidel sweep:
+//
+//     A^T z_x^{n+1}   = G_y    - A2^T z_psi^n
+//     B^T z_psi^{n+1} = G_psi  - A1^T z_x^{n+1}
+//
+// one transposed transport solve and one B^T solve per sweep, against the exact
+// path's nField + 1.
+//
+// Irons-Tuck accelerated, like its forward twin, and for the same reason: the
+// transposed iteration has the *same* spectrum -- transposition preserves
+// eigenvalues -- but always runs at cj = 0, where rho is largest. It is
+// therefore the strictly harder of the two directions, which is also why it has
+// its own, larger cap in FieldSolveMaxAdjointSweeps.
+//
+// The stopping test is a relative *backward error*, not the increment test the
+// forward sweep uses. It can be, because the residual of the coupled adjoint
+// system at the end of a sweep is available in closed form: row two is zero by
+// construction, and row one is
+//
+//     A^T z_x + A2^T z_psi - G_y = A2^T ( z_psi^{n+1} - z_psi^n )
+//
+// since z_x was solved against z_psi^n. So ||A2^T dz_psi|| is the exact
+// residual of the pair actually returned, and comparing it to ||g|| is the
+// standard backward-error test rather than a proxy for one. The degenerate
+// g = 0 case needs no clamp: every iterate is zero, the residual is exactly
+// zero, and 0 <= tol * 0 holds.
+//
+// **That derivation is why the accepted iterate is the unaccelerated one.** Row
+// two holds exactly only because z_psi^{n+1} came from solveBTranspose against
+// this sweep's z_x; returning an extrapolated value instead would leave the pair
+// inconsistent by the length of the extrapolation and silently turn an exact
+// backward error into a proxy. So the acceleration changes only what the *next*
+// sweep starts from, at a cost of one extra sweep to certify -- which is what
+// certification always costs.
+void SystemSolver::solveCoupledAdjointIterative()
+{
+    double rhsNorm2 = G_field.squaredNorm();
+    for (Index i = 0; i < nCells; ++i)
+        rhsNorm2 += G_y[i].squaredNorm();
+    const double rhsNorm = std::sqrt(rhsNorm2);
+
+    Vector zpsi = Vector::Zero(nField);
+    Vector delta = Vector::Zero(nField), deltaPrev = Vector::Zero(nField);
+    bool haveDeltaPrev = false, converged = false;
+    std::vector<Vector> rhs(nCells);
+
+    double residualNorm = std::numeric_limits<double>::infinity();
+
+    for (int sweep = 0; sweep < fieldSolveMaxAdjointSweeps; ++sweep)
+    {
+        ++fieldAdjointSweeps;
+
+        for (Index i = 0; i < nCells; ++i)
+            rhs[i] = G_y[i] - A2_transpose_cellwise[i] * zpsi;
+
+        solveTransportAdjoint(rhs, adjoint_squ, adjoint_lambdas);
+
+        Vector r = G_field;
+        for (Index i = 0; i < nCells; ++i)
+            r -= A1_transpose_cellwise[i] * adjoint_squ[i];
+
+        Vector g(nField);
+        fieldModel->solveBTranspose(g, r);
+
+        deltaPrev = delta;
+        delta = g - zpsi;
+
+        double residual2 = 0.0;
+        for (Index i = 0; i < nCells; ++i)
+            residual2 += (A2_transpose_cellwise[i] * delta).squaredNorm();
+        residualNorm = std::sqrt(residual2);
+
+        if (residualNorm <= fieldSolveTolerance * rhsNorm)
+        {
+            zpsi = g;
+            converged = true;
+            break;
         }
 
-        /*
-        // Try mapping the memory by using the magic runes (future update)
-        Eigen::Map< Vector, 0, Eigen::InnerStride<nCells + 1> >
-        delLambdaCell( delYVec.data() + LambdaOffset + i, 2 * nVars, Eigen::InnerStride<nCells + 1> );
-        */
-
-        adjoint_squ.emplace_back(SQU_f[i] - SQU_0[i] * LambdaCell);
+        zpsi = haveDeltaPrev ? ironsTuck(g, delta, deltaPrev) : g;
+        haveDeltaPrev = true;
     }
+
+    if (converged)
+    {
+        adjoint_field = zpsi;
+        return;
+    }
+
+    // This used to throw, on the argument that an under-converged adjoint is a
+    // wrong gradient beside a correct objective and there is no "close enough"
+    // to fall back on. The argument was right and the remedy is now better: the
+    // exact transposed Schur solve gives the same guarantee without failing the
+    // run. Escalating is strictly stronger than throwing -- the caller gets a
+    // correct gradient instead of an exception -- so the exception_ptr guard in
+    // Solver.cpp that stops a refusal from eating the forward run's output is
+    // now unreachable from this path. Leave it: solveCoupledAdjointExact can
+    // still throw out of the field model, and the guard is what keeps a netCDF
+    // file from dying with it.
+    //
+    // solveCoupledAdjointExact overwrites adjoint_squ, adjoint_lambdas *and*
+    // adjoint_field, so the sweep's last iterate is discarded rather than blended
+    // into the answer.
+    //
+    // Warned, not counted: unlike the forward Jacobian this runs once per run,
+    // so once per occurrence *is* once per run, and the cost of the escalation
+    // is worth a line.
+    //
+    // std::format, not std::to_string: the latter is fixed to six decimals, so a
+    // tolerance of 1e-8 prints as "0.000000" and a residual of 3.7e-5 as
+    // "0.000037" -- a message about convergence that cannot show the numbers it
+    // is about.
+    fieldAdjointFellBack = true;
+    logmsg<LOG_LEVEL::WARNING>(
+        "The coupled adjoint sweep did not converge in {} sweeps (backward error {:g} "
+        "against a tolerance of {:g} times a right-hand side of norm {:g}); falling back "
+        "to the exact transposed Schur solve, which costs {} transposed transport solves. "
+        "The gradient is correct either way. Raise FieldSolveMaxAdjointSweeps to try "
+        "longer, or set FieldSolve = exact to skip the sweep.",
+        fieldSolveMaxAdjointSweeps, residualNorm, fieldSolveTolerance, rhsNorm, nField + 1);
+    solveCoupledAdjointExact();
+}
+
+SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
+{
+    ObjectiveEstimate out;
+    if (adjointProblem == nullptr)
+        return out;   // valid stays false: there is no objective to estimate
+
+    const Index ng = adjointProblem->getNg();
+    out.value.setZero(ng);
+    out.corrected.setZero(ng);
+    out.uncertainty.setZero(ng);
+
+    // Restored on the way out. alpha and the factorised MX blocks belong to
+    // whatever is driving the solver -- a continuation step, or IDA -- and this
+    // is meant to be callable from inside that without disturbing it.
+    const double alphaOnEntry = alpha;
+
+    N_Vector zeroDeriv = N_VClone(Y);
+    N_Vector F = N_VClone(Y);
+    N_Vector delta = N_VClone(Y);
+    N_VConst(0.0, zeroDeriv);
+
+    // alpha = 0 is the steady operator dF/dy, with no mass term. That is the
+    // right one whatever the solve was damped with: the fixed point being
+    // extrapolated to is a steady state, not the end of a pseudo-time step.
+    setAlpha(0.0);
+    setJacEvalY(Y, zeroDeriv);
+    updateMatricesForJacSolve();
+    residual(t0, Y, zeroDeriv, F);
+    solveJacEq(F, delta);
+
+    double const *deltaData = N_VGetArrayPointer(delta);
+    double deltaNorm = 0.0;
+    for (Index i = 0; i < static_cast<Index>(nCells); ++i)
+        for (Index j = 0; j < static_cast<Index>(localDOF); ++j)
+        {
+            const double d = deltaData[i * localDOF + j];
+            deltaNorm += d * d;
+        }
+    deltaNorm = std::sqrt(deltaNorm);
+
+    for (Index g = 0; g < ng; ++g)
+    {
+        // y, not yJac: y maps Y, the state the solve is actually in. yJac does not
+        // catch up until the end of integrate(), so reading it here would report
+        // the objective at the initial condition.
+        if (superconvergent)
+            postprocessor->computeUStar(y);
+        out.value(g) = superconvergent
+                           ? adjointProblem->GFn(g, y, *postprocessor)
+                           : adjointProblem->GFn(g, y);
+
+        // G_y is dG/dy for one objective, so it has to be rebuilt per objective.
+        initializeMatricesForAdjointSolve(g);
+
+        double dot = 0.0, dGdyNorm = 0.0;
+        for (Index i = 0; i < static_cast<Index>(nCells); ++i)
+            for (Index j = 0; j < static_cast<Index>(localDOF); ++j)
+            {
+                const double gy = G_y[i](j);
+                const double d = deltaData[i * localDOF + j];
+                dot += gy * d;
+                dGdyNorm += gy * gy;
+            }
+        dGdyNorm = std::sqrt(dGdyNorm);
+
+        // Newton takes y to y - J^-1 F, so the change in G is -(dG/dy).delta.
+        out.corrected(g) = out.value(g) - dot;
+        out.uncertainty(g) = dGdyNorm * deltaNorm;
+    }
+
+    out.valid = true;
+
+    N_VDestroy(zeroDeriv);
+    N_VDestroy(F);
+    N_VDestroy(delta);
+    setAlpha(alphaOnEntry);
+    return out;
 }
 
 void SystemSolver::computeAdjointGradients()
 {
-
-    GlobalStateMatrix dSigmadp(nVars);
-    GlobalStateMatrix dSourcedp(nVars);
-    GlobalStateMatrix dAuxdp(nAux);
 
     // Spatial adjoint parameters index the parameter vector by node, so the star
     // node set would silently redefine how many parameters there are. Combined
@@ -1692,13 +2958,78 @@ void SystemSolver::computeAdjointGradients()
             "Superconvergent postprocessing is not supported with spatial adjoint "
             "parameters");
 
+    // Spatial parameters effectively mean we have nCells * np parameters, but we store as a matrix to make output easier to interpret
+    if (adjointProblem->areParametersSpatial())
+        G_p.resize(adjointProblem->getNg() * nCells * (k + 1), adjointProblem->getNp());
+    else 
+        G_p.resize(adjointProblem->getNg(), adjointProblem->getNp());
+
+    G_p.setZero();
+    
+    // The gradient is dG/dp = dG/dp|explicit - z^T dF/dp, and with a field model
+    // attached both halves of z exist. Only z_x appears below, and that is not
+    // an omission: dF/dp splits as ( F_p ; dR/dp ), and dR/dp is identically
+    // zero because a FieldModel has no notion of an adjoint parameter to depend
+    // on -- there is no hook a model author could fill and therefore no term to
+    // drop. The coupling reaches the gradient entirely through z_x, which
+    // solveAdjointState has already solved coupled: the field block changes the
+    // adjoint *state*, not the contraction below.
+    //
+    //Index np = adjointProblem->areParametersSpatial() ? np_internal * nCells * (k + 1) + adjointProblem->getNpBoundary() : adjointProblem->getNp();
+    // One adjoint state per objective, and the loop has to be outside pIndex for
+    // that reason: adjoint_squ is what solveAdjointState leaves behind, and it is
+    // the adjoint of *one* objective. Solving once and reusing it across the gIndex
+    // loop below gave every objective the first one's gradient -- on a case whose
+    // second objective is four times its first, both rows of G_p came back
+    // identical, and a finite difference put the second out by exactly that factor
+    // of four.
+    //
+    // F_p does not depend on the objective, so it is rebuilt once per objective
+    // rather than cached. That costs a factor of ng in the parameter-derivative
+    // hooks and nothing at ng = 1, which is every case in the tree bar this one;
+    // caching it would cost np * nCells * localDOF, which with spatial parameters
+    // is not obviously the better trade.
+    for (Index gIndex = 0; gIndex < adjointProblem->getNg(); ++gIndex)
+    {
+        initializeMatricesForAdjointSolve(gIndex);
+        solveAdjointState();
+        accumulateAdjointGradients(gIndex);
+    }
+}
+
+// One objective's contribution to G_p, at the adjoint state solveAdjointState
+// has already left in adjoint_squ.
+//
+// Split out of the loop above rather than inlined into it because the two halves
+// have different preconditions: this one requires the adjoint *matrices* to be
+// the ones its caller wants, and initializeMatricesForAdjointSolve rebuilds them
+// from scratch. A test that zeroes a transposed coupling block to check the
+// block is read at all -- which is the only thing standing between a wrong
+// gradient and a silently plausible one, see
+// field_adjoint_tests/dropping_a_transposed_coupling_block_makes_the_gradient_wrong
+// -- cannot do that through computeAdjointGradients(), because the rebuild
+// happens after the zeroing and undoes it. With the accumulation callable on its
+// own the sequence is init, zero, solve, accumulate, and the block stays zeroed.
+void SystemSolver::accumulateAdjointGradients(Index gIndex)
+{
+    GlobalStateMatrix dSigmadp(nVars);
+    GlobalStateMatrix dSourcedp(nVars);
+    GlobalStateMatrix dAuxdp(nAux);
+
     if (superconvergent)
         postprocessor->computeUStar(y);
 
     const std::vector<Position> points =
         superconvergent ? postprocessor->starPoints() : y.getPoints();
-    const GlobalState states =
+    GlobalState states =
         superconvergent ? postprocessor->evalOnStarNodes(y) : y.evalOnNodes();
+
+    // dF/dp is evaluated at the same state, and with the same geometry, as the
+    // residual it differentiates: dSigmaFn_dp on a geometry-dependent case reads
+    // State::geom exactly as SigmaFn does. Without this the adjoint's F_p is the
+    // derivative of a different function from the one the solver converged, and
+    // the symptom is a plausible wrong gradient beside a correct G.
+    evaluateGeometry(y, points, states, jt);
 
     const Index derivK = superconvergent ? k + 1 : k;
 
@@ -1715,218 +3046,210 @@ void SystemSolver::computeAdjointGradients()
     }
     adjointProblem->ComputePhysicsDerivatives({dSigmadp, dSourcedp, dAuxdp}, states, points);
     
-    // Spatial parameters effectively mean we have nCells * np parameters, but we store as a matrix to make output easier to interpret
+    // The explicit half, dG/dp|explicit, seeded here rather than for every
+    // objective before the loop. An objective owns its own rows of G_p and
+    // nothing else writes them, so seeding and subtracting in one place makes
+    // this idempotent -- call it twice and row gIndex is the same both times --
+    // which is what lets it be called on its own at all. It reads y and the
+    // objective, neither of which initializeMatricesForAdjointSolve touches.
     if (adjointProblem->areParametersSpatial())
-        G_p.resize(adjointProblem->getNg() * nCells * (k + 1), adjointProblem->getNp());
-    else 
-        G_p.resize(adjointProblem->getNg(), adjointProblem->getNp());
+        checkShapeAndSet(G_p.block(gIndex * nCells * (k + 1), 0, nCells * (k + 1),
+                                   adjointProblem->getNp()),
+                         adjointProblem->dGFndp(gIndex, y), "dGdp in SystemSolver");
+    else
+        G_p.row(gIndex) = adjointProblem->dGFndp(gIndex, y);
 
-    G_p.setZero();
-
-    for (Index i = 0; i < adjointProblem->getNg(); i++)
     {
-        if (adjointProblem->areParametersSpatial())
+        for (Index pIndex = 0; pIndex < adjointProblem->getNp(); ++pIndex)
         {
-            checkShapeAndSet(G_p.block(i * nCells * (k + 1), 0, nCells * (k + 1), adjointProblem->getNp()), adjointProblem->dGFndp(i, y), "dGdp in SystemSolver");
-        }
-        else
-            G_p.row(i) = adjointProblem->dGFndp(i, y);
-    }
-    
-    //Index np = adjointProblem->areParametersSpatial() ? np_internal * nCells * (k + 1) + adjointProblem->getNpBoundary() : adjointProblem->getNp();
-    for (Index pIndex = 0; pIndex < adjointProblem->getNp(); ++pIndex)
-    {
-        for (Index i = 0; i < nCells; ++i)
-        {
-            Matrix F_p;
-            if (adjointProblem->areParametersSpatial())
-                F_p.resize(3 * nVars * (k + 1) + nAux * (k + 1), (k + 1));
-            else
+            for (Index i = 0; i < nCells; ++i)
             {
-                F_p.resize(3 * nVars * (k + 1) + nAux * (k + 1), 1);
-            }
-            F_p.setZero();
-
-            Interval I = grid[i];
-
-            for (Index var = 0; var < nVars; ++var)
-            {
-                
-                Eigen::VectorXd dkappa_dp_phi(k + 1);
-                Eigen::VectorXd dSdp_cellwise(k + 1);
+                Matrix F_p;
                 if (adjointProblem->areParametersSpatial())
+                    F_p.resize(3 * nVars * (k + 1) + nAux * (k + 1), (k + 1));
+                else
                 {
-                    for (Index j = 0; j < k + 1; j++)
+                    F_p.resize(3 * nVars * (k + 1) + nAux * (k + 1), 1);
+                }
+                F_p.setZero();
+
+                Interval I = grid[i];
+
+                for (Index var = 0; var < nVars; ++var)
+                {
+                
+                    Eigen::VectorXd dkappa_dp_phi(k + 1);
+                    Eigen::VectorXd dSdp_cellwise(k + 1);
+                    if (adjointProblem->areParametersSpatial())
                     {
+                        for (Index j = 0; j < k + 1; j++)
+                        {
+                            dkappa_dp_phi.setZero();
+                            if (adjointProblem->isAdjointIndexInternal(pIndex))
+                            {
+                                const auto dSigmadp_cell = dSigmadp.Variable(i)[var];
+                                Vector temp(k + 1);
+                                temp.setZero();
+                                temp(j) = dSigmadp_cell(pIndex, j);
+                                dkappa_dp_phi = y.getBasis().InterpolateOntoBasis(I, temp);
+                            }
+
+                            // Evaluate Source Function
+
+                            dSdp_cellwise.setZero();
+                            if (adjointProblem->isAdjointIndexInternal(pIndex))
+                            {
+                                const auto dSourcedp_cell = dSourcedp.Variable(i)[var];
+                                Vector temp(k + 1);
+                                temp.setZero();
+                                temp(j) = dSourcedp_cell(pIndex, j);
+                                dSdp_cellwise = y.getBasis().InterpolateOntoBasis(I, temp);
+                            }
+
+                 
+                            F_p.block(var * (k + 1), j, k + 1, 1) = dkappa_dp_phi;
+
+                            F_p.block(var * (k + 1) + 2 * nVars * (k + 1), j, k + 1, 1) = -dSdp_cellwise;
+                        }
+                    }
+                    else
+                    {
+                        // Same projection the residual uses for these terms: A9 over
+                        // the star nodes with the superconvergent scheme, the
+                        // interpolatory mass-matrix form otherwise. The parameters do
+                        // not enter u*, so there is no chain matrix here.
                         dkappa_dp_phi.setZero();
-                        if (adjointProblem->isAdjointIndexInternal(pIndex))
+                        if( adjointProblem->isAdjointIndexInternal( pIndex ) )
                         {
                             const auto dSigmadp_cell = dSigmadp.Variable(i)[var];
-                            Vector temp(k + 1);
-                            temp.setZero();
-                            temp(j) = dSigmadp_cell(pIndex, j);
-                            dkappa_dp_phi = y.getBasis().InterpolateOntoBasis(I, temp);
+                            dkappa_dp_phi = superconvergent
+                                ? Vector(postprocessor->A9(i) * Vector(dSigmadp_cell.row(pIndex)))
+                                : y.getBasis().InterpolateOntoBasis( I, dSigmadp_cell.row(pIndex) );
                         }
 
                         // Evaluate Source Function
 
                         dSdp_cellwise.setZero();
-                        if (adjointProblem->isAdjointIndexInternal(pIndex))
+                        if( adjointProblem->isAdjointIndexInternal( pIndex ) )
                         {
                             const auto dSourcedp_cell = dSourcedp.Variable(i)[var];
-                            Vector temp(k + 1);
-                            temp.setZero();
-                            temp(j) = dSourcedp_cell(pIndex, j);
-                            dSdp_cellwise = y.getBasis().InterpolateOntoBasis(I, temp);
+                            dSdp_cellwise = superconvergent
+                                ? Vector(postprocessor->A9(i) * Vector(dSourcedp_cell.row(pIndex)))
+                                : y.getBasis().InterpolateOntoBasis( I, dSourcedp_cell.row(pIndex) );
                         }
 
-                 
-                        F_p.block(var * (k + 1), j, k + 1, 1) = dkappa_dp_phi;
+                
+                        F_p.block(var * (k + 1), 0, k + 1, 1) = dkappa_dp_phi;
 
-                        F_p.block(var * (k + 1) + 2 * nVars * (k + 1), j, k + 1, 1) = -dSdp_cellwise;
-                    }
-                }
-                else
-                {
-                    // Same projection the residual uses for these terms: A9 over
-                    // the star nodes with the superconvergent scheme, the
-                    // interpolatory mass-matrix form otherwise. The parameters do
-                    // not enter u*, so there is no chain matrix here.
-                    dkappa_dp_phi.setZero();
-                    if( adjointProblem->isAdjointIndexInternal( pIndex ) )
-                    {
-                        const auto dSigmadp_cell = dSigmadp.Variable(i)[var];
-                        dkappa_dp_phi = superconvergent
-                            ? Vector(postprocessor->A9(i) * Vector(dSigmadp_cell.row(pIndex)))
-                            : y.getBasis().InterpolateOntoBasis( I, dSigmadp_cell.row(pIndex) );
-                    }
-
-                    // Evaluate Source Function
-
-                    dSdp_cellwise.setZero();
-                    if( adjointProblem->isAdjointIndexInternal( pIndex ) )
-                    {
-                        const auto dSourcedp_cell = dSourcedp.Variable(i)[var];
-                        dSdp_cellwise = superconvergent
-                            ? Vector(postprocessor->A9(i) * Vector(dSourcedp_cell.row(pIndex)))
-                            : y.getBasis().InterpolateOntoBasis( I, dSourcedp_cell.row(pIndex) );
+                        //auto C_cell = C_cellwise[i];
+                        F_p.block(var * (k + 1) + 2 * nVars * (k + 1), 0, k + 1, 1) = -dSdp_cellwise;
                     }
 
                 
-                    F_p.block(var * (k + 1), 0, k + 1, 1) = dkappa_dp_phi;
 
-                    //auto C_cell = C_cellwise[i];
-                    F_p.block(var * (k + 1) + 2 * nVars * (k + 1), 0, k + 1, 1) = -dSdp_cellwise;
-                }
-
-                
-
-                // Boundary conditions
-                // p = g_D in this case, so the derivatives are just the basis functions
-                //
-                // "in this case" is load bearing, and is now enforced. This term is
-                // the derivative of a *Dirichlet* datum, which reaches the residual
-                // through RF_cellwise in the cell rows. A Neumann or Mixed datum
-                // reaches it through L_global in the lambda row instead, and F_p has
-                // no lambda rows at all -- it is 3*nVars*(k+1) + nAux*(k+1) tall, and
-                // the lambda contribution exists only as the commented-out block
-                // further down. So a boundary parameter on such an end would be
-                // handed a Dirichlet-shaped derivative and return a plausible wrong
-                // gradient with a perfectly good G, which is the failure mode this
-                // file's dSigma/dPhi comment records. Refuse it instead.
-                if (I.x_l == grid.lowerBoundary() && adjointProblem->computeLowerBoundarySensitivity(var, pIndex))
-                {
-                    if (!problem->isLowerBoundaryDirichlet(var))
-                        throw std::logic_error(
-                            "Adjoint parameter " + std::to_string(pIndex) + " is declared a lower "
-                            "boundary sensitivity for variable '" + problem->getVariableName(var) +
-                            "', whose lower boundary is not Dirichlet. Only a Dirichlet datum has a "
-                            "derivative here: a Neumann or Mixed one enters through L_global in the "
-                            "trace row, which F_p does not represent.");
-                    for (Eigen::Index j = 0; j < k + 1; j++)
+                    // Boundary conditions
+                    // p = g_D in this case, so the derivatives are just the basis functions
+                    //
+                    // "in this case" is load bearing, and is now enforced. This term is
+                    // the derivative of a *Dirichlet* datum, which reaches the residual
+                    // through RF_cellwise in the cell rows. A Neumann or Mixed datum
+                    // reaches it through L_global in the lambda row instead, and F_p has
+                    // no lambda rows at all -- it is 3*nVars*(k+1) + nAux*(k+1) tall, and
+                    // the lambda contribution exists only as the commented-out block
+                    // further down. So a boundary parameter on such an end would be
+                    // handed a Dirichlet-shaped derivative and return a plausible wrong
+                    // gradient with a perfectly good G, which is the failure mode this
+                    // file's dSigma/dPhi comment records. Refuse it instead.
+                    if (I.x_l == grid.lowerBoundary() && adjointProblem->computeLowerBoundarySensitivity(var, pIndex))
                     {
-                        F_p(nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_l);
+                        if (!problem->isLowerBoundaryDirichlet(var))
+                            throw std::logic_error(
+                                "Adjoint parameter " + std::to_string(pIndex) + " is declared a lower "
+                                "boundary sensitivity for variable '" + problem->getVariableName(var) +
+                                "', whose lower boundary is not Dirichlet. Only a Dirichlet datum has a "
+                                "derivative here: a Neumann or Mixed one enters through L_global in the "
+                                "trace row, which F_p does not represent.");
+                        for (Eigen::Index j = 0; j < k + 1; j++)
+                        {
+                            F_p(nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_l);
+                        }
                     }
-                }
 
-                if (I.x_u == grid.upperBoundary() && adjointProblem->computeUpperBoundarySensitivity(var, pIndex))
-                {
-                    if (!problem->isUpperBoundaryDirichlet(var))
-                        throw std::logic_error(
-                            "Adjoint parameter " + std::to_string(pIndex) + " is declared an upper "
-                            "boundary sensitivity for variable '" + problem->getVariableName(var) +
-                            "', whose upper boundary is not Dirichlet. Only a Dirichlet datum has a "
-                            "derivative here: a Neumann or Mixed one enters through L_global in the "
-                            "trace row, which F_p does not represent.");
-                    for (Eigen::Index j = 0; j < k + 1; j++)
+                    if (I.x_u == grid.upperBoundary() && adjointProblem->computeUpperBoundarySensitivity(var, pIndex))
                     {
-                        // < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 )
-                        F_p(nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_u);
+                        if (!problem->isUpperBoundaryDirichlet(var))
+                            throw std::logic_error(
+                                "Adjoint parameter " + std::to_string(pIndex) + " is declared an upper "
+                                "boundary sensitivity for variable '" + problem->getVariableName(var) +
+                                "', whose upper boundary is not Dirichlet. Only a Dirichlet datum has a "
+                                "derivative here: a Neumann or Mixed one enters through L_global in the "
+                                "trace row, which F_p does not represent.");
+                        for (Eigen::Index j = 0; j < k + 1; j++)
+                        {
+                            // < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 )
+                            F_p(nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_u);
+                        }
                     }
-                }
-                // TODO: implement this 
+                    // TODO: implement this 
                
-            }
-            for (Index aux = 0; aux < nAux; ++aux)
-            {
-
-                Eigen::VectorXd daux_dp_phi(k + 1);
-                if (adjointProblem->areParametersSpatial())
+                }
+                for (Index aux = 0; aux < nAux; ++aux)
                 {
-                  for (Index j = 0; j < k + 1; j++)
-                  {
-                    daux_dp_phi.setZero();
-                    if( adjointProblem->isAdjointIndexInternal( pIndex ) )
+
+                    Eigen::VectorXd daux_dp_phi(k + 1);
+                    if (adjointProblem->areParametersSpatial())
                     {
-                        const auto dAuxdp_cell = dAuxdp.Variable(i)[aux];
-                        Vector temp(k + 1);
-                        temp.setZero();
-                        temp(j) = dAuxdp_cell(pIndex, j);
-                        daux_dp_phi = y.getBasis().InterpolateOntoBasis(I, temp);
+                      for (Index j = 0; j < k + 1; j++)
+                      {
+                        daux_dp_phi.setZero();
+                        if( adjointProblem->isAdjointIndexInternal( pIndex ) )
+                        {
+                            const auto dAuxdp_cell = dAuxdp.Variable(i)[aux];
+                            Vector temp(k + 1);
+                            temp.setZero();
+                            temp(j) = dAuxdp_cell(pIndex, j);
+                            daux_dp_phi = y.getBasis().InterpolateOntoBasis(I, temp);
+                        }
+                        F_p.block(3 * nVars * (k + 1) + aux * (k + 1), j, k + 1, 1) = daux_dp_phi;
+                      }
                     }
-                    F_p.block(3 * nVars * (k + 1) + aux * (k + 1), j, k + 1, 1) = daux_dp_phi;
-                  }
+                    else
+                    {
+                      daux_dp_phi.setZero();
+                      if( adjointProblem->isAdjointIndexInternal( pIndex ) )
+                      {
+                          const auto dAuxdp_cell = dAuxdp.Variable(i)[aux];
+                          daux_dp_phi = superconvergent
+                              ? Vector(postprocessor->A9(i) * Vector(dAuxdp_cell.row(pIndex)))
+                              : y.getBasis().InterpolateOntoBasis( I, dAuxdp_cell.row(pIndex) );
+                      }
+                      F_p.block(3 * nVars * (k + 1) + aux * (k + 1), 0, k + 1, 1) = daux_dp_phi;
+                    }
                 }
-                else
-                {
-                  daux_dp_phi.setZero();
-                  if( adjointProblem->isAdjointIndexInternal( pIndex ) )
-                  {
-                      const auto dAuxdp_cell = dAuxdp.Variable(i)[aux];
-                      daux_dp_phi = superconvergent
-                          ? Vector(postprocessor->A9(i) * Vector(dAuxdp_cell.row(pIndex)))
-                          : y.getBasis().InterpolateOntoBasis( I, dAuxdp_cell.row(pIndex) );
-                  }
-                  F_p.block(3 * nVars * (k + 1) + aux * (k + 1), 0, k + 1, 1) = daux_dp_phi;
-                }
-            }
 
-            // SQU portion
+                // SQU portion
         
-            for (Index gIndex = 0; gIndex < adjointProblem->getNg(); gIndex++)
-            {
                 if (adjointProblem->areParametersSpatial())
                 {
-                    for (Index j = 0; j < k + 1; j ++)
-                    {
-                        G_p(gIndex * nCells * (k + 1) + i * (k + 1) + j, pIndex) -= adjoint_squ[i].transpose() * F_p.col(j);
-                    }
+                    for (Index j = 0; j < k + 1; j++)
+                        G_p(gIndex * nCells * (k + 1) + i * (k + 1) + j, pIndex) -=
+                            adjoint_squ[i].transpose() * F_p.col(j);
                 }
                 else
                     G_p(gIndex, pIndex) -= adjoint_squ[i].transpose() * static_cast<Vector>(F_p);
+
+
+                // Eigen::VectorXd dkappa_lambda = C_cell * dkappa_dp_phi;
+                // // // // // Lambda portion
+                // G_p(pIndex) -= adjoint_lambdas.segment(i, 2).transpose() * dkappa_lambda;
             }
-
-
-            // Eigen::VectorXd dkappa_lambda = C_cell * dkappa_dp_phi;
-            // // // // // Lambda portion
-            // G_p(pIndex) -= adjoint_lambdas.segment(i, 2).transpose() * dkappa_lambda;
         }
     }
 }
 
 void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &tempY, bool printSources)
 {
-    DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY), nScalars, nAux);
+    DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY), nScalars, nAux, nField);
 
     std::println(out, "# t = {:g}", t);
     for (Index v = 0; v < nVars; ++v)
@@ -2059,7 +3382,7 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
 void SystemSolver::printOnNodes(std::ostream &out, double t, N_Vector const& tempY, bool printSources)
 {
 
-    DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY), nScalars, nAux);
+    DGSoln tmp_y(nVars, grid, k, N_VGetArrayPointer(tempY), nScalars, nAux, nField);
     std::println(out, "# t = {:g}", t);
     for (Index v = 0; v < nVars; ++v)
     {
@@ -2077,16 +3400,21 @@ void SystemSolver::printOnNodes(std::ostream &out, double t, N_Vector const& tem
         std::println(out, "{:g}", tmp_y.Scalar(nScalars - 1));
     }
 
+    // Built before the sources rather than after: Sources reads State::geom, so
+    // it has to be handed a state the field model has filled in, not a fresh
+    // temporary with no geometry rows at all.
+    auto states = tmp_y.evalOnNodes();
+    const auto points = tmp_y.getPoints();
+    evaluateGeometry(tmp_y, points, states, t);
+
     std::vector<Values> sources(nVars);
-    if (printSources) 
+    if (printSources)
     {
         for (Index v = 0; v < nVars; ++v)
         {
-            sources[v] = problem->Sources(v, tmp_y.evalOnNodes(), tmp_y.getPoints(), t);
+            sources[v] = problem->Sources(v, states, points, t);
         }
     }
-    const auto states = tmp_y.evalOnNodes();
-    const auto points = tmp_y.getPoints();
 
     if (postprocessor)
         postprocessor->computeUStar(tmp_y);
@@ -2116,8 +3444,8 @@ void SystemSolver::printOnNodes(std::ostream &out, double t, N_Vector const& tem
 
 int SystemSolver::getErrorWeights(N_Vector y_sundials, N_Vector ewt_sundials)
 {
-    DGSoln y(nVars, grid, k, N_VGetArrayPointer(y_sundials), nScalars, nAux);
-    DGSoln ewt(nVars, grid, k, N_VGetArrayPointer(ewt_sundials), nScalars, nAux);
+    DGSoln y(nVars, grid, k, N_VGetArrayPointer(y_sundials), nScalars, nAux, nField);
+    DGSoln ewt(nVars, grid, k, N_VGetArrayPointer(ewt_sundials), nScalars, nAux, nField);
     for (Index i = 0; i < nCells; ++i)
     {
         double absTol = 1e-8;
@@ -2164,6 +3492,17 @@ int SystemSolver::getErrorWeights(N_Vector y_sundials, N_Vector ewt_sundials)
     {
         double absTol = atol[0];
         ewt.Scalar(i) = ::sqrt(localDOF * nCells) / (rtol * abs(y.Scalar(i)) + absTol);
+    }
+
+    // The field unknowns, weighted like the scalars and for the same reason:
+    // there is one of each against localDOF * nCells spatial coefficients, so
+    // without the sqrt(N) they would contribute essentially nothing to the WRMS
+    // norm IDA tests against. A zero weight here is worse than a badly chosen
+    // one -- N_VWrmsNorm divides by it.
+    for (Index i = 0; i < nField; ++i)
+    {
+        double absTol = atol[0];
+        ewt.Field(i) = ::sqrt(localDOF * nCells) / (rtol * abs(y.Field(i)) + absTol);
     }
 
     return 0;

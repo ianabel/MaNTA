@@ -169,6 +169,16 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
     std::unique_ptr<SystemSolver> system;
     unsigned int k = k0;
 
+    // What the whole adaptive run cost, as against what one level did. This is
+    // the only construct in the tree where a run contains more than one steady
+    // solve, so it is the only place where "the run's total" and
+    // SystemSolver::lastSteadyStats() are different numbers -- and it is the
+    // total the benchmarks quote, since the point of adapting the degree is that
+    // the coarse levels are cheap enough to be worth paying for. A solver is
+    // destroyed at the end of each level, so it has to be read before then.
+    SystemSolver::SteadyStats runTotal;
+    int levels = 0;
+
     for (int level = 0;; ++level)
     {
         system = std::make_unique<SystemSolver>(grid, k, &problem);
@@ -200,6 +210,21 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
             system->setAdjointProblem(adjoint);
 
         system->runSolver(tFinal);
+
+        // Read now: `system` is reset at the bottom of the loop, and a level
+        // that breaks out leaves the last one alive but the earlier ones gone.
+        {
+            const auto levelStats = system->lastSteadyStats();
+            runTotal.steps += levelStats.steps;
+            runTotal.rejected += levelStats.rejected;
+            runTotal.newtonIters += levelStats.newtonIters;
+            runTotal.kinFuncEvals += levelStats.kinFuncEvals;
+            runTotal.kinJacEvals += levelStats.kinJacEvals;
+            runTotal.residualEvals += levelStats.residualEvals;
+            runTotal.jacBuilds += levelStats.jacBuilds;
+            runTotal.jacSolves += levelStats.jacSolves;
+            ++levels;
+        }
 
         // runSolver has already freed the SUNDIALS state; accuracyEstimate
         // reads yJac, which owns its own memory, and the postprocessor, which is
@@ -272,6 +297,25 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
     // test_reconfiguring_without_restart_clears_the_restart_state exists for,
     // one level up.
     problem.clearRestart();
+
+    // Printed unconditionally when the diagnostics are on, even at one level,
+    // where it duplicates that level's own block. The duplication is the lesser
+    // evil: a log whose shape depends on how many levels the run happened to
+    // take is one nothing can read mechanically, and the label says how many
+    // solves went into it either way.
+    if (config.SteadyStateDiagnostics && levels > 0)
+    {
+        std::println("Degree adaptation totals -- {} level{}, one steady solve each",
+                     levels, levels == 1 ? "" : "s");
+        std::println("  continuation steps      : {}  ({} rejected)",
+                     runTotal.steps, runTotal.rejected);
+        std::println("  KINSOL Newton iterations: {}", runTotal.newtonIters);
+        std::println("  residual evaluations    : {}  (of which KINSOL: {})",
+                     runTotal.residualEvals, runTotal.kinFuncEvals);
+        std::println("  Jacobian builds         : {}  (KINSOL asked for {})",
+                     runTotal.jacBuilds, runTotal.kinJacEvals);
+        std::println("  Jacobian solves         : {}", runTotal.jacSolves);
+    }
 
     return system;
 }

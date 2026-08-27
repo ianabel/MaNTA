@@ -44,12 +44,23 @@ std::unique_ptr<TransportSystem> PhysicsCases::InstantiateProblem(std::string co
         // TransportSystem name segfaulted instead of saying so. The list of
         // what *is* available is the useful half of the message, because the
         // usual cause is a physics case whose object file is not linked in:
-        // nothing references it directly, so a missing entry in PHYSICS_SOURCES
+        // nothing references it directly, so a source the build's glob misses
         // produces no compile error.
         throw std::invalid_argument(
             "There is no physics case named '" + s + "'. Available cases: " +
             registeredNames(*getMap()));
     return it->second( config, grid );
+}
+
+std::vector<std::string> PhysicsCases::RegisteredNames() {
+    // Sorted, because the map is: what a caller gets is a stable list rather
+    // than an insertion order that depends on static-initialisation order
+    // across translation units.
+    std::vector<std::string> out;
+    out.reserve(getMap()->size());
+    for (auto const &entry : *getMap())
+        out.push_back(entry.first);
+    return out;
 }
 
 PhysicsCases::map_type* PhysicsCases::getMap() {

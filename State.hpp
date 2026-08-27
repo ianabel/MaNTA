@@ -66,12 +66,13 @@ public:
   /// in the ScalarTestLD3 post-mortem in Tests/README.md, where a missing v[2]
   /// put a garbage column into the scalar coupling matrix. The hooks may still
   /// call zero() and several do; it is redundant now rather than load-bearing.
-  explicit State(Index nv, Index ns = 0, Index naux = 0) {
+  explicit State(Index nv, Index ns = 0, Index naux = 0, Index ngeom = 0) {
     m_Variable.setZero(nv);
     m_Derivative.setZero(nv);
     m_Flux.setZero(nv);
     m_Scalars.setZero(ns);
     m_Aux.setZero(naux);
+    m_Geometry.setZero(ngeom);
   }
 
   void clone(const State &other) {
@@ -80,6 +81,7 @@ public:
     m_Flux.setZero(other.m_Flux.size());
     m_Scalars.setZero(other.m_Scalars.size());
     m_Aux.setZero(other.m_Aux.size());
+    m_Geometry.setZero(other.m_Geometry.size());
   }
 
   void zero() {
@@ -88,6 +90,7 @@ public:
     m_Flux.setZero();
     m_Scalars.setZero();
     m_Aux.setZero();
+    m_Geometry.setZero();
   }
 
 private:
@@ -141,6 +144,13 @@ public:
   double &phi(Index i) { return checked(m_Aux, i, "auxiliary variable"); }
   double phi(Index i) const { return checked(m_Aux, i, "auxiliary variable"); }
 
+  /// A derived metric field, not an unknown: geometry is a function of the
+  /// field model's psi and of x, evaluated at the physics nodes and cached per
+  /// residual, in the same standing as sigmaHat. Read-write because the solver
+  /// fills it before handing the State to a physics hook; a case only reads it.
+  double &geom(Index i) { return checked(m_Geometry, i, "geometry slot"); }
+  double geom(Index i) const { return checked(m_Geometry, i, "geometry slot"); }
+
   double &scalar(Index i) { return checked(m_Scalars, i, "scalar"); }
   double scalar(Index i) const { return checked(m_Scalars, i, "scalar"); }
 
@@ -171,11 +181,14 @@ public:
   Vector &phi() { return m_Aux; }
   Vector const &phi() const { return m_Aux; }
 
+  Vector &geom() { return m_Geometry; }
+  Vector const &geom() const { return m_Geometry; }
+
   Vector &scalars() { return m_Scalars; }
   Vector const &scalars() const { return m_Scalars; }
 
 private:
-  Vector m_Variable, m_Derivative, m_Flux, m_Aux;
+  Vector m_Variable, m_Derivative, m_Flux, m_Aux, m_Geometry;
   Vector m_Scalars;
 };
 
@@ -187,12 +200,13 @@ public:
   /// GlobalStateMatrix for every Jacobian evaluation and hands its columns
   /// straight to dSigmaFn_du and friends as out-parameters.
   explicit GlobalState(Index nCells, Index k, Index nv, Index ns = 0,
-                       Index naux = 0) noexcept
-      : nCells(nCells), k(k), nVars(nv), nScalars(ns), nAux(naux) {
+                       Index naux = 0, Index ngeom = 0) noexcept
+      : nCells(nCells), k(k), nVars(nv), nScalars(ns), nAux(naux), nGeom(ngeom) {
     m_Variable.setZero(nVars, nCells * (k + 1));
     m_Derivative.setZero(nVars, nCells * (k + 1));
     m_Flux.setZero(nVars, nCells * (k + 1));
     m_Aux.setZero(nAux, nCells * (k + 1));
+    m_Geometry.setZero(nGeom, nCells * (k + 1));
     m_Scalars.setZero(nScalars);
   }
 
@@ -201,21 +215,47 @@ public:
     m_Derivative.col(i) = s.q();
     m_Flux.col(i) = s.sigma();
     m_Aux.col(i) = s.phi();
+    m_Geometry.col(i) = s.geom();
     m_Scalars = s.scalars();
   }
 
   // Return state at point i
   State operator[](Index i) const {
-    State out(nVars, nScalars, nAux);
+    State out(nVars, nScalars, nAux, nGeom);
 
     out.u() = m_Variable.col(i);
     out.q() = m_Derivative.col(i);
     out.sigma() = m_Flux.col(i);
     out.phi() = m_Aux.col(i);
+    out.geom() = m_Geometry.col(i);
     out.scalars() = m_Scalars;
 
     return out;
   }
+
+  Vector Geometry(Index node) const { return m_Geometry.col(node); }
+  void setGeometry(Index node, Vector const &g) { m_Geometry.col(node) = g; }
+
+  /// Give this state geometry rows after construction.
+  ///
+  /// The GlobalStates the physics is evaluated on come from
+  /// DGSoln::evalOnNodes and Postprocessor::evalOnStarNodes, and neither knows
+  /// how many geometry slots a field model declares: geometry is a function of
+  /// (psi, x), not part of the DOF layout, so a DGSoln has no business knowing
+  /// about it. SystemSolver::evaluateGeometry sizes the rows here and then
+  /// fills them.
+  ///
+  /// nGeom, not just the matrix. operator[] builds its State with nGeom, so
+  /// resizing the storage alone would hand out States with nowhere to copy the
+  /// values to -- and State::geom(i) on an empty vector is an out-of-range read
+  /// in any build without DEBUG.
+  void setGeometrySlots(Index ngeom) {
+    nGeom = ngeom;
+    m_Geometry.setZero(ngeom, m_Variable.cols());
+  }
+
+  Matrix &GeometryMatrix() { return m_Geometry; }
+  Matrix const &GeometryMatrix() const { return m_Geometry; }
 
   // This is mainly for copying from python
   GlobalState &operator=(const GlobalState &other) {
@@ -224,13 +264,16 @@ public:
     checkShapeAndSet(m_Flux, other.Flux(), "Flux");
     if (nAux > 0) // Don't bother with Aux if nAux = 0
       checkShapeAndSet(m_Aux, other.Aux(), "Aux");
+    if (nGeom > 0) // Don't bother with Geometry if nGeom = 0
+      checkShapeAndSet(m_Geometry, other.GeometryMatrix(), "Geometry");
     // Guard-clause form, and braced. The `else` used to hang off the inner `if`
     // -- which is what was meant, so the behaviour here is unchanged -- but with
     // two unbraced nested ifs that is only true by the standard's
     // nearest-enclosing rule, not by anything the reader can see. gcc's
-    // -Wdangling-else lives inside -Wparentheses, which Makefile.config disables
-    // globally, so only clang reports it. It was the sole thing standing between
-    // this codebase and a clean clang build.
+    // -Wdangling-else lives inside -Wparentheses, which the build used to
+    // disable globally, so at the time only clang reported it. It was the sole
+    // thing standing between this codebase and a clean clang build. That blanket
+    // suppression is long gone, and -Wall now catches this on either compiler.
     if (nScalars > 0)
     {
       if (m_Scalars.size() != other.Scalars().size())
@@ -287,6 +330,13 @@ public:
   }
 
   /*
+      Geometry -- see Geometry(Index)/setGeometry/GeometryMatrix() above,
+      beside the constructor. Unlike Variable/Derivative/Flux/Aux, geometry is
+      derived rather than solved for, so there is no cellwise accessor: nothing
+      assembles a Jacobian block against it yet.
+  */
+
+  /*
       Scalars
   */
   Vector &Scalars() { return m_Scalars; }
@@ -314,6 +364,7 @@ public:
   {
     nVars = m_Variable.rows();
     nAux = m_Aux.rows();
+    nGeom = m_Geometry.rows();
     nScalars = m_Scalars.size();
     nCells = m_Variable.cols();
     k = 0;
@@ -323,7 +374,7 @@ public:
 
 private:
   // We hold global state data in matrices that are (nVars x nPoints)
-  Matrix m_Variable, m_Derivative, m_Flux, m_Aux;
+  Matrix m_Variable, m_Derivative, m_Flux, m_Aux, m_Geometry;
 
   // Scalars are global so this is just a vector
   Vector m_Scalars;
@@ -331,7 +382,7 @@ private:
   // Hold sizes internally for checking & preallocating memory.
   // Initialised here because the default constructor is used by the pybind11
   // type caster; leaving them indeterminate made size() unpredictable.
-  Index nCells = 0, k = 0, nVars = 0, nScalars = 0, nAux = 0;
+  Index nCells = 0, k = 0, nVars = 0, nScalars = 0, nAux = 0, nGeom = 0;
 };
 
 /*

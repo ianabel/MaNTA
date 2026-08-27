@@ -5,13 +5,19 @@
 #include <sunlinsol/sunlinsol_band.h> /* access to band SUNLinearSolver       */
 #include <sundials/sundials_types.h>  /* definition of type sunrealtype          */
 #include <toml.hpp>
+#include <exception>
 #include <fstream>
+#include <limits>
 #include <print>
 #include <memory>
 
 #include "Types.hpp"
+#include "FieldModel.hpp"
 #include "SystemSolver.hpp"
 #include "gridStructures.hpp"
+// The field hooks are handed the same quadrature weights the scalar ones are,
+// so the model does not have to pick a rule of its own; they are cached here.
+#include "PyIntegrator.hpp"
 #include "SunLinSolWrapper.hpp"
 #include "SunMatrixWrapper.hpp"
 #include "ErrorChecker.hpp"
@@ -36,17 +42,6 @@ void SystemSolver::runSolver(double tFinal)
 {
 	initialize();
 
-	// The dG/dt gate, which is why the three phases are separate: the objective's
-	// time derivative is a property of the initial condition, so it can be asked
-	// after initialize() and answered before paying for integrate(). Disarmed
-	// unless setObjectiveDecreaseTolerance has been called, in which case this is
-	// false and the run proceeds exactly as before.
-	if (objectiveIsDecreasing())
-	{
-		destroySundials();
-		return;
-	}
-
 	try
 	{
 		integrate(tFinal);
@@ -59,59 +54,26 @@ void SystemSolver::runSolver(double tFinal)
 	destroySundials();
 }
 
-// Does the objective get worse from here?
-//
-// Every objective must clear the bar: one that is falling faster than the
-// tolerance rejects the step even if the others improve, which is the
-// all-must-improve rule origin/optimize-mode used and worth keeping -- a sweep
-// that accepts a step because two of three objectives improved is not maximising
-// anything in particular.
-//
-// The sign convention is that optimisation *maximises* G, so a decrease is the
-// bad direction. The tolerance is one-sided slack on that: dG/dt may dip by up to
-// objective_decrease_tol before the step is called bad, which leaves room for a
-// transient that recovers, and keeps quadrature noise about zero from rejecting a
-// run that is really flat.
-bool SystemSolver::objectiveIsDecreasing()
-{
-	if (!CheckObjectiveDecrease)
-		return false;
-
-	if (!adjointProblem)
-		throw std::logic_error("ObjectiveDecreaseTolerance is set but no AdjointProblem is; there is no objective to test. Set solveAdjoint, or drop the tolerance.");
-
-	const Index ng = adjointProblem->getNg();
-	last_dGdt.resize(ng);
-
-	bool decreasing = false;
-	for (Index gIndex = 0; gIndex < ng; ++gIndex)
-	{
-		// dydtComplete, not IDA's dydt. At t0 the latter's q, sigma and phi
-		// blocks are identically zero, so three of dGdt's four terms would
-		// multiply by nothing and the objective would be judged on its u
-		// dependence alone -- an objective depending only on q would score
-		// exactly zero. computeAlgebraicTimeDerivatives() fills them in.
-		last_dGdt(gIndex) = dGdt(gIndex, y, dydtComplete);
-		if (last_dGdt(gIndex) < -objective_decrease_tol)
-			decreasing = true;
-	}
-
-	if (decreasing)
-		logmsg<LOG_LEVEL::WARNING>("Objective is decreasing at t = {}: dG/dt = {}, tolerance {}. Abandoning this run without integrating.",
-								   t0, last_dGdt(0), objective_decrease_tol);
-	else
-		logmsg<LOG_LEVEL::INFO>("dG/dt gate passed at t = {}: dG/dt = {}.", t0, last_dGdt(0));
-
-	objective_rejected = decreasing;
-	return decreasing;
-}
-
 void SystemSolver::initialize()
 {
 	int retval;
 
-	// A fresh run: whatever the gate concluded about the last one does not apply.
-	objective_rejected = false;
+	// Whatever the field model cached about the last run does not apply to this
+	// one. This has to be here rather than in initialiseMatrices(), which is
+	// skipped entirely when `initialised` is already set: that is the
+	// RF_cellwise trap, where the second run on a reused solver solved its
+	// initial dydt out of the previous run's final-time boundary data.
+	if (fieldModel)
+		fieldModel->resetForRun();
+
+	// ...and neither do the sweep counts. Here, in the unconditional part of
+	// initialize() and beside resetForRun() for the same reason: a cumulative
+	// count reported as a per-run one is a lie a second run would tell silently.
+	fieldSweepSolves = 0;
+	fieldSweepIterations = 0;
+	fieldSweepFallbacks = 0;
+	fieldAdjointSweeps = 0;
+	fieldAdjointFellBack = false;
 
 	if (!initialised)
 		initialiseMatrices();
@@ -129,7 +91,9 @@ void SystemSolver::initialize()
 	//-----------------------------Initial conditions-------------------------------
 
 	// Set original vector lengths
-	Y = N_VNew_Serial(nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1), ctx);
+	// The field model's unknowns go last, after the scalars, so nothing before
+	// them moves. nField is zero unless setFieldModel has attached a model.
+	Y = N_VNew_Serial(nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1) + nField, ctx);
 	if (ErrorChecker::check_retval((void *)Y, "N_VNew_Serial", 0))
 		throw std::runtime_error("Sundials Initialization Error");
 
@@ -152,6 +116,86 @@ void SystemSolver::initialize()
 	// asserts the vector length matches the full DoF, and setInitialConditions is
 	// also called directly by tests that size their own N_Vectors.
 	setJacEvalY(Y, dYdt);
+
+	// A field DOF declared differential whose residual carries no d/dt is a row
+	// every unknown of which IDA_YA_YDP_INIT holds fixed: no Newton direction
+	// touches it, so the backtracking loop runs to exhaustion and IDA reports
+	// IDA_LINESEARCH_FAIL (-13) -- a message about the linesearch for a defect in
+	// the declaration. That is exactly what kept python-physics/mirror-plasma's
+	// voltage controller from ever starting, and the residual there was 4.3e-6:
+	// irreducible beats small, so there is no threshold to test against. Ask
+	// instead which unknowns each row can reach, here, where the answer can name
+	// the DOF.
+	//
+	// After setJacEvalY, because that is what puts the initial condition into
+	// yJac and dydtJac, and before IDACalcIC, which is what would otherwise fail.
+	if (fieldModel)
+	{
+		GlobalStateMatrix dR(nField), dRdot(nField);
+		for (Index f = 0; f < nField; ++f)
+		{
+			dR.add(nCells, k, nVars, nScalars, nAux);
+			dRdot.add(nCells, k, nVars, nScalars, nAux);
+		}
+		Matrix dRdpsi = Matrix::Zero(nField, nField);
+		Matrix dRddpsidt = Matrix::Zero(nField, nField);
+
+		fieldModel->FieldResidualPrime(dR, dRdot, dRdpsi, dRddpsidt,
+									   Vector(yJac.getField()), Vector(dydtJac.getField()),
+									   yJac.evalOnNodes(), yJac.getPoints(),
+									   integrator.integrationWeights(yJac.getBasis(), grid),
+									   t0);
+
+		for (Index f = 0; f < nField; ++f)
+			if (fieldModel->isFieldDOFDifferential(f) && dRddpsidt.row(f).isZero(0.0))
+				throw std::invalid_argument(
+					"Field DOF '" + fieldModel->getSpec().dofs[f].name +
+					"' is declared differential but its residual row carries no time "
+					"derivative. IDACalcIC holds every differential value fixed, so this row "
+					"is irreducible and the initialisation would fail with "
+					"IDA_LINESEARCH_FAIL.");
+
+		// What the chosen coupled solve costs, said once per run rather than
+		// once per Jacobian. Here rather than in applySolverConfig because
+		// nField is only known once a model is attached, and warning about the
+		// cost of a solve that will never happen -- FieldSolve set on a run with
+		// no field model -- is noise.
+		//
+		// **The two levels differ, and deliberately.** Exact is a WARNING: the
+		// user asked for a verification tool and is about to pay nField + 1
+		// transport solves per Jacobian solve for it in what may be a production
+		// run, which is a choice worth interrupting. Iterative is INFO, because
+		// it describes what the *default* does -- it fired on every coupled run
+		// including every unconfigured one, and a warning that always fires
+		// teaches a reader to skip warnings, which is a real cost given the
+		// genuine one this function's caller prints at the end of a run when
+		// fallbacks > 0. INFO is compiled out below WARNING (Logging.hpp), so
+		// this text is reachable on a VERBOSE or DEBUG build; the permanent
+		// homes for it are docs/running.rst and docs/field_coupling.rst, and
+		// what a release build reports about the sweep is the "Coupled field
+		// sweeps" line, which is measurement rather than description.
+		if (fieldSolveMode == FieldSolveMode::Exact)
+			logmsg<LOG_LEVEL::WARNING>(
+				"FieldSolve = exact forms the Schur complement onto the field block, which "
+				"costs one full transport solve per field degree of freedom: {} transport "
+				"solves per Jacobian solve where the iterative path costs one. It is a "
+				"verification tool and is not intended for production runs.",
+				nField + 1);
+		else
+			logmsg<LOG_LEVEL::INFO>(
+				"FieldSolve = iterative: block Gauss-Seidel between the transport and field "
+				"blocks with Irons-Tuck acceleration, one transport solve per sweep against "
+				"exact's {} per Jacobian solve. Stops once the relative change in psi is below "
+				"FieldSolveTolerance = {}, up to FieldSolveMaxSweeps = {} sweeps ({} for the "
+				"adjoint); a sweep that reaches its cap falls back to the exact solve, so this "
+				"mode costs more than exact in the worst case and never less accuracy. It is "
+				"only *cheaper* than exact when the sweep converges in fewer than {} sweeps, "
+				"which no test fixture in this tree manages -- it is a bet on a field block "
+				"far larger than the transport one, not a free improvement. Watch the "
+				"\"Coupled field sweeps\" line at the end of the run.",
+				nField + 1, fieldSolveTolerance, fieldSolveMaxSweeps, fieldSolveMaxAdjointSweeps,
+				nField + 1);
+	}
 
 	// ----------------- Allocate and initialize all other sun-vectors. -------------
 	//
@@ -183,7 +227,7 @@ void SystemSolver::initialize()
 	// have been solving a different initialisation problem from the intended one
 	// for as long as this code has existed. Nothing warns: Constant is not
 	// [[nodiscard]] and the statement declares no unused variable.
-	DGSoln isDifferential(nVars, grid, k, nScalars, nAux);
+	DGSoln isDifferential(nVars, grid, k, nScalars, nAux, nField);
 	isDifferential.Map(N_VGetArrayPointer(id));
 	isDifferential.zeroCoeffs();
 	for (Index v = 0; v < nVars; ++v)
@@ -197,6 +241,16 @@ void SystemSolver::initialize()
 			isDifferential.Scalar(s) = 1.0;
 		}
 	}
+
+	// nField is only ever nonzero with a model attached, but the guard keeps that
+	// invariant visible where the pointer is dereferenced rather than three
+	// hundred lines away in setFieldModel.
+	if (fieldModel)
+		for (Index f = 0; f < nField; ++f)
+		{
+			if (fieldModel->isFieldDOFDifferential(f))
+				isDifferential.Field(f) = 1.0;
+		}
 
 	retval = IDASetId(IDA_mem, id);
 	if (ErrorChecker::check_retval(&retval, "IDASetId", 1))
@@ -214,9 +268,13 @@ void SystemSolver::initialize()
 	// first step. But sigma, q, lambda and phi are then controlled only by the
 	// Newton tolerance, and two things read them: a restart file serialises the
 	// whole DOF vector, and phi is a physics quantity in its own right when
-	// nAux > 0. Measured, a restart round trip degrades from 1.9e-6 to 8.6e-4
-	// and the AuxVarTest regression case drifts 1.0% against a 0.84% tolerance.
-	// Turning it on is a trade, not an improvement.
+	// nAux > 0. Measured, a restart round trip degrades from 1.9e-6 to 8.6e-4,
+	// and on AuxVarTest q and sigma -- the fields the flag drops from the error
+	// test -- land 1.0e-6 from a converged solution against 4.1e-7 with it off.
+	// (This used to cite a 1.0% drift past a 0.84% tolerance on that case. It
+	// was measured when the case ran at rtol = atol = 1e-2, where its own answer
+	// is 4.1% from converged, so the drift was step-sequence noise rather than
+	// the flag.) Turning it on is a trade, not an improvement.
 	if (suppressAlgebraicError)
 	{
 		retval = IDASetSuppressAlg(IDA_mem, SUNTRUE);
@@ -236,7 +294,7 @@ void SystemSolver::initialize()
 	VectorWrapper absTolVals(N_VGetArrayPointer(absTolVec), N_VGetLength(absTolVec));
 	absTolVals.setZero();
 
-	DGSoln tolerances(nVars, grid, k, nScalars, nAux);
+	DGSoln tolerances(nVars, grid, k, nScalars, nAux, nField);
 	tolerances.Map(N_VGetArrayPointer(absTolVec));
 	for (Index i = 0; i < nCells; ++i)
 	{
@@ -271,6 +329,9 @@ void SystemSolver::initialize()
 
 	for (Index i = 0; i < nScalars; ++i)
 		tolerances.Scalar(i) = atol[0];
+
+	for (Index i = 0; i < nField; ++i)
+		tolerances.Field(i) = atol[0];
 
 	retval = IDAWFtolerances(IDA_mem, SystemSolver::getErrorWeights_static);
 	if (ErrorChecker::check_retval(&retval, "IDAWFtolerances", 1))
@@ -322,19 +383,26 @@ void SystemSolver::initialize()
 
 	if (debugDat)
 	{
+		// "pre-calcIC" only when there is going to be one. A steady solve skips
+		// IDACalcIC (see below), so on that path this block and its partner after
+		// the solve would bracket nothing, and the labels would name a correction
+		// that never happened.
+		const char *const icStage =
+			solvesForSteadyState() ? "initial guess" : "pre-calcIC";
+
 		wgt = N_VClone(res);
 		dydt_out.open(baseName + ".dydt.dat");
-		std::println(dydt_out, "# dydt before CalcIC");
+		std::println(dydt_out, "# dydt at the {}", icStage);
 		printOnNodes(dydt_out, t0, dYdt);
 		res_out.open(baseName + ".res.dat");
 		residual(t0, Y, dYdt, res);
 		getErrorWeights(Y, wgt);
 		double residual_val = N_VWrmsNorm(res, wgt);
-		std::println(res_out, "# Residual norm at t = {:g} (pre-calcIC) is {:g}", t0, residual_val);
+		std::println(res_out, "# Residual norm at t = {:g} ({}) is {:g}", t0, icStage, residual_val);
 		printOnNodes(res_out, t0, res);
 		if (writeDatFile)
 		{
-			std::println(out0, "# t = {:g} (pre-calcIC) ", t0);
+			std::println(out0, "# t = {:g} ({}) ", t0, icStage);
 			print(out0, t0, nOut, true);
 		}
 	}
@@ -342,93 +410,176 @@ void SystemSolver::initialize()
 	//------------------------------Solve------------------------------
 	// Update initial solution to be within tolerance of the residual equation
 
-	// The `retval = 0` that used to sit between these two lines made the check
-	// below unreachable: IDACalcIC's status was overwritten before it was read, so
-	// a failed initial-condition calculation carried on silently into the time
-	// loop with whatever partial state IDA had reached. The name passed to
-	// check_retval said "IDASolve" too, so even the message would have pointed at
-	// the wrong call.
-	retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, dt0 > 0.0 ? dt0 : dt);
-	if (ErrorChecker::check_retval(&retval, "IDACalcIC", 1))
+	// ...but only for a run that will time-march. IDACalcIC exists to hand IDA a
+	// state consistent with the algebraic constraints before it takes its first
+	// step, and a steady solve never takes one: solveSteadyState drives the *whole*
+	// residual to zero from Y with KINSOL, so whatever inconsistency the guess
+	// carries is removed by the answer rather than before it, and everything CalcIC
+	// computes is overwritten by the first accepted continuation step.
+	//
+	// Being wasted is the smaller half. IDACalcIC is itself a damped Newton solve,
+	// and it fails on states a steady solve handles without difficulty --
+	// python-examples/jardin-critical-gradient records a case where starting from
+	// the *exact* steady state makes it return IDA_CONV_FAIL (-4), which is the one
+	// initial condition a steady solve would have accepted instantly. So requiring
+	// it ahead of a solve that does not need it converts runs that would have
+	// converged into runs that never start, and reports the failure as if the
+	// answer were unreachable.
+	//
+	// The gate is solvesForSteadyState(), i.e. `TerminateOnSteadyState && steadyMode
+	// != TimeMarch`, so a plain transient and an explicit SteadyStateSolver =
+	// "TimeMarch" both keep the call unchanged. Both integrate, and IDA's first step
+	// is only as good as the state it starts from.
+	//
+	// One thing reads the initial condition rather than the answer, and on the
+	// steady path it now sees the guess setInitialConditions built: the t0
+	// timeslice in the netCDF and .dat output. That is the state the run actually
+	// started from, so it is if anything the more honest report.
+	//
+	// ...and not for a restart either, which resumes from a state the previous run
+	// had already driven onto the constraint manifold. IDACalcIC cannot find that
+	// out cheaply -- its convergence test is on the Newton step rather than on the
+	// residual, so it does a Jacobian setup and solve before it can discover it had
+	// nothing to do, and repeats the whole thing to refresh the error weights.
+	// Measured floor, on a state it had itself just converged to: two residual
+	// evaluations, two Jacobian builds and two Jacobian solves, zero Newton
+	// iterations. See setForceConsistentIC for the source references and for why
+	// this is decided from what the run *is* rather than from a residual threshold.
+	//
+	// A cold time-marching run is the case that is left, and it always runs
+	// IDACalcIC. There is deliberately no way to turn that off: its guess is not a
+	// consistent state, IDA_ERR_FAIL on the first step is what starting from one
+	// looks like, and a caller who does not care about the transient wants
+	// SteadyStateSolver = PseudoTransient or Newton rather than an uncorrected
+	// time march. ForceConsistentIC only ever adds the call back.
+	//
+	// The norm is still *reported* on every time-marching run, armed or not,
+	// because it is how a caller finds out whether the restart they resumed from
+	// was as consistent as a restart is supposed to be.
+	initial_residual_norm = std::numeric_limits<double>::quiet_NaN();
+	calcICRan = false;
+
+	// A restart skips only on the *copy* path. The claim behind the default is
+	// that a restart resumes from a state the previous run had already driven onto
+	// the constraint manifold, and that is true only when the discretisation
+	// matches: a restart at a different degree is projected, which transfers u, q,
+	// aux and the scalars and then rebuilds sigma and the trace, so what it hands
+	// IDA is a guess like any other. Measured on AuxVarTest resuming at a lower
+	// degree, skipping there fails with IDA_ERR_FAIL where running IDACalcIC
+	// completes the run -- so the carve-out is not tidiness.
+	const bool restarting = problem && problem->isRestarting();
+	const bool restartIsConsistent = restarting && !restartWasProjected;
+	bool wouldSkip = solvesForSteadyState() || restartIsConsistent;
+
+	// One-directional: it adds IDACalcIC where the run would have skipped, and
+	// cannot remove it from the cold time-marching run that needs it.
+	if (forceConsistentIC)
+		wouldSkip = false;
+
+	if (!solvesForSteadyState())
 	{
-		throw std::runtime_error("IDACalcIC could not complete");
+		initial_residual_norm = weightedResidualNorm(t0, Y, dYdt);
+
+		logmsg<LOG_LEVEL::INFO>(
+			"Initial state has a weighted residual of {:g}, so IDACalcIC {}.",
+			initial_residual_norm,
+			wouldSkip	 ? "is skipped (this run resumes from a restart file)"
+			: !restarting	 ? "will run"
+			: forceConsistentIC ? "will run (ForceConsistentIC)"
+							 : "will run (this restart was projected onto a different "
+							   "discretisation, so it is not a consistent state)");
 	}
 
-	long int nresevals = 0;
-	IDAGetNumResEvals(IDA_mem, &nresevals);
-  logmsg<LOG_LEVEL::INFO>("Number of Residual Evaluations due to IDACalcIC: {}", nresevals);
+	calcICRan = !wouldSkip;
 
-	if (nresevals > 10)
-    logmsg<LOG_LEVEL::WARNING>("IDACalcIC required {} residual evaluations. Check settings in {}", nresevals, std::string(inputFilePath));
-
-	// Take IDACalcIC's result. It keeps the corrected initial condition inside IDA
-	// and hands it over only on request, so without this Y and dYdt still hold the
-	// state that was *fed* to CalcIC rather than the one it computed.
-	//
-	// Here, once, before anything reads Y or writes output. Everything downstream
-	// then means the same thing by "the initial condition": the t0 timeslice
-	// initialiseNetCDF writes below, the t0 block of the .dat file, the residual the
-	// debug path evaluates, and the state the dG/dt gate differentiates. It used to
-	// be fetched in two places for two reasons -- inside the debugDat branch, and
-	// again for the gate when armed -- which meant the t0 output reported the
-	// pre-CalcIC state on an ordinary run and the corrected one under
-	// WriteDebugDatFiles, so a discrepancy could reproduce only with debug output
-	// switched on.
-	//
-	// Note what this does *not* fix. dYdt's algebraic blocks stay zero: q, sigma and
-	// phi are algebraic, and IDA_YA_YDP_INIT computes algebraic values and
-	// differential derivatives, not the other way round. That is structural, not the
-	// old wrong id vector -- see at_t0_only_the_differential_part_of_dydt_exists --
-	// and it stays that way, because dYdt is the state IDA takes its first step
-	// from. The gate reads dydtComplete instead, which the two blocks below seed
-	// from this and then fill in.
-	//
-	// Checked, unlike every other use of it in this file's history: it fails with
-	// IDA_ILL_INPUT if IDA has already taken a step, and on failure it leaves Y and
-	// dYdt holding their *pre*-CalcIC values rather than reporting anything. That is
-	// the same silent-failure shape as the `retval = 0` described above, and it
-	// would show up as a run whose initial condition is quietly the uncorrected one.
-	retval = IDAGetConsistentIC(IDA_mem, Y, dYdt);
-	if (ErrorChecker::check_retval(&retval, "IDAGetConsistentIC", 1))
-		throw std::runtime_error("Could not retrieve the corrected initial condition");
-
-	// Seed the complete derivative from IDA's. Its algebraic blocks are zero at
-	// this point; computeAlgebraicTimeDerivatives() fills them when the gate is
-	// armed, and nothing else reads them.
-	//
-	// Here rather than beside setJacEvalY above, because until the fetch on the
-	// line before this dYdt still holds the *guess* setInitialConditions built
-	// rather than the derivative IDACalcIC corrected it to. Seeding from the guess
-	// left dydtComplete's u block disagreeing with the state it is meant to
-	// describe by a fraction of a percent -- small enough to look like round-off
-	// and quite large enough to matter to anything differentiating the solution.
+	if (calcICRan)
 	{
-		DGSoln idaDerivative(nVars, grid, k, nScalars, nAux);
-		idaDerivative.Map(N_VGetArrayPointer(dYdt));
-		dydtComplete.copy(idaDerivative);
+		// The `retval = 0` that used to sit between these two lines made the check
+		// below unreachable: IDACalcIC's status was overwritten before it was read, so
+		// a failed initial-condition calculation carried on silently into the time
+		// loop with whatever partial state IDA had reached. The name passed to
+		// check_retval said "IDASolve" too, so even the message would have pointed at
+		// the wrong call.
+		//
+		// tout1 is an absolute *time* -- "the first value of t at which a solution will
+		// be requested" -- and is what IDA takes the direction and rough scale of the
+		// independent variable from. This used to pass the *interval*,
+		// `dt0 > 0 ? dt0 : dt`, which is the same number only when t0 is zero.
+		//
+		// Every fixture in the tree starts at zero, so nothing noticed. Set t_initial
+		// equal to delta_t and the run dies before evaluating a single residual:
+		//
+		//     t_initial = 0.1, delta_t = 0.1   ->  tout1 == t0, IDA_ILL_INPUT (-22),
+		//                                          "tout1 too close to t0", and the
+		//                                          throw below kills the run
+		//
+		// which is a plain configuration, not a corner. A restart is the common way to
+		// reach it, since it resumes at the time the file was written. Other values of
+		// t_initial are wrong in a quieter way -- t_initial > delta_t hands IDA a tout1
+		// *behind* t0, i.e. the wrong direction of integration, which IDA does not
+		// reject.
+		//
+		// The first time integrate() actually asks for is t0 + dt: it sets `tout = t0`
+		// and the loop does `tout += dt` before the first IDASolve.
+		retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, t0 + (dt0 > 0.0 ? dt0 : dt));
+		if (ErrorChecker::check_retval(&retval, "IDACalcIC", 1))
+		{
+			throw std::runtime_error("IDACalcIC could not complete");
+		}
 	}
 
-	// Only when the gate is armed: this is a dense assembly and factorisation of
-	// the whole system, and nothing but the gate reads the algebraic blocks. A
-	// run with the gate disarmed pays nothing and is unchanged.
-	if (CheckObjectiveDecrease)
-		computeAlgebraicTimeDerivatives();
+	if (calcICRan)
+	{
+
+		long int nresevals = 0;
+		IDAGetNumResEvals(IDA_mem, &nresevals);
+		logmsg<LOG_LEVEL::INFO>("Number of Residual Evaluations due to IDACalcIC: {}", nresevals);
+
+		if (nresevals > 10)
+			logmsg<LOG_LEVEL::WARNING>("IDACalcIC required {} residual evaluations. Check settings in {}", nresevals, std::string(inputFilePath));
+
+		// Take IDACalcIC's result. It keeps the corrected initial condition inside
+		// IDA and hands it over only on request, so without this Y and dYdt still
+		// hold the state that was *fed* to CalcIC rather than the one it computed.
+		//
+		// Here, once, before anything reads Y or writes output. Everything
+		// downstream then means the same thing by "the initial condition": the t0
+		// timeslice initialiseNetCDF writes below, the t0 block of the .dat file,
+		// and the residual the debug path evaluates. It used to be fetched inside
+		// the debugDat branch instead, which meant the t0 output reported the
+		// pre-CalcIC state on an ordinary run and the corrected one under
+		// WriteDebugDatFiles, so a discrepancy could reproduce only with debug
+		// output switched on.
+		//
+		// Note what this does *not* fix. dYdt's algebraic blocks stay zero: q, sigma
+		// and phi are algebraic, and IDA_YA_YDP_INIT computes algebraic values and
+		// differential derivatives, not the other way round. That is structural, not
+		// the old wrong id vector -- see at_t0_only_the_differential_part_of_dydt_exists
+		// -- and it stays that way, because dYdt is the state IDA takes its first
+		// step from.
+		//
+		// Checked, unlike every other use of it in this file's history: it fails
+		// with IDA_ILL_INPUT if IDA has already taken a step, and on failure it
+		// leaves Y and dYdt holding their *pre*-CalcIC values rather than reporting
+		// anything. That is the same silent-failure shape as the `retval = 0`
+		// described above, and it would show up as a run whose initial condition is
+		// quietly the uncorrected one.
+		retval = IDAGetConsistentIC(IDA_mem, Y, dYdt);
+		if (ErrorChecker::check_retval(&retval, "IDAGetConsistentIC", 1))
+			throw std::runtime_error("Could not retrieve the corrected initial condition");
+	}
 
 	if (writeDatFile)
 		print(out0, t0, nOut, true);
 	if (debugDat)
 	{
 		residual(t0, Y, dYdt, res);
-		std::println(dydt_out, "# After CalcIC ");
+		std::println(dydt_out, "# dydt at the initial condition the run starts from");
 		printOnNodes(dydt_out, t0, dYdt);
-
-	
 
 		IDAEwtSet(Y, wgt, IDA_mem);
 
-
-
-		std::println(res_out, "# Residual norm at t = {:g} (post-CalcIC) is {:g}", t0,
+		std::println(res_out, "# Residual norm at t = {:g} (initial condition) is {:g}", t0,
 					 N_VWrmsNorm(res, wgt));
 		printOnNodes(res_out, t0, res);
 	}
@@ -465,16 +616,41 @@ void SystemSolver::initialize()
 		IDASetEtaMax(IDA_mem, 10.0);
 }
 
+// ||F(t, Y, dYdt)|| in the WRMS norm with this solver's own error weights.
+//
+// The same measure the WriteDebugDatFiles blocks print, deliberately: the number
+// the initial-condition skip is decided on is then a number a user can already
+// see in the .res.dat rather than one only this function knows.
+//
+// The weights are the state's, not the residual's, which is the scaling IDA
+// itself uses for the quantity this stands in for -- IDACalcIC tests
+// ||J^-1 F||_WRMS, a correction to y, against epsNewt. So the threshold means
+// the same thing at every tolerance setting: tightening Absolute_tolerance
+// tightens what counts as a consistent initial state, exactly as it tightens
+// everything else.
+//
+// One residual evaluation and one error-weight fill; no Jacobian work at all,
+// which is the entire point.
+double SystemSolver::weightedResidualNorm(double t, N_Vector Y_in, N_Vector dYdt_in)
+{
+	if (res == nullptr)
+		throw std::logic_error("weightedResidualNorm needs the SUNDIALS vectors initialize() allocates");
+
+	N_Vector wgtLocal = N_VClone(Y_in);
+	if (ErrorChecker::check_retval((void *)wgtLocal, "N_VClone", 0))
+		throw std::runtime_error("Sundials initialization Error, run in debug to find");
+
+	residual(t, Y_in, dYdt_in, res);
+	getErrorWeights(Y_in, wgtLocal);
+	const double norm = N_VWrmsNorm(res, wgtLocal);
+
+	N_VDestroy(wgtLocal);
+	return norm;
+}
+
 void SystemSolver::integrate(double tFinal)
 {
 	int retval;
-	// filename(), not stem(): inputFilePath now holds the configuration's
-	// OutputFilename, which is already a base name -- the TOML source seeds it
-	// from the config file's stem. Stemming it a second time would turn a
-	// config named run.v2.conf into output called run.nc. filename() also keeps
-	// the long-standing behaviour that output lands in the current directory
-	// rather than beside any path given in OutputFilename.
-	std::string baseName = inputFilePath.filename().string();
 
 	if (IDA_mem == nullptr)
 		throw std::logic_error("integrate() called before initialize()");
@@ -528,41 +704,11 @@ void SystemSolver::integrate(double tFinal)
 				print(out0, STEADY_STATE_TIME, nOut, Y, true);
 			if (writeOutput)
 				WriteTimeslice(STEADY_STATE_TIME);
-			if (writeDatFile)
-				out0.close();
-			if (writeOutput)
-				nc_output.Close();
+			closeOutputFiles();
 			throw;
 		}
 
-		// Write the converged state. Every output call used to live inside the
-		// time loop below, so a PseudoTransient or Newton run produced a .nc
-		// holding one timeslice -- the t0 one initialiseNetCDF wrote during
-		// initialize() -- and a .dat holding one block, both of them the
-		// *initial condition*. The answer reached the restart file (from Y) and
-		// yJac, which is why the Python surface always looked right and only
-		// the files were wrong.
-		//
-		// A physics case's writeDiagnostics is called from WriteTimeslice and
-		// nowhere else, so it was never called at all on this path:
-		// initialiseDiagnostics and finaliseDiagnostics ran and the case got to
-		// write the scaffolding at both ends with nothing hung on it.
-		//
-		// STEADY_STATE_TIME, not tret: see its definition. Deliberately no
-		// IDAGetNumSteps report -- IDA never ran.
-		if (writeDatFile)
-			print(out0, STEADY_STATE_TIME, nOut, Y, true);
-		if (debugDat)
-		{
-			printOnNodes(dydt_out, STEADY_STATE_TIME, dYdt);
-			residual(t0, Y, dYdt, res);
-			IDAEwtSet(Y, wgt, IDA_mem);
-			std::println(res_out, "# Residual norm at steady state is {:g}",
-						 N_VWrmsNorm(res, wgt));
-			printOnNodes(res_out, STEADY_STATE_TIME, res);
-		}
-		if (writeOutput)
-			WriteTimeslice(STEADY_STATE_TIME);
+		writeSteadyState();
 	}
 	else
 	{
@@ -646,16 +792,134 @@ void SystemSolver::integrate(double tFinal)
 	std::println("Total Number of Timesteps             :{}", nsteps);
 	std::println("Total Number of Residual Evaluations  :{}", nresevals);
 	std::println("Total Number of Jacobian Computations :{}", njacevals);
+
+	if (nField > 0 && getFieldSolveMode() == SystemSolver::FieldSolveMode::Iterative)
+	{
+		auto fs = getFieldSweepStats();
+		std::println("Coupled field sweeps                  :{} over {} solves ({} exact fallbacks)",
+					 fs.iterations, fs.solves, fs.fallbacks);
+		// This is the only signal a user has that the coupling is not converging.
+		// The run is still correct -- the fallback is the exact solve -- so this is
+		// a cost report, not an error, and it says what to do about it.
+		if (fs.fallbacks > 0)
+			logmsg<LOG_LEVEL::WARNING>(
+				"{} of {} coupled Jacobian solves exhausted FieldSolveMaxSweeps = {} and fell "
+				"back to the exact Schur solve, at {} transport solves each. The answers are "
+				"correct; the run is paying for both. Raise FieldSolveMaxSweeps, or set "
+				"FieldSolve = exact and skip the sweeps.",
+				fs.fallbacks, fs.solves, fieldSolveMaxSweeps, nField + 1);
+	}
 	}
 
+	finishRun();
+}
+
+// The converged state of a steady solve, written at STEADY_STATE_TIME.
+//
+// A physics case's writeDiagnostics is called from WriteTimeslice and nowhere
+// else, so this is also what gives a steady run its diagnostics rather than
+// leaving initialiseDiagnostics and finaliseDiagnostics to bracket nothing.
+//
+// STEADY_STATE_TIME, not tret: see its definition. Deliberately no
+// IDAGetNumSteps report -- IDA never ran.
+void SystemSolver::writeSteadyState()
+{
+	if (writeDatFile)
+		print(out0, STEADY_STATE_TIME, nOut, Y, true);
+	if (debugDat)
+	{
+		printOnNodes(dydt_out, STEADY_STATE_TIME, dYdt);
+		residual(t0, Y, dYdt, res);
+		IDAEwtSet(Y, wgt, IDA_mem);
+		std::println(res_out, "# Residual norm at steady state is {:g}",
+					 N_VWrmsNorm(res, wgt));
+		printOnNodes(res_out, STEADY_STATE_TIME, res);
+	}
+	if (writeOutput)
+		WriteTimeslice(STEADY_STATE_TIME);
+}
+
+// Everything a run does once its final state is in Y, whichever route reached
+// it: the adjoint solve, the output files, the restart file, and the copy into
+// yJac. Shared by integrate() and by a sliced steady solve, so the two cannot
+// drift apart on the sequencing -- which matters most for the last of them.
+void SystemSolver::finishRun()
+{
+	// filename(), not stem(): inputFilePath holds the configuration's
+	// OutputFilename, which is already a base name -- the TOML source seeds it
+	// from the config file's stem. Stemming it a second time would turn a config
+	// named run.v2.conf into output called run.nc. filename() also keeps the
+	// long-standing behaviour that output lands in the current directory rather
+	// than beside any path given in OutputFilename.
+	const std::string baseName = inputFilePath.filename().string();
+
+	// The adjoint solve is allowed to fail, and its failure must not take the
+	// forward run's output with it.
+	//
+	// The coupled adjoint sweep no longer throws on non-convergence -- it
+	// escalates to the exact transposed Schur solve, which is strictly stronger
+	// than refusing, since the caller gets a correct gradient rather than an
+	// exception. What reaches this catch is therefore a throw out of the *field
+	// model* itself: from solveCoupledAdjointExact, or from the sweep's own
+	// solveBTranspose before it. But this call sits *before* finaliseDiagnostics,
+	// closeOutputFiles() and WriteRestartFile, and runSolver's catch(...)
+	// rethrows, so an unguarded throw here destroyed the netCDF and the restart
+	// file of a run that had integrated perfectly. The gradient is the optional
+	// half of the run; the solution is not, and losing hours of transport solve
+	// because a Schur sweep would not converge is a worse failure than the one
+	// being reported.
+	//
+	// Held as an exception_ptr rather than by moving the call after the output
+	// block, because captureState() below must still run after the adjoint solve:
+	// the gradients are defined at the state the adjoint matrices were built
+	// from. See its own comment.
+	std::exception_ptr adjointFailure;
 	if (solveAdjoint)
 	{
-		runAdjointSolve();
-		// WriteAdjoints();
+		try
+		{
+			runAdjointSolve();
+			// WriteAdjoints();
+		}
+		catch (std::exception const &e)
+		{
+			adjointFailure = std::current_exception();
+			logmsg<LOG_LEVEL::ERROR>(
+				"The adjoint solve failed; the gradients are unavailable. The forward "
+				"solution and its output files are unaffected and are being written now.\n  {}",
+				e.what());
+		}
 	}
 
 	if (writeOutput)
 		problem->finaliseDiagnostics(nc_output);
+	closeOutputFiles();
+
+	if (writeOutput)
+		WriteRestartFile(baseName + ".restart.nc", Y, dYdt, nOut);
+
+	// Leave yJac holding the *final* solution. It is the only copy that outlives
+	// destroySundials() -- `y` is a non-owning view over Y -- and it is what
+	// PyRunner::getSolution, getAdjointGradients and G read.
+	//
+	// Deliberately after runAdjointSolve(): the adjoint solve above is defined
+	// at the state its matrices were built from, so moving this earlier would
+	// change the gradients.
+	captureState();
+
+	if (writeOutput)
+		nc_output.Close();
+
+	// Now that everything is on disk. G_p holds whatever the failed solve left
+	// there, which is why this rethrows rather than returning quietly: a caller
+	// that went on to read getAdjointGradients() would get a plausible matrix
+	// that is not the gradient of anything.
+	if (adjointFailure)
+		std::rethrow_exception(adjointFailure);
+}
+
+void SystemSolver::closeOutputFiles()
+{
 	if (writeDatFile)
 		out0.close();
 	if (debugDat)
@@ -665,23 +929,11 @@ void SystemSolver::integrate(double tFinal)
 	}
 	if (writeOutput)
 		nc_output.Close();
+}
 
-	if (writeOutput)
-		WriteRestartFile(baseName + ".restart.nc", Y, dYdt, nOut);
-
-	// Leave yJac holding the *final* solution. It is the only copy that outlives
-	// destroySundials() -- `y` is a non-owning view over Y -- and it is what
-	// PyRunner::getSolution, getAdjointGradients and G read. Until now it held
-	// whatever state IDA last evaluated a Jacobian at, which can be several steps
-	// stale, so a caller asking for "the solution" got a slightly earlier one.
-	//
-	// Deliberately after runAdjointSolve(): the adjoint solve above is defined
-	// at the state its matrices were built from, so moving this earlier would
-	// change the gradients.
+void SystemSolver::captureState()
+{
 	setJacEvalY(Y, dYdt);
-
-	if (writeOutput)
-		nc_output.Close();
 }
 
 void SystemSolver::destroySundials()
@@ -750,8 +1002,7 @@ void SystemSolver::destroySundials()
 	// And the netCDF file, for the same reason and with a sharper symptom.
 	// initialize() opens it via initialiseNetCDF; only integrate() used to close
 	// it, so any path that allocates and then does not complete a time loop left
-	// it open -- the dG/dt gate rejecting a run, or integrate() throwing and
-	// runSolver catching. The next run in the same process then fails inside
+	// it open -- integrate() throwing and runSolver catching, for instance. The next run in the same process then fails inside
 	// netCDF trying to create a file this process still holds, and reports
 	// "Permission denied", which reads like a filesystem problem rather than a
 	// handle we never released. Close() just clears the name and closes the file,
@@ -771,11 +1022,28 @@ void SystemSolver::destroySundials()
 
 void SystemSolver::runAdjointSolve()
 {
+	// This used to refuse a field model outright, because the adjoint matrices
+	// carried neither geometry nor a transpose of the coupling and so would have
+	// returned a silently wrong gradient beside a perfectly good G. Both are now
+	// here: initializeMatricesForAdjointSolve fills geometry before it evaluates
+	// anything and stores A1^T and A2^T beside M^T, and solveAdjointState
+	// eliminates them exactly (FieldSolve = exact) or sweeps to a checked
+	// backward error that *throws* if it is not reached.
+	//
+	// Two limits survive the lifting and are deliberate rather than overlooked.
+	// An objective whose integrand reads State::geom directly loses its dG/dpsi
+	// term, because AdjointProblem reports four state derivatives and geometry
+	// is not among them; and a FieldModel cannot depend on an adjoint parameter
+	// at all, so dR/dp is zero by construction rather than by assumption. Both
+	// are recorded in SystemSolver.hpp beside G_field and in TODO.
+
 	if (solveAdjoint)
 	{
     logmsg<LOG_LEVEL::INFO>("Computing adjoints");
-		initializeMatricesForAdjointSolve();
-		solveAdjointState(0);
+		// computeAdjointGradients assembles and solves the adjoint itself, once per
+		// objective. Both halves belong to *one* objective -- G_y is dG/dy for it and
+		// is the solve's right-hand side -- so doing either here would give every
+		// objective the first one's gradient.
 		computeAdjointGradients();
 	}
 	else

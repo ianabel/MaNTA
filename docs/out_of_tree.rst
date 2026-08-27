@@ -10,7 +10,7 @@ Python: install the package
 
 .. code-block:: sh
 
-   make python          # builds python/manta/_manta<abi>.so
+   cmake --build build --target _manta   # builds python/manta/_manta<abi>.so
    pip install .        # installs the `manta` package and the `manta` command
    pip install .[jax]   # ...and the JAX layer, if you want manta.jax
 
@@ -81,19 +81,25 @@ line, and is repeatable.
 .. note::
 
    The wheel is not portable: the extension links the SUNDIALS, netCDF and BLAS
-   that ``Makefile.local`` pointed at. ``pip install .`` shells out to
-   ``make python`` rather than reimplementing that discovery, so the build needs
-   a working :doc:`install`.
+   that CMake found. ``pip install .`` shells out to CMake rather than
+   reimplementing that discovery, so the build needs a working :doc:`install`. It
+   reuses ``build/`` if that is already configured, so a machine whose SUNDIALS
+   needed naming does not have to name it again for the install; point
+   ``MANTA_CMAKE_BUILD_DIR`` elsewhere, or pass extra configure arguments through
+   ``MANTA_CMAKE_ARGS``, if you want something different.
 
 C++: build a plugin
 -------------------
 
 .. code-block:: sh
 
-   make install PREFIX=/where/you/want
+   cmake --install build --prefix /where/you/want
 
 installs the headers under ``$PREFIX/include/manta``, ``libmanta.so`` under
-``$PREFIX/lib``, and a pkg-config file. A physics case is then an ordinary
+``$PREFIX/lib``, and a pkg-config file recording that prefix. (There is
+deliberately no installed CMake package: an exported target would invite
+``target_link_libraries(mycase manta)``, and linking ``libmanta`` is precisely
+the mistake that gives a plugin its own copy of the registry.) A physics case is then an ordinary
 shared object:
 
 .. code-block:: cpp
@@ -133,6 +139,12 @@ and name it in the config:
 The solver ``dlopen``\ s each entry before instantiating the problem. The
 plugin's static initialiser runs on load and registers the case into the same
 process-global map the built-in cases use.
+
+From Python, ``manta.load_physics_plugin("./libmycase.so")`` does the same thing,
+and then ``manta.Runner("MyCase")`` reaches the case — see
+:ref:`running-cpp-cases`. ``PhysicsPlugins`` itself is not accepted in a
+``configure`` dict, for the same reason ``TransportSystem`` is not: choosing the
+physics is not a solver setting.
 
 .. warning::
 

@@ -27,12 +27,17 @@
 #include "SystemSolver.hpp"
 #include "TestDiffusion.hpp"
 #include "Types.hpp"
+#include "../../FieldModel.hpp"
 
 #include <ida/ida.h>
+#include <netcdf>
 
+#include <algorithm>
 #include <cmath>
 #include <exception>
 #include <filesystem>
+#include <memory>
+#include <numbers>
 #include <print>
 #include <stdexcept>
 #include <string>
@@ -74,6 +79,49 @@ void removeOutput(std::string const &stem)
         std::filesystem::remove(stem + ext);
 }
 
+// A nonlinear diffusion, for the tests that need a KINSol call to take more than
+// one Newton iteration.
+//
+// TestDiffusion cannot serve: it is linear, so every inner solve converges in a
+// single iteration and there is never a second one to reuse a Jacobian across.
+// That makes NewtonJacobianReuse unobservable on it -- builds equal solves at
+// every setting, which is exactly the degenerate case CLAUDE.md warns about when
+// reading the steady diagnostics.
+//
+// sigma = (1 + u^2) q is the smallest change that fixes it: the flux depends on u,
+// so dSigma/du is nonzero and the Jacobian genuinely moves between iterations.
+// Dirichlet at both ends, and an initial condition that is not the steady state,
+// so the solve has somewhere to go.
+class NonlinearDiffusion : public TransportSystem
+{
+public:
+    NonlinearDiffusion() : TransportSystem({.variables = numberedFields(1)}) {};
+
+    Value LowerBoundary(Index, Time) const override { return 1.0; };
+    Value UpperBoundary(Index, Time) const override { return 0.0; };
+
+    Value SigmaFn(Index, const State &s, Position, Time) override
+    {
+        return (1.0 + s.u(0) * s.u(0)) * s.q(0);
+    };
+    Value Sources(Index, const State &, Position, Time) override { return 1.0; };
+
+    void dSigmaFn_dq(Index, VectorRef v, const State &s, Position, Time) override
+    {
+        v[0] = 1.0 + s.u(0) * s.u(0);
+    };
+    void dSigmaFn_du(Index, VectorRef v, const State &s, Position, Time) override
+    {
+        v[0] = 2.0 * s.u(0) * s.q(0);
+    };
+    void dSources_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; };
+    void dSources_dq(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; };
+    void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; };
+
+    Value InitialValue(Index, Position x) const override { return 1.0 - x; };
+    Value InitialDerivative(Index, Position) const override { return -1.0; };
+};
+
 // u at a handful of interior points, read out of yJac -- the only copy of the
 // solution that outlives destroySundials().
 Vector sample(SystemSolver &sys)
@@ -84,48 +132,198 @@ Vector sample(SystemSolver &sys)
     return out;
 }
 
-// The smallest objective that will drive the dG/dt gate: G = sign * Int u dx over
-// TestDiffusion's single variable, so dG/dt = sign * Int u' dx and the two signs
-// give opposite verdicts on the same run. Which of them rejects depends on which
-// way the diffusion problem's initial condition is relaxing, and the test does
-// not need to know -- it asserts that exactly one does.
-class SignedIntegralObjective : public AdjointProblem
+// ------------------------------------------------------------ the coupled pair --
+//
+// The lifecycle properties above have to hold with a field model attached too,
+// and two of them are only reachable that way: a model may cache things across
+// a run, and psi has to survive a restart.
+
+// Linear diffusion whose diffusivity *is* the field model's geometry slot. The
+// coupling has to reach u, or a difference in psi would leave the solution
+// alone and the comparisons below would be measuring the uncoupled problem.
+class GeometricDiffusion : public TransportSystem
 {
 public:
-    explicit SignedIntegralObjective(double s) : sign(s)
+    GeometricDiffusion()
+        : TransportSystem({.variables = {{"u", "the diffused quantity", "",
+                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}}})
     {
-        ng = 1;
-        np = 1;
-        np_boundary = 0;
     }
 
-    using AdjointProblem::gFn;
+    Value SigmaFn(Index, const State &s, Position, Time) override { return s.geom(0) * s.q(0); }
+    Value Sources(Index, const State &, Position, Time) override { return 0.0; }
 
-    Value gFn(Index, const State &s, Position) const override { return sign * s.u(0); }
-
-    Value GFn(Index, DGSoln &) const override
+    void dSigmaFn_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSigmaFn_dq(Index, VectorRef v, const State &s, Position, Time) override
     {
-        // Never called: the gate goes through dGdt, and solveAdjoint is off, so
-        // nothing asks for G itself here.
-        throw std::logic_error("GFn is not part of what this fixture exercises.");
+        v[0] = s.geom(0);
     }
-    Value dGFndp(Index, Index, DGSoln &) const override { return 0.0; }
+    void dSources_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSources_dq(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
 
-    void dgFn_du(Index, VectorRef v, const State &, Position) override
+    void dSigmaFn_dGeometry(Index, VectorRef v, const State &s, Position, Time) override
     {
-        v.setZero();
-        v[0] = sign;
+        v[0] = s.q(0);
     }
-    void dgFn_dq(Index, VectorRef v, const State &, Position) override { v.setZero(); }
-    void dgFn_dsigma(Index, VectorRef v, const State &, Position) override { v.setZero(); }
-    void dgFn_dphi(Index, VectorRef v, const State &, Position) override { v.setZero(); }
 
-    void dSigmaFn_dp(Index, Index, Value &out, const State &, Position) override { out = 0.0; }
-    void dSources_dp(Index, Index, Value &out, const State &, Position) override { out = 0.0; }
+    Value InitialValue(Index, Position x) const override
+    {
+        return std::sin(std::numbers::pi * x);
+    }
+    Value InitialDerivative(Index, Position x) const override
+    {
+        return std::numbers::pi * std::cos(std::numbers::pi * x);
+    }
+
+    Value LowerBoundary(Index, Time) const override { return 0.0; }
+    Value UpperBoundary(Index, Time) const override { return 0.0; }
+};
+
+// A field model that warm-starts from the psi it last saw, and clears that cache
+// in resetForRun().
+//
+//     R = dpsi/dt - ( Int u dx - psi ),     psi(0) = 0.5
+//
+// Three properties, each load-bearing for one of the two cases below.
+//
+// **The row is differential**, so IDA_YA_YDP_INIT holds psi's *value* fixed and
+// whatever InitialFieldValue (or a restart file) supplies is the answer rather
+// than a guess. An algebraic psi would be re-solved out of the restored
+// transport state by IDACalcIC, and the restart case would then pass without
+// ever reading psi off disk -- vacuously, and invisibly so.
+//
+// **It reads the transport state**, so the coupling is two-way: dR/du is the
+// quadrature weights, exactly as ManufacturedField's is.
+//
+// **The cache is a tripwire.** initialize() calls resetForRun() and *then*
+// setInitialConditions, so with the reset honoured the warm start never fires
+// and the model is a pure function of its declaration -- which is the point. A
+// resetForRun() that did nothing would hand the second run its predecessor's
+// final psi, which is the RF_cellwise trap one level out. Nothing else in the
+// suite would notice: the run completes, and the answer is plausible.
+class WarmStartingField : public FieldModel
+{
+public:
+    static constexpr double PSI0 = 0.5;
+
+    WarmStartingField() : FieldModel(buildSpec()) {}
+
+    static FieldModelSpec buildSpec()
+    {
+        FieldModelSpec s;
+        s.dofs = {{"psi", "the field unknown", "1", /* differential */ true}};
+        s.geometry = {{"g", "metric factor multiplying the diffusivity", "1"}};
+        s.label = "x";
+        // Not the default "Field": the netCDF case below has to be able to tell
+        // a group named from the spec from one named by a string literal.
+        s.name = "WarmStart";
+        return s;
+    }
+
+    void FieldResidual(VectorRef out, Vector const &psi, Vector const &dpsidt,
+                       GlobalState const &states, std::vector<Position> const &,
+                       Vector const &weights, Time) override
+    {
+        double integral = 0.0;
+        for (Index j = 0; j < weights.size(); ++j)
+            integral += weights(j) * states[j].u(0);
+        out(0) = dpsidt(0) - (integral - psi(0));
+
+        lastPsi = psi(0);
+        warm = true;
+    }
+
+    void Geometry(VectorRef out, Vector const &psi, Position x, Time) override
+    {
+        out(0) = 1.0 + psi(0) * std::cos(std::numbers::pi * x);
+    }
+
+    void dGeometry_dpsi(MatrixRef out, Vector const &, Position x, Time) override
+    {
+        out(0, 0) = std::cos(std::numbers::pi * x);
+    }
+
+    void FieldResidualPrime(GlobalStateMatrix &dR, GlobalStateMatrix &, MatrixRef dRdpsi,
+                            MatrixRef dRddpsidt, Vector const &, Vector const &,
+                            GlobalState const &, std::vector<Position> const &,
+                            Vector const &weights, Time) override
+    {
+        dRdpsi(0, 0) = 1.0;
+        dRddpsidt(0, 0) = 1.0;
+        // Through Variable(), the whole (nVars, nPoints) matrix: dR[0][j] hands
+        // back a State *by value* and the write would be discarded.
+        dR[0].Variable().row(0) = -weights.transpose();
+    }
+
+    void InitialFieldValue(VectorRef out) override { out(0) = warm ? lastPsi : PSI0; }
+
+    void resetForRun() override
+    {
+        warm = false;
+        lastPsi = 0.0;
+    }
+
+    /// True once a residual has been evaluated in this run, i.e. the tripwire is
+    /// armed. Asked between runs, so that a reuse test cannot go quietly vacuous
+    /// if the model stops being consulted at all.
+    bool isWarm() const { return warm; }
 
 private:
-    double sign;
+    bool warm = false;
+    double lastPsi = 0.0;
 };
+
+/// Everything a coupled run owns, in destruction order: the solver first, so its
+/// SUNContext outlives nothing that was made in it.
+struct CoupledSolver
+{
+    std::unique_ptr<Grid> grid;
+    std::unique_ptr<GeometricDiffusion> problem;
+    std::shared_ptr<WarmStartingField> field;
+    std::unique_ptr<SystemSolver> sys;
+};
+
+/// A coupled solver configured like `configure` above, plus the field model.
+CoupledSolver makeCoupledSolver(Index cells, Index order, std::string const &stem)
+{
+    CoupledSolver c;
+    c.grid = std::make_unique<Grid>(0.0, 1.0, cells);
+    c.problem = std::make_unique<GeometricDiffusion>();
+    c.field = std::make_shared<WarmStartingField>();
+    c.sys = std::make_unique<SystemSolver>(*c.grid, order, c.problem.get());
+
+    c.sys->setTau(1.0);
+    c.sys->resetCoeffs();
+    c.sys->setInputFile(stem);
+    c.sys->setOutputCadence(T_FINAL);
+    c.sys->setNOutput(11);
+    c.sys->setInitialTime(0.0);
+    c.sys->setMinStepSize(1e-12);
+    c.sys->setTolerances({1e-8}, 1e-6);
+    c.sys->setFieldModel(c.field);
+    return c;
+}
+
+/// u at five interior points followed by every field unknown, out of yJac -- the
+/// only copy of the solution that outlives destroySundials(). psi is in here
+/// deliberately: a defect that moved only the field block and left u alone would
+/// otherwise be invisible.
+Vector coupledSample(SystemSolver &sys)
+{
+    Vector out(5 + sys.getFieldDOF());
+    for (Index i = 0; i < 5; ++i)
+        out(i) = sys.getSolution().u(0)(0.1 + 0.2 * i);
+    for (Index f = 0; f < sys.getFieldDOF(); ++f)
+        out(5 + f) = sys.getSolution().Field(f);
+    return out;
+}
+
+double maxAbsDifference(Vector const &a, Vector const &b)
+{
+    BOOST_REQUIRE_EQUAL(a.size(), b.size());
+    return (a - b).cwiseAbs().maxCoeff();
+}
 
 // TestDiffusion, counting physics evaluations. That is the unit PERFORMANCE.md
 // asks for, and the only one in which the SER knobs below can be shown to do
@@ -391,85 +589,6 @@ BOOST_AUTO_TEST_CASE(aggressive_timesteps_is_accepted_and_gives_the_same_answer)
 
     removeOutput("lifecycle_eta_default");
     removeOutput("lifecycle_eta_aggressive");
-}
-
-BOOST_AUTO_TEST_CASE(the_dGdt_gate_skips_the_time_loop_without_disturbing_an_ungated_run)
-{
-    // End to end through runSolver, which is the whole point of the gate: a step
-    // whose objective is already getting worse should cost initialisation and
-    // nothing more.
-    //
-    // Observed through the solution rather than through IDA's step counter,
-    // because IDA_mem is gone by the time runSolver returns. integrate() ends by
-    // leaving the final solution in yJac, so a run that was skipped leaves yJac
-    // holding the initial condition instead -- and that is also the assertion
-    // that would catch a gate which "rejects" but integrates anyway.
-    Grid grid(0.0, 1.0, nCells);
-
-    // The initial condition alone, for comparison: initialize() seeds yJac with
-    // it, so stopping there gives the state a rejected run should be left in.
-    TestDiffusion icProblem(lifecycle_config);
-    SystemSolver icOnly(grid, k, &icProblem);
-    configure(icOnly, "lifecycle_gate_ic");
-    {
-        CapturedOutput quiet;
-        icOnly.initialize();
-    }
-    const Vector initial = sample(icOnly);
-    {
-        CapturedOutput quiet;
-        icOnly.destroySundials();
-    }
-    BOOST_TEST(initial.norm() > 1e-8);
-
-    // Which sign of the objective is falling is a property of the problem, not
-    // something to hardcode: run both and require exactly one rejection.
-    int rejections = 0;
-    for (double sign : {1.0, -1.0})
-    {
-        const std::string stem = sign > 0 ? "lifecycle_gate_pos" : "lifecycle_gate_neg";
-
-        TestDiffusion problem(lifecycle_config);
-        SignedIntegralObjective objective(sign);
-        SystemSolver sys(grid, k, &problem);
-        configure(sys, stem);
-        sys.setAdjointProblem(&objective);
-
-        // Armed tight enough that the sign of dG/dt decides, rather than the
-        // slack swamping it.
-        sys.setObjectiveDecreaseTolerance(1e-12);
-
-        {
-            CapturedOutput quiet;
-            sys.runSolver(T_FINAL);
-        }
-
-        const Vector after = sample(sys);
-
-        if (sys.wasRejected())
-        {
-            ++rejections;
-            // Skipped, so the solution never moved.
-            for (Index i = 0; i < after.size(); ++i)
-                BOOST_TEST(after(i) == initial(i), boost::test_tools::tolerance(0.0));
-            BOOST_TEST(sys.lastDGdt()(0) < 0.0);
-        }
-        else
-        {
-            // Ran, so it did. If this ever coincides with the rejected branch's
-            // values the test above has stopped meaning anything.
-            BOOST_TEST((after - initial).norm() > 1e-8,
-                       "an accepted run left the solution where it started");
-            BOOST_TEST(sys.lastDGdt()(0) >= 0.0);
-        }
-
-        removeOutput(stem);
-    }
-
-    BOOST_TEST(rejections == 1,
-               "expected exactly one of the two objective signs to be rejected, got " << rejections);
-
-    removeOutput("lifecycle_gate_ic");
 }
 
 BOOST_AUTO_TEST_CASE(the_id_vector_marks_u_differential_and_nothing_else)
@@ -760,6 +879,135 @@ BOOST_AUTO_TEST_CASE(the_initial_condition_uses_boundary_data_at_t0)
         sys.destroySundials();
     }
     removeOutput("lifecycle_t0_boundaries");
+}
+
+// How many residual evaluations IDA itself has made. Zero until something asks
+// IDA to solve: IDAInit clears the counter, and nothing else in initialize()
+// goes through IDA. So on a path that skips IDACalcIC this stays at zero, and
+// MaNTA's own nResidualEvals -- which the debug .dat blocks and the steady solve
+// also increment -- would not distinguish the two.
+long idaResidualEvals(SystemSolver &sys)
+{
+    long n = -1;
+    BOOST_REQUIRE(IDAGetNumResEvals(sys.IDA_mem, &n) == IDA_SUCCESS);
+    return n;
+}
+
+BOOST_AUTO_TEST_CASE(only_a_time_marching_run_pays_for_calcic)
+{
+    // IDACalcIC exists to make the state IDA takes its *first step* from
+    // consistent with the algebraic constraints. A PseudoTransient or Newton run
+    // never takes one -- solveSteadyState drives the whole residual to zero from
+    // Y with KINSOL -- so everything CalcIC computes there is overwritten by the
+    // first accepted continuation step.
+    //
+    // It is not free and it is not safe. It is a damped Newton solve in its own
+    // right, and it fails on initial conditions a steady solve handles without
+    // difficulty: python-examples/jardin-critical-gradient records IDA_CONV_FAIL
+    // (-4) from starting at the *exact* steady state, which is the one guess a
+    // steady solve would have accepted immediately. Requiring it ahead of a solve
+    // that does not need it turns runs that would converge into runs that never
+    // start.
+    //
+    // Measured on python-examples/park-convergence at 8 cells, k = 3: 256 -> 192
+    // physics evaluations for Newton and 352 -> 288 for PseudoTransient, with the
+    // converged answer identical bit for bit in both.
+    //
+    // Three solvers, because the condition is solvesForSteadyState() -- the
+    // conjunction of steady-state *termination* and a mode that is not TimeMarch
+    // -- and each half of it has to be shown to matter. Only initialize() is
+    // called: the counter is read before anything can add to it.
+    struct Case
+    {
+        const char *stem;
+        bool armTermination;
+        SystemSolver::SteadyMode mode;
+        bool expectCalcIC;
+    };
+
+    const Case cases[] = {
+        // A plain transient. No termination armed, so the mode is not consulted
+        // at all and the default PseudoTransient must not be read as a steady
+        // solve -- that pairing is the trap solvesForSteadyState() exists for.
+        {"lifecycle_calcic_transient", false, SystemSolver::SteadyMode::PseudoTransient, true},
+        // Termination armed, but the mode says integrate to it. This is
+        // run_ss() with SteadyStateSolver = "TimeMarch", which does take IDA
+        // steps and so still needs a consistent state to start from.
+        {"lifecycle_calcic_timemarch", true, SystemSolver::SteadyMode::TimeMarch, true},
+        // The steady path proper.
+        {"lifecycle_calcic_steady", true, SystemSolver::SteadyMode::PseudoTransient, false},
+    };
+
+    for (Case const &c : cases)
+    {
+        Grid grid(0.0, 1.0, nCells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, c.stem);
+        sys.setSteadyMode(c.mode);
+        if (c.armTermination)
+            sys.setSteadyStateTolerance(1e-10);
+
+        BOOST_TEST(sys.solvesForSteadyState() == !c.expectCalcIC);
+
+        {
+            CapturedOutput quiet;
+            sys.initialize();
+        }
+
+        const long nre = idaResidualEvals(sys);
+        if (c.expectCalcIC)
+            BOOST_TEST(nre > 0,
+                       "" << c.stem << ": IDACalcIC was skipped on a run that "
+                          "will hand the state to IDA");
+        else
+            BOOST_TEST(nre == 0,
+                       "" << c.stem << ": IDA evaluated the residual " << nre
+                          << " times during initialize(), so IDACalcIC still ran "
+                             "on a path that discards its answer");
+
+        {
+            CapturedOutput quiet;
+            sys.destroySundials();
+        }
+        removeOutput(c.stem);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(skipping_calcic_leaves_the_steady_answer_alone)
+{
+    // The other half of the case above: what the steady solve converges to must
+    // not depend on whether a discarded correction was computed first. Same
+    // closed form as a_steady_solve_writes_its_answer_to_the_output_file --
+    // TestDiffusion with Centre = 0 has the exact steady state u = 1 - x, degree
+    // 1 and so exactly representable -- but checked here at both modes, because
+    // Newton starts from an infinite pseudo-timestep and is the mode least
+    // tolerant of a poor initial iterate.
+    for (auto mode : {SystemSolver::SteadyMode::PseudoTransient,
+                      SystemSolver::SteadyMode::Newton})
+    {
+        const std::string stem = "lifecycle_calcic_answer";
+        Grid grid(0.0, 1.0, nCells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        sys.setSteadyMode(mode);
+        sys.setSteadyStateTolerance(1e-10);
+
+        {
+            CapturedOutput quiet;
+            sys.runSolver(T_FINAL);
+        }
+
+        const Vector u = sample(sys);
+        for (Index i = 0; i < u.size(); ++i)
+        {
+            const double x = 0.1 + 0.2 * i;
+            BOOST_TEST(u(i) == 1.0 - x, boost::test_tools::tolerance(1e-8));
+        }
+
+        removeOutput(stem);
+    }
 }
 
 BOOST_AUTO_TEST_CASE(a_steady_solve_writes_its_answer_to_the_output_file)
@@ -1053,6 +1301,244 @@ BOOST_AUTO_TEST_CASE(the_steady_diagnostics_count_the_whole_solve_not_the_last_s
     removeOutput(stem);
 }
 
+BOOST_AUTO_TEST_CASE(the_per_step_records_sum_to_the_totals)
+{
+    // The totals say what a steady solve cost; the per-step records say where.
+    // They are gathered by two different routes -- the totals difference MaNTA's
+    // monotonic counters across the whole solve, each record differences them
+    // across one step -- so agreeing is a real check rather than a restatement,
+    // and it is what would catch a step whose record was never closed. Two of
+    // the three exits from the loop body are a `return` and a `throw`, so that
+    // is not a hypothetical failure mode.
+    const std::string stem = "lifecycle_steady_steps";
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, stem);
+    sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    sys.setSteadyStateTolerance(1e-10);
+
+    {
+        CapturedOutput quiet;
+        sys.runSolver(T_FINAL);
+    }
+
+    const auto total = sys.lastSteadyStats();
+    const auto &steps = sys.lastSteadyStepStats();
+
+    // Filled with neither diagnostic armed. Printing and recording are separate
+    // decisions: a driver that wants the trace should not have to put it through
+    // stdout to get it.
+    BOOST_TEST(steps.size() == static_cast<size_t>(total.steps));
+    BOOST_TEST(steps.size() > 1u);
+
+    long newton = 0, kinFunc = 0, kinJac = 0, residual = 0, builds = 0, solves = 0;
+    for (size_t i = 0; i < steps.size(); ++i)
+    {
+        BOOST_TEST(steps[i].step == static_cast<int>(i),
+                   "record " << i << " is labelled step " << steps[i].step
+                   << "; the records are out of order or one is missing");
+
+        // A KINSol that returned took at least one Newton iteration, and with a
+        // direct solver each one costs exactly one linear solve. The aggregate
+        // versions of both are in the test above; per step they are sharper,
+        // because a missing record would still satisfy the aggregate.
+        BOOST_TEST(steps[i].newtonIters >= 1);
+        BOOST_TEST(steps[i].jacSolves == steps[i].newtonIters);
+        BOOST_TEST(std::isfinite(steps[i].residualNorm));
+
+        newton += steps[i].newtonIters;
+        kinFunc += steps[i].kinFuncEvals;
+        kinJac += steps[i].kinJacEvals;
+        residual += steps[i].residualEvals;
+        builds += steps[i].jacBuilds;
+        solves += steps[i].jacSolves;
+    }
+
+    BOOST_TEST(newton == total.newtonIters);
+    BOOST_TEST(kinFunc == total.kinFuncEvals);
+    BOOST_TEST(kinJac == total.kinJacEvals);
+
+    // Nothing builds or solves outside the continuation loop, so these are
+    // equalities rather than bounds.
+    BOOST_TEST(builds == total.jacBuilds);
+    BOOST_TEST(solves == total.jacSolves);
+
+    // The one deliberate offset: the merit function is evaluated once on entry,
+    // before any step exists to charge it to. Every *other* merit evaluation
+    // falls inside the step that provoked it, which is why the records are
+    // closed after steadyNorm() rather than straight after KINSol.
+    BOOST_TEST(residual + 1 == total.residualEvals,
+               "per-step residual evaluations " << residual << " against a total of "
+               << total.residualEvals << "; the offset should be exactly the one "
+               "merit evaluation made before the loop");
+
+    // Cleared per solve, not appended to. PyRunner runs many solves on one
+    // solver, so a trace that accumulated across them would describe no solve at
+    // all -- and would agree with the totals on neither.
+    {
+        CapturedOutput quiet;
+        sys.runSolver(T_FINAL);
+    }
+    BOOST_TEST(sys.lastSteadyStepStats().size() ==
+               static_cast<size_t>(sys.lastSteadyStats().steps));
+
+    removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(newton_jacobian_reuse_trades_builds_for_solves)
+{
+    // KINSOL's msbset, which is what decides whether a Newton iteration reuses
+    // the previous factorisation or asks for a new one. It is the setting the
+    // per-step table's "jac" and "solves" columns measure, so this test reads the
+    // knob through the diagnostics rather than through KINSOL -- there is no
+    // KINGet for msbset, and behaviour is the thing worth pinning anyway.
+    //
+    // Nonlinear on purpose. On a linear problem each inner solve converges in one
+    // iteration, builds equal solves at every setting, and this test would pass
+    // while measuring nothing.
+    auto run = [](long reuse)
+    {
+        const std::string stem = "lifecycle_reuse_" + std::to_string(reuse);
+        Grid grid(0.0, 1.0, nCells);
+        NonlinearDiffusion problem;
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+        sys.setSteadyStateTolerance(1e-10);
+        sys.setNewtonJacobianReuse(reuse);
+        {
+            CapturedOutput quiet;
+            sys.runSolver(T_FINAL);
+        }
+        const auto stats = sys.lastSteadyStats();
+        const Vector u = sample(sys);
+        removeOutput(stem);
+        return std::make_pair(stats, u);
+    };
+
+    const auto [full, uFull] = run(1);
+    const auto [lazy, uLazy] = run(10);
+
+    BOOST_TEST_MESSAGE("reuse=1:  builds " << full.jacBuilds << ", solves " << full.jacSolves
+                       << ", residuals " << full.residualEvals);
+    BOOST_TEST_MESSAGE("reuse=10: builds " << lazy.jacBuilds << ", solves " << lazy.jacSolves
+                       << ", residuals " << lazy.residualEvals);
+
+    // The fixture has to be nonlinear enough to need more than one iteration per
+    // inner solve, or the comparison below is vacuous. Checked rather than
+    // assumed, because a change to the fixture could quietly make it linear.
+    BOOST_TEST(lazy.jacSolves > lazy.steps,
+               "the fixture converges in one Newton iteration per continuation step, "
+               "so Jacobian reuse cannot be observed on it");
+
+    // reuse = 1 is full Newton: a build for every solve.
+    BOOST_TEST(full.jacBuilds == full.jacSolves);
+
+    // reuse = 10 must actually reuse. This is the assertion that fails if the
+    // setting never reaches KINSOL.
+    BOOST_TEST(lazy.jacBuilds < lazy.jacSolves);
+    BOOST_TEST(lazy.jacBuilds < full.jacBuilds);
+
+    // Same answer either way -- this trades work against work, not accuracy.
+    for (Index i = 0; i < uFull.size(); ++i)
+        BOOST_TEST(uFull(i) == uLazy(i), boost::test_tools::tolerance(1e-8));
+}
+
+BOOST_AUTO_TEST_CASE(newton_max_iterations_caps_every_inner_solve)
+{
+    // The hardcoded 20 is now a setting, and this is what says it reaches KINSOL.
+    // Read per step rather than in total: a total could be held down by the solve
+    // simply needing fewer iterations, where a per-step maximum of exactly the cap
+    // can only come from the cap binding.
+    const std::string stem = "lifecycle_maxiter";
+    Grid grid(0.0, 1.0, nCells);
+    NonlinearDiffusion problem;
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, stem);
+    sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    sys.setSteadyStateTolerance(1e-10);
+    sys.setNewtonMaxIterations(1);
+
+    {
+        CapturedOutput quiet;
+        sys.runSolver(T_FINAL);
+    }
+
+    const auto &steps = sys.lastSteadyStepStats();
+    BOOST_TEST(steps.size() > 0u);
+
+    long worst = 0;
+    for (auto const &r : steps)
+        worst = std::max(worst, r.newtonIters);
+    BOOST_TEST_MESSAGE("most Newton iterations in any one KINSol: " << worst
+                       << " over " << steps.size() << " steps");
+    BOOST_TEST(worst == 1, "a cap of 1 let a KINSol take " << worst << " iterations");
+
+    // And the run still reaches a steady state: KIN_MAXITER_REACHED is one of the
+    // two returns the continuation loop treats as ordinary, so capping the inner
+    // solve makes the outer loop work harder rather than making it fail.
+    BOOST_TEST(sys.lastSteadyStats().steps > 0);
+
+    removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(the_newton_settings_refuse_values_that_cannot_work)
+{
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+
+    // Zero iterations cannot make progress; zero reuse is KINSOL's "use the
+    // default" sentinel and would silently mean 10 rather than what was asked.
+    BOOST_CHECK_THROW(sys.setNewtonMaxIterations(0), std::logic_error);
+    BOOST_CHECK_THROW(sys.setNewtonJacobianReuse(0), std::logic_error);
+    BOOST_CHECK_THROW(sys.setNewtonStepTolerance(-1.0), std::logic_error);
+
+    // Zero *is* meaningful for the step tolerance -- it means "KINSOL's default",
+    // which KINSetScaledStepTol implements itself.
+    BOOST_CHECK_NO_THROW(sys.setNewtonStepTolerance(0.0));
+    BOOST_CHECK_NO_THROW(sys.setNewtonJacobianReuse(1));
+}
+
+BOOST_AUTO_TEST_CASE(the_per_step_diagnostics_print_without_the_summary)
+{
+    // The two flags are independent, and this is the direction that is easy to
+    // get wrong: a per-step report implemented as extra detail *inside* the
+    // summary would make the trace unreachable without the block, which is
+    // backwards -- the trace is the more specialised request of the two.
+    const std::string stem = "lifecycle_steady_steplog";
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, stem);
+    sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    sys.setSteadyStateTolerance(1e-10);
+    sys.setSteadyStateStepDiagnostics(true);
+
+    std::string log;
+    {
+        CapturedOutput capture;
+        sys.runSolver(T_FINAL);
+        log = capture.text();
+    }
+
+    BOOST_TEST(log.find("outcome") != std::string::npos, log);
+    BOOST_TEST(log.find("accepted") != std::string::npos, log);
+    BOOST_TEST(log.find("Steady solve statistics") == std::string::npos, log);
+
+    // One row per continuation step. Counted from the outcome column rather
+    // than by counting lines, so an extra line printed elsewhere in the run
+    // cannot make this pass.
+    size_t accepted = 0;
+    for (size_t at = log.find("accepted"); at != std::string::npos;
+         at = log.find("accepted", at + 1))
+        ++accepted;
+    BOOST_TEST(accepted == static_cast<size_t>(sys.lastSteadyStats().steps));
+
+    removeOutput(stem);
+}
+
 BOOST_AUTO_TEST_CASE(a_failed_steady_solve_still_writes_the_last_state_it_reached)
 {
     // A failed steady solve is exactly when the state is worth looking at, and
@@ -1089,6 +1575,15 @@ BOOST_AUTO_TEST_CASE(a_failed_steady_solve_still_writes_the_last_state_it_reache
     // The stats survive the throw, which is half the point of filling them in
     // before it.
     BOOST_TEST(sys.lastSteadyStats().steps > 1);
+
+    // So does the per-step trace, and it is complete: the run that failed is the
+    // one whose trace is worth having, and a record closed only at the bottom of
+    // the loop body would drop whichever step went wrong. This exit -- out of
+    // continuation steps -- closes every record normally; the KINSol-failure
+    // exit closes the failing one explicitly on its way past.
+    const auto &steps = sys.lastSteadyStepStats();
+    BOOST_TEST(steps.size() == static_cast<size_t>(sys.lastSteadyStats().steps));
+    BOOST_TEST(steps.back().step == sys.lastSteadyStats().steps - 1);
 
     netCDF::NcFile out;
     BOOST_CHECK_NO_THROW(out.open(stem + ".nc", netCDF::NcFile::FileMode::read));
@@ -1162,6 +1657,269 @@ RestartSnapshot initialiseAt(TestDiffusion &problem, Grid const &grid, Index ord
     return out;
 }
 } // namespace
+
+// Everything a restart file carries that a warm start needs.
+//
+// Through the file rather than through setRestartValues on an in-memory vector,
+// which is what the three degree-transfer cases below do. The point here is the
+// production path: the netCDF round trip is part of what decides whether the
+// state the solver is handed is still consistent.
+struct RestartFileData
+{
+    std::vector<double> Y, dYdt;
+    std::vector<Position> cellBoundaries;
+    Index order = 0;
+};
+
+RestartFileData readRestart(std::string const &path)
+{
+    RestartFileData out;
+    netCDF::NcFile f;
+    f.open(path, netCDF::NcFile::FileMode::read);
+
+    netCDF::NcGroup g = f.getGroup("Grid");
+    out.cellBoundaries.resize(g.getDim("Index").getSize());
+    g.getVar("CellBoundaries").getVar(out.cellBoundaries.data());
+    g.getVar("PolyOrder").getVar(&out.order);
+
+    netCDF::NcGroup r = f.getGroup("RestartData");
+    out.Y.resize(r.getDim("nDOF").getSize());
+    out.dYdt.resize(out.Y.size());
+    r.getVar("Y").getVar(out.Y.data());
+    r.getVar("dYdt").getVar(out.dYdt.data());
+    f.close();
+    return out;
+}
+
+BOOST_AUTO_TEST_CASE(a_warm_start_from_a_restart_file_does_not_run_calcic)
+{
+    // IDACalcIC has no cheap path. Its convergence test is on the Newton step,
+    // so IDANewtonIC calls lsolve and only then tests ||J^-1 F|| against epsNewt
+    // (ida_ic.c:404-417); IDAnlsIC calls lsetup unconditionally before that
+    // (ida_ic.c:345); and the outer loop repeats the whole thing on success to
+    // refresh the error weights (ida_ic.c:232). Measured floor, handing it a
+    // state it had itself just converged to: two residual evaluations, two
+    // Jacobian builds and two Jacobian solves, with zero Newton iterations --
+    // every time, whatever the state. A build is updateMatricesForJacSolve(),
+    // i.e. assemble and factorise every per-cell MX.
+    //
+    // A warm start is exactly the case where all of that is wasted, and warm
+    // starts are a large share of production runs. So a restart skips IDACalcIC
+    // *by default*, and this case pins that default -- it sets no key at all.
+    //
+    // IDAGetNumResEvals is the observable: it counts residuals IDA asked for, and
+    // nothing else in initialize() goes through IDA, so zero means CalcIC never
+    // ran. MaNTA's own nResidualEvals would not do -- the precheck increments it.
+    //
+    // The decision is made from what the run *is* rather than from a residual
+    // threshold, because ||F|| cannot be calibrated against what IDACalcIC tests
+    // -- see setForceConsistentIC for the measured per-row amplification. So this
+    // case asserts two separate things: that a restart really does suppress
+    // CalcIC, and that the warm start it suppresses it on was in fact consistent.
+    // The run is integrated below rather than merely initialised, so what is
+    // pinned is that skipping is safe *here*, not only that it happened.
+    const std::string stem = "lifecycle_warm_start";
+    const double tSplit = T_FINAL;
+
+    // A real run, and the restart file it leaves behind.
+    {
+        Grid grid(0.0, 1.0, nCells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        CapturedOutput quiet;
+        sys.runSolver(tSplit);
+    }
+
+    const RestartFileData rf = readRestart(stem + ".restart.nc");
+    BOOST_TEST_REQUIRE(rf.order == k);
+    BOOST_TEST_REQUIRE(rf.Y.size() > 0u);
+
+    Grid grid(rf.cellBoundaries);
+    TestDiffusion problem(lifecycle_config);
+    problem.setRestartValues(rf.Y, rf.dYdt, grid, rf.order);
+    BOOST_TEST_REQUIRE(problem.isRestarting());
+
+    SystemSolver sys(grid, rf.order, &problem);
+    configure(sys, stem);
+    sys.setInitialTime(tSplit);   // a restart resumes where the file was written
+
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+    }
+
+    BOOST_TEST_MESSAGE("warm start: weighted residual " << sys.getInitialResidualNorm());
+
+    // Not what the skip is decided on any more -- the flag is -- but it is what
+    // makes the skip *sound*, so it is still checked. A warm start is supposed to
+    // arrive consistent, and if this ever stops holding the integrate() below is
+    // passing for a reason nobody chose.
+    constexpr double warmStartIsConsistent = 1e-2;
+    BOOST_TEST(sys.getInitialResidualNorm() < warmStartIsConsistent,
+               "the state the restart file was turned into has a weighted residual of "
+                   << sys.getInitialResidualNorm() << ", above the "
+                   << warmStartIsConsistent << " a warm start is expected to reach");
+
+    BOOST_TEST(!sys.initialConditionWasCorrected(),
+               "IDACalcIC ran on a warm start whose residual was already "
+                   << sys.getInitialResidualNorm());
+
+    long idaResEvals = -1;
+    BOOST_REQUIRE(IDAGetNumResEvals(sys.IDA_mem, &idaResEvals) == IDA_SUCCESS);
+    BOOST_TEST(idaResEvals == 0,
+               "IDA evaluated the residual " << idaResEvals
+                   << " times during a warm start's initialize(), so IDACalcIC ran");
+
+    // And the run that follows must actually work. Skipping IDACalcIC is only
+    // sound if the state left behind can be integrated from, and a residual norm
+    // does not establish that: AuxVarTest used to warm-start at 1.6e-4 -- lower
+    // than the number here -- and fail at its first step unless CalcIC had run.
+    // That case turned out to be a missing Jacobian block in the fixture rather
+    // than a property of the norm, but the norm is still the wrong measure (its
+    // ||J^-1 F|| was 6.3x *worse* where ||F|| was 2.4x better), so this
+    // integrates rather than stopping at initialize().
+    {
+        CapturedOutput quiet;
+        BOOST_CHECK_NO_THROW(sys.integrate(2.0 * tSplit));
+    }
+
+    // Not vacuous, in two directions. A cold start of the same problem is three
+    // orders of magnitude further from consistent -- so the fixture can tell warm
+    // from cold -- and it *is* corrected, which is what stops this case passing
+    // were the skip wired to happen unconditionally.
+    {
+        Grid coldGrid(0.0, 1.0, nCells);
+        TestDiffusion coldProblem(lifecycle_config);
+        SystemSolver cold(coldGrid, k, &coldProblem);
+        configure(cold, "lifecycle_warm_start_cold");
+        {
+            CapturedOutput quiet;
+            cold.initialize();
+        }
+        BOOST_TEST_MESSAGE("cold start: weighted residual " << cold.getInitialResidualNorm());
+        BOOST_TEST(cold.initialConditionWasCorrected(),
+                   "IDACalcIC did not run on a cold time-marching start, which is "
+                   "the one case that must always have it");
+        BOOST_TEST(cold.getInitialResidualNorm() > 10.0 * sys.getInitialResidualNorm(),
+                   "the cold and warm starts are only " << cold.getInitialResidualNorm()
+                       << " and " << sys.getInitialResidualNorm() << " apart, so this "
+                       "fixture cannot tell the two apart");
+        {
+            CapturedOutput quiet;
+            cold.destroySundials();
+        }
+        removeOutput("lifecycle_warm_start_cold");
+    }
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+
+    // And ForceConsistentIC puts it back, on the same restart, which is the whole
+    // of what that key does. Worth pinning separately: the skip is now decided by
+    // what the run *is*, so without this nothing would notice the key being
+    // ignored -- every other case here would pass just as well.
+    {
+        SystemSolver forced(grid, rf.order, &problem);
+        configure(forced, stem);
+        forced.setInitialTime(tSplit);
+        forced.setForceConsistentIC(true);
+        {
+            CapturedOutput quiet;
+            forced.initialize();
+        }
+
+        BOOST_TEST(forced.initialConditionWasCorrected(),
+                   "ForceConsistentIC did not put IDACalcIC back on a restart");
+
+        long forcedResEvals = -1;
+        BOOST_REQUIRE(IDAGetNumResEvals(forced.IDA_mem, &forcedResEvals) == IDA_SUCCESS);
+        BOOST_TEST(forcedResEvals > 0,
+                   "IDA evaluated no residuals, so IDACalcIC did not actually run");
+
+        {
+            CapturedOutput quiet;
+            forced.destroySundials();
+        }
+    }
+
+    problem.clearRestart();
+    removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(the_warm_start_keeps_the_trace_the_file_carries)
+{
+    // Why the case above can pass at all. setInitialConditions used to finish
+    // every restart with EvaluateLambda(), which sets lambda to {{u}} -- the DG
+    // average of the two cell traces (DGSoln.hpp), not the HDG trace equation
+    // Csigma sigma + Cq q + G_c u + H lambda = L(t) that lambda actually solves.
+    // On a restart that discards a converged trace and replaces it with
+    // something that solves nothing.
+    //
+    // Measured here: it is the whole of the difference. Keeping the file's trace
+    // takes the warm start's weighted residual from above the tolerance to three
+    // orders below it, and it is why a restart used to need about ten times as
+    // many residual evaluations inside IDACalcIC as a cold start.
+    //
+    // The projection path still builds a trace, because there is none to keep --
+    // copy() refuses a different degree and only u, q, aux and the scalars are
+    // transferred. a_restart_at_a_higher_degree_reproduces_the_state_exactly and
+    // its two siblings cover that path.
+    const std::string stem = "lifecycle_warm_trace";
+    {
+        Grid grid(0.0, 1.0, nCells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        CapturedOutput quiet;
+        sys.runSolver(T_FINAL);
+    }
+
+    const RestartFileData rf = readRestart(stem + ".restart.nc");
+    Grid grid(rf.cellBoundaries);
+    TestDiffusion problem(lifecycle_config);
+    problem.setRestartValues(rf.Y, rf.dYdt, grid, rf.order);
+
+    SystemSolver sys(grid, rf.order, &problem);
+    configure(sys, stem);
+    sys.setInitialTime(T_FINAL);
+
+    // Armed, because this fixture's warm start cannot run IDACalcIC at all:
+    // configure() uses rtol 1e-6 / atol 1e-8, and at that tolerance CalcIC on a
+    // TestDiffusion restart fails with IDA_CONV_FAIL -- before this change as
+    // well as after, so it is the tolerance rather than the trace. AuxVarTest
+    // used to be the opposite case -- CalcIC was what made its resumed run work
+    // -- until the missing dSigma_dPhi block in that fixture was declared; it now
+    // resumes either way, so this is the only direction still exercised.
+    // Nothing to set: a restart skips IDACalcIC by default.
+
+    double kept = 0.0, reAveraged = 0.0;
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+        kept = sys.getInitialResidualNorm();
+
+        // What the old code did, applied to the state it built: re-average the
+        // trace and measure again. Nothing else changes.
+        sys.y.EvaluateLambda();
+        reAveraged = sys.weightedResidualNorm(T_FINAL, sys.Y, sys.dYdt);
+        sys.destroySundials();
+    }
+
+    BOOST_TEST_MESSAGE("warm start weighted residual: trace kept " << kept
+                       << ", trace re-averaged " << reAveraged
+                       << "  (factor " << reAveraged / kept << ")");
+
+    BOOST_TEST(reAveraged > 100.0 * kept,
+               "re-averaging the trace only moved the residual from " << kept << " to "
+                   << reAveraged << "; either the trace is being rebuilt again "
+                   "somewhere or this fixture no longer shows the difference");
+
+    problem.clearRestart();
+    removeOutput(stem);
+}
 
 BOOST_AUTO_TEST_CASE(a_restart_at_a_higher_degree_reproduces_the_state_exactly)
 {
@@ -1247,6 +2005,57 @@ BOOST_AUTO_TEST_CASE(a_restart_at_a_lower_degree_lands_where_a_fresh_run_would)
     removeOutput(stem);
 }
 
+BOOST_AUTO_TEST_CASE(only_a_copied_restart_is_treated_as_already_consistent)
+{
+    // A restart skips IDACalcIC by default, on the grounds that it resumes from a
+    // state the previous run had already driven onto the constraint manifold. That
+    // is true of the *copy* path and not of the projection one: a restart onto a
+    // different degree transfers u, q, aux and the scalars and then rebuilds sigma
+    // and the trace, so what it hands IDA is a guess like any other.
+    //
+    // Skipping there is not a missed optimisation, it is a broken run. Measured on
+    // the AuxVarTest regression case resuming at a lower degree, which fails with
+    // IDA_ERR_FAIL when IDACalcIC is skipped and completes when it runs. So the
+    // default is conditional on the transfer having been a copy, and this pins
+    // both halves of that -- without the second, the projection path would quietly
+    // start from an inconsistent state.
+    const std::string stem = "lifecycle_restart_consistency";
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+
+    const RestartSnapshot source = initialiseAt(problem, grid, k, stem);
+
+    auto calcICRanAt = [&](Index runOrder)
+    {
+        problem.setRestartValues(source.Y, source.dYdt, grid, k);
+        SystemSolver sys(grid, runOrder, &problem);
+        configure(sys, stem);
+        {
+            CapturedOutput quiet;
+            sys.initialize();
+        }
+        const bool ran = sys.initialConditionWasCorrected();
+        {
+            CapturedOutput quiet;
+            sys.destroySundials();
+        }
+        problem.clearRestart();
+        return ran;
+    };
+
+    BOOST_TEST(!calcICRanAt(k),
+               "a restart at the file's own degree took the copy path, so its state "
+               "is the one the previous run converged to and IDACalcIC has nothing "
+               "to do -- but it ran anyway");
+
+    BOOST_TEST(calcICRanAt(k + 1),
+               "a restart at a different degree is projected, not copied, so its "
+               "sigma and trace are rebuilt and the state is not consistent -- "
+               "IDACalcIC must still run there");
+
+    removeOutput(stem);
+}
+
 BOOST_AUTO_TEST_CASE(a_restart_at_the_same_degree_still_takes_the_copy_path)
 {
     // The no-regression half. Equal degrees must keep going through
@@ -1270,40 +2079,481 @@ BOOST_AUTO_TEST_CASE(a_restart_at_the_same_degree_still_takes_the_copy_path)
     removeOutput(stem);
 }
 
-BOOST_AUTO_TEST_CASE(an_unarmed_gate_leaves_runSolver_bit_for_bit_unchanged)
+BOOST_AUTO_TEST_CASE(a_coupled_solver_reused_matches_a_fresh_one_bit_for_bit)
 {
-    // The no-regression guarantee. An AdjointProblem may be attached for other
-    // reasons -- solveAdjoint, PyRunner::G -- and with no tolerance set that must
-    // not change the run at all, not even by the extra objective evaluations the
-    // gate would make.
-    Grid grid(0.0, 1.0, nCells);
+    // At exactly zero tolerance, like the uncoupled version above. The tolerance
+    // is the point: the last defect there left the second run completing,
+    // plausible, and wrong in the eleventh digit. A field model that caches
+    // anything across runs and does not reset it fails here and nowhere else --
+    // initialize() skips initialiseMatrices() when already initialised, so
+    // resetForRun() is called from the unconditional part of it instead, and
+    // nothing but this says that it is.
+    //
+    // WarmStartingField is exactly that model: it remembers the psi it last saw
+    // and starts from it. With resetForRun() honoured the memory is cleared
+    // before setInitialConditions asks, so the second run starts from PSI0 like
+    // the first; without it the second run starts from the first run's *final*
+    // psi, which is measurably different -- see the report for this task.
+    auto fresh = makeCoupledSolver(8, 2, "lifecycle_coupled_fresh");
+    auto reused = makeCoupledSolver(8, 2, "lifecycle_coupled_reused");
 
-    TestDiffusion plainProblem(lifecycle_config);
-    SystemSolver plain(grid, k, &plainProblem);
-    configure(plain, "lifecycle_gate_off_plain");
+    bool armedBetweenRuns = false;
+    {
+        CapturedOutput quiet;
+        fresh.sys->runSolver(T_FINAL);
 
-    TestDiffusion attachedProblem(lifecycle_config);
-    SignedIntegralObjective objective(1.0);
-    SystemSolver attached(grid, k, &attachedProblem);
-    configure(attached, "lifecycle_gate_off_attached");
-    attached.setAdjointProblem(&objective);
+        // Three runs, not two: the second is the one a missing reset breaks, and
+        // a third catches anything that accumulates rather than simply differing
+        // from the first.
+        reused.sys->runSolver(T_FINAL);
+
+        // The cache really was populated by the run that just finished, so the
+        // next initialize() has something to clear. Without this the case would
+        // go quietly vacuous the day FieldResidual stops being called.
+        armedBetweenRuns = reused.field->isWarm();
+
+        reused.sys->runSolver(T_FINAL);
+        reused.sys->runSolver(T_FINAL);
+    }
+
+    BOOST_TEST(armedBetweenRuns,
+               "the field model's per-run cache was never populated, so this case would "
+               "pass whether or not resetForRun() is called");
+
+    BOOST_TEST(maxAbsDifference(coupledSample(*reused.sys), coupledSample(*fresh.sys)) == 0.0,
+               boost::test_tools::tolerance(0.0));
+
+    // Not vacuous, and the coupling is live: psi has moved away from its initial
+    // value, so geometry -- and therefore u -- is not the same as an uncoupled
+    // run's would have been.
+    const Vector want = coupledSample(*fresh.sys);
+    BOOST_TEST(want.head(5).norm() > 1e-8);
+    BOOST_TEST(std::abs(want(5) - WarmStartingField::PSI0) > 1e-8);
+
+    removeOutput("lifecycle_coupled_fresh");
+    removeOutput("lifecycle_coupled_reused");
+}
+
+BOOST_AUTO_TEST_CASE(psi_round_trips_through_a_restart)
+{
+    // The restart file has carried psi since the DoF accounting stopped being
+    // open-coded -- Y is written at y.getDoF() bytes and the field block is last.
+    // What it did not carry was any record of *how much* of Y that is, so the
+    // reader could not shape a DGSoln over it and setInitialConditions refused
+    // the combination outright. RestartData/nField is that record.
+    //
+    // The field DOF is differential, which is what stops this passing vacuously:
+    // IDA_YA_YDP_INIT solves for algebraic *values*, so an algebraic psi would be
+    // recomputed from the restored transport state and would come back right
+    // whatever the file said. A differential value is held fixed, so the number
+    // compared below is the number that was read off disk.
+    const std::string stem = "lifecycle_coupled_restart";
+    const double T_RESTART = 0.25, T_LATER = 0.5;
+
+    auto original = makeCoupledSolver(8, 2, stem);
+    original.sys->setOutputCadence(T_RESTART);
 
     {
         CapturedOutput quiet;
-        plain.runSolver(T_FINAL);
-        attached.runSolver(T_FINAL);
+        original.sys->initialize();
+        original.sys->integrate(T_RESTART);
+    }
+    const double psiBefore = original.sys->getSolution().Field(0);
+    const Vector uBefore = coupledSample(*original.sys).head(5);
+    {
+        CapturedOutput quiet;
+        original.sys->destroySundials();
     }
 
-    BOOST_TEST(!plain.wasRejected());
-    BOOST_TEST(!attached.wasRejected());
+    // ---- read it back the way runManta does ----------------------------------
 
-    const Vector a = sample(plain), b = sample(attached);
-    for (Index i = 0; i < a.size(); ++i)
-        BOOST_TEST(a(i) == b(i), boost::test_tools::tolerance(0.0));
-    BOOST_TEST(a.norm() > 1e-8);
+    netCDF::NcFile restartFile;
+    BOOST_REQUIRE_NO_THROW(
+        restartFile.open(stem + ".restart.nc", netCDF::NcFile::FileMode::read));
 
-    removeOutput("lifecycle_gate_off_plain");
-    removeOutput("lifecycle_gate_off_attached");
+    netCDF::NcGroup gridGroup = restartFile.getGroup("Grid");
+    std::vector<Position> cellBoundaries(gridGroup.getDim("Index").getSize());
+    gridGroup.getVar("CellBoundaries").getVar(cellBoundaries.data());
+    Index order = 0;
+    gridGroup.getVar("PolyOrder").getVar(&order);
+
+    netCDF::NcGroup restartGroup = restartFile.getGroup("RestartData");
+    const size_t nDOF_file = restartGroup.getDim("nDOF").getSize();
+    std::vector<double> Y(nDOF_file), dYdt(nDOF_file);
+    restartGroup.getVar("Y").getVar(Y.data());
+    restartGroup.getVar("dYdt").getVar(dYdt.data());
+
+    // The point of the format change. Without it a reader has to infer nField by
+    // subtracting the uncoupled DoF formula from nDOF, which is the arithmetic
+    // that was wrong in three places before y.getDoF() became the authority.
+    netCDF::NcVar nFieldVar = restartGroup.getVar("nField");
+    BOOST_REQUIRE(!nFieldVar.isNull());
+    int nField_file = -1;
+    nFieldVar.getVar(&nField_file);
+    restartFile.close();
+
+    BOOST_TEST(nField_file == 1);
+
+    // **The oracle is the file, not getSolution().**
+    //
+    // psiBefore above comes from yJac, which setJacEvalY fills with
+    // DGSoln::copy -- the very function this task taught to carry the field
+    // block. Comparing yJac against yJac therefore agrees perfectly when
+    // `psi_ = other.psi_` is deleted: both sides are zero, the case passes, and
+    // a regression in the field block of copy() ships silently. Verified by
+    // deleting that line, which leaves the earlier form of this test green.
+    //
+    // Y is the raw array out of the netCDF file and has been nowhere near
+    // DGSoln. The field block is last in the layout, so with nField_file == 1
+    // the last entry is psi.
+    const double psiFromFile = Y[nDOF_file - 1];
+    BOOST_TEST(psiFromFile == psiBefore, boost::test_tools::tolerance(0.0));
+
+    // Not vacuous, twice over. `!= PSI0` says the run actually moved psi, so a
+    // file that stored nothing would not round-trip through this by accident --
+    // but PSI0 is 0.5, so that distance is *satisfied by zero*, and a guard a
+    // zeroed value satisfies is not a guard. Hence the second line.
+    BOOST_TEST(std::abs(psiFromFile - WarmStartingField::PSI0) > 1e-6);
+    BOOST_TEST(std::abs(psiFromFile) > 1e-6);
+
+    Grid restartGrid(cellBoundaries);
+    GeometricDiffusion restartedProblem;
+    restartedProblem.setRestartValues(Y, dYdt, restartGrid, order, nField_file);
+
+    auto field = std::make_shared<WarmStartingField>();
+    SystemSolver restarted(restartGrid, order, &restartedProblem);
+    restarted.setTau(1.0);
+    restarted.resetCoeffs();
+    restarted.setInputFile(stem + "_resumed");
+    // Well below T_RESTART, and the choice is forced. Two places treat the
+    // output cadence as something it is not, and on a restart -- the only run in
+    // this tree that starts at t0 != 0 -- they pull in opposite directions:
+    //
+    //   * IDACalcIC is handed `dt` as its `tout1`, which SUNDIALS documents as
+    //     the first output *time*, not a delta. A delta equals a time only at
+    //     t0 = 0. So cadence == t_initial gives tdist = 0 and IDA_ILL_INPUT
+    //     (-22), "tout1 too close to t0"; cadence < t_initial makes IDA
+    //     conclude it is integrating backwards and sign hh accordingly.
+    //   * `if (problem->isRestarting()) IDASetInitStep(IDA_mem, dt)` makes the
+    //     cadence the *first step*, on the reading that a resumed run should
+    //     "continue at the same delta t".
+    //
+    // So there is no cadence that avoids both: above t_initial escapes the first
+    // and hands IDA an initial step longer than the whole remaining integration,
+    // which here fails the error test ten times over and dies IDA_ERR_FAIL (-3)
+    // at h = 1.1e-6; below it takes the second, harmlessly, and completes. A
+    // small cadence is also what a resumed run really has, so this is the honest
+    // configuration rather than a dodge. Neither trap is about field models --
+    // both reproduce on main with no coupling, from a config with
+    // `restart = true` -- so both are reported rather than fixed here.
+    restarted.setOutputCadence(T_RESTART / 5.0);
+    restarted.setNOutput(11);
+    restarted.setInitialTime(T_RESTART);
+    restarted.setMinStepSize(1e-12);
+    restarted.setTolerances({1e-8}, 1e-6);
+    restarted.setWriteOutput(false);
+    restarted.setFieldModel(field);
+
+    // initialize() alone: yJac holds the initial condition after it, and the
+    // initial condition is what a restart is. Integrating further would only add
+    // the resumed run's own error to the comparison.
+    {
+        CapturedOutput quiet;
+        restarted.initialize();
+    }
+
+    // 1e-12 is slack, not a measured bound: this comes back *bit* exact, and
+    // structurally so. psi is a differential value, IDA_YA_YDP_INIT holds every
+    // differential value fixed, and netCDF stores a double as a double -- so the
+    // number below is the one the file carries, not one re-derived from it. If
+    // this ever stops being exact, something is recomputing psi rather than
+    // resuming it, and the tolerance is not the thing to adjust.
+    BOOST_CHECK_SMALL(std::abs(restarted.getSolution().Field(0) - psiFromFile), 1e-12);
+
+    // ...and the transport state came back with it, so the psi above is the psi
+    // of the same solution rather than of some other one.
+    for (Index i = 0; i < 5; ++i)
+        BOOST_CHECK_SMALL(std::abs(restarted.getSolution().u(0)(0.1 + 0.2 * i) - uBefore(i)),
+                          1e-10);
+
+    // ---- and the resumed state is usable, not merely readable ----------------
+    //
+    // Everything above says psi came back. It does not say the run can go on
+    // from there: a state that is read correctly and then cannot be integrated
+    // is a restart that does not work. So continue to T_LATER and compare
+    // against a single uninterrupted run to the same time.
+    //
+    // Not bit for bit, and it cannot be: the two routes re-initialise the
+    // integrator at different points and take genuinely different step
+    // sequences, which is why the regression suite's round trips compare in L2
+    // at a tolerance too. Measured, at atol 1e-8 / rtol 1e-6, they agree to
+    // 1.0e-8 in psi and 6.4e-8 in u -- so the 1e-6 below carries about a
+    // decade and a half of slack, which is the right amount for a quantity
+    // set by where two different step sequences land inside their own
+    // tolerance.
+    {
+        CapturedOutput quiet;
+        restarted.integrate(T_LATER);
+    }
+
+    auto straight = makeCoupledSolver(8, 2, stem + "_straight");
+    straight.sys->setOutputCadence(T_LATER);
+    straight.sys->setWriteOutput(false);
+    {
+        CapturedOutput quiet;
+        straight.sys->runSolver(T_LATER);
+    }
+
+    BOOST_CHECK_SMALL(std::abs(restarted.getSolution().Field(0) -
+                               straight.sys->getSolution().Field(0)),
+                      1e-6);
+    for (Index i = 0; i < 5; ++i)
+        BOOST_CHECK_SMALL(std::abs(restarted.getSolution().u(0)(0.1 + 0.2 * i) -
+                                   straight.sys->getSolution().u(0)(0.1 + 0.2 * i)),
+                          1e-6);
+
+    // The continuation actually went somewhere, so the agreement above is not
+    // two runs sitting still together.
+    BOOST_TEST(std::abs(restarted.getSolution().Field(0) - psiFromFile) > 1e-4);
+
+    {
+        CapturedOutput quiet;
+        restarted.destroySundials();
+    }
+    removeOutput(stem);
+    removeOutput(stem + "_resumed");
+    removeOutput(stem + "_straight");
+}
+
+BOOST_AUTO_TEST_CASE(a_coupled_run_writes_the_field_group)
+{
+    // The netCDF group is the only part of the coupling a user ever sees, and
+    // there is deliberately no regression case that would exercise it -- no field
+    // model is registered, so no `.conf` can select one. This is its cover.
+    const std::string stem = "lifecycle_coupled_output";
+    auto run = makeCoupledSolver(8, 2, stem);
+
+    {
+        CapturedOutput quiet;
+        run.sys->runSolver(T_FINAL);
+    }
+
+    netCDF::NcFile out;
+    BOOST_REQUIRE_NO_THROW(out.open(stem + ".nc", netCDF::NcFile::FileMode::read));
+
+    // Named from the spec, not from a string literal in NetCDFIO.cpp.
+    netCDF::NcGroup group = out.getGroup("WarmStart");
+    BOOST_REQUIRE(!group.isNull());
+
+    // The coordinate the geometry is expressed against, so a run records what its
+    // x meant.
+    std::string label;
+    group.getAtt("label").getValues(label);
+    BOOST_TEST(label == "x");
+
+    // psi is a time series -- it has no x dependence -- and the geometry slot is
+    // a spatial field, like u. Getting those two the wrong way round is the
+    // mistake this checks: both would still be "present".
+    netCDF::NcVar psi = group.getVar("psi");
+    BOOST_REQUIRE(!psi.isNull());
+    BOOST_TEST(psi.getDimCount() == 1);
+
+    netCDF::NcVar g = group.getVar("g");
+    BOOST_REQUIRE(!g.isNull());
+    BOOST_TEST(g.getDimCount() == 2);
+
+    std::string units;
+    psi.getAtt("units").getValues(units);
+    BOOST_TEST(units == "1");
+
+    const size_t nTimes = psi.getDim(0).getSize();
+    BOOST_TEST(nTimes >= 2u);
+
+    std::vector<double> psiSeries(nTimes);
+    psi.getVar(psiSeries.data());
+    BOOST_TEST(psiSeries[0] == WarmStartingField::PSI0, boost::test_tools::tolerance(1e-12));
+    BOOST_TEST(std::abs(psiSeries[nTimes - 1] - WarmStartingField::PSI0) > 1e-8);
+
+    // g = 1 + psi cos(pi x) at the final psi, sampled at the output grid. Checked
+    // at the ends, where cos(pi x) is +-1 and the two would differ by 2 psi if
+    // the geometry were written at the wrong time or the wrong psi.
+    const size_t nx = g.getDim(1).getSize();
+    std::vector<double> gFinal(nx);
+    g.getVar({nTimes - 1, 0}, {1, nx}, gFinal.data());
+    BOOST_TEST(gFinal.front() == 1.0 + psiSeries[nTimes - 1], boost::test_tools::tolerance(1e-12));
+    BOOST_TEST(gFinal.back() == 1.0 - psiSeries[nTimes - 1], boost::test_tools::tolerance(1e-12));
+
+    out.close();
+    removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(initialize_starts_at_a_nonzero_time)
+{
+    // IDACalcIC's tout1 is an absolute *time* -- "the first value of t at which a
+    // solution will be requested" -- and initialize() used to pass the *interval*,
+    // `dt0 > 0 ? dt0 : dt`. Those are the same number only at t0 = 0, which is
+    // where every other fixture in this file starts, so nothing caught it.
+    //
+    // Set the initial time equal to the output cadence and tout1 lands exactly on
+    // t0. IDA rejects that outright -- IDA_ILL_INPUT (-22), "tout1 too close to t0
+    // to attempt initial condition calculation", before it evaluates a single
+    // residual -- and initialize() turns the failure into a throw, so the run dies
+    // with a message pointing into SUNDIALS. A restart is the ordinary way to
+    // reach this, since it resumes at the time the file was written, but nothing
+    // about it needs a restart: t_initial = delta_t is enough.
+    //
+    // Both halves are asserted. The equal case is the one that used to throw; the
+    // larger t0 is the quieter half of the same error, where tout1 came out
+    // *behind* t0 and handed IDA the wrong direction of integration. IDA does not
+    // reject that, so it never announced itself.
+    constexpr double CADENCE = T_FINAL;
+
+    for (double t0 : {CADENCE, 4.0 * CADENCE})
+    {
+        Grid grid(0.0, 1.0, nCells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, "lifecycle_nonzero_t0");
+        sys.setInitialTime(t0);
+
+        // Reached directly: dt is MANTA_TEST_PRIVATE, and the premise of this
+        // case is that the cadence and t0 coincide.
+        BOOST_TEST_REQUIRE(sys.dt == CADENCE,
+                           "configure() no longer sets the cadence this case needs");
+
+        {
+            CapturedOutput quiet;
+            BOOST_CHECK_NO_THROW(sys.initialize());
+        }
+
+        // Not vacuous: IDACalcIC has to have run and done something, or the case
+        // would pass just as well if the call were removed.
+        long idaResEvals = -1;
+        BOOST_REQUIRE(IDAGetNumResEvals(sys.IDA_mem, &idaResEvals) == IDA_SUCCESS);
+        BOOST_TEST(idaResEvals > 0,
+                   "IDACalcIC evaluated no residuals at t0 = " << t0
+                       << ", so it cannot have run");
+
+        {
+            CapturedOutput quiet;
+            BOOST_CHECK_NO_THROW(sys.integrate(t0 + 2.0 * CADENCE));
+            sys.destroySundials();
+        }
+    }
+
+    removeOutput("lifecycle_nonzero_t0");
+}
+
+BOOST_AUTO_TEST_CASE(a_resumed_steady_solve_does_not_re_climb_the_ser_ramp)
+{
+    // A solve stopped by MaxContinuationSteps is stopped by its budget, not by
+    // its method: the state it reached and the pseudo-time step SER climbed to
+    // are both still good, and continueSteadyState() picks up both.
+    //
+    // A fresh solveSteadyState() picks up neither knowingly -- it re-enters at
+    // PseudoTransientInitialStep, so each slice repeats the ramp the previous
+    // one paid for. On a problem whose dt has to climb several orders of
+    // magnitude that ramp *is* the solve, which is why this is measured in
+    // continuation steps against one uninterrupted solve rather than asserted
+    // as an inequality between the two sliced variants.
+    constexpr int SLICE = 3;
+
+    auto build = [](SystemSolver &sys)
+    {
+        configure(sys, "lifecycle_resume");
+        sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+        sys.setSteadyStateTolerance(1e-10);
+        sys.setPseudoTransientInitialStep(1e-4);
+    };
+
+    // The reference: one uninterrupted solve.
+    int wholeSteps = 0;
+    Vector wholeU;
+    {
+        Grid grid(0.0, 1.0, nCells);
+        NonlinearDiffusion problem;
+        SystemSolver sys(grid, k, &problem);
+        build(sys);
+        CapturedOutput quiet;
+        sys.initialize();
+        sys.solveSteadyState();
+        wholeSteps = sys.lastSteadyStats().steps;
+        wholeU = sample(sys);
+        sys.destroySundials();
+    }
+    BOOST_TEST_MESSAGE("uninterrupted: " << wholeSteps << " continuation steps");
+    BOOST_REQUIRE(wholeSteps > 2 * SLICE);
+
+    // The same solve in slices. `resume` chooses between continueSteadyState()
+    // and a fresh solveSteadyState(), which is the whole comparison.
+    auto sliced = [&](bool resume)
+    {
+        Grid grid(0.0, 1.0, nCells);
+        NonlinearDiffusion problem;
+        SystemSolver sys(grid, k, &problem);
+        build(sys);
+        sys.setMaxContinuationSteps(SLICE);
+
+        int total = 0, slices = 0;
+        CapturedOutput quiet;
+        sys.initialize();
+        while (slices < 40)
+        {
+            ++slices;
+            try
+            {
+                if (resume && slices > 1)
+                    sys.continueSteadyState();
+                else
+                    sys.solveSteadyState();
+            }
+            catch (std::exception const &)
+            {
+                // Out of steps for this slice, which is the expected exit until
+                // the last one. The state stays in Y; nothing has been freed,
+                // because this drives the phases rather than runSolver().
+            }
+            total += sys.lastSteadyStats().steps;
+            if (sys.lastSteadyOutcome() == SystemSolver::SteadyOutcome::Converged)
+                break;
+        }
+        const bool converged =
+            (sys.lastSteadyOutcome() == SystemSolver::SteadyOutcome::Converged);
+        Vector u = sample(sys);
+        sys.destroySundials();
+        return std::tuple{converged, total, u};
+    };
+
+    const auto [resumedOK, resumedSteps, resumedU] = sliced(true);
+    const auto [restartedOK, restartedSteps, restartedU] = sliced(false);
+    BOOST_TEST_MESSAGE("resumed:   converged=" << resumedOK << ", "
+                       << resumedSteps << " continuation steps");
+    BOOST_TEST_MESSAGE("restarted: converged=" << restartedOK << ", "
+                       << restartedSteps << " continuation steps");
+
+    // Resuming reaches the same answer, and pays no more than one extra step
+    // per slice for the interruptions -- a slice cut off part way through a
+    // step has that step retried by the next one.
+    BOOST_TEST(resumedOK);
+    const int slicesUsed = (resumedSteps + SLICE - 1) / SLICE;
+    BOOST_TEST(resumedSteps <= wholeSteps + slicesUsed,
+               "resuming cost " << resumedSteps << " steps against "
+                   << wholeSteps << " uninterrupted");
+
+    // Same answer, to the tolerance both solves were converged at.
+    for (Index i = 0; i < wholeU.size(); ++i)
+        BOOST_TEST(std::abs(resumedU(i) - wholeU(i)) < 1e-8,
+                   "u differs at sample " << i << ": resumed " << resumedU(i)
+                       << " against " << wholeU(i));
+
+    // Not vacuous: without the resume the ramp restarts every slice, so the
+    // same budget buys strictly less progress.
+    BOOST_TEST(restartedSteps > resumedSteps,
+               "restarting each slice cost " << restartedSteps
+                   << " steps, no more than resuming's " << resumedSteps
+                   << " -- the SER ramp cannot be being re-climbed");
+
+    removeOutput("lifecycle_resume");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

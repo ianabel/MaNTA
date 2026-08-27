@@ -70,7 +70,7 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
 
 	M0 = 2 * u0 + 4 * beta / std::numbers::pi;
 	// Was an unconditional std::cerr, which printed once per construction --
-	// eight times in a `make test` run, and once per regression case. INFO is
+	// eight times in a unit-test run, and once per regression case. INFO is
 	// compiled out of a release build and still available with VERBOSE.
 	logmsg<LOG_LEVEL::INFO>("ScalarTestLD3 target mass M0 = {}", M0);
 }

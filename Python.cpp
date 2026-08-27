@@ -1,3 +1,4 @@
+#include <dlfcn.h> // physics plugins loaded by load_physics_plugin
 #include <pybind11/functional.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
@@ -12,6 +13,9 @@
 #include "PyIntegrator.hpp"
 #include "PyRunner.hpp"
 #include "PyState.hpp"
+// cast_toml lives here now, alongside the Python -> toml direction PyRunner
+// needs. TODO: check whether pytoml could replace both.
+#include "PyToml.hpp"
 #include "PyTransportSystem.hpp"
 #include "State.hpp"
 #include "TransportSystem.hpp"
@@ -51,6 +55,17 @@ public:
     value.Derivative() = py::cast<Matrix>(d["Derivative"]).transpose();
     value.Flux() = py::cast<Matrix>(d["Flux"]).transpose();
     value.Aux() = py::cast<Matrix>(d["Aux"]).transpose();
+    // Geometry is optional on the way in: every physics case and test fixture
+    // that predates field models builds a dict with no "Geometry" key, and
+    // GlobalState defaults to zero geometry slots, so a missing key means the
+    // same thing an explicitly empty one would. Still size it to (0, nPoints)
+    // rather than leave it at PYBIND11_TYPE_CASTER's default-constructed 0x0:
+    // operator[] slices every field's column i unconditionally, and a matrix
+    // with zero *columns* fails that where zero *rows* would not.
+    if (d.contains("Geometry"))
+      value.GeometryMatrix() = py::cast<Matrix>(d["Geometry"]).transpose();
+    else
+      value.GeometryMatrix().setZero(0, value.Variable().cols());
 
     auto scalars = py::cast<py::array_t<double>>(d["Scalars"]);
     py::buffer_info info = scalars.request();
@@ -73,6 +88,7 @@ public:
     d["Derivative"] = src.Derivative().transpose();
     d["Flux"] = src.Flux().transpose();
     d["Aux"] = src.Aux().transpose();
+    d["Geometry"] = src.GeometryMatrix().transpose();
     d["Scalars"] = src.Scalars();
     return d.release();
   }
@@ -80,39 +96,41 @@ public:
 } // namespace detail
 }; // namespace pybind11
 
-// TODO: Check if we can just use pytoml instead and
-// remove this extra cast
-py::object cast_toml(toml::value v) {
-  if (v.is_boolean())
-    return py::bool_(v.as_boolean());
-  else if (v.is_integer())
-    return py::int_(v.as_integer());
-  else if (v.is_floating())
-    return py::float_(v.as_floating());
-  else if (v.is_string())
-    return py::str(v.as_string());
-  else if (v.is_array()) {
-    py::list lst;
-    for (const auto &elem : v.as_array()) {
-      lst.append(cast_toml(elem));
-    }
-    return lst;
-  } else if (v.is_table()) {
-    py::dict d;
-    for (const auto &[key, val] : v.as_table()) {
-      d[py::str(key)] = cast_toml(val);
-    }
-    return d;
-  } else {
-    return py::none();
-  }
-}
-
 // Defines the MaNTA module and what can be called
 // The extension is private to the `manta` package: python/manta/__init__.py
 // re-exports it and adds the parts that are more naturally written in Python
 // (the declarative class-attribute spec, chiefly). Users import `manta`.
-PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
+//
+// **No py::mod_gil_not_used(), deliberately, and please do not add it back
+// without doing the audit it stands for.** That tag asserts this module is safe
+// to run without the GIL. It was here, asserted rather than established, and the
+// assertion was false in at least two places:
+//
+//   * Basis.hpp's three `singletons` maps -- LegendreBasis, ChebyshevBasis and
+//     NodalBasis each cache their flyweight in a static std::map that getBasis(k)
+//     mutates on first touch. Concurrent insert, or a read racing one, is UB.
+//   * PhysicsCases::map, a lazily allocated static registry. Static-init
+//     population is single-threaded and fine; registerPhysicsCase is *bound to
+//     Python* (below), so it is also mutated at runtime.
+//
+// Neither can race today, and that is the point: PyRunner never releases the
+// GIL -- there is no gil_scoped_release or call_guard anywhere in this module --
+// so a Python thread calling run() holds it for the whole solve and the GIL is
+// silently doing all the synchronisation. Declaring the tag removes exactly that
+// and leaves the statics above unguarded.
+//
+// Without the tag, importing this on a free-threaded interpreter makes CPython
+// re-enable the GIL and say so. That is the conservative outcome and it
+// announces itself, where a false declaration does neither. The tag costs
+// nothing on an ordinary build either way -- measured, it is inert there.
+//
+// To make it true: mutexes on those two (about half a day), then a free-threaded
+// interpreter, its own ABI-tagged build and a CI leg to test against, plus a
+// stated contract for what a user's Python physics case must guarantee once the
+// trampolines' gil_scoped_acquire no longer serialises it. Worth doing when
+// something actually calls in from several threads -- the XLA FFI path is the
+// candidate -- and not before.
+PYBIND11_MODULE(_manta, m) {
   m.doc() =
       "Compiled core of the MaNTA Python package; import `manta` instead.";
 
@@ -304,6 +322,14 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def("dSources_du", &TransportSystem::dSources_du)
       .def("dSources_dq", &TransportSystem::dSources_dq)
       .def("dSources_dsigma", &TransportSystem::dSources_dsigma)
+      // Derivatives with respect to a field model's geometry slots. Optional,
+      // like the five above: absent means an identically zero column of the A1
+      // coupling block, which is exactly right for a case that does not read
+      // geometry. They are live -- Matrices.cpp's fieldChainOnNodes calls all
+      // three, once per node, whenever a field model is attached.
+      .def("dSigmaFn_dGeometry", &TransportSystem::dSigmaFn_dGeometry)
+      .def("dSources_dGeometry", &TransportSystem::dSources_dGeometry)
+      .def("dAuxG_dGeometry", &TransportSystem::dAuxG_dGeometry)
       .def("dSigma", &TransportSystem::dSigma)
       .def("dSources", &TransportSystem::dSources)
       .def("InitialValue", &TransportSystem::InitialValue)
@@ -412,18 +438,113 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
         py::arg("name"), py::arg("factory"), py::return_value_policy::reference,
         "Register a physics case under the name a config file can ask for.");
 
+  // Test support only -- not part of the public API. manta/__init__.py does
+  // not re-export this, so it is reachable only as
+  // manta._manta._test_dSigmaFn_dGeometry, the same way python/Tests already
+  // reaches manta._manta.runner_ffi_ops directly rather than through the
+  // curated `manta` surface.
+  //
+  // It exists because dSigmaFn_dGeometry has no batched (GlobalState-taking)
+  // entry point the way SigmaFn/Sources/AuxG do -- the A1 assembly in
+  // Matrices.cpp calls the *pointwise* hook per node through a member pointer
+  // -- and a State cannot be constructed standalone from Python (see
+  // PyState.hpp), so python/Tests/test_trampolines.py had no way at all to
+  // drive PyTransportSystem.hpp's pointwise dSigmaFn_dGeometry dispatcher, its
+  // optional_override lookup, and the Values cast.
+  //
+  // A free function rather than a TransportSystem method, deliberately: it
+  // adds nothing inheritable or overridable to the interface a physics case
+  // implements, unlike a batched virtual would. It builds a State carrying
+  // only the given geometry (u/q/sigma/phi are left zero, since this is
+  // about the geometry dispatch, not the physics) and calls the pointwise
+  // hook directly -- exactly what a C++ test does, and what the real caller
+  // does: Matrices.cpp's fieldChainOnNodes builds the A1 column the same way,
+  // one pointwise call per node.
+  m.def(
+      "_test_dSigmaFn_dGeometry",
+      [](TransportSystem &sys, Index i, Vector const &geom, Position x, Time t) {
+        State s(sys.getNumVars(), sys.getNumScalars(), sys.getNumAux(),
+                static_cast<Index>(geom.size()));
+        s.geom() = geom;
+        Vector out = Vector::Zero(geom.size());
+        sys.dSigmaFn_dGeometry(i, out, s, x, t);
+        return out;
+      },
+      py::arg("sys"), py::arg("i"), py::arg("geom"), py::arg("x"), py::arg("t"),
+      "Test support only: builds a State carrying the given geometry and calls "
+      "the pointwise dSigmaFn_dGeometry dispatcher directly.");
+
+  m.def("physics_cases", &PhysicsCases::RegisteredNames,
+        "Every physics case name manta.Runner(name) will accept, ascending. "
+        "Includes the C++ cases compiled into this extension, anything a "
+        "loaded plugin registered, and anything registerPhysicsCase was "
+        "called with.");
+
+  m.def(
+      "load_physics_plugin",
+      [](std::string const &path) {
+        // RTLD_GLOBAL so a plugin can be linked against another plugin's
+        // symbols; RTLD_NOW so an unresolved symbol is reported here rather
+        // than at the first call into the case. Both match what runManta does
+        // for the PhysicsPlugins key, deliberately -- a plugin must behave the
+        // same however it was loaded.
+        //
+        // The registration is a side effect of loading: the case's
+        // PhysicsCaseRegister runs during the shared object's static
+        // initialisation and inserts into the same process-global map the
+        // built-in cases use. So there is nothing to return, and nothing to
+        // keep -- the handle is deliberately not closed, because the map would
+        // then hold a factory pointing into unmapped code.
+        if (dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL) == nullptr)
+          throw std::runtime_error("Could not load physics plugin " + path +
+                                   ": " + dlerror());
+      },
+      py::arg("path"),
+      "Load a physics case built outside the MaNTA tree, so that "
+      "manta.Runner(name) can reach it. The dict equivalent of a config "
+      "file's PhysicsPlugins key. Compile the plugin with the flags "
+      "`pkg-config --cflags manta` reports, and do not link it against "
+      "-lmanta; see the out-of-tree section of the docs.");
+
+  py::enum_<SystemSolver::SteadyOutcome>(
+      m, "SteadyOutcome",
+      "Why a steady solve, or one slice of one, stopped.")
+      .value("NotRun", SystemSolver::SteadyOutcome::NotRun,
+             "No steady solve has been taken on this solver.")
+      .value("Converged", SystemSolver::SteadyOutcome::Converged,
+             "||F|| fell below SteadyStateTolerance.")
+      .value("OutOfSteps", SystemSolver::SteadyOutcome::OutOfSteps,
+             "The MaxContinuationSteps budget was spent. Not a failure: the "
+             "state and the pseudo-time step reached are both good, and "
+             "continue_steady() resumes from them.")
+      .value("SolverFailed", SystemSolver::SteadyOutcome::SolverFailed,
+             "KINSol failed in a way pseudo-transient damping cannot answer.");
+
   py::class_<PyRunner, py::smart_holder>(m, "Runner")
       .def(py::init<std::shared_ptr<TransportSystem>>())
+      // A C++ case by the name a config file's TransportSystem key would give.
+      // Registered second, so a TransportSystem object still binds to the
+      // overload above rather than being str()'d into this one.
+      .def(py::init<std::string>(), py::arg("physics_case"))
+      .def_property_readonly("physics_case", &PyRunner::physicsCase,
+                             "The registered C++ case name this Runner was "
+                             "built from, or \"\" when it was handed a "
+                             "transport system object.")
       .def("configure", &PyRunner::configure)
       // Two overloads: run(tFinal) is the usual way in, run() uses the
       // configuration's t_final -- the same key a config file must carry.
       .def("run", static_cast<void (PyRunner::*)(double)>(&PyRunner::run))
       .def("run", static_cast<void (PyRunner::*)()>(&PyRunner::run))
       .def("run_ss", &PyRunner::run_ss)
-      .def("wasRejected", &PyRunner::wasRejected)
-      .def("lastDGdt", &PyRunner::lastDGdt)
+      .def("start_steady", &PyRunner::start_steady, py::arg("estimate") = true)
+      .def("continue_steady", &PyRunner::continue_steady,
+           py::arg("estimate") = true)
+      .def("finish_steady", &PyRunner::finish_steady)
+      .def("abandon_steady", &PyRunner::abandon_steady)
+      .def("steadyStats", &PyRunner::steadyStats)
       .def("G", &PyRunner::G)
       .def("getAdjointGradients", &PyRunner::getAdjointGradients)
+      .def("objectiveEstimate", &PyRunner::objectiveEstimate)
       .def("getSolution", &PyRunner::getSolution)
       .def("getDerivative", &PyRunner::getDerivative)
       .def("getPostprocessedSolution", &PyRunner::getPostprocessedSolution)
@@ -438,6 +559,10 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
     ffi_ops["get_g_val"] = EncapsulateFfiCall(get_g_val_ffi_ops);
     ffi_ops["run_ffi"] = EncapsulateFfiCall(run_ffi_ops);
     ffi_ops["run_ss_ffi"] = EncapsulateFfiCall(run_ss_ffi_ops);
+    ffi_ops["start_steady_ffi"] = EncapsulateFfiCall(start_steady_ffi_ops);
+    ffi_ops["continue_steady_ffi"] = EncapsulateFfiCall(continue_steady_ffi_ops);
+    ffi_ops["finish_steady_ffi"] = EncapsulateFfiCall(finish_steady_ffi_ops);
+    ffi_ops["abandon_steady_ffi"] = EncapsulateFfiCall(abandon_steady_ffi_ops);
     return ffi_ops;
   });
 #ifdef CUDA
