@@ -12,7 +12,7 @@ by both through ``loadSolverConfig``. A key has the same name, the same type and
 the same default whichever way it arrives. The few places the two surfaces still
 differ are deliberate, and are listed in :ref:`config-divergences` below.
 
-``./MaNTA --list-options`` prints the current schema — every key, its type, its
+``build/MaNTA --list-options`` prints the current schema — every key, its type, its
 default and a line of description — straight from the table this page is written
 from.
 
@@ -227,7 +227,8 @@ Output
    * - ``WriteDebugDatFiles``
      - ``false``
      - Also write ``<stem>.dydt.dat`` and ``<stem>.res.dat``. Additionally
-       requires a ``PHYSICS_DEBUG`` build (``make DEBUG=on``).
+       requires a ``PHYSICS_DEBUG`` build (``cmake --preset debug``, or
+       ``-DMANTA_PHYSICS_DEBUG=ON``).
 
 ``<stem>`` throughout is ``OutputFilename``. The two ``.dat`` options are
 deliberately **not** nested under ``WriteOutput``: they are opt-in already, so a
@@ -457,6 +458,6 @@ binary's exit status and ``manta.run``'s return value. ``Runner.configure``,
 which has no exit status to hand back, raises ``RuntimeError`` for the restart
 file too.
 
-Finally, ``./MaNTA --list-options`` prints the schema as it actually stands —
+Finally, ``build/MaNTA --list-options`` prints the schema as it actually stands —
 every key, its type, its default and a line of description. Prefer it to this
 page when the two disagree, and fix the page.

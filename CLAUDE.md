@@ -6,61 +6,97 @@ MaNTA (Maryland Nonlinear Transport Analyzer) solves 1-D reaction–diffusion /
 transport systems with a hybridizable discontinuous Galerkin (HDG) spatial
 discretisation, integrated in time as an index-1 DAE by SUNDIALS IDA.
 
-`README.md` covers first-time setup (dependencies, `Makefile.local`, installing
-SUNDIALS). `Tests/README.md` covers test conventions and the current known gaps
+`README.md` covers first-time setup (dependencies, `CMakeUserPresets.json`,
+installing SUNDIALS). `Tests/README.md` covers test conventions and the current known gaps
 in detail — read it before adding tests or interpreting a coverage number.
 
 ## Commands
 
+**The build is CMake, out of source.** There is no Makefile in this tree any more
+and no `Makefile.local` to write: machine-specific paths go on the configure line
+or into a gitignored `CMakeUserPresets.json`.
+
 ```sh
-make MaNTA                # the solver only (bare `make` also builds python + runs tests)
-make test                 # Boost.Test C++ unit tests
-make regression_tests     # solver over Tests/RegressionTests/*.conf vs checked-in .ref.nc
-make python               # the manta package, python/manta/_manta<suffix>.so
-make install PREFIX=...   # headers under include/manta, libmanta.so, manta.pc
+cmake --preset default    # configure into build/ (Release; also: debug, coverage, portable)
+cmake --build build -j    # solver + libmanta.so + the Python module + the unit tests
+ctest --test-dir build    # all three suites
+
+cmake --build build --target MaNTA        # the solver only, at build/MaNTA
+cmake --build build --target _manta       # the manta package, python/manta/_manta<suffix>.so
+cmake --build build --target UnitTests    # build/Tests/UnitTests/UnitTests
+cmake --install build --prefix ...        # headers under include/manta, libmanta.so, manta.pc
 pip install .             # the `manta` package and the `manta` console script
 pip install .[jax]        # ...and manta.jax (jax, equinox, jaxtyping)
-make python_tests         # pytest suite for that extension
-make coverage             # rebuild instrumented, run all three suites, write coverage/
-make docs                 # docs/_build/html, via .venv-docs built from
-                          # docs/requirements.txt; -W, as Read the Docs runs it
-make stubs                # regenerate python/manta/_manta.pyi from the module
-make stubs-check          # fail if the committed stub is stale (CI runs this)
-make typecheck            # mypy over the manta package
-make clean                # also sweeps orphaned PhysicsCases/*.o and .d files,
-                          # python/manta modules of every ABI suffix, the
-                          # bytecode and pytest caches, and clean_data below
-make clean_data           # run output (.nc/.restart.nc/.dat) at the root and in
-                          # Tests/RegressionTests, python/Tests/ and each
-                          # directory under python-examples/ and python-physics/
 
-./MaNTA --list-options    # every configuration key, straight from ConfigSchema.cpp
+cmake --build build --target unit_tests | regression_tests | python_tests
+cmake --build build --target docs         # docs/_build/html, via .venv-docs built from
+                                          # docs/requirements.txt; -W, as Read the Docs runs it
+cmake --build build --target stubs        # regenerate python/manta/_manta.pyi from the module
+cmake --build build --target stubs-check  # fail if the committed stub is stale (CI runs this)
+cmake --build build --target typecheck    # mypy over the manta package
+cmake --build build --target venv         # .venv from requirements.txt, plus gcovr
+cmake --build build --target clean_data   # run output (.nc/.restart.nc/.dat) at the root and in
+                                          # Tests/RegressionTests, python/Tests/ and each
+                                          # directory under python-examples/ and python-physics/
+cmake --build build --target clean_coverage
+
+cmake --preset coverage                            # a build directory of its own
+cmake --build build-coverage --target coverage     # all three suites instrumented + gcovr
+
+build/MaNTA --list-options   # every configuration key, straight from ConfigSchema.cpp
 ```
 
-The regression and Python suites need `requirements.txt` installed and the
-virtualenv on `PATH` (the regression driver's shebang is `env python3`):
+There is no `clean` target and no need for one: `rm -rf build`.
 
-```sh
-export PATH="$PWD/.venv/bin:$PATH"
-```
+The regression and Python suites need `requirements.txt` installed, but **nothing
+needs to be on `PATH`**. CMake finds one interpreter — preferring a `.venv` in the
+repo root — and runs the regression driver and pytest with that one. Name a
+different one once, with `-DPython3_EXECUTABLE=...`.
 
 Running one test:
 
 ```sh
-Tests/UnitTests/UnitTests --run_test=solve_jac_tests/solve_hdg_jac_agrees_with_a_dense_solve --log_level=all
-Tests/UnitTests/UnitTests --run_test=mms_convergence_tests --log_level=message   # see BOOST_TEST_MESSAGE output
+build/Tests/UnitTests/UnitTests --run_test=solve_jac_tests/solve_hdg_jac_agrees_with_a_dense_solve --log_level=all
+build/Tests/UnitTests/UnitTests --run_test=mms_convergence_tests --log_level=message   # see BOOST_TEST_MESSAGE output
 pytest python/Tests/test_adjoint.py::test_adjoint_gradient_matches_finite_differences
-Tests/RegressionTests/TestSolutions.py --tolerance 1e-2
+SOLVER=$PWD/build/MaNTA Tests/RegressionTests/TestSolutions.py --tolerance 1e-2
+ctest --test-dir build -R '^unit$' --output-on-failure
 ```
 
-All three suites run from any working directory. New unit-test `.cpp` files must
-be added to `TEST_SOURCES` in `Tests/UnitTests/Makefile`.
+All three suites run from any working directory. `TestSolutions.py` needs
+`SOLVER` when run by hand, because its fallback is `<repo>/MaNTA` and an
+out-of-source build does not put one there; CTest sets it. New unit-test `.cpp`
+files must be added to `MANTA_TEST_SOURCES` in `Tests/UnitTests/CMakeLists.txt` —
+kept an explicit list, unlike `PhysicsCases/*.cpp`, which is globbed with
+`CONFIGURE_DEPENDS`.
 
-Build variants (set on the make command line, e.g. `make DEBUG=on test`):
-`DEBUG` (`-O0 -g -DDEBUG -DPHYSICS_DEBUG`, and `State.hpp`'s `checkShapeAndSet`
-becomes shape-checking rather than a plain assignment), `OMP` (enables the
-`#pragma omp parallel for` in the batched physics wrappers), `COVERAGE`,
-`VERBOSE`, `XLA_FFI`/`CUDA` (JAX FFI, needs jaxlib headers).
+Build variants are build types and `MANTA_*` options, not command-line variables:
+`--preset debug` (`-O0 -g -DDEBUG -DPHYSICS_DEBUG`, and `State.hpp`'s
+`checkShapeAndSet` becomes shape-checking rather than a plain assignment),
+`--preset coverage`, `MANTA_OPENMP` (enables the `#pragma omp parallel for` in
+the batched physics wrappers), `MANTA_VERBOSE`, `MANTA_PHYSICS_DEBUG`,
+`MANTA_NATIVE_ARCH`, `MANTA_TESTS`, `MANTA_PYTHON`, `MANTA_XLA_FFI`/`MANTA_CUDA`
+(JAX FFI, needs jaxlib headers). `cmake -B build -LH` lists them all.
+
+**A Release build does not define `NDEBUG`, deliberately** — CMake would add it
+and this build strips it back out. `NDEBUG` disables `assert()` and takes Eigen's
+assertions with it, and those are the diagnostic of record here: the adjoint's
+spatial-parameter transpose was reported by nothing but Eigen's `resize()`
+assertion, and under `NDEBUG` it would have silently transposed a gradient.
+`cmake/MantaCompilerFlags.cmake` carries the note.
+
+### Where the build lives
+
+| File | What it holds |
+|---|---|
+| `CMakeLists.txt` | targets, source lists, install rules |
+| `CMakePresets.json` | the four presets; `CMakeUserPresets.json` is yours and gitignored |
+| `cmake/MantaCompilerFlags.cmake` | warnings, build types, `-march`, the g++-14 warning, `MANTA_GCOV` |
+| `cmake/MantaDependencies.cmake` | SUNDIALS, Eigen, netCDF, Boost, BLAS, the `extern/` submodules |
+| `cmake/MantaPython.cmake` | which interpreter, and pybind11 |
+| `cmake/MantaTools.cmake` | docs, coverage, venv, the two cleaners |
+| `Tests/UnitTests/CMakeLists.txt` | `MANTA_TEST_SOURCES`, `-DTEST`, `TEST_DATA_DIR` |
+| `python/CMakeLists.txt` | the `_manta` module, XLA FFI, stubs, typecheck |
 
 ## Branch protection on `main`
 
@@ -113,8 +149,9 @@ diff /tmp/req /tmp/got     # left-only = required but impossible; right-only = u
 ```
 
 `Coverage` is in the list deliberately. It has no percentage threshold — it runs
-`make coverage`, i.e. all three suites under an instrumented build, and fails
-only if the build or a suite does — so it gates on the same thing the others do
+the `coverage` target in a `CMAKE_BUILD_TYPE=Coverage` build directory, i.e. all
+three suites under an instrumented build, and fails only if the build or a suite
+does — so it gates on the same thing the others do
 and costs the slowest leg's wall-clock.
 
 ## Architecture
@@ -357,7 +394,7 @@ builds its logger from the environment (`sundials_context.c` calls
 `SUNLogger_CreateFromEnv`), so
 
 ```sh
-SUNLOGGER_INFO_FILENAME=/tmp/ida-info.log SUNLOGGER_DEBUG_FILENAME=/tmp/ida-debug.log ./MaNTA foo.conf
+SUNLOGGER_INFO_FILENAME=/tmp/ida-info.log SUNLOGGER_DEBUG_FILENAME=/tmp/ida-debug.log build/MaNTA foo.conf
 ```
 
 yields IDA's per-attempt record — step size, order, `dsm`, and whether the attempt
@@ -407,7 +444,7 @@ Two return codes worth being able to read without looking them up:
 
 **Every key MaNTA accepts is declared once**, in `ConfigSchema.cpp`: canonical
 name, deprecated aliases, type, category, per-reader requiredness, default and a
-line of documentation. `./MaNTA --list-options` prints the table. There used to
+line of documentation. `build/MaNTA --list-options` prints the table. There used to
 be two — `runManta` open-coded ~120 lines of `toml::find_or`, `PyRunner::configure`
 carried its own `params` list — and they had drifted: two names for the initial
 time (`t_initial`/`tZero`), two defaults for `Absolute_tolerance` (`1e-2` against
@@ -713,7 +750,8 @@ quantity `copy` moves.
 `Python.cpp` defines `_manta`, the compiled core of the **`manta` package**;
 `python/manta/__init__.py` re-exports it and adds the parts better written in
 Python. Users `import manta`, and `pip install .` makes that work from anywhere
-(the build shells out to `make python`, so it still needs `Makefile.local`).
+(the build shells out to CMake, reusing `build/` if it is configured, so it still
+needs a working dependency setup — see `setup.py`).
 A Python case declares itself with class attributes:
 
 ```python
@@ -872,12 +910,12 @@ read — small, one idea each, no dependency outside `requirements.txt`. A syste
 under `python-physics/` is run to get physics: `mirror-plasma/` (a package, its
 own tests, needs `optimistix`) and `stellarator/` (DESC, yancc, interpax, and an
 `XLA_FFI` build). Neither `python-physics/` system is reached by
-`make python_tests` — `pytest.ini` is `testpaths = python/Tests` — so nothing in
-CI runs them, and their READMEs carry the status instead.
+the `python` CTest test — `pytest.ini` is `testpaths = python/Tests` — so nothing
+in CI runs them, and their READMEs carry the status instead.
 
 ### Type stubs
 
-`python/manta/_manta.pyi` is **generated** by `make stubs`; `make stubs-check`
+`python/manta/_manta.pyi` is **generated** by the `stubs` target; `stubs-check`
 diffs it against a fresh generation and is what CI runs, because a stale stub is
 worse than none — it reports the old signature as fact.
 `python/manta/__init__.pyi` is hand-written and covers the Python layer, chiefly
@@ -904,8 +942,14 @@ Three things to know:
 
 ### Out-of-tree builds
 
-`make install PREFIX=...` installs the headers under `$PREFIX/include/manta`,
-`libmanta.so`, and `manta.pc`. A physics case built as a shared object and named
+`cmake --install build --prefix ...` installs the headers under
+`$PREFIX/include/manta`, `libmanta.so`, and `manta.pc`. **`manta.pc` is written at
+*install* time, not configure time**, so `--prefix` is recorded correctly and
+`DESTDIR` is honoured; a plain `configure_file` bakes in whatever the prefix was
+when cmake last ran, and the first symptom of that is a plugin compiling against
+the wrong headers. There is deliberately **no installed CMake package**: an
+exported target would invite `target_link_libraries(mycase manta)`, and linking
+`libmanta` is exactly the mistake below. A physics case built as a shared object and named
 in the config's `PhysicsPlugins` array is dlopened by `runManta` before
 `InstantiateProblem`; its static initialiser registers it into the same
 process-global map. Two traps, neither of which is a link error:
@@ -1062,13 +1106,55 @@ formula, not the operator, if the data cannot tell them apart.
   symptom is heap corruption surfacing at exit in whichever static destructor runs
   first — for us, `ChebyshevBasis::singletons`, which the change had nothing to do
   with. `Postprocessing.hpp` carries a comment saying so.
-* **Build staleness has bitten three times.** Header dependencies now come from
-  `-MMD -MP`, and the `python` target lists `MaNTA.o`, `Python.cpp` and
-  `PyRunner.cpp` as prerequisites. If a fix appears to have no effect, check the
-  object timestamps before doubting the fix.
-* **The top-level Makefile has a bare `export`.** A recursive `$(MAKE)` inherits
-  the already-computed release `CXXFLAGS`, which is why the `coverage` target
-  runs `env -u CXXFLAGS -u LDFLAGS $(MAKE) COVERAGE=on`.
+* **Build staleness bit three times under the Makefile**, each time because a
+  hand-maintained prerequisite list had a hole in it. CMake derives the whole
+  dependency graph, so that class is gone — with one exception, and it is the one
+  the port itself tripped over. **`python/manta/_manta<abi>.so` is written into
+  the *source* tree**, because that is where `import manta` has to find it, so it
+  is the one output two build directories can fight over. `build/` and
+  `build-coverage/` both target it, and CMake will consider its own target up to
+  date if the file on disk is newer than its objects — even when the file was put
+  there by the other build. The symptom is a test suite exercising a module you
+  did not build: measured, a Release run reporting a crash that belonged to the
+  instrumented module.
+
+  **Each build directory now claims the module, so this is handled rather than
+  remembered.** `manta_claim_module` (`python/CMakeLists.txt`) is an ordering
+  dependency of `_manta`: before any link it checks the file against
+  `<build>/python/manta_module.stamp`, which a POST_BUILD step wrote describing
+  what this directory last linked, and deletes anything it does not recognise —
+  which is what makes the link happen. `cmake/MantaClaimModule.cmake` is both
+  halves. Building the same directory twice does no extra work; a relink happens
+  only when the module really did belong to someone else.
+
+  Both directions were measured, and **both were silent**. A coverage run whose
+  Python suite imported the *Release* module: 133s against 748s for the same
+  tests, `PyRunner.cpp.gcda` left at the previous run's timestamp, and the report
+  still read correctly only because gcov data accumulates and an earlier
+  instrumented run had left some behind. And `cmake --build build --target
+  _manta` reporting `Built target _manta` while leaving the 57MB instrumented
+  module exactly where it was — note what that means: **"rebuild it in `build/`"
+  was never a workaround**, because the rebuild is precisely the thing that does
+  not happen. The docs said it for a while; it was wrong.
+
+  On top of that, `cmake/MantaCheckInstrumented.cmake` runs ahead of the suites
+  in the `coverage` target and refuses to start unless the module carries `.gcda`
+  strings. That is deliberate belt and braces: the claim is a mechanism that
+  could quietly stop working, and the thing it protects — a coverage number —
+  looks equally plausible either way.
+
+  Two details worth keeping if you edit any of it. The claim has to hang off
+  `_manta` rather than off the targets that *use* the module; an
+  `add_dependencies` on `coverage` or on a test would be too late twice over,
+  since that dependency is satisfied before the target's own commands run and is
+  satisfied by exactly the stale comparison at fault. And the path cannot be
+  spelled `$<TARGET_FILE:_manta>` — a `TARGET_FILE` genex in a custom command
+  makes that command depend on the target, and this command is a dependency of
+  it, so CMake refuses the cycle by name. It is assembled from
+  `OUTPUT_NAME`/`PREFIX`/`SUFFIX`, with a configure-time check that the suffix
+  still looks like a module suffix, because a mis-assembled path would delete
+  nothing and restore the original silent bug.
+
 * **g++-14 miscompiles this tree at `-O3 -flto -march=native`, and the symptom is
   a wrong number rather than a crash. Do not trust a g++-14 release build.**
   Measured 2026-08-23 on g++-14.2.0, znver2. It is no longer a CI leg, and the
@@ -1177,18 +1263,19 @@ formula, not the operator, if the data cannot tell them apart.
   and the explicit-object-parameter branch failed `std::function`'s `_Callable`
   probe until 14.4. `SystemSolver::setInitialConditions` and `DGSoln::AssignU` use
   lambdas rather than the bind family for that reason — don't reintroduce it.
-* **Third-party includes use `-isystem`, not `-I`** (`Makefile.config`: SUNDIALS,
-  toml11, Boost, netCDF, Eigen, autodiff, and pybind11 in the top-level Makefile).
-  `-Werror` is on, and Eigen's own headers do trip `-Wunused-but-set-variable`
-  under clang — reachable only from the pybind11 build, which pulls in
-  `SparseCore`. Adding a dependency with `-I` re-arms that.
-* **...but never `-isystem` a directory the compiler already searches.** Go through
-  `$(call sysinclude,DIR)` in `Makefile.config`, never a bare `-isystem`. Passing a
-  default system directory is not a no-op: gcc and clang both de-duplicate it,
-  dropping the directory from its proper place at the *end* of the system chain and
-  searching it where the `-isystem` appeared — ahead of the libstdc++ headers.
-  `<cstdlib>` then does `#include_next <stdlib.h>`, which only considers directories
-  *after* the one holding it, so every translation unit dies with
+* **Third-party includes must be `SYSTEM`.** An imported target's include
+  directories are already treated that way; anything added by hand needs
+  `target_include_directories(... SYSTEM ...)`, as `manta_vendored` and the netCDF
+  and Eigen fallbacks in `cmake/MantaDependencies.cmake` do. `-Werror` is on, and
+  Eigen's own headers do trip `-Wunused-but-set-variable` under clang — reachable
+  only from the pybind11 build, which pulls in `SparseCore`. Adding a dependency
+  without `SYSTEM` re-arms that.
+* **...but never hand the compiler a directory it already searches.** Passing a
+  default system directory with `-isystem` is not a no-op: gcc and clang both
+  de-duplicate it, dropping the directory from its proper place at the *end* of the
+  system chain and searching it where the flag appeared — ahead of the libstdc++
+  headers. `<cstdlib>` then does `#include_next <stdlib.h>`, which only considers
+  directories *after* the one holding it, so every translation unit dies with
 
   ```
   /usr/include/c++/16/cstdlib:83:15: fatal error: stdlib.h: No such file or directory
@@ -1196,50 +1283,81 @@ formula, not the operator, if the data cannot tell them apart.
   ```
 
   `NETCDF_DIR=/usr` did exactly that, which is what a package-manager install means
-  on Debian/Ubuntu, and `EIGEN_DIR=/usr/include` does the same. Note the asymmetry:
-  `-I` is safe here — gcc documents that an `-I` naming a standard system directory
-  "is ignored. The directory is still searched but as a system directory at its
-  normal position" — so the fix is to filter, not to downgrade to `-I`, which would
-  re-arm the `-Werror` problem above. **`NETCDF_DIR`/`NETCDF_CXX_DIR` should be
-  unset for a system install**; with neither set, `Makefile.config` asks pkg-config.
-  `sysinclude` compares canonically because clang reports its C++ directories as
-  `/usr/lib/gcc/x86_64-linux-gnu/16/../../../../include/c++/16` where gcc reports
-  `/usr/include/c++/16`, and a probe that fails filters nothing — degrading to the
-  old behaviour rather than to a new error. It cannot be replaced by a "does this
-  directory hold the header we want" test: `/usr/include` really does hold
-  `netcdf.h`. CI's `Makefile.local` leaves `NETCDF_DIR` unset, which is the one
-  configuration where this is invisible, so a workflow step compiles one object with
-  `NETCDF_DIR=/usr` on every matrix leg — on every leg because the probe is a
-  compiler command whose output format differs between gcc and clang.
-* **A comma inside `$(if ...)` is an argument separator, not text.** `syslibdir` in
-  `Makefile.config` writes `-Wl$(comma)-rpath` rather than a literal `-Wl,-rpath`
-  for that reason. Spelled literally, make reads the body of
-  `$(if $(strip $(1)),-L$(1) -Wl,-rpath $(1))` as *then:* `-L$(1) -Wl` and *else:*
-  `-rpath $(1)`, so an empty argument emitted a bare `-rpath` that swallowed the
-  next flag and a real one silently lost its rpath. The `$(comma)` looks like
-  clutter and is load-bearing; don't inline it.
-* **`make -B` does not work in this tree.** `--always-make` tries to remake every
-  target including the included `Makefile.local`, whose rule is a bare
-  `$(error You need to provide a Makefile.local...)`, so `-B` fails immediately with
-  that message no matter what you asked for. To see the recipe for an
-  already-built target, delete it, or read the expanded variables from a throwaway
-  makefile that `include`s `Makefile.config` and `$(info)`s them.
-* **`COMPILER_ID` in `Makefile.config`** distinguishes gcc from clang for the few
-  flags that differ: `-fprofile-abs-path` (gcc-only, a hard error on clang),
+  on Debian/Ubuntu, and `EIGEN_DIR=/usr/include` did the same. `Makefile.config`
+  carried a compiler probe and a `sysinclude` filter for it; **CMake does the
+  filtering itself**, stripping anything in `CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES`
+  from the flags it generates, so the filter is gone. That is a property to keep
+  testing rather than to trust: CI configures a scratch build directory with
+  `-DCMAKE_PREFIX_PATH=/usr` and greps `compile_commands.json`, on *every* leg,
+  because the implicit-directory list comes from a compiler probe whose output
+  differs between gcc and clang.
+* **`FindBLAS` left to itself does not pick what `-lblas` picked, and the
+  difference can be fatal to the Python module only.** `MANTA_BLAS_VENDOR` defaults
+  to `Generic` — a plain `-lblas`, the distribution's alternatives symlink — for
+  this reason. Asked freely, `FindBLAS` walks its vendor list and on a box with
+  Intel's libraries takes the *layered* MKL link (`mkl_gf_lp64` + `mkl_gnu_thread`
+  + `mkl_core` + `libgomp`). Both are MKL on such a box; `-lblas` there is
+  `libmkl_rt`, the dispatch layer that initialises itself. The layered link with
+  the GNU threading layer is unsafe to `dlopen`, and importing a C extension *is* a
+  `dlopen`: the module died mid-solve and took the interpreter with it, leaving
+  pytest to report a bare exit 2 with no traceback, while the standalone solver —
+  linked from the very same objects — ran the whole regression suite. **That
+  asymmetry is the signature**, and the obvious reading of it ("CMake found MKL,
+  the Makefile found `-lblas`, so this is reference-versus-vendor") is wrong.
+* **A find_package can be overruled by a dependency's own config file, silently.**
+  `SUNDIALSConfig.cmake`, when SUNDIALS was built with LAPACK on, writes the BLAS
+  *its own* configure resolved straight into the cache as a hardcoded path list,
+  before calling `find_dependency(LAPACK)`. `set(... CACHE ...)` without `FORCE` is
+  a no-op when the entry exists — but when it does not, CMake *removes the normal
+  variable of the same name from the calling scope*, and `FindBLAS` leaves
+  `BLAS_LIBRARIES` a normal variable. So MaNTA's choice was replaced by whatever
+  machine SUNDIALS happened to be built on, and `BLAS::BLAS` followed it.
+  **Ordering alone does not save you** — the BLAS block already ran first.
+  `cmake/MantaDependencies.cmake` writes its answer into the cache with `FORCE`,
+  and the configure summary prints `BLAS_LIBRARIES` *after* `find_package(SUNDIALS)`
+  precisely so a recurrence is visible rather than inferred.
+* **`CMAKE_CXX_COMPILER_ID` distinguishes gcc from clang** for the few flags that
+  differ: `-fprofile-abs-path` (gcc-only, a hard error on clang),
   `-fno-inline-small-functions` / `-fno-default-inline` (gcc-only, ignored with a
-  warning by clang), and `GCOV`, which is `gcov-14` for gcc but has to be
-  `llvm-cov gcov` for clang. `-flto=auto` is fine on both.
-* **`GCOV` is derived outside `ifdef COVERAGE`, deliberately.** The `coverage`
-  target runs `gcovr` in the *parent* make and only recurses with `COVERAGE=on`,
-  so the make that expands `$(GCOV)` is the one where `COVERAGE` is undefined.
-  Deriving it inside that branch left the parent with a bare `gcov` — which is
-  gcov-14 on a box whose default compiler is gcc-14, and gcov-13 on
-  ubuntu-24.04, where the image ships gcc 12/13/14 with 13 as the default and the
-  workflow builds with `g++-15`. gcov then exits 3 with
-  `AdjointVectors.gcno:version 'B42*', prefer 'B33*'`, gcovr promotes that to a
-  hard error, and `make coverage` fails with exit 64 on CI while passing locally.
-  Anything that reads `.gcno`/`.gcda` must come from the same toolchain version
-  that wrote them.
+  warning by clang), and `MANTA_GCOV`, which is `gcov-15` for gcc but has to be
+  `llvm-cov gcov` for clang. `-flto=auto` is fine on both — clang has accepted it
+  as a spelling of full LTO since clang 17, and the CI matrix starts at 19. Two
+  flags are *probed* with `check_cxx_compiler_flag` rather than assumed:
+  `-march=native` and `-Wno-invalid-feature-combination`, the latter because an
+  unknown `-Wno-` name is itself an error under `-Werror`.
+* **`MANTA_GCOV` must match the compiler that wrote the `.gcno` files**, and it
+  is derived from `CMAKE_CXX_COMPILER_VERSION`, not from the compiler's *name*.
+  The Makefile substituted `gcov` for `g++` in `$(CXX)`, which works for `g++-15`
+  and does nothing whatever for `/usr/bin/c++` — leaving a bare `gcov`, i.e. the
+  distribution's default. That is gcov-13 on ubuntu-24.04, whose image ships gcc
+  12/13/14 with 13 as the default while the workflow builds with `g++-15`. gcovr
+  then exits 3 with `AdjointVectors.gcno:version 'B42*', prefer 'B33*'`, which it
+  promotes to a hard error, and the coverage job fails with exit 64 on CI while
+  passing locally. Note how easily this hides: on a box whose default `gcov`
+  happens to match its default `c++` — as the development box does — the broken
+  derivation gives the right answer. Under the Makefile it additionally needed
+  `GCOV` derived *outside* `ifdef COVERAGE`, because the parent make ran gcovr and
+  only the child had `COVERAGE=on`; a Coverage build directory has no such split.
+* **A `add_custom_target` COMMAND is not shell-quoted unless you say `VERBATIM`,
+  and the failure is a shell syntax error attributed to nothing.** The `coverage`
+  target passes gcovr a filter regex — `[A-Za-z0-9_]+\.(cpp|hpp)$` — and without
+  `VERBATIM` the parentheses reached `/bin/sh` bare:
+
+  ```
+  /bin/sh: 1: Syntax error: "(" unexpected
+  ```
+
+  after all three suites had run to completion, so the cost was twenty-three
+  minutes of instrumented tests and no report. The same target passes
+  `MANTA_GCOV` around, which is the two words `llvm-cov gcov` under clang, so it
+  has a second reason to need it. Any custom command carrying a regex, a glob or
+  an argument with a space wants `VERBATIM`.
+* **`gcovr` is looked for beside `Python3_EXECUTABLE`, not just on `PATH`.**
+  `pip install gcovr` into a virtualenv puts it in that environment's `bin/`,
+  which is on `PATH` only if the environment has been activated — and the point of
+  CMake finding the interpreter itself is that it need not have been. Searching
+  `PATH` alone made the `venv` and `coverage` targets disagree about whether gcovr
+  existed.
 * **A restart used to have its trace thrown away.** `setInitialConditions`
   finished every restart with `EvaluateLambda()`, which sets `lambda` to
   `{{u}}` -- the average of the two cell traces (`DGSoln.hpp`) -- and that is not
@@ -1306,13 +1424,16 @@ formula, not the operator, if the data cannot tell them apart.
   it as behaviour to change deliberately rather than by accident. An explicit
   `RestartFile` is *not* filtered that way and is opened as given.
 * **Not every `.nc` in the tree is output.** `clean_data` sweeps generated data
-  from the directories in `CLEAN_DATA_DIRS`, sparing `*.ref.nc` / `*.ref.dat`.
+  from the directories listed in `cmake/MantaCleanData.cmake`, sparing
+  `*.ref.nc` / `*.ref.dat`.
   `Tests/UnitTests` is deliberately absent: its data files are tracked test
   *inputs* — `testic.nc` (`AutodiffTest.cpp`) and `MatrixDiffusion.restart.nc`
   (`SystemSolverTests.cpp:378`) — and the second has no `.ref.` in its name, so
   the keep-pattern would not save it. Check tracked status, not the filename,
-  before adding a directory there. Unit-test output itself lands at the repo
-  root, because `make test` runs the binary from there. `python` is absent for a
+  before adding a directory there. Unit-test output now lands in the **build
+  directory**, because that is where CTest launches the binary — the repo root is
+  still swept, so a tree carrying output from the Makefile era is tidied rather
+  than stranded. `python` is absent for a
   different reason: since the drivers moved out to `python-examples/` and
   `python-physics/`, nothing writes output there. `.h5` and `.pkl` are not in the
   pattern list either — the DESC equilibria under `python-physics/stellarator/`
@@ -1341,31 +1462,27 @@ formula, not the operator, if the data cannot tell them apart.
   and went on writing the files they believed they had suppressed.
 * **Tests reach private `SystemSolver` members** through `MANTA_TEST_PRIVATE`,
   which a `-DTEST` build widens to `public`. No friend declarations needed.
-* **The extension's ABI suffix comes from `PYTHON_CONFIG`, and the venv need not
-  agree with it.** `make python` names the module from
-  `$(PYTHON_CONFIG) --extension-suffix` and takes its headers from the same
-  program, so the two always match each other — but not necessarily the interpreter
-  that will import them. `PYTHON_CONFIG` prefers a `pythonX.Y-config` matching
-  `.venv`, and falls back to plain `python3-config` when there is none; that follows
-  the distribution's unversioned `python3` symlink. On a box whose `python3` has
-  moved ahead of the venv, the fallback builds `_manta.cpython-314-*.so` while
-  `.venv` runs 3.13, and `make python` *succeeds* while `python_tests`,
-  `stubs-check` and `typecheck` all fail — each with a message pointing somewhere
-  else. pytest exits "manta package not importable. Build it with `make python`",
-  which you just did. `typecheck` reports an `ImportError` for `_manta` dressed up
-  as "most likely due to a circular import", which sends you into `__init__.py`.
-  `stubs-check` is the worst of the three: regenerating the stub needs the import
-  too, so it fails to write one and then reports `_manta.pyi is stale -- run 'make
-  stubs' and commit the result`, which is a claim about a committed file that is
-  in fact fine. Check `ls python/manta/*.so` against
+* **The extension's ABI suffix and the interpreter that imports it now come from
+  the same place, and that retired a whole class of failure.** Worth knowing what
+  it was, because a report of it may still be in flight. The Makefile named the
+  module from `$(PYTHON_CONFIG) --extension-suffix` and took its headers from the
+  same program, so the two matched each other but not necessarily the interpreter
+  that would import them; `PYTHON_CONFIG` fell back to plain `python3-config`,
+  which follows the distribution's unversioned `python3` symlink. On a box whose
+  `python3` had moved ahead of `.venv`, `make python` *succeeded* while
+  `python_tests`, `stubs-check` and `typecheck` all failed — each with a message
+  pointing somewhere else. `stubs-check` was the worst: regenerating the stub
+  needs the import too, so it failed to write one and then reported the committed
+  `_manta.pyi` stale, which was a claim about a tracked file that was fine.
+  `cmake/MantaPython.cmake` finds **one** interpreter — preferring `.venv`, or
+  `$VIRTUAL_ENV` — and pybind11 derives the headers and the suffix from it, so the
+  three cannot disagree. Name a different one with `-DPython3_EXECUTABLE=...`;
+  `setup.py` passes `sys.executable` for the same reason, so `pip install .`
+  always builds for the interpreter doing the installing. If an import of `_manta`
+  ever does fail, `ls python/manta/*.so` against
   `python3 -c 'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX"))'`
-  before believing any of those three failures. The fix is the matching
-  `pythonX.Y-dev` package, or `make venv VENV_PYTHON=... VENV_CREATE_FLAGS=--clear`;
-  the header directory alone is not enough, since a `/usr/include/python3.13` left
-  behind by other packages can exist with no `Python.h` in it. `Makefile:34-51`
-  documents the mechanism, and `make python PYTHON_CONFIG=pythonX.Y-config`
-  overrides it — but only if that program is installed, because `pythonX.Y-config`
-  derives its prefix from `argv[0]`.
+  is still the check — but the answer is now a build directory configured for a
+  different interpreter, not a silent fallback.
 * **gcov counts a templated line once per instantiation**, which makes
   `NetCDFIO.hpp` and `util/trapezoid.hpp` look far worse than they are. Judge
   those by distinct uncovered lines; `Tests/README.md` has the numbers.
@@ -1430,8 +1547,8 @@ These are deliberate and documented, not oversights — see `Tests/README.md` an
 
   The cost is real and worth naming: `plasma_init_tests` and
   `neutral_model_tests` are gone from CI, and the Python case's own suite is not
-  run by `make python_tests` (`pytest.ini` is `testpaths = python/Tests`) because
-  it needs `desc` and `optimistix`. `Tests/README.md` records this.
+  run by the `python` CTest test (`pytest.ini` is `testpaths = python/Tests`)
+  because it needs `desc` and `optimistix`. `Tests/README.md` records this.
 * The `UseMMS` options on `LinearDiffusion` and `LinearDiffSourceTest` have been
   removed: the first's manufactured solution did not satisfy its own boundary
   conditions, and the second never applied `MMS_Source` at all. Order of accuracy
