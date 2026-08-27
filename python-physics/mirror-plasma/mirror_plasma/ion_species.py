@@ -40,103 +40,129 @@ class _IonSpecies(eqx.Module):
         )
 
 
+def _electronImpactIonizationCrossSection(Energy):
+    ionizationEnergy = 13.6
+    minimumEnergySigma = ionizationEnergy
+    # Contribution from ground state
+    # Janev 1993, ATOMIC AND PLASMA-MATERIAL INTERACTION DATA FOR FUSION,
+    # Volume 4 Equation 1.2.1 e + H(1s) --> e + H+ + e Accuracy is 10% or
+    # better
+    fittingParamA = 0.18450
+    fittingParamB = jnp.array([-0.032226, -0.034539, 1.4003, -2.8115, 2.2986])
+
+    x = 1.0 - ionizationEnergy / Energy
+
+    def _compute(x):
+        sum = x * (
+            fittingParamB[0]
+            + x
+            * (
+                fittingParamB[1]
+                + x * (fittingParamB[2] + x * (fittingParamB[3] + x * fittingParamB[4]))
+            )
+        )
+        sigma = (1.0e-13 / (ionizationEnergy * Energy)) * (
+            fittingParamA * jnp.log(Energy / ionizationEnergy) + sum
+        )
+        return sigma
+
+    return jnp.where(jax.lax.le(Energy, minimumEnergySigma), 0.0, _compute(x))
+
+
+def _protonImpactIonizationCrossSection(Energy):
+    # Minimum energy of cross section in keV
+    minimumEnergySigma = 0.5
+    # Convert to keV
+    EnergyKEV = Energy / 1000
+
+    # Contribution from ground state
+    # Janev 1993, ATOMIC AND PLASMA-MATERIAL INTERACTION DATA FOR FUSION,
+    # Volume 4 Equation 2.2.1 H+ + H(1s) --> H+ + H+ + e Accuracy is 30% or
+    # better
+    A1 = 12.899
+    A2 = 61.897
+    A3 = 9.2731e3
+    A4 = 4.9749e-4
+    A5 = 3.9890e-2
+    A6 = -1.5900
+    A7 = 3.1834
+    A8 = -3.7154
+
+    def _compute(E):
+        # Energy is in units of keV
+        sigma = (
+            1e-16
+            * A1
+            * (
+                jnp.exp(-A2 / E) * jnp.log(1 + A3 * E) / E
+                + A4 * jnp.exp(-A5 * E) / (jnp.pow(E, A6) + A7 * jnp.pow(E, A8))
+            )
+        )
+        return sigma
+
+    return jnp.where(
+        jax.lax.le(EnergyKEV, minimumEnergySigma), 0.0, _compute(EnergyKEV)
+    )
+
+
+def _hydrogenChargeExchangeCrossSection(Energy):
+
+    # Minimum energy of cross section in eV
+    minimumEnergySigma_n1 = 0.12
+
+    # Contribution from ground -> ground state
+    # Janev 1993 2.3.1
+    # p + H(n=1) --> H + p
+    def _compute(Energy):
+        EnergyKEV = Energy / 1000
+        sigma_n1 = (
+            1e-16
+            * 3.2345
+            * jnp.log(235.88 / EnergyKEV + 2.3713)
+            / (
+                1
+                + 0.038371 * EnergyKEV
+                + 3.8068e-6 * jnp.pow(EnergyKEV, 3.5)
+                + 1.1832e-10 * jnp.pow(EnergyKEV, 5.4)
+            )
+        )
+        return sigma_n1
+
+    return jnp.where(jax.lax.le(Energy, minimumEnergySigma_n1), 0.0, _compute(Energy))
+
+
 class Hydrogen(_IonSpecies):
     def __init__(self):
         self.IonMass = 1.0 * ProtonMass
 
     @override
     def electronImpactIonizationCrossSection(self, Energy):
-        ionizationEnergy = 13.6
-        minimumEnergySigma = ionizationEnergy
-        # Contribution from ground state
-        # Janev 1993, ATOMIC AND PLASMA-MATERIAL INTERACTION DATA FOR FUSION,
-        # Volume 4 Equation 1.2.1 e + H(1s) --> e + H+ + e Accuracy is 10% or
-        # better
-        fittingParamA = 0.18450
-        fittingParamB = jnp.array([-0.032226, -0.034539, 1.4003, -2.8115, 2.2986])
-
-        x = 1.0 - ionizationEnergy / Energy
-
-        def _compute(x):
-            sum = x * (
-                fittingParamB[0]
-                + x
-                * (
-                    fittingParamB[1]
-                    + x
-                    * (fittingParamB[2] + x * (fittingParamB[3] + x * fittingParamB[4]))
-                )
-            )
-            sigma = (1.0e-13 / (ionizationEnergy * Energy)) * (
-                fittingParamA * jnp.log(Energy / ionizationEnergy) + sum
-            )
-            return sigma
-
-        return jnp.where(jax.lax.le(Energy, minimumEnergySigma), 0.0, _compute(x))
+        return _electronImpactIonizationCrossSection(Energy)
 
     @override
     def protonImpactIonizationCrossSection(self, Energy):
-        # Minimum energy of cross section in keV
-        minimumEnergySigma = 0.5
-        # Convert to keV
-        EnergyKEV = Energy / 1000
-
-        # Contribution from ground state
-        # Janev 1993, ATOMIC AND PLASMA-MATERIAL INTERACTION DATA FOR FUSION,
-        # Volume 4 Equation 2.2.1 H+ + H(1s) --> H+ + H+ + e Accuracy is 30% or
-        # better
-        A1 = 12.899
-        A2 = 61.897
-        A3 = 9.2731e3
-        A4 = 4.9749e-4
-        A5 = 3.9890e-2
-        A6 = -1.5900
-        A7 = 3.1834
-        A8 = -3.7154
-
-        def _compute(E):
-            # Energy is in units of keV
-            sigma = (
-                1e-16
-                * A1
-                * (
-                    jnp.exp(-A2 / E) * jnp.log(1 + A3 * E) / E
-                    + A4 * jnp.exp(-A5 * E) / (jnp.pow(E, A6) + A7 * jnp.pow(E, A8))
-                )
-            )
-            return sigma
-
-        return jnp.where(
-            jax.lax.le(EnergyKEV, minimumEnergySigma), 0.0, _compute(EnergyKEV)
-        )
+        return _protonImpactIonizationCrossSection(Energy)
 
     @override
     def hydrogenChargeExchangeCrossSection(self, Energy):
+        return _hydrogenChargeExchangeCrossSection(Energy)
 
-        # Minimum energy of cross section in eV
-        minimumEnergySigma_n1 = 0.12
 
-        # Contribution from ground -> ground state
-        # Janev 1993 2.3.1
-        # p + H(n=1) --> H + p
-        def _compute(Energy):
-            EnergyKEV = Energy / 1000
-            sigma_n1 = (
-                1e-16
-                * 3.2345
-                * jnp.log(235.88 / EnergyKEV + 2.3713)
-                / (
-                    1
-                    + 0.038371 * EnergyKEV
-                    + 3.8068e-6 * jnp.pow(EnergyKEV, 3.5)
-                    + 1.1832e-10 * jnp.pow(EnergyKEV, 5.4)
-                )
-            )
-            return sigma_n1
+class Deuterium(_IonSpecies):
+    def __init__(self):
+        self.IonMass = 2.0 * ProtonMass
 
-        return jnp.where(
-            jax.lax.le(Energy, minimumEnergySigma_n1), 0.0, _compute(Energy)
-        )
+    @override
+    def electronImpactIonizationCrossSection(self, Energy):
+        return _electronImpactIonizationCrossSection(Energy)
+
+    @override
+    def protonImpactIonizationCrossSection(self, Energy):
+        return _protonImpactIonizationCrossSection(Energy)
+
+    @override
+    def hydrogenChargeExchangeCrossSection(self, Energy):
+        return _hydrogenChargeExchangeCrossSection(Energy)
 
 
 class DeuteriumTritium(_IonSpecies):
@@ -170,94 +196,12 @@ class DeuteriumTritium(_IonSpecies):
 
     @override
     def electronImpactIonizationCrossSection(self, Energy):
-        ionizationEnergy = 13.6
-        minimumEnergySigma = ionizationEnergy
-        # Contribution from ground state
-        # Janev 1993, ATOMIC AND PLASMA-MATERIAL INTERACTION DATA FOR FUSION,
-        # Volume 4 Equation 1.2.1 e + H(1s) --> e + H+ + e Accuracy is 10% or
-        # better
-        fittingParamA = 0.18450
-        fittingParamB = jnp.array([-0.032226, -0.034539, 1.4003, -2.8115, 2.2986])
-
-        x = 1.0 - ionizationEnergy / Energy
-
-        def _compute(x):
-            sum = x * (
-                fittingParamB[0]
-                + x
-                * (
-                    fittingParamB[1]
-                    + x
-                    * (fittingParamB[2] + x * (fittingParamB[3] + x * fittingParamB[4]))
-                )
-            )
-            sigma = (1.0e-13 / (ionizationEnergy * Energy)) * (
-                fittingParamA * jnp.log(Energy / ionizationEnergy) + sum
-            )
-            return sigma
-
-        return jnp.where(jax.lax.le(Energy, minimumEnergySigma), 0.0, _compute(x))
+        return _electronImpactIonizationCrossSection(Energy)
 
     @override
     def protonImpactIonizationCrossSection(self, Energy):
-        # Minimum energy of cross section in keV
-        minimumEnergySigma = 0.5
-        # Convert to keV
-        EnergyKEV = Energy / 1000
-
-        # Contribution from ground state
-        # Janev 1993, ATOMIC AND PLASMA-MATERIAL INTERACTION DATA FOR FUSION,
-        # Volume 4 Equation 2.2.1 H+ + H(1s) --> H+ + H+ + e Accuracy is 30% or
-        # better
-        A1 = 12.899
-        A2 = 61.897
-        A3 = 9.2731e3
-        A4 = 4.9749e-4
-        A5 = 3.9890e-2
-        A6 = -1.5900
-        A7 = 3.1834
-        A8 = -3.7154
-
-        def _compute(E):
-            # Energy is in units of keV
-            sigma = (
-                1e-16
-                * A1
-                * (
-                    jnp.exp(-A2 / E) * jnp.log(1 + A3 * E) / E
-                    + A4 * jnp.exp(-A5 * E) / (jnp.pow(E, A6) + A7 * jnp.pow(E, A8))
-                )
-            )
-            return sigma
-
-        return jnp.where(
-            jax.lax.le(EnergyKEV, minimumEnergySigma), 0.0, _compute(EnergyKEV)
-        )
+        return _protonImpactIonizationCrossSection(Energy)
 
     @override
     def hydrogenChargeExchangeCrossSection(self, Energy):
-
-        # Minimum energy of cross section in eV
-        minimumEnergySigma_n1 = 0.12
-
-        # Contribution from ground -> ground state
-        # Janev 1993 2.3.1
-        # p + H(n=1) --> H + p
-        def _compute(Energy):
-            EnergyKEV = Energy / 1000
-            sigma_n1 = (
-                1e-16
-                * 3.2345
-                * jnp.log(235.88 / EnergyKEV + 2.3713)
-                / (
-                    1
-                    + 0.038371 * EnergyKEV
-                    + 3.8068e-6 * jnp.pow(EnergyKEV, 3.5)
-                    + 1.1832e-10 * jnp.pow(EnergyKEV, 5.4)
-                )
-            )
-            return sigma_n1
-
-        return jnp.where(
-            jax.lax.le(Energy, minimumEnergySigma_n1), 0.0, _compute(Energy)
-        )
+        return _hydrogenChargeExchangeCrossSection(Energy)

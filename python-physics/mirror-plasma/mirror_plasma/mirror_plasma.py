@@ -284,9 +284,8 @@ class MirrorPlasma(VectorizedTransportSystem):
 
         G = D * (
             Uei - 3.0 / 2.0 * state.dTedpsi / state.Te
-        ) + GeometricFactor * params.Config.ADCoefficient * state.dndpsi * (
-            jnp.exp(-t / params.Config.ADDecayRates[Channel.Density])
-            + params.Config.ADFinalCoeffs[Channel.Density]
+        ) + GeometricFactor * state.dndpsi * self.ArtificialDiffusion(
+            t, params, Channel.Density
         )
 
         return (
@@ -305,9 +304,8 @@ class MirrorPlasma(VectorizedTransportSystem):
             * state.pi
             / params.Constants.IonCollisionTime(state.n, state.Ti)
             * state.domegadpsi
-        ) + GeometricFactor * params.Config.ADCoefficient * state.domegadpsi * (
-            jnp.exp(-t / params.Config.ADDecayRates[Channel.AngularMomentum])
-            + params.Config.ADFinalCoeffs[Channel.AngularMomentum]
+        ) + GeometricFactor * state.domegadpsi * self.ArtificialDiffusion(
+            t, params, Channel.AngularMomentum
         )
 
         Pi_out = (
@@ -336,9 +334,8 @@ class MirrorPlasma(VectorizedTransportSystem):
             / params.Constants.IonCollisionTime(state.n, state.Ti)
             * state.dTidpsi
             / state.Ti
-        ) + GeometricFactor * params.Config.ADCoefficient * state.dTidpsi * (
-            jnp.exp(-t / params.Config.ADDecayRates[Channel.IonEnergy])
-            + params.Config.ADFinalCoeffs[Channel.IonEnergy]
+        ) + GeometricFactor * state.dTidpsi * self.ArtificialDiffusion(
+            t, params, Channel.IonEnergy
         )
 
         qi_out = (
@@ -370,15 +367,21 @@ class MirrorPlasma(VectorizedTransportSystem):
             * state.Te
             / params.Constants.ElectronCollisionTime(state.n, state.Te)
             * (4.66 * state.dTedpsi / state.Te - 3.0 / 2.0 * Uei)
-        ) + GeometricFactor * params.Config.ADCoefficient * state.dTedpsi * (
-            jnp.exp(-t / params.Config.ADDecayRates[Channel.ElectronEnergy])
-            + params.Config.ADFinalCoeffs[Channel.ElectronEnergy]
+        ) + GeometricFactor * state.dTedpsi * self.ArtificialDiffusion(
+            t, params, Channel.ElectronEnergy
         )
 
         return (
             params.Constants.qe0()
             / params.Constants.HeatEquationNormalization()
             * HeatFlux
+        )
+
+    def ArtificialDiffusion(self, t, params: MirrorPlasmaParams, channel: Channel):
+        return (
+            jnp.exp(-t / params.Config.ADDecayRates[channel])
+            * params.Config.ADCoefficient
+            + params.Config.ADFinalCoeffs[channel]
         )
 
     # ======================================================================= #

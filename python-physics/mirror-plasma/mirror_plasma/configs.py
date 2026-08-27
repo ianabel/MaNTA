@@ -1,5 +1,5 @@
 from .config import MirrorPlasmaConfig
-from .ion_species import DeuteriumTritium
+from .ion_species import DeuteriumTritium, Deuterium
 import numpy as np
 
 CMFX = MirrorPlasmaConfig(
@@ -22,9 +22,10 @@ CMFX = MirrorPlasmaConfig(
     ParticleSourceCenter=0.2,
     MagneticFieldSlope=0.0,
     PlasmaVoltage=75e3,
-    ADCoefficient=0.05,
+    # IonSpecies=Deuterium(),
+    ADCoefficient=0.1,
     ADDecayRates=0.5 * np.ones((4,)),
-    ADFinalCoeffs=[0.5, 0.01, 0.01, 1.0],
+    ADFinalCoeffs=[0.2, 0.005, 0.01, 0.1],
 )
 
 CMFX1keV = MirrorPlasmaConfig(
@@ -44,6 +45,7 @@ CMFX1keV = MirrorPlasmaConfig(
     ParticleSourceHeight=100.0,
     ParticleSourceWidth=0.1,
     ParticleSourceCenter=0.2,
+    IonSpecies=Deuterium(),
     PlasmaVoltage=100e3,
     ADCoefficient=1.0,
 )
