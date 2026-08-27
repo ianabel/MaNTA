@@ -1,3 +1,41 @@
+Add `Build + tests (g++-15, OpenMP)` to branch protection -- AFTER this lands.
+Raised 2026-08-26, and it is deliberately not done yet.
+
+  ci.yml publishes ten contexts on this branch; the protection rule on main
+  requires nine. The tenth is the OpenMP leg, and it cannot be required until the
+  leg exists on main, because a required context is matched by name against what
+  a PR's own workflow publishes -- so a PR branched from a main without the leg
+  can never satisfy it and hangs at "Expected" forever. It was required early
+  once, in the change that added the leg, and had to be reverted for that reason.
+
+    gh api repos/ianabel/MaNTA/branches/main/protection/required_status_checks \
+      -q '.contexts[]' | sort > /tmp/req
+    gh pr view <N> --json statusCheckRollup \
+      -q '.statusCheckRollup[].name' | sort > /tmp/got
+    diff /tmp/req /tmp/got
+
+  Left-only is required-but-impossible; right-only is ungated. CLAUDE.md's
+  "Branch protection" section carries the full version.
+
+
+No CI leg builds the documentation, so a -W failure reaches main unnoticed.
+Found 2026-08-26, by putting one there.
+
+  The `docs` target builds with -W, as Read the Docs does, and it is the only
+  thing in the tree that would catch a broken reST cross-reference. Nothing runs
+  it: the ten CI contexts are the compiler matrix, the Fedora compile and
+  Coverage. A blank line dropped before `.. _warm-starts:` during a conflict
+  resolution silently deleted the label, `docs/configuration.rst` went on
+  referencing it, and the first thing to notice was a Read the Docs build of main
+  -- one PR later, and only because the CMake branch happened to build docs.
+
+  The job is cheap: `cmake --build build --target docs` needs the .venv-docs
+  built from docs/requirements.txt and no compiler at all. It is a separate leg
+  rather than a step in an existing one precisely because it needs neither the
+  solver nor the matrix, and adding it means adding its context to the protection
+  rule -- in that order, per the entry above.
+
+
 Per-call N_Vector allocation in the coupled Jacobian solve.
 The scalar half of this is fixed (2026-08-25): solveTransportJac used to
 N_VClone and destroy nScalars + 2 full-length vectors on *every* call -- once per
@@ -81,7 +119,7 @@ Found 2026-08-23. CLAUDE.md has the summary; this is the reproduction.
            std::vector<double> reproPadding;
 
        Nothing reads either. Add `#include <vector>` with the other includes.
-    2. `make clean && make test`
+    2. `rm -rf build && cmake --preset default && cmake --build build`
     3. Run the one test in a loop:
 
            for i in $(seq 1 12); do
@@ -191,10 +229,10 @@ landed; these are the pieces that were deliberately not done, with the reason.
     end to end -- a one-file C++ case compiled against the installed headers,
     dlopened via PhysicsPlugins and run; and `pip install .` into a fresh venv
     with a Python case run from the user's own directory through the `manta`
-    command -- but neither is an automated test. The C++ one needs `make
-    install` to a temp prefix and a compiler invocation; the Python one needs a
-    venv. Both are slow enough to want their own CI job rather than a place in
-    `make test`.
+    command -- but neither is an automated test. The C++ one needs
+    `cmake --install build --prefix` to a temp directory and a compiler
+    invocation; the Python one needs a venv. Both are slow enough to want their
+    own CI job rather than a place in `ctest`.
 
 
 Found since, and left undone deliberately rather than overlooked. Each says what
@@ -534,9 +572,16 @@ From the origin/optimize-mode review, still unmerged and worth taking:
     desc_optimize.py, scan_eq.py, desc_optimize_bfgs.py and the notebook:
     SourceCenter/SourceHeight/SourceWidth -> HeatSourceCenter/Height/Width.
     Mechanical, but unverifiable here, so it was not done on spec.
-  - why the branch removed both `#pragma omp parallel for` from
-    TransportSystem.hpp's batched defaults -- ask eatocco; may be a real finding
-    about OpenMP against a Python trampoline
+  - ANSWERED, and it was a real finding, so there is no need to ask: why the
+    branch removed both `#pragma omp parallel for` from TransportSystem.hpp's
+    batched defaults. Rediscovered independently 2026-08-25 by turning
+    MANTA_OPENMP on in CI. Those pragmas wrap the *pointwise fallbacks*, so for a
+    Python case every iteration acquires and releases the GIL: the Python suite
+    went from ~110 s to over 1500 s, which is ctest's timeout, so it never
+    finished at all. The batched defaults are plain serial loops now and
+    util/ParallelFor.hpp holds the only `#pragma omp` in the tree. CLAUDE.md's
+    "Parallelism" section has the numbers and the argument that a case wanting
+    its batch split is the right place to split it.
 
   The drivers, stellarator_state.py and the multi-channel rewrite itself are in
   python-physics/stellarator/ now; that README says which of them run against

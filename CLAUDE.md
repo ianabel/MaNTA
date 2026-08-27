@@ -146,21 +146,32 @@ Read the live rule rather than trusting this paragraph —
   are, and a workflow that works for `ianabel` is not evidence it works for
   anyone else.
 
-**All ten contexts `ci.yml` publishes are required**, each pinned to app 15368
-(GitHub Actions), so a status of that name from anything else does not count:
+**Nine of the ten contexts `ci.yml` publishes are required**, each pinned to app
+15368 (GitHub Actions), so a status of that name from anything else does not
+count:
 
 ```
 Build + tests (g++-15)                    Build + tests (clang++-19)
 Build + tests (g++-16)                    Build + tests (clang++-20)
 Build + tests (g++-15, Eigen 5.0.1)       Build + tests (clang++-21)
 Build + tests (clang++-19, Eigen 5.0.1)   Compile (fedora:latest)
-Build + tests (g++-15, OpenMP)            Coverage
+                                          Coverage
 ```
 
-`Build + tests (g++-15, OpenMP)` was added with `util/ParallelFor.hpp`, and the
-protection rule was updated in the same change — which is the rule this section
-exists to state. The g++-16 leg builds `MANTA_LAPACK=OFF` but is *not* renamed by
-it, deliberately: it carries no `label`, so it goes on publishing
+**The tenth is `Build + tests (g++-15, OpenMP)`, and adding it to the rule has to
+wait until the branch carrying it is on `main`.** That ordering is not fussiness;
+it is the failure this section already records, approached from the other side. A
+required context is matched by *name* against what a PR's own workflow publishes,
+and a PR branched from a `main` whose `ci.yml` has no OpenMP leg cannot publish
+one. Require it early and every unrelated PR sits at "Expected — waiting for
+status to be reported" indefinitely, while the green ticks beside it say the
+build is fine. It *was* required early once, in the change that added the leg,
+and had to be reverted for exactly that reason.
+
+So the sequence is: merge the leg, then add the context, then check the two agree
+with the `diff` below rather than assuming. The g++-16 leg builds
+`MANTA_LAPACK=OFF` but is *not* renamed by it, deliberately: it carries no
+`label`, so it goes on publishing
 `Build + tests (g++-16)` and the required list did not have to move for it. A
 matrix key that changes behaviour without changing the rendered name is the
 cheap way to add coverage here.
@@ -190,6 +201,60 @@ the `coverage` target in a `CMAKE_BUILD_TYPE=Coverage` build directory, i.e. all
 three suites under an instrumented build, and fails only if the build or a suite
 does — so it gates on the same thing the others do
 and costs the slowest leg's wall-clock.
+
+## Working on this repository
+
+Traps in the surrounding tooling rather than in the code. Every one of these has
+cost real time here, and none of them announces itself.
+
+* **`gh` on this box is too old for `gh pr checks --json`**, and it fails by
+  printing usage to *stderr* and nothing to stdout. A poll loop built around it
+  therefore never sees a terminal state and waits forever, in silence — the shape
+  of bug where the absence of a notification is indistinguishable from "still
+  running". `gh pr view <N> --json statusCheckRollup` works and is the one to
+  use. `gh pr create` and `gh pr edit` fail differently again, on a
+  Projects-classic GraphQL deprecation; open and edit PRs through
+  `gh api repos/ianabel/MaNTA/pulls` instead. **Run any `gh` subcommand once and
+  look at what it actually returns before building a wait loop on it.**
+
+* **`git diff main <branch>` does not answer "does this branch hold work I would
+  lose".** For a branch that is fully merged but sitting at an older point, that
+  diff reports `main`'s *subsequent* commits backwards: a merged branch here
+  showed "89 files changed, 7917 insertions(+)", which reads like unmerged work
+  and is the opposite. The question is `git rev-list --count main..<branch>`,
+  which is 0 for exactly the branches that are safe to delete. `git branch -d`
+  applies that same test and refuses when it fails, so prefer it to `-D` and let
+  git hold the veto.
+
+* **`git reset` clears `MERGE_HEAD`.** Unstaging something in the middle of a
+  conflicted merge turns the merge into an ordinary one-parent commit, so the
+  merge silently does not happen — and GitHub then reports the PR `CONFLICTING`
+  against a `main` whose content it appears to contain already. Rebuilding the
+  commit with `git commit-tree $TREE -p <ours> -p <theirs>` fixes it without
+  redoing the resolution; confirm with an empty `git diff` against the broken
+  commit and `git merge-base --is-ancestor origin/main HEAD`.
+
+* **`git add -A` is unsafe on a branch based on `main`.** `.gitignore` covers
+  `build/` but not `build-*/`, and this tree accumulates `build-omp/`,
+  `build-debug/` and `build-coverage/`. Stage by name.
+
+* **A conflict resolved by splicing strings damages prose in ways nothing
+  compiles.** Two reached `main` that way: a `Solver.cpp` comment joined
+  mid-sentence into "does not apply about it does not either", and a blank line
+  dropped before a reST label, which deletes the label outright. The compiler
+  sees neither. The docs one *is* caught by the `docs` target, which builds with
+  `-W` — but **no CI leg runs it**, so the first thing to notice was a Read the
+  Docs build of `main`. Read every resolved hunk that is prose, and run
+  `cmake --build build --target docs` before pushing anything touching `docs/`.
+
+* **A clean rebase can still revert a fix.** When the branch and the commits it
+  replays onto both touch a file, "no conflicts" means git found no textual
+  overlap — not that the result is what you want. `git range-diff <old-base>..<old>
+  <new-base>..<new>` reports whether each patch survived unchanged, `=` on every
+  line being the thing to look for, and then read the merged region itself. This
+  matters most for a file a *bugfix* branch also touched, which is precisely when
+  the rebase is least likely to conflict and most likely to matter.
+
 
 ## Architecture
 
