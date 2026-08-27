@@ -646,7 +646,7 @@ public:
 
     Value out =
         _override(s, state, state_dot,
-                  Integrator::getIntegrationWeights(y.getBasis(), y.getGrid()))
+                  m_integrator.integrationWeights(y.getBasis(), y.getGrid()))
             .cast<Value>();
     return out;
   }
@@ -700,6 +700,9 @@ public:
   using TransportSystem::nVars;
 
 private:
+  // See Integrator::Cache. One per case, not one per process.
+  mutable Integrator::Cache m_integrator;
+
   bool initialized = false;
   bool vectorized = false;
   std::map<std::string_view, py::function> method_overrides;

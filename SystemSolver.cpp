@@ -1,4 +1,5 @@
 #include "SystemSolver.hpp"
+#include "util/ParallelFor.hpp"
 #include <sundials/sundials_nvector.h>
 #include <sundials/sundials_linearsolver.h> /* Generic Liner Solver Interface */
 #include <sundials/sundials_types.h>        /* defs of sunrealtype, sunindextype  */
@@ -35,38 +36,60 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSyst
     localDOF = nVars * SQU_DOF + nAux * AUX_DOF;
 
     logmsg<LOG_LEVEL::INFO>("Total HDG degrees of freedom {}", (localDOF)*nCells + (nCells + 1) * nVars + nScalars );
-    if (nScalars > 0)
-    {
-        v = new N_Vector[nScalars];
-        w = new N_Vector[nScalars];
-        for (Index i = 0; i < nScalars; ++i)
-        {
-            v[i] = N_VNew_Serial(y.getDoF(), ctx);
-            w[i] = N_VNew_Serial(y.getDoF(), ctx);
-        }
-    }
-    else
-    {
-        v = nullptr;
-        w = nullptr;
-    }
+    allocateScalarWorkVectors();
     initialised = false; // Need to know tau to call this
+}
+
+// See the declaration. Both are no-ops with no scalars, and free() is idempotent
+// and safe to call before any allocate -- which is what lets setFieldModel pair
+// them without knowing whether the constructor got there first.
+void SystemSolver::allocateScalarWorkVectors()
+{
+    if (nScalars < 1)
+        return;
+
+    v = new N_Vector[nScalars];
+    w = new N_Vector[nScalars];
+    solveScalarE = new N_Vector[nScalars];
+    for (Index i = 0; i < nScalars; ++i)
+    {
+        v[i] = N_VNew_Serial(y.getDoF(), ctx);
+        w[i] = N_VNew_Serial(y.getDoF(), ctx);
+        solveScalarE[i] = N_VNew_Serial(y.getDoF(), ctx);
+    }
+    solveScalarD = N_VNew_Serial(y.getDoF(), ctx);
+    solveScalarG = N_VNew_Serial(y.getDoF(), ctx);
+}
+
+void SystemSolver::freeScalarWorkVectors()
+{
+    if (v != nullptr)
+        for (Index i = 0; i < nScalars; ++i)
+            N_VDestroy(v[i]);
+    if (w != nullptr)
+        for (Index i = 0; i < nScalars; ++i)
+            N_VDestroy(w[i]);
+    if (solveScalarE != nullptr)
+        for (Index i = 0; i < nScalars; ++i)
+            N_VDestroy(solveScalarE[i]);
+
+    delete[] v;
+    delete[] w;
+    delete[] solveScalarE;
+    v = w = solveScalarE = nullptr;
+
+    if (solveScalarD != nullptr)
+        N_VDestroy(solveScalarD);
+    if (solveScalarG != nullptr)
+        N_VDestroy(solveScalarG);
+    solveScalarD = solveScalarG = nullptr;
 }
 
 SystemSolver::~SystemSolver()
 {
     delete[] yJacMem;
     delete[] dydtJacMem;
-    if (nScalars > 0)
-    {
-        for (Index i = 0; i < nScalars; ++i)
-        {
-            N_VDestroy(v[i]);
-            N_VDestroy(w[i]);
-        }
-        delete[] v;
-        delete[] w;
-    }
+    freeScalarWorkVectors();
     freeFieldWorkVectors();
     SUNContext_Free(&ctx);
 }
@@ -198,13 +221,8 @@ void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
     // *detaching* a model from a scalar system, where the length is unchanged
     // and the rebuild is a no-op. It is here for the moment that refusal lifts,
     // which is the moment it stops being one.
-    for (Index i = 0; i < nScalars; ++i)
-    {
-        N_VDestroy(v[i]);
-        N_VDestroy(w[i]);
-        v[i] = N_VNew_Serial(y.getDoF(), ctx);
-        w[i] = N_VNew_Serial(y.getDoF(), ctx);
-    }
+    freeScalarWorkVectors();
+    allocateScalarWorkVectors();
 
     // The A2 rows. One per field DOF, each as long as the whole solution vector
     // -- which is why they cannot be allocated in the constructor: nField is
@@ -261,7 +279,7 @@ void SystemSolver::assembleFieldCoupling(DGSoln const &Y, DGSoln const &Ydot,
     fieldModel->FieldResidualPrime(dR, dRdot, dRdpsi, dRddpsidt,
                                    Vector(Y.getField()), Vector(Ydot.getField()),
                                    Y.evalOnNodes(), Y.getPoints(),
-                                   Integrator::getIntegrationWeights(Y.getBasis(), grid),
+                                   integrator.integrationWeights(Y.getBasis(), grid),
                                    tEval);
 
     // ---- A2: one full-length row vector per field row.
@@ -702,8 +720,14 @@ void SystemSolver::initialiseMatrices()
 
     Eigen::MatrixXd HGlobalMat(nVars * (nCells + 1), nVars * (nCells + 1));
     HGlobalMat.setZero();
-    K_global.resize(nVars * (nCells + 1), nVars * (nCells + 1));
-    K_global.setZero();
+    // Banded, in trace-major order: (a - b) * nVars + (varI - varJ) with
+    // a, b in {0, 1} for the two faces a cell owns, so 2 * nVars - 1 either side.
+    // See K_banded's declaration for why the ordering is not the DOF layout's.
+    const Index traceN = nVars * (nCells + 1);
+    const Index traceBand = 2 * nVars - 1;
+    K_banded.resize(traceN, traceBand, traceBand);
+    adjoint_K_banded.resize(traceN, traceBand, traceBand);
+    traceRhs.resize(traceN);
     L_global.resize(nVars * (nCells + 1));
     L_global.setZero();
 
@@ -1142,7 +1166,6 @@ Matrix SystemSolver::assembleCellMatrix(Index i, DGSoln const &Y,
                                         GlobalStateMatrix &dSource_vals,
                                         GlobalStateMatrix &dAux_vals, double alphaValue)
 {
-    Eigen::MatrixXd X(nVars * (k + 1), nVars * (k + 1));
     Eigen::MatrixXd NLq(nVars * (k + 1), nVars * (k + 1));
     Eigen::MatrixXd NLu(nVars * (k + 1), nVars * (k + 1));
     Eigen::MatrixXd Ssig(nVars * (k + 1), nVars * (k + 1));
@@ -1157,17 +1180,26 @@ Matrix SystemSolver::assembleCellMatrix(Index i, DGSoln const &Y,
     Eigen::MatrixXd MX(nVars * SQU_DOF + nAux * AUX_DOF, nVars * SQU_DOF + nAux * AUX_DOF);
     MX = MBlocks[i];
 
-    // X matrix
-    X.setZero();
-    for (Index var = 0; var < nVars; var++)
-    {
-        std::function<double(double)> alphaF = [=, this](double x)
-        { return alphaValue * problem->aFn(var, x); };
-        Eigen::MatrixXd Xsubmat((k + 1), (k + 1));
-        Y.getBasis().MassMatrix(I, Xsubmat, alphaF);
-        X.block(var * (k + 1), var * (k + 1), k + 1, k + 1) = Xsubmat;
-    }
-    MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) += X;
+    // The X matrix: alphaValue times the aFn-weighted mass matrix, which is
+    // exactly what initialiseMatrices already put in XMats[i].
+    //
+    // This used to re-integrate it here, every Jacobian build, through
+    // MassMatrix(I, ., alphaValue * aFn) -- a 30-point Gauss rule per entry per
+    // variable per cell. MassMatrix is linear in its weight, so scaling the
+    // stored matrix is the same quantity for none of the work, and aFn takes no
+    // time argument so XMats cannot go stale within a run.
+    //
+    // **It also takes a physics hook out of a parallel region.** aFn is a
+    // pointwise hook and PyTransportSystem overrides it via PYBIND11_OVERRIDE, so
+    // while this loop recomputed the quadrature a Python case's aFn was being
+    // called from OpenMP worker threads -- taking the GIL once per quadrature
+    // point, and running user Python concurrently on one object, which is the
+    // thing the batched wrappers were made serial to avoid. Reading XMats closes
+    // that: nothing under updateMatricesForJacSolve's parallel loop calls into a
+    // physics case any more, because evaluatePhysicsDerivatives has already done
+    // all of it, serially, before the loop starts.
+    MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) +=
+        alphaValue * XMats[i];
 
     if (superconvergent)
     {
@@ -1307,8 +1339,8 @@ void SystemSolver::assembleScalarCoupling(DGSoln const &Y, DGSoln const &Ydot,
 
     problem->ScalarGPrime(ScalarG_vals, ScalarG_dt_vals, Y.evalOnNodes(), Ydot.evalOnNodes(),
                           Y.getPoints(),
-                          Integrator::getIntegrationWeights(Y.getBasis(), grid),
-                          Integrator::getPhiBoundary(Y.getBasis(), grid), tEval);
+                          integrator.integrationWeights(Y.getBasis(), grid),
+                          integrator.phiBoundary(Y.getBasis(), grid), tEval);
 
     for ( Index j = 0; j < nScalars; ++j ) {
         const auto& s = ScalarG_vals[j];
@@ -1348,12 +1380,14 @@ void SystemSolver::updateMatricesForJacSolve()
     // Basis::MassMatrix is a boost::math::quadrature::gauss<double, 30>, whose
     // integrate() is const over static tables, so the shared static integrator is
     // not a race either.
-#pragma omp parallel for
-    for (unsigned int i = 0; i < nCells; i++)
-    {
-        MXSolvers[i].compute(
-            assembleCellMatrix(i, yJac, dSigma_vals, dSource_vals, dAux_vals, alpha));
-    }
+    manta::parallel_for(
+        nCells,
+        [&](Index i)
+        {
+            MXSolvers[i].compute(
+                assembleCellMatrix(i, yJac, dSigma_vals, dSource_vals, dAux_vals, alpha));
+        },
+        cellGrain);
 
     if (nScalars > 0)
     {
@@ -1437,16 +1471,16 @@ void SystemSolver::solveTransportJac(N_Vector res_g, N_Vector delY)
 {
     if (nScalars > 0)
     {
-        // TODO: move temporaries into private variables of the class and allocate/destroy once
-        // allocate temporary working space for gauss elimination of scalars.
-
-        N_Vector d = N_VClone(delY);
-
-        N_Vector *e = new N_Vector[nScalars];
-        for (Index i = 0; i < nScalars; ++i)
-            e[i] = N_VClone(delY);
-
-        N_Vector g = N_VClone(delY);
+        // The working space for the Gaussian elimination of the scalar rows.
+        // Owned by the solver and allocated once -- these were N_VClone'd and
+        // destroyed on every call, which is once per Newton iteration and
+        // nField + 1 times that under solveCoupledJacExact. Nothing in them
+        // survives a call, so there is nothing to reset: every one is fully
+        // written before it is read (d and e[] by solveHDGJac, g by
+        // N_VLinearCombination, which assigns rather than accumulates).
+        N_Vector d = solveScalarD;
+        N_Vector *e = solveScalarE;
+        N_Vector g = solveScalarG;
 
         DGSoln res_g_map(nVars, grid, k, N_VGetArrayPointer(res_g), nScalars, nAux, nField);
 
@@ -1463,7 +1497,12 @@ void SystemSolver::solveTransportJac(N_Vector res_g, N_Vector delY)
             solveHDGJac(v[i], e[i]);
         }
 
-        Vector tmp_N = (N_global.inverse() * res_g_map.Scalars());
+        // One factorisation, not two: this was `N_global.inverse()` here and
+        // again for del_y.Scalars() below, on a matrix that does not change
+        // between them.
+        const Matrix N_global_inv = N_global.inverse();
+
+        Vector tmp_N = (N_global_inv * res_g_map.Scalars());
         N_VLinearCombination(nScalars, tmp_N.data(), e, g); // g = Sum_i tmp_N[i]*e[i]
         N_VLinearSum(1.0, g, 1.0, d, g);                    // g += d;
 
@@ -1490,13 +1529,8 @@ void SystemSolver::solveTransportJac(N_Vector res_g, N_Vector delY)
         for (Index i = 0; i < nScalars; ++i)
             del_y_scalars(i) = res_g_map.Scalar(i) - N_VDotProd(w[i], delY);
 
-        del_y.Scalars() = N_global.inverse() * del_y_scalars;
+        del_y.Scalars() = N_global_inv * del_y_scalars;
 
-        for (Index i = 0; i < nScalars; ++i)
-            N_VDestroy(e[i]);
-        N_VDestroy(d);
-        N_VDestroy(g);
-        delete[] e;
     }
     else
     {
@@ -1730,6 +1764,70 @@ void SystemSolver::solveCoupledJacIterative(N_Vector res_g, N_Vector delY)
 // Solve the HDG part of the Jacobian
 // NB: This is called repeatedly, *possibly with the same jacobian*
 // don't do any matrix re-assembly here
+// See the declarations. The loops are written out rather than expressed as an
+// Eigen permutation because the band form is not an Eigen matrix and never
+// materialises the permutation: this is a gather and a scatter over
+// nVars * (nCells + 1) doubles, against a solve that is now O(n * band^2).
+void SystemSolver::scatterTraceBlock(manta::BandedMatrix &K, Index cell,
+                                     Matrix const &block) const
+{
+    for (Index varI = 0; varI < nVars; ++varI)
+        for (Index varJ = 0; varJ < nVars; ++varJ)
+            for (Index a = 0; a < 2; ++a)
+                for (Index b = 0; b < 2; ++b)
+                    K(traceDoF(cell + a, varI), traceDoF(cell + b, varJ)) +=
+                        block(varI * 2 + a, varJ * 2 + b);
+}
+
+void SystemSolver::toTraceMajor(Eigen::Ref<const Vector> varMajor,
+                                Eigen::Ref<Vector> traceMajor) const
+{
+    for (Index var = 0; var < nVars; ++var)
+        for (Index node = 0; node <= static_cast<Index>(nCells); ++node)
+            traceMajor(traceDoF(node, var)) = varMajor(var * (nCells + 1) + node);
+}
+
+void SystemSolver::fromTraceMajor(Eigen::Ref<const Vector> traceMajor,
+                                  Eigen::Ref<Vector> varMajor) const
+{
+    for (Index var = 0; var < nVars; ++var)
+        for (Index node = 0; node <= static_cast<Index>(nCells); ++node)
+            varMajor(var * (nCells + 1) + node) = traceMajor(traceDoF(node, var));
+}
+
+// A Dirichlet end contributes an identically zero trace row *and* column to the
+// condensed operator -- Hvar's diagonal is set to zero in initialiseMatrices and
+// nothing else writes that DOF -- so K is singular by exactly the number of
+// Dirichlet boundaries. See CLAUDE.md, which records the same rank deficiency in
+// the finite-differenced Jacobian.
+//
+// The dense FullPivLU absorbed that silently: for a consistent rank-deficient
+// system it returns the particular solution with the free components set to
+// zero. A banded LU cannot, and should not -- so the constraint that was implicit
+// in the decomposition's behaviour is written down instead. `delta lambda = 0` at
+// a Dirichlet face is the correct increment: lambda is already at g_D(t) there.
+void SystemSolver::imposeDirichletTraceRows(manta::BandedMatrix &K) const
+{
+    for (Index var = 0; var < nVars; ++var)
+    {
+        if (problem->isLowerBoundaryDirichlet(var))
+            K(traceDoF(0, var), traceDoF(0, var)) = 1.0;
+        if (problem->isUpperBoundaryDirichlet(var))
+            K(traceDoF(nCells, var), traceDoF(nCells, var)) = 1.0;
+    }
+}
+
+void SystemSolver::zeroDirichletTraceRows(Eigen::Ref<Vector> traceMajor) const
+{
+    for (Index var = 0; var < nVars; ++var)
+    {
+        if (problem->isLowerBoundaryDirichlet(var))
+            traceMajor(traceDoF(0, var)) = 0.0;
+        if (problem->isUpperBoundaryDirichlet(var))
+            traceMajor(traceDoF(nCells, var)) = 0.0;
+    }
+}
+
 void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
 {
     // DGsoln object that will map the data from delY
@@ -1751,7 +1849,7 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
     VectorWrapper delYVec(N_VGetArrayPointer(delY), N_VGetLength(delY));
     delYVec.setZero();
 
-    K_global.setZero();
+    K_banded.setZero();
 
     // Assemble RHS g into cellwise form and solve for SQU blocks
     mapDGtoSundials(g1g2g3_cellwise, g4, N_VGetArrayPointer(g));
@@ -1759,28 +1857,34 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
     std::vector<Eigen::VectorXd> SQU_f(nCells);
     std::vector<Eigen::MatrixXd> SQU_0(nCells);
     std::vector<Eigen::MatrixXd> K_cell(nCells);
+    std::vector<Eigen::VectorXd> CGf(nCells);
 
     // The two back-substitutions are the expensive part and are cell-independent,
     // so they parallelise; the assembly into K_global below does not, and the two
     // are separate loops for that reason. See the comment there.
-#pragma omp parallel for
-    for (Index i = 0; i < nCells; i++)
-    {
-        // Interval const& I( grid[ i ] );
+    //
+    // CGf[i] is computed here rather than in the serial F loop below for the same
+    // reason: it is a matrix-vector product per cell, it depends on nothing but
+    // this cell, and the loop that consumes it cannot be parallel.
+    manta::parallel_for(
+        nCells,
+        [&](Index i)
+        {
+            // Interval const& I( grid[ i ] );
 
-        // SQU_f
-        Eigen::VectorXd const &g1g2g3 = g1g2g3_cellwise[i];
+            // SQU_f
+            Eigen::VectorXd const &g1g2g3 = g1g2g3_cellwise[i];
 
-        SQU_f[i] = MXSolvers[i].solve(g1g2g3);
+            SQU_f[i] = MXSolvers[i].solve(g1g2g3);
 
-        // SQU_0
-        Eigen::MatrixXd const &CE = CEBlocks[i];
-        SQU_0[i] = MXSolvers[i].solve(CE);
-        // std::cerr << SQU_0[i] << std::endl << std::endl;
-        // std::cerr << CE << std::endl << std::endl;
+            // SQU_0
+            Eigen::MatrixXd const &CE = CEBlocks[i];
+            SQU_0[i] = MXSolvers[i].solve(CE);
 
-        K_cell[i] = H_cellwise[i] - CG_cellwise[i] * SQU_0[i];
-    }
+            K_cell[i] = H_cellwise[i] - CG_cellwise[i] * SQU_0[i];
+            CGf[i] = CG_cellwise[i] * SQU_f[i];
+        },
+        cellGrain);
 
     // Serial, and it has to be: lambda lives on cell *faces*, so cell i's 2x2
     // block starts at trace index i and cell i+1's at i+1 -- they overlap in the
@@ -1789,27 +1893,45 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
     // lost by leaving it out of the parallel region.
     // K
     for (Index i = 0; i < nCells; i++)
-        for (Index varI = 0; varI < nVars; varI++)
-            for (Index varJ = 0; varJ < nVars; varJ++)
-                K_global.block<2, 2>(varI * (nCells + 1) + i, varJ * (nCells + 1) + i) += K_cell[i].block<2, 2>(varI * 2, varJ * 2);
+        scatterTraceBlock(K_banded, i, K_cell[i]);
+
+    imposeDirichletTraceRows(K_banded);
 
     // Construct the RHS of K Lambda = F
     Eigen::VectorXd F(nVars * (nCells + 1));
     F = g4;
+    // Serial for the same reason the K_global assembly above is: cell i writes
+    // trace rows i and i+1, so neighbours overlap in the face they share. The
+    // product itself was hoisted into the parallel loop; what is left is 2*nVars
+    // subtractions per cell.
     for (Index i = 0; i < nCells; i++)
     {
         for (Index var = 0; var < nVars; var++)
         {
-            F.block<2, 1>(var * (nCells + 1) + i, 0) -= (CG_cellwise[i] * SQU_f[i]).block(var * 2, 0, 2, 1);
+            F.block<2, 1>(var * (nCells + 1) + i, 0) -= CGf[i].block(var * 2, 0, 2, 1);
         }
     }
 
-    // Factorise the global matrix ( size n_cells * n_variables )
-    EigenGlobalSolver globalKSolver(K_global);
-    // This solves for the lambdas of all variables at once (drop it in the memory sundials reserved for it)
+    // Factorise the global matrix and solve for the lambdas of all variables at
+    // once, dropping the answer in the memory SUNDIALS reserved for it.
+    //
+    // Banded rather than dense: see K_banded. The permutation either side is what
+    // lets the band form use its own ordering without the solution vector's
+    // changing -- F is built above in the DOF layout's var-major order, so it is
+    // gathered into trace-major, solved in place, and scattered back.
     Index LambdaOffset = nCells * localDOF;
 
-    delYVec.segment(LambdaOffset, nVars * (nCells + 1)) = globalKSolver.solve(F);
+    toTraceMajor(F, traceRhs);
+    zeroDirichletTraceRows(traceRhs);
+
+    if (!K_banded.factorize())
+        throw std::runtime_error(
+            "solveHDGJac: the condensed trace matrix is singular. The dense "
+            "FullPivLU this replaced would have returned something for it.");
+    K_banded.solveInPlace(traceRhs);
+
+    auto lambdaOut = delYVec.segment(LambdaOffset, nVars * (nCells + 1));
+    fromTraceMajor(traceRhs, lambdaOut);
 
     /*
      * We really should do something here.
@@ -1822,9 +1944,12 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
     }
     */
 
-    // Now find del sigma, del q and del u to eventually find del Y
-    // this can be done in parallel over each cell
-    for (Index i = 0; i < nCells; i++)
+    // Now find del sigma, del q and del u to eventually find del Y. Cell-
+    // independent: iteration i reads lambda and writes only cell i's own
+    // sigma/q/u/aux coefficients, which are disjoint blocks of the same vector.
+    manta::parallel_for(
+        nCells,
+        [&](Index i)
     {
         Vector delSQU(nVars * SQU_DOF);
 
@@ -1851,7 +1976,8 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
         }
         for (Index aux = 0; aux < nAux; aux++)
             del_y.Aux(aux).getCoeff(i).second = delSQU.segment(nVars * SQU_DOF + aux * AUX_DOF, AUX_DOF);
-    }
+    },
+        cellGrain);
 }
 
 int static_residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval, void *user_data)
@@ -2001,8 +2127,8 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
         // every cell and node, and the scalars all see the same state.
         const GlobalState scalarStates = Y_h.evalOnNodes();
         const GlobalState scalarStates_dt = dYdt_h.evalOnNodes();
-        const Vector &weights = Integrator::getIntegrationWeights(Y_h.getBasis(), grid);
-        const Matrix &phiBoundary = Integrator::getPhiBoundary(Y_h.getBasis(), grid);
+        const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
+        const Matrix &phiBoundary = integrator.phiBoundary(Y_h.getBasis(), grid);
 
         for (Index j = 0; j < nScalars; j++)
             res.Scalar(j) = problem->ScalarG(j, scalarStates, scalarStates_dt, Y_h.getPoints(),
@@ -2018,7 +2144,7 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
         // row's integrals are taken against it. The star nodes are a device for
         // the transport residual's projection, not a different set of unknowns.
         const GlobalState fieldStates = Y_h.evalOnNodes();
-        const Vector &weights = Integrator::getIntegrationWeights(Y_h.getBasis(), grid);
+        const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
 
         Vector fieldRes = Vector::Zero(nField);
         fieldModel->FieldResidual(fieldRes, Vector(Y_h.getField()), Vector(dYdt_h.getField()),
@@ -2162,6 +2288,13 @@ void SystemSolver::initializeMatricesForAdjointSolve(Index gIndex)
    // We have to remake the M matrices because they're in the wrong order
     // We also need to calculate the dSigmadX and dSourcedX matrices at the same time
 
+    // Serial, unlike its forward twin in updateMatricesForJacSolve, and for a
+    // reason that is about this loop rather than about the mathematics: it grows
+    // adjoint_CEBlocks and adjoint_CGBlocks with emplace_back, so both the
+    // container and the resulting order are shared state. Pre-sizing them and
+    // indexing by i would make it parallelisable -- but this runs once per run,
+    // against updateMatricesForJacSolve's once per Newton iteration, so it has
+    // never been where the time is. Measured breakdown is in TODO.
     for (unsigned int i = 0; i < nCells; i++)
     {
         Eigen::MatrixXd NLq(nVars * (k + 1), nVars * (k + 1));
@@ -2405,22 +2538,30 @@ void SystemSolver::initializeMatricesForAdjointSolve(Index gIndex)
 // once per right-hand side.
 void SystemSolver::factoriseAdjointTrace()
 {
-    K_global.setZero();
+    adjoint_K_banded.setZero();
     adjoint_SQU_0.assign(nCells, Matrix());
 
+    // Serial: the solve is cell-independent but the K_global accumulation below
+    // it is not -- lambda lives on faces, so cell i and cell i+1 both write the
+    // trace block they share. Splitting it into a parallel solve and a serial
+    // accumulation, the way solveHDGJac does, would work; it has not been done
+    // because this runs once per run rather than once per Newton iteration.
     for (Index i = 0; i < nCells; i++)
     {
         adjoint_SQU_0[i] = MXSolvers[i].solve(adjoint_CGBlocks[i]);
 
         const Matrix K_cell = H_cellwise[i].transpose() - adjoint_CEBlocks[i] * adjoint_SQU_0[i];
 
-        for (Index varI = 0; varI < nVars; varI++)
-            for (Index varJ = 0; varJ < nVars; varJ++)
-                K_global.block<2, 2>(varI * (nCells + 1) + i, varJ * (nCells + 1) + i) +=
-                    K_cell.block<2, 2>(varI * 2, varJ * 2);
+        scatterTraceBlock(adjoint_K_banded, i, K_cell);
     }
 
-    adjoint_K.compute(K_global);
+    // Same rank deficiency as the forward operator, and for the same reason:
+    // H_cellwise.transpose() carries the same zeroed Dirichlet diagonal.
+    imposeDirichletTraceRows(adjoint_K_banded);
+
+    if (!adjoint_K_banded.factorize())
+        throw std::runtime_error(
+            "factoriseAdjointTrace: the transposed trace matrix is singular.");
 }
 
 // See the declaration: A^-T applied to a cellwise right-hand side.
@@ -2451,19 +2592,29 @@ void SystemSolver::solveTransportAdjoint(std::vector<Vector> const &rhs,
     }
     */
 
-    lambdaOut = adjoint_K.solve(F);
+    // Same permutation as the forward solve; see K_banded.
+    lambdaOut.resize(nVars * (nCells + 1));
+    toTraceMajor(F, traceRhs);
+    zeroDirichletTraceRows(traceRhs);
+    adjoint_K_banded.solveInPlace(traceRhs);
+    fromTraceMajor(traceRhs, lambdaOut);
 
-    // Now find the cellwise part, which can be done in parallel over each cell
+    // The cellwise part, cell-independent exactly as solveHDGJac's is: iteration
+    // i reads lambdaOut and writes only squOut[i], which is pre-sized here rather
+    // than grown.
     squOut.assign(nCells, Vector());
-    for (Index i = 0; i < nCells; i++)
-    {
-        // Reorganise the data from variable-major to cell-major
-        Vector LambdaCell(2 * nVars);
-        for (Index var = 0; var < nVars; var++)
-            LambdaCell.segment(2 * var, 2) = lambdaOut.segment(var * (nCells + 1) + i, 2);
+    manta::parallel_for(
+        nCells,
+        [&](Index i)
+        {
+            // Reorganise the data from variable-major to cell-major
+            Vector LambdaCell(2 * nVars);
+            for (Index var = 0; var < nVars; var++)
+                LambdaCell.segment(2 * var, 2) = lambdaOut.segment(var * (nCells + 1) + i, 2);
 
-        squOut[i] = SQU_f[i] - adjoint_SQU_0[i] * LambdaCell;
-    }
+            squOut[i] = SQU_f[i] - adjoint_SQU_0[i] * LambdaCell;
+        },
+        cellGrain);
 }
 
 // See the declaration. Materialising both transposes is what lets a test zero

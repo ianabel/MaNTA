@@ -111,6 +111,86 @@ endif()
 set(BLAS_LIBRARIES "${BLAS_LIBRARIES}" CACHE FILEPATH "BLAS libraries" FORCE)
 set(BLAS_LINKER_FLAGS "${BLAS_LINKER_FLAGS}" CACHE STRING "BLAS linker flags" FORCE)
 
+# ------------------------------------------------------------------- LAPACK --
+#
+# Optional, and only for one thing: the banded factorisation of the HDG trace
+# matrix (dgbtrf/dgbtrs), which util/BandedMatrix.hpp calls when this is found
+# and reimplements when it is not. The reimplementation is a fallback rather than
+# a preference -- it exists so a box with a BLAS and no LAPACK still builds -- so
+# a found LAPACK is always used.
+#
+# Everything the BLAS block above says applies here unchanged, because FindLAPACK
+# reads the same BLA_VENDOR and can resolve to the same layered MKL link that is
+# unsafe to dlopen. So it is asked for the vendor that BLAS actually resolved to,
+# not left free: mixing a Generic BLAS with a layered-MKL LAPACK would put both in
+# the Python module's link line, which is the exact configuration that killed the
+# interpreter mid-solve.
+#
+# Not REQUIRED. Debian splits liblapack-dev from libblas-dev and a minimal
+# container often has only the latter; the fallback is there precisely so that
+# still works, and `cmake -B build -LH` reports which one a given build got.
+option(MANTA_LAPACK "Use LAPACK's banded solver (dgbtrf/dgbtrs) when available" ON)
+
+set(MANTA_HAVE_LAPACK OFF)
+if(MANTA_LAPACK)
+  if(MANTA_BLAS_VENDOR_USED STREQUAL "Any")
+    unset(BLA_VENDOR)
+  else()
+    set(BLA_VENDOR "${MANTA_BLAS_VENDOR_USED}")
+  endif()
+  # Discovered afresh every configure. FindLAPACK short-circuits on a cached
+  # LAPACK_LIBRARIES, and the entry it would find is not necessarily one this
+  # file wrote -- SUNDIALSConfig.cmake writes its own configure's answer into the
+  # cache too. Without this unset, one bad configure is permanent: the poisoned
+  # value is read back, captured, and re-pinned every time afterwards, and no
+  # amount of reconfiguring heals it. Re-running the find is two find_library
+  # calls.
+  unset(LAPACK_LIBRARIES CACHE)
+  unset(LAPACK_FOUND CACHE)
+  find_package(LAPACK QUIET)
+  if(LAPACK_FOUND)
+    set(MANTA_HAVE_LAPACK ON)
+    # Copied out by value, immediately, and linked as a list of paths rather than
+    # as LAPACK::LAPACK. That is not fussiness -- it was measured, and the
+    # imported target is NOT safe to hold on to.
+    #
+    # CMake's FindLAPACK creates the target under `if(NOT TARGET LAPACK::LAPACK)`
+    # but sets INTERFACE_LINK_LIBRARIES on it *outside* that guard. So the next
+    # find_package(LAPACK) anywhere in the project -- and SUNDIALSConfig.cmake
+    # runs one, via find_dependency(LAPACK), a few lines below -- silently
+    # rewrites the contents of the target this project already linked.
+    #
+    # That is the BLAS trap above, one level deeper: not the variable this time
+    # but the target. Measured on the development box, where SUNDIALS was built
+    # against Intel's libraries: MANTA_LAPACK=ON put
+    # libmkl_gf_lp64 + libmkl_gnu_thread + libmkl_core + libgomp on the link line
+    # of *libmanta and the Python module*, while an isolated
+    # find_package(LAPACK) with the same BLA_VENDOR resolved cleanly to
+    # liblapack.so + libblas.so. The layered MKL link is the one that is unsafe
+    # to dlopen -- see the BLAS block -- so this would have reintroduced the
+    # interpreter crash that block exists to prevent, on a knob whose whole
+    # purpose is to make one factorisation faster.
+    set(MANTA_LAPACK_LIBRARIES "${LAPACK_LIBRARIES}")
+    target_link_libraries(manta_deps INTERFACE ${MANTA_LAPACK_LIBRARIES})
+    target_compile_definitions(manta_deps INTERFACE MANTA_HAVE_LAPACK)
+  else()
+    message(STATUS
+      "No LAPACK found; the banded trace solve will use the built-in "
+      "factorisation. Install one (apt: liblapack-dev; dnf: lapack-devel) to use "
+      "dgbtrf/dgbtrs instead.")
+  endif()
+endif()
+
+# Pinned with FORCE for the same reason BLAS_LIBRARIES is, and it is the *second*
+# line of defence rather than the first: what actually protects the link line is
+# MANTA_LAPACK_LIBRARIES above, copied out by value before anything else can run
+# a find_package(LAPACK).
+#
+# The configure summary prints MANTA_LAPACK_LIBRARIES -- the value that is really
+# linked -- and not LAPACK_LIBRARIES, which SUNDIALS may well have rewritten by
+# the time it is read. If the two ever need comparing, print both.
+set(LAPACK_LIBRARIES "${LAPACK_LIBRARIES}" CACHE FILEPATH "LAPACK libraries" FORCE)
+
 # ------------------------------------------------------------------ SUNDIALS --
 #
 # v7.1.0 or newer, not 6.x: MaNTA links sundials_core and uses SUNContext,

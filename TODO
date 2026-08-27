@@ -1,3 +1,74 @@
+Per-call N_Vector allocation in the coupled Jacobian solve.
+The scalar half of this is fixed (2026-08-25): solveTransportJac used to
+N_VClone and destroy nScalars + 2 full-length vectors on *every* call -- once per
+Newton iteration, and nField + 1 times that under solveCoupledJacExact -- for
+working space whose size is fixed by nScalars at construction. They are now
+members (solveScalarD/E/G), allocated beside v and w by
+allocateScalarWorkVectors() and rebuilt by setFieldModel when getDoF() changes.
+
+  What is left, in the same shape and for the same reason:
+
+    solveCoupledJacExact   N_Vector col, AinvA1[nField], Ainv_r1   (nField + 2)
+    solveCoupledJacIterative  N_Vector work                        (1)
+
+  nField is fixed once setFieldModel has run, exactly as nScalars is fixed at
+  construction, so the same treatment applies -- a2 already demonstrates the
+  pattern for an nField-sized array of full-length vectors.
+
+  Not done because no field model is registered anywhere in the tree, so this is
+  cold code with no fixture that would notice either the saving or a mistake in
+  it. Do it when a model lands, alongside a coupled regression case.
+
+K_global is factorised densely, and it is 73-91% of a low-k run.
+Found 2026-08-25. FIXED the same day -- util/BandedMatrix.hpp, and the entry is
+kept because the measurements are what justify the shape of the fix and the
+numbers are worth not re-deriving.
+
+  solveHDGJac condensed onto lambda and then handed the result to a *dense*
+  Eigen::FullPivLU of side nVars * (nCells + 1), on every Newton iteration. That
+  is O(nCells^3) in the one quantity static condensation exists to make
+  O(nCells). Phase breakdown before the fix, by direct chrono instrumentation:
+
+    400 cells, k=3:  K_global 3.534 s of a 3.9 s run   -- 91%
+    200 cells, k=4:  K_global 14.165 s of a 19.4 s run -- 73%
+     50 cells, k=8:  K_global 0.248 s of 2.1 s         -- 12%
+     20 cells, k=10: K_global 0.023 s of 1.0 s         --  2%
+
+  What it is now: a banded LU with partial pivoting, dgbtrf/dgbtrs when a LAPACK
+  was found and an equivalent built-in when not. Measured, MKL pinned, best of 3:
+
+    400 cells, k=3:  5233 ms -> 555 ms   (9.4x)
+    200 cells, k=4: ~16400 ms -> 2147 ms (7.6x)
+     50 cells, k=8:  1902 ms -> 1226 ms  (1.55x)
+     20 cells, k=10:  976 ms -> 755 ms   (1.29x)
+
+  The k=10 case is the interesting one: the trace solve was 2% of it, so the 1.29x
+  is not the factorisation at all. It is the dense (nCells+1)^2 allocate-and-zero
+  and the FullPivLU's own per-call buffers, 627 times over.
+
+  Two things this turned up that are worth keeping:
+
+  * **K_global is singular, by exactly the number of Dirichlet boundaries**, and
+    the dense FullPivLU was absorbing that silently. A Dirichlet end sets Hvar's
+    diagonal to zero and nothing else writes that trace DOF, so the row and the
+    column are identically zero; FullPivLU returns the particular solution with
+    the free components zeroed, which is the right answer for the wrong reason.
+    imposeDirichletTraceRows writes the constraint down instead. Verified rather
+    than argued: measured rank 3/5 and 4/6 on the fixture solves, and the banded
+    answer agrees with the dense one to 2.7e-15.
+
+  * **It is not bit-identical, and should not be.** Unlike the OpenMP change --
+    same operations, same order, byte-identical output -- this is a different
+    factorisation, so the last bits move and IDA's step sequence moves with them.
+    Measured worst relative difference in the netCDF output: 4.2e-13 (400 cells,
+    k=3) and 2.7e-11 (20 cells, k=10), against run tolerances of 1e-8 and 1e-6.
+
+  Not done, and the obvious next thing if the trace solve ever matters again: the
+  band is 2*nVars - 1 either side only because the trace DOFs are ordered
+  (node, var). Nothing needs the *matrix* ordering to match the solution vector's,
+  which is why the permutation is local to the solve -- but a solution vector that
+  interleaved lambda the same way would remove the gather and scatter entirely.
+
 g++-14 miscompiles this tree at -O3 -flto -march=native. Root cause not found.
 Found 2026-08-23. CLAUDE.md has the summary; this is the reproduction.
 

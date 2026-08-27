@@ -1129,3 +1129,43 @@ These are deliberate and tracked, not oversights:
 
 * **`PhysicsCases/` is reported but not gated.** It is exercised as test
   fixtures rather than as a coverage target in its own right.
+
+## Threading
+
+The physics is never threaded — the batched wrappers that fall back on pointwise
+hooks are serial loops whatever `MANTA_OPENMP` says, because a case that supplies
+only pointwise hooks never agreed to be called concurrently, and because a Python
+case's GIL makes it more than 13x *slower* rather than faster. Only the solver's
+own cell loops are parallel. `docs/physics_interface.rst` states the rule and
+`CLAUDE.md` has the measurements.
+
+`UtilityTests.cpp` carries four `parallel_for` cases. Three of them are near-
+tautologies in an ordinary build — without `MANTA_OPENMP` the helper is a plain
+loop — and they are there because the thing they pin cost a **process abort**: an
+exception thrown by a physics hook inside an OpenMP loop reached
+`__cxa_call_terminate` instead of `static_residual`'s handler, killing the whole
+suite. `an_exception_from_the_body_reaches_the_caller` throws from the last index
+deliberately, because the original defect passed whenever the throw landed on the
+master thread.
+
+**They only bite in a build that sets the option.** Until 2026-08-25 nothing did
+— no CI leg, no preset — which is how the abort survived. `ci.yml` now has a
+`Build + tests (g++-15, OpenMP)` leg, and it is in the branch-protection required
+list, so a red one blocks a merge.
+
+To run them by hand:
+
+```sh
+cmake -B build-omp -DMANTA_OPENMP=ON && cmake --build build-omp -j 6
+OMP_NUM_THREADS=6 MKL_NUM_THREADS=1 ctest --test-dir build-omp --output-on-failure
+```
+
+`MKL_NUM_THREADS=1` is not optional on a box whose BLAS threads itself. With it
+unset, `OMP_NUM_THREADS=6` also threads the BLAS, and the changed reduction order
+was enough to fail `afn_tests/the_jacobian_agrees_with_the_residual_for_a_nonunit_coefficient`
+with `IDACalcIC could not complete` — in a configuration where **none of MaNTA's
+own loops were parallel at all**, since that test's 3 cells and 12 physics points
+are both below the grain floors. Confirmed by separating the variables:
+`OMP_NUM_THREADS=6 MKL_NUM_THREADS=1` passes, `OMP_NUM_THREADS=1
+MKL_NUM_THREADS=4` fails. Worth remembering before attributing any threaded-build
+failure to a race.

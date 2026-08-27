@@ -179,6 +179,45 @@ coexist:
    that reported it was Eigen's ``resize()`` assertion. Under ``NDEBUG`` that run
    would have silently transposed a gradient instead.
 
+   What they cost was measured rather than assumed, and it depends on the
+   polynomial degree: about 2.5% at ``Polynomial_degree = 3``, and 7-9% at 8-10,
+   where the per-cell blocks are large. ``-DMANTA_ASSERTS=OFF`` defines
+   ``NDEBUG`` and buys that back. ``CLAUDE.md`` has the table and the reason the
+   effect grows with ``k``.
+
+.. _openmp:
+
+Threading (``MANTA_OPENMP``)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Off by default. When on, the solver's cell-independent loops — the per-cell
+factorisation and solves, and both back-substitutions — run through
+``manta::parallel_for`` in ``util/ParallelFor.hpp``, which is the only place in
+the tree that writes an ``omp`` pragma. The *physics* is never threaded; see
+:doc:`physics_interface`.
+
+Four threads are worth 1.3x at :math:`k = 3` on 400 cells, rising to 1.78x at
+:math:`k = 10` on 20 — the more work there is per cell, the better it does. That
+is a recent state of affairs: while the condensed trace matrix was factorised
+densely it accounted for up to 91% of a low-degree run, and threading bought 11%
+there however many cores it was given. Fixing that unlocked the parallelism as
+well as removing its own cost.
+
+Two cautions.
+
+*Do not oversubscribe.* There is no ``num_threads`` clause; with more threads
+than cells the loss is large rather than marginal. Keep ``OMP_NUM_THREADS`` at or
+below the cell count.
+
+*Set your BLAS thread count explicitly.* Building with ``-fopenmp`` links
+``libgomp``, and that alone is enough for a dispatching BLAS (MKL's ``libmkl_rt``,
+OpenBLAS) to begin threading itself when ``OMP_NUM_THREADS`` is set. That changes
+floating-point reduction order, which is enough to change whether a tight-
+tolerance ``IDACalcIC`` converges. Set ``MKL_NUM_THREADS`` or
+``OPENBLAS_NUM_THREADS`` alongside ``OMP_NUM_THREADS`` rather than letting one
+variable drive both — and note they want opposite things, since BLAS threading
+helps exactly the low-degree case where MaNTA's own threading does not.
+
 ``CMakeUserPresets.json``
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -223,7 +262,15 @@ ones:
    * - ``MANTA_PYTHON``
      - Build the ``manta`` Python extension. Default ``ON``.
    * - ``MANTA_OPENMP``
-     - Enable the ``#pragma omp parallel for`` in the batched physics wrappers.
+     - Thread the cell-independent loops, through ``util/ParallelFor.hpp``.
+       Default ``OFF``; see :ref:`openmp` before turning it on.
+   * - ``MANTA_LAPACK``
+     - Use LAPACK's ``dgbtrf``/``dgbtrs`` for the banded trace solve when one is
+       found. Default ``ON``; with no LAPACK, or ``OFF``, an equivalent built-in
+       factorisation is used instead and the answers are the same.
+   * - ``MANTA_ASSERTS``
+     - Keep ``assert()``, and so Eigen's assertions, in an optimised build.
+       Default ``ON``; ``OFF`` defines ``NDEBUG``.
    * - ``MANTA_VERBOSE``
      - Define ``VERBOSE`` — extra solver logging.
    * - ``MANTA_PHYSICS_DEBUG``

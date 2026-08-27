@@ -143,7 +143,7 @@ void SystemSolver::initialize()
 		fieldModel->FieldResidualPrime(dR, dRdot, dRdpsi, dRddpsidt,
 									   Vector(yJac.getField()), Vector(dydtJac.getField()),
 									   yJac.evalOnNodes(), yJac.getPoints(),
-									   Integrator::getIntegrationWeights(yJac.getBasis(), grid),
+									   integrator.integrationWeights(yJac.getBasis(), grid),
 									   t0);
 
 		for (Index f = 0; f < nField; ++f)

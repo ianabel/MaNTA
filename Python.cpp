@@ -100,7 +100,37 @@ public:
 // The extension is private to the `manta` package: python/manta/__init__.py
 // re-exports it and adds the parts that are more naturally written in Python
 // (the declarative class-attribute spec, chiefly). Users import `manta`.
-PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
+//
+// **No py::mod_gil_not_used(), deliberately, and please do not add it back
+// without doing the audit it stands for.** That tag asserts this module is safe
+// to run without the GIL. It was here, asserted rather than established, and the
+// assertion was false in at least two places:
+//
+//   * Basis.hpp's three `singletons` maps -- LegendreBasis, ChebyshevBasis and
+//     NodalBasis each cache their flyweight in a static std::map that getBasis(k)
+//     mutates on first touch. Concurrent insert, or a read racing one, is UB.
+//   * PhysicsCases::map, a lazily allocated static registry. Static-init
+//     population is single-threaded and fine; registerPhysicsCase is *bound to
+//     Python* (below), so it is also mutated at runtime.
+//
+// Neither can race today, and that is the point: PyRunner never releases the
+// GIL -- there is no gil_scoped_release or call_guard anywhere in this module --
+// so a Python thread calling run() holds it for the whole solve and the GIL is
+// silently doing all the synchronisation. Declaring the tag removes exactly that
+// and leaves the statics above unguarded.
+//
+// Without the tag, importing this on a free-threaded interpreter makes CPython
+// re-enable the GIL and say so. That is the conservative outcome and it
+// announces itself, where a false declaration does neither. The tag costs
+// nothing on an ordinary build either way -- measured, it is inert there.
+//
+// To make it true: mutexes on those two (about half a day), then a free-threaded
+// interpreter, its own ABI-tagged build and a CI leg to test against, plus a
+// stated contract for what a user's Python physics case must guarantee once the
+// trampolines' gil_scoped_acquire no longer serialises it. Worth doing when
+// something actually calls in from several threads -- the XLA FFI path is the
+// candidate -- and not before.
+PYBIND11_MODULE(_manta, m) {
   m.doc() =
       "Compiled core of the MaNTA Python package; import `manta` instead.";
 

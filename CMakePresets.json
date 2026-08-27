@@ -5,7 +5,7 @@
     {
       "name": "default",
       "displayName": "Release",
-      "description": "-O3 -flto=auto -march=native, asserts left on. What a run's numbers should come from.",
+      "description": "-O3 -flto=auto -march=native, asserts left on (~2.5% at k=3, 7-9% at k=8-10). What a run's numbers should come from.",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"

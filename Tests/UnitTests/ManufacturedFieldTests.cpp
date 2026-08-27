@@ -39,7 +39,8 @@ sampleExactOnNodes(Grid const &grid, Index k, Time t)
 
     GlobalState states = soln.evalOnNodes();
     std::vector<Position> points = soln.getPoints();
-    Vector weights = Integrator::getIntegrationWeights(soln.getBasis(), grid);
+    Integrator::Cache integrator;
+    Vector weights = integrator.integrationWeights(soln.getBasis(), grid);
     return {states, points, weights};
 }
 

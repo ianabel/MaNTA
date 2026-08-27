@@ -565,8 +565,8 @@ void AutodiffTransportSystem::writeDiagnostics(DGSoln const &y, DGSoln const &dy
 		const GlobalState states = y.evalOnNodes();
 		const GlobalState states_dt = dydt.evalOnNodes();
 		const Grid &grid = y.getGrid();
-		const Vector &weights = Integrator::getIntegrationWeights(y.getBasis(), grid);
-		const Matrix &phiBoundary = Integrator::getPhiBoundary(y.getBasis(), grid);
+		const Vector &weights = m_integrator.integrationWeights(y.getBasis(), grid);
+		const Matrix &phiBoundary = m_integrator.phiBoundary(y.getBasis(), grid);
 
 		for (Index i = 0; i < nScalars; ++i)
 			nc.AppendToTimeSeries("ScalarG", "ScalarG" + std::to_string(i),

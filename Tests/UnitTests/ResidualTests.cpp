@@ -413,8 +413,9 @@ BOOST_AUTO_TEST_CASE(residual_scalar_rows_are_scalar_g)
     DGSoln res_h(problem.getNumVars(), grid, k, N_VGetArrayPointer(res),
                  problem.getNumScalars(), problem.getNumAux());
 
-    const Vector &weights = Integrator::getIntegrationWeights(Y_h.getBasis(), grid);
-    const Matrix &phiBoundary = Integrator::getPhiBoundary(Y_h.getBasis(), grid);
+    Integrator::Cache integrator;
+    const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
+    const Matrix &phiBoundary = integrator.phiBoundary(Y_h.getBasis(), grid);
     for (Index j = 0; j < problem.getNumScalars(); ++j)
         BOOST_TEST(res_h.Scalar(j) == problem.ScalarG(j, Y_h.evalOnNodes(), dY_h.evalOnNodes(),
                                                       Y_h.getPoints(), weights, phiBoundary, 0.5),

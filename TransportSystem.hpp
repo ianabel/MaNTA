@@ -263,25 +263,39 @@ public:
   }
   // Wrapper functions which serialise batched evaluations
   //
+  // **Serial, deliberately, and not an oversight to be fixed.** These are the
+  // fallback for a case that supplies only pointwise hooks, and a case that has
+  // not provided a batched implementation is assumed to have a reason. Threading
+  // them would call an arbitrary case's hooks concurrently on one instance --
+  // which nothing here can check and the case never agreed to.
+  //
+  // For a Python case it is not merely unsafe but ruinous. Every pointwise
+  // trampoline in PyTransportSystem takes the GIL, so N threads serialise on it
+  // and pay a lock handoff *per point*: measured, MANTA_OPENMP=ON with four
+  // threads took the Python suite from ~110 s to over 1500 s, where it hit
+  // ctest's timeout without finishing. That is a floor of 13.6x slower, not a
+  // failure to speed up.
+  //
+  // A case that wants its physics parallel overrides the batched level, which is
+  // the whole point of these being virtual -- and where it can cross into Python
+  // once for the entire grid rather than once per point, as
+  // PyTransportSystem::ComputePhysics and manta.jax already do. The solver's own
+  // cell loops are still threaded (see util/ParallelFor.hpp), so a case that
+  // takes this path still gets the assembly and solve parallelism, which is
+  // where the time is.
   virtual Values SigmaFn(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
     Values out(states.size());
-#pragma omp parallel for
-    for (size_t j = 0; j < states.size(); ++j)
-    {
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
       out(j) = SigmaFn(i, states[j], abscissae[j], time);
-    }
     return out;
   };
 
   virtual Values Sources(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
     Values out(states.size());
-#pragma omp parallel for
-    for (size_t j = 0; j < states.size(); ++j)
-    {
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
       out(j) = Sources(i, states[j], abscissae[j], time);
-    }
     return out;
   };
 
@@ -303,8 +317,7 @@ public:
 
   virtual void dSigma(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
-#pragma omp parallel for
-    for (size_t j = 0; j < states.size(); ++j)
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
     {
       dSigmaFn_du(i, out.Variable(j), states[j], abscissae[j], time);
       dSigmaFn_dq(i, out.Derivative(j), states[j], abscissae[j], time);
@@ -321,8 +334,7 @@ public:
   // them directly rather than through here.
   virtual void dSources(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
-#pragma omp parallel for
-    for (size_t j = 0; j < states.size(); ++j)
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
     {
       dSources_du(i, out.Variable(j), states[j], abscissae[j], time);
       dSources_dq(i, out.Derivative(j), states[j], abscissae[j], time);
@@ -467,11 +479,8 @@ public:
   virtual Values AuxG(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
     Values out(states.size());
-#pragma omp parallel for
-    for (size_t j = 0; j < states.size(); ++j)
-    {
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
       out(j) = AuxG(i, states[j], abscissae[j], time);
-    }
     return out;
   }
 
@@ -483,14 +492,11 @@ public:
 
   virtual void AuxGPrime(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
-#pragma omp parallel for
-    for (size_t j = 0; j < states.size(); ++j)
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
     {
-      // Declared inside the loop, not outside it. One State shared across a
-      // `#pragma omp parallel for` is a data race under OMP=on -- every thread
-      // writing its own point's derivatives into the same vectors -- and it
-      // also carried one point's values into the next when a hook wrote only
-      // its nonzero entries. Per-iteration, it is private and starts zeroed.
+      // Declared inside the loop body, not outside it. Even serially this
+      // matters: a shared State carried one point's values into the next when a
+      // hook wrote only its nonzero entries. Per-iteration, it starts zeroed.
       State temp(nVars, nScalars, nAux);
       AuxGPrime(i, temp, states[j], abscissae[j], time);
       out.setWithState(j, temp);

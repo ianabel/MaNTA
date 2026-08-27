@@ -30,19 +30,54 @@ set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
 
 # -------------------------------------------------------------------- NDEBUG --
 #
-# CMake puts -DNDEBUG in every optimised configuration's flags. The Makefile
-# never did, and the difference is not cosmetic: NDEBUG disables assert(), which
-# takes Eigen's own assertions with it.
+# CMake puts -DNDEBUG in every optimised configuration's flags. This build takes
+# it back out, and the reason is that the trade is entirely one-sided: the
+# assertions cost nothing measurable and they are the diagnostic of record for a
+# whole class of defect here.
 #
-# Those assertions are the diagnostic of record for a whole class of defect here.
-# State.hpp's checkShapeAndSet is a plain assignment outside a DEBUG build, so
-# when the adjoint's spatial-parameter branch wrote a (np, nPoints) block into an
-# (nPoints, np) destination the *only* thing that reported it was Eigen's
-# resize() assertion firing inside Block<>::operator=. Under -DNDEBUG that run
-# would have silently transposed a gradient instead.
+# What they cost depends on the polynomial degree, and it is small: measured
+# +2.5% at k = 3, +8.5% at k = 8 and +7.4% at k = 10 (paired A/B, 5 reps,
+# medians, MKL pinned). CLAUDE.md carries the table.
 #
-# So strip it, in every configuration, and leave a release build asserting
-# exactly as it always has.
+# The shape of that is worth knowing before anyone re-derives it. Eigen's
+# assertions guard its *API* -- operator(), resize, block construction -- not its
+# inner kernels, which address raw pointers; MaNTA's own are 26 shape checks in
+# Matrices.cpp, one or two per assembled block. All O(1) per call, so what
+# matters is the ratio of calls to arithmetic, and raising k grows the blocks
+# without growing the call count. Hence near-free at the degrees the fixtures
+# use, and a few percent at k = 8+.
+#
+# What the assertions buy: State.hpp's checkShapeAndSet is a plain assignment
+# outside a DEBUG build, so when the adjoint's spatial-parameter branch wrote a
+# (np, nPoints) block into an (nPoints, np) destination, the *only* thing that
+# reported it was Eigen's resize() assertion firing inside Block<>::operator=.
+# With NDEBUG that run transposes a gradient silently instead.
+#
+# MANTA_ASSERTS=OFF defines NDEBUG anyway -- worth having for a high-k production
+# run, where it is a real if modest few percent, and for a build that has to match
+# some other toolchain's expectations.
+#
+# Coverage does not appear below and does not want to: CMAKE_CXX_FLAGS_COVERAGE
+# is set to "-O0 -g" outright, so an instrumented build asserts whatever this
+# option says -- the right default for the build that exists to run every suite.
+option(MANTA_ASSERTS
+       "Keep assert() -- and so Eigen's assertions -- in optimised builds" ON)
+
+# CMake's own -DNDEBUG is stripped out of the cache *unconditionally*, and when
+# MANTA_ASSERTS is off the definition is made by manta::flags instead. Two
+# reasons, and the second is the one that bites.
+#
+# One: a single source of truth. NDEBUG then follows MANTA_ASSERTS in one place
+# rather than being partly CMake's business and partly ours.
+#
+# Two: `set(... CACHE ... FORCE)` writes a value that outlives the code that
+# wrote it, so a *conditional* strip cannot be undone. A build directory
+# configured while the strip was running holds a CMAKE_CXX_FLAGS_RELEASE with no
+# NDEBUG in it, and reconfiguring it with the condition now false would leave
+# that alone -- reporting one thing and building another, silently and forever.
+# Stripping every time and adding the definition back from the target makes the
+# cache's history irrelevant, which is what lets MANTA_ASSERTS be flipped in an
+# existing directory.
 foreach(_cfg RELEASE RELWITHDEBINFO MINSIZEREL)
   string(REGEX REPLACE "(^| )-DNDEBUG( |$)" " " CMAKE_CXX_FLAGS_${_cfg}
          "${CMAKE_CXX_FLAGS_${_cfg}}")
@@ -67,6 +102,13 @@ endif()
 # ------------------------------------------------------------------- the target --
 add_library(manta_flags INTERFACE)
 add_library(manta::flags ALIAS manta_flags)
+
+# NDEBUG when MANTA_ASSERTS is off, per the block above -- made here rather than
+# left to CMake so that one option decides it and the cache cannot outvote us.
+if(NOT MANTA_ASSERTS)
+  target_compile_definitions(manta_flags INTERFACE
+    $<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:NDEBUG>)
+endif()
 
 # cxx_std_23 plus CXX_EXTENSIONS OFF is -std=c++23, which is what the Makefile
 # passed. Left to itself CMake asks for -std=gnu++23, and a GNU-extensions build
@@ -108,12 +150,15 @@ if(MANTA_WERROR)
   target_compile_options(manta_flags INTERFACE $<$<NOT:${_manta_coverage}>:-Werror>)
 endif()
 
+# Every `#pragma omp` in the tree is inside util/ParallelFor.hpp, behind
+# `#ifdef _OPENMP`, so a build without OpenMP does not compile one at all. That
+# is what retired the `-Wno-unknown-pragmas` this branch used to carry: it was
+# added for the pragmas the batched physics wrappers wrote out unconditionally,
+# it applied to the whole project, and it silenced every mistyped pragma
+# anywhere in the tree for the sake of eight known ones.
 if(MANTA_OPENMP)
   find_package(OpenMP REQUIRED COMPONENTS CXX)
   target_link_libraries(manta_flags INTERFACE OpenMP::OpenMP_CXX)
-else()
-  # The batched physics wrappers carry #pragma omp parallel for unconditionally.
-  target_compile_options(manta_flags INTERFACE -Wno-unknown-pragmas)
 endif()
 
 # ------------------------------------------------------------------ Release --
