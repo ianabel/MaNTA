@@ -12,11 +12,9 @@ from .plasma_state import (
 from .parallel_physics import (
     InitialPhiValue,
     ParallelCurrent,
-    ElectronPastukhovLossRate,
-    IonPastukhovLossRate,
-    Xi_i,
-    Xi_e,
 )
+
+from .sources import source_registry, sink_registry
 
 from functools import partial
 
@@ -52,7 +50,9 @@ def buildSpec(config: MirrorPlasmaConfig) -> MaNTA.SystemSpec:
             lower=MaNTA.Neumann,
             upper=MaNTA.Neumann,
         ),
-        MaNTA.Field("AngularMomentum", "angular momentum density", "n0 T0 / c_s0"),
+        MaNTA.Field(
+            "AngularMomentum", "angular momentum density", "m_i n0 a^2 cs0 / a"
+        ),
         MaNTA.Field("IonEnergy", "ion energy density", "n0 T0"),
         MaNTA.Field("ElectronEnergy", "electron energy density", "n0 T0"),
     ]
@@ -114,12 +114,8 @@ class MirrorPlasma(VectorizedTransportSystem):
         # base class's isLowerBoundaryDirichlet is a bound C++ method that wants
         # a concrete int. Derived from the spec rather than written out again,
         # so there is still one source of truth.
-        self.lower_bcs = jnp.array(
-            [f.lower == MaNTA.Dirichlet for f in spec.variables]
-        )
-        self.upper_bcs = jnp.array(
-            [f.upper == MaNTA.Dirichlet for f in spec.variables]
-        )
+        self.lower_bcs = jnp.array([f.lower == MaNTA.Dirichlet for f in spec.variables])
+        self.upper_bcs = jnp.array([f.upper == MaNTA.Dirichlet for f in spec.variables])
 
         self.params = MirrorPlasmaParams.make(config)
         self.nCells = solver_config["Grid_size"]
@@ -288,9 +284,8 @@ class MirrorPlasma(VectorizedTransportSystem):
 
         G = D * (
             Uei - 3.0 / 2.0 * state.dTedpsi / state.Te
-        ) + GeometricFactor * params.Config.ADCoefficient * state.dndpsi * (
-            jnp.exp(-t / params.Config.ADDecayRates[Channel.Density])
-            + params.Config.ADFinalCoeffs[Channel.Density]
+        ) + GeometricFactor * state.dndpsi * self.ArtificialDiffusion(
+            t, params, Channel.Density
         )
 
         return (
@@ -309,9 +304,8 @@ class MirrorPlasma(VectorizedTransportSystem):
             * state.pi
             / params.Constants.IonCollisionTime(state.n, state.Ti)
             * state.domegadpsi
-        ) + GeometricFactor * params.Config.ADCoefficient * state.domegadpsi * (
-            jnp.exp(-t / params.Config.ADDecayRates[Channel.AngularMomentum])
-            + params.Config.ADFinalCoeffs[Channel.AngularMomentum]
+        ) + GeometricFactor * state.domegadpsi * self.ArtificialDiffusion(
+            t, params, Channel.AngularMomentum
         )
 
         Pi_out = (
@@ -340,9 +334,8 @@ class MirrorPlasma(VectorizedTransportSystem):
             / params.Constants.IonCollisionTime(state.n, state.Ti)
             * state.dTidpsi
             / state.Ti
-        ) + GeometricFactor * params.Config.ADCoefficient * state.dTidpsi * (
-            jnp.exp(-t / params.Config.ADDecayRates[Channel.IonEnergy])
-            + params.Config.ADFinalCoeffs[Channel.IonEnergy]
+        ) + GeometricFactor * state.dTidpsi * self.ArtificialDiffusion(
+            t, params, Channel.IonEnergy
         )
 
         qi_out = (
@@ -374,9 +367,8 @@ class MirrorPlasma(VectorizedTransportSystem):
             * state.Te
             / params.Constants.ElectronCollisionTime(state.n, state.Te)
             * (4.66 * state.dTedpsi / state.Te - 3.0 / 2.0 * Uei)
-        ) + GeometricFactor * params.Config.ADCoefficient * state.dTedpsi * (
-            jnp.exp(-t / params.Config.ADDecayRates[Channel.ElectronEnergy])
-            + params.Config.ADFinalCoeffs[Channel.ElectronEnergy]
+        ) + GeometricFactor * state.dTedpsi * self.ArtificialDiffusion(
+            t, params, Channel.ElectronEnergy
         )
 
         return (
@@ -385,225 +377,48 @@ class MirrorPlasma(VectorizedTransportSystem):
             * HeatFlux
         )
 
+    def ArtificialDiffusion(self, t, params: MirrorPlasmaParams, channel: Channel):
+        return (
+            jnp.exp(-t / params.Config.ADDecayRates[channel])
+            * params.Config.ADCoefficient
+            + params.Config.ADFinalCoeffs[channel]
+        )
+
     # ======================================================================= #
     # Sources                                                                 #
     # ======================================================================= #
 
     def Sn(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
-        return (
-            self.ParticleSource(state, x, t, params)
-            + self.IonizationSource(state, x, t, params)
-            - self.ParallelParticleLosses(state, x, t, params)
-        )
+        S = 0.0
+        for source in source_registry[Channel.Density]:
+            S += source(state, x, t, params)
+        for sink in sink_registry[Channel.Density]:
+            S -= sink(state, x, t, params)
+        return S
 
     def Somega(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
-        return self.JxBForce(state, x, t, params) - (
-            self.ParallelAngularMomentumLosses(state, x, t, params)
-            + self.ChargeExchangeMomentumLosses(state, x, t, params)
-        )
+        S = 0.0
+        for source in source_registry[Channel.AngularMomentum]:
+            S += source(state, x, t, params)
+        for sink in sink_registry[Channel.AngularMomentum]:
+            S -= sink(state, x, t, params)
+        return S
 
     def Spi(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
-        return (
-            self.ViscousHeating(state, x, t, params)
-            + self.IonPotentialHeating(state, x, t, params)
-            + params.Constants.IonElectronEnergyExchange(state.n, state.pe, state.pi)
-            + self.UniformHeatSource(state, x, t, params)
-        ) - (
-            self.IonParallelHeatLosses(state, x, t, params)
-            + self.ChargeExchangeHeatLosses(state, x, t, params)
-        )
+        S = 0.0
+        for source in source_registry[Channel.IonEnergy]:
+            S += source(state, x, t, params)
+        for sink in sink_registry[Channel.IonEnergy]:
+            S -= sink(state, x, t, params)
+        return S
 
     def Spe(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
-        return (
-            self.AlphaHeating(state, x, t, params)
-            + self.UniformHeatSource(state, x, t, params)
-            - (
-                self.RadiationHeatLosses(state, x, t, params)
-                + self.ElectronParallelHeatLosses(state, x, t, params)
-                + params.Constants.IonElectronEnergyExchange(
-                    state.n, state.pe, state.pi
-                )
-            )
-        )
-
-    # ======================================================================= #
-    # Particle Sources                                                        #
-    # ======================================================================= #
-
-    def ParticleSource(self, state, x, t, params):
-        Center = params.Config.ParticleSourceCenter / params.Constants.a
-        Width = params.Config.ParticleSourceWidth / params.Constants.a
-        Height = params.Config.ParticleSourceHeight * params.Constants.a**2
-        return (
-            Height * jnp.exp(-(((state.R - Center) / Width) ** 2)) * jnp.exp(-t / 0.01)
-        )
-
-    def IonizationSource(self, state, x, t, params):
-        return (
-            params.Constants.IonizationRate(
-                state.n,
-                params.Config.NeutralDensity,
-                state.R * params.Constants.a * state.omega * params.Constants.omega0,
-                state.Te,
-                state.Ti,
-            )
-            / params.Constants.DensityEquationNormalization()
-        )
-
-    def ParallelParticleLosses(self, state, x, t, params):
-        return (
-            ElectronPastukhovLossRate(state, x, t, params)
-            / params.Constants.DensityEquationNormalization()
-        )
-
-    # ======================================================================= #
-    # Momentum Sources                                                        #
-    # ======================================================================= #
-
-    def ParallelAngularMomentumLosses(self, state, x, t, params):
-        return (
-            state.omega
-            * state.R**2
-            * IonPastukhovLossRate(state, x, t, params)
-            * (
-                params.Constants.IonSpecies.IonMass
-                * params.Constants.omega0
-                * params.Constants.a**2
-            )
-            / params.Constants.MomentumEquationNormalization()
-        )
-
-    def ChargeExchangeMomentumLosses(self, state, x, t, params):
-
-        def true_fun():
-            return (
-                state.omega
-                * state.R**2
-                * params.Constants.ChargeExchangeLossRate(
-                    state.n,
-                    params.Config.NeutralDensity,
-                    state.R
-                    * params.Constants.a
-                    * state.omega
-                    * params.Constants.omega0,
-                    state.Ti,
-                )
-                * (
-                    params.Constants.IonSpecies.IonMass
-                    * params.Constants.omega0
-                    * params.Constants.a**2
-                )
-                / params.Constants.MomentumEquationNormalization()
-            )
-
-        def false_fun():
-            return 0.0
-
-        return jax.lax.cond(params.Config.useNeutralsModel, true_fun, false_fun)
-
-    def JxBForce(self, state, x, t, params):
-        return (
-            state.Current * params.Constants.I0() / state.VPrime
-        ) / params.Constants.MomentumEquationNormalization()
-
-    # ======================================================================= #
-    # Heat sources                                                            #
-    # ======================================================================= #
-
-    # Decaying uniform source to help solution along
-    def UniformHeatSource(
-        self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams
-    ):
-        return params.Constants.a**2 * 200.0 * jnp.exp(-t / 0.01)
-
-    """
-    Ion heat sources
-    """
-
-    def ViscousHeating(
-        self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams
-    ):
-        return (
-            -1
-            * (state.domegadpsi * state.Pi / state.VPrime)
-            * (
-                params.Constants.omega0
-                * params.Constants.MomentumEquationNormalization()
-            )
-            / params.Constants.HeatEquationNormalization()
-        )
-
-    def IonPotentialHeating(
-        self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams
-    ):
-        return (
-            -0.5
-            * params.Constants.IonSpecies.IonMass
-            * (params.Constants.a * params.Constants.omega0) ** 2
-            * (state.R * state.omega) ** 2
-            * self.Sn(state, x, t, params)
-            * params.Constants.DensityEquationNormalization()
-        ) / params.Constants.HeatEquationNormalization()
-
-    def ChargeExchangeHeatLosses(
-        self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams
-    ):
-        def true_fun():
-            return (
-                state.Ti
-                * params.Constants.T0
-                * params.Constants.ChargeExchangeLossRate(
-                    state.n,
-                    params.Config.NeutralDensity,
-                    state.R
-                    * params.Constants.a
-                    * state.omega
-                    * params.Constants.omega0,
-                    state.Ti,
-                )
-                / params.Constants.HeatEquationNormalization()
-            )
-
-        def false_fun():
-            return 0.0
-
-        return jax.lax.cond(params.Config.useNeutralsModel, true_fun, false_fun)
-
-    def IonParallelHeatLosses(
-        self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams
-    ):
-        ParticleEnergy = state.Ti * (1 + Xi_i(state, x, t, params))
-        return (
-            ParticleEnergy
-            * params.Constants.T0
-            * IonPastukhovLossRate(state, x, t, params)
-            / params.Constants.HeatEquationNormalization()
-        )
-
-    """
-    Electron heat sources
-    """
-
-    def RadiationHeatLosses(
-        self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams
-    ):
-        return params.Constants.BremsstrahlungLosses(
-            state.n, state.pe
-        ) + params.Constants.CyclotronLosses(x, state.n, state.Te)
-
-    def AlphaHeating(self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
-        return params.Constants.TotalAlphaPower(state.n, state.pi)
-
-    def ElectronParallelHeatLosses(
-        self, state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams
-    ):
-        ParticleEnergy = state.Te * (1 + Xi_e(state, x, t, params))
-        return (
-            ParticleEnergy
-            * params.Constants.T0
-            * ElectronPastukhovLossRate(state, x, t, params)
-            / params.Constants.HeatEquationNormalization()
-        )
+        S = 0.0
+        for source in source_registry[Channel.ElectronEnergy]:
+            S += source(state, x, t, params)
+        for sink in sink_registry[Channel.ElectronEnergy]:
+            S -= sink(state, x, t, params)
+        return S
 
     # ======================================================================= #
     # Scalars                                                                 #
@@ -647,14 +462,8 @@ class MirrorPlasma(VectorizedTransportSystem):
             n = self.InitialValue(Channel.Density, x)
             return L / (n * R**2 * VPrime)
 
-        # phi = quad(omega, 0.0, 1.0)[0]
         integrand = jax.vmap(omega)(self.points)
         phi = jax.scipy.integrate.trapezoid(integrand, self.points)
-
-        # jax.debug.print(
-        #     "V0: {val}",
-        #     val=self.params.Config.PlasmaVoltage / self.params.Constants.omega0,
-        # )
 
         match s:
             case Scalar.Error:
