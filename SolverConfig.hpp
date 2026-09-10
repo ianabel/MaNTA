@@ -76,6 +76,7 @@ struct SolverConfig
     bool                     SteadyStateDiagnostics;
     bool                     SteadyStateStepDiagnostics;
     bool                     SteadyStateSolve;
+    unsigned int             MaxRejectedSteps;
     bool                     DegreeAdaptation;
     double                   DegreeTolerance;
     unsigned int             MaxPolynomialDegree;

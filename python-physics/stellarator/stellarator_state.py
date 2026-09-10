@@ -229,26 +229,3 @@ class StellaratorState(eqx.Module):
     @staticmethod
     def initial_profile(x, edge_value, peak_value):
         return (peak_value - edge_value) * (1 - x**4) + edge_value
-
-    #
-    # @staticmethod
-    # def vmap_axes():
-    #     return StellaratorState(
-    #         n=0,
-    #         pi=0,
-    #         pe=0,
-    #         Ti=0,
-    #         Te=0,
-    #         dndrho=0,
-    #         dpidrho=0,
-    #         dpedrho=0,
-    #         dTidrho=0,
-    #         dTedrho=0,
-    #         gamma=0,
-    #         qi=0,
-    #         qe=0,
-    #         Er=0,
-    #         rho=0,
-    #         vp=0,
-    #         vpp=0,
-    #     )

@@ -130,6 +130,7 @@ class SystemSolver
         };
         long getMaxContinuationSteps() const { return maxContinuationSteps; };
         void setPseudoTransientMaxStep(double dt) { ptcMaxStep = dt; };
+        void setMaxRejectedSteps(unsigned int steps) { maxRejectedSteps = steps; };
 
         // The SER schedule on an accepted step:
         //
@@ -817,6 +818,7 @@ class SystemSolver
         // backstop rather than a budget. Lowering it deliberately is what makes
         // a solve stop early enough to be looked at and then resumed.
         long maxContinuationSteps = 200;
+        unsigned int maxRejectedSteps;
         bool estimateObjectiveOnFinish = true;
         double ptcMaxStep = std::numeric_limits<double>::infinity();
         double ptcStep = 0.0;        // the current dt; infinite in Newton mode

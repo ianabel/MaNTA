@@ -6,11 +6,11 @@ import enum
 import matplotlib.pyplot as plt
 import numpy as np
 import pathlib
-from yancc.species import Species
+from ion_species import _IonSpecies
 
 
 class PlasmaConstants(eqx.Module):
-    IonSpecies: Species
+    IonSpecies: _IonSpecies
     n0: Float = eqx.field(static=True)
     n0cgs: Float = eqx.field(static=True)
     T0: Float = eqx.field(static=True)
@@ -146,3 +146,11 @@ class PlasmaConstants(eqx.Module):
         IonHeating = 3 * pDiff / taue * (1 / self.mu())
 
         return IonHeating / self.HeatEquationNormalization()
+
+    def FusionRate(self, n, Ti):
+        return self.IonSpecies.FusionRate(n * self.n0cgs, Ti * self.T0eV/ 1000.0) * 1e6
+
+    def AlphaHeating(self, n, Ti):
+        Factor = 3.5e6 * self.T0
+        return Factor * self.FusionRate(n, Ti)
+

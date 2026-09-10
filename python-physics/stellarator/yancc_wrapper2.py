@@ -15,10 +15,8 @@ import equinox as eqx
 from jaxtyping import ArrayLike, Float
 
 from typing import Optional
-from stellarator_state import StellaratorParams, StellaratorState, StellaratorDecorator
+from stellarator_state import StellaratorParams, StellaratorState
 
-
-# Remove LD_LIBRARY_PATH to avoid conflicts with yancc's C++ extensions
 
 import desc
 
@@ -226,8 +224,8 @@ def compute_dke_sol(
     field,
     vp,
     vpp,
-    pitchgrid,
-    speedgrid,
+    pitchgrid: UniformPitchAngleGrid,
+    speedgrid: MaxwellSpeedGrid,
     params: StellaratorParams,
     evolveDensity=False,
 ):
@@ -249,7 +247,7 @@ def compute_dke_sol(
 
         species = [
             LocalMaxwellian(
-                params.constants.IonSpecies,
+                params.constants.IonSpecies.yancc_species,
                 temperature=state.Ti * params.constants.T0eV,
                 density=state.n * params.constants.n0,
                 dTdrho=state.dTidrho * params.constants.T0eV,
@@ -290,7 +288,7 @@ def compute_dke_sol(
     ):
         species = [
             LocalMaxwellian(
-                params.constants.IonSpecies,
+                params.constants.IonSpecies.yancc_species,
                 temperature=state.Ti * params.constants.T0eV,
                 density=state.n * params.constants.n0,
                 dTdrho=state.dTidrho * params.constants.T0eV,
@@ -319,7 +317,7 @@ def compute_dke_sol(
         )
 
         particle_flux = (
-            -sol.get("<particle_flux>")[0]
+            -sol.get("<particle_flux>")[1]
             * vp
             / (params.constants.DensityEquationNormalization())
         )
@@ -358,3 +356,100 @@ def compute_dke_sol(
             speedgrid,
             params,
         )
+
+
+def dke_field_jac(
+    states,
+    positions,
+    t,
+    field,
+    vp,
+    vpp,
+    pitchgrid,
+    speedgrid,
+    params,
+    evolveDensity=False,
+):
+    def _dke_sol(tree_in):
+        _field, _vp, _vpp = tree_in
+        return compute_dke_sol(
+            states,
+            positions,
+            t,
+            _field,
+            _vp,
+            _vpp,
+            pitchgrid,
+            speedgrid,
+            params,
+            evolveDensity,
+        )
+
+    return eqx.filter_jacrev(_dke_sol)((field, vp, vpp))
+
+
+def test_flux(
+    _state,
+    x,
+    t,
+    field,
+    vp,
+    vpp,
+    pitchgrid: UniformPitchAngleGrid,
+    speedgrid: MaxwellSpeedGrid,
+    params: StellaratorParams,
+    evolveDensity=False,
+):
+
+    state = StellaratorState.from_state(_state, x, vp, vpp, params)
+
+    def ambipolar(state, x, t, field, vp, vpp, *args):
+
+        particle_flux = -vp * 0.01 * state.dndrho
+        ion_heat_flux = -vp * 0.01 * state.dTidrho
+
+        electron_heat_flux = -vp * 0.01 * state.dTedrho
+
+        aux_g_out = vp * 100
+
+        return [particle_flux, ion_heat_flux, electron_heat_flux], [aux_g_out]
+
+    def constant_density(state, x, t, field, vp, vpp, *args):
+        return [vp * 0.01 * state.dTidrho], []
+
+    if evolveDensity:
+        return ambipolar(state, x, t, field, vp, vpp, pitchgrid, speedgrid, params)
+    else:
+        return constant_density(
+            state, x, t, field, vp, vpp, pitchgrid, speedgrid, params
+        )
+
+
+def test_flux_field_jac(
+    states,
+    positions,
+    t,
+    field,
+    vp,
+    vpp,
+    pitchgrid,
+    speedgrid,
+    params,
+    evolveDensity=False,
+):
+    def _dke_sol(tree_in):
+        _field, _vp, _vpp = tree_in
+        return test_flux(
+            states,
+            positions,
+            t,
+            _field,
+            _vp,
+            _vpp,
+            pitchgrid,
+            speedgrid,
+            params,
+            evolveDensity,
+        )
+
+    return eqx.filter_jacrev(_dke_sol)((field, vp, vpp))

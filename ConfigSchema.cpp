@@ -104,6 +104,8 @@ const std::vector<Entry> &table()
          "Run to a steady state using the default tolerance. SteadyStateTolerance "
          "does the same and names the tolerance; either arms it, and giving both "
          "uses the tolerance."},
+        {"MaxRejectedSteps", {}, Type::UInt, Category::Solver, false, false, 100u,
+         "Maximum number of rejected steps taken by KINSOL before returning"}, 
         {"DegreeAdaptation", {}, Type::Bool, Category::Solver, false, false, false,
          "Choose the global polynomial degree by solving, estimating the error from "
          "u* - u_h, and re-solving at a higher degree. Steady solves only; implies "

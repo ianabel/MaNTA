@@ -41,7 +41,7 @@ nodes = 1 - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 1)
 nodes = np.concatenate(([0], nodes, [1]))
 # # %%
 solver_config = {
-    "OutputFilename": "stellarator_gpu_test",
+    "OutputFilename": "stellarator_w7x",
     "Polynomial_degree": degree,
     "Grid_points": nodes,
     "Grid_size": len(nodes) - 1,
@@ -73,7 +73,7 @@ eq = eq.solve(x_scale="ess")[0]
 eq_init = eq.copy()
 
 
-def make_test_state(rho, fname="stellarator_gpu_test"):
+def make_test_state(rho, fname="stellarator_w7x"):
     data = Dataset(fname + ".nc", "r")
     x = jnp.array(data.variables["x"][:])
     n = Akima1DInterpolator(

@@ -1,6 +1,6 @@
 import equinox as eqx
 from constants import PlasmaConstants
-from yancc.species import Hydrogen
+import ion_species
 
 
 class StellaratorConfig(eqx.Module):
@@ -16,6 +16,7 @@ class StellaratorConfig(eqx.Module):
     EdgeTemperature: float
     EdgeDensity: float
     n0: float
+    T0: float
     evolveDensity: bool
     useSharding: bool
     useBatching: bool
@@ -24,7 +25,6 @@ class StellaratorConfig(eqx.Module):
         self,
         EdgeTemperature,
         EdgeDensity,
-        n0,
         NBICenter,
         NBIPower,
         NBIWidth,
@@ -34,6 +34,8 @@ class StellaratorConfig(eqx.Module):
         ParticleSourceCenter=0.0,
         ParticleSourceWidth=0.1,
         ParticleSourceHeight=1.0,
+        T0=None,
+        n0=None,
         evolveDensity=False,
         useSharding=True,
         useBatching=False,
@@ -49,7 +51,15 @@ class StellaratorConfig(eqx.Module):
         self.ECHWidth = ECHWidth
         self.EdgeTemperature = EdgeTemperature
         self.EdgeDensity = EdgeDensity
-        self.n0 = n0
+        if T0 is None:
+            self.T0 = self.EdgeTemperature
+        else:
+            self.T0 = T0
+
+        if n0 is None:
+            self.n0 = self.EdgeDensity
+        else:
+            self.n0 = n0
         self.evolveDensity = evolveDensity
         self.useSharding = useSharding
         self.useBatching = useBatching
@@ -59,6 +69,6 @@ class StellaratorParams(eqx.Module):
     config: StellaratorConfig
     constants: PlasmaConstants
 
-    def __init__(self, _config, ion_species=Hydrogen, **constant_args):
+    def __init__(self, _config, ion_species=ion_species.DeuteriumTritium(), **constant_args):
         self.config = _config
         self.constants = PlasmaConstants(ion_species, **constant_args)

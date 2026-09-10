@@ -374,7 +374,7 @@ void SystemSolver::solveSteadyState(bool resume)
                      "outcome");
 
     int step = 0;
-    int rejected = 0;
+    unsigned int rejected = 0;
     for (; step < maxContinuationSteps; ++step)
     {
         // What this one continuation step costs. MaNTA's counters are monotonic,
@@ -535,6 +535,14 @@ void SystemSolver::solveSteadyState(bool resume)
             N_VScale(1.0, uPrev, Y);
             ptcStep = std::isfinite(ptcStep) ? ptcStep * 0.25 : fallback;
             ++rejected;
+            logmsg<LOG_LEVEL::PDEBUG>("Rejected steps: {}, Max rejected steps: {}", rejected, maxRejectedSteps);
+        }
+        if (rejected > maxRejectedSteps)
+        {
+          
+          finish("FAILED: max rejected steps exceeded", step, rejected, 
+                 SteadyOutcome::OutOfSteps, Fprev);
+          return;
         }
     }
 

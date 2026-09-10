@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 from desc.profiles import SplineProfile
 from desc.plotting import plot_boozer_surface, plot_boundaries, plot_qs_error
 from desc.plotting import plot_comparison
-from desc.plotting import plot_1d
 from desc.objectives import (
     AspectRatio,
     FixBoundaryR,
@@ -19,13 +18,10 @@ from desc.objectives import (
     RotationalTransform,
     Volume,
 )
-from desc.grid import Grid, LinearGrid
+import desc
+from desc.grid import Grid
 from desc.geometry import FourierRZToroidalSurface
 from desc.equilibrium import Equilibrium, EquilibriaFamily
-import desc.io
-from desc import set_device
-import desc
-from yancc_wrapper2 import yancc_data
 import yancc
 import jax.numpy as jnp
 import numpy as np
@@ -43,31 +39,36 @@ fname = "stellarator_opt_amb"
 eq_name = "eq_amb"
 st_config = {
     "ParticleSourceCenter": 0.0,
-    "ParticleSourceHeight": 0.5,
+    "ParticleSourceHeight": 0.2,
     "ParticleSourceWidth": 0.6,
     "NBICenter": 0.0,
-    "NBIPower": 2.0,
+    "NBIPower": 0.5,
     "NBIWidth": 0.4,
     "ECHCenter": 0.0,
-    "ECHPower": 2.0,
+    "ECHPower": 0.5,
     "ECHWidth": 0.4,
     "EdgeTemperature": 0.2,
-    "EdgeDensity": 0.4,
-    "n0": 0.5,
+    "EdgeDensity": 0.2,
+    "n0": 0.21,
+    "T0": 0.21,
     "evolveDensity": True,
+    "useBatching": True,
 }
 
 
 rho_upper = 1.0
 rtol = 1e-2
 atol = 1e-3
-# nodes = [0.0,0.5, 0.75, 0.9, 1.0]
-npoints = 4
-degree = 4
-base = 3.0
+# nodes = [0.0, 0.4, 0.6, 0.75, 0.95, 1.0]
+npoints = 8
+degree = 3
+base = 1.5
 tau = 100.0
+#
 nodes = 1 - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 1)
 nodes = np.concatenate(([0], nodes, [1]))
+# nodes = np.linspace(0, 1.0, npoints + 1)
+print(nodes)
 # # %%
 solver_config = {
     "OutputFilename": fname,
@@ -80,11 +81,14 @@ solver_config = {
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
-    "initialTimestep": 1e-4,
+    "initialTimestep": 1e-2,
     "MinStepSize": 1e-9,
-    "SteadyStateTolerance": 1e-2,
+    "SteadyStateTolerance": 5e-3,
     "AggressiveTimesteps": False,
     "WriteDatFile": True,
+    "SteadyStateDiagnostics": True,
+    "SteadyStateStepDiagnostics": True,
+    "MaxRejectedSteps": 4,
     "zeroFlux": True,
     "solveAdjoint": False,
     "PseudoTransientSERRate": 2.0,
@@ -108,7 +112,7 @@ yancc_rho = jnp.array(points)
 yancc_ntheta = 17
 yancc_nzeta = 25
 
-yancc_res = {"na": 43, "nx": 7}
+yancc_res = {"na": 45, "nx": 7}
 
 
 # %%
@@ -116,20 +120,20 @@ yancc_res = {"na": 43, "nx": 7}
 pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 #
-# surf = FourierRZToroidalSurface(
-#     R_lmn=[1, 0.125, 0.1],
-#     Z_lmn=[-0.125, -0.1],
-#     modes_R=[[0, 0], [1, 0], [0, 1]],
-#     modes_Z=[[-1, 0], [0, -1]],
-#     NFP=4,
-# )
+surf = FourierRZToroidalSurface(
+    R_lmn=[1, 0.125, 0.1],
+    Z_lmn=[-0.125, -0.1],
+    modes_R=[[0, 0], [1, 0], [0, 1]],
+    modes_Z=[[-1, 0], [0, -1]],
+    NFP=4,
+)
 # # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
 # # default is zero pressure and zero current
-# eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
+eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
 # # this is usually all you need to solve a fixed boundary equilibrium
-# eq = eq.solve(x_scale="ess")[0]
-# # print(pressure_rho)
-eq = desc.io.load(eq_name + "_all_equilibria.h5")[-1]
+eq = eq.solve(x_scale="ess")[0]
+# print(pressure_rho)
+# eq = desc.io.load(eq_name + "_all_equilibria.h5")[-1]
 # desc_pressure = eq.get_profile('p')
 eqs = EquilibriaFamily(eq)
 eq_init = eq.copy()
@@ -142,7 +146,8 @@ yancc_wrapper = yancc_data.from_eq(
 ## %%
 
 #
-# %%
+# # # %%
+# with jax.log_compiles(True):
 st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
 st.run()
 
@@ -232,13 +237,16 @@ solver_config = {
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
-    "initialTimestep": 1e-6,
+    "initialTimestep": 1e-2,
     "MinStepSize": 1e-10,
     "WriteDatFile": True,
     "restart": True,
     "zeroFlux": True,
-    "SteadyStateTolerance": 1e-2,
+    "SteadyStateTolerance": 5e-3,
     "SteadyStateSolver": "Newton",
+    "SteadyStateDiagnostics": True,
+    "MaxRejectedSteps": 0,
+    "SteadyStateStepDiagnostics": True,
     # "ObjectiveDecreaseTolerance": 0.01,
     "PseudoTransientSERFloor": 2.0,
 }
@@ -290,7 +298,6 @@ def objective_from_user_fun(grid, data):
     fields = jax.vmap(lambda d: yancc.field.Field(**d, NFP=grid.NFP))(yancc_dat)
 
     desc_pressure = grid.compress(data["p"], surface_label="rho")
-
     stored_energy, manta_pressure = manta_objective((fields, Vp, Vpp), grid)
     print("------------ STORED ENERGY ----------------")
     print(stored_energy)
@@ -305,7 +312,7 @@ def objective_from_user_fun(grid, data):
 
     # optimization is easiest for least squares objectives, so instead of maximizing
     # stored energy we minimize 1/stored_energy^2 (the squaring happens later)
-    return 1 / stored_energy  # jnp.append(pressure_error, 1 / stored_energy)
+    return -stored_energy # jnp.append(pressure_error, 1 / stored_energy)
 
 
 yancc_desc_grid = yancc_wrapper.grid
@@ -362,7 +369,7 @@ stored_energy_weight = 1.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()
-max_it = 8
+max_it = 20
 
 eqfam = EquilibriaFamily(eq)
 # ks = [1, 2, eq.M + 1]
@@ -379,7 +386,7 @@ objectives = [
     ObjectiveFromUser(
         objective_from_user_fun,
         eqfam[-1],
-        target=0,
+        target=-jnp.inf,
         weight=objective_from_user_weight,
         grid=yancc_desc_grid,
         deriv_mode="fwd",
@@ -390,26 +397,23 @@ objectives = [
 objective = ObjectiveFunction(objectives)
 objective.build(use_jit=False)
 
+k = 2
 
-# R_modes = np.vstack(
-#     (
-#         [0, 0, 0],
-#         eq.surface.R_basis.modes[
-#             np.max(np.abs(eq.surface.R_basis.modes), 1) > k, :
-#         ],
-#     )
-# )
-# Z_modes = eq.surface.Z_basis.modes[
-#     np.max(np.abs(eq.surface.Z_basis.modes), 1) > k, :
-# ]
+R_modes = np.vstack(
+    (
+        [0, 0, 0],
+        eq.surface.R_basis.modes[np.max(np.abs(eq.surface.R_basis.modes), 1) > k, :],
+    )
+)
+Z_modes = eq.surface.Z_basis.modes[np.max(np.abs(eq.surface.Z_basis.modes), 1) > k, :]
 
 # %%
 constraints = [
     ForceBalance(eq=eq),  # J x B - grad(p) = 0
     # fix zero current, eventually should use real bootstrap
     FixCurrent(eq=eq),
-    # FixBoundaryR(eq=eqfam[-1], modes=R_modes),
-    # FixBoundaryZ(eq=eqfam[-1odule], modes=Z_modes),
+    FixBoundaryR(eq=eqfam[-1], modes=R_modes),
+    FixBoundaryZ(eq=eqfam[-1], modes=Z_modes),
     FixPsi(eq=eq),  # fix total magnetic flux
     LinearObjectiveFromUser(
         pressure_constraint_fun, eq, target=pressure_constraint_target
@@ -425,16 +429,16 @@ eq, info_out = eq.optimize(
     ftol=1e-3,  # stopping tolerance on the function value
     xtol=1e-6,  # stopping tolerance on the step size
     gtol=1e-6,  # stopping tolerance on the gradient
-    options={
-        "initial_trust_radius": 0.02,
-        # "perturb_options": {"order": 2, "verbose": 3},  # use 2nd-order perturbations
-        #     # "solve_options": {
-        #     #     "ftol": 5e-3,
-        #     #     "xtol": 1e-6,
-        #     #     "gtol": 1e-6,
-        #     #     "verbose": 3,
-        # },  # for equilibrium subproblem
-    },
+    # options={
+    #     "initial_trust_radius": 1.0,
+    #     # "perturb_options": {"order": 2, "verbose": 3},  # use 2nd-order perturbations
+    #     #     # "solve_options": {
+    #     #     #     "ftol": 5e-3,
+    #     #     #     "xtol": 1e-6,
+    #     #     #     "gtol": 1e-6,
+    #     #     #     "verbose": 3,
+    #     # },  # for equilibrium subproblem
+    # },
     verbose=3,
     copy=True,
 )

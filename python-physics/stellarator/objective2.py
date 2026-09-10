@@ -6,15 +6,11 @@ import functools
 import equinox as eqx
 import jax.numpy as jnp
 import jax
+from jax.experimental import io_callback
 import os
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
-
-
-# from desc import set_device
-# set_device('gpu')
-# from desc.backend import pure_callback
 
 
 def abstract_eval(yin):
@@ -43,25 +39,23 @@ def make_objective(config, yancc_res=None):
 
         return G[0], G_p, pi
 
-    #    def wrap_callback(func):
-    #
-    #        @functools.wraps(func)
-    #        def wrapper(*args, **kwargs):
-    #            result_shape_dtype = abstract_eval(*args, **kwargs)
-    #            return io_callback(
-    #                func, result_shape_dtype, *args, ordered=False, **kwargs
-    #            )
-    #
-    #        return wrapper
     solver_config = config["Solver"]
+    time_march_solver_config = solver_config.copy()
+    time_march_solver_config["SteadyStateSolver"] = "PseudoTransient"
+    time_march_solver_config["restart"] = False
+    time_march_solver_config["MaxRejectedSteps"] = 4
     grad_solver_config = solver_config.copy()
     grad_solver_config["delta_t"] = grad_solver_config["delta_t"] / 10000.0
     grad_solver_config["restart"] = True
     grad_solver_config["solveAdjoint"] = True
     grad_solver_config["SteadyStateSolver"] = "Newton"
-    print("delta t=", grad_solver_config["delta_t"])
 
     grad_config = {"Stellarator": config["Stellarator"], "Solver": grad_solver_config}
+
+    time_march_config = {
+        "Stellarator": config["Stellarator"],
+        "Solver": time_march_solver_config,
+    }
 
     @eqx.filter_custom_jvp
     def _objective_base(tree_in, grid):
@@ -69,7 +63,29 @@ def make_objective(config, yancc_res=None):
         yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp, **yancc_res)
 
         st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-        st.run()
+        with jax.default_device(jax.devices("cpu")[0]):
+            ec = st.run()
+
+            def true_fn():
+                pass
+
+            def false_fn():
+
+                # put in callback to stop jax from trying to evaluate this during tracing
+                conf_success = io_callback(
+                    lambda: st.reconfigure(time_march_solver_config),
+                    (jax.ShapeDtypeStruct((), jnp.bool),),
+                    ordered=True,
+                )
+                jax.debug.print(
+                    "Reconfigured solver with code {val}",
+                    val=conf_success,
+                    ordered=True,
+                )
+                st.run()
+
+            jax.lax.cond(ec, true_fn, false_fn)
+
         G = st.G()[0]
         pi = jnp.array(st.getPressure())
         return G, pi
@@ -96,40 +112,7 @@ def make_objective(config, yancc_res=None):
             )
         )(v)
         dp = jnp.float32(jnp.dot(G_p.flatten(), v_unstack.flatten()))
-        # get unflattening function
-        # _, unflatten_field = jax.flatten_util.ravel_pytree(yancc_wrapper.fields_unstacked[0])
 
-        # Separate out the different parts of the gradient
-        #     G_p_field = G_p[:, :-2] # extract field component
-        #     G_p_vprime = G_p[:, -2] # extract vprime component
-        #     G_p_vpp = G_p[:, -1] # extract vpp component
-        #     # need to pad the field portion because NFP gets removed by equinox during the gradient calculation
-        #     G_p_padded = jnp.pad(G_p_field, pad_width=((0,0),(0,1)), mode='constant')
-
-        #     # Create a field object from the padded G_p matrix
-        #     G_p_unflattened = jax.vmap(unflatten_field)(jnp.float64(G_p_padded))
-
-        #     # Function to compute the dot product between individual components of the field
-        #     def safe_mul(x, y):
-        #         if x is None:
-        #             return y
-        #         if y is None:
-        #             return x
-        #         x_flat = jax.flatten_util.ravel_pytree(x)[0]
-        #         y_flat = jax.flatten_util.ravel_pytree(y)[0]
-        #         return jnp.dot(x_flat,y_flat)
-
-        #    # Apply tree_map to multiply G_p * tangents
-        #     # We need to treat None as a leaf
-        #     result = jax.tree.map(safe_mul, G_p_unflattened, field_dot, is_leaf=lambda x: x is None)
-        #     result_flattened, _ = jax.flatten_util.ravel_pytree(result)
-
-        #     #now do vprime
-        #     result_vprime = jnp.dot(G_p_vprime, Vp_dot)
-        #     result_vpp = jnp.dot(G_p_vpp, Vpp_dot)
-
-        # Result is the sum of G_field * tangent_field + G_vp * tangent_vp + G_vpp * tangent_vpp
-        # (jnp.float32(jnp.sum(result_flattened)+result_vprime+result_vpp), None)
         return (G, pi), (dp, None)
 
     return _objective_base
