@@ -552,6 +552,43 @@ case cannot see the `B11` term at all, which is the one genuinely new coupling
 the scheme introduces. Measured `||J dy - g|| / ||g||` is 2e-10 to 5e-10 for
 `k = 1, 2, 3`.
 
+**`TimeDerivativeSourceTests.cpp`** covers sources that read `State::udot`. Ten
+cases, and the split between them is the point: an order study is the only thing
+that sees a wrong *residual*, and a finite-difference of the Jacobian is the only
+thing that sees a wrong *Jacobian*, because the Jacobian is never assembled.
+
+The manufactured problem is two variables solving the same equation, with
+variable 1's source carrying `C * udot(0)` and a compensating `- C * du_exact/dt`
+subtracted, so the exact solution is unchanged and a solver that never filled
+`udot` would be integrating a source short by `C du/dt`. Measured orders of
+`u(1)`, which is the variable whose source carries the coupling:
+
+| k | u(0) | u(1) | u* (flag on) |
+|---|---|---|---|
+| 1 | 1.89 | 1.95 | 3.09 (local, n=8->16) |
+| 2 | 2.96 | 2.98 | 4.09 |
+| 3 | 3.98 | 3.99 | 5.01 (local, n=8->16) |
+
+**That last column answers the design's open question.** `udot` is *interpolated*
+onto the star nodes rather than reconstructed -- `d(u*)/dt` would run through
+`q_dot`, which is an algebraic row's time derivative and has no meaning -- and
+the worry was that this would cap the postprocessed rate at `k+1`. It does not:
+`u*` reaches `k+2` with the coupling present, at every degree measured.
+
+**The `alpha` pair is the trap this suite exists to record.** The new Jacobian
+term is `- alpha * dS/d(udot)`, so it is *identically invisible* at `alpha = 0`.
+`the_udot_block_is_invisible_at_zero_alpha` passes with the term deleted, by
+construction, and is kept beside `..._at_nonzero_alpha` so that the two are never
+collapsed into one. Verified by deleting the term and rebuilding: the
+`alpha = 3.7` case goes from `8.8e-10` to failing, the `alpha = 0` case does not
+move. The same fact is why the adjoint needs nothing: it is built at `alpha = 0`.
+
+`a_cancelled_mass_term_is_refused_by_name` drives the other new failure mode. A
+source containing `a_i du_i/dt` cancels its own mass term, which makes the row
+algebraic and raises the index; the run is refused at `initialize()` with the
+variable named, rather than failing later inside `IDACalcIC` with nothing to say
+where it came from.
+
 **`MMSConvergenceTests.cpp`** and **`MMSAuxScalarTests.cpp`** measure the observed
 orders, flag off and flag on, for `u` and for `u*`. The shared sweep, the
 least-squares fit and the exact solution live in `MMSHarness.hpp`; the first file

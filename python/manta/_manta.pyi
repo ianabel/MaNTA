@@ -123,7 +123,15 @@ class Field:
     name: str
     units: str
     upper: BoundaryCondition
-    def __init__(self, name: str, description: str = '', units: str = '', lower: BoundaryCondition = ..., upper: BoundaryCondition = ...) -> None:
+    def __init__(self, name: str, description: str = '', units: str = '', lower: BoundaryCondition = ..., upper: BoundaryCondition = ..., source_reads_time_derivatives: bool = False) -> None:
+        ...
+    @property
+    def source_reads_time_derivatives(self) -> bool:
+        """
+        Set when this variable's Sources reads state.udot. It is what makes udot be filled and dSources_dudot be asked for.
+        """
+    @source_reads_time_derivatives.setter
+    def source_reads_time_derivatives(self, arg0: bool) -> None:
         ...
 class Grid:
     @typing.overload
@@ -227,6 +235,11 @@ class State:
     def u(self) -> StateField:
         """
         the variables
+        """
+    @property
+    def udot(self) -> StateField:
+        """
+        d(variable)/dt; meaningful in Sources only
         """
 class StateField:
     """

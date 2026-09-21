@@ -68,6 +68,7 @@ set(MANTA_TEST_SOURCES
   StateGeometryTests.cpp
   SystemSolverMatrixTests.cpp
   SystemSolverTests.cpp
+  TimeDerivativeSourceTests.cpp
   TransportSystemTests.cpp
   UtilityTests.cpp
   main.cpp

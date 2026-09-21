@@ -177,6 +177,8 @@ Every hook receives a ``State``. Use the named accessors:
      - the auxiliary variable :math:`\phi_i`
    * - ``s.scalar(i)``
      - the global scalar :math:`\mu_i`
+   * - ``s.udot(i)``
+     - :math:`\partial_t u_i` — see :ref:`time-derivative-sources` below
 
 They are bounds-checked in a ``DEBUG`` build, which is worth having: anything
 indexed per auxiliary variable is sized ``nAux``, not ``nVars``, and those
@@ -187,6 +189,69 @@ coincide in almost every case.
    The derivative hooks receive their output vector **already zeroed**. Assign
    only the entries that are nonzero; there is no need to call ``setZero()``
    first, and an omitted entry means zero rather than uninitialised memory.
+
+.. _time-derivative-sources:
+
+Sources that read a time derivative
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A source may depend on :math:`\partial_t u_j`, which is what a formulation whose
+state variables are not the conserved quantities produces — a heat equation
+carrying :math:`\partial_t n` on its right-hand side, for instance. Declare it on
+the variable whose source does the reading, and supply the derivative:
+
+.. code-block:: cpp
+
+   SystemSpec spec{.variables = {{"n", "density", "m^-3"},
+                                 {"T", "temperature", "eV"}}};
+   spec.variables[1].sourceReadsTimeDerivatives = true;
+
+   Value Sources(Index i, const State &s, Position x, Time t) override
+   {
+       if (i == 1)
+           return heating(x, t) - Z * phi0 * s.udot(0);   // reads dn/dt
+       return particleSource(x, t);
+   }
+
+   void dSources_dudot(Index i, VectorRef v, const State &s,
+                       Position x, Time t) override
+   {
+       if (i == 1)
+           v[0] = -Z * phi0;
+   }
+
+From Python the flag is ``manta.Field(..., source_reads_time_derivatives=True)``
+and the value is ``state.udot[0]``; from ``AutodiffTransportSystem`` override the
+``Source`` overload that takes a ``udot`` vector and the derivative is derived
+for you.
+
+Four things are worth knowing before using it.
+
+**It is meaningful in** ``Sources`` **and nowhere else.** ``SigmaFn`` and
+``AuxG`` receive the same ``State``, so the value is there, but the Jacobian
+carries no :math:`\partial\hat\sigma/\partial\dot u` or
+:math:`\partial G/\partial\dot u` term. A flux that read it would be
+differentiated wrongly, and the only symptom would be slow Newton convergence.
+
+**There is no** ``qdot``, ``sigmadot`` **or** ``phidot``. Those rows are
+algebraic — the residual carries no :math:`\partial_t` for them and
+``SuppressAlgebraicError`` may take them out of the local error test — so their
+``dYdt`` entries are whatever makes the constraints hold rather than quantities
+with a physical meaning.
+
+**It changes what multiplies the time derivative**, from :math:`X` to
+:math:`X - \partial S/\partial\dot u`. A source containing :math:`a_i
+\partial_t u_i` cancels its own mass term, which makes the row algebraic and
+raises the index of the system; the solver assembles that operator at the initial
+state and refuses the run by name rather than leaving it to IDA. A near-cancellation
+warns instead, because pseudo-transient continuation damps with this operator
+rather than with :math:`X`, so its step schedule may behave unlike it does
+elsewhere.
+
+**A steady solve sees** :math:`\dot u = 0`, which is the right reading of a
+steady state: ``PseudoTransient`` drives its damping term to zero at the fixed
+point and ``Newton`` never has one. The adjoint is built at :math:`\alpha = 0`
+and so is unaffected by this feature entirely.
 
 Boundary conditions
 ~~~~~~~~~~~~~~~~~~~

@@ -205,18 +205,29 @@ PYBIND11_MODULE(_manta, m) {
   py::class_<FieldSpec>(m, "Field")
       .def(py::init([](std::string name, std::string description,
                        std::string units, BoundaryCondition lower,
-                       BoundaryCondition upper) {
-             return FieldSpec{std::move(name), std::move(description),
-                              std::move(units), lower, upper};
+                       BoundaryCondition upper,
+                       bool source_reads_time_derivatives) {
+             return FieldSpec{std::move(name),
+                              std::move(description),
+                              std::move(units),
+                              lower,
+                              upper,
+                              source_reads_time_derivatives};
            }),
            py::arg("name"), py::arg("description") = "", py::arg("units") = "",
            py::arg("lower") = BoundaryCondition(BoundaryKind::Dirichlet),
-           py::arg("upper") = BoundaryCondition(BoundaryKind::Dirichlet))
+           py::arg("upper") = BoundaryCondition(BoundaryKind::Dirichlet),
+           py::arg("source_reads_time_derivatives") = false)
       .def_readwrite("name", &FieldSpec::name)
       .def_readwrite("description", &FieldSpec::description)
       .def_readwrite("units", &FieldSpec::units)
       .def_readwrite("lower", &FieldSpec::lower)
-      .def_readwrite("upper", &FieldSpec::upper);
+      .def_readwrite("upper", &FieldSpec::upper)
+      .def_readwrite("source_reads_time_derivatives",
+                     &FieldSpec::sourceReadsTimeDerivatives,
+                     "Set when this variable's Sources reads state.udot. It is "
+                     "what makes udot be filled and dSources_dudot be asked "
+                     "for.");
 
   py::class_<ScalarSpec>(m, "Scalar")
       .def(py::init([](std::string name, std::string description,

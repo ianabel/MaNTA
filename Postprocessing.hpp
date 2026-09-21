@@ -121,6 +121,20 @@ public:
     // Uses the u* from the last computeUStar() call.
     GlobalState evalOnStarNodes(DGSoln const &Y) const;
 
+    // The variables of Y sampled at the star nodes, (nVars x nCells*(k+2)),
+    // with no reconstruction anywhere in it.
+    //
+    // This is what the time derivatives want. evalOnStarNodes cannot serve:
+    // it substitutes u*, and the u* it holds was reconstructed from the
+    // *solution's* (u, q) by the last computeUStar -- handing it dYdt would put
+    // Y's u* in the variable rows and dYdt's q and sigma beside them.
+    // Reconstructing a u* for dYdt instead is not the answer either, because
+    // d(u*)/dt runs through q_dot, which is an algebraic row's time derivative
+    // and has no meaning here (State::udot says why). So du_h/dt is simply
+    // interpolated from its own degree-k coefficients onto the star points,
+    // through the same V_[cell] that evalOnStarNodes applies to q and sigma.
+    Matrix interpolateVariableOnStarNodes(DGSoln const &Y) const;
+
     // Per-cell operators. See the class comment for shapes.
     Matrix const &B11(Index cell) const { return B11_[cell]; }
     Matrix const &B12(Index cell) const { return B12_[cell]; }
