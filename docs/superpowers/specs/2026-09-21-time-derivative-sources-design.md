@@ -1,7 +1,14 @@
 # Sources that carry time derivatives
 
 Date: 2026-09-21
-Status: design, not approved; no code written
+Status: phase 1 implemented; phases 2 and 3 not started.
+
+Where the implementation departed from this document, the text below has been
+left as written and the departure recorded at the point it happens, rather than
+edited away. Two of them: the superconvergent open question was **answered**
+(interpolating `udot` onto the star nodes does not cap the `k+2` rate -- measured
+3.09, 4.09, 5.01 at k = 1, 2, 3), and the call to force `IDACalcIC` on turned out
+to be **unnecessary** and was not made.
 
 ## Why
 
@@ -50,6 +57,27 @@ that evolves temperature rather than energy density, or that carries a
 potential-energy exchange, produces a `d(other variable)/dt` on the right-hand
 side. It is the generic consequence of choosing state variables that are not
 the conserved quantities.
+
+**And it is already in production use elsewhere, which was not known when this
+was designed.** `refs/ASTRA-8.pdf` Sec 5.4 describes ASTRA's cure for the
+oscillation a stiff turbulent model produces — zero gradient gives no transport,
+so the gradient grows, so the transport overshoots and flattens it again — and
+that cure is *"an additional artificial diffusion, proportional to the time
+derivative of the relevant kinetic profile"*, which *"has also been crucial for
+almost every predictive transport modelling study which was carried out with the
+ASTRA code in the last two decades"* (Pereverzev & Corrigan, Comput. Phys.
+Commun. 179 (2008) 579). So one of the two most-used transport codes in the
+field has depended on a `du/dt`-dependent term for twenty years, on precisely
+the stiff-gradient problem class the paper's Section 6.3 benchmarks.
+
+Two things follow for MaNTA. ASTRA writes the damping into the *physics*, where
+pseudo-transient continuation puts an equivalent term in the *solver* and drives
+it to zero at the fixed point — so the two are alternatives rather than
+complements, and a case porting ASTRA's stabiliser verbatim onto a
+`PseudoTransient` run would be damping twice. And a stabiliser of that form
+modifies exactly the effective mass matrix `X - dS/d(udot)` that the singularity
+check below guards: there, that is not a hazard to be worked around but the
+whole mechanism by which the term does its job.
 
 ## What the solver already has
 
@@ -263,6 +291,14 @@ must not take that path: its initial `udot` is wrong by construction, and the
 residual test cannot see it, because the residual is evaluated with the same
 wrong `udot` that produced it. Force the call on, and say so in the log line
 that already reports the decision.
+
+*(Wrong, and not implemented. There is no such path to force. The only two that
+skip are a steady solve -- where `udot` is the continuation's damping term
+`(u - u_prev)/dt` rather than the guess `setInitialConditions` built, so the
+guess is never used -- and a copy-path restart, whose stored `dYdt` was
+consistent for these same equations. A cold time-marching run, which is the case
+that would have needed forcing, already calls `IDACalcIC` unconditionally. No
+code was added.)*
 
 ### Geometry time derivatives (phase 2)
 

@@ -81,8 +81,46 @@ implicit time step. These are the established ways of coping.
 | Journal of Computational Physics 227 (2008) 8769–8775 | https://doi.org/10.1016/j.jcp.2008.06.032 | Jardin et al. on gradient-dependent diffusivity: why Crank–Nicolson and backward Euler oscillate, and the correction that cures it. Despite the file name, this is not about PTRANSP | PTRANSP.pdf |
 | Physics of Plasmas 17, 056109 (2010) | https://doi.org/10.1063/1.3323082 | Trinity: multiscale coupling of a 1-D transport solve to gyrokinetic flux calculations, with the fluxes evaluated by a separate expensive code | TrinityAlgorithm.pdf |
 | Computer Physics Communications 214 (2017) 1–5 | https://doi.org/10.1016/j.cpc.2016.12.018 | FASTRAN: 4th-order Interpolated Differential Operator scheme plus a root-finding nonlinear iteration; solves for the gradient as an independent unknown, as MaNTA's `q` is | ParkEfficientSolver.pdf |
+| Physics of Plasmas 16, 060704 (2009) | https://doi.org/10.1063/1.3167820 | TGYRO (Candy, Holland, Waltz, Fahey & Belli). The closest algorithmic analogue to `SteadyStateSolver = Newton` in the literature, and the best cost comparison MaNTA has. It solves the *steady* problem directly by flux matching, `Q_hat = Q_hat^T`, and its unknowns are the **logarithmic gradients** `z_a = -(1/T_a) dT_a/dr` rather than the profiles, which are recovered by integrating from a fixed pedestal-top value (their eq. (7)). Newton with a per-equation relaxation parameter `eta`, halved on any step that increases the residual, plus a cap `dz_max` on the correction -- where MaNTA puts the same job on the pseudo-time term. Its Jacobian is **block diagonal by assumption** (fluxes depend only on local gradients, which they note "affects only the rate of convergence, not the accuracy of the root") and **forward-differenced**, so it pays the `(1 + n_p)` multiplier `PERFORMANCE.md` measures MaNTA against. **Its cost is quoted in exactly our currency**: 4 calls per radius per iteration (3 for the Jacobian, 1 for the relaxation correction), 8 radii, ~12 iterations = 384 calls to GYRO/NEO, i.e. **48 visits per point**. Compare `tab:steady`, where MaNTA is 7-45 at `NewtonJacobianReuse = 1` | TGYRO.pdf |
+| Plasma Physics and Controlled Fusion 68 (2026) 065024 | https://doi.org/10.1088/1361-6587/ae7640 | ASTRA-8 (Tardini *et al.*), the 2026 rewrite of the 40-year-old ASTRA framework. Open access. Three things in it bear on MaNTA. **Sec 3.1**: one solver routine for every transport channel, up to 15 equations, the user choosing which to evolve and which to prescribe -- the same separation MaNTA makes with `SystemSpec`, arrived at independently. **Sec 3.3**: a boundary condition may be set *on the profile or on the corresponding flux*, at any radius, independently per equation. That is MaNTA's Dirichlet-versus-mixed-`delta` distinction, and it is independent corroboration of the Jardin finding in the paper's Sec 6.3 -- a production code has had the flux form for decades. **Sec 5.4**: see the section below; it is the reason this reference matters most | ASTRA-8.pdf |
+| IPP Report 5/98, February 2002 | https://pure.mpg.de/pubman/item/item_2138238 | Pereverzev & Yushmanov, the 147-page ASTRA manual, and reference [18] of ASTRA-8 -- which cites its **eq. (59)** for the generic transport equation every channel is reduced to. Also worth knowing: ASTRA splits each source into a part *linear in the unknown*, treated implicitly, and a remainder treated explicitly (`SN` against `SNN`), which is the device MaNTA replaces with a full Newton through `dSources_du`. A scanned original, OCR'd, so the text layer is imperfect and the equations are images -- read the figures, do not trust a copied formula | Astra_ocr.pdf |
 | SIAM Journal on Scientific Computing 25 (2003) 553–569 | https://doi.org/10.1137/S106482750241044X | Coffey, Kelley & Keyes, **the house reference for `SteadyStateSolver = PseudoTransient`**, and the one that actually covers MaNTA: it extends the global convergence result for pseudo-transient continuation from the semidiscretised ODE case to semi-explicit index-1 DAEs. That distinction is the whole point of citing this rather than the better-known ODE paper — MaNTA is an index-1 DAE, with the `sigma`, `q`, `lambda` and `phi` rows algebraic, so the ODE-only theory says nothing about the system being solved. The SER step-size rule `docs/running.rst` describes is the one analysed here (it is due to Mulder & van Leer; this paper is where it meets the DAE case) | PseudoTransientDAE.pdf |
 
+
+## Sources that carry a time derivative
+
+The motivation for `FieldSpec::sourceReadsTimeDerivatives` and `State::udot`
+(`docs/superpowers/specs/2026-09-21-time-derivative-sources-design.md`). Two
+independent sources ask for the same thing, and neither is a corner case.
+
+**Abel *et al.*, Rep. Prog. Phys. 76 (2013) 116201**, eq. (201) -- the
+potential-exchange heating `P^pot` on the right-hand side of the heat transport
+equation (194) -- carries `dn_s/dt` outright, plus `d/dt` of a metric coefficient
+and of the flux-surface label. That is the derivation MaNTA's equations come
+from, so this is not an extension so much as a gap being closed. Not in `refs/`;
+it is `~/Papers/RoPP-final.pdf`.
+
+**ASTRA's stiffness stabiliser is the same shape, and is in production use.**
+`ASTRA-8.pdf` Sec 5.4 describes the oscillation a stiff turbulent model produces
+-- zero gradient gives no transport, so the gradient grows, so the transport
+overshoots and flattens it again -- and the cure: *"an additional artificial
+diffusion, proportional to the time derivative of the relevant kinetic profile"*.
+They add that it *"has also been crucial for almost every predictive transport
+modelling study which was carried out with the ASTRA code in the last two
+decades"*. So a `du/dt`-dependent term is not exotic; it is what one of the two
+most-used transport codes in the field has leaned on for twenty years.
+
+Note what that means for MaNTA's own machinery. ASTRA writes the damping into
+the *physics*, where MaNTA's pseudo-transient continuation puts an equivalent
+term in the *solver* and drives it to zero at the fixed point. The two are
+alternatives, not complements, and a case that ported ASTRA's stabiliser
+verbatim would be damping twice. It would also modify the effective mass matrix
+`X - dS/d(udot)` that `checkEffectiveMassMatrix` guards, which is exactly the
+operator a stabiliser of this form is designed to change.
+
+| Reference | URL (doi or arxiv) | Short Description | File Name |
+| --- | --- | --- | --- |
+| Computer Physics Communications 179 (2008) 579 | https://doi.org/10.1016/j.cpc.2008.07.001 | Pereverzev & Corrigan, the stabilising scheme ASTRA Sec 5.4 cites as its [34]. **Not in `refs/` and worth fetching**: it is the primary source for the `d/dt`-proportional artificial diffusion, and the only one that would say what the coefficient should be and when the term has to be switched off | *(not held)* |
 
 ## Coupling to a magnetic field solver
 
