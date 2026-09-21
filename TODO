@@ -1,38 +1,9 @@
-Finish the branch-protection move for the Fedora legs -- AFTER this lands.
-Raised 2026-08-26. Two of the three steps are done; this is the third.
-
-  The Fedora job stopped being `Compile (fedora:latest)` and became two legs,
-  `Build + tests (fedora:latest)` and `Build + tests (fedora:latest, OpenMP)`.
-  Renaming a job renames its context, so the sequence is forced and cannot be
-  done in one step:
-
-    1. DONE, before the PR: drop `Compile (fedora:latest)` from the rule. A PR
-       carrying the rename cannot publish that name, so leaving it required would
-       have hung the PR that makes it publishable -- the deadlock this ordering
-       exists to avoid. `Coverage` came off in the same call, and
-       `Build + tests (g++-15, OpenMP)` went on, that leg already being on main.
-    2. DONE: merge the rename.
-    3. TODO: add `Build + tests (fedora:latest)` and
-       `Build + tests (fedora:latest, OpenMP)`, taking the rule to ten of the
-       eleven contexts ci.yml publishes. Until this is done both Fedora legs run
-       and gate nothing, and CLAUDE.md's table is a step ahead of the rule.
-
-    gh api repos/ianabel/MaNTA/branches/main/protection/required_status_checks \
-      -q '.contexts[]' | sort > /tmp/req
-    gh pr view <N> --json statusCheckRollup \
-      -q '.statusCheckRollup[].name' | sort > /tmp/got
-    diff /tmp/req /tmp/got
-
-  Left-only is required-but-impossible; right-only is ungated. Right-only is the
-  expected state between steps 2 and 3, and is the reason not to leave it there.
-
-
 No CI leg builds the documentation, so a -W failure reaches main unnoticed.
 Found 2026-08-26, by putting one there.
 
   The `docs` target builds with -W, as Read the Docs does, and it is the only
   thing in the tree that would catch a broken reST cross-reference. Nothing runs
-  it: the ten CI contexts are the compiler matrix, the Fedora compile and
+  it: the eleven CI contexts are the compiler matrix, the two Fedora legs and
   Coverage. A blank line dropped before `.. _warm-starts:` during a conflict
   resolution silently deleted the label, `docs/configuration.rst` went on
   referencing it, and the first thing to notice was a Read the Docs build of main
@@ -42,7 +13,8 @@ Found 2026-08-26, by putting one there.
   built from docs/requirements.txt and no compiler at all. It is a separate leg
   rather than a step in an existing one precisely because it needs neither the
   solver nor the matrix, and adding it means adding its context to the protection
-  rule -- in that order, per the entry above.
+  rule -- merge the leg first, then require it, per the ordering rule in
+  CLAUDE.md.
 
 
 Per-call N_Vector allocation in the coupled Jacobian solve.
