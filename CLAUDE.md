@@ -205,12 +205,6 @@ gh pr view <N> --json statusCheckRollup -q '.statusCheckRollup[].name' | sort > 
 diff /tmp/req /tmp/got     # left-only = required but impossible; right-only = ungated
 ```
 
-`Coverage` is in the list deliberately. It has no percentage threshold — it runs
-the `coverage` target in a `CMAKE_BUILD_TYPE=Coverage` build directory, i.e. all
-three suites under an instrumented build, and fails only if the build or a suite
-does — so it gates on the same thing the others do
-and costs the slowest leg's wall-clock.
-
 ## Working on this repository
 
 Traps in the surrounding tooling rather than in the code. Every one of these has
