@@ -181,13 +181,47 @@ Nothing else in the value path changes: `Sources` keeps its signature and reads
 `interpolateVariableOnStarNodes` is new but trivial, and the emphasis is on
 *interpolate*. `Postprocessor::evalOnStarNodes` cannot be reused as it stands:
 it substitutes `u*` for `u`, and the `u*` it has is the one `computeUStar(Y_h)`
-built — reconstructed from `Y`'s `(u, q)`, not from `dYdt`'s. Reconstructing a
-`u*` for `dYdt` instead is not the answer either, because `d(u*)/dt` involves
-`q_dot`, which by the decision above has no meaning here. What is wanted is
-`du_h/dt` interpolated from its own `P_k` coefficients onto the star points —
-which is precisely what `evalOnStarNodes` already does to `q`, `sigma` and the
-auxiliary variables, through `V(cell)`. The new method is that loop with the
-`u*` branch removed, and `V(cell)` is the whole of its content.
+built — reconstructed from `Y`'s `(u, q)`, not from `dYdt`'s. What is used
+instead is `du_h/dt` interpolated from its own `P_k` coefficients onto the star
+points — which is precisely what `evalOnStarNodes` already does to `q`, `sigma`
+and the auxiliary variables, through `V(cell)`. The new method is that loop with
+the `u*` branch removed, and `V(cell)` is the whole of its content.
+
+**Reconstructing `d(u*)/dt` instead is available, and the reason not to is not
+that `q_dot` is unavailable.** IDA supplies `y'` for every component, algebraic
+ones included, and this solver already computes them: the non-superconvergent
+branch two lines up builds a whole `GlobalState` from `dYdt` and keeps only its
+`Variable()`, dropping `q_dot` and `sigma_dot` it has in hand. `u*` is linear in
+the cell's coefficients, `u* = B11 q + B12 u`, with both operators assembled once
+in `initialiseMatrices`, so
+
+```
+d(u*)/dt = B11 q_dot + B12 u_dot
+```
+
+is one matrix product more than what is done now, and it is the *exact*
+derivative of the field the physics is being evaluated on rather than a
+same-order stand-in for it. The two differ by `B11 q_dot`.
+
+Two things argue against it, and neither is availability:
+
+* **`q_dot` is exactly zero at the initial point, not merely unknown.**
+  `setInitialConditions` zeroes `dydt` and fills only the differential rows —
+  its own comment says so — and `IDA_YA_YDP_INIT` then holds the algebraic `y'`
+  *fixed* while it solves for algebraic values and differential derivatives. So
+  a reconstruction would silently degrade to `B12 u_dot` for exactly the
+  evaluations `IDACalcIC` is converging on, and become right afterwards. During
+  the march `q_dot` is the BDF derivative of a quantity that *is* in the local
+  error test, since `SuppressAlgebraicError` defaults off — so the objection is
+  to the initial point, not to the time march.
+* **A residual that reads `q_dot` puts `alpha`-weighted entries in the `q`
+  columns of `dF/dy'`**, which contradicts what `IDASetId` declares about this
+  system and what `the_id_vector_marks_u_differential_and_nothing_else` pins. It
+  is the index question of the `qdot` decision above, arriving through the
+  postprocessor rather than through a hook.
+
+And the measurement says it buys nothing here: interpolation reaches `k+2`
+anyway.
 
 **Whether interpolating rather than reconstructing caps the `k+2` rate is the
 one genuinely open question in this design**; see Testing.
@@ -424,7 +458,11 @@ No output change. `udot` is `dYdt`, which the restart file already carries.
 ## Deliberately not in v1
 
 * `qdot`, `sigmadot`, `phidot` in sources. Decided against above, on index
-  grounds, not on effort.
+  grounds — not on effort, and not on availability: IDA supplies `y'` for the
+  algebraic components too, and `residual()` is handed the whole vector. What a
+  case would be reading is a quantity the `id` vector says this system does not
+  have a mass term for, and reading it is what would make that declaration
+  false.
 * Scalars' `dS/d(nu_dot)` reaching the transport rows. The scalar hooks already
   take `ydot`; the transport source reading a scalar's time derivative is a
   separate coupling and no equation in (201) asks for it.

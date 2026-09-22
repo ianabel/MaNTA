@@ -126,7 +126,14 @@ a mixed space-time derivative carrying the time step in front of it.
 **So it is not a `du/dt` source, and phase 1 does not reach it.** The term
 differentiates the *gradient*: in MaNTA's variables that is `dq/dt`, and it
 belongs in `SigmaFn` rather than in `Sources`, while `State::udot` is
-deliberately the only time derivative a case is given. What the device *is*, in
+deliberately the only time derivative a case is given. Note what that decision
+does and does not rest on. The *value* is there -- IDA supplies `y'` for the
+algebraic components too, and `residual()` is handed all of it -- so a flux
+carrying `-tau Dbar q_dot` is not blocked by anything being unavailable. It is
+blocked by `IDASetId`, which declares this system's only differential rows to be
+`u`: a residual that reads `q_dot` puts `alpha`-weighted entries in the `q`
+columns of `dF/dy'` and makes that declaration false. Anyone porting the
+stabiliser starts there, not at the interface. What the device *is*, in
 MaNTA's terms, is pseudo-transient continuation -- a term proportional to the
 step that vanishes at the fixed point and exists to make the Newton step
 survivable. So this narrows the second motivation for phase 1 rather than

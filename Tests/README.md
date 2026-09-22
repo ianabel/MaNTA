@@ -570,10 +570,14 @@ subtracted, so the exact solution is unchanged and a solver that never filled
 | 3 | 3.98 | 3.99 | 5.01 (local, n=8->16) |
 
 **That last column answers the design's open question.** `udot` is *interpolated*
-onto the star nodes rather than reconstructed -- `d(u*)/dt` would run through
-`q_dot`, which is an algebraic row's time derivative and has no meaning -- and
-the worry was that this would cap the postprocessed rate at `k+1`. It does not:
-`u*` reaches `k+2` with the coupling present, at every degree measured.
+onto the star nodes rather than reconstructed, and the worry was that this would
+cap the postprocessed rate at `k+1`. It does not: `u*` reaches `k+2` with the
+coupling present, at every degree measured. Which is what settles it, because
+the reconstruction `d(u*)/dt = B11 q_dot + B12 u_dot` is *available* -- IDA
+supplies `y'` for the algebraic rows too and both operators are already built --
+and is ruled out by `IDASetId` and by `q_dot` being identically zero at the
+initial point rather than by the value being absent. The measurement is what
+says the exact derivative would buy nothing to pay that for.
 
 **The `alpha` pair is the trap this suite exists to record.** The new Jacobian
 term is `- alpha * dS/d(udot)`, so it is *identically invisible* at `alpha = 0`.

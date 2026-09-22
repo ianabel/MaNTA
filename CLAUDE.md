@@ -297,11 +297,17 @@ Jacobian as `- alpha * dS/d(udot)` beside the mass term in the `u` block
 * **A steady solve sees `udot = 0`** — `PseudoTransient`'s damping term vanishes
   at its fixed point and `Newton` never has one — so "steady state" means
   `d/dt = 0` inside the sources too, which is the right reading.
-* **There is deliberately no `qdot`, `sigmadot` or `phidot`.** Those rows are
-  algebraic, `id` marks them zero for `IDASetId`, and `SuppressAlgebraicError`
-  may take them out of the error test, so their `dYdt` entries are whatever makes
-  the constraints hold rather than physical quantities. Reading one would make an
-  algebraic row differential without saying so.
+* **There is deliberately no `qdot`, `sigmadot` or `phidot`, and the reason is
+  `IDASetId` rather than availability.** IDA supplies `y'` for every component,
+  algebraic ones included, and `variableTimeDerivatives` already builds a whole
+  `GlobalState` from `dYdt` and keeps only its `Variable()`. What makes those
+  entries unusable is what the solver has *declared*: `id` marks `u` differential
+  and nothing else, so a residual reading `q_dot` would put `alpha`-weighted
+  entries in the `q` columns of `dF/dy'` and contradict it. They are also exactly
+  zero at the initial point — `setInitialConditions` fills only the differential
+  rows and `IDA_YA_YDP_INIT` holds the algebraic `y'` fixed — so a term reading
+  one would be wrong for precisely the evaluations `IDACalcIC` converges on, and
+  right afterwards.
 
 `docs/superpowers/specs/2026-09-21-time-derivative-sources-design.md` is the
 design, including the two phases not built: geometry time derivatives (`dV'/dt`,

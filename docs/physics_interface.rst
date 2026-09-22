@@ -250,11 +250,16 @@ carries no :math:`\partial\hat\sigma/\partial\dot u` or
 :math:`\partial G/\partial\dot u` term. A flux that read it would be
 differentiated wrongly, and the only symptom would be slow Newton convergence.
 
-**There is no** ``qdot``, ``sigmadot`` **or** ``phidot``. Those rows are
-algebraic — the residual carries no :math:`\partial_t` for them and
-``SuppressAlgebraicError`` may take them out of the local error test — so their
-``dYdt`` entries are whatever makes the constraints hold rather than quantities
-with a physical meaning.
+**There is no** ``qdot``, ``sigmadot`` **or** ``phidot``, and the reason is
+``IDASetId``. IDA hands the residual a ``y'`` for every component, algebraic ones
+included, so the values exist; what does not exist is a mass term for them. ``id``
+marks :math:`u` differential and nothing else, so a source reading
+:math:`\dot q` would put :math:`\alpha`-weighted entries in the :math:`q`
+columns of :math:`\partial F/\partial y'` and make that declaration false. They
+are also exactly zero at the initial point, because ``setInitialConditions``
+fills only the differential rows and ``IDA_YA_YDP_INIT`` holds the algebraic
+:math:`y'` fixed — so a term reading one would be wrong for the evaluations
+``IDACalcIC`` converges on and right for every one after.
 
 **It changes what multiplies the time derivative**, from :math:`X` to
 :math:`X - \partial S/\partial\dot u`. A source containing :math:`a_i
