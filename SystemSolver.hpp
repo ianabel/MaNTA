@@ -1107,6 +1107,20 @@ class SystemSolver
         double ptcSERRate = 1.0;     // exponent on the residual ratio
         double ptcSERFloor = 2.0;    // least growth on an accepted step
 
+        // The steady residual norm KINSOL's own system function last computed,
+        // and a stamp saying it did. At dt = infinity steadyResidual() damps
+        // with an identically zero ptcDYdt, so the function KINSOL evaluates
+        // *is* the steady residual -- the same call, at the same state, that
+        // the merit function would make afterwards. Recording the norm there
+        // lets the continuation loop read it instead of sweeping the physics a
+        // second time. The stamp is what makes that safe: it is bumped only on
+        // a successful steady-mode evaluation, so a KINSol that made none
+        // leaves it where the loop's snapshot found it and the loop evaluates
+        // for itself. Meaningless with a finite dt, where the two residuals are
+        // genuinely different functions, and never consulted there.
+        double kinSteadyNorm = std::numeric_limits<double>::quiet_NaN();
+        long kinSteadyNormStamp = 0;
+
         // KINSOL's own settings. Every default here is what the code hardcoded
         // before they were configurable, so an unconfigured run is unchanged.
         long newtonMaxIters = 20;    // KINSOL's default is 200; see the setter

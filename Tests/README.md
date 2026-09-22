@@ -1128,10 +1128,24 @@ These are deliberate and tracked, not oversights:
     thing that actually matters: what the solve converges to must not depend on a
     correction that was going to be thrown away, checked at both steady modes
     against `TestDiffusion`'s closed form. Measured on the benchmarks, this cut
-    physics evaluations per point from 15 to 11 (`PseudoTransient`) and 11 to 7
-    (`Newton`) on `park-convergence`, 142/167 to 138/163 on
-    `jardin-critical-gradient` and 657/683 to 622/648 on `shestakov-nonlinear`,
-    with every converged answer identical bit for bit and `TimeMarch` untouched.
+    physics evaluations per point by four on `park-convergence` and
+    `jardin-critical-gradient` and by thirty-five on `shestakov-nonlinear`, at
+    both steady modes, with every converged answer identical bit for bit and
+    `TimeMarch` untouched. Quoted as a difference rather than as totals because
+    the totals move whenever anything else in the prologue does; `PERFORMANCE.md`
+    carries the current ones.
+  * `a_steady_solve_spends_the_physics_sweeps_it_has_to_and_no_others` pins the
+    whole budget instead of one saving in it: `2 + 3n` grid sweeps of the
+    physics for `Newton` and `2 + 4n` for `PseudoTransient` over `n`
+    continuation steps, counted by a `CountingDiffusion` that tallies `SigmaFn`
+    and `dSigmaFn_dq` separately. It exists because nothing else here would
+    notice a duplicate sweep: it changes no answer, so every other test in this
+    file passes with one reinstated, and the only symptom is the bill a case
+    with an expensive flux pays. The two fixed sweeps are `AssignSigma` and the
+    already-converged test; the extra one per step in the damped column is the
+    merit evaluation that a finite `dt` still has to make. `rejected == 0` is
+    asserted alongside, so a fixture that started rejecting steps would report a
+    changed solve rather than a broken count.
 
   What is still uncovered is the rest of the algorithm -- step rejection, the
   `KINSetMaxNewtonStep` clamp, and the hard-`KINSol`-failure

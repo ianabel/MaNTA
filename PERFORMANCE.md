@@ -20,13 +20,13 @@ Where only the steady state is wanted, `SteadyStateSolver` chooses how it is
 reached, and the choice is worth an order of magnitude -- but only once
 `NewtonJacobianReuse` is out of the way, which on these fluxes matters more than
 the choice of method does. Visits per collocation point, measured on
-2026-09-21, for answers identical in every printed digit:
+2026-09-22, for answers identical in every printed digit:
 
 | benchmark | `TimeMarch` | `PseudoTransient` 10 / 1 | `Newton` 10 / 1 |
 |---|---|---|---|
-| `park-convergence` | 120 | 11 / 11 | 7 / **7** |
-| `jardin-critical-gradient` | 183 | 138 / 23 | 163 / **17** |
-| `shestakov-nonlinear` | 257 | 622 / 45 | 648 / **39** |
+| `park-convergence` | 120 | 10 / 10 | 5 / **5** |
+| `jardin-critical-gradient` | 183 | 137 / 22 | 161 / **15** |
+| `shestakov-nonlinear` | 257 | 621 / 44 | 646 / **37** |
 
 The two numbers in each of the last two columns are `NewtonJacobianReuse = 10`,
 which is KINSOL's default, and `= 1`, a fresh Jacobian factorisation at every
@@ -35,7 +35,28 @@ each example's own `run.conf` resolution, which differs in `k`.
 
 `TimeMarch` sizes every step from a local error estimate on a transient that is
 then discarded, which is where the factor goes; Park's own solver reaches the
-same state in 9-15 iterations, which is where `Newton` lands.
+same state in 9-15 iterations on the nonlinear problems he reports, which is
+where `Newton` lands.
+
+**What a steady solve spends, sweep by sweep**, since that is the budget the
+table is made of. Two sweeps are fixed -- one building `sigma` from the initial
+condition, one evaluating the residual to test whether the initial state is
+already converged -- and then each continuation step costs KINSOL's residual at
+each end of it plus one Jacobian. A step at finite `dt` costs one more, because
+KINSOL drives the *damped* residual to zero and the SER schedule needs the
+steady one, which has to be evaluated separately; at `dt = inf` the two are the
+same function at the same state and the second evaluation is served from what
+KINSOL already computed. So `Newton` is `2 + 3n` visits for `n` steps and
+`PseudoTransient` is `2 + 4n`, and `park-convergence`'s 5 is `2 + 3*1`.
+
+**Three of those five are irreducible for a Newton method and one is not
+overhead at all.** A scheme that does not know the problem is linear has to
+evaluate the residual to form a right-hand side and again to learn the
+correction was exact; that is the floor, and it is why Park's direct solve of
+the same linear system costs one pass where this costs three. The
+already-converged test is the fifth, and on the workload this solver is built
+for -- a parameter sweep resuming from a neighbouring answer -- it is frequently
+the only sweep a solve pays.
 
 **At the default reuse, `shestakov-nonlinear` looks like a counter-example, and
 it is not.** Continuation appears to cost 2.4x what time marching does there; at
@@ -44,7 +65,7 @@ all three benchmarks. Reuse is not a trade on a flux like `D0 q^3/u^2` or a
 `chi(q)` with a square root switching on at a critical gradient: the stale
 Jacobian points somewhere useless, and the extra inner iterations it buys push
 the *total* assembly count up as well, so it loses on both axes at once. Jardin
-under `Newton` costs 5760 flux and 760 derivative calls at reuse 10 against 440
+under `Newton` costs 5680 flux and 760 derivative calls at reuse 10 against 360
 and 240 at reuse 1. **If a steady solve is slow or will not converge,
 `NewtonJacobianReuse = 1` is the first thing to try.** The default of 10 is
 retained for the opposite case, a model whose Jacobian is finite-differenced at

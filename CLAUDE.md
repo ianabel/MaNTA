@@ -494,6 +494,43 @@ slices when each starts over
 driving the phases directly, because `runSolver` frees the state on its way out
 of a failed solve, so `PyRunner::run_ss()` cannot do it.
 
+**What a steady solve spends on physics is counted in whole grid sweeps, and the
+budget is exact rather than approximate**: `2 + 3n` for `Newton` and `2 + 4n`
+for `PseudoTransient`, `n` being continuation steps, pinned by
+`a_steady_solve_spends_the_physics_sweeps_it_has_to_and_no_others`. The two
+fixed sweeps are `AssignSigma` building `sigma` from the initial condition and
+the merit function's `||F||` at the initial state; each step is then KINSOL's
+residual at both ends plus one Jacobian, and a step at *finite* `dt` costs a
+fourth. Two properties keep it there, and both are the kind that would be lost
+silently, since a duplicate sweep changes no answer and only shows up on the
+bill of a case whose flux is expensive:
+
+* **`setInitialConditions` returns early on a steady solve**, before solving the
+  initial `du/dt` out of the u row. That derivative reaches nobody there --
+  `solveSteadyState` damps through its own zeroed `ptcDYdt`, and on convergence
+  it overwrites `dYdt` with zero, since the defining property of the answer is
+  that `dy/dt` vanishes. The gate is `solvesForSteadyState()`, so `TimeMarch`
+  keeps it: that path reaches a steady state through IDA, which wants a
+  consistent `y'` at `t0` like any transient.
+* **`steadyResidual` records its own norm when `dt` is infinite**, and the loop
+  reads that instead of calling `steadyNorm()` again. At `dt = inf` the damping
+  term is identically zero, so the function KINSOL evaluates *is* the steady
+  residual, at the same state -- it is recorded rather than recomputed so the
+  number is bit for bit what `steadyNorm()` would have returned, which is what
+  keeps the SER schedule and every run's step sequence unchanged. A stamp
+  counter guards it: a `KINSol` that made no successful steady-mode evaluation
+  leaves the stamp where the loop's snapshot found it, and the loop evaluates
+  for itself. Never consulted at finite `dt`, where the damped residual is a
+  different function and any small enough `dt` makes it small.
+
+**The residual at the initial state is not one of the removable ones**, despite
+duplicating KINSOL's first evaluation: it is also the already-converged test,
+the early return that makes a warm start cost one sweep rather than a Newton
+solve. And KINSOL offers no way to hand it a residual it did not compute, so
+three sweeps -- two residuals and a Jacobian -- is the floor for a Newton method
+on a problem it does not know is linear. `PERFORMANCE.md` has the comparison
+against a direct solve, which pays one.
+
 Every SUNDIALS handle is a member, not a local, so those three can be split.
 `ctx` is the exception: it belongs to the `SystemSolver`, not to a run, and
 `destroySundials` must not touch it.
