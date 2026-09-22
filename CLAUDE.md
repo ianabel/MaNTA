@@ -1156,7 +1156,12 @@ gives. Four pieces to know:
   `(nPoints, nVars)` arrays — what the JAX path wants — and **its caster
   transposes in both directions** (C++ stores `(nVars, nPoints)`), so a
   round-trip test cannot detect a missing transpose; check the orientation from
-  inside a batched call instead.
+  inside a batched call instead. Its `"VariableDot"` entry is `du/dt`, and it is
+  an **empty** array rather than a grid of zeros in a run where no variable
+  declares `sourceReadsTimeDerivatives` — and also in the calls that build the
+  initial condition, which happen before there is a `dYdt` to read. A batched
+  case therefore tests `.size` rather than indexing it. The pointwise view does
+  not have that shape: `s.udot` is always `nVars` long and reads zero.
 * **`PyRunner`** (`configure(dict)` / `run` / `run_ss` / `getSolution` / `G` /
   `getAdjointGradients`) is the API the optimisation drivers use, and the only
   route supporting repeated configure/run cycles in one process — it works by

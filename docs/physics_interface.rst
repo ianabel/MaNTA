@@ -225,6 +225,23 @@ and the value is ``state.udot[0]``; from ``AutodiffTransportSystem`` override th
 ``Source`` overload that takes a ``udot`` vector and the derivative is derived
 for you.
 
+A **vectorised** case — one that supplies ``ComputePhysics`` and
+``ComputePhysicsDerivatives`` — reads it as the ``"VariableDot"`` entry of the
+state dict, ``(nPoints, nVars)`` like the others, and returns the derivative from
+``ComputeSourceTimeDerivatives``: one dict per variable, with
+:math:`\partial S_i/\partial\dot u_j` in the **Variable** slice, because that
+block has the shape :math:`\partial S_i/\partial u_j` has and lands in the same
+place. It is a call of its own rather than a fourth group in
+``ComputePhysicsDerivatives``, whose three-group shape is part of the interface
+every vectorised case already implements. When no variable declares the flag the
+entry is an *empty* array rather than a grid of zeros, so a case that wants to
+work either way should test ``VariableDot.size`` rather than index it blind.
+
+A ``manta.jax`` case needs neither: ``VariableDot`` is a field of the layer's
+``State``, so the value arrives as ``state.VariableDot[j]`` and
+``grad(source)`` carries :math:`\partial S/\partial\dot u` beside the four
+blocks it already produced.
+
 Four things are worth knowing before using it.
 
 **It is meaningful in** ``Sources`` **and nowhere else.** ``SigmaFn`` and

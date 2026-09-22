@@ -276,6 +276,48 @@ public:
       daux[aux] = temp[2][aux];
     }
   }
+  // The batched dS/d(udot), for a case that took the vectorised path. A
+  // separate call rather than a fourth entry in ComputePhysicsDerivatives, for
+  // the reason TransportSystem.hpp gives: that array's width is part of the
+  // interface, and widening it would break every vectorised case in existence.
+  //
+  // The Python side returns one GlobalState dict per variable and puts
+  // dS_i/d(udot_j) in its "Variable" slice, which is where the C++ default
+  // writes it too -- the block has the shape dS_i/du_j has and lands in the
+  // same place, one factor of alpha apart. Without an override this falls
+  // through to the base, which loops over the pointwise dSources_dudot, so a
+  // vectorised case that supplies neither gets the zero block and the
+  // "declared but zero" warning the solver prints at startup.
+  void ComputeSourceTimeDerivatives(GlobalStateMatrix &out,
+                                    GlobalState const &states,
+                                    std::vector<Position> const &abscissae,
+                                    Time time) override {
+    py::gil_scoped_acquire gil;
+    py::function _override =
+        py::get_override(this, "ComputeSourceTimeDerivatives");
+
+    if (!_override) {
+      TransportSystem::ComputeSourceTimeDerivatives(out, states, abscissae,
+                                                    time);
+      return;
+    }
+
+    auto temp =
+        _override(states, abscissae, time).cast<std::vector<GlobalState>>();
+
+    if (static_cast<Index>(temp.size()) != nVars)
+      throw std::runtime_error(
+          "ComputeSourceTimeDerivatives returned " +
+          std::to_string(temp.size()) + " entries for " +
+          std::to_string(nVars) +
+          " variables. It must return one GlobalState per variable, in order, "
+          "whatever the spec's sourceReadsTimeDerivatives flags say -- the "
+          "ones that declare nothing are simply zero.");
+
+    for (Index var = 0; var < nVars; ++var)
+      out[var] = temp[var];
+  }
+
   Value SigmaFn(Index i, const State &s, Position x, Time t) override {
     if (!initialized)
       initializeOverrides();

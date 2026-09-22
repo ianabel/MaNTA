@@ -67,6 +67,15 @@ public:
     else
       value.GeometryMatrix().setZero(0, value.Variable().cols());
 
+    // VariableDot is optional on the way in, and left *empty* when absent
+    // rather than sized like Geometry above. Empty is the state that means "no
+    // variable declares sourceReadsTimeDerivatives": GlobalState guards every
+    // read of it with hasVariableDot(), where the geometry rows are sliced
+    // unconditionally. A dict carrying no such key therefore says the same
+    // thing the solver says when it builds one itself.
+    if (d.contains("VariableDot"))
+      value.setVariableDot(py::cast<Matrix>(d["VariableDot"]).transpose());
+
     auto scalars = py::cast<py::array_t<double>>(d["Scalars"]);
     py::buffer_info info = scalars.request();
     double *data = static_cast<double *>(info.ptr);
@@ -89,6 +98,10 @@ public:
     d["Flux"] = src.Flux().transpose();
     d["Aux"] = src.Aux().transpose();
     d["Geometry"] = src.GeometryMatrix().transpose();
+    // (nPoints, nVars) when some variable declares sourceReadsTimeDerivatives,
+    // and an empty array when none does -- which is what a case should test if
+    // it wants to know, rather than assuming the run it is in.
+    d["VariableDot"] = src.VariableDot().transpose();
     d["Scalars"] = src.Scalars();
     return d.release();
   }
@@ -333,6 +346,12 @@ PYBIND11_MODULE(_manta, m) {
       .def("dSources_du", &TransportSystem::dSources_du)
       .def("dSources_dq", &TransportSystem::dSources_dq)
       .def("dSources_dsigma", &TransportSystem::dSources_dsigma)
+      // d(Sources)/d(state.udot), asked for only of a variable whose spec sets
+      // sourceReadsTimeDerivatives. Bound like the four above so the family is
+      // uniform: it is what puts the method in the generated stub, and so what
+      // makes a case's own override something mypy checks against a base rather
+      // than a new name it has never seen.
+      .def("dSources_dudot", &TransportSystem::dSources_dudot)
       // Derivatives with respect to a field model's geometry slots. Optional,
       // like the five above: absent means an identically zero column of the A1
       // coupling block, which is exactly right for a case that does not read
