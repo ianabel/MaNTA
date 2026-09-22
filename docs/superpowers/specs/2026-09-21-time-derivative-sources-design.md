@@ -58,26 +58,32 @@ potential-energy exchange, produces a `d(other variable)/dt` on the right-hand
 side. It is the generic consequence of choosing state variables that are not
 the conserved quantities.
 
-**And it is already in production use elsewhere, which was not known when this
-was designed.** `refs/ASTRA-8.pdf` Sec 5.4 describes ASTRA's cure for the
-oscillation a stiff turbulent model produces — zero gradient gives no transport,
-so the gradient grows, so the transport overshoots and flattens it again — and
-that cure is *"an additional artificial diffusion, proportional to the time
-derivative of the relevant kinetic profile"*, which *"has also been crucial for
-almost every predictive transport modelling study which was carried out with the
-ASTRA code in the last two decades"* (Pereverzev & Corrigan, Comput. Phys.
-Commun. 179 (2008) 579). So one of the two most-used transport codes in the
-field has depended on a `du/dt`-dependent term for twenty years, on precisely
-the stiff-gradient problem class the paper's Section 6.3 benchmarks.
+**RoPP eq. (201) is the motivation, and it is the only one.** ASTRA's
+stiffness stabiliser looks at first like a second, much better-worn case for the
+same feature: `refs/ASTRA-8.pdf` Sec 5.4 calls it *"an additional artificial
+diffusion, proportional to the time derivative of the relevant kinetic
+profile"*, and says it *"has also been crucial for almost every predictive
+transport modelling study which was carried out with the ASTRA code in the last
+two decades"*. The primary source, `refs/PereverzevCorrigan.pdf` (Comput. Phys.
+Commun. **179** (2008) 579), does not support that reading. What it adds is a
+large implicit diffusive flux `Dbar u_x` against an explicitly evaluated
+compensating convection `Vbar u`, `Vbar = Dbar u_x/u`; the two cancel
+identically in the differential equation, and the residue the difference scheme
+leaves is their eq. (16), `q~ = -tau Dbar u_xt`. That differentiates the
+*gradient*, so in MaNTA's variables it wants `dq/dt` in the **flux**, not
+`du/dt` in a source — and it carries the time step in front of it, so it is not
+a physics term at all.
 
-Two things follow for MaNTA. ASTRA writes the damping into the *physics*, where
-pseudo-transient continuation puts an equivalent term in the *solver* and drives
-it to zero at the fixed point — so the two are alternatives rather than
-complements, and a case porting ASTRA's stabiliser verbatim onto a
-`PseudoTransient` run would be damping twice. And a stabiliser of that form
-modifies exactly the effective mass matrix `X - dS/d(udot)` that the singularity
-check below guards: there, that is not a hazard to be worked around but the
-whole mechanism by which the term does its job.
+**Which makes it a description of pseudo-transient continuation, not of this
+feature.** A term proportional to the step, vanishing at the fixed point,
+present only to make the Newton step survivable, is what `PseudoTransient`
+already does on the solver side of the interface. So ASTRA corroborates the
+solver MaNTA has rather than the hook this spec adds, and a case that
+reimplemented the stabiliser as a physics term on top of a `PseudoTransient` run
+would be damping twice. A physics term of that shape would also modify the
+effective mass matrix `X - dS/d(udot)` that the singularity check below guards:
+there, that is not a hazard to be worked around but the whole mechanism by which
+such a term does its job.
 
 ## What the solver already has
 

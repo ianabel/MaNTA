@@ -90,8 +90,11 @@ implicit time step. These are the established ways of coping.
 ## Sources that carry a time derivative
 
 The motivation for `FieldSpec::sourceReadsTimeDerivatives` and `State::udot`
-(`docs/superpowers/specs/2026-09-21-time-derivative-sources-design.md`). Two
-independent sources ask for the same thing, and neither is a corner case.
+(`docs/superpowers/specs/2026-09-21-time-derivative-sources-design.md`). One
+paper asks for it, and it is the derivation MaNTA's own equations come from. A
+second looks as though it does and, read properly, asks for something else --
+which is worth keeping here, because the distinction is the interface boundary
+this feature sits on.
 
 **Abel *et al.*, Rep. Prog. Phys. 76 (2013) 116201**, eq. (201) -- the
 potential-exchange heating `P^pot` on the right-hand side of the heat transport
@@ -100,15 +103,35 @@ and of the flux-surface label. That is the derivation MaNTA's equations come
 from, so this is not an extension so much as a gap being closed. Not in `refs/`;
 it is `~/Papers/RoPP-final.pdf`.
 
-**ASTRA's stiffness stabiliser is the same shape, and is in production use.**
-`ASTRA-8.pdf` Sec 5.4 describes the oscillation a stiff turbulent model produces
--- zero gradient gives no transport, so the gradient grows, so the transport
-overshoots and flattens it again -- and the cure: *"an additional artificial
-diffusion, proportional to the time derivative of the relevant kinetic profile"*.
-They add that it *"has also been crucial for almost every predictive transport
-modelling study which was carried out with the ASTRA code in the last two
-decades"*. So a `du/dt`-dependent term is not exotic; it is what one of the two
-most-used transport codes in the field has leaned on for twenty years.
+**ASTRA's stiffness stabiliser is the nearest thing in production use, and the
+primary source says what it actually is.** `ASTRA-8.pdf` Sec 5.4 describes the
+oscillation a stiff turbulent model produces -- zero gradient gives no transport,
+so the gradient grows, so the transport overshoots and flattens it again -- and
+calls the cure *"an additional artificial diffusion, proportional to the time
+derivative of the relevant kinetic profile"*, one that *"has also been crucial
+for almost every predictive transport modelling study which was carried out with
+the ASTRA code in the last two decades"*. `PereverzevCorrigan.pdf` is that cure,
+and it is a **discretisation device rather than a source term**: a large
+diffusive flux `Dbar u_x` is added *implicitly* and an exactly compensating
+convective flux `Vbar u`, with `Vbar = Dbar u_x / u`, is subtracted *explicitly*.
+The two cancel identically in the differential equation. Only the difference
+scheme sees anything, and what it sees is their eq. (16),
+
+```
+q~ = -tau * Dbar * u_xt + O(h^2) + O(tau^2)
+```
+
+a mixed space-time derivative carrying the time step in front of it.
+
+**So it is not a `du/dt` source, and phase 1 does not reach it.** The term
+differentiates the *gradient*: in MaNTA's variables that is `dq/dt`, and it
+belongs in `SigmaFn` rather than in `Sources`, while `State::udot` is
+deliberately the only time derivative a case is given. What the device *is*, in
+MaNTA's terms, is pseudo-transient continuation -- a term proportional to the
+step that vanishes at the fixed point and exists to make the Newton step
+survivable. So this narrows the second motivation for phase 1 rather than
+removing it. `RoPP` eq. (201) remains the one that asks for `udot` inside a
+source, and it asks alone.
 
 **It is a steady-state device, and ASTRA says so.** The term speeds convergence
 *"for steady-state simulations, i.e. in absence of a significant
@@ -119,16 +142,17 @@ problem at the price of a modified transient, and a case carrying one is making
 that trade whether or not it says so.
 
 Note what that means for MaNTA's own machinery. ASTRA writes the damping into
-the *physics*, where MaNTA's pseudo-transient continuation puts an equivalent
-term in the *solver* and drives it to zero at the fixed point. The two are
-alternatives, not complements, and a case that ported ASTRA's stabiliser
-verbatim would be damping twice. It would also modify the effective mass matrix
-`X - dS/d(udot)` that `checkEffectiveMassMatrix` guards, which is exactly the
-operator a stabiliser of this form is designed to change.
+the *difference scheme*, where pseudo-transient continuation writes it into the
+*solver* and drives it to zero at the fixed point. The two are alternatives, not
+complements: a case that reimplemented the stabiliser as a physics term on top of
+a `PseudoTransient` run would be damping twice. A physics term of that shape
+would also modify the effective mass matrix `X - dS/d(udot)` that
+`checkEffectiveMassMatrix` guards, which is exactly the operator such a
+stabiliser is designed to change.
 
 | Reference | URL (doi or arxiv) | Short Description | File Name |
 | --- | --- | --- | --- |
-| Computer Physics Communications 179 (2008) 579 | https://doi.org/10.1016/j.cpc.2008.07.001 | Pereverzev & Corrigan, the stabilising scheme ASTRA Sec 5.4 cites as its [34]. **Not in `refs/` and worth fetching**: it is the primary source for the `d/dt`-proportional artificial diffusion, and the only one that would say what the coefficient should be. ASTRA-8 Sec 5.4 answers the qualitative half of when to switch it off -- any strongly time-dependent phase -- and nothing held here answers the quantitative half | *(not held)* |
+| Computer Physics Communications 179 (2008) 579–585 | https://doi.org/10.1016/j.cpc.2008.05.006 | Pereverzev & Corrigan, *Stable numeric scheme for diffusion equation with a stiff transport* -- the scheme ASTRA-8 Sec 5.4 cites as its [34], and the source for everything above. **What the coefficient should be**: `Dbar > q_eta = dq/d(eta)` pointwise -- the *slope* of the flux-gradient curve, not the diffusivity `D_eff = q/eta`. In a stiff model that distinction is the whole point: in their ITER inductive / GLF23 example `q_eta` runs 20-100 m^2/s while `D_eff` never exceeds 1, and it takes `Dbar >= 50 m^2/s`, fifty times the diffusivity. Below that the instability appears locally wherever `Dbar < q_eta` and then spreads over the grid. They prescribe `Dbar` constant in space and call `Dbar > q_eta` "rather a rough estimate", since the flux depends on more than the gradient. **The error is monitored, not bounded**: the leftover difference source `Sbar_i = (qbar_{i+1/2} - qbar_{i-1/2})/h = O(tau)` is computed each step and compared against the physical sources -- it is a short-scale dipole, so its integral over any few cells is essentially zero and the energy balance is untouched, but where it grows comparable to `S` locally, `Dbar` or `tau` has to come down, or the term is subtracted and iterated away within the step. Their instability sensor is `max_i |Dhat_an - D_an| / D_an <= eps_tol`, with `eps_tol` at 5-10% and no sense in going below 5%. **What it buys**: several orders of magnitude on the time step at steady state -- a factor 1e3 does not yet bring accuracy into play -- and less in a fast transient, where other limits bind first. Transport barriers are the known weak spot, their two variants moving the barrier in opposite directions. **Note also their objection to the alternative**, Kinsey, Staebler & Waltz (Phys. Plasmas 9 (2002) 1678), who take `D_an = dq/d(eta)` exactly: that quantity is discontinuous in space, incomplete, and "requires derivation of the numerically defined flux `q` that is usually the most expensive part of the simulation". MaNTA's answer to the last is that the HDG Jacobian derives it anyway, and never assembles it | PereverzevCorrigan.pdf |
 
 ## Coupling to a magnetic field solver
 
