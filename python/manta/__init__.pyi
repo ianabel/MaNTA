@@ -117,6 +117,14 @@ class TransportSystem(_TransportSystem):
     def dSources_dq(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
     def dSources_dsigma(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
 
+    # d(Sources)/d(state.udot), asked for only of a variable whose Field sets
+    # source_reads_time_derivatives. Optional in the same sense as the five
+    # above -- an absent hook is a zero block -- but with a sharper consequence:
+    # a source that reads udot and does not report this is a wrong Jacobian, not
+    # an absent coupling, and the solver says so at startup rather than leaving
+    # it to the iteration counts.
+    def dSources_dudot(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
+
     # Derivatives with respect to a field model's geometry slots (state.geom).
     # Optional, like the five above: an absent hook is an identically zero
     # coupling block, which is the correct answer for a case that does not

@@ -141,6 +141,24 @@ void Postprocessor::computeUStar(DGSoln const &Y)
     }
 }
 
+Matrix Postprocessor::interpolateVariableOnStarNodes(DGSoln const &Y) const
+{
+    const Index nCells = grid.getNCells();
+    const Index nStar = k + 2;
+
+    Matrix out(nVars, nCells * nStar);
+
+    for (Index cell = 0; cell < nCells; ++cell)
+    {
+        Matrix const &Vc = V_[cell];
+        for (Index var = 0; var < nVars; ++var)
+            out.block(var, cell * nStar, 1, nStar) =
+                (Vc * Y.u(var).getCoeff(cell).second).transpose();
+    }
+
+    return out;
+}
+
 GlobalState Postprocessor::evalOnStarNodes(DGSoln const &Y) const
 {
     const Index nCells = grid.getNCells();

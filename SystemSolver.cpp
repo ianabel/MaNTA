@@ -1111,15 +1111,32 @@ void SystemSolver::resetCoeffs()
     dydt.zeroCoeffs();
 }
 
+// See the declaration. Empty means "no variable asked", not "all zero": an
+// empty matrix is what GlobalState::setVariableDot reads as leaving the rows
+// off entirely, which is what keeps an ordinary run allocation-for-allocation
+// what it was.
+Matrix SystemSolver::variableTimeDerivatives(DGSoln const &Ydot) const
+{
+    if (!problem->anySourceReadsTimeDerivatives())
+        return Matrix();
+
+    if (superconvergent)
+        return postprocessor->interpolateVariableOnStarNodes(Ydot);
+
+    const GlobalState dotStates = Ydot.evalOnNodes();
+    return dotStates.Variable();
+}
+
 // Where and at what state the physics derivatives are evaluated. Shared with the
 // algebraic-derivative solve, which has to make exactly the same choice: a
 // Jacobian consistent with a different residual is the one failure mode this
 // solver cannot detect from its answers, only from its iteration counts.
 SystemSolver::PhysicsNodes
-SystemSolver::evaluatePhysicsDerivatives(DGSoln const &Y, Time tEval,
+SystemSolver::evaluatePhysicsDerivatives(DGSoln const &Y, DGSoln const &Ydot, Time tEval,
                                          GlobalStateMatrix &dSigma_vals,
                                          GlobalStateMatrix &dSource_vals,
-                                         GlobalStateMatrix &dAux_vals)
+                                         GlobalStateMatrix &dAux_vals,
+                                         GlobalStateMatrix &dSourceDot_vals)
 {
     // With the superconvergent scheme the derivatives are wanted at the star
     // nodes and evaluated with u* in place of u_h, exactly as the residual does.
@@ -1133,6 +1150,12 @@ SystemSolver::evaluatePhysicsDerivatives(DGSoln const &Y, Time tEval,
     // before ComputePhysics: a derivative hook reads State::geom just as its
     // value hook does, and the two have to see the same metric.
     evaluateGeometry(Y, nodes.points, nodes.states, tEval);
+
+    // And the same argument again for the time derivatives: dSources_du on a
+    // source that reads udot is a function of udot, so differentiating at a
+    // different one from the residual was evaluated at gives the Jacobian of a
+    // different operator. A no-op unless a variable declared it.
+    nodes.states.setVariableDot(variableTimeDerivatives(Ydot));
 
     // GlobalState's second argument is a per-cell dof count minus one; passing
     // k+1 is what makes cellwise*() hand back the k+2 star values.
@@ -1155,6 +1178,17 @@ SystemSolver::evaluatePhysicsDerivatives(DGSoln const &Y, Time tEval,
     problem->ComputePhysicsDerivatives({dSigma_vals, dSource_vals, dAux_vals}, nodes.states,
                                        nodes.points, tEval);
 
+    // A separate pass, and only when asked. See
+    // TransportSystem::ComputeSourceTimeDerivatives for why it is not a fourth
+    // entry in the array above.
+    if (problem->anySourceReadsTimeDerivatives())
+    {
+        for (Index var = 0; var < nVars; var++)
+            dSourceDot_vals.add(nCells, derivK, nVars, nScalars, nAux);
+
+        problem->ComputeSourceTimeDerivatives(dSourceDot_vals, nodes.states, nodes.points, tEval);
+    }
+
     return nodes;
 }
 
@@ -1164,13 +1198,21 @@ SystemSolver::evaluatePhysicsDerivatives(DGSoln const &Y, Time tEval,
 Matrix SystemSolver::assembleCellMatrix(Index i, DGSoln const &Y,
                                         GlobalStateMatrix &dSigma_vals,
                                         GlobalStateMatrix &dSource_vals,
-                                        GlobalStateMatrix &dAux_vals, double alphaValue)
+                                        GlobalStateMatrix &dAux_vals,
+                                        GlobalStateMatrix &dSourceDot_vals, double alphaValue)
 {
     Eigen::MatrixXd NLq(nVars * (k + 1), nVars * (k + 1));
     Eigen::MatrixXd NLu(nVars * (k + 1), nVars * (k + 1));
     Eigen::MatrixXd Ssig(nVars * (k + 1), nVars * (k + 1));
     Eigen::MatrixXd Sq(nVars * (k + 1), nVars * (k + 1));
     Eigen::MatrixXd Su(nVars * (k + 1), nVars * (k + 1));
+    Eigen::MatrixXd Sudot(nVars * (k + 1), nVars * (k + 1));
+
+    // Zero width is how evaluatePhysicsDerivatives says "no variable declared
+    // sourceReadsTimeDerivatives"; GlobalStateMatrix::Variable would index an
+    // empty m_data otherwise, since its nVars comes from the constructor rather
+    // than from what was added.
+    const bool haveSourceDot = dSourceDot_vals.size() > 0;
 
 
     Eigen::MatrixXd Sigma_phi(nVars * (k + 1), nAux * (k + 1));
@@ -1238,6 +1280,19 @@ Matrix SystemSolver::assembleCellMatrix(Index i, DGSoln const &Y,
         accumulateStarBlocks(Su, dSource_vals.Variable(i), pp.B12(i), nVars, nVars, i);
         MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
 
+        // V, not B12. dS/du goes through the reconstruction because the source
+        // was evaluated at u*; udot was *interpolated* onto the star nodes
+        // rather than reconstructed (Postprocessor::interpolateVariableOnStarNodes
+        // says why), so its chain to the degree-k coefficients is the plain one
+        // that q and sigma use.
+        if (haveSourceDot)
+        {
+            Sudot.setZero();
+            accumulateStarBlocks(Sudot, dSourceDot_vals.Variable(i), pp.V(i), nVars, nVars, i);
+            MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -=
+                alphaValue * Sudot;
+        }
+
         if (nAux > 0)
         {
             Sphi.setZero();
@@ -1291,6 +1346,18 @@ Matrix SystemSolver::assembleCellMatrix(Index i, DGSoln const &Y,
         DerivativeSubMatrix(Su, dSource_vals.Variable(i), Y, i);
         MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -= Su;
 
+        // S_udot: the same block, one factor of alphaValue apart from S_u,
+        // because it multiplies dY/dt rather than Y. Together with the
+        // `+= alphaValue * XMats[i]` above this makes the u block's time-
+        // derivative operator X - S_udot rather than X -- which is why
+        // checkEffectiveMassMatrix exists.
+        if (haveSourceDot)
+        {
+            DerivativeSubMatrix(Sudot, dSourceDot_vals.Variable(i), Y, i);
+            MX.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) -=
+                alphaValue * Sudot;
+        }
+
         dPhi_Mat(Sphi, dSource_vals.Aux(i), Y, i);
         MX.block(2 * nVars * (k + 1), 3 * nVars * (k + 1), nVars * (k + 1), nAux * (k + 1)) -= Sphi;
 
@@ -1299,6 +1366,121 @@ Matrix SystemSolver::assembleCellMatrix(Index i, DGSoln const &Y,
     }
 
     return MX;
+}
+
+// Refuse a run whose u rows have had their time derivative cancelled.
+//
+// The u block's time-derivative operator is X - S_udot, not X. A case is free to
+// write a source containing a_i du_i/dt, and the two then annihilate: the row
+// stops being differential, the index of the system rises, and nothing in
+// SUNDIALS is in a position to say so. What it does instead is fail -- in
+// IDACalcIC, or as a Newton that will not converge -- a long way from the
+// declaration at fault.
+//
+// So this is the same shape of check as the field-DOF one in Solver.cpp, and for
+// the same reason: asked once, at initialise, where the message can name the
+// variable. The quantity tested is I - X^-1 S_udot rather than X - S_udot
+// itself, because a mass matrix carries its own conditioning -- at k = 8 or 10
+// it is not especially well conditioned even untouched -- and what matters here
+// is how far the *modification* is from cancelling, not how well conditioned the
+// result is in absolute terms.
+void SystemSolver::checkEffectiveMassMatrix(DGSoln const &Y, DGSoln const &Ydot, Time tEval)
+{
+    if (!problem->anySourceReadsTimeDerivatives())
+        return;
+
+    GlobalStateMatrix dSigma_vals(nVars);
+    GlobalStateMatrix dSource_vals(nVars);
+    GlobalStateMatrix dAux_vals(nAux);
+    GlobalStateMatrix dSourceDot_vals(nVars);
+
+    evaluatePhysicsDerivatives(Y, Ydot, tEval, dSigma_vals, dSource_vals, dAux_vals,
+                               dSourceDot_vals);
+
+    const Index n = nVars * (k + 1);
+    const Matrix I = Matrix::Identity(n, n);
+
+    // Loud enough to act on, quiet enough not to stop a legitimately stiff
+    // problem. A mass matrix modified to within 1e-12 of singular is a
+    // declaration error in every case anyone has written; 1e-6 is the band where
+    // it may be deliberate and the caller should know.
+    constexpr double singularTol = 1.0e-12;
+    constexpr double warnTol = 1.0e-6;
+
+    bool declaredButZero = true;
+
+    for (Index i = 0; i < nCells; ++i)
+    {
+        Matrix Sudot(n, n);
+        if (superconvergent)
+        {
+            Sudot.setZero();
+            accumulateStarBlocks(Sudot, dSourceDot_vals.Variable(i), postprocessor->V(i),
+                                 nVars, nVars, i);
+        }
+        else
+        {
+            DerivativeSubMatrix(Sudot, dSourceDot_vals.Variable(i), Y, i);
+        }
+
+        if (!Sudot.isZero(0.0))
+            declaredButZero = false;
+
+        const Matrix E = I - XMats[i].partialPivLu().solve(Sudot);
+
+        // X singular is a pre-existing condition -- an identically zero aFn, say
+        // -- and not this check's business to newly refuse. Say so and move on
+        // rather than reporting it as a time-derivative fault.
+        if (!E.allFinite())
+        {
+            logmsg<LOG_LEVEL::WARNING>(
+                "Cell {}: the mass matrix is not invertible, so the effective mass "
+                "matrix could not be checked. Look at aFn before looking at "
+                "dSources_dudot.",
+                i);
+            continue;
+        }
+
+        Eigen::JacobiSVD<Matrix> svd(E, Eigen::ComputeThinV);
+        const Vector sv = svd.singularValues();
+        const double rcond = sv(sv.size() - 1) / sv(0);
+
+        if (rcond > warnTol)
+            continue;
+
+        // Which variable the near-null direction lives in. The DOF layout inside
+        // a cell is variable-major, so the block index is the variable.
+        Index worstDoF = 0;
+        svd.matrixV().col(sv.size() - 1).cwiseAbs().maxCoeff(&worstDoF);
+        const Index var = worstDoF / (k + 1);
+        const std::string name = problem->spec().variables.at(var).name;
+
+        if (rcond < singularTol)
+            throw std::invalid_argument(std::format(
+                "Variable '{}' has had its time derivative cancelled by its own source: "
+                "the effective mass matrix X - dS/d(udot) is singular in cell {} "
+                "(reciprocal condition number {:g}). That makes the row algebraic "
+                "rather than differential and raises the index of the system, which "
+                "IDA would report as an initial-condition or convergence failure with "
+                "nothing to say where it came from. Check dSources_dudot against the "
+                "aFn of this variable.",
+                name, i, rcond));
+
+        logmsg<LOG_LEVEL::WARNING>(
+            "Variable '{}': the effective mass matrix X - dS/d(udot) is close to "
+            "singular in cell {} (reciprocal condition number {:g}). The run will "
+            "proceed, but pseudo-transient continuation damps with this operator "
+            "rather than with X, so its step schedule may behave unlike it does "
+            "elsewhere.",
+            name, i, rcond);
+    }
+
+    if (declaredButZero)
+        logmsg<LOG_LEVEL::WARNING>(
+            "Some variable declares sourceReadsTimeDerivatives, but dSources_dudot "
+            "is identically zero at the initial state. If a source really does read "
+            "State::udot, its Jacobian is one term short -- which costs Newton "
+            "iterations and nothing else, so nothing further will report it.");
 }
 
 // The scalar coupling blocks. See the declaration for why they are written
@@ -1371,9 +1553,14 @@ void SystemSolver::updateMatricesForJacSolve()
     GlobalStateMatrix dSigma_vals(nVars);
     GlobalStateMatrix dSource_vals(nVars);
     GlobalStateMatrix dAux_vals(nAux);
+    // Zero-width unless some variable asked, which is what assembleCellMatrix
+    // reads as "there is no dS/d(udot) block": GlobalStateMatrix takes its width
+    // from the constructor rather than from what was added to it.
+    GlobalStateMatrix dSourceDot_vals(problem->anySourceReadsTimeDerivatives() ? nVars : 0);
 
     const PhysicsNodes nodes =
-        evaluatePhysicsDerivatives(yJac, jt, dSigma_vals, dSource_vals, dAux_vals);
+        evaluatePhysicsDerivatives(yJac, dydtJac, jt, dSigma_vals, dSource_vals, dAux_vals,
+                                   dSourceDot_vals);
 
     // Cell-independent: iteration i reads MBlocks[i] and grid[i] and writes only
     // MXSolvers[i]. The quadrature `assembleCellMatrix` reaches through
@@ -1385,7 +1572,8 @@ void SystemSolver::updateMatricesForJacSolve()
         [&](Index i)
         {
             MXSolvers[i].compute(
-                assembleCellMatrix(i, yJac, dSigma_vals, dSource_vals, dAux_vals, alpha));
+                assembleCellMatrix(i, yJac, dSigma_vals, dSource_vals, dAux_vals,
+                                   dSourceDot_vals, alpha));
         },
         cellGrain);
 
@@ -2029,6 +2217,13 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
     // at this state's psi. A no-op with no model attached, which is what keeps
     // an uncoupled run bit-for-bit what it was.
     evaluateGeometry(Y_h, points, states, tres);
+
+    // And the variables' time derivatives, for a source that reads them. Also a
+    // no-op -- an empty matrix, costing no allocation and no copy -- unless some
+    // variable declares sourceReadsTimeDerivatives. The u row below goes on
+    // carrying its own `+ XMats[i] * dYdt` mass term either way; this is the
+    // *source's* view of the same vector.
+    states.setVariableDot(variableTimeDerivatives(dYdt_h));
 
     auto values = problem->ComputePhysics(states, points, tres);
 

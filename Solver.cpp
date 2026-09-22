@@ -127,6 +127,11 @@ void SystemSolver::initialize()
 	// instead which unknowns each row can reach, here, where the answer can name
 	// the DOF.
 	//
+	// Same shape of check, same reason, same place: a source that reads du/dt can
+	// cancel its own variable's mass term, which turns a differential row
+	// algebraic without saying so. A no-op unless a variable declared it.
+	checkEffectiveMassMatrix(yJac, dydtJac, t0);
+
 	// After setJacEvalY, because that is what puts the initial condition into
 	// yJac and dydtJac, and before IDACalcIC, which is what would otherwise fail.
 	if (fieldModel)

@@ -266,13 +266,52 @@ cost real time here, and none of them announces itself.
 A physics case defines, per variable `i`:
 
 ```
-a_i d_t u_i + d_x sigma_i = S_i(u, q, sigma, phi, x, t)
+a_i d_t u_i + d_x sigma_i = S_i(u, q, sigma, phi, du/dt, x, t)
 sigma_i    = sigma_hat_i(u, q, x, t)          # the flux
 q_i        = d_x u_i                          # introduced as an unknown
 G_j(phi, u, q, sigma, x) = 0                  # nAux algebraic auxiliary constraints
 G_s(mu, y, dy/dt, t)     = 0                  # nScalars global (non-spatial) unknowns
 R_m(psi, dpsi/dt, y, t)  = 0                  # nField magnetic-field unknowns
 ```
+
+**A source may read `du/dt`, and only `du/dt`.** It reaches a case as
+`State::udot(j)`, filled by the solver from the `dYdt` vector, and is **zero
+unless some variable's `FieldSpec` sets `sourceReadsTimeDerivatives`** — which is
+what keeps every case that does not declare it identical to what it was, down to
+not allocating the rows. The derivative is `dSources_dudot`, and it enters the
+Jacobian as `- alpha * dS/d(udot)` beside the mass term in the `u` block
+(`assembleCellMatrix`). Four consequences, each of which has a test:
+
+* **It is invisible at `alpha = 0`.** A finite-difference check of the Jacobian
+  written only at the steady point passes with the term deleted, which is why
+  `TimeDerivativeSourceTests.cpp` carries both an `alpha != 0` case and an
+  `alpha = 0` one that records the blindness rather than relying on it. The
+  adjoint is built at `alpha = 0` and is therefore unaffected by this feature
+  entirely.
+* **It changes what multiplies the time derivative**, from `X` to
+  `X - dS/d(udot)`, which is no longer diagonal in the variable index and which a
+  case can make *singular* by writing `a_i d_t u_i` into its own source. That
+  raises the index of the system; `checkEffectiveMassMatrix` assembles the
+  operator at the initial state and refuses the run by name, in the same place
+  and for the same reason as the differential-field-DOF check beside it.
+* **A steady solve sees `udot = 0`** — `PseudoTransient`'s damping term vanishes
+  at its fixed point and `Newton` never has one — so "steady state" means
+  `d/dt = 0` inside the sources too, which is the right reading.
+* **There is deliberately no `qdot`, `sigmadot` or `phidot`, and the reason is
+  `IDASetId` rather than availability.** IDA supplies `y'` for every component,
+  algebraic ones included, and `variableTimeDerivatives` already builds a whole
+  `GlobalState` from `dYdt` and keeps only its `Variable()`. What makes those
+  entries unusable is what the solver has *declared*: `id` marks `u` differential
+  and nothing else, so a residual reading `q_dot` would put `alpha`-weighted
+  entries in the `q` columns of `dF/dy'` and contradict it. They are also exactly
+  zero at the initial point — `setInitialConditions` fills only the differential
+  rows and `IDA_YA_YDP_INIT` holds the algebraic `y'` fixed — so a term reading
+  one would be wrong for precisely the evaluations `IDACalcIC` converges on, and
+  right afterwards.
+
+`docs/superpowers/specs/2026-09-21-time-derivative-sources-design.md` is the
+design, including the two phases not built: geometry time derivatives (`dV'/dt`,
+`dpsi/dt`) and the field rows.
 
 `sigma`, `q`, `u` and the auxiliary variables `phi` live per cell; `lambda` is
 the HDG trace unknown on cell faces; `mu` are the global scalars; `psi` are a
@@ -1123,7 +1162,12 @@ gives. Four pieces to know:
   `(nPoints, nVars)` arrays — what the JAX path wants — and **its caster
   transposes in both directions** (C++ stores `(nVars, nPoints)`), so a
   round-trip test cannot detect a missing transpose; check the orientation from
-  inside a batched call instead.
+  inside a batched call instead. Its `"VariableDot"` entry is `du/dt`, and it is
+  an **empty** array rather than a grid of zeros in a run where no variable
+  declares `sourceReadsTimeDerivatives` — and also in the calls that build the
+  initial condition, which happen before there is a `dYdt` to read. A batched
+  case therefore tests `.size` rather than indexing it. The pointwise view does
+  not have that shape: `s.udot` is always `nVars` long and reads zero.
 * **`PyRunner`** (`configure(dict)` / `run` / `run_ss` / `getSolution` / `G` /
   `getAdjointGradients`) is the API the optimisation drivers use, and the only
   route supporting repeated configure/run cycles in one process — it works by

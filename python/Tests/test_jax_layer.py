@@ -87,3 +87,44 @@ def test_ffi_runner_says_which_build_it_needs():
     # would bind `manta` as a local and shadow the module-level name above it.
     with pytest.raises(ImportError, match="XLA_FFI"):
         importlib.import_module("manta.jax.ffi_runner")
+
+
+def test_the_state_carries_the_time_derivative():
+    """`du/dt` has to survive the dict -> State -> dict round trip.
+
+    The layer's State is the only thing a JAX case sees, so a field missing here
+    is a field the case cannot read whatever the solver fills. "VariableDot" is
+    optional on the way in -- a dict built by hand, or by a case older than the
+    key, is a legitimate caller -- and an absent one is empty rather than zero,
+    which is what tells a case it is in a run that fills nothing.
+    """
+    import numpy as np
+
+    from manta.jax import State
+
+    dense = {
+        "Variable": np.ones((4, 2)),
+        "Derivative": np.zeros((4, 2)),
+        "Flux": np.zeros((4, 2)),
+        "Aux": np.zeros((4, 0)),
+        "Scalars": np.zeros(0),
+        "VariableDot": np.arange(8.0).reshape(4, 2),
+    }
+
+    s = State.from_manta(dense)
+    assert np.allclose(np.asarray(s.VariableDot), dense["VariableDot"])
+    assert np.allclose(s.to_manta()["VariableDot"], dense["VariableDot"])
+
+    del dense["VariableDot"]
+    assert State.from_manta(dense).VariableDot.size == 0
+
+
+def test_the_time_derivative_is_mapped_over_points():
+    """vmap_axes has to name every per-point field.
+
+    A field left at None here would be broadcast rather than mapped, so every
+    point would see the whole grid's `du/dt` and the error would be a shape
+    mismatch a long way from this line -- or, worse, not a shape mismatch.
+    """
+    assert manta.jax.State.vmap_axes().VariableDot == 0
+    assert manta.jax.State.vmap_axes().Scalars is None

@@ -303,6 +303,20 @@ reason it was not made:
     against a closed form first: the same "write the case that would catch it
     being wrong before changing it" rule the autodiff-sigma entry above records.
 
+    **The transport rows have since gained exactly this, which makes the
+    remaining work a third application of a pattern rather than a new one.** A
+    source may read State::udot, reports dSources_dudot, and that block enters
+    the Jacobian weighted by alpha beside the mass term -- see
+    docs/superpowers/specs/2026-09-21-time-derivative-sources-design.md, which
+    lists the field rows as its phase 3. Two things it settled that this entry
+    was going to have to settle anyway. The value travels *in* the state object
+    rather than as a second argument, which is what let forty-odd existing cases
+    compile unchanged; and the alpha-weighted term is provably invisible at
+    alpha = 0, so a finite-difference check of it has to be written at alpha != 0
+    or it gates nothing -- measured, deleting the term moves the alpha = 3.7
+    check from 8.8e-10 to 0.105 and does not move the alpha = 0 one at all.
+    Whatever is done for FieldResidual should follow the same two.
+
 
   - The coupled adjoint has two structurally missing terms, both zero today by
     construction rather than by assumption, and both named in code beside the
