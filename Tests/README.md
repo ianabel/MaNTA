@@ -1147,6 +1147,42 @@ These are deliberate and tracked, not oversights:
     asserted alongside, so a fixture that started rejecting steps would report a
     changed solve rather than a broken count.
 
+* **`SpectrumTests.cpp`** -- where the semi-discrete spectrum lies, and what the
+  flux has to do to put it there. This exists because the time integrator is
+  chosen on a claim about the spectrum: BDF of order three to five are only
+  `A(alpha)`-stable, at 86.03, 73.35 and 51.84 degrees, so an eigenvalue further
+  than that from the negative real axis is outside the wedge and the choice is
+  wrong. Nothing else in the suite looks at the spectrum at all.
+
+  The quantity is the finite spectrum of the pencil `(dF/dY, -dF/dYdot)`, both
+  finite-differenced from the residual, with the Dirichlet trace unknowns
+  eliminated first -- their rows are identically zero, since the residual does
+  not write them, which makes the pencil *singular* rather than merely
+  rank-deficient if they are left in. Note that a mode `exp(lambda t)` is a
+  value of `lambda` at which `J(lambda)` is singular, so this is the set of
+  coefficients the linear solve must never be handed, not a new object.
+
+  Four things are pinned. The count of finite eigenvalues equals `rank(M)`,
+  which is the index-one statement counted rather than asserted. For constant
+  `kappa` the low modes reproduce `-n^2 pi^2` to 1e-9 and the extreme eigenvalue
+  scales as `h^-2` -- the validation, and the parabolic scaling that makes an
+  implicit method necessary. Every diffusive flux tried, including a
+  critical-gradient `chi(q)`, gives a real negative spectrum. And, the sharp one:
+  for a matrix flux the angle is `max_k |arg mu_k(D)|` with `D = d(sigmahat_j)/d(q_k)`,
+  reproduced to six digits against `arctan b` for
+  `D = [[1, b], [-b, 1]]`.
+
+  That last case is why the test is worth having rather than obvious. `D`
+  positive definite is *not* sufficient for the wedge: that matrix has symmetric
+  part the identity and is outside BDF5's wedge at `b = 3` and BDF4's at
+  `b = 10`. A symmetrisable `D = S A` is at angle zero however asymmetric it
+  looks, which is the condition a transport model actually satisfies.
+  `docs/physics_interface.rst` states it for case authors.
+
+  Not covered: a state-dependent `D` whose spectrum leaves the sector somewhere
+  in the domain but not everywhere, which is the case where the angle would be
+  neither constant nor predicted by a single `D`.
+
   What is still uncovered is the rest of the algorithm -- step rejection, the
   `KINSetMaxNewtonStep` clamp, and the hard-`KINSol`-failure
   path (the ordinary exhaustion path above shares its `catch (...)` in
