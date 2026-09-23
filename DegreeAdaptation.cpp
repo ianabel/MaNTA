@@ -319,3 +319,113 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
 
     return system;
 }
+
+// --- runLadder --------------------------------------------------------------
+
+namespace
+{
+// A rung's mesh, built the way configuredGrid builds the configured one but at
+// this rung's cell count, so the grading of a High_Grid_Boundary mesh is the
+// same on every rung and only the count changes.
+Grid ladderGrid(SolverConfig const &config, unsigned int nCells)
+{
+    return Grid(config.Lower_boundary, config.Upper_boundary,
+                static_cast<Index>(nCells), config.High_Grid_Boundary,
+                config.Lower_Boundary_Fraction, config.Upper_Boundary_Fraction);
+}
+} // namespace
+
+std::unique_ptr<SystemSolver> runLadder(SolverConfig const &config,
+                                        TransportSystem &problem,
+                                        AdjointProblem *adjoint,
+                                        Grid const &grid,
+                                        unsigned int kFinal,
+                                        double tFinal)
+{
+    const size_t intermediate =
+        std::max(config.DegreeLadder.size(), config.GridLadder.size());
+
+    std::println("Ladder: {} intermediate rung{} before {} cells at k = {}",
+                 intermediate, intermediate == 1 ? "" : "s", grid.getNCells(),
+                 kFinal);
+
+    SystemSolver::SteadyStats runTotal;
+    std::unique_ptr<SystemSolver> system;
+    std::vector<double> Y, dYdt;
+
+    // The first rung inherits whatever restart state the caller already put on
+    // the problem -- a ladder started from a restart file is a reasonable thing
+    // to ask for, and clearing here would silently throw it away. Every rung
+    // after the first hands on the one before it.
+    for (size_t rung = 0; rung <= intermediate; ++rung)
+    {
+        const bool last = rung == intermediate;
+        const unsigned int k =
+            last || config.DegreeLadder.empty() ? kFinal : config.DegreeLadder[rung];
+        const unsigned int nCells =
+            last || config.GridLadder.empty()
+                ? static_cast<unsigned int>(grid.getNCells())
+                : config.GridLadder[rung];
+
+        // The last rung solves on the *caller's* grid, which is what lets the
+        // returned solver outlive this function: it holds a reference to its
+        // grid, and an intermediate one dies at the bottom of this loop.
+        // Declared before the solver so it is destroyed after it.
+        Grid rungGrid = last ? grid : ladderGrid(config, nCells);
+
+        std::println("  rung {}: {} cells at k = {}", rung, nCells, k);
+
+        system = std::make_unique<SystemSolver>(last ? grid : rungGrid, k, &problem);
+        applySolverConfig(config, *system);
+
+        // A fresh solver has no adjoint problem, and forgetting this is silent:
+        // the run completes and the gradients are never computed.
+        if (adjoint != nullptr)
+            system->setAdjointProblem(adjoint);
+
+        system->runSolver(tFinal);
+
+        const auto rungStats = system->lastSteadyStats();
+        runTotal.steps += rungStats.steps;
+        runTotal.rejected += rungStats.rejected;
+        runTotal.newtonIters += rungStats.newtonIters;
+        runTotal.kinFuncEvals += rungStats.kinFuncEvals;
+        runTotal.kinJacEvals += rungStats.kinJacEvals;
+        runTotal.residualEvals += rungStats.residualEvals;
+        runTotal.jacBuilds += rungStats.jacBuilds;
+        runTotal.jacSolves += rungStats.jacSolves;
+
+        if (last)
+            break;
+
+        // Hand the state on. setRestartValues copies both the vector and the
+        // Grid, so nothing here points into the solver or the mesh about to be
+        // destroyed, and the destruction has to come before the next
+        // construction or the two solvers thrash Integrator's cache.
+        Y = system->stateVector();
+        dYdt = system->derivativeVector();
+        problem.setRestartValues(Y, dYdt, rungGrid, k);
+        system.reset();
+    }
+
+    // Sticky, and set by the loop above. Left armed, the next run on this same
+    // configuration would resume from the second-to-last rung instead of
+    // building an initial condition.
+    problem.clearRestart();
+
+    if (config.SteadyStateDiagnostics)
+    {
+        std::println("Ladder totals -- {} rung{}, one steady solve each",
+                     intermediate + 1, intermediate == 0 ? "" : "s");
+        std::println("  continuation steps      : {}  ({} rejected)",
+                     runTotal.steps, runTotal.rejected);
+        std::println("  KINSOL Newton iterations: {}", runTotal.newtonIters);
+        std::println("  residual evaluations    : {}  (of which KINSOL: {})",
+                     runTotal.residualEvals, runTotal.kinFuncEvals);
+        std::println("  Jacobian builds         : {}  (KINSOL asked for {})",
+                     runTotal.jacBuilds, runTotal.kinJacEvals);
+        std::println("  Jacobian solves         : {}", runTotal.jacSolves);
+    }
+
+    return system;
+}

@@ -213,11 +213,28 @@ void PyRunner::adaptDegree(double tFinal) {
   system = runAdaptiveDegree(cfg, *pProblem, adjoint.get(), *grid, k, tFinal);
 }
 
+// And with the one a ladder ends on. Same ownership argument as above: the
+// driver builds a solver per rung and returns the last, which is the only one
+// built on `grid` and so the only one that may outlive the call.
+void PyRunner::runLadderTo(double tFinal) {
+  system.reset();
+  system = runLadder(cfg, *pProblem, adjoint.get(), *grid, k, tFinal);
+}
+
+bool PyRunner::hasLadder() const {
+  return !cfg.DegreeLadder.empty() || !cfg.GridLadder.empty();
+}
+
 void PyRunner::run(double tFinal) {
   if (!configured) {
     throw std::runtime_error(
         "Error: Runner must be configured before running solver.");
   }
+  if (hasLadder())
+    throw std::runtime_error(
+        "DegreeLadder/GridLadder cannot be used with run(), which integrates "
+        "the transient: every rung would take the previous one's final state "
+        "and integrate the same interval again. Use run_ss().");
   if (cfg.DegreeAdaptation) {
     // run() means "integrate the transient", and degree adaptation is a
     // steady-only feature -- so this is refused rather than quietly turned into
@@ -257,6 +274,15 @@ void PyRunner::run_ss() {
   if (!configured) {
     throw std::runtime_error(
         "Error: Runner must be configured before running solver.");
+  }
+  if (hasLadder()) {
+    // The tolerance has to reach every rung, for the reason the adaptive
+    // branch below gives: run_ss() arms termination itself, and setting it on
+    // `system` here would be lost with the solver the driver replaces.
+    cfg.SteadyStateTolerance = steady_state_tolerance;
+    runLadderTo(0);
+    std::println("Done.");
+    return;
   }
   if (cfg.DegreeAdaptation) {
     // run_ss() arms steady-state termination whether or not the key was
@@ -334,6 +360,11 @@ SystemSolver::SteadyOutcome PyRunner::start_steady(bool estimate) {
         "DegreeAdaptation cannot be combined with a sliced steady solve: "
         "adapting the degree replaces the solver, and a slice loop holds the "
         "state of the one it started on. Run one or the other.");
+  if (hasLadder())
+    throw std::runtime_error(
+        "DegreeLadder/GridLadder cannot be combined with a sliced steady "
+        "solve, for the same reason: each rung replaces the solver, and a "
+        "slice loop holds the state of the one it started on.");
 
   system->setSteadyStateTolerance(steady_state_tolerance);
   system->initialize();

@@ -196,6 +196,35 @@ faces, where a change of degree alone leaves it transferable verbatim.
 
 .. note::
 
+   ``DegreeLadder`` and ``GridLadder`` express that directly, so it need not be
+   driven by hand::
+
+      Polynomial_degree = 5
+      Grid_size         = 10
+      DegreeLadder      = [1, 2]
+      GridLadder        = [2, 4]
+
+   solves at 2 cells and :math:`k = 1`, then 4 and :math:`k = 2`, then the
+   configured 10 and :math:`k = 5`, each rung warm-starting the next. **The last
+   rung is always the configured resolution**, so a ladder is a route and not a
+   change of destination: remove the keys and the answer is the same, which is
+   what makes it safe to try on a problem you already have an answer for. Either
+   list alone holds the other quantity at its configured value, so a pure
+   :math:`h`- or :math:`k`-ladder needs only one of them; given both, they must
+   be the same length. A ladder needs a steady solve, is refused alongside
+   ``DegreeAdaptation`` — both choose the sequence of discretisations — and is
+   refused inside a sliced steady solve, since each rung replaces the solver.
+
+   **Do not loosen the early rungs.** Solving each rung only to its own
+   discretisation error is the classical nested-iteration advice and it is wrong
+   here, measured: on the Jardin benchmark a ramp from :math:`10^{-2}` costs
+   twice what converging every rung costs, because a *fully* converged coarse
+   rung is what lets every rung above it exit at zero Newton iterations through
+   the already-converged test. On Shestakov it is a wash either way. The coarse
+   rungs of a good ladder are cheap — two cells at :math:`k = 1` is a few per
+   cent of the budget — so there is very little there to save, and the saving
+   they buy above them is large.
+
    That makes a *ladder* expressible in configuration: solve coarse, restart
    finer, solve again. On a nonlinear problem started far from its answer this
    is worth between 1.5x and 7x in transport-model calls, and on a linear one it

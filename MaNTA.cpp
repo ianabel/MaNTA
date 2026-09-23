@@ -219,7 +219,9 @@ int runManta(std::string const &fname)
 	// problem while the restart check above has already sized the state for
 	// nField unknowns. Refused rather than ignored, the way a sliced steady
 	// solve refuses it.
-	if (config.DegreeAdaptation && fieldModel)
+	if ((config.DegreeAdaptation || !config.DegreeLadder.empty() ||
+		 !config.GridLadder.empty()) &&
+		fieldModel)
 		throw std::invalid_argument(
 			"DegreeAdaptation cannot be combined with a FieldModel: the adaptive "
 			"driver builds a solver per degree and cannot carry the field model.");
@@ -232,6 +234,12 @@ int runManta(std::string const &fname)
 		// object survives to be destroyed here in the usual way.
 		auto system = runAdaptiveDegree(config, *pProblem, adjoint.get(), *grid, k,
 										*config.t_final);
+	}
+	else if (!config.DegreeLadder.empty() || !config.GridLadder.empty())
+	{
+		// Same shape, and for the same reason: a solver per rung, built inside.
+		auto system = runLadder(config, *pProblem, adjoint.get(), *grid, k,
+								*config.t_final);
 	}
 	else
 	{

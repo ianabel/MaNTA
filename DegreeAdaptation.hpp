@@ -77,4 +77,37 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
                                                 unsigned int k0,
                                                 double tFinal);
 
+// Solve at a sequence of discretisations the *configuration* names, each rung
+// warm-starting the next, ending at the configured Polynomial_degree and
+// Grid_size.
+//
+// The sibling of runAdaptiveDegree and deliberately the dumb one: no error
+// estimate, so no superconvergence, and the rungs are whatever DegreeLadder and
+// GridLadder say. What it buys is the Newton basin, not accuracy -- on a
+// nonlinear problem started far from its answer the target rung can go from
+// tens of iterations to one or two, and PERFORMANCE.md measures between 1.4x
+// and 7.2x. On a *linear* problem it is a straight loss, because Newton is
+// exact in one step from any guess and every rung below the last is overhead.
+//
+// The last rung is always the configured resolution, so adding a ladder cannot
+// change the answer -- only the cost of reaching it. That is what makes it safe
+// to try: remove the key and you get the same numbers.
+//
+// The state crosses each rung the way runAdaptiveDegree's does, through
+// setRestartValues, and setInitialConditions then projects across whichever of
+// the mesh and the degree has changed. Note that `problem` is built once, by
+// the caller, against the *final* grid: a case that sizes something from the
+// grid it was constructed with sees that one on every rung, which is the same
+// bargain runAdaptiveDegree already makes with the degree.
+//
+// `adjoint` may be null. Only the caller's grid and problem outlive this, and
+// the returned solver is the last rung's, which is built on the caller's grid
+// precisely so it may.
+std::unique_ptr<SystemSolver> runLadder(SolverConfig const &config,
+                                        TransportSystem &problem,
+                                        AdjointProblem *adjoint,
+                                        Grid const &grid,
+                                        unsigned int kFinal,
+                                        double tFinal);
+
 #endif // DEGREEADAPTATION_HPP

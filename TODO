@@ -1,3 +1,41 @@
+The Dirichlet trace is seeded differently by a cold start and by a restart.
+Found 2026-09-23, by a ladder test asserting that a ladder reaches the same
+answer as a direct solve and finding it did not, in exactly two entries.
+
+  A Dirichlet trace row *and column* are identically zero in K_global, so
+  nothing in a solve can move those entries: each keeps whatever
+  setInitialConditions seeded it with, for the whole run. The two paths seed
+  them differently. The cold branch runs ApplyDirichletBCs and then
+  EvaluateLambda, which sets *every* entry to {{u}} and so overwrites the data a
+  few lines after applying it; the restart branch was reordered long ago to run
+  ApplyDirichletBCs last, precisely because of that overwrite, and keeps the
+  datum. So a cold steady solve of LinearDiffusion at k = 3 on eight cells
+  reports lambda = 0.9999991 at a face whose boundary condition is 1, and the
+  same problem reached by a ladder reports 1. The gap does not shrink with the
+  steady tolerance -- identical from 1e-8 to 1e-14 -- because neither value is
+  converging to anything.
+
+  It reaches no interior unknown and no answer, but it is written to the netCDF
+  output and to the restart file, and it is what a reader gets when they ask for
+  the trace at the boundary.
+
+  **Reordering the cold path to match was tried and reverted, and the reason is
+  worth keeping.** It fails systemsolver_init_tests, which asserts the initial
+  lambda matches the initial function at the faces to 0.025; that fixture's
+  initial condition is exp(-25x^2), which is 1 at the axis where the boundary
+  condition is 0, so pinning the face to the datum moves that entry by 0.9. And
+  the test's expectation is defensible: on a *cold* start there is no converged
+  trace to protect, and forcing the face to g_D while the interior sits at
+  u(0,0) = 1 hands IDACalcIC a discontinuity where {{u}} gives it a smooth
+  guess. The restart reorder was about not discarding a converged trace, which
+  is a different situation.
+
+  So the question is which value setInitialConditions should report for an
+  initial condition that does not satisfy its own boundary condition, and it
+  wants deciding rather than patching. Whichever way it goes, the two paths
+  should agree.
+
+
 No CI leg builds the documentation, so a -W failure reaches main unnoticed.
 Found 2026-08-26, by putting one there.
 

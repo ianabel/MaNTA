@@ -11,10 +11,13 @@
 // applySolverConfig is the single point at which a configuration reaches the
 // solver, so the tests below build a real one and read the settings back.
 #include "SystemSolver.hpp"
+#include "CapturedOutput.hpp"
+#include "DegreeAdaptation.hpp"
 #include "TestDiffusion.hpp"
 
 #include <map>
 #include <stdexcept>
+#include <format>
 #include <string>
 
 namespace
@@ -550,6 +553,7 @@ BOOST_AUTO_TEST_CASE(a_restart_onto_a_different_mesh_honours_the_configuration)
     auto c = load(meshed("Grid_size = 20\nLower_boundary = 0.0\nUpper_boundary = 1.0\n"));
     Grid fileGrid(0.0, 1.0, 5);
 
+    CapturedOutput quiet;
     auto run = restartRunGrid(c, fileGrid);
     BOOST_TEST(run->getNCells() == 20);
     BOOST_TEST(!(*run == fileGrid));
@@ -566,6 +570,7 @@ BOOST_AUTO_TEST_CASE(a_restart_onto_a_coarser_mesh_is_allowed_and_is_the_lossy_d
     auto c = load(meshed("Grid_size = 4\nLower_boundary = 0.0\nUpper_boundary = 1.0\n"));
     Grid fileGrid(0.0, 1.0, 16);
 
+    CapturedOutput quiet;
     auto run = restartRunGrid(c, fileGrid);
     BOOST_TEST(run->getNCells() == 4);
 }
@@ -581,6 +586,7 @@ BOOST_AUTO_TEST_CASE(a_restart_onto_a_different_domain_honours_the_configuration
     auto c = load(meshed("Grid_size = 8\nLower_boundary = 0.0\nUpper_boundary = 1.0\n"));
     Grid fileGrid(-1.0, 1.0, 8);
 
+    CapturedOutput quiet;
     auto run = restartRunGrid(c, fileGrid);
     BOOST_TEST(run->getNCells() == 8);
     BOOST_TEST(run->lowerBoundary() == 0.0);
@@ -592,6 +598,7 @@ BOOST_AUTO_TEST_CASE(grid_points_supersede_grid_size_on_a_restart_too)
     auto c = load(meshed("Grid_size = 8\nGrid_points = [0.0, 0.25, 0.9, 1.0]\n"));
     Grid fileGrid(0.0, 1.0, 8);
 
+    CapturedOutput quiet;
     auto run = restartRunGrid(c, fileGrid);
     BOOST_TEST(run->getNCells() == 3);
 }
@@ -605,6 +612,154 @@ BOOST_AUTO_TEST_CASE(without_restart_the_file_mesh_is_returned_unchanged)
 
     auto run = restartRunGrid(c, fileGrid);
     BOOST_TEST((*run == fileGrid));
+}
+
+// --- DegreeLadder / GridLadder --------------------------------------------
+
+BOOST_AUTO_TEST_CASE(a_ladder_reaches_the_same_answer_as_a_direct_solve)
+{
+    // The property the whole design rests on: the last rung is always the
+    // configured resolution, so a ladder is a *route* and not a change of
+    // destination. Remove the key and the numbers must not move -- which is
+    // what makes it safe to try on a problem you already have an answer for.
+    //
+    // Exactly, not approximately. Both solves end at the same steady tolerance
+    // on the same discretisation, so any difference would be a difference in
+    // the state Newton converged from, and the point is that that does not
+    // survive to the answer.
+    const std::string body =
+        "Polynomial_degree = 3\n"
+        "Grid_size = 8\n"
+        "delta_t = 0.1\n"
+        "t_final = 1.0\n"
+        "Lower_boundary = 0.0\n"
+        "Upper_boundary = 1.0\n"
+        "OutputFilename = \"ladder_equal\"\n"
+        "WriteOutput = false\n"
+        "SteadyStateSolver = \"Newton\"\n"
+        "TransportSystem = \"LinearDiffusion\"\n";
+
+    const toml::value diffusion = toml::parse_str(
+        "[DiffusionProblem]\nKappa = 1.0\nCentre = 0.0\n");
+
+    auto solve = [&](std::string const &extra)
+    {
+        auto c = load(body + extra);
+        Grid grid(0.0, 1.0, 8);
+        TestDiffusion problem(diffusion);
+        std::unique_ptr<SystemSolver> sys;
+        {
+            CapturedOutput quiet;
+            if (c.DegreeLadder.empty() && c.GridLadder.empty())
+            {
+                sys = std::make_unique<SystemSolver>(grid, 3, &problem);
+                applySolverConfig(c, *sys);
+                sys->runSolver(*c.t_final);
+            }
+            else
+            {
+                sys = runLadder(c, problem, nullptr, grid, 3, *c.t_final);
+            }
+        }
+        auto Y = sys->stateVector();
+        {
+            CapturedOutput quiet;
+            sys->destroySundials();
+        }
+        return Y;
+    };
+
+    const std::string t = "SteadyStateTolerance = 1.0e-12\n";
+    const auto direct = solve(t);
+    const auto laddered = solve(t + "DegreeLadder = [1, 2]\nGridLadder = [2, 4]\n");
+    BOOST_REQUIRE_EQUAL(direct.size(), laddered.size());
+
+    // Every degree of freedom the solve can reach agrees to round-off, not
+    // merely to the steady tolerance: both end on the same discretisation with
+    // the residual driven to the same place, so it is the same state.
+    //
+    // The exceptions are the two Dirichlet trace entries, and they are
+    // exceptions for a reason that has nothing to do with the ladder. A
+    // Dirichlet trace row *and column* are identically zero in K_global, so
+    // nothing in the solve can move those entries: each keeps whatever
+    // setInitialConditions seeded it with, forever. The cold path seeds them
+    // from EvaluateLambda's {{u}} and the restart path from the boundary data,
+    // and a ladder ends on a restart -- so it reports the datum where a cold
+    // solve reports an extrapolation of the interior. Measured here: 1.0
+    // against 0.9999991 at k = 3 on eight cells, a discretisation error apart,
+    // and identical at every tolerance from 1e-8 to 1e-14 because neither is
+    // converging to anything. `TODO` carries the inconsistency.
+    const size_t lambda0 = 3 * 4 * 8, lambdaN = lambda0 + 8;
+    double worst = 0.0;
+    for (size_t i = 0; i < direct.size(); ++i)
+    {
+        if (i == lambda0 || i == lambdaN)
+            continue;
+        worst = std::max(worst, std::abs(direct[i] - laddered[i]));
+    }
+    BOOST_TEST_MESSAGE("ladder against direct, off the Dirichlet traces: worst |dY| = "
+                       << worst);
+    BOOST_TEST(worst < 1e-12);
+
+    // And the ladder's own Dirichlet entry is the datum to round-off, which is
+    // what the restart path guarantees and the thing worth having. Not bit
+    // exact: the entry is set from the boundary condition on the last rung, but
+    // the rung before it went through a remesh, so the arithmetic that produced
+    // the 1.0 is not the same arithmetic.
+    BOOST_TEST(std::abs(laddered[lambda0] - 1.0) < 1e-14);
+}
+
+BOOST_AUTO_TEST_CASE(the_two_ladders_must_describe_the_same_rungs)
+{
+    BOOST_CHECK_THROW(load(minimal + "DegreeLadder = [1, 2]\nGridLadder = [4]\n"),
+                      std::invalid_argument);
+    // Either alone is fine: it holds the other quantity at its configured value.
+    BOOST_CHECK_NO_THROW(load(minimal + "DegreeLadder = [1, 2]\n"
+                                        "SteadyStateSolve = true\n"));
+    BOOST_CHECK_NO_THROW(load(minimal + "GridLadder = [2, 4]\n"
+                                        "SteadyStateSolve = true\n"));
+}
+
+BOOST_AUTO_TEST_CASE(a_ladder_refuses_what_it_cannot_mean)
+{
+    // Degree zero has no gradient to postprocess and cannot be evaluated off
+    // its node; zero cells is not a mesh.
+    BOOST_CHECK_THROW(load(minimal + "DegreeLadder = [0, 2]\nSteadyStateSolve = true\n"),
+                      std::invalid_argument);
+    BOOST_CHECK_THROW(load(minimal + "GridLadder = [0, 4]\nSteadyStateSolve = true\n"),
+                      std::invalid_argument);
+
+    // Both choose the sequence of discretisations, from different information.
+    BOOST_CHECK_THROW(load(minimal + "DegreeLadder = [1, 2]\nDegreeAdaptation = true\n"
+                                     "SteadyStateSolve = true\n"),
+                      std::invalid_argument);
+
+    // A transient rung would take the previous rung's final state and integrate
+    // the same interval again -- a wrong answer, not a slow one.
+    BOOST_CHECK_THROW(load(minimal + "DegreeLadder = [1, 2]\n"
+                                     "SteadyStateSolver = \"TimeMarch\"\n"
+                                     "SteadyStateSolve = true\n"),
+                      std::invalid_argument);
+
+    // And without a steady solve armed at all, SteadyStateSolver is never
+    // consulted and every rung time-marches regardless of what it says.
+    BOOST_CHECK_THROW(load(minimal + "DegreeLadder = [1, 2]\n"),
+                      std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(a_ladder_is_a_list_of_whole_numbers)
+{
+    // UIntList exists rather than reusing DoubleList because these are counts:
+    // 2.5 cells is a configuration error and not something to round.
+    BOOST_CHECK_THROW(load(minimal + "GridLadder = [2.5]\nSteadyStateSolve = true\n"),
+                      std::invalid_argument);
+    BOOST_CHECK_THROW(load(minimal + "GridLadder = [-2]\nSteadyStateSolve = true\n"),
+                      std::invalid_argument);
+
+    // A bare scalar is a one-rung ladder, matching how DoubleList treats one.
+    auto c = load(minimal + "GridLadder = 4\nSteadyStateSolve = true\n");
+    BOOST_REQUIRE_EQUAL(c.GridLadder.size(), 1u);
+    BOOST_TEST(c.GridLadder[0] == 4u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

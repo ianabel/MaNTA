@@ -162,8 +162,33 @@ than direct on Jardin's own initial condition -- the best number here -- and
 2.9x worse on Shestakov from a poor one, where the extra points are spent on
 levels that were not the bottleneck. It also cannot start at all on Jardin from
 a poor initial condition, for the reason below. A ladder to a fixed target
-degree needs no error estimate and so needs no superconvergence, and that is the
-thing to build if this is built.
+degree needs no error estimate and so needs no superconvergence, and that is
+what `DegreeLadder`/`GridLadder` are (`docs/running.rst`).
+
+**Do not loosen the early rungs.** Measured on the h+k ladder, against solving
+every rung to the final `1e-11`:
+
+| benchmark | IC | all `1e-11` | ramp `1e-2` | ramp `1e-4` | ramp `1e-6` |
+|---|---|---|---|---|---|
+| `jardin` | own | **252** | 516 | 316 | 280 |
+| `jardin` | poor | **260** | 524 | 324 | 288 |
+| `shestakov` | own | 1784 | 1736 | 1740 | 1776 |
+| `shestakov` | poor | 1692 | 1776 | 1784 | **1684** |
+
+Jardin loses a clean factor of two at the loosest ramp and loses at every ramp;
+Shestakov is a wash, a few per cent either way with no pattern. The mechanism is
+visible in the rung trace: at full tolerance Jardin's rungs above the first exit
+at **zero** Newton iterations, two sweeps apiece, through the already-converged
+test -- and a *fully* converged coarse rung is what earns that. Loosen it and
+each of those rungs pays an iteration instead, which costs more than was saved
+below.
+
+The general point is that the classical nested-iteration advice -- solve each
+level only to its own discretisation error -- does not transfer. It assumes the
+coarse levels are where the work is. Here a good ladder makes them cheap by
+construction (two cells at `k = 1` is a few per cent of the budget), so there is
+almost nothing to save by under-solving them, and the thing they buy above them
+is worth much more. Hence no per-rung tolerance key.
 
 ## Superconvergence narrows the Newton basin
 

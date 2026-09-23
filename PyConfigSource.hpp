@@ -81,6 +81,15 @@ public:
                 {
                     return std::vector<double>{obj.cast<double>()};
                 }
+            case ConfigSchema::Type::UIntList:
+                try
+                {
+                    return obj.cast<std::vector<unsigned>>();
+                }
+                catch (py::cast_error const &)
+                {
+                    return std::vector<unsigned>{obj.cast<unsigned>()};
+                }
             case ConfigSchema::Type::StringList:
                 return obj.cast<std::vector<std::string>>();
             }
