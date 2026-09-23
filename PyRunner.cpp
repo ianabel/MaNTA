@@ -124,8 +124,19 @@ void PyRunner::configure(const py::dict &config) {
     }
   }
 
-  k = 1;
-  grid = makeGrid(cfg, cfg.restart ? &restart_file : nullptr, k);
+  // Two meshes and two degrees on a restart; see MaNTA.cpp for why they have to
+  // be kept apart. fileGrid/fileOrder describe the stored state, grid/k the run.
+  unsigned int fileOrder = 1;
+  std::unique_ptr<Grid> fileGrid =
+      makeGrid(cfg, cfg.restart ? &restart_file : nullptr, fileOrder);
+
+  k = fileOrder;
+  if (cfg.restart) {
+    grid = restartRunGrid(cfg, *fileGrid);
+    k = restartRunOrder(cfg, fileOrder);
+  } else {
+    grid = std::move(fileGrid);
+  }
 
   if (!caseName.empty())
     instantiatePhysicsCase(config);
@@ -153,23 +164,22 @@ void PyRunner::configure(const py::dict &config) {
           "registered model and is a config-file key. Resume it with the MaNTA "
           "binary.");
 
-    // Make sure degrees of freedom are consistent with restart file
-    const Index nCells = grid->getNCells();
-    const Index nDOF = pProblem->getNumVars() * 3 * nCells * (k + 1) +
+    // Make sure degrees of freedom are consistent with restart file. The file's
+    // mesh and degree, not the run's: this is a statement about how the vector
+    // just read is laid out.
+    const Index nCells = fileGrid->getNCells();
+    const Index nDOF = pProblem->getNumVars() * 3 * nCells * (fileOrder + 1) +
                        pProblem->getNumVars() * (nCells + 1) +
                        pProblem->getNumScalars() +
-                       pProblem->getNumAux() * nCells * (k + 1);
+                       pProblem->getNumAux() * nCells * (fileOrder + 1);
 
     if (nDOF_file != nDOF)
       throw std::invalid_argument(
           "nVars/nAux/nScalars in restart file inconsistent with physics case");
 
-    // The file's own degree, which is what its DOF are laid out at.
-    pProblem->setRestartValues(Y, dYdt, *grid, k);
-
-    // The run's degree, which may differ. setInitialConditions projects across
-    // the difference; equal degrees keep the copy path.
-    k = restartRunOrder(cfg, k);
+    // The file's own mesh and degree, which is what its DOF are laid out at.
+    // The run's, which may differ in either, were chosen above.
+    pProblem->setRestartValues(Y, dYdt, *fileGrid, fileOrder);
   }
 
   system = std::make_unique<SystemSolver>(*grid, k, pProblem.get());

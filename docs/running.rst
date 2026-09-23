@@ -186,6 +186,25 @@ and its declared ``nFieldDOF`` is checked against the ``nField`` the file
 records before anything is read into it. Resuming a coupled run therefore needs
 the same ``FieldModel`` line the original run had.
 
+**A restart may change the mesh as well as the degree.** ``Grid_size``,
+``Grid_points`` and the domain boundaries are honoured on a restart the way
+``Polynomial_degree`` is: an identical mesh keeps the copy path and is bit for
+bit unchanged, while a different one is projected onto — the stored element
+polynomials are evaluated at the new cell nodes — with a warning naming both
+meshes. The trace is rebuilt when the cells move, since ``lambda`` lives on
+faces, where a change of degree alone leaves it transferable verbatim.
+
+.. note::
+
+   That makes a *ladder* expressible in configuration: solve coarse, restart
+   finer, solve again. On a nonlinear problem started far from its answer this
+   is worth between 1.5x and 7x in transport-model calls, and on a linear one it
+   is a loss, since Newton is exact in one step from any guess and every rung is
+   overhead. ``PERFORMANCE.md`` has the measurements and the two traps — a rung
+   costs a full solve whatever it achieves, so few large jumps beat many small
+   ones; and the boundaries default to 0 and 1, so a restart config that omits
+   them will remesh a run over another domain, which is what the warning is for.
+
 A restart written by a steady solve carries ``dYdt = 0``, which is the defining
 property of the state it holds. It used to carry the ``t_initial`` derivative
 instead — ``solveSteadyState`` damps through a scratch vector and never wrote

@@ -502,4 +502,109 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     BOOST_TEST(*fromToml.t_final == *fromMap.t_final);
 }
 
+namespace
+{
+// A minimal config with the mesh spelled out, since `minimal` already names a
+// Grid_size and toml refuses a duplicate key.
+std::string meshed(std::string const &mesh, bool restart = true)
+{
+    return std::string("Polynomial_degree = 2\n")
+           + "delta_t = 0.1\n"
+             "t_final = 1.0\n"
+             "TransportSystem = \"LinearDiffusion\"\n"
+           + (restart ? "restart = true\n" : "")
+           + mesh;
+}
+
+} // namespace
+
+// --- the mesh a restarted run is solved on --------------------------------
+//
+// restartRunGrid is to Grid_size what restartRunOrder is to Polynomial_degree.
+// Both keys are required of every config on both readers; both used to be read,
+// validated and then discarded on a restart, because makeGrid took the whole
+// discretisation out of the file. The degree was fixed first; this is the mesh.
+//
+// Why it matters beyond tidiness: a ladder written as "solve coarse, restart
+// finer, solve again" silently re-solved the coarse problem at every rung and
+// reported it converged, which is indistinguishable from success -- resuming a
+// converged state at its own resolution costs one residual evaluation and exits
+// at the already-converged test, exactly as a genuine rung would look.
+
+BOOST_AUTO_TEST_CASE(a_restart_onto_the_same_mesh_keeps_it)
+{
+    // The no-regression half, and the reason the comparison is on the Grid
+    // rather than on Grid_size: an equal mesh has to come back equal so that
+    // setInitialConditions takes the copy path and every existing restart is
+    // bit for bit what it was.
+    auto c = load(meshed("Grid_size = 8\nLower_boundary = 0.0\nUpper_boundary = 1.0\n"));
+    Grid fileGrid(0.0, 1.0, 8);
+
+    auto run = restartRunGrid(c, fileGrid);
+    BOOST_TEST((*run == fileGrid));
+    BOOST_TEST(run->getNCells() == 8);
+}
+
+BOOST_AUTO_TEST_CASE(a_restart_onto_a_different_mesh_honours_the_configuration)
+{
+    auto c = load(meshed("Grid_size = 20\nLower_boundary = 0.0\nUpper_boundary = 1.0\n"));
+    Grid fileGrid(0.0, 1.0, 5);
+
+    auto run = restartRunGrid(c, fileGrid);
+    BOOST_TEST(run->getNCells() == 20);
+    BOOST_TEST(!(*run == fileGrid));
+    BOOST_TEST(run->lowerBoundary() == 0.0);
+    BOOST_TEST(run->upperBoundary() == 1.0);
+}
+
+BOOST_AUTO_TEST_CASE(a_restart_onto_a_coarser_mesh_is_allowed_and_is_the_lossy_direction)
+{
+    // Refining puts the stored element polynomials inside the new space;
+    // coarsening is a genuine approximation. Both are permitted -- a ladder may
+    // want either -- and the warning is what distinguishes them, so the test
+    // pins only that coarsening is not refused.
+    auto c = load(meshed("Grid_size = 4\nLower_boundary = 0.0\nUpper_boundary = 1.0\n"));
+    Grid fileGrid(0.0, 1.0, 16);
+
+    auto run = restartRunGrid(c, fileGrid);
+    BOOST_TEST(run->getNCells() == 4);
+}
+
+BOOST_AUTO_TEST_CASE(a_restart_onto_a_different_domain_honours_the_configuration)
+{
+    // The mesh is the cell boundaries, not the cell count, so moving the domain
+    // is a mesh change even at the same Grid_size. Worth its own case because
+    // Lower_boundary and Upper_boundary are not required keys and default to 0
+    // and 1: a restart config that omits them and resumes a run over [-1, 1]
+    // will be remeshed onto [0, 1], and the warning is the only thing that says
+    // so.
+    auto c = load(meshed("Grid_size = 8\nLower_boundary = 0.0\nUpper_boundary = 1.0\n"));
+    Grid fileGrid(-1.0, 1.0, 8);
+
+    auto run = restartRunGrid(c, fileGrid);
+    BOOST_TEST(run->getNCells() == 8);
+    BOOST_TEST(run->lowerBoundary() == 0.0);
+    BOOST_TEST(!(*run == fileGrid));
+}
+
+BOOST_AUTO_TEST_CASE(grid_points_supersede_grid_size_on_a_restart_too)
+{
+    auto c = load(meshed("Grid_size = 8\nGrid_points = [0.0, 0.25, 0.9, 1.0]\n"));
+    Grid fileGrid(0.0, 1.0, 8);
+
+    auto run = restartRunGrid(c, fileGrid);
+    BOOST_TEST(run->getNCells() == 3);
+}
+
+BOOST_AUTO_TEST_CASE(without_restart_the_file_mesh_is_returned_unchanged)
+{
+    // Defensive: the callers only reach this on a restart, but a function that
+    // silently remeshed a cold start would be a bad one to leave lying about.
+    auto c = load(meshed("Grid_size = 20\nLower_boundary = 0.0\nUpper_boundary = 1.0\n", false));
+    Grid fileGrid(0.0, 1.0, 5);
+
+    auto run = restartRunGrid(c, fileGrid);
+    BOOST_TEST((*run == fileGrid));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

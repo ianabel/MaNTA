@@ -152,12 +152,36 @@ private:
 // type, a key given alongside its own alias, or a violated conditional rule.
 SolverConfig loadSolverConfig(ConfigSource const &source, ConfigSchema::Reader reader);
 
-// The grid the configuration asks for. `restart` is the opened restart file
-// when config.restart is set, nullptr otherwise; k is written with the
-// polynomial degree the *file* was written at, which is also the degree it must
-// be read back at -- see restartRunOrder for the degree the run then uses.
+// The mesh the restart file holds, or -- when not restarting -- the one the
+// configuration asks for. `restart` is the opened restart file when
+// config.restart is set, nullptr otherwise; k is written with the polynomial
+// degree the *file* was written at, which is also the degree it must be read
+// back at.
+//
+// On a restart this is the mesh the stored state is laid out on, which is what
+// the DOF check and setRestartValues need, and **not** necessarily the mesh the
+// run uses -- see restartRunGrid, exactly as restartRunOrder gives the degree
+// the run uses.
 std::unique_ptr<Grid> makeGrid(SolverConfig const &config,
                                netCDF::NcFile *restart, unsigned int &k);
+
+// The mesh the configuration asks for, whether or not this is a restart.
+std::unique_ptr<Grid> configuredGrid(SolverConfig const &config);
+
+// The mesh a restarted run should be solved on, given the mesh its restart file
+// was written on. The counterpart of restartRunOrder, and it exists for the
+// same reason: makeGrid used to return the file's mesh and the run used that,
+// so Grid_size was read, validated, required of every config on both readers --
+// and then silently discarded. A ladder written as "solve coarse, restart
+// finer, solve again" therefore re-solved the coarse problem at every rung and
+// reported it converged, which is indistinguishable from success.
+//
+// An equal mesh returns the file's own, so every existing restart takes the
+// copy path in setInitialConditions and is bit for bit unchanged. A different
+// one warns and wins; setInitialConditions then projects the stored element
+// polynomials onto the new cells and rebuilds the trace, since lambda lives on
+// faces that have moved.
+std::unique_ptr<Grid> restartRunGrid(SolverConfig const &config, Grid const &fileGrid);
 
 // The polynomial degree a restarted run should use, given the degree its restart
 // file was written at.

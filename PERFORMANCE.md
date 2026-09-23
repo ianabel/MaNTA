@@ -123,38 +123,37 @@ well-converged one: `k = 2` took 46 iterations at full tolerance, 81 with three
 rejected steps at a `1e-2` ramp, and 25 at `1e-6`. So the refinement is the win
 and the tolerance sequencing is not.
 
-**Refining the mesh behaves the same way, and fewer larger jumps beat more
-smaller ones.** Not measurable through a config restart -- `makeGrid` takes the
-mesh from the restart file and ignores `Grid_size`, so a ladder written that way
-silently re-solves the coarse problem; see `TODO`. Driven instead through
-`setRestartValues`, which is the in-memory transfer `DegreeAdaptation` uses and
-which does take a `Grid`, on `k = 3` to a target of 16 cells:
+**Refining the mesh pays more than raising the degree, and doing both pays
+most.** Same runs as above, target 10 cells at `k = 5` for the two nonlinear
+cases and 4 cells at `k = 5` for Park:
 
-| flux | initial condition | direct | ladder 2,4,8,16 | ladder 4,16 |
-|---|---|---|---|---|
-| `kappa q` | -- | **320** | 600, 0.53x | -- |
-| `(1 + u^2) q` | the case's own | **704** | 744, 0.95x | 624, 1.13x |
-| `(1 + u^2) q` | deliberately poor | 3456 | 936, 3.69x | **816, 4.24x** |
+| benchmark | IC | direct | k-ladder | h-ladder | h+k ladder |
+|---|---|---|---|---|---|
+| `park-convergence` | either | **120** | 400, 0.30x | 210, 0.57x | 170, 0.71x |
+| `jardin` | own | 900 | 660, 1.36x | 420, 2.14x | **252, 3.57x** |
+| `jardin` | poor | 1860 | 940, 1.98x | 588, 3.16x | **260, 7.15x** |
+| `shestakov` | own | 2460 | 2540, 0.97x | **1668, 1.47x** | 1784, 1.38x |
+| `shestakov` | poor | 6420 | 5380, 1.19x | 2208, 2.91x | **1692, 3.79x** |
 
-Same shape as the degree ladder: a loss on a linear problem, a wash on a
-nonlinear one that already starts near its answer, and a large saving from a
-poor start, where the target level goes from 25 Newton iterations to two. The
-new information is the last column -- **two levels beat four in both nonlinear
-rows**, because each level costs a prologue and a Newton solve whatever it
-achieves, so once the guess is good enough the intermediate levels are overhead.
-A ladder wants the fewest rungs that keep each solve convergent, not a rung per
-refinement.
+The `h` ladders are `2, 4, 6, 10` cells and the combined ones
+`(2,k1) (4,k2) (6,k3) (10,k5)`. Coarsening the mesh is the better lever because
+it cuts the points per sweep linearly in the cell count where dropping `k` from
+5 to 1 only cuts them threefold, and the coarse mesh still carries the
+nonlinearity that the ladder exists to work through. The combined ladder wins on
+three of the four nonlinear rows and is the only one that makes Park's loss
+tolerable rather than severe.
 
-*A caution on fixtures for anyone repeating this.* The first attempt used
-`kappa q` with a constant source and a critical-gradient `chi(q) q`, and both
-reported the fine levels converging in zero Newton iterations. That was real but
-vacuous: both steady states are low-degree polynomials -- `x(1-x)/2kappa` and a
-straight line -- so a converged coarse solution is *exactly* the fine-mesh
-solution too, and the ladder measured nothing. The rows above use a
-`sin(pi x)` source and `(1 + u^2) q`, whose steady states are not polynomials.
-The same trap explains why `jardin-critical-gradient` shows every level above
-the first at zero iterations in the degree table: its exact steady state is
-linear.
+Two things to keep in mind when building one. **A rung costs a prologue and a
+Newton solve whatever it achieves**, so the fewest rungs that keep each solve
+convergent beats a rung per refinement -- measured separately on `(1 + u^2) q`
+at `k = 3` to 16 cells from a poor start, a two-rung ladder `4, 16` cost 816
+model calls against 936 for `2, 4, 8, 16` and 3456 direct. And **the exact
+steady state must not be a low-degree polynomial or the measurement is
+vacuous**: a converged coarse solution is then exactly the fine-mesh solution as
+well, every rung above the first exits at zero Newton iterations, and the ladder
+looks free. That is why `jardin` shows `0N` at every rung above the first -- its
+exact steady state is linear -- and it is the more representative `shestakov`
+numbers that should be read as typical.
 
 **`DegreeAdaptation` is not the vehicle for this, though it does the same
 transfer.** It implies `Superconvergent`, which costs `(k+2)/(k+1)` points per
