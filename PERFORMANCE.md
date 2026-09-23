@@ -215,9 +215,70 @@ refining an algebraic solution that is already three orders inside the
 discretisation error** -- and removing that spend changes the answer in the
 third significant figure of nothing.
 
-So set the steady tolerance from the discretisation error rather than from zero.
-The estimator is to hand: `u* - u_h` is what `DegreeAdaptation` already uses, and
-it is computed for every run with `k >= 1` whether or not the flag is on.
+So the steady tolerance wants setting from what the answer is worth rather than
+from zero -- and note the scale that puts it on. A relative error of `5e-3` is
+already better than a plasma transport run can expect, because the model
+producing `sigma` is not that good; `1e-6` and `1e-15` are alike unreachable in
+that setting. The option to ask for them stays, for a transport problem of some
+other kind that needs the accuracy, but a default calibrated on a benchmark is
+calibrated on the wrong thing.
+
+**Which means every visits-per-point number in this file is measured at
+`SteadyStateTolerance = 1e-11`**, eight orders inside anything a real run needs,
+because that is what the benchmark scripts set. That is the right choice for
+comparing *methods* -- it is the algebraic solution being compared, not the
+tolerances -- and the wrong number to quote as what a production solve costs.
+At a realistic `1e-2`, `shestakov` direct is 1920 rather than 2460 and the
+h+k ladder 1028 rather than 1784.
+
+### Why the tolerance is not chosen automatically
+
+The obvious automation is to set it from `||u* - u_h||`, which `DegreeAdaptation`
+already computes and which every run with `k >= 1` builds anyway. Measured on
+`shestakov`, against the true error from the closed form, it does not work:
+
+| rung | `||u*-u_h||/||u_h||` | true error | ratio |
+|---|---|---|---|
+| 2 cells, k=1 | 2.54e-01 | 1.72e-01 | 1.48 |
+| 4 cells, k=2 | 3.23e-02 | 1.93e-01 | 0.17 |
+| 6 cells, k=3 | 8.69e-03 | 4.78e-02 | 0.18 |
+| 10 cells, k=5 | 2.46e-05 | 3.71e-03 | **0.007** |
+| 20 cells, k=5 | 8.03e-06 | 1.85e-03 | **0.004** |
+
+It under-predicts by up to 250x and the under-prediction *worsens* with
+resolution, which is the opposite of what an estimator should do. The reason is
+in the same runs: `u*` is not a better approximation than `u_h` here -- 3.714e-3
+against 3.713e-3 -- so their difference measures how little the postprocessing
+moved, not how wrong the answer is. Turning `Superconvergent` on makes it worse
+rather than better, 0.007 to 0.003 at ten cells, and roughly doubles the true
+error into the bargain.
+
+Worth separating two uses of the same quantity. As a *ranking* signal -- is the
+error still falling as k rises -- a consistent bias does not matter, which is
+why `DegreeAdaptation` is entitled to it. As an *absolute* number to set a
+tolerance against, a 250x bias is fatal.
+
+The two-level difference a ladder already holds is far better calibrated, and it
+costs nothing extra since both states exist:
+
+| coarse | fine | `||u_c-u_f||/||u_f||` | true error of fine | ratio |
+|---|---|---|---|---|
+| (2, k1) | (4, k2) | 3.18e-01 | 1.93e-01 | 1.65 |
+| (4, k2) | (6, k3) | 1.53e-01 | 4.78e-02 | 3.21 |
+| (6, k3) | (10, k5) | 4.43e-02 | 3.71e-03 | 11.9 |
+| (10, k5) | (20, k5) | 1.87e-03 | 1.85e-03 | 1.01 |
+
+But note which way each one fails, because it decides whether a safety factor
+can rescue it. `||u* - u_h||` under-predicts, so a tolerance set from it is
+*tighter* than needed: safe, and worth nothing, since the saving was the point.
+The two-level estimate over-predicts, by up to 12x here, so a tolerance set from
+it can stop while the algebraic error is still above the discretisation error --
+an answer worse than the mesh can give, which is the failure that matters. A
+safety factor large enough to cover 12x puts it back where it started.
+
+So neither is automated. The tolerance a run should use is set by the accuracy
+of the transport model, which is outside the solver and cannot be estimated from
+inside it.
 
 Two further readings of that table. The saving is **larger on the ladder than on
 the direct solve** for Shestakov (26% against 10%), because a ladder spends its
