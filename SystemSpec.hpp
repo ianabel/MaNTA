@@ -91,6 +91,17 @@ struct FieldSpec
     std::string units;
     BoundaryCondition lower = BoundaryKind::Dirichlet;
     BoundaryCondition upper = BoundaryKind::Dirichlet;
+    // Set when S_i may depend on du/dt -- on the time derivative of *any*
+    // evolved variable, not only this one's. It is what makes State::udot be
+    // filled at all, what makes dSources_dudot be asked for, and what arms the
+    // effective-mass-matrix check in SystemSolver::checkEffectiveMassMatrix.
+    // Declared rather than detected because it is a property of the equations:
+    // see docs/superpowers/specs/2026-09-21-time-derivative-sources-design.md.
+    //
+    // Trailing, and defaulted, so that every existing aggregate initialiser --
+    // `{"n", "density", "m^-3", BoundaryKind::Neumann, BoundaryKind::Dirichlet}`
+    // -- keeps compiling and keeps meaning what it did.
+    bool sourceReadsTimeDerivatives = false;
 };
 
 struct ScalarSpec
@@ -116,6 +127,17 @@ struct SystemSpec
     std::vector<FieldSpec> variables;
     std::vector<ScalarSpec> scalars;
     std::vector<AuxSpec> aux;
+
+    /// Does any variable's source read du/dt?
+    ///
+    /// Asked once per run rather than per node: it gates a whole evaluation
+    /// pass, so a case that does not declare it pays nothing at all -- no extra
+    /// hook call, no extra storage, and an identical Jacobian.
+    bool anySourceReadsTimeDerivatives() const
+    {
+        return std::any_of(variables.begin(), variables.end(),
+                           [](FieldSpec const &v) { return v.sourceReadsTimeDerivatives; });
+    }
 
     Index numVars() const { return static_cast<Index>(variables.size()); }
     Index numScalars() const { return static_cast<Index>(scalars.size()); }

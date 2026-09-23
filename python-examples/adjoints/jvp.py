@@ -19,7 +19,7 @@ class NonlinearDiffusionParams(NamedTuple):
     SourceWidth: float
 
     @classmethod
-    def make(cls, SourceCentre, D, a ) -> "NonlinearDiffusionParams":
+    def make(cls, SourceCentre, D, a) -> "NonlinearDiffusionParams":
         return cls(
             SourceCentre=SourceCentre,
             D=D,
@@ -31,7 +31,7 @@ class NonlinearDiffusionParams(NamedTuple):
 
 class JAXAuxTest(VectorizedTransportSystem):
     def __init__(self, params):
-        super().__init__(MaNTA.numbered_spec(1, nAux = 1, lower=MaNTA.Neumann))
+        super().__init__(MaNTA.numbered_spec(1, nAux=1, lower=MaNTA.Neumann))
 
         self.params = params
 
@@ -105,7 +105,6 @@ class JAXAuxTest(VectorizedTransportSystem):
         u0 = self.InitialValue(index, x)
         return self.params.D * u0 * u0
 
-
     def createAdjointProblem(self):
         return self.adjointProblem
 
@@ -113,7 +112,7 @@ class JAXAuxTest(VectorizedTransportSystem):
 def runMaNTA(params):
     transportSystem = JAXAuxTest(params)
 
-    transportSystem.run(5.0)
+    transportSystem.run()
     G, G_p = transportSystem.getAdjointGradients()
     uout = transportSystem.runner.Get_profile(0)
     return G, G_p

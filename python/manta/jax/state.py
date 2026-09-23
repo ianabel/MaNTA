@@ -14,18 +14,27 @@ class State(eqx.Module):
     Variable: Float[ArrayLike, "..."]
     Derivative: Float[ArrayLike, "..."]
     Flux: Float[ArrayLike, "..."]
+    VariableDot: Float[ArrayLike, "..."]
     Aux: Float[ArrayLike, "..."]
     Scalars: Float[ArrayLike, "..."]
 
-    def __init__(self, Variable_, Derivative_, Flux_, Aux_, Scalars_):
+    # VariableDot is d(variable)/dt, and it is empty unless some variable
+    # declares `source_reads_time_derivatives`. Empty rather than zero so that
+    # Physics_Decorator's partition drops it, the way it drops Aux for a case
+    # with no auxiliary variables: a case that never asks for it pays nothing,
+    # and jax.grad of a source that never reads it has nothing to differentiate.
+    # It is last in the signature so that State(v, d, f, a, s) still means what
+    # it always did.
+    def __init__(self, Variable_, Derivative_, Flux_, Aux_, Scalars_, VariableDot_=None):
         self.Variable = Variable_
         self.Derivative = Derivative_
         self.Flux = Flux_
+        self.VariableDot = jnp.zeros((0, 0)) if VariableDot_ is None else VariableDot_
         self.Aux = Aux_
         self.Scalars = Scalars_
 
     @classmethod
-    def make_zero(cls, nVars, nAux, nScalars, nPoints):
+    def make_zero(cls, nVars, nAux, nScalars, nPoints, readsTimeDerivatives=False):
         zero_ = jnp.zeros((nPoints, nVars))
         zero_aux = jnp.zeros((nPoints, nAux)) if nAux > 0 else None
         zero_scalars = jnp.zeros((nScalars,)) if nScalars > 0 else None
@@ -35,6 +44,7 @@ class State(eqx.Module):
             Flux_=zero_,
             Aux_=zero_aux,
             Scalars_=zero_scalars,
+            VariableDot_=zero_ if readsTimeDerivatives else None,
         )
 
     @classmethod
@@ -49,6 +59,11 @@ class State(eqx.Module):
                 Flux_=jnp.asarray(manta_state.sigma),
                 Aux_=jnp.asarray(manta_state.phi),
                 Scalars_=jnp.asarray(manta_state.scalars),
+                # The pointwise view always has the field; it is zeros when no
+                # variable declares the flag, which partition keeps rather than
+                # drops. That is the one asymmetry with the batched form below,
+                # and it is the view's, not this layer's.
+                VariableDot_=jnp.asarray(manta_state.udot),
             )
 
         # Scalars stay (nScalars,) in both forms. They used to be broadcast to
@@ -57,12 +72,17 @@ class State(eqx.Module):
         # that maps None over Scalars, which is what they are -- global, not
         # per-point -- so the broadcast is no longer needed to make the shapes
         # line up under vmap.
+        # "VariableDot" is (nPoints, nVars) when a variable declares
+        # `source_reads_time_derivatives` and an empty array when none does.
+        # .get() rather than [] because a dict built by hand -- a test, a case
+        # that predates the key -- is a legitimate caller.
         return cls(
             Variable_=jnp.array(manta_state["Variable"]),
             Derivative_=jnp.array(manta_state["Derivative"]),
             Flux_=jnp.array(manta_state["Flux"]),
             Aux_=jnp.array(manta_state["Aux"]),
             Scalars_=jnp.array(manta_state["Scalars"]),
+            VariableDot_=jnp.array(manta_state.get("VariableDot", jnp.zeros((0, 0)))),
         )
 
     def to_manta(self):
@@ -80,11 +100,15 @@ class State(eqx.Module):
             "Flux": np.asarray(self.Flux),
             "Aux": np.asarray(self.Aux),
             "Scalars": np.asarray(Scalars_out),
+            "VariableDot": np.asarray(self.VariableDot),
         }
 
     @staticmethod
     def vmap_axes():
-        return State(0, 0, 0, 0, None)
+        # 0 for VariableDot as for every other per-point field. When it is empty
+        # the partition ahead of the vmap has already replaced it with None,
+        # which is not a leaf, so the axis here is simply not consulted.
+        return State(0, 0, 0, 0, None, 0)
 
 
 """

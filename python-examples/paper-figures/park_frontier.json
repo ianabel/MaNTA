@@ -1,0 +1,206 @@
+{
+ "manta": [
+  {
+   "cells": 4,
+   "k": 2,
+   "points": 12,
+   "nflux": 1092,
+   "nderiv": 300,
+   "visits": 116,
+   "error": 0.0012333565116865379
+  },
+  {
+   "cells": 4,
+   "k": 3,
+   "points": 16,
+   "nflux": 1520,
+   "nderiv": 400,
+   "visits": 120,
+   "error": 7.550338726670315e-05
+  },
+  {
+   "cells": 4,
+   "k": 4,
+   "points": 20,
+   "nflux": 1880,
+   "nderiv": 500,
+   "visits": 119,
+   "error": 3.406931693193745e-06
+  },
+  {
+   "cells": 4,
+   "k": 5,
+   "points": 24,
+   "nflux": 2376,
+   "nderiv": 624,
+   "visits": 125,
+   "error": 2.1208158040976864e-07
+  },
+  {
+   "cells": 4,
+   "k": 6,
+   "points": 28,
+   "nflux": 2744,
+   "nderiv": 700,
+   "visits": 123,
+   "error": 6.46146308551546e-09
+  },
+  {
+   "cells": 6,
+   "k": 2,
+   "points": 18,
+   "nflux": 1692,
+   "nderiv": 450,
+   "visits": 119,
+   "error": 0.00033985419568398963
+  },
+  {
+   "cells": 6,
+   "k": 3,
+   "points": 24,
+   "nflux": 2256,
+   "nderiv": 600,
+   "visits": 119,
+   "error": 1.5178861767966373e-05
+  },
+  {
+   "cells": 6,
+   "k": 4,
+   "points": 30,
+   "nflux": 2820,
+   "nderiv": 750,
+   "visits": 119,
+   "error": 3.927441231302914e-07
+  },
+  {
+   "cells": 6,
+   "k": 5,
+   "points": 36,
+   "nflux": 3528,
+   "nderiv": 900,
+   "visits": 123,
+   "error": 1.9715938300690866e-08
+  },
+  {
+   "cells": 6,
+   "k": 6,
+   "points": 42,
+   "nflux": 4200,
+   "nderiv": 1092,
+   "visits": 126,
+   "error": 3.0858791329465946e-10
+  },
+  {
+   "cells": 10,
+   "k": 2,
+   "points": 30,
+   "nflux": 2790,
+   "nderiv": 750,
+   "visits": 118,
+   "error": 7.196830783078e-05
+  },
+  {
+   "cells": 10,
+   "k": 3,
+   "points": 40,
+   "nflux": 3960,
+   "nderiv": 1040,
+   "visits": 125,
+   "error": 2.0718577346925255e-06
+  },
+  {
+   "cells": 10,
+   "k": 4,
+   "points": 50,
+   "nflux": 4900,
+   "nderiv": 1250,
+   "visits": 123,
+   "error": 2.853370452203349e-08
+  },
+  {
+   "cells": 10,
+   "k": 5,
+   "points": 60,
+   "nflux": 5940,
+   "nderiv": 1500,
+   "visits": 124,
+   "error": 9.97090914369433e-10
+  },
+  {
+   "cells": 10,
+   "k": 6,
+   "points": 70,
+   "nflux": 7000,
+   "nderiv": 1750,
+   "visits": 125,
+   "error": 7.997860284271168e-12
+  },
+  {
+   "cells": 20,
+   "k": 2,
+   "points": 60,
+   "nflux": 5640,
+   "nderiv": 1500,
+   "visits": 119,
+   "error": 9.17853160885278e-06
+  },
+  {
+   "cells": 20,
+   "k": 3,
+   "points": 80,
+   "nflux": 7840,
+   "nderiv": 2000,
+   "visits": 123,
+   "error": 1.3878500288742484e-07
+  },
+  {
+   "cells": 20,
+   "k": 4,
+   "points": 100,
+   "nflux": 10000,
+   "nderiv": 2500,
+   "visits": 125,
+   "error": 9.524206216973434e-10
+  },
+  {
+   "cells": 20,
+   "k": 5,
+   "points": 120,
+   "nflux": 12000,
+   "nderiv": 3000,
+   "visits": 125,
+   "error": 1.718171923857642e-11
+  },
+  {
+   "cells": 20,
+   "k": 6,
+   "points": 140,
+   "nflux": 14000,
+   "nderiv": 3500,
+   "visits": 125,
+   "error": 6.592952058082136e-14
+  }
+ ],
+ "fd": [
+  {
+   "N": 11,
+   "error": 0.006031901993882831
+  },
+  {
+   "N": 21,
+   "error": 0.0015067061392579641
+  },
+  {
+   "N": 41,
+   "error": 0.00037638132719163204
+  },
+  {
+   "N": 101,
+   "error": 6.018671640223473e-05
+  },
+  {
+   "N": 201,
+   "error": 1.504360893734867e-05
+  }
+ ]
+}

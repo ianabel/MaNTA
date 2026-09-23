@@ -1,14 +1,14 @@
 The Python interface
 ====================
 
-``make python`` builds the ``manta`` package -- a pybind11 extension,
+The ``_manta`` target builds the ``manta`` package -- a pybind11 extension,
 ``python/manta/_manta<suffix>.so``, wrapped by a thin Python layer. It does two
 separate jobs: it drives the solver from Python, and it lets a transport system
 be *written* in Python.
 
 .. code-block:: sh
 
-   make python
+   cmake --build build --target _manta
    pip install .                     # then `import manta` works anywhere
    python -c "import manta; print(manta.__doc__)"
 
@@ -88,12 +88,6 @@ Module contents
      - The objective value, without gradients.
    * - ``getAdjointGradients()``
      - :math:`\mathrm{d}G/\mathrm{d}p`.
-   * - ``wasRejected()``
-     - Whether the last run was abandoned by the ``ObjectiveDecreaseTolerance``
-       gate instead of integrated. Always ``False`` when that is not configured.
-   * - ``lastDGdt()``
-     - The :math:`\mathrm{d}G/\mathrm{d}t` values behind that decision, one per
-       objective.
    * - ``physics_case``
      - The registered C++ case name this ``Runner`` was built from, or ``""``
        when it was handed a transport system object.
@@ -363,8 +357,8 @@ The package ships ``py.typed`` and two stub files, so an editor completes
    * - File
      - Origin
    * - ``manta/_manta.pyi``
-     - **Generated** from the built extension by ``make stubs``. Do not edit --
-       ``make stubs-check`` fails if it no longer matches what the module
+     - **Generated** from the built extension by the ``stubs`` target. Do not
+       edit -- ``stubs-check`` fails if it no longer matches what the module
        exposes, and CI runs that.
    * - ``manta/__init__.pyi``
      - Hand-written, for the Python layer stubgen cannot see: the class-level

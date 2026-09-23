@@ -6,7 +6,7 @@ import collections.abc
 import numpy
 import numpy.typing
 import typing
-__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'Field', 'Grid', 'Mixed', 'Neumann', 'Runner', 'Scalar', 'State', 'StateField', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'load_physics_plugin', 'numbered_spec', 'physics_cases', 'registerPhysicsCase', 'run']
+__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'Field', 'Grid', 'Mixed', 'Neumann', 'Runner', 'Scalar', 'State', 'StateField', 'SteadyOutcome', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'load_physics_plugin', 'numbered_spec', 'physics_cases', 'registerPhysicsCase', 'run']
 class AdjointProblem:
     spatialParameters: bool
     def __init__(self) -> None:
@@ -123,7 +123,15 @@ class Field:
     name: str
     units: str
     upper: BoundaryCondition
-    def __init__(self, name: str, description: str = '', units: str = '', lower: BoundaryCondition = ..., upper: BoundaryCondition = ...) -> None:
+    def __init__(self, name: str, description: str = '', units: str = '', lower: BoundaryCondition = ..., upper: BoundaryCondition = ..., source_reads_time_derivatives: bool = False) -> None:
+        ...
+    @property
+    def source_reads_time_derivatives(self) -> bool:
+        """
+        Set when this variable's Sources reads state.udot. It is what makes udot be filled and dSources_dudot be asked for.
+        """
+    @source_reads_time_derivatives.setter
+    def source_reads_time_derivatives(self, arg0: bool) -> None:
         ...
 class Grid:
     @typing.overload
@@ -143,7 +151,13 @@ class Runner:
     @typing.overload
     def __init__(self, physics_case: str) -> None:
         ...
+    def abandon_steady(self) -> None:
+        ...
     def configure(self, arg0: dict) -> None:
+        ...
+    def continue_steady(self, estimate: bool = True) -> SteadyOutcome:
+        ...
+    def finish_steady(self) -> None:
         ...
     def getAdjointGradients(self) -> tuple:
         ...
@@ -155,7 +169,7 @@ class Runner:
         ...
     def get_address(self) -> int:
         ...
-    def lastDGdt(self) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
+    def objectiveEstimate(self) -> dict:
         ...
     @typing.overload
     def run(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
@@ -165,7 +179,9 @@ class Runner:
         ...
     def run_ss(self) -> None:
         ...
-    def wasRejected(self) -> bool:
+    def start_steady(self, estimate: bool = True) -> SteadyOutcome:
+        ...
+    def steadyStats(self) -> dict:
         ...
     @property
     def physics_case(self) -> str:
@@ -185,6 +201,11 @@ class State:
     """
     def __repr__(self) -> str:
         ...
+    @property
+    def geom(self) -> StateField:
+        """
+        the field model's geometry (derived, not an unknown)
+        """
     @property
     def phi(self) -> StateField:
         """
@@ -215,6 +236,11 @@ class State:
         """
         the variables
         """
+    @property
+    def udot(self) -> StateField:
+        """
+        d(variable)/dt; meaningful in Sources only
+        """
 class StateField:
     """
     One field of a State: indexable by position or by declared name.
@@ -228,6 +254,51 @@ class StateField:
     def __repr__(self) -> str:
         ...
     def __setitem__(self, arg0: typing.Any, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class SteadyOutcome:
+    """
+    Why a steady solve, or one slice of one, stopped.
+    
+    Members:
+    
+      NotRun : No steady solve has been taken on this solver.
+    
+      Converged : ||F|| fell below SteadyStateTolerance.
+    
+      OutOfSteps : The MaxContinuationSteps budget was spent. Not a failure: the state and the pseudo-time step reached are both good, and continue_steady() resumes from them.
+    
+      SolverFailed : KINSol failed in a way pseudo-transient damping cannot answer.
+    """
+    Converged: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.Converged: 1>
+    NotRun: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.NotRun: 0>
+    OutOfSteps: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.OutOfSteps: 2>
+    SolverFailed: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.SolverFailed: 3>
+    __members__: typing.ClassVar[dict[str, SteadyOutcome]]  # value = {'NotRun': <SteadyOutcome.NotRun: 0>, 'Converged': <SteadyOutcome.Converged: 1>, 'OutOfSteps': <SteadyOutcome.OutOfSteps: 2>, 'SolverFailed': <SteadyOutcome.SolverFailed: 3>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
         ...
 class SystemSpec:
     def __init__(self, variables: collections.abc.Sequence[Field], scalars: collections.abc.Sequence[Scalar] = [], aux: collections.abc.Sequence[Aux] = []) -> None:
@@ -300,7 +371,11 @@ class TransportSystem:
         ...
     def createAdjointProblem(self) -> AdjointProblem:
         ...
+    def dAuxG_dGeometry(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]", "flags.writeable"], arg2: State, arg3: typing.SupportsFloat | typing.SupportsIndex, arg4: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
     def dSigma(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: dict[typing.Sequence[float]], arg2: dict[typing.Sequence[float]], arg3: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], arg4: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def dSigmaFn_dGeometry(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]", "flags.writeable"], arg2: State, arg3: typing.SupportsFloat | typing.SupportsIndex, arg4: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     def dSigmaFn_dq(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]", "flags.writeable"], arg2: State, arg3: typing.SupportsFloat | typing.SupportsIndex, arg4: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
@@ -309,6 +384,8 @@ class TransportSystem:
     def dSigma_dPhi(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]", "flags.writeable"], arg2: State, arg3: typing.SupportsFloat | typing.SupportsIndex, arg4: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     def dSources(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: dict[typing.Sequence[float]], arg2: dict[typing.Sequence[float]], arg3: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], arg4: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def dSources_dGeometry(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]", "flags.writeable"], arg2: State, arg3: typing.SupportsFloat | typing.SupportsIndex, arg4: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     def dSources_dPhi(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]", "flags.writeable"], arg2: State, arg3: typing.SupportsFloat | typing.SupportsIndex, arg4: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
@@ -319,6 +396,8 @@ class TransportSystem:
     def dSources_dsigma(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]", "flags.writeable"], arg2: State, arg3: typing.SupportsFloat | typing.SupportsIndex, arg4: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     def dSources_du(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]", "flags.writeable"], arg2: State, arg3: typing.SupportsFloat | typing.SupportsIndex, arg4: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def dSources_dudot(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]", "flags.writeable"], arg2: State, arg3: typing.SupportsFloat | typing.SupportsIndex, arg4: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     def isLowerBoundaryDirichlet(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> bool:
         ...
@@ -341,6 +420,10 @@ class TransportSystem:
 def Mixed(a: typing.SupportsFloat | typing.SupportsIndex = 0.0, b: typing.SupportsFloat | typing.SupportsIndex = 0.0, d: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> BoundaryCondition:
     """
     A mixed/Robin boundary condition a u + b q + d sigma = c, where c is what LowerBoundary/UpperBoundary returns. sigma is the stored flux, which is -sigma_hat. At least one of b and d must be nonzero.
+    """
+def _test_dSigmaFn_dGeometry(sys: TransportSystem, i: typing.SupportsInt | typing.SupportsIndex, geom: typing.Annotated[numpy.typing.ArrayLike, numpy.float64, "[m, 1]"], x: typing.SupportsFloat | typing.SupportsIndex, t: typing.SupportsFloat | typing.SupportsIndex) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
+    """
+    Test support only: builds a State carrying the given geometry and calls the pointwise dSigmaFn_dGeometry dispatcher directly.
     """
 @typing.overload
 def getNodes(arg0: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], arg1: typing.SupportsInt | typing.SupportsIndex) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:

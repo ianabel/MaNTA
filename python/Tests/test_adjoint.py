@@ -505,10 +505,13 @@ def test_gradients_are_refused_when_no_adjoint_was_configured(tmp_path):
 
 
 def test_a_subclass_missing_the_vectorised_hooks_is_reported(tmp_path):
-    """PyAdjointProblem::dg throws by name when the override is absent.
+    """PyAdjointProblem throws, naming the hook, when an override is absent.
 
     The message matters: these are pure-virtual-in-practice methods with no C++
     fallback, and the failure otherwise surfaces deep inside the solve.
+
+    Which of the three is named is the adjoint solve's business, not this test's
+    -- all three are missing, so whichever it reaches first is the right answer.
     """
 
     class NoVectorisedHooks(MaNTA.AdjointProblem):
@@ -536,150 +539,8 @@ def test_a_subclass_missing_the_vectorised_hooks_is_reported(tmp_path):
 
     with pytest.raises(RuntimeError) as excinfo:
         runner.run(0.5)
-    assert "dg" in str(excinfo.value), str(excinfo.value)
-
-
-# ----------------------------------------------------- the dG/dt gate --
-#
-# ObjectiveDecreaseTolerance abandons a run after the initial condition is built
-# if the objective is already getting worse, so an optimisation sweep pays
-# initialisation instead of a whole transport solve for a bad step. The
-# convention is that G is maximised, so "worse" means falling.
-#
-# int 0.5 u^2 dx cannot drive this, which is worth saying because it is the
-# objective the rest of this file uses: its dg/du is u, and the initial condition
-# here is u = 0, so dG/dt would be exactly zero and neither verdict reachable. The
-# gate tests below use an objective linear in u instead.
-
-
-class SignedIntegralAdjoint(DiffusionAdjoint):
-    """G = sign * int u dx, so dG/dt at t = 0 is sign * int du/dt dx.
-
-    Inherits dgFndp, dSigma and dSources unchanged -- the gate does not use them,
-    but PyTransportSystem requires them to be present.
-    """
-
-    def __init__(self, transport_system, sign):
-        super().__init__(transport_system)
-        self.sign = sign
-
-    def gFn(self, gIndex, states, positions):
-        return self.sign * np.asarray(states["Variable"])[:, 0]
-
-    def dg(self, gIndex, states, positions):
-        V = np.asarray(states["Variable"])
-        dgdu = np.zeros_like(V)
-        dgdu[:, 0] = self.sign
-        zeros = np.zeros_like(V)
-        return {
-            "Variable": dgdu,
-            "Derivative": zeros,
-            "Flux": zeros,
-            "Aux": np.zeros((len(positions), 0)),
-            "Scalars": np.zeros(0),
-        }
-
-
-class GateDiffusion(ParametricDiffusion):
-    """ParametricDiffusion with a sign-selectable linear objective on it."""
-
-    def __init__(self, p, sign):
-        super().__init__(p)
-        self.sign = sign
-
-    def createAdjointProblem(self):
-        return SignedIntegralAdjoint(self, self.sign)
-
-
-# The steady state is u = S x(1-x) / (2 kappa), so int u dx = S / (12 kappa) --
-# the value a *completed* run's objective must take, and hence the evidence that
-# an accepted run really did integrate.
-def exact_integral_of_u(kappa, source):
-    return source / (12.0 * kappa)
-
-
-def gate_run(tmp_path, sign, **overrides):
-    system = GateDiffusion(np.array([KAPPA0, SOURCE0]), sign)
-    runner = MaNTA.Runner(system)
-    runner.configure(adjoint_config(tmp_path, **overrides))
-    runner.run(T_FINAL)
-    # Held so the trampoline's Python object outlives the call.
-    return runner, system
-
-
-def test_the_gate_rejects_a_worsening_objective(tmp_path):
-    runner, _ = gate_run(tmp_path, -1.0, ObjectiveDecreaseTolerance=1e-12)
-
-    assert runner.wasRejected()
-
-    dGdt = np.asarray(runner.lastDGdt())
-    assert dGdt.shape == (1,), dGdt.shape
-    assert dGdt[0] < 0.0, dGdt
-
-    # Rejection leaves the solver at the initial condition rather than
-    # synthesising an objective value, so G stays readable and reports G(t0) --
-    # here sign * int u dx with u = 0.
-    G = np.asarray(runner.G())
-    assert np.isfinite(G).all()
-    assert G[0] == pytest.approx(0.0, abs=1e-12), G
-
-    # getAdjointGradients() is deliberately not called: the adjoint solve happens
-    # inside integrate(), which never ran, so G_p was never computed.
-
-
-def test_the_gate_passes_an_improving_objective(tmp_path):
-    runner, _ = gate_run(tmp_path, +1.0, ObjectiveDecreaseTolerance=1e-12)
-
-    assert not runner.wasRejected()
-    assert np.asarray(runner.lastDGdt())[0] > 0.0
-
-    # And it genuinely integrated: G is the steady-state value, not G(t0) = 0.
-    G = np.asarray(runner.G())
-    assert G[0] == pytest.approx(exact_integral_of_u(KAPPA0, SOURCE0), rel=1e-4), G
-
-
-def test_without_the_tolerance_nothing_is_rejected(tmp_path):
-    """The same worsening objective, gate unarmed: the run must proceed."""
-    runner, _ = gate_run(tmp_path, -1.0)
-
-    assert not runner.wasRejected()
-
-    G = np.asarray(runner.G())
-    assert G[0] == pytest.approx(-exact_integral_of_u(KAPPA0, SOURCE0), rel=1e-4), G
-
-
-def test_a_negative_tolerance_is_rejected(tmp_path):
-    """Zero means absent, so reaching the setter with zero or less is an error."""
-    system = GateDiffusion(np.array([KAPPA0, SOURCE0]), -1.0)
-    runner = MaNTA.Runner(system)
-    # pybind11 maps std::logic_error to RuntimeError -- only invalid_argument,
-    # domain_error and the like become ValueError.
-    with pytest.raises(RuntimeError, match="cannot be zero or negative"):
-        runner.configure(adjoint_config(tmp_path, ObjectiveDecreaseTolerance=-1.0))
-
-
-def test_the_gate_verdict_does_not_depend_on_the_output_cadence(tmp_path):
-    """Defect 2 of origin/optimize-mode's version, kept out.
-
-    That one compared dt * dG/dt against its threshold with dt the netCDF output
-    cadence, so an I/O setting decided whether a step was rejected and
-    setOutputCadence(0.0) disarmed the gate entirely. Here delta_t must not reach
-    the decision.
-
-    Only the verdict and the sign are compared, not the values: delta_t is also
-    IDACalcIC's initial step guess, so the corrected initial condition -- and
-    therefore dG/dt -- may differ in the last digits between the two.
-    """
-    verdicts = []
-    for delta_t in (0.5, 50.0):
-        runner, _ = gate_run(
-            tmp_path, -1.0, delta_t=delta_t, ObjectiveDecreaseTolerance=1e-12
-        )
-        verdicts.append(runner.wasRejected())
-        assert np.asarray(runner.lastDGdt())[0] < 0.0, delta_t
-
-    assert verdicts[0] == verdicts[1], verdicts
-    assert all(verdicts), "a worsening objective should be rejected at either cadence"
+    message = str(excinfo.value)
+    assert any(hook in message for hook in ("dg", "dSigma", "dSources")), message
 
 
 # --------------------------------------------------- spatial parameters --
@@ -758,6 +619,45 @@ class SpatialObjectiveAdjoint(MaNTA.AdjointProblem):
 
     def getName(self, pIndex):
         return f"field{pIndex}"
+
+
+def test_a_transposed_dgfndp_is_reported_rather_than_aborting(tmp_path):
+    """A wrong-way-round dgFndp names itself instead of killing the process.
+
+    Neither wrong shape announces itself on its own. `checkShapeAndSet` is a plain
+    assignment outside a DEBUG build, so a mismatched one reaches Eigen and aborts
+    the process naming `Block<Matrix<double,-1,-1>,-1,-1,false>` and nothing about
+    MaNTA -- and where `np` happens to equal the node count nothing aborts at all:
+    the gradient is silently transposed and the run returns a plausible wrong
+    answer. So the orientation is checked where it arrives.
+    """
+
+    class TransposedSpatialAdjoint(SpatialObjectiveAdjoint):
+        def dgFndp(self, gIndex, states, positions):
+            return np.asarray(
+                super().dgFndp(gIndex, states, positions)
+            ).T.copy()
+
+    system = ParametricDiffusion(np.array([KAPPA0, SOURCE0]))
+    cfg = adjoint_config(tmp_path, Polynomial_degree=3, Grid_size=4)
+    nPoints = cfg["Grid_size"] * (cfg["Polynomial_degree"] + 1)
+    assert nPoints != NP_SPATIAL, (
+        "np and nPoints coincide here, so a transpose would be undetectable"
+    )
+
+    adjoint = TransposedSpatialAdjoint()
+    system.createAdjointProblem = lambda: adjoint
+
+    runner = MaNTA.Runner(system)
+    runner.configure(cfg)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        runner.run(T_FINAL)
+
+    message = str(excinfo.value)
+    assert "dgFndp" in message, message
+    assert f"({NP_SPATIAL}, {nPoints})" in message, message
+    assert "transpose" in message, message
 
 
 def test_spatial_gradients_keep_dgdp_in_the_layout_G_p_uses(tmp_path):

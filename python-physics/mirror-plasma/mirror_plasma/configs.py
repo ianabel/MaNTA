@@ -1,5 +1,5 @@
 from .config import MirrorPlasmaConfig
-from .ion_species import DeuteriumTritium
+from .ion_species import DeuteriumTritium, Deuterium
 import numpy as np
 
 CMFX = MirrorPlasmaConfig(
@@ -21,9 +21,11 @@ CMFX = MirrorPlasmaConfig(
     ParticleSourceWidth=0.1,
     ParticleSourceCenter=0.2,
     MagneticFieldSlope=0.0,
-    PlasmaVoltage=80e3,
-    ADCoefficient=0.2,
-    ADFinalCoeffs=[0.1, 0.01, 0.05, 0.1],
+    PlasmaVoltage=75e3,
+    # IonSpecies=Deuterium(),
+    ADCoefficient=0.1,
+    ADDecayRates=0.5 * np.ones((4,)),
+    ADFinalCoeffs=[0.2, 0.005, 0.01, 0.1],
 )
 
 CMFX1keV = MirrorPlasmaConfig(
@@ -43,6 +45,7 @@ CMFX1keV = MirrorPlasmaConfig(
     ParticleSourceHeight=100.0,
     ParticleSourceWidth=0.1,
     ParticleSourceCenter=0.2,
+    IonSpecies=Deuterium(),
     PlasmaVoltage=100e3,
     ADCoefficient=1.0,
 )
@@ -50,25 +53,30 @@ CMFX1keV = MirrorPlasmaConfig(
 Fusion = MirrorPlasmaConfig(
     0.1,
     0.5,
-    gamma=0.1,
-    gamma_d=1e-4,
-    gamma_h=0.1,
+    gamma=0.5,
+    gamma_d=1e-3,
+    gamma_h=1.0,
     InitialMachNumber=8.0,
     EdgeMachNumber=5.0,
-    EdgeDensity=0.02,
+    EdgeDensity=0.1,
+    EdgeElectronTemperature=0.4,
+    InitialElectronTemperatureHeight=1.0,
+    EdgeIonTemperature=0.4,
+    InitialIonTemperatureHeight=1.0,
     InitialDensityHeight=0.2,
-    NeutralDensity=5e12,
-    PlasmaVoltage=5.0e6,
+    NeutralDensity=1e13,
+    PlasmaVoltage=8.0e6,
     MagneticFieldStrength=4.5,
-    ParticleSourceHeight=20.0,
+    ParticleSourceHeight=10.0,
     ParticleSourceWidth=0.2,
-    Current=0.1,
-    PlasmaLength=4.0,
-    ParticleSourceCenter=0.4,
+    ParticleSourceCenter=0.3,
+    Current=0.01,
+    PlasmaLength=2.0,
     MirrorRatio=3.0,
+    MagneticFieldSlope=0.2,
     useNeutralsModel=True,
     IonSpecies=DeuteriumTritium(),
-    ADCoefficient=5.0,
-    ADDecayRates=0.5 * np.ones((4,)),
-    ADFinalCoeffs=[0.1, 0.2, 0.2, 0.1],
+    ADCoefficient=1.0,
+    ADDecayRates=10.0 * np.ones((4,)),
+    ADFinalCoeffs=[0.1, 0.01, 0.01, 5.0],
 )

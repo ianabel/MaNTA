@@ -39,6 +39,10 @@ What MaNTA can additionally do
 * **Steady states.** ``run_ss`` integrates until :math:`\mathrm{d}y/\mathrm{d}t`
   falls below a tolerance rather than to a fixed final time.
 * **Restarts.** Every run writes a restart file that a later run can resume from.
+* **Self-consistent magnetic fields.** A *field model* can join the system as a
+  coupled algebraic block, so that the geometry the transport physics reads and
+  the profiles that determine it are solved for together rather than in an outer
+  loop. See :doc:`field_coupling`.
 
 .. note::
 
@@ -69,6 +73,7 @@ subtly wrong — read :doc:`formulation` first.
 
    formulation
    superconvergence
+   field_coupling
 
 .. toctree::
    :maxdepth: 2
