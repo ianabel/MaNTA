@@ -19,14 +19,33 @@ physics per point.
 Where only the steady state is wanted, `SteadyStateSolver` chooses how it is
 reached, and the choice is worth an order of magnitude -- but only once
 `NewtonJacobianReuse` is out of the way, which on these fluxes matters more than
-the choice of method does. Visits per collocation point, measured on
-2026-09-22, for answers identical in every printed digit:
+the choice of method does. Visits per collocation point, measured 2026-09-23 at
+`SteadyStateTolerance = 1e-2` -- see below for why that and not something
+tighter -- with the relative L1 error each setting actually reached:
 
 | benchmark | `TimeMarch` | `PseudoTransient` 10 / 1 | `Newton` 10 / 1 |
 |---|---|---|---|
-| `park-convergence` | 120 | 10 / 10 | 5 / **5** |
-| `jardin-critical-gradient` | 183 | 137 / 22 | 161 / **15** |
-| `shestakov-nonlinear` | 257 | 621 / 44 | 646 / **37** |
+| `park-convergence` | 120 | 6 / 6 | 5 / **5** |
+| `jardin-critical-gradient` | 183 | 116 / 12 | 140 / **10** |
+| `shestakov-nonlinear` | 257 | 442 / 28 | 467 / **27** |
+| | | | |
+| `park` error | 7.6e-5 | 1.2e-4 / 1.2e-4 | 7.6e-5 / 7.6e-5 |
+| `jardin` error | 3.8e-16 | 3.3e-3 / 1.7e-3 | 3.3e-3 / 1.7e-3 |
+| `shestakov` error | 7.2e-3 | 1.6e-2 / 3.6e-3 | 1.6e-2 / 3.5e-3 |
+
+**Two of those ratios flatter the steady solvers, and the error rows say by how
+much.** `SteadyStateTolerance` is not a common currency between the columns. For
+`PseudoTransient` and `Newton` it bounds `||F||`; for `TimeMarch` it is only the
+*relative* weight in a test on `dlambda/dt * dt` whose absolute floor is
+hardcoded at 1e-3 (`Solver.cpp`), so that column barely moves with the key and
+cannot be asked for a cheaper, less accurate answer -- see `TODO`.
+
+Compared instead at matched accuracy, each method run until it reaches the state
+`TimeMarch` reaches, the factors are **24, 11 and 7** against the table's 24, 15
+and 9. Those are the defensible numbers, and what is useful about them is how
+little they move: the same comparison at `1e-11`, nine orders tighter, gives 24,
+12 and 7. Where the tolerance is set does not decide whether solving for the
+steady state beats integrating to one.
 
 The two numbers in each of the last two columns are `NewtonJacobianReuse = 10`,
 which is KINSOL's default, and `= 1`, a fresh Jacobian factorisation at every
@@ -223,13 +242,13 @@ that setting. The option to ask for them stays, for a transport problem of some
 other kind that needs the accuracy, but a default calibrated on a benchmark is
 calibrated on the wrong thing.
 
-**Which means every visits-per-point number in this file is measured at
-`SteadyStateTolerance = 1e-11`**, eight orders inside anything a real run needs,
-because that is what the benchmark scripts set. That is the right choice for
-comparing *methods* -- it is the algebraic solution being compared, not the
-tolerances -- and the wrong number to quote as what a production solve costs.
-At a realistic `1e-2`, `shestakov` direct is 1920 rather than 2460 and the
-h+k ladder 1028 rather than 1784.
+The table at the top of this file is measured at `1e-2` for that reason, and
+`steady_modes.py` takes `MANTA_STEADY_TOL` if a different regime is wanted. The
+**ladder** measurements in this section are still at `1e-11`, deliberately:
+their subject is the ladder rather than the tolerance, and holding the tolerance
+at a point where every rung converges fully is what isolates it. At `1e-2`
+`shestakov` direct is 1920 rather than 2460 and the h+k ladder 1028 rather than
+1784, so the ladder's advantage survives the change.
 
 ### Why the tolerance is not chosen automatically
 

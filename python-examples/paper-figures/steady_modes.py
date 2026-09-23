@@ -5,6 +5,7 @@ the resolutions the caption states: Park on 4 cells, Jardin and Shestakov on 10,
 all at k = 3.  Each row's configuration is copied from that example's own
 benchmark.py `solve()`, with only `SteadyStateSolver` varied.
 """
+import os
 import pathlib
 import sys
 
@@ -13,6 +14,16 @@ import manta
 
 EX = str(pathlib.Path(__file__).resolve().parent.parent)
 MODES = ("TimeMarch", "PseudoTransient", "Newton")
+
+
+# The tolerance every row is measured at. 1e-2 rather than something tiny, and
+# the choice is the point: a relative error of 5e-3 is already better than a
+# plasma transport run can expect, because the model producing sigma is not that
+# good, so converging the algebra past that is refining a number the physics
+# cannot support. Set MANTA_STEADY_TOL to measure a different regime -- the
+# table was taken at 1e-11 once, which compares the *methods* at a converged
+# algebraic solution and is eight orders inside anything a real run needs.
+TOLERANCE = float(os.environ.get("MANTA_STEADY_TOL", "1.0e-2"))
 
 
 def run(case, ncells, k, extra, sample, exact, mode):
@@ -24,7 +35,7 @@ def run(case, ncells, k, extra, sample, exact, mode):
         "Lower_boundary": 0.0,
         "Relative_tolerance": 1.0e-6,
         "Absolute_tolerance": 1.0e-3,
-        "SteadyStateTolerance": 1.0e-11,
+        "SteadyStateTolerance": TOLERANCE,
         "SteadyStateSolver": mode,
         "WriteOutput": False,
         "WriteDatFile": False,
@@ -83,7 +94,8 @@ def main():
                 rows.append((name, ncells, k, mode, None, None, None, str(e)))
 
     print()
-    print("Visits per collocation point to reach the steady state")
+    print(f"Visits per collocation point to reach the steady state "
+          f"(SteadyStateTolerance = {TOLERANCE:g})")
     print(f"  {'problem':>10} {'cells':>5} {'k':>2} {'mode':>16} "
           f"{'flux calls':>11} {'deriv pts':>10} {'visits':>7} {'error':>12}")
     for name, ncells, k, mode, nflux, nderiv, visits, err in rows:

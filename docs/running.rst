@@ -604,16 +604,16 @@ three at :math:`k = 3`.
      - ``Newton``
    * - ``park-convergence``
      - 120
-     - **10**
+     - **6**
      - **5**
    * - ``jardin-critical-gradient``
      - 183
-     - **137**
-     - 161
+     - **116**
+     - 140
    * - ``shestakov-nonlinear``
      - **257**
-     - 621
-     - 646
+     - 442
+     - 467
 
 Three things a steady solve does not pay for account for a constant few
 evaluations of those two columns, and none of them for the order of magnitude in
