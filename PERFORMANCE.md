@@ -184,11 +184,50 @@ each of those rungs pays an iteration instead, which costs more than was saved
 below.
 
 The general point is that the classical nested-iteration advice -- solve each
-level only to its own discretisation error -- does not transfer. It assumes the
-coarse levels are where the work is. Here a good ladder makes them cheap by
-construction (two cells at `k = 1` is a few per cent of the budget), so there is
-almost nothing to save by under-solving them, and the thing they buy above them
-is worth much more. Hence no per-rung tolerance key.
+level only to its own discretisation error -- does not transfer to the *rungs*.
+It assumes the coarse levels are where the work is. Here a good ladder makes
+them cheap by construction (two cells at `k = 1` is a few per cent of the
+budget), so there is almost nothing to save by under-solving them, and the thing
+they buy above them is worth much more. Hence no per-rung tolerance key.
+
+**Applied to the tolerance as a whole, though, the same advice is exactly
+right**, and that is a separate question from the ramp. Loosening every rung
+together, error measured against the closed form:
+
+| benchmark | IC | | `1e-11` | `1e-4` | saving | accuracy |
+|---|---|---|---|---|---|---|
+| `jardin` | own | direct | 900, 3.5e-15 | 660, 3.6e-05 | 27% | **10 orders worse** |
+| | | ladder | 252, 2.6e-15 | 244, 1.5e-08 | 3% | 7 orders worse |
+| `jardin` | poor | direct | 1860, 7.9e-15 | 1500, 1.5e-05 | 19% | 10 orders worse |
+| | | ladder | 260, 2.6e-15 | 252, 1.5e-08 | 3% | 7 orders worse |
+| `shestakov` | own | direct | 2460, 3.15e-3 | 2220, 3.13e-3 | 10% | **unchanged** |
+| | | ladder | 1784, 3.15e-3 | 1320, 3.15e-3 | **26%** | **unchanged** |
+| `shestakov` | poor | direct | 6420, 3.15e-3 | 6060, 3.12e-3 | 6% | unchanged |
+| | | ladder | 1692, 3.15e-3 | 1352, 3.15e-3 | **20%** | **unchanged** |
+
+The two benchmarks are at opposite ends of the only thing that matters here,
+which is whether the discretisation error or the algebraic error dominates.
+Jardin's exact steady state is linear, so ten cells at `k = 5` resolve it to
+round-off and the steady tolerance *is* the accuracy: loosening it to `1e-4`
+buys 27% and costs ten orders. Shestakov's discretisation error at the same
+resolution is `3.15e-3`, so **every digit below about `1e-4` is being spent
+refining an algebraic solution that is already three orders inside the
+discretisation error** -- and removing that spend changes the answer in the
+third significant figure of nothing.
+
+So set the steady tolerance from the discretisation error rather than from zero.
+The estimator is to hand: `u* - u_h` is what `DegreeAdaptation` already uses, and
+it is computed for every run with `k >= 1` whether or not the flag is on.
+
+Two further readings of that table. The saving is **larger on the ladder than on
+the direct solve** for Shestakov (26% against 10%), because a ladder spends its
+budget across several rungs and the tolerance binds on each; on Jardin it is
+smaller (3% against 27%), because there the rungs above the first already exit
+at the already-converged test and there is nothing left for the tolerance to
+relax. And `jardin`'s laddered answer at `1e-4` is three orders *better* than
+the direct solve's at the same tolerance -- 1.5e-8 against 3.6e-5 -- for a third
+of the calls, because the coarse rung overshoots its tolerance and everything
+above it is free.
 
 ## Superconvergence narrows the Newton basin
 
