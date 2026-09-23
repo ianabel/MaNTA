@@ -43,6 +43,11 @@ class PlasmaConstants(eqx.Module):
         self.B0 = _B0
         self.cs0 = jnp.sqrt(2 * self.T0 / self.IonSpecies.mass)
 
+        print(
+            f"Normalizing particle rate: {self.DensityEquationNormalization()} #/m^3/s"
+        )
+        print(f"Normalizing heat rate: {self.HeatEquationNormalization()} W/m^3")
+
     def ReferenceElectronCollisionTime(self):
         LogLambdaRef = 24.0 - jnp.log(self.n0cgs) / 2.0 + jnp.log(self.T0eV)
         return (
@@ -148,9 +153,8 @@ class PlasmaConstants(eqx.Module):
         return IonHeating / self.HeatEquationNormalization()
 
     def FusionRate(self, n, Ti):
-        return self.IonSpecies.FusionRate(n * self.n0cgs, Ti * self.T0eV/ 1000.0) * 1e6
+        return self.IonSpecies.FusionRate(n * self.n0cgs, Ti * self.T0eV / 1000.0) * 1e6
 
     def AlphaHeating(self, n, Ti):
         Factor = 3.5e6 * self.T0
         return Factor * self.FusionRate(n, Ti)
-

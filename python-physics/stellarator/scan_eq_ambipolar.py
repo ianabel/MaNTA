@@ -36,36 +36,40 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
 st_config = {
     "ParticleSourceCenter": 0.0,
-    "ParticleSourceHeight": 0.02,
-    "ParticleSourceWidth": 0.25,
+    "ParticleSourceHeight": 1.25e-2,
+    "ParticleSourceWidth": 0.45,
     "NBICenter": 0.0,
-    "NBIPower": 0.15,
-    "NBIWidth": 0.25,
+    "NBIPower": 0.4,
+    "NBIWidth": 0.3,
     "ECHCenter": 0.0,
-    "ECHPower": 0.15,
-    "ECHWidth": 0.25,
+    "ECHPower": 0.04,
+    "ECHWidth": 0.26,
     "EdgeTemperature": 0.2,
-    "EdgeDensity": 0.3,
+    "EdgeDensity": 0.2,
+    "n0": 1.0,
+    "T0": 1.0,
     "evolveDensity": True,
     "useBatching": True,
 }
-# runner = MaNTA.Runner(st)
+
+
+eq_name = "qa"
 
 rho_upper = 1.0
 rtol = 1e-2
-atol = 1e-4
-# nodes = [0.0, 0.4, 0.6, 0.8, 0.95, 1.0]
-# nodes = [0.0,0.5, 0.75, 0.9, 1.0]
+atol = 1e-3
+# nodes = [0.0, 0.4, 0.6, 0.75, 0.95, 1.0]
 npoints = 8
 degree = 3
-base = 1.5
-tau = 100.0
-nodes = 1 - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 1)
-nodes = np.concatenate(([0], nodes, [1]))
+base = 1.6
+tau = 1.0
+#
+nodes = 1 - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
+nodes = np.concatenate(([0, 0.1], nodes, [1]))
 print(nodes)
-# # %%
+# # %%c
 solver_config = {
-    "OutputFilename": "stellarator_w7x",
+    "OutputFilename": "stellarator_" + eq_name,
     "Polynomial_degree": degree,
     "Grid_points": nodes,
     "Grid_size": len(nodes) - 1,
@@ -77,7 +81,7 @@ solver_config = {
     "delta_t": 1.0,
     "initialTimestep": 1e-2,
     "MinStepSize": 1e-9,
-    "SteadyStateTolerance": 0.001,
+    "SteadyStateTolerance": 1e-4,
     "AggressiveTimesteps": False,
     "WriteDatFile": True,
     "restart": False,
@@ -86,7 +90,8 @@ solver_config = {
     "SteadyStateSolver": "PseudoTransient",
     "SteadyStateDiagnostics": True,
     "SteadyStateStepDiagnostics": True,
-    "PseudoTransientSERRate": 2.0,
+    "PseudoTransientSERRate": 1.0,
+    # "PseudoTransientSERFloor": 1.5,
 }
 
 
@@ -102,29 +107,40 @@ points = MaNTA.getNodes(
 )
 
 yancc_rho = jnp.array(points)
-
 yancc_ntheta = 17
 yancc_nzeta = 25
 
 yancc_res = {"na": 45, "nx": 7}
+
 ## to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
 # + axis and lcfs
 # initial pressure is all zeros, can change this if desired
 pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 
-eq = desc.examples.get("W7-X")
-
-# Reduce the number of modes (not sure if this is a good thing to do)
-eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
-eq = eq.solve(x_scale="ess")[0]
+# # eq = desc.examples.get("precise_QA")
+# # eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.86))
+# # Reduce the number of modes (not sure if this is a good thing to do)
+# eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
+# #
+# # eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
+# # eq = Equilibrium(
+# #     M=4, N=4, Psi=0.1, surface=eq.get_surface_at(rho=1), pressure=desc_pressure
+# # )
+#
+# eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
+#
+# eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
+eq = desc.io.load("eq_omnigenity.h5")
+# eq.solve(x_scale="ess")[0]
 eq_init = eq.copy()
 yancc_wrapper = yancc_data.from_eq(
     points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
-
-# st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-# st.run()
+# with jax.log_compiles(True):
+st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+st.run()
+#
 
 
 def make_tangent(params, idx, key="Rb_lmn"):
@@ -151,7 +167,7 @@ def make_tangent(params, idx, key="Rb_lmn"):
 
 
 solver_config = {
-    "OutputFilename": "stellarator_w7x",
+    "OutputFilename": "stellarator_" + eq_name,
     "Polynomial_degree": degree,
     "Grid_points": nodes,
     "Grid_size": len(nodes) - 1,
@@ -161,7 +177,7 @@ solver_config = {
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
-    "initialTimestep": 1e-6,
+    "initialTimestep": 1e-2,
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 0.001,
     "AggressiveTimesteps": False,
@@ -172,6 +188,7 @@ solver_config = {
     "SteadyStateSolver": "Newton",
     "SteadyStateDiagnostics": True,
     "SteadyStateStepDiagnostics": True,
+    "MaxRejectedSteps": 0,
     "PseudoTransientSERRate": 2.0,
 }
 
@@ -288,7 +305,7 @@ o1 = ObjectiveFunction(objectives)
 o1.build(use_jit=False)
 obj = ProximalProjection(o1, ObjectiveFunction(constraints), eq)
 obj.build()
-N = 2
+N = 1
 M = 1
 # Get the index of a mode
 idx = eq.surface.R_basis.get_idx(L=0, N=N, M=M)
@@ -299,13 +316,13 @@ grads = []
 G = []
 
 # Sweep in the proximity of initial value
-f = 0.2
+f = 0.1
 delta = f * jnp.abs(v0)
 start = v0 - delta
 end = v0 + delta
 # start = -0.04
 # end = 0.02
-sweep = jnp.linspace(start, end, 15)
+sweep = jnp.linspace(start, end, 8)
 df = sweep[1] - sweep[0]
 
 
@@ -340,15 +357,15 @@ ax.set_xlabel(rf"$R_{{0, {M}, {N}}}$")
 ax.set_ylabel(rf"$dG/dR_{{0, {M}, {N}}}$")
 ax.axvline(v0, color="k", linestyle="--")
 ax.legend()
-fig.savefig(f"figs/fd_vs_adj_w7x_{M}_{N}.png")
+fig.savefig(f"figs/fd_vs_adj_{eq_name}_{M}_{N}.png")
 fig, ax = plt.subplots()
 ax.plot(sweep, G)
 ax.set_xlabel(rf"$R_{{0, {M}, {N}}}$")
 ax.set_ylabel("G")
 ax.axvline(v0, color="k", linestyle="--")
-fig.savefig(f"figs/G_w7x_{M}_{N}.png")
+fig.savefig(f"figs/G_{eq_name}_{M}_{N}.png")
 eqs.save("sweep.h5")
 plt.figure()
 fig, ax = plot_comparison(eqs=eqs[0:-1:4])
-fig.savefig(f"figs/eqs_w7x{M}_{N}.png")
+fig.savefig(f"figs/eqs_{eq_name}_{M}_{N}.png")
 print("done")

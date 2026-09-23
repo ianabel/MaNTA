@@ -17,6 +17,7 @@ class StellaratorConfig(eqx.Module):
     EdgeDensity: float
     n0: float
     T0: float
+    FusionFactor: float
     evolveDensity: bool
     useSharding: bool
     useBatching: bool
@@ -36,6 +37,7 @@ class StellaratorConfig(eqx.Module):
         ParticleSourceHeight=1.0,
         T0=None,
         n0=None,
+        FusionFactor=1.0,
         evolveDensity=False,
         useSharding=True,
         useBatching=False,
@@ -60,6 +62,7 @@ class StellaratorConfig(eqx.Module):
             self.n0 = self.EdgeDensity
         else:
             self.n0 = n0
+        self.FusionFactor = FusionFactor
         self.evolveDensity = evolveDensity
         self.useSharding = useSharding
         self.useBatching = useBatching

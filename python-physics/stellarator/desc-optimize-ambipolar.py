@@ -1,5 +1,11 @@
+import os
+
+# uncomment to run test flux
+# os.environ["TEST_STELLARATOR"] = "true"
 from stellarator_multichannel import StellaratorTransport
 from objective2 import make_objective
+
+# os.environ.pop("TEST_STELLARATOR", None)
 from yancc_wrapper2 import yancc_data
 import matplotlib.pyplot as plt
 from desc.profiles import SplineProfile
@@ -27,7 +33,6 @@ import jax.numpy as jnp
 import numpy as np
 import jax
 import manta as MaNTA
-import os
 
 
 # %%
@@ -36,21 +41,22 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
 fname = "stellarator_opt_amb"
 
-eq_name = "eq_amb"
+eq_name = "eq_amb2"
+
 st_config = {
     "ParticleSourceCenter": 0.0,
-    "ParticleSourceHeight": 0.2,
-    "ParticleSourceWidth": 0.6,
+    "ParticleSourceHeight": 1.25e-2,
+    "ParticleSourceWidth": 0.45,
     "NBICenter": 0.0,
-    "NBIPower": 0.5,
-    "NBIWidth": 0.4,
+    "NBIPower": 0.4,
+    "NBIWidth": 0.3,
     "ECHCenter": 0.0,
-    "ECHPower": 0.5,
-    "ECHWidth": 0.4,
+    "ECHPower": 0.04,
+    "ECHWidth": 0.26,
     "EdgeTemperature": 0.2,
     "EdgeDensity": 0.2,
-    "n0": 0.21,
-    "T0": 0.21,
+    "n0": 1.0,
+    "T0": 1.0,
     "evolveDensity": True,
     "useBatching": True,
 }
@@ -62,11 +68,11 @@ atol = 1e-3
 # nodes = [0.0, 0.4, 0.6, 0.75, 0.95, 1.0]
 npoints = 8
 degree = 3
-base = 1.5
+base = 1.6
 tau = 100.0
 #
-nodes = 1 - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 1)
-nodes = np.concatenate(([0], nodes, [1]))
+nodes = 1 - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
+nodes = np.concatenate(([0, 0.1], nodes, [1]))
 # nodes = np.linspace(0, 1.0, npoints + 1)
 print(nodes)
 # # %%
@@ -81,17 +87,18 @@ solver_config = {
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
-    "initialTimestep": 1e-2,
+    "initialTimestep": 0.01,
     "MinStepSize": 1e-9,
-    "SteadyStateTolerance": 5e-3,
+    "SteadyStateTolerance": 5e-5,
     "AggressiveTimesteps": False,
     "WriteDatFile": True,
     "SteadyStateDiagnostics": True,
     "SteadyStateStepDiagnostics": True,
-    "MaxRejectedSteps": 4,
+    "MaxRejectedSteps": 10,
+    "restart": True,
     "zeroFlux": True,
     "solveAdjoint": False,
-    "PseudoTransientSERRate": 2.0,
+    "PseudoTransientSERRate": 1.0,
 }
 
 
@@ -120,22 +127,35 @@ yancc_res = {"na": 45, "nx": 7}
 pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 #
-surf = FourierRZToroidalSurface(
-    R_lmn=[1, 0.125, 0.1],
-    Z_lmn=[-0.125, -0.1],
-    modes_R=[[0, 0], [1, 0], [0, 1]],
-    modes_Z=[[-1, 0], [0, -1]],
-    NFP=4,
-)
+
 # # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
 # # default is zero pressure and zero current
-eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
+# eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
 # # this is usually all you need to solve a fixed boundary equilibrium
-eq = eq.solve(x_scale="ess")[0]
+# eq = eq.solve(x_scale="ess")[0]
 # print(pressure_rho)
-# eq = desc.io.load(eq_name + "_all_equilibria.h5")[-1]
-# desc_pressure = eq.get_profile('p')
-eqs = EquilibriaFamily(eq)
+#
+# surf = FourierRZToroidalSurface(
+#     R_lmn=[1, 0.125, 0.1],
+#     Z_lmn=[-0.125, -0.1],
+#     modes_R=[[0, 0], [1, 0], [0, 1]],
+#     modes_Z=[[-1, 0], [0, -1]],
+#     NFP=4,
+# )
+# # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
+# # default is zero pressure and zero current
+# eq = Equilibrium(M=8, N=8, Psi=0.1, surface=surf, pressure=desc_pressure)
+#
+eqs = desc.io.load(eq_name + "_all_equilibria.h5")
+#
+# eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
+# #
+# eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
+# eq.pressure = desc_pressure
+# eq = eq.solve(x_scale="ess")[0]
+# # desc_pressure = eq.get_profile('p')
+# eqs = EquilibriaFamily(eq)
+eq = eqs[-1].copy()
 eq_init = eq.copy()
 
 V0 = eq.compute("V")["V"]
@@ -148,6 +168,7 @@ yancc_wrapper = yancc_data.from_eq(
 #
 # # # %%
 # with jax.log_compiles(True):
+#
 st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
 st.run()
 
@@ -242,7 +263,7 @@ solver_config = {
     "WriteDatFile": True,
     "restart": True,
     "zeroFlux": True,
-    "SteadyStateTolerance": 5e-3,
+    "SteadyStateTolerance": 1e-4,
     "SteadyStateSolver": "Newton",
     "SteadyStateDiagnostics": True,
     "MaxRejectedSteps": 0,
@@ -298,9 +319,10 @@ def objective_from_user_fun(grid, data):
     fields = jax.vmap(lambda d: yancc.field.Field(**d, NFP=grid.NFP))(yancc_dat)
 
     desc_pressure = grid.compress(data["p"], surface_label="rho")
-    stored_energy, manta_pressure = manta_objective((fields, Vp, Vpp), grid)
+
+    g, manta_pressure = manta_objective((fields, Vp, Vpp), grid)
     print("------------ STORED ENERGY ----------------")
-    print(stored_energy)
+    print(g)
     print("-------------------------------------------")
 
     # not sure if the sign makes the difference here
@@ -312,7 +334,7 @@ def objective_from_user_fun(grid, data):
 
     # optimization is easiest for least squares objectives, so instead of maximizing
     # stored energy we minimize 1/stored_energy^2 (the squaring happens later)
-    return -stored_energy # jnp.append(pressure_error, 1 / stored_energy)
+    return 1 / g  # jnp.append(pressure_error, 1 / stored_energy)
 
 
 yancc_desc_grid = yancc_wrapper.grid
@@ -369,7 +391,7 @@ stored_energy_weight = 1.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()
-max_it = 20
+max_it = 1
 
 eqfam = EquilibriaFamily(eq)
 # ks = [1, 2, eq.M + 1]
@@ -381,12 +403,12 @@ eqfam = EquilibriaFamily(eq)
 objectives = [
     # AspectRatio(eq=eq, target=6, weight=10),
     obj_mirror_ratio,
-    Volume(eq=eqfam[-1], target=V0, weight=10.0),
+    Volume(eq=eq, target=V0, weight=10.0),
     # RotationalTransform(eq=eq, target=0.42, weight=10),
     ObjectiveFromUser(
         objective_from_user_fun,
         eqfam[-1],
-        target=-jnp.inf,
+        target=0.0,
         weight=objective_from_user_weight,
         grid=yancc_desc_grid,
         deriv_mode="fwd",
@@ -397,8 +419,8 @@ objectives = [
 objective = ObjectiveFunction(objectives)
 objective.build(use_jit=False)
 
-k = 2
-
+k = 4
+#
 R_modes = np.vstack(
     (
         [0, 0, 0],

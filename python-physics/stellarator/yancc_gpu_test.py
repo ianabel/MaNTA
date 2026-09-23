@@ -17,6 +17,11 @@ import matplotlib.pyplot as plt
 from stellarator_multichannel import StellaratorTransport
 from netCDF4 import Dataset
 from interpax import Akima1DInterpolator
+from desc.equilibrium import Equilibrium
+
+from desc.profiles import SplineProfile
+
+from functools import partial
 
 # explain cache misses
 import yancc
@@ -34,7 +39,7 @@ rtol = 1e-2
 atol = 1e-5
 # nodes = [0.0,0.5, 0.75, 0.9, 1.0]
 npoints = 4
-degree = 4
+degree = 3
 base = 1.6
 tau = 10.0
 nodes = 1 - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 1)
@@ -65,44 +70,81 @@ points = MaNTA.getNodes(
     nodes,
     solver_config["Polynomial_degree"],
 )
-eq = desc.examples.get("W7-X")
-
+yancc_rho = points
+pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
+desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
+eq = desc.examples.get("precise_QA")
+# eq = desc.examples.get("W7-X")
+eq = Equilibrium(
+    M=4, N=4, Psi=0.1, surface=eq.get_surface_at(rho=1), pressure=desc_pressure
+)
+eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
 # Reduce the number of modes (not sure if this is a good thing to do)
-eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
+# eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
+
+# eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
 eq = eq.solve(x_scale="ess")[0]
 eq_init = eq.copy()
 
 
-def make_test_state(rho, fname="stellarator_w7x"):
-    data = Dataset(fname + ".nc", "r")
-    x = jnp.array(data.variables["x"][:])
-    n = Akima1DInterpolator(
-        x, jnp.array(data.groups["Density"].variables["u"][:][-1, :])
-    )(rho)
-    ui = Akima1DInterpolator(
-        x, jnp.array(data.groups["IonEnergy"].variables["u"][:][-1, :])
-    )(rho)
-    ue = Akima1DInterpolator(
-        x, jnp.array(data.groups["ElectronEnergy"].variables["u"][:][-1, :])
-    )(rho)
-    dndx = Akima1DInterpolator(
-        x, jnp.array(data.groups["Density"].variables["q"][:][-1, :])
-    )(rho)
-    duidx = Akima1DInterpolator(
-        x, jnp.array(data.groups["IonEnergy"].variables["q"][:][-1, :])
-    )(rho)
-    duedx = Akima1DInterpolator(
-        x, jnp.array(data.groups["ElectronEnergy"].variables["q"][:][-1, :])
-    )(rho)
-    Er = Akima1DInterpolator(x, jnp.array(data.variables["Er"][:][-1, :]))(rho)
-    data.close()
-    Variable = jnp.stack([n, ui, ue]).transpose()
-    Derivative = jnp.stack([dndx, duidx, duedx]).transpose()
+#
+#
+# def make_test_state(rho, fname="stellarator_w7x"):
+#     data = Dataset(fname + ".nc", "r")
+#     x = jnp.array(data.variables["x"][:])
+#     n = Akima1DInterpolator(
+#         x, jnp.array(data.groups["Density"].variables["u"][:][-1, :])
+#     )(rho)
+#     ui = Akima1DInterpolator(
+#         x, jnp.array(data.groups["IonEnergy"].variables["u"][:][-1, :])
+#     )(rho)
+#     ue = Akima1DInterpolator(
+#         x, jnp.array(data.groups["ElectronEnergy"].variables["u"][:][-1, :])
+#     )(rho)
+#     dndx = Akima1DInterpolator(
+#         x, jnp.array(data.groups["Density"].variables["q"][:][-1, :])
+#     )(rho)
+#     duidx = Akima1DInterpolator(
+#         x, jnp.array(data.groups["IonEnergy"].variables["q"][:][-1, :])
+#     )(rho)
+#     duedx = Akima1DInterpolator(
+#         x, jnp.array(data.groups["ElectronEnergy"].variables["q"][:][-1, :])
+#     )(rho)
+#     Er = Akima1DInterpolator(x, jnp.array(data.variables["Er"][:][-1, :]))(rho)
+#     data.close()
+#     Variable = jnp.stack([n, ui, ue]).transpose()
+#     Derivative = jnp.stack([dndx, duidx, duedx]).transpose()
+#     state = {
+#         "Variable": Variable,
+#         "Derivative": Derivative,
+#         "Flux": jnp.zeros(Variable.shape),
+#         "Aux": Er,
+#         "Scalars": [],
+#     }
+#     return state
+#
+
+
+def make_test_state(rho, st):
+    Variable = jnp.stack(
+        [st.InitialValue(0, rho), st.InitialValue(1, rho), st.InitialValue(2, rho)]
+    ).transpose()
+    Derivative = jnp.stack(
+        [
+            jax.vmap(partial(st.InitialDerivative, 0))(rho),
+            jax.vmap(partial(st.InitialDerivative, 1))(rho),
+            jax.vmap(partial(st.InitialDerivative, 2))(rho),
+        ]
+    ).transpose()
+
+    def Er(rho):
+        return 0.0 * rho
+
     state = {
         "Variable": Variable,
         "Derivative": Derivative,
         "Flux": jnp.zeros(Variable.shape),
-        "Aux": Er,
+        "Aux": jnp.atleast_2d(Er(rho)).transpose(),
         "Scalars": [],
     }
     return state
@@ -122,17 +164,23 @@ def test_multi_gpu():
 
 def run_yancc_at_res(nt, nz, na, nx):
     print(f"running at resolution nt={nt}, nz={nz}, na={na}, nx={nx}")
+
     st_config = {
-        "ParticleSourceCenter": 0.1,
-        "ParticleSourceHeight": 0.01,
-        "ParticleSourceWidth": 0.4,
-        "HeatSourceCenter": 0.1,
-        "HeatSourceHeight": 0.1,
-        "HeatSourceWidth": 0.2,
+        "ParticleSourceCenter": 0.0,
+        "ParticleSourceHeight": 0.5,
+        "ParticleSourceWidth": 0.6,
+        "NBICenter": 0.0,
+        "NBIPower": 10.0,
+        "NBIWidth": 0.4,
+        "ECHCenter": 0.0,
+        "ECHPower": 0.5,
+        "ECHWidth": 0.4,
         "EdgeTemperature": 0.2,
-        "EdgeDensity": 0.3,
-        "n0": 0.5,
+        "EdgeDensity": 0.2,
+        "n0": 1.0,
+        "T0": 10.0,
         "evolveDensity": True,
+        "useBatching": False,
     }
 
     config = {
@@ -146,21 +194,18 @@ def run_yancc_at_res(nt, nz, na, nx):
     # + axis and lcfs
     # initial pressure is all zeros, can change this if desired
 
-    scale = 1.0
-    yancc_wrapper = yancc_data.from_eq(
-        points, scale=scale, eq=eq_init, nt=nt, nz=nz, **yancc_res
-    )
+    yancc_wrapper = yancc_data.from_eq(points, eq=eq_init, nt=nt, nz=nz, **yancc_res)
 
     st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-    states = make_test_state(points)
+    states = make_test_state(points, st)
     return st.ComputePhysics(states, points, 0.0)
 
 
 def test_yancc_res():
-    low_res = (13, 23, 43, 5)
-    mid_res = (17, 33, 55, 5)
+    low_res = (13, 23, 43, 7)
+    mid_res = (17, 33, 55, 7)
     high_res = (23, 43, 71, 7)
-    super_high_res = (27, 49, 99, 7)
+    super_high_res = (27, 49, 89, 7)
 
     test_res = [low_res, mid_res, high_res, super_high_res]
 

@@ -522,6 +522,12 @@ void SystemSolver::solveSteadyState(bool resume)
                 ptcStep *= std::max(growth, ptcSERFloor);
                 if (ptcStep > ptcMaxStep)
                     ptcStep = ptcMaxStep;
+
+                if (writeDatFile)
+                {
+				          print(out0, ptcStep, nOut, true);
+                }
+
             }
             Fprev = Fnow;
         }

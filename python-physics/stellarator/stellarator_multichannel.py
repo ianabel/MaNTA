@@ -264,7 +264,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
         # C++ object behind self to hang attributes on.
 
         config = StellaratorConfig(**st_config)
-        self.params = StellaratorParams(config)
+
+        self.params = StellaratorParams(config, _B0=5.0)
         if "Superconvergent" in solver_config and solver_config["Superconvergent"]:
             raise RuntimeError(
                 "Superconvergent is not compatible with this physics case"
@@ -364,7 +365,10 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return G, G_p
 
     def getPressure(self, points=None):
-        ui = self.runner.Get_profile(0) / self.vp
+        if (self.params.config.evolveDensity):
+            ui = self.runner.Get_profile(Channel.IonEnergy) / self.vp
+        else:
+            ui = self.runner.Get_profile(0) / self.vp
         return 2.0 / 3.0 * ui * self.pnorm
 
     def LowerBoundary(self, index, t):
@@ -468,7 +472,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
             * jnp.exp(
                 -((x - params.config.ParticleSourceCenter) ** 2)
                 / (2 * params.config.ParticleSourceWidth**2)
-            ) - params.constants.FusionRate(state.n, state.Ti) / params.constants.DensityEquationNormalization()
+            )
+            - params.constants.FusionRate(state.n, state.Ti)
+            / params.constants.DensityEquationNormalization()
         )
 
     def Spi(self, state: StellaratorState, x, t, vp, params: StellaratorParams):
@@ -486,7 +492,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
             * jnp.exp(
                 -((x - params.config.ECHCenter) ** 2) / (2 * params.config.ECHWidth**2)
             )
-            - self.CollisionalEnergyExchange(state, params) + params.constants.AlphaHeating(state.n, state.Ti) / params.constants.HeatEquationNormalization()
+            - self.CollisionalEnergyExchange(state, params)
+            + params.config.FusionFactor * params.constants.AlphaHeating(state.n, state.Ti)
+            / params.constants.HeatEquationNormalization()
         )
 
     def CollisionalEnergyExchange(
@@ -495,6 +503,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return params.constants.IonElectronEnergyExchange(state.n, state.pe, state.pi)
 
     def StoredEnergy(self, field, state, x, params: StellaratorParams):
+
         if self.params.config.evolveDensity:
             return (
                 state.Variable[Channel.IonEnergy]
@@ -504,11 +513,39 @@ class StellaratorTransport(MaNTA.TransportSystem):
             return state.Variable[0]
 
     def FusionPower(self, field, state, x, params: StellaratorParams):
-        n = state.Variable[Channel.Density]
-        pi = 2./3. * state.Variable[Channel.IonEnergy]
-        Ti = pi / n 
-        return jnp.log(params.constants.FusionRate(n, Ti) / params.constants.DensityEquationNormalization())
-    
+        if self.params.config.evolveDensity:
+            n = state.Variable[Channel.Density]
+            pi = 2.0 / 3.0 * state.Variable[Channel.IonEnergy]
+            Ti = pi / n
+        else:
+            n = StellaratorState.initial_profile(
+                x, params.config.EdgeDensity, params.config.n0
+            )
+            Ti = 2.0 / 3.0 * state.Variable[0] / n
+
+        return (
+            params.constants.AlphaHeating(n, Ti)
+            / params.constants.HeatEquationNormalization()
+        )
+
+    def tauE(self, field, state, x, params: StellaratorParams):
+        return self.StoredEnergy(field, state, x, params) / self.FusionPower(
+            field, state, x, params
+        )
+
+    def TripleProduct(self, field, state, x, params):
+        if self.params.config.evolveDensity:
+            n = state.Variable[Channel.Density]
+            pi = 2.0 / 3.0 * state.Variable[Channel.IonEnergy]
+            Ti = pi / n
+        else:
+            n = StellaratorState.initial_profile(
+                x, params.config.EdgeDensity, params.config.n0
+            )
+            Ti = 2.0 / 3.0 * state.Variable[0] / n
+
+        return n * Ti * self.tauE(field, state, x, params)
+
     @partial(jax.jit, static_argnums=(0,))
     def InitialValue(self, index, x):
         def constant_density(index, x):

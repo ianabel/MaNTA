@@ -228,4 +228,4 @@ class StellaratorState(eqx.Module):
 
     @staticmethod
     def initial_profile(x, edge_value, peak_value):
-        return (peak_value - edge_value) * (1 - x**4) + edge_value
+        return (peak_value - edge_value) * (1 - x**2) + edge_value

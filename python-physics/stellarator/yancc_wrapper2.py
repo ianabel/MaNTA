@@ -265,7 +265,7 @@ def compute_dke_sol(
             rtol=1e-3,
             throw=False,
             verbose=0,
-            multigrid_options={"smooth_solver": "banded", "max_grids": 2},
+            multigrid_options={"smooth_solver": "banded", "max_grids": 3},
         )
         flux = (
             -sol.get("<heat_flux>")[0]
@@ -310,7 +310,7 @@ def compute_dke_sol(
             species,
             Erho=state.Er * params.constants.T0eV,
             # m=50,
-            rtol=1e-3,
+            rtol=1e-2,
             throw=False,
             verbose=0,
             multigrid_options={"smooth_solver": "banded", "max_grids": 2},
@@ -328,7 +328,7 @@ def compute_dke_sol(
             / (params.constants.HeatEquationNormalization())
         )
 
-        aux_g_out = vp * sol.get("J_rho") / (params.constants.CurrentNormalization())
+        aux_g_out = 10.0 * sol.get("J_rho") / (params.constants.CurrentNormalization())
 
         return [particle_flux, heat_flux[0], heat_flux[1]], [aux_g_out]
 
@@ -405,12 +405,12 @@ def test_flux(
 
     def ambipolar(state, x, t, field, vp, vpp, *args):
 
-        particle_flux = -vp * 0.01 * state.dndrho
-        ion_heat_flux = -vp * 0.01 * state.dTidrho
+        particle_flux = vp * 0.1 * state.dndrho
+        ion_heat_flux = vp * 0.1 * state.dTidrho
 
-        electron_heat_flux = -vp * 0.01 * state.dTedrho
+        electron_heat_flux = vp * 0.1 * state.dTedrho
 
-        aux_g_out = vp * 100
+        aux_g_out = 0.0 * vp
 
         return [particle_flux, ion_heat_flux, electron_heat_flux], [aux_g_out]
 

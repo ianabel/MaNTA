@@ -1,3 +1,5 @@
+from datetime import time
+
 from stellarator_multichannel import StellaratorTransport
 from desc.backend import tree_unstack
 from yancc_wrapper2 import yancc_data
@@ -63,30 +65,21 @@ def make_objective(config, yancc_res=None):
         yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp, **yancc_res)
 
         st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+        st2 = StellaratorTransport(time_march_config, yancc_wrapper=yancc_wrapper)
         with jax.default_device(jax.devices("cpu")[0]):
             ec = st.run()
 
             def true_fn():
-                pass
+                return st.G()[0]
 
             def false_fn():
+                return jnp.array([1e-10], dtype=jnp.float32)
+                # ec = st2.run()
+                #
+                # return st2.G()[0]
 
-                # put in callback to stop jax from trying to evaluate this during tracing
-                conf_success = io_callback(
-                    lambda: st.reconfigure(time_march_solver_config),
-                    (jax.ShapeDtypeStruct((), jnp.bool),),
-                    ordered=True,
-                )
-                jax.debug.print(
-                    "Reconfigured solver with code {val}",
-                    val=conf_success,
-                    ordered=True,
-                )
-                st.run()
+            G = jax.lax.cond(ec, true_fn, false_fn)
 
-            jax.lax.cond(ec, true_fn, false_fn)
-
-        G = st.G()[0]
         pi = jnp.array(st.getPressure())
         return G, pi
 

@@ -57,6 +57,8 @@ def _wrap_vmap_maybe_chunk(func, vmap_axes, chunk_size, nchunks, sharding):
                         *_wrap_shard(*arg)
                     )
                 )
+
+            # reassemble arrays
             return jax.tree.map(
                 lambda *chunks: jnp.concatenate(chunks, axis=0), *outputs
             )
