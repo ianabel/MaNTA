@@ -72,6 +72,67 @@ retained for the opposite case, a model whose Jacobian is finite-differenced at
 `(1 + n_p)` residuals per assembly, which genuinely would rather have the
 iterations.
 
+## Warm-starting a cold solve by climbing the degree
+
+Measured 2026-09-22, `SteadyStateSolver = Newton`, `NewtonJacobianReuse = 1`,
+Park on 4 cells and the other two on 10. "Nested" means solving at `k = 1` and
+then at each degree up to 5, each level resuming from the previous one's answer
+through a restart file; "direct" is a single cold solve at `k = 5`. Both reach
+the same answer. Model calls, and the ratio against direct:
+
+| benchmark | initial condition | direct `k = 5` | nested 1..5 | |
+|---|---|---|---|---|
+| `park-convergence` | either | **120** | 400 | 3.3x worse |
+| `jardin-critical-gradient` | the case's own | 900 | **660** | 1.4x better |
+| `jardin-critical-gradient` | deliberately poor | 1860 | **940** | 2.0x better |
+| `shestakov-nonlinear` | the case's own | 2460 | **2040** | 1.2x better |
+| `shestakov-nonlinear` | deliberately poor | 6420 | **3830** | 1.7x better |
+
+**The mechanism is the target level, and it is worth a factor of five to
+seventeen there.** Jardin from a poor start takes 14 Newton iterations at
+`k = 5` cold and **zero** warm -- it trips the already-converged early return,
+at two sweeps -- because its exact steady state is linear, so a converged
+`k = 1` answer is already the answer. Shestakov goes from 51 iterations to 3.
+What is paid for that is the coarse levels, which is why the ratios are 1.2-2.0
+and not 5-17.
+
+**On a linear problem it is a 3.3x loss, every time, and that is structural.**
+Newton is exact in one step from any initial guess, so there is nothing for a
+warm start to save and every coarse level is pure overhead. A degree ladder can
+therefore never be a default; it is a bet that the flux is nonlinear enough to
+repay it.
+
+**Sequencing the tolerance across levels -- solving the coarse ones loosely --
+is not reliably a win.** Three ramps were measured against solving every level
+to the final `1e-11`, and the best choice differs by problem, with a spread up
+to 1.9x:
+
+| benchmark | IC | full `1e-11` | ramp from `1e-2` | ramp from `1e-6` |
+|---|---|---|---|---|
+| `jardin` | own | **660** | 920 | 710 |
+| `jardin` | poor | **940** | 1200 | 990 |
+| `shestakov` | own | 2540 | **2040** | 2300 |
+| `shestakov` | poor | 5380 | 7240 | **3830** |
+
+Two mechanisms make it backfire, and they pull in opposite directions. On
+Jardin, a *fully* converged coarse level is what makes every level above it exit
+at zero Newton iterations; loosening it destroys that, and each level then pays
+one iteration and four sweeps instead of two sweeps. On Shestakov from a poor
+start, a loosely converged answer projected up is a *worse* initial guess than a
+well-converged one: `k = 2` took 46 iterations at full tolerance, 81 with three
+rejected steps at a `1e-2` ramp, and 25 at `1e-6`. So the refinement is the win
+and the tolerance sequencing is not.
+
+**`DegreeAdaptation` is not the vehicle for this, though it does the same
+transfer.** It implies `Superconvergent`, which costs `(k+2)/(k+1)` points per
+sweep at every level: driven as a fixed ladder to `k = 5` it is 2.05x *better*
+than direct on Jardin's own initial condition -- the best number here -- and
+2.9x worse on Shestakov from a poor one, where the extra points are spent on
+levels that were not the bottleneck. It also cannot start at all on Jardin from
+a poor initial condition; see `TODO`. A ladder to a fixed target degree needs no
+error estimate and so needs no superconvergence, and that is the thing to build
+if this is built.
+
 `TimeMarch` stays available for a reason that is not cost: a problem with more
 than one steady state selects a branch by following the physics, where the other
 two select whichever branch the initial guess lies in the basin of. It also
