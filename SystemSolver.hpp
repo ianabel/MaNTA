@@ -1177,12 +1177,25 @@ class SystemSolver
             GlobalState states;
         };
 
-        // Size and fill the three derivative blocks at the state Y and time
-        // tEval, and report the nodes they were evaluated on.
-        PhysicsNodes evaluatePhysicsDerivatives(DGSoln const &Y, Time tEval,
+        // The variables' time derivatives sampled on the nodes the physics is
+        // evaluated at, or an *empty* matrix when no variable's source reads
+        // them -- which is what GlobalState::setVariableDot takes to mean "do
+        // not carry them", and is how a case that never asked for this pays
+        // nothing for it.
+        Matrix variableTimeDerivatives(DGSoln const &Ydot) const;
+
+        // Size and fill the derivative blocks at the state Y and time tEval, and
+        // report the nodes they were evaluated on.
+        //
+        // Ydot is here for one reason: a source that reads State::udot has to be
+        // *differentiated* at the same udot it was evaluated at, or the Jacobian
+        // is a different operator's. dSourceDot_vals is left empty unless some
+        // variable declares sourceReadsTimeDerivatives.
+        PhysicsNodes evaluatePhysicsDerivatives(DGSoln const &Y, DGSoln const &Ydot, Time tEval,
                                                 GlobalStateMatrix &dSigma_vals,
                                                 GlobalStateMatrix &dSource_vals,
-                                                GlobalStateMatrix &dAux_vals);
+                                                GlobalStateMatrix &dAux_vals,
+                                                GlobalStateMatrix &dSourceDot_vals);
 
         // One cell's Jacobian block, [ sigma | q | u | aux ] by
         // [ sigma | q | u | aux ], from derivative blocks evaluatePhysicsDerivatives
@@ -1194,10 +1207,27 @@ class SystemSolver
         // place this block layout is written down for the forward direction;
         // initializeMatricesForAdjointSolve holds the transposed copy and has to
         // be kept in step with it block for block.
+        // dSourceDot_vals is dS/d(udot), and enters weighted by alphaValue
+        // beside the mass term. An empty one -- which is what
+        // evaluatePhysicsDerivatives leaves when no variable declares
+        // sourceReadsTimeDerivatives -- contributes nothing and costs nothing.
         Matrix assembleCellMatrix(Index i, DGSoln const &Y,
                                   GlobalStateMatrix &dSigma_vals,
                                   GlobalStateMatrix &dSource_vals,
-                                  GlobalStateMatrix &dAux_vals, double alphaValue);
+                                  GlobalStateMatrix &dAux_vals,
+                                  GlobalStateMatrix &dSourceDot_vals, double alphaValue);
+
+        // Refuse a run whose effective mass matrix, X - (dS/d(udot)) M, is
+        // singular, and warn about one that is close to it.
+        //
+        // A source that reads du/dt changes what multiplies the time derivative
+        // in the u rows, so a case can cancel its own mass term and turn a
+        // differential row algebraic without saying so -- which raises the index
+        // of the system and shows up as an IDACalcIC or Newton failure a long way
+        // from the cause. Checked once, at initialise, where the message can name
+        // the variable. A no-op unless some variable declares
+        // sourceReadsTimeDerivatives.
+        void checkEffectiveMassMatrix(DGSoln const &Y, DGSoln const &Ydot, Time tEval);
 
         // The scalar coupling: v (how the HDG rows depend on the scalars) and w
         // (how the scalar constraints depend on the HDG unknowns), plus the

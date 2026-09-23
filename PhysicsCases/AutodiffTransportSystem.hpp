@@ -39,6 +39,7 @@ public:
 	void dSources_du(Index i, VectorRef, const State &, Position x, Time t) override;
 	void dSources_dq(Index i, VectorRef, const State &, Position x, Time t) override;
 	void dSources_dsigma(Index i, VectorRef, const State &, Position x, Time t) override;
+	void dSources_dudot(Index i, VectorRef, const State &, Position x, Time t) override;
 	void dSources_dScalars(Index, VectorRef, const State &, Position, Time) override;
 	void dSigmaFn_dp(Index i, Index pIndex, Value &, const State &s, Position x, Time t);
 	void dSources_dp(Index i, Index pIndex, Value &, const State &, Position x, Time t);
@@ -162,6 +163,19 @@ private:
 	virtual Real Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector phi, RealVector Scalars, RealVector /* geom */, Real x, Time t)
 	{
 		return Source(i, u, q, sigma, phi, Scalars, x, t);
+	}
+
+	/// ...and the time-derivative-aware one, on the same footing again.
+	///
+	/// A case whose source reads du/dt overrides *this* overload and declares
+	/// `sourceReadsTimeDerivatives` on the variables whose source does so; it
+	/// then gets dSources_dudot by the same autodiff mechanism that gives it
+	/// dSources_du, and needs to write no derivative by hand. One that does not
+	/// override it contributes an identically zero block, from the same
+	/// mechanism -- so this costs nothing to have and nothing to ignore.
+	virtual Real Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector phi, RealVector Scalars, RealVector geom, RealVector /* udot */, Real x, Time t)
+	{
+		return Source(i, u, q, sigma, phi, Scalars, geom, x, t);
 	}
 
 	// Auxiliary variables are optional, so provide a default implementation

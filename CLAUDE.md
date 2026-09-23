@@ -146,7 +146,7 @@ Read the live rule rather than trusting this paragraph —
   are, and a workflow that works for `ianabel` is not evidence it works for
   anyone else.
 
-**Nine of the ten contexts `ci.yml` publishes are required**, each pinned to app
+**Ten of the eleven contexts `ci.yml` publishes are required**, each pinned to app
 15368 (GitHub Actions), so a status of that name from anything else does not
 count:
 
@@ -154,19 +154,28 @@ count:
 Build + tests (g++-15)                    Build + tests (clang++-19)
 Build + tests (g++-16)                    Build + tests (clang++-20)
 Build + tests (g++-15, Eigen 5.0.1)       Build + tests (clang++-21)
-Build + tests (clang++-19, Eigen 5.0.1)   Compile (fedora:latest)
-                                          Coverage
+Build + tests (clang++-19, Eigen 5.0.1)   Build + tests (fedora:latest)
+Build + tests (g++-15, OpenMP)            Build + tests (fedora:latest, OpenMP)
 ```
 
-**The tenth is `Build + tests (g++-15, OpenMP)`, and adding it to the rule has to
-wait until the branch carrying it is on `main`.** That ordering is not fussiness;
-it is the failure this section already records, approached from the other side. A
-required context is matched by *name* against what a PR's own workflow publishes,
-and a PR branched from a `main` whose `ci.yml` has no OpenMP leg cannot publish
-one. Require it early and every unrelated PR sits at "Expected — waiting for
-status to be reported" indefinitely, while the green ticks beside it say the
-build is fine. It *was* required early once, in the change that added the leg,
-and had to be reverted for exactly that reason.
+**`Coverage` is the one that is deliberately *not* required**, and it is the only
+context here that publishes without gating anything. It runs `make coverage`'s
+successor — all three suites under an instrumented build — so what it would gate
+is what ten other legs already gate, at the cost of the slowest leg's wall-clock
+on every PR. It has no percentage threshold and never did, so it was never
+measuring coverage in the sense of holding a number: it was a duplicate build.
+Removed from the rule 2026-08-26. It still runs, and a red `Coverage` beside ten
+green legs is worth reading — an instrumented `-O0` build failing where the
+optimised ones pass is a real signal — but it does not block a merge.
+
+**A new leg's context can only be required once the leg is on `main`**, and that
+ordering is forced rather than fussy. A required context is matched by *name*
+against what a PR's own workflow publishes, so a PR branched from a `main` whose
+`ci.yml` lacks the leg cannot publish it: require it early and every unrelated PR
+sits at "Expected — waiting for status to be reported" indefinitely, while the
+green ticks beside it say the build is fine. `Build + tests (g++-15, OpenMP)` was
+required early once, in the change that added the leg, and had to be reverted for
+exactly that reason; it was added for real once that branch merged.
 
 So the sequence is: merge the leg, then add the context, then check the two agree
 with the `diff` below rather than assuming. The g++-16 leg builds
@@ -195,12 +204,6 @@ gh api repos/ianabel/MaNTA/branches/main/protection/required_status_checks -q '.
 gh pr view <N> --json statusCheckRollup -q '.statusCheckRollup[].name' | sort > /tmp/got
 diff /tmp/req /tmp/got     # left-only = required but impossible; right-only = ungated
 ```
-
-`Coverage` is in the list deliberately. It has no percentage threshold — it runs
-the `coverage` target in a `CMAKE_BUILD_TYPE=Coverage` build directory, i.e. all
-three suites under an instrumented build, and fails only if the build or a suite
-does — so it gates on the same thing the others do
-and costs the slowest leg's wall-clock.
 
 ## Working on this repository
 
@@ -263,13 +266,52 @@ cost real time here, and none of them announces itself.
 A physics case defines, per variable `i`:
 
 ```
-a_i d_t u_i + d_x sigma_i = S_i(u, q, sigma, phi, x, t)
+a_i d_t u_i + d_x sigma_i = S_i(u, q, sigma, phi, du/dt, x, t)
 sigma_i    = sigma_hat_i(u, q, x, t)          # the flux
 q_i        = d_x u_i                          # introduced as an unknown
 G_j(phi, u, q, sigma, x) = 0                  # nAux algebraic auxiliary constraints
 G_s(mu, y, dy/dt, t)     = 0                  # nScalars global (non-spatial) unknowns
 R_m(psi, dpsi/dt, y, t)  = 0                  # nField magnetic-field unknowns
 ```
+
+**A source may read `du/dt`, and only `du/dt`.** It reaches a case as
+`State::udot(j)`, filled by the solver from the `dYdt` vector, and is **zero
+unless some variable's `FieldSpec` sets `sourceReadsTimeDerivatives`** — which is
+what keeps every case that does not declare it identical to what it was, down to
+not allocating the rows. The derivative is `dSources_dudot`, and it enters the
+Jacobian as `- alpha * dS/d(udot)` beside the mass term in the `u` block
+(`assembleCellMatrix`). Four consequences, each of which has a test:
+
+* **It is invisible at `alpha = 0`.** A finite-difference check of the Jacobian
+  written only at the steady point passes with the term deleted, which is why
+  `TimeDerivativeSourceTests.cpp` carries both an `alpha != 0` case and an
+  `alpha = 0` one that records the blindness rather than relying on it. The
+  adjoint is built at `alpha = 0` and is therefore unaffected by this feature
+  entirely.
+* **It changes what multiplies the time derivative**, from `X` to
+  `X - dS/d(udot)`, which is no longer diagonal in the variable index and which a
+  case can make *singular* by writing `a_i d_t u_i` into its own source. That
+  raises the index of the system; `checkEffectiveMassMatrix` assembles the
+  operator at the initial state and refuses the run by name, in the same place
+  and for the same reason as the differential-field-DOF check beside it.
+* **A steady solve sees `udot = 0`** — `PseudoTransient`'s damping term vanishes
+  at its fixed point and `Newton` never has one — so "steady state" means
+  `d/dt = 0` inside the sources too, which is the right reading.
+* **There is deliberately no `qdot`, `sigmadot` or `phidot`, and the reason is
+  `IDASetId` rather than availability.** IDA supplies `y'` for every component,
+  algebraic ones included, and `variableTimeDerivatives` already builds a whole
+  `GlobalState` from `dYdt` and keeps only its `Variable()`. What makes those
+  entries unusable is what the solver has *declared*: `id` marks `u` differential
+  and nothing else, so a residual reading `q_dot` would put `alpha`-weighted
+  entries in the `q` columns of `dF/dy'` and contradict it. They are also exactly
+  zero at the initial point — `setInitialConditions` fills only the differential
+  rows and `IDA_YA_YDP_INIT` holds the algebraic `y'` fixed — so a term reading
+  one would be wrong for precisely the evaluations `IDACalcIC` converges on, and
+  right afterwards.
+
+`docs/superpowers/specs/2026-09-21-time-derivative-sources-design.md` is the
+design, including the two phases not built: geometry time derivatives (`dV'/dt`,
+`dpsi/dt`) and the field rows.
 
 `sigma`, `q`, `u` and the auxiliary variables `phi` live per cell; `lambda` is
 the HDG trace unknown on cell faces; `mu` are the global scalars; `psi` are a
@@ -1120,7 +1162,12 @@ gives. Four pieces to know:
   `(nPoints, nVars)` arrays — what the JAX path wants — and **its caster
   transposes in both directions** (C++ stores `(nVars, nPoints)`), so a
   round-trip test cannot detect a missing transpose; check the orientation from
-  inside a batched call instead.
+  inside a batched call instead. Its `"VariableDot"` entry is `du/dt`, and it is
+  an **empty** array rather than a grid of zeros in a run where no variable
+  declares `sourceReadsTimeDerivatives` — and also in the calls that build the
+  initial condition, which happen before there is a `dYdt` to read. A batched
+  case therefore tests `.size` rather than indexing it. The pointwise view does
+  not have that shape: `s.udot` is always `nVars` long and reads zero.
 * **`PyRunner`** (`configure(dict)` / `run` / `run_ss` / `getSolution` / `G` /
   `getAdjointGradients`) is the API the optimisation drivers use, and the only
   route supporting repeated configure/run cycles in one process — it works by
@@ -1556,11 +1603,13 @@ formula, not the operator, if the data cannot tell them apart.
   release build warns when it sees it; `TODO` has the full reproduction.
 
 * **gcc and clang do not diagnose the same things, so build with clang
-  occasionally** — that is what CI's clang matrix legs are for. (CI is seven
+  occasionally** — that is what CI's clang matrix legs are for. (CI is eight
   `build-and-test` legs: g++-15/16 and clang++-19/20/21 against the distro's
-  Eigen 3.4.0, plus g++-15 and clang++-19 against Eigen 5.0.1; then a Fedora container job that
-  only *compiles*, to keep the build's notions of a system prefix — `/usr/lib64`,
-  pkg-config-discovered netCDF — from quietly becoming Ubuntu-specific.) gcc never
+  Eigen 3.4.0, plus g++-15 and clang++-19 against Eigen 5.0.1, plus g++-15 with
+  `MANTA_OPENMP=ON`; then two Fedora container legs, with and without OpenMP,
+  which keep the build's notions of a system prefix — `/usr/lib64`,
+  pkg-config-discovered netCDF — from quietly becoming Ubuntu-specific. Those two
+  built and stopped until 2026-08-26 and now run the suites as well.) gcc never
   diagnoses a polymorphic base with a non-virtual destructor; clang does
   (`-Wdelete-non-abstract-non-virtual-dtor`), and it reports it at the point of
   *destruction* inside libstdc++, once per instantiating translation unit, which

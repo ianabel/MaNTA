@@ -1,29 +1,9 @@
-Add `Build + tests (g++-15, OpenMP)` to branch protection -- AFTER this lands.
-Raised 2026-08-26, and it is deliberately not done yet.
-
-  ci.yml publishes ten contexts on this branch; the protection rule on main
-  requires nine. The tenth is the OpenMP leg, and it cannot be required until the
-  leg exists on main, because a required context is matched by name against what
-  a PR's own workflow publishes -- so a PR branched from a main without the leg
-  can never satisfy it and hangs at "Expected" forever. It was required early
-  once, in the change that added the leg, and had to be reverted for that reason.
-
-    gh api repos/ianabel/MaNTA/branches/main/protection/required_status_checks \
-      -q '.contexts[]' | sort > /tmp/req
-    gh pr view <N> --json statusCheckRollup \
-      -q '.statusCheckRollup[].name' | sort > /tmp/got
-    diff /tmp/req /tmp/got
-
-  Left-only is required-but-impossible; right-only is ungated. CLAUDE.md's
-  "Branch protection" section carries the full version.
-
-
 No CI leg builds the documentation, so a -W failure reaches main unnoticed.
 Found 2026-08-26, by putting one there.
 
   The `docs` target builds with -W, as Read the Docs does, and it is the only
   thing in the tree that would catch a broken reST cross-reference. Nothing runs
-  it: the ten CI contexts are the compiler matrix, the Fedora compile and
+  it: the eleven CI contexts are the compiler matrix, the two Fedora legs and
   Coverage. A blank line dropped before `.. _warm-starts:` during a conflict
   resolution silently deleted the label, `docs/configuration.rst` went on
   referencing it, and the first thing to notice was a Read the Docs build of main
@@ -33,7 +13,8 @@ Found 2026-08-26, by putting one there.
   built from docs/requirements.txt and no compiler at all. It is a separate leg
   rather than a step in an existing one precisely because it needs neither the
   solver nor the matrix, and adding it means adding its context to the protection
-  rule -- in that order, per the entry above.
+  rule -- merge the leg first, then require it, per the ordering rule in
+  CLAUDE.md.
 
 
 Per-call N_Vector allocation in the coupled Jacobian solve.
@@ -321,6 +302,20 @@ reason it was not made:
     whose residual genuinely carries d/dt of a transport quantity, checked
     against a closed form first: the same "write the case that would catch it
     being wrong before changing it" rule the autodiff-sigma entry above records.
+
+    **The transport rows have since gained exactly this, which makes the
+    remaining work a third application of a pattern rather than a new one.** A
+    source may read State::udot, reports dSources_dudot, and that block enters
+    the Jacobian weighted by alpha beside the mass term -- see
+    docs/superpowers/specs/2026-09-21-time-derivative-sources-design.md, which
+    lists the field rows as its phase 3. Two things it settled that this entry
+    was going to have to settle anyway. The value travels *in* the state object
+    rather than as a second argument, which is what let forty-odd existing cases
+    compile unchanged; and the alpha-weighted term is provably invisible at
+    alpha = 0, so a finite-difference check of it has to be written at alpha != 0
+    or it gates nothing -- measured, deleting the term moves the alpha = 3.7
+    check from 8.8e-10 to 0.105 and does not move the alpha = 0 one at all.
+    Whatever is done for FieldResidual should follow the same two.
 
 
   - The coupled adjoint has two structurally missing terms, both zero today by

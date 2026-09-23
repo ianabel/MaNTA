@@ -50,7 +50,9 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     index : int
         Variable index
     state : dict
-        Dictionary containing "Variable", "Derivative", "Flux", "Aux", and "Scalars" arrays
+        Dictionary containing "Variable", "Derivative", "Flux", "Aux" and "Scalars"
+        arrays, plus "VariableDot" -- d(variable)/dt, which is an empty array
+        unless some variable declares source_reads_time_derivatives
     x : float
         Spatial location
     t : float
@@ -102,6 +104,14 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     @MaNTA_Decorator
     def dSources_dPhi( self, index, state, x, t ):
         return self.dSourcedvar(index,state,x,t, self.params).Aux
+
+    # Only ever called for a variable whose spec sets
+    # source_reads_time_derivatives, and it comes out of the same gradient the
+    # other four blocks do: State.VariableDot is d(variable)/dt, so the
+    # component of grad(source) along it is dS/d(udot).
+    @MaNTA_Decorator
+    def dSources_dudot( self, index, state, x, t ):
+        return self.dSourcedvar(index,state,x,t, self.params).VariableDot
     
     @MaNTA_Decorator
     def AuxG( self, index, state, x, t):

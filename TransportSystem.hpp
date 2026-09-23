@@ -235,6 +235,37 @@ public:
   virtual void dSources_dq(Index i, VectorRef, const State &, Position x, Time t) = 0;
   virtual void dSources_dsigma(Index i, VectorRef, const State &, Position x, Time t) = 0;
 
+  /*
+      d(S_i)/d(du_j/dt), the derivative of a source with respect to the time
+      derivatives State::udot carries.
+
+      Defaults to leaving the vector at the zero it arrives as, which is the same
+      "an unread hook means no coupling" convention as dSigmaFn_dGeometry: a case
+      that does not read udot needs no override and gets an identical Jacobian.
+
+      It is only ever called for a variable whose spec sets
+      `sourceReadsTimeDerivatives`, so declaring that flag and not overriding
+      this is a wrong Jacobian rather than a wrong answer -- the solver warns
+      about it at startup for exactly that reason. The converse, overriding this
+      without declaring the flag, is the silent one: nothing calls it, and the
+      term in the value hook is differentiated as though it were not there.
+
+      This block enters the Jacobian weighted by alpha, beside the mass term, so
+      it is **invisible in the steady Jacobian** (alpha = 0) and therefore in the
+      adjoint. A finite-difference check of it has to be run at alpha != 0.
+  */
+  virtual void dSources_dudot(Index, VectorRef, const State &, Position, Time) {}
+
+  /// Spec data. See FieldSpec::sourceReadsTimeDerivatives.
+  bool sourceReadsTimeDerivatives(Index i) const
+  {
+    return m_spec.variables.at(i).sourceReadsTimeDerivatives;
+  }
+  bool anySourceReadsTimeDerivatives() const
+  {
+    return m_spec.anySourceReadsTimeDerivatives();
+  }
+
 
  /*
  * Compute all fluxes and sources 
@@ -342,6 +373,37 @@ public:
       if (nAux > 0)
         dSources_dPhi(i, out.Aux(j), states[j], abscissae[j], time);
     }
+  }
+
+  /*
+      d(S)/d(udot) for every variable at once, into the *Variable* slice of its
+      own GlobalStateMatrix.
+
+      A separate pass rather than a fourth entry in ComputePhysicsDerivatives,
+      and deliberately: that array's width is part of the interface a Python or
+      JAX case overrides, and widening it would break every vectorised case in
+      existence to add a block that almost all of them would leave zero. This
+      one is called only when the spec asks for it, so a case that does not
+      declare `sourceReadsTimeDerivatives` never sees it at all.
+
+      The Variable slice, not a new one, because dS_i/d(udot_j) has exactly the
+      shape dS_i/du_j has and lands in the same block of the cell matrix -- one
+      factor of alpha apart. See SystemSolver::assembleCellMatrix.
+  */
+  virtual void ComputeSourceTimeDerivatives(GlobalStateMatrix &out, GlobalState const &states,
+                                            std::vector<Position> const &abscissae, Time time)
+  {
+    for (Index i = 0; i < nVars; ++i)
+      dSourcesDot(i, out[i], states, abscissae, time);
+  }
+
+  virtual void dSourcesDot(Index i, GlobalState &out, GlobalState const &states,
+                           std::vector<Position> const &abscissae, Time time)
+  {
+    if (!sourceReadsTimeDerivatives(i))
+      return;
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
+      dSources_dudot(i, out.Variable(j), states[j], abscissae[j], time);
   }
 
   // and initial conditions for u & q

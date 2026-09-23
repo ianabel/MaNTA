@@ -390,31 +390,50 @@ jobs:
   #   - netCDF is found through pkg-config here, with NETCDF_DIR unset, and the
   #     Fedora .pc files are laid out differently from noble's.
   #
-  # Compilation only, deliberately -- the MaNTA and _manta targets, no suites.
-  # The point is to find configuration that is wrong outside Debian, and running
-  # the numerics as well would add failure modes (a differently-tuned BLAS, say)
-  # that say nothing about that. The other seven legs cover behaviour.
+  # This job used to compile and stop, on the argument that running the numerics
+  # would add failure modes -- a differently-tuned BLAS, say -- that say nothing
+  # about whether the *configuration* is Debian-specific. It runs the suites now,
+  # in two legs, and the argument it replaces is worth keeping in view: if this
+  # ever fails on a numerical tolerance rather than on a build or a link, that is
+  # the predicted noise and not a Fedora bug. The pins in `env` below are what
+  # keep the BLAS out of it.
   #
-  # _manta is in scope because it is the only translation unit that pulls in
-  # Eigen's SparseCore, which is where -isystem mistakes surface (see CLAUDE.md).
+  # Two legs, differing only in MANTA_OPENMP. Both are wanted here rather than on
+  # the ubuntu matrix alone because this is the one image whose libgomp, libstdc++
+  # and BLAS are not the runner's, and OpenMP is where those three interact: the
+  # threading defect that util/ParallelFor.hpp fixed was an interaction between
+  # gcc's outlined function and an exception, which is a toolchain property rather
+  # than a MaNTA one.
+  #
+  # _manta is built on both legs because it is the only translation unit that pulls
+  # in Eigen's SparseCore, which is where -isystem mistakes surface (see CLAUDE.md).
   #
   # This is a separate job rather than another entry in build-and-test because it
   # shares almost none of that job's steps: dnf rather than apt, no sudo, no
   # setup-python, and git has to exist *before* actions/checkout or the submodules
-  # are silently skipped. It carries its own one-element matrix so a second distro
-  # is one line.
-  #
-  # Unverified locally -- there is no container runtime on the box this was written
-  # on -- so CI is its first real run, exactly as for g++-15 and clang++-20 above.
-  compile-on-other-distros:
-    name: Compile (${{ matrix.image }})
+  # are silently skipped. It carries its own matrix so a second distro is one line.
+  distro-build-and-test:
+    name: Build + tests (${{ matrix.label || matrix.image }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           - image: fedora:latest
+          - image: fedora:latest
+            openmp: 'ON'
+            omp_threads: 4
+            label: 'fedora:latest, OpenMP'
     container: ${{ matrix.image }}
+    # As on the ubuntu OpenMP leg: -fopenmp loads libgomp, and that alone is enough
+    # for a dispatching BLAS to start threading itself and change reduction order.
+    # Fedora's BLAS is not the runner's, so unlike there these are not a no-op that
+    # documents an intention -- they are the thing that keeps a failure here
+    # meaning "MaNTA's threading" rather than "Fedora's libblas".
+    env:
+      OMP_NUM_THREADS: ${{ matrix.omp_threads || 1 }}
+      OPENBLAS_NUM_THREADS: 1
+      MKL_NUM_THREADS: 1
     steps:
       # Before the checkout, and the reason this job cannot just reuse the matrix
       # above. actions/checkout falls back to downloading a tarball through the REST
@@ -436,21 +455,40 @@ jobs:
             eigen3-devel \
             netcdf-devel netcdf-cxx4-devel \
             blas-devel lapack-devel \
-            python3-devel
+            python3-devel python3-pip
           # Diagnostics only -- which Eigen Fedora shipped is the interesting
           # part, and it moved header between 3.4 and 5.0. `|| true` because run
           # steps use `bash -e` and grep exits non-zero on no match, which would
           # fail the step over a log line.
           echo "--- versions ---"
           g++ --version | head -1
+          python3 --version
           grep -rhE 'define EIGEN_(WORLD|MAJOR|MINOR|PATCH)_VERSION' \
             /usr/include/eigen3/Eigen/src/Core/util/Macros.h \
             /usr/include/eigen3/Eigen/Version 2>/dev/null || true
 
+      # The suites need the same packages the ubuntu legs install. This is the one
+      # leg where the interpreter is the image's rather than setup-python's, so the
+      # Python version moves when Fedora's does -- and a requirements.txt pin with
+      # no wheel for that version fails here first. That is a real risk and it is
+      # deliberate: it is the same class of thing this job exists to find.
+      - name: Install Python dependencies
+        run: |
+          # A venv rather than `pip install` into the image's Python. Fedora marks
+          # its system interpreter externally-managed (PEP 668), so installing into
+          # it fails outright unless overridden -- and a venv in the repo root is
+          # what CMake looks for first anyway, so this is the configuration a
+          # developer on this distro would have.
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements.txt
+          .venv/bin/python --version
+
       # A key of its own: this SUNDIALS is built in a Fedora container against a
       # different libc and libstdc++ from the ubuntu legs', and the two must not
       # restore each other's. Hashed on build_sundials for the reason given on
-      # the ubuntu leg's key.
+      # the ubuntu leg's key. Both legs of this job share it -- same image, same
+      # compiler, and MANTA_OPENMP does not reach SUNDIALS.
       - name: Cache SUNDIALS
         id: cache-sundials
         uses: actions/cache@v4
@@ -468,20 +506,38 @@ jobs:
       # this job exists to check, since Fedora lays both out differently from
       # noble and puts its libraries in lib64.
       #
-      # MANTA_TESTS=OFF: this job compiles, it does not run anything, and the
-      # unit tests are the only thing that needs Boost.
+      # Python3_EXECUTABLE is pinned for the reason the ubuntu legs pin it: the
+      # extension must be built for the interpreter that will import it, and
+      # FindPython3 is free to prefer a different one.
       - name: Configure
         run: |
           cmake -B build -S . \
             -DCMAKE_BUILD_TYPE=Release \
-            -DMANTA_TESTS=OFF \
+            -DMANTA_OPENMP=${{ matrix.openmp || 'OFF' }} \
+            -DPython3_EXECUTABLE="$PWD/.venv/bin/python" \
             -DSUNDIALS_ROOT="$PWD/sundials/install"
 
+      # Three build steps rather than one, so a failure still says which half of
+      # the tree broke. They share manta_objects, so the first does most of the
+      # work and the other two are close to free.
       - name: Build solver
         run: cmake --build build --target MaNTA -j$(nproc)
 
+      - name: Build unit tests
+        run: cmake --build build --target UnitTests -j$(nproc)
+
       - name: Build Python module
         run: cmake --build build --target _manta -j$(nproc)
+
+      - name: Unit tests
+        run: ctest --test-dir build -R '^unit$' --output-on-failure
+
+      - name: Regression tests
+        run: ctest --test-dir build -R '^regression$' --output-on-failure
+
+      - name: Python tests
+        run: ctest --test-dir build -R '^python$' --output-on-failure
+
 
   coverage:
     name: Coverage
