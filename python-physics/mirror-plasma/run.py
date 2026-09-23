@@ -31,5 +31,5 @@ solver_config = {
     "Superconvergent": True,
 }
 
-MP = MirrorPlasma(config.CMFX, solver_config=solver_config)
-MP.run(2)
+MP = MirrorPlasma(config.Fusion, solver_config=solver_config)
+MP.run(10)
