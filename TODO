@@ -1,3 +1,30 @@
+A restart silently ignores Grid_size and runs on the file's mesh.
+Found 2026-09-22, while measuring whether refining the mesh is a cheaper route
+to a cold-start steady state.
+
+  `makeGrid` (SolverConfig.cpp) reads `CellBoundaries` and `PolyOrder` out of
+  the restart file and returns that grid, never looking at `Grid_size`,
+  `Grid_points` or the boundaries. A config that restarts and asks for a
+  different number of cells gets the file's mesh and no warning, so a ladder
+  written as "solve coarse, restart finer, solve again" re-solves the coarse
+  problem at every rung and reports it as converged -- which is exactly what it
+  looks like, since resuming a converged state at the same resolution costs one
+  residual evaluation and exits at the already-converged test.
+
+  Note the asymmetry with the degree, which is handled deliberately: a restart
+  whose `Polynomial_degree` differs from the file's goes through
+  `restartRunOrder`, which honours the configuration and says so, "loud rather
+  than silent, in both directions" in its own words. The mesh has no equivalent.
+  `setInitialConditions` is ready for the change either way -- `sameGrid` is
+  computed, the projection evaluates the stored element polynomials at the new
+  points, and the trace is rebuilt when the mesh moves -- so what is missing is
+  only the plumbing in `makeGrid` and a matching warning.
+
+  Worth fixing because an h-ladder is worth up to 4.2x on a nonlinear cold start
+  (PERFORMANCE.md) and this is the obvious way anyone would try to write one.
+  The measurement there had to drive `setRestartValues` from C++ instead.
+
+
 Superconvergent = true cannot reach a steady state from a poor initial guess.
 Found 2026-09-22, while measuring whether climbing the degree is a cheaper route
 to a cold-start steady state.

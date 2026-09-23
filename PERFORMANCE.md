@@ -123,6 +123,39 @@ well-converged one: `k = 2` took 46 iterations at full tolerance, 81 with three
 rejected steps at a `1e-2` ramp, and 25 at `1e-6`. So the refinement is the win
 and the tolerance sequencing is not.
 
+**Refining the mesh behaves the same way, and fewer larger jumps beat more
+smaller ones.** Not measurable through a config restart -- `makeGrid` takes the
+mesh from the restart file and ignores `Grid_size`, so a ladder written that way
+silently re-solves the coarse problem; see `TODO`. Driven instead through
+`setRestartValues`, which is the in-memory transfer `DegreeAdaptation` uses and
+which does take a `Grid`, on `k = 3` to a target of 16 cells:
+
+| flux | initial condition | direct | ladder 2,4,8,16 | ladder 4,16 |
+|---|---|---|---|---|
+| `kappa q` | -- | **320** | 600, 0.53x | -- |
+| `(1 + u^2) q` | the case's own | **704** | 744, 0.95x | 624, 1.13x |
+| `(1 + u^2) q` | deliberately poor | 3456 | 936, 3.69x | **816, 4.24x** |
+
+Same shape as the degree ladder: a loss on a linear problem, a wash on a
+nonlinear one that already starts near its answer, and a large saving from a
+poor start, where the target level goes from 25 Newton iterations to two. The
+new information is the last column -- **two levels beat four in both nonlinear
+rows**, because each level costs a prologue and a Newton solve whatever it
+achieves, so once the guess is good enough the intermediate levels are overhead.
+A ladder wants the fewest rungs that keep each solve convergent, not a rung per
+refinement.
+
+*A caution on fixtures for anyone repeating this.* The first attempt used
+`kappa q` with a constant source and a critical-gradient `chi(q) q`, and both
+reported the fine levels converging in zero Newton iterations. That was real but
+vacuous: both steady states are low-degree polynomials -- `x(1-x)/2kappa` and a
+straight line -- so a converged coarse solution is *exactly* the fine-mesh
+solution too, and the ladder measured nothing. The rows above use a
+`sin(pi x)` source and `(1 + u^2) q`, whose steady states are not polynomials.
+The same trap explains why `jardin-critical-gradient` shows every level above
+the first at zero iterations in the degree table: its exact steady state is
+linear.
+
 **`DegreeAdaptation` is not the vehicle for this, though it does the same
 transfer.** It implies `Superconvergent`, which costs `(k+2)/(k+1)` points per
 sweep at every level: driven as a fixed ladder to `k = 5` it is 2.05x *better*
