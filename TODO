@@ -1,34 +1,3 @@
-Superconvergent = true cannot reach a steady state from a poor initial guess.
-Found 2026-09-22, while measuring whether climbing the degree is a cheaper route
-to a cold-start steady state.
-
-  On `python-examples/jardin-critical-gradient` at 10 cells, with the initial
-  condition replaced by `5 sin(8 pi x)` -- unusual, but a perfectly ordinary bad
-  guess -- the plain method converges at every degree from 1 to 5 and by both
-  residual-driven steady solvers, ten runs out of ten, in 580 to 2280 transport
-  model calls. With `Superconvergent = true` and nothing else changed, all ten
-  fail: "did not converge in 200 continuation steps", with dt collapsed to
-  around 1e-107, i.e. the continuation damping to nothing while the residual
-  stalls near 4e-2.
-
-  It is the flag and not the degree: the failure is at k = 1, 2, 3, 4 and 5
-  alike, under Newton and PseudoTransient alike. The case's own initial
-  condition converges with the flag on at every one of those ten settings, at
-  about 1.15x the calls, so this is a basin-of-attraction question rather than a
-  broken residual -- the superconvergent residual evaluates the physics at the
-  k+2 star nodes with u* in place of u_h, and `accumulateStarBlocks` carries a
-  chain factor into every Jacobian block, so both the function and its
-  linearisation differ from the plain ones and there is no reason the basins
-  should coincide. Whether the difference is this large legitimately, or whether
-  a block is wrong somewhere off the manifold, is the thing to find out; note
-  that `SolveJacTests.cpp` differences the Jacobian at states near the solution,
-  which is exactly where this does not fail.
-
-  It matters beyond the flag, because `DegreeAdaptation` implies it. A degree
-  ladder is worth 1.2x to 2.0x on a nonlinear cold start (PERFORMANCE.md), and
-  the obvious vehicle for one cannot be used on a problem of this shape.
-
-
 No CI leg builds the documentation, so a -W failure reaches main unnoticed.
 Found 2026-08-26, by putting one there.
 

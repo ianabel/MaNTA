@@ -161,9 +161,51 @@ sweep at every level: driven as a fixed ladder to `k = 5` it is 2.05x *better*
 than direct on Jardin's own initial condition -- the best number here -- and
 2.9x worse on Shestakov from a poor one, where the extra points are spent on
 levels that were not the bottleneck. It also cannot start at all on Jardin from
-a poor initial condition; see `TODO`. A ladder to a fixed target degree needs no
-error estimate and so needs no superconvergence, and that is the thing to build
-if this is built.
+a poor initial condition, for the reason below. A ladder to a fixed target
+degree needs no error estimate and so needs no superconvergence, and that is the
+thing to build if this is built.
+
+## Superconvergence narrows the Newton basin
+
+`Superconvergent = true` cannot reach a steady state on
+`jardin-critical-gradient` from a perturbed initial condition -- ten runs out of
+ten across `k = 1..5` and both residual-driven solvers, with `dt` damping to
+1e-107 while the residual stalls near 4e-2 -- where the plain method converges
+in all ten. Diagnosed 2026-09-22, and it is **not** a wrong Jacobian block:
+
+* **The linearisation is right where the solve fails.** Differencing the
+  residual at that exact state, on that flux, gives `||J dy - g|| / ||g||` of
+  5.7e-8 to 1.8e-7 with the flag on -- matching the plain method to the last
+  digit, and marginally better -- at `cj = 0` as well as `cj != 0`, at `k = 2`
+  and `3`. `the_superconvergent_jacobian_is_right_where_its_own_solve_fails`
+  pins it.
+* **It is the curvature of the flux in `q`, not the size of its derivative.**
+  Jardin's `chi = chi0 + kappa(|q| - qc)^alpha` fails with the flag on at
+  `alpha <= 0.6` and converges from `0.7` up; capping `dchi/dq` with a
+  *continuous* regularisation puts the threshold between 158 and 50. Yet
+  `alpha = 1` reaches `|d sigmahat/dq| = 474` and is perfectly happy, because
+  there the second derivative is zero. What matters is how fast the tangent
+  diffusivity varies, which is what bounds a Newton basin -- not how large it
+  gets.
+* **Damping fixes it, and costs nothing.** Pseudo-transient continuation at
+  `PseudoTransientInitialStep = 1e-4` converges with the flag on in 5090
+  transport-model calls against 5280 with it off.
+
+Two practical consequences. The default `PseudoTransientInitialStep = 0` means
+"use `delta_t`", which on these configurations is 1e4 and so is no damping at
+all -- which is why `PseudoTransient` appeared to fail here too, and why naming
+a genuinely small first step is the first thing to try on a stiff flux from a
+poor guess. And since `DegreeAdaptation` implies `Superconvergent`, an adaptive
+run can fail where a fixed-degree run of the same problem succeeds; the remedy
+is the same.
+
+A caution on measuring this, since the first attempt got it backwards. A
+regularisation written as `chi0 + kappa(t + eps)^alpha` above the threshold is
+not a regularisation: it makes `chi` *jump* by `kappa eps^alpha` at the
+threshold rather than smoothing it, and it left the failure in place at every
+`eps`, which read as evidence that the derivative was not the cause. Subtracting
+`kappa eps^alpha` restores continuity, and the threshold behaviour above is what
+that shows.
 
 `TimeMarch` stays available for a reason that is not cost: a problem with more
 than one steady state selects a branch by following the physics, where the other

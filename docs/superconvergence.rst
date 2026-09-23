@@ -117,6 +117,42 @@ With the flag on, :math:`u^\star` reaches :math:`k+2` in every case and
    assert that the flag improves on the flag-off rate, because for these problems
    there is not always anything to improve.
 
+What it costs a hard solve
+--------------------------
+
+.. warning::
+
+   **The flag narrows the Newton basin on a flux whose tangent diffusivity
+   varies quickly, and can turn a converging steady solve into a failing one.**
+   On ``python-examples/jardin-critical-gradient`` started from a perturbed
+   initial condition, the flag-off method converges at every degree from 1 to 5
+   and by both residual-driven solvers; with the flag on, all ten fail, the
+   pseudo-time step damping to :math:`10^{-107}` while the residual stalls near
+   :math:`4\times10^{-2}`.
+
+   It is not a defect in the chain rule. Differencing the residual at exactly
+   that state gives :math:`\lVert J\,\delta y - g\rVert / \lVert g \rVert`
+   of :math:`6\times10^{-8}` to :math:`2\times10^{-7}` with the flag on,
+   matching the flag-off Jacobian to the last digit, at :math:`c_j = 0` as well
+   as :math:`c_j \neq 0`
+   (``the_superconvergent_jacobian_is_right_where_its_own_solve_fails``). The
+   linearisation is right; what shrinks is the region it is a good model over.
+
+   The controlling quantity is the **curvature** of :math:`\hat\sigma` in
+   :math:`q`, not the size of its derivative. With Jardin's
+   :math:`\chi = \chi_0 + \kappa(\lvert q\rvert - q_c)^\alpha` the flag-on
+   solve fails for :math:`\alpha \le 0.6` and converges from :math:`0.7` up,
+   while :math:`\alpha = 1` is untroubled at a tangent diffusivity of 474 —
+   because there the second derivative vanishes.
+
+   **The remedy is damping, and it is free.** Pseudo-transient continuation with
+   a genuinely small ``PseudoTransientInitialStep`` converges with the flag on
+   at the same cost as without it. Note that the default of ``0`` means "use
+   ``delta_t``", which for a steady solve is usually enormous and so is no
+   damping at all — naming a small first step is the thing to try. The same
+   applies to ``DegreeAdaptation``, which implies this flag and so inherits the
+   narrower basin. ``PERFORMANCE.md`` has the measurements.
+
 What is not covered
 -------------------
 
