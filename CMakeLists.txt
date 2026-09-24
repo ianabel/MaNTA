@@ -97,6 +97,7 @@ add_library(manta_objects OBJECT ${MANTA_CORE_SOURCES} ${MANTA_PHYSICS_SOURCES})
 add_library(manta::objects ALIAS manta_objects)
 target_include_directories(manta_objects PUBLIC "${PROJECT_SOURCE_DIR}")
 target_link_libraries(manta_objects PUBLIC manta::flags manta::deps)
+target_link_libraries(manta_objects PRIVATE ${MANTA_BOOST_TARGET})
 
 # ------------------------------------------------------------- the binaries --
 
