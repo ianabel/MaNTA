@@ -505,7 +505,16 @@ class SystemSolver
         // Initialises u, q and lambda to satisfy residual equation at t=0
         void setInitialConditions(N_Vector &Y, N_Vector &dYdt);
 
-        void ApplyDirichletBCs(DGSoln &);
+        // Writes g_D(t) into the trace entries of the two Dirichlet ends.
+        //
+        // Those entries are not unknowns the solve moves: their row and column in
+        // K_global are identically zero, imposeDirichletTraceRows pins the
+        // correction to zero, and residual() never writes the row. So whatever is
+        // put there stays there, and it has to be put there by whoever wants it
+        // right -- once when the initial condition is built, and again at every
+        // point the state is reported, because the datum is a function of time and
+        // the stored entry cannot follow it on its own.
+        void ApplyDirichletBCs(DGSoln &, Time t);
 
         // Builds initial matrices
         void initialiseMatrices();
@@ -1106,6 +1115,20 @@ class SystemSolver
         double ptcStep = 0.0;        // the current dt; infinite in Newton mode
         double ptcSERRate = 1.0;     // exponent on the residual ratio
         double ptcSERFloor = 2.0;    // least growth on an accepted step
+
+        // The steady residual norm KINSOL's own system function last computed,
+        // and a stamp saying it did. At dt = infinity steadyResidual() damps
+        // with an identically zero ptcDYdt, so the function KINSOL evaluates
+        // *is* the steady residual -- the same call, at the same state, that
+        // the merit function would make afterwards. Recording the norm there
+        // lets the continuation loop read it instead of sweeping the physics a
+        // second time. The stamp is what makes that safe: it is bumped only on
+        // a successful steady-mode evaluation, so a KINSol that made none
+        // leaves it where the loop's snapshot found it and the loop evaluates
+        // for itself. Meaningless with a finite dt, where the two residuals are
+        // genuinely different functions, and never consulted there.
+        double kinSteadyNorm = std::numeric_limits<double>::quiet_NaN();
+        long kinSteadyNormStamp = 0;
 
         // KINSOL's own settings. Every default here is what the code hardcoded
         // before they were configurable, so an unconfigured run is unchanged.

@@ -106,6 +106,26 @@ ConfigSchema::Value TomlConfigSource::get(std::string_view key, Type t) const
         return out;
     }
 
+    case Type::UIntList:
+    {
+        // Integer literals only, and non-negative: these are counts and
+        // degrees, and 2.5 cells is a configuration error rather than
+        // something to round.
+        std::vector<unsigned> out;
+        auto one = [&](auto const &e)
+        {
+            if (!e.is_integer() || e.as_integer() < 0)
+                throw bad(typeName(t));
+            out.push_back(static_cast<unsigned>(e.as_integer()));
+        };
+        if (node.is_array())
+            for (auto const &e : node.as_array())
+                one(e);
+        else
+            one(node);
+        return out;
+    }
+
     case Type::StringList:
     {
         if (!node.is_array())
@@ -268,6 +288,8 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(SteadyStateDiagnostics, bool);
     READ(SteadyStateStepDiagnostics, bool);
     READ(SteadyStateSolve, bool);
+    READ(DegreeLadder, std::vector<unsigned>);
+    READ(GridLadder, std::vector<unsigned>);
     READ(DegreeAdaptation, bool);
     READ(DegreeTolerance, double);
     READ(MaxPolynomialDegree, unsigned);
@@ -319,6 +341,56 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
         throw std::invalid_argument(
             "Missing required configuration key: OutputFilename -- there is no "
             "config file to take a name from.");
+
+    if (!c.DegreeLadder.empty() || !c.GridLadder.empty())
+    {
+        // Both lists describe the same sequence of rungs, so they have to be
+        // the same length. Either alone is fine and holds the other quantity at
+        // its configured value for every rung, which is what makes a pure
+        // h-ladder and a pure k-ladder expressible without writing the other
+        // list out.
+        if (!c.DegreeLadder.empty() && !c.GridLadder.empty() &&
+            c.DegreeLadder.size() != c.GridLadder.size())
+            throw std::invalid_argument(
+                "DegreeLadder and GridLadder describe the same rungs and must be "
+                "the same length: " + std::to_string(c.DegreeLadder.size()) +
+                " degrees against " + std::to_string(c.GridLadder.size()) +
+                " cell counts.");
+
+        for (unsigned k : c.DegreeLadder)
+            if (k < 1)
+                throw std::invalid_argument(
+                    "DegreeLadder entries must be at least 1: the degree-0 basis "
+                    "cannot be evaluated away from its node.");
+
+        for (unsigned n : c.GridLadder)
+            if (n < 1)
+                throw std::invalid_argument(
+                    "GridLadder entries must be at least 1 cell.");
+
+        // Both choose the discretisation a run is solved at, from different
+        // information -- a ladder from what the user wrote, adaptation from an
+        // error estimate -- so combining them means one silently loses.
+        if (c.DegreeAdaptation)
+            throw std::invalid_argument(
+                "DegreeLadder and DegreeAdaptation both choose the sequence of "
+                "discretisations to solve at. Use one or the other.");
+
+        // Same reasoning as DegreeAdaptation's: each rung would take the
+        // previous one's final state as its initial condition and integrate the
+        // same interval again, which is a wrong answer rather than a slow one.
+        if (c.SteadyStateSolver == "TimeMarch")
+            throw std::invalid_argument(
+                "A ladder is for steady solves, but SteadyStateSolver = "
+                "\"TimeMarch\". Use \"PseudoTransient\" or \"Newton\".");
+
+        if (reader == Reader::Toml && !c.SteadyStateTolerance && !c.SteadyStateSolve)
+            throw std::invalid_argument(
+                "A ladder needs a steady solve: set SteadyStateSolve = true, or "
+                "SteadyStateTolerance to name a tolerance. Without either, "
+                "steady-state termination is never armed and every rung "
+                "time-marches the same interval again.");
+    }
 
     if (c.DegreeAdaptation)
     {
@@ -401,6 +473,30 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
 
 // --- makeGrid ---------------------------------------------------------------
 
+// The mesh the configuration asks for, restart or not. Split out because a
+// restart needs it as well: the file's mesh says how the stored state is laid
+// out, and this says what the run is to be solved on, exactly as fileOrder and
+// restartRunOrder split the two degrees.
+std::unique_ptr<Grid> configuredGrid(SolverConfig const &config)
+{
+    if (!config.Grid_points.empty())
+        return std::make_unique<Grid>(config.Grid_points);
+
+    if (config.Grid_size < 4 && config.High_Grid_Boundary)
+        throw std::invalid_argument(
+            "Grid size must exceed 4 cells in order to implement dense boundaries");
+
+    // Grid ignores both fractions when High_Grid_Boundary is false
+    // (gridStructures.hpp:81), so passing them unconditionally is what the two
+    // old readers did between them -- MaNTA.cpp zeroed them, PyRunner did not,
+    // and the grids came out identical either way. Worth stating because it
+    // looks like a divergence somebody should fix.
+    return std::make_unique<Grid>(config.Lower_boundary, config.Upper_boundary,
+                                  config.Grid_size, config.High_Grid_Boundary,
+                                  config.Lower_Boundary_Fraction,
+                                  config.Upper_Boundary_Fraction);
+}
+
 std::unique_ptr<Grid> makeGrid(SolverConfig const &config,
                                netCDF::NcFile *restart, unsigned int &k)
 {
@@ -418,23 +514,41 @@ std::unique_ptr<Grid> makeGrid(SolverConfig const &config,
     }
 
     k = config.Polynomial_degree;
+    return configuredGrid(config);
+}
 
-    if (!config.Grid_points.empty())
-        return std::make_unique<Grid>(config.Grid_points);
+// --- restartRunGrid ---------------------------------------------------------
 
-    if (config.Grid_size < 4 && config.High_Grid_Boundary)
-        throw std::invalid_argument(
-            "Grid size must exceed 4 cells in order to implement dense boundaries");
+std::unique_ptr<Grid> restartRunGrid(SolverConfig const &config, Grid const &fileGrid)
+{
+    if (!config.restart)
+        return std::make_unique<Grid>(fileGrid);
 
-    // Grid ignores both fractions when High_Grid_Boundary is false
-    // (gridStructures.hpp:81), so passing them unconditionally is what the two
-    // old readers did between them -- MaNTA.cpp zeroed them, PyRunner did not,
-    // and the grids came out identical either way. Worth stating because it
-    // looks like a divergence somebody should fix.
-    return std::make_unique<Grid>(config.Lower_boundary, config.Upper_boundary,
-                                  config.Grid_size, config.High_Grid_Boundary,
-                                  config.Lower_Boundary_Fraction,
-                                  config.Upper_Boundary_Fraction);
+    std::unique_ptr<Grid> wanted = configuredGrid(config);
+
+    // The common case, and it returns the file's own object rather than an
+    // equal one so that a restart onto the same mesh is the path it always was,
+    // down to the cell boundaries being the very doubles the file holds.
+    if (*wanted == fileGrid)
+        return std::make_unique<Grid>(fileGrid);
+
+    // Loud, for the same reason restartRunOrder is: the configuration has asked
+    // for something the file cannot supply directly, and a user who reached
+    // this by copying a config from elsewhere should be told which mesh won.
+    // Refining is safe -- the stored element polynomials are evaluated at the
+    // new nodes -- while coarsening is a genuine approximation, and either way
+    // the trace is rebuilt, since lambda lives on faces that have moved.
+    logmsg<LOG_LEVEL::WARNING>(
+        "Restart file was written on {} cells over [{:g}, {:g}], but the "
+        "configuration asks for {} over [{:g}, {:g}]. The state will be "
+        "projected onto the new mesh and the trace rebuilt{}.",
+        fileGrid.getNCells(), fileGrid.lowerBoundary(), fileGrid.upperBoundary(),
+        wanted->getNCells(), wanted->lowerBoundary(), wanted->upperBoundary(),
+        wanted->getNCells() < fileGrid.getNCells()
+            ? ", which discards information at this resolution"
+            : "");
+
+    return wanted;
 }
 
 // --- restartRunOrder --------------------------------------------------------

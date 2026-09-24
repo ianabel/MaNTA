@@ -4,181 +4,181 @@
    "cells": 4,
    "k": 2,
    "points": 12,
-   "nflux": 108,
+   "nflux": 96,
    "nderiv": 24,
-   "visits": 11,
-   "error": 0.0012333565115850125
+   "visits": 10,
+   "error": 0.0012333565115846454
   },
   {
    "cells": 4,
    "k": 3,
    "points": 16,
-   "nflux": 144,
+   "nflux": 128,
    "nderiv": 32,
-   "visits": 11,
-   "error": 7.550338739359364e-05
+   "visits": 10,
+   "error": 7.550338739344828e-05
   },
   {
    "cells": 4,
    "k": 4,
    "points": 20,
-   "nflux": 180,
+   "nflux": 160,
    "nderiv": 40,
-   "visits": 11,
-   "error": 3.406931825745949e-06
+   "visits": 10,
+   "error": 3.4069318246443576e-06
   },
   {
    "cells": 4,
    "k": 5,
    "points": 24,
-   "nflux": 216,
+   "nflux": 192,
    "nderiv": 48,
-   "visits": 11,
-   "error": 2.1208139822201204e-07
+   "visits": 10,
+   "error": 2.120813979911533e-07
   },
   {
    "cells": 4,
    "k": 6,
    "points": 28,
-   "nflux": 252,
+   "nflux": 224,
    "nderiv": 56,
-   "visits": 11,
-   "error": 6.461297295077397e-09
+   "visits": 10,
+   "error": 6.46129803495573e-09
   },
   {
    "cells": 6,
    "k": 2,
    "points": 18,
-   "nflux": 162,
+   "nflux": 144,
    "nderiv": 36,
-   "visits": 11,
-   "error": 0.00033985419559667433
+   "visits": 10,
+   "error": 0.00033985419559633335
   },
   {
    "cells": 6,
    "k": 3,
    "points": 24,
-   "nflux": 216,
+   "nflux": 192,
    "nderiv": 48,
-   "visits": 11,
-   "error": 1.5178861894227348e-05
+   "visits": 10,
+   "error": 1.5178861894085466e-05
   },
   {
    "cells": 6,
    "k": 4,
    "points": 30,
-   "nflux": 270,
+   "nflux": 240,
    "nderiv": 60,
-   "visits": 11,
-   "error": 3.9274423785880207e-07
+   "visits": 10,
+   "error": 3.927442362827809e-07
   },
   {
    "cells": 6,
    "k": 5,
    "points": 36,
-   "nflux": 324,
+   "nflux": 288,
    "nderiv": 72,
-   "visits": 11,
-   "error": 1.97157431452068e-08
+   "visits": 10,
+   "error": 1.9715745185180177e-08
   },
   {
    "cells": 6,
    "k": 6,
    "points": 42,
-   "nflux": 378,
+   "nflux": 336,
    "nderiv": 84,
-   "visits": 11,
-   "error": 3.0846083888082614e-10
+   "visits": 10,
+   "error": 3.084627824806792e-10
   },
   {
    "cells": 10,
    "k": 2,
    "points": 30,
-   "nflux": 270,
+   "nflux": 240,
    "nderiv": 60,
-   "visits": 11,
-   "error": 7.19683077560313e-05
+   "visits": 10,
+   "error": 7.196830775600318e-05
   },
   {
    "cells": 10,
    "k": 3,
    "points": 40,
-   "nflux": 360,
+   "nflux": 320,
    "nderiv": 80,
-   "visits": 11,
-   "error": 2.0718578846724473e-06
+   "visits": 10,
+   "error": 2.0718578840792134e-06
   },
   {
    "cells": 10,
    "k": 4,
    "points": 50,
-   "nflux": 450,
+   "nflux": 400,
    "nderiv": 100,
-   "visits": 11,
-   "error": 2.8533783536853383e-08
+   "visits": 10,
+   "error": 2.8533782226062747e-08
   },
   {
    "cells": 10,
    "k": 5,
    "points": 60,
-   "nflux": 540,
+   "nflux": 480,
    "nderiv": 120,
-   "visits": 11,
-   "error": 9.96897652218873e-10
+   "visits": 10,
+   "error": 9.969000373315657e-10
   },
   {
    "cells": 10,
    "k": 6,
    "points": 70,
-   "nflux": 630,
+   "nflux": 560,
    "nderiv": 140,
-   "visits": 11,
-   "error": 7.914096062064088e-12
+   "visits": 10,
+   "error": 7.915613928324209e-12
   },
   {
    "cells": 20,
    "k": 2,
    "points": 60,
-   "nflux": 540,
+   "nflux": 480,
    "nderiv": 120,
-   "visits": 11,
-   "error": 9.178531544455836e-06
+   "visits": 10,
+   "error": 9.178531544664154e-06
   },
   {
    "cells": 20,
    "k": 3,
    "points": 80,
-   "nflux": 720,
+   "nflux": 640,
    "nderiv": 160,
-   "visits": 11,
-   "error": 1.387851503294102e-07
+   "visits": 10,
+   "error": 1.3878515212800116e-07
   },
   {
    "cells": 20,
    "k": 4,
    "points": 100,
-   "nflux": 900,
+   "nflux": 800,
    "nderiv": 200,
-   "visits": 11,
-   "error": 9.524875147225831e-10
+   "visits": 10,
+   "error": 9.524842679334669e-10
   },
   {
    "cells": 20,
    "k": 5,
    "points": 120,
-   "nflux": 1080,
+   "nflux": 960,
    "nderiv": 240,
-   "visits": 11,
-   "error": 1.699113498990353e-11
+   "visits": 10,
+   "error": 1.6994861183434163e-11
   },
   {
    "cells": 20,
    "k": 6,
    "points": 140,
-   "nflux": 1260,
+   "nflux": 1120,
    "nderiv": 280,
-   "visits": 11,
-   "error": 2.4065541041315154e-13
+   "visits": 10,
+   "error": 2.298757856531355e-13
   }
  ]
 }

@@ -104,6 +104,12 @@ const std::vector<Entry> &table()
          "Run to a steady state using the default tolerance. SteadyStateTolerance "
          "does the same and names the tolerance; either arms it, and giving both "
          "uses the tolerance."},
+        {"DegreeLadder", {}, Type::UIntList, Category::Solver, false, false, std::vector<unsigned>{},
+         "Intermediate polynomial degrees to solve at before Polynomial_degree, each rung "
+         "warm-starting the next. A route to the configured resolution, not a change of it."},
+        {"GridLadder", {}, Type::UIntList, Category::Solver, false, false, std::vector<unsigned>{},
+         "Intermediate cell counts to go with DegreeLadder; same length if both are given. "
+         "Either alone holds the other at its configured value."},
         {"DegreeAdaptation", {}, Type::Bool, Category::Solver, false, false, false,
          "Choose the global polynomial degree by solving, estimating the error from "
          "u* - u_h, and re-solving at a higher degree. Steady solves only; implies "
@@ -257,6 +263,7 @@ const char *typeName(Type t)
     case Type::Double:     return "a number";
     case Type::String:     return "a string";
     case Type::DoubleList: return "a number, or an array of numbers";
+    case Type::UIntList: return "an array of non-negative whole numbers";
     case Type::StringList: return "an array of strings";
     }
     return "of an unrecognised type";

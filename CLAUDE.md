@@ -494,6 +494,43 @@ slices when each starts over
 driving the phases directly, because `runSolver` frees the state on its way out
 of a failed solve, so `PyRunner::run_ss()` cannot do it.
 
+**What a steady solve spends on physics is counted in whole grid sweeps, and the
+budget is exact rather than approximate**: `2 + 3n` for `Newton` and `2 + 4n`
+for `PseudoTransient`, `n` being continuation steps, pinned by
+`a_steady_solve_spends_the_physics_sweeps_it_has_to_and_no_others`. The two
+fixed sweeps are `AssignSigma` building `sigma` from the initial condition and
+the merit function's `||F||` at the initial state; each step is then KINSOL's
+residual at both ends plus one Jacobian, and a step at *finite* `dt` costs a
+fourth. Two properties keep it there, and both are the kind that would be lost
+silently, since a duplicate sweep changes no answer and only shows up on the
+bill of a case whose flux is expensive:
+
+* **`setInitialConditions` returns early on a steady solve**, before solving the
+  initial `du/dt` out of the u row. That derivative reaches nobody there --
+  `solveSteadyState` damps through its own zeroed `ptcDYdt`, and on convergence
+  it overwrites `dYdt` with zero, since the defining property of the answer is
+  that `dy/dt` vanishes. The gate is `solvesForSteadyState()`, so `TimeMarch`
+  keeps it: that path reaches a steady state through IDA, which wants a
+  consistent `y'` at `t0` like any transient.
+* **`steadyResidual` records its own norm when `dt` is infinite**, and the loop
+  reads that instead of calling `steadyNorm()` again. At `dt = inf` the damping
+  term is identically zero, so the function KINSOL evaluates *is* the steady
+  residual, at the same state -- it is recorded rather than recomputed so the
+  number is bit for bit what `steadyNorm()` would have returned, which is what
+  keeps the SER schedule and every run's step sequence unchanged. A stamp
+  counter guards it: a `KINSol` that made no successful steady-mode evaluation
+  leaves the stamp where the loop's snapshot found it, and the loop evaluates
+  for itself. Never consulted at finite `dt`, where the damped residual is a
+  different function and any small enough `dt` makes it small.
+
+**The residual at the initial state is not one of the removable ones**, despite
+duplicating KINSOL's first evaluation: it is also the already-converged test,
+the early return that makes a warm start cost one sweep rather than a Newton
+solve. And KINSOL offers no way to hand it a residual it did not compute, so
+three sweeps -- two residuals and a Jacobian -- is the floor for a Newton method
+on a problem it does not know is linear. `PERFORMANCE.md` has the comparison
+against a direct solve, which pays one.
+
 Every SUNDIALS handle is a member, not a local, so those three can be split.
 `ctx` is the exception: it belongs to the `SystemSolver`, not to a run, and
 `destroySundials` must not touch it.
@@ -1647,6 +1684,31 @@ formula, not the operator, if the data cannot tell them apart.
   and the explicit-object-parameter branch failed `std::function`'s `_Callable`
   probe until 14.4. `SystemSolver::setInitialConditions` and `DGSoln::AssignU` use
   lambdas rather than the bind family for that reason — don't reintroduce it.
+
+  **And a second: `std::format` of a `std::vector` needs libstdc++ 15.** P2286's
+  range formatters landed there, so formatting a container whole compiles on a box
+  with g++-15 and is a `static_assert` inside `<format>` on CI's clang legs —
+  *"std::formatter must be specialized for each type being formatted"*, naming
+  `<format>` and `variant` and nothing in this tree. What triggered it was adding
+  `std::vector<unsigned int>` to `ConfigSchema::Value` for the ladders without
+  adding it to the vector branch of `main.cpp`'s `defaultText`, so it fell through
+  to the generic `std::format("{}", x)`. Every vector alternative of that variant
+  has to be named in that branch, which formats element by element. All five gcc
+  legs were green and all five clang legs red, which is the signature — a build
+  error that splits the matrix by compiler is almost always the standard library
+  rather than the compiler.
+
+  **Reproduce it locally before pushing a fix rather than after.** Both halves of
+  CI's configuration are installable here, and the check costs a syntax-only pass:
+
+  ```sh
+  clang++-19 -std=c++23 --gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 \
+      -fsyntax-only -I. -Iextern/toml11/include main.cpp
+  ```
+
+  That gave 4 errors before the fix and 0 after — the same 4 CI reported. Run it
+  *without* the fix too: a clean result from a probe that never reproduced the
+  failure is evidence of nothing.
 * **Third-party includes must be `SYSTEM`.** An imported target's include
   directories are already treated that way; anything added by hand needs
   `target_include_directories(... SYSTEM ...)`, as `manta_vendored` and the netCDF
@@ -1751,10 +1813,12 @@ formula, not the operator, if the data cannot tell them apart.
   solves nothing: measured on a `TestDiffusion` round trip at
   `Absolute_tolerance = 1e-8`, that one call takes the weighted residual from
   2.6e-3 to 556. It is why a restart needed roughly ten times as many residual
-  evaluations inside `IDACalcIC` as a cold start. Note the reordering that went
-  with it: `ApplyDirichletBCs` now runs *after* the trace is settled, since
-  `EvaluateLambda` overwrites every entry including the boundary ones, so in the
-  old order the Dirichlet data was applied and then immediately discarded.
+  evaluations inside `IDACalcIC` as a cold start. What changed is *not* the order
+  of the two calls -- `ApplyDirichletBCs` still runs first, and the comment at the
+  site says why -- but that `EvaluateLambda` became conditional on
+  `!sameDiscretisation && !sameGrid`. So the copy path and a degree projection
+  over the same mesh never reach it and keep the datum, while a restart onto a
+  different mesh still runs it and behaves exactly like a cold start.
 
   **The trace is kept whenever the *mesh* matches, not only the discretisation.**
   `lambda` has no polynomial degree — `DGSoln::Map` gives it `nCells + 1` entries
@@ -1763,6 +1827,37 @@ formula, not the operator, if the data cannot tell them apart.
   because the `q` row carries a `<lambda, v n>` term: on a `LinearDiffusion`
   restart coarsened from `k = 4` to `k = 3` at `atol = 1e-10`, keeping the trace
   takes the `q` block from 7.3e7 to 3.2e-7. Only a genuine remesh rebuilds it.
+* **A Dirichlet trace entry is written by hand or it is wrong, and it has to be
+  rewritten every time the state is reported.** Its row *and column* in
+  `K_global` are identically zero, `imposeDirichletTraceRows` pins the correction
+  to zero and `residual` never writes the row, so it is an unknown appearing in no
+  equation: nothing in the integration can move it, and it keeps whatever was last
+  stored there. `setInitialConditions` seeds it; that used to be the only write, so
+  a run with **time-dependent** Dirichlet data reported `g_D(t0)` for ever. Measured
+  on `MatTest`, whose `g_D` decays like `exp(-t pi^2 / 4)`: at `t = 0.5` the restart
+  file's lower-face trace held 0.99999993 against a datum of 0.29121, with the first
+  interior trace node at 0.28962 -- discontinuous from its own neighbour by a factor
+  of three.
+
+  `ApplyDirichletBCs(y, t)` is therefore called at each point the state is settled
+  and about to be read: after `IDASolve` returns, at the top of `writeSteadyState()`,
+  and on the steady-solve failure path. One call covers every reader, because `y`
+  aliases the `N_Vector` `IDASolve` writes its output into and the netCDF slice, the
+  `.dat` files, the restart file's DOF vector and `yJac` all read that memory. **It
+  reaches no equation**: `IDASolve` treats `Y` as an output and resumes from its own
+  internal state, so a write between calls is discarded, and the cell rows take the
+  datum from `RF_cellwise` as they always have -- `MatTest`'s `.nc` is byte
+  identical across the change, its restart DOF vector bit identical on all 388
+  entries that are not one of the four trace DOFs, at the same 25 residuals and 11
+  Jacobian builds.
+
+  Note the time argument. `ApplyDirichletBCs` used to read the member `t`, which is
+  assigned `t0` in `setInitialConditions` and never moves again, so a call added
+  without it would have written `g_D(t0)` and looked like it worked. Any new
+  reporting path needs the same call; `the_reported_dirichlet_trace_follows_the_
+  boundary_datum` and the ladder equality test are what would notice one that
+  forgot. The two *seeds* still differ between a cold start and a restart, which
+  `TODO` records and which is now invisible to a reader.
 * **`sigma` is loaded on a copy-path restart, not recomputed, and that is a
   measurement too.** `DGSoln::copy` brings `sigma` across with everything else and
   `ApplyDirichletBCs` touches only `lambda`, so `AssignSigma` was rebuilding it

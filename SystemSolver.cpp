@@ -464,7 +464,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
                     y.lambda(v) = restart.lambda(v);
         }
 
-        ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
+        ApplyDirichletBCs(y, t); // If dirichlet, overwrite with those boundary conditions
 
         // sigma is *loaded* on the copy path, not recomputed.
         //
@@ -613,7 +613,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
             y.AssignAux([this](Index i, Position x) { return problem->InitialAuxValue(i, x); });
         }
 
-        ApplyDirichletBCs(y);
+        ApplyDirichletBCs(y, t);
 
         // Zero most of dydt, we only have to set it to nonzero values for the differential parts of y
 
@@ -633,6 +633,28 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     }
 
     dydt.zeroCoeffs();
+
+    // A steady solve is finished with the initial condition here, and the sweep
+    // below is one it would throw away. What follows exists to solve the initial
+    // du/dt out of the u row, and on this path that derivative reaches nobody:
+    // solveSteadyState damps against its own zeroed ptcDYdt and never reads
+    // dYdt, and on convergence it overwrites dYdt with zero anyway
+    // (SteadyState.cpp) -- because the defining property of the answer is that
+    // dy/dt vanishes, so the t0 guess is wrong for everything that reads it
+    // afterwards. Returning with dydt left at the zero above is that same
+    // value, reached without the sweep.
+    //
+    // The sweep is not incidental. ComputePhysics evaluates SigmaFn *and*
+    // Sources at every node and this block keeps only the sources, so on a case
+    // whose flux is expensive it is a full evaluation of the transport model
+    // bought for nothing -- one of the seven a Newton steady solve of
+    // python-examples/park-convergence used to spend. It is the same waste the
+    // restart copy path above documents, in the other direction.
+    //
+    // TimeMarch is excluded by solvesForSteadyState(): it reaches a steady state
+    // through IDA, which wants a consistent y' at t0 like any transient.
+    if (solvesForSteadyState())
+        return;
 
     GlobalState sourceStates = y.evalOnNodes();
     const auto sourcePoints = y.getPoints();
@@ -673,18 +695,18 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     }
 }
 
-void SystemSolver::ApplyDirichletBCs(DGSoln &Y)
+void SystemSolver::ApplyDirichletBCs(DGSoln &Y, Time tNow)
 {
     for (Index i = 0; i < nVars; ++i)
     {
         if (problem->isLowerBoundaryDirichlet(i))
         {
-            Y.lambda(i)(0) = problem->LowerBoundary(i, t);
+            Y.lambda(i)(0) = problem->LowerBoundary(i, tNow);
         }
 
         if (problem->isUpperBoundaryDirichlet(i))
         {
-            Y.lambda(i)(grid.getNCells()) = problem->UpperBoundary(i, t);
+            Y.lambda(i)(grid.getNCells()) = problem->UpperBoundary(i, tNow);
         }
     }
 }

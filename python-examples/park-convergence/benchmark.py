@@ -152,8 +152,11 @@ def main():
     print("  Same answer to every digit, an order of magnitude apart in cost.")
     print("  TimeMarch sizes each step from a local error estimate on a transient")
     print("  that is thrown away; the other two size it from the residual, and")
-    print("  Newton drops the pseudo-time term altogether. Park's own solver")
-    print("  reaches this state in 9-15 iterations, which is where Newton lands.")
+    print("  Newton drops the pseudo-time term altogether. Park's 9-15")
+    print("  iterations are his nonlinear cases; chi is constant here, so his")
+    print("  relaxation is converged at its first iterate and he solves in one")
+    print("  pass -- three of Newton's five sweeps are the floor for a method")
+    print("  that does not know the problem is linear.")
     print("  It does not always go this way -- see ../shestakov-nonlinear/, where")
     print("  continuation costs 2.5x what time marching does.")
 

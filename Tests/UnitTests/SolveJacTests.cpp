@@ -28,6 +28,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
+#include <numbers>
 #include <toml.hpp>
 
 using namespace toml::literals::toml_literals;
@@ -345,6 +347,63 @@ public:
     }
 };
 
+// A Jardin-shaped critical-gradient flux with the singularity
+// regularised away: chi = 1 + 10[(t+eps)^0.5 - eps^0.5], t = max(|q| - qc, 0).
+// The subtraction keeps chi continuous at the threshold and eps = 1e-3 caps
+// dchi/dq at 158, so the derivative is bounded and smooth and a finite
+// difference of the residual is trustworthy -- which it is not at eps = 0,
+// where dchi/dq is unbounded and a difference quotient averages across it.
+//
+// This is the state a superconvergent steady solve fails from: the initial
+// condition is 1 - x + sin(8 pi x), whose q sweeps through the critical
+// gradient many times.
+class KinkedDiffusion : public TransportSystem
+{
+public:
+    KinkedDiffusion() : TransportSystem({.variables = numberedFields(1)}) {}
+
+    static constexpr double chi0 = 1.0, kap = 10.0, qc = 0.5, eps = 1e-3, a = 0.5;
+
+    static double chi(double q)
+    {
+        const double t = std::max(std::abs(q) - qc, 0.0);
+        return t == 0.0 ? chi0 : chi0 + kap * (std::pow(t + eps, a) - std::pow(eps, a));
+    }
+    static double dchi(double q)
+    {
+        const double t = std::max(std::abs(q) - qc, 0.0);
+        return t == 0.0 ? 0.0
+                        : kap * a * std::pow(t + eps, a - 1.0) * (q > 0 ? 1.0 : -1.0);
+    }
+
+    Value LowerBoundary(Index, Time) const override { return 1.0; }
+    Value UpperBoundary(Index, Time) const override { return 0.0; }
+
+    Value SigmaFn(Index, const State &s, Position x, Time) override
+    {
+        return x * chi(s.q(0)) * s.q(0);
+    }
+    Value Sources(Index, const State &, Position, Time) override { return 1.0; }
+
+    void dSigmaFn_dq(Index, VectorRef v, const State &s, Position x, Time) override
+    {
+        v[0] = x * (chi(s.q(0)) + dchi(s.q(0)) * s.q(0));
+    }
+    void dSigmaFn_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSources_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSources_dq(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+
+    Value InitialValue(Index, Position x) const override
+    {
+        return 1.0 - x + std::sin(8.0 * std::numbers::pi * x);
+    }
+    Value InitialDerivative(Index, Position x) const override
+    {
+        return -1.0 + 8.0 * std::numbers::pi * std::cos(8.0 * std::numbers::pi * x);
+    }
+};
+
 // The J dy = g check of the first test case in this file, parameterised on the
 // flag and the physics so it can be run both ways.
 template <class Problem>
@@ -462,6 +521,58 @@ BOOST_AUTO_TEST_CASE(the_flag_off_jacobian_is_unaffected_by_the_new_code_path)
                                            << resid);
         BOOST_TEST(resid < 1e-6);
     }
+}
+
+BOOST_AUTO_TEST_CASE(the_superconvergent_jacobian_is_right_where_its_own_solve_fails)
+{
+    // Superconvergent = true cannot reach a steady state on Jardin's flux from
+    // a perturbed initial condition, by either residual-driven solver and at
+    // every degree, where the plain method converges every time. The obvious
+    // suspicion is a wrong block in the chain rule through the postprocessing,
+    // reachable only off the constraint manifold -- the case above differences
+    // a *smooth* flux at a mild state, which is exactly where such a block
+    // would not show.
+    //
+    // It is not that. This differences the residual at the state the solve
+    // fails from, on the flux it fails on, and the superconvergent Jacobian is
+    // as good as the plain one to seven digits. What the flag costs there is
+    // the width of the Newton basin, not the accuracy of the linearisation:
+    // pseudo-transient continuation with a small enough initial step converges
+    // with the flag on, at 5090 transport-model calls against 5280 with it off.
+    // See PERFORMANCE.md.
+    //
+    // Run at cj = 0 as well as cj != 0 deliberately, because cj = 0 is the
+    // operator a steady solve actually uses and the mass term at cj = 3.7 would
+    // otherwise dominate the comparison.
+    for (Index k : {2, 3})
+        for (double cj : {0.0, 3.7})
+        {
+            double plain = 0.0, star = 0.0;
+            for (int trial = 0; trial < 3; ++trial)
+            {
+                plain = std::max(plain, solveResidualRatio<KinkedDiffusion>(
+                                            k, 10, 1.0, cj, false, trial));
+                star = std::max(star, solveResidualRatio<KinkedDiffusion>(
+                                          k, 10, 1.0, cj, true, trial));
+            }
+            BOOST_TEST_MESSAGE(std::format(
+                "  k={} cj={:<4}  ||J dy - g||/||g||: plain {:.3e}, superconvergent {:.3e}",
+                k, cj, plain, star));
+
+            BOOST_TEST(star < 1e-5,
+                       "k = " << k << ", cj = " << cj
+                              << ": the superconvergent Jacobian disagrees with a "
+                                 "finite difference of its own residual ("
+                              << star << ")");
+
+            // And not merely small but no worse than the plain one, which is
+            // the comparison that would catch a block that is right to within
+            // the finite-difference floor and wrong beyond it. A factor of ten
+            // of headroom, because both are finite-difference measurements.
+            BOOST_TEST(star < 10.0 * plain,
+                       "k = " << k << ", cj = " << cj << ": superconvergent " << star
+                              << " against plain " << plain);
+        }
 }
 
 BOOST_AUTO_TEST_CASE(solve_jac_eq_without_a_field_model_is_the_transport_solve)

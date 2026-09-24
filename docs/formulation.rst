@@ -182,3 +182,15 @@ are imposed inside the linear solve instead. The visible effect is that a
 finite-differenced Jacobian of ``residual`` is rank-deficient by exactly the
 number of Dirichlet boundaries, which is expected rather than a bug, and which
 the Jacobian tests account for explicitly.
+
+A second effect is less obvious. The trace unknown :math:`\lambda` at a
+Dirichlet end appears in no equation at all: its row and its column in the
+condensed trace matrix are identically zero, and the Newton correction there is
+pinned to zero. So the solver never computes a value for it, and it holds
+whatever was last written into it. The solver writes :math:`g_D(t)` there
+directly -- once when the initial condition is built, and again each time the
+state is reported -- which is what makes the boundary entry of the trace in the
+output and the restart file agree with the boundary condition at that time.
+Nothing downstream reads it: the interior sees the Dirichlet datum through the
+cell rows, which are assembled from the boundary functions at the residual's own
+time.

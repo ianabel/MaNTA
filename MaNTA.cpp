@@ -93,8 +93,25 @@ int runManta(std::string const &fname)
 		}
 	}
 
-	unsigned int k = 1;
-	std::unique_ptr<Grid> grid = makeGrid(config, config.restart ? &restart_file : nullptr, k);
+	// Two meshes and two degrees on a restart, and keeping them apart is the
+	// whole of it: `fileGrid`/`fileOrder` describe how the stored state is laid
+	// out, and are what the DOF check and setRestartValues below must use, while
+	// `grid`/`k` are what the run is solved on and are the configuration's to
+	// choose. Off a restart the two coincide and fileGrid is moved into grid.
+	unsigned int fileOrder = 1;
+	std::unique_ptr<Grid> fileGrid = makeGrid(config, config.restart ? &restart_file : nullptr, fileOrder);
+
+	unsigned int k = fileOrder;
+	std::unique_ptr<Grid> grid;
+	if (config.restart)
+	{
+		grid = restartRunGrid(config, *fileGrid);
+		k = restartRunOrder(config, fileOrder);
+	}
+	else
+	{
+		grid = std::move(fileGrid);
+	}
 
 	// Physics cases built outside this tree.
 	//
@@ -165,12 +182,14 @@ int runManta(std::string const &fname)
 		Index nField_file = 0;
 		Index nDOF_file = LoadFromFile(restart_file, Y, dYdt, nField_file);
 
-		// Make sure degrees of freedom are consistent with restart file
-		const Index nCells = grid->getNCells();
-		const Index nDOF = pProblem->getNumVars() * 3 * nCells * (k + 1) +
+		// Make sure degrees of freedom are consistent with restart file. The
+		// file's mesh and degree, not the run's: this is a statement about how
+		// the vector just read is laid out.
+		const Index nCells = fileGrid->getNCells();
+		const Index nDOF = pProblem->getNumVars() * 3 * nCells * (fileOrder + 1) +
 						   pProblem->getNumVars() * (nCells + 1) +
 						   pProblem->getNumScalars() +
-						   pProblem->getNumAux() * nCells * (k + 1) +
+						   pProblem->getNumAux() * nCells * (fileOrder + 1) +
 						   nField;
 
 		// Two checks, not one, because nDOF alone cannot separate them: a file
@@ -187,12 +206,11 @@ int runManta(std::string const &fname)
 		if (nDOF_file != nDOF)
 			throw std::invalid_argument("nVars/nAux/nScalars in restart file inconsistent with physics case");
 
-		// The file's own degree, which is what its DOF are laid out at.
-		pProblem->setRestartValues(Y, dYdt, *grid, k, nField);
-
-		// The run's degree, which may differ. setInitialConditions projects
-		// across the difference; equal degrees keep the copy path.
-		k = restartRunOrder(config, k);
+		// The file's own mesh and degree, which is what its DOF are laid out at.
+		// The run's, which may differ in either, were chosen above;
+		// setInitialConditions projects across whichever differs and keeps the
+		// copy path when neither does.
+		pProblem->setRestartValues(Y, dYdt, *fileGrid, fileOrder, nField);
 	}
 
 	// Degree adaptation builds and runs a solver per level itself, and
@@ -201,7 +219,9 @@ int runManta(std::string const &fname)
 	// problem while the restart check above has already sized the state for
 	// nField unknowns. Refused rather than ignored, the way a sliced steady
 	// solve refuses it.
-	if (config.DegreeAdaptation && fieldModel)
+	if ((config.DegreeAdaptation || !config.DegreeLadder.empty() ||
+		 !config.GridLadder.empty()) &&
+		fieldModel)
 		throw std::invalid_argument(
 			"DegreeAdaptation cannot be combined with a FieldModel: the adaptive "
 			"driver builds a solver per degree and cannot carry the field model.");
@@ -214,6 +234,12 @@ int runManta(std::string const &fname)
 		// object survives to be destroyed here in the usual way.
 		auto system = runAdaptiveDegree(config, *pProblem, adjoint.get(), *grid, k,
 										*config.t_final);
+	}
+	else if (!config.DegreeLadder.empty() || !config.GridLadder.empty())
+	{
+		// Same shape, and for the same reason: a solver per rung, built inside.
+		auto system = runLadder(config, *pProblem, adjoint.get(), *grid, k,
+								*config.t_final);
 	}
 	else
 	{

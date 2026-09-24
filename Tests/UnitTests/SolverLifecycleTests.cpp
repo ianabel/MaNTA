@@ -36,6 +36,7 @@
 #include <cmath>
 #include <exception>
 #include <filesystem>
+#include <format>
 #include <memory>
 #include <numbers>
 #include <print>
@@ -340,7 +341,17 @@ public:
         return TestDiffusion::SigmaFn(i, s, x, t);
     }
 
+    // Counted separately because the two are billed separately: a flux sweep is
+    // ComputePhysics over every node, a derivative sweep is
+    // ComputePhysicsDerivatives, and a solve spends different numbers of each.
+    void dSigmaFn_dq(Index i, VectorRef v, const State &s, Position x, Time t) override
+    {
+        ++derivCalls;
+        TestDiffusion::dSigmaFn_dq(i, v, s, x, t);
+    }
+
     int calls = 0;
+    int derivCalls = 0;
 };
 
 } // namespace
@@ -893,6 +904,55 @@ long idaResidualEvals(SystemSolver &sys)
     return n;
 }
 
+BOOST_AUTO_TEST_CASE(the_reported_dirichlet_trace_follows_the_boundary_datum)
+{
+    // A Dirichlet trace entry is an unknown that appears in no equation: its row
+    // and column in K_global are identically zero, imposeDirichletTraceRows pins
+    // the correction to zero and residual() never writes the row, so nothing in
+    // the integration can move it. It therefore has to be written by whoever
+    // wants it right, and the datum it should hold is a function of time.
+    //
+    // It used to be written once, by setInitialConditions, and then left --
+    // reporting g_D(t0) for the whole run, or on a cold start not even that,
+    // since EvaluateLambda overwrites the datum with {{u}} a few lines after
+    // ApplyDirichletBCs applies it. Measured on Tests/RegressionTests/MatTest,
+    // whose g_D decays like exp(-t pi^2 / 4): at t = 0.5 the restart file's
+    // lower-face trace held 0.99999993 against a datum of 0.29121, with the
+    // first interior trace node at 0.28962 -- discontinuous from its own
+    // neighbour by a factor of three.
+    //
+    // TestDiffusion's boundaries are its exact solution sampled at the two ends,
+    // so they genuinely move; that is checked below rather than assumed, because
+    // every other fixture here has constant boundary data and would pass this
+    // test with the fix removed.
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, "lifecycle_dirichlet_trace");
+
+    const double gLower = problem.LowerBoundary(0, T_FINAL);
+    const double gUpper = problem.UpperBoundary(0, T_FINAL);
+    BOOST_TEST(gLower != problem.LowerBoundary(0, 0.0));
+    BOOST_TEST(gUpper != problem.UpperBoundary(0, 0.0));
+
+    {
+        CapturedOutput quiet;
+        sys.runSolver(T_FINAL);
+    }
+
+    // yJac is what outlives the run and what PyRunner::getSolution reads; it is
+    // filled by captureState() from the same memory the restart file's DOF
+    // vector is written from, so this covers both.
+    BOOST_TEST(sys.yJac.lambda(0)(0) == gLower, boost::test_tools::tolerance(1e-15));
+    BOOST_TEST(sys.yJac.lambda(0)(nCells) == gUpper, boost::test_tools::tolerance(1e-15));
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+    removeOutput("lifecycle_dirichlet_trace");
+}
+
 BOOST_AUTO_TEST_CASE(only_a_time_marching_run_pays_for_calcic)
 {
     // IDACalcIC exists to make the state IDA takes its *first step* from
@@ -1109,9 +1169,24 @@ BOOST_AUTO_TEST_CASE(a_converged_steady_state_leaves_no_stale_derivative)
         sys.initialize();
     }
 
-    // Not vacuous: at t0 the derivative is genuinely nonzero, so zeroing it is a
-    // change rather than a coincidence of this fixture.
-    BOOST_TEST(N_VMaxNorm(sys.dYdt) > 1e-3);
+    // Not vacuous, but no longer for the reason it once was. setInitialConditions
+    // skips solving the initial du/dt out of the u row on a steady solve -- the
+    // derivative reaches nobody there and the sweep that builds it is thrown
+    // away -- so dYdt is already zero here, and a guard asserting otherwise
+    // would now be asserting the waste. What makes the zero below a property of
+    // the steady path rather than of this fixture is that the *same* fixture
+    // time-marched does fill it.
+    BOOST_TEST(N_VMaxNorm(sys.dYdt) == 0.0, boost::test_tools::tolerance(0.0));
+
+    {
+        SystemSolver marching(grid, k, &problem);
+        configure(marching, stem + "_tm");
+        CapturedOutput quiet;
+        marching.initialize();
+        BOOST_TEST(N_VMaxNorm(marching.dYdt) > 1e-3);
+        marching.destroySundials();
+    }
+    removeOutput(stem + "_tm");
 
     {
         CapturedOutput quiet;
@@ -1126,6 +1201,91 @@ BOOST_AUTO_TEST_CASE(a_converged_steady_state_leaves_no_stale_derivative)
         sys.destroySundials();
     }
     removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(a_steady_solve_spends_the_physics_sweeps_it_has_to_and_no_others)
+{
+    // What a steady solve costs an expensive transport model, pinned sweep by
+    // sweep. Two of the sweeps this used to make were duplicates and are gone;
+    // the test exists so they cannot come back unremarked, because nothing else
+    // here would notice -- a duplicate sweep changes no answer, only the bill.
+    //
+    // Newton mode, from a cold start, spends exactly five:
+    //
+    //   1  setInitialConditions, building sigma from the initial u and q
+    //   2  the merit function's ||F|| at the initial state, which is also the
+    //      already-converged test -- the one sweep a warm start may pay alone
+    //   3  KINSOL's system function at the initial iterate, forming the RHS
+    //   4  the Jacobian (a derivative sweep, not a flux one)
+    //   5  KINSOL's system function at the new iterate, the convergence test
+    //
+    // so four flux sweeps and one derivative sweep, and in general
+    // 2 + 2*steps flux sweeps in Newton mode against 2 + 3*steps damped, the
+    // extra one being the merit evaluation a finite dt still has to make.
+    //
+    // Sweep 3 duplicates sweep 2, and there is no KINSOL interface for handing
+    // it a residual it did not compute, so it stays. What went were the initial
+    // du/dt solve -- a sweep whose whole product a steady solve discards -- and
+    // the merit evaluation after KINSol, which at dt = infinity recomputes what
+    // KINSOL's last call already produced at the same state.
+    Grid grid(0.0, 1.0, nCells);
+    CountingDiffusion problem(lifecycle_config);
+    const long nodes = nCells * (k + 1);
+
+    for (auto mode : {SystemSolver::SteadyMode::Newton,
+                      SystemSolver::SteadyMode::PseudoTransient})
+    {
+        const bool newton = mode == SystemSolver::SteadyMode::Newton;
+        const std::string stem =
+            newton ? "lifecycle_sweeps_newton" : "lifecycle_sweeps_ptc";
+
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        sys.setSteadyMode(mode);
+        sys.setSteadyStateTolerance(1e-10);
+        if (!newton)
+            sys.setPseudoTransientInitialStep(1.0);
+
+        problem.calls = problem.derivCalls = 0;
+        {
+            CapturedOutput quiet;
+            sys.initialize();
+            sys.integrate(T_FINAL);
+        }
+
+        // Whole sweeps, or the count means something other than it says.
+        BOOST_TEST(problem.calls % nodes == 0);
+        BOOST_TEST(problem.derivCalls % nodes == 0);
+
+        const long flux = problem.calls / nodes;
+        const long deriv = problem.derivCalls / nodes;
+        const long steps = sys.lastSteadyStats().steps;
+        BOOST_TEST_MESSAGE(std::format("{}: {} continuation steps, {} flux sweeps, "
+                                       "{} derivative sweeps",
+                                       newton ? "Newton" : "PseudoTransient", steps,
+                                       flux, deriv));
+
+        // One derivative sweep per continuation step, which is KINSOL taking a
+        // fresh factorisation each time -- msbset is irrelevant at one Newton
+        // iteration per call, which is what a linear inner problem gives.
+        BOOST_TEST(deriv == steps);
+
+        // Two fixed sweeps -- sigma, and the initial ||F|| -- and then per step
+        // KINSOL's two, plus the merit evaluation afterwards on the damped path
+        // only. At dt = infinity that third one is the duplicate the cache now
+        // serves, which is the whole saving. Newton damps to a finite dt only on
+        // a rejected step, so the count below assumes none; assert it rather
+        // than rely on it, or a fixture that starts rejecting would report a
+        // broken cache instead of a changed solve.
+        BOOST_TEST(sys.lastSteadyStats().rejected == 0);
+        BOOST_TEST(flux == 2 + (newton ? 2 : 3) * steps);
+
+        {
+            CapturedOutput quiet;
+            sys.destroySundials();
+        }
+        removeOutput(stem);
+    }
 }
 
 BOOST_AUTO_TEST_CASE(the_SER_rate_and_floor_change_the_cost_and_not_the_answer)
@@ -1282,6 +1442,13 @@ BOOST_AUTO_TEST_CASE(the_steady_diagnostics_count_the_whole_solve_not_the_last_s
     // those are MaNTA's, not KINSOL's -- so the total strictly exceeds KINSOL's
     // own count by exactly that. Pins the snapshot being taken before the first
     // steadyNorm(), which it was not to begin with.
+    //
+    // PseudoTransient, and the offset is why. At a finite dt the damped
+    // residual KINSOL drives to zero and the steady residual this loop measures
+    // are different functions, so every step pays for both. In Newton mode they
+    // are the same function at the same state, the per-step merit evaluation is
+    // served from what KINSOL already computed, and the offset is 1 rather than
+    // steps + 1 -- a correct solve that would fail this line.
     BOOST_TEST(s.residualEvals == s.kinFuncEvals + s.steps + 1);
 
     // One linear solve per Newton iteration, with a direct solver.
