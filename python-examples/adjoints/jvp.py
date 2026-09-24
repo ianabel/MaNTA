@@ -47,6 +47,7 @@ class JAXAuxTest(VectorizedTransportSystem):
             "delta_t": 0.5,
             "solveAdjoint": True,
             "restart": False,
+            "SteadyStateSolver": "TimeMarch",
             "SteadyStateTolerance": 1e-3,
         }
 
