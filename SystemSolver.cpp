@@ -464,7 +464,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
                     y.lambda(v) = restart.lambda(v);
         }
 
-        ApplyDirichletBCs(y); // If dirichlet, overwrite with those boundary conditions
+        ApplyDirichletBCs(y, t); // If dirichlet, overwrite with those boundary conditions
 
         // sigma is *loaded* on the copy path, not recomputed.
         //
@@ -613,7 +613,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
             y.AssignAux([this](Index i, Position x) { return problem->InitialAuxValue(i, x); });
         }
 
-        ApplyDirichletBCs(y);
+        ApplyDirichletBCs(y, t);
 
         // Zero most of dydt, we only have to set it to nonzero values for the differential parts of y
 
@@ -695,18 +695,18 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     }
 }
 
-void SystemSolver::ApplyDirichletBCs(DGSoln &Y)
+void SystemSolver::ApplyDirichletBCs(DGSoln &Y, Time tNow)
 {
     for (Index i = 0; i < nVars; ++i)
     {
         if (problem->isLowerBoundaryDirichlet(i))
         {
-            Y.lambda(i)(0) = problem->LowerBoundary(i, t);
+            Y.lambda(i)(0) = problem->LowerBoundary(i, tNow);
         }
 
         if (problem->isUpperBoundaryDirichlet(i))
         {
-            Y.lambda(i)(grid.getNCells()) = problem->UpperBoundary(i, t);
+            Y.lambda(i)(grid.getNCells()) = problem->UpperBoundary(i, tNow);
         }
     }
 }

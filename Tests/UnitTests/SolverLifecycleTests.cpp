@@ -904,6 +904,55 @@ long idaResidualEvals(SystemSolver &sys)
     return n;
 }
 
+BOOST_AUTO_TEST_CASE(the_reported_dirichlet_trace_follows_the_boundary_datum)
+{
+    // A Dirichlet trace entry is an unknown that appears in no equation: its row
+    // and column in K_global are identically zero, imposeDirichletTraceRows pins
+    // the correction to zero and residual() never writes the row, so nothing in
+    // the integration can move it. It therefore has to be written by whoever
+    // wants it right, and the datum it should hold is a function of time.
+    //
+    // It used to be written once, by setInitialConditions, and then left --
+    // reporting g_D(t0) for the whole run, or on a cold start not even that,
+    // since EvaluateLambda overwrites the datum with {{u}} a few lines after
+    // ApplyDirichletBCs applies it. Measured on Tests/RegressionTests/MatTest,
+    // whose g_D decays like exp(-t pi^2 / 4): at t = 0.5 the restart file's
+    // lower-face trace held 0.99999993 against a datum of 0.29121, with the
+    // first interior trace node at 0.28962 -- discontinuous from its own
+    // neighbour by a factor of three.
+    //
+    // TestDiffusion's boundaries are its exact solution sampled at the two ends,
+    // so they genuinely move; that is checked below rather than assumed, because
+    // every other fixture here has constant boundary data and would pass this
+    // test with the fix removed.
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, "lifecycle_dirichlet_trace");
+
+    const double gLower = problem.LowerBoundary(0, T_FINAL);
+    const double gUpper = problem.UpperBoundary(0, T_FINAL);
+    BOOST_TEST(gLower != problem.LowerBoundary(0, 0.0));
+    BOOST_TEST(gUpper != problem.UpperBoundary(0, 0.0));
+
+    {
+        CapturedOutput quiet;
+        sys.runSolver(T_FINAL);
+    }
+
+    // yJac is what outlives the run and what PyRunner::getSolution reads; it is
+    // filled by captureState() from the same memory the restart file's DOF
+    // vector is written from, so this covers both.
+    BOOST_TEST(sys.yJac.lambda(0)(0) == gLower, boost::test_tools::tolerance(1e-15));
+    BOOST_TEST(sys.yJac.lambda(0)(nCells) == gUpper, boost::test_tools::tolerance(1e-15));
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+    removeOutput("lifecycle_dirichlet_trace");
+}
+
 BOOST_AUTO_TEST_CASE(only_a_time_marching_run_pays_for_calcic)
 {
     // IDACalcIC exists to make the state IDA takes its *first step* from

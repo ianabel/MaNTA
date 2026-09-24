@@ -674,39 +674,36 @@ BOOST_AUTO_TEST_CASE(a_ladder_reaches_the_same_answer_as_a_direct_solve)
     const auto laddered = solve(t + "DegreeLadder = [1, 2]\nGridLadder = [2, 4]\n");
     BOOST_REQUIRE_EQUAL(direct.size(), laddered.size());
 
-    // Every degree of freedom the solve can reach agrees to round-off, not
-    // merely to the steady tolerance: both end on the same discretisation with
-    // the residual driven to the same place, so it is the same state.
+    // Every degree of freedom agrees to round-off, not merely to the steady
+    // tolerance: both end on the same discretisation with the residual driven to
+    // the same place, so it is the same state.
     //
-    // The exceptions are the two Dirichlet trace entries, and they are
-    // exceptions for a reason that has nothing to do with the ladder. A
-    // Dirichlet trace row *and column* are identically zero in K_global, so
-    // nothing in the solve can move those entries: each keeps whatever
-    // setInitialConditions seeded it with, forever. The cold path seeds them
-    // from EvaluateLambda's {{u}} and the restart path from the boundary data,
-    // and a ladder ends on a restart -- so it reports the datum where a cold
-    // solve reports an extrapolation of the interior. Measured here: 1.0
-    // against 0.9999991 at k = 3 on eight cells, a discretisation error apart,
-    // and identical at every tolerance from 1e-8 to 1e-14 because neither is
-    // converging to anything. `TODO` carries the inconsistency.
-    const size_t lambda0 = 3 * 4 * 8, lambdaN = lambda0 + 8;
+    // The two Dirichlet trace entries used to be exceptions, and the reason had
+    // nothing to do with the ladder. A Dirichlet trace row *and column* are
+    // identically zero in K_global, so no solve can move those entries: each
+    // keeps whatever setInitialConditions seeded it with. The cold path seeds
+    // them from EvaluateLambda's {{u}} and the restart path from the boundary
+    // datum, and a ladder ends on a restart -- so the ladder reported 1.0 where
+    // a cold solve reported 0.9999991, a discretisation error apart and
+    // identical at every tolerance from 1e-8 to 1e-14, because neither was
+    // converging to anything.
+    //
+    // The seeds still differ, deliberately -- see TODO -- and this now passes
+    // anyway, because the datum is written back into those entries at every
+    // point the state is reported, writeSteadyState() included. So the whole
+    // vector is in scope here, and keeping it that way is the point of the test:
+    // it is what would notice a reporting path that got missed.
     double worst = 0.0;
     for (size_t i = 0; i < direct.size(); ++i)
-    {
-        if (i == lambda0 || i == lambdaN)
-            continue;
         worst = std::max(worst, std::abs(direct[i] - laddered[i]));
-    }
-    BOOST_TEST_MESSAGE("ladder against direct, off the Dirichlet traces: worst |dY| = "
-                       << worst);
+    BOOST_TEST_MESSAGE("ladder against direct: worst |dY| = " << worst);
     BOOST_TEST(worst < 1e-12);
 
-    // And the ladder's own Dirichlet entry is the datum to round-off, which is
-    // what the restart path guarantees and the thing worth having. Not bit
-    // exact: the entry is set from the boundary condition on the last rung, but
-    // the rung before it went through a remesh, so the arithmetic that produced
-    // the 1.0 is not the same arithmetic.
-    BOOST_TEST(std::abs(laddered[lambda0] - 1.0) < 1e-14);
+    // And both hold the datum at the lower face, rather than merely agreeing
+    // with each other on some extrapolation of the interior.
+    const size_t lambda0 = 3 * 4 * 8;
+    BOOST_TEST(direct[lambda0] == 1.0, boost::test_tools::tolerance(1e-14));
+    BOOST_TEST(laddered[lambda0] == 1.0, boost::test_tools::tolerance(1e-14));
 }
 
 BOOST_AUTO_TEST_CASE(the_two_ladders_must_describe_the_same_rungs)

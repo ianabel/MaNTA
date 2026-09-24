@@ -505,7 +505,16 @@ class SystemSolver
         // Initialises u, q and lambda to satisfy residual equation at t=0
         void setInitialConditions(N_Vector &Y, N_Vector &dYdt);
 
-        void ApplyDirichletBCs(DGSoln &);
+        // Writes g_D(t) into the trace entries of the two Dirichlet ends.
+        //
+        // Those entries are not unknowns the solve moves: their row and column in
+        // K_global are identically zero, imposeDirichletTraceRows pins the
+        // correction to zero, and residual() never writes the row. So whatever is
+        // put there stays there, and it has to be put there by whoever wants it
+        // right -- once when the initial condition is built, and again at every
+        // point the state is reported, because the datum is a function of time and
+        // the stored entry cannot follow it on its own.
+        void ApplyDirichletBCs(DGSoln &, Time t);
 
         // Builds initial matrices
         void initialiseMatrices();

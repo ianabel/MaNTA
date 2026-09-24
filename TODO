@@ -31,38 +31,64 @@ The Dirichlet trace is seeded differently by a cold start and by a restart.
 Found 2026-09-23, by a ladder test asserting that a ladder reaches the same
 answer as a direct solve and finding it did not, in exactly two entries.
 
-  A Dirichlet trace row *and column* are identically zero in K_global, so
-  nothing in a solve can move those entries: each keeps whatever
-  setInitialConditions seeded it with, for the whole run. The two paths seed
-  them differently. The cold branch runs ApplyDirichletBCs and then
-  EvaluateLambda, which sets *every* entry to {{u}} and so overwrites the data a
-  few lines after applying it; the restart branch was reordered long ago to run
-  ApplyDirichletBCs last, precisely because of that overwrite, and keeps the
-  datum. So a cold steady solve of LinearDiffusion at k = 3 on eight cells
-  reports lambda = 0.9999991 at a face whose boundary condition is 1, and the
-  same problem reached by a ladder reports 1. The gap does not shrink with the
-  steady tolerance -- identical from 1e-8 to 1e-14 -- because neither value is
-  converging to anything.
+  **The observable half of this is fixed** (2026-09-23) and only the seed is
+  left. What remains is a question about the guess handed to IDACalcIC, not
+  about any number a reader sees, so this is a note rather than a defect.
 
-  It reaches no interior unknown and no answer, but it is written to the netCDF
-  output and to the restart file, and it is what a reader gets when they ask for
-  the trace at the boundary.
+  A Dirichlet trace row *and column* are identically zero in K_global,
+  imposeDirichletTraceRows pins the correction to zero and residual() never
+  writes the row, so nothing in a solve can move those entries: each keeps
+  whatever was last written into it. The two initial-condition paths write
+  different things. The cold branch runs ApplyDirichletBCs and then an
+  unconditional EvaluateLambda, which sets *every* entry to {{u}} and so
+  overwrites the datum a few lines after applying it. The restart branch runs
+  ApplyDirichletBCs first as well, but its EvaluateLambda is guarded by
+  `!sameDiscretisation && !sameGrid`, so on the copy path and on a degree
+  projection over the same mesh there is no overwrite at all and the datum
+  survives -- a restart onto a *different* mesh behaves exactly like a cold
+  start. So a cold steady solve of LinearDiffusion at k = 3 on eight cells
+  seeds lambda = 0.9999991 at a face whose boundary condition is 1, where the
+  same problem reached by a degree ladder seeds 1. Neither value is converging
+  to anything, so the gap is identical from a steady tolerance of 1e-8 to 1e-14.
 
-  **Reordering the cold path to match was tried and reverted, and the reason is
-  worth keeping.** It fails systemsolver_init_tests, which asserts the initial
-  lambda matches the initial function at the faces to 0.025; that fixture's
-  initial condition is exp(-25x^2), which is 1 at the axis where the boundary
-  condition is 0, so pinning the face to the datum moves that entry by 0.9. And
-  the test's expectation is defensible: on a *cold* start there is no converged
-  trace to protect, and forcing the face to g_D while the interior sits at
-  u(0,0) = 1 hands IDACalcIC a discontinuity where {{u}} gives it a smooth
-  guess. The restart reorder was about not discarding a converged trace, which
-  is a different situation.
+  What a reader gets no longer depends on that. ApplyDirichletBCs now takes the
+  time explicitly -- it used to read the member `t`, which is set to t0 and
+  never moves -- and is called at each point the state is settled and about to
+  be reported: after IDASolve returns, at the top of writeSteadyState(), and on
+  the steady-solve failure path. `y` aliases the N_Vector IDASolve writes its
+  output into, and the netCDF slice, the .dat files, the restart file's DOF
+  vector and yJac all read that memory, so one call covers every reader. It
+  reaches no equation: IDASolve treats Y as an output and continues from its own
+  internal state, so a write between calls is discarded, and the cell rows take
+  the datum from RF_cellwise as they always have. Verified on MatTest -- the
+  .nc byte identical, the restart DOF vector bit identical on all 388 entries
+  that are not one of the four trace DOFs, dYdt unchanged, 25 residuals and 11
+  Jacobian builds before and after.
 
-  So the question is which value setInitialConditions should report for an
-  initial condition that does not satisfy its own boundary condition, and it
-  wants deciding rather than patching. Whichever way it goes, the two paths
-  should agree.
+  That fix was the substantive one, and it was a separate defect wearing the
+  same coat. The entry was not merely inconsistent between paths, it was *stale*
+  whenever g_D depends on t: MatTest's decays like exp(-t pi^2 / 4) and at
+  t = 0.5 the restart file held 0.99999993 -- the t = 0 value -- against a datum
+  of 0.29121 and a first interior trace node of 0.28962, discontinuous from its
+  own neighbour by a factor of three.
+
+  **Reordering the cold path to match the restart was tried and reverted, and
+  the reason is worth keeping.** It fails systemsolver_init_tests, which asserts
+  the initial lambda matches the initial function at the faces to 0.025; that
+  fixture's initial condition is exp(-25x^2), which is 1 at the axis where the
+  boundary condition is 0, so pinning the face to the datum moves that entry by
+  0.9. And the test's expectation is defensible: on a *cold* start there is no
+  converged trace to protect, and forcing the face to g_D while the interior
+  sits at u(0,0) = 1 hands IDACalcIC a discontinuity where {{u}} gives it a
+  smooth guess. The restart's conditional EvaluateLambda was about not
+  discarding a converged trace, which is a different situation.
+
+  So the open question is narrow: which value should setInitialConditions hand
+  IDACalcIC for an initial condition that does not satisfy its own boundary
+  condition? Both current answers are defensible as *guesses*, which is the
+  argument for leaving them as they are, and the only thing that made the
+  difference visible has been closed. Left here because "the two paths write
+  different things into the same slot" is worth knowing before touching either.
 
 
 No CI leg builds the documentation, so a -W failure reaches main unnoticed.

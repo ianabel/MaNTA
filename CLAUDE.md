@@ -1788,10 +1788,12 @@ formula, not the operator, if the data cannot tell them apart.
   solves nothing: measured on a `TestDiffusion` round trip at
   `Absolute_tolerance = 1e-8`, that one call takes the weighted residual from
   2.6e-3 to 556. It is why a restart needed roughly ten times as many residual
-  evaluations inside `IDACalcIC` as a cold start. Note the reordering that went
-  with it: `ApplyDirichletBCs` now runs *after* the trace is settled, since
-  `EvaluateLambda` overwrites every entry including the boundary ones, so in the
-  old order the Dirichlet data was applied and then immediately discarded.
+  evaluations inside `IDACalcIC` as a cold start. What changed is *not* the order
+  of the two calls -- `ApplyDirichletBCs` still runs first, and the comment at the
+  site says why -- but that `EvaluateLambda` became conditional on
+  `!sameDiscretisation && !sameGrid`. So the copy path and a degree projection
+  over the same mesh never reach it and keep the datum, while a restart onto a
+  different mesh still runs it and behaves exactly like a cold start.
 
   **The trace is kept whenever the *mesh* matches, not only the discretisation.**
   `lambda` has no polynomial degree — `DGSoln::Map` gives it `nCells + 1` entries
@@ -1800,6 +1802,37 @@ formula, not the operator, if the data cannot tell them apart.
   because the `q` row carries a `<lambda, v n>` term: on a `LinearDiffusion`
   restart coarsened from `k = 4` to `k = 3` at `atol = 1e-10`, keeping the trace
   takes the `q` block from 7.3e7 to 3.2e-7. Only a genuine remesh rebuilds it.
+* **A Dirichlet trace entry is written by hand or it is wrong, and it has to be
+  rewritten every time the state is reported.** Its row *and column* in
+  `K_global` are identically zero, `imposeDirichletTraceRows` pins the correction
+  to zero and `residual` never writes the row, so it is an unknown appearing in no
+  equation: nothing in the integration can move it, and it keeps whatever was last
+  stored there. `setInitialConditions` seeds it; that used to be the only write, so
+  a run with **time-dependent** Dirichlet data reported `g_D(t0)` for ever. Measured
+  on `MatTest`, whose `g_D` decays like `exp(-t pi^2 / 4)`: at `t = 0.5` the restart
+  file's lower-face trace held 0.99999993 against a datum of 0.29121, with the first
+  interior trace node at 0.28962 -- discontinuous from its own neighbour by a factor
+  of three.
+
+  `ApplyDirichletBCs(y, t)` is therefore called at each point the state is settled
+  and about to be read: after `IDASolve` returns, at the top of `writeSteadyState()`,
+  and on the steady-solve failure path. One call covers every reader, because `y`
+  aliases the `N_Vector` `IDASolve` writes its output into and the netCDF slice, the
+  `.dat` files, the restart file's DOF vector and `yJac` all read that memory. **It
+  reaches no equation**: `IDASolve` treats `Y` as an output and resumes from its own
+  internal state, so a write between calls is discarded, and the cell rows take the
+  datum from `RF_cellwise` as they always have -- `MatTest`'s `.nc` is byte
+  identical across the change, its restart DOF vector bit identical on all 388
+  entries that are not one of the four trace DOFs, at the same 25 residuals and 11
+  Jacobian builds.
+
+  Note the time argument. `ApplyDirichletBCs` used to read the member `t`, which is
+  assigned `t0` in `setInitialConditions` and never moves again, so a call added
+  without it would have written `g_D(t0)` and looked like it worked. Any new
+  reporting path needs the same call; `the_reported_dirichlet_trace_follows_the_
+  boundary_datum` and the ladder equality test are what would notice one that
+  forgot. The two *seeds* still differ between a cold start and a restart, which
+  `TODO` records and which is now invisible to a reader.
 * **`sigma` is loaded on a copy-path restart, not recomputed, and that is a
   measurement too.** `DGSoln::copy` brings `sigma` across with everything else and
   `ApplyDirichletBCs` touches only `lambda`, so `AssignSigma` was rebuilding it
