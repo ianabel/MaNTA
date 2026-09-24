@@ -1684,6 +1684,31 @@ formula, not the operator, if the data cannot tell them apart.
   and the explicit-object-parameter branch failed `std::function`'s `_Callable`
   probe until 14.4. `SystemSolver::setInitialConditions` and `DGSoln::AssignU` use
   lambdas rather than the bind family for that reason — don't reintroduce it.
+
+  **And a second: `std::format` of a `std::vector` needs libstdc++ 15.** P2286's
+  range formatters landed there, so formatting a container whole compiles on a box
+  with g++-15 and is a `static_assert` inside `<format>` on CI's clang legs —
+  *"std::formatter must be specialized for each type being formatted"*, naming
+  `<format>` and `variant` and nothing in this tree. What triggered it was adding
+  `std::vector<unsigned int>` to `ConfigSchema::Value` for the ladders without
+  adding it to the vector branch of `main.cpp`'s `defaultText`, so it fell through
+  to the generic `std::format("{}", x)`. Every vector alternative of that variant
+  has to be named in that branch, which formats element by element. All five gcc
+  legs were green and all five clang legs red, which is the signature — a build
+  error that splits the matrix by compiler is almost always the standard library
+  rather than the compiler.
+
+  **Reproduce it locally before pushing a fix rather than after.** Both halves of
+  CI's configuration are installable here, and the check costs a syntax-only pass:
+
+  ```sh
+  clang++-19 -std=c++23 --gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 \
+      -fsyntax-only -I. -Iextern/toml11/include main.cpp
+  ```
+
+  That gave 4 errors before the fix and 0 after — the same 4 CI reported. Run it
+  *without* the fix too: a clean result from a probe that never reproduced the
+  failure is evidence of nothing.
 * **Third-party includes must be `SYSTEM`.** An imported target's include
   directories are already treated that way; anything added by hand needs
   `target_include_directories(... SYSTEM ...)`, as `manta_vendored` and the netCDF
