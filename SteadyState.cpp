@@ -20,9 +20,8 @@
 //
 // Two pieces of the existing solver make this cheap. setAlpha already scales the
 // mass term in the u row -- IDA's cj for the forward solve, and 0 where dF/dy
-// alone is wanted, which computeAlgebraicTimeDerivatives has relied on for as
-// long as it has existed -- so alpha = 1/dt and alpha = 0 are both already
-// supported and exercised. And SunLinSolWrapper is solver-agnostic: its Setup is
+// alone is wanted -- so alpha = 1/dt and alpha = 0 are both already supported
+// and exercised. And SunLinSolWrapper is solver-agnostic: its Setup is
 // a no-op and its Solve calls solveJacEq, so KINSOL drives the same static
 // condensation IDA does.
 //
@@ -34,7 +33,7 @@
 // This was very nearly justified on a different and false ground. CLAUDE.md
 // describes the Dirichlet constraints as "imposed inside the linear solve",
 // which would make ||F|| blind to a Dirichlet violation and rule out any merit
-// function built on it. The code says otherwise: the block in solveJacEq that
+// function built on it. The code says otherwise: the block in solveHDGJac that
 // would force del_y.lambda to (boundary value - current lambda) is commented
 // out, above the words "We really should do something here", and the boundary
 // data reaches the residual instead -- Dirichlet through RF_cellwise into the

@@ -668,7 +668,6 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         grad_w_vprime = jnp.pad(grad_unraveled, ((0, 0), (0, 2)), mode="constant")
 
         return grad_w_vprime.transpose()
-
     @MaNTA_Decorator
     def dg(self, i, states, positions):
         out = jax.vmap(

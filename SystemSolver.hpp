@@ -6,7 +6,9 @@
 #include <nvector/nvector_serial.h>
 #include <filesystem>
 
+#include "PyIntegrator.hpp"
 #include "Types.hpp"
+#include "util/BandedMatrix.hpp"
 
 #include <Eigen/Core>
 #include <Eigen/Dense>
@@ -37,6 +39,13 @@
 #else
 #define MANTA_TEST_PRIVATE private
 #endif
+
+// Forward-declared rather than included: FieldModel.hpp pulls in toml11 for the
+// registry at its foot, and SystemSolver.hpp reaches 25 translation units that
+// have no other reason to parse it. A shared_ptr to an incomplete type is fine
+// as long as its destructor is instantiated where the type is complete, which
+// is ~SystemSolver in SystemSolver.cpp.
+class FieldModel;
 
 class SystemSolver
 {
@@ -510,8 +519,36 @@ class SystemSolver
         // Factorization of these matrices is done here
         void updateMatricesForJacSolve();
 
-        // Solves the Jy = g equation
+        // Solves the Jy = g equation. Dispatches on whether a field model is
+        // attached: without one this *is* solveTransportJac, bit for bit.
         void solveJacEq(N_Vector g, N_Vector delY);
+
+        // The uncoupled transport operator: HDG static condensation plus the
+        // scalar bordering, and nothing about the field.
+        //
+        // Kept separate from solveJacEq because solveCoupledJacExact applies it
+        // nField + 1 times as its *inner* solve. Anything that wrote the field
+        // block in here -- as the block-Jacobi psi solve that preceded this
+        // split did -- would corrupt every one of those. See the definition.
+        void solveTransportJac(N_Vector g, N_Vector delY);
+
+        // Exact Schur complement onto psi. See the definition; costs one
+        // transport solve per field degree of freedom, so it is a verification
+        // tool rather than a production path.
+        void solveCoupledJacExact(N_Vector g, N_Vector delY);
+
+        // Block Gauss-Seidel between the transport and field blocks, with
+        // Irons-Tuck acceleration: one transport solve and one field solve per
+        // sweep, against the exact path's nField + 1 transport solves. Stops
+        // once the relative change in psi between sweeps is below
+        // FieldSolveTolerance, up to FieldSolveMaxSweeps.
+        //
+        // Reaching that cap **escalates to solveCoupledJacExact** rather than
+        // returning the last iterate, so this mode can no longer be wrong, only
+        // slower -- which is what makes it a safe default. The escalation is
+        // counted in fieldSweepFallbacks and reported once per run.
+        void solveCoupledJacIterative(N_Vector g, N_Vector delY);
+
         // Solves the HDG part of Jy = g
         void solveHDGJac(N_Vector g, N_Vector delY);
 
@@ -734,6 +771,98 @@ class SystemSolver
         void setJacEvalY( N_Vector, N_Vector );
         int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
 
+        // Couple this solver to a magnetic-field model, whose unknowns join the
+        // solution vector after the global scalars and whose geometry reaches
+        // the physics through State::geom.
+        //
+        // Must be called before initialize(), and refuses afterwards: it
+        // reshapes the five DGSoln members and reallocates the three that own
+        // their memory, and there is no way to do that safely to a live run.
+        // Passing nullptr detaches, which is what every existing run already is.
+        void setFieldModel(std::shared_ptr<FieldModel> model);
+
+        FieldModel *getFieldModel() const { return fieldModel.get(); };
+        Index getFieldDOF() const { return nField; };
+        Index getGeometrySlots() const { return nGeom; };
+
+        // How the coupled Jacobian is solved once a field model is attached.
+        // Iterative is block Gauss-Seidel and is the default; Exact is the
+        // Schur complement onto psi, and is a verification tool rather than a
+        // production path -- it is the oracle the iterative path is compared
+        // against, and what makes the coupled system checkable by SolveJacTests'
+        // method. See solveCoupledJacIterative and solveCoupledJacExact above
+        // for what each costs.
+        //
+        // Consulted by initialize(), which says once per run what the choice
+        // costs, and by solveJacEq.
+        enum class FieldSolveMode
+        {
+            Iterative,
+            Exact,
+        };
+
+        void setFieldSolveMode(FieldSolveMode m) { fieldSolveMode = m; };
+        FieldSolveMode getFieldSolveMode() const { return fieldSolveMode; };
+
+        void setFieldSolveTolerance(double tol)
+        {
+            if (tol <= 0)
+                throw std::logic_error("Field solve tolerance cannot be zero or negative.");
+            fieldSolveTolerance = tol;
+        };
+        double getFieldSolveTolerance() const { return fieldSolveTolerance; };
+
+        void setFieldSolveMaxSweeps(int n)
+        {
+            if (n < 1)
+                throw std::logic_error("Field solve sweep cap must be at least one.");
+            fieldSolveMaxSweeps = n;
+        };
+        int getFieldSolveMaxSweeps() const { return fieldSolveMaxSweeps; };
+
+        // The adjoint sweep's own cap, separate from the forward one and larger.
+        // The transposed iteration has the same spectrum -- it is the transpose --
+        // but always runs at cj = 0, where rho is largest, so it is strictly the
+        // harder direction and inheriting the forward cap would under-serve it.
+        void setFieldSolveMaxAdjointSweeps(int n)
+        {
+            if (n < 1)
+                throw std::logic_error("Field solve adjoint sweep cap must be at least one.");
+            fieldSolveMaxAdjointSweeps = n;
+        };
+        int getFieldSolveMaxAdjointSweeps() const { return fieldSolveMaxAdjointSweeps; };
+
+        // What the coupled sweeps cost, and whether either had to escalate.
+        // Zeroed per run by initialize(); nothing here feeds the answer.
+        struct FieldSweepStats
+        {
+            long solves, iterations, fallbacks, adjointSweeps;
+            bool adjointFellBack;
+        };
+        FieldSweepStats getFieldSweepStats() const
+        {
+            return {fieldSweepSolves, fieldSweepIterations, fieldSweepFallbacks,
+                    fieldAdjointSweeps, fieldAdjointFellBack};
+        };
+
+        // The solution as it stands. `y` is a non-owning view over memory
+        // SUNDIALS owns and dangles after destroySundials(), so yJac is the only
+        // copy that outlives a run; initialize() seeds it with the initial
+        // condition, so this is meaningful between the two phases as well.
+        DGSoln const &getSolution() const { return yJac; };
+
+        // Fill the geometry rows of `states` from the field model, at the points
+        // those states were sampled on. A no-op with no model attached.
+        //
+        // Called once per residual and once per Jacobian update, never once per
+        // variable: geometry does not depend on which equation is being
+        // assembled.
+        //
+        // With Superconvergent = true the points are the k+2 star nodes rather
+        // than the k+1 basis nodes, which needs no special case here -- geometry
+        // is a function of (psi, x) and star nodes are just more x.
+        void evaluateGeometry(DGSoln const &Y, std::vector<Position> const &points,
+                              GlobalState &states, Time t);
         // ||F(t, Y, dYdt)|| in the WRMS norm with this solver's own error
         // weights -- the same measure the WriteDebugDatFiles output reports, so
         // the number a user sees in the .res.dat is the number the skip above is
@@ -745,7 +874,37 @@ class SystemSolver
 
         void initializeMatricesForAdjointSolve(Index gIndex = 0);
 
+        // Solve J^T z = dG/dy at the state the matrices above were built from.
+        // Dispatches on whether a field model is attached, exactly as solveJacEq
+        // does forwards: without one this *is* solveTransportAdjoint.
         void solveAdjointState();
+
+        // One objective's contribution to G_p, at whatever adjoint state and
+        // adjoint matrices are currently in place. See the definition for why it
+        // is callable separately from computeAdjointGradients().
+        void accumulateAdjointGradients(Index gIndex);
+
+        // The transpose of solveCoupledJacExact. The block elimination runs the
+        // other way round, so the Schur complement onto psi is
+        //
+        //     ( B^T - A1^T A^-T A2^T ) z_psi = G_psi - A1^T A^-T G_y
+        //     A^T z_x                        = G_y - A2^T z_psi
+        //
+        // which is why FieldModel declares applyBTranspose and solveBTranspose
+        // beside the forward pair: a model that supplied only one direction
+        // cannot be silently accommodated here.
+        //
+        // Costs nField + 1 transposed transport solves, the same as the forward
+        // exact path, and is a verification tool for the same reason.
+        void solveCoupledAdjointExact();
+
+        // The transposed block Gauss-Seidel sweep, Irons-Tuck accelerated like
+        // its forward twin, and capped by FieldSolveMaxAdjointSweeps rather than
+        // FieldSolveMaxSweeps. Reaching that cap escalates to
+        // solveCoupledAdjointExact -- it used to throw, and escalating is
+        // strictly stronger: the caller gets a correct gradient rather than an
+        // exception. Warned once, and recorded in fieldAdjointFellBack.
+        void solveCoupledAdjointIterative();
 
         void computeAdjointGradients();
 
@@ -761,16 +920,57 @@ class SystemSolver
         unsigned int nScalars; // Any global scalars
         unsigned int nAux;	   // Any auxiliary constraints
 
-        unsigned int nP;       // Number of parameters to compute for adjoint sensitivity problem 
+        // The field model's unknowns, and the geometry slots derived from them.
+        // Both are zero until setFieldModel attaches a model, which is every
+        // existing run. Declared here, ahead of the DGSoln members below,
+        // because they are arguments to those members' constructors and member
+        // initialisation follows declaration order.
+        Index nField = 0;
+        Index nGeom = 0;
+
+        unsigned int nP;       // Number of parameters to compute for adjoint sensitivity problem
+
+        // The smallest number of cells worth a parallel region.
+        //
+        // Much lower than TransportSystem::physicsGrain because the iteration is
+        // much bigger: one dense factorisation or two dense solves of a
+        // (3 nVars + nAux)(k+1) square, tens of microseconds by k = 4 against a
+        // few for a fork and join. A floor of 32 would turn parallelism off
+        // entirely for the few-cell high-k runs, which measured 1.61x at
+        // nCells = 20, k = 10 -- the smallest grid here that gains anything.
+        static constexpr Index cellGrain = 4;
 
         using EigenCellwiseSolver = Eigen::FullPivLU<Matrix>;
-        using EigenGlobalSolver = Eigen::FullPivLU<Matrix>;
 
         std::vector<Matrix> XMats;
         std::vector<Matrix> MBlocks;
 
         std::vector<Matrix> CEBlocks;
-        Matrix K_global;
+        // The condensed trace operator, banded.
+        //
+        // This was a dense Matrix handed to a dense FullPivLU on every Newton
+        // iteration, which is O(nCells^3) in the one quantity static condensation
+        // exists to make O(nCells) -- and it was 73-91% of a low-k run. It is
+        // block-tridiagonal by construction: cell i couples only the two faces it
+        // owns, so the only entries are those scatterTraceBlock writes.
+        //
+        // **Banded only in trace-major order.** The solution vector indexes
+        // lambda as var*(nCells+1) + node, and in that order two nodes of
+        // different variables are (nCells+1) apart -- a full-width matrix, not a
+        // banded one. Indexed (node, var) instead, the bandwidth is 2*nVars - 1
+        // either side. So the band form carries its own ordering and the trace
+        // solve permutes in and out of it; the DOF layout, the restart format and
+        // everything else are untouched, which is the point.
+        manta::BandedMatrix K_banded;
+
+        // The same operator transposed, for the adjoint. Kept factorised between
+        // calls because solveTransportAdjoint applies A^-T once per right-hand
+        // side while factoriseAdjointTrace builds it once.
+        manta::BandedMatrix adjoint_K_banded;
+
+        // Trace-major scratch for the permutation above, so the trace solve does
+        // not allocate per Newton iteration. Sized in initialiseMatrices.
+        Vector traceRhs;
         Vector L_global;
         Matrix H_global_mat;
         Eigen::FullPivLU<Matrix> H_global;
@@ -785,8 +985,92 @@ class SystemSolver
         Vector adjoint_lambdas;
         std::vector<Vector> adjoint_squ;
 
+        // The right-hand-side-independent half of the transposed HDG solve:
+        // M^-T CG^T per cell, and the condensed trace operator factorised.
+        //
+        // Hoisted out of solveAdjointState because the coupled paths apply A^-T
+        // repeatedly -- nField + 1 times for the exact Schur complement, once
+        // per sweep for the iterative one -- and neither of these depends on the
+        // right-hand side. Filled by initializeMatricesForAdjointSolve, which is
+        // also the only place MXSolvers holds M^T.
+        std::vector<Matrix> adjoint_SQU_0;
+
+
+        // The coupling blocks as the adjoint needs them: transposed, stored,
+        // and used only from here.
+        //
+        //   A1_transpose_cellwise[i]  (nField, localDOF)  -- A1_cellwise[i]^T
+        //   A2_transpose_cellwise[i]  (localDOF, nField)  -- column f is cell
+        //                             i's [ sigma | q | u | aux ] segment of
+        //                             the A2 row a2[f]
+        //
+        // Materialised rather than transposed at each use so that a test can
+        // zero one of them and require the gradient to go wrong: without that
+        // guard a gradient check passes on an objective that never sees the
+        // coupling. Stored transposed for the same reason M is -- the adjoint
+        // operator *is* the transpose, so keeping the two shapes side by side
+        // is what makes a missing block visible in review.
+        std::vector<Matrix> A1_transpose_cellwise;
+        std::vector<Matrix> A2_transpose_cellwise;
+
+        // The field block of the adjoint state, z_psi, and of the adjoint
+        // right-hand side, dG/dpsi.
+        //
+        // G_field is identically zero and that is a *limit*, not a fact about
+        // the discretisation: AdjointProblem reports dg/du, dg/dq, dg/dsigma and
+        // dg/dphi and has no geometry hook, so an objective whose integrand
+        // reads State::geom directly loses that term. It cannot be detected from
+        // here -- the same standing limit AdjointVectors.cpp records for the
+        // absent dgFn_dscalars -- so it is named here and in TODO rather than
+        // left as an unremarked zero.
+        Vector adjoint_field;
+        Vector G_field;
+
         SUNContext ctx;
-        N_Vector *v, *w;
+
+        // The quadrature weights and boundary basis values the scalar hooks are
+        // handed. An instance rather than the namespace of globals this used to
+        // be -- see Integrator::Cache. Mutable because it is a memo: filling it
+        // does not change what this solver *is*, and the const-ness of the
+        // callers should not have to care.
+        mutable Integrator::Cache integrator;
+
+        // The scalar bordering's work vectors: v and w are the Woodbury update's
+        // columns and rows, and solveScalarD/E/G are solveTransportJac's scratch.
+        //
+        // All of them are as long as the whole solution vector and all of them
+        // have the solver's own lifetime, because nScalars is fixed by the
+        // physics case at construction and never changes afterwards. The scratch
+        // three used to be N_VClone'd and destroyed on *every* call -- so once
+        // per Newton iteration, and nField + 1 times that under
+        // solveCoupledJacExact, for nScalars + 2 vectors of getDoF() doubles
+        // each. Nothing about them was ever per-call except the allocation.
+        //
+        // They are handed out through allocate/freeScalarWorkVectors rather than
+        // written out at each of the three sites that own them (constructor,
+        // setFieldModel, destructor), because five vectors across three sites is
+        // exactly the shape that drifts.
+        N_Vector *v = nullptr, *w = nullptr;
+        N_Vector *solveScalarE = nullptr;   // nScalars of A^-1 v[i]
+        N_Vector solveScalarD = nullptr;    // A^-1 res_g
+        N_Vector solveScalarG = nullptr;    // the combined right-hand side
+
+        // The field coupling.
+        //
+        //   A1_cellwise[i]  one cell's ( (3 nVars + nAux)(k+1), nField ) block of
+        //                   d(transport residual)/d(psi), in MX's row order
+        //                   [ sigma | q | u | aux ]. Sized in initialiseMatrices,
+        //                   filled by assembleFieldCoupling.
+        //   a2[f]           field row f of d(field residual)/d(transport DOF),
+        //                   as a full-length vector so it contracts with a
+        //                   solution vector by a plain dot product -- the shape
+        //                   the scalar bordering's `w` already uses.
+        //
+        // a2 is allocated by setFieldModel rather than by the constructor,
+        // because that is where nField -- and so both the count and the length
+        // of these vectors -- becomes known. Null with no model attached.
+        std::vector<Matrix> A1_cellwise;
+        N_Vector *a2 = nullptr;
 
         // ---- state of one run, owned between initialize() and destroySundials()
         //
@@ -818,8 +1102,8 @@ class SystemSolver
         // backstop rather than a budget. Lowering it deliberately is what makes
         // a solve stop early enough to be looked at and then resumed.
         long maxContinuationSteps = 200;
-        unsigned int maxRejectedSteps;
         bool estimateObjectiveOnFinish = true;
+        unsigned int maxRejectedSteps;
         double ptcMaxStep = std::numeric_limits<double>::infinity();
         double ptcStep = 0.0;        // the current dt; infinite in Newton mode
         double ptcSERRate = 1.0;     // exponent on the residual ratio
@@ -895,12 +1179,25 @@ class SystemSolver
             GlobalState states;
         };
 
-        // Size and fill the three derivative blocks at the state Y and time
-        // tEval, and report the nodes they were evaluated on.
-        PhysicsNodes evaluatePhysicsDerivatives(DGSoln const &Y, Time tEval,
+        // The variables' time derivatives sampled on the nodes the physics is
+        // evaluated at, or an *empty* matrix when no variable's source reads
+        // them -- which is what GlobalState::setVariableDot takes to mean "do
+        // not carry them", and is how a case that never asked for this pays
+        // nothing for it.
+        Matrix variableTimeDerivatives(DGSoln const &Ydot) const;
+
+        // Size and fill the derivative blocks at the state Y and time tEval, and
+        // report the nodes they were evaluated on.
+        //
+        // Ydot is here for one reason: a source that reads State::udot has to be
+        // *differentiated* at the same udot it was evaluated at, or the Jacobian
+        // is a different operator's. dSourceDot_vals is left empty unless some
+        // variable declares sourceReadsTimeDerivatives.
+        PhysicsNodes evaluatePhysicsDerivatives(DGSoln const &Y, DGSoln const &Ydot, Time tEval,
                                                 GlobalStateMatrix &dSigma_vals,
                                                 GlobalStateMatrix &dSource_vals,
-                                                GlobalStateMatrix &dAux_vals);
+                                                GlobalStateMatrix &dAux_vals,
+                                                GlobalStateMatrix &dSourceDot_vals);
 
         // One cell's Jacobian block, [ sigma | q | u | aux ] by
         // [ sigma | q | u | aux ], from derivative blocks evaluatePhysicsDerivatives
@@ -908,14 +1205,31 @@ class SystemSolver
         //
         // alphaValue scales the mass term in the u row -- IDA's cj for the
         // forward solve, and 0 where dF/dy alone is wanted, which is what makes
-        // this shareable with computeAlgebraicTimeDerivatives(). It is the *only*
+        // it shareable with anything that needs dF/dy alone. It is the *only*
         // place this block layout is written down for the forward direction;
         // initializeMatricesForAdjointSolve holds the transposed copy and has to
         // be kept in step with it block for block.
+        // dSourceDot_vals is dS/d(udot), and enters weighted by alphaValue
+        // beside the mass term. An empty one -- which is what
+        // evaluatePhysicsDerivatives leaves when no variable declares
+        // sourceReadsTimeDerivatives -- contributes nothing and costs nothing.
         Matrix assembleCellMatrix(Index i, DGSoln const &Y,
                                   GlobalStateMatrix &dSigma_vals,
                                   GlobalStateMatrix &dSource_vals,
-                                  GlobalStateMatrix &dAux_vals, double alphaValue);
+                                  GlobalStateMatrix &dAux_vals,
+                                  GlobalStateMatrix &dSourceDot_vals, double alphaValue);
+
+        // Refuse a run whose effective mass matrix, X - (dS/d(udot)) M, is
+        // singular, and warn about one that is close to it.
+        //
+        // A source that reads du/dt changes what multiplies the time derivative
+        // in the u rows, so a case can cancel its own mass term and turn a
+        // differential row algebraic without saying so -- which raises the index
+        // of the system and shows up as an IDACalcIC or Newton failure a long way
+        // from the cause. Checked once, at initialise, where the message can name
+        // the variable. A no-op unless some variable declares
+        // sourceReadsTimeDerivatives.
+        void checkEffectiveMassMatrix(DGSoln const &Y, DGSoln const &Ydot, Time tEval);
 
         // The scalar coupling: v (how the HDG rows depend on the scalars) and w
         // (how the scalar constraints depend on the HDG unknowns), plus the
@@ -926,6 +1240,99 @@ class SystemSolver
                                     PhysicsNodes const &nodes, Time tEval,
                                     double alphaValue, std::vector<DGSoln> &v_map,
                                     std::vector<DGSoln> &w_map, Matrix &N_out);
+
+        // The three field blocks, from one FieldResidualPrime call.
+        //
+        //   A1 (per cell, into A1_cellwise) -- how the transport rows see psi,
+        //      by the chain rule through the case's geometry hooks and the
+        //      model's dGeometry/dpsi.
+        //   A2 (into a2)                    -- how the field rows see the
+        //      transport unknowns, weighted by alpha exactly as the scalar `w`
+        //      vectors are.
+        //   B  (into the model)             -- dR/dpsi + alpha dR/d(psi'), which
+        //      the model assembles and factorises for itself.
+        //
+        // One call is deliberate: a model that solves a coupled system
+        // internally reports every row at once, and is entitled to be asked
+        // once per Jacobian. This replaced updateFieldBlock, which made the
+        // same call, threw dR and dRdot away, and left the Jacobian block
+        // diagonal.
+        void assembleFieldCoupling(DGSoln const &Y, DGSoln const &Ydot,
+                                   PhysicsNodes const &nodes, Time tEval,
+                                   double alphaValue);
+
+        // Column m of A1, scattered into a full-length solution vector: each
+        // cell's block at its own offset, zero everywhere else -- including the
+        // field block, so that the transport solve it is fed to cannot mistake
+        // it for a right-hand side for psi.
+        void scatterA1Column(Index m, N_Vector out) const;
+
+        // Apply A^-T: the transpose of the uncoupled transport operator, by the
+        // same static condensation solveHDGJac performs forwards.
+        //
+        // `rhs` is one vector per cell in the [ sigma | q | u | aux ] ordering
+        // and the trace rows' right-hand side is identically zero. That is a
+        // property of everything that reaches here rather than a simplification:
+        // the objective has no trace dependence (AdjointProblem::dg reports four
+        // blocks, none of them lambda), and neither has A2 -- a field residual
+        // is handed a GlobalState, which has no trace slot at all.
+        // initializeMatricesForAdjointSolve *checks* the second of those rather
+        // than assuming it.
+        //
+        // Needs adjoint_SQU_0 and adjoint_K, so only meaningful after
+        // initializeMatricesForAdjointSolve.
+        void solveTransportAdjoint(std::vector<Vector> const &rhs,
+                                   std::vector<Vector> &squOut, Vector &lambdaOut);
+
+        // Fill adjoint_SQU_0 and factorise adjoint_K -- the part of the
+        // transposed solve that does not depend on the right-hand side.
+        void factoriseAdjointTrace();
+
+        // Transpose A1 and A2 into A1_transpose_cellwise / A2_transpose_cellwise,
+        // and refuse an A2 row with anything outside the cellwise blocks.
+        void transposeFieldCoupling();
+
+        // work's cellwise [sigma | q | u | aux] segment gets A1_cellwise[i]*dpsi
+        // subtracted, cell by cell -- the A1 dpsi term of the block
+        // Gauss-Seidel sweep in solveCoupledJacIterative. A1_cellwise already
+        // carries d(res)/d(psi) with its own sign baked in (see
+        // dPhysics_dField_Mat), so this is a plain subtraction with no sign of
+        // its own; the lambda, scalar and field segments of work are untouched.
+        void subtractA1Times(Vector const &dpsi, N_Vector work) const;
+
+        // Allocate (or reallocate) the two buffers yJac and dydtJac map. Called
+        // from the constructor, and again from setFieldModel, which changes how
+        // long they have to be.
+        void allocateJacobianStorage();
+
+        // Free the a2 vectors, using the *current* nField as the count -- so
+        // call it before changing nField, not after.
+        void freeFieldWorkVectors();
+
+        // Where trace node `node` of variable `var` sits in the *band form's*
+        // ordering, which is not the solution vector's. See K_banded.
+        Index traceDoF(Index node, Index var) const { return node * nVars + var; }
+
+        // Accumulate one cell's 2*nVars square trace block -- H - CG SQU_0, or
+        // its adjoint counterpart -- into a banded global operator.
+        void scatterTraceBlock(manta::BandedMatrix &K, Index cell, Matrix const &block) const;
+
+        // Write the identity on the trace rows a Dirichlet end leaves empty, and
+        // zero the matching right-hand side entries. See the definitions.
+        void imposeDirichletTraceRows(manta::BandedMatrix &K) const;
+        void zeroDirichletTraceRows(Eigen::Ref<Vector> traceMajor) const;
+
+        // The two halves of the permutation between the solution vector's
+        // lambda ordering (var-major) and the band form's (trace-major).
+        void toTraceMajor(Eigen::Ref<const Vector> varMajor, Eigen::Ref<Vector> traceMajor) const;
+        void fromTraceMajor(Eigen::Ref<const Vector> traceMajor, Eigen::Ref<Vector> varMajor) const;
+
+        // Allocate, or free, every vector the scalar bordering owns: v, w and
+        // solveTransportJac's scratch. All are getDoF() long, so setFieldModel
+        // has to free and reallocate them when a field block changes that
+        // length. No-ops when nScalars is zero, and free is idempotent.
+        void allocateScalarWorkVectors();
+        void freeScalarWorkVectors();
 
         // The whole Jacobian, densely, in the solution vector's own ordering:
 
@@ -1000,6 +1407,44 @@ class SystemSolver
         // could not do for the star nodes anyway.
         void dSources_dScalars_StarMat(Matrix &, GlobalState const &,
                                        std::vector<Position> const &, Index, Time);
+
+        // One cell's block of A1: d(sigma, u and aux residual rows)/d(psi), by
+        // the chain rule
+        //
+        //     d(row)/d(psi_m) = sum_g d(row)/d(geometry_g) . d(geometry_g)/d(psi_m)
+        //
+        // The first factor is the case's, the second the field model's. The q
+        // rows and the trace rows have no geometry dependence and stay zero.
+        //
+        // Shape ( (3 nVars + nAux)(k+1), nField ), laid out [ sigma | q | u | aux ]
+        // to match assembleCellMatrix's rows.
+        //
+        // `states` must be the ones evaluatePhysicsDerivatives filled -- they
+        // carry geometry, and a hook may read it (d/dg of g^2 q is 2 g q). That
+        // is why this takes them rather than calling DGSoln::evalOnNode the way
+        // dSources_dScalars_Mat does: a State built from a DGSoln has no
+        // geometry rows at all.
+        void dPhysics_dField_Mat(Matrix &mat, DGSoln const &Y, GlobalState const &states,
+                                 std::vector<Position> const &points, Index intervalIndex,
+                                 Time tEval);
+
+        // Superconvergent counterpart: the k+2 star nodes and A9 in place of
+        // InterpolateOntoBasis. There is no chain matrix -- geometry is a
+        // function of (psi, x), and u* does not enter it.
+        void dPhysics_dField_StarMat(Matrix &mat, DGSoln const &Y, GlobalState const &states,
+                                     std::vector<Position> const &points, Index intervalIndex,
+                                     Time tEval);
+
+        // d(one physics value)/d(psi_m) at each node of one cell, (nField, nNodes):
+        // the case's dX/dgeometry there contracted with the model's
+        // dGeometry/dpsi. The part the two functions above share; they differ
+        // only in how they project the result onto the test space.
+        void fieldChainOnNodes(Matrix &nodal, Index XVar,
+                               void (TransportSystem::*dX_dGeom)(Index, VectorRef, const State &,
+                                                                 Position, Time),
+                               Vector const &psi, GlobalState const &states,
+                               std::vector<Position> const &points, Index intervalIndex,
+                               Index nNodes, Time tEval);
 
         void dSourcedPhi_Mat(Matrix &, DGSoln const &, Index );
         void dPhi_Mat(Matrix &, std::vector<Eigen::Ref<Matrix>> const dX_dZ, DGSoln const &, Index );
@@ -1083,7 +1528,65 @@ class SystemSolver
 
         // Hide all physics-specific info in here
         TransportSystem *problem = nullptr;
-   
+
+        // Null when no field model is configured, which is every existing run.
+        // Held by shared_ptr because the adjoint solve and the Python layer both
+        // need to reach it and neither owns the solver.
+        std::shared_ptr<FieldModel> fieldModel = nullptr;
+
+        // Iterative to match the FieldSolve default, so there is one default
+        // rather than two that can drift. Read by solveJacEq and by
+        // initialize(), which reports what the choice costs.
+        FieldSolveMode fieldSolveMode = FieldSolveMode::Iterative;
+        double fieldSolveTolerance = 1e-8;
+        int fieldSolveMaxSweeps = 20;
+        // Larger than the forward cap, and for the reason the setter gives: the
+        // adjoint runs at cj = 0, where the coupling is stiffest. One default,
+        // matching ConfigSchema's, rather than two that can drift.
+        int fieldSolveMaxAdjointSweeps = 100;
+
+        // Diagnostics for the coupled sweeps, zeroed per run. Nothing here feeds
+        // the answer, so none of it can disturb the bit-for-bit reuse invariant
+        // that a_second_integration_on_one_solver_matches_a_fresh_one pins -- but
+        // it is zeroed per run all the same, because a cumulative count reported
+        // as a per-run one is a lie a second run would tell silently.
+        long fieldSweepSolves = 0;
+        long fieldSweepIterations = 0;
+        long fieldSweepFallbacks = 0;
+        long fieldAdjointSweeps = 0;
+        bool fieldAdjointFellBack = false;
+
+        // Irons-Tuck vector acceleration: Aitken's Delta^2 generalised to
+        // vectors.
+        //
+        // Both coupled sweeps are affine fixed-point iterations on the field
+        // block alone. Writing G for one sweep, G(p) = c + M p with
+        // M = B^-1 A2 A^-1 A1 forwards and its transpose backwards, so the plain
+        // sweep converges only for rho(M) < 1 -- and rho is a property of the
+        // coupling rather than of the time step: 1.611 at cj = 0 against 1.571
+        // at cj = 1e8 for RichGeometricDiffusion.
+        //
+        // Given the two most recent increments D_k = G(p_k) - p_k and D_{k-1}:
+        //
+        //     mu  = D_k . (D_k - D_{k-1}) / |D_k - D_{k-1}|^2
+        //     p*  = G(p_k) - mu D_k
+        //
+        // which is the secant (rank-one quasi-Newton) step on F(p) = G(p) - p.
+        // For nField == 1 and an affine G it lands on the fixed point *exactly*,
+        // in one step, for every m -- including m > 1, where no relaxation
+        // parameter helps at all: D_k = m D_{k-1} gives mu = m/(m-1) and
+        // p* = p_k + D_k/(1-m), and D_k = (1-m)(p_fix - p_k), so p* = p_fix.
+        // That exactness for a divergent scalar map is why this rather than SOR,
+        // whose eigenvalues 1 - w + w*lambda cannot be brought inside the unit
+        // circle by any w > 0 when lambda > 1.
+        //
+        // For nField > 1 it is a rank-one approximation: it removes the dominant
+        // eigendirection and leaves the rest, which is why the caller still needs
+        // the exact fallback. Anderson acceleration -- equivalently GMRES on the
+        // Schur complement, since the map is affine -- is the depth-m
+        // generalisation and is in TODO.
+        static Vector ironsTuck(const Vector &g, const Vector &delta, const Vector &deltaPrev);
+
         AdjointProblem *adjointProblem = nullptr;
 
         // Tau
@@ -1099,6 +1602,20 @@ class SystemSolver
         void WriteTimeslice(double tNew);
         void WriteRestartFile(std::string const &fname, N_Vector const &Y, N_Vector const &dYdt, size_t nOut);
         void WriteAdjoints();
+
+        // The field model's own netCDF group: one time series per FieldDOF, one
+        // spatial variable per FieldSlot, and the spec's `label` as an attribute
+        // so a run records what its x meant. No-ops with no model attached, and
+        // reached only from the three functions above -- all of which Solver.cpp
+        // already gates on writeOutput.
+        //
+        // Both take the file, because the same group is written to <stem>.nc and
+        // to <stem>.restart.nc, and both take the time, because geometry is a
+        // function of (psi, x, t) and the two files are written at different
+        // times: the t0 slice against t0, a timeslice against its own tNew, the
+        // restart file against the time the run reached.
+        void initialiseFieldOutput(NetCDFIO &file, Time tEval);
+        void writeFieldTimeslice(NetCDFIO &file, size_t tIndex, Time tEval);
 
         size_t S_DOF,
         U_DOF, Q_DOF, AUX_DOF, SQU_DOF;

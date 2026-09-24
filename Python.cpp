@@ -55,6 +55,26 @@ public:
     value.Derivative() = py::cast<Matrix>(d["Derivative"]).transpose();
     value.Flux() = py::cast<Matrix>(d["Flux"]).transpose();
     value.Aux() = py::cast<Matrix>(d["Aux"]).transpose();
+    // Geometry is optional on the way in: every physics case and test fixture
+    // that predates field models builds a dict with no "Geometry" key, and
+    // GlobalState defaults to zero geometry slots, so a missing key means the
+    // same thing an explicitly empty one would. Still size it to (0, nPoints)
+    // rather than leave it at PYBIND11_TYPE_CASTER's default-constructed 0x0:
+    // operator[] slices every field's column i unconditionally, and a matrix
+    // with zero *columns* fails that where zero *rows* would not.
+    if (d.contains("Geometry"))
+      value.GeometryMatrix() = py::cast<Matrix>(d["Geometry"]).transpose();
+    else
+      value.GeometryMatrix().setZero(0, value.Variable().cols());
+
+    // VariableDot is optional on the way in, and left *empty* when absent
+    // rather than sized like Geometry above. Empty is the state that means "no
+    // variable declares sourceReadsTimeDerivatives": GlobalState guards every
+    // read of it with hasVariableDot(), where the geometry rows are sliced
+    // unconditionally. A dict carrying no such key therefore says the same
+    // thing the solver says when it builds one itself.
+    if (d.contains("VariableDot"))
+      value.setVariableDot(py::cast<Matrix>(d["VariableDot"]).transpose());
 
     auto scalars = py::cast<py::array_t<double>>(d["Scalars"]);
     py::buffer_info info = scalars.request();
@@ -77,6 +97,11 @@ public:
     d["Derivative"] = src.Derivative().transpose();
     d["Flux"] = src.Flux().transpose();
     d["Aux"] = src.Aux().transpose();
+    d["Geometry"] = src.GeometryMatrix().transpose();
+    // (nPoints, nVars) when some variable declares sourceReadsTimeDerivatives,
+    // and an empty array when none does -- which is what a case should test if
+    // it wants to know, rather than assuming the run it is in.
+    d["VariableDot"] = src.VariableDot().transpose();
     d["Scalars"] = src.Scalars();
     return d.release();
   }
@@ -88,7 +113,37 @@ public:
 // The extension is private to the `manta` package: python/manta/__init__.py
 // re-exports it and adds the parts that are more naturally written in Python
 // (the declarative class-attribute spec, chiefly). Users import `manta`.
-PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
+//
+// **No py::mod_gil_not_used(), deliberately, and please do not add it back
+// without doing the audit it stands for.** That tag asserts this module is safe
+// to run without the GIL. It was here, asserted rather than established, and the
+// assertion was false in at least two places:
+//
+//   * Basis.hpp's three `singletons` maps -- LegendreBasis, ChebyshevBasis and
+//     NodalBasis each cache their flyweight in a static std::map that getBasis(k)
+//     mutates on first touch. Concurrent insert, or a read racing one, is UB.
+//   * PhysicsCases::map, a lazily allocated static registry. Static-init
+//     population is single-threaded and fine; registerPhysicsCase is *bound to
+//     Python* (below), so it is also mutated at runtime.
+//
+// Neither can race today, and that is the point: PyRunner never releases the
+// GIL -- there is no gil_scoped_release or call_guard anywhere in this module --
+// so a Python thread calling run() holds it for the whole solve and the GIL is
+// silently doing all the synchronisation. Declaring the tag removes exactly that
+// and leaves the statics above unguarded.
+//
+// Without the tag, importing this on a free-threaded interpreter makes CPython
+// re-enable the GIL and say so. That is the conservative outcome and it
+// announces itself, where a false declaration does neither. The tag costs
+// nothing on an ordinary build either way -- measured, it is inert there.
+//
+// To make it true: mutexes on those two (about half a day), then a free-threaded
+// interpreter, its own ABI-tagged build and a CI leg to test against, plus a
+// stated contract for what a user's Python physics case must guarantee once the
+// trampolines' gil_scoped_acquire no longer serialises it. Worth doing when
+// something actually calls in from several threads -- the XLA FFI path is the
+// candidate -- and not before.
+PYBIND11_MODULE(_manta, m) {
   m.doc() =
       "Compiled core of the MaNTA Python package; import `manta` instead.";
 
@@ -163,18 +218,29 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
   py::class_<FieldSpec>(m, "Field")
       .def(py::init([](std::string name, std::string description,
                        std::string units, BoundaryCondition lower,
-                       BoundaryCondition upper) {
-             return FieldSpec{std::move(name), std::move(description),
-                              std::move(units), lower, upper};
+                       BoundaryCondition upper,
+                       bool source_reads_time_derivatives) {
+             return FieldSpec{std::move(name),
+                              std::move(description),
+                              std::move(units),
+                              lower,
+                              upper,
+                              source_reads_time_derivatives};
            }),
            py::arg("name"), py::arg("description") = "", py::arg("units") = "",
            py::arg("lower") = BoundaryCondition(BoundaryKind::Dirichlet),
-           py::arg("upper") = BoundaryCondition(BoundaryKind::Dirichlet))
+           py::arg("upper") = BoundaryCondition(BoundaryKind::Dirichlet),
+           py::arg("source_reads_time_derivatives") = false)
       .def_readwrite("name", &FieldSpec::name)
       .def_readwrite("description", &FieldSpec::description)
       .def_readwrite("units", &FieldSpec::units)
       .def_readwrite("lower", &FieldSpec::lower)
-      .def_readwrite("upper", &FieldSpec::upper);
+      .def_readwrite("upper", &FieldSpec::upper)
+      .def_readwrite("source_reads_time_derivatives",
+                     &FieldSpec::sourceReadsTimeDerivatives,
+                     "Set when this variable's Sources reads state.udot. It is "
+                     "what makes udot be filled and dSources_dudot be asked "
+                     "for.");
 
   py::class_<ScalarSpec>(m, "Scalar")
       .def(py::init([](std::string name, std::string description,
@@ -280,6 +346,20 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def("dSources_du", &TransportSystem::dSources_du)
       .def("dSources_dq", &TransportSystem::dSources_dq)
       .def("dSources_dsigma", &TransportSystem::dSources_dsigma)
+      // d(Sources)/d(state.udot), asked for only of a variable whose spec sets
+      // sourceReadsTimeDerivatives. Bound like the four above so the family is
+      // uniform: it is what puts the method in the generated stub, and so what
+      // makes a case's own override something mypy checks against a base rather
+      // than a new name it has never seen.
+      .def("dSources_dudot", &TransportSystem::dSources_dudot)
+      // Derivatives with respect to a field model's geometry slots. Optional,
+      // like the five above: absent means an identically zero column of the A1
+      // coupling block, which is exactly right for a case that does not read
+      // geometry. They are live -- Matrices.cpp's fieldChainOnNodes calls all
+      // three, once per node, whenever a field model is attached.
+      .def("dSigmaFn_dGeometry", &TransportSystem::dSigmaFn_dGeometry)
+      .def("dSources_dGeometry", &TransportSystem::dSources_dGeometry)
+      .def("dAuxG_dGeometry", &TransportSystem::dAuxG_dGeometry)
       .def("dSigma", &TransportSystem::dSigma)
       .def("dSources", &TransportSystem::dSources)
       .def("InitialValue", &TransportSystem::InitialValue)
@@ -387,6 +467,42 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
   m.def("registerPhysicsCase", &PhysicsCases::RegisterPhysicsCase,
         py::arg("name"), py::arg("factory"), py::return_value_policy::reference,
         "Register a physics case under the name a config file can ask for.");
+
+  // Test support only -- not part of the public API. manta/__init__.py does
+  // not re-export this, so it is reachable only as
+  // manta._manta._test_dSigmaFn_dGeometry, the same way python/Tests already
+  // reaches manta._manta.runner_ffi_ops directly rather than through the
+  // curated `manta` surface.
+  //
+  // It exists because dSigmaFn_dGeometry has no batched (GlobalState-taking)
+  // entry point the way SigmaFn/Sources/AuxG do -- the A1 assembly in
+  // Matrices.cpp calls the *pointwise* hook per node through a member pointer
+  // -- and a State cannot be constructed standalone from Python (see
+  // PyState.hpp), so python/Tests/test_trampolines.py had no way at all to
+  // drive PyTransportSystem.hpp's pointwise dSigmaFn_dGeometry dispatcher, its
+  // optional_override lookup, and the Values cast.
+  //
+  // A free function rather than a TransportSystem method, deliberately: it
+  // adds nothing inheritable or overridable to the interface a physics case
+  // implements, unlike a batched virtual would. It builds a State carrying
+  // only the given geometry (u/q/sigma/phi are left zero, since this is
+  // about the geometry dispatch, not the physics) and calls the pointwise
+  // hook directly -- exactly what a C++ test does, and what the real caller
+  // does: Matrices.cpp's fieldChainOnNodes builds the A1 column the same way,
+  // one pointwise call per node.
+  m.def(
+      "_test_dSigmaFn_dGeometry",
+      [](TransportSystem &sys, Index i, Vector const &geom, Position x, Time t) {
+        State s(sys.getNumVars(), sys.getNumScalars(), sys.getNumAux(),
+                static_cast<Index>(geom.size()));
+        s.geom() = geom;
+        Vector out = Vector::Zero(geom.size());
+        sys.dSigmaFn_dGeometry(i, out, s, x, t);
+        return out;
+      },
+      py::arg("sys"), py::arg("i"), py::arg("geom"), py::arg("x"), py::arg("t"),
+      "Test support only: builds a State carrying the given geometry and calls "
+      "the pointwise dSigmaFn_dGeometry dispatcher directly.");
 
   m.def("physics_cases", &PhysicsCases::RegisteredNames,
         "Every physics case name manta.Runner(name) will accept, ascending. "

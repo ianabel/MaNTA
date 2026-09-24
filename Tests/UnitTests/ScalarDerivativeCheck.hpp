@@ -42,8 +42,9 @@ inline double checkScalarDerivative(TransportSystem &problem, DGSoln &y, DGSoln 
     const Index nAux = problem.getNumAux();
     const Index nCells = static_cast<Index>(grid.getNCells());
 
-    const Vector &weights = Integrator::getIntegrationWeights(y.getBasis(), grid);
-    const Matrix &phiBoundary = Integrator::getPhiBoundary(y.getBasis(), grid);
+    Integrator::Cache integrator;
+    const Vector &weights = integrator.integrationWeights(y.getBasis(), grid);
+    const Matrix &phiBoundary = integrator.phiBoundary(y.getBasis(), grid);
 
     double worst = 0.0;
 

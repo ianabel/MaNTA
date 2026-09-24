@@ -20,7 +20,7 @@ Three specific things to expect:
   It was left as found rather than repaired on a guess, since nothing here can
   check the repair.
 * `stellarator.py` and `stellarator2.py` need an `XLA_FFI` build
-  (`make python XLA_FFI=on`), because they use `manta.jax.FFIRunner` to put the
+  (`cmake -B build -DMANTA_XLA_FFI=ON`), because they use `manta.jax.FFIRunner` to put the
   solver inside a JAX computation.
 * There are two generations of the whole stack — `stellarator.py` /
   `objective.py` / `yancc_wrapper.py` and their `2` counterparts.

@@ -66,28 +66,34 @@ public:
   /// in the ScalarTestLD3 post-mortem in Tests/README.md, where a missing v[2]
   /// put a garbage column into the scalar coupling matrix. The hooks may still
   /// call zero() and several do; it is redundant now rather than load-bearing.
-  explicit State(Index nv, Index ns = 0, Index naux = 0) {
+  explicit State(Index nv, Index ns = 0, Index naux = 0, Index ngeom = 0) {
     m_Variable.setZero(nv);
     m_Derivative.setZero(nv);
     m_Flux.setZero(nv);
+    m_VariableDot.setZero(nv);
     m_Scalars.setZero(ns);
     m_Aux.setZero(naux);
+    m_Geometry.setZero(ngeom);
   }
 
   void clone(const State &other) {
     m_Variable.setZero(other.m_Variable.size());
     m_Derivative.setZero(other.m_Derivative.size());
     m_Flux.setZero(other.m_Flux.size());
+    m_VariableDot.setZero(other.m_VariableDot.size());
     m_Scalars.setZero(other.m_Scalars.size());
     m_Aux.setZero(other.m_Aux.size());
+    m_Geometry.setZero(other.m_Geometry.size());
   }
 
   void zero() {
     m_Variable.setZero();
     m_Derivative.setZero();
     m_Flux.setZero();
+    m_VariableDot.setZero();
     m_Scalars.setZero();
     m_Aux.setZero();
+    m_Geometry.setZero();
   }
 
 private:
@@ -141,6 +147,39 @@ public:
   double &phi(Index i) { return checked(m_Aux, i, "auxiliary variable"); }
   double phi(Index i) const { return checked(m_Aux, i, "auxiliary variable"); }
 
+  /*
+      d(variable)/dt at this point.
+
+      Filled by the solver from the dYdt vector before a physics hook is called;
+      a case only reads it, exactly as for geom() above. It is **zero unless
+      some variable declares `sourceReadsTimeDerivatives`** in the spec, which
+      is what keeps a case that never asked for it identical to what it was.
+
+      Two things to know before reading it.
+
+      It is meaningful in `Sources` and nowhere else. `SigmaFn` and `AuxG` are
+      handed the same State, so the value is there, but the Jacobian carries no
+      d(sigma_hat)/d(udot) or dG/d(udot) term -- a flux or a constraint that
+      read it would be differentiated wrongly, and the symptom would be slow
+      Newton convergence and nothing else.
+
+      There is deliberately no qdot, sigmadot or phidot. Those rows are
+      algebraic: the residual carries no d/dt for them, `id` marks them zero for
+      IDASetId, and SuppressAlgebraicError may take them out of the local error
+      test altogether, so their dYdt entries are whatever makes the constraints
+      hold rather than quantities with a physical meaning. A source reading one
+      would make an algebraic row differential without saying so.
+  */
+  double &udot(Index i) { return checked(m_VariableDot, i, "variable"); }
+  double udot(Index i) const { return checked(m_VariableDot, i, "variable"); }
+
+  /// A derived metric field, not an unknown: geometry is a function of the
+  /// field model's psi and of x, evaluated at the physics nodes and cached per
+  /// residual, in the same standing as sigmaHat. Read-write because the solver
+  /// fills it before handing the State to a physics hook; a case only reads it.
+  double &geom(Index i) { return checked(m_Geometry, i, "geometry slot"); }
+  double geom(Index i) const { return checked(m_Geometry, i, "geometry slot"); }
+
   double &scalar(Index i) { return checked(m_Scalars, i, "scalar"); }
   double scalar(Index i) const { return checked(m_Scalars, i, "scalar"); }
 
@@ -168,14 +207,20 @@ public:
   /// reference. Use sigma() when assigning.
   Vector sigmaHat() const { return -m_Flux; }
 
+  Vector &udot() { return m_VariableDot; }
+  Vector const &udot() const { return m_VariableDot; }
+
   Vector &phi() { return m_Aux; }
   Vector const &phi() const { return m_Aux; }
+
+  Vector &geom() { return m_Geometry; }
+  Vector const &geom() const { return m_Geometry; }
 
   Vector &scalars() { return m_Scalars; }
   Vector const &scalars() const { return m_Scalars; }
 
 private:
-  Vector m_Variable, m_Derivative, m_Flux, m_Aux;
+  Vector m_Variable, m_Derivative, m_Flux, m_VariableDot, m_Aux, m_Geometry;
   Vector m_Scalars;
 };
 
@@ -187,12 +232,13 @@ public:
   /// GlobalStateMatrix for every Jacobian evaluation and hands its columns
   /// straight to dSigmaFn_du and friends as out-parameters.
   explicit GlobalState(Index nCells, Index k, Index nv, Index ns = 0,
-                       Index naux = 0) noexcept
-      : nCells(nCells), k(k), nVars(nv), nScalars(ns), nAux(naux) {
+                       Index naux = 0, Index ngeom = 0) noexcept
+      : nCells(nCells), k(k), nVars(nv), nScalars(ns), nAux(naux), nGeom(ngeom) {
     m_Variable.setZero(nVars, nCells * (k + 1));
     m_Derivative.setZero(nVars, nCells * (k + 1));
     m_Flux.setZero(nVars, nCells * (k + 1));
     m_Aux.setZero(nAux, nCells * (k + 1));
+    m_Geometry.setZero(nGeom, nCells * (k + 1));
     m_Scalars.setZero(nScalars);
   }
 
@@ -200,22 +246,77 @@ public:
     m_Variable.col(i) = s.u();
     m_Derivative.col(i) = s.q();
     m_Flux.col(i) = s.sigma();
+    if (m_VariableDot.rows() > 0)
+      m_VariableDot.col(i) = s.udot();
     m_Aux.col(i) = s.phi();
+    m_Geometry.col(i) = s.geom();
     m_Scalars = s.scalars();
   }
 
   // Return state at point i
   State operator[](Index i) const {
-    State out(nVars, nScalars, nAux);
+    State out(nVars, nScalars, nAux, nGeom);
 
     out.u() = m_Variable.col(i);
     out.q() = m_Derivative.col(i);
     out.sigma() = m_Flux.col(i);
+    // Left at the zero State's constructor put there when no time derivatives
+    // were supplied. That is the right value rather than a fallback: it is what
+    // every case that does not declare `sourceReadsTimeDerivatives` sees, and it
+    // is also what the *steady* adjoint linearisation wants, since the adjoint
+    // is taken about a state at which du/dt vanishes.
+    if (m_VariableDot.rows() > 0)
+      out.udot() = m_VariableDot.col(i);
     out.phi() = m_Aux.col(i);
+    out.geom() = m_Geometry.col(i);
     out.scalars() = m_Scalars;
 
     return out;
   }
+
+  Vector Geometry(Index node) const { return m_Geometry.col(node); }
+  void setGeometry(Index node, Vector const &g) { m_Geometry.col(node) = g; }
+
+  /*
+      Give this state the time derivatives of the variables.
+
+      Zero rows until this is called, which is the state every run is in unless
+      some variable declares `sourceReadsTimeDerivatives`: operator[] then hands
+      out States whose udot() is the zero vector its constructor made, and
+      nothing allocates or copies an extra (nVars x nPoints) matrix per residual.
+
+      `dot` is an (nVars x nPoints) matrix on the same nodes as this state --
+      DGSoln::evalOnNodes().Variable() of the dYdt vector, or, with the
+      superconvergent scheme, Postprocessor::interpolateVariableOnStarNodes.
+      Note *interpolate*: u* is reconstructed from (u, q), so d(u*)/dt would
+      need qdot, which by the note in State::udot has no meaning here.
+  */
+  void setVariableDot(Matrix const &dot) { m_VariableDot = dot; }
+
+  Matrix &VariableDot() { return m_VariableDot; }
+  const Matrix &VariableDot() const { return m_VariableDot; }
+  bool hasVariableDot() const { return m_VariableDot.rows() > 0; }
+
+  /// Give this state geometry rows after construction.
+  ///
+  /// The GlobalStates the physics is evaluated on come from
+  /// DGSoln::evalOnNodes and Postprocessor::evalOnStarNodes, and neither knows
+  /// how many geometry slots a field model declares: geometry is a function of
+  /// (psi, x), not part of the DOF layout, so a DGSoln has no business knowing
+  /// about it. SystemSolver::evaluateGeometry sizes the rows here and then
+  /// fills them.
+  ///
+  /// nGeom, not just the matrix. operator[] builds its State with nGeom, so
+  /// resizing the storage alone would hand out States with nowhere to copy the
+  /// values to -- and State::geom(i) on an empty vector is an out-of-range read
+  /// in any build without DEBUG.
+  void setGeometrySlots(Index ngeom) {
+    nGeom = ngeom;
+    m_Geometry.setZero(ngeom, m_Variable.cols());
+  }
+
+  Matrix &GeometryMatrix() { return m_Geometry; }
+  Matrix const &GeometryMatrix() const { return m_Geometry; }
 
   // This is mainly for copying from python
   GlobalState &operator=(const GlobalState &other) {
@@ -224,13 +325,22 @@ public:
     checkShapeAndSet(m_Flux, other.Flux(), "Flux");
     if (nAux > 0) // Don't bother with Aux if nAux = 0
       checkShapeAndSet(m_Aux, other.Aux(), "Aux");
+    if (nGeom > 0) // Don't bother with Geometry if nGeom = 0
+      checkShapeAndSet(m_Geometry, other.GeometryMatrix(), "Geometry");
+    // Guarded on the *source* having them, not on this object: a Python case
+    // returns a GlobalState built by the type caster, which never sets them, and
+    // assigning an empty matrix over the rows the solver just filled would drop
+    // them silently.
+    if (other.hasVariableDot())
+      m_VariableDot = other.VariableDot();
     // Guard-clause form, and braced. The `else` used to hang off the inner `if`
     // -- which is what was meant, so the behaviour here is unchanged -- but with
     // two unbraced nested ifs that is only true by the standard's
     // nearest-enclosing rule, not by anything the reader can see. gcc's
-    // -Wdangling-else lives inside -Wparentheses, which Makefile.config disables
-    // globally, so only clang reports it. It was the sole thing standing between
-    // this codebase and a clean clang build.
+    // -Wdangling-else lives inside -Wparentheses, which the build used to
+    // disable globally, so at the time only clang reported it. It was the sole
+    // thing standing between this codebase and a clean clang build. That blanket
+    // suppression is long gone, and -Wall now catches this on either compiler.
     if (nScalars > 0)
     {
       if (m_Scalars.size() != other.Scalars().size())
@@ -287,6 +397,13 @@ public:
   }
 
   /*
+      Geometry -- see Geometry(Index)/setGeometry/GeometryMatrix() above,
+      beside the constructor. Unlike Variable/Derivative/Flux/Aux, geometry is
+      derived rather than solved for, so there is no cellwise accessor: nothing
+      assembles a Jacobian block against it yet.
+  */
+
+  /*
       Scalars
   */
   Vector &Scalars() { return m_Scalars; }
@@ -314,6 +431,7 @@ public:
   {
     nVars = m_Variable.rows();
     nAux = m_Aux.rows();
+    nGeom = m_Geometry.rows();
     nScalars = m_Scalars.size();
     nCells = m_Variable.cols();
     k = 0;
@@ -322,8 +440,14 @@ public:
   friend class GlobalStateMatrix;
 
 private:
-  // We hold global state data in matrices that are (nVars x nPoints)
-  Matrix m_Variable, m_Derivative, m_Flux, m_Aux;
+  // We hold global state data in matrices that are (nVars x nPoints).
+  //
+  // m_VariableDot is the exception and is left empty by the constructor, in the
+  // way m_Geometry is sized only by setGeometrySlots: it is filled on demand by
+  // setVariableDot, so a run whose spec declares no time-derivative source
+  // carries no extra storage and copies no extra matrix.
+  Matrix m_Variable, m_Derivative, m_Flux, m_Aux, m_Geometry;
+  Matrix m_VariableDot;
 
   // Scalars are global so this is just a vector
   Vector m_Scalars;
@@ -331,7 +455,7 @@ private:
   // Hold sizes internally for checking & preallocating memory.
   // Initialised here because the default constructor is used by the pybind11
   // type caster; leaving them indeterminate made size() unpredictable.
-  Index nCells = 0, k = 0, nVars = 0, nScalars = 0, nAux = 0;
+  Index nCells = 0, k = 0, nVars = 0, nScalars = 0, nAux = 0, nGeom = 0;
 };
 
 /*

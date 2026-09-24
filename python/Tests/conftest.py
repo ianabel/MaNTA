@@ -10,7 +10,7 @@ The tests need three things that used to be supplied implicitly by running
 Previously test.py and the JAX fixtures each did `sys.path.append("../")`,
 which only resolves correctly when cwd is already python/Tests. With this
 file, `pytest python/Tests` from the repo root works too -- which is what
-`make coverage` and CI need.
+the coverage target and CI need.
 """
 
 import os
@@ -40,7 +40,8 @@ def _check_extension_built():
         import manta as MaNTA
     except ImportError:
         pytest.exit(
-            "manta package not importable. Build it with `make python`.",
+            "manta package not importable. Build it with\n"
+            "    cmake --build build --target _manta",
             returncode=1,
         )
     if not hasattr(MaNTA, "TransportSystem"):
@@ -48,7 +49,8 @@ def _check_extension_built():
             "'MaNTA' resolved to "
             f"{getattr(MaNTA, '__path__', MaNTA.__file__)!r}, which is not the "
             "compiled extension -- most likely the repo directory imported as a "
-            "namespace package. Build the module with `make python`.",
+            "namespace package. Build the module with\n"
+            "    cmake --build build --target _manta",
             returncode=1,
         )
 

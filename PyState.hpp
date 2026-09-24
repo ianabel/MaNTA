@@ -36,6 +36,10 @@ namespace py = pybind11;
         s.sigma[i]    the stored flux, sigma = -sigma_hat
         s.sigmaHat[i] the physical flux, what SigmaFn returned
         s.phi[i]      s.phi["potential"]
+        s.udot[i]     d(variable i)/dt, zero unless a variable declares
+                      source_reads_time_derivatives; see StateView::udot() below
+        s.geom[g]     a field model's geometry, derived rather than declared --
+                      see the note on StateView::geom() below
         s.scalars[i]  s.scalars["current"]
 
     It is valid only for the duration of the call it was passed to; the
@@ -190,6 +194,25 @@ public:
     {
         return {m_state->phi().data(), m_state->phi().size(), &auxNames(), false};
     }
+    /// d(variable)/dt -- named like u, because it is indexed by variable.
+    ///
+    /// Zero unless some variable declares `source_reads_time_derivatives`, and
+    /// meaningful in Sources and nowhere else; State::udot in State.hpp is the
+    /// full note.
+    StateField udot() const
+    {
+        return {m_state->udot().data(), m_state->udot().size(), &varNames(), false};
+    }
+    /// The field model's geometry -- a derived metric field, not an unknown.
+    /// Indexable by position only, and still is: the slot names live in the
+    /// field model's own FieldModelSpec, while this view takes its names from
+    /// the TransportSystem's SystemSpec, which knows nothing about whichever
+    /// model happens to be attached. There is no route from one to the other,
+    /// so there is nothing to look a name up in. See TODO for the entry.
+    StateField geom() const
+    {
+        return {m_state->geom().data(), m_state->geom().size(), &noNames(), false};
+    }
     StateField scalars() const
     {
         return {m_state->scalars().data(), m_state->scalars().size(), &scalarNames(), false};
@@ -224,6 +247,14 @@ private:
                 m_scalarNames.push_back(s.name);
         return m_scalarNames;
     }
+    /// geom() has no name source yet -- see its doc comment -- so it always
+    /// gets this empty table, and a string key reports "no named entries"
+    /// rather than resolving anything.
+    static std::vector<std::string> const &noNames()
+    {
+        static const std::vector<std::string> empty;
+        return empty;
+    }
 
     State *m_state;
     SystemSpec const *m_spec;
@@ -253,6 +284,10 @@ inline void bindState(py::module_ &m)
         .def_property_readonly("sigmaHat", &StateView::sigmaHat,
                                "the physical flux, the quantity SigmaFn returns (read-only)")
         .def_property_readonly("phi", &StateView::phi, "the auxiliary variables")
+        .def_property_readonly("udot", &StateView::udot,
+                               "d(variable)/dt; meaningful in Sources only")
+        .def_property_readonly("geom", &StateView::geom,
+                               "the field model's geometry (derived, not an unknown)")
         .def_property_readonly("scalars", &StateView::scalars, "the global scalars")
         .def("__repr__", &StateView::repr);
 }

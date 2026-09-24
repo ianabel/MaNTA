@@ -116,6 +116,21 @@ class TransportSystem(_TransportSystem):
     def dSources_du(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
     def dSources_dq(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
     def dSources_dsigma(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
+
+    # d(Sources)/d(state.udot), asked for only of a variable whose Field sets
+    # source_reads_time_derivatives. Optional in the same sense as the five
+    # above -- an absent hook is a zero block -- but with a sharper consequence:
+    # a source that reads udot and does not report this is a wrong Jacobian, not
+    # an absent coupling, and the solver says so at startup rather than leaving
+    # it to the iteration counts.
+    def dSources_dudot(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
+
+    # Derivatives with respect to a field model's geometry slots (state.geom).
+    # Optional, like the five above: an absent hook is an identically zero
+    # coupling block, which is the correct answer for a case that does not
+    # read geometry at all.
+    def dSigmaFn_dGeometry(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
+    def dSources_dGeometry(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
     def aFn(self, i: int, x: float) -> float: ...  # type: ignore[override]
     def LowerBoundary(self, i: int, t: float) -> float: ...  # type: ignore[override]
     def UpperBoundary(self, i: int, t: float) -> float: ...  # type: ignore[override]
@@ -129,6 +144,7 @@ class TransportSystem(_TransportSystem):
     def AuxGPrime(self, i: int, out: State, state: State, x: float, t: float) -> None: ...  # type: ignore[override]
     def dSources_dPhi(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
     def dSigma_dPhi(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
+    def dAuxG_dGeometry(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
 
     # Global scalars. These take the solution sampled on the element nodes, as
     # dicts of (nPoints, nVars) arrays, plus the quadrature data.

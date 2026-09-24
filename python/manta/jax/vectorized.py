@@ -107,6 +107,43 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
             in_axes=(self.vmap_axes),
         )(states, positions, self.params)
 
+    def ComputeSourceTimeDerivatives(self, states, positions, t):
+        """dS_i/d(udot_j) for every variable, one GlobalState dict each.
+
+        The solver asks for this separately from ComputePhysicsDerivatives, and
+        only when some variable declares `source_reads_time_derivatives`. It
+        reads the block out of the **Variable** slice of each dict, because
+        dS_i/d(udot_j) has the shape dS_i/du_j has and lands in the same block
+        of the cell matrix, one factor of alpha apart.
+
+        The gradient is the one `dSources` already computes -- State.VariableDot
+        is d(variable)/dt, so grad(source) carries this component beside the
+        other four. It is evaluated a second time here rather than cached from
+        the ComputePhysicsDerivatives call, because the two are separate calls
+        from the solver and nothing guarantees their order or that both happen.
+
+        Physics_Decorator is not used: it walks a list of *lists* of States, and
+        this returns one State per variable.
+        """
+        states_, empty = eqx.partition(State.from_manta(states), lambda x: x.size > 0)
+        positions_ = jnp.array(positions)
+
+        out = []
+        for i in range(0, self.nVars):
+            block = eqx.combine(
+                self.dSources(i, states_, positions_, t), empty
+            ).to_manta()
+            out.append(
+                {
+                    "Variable": block["VariableDot"],
+                    "Derivative": np.zeros_like(block["Derivative"]),
+                    "Flux": np.zeros_like(block["Flux"]),
+                    "Aux": np.zeros_like(block["Aux"]),
+                    "Scalars": np.zeros_like(block["Scalars"]),
+                }
+            )
+        return out
+
     @partial(jax.jit, static_argnames=("self",))
     def AuxGPrime_v(self, index, states, positions, t):
         return jax.vmap(
@@ -147,7 +184,9 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
     index : int
         Variable index
     state : dict
-        Dictionary containing "Variable", "Derivative", "Flux", "Aux", and "Scalars" arrays
+        Dictionary containing "Variable", "Derivative", "Flux", "Aux" and "Scalars"
+        arrays, plus "VariableDot" -- d(variable)/dt, which is an empty array
+        unless some variable declares source_reads_time_derivatives
     x : float
         Spatial location
     t : float

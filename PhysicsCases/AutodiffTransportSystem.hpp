@@ -6,6 +6,7 @@
 #include <autodiff/forward/dual/eigen.hpp>
 
 #include "AdjointProblem.hpp"
+#include "PyIntegrator.hpp"
 
 #include <boost/math/interpolators/cardinal_cubic_b_spline.hpp>
 using spline = boost::math::interpolators::cardinal_cubic_b_spline<double>;
@@ -38,9 +39,19 @@ public:
 	void dSources_du(Index i, VectorRef, const State &, Position x, Time t) override;
 	void dSources_dq(Index i, VectorRef, const State &, Position x, Time t) override;
 	void dSources_dsigma(Index i, VectorRef, const State &, Position x, Time t) override;
+	void dSources_dudot(Index i, VectorRef, const State &, Position x, Time t) override;
 	void dSources_dScalars(Index, VectorRef, const State &, Position, Time) override;
 	void dSigmaFn_dp(Index i, Index pIndex, Value &, const State &s, Position x, Time t);
 	void dSources_dp(Index i, Index pIndex, Value &, const State &, Position x, Time t);
+
+	// Geometry derivatives -- see TransportSystem.hpp for the contract. Derived
+	// by autodiff like every other derivative here: SigmaFn/Sources/AuxG all
+	// evaluate through the geometry-aware Flux/Source/GFunc overloads below, so
+	// a case that never reads geometry gets an identically zero gradient from
+	// the same mechanism that gives one to a case that does.
+	void dSigmaFn_dGeometry(Index i, VectorRef, const State &, Position x, Time t) override;
+	void dSources_dGeometry(Index i, VectorRef, const State &, Position x, Time t) override;
+	void dAuxG_dGeometry(Index i, VectorRef, const State &, Position x, Time t) override;
 
 	Value AuxG(Index, const State &, Position, Time) override;
 	void AuxGPrime(Index, State &, const State &, Position, Time) override;
@@ -110,8 +121,25 @@ protected:
 	std::vector<std::reference_wrapper<Real>> pvals;
 
 private:
+	// See Integrator::Cache. writeDiagnostics is the only caller here.
+	mutable Integrator::Cache m_integrator;
+
 	// API to underlying flux models
 	virtual Real Flux(Index i, RealVector u, RealVector q, Real x, Time t) = 0;
+
+	/// The geometry-aware overload. Defaults to ignoring geometry and forwarding
+	/// to the required overload above, so an existing case's Flux keeps
+	/// compiling unchanged and contributes zero geometry coupling -- the same
+	/// "an unread hook means no coupling" convention as TransportSystem's own
+	/// default dSigmaFn_dGeometry. SigmaFn and every d.../dGeometry hook below
+	/// evaluate through this overload rather than the one above, so a case that
+	/// wants sigma_hat to depend on geometry overrides this one instead and gets
+	/// the derivative for free by the same autodiff mechanism as du/dq.
+	virtual Real Flux(Index i, RealVector u, RealVector q, RealVector /* geom */, Real x, Time t)
+	{
+		return Flux(i, u, q, x, t);
+	}
+
 	virtual Real Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t)
 	{
 		if (nScalars > 0)
@@ -131,6 +159,25 @@ private:
 			return Source(i, u, q, sigma, phi, x, t);
 	}
 
+	/// The geometry-aware overload, on the same footing as Flux's above.
+	virtual Real Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector phi, RealVector Scalars, RealVector /* geom */, Real x, Time t)
+	{
+		return Source(i, u, q, sigma, phi, Scalars, x, t);
+	}
+
+	/// ...and the time-derivative-aware one, on the same footing again.
+	///
+	/// A case whose source reads du/dt overrides *this* overload and declares
+	/// `sourceReadsTimeDerivatives` on the variables whose source does so; it
+	/// then gets dSources_dudot by the same autodiff mechanism that gives it
+	/// dSources_du, and needs to write no derivative by hand. One that does not
+	/// override it contributes an identically zero block, from the same
+	/// mechanism -- so this costs nothing to have and nothing to ignore.
+	virtual Real Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector phi, RealVector Scalars, RealVector geom, RealVector /* udot */, Real x, Time t)
+	{
+		return Source(i, u, q, sigma, phi, Scalars, geom, x, t);
+	}
+
 	// Auxiliary variables are optional, so provide a default implementation
 	virtual Real GFunc(Index, RealVector, RealVector, RealVector, RealVector, Position, Time)
 	{
@@ -139,6 +186,12 @@ private:
 		else
 			return 0.0;
 	};
+
+	/// The geometry-aware overload, on the same footing as Flux's above.
+	virtual Real GFunc(Index i, RealVector u, RealVector q, RealVector sigma, RealVector phi, RealVector /* geom */, Position x, Time t)
+	{
+		return GFunc(i, u, q, sigma, phi, x, t);
+	}
 
 	virtual Value InitialAuxValue(Index, Position, Time) const
 	{

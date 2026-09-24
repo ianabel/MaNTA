@@ -1,13 +1,17 @@
 # MaNTA test suites
 
-Three suites, all driven from the top-level Makefile and all runnable from any
-working directory.
+Three suites, all registered with CTest (`ctest --test-dir build`) and all
+runnable from any working directory.
 
-| Command | Suite | Location |
+| Test | Suite | Location |
 |---|---|---|
-| `make test` | Boost.Test C++ unit tests | `Tests/UnitTests/` |
-| `make regression_tests` | Solver run against checked-in `.ref.nc` references | `Tests/RegressionTests/` |
-| `make python_tests` | pytest suite for the pybind11 module | `python/Tests/` |
+| `unit` | Boost.Test C++ unit tests | `Tests/UnitTests/` |
+| `regression` | Solver run against checked-in `.ref.nc` references | `Tests/RegressionTests/` |
+| `python` | pytest suite for the pybind11 module | `python/Tests/` |
+
+Each also has a build target of the same name plus `_tests` — `unit_tests`,
+`regression_tests`, `python_tests` — which builds what it needs and runs that one
+suite.
 
 The Python suite writes its solver output into the *current directory*, not into
 pytest's `tmp_path`: `OutputFilename` is passed to `setInputFile`, and
@@ -21,16 +25,22 @@ output at all; `.dat` files need `WriteDatFile` (and `WriteDebugDatFiles` for
 the `.dydt.dat` / `.res.dat` pair), both off by default. Test cleanup code must
 therefore treat `.dat` as optional.
 
-`make coverage` rebuilds with `--coverage -O0`, runs all three, and writes
-`coverage/index.html` (numerical core + Python bindings) and
-`coverage/physics.html` (`PhysicsCases/`, informational). See the README.
+`cmake --preset coverage && cmake --build build-coverage --target coverage`
+builds with `--coverage -O0`, runs all three, and writes
+`build-coverage/coverage/index.html` (numerical core + Python bindings) and
+`.../physics.html` (`PhysicsCases/`, informational). See the README.
+
+Note that the unit tests now run from the **build directory** rather than the
+repo root, because CTest launches them there. Fixtures are unaffected — they are
+reached through the absolute `TEST_DATA_DIR` — but a test that writes output and
+cleans up after itself is doing so in `build/` now.
 
 ## Unit tests
 
 Boost.Test in header-only mode (`boost/test/included/unit_test.hpp`), so there
 is no `-lboost_unit_test_framework` link step -- `libboost-dev` is enough.
 `Tests/UnitTests/main.cpp` defines the module; every other `.cpp` listed in
-`TEST_SOURCES` contributes suites.
+`MANTA_TEST_SOURCES` (`Tests/UnitTests/CMakeLists.txt`) contributes suites.
 
 Two things worth knowing when adding a test:
 
@@ -43,8 +53,9 @@ Two things worth knowing when adding a test:
   every new test.
 * **Fixture paths.** netCDF fixtures (`testic.nc`, `MatrixDiffusion.restart.nc`,
   `Bfield.ref.nc`) must be reached with `testDataPath()` from `TestPaths.hpp`,
-  which resolves against the `TEST_DATA_DIR` baked in by the Makefile. Do not
-  hardcode `./Tests/UnitTests/...`; that only works from the repo root.
+  which resolves against the `TEST_DATA_DIR` baked in by
+  `Tests/UnitTests/CMakeLists.txt`. Do not hardcode `./Tests/UnitTests/...`; that
+  only works from the repo root, which is no longer where the binary runs.
 * **A passing run is silent.** Several tests deliberately provoke output --
   they run the full solver, hand `ErrorChecker` a null pointer, or make the
   physics throw so `static_residual` has to report it. Wrap those calls in a
@@ -204,6 +215,18 @@ per-instantiation line records (all three modes give identical output).
 So: treat the headline as a floor, and judge work on this header by the count of
 *distinct* uncovered lines, not by its percentage.
 
+**And a number is only worth reading if the Python suite ran against the
+instrumented module.** The extension lives at `python/manta/_manta<abi>.so` --
+in the source tree, because that is where `import manta` has to find it -- so
+every build directory writes to the same path, and a run once imported the
+Release module while believing otherwise: 133s against 748s for the same tests,
+with the report still looking right because gcov data accumulates. Each build
+directory now claims the module and replaces one it does not recognise, and the
+`coverage` target refuses to start unless what is in place carries
+instrumentation; `python/CMakeLists.txt` has the full account. Nothing is needed
+from you, but if a binding-layer figure ever looks impossibly low, that is the
+first thing to suspect.
+
 ## The scalar (Woodbury) path in solveJacEq
 
 `SolveJacTests.cpp` builds the Jacobian by finite-differencing `residual` under
@@ -287,6 +310,219 @@ Two things make this work, and both are easy to get wrong when adding a case:
   with "the error test failed repeatedly or with |h| = hmin"; 1e-9 leaves three
   orders of margin over the smallest spatial error in the sweep.
 
+## Order of accuracy with a field model coupled
+
+`Tests/UnitTests/MMSFieldTests.cpp` is the same instrument pointed at the
+self-consistent field coupling, and it is the only test class that can catch an
+error in the coupled *equations*. The split is worth restating, because the two
+halves catch disjoint things:
+
+* The coupled Jacobian is never assembled, so a wrong `A1` or `A2` costs Newton
+  iterations and nothing else. Only `FieldJacobianTests.cpp` sees that.
+* A sign error in the coupled *residual* converges at the right rate to the
+  wrong function. Only a closed-form comparison sees that -- which is this file.
+
+The problem is `u_t - d_x[ g(x; psi) kappa u_x ] = S` with `kappa = 0.7`,
+`u = sin(pi x)(1 + t)` and `g` supplied by the field model, all in `MMSHarness.hpp`
+alongside the uncoupled sweeps. `kappa != 1` deliberately: a case that used the
+geometry slot *as* the diffusivity rather than as a factor multiplying it would
+be indistinguishable at `kappa = 1`.
+
+**The manufactured source is checked before the solver is.** `S` is derived
+symbolically as `u_t - kappa (g' u_x + g u_xx)`, and
+`the_manufactured_source_is_consistent_with_the_exact_solution` evaluates
+`u_t - d_x[kappa g u_x] - S` at 21 and 30 `(x, t)` points respectively. Both
+models come back at **5e-13**, against a 1e-10 threshold. The derivative there is
+a six-point `O(h^6)` stencil at `h = 2e-3`, not a plain central difference: the
+flux carries `cos^2(pi x)`, so its seventh derivative goes as `(2 pi)^7` and the
+obvious `h = 5e-3` lands at 4e-11 -- close enough to the threshold to be worth
+not doing.
+
+Measured local orders, `t = 0.25`, grids 4, 8, 16, 32, `Superconvergent = false`:
+
+| model | k | u | u* | psi |
+|---|---|---|---|---|
+| `ManufacturedField` (1 DOF) | 1 | 1.90, 1.96, 1.98 | 2.21, 2.09, 2.05 | 2.09, 2.07, 2.04 |
+| `ManufacturedField` (1 DOF) | 2 | 2.95, 2.98, 2.99 | 4.47, 4.08, 3.96 | 4.82, 3.93, 3.87 |
+| `ManufacturedField` (1 DOF) | 3 | 3.96, 3.99, 4.00 | 4.99, 4.89, 4.71 | 5.12, 4.37, 4.10 |
+| `ManufacturedFieldVector` (5 DOF) | 2 | 2.93, 2.98, 2.99 | 4.04, 4.01, 4.00 | 4.03, 4.01, 4.00 |
+
+and `u*` with the flag off against the flag on, `ManufacturedField`:
+
+| k | `u` flag on | `u*` flag off | `u*` flag on |
+|---|---|---|---|
+| 1 | 1.87, 1.96, 1.98 | 2.21, 2.09, 2.05 | **3.12, 3.05, 3.01** |
+| 2 | 2.92, 2.97, 2.99 | 4.47, 4.08, 3.96 | 4.24, 3.99, 3.97 |
+| 3 | 3.94, 3.98, 3.99 | 4.99, 4.89, 4.71 | 5.27, 4.98, 4.94 |
+
+Three things to read out of that.
+
+* `u_h` holds `k+1` at every degree and on both models, which is the headline.
+* **`u*` reaches `k+2` with the flag on at every degree, so the fourth test
+  asserts it** rather than asserting that the flag throws. Geometry is a function
+  of `(psi, x)` and the star nodes are just more `x`, so the coupling needs no
+  special case in `ComputePhysics`'s `states.size()` loop -- and does not get one.
+
+  **`k = 1` is the row that earns the test**: it is the only configuration in the
+  file where the flag-on assertion is not also satisfied flag-off, i.e. the only
+  one showing the flag *doing* something rather than failing to break something,
+  and it is asserted as such. That is not a new phenomenon -- it reproduces,
+  under coupling, the `k = 1` / `k = 2` split the uncoupled study measures and
+  the next section records as unexplained: flag off, the interpolatory scheme's
+  postprocessing superconverges at `k = 2` but not at `k = 1`. The coupling
+  neither causes nor cures it. The `k = 3` flag-off row is the one genuinely new
+  number, and it *decays* -- 4.99, 4.89, 4.71 -- the same shape as the nonlinear
+  flux's transient superconvergence below, where the flag-on column does not.
+* **`psi` starts above `k+1` and slows down**, which is why the assertion is at
+  `k+1` and why the extra order is not claimed. `k = 2` gives 4.82, 3.93, 3.87
+  and `k = 3` gives 5.12, 4.37, 4.10. There *is* a mechanism for `k+2` -- the
+  field quadrature is exact on a degree-`k` field, so `psi_h` is exactly
+  `Int u_h dx` and its error is `Int (u_h - u) dx`, a linear functional of the
+  error rather than its `L2` norm, which superconverges by the usual duality
+  argument -- but a falling rate at `n = 32` is precisely the pattern this
+  codebase has already measured and been caught by. See "the two italicised
+  flag-off entries" below: the nonlinear flux's `u*` fell by 6.9, 11.7, 9.1 and
+  then 2.3, so a sweep ending at `n = 32` reported 3.21 and looked perfectly
+  healthy. Until this sweep is refined far enough to tell a settled `k+2` from a
+  pre-asymptotic transient, `k+1` is what the evidence supports. The multi-DOF
+  model's `psi` is the one column that does *not* decay (4.03, 4.01, 4.00), and
+  it is asserted at `k+1` too, on the same three-refinements-is-not-settled
+  grounds.
+
+### Which solve produced these numbers
+
+`solveCoupledJacIterative` escalates to the exact Schur solve when it exhausts
+`FieldSolveMaxSweeps`, so a sweep that never converged would yield exactly the
+exact path's answer with nothing in the result to say so.
+`the_coupled_problem_converges_at_k_plus_one_in_u` therefore runs the whole `k =
+1, 2, 3` study on **both** modes and requires the local orders to agree.
+
+They do, to **1.8e-9, 3.2e-8 and 1.3e-7** at `k = 1, 2, 3` -- so the numbers above
+are the iterative mode's own, and the table would be unchanged had it been the
+exact mode's. The assertion is pinned at 0.01, the brief's "third digit of a
+rate", rather than at the measured gap: the gap is set by where IDA's Newton
+lands inside its own tolerance, which is not a portable quantity, while a real
+disagreement between two solves of the same equations would be an order of 0.1 or
+worse.
+
+**`getFieldSweepStats().fallbacks` is zero at every refinement, on every case in
+the file, and that is asserted rather than printed** (`checkNoFallbacks`). The
+distinction is the whole finding: forcing an escalation by capping the sweep at
+one iteration leaves every local order in the file *bit for bit unchanged* -- the
+escalation returns the exact path's answer -- and drives the two-mode gap from
+1.3e-7 to **exactly zero**, so the agreement check passes more strongly while the
+study has stopped measuring the iterative mode at all. Only the fallback count
+tells the difference, and only if something checks it.
+
+The sweep runs 2.5 to 3.6 iterations per Jacobian solve here. Read that beside
+`FieldJacobianTests.cpp`'s 13 to 38 sweeps on *random* right-hand sides, where
+three of six exhaust the shipped cap of 20: the two are not in tension, and the
+contrast is the explanation for why that cap is adequate in a real run. Newton's
+right-hand sides are small, smooth corrections about a nearby state; a random
+vector is the hard case. Neither number says anything about the cap on its own.
+
+One outlier is worth recording so it is not mistaken for a defect later: the
+multi-DOF case at `n = 8` takes 1591 field solves and 4877 sweeps where its
+neighbours take ~200 and ~700. That is IDA working harder over that particular
+step sequence, not the sweep failing -- the fallback count is still zero and the
+ratio, 3.07 sweeps per solve, is inside the band every other row sits in.
+
+**These tests are not vacuous, and that was checked rather than assumed.** Three
+mutations, applied and reverted:
+
+| mutation | effect |
+|---|---|
+| `SigmaFn` drops `s.geom(0)`, i.e. the geometry never reaches the physics | the flux check fails at every sample point; both single-DOF studies die with `IDASolve could not complete`; the multi-DOF orders collapse to -0.001, -0.000, -0.000 |
+| `ManufacturedField::FieldResidual` becomes `psi - 1.05 Int u dx`, a 5% error in the field row -- not even a sign error | `k = 1` orders fall to 1.79, 0.85, 0.07; `k = 2` to 0.26, 0.00, -0.00; `k = 3` to 0.005, 0.000, 0.000; `psi` to -0.007 |
+| `FieldSolveMaxSweeps` capped at 1, so every Jacobian solve escalates | every order unchanged, the two-mode gap improves to exactly zero, and only `checkNoFallbacks` fires -- 382 fallbacks in 382 solves at `k = 1, n = 4` |
+
+The second is the one that matters for the equations: it is the failure mode the
+whole file exists for, and the study loses the rate entirely rather than
+degrading by an order. The third is the one that matters for the *method*, and it
+is why the fallback count is asserted.
+
+Note that the two solve modes still agreed -- to 1e-8 under the first two
+mutations, and exactly under the third. That is the point of the cross-check
+rather than a weakness in it: it is a statement about the linear solve, and
+carries no information whatever about the equations.
+
+### What the coupled study does not cover
+
+* **`Superconvergent = true` on the multi-DOF model.** The flag is measured at
+  `k = 1, 2, 3`, but only against `ManufacturedField`; nothing runs the star nodes
+  against a geometry with five field unknowns behind it.
+* **A settled rate for `psi`, or for `u*` at `k = 3`.** Both sweeps stop at
+  `n = 32` and both are still moving there. Refuting a pre-asymptotic transient
+  takes `n = 64`, as `the_flag_off_superconvergence_at_k2_is_genuine_not_pre_asymptotic`
+  had to do for the uncoupled case.
+* **A differential field DOF.** Both manufactured models are algebraic here.
+  `CoupledResidualTests.cpp` runs the differential declaration end to end at one
+  grid and compares its answer to the algebraic one, but nothing measures its
+  order.
+* **`nAux > 0` with a field.** Measured separately: `FieldJacobianTests.cpp`'s
+  `GeometricAuxDiffusion` has both, but that is a Jacobian check, not an order
+  study. `nScalars > 0` with a field is refused by `setFieldModel` outright.
+* **A geometry that is not a smooth function of `x` within a cell.**
+  `ManufacturedFieldVector`'s hat interpolant is only piecewise linear, so `g'`
+  jumps at 0, 0.25, 0.5, 0.75, 1 and the manufactured source jumps with it. Every
+  grid in the sweep is a multiple of 4, so those land on cell boundaries. A grid
+  that put one *inside* a cell would lose the rate for a reason that has nothing
+  to do with the coupling -- and the source-consistency check would still pass,
+  since it samples away from the kinks by more than the stencil's reach.
+
+### There is no coupled regression case, deliberately
+
+`Tests/RegressionTests/` has no `coupled-field.conf` and is not going to get one
+until a field model with physics in it exists. A regression case selects its
+model by name from `[configuration] FieldModel`, which resolves against the
+process-global registry, so the model would have to live in `PhysicsCases/` and
+be linked into the shipped binary. The only two models that exist are
+manufactured fixtures with no physics in them -- `ManufacturedField` and
+`ManufacturedFieldVector`, both under `Tests/UnitTests` and both deliberately
+unregistered -- and registering a fixture into the production binary to give the
+regression suite something to point at is a worse trade than the gap it closes.
+
+What covers the coupled path instead, and what each catches:
+
+| test | what only it sees |
+|---|---|
+| `MMSFieldTests.cpp` (order study) | an error in the coupled *equations*: a sign or a factor in the residual, which converges at the right rate to the wrong function |
+| `FieldJacobianTests.cpp` | an error in `A1` or `A2`, which costs Newton iterations and nothing else, since the coupled Jacobian is never assembled |
+| `FieldAdjointTests.cpp` | an error in the *transpose* of either, which is a silently wrong gradient beside a perfectly good `G` |
+| `SolverLifecycleTests.cpp::psi_round_trips_through_a_restart` | psi missing from, or misread out of, `<stem>.restart.nc`, and a resumed state that cannot be integrated on |
+| `SolverLifecycleTests.cpp::a_coupled_solver_reused_matches_a_fresh_one_bit_for_bit` | a field model that caches across runs, or an `initialize()` that stops calling `resetForRun` |
+| `SolverLifecycleTests.cpp::a_coupled_run_writes_the_field_group` | the netCDF group: its name, its `label`, and psi and geometry written to the wrong shape |
+| `FieldModelSpecTests.cpp` (two name cases) + `CoupledResidualTests.cpp` (two collision cases) | a spec whose names netCDF cannot use, which is otherwise an `NcBadName`/`NcNameInUse` out of `ncGroup.cpp` at the first write |
+
+**The restart case's oracle is the raw netCDF array, not `getSolution()`, and
+that is load bearing.** `yJac` is filled by `DGSoln::copy` — the function this
+work taught to carry the field block — so comparing `getSolution()` on both
+sides of the round trip agrees perfectly when `psi_ = other.psi_` is deleted:
+both are zero. Measured: with the oracle rooted in `getSolution()` that deletion
+left the case *green*; rooted in `Y[nDOF - 1]` it fails three ways, the first
+being `0.4421 != 0`. The vacuity guard has to exclude zero explicitly too — the
+"psi actually moved away from `PSI0`" guard is satisfied by zero, since `PSI0`
+is 0.5.
+
+**The gap that leaves is real and is not covered by any of the above: nothing
+exercises the coupled path through a `.conf` file.** The config plumbing --
+`FieldModel` reaching `FieldModels::InstantiateFieldModel`, `FieldSolve` and the
+three sweep keys reaching the solver through `applySolverConfig`, and the
+restart branch of `runManta` shaping its `DGSoln` from `RestartData/nField` --
+is covered by unit tests only. So is the netCDF group. The nearest thing to
+end-to-end cover is the zero-coupling check below, which runs the binary over
+every regression config and proves the coupling is *inert*, not that it works.
+
+**The zero-coupling invariant is checked by hand, not asserted.** Every existing
+config has no field model, so every one of them must produce output identical to
+the same run built before the branch. Run each `Tests/RegressionTests/*.conf`
+under both binaries from the same directory and `cmp` the results -- netCDF
+files carry no timestamp of their own, so a byte comparison is legitimate, and
+the regression suite's own 5e-3 is far too loose to see a change of this kind.
+Measured at the point the serialisation landed: **all 14 `.nc` files byte
+identical**, and all 14 `.restart.nc` files identical apart from the one
+deliberately added `int nField = 0`.
+
 ## Superconvergence
 
 `Superconvergent = true` switches the residual and Jacobian to the interpolatory
@@ -315,6 +551,47 @@ wrong one costs Newton iterations rather than accuracy. It uses a locally define
 case cannot see the `B11` term at all, which is the one genuinely new coupling
 the scheme introduces. Measured `||J dy - g|| / ||g||` is 2e-10 to 5e-10 for
 `k = 1, 2, 3`.
+
+**`TimeDerivativeSourceTests.cpp`** covers sources that read `State::udot`. Ten
+cases, and the split between them is the point: an order study is the only thing
+that sees a wrong *residual*, and a finite-difference of the Jacobian is the only
+thing that sees a wrong *Jacobian*, because the Jacobian is never assembled.
+
+The manufactured problem is two variables solving the same equation, with
+variable 1's source carrying `C * udot(0)` and a compensating `- C * du_exact/dt`
+subtracted, so the exact solution is unchanged and a solver that never filled
+`udot` would be integrating a source short by `C du/dt`. Measured orders of
+`u(1)`, which is the variable whose source carries the coupling:
+
+| k | u(0) | u(1) | u* (flag on) |
+|---|---|---|---|
+| 1 | 1.89 | 1.95 | 3.09 (local, n=8->16) |
+| 2 | 2.96 | 2.98 | 4.09 |
+| 3 | 3.98 | 3.99 | 5.01 (local, n=8->16) |
+
+**That last column answers the design's open question.** `udot` is *interpolated*
+onto the star nodes rather than reconstructed, and the worry was that this would
+cap the postprocessed rate at `k+1`. It does not: `u*` reaches `k+2` with the
+coupling present, at every degree measured. Which is what settles it, because
+the reconstruction `d(u*)/dt = B11 q_dot + B12 u_dot` is *available* -- IDA
+supplies `y'` for the algebraic rows too and both operators are already built --
+and is ruled out by `IDASetId` and by `q_dot` being identically zero at the
+initial point rather than by the value being absent. The measurement is what
+says the exact derivative would buy nothing to pay that for.
+
+**The `alpha` pair is the trap this suite exists to record.** The new Jacobian
+term is `- alpha * dS/d(udot)`, so it is *identically invisible* at `alpha = 0`.
+`the_udot_block_is_invisible_at_zero_alpha` passes with the term deleted, by
+construction, and is kept beside `..._at_nonzero_alpha` so that the two are never
+collapsed into one. Verified by deleting the term and rebuilding: the
+`alpha = 3.7` case goes from `8.8e-10` to failing, the `alpha = 0` case does not
+move. The same fact is why the adjoint needs nothing: it is built at `alpha = 0`.
+
+`a_cancelled_mass_term_is_refused_by_name` drives the other new failure mode. A
+source containing `a_i du_i/dt` cancels its own mass term, which makes the row
+algebraic and raises the index; the run is refused at `initialize()` with the
+variable named, rather than failing later inside `IDACalcIC` with nothing to say
+where it came from.
 
 **`MMSConvergenceTests.cpp`** and **`MMSAuxScalarTests.cpp`** measure the observed
 orders, flag off and flag on, for `u` and for `u*`. The shared sweep, the
@@ -508,7 +785,7 @@ These are deliberate and tracked, not oversights:
   is noticed.
 
   What is **not** covered: `load_physics_plugin` on a real plugin. Only the
-  missing-file path is tested. A plugin needs `make install` and a shared object
+  missing-file path is tested. A plugin needs `cmake --install` and a shared object
   compiled with the flags `pkg-config --cflags manta` reports, which is more than
   a pytest should build -- and it is the same gap the TOML surface's
   `PhysicsPlugins` key already has, so the `dlopen` flags and the
@@ -606,6 +883,36 @@ These are deliberate and tracked, not oversights:
   `nAux != nVars` is deliberate in that fixture: it is what distinguishes the
   two lengths. The extra auxiliary variable (`phi_u - u = 0`) is otherwise
   unused.
+
+* **The coupled adjoint is C++-only, and the Python surface cannot reach it.**
+  `Tests/UnitTests/FieldAdjointTests.cpp` covers the field coupling's adjoint end
+  to end -- against a closed-form `dG/dp`, against finite differences, and
+  against the transpose of a finite-differenced coupled Jacobian -- but there is
+  no Python equivalent, and that is a gap in the *bindings* rather than in the
+  tests. `FieldModel` has no pybind11 class, so a Python case cannot define one;
+  the `FieldModel` configuration key names a *registered* model, and no field
+  model is registered anywhere in the tree (both manufactured ones live under
+  `Tests/UnitTests` and are deliberately unregistered). So there is nothing a
+  `python/Tests/test_adjoint.py` fixture could attach. Adding the coupled Python
+  check means first registering a production field model or binding `FieldModel`
+  to Python -- neither of which the adjoint work owns.
+
+  Two limits of the coupled adjoint itself are structural rather than untested,
+  and are recorded in `TODO` and beside `G_field` in `SystemSolver.hpp`: an
+  objective whose integrand reads `State::geom` directly loses its `dG/dpsi`
+  term, because `AdjointProblem` reports four state derivatives and geometry is
+  not among them; and a `FieldModel` cannot depend on an adjoint parameter at
+  all, so `d(field residual)/dp` is zero by construction.
+
+  One defect that fixture found was **not** in the coupling. The adjoint's local
+  matrix stored `+Sq` where the forward Jacobian builds `-Sq` -- the `u` row's
+  `q` column, i.e. `dSources_dq` -- so `initializeMatricesForAdjointSolve` had
+  not been the transpose of `assembleCellMatrix` for any case whose source reads
+  `q`. Every adjoint fixture in the tree has `dSources_dq` identically zero, so
+  `Sq` was the zero matrix and its sign never mattered; the coupled fixture
+  carries `dSources_dq = 0.2` and put the gradient 0.48% out. The `J^T z = g`
+  check is what localised it to the operator rather than to `F_p` or to a state
+  that was not quite steady.
 
 * **`python/Tests/test_reference_solutions.py::test_jax_aux_test` passed and the
   xfail is gone.** It had been `strict=True` xfail since `fdd5ee1`. The
@@ -849,16 +1156,57 @@ These are deliberate and tracked, not oversights:
   constructed a `PlasmaConstants` and checked collision times and neutral rates
   against hand values. Nothing replaces them here — the equivalent checks are
   `python-physics/mirror-plasma/test_mirror.py`, which is not run by
-  `make python_tests` (`pytest.ini` is `testpaths = python/Tests`) and needs
+  the `python` test (`pytest.ini` is `testpaths = python/Tests`) and needs
   `desc` and `optimistix`. That is a real reduction in what CI covers, recorded
   here rather than left to be discovered.
 
   `CurvedMirrorPlasma/` had never compiled in any case (commit `c17fa42`,
   "start to add in curved stuff (doesn't compile)"): 49 errors, including
   references to a `CurvedMagneticField` class and a `PlasmaTypes` enum that were
-  never written. It was excluded from `PHYSICS_SOURCES` for that reason, and it
+  never written. It was excluded from the build's physics sources for that
+  reason, and it
   depended on `MirrorPlasma` and `PlasmaConstants`, so it could not have
   outlived them.
 
 * **`PhysicsCases/` is reported but not gated.** It is exercised as test
   fixtures rather than as a coverage target in its own right.
+
+## Threading
+
+The physics is never threaded — the batched wrappers that fall back on pointwise
+hooks are serial loops whatever `MANTA_OPENMP` says, because a case that supplies
+only pointwise hooks never agreed to be called concurrently, and because a Python
+case's GIL makes it more than 13x *slower* rather than faster. Only the solver's
+own cell loops are parallel. `docs/physics_interface.rst` states the rule and
+`CLAUDE.md` has the measurements.
+
+`UtilityTests.cpp` carries four `parallel_for` cases. Three of them are near-
+tautologies in an ordinary build — without `MANTA_OPENMP` the helper is a plain
+loop — and they are there because the thing they pin cost a **process abort**: an
+exception thrown by a physics hook inside an OpenMP loop reached
+`__cxa_call_terminate` instead of `static_residual`'s handler, killing the whole
+suite. `an_exception_from_the_body_reaches_the_caller` throws from the last index
+deliberately, because the original defect passed whenever the throw landed on the
+master thread.
+
+**They only bite in a build that sets the option.** Until 2026-08-25 nothing did
+— no CI leg, no preset — which is how the abort survived. `ci.yml` now has a
+`Build + tests (g++-15, OpenMP)` leg, and it is in the branch-protection required
+list, so a red one blocks a merge.
+
+To run them by hand:
+
+```sh
+cmake -B build-omp -DMANTA_OPENMP=ON && cmake --build build-omp -j 6
+OMP_NUM_THREADS=6 MKL_NUM_THREADS=1 ctest --test-dir build-omp --output-on-failure
+```
+
+`MKL_NUM_THREADS=1` is not optional on a box whose BLAS threads itself. With it
+unset, `OMP_NUM_THREADS=6` also threads the BLAS, and the changed reduction order
+was enough to fail `afn_tests/the_jacobian_agrees_with_the_residual_for_a_nonunit_coefficient`
+with `IDACalcIC could not complete` — in a configuration where **none of MaNTA's
+own loops were parallel at all**, since that test's 3 cells and 12 physics points
+are both below the grain floors. Confirmed by separating the variables:
+`OMP_NUM_THREADS=6 MKL_NUM_THREADS=1` passes, `OMP_NUM_THREADS=1
+MKL_NUM_THREADS=4` fails. Worth remembering before attributing any threaded-build
+failure to a race.

@@ -7,9 +7,10 @@
 #include <pybind11/eigen.h>
 #include <string>
 #include <print>
-// Load restart data into vectors
+// Load restart data into vectors. Defined in MaNTA.cpp; `nField` comes back as
+// how many trailing entries of Y are a field model's psi.
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y,
-                 std::vector<double> &dYdt);
+                 std::vector<double> &dYdt, Index &nField);
 
 PyRunner::PyRunner(std::string physicsCase) : caseName(std::move(physicsCase)) {
   // Rejected here, at the point the name was written, rather than at the first
@@ -134,7 +135,23 @@ void PyRunner::configure(const py::dict &config) {
 
   if (cfg.restart) {
     std::vector<double> Y, dYdt;
-    Index nDOF_file = LoadFromFile(restart_file, Y, dYdt);
+    Index nField_file = 0;
+    Index nDOF_file = LoadFromFile(restart_file, Y, dYdt, nField_file);
+
+    // This surface cannot attach a field model at all: FieldModel is
+    // Category::ProblemSelection and so is an *error* in a dict, and there is no
+    // pybind11 class for a FieldModel to hand over instead. So a coupled restart
+    // file is refused rather than silently read with psi landing in the last
+    // nField entries of a vector that has no field block -- which is a length
+    // mismatch reported as an nVars/nAux/nScalars disagreement, three names none
+    // of which is the problem.
+    if (nField_file != 0)
+      throw std::runtime_error(
+          "This restart file was written by a run with a field model (" +
+          std::to_string(nField_file) +
+          " field unknowns), and Runner cannot attach one: FieldModel names a "
+          "registered model and is a config-file key. Resume it with the MaNTA "
+          "binary.");
 
     // Make sure degrees of freedom are consistent with restart file
     const Index nCells = grid->getNCells();
