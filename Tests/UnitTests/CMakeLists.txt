@@ -62,6 +62,7 @@ set(MANTA_TEST_SOURCES
   PyIntegratorTests.cpp
   ResidualTests.cpp
   ScalarJacobianTests.cpp
+  SpectrumTests.cpp
   SolveJacTests.cpp
   SolverLifecycleTests.cpp
   SolverPlumbingTests.cpp

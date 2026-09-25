@@ -53,9 +53,9 @@ Measured, in his error norm:
 |---|---|---|---|---|
 | 2nd-order FD, N = 101 | 101 | 1 | 101 | 6.02e-5 |
 | Park IDO, N = 11 | 11 | 1 | ~11 | ≈6e-5 *(proxy)* |
-| MaNTA, 4 cells, k = 3 | 16 | 119 | 1504 | 7.55e-5 |
-| MaNTA, 4 cells, k = 4 | 20 | 118 | 1860 | 3.41e-6 |
-| MaNTA, 4 cells, k = 5 | 24 | 124 | 2352 | 2.12e-7 |
+| MaNTA, 4 cells, k = 3 | 16 | 120 | 1520 | 7.55e-5 |
+| MaNTA, 4 cells, k = 4 | 20 | 119 | 1880 | 3.41e-6 |
+| MaNTA, 4 cells, k = 5 | 24 | 125 | 2376 | 2.12e-7 |
 
 Two things fall out, and they point in opposite directions.
 
@@ -71,15 +71,25 @@ last is
 
 | `SteadyStateSolver` | flux calls | visits/point | error |
 |---|---|---|---|
-| `TimeMarch` | 1504 | 119 | 7.5503e-05 |
-| `PseudoTransient` (default) | 176 | **19** | 7.5503e-05 |
-| `Newton` | 128 | **11** | 7.5503e-05 |
+| `TimeMarch` | 1520 | 120 | 7.5503e-05 |
+| `PseudoTransient` (default) | 128 | **10** | 7.5503e-05 |
+| `Newton` | 64 | **5** | 7.5503e-05 |
 
-Same answer to every digit, an order of magnitude apart in cost, and `Newton`
-lands exactly where Park's own 9–15 iterations do. `TimeMarch` sizes each step
-from a local error estimate on a transient that is then discarded; the other two
-size it from the residual. See `docs/running.rst`, and
+Same answer to every digit, an order of magnitude apart in cost. `TimeMarch`
+sizes each step from a local error estimate on a transient that is then
+discarded; the other two size it from the residual. See `docs/running.rst`, and
 `../shestakov-nonlinear/` for the problem where this goes the other way.
+
+**`Newton`'s five sweeps are not comparable with Park's 9–15 iterations, and the
+honest comparison is less flattering.** Those iterations are from his stiff and
+TGLF cases; here the diffusivity is constant, so his relaxation is converged at
+its first iterate and he solves the linear system in one pass over the grid —
+the `1` in his row above. Three of the five are the floor for a method that does
+not know the problem is linear: a residual to form the right-hand side, a
+Jacobian, and a residual to learn the correction was exact. The other two build
+`sigma` from the initial condition and test whether the initial state is already
+converged, and that last one is the whole cost of a solve resumed from a
+neighbouring answer.
 
 Also worth noting: every point on the cost/accuracy Pareto frontier used **4
 cells**, the coarsest tried. Refining the mesh never paid; raising `k` always

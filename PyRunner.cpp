@@ -124,8 +124,19 @@ void PyRunner::configure(const py::dict &config) {
     }
   }
 
-  k = 1;
-  grid = makeGrid(cfg, cfg.restart ? &restart_file : nullptr, k);
+  // Two meshes and two degrees on a restart; see MaNTA.cpp for why they have to
+  // be kept apart. fileGrid/fileOrder describe the stored state, grid/k the run.
+  unsigned int fileOrder = 1;
+  std::unique_ptr<Grid> fileGrid =
+      makeGrid(cfg, cfg.restart ? &restart_file : nullptr, fileOrder);
+
+  k = fileOrder;
+  if (cfg.restart) {
+    grid = restartRunGrid(cfg, *fileGrid);
+    k = restartRunOrder(cfg, fileOrder);
+  } else {
+    grid = std::move(fileGrid);
+  }
 
   if (!caseName.empty())
     instantiatePhysicsCase(config);
@@ -153,23 +164,22 @@ void PyRunner::configure(const py::dict &config) {
           "registered model and is a config-file key. Resume it with the MaNTA "
           "binary.");
 
-    // Make sure degrees of freedom are consistent with restart file
-    const Index nCells = grid->getNCells();
-    const Index nDOF = pProblem->getNumVars() * 3 * nCells * (k + 1) +
+    // Make sure degrees of freedom are consistent with restart file. The file's
+    // mesh and degree, not the run's: this is a statement about how the vector
+    // just read is laid out.
+    const Index nCells = fileGrid->getNCells();
+    const Index nDOF = pProblem->getNumVars() * 3 * nCells * (fileOrder + 1) +
                        pProblem->getNumVars() * (nCells + 1) +
                        pProblem->getNumScalars() +
-                       pProblem->getNumAux() * nCells * (k + 1);
+                       pProblem->getNumAux() * nCells * (fileOrder + 1);
 
     if (nDOF_file != nDOF)
       throw std::invalid_argument(
           "nVars/nAux/nScalars in restart file inconsistent with physics case");
 
-    // The file's own degree, which is what its DOF are laid out at.
-    pProblem->setRestartValues(Y, dYdt, *grid, k);
-
-    // The run's degree, which may differ. setInitialConditions projects across
-    // the difference; equal degrees keep the copy path.
-    k = restartRunOrder(cfg, k);
+    // The file's own mesh and degree, which is what its DOF are laid out at.
+    // The run's, which may differ in either, were chosen above.
+    pProblem->setRestartValues(Y, dYdt, *fileGrid, fileOrder);
   }
 
   system = std::make_unique<SystemSolver>(*grid, k, pProblem.get());
@@ -203,11 +213,28 @@ void PyRunner::adaptDegree(double tFinal) {
   system = runAdaptiveDegree(cfg, *pProblem, adjoint.get(), *grid, k, tFinal);
 }
 
+// And with the one a ladder ends on. Same ownership argument as above: the
+// driver builds a solver per rung and returns the last, which is the only one
+// built on `grid` and so the only one that may outlive the call.
+void PyRunner::runLadderTo(double tFinal) {
+  system.reset();
+  system = runLadder(cfg, *pProblem, adjoint.get(), *grid, k, tFinal);
+}
+
+bool PyRunner::hasLadder() const {
+  return !cfg.DegreeLadder.empty() || !cfg.GridLadder.empty();
+}
+
 void PyRunner::run(double tFinal) {
   if (!configured) {
     throw std::runtime_error(
         "Error: Runner must be configured before running solver.");
   }
+  if (hasLadder())
+    throw std::runtime_error(
+        "DegreeLadder/GridLadder cannot be used with run(), which integrates "
+        "the transient: every rung would take the previous one's final state "
+        "and integrate the same interval again. Use run_ss().");
   if (cfg.DegreeAdaptation) {
     // run() means "integrate the transient", and degree adaptation is a
     // steady-only feature -- so this is refused rather than quietly turned into
@@ -247,6 +274,15 @@ void PyRunner::run_ss() {
   if (!configured) {
     throw std::runtime_error(
         "Error: Runner must be configured before running solver.");
+  }
+  if (hasLadder()) {
+    // The tolerance has to reach every rung, for the reason the adaptive
+    // branch below gives: run_ss() arms termination itself, and setting it on
+    // `system` here would be lost with the solver the driver replaces.
+    cfg.SteadyStateTolerance = steady_state_tolerance;
+    runLadderTo(0);
+    std::println("Done.");
+    return;
   }
   if (cfg.DegreeAdaptation) {
     // run_ss() arms steady-state termination whether or not the key was
@@ -324,6 +360,11 @@ SystemSolver::SteadyOutcome PyRunner::start_steady(bool estimate) {
         "DegreeAdaptation cannot be combined with a sliced steady solve: "
         "adapting the degree replaces the solver, and a slice loop holds the "
         "state of the one it started on. Run one or the other.");
+  if (hasLadder())
+    throw std::runtime_error(
+        "DegreeLadder/GridLadder cannot be combined with a sliced steady "
+        "solve, for the same reason: each rung replaces the solver, and a "
+        "slice loop holds the state of the one it started on.");
 
   system->setSteadyStateTolerance(steady_state_tolerance);
   system->initialize();

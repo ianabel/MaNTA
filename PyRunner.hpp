@@ -190,6 +190,8 @@ private:
   // Hand off to runAdaptiveDegree and adopt the solver it settles on. Shared by
   // run() and run_ss() so the two cannot diverge on the sequencing.
   void adaptDegree(double tFinal);
+  void runLadderTo(double tFinal);
+  bool hasLadder() const;
 
   // Build the case `caseName` names, from the config dict, against `grid`.
   // Only called when caseName is non-empty, and only from configure(), which

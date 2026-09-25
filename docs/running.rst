@@ -186,6 +186,54 @@ and its declared ``nFieldDOF`` is checked against the ``nField`` the file
 records before anything is read into it. Resuming a coupled run therefore needs
 the same ``FieldModel`` line the original run had.
 
+**A restart may change the mesh as well as the degree.** ``Grid_size``,
+``Grid_points`` and the domain boundaries are honoured on a restart the way
+``Polynomial_degree`` is: an identical mesh keeps the copy path and is bit for
+bit unchanged, while a different one is projected onto — the stored element
+polynomials are evaluated at the new cell nodes — with a warning naming both
+meshes. The trace is rebuilt when the cells move, since ``lambda`` lives on
+faces, where a change of degree alone leaves it transferable verbatim.
+
+.. note::
+
+   ``DegreeLadder`` and ``GridLadder`` express that directly, so it need not be
+   driven by hand::
+
+      Polynomial_degree = 5
+      Grid_size         = 10
+      DegreeLadder      = [1, 2]
+      GridLadder        = [2, 4]
+
+   solves at 2 cells and :math:`k = 1`, then 4 and :math:`k = 2`, then the
+   configured 10 and :math:`k = 5`, each rung warm-starting the next. **The last
+   rung is always the configured resolution**, so a ladder is a route and not a
+   change of destination: remove the keys and the answer is the same, which is
+   what makes it safe to try on a problem you already have an answer for. Either
+   list alone holds the other quantity at its configured value, so a pure
+   :math:`h`- or :math:`k`-ladder needs only one of them; given both, they must
+   be the same length. A ladder needs a steady solve, is refused alongside
+   ``DegreeAdaptation`` — both choose the sequence of discretisations — and is
+   refused inside a sliced steady solve, since each rung replaces the solver.
+
+   **Do not loosen the early rungs.** Solving each rung only to its own
+   discretisation error is the classical nested-iteration advice and it is wrong
+   here, measured: on the Jardin benchmark a ramp from :math:`10^{-2}` costs
+   twice what converging every rung costs, because a *fully* converged coarse
+   rung is what lets every rung above it exit at zero Newton iterations through
+   the already-converged test. On Shestakov it is a wash either way. The coarse
+   rungs of a good ladder are cheap — two cells at :math:`k = 1` is a few per
+   cent of the budget — so there is very little there to save, and the saving
+   they buy above them is large.
+
+   That makes a *ladder* expressible in configuration: solve coarse, restart
+   finer, solve again. On a nonlinear problem started far from its answer this
+   is worth between 1.5x and 7x in transport-model calls, and on a linear one it
+   is a loss, since Newton is exact in one step from any guess and every rung is
+   overhead. ``PERFORMANCE.md`` has the measurements and the two traps — a rung
+   costs a full solve whatever it achieves, so few large jumps beat many small
+   ones; and the boundaries default to 0 and 1, so a restart config that omits
+   them will remesh a run over another domain, which is what the warning is for.
+
 A restart written by a steady solve carries ``dYdt = 0``, which is the defining
 property of the state it holds. It used to carry the ``t_initial`` derivative
 instead — ``solveSteadyState`` damps through a scratch vector and never wrote
@@ -555,28 +603,44 @@ three at :math:`k = 3`.
      - ``PseudoTransient``
      - ``Newton``
    * - ``park-convergence``
-     - 119
-     - **11**
-     - **7**
+     - 120
+     - **6**
+     - **5**
    * - ``jardin-critical-gradient``
-     - 182
-     - **138**
-     - 163
+     - 183
+     - **116**
+     - 140
    * - ``shestakov-nonlinear``
-     - **256**
-     - 622
-     - 648
+     - **257**
+     - 442
+     - 467
 
-A small, uniform part of those two columns is that a steady solve no longer pays
-for ``IDACalcIC`` (see :ref:`the-run-lifecycle` below). Skipping it took
-``PseudoTransient``/``Newton`` from 15/11 to 11/7 on ``park-convergence``, from
-142/167 to 138/163 on ``jardin-critical-gradient`` and from 657/683 to 622/648 on
-``shestakov-nonlinear`` — every converged answer unchanged bit for bit, and
-``TimeMarch``, which still runs it, untouched. It is a constant few evaluations,
-not the order of magnitude in the first row; that is the algorithm.
+Three things a steady solve does not pay for account for a constant few
+evaluations of those two columns, and none of them for the order of magnitude in
+the first row — that is the algorithm. It does not run ``IDACalcIC`` (see
+:ref:`the-run-lifecycle` below); ``setInitialConditions`` does not solve the
+initial ``du/dt`` out of the u row, a sweep whose whole product a steady solve
+discards; and at ``dt = inf`` the merit function reads the residual norm KINSOL
+already computed rather than evaluating it again. Every converged answer is
+unchanged bit for bit by all three, and ``TimeMarch``, which needs the first two,
+is untouched.
 
-Park's own solver reaches that state in 9–15 iterations, which ``Newton`` now
-matches or beats. The last row is the counter-example and is why ``TimeMarch``
+The budget that leaves is exact: ``2 + 3n`` physics sweeps for ``Newton`` and
+``2 + 4n`` for ``PseudoTransient``, over ``n`` continuation steps. Two are fixed
+— building ``sigma``, and the residual evaluation that tests whether the initial
+state is already converged — and each step costs KINSOL's residual at both ends
+plus a Jacobian, with a fourth sweep at finite ``dt`` where the damped residual
+KINSOL drives to zero and the steady one the step-size rule needs are different
+functions.
+
+Park's own solver reaches a steady state in 9–15 iterations on the nonlinear
+problems he reports, which ``Newton`` matches or beats. On ``park-convergence``
+itself the comparison is not that: the diffusivity there is constant, so his
+relaxation is converged at its first iterate and he solves the linear system in
+one pass over the grid. Three of ``Newton``'s five sweeps are the floor for a
+method that does not know the problem is linear — a residual to form the
+right-hand side, a Jacobian, and a residual to learn the correction was exact —
+and the other two are ``sigma`` and the already-converged test. The last row is the counter-example and is why ``TimeMarch``
 stays: that problem's flux ``D0 q^3/u^2`` is degenerate, the mass term
 continuation exists to shed is what was damping it, and as ``dt`` grows the inner
 solve starts rejecting steps. Its ``run.conf`` therefore pins ``TimeMarch``.

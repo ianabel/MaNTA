@@ -91,7 +91,24 @@ int SystemSolver::steadyResidual(N_Vector u, N_Vector fval)
         N_VConst(0.0, ptcDYdt);
     }
 
-    return residual(t0, u, ptcDYdt, fval);
+    const int retval = residual(t0, u, ptcDYdt, fval);
+
+    // With ptcDYdt identically zero this call *is* steadyNorm()'s call: same
+    // state, same time, same zero derivative, same physics sweep. Recording the
+    // norm here is what lets the loop below skip evaluating it again -- and it
+    // is recorded rather than recomputed so the number is bit for bit what
+    // steadyNorm() would have returned, which keeps the SER schedule, and so
+    // every run's step sequence, exactly as it was.
+    //
+    // Only on success: a recoverable failure leaves fval unfinished, and a norm
+    // of it would be a plausible number rather than a measurement.
+    if (retval == 0 && !std::isfinite(ptcStep))
+    {
+        kinSteadyNorm = std::sqrt(N_VDotProd(fval, fval));
+        ++kinSteadyNormStamp;
+    }
+
+    return retval;
 }
 
 void SystemSolver::steadyJacSetup(N_Vector u)
@@ -417,6 +434,11 @@ void SystemSolver::solveSteadyState(bool resume)
         if (newtonScaling == NewtonScaling::ErrorWeights)
             getErrorWeights(Y, kinScale);
 
+        // Snapshotted so the read below can tell "KINSOL evaluated the steady
+        // residual during this call" from "kinSteadyNorm is left over from an
+        // earlier step, or an earlier solve".
+        const long kinNormStamp = kinSteadyNormStamp;
+
         const int retval = KINSol(kin_mem, Y, KIN_NONE, kinScale, kinScale);
         rec.kinRetval = retval;
 
@@ -446,7 +468,21 @@ void SystemSolver::solveSteadyState(bool resume)
                 retval, step, ptcStep, Fprev));
         }
 
-        const double Fnow = steadyNorm();
+        // KINSol's last act is to evaluate its system function at the iterate
+        // it returns -- KIN_NONE takes no line search, so nothing rolls the
+        // iterate back behind that evaluation. At dt = infinity that function
+        // is the steady residual, so its norm is already known and the merit
+        // evaluation here is a duplicate physics sweep. Worth one of the seven
+        // a Newton solve of python-examples/park-convergence spends.
+        //
+        // Both conditions are needed. A finite dt makes KINSOL's residual the
+        // damped one, which is a different function -- any small enough dt
+        // makes it small, which is the whole reason the loop measures the
+        // steady norm separately. And a KINSol that returned without a
+        // successful evaluation leaves the stamp untouched, so the previous
+        // step's norm can never be read as this one's.
+        const bool kinHasIt = !std::isfinite(ptcStep) && kinSteadyNormStamp != kinNormStamp;
+        const double Fnow = kinHasIt ? kinSteadyNorm : steadyNorm();
         logmsg<LOG_LEVEL::INFO>("Steady solve: step {}, dt = {:g}, ||F|| = {:g}",
                                 step, ptcStep, Fnow);
 
