@@ -41,17 +41,36 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
 fname = "stellarator_opt_amb"
 
-eq_name = "eq_amb2"
+eq_name = "eq_amb3"
+#
+# st_config = {
+#     "ParticleSourceCenter": 0.0,
+#     "ParticleSourceHeight": 1.25e-2,
+#     "ParticleSourceWidth": 0.5,
+#     "NBICenter": 0.0,
+#     "NBIPower": 0.4,
+#     "NBIWidth": 0.3,
+#     "ECHCenter": 0.0,
+#     "ECHPower": 0.04,
+#     "ECHWidth": 0.26,
+#     "EdgeTemperature": 0.2,
+#     "EdgeDensity": 0.2,
+#     "n0": 1.0,
+#     "T0": 1.0,
+#     "evolveDensity": True,
+#     "useBatching": True,
+# }
+#
 
 st_config = {
     "ParticleSourceCenter": 0.0,
     "ParticleSourceHeight": 1.25e-2,
-    "ParticleSourceWidth": 0.45,
+    "ParticleSourceWidth": 0.5,
     "NBICenter": 0.0,
-    "NBIPower": 0.4,
+    "NBIPower": 0.6,
     "NBIWidth": 0.3,
     "ECHCenter": 0.0,
-    "ECHPower": 0.04,
+    "ECHPower": 0.1,
     "ECHWidth": 0.26,
     "EdgeTemperature": 0.2,
     "EdgeDensity": 0.2,
@@ -69,7 +88,7 @@ atol = 1e-3
 npoints = 8
 degree = 3
 base = 1.6
-tau = 100.0
+tau = 1.0
 #
 nodes = 1 - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
 nodes = np.concatenate(([0, 0.1], nodes, [1]))
@@ -95,7 +114,7 @@ solver_config = {
     "SteadyStateDiagnostics": True,
     "SteadyStateStepDiagnostics": True,
     "MaxRejectedSteps": 10,
-    "restart": True,
+    "restart": False,
     "zeroFlux": True,
     "solveAdjoint": False,
     "PseudoTransientSERRate": 1.0,
@@ -142,18 +161,18 @@ desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 #     modes_Z=[[-1, 0], [0, -1]],
 #     NFP=4,
 # )
-# # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
-# # default is zero pressure and zero current
-# eq = Equilibrium(M=8, N=8, Psi=0.1, surface=surf, pressure=desc_pressure)
+# # # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
+# # # default is zero pressure and zero current
+# eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
 #
 eqs = desc.io.load(eq_name + "_all_equilibria.h5")
 #
 # eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
-# #
-# eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
+# # #
+# # eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
 # eq.pressure = desc_pressure
 # eq = eq.solve(x_scale="ess")[0]
-# # desc_pressure = eq.get_profile('p')
+# # # desc_pressure = eq.get_profile('p')
 # eqs = EquilibriaFamily(eq)
 eq = eqs[-1].copy()
 eq_init = eq.copy()
@@ -263,10 +282,10 @@ solver_config = {
     "WriteDatFile": True,
     "restart": True,
     "zeroFlux": True,
-    "SteadyStateTolerance": 1e-4,
+    "SteadyStateTolerance": 5e-4,
     "SteadyStateSolver": "Newton",
     "SteadyStateDiagnostics": True,
-    "MaxRejectedSteps": 0,
+    "MaxRejectedSteps": 3,
     "SteadyStateStepDiagnostics": True,
     # "ObjectiveDecreaseTolerance": 0.01,
     "PseudoTransientSERFloor": 2.0,
@@ -372,7 +391,7 @@ obj_mirror_ratio = ObjectiveFromUser(
     fun=fun_mirror_ratio,
     thing=eq,
     grid=yancc_desc_grid,
-    bounds=(0.0, 0.3),
+    bounds=(0.0, 0.2),
     weight=2.0,
     name="my mirror ratio",
 )
@@ -391,7 +410,7 @@ stored_energy_weight = 1.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()
-max_it = 1
+max_it = 8
 
 eqfam = EquilibriaFamily(eq)
 # ks = [1, 2, eq.M + 1]

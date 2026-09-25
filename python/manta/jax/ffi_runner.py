@@ -47,12 +47,9 @@ ffi_ops_names = [
     "continue_steady",
     "finish_steady",
     "abandon_steady",
-    "start_steady",
-    "continue_steady",
-    "finish_steady",
-    "abandon_steady",
 ]
 ffi_ops = {}
+
 
 def _match(ops, op_name):
     """The C++ symbol implementing `op_name`, or None.
@@ -80,17 +77,9 @@ def register_ffi_cpu(op_name):
     print("Registering cpu implementation for operation " + op_name)
     jax.ffi.register_ffi_target(name, ops[name], platform="cpu")
     return name
-    return None
 
 
 def register_ffi_gpu(op_name):
-    ops = MaNTA.runner_ffi_ops_cuda()
-    name = _match(ops, op_name)
-    if name is None:
-        return False
-    print("Registering gpu implementation for operation " + op_name)
-    jax.ffi.register_ffi_target(name, ops[name], platform="CUDA")
-    return name
     ops = MaNTA.runner_ffi_ops_cuda()
     name = _match(ops, op_name)
     if name is None:

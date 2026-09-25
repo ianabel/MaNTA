@@ -37,7 +37,7 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 st_config = {
     "ParticleSourceCenter": 0.0,
     "ParticleSourceHeight": 1.25e-2,
-    "ParticleSourceWidth": 0.45,
+    "ParticleSourceWidth": 0.5,
     "NBICenter": 0.0,
     "NBIPower": 0.4,
     "NBIWidth": 0.3,
@@ -46,8 +46,8 @@ st_config = {
     "ECHWidth": 0.26,
     "EdgeTemperature": 0.2,
     "EdgeDensity": 0.2,
-    "n0": 1.0,
-    "T0": 1.0,
+    "n0": 0.2,
+    "T0": 0.2,
     "evolveDensity": True,
     "useBatching": True,
 }
@@ -79,7 +79,7 @@ solver_config = {
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
-    "initialTimestep": 1e-2,
+    "initialTimestep": 1e-5,
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 1e-4,
     "AggressiveTimesteps": False,
@@ -87,7 +87,7 @@ solver_config = {
     "restart": False,
     "zeroFlux": True,
     "solveAdjoint": False,
-    "SteadyStateSolver": "PseudoTransient",
+    "SteadyStateSolver": "TimeMarch",
     "SteadyStateDiagnostics": True,
     "SteadyStateStepDiagnostics": True,
     "PseudoTransientSERRate": 1.0,
@@ -131,7 +131,7 @@ desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 # eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
 #
 # eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
-eq = desc.io.load("eq_omnigenity.h5")
+eq = desc.io.load("eq_qa.h5")
 # eq.solve(x_scale="ess")[0]
 eq_init = eq.copy()
 yancc_wrapper = yancc_data.from_eq(
