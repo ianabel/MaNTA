@@ -1,0 +1,72 @@
+Registering cpu implementation for operation get_solution
+Registering gpu implementation for operation get_solution
+Registering cpu implementation for operation get_adjoint_gradients
+Registering gpu implementation for operation get_adjoint_gradients
+Registering cpu implementation for operation get_g_val
+Registering cpu implementation for operation run
+Registering cpu implementation for operation run_ss
+Registering cpu implementation for operation start_steady
+Registering cpu implementation for operation continue_steady
+Registering cpu implementation for operation finish_steady
+Registering cpu implementation for operation abandon_steady
+Using cache directory: /global/cfs/cdirs/mp217/eatocco/jax-cache
+[CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3)]
+Building objective: force
+Precomputing transforms
+Building objective: lcfs R
+Building objective: lcfs Z
+Building objective: fixed Psi
+Building objective: fixed pressure
+Building objective: fixed current
+Building objective: fixed sheet current
+Building objective: self_consistency R
+Building objective: self_consistency Z
+Building objective: lambda gauge
+Building objective: axis R self consistency
+Building objective: axis Z self consistency
+Number of parameters: 120
+Number of objectives: 850
+
+Starting optimization
+Using method: lsq-exact
+Optimization terminated successfully.
+`ftol` condition satisfied. (ftol=1.00e-02)
+         Current function value: 9.215e-05
+         Total delta_x: 2.541e-01
+         Iterations: 7
+         Function evaluations: 8
+         Jacobian evaluations: 8
+==============================================================================================================
+                                                                 Start  -->   End
+Total (sum of squares):                                      3.933e+00  -->   9.215e-05, 
+Maximum absolute Force error:                                9.781e+05  -->   4.806e+03 (N)
+Minimum absolute Force error:                                2.089e+01  -->   4.879e-01 (N)
+Average absolute Force error:                                4.797e+04  -->   2.619e+02 (N)
+Maximum absolute Force error:                                6.789e-01  -->   3.336e-03 (normalized)
+Minimum absolute Force error:                                1.450e-05  -->   3.387e-07 (normalized)
+Average absolute Force error:                                3.329e-02  -->   1.818e-04 (normalized)
+R boundary error:                                            0.000e+00  -->   1.110e-16 (m)
+Z boundary error:                                            0.000e+00  -->   2.799e-17 (m)
+Fixed Psi error:                                             0.000e+00  -->   0.000e+00 (Wb)
+Fixed pressure profile error:                                0.000e+00  -->   0.000e+00 (Pa)
+Fixed current profile error:                                 0.000e+00  -->   0.000e+00 (A)
+Fixed sheet current error:                                   0.000e+00  -->   0.000e+00 (~)
+==============================================================================================================
+
+Initializing yancc wrapper
+yancc_wrapper initialized successfully with resolution na=45, nx=7.
+Using batch size 16
+configuring
+INFO: Total HDG degrees of freedom 347
+INFO: Running until steady state achieved (variation below 0.001) or end time reached.
+INFO: Configuration done.
+Successfully created StellaratorTransport object
+INFO: Setting initial conditions
+Steady solve: PseudoTransient on 8 cells at k = 3, tolerance 0.001
+  initial ||F|| = 0.254838, dt = 0.01, SER rate 2, floor 2, max step inf
+INFO: Steady solve: initial ||F|| = 0.254838, dt = 0.01
+  step          dt       ||F||  iters    res    jac  solves  outcome
+INFO: Steady solve: step 0, dt = 0.01, ||F|| = 0.235455
+     0   1.000e-02   2.355e-01      1      3      1       1  accepted
+INFO: Steady solve: step 1, dt = 0.02, ||F|| = 0.205096
+     1   2.000e-02   2.051e-01      2      4      1       2  accepted

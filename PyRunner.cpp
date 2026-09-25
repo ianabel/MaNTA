@@ -7,9 +7,10 @@
 #include <pybind11/eigen.h>
 #include <string>
 #include <print>
-// Load restart data into vectors
+// Load restart data into vectors. Defined in MaNTA.cpp; `nField` comes back as
+// how many trailing entries of Y are a field model's psi.
 int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y,
-                 std::vector<double> &dYdt);
+                 std::vector<double> &dYdt, Index &nField);
 
 PyRunner::PyRunner(std::string physicsCase) : caseName(std::move(physicsCase)) {
   // Rejected here, at the point the name was written, rather than at the first
@@ -68,6 +69,11 @@ void PyRunner::configure(const py::dict &config) {
   if (!pProblem && caseName.empty())
     throw std::runtime_error("Transport system not set. Please set transport "
                              "system before configuring solver.");
+  // Reconfiguring abandons a sliced solve that is still running. ~SystemSolver
+  // does not free the SUNDIALS objects -- only destroySundials() does -- so
+  // dropping the solver without this leaks every one of them, and silently.
+  abandonSlices();
+
   // Set stored problem to null to allow reconfiguration after object creation
   system = nullptr;
   grid = nullptr;
@@ -118,8 +124,19 @@ void PyRunner::configure(const py::dict &config) {
     }
   }
 
-  k = 1;
-  grid = makeGrid(cfg, cfg.restart ? &restart_file : nullptr, k);
+  // Two meshes and two degrees on a restart; see MaNTA.cpp for why they have to
+  // be kept apart. fileGrid/fileOrder describe the stored state, grid/k the run.
+  unsigned int fileOrder = 1;
+  std::unique_ptr<Grid> fileGrid =
+      makeGrid(cfg, cfg.restart ? &restart_file : nullptr, fileOrder);
+
+  k = fileOrder;
+  if (cfg.restart) {
+    grid = restartRunGrid(cfg, *fileGrid);
+    k = restartRunOrder(cfg, fileOrder);
+  } else {
+    grid = std::move(fileGrid);
+  }
 
   if (!caseName.empty())
     instantiatePhysicsCase(config);
@@ -129,25 +146,40 @@ void PyRunner::configure(const py::dict &config) {
 
   if (cfg.restart) {
     std::vector<double> Y, dYdt;
-    Index nDOF_file = LoadFromFile(restart_file, Y, dYdt);
+    Index nField_file = 0;
+    Index nDOF_file = LoadFromFile(restart_file, Y, dYdt, nField_file);
 
-    // Make sure degrees of freedom are consistent with restart file
-    const Index nCells = grid->getNCells();
-    const Index nDOF = pProblem->getNumVars() * 3 * nCells * (k + 1) +
+    // This surface cannot attach a field model at all: FieldModel is
+    // Category::ProblemSelection and so is an *error* in a dict, and there is no
+    // pybind11 class for a FieldModel to hand over instead. So a coupled restart
+    // file is refused rather than silently read with psi landing in the last
+    // nField entries of a vector that has no field block -- which is a length
+    // mismatch reported as an nVars/nAux/nScalars disagreement, three names none
+    // of which is the problem.
+    if (nField_file != 0)
+      throw std::runtime_error(
+          "This restart file was written by a run with a field model (" +
+          std::to_string(nField_file) +
+          " field unknowns), and Runner cannot attach one: FieldModel names a "
+          "registered model and is a config-file key. Resume it with the MaNTA "
+          "binary.");
+
+    // Make sure degrees of freedom are consistent with restart file. The file's
+    // mesh and degree, not the run's: this is a statement about how the vector
+    // just read is laid out.
+    const Index nCells = fileGrid->getNCells();
+    const Index nDOF = pProblem->getNumVars() * 3 * nCells * (fileOrder + 1) +
                        pProblem->getNumVars() * (nCells + 1) +
                        pProblem->getNumScalars() +
-                       pProblem->getNumAux() * nCells * (k + 1);
+                       pProblem->getNumAux() * nCells * (fileOrder + 1);
 
     if (nDOF_file != nDOF)
       throw std::invalid_argument(
           "nVars/nAux/nScalars in restart file inconsistent with physics case");
 
-    // The file's own degree, which is what its DOF are laid out at.
-    pProblem->setRestartValues(Y, dYdt, *grid, k);
-
-    // The run's degree, which may differ. setInitialConditions projects across
-    // the difference; equal degrees keep the copy path.
-    k = restartRunOrder(cfg, k);
+    // The file's own mesh and degree, which is what its DOF are laid out at.
+    // The run's, which may differ in either, were chosen above.
+    pProblem->setRestartValues(Y, dYdt, *fileGrid, fileOrder);
   }
 
   system = std::make_unique<SystemSolver>(*grid, k, pProblem.get());
@@ -181,11 +213,28 @@ void PyRunner::adaptDegree(double tFinal) {
   system = runAdaptiveDegree(cfg, *pProblem, adjoint.get(), *grid, k, tFinal);
 }
 
+// And with the one a ladder ends on. Same ownership argument as above: the
+// driver builds a solver per rung and returns the last, which is the only one
+// built on `grid` and so the only one that may outlive the call.
+void PyRunner::runLadderTo(double tFinal) {
+  system.reset();
+  system = runLadder(cfg, *pProblem, adjoint.get(), *grid, k, tFinal);
+}
+
+bool PyRunner::hasLadder() const {
+  return !cfg.DegreeLadder.empty() || !cfg.GridLadder.empty();
+}
+
 void PyRunner::run(double tFinal) {
   if (!configured) {
     throw std::runtime_error(
         "Error: Runner must be configured before running solver.");
   }
+  if (hasLadder())
+    throw std::runtime_error(
+        "DegreeLadder/GridLadder cannot be used with run(), which integrates "
+        "the transient: every rung would take the previous one's final state "
+        "and integrate the same interval again. Use run_ss().");
   if (cfg.DegreeAdaptation) {
     // run() means "integrate the transient", and degree adaptation is a
     // steady-only feature -- so this is refused rather than quietly turned into
@@ -226,6 +275,15 @@ void PyRunner::run_ss() {
     throw std::runtime_error(
         "Error: Runner must be configured before running solver.");
   }
+  if (hasLadder()) {
+    // The tolerance has to reach every rung, for the reason the adaptive
+    // branch below gives: run_ss() arms termination itself, and setting it on
+    // `system` here would be lost with the solver the driver replaces.
+    cfg.SteadyStateTolerance = steady_state_tolerance;
+    runLadderTo(0);
+    std::println("Done.");
+    return;
+  }
   if (cfg.DegreeAdaptation) {
     // run_ss() arms steady-state termination whether or not the key was
     // present, so the tolerance has to reach every level rather than the one
@@ -242,19 +300,117 @@ void PyRunner::run_ss() {
   std::println("Done.");
 }
 
-bool PyRunner::wasRejected() const {
-  if (!configured)
-    throw std::runtime_error(
-        "Error: Runner must be configured before asking about the dG/dt gate.");
-  return system->wasRejected();
+PyRunner::~PyRunner() {
+  // A destructor cannot let an exception out, and destroySundials() is not
+  // expected to throw -- but "not expected to" is not a guarantee worth
+  // terminating the interpreter over.
+  try {
+    abandonSlices();
+  } catch (...) {
+  }
 }
 
-Vector PyRunner::lastDGdt() const {
+SystemSolver::SteadyOutcome PyRunner::runSlice(bool resume, bool estimate) {
+  system->setEstimateObjectiveOnFinish(estimate);
+  try {
+    if (resume)
+      system->continueSteadyState();
+    else
+      system->solveSteadyState();
+  } catch (...) {
+    // OutOfSteps is not a failure: the step budget is spent, the last accepted
+    // iterate is in Y and the pseudo-time step SER climbed to is still on the
+    // solver, so continue_steady() picks up both. Returning it is what lets a
+    // driver tell it apart from a dead solve without reading the message.
+    if (system->lastSteadyOutcome() != SystemSolver::SteadyOutcome::OutOfSteps) {
+      // The same bargain integrate() makes for a failed steady solve: write the
+      // last state reached -- which is exactly the run whose state is worth
+      // looking at -- close the files, then let the caller hear about it. No
+      // adjoint solve, because there is no converged state to define it at.
+      try {
+        system->writeSteadyState();
+        system->closeOutputFiles();
+      } catch (...) {
+        // A failure while reporting a failure. The original is the one worth
+        // propagating, so this one is dropped rather than replacing it.
+      }
+      abandonSlices();
+      throw;
+    }
+  }
+
+  // Leave the state where getSolution() reads it. finishRun() does this at the
+  // end of a run; without it here, a driver looking between slices would be
+  // handed the initial condition -- silently, since yJac is always a valid
+  // state, just not this one.
+  system->captureState();
+  return system->lastSteadyOutcome();
+}
+
+SystemSolver::SteadyOutcome PyRunner::start_steady(bool estimate) {
   if (!configured)
     throw std::runtime_error(
-        "Error: Runner must be configured before asking about the dG/dt gate.");
-  return system->lastDGdt();
+        "Error: Runner must be configured before running solver.");
+  if (slicing)
+    throw std::runtime_error(
+        "start_steady() called while a sliced solve is already running. Use "
+        "continue_steady() to carry on, or finish_steady() to end it.");
+  if (cfg.DegreeAdaptation)
+    throw std::runtime_error(
+        "DegreeAdaptation cannot be combined with a sliced steady solve: "
+        "adapting the degree replaces the solver, and a slice loop holds the "
+        "state of the one it started on. Run one or the other.");
+  if (hasLadder())
+    throw std::runtime_error(
+        "DegreeLadder/GridLadder cannot be combined with a sliced steady "
+        "solve, for the same reason: each rung replaces the solver, and a "
+        "slice loop holds the state of the one it started on.");
+
+  system->setSteadyStateTolerance(steady_state_tolerance);
+  system->initialize();
+  slicing = true;
+  return runSlice(false, estimate);
 }
+
+SystemSolver::SteadyOutcome PyRunner::continue_steady(bool estimate) {
+  if (!slicing)
+    throw std::runtime_error(
+        "continue_steady() called with no sliced solve running. Call "
+        "start_steady() first.");
+  return runSlice(true, estimate);
+}
+
+void PyRunner::finish_steady(void) {
+  if (!slicing)
+    throw std::runtime_error(
+        "finish_steady() called with no sliced solve running.");
+  slicing = false;
+  system->writeSteadyState();
+  system->finishRun();
+  system->destroySundials();
+  std::println("Done.");
+}
+
+void PyRunner::abandonSlices(void) {
+  if (!slicing)
+    return;
+  slicing = false;
+  if (system != nullptr)
+    system->destroySundials();
+}
+
+py::dict PyRunner::steadyStats(void) const {
+  using namespace pybind11::literals;
+  const auto s = system->lastSteadyStats();
+  return py::dict(
+      "outcome"_a = system->lastSteadyOutcome(), "steps"_a = s.steps,
+      "rejected"_a = s.rejected, "residual_norm"_a = s.residualNorm,
+      "newton_iterations"_a = s.newtonIters, "residual_evaluations"_a = s.residualEvals,
+      "jacobian_builds"_a = s.jacBuilds, "jacobian_solves"_a = s.jacSolves,
+      "pseudo_transient_step"_a = system->getPseudoTransientStep());
+}
+
+
 
 Vector PyRunner::G(void) {
   if (!configured)
@@ -290,6 +446,15 @@ Vector PyRunner::G(void) {
     Gout(i) = ap->GFn(i, system->yJac);
 
   return Gout;
+}
+
+py::dict PyRunner::objectiveEstimate(void) const {
+  using namespace pybind11::literals;
+  const auto e = system->lastObjectiveEstimate();
+  if (!e.valid)
+    return py::dict();
+  return py::dict("value"_a = e.value, "corrected"_a = e.corrected,
+                  "uncertainty"_a = e.uncertainty);
 }
 
 py::tuple PyRunner::getAdjointGradients(void) {

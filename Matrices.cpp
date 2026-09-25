@@ -6,6 +6,9 @@
 
 #include "Types.hpp"
 #include "SystemSolver.hpp"
+// SystemSolver.hpp only forward-declares FieldModel; the A1 assembly below calls
+// dGeometry_dpsi through it, so this translation unit needs the definition.
+#include "FieldModel.hpp"
 
 
 
@@ -214,6 +217,143 @@ void SystemSolver::dSources_dScalars_StarMat(Matrix &mat, GlobalState const &sta
 		for (Index iScalar = 0; iScalar < nScalars; ++iScalar)
 			mat.block(XVar * (k + 1), iScalar, k + 1, 1) =
 				A9 * Vector(nodal.row(iScalar).transpose());
+	}
+}
+
+// ------------------------------------------------- the field coupling, A1 --
+
+void SystemSolver::fieldChainOnNodes(Matrix &nodal, Index XVar,
+									 void (TransportSystem::*dX_dGeom)(Index, VectorRef,
+																	   const State &, Position,
+																	   Time),
+									 Vector const &psi, GlobalState const &states,
+									 std::vector<Position> const &points, Index intervalIndex,
+									 Index nNodes, Time tEval)
+{
+	assert(nodal.rows() == nField);
+	assert(nodal.cols() == nNodes);
+
+	Values dXdG(nGeom);
+	Matrix dGdPsi(nGeom, nField);
+
+	for (Index j = 0; j < nNodes; ++j)
+	{
+		const Index g = intervalIndex * nNodes + j;
+
+		// Both arrive zeroed, so a case that does not read geometry -- and so
+		// does not override the hook at all -- contributes an identically zero
+		// column, which is exactly right: it does not couple.
+		dXdG.setZero();
+		dGdPsi.setZero();
+
+		(problem->*dX_dGeom)(XVar, dXdG, states[g], points[g], tEval);
+		fieldModel->dGeometry_dpsi(dGdPsi, psi, points[g], tEval);
+
+		nodal.col(j) = dGdPsi.transpose() * dXdG;
+	}
+}
+
+// See the declaration for the shape and for why this takes `states` rather than
+// building them from Y.
+//
+// The sign of the u block is the one thing here that cannot be read off the
+// chain rule. residual() forms that row as
+//
+//     res.u = ... - InterpolateOntoBasis( I, S( nodes ) )
+//
+// so d(res.u)/d(psi) carries the same minus sign, exactly as assembleCellMatrix
+// *subtracts* every source block from MX. Getting it wrong flips the sign of one
+// third of A1, which the Jacobian being unassembled would hide completely: the
+// answer would still be right and only the Newton iteration count would move.
+void SystemSolver::dPhysics_dField_Mat(Matrix &mat, DGSoln const &Y, GlobalState const &states,
+									   std::vector<Position> const &points, Index intervalIndex,
+									   Time tEval)
+{
+	Interval const &I(grid[intervalIndex]);
+
+	assert(mat.rows() == (3 * nVars + nAux) * (k + 1));
+	assert(mat.cols() == nField);
+
+	mat.setZero();
+
+	const Vector psi = Y.getField();
+	Matrix nodal(nField, k + 1);
+
+	// The projection the residual applies to a physics value: the interpolatory
+	// mass-matrix form of arXiv:1811.09667, i.e. the projection of the
+	// *interpolant*. Not an exact quadrature of the derivative -- the two agree
+	// only when the integrand is a polynomial the basis represents, which is the
+	// trap dSources_dScalars_Mat records above.
+	auto project = [&](Index rowOffset, double scale)
+	{
+		for (Index m = 0; m < nField; ++m)
+		{
+			Vector vals = nodal.row(m).transpose();
+			mat.block(rowOffset, m, k + 1, 1) =
+				scale * Y.getBasis().InterpolateOntoBasis(I, vals);
+		}
+	};
+
+	for (Index XVar = 0; XVar < nVars; XVar++)
+	{
+		// sigma rows: res.sigma = A sigma + Pi( sigma_hat ).
+		fieldChainOnNodes(nodal, XVar, &TransportSystem::dSigmaFn_dGeometry, psi, states, points,
+						  intervalIndex, k + 1, tEval);
+		project(XVar * (k + 1), 1.0);
+
+		// u rows: res.u = ... - Pi( S ). See the note on the sign above.
+		fieldChainOnNodes(nodal, XVar, &TransportSystem::dSources_dGeometry, psi, states, points,
+						  intervalIndex, k + 1, tEval);
+		project(2 * nVars * (k + 1) + XVar * (k + 1), -1.0);
+	}
+
+	// aux rows: res.Aux = Pi( G ), the constraint imposed by projection.
+	for (Index aux = 0; aux < nAux; aux++)
+	{
+		fieldChainOnNodes(nodal, aux, &TransportSystem::dAuxG_dGeometry, psi, states, points,
+						  intervalIndex, k + 1, tEval);
+		project(3 * nVars * (k + 1) + aux * (k + 1), 1.0);
+	}
+}
+
+void SystemSolver::dPhysics_dField_StarMat(Matrix &mat, DGSoln const &Y, GlobalState const &states,
+										   std::vector<Position> const &points,
+										   Index intervalIndex, Time tEval)
+{
+	assert(mat.rows() == (3 * nVars + nAux) * (k + 1));
+	assert(mat.cols() == nField);
+
+	mat.setZero();
+
+	const Index nStar = k + 2;
+	Matrix const &A9 = postprocessor->A9(intervalIndex);
+
+	const Vector psi = Y.getField();
+	Matrix nodal(nField, nStar);
+
+	auto project = [&](Index rowOffset, double scale)
+	{
+		for (Index m = 0; m < nField; ++m)
+			mat.block(rowOffset, m, k + 1, 1) =
+				scale * (A9 * Vector(nodal.row(m).transpose()));
+	};
+
+	for (Index XVar = 0; XVar < nVars; XVar++)
+	{
+		fieldChainOnNodes(nodal, XVar, &TransportSystem::dSigmaFn_dGeometry, psi, states, points,
+						  intervalIndex, nStar, tEval);
+		project(XVar * (k + 1), 1.0);
+
+		fieldChainOnNodes(nodal, XVar, &TransportSystem::dSources_dGeometry, psi, states, points,
+						  intervalIndex, nStar, tEval);
+		project(2 * nVars * (k + 1) + XVar * (k + 1), -1.0);
+	}
+
+	for (Index aux = 0; aux < nAux; aux++)
+	{
+		fieldChainOnNodes(nodal, aux, &TransportSystem::dAuxG_dGeometry, psi, states, points,
+						  intervalIndex, nStar, tEval);
+		project(3 * nVars * (k + 1) + aux * (k + 1), 1.0);
 	}
 }
 

@@ -1,0 +1,814 @@
+[0/8] devices: [CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3), CudaDevice(id=4), CudaDevice(id=5), CudaDevice(id=6), CudaDevice(id=7)]
+[0/8] local devices: [CudaDevice(id=0)]
+I will be running a calculation among 8 tasks, using a total of 8 devices (1 per slurm task). If this does not match your expected number of total devices, something is misconfigured
+[7/8] devices: [CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3), CudaDevice(id=4), CudaDevice(id=5), CudaDevice(id=6), CudaDevice(id=7)]
+[7/8] local devices: [CudaDevice(id=7)]
+I will be running a calculation among 8 tasks, using a total of 8 devices (1 per slurm task). If this does not match your expected number of total devices, something is misconfigured
+[4/8] devices: [CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3), CudaDevice(id=4), CudaDevice(id=5), CudaDevice(id=6), CudaDevice(id=7)]
+[4/8] local devices: [CudaDevice(id=4)]
+I will be running a calculation among 8 tasks, using a total of 8 devices (1 per slurm task). If this does not match your expected number of total devices, something is misconfigured
+[2/8] devices: [CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3), CudaDevice(id=4), CudaDevice(id=5), CudaDevice(id=6), CudaDevice(id=7)]
+[2/8] local devices: [CudaDevice(id=2)]
+I will be running a calculation among 8 tasks, using a total of 8 devices (1 per slurm task). If this does not match your expected number of total devices, something is misconfigured
+[3/8] devices: [CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3), CudaDevice(id=4), CudaDevice(id=5), CudaDevice(id=6), CudaDevice(id=7)]
+[3/8] local devices: [CudaDevice(id=3)]
+I will be running a calculation among 8 tasks, using a total of 8 devices (1 per slurm task). If this does not match your expected number of total devices, something is misconfigured
+[1/8] devices: [CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3), CudaDevice(id=4), CudaDevice(id=5), CudaDevice(id=6), CudaDevice(id=7)]
+[1/8] local devices: [CudaDevice(id=1)]
+I will be running a calculation among 8 tasks, using a total of 8 devices (1 per slurm task). If this does not match your expected number of total devices, something is misconfigured
+[5/8] devices: [CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3), CudaDevice(id=4), CudaDevice(id=5), CudaDevice(id=6), CudaDevice(id=7)]
+[5/8] local devices: [CudaDevice(id=5)]
+I will be running a calculation among 8 tasks, using a total of 8 devices (1 per slurm task). If this does not match your expected number of total devices, something is misconfigured
+[6/8] devices: [CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3), CudaDevice(id=4), CudaDevice(id=5), CudaDevice(id=6), CudaDevice(id=7)]
+[6/8] local devices: [CudaDevice(id=6)]
+I will be running a calculation among 8 tasks, using a total of 8 devices (1 per slurm task). If this does not match your expected number of total devices, something is misconfigured
+Registering cpu implementation for operation get_solution
+Registering gpu implementation for operation get_solution
+Registering cpu implementation for operation get_adjoint_gradients
+Registering gpu implementation for operation get_adjoint_gradients
+Registering cpu implementation for operation get_g_val
+Registering cpu implementation for operation run
+Registering cpu implementation for operation run_ss
+Registering cpu implementation for operation start_steady
+Registering cpu implementation for operation continue_steady
+Registering cpu implementation for operation finish_steady
+Registering cpu implementation for operation abandon_steady
+Registering cpu implementation for operation get_solution
+Registering gpu implementation for operation get_solution
+Registering cpu implementation for operation get_adjoint_gradients
+Registering gpu implementation for operation get_adjoint_gradients
+Registering cpu implementation for operation get_g_val
+Registering cpu implementation for operation run
+Registering cpu implementation for operation run_ss
+Registering cpu implementation for operation start_steady
+Registering cpu implementation for operation continue_steady
+Registering cpu implementation for operation finish_steady
+Registering cpu implementation for operation abandon_steady
+Registering cpu implementation for operation get_solution
+Registering gpu implementation for operation get_solution
+Registering cpu implementation for operation get_adjoint_gradients
+Registering gpu implementation for operation get_adjoint_gradients
+Registering cpu implementation for operation get_g_val
+Registering cpu implementation for operation run
+Registering cpu implementation for operation run_ss
+Registering cpu implementation for operation start_steady
+Registering cpu implementation for operation continue_steady
+Registering cpu implementation for operation finish_steady
+Registering cpu implementation for operation abandon_steady
+Registering cpu implementation for operation get_solution
+Registering gpu implementation for operation get_solution
+Registering cpu implementation for operation get_adjoint_gradients
+Registering gpu implementation for operation get_adjoint_gradients
+Registering cpu implementation for operation get_g_val
+Registering cpu implementation for operation run
+Registering cpu implementation for operation run_ss
+Registering cpu implementation for operation start_steady
+Registering cpu implementation for operation continue_steady
+Registering cpu implementation for operation finish_steady
+Registering cpu implementation for operation abandon_steady
+Registering cpu implementation for operation get_solution
+Registering gpu implementation for operation get_solution
+Registering cpu implementation for operation get_adjoint_gradients
+Registering gpu implementation for operation get_adjoint_gradients
+Registering cpu implementation for operation get_g_val
+Registering cpu implementation for operation run
+Registering cpu implementation for operation run_ss
+Registering cpu implementation for operation start_steady
+Registering cpu implementation for operation continue_steady
+Registering cpu implementation for operation finish_steady
+Registering cpu implementation for operation abandon_steady
+Registering cpu implementation for operation get_solution
+Registering gpu implementation for operation get_solution
+Registering cpu implementation for operation get_adjoint_gradients
+Registering gpu implementation for operation get_adjoint_gradients
+Registering cpu implementation for operation get_g_val
+Registering cpu implementation for operation run
+Registering cpu implementation for operation run_ss
+Registering cpu implementation for operation start_steady
+Registering cpu implementation for operation continue_steady
+Registering cpu implementation for operation finish_steady
+Registering cpu implementation for operation abandon_steady
+Registering cpu implementation for operation get_solution
+Registering gpu implementation for operation get_solution
+Registering cpu implementation for operation get_adjoint_gradients
+Registering gpu implementation for operation get_adjoint_gradients
+Registering cpu implementation for operation get_g_val
+Registering cpu implementation for operation run
+Registering cpu implementation for operation run_ss
+Registering cpu implementation for operation start_steady
+Registering cpu implementation for operation continue_steady
+Registering cpu implementation for operation finish_steady
+Registering cpu implementation for operation abandon_steady
+Registering cpu implementation for operation get_solution
+Registering gpu implementation for operation get_solution
+Registering cpu implementation for operation get_adjoint_gradients
+Registering gpu implementation for operation get_adjoint_gradients
+Registering cpu implementation for operation get_g_val
+Registering cpu implementation for operation run
+Registering cpu implementation for operation run_ss
+Registering cpu implementation for operation start_steady
+Registering cpu implementation for operation continue_steady
+Registering cpu implementation for operation finish_steady
+Registering cpu implementation for operation abandon_steady
+Running stellarator model in test context
+Running stellarator model in test context
+Running stellarator model in test context
+Running stellarator model in test context
+Running stellarator model in test context
+Running stellarator model in test context
+Running stellarator model in test context
+Running stellarator model in test context
+Using cache directory: /global/cfs/cdirs/mp217/eatocco/jax-cache
+[CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3), CudaDevice(id=4), CudaDevice(id=5), CudaDevice(id=6), CudaDevice(id=7)]
+Using cache directory: /global/cfs/cdirs/mp217/eatocco/jax-cache
+[CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3), CudaDevice(id=4), CudaDevice(id=5), CudaDevice(id=6), CudaDevice(id=7)]
+Using cache directory: /global/cfs/cdirs/mp217/eatocco/jax-cache
+[CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3), CudaDevice(id=4), CudaDevice(id=5), CudaDevice(id=6), CudaDevice(id=7)]
+Using cache directory: /global/cfs/cdirs/mp217/eatocco/jax-cache
+[CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3), CudaDevice(id=4), CudaDevice(id=5), CudaDevice(id=6), CudaDevice(id=7)]
+Using cache directory: /global/cfs/cdirs/mp217/eatocco/jax-cache
+[CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3), CudaDevice(id=4), CudaDevice(id=5), CudaDevice(id=6), CudaDevice(id=7)]
+Using cache directory: /global/cfs/cdirs/mp217/eatocco/jax-cache
+[CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3), CudaDevice(id=4), CudaDevice(id=5), CudaDevice(id=6), CudaDevice(id=7)]
+Using cache directory: /global/cfs/cdirs/mp217/eatocco/jax-cache
+[CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3), CudaDevice(id=4), CudaDevice(id=5), CudaDevice(id=6), CudaDevice(id=7)]
+Using cache directory: /global/cfs/cdirs/mp217/eatocco/jax-cache
+[CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3), CudaDevice(id=4), CudaDevice(id=5), CudaDevice(id=6), CudaDevice(id=7)]
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 120, in <module>
+    test_multinode()
+    ~~~~~~~~~~~~~~^^
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 115, in test_multinode
+    st = make_stellarator()
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 91, in make_stellarator
+    eq = desc.examples.get("W7-X")
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/backend.py", line 150, in wrapper
+    return func(*args, **kwargs)
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/examples/__init__.py", line 57, in get
+    eqf = desc.io.load(path)
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 64, in load
+    reader.read_obj(obj)
+    ~~~~~~~~~~~~~~~^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 165, in read_obj
+    setattr(obj, attr, self.read_list(where=loc[attr]))
+                       ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 270, in read_list
+    cls.load(
+    ~~~~~~~~^
+        load_from=loc[str(i)],
+        ^^^^^^^^^^^^^^^^^^^^^^
+        file_format=self._file_format_,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 208, in load
+    reader.read_obj(self)
+    ~~~~~~~~~~~~~~~^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 175, in read_obj
+    cls.load(
+    ~~~~~~~~^
+        load_from=loc[attr],
+        ^^^^^^^^^^^^^^^^^^^^
+        file_format=self._file_format_,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 212, in load
+    self._set_up()
+    ~~~~~~~~~~~~^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/basis.py", line 74, in _set_up
+    self._enforce_symmetry()
+    ~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/basis.py", line 108, in _enforce_symmetry
+    np.asarray(sign(self.modes[:, 1]) == sign(self.modes[:, 2]))
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/array.py", line 441, in __array__
+    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]
+                      ^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/profiler.py", line 384, in wrapper
+    return func(*args, **kwargs)
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/array.py", line 652, in _value
+    raise RuntimeError(
+    ...<5 lines>...
+    )
+RuntimeError: Fetching value for `jax.Array` that spans non-addressable (non process local) devices is not possible. You can use `jax.experimental.multihost_utils.process_allgather` to print the global array or use `.addressable_shards` method of jax.Array to inspect the addressable (process local) shards.
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 120, in <module>
+    test_multinode()
+    ~~~~~~~~~~~~~~^^
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 115, in test_multinode
+    st = make_stellarator()
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 91, in make_stellarator
+    eq = desc.examples.get("W7-X")
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/backend.py", line 150, in wrapper
+    return func(*args, **kwargs)
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/examples/__init__.py", line 57, in get
+    eqf = desc.io.load(path)
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 64, in load
+    reader.read_obj(obj)
+    ~~~~~~~~~~~~~~~^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 165, in read_obj
+    setattr(obj, attr, self.read_list(where=loc[attr]))
+                       ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 270, in read_list
+    cls.load(
+    ~~~~~~~~^
+        load_from=loc[str(i)],
+        ^^^^^^^^^^^^^^^^^^^^^^
+        file_format=self._file_format_,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 208, in load
+    reader.read_obj(self)
+    ~~~~~~~~~~~~~~~^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 175, in read_obj
+    cls.load(
+    ~~~~~~~~^
+        load_from=loc[attr],
+        ^^^^^^^^^^^^^^^^^^^^
+        file_format=self._file_format_,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 212, in load
+    self._set_up()
+    ~~~~~~~~~~~~^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/basis.py", line 74, in _set_up
+    self._enforce_symmetry()
+    ~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/basis.py", line 108, in _enforce_symmetry
+    np.asarray(sign(self.modes[:, 1]) == sign(self.modes[:, 2]))
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/array.py", line 441, in __array__
+    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]
+                      ^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/profiler.py", line 384, in wrapper
+    return func(*args, **kwargs)
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/array.py", line 652, in _value
+    raise RuntimeError(
+    ...<5 lines>...
+    )
+RuntimeError: Fetching value for `jax.Array` that spans non-addressable (non process local) devices is not possible. You can use `jax.experimental.multihost_utils.process_allgather` to print the global array or use `.addressable_shards` method of jax.Array to inspect the addressable (process local) shards.
+Traceback (most recent call last):
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 120, in <module>
+    test_multinode()
+    ~~~~~~~~~~~~~~^^
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 115, in test_multinode
+    st = make_stellarator()
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 91, in make_stellarator
+    eq = desc.examples.get("W7-X")
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/backend.py", line 150, in wrapper
+    return func(*args, **kwargs)
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/examples/__init__.py", line 57, in get
+    eqf = desc.io.load(path)
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 64, in load
+    reader.read_obj(obj)
+    ~~~~~~~~~~~~~~~^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 165, in read_obj
+    setattr(obj, attr, self.read_list(where=loc[attr]))
+                       ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 270, in read_list
+    cls.load(
+    ~~~~~~~~^
+        load_from=loc[str(i)],
+        ^^^^^^^^^^^^^^^^^^^^^^
+        file_format=self._file_format_,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 208, in load
+    reader.read_obj(self)
+    ~~~~~~~~~~~~~~~^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 175, in read_obj
+    cls.load(
+    ~~~~~~~~^
+        load_from=loc[attr],
+        ^^^^^^^^^^^^^^^^^^^^
+        file_format=self._file_format_,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 212, in load
+    self._set_up()
+    ~~~~~~~~~~~~^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/basis.py", line 74, in _set_up
+    self._enforce_symmetry()
+    ~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/basis.py", line 108, in _enforce_symmetry
+    np.asarray(sign(self.modes[:, 1]) == sign(self.modes[:, 2]))
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/array.py", line 441, in __array__
+    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]
+                      ^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/profiler.py", line 384, in wrapper
+    return func(*args, **kwargs)
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/array.py", line 652, in _value
+    raise RuntimeError(
+    ...<5 lines>...
+    )
+RuntimeError: Fetching value for `jax.Array` that spans non-addressable (non process local) devices is not possible. You can use `jax.experimental.multihost_utils.process_allgather` to print the global array or use `.addressable_shards` method of jax.Array to inspect the addressable (process local) shards.
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 120, in <module>
+    test_multinode()
+    ~~~~~~~~~~~~~~^^
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 115, in test_multinode
+    st = make_stellarator()
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 91, in make_stellarator
+    eq = desc.examples.get("W7-X")
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/backend.py", line 150, in wrapper
+    return func(*args, **kwargs)
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/examples/__init__.py", line 57, in get
+    eqf = desc.io.load(path)
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 64, in load
+    reader.read_obj(obj)
+    ~~~~~~~~~~~~~~~^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 165, in read_obj
+    setattr(obj, attr, self.read_list(where=loc[attr]))
+                       ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 270, in read_list
+    cls.load(
+    ~~~~~~~~^
+        load_from=loc[str(i)],
+        ^^^^^^^^^^^^^^^^^^^^^^
+        file_format=self._file_format_,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 208, in load
+    reader.read_obj(self)
+    ~~~~~~~~~~~~~~~^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 175, in read_obj
+    cls.load(
+    ~~~~~~~~^
+        load_from=loc[attr],
+        ^^^^^^^^^^^^^^^^^^^^
+        file_format=self._file_format_,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 212, in load
+    self._set_up()
+    ~~~~~~~~~~~~^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/basis.py", line 74, in _set_up
+    self._enforce_symmetry()
+    ~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/basis.py", line 108, in _enforce_symmetry
+    np.asarray(sign(self.modes[:, 1]) == sign(self.modes[:, 2]))
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/array.py", line 441, in __array__
+    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]
+                      ^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/profiler.py", line 384, in wrapper
+    return func(*args, **kwargs)
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/array.py", line 652, in _value
+    raise RuntimeError(
+    ...<5 lines>...
+    )
+RuntimeError: Fetching value for `jax.Array` that spans non-addressable (non process local) devices is not possible. You can use `jax.experimental.multihost_utils.process_allgather` to print the global array or use `.addressable_shards` method of jax.Array to inspect the addressable (process local) shards.
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 120, in <module>
+    test_multinode()
+    ~~~~~~~~~~~~~~^^
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 115, in test_multinode
+    st = make_stellarator()
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 91, in make_stellarator
+    eq = desc.examples.get("W7-X")
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/backend.py", line 150, in wrapper
+    return func(*args, **kwargs)
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/examples/__init__.py", line 57, in get
+    eqf = desc.io.load(path)
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 64, in load
+    reader.read_obj(obj)
+    ~~~~~~~~~~~~~~~^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 165, in read_obj
+    setattr(obj, attr, self.read_list(where=loc[attr]))
+                       ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 270, in read_list
+    cls.load(
+    ~~~~~~~~^
+        load_from=loc[str(i)],
+        ^^^^^^^^^^^^^^^^^^^^^^
+        file_format=self._file_format_,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 208, in load
+    reader.read_obj(self)
+    ~~~~~~~~~~~~~~~^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 175, in read_obj
+    cls.load(
+    ~~~~~~~~^
+        load_from=loc[attr],
+        ^^^^^^^^^^^^^^^^^^^^
+        file_format=self._file_format_,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 212, in load
+    self._set_up()
+    ~~~~~~~~~~~~^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/basis.py", line 74, in _set_up
+    self._enforce_symmetry()
+    ~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/basis.py", line 108, in _enforce_symmetry
+    np.asarray(sign(self.modes[:, 1]) == sign(self.modes[:, 2]))
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/array.py", line 441, in __array__
+    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]
+                      ^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/profiler.py", line 384, in wrapper
+    return func(*args, **kwargs)
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/array.py", line 652, in _value
+    raise RuntimeError(
+    ...<5 lines>...
+    )
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 120, in <module>
+    test_multinode()
+    ~~~~~~~~~~~~~~^^
+RuntimeError: Fetching value for `jax.Array` that spans non-addressable (non process local) devices is not possible. You can use `jax.experimental.multihost_utils.process_allgather` to print the global array or use `.addressable_shards` method of jax.Array to inspect the addressable (process local) shards.
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 115, in test_multinode
+    st = make_stellarator()
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 91, in make_stellarator
+    eq = desc.examples.get("W7-X")
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/backend.py", line 150, in wrapper
+    return func(*args, **kwargs)
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/examples/__init__.py", line 57, in get
+    eqf = desc.io.load(path)
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 64, in load
+    reader.read_obj(obj)
+    ~~~~~~~~~~~~~~~^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 165, in read_obj
+    setattr(obj, attr, self.read_list(where=loc[attr]))
+                       ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 270, in read_list
+    cls.load(
+    ~~~~~~~~^
+        load_from=loc[str(i)],
+        ^^^^^^^^^^^^^^^^^^^^^^
+        file_format=self._file_format_,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 208, in load
+    reader.read_obj(self)
+    ~~~~~~~~~~~~~~~^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 175, in read_obj
+    cls.load(
+    ~~~~~~~~^
+        load_from=loc[attr],
+        ^^^^^^^^^^^^^^^^^^^^
+        file_format=self._file_format_,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 212, in load
+    self._set_up()
+    ~~~~~~~~~~~~^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/basis.py", line 74, in _set_up
+    self._enforce_symmetry()
+    ~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/basis.py", line 108, in _enforce_symmetry
+    np.asarray(sign(self.modes[:, 1]) == sign(self.modes[:, 2]))
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/array.py", line 441, in __array__
+    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]
+                      ^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/profiler.py", line 384, in wrapper
+    return func(*args, **kwargs)
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/array.py", line 652, in _value
+    raise RuntimeError(
+    ...<5 lines>...
+    )
+RuntimeError: Fetching value for `jax.Array` that spans non-addressable (non process local) devices is not possible. You can use `jax.experimental.multihost_utils.process_allgather` to print the global array or use `.addressable_shards` method of jax.Array to inspect the addressable (process local) shards.
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 120, in <module>
+    test_multinode()
+    ~~~~~~~~~~~~~~^^
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 115, in test_multinode
+    st = make_stellarator()
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 91, in make_stellarator
+    eq = desc.examples.get("W7-X")
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/backend.py", line 150, in wrapper
+    return func(*args, **kwargs)
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/examples/__init__.py", line 57, in get
+    eqf = desc.io.load(path)
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 64, in load
+    reader.read_obj(obj)
+    ~~~~~~~~~~~~~~~^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 165, in read_obj
+    setattr(obj, attr, self.read_list(where=loc[attr]))
+                       ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 270, in read_list
+    cls.load(
+    ~~~~~~~~^
+        load_from=loc[str(i)],
+        ^^^^^^^^^^^^^^^^^^^^^^
+        file_format=self._file_format_,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 208, in load
+    reader.read_obj(self)
+    ~~~~~~~~~~~~~~~^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/hdf5_io.py", line 175, in read_obj
+    cls.load(
+    ~~~~~~~~^
+        load_from=loc[attr],
+        ^^^^^^^^^^^^^^^^^^^^
+        file_format=self._file_format_,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/io/optimizable_io.py", line 212, in load
+    self._set_up()
+    ~~~~~~~~~~~~^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/basis.py", line 74, in _set_up
+    self._enforce_symmetry()
+    ~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/global/cfs/cdirs/mp217/eatocco/DESC/desc/basis.py", line 108, in _enforce_symmetry
+    np.asarray(sign(self.modes[:, 1]) == sign(self.modes[:, 2]))
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/array.py", line 441, in __array__
+    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]
+                      ^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/profiler.py", line 384, in wrapper
+    return func(*args, **kwargs)
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/array.py", line 652, in _value
+    raise RuntimeError(
+    ...<5 lines>...
+    )
+RuntimeError: Fetching value for `jax.Array` that spans non-addressable (non process local) devices is not possible. You can use `jax.experimental.multihost_utils.process_allgather` to print the global array or use `.addressable_shards` method of jax.Array to inspect the addressable (process local) shards.
+Building objective: force
+Precomputing transforms
+Building objective: lcfs R
+Building objective: lcfs Z
+Building objective: fixed Psi
+Building objective: fixed pressure
+Building objective: fixed iota
+Building objective: fixed sheet current
+Building objective: self_consistency R
+Building objective: self_consistency Z
+Building objective: lambda gauge
+Building objective: axis R self consistency
+Building objective: axis Z self consistency
+Number of parameters: 604
+Number of objectives: 3026
+
+Starting optimization
+Using method: lsq-exact
+Optimization terminated successfully.
+`ftol` condition satisfied. (ftol=1.00e-02)
+         Current function value: 1.082e-05
+         Total delta_x: 1.334e-01
+         Iterations: 6
+         Function evaluations: 7
+         Jacobian evaluations: 7
+==============================================================================================================
+                                                                 Start  -->   End
+Total (sum of squares):                                      1.442e-01  -->   1.082e-05, 
+Maximum absolute Force error:                                1.291e+08  -->   3.002e+05 (N)
+Minimum absolute Force error:                                1.642e+01  -->   2.629e+00 (N)
+Average absolute Force error:                                9.839e+05  -->   1.122e+04 (N)
+Maximum absolute Force error:                                6.984e-01  -->   1.623e-03 (normalized)
+Minimum absolute Force error:                                8.879e-08  -->   1.422e-08 (normalized)
+Average absolute Force error:                                5.321e-03  -->   6.065e-05 (normalized)
+R boundary error:                                            0.000e+00  -->   2.914e-17 (m)
+Z boundary error:                                            0.000e+00  -->   2.799e-17 (m)
+Fixed Psi error:                                             0.000e+00  -->   0.000e+00 (Wb)
+Fixed pressure profile error:                                0.000e+00  -->   0.000e+00 (Pa)
+Fixed iota profile error:                                    0.000e+00  -->   0.000e+00 (dimensionless)
+Fixed sheet current error:                                   0.000e+00  -->   0.000e+00 (~)
+==============================================================================================================
+
+Initializing yancc wrapper
+yancc_wrapper initialized successfully with resolution na=43, nx=7.
+/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/config.py:74: UserWarning: A JAX array is being set as static! This can result in unexpected behavior and is usually a mistake to do.
+  self.constants = PlasmaConstants(ion_species, **constant_args)
+Using batch size 0
+configuring
+INFO: Total HDG degrees of freedom 347
+INFO: Running until steady state achieved (variation below 0.002) or end time reached.
+INFO: Configuration done.
+Successfully created StellaratorTransport object
+Finished tracing + transforming convert_element_type for pjit in 0.000181198 sec
+Compiling jit(convert_element_type) with global shapes and types (ShapedArray(int32[]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(convert_element_type) in 0.003900290 sec
+Persistent compilation cache hit for 'jit_convert_element_type' with key 'jit_convert_element_type-8a406722a93849da262adc0447ff354bf6ad7fdb96ab64de1f64d8cb76a62318'
+Finished XLA compilation of jit(convert_element_type) in 0.003220081 sec
+Finished tracing + transforming ffi_call for pjit in 0.000182390 sec
+Compiling jit(ffi_call) with global shapes and types (ShapedArray(int32[]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(ffi_call) in 0.004606009 sec
+Finished XLA compilation of jit(ffi_call) in 0.021280527 sec
+INFO: Setting initial conditions
+Finished tracing + transforming subtract for pjit in 0.000325203 sec
+Finished tracing + transforming add for pjit in 0.000239134 sec
+Finished tracing + transforming ravel for pjit in 0.000212669 sec
+Finished tracing + transforming _moveaxis for pjit in 0.000098467 sec
+Finished tracing + transforming subtract for pjit in 0.000233173 sec
+Finished tracing + transforming floor_divide for pjit in 0.000393391 sec
+Finished tracing + transforming add for pjit in 0.000218868 sec
+Finished tracing + transforming _searchsorted_scan_impl for pjit in 0.003943205 sec
+Finished tracing + transforming _searchsorted_scan_impl for pjit in 0.010932446 sec
+Finished tracing + transforming _searchsorted_impl for pjit in 0.011665344 sec
+Finished tracing + transforming searchsorted for pjit in 0.012512445 sec
+Finished tracing + transforming maximum for pjit in 0.000292301 sec
+Finished tracing + transforming minimum for pjit in 0.000291109 sec
+Finished tracing + transforming clip for pjit in 0.001201868 sec
+Finished tracing + transforming subtract for pjit in 0.000284433 sec
+Finished tracing + transforming less for pjit in 0.000301361 sec
+Finished tracing + transforming _broadcast_arrays for pjit in 0.000079393 sec
+Finished tracing + transforming subtract for pjit in 0.000269175 sec
+Finished tracing + transforming _squeeze for pjit in 0.000164270 sec
+Finished tracing + transforming polyder for pjit in 0.000108480 sec
+Finished tracing + transforming _squeeze for pjit in 0.000121593 sec
+Finished tracing + transforming polyval for pjit in 0.000825644 sec
+Finished tracing + transforming __call__ for pjit in 0.021791220 sec
+Finished tracing + transforming multiply for pjit in 0.000276566 sec
+Finished tracing + transforming InitialValue for pjit in 0.029010534 sec
+Compiling jit(InitialValue) with global shapes and types (ShapedArray(int64[], weak_type=True), ShapedArray(float64[], weak_type=True)). Argument mapping: (UnspecifiedValue, UnspecifiedValue).
+Finished jaxpr to MLIR module conversion jit(InitialValue) in 0.024167299 sec
+Persistent compilation cache hit for 'jit_InitialValue' with key 'jit_InitialValue-f3083ab983db754effd465924dbabf5e92964d48cf97487b689f5560e04c16ef'
+Finished XLA compilation of jit(InitialValue) in 0.026259661 sec
+Finished tracing + transforming InitialDerivative for pjit in 0.081728697 sec
+Compiling jit(InitialDerivative) with global shapes and types (ShapedArray(int64[], weak_type=True), ShapedArray(float64[], weak_type=True)). Argument mapping: (UnspecifiedValue, UnspecifiedValue).
+Finished jaxpr to MLIR module conversion jit(InitialDerivative) in 0.045072556 sec
+Persistent compilation cache hit for 'jit_InitialDerivative' with key 'jit_InitialDerivative-820b523aae0727917411ed660bb45ec3e9ff5dfc0161e53a3ec42b8b5f19340e'
+Finished XLA compilation of jit(InitialDerivative) in 0.021126509 sec
+Finished tracing + transforming convert_element_type for pjit in 0.000203371 sec
+Compiling jit(convert_element_type) with global shapes and types (ShapedArray(float64[32,3]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(convert_element_type) in 0.003715515 sec
+Persistent compilation cache hit for 'jit_convert_element_type' with key 'jit_convert_element_type-2e423104f2e227351ba0d60eec014ee31a6ceb5d21eb97744af23bc9bde652bf'
+Finished XLA compilation of jit(convert_element_type) in 0.004519701 sec
+Finished tracing + transforming convert_element_type for pjit in 0.000190258 sec
+Compiling jit(convert_element_type) with global shapes and types (ShapedArray(float64[32,1]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(convert_element_type) in 0.003252029 sec
+Persistent compilation cache hit for 'jit_convert_element_type' with key 'jit_convert_element_type-b7acb7cbd6fa260ea9a365b28dbb069e5827b3a8c9f96d1691c24ed7fbfacac9'
+Finished XLA compilation of jit(convert_element_type) in 0.003225803 sec
+Finished tracing + transforming convert_element_type for pjit in 0.000187874 sec
+Compiling jit(convert_element_type) with global shapes and types (ShapedArray(float64[0]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(convert_element_type) in 0.003206491 sec
+Persistent compilation cache hit for 'jit_convert_element_type' with key 'jit_convert_element_type-fd787e6426ecc879aeaa76798d405b6f4553f1a45ae09b2e36315fc097f353f9'
+Finished XLA compilation of jit(convert_element_type) in 0.002578259 sec
+Finished tracing + transforming convert_element_type for pjit in 0.000231266 sec
+Compiling jit(convert_element_type) with global shapes and types (ShapedArray(float64[32]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(convert_element_type) in 0.003296614 sec
+Persistent compilation cache hit for 'jit_convert_element_type' with key 'jit_convert_element_type-c9d3fba30d26609604d250fde4fe567b3992843f783d4ddf05467431660f9137'
+Finished XLA compilation of jit(convert_element_type) in 0.014148474 sec
+Finished tracing + transforming _identity_fn for pjit in 0.000091314 sec
+Compiling jit(_identity_fn) with global shapes and types (ShapedArray(float64[32,3]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(_identity_fn) in 0.004702330 sec
+Persistent compilation cache hit for 'jit__identity_fn' with key 'jit__identity_fn-00d40aa184d5bb583fd7565b6fd681e4b8a281d2355d7825b5db0beebeb10c42'
+Finished XLA compilation of jit(_identity_fn) in 0.003454924 sec
+Finished tracing + transforming _multi_slice for pjit in 0.000238180 sec
+Compiling jit(_multi_slice) with global shapes and types (ShapedArray(float64[32,3]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(_multi_slice) in 0.004570961 sec
+Persistent compilation cache hit for 'jit__multi_slice' with key 'jit__multi_slice-be45626b533c2d2bca6aa5650048b08373618c4cc5160c7505ce396949f4f4d4'
+Finished XLA compilation of jit(_multi_slice) in 0.003715992 sec
+Finished tracing + transforming _identity_fn for pjit in 0.000078201 sec
+Compiling jit(_identity_fn) with global shapes and types (ShapedArray(float64[32,1]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(_identity_fn) in 0.004627466 sec
+Persistent compilation cache hit for 'jit__identity_fn' with key 'jit__identity_fn-959b2f029debce5c4f8d2496dcdb8aeb5de3346c5e336705d9dc4dca9c01c812'
+Finished XLA compilation of jit(_identity_fn) in 0.003048897 sec
+Finished tracing + transforming _multi_slice for pjit in 0.000213146 sec
+Compiling jit(_multi_slice) with global shapes and types (ShapedArray(float64[32,1]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(_multi_slice) in 0.004513979 sec
+Persistent compilation cache hit for 'jit__multi_slice' with key 'jit__multi_slice-3fda8ff9407c3ead29c5132b8732e042bfee8015a8cce1062814bf691ca75f2c'
+Finished XLA compilation of jit(_multi_slice) in 0.003151894 sec
+Finished tracing + transforming _identity_fn for pjit in 0.000086308 sec
+Compiling jit(_identity_fn) with global shapes and types (ShapedArray(float64[32]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(_identity_fn) in 0.004591227 sec
+Persistent compilation cache hit for 'jit__identity_fn' with key 'jit__identity_fn-425a5118cc229e455bbbd3d807d6c0cfa2c764ce4c5d249815567ea327853d03'
+Finished XLA compilation of jit(_identity_fn) in 0.002568007 sec
+Finished tracing + transforming _multi_slice for pjit in 0.000216961 sec
+Compiling jit(_multi_slice) with global shapes and types (ShapedArray(float64[32]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(_multi_slice) in 0.004474401 sec
+Persistent compilation cache hit for 'jit__multi_slice' with key 'jit__multi_slice-ee7c623afbd6da248171b22f9569ce181845ae2b7abc365e12a6473195ab8049'
+Finished XLA compilation of jit(_multi_slice) in 0.005337238 sec
+Finished tracing + transforming _identity_fn for pjit in 0.000006437 sec
+Finished tracing + transforming _identity_fn for pjit in 0.000077009 sec
+Compiling jit(_identity_fn) with global shapes and types (ShapedArray(float64[32,17]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(_identity_fn) in 0.004666328 sec
+Persistent compilation cache hit for 'jit__identity_fn' with key 'jit__identity_fn-c897d4fbd5842fda6e7669b0a6ce51541d49701358a70c38b7dc16664292a198'
+Finished XLA compilation of jit(_identity_fn) in 0.013230324 sec
+Finished tracing + transforming _multi_slice for pjit in 0.000229359 sec
+Compiling jit(_multi_slice) with global shapes and types (ShapedArray(float64[32,17]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(_multi_slice) in 0.004499197 sec
+Persistent compilation cache hit for 'jit__multi_slice' with key 'jit__multi_slice-1a30b94447702cdd102211d160c57fe14f3e6fe20817b0b486bffc904f17d704'
+Finished XLA compilation of jit(_multi_slice) in 0.009422302 sec
+Finished tracing + transforming _identity_fn for pjit in 0.000077724 sec
+Compiling jit(_identity_fn) with global shapes and types (ShapedArray(float64[32,25]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(_identity_fn) in 0.004608154 sec
+Persistent compilation cache hit for 'jit__identity_fn' with key 'jit__identity_fn-5307adf8dea2efab0a071af44b61ff5c36f6b352d29132d75c47ed262b711c7e'
+Finished XLA compilation of jit(_identity_fn) in 0.004883051 sec
+Finished tracing + transforming _multi_slice for pjit in 0.000235558 sec
+Compiling jit(_multi_slice) with global shapes and types (ShapedArray(float64[32,25]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(_multi_slice) in 0.004450560 sec
+Persistent compilation cache hit for 'jit__multi_slice' with key 'jit__multi_slice-8ee69957acb34e6c82c5f0154d5ea66d0a42670cded21f663b120b6d074b74cd'
+Finished XLA compilation of jit(_multi_slice) in 0.005162477 sec
+Finished tracing + transforming _identity_fn for pjit in 0.000077963 sec
+Compiling jit(_identity_fn) with global shapes and types (ShapedArray(float64[32,17,25]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(_identity_fn) in 0.004605770 sec
+Persistent compilation cache hit for 'jit__identity_fn' with key 'jit__identity_fn-c7cfe57fb202a5fca45b42cedfed50f972d2feee2607098d95f5637427ba1a26'
+Finished XLA compilation of jit(_identity_fn) in 0.017051220 sec
+Finished tracing + transforming _multi_slice for pjit in 0.000246048 sec
+Compiling jit(_multi_slice) with global shapes and types (ShapedArray(float64[32,17,25]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(_multi_slice) in 0.004402637 sec
+Persistent compilation cache hit for 'jit__multi_slice' with key 'jit__multi_slice-73d5a7f2fb3687672b5c92dee0351a60ec985b5226ec9397229246817c062fe5'
+Finished XLA compilation of jit(_multi_slice) in 0.003401518 sec
+Finished tracing + transforming _identity_fn for pjit in 0.000078201 sec
+Compiling jit(_identity_fn) with global shapes and types (ShapedArray(int64[32], weak_type=True),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(_identity_fn) in 0.004581928 sec
+Persistent compilation cache hit for 'jit__identity_fn' with key 'jit__identity_fn-ed94f14a8cafd2422ca6dae305041e27acf74478cf5ff07758e95a5f8595d096'
+Finished XLA compilation of jit(_identity_fn) in 0.015370131 sec
+Finished tracing + transforming _multi_slice for pjit in 0.000240564 sec
+Compiling jit(_multi_slice) with global shapes and types (ShapedArray(int64[32], weak_type=True),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(_multi_slice) in 0.004408121 sec
+Persistent compilation cache hit for 'jit__multi_slice' with key 'jit__multi_slice-1eea6b24ddcbecac3b672ca916c8b0e70a401dd51d67298af1f90ed768601a86'
+Finished XLA compilation of jit(_multi_slice) in 0.009602308 sec
+Finished tracing + transforming _identity_fn for pjit in 0.000093937 sec
+Compiling jit(_identity_fn) with global shapes and types (ShapedArray(int32[32]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(_identity_fn) in 0.004460812 sec
+Persistent compilation cache hit for 'jit__identity_fn' with key 'jit__identity_fn-a71277d00cdf8e2667c7142ba477009efa6ab2ed314c6fda4f4340001c7b5f79'
+Finished XLA compilation of jit(_identity_fn) in 0.003094435 sec
+Finished tracing + transforming _multi_slice for pjit in 0.000211477 sec
+Compiling jit(_multi_slice) with global shapes and types (ShapedArray(int32[32]),). Argument mapping: (UnspecifiedValue,).
+Finished jaxpr to MLIR module conversion jit(_multi_slice) in 0.004431248 sec
+Persistent compilation cache hit for 'jit__multi_slice' with key 'jit__multi_slice-6d2fd0acbd34ef0a4c6c7453d178a9f2595de6d9b810761ac13ec8e411d9af06'
+Finished XLA compilation of jit(_multi_slice) in 0.013568640 sec
+Finished tracing + transforming true_divide for pjit in 0.000246525 sec
+Finished tracing + transforming multiply for pjit in 0.000235081 sec
+Finished tracing + transforming subtract for pjit in 0.000229359 sec
+Finished tracing + transforming multiply for pjit in 0.000257015 sec
+Finished tracing + transforming subtract for pjit in 0.000188112 sec
+Finished tracing + transforming subtract for pjit in 0.000304699 sec
+Finished tracing + transforming add for pjit in 0.000262976 sec
+Finished tracing + transforming multiply for pjit in 0.000235558 sec
+Finished tracing + transforming _moveaxis for pjit in 0.000081778 sec
+Finished tracing + transforming test_flux for pjit in 0.069993019 sec
+Compiling jit(test_flux) with global shapes and types (ShapedArray(float64[32,3]), ShapedArray(float64[32,3]), ShapedArray(float64[32]), ShapedArray(float64[32]), ShapedArray(float64[32])). Argument mapping: (NamedSharding(mesh=Mesh('axis': 8, axis_types=(Auto,)), spec=P('axis',), memory_kind=device), NamedSharding(mesh=Mesh('axis': 8, axis_types=(Auto,)), spec=P('axis',), memory_kind=device), NamedSharding(mesh=Mesh('axis': 8, axis_types=(Auto,)), spec=P('axis',), memory_kind=device), NamedSharding(mesh=Mesh('axis': 8, axis_types=(Auto,)), spec=P('axis',), memory_kind=device), NamedSharding(mesh=Mesh('axis': 8, axis_types=(Auto,)), spec=P('axis',), memory_kind=device)).
+Finished jaxpr to MLIR module conversion jit(test_flux) in 0.020965099 sec
+Persistent compilation cache hit for 'jit_test_flux' with key 'jit_test_flux-6d6405c121b3348b5ff801678b54d7c325705a6f96b165a030a85d87a8912dfe'
+Finished XLA compilation of jit(test_flux) in 0.005632639 sec
+Finished tracing + transforming subtract for pjit in 0.000193357 sec
+Finished tracing + transforming subtract for pjit in 0.000211954 sec
+Finished tracing + transforming add for pjit in 0.000251293 sec
+Finished tracing + transforming subtract for pjit in 0.000187635 sec
+Finished tracing + transforming negative for pjit in 0.000168800 sec
+Finished tracing + transforming true_divide for pjit in 0.000259876 sec
+Finished tracing + transforming exp for pjit in 0.000182152 sec
+Finished tracing + transforming _power for pjit in 0.000243902 sec
+Finished tracing + transforming log for pjit in 0.000181675 sec
+Finished tracing + transforming true_divide for pjit in 0.000218868 sec
+Finished tracing + transforming log for pjit in 0.000184059 sec
+Finished tracing + transforming subtract for pjit in 0.000202656 sec
+Finished tracing + transforming _power for pjit in 0.000201941 sec
+Finished tracing + transforming sqrt for pjit in 0.000170708 sec
+Finished tracing + transforming true_divide for pjit in 0.000201941 sec
+Finished tracing + transforming sqrt for pjit in 0.000190973 sec
+Finished tracing + transforming true_divide for pjit in 0.000206470 sec
+Finished tracing + transforming _moveaxis for pjit in 0.000085592 sec
+Finished tracing + transforming wrapper for pjit in 0.095116377 sec
+Compiling jit(wrapper) with global shapes and types (ShapedArray(float64[32,3]), ShapedArray(float64[32,3]), ShapedArray(float64[32]), ShapedArray(float64[32]), ShapedArray(float64[32]), ShapedArray(float64[])). Argument mapping: (UnspecifiedValue, UnspecifiedValue, UnspecifiedValue, UnspecifiedValue, UnspecifiedValue, UnspecifiedValue).
+Finished jaxpr to MLIR module conversion jit(wrapper) in 0.024667740 sec
+Persistent compilation cache hit for 'jit_wrapper' with key 'jit_wrapper-fcc52f6dfa408355da1f5b48a708c71383f5d3a0f79e92d5005db907f8da091d'
+Finished XLA compilation of jit(wrapper) in 0.021673203 sec
+Traceback (most recent call last):
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 120, in <module>
+    test_multinode()
+    ~~~~~~~~~~~~~~^^
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/test_stellarator.py", line 117, in test_multinode
+    st.run()
+    ~~~~~~^^
+  File "/global/u2/e/eatocco/projects/MaNTA/python-physics/stellarator/stellarator_multichannel.py", line 304, in run
+    outcome = self.runner.start_steady()
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/manta/jax/ffi_runner.py", line 181, in start_steady
+    return self._steady_slice("start_steady", estimate)
+           ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/manta/jax/ffi_runner.py", line 188, in _steady_slice
+    outcome = jax.ffi.ffi_call(
+    ...<2 lines>...
+        has_side_effect=True,
+    )(cpu_i_dtype(1 if estimate else 0), obj=self.get_address())
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/ffi.py", line 563, in wrapped
+    results = ffi_call_p.bind(
+        *args,
+    ...<9 lines>...
+        attributes=_wrap_kwargs_hashable(kwargs),
+    )
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/core.py", line 648, in bind
+    return self.bind_with_trace(prev_trace, args, avals, params)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/core.py", line 656, in bind_with_trace
+    return trace.process_primitive(self, args, params)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/core.py", line 1217, in process_primitive
+    return primitive.impl(*args, **params)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/global/cfs/cdirs/mp217/eatocco/desc-env/lib/python3.14/site-packages/jax/_src/dispatch.py", line 91, in apply_primitive
+    outs = fun(*args)
+jax.errors.JaxRuntimeError: INTERNAL: Unable to cast Python instance of type <class 'list'> to C++ type 'std::array<std::vector<Eigen::Matrix<double, -1, 1, 0, -1, 1>, std::allocator<Eigen::Matrix<double, -1, 1, 0, -1, 1> > >, 3ul>'
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+[0m[0m[0m[0m[0m[0m[0m[0m[2026-09-01T20:49:42.875] error: *** STEP 57836152.1 ON nid008477 CANCELLED AT 2026-09-01T20:49:42 DUE TO TASK FAILURE ***

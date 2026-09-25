@@ -139,6 +139,8 @@ BOOST_AUTO_TEST_CASE(every_default_matches_its_declared_type)
         case Type::String: BOOST_TEST(std::holds_alternative<std::string>(e._default), std::string(e.name)); break;
         case Type::DoubleList:
             BOOST_TEST(std::holds_alternative<std::vector<double>>(e._default), std::string(e.name)); break;
+        case Type::UIntList:
+            BOOST_TEST(std::holds_alternative<std::vector<unsigned>>(e._default), std::string(e.name)); break;
         case Type::StringList:
             BOOST_TEST(std::holds_alternative<std::vector<std::string>>(e._default), std::string(e.name)); break;
         }

@@ -7,7 +7,7 @@ Tests/UnitTests/UnitTests
 !*.ref.dat
 *.nc
 !*.ref.nc
-Makefile.local
+CMakeUserPresets.json
 *.o
 *.so
 sundials/
@@ -18,6 +18,7 @@ runs/
 .vscode/
 python/__pycache__/
 build/
+build-*/
 python/Tests/__pycache__/
 python/Tests/.pytest_cache/
 python/.ipynb_checkpoints/*
@@ -34,7 +35,7 @@ tags
 *.h5
 venv
 .venv/
-# `make docs` builds this from docs/requirements.txt.
+# The `docs` target builds this from docs/requirements.txt.
 .venv-docs/
 gmon.out
 *.sh
@@ -46,13 +47,13 @@ slurm-*.out
 # Editor swap files
 *.swp
 
-# Coverage (make coverage)
+# Coverage (the `coverage` target)
 *.gcda
 *.gcno
 *.gcov
 coverage/
 
-# Sphinx (docs/), built locally with `make docs`.
+# Sphinx (docs/), built locally with the `docs` target.
 docs/_build/
 
 # Local scratch / run output. Anchored with a leading slash because these are
@@ -70,7 +71,7 @@ __pycache__/
 # for its constants.py to read back: build output, not input.
 *.pkl
 
-# Build artefacts of `make install` / `pip install .`
+# Build artefacts of `cmake --install` / `pip install .`
 libmanta.so
 manta.pc
 python/*.egg-info/

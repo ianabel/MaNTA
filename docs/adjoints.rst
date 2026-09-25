@@ -127,85 +127,70 @@ Limitations
   redefine how many parameters there are. See :doc:`superconvergence`.
 * Anything indexed per auxiliary variable is sized ``nAux``, not ``nVars``.
 
-The dG/dt early-exit gate
--------------------------
+The corrected objective and its error bar
+-----------------------------------------
 
-An optimisation sweep spends most of its time on steps that turn out to be bad.
-``ObjectiveDecreaseTolerance`` lets the solver notice some of them before paying
-for the transport solve: after the initial condition is built, it evaluates
-
-.. math::
-
-   \frac{\mathrm{d}G}{\mathrm{d}t} = \int \left(
-       \frac{\partial g}{\partial u} \dot u
-     + \frac{\partial g}{\partial q} \dot q
-     + \frac{\partial g}{\partial \sigma} \dot \sigma
-     + \frac{\partial g}{\partial \phi} \dot \phi \right) \mathrm{d}x
-
-and, if any objective is falling faster than the tolerance, abandons the run
-without integrating. The convention is that :math:`G` is **maximised**, so a
-decrease is the bad direction, and the tolerance is one-sided slack on that.
-
-This works between ``initialize()`` and ``integrate()``, which is why those are
-separate phases. From Python, ``Runner.wasRejected()`` reports the verdict and
-``Runner.lastDGdt()`` the values behind it; a rejected run leaves the solver at
-the initial condition, so ``G()`` still reads, and reports :math:`G(t_0)` rather
-than a synthesised value. What a rejected step means for the search is the
-driver's decision.
-
-The derivatives come from the same ``dg`` hook and the same projection the adjoint
-solve uses to build :math:`G_y`, so the gate and the gradients beside it answer
-consistent questions, and no case has to implement anything new.
-
-Where the algebraic derivatives come from
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Three of the four terms above are not IDA's to give. :math:`q`, :math:`\sigma`
-and :math:`\phi` are algebraic, and ``IDA_YA_YDP_INIT`` computes algebraic
-*values* and differential *derivatives* — so at :math:`t_0` those blocks of IDA's
-``dydt`` are identically zero, and a gate reading it would differentiate every
-objective through its :math:`u` dependence alone. An objective depending on
-:math:`q` alone would score exactly zero and could never be rejected.
-
-They are **solved for rather than read**.
-``SystemSolver::computeAlgebraicTimeDerivatives()`` differentiates the algebraic
-residual rows in :math:`t`, which gives
+A steady solve stops when :math:`\|F\|` is small, not when :math:`G` is. An
+optimisation sweep comparing :math:`G` at two parameter points therefore needs to
+know how much of the difference is the answer moving and how much is each solve
+stopping short, and ``estimateObjective()`` answers both. Both quantities it needs
+are already assembled — :math:`\partial G/\partial y` is ``G_y``, which
+``initializeMatricesForAdjointSolve`` builds per objective, and the Newton step to
+the solution is :math:`J^{-1}F` from the matrix the solve has already factorised:
 
 .. math::
 
-   \frac{\partial F}{\partial y} \, \dot y = -\frac{\partial F}{\partial t}
+   G_{\text{corrected}} = G - \frac{\partial G}{\partial y}\cdot J^{-1}F,
+   \qquad
+   G_{\text{err}} = \left\|\frac{\partial G}{\partial y}\right\| \left\|J^{-1}F\right\|
 
-— a linear system in :math:`(\dot\sigma, \dot q, \dot\phi, \dot\lambda)` once
-:math:`\dot u`, which IDA *does* have, is treated as data. The matrix is the
-residual Jacobian with no mass term; the rows for the differential unknowns are
-replaced by the identity, with the known derivative on the right, and one dense
-factorisation finishes it. The answer goes to a separate ``dydtComplete`` vector,
-never into IDA's own ``dYdt``, which is the state the integration starts from.
+the first a first-order extrapolation to the fixed point, the second a
+Cauchy–Schwarz bound on what is left. The Jacobian is taken at :math:`\alpha = 0`,
+the steady operator, whatever the solve was damped with: the fixed point being
+extrapolated to is a steady state, not the end of a pseudo-time step.
 
-The gate therefore still evaluates at the initial condition, between
-``initialize()`` and ``integrate()`` — no step is taken and the run's trajectory
-is untouched — but it now evaluates the whole chain rule there. It costs one
-assembly and factorisation of the whole system, once, and only on a run that arms
-the gate.
+It runs at every exit from ``solveSteadyState``, including the two that then
+throw, so a caught failure still carries a partial answer and a bound saying what
+that answer is worth. ``lastSteadyOutcome()`` says which exit it was.
+``PyRunner::objectiveEstimate()`` returns ``value``, ``corrected`` and
+``uncertainty``, one entry per objective; it is empty when the run had no
+``AdjointProblem``, and it costs nothing in that case.
 
-.. note::
+**Solve looser and correct, rather than converging harder.** Measured on
+``AdjointTestProblem``, against a reference two orders tighter:
 
-   :math:`-\partial F/\partial t` is the *explicit* time derivative of the
-   residual, and nothing in the tree exposes it analytically:
-   ``TransportSystem::LowerBoundary`` has no derivative counterpart and there is
-   no ``dSigmaFn_dt`` or ``dAuxG_dt``. It is obtained by central-differencing
-   ``residual()`` in :math:`t` with the state held fixed, so the algebraic
-   derivatives are second order in the differencing step for a case with explicit
-   time dependence and exact for an autonomous one. Measured against a
-   manufactured solution the error is around :math:`10^{-11}`, against
-   :math:`10^{-14}` for :math:`\dot u`, which is data rather than a difference.
+.. list-table::
+   :header-rows: 1
 
-   Note also that an objective linear in the state is the only kind whose
-   :math:`\mathrm{d}G/\mathrm{d}t` is nonzero at a uniform initial condition —
-   :math:`\int \tfrac{1}{2} u^2` has :math:`\partial g/\partial u = u`, which
-   vanishes where :math:`u = 0`.
+   * - ``SteadyStateTolerance``
+     - residuals
+     - raw error
+     - corrected error
+   * - 1e-2
+     - 31
+     - 2.1e-3
+     - **1.7e-6**
+   * - 1e-3
+     - 41
+     - 6.0e-6
+     - < 1e-10
+   * - 1e-4
+     - 47
+     - 5.6e-6
+     - < 1e-10
+   * - 1e-6
+     - 65
+     - < 1e-10
+     - < 1e-10
 
-The gate is unavailable with ``Superconvergent`` set — it throws rather than
-differentiate through the wrong projection — and it has no term for the global
-scalars, because ``AdjointProblem`` has no ``dgFn_dscalars`` to go with the other
-four.
+Correcting a solve at 1e-2 is **34% cheaper and three times more accurate** than
+running one at 1e-4 and taking :math:`G` raw. The bound holds throughout —
+replaying every continuation step of a tight solve, it is 1.04x the true error at
+its tightest and 2.3x at its loosest.
+
+.. warning::
+
+   :math:`G_{\text{err}}` bounds *solver* error only. It says how far this solve
+   stopped short of its own fixed point, not how far that fixed point is from the
+   continuum. It compares two runs at one discretisation and nothing else — which
+   is the sweep's question, and not a discretisation error estimate.

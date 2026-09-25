@@ -150,8 +150,17 @@ at all without it. **It is off by default in MaNTA and should stay that way**:
 `sigma`, `q`, `lambda` and `phi` are then controlled only by the Newton
 tolerance, a restart file serialises all of them — a round trip degrades from
 `1.9e-6` to `8.6e-4` — and `phi` is a physics quantity in its own right when
-`nAux > 0`, where the `AuxVarTest` regression case drifts 1.0% past its 0.84%
-tolerance. `docs/running.rst` has the full account.
+`nAux > 0`. `docs/running.rst` has the full account.
+
+The `AuxVarTest` evidence that used to appear here has been withdrawn: that case
+was said to drift 1.0% past its tolerance with the flag on, but it was then
+running at `rtol = atol = 1e-2`, where its own answer is 4.1% from converged, so
+the "drift" was step-sequence noise. Re-measured at the `1e-6 / 1e-8` the case
+now uses, the flag moves `u` by **3.5e-7** and passes the regression outright.
+It does still cost accuracy in exactly the fields it drops from the error test —
+`q` and `sigma` land 1.0e-6 from converged against 4.1e-7 with the flag off, a
+factor of 2.5 — which is the real effect, two orders smaller than the number it
+replaces.
 
 ## Cost where it is tractable
 

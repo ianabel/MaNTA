@@ -5,10 +5,11 @@
 
 // Resolve a netCDF fixture that lives alongside the unit-test sources.
 //
-// TEST_DATA_DIR is baked in by Tests/UnitTests/Makefile as an absolute path, so
-// the test binary can be run from any working directory -- including from
-// Tests/UnitTests itself, and from wherever `make coverage` invokes it. The
-// fallback keeps the file usable if someone compiles a test by hand without it.
+// TEST_DATA_DIR is baked in by Tests/UnitTests/CMakeLists.txt as an absolute
+// path, so the test binary can be run from any working directory -- including
+// from Tests/UnitTests itself, and from the build directory CTest launches it in.
+// The fallback keeps the file usable if someone compiles a test by hand without
+// it.
 inline std::string testDataPath(std::string const &filename)
 {
 #ifdef TEST_DATA_DIR

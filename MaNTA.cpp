@@ -7,10 +7,18 @@
 #include "SystemSolver.hpp"
 #include "PhysicsCases.hpp"
 #include "SolverConfig.hpp"
+#include "FieldModel.hpp"
 #include "DegreeAdaptation.hpp"
 
-// Load restart data into vectors
-int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vector<double> &dYdt)
+// Load restart data into vectors. `nField` is filled with how many of the
+// trailing entries of Y are a field model's psi, so the caller can shape the
+// DGSoln that wraps them.
+//
+// A file written before the field block existed has no nField variable, and
+// reads back as zero rather than as an error: every such file was written by a
+// run with no field model, so zero is the truth about it rather than a guess.
+int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vector<double> &dYdt,
+				 Index &nField)
 {
 	netCDF::NcGroup RestartGroup = restart_file.getGroup("RestartData");
 
@@ -21,6 +29,15 @@ int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vect
 
 	RestartGroup.getVar("Y").getVar(Y.data());
 	RestartGroup.getVar("dYdt").getVar(dYdt.data());
+
+	nField = 0;
+	netCDF::NcVar nFieldVar = RestartGroup.getVar("nField");
+	if (!nFieldVar.isNull())
+	{
+		int stored = 0;
+		nFieldVar.getVar(&stored);
+		nField = stored;
+	}
 
 	restart_file.close();
 
@@ -76,8 +93,25 @@ int runManta(std::string const &fname)
 		}
 	}
 
-	unsigned int k = 1;
-	std::unique_ptr<Grid> grid = makeGrid(config, config.restart ? &restart_file : nullptr, k);
+	// Two meshes and two degrees on a restart, and keeping them apart is the
+	// whole of it: `fileGrid`/`fileOrder` describe how the stored state is laid
+	// out, and are what the DOF check and setRestartValues below must use, while
+	// `grid`/`k` are what the run is solved on and are the configuration's to
+	// choose. Off a restart the two coincide and fileGrid is moved into grid.
+	unsigned int fileOrder = 1;
+	std::unique_ptr<Grid> fileGrid = makeGrid(config, config.restart ? &restart_file : nullptr, fileOrder);
+
+	unsigned int k = fileOrder;
+	std::unique_ptr<Grid> grid;
+	if (config.restart)
+	{
+		grid = restartRunGrid(config, *fileGrid);
+		k = restartRunOrder(config, fileOrder);
+	}
+	else
+	{
+		grid = std::move(fileGrid);
+	}
 
 	// Physics cases built outside this tree.
 	//
@@ -118,28 +152,79 @@ int runManta(std::string const &fname)
 	if (config.solveAdjoint)
 		adjoint = pProblem->createAdjointProblem();
 
+	// A field model is selected by name from the same process-global registry
+	// pattern the physics cases use, and is handed the parsed config file so it
+	// can read its own table. After the plugin dlopens above, since a model may
+	// come from one; and *before* the restart block below, because the field
+	// block is part of the solution vector and its length is what the restart
+	// file has to be checked against and the restart DGSoln shaped by. It is
+	// attached to the solver further down -- setFieldModel needs a solver, and a
+	// solver cannot exist until the restart values are in the problem.
+	std::shared_ptr<FieldModel> fieldModel;
+	if (!config.FieldModel.empty())
+	{
+		try
+		{
+			fieldModel = FieldModels::InstantiateFieldModel(config.FieldModel, configFile, *grid);
+		}
+		catch (std::invalid_argument const &e)
+		{
+			logmsg<LOG_LEVEL::ERROR>("Could not instantiate a field model for FieldModel = {}\n  {}",
+									 config.FieldModel, e.what());
+			return 1;
+		}
+	}
+	const Index nField = fieldModel ? fieldModel->nFieldDOF() : 0;
+
 	if (config.restart)
 	{
 		std::vector<double> Y, dYdt;
-		Index nDOF_file = LoadFromFile(restart_file, Y, dYdt);
+		Index nField_file = 0;
+		Index nDOF_file = LoadFromFile(restart_file, Y, dYdt, nField_file);
 
-		// Make sure degrees of freedom are consistent with restart file
-		const Index nCells = grid->getNCells();
-		const Index nDOF = pProblem->getNumVars() * 3 * nCells * (k + 1) +
+		// Make sure degrees of freedom are consistent with restart file. The
+		// file's mesh and degree, not the run's: this is a statement about how
+		// the vector just read is laid out.
+		const Index nCells = fileGrid->getNCells();
+		const Index nDOF = pProblem->getNumVars() * 3 * nCells * (fileOrder + 1) +
 						   pProblem->getNumVars() * (nCells + 1) +
 						   pProblem->getNumScalars() +
-						   pProblem->getNumAux() * nCells * (k + 1);
+						   pProblem->getNumAux() * nCells * (fileOrder + 1) +
+						   nField;
+
+		// Two checks, not one, because nDOF alone cannot separate them: a file
+		// with one extra field unknown and one fewer scalar has exactly the
+		// right total length, and would be read back with psi in the scalar
+		// slot. The field count is the cheaper thing to be sure of, so it is
+		// reported first and by name.
+		if (nField_file != nField)
+			throw std::invalid_argument(
+				"Restart file carries " + std::to_string(nField_file) +
+				" field unknowns but the configured FieldModel declares " +
+				std::to_string(nField) + ".");
 
 		if (nDOF_file != nDOF)
 			throw std::invalid_argument("nVars/nAux/nScalars in restart file inconsistent with physics case");
 
-		// The file's own degree, which is what its DOF are laid out at.
-		pProblem->setRestartValues(Y, dYdt, *grid, k);
-
-		// The run's degree, which may differ. setInitialConditions projects
-		// across the difference; equal degrees keep the copy path.
-		k = restartRunOrder(config, k);
+		// The file's own mesh and degree, which is what its DOF are laid out at.
+		// The run's, which may differ in either, were chosen above;
+		// setInitialConditions projects across whichever differs and keeps the
+		// copy path when neither does.
+		pProblem->setRestartValues(Y, dYdt, *fileGrid, fileOrder, nField);
 	}
+
+	// Degree adaptation builds and runs a solver per level itself, and
+	// runAdaptiveDegree has no way to take a field model -- so a field model
+	// would silently never be attached, leaving the run solving the fixed-field
+	// problem while the restart check above has already sized the state for
+	// nField unknowns. Refused rather than ignored, the way a sliced steady
+	// solve refuses it.
+	if ((config.DegreeAdaptation || !config.DegreeLadder.empty() ||
+		 !config.GridLadder.empty()) &&
+		fieldModel)
+		throw std::invalid_argument(
+			"DegreeAdaptation cannot be combined with a FieldModel: the adaptive "
+			"driver builds a solver per degree and cannot carry the field model.");
 
 	if (config.DegreeAdaptation)
 	{
@@ -150,9 +235,20 @@ int runManta(std::string const &fname)
 		auto system = runAdaptiveDegree(config, *pProblem, adjoint.get(), *grid, k,
 										*config.t_final);
 	}
+	else if (!config.DegreeLadder.empty() || !config.GridLadder.empty())
+	{
+		// Same shape, and for the same reason: a solver per rung, built inside.
+		auto system = runLadder(config, *pProblem, adjoint.get(), *grid, k,
+								*config.t_final);
+	}
 	else
 	{
 		auto system = std::make_shared<SystemSolver>(*grid, k, pProblem.get());
+
+		// Before applySolverConfig, and necessarily before runSolver: setFieldModel
+		// reshapes the solution vector and refuses once the solver is initialised.
+		if (fieldModel)
+			system->setFieldModel(fieldModel);
 
 		applySolverConfig(config, *system);
 		if (config.solveAdjoint)

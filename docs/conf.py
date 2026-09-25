@@ -39,11 +39,7 @@ extensions = [
 suppress_warnings = ["config.cache"]
 
 templates_path = ["_templates"]
-# `superpowers` holds design specs and implementation plans in Markdown. Sphinx
-# would ignore them anyway -- source_suffix is .rst and there is no myst-parser
-# -- but the build runs with -W, so excluding them costs a word and removes the
-# question.
-exclude_patterns = ["_build", "requirements.txt", "superpowers"]
+exclude_patterns = ["_build", "requirements.txt"]
 
 # The default role, so `like this` renders as literal rather than as a broken
 # cross-reference. Most inline markup in these pages is a config key, a file

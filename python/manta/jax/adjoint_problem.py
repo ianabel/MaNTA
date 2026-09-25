@@ -62,8 +62,16 @@ class JAXAdjointProblem(MaNTA.AdjointProblem):
         g, _ = ravel_pytree(dgdp)
         g = jnp.reshape(g, (self.np - self.np_boundary, len(positions)))
 
+        # Rows only. A scalar pair pads *every* axis, which would add a spurious
+        # point column as well as the boundary-parameter row -- and the extra
+        # column is invisible downstream, since the non-spatial branch of
+        # PyAdjointProblem::dGFndp reads dgdp(p, ind) with ind stopping at the
+        # last real node.
         out = jnp.pad(
-            g, pad_width=(0, self.np_boundary), mode="constant", constant_values=0
+            g,
+            pad_width=((0, self.np_boundary), (0, 0)),
+            mode="constant",
+            constant_values=0,
         )
 
         return out

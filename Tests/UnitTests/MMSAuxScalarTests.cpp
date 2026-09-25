@@ -306,6 +306,10 @@ public:
 // into dG's scalar block.
 class ManufacturedScalarDifferential : public ManufacturedScalarBase
 {
+    // Its own, not a process-wide one; see Integrator::Cache. mutable because
+    // InitialScalarDerivative is const and filling a memo is not a change.
+    mutable Integrator::Cache integrator;
+
 public:
     ManufacturedScalarDifferential() : ManufacturedScalarBase(true) {}
 
@@ -336,7 +340,7 @@ public:
     Value InitialScalarDerivative(Index, const DGSoln &y, const DGSoln &) const override
     {
         return mass(y.evalOnNodes(),
-                    Integrator::getIntegrationWeights(y.getBasis(), y.getGrid()));
+                    integrator.integrationWeights(y.getBasis(), y.getGrid()));
     }
 
     static double extraError(SystemSolver &sys, Grid const &, double t)

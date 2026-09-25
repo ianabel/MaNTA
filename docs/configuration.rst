@@ -12,7 +12,7 @@ by both through ``loadSolverConfig``. A key has the same name, the same type and
 the same default whichever way it arrives. The few places the two surfaces still
 differ are deliberate, and are listed in :ref:`config-divergences` below.
 
-``./MaNTA --list-options`` prints the current schema — every key, its type, its
+``build/MaNTA --list-options`` prints the current schema — every key, its type, its
 default and a line of description — straight from the table this page is written
 from.
 
@@ -104,6 +104,18 @@ Problem definition
        :ref:`mixed condition <mixed-boundaries>` with :math:`d = 1` when it is set
        and :math:`b = 1` when it is not, so the per-variable, per-end version of
        the same choice is available to a case through its own spec.
+   * - ``FieldModel``
+     - ``""``, *file only*
+     - Name of a registered magnetic-field model to couple to, as registered by
+       ``REGISTER_FIELD_MODEL_IMPL``. Absent — the default — means no coupling,
+       and an uncoupled run's ``.nc`` is bit-for-bit what it was before the
+       feature existed. Its ``.restart.nc`` is not, by exactly one scalar:
+       ``RestartData/nField`` is written on every run, and reads back as ``0``.
+       An unrecognised name is an error listing what *is* registered;
+       note that no field model is registered in this tree yet. Like
+       ``TransportSystem`` this is a ``ProblemSelection`` key, so passing it to
+       ``Runner.configure`` is an error rather than being ignored. See
+       :doc:`field_coupling`.
    * - ``High_Grid_Boundary``
      - ``false``
      - Refine the grid towards both ends instead of spacing cells uniformly.
@@ -156,6 +168,18 @@ Time integration
        when the transient is not the interesting part, at the cost of making IDA
        more likely to overshoot and retry. ``aggressiveTimesteps`` is a
        deprecated spelling of this and still works, with a warning.
+   * - ``ForceConsistentIC``
+     - ``false``
+     - Run ``IDACalcIC`` on a run that would otherwise skip it. A steady solve
+       skips it because it discards the answer; a restart skips it because it
+       resumes from a state already on the constraint manifold. **A cold
+       time-marching run always runs it and this cannot turn that off** — if you
+       do not care about the transient, use ``SteadyStateSolver =
+       PseudoTransient`` or ``Newton`` rather than an uncorrected time march. The
+       key is therefore one-directional: it only ever adds the call back. The
+       case that needs it is a restart onto a *different* discretisation, which
+       is projected rather than copied and so is not a consistent state. See
+       :ref:`warm-starts`.
    * - ``SteadyStateSolve``
      - ``false``
      - Terminate when :math:`\mathrm{d}y/\mathrm{d}t` becomes small rather than at
@@ -169,16 +193,6 @@ Time integration
        ``SteadyStateSolve`` simply sets the tolerance.
        ``Runner.run_ss()`` arms it whether or not either key was given, and falls
        back to ``1e-3``.
-   * - ``ObjectiveDecreaseTolerance``
-     - ``0.0`` — off
-     - If nonzero, the run is abandoned before the time loop when
-       :math:`\mathrm{d}G/\mathrm{d}t < -` this at the initial condition. For an
-       optimisation sweep that turns a step which was going to make the objective
-       worse into the cost of initialisation alone. Requires ``solveAdjoint``,
-       since the adjoint problem is what defines :math:`G`. Absolute, not
-       relative — it carries the units of the objective over time, so there is no
-       number worth defaulting to and zero means "off". A negative value is an
-       error rather than a quiet "off". See :doc:`adjoints`.
    * - ``tau``
      - ``1.0``
      - The HDG stabilisation parameter. Constant across the domain.
@@ -213,7 +227,8 @@ Output
    * - ``WriteDebugDatFiles``
      - ``false``
      - Also write ``<stem>.dydt.dat`` and ``<stem>.res.dat``. Additionally
-       requires a ``PHYSICS_DEBUG`` build (``make DEBUG=on``).
+       requires a ``PHYSICS_DEBUG`` build (``cmake --preset debug``, or
+       ``-DMANTA_PHYSICS_DEBUG=ON``).
 
 ``<stem>`` throughout is ``OutputFilename``. The two ``.dat`` options are
 deliberately **not** nested under ``WriteOutput``: they are opt-in already, so a
@@ -306,6 +321,63 @@ Adjoints and superconvergence
        :math:`\Delta k = \lceil \log_b(E/\epsilon) \rceil`. Between 10 and 100;
        larger is more aggressive and so asks for fewer degrees.
 
+Coupling to a magnetic-field model
+----------------------------------
+
+These four are read whether or not a model is attached, and do nothing at all
+without one — ``FieldModel``, under *Problem definition* above, is what turns
+the coupling on.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 12 58
+
+   * - Key
+     - Default
+     - Meaning
+   * - ``FieldSolve``
+     - ``"iterative"``
+     - How the coupled Jacobian is solved. ``iterative`` is block Gauss–Seidel
+       between the transport and field blocks with Irons–Tuck acceleration, at
+       one transport solve per sweep. ``exact`` forms the Schur complement onto
+       the field block, at :math:`\texttt{nField}+1` transport solves per
+       Jacobian solve.
+   * - ``FieldSolveTolerance``
+     - ``1e-8``
+     - Where the sweep stops — **one key, two tests**, because the two
+       directions have different things available to measure. Forward, it is a
+       relative *change*: the sweep stops once
+       :math:`\|\delta\psi\| \le \texttt{tol}\,\|\psi\|` for the unaccelerated
+       iterate. In the adjoint it is a relative *backward error*: the field row
+       of the transposed system holds identically at every iterate, so the
+       residual of the pair returned is exactly
+       :math:`A_2^{T}\,\delta z_\psi`, and the sweep stops once that is below
+       ``tol`` times the norm of the right-hand side. Both are scale
+       equivariant, so neither has an absolute floor, and neither returns an
+       under-converged answer — reaching the cap escalates to the exact solve.
+   * - ``FieldSolveMaxSweeps``
+     - ``20``
+     - Sweep cap for the forward solve. Reaching it escalates to the exact
+       solve; it does not return an under-converged answer.
+   * - ``FieldSolveMaxAdjointSweeps``
+     - ``100``
+     - The same cap for the adjoint solve. Separate, and larger, because the
+       adjoint always runs at :math:`c_j = 0` where the coupling is stiffest —
+       five field unknowns have been measured needing 13–38 sweeps.
+
+.. important::
+
+   **``FieldSolve = exact`` is a verification tool, not a slow mode.** It is what
+   makes the coupled system checkable by finite-differencing the residual and
+   requiring :math:`J\,\delta y = g`, and it is the oracle the iterative path is
+   measured against.
+
+   And the choice between them is a **cost** choice, never an accuracy one: the
+   sweep escalates to the exact solve in both directions rather than guessing, so
+   ``iterative`` can be slower than ``exact`` and can never be less accurate. On
+   every fixture in this tree it *is* slower — see :doc:`field_coupling` for the
+   break-even and the measured numbers.
+
 .. The label is `config-divergences` for historical reasons: it named a section
    listing how the two readers disagreed, and docs/python.rst links to it.
 
@@ -386,6 +458,6 @@ binary's exit status and ``manta.run``'s return value. ``Runner.configure``,
 which has no exit status to hand back, raises ``RuntimeError`` for the restart
 file too.
 
-Finally, ``./MaNTA --list-options`` prints the schema as it actually stands —
+Finally, ``build/MaNTA --list-options`` prints the schema as it actually stands —
 every key, its type, its default and a line of description. Prefer it to this
 page when the two disagree, and fix the page.

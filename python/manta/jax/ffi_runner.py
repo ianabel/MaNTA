@@ -43,26 +43,50 @@ ffi_ops_names = [
     "get_g_val",
     "run",
     "run_ss",
+    "start_steady",
+    "continue_steady",
+    "finish_steady",
+    "abandon_steady",
 ]
 ffi_ops = {}
 
 
-def register_ffi_cpu(op_name):
-    for name, target in MaNTA.runner_ffi_ops().items():
+def _match(ops, op_name):
+    """The C++ symbol implementing `op_name`, or None.
+
+    Exact match first, prefix scan second. The prefix scan alone is ambiguous --
+    "run" is a prefix of both "run_ffi" and "run_ss_ffi" -- and picks the right
+    one only because runner_ffi_ops() is a dict in insertion order and "run_ffi"
+    goes in first. Trying "<op>_ffi" and "<op>" exactly makes the resolution a
+    property of the names rather than of the order they were registered in.
+    """
+    for candidate in (op_name + "_ffi", op_name):
+        if candidate in ops:
+            return candidate
+    for name in ops:
         if name.startswith(op_name):
-            print("Registering cpu implementation for operation " + op_name)
-            jax.ffi.register_ffi_target(name, target, platform="cpu")
             return name
-    return False
+    return None
+
+
+def register_ffi_cpu(op_name):
+    ops = MaNTA.runner_ffi_ops()
+    name = _match(ops, op_name)
+    if name is None:
+        return False
+    print("Registering cpu implementation for operation " + op_name)
+    jax.ffi.register_ffi_target(name, ops[name], platform="cpu")
+    return name
 
 
 def register_ffi_gpu(op_name):
-    for name, target in MaNTA.runner_ffi_ops_cuda().items():
-        if name.startswith(op_name):
-            print("Registering gpu implementation for operation " + op_name)
-            jax.ffi.register_ffi_target(name, target, platform="CUDA")
-            return name
-    return False
+    ops = MaNTA.runner_ffi_ops_cuda()
+    name = _match(ops, op_name)
+    if name is None:
+        return False
+    print("Registering gpu implementation for operation " + op_name)
+    jax.ffi.register_ffi_target(name, ops[name], platform="CUDA")
+    return name
 
 
 has_gpu = hasattr(MaNTA, "runner_ffi_ops_cuda")
@@ -129,6 +153,56 @@ class FFIRunner(MaNTA.Runner):
             jax.ffi.ffi_call(ffi_ops["run_ss"][Platform.CPU], [], has_side_effect=True)(
                 obj=self.get_address()
             )
+
+    """
+    A steady solve driven in slices.
+
+    Unlike run/run_ss these keep their lowercase names rather than being
+    disabled, because manta.SteadySolve -- the intended entry point -- calls
+    them, so a driver gets the context manager and its teardown guarantees for
+    free:
+
+        with manta.SteadySolve(ffi_runner, estimate=False) as solve:
+            for outcome, stats in solve:
+                ...
+
+    The outcome comes back as a concrete value, which forces a sync. That is
+    what lets a Python `while` branch on it, and it is also why a slice loop
+    belongs in eager code or inside an io_callback -- under jit the outcome is a
+    tracer and the loop cannot be written. objective.py already runs the solve
+    inside an io_callback, which is exactly the right place.
+
+    steadyStats() and objectiveEstimate() need no FFI op: they read host-side
+    C++ state and touch no device memory, so the inherited MaNTA.Runner methods
+    work here unchanged.
+    """
+
+    def start_steady(self, estimate=True):
+        return self._steady_slice("start_steady", estimate)
+
+    def continue_steady(self, estimate=True):
+        return self._steady_slice("continue_steady", estimate)
+
+    def _steady_slice(self, op, estimate):
+        with jax.default_device(cpu_device):
+            outcome = jax.ffi.ffi_call(
+                ffi_ops[op][Platform.CPU],
+                jax.ShapeDtypeStruct((), cpu_i_dtype),
+                has_side_effect=True,
+            )(cpu_i_dtype(1 if estimate else 0), obj=self.get_address())
+        return MaNTA.SteadyOutcome(int(outcome))
+
+    def finish_steady(self):
+        with jax.default_device(cpu_device):
+            jax.ffi.ffi_call(
+                ffi_ops["finish_steady"][Platform.CPU], [], has_side_effect=True
+            )(obj=self.get_address())
+
+    def abandon_steady(self):
+        with jax.default_device(cpu_device):
+            jax.ffi.ffi_call(
+                ffi_ops["abandon_steady"][Platform.CPU], [], has_side_effect=True
+            )(obj=self.get_address())
 
     def Get_G(self):
         with jax.default_device(cpu_device):

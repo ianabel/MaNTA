@@ -1,0 +1,26 @@
+Registering cpu implementation for operation get_solution
+Registering gpu implementation for operation get_solution
+Registering cpu implementation for operation get_adjoint_gradients
+Registering gpu implementation for operation get_adjoint_gradients
+Registering cpu implementation for operation get_g_val
+Registering cpu implementation for operation run
+Registering cpu implementation for operation run_ss
+Registering cpu implementation for operation start_steady
+Registering cpu implementation for operation continue_steady
+Registering cpu implementation for operation finish_steady
+Registering cpu implementation for operation abandon_steady
+Using cache directory: /global/cfs/cdirs/mp217/eatocco/jax-cache
+[CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3)]
+[0.         0.1        0.375      0.64442105 0.79770178 0.88490722
+ 0.93452069 0.9627471  1.        ]
+Initializing yancc wrapper
+yancc_wrapper initialized successfully with resolution na=45, nx=7.
+Normalizing particle rate: 2.889939093478991e+19 #/m^3/s
+Normalizing heat rate: 4630.192877695424 W/m^3
+Using batch size 16
+configuring
+Successfully created StellaratorTransport object
+Steady solve: PseudoTransient on 8 cells at k = 3, tolerance 5e-05
+  initial ||F|| = 0.0849112, dt = 0.01, SER rate 1, floor 2, max step inf
+  step          dt       ||F||  iters    res    jac  solves  outcome
+     0   1.000e-02   1.843e-02      2      4      1       2  accepted
