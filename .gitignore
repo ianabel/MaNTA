@@ -31,6 +31,7 @@ python/random/
 .clang-format
 compile_commands.json
 *.png
+*.eps
 tags
 *.h5
 venv

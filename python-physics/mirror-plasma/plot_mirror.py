@@ -99,6 +99,7 @@ _final_state = State(
     np.stack((Gamma[-1, :], Pi[-1, :], qi[-1, :], qe[-1, :])).transpose(),
     np.atleast_2d(phi[-1, :]).transpose(),
     np.stack((E[-1], I[-1], Current[-1])),
+    np.zeros((len(x), 4)),
 )
 
 _initial_state = State(
@@ -107,6 +108,7 @@ _initial_state = State(
     np.stack((Gamma[0, :], Pi[0, :], qi[0, :], qe[0, :])).transpose(),
     np.atleast_2d(phi[0, :]).transpose(),
     np.stack((E[0], I[0], Current[0])),
+    np.zeros((len(x), 4)),
 )
 
 _all_states = State(
@@ -115,6 +117,7 @@ _all_states = State(
     np.stack((Gamma, Pi, qi, qe)).transpose(),
     np.atleast_3d(np.atleast_2d(phi).transpose()),
     np.stack((E, I, Current)),
+    np.zeros((len(x), len(t), 4)),
 )
 
 
@@ -123,7 +126,13 @@ final_state = jax.vmap(MirrorPlasmaState.from_state, (State.vmap_axes(), 0, None
 )
 
 
-params_no_AD = eqx.tree_at(lambda p: p.Config.ADCoefficient, params, 0.0)
+params_no_AD = eqx.tree_at(
+    lambda p: p.Config.ADFinalCoeffs,
+    params,
+    jnp.zeros(
+        4,
+    ),
+)
 MP.params = params_no_AD
 fluxes_no_ad = MP.ComputePhysics(_final_state.to_manta(), x, t[-1])[0]
 initial_state = jax.vmap(MirrorPlasmaState.from_state, (State.vmap_axes(), 0, None))(

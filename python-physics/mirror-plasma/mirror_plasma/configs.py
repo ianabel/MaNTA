@@ -25,7 +25,7 @@ CMFX = MirrorPlasmaConfig(
     # IonSpecies=Deuterium(),
     ADCoefficient=0.1,
     ADDecayRates=0.5 * np.ones((4,)),
-    ADFinalCoeffs=[0.2, 0.005, 0.01, 0.1],
+    ADFinalCoeffs=[0.2, 0.001, 0.005, 0.1],
 )
 
 CMFX1keV = MirrorPlasmaConfig(
@@ -52,7 +52,7 @@ CMFX1keV = MirrorPlasmaConfig(
 
 Fusion = MirrorPlasmaConfig(
     0.1,
-    0.5,
+    0.7,
     gamma=0.5,
     gamma_d=1e-3,
     gamma_h=1.0,
@@ -65,7 +65,7 @@ Fusion = MirrorPlasmaConfig(
     InitialIonTemperatureHeight=1.0,
     InitialDensityHeight=0.2,
     NeutralDensity=1e13,
-    PlasmaVoltage=6.0e6,
+    PlasmaVoltage=10.0e6,
     MagneticFieldStrength=4.5,
     ParticleSourceHeight=10.0,
     ParticleSourceWidth=0.2,
@@ -78,5 +78,5 @@ Fusion = MirrorPlasmaConfig(
     IonSpecies=DeuteriumTritium(),
     ADCoefficient=10.0,
     ADDecayRates=2.0 * np.ones((4,)),
-    ADFinalCoeffs=[50.0, 0.1, 0.2, 200.0],
+    ADFinalCoeffs=[50.0, 0.4, 0.4, 200.0],
 )

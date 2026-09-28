@@ -49,12 +49,23 @@ def buildSpec(config: MirrorPlasmaConfig) -> MaNTA.SystemSpec:
             "n0",
             lower=MaNTA.Neumann,
             upper=MaNTA.Neumann,
+            source_reads_time_derivatives=True,
         ),
         MaNTA.Field(
-            "AngularMomentum", "angular momentum density", "m_i n0 a^2 cs0 / a"
+            "AngularMomentum",
+            "angular momentum density",
+            "m_i n0 a^2 cs0 / a",
         ),
-        MaNTA.Field("IonEnergy", "ion energy density", "n0 T0"),
-        MaNTA.Field("ElectronEnergy", "electron energy density", "n0 T0"),
+        MaNTA.Field(
+            "IonEnergy",
+            "ion energy density",
+            "n0 T0",
+        ),
+        MaNTA.Field(
+            "ElectronEnergy",
+            "electron energy density",
+            "n0 T0",
+        ),
     ]
 
     aux = [
@@ -244,6 +255,7 @@ class MirrorPlasma(VectorizedTransportSystem):
             Flux_=jnp.zeros((4,)),
             Aux_=jnp.zeros((1,)),
             Scalars_=jnp.zeros((self.nScalars,)),
+            VariableDot_=jnp.zeros((4,)),
         )
         s1 = MirrorPlasmaState.from_state(s0, x, self.params)
 

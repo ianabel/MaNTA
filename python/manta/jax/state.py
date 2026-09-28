@@ -25,7 +25,9 @@ class State(eqx.Module):
     # and jax.grad of a source that never reads it has nothing to differentiate.
     # It is last in the signature so that State(v, d, f, a, s) still means what
     # it always did.
-    def __init__(self, Variable_, Derivative_, Flux_, Aux_, Scalars_, VariableDot_=None):
+    def __init__(
+        self, Variable_, Derivative_, Flux_, Aux_, Scalars_, VariableDot_=None
+    ):
         self.Variable = Variable_
         self.Derivative = Derivative_
         self.Flux = Flux_

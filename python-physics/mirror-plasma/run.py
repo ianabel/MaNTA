@@ -5,7 +5,7 @@ from mirror_plasma import MirrorPlasma
 from mirror_plasma import configs as config
 import numpy as np
 
-nCells = 43
+nCells = 22
 
 
 def cheb_nodes(nCells):
@@ -32,4 +32,4 @@ solver_config = {
 }
 
 MP = MirrorPlasma(config.Fusion, solver_config=solver_config)
-MP.run(10)
+MP.run(20)
