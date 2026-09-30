@@ -248,5 +248,6 @@ for a in ax:
     a.set_box_aspect(1)
 fig.tight_layout()
 fig.set_figwidth(5.0)
+fig.set_figheight(3.0)
 fig.savefig("adjoints.eps", dpi=500)
 plt.show()

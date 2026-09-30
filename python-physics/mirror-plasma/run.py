@@ -5,7 +5,7 @@ from mirror_plasma import MirrorPlasma
 from mirror_plasma import configs as config
 import numpy as np
 
-nCells = 22
+nCells = 43
 
 
 def cheb_nodes(nCells):
