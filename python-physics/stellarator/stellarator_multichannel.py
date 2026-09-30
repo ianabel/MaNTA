@@ -263,7 +263,10 @@ class StellaratorTransport(MaNTA.TransportSystem):
         # local until the base class exists, because until then there is no
         # C++ object behind self to hang attributes on.
 
-        config = StellaratorConfig(**st_config)
+        self.xL = solver_config["Lower_boundary"]
+        self.xR = solver_config["Upper_boundary"]
+
+        config = StellaratorConfig(rhoUpper=self.xR, **st_config)
 
         self.params = StellaratorParams(config, _B0=5.0)
         if "Superconvergent" in solver_config and solver_config["Superconvergent"]:
@@ -278,9 +281,6 @@ class StellaratorTransport(MaNTA.TransportSystem):
         )
         if self.params.config.useSharding:
             print(f"Using batch size {self.batch_size}")
-
-        self.xL = solver_config["Lower_boundary"]
-        self.xR = solver_config["Upper_boundary"]
         # jax.device_put(yancc_wrapper, data_sharding)
         self.yancc_wrapper = yancc_wrapper
         self.points = yancc_wrapper.rho
@@ -288,7 +288,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         self.pnorm = self.params.constants.T0 * self.params.constants.n0
         self.field, self.vp, self.vpp = self.yancc_wrapper.get_fields()
         self.vp_interp = interpax.Akima1DInterpolator(self.points, self.vp, check=False)
-        g = [self.FusionPower]
+        g = [self.StoredEnergy]
 
         self.adjointProblem = StellaratorAdjointProblem(
             self, g, self.yancc_wrapper, len(self.points)
@@ -365,7 +365,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return G, G_p
 
     def getPressure(self, points=None):
-        if (self.params.config.evolveDensity):
+        if self.params.config.evolveDensity:
             ui = self.runner.Get_profile(Channel.IonEnergy) / self.vp
         else:
             ui = self.runner.Get_profile(0) / self.vp
@@ -493,7 +493,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
                 -((x - params.config.ECHCenter) ** 2) / (2 * params.config.ECHWidth**2)
             )
             - self.CollisionalEnergyExchange(state, params)
-            + params.config.FusionFactor * params.constants.AlphaHeating(state.n, state.Ti)
+            + params.config.FusionFactor
+            * params.constants.AlphaHeating(state.n, state.Ti)
             / params.constants.HeatEquationNormalization()
         )
 
@@ -519,7 +520,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
             Ti = pi / n
         else:
             n = StellaratorState.initial_profile(
-                x, params.config.EdgeDensity, params.config.n0
+                x, params.config.EdgeDensity, params.config.n0, params.config.rhoUpper
             )
             Ti = 2.0 / 3.0 * state.Variable[0] / n
 
@@ -540,7 +541,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
             Ti = pi / n
         else:
             n = StellaratorState.initial_profile(
-                x, params.config.EdgeDensity, params.config.n0
+                x, params.config.EdgeDensity, params.config.n0, params.config.rhoUpper
             )
             Ti = 2.0 / 3.0 * state.Variable[0] / n
 
@@ -550,7 +551,10 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def InitialValue(self, index, x):
         def constant_density(index, x):
             n = StellaratorState.initial_profile(
-                x, self.params.config.EdgeDensity, self.params.config.n0
+                x,
+                self.params.config.EdgeDensity,
+                self.params.config.n0,
+                self.params.config.rhoUpper,
             )
 
             return 1.5 * self.params.config.EdgeTemperature * n * self.vp_interp(x)
@@ -558,7 +562,10 @@ class StellaratorTransport(MaNTA.TransportSystem):
         def ambipolar(index, x):
             def n0(x):
                 return StellaratorState.initial_profile(
-                    x, self.params.config.EdgeDensity, self.params.config.n0
+                    x,
+                    self.params.config.EdgeDensity,
+                    self.params.config.n0,
+                    self.params.config.rhoUpper,
                 ) * self.vp_interp(x)
 
             def ui0(x):
@@ -567,7 +574,10 @@ class StellaratorTransport(MaNTA.TransportSystem):
                     / 2.0
                     * n0(x)
                     * StellaratorState.initial_profile(
-                        x, self.params.config.EdgeTemperature, self.params.config.T0
+                        x,
+                        self.params.config.EdgeTemperature,
+                        self.params.config.T0,
+                        self.params.config.rhoUpper,
                     )
                 )
 
@@ -577,7 +587,10 @@ class StellaratorTransport(MaNTA.TransportSystem):
                     / 2.0
                     * n0(x)
                     * StellaratorState.initial_profile(
-                        x, self.params.config.EdgeTemperature, self.params.config.T0
+                        x,
+                        self.params.config.EdgeTemperature,
+                        self.params.config.T0,
+                        self.params.config.rhoUpper,
                     )
                 )
 
@@ -668,6 +681,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         grad_w_vprime = jnp.pad(grad_unraveled, ((0, 0), (0, 2)), mode="constant")
 
         return grad_w_vprime.transpose()
+
     @MaNTA_Decorator
     def dg(self, i, states, positions):
         out = jax.vmap(

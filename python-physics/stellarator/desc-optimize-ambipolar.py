@@ -9,7 +9,7 @@ from objective2 import make_objective
 from yancc_wrapper2 import yancc_data
 import matplotlib.pyplot as plt
 from desc.profiles import SplineProfile
-from desc.plotting import plot_boozer_surface, plot_boundaries, plot_qs_error
+from desc.plotting import plot_boozer_surface, plot_boundaries, plot_qs_error, plot_1d
 from desc.plotting import plot_comparison
 from desc.objectives import (
     AspectRatio,
@@ -41,7 +41,7 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
 fname = "stellarator_opt_amb"
 
-eq_name = "eq_amb3"
+eq_name = "eq_amb5"
 #
 # st_config = {
 #     "ParticleSourceCenter": 0.0,
@@ -61,21 +61,22 @@ eq_name = "eq_amb3"
 #     "useBatching": True,
 # }
 #
-
+fac = 1.0
 st_config = {
     "ParticleSourceCenter": 0.0,
-    "ParticleSourceHeight": 1.25e-2,
-    "ParticleSourceWidth": 0.5,
+    "ParticleSourceHeight": fac * 1.6e-2,
+    "ParticleSourceWidth": 0.6,
     "NBICenter": 0.0,
-    "NBIPower": 0.6,
-    "NBIWidth": 0.3,
+    "NBIPower": fac * 1.25,
+    "NBIWidth": 0.25,
     "ECHCenter": 0.0,
-    "ECHPower": 0.1,
+    "ECHPower": fac * 8.76e-2,
     "ECHWidth": 0.26,
     "EdgeTemperature": 0.2,
     "EdgeDensity": 0.2,
-    "n0": 1.0,
+    "n0": 0.5,
     "T0": 1.0,
+    "FusionFactor": 0.01,
     "evolveDensity": True,
     "useBatching": True,
 }
@@ -83,15 +84,21 @@ st_config = {
 
 rho_upper = 1.0
 rtol = 1e-2
-atol = 1e-3
+atol = 1e-10
 # nodes = [0.0, 0.4, 0.6, 0.75, 0.95, 1.0]
 npoints = 8
 degree = 3
-base = 1.6
-tau = 1.0
+# base = 1.5
+# tau = 0.5
 #
-nodes = 1 - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
-nodes = np.concatenate(([0, 0.1], nodes, [1]))
+base = 1.5
+tau = 0.5
+#
+nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
+
+nodes = np.concatenate(
+    ([0, 0.1], nodes, [rho_upper])
+)  # nodes = np.concatenate(([0, 0.1], nodes, [0.98,1]))
 # nodes = np.linspace(0, 1.0, npoints + 1)
 print(nodes)
 # # %%
@@ -108,7 +115,7 @@ solver_config = {
     "delta_t": 1.0,
     "initialTimestep": 0.01,
     "MinStepSize": 1e-9,
-    "SteadyStateTolerance": 5e-5,
+    "SteadyStateTolerance": 1e-5,
     "AggressiveTimesteps": False,
     "WriteDatFile": True,
     "SteadyStateDiagnostics": True,
@@ -118,6 +125,7 @@ solver_config = {
     "zeroFlux": True,
     "solveAdjoint": False,
     "PseudoTransientSERRate": 1.0,
+    "PseudoTransientSERFloor": 2.0,
 }
 
 
@@ -149,11 +157,8 @@ desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 
 # # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
 # # default is zero pressure and zero current
-# eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
-# # this is usually all you need to solve a fixed boundary equilibrium
-# eq = eq.solve(x_scale="ess")[0]
-# print(pressure_rho)
-#
+# this is usually all you need to solve a fixed boundary equilibrium
+
 # surf = FourierRZToroidalSurface(
 #     R_lmn=[1, 0.125, 0.1],
 #     Z_lmn=[-0.125, -0.1],
@@ -164,20 +169,21 @@ desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 # # # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
 # # # default is zero pressure and zero current
 # eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
+# eq = desc.compat.rescale(
+#     eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
+# )
 #
-eqs = desc.io.load(eq_name + "_all_equilibria.h5")
-#
-# eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
-# # #
-# # eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
-# eq.pressure = desc_pressure
+# # # #
+# # eq.pressure = desc_pressure
 # eq = eq.solve(x_scale="ess")[0]
-# # # desc_pressure = eq.get_profile('p')
 # eqs = EquilibriaFamily(eq)
+# # # desc_pressure = eq.get_profile('p')
+eqs = desc.io.load(eq_name + "_all_equilibria.h5")
 eq = eqs[-1].copy()
+
 eq_init = eq.copy()
 
-V0 = eq.compute("V")["V"]
+V0 = eqs[0].compute("V")["V"]
 # yancc_wrapper = yancc_data.from_eq(points, grid = yancc_grid,rho = yancc_rho, Density=Density, eq=eq_init, nt = yancc_ntheta, nz = yancc_nzeta)
 yancc_wrapper = yancc_data.from_eq(
     points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
@@ -188,9 +194,9 @@ yancc_wrapper = yancc_data.from_eq(
 # # # %%
 # with jax.log_compiles(True):
 #
-st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-st.run()
-
+# st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+# st.run()
+#
 # # %%
 #
 # plt.plot(points, 2.0 / 3.0 * st.InitialValue(0, points) / yancc_wrapper.Vp)  # %%
@@ -221,51 +227,8 @@ st.run()
 #     "Solver": solver_config,
 # }
 # pi = []
-# fig, ax = plt.subplots()
-# eq2 = eq.copy()
-# fam2 = EquilibriaFamily(eq2)
-# niters = 2
-# for k in range(niters):
-#     eq2 = eq2.copy()
+fig, ax = plt.subplots()
 #
-#     fig, ax = plot_1d(eq2, "pressure", label="DESC " + str(k), ax=ax)
-#
-#     yancc_wrapper = yancc_data.from_eq(
-#         points, eq=eq2, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
-#     )
-#     pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
-#     st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-#     st.run()
-#
-#     pi = st.getPressure()
-#     pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
-#     ax.plot(pressure_rho, pi_manta, label="MANTA" + str(k))
-#     eq2.pressure = SplineProfile(pi_manta, pressure_rho)
-#     # fit the current profile to a power series, with c_0=c_1=0
-#     # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])
-#     # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
-#     # re-solve the equilibrium
-#     eq2, _ = eq2.solve(objective="force", optimizer="lsq-exact", verbose=3)
-#     fam2.append(eq2)
-#     eqs.append(eq2)
-# eq_self_consistent = eq2.copy()
-#
-# ax.legend()
-# fig.savefig("initial_self_consistent_pressure.png")
-# # %%
-#
-# plot_comparison(eqs=[eq_init, eq2], labels=["Initial", "self-consistent"])
-# eq = eq2.copy()
-#
-# # %%
-# # %%
-#
-#
-#
-# %%
-
-
-# %%
 solver_config = {
     "OutputFilename": fname,
     "Polynomial_degree": degree,
@@ -282,7 +245,7 @@ solver_config = {
     "WriteDatFile": True,
     "restart": True,
     "zeroFlux": True,
-    "SteadyStateTolerance": 5e-4,
+    "SteadyStateTolerance": 5e-5,
     "SteadyStateSolver": "Newton",
     "SteadyStateDiagnostics": True,
     "MaxRejectedSteps": 3,
@@ -294,6 +257,54 @@ config = {
     "Stellarator": st_config,
     "Solver": solver_config,
 }
+
+
+eq2 = eq.copy()
+fam2 = EquilibriaFamily(eq2)
+niters = 2
+for k in range(niters):
+    eq2 = eq2.copy()
+
+    fig, ax = plot_1d(eq2, "pressure", label="DESC " + str(k), ax=ax)
+
+    yancc_wrapper = yancc_data.from_eq(
+        points, eq=eq2, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
+    )
+    pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
+    st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+    st.run()
+
+    pi = st.getPressure()
+    pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
+    ax.plot(pressure_rho, pi_manta, label="MANTA" + str(k))
+    eq2.pressure = SplineProfile(pi_manta, pressure_rho)
+    # fit the current profile to a power series, with c_0=c_1=0
+    # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])
+    # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
+    # re-solve the equilibrium
+    eq2, _ = eq2.solve(objective="force", optimizer="lsq-exact", verbose=3)
+    fam2.append(eq2)
+    eqs.append(eq2)
+eq_self_consistent = eq2.copy()
+#
+ax.legend()
+fig.savefig("initial_self_consistent_pressure.png")
+# # %%
+#
+plot_comparison(eqs=[eq_init, eq2], labels=["Initial", "self-consistent"])
+# plt.show()
+eq = eq2.copy()
+#
+# # %%
+# # %%
+#
+#
+#
+# %%
+
+
+# %%
+
 
 manta_objective = make_objective(config, yancc_res=yancc_res)
 
@@ -391,8 +402,8 @@ obj_mirror_ratio = ObjectiveFromUser(
     fun=fun_mirror_ratio,
     thing=eq,
     grid=yancc_desc_grid,
-    bounds=(0.0, 0.2),
-    weight=2.0,
+    bounds=(0.0, 0.15),
+    weight=5.0,
     name="my mirror ratio",
 )
 
@@ -406,11 +417,11 @@ obj_mirror_ratio = ObjectiveFromUser(
 # pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 1e-5)
 
 # pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 2e-6)
-stored_energy_weight = 1.0
+stored_energy_weight = 5.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()
-max_it = 8
+max_it = 30
 
 eqfam = EquilibriaFamily(eq)
 # ks = [1, 2, eq.M + 1]
@@ -422,7 +433,7 @@ eqfam = EquilibriaFamily(eq)
 objectives = [
     # AspectRatio(eq=eq, target=6, weight=10),
     obj_mirror_ratio,
-    Volume(eq=eq, target=V0, weight=10.0),
+    Volume(eq=eq, target=V0, weight=1.0),
     # RotationalTransform(eq=eq, target=0.42, weight=10),
     ObjectiveFromUser(
         objective_from_user_fun,
@@ -438,8 +449,8 @@ objectives = [
 objective = ObjectiveFunction(objectives)
 objective.build(use_jit=False)
 
-k = 4
-#
+k = 6
+# #
 R_modes = np.vstack(
     (
         [0, 0, 0],
@@ -467,11 +478,11 @@ eq, info_out = eq.optimize(
     optimizer="proximal-lsq-exact",
     x_scale="ess",
     maxiter=max_it,
-    ftol=1e-3,  # stopping tolerance on the function value
+    ftol=1e-4,  # stopping tolerance on the function value
     xtol=1e-6,  # stopping tolerance on the step size
     gtol=1e-6,  # stopping tolerance on the gradient
     # options={
-    #     "initial_trust_radius": 1.0,
+    #     "initial_trust_radius": 1e-2,
     #     # "perturb_options": {"order": 2, "verbose": 3},  # use 2nd-order perturbations
     #     #     # "solve_options": {
     #     #     #     "ftol": 5e-3,
@@ -480,7 +491,7 @@ eq, info_out = eq.optimize(
     #     #     #     "verbose": 3,
     #     # },  # for equilibrium subproblem
     # },
-    verbose=3,
+    # verbose=3,
     copy=True,
 )
 
@@ -545,6 +556,6 @@ fig, ax = plot_boozer_surface(eqfam[-1], fieldlines=8)
 fig.savefig("figs/" + eq_name + "final_boozer_surface.png")
 fig, ax = plot_qs_error(eqfam[-1])
 fig.savefig("figs/" + eq_name + "final_qs_error.png")
-
+plt.show()
 
 # %%

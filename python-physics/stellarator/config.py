@@ -15,6 +15,7 @@ class StellaratorConfig(eqx.Module):
     ECHWidth: float
     EdgeTemperature: float
     EdgeDensity: float
+    rhoUpper: float
     n0: float
     T0: float
     FusionFactor: float
@@ -35,6 +36,7 @@ class StellaratorConfig(eqx.Module):
         ParticleSourceCenter=0.0,
         ParticleSourceWidth=0.1,
         ParticleSourceHeight=1.0,
+        rhoUpper=1.0,
         T0=None,
         n0=None,
         FusionFactor=1.0,
@@ -53,6 +55,7 @@ class StellaratorConfig(eqx.Module):
         self.ECHWidth = ECHWidth
         self.EdgeTemperature = EdgeTemperature
         self.EdgeDensity = EdgeDensity
+        self.rhoUpper = rhoUpper
         if T0 is None:
             self.T0 = self.EdgeTemperature
         else:
@@ -72,6 +75,8 @@ class StellaratorParams(eqx.Module):
     config: StellaratorConfig
     constants: PlasmaConstants
 
-    def __init__(self, _config, ion_species=ion_species.DeuteriumTritium(), **constant_args):
+    def __init__(
+        self, _config, ion_species=ion_species.DeuteriumTritium(), **constant_args
+    ):
         self.config = _config
         self.constants = PlasmaConstants(ion_species, **constant_args)

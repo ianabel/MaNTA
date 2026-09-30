@@ -3498,12 +3498,19 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
     const size_t sourceStride = superconvergent ? k + 2 : k + 1;
 
     std::vector<DGApproxImpl<NodalBasis>> source_interp;
+    Values zeros = Eigen::VectorXd::Zero(grid.getNCells() * (k + 1));  
     if (printSources)
     {
         for (Index v = 0; v < nVars; ++v)
        {
-          auto& Source_vals = problem->getSourceCache(v);
-          source_interp.emplace_back(grid, sourceBasis, Source_vals.data(), sourceStride);
+          double* Source_vals = problem->getSourceCache(v);
+          if (Source_vals != nullptr)
+          {
+            source_interp.emplace_back(grid, sourceBasis, Source_vals, sourceStride);
+          }
+          else {
+            source_interp.emplace_back(grid, sourceBasis, zeros.data(), sourceStride);
+          }
        }
     }
 
@@ -3562,12 +3569,19 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
     const size_t sourceStride = superconvergent ? k + 2 : k + 1;
 
     std::vector<DGApproxImpl<NodalBasis>> source_interp;
+    Values zeros = Eigen::VectorXd::Zero(grid.getNCells() * (k + 1));  
     if (printSources)
     {
         for (Index v = 0; v < nVars; ++v)
        {
-          auto& Source_vals = problem->getSourceCache(v);
-          source_interp.emplace_back(grid, sourceBasis, Source_vals.data(), sourceStride);
+          double* Source_vals = problem->getSourceCache(v);
+          if (Source_vals != nullptr)
+          {
+            source_interp.emplace_back(grid, sourceBasis, Source_vals, sourceStride);
+          }
+          else {
+            source_interp.emplace_back(grid, sourceBasis, zeros.data(), sourceStride);
+          }       
        }
     }
 

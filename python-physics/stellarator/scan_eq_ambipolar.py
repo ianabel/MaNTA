@@ -34,20 +34,22 @@ import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
+fac = 1.0
 st_config = {
     "ParticleSourceCenter": 0.0,
-    "ParticleSourceHeight": 1.25e-2,
-    "ParticleSourceWidth": 0.5,
+    "ParticleSourceHeight": fac * 1.6e-2,
+    "ParticleSourceWidth": 0.6,
     "NBICenter": 0.0,
-    "NBIPower": 0.4,
-    "NBIWidth": 0.3,
+    "NBIPower": fac * 1.25,
+    "NBIWidth": 0.25,
     "ECHCenter": 0.0,
-    "ECHPower": 0.04,
+    "ECHPower": fac * 8.76e-2,
     "ECHWidth": 0.26,
     "EdgeTemperature": 0.2,
     "EdgeDensity": 0.2,
-    "n0": 0.2,
-    "T0": 0.2,
+    "n0": 0.5,
+    "T0": 1.0,
+    "FusionFactor": 0.01,
     "evolveDensity": True,
     "useBatching": True,
 }
@@ -57,15 +59,19 @@ eq_name = "qa"
 
 rho_upper = 1.0
 rtol = 1e-2
-atol = 1e-3
+atol = 1e-10
 # nodes = [0.0, 0.4, 0.6, 0.75, 0.95, 1.0]
 npoints = 8
 degree = 3
-base = 1.6
-tau = 1.0
+base = 2.0
+tau = 0.1
 #
-nodes = 1 - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
-nodes = np.concatenate(([0, 0.1], nodes, [1]))
+nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
+
+nodes = np.concatenate(([0, 0.1], nodes, [rho_upper]))
+# nodes = np.concatenate(([0, 0.1, 0.25], jnp.linspace(0.4, 0.95, npoints - 2)))
+
+# nodes = np
 print(nodes)
 # # %%c
 solver_config = {
@@ -79,7 +85,7 @@ solver_config = {
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
-    "initialTimestep": 1e-5,
+    "initialTimestep": 1e-3,
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 1e-4,
     "AggressiveTimesteps": False,
@@ -87,11 +93,11 @@ solver_config = {
     "restart": False,
     "zeroFlux": True,
     "solveAdjoint": False,
-    "SteadyStateSolver": "TimeMarch",
+    "SteadyStateSolver": "PseudoTransient",
     "SteadyStateDiagnostics": True,
     "SteadyStateStepDiagnostics": True,
     "PseudoTransientSERRate": 1.0,
-    # "PseudoTransientSERFloor": 1.5,
+    "PseudoTransientSERFloor": 2.0,
 }
 
 
@@ -117,22 +123,21 @@ yancc_res = {"na": 45, "nx": 7}
 # initial pressure is all zeros, can change this if desired
 pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
-
-# # eq = desc.examples.get("precise_QA")
-# # eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.86))
-# # Reduce the number of modes (not sure if this is a good thing to do)
-# eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
-# #
-# # eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
-# # eq = Equilibrium(
-# #     M=4, N=4, Psi=0.1, surface=eq.get_surface_at(rho=1), pressure=desc_pressure
-# # )
 #
+# eq = desc.examples.get("W7-X")
+# # # # Reduce the number of modes (not sure if this is a good thing to do)
+# # #
 # eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
+# #
 #
+eq = desc.examples.get("reactor_QA")
+eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
+eq.solve(x_scale="ess")[0]
 # eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
-eq = desc.io.load("eq_qa.h5")
-# eq.solve(x_scale="ess")[0]
+# eq = desc.io.load("eq_qa.h5")
+
+# eq = desc.io.load("eq_omnigenity.h5")
+
 eq_init = eq.copy()
 yancc_wrapper = yancc_data.from_eq(
     points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
@@ -179,7 +184,7 @@ solver_config = {
     "delta_t": 1.0,
     "initialTimestep": 1e-2,
     "MinStepSize": 1e-9,
-    "SteadyStateTolerance": 0.001,
+    "SteadyStateTolerance": 5e-4,
     "AggressiveTimesteps": False,
     "solveAdjoint": False,
     "WriteDatFile": True,
@@ -322,7 +327,7 @@ start = v0 - delta
 end = v0 + delta
 # start = -0.04
 # end = 0.02
-sweep = jnp.linspace(start, end, 8)
+sweep = jnp.linspace(start, end, 10)
 df = sweep[1] - sweep[0]
 
 
@@ -349,21 +354,29 @@ for i in range(0, len(sweep)):
 
     grads.append(obj.jvp_scaled(t1, x_in)[0])
 
+plt.rcParams.update({"font.family": "serif", "font.size": 12})
+
+fig, ax = plt.subplots(1, 2)
+
 fd_grad = jnp.gradient(jnp.array(G)) / df
-fig, ax = plt.subplots()
-ax.plot(sweep, fd_grad, "bo", label="Finite Differences")
-ax.plot(sweep, grads, "rx", label="Adjoints")
-ax.set_xlabel(rf"$R_{{0, {M}, {N}}}$")
-ax.set_ylabel(rf"$dG/dR_{{0, {M}, {N}}}$")
-ax.axvline(v0, color="k", linestyle="--")
-ax.legend()
-fig.savefig(f"figs/fd_vs_adj_{eq_name}_{M}_{N}.png")
-fig, ax = plt.subplots()
-ax.plot(sweep, G)
-ax.set_xlabel(rf"$R_{{0, {M}, {N}}}$")
-ax.set_ylabel("G")
-ax.axvline(v0, color="k", linestyle="--")
-fig.savefig(f"figs/G_{eq_name}_{M}_{N}.png")
+
+ax[1].plot(sweep, fd_grad, "ro", label="FD")
+ax[1].plot(sweep, grads, "bx", label="Adjoints")
+ax[1].set_xlabel(rf"$R_{{0, {M}, {N}}}$")
+ax[1].set_ylabel(rf"$dG/dR_{{0, {M}, {N}}}$")
+ax[1].axvline(v0, color="k", linestyle="--")
+ax[1].legend()
+ax[0].plot(sweep, G, marker="o", color="red")
+ax[0].set_xlabel(rf"$R_{{0, {M}, {N}}}$")
+ax[0].set_ylabel("G")
+ax[0].axvline(v0, color="k", linestyle="--")
+
+for a in ax:
+    a.set_box_aspect(1)
+fig.tight_layout()
+fig.set_figwidth(5.0)
+fig.set_figheight(3.0)
+fig.savefig(f"figs/sweep_G_{eq_name}_{M}_{N}.eps", dpi=500)
 eqs.save("sweep.h5")
 plt.figure()
 fig, ax = plot_comparison(eqs=eqs[0:-1:4])

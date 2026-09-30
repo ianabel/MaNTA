@@ -110,7 +110,10 @@ class StellaratorState(eqx.Module):
         def constant_density(state, x, vp, vpp, params: StellaratorParams):
             n, dndrho = jax.value_and_grad(
                 lambda x: StellaratorState.initial_profile(
-                    x, params.config.EdgeDensity, params.config.n0
+                    x,
+                    params.config.EdgeDensity,
+                    params.config.n0,
+                    params.config.rhoUpper,
                 )
             )(x)
 
@@ -227,5 +230,6 @@ class StellaratorState(eqx.Module):
         )
 
     @staticmethod
-    def initial_profile(x, edge_value, peak_value):
-        return (peak_value - edge_value) * (1 - x**2) + edge_value
+    def initial_profile(x, edge_value, peak_value, xr):
+        a = 1.0 / xr**2
+        return (peak_value - edge_value) * (1 - a * x**2) + edge_value

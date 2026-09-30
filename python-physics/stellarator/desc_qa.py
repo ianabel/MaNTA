@@ -29,7 +29,7 @@ from desc.grid import Grid, LinearGrid
 from desc.geometry import FourierRZToroidalSurface
 from desc.equilibrium import Equilibrium, EquilibriaFamily
 import numpy as np
-
+import manta as MaNTA
 
 # %%
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
@@ -59,6 +59,16 @@ eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf)
 #
 eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
 # #
+degree =3
+npoints = 8
+nodes = np.concatenate(([0, 0.1, 0.25], np.linspace(0.4, 0.98, npoints - 3), [1]))
+
+points = MaNTA.getNodes(
+    nodes,
+    degree
+)
+
+
 # eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
 # eq.pressure = desc_pressure
 # eq = eq.solve(x_scale="ess")[0]
@@ -76,7 +86,7 @@ def run_qh_step(k, eq):
 
     # create grid where we want to minimize QS error. Here we do it on 3 surfaces
     grid = LinearGrid(
-        M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, rho=np.array([0.6, 0.8, 1.0]), sym=True
+        M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, rho=points, sym=True
     )
 
     # Mirror ratio, manually computed from "|B|"

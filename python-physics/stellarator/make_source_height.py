@@ -18,6 +18,7 @@ from stellarator_multichannel import StellaratorTransport
 from netCDF4 import Dataset
 from interpax import Akima1DInterpolator
 from desc.equilibrium import Equilibrium
+from desc.plotting import plot_boozer_surface
 from scipy.optimize import curve_fit
 
 from functools import partial
@@ -42,7 +43,7 @@ npoints = 4
 degree = 4
 base = 1.6
 tau = 10.0
-nodes = np.linspace(0.05, 1.0, npoints + 1)
+nodes = np.linspace(0.2, 1.0, npoints + 1)
 # nodes = np.concatenate(([0], nodes, [1]))
 # # %%
 solver_config = {
@@ -74,10 +75,12 @@ yancc_rho = points
 pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 eq = desc.io.load("eq_qa.h5")
+fig, ax = plot_boozer_surface(eq, fieldlines=8)
+plt.show()
 # eq = desc.examples.get("precise_QA")
 #
-# # eq_name = "eq_amb"
-# # eq = desc.io.load(eq_name + "_all_equilibria.h5")[0]
+# eq_name = "eq_amb3"
+# eq = desc.io.load(eq_name + "_all_equilibria.h5")[-1]
 #
 # eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
 # eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
@@ -100,7 +103,7 @@ def make_test_state(rho, st):
     ).transpose()
 
     def Er(rho):
-        return -15.0 * rho
+        return -6.0 * rho
 
     state = {
         "Variable": Variable,
@@ -114,6 +117,25 @@ def make_test_state(rho, st):
 
 def compute_physics(nt, nz, na, nx):
     print(f"running at resolution nt={nt}, nz={nz}, na={na}, nx={nx}")
+    #
+    # st_config = {
+    #     "ParticleSourceCenter": 0.0,
+    #     "ParticleSourceHeight": 1.25e-2,
+    #     "ParticleSourceWidth": 0.5,
+    #     "NBICenter": 0.0,
+    #     "NBIPower": 0.6,
+    #     "NBIWidth": 0.3,
+    #     "ECHCenter": 0.0,
+    #     "ECHPower": 0.1,
+    #     "ECHWidth": 0.26,
+    #     "EdgeTemperature": 0.2,
+    #     "EdgeDensity": 0.2,
+    #     "n0": 1.0,
+    #     "T0": 1.0,
+    #     "evolveDensity": True,
+    #     "useBatching": False,
+    # }
+    #
 
     st_config = {
         "ParticleSourceCenter": 0.0,
@@ -128,7 +150,7 @@ def compute_physics(nt, nz, na, nx):
         "EdgeTemperature": 0.2,
         "EdgeDensity": 0.2,
         "n0": 1.0,
-        "T0": 1.0,
+        "T0": 1.5,
         "FusionFactor": 0.01,
         "evolveDensity": True,
         "useBatching": False,
