@@ -1,0 +1,12 @@
+#!@Python3_EXECUTABLE@
+# The `manta` console script, as `cmake --install` writes it. The package is
+# found relative to this file, so the install needs nothing on PYTHONPATH.
+import os
+import sys
+
+sys.path.insert(0, os.path.normpath(os.path.join(
+    os.path.dirname(os.path.realpath(__file__)), "@_manta_bin_to_py@")))
+
+from manta.cli import main  # noqa: E402
+
+sys.exit(main())

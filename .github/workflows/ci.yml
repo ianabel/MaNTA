@@ -342,6 +342,23 @@ jobs:
         if: matrix.cxx == 'g++-15' && matrix.eigen == ''
         run: cmake --build build --target typecheck
 
+      # A build, and the suites run from it, write nothing outside the build
+      # directory: not the extension, not test output, not a __pycache__. This is
+      # what holds that, and it has to be `--ignored`, because everything a stray
+      # write would produce is gitignored. The exceptions are what this workflow
+      # itself puts in the checkout before the build starts.
+      - name: Nothing was written outside the build tree
+        run: |
+          # Two steps, so a failing `git status` fails the check rather than
+          # being read as an empty listing.
+          status=$(git status --porcelain --ignored)
+          stray=$(printf '%s\n' "$status" | grep -vE '^!! (build/|sundials/|eigen-)' || true)
+          if [ -n "$stray" ]; then
+            echo "::error::the build or the suites wrote into the source tree"
+            echo "$stray"
+            exit 1
+          fi
+
       # Naming a prefix the compiler already searches must be a no-op. Under the
       # Makefile it was not: -isystem /usr/include makes gcc and clang drop
       # /usr/include from the end of the system chain and search it ahead of the
@@ -476,9 +493,9 @@ jobs:
         run: |
           # A venv rather than `pip install` into the image's Python. Fedora marks
           # its system interpreter externally-managed (PEP 668), so installing into
-          # it fails outright unless overridden -- and a venv in the repo root is
-          # what CMake looks for first anyway, so this is the configuration a
-          # developer on this distro would have.
+          # it fails outright unless overridden -- and a .venv in the repo root is
+          # one of the two CMake looks for unprompted, so this is the
+          # configuration a developer on this distro would have.
           python3 -m venv .venv
           .venv/bin/python -m pip install --upgrade pip
           .venv/bin/python -m pip install -r requirements.txt
@@ -537,6 +554,23 @@ jobs:
 
       - name: Python tests
         run: ctest --test-dir build -R '^python$' --output-on-failure
+
+      # A build, and the suites run from it, write nothing outside the build
+      # directory: not the extension, not test output, not a __pycache__. This is
+      # what holds that, and it has to be `--ignored`, because everything a stray
+      # write would produce is gitignored. The exceptions are what this workflow
+      # itself puts in the checkout before the build starts.
+      - name: Nothing was written outside the build tree
+        run: |
+          # Two steps, so a failing `git status` fails the check rather than
+          # being read as an empty listing.
+          status=$(git status --porcelain --ignored)
+          stray=$(printf '%s\n' "$status" | grep -vE '^!! (build/|sundials/|\.venv/)' || true)
+          if [ -n "$stray" ]; then
+            echo "::error::the build or the suites wrote into the source tree"
+            echo "$stray"
+            exit 1
+          fi
 
 
   coverage:
@@ -614,6 +648,23 @@ jobs:
 
       - name: Run coverage
         run: cmake --build build-coverage --target coverage
+
+      # A build, and the suites run from it, write nothing outside the build
+      # directory: not the extension, not test output, not a __pycache__. This is
+      # what holds that, and it has to be `--ignored`, because everything a stray
+      # write would produce is gitignored. The exceptions are what this workflow
+      # itself puts in the checkout before the build starts.
+      - name: Nothing was written outside the build tree
+        run: |
+          # Two steps, so a failing `git status` fails the check rather than
+          # being read as an empty listing.
+          status=$(git status --porcelain --ignored)
+          stray=$(printf '%s\n' "$status" | grep -vE '^!! (build-coverage/|sundials/)' || true)
+          if [ -n "$stray" ]; then
+            echo "::error::the build or the suites wrote into the source tree"
+            echo "$stray"
+            exit 1
+          fi
 
       - name: Summarise
         if: always()

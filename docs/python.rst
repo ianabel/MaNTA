@@ -2,14 +2,16 @@ The Python interface
 ====================
 
 The ``_manta`` target builds the ``manta`` package -- a pybind11 extension,
-``python/manta/_manta<suffix>.so``, wrapped by a thin Python layer. It does two
+``_manta<suffix>.so``, wrapped by a thin Python layer -- into the build
+directory, at ``build/python/manta/`` (:ref:`build-tree-package`). It does two
 separate jobs: it drives the solver from Python, and it lets a transport system
 be *written* in Python.
 
 .. code-block:: sh
 
    cmake --build build --target _manta
-   pip install .                     # then `import manta` works anywhere
+   export PYTHONPATH=$PWD/build/python   # use the build's package in place, or
+   pip install .                         # install it; then `import manta` works anywhere
    python -c "import manta; print(manta.__doc__)"
 
 A case and its driver can live in your own repository rather than in this tree;

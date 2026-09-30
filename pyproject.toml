@@ -28,7 +28,8 @@ Documentation = "https://manta-docs.readthedocs.io"
 # build needs SUNDIALS, netCDF, Eigen and autodiff located through CMake, and
 # reproducing that discovery in setup.py would give two build systems that have
 # to agree. `pip install .` therefore shells out to `cmake`, reusing an already
-# configured `build/` when there is one.
+# configured `build/` when there is one (MANTA_CMAKE_BUILD_DIR names another)
+# and taking the extension from its package directory, <build>/python/manta.
 #
 # The consequence is that a wheel built here is not portable -- it links the
 # SUNDIALS CMake found. That is the same constraint the standalone binary has
@@ -40,5 +41,7 @@ package-dir = { "" = "python" }
 where = ["python"]
 include = ["manta*"]
 
+# The extension is not package data: setup.py copies it in from the CMake build
+# directory, so a stray _manta*.so in python/manta/ cannot be shipped instead.
 [tool.setuptools.package-data]
-manta = ["*.so", "*.pyi", "py.typed"]
+manta = ["*.pyi", "py.typed"]

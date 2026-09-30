@@ -89,14 +89,11 @@ target_compile_definitions(UnitTests PRIVATE
   TEST
   TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/")
 
-# Run from the build directory, so the .nc files a run drops land there rather
-# than in the source tree. This is the one behavioural difference from
-# `make test`, which ran the binary from the repo root and left its output beside
-# the sources. `clean_data` still sweeps the repo root, so an existing tree
-# carrying those files gets tidied rather than stranded.
+# Run from this directory's binary dir, so the .nc files a run drops land in the
+# build tree. The fixtures above are only ever read.
 add_test(NAME unit
          COMMAND UnitTests
-         WORKING_DIRECTORY "${PROJECT_BINARY_DIR}")
+         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties(unit PROPERTIES LABELS "unit" TIMEOUT 3600)
 
 add_custom_target(unit_tests
