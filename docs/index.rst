@@ -74,6 +74,7 @@ subtly wrong — read :doc:`formulation` first.
    formulation
    superconvergence
    field_coupling
+   adaptivity
 
 .. toctree::
    :maxdepth: 2

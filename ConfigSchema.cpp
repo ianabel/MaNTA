@@ -15,22 +15,42 @@ const std::vector<Entry> &table()
          "Resume from a restart file instead of building an initial condition."},
         {"RestartFile", {}, Type::String, Category::Solver, false, false, std::string{},
          "Restart file to resume from; defaults to <stem>.restart.nc."},
-        {"High_Grid_Boundary", {}, Type::Bool, Category::Solver, false, false, false,
-         "Concentrate cells near both ends of the domain."},
-        {"Lower_Boundary_Fraction", {}, Type::Double, Category::Solver, false, false, 0.2,
-         "Fraction of the domain in the dense lower region; ignored unless High_Grid_Boundary."},
-        {"Upper_Boundary_Fraction", {}, Type::Double, Category::Solver, false, false, 0.2,
-         "Fraction of the domain in the dense upper region; ignored unless High_Grid_Boundary."},
-        {"Polynomial_degree", {}, Type::UInt, Category::Solver, true, true, 1u,
+        {"GradedGridBoundary", {"High_Grid_Boundary"}, Type::Bool, Category::Solver, false, false, false,
+         "Grade the mesh geometrically towards the ends of the domain: GradingCells cells "
+         "over each dense layer, each GradingRatio times the width of its inward neighbour, "
+         "then the rest uniform between them. For a solution that is singular at an end this "
+         "is worth orders of magnitude at a fixed cell count -- see docs/configuration.rst. "
+         "Replaces High_Grid_Boundary, which spaced those cells by a cosine rule instead; "
+         "that spelling still works and warns, but the mesh it now builds is the geometric one."},
+        {"GradingRatio", {}, Type::Double, Category::Solver, false, false, 0.3,
+         "Width ratio between neighbouring cells in a graded layer, strictly between 0 and 1. "
+         "Smaller grades harder: the cell touching a graded end has width "
+         "fraction * span * ratio^(GradingCells - 1), which is what sets the error."},
+        {"GradingCells", {}, Type::Int, Category::Solver, false, false, 0,
+         "Cells in each graded layer; at least 2, and few enough to leave one cell outside "
+         "them. 0 means a third of GridSize per layer when grading both ends, half when "
+         "grading one."},
+        {"GradingEnd", {}, Type::String, Category::Solver, false, false, std::string{"Both"},
+         "Which end GradedGridBoundary refines into: \"Both\" (default), \"Lower\" or "
+         "\"Upper\"."},
+        {"LowerBoundaryFraction", {"Lower_Boundary_Fraction"}, Type::Double, Category::Solver, false, false, 0.2,
+         "Fraction of the domain in the dense lower region; read when GradedGridBoundary is "
+         "set and GradingEnd is \"Lower\" or \"Both\"."},
+        {"UpperBoundaryFraction", {"Upper_Boundary_Fraction"}, Type::Double, Category::Solver, false, false, 0.2,
+         "Fraction of the domain in the dense upper region; read when GradedGridBoundary is "
+         "set and GradingEnd is \"Upper\" or \"Both\"."},
+        {"PolynomialDegree", {"Polynomial_degree"}, Type::UInt, Category::Solver, true, true, 1u,
          "Degree k of the nodal basis in each cell."},
-        {"Grid_size", {}, Type::Int, Category::Solver, true, true, 0,
-         "Number of cells."},
-        {"Grid_points", {}, Type::DoubleList, Category::Solver, false, false, std::vector<double>{},
-         "Explicit cell boundaries; supersedes Lower_boundary/Upper_boundary/Grid_size."},
-        {"Lower_boundary", {}, Type::Double, Category::Solver, false, false, 0.0,
-         "Lower end of the domain; required unless Grid_points is given."},
-        {"Upper_boundary", {}, Type::Double, Category::Solver, false, false, 1.0,
-         "Upper end of the domain; required unless Grid_points is given."},
+        {"GridSize", {"Grid_size"}, Type::Int, Category::Solver, false, false, 0,
+         "Number of cells; required unless GridPoints is given or the run is a restart."},
+        {"GridPoints", {"Grid_points"}, Type::DoubleList, Category::Solver, false, false, std::vector<double>{},
+         "Explicit cell boundaries, as an array. Supersedes LowerBoundary/UpperBoundary/"
+         "GridSize and every grading key, and is the way to supply a mesh no rule here "
+         "produces."},
+        {"LowerBoundary", {"Lower_boundary"}, Type::Double, Category::Solver, false, false, 0.0,
+         "Lower end of the domain; required unless GridPoints is given."},
+        {"UpperBoundary", {"Upper_boundary"}, Type::Double, Category::Solver, false, false, 1.0,
+         "Upper end of the domain; required unless GridPoints is given."},
         {"tau", {}, Type::Double, Category::Solver, false, false, 1.0,
          "HDG stabilisation parameter."},
         {"delta_t", {}, Type::Double, Category::Solver, true, true, 0.0,
@@ -55,7 +75,9 @@ const std::vector<Entry> &table()
         {"solveAdjoint", {}, Type::Bool, Category::Solver, false, false, false,
          "Build the adjoint problem and solve for dG/dp after the integration."},
         {"SteadyStateTolerance", {}, Type::Double, Category::Solver, false, false, 1e-3,
-         "Stop once the solution stops changing by this much; presence arms it."},
+         "Stop once the solution stops changing by this much; presence arms it. "
+         "Compared against dy/dt under TimeMarch, and against a mesh-independent "
+         "weighted norm of the steady residual otherwise."},
         {"SteadyStateSolver", {}, Type::String, Category::Solver, false, false, std::string{"PseudoTransient"},
          "How a steady state is reached: PseudoTransient (default), TimeMarch (integrate to it), "
          "or Newton (pseudo-transient with an infinite first step). See docs/running.rst."},
@@ -129,6 +151,23 @@ const std::vector<Entry> &table()
          "How much error one extra degree is assumed to buy, in Giorgiani's rule "
          "dk = ceil(log_base(E/tolerance)). 10 is cautious, 100 aggressive; must be "
          "between 10 and 100."},
+        {"MeshAdaptation", {}, Type::Bool, Category::Solver, false, false, false,
+         "Run the p -> h -> p sequence: solve uniform at PolynomialDegree, decide from "
+         "the per-cell modal decay rate whether an end of the domain wants grading, "
+         "regrade at the same cell count if so, then adapt the degree to "
+         "DegreeTolerance. Needs PolynomialDegree >= 3, because at 2 the decision is "
+         "reversed rather than merely noisy. Steady solves only; implies "
+         "DegreeAdaptation and so Superconvergent. See docs/adaptivity.rst."},
+        {"MeshAdaptationThreshold", {}, Type::Double, Category::Solver, false, false, 2.0,
+         "How much rougher than the interior an end must look before MeshAdaptation "
+         "grades it, as a ratio of decay rates. Must exceed 1. Measured on three "
+         "problems at k >= 3: 3.09-6.80 for the one that wants grading against "
+         "0.97-1.19 for the two that do not."},
+        {"MeshAdaptationAttempts", {}, Type::UInt, Category::Solver, false, false, 4u,
+         "How many graded meshes MeshAdaptation may try before giving up and staying "
+         "uniform. A grading that fails to solve is a rejected step: the ratio is "
+         "softened towards 1 and retried, because the ceiling on grading is the time "
+         "integrator rather than the method. Minimum 1."},
         {"WriteOutput", {}, Type::Bool, Category::Solver, false, false, true,
          "Write <stem>.nc and <stem>.restart.nc."},
         {"WriteDatFile", {}, Type::Bool, Category::Solver, false, false, false,

@@ -9,6 +9,7 @@
 #include "SolverConfig.hpp"
 #include "FieldModel.hpp"
 #include "DegreeAdaptation.hpp"
+#include "MeshAdaptation.hpp"
 
 // Load restart data into vectors. `nField` is filled with how many of the
 // trailing entries of Y are a field model's psi, so the caller can shape the
@@ -219,14 +220,22 @@ int runManta(std::string const &fname)
 	// problem while the restart check above has already sized the state for
 	// nField unknowns. Refused rather than ignored, the way a sliced steady
 	// solve refuses it.
-	if ((config.DegreeAdaptation || !config.DegreeLadder.empty() ||
+	if ((config.DegreeAdaptation || config.MeshAdaptation || !config.DegreeLadder.empty() ||
 		 !config.GridLadder.empty()) &&
 		fieldModel)
 		throw std::invalid_argument(
-			"DegreeAdaptation cannot be combined with a FieldModel: the adaptive "
-			"driver builds a solver per degree and cannot carry the field model.");
+			"DegreeAdaptation and MeshAdaptation cannot be combined with a FieldModel: "
+			"the adaptive drivers build a solver per level and cannot carry the field model.");
 
-	if (config.DegreeAdaptation)
+	if (config.MeshAdaptation)
+	{
+		// p -> h -> p. Owns the graded mesh it may build, and its solver points
+		// into that, so the whole result is destroyed together and in the right
+		// order (see AdaptiveMeshResult).
+		auto adapted = runAdaptiveMesh(config, *pProblem, adjoint.get(), *grid, k,
+									   *config.t_final);
+	}
+	else if (config.DegreeAdaptation)
 	{
 		// The driver builds and runs a solver per degree, so it does the
 		// applySolverConfig/setAdjointProblem/runSolver sequence below itself --

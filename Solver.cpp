@@ -90,10 +90,10 @@ void SystemSolver::initialize()
 
 	//-----------------------------Initial conditions-------------------------------
 
-	// Set original vector lengths
+	// Set original vector lengths. The layout is DGSoln's, so the length is too.
 	// The field model's unknowns go last, after the scalars, so nothing before
-	// them moves. nField is zero unless setFieldModel has attached a model.
-	Y = N_VNew_Serial(nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1) + nField, ctx);
+	// them moves; nField is zero unless setFieldModel has attached a model.
+	Y = N_VNew_Serial(DGSoln::getDoF(nVars, nCells, k, nScalars, nAux, nField), ctx);
 	if (ErrorChecker::check_retval((void *)Y, "N_VNew_Serial", 0))
 		throw std::runtime_error("Sundials Initialization Error");
 
@@ -1018,7 +1018,7 @@ void SystemSolver::destroySundials()
 	}
 
 	for (N_Vector *vec : {&Y, &dYdt, &constraints, &id, &res, &absTolVec,
-	                      &uPrev, &ptcDYdt, &kinScale})
+	                      &uPrev, &ptcDYdt, &kinScale, &resScale, &fScaleScratch})
 	{
 		if (*vec)
 		{
