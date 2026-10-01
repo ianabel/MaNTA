@@ -66,6 +66,15 @@ void SystemSolver::initialize()
 	if (fieldModel)
 		fieldModel->resetForRun();
 
+	// A tau frozen per continuation step is set by the continuation loop, and a
+	// time march has none: tau would stay at the initial condition's for the
+	// whole run.
+	if (tauFrozenPerStep() && !solvesForSteadyState())
+		throw std::invalid_argument(
+			"tauUpdate = \"ContinuationStep\" or \"JacobianBuild\" needs a steady solve with "
+			"SteadyStateSolver = \"PseudoTransient\" or \"Newton\"; a time march "
+			"would freeze tau at the initial condition. Use tauUpdate = \"Residual\".");
+
 	// ...and neither do the sweep counts. Here, in the unconditional part of
 	// initialize() and beside resetForRun() for the same reason: a cumulative
 	// count reported as a per-run one is a lie a second run would tell silently.

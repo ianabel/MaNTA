@@ -322,7 +322,21 @@ Time integration
        error rather than a quiet "off". See :doc:`adjoints`.
    * - ``tau``
      - ``1.0``
-     - The HDG stabilisation parameter. Constant across the domain.
+     - The HDG stabilisation parameter: constant across the domain, or under
+       ``tauScaling = "Diffusive"`` a dimensionless multiplier on
+       :math:`\kappa/h`.
+   * - ``tauScaling``
+     - ``"Constant"``
+     - ``"Constant"`` or ``"Diffusive"``. See :ref:`tau-scaling`.
+   * - ``tauUpdate``
+     - ``"Residual"``
+     - Under ``"Diffusive"``, when :math:`\tau` is re-evaluated: ``"Residual"``,
+       ``"ContinuationStep"`` or ``"JacobianBuild"`` (the last two for steady
+       solves only). See :ref:`tau-scaling`.
+   * - ``tauFloor``
+     - ``1e-3``
+     - Under ``"Diffusive"``, the floor on :math:`\kappa/h` as a fraction of its
+       largest value on the grid. Must be positive.
 
 Output
 ------

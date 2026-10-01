@@ -113,7 +113,7 @@ BOOST_AUTO_TEST_CASE(a_minimal_config_loads_with_every_default_applied)
     BOOST_TEST(c.PseudoTransientSERRate == 1.0);
     BOOST_TEST(c.PseudoTransientSERFloor == 2.0);
     BOOST_TEST(c.NewtonMaxIterations == 20u);
-    BOOST_TEST(c.NewtonJacobianReuse == 10u);
+    BOOST_TEST(c.NewtonJacobianReuse == 1u);
     BOOST_TEST(c.NewtonStepTolerance == 0.0);
     BOOST_TEST(c.NewtonScaling == "Unit");
     BOOST_TEST(c.SteadyStateDiagnostics == false);
@@ -336,6 +336,60 @@ BOOST_AUTO_TEST_CASE(an_unrecognised_field_solve_is_rejected_rather_than_default
         std::string msg = e.what();
         BOOST_TEST(msg.find("FieldSolve") != std::string::npos);
         BOOST_TEST(msg.find("schur") != std::string::npos);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(apply_solver_config_carries_the_tau_scaling_through)
+{
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
+    SystemSolver sys(grid, 1, &problem);
+
+    applySolverConfig(load(minimal), sys);
+    BOOST_TEST((sys.getTauScaling() == SystemSolver::TauScaling::Constant));
+
+    applySolverConfig(load(minimal + "tauScaling = \"Diffusive\"\ntauFloor = 0.02\n"), sys);
+    BOOST_TEST((sys.getTauScaling() == SystemSolver::TauScaling::Diffusive));
+    BOOST_TEST((sys.getTauUpdate() == SystemSolver::TauUpdate::Residual));
+    BOOST_TEST(sys.tauFloorFraction == 0.02);
+
+    applySolverConfig(load(minimal + "tauScaling = \"Diffusive\"\ntauUpdate = \"ContinuationStep\"\n"), sys);
+    BOOST_TEST((sys.getTauUpdate() == SystemSolver::TauUpdate::ContinuationStep));
+
+    applySolverConfig(load(minimal + "tauScaling = \"Diffusive\"\ntauUpdate = \"JacobianBuild\"\n"), sys);
+    BOOST_TEST((sys.getTauUpdate() == SystemSolver::TauUpdate::JacobianBuild));
+}
+
+BOOST_AUTO_TEST_CASE(bad_tau_scaling_configurations_are_refused_by_name)
+{
+    // An unknown scaling for the reason FieldSolve's is refused; a non-positive
+    // floor because a face with kappa = 0 would leave its trace undetermined;
+    // and Diffusive with the adjoint because the adjoint cannot carry d tau / dy
+    // and the gradient would be wrong with nothing to say so.
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
+    SystemSolver sys(grid, 1, &problem);
+
+    const std::vector<std::pair<std::string, std::string>> cases{
+        {"tauScaling = \"Local\"\n", "Local"},
+        {"tauScaling = \"Diffusive\"\ntauFloor = 0.0\n", "tauFloor"},
+        {"tauScaling = \"Diffusive\"\ntau = -1.0\n", "tau > 0"},
+        {"tauScaling = \"Diffusive\"\nsolveAdjoint = true\n", "solveAdjoint"},
+        {"tauScaling = \"Diffusive\"\ntauUpdate = \"Newton\"\n", "tauUpdate"},
+        {"tauUpdate = \"ContinuationStep\"\n", "Diffusive"},
+    };
+    for (auto const &[extra, needle] : cases)
+    {
+        try
+        {
+            applySolverConfig(load(minimal + extra), sys);
+            BOOST_ERROR("expected a throw for: " << extra);
+        }
+        catch (std::invalid_argument const &e)
+        {
+            BOOST_TEST(std::string(e.what()).find(needle) != std::string::npos,
+                       "message for `" << extra << "` does not name " << needle << ": " << e.what());
+        }
     }
 }
 

@@ -52,7 +52,16 @@ const std::vector<Entry> &table()
         {"UpperBoundary", {"Upper_boundary"}, Type::Double, Category::Solver, false, false, 1.0,
          "Upper end of the domain; required unless GridPoints is given."},
         {"tau", {}, Type::Double, Category::Solver, false, false, 1.0,
-         "HDG stabilisation parameter."},
+         "HDG stabilisation parameter; under tauScaling = Diffusive, a dimensionless multiplier on kappa/h."},
+        {"tauScaling", {}, Type::String, Category::Solver, false, false, std::string{"Constant"},
+         "How tau is chosen per face: Constant (tau everywhere) or Diffusive "
+         "(tau * kappa/h, one-sided, from the state at each residual). See docs/formulation.rst."},
+        {"tauUpdate", {}, Type::String, Category::Solver, false, false, std::string{"Residual"},
+         "Under tauScaling = Diffusive, when tau is re-evaluated: Residual (every residual, with "
+         "d tau/dy in the Jacobian), JacobianBuild (each Jacobian build) or ContinuationStep "
+         "(once per steady continuation step); the last two are for steady solves."},
+        {"tauFloor", {}, Type::Double, Category::Solver, false, false, 1e-3,
+         "Under tauScaling = Diffusive, the floor on kappa/h as a fraction of its largest value on the grid."},
         {"delta_t", {}, Type::Double, Category::Solver, true, true, 0.0,
          "Interval between output timeslices."},
         {"t_initial", {"tZero"}, Type::Double, Category::Solver, false, false, 0.0,
@@ -103,10 +112,10 @@ const std::vector<Entry> &table()
          "Newton iterations one KINSol call may take before handing back to the continuation "
          "loop. Applies to PseudoTransient and Newton alike. KINSOL's own default is 200; 20 "
          "is deliberate, because an inner solve only has to make progress. Minimum 1."},
-        {"NewtonJacobianReuse", {}, Type::UInt, Category::Solver, false, false, 10u,
+        {"NewtonJacobianReuse", {}, Type::UInt, Category::Solver, false, false, 1u,
          "Newton iterations that may share one Jacobian factorisation (KINSOL's msbset). "
-         "1 is full Newton. Trades assemblies for iterations; which side wins depends on how "
-         "expensive your case's Jacobian is against its residual. Minimum 1."},
+         "1 (the default) is full Newton. Raising it trades assemblies for iterations, which "
+         "pays only when your case's Jacobian is expensive against its residual. Minimum 1."},
         {"NewtonStepTolerance", {}, Type::Double, Category::Solver, false, false, 0.0,
          "KINSOL's scaled-step stopping test; a KINSol below it returns KIN_STEP_LT_STPTOL, "
          "which the continuation loop answers by damping rather than treating as a failure. "

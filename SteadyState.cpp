@@ -364,6 +364,25 @@ void SystemSolver::solveSteadyState(bool resume)
 
     N_VScale(1.0, Y, uPrev);
 
+    // Under a tau frozen per continuation step, tau is brought to the current
+    // state before the merit function is measured, so that "converged" means
+    // F(y; tau(y)) = 0 rather than zero for the tau the step happened to start
+    // with. That also leaves tau right for the next step, which therefore only
+    // has to refresh it after a rejection.
+    bool tauAtY = false;
+    auto refreshTau = [&]()
+    {
+        DGSoln Yh(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux, nField);
+        freezeTauAt(Yh, t0);
+        tauAtY = true;
+    };
+    auto steadyNorm = [&]() -> double
+    {
+        if (tauFrozenPerStep())
+            refreshTau();
+        return steadyResidualNorm();
+    };
+
     // What this call costs. MaNTA's counters are monotonic over the solver --
     // IDA writes to them too -- so they are differenced against here, which is
     // also what makes a second solve on one object report its own cost.
@@ -387,7 +406,7 @@ void SystemSolver::solveSteadyState(bool resume)
     // on OutOfSteps would loop forever.
     steadyOutcome = SteadyOutcome::NotRun;
 
-    double Fprev = steadyResidualNorm();
+    double Fprev = steadyNorm();
 
     // Every way out of the loop goes through here, including the two that then
     // throw. That is what lets a caught failure still carry a partial answer:
@@ -500,6 +519,11 @@ void SystemSolver::solveSteadyState(bool resume)
         // to fall back to if the attempt makes things worse.
         N_VScale(1.0, Y, uPrev);
 
+        // tau for this step, from the state it starts at. Already there unless
+        // the last step was rejected and Y put back.
+        if (tauFrozenPerStep() && !tauAtY)
+            refreshTau();
+
         // Refreshed here rather than once on entry, because the weights are a
         // function of Y and Y moves a long way over a continuation run -- on
         // AdjointPoster ||F|| falls thirteen orders. Scaling fixed at the initial
@@ -591,8 +615,12 @@ void SystemSolver::solveSteadyState(bool resume)
         // steady norm separately. And a KINSol that returned without a
         // successful evaluation leaves the stamp untouched, so the previous
         // step's norm can never be read as this one's.
-        const bool kinHasIt = !std::isfinite(ptcStep) && kinSteadyNormStamp != kinNormStamp;
-        const double Fnow = kinHasIt ? kinSteadyNorm : steadyResidualNorm();
+        //
+        // Not under a frozen tau: KINSOL's last evaluation used the step's tau,
+        // and the merit function wants tau at the state the step reached.
+        const bool kinHasIt = !std::isfinite(ptcStep) && kinSteadyNormStamp != kinNormStamp &&
+                              !tauFrozenPerStep();
+        const double Fnow = kinHasIt ? kinSteadyNorm : steadyNorm();
         logmsg<LOG_LEVEL::INFO>("Steady solve: step {}, dt = {:g}, ||F|| = {:g}",
                                 step, ptcStep, Fnow);
 
@@ -678,6 +706,7 @@ void SystemSolver::solveSteadyState(bool resume)
             // damp, so drop to a finite one and continue as pseudo-transient --
             // which is the honest thing to do when the undamped step failed.
             N_VScale(1.0, uPrev, Y);
+            tauAtY = false;
             ptcStep = std::isfinite(ptcStep) ? ptcStep * 0.25 : fallback;
             ++rejected;
         }

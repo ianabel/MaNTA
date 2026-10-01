@@ -49,7 +49,7 @@ steady state beats integrating to one.
 
 The two numbers in each of the last two columns are `NewtonJacobianReuse = 10`,
 which is KINSOL's default, and `= 1`, a fresh Jacobian factorisation at every
-inner iteration. Park on 4 cells, the other two on 10, all at `k = 3` -- not
+inner iteration -- MaNTA's default. Park on 4 cells, the other two on 10, all at `k = 3` -- not
 each example's own `run.conf` resolution, which differs in `k`.
 
 `TimeMarch` sizes every step from a local error estimate on a transient that is
@@ -77,7 +77,7 @@ already-converged test is the fifth, and on the workload this solver is built
 for -- a parameter sweep resuming from a neighbouring answer -- it is frequently
 the only sweep a solve pays.
 
-**At the default reuse, `shestakov-nonlinear` looks like a counter-example, and
+**At reuse 10, `shestakov-nonlinear` looks like a counter-example, and
 it is not.** Continuation appears to cost 2.4x what time marching does there; at
 reuse 1 it costs a sixth, and both residual-driven methods beat time marching on
 all three benchmarks. Reuse is not a trade on a flux like `D0 q^3/u^2` or a
@@ -85,11 +85,10 @@ all three benchmarks. Reuse is not a trade on a flux like `D0 q^3/u^2` or a
 Jacobian points somewhere useless, and the extra inner iterations it buys push
 the *total* assembly count up as well, so it loses on both axes at once. Jardin
 under `Newton` costs 5680 flux and 760 derivative calls at reuse 10 against 360
-and 240 at reuse 1. **If a steady solve is slow or will not converge,
-`NewtonJacobianReuse = 1` is the first thing to try.** The default of 10 is
-retained for the opposite case, a model whose Jacobian is finite-differenced at
-`(1 + n_p)` residuals per assembly, which genuinely would rather have the
-iterations.
+and 240 at reuse 1. That is why
+the default is 1. Raising it is for the opposite case, a model whose Jacobian is
+finite-differenced at `(1 + n_p)` residuals per assembly, which genuinely would
+rather have the iterations.
 
 ## Warm-starting a cold solve by climbing the degree
 

@@ -50,6 +50,7 @@ set(MANTA_TEST_SOURCES
   GeometryDerivativeTests.cpp
   GridTests.cpp
   IntegratorTest.cpp
+  LocalTauTests.cpp
   MeshAdaptationTests.cpp
   MMSAuxScalarTests.cpp
   MMSConvergenceTests.cpp
