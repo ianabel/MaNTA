@@ -2278,7 +2278,8 @@ BOOST_AUTO_TEST_CASE(the_steady_merit_function_is_the_undamped_residual_two_norm
     // Recomputed from the outside: zero derivative, residual at t0 and Y, then
     // sum (w_i F_i)^2 with the weights written out here rather than read from the
     // solver -- 1/sqrt(h) on the cell rows, 1 on the lambda rows and the scalars.
-    // Exact equality, because it is the same arithmetic on the same data.
+    // Equal to round-off: the same squares on the same data, summed by two
+    // different pieces of code (see the tolerance on the check below).
     //
     // Written out by hand deliberately. Reading resScale back and reusing it
     // would pin the *contraction* and say nothing about the weights, which are
