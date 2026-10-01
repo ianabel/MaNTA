@@ -91,10 +91,10 @@ class Coupled(manta.TransportSystem):
 def solved(system, t_final, tmp_path, stem):
     runner = manta.Runner(system)
     runner.configure({
-        "Polynomial_degree": 3,
-        "Grid_size": 8,
-        "Lower_boundary": 0.0,
-        "Upper_boundary": 1.0,
+        "PolynomialDegree": 3,
+        "GridSize": 8,
+        "LowerBoundary": 0.0,
+        "UpperBoundary": 1.0,
         "delta_t": t_final,
         "Relative_tolerance": 1e-10,
         "Absolute_tolerance": [1e-11],
@@ -188,10 +188,10 @@ def test_a_case_that_declares_nothing_sees_zero(tmp_path):
     case = Silent()
     runner = manta.Runner(case)
     runner.configure({
-        "Polynomial_degree": 3,
-        "Grid_size": 8,
-        "Lower_boundary": 0.0,
-        "Upper_boundary": 1.0,
+        "PolynomialDegree": 3,
+        "GridSize": 8,
+        "LowerBoundary": 0.0,
+        "UpperBoundary": 1.0,
         "delta_t": 0.05,
         "Relative_tolerance": 1e-8,
         "Absolute_tolerance": [1e-9],

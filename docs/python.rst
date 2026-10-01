@@ -53,10 +53,10 @@ Module contents
    problem = MyTransportSystem()           # subclass of manta.TransportSystem
    runner = manta.Runner(problem)
    runner.configure({
-       "Polynomial_degree": 3,
-       "Grid_size": 30,
-       "Lower_boundary": 0.0,
-       "Upper_boundary": 1.0,
+       "PolynomialDegree": 3,
+       "GridSize": 30,
+       "LowerBoundary": 0.0,
+       "UpperBoundary": 1.0,
        "delta_t": 0.1,
        "OutputFilename": "run1",
    })

@@ -37,14 +37,17 @@ struct SolverConfig
 {
     bool                     restart;
     std::string              RestartFile;
-    bool                     High_Grid_Boundary;
-    double                   Lower_Boundary_Fraction;
-    double                   Upper_Boundary_Fraction;
-    unsigned                 Polynomial_degree;
-    int                      Grid_size;
-    std::vector<double>      Grid_points;
-    double                   Lower_boundary;
-    double                   Upper_boundary;
+    double                   LowerBoundaryFraction;
+    double                   UpperBoundaryFraction;
+    bool                     GradedGridBoundary;
+    double                   GradingRatio;
+    int                      GradingCells;   // 0 means "derive from GridSize"
+    std::string              GradingEnd;     // "Lower", "Upper" or "Both"
+    unsigned                 PolynomialDegree;
+    int                      GridSize;
+    std::vector<double>      GridPoints;
+    double                   LowerBoundary;
+    double                   UpperBoundary;
     double                   tau;
     double                   delta_t;
     double                   t_initial;
@@ -87,6 +90,9 @@ struct SolverConfig
     unsigned int             MaxPolynomialDegree;
     unsigned int             MaxDegreeIncrement;
     double                   DegreeAdaptationBase;
+    bool                     MeshAdaptation;
+    double                   MeshAdaptationThreshold;
+    unsigned int             MeshAdaptationAttempts;
     std::string              TransportSystem;
     std::vector<std::string> PhysicsPlugins;
 
@@ -193,7 +199,7 @@ std::unique_ptr<Grid> restartRunGrid(SolverConfig const &config, Grid const &fil
 // file was written at.
 //
 // A restart used to take its degree from the file and ignore
-// Polynomial_degree outright, even though the schema makes that key required of
+// PolynomialDegree outright, even though the schema makes that key required of
 // every config on both readers -- so a user was obliged to write a number that
 // was then silently discarded. This honours it, and warns when the two differ,
 // because the state is projected across the degree change rather than copied.

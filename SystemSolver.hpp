@@ -481,6 +481,25 @@ class SystemSolver
         int steadyResidual(N_Vector u, N_Vector fval);
         void steadyJacSetup(N_Vector u);
 
+        // The merit function the whole steady solve is measured against: the
+        // *undamped* residual at the current Y, so it does not vanish simply by
+        // taking a small enough step the way the damped one KINSOL sees does.
+        // Both the convergence test and the SER ratio read this.
+        //
+        // Weighted, not flat: sqrt(sum_i (w_i F_i)^2) with the weights
+        // residualWeights() builds. A flat 2-norm over this DOF vector is
+        // mesh-dependent, because the cell rows are pairings against the basis
+        // and so carry a mass factor going like h while the row count goes like
+        // 1/h -- measured at exactly sqrt(h) near a solution. steady_state_tol
+        // then means a different thing on every mesh, which is what stands
+        // between this and a driver that remeshes between solves.
+        //
+        // KINSOL is handed the same weights as its f_scale, so its own stopping
+        // test and this one stay the identical quantity rather than decoupling by
+        // whatever the normalisation is worth. See residualWeights().
+        //
+        // Costs one residual evaluation, and counts as one.
+        double steadyResidualNorm();
         void setNOutput(int nO)
         {
             if (nO <= 0)
@@ -669,6 +688,23 @@ class SystemSolver
         // keyed on (order, grid).
         std::vector<double> stateVector() const;
         std::vector<double> derivativeVector() const;
+
+        // The run's answer as a structured view, for anything that needs to read
+        // the solution *by field and cell* rather than as a flat vector -- the
+        // smoothness sensor, chiefly.
+        //
+        // This is yJac and not y, deliberately. `y` maps the N_Vector that
+        // initialize() allocates and destroySundials() frees, so it dangles the
+        // moment a run finishes; yJac owns its own memory (yJacMem) and is what
+        // outlives the solve. initialize() seeds it with the initial condition, so
+        // it is also valid *before* integrate().
+        //
+        // Two things not to do with it. Do not bind `getBasis()` to a reference
+        // that outlives this solver: DGSolnImpl holds its basis by value, so that
+        // reference points into the returned object rather than into a shared
+        // singleton. And do not keep the reference across a rebuild -- anything
+        // that destroys this solver invalidates it.
+        DGSoln const &solution() const { return yJac; };
 
         // Gates the netCDF output and the restart file -- <stem>.nc and
         // <stem>.restart.nc. The .dat flags below are deliberately *not* nested
@@ -1102,7 +1138,20 @@ class SystemSolver
         SUNLinearSolver kinLS = nullptr;
         N_Vector uPrev = nullptr;    // previous PTC iterate
         N_Vector ptcDYdt = nullptr;  // id * (u - uPrev)/dt, the damping term
-        N_Vector kinScale = nullptr; // unit scaling; KINSol requires a vector
+        N_Vector kinScale = nullptr; // unit scaling on u; KINSol requires a vector
+        N_Vector resScale = nullptr; // residual weights, from residualWeights()
+        N_Vector fScaleScratch = nullptr; // resScale * error weights, for NewtonScaling::ErrorWeights
+
+        // Clones the five above on first use, and fills resScale. Called by both
+        // solveSteadyState and steadyResidualNorm, since either may be the first
+        // to need them.
+        void allocateSteadyScratch();
+
+        // Fill resScale with 1/sqrt(h) on every row that is a pairing against the
+        // basis -- sigma, q, u and aux, at their own cell's width -- and 1 on the
+        // rows that are not: lambda, which is a flux condition at a face, and the
+        // global scalars. Depends on the grid alone, so it is filled once.
+        void residualWeights();
         SteadyMode steadyMode = SteadyMode::TimeMarch;
         double ptcInitialStep = 0.0; // 0 means "use dt0"
         // How many KINSol calls before giving up. Each is a full Newton solve,

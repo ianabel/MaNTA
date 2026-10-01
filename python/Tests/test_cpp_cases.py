@@ -99,10 +99,10 @@ def remove_output(stem):
 # plumbing's, and it is the first thing to check if this file starts failing at
 # -3.
 LINEAR_DIFFUSION = {
-    "Polynomial_degree": 3,
-    "Grid_size": 30,
-    "Lower_boundary": -1.0,
-    "Upper_boundary": 1.0,
+    "PolynomialDegree": 3,
+    "GridSize": 30,
+    "LowerBoundary": -1.0,
+    "UpperBoundary": 1.0,
     "delta_t": 0.1,
     "t_final": 1.0,
     "Relative_tolerance": 1.0e-3,
@@ -128,10 +128,10 @@ LINEAR_DIFFUSION = {
 # checked-in Config/ADTestProblem.conf does not run on main either -- IDA gives
 # up with IDA_ERR_FAIL -- so it is a broken case rather than a broken surface.
 ADJOINT_TEST_PROBLEM = {
-    "Polynomial_degree": 3,
-    "Grid_size": 10,
-    "Lower_boundary": 0.0,
-    "Upper_boundary": 1.0,
+    "PolynomialDegree": 3,
+    "GridSize": 10,
+    "LowerBoundary": 0.0,
+    "UpperBoundary": 1.0,
     "tau": 1.0,
     "delta_t": 0.25,
     "t_final": 5.0,
@@ -386,20 +386,20 @@ def test_an_unknown_scalar_key_is_still_rejected():
         runner.configure(dict(LINEAR_DIFFUSION, Grid_sze=30, OutputFilename="x"))
 
     assert "Grid_sze" in str(excinfo.value)
-    assert "Grid_size" in str(excinfo.value), "no did-you-mean suggestion"
+    assert "GridSize" in str(excinfo.value), "no did-you-mean suggestion"
 
 
 def test_a_solver_key_given_as_a_table_is_a_type_error_not_a_physics_table():
     """The other half of that narrowing: the *name* decides, not the value.
 
-    {"Grid_size": {...}} is a schema key holding the wrong type, and must be
+    {"GridSize": {...}} is a schema key holding the wrong type, and must be
     reported as such. Treating any dict as physics would instead drop the key
     silently and leave the run at Grid_size's default.
     """
     runner = MaNTA.Runner("LinearDiffusion")
-    with pytest.raises(RuntimeError, match="Grid_size"):
+    with pytest.raises(RuntimeError, match="GridSize"):
         runner.configure(
-            dict(LINEAR_DIFFUSION, Grid_size={"nope": 1}, OutputFilename="x")
+            dict(LINEAR_DIFFUSION, GridSize={"nope": 1}, OutputFilename="x")
         )
 
 

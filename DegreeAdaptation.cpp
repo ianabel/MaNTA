@@ -159,7 +159,7 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
 
     if (k0 > kMax)
         throw std::invalid_argument(
-            "Polynomial_degree already exceeds MaxPolynomialDegree, so degree "
+            "PolynomialDegree already exceeds MaxPolynomialDegree, so degree "
             "adaptation has nothing it is allowed to do.");
 
     std::println("Degree adaptation: starting at k = {}, ceiling {}, relative "
@@ -324,14 +324,15 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
 
 namespace
 {
-// A rung's mesh, built the way configuredGrid builds the configured one but at
-// this rung's cell count, so the grading of a High_Grid_Boundary mesh is the
-// same on every rung and only the count changes.
+// A rung's mesh, built by configuredGrid itself at this rung's cell count, so
+// the grading of a GradedGridBoundary mesh is the same on every rung and only the
+// count changes.
 Grid ladderGrid(SolverConfig const &config, unsigned int nCells)
 {
-    return Grid(config.Lower_boundary, config.Upper_boundary,
-                static_cast<Index>(nCells), config.High_Grid_Boundary,
-                config.Lower_Boundary_Fraction, config.Upper_Boundary_Fraction);
+    SolverConfig rung = config;
+    rung.GridSize = static_cast<int>(nCells);
+    rung.GridPoints.clear();
+    return *configuredGrid(rung);
 }
 } // namespace
 

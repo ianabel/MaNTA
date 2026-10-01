@@ -50,6 +50,7 @@ set(MANTA_TEST_SOURCES
   GeometryDerivativeTests.cpp
   GridTests.cpp
   IntegratorTest.cpp
+  MeshAdaptationTests.cpp
   MMSAuxScalarTests.cpp
   MMSConvergenceTests.cpp
   MMSFieldTests.cpp
@@ -62,6 +63,7 @@ set(MANTA_TEST_SOURCES
   PyIntegratorTests.cpp
   ResidualTests.cpp
   ScalarJacobianTests.cpp
+  SmoothnessSensorTests.cpp
   SpectrumTests.cpp
   SolveJacTests.cpp
   SolverLifecycleTests.cpp
