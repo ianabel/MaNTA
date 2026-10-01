@@ -21,7 +21,7 @@ and the retractions are recorded deliberately.
 | Phase 0 (spike) | done, on three benchmarks |
 | Phase 1 (into the solver) | **the plan as written should not be built** — see "What the measurements changed". Working through the revised order at the end of this file instead. |
 | Landed on `main` | the two side quests, **#13** restart use-after-free and **#14** `getDerivative`; then **#15** steady-state output, PTC diagnostics and the SER config keys — most of step 2 below; then **#16**, a restart that can resume at a different polynomial degree, which is step 4's state transfer |
-| On this branch | steps 1–3 below: `Grid` validation, the merit function named and measured, and the modal sensor built — plus the merit function now **weighted** so the tolerance is mesh-independent near a solution, which is what step 2 was measuring towards. Merged up to `main` at `c585326`; no PR yet. |
+| On this branch | steps 1–3 below, merged onto `main` as of 2026-09-30 on `features/mesh-refinement-revival` (131 commits of `main` merged in; the resolutions are in that merge commit's message). |
 | In review | **#17**, step 4 — global-`k` by Giorgiani's rule, plus `SteadyStateSolve`. Built on `feature-degree-adaptivity`, branched from `main` rather than from here, so none of it is below. |
 | Next | **Built.** `MeshAdaptation` runs the p → h → p sequence (`MeshAdaptation.{hpp,cpp}`, `docs/adaptivity.rst`), and **§11** removed the last blocker: `KINSol -7` treated as fatal was the whole of §5's "PTC cannot do Shestakov", so the driver now runs that problem at 262×. What is open: the two cell counts §11 leaves unexplained, carrying `dt` across a remesh, and TimeMarch. Everything below §8 settles the scheme; it is now description rather than plan. Formerly:** Solve uniform at `k >= 4`; decide from the per-cell decay rate whether to grade and at which end (§10); if so rebuild at the *same cell count*, graded as hard as the solver tolerates (§9, worth 14900× at fixed DOF); then run global-`k` to tolerance (#17). **The order is forced, not chosen** — at `k = 2` the grading decision is not merely unreliable but *reversed*. The mesh half is now configurable (`GradedGridBoundary`), so what is left to build is the decision and the loop. Per-cell `p` is gated *no*. Also open: carrying `dt` across a remesh, now that the norm allows it. |
 
@@ -725,6 +725,45 @@ own evidence — the failure there was `IDASolve` at `|h| = MinStepSize` and low
 the key bought a level — but "the solver cannot do this" deserves the same test that
 broke this one open: **change the schedule and see whether the failure moves.** If it
 does not, the schedule is not what is failing.
+
+## 12. A wall layer, not a singularity: the sensor and the regrade both hold
+
+Measured 2026-09-30, after the merge onto `main`, on a problem none of the earlier
+sections had: a boundary *layer* at a Dirichlet wall rather than a singularity at
+an axis. `-d/dx[2 x D u^n u'] = H exp(-x^2/W)`, zero flux at `x = 0`, `u(1) = 0.2`,
+`D = 0.01`, `H = 0.1`, `W = 0.2`, `n = 2.5`. The steady state is closed form,
+`u^(n+1) = u_b^(n+1) + (n+1)/(2D) int_x^1 sigma(s)/s ds` with
+`sigma = H sqrt(pi W)/2 erf(x/sqrt(W))`, and its layer at `x = 1` is about
+`2 D u_b^(n+1) / ((n+1) sigma(1))` = 5e-4 wide. (It is `python-examples/nc-toy-model`
+on the branch that introduced it, with its axis condition corrected from
+`u'(0) = 0` to `sigma(0) = 0`.) Error is the worst pointwise relative error in `u`.
+
+The sensor read it right at every cell count: upper end 3.8–4.3x rougher than the
+interior against the 2.0 threshold, and the zero-flux axis 0.73x -- no false
+positive from a solution that is flat there, which is the `k = 2` failure mode §10
+warns about, at `k = 4` correctly absent.
+
+| `GridSize`, `k = 4` | uniform | `MeshAdaptation`, `MaxPolynomialDegree = 4` | full p → h → p |
+| --- | --- | --- | --- |
+| 4 | 22.8% | 3.1% | 0.14% (k → 9) |
+| 5 | 20.6% | 0.56% | 0.013% (k → 10) |
+| 6 | 18.8% | **0.087%** | < 0.001% |
+
+The regraded 6-cell mesh is `0, 0.8, 0.94, 0.982, 0.9946, 0.99838, 1`: a wall cell
+of 1.6e-3, within a factor of two of the best 6-cell geometric mesh a scan found
+by hand (1e-3, 0.10%). Cost, grading only, at `NewtonJacobianReuse = 1`: 458 visits
+per node against 151 for the one uniform solve -- three solves for 216x the
+accuracy. At the default reuse of 10 both double.
+
+Shrinking the layer (`UpperBoundaryFraction = 0.05`) made it worse, 1.5% at 6
+cells: the interior cell then spans 0.95 and carries the error instead. The
+default of 0.2 was the better of the two here, which is consistent with §9's
+law that what matters is `h0` *and* not starving the rest of the domain.
+
+For contrast, splitting the worst cell by the accuracy indicator from 4 uniform
+cells, twice, to 6 -- what one would build without this file -- reached 0.33% at
+best and 7.8% by bisection, for the same three solves. Moving cells beat adding
+them again.
 
 ## What the measurements changed about the plan
 
