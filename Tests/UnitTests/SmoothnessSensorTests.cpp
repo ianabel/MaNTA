@@ -101,9 +101,12 @@ BOOST_AUTO_TEST_CASE(a_polynomial_below_the_basis_degree_reports_itself_resolved
 
     const CellSmoothness s = cellSmoothness(basis, nodal);
 
-    // Nothing in the top mode, to round-off.
-    BOOST_TEST(s.modalEnergyFraction < 1e-28,
-               "top-mode energy share is " << s.modalEnergyFraction);
+    // Nothing in the top mode, to round-off. Compared outside BOOST_TEST: the
+    // suite's tolerance turns `0 < 1e-28` into a tie when the share comes out
+    // exactly zero, which it does on some builds. See the structural-zeros case
+    // below for the same trap.
+    const bool topModeEmpty = s.modalEnergyFraction < 1e-28;
+    BOOST_TEST(topModeEmpty, "top-mode energy share is " << s.modalEnergyFraction);
 
     // And the rate is reported as infinite rather than fitted. The top mode is
     // at the round-off floor, so this polynomial is exactly representable below
@@ -239,7 +242,9 @@ BOOST_AUTO_TEST_CASE(a_singular_function_decays_more_slowly_than_an_analytic_one
 
     // Both indicators agree in direction here. They do not always -- see the
     // next case -- which is the reason the sensor reports both.
-    BOOST_TEST(smooth.modalEnergyFraction < rough.modalEnergyFraction);
+    // Outside BOOST_TEST, for the reason given in the first case.
+    const bool smootherHasLessTopMode = smooth.modalEnergyFraction < rough.modalEnergyFraction;
+    BOOST_TEST(smootherHasLessTopMode);
 }
 
 BOOST_AUTO_TEST_CASE(the_energy_fraction_moves_orders_with_degree_where_the_decay_rate_does_not)
@@ -275,7 +280,8 @@ BOOST_AUTO_TEST_CASE(the_energy_fraction_moves_orders_with_degree_where_the_deca
     // Measured 3.3e-3, 8.0e-7, 3.8e-11: nearly eight orders between k = 2 and
     // k = 6 on one unchanged function, against 2.04, 3.63, 5.39 for the rate.
     // No single S* can be the boundary between smooth and rough at both.
-    BOOST_TEST(s2.modalEnergyFraction > 1e6 * s6.modalEnergyFraction,
+    const bool sixOrdersApart = s2.modalEnergyFraction > 1e6 * s6.modalEnergyFraction;
+    BOOST_TEST(sixOrdersApart,
                "S_K went from " << s2.modalEnergyFraction << " to "
                << s6.modalEnergyFraction << "; if it is now scale-stable across "
                "degrees, a fixed threshold may be safe and this test should be "

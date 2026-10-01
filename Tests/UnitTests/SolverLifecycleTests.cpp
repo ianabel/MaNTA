@@ -2301,7 +2301,12 @@ BOOST_AUTO_TEST_CASE(the_steady_merit_function_is_the_undamped_residual_two_norm
         flat += data[i] * data[i];
     }
 
-    BOOST_TEST(norm == std::sqrt(sumsq));
+    // To a few ulps rather than bit for bit. N_VWL2Norm and the loop above sum
+    // the same squares, but not as the same code, and clang 21 contracts one of
+    // them into fused multiply-adds: measured one ulp apart there
+    // (1.1114515388469293 against ...95) and identical under gcc. Still tight
+    // enough to fail on any wrong weight, which moves the norm in the third digit.
+    BOOST_TEST(norm == std::sqrt(sumsq), boost::test_tools::tolerance(1e-15));
     BOOST_TEST(norm > 0.0, "the initial condition is already a steady state; "
                            "this fixture cannot say anything about the norm");
 
