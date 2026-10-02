@@ -2,6 +2,7 @@
 
 #include "AdjointProblem.hpp"
 #include "Logging.hpp"
+#include "ParallelFill.hpp"
 #include "PhysicsInstance.hpp"
 #include "Postprocessing.hpp"
 #include "SystemSolver.hpp"
@@ -336,13 +337,24 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
         // it in bounded steps costs solves but each one reports where it got to,
         // which is what makes a run diagnosable.
         const unsigned int capped = std::min(bump, config.MaxDegreeIncrement);
-        const unsigned int next = std::min(k + capped, kMax);
+        const unsigned int chosen = std::min(k + capped, kMax);
 
         if (capped < bump)
             std::println("  raising k from {} to {} (the rule asked for +{}, capped at +{})",
-                         k, next, bump, config.MaxDegreeIncrement);
+                         k, chosen, bump, config.MaxDegreeIncrement);
         else
-            std::println("  raising k from {} to {}", k, next);
+            std::println("  raising k from {} to {}", k, chosen);
+
+        // Then as far beyond that as costs no more rounds of physics, up to the
+        // ceiling but not bound by MaxDegreeIncrement: the cap bounds how far one
+        // estimate may send the loop, and degrees that cost nothing extra to
+        // evaluate are not a bet on the estimate.
+        const unsigned int next = filledDegree(
+            [&](Grid const &g, unsigned int kk) { return system->evaluationPlanFor(g, kk); },
+            grid, chosen, kMax, config.PhysicsParallelism);
+        if (next > chosen)
+            std::println("  filled to k = {}: no more rounds of {} than k = {}", next,
+                         config.PhysicsParallelism, chosen);
 
         // Hand the state on. setRestartValues copies both the vector and the
         // Grid, so nothing here points into the solver about to be destroyed --
@@ -432,19 +444,68 @@ std::unique_ptr<SystemSolver> runLadder(SolverConfig const &config,
     if (intermediate > 0)
         physics.requireAdaptable("A DegreeLadder or GridLadder");
 
+    // The rungs, filled: each to the largest degree, then the largest cell
+    // count, that costs no more rounds of physics -- along whichever of the two
+    // the ladder steps, and never past the configured resolution. A rung filled
+    // up to the one after it is dropped, since solving a level twice buys
+    // nothing. One configured solver plans them all: a plan depends on the
+    // configuration and the level asked about, not on the level the solver was
+    // built for, and this one evaluates nothing.
+    struct Rung
+    {
+        unsigned int k;
+        unsigned int nCells;
+    };
+    const auto finalCells = static_cast<unsigned int>(grid.getNCells());
+    std::vector<Rung> rungs;
+    for (size_t rung = 0; rung < intermediate; ++rung)
+        rungs.push_back({config.DegreeLadder.empty() ? kFinal : config.DegreeLadder[rung],
+                         config.GridLadder.empty() ? finalCells : config.GridLadder[rung]});
+    if (config.PhysicsParallelism > 1 && intermediate > 0)
+    {
+        const auto planner = physics.plannerFor(grid, kFinal, [&](SystemSolver &s)
+                                                { applySolverConfig(config, s); });
+        const LevelPlan planAt = [&](Grid const &g, unsigned int kk)
+        { return planner->evaluationPlanFor(g, kk); };
+
+        std::vector<Rung> filled;
+        for (Rung const &r : rungs)
+        {
+            Rung f = r;
+            const Grid rungGrid(grid.lowerBoundary(), grid.upperBoundary(), r.nCells);
+            if (!config.DegreeLadder.empty())
+                f.k = filledDegree(planAt, rungGrid, r.k, kFinal, config.PhysicsParallelism);
+            if (!config.GridLadder.empty())
+                f.nCells = static_cast<unsigned int>(filledCellCount(
+                    planAt, rungGrid, f.k, finalCells, config.PhysicsParallelism));
+            if (f.k != r.k || f.nCells != r.nCells)
+                std::println("  rung {} filled from {} cells at k = {} to {} cells at k = {}: "
+                             "no more rounds of {}",
+                             &r - rungs.data(), r.nCells, r.k, f.nCells, f.k,
+                             config.PhysicsParallelism);
+            filled.push_back(f);
+        }
+        rungs.clear();
+        for (size_t i = 0; i < filled.size(); ++i)
+        {
+            const Rung after = i + 1 < filled.size() ? filled[i + 1] : Rung{kFinal, finalCells};
+            if (filled[i].k == after.k && filled[i].nCells == after.nCells)
+                std::println("  rung {} dropped: filled, it is the level after it", i);
+            else
+                rungs.push_back(filled[i]);
+        }
+    }
+    const size_t steps = rungs.size();
+
     // The first rung inherits whatever restart state the caller already put on
     // the problem -- a ladder started from a restart file is a reasonable thing
     // to ask for, and clearing here would silently throw it away. Every rung
     // after the first hands on the one before it.
-    for (size_t rung = 0; rung <= intermediate; ++rung)
+    for (size_t rung = 0; rung <= steps; ++rung)
     {
-        const bool last = rung == intermediate;
-        const unsigned int k =
-            last || config.DegreeLadder.empty() ? kFinal : config.DegreeLadder[rung];
-        const unsigned int nCells =
-            last || config.GridLadder.empty()
-                ? static_cast<unsigned int>(grid.getNCells())
-                : config.GridLadder[rung];
+        const bool last = rung == steps;
+        const unsigned int k = last ? kFinal : rungs[rung].k;
+        const unsigned int nCells = last ? finalCells : rungs[rung].nCells;
 
         // The last rung solves on the *caller's* grid, which is what lets the
         // returned solver outlive this function: it holds a reference to its
@@ -492,7 +553,7 @@ std::unique_ptr<SystemSolver> runLadder(SolverConfig const &config,
     if (config.SteadyStateDiagnostics)
     {
         std::println("Ladder totals -- {} rung{}, one steady solve each",
-                     intermediate + 1, intermediate == 0 ? "" : "s");
+                     steps + 1, steps == 0 ? "" : "s");
         std::println("  continuation steps      : {}  ({} rejected)",
                      runTotal.steps, runTotal.rejected);
         std::println("  KINSOL Newton iterations: {}", runTotal.newtonIters);

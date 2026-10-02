@@ -177,6 +177,12 @@ const std::vector<Entry> &table()
          "or degree, when the case does not declare that it follows a new evaluation "
          "plan in place. For cases written before evaluation plans; needs a registered "
          "case, so a Python case object handed to Runner is refused."},
+        {"PhysicsParallelism", {}, Type::UInt, Category::Solver, false, false, 1u,
+         "How many points the physics can evaluate at once: a batch of M points takes "
+         "ceil(M / PhysicsParallelism) rounds. The adaptation controllers fill each "
+         "level they choose to the largest that costs no more rounds, and a level that "
+         "leaves rounds part empty is warned about. 1 changes nothing. See "
+         "docs/adaptivity.rst."},
         {"MeshAdaptationThreshold", {}, Type::Double, Category::Solver, false, false, 2.0,
          "How much rougher than the interior an end must look before MeshAdaptation "
          "grades it, as a ratio of decay rates. Must exceed 1. Measured on three "

@@ -1166,6 +1166,19 @@ autodiff cases), so a case added with grid-dependent state has to do the same or
 stay `Fixed`. The rebuild path is reached only by the `Fixed` fixtures in
 `EvaluationPlanTests.cpp` and `test_evaluation_plan.py`.
 
+**`PhysicsParallelism` costs a level by its plan, so a plan must be buildable for
+any level.** `SystemSolver::evaluationPlanFor(grid, k)` is the plan this solver's
+configuration would make elsewhere, and `ParallelFill.hpp` counts its recurring
+batched sites in rounds of N to *fill* each level a controller chooses (degree up
+to `MaxPolynomialDegree`, past `MaxDegreeIncrement`; graded cells; ladder rungs).
+So everything `evaluationPlanFor` reads must be the configuration or its
+arguments, never the solver's own grid, k or run state;
+`a_plan_for_another_level_is_the_plan_a_solver_there_makes` compares it with a
+solver built at that level and is what fails if a site starts reading `y`. The
+graded-mesh fill keeps the wall cell and caps the layer's ratio at 1/2 because
+`gradedMeshPoints` puts boundaries at `layer * ratio^j`: past 1/2 the wall cell's
+neighbour is the narrower of the two.
+
 ### Self-consistent magnetic fields (`FieldModel`)
 
 A `FieldModel` (`FieldModel.hpp`) contributes `nFieldDOF` unknowns `psi`, one

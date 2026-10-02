@@ -11,6 +11,7 @@
 #include "DegreeAdaptation.hpp"
 #include "MeshAdaptation.hpp"
 #include "PhysicsInstance.hpp"
+#include "ParallelFill.hpp"
 
 // Load restart data into vectors. `nField` is filled with how many of the
 // trailing entries of Y are a field model's psi, so the caller can shape the
@@ -240,6 +241,19 @@ int runManta(std::string const &fname)
 		rebuild = [&](Grid const &g) -> std::shared_ptr<TransportSystem>
 		{ return PhysicsCases::InstantiateProblem(config.TransportSystem, configFile, g); };
 	PhysicsInstance physics(pProblem, adjoint, *grid, std::move(rebuild));
+
+	// The configured level is the one place no controller chooses, so it is the
+	// one that is only warned about. See ParallelFill.hpp.
+	if (config.PhysicsParallelism > 1)
+	{
+		const auto planner = physics.plannerFor(*grid, k, [&](SystemSolver &s)
+												{ applySolverConfig(config, s); });
+		if (const std::string w = underuseWarning(
+				[&](Grid const &g, unsigned int kk) { return planner->evaluationPlanFor(g, kk); },
+				*grid, k, config.MaxPolynomialDegree, config.PhysicsParallelism);
+			!w.empty())
+			logmsg<LOG_LEVEL::WARNING>("{}", w);
+	}
 
 	if (config.MeshAdaptation)
 	{

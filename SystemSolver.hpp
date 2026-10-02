@@ -629,7 +629,13 @@ class SystemSolver
         // discretisation and the configuration and never of the run, so call it
         // after applySolverConfig, setAdjointProblem and setFieldModel -- every
         // one of which can add or move a site.
-        EvaluationPlan evaluationPlan() const;
+        EvaluationPlan evaluationPlan() const { return evaluationPlanFor(grid, k); }
+
+        // The plan this solver's configuration would make on another mesh or at
+        // another degree: what the adaptation controllers compare levels by, so
+        // that a candidate level is costed by exactly the sites it would have
+        // rather than by a formula for them.
+        EvaluationPlan evaluationPlanFor(Grid const &grid, unsigned int k) const;
 
         void setAdjointProblem(AdjointProblem *ap) { adjointProblem = ap; };
         void runAdjointSolve();

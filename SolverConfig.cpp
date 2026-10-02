@@ -339,6 +339,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(MeshAdaptationThreshold, double);
     READ(MeshAdaptationAttempts, unsigned);
     READ(RebuildPhysicsOnRegrid, bool);
+    READ(PhysicsParallelism, unsigned);
     READ(TransportSystem, std::string);
     READ(PhysicsPlugins, std::vector<std::string>);
     READ(FieldModel, std::string);
@@ -476,6 +477,12 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
                 "steady-state termination is never armed and every rung "
                 "time-marches the same interval again.");
     }
+
+    // A machine that evaluates no points at a time has no rounds to count.
+    if (c.PhysicsParallelism < 1)
+        throw std::invalid_argument(
+            "PhysicsParallelism must be at least 1: it is how many points the physics "
+            "evaluates at once, and 1 is a machine with no parallelism.");
 
     // MeshAdaptation *is* the p -> h -> p sequence, and its last stage is the
     // degree loop, so it turns that on rather than requiring the user to ask for

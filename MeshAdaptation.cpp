@@ -3,6 +3,7 @@
 #include "AdjointProblem.hpp"
 #include "DegreeAdaptation.hpp"
 #include "Logging.hpp"
+#include "ParallelFill.hpp"
 #include "PhysicsInstance.hpp"
 #include "SmoothnessSensor.hpp"
 #include "SystemSolver.hpp"
@@ -245,7 +246,49 @@ AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
         const std::vector<double> sampleDerivative = sample->derivativeVector();
         const Grid sampleGrid = *result.grid;
         const SolverConfig warmConfig = carriedStepConfig(config, *sample);
+
+        // As many cells as cost no more rounds of physics than the sample's,
+        // planned by the sample's own configuration; see layerFor below for
+        // where they go.
+        const Grid::Index sampleCells = uniform.getNCells();
+        const Grid::Index gradedCount = filledCellCount(
+            [&](Grid const &g, unsigned int kk) { return sample->evaluationPlanFor(g, kk); },
+            uniform, k0, std::numeric_limits<Grid::Index>::max(), config.PhysicsParallelism);
+        const Grid filledUniform(uniform.lowerBoundary(), uniform.upperBoundary(), gradedCount);
         sample.reset();
+
+        // The layer the filled mesh grades at a given ratio. Its boundaries sit
+        // at layer * ratio^j from the wall, so the wall cell is layer *
+        // ratio^(m-1), its neighbour layer * ratio^(m-2) * (1 - ratio), and the
+        // wall cell is the narrowest only while ratio <= 1/2. Extra cells
+        // therefore go into the layer at the ratio that keeps the wall cell the
+        // sample's count would have given it, ratio^((m-1)/(m'-1)), for as long
+        // as that stays at or below 1/2; the rest go to the bulk. At a fixed ratio
+        // each one would shrink the wall cell by the ratio again, which below the
+        // layer's own width is lost accuracy -- 4, 5 and 6 cells at 0.3 measured
+        // 5.5e-3, 8.9e-4 and 1.3e-3 on the n = 2.5 wall layer of
+        // MESH-REFINEMENT.md section 12 -- and past 1/2 they would pack cells
+        // narrower than the wall cell beside it. A GradingCells holds the layer
+        // where it is, and every extra cell goes to the bulk.
+        struct Layer
+        {
+            Grid::Index cells;
+            double ratio;
+        };
+        const auto layerFor = [&](double r) -> Layer
+        {
+            const auto m = config.GradingCells == 0 ? sampleCells - 1
+                                                    : static_cast<Grid::Index>(config.GradingCells);
+            if (config.GradingCells != 0 || gradedCount == sampleCells || m < 2 || !(r < 0.5))
+                return {m, r};
+            const auto most = static_cast<Grid::Index>(
+                1.0 + std::floor(static_cast<double>(m - 1) * std::log(r) / std::log(0.5)));
+            const Grid::Index cells = std::min(gradedCount - 1, std::max(m, most));
+            return {cells, std::pow(r, static_cast<double>(m - 1) / static_cast<double>(cells - 1))};
+        };
+        if (gradedCount > sampleCells)
+            std::println("  filled to {} cells: no more rounds of {} than {}", gradedCount,
+                         config.PhysicsParallelism, sampleCells);
 
         const double layer = gradingLayerFraction(d, uniform, config);
         std::println("  layer: {:.4g} of the domain{}", layer,
@@ -257,9 +300,9 @@ AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
         for (unsigned int attempt = 1; attempt <= config.MeshAdaptationAttempts;
              ++attempt)
         {
-            auto points = gradedMeshFor(d, uniform,
-                                        static_cast<Grid::Index>(config.GradingCells),
-                                        layer, layer, ratio);
+            const Layer layerShape = layerFor(ratio);
+            auto points = gradedMeshFor(d, filledUniform, layerShape.cells, layer, layer,
+                                        layerShape.ratio);
             auto graded = std::make_unique<Grid>(points);
 
             const double span = uniform.upperBoundary() - uniform.lowerBoundary();
@@ -267,8 +310,9 @@ AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
             for (Grid::Index i = 0; i < graded->getNCells(); ++i)
                 narrowest = std::min(narrowest, (*graded)[i].h());
 
-            std::println("  attempt {}: ratio {:.4g}, narrowest cell {:.3e} of the "
-                         "domain", attempt, ratio, narrowest / span);
+            std::println("  attempt {}: ratio {:.4g}, {} cells in the layer, narrowest "
+                         "cell {:.3e} of the domain",
+                         attempt, layerShape.ratio, layerShape.cells, narrowest / span);
 
             // Built -- around a rebuilt case, if RebuildPhysicsOnRegrid calls for one --
             // outside the attempt's own failure handling below. A case that cannot
