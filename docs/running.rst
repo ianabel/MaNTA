@@ -985,12 +985,11 @@ Controlling the inner solve
 
 Four keys reach KINSOL. They apply to ``PseudoTransient`` and ``Newton`` alike —
 pseudo-transient continuation *is* Newton on a damped residual — and not at all
-to ``TimeMarch``, which never builds a KINSOL object. Every default reproduces
-what the code did when these were hardcoded, so an unconfigured run is unchanged.
+to ``TimeMarch``, which never builds a KINSOL object.
 
 ``NewtonJacobianReuse``
    How many Newton iterations may share one Jacobian factorisation (KINSOL's
-   ``msbset``). ``1`` is full Newton; larger is modified Newton. **This is the
+   ``msbset``). ``1``, the default, is full Newton; larger is modified Newton. **This is the
    setting the** ``jac`` **and** ``solves`` **columns above measure**, and the
    section below is about why it is worth setting per case.
 
@@ -1043,7 +1042,7 @@ Which side wins is a property of how your flux model is differentiated. **That i
 the whole reason this is configurable**, and it is why there is no default that is
 right for every case.
 
-The default of 10 is KINSOL's. At the cheap-Jacobian end of the range it is
+KINSOL's own default is 10. At the cheap-Jacobian end of the range that is
 conservative — measured on ``AdjointPoster``, an analytic flux, at k = 3, driving
 the residual to 1e-10:
 
@@ -1070,7 +1069,7 @@ the residual to 1e-10:
      - 8
      - 25
      - 36
-   * - 10 (default)
+   * - 10
      - 6.21 s
      - 7
      - 32
@@ -1178,21 +1177,20 @@ described above is real only while the Jacobian is stable enough that a stale on
 still points somewhere useful; on a strongly nonlinear problem it is not, and the
 extra iterations are pure loss.
 
-**At the default, Shestakov does not converge at all**, in either steady mode,
+**At reuse 10, Shestakov does not converge at all**, in either steady mode,
 returning ``KIN_MXNEWT_5X_EXCEEDED``. A Jacobian ten iterations old gives a bad
 enough direction that the step clamp fires five times running. At reuse 1 both
 modes converge, and ``PseudoTransient`` beats ``TimeMarch`` four to one — which
 reverses the note in ``../shestakov-nonlinear/`` that continuation costs 2.5× what
-time marching does. That measurement was taken at the default and is a statement
+time marching does. That measurement was taken at reuse 10 and is a statement
 about ``msbset``, not about pseudo-transient continuation.
 
-So the honest summary is that KINSOL's default of 10 suits neither of MaNTA's
-nonlinear benchmarks, and on one of them it is the difference between converging
-and not. It is left in place only because the cost model above says the opposite
-case exists: a physics case whose Jacobian is finite-differenced from expensive
-flux calls pays far more per assembly than these do, and would rather have the
-iterations. **If a steady solve is slow or will not converge,**
-``NewtonJacobianReuse = 1`` **is the first thing to try.**
+So KINSOL's default of 10 suits neither of MaNTA's nonlinear benchmarks, and on
+one of them it is the difference between converging and not; MaNTA's default is
+therefore 1. The cost model above says the opposite case exists -- a physics case
+whose Jacobian is finite-differenced from expensive flux calls pays far more per
+assembly than these do, and would rather have the iterations -- and that is what
+raising it is for.
 
 .. _degree-adaptation:
 

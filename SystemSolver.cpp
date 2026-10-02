@@ -656,6 +656,16 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     if (solvesForSteadyState())
         return;
 
+    // The dydt solve below reads D, E and RF_cellwise, so under a Diffusive
+    // scaling it wants tau at the state just built rather than the constant
+    // initialiseMatrices left there.
+    if (tauFollowsResidual())
+        applyResidualTau(faceTau(y, t0));
+    else if (tauFrozenPerStep())
+        freezeTauAt(y, t0);
+    if (tauScaling != TauScaling::Constant)
+        updateBoundaryConditions(t0);
+
     GlobalState sourceStates = y.evalOnNodes();
     const auto sourcePoints = y.getPoints();
     evaluateGeometry(y, sourcePoints, sourceStates, t);
@@ -772,16 +782,9 @@ void SystemSolver::initialiseMatrices()
             // B_ij = ( phi_i, phi_j' )
             y.getBasis().DerivativeMatrix(I, Bvar);
 
-            // Now do all the boundary terms
-            for (Eigen::Index i = 0; i < k + 1; i++)
-            {
-                for (Eigen::Index j = 0; j < k + 1; j++)
-                {
-                    Dvar(i, j) +=
-                        tau(I.x_l) * y.getBasis().Evaluate(I, j, I.x_l) * y.getBasis().Evaluate(I, i, I.x_l) +
-                        tau(I.x_u) * y.getBasis().Evaluate(I, j, I.x_u) * y.getBasis().Evaluate(I, i, I.x_u);
-                }
-            }
+            // D_ij = < tau phi_j, phi_i > on the two faces is left zero here;
+            // applyResidualTau / applyJacobianTau write it, and every other tau
+            // term, once the loop is done.
 
             A.block(var * (k + 1), var * (k + 1), k + 1, k + 1) = Avar;
             D.block(var * (k + 1), var * (k + 1), k + 1, k + 1) = Dvar;
@@ -809,7 +812,7 @@ void SystemSolver::initialiseMatrices()
         // row3
         M.block(2 * nVars * (k + 1), 0, nVars * (k + 1), nVars * (k + 1)) = B;
         M.block(2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)).setZero();
-        M.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = D; // X added at Jac step
+        M.block(2 * nVars * (k + 1), 2 * nVars * (k + 1), nVars * (k + 1), nVars * (k + 1)) = D; // tau terms by applyJacobianTau; X added at Jac step
 
         // TODO:  Consider factorization here (is M sparse nough to warrant a sparse implementation?)
         MBlocks.emplace_back(M);
@@ -828,21 +831,13 @@ void SystemSolver::initialiseMatrices()
                 Cvar(0, i) = -y.getBasis().Evaluate(I, i, I.x_l);
                 Cvar(1, i) = y.getBasis().Evaluate(I, i, I.x_u);
 
-                // E_ij = < phi_i, (- tau ) lambda >
-                Evar(i, 0) = y.getBasis().Evaluate(I, i, I.x_l) * (-tau(I.x_l));
-                Evar(i, 1) = y.getBasis().Evaluate(I, i, I.x_u) * (-tau(I.x_u));
+                // E_ij = < phi_i, (- tau ) lambda > is written by the tau passes.
 
                 if (I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryDirichlet(var))
-                {
                     Cvar(0, i) = 0;
-                    Evar(i, 0) = 0;
-                }
                 // should this be is upper boundary dirichlet?
                 if (I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(var))
-                {
                     Cvar(1, i) = 0;
-                    Evar(i, 1) = 0;
-                }
             }
 
             // Construct per-cell Matrix solutions
@@ -935,21 +930,14 @@ void SystemSolver::initialiseMatrices()
                     Cq_var(1, i) = bc.b * y.getBasis().Evaluate(I, i, I.x_u);
                 }
 
-                Gvar(0, i) = tau(I.x_l) * y.getBasis().Evaluate(I, i, I.x_l);
+                // G, tau u on each face, is written by the tau passes.
 
                 // If Dirichlet, proceed as normal
                 if (I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryDirichlet(var))
-                {
                     Csigma_var(0, i) = 0.0;
-                    Gvar(0, i) = 0.0;
-                }
 
-                Gvar(1, i) = tau(I.x_u) * y.getBasis().Evaluate(I, i, I.x_u);
                 if (I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(var))
-                {
                     Csigma_var(1, i) = 0.0;
-                    Gvar(1, i) = 0.0;
-                }
             }
 
             Csigma.block(2 * var, (k + 1) * var, 2,(k + 1)) = Csigma_var;
@@ -970,42 +958,11 @@ void SystemSolver::initialiseMatrices()
         Csigma_cellwise.emplace_back(Csigma);
         Cq_cellwise.emplace_back(Cq);
 
-        // Now fill H
-        Eigen::MatrixXd H(2 * nVars, 2 * nVars);
-        H.setZero();
-        for (Index var = 0; var < nVars; var++)
-        {
-            Eigen::MatrixXd Hvar(2, 2);
-            Hvar.setZero();
-            Hvar(0, 0) = -tau(I.x_l);
-            Hvar(1, 0) = 0.0;
-            Hvar(0, 1) = 0.0;
-            Hvar(1, 1) = -tau(I.x_u);
-
-            // A Mixed end's `a` coefficient lives here, on the lambda column,
-            // rather than in G on the interior u. That is the form the HDG
-            // literature uses -- the condition relates the *numerical flux* to
-            // the *trace unknown*, not to the interior trace (Cui & Zhang,
-            // refs/HDG-Helmholtz-Robin.pdf eq. 2.3 and its impedance condition)
-            // -- and it is what keeps the row solvable for lambda when b = d = 0
-            // is the only thing left. It carries the outward normal, so that
-            // dividing the row through by n leaves a plain `a u` for the case
-            // author: -a below, +a above.
-            if (I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryDirichlet(var))
-                Hvar(0, 0) = 0.0;
-            else if (I.x_l == grid.lowerBoundary())
-                Hvar(0, 0) = -tau(I.x_l) - effectiveLowerBoundary(var).a;
-
-            if (I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(var))
-                Hvar(1, 1) = 0.0;
-            else if (I.x_u == grid.upperBoundary())
-                Hvar(1, 1) = -tau(I.x_u) + effectiveUpperBoundary(var).a;
-
-            H.block(2 * var, 2 * var, 2, 2) = Hvar;
-            HGlobalMat.block(var * (nCells + 1) + i, var * (nCells + 1) + i, 2, 2) += Hvar;
-        }
-
+        // H, -tau on each face's lambda plus a Mixed end's `a`, is written by
+        // the tau passes.
+        Eigen::MatrixXd H = Eigen::MatrixXd::Zero(2 * nVars, 2 * nVars);
         H_cellwise.emplace_back(H);
+        H_jac_cellwise.emplace_back(H);
 
         // L is the Neumann counterpart of RF_cellwise above, and equally time
         // dependent: updateBoundaryConditions fills it. It was zeroed before the
@@ -1039,6 +996,19 @@ void SystemSolver::initialiseMatrices()
         // columns and scatterA1Column is never called.
         A1_cellwise.emplace_back(Matrix::Zero(nDof, nField));
     }
+    // Every tau term, at the configured constant. A Diffusive scaling replaces
+    // these with state-dependent values before any residual or Jacobian reads
+    // them; faceTau at a Constant scaling is exactly this matrix.
+    tauRes = Matrix::Constant(nVars, 2 * nCells, tauc);
+    tauJac = tauRes;
+    applyResidualTau(tauRes);
+    applyJacobianTau(tauJac);
+
+    for (unsigned int i = 0; i < nCells; i++)
+        for (Index var = 0; var < nVars; var++)
+            HGlobalMat.block(var * (nCells + 1) + i, var * (nCells + 1) + i, 2, 2) +=
+                H_cellwise[i].block(2 * var, 2 * var, 2, 2);
+
     // Factorise the global H matrix
     H_global.compute(HGlobalMat);
     H_global_mat = HGlobalMat;
@@ -1076,11 +1046,388 @@ void SystemSolver::clearCellwiseVecs()
     C_cellwise.clear();
     G_cellwise.clear();
     H_cellwise.clear();
+    H_jac_cellwise.clear();
     Csigma_cellwise.clear();
     Cq_cellwise.clear();
     CEBlocks.clear();
     MXSolvers.clear();
     A1_cellwise.clear();
+}
+
+// The tau terms of one cell, in the full-width cell matrices: D (u, u), E (u,
+// lambda), G (trace row, u) and H (trace row, lambda). `tau` is (nVars x
+// 2 nCells), column 2i the lower face of cell i and 2i + 1 its upper face. The
+// arithmetic is written exactly as initialiseMatrices wrote it before these were
+// split out, so a Constant scaling assembles the same bits it always did.
+void SystemSolver::assembleTauBlocks(Index i, Matrix const &tau, Matrix &D, Matrix &E,
+                                     Matrix &G, Matrix &H) const
+{
+    Interval const &I(grid[i]);
+    D.setZero(nVars * (k + 1), nVars * (k + 1));
+    E.setZero(nVars * (k + 1), 2 * nVars);
+    G.setZero(2 * nVars, nVars * (k + 1));
+    H.setZero(2 * nVars, 2 * nVars);
+
+    const bool lowerEnd = I.x_l == grid.lowerBoundary();
+    const bool upperEnd = I.x_u == grid.upperBoundary();
+
+    for (Index var = 0; var < nVars; var++)
+    {
+        const double tl = tau(var, 2 * i);
+        const double tu = tau(var, 2 * i + 1);
+        const bool lowerDirichlet = lowerEnd && problem->isLowerBoundaryDirichlet(var);
+        const bool upperDirichlet = upperEnd && problem->isUpperBoundaryDirichlet(var);
+
+        for (Eigen::Index ii = 0; ii < k + 1; ii++)
+        {
+            for (Eigen::Index jj = 0; jj < k + 1; jj++)
+                D(var * (k + 1) + ii, var * (k + 1) + jj) =
+                    tl * y.getBasis().Evaluate(I, jj, I.x_l) * y.getBasis().Evaluate(I, ii, I.x_l) +
+                    tu * y.getBasis().Evaluate(I, jj, I.x_u) * y.getBasis().Evaluate(I, ii, I.x_u);
+
+            // E_ij = < phi_i, (- tau ) lambda >, absent where lambda is the
+            // Dirichlet datum: that term is tau g_D in RF_cellwise instead.
+            E(var * (k + 1) + ii, 2 * var) =
+                lowerDirichlet ? 0.0 : y.getBasis().Evaluate(I, ii, I.x_l) * (-tl);
+            E(var * (k + 1) + ii, 2 * var + 1) =
+                upperDirichlet ? 0.0 : y.getBasis().Evaluate(I, ii, I.x_u) * (-tu);
+
+            G(2 * var, var * (k + 1) + ii) =
+                lowerDirichlet ? 0.0 : tl * y.getBasis().Evaluate(I, ii, I.x_l);
+            G(2 * var + 1, var * (k + 1) + ii) =
+                upperDirichlet ? 0.0 : tu * y.getBasis().Evaluate(I, ii, I.x_u);
+        }
+
+        // A Mixed end's `a` coefficient lives here, on the lambda column,
+        // rather than in G on the interior u. That is the form the HDG
+        // literature uses -- the condition relates the *numerical flux* to
+        // the *trace unknown*, not to the interior trace (Cui & Zhang,
+        // refs/HDG-Helmholtz-Robin.pdf eq. 2.3 and its impedance condition)
+        // -- and it is what keeps the row solvable for lambda when b = d = 0
+        // is the only thing left. It carries the outward normal, so that
+        // dividing the row through by n leaves a plain `a u` for the case
+        // author: -a below, +a above.
+        H(2 * var, 2 * var) = -tl;
+        H(2 * var + 1, 2 * var + 1) = -tu;
+        if (lowerDirichlet)
+            H(2 * var, 2 * var) = 0.0;
+        else if (lowerEnd)
+            H(2 * var, 2 * var) = -tl - effectiveLowerBoundary(var).a;
+
+        if (upperDirichlet)
+            H(2 * var + 1, 2 * var + 1) = 0.0;
+        else if (upperEnd)
+            H(2 * var + 1, 2 * var + 1) = -tu + effectiveUpperBoundary(var).a;
+    }
+}
+
+void SystemSolver::applyResidualTau(Matrix const &tau)
+{
+    tauRes = tau;
+    Matrix D, E, G, H;
+    for (Index i = 0; i < nCells; i++)
+    {
+        assembleTauBlocks(i, tau, D, E, G, H);
+        D_cellwise[i] = D;
+        E_cellwise[i] = E;
+        G_cellwise[i] = G;
+        H_cellwise[i] = H;
+    }
+}
+
+void SystemSolver::applyJacobianTau(Matrix const &tau, TauJacobian const *dTau)
+{
+    tauJac = tau;
+    const Index blk = nVars * (k + 1);
+    const Index sigCol = 0, qCol = blk, uCol = 2 * blk, auxCol = 3 * blk, uRow = 2 * blk;
+    Matrix D, E, G, H;
+    for (Index i = 0; i < nCells; i++)
+    {
+        assembleTauBlocks(i, tau, D, E, G, H);
+        MBlocks[i].block(uRow, uCol, blk, blk) = D;
+        CEBlocks[i].block(uRow, 0, blk, 2 * nVars) = E;
+        CG_cellwise[i].block(0, uCol, 2 * nVars, blk) = G;
+        H_jac_cellwise[i] = H;
+
+        // The blocks d tau / dy adds to, put back to what initialiseMatrices
+        // made them, so that terms from a previous build do not accumulate.
+        // Copies of exactly those values, so this costs a Constant run nothing.
+        MBlocks[i].block(uRow, sigCol, blk, blk) = B_cellwise[i];
+        MBlocks[i].block(uRow, qCol, blk, blk).setZero();
+        CG_cellwise[i].block(0, sigCol, 2 * nVars, blk) = Csigma_cellwise[i];
+        CG_cellwise[i].block(0, qCol, 2 * nVars, blk) = Cq_cellwise[i];
+        if (nAux > 0)
+        {
+            MBlocks[i].block(uRow, auxCol, blk, nAux * (k + 1)).setZero();
+            CG_cellwise[i].block(0, auxCol, 2 * nVars, nAux * (k + 1)).setZero();
+        }
+
+        if (dTau == nullptr)
+            continue;
+
+        Interval const &I(grid[i]);
+        for (Index side = 0; side < 2; side++)
+        {
+            const Index p = 2 * i + side;
+            const Position x = side == 0 ? I.x_l : I.x_u;
+            Vector phi(k + 1);
+            for (Index j = 0; j < k + 1; j++)
+                phi(j) = y.getBasis().Evaluate(I, j, x);
+
+            for (Index v = 0; v < nVars; v++)
+            {
+                const double jump = dTau->jump(v, p);
+                if (jump == 0.0)
+                    continue;
+                // The trace row of a Dirichlet end is not solved; see
+                // imposeDirichletTraceRows.
+                const bool traceRow =
+                    !((side == 0 && I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryDirichlet(v)) ||
+                      (side == 1 && I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(v)));
+                const Index uRowV = uRow + v * (k + 1);
+                const Index traceV = 2 * v + side;
+
+                // Component c: u of variable w, through lambda_w on this face.
+                for (Index w = 0; w < nVars; w++)
+                {
+                    const double T = jump * dTau->dTau[w](v, p);
+                    if (T == 0.0)
+                        continue;
+                    CEBlocks[i].block(uRowV, 2 * w + side, k + 1, 1) += T * phi;
+                    if (traceRow)
+                        H_jac_cellwise[i](traceV, 2 * w + side) += T;
+                }
+
+                // q, sigma and aux of this cell, through their face values.
+                auto cellComponent = [&](Index c, Index col)
+                {
+                    const double T = jump * dTau->dTau[c](v, p);
+                    if (T == 0.0)
+                        return;
+                    MBlocks[i].block(uRowV, col, k + 1, k + 1) += T * phi * phi.transpose();
+                    if (traceRow)
+                        CG_cellwise[i].block(traceV, col, 1, k + 1) += T * phi.transpose();
+                };
+                for (Index w = 0; w < nVars; w++)
+                {
+                    cellComponent(nVars + w, qCol + w * (k + 1));
+                    cellComponent(2 * nVars + w, sigCol + w * (k + 1));
+                }
+                for (Index a = 0; a < nAux; a++)
+                    cellComponent(3 * nVars + a, auxCol + a * (k + 1));
+            }
+        }
+    }
+}
+
+SystemSolver::FaceStates SystemSolver::faceStates(DGSoln const &Y, Time tEval)
+{
+    // The state on each face as cell i sees it: u from the trace, which is
+    // single valued (or the Dirichlet datum, where the trace row is not
+    // solved), and q, sigma and the aux variables from the cell's own
+    // polynomials. GlobalState's k is a per-cell point count minus one, so
+    // k = 1 gives the two faces of every cell.
+    FaceStates out{GlobalState(nCells, 1, nVars, nScalars, nAux), std::vector<Position>(2 * nCells)};
+    Vector phiF(k + 1);
+    for (Index i = 0; i < nCells; i++)
+    {
+        Interval const &I(grid[i]);
+        for (Index side = 0; side < 2; side++)
+        {
+            const Position x = side == 0 ? I.x_l : I.x_u;
+            const Index p = 2 * i + side;
+            out.points[p] = x;
+            for (Index j = 0; j < k + 1; j++)
+                phiF(j) = y.getBasis().Evaluate(I, j, x);
+
+            State st(nVars, nScalars, nAux);
+            for (Index v = 0; v < nVars; v++)
+            {
+                const bool dirichlet =
+                    (side == 0 && I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryDirichlet(v)) ||
+                    (side == 1 && I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(v));
+                if (dirichlet)
+                    st.u(v) = side == 0 ? problem->LowerBoundary(v, tEval) : problem->UpperBoundary(v, tEval);
+                else
+                    st.u(v) = Y.lambda(v)[i + side];
+                st.q(v) = phiF.dot(Y.q(v).getCoeff(i).second);
+                st.sigma(v) = phiF.dot(Y.sigma(v).getCoeff(i).second);
+            }
+            for (Index a = 0; a < nAux; a++)
+                st.phi(a) = phiF.dot(Y.Aux(a).getCoeff(i).second);
+            for (Index sc = 0; sc < nScalars; sc++)
+                st.scalar(sc) = Y.Scalar(sc);
+            out.states.setWithState(p, st);
+        }
+    }
+    evaluateGeometry(Y, out.points, out.states, tEval);
+    return out;
+}
+
+Matrix SystemSolver::faceKappaOverH(FaceStates const &faces, Time tEval)
+{
+    // One batched call for all 2 nCells faces. It computes the source and aux
+    // derivatives too, which are not wanted -- the price of reusing the one
+    // derivative interface every case, C++ or Python, already implements.
+    GlobalStateMatrix dSigma_vals(nVars), dSource_vals(nVars), dAux_vals(nAux);
+    for (Index v = 0; v < nVars; v++)
+    {
+        dSigma_vals.add(nCells, 1, nVars, nScalars, nAux);
+        dSource_vals.add(nCells, 1, nVars, nScalars, nAux);
+    }
+    for (Index a = 0; a < nAux; a++)
+        dAux_vals.add(nCells, 1, nVars, nScalars, nAux);
+    problem->ComputePhysicsDerivatives({dSigma_vals, dSource_vals, dAux_vals}, faces.states,
+                                       faces.points, tEval);
+
+    Matrix kh(nVars, 2 * nCells);
+    for (Index v = 0; v < nVars; v++)
+        for (Index p = 0; p < 2 * nCells; p++)
+        {
+            Interval const &I(grid[p / 2]);
+            kh(v, p) = std::abs(dSigma_vals[v].Derivative()(v, p)) / (I.x_u - I.x_l);
+        }
+
+    // A boundary face carrying a flux condition takes the larger of its own
+    // kappa and its cell's other face. There tau has no Dirichlet mismatch to
+    // weigh against the flux -- it is only what ties the trace to the cell --
+    // and kappa at that face can vanish for reasons that are no layer at all: a
+    // flux carrying a factor of x vanishes on the axis however diffusive the
+    // cell is. Measured on a wall-layer case graded towards x = 1, where the
+    // axis cell is the coarsest: the axis face's own kappa left that cell at
+    // 3.4x a constant tau's error, and this halves the excess.
+    const Index last = 2 * nCells - 1;
+    for (Index v = 0; v < nVars; v++)
+    {
+        if (!problem->isLowerBoundaryDirichlet(v))
+            kh(v, 0) = std::max(kh(v, 0), kh(v, 1));
+        if (!problem->isUpperBoundaryDirichlet(v))
+            kh(v, last) = std::max(kh(v, last), kh(v, last - 1));
+    }
+    return kh;
+}
+
+Matrix SystemSolver::tauFromKappa(Matrix const &kh) const
+{
+    Matrix tau = Matrix::Constant(nVars, 2 * nCells, tauc);
+    for (Index v = 0; v < nVars; v++)
+    {
+        const double scale = kh.row(v).maxCoeff();
+        // No diffusion anywhere in this variable at this state: there is no
+        // kappa / h to scale by, so it keeps the constant.
+        if (!(scale > 0.0))
+            continue;
+        tau.row(v) = tauc * (kh.row(v).array() + tauFloorFraction * scale).matrix();
+    }
+    return tau;
+}
+
+Matrix SystemSolver::faceTau(DGSoln const &Y, Time tEval)
+{
+    if (tauScaling == TauScaling::Constant)
+        return Matrix::Constant(nVars, 2 * nCells, tauc);
+    return tauFromKappa(faceKappaOverH(faceStates(Y, tEval), tEval));
+}
+
+SystemSolver::TauJacobian SystemSolver::faceTauJacobian(DGSoln const &Y, FaceStates const &faces,
+                                                        Matrix const &kh, Time tEval)
+{
+    TauJacobian out;
+    out.jump = Matrix::Zero(nVars, 2 * nCells);
+    for (Index i = 0; i < nCells; i++)
+    {
+        Interval const &I(grid[i]);
+        for (Index side = 0; side < 2; side++)
+        {
+            const Index p = 2 * i + side;
+            const Position x = side == 0 ? I.x_l : I.x_u;
+            for (Index v = 0; v < nVars; v++)
+            {
+                double uFace = 0.0;
+                auto const &coeffs = Y.u(v).getCoeff(i).second;
+                for (Index j = 0; j < k + 1; j++)
+                    uFace += coeffs(j) * y.getBasis().Evaluate(I, j, x);
+                // faces.states carries lambda, or g_D at a Dirichlet end.
+                out.jump(v, p) = uFace - faces.states.Variable()(v, p);
+            }
+        }
+    }
+
+    // A variable that fell back to the constant (no diffusion anywhere) has a
+    // tau that does not move.
+    std::vector<bool> scaled(nVars);
+    for (Index v = 0; v < nVars; v++)
+        scaled[v] = kh.row(v).maxCoeff() > 0.0;
+
+    // d kh / d s_c by a forward difference in each component c of the face
+    // state, all 2 nCells faces at once: kh at face p depends only on s_p, so
+    // perturbing every face in the same component is one batched call and not
+    // 2 nCells of them. The floor's dependence on the grid maximum is dropped.
+    const Index nComponents = 3 * nVars + nAux;
+    out.dTau.assign(nComponents, Matrix::Zero(nVars, 2 * nCells));
+    for (Index c = 0; c < nComponents; c++)
+    {
+        FaceStates perturbed = faces;
+        Matrix *field;
+        Index row;
+        if (c < nVars)
+            field = &perturbed.states.Variable(), row = c;
+        else if (c < 2 * nVars)
+            field = &perturbed.states.Derivative(), row = c - nVars;
+        else if (c < 3 * nVars)
+            field = &perturbed.states.Flux(), row = c - 2 * nVars;
+        else
+            field = &perturbed.states.Aux(), row = c - 3 * nVars;
+
+        Vector delta(2 * nCells);
+        for (Index p = 0; p < 2 * nCells; p++)
+        {
+            delta(p) = 1e-7 * (1.0 + std::abs((*field)(row, p)));
+            (*field)(row, p) += delta(p);
+        }
+        const Matrix khPerturbed = faceKappaOverH(perturbed, tEval);
+
+        for (Index v = 0; v < nVars; v++)
+        {
+            if (!scaled[v])
+                continue;
+            for (Index p = 0; p < 2 * nCells; p++)
+                out.dTau[c](v, p) = tauc * (khPerturbed(v, p) - kh(v, p)) / delta(p);
+        }
+
+        // u of variable w at a Dirichlet end is the datum, not lambda: there is
+        // no unknown for it to be a derivative with respect to.
+        if (c < nVars)
+        {
+            if (problem->isLowerBoundaryDirichlet(c))
+                out.dTau[c].col(0).setZero();
+            if (problem->isUpperBoundaryDirichlet(c))
+                out.dTau[c].col(2 * nCells - 1).setZero();
+        }
+    }
+
+    // A flux-condition boundary face can take its kappa from the other face of
+    // its cell (faceKappaOverH), so its tau depends on that face's state too --
+    // which perturbing every face at once attributes to the wrong face. Dropped
+    // there rather than assembled against the wrong columns; it is two faces.
+    for (Index v = 0; v < nVars; v++)
+    {
+        for (Index c = 0; c < nComponents; c++)
+        {
+            if (!problem->isLowerBoundaryDirichlet(v))
+                out.dTau[c](v, 0) = 0.0;
+            if (!problem->isUpperBoundaryDirichlet(v))
+                out.dTau[c](v, 2 * nCells - 1) = 0.0;
+        }
+    }
+    return out;
+}
+
+void SystemSolver::freezeTauAt(DGSoln const &Y, Time tEval)
+{
+    const Matrix tau = faceTau(Y, tEval);
+    applyResidualTau(tau);
+    applyJacobianTau(tau);
 }
 
 // Memory Layout for a sundials Y is, if i indexes the components of u / q / sigma
@@ -1105,7 +1452,7 @@ void SystemSolver::updateBoundaryConditions(double t)
                     // < g_D , v . n > ~= g_D( x_0 ) * phi_j( x_0 ) * ( n_x = -1 )
                     RF_cellwise[i](j + var * (k + 1)) += -y.getBasis().Evaluate(I, j, I.x_l) * (-1) * problem->LowerBoundary(var, t);
                     // < ( tau ) g_D, w >
-                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_l) * tau(I.x_l) * problem->LowerBoundary(var, t);
+                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_l) * tauRes(var, 2 * i) * problem->LowerBoundary(var, t);
                 }
             }
 
@@ -1115,7 +1462,7 @@ void SystemSolver::updateBoundaryConditions(double t)
                 {
                     // < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 )
                     RF_cellwise[i](j + var * (k + 1)) += -y.getBasis().Evaluate(I, j, I.x_u) * (+1) * problem->UpperBoundary(var, t);
-                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_u) * tau(I.x_u) * problem->UpperBoundary(var, t);
+                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_u) * tauRes(var, 2 * i + 1) * problem->UpperBoundary(var, t);
                 }
             }
 
@@ -1583,6 +1930,19 @@ void SystemSolver::updateMatricesForJacSolve()
     const PhysicsNodes nodes =
         evaluatePhysicsDerivatives(yJac, dydtJac, jt, dSigma_vals, dSource_vals, dAux_vals,
                                    dSourceDot_vals);
+
+    // tau at the state the Jacobian is built from, and d tau / dy, into MBlocks
+    // and the trace blocks before either is read. Under a frozen tau the blocks
+    // already hold the step's tau and there is no derivative to add.
+    if (tauFollowsResidual())
+    {
+        const FaceStates faces = faceStates(yJac, jt);
+        const Matrix kh = faceKappaOverH(faces, jt);
+        const TauJacobian dTau = faceTauJacobian(yJac, faces, kh, jt);
+        applyJacobianTau(tauFromKappa(kh), &dTau);
+    }
+    else if (tauRefreshedPerJacobian())
+        freezeTauAt(yJac, jt);
 
     // Cell-independent: iteration i reads MBlocks[i] and grid[i] and writes only
     // MXSolvers[i]. The quadrature `assembleCellMatrix` reaches through
@@ -2091,7 +2451,7 @@ void SystemSolver::solveHDGJac(N_Vector g, N_Vector delY)
             Eigen::MatrixXd const &CE = CEBlocks[i];
             SQU_0[i] = MXSolvers[i].solve(CE);
 
-            K_cell[i] = H_cellwise[i] - CG_cellwise[i] * SQU_0[i];
+            K_cell[i] = H_jac_cellwise[i] - CG_cellwise[i] * SQU_0[i];
             CGf[i] = CG_cellwise[i] * SQU_f[i];
         },
         cellGrain);
@@ -2207,9 +2567,16 @@ int static_residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval
 int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval)
 {
     ++nResidualEvals;
-    updateBoundaryConditions(tres);
 
     DGSoln Y_h(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux, nField);
+
+    // tau at this state, before updateBoundaryConditions reads it into the
+    // Dirichlet data. Nothing to do under a Constant scaling, or when the
+    // continuation loop is holding tau fixed for the step.
+    if (tauFollowsResidual())
+        applyResidualTau(faceTau(Y_h, tres));
+    updateBoundaryConditions(tres);
+
     DGSoln dYdt_h(nVars, grid, k, N_VGetArrayPointer(dYdt), nScalars, nAux, nField);
     DGSoln res(nVars, grid, k, N_VGetArrayPointer(resval), nScalars, nAux, nField);
 

@@ -294,6 +294,9 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(LowerBoundary, double);
     READ(UpperBoundary, double);
     READ(tau, double);
+    READ(tauScaling, std::string);
+    READ(tauUpdate, std::string);
+    READ(tauFloor, double);
     READ(delta_t, double);
     READ(t_initial, double);
     READ(Relative_tolerance, double);
@@ -748,6 +751,49 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     system.setOutputCadence(config.delta_t);
     system.setTolerances(config.Absolute_tolerance, config.Relative_tolerance);
     system.setTau(config.tau);
+
+    // Rejected rather than defaulted, as SteadyStateSolver is.
+    SystemSolver::TauUpdate tauUpdate;
+    if (config.tauUpdate == "Residual")
+        tauUpdate = SystemSolver::TauUpdate::Residual;
+    else if (config.tauUpdate == "ContinuationStep")
+        tauUpdate = SystemSolver::TauUpdate::ContinuationStep;
+    else if (config.tauUpdate == "JacobianBuild")
+        tauUpdate = SystemSolver::TauUpdate::JacobianBuild;
+    else
+        throw std::invalid_argument(
+            "tauUpdate must be \"Residual\", \"ContinuationStep\" or \"JacobianBuild\"; got \"" +
+            config.tauUpdate + "\".");
+
+    if (config.tauScaling == "Constant")
+    {
+        // A key that changes nothing is refused rather than ignored.
+        if (tauUpdate != SystemSolver::TauUpdate::Residual)
+            throw std::invalid_argument(
+                "tauUpdate only applies under tauScaling = \"Diffusive\"; a Constant tau "
+                "is never re-evaluated.");
+        system.setTauScaling(SystemSolver::TauScaling::Constant, config.tauFloor);
+    }
+    else if (config.tauScaling == "Diffusive")
+    {
+        if (!(config.tau > 0.0) || !(config.tauFloor > 0.0))
+            throw std::invalid_argument(
+                "tauScaling = \"Diffusive\" needs tau > 0 and tauFloor > 0: the floor is "
+                "what keeps a face where kappa vanishes -- a degenerate axis, say -- "
+                "from leaving its trace unknown undetermined.");
+        // The adjoint is the transpose of a Jacobian that holds tau fixed, so it
+        // would be missing d tau / dy and return a gradient that is wrong with
+        // nothing to say so.
+        if (config.solveAdjoint)
+            throw std::invalid_argument(
+                "tauScaling = \"Diffusive\" cannot be combined with solveAdjoint: tau "
+                "depends on the state and the adjoint does not carry d tau / dy, so the "
+                "gradients would be silently wrong. Use tauScaling = \"Constant\".");
+        system.setTauScaling(SystemSolver::TauScaling::Diffusive, config.tauFloor, tauUpdate);
+    }
+    else
+        throw std::invalid_argument(
+            "tauScaling must be \"Constant\" or \"Diffusive\"; got \"" + config.tauScaling + "\".");
     system.setInitialTime(config.t_initial);
     system.setInitialTimestep(config.initialTimestep);
     system.setInputFile(config.OutputFilename);

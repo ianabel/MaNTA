@@ -972,6 +972,45 @@ The reconstruction is built for every run with `k >= 1` regardless of the flag, 
 only whether the *method* uses it. `Tests/README.md` has the measured orders and
 the list of what is not covered.
 
+### Stabilisation (`tauScaling`)
+
+`tau` enters five places — the `D`, `E`, `G`, `H` blocks and the `tau g_D`
+Dirichlet term in `RF_cellwise` — and **all of them are written by
+`assembleTauBlocks`**, reached through `applyResidualTau` (the residual's copies)
+and `applyJacobianTau` (the `MBlocks`/`CEBlocks`/`CG_cellwise` parts and
+`H_jac_cellwise`). `initialiseMatrices` calls both with the constant, with the
+arithmetic in its original order: a `Constant` run is **byte-identical** to the
+tree before the split, checked by `cmp` over every regression config's `.nc` and
+`.restart.nc`. Re-run that check after touching `assembleTauBlocks`.
+
+Under `Diffusive`, `faceTau` evaluates `tau * (kappa/h + floor * max kappa/h)`
+per face, one-sided, from the trace and the cell's own `q`, with one batched
+`ComputePhysicsDerivatives` on the `2 nCells` faces. The residual applies it at
+*its* state, the Jacobian build at `yJac` — which is why `H` is split into
+`H_cellwise` and `H_jac_cellwise`: it is the one tau block both read directly,
+and `solveHDGJac` reads it at *solve* time, long after the residuals of a Newton
+iteration have overwritten the residual's copy. Under
+`tauUpdate = Residual` the Jacobian carries `d tau / dy`
+(`faceTauJacobian`: a forward difference per face-state component, all faces in
+one batched call, so `3 nVars + nAux` extra face calls per build) in the blocks
+`applyJacobianTau` rewrites; what it leaves out is the floor's grid-maximum term,
+and `LocalTauTests.cpp` shows that is *all* it leaves out — the mismatch against a
+finite-differenced residual falls from 3e-7 to 1e-9 when the floor is taken to
+1e-9. Under `ContinuationStep` the continuation loop sets `tau` (`freezeTauAt`),
+the residual and the Jacobian leave it alone, and `steadyNorm` re-evaluates it
+before measuring convergence; a transient run is refused in `initialize()`.
+`JacobianBuild` is `ContinuationStep` plus a refresh in each Jacobian build
+(`tauRefreshedPerJacobian`), so tau is fixed across the Newton iterations sharing
+a Jacobian; KINSOL evaluated the residual before the rebuild with the old tau, so
+that step is lagged and costs Newton iterations. Measured cost, against a
+constant tau at the same `NewtonJacobianReuse`: `Residual` 1.6-1.8x, nearly all
+of it the per-residual face call; `ContinuationStep` 1.07-1.10x; `JacobianBuild`
+1.15-1.47x. `ContinuationStep` is a fixed-point iteration on tau that pseudo-time
+cannot damp (tau reads `lambda` and `q`, which are algebraic); it stalled once,
+under the default Jacobian reuse, and not with `NewtonJacobianReuse = 1`. The adjoint
+would carry neither, so `applySolverConfig` refuses `Diffusive` with
+`solveAdjoint`.
+
 ### Non-owning state views
 
 `DGSoln` / `DGApprox` are **`Eigen::Map` views over memory SUNDIALS owns**, not
