@@ -36,31 +36,15 @@ import manta as MaNTA
 
 
 # %%
+#
+RANDOM_INDEX = 3
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
-fname = "stellarator_opt_amb"
+fname = f"stellarator_opt_random{RANDOM_INDEX}"
 
-eq_name = "eq_amb5"
-#
-# st_config = {
-#     "ParticleSourceCenter": 0.0,
-#     "ParticleSourceHeight": 1.25e-2,
-#     "ParticleSourceWidth": 0.5,
-#     "NBICenter": 0.0,
-#     "NBIPower": 0.4,
-#     "NBIWidth": 0.3,
-#     "ECHCenter": 0.0,
-#     "ECHPower": 0.04,
-#     "ECHWidth": 0.26,
-#     "EdgeTemperature": 0.2,
-#     "EdgeDensity": 0.2,
-#     "n0": 1.0,
-#     "T0": 1.0,
-#     "evolveDensity": True,
-#     "useBatching": True,
-# }
-#
+eq_name = f"eq_random{RANDOM_INDEX}"
+
 fac = 1.0
 st_config = {
     "ParticleSourceCenter": 0.0,
@@ -75,7 +59,7 @@ st_config = {
     "EdgeTemperature": 0.2,
     "EdgeDensity": 0.2,
     "n0": 0.5,
-    "T0": 1.0,
+    "T0": 0.5,
     "FusionFactor": 0.01,
     "evolveDensity": True,
     "useBatching": True,
@@ -85,20 +69,15 @@ st_config = {
 rho_upper = 1.0
 rtol = 1e-2
 atol = 1e-10
-# nodes = [0.0, 0.4, 0.6, 0.75, 0.95, 1.0]
 npoints = 8
 degree = 3
-# base = 1.5
-# tau = 0.5
-#
+
 base = 1.5
 tau = 0.5
 #
-nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
+nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 4)
 
-nodes = np.concatenate(
-    ([0, 0.1], nodes, [rho_upper])
-)  # nodes = np.concatenate(([0, 0.1], nodes, [0.98,1]))
+nodes = np.concatenate(([0, 0.05, 0.1], nodes, [0.99, rho_upper]))
 # nodes = np.linspace(0, 1.0, npoints + 1)
 print(nodes)
 # # %%
@@ -150,36 +129,19 @@ yancc_res = {"na": 45, "nx": 7}
 
 
 # %%
-
+#
 pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 #
+random_eq = desc.io.load("random_equilibria.h5")[RANDOM_INDEX]
 
-# # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
-# # default is zero pressure and zero current
-# this is usually all you need to solve a fixed boundary equilibrium
-
-# surf = FourierRZToroidalSurface(
-#     R_lmn=[1, 0.125, 0.1],
-#     Z_lmn=[-0.125, -0.1],
-#     modes_R=[[0, 0], [1, 0], [0, 1]],
-#     modes_Z=[[-1, 0], [0, -1]],
-#     NFP=4,
-# )
-# # # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
-# # # default is zero pressure and zero current
-# eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
-# eq = desc.compat.rescale(
-#     eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
-# )
+eq = random_eq.copy()
+eq.pressure = desc_pressure
+eqs = EquilibriaFamily(eq)
 #
-# # # #
-# # eq.pressure = desc_pressure
-# eq = eq.solve(x_scale="ess")[0]
-# eqs = EquilibriaFamily(eq)
-# # # desc_pressure = eq.get_profile('p')
-eqs = desc.io.load(eq_name + "_all_equilibria.h5")
-eq = eqs[-1].copy()
+#
+# eqs = desc.io.load(eq_name + "_all_equilibria.h5")
+# eq = eqs[-1]
 
 eq_init = eq.copy()
 
@@ -259,49 +221,49 @@ config = {
 }
 
 
-eq2 = eq.copy()
-fam2 = EquilibriaFamily(eq2)
-niters = 2
-for k in range(niters):
-    eq2 = eq2.copy()
-
-    fig, ax = plot_1d(eq2, "pressure", label="DESC " + str(k), ax=ax)
-
-    yancc_wrapper = yancc_data.from_eq(
-        points, eq=eq2, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
-    )
-    pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
-    st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-    st.run()
-
-    pi = st.getPressure()
-    pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
-    ax.plot(pressure_rho, pi_manta, label="MANTA" + str(k))
-    eq2.pressure = SplineProfile(pi_manta, pressure_rho)
-    # fit the current profile to a power series, with c_0=c_1=0
-    # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])
-    # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
-    # re-solve the equilibrium
-    eq2, _ = eq2.solve(objective="force", optimizer="lsq-exact", verbose=3)
-    fam2.append(eq2)
-    eqs.append(eq2)
-eq_self_consistent = eq2.copy()
+# eq2 = eq.copy()
+# fam2 = EquilibriaFamily(eq2)
+# niters = 2
+# for k in range(niters):
+#     eq2 = eq2.copy()
 #
-ax.legend()
-fig.savefig("initial_self_consistent_pressure.png")
+#     fig, ax = plot_1d(eq2, "pressure", label="DESC " + str(k), ax=ax)
+#
+#     yancc_wrapper = yancc_data.from_eq(
+#         points, eq=eq2, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
+#     )
+#     pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
+#     st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+#     st.run()
+#
+#     pi = st.getPressure()
+#     pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
+#     ax.plot(pressure_rho, pi_manta, label="MANTA" + str(k))
+#     eq2.pressure = SplineProfile(pi_manta, pressure_rho)
+#     # fit the current profile to a power series, with c_0=c_1=0
+#     # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])
+#     # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
+#     # re-solve the equilibrium
+#     eq2, _ = eq2.solve(objective="force", optimizer="lsq-exact", verbose=3)
+#     fam2.append(eq2)
+#     eqs.append(eq2)
+# eq_self_consistent = eq2.copy()
+# #
+# ax.legend()
+# fig.savefig("initial_self_consistent_pressure.png")
+# # # %%
+# #
+# plot_comparison(eqs=[eq_init, eq2], labels=["Initial", "self-consistent"])
+# # plt.show()
+# eq = eq2.copy()
+# #
+# # # %%
+# # # %%
+# #
+# #
+# #
 # # %%
 #
-plot_comparison(eqs=[eq_init, eq2], labels=["Initial", "self-consistent"])
-# plt.show()
-eq = eq2.copy()
-#
-# # %%
-# # %%
-#
-#
-#
-# %%
-
 
 # %%
 
@@ -402,8 +364,8 @@ obj_mirror_ratio = ObjectiveFromUser(
     fun=fun_mirror_ratio,
     thing=eq,
     grid=yancc_desc_grid,
-    bounds=(0.0, 0.15),
-    weight=5.0,
+    bounds=(0.0, 0.2),
+    weight=10.0,
     name="my mirror ratio",
 )
 
@@ -421,7 +383,7 @@ stored_energy_weight = 5.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()
-max_it = 30
+max_it = 60
 
 eqfam = EquilibriaFamily(eq)
 # ks = [1, 2, eq.M + 1]
@@ -433,7 +395,7 @@ eqfam = EquilibriaFamily(eq)
 objectives = [
     # AspectRatio(eq=eq, target=6, weight=10),
     obj_mirror_ratio,
-    Volume(eq=eq, target=V0, weight=1.0),
+    Volume(eq=eq, target=V0, weight=5.0),
     # RotationalTransform(eq=eq, target=0.42, weight=10),
     ObjectiveFromUser(
         objective_from_user_fun,
@@ -481,16 +443,16 @@ eq, info_out = eq.optimize(
     ftol=1e-4,  # stopping tolerance on the function value
     xtol=1e-6,  # stopping tolerance on the step size
     gtol=1e-6,  # stopping tolerance on the gradient
-    # options={
-    #     "initial_trust_radius": 1e-2,
-    #     # "perturb_options": {"order": 2, "verbose": 3},  # use 2nd-order perturbations
-    #     #     # "solve_options": {
-    #     #     #     "ftol": 5e-3,
-    #     #     #     "xtol": 1e-6,
-    #     #     #     "gtol": 1e-6,
-    #     #     #     "verbose": 3,
-    #     # },  # for equilibrium subproblem
-    # },
+    options={
+        "initial_trust_radius": 0.1,
+        # "perturb_options": {"order": 2, "verbose": 3},  # use 2nd-order perturbations
+        #     # "solve_options": {
+        #     #     "ftol": 5e-3,
+        #     #     "xtol": 1e-6,
+        #     #     "gtol": 1e-6,
+        #     #     "verbose": 3,
+        # },  # for equilibrium subproblem
+    },
     verbose=3,
     copy=True,
 )
@@ -558,4 +520,4 @@ fig, ax = plot_qs_error(eqfam[-1])
 fig.savefig("figs/" + eq_name + "final_qs_error.png")
 plt.show()
 
-# %%
+#

@@ -47,7 +47,7 @@ st_config = {
     "ECHWidth": 0.26,
     "EdgeTemperature": 0.2,
     "EdgeDensity": 0.2,
-    "n0": 0.5,
+    "n0": 1.5,
     "T0": 1.0,
     "FusionFactor": 0.01,
     "evolveDensity": True,
@@ -55,21 +55,21 @@ st_config = {
 }
 
 
-eq_name = "qa"
+eq_name = "qh"
 
 rho_upper = 1.0
 rtol = 1e-2
 atol = 1e-10
-# nodes = [0.0, 0.4, 0.6, 0.75, 0.95, 1.0]
 npoints = 8
 degree = 3
-base = 2.0
-tau = 0.1
-#
-nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
 
-nodes = np.concatenate(([0, 0.1], nodes, [rho_upper]))
-# nodes = np.concatenate(([0, 0.1, 0.25], jnp.linspace(0.4, 0.95, npoints - 2)))
+base = 1.5
+tau = 0.5
+#
+# nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 4)
+
+# nodes = np.concatenate(([0, 0.05, 0.1], nodes, [0.99, rho_upper]))
+nodes = np.concatenate(([0, 0.05, 0.1], jnp.linspace(0.4, 0.99, npoints - 2)))
 
 # nodes = np
 print(nodes)
@@ -87,7 +87,7 @@ solver_config = {
     "delta_t": 1.0,
     "initialTimestep": 1e-3,
     "MinStepSize": 1e-9,
-    "SteadyStateTolerance": 1e-4,
+    "SteadyStateTolerance": 5e-5,
     "AggressiveTimesteps": False,
     "WriteDatFile": True,
     "restart": False,
@@ -123,14 +123,17 @@ yancc_res = {"na": 45, "nx": 7}
 # initial pressure is all zeros, can change this if desired
 pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
-#
+eq = desc.examples.get("precise_QH")
+eq = desc.compat.rescale(
+    eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
+)
 # eq = desc.examples.get("W7-X")
 # # # # Reduce the number of modes (not sure if this is a good thing to do)
 # # #
 # eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
 # #
 #
-eq = desc.examples.get("reactor_QA")
+# eq = desc.examples.get("reactor_QA")
 eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
 eq.solve(x_scale="ess")[0]
 # eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
@@ -184,7 +187,7 @@ solver_config = {
     "delta_t": 1.0,
     "initialTimestep": 1e-2,
     "MinStepSize": 1e-9,
-    "SteadyStateTolerance": 5e-4,
+    "SteadyStateTolerance": 5e-5,
     "AggressiveTimesteps": False,
     "solveAdjoint": False,
     "WriteDatFile": True,
@@ -193,7 +196,7 @@ solver_config = {
     "SteadyStateSolver": "Newton",
     "SteadyStateDiagnostics": True,
     "SteadyStateStepDiagnostics": True,
-    "MaxRejectedSteps": 0,
+    "MaxRejectedSteps": 4,
     "PseudoTransientSERRate": 2.0,
 }
 
@@ -321,7 +324,7 @@ grads = []
 G = []
 
 # Sweep in the proximity of initial value
-f = 0.1
+f = 0.2
 delta = f * jnp.abs(v0)
 start = v0 - delta
 end = v0 + delta

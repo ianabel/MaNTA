@@ -73,56 +73,57 @@ points = MaNTA.getNodes(
 yancc_rho = points
 pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
-eq = desc.examples.get("precise_QA")
-# eq = desc.examples.get("W7-X")
-eq = Equilibrium(
-    M=4, N=4, Psi=0.1, surface=eq.get_surface_at(rho=1), pressure=desc_pressure
-)
-eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
-# Reduce the number of modes (not sure if this is a good thing to do)
-# eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
+# eq = desc.examples.get("precise_QA")
+# # eq = desc.examples.get("W7-X")
+# eq = Equilibrium(
+#     M=4, N=4, Psi=0.1, surface=eq.get_surface_at(rho=1), pressure=desc_pressure
+# )
+# eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
+# # Reduce the number of modes (not sure if this is a good thing to do)
+# # eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
+#
+# # eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
+# eq = eq.solve(x_scale="ess")[0]
+# eq_init = eq.copy()
 
-# eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
-eq = eq.solve(x_scale="ess")[0]
-eq_init = eq.copy()
-
+eq = desc.io.load("eq_amb5_all_equilibria.h5")[-1]
 
 #
-#
-# def make_test_state(rho, fname="stellarator_w7x"):
-#     data = Dataset(fname + ".nc", "r")
-#     x = jnp.array(data.variables["x"][:])
-#     n = Akima1DInterpolator(
-#         x, jnp.array(data.groups["Density"].variables["u"][:][-1, :])
-#     )(rho)
-#     ui = Akima1DInterpolator(
-#         x, jnp.array(data.groups["IonEnergy"].variables["u"][:][-1, :])
-#     )(rho)
-#     ue = Akima1DInterpolator(
-#         x, jnp.array(data.groups["ElectronEnergy"].variables["u"][:][-1, :])
-#     )(rho)
-#     dndx = Akima1DInterpolator(
-#         x, jnp.array(data.groups["Density"].variables["q"][:][-1, :])
-#     )(rho)
-#     duidx = Akima1DInterpolator(
-#         x, jnp.array(data.groups["IonEnergy"].variables["q"][:][-1, :])
-#     )(rho)
-#     duedx = Akima1DInterpolator(
-#         x, jnp.array(data.groups["ElectronEnergy"].variables["q"][:][-1, :])
-#     )(rho)
-#     Er = Akima1DInterpolator(x, jnp.array(data.variables["Er"][:][-1, :]))(rho)
-#     data.close()
-#     Variable = jnp.stack([n, ui, ue]).transpose()
-#     Derivative = jnp.stack([dndx, duidx, duedx]).transpose()
-#     state = {
-#         "Variable": Variable,
-#         "Derivative": Derivative,
-#         "Flux": jnp.zeros(Variable.shape),
-#         "Aux": Er,
-#         "Scalars": [],
-#     }
-#     return state
-#
+
+
+def make_state_from_output(rho, fname="stellarator_w7x"):
+    data = Dataset(fname + ".nc", "r")
+    x = jnp.array(data.variables["x"][:])
+    n = Akima1DInterpolator(
+        x, jnp.array(data.groups["Density"].variables["u"][:][-1, :])
+    )(rho)
+    ui = Akima1DInterpolator(
+        x, jnp.array(data.groups["IonEnergy"].variables["u"][:][-1, :])
+    )(rho)
+    ue = Akima1DInterpolator(
+        x, jnp.array(data.groups["ElectronEnergy"].variables["u"][:][-1, :])
+    )(rho)
+    dndx = Akima1DInterpolator(
+        x, jnp.array(data.groups["Density"].variables["q"][:][-1, :])
+    )(rho)
+    duidx = Akima1DInterpolator(
+        x, jnp.array(data.groups["IonEnergy"].variables["q"][:][-1, :])
+    )(rho)
+    duedx = Akima1DInterpolator(
+        x, jnp.array(data.groups["ElectronEnergy"].variables["q"][:][-1, :])
+    )(rho)
+    Er = Akima1DInterpolator(x, jnp.array(data.variables["Er"][:][-1, :]))(rho)
+    data.close()
+    Variable = jnp.stack([n, ui, ue]).transpose()
+    Derivative = jnp.stack([dndx, duidx, duedx]).transpose()
+    state = {
+        "Variable": Variable,
+        "Derivative": Derivative,
+        "Flux": jnp.zeros(Variable.shape),
+        "Aux": Er,
+        "Scalars": [],
+    }
+    return state
 
 
 def make_test_state(rho, st):
@@ -162,26 +163,8 @@ def test_multi_gpu():
     pass
 
 
-def run_yancc_at_res(nt, nz, na, nx):
+def run_yancc_at_res(st_config, nt, nz, na, nx):
     print(f"running at resolution nt={nt}, nz={nz}, na={na}, nx={nx}")
-
-    st_config = {
-        "ParticleSourceCenter": 0.0,
-        "ParticleSourceHeight": 0.5,
-        "ParticleSourceWidth": 0.6,
-        "NBICenter": 0.0,
-        "NBIPower": 10.0,
-        "NBIWidth": 0.4,
-        "ECHCenter": 0.0,
-        "ECHPower": 0.5,
-        "ECHWidth": 0.4,
-        "EdgeTemperature": 0.2,
-        "EdgeDensity": 0.2,
-        "n0": 1.0,
-        "T0": 10.0,
-        "evolveDensity": True,
-        "useBatching": False,
-    }
 
     config = {
         "Stellarator": st_config,
@@ -189,23 +172,38 @@ def run_yancc_at_res(nt, nz, na, nx):
     }
 
     yancc_res = {"na": na, "nx": nx}
-
-    ## to allow maximum flexibility to match manta, we use a spline with the same control points as manta \
-    # + axis and lcfs
-    # initial pressure is all zeros, can change this if desired
-
-    yancc_wrapper = yancc_data.from_eq(points, eq=eq_init, nt=nt, nz=nz, **yancc_res)
+    yancc_wrapper = yancc_data.from_eq(points, eq=eq, nt=nt, nz=nz, **yancc_res)
 
     st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-    states = make_test_state(points, st)
+    states = make_state_from_output(points, "stellarator_opt_amb")
     return st.ComputePhysics(states, points, 0.0)
 
 
 def test_yancc_res():
-    low_res = (13, 23, 43, 7)
-    mid_res = (17, 33, 55, 7)
+    low_res = (13, 19, 39, 7)
+    mid_res = (17, 25, 45, 7)
     high_res = (23, 43, 71, 7)
-    super_high_res = (27, 49, 89, 7)
+    super_high_res = (23, 39, 83, 7)
+
+    fac = 1.0
+    st_config = {
+        "ParticleSourceCenter": 0.0,
+        "ParticleSourceHeight": fac * 1.6e-2,
+        "ParticleSourceWidth": 0.6,
+        "NBICenter": 0.0,
+        "NBIPower": fac * 1.25,
+        "NBIWidth": 0.25,
+        "ECHCenter": 0.0,
+        "ECHPower": fac * 8.76e-2,
+        "ECHWidth": 0.26,
+        "EdgeTemperature": 0.2,
+        "EdgeDensity": 0.2,
+        "n0": 0.5,
+        "T0": 1.0,
+        "FusionFactor": 0.01,
+        "evolveDensity": True,
+        "useBatching": True,
+    }
 
     test_res = [low_res, mid_res, high_res, super_high_res]
 
@@ -213,7 +211,7 @@ def test_yancc_res():
     labels = ("low", "mid", "high", "super")
     colors = ("r", "g", "b", "y")
     for res, l, c in zip(test_res, labels, colors):
-        physics = run_yancc_at_res(*res)
+        physics = run_yancc_at_res(st_config, *res)
         flux = physics[0]
         aux = physics[2]
         ax[0].plot(points, -flux[0], c, label=l)
