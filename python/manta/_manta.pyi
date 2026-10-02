@@ -531,7 +531,7 @@ class SteadyOutcome:
     
       Converged : ||F|| fell below SteadyStateTolerance.
     
-      OutOfSteps : The MaxContinuationSteps budget was spent. Not a failure: the state and the pseudo-time step reached are both good, and continue_steady() resumes from them.
+      OutOfSteps : A budget was spent: MaxContinuationSteps, or MaxRejectedSteps. Not a failure: the state reached is the last accepted one, and continue_steady() resumes from it and the pseudo-time step.
     
       SolverFailed : KINSol failed in a way pseudo-transient damping cannot answer.
     """

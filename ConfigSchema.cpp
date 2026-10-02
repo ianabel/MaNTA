@@ -138,7 +138,9 @@ const std::vector<Entry> &table()
          "does the same and names the tolerance; either arms it, and giving both "
          "uses the tolerance."},
         {"MaxRejectedSteps", {}, Type::UInt, Category::Solver, false, false, 100u,
-         "Maximum number of rejected steps taken by KINSOL before returning"}, 
+         "Rejected continuation steps a steady solve may take before it stops. It returns "
+         "the last accepted state, with outcome OutOfSteps -- a spent budget, not a "
+         "failure -- and the run carries on with it."},
         {"DegreeLadder", {}, Type::UIntList, Category::Solver, false, false, std::vector<unsigned>{},
          "Intermediate polynomial degrees to solve at before Polynomial_degree, each rung "
          "warm-starting the next. A route to the configured resolution, not a change of it."},
