@@ -717,12 +717,18 @@ void SystemSolver::solveSteadyState(bool resume)
             ++rejected;
             logmsg<LOG_LEVEL::PDEBUG>("Rejected steps: {}, Max rejected steps: {}", rejected, maxRejectedSteps);
         }
+        // Thrown, as the exit below is: a solve that gave up is not a converged
+        // one, and runSolver only writes and reports a failure it is told about.
+        // This step's record is already closed, so step + 1 of them were taken.
         if (rejected > maxRejectedSteps)
         {
-          
-          finish("FAILED: max rejected steps exceeded", step, rejected, 
-                 SteadyOutcome::OutOfSteps, Fprev);
-          return;
+            finish("FAILED: max rejected steps exceeded", step + 1, rejected,
+                   SteadyOutcome::OutOfSteps, Fprev);
+            throw std::runtime_error(std::format(
+                "Steady solve did not converge: {} rejected continuation steps, more "
+                "than MaxRejectedSteps = {}, with ||F|| = {:g} against a tolerance of "
+                "{:g} and dt = {:g}.",
+                rejected, maxRejectedSteps, Fprev, steady_state_tol, ptcStep));
         }
     }
 
