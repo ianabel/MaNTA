@@ -10,8 +10,11 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL( NonlinDiffTest );
 
+// RegridPolicy::InPlace: the domain ends are all the constructor takes from its
+// grid, and prepareEvaluation takes them again from each plan.
 NonlinDiffTest::NonlinDiffTest( toml::value const& config, Grid const& g )
-	: TransportSystem({.variables = {{"u", "the diffused quantity", ""}}})
+	: TransportSystem({.variables = {{"u", "the diffused quantity", ""}},
+	                   .regrid = RegridPolicy::InPlace})
 {
 	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around

@@ -259,25 +259,70 @@ def test_a_named_in_place_case_adapts(tmp_path, mode):
     runner.run_ss()
 
 
+LEGACY_NAME = "UnitTestEvaluationPlanLegacyCase"
+
+
+class LegacyDiffusion(MaNTA.TransportSystem):
+    """A registered case written as if before plans: Fixed, and it keeps its grid.
+
+    -u'' = 1 with u = 1 at both ends, so u(0) = 1 exactly.
+    """
+
+    plans_seen = []
+
+    def __init__(self, config, grid):
+        super().__init__(MaNTA.numbered_spec(1))
+        self.xR = grid.upperBoundary()
+        self.plans = 0
+        LegacyDiffusion.plans_seen.append(self)
+
+    def prepareEvaluation(self, plan):
+        self.plans += 1
+
+    def SigmaFn(self, i, state, x, t):
+        return state.q[0]
+
+    def Sources(self, i, state, x, t):
+        return 1.0
+
+    def dSigmaFn_dq(self, i, state, x, t):
+        return np.ones(1)
+
+    def LowerBoundary(self, i, t):
+        return 1.0
+
+    def UpperBoundary(self, i, t):
+        return 1.0
+
+    def InitialValue(self, i, x):
+        return 1.0
+
+    def InitialDerivative(self, i, x):
+        return 0.0
+
+
+MaNTA.registerPhysicsCase(LEGACY_NAME, LegacyDiffusion)
+
+
 @pytest.mark.parametrize("mode", NAMED_ADAPTATION)
 def test_a_named_fixed_case_is_refused_without_the_key(tmp_path, mode):
-    # NonlinDiffTest takes its upper boundary from its construction grid, so it
-    # stays Fixed.
-    runner = MaNTA.Runner("NonlinDiffTest")
+    runner = MaNTA.Runner(LEGACY_NAME)
     with pytest.raises(RuntimeError, match="RebuildPhysicsOnRegrid"):
         runner.configure(named_config(tmp_path, **mode))
 
 
 @pytest.mark.parametrize("mode", NAMED_ADAPTATION)
 def test_a_named_fixed_case_is_rebuilt_under_the_key(tmp_path, mode):
-    runner = MaNTA.Runner("NonlinDiffTest")
+    LegacyDiffusion.plans_seen.clear()
+    runner = MaNTA.Runner(LEGACY_NAME)
     runner.configure(named_config(tmp_path, **mode, RebuildPhysicsOnRegrid=True))
     runner.run_ss()
     x = np.linspace(0.0, 1.0, 5)
     u = np.asarray(runner.getSolution(0, list(x))).reshape(-1)
-    assert np.all(np.isfinite(u))
-    # The Dirichlet datum at x = 0, to the discretisation's accuracy there.
-    assert u[0] == pytest.approx(1.0, abs=1e-3)
+    assert u == pytest.approx(1.0 + x * (1.0 - x) / 2.0, abs=1e-8)
+    # Rebuilt rather than moved: no instance is handed a second plan.
+    assert LegacyDiffusion.plans_seen
+    assert all(case.plans <= 1 for case in LegacyDiffusion.plans_seen)
 
 
 # ----------------------------------------------------------------- JAX ----

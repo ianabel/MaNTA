@@ -700,12 +700,12 @@ solves find — the grading decision, the degree loop converging at once — and
 refusal after a sampling solve would cost the run it was meant to save. A run with
 no adaptation never changes the plan, and a ``Fixed`` case is never refused there.
 
-Of the cases in this tree, those whose constructors read nothing from their grid
-declare ``InPlace``: ``LinearDiffusion``, ``AdjointPoster``, ``AuxVarTest``,
-``LD2``, ``LDTest``, ``MatrixDiffusion``, ``MatrixDiffusionTest`` and
-``ScalarTestLD3``. The rest take a domain end from their grid and stay ``Fixed`` —
-``NonlinDiffTest``, ``NeumannTest`` and the ``AutodiffTransportSystem`` cases —
-and need ``RebuildPhysicsOnRegrid`` to adapt.
+Every C++ case in this tree declares ``InPlace``. Most read nothing from their
+grid; the rest take only the domain ends from it — ``NonlinDiffTest``,
+``NeumannTest`` and the ``AutodiffTransportSystem`` cases — and take them again
+from each plan in ``prepareEvaluation`` (for the autodiff cases, in
+``AutodiffTransportSystem``'s). ``RebuildPhysicsOnRegrid`` is for cases outside the
+tree that predate plans.
 
 Diagnostics
 -----------

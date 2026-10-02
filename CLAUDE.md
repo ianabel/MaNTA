@@ -1160,6 +1160,11 @@ because a rebuild destroys the case it pointed at, and warm-start restart values
 are set *after* `solverFor`. Only runManta and a `Runner` built from a case *name*
 can rebuild; the drivers refuse a case that can do neither up front, whenever they
 *may* change the plan, before the first solve.
+Every C++ case in the tree declares `InPlace`; those holding `xL`/`xR` take them
+again from each plan (`AutodiffTransportSystem::prepareEvaluation` for the
+autodiff cases), so a case added with grid-dependent state has to do the same or
+stay `Fixed`. The rebuild path is reached only by the `Fixed` fixtures in
+`EvaluationPlanTests.cpp` and `test_evaluation_plan.py`.
 
 ### Self-consistent magnetic fields (`FieldModel`)
 

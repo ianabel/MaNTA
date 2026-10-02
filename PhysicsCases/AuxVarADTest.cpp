@@ -20,9 +20,13 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(AuxVarADTest);
 
+// RegridPolicy::InPlace: the domain ends are all the constructor takes from its
+// grid, and AutodiffTransportSystem::prepareEvaluation takes them again from
+// each plan.
 AuxVarADTest::AuxVarADTest(toml::value const &config, Grid const &grid) : AutodiffTransportSystem(config, grid,
                           {.variables = {{"u", "reaction-diffusion variable", ""}},
-                           .aux = {{"a", "the auxiliary a = u * u", ""}}})
+                           .aux = {{"a", "the auxiliary a = u * u", ""}},
+                           .regrid = RegridPolicy::InPlace})
 {
     // Construct your problem from user-specified config
     // throw an exception if you can't. NEVER leave a part-constructed object around
