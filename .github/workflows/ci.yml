@@ -346,7 +346,8 @@ jobs:
       # directory: not the extension, not test output, not a __pycache__. This is
       # what holds that, and it has to be `--ignored`, because everything a stray
       # write would produce is gitignored. The exceptions are what this workflow
-      # itself puts in the checkout before the build starts.
+      # itself puts in the checkout before the build starts, ignored or not --
+      # the Eigen 5 legs' tarball and source tree are plain untracked files.
       - name: Nothing was written outside the build tree
         run: |
           # Two steps, so a failing `git status` fails the check rather than
@@ -354,7 +355,7 @@ jobs:
           # Fedora container the checkout is owned by another user, and git
           # refuses to read it without; on the command line it is honoured.
           status=$(git -c safe.directory="$PWD" status --porcelain --ignored)
-          stray=$(printf '%s\n' "$status" | grep -vE '^!! (build/|sundials/|eigen-)' || true)
+          stray=$(printf '%s\n' "$status" | grep -vE '^(!!|\?\?) (build/|sundials/|eigen-)' || true)
           if [ -n "$stray" ]; then
             echo "::error::the build or the suites wrote into the source tree"
             echo "$stray"
@@ -561,7 +562,8 @@ jobs:
       # directory: not the extension, not test output, not a __pycache__. This is
       # what holds that, and it has to be `--ignored`, because everything a stray
       # write would produce is gitignored. The exceptions are what this workflow
-      # itself puts in the checkout before the build starts.
+      # itself puts in the checkout before the build starts, ignored or not --
+      # the Eigen 5 legs' tarball and source tree are plain untracked files.
       - name: Nothing was written outside the build tree
         run: |
           # Two steps, so a failing `git status` fails the check rather than
@@ -569,7 +571,7 @@ jobs:
           # Fedora container the checkout is owned by another user, and git
           # refuses to read it without; on the command line it is honoured.
           status=$(git -c safe.directory="$PWD" status --porcelain --ignored)
-          stray=$(printf '%s\n' "$status" | grep -vE '^!! (build/|sundials/|\.venv/)' || true)
+          stray=$(printf '%s\n' "$status" | grep -vE '^(!!|\?\?) (build/|sundials/|\.venv/)' || true)
           if [ -n "$stray" ]; then
             echo "::error::the build or the suites wrote into the source tree"
             echo "$stray"
@@ -657,7 +659,8 @@ jobs:
       # directory: not the extension, not test output, not a __pycache__. This is
       # what holds that, and it has to be `--ignored`, because everything a stray
       # write would produce is gitignored. The exceptions are what this workflow
-      # itself puts in the checkout before the build starts.
+      # itself puts in the checkout before the build starts, ignored or not --
+      # the Eigen 5 legs' tarball and source tree are plain untracked files.
       - name: Nothing was written outside the build tree
         run: |
           # Two steps, so a failing `git status` fails the check rather than
@@ -665,7 +668,7 @@ jobs:
           # Fedora container the checkout is owned by another user, and git
           # refuses to read it without; on the command line it is honoured.
           status=$(git -c safe.directory="$PWD" status --porcelain --ignored)
-          stray=$(printf '%s\n' "$status" | grep -vE '^!! (build-coverage/|sundials/)' || true)
+          stray=$(printf '%s\n' "$status" | grep -vE '^(!!|\?\?) (build-coverage/|sundials/)' || true)
           if [ -n "$stray" ]; then
             echo "::error::the build or the suites wrote into the source tree"
             echo "$stray"
