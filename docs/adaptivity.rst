@@ -354,7 +354,10 @@ the failure rate above, a driver without this would die on a third of the proble
 it was pointed at.
 
 **3. p — the degree loop.** ``runAdaptiveDegree`` on whichever mesh won, to
-``DegreeTolerance`` by Giorgiani's rule. See :ref:`degree-adaptation`.
+``DegreeTolerance`` by Giorgiani's rule. See :ref:`degree-adaptation`. Its first
+level is the solve stage 1 or 2 already made on that mesh at ``PolynomialDegree``,
+so a run whose degree is already good enough costs the sampling solve plus, if it
+graded, one more -- and nothing is solved twice.
 
 .. code-block:: toml
 

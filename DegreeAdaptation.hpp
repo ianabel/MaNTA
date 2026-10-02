@@ -70,12 +70,20 @@ unsigned int degreeIncrement(double E, double eps, double base);
 //
 // Only the caller's grid and problem outlive this. The returned solver holds a
 // reference to that grid, so it must not outlive it.
+//
+// `solvedFirstLevel`, when given, *is* level 0: a solver already configured from
+// `config`, built on `grid` at `k0` and run, whose answer the loop measures rather
+// than solving that level again. MeshAdaptation passes the solve it has just made
+// on the mesh it settled on, which is exactly the level this loop would otherwise
+// open with -- same mesh, same degree, from the same initial condition -- so
+// without it every adapted run paid for that solve twice.
 std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
                                                 TransportSystem &problem,
                                                 AdjointProblem *adjoint,
                                                 Grid const &grid,
                                                 unsigned int k0,
-                                                double tFinal);
+                                                double tFinal,
+                                                std::unique_ptr<SystemSolver> solvedFirstLevel = nullptr);
 
 // Solve at a sequence of discretisations the *configuration* names, each rung
 // warm-starting the next, ending at the configured Polynomial_degree and

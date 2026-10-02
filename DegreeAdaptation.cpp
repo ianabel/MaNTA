@@ -139,7 +139,8 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
                                                 AdjointProblem *adjoint,
                                                 Grid const &grid,
                                                 unsigned int k0,
-                                                double tFinal)
+                                                double tFinal,
+                                                std::unique_ptr<SystemSolver> solvedFirstLevel)
 {
     // Only Python can arm spatial adjoint parameters, so this cannot be caught
     // in loadSolverConfig with the rest. The objection is the one that already
@@ -179,37 +180,51 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
     SystemSolver::SteadyStats runTotal;
     int levels = 0;
 
+    if (solvedFirstLevel != nullptr && solvedFirstLevel->getOrder() != k0)
+        throw std::logic_error(
+            "runAdaptiveDegree was handed a solved first level at a degree other "
+            "than the one it was asked to start from.");
+
     for (int level = 0;; ++level)
     {
-        system = std::make_unique<SystemSolver>(grid, k, &problem);
-        applySolverConfig(config, *system);
+        if (level == 0 && solvedFirstLevel != nullptr)
+        {
+            // Already configured, checked for a steady solve, given the adjoint
+            // problem and run by whoever built it -- so straight to measuring it.
+            system = std::move(solvedFirstLevel);
+        }
+        else
+        {
+            system = std::make_unique<SystemSolver>(grid, k, &problem);
+            applySolverConfig(config, *system);
 
-        // Checked here, against the solver, because this is the point of truth
-        // and a proxy for it is what let a transient through: loadSolverConfig
-        // refuses SteadyStateSolver = "TimeMarch", but that key defaults to
-        // "PseudoTransient" and the mode is only consulted once termination is
-        // *armed*. A configuration that simply never set SteadyStateTolerance
-        // therefore passed validation and then time-marched every level.
-        //
-        // That is not a scope question, it is a wrong answer. Each level would
-        // take the previous one's state at t_final as its initial condition at
-        // t_initial and integrate the same interval again -- so the run has
-        // evolved twice. Measured on NonlinDiffTest at k = 4: u(0.9) came out
-        // 0.4048 against a plain fixed-degree run's 0.3767, 7.5% apart, where
-        // two runs at the same degree should agree to discretisation error.
-        if (level == 0 && !system->solvesForSteadyState())
-            throw std::invalid_argument(
-                "DegreeAdaptation needs a steady solve, but this configuration "
-                "time-marches: SteadyStateTolerance is absent, so steady-state "
-                "termination is never armed and SteadyStateSolver is not "
-                "consulted. Set SteadyStateTolerance, or call run_ss().");
+            // Checked here, against the solver, because this is the point of truth
+            // and a proxy for it is what let a transient through: loadSolverConfig
+            // refuses SteadyStateSolver = "TimeMarch", but that key defaults to
+            // "PseudoTransient" and the mode is only consulted once termination is
+            // *armed*. A configuration that simply never set SteadyStateTolerance
+            // therefore passed validation and then time-marched every level.
+            //
+            // That is not a scope question, it is a wrong answer. Each level would
+            // take the previous one's state at t_final as its initial condition at
+            // t_initial and integrate the same interval again -- so the run has
+            // evolved twice. Measured on NonlinDiffTest at k = 4: u(0.9) came out
+            // 0.4048 against a plain fixed-degree run's 0.3767, 7.5% apart, where
+            // two runs at the same degree should agree to discretisation error.
+            if (level == 0 && !system->solvesForSteadyState())
+                throw std::invalid_argument(
+                    "DegreeAdaptation needs a steady solve, but this configuration "
+                    "time-marches: SteadyStateTolerance is absent, so steady-state "
+                    "termination is never armed and SteadyStateSolver is not "
+                    "consulted. Set SteadyStateTolerance, or call run_ss().");
 
-        // A fresh solver has no adjoint problem. Forgetting this is silent: the
-        // run completes and the gradients are simply never computed.
-        if (adjoint != nullptr)
-            system->setAdjointProblem(adjoint);
+            // A fresh solver has no adjoint problem. Forgetting this is silent: the
+            // run completes and the gradients are simply never computed.
+            if (adjoint != nullptr)
+                system->setAdjointProblem(adjoint);
 
-        system->runSolver(tFinal);
+            system->runSolver(tFinal);
+        }
 
         // Read now: `system` is reset at the bottom of the loop, and a level
         // that breaks out leaves the last one alive but the earlier ones gone.

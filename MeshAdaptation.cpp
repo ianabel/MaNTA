@@ -289,14 +289,17 @@ AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
     // --- p: the degree loop, on whichever mesh won -----------------------------
     //
     // Handed the mesh rather than the config, so it never consults the grading
-    // keys and cannot rebuild a different one. It owns its own solvers, so the
-    // sampling solver goes first.
-    result.solver.reset();
-
+    // keys and cannot rebuild a different one. And handed the solve already made
+    // on that mesh at k0 -- the sample, or the graded trial that converged -- as
+    // its first level, because that is exactly the solve the loop would open with.
+    // It used to be discarded here and repeated from cold: one solve in three on
+    // every graded run, and one in two on every uniform one, for an identical
+    // answer. Null when every graded attempt failed and the mesh fell back to
+    // uniform, in which case the loop solves that level itself as before.
     std::println("Mesh adaptation: adapting the degree on the {} mesh",
                  result.gradingAttempts > 0 && result.decision.verdict != GradingVerdict::Uniform
                      ? "graded" : "uniform");
     result.solver = runAdaptiveDegree(config, problem, adjoint, *result.grid, k0,
-                                      tFinal);
+                                      tFinal, std::move(result.solver));
     return result;
 }
