@@ -327,6 +327,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(SteadyStateDiagnostics, bool);
     READ(SteadyStateStepDiagnostics, bool);
     READ(SteadyStateSolve, bool);
+    READ(MaxRejectedSteps, unsigned);
     READ(DegreeLadder, std::vector<unsigned>);
     READ(GridLadder, std::vector<unsigned>);
     READ(DegreeAdaptation, bool);
@@ -854,6 +855,8 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         system.setPseudoTransientInitialStep(config.PseudoTransientInitialStep);
     if (config.PseudoTransientMaxStep > 0.0)
         system.setPseudoTransientMaxStep(config.PseudoTransientMaxStep);
+
+    system.setMaxRejectedSteps(config.MaxRejectedSteps);
 
     // Unconditional, unlike the two above: those use 0 as "unset", which works
     // because a zero step is meaningless, but a zero SER *rate* is a legitimate

@@ -623,7 +623,14 @@ public:
 
   virtual std::string getAdjointNames(Index pIndex) const { return "p" + std::to_string(pIndex); }
 
-  Values& getSourceCache(Index var) { return m_sourceCache[var]; }
+  std::optional<std::reference_wrapper<Values>> getSourceCache(Index var) { 
+    if (m_sourceCache.size() > 0)
+    {
+      return m_sourceCache[var]; 
+    } else {
+      return std::nullopt;
+    }
+  }
 
 private:
   // Shared by the two boundary defaults above. Not .at(): out_of_range names a

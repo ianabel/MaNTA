@@ -139,6 +139,7 @@ class SystemSolver
         };
         long getMaxContinuationSteps() const { return maxContinuationSteps; };
         void setPseudoTransientMaxStep(double dt) { ptcMaxStep = dt; };
+        void setMaxRejectedSteps(unsigned int steps) { maxRejectedSteps = steps; };
 
         // The SER schedule on an accepted step:
         //
@@ -1213,6 +1214,7 @@ class SystemSolver
         // a solve stop early enough to be looked at and then resumed.
         long maxContinuationSteps = 200;
         bool estimateObjectiveOnFinish = true;
+        unsigned int maxRejectedSteps = 100;
         double ptcMaxStep = std::numeric_limits<double>::infinity();
         double ptcStep = 0.0;        // the current dt; infinite in Newton mode
         double ptcSERRate = 1.0;     // exponent on the residual ratio

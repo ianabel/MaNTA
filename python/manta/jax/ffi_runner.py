@@ -190,7 +190,7 @@ class FFIRunner(MaNTA.Runner):
                 jax.ShapeDtypeStruct((), cpu_i_dtype),
                 has_side_effect=True,
             )(cpu_i_dtype(1 if estimate else 0), obj=self.get_address())
-        return MaNTA.SteadyOutcome(int(outcome))
+            return outcome
 
     def finish_steady(self):
         with jax.default_device(cpu_device):

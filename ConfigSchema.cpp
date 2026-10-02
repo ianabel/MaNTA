@@ -137,6 +137,8 @@ const std::vector<Entry> &table()
          "Run to a steady state using the default tolerance. SteadyStateTolerance "
          "does the same and names the tolerance; either arms it, and giving both "
          "uses the tolerance."},
+        {"MaxRejectedSteps", {}, Type::UInt, Category::Solver, false, false, 100u,
+         "Maximum number of rejected steps taken by KINSOL before returning"}, 
         {"DegreeLadder", {}, Type::UIntList, Category::Solver, false, false, std::vector<unsigned>{},
          "Intermediate polynomial degrees to solve at before Polynomial_degree, each rung "
          "warm-starting the next. A route to the configured resolution, not a change of it."},

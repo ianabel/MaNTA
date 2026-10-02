@@ -82,6 +82,7 @@ struct SolverConfig
     bool                     SteadyStateDiagnostics;
     bool                     SteadyStateStepDiagnostics;
     bool                     SteadyStateSolve;
+    unsigned int             MaxRejectedSteps;
     // Intermediate rungs to solve at before the configured resolution, each
     // warm-starting the next. Empty means no ladder. Deliberately a route to
     // Polynomial_degree/Grid_size and not a replacement for them, so adding a

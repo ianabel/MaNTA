@@ -1,17 +1,18 @@
-import jax
-import jax.numpy as jnp
-import equinox as eqx
-import functools
-from stellarator import StellaratorTransport
-import yancc
+from datetime import time
+
+from stellarator_multichannel import StellaratorTransport
+from desc.backend import tree_unstack
 from yancc_wrapper import yancc_data
-
-
+import yancc
+import functools
+import equinox as eqx
+import jax.numpy as jnp
+import jax
 from jax.experimental import io_callback
+import os
 
-# from desc import set_device
-# set_device('gpu')
-# from desc.backend import pure_callback
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
 
 def abstract_eval(yin):
@@ -19,15 +20,17 @@ def abstract_eval(yin):
 
     flat, _ = jax.flatten_util.ravel_pytree((eqx.filter(boundary_field, eqx.is_array)))
     npoints = yin.grid.num_rho
-    np = len(flat)-1
+    np = len(flat) - 1 + 1 + 1
 
-    return jax.ShapeDtypeStruct((),jnp.float32), jax.ShapeDtypeStruct((npoints, np), jnp.float32), jax.ShapeDtypeStruct((npoints,), jnp.float32)
+    return (
+        jax.ShapeDtypeStruct((), jnp.float32),
+        jax.ShapeDtypeStruct((npoints, np), jnp.float32),
+        jax.ShapeDtypeStruct((npoints,), jnp.float32),
+    )
 
-def make_objective(config, vectorized=False):
-    """Make an external (python) function work with JAX.
 
-    callback syntax stolen from desc jaxify
-    """
+def make_objective(config, yancc_res=None):
+    """Make an external (python) function work with JAX."""
 
     def StellaratorFun(config, yin):
         st = StellaratorTransport(config, yancc_wrapper=yin)
@@ -38,129 +41,71 @@ def make_objective(config, vectorized=False):
 
         return G[0], G_p, pi
 
+    solver_config = config["Solver"]
+    time_march_solver_config = solver_config.copy()
+    time_march_solver_config["SteadyStateSolver"] = "PseudoTransient"
+    time_march_solver_config["restart"] = False
+    time_march_solver_config["MaxRejectedSteps"] = 4
+    grad_solver_config = solver_config.copy()
+    grad_solver_config["delta_t"] = grad_solver_config["delta_t"] / 10000.0
+    grad_solver_config["restart"] = True
+    grad_solver_config["solveAdjoint"] = True
+    grad_solver_config["SteadyStateSolver"] = "Newton"
 
-    def wrap_callback(func):
+    grad_config = {"Stellarator": config["Stellarator"], "Solver": grad_solver_config}
 
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            result_shape_dtype = abstract_eval(*args, **kwargs)
-            return io_callback(
-                func, result_shape_dtype, *args, ordered=False, **kwargs
+    time_march_config = {
+        "Stellarator": config["Stellarator"],
+        "Solver": time_march_solver_config,
+    }
+
+    @eqx.filter_custom_jvp
+    def _objective_base(tree_in, grid):
+        fields, Vp, Vpp = tree_in
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp, **yancc_res)
+
+        st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+        st2 = StellaratorTransport(time_march_config, yancc_wrapper=yancc_wrapper)
+        with jax.default_device(jax.devices("cpu")[0]):
+            ec = st.run()
+
+            def true_fn():
+                return st.G()[0]
+
+            def false_fn():
+                return jnp.array([1e-10], dtype=jnp.float32)
+                # ec = st2.run()
+                #
+                # return st2.G()[0]
+
+            G = jax.lax.cond(ec, true_fn, false_fn)
+
+        pi = jnp.array(st.getPressure())
+        return G, pi
+
+    @_objective_base.def_jvp
+    def _objective_base_jvp(primals, tangents):
+        (fields, Vp, Vpp), grid = primals
+        # (field_dot, Vp_dot, Vpp_dot), _= tangents
+        v, _ = tangents
+
+        # compute
+        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp, **yancc_res)
+        # runs MaNTA and returns the adjoints + pressure profile
+        G, G_p, pi = StellaratorFun(grad_config, yancc_wrapper)
+
+        ntheta = fields.ntheta
+        nzeta = fields.nzeta
+        pad_width = 1 + 2 * (nzeta) + 2 * (ntheta)
+        v_unstack = jax.vmap(
+            lambda x: jnp.pad(
+                jax.flatten_util.ravel_pytree(x)[0],
+                pad_width=(pad_width, 0),
+                mode="constant",
             )
+        )(v)
+        dp = jnp.float32(jnp.dot(G_p.flatten(), v_unstack.flatten()))
 
-        return wrapper
-    
-    _f_wrapped = functools.partial(StellaratorFun, config)
-
-    @eqx.filter_custom_jvp
-    def _objective_base(tree_in, grid):
-        fields, Vp = tree_in
-        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp)
-
-        G, G_p, pi = _f_wrapped(yancc_wrapper)
-        return G, pi 
-
-
-    @_objective_base.def_jvp
-    def _objective_base_jvp(primals, tangents):
-        (fields, Vp), grid = primals
-        (field_dot, Vp_dot), _= tangents
-    
-        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp)
-        G, G_p, pi = _f_wrapped(yancc_wrapper)
-        # _, unflatten = jax.flatten_util.ravel_pytree(fields)
-
-        _, unflatten_field = jax.flatten_util.ravel_pytree(yancc_wrapper.fields_unstacked[0])
-
-        G_p_field = G_p[:, :-1] # remove vprime component
-        G_p_vprime = G_p[:, -1] # extract vprime component
-        G_p_padded = jnp.pad(G_p_field, pad_width=((0,0),(0,1)), mode='constant')
-
-        G_p_unflattened = jax.vmap(unflatten_field)((G_p_padded))
-
-        def safe_mul(x, y):
-            if x is None:
-                return y
-            if y is None:
-                return x
-
-            return jnp.multiply(x, y) 
-
-        # Apply tree_map
-        # We need to treat None as a leaf
-        result = jax.tree.map(safe_mul, field_dot, G_p_unflattened, is_leaf=lambda x: x is None)
-        result_flattened, _ = jax.flatten_util.ravel_pytree(result)
-
-        #now do vprime
-
-        result_vprime = jnp.dot(Vp_dot, G_p_vprime)
-
-        return (G, pi), ((jnp.sum(result_flattened)+result_vprime), None)
-
-    return _objective_base
-
-
-# Finite difference objective for testing
-def make_objective_fd(config, abs_step=1e-4, rel_step=0):
-
-    def StellaratorFun(config, yin):
-        st = StellaratorTransport(config, yancc_wrapper=yin)
-        st.run()
-        G, G_p = st.getAdjointGradients()
-
-        pi = jnp.array(st.getPressure())
-
-        return G[0], G_p, pi
-    
-    _f_wrapped = functools.partial(StellaratorFun, config)
-
-    @eqx.filter_custom_jvp
-    def _objective_base(tree_in, grid):
-        fields, Vp = tree_in
-        yancc_wrapper = yancc_data.from_fields(fields, grid, Vp)
-
-        G, G_p, pi = _f_wrapped(yancc_wrapper)
-        return G, pi 
-
-    @_objective_base.def_jvp
-    def _objective_base_jvp(primals, tangents):
-        tree_in, grid = primals
-        tree_dot, _= tangents
-    
-        yancc_wrapper = yancc_data.from_fields(tree_in[0], grid, tree_in[1])
-        G, G_p, pi = _f_wrapped(yancc_wrapper)
-        primal_out = (G, pi)
-        # primal_out = _f_wrapped(*primals)
-
-        # flatten everything into 1D vectors for easier finite differences
-        # y, unflaty = jax.flatten_util.ravel_pytree(field_dot)
-        x, unflatx = jax.flatten_util.ravel_pytree(tree_in)
-        v1, ______ = jax.flatten_util.ravel_pytree(tree_dot[0])
-        v2, ______ = jax.flatten_util.ravel_pytree(tree_dot[1])
-
-        # finite difference step size
-        fd_step = abs_step + rel_step * jnp.mean(jnp.abs(x))
-
-        # scale tangents to unit norm if nonzero
-        normv1 = jnp.linalg.norm(v1)
-        v1a = jnp.where(normv1 == 0, v1, v1 / normv1)
-        vh1 = jnp.pad(v1a, (0, len(x)-len(v1a)), mode='constant')
-        normv2 = jnp.linalg.norm(v2)
-        v2a = jnp.where(normv2 == 0, v2, v2 / normv2)
-        vcat = jnp.concatenate([vh1, v2a])
-        normv = jnp.linalg.norm(vcat)
-        vh = jnp.where(normv == 0, vcat, vcat / normv)
-        def f(tree_in):
-            tree_unflat = unflatx(tree_in)
-            fields_in = tree_unflat[0]
-            vp_in = tree_unflat[1]
-            yancc_wrapper = yancc_data.from_fields(fields_in, grid, vp_in)
-            G, _, _ = _f_wrapped(yancc_wrapper)
-            return G
-
-        tangent_out = (f(x + fd_step * vh) - G) / fd_step * normv
-        #tangent_out = (, None)
-
-        return primal_out, (tangent_out, None)
+        return (G, pi), (dp, None)
 
     return _objective_base

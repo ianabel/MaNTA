@@ -362,8 +362,9 @@ endif()
 
 # -------------------------------------------------------------------- Boost --
 #
-# Header-only: the unit tests use <boost/test/included/unit_test.hpp>, so there
-# is no unit_test_framework library to link. CMake 4 removed the FindBoost
+# Header-only. The core uses Boost.Math (Basis.hpp's quadrature, among others)
+# and the unit tests <boost/test/included/unit_test.hpp>, so there is no library
+# to link, but every target needs the headers. CMake 4 removed the FindBoost
 # module, so this is Boost's own BoostConfig.cmake when it is installed, and a
 # plain header search when it is not -- which keeps a hand-unpacked Boost
 # (BOOST_ROOT, the old Makefile.local's BOOST_DIR) working.
@@ -377,14 +378,14 @@ else()
   if(NOT BOOST_INCLUDE_DIR)
     message(FATAL_ERROR
       "Boost headers not found (looking for boost/test/included/unit_test.hpp). "
-      "Install Boost (apt: libboost-dev; dnf: boost-devel), or set -DBOOST_ROOT=/path/to/boost. "
-      "Configure with -DMANTA_TESTS=OFF to build without the unit tests.")
+      "Install Boost (apt: libboost-dev; dnf: boost-devel), or set -DBOOST_ROOT=/path/to/boost.")
   endif()
   add_library(manta_boost_headers INTERFACE)
   target_include_directories(manta_boost_headers SYSTEM INTERFACE ${BOOST_INCLUDE_DIR})
   set(MANTA_BOOST_TARGET manta_boost_headers)
   mark_as_advanced(BOOST_INCLUDE_DIR)
 endif()
+target_link_libraries(manta_deps INTERFACE ${MANTA_BOOST_TARGET})
 
 # ------------------------------------------------- vendored, under extern/ --
 #
