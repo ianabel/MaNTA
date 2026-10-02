@@ -621,6 +621,15 @@ class SystemSolver
         void destroySundials();
         void runSolver(double tFinal);
 
+        // Where, through which entry point and how often this solver will
+        // evaluate its physics case on its next run: see EvaluationPlan.hpp.
+        // initialize() builds one and hands it to the case before the run's
+        // first physics call; the adaptation drivers build one ahead of that,
+        // for TransportSystem::regrid. A function of the configuration, so call
+        // it after applySolverConfig, setAdjointProblem and setFieldModel --
+        // every one of which can add or move a site.
+        EvaluationPlan evaluationPlan() const;
+
         void setAdjointProblem(AdjointProblem *ap) { adjointProblem = ap; };
         void runAdjointSolve();
 
@@ -700,6 +709,10 @@ class SystemSolver
         // changing it means a new solver. That is what runAdaptiveDegree does,
         // and its caller needs this to find out where it landed.
         unsigned int getOrder() const { return k; };
+
+        // The mesh, likewise fixed for the solver's lifetime. A copy of the one
+        // it was constructed with, so it outlives that.
+        Grid const &getGrid() const { return grid; };
 
         // Whether a run will take the steady path rather than the time loop.
         //
@@ -1741,6 +1754,11 @@ class SystemSolver
         {
             return tauScaling == TauScaling::Diffusive && tauUpdate == TauUpdate::JacobianBuild;
         }
+        // Whether tau evaluates the physics on the faces (faceStates) at all.
+        // The one predicate the evaluation plan keys the TauFaces sites off, so a
+        // tau that stops evaluating on the faces changes this line and the plan
+        // follows; EvaluationPlanTests.cpp fails if the two ever disagree.
+        bool tauEvaluatesFaces() const { return tauScaling == TauScaling::Diffusive; }
 
         // The state on each of the 2 nCells faces as its cell sees it; see
         // faceTau.

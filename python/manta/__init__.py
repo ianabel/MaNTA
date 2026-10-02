@@ -51,6 +51,11 @@ from ._manta import (  # noqa: F401
     BoundaryCondition,
     BoundaryKind,
     Dirichlet,
+    EvaluationCadence,
+    EvaluationEntry,
+    EvaluationKind,
+    EvaluationPlan,
+    EvaluationSite,
     Field,
     Grid,
     Mixed,
@@ -74,6 +79,11 @@ __all__ = [
     "BoundaryCondition",
     "BoundaryKind",
     "Dirichlet",
+    "EvaluationCadence",
+    "EvaluationEntry",
+    "EvaluationKind",
+    "EvaluationPlan",
+    "EvaluationSite",
     "Field",
     "Grid",
     "Mixed",
@@ -194,6 +204,17 @@ class TransportSystem(_core.TransportSystem):
 
         super().__init__(manta.numbered_spec(nVars, nAux=1))
         super().__init__(variables=[...], scalars=[...], aux=[...])
+
+    ``supports_regrid = True`` says the case may be moved onto another mesh
+    after construction. The adaptation drivers then call
+    ``regrid(grid, k, plan)`` before each solve on a new mesh; without it they
+    reuse the case only on meshes spanning the same domain. It is honoured on
+    both paths above -- an explicit spec need not repeat it.
+
+    Two optional hooks report where the solver will evaluate the case:
+    ``prepareEvaluation(plan)``, before every run's first physics call, with an
+    :class:`EvaluationPlan` of every point set, batch size and cadence; and
+    ``regrid`` above. Neither need be defined.
     """
 
     # Overridden by subclasses. Empty rather than absent so that a case which
@@ -201,22 +222,32 @@ class TransportSystem(_core.TransportSystem):
     variables = ()
     scalars = ()
     aux = ()
+    supports_regrid = False
 
     def __init__(self, spec=None, *, variables=None, scalars=None, aux=None):
+        cls = type(self)
         if spec is not None:
             if variables is not None or scalars is not None or aux is not None:
                 raise TypeError(
                     "give TransportSystem.__init__ either a spec or the "
                     "variables/scalars/aux lists, not both"
                 )
+            # A copy rather than an edit, so the caller's spec is left as given.
+            if cls.supports_regrid and not spec.supports_regrid:
+                spec = SystemSpec(
+                    variables=list(spec.variables),
+                    scalars=list(spec.scalars),
+                    aux=list(spec.aux),
+                    supports_regrid=True,
+                )
             super().__init__(spec)
             return
 
-        cls = type(self)
         spec = SystemSpec(
             variables=list(self.variables if variables is None else variables),
             scalars=list(self.scalars if scalars is None else scalars),
             aux=list(self.aux if aux is None else aux),
+            supports_regrid=bool(cls.supports_regrid),
         )
 
         if not spec.variables:

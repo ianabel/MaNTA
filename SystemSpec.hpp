@@ -128,6 +128,19 @@ struct SystemSpec
     std::vector<ScalarSpec> scalars;
     std::vector<AuxSpec> aux;
 
+    // Set when the case may be moved onto a different mesh after construction:
+    // the adaptation drivers then call TransportSystem::regrid before each solve
+    // on a mesh other than the one the case currently holds, and the case
+    // rebuilds whatever it derived from its construction grid. Unset, a driver
+    // reuses the case only on a mesh spanning the same domain -- the one property
+    // of the grid any case in the tree reads in its constructor -- and refuses
+    // otherwise. A case whose constructor ignores the grid altogether may set it
+    // and leave regrid() alone.
+    //
+    // Trailing and defaulted, like FieldSpec::sourceReadsTimeDerivatives, so
+    // every existing `{.variables = ...}` initialiser keeps its meaning.
+    bool supportsRegrid = false;
+
     /// Does any variable's source read du/dt?
     ///
     /// Asked once per run rather than per node: it gates a whole evaluation

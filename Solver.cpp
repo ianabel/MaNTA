@@ -84,6 +84,16 @@ void SystemSolver::initialize()
 	fieldAdjointSweeps = 0;
 	fieldAdjointFellBack = false;
 
+	// Where and how this run will evaluate the case, said before the first
+	// evaluation -- and initialiseMatrices below is that, on a solver's first
+	// run, because it integrates aFn into the mass matrix. Per run rather than
+	// per solver for the same reason as resetForRun: the plan depends on the
+	// restart state and on whether the matrices are already built, both of which
+	// move between runs on one solver. The plan reads no state and the case's
+	// hook writes none of the solver's, so a reused solver stays bit for bit a
+	// fresh one.
+	problem->deliverEvaluationPlan(std::make_shared<const EvaluationPlan>(evaluationPlan()));
+
 	if (!initialised)
 		initialiseMatrices();
 

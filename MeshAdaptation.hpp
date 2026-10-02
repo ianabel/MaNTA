@@ -169,6 +169,11 @@ struct AdaptiveMeshResult
 // back to the uniform mesh and says so. A driver without that would die on a
 // third of the problems it is pointed at.
 //
+// `problem` must hold `uniform` -- be built against it -- and is moved onto each
+// graded mesh through moveCaseToMesh before it is solved there, and back if the
+// run falls back to the uniform mesh. A case that sets supportsRegrid is told each
+// time; see DegreeAdaptation.hpp.
+//
 // Throws std::invalid_argument for k0 < 3.
 AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
                                    TransportSystem &problem,

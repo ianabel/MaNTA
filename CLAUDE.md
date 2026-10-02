@@ -1120,6 +1120,32 @@ and batched (`SigmaFn(i, GlobalState, positions, t)`). The batched defaults in
 `TransportSystem.hpp` are serial loops over the pointwise version, several under
 `#pragma omp parallel for`; a case may override either level.
 
+**The solver tells a case where it will evaluate it, and the list has to stay
+complete.** `SystemSolver::evaluationPlan()` builds an `EvaluationPlan`
+(`EvaluationPlan.hpp`): one site per kind of evaluation, entry point and cadence,
+with the exact abscissae. `initialize()` hands it over through
+`TransportSystem::prepareEvaluation` in its unconditional part, *before*
+`initialiseMatrices` -- which calls `aFn` on a solver's first run -- so it is
+refreshed per run like `resetForRun`. A case may compile per batch shape against
+it, so **a physics call at a point set the plan does not list is a bug, not a
+fallback**: `EvaluationPlanTests.cpp` records every call a case is handed across a
+matrix of configurations and fails on any outside the plan, and on any announced
+site never used. Adding a physics call means adding its site to
+`evaluationPlan()`. The `TauFaces` sites are keyed off `tauEvaluatesFaces()` and
+nothing else, so a tau that stops evaluating on the faces is a one-line change
+there.
+
+**Regridding is declared, and only the mesh is a regrid.** `MeshAdaptation` and a
+`GridLadder` reuse one case across meshes; `moveCaseToMesh` (`DegreeAdaptation.cpp`)
+runs before each solve on a mesh other than the one the case holds. A case whose
+spec sets `supportsRegrid` is told through `regrid(grid, k, plan)`; any other is
+reused on the same domain -- every in-tree constructor reads only `xL`/`xR` from
+its grid -- and refused on a different one. A degree change is not a regrid: a
+constructor never sees `k`, so the new degree reaches the case only through the
+next plan. In `MeshAdaptation` the move happens *outside* the attempt's failure
+handling, so a case that cannot follow a mesh is not mistaken for a failed grading
+and softened into silence.
+
 ### Self-consistent magnetic fields (`FieldModel`)
 
 A `FieldModel` (`FieldModel.hpp`) contributes `nFieldDOF` unknowns `psi`, one
@@ -1274,6 +1300,15 @@ gives. Four pieces to know:
   initial condition, which happen before there is a `dYdt` to read. A batched
   case therefore tests `.size` rather than indexing it. The pointwise view does
   not have that shape: `s.udot` is always `nVars` long and reads zero.
+* **`prepareEvaluation` and `regrid` are optional, and dispatched with
+  `PYBIND11_OVERRIDE`** like `aFn`, so a case defining neither pays an override
+  lookup per run. The plan and the grid cross as copies, with numpy point sets;
+  `supports_regrid` is a class attribute that `manta.TransportSystem.__init__`
+  honours on both its paths, copying an explicit spec rather than editing it.
+  `Grid` and the plan types are bound *before* `TransportSystem` so the generated
+  stub names them. A case object handed to `Runner(system)` is never told its grid
+  at construction -- `configure()` builds it afterwards -- so the plan is the
+  only place such a case learns the mesh.
 * **`PyRunner`** (`configure(dict)` / `run` / `run_ss` / `getSolution` / `G` /
   `getAdjointGradients`) is the API the optimisation drivers use, and the only
   route supporting repeated configure/run cycles in one process — it works by

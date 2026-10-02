@@ -212,6 +212,7 @@ set(MANTA_INSTALL_HEADERS
   DGApprox.hpp
   DGSoln.hpp
   ErrorChecker.hpp
+  EvaluationPlan.hpp
   FieldModel.hpp
   FieldModelSpec.hpp
   Logging.hpp

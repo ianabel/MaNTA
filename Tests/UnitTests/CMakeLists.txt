@@ -42,6 +42,7 @@ set(MANTA_TEST_SOURCES
   DGSolnTests.cpp
   DGTests.cpp
   DegreeAdaptationTests.cpp
+  EvaluationPlanTests.cpp
   FieldAdjointTests.cpp
   FieldDoFLayoutTests.cpp
   FieldJacobianTests.cpp

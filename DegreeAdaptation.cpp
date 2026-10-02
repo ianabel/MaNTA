@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <print>
 #include <stdexcept>
 #include <vector>
@@ -133,6 +134,31 @@ LevelError measure(SystemSolver &system, SolverConfig const &config,
     return out;
 }
 } // namespace
+
+void moveCaseToMesh(TransportSystem &problem, SystemSolver const &next, Grid &current)
+{
+    Grid const &target = next.getGrid();
+    if (target == current)
+        return;
+
+    if (problem.supportsRegrid())
+    {
+        problem.regrid(target, static_cast<Index>(next.getOrder()), next.evaluationPlan());
+    }
+    else if (target.lowerBoundary() != current.lowerBoundary() ||
+             target.upperBoundary() != current.upperBoundary())
+    {
+        throw std::invalid_argument(std::format(
+            "An adaptation driver asked to solve this physics case on [{}, {}], but the "
+            "case holds a mesh on [{}, {}] and its spec does not set supportsRegrid, so "
+            "nothing would tell it the domain moved. Set supportsRegrid and override "
+            "regrid() to rebuild what the constructor took from its grid.",
+            target.lowerBoundary(), target.upperBoundary(), current.lowerBoundary(),
+            current.upperBoundary()));
+    }
+
+    current = target;
+}
 
 SolverConfig carriedStepConfig(SolverConfig const &config, SystemSolver const &previous)
 {
@@ -425,6 +451,10 @@ std::unique_ptr<SystemSolver> runLadder(SolverConfig const &config,
     std::unique_ptr<SystemSolver> system;
     std::vector<double> Y, dYdt;
 
+    // The mesh the case holds: the caller's, which is the one it was built
+    // against, until a GridLadder rung moves it. See moveCaseToMesh.
+    Grid caseGrid = grid;
+
     // The first rung inherits whatever restart state the caller already put on
     // the problem -- a ladder started from a restart file is a reasonable thing
     // to ask for, and clearing here would silently throw it away. Every rung
@@ -454,6 +484,10 @@ std::unique_ptr<SystemSolver> runLadder(SolverConfig const &config,
         // the run completes and the gradients are never computed.
         if (adjoint != nullptr)
             system->setAdjointProblem(adjoint);
+
+        // After the solver is configured, because the case is handed that
+        // solve's evaluation plan; and back to the caller's mesh on the last rung.
+        moveCaseToMesh(problem, *system, caseGrid);
 
         system->runSolver(tFinal);
 

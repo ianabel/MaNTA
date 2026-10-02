@@ -549,6 +549,134 @@ they do not care how many points they are handed. That is what allows
 ``Superconvergent`` to evaluate the physics at :math:`k+2` points per cell
 instead of :math:`k+1` without any physics case changing.
 
+.. _evaluation-plans:
+
+Evaluation plans
+----------------
+
+A case that compiles once per batch shape — a JAX case — or that tabulates an
+:math:`x`-dependent profile on the points it will be evaluated at needs to know
+those points *before* the first call. ``prepareEvaluation(plan)`` tells it. The
+solver calls it at the start of every run, from ``SystemSolver::initialize()``,
+before any physics call of that run, with an ``EvaluationPlan``
+(``EvaluationPlan.hpp``): one ``EvaluationSite`` per kind of evaluation, entry
+point and cadence, each carrying the abscissae it will pass. The default does
+nothing, and ``evaluationPlan()`` returns the last plan delivered.
+
+It arrives at ``initialize()`` rather than at construction because a case is built
+from ``(config, grid)`` before any solver exists, and the degree,
+``Superconvergent`` and the tau scaling are the solver's configuration rather than
+the case's. It arrives again for every solver a case is used with, so a case that
+caches against it rebuilds from the latest plan.
+
+The kinds, for :math:`N` cells at degree :math:`k`:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 30 14 38
+
+   * - Kind
+     - Entry point
+     - Points
+     - Cadence
+   * - ``Residual``
+     - ``ComputePhysics``
+     - :math:`N(k+1)`, or :math:`N(k+2)` superconvergent
+     - per residual
+   * - ``Jacobian``
+     - ``ComputePhysicsDerivatives`` (and ``ComputeSourceTimeDerivatives`` if a
+       source reads ``udot``)
+     - as ``Residual``
+     - per Jacobian build; once more at the start of a run whose sources read
+       ``udot``
+   * - ``InitialCondition``
+     - ``ComputePhysics``
+     - :math:`N(k+1)`
+     - once per run: once to build ``sigma`` (not on a copied restart), once for
+       the initial :math:`du/dt` (not on a steady solve)
+   * - ``TauFaces``
+     - ``ComputePhysicsDerivatives``
+     - :math:`2N`, both faces of each cell, one-sided
+     - only with ``tauScaling = "Diffusive"``: per residual and
+       :math:`1 + 3n_{vars} + n_{aux}` per Jacobian build under
+       ``tauUpdate = "Residual"``, plus one for a time march's initial
+       :math:`du/dt`; per continuation step under the frozen updates, and per
+       Jacobian build too under ``"JacobianBuild"``
+   * - ``ScalarConstraint``, ``ScalarJacobian``
+     - ``ScalarG`` (one call per scalar), ``ScalarGPrime``;
+       ``InitialScalarDerivative``
+     - :math:`N(k+1)` whatever ``Superconvergent`` says
+     - per residual, per Jacobian build; once per run per differential scalar
+   * - ``ScalarCoupling``, ``FieldCoupling``
+     - pointwise ``dSources_dScalars``; the three ``*_dGeometry`` hooks
+     - as ``Residual``
+     - per Jacobian build
+   * - ``Adjoint``
+     - ``ComputePhysicsDerivatives``, one call per objective
+     - as ``Residual``
+     - per adjoint solve, including the objective estimate a steady solve makes
+   * - ``InitialProjection``
+     - pointwise ``InitialValue``, ``InitialDerivative``, ``InitialAuxValue``
+     - :math:`30N` Gauss points
+     - once per cold start, :math:`k+1` visits per point
+   * - ``MassMatrix``
+     - pointwise ``aFn``
+     - :math:`30N` Gauss points
+     - the first run of a solver only
+
+Five cells at :math:`k = 4` therefore hand ``ComputePhysics`` batches of 25
+points, and ``ComputePhysicsDerivatives`` batches of 25 — plus 10 with a Diffusive
+tau. With ``Superconvergent`` the residual, Jacobian and adjoint batches become 30
+while the initial condition stays at 25. ``plan.batchSizes(entry)`` lists the
+distinct shapes of an entry; ``plan.points(kind)`` the abscissae of a kind.
+
+**A cadence is not a count.** How many residuals or Jacobian builds a run takes is
+decided by Newton and IDA as it goes, so the plan says what happens *when*, not
+how often in total. **The plan is complete**: every batched call the solver makes
+is at a point set it announced for that entry, and ``EvaluationPlanTests.cpp``
+records what a case is actually handed across the solver's configurations and
+fails on any call outside the plan. A case that wants to be told rather than trust
+that can assert ``plan.announces(entry, abscissae)`` in its own hooks. Outside the
+plan altogether: ``LowerBoundary``/``UpperBoundary``, which take no position;
+``writeDiagnostics``, which is the case's own; and a field model's hooks, which
+belong to the model.
+
+From Python the plan is a ``manta.EvaluationPlan`` whose point sets are numpy
+arrays, and a case overrides the hook like any other:
+
+.. code-block:: python
+
+   class MyCase(manta.TransportSystem):
+       def prepareEvaluation(self, plan):
+           self.shapes = plan.batchSizes(manta.EvaluationEntry.ComputePhysics)
+           self.profile = tabulate(plan.points(manta.EvaluationKind.Residual))
+
+Regridding
+~~~~~~~~~~
+
+The adaptation drivers — ``MeshAdaptation`` and a ladder's ``GridLadder`` — solve
+one case on several meshes, building a new solver each time and *reusing the case*.
+A case whose constructor derived something from its grid can say it supports this
+by setting ``SystemSpec::supportsRegrid`` (``supports_regrid = True`` as a class
+attribute in Python, honoured whether the spec is built from class attributes or
+passed explicitly). Before each solve on a mesh other than the one the case holds,
+the driver then calls ``regrid(grid, k, plan)`` with the new mesh, that solve's
+degree and its plan; the same plan reaches ``prepareEvaluation`` when the solve
+starts. The default ``regrid`` does nothing, which is right for a case whose
+constructor reads nothing from the grid.
+
+A case that does not declare it is reused as it is, on a mesh spanning the same
+domain, and refused with ``std::invalid_argument`` on any other. That is
+correct for every case in this tree, whose constructors read only the domain ends
+from their grid, and every driver keeps the domain. Re-instantiating the case
+instead is not open to a driver: it is handed a ``TransportSystem&``, and the
+adjoint problem a case hands out may point back into it.
+
+A change of degree alone is not a regrid — a constructor is never told
+:math:`k`, so nothing it built depends on it — and reaches the case only through
+the plan its next solve delivers. ``DegreeAdaptation`` therefore never calls
+``regrid``.
+
 Diagnostics
 -----------
 

@@ -4,6 +4,7 @@
 #include "State.hpp"
 #include "Types.hpp"
 #include "SystemSpec.hpp"
+#include "EvaluationPlan.hpp"
 #include "DGSoln.hpp"
 #include "NetCDFIO.hpp"
 #include "AdjointProblem.hpp"
@@ -75,6 +76,61 @@ public:
   Index getNumVars() const { return nVars; };
   Index getNumScalars() const { return nScalars; };
   Index getNumAux() const { return nAux; };
+
+  /*
+      Where the solver is about to evaluate this case, and how often.
+
+      Called by SystemSolver::initialize() on every run, before the run's first
+      physics call -- before even aFn, which the first initialize() of a solver
+      integrates into the mass matrix -- with the plan that solver will follow:
+      every point set it will hand ComputePhysics, ComputePhysicsDerivatives and
+      the pointwise hooks, the batch shape of each, and its cadence. See
+      EvaluationPlan.hpp.
+
+      Here rather than at construction, because a case is built from (config,
+      grid) before any solver exists, and the degree, Superconvergent and the tau
+      scaling are the solver's configuration rather than the case's. It arrives
+      again for every solver a case is used with -- each level of
+      DegreeAdaptation, each rung of a ladder -- so a case that caches against a
+      plan should rebuild from the latest one rather than from the first.
+
+      The default does nothing, and a case that does not override it pays for a
+      shared_ptr copy per run. The plan stays readable afterwards through
+      evaluationPlan().
+  */
+  virtual void prepareEvaluation(EvaluationPlan const &) {}
+
+  /// The plan prepareEvaluation was last handed, or null before any solver has
+  /// initialised with this case.
+  EvaluationPlan const *evaluationPlan() const { return m_evaluationPlan.get(); }
+
+  /// What SystemSolver::initialize calls: keep the plan, then tell the case.
+  void deliverEvaluationPlan(std::shared_ptr<const EvaluationPlan> plan)
+  {
+    m_evaluationPlan = std::move(plan);
+    prepareEvaluation(*m_evaluationPlan);
+  }
+
+  /// Spec data. See SystemSpec::supportsRegrid.
+  bool supportsRegrid() const { return m_spec.supportsRegrid; }
+
+  /*
+      The case is about to be solved on a different mesh from the one it holds.
+
+      Called by the adaptation drivers -- MeshAdaptation and a ladder's
+      GridLadder -- before the first solve on each mesh other than the one the
+      case was constructed with or last regridded to, and only for a case whose
+      spec sets supportsRegrid. `grid` is the new mesh, `k` the degree that solve
+      runs at, and `plan` the evaluation plan of that solve; the same plan then
+      reaches prepareEvaluation when the solve initialises.
+
+      This is for state the *constructor* derived from its grid. A change of
+      degree alone is not a regrid -- a constructor is never told k, so nothing
+      it built can depend on it -- and reaches the case through prepareEvaluation
+      like any other change of plan. The default does nothing, which is right for
+      a case whose constructor reads nothing from the grid at all.
+  */
+  virtual void regrid(Grid const &, Index, EvaluationPlan const &) {}
 
   // `nField` is how many of the trailing entries of `y` are the field model's
   // psi. It defaults to zero, which is every caller that has no field model --
@@ -663,6 +719,10 @@ protected:
   std::vector<Values> m_sourceCache; // since sources might be expensive to calculate, cache them for use in outputs
 
   std::vector<Value> uL, uR;
+
+  // Shared rather than copied: the solver keeps no copy of its own, and a case
+  // that ignores the plan should not pay for one.
+  std::shared_ptr<const EvaluationPlan> m_evaluationPlan;
 };
 
 #endif // TRANSPORTSYSTEM_HPP

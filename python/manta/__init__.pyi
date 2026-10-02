@@ -28,6 +28,11 @@ from ._manta import (
     Aux as Aux,
     BoundaryCondition as BoundaryCondition,
     BoundaryKind as BoundaryKind,
+    EvaluationCadence as EvaluationCadence,
+    EvaluationEntry as EvaluationEntry,
+    EvaluationKind as EvaluationKind,
+    EvaluationPlan as EvaluationPlan,
+    EvaluationSite as EvaluationSite,
     Field as Field,
     Grid as Grid,
     Mixed as Mixed,
@@ -74,6 +79,7 @@ class TransportSystem(_TransportSystem):
     variables: Sequence[Field]
     scalars: Sequence[Scalar]
     aux: Sequence[Aux]
+    supports_regrid: bool
 
     def __init__(
         self,
@@ -153,3 +159,11 @@ class TransportSystem(_TransportSystem):
     def ScalarG(self, s: int, states: Any, states_dot: Any, abscissae: Any, weights: Any, phi_boundary: Any, t: float) -> float: ...  # type: ignore[override]
     def ScalarGPrime(self, states: Any, states_dot: Any, abscissae: Any, weights: Any, phi_boundary: Any, t: float) -> tuple[list[Any], list[Any]]: ...
     def dSources_dScalars(self, s: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
+
+    # Where the solver will evaluate the case, before every run's first physics
+    # call; and, for a case that sets supports_regrid, the mesh it is about to be
+    # moved to. Both optional. prepareEvaluation matches the bound base exactly,
+    # so it carries no ignore; regrid's `k` is narrowed to int like every index
+    # above.
+    def prepareEvaluation(self, plan: EvaluationPlan) -> None: ...
+    def regrid(self, grid: Grid, k: int, plan: EvaluationPlan) -> None: ...  # type: ignore[override]

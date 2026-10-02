@@ -147,14 +147,14 @@ double gradingLayerFraction(GradingDecision const &decision,
 
 namespace
 {
-// One solve at a fixed degree on a given mesh, returning the solver. Split out so
-// that the sampling solve and the retry loop share it, and so the "never two
-// solvers alive" discipline lives in one place.
-std::unique_ptr<SystemSolver> solveOnce(SolverConfig const &config,
-                                        TransportSystem &problem,
-                                        AdjointProblem *adjoint,
-                                        Grid const &grid, unsigned int k,
-                                        double tFinal)
+// A solver for one solve at a fixed degree on a given mesh, configured but not
+// yet run. Split out so that the sampling solve, the retry loop and the fallback
+// share it, and so the "never two solvers alive" discipline lives in one place:
+// the caller runs it, and moves the case onto its mesh first.
+std::unique_ptr<SystemSolver> configuredSolver(SolverConfig const &config,
+                                               TransportSystem &problem,
+                                               AdjointProblem *adjoint,
+                                               Grid const &grid, unsigned int k)
 {
     auto system = std::make_unique<SystemSolver>(grid, k, &problem);
     applySolverConfig(config, *system);
@@ -174,7 +174,6 @@ std::unique_ptr<SystemSolver> solveOnce(SolverConfig const &config,
     if (adjoint != nullptr)
         system->setAdjointProblem(adjoint);
 
-    system->runSolver(tFinal);
     return system;
 }
 } // namespace
@@ -207,8 +206,14 @@ AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
     AdaptiveMeshResult result;
     result.grid = std::make_unique<Grid>(uniform);
 
+    // The mesh the case holds, which the caller built it against. Every solve on
+    // another goes through moveCaseToMesh first.
+    Grid caseGrid = uniform;
+
     // --- p: the sampling solve, at a degree the decision can be trusted at -----
-    auto sample = solveOnce(config, problem, adjoint, *result.grid, k0, tFinal);
+    auto sample = configuredSolver(config, problem, adjoint, *result.grid, k0);
+    moveCaseToMesh(problem, *sample, caseGrid);
+    sample->runSolver(tFinal);
 
     // --- h: decide, and regrade at the same cell count -------------------------
     result.decision = gradingDecision(sample->solution(), var,
@@ -268,13 +273,28 @@ AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
             std::println("  attempt {}: ratio {:.4g}, narrowest cell {:.3e} of the "
                          "domain", attempt, ratio, narrowest / span);
 
+            // Built, and the case moved onto the new mesh, outside the attempt's
+            // own failure handling below. A case that cannot follow the mesh has
+            // not failed to solve on it, and softening the grading would only
+            // bury that.
+            std::unique_ptr<SystemSolver> trial;
+            problem.setRestartValues(sampleState, sampleDerivative, sampleGrid, k0);
             try
             {
-                std::unique_ptr<SystemSolver> trial;
+                trial = configuredSolver(warmConfig, problem, adjoint, *graded, k0);
+                moveCaseToMesh(problem, *trial, caseGrid);
+            }
+            catch (...)
+            {
+                problem.clearRestart();
+                throw;
+            }
+
+            try
+            {
                 try
                 {
-                    problem.setRestartValues(sampleState, sampleDerivative, sampleGrid, k0);
-                    trial = solveOnce(warmConfig, problem, adjoint, *graded, k0, tFinal);
+                    trial->runSolver(tFinal);
                     problem.clearRestart();
                 }
                 catch (std::invalid_argument const &)
@@ -286,13 +306,16 @@ AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
                 {
                     // The warm start is a cost saving, so its failure is not
                     // evidence against the mesh: retry this mesh cold, exactly as
-                    // it used to be solved, before softening anything.
+                    // it used to be solved, before softening anything. The failed
+                    // solver goes first, so two are never alive at once.
                     problem.clearRestart();
                     logmsg<LOG_LEVEL::WARNING>(
                         "Graded mesh attempt {} failed from the sample's state ({}). "
                         "Retrying it from the initial condition.", attempt, e.what());
                     std::println("  attempt {}: warm start failed; retrying cold", attempt);
-                    trial = solveOnce(config, problem, adjoint, *graded, k0, tFinal);
+                    trial.reset();
+                    trial = configuredSolver(config, problem, adjoint, *graded, k0);
+                    trial->runSolver(tFinal);
                 }
                 result.grid = std::move(graded);
                 result.solver = std::move(trial);
@@ -335,6 +358,14 @@ AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
                          config.MeshAdaptationAttempts);
             result.grid = std::make_unique<Grid>(uniform);
             result.gradingAttempts = config.MeshAdaptationAttempts;
+
+            // The degree loop's first level, solved here rather than by the loop
+            // because the case has to come back from the last graded mesh it was
+            // moved to first, and the loop solves on the mesh it is handed
+            // without moving anything.
+            result.solver = configuredSolver(config, problem, adjoint, *result.grid, k0);
+            moveCaseToMesh(problem, *result.solver, caseGrid);
+            result.solver->runSolver(tFinal);
         }
     }
     else
@@ -350,8 +381,8 @@ AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
     // its first level, because that is exactly the solve the loop would open with.
     // It used to be discarded here and repeated from cold: one solve in three on
     // every graded run, and one in two on every uniform one, for an identical
-    // answer. Null when every graded attempt failed and the mesh fell back to
-    // uniform, in which case the loop solves that level itself as before.
+    // answer. When every graded attempt failed, that is the uniform solve made
+    // just above.
     std::println("Mesh adaptation: adapting the degree on the {} mesh",
                  result.gradingAttempts > 0 && result.decision.verdict != GradingVerdict::Uniform
                      ? "graded" : "uniform");
