@@ -80,23 +80,28 @@ public:
   /*
       Where the solver is about to evaluate this case, and how often.
 
-      Called by SystemSolver::initialize() on every run, before the run's first
-      physics call -- before even aFn, which the first initialize() of a solver
-      integrates into the mass matrix -- with the plan that solver will follow:
-      every point set it will hand ComputePhysics, ComputePhysicsDerivatives and
-      the pointwise hooks, the batch shape of each, and its cadence. See
-      EvaluationPlan.hpp.
+      Called before a run's first physics call -- before even aFn, which the
+      first initialize() of a solver integrates into the mass matrix -- with the
+      plan that solver will follow: every point set it will hand
+      ComputePhysics, ComputePhysicsDerivatives and the pointwise hooks, the
+      batch shape of each, and its cadence. See EvaluationPlan.hpp. The plan
+      carries the grid and the degree, so it is all a case is told about where
+      it is.
+
+      Called only when the plan *changes*: on the first run an instance takes
+      part in, and afterwards only when a run would evaluate it differently from
+      the last plan it was handed. A rerun on the same mesh, degree and
+      configuration makes no call. A change after the first is a **regrid** --
+      a new mesh, or a new degree, which adds nodes and moves the old ones -- and
+      reaches this hook only for a case whose spec's RegridPolicy is InPlace. Any
+      other case sees exactly one plan in its life: the change is refused, or,
+      where the configuration sets RebuildPhysicsOnRegrid, a driver replaces the
+      case with a new instance built from the registry (PhysicsInstance.hpp).
 
       Here rather than at construction, because a case is built from (config,
       grid) before any solver exists, and the degree, Superconvergent and the tau
-      scaling are the solver's configuration rather than the case's. It arrives
-      again for every solver a case is used with -- each level of
-      DegreeAdaptation, each rung of a ladder -- so a case that caches against a
-      plan should rebuild from the latest one rather than from the first.
-
-      The default does nothing, and a case that does not override it pays for a
-      shared_ptr copy per run. The plan stays readable afterwards through
-      evaluationPlan().
+      scaling are the solver's configuration rather than the case's. The default
+      does nothing.
   */
   virtual void prepareEvaluation(EvaluationPlan const &) {}
 
@@ -104,33 +109,43 @@ public:
   /// initialised with this case.
   EvaluationPlan const *evaluationPlan() const { return m_evaluationPlan.get(); }
 
-  /// What SystemSolver::initialize calls: keep the plan, then tell the case.
+  /// Spec data. See RegridPolicy.
+  RegridPolicy regridPolicy() const { return m_spec.regrid; }
+
+  /// May this instance be evaluated according to `plan`? Always before its first
+  /// plan, and afterwards if the plan is the one it already has or the case
+  /// takes a new one in place.
+  bool acceptsPlan(EvaluationPlan const &plan) const
+  {
+    return !m_evaluationPlan || *m_evaluationPlan == plan ||
+           regridPolicy() == RegridPolicy::InPlace;
+  }
+
+  /// Why a changed plan was refused, for every surface that refuses one.
+  static std::string regridRefusal()
+  {
+    return "This physics case has already been evaluated on another mesh or degree, and "
+           "its RegridPolicy is Fixed, so it may not be evaluated anywhere else: "
+           "whatever it derived from where it was evaluated would be stale. Either "
+           "declare RegridPolicy InPlace in its spec (regrid = manta.Regrid.InPlace in "
+           "Python), if prepareEvaluation rebuilds that state from a new plan or "
+           "nothing depends on it; or set RebuildPhysicsOnRegrid = true, under which an "
+           "adaptation driver builds a new instance from the registry for each new "
+           "discretisation -- which needs a registered case, named rather than handed "
+           "over as an object.";
+  }
+
+  /// What SystemSolver::initialize calls: tell the case about `plan` if it is new
+  /// to it, and refuse a plan the case cannot accept.
   void deliverEvaluationPlan(std::shared_ptr<const EvaluationPlan> plan)
   {
+    if (m_evaluationPlan && *m_evaluationPlan == *plan)
+      return;
+    if (!acceptsPlan(*plan))
+      throw std::invalid_argument(regridRefusal());
     m_evaluationPlan = std::move(plan);
     prepareEvaluation(*m_evaluationPlan);
   }
-
-  /// Spec data. See SystemSpec::supportsRegrid.
-  bool supportsRegrid() const { return m_spec.supportsRegrid; }
-
-  /*
-      The case is about to be solved on a different mesh from the one it holds.
-
-      Called by the adaptation drivers -- MeshAdaptation and a ladder's
-      GridLadder -- before the first solve on each mesh other than the one the
-      case was constructed with or last regridded to, and only for a case whose
-      spec sets supportsRegrid. `grid` is the new mesh, `k` the degree that solve
-      runs at, and `plan` the evaluation plan of that solve; the same plan then
-      reaches prepareEvaluation when the solve initialises.
-
-      This is for state the *constructor* derived from its grid. A change of
-      degree alone is not a regrid -- a constructor is never told k, so nothing
-      it built can depend on it -- and reaches the case through prepareEvaluation
-      like any other change of plan. The default does nothing, which is right for
-      a case whose constructor reads nothing from the grid at all.
-  */
-  virtual void regrid(Grid const &, Index, EvaluationPlan const &) {}
 
   // `nField` is how many of the trailing entries of `y` are the field model's
   // psi. It defaults to zero, which is every caller that has no field model --
@@ -231,6 +246,20 @@ public:
     restart_grid.reset();
     restart_Y_data.clear();
     restart_dYdt_data.clear();
+  }
+
+  // Take over another instance's restart state, or its absence. For a driver
+  // that replaces a case with a freshly built one between two solves, so the
+  // next solve warm-starts from the last as it would have on the old instance.
+  void copyRestartFrom(TransportSystem const &other)
+  {
+    if (!other.restarting)
+    {
+      clearRestart();
+      return;
+    }
+    setRestartValues(other.restart_Y_data, other.restart_dYdt_data, *other.restart_grid,
+                     other.restart_Y->getBasis().Order(), other.restart_Y->getFieldDOF());
   }
 
   // Function for passing boundary conditions to the solver.

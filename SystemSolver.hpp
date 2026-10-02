@@ -623,11 +623,12 @@ class SystemSolver
 
         // Where, through which entry point and how often this solver will
         // evaluate its physics case on its next run: see EvaluationPlan.hpp.
-        // initialize() builds one and hands it to the case before the run's
-        // first physics call; the adaptation drivers build one ahead of that,
-        // for TransportSystem::regrid. A function of the configuration, so call
-        // it after applySolverConfig, setAdjointProblem and setFieldModel --
-        // every one of which can add or move a site.
+        // initialize() builds one and offers it to the case before the run's
+        // first physics call; PhysicsInstance builds one ahead of that, to decide
+        // whether the case may be evaluated by it at all. A function of the
+        // discretisation and the configuration and never of the run, so call it
+        // after applySolverConfig, setAdjointProblem and setFieldModel -- every
+        // one of which can add or move a site.
         EvaluationPlan evaluationPlan() const;
 
         void setAdjointProblem(AdjointProblem *ap) { adjointProblem = ap; };

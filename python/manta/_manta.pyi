@@ -6,7 +6,7 @@ import collections.abc
 import numpy
 import numpy.typing
 import typing
-__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'EvaluationCadence', 'EvaluationEntry', 'EvaluationKind', 'EvaluationPlan', 'EvaluationSite', 'Field', 'Grid', 'Mixed', 'Neumann', 'Runner', 'Scalar', 'State', 'StateField', 'SteadyOutcome', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'load_physics_plugin', 'numbered_spec', 'physics_cases', 'registerPhysicsCase', 'run']
+__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'EvaluationCadence', 'EvaluationEntry', 'EvaluationKind', 'EvaluationPlan', 'EvaluationSite', 'Field', 'Grid', 'Mixed', 'Neumann', 'Regrid', 'Runner', 'Scalar', 'State', 'StateField', 'SteadyOutcome', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'load_physics_plugin', 'numbered_spec', 'physics_cases', 'registerPhysicsCase', 'run']
 class AdjointProblem:
     spatialParameters: bool
     def __init__(self) -> None:
@@ -369,6 +369,43 @@ class Grid:
         ...
     def upperBoundary(self) -> float:
         ...
+class Regrid:
+    """
+    Members:
+    
+      Fixed
+    
+      InPlace
+    """
+    Fixed: typing.ClassVar[Regrid]  # value = <Regrid.Fixed: 0>
+    InPlace: typing.ClassVar[Regrid]  # value = <Regrid.InPlace: 1>
+    __members__: typing.ClassVar[dict[str, Regrid]]  # value = {'Fixed': <Regrid.Fixed: 0>, 'InPlace': <Regrid.InPlace: 1>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
 class Runner:
     def G(self) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
         ...
@@ -530,7 +567,7 @@ class SteadyOutcome:
     def value(self) -> int:
         ...
 class SystemSpec:
-    def __init__(self, variables: collections.abc.Sequence[Field], scalars: collections.abc.Sequence[Scalar] = [], aux: collections.abc.Sequence[Aux] = [], supports_regrid: bool = False) -> None:
+    def __init__(self, variables: collections.abc.Sequence[Field], scalars: collections.abc.Sequence[Scalar] = [], aux: collections.abc.Sequence[Aux] = [], regrid: Regrid = ...) -> None:
         ...
     def validate(self) -> None:
         ...
@@ -541,18 +578,18 @@ class SystemSpec:
     def aux(self, arg0: collections.abc.Sequence[Aux]) -> None:
         ...
     @property
+    def regrid(self) -> Regrid:
+        """
+        InPlace when the case follows a changed evaluation plan -- a new mesh or degree -- through prepareEvaluation. Fixed, the default, lets it be evaluated by its first plan only.
+        """
+    @regrid.setter
+    def regrid(self, arg0: Regrid) -> None:
+        ...
+    @property
     def scalars(self) -> list[Scalar]:
         ...
     @scalars.setter
     def scalars(self, arg0: collections.abc.Sequence[Scalar]) -> None:
-        ...
-    @property
-    def supports_regrid(self) -> bool:
-        """
-        Set when the case may be moved onto another mesh after construction; the adaptation drivers then call regrid() before each solve on a new mesh.
-        """
-    @supports_regrid.setter
-    def supports_regrid(self, arg0: bool) -> None:
         ...
     @property
     def variables(self) -> list[Field]:
@@ -644,9 +681,7 @@ class TransportSystem:
         ...
     def prepareEvaluation(self, plan: EvaluationPlan) -> None:
         ...
-    def regrid(self, grid: Grid, k: typing.SupportsInt | typing.SupportsIndex, plan: EvaluationPlan) -> None:
-        ...
-    def supportsRegrid(self) -> bool:
+    def regridPolicy(self) -> Regrid:
         ...
     @property
     def evaluationPlan(self) -> manta._manta.EvaluationPlan | None:

@@ -18,7 +18,8 @@ class TestDiffusion : public TransportSystem {
 		// Must provide a constructor that constructs from a toml configuration snippet
 		// you can ignore it, or read problem-dependent parameters from the configuration file
 		explicit TestDiffusion( toml::value const& config )
-			: TransportSystem({.variables = numberedFields(1)})
+			// InPlace: it takes no grid, and keeps nothing from a plan.
+			: TransportSystem({.variables = numberedFields(1), .regrid = RegridPolicy::InPlace})
 		{
 			// Construct your problem from user-specified config
 			// throw an exception if you can't. NEVER leave a part-constructed object around

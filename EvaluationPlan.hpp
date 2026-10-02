@@ -25,9 +25,17 @@
     discretisation. How many residuals or Jacobian builds a run takes is decided
     by Newton and IDA as it goes, and nothing here pretends to know it.
 
+    **A plan is a function of the discretisation and the configuration alone**,
+    never of the run: not of a restart, and not of whether this is a solver's
+    first run. A site that only some runs reach -- the mass matrix's aFn, built
+    on a solver's first run; the initial-condition sweeps a copied restart skips
+    -- is listed always, with its count as an upper bound. That is what lets
+    `==` mean "this case is evaluated at the same points in the same way", which
+    is the test for whether a case must be told anything at all.
+
     SystemSolver::evaluationPlan() builds one, and initialize() hands it to the
-    case through TransportSystem::prepareEvaluation before the first physics call
-    of the run. See docs/physics_interface.rst, "Evaluation plans".
+    case through TransportSystem::deliverEvaluationPlan before the first physics
+    call of the run. See docs/physics_interface.rst, "Evaluation plans".
  */
 
 /// What an evaluation is for. Each names the solver code that makes it.
@@ -70,8 +78,9 @@ enum class EvaluationCadence
     PerContinuationStep, // every pseudo-transient continuation step of a steady solve
     PerAdjointSolve,     // every adjoint solve, including the objective estimate a
                          // steady solve makes on its way out
-    OncePerRun,          // inside initialize(), before anything is integrated
-    OncePerSolver,       // the first initialize() of a SystemSolver only
+    OncePerRun,          // inside initialize(), at most `calls` times: a restart or a
+                         // steady solve skips some of them
+    OncePerSolver,       // the first initialize() of a SystemSolver, at most
 };
 
 /// One kind of evaluation, through one entry point, at one cadence.
@@ -102,6 +111,8 @@ struct EvaluationSite
     Index batchSize() const { return static_cast<Index>(points.size()); }
 
     bool isBatched() const { return entry != EvaluationEntry::Pointwise; }
+
+    bool operator==(EvaluationSite const &) const = default;
 };
 
 struct EvaluationPlan
@@ -114,6 +125,11 @@ struct EvaluationPlan
     bool steady = false; // a steady solve: PseudoTransient or Newton, not a time march
 
     std::vector<EvaluationSite> sites;
+
+    /// Plain equality, field by field: the same evaluations at the same points.
+    /// Nothing in a plan depends on the run, so two runs that evaluate a case the
+    /// same way compare equal and one that does not compares unequal.
+    bool operator==(EvaluationPlan const &) const = default;
 
     /// Does any evaluation of this kind happen in this run?
     bool has(EvaluationKind kind) const

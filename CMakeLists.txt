@@ -72,6 +72,7 @@ set(MANTA_CORE_SOURCES
   MeshAdaptation.cpp
   NetCDFIO.cpp
   PhysicsCases.cpp
+  PhysicsInstance.cpp
   Postprocessing.cpp
   SmoothnessSensor.cpp
   Solver.cpp

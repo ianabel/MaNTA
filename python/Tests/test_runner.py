@@ -24,7 +24,12 @@ class LinearDiffusion(MaNTA.TransportSystem):
 
     sigma = kappa * q, so the derivatives are constant and easy to state
     exactly -- which is the point: any error is in the plumbing, not here.
+
+    InPlace, honestly: nothing here depends on the grid or on where the case
+    is evaluated, so one instance may be reconfigured and adapted freely.
     """
+
+    regrid = MaNTA.Regrid.InPlace
 
     def __init__(self, kappa=1.0, source=1.0, spec=None):
         # spec is an argument so the two-variable subclass below can widen it.

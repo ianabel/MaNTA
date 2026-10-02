@@ -1,11 +1,13 @@
-"""The evaluation plan and regrid hooks, reached from Python.
+"""The evaluation plan and the regrid policy, reached from Python.
 
 The C++ suite (Tests/UnitTests/EvaluationPlanTests.cpp) pins that the plan is
-complete across the solver's configurations. What only this can cover is the
-trampoline: that a Python case's ``prepareEvaluation`` and ``regrid`` are
-called at all, that the plan crosses with numpy-friendly fields, that the
-class attribute ``supports_regrid`` reaches the spec, and that a vectorised
-case can check each batch it is handed against what it was told.
+complete across the solver's configurations, and what a rebuild does to the
+instances and the adjoint. What only this can cover is the trampoline and the
+Runner: that a Python case's ``prepareEvaluation`` is called, and only on a new
+plan; that the plan crosses with numpy-friendly fields; that ``regrid`` reaches
+the spec; and what ``Runner.configure`` accepts and refuses -- for a case object,
+which can be moved only in place, and for a named C++ case, which
+``RebuildPhysicsOnRegrid`` may rebuild.
 """
 
 import numpy as np
@@ -82,16 +84,6 @@ def test_a_python_case_is_handed_the_plan_before_its_first_evaluation(tmp_path):
     assert np.array_equal(case.evaluationPlan.points(Kind.Residual), residual)
 
 
-def test_a_case_that_defines_neither_hook_is_unaffected(tmp_path):
-    case = VectorisedSystem()
-    assert case.evaluationPlan is None
-    runner = MaNTA.Runner(case)
-    runner.configure(config(tmp_path))
-    runner.run(0.5)
-    assert case.evaluationPlan is not None
-    assert not case.supportsRegrid()
-
-
 def test_the_diffusive_tau_faces_are_announced(tmp_path):
     """Both faces of every cell, one-sided, whenever tau is Diffusive."""
     case = AnnouncedVectorised()
@@ -107,44 +99,188 @@ def test_the_diffusive_tau_faces_are_announced(tmp_path):
     assert np.array_equal(faces[1::2], edges[1:])
 
 
-class RegriddableAxis(AxisSingular):
-    supports_regrid = True
+def test_a_fixed_case_runs_and_reruns_on_an_unchanged_plan(tmp_path):
+    """No adaptation and an equal plan: nothing to refuse, and nothing to say.
 
-    def __init__(self):
-        super().__init__(spec=MaNTA.numbered_spec(1))
-        self.regrids = []
+    A case object that declares nothing is Fixed, and that costs it nothing
+    until something would evaluate it elsewhere: a run, a rerun, and a second
+    configure() with the same mesh and degree all go ahead, and the case is told
+    about the plan once.
+    """
+    case = AnnouncedVectorised()
+    assert case.regridPolicy() == MaNTA.Regrid.Fixed
+    runner = MaNTA.Runner(case)
+    runner.configure(config(tmp_path))
+    runner.run(0.5)
+    runner.run(0.5)
+    runner.configure(config(tmp_path, Relative_tolerance=1e-4))
+    runner.run(0.5)
+    assert len(case.plans) == 1
+    assert case.unannounced == []
 
-    def regrid(self, grid, k, plan):
-        self.regrids.append((np.asarray(grid.cellBoundaries()), k, plan.grid.getNCells()))
+
+def test_reconfiguring_a_fixed_case_object_onto_a_new_plan_is_refused(tmp_path):
+    case = AnnouncedVectorised()
+    runner = MaNTA.Runner(case)
+    runner.configure(config(tmp_path))
+    runner.run(0.5)
+    with pytest.raises(RuntimeError, match="RegridPolicy is Fixed"):
+        runner.configure(config(tmp_path, GridSize=6))
+    assert len(case.plans) == 1
 
 
-def test_supports_regrid_is_read_from_the_class_on_either_path():
+def test_regrid_is_read_from_the_class_on_either_path():
     class FromAttributes(MaNTA.TransportSystem):
         variables = [MaNTA.Field("u")]
-        supports_regrid = True
+        regrid = MaNTA.Regrid.InPlace
 
         def __init__(self):
             super().__init__()
 
+    class FromSpec(MaNTA.TransportSystem):
+        regrid = MaNTA.Regrid.InPlace
+
+        def __init__(self, spec):
+            super().__init__(spec)
+
     spec = MaNTA.numbered_spec(1)
-    assert FromAttributes().supportsRegrid()
-    assert RegriddableAxis().supportsRegrid()
-    assert not spec.supports_regrid, "the caller's spec was edited in place"
-    assert not AxisSingular().supportsRegrid()
+    assert FromAttributes().regridPolicy() == MaNTA.Regrid.InPlace
+    assert FromSpec(spec).regridPolicy() == MaNTA.Regrid.InPlace
+    assert spec.regrid == MaNTA.Regrid.Fixed, "the caller's spec was edited in place"
+    assert MaNTA.TransportSystem(spec).regridPolicy() == MaNTA.Regrid.Fixed
 
 
-def test_mesh_adaptation_tells_a_python_case_about_the_graded_mesh(tmp_path):
-    case = RegriddableAxis()
+# ------------------------------------------------- case objects that adapt --
+
+
+class RecordingAxis(AxisSingular):
+    """test_mesh_adaptation's axis singularity, recording the plans it is given.
+
+    InPlace by inheritance: test_runner.LinearDiffusion declares it, honestly.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.plans = []
+
+    def prepareEvaluation(self, plan):
+        self.plans.append(plan)
+
+
+class FixedAxis(RecordingAxis):
+    regrid = MaNTA.Regrid.Fixed
+
+
+ADAPTATION = [
+    pytest.param({"MeshAdaptation": True, "DegreeTolerance": 1e-2}, id="mesh"),
+    pytest.param(
+        {"MeshAdaptation": False, "DegreeAdaptation": True, "DegreeTolerance": 1e-6,
+         "MaxPolynomialDegree": 6},
+        id="degree",
+    ),
+]
+
+
+def same_plan(a, b):
+    return a.k == b.k and np.array_equal(a.grid.cellBoundaries(), b.grid.cellBoundaries())
+
+
+@pytest.mark.parametrize("mode", ADAPTATION)
+def test_an_in_place_case_object_follows_adaptation(tmp_path, mode):
+    case = RecordingAxis()
+    assert case.regridPolicy() == MaNTA.Regrid.InPlace
     runner = MaNTA.Runner(case)
-    runner.configure(mesh_config(tmp_path, DegreeTolerance=1e-2))
+    runner.configure(mesh_config(tmp_path, **mode))
     runner.run_ss()
 
-    graded = np.asarray(runner.getCellBoundaries())
-    assert not np.allclose(np.diff(graded), 0.1), "the driver did not grade"
-    assert len(case.regrids) == 1
-    boundaries, k, n_cells = case.regrids[0]
-    assert np.array_equal(boundaries, graded)
-    assert k == 4 and n_cells == 10
+    assert len(case.plans) >= 2
+    for before, after in zip(case.plans, case.plans[1:]):
+        assert not same_plan(before, after), "a plan was delivered twice"
+    final = case.plans[-1]
+    assert np.array_equal(final.grid.cellBoundaries(), np.asarray(runner.getCellBoundaries()))
+    if mode.get("MeshAdaptation"):
+        assert not np.allclose(np.diff(case.plans[1].grid.cellBoundaries()), 0.1)
+    else:
+        assert final.k > 4
+
+
+@pytest.mark.parametrize("mode", ADAPTATION)
+def test_a_fixed_case_object_is_refused_at_configure(tmp_path, mode):
+    case = FixedAxis()
+    runner = MaNTA.Runner(case)
+    with pytest.raises(RuntimeError, match="RegridPolicy is Fixed"):
+        runner.configure(mesh_config(tmp_path, **mode))
+    assert case.plans == []
+
+
+def test_a_case_object_cannot_ask_to_be_rebuilt(tmp_path):
+    """RebuildPhysicsOnRegrid rebuilds by name; an object has none."""
+    runner = MaNTA.Runner(FixedAxis())
+    with pytest.raises(RuntimeError, match="Regrid.InPlace"):
+        runner.configure(mesh_config(tmp_path, RebuildPhysicsOnRegrid=True))
+
+
+# ----------------------------------------------------- named C++ cases ----
+
+
+def named_config(tmp_path, **overrides):
+    cfg = {
+        "PolynomialDegree": 4,
+        "GridSize": 6,
+        "LowerBoundary": 0.0,
+        "UpperBoundary": 1.0,
+        "delta_t": 0.1,
+        "OutputFilename": str(tmp_path / "named"),
+        "WriteOutput": False,
+        "SteadyStateSolver": "Newton",
+        "SteadyStateTolerance": 1.0e-10,
+        "Absolute_tolerance": 1.0e-10,
+        "MinStepSize": 1.0e-12,
+        "DegreeTolerance": 1.0e-6,
+        "MaxPolynomialDegree": 6,
+    }
+    cfg.update(overrides)
+    return cfg
+
+
+NAMED_ADAPTATION = [
+    pytest.param({"MeshAdaptation": True}, id="mesh"),
+    pytest.param({"DegreeAdaptation": True}, id="degree"),
+]
+
+
+@pytest.mark.parametrize("mode", NAMED_ADAPTATION)
+def test_a_named_in_place_case_adapts(tmp_path, mode):
+    # LinearDiffusion reads nothing from its grid and declares InPlace.
+    runner = MaNTA.Runner("LinearDiffusion")
+    runner.configure(named_config(
+        tmp_path, **mode,
+        DiffusionProblem={"Kappa": 1.0, "Centre": 0.5, "InitialWidth": 0.2}))
+    runner.run_ss()
+
+
+@pytest.mark.parametrize("mode", NAMED_ADAPTATION)
+def test_a_named_fixed_case_is_refused_without_the_key(tmp_path, mode):
+    # NonlinDiffTest takes its upper boundary from its construction grid, so it
+    # stays Fixed.
+    runner = MaNTA.Runner("NonlinDiffTest")
+    with pytest.raises(RuntimeError, match="RebuildPhysicsOnRegrid"):
+        runner.configure(named_config(tmp_path, **mode))
+
+
+@pytest.mark.parametrize("mode", NAMED_ADAPTATION)
+def test_a_named_fixed_case_is_rebuilt_under_the_key(tmp_path, mode):
+    runner = MaNTA.Runner("NonlinDiffTest")
+    runner.configure(named_config(tmp_path, **mode, RebuildPhysicsOnRegrid=True))
+    runner.run_ss()
+    x = np.linspace(0.0, 1.0, 5)
+    u = np.asarray(runner.getSolution(0, list(x))).reshape(-1)
+    assert np.all(np.isfinite(u))
+    # The Dirichlet datum at x = 0, to the discretisation's accuracy there.
+    assert u[0] == pytest.approx(1.0, abs=1e-3)
+
+
+# ----------------------------------------------------------------- JAX ----
 
 
 def test_a_jax_case_can_override_the_hook(tmp_path):
@@ -156,6 +292,7 @@ def test_a_jax_case_can_override_the_hook(tmp_path):
             self.shapes = list(plan.batchSizes(Entry.ComputePhysics))
 
     case = PlannedJAX({"Centre": 0.0, "kappa": 2.0}, None)
+    assert case.regridPolicy() == MaNTA.Regrid.Fixed
     runner = MaNTA.Runner(case)
     runner.configure(config(tmp_path, GridSize=4, PolynomialDegree=2))
     runner.run(0.1)

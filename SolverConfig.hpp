@@ -97,6 +97,10 @@ struct SolverConfig
     bool                     MeshAdaptation;
     double                   MeshAdaptationThreshold;
     unsigned int             MeshAdaptationAttempts;
+    // Read by whoever builds the adaptation driver's PhysicsInstance -- runManta
+    // and PyRunner -- not by applySolverConfig: it is about the case, not the
+    // solver.
+    bool                     RebuildPhysicsOnRegrid;
     std::string              TransportSystem;
     std::vector<std::string> PhysicsPlugins;
 

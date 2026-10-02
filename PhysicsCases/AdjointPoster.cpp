@@ -8,9 +8,13 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL( AdjointPoster );
 
+// RegridPolicy::InPlace: the constructor reads nothing from its grid and the
+// case keeps nothing from an evaluation plan, so a new plan changes nothing it
+// built.
 AdjointPoster::AdjointPoster( toml::value const& config, Grid const & )
 	: TransportSystem({.variables = {{"u", "the diffused quantity", "",
-									 BoundaryKind::Neumann, BoundaryKind::Dirichlet}}})
+									 BoundaryKind::Neumann, BoundaryKind::Dirichlet}},
+					   .regrid = RegridPolicy::InPlace})
 {
 	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around

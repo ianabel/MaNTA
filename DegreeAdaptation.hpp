@@ -8,6 +8,7 @@
 
 class AdjointProblem;
 class Grid;
+class PhysicsInstance;
 class SystemSolver;
 class TransportSystem;
 
@@ -63,29 +64,7 @@ unsigned int degreeIncrement(double E, double eps, double base);
 // already infinite, or when the previous step is not a finite positive number.
 SolverConfig carriedStepConfig(SolverConfig const &config, SystemSolver const &previous);
 
-// Bring `problem` onto the mesh `next` was built on, before `next` runs.
-//
-// `current` is the mesh the case holds now -- the one it was constructed with, or
-// the one this last moved it to -- and is updated to `next`'s. Equal meshes are
-// nothing to do. Otherwise a case whose spec sets supportsRegrid is told, through
-// TransportSystem::regrid with `next`'s evaluation plan; so configure `next`
-// completely first, adjoint problem included.
-//
-// A case that does not declare it is reused as it is, and that is correct for
-// exactly the reason this checks: every constructor in the tree reads the domain
-// from its grid -- AutodiffTransportSystem and AdjointPlasma take xL and xR there
-// -- and nothing finer, and every driver keeps the domain. A mesh spanning a
-// different one is refused with std::invalid_argument, naming the flag, rather
-// than handed to a case that would go on using the old ends. Re-instantiating
-// the case instead is not open to a driver: it is handed a TransportSystem&, and
-// the adjoint problem a case hands out may point back into it.
-//
-// A change of degree alone does not come through here. A constructor is never
-// told k, so nothing it built depends on it; the new degree reaches the case in
-// the evaluation plan `next` delivers when it initialises.
-void moveCaseToMesh(TransportSystem &problem, SystemSolver const &next, Grid &current);
-
-// Solve `problem`, adapting the global polynomial degree between solves, and
+// Solve `physics`, adapting the global polynomial degree between solves, and
 // return the solver that produced the final answer.
 //
 // Builds and destroys one SystemSolver per level and is careful never to have
@@ -102,15 +81,17 @@ void moveCaseToMesh(TransportSystem &problem, SystemSolver const &next, Grid &cu
 // *next* run on the same configuration resume from the last level instead of
 // from InitialValue.
 //
-// `adjoint` may be null; when it is not, it is re-attached to each new solver,
-// which a fresh one does not inherit.
+// Each level after the first is a new evaluation plan -- the degree adds nodes
+// and moves the old ones -- and goes through PhysicsInstance::solverFor: a case
+// declaring RegridPolicy::InPlace is handed the new plan; under
+// RebuildPhysicsOnRegrid any other case is replaced by a new instance, which
+// takes over the restart state; and without either the run is refused before
+// its first solve whenever MaxPolynomialDegree leaves room to raise k. The
+// adjoint problem, if there is one, is re-attached to each solver, and
+// re-obtained from each rebuilt case.
 //
-// `problem` must hold `grid` -- be built against it, or have been moved onto it
-// by moveCaseToMesh -- since every level is solved there and none is a regrid.
-// Each level's degree reaches the case through the evaluation plan its solver
-// delivers.
-//
-// Only the caller's grid and problem outlive this. The returned solver holds a
+// The case must have been built against `grid`. Only the caller's grid and the
+// case physics holds outlive this. The returned solver holds a
 // reference to that grid, so it must not outlive it.
 //
 // `solvedFirstLevel`, when given, *is* level 0: a solver already configured from
@@ -125,15 +106,13 @@ void moveCaseToMesh(TransportSystem &problem, SystemSolver const &next, Grid &cu
 // declaration, which needs the complete type. gcc defers it, so only the clang
 // legs saw this.
 std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
-                                                TransportSystem &problem,
-                                                AdjointProblem *adjoint,
+                                                PhysicsInstance &physics,
                                                 Grid const &grid,
                                                 unsigned int k0,
                                                 double tFinal,
                                                 std::unique_ptr<SystemSolver> solvedFirstLevel);
 std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
-                                                TransportSystem &problem,
-                                                AdjointProblem *adjoint,
+                                                PhysicsInstance &physics,
                                                 Grid const &grid,
                                                 unsigned int k0,
                                                 double tFinal);
@@ -156,17 +135,16 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
 //
 // The state crosses each rung the way runAdaptiveDegree's does, through
 // setRestartValues, and setInitialConditions then projects across whichever of
-// the mesh and the degree has changed. `problem` is built once, by the caller,
-// against the *final* grid, and every rung on another mesh goes through
-// moveCaseToMesh first -- so a case that sets supportsRegrid is told about each
-// GridLadder rung, and the last rung moves it back.
+// the mesh and the degree has changed. The case is built by the caller against
+// the *final* grid, and every rung is a different plan from it, so the case
+// follows its RegridPolicy at each rung as runAdaptiveDegree describes -- and a
+// Fixed one is refused before the first.
 //
-// `adjoint` may be null. Only the caller's grid and problem outlive this, and
+// Only the caller's grid and the case physics holds outlive this, and
 // the returned solver is the last rung's, which is built on the caller's grid
 // precisely so it may.
 std::unique_ptr<SystemSolver> runLadder(SolverConfig const &config,
-                                        TransportSystem &problem,
-                                        AdjointProblem *adjoint,
+                                        PhysicsInstance &physics,
                                         Grid const &grid,
                                         unsigned int kFinal,
                                         double tFinal);

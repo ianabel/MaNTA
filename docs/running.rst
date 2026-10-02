@@ -1245,8 +1245,14 @@ binds, the run says so::
 
    raising k from 2 to 5 (the rule asked for +7, capped at +3)
 
-Four things worth knowing:
+Five things worth knowing:
 
+* **Each level is a new evaluation plan** for the physics case, so the case has to
+  be able to follow one: it declares ``RegridPolicy::InPlace``, or the
+  configuration sets ``RebuildPhysicsOnRegrid = true`` to have a new instance
+  built for each level. Otherwise the run is refused before its first solve. Of
+  the cases above, ``AdjointPoster`` declares ``InPlace`` and ``NonlinDiffTest``
+  needs the key. See :ref:`evaluation-plans`.
 * **It implies** ``Superconvergent = true``. The whole estimate rests on
   :math:`u^*` being the better of the two approximations, which is only assured
   with the superconvergent scheme on. Setting ``Superconvergent = false``

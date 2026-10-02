@@ -60,6 +60,7 @@ from ._manta import (  # noqa: F401
     Grid,
     Mixed,
     Neumann,
+    Regrid,
     Runner,
     Scalar,
     SteadyOutcome,
@@ -88,6 +89,7 @@ __all__ = [
     "Grid",
     "Mixed",
     "Neumann",
+    "Regrid",
     "Runner",
     "Scalar",
     "SteadyOutcome",
@@ -205,16 +207,16 @@ class TransportSystem(_core.TransportSystem):
         super().__init__(manta.numbered_spec(nVars, nAux=1))
         super().__init__(variables=[...], scalars=[...], aux=[...])
 
-    ``supports_regrid = True`` says the case may be moved onto another mesh
-    after construction. The adaptation drivers then call
-    ``regrid(grid, k, plan)`` before each solve on a new mesh; without it they
-    reuse the case only on meshes spanning the same domain. It is honoured on
-    both paths above -- an explicit spec need not repeat it.
-
-    Two optional hooks report where the solver will evaluate the case:
-    ``prepareEvaluation(plan)``, before every run's first physics call, with an
-    :class:`EvaluationPlan` of every point set, batch size and cadence; and
-    ``regrid`` above. Neither need be defined.
+    ``prepareEvaluation(plan)``, optional, is told where the solver will
+    evaluate the case -- an :class:`EvaluationPlan` of every point set, batch
+    size and cadence -- before the first physics call of any run whose plan is
+    new to this instance. A *changed* plan, from a new mesh or degree, reaches a
+    case only if it declares ``regrid = manta.Regrid.InPlace``, saying it
+    rebuilds in ``prepareEvaluation`` whatever depended on the old plan (or that
+    nothing did). Without it the case is evaluated by its first plan only, and
+    reusing it elsewhere -- adapting the mesh or degree, or reconfiguring a
+    Runner onto another grid -- is refused. ``regrid`` is honoured on both paths
+    above; an explicit spec need not repeat it.
     """
 
     # Overridden by subclasses. Empty rather than absent so that a case which
@@ -222,7 +224,7 @@ class TransportSystem(_core.TransportSystem):
     variables = ()
     scalars = ()
     aux = ()
-    supports_regrid = False
+    regrid = Regrid.Fixed
 
     def __init__(self, spec=None, *, variables=None, scalars=None, aux=None):
         cls = type(self)
@@ -233,12 +235,12 @@ class TransportSystem(_core.TransportSystem):
                     "variables/scalars/aux lists, not both"
                 )
             # A copy rather than an edit, so the caller's spec is left as given.
-            if cls.supports_regrid and not spec.supports_regrid:
+            if cls.regrid != Regrid.Fixed and spec.regrid == Regrid.Fixed:
                 spec = SystemSpec(
                     variables=list(spec.variables),
                     scalars=list(spec.scalars),
                     aux=list(spec.aux),
-                    supports_regrid=True,
+                    regrid=cls.regrid,
                 )
             super().__init__(spec)
             return
@@ -247,7 +249,7 @@ class TransportSystem(_core.TransportSystem):
             variables=list(self.variables if variables is None else variables),
             scalars=list(self.scalars if scalars is None else scalars),
             aux=list(self.aux if aux is None else aux),
-            supports_regrid=bool(cls.supports_regrid),
+            regrid=cls.regrid,
         )
 
         if not spec.variables:

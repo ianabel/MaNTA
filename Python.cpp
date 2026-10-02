@@ -286,29 +286,35 @@ PYBIND11_MODULE(_manta, m) {
       "A SystemSpec using the historical placeholder names (Var0, Scalar0, "
       "AuxVariable0).");
 
+  // Whether a case follows a changed evaluation plan: SystemSpec.hpp. Named
+  // Regrid, the way a case writes it -- `regrid = manta.Regrid.InPlace`.
+  py::enum_<RegridPolicy>(m, "Regrid")
+      .value("Fixed", RegridPolicy::Fixed)
+      .value("InPlace", RegridPolicy::InPlace);
+
   py::class_<SystemSpec>(m, "SystemSpec")
       .def(py::init([](std::vector<FieldSpec> variables,
                        std::vector<ScalarSpec> scalars,
-                       std::vector<AuxSpec> aux, bool supports_regrid) {
+                       std::vector<AuxSpec> aux, RegridPolicy regrid) {
              return SystemSpec{std::move(variables), std::move(scalars),
-                               std::move(aux), supports_regrid};
+                               std::move(aux), regrid};
            }),
            py::arg("variables"), py::arg("scalars") = std::vector<ScalarSpec>{},
            py::arg("aux") = std::vector<AuxSpec>{},
-           py::arg("supports_regrid") = false)
+           py::arg("regrid") = RegridPolicy::Fixed)
       .def_readwrite("variables", &SystemSpec::variables)
       .def_readwrite("scalars", &SystemSpec::scalars)
       .def_readwrite("aux", &SystemSpec::aux)
-      .def_readwrite("supports_regrid", &SystemSpec::supportsRegrid,
-                     "Set when the case may be moved onto another mesh after "
-                     "construction; the adaptation drivers then call regrid() "
-                     "before each solve on a new mesh.")
+      .def_readwrite("regrid", &SystemSpec::regrid,
+                     "InPlace when the case follows a changed evaluation plan -- a "
+                     "new mesh or degree -- through prepareEvaluation. Fixed, the "
+                     "default, lets it be evaluated by its first plan only.")
       .def("validate", &SystemSpec::validate);
 
-  // Before TransportSystem, and in this order, because regrid() and
-  // prepareEvaluation() name these types: pybind11 renders a signature from
-  // the types registered at the point the method is bound, so binding them
-  // later would leave C++ names in the generated stub.
+  // Before TransportSystem, and in this order, because prepareEvaluation()
+  // names these types: pybind11 renders a signature from the types registered
+  // at the point the method is bound, so binding them later would leave C++
+  // names in the generated stub.
   py::class_<Grid>(m, "Grid")
       .def(py::init<>(), py::return_value_policy::reference)
       .def(py::init<Grid::Position, Grid::Position, Grid::Index>(),
@@ -321,8 +327,8 @@ PYBIND11_MODULE(_manta, m) {
       .def("getNCells", &Grid::getNCells)
       .def("lowerBoundary", &Grid::lowerBoundary)
       .def("upperBoundary", &Grid::upperBoundary)
-      // The nCells + 1 cell boundaries, which is what a case handed a Grid in
-      // regrid() needs to rebuild anything cell by cell.
+      // The nCells + 1 cell boundaries, for a case rebuilding anything cell by
+      // cell from a plan's grid.
       .def("cellBoundaries", [](Grid const &g) {
         std::vector<Position> out;
         out.reserve(g.getNCells() + 1);
@@ -502,17 +508,13 @@ PYBIND11_MODULE(_manta, m) {
       .def("dSources_dScalars", &TransportSystem::dSources_dScalars)
       .def("createAdjointProblem", &TransportSystem::createAdjointProblem)
       .def("isScalarDifferential", &TransportSystem::isScalarDifferential)
-      // Where and how often the solver will evaluate the case, delivered by
-      // every run before its first physics call; and the notification an
-      // adaptation driver sends a case that declares supports_regrid before
-      // solving on a new mesh. Both optional: the base implementations do
-      // nothing, and a case that defines neither pays one override lookup per
-      // run.
+      // Where and how often the solver will evaluate the case, delivered
+      // before the first physics call of a run whose plan is new to this
+      // instance. Optional: the base does nothing, and a case that does not
+      // define it pays one override lookup per new plan.
       .def("prepareEvaluation", &TransportSystem::prepareEvaluation,
            py::arg("plan"))
-      .def("regrid", &TransportSystem::regrid, py::arg("grid"), py::arg("k"),
-           py::arg("plan"))
-      .def("supportsRegrid", &TransportSystem::supportsRegrid)
+      .def("regridPolicy", &TransportSystem::regridPolicy)
       // A copy of the plan prepareEvaluation was last handed, or None before
       // any run has initialised with this case.
       .def_property_readonly(

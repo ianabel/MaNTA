@@ -556,18 +556,27 @@ Evaluation plans
 
 A case that compiles once per batch shape — a JAX case — or that tabulates an
 :math:`x`-dependent profile on the points it will be evaluated at needs to know
-those points *before* the first call. ``prepareEvaluation(plan)`` tells it. The
-solver calls it at the start of every run, from ``SystemSolver::initialize()``,
-before any physics call of that run, with an ``EvaluationPlan``
-(``EvaluationPlan.hpp``): one ``EvaluationSite`` per kind of evaluation, entry
-point and cadence, each carrying the abscissae it will pass. The default does
-nothing, and ``evaluationPlan()`` returns the last plan delivered.
+those points *before* the first call. ``prepareEvaluation(plan)`` tells it, from
+``SystemSolver::initialize()`` and before any physics call of the run, with an
+``EvaluationPlan`` (``EvaluationPlan.hpp``): one ``EvaluationSite`` per kind of
+evaluation, entry point and cadence, each carrying the abscissae it will pass. The
+plan carries the grid and the degree too, so it is everything a case is told about
+where it is. The default does nothing, and ``evaluationPlan()`` returns the last
+plan delivered.
 
 It arrives at ``initialize()`` rather than at construction because a case is built
 from ``(config, grid)`` before any solver exists, and the degree,
 ``Superconvergent`` and the tau scaling are the solver's configuration rather than
-the case's. It arrives again for every solver a case is used with, so a case that
-caches against it rebuilds from the latest plan.
+the case's.
+
+**It is called only when the plan changes**: on the first run an instance takes
+part in, and afterwards only if a run would evaluate it differently from the last
+plan it was handed. A rerun on the same mesh, degree and configuration says
+nothing. That is possible because a plan depends only on the discretisation and the
+configuration, never on the run — a site only some runs reach, such as the mass
+matrix a solver's first run integrates or the initial-condition sweeps a restart
+skips, is listed always, with its count as an upper bound — so ``==`` is plain
+equality: the same evaluations at the same points.
 
 The kinds, for :math:`N` cells at degree :math:`k`:
 
@@ -592,8 +601,8 @@ The kinds, for :math:`N` cells at degree :math:`k`:
    * - ``InitialCondition``
      - ``ComputePhysics``
      - :math:`N(k+1)`
-     - once per run: once to build ``sigma`` (not on a copied restart), once for
-       the initial :math:`du/dt` (not on a steady solve)
+     - once per run, at most: once to build ``sigma`` (skipped on a copied
+       restart), once for the initial :math:`du/dt` (not on a steady solve)
    * - ``TauFaces``
      - ``ComputePhysicsDerivatives``
      - :math:`2N`, both faces of each cell, one-sided
@@ -618,11 +627,11 @@ The kinds, for :math:`N` cells at degree :math:`k`:
    * - ``InitialProjection``
      - pointwise ``InitialValue``, ``InitialDerivative``, ``InitialAuxValue``
      - :math:`30N` Gauss points
-     - once per cold start, :math:`k+1` visits per point
+     - once per run, on a cold start only; :math:`k+1` visits per point
    * - ``MassMatrix``
      - pointwise ``aFn``
      - :math:`30N` Gauss points
-     - the first run of a solver only
+     - the first run of a solver only, :math:`(k+1)^2` visits per point
 
 Five cells at :math:`k = 4` therefore hand ``ComputePhysics`` batches of 25
 points, and ``ComputePhysicsDerivatives`` batches of 25 — plus 10 with a Diffusive
@@ -654,28 +663,49 @@ arrays, and a case overrides the hook like any other:
 Regridding
 ~~~~~~~~~~
 
-The adaptation drivers — ``MeshAdaptation`` and a ladder's ``GridLadder`` — solve
-one case on several meshes, building a new solver each time and *reusing the case*.
-A case whose constructor derived something from its grid can say it supports this
-by setting ``SystemSpec::supportsRegrid`` (``supports_regrid = True`` as a class
-attribute in Python, honoured whether the spec is built from class attributes or
-passed explicitly). Before each solve on a mesh other than the one the case holds,
-the driver then calls ``regrid(grid, k, plan)`` with the new mesh, that solve's
-degree and its plan; the same plan reaches ``prepareEvaluation`` when the solve
-starts. The default ``regrid`` does nothing, which is right for a case whose
-constructor reads nothing from the grid.
+Once a case has been handed a plan, a *different* plan is a regrid: a new mesh, or
+a new degree, which adds nodes and moves the old ones. The adaptation drivers —
+``MeshAdaptation``, ``DegreeAdaptation`` and the ladders — make them, and so does
+reconfiguring a Python ``Runner`` onto another grid with the same case object.
+Whether a case can follow one is its own declaration, ``SystemSpec::regrid``:
 
-A case that does not declare it is reused as it is, on a mesh spanning the same
-domain, and refused with ``std::invalid_argument`` on any other. That is
-correct for every case in this tree, whose constructors read only the domain ends
-from their grid, and every driver keeps the domain. Re-instantiating the case
-instead is not open to a driver: it is handed a ``TransportSystem&``, and the
-adjoint problem a case hands out may point back into it.
+``RegridPolicy::Fixed`` (the default)
+   The case is evaluated by its first plan only. A changed plan is refused with
+   ``std::invalid_argument`` (``RuntimeError`` from ``Runner.configure``), before
+   the solve that would need it — and a driver that may change the plan refuses
+   before its first solve.
+``RegridPolicy::InPlace``
+   The case takes a changed plan through ``prepareEvaluation`` and rebuilds there
+   whatever depended on the old one. A case that keeps nothing from its grid or its
+   plan declares it and need do nothing more. In Python it is a class attribute,
+   ``regrid = manta.Regrid.InPlace``, honoured whether the spec is built from class
+   attributes or passed explicitly.
 
-A change of degree alone is not a regrid — a constructor is never told
-:math:`k`, so nothing it built depends on it — and reaches the case only through
-the plan its next solve delivers. ``DegreeAdaptation`` therefore never calls
-``regrid``.
+For a case written before plans existed there is a fallback, and the
+*configuration* turns it on: ``RebuildPhysicsOnRegrid = true``. A driver meeting a
+changed plan on a case that is not ``InPlace`` then destroys the case and builds a
+new instance for the new grid from the registry — ``InstantiateProblem`` with the
+name and table it was first built from — re-obtains the adjoint problem from the
+new instance, and moves the warm-start restart state onto it. The new instance is
+handed its first plan as usual. Only a registered case can be rebuilt this way:
+``MaNTA`` with a config file, and a ``Runner`` constructed with a case *name*. A
+case object handed to ``Runner`` cannot, and the key is refused at ``configure()``
+for one; such a case declares ``InPlace`` instead.
+
+The drivers refuse a ``Fixed`` case without the key up front whenever they *may*
+change the plan, rather than at the moment they would: ``MeshAdaptation`` always,
+``DegreeAdaptation`` whenever ``MaxPolynomialDegree`` leaves room above the
+starting degree, and a ladder always. Whether a change happens depends on what the
+solves find — the grading decision, the degree loop converging at once — and a
+refusal after a sampling solve would cost the run it was meant to save. A run with
+no adaptation never changes the plan, and a ``Fixed`` case is never refused there.
+
+Of the cases in this tree, those whose constructors read nothing from their grid
+declare ``InPlace``: ``LinearDiffusion``, ``AdjointPoster``, ``AuxVarTest``,
+``LD2``, ``LDTest``, ``MatrixDiffusion``, ``MatrixDiffusionTest`` and
+``ScalarTestLD3``. The rest take a domain end from their grid and stay ``Fixed`` —
+``NonlinDiffTest``, ``NeumannTest`` and the ``AutodiffTransportSystem`` cases —
+and need ``RebuildPhysicsOnRegrid`` to adapt.
 
 Diagnostics
 -----------

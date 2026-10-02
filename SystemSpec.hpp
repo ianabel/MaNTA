@@ -84,6 +84,32 @@ struct BoundaryCondition
 /// anything in the tree asks.
 constexpr bool operator==(BoundaryCondition const &bc, BoundaryKind k) { return bc.kind == k; }
 
+/*
+    Whether a case can follow a change of evaluation plan.
+
+    A case is told where it will be evaluated through
+    TransportSystem::prepareEvaluation, and may have built things on those
+    points -- a profile tabulated on them, a function compiled for their batch
+    shape. Once it has been handed a plan, a *different* plan is a regrid: a new
+    mesh, or a new degree, which adds nodes and moves the old ones.
+
+      Fixed    the case says nothing, and may be evaluated by its first plan only.
+               A solver that would evaluate it elsewhere is refused, and so is an
+               adaptation driver that would need to, before its first solve --
+               unless the configuration sets RebuildPhysicsOnRegrid, under which
+               a driver destroys the case and builds a new instance from the
+               registry for each new discretisation.
+      InPlace  the case takes a new plan through prepareEvaluation and rebuilds
+               whatever depended on the old one -- or depends on nothing.
+
+    Fixed rather than None, because a Python attribute cannot be called None.
+ */
+enum class RegridPolicy
+{
+    Fixed,
+    InPlace,
+};
+
 struct FieldSpec
 {
     std::string name;
@@ -128,18 +154,13 @@ struct SystemSpec
     std::vector<ScalarSpec> scalars;
     std::vector<AuxSpec> aux;
 
-    // Set when the case may be moved onto a different mesh after construction:
-    // the adaptation drivers then call TransportSystem::regrid before each solve
-    // on a mesh other than the one the case currently holds, and the case
-    // rebuilds whatever it derived from its construction grid. Unset, a driver
-    // reuses the case only on a mesh spanning the same domain -- the one property
-    // of the grid any case in the tree reads in its constructor -- and refuses
-    // otherwise. A case whose constructor ignores the grid altogether may set it
-    // and leave regrid() alone.
+    // What may happen to the case when a solver would evaluate it according to a
+    // different plan from the one it was first given -- a new mesh, or a new
+    // degree, which adds nodes and moves the old ones. See RegridPolicy.
     //
     // Trailing and defaulted, like FieldSpec::sourceReadsTimeDerivatives, so
     // every existing `{.variables = ...}` initialiser keeps its meaning.
-    bool supportsRegrid = false;
+    RegridPolicy regrid = RegridPolicy::Fixed;
 
     /// Does any variable's source read du/dt?
     ///

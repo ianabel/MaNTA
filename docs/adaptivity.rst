@@ -9,6 +9,11 @@ Everything here was measured on the benchmarks under ``python-examples/``;
 ``MESH-REFINEMENT.md`` in the repository root carries the numbers, the retractions
 and the failures. Where a claim below has a margin, it is stated.
 
+Every new mesh and every new degree is a new evaluation plan for the physics case,
+so a case adapted this way either declares that it follows one in place or runs
+with ``RebuildPhysicsOnRegrid = true``; otherwise the run is refused before it
+starts. See :ref:`evaluation-plans`.
+
 .. _adaptivity-quantities:
 
 The three quantities

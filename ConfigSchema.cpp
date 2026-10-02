@@ -171,6 +171,12 @@ const std::vector<Entry> &table()
          "DegreeTolerance. Needs PolynomialDegree >= 3, because at 2 the decision is "
          "reversed rather than merely noisy. Steady solves only; implies "
          "DegreeAdaptation and so Superconvergent. See docs/adaptivity.rst."},
+        {"RebuildPhysicsOnRegrid", {}, Type::Bool, Category::Solver, false, false, false,
+         "Let an adaptation driver (MeshAdaptation, DegreeAdaptation, a ladder) destroy "
+         "the physics case and build a new instance from the registry for each new mesh "
+         "or degree, when the case does not declare that it follows a new evaluation "
+         "plan in place. For cases written before evaluation plans; needs a registered "
+         "case, so a Python case object handed to Runner is refused."},
         {"MeshAdaptationThreshold", {}, Type::Double, Category::Solver, false, false, 2.0,
          "How much rougher than the interior an end must look before MeshAdaptation "
          "grades it, as a ratio of decay rates. Must exceed 1. Measured on three "

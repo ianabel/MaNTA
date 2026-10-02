@@ -1,4 +1,4 @@
-// The evaluation plan (EvaluationPlan.hpp) and regridding (SystemSpec::supportsRegrid).
+// The evaluation plan (EvaluationPlan.hpp) and regridding (RegridPolicy, PhysicsInstance).
 //
 // The plan is only worth having if it is complete: a case may compile once per
 // batch shape, or tabulate a profile on the announced points, and a call
@@ -15,6 +15,8 @@
 #include "CapturedOutput.hpp"
 #include "DegreeAdaptation.hpp"
 #include "MeshAdaptation.hpp"
+#include "PhysicsCases.hpp"
+#include "PhysicsInstance.hpp"
 #include "SolverConfig.hpp"
 #include "SystemSolver.hpp"
 #include "TransportSystem.hpp"
@@ -286,8 +288,13 @@ void checkAgainstPlan(EvaluationPlan const &plan, RecordingCase const &problem,
     auto pointwise = [&](EvaluationKind kind, std::vector<Position> const &seen)
     {
         if (plan.has(kind))
-            BOOST_TEST(sameSet(plan.points(kind), seen),
-                       toString(kind) << ": the hook was called at points the plan does not list, or not at all");
+        {
+            BOOST_TEST(plan.announces(EvaluationEntry::Pointwise, seen),
+                       toString(kind) << ": the hook was called at points the plan does not list");
+            if (everySiteUsed)
+                BOOST_TEST(sameSet(plan.points(kind), seen),
+                           toString(kind) << ": announced points were never visited");
+        }
         else
             BOOST_TEST(seen.empty(), toString(kind) << " was evaluated without being announced");
     };
@@ -358,14 +365,16 @@ BOOST_AUTO_TEST_CASE(every_call_is_announced_and_every_announced_site_is_used)
     }
 }
 
-BOOST_AUTO_TEST_CASE(a_reused_solver_delivers_a_fresh_plan_each_run)
+BOOST_AUTO_TEST_CASE(a_rerun_with_an_equal_plan_tells_the_case_nothing)
 {
-    // Per run, because what the plan says moves between runs on one solver: the
-    // mass matrix is integrated only by the first, so aFn is announced only
-    // there. And the second run's calls are still all announced -- by the plan
-    // that run was handed, not the first.
+    // A plan does not depend on the run, so a second run on the same solver --
+    // which builds no mass matrix -- and a run on a second solver configured the
+    // same way are the same plan, and the case hears nothing. Its calls are still
+    // all announced, by the one plan it has. And a case whose RegridPolicy is
+    // Fixed runs every time: nothing here changes its plan.
     Grid grid(0.0, 1.0, nCells);
     RecordingCase problem;
+    BOOST_TEST((problem.regridPolicy() == RegridPolicy::Fixed));
     SystemSolver sys(grid, k, &problem);
     configure(sys, {.label = "reused"}, nullptr);
 
@@ -383,19 +392,53 @@ BOOST_AUTO_TEST_CASE(a_reused_solver_delivers_a_fresh_plan_each_run)
         CapturedOutput quiet;
         sys.runSolver(0.1);
     }
-    BOOST_TEST_REQUIRE(problem.plans.size() == 2u);
-    BOOST_TEST(!problem.plans[1].has(EvaluationKind::MassMatrix));
-    BOOST_TEST(problem.evaluationsBeforePlan[1] == 0u);
-    checkAgainstPlan(problem.plans[1], problem);
+    BOOST_TEST(problem.plans.size() == 1u);
+    BOOST_TEST(problem.massPoints.empty());
+    checkAgainstPlan(problem.plans[0], problem, false);
+
+    SystemSolver again(grid, k, &problem);
+    configure(again, {.label = "reused_again"}, nullptr);
+    BOOST_TEST((again.evaluationPlan() == problem.plans[0]));
+    {
+        CapturedOutput quiet;
+        BOOST_CHECK_NO_THROW(again.runSolver(0.1));
+    }
+    BOOST_TEST(problem.plans.size() == 1u);
 }
 
-BOOST_AUTO_TEST_CASE(the_plan_follows_a_restart)
+BOOST_AUTO_TEST_CASE(a_fixed_case_is_refused_a_changed_plan)
 {
-    // A restart copied at the same discretisation needs neither the projection
-    // of the initial values nor AssignSigma, so neither is announced; a steady
-    // solve skips the initial du/dt solve too, which leaves the initial
-    // condition no evaluation at all. Resumed from a converged state, the solve
-    // stops at its first residual, so the Jacobian it announces is never built.
+    // The same instance on another degree is a regrid, which a Fixed case cannot
+    // follow: refused before the solver evaluates anything, and the case keeps
+    // the one plan it had.
+    Grid grid(0.0, 1.0, nCells);
+    RecordingCase problem;
+    SystemSolver first(grid, k, &problem);
+    configure(first, {.label = "fixed_first"}, nullptr);
+    {
+        CapturedOutput quiet;
+        first.runSolver(0.1);
+    }
+
+    SystemSolver second(grid, k - 1, &problem);
+    configure(second, {.label = "fixed_second"}, nullptr);
+    problem.calls.clear();
+    {
+        CapturedOutput quiet;
+        BOOST_CHECK_THROW(second.runSolver(0.1), std::invalid_argument);
+    }
+    BOOST_TEST(problem.plans.size() == 1u);
+    BOOST_TEST(problem.calls.empty());
+}
+
+BOOST_AUTO_TEST_CASE(a_restart_is_not_a_change_of_plan)
+{
+    // A restart copied at the same discretisation makes neither the projection
+    // of the initial values nor AssignSigma's sweep, and a steady solve skips the
+    // initial du/dt solve too -- but the plan lists them all the same, as upper
+    // bounds, so that it is the cold start's plan exactly. Resumed from a
+    // converged state, the solve stops at its first residual, so the Jacobian it
+    // announces is never built either.
     Grid grid(0.0, 1.0, nCells);
     RecordingCase first;
     SystemSolver a(grid, k, &first);
@@ -416,8 +459,9 @@ BOOST_AUTO_TEST_CASE(the_plan_follows_a_restart)
 
     BOOST_TEST_REQUIRE(problem.plans.size() == 1u);
     EvaluationPlan const &plan = problem.plans.front();
-    BOOST_TEST(!plan.has(EvaluationKind::InitialProjection));
-    BOOST_TEST(!plan.has(EvaluationKind::InitialCondition));
+    BOOST_TEST((plan == first.plans.front()));
+    BOOST_TEST(plan.has(EvaluationKind::InitialProjection));
+    BOOST_TEST(problem.initialPoints.empty());
     checkAgainstPlan(plan, problem, false);
 }
 
@@ -459,34 +503,36 @@ BOOST_AUTO_TEST_CASE(batch_sizes_are_the_shapes_to_compile_for)
 
 namespace
 {
+int liveAxisCases = 0;
+bool anAxisCaseSawTwoPlans = false;
+
 // u = x - x^(4/3) at steady state: -u'' = (4/9) x^(-2/3) with zero Dirichlet
 // ends, singular at the axis, so MeshAdaptation grades towards x = 0. The same
 // problem python/Tests/test_mesh_adaptation.py's AxisSingular solves.
 //
-// Records every regrid it is told about, and the grid each plan names.
+// Records the plans it is handed, counts the instances alive, and notes whether
+// any Fixed instance was ever handed a second plan -- which is what a rebuild
+// exists to prevent.
 class AxisSingular : public TransportSystem
 {
 public:
-    explicit AxisSingular(bool regriddable)
-        : TransportSystem(SystemSpec{.variables = numberedFields(1), .supportsRegrid = regriddable})
+    explicit AxisSingular(RegridPolicy policy)
+        : TransportSystem(SystemSpec{.variables = numberedFields(1), .regrid = policy})
     {
+        ++liveAxisCases;
+    }
+    ~AxisSingular() override { --liveAxisCases; }
+
+    std::vector<EvaluationPlan> plans;
+
+    void prepareEvaluation(EvaluationPlan const &plan) override
+    {
+        plans.push_back(plan);
+        if (regridPolicy() == RegridPolicy::Fixed && plans.size() > 1)
+            anAxisCaseSawTwoPlans = true;
     }
 
-    struct Regrid
-    {
-        Grid grid;
-        Index k;
-        Grid planGrid;
-        size_t plansBefore;
-    };
-    std::vector<Regrid> regrids;
-    std::vector<Grid> planGrids;
-
-    void regrid(Grid const &grid, Index k, EvaluationPlan const &plan) override
-    {
-        regrids.push_back({grid, k, plan.grid, planGrids.size()});
-    }
-    void prepareEvaluation(EvaluationPlan const &plan) override { planGrids.push_back(plan.grid); }
+    std::unique_ptr<AdjointProblem> createAdjointProblem() override;
 
     Value LowerBoundary(Index, Time) const override { return 0.0; }
     Value UpperBoundary(Index, Time) const override { return 0.0; }
@@ -504,6 +550,40 @@ public:
     Value InitialDerivative(Index, Position) const override { return 0.0; }
 };
 
+// The objective a case hands out, remembering which case it came from -- the
+// way AutodiffAdjointProblem holds a pointer back to its PhysicsProblem.
+class OwnedObjective : public SquareObjective
+{
+public:
+    explicit OwnedObjective(TransportSystem const *owner) : owner(owner) {}
+    TransportSystem const *owner;
+};
+
+std::unique_ptr<AdjointProblem> AxisSingular::createAdjointProblem()
+{
+    return std::make_unique<OwnedObjective>(this);
+}
+
+// A Fixed AxisSingular by name, so a rebuild goes through the registry as
+// runManta's and a named Runner's do.
+constexpr char axisName[] = "EvaluationPlanTestsFixedAxis";
+void registerAxis()
+{
+    static bool done = false;
+    if (done)
+        return;
+    PhysicsCases::RegisterPhysicsCase(axisName, [](toml::value const &, Grid const &)
+                                      { return std::make_unique<AxisSingular>(RegridPolicy::Fixed); });
+    done = true;
+}
+
+PhysicsInstance::Rebuild fromRegistry()
+{
+    registerAxis();
+    return [](Grid const &g) -> std::shared_ptr<TransportSystem>
+    { return PhysicsCases::InstantiateProblem(axisName, toml::value{}, g); };
+}
+
 SolverConfig adaptiveConfig(std::string const &extra)
 {
     const std::string body =
@@ -516,114 +596,242 @@ SolverConfig adaptiveConfig(std::string const &extra)
     TomlConfigSource src(v);
     return loadSolverConfig(src, ConfigSchema::Reader::Toml);
 }
+
+const std::string meshAdaptation = "MeshAdaptation = true\nDegreeTolerance = 1e-2\n";
+// Tight enough that the loop raises k at least once from 4.
+const std::string degreeAdaptation =
+    "DegreeAdaptation = true\nDegreeTolerance = 1e-6\nMaxPolynomialDegree = 6\n";
+
+// Consecutive plans differ: a plan is delivered only when it changes.
+bool allChanges(std::vector<EvaluationPlan> const &plans)
+{
+    for (size_t i = 1; i < plans.size(); ++i)
+        if (plans[i] == plans[i - 1])
+            return false;
+    return true;
+}
+
+// The case and adjoint slots a rebuildable run works through, as runManta's.
+struct Owned
+{
+    std::shared_ptr<TransportSystem> problem;
+    std::unique_ptr<AdjointProblem> adjoint;
+    std::weak_ptr<TransportSystem> original;
+
+    explicit Owned(bool withAdjoint)
+    {
+        registerAxis();
+        problem = PhysicsCases::InstantiateProblem(axisName, toml::value{}, Grid(0.0, 1.0, 10));
+        if (withAdjoint)
+            adjoint = problem->createAdjointProblem();
+        original = problem;
+    }
+    AxisSingular &axis() const { return static_cast<AxisSingular &>(*problem); }
+};
 } // namespace
 
-BOOST_AUTO_TEST_CASE(mesh_adaptation_tells_a_regriddable_case_about_the_graded_mesh)
+BOOST_AUTO_TEST_CASE(an_in_place_case_follows_mesh_and_degree_adaptation)
 {
-    // The sample solve is on the mesh the case was built for, so it is no
-    // regrid. The graded mesh is, and the case hears about it -- with that mesh,
-    // the degree, and a plan for exactly that solve -- before the solve's own
-    // plan arrives, and so before anything is evaluated there.
-    const SolverConfig config = adaptiveConfig("MeshAdaptation = true\nDegreeTolerance = 1e-2\n");
-    Grid uniform(0.0, 1.0, 10);
-    AxisSingular problem(true);
-
-    std::optional<AdaptiveMeshResult> result;
+    // One instance throughout, told about each new plan once: the sample on the
+    // mesh it was built for, the graded mesh, and each degree the loop raises to.
+    for (std::string const &mode : {meshAdaptation, degreeAdaptation})
     {
-        CapturedOutput quiet;
-        result.emplace(runAdaptiveMesh(config, problem, nullptr, uniform, 4, 1.0));
+        BOOST_TEST_CONTEXT(mode)
+        {
+            const SolverConfig config = adaptiveConfig(mode);
+            Grid uniform(0.0, 1.0, 10);
+            AxisSingular problem(RegridPolicy::InPlace);
+            PhysicsInstance physics(problem, uniform);
+
+            std::unique_ptr<SystemSolver> final;
+            std::optional<AdaptiveMeshResult> mesh;
+            {
+                CapturedOutput quiet;
+                if (config.MeshAdaptation)
+                    mesh.emplace(runAdaptiveMesh(config, physics, uniform, 4, 1.0));
+                else
+                    final = runAdaptiveDegree(config, physics, uniform, 4, 1.0);
+            }
+
+            BOOST_TEST(&physics.problem() == &problem);
+            BOOST_TEST(physics.rebuilds() == 0);
+            BOOST_TEST_REQUIRE(problem.plans.size() >= 2u);
+            BOOST_TEST(allChanges(problem.plans));
+            BOOST_TEST((problem.plans.front().grid == uniform));
+            BOOST_TEST(problem.plans.front().k == 4);
+
+            if (mesh)
+            {
+                BOOST_TEST_REQUIRE((mesh->decision.verdict == GradingVerdict::GradeLower));
+                BOOST_TEST((problem.plans[1].grid == *mesh->grid));
+                BOOST_TEST((problem.plans.back().grid == *mesh->grid));
+            }
+            else
+            {
+                BOOST_TEST(problem.plans.back().k > 4);
+                for (auto const &plan : problem.plans)
+                    BOOST_TEST((plan.grid == uniform));
+            }
+        }
     }
-
-    BOOST_TEST_REQUIRE((result->decision.verdict == GradingVerdict::GradeLower));
-    BOOST_TEST_REQUIRE(problem.regrids.size() == 1u);
-
-    auto const &r = problem.regrids.front();
-    BOOST_TEST((r.grid == *result->grid));
-    BOOST_TEST((r.grid != uniform));
-    BOOST_TEST(r.grid.getNCells() == uniform.getNCells());
-    BOOST_TEST(r.k == 4);
-    BOOST_TEST((r.planGrid == r.grid));
-
-    // One plan for the sample, then the regrid, then the graded solve's plan.
-    BOOST_TEST(r.plansBefore == 1u);
-    BOOST_TEST_REQUIRE(problem.planGrids.size() >= 2u);
-    BOOST_TEST((problem.planGrids[0] == uniform));
-    BOOST_TEST((problem.planGrids[1] == r.grid));
 }
 
-BOOST_AUTO_TEST_CASE(a_case_that_does_not_declare_it_is_reused_without_a_regrid)
+BOOST_AUTO_TEST_CASE(rebuild_physics_on_regrid_replaces_a_fixed_case)
 {
-    // The same sequence, and the same answer, with nothing told -- which is the
-    // behaviour every case in the tree relies on. Its plans still name the
-    // graded mesh, because a plan arrives with every solve whatever the spec says.
-    const SolverConfig config = adaptiveConfig("MeshAdaptation = true\nDegreeTolerance = 1e-2\n");
-    Grid uniform(0.0, 1.0, 10);
-    AxisSingular problem(false);
-
-    std::optional<AdaptiveMeshResult> result;
+    // Under the key, a case that cannot follow a new plan is destroyed and built
+    // again from the registry for each one. Every instance is handed exactly one
+    // plan, the original is gone, and the adjoint problem the final solver uses
+    // is the one the final instance handed out.
+    for (std::string const &mode : {meshAdaptation, degreeAdaptation})
     {
-        CapturedOutput quiet;
-        result.emplace(runAdaptiveMesh(config, problem, nullptr, uniform, 4, 1.0));
-    }
+        BOOST_TEST_CONTEXT(mode)
+        {
+            const SolverConfig config = adaptiveConfig(mode + "RebuildPhysicsOnRegrid = true\n");
+            BOOST_TEST(config.RebuildPhysicsOnRegrid);
+            Grid uniform(0.0, 1.0, 10);
+            anAxisCaseSawTwoPlans = false;
 
-    BOOST_TEST_REQUIRE((result->decision.verdict == GradingVerdict::GradeLower));
-    BOOST_TEST(problem.regrids.empty());
-    BOOST_TEST_REQUIRE(problem.planGrids.size() >= 2u);
-    BOOST_TEST((problem.planGrids[1] == *result->grid));
+            Owned slots(true);
+            PhysicsInstance physics(slots.problem, slots.adjoint, uniform, fromRegistry());
+
+            std::unique_ptr<SystemSolver> final;
+            std::optional<AdaptiveMeshResult> mesh;
+            {
+                CapturedOutput quiet;
+                if (config.MeshAdaptation)
+                    mesh.emplace(runAdaptiveMesh(config, physics, uniform, 4, 1.0));
+                else
+                    final = runAdaptiveDegree(config, physics, uniform, 4, 1.0);
+            }
+            SystemSolver &solver = mesh ? *mesh->solver : *final;
+
+            BOOST_TEST(physics.rebuilds() >= 1);
+            BOOST_TEST(slots.original.expired());
+            BOOST_TEST(liveAxisCases == 1);
+            BOOST_TEST(!anAxisCaseSawTwoPlans);
+            BOOST_TEST(slots.axis().plans.size() == 1u);
+
+            BOOST_TEST(solver.problem == slots.problem.get());
+            BOOST_TEST(solver.adjointProblem == slots.adjoint.get());
+            BOOST_TEST(static_cast<OwnedObjective *>(slots.adjoint.get())->owner ==
+                       slots.problem.get());
+            if (mesh)
+                BOOST_TEST((slots.axis().plans.front().grid == *mesh->grid));
+        }
+    }
 }
 
-BOOST_AUTO_TEST_CASE(a_grid_ladder_regrids_each_rung_and_moves_the_case_back)
+BOOST_AUTO_TEST_CASE(a_rebuilt_case_starts_from_where_the_old_one_finished)
 {
-    // Built against the final mesh, solved first on a coarser one: a regrid onto
-    // the rung, and one back for the last solve. A DegreeLadder rung on the same
-    // mesh is no regrid at all.
-    const SolverConfig config = adaptiveConfig("GridLadder = [5]\nDegreeLadder = [2]\n");
+    // The warm start a level hands on is set on the instance it was solved with,
+    // so a rebuild has to carry it over or the next level starts cold. The same
+    // problem adapted in place and by rebuilding then takes the same steps and
+    // gives the same answer, bit for bit.
+    const SolverConfig inPlaceConfig = adaptiveConfig(degreeAdaptation);
+    const SolverConfig rebuildConfig =
+        adaptiveConfig(degreeAdaptation + "RebuildPhysicsOnRegrid = true\n");
+    Grid uniform(0.0, 1.0, 10);
+
+    AxisSingular inPlace(RegridPolicy::InPlace);
+    PhysicsInstance borrowed(inPlace, uniform);
+    Owned slots(false);
+    PhysicsInstance owned(slots.problem, slots.adjoint, uniform, fromRegistry());
+
+    std::unique_ptr<SystemSolver> a, b;
+    {
+        CapturedOutput quiet;
+        a = runAdaptiveDegree(inPlaceConfig, borrowed, uniform, 4, 1.0);
+        b = runAdaptiveDegree(rebuildConfig, owned, uniform, 4, 1.0);
+    }
+    BOOST_TEST(owned.rebuilds() >= 1);
+    BOOST_TEST(a->getOrder() == b->getOrder());
+    BOOST_TEST((a->stateVector() == b->stateVector()));
+    BOOST_TEST(a->lastSteadyStats().steps == b->lastSteadyStats().steps);
+}
+
+BOOST_AUTO_TEST_CASE(a_fixed_case_without_the_key_is_refused_before_the_first_solve)
+{
+    // Neither InPlace nor RebuildPhysicsOnRegrid: refused up front, by every
+    // driver that may change the plan, before the case is handed anything. A
+    // rebuild function is not enough on its own -- the key is what supplies one,
+    // and without it the caller passes none.
+    const std::vector<std::string> modes = {meshAdaptation, degreeAdaptation,
+                                            "GridLadder = [5]\n"};
+    for (std::string const &mode : modes)
+    {
+        BOOST_TEST_CONTEXT(mode)
+        {
+            const SolverConfig config = adaptiveConfig(mode);
+            Grid uniform(0.0, 1.0, 10);
+            AxisSingular problem(RegridPolicy::Fixed);
+            PhysicsInstance physics(problem, uniform);
+            {
+                CapturedOutput quiet;
+                if (config.MeshAdaptation)
+                    BOOST_CHECK_THROW(runAdaptiveMesh(config, physics, uniform, 4, 1.0),
+                                      std::invalid_argument);
+                else if (config.DegreeAdaptation)
+                    BOOST_CHECK_THROW(runAdaptiveDegree(config, physics, uniform, 4, 1.0),
+                                      std::invalid_argument);
+                else
+                    BOOST_CHECK_THROW(runLadder(config, physics, uniform, 4, 1.0),
+                                      std::invalid_argument);
+            }
+            BOOST_TEST(problem.plans.empty());
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(a_fixed_case_adapts_where_the_plan_cannot_change)
+{
+    // DegreeAdaptation with no room above k0 never changes the plan, so a Fixed
+    // case runs under it: refusing is for runs that would move the case.
+    const SolverConfig config =
+        adaptiveConfig("DegreeAdaptation = true\nDegreeTolerance = 1e-2\nMaxPolynomialDegree = 4\n");
+    Grid uniform(0.0, 1.0, 10);
+    AxisSingular problem(RegridPolicy::Fixed);
+    PhysicsInstance physics(problem, uniform);
+    std::unique_ptr<SystemSolver> sys;
+    {
+        CapturedOutput quiet;
+        BOOST_CHECK_NO_THROW(sys = runAdaptiveDegree(config, physics, uniform, 4, 1.0));
+    }
+    BOOST_TEST(problem.plans.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(a_grid_ladder_moves_an_in_place_case_and_rebuilds_a_fixed_one)
+{
+    // Built against the final mesh, solved first on a coarser one at a lower
+    // degree, then back: two changes of plan.
     Grid fine(0.0, 1.0, 10);
-    AxisSingular problem(true);
-
     {
-        CapturedOutput quiet;
-        auto system = runLadder(config, problem, nullptr, fine, 4, 1.0);
+        const SolverConfig config = adaptiveConfig("GridLadder = [5]\nDegreeLadder = [2]\n");
+        AxisSingular problem(RegridPolicy::InPlace);
+        PhysicsInstance physics(problem, fine);
+        {
+            CapturedOutput quiet;
+            auto system = runLadder(config, physics, fine, 4, 1.0);
+        }
+        BOOST_TEST_REQUIRE(problem.plans.size() == 2u);
+        BOOST_TEST(problem.plans[0].grid.getNCells() == 5u);
+        BOOST_TEST(problem.plans[0].k == 2);
+        BOOST_TEST((problem.plans[1].grid == fine));
+        BOOST_TEST(problem.plans[1].k == 4);
     }
-
-    BOOST_TEST_REQUIRE(problem.regrids.size() == 2u);
-    BOOST_TEST(problem.regrids[0].grid.getNCells() == 5u);
-    BOOST_TEST(problem.regrids[0].k == 2);
-    BOOST_TEST((problem.regrids[1].grid == fine));
-    BOOST_TEST(problem.regrids[1].k == 4);
-}
-
-BOOST_AUTO_TEST_CASE(moving_a_case_that_does_not_declare_it_off_its_domain_is_refused)
-{
-    // The one property of the grid a constructor in this tree reads is the
-    // domain, so that is the one a driver must not change behind a case's back.
-    // No driver does; this is what stops one starting.
-    Grid unit(0.0, 1.0, 4);
-    AxisSingular fixed(false), moving(true);
-
-    SystemSolver sameDomain(Grid(std::vector<Position>{0.0, 0.1, 0.5, 1.0}), 2, &fixed);
-    SystemSolver otherDomain(Grid(0.0, 2.0, 4), 2, &fixed);
-
-    Grid current = unit;
-    BOOST_CHECK_NO_THROW(moveCaseToMesh(fixed, sameDomain, current));
-    BOOST_TEST((current == sameDomain.getGrid()));
-    BOOST_TEST(fixed.regrids.empty());
-
-    current = unit;
-    BOOST_CHECK_THROW(moveCaseToMesh(fixed, otherDomain, current), std::invalid_argument);
-    BOOST_TEST((current == unit));
-
-    // A case that declares it may go anywhere, and is told.
-    SystemSolver elsewhere(Grid(0.0, 2.0, 4), 3, &moving);
-    current = unit;
-    BOOST_CHECK_NO_THROW(moveCaseToMesh(moving, elsewhere, current));
-    BOOST_TEST_REQUIRE(moving.regrids.size() == 1u);
-    BOOST_TEST(moving.regrids[0].k == 3);
-    BOOST_TEST((moving.regrids[0].grid == Grid(0.0, 2.0, 4)));
-
-    // And the same mesh again is nothing to do.
-    BOOST_CHECK_NO_THROW(moveCaseToMesh(moving, elsewhere, current));
-    BOOST_TEST(moving.regrids.size() == 1u);
+    {
+        const SolverConfig config = adaptiveConfig(
+            "GridLadder = [5]\nDegreeLadder = [2]\nRebuildPhysicsOnRegrid = true\n");
+        anAxisCaseSawTwoPlans = false;
+        Owned slots(false);
+        PhysicsInstance physics(slots.problem, slots.adjoint, fine, fromRegistry());
+        {
+            CapturedOutput quiet;
+            auto system = runLadder(config, physics, fine, 4, 1.0);
+        }
+        BOOST_TEST(physics.rebuilds() == 2);
+        BOOST_TEST(!anAxisCaseSawTwoPlans);
+        BOOST_TEST((slots.axis().plans.front().grid == fine));
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

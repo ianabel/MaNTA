@@ -466,19 +466,12 @@ EvaluationPlan SystemSolver::evaluationPlan() const
         }
     }
 
-    // setInitialConditions(). AssignSigma's ComputePhysics runs unless a restart
-    // is copied; the du/dt solve's runs unless the run is a steady solve.
-    const bool restarting = problem->isRestarting();
-    bool copiedRestart = false;
-    if (restarting)
-    {
-        DGSoln const &restart = problem->getRestartY();
-        copiedRestart = restart.getGrid() == grid && restart.getBasis().Order() == k;
-    }
-    const Index initialCalls = (copiedRestart ? 0 : 1) + (plan.steady ? 0 : 1);
-    if (initialCalls > 0)
-        add(Kind::InitialCondition, Entry::ComputePhysics, Cadence::OncePerRun, initialCalls,
-            basisPerCell, basisNodes);
+    // setInitialConditions(): AssignSigma's ComputePhysics, and the du/dt
+    // solve's unless the run is a steady solve. Listed whether or not a restart
+    // will skip the first -- a plan says nothing about the run, so that a restart
+    // is not a change of plan -- which makes the count an upper bound.
+    add(Kind::InitialCondition, Entry::ComputePhysics, Cadence::OncePerRun,
+        plan.steady ? 1 : 2, basisPerCell, basisNodes);
 
     // ...and, after the du/dt solve, each differential scalar's initial
     // derivative.
@@ -518,17 +511,16 @@ EvaluationPlan SystemSolver::evaluationPlan() const
     }
     const Index gaussPerCell = 2 * static_cast<Index>(NodalBasis::abscissae().size());
 
-    // InitialValue, InitialDerivative and InitialAuxValue: a cold start only.
-    // Each Gauss point is visited once per basis function it is tested against.
-    if (!restarting)
-        add(Kind::InitialProjection, Entry::Pointwise, Cadence::OncePerRun, k + 1, gaussPerCell,
-            gauss);
+    // InitialValue, InitialDerivative and InitialAuxValue, on a cold start; each
+    // Gauss point is visited once per basis function it is tested against. A
+    // restart makes none of these calls and is the same plan.
+    add(Kind::InitialProjection, Entry::Pointwise, Cadence::OncePerRun, k + 1, gaussPerCell,
+        gauss);
 
-    // aFn, into XMats: once per pair of basis functions, and only by the
-    // initialiseMatrices() of a solver's first run.
-    if (!initialised)
-        add(Kind::MassMatrix, Entry::Pointwise, Cadence::OncePerSolver, (k + 1) * (k + 1),
-            gaussPerCell, gauss);
+    // aFn, into XMats: once per pair of basis functions, by the
+    // initialiseMatrices() of a solver's first run and no other.
+    add(Kind::MassMatrix, Entry::Pointwise, Cadence::OncePerSolver, (k + 1) * (k + 1),
+        gaussPerCell, gauss);
 
     return plan;
 }
