@@ -79,17 +79,20 @@ void PhysicsInstance::rebuild(Grid const &grid)
     ++rebuilds_;
 }
 
+std::unique_ptr<SystemSolver> PhysicsInstance::plannerFor(
+    Grid const &grid, unsigned int k, std::function<void(SystemSolver &)> const &configure) const
+{
+    auto system = std::make_unique<SystemSolver>(grid, k, &problem());
+    configure(*system);
+    if (AdjointProblem *a = adjoint())
+        system->setAdjointProblem(a);
+    return system;
+}
+
 std::unique_ptr<SystemSolver> PhysicsInstance::solverFor(
     Grid const &grid, unsigned int k, std::function<void(SystemSolver &)> const &configure)
 {
-    auto build = [&]
-    {
-        auto system = std::make_unique<SystemSolver>(grid, k, &problem());
-        configure(*system);
-        if (AdjointProblem *a = adjoint())
-            system->setAdjointProblem(a);
-        return system;
-    };
+    auto build = [&] { return plannerFor(grid, k, configure); };
 
     auto system = build();
     if (usable(system->evaluationPlan()))

@@ -71,6 +71,7 @@ set(MANTA_CORE_SOURCES
   Matrices.cpp
   MeshAdaptation.cpp
   NetCDFIO.cpp
+  ParallelFill.cpp
   PhysicsCases.cpp
   PhysicsInstance.cpp
   Postprocessing.cpp

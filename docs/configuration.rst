@@ -468,6 +468,13 @@ Adjoints and superconvergence
        declare that it follows a new evaluation plan in place. For cases written
        before evaluation plans; a Python case object handed to ``Runner`` cannot
        be rebuilt and is refused. See :ref:`evaluation-plans`.
+   * - ``PhysicsParallelism``
+     - ``1``
+     - How many points the physics evaluates at once, so that a batch of M points
+       takes ceil(M / N) rounds. The adaptation controllers fill each level they
+       choose to the largest that costs no more rounds, and a configured level
+       that leaves rounds part empty is warned about. 1 changes nothing. See
+       :ref:`adaptivity-parallelism`.
 
 Coupling to a magnetic-field model
 ----------------------------------

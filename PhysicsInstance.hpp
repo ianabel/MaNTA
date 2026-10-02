@@ -92,6 +92,12 @@ public:
     std::unique_ptr<SystemSolver> solverFor(Grid const &grid, unsigned int k,
                                             std::function<void(SystemSolver &)> const &configure);
 
+    // A solver built and configured as solverFor builds one, around the current
+    // case, for its evaluationPlanFor and nothing else: it is never run, so
+    // nothing is rebuilt and the case is told nothing.
+    std::unique_ptr<SystemSolver> plannerFor(Grid const &grid, unsigned int k,
+                                             std::function<void(SystemSolver &)> const &configure) const;
+
 private:
     bool usable(EvaluationPlan const &plan) const;
     void rebuild(Grid const &grid);

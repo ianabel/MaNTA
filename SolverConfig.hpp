@@ -101,6 +101,9 @@ struct SolverConfig
     // and PyRunner -- not by applySolverConfig: it is about the case, not the
     // solver.
     bool                     RebuildPhysicsOnRegrid;
+    // Read by the adaptation controllers, and by runManta and PyRunner for the
+    // starting point's warning; see ParallelFill.hpp.
+    unsigned int             PhysicsParallelism;
     std::string              TransportSystem;
     std::vector<std::string> PhysicsPlugins;
 

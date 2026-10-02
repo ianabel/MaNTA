@@ -370,11 +370,17 @@ void SystemSolver::subtractA1Times(Vector const &dpsi, N_Vector work) const
 // requires each call to match a site here, so a new evaluation that is not
 // added to this list fails there rather than surprising a case that compiled
 // for the shapes the plan promised.
-EvaluationPlan SystemSolver::evaluationPlan() const
+EvaluationPlan SystemSolver::evaluationPlanFor(Grid const &grid, unsigned int kPlan) const
 {
     using Kind = EvaluationKind;
     using Entry = EvaluationEntry;
     using Cadence = EvaluationCadence;
+
+    // `grid` is the parameter, which shadows the member: everything below is
+    // about the level asked for, and nothing about the one this solver was
+    // built for.
+    const Index k = kPlan;
+    const Index nCells = grid.getNCells();
 
     EvaluationPlan plan;
     plan.grid = grid;
@@ -392,7 +398,17 @@ EvaluationPlan SystemSolver::evaluationPlan() const
     // the k+1 basis nodes otherwise. residual(), evaluatePhysicsDerivatives()
     // and the adjoint all choose between them the same way. The scalar and field
     // rows, and the initial condition, use the basis nodes whatever the flag.
-    const std::vector<Position> basisNodes = y.getPoints();
+    std::vector<Position> basisNodes;
+    {
+        // DGSoln::getPoints, for a level this solver's y need not be at. By
+        // value: getBasis returns a copy.
+        const NodalBasis basis = NodalBasis::getBasis(k);
+        Vector const &nodes = basis.getNodes();
+        basisNodes.reserve(nCells * (k + 1));
+        for (Index i = 0; i < nCells; ++i)
+            for (Index j = 0; j < k + 1; ++j)
+                basisNodes.push_back(grid[i].fromRef(nodes(j)));
+    }
     const std::vector<Position> physicsNodes =
         superconvergent ? Postprocessor::starPointsOn(grid, k) : basisNodes;
     const Index physicsPerCell = superconvergent ? k + 2 : k + 1;

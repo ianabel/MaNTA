@@ -2,6 +2,7 @@
 #include "Logging.hpp"
 #include "DegreeAdaptation.hpp"
 #include "MeshAdaptation.hpp"
+#include "ParallelFill.hpp"
 #include "PhysicsInstance.hpp"
 #include "PyConfigSource.hpp"
 #include "PyToml.hpp"
@@ -221,6 +222,14 @@ void PyRunner::configure(const py::dict &config) {
   // any plan; an equal plan is no change at all.
   if (!pProblem->acceptsPlan(system->evaluationPlan()))
     throw std::runtime_error(TransportSystem::regridRefusal());
+
+  // The configured level is the one place no controller chooses, so it is the
+  // one that is only warned about. See ParallelFill.hpp.
+  if (const std::string w = underuseWarning(
+          [this](Grid const &g, unsigned int kk) { return system->evaluationPlanFor(g, kk); },
+          *grid, k, cfg.MaxPolynomialDegree, cfg.PhysicsParallelism);
+      !w.empty())
+    logmsg<LOG_LEVEL::WARNING>("{}", w);
 
   // run_ss() arms steady-state termination itself, so it needs the value
   // whether or not the key was present. applySolverConfig has already armed it
