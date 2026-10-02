@@ -3,10 +3,10 @@ import os
 # uncomment to run test flux
 # os.environ["TEST_STELLARATOR"] = "true"
 from stellarator_multichannel import StellaratorTransport
-from objective2 import make_objective
+from objective import make_objective
 
 # os.environ.pop("TEST_STELLARATOR", None)
-from yancc_wrapper2 import yancc_data
+from yancc_wrapper import yancc_data
 import matplotlib.pyplot as plt
 from desc.profiles import SplineProfile
 from desc.plotting import plot_boozer_surface, plot_boundaries, plot_qs_error, plot_1d
@@ -58,8 +58,8 @@ st_config = {
     "ECHWidth": 0.26,
     "EdgeTemperature": 0.2,
     "EdgeDensity": 0.2,
-    "n0": 0.5,
-    "T0": 0.5,
+    "n0": 0.2,
+    "T0": 0.2,
     "FusionFactor": 0.01,
     "evolveDensity": True,
     "useBatching": True,
@@ -156,8 +156,8 @@ yancc_wrapper = yancc_data.from_eq(
 # # # %%
 # with jax.log_compiles(True):
 #
-# st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-# st.run()
+st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+st.run()
 #
 # # %%
 #

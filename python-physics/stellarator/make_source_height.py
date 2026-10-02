@@ -30,7 +30,7 @@ from yancc.solve import solve_dke
 from yancc.species import LocalMaxwellian
 import manta as MaNTA
 
-from yancc_wrapper2 import yancc_data
+from yancc_wrapper import yancc_data
 
 import numpy as np
 

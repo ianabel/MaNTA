@@ -74,16 +74,16 @@ else:
 from functools import partial
 import manta as MaNTA
 from manta.jax import FFIRunner
-from yancc_wrapper2 import yancc_data
+from yancc_wrapper import yancc_data
 
 # import a simple flux model for testing purposes
 if "TEST_STELLARATOR" in os.environ:
-    from yancc_wrapper2 import test_flux as compute_dke_sol
-    from yancc_wrapper2 import test_flux_field_jac as dke_field_jac
+    from yancc_wrapper import test_flux as compute_dke_sol
+    from yancc_wrapper import test_flux_field_jac as dke_field_jac
 
     print("Running stellarator model in test context")
 else:
-    from yancc_wrapper2 import compute_dke_sol, dke_field_jac
+    from yancc_wrapper import compute_dke_sol, dke_field_jac
 
 
 from manta.jax import State, Physics_Decorator
@@ -198,7 +198,7 @@ def put_on_gpu(tree):
 
 # Magic tuple to make vmap work
 vmap_axes = (State.vmap_axes(), 0)
-vmap_axes_wfield = (0, 0, None, 0, 0, 0, None, None, None, None)
+vmap_axes_wfield = (State.vmap_axes(), 0, None, 0, 0, 0, None, None, None, None)
 vmap_axes_sources = (State.vmap_axes(), 0, None, 0, 0, 0, None)
 shard_map_specs = (
     P(

@@ -3,10 +3,10 @@ import os
 # uncomment to run test flux
 # os.environ["TEST_STELLARATOR"] = "true"
 from stellarator_multichannel import StellaratorTransport
-from objective2 import make_objective
+from objective import make_objective
 
 # os.environ.pop("TEST_STELLARATOR", None)
-from yancc_wrapper2 import yancc_data
+from yancc_wrapper import yancc_data
 import matplotlib.pyplot as plt
 from desc.profiles import SplineProfile
 from desc.plotting import plot_boozer_surface, plot_boundaries, plot_qs_error, plot_1d
