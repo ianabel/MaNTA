@@ -837,6 +837,26 @@ BOOST_AUTO_TEST_CASE(graded_grid_defaults_are_off_and_harmless)
         BOOST_TEST((*grid)[i].h() == 0.125, boost::test_tools::tolerance(1e-12));
 }
 
+BOOST_AUTO_TEST_CASE(the_layer_fractions_record_whether_they_were_given)
+{
+    // MeshAdaptation sizes its layer from the sampling mesh unless a fraction is
+    // given, so it needs the absent key told apart from the schema default -- a
+    // config that writes the default out has asked for it. Either spelling counts.
+    auto absent = load(minimal);
+    BOOST_TEST(!absent.LowerBoundaryFractionGiven);
+    BOOST_TEST(!absent.UpperBoundaryFractionGiven);
+    BOOST_TEST(absent.LowerBoundaryFraction == 0.2);
+
+    auto lower = load(minimal + "LowerBoundaryFraction = 0.2\n");
+    BOOST_TEST(lower.LowerBoundaryFractionGiven);
+    BOOST_TEST(!lower.UpperBoundaryFractionGiven);
+
+    auto alias = load(minimal + "Upper_Boundary_Fraction = 0.1\n");
+    BOOST_TEST(!alias.LowerBoundaryFractionGiven);
+    BOOST_TEST(alias.UpperBoundaryFractionGiven);
+    BOOST_TEST(alias.UpperBoundaryFraction == 0.1);
+}
+
 BOOST_AUTO_TEST_CASE(a_graded_grid_config_builds_the_mesh_it_describes)
 {
     // The end-to-end path: keys -> SolverConfig -> makeGrid -> Grid. The layer

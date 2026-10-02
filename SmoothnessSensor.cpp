@@ -29,6 +29,18 @@ double relativeFloor(unsigned int k)
 }
 } // namespace
 
+double measurableDecayRate(unsigned int k)
+{
+    if (k < 2)
+        throw std::invalid_argument(std::format(
+            "A decay rate is fitted over j = 1..k, so it needs k >= 2; got {}.", k));
+
+    // The two-point slope from (1, 1) to (k, floor) in log-log, which is also what
+    // the least-squares fit returns for any spectrum that is a pure power law
+    // between those two ends.
+    return -std::log(relativeFloor(k)) / std::log(static_cast<double>(k));
+}
+
 CellSmoothness cellSmoothness(NodalBasis const &basis,
                               Eigen::Ref<const Vector> const &nodalValues)
 {

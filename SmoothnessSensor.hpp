@@ -95,6 +95,14 @@ struct CellSmoothness
 CellSmoothness cellSmoothness(NodalBasis const &basis,
                               Eigen::Ref<const Vector> const &nodalValues);
 
+// The largest decay rate a cell can be *measured* to have at degree k: that of a
+// spectrum falling from the cell's own scale at j = 1 to the round-off floor at
+// j = k. A smoother cell has its top mode under the floor and is reported as
+// infinite, so a finite rate near this ceiling and an infinite one are the same
+// measurement -- a top mode at round-off, on one side of the floor or the other.
+// 31.5 at k = 3, 24.8 at k = 4, 16.3 at k = 8. Requires k >= 2, as the fit does.
+double measurableDecayRate(unsigned int k);
+
 // Every cell of one field, in grid order. `field` may be any degree-k DGApprox
 // -- u, q, sigma or an auxiliary variable -- and the caller chooses; the
 // measurements in MESH-REFINEMENT.md are all on u.

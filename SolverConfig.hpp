@@ -128,6 +128,14 @@ struct SolverConfig
     // distinction is impossible to draw from a plain bool carrying the schema's
     // default.
     std::optional<bool> Superconvergent;
+
+    // Whether LowerBoundaryFraction / UpperBoundaryFraction were given. The manual
+    // GradedGridBoundary path reads the values with their schema default either
+    // way; MeshAdaptation does not, and sizes its layer from the sampling mesh
+    // unless told otherwise -- so for it the absent key and the default value have
+    // to be told apart.
+    bool LowerBoundaryFractionGiven = false;
+    bool UpperBoundaryFractionGiven = false;
 };
 
 // The one thing that differs between the two surfaces.
