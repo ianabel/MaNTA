@@ -867,10 +867,20 @@ that is what the context manager calls.
 host-side state and touch no device memory, so the inherited ``Runner`` methods
 serve.
 
-CPU only, like ``Run`` and ``Run_ss``. The outcome crosses as a concrete
-``int32``, which forces the sync a Python ``while`` needs — so a slice loop
-belongs in eager code, or inside an ``io_callback``, and cannot be written under
-``jit`` where the outcome would be a tracer.
+CPU only, like ``Run`` and ``Run_ss``. In eager code a slice returns a
+``SteadyOutcome``, which forces the sync a Python ``while`` needs. Under a trace
+— ``jit``, a ``custom_jvp`` — the solve has not run yet, so the outcome is the
+traced ``int32`` it will produce. ``SteadyOutcome`` is an ``enum.IntEnum``, so
+that scalar is tested against its members in the same way:
+
+.. code-block:: python
+
+   outcome = ffi_runner.start_steady()
+   jax.lax.cond(jnp.equal(outcome, manta.SteadyOutcome.Converged),
+                ffi_runner.finish_steady, ffi_runner.abandon_steady)
+
+A *loop* of slices cannot be traced, since how many there are depends on the
+outcomes; it belongs in eager code, or inside an ``io_callback``.
 
 What the solve did
 ~~~~~~~~~~~~~~~~~~

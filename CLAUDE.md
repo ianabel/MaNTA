@@ -1371,9 +1371,17 @@ gives. Four pieces to know:
   The same four names are FFI ops (`ffi.hpp`, CPU only like `run`/`run_ss`), so
   `manta.SteadySolve(ffi_runner)` works — `steadyStats()` and
   `objectiveEstimate()` need none, being host-side reads that touch no device
-  memory. The outcome crosses as a concrete `int32`, which forces the sync a
-  Python `while` needs, so a slice loop belongs in eager code or inside an
-  `io_callback` rather than under `jit`.
+  memory. The outcome crosses as an `int32`. Eagerly `FFIRunner` makes it a
+  `SteadyOutcome`, which forces the sync a Python `while` needs; under a trace
+  (`jit`, a `custom_jvp`) the solve has not run, `int()` of the tracer raises,
+  and it comes back as the traced scalar. **`SteadyOutcome` is bound with
+  `py::native_enum` as an `enum.IntEnum` for that reason**: its members are
+  ints, so `jnp.equal(outcome, SteadyOutcome.Converged)` traces, where a
+  `py::enum_` member is an object JAX refuses. A single slice can therefore be
+  branched on under `jit` with `lax.cond`, which is how
+  `python-physics/stellarator` drives its solve; a *loop* of slices still
+  cannot, and belongs in eager code or an `io_callback`.
+  `test_ffi_steady_outcome.py` pins both, on an `XLA_FFI` build only.
 
   `G` returns the objective without the gradient. The saving is in the run, not
   in `G` itself: `integrate` calls `runAdjointSolve()` whenever `solveAdjoint` is

@@ -325,7 +325,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
                     self.runner.abandon_steady()
                     return False
 
-                ec = jax.lax.cond(jnp.equal(outcome, 1), true_fn, false_fn)
+                ec = jax.lax.cond(
+                    jnp.equal(outcome, MaNTA.SteadyOutcome.Converged), true_fn, false_fn
+                )
                 jax.debug.print("ec: {val}", val=ec)
 
                 self._report_objective_estimate()

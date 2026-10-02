@@ -166,11 +166,18 @@ class FFIRunner(MaNTA.Runner):
             for outcome, stats in solve:
                 ...
 
-    The outcome comes back as a concrete value, which forces a sync. That is
-    what lets a Python `while` branch on it, and it is also why a slice loop
-    belongs in eager code or inside an io_callback -- under jit the outcome is a
-    tracer and the loop cannot be written. objective.py already runs the solve
-    inside an io_callback, which is exactly the right place.
+    The outcome is a manta.SteadyOutcome in eager code, which forces a sync and
+    is what lets a Python `while` -- and so SteadySolve -- branch on it. Under a
+    trace (jit, a custom_jvp, vmap) the solve has not run yet: the outcome is
+    the int32 the compiled program will produce, so it stays a traced scalar.
+    SteadyOutcome is an IntEnum, so that scalar is tested against its members
+    the same way either side of a trace:
+
+        converged = jnp.equal(outcome, MaNTA.SteadyOutcome.Converged)
+        jax.lax.cond(converged, finish, abandon)
+
+    What cannot be traced is a loop over slices, since how many there are
+    depends on the outcomes; that belongs in eager code or an io_callback.
 
     steadyStats() and objectiveEstimate() need no FFI op: they read host-side
     C++ state and touch no device memory, so the inherited MaNTA.Runner methods
@@ -190,7 +197,12 @@ class FFIRunner(MaNTA.Runner):
                 jax.ShapeDtypeStruct((), cpu_i_dtype),
                 has_side_effect=True,
             )(cpu_i_dtype(1 if estimate else 0), obj=self.get_address())
+        # int() of a tracer raises -- the value does not exist until the compiled
+        # program runs -- so under a trace the scalar itself goes back, and it
+        # compares with SteadyOutcome's members as it is. See the class notes.
+        if isinstance(outcome, jax.core.Tracer):
             return outcome
+        return MaNTA.SteadyOutcome(int(outcome))
 
     def finish_steady(self):
         with jax.default_device(cpu_device):
