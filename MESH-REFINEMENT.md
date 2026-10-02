@@ -751,9 +751,33 @@ warns about, at `k = 4` correctly absent.
 
 The regraded 6-cell mesh is `0, 0.8, 0.94, 0.982, 0.9946, 0.99838, 1`: a wall cell
 of 1.6e-3, within a factor of two of the best 6-cell geometric mesh a scan found
-by hand (1e-3, 0.10%). Cost, grading only, at `NewtonJacobianReuse = 1`: 458 visits
-per node against 151 for the one uniform solve -- three solves for 216x the
-accuracy. At the default reuse of 10 both double.
+by hand (1e-3, 0.10%). Cost, grading only, at `NewtonJacobianReuse = 1` (now the
+default): **170 visits per node against 151 for the one uniform solve**, 1.13x, for
+216x the accuracy. That figure is the sample plus a graded solve warm-started from
+it -- the sample's state projected onto the graded mesh, and its final
+pseudo-transient step (~1e6) as the graded solve's first -- which costs 2 steps
+and 5 Newton iterations where a cold one took 19 and 44, for the same answer to
+1e-10. Carrying a tenth or a hundredth of that step measured the same. The full
+p → h → p, which carries the step between degree levels too, is 222 at 5 cells and
+218 at 6.
+
+Before the warm start it was 304, and before the degree loop stopped repeating the
+graded solve 458. Until then `runAdaptiveMesh` discarded the converged solve on the mesh it settled on
+and `runAdaptiveDegree` opened by solving that same mesh at the same degree from
+cold. Every adapted run paid it -- one solve in three when graded, one in two when
+left uniform -- for a bit-identical answer. The full p → h → p went 695 to 541 at 5
+cells and 782 to 628 at 6, the same 154 visits per node each time, which is one
+solve; `test_the_degree_loop_reuses_the_solve_the_mesh_stage_already_made` pins
+that, and `test_the_graded_solve_starts_from_the_sample_rather_than_from_scratch`
+the warm start (1.45x against 1.85x cold on its fixture).
+
+This revisits section 9's "warm starting buys cost, not reach". The cost half
+holds and is the whole of the gain here. Section 9's objection to sequencing was
+the cumulative cost of levels nobody wanted, which does not arise: the sample is
+paid for regardless, because the grading decision is read from it. Its other
+caution, a spline transfer overshooting a singular profile, does not apply to the
+restart path's L2 projection of the element polynomials -- and a failed warm start
+falls back to a cold solve of the same mesh before softening the grading.
 
 Shrinking the layer (`UpperBoundaryFraction = 0.05`) made it worse, 1.5% at 6
 cells: the interior cell then spans 0.95 and carries the error instead. The
@@ -762,7 +786,7 @@ law that what matters is `h0` *and* not starving the rest of the domain.
 
 For contrast, splitting the worst cell by the accuracy indicator from 4 uniform
 cells, twice, to 6 -- what one would build without this file -- reached 0.33% at
-best and 7.8% by bisection, for the same three solves. Moving cells beat adding
+best and 7.8% by bisection, for three solves against two here. Moving cells beat adding
 them again.
 
 ## What the measurements changed about the plan

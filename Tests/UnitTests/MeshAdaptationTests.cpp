@@ -14,6 +14,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include "CapturedOutput.hpp"
+#include "DegreeAdaptation.hpp"
 #include "MeshAdaptation.hpp"
 #include "SolverConfig.hpp"
 #include "SystemSolver.hpp"
@@ -21,6 +22,7 @@
 #include "gridStructures.hpp"
 
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -319,6 +321,37 @@ BOOST_AUTO_TEST_CASE(the_driver_refuses_a_low_degree_even_if_the_config_did_not)
     SolverConfig cfg{};
     BOOST_CHECK_THROW(runAdaptiveMesh(cfg, problem, nullptr, grid, 2, 1.0),
                       std::invalid_argument);
+}
+
+// --- carrying the pseudo-transient step to a warm-started solve -----------
+
+BOOST_AUTO_TEST_CASE(a_warm_started_solve_starts_from_the_step_the_last_one_reached)
+{
+    // What carriedStepConfig is for: a solve started next to the answer should not
+    // climb the SER ramp again from PseudoTransientInitialStep. Three cases, and
+    // the two refusals are the ones that would go wrong silently -- an infinite
+    // step handed on as a finite "initial step", or a cap the configuration set
+    // being overridden by a step the previous solve was allowed to exceed it by.
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(mesh_config);
+    SystemSolver previous(grid, 2, &problem);
+
+    SolverConfig config;
+    config.PseudoTransientInitialStep = 1e-3;
+    config.PseudoTransientMaxStep = 0.0; // uncapped
+
+    previous.ptcStep = 7.5e5;
+    BOOST_TEST(carriedStepConfig(config, previous).PseudoTransientInitialStep == 7.5e5);
+
+    config.PseudoTransientMaxStep = 1e3;
+    BOOST_TEST(carriedStepConfig(config, previous).PseudoTransientInitialStep == 1e3);
+
+    // Newton mode leaves the step infinite; there is nothing to carry.
+    previous.ptcStep = std::numeric_limits<double>::infinity();
+    BOOST_TEST(carriedStepConfig(config, previous).PseudoTransientInitialStep == 1e-3);
+
+    previous.ptcStep = 0.0;
+    BOOST_TEST(carriedStepConfig(config, previous).PseudoTransientInitialStep == 1e-3);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

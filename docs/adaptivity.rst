@@ -347,6 +347,15 @@ path, where it is half the grid. Here exactly one end is being graded and the er
 is known to be :math:`0.0487 h_0`, so filling the layer is the right default —
 measured, 9 cells of 10 beat 5 of 10 by 48×.
 
+**The graded solve starts from the sample.** Its state is projected onto the
+graded mesh, the way a restart onto a different mesh is, and its first
+pseudo-transient step is the one the sample finished at -- so it does not climb
+the SER ramp again. On the wall-layer case in ``MESH-REFINEMENT.md`` that took
+the graded solve from 19 continuation steps to 2, for the same answer to
+:math:`10^{-10}`. If the warm start fails, the same mesh is solved cold before
+anything is softened. The degree loop's levels carry the step the same way, from
+the level before.
+
 **A grading that fails to solve is a rejected step.** The ratio is softened towards
 1 and retried, up to ``MeshAdaptationAttempts`` times (default 4); if none
 converges the run continues on the uniform mesh and says so at ``WARNING``. Given
@@ -354,7 +363,10 @@ the failure rate above, a driver without this would die on a third of the proble
 it was pointed at.
 
 **3. p — the degree loop.** ``runAdaptiveDegree`` on whichever mesh won, to
-``DegreeTolerance`` by Giorgiani's rule. See :ref:`degree-adaptation`.
+``DegreeTolerance`` by Giorgiani's rule. See :ref:`degree-adaptation`. Its first
+level is the solve stage 1 or 2 already made on that mesh at ``PolynomialDegree``,
+so a run whose degree is already good enough costs the sampling solve plus, if it
+graded, one more -- and nothing is solved twice.
 
 .. code-block:: toml
 
