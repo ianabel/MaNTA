@@ -6,6 +6,11 @@
 # none: it reports the old signature as fact, and mypy believes it. The `stubs`
 # target has just written GENERATED.
 
+# -P scripts start with no policies set, so the project's minimum has to be
+# restated here: without it CMake 3.x reads IN_LIST and friends by their pre-3.3
+# rules, where CMake 4 has already dropped those and quietly gets it right.
+cmake_minimum_required(VERSION 3.22)
+
 if(NOT EXISTS "${GENERATED}")
   message(FATAL_ERROR "No generated stub at ${GENERATED}; the `stubs` target should have written it.")
 endif()

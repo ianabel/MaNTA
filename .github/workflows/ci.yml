@@ -350,8 +350,10 @@ jobs:
       - name: Nothing was written outside the build tree
         run: |
           # Two steps, so a failing `git status` fails the check rather than
-          # being read as an empty listing.
-          status=$(git status --porcelain --ignored)
+          # being read as an empty listing. safe.directory because in the
+          # Fedora container the checkout is owned by another user, and git
+          # refuses to read it without; on the command line it is honoured.
+          status=$(git -c safe.directory="$PWD" status --porcelain --ignored)
           stray=$(printf '%s\n' "$status" | grep -vE '^!! (build/|sundials/|eigen-)' || true)
           if [ -n "$stray" ]; then
             echo "::error::the build or the suites wrote into the source tree"
@@ -563,8 +565,10 @@ jobs:
       - name: Nothing was written outside the build tree
         run: |
           # Two steps, so a failing `git status` fails the check rather than
-          # being read as an empty listing.
-          status=$(git status --porcelain --ignored)
+          # being read as an empty listing. safe.directory because in the
+          # Fedora container the checkout is owned by another user, and git
+          # refuses to read it without; on the command line it is honoured.
+          status=$(git -c safe.directory="$PWD" status --porcelain --ignored)
           stray=$(printf '%s\n' "$status" | grep -vE '^!! (build/|sundials/|\.venv/)' || true)
           if [ -n "$stray" ]; then
             echo "::error::the build or the suites wrote into the source tree"
@@ -657,8 +661,10 @@ jobs:
       - name: Nothing was written outside the build tree
         run: |
           # Two steps, so a failing `git status` fails the check rather than
-          # being read as an empty listing.
-          status=$(git status --porcelain --ignored)
+          # being read as an empty listing. safe.directory because in the
+          # Fedora container the checkout is owned by another user, and git
+          # refuses to read it without; on the command line it is honoured.
+          status=$(git -c safe.directory="$PWD" status --porcelain --ignored)
           stray=$(printf '%s\n' "$status" | grep -vE '^!! (build-coverage/|sundials/)' || true)
           if [ -n "$stray" ]; then
             echo "::error::the build or the suites wrote into the source tree"
