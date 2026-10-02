@@ -92,13 +92,24 @@ SolverConfig carriedStepConfig(SolverConfig const &config, SystemSolver const &p
 // on the mesh it settled on, which is exactly the level this loop would otherwise
 // open with -- same mesh, same degree, from the same initial condition -- so
 // without it every adapted run paid for that solve twice.
+//
+// An overload rather than a defaulted parameter: SystemSolver is incomplete here,
+// and clang instantiates unique_ptr's destructor for a default argument at the
+// declaration, which needs the complete type. gcc defers it, so only the clang
+// legs saw this.
 std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
                                                 TransportSystem &problem,
                                                 AdjointProblem *adjoint,
                                                 Grid const &grid,
                                                 unsigned int k0,
                                                 double tFinal,
-                                                std::unique_ptr<SystemSolver> solvedFirstLevel = nullptr);
+                                                std::unique_ptr<SystemSolver> solvedFirstLevel);
+std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
+                                                TransportSystem &problem,
+                                                AdjointProblem *adjoint,
+                                                Grid const &grid,
+                                                unsigned int k0,
+                                                double tFinal);
 
 // Solve at a sequence of discretisations the *configuration* names, each rung
 // warm-starting the next, ending at the configured Polynomial_degree and

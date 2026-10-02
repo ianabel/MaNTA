@@ -381,6 +381,16 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
     return system;
 }
 
+std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
+                                                TransportSystem &problem,
+                                                AdjointProblem *adjoint,
+                                                Grid const &grid,
+                                                unsigned int k0,
+                                                double tFinal)
+{
+    return runAdaptiveDegree(config, problem, adjoint, grid, k0, tFinal, nullptr);
+}
+
 // --- runLadder --------------------------------------------------------------
 
 namespace
