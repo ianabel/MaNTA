@@ -22,19 +22,23 @@ cmake --build build -j    # solver + libmanta.so + the Python module + the unit 
 ctest --test-dir build    # all three suites
 
 cmake --build build --target MaNTA        # the solver only, at build/MaNTA
-cmake --build build --target _manta       # the manta package, python/manta/_manta<suffix>.so
+cmake --build build --target _manta       # the manta package, at build/python/manta
 cmake --build build --target UnitTests    # build/Tests/UnitTests/UnitTests
-cmake --install build --prefix ...        # headers under include/manta, libmanta.so, manta.pc
+cmake --install build --prefix ...        # bin/, lib/ (+ pkgconfig, the Python package),
+                                          # include/manta, share/doc; DESTDIR honoured
+export PYTHONPATH=$PWD/build/python       # use the build's package in place
 pip install .             # the `manta` package and the `manta` console script
 pip install .[jax]        # ...and manta.jax (jax, equinox, jaxtyping)
 
 cmake --build build --target unit_tests | regression_tests | python_tests
-cmake --build build --target docs         # docs/_build/html, via .venv-docs built from
+cmake --build build --target docs         # build/docs/html, via build/venv-docs built from
                                           # docs/requirements.txt; -W, as Read the Docs runs it
-cmake --build build --target stubs        # regenerate python/manta/_manta.pyi from the module
-cmake --build build --target stubs-check  # fail if the committed stub is stale (CI runs this)
+cmake --install build --component docs    # ...and copy it to docs/_build/html
+cmake --build build --target stubs        # generate _manta.pyi into build/stubs/
+cmake --build build --target stubs-check  # fail if the committed stub differs (CI runs this)
+cmake --build build --target stubs-update # copy the generated stub over python/manta/_manta.pyi
 cmake --build build --target typecheck    # mypy over the manta package
-cmake --build build --target venv         # .venv from requirements.txt, plus gcovr
+cmake --build build --target venv         # build/venv from requirements.txt, plus gcovr
 cmake --build build --target clean_data   # run output (.nc/.restart.nc/.dat) at the root and in
                                           # Tests/RegressionTests, python/Tests/ and each
                                           # directory under python-examples/ and python-physics/
@@ -46,26 +50,33 @@ cmake --build build-coverage --target coverage     # all three suites instrument
 build/MaNTA --list-options   # every configuration key, straight from ConfigSchema.cpp
 ```
 
-There is no `clean` target and no need for one: `rm -rf build`.
+There is no `clean` target and no need for one: `rm -rf build`. **A build writes
+nothing outside its build directory, and the suites run from there too** — CI
+checks it, with `git status --ignored` after the suites. `stubs-update` and the
+docs component of `install` are the only things that write into the checkout,
+and both exist to. Keep it that way: anything new that a target or a test
+writes goes under `PROJECT_BINARY_DIR`.
 
 The regression and Python suites need `requirements.txt` installed, but **nothing
-needs to be on `PATH`**. CMake finds one interpreter — preferring a `.venv` in the
-repo root — and runs the regression driver and pytest with that one. Name a
-different one once, with `-DPython3_EXECUTABLE=...`.
+needs to be on `PATH`**. CMake finds one interpreter — preferring `build/venv`,
+then a `.venv` in the repo root — and runs the regression driver and pytest with
+that one. Name a different one once, with `-DPython3_EXECUTABLE=...`.
 
 Running one test:
 
 ```sh
 build/Tests/UnitTests/UnitTests --run_test=solve_jac_tests/solve_hdg_jac_agrees_with_a_dense_solve --log_level=all
 build/Tests/UnitTests/UnitTests --run_test=mms_convergence_tests --log_level=message   # see BOOST_TEST_MESSAGE output
-pytest python/Tests/test_adjoint.py::test_adjoint_gradient_matches_finite_differences
-SOLVER=$PWD/build/MaNTA Tests/RegressionTests/TestSolutions.py --tolerance 1e-2
+build/python/Tests/run-pytest python/Tests/test_adjoint.py::test_adjoint_gradient_matches_finite_differences
+build/Tests/RegressionTests/run-regression --tolerance 1e-2
 ctest --test-dir build -R '^unit$' --output-on-failure
 ```
 
-All three suites run from any working directory. `TestSolutions.py` needs
-`SOLVER` when run by hand, because its fallback is `<repo>/MaNTA` and an
-out-of-source build does not put one there; CTest sets it. New unit-test `.cpp`
+`run-pytest` and `run-regression` are generated into the build tree and are what
+CTest runs, so a test run by hand from any cwd runs exactly as it does there:
+from the build tree, against that build's package, with pytest's cache, its
+temporary directories and the tests' bytecode kept out of the source tree. A bare
+`pytest` from the repo root does none of that. New unit-test `.cpp`
 files must be added to `MANTA_TEST_SOURCES` in `Tests/UnitTests/CMakeLists.txt` —
 kept an explicit list, unlike `PhysicsCases/*.cpp`, which is globbed with
 `CONFIGURE_DEPENDS`.
@@ -906,10 +917,29 @@ the surfaces: `TomlConfigSource` (in `SolverConfig.cpp`) and `DictConfigSource`
   on raising `RuntimeError`, which is what it always has. "Could not start"
   conditions — no such config file, an unknown `TransportSystem`, an unopenable
   restart file — still make `runManta` log and return 1.
-* **The naming style is deliberately not unified.** `delta_t`, `MinStepSize` and
-  `solveAdjoint` keep their inconsistent spellings; only the two genuine name
-  *conflicts* were resolved, because regularising the rest would churn every
-  config file in the tree for no functional gain.
+* **`UpperCamelCase` is the convention for new configuration keys, and for
+  renames of existing ones.** It is what the schema already mostly is — measured
+  over `--list-options`, 23 keys are `UpperCamel` against 3 `lowerCamel`
+  (`initialTimestep`, `solveAdjoint`, `zeroFlux`), 2 bare lower-case (`restart`,
+  `tau`) and the remaining stragglers with underscores. So a new key should be
+  `MaxDegreeIncrement`, not `max_degree_increment` or `maxDegreeIncrement`.
+
+  **The rest is not being regularised wholesale.** `delta_t`, `t_initial`,
+  `t_final`, `Relative_tolerance` and `Absolute_tolerance` keep their spellings;
+  churning every config file in the tree for no functional gain is a job for
+  never. What is regularised is a group of keys that is being *changed anyway* —
+  the grid keys went `Grid_size` → `GridSize`, `Lower_boundary` →
+  `LowerBoundary`, `Polynomial_degree` → `PolynomialDegree` and so on alongside
+  the graded-mesh work, since editing them for another reason is the one moment
+  the rename is free.
+
+  **A rename is a deprecated alias, never a removal.** The schema's `aliases`
+  field is what makes that a one-line change: `presentSpelling` warns when the
+  old name is used, and refuses a config that gives both. So every existing
+  `.conf` and every `Runner.configure` dict in and out of the tree keeps working
+  untouched, which is what kept the grid rename from touching 35 Python files.
+  Grep `--list-options` before adding a key, because a rename that forgets the
+  alias is silent for anyone whose config predates it.
 
 ### Superconvergence (`Superconvergent = true`)
 
@@ -952,6 +982,45 @@ The reconstruction is built for every run with `k >= 1` regardless of the flag, 
 `u_star` is always in the netCDF output and the `.dat` files; the flag controls
 only whether the *method* uses it. `Tests/README.md` has the measured orders and
 the list of what is not covered.
+
+### Stabilisation (`tauScaling`)
+
+`tau` enters five places — the `D`, `E`, `G`, `H` blocks and the `tau g_D`
+Dirichlet term in `RF_cellwise` — and **all of them are written by
+`assembleTauBlocks`**, reached through `applyResidualTau` (the residual's copies)
+and `applyJacobianTau` (the `MBlocks`/`CEBlocks`/`CG_cellwise` parts and
+`H_jac_cellwise`). `initialiseMatrices` calls both with the constant, with the
+arithmetic in its original order: a `Constant` run is **byte-identical** to the
+tree before the split, checked by `cmp` over every regression config's `.nc` and
+`.restart.nc`. Re-run that check after touching `assembleTauBlocks`.
+
+Under `Diffusive`, `faceTau` evaluates `tau * (kappa/h + floor * max kappa/h)`
+per face, one-sided, from the trace and the cell's own `q`, with one batched
+`ComputePhysicsDerivatives` on the `2 nCells` faces. The residual applies it at
+*its* state, the Jacobian build at `yJac` — which is why `H` is split into
+`H_cellwise` and `H_jac_cellwise`: it is the one tau block both read directly,
+and `solveHDGJac` reads it at *solve* time, long after the residuals of a Newton
+iteration have overwritten the residual's copy. Under
+`tauUpdate = Residual` the Jacobian carries `d tau / dy`
+(`faceTauJacobian`: a forward difference per face-state component, all faces in
+one batched call, so `3 nVars + nAux` extra face calls per build) in the blocks
+`applyJacobianTau` rewrites; what it leaves out is the floor's grid-maximum term,
+and `LocalTauTests.cpp` shows that is *all* it leaves out — the mismatch against a
+finite-differenced residual falls from 3e-7 to 1e-9 when the floor is taken to
+1e-9. Under `ContinuationStep` the continuation loop sets `tau` (`freezeTauAt`),
+the residual and the Jacobian leave it alone, and `steadyNorm` re-evaluates it
+before measuring convergence; a transient run is refused in `initialize()`.
+`JacobianBuild` is `ContinuationStep` plus a refresh in each Jacobian build
+(`tauRefreshedPerJacobian`), so tau is fixed across the Newton iterations sharing
+a Jacobian; KINSOL evaluated the residual before the rebuild with the old tau, so
+that step is lagged and costs Newton iterations. Measured cost, against a
+constant tau at the same `NewtonJacobianReuse`: `Residual` 1.6-1.8x, nearly all
+of it the per-residual face call; `ContinuationStep` 1.07-1.10x; `JacobianBuild`
+1.15-1.47x. `ContinuationStep` is a fixed-point iteration on tau that pseudo-time
+cannot damp (tau reads `lambda` and `q`, which are algebraic); it stalled once,
+under the default Jacobian reuse, and not with `NewtonJacobianReuse = 1`. The adjoint
+would carry neither, so `applySolverConfig` refuses `Diffusive` with
+`solveAdjoint`.
 
 ### Non-owning state views
 
@@ -1334,9 +1403,11 @@ in CI runs them, and their READMEs carry the status instead.
 
 ### Type stubs
 
-`python/manta/_manta.pyi` is **generated** by the `stubs` target; `stubs-check`
-diffs it against a fresh generation and is what CI runs, because a stale stub is
-worse than none — it reports the old signature as fact.
+`python/manta/_manta.pyi` is **generated**: `stubs` writes a fresh one into
+`<build>/stubs/`, `stubs-check` diffs the committed one against it and is what CI
+runs, because a stale stub is worse than none — it reports the old signature as
+fact — and `stubs-update` copies it over. `typecheck` runs mypy over the build's
+package, i.e. against the *committed* stub, which is what ships.
 `python/manta/__init__.pyi` is hand-written and covers the Python layer, chiefly
 the hook signatures a case implements.
 
@@ -1525,54 +1596,36 @@ formula, not the operator, if the data cannot tell them apart.
   symptom is heap corruption surfacing at exit in whichever static destructor runs
   first — for us, `ChebyshevBasis::singletons`, which the change had nothing to do
   with. `Postprocessing.hpp` carries a comment saying so.
-* **Build staleness bit three times under the Makefile**, each time because a
-  hand-maintained prerequisite list had a hole in it. CMake derives the whole
-  dependency graph, so that class is gone — with one exception, and it is the one
-  the port itself tripped over. **`python/manta/_manta<abi>.so` is written into
-  the *source* tree**, because that is where `import manta` has to find it, so it
-  is the one output two build directories can fight over. `build/` and
-  `build-coverage/` both target it, and CMake will consider its own target up to
-  date if the file on disk is newer than its objects — even when the file was put
-  there by the other build. The symptom is a test suite exercising a module you
-  did not build: measured, a Release run reporting a crash that belonged to the
-  instrumented module.
+* **The Python package lives in the build tree, one per build directory.**
+  `_manta` links into `<build>/python/manta/`, and `manta_package` fills the rest
+  of that directory with a symlink to each `.py`/`.pyi` under `python/manta/`
+  (`cmake/MantaStagePackage.cmake`, run on every build, so an added or deleted
+  file is picked up without a reconfigure). `<build>/python` is then a `sys.path`
+  entry, and every Python process a target or test starts gets it through
+  `MANTA_PYTHON_ENV` (`python/CMakeLists.txt`), together with a
+  `PYTHONPYCACHEPREFIX` in the build tree for the modules imported from the
+  source tree — the test files, and pytest's assertion rewrite of them. Links
+  rather than copies, so a `.py` edit reaches the next import without a rebuild,
+  and because Python does not resolve them — a module's `__file__` is the path it
+  was found at — the package's own `__pycache__` lands in the build tree too.
 
-  **Each build directory now claims the module, so this is handled rather than
-  remembered.** `manta_claim_module` (`python/CMakeLists.txt`) is an ordering
-  dependency of `_manta`: before any link it checks the file against
-  `<build>/python/manta_module.stamp`, which a POST_BUILD step wrote describing
-  what this directory last linked, and deletes anything it does not recognise —
-  which is what makes the link happen. `cmake/MantaClaimModule.cmake` is both
-  halves. Building the same directory twice does no extra work; a relink happens
-  only when the module really did belong to someone else.
+  What that buys is that two build directories cannot see each other's
+  extension, which a single shared location cannot promise: CMake calls a target
+  up to date when the file on disk is newer than its objects, whoever wrote it.
+  What it leaves is the one way left to test the wrong module — something ahead
+  of `PYTHONPATH` on `sys.path`, an installed `manta` in a `.pth` say — so
+  `conftest.py` compares `manta.__file__` and `manta._manta.__file__` against
+  `MANTA_PYTHON_ROOT` and exits if either is elsewhere. That check is what lets a
+  coverage run's Python suite be trusted to have measured the instrumented
+  module: the failure it guards is silent, a passing suite and a report that
+  never mentions the binding layer.
 
-  Both directions were measured, and **both were silent**. A coverage run whose
-  Python suite imported the *Release* module: 133s against 748s for the same
-  tests, `PyRunner.cpp.gcda` left at the previous run's timestamp, and the report
-  still read correctly only because gcov data accumulates and an earlier
-  instrumented run had left some behind. And `cmake --build build --target
-  _manta` reporting `Built target _manta` while leaving the 57MB instrumented
-  module exactly where it was — note what that means: **"rebuild it in `build/`"
-  was never a workaround**, because the rebuild is precisely the thing that does
-  not happen. The docs said it for a while; it was wrong.
-
-  On top of that, `cmake/MantaCheckInstrumented.cmake` runs ahead of the suites
-  in the `coverage` target and refuses to start unless the module carries `.gcda`
-  strings. That is deliberate belt and braces: the claim is a mechanism that
-  could quietly stop working, and the thing it protects — a coverage number —
-  looks equally plausible either way.
-
-  Two details worth keeping if you edit any of it. The claim has to hang off
-  `_manta` rather than off the targets that *use* the module; an
-  `add_dependencies` on `coverage` or on a test would be too late twice over,
-  since that dependency is satisfied before the target's own commands run and is
-  satisfied by exactly the stale comparison at fault. And the path cannot be
-  spelled `$<TARGET_FILE:_manta>` — a `TARGET_FILE` genex in a custom command
-  makes that command depend on the target, and this command is a dependency of
-  it, so CMake refuses the cycle by name. It is assembled from
-  `OUTPUT_NAME`/`PREFIX`/`SUFFIX`, with a configure-time check that the suffix
-  still looks like a module suffix, because a mis-assembled path would delete
-  nothing and restore the original silent bug.
+  Two things follow for anything that ships the package. `pip install .` takes
+  the `.py` files from `python/manta/` and copies the extension in from the build
+  directory (`setup.py`); pyproject's package-data deliberately does not list
+  `*.so`, so a stray one in the source tree cannot be shipped instead. And
+  `pip install -e .` has no extension to find — `PYTHONPATH=<build>/python` is
+  the editable form.
 
 * **g++-14 miscompiles this tree at `-O3 -flto -march=native`, and the symptom is
   a wrong number rather than a crash. Do not trust a g++-14 release build.**
@@ -1909,10 +1962,9 @@ formula, not the operator, if the data cannot tell them apart.
   *inputs* — `testic.nc` (`AutodiffTest.cpp`) and `MatrixDiffusion.restart.nc`
   (`SystemSolverTests.cpp:378`) — and the second has no `.ref.` in its name, so
   the keep-pattern would not save it. Check tracked status, not the filename,
-  before adding a directory there. Unit-test output now lands in the **build
-  directory**, because that is where CTest launches the binary — the repo root is
-  still swept, so a tree carrying output from the Makefile era is tidied rather
-  than stranded. `python` is absent for a
+  before adding a directory there. Nothing it sweeps comes from a build or a
+  suite, which write only into the build tree; it is for runs started by hand
+  inside the checkout. `python` is absent for a
   different reason: since the drivers moved out to `python-examples/` and
   `python-physics/`, nothing writes output there. `.h5` and `.pkl` are not in the
   pattern list either — the DESC equilibria under `python-physics/stellarator/`
@@ -1953,12 +2005,12 @@ formula, not the operator, if the data cannot tell them apart.
   pointing somewhere else. `stubs-check` was the worst: regenerating the stub
   needs the import too, so it failed to write one and then reported the committed
   `_manta.pyi` stale, which was a claim about a tracked file that was fine.
-  `cmake/MantaPython.cmake` finds **one** interpreter — preferring `.venv`, or
-  `$VIRTUAL_ENV` — and pybind11 derives the headers and the suffix from it, so the
-  three cannot disagree. Name a different one with `-DPython3_EXECUTABLE=...`;
-  `setup.py` passes `sys.executable` for the same reason, so `pip install .`
-  always builds for the interpreter doing the installing. If an import of `_manta`
-  ever does fail, `ls python/manta/*.so` against
+  `cmake/MantaPython.cmake` finds **one** interpreter — `$VIRTUAL_ENV`, else
+  `build/venv`, else a `.venv` in the repo root — and pybind11 derives the headers
+  and the suffix from it, so the three cannot disagree. Name a different one with
+  `-DPython3_EXECUTABLE=...`; `setup.py` passes `sys.executable` for the same
+  reason, so `pip install .` always builds for the interpreter doing the
+  installing. If an import of `_manta` ever does fail, `ls <build>/python/manta/*.so` against
   `python3 -c 'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX"))'`
   is still the check — but the answer is now a build directory configured for a
   different interpreter, not a silent fallback.

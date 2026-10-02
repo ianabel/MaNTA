@@ -623,12 +623,12 @@ public:
 
   virtual std::string getAdjointNames(Index pIndex) const { return "p" + std::to_string(pIndex); }
 
-  double* getSourceCache(Index var) { 
+  std::optional<std::reference_wrapper<Values>> getSourceCache(Index var) { 
     if (m_sourceCache.size() > 0)
     {
-      return m_sourceCache[var].data(); 
+      return m_sourceCache[var]; 
     } else {
-      return nullptr;
+      return std::nullopt;
     }
   }
 

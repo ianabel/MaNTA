@@ -482,6 +482,25 @@ class SystemSolver
         int steadyResidual(N_Vector u, N_Vector fval);
         void steadyJacSetup(N_Vector u);
 
+        // The merit function the whole steady solve is measured against: the
+        // *undamped* residual at the current Y, so it does not vanish simply by
+        // taking a small enough step the way the damped one KINSOL sees does.
+        // Both the convergence test and the SER ratio read this.
+        //
+        // Weighted, not flat: sqrt(sum_i (w_i F_i)^2) with the weights
+        // residualWeights() builds. A flat 2-norm over this DOF vector is
+        // mesh-dependent, because the cell rows are pairings against the basis
+        // and so carry a mass factor going like h while the row count goes like
+        // 1/h -- measured at exactly sqrt(h) near a solution. steady_state_tol
+        // then means a different thing on every mesh, which is what stands
+        // between this and a driver that remeshes between solves.
+        //
+        // KINSOL is handed the same weights as its f_scale, so its own stopping
+        // test and this one stay the identical quantity rather than decoupling by
+        // whatever the normalisation is worth. See residualWeights().
+        //
+        // Costs one residual evaluation, and counts as one.
+        double steadyResidualNorm();
         void setNOutput(int nO)
         {
             if (nO <= 0)
@@ -609,6 +628,53 @@ class SystemSolver
         void setTime(double tt) { t = tt; };
         void setTau(double tau) { tauc = tau; };
 
+        // How the HDG stabilisation tau is chosen at each face.
+        //
+        //   Constant   tau everywhere, as given (the default).
+        //   Diffusive  one-sided, per variable, per face of each cell I:
+        //                tau_{I,f,v} = tau * ( kappa_v(f) / h_I + floor * max_f' kappa_v(f') / h )
+        //              with kappa_v = |d sigma_hat_v / d q_v| evaluated at the face
+        //              from the trace (u = lambda, or the Dirichlet datum) and the
+        //              cell's own one-sided q, sigma and aux. `tau` is then a
+        //              dimensionless multiplier, and the floor is a fraction of the
+        //              largest kappa/h on the grid, so neither depends on units.
+        //
+        // Diffusive tau is a function of the state, and TauUpdate says when it is
+        // re-evaluated:
+        //
+        //   Residual          at every residual, at that residual's state. The
+        //                     Jacobian carries d tau / dy, finite-differenced per
+        //                     component of the face state -- one batched face
+        //                     derivative call per component per Jacobian build.
+        //                     Omitted: its dependence on the scalars and the field
+        //                     unknowns, and the floor's through the grid maximum.
+        //   ContinuationStep  once per pseudo-transient continuation step, from
+        //                     the state the step starts at, and frozen through its
+        //                     Newton solve; the Jacobian is then exact for the
+        //                     frozen system with no extra terms. Steady solves
+        //                     only: initialize() refuses it for a time march,
+        //                     which would freeze tau at the initial condition.
+        //   JacobianBuild     as ContinuationStep, and also at every Jacobian
+        //                     build, from the state it is built at: tau is fixed
+        //                     across the Newton iterations that share a Jacobian
+        //                     (NewtonJacobianReuse of them) and no longer. The
+        //                     residual KINSOL evaluated just before a rebuild used
+        //                     the previous tau, so that one step is lagged.
+        //
+        // The adjoint is refused either way (applySolverConfig): tau's dependence
+        // on the state is not in it, and the gradient would be silently wrong.
+        enum class TauScaling { Constant, Diffusive };
+        enum class TauUpdate { Residual, ContinuationStep, JacobianBuild };
+        void setTauScaling(TauScaling mode, double floorFraction,
+                           TauUpdate update = TauUpdate::Residual)
+        {
+            tauScaling = mode;
+            tauFloorFraction = floorFraction;
+            tauUpdate = update;
+        }
+        TauScaling getTauScaling() const { return tauScaling; }
+        TauUpdate getTauUpdate() const { return tauUpdate; }
+
         void setInputFile(std::string const &fn) { inputFilePath = fn; };
 
         void setZeroFlux(bool in) { zeroFlux = in; };
@@ -670,6 +736,23 @@ class SystemSolver
         // keyed on (order, grid).
         std::vector<double> stateVector() const;
         std::vector<double> derivativeVector() const;
+
+        // The run's answer as a structured view, for anything that needs to read
+        // the solution *by field and cell* rather than as a flat vector -- the
+        // smoothness sensor, chiefly.
+        //
+        // This is yJac and not y, deliberately. `y` maps the N_Vector that
+        // initialize() allocates and destroySundials() frees, so it dangles the
+        // moment a run finishes; yJac owns its own memory (yJacMem) and is what
+        // outlives the solve. initialize() seeds it with the initial condition, so
+        // it is also valid *before* integrate().
+        //
+        // Two things not to do with it. Do not bind `getBasis()` to a reference
+        // that outlives this solver: DGSolnImpl holds its basis by value, so that
+        // reference points into the returned object rather than into a shared
+        // singleton. And do not keep the reference across a rebuild -- anything
+        // that destroys this solver invalidates it.
+        DGSoln const &solution() const { return yJac; };
 
         // Gates the netCDF output and the restart file -- <stem>.nc and
         // <stem>.restart.nc. The .dat flags below are deliberately *not* nested
@@ -987,6 +1070,12 @@ class SystemSolver
         std::vector<Matrix> CG_cellwise;
         std::vector<Matrix> A_cellwise, B_cellwise, D_cellwise, E_cellwise, C_cellwise, G_cellwise, H_cellwise, Csigma_cellwise, Cq_cellwise;
 
+        // H as the Jacobian's trace solve sees it. The same matrix as H_cellwise
+        // under a constant tau; under a Diffusive one the residual and the
+        // Jacobian each carry tau at their own state, and H is the one
+        // tau-dependent block both of them read directly, so it is split.
+        std::vector<Matrix> H_jac_cellwise;
+
         // Adjoint vectors
         std::vector<Matrix> adjoint_CEBlocks;
         std::vector<Matrix> adjoint_CGBlocks;
@@ -1103,7 +1192,20 @@ class SystemSolver
         SUNLinearSolver kinLS = nullptr;
         N_Vector uPrev = nullptr;    // previous PTC iterate
         N_Vector ptcDYdt = nullptr;  // id * (u - uPrev)/dt, the damping term
-        N_Vector kinScale = nullptr; // unit scaling; KINSol requires a vector
+        N_Vector kinScale = nullptr; // unit scaling on u; KINSol requires a vector
+        N_Vector resScale = nullptr; // residual weights, from residualWeights()
+        N_Vector fScaleScratch = nullptr; // resScale * error weights, for NewtonScaling::ErrorWeights
+
+        // Clones the five above on first use, and fills resScale. Called by both
+        // solveSteadyState and steadyResidualNorm, since either may be the first
+        // to need them.
+        void allocateSteadyScratch();
+
+        // Fill resScale with 1/sqrt(h) on every row that is a pairing against the
+        // basis -- sigma, q, u and aux, at their own cell's width -- and 1 on the
+        // rows that are not: lambda, which is a flux condition at a face, and the
+        // global scalars. Depends on the grid alone, so it is filled once.
+        void residualWeights();
         SteadyMode steadyMode = SteadyMode::TimeMarch;
         double ptcInitialStep = 0.0; // 0 means "use dt0"
         // How many KINSol calls before giving up. Each is a full Newton solve,
@@ -1135,7 +1237,7 @@ class SystemSolver
         // KINSOL's own settings. Every default here is what the code hardcoded
         // before they were configurable, so an unconfigured run is unchanged.
         long newtonMaxIters = 20;    // KINSOL's default is 200; see the setter
-        long newtonJacReuse = 10;    // KINSOL's msbset default
+        long newtonJacReuse = 1;     // full Newton; KINSOL's own msbset default is 10
         double newtonStepTol = 0.0;  // 0 = leave KINSOL's uround^(2/3)
         NewtonScaling newtonScaling = NewtonScaling::Unit;
 
@@ -1612,9 +1714,78 @@ class SystemSolver
 
         AdjointProblem *adjointProblem = nullptr;
 
-        // Tau
+        // Tau. tauc is the configured value; tauRes and tauJac are the per-face
+        // values the residual and the Jacobian are using, (nVars x 2 nCells) with
+        // column 2i the lower face of cell i and 2i + 1 its upper face. Under a
+        // Constant scaling both are tauc throughout and never change.
         double tauc;
-        double tau(double x) const { return tauc; };
+        TauScaling tauScaling = TauScaling::Constant;
+        TauUpdate tauUpdate = TauUpdate::Residual;
+        double tauFloorFraction = 1e-3;
+        Matrix tauRes, tauJac;
+
+        // Whether tau is re-evaluated inside residual() and the Jacobian build,
+        // as opposed to being set from outside -- by the continuation loop, under
+        // TauUpdate::ContinuationStep.
+        bool tauFollowsResidual() const
+        {
+            return tauScaling == TauScaling::Diffusive && tauUpdate == TauUpdate::Residual;
+        }
+        // Set by the continuation loop at each step and before each convergence
+        // test: both of the modes that hold tau fixed through residuals.
+        bool tauFrozenPerStep() const
+        {
+            return tauScaling == TauScaling::Diffusive && tauUpdate != TauUpdate::Residual;
+        }
+        bool tauRefreshedPerJacobian() const
+        {
+            return tauScaling == TauScaling::Diffusive && tauUpdate == TauUpdate::JacobianBuild;
+        }
+
+        // The state on each of the 2 nCells faces as its cell sees it; see
+        // faceTau.
+        struct FaceStates
+        {
+            GlobalState states;
+            std::vector<Position> points;
+        };
+        FaceStates faceStates(DGSoln const &Y, Time tEval);
+        // |d sigma_hat_v / d q_v| / h_I on each face, (nVars x 2 nCells): one
+        // batched ComputePhysicsDerivatives on the face points.
+        Matrix faceKappaOverH(FaceStates const &faces, Time tEval);
+        // tau from kappa/h: tauc * (kh + floor * max kh), per variable.
+        Matrix tauFromKappa(Matrix const &kh) const;
+
+        // tau on every face at the state Y: the constant, or the Diffusive
+        // formula above.
+        Matrix faceTau(DGSoln const &Y, Time tEval);
+
+        // What the Jacobian needs for d tau / dy. tau enters the residual only as
+        // tau_f (u_face - lambda_f), in the u rows and the trace rows, so its
+        // derivative contributes jump_f * d tau_f / d s_c for each component c of
+        // the face state s: the u of each variable (reached through lambda), and
+        // the q, sigma and aux values (reached through the cell's coefficients).
+        struct TauJacobian
+        {
+            Matrix jump;              // (nVars x 2 nCells): u_face - lambda (or g_D)
+            std::vector<Matrix> dTau; // per component, (nVars x 2 nCells)
+        };
+        TauJacobian faceTauJacobian(DGSoln const &Y, FaceStates const &faces,
+                                    Matrix const &kh, Time tEval);
+
+        // Set both copies of tau from Y, for a frozen tau.
+        void freezeTauAt(DGSoln const &Y, Time tEval);
+
+        // Write tau into every block that carries it. The residual's set is
+        // D, E, G and H_cellwise, plus the tau g_D Dirichlet term that
+        // updateBoundaryConditions puts in RF_cellwise from tauRes; the
+        // Jacobian's is the D, E and G parts of MBlocks, CEBlocks and
+        // CG_cellwise, and H_jac_cellwise. initialiseMatrices builds all of them
+        // through these two, so there is one place the tau terms are assembled.
+        void applyResidualTau(Matrix const &tau);
+        void applyJacobianTau(Matrix const &tau, TauJacobian const *dTau = nullptr);
+        void assembleTauBlocks(Index i, Matrix const &tau, Matrix &D, Matrix &E,
+                               Matrix &G, Matrix &H) const;
 
         double rtol;
         std::vector<double> atol;

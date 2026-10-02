@@ -285,8 +285,14 @@ ones:
      - ``BLA_VENDOR`` for ``FindBLAS``. ``Generic`` (the default) is a plain
        ``-lblas``; ``Any`` lets CMake choose.
    * - ``MANTA_VENV`` / ``MANTA_VENV_PYTHON``
-     - Where the ``venv`` target builds its environment, and with which
-       interpreter.
+     - Where the ``venv`` target builds its environment (``build/venv`` by
+       default), and with which interpreter.
+   * - ``MANTA_INSTALL_PYTHONDIR``
+     - Where ``install`` puts the Python package, relative to the prefix.
+       Defaults to the interpreter's own layout, ``lib/python3.X/site-packages``.
+   * - ``MANTA_DOCS_SOURCE_COPY``
+     - Where ``install`` also copies the built HTML; ``docs/_build/html`` in the
+       checkout by default, empty for nowhere.
 
 .. warning::
 
@@ -339,7 +345,8 @@ Built with ``cmake --build build --target <name>``.
    * - *(none)*
      - The solver, ``libmanta.so``, the Python module and the unit tests.
    * - ``_manta``
-     - The pybind11 extension, ``python/manta/_manta<suffix>.so``.
+     - The pybind11 extension, into the build's package directory,
+       ``build/python/manta/``. See :ref:`build-tree-package`.
    * - ``UnitTests``
      - The Boost.Test binary, at ``build/Tests/UnitTests/UnitTests``.
    * - ``manta``
@@ -347,26 +354,32 @@ Built with ``cmake --build build --target <name>``.
    * - ``unit_tests`` / ``regression_tests`` / ``python_tests``
      - Run one suite. ``ctest --test-dir build`` runs all three.
    * - ``stubs`` / ``stubs-check`` / ``typecheck``
-     - Regenerate ``_manta.pyi``, fail if the committed one is stale, and run
-       mypy over the package.
+     - Generate ``_manta.pyi`` into ``build/stubs/``, fail if the committed one
+       differs from it, and run mypy over the package.
+   * - ``stubs-update``
+     - Copy the generated stub over ``python/manta/_manta.pyi``.
    * - ``docs``
-     - Sphinx, into ``docs/_build/html``.
+     - Sphinx, into ``build/docs/html``.
    * - ``coverage``
      - Runs all three suites instrumented and writes the gcovr reports. Only
        does anything in a ``Coverage`` build directory.
    * - ``venv``
-     - Creates ``.venv`` and installs the Python dependencies into it. See below.
+     - Creates ``build/venv`` and installs the Python dependencies into it. See
+       below.
    * - ``install`` / ``uninstall``
-     - Headers, ``libmanta.so`` and ``manta.pc`` under a prefix.
+     - Everything, under a prefix. See :ref:`installing`.
    * - ``clean_data``
      - Just the run output: ``.nc``, ``.restart.nc`` and ``.dat`` at the repo
        root and in ``Tests/RegressionTests``, ``python/Tests`` and each
        directory under ``python-examples`` and ``python-physics``.
    * - ``clean_coverage``
-     - Instrumentation data and the reports, in both the build and source trees.
+     - Instrumentation data and the reports.
 
 There is no ``clean`` target to describe, and that is the point of an
-out-of-source build: ``rm -rf build`` is the whole of it.
+out-of-source build: **a build writes nothing outside its build directory**, so
+``rm -rf build`` is the whole of it. The suites run from there as well. Two
+targets write into the checkout, and both exist to: ``stubs-update``, whose job
+is to change a tracked file, and ``install``'s copy of the docs.
 
 .. warning::
 
@@ -382,9 +395,8 @@ out-of-source build: ``rm -rf build`` is the whole of it.
    in mind before adding a directory to the list in
    ``cmake/MantaCleanData.cmake``.
 
-   The repo root is still swept even though the unit tests now run from the build
-   directory, so a tree carrying output from the Makefile era is tidied rather
-   than stranded.
+   None of what it sweeps comes from a build or a suite; it is the output of runs
+   started by hand from inside the checkout.
 
 Python dependencies
 -------------------
@@ -396,15 +408,14 @@ virtualenv, and the ``venv`` target builds one:
 .. code-block:: sh
 
    cmake --build build --target venv
-   cmake -B build -DPython3_EXECUTABLE="$PWD/.venv/bin/python"
+   cmake -B build -DPython3_EXECUTABLE="$PWD/build/venv/bin/python"
 
 It installs ``requirements.txt`` plus ``gcovr``, so ``coverage`` works too.
 
 There is no need to put it on ``PATH``. CMake records which interpreter to use
-and runs the regression driver and pytest with that one, where the Makefile
-relied on ``PATH`` and the regression driver's ``env python3`` shebang. A
-``.venv`` in the repository root is picked up automatically on a fresh configure,
-so the second line above is only needed if you configured before creating it.
+and runs the regression driver and pytest with that one. A fresh configure picks
+up ``build/venv``, or failing that a ``.venv`` of your own in the repository
+root, without being told.
 
 .. list-table::
    :header-rows: 1
@@ -449,4 +460,86 @@ so the second line above is only needed if you configured before creating it.
    every tool command from it, so the three cannot disagree. If you want a
    different one, name it once with ``-DPython3_EXECUTABLE``.
 
-All three suites can be run from any working directory.
+.. _build-tree-package:
+
+The Python package in the build tree
+------------------------------------
+
+The ``manta`` package is assembled in the build directory, at
+``build/python/manta/``: the extension that build linked, beside a symlink to
+each file of ``python/manta/``. ``build/python`` is therefore a ``sys.path``
+entry, and every suite, ``stubs``, ``typecheck`` and anything you run by hand
+against the build use it the same way:
+
+.. code-block:: sh
+
+   export PYTHONPATH=$PWD/build/python
+   python -c 'import manta; print(manta._manta.__file__)'
+
+Because the Python files are links, an edit to one is seen by the next import
+without a rebuild, so this is also the editable form of the package;
+``pip install -e .`` is not supported. Each build directory has a package of its
+own, so a Release and a Coverage build never see each other's extension.
+
+The suites run from the build tree too. CTest starts each one in the build
+directory's copy of its source directory — ``build/Tests/RegressionTests``,
+``build/python/Tests``, ``build/Tests/UnitTests`` — which is where their output
+lands; configs, references and fixtures are read from the source tree. The
+Python suite keeps pytest's cache, its temporary directories and the bytecode of
+the test files there as well, and refuses to start if ``manta`` resolves anywhere
+but the build under test.
+
+.. _installing:
+
+Installing
+----------
+
+.. code-block:: sh
+
+   cmake --install build --prefix /opt/manta              # default /usr/local
+   DESTDIR=/tmp/stage cmake --install build --prefix /usr   # staged, for packaging
+   cmake --install build --component python               # one part only
+
+.. list-table::
+   :header-rows: 1
+   :widths: 45 20 35
+
+   * - Under the prefix
+     - Component
+     - What
+   * - ``bin/MaNTA``
+     - ``runtime``
+     - The solver.
+   * - ``lib/libmanta.so``
+     - ``runtime``
+     - The solver as a library, for embedding.
+   * - ``include/manta/``, ``lib/pkgconfig/manta.pc``
+     - ``devel``
+     - What an out-of-tree physics case builds against; see
+       :doc:`out_of_tree`.
+   * - ``lib/python3.X/site-packages/manta/``
+     - ``python``
+     - The package, extension included.
+   * - ``bin/manta``
+     - ``python``
+     - The console script. It finds the package relative to itself, so it needs
+       nothing on ``PYTHONPATH``.
+   * - ``share/doc/MaNTA/html/``
+     - ``docs``
+     - The HTML, if the ``docs`` target has been built.
+
+The directories are CMake's ``GNUInstallDirs`` ones, so ``lib`` is ``lib64``
+where the platform says so. The package directory follows the interpreter the
+build was configured for rather than ``GNUInstallDirs``, because that is where
+the interpreter will look. A distribution Python may look elsewhere — Debian's
+reads ``/usr/local/lib/python3/dist-packages`` — so set
+``-DMANTA_INSTALL_PYTHONDIR`` for one of those, or install the package with
+``pip install .`` instead.
+
+The ``docs`` component also copies the HTML into the checkout, at
+``docs/_build/html`` (``MANTA_DOCS_SOURCE_COPY``). That copy is skipped under
+``DESTDIR`` and is not removed by ``uninstall``.
+
+The installed binaries keep the paths to libraries found outside the system
+directories — a SUNDIALS under a prefix of its own, typically — so they run
+without ``LD_LIBRARY_PATH``.

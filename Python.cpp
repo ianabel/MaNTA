@@ -432,8 +432,12 @@ PYBIND11_MODULE(_manta, m) {
 
   py::class_<Grid>(m, "Grid")
       .def(py::init<>(), py::return_value_policy::reference)
-      .def(py::init<Grid::Position, Grid::Position, Grid::Index, bool, double,
-                    double>(),
+      .def(py::init<Grid::Position, Grid::Position, Grid::Index>(),
+           py::return_value_policy::reference)
+      // Explicit boundaries, which is how a Python caller reaches a non-uniform
+      // mesh now that the `highGridBoundary` flag on the constructor above is
+      // gone. Configure a Runner with GridPoints for the same thing from a dict.
+      .def(py::init<std::vector<Grid::Position> const &>(),
            py::return_value_policy::reference)
       .def("getNCells", &Grid::getNCells);
 
@@ -578,6 +582,7 @@ PYBIND11_MODULE(_manta, m) {
       .def("getSolution", &PyRunner::getSolution)
       .def("getDerivative", &PyRunner::getDerivative)
       .def("getPostprocessedSolution", &PyRunner::getPostprocessedSolution)
+      .def("getCellBoundaries", &PyRunner::getCellBoundaries)
       .def("get_address", [](const PyRunner &runner) // needed for xla interface
            { return reinterpret_cast<std::uint64_t>(&runner); });
 #ifdef XLA_FFI

@@ -227,10 +227,10 @@ def aux_adjoint_config(tmp_path, **overrides):
         # k = 4: u is a quadratic and 0.5 u^2 a quartic, so both the solution
         # and the objective's quadrature are exact and the closed form is a
         # reference rather than an approximation.
-        "Polynomial_degree": 4,
-        "Grid_size": 6,
-        "Lower_boundary": 0.0,
-        "Upper_boundary": 1.0,
+        "PolynomialDegree": 4,
+        "GridSize": 6,
+        "LowerBoundary": 0.0,
+        "UpperBoundary": 1.0,
         "delta_t": 0.5,
         "Relative_tolerance": 1e-8,
         "Absolute_tolerance": [1e-10],
@@ -750,7 +750,7 @@ def spatial_aux_solve(source_nodes, tmp_path):
     runner = MaNTA.Runner(system)
     runner.configure(
         aux_adjoint_config(
-            tmp_path, Polynomial_degree=SPATIAL_K, Grid_size=SPATIAL_NCELLS
+            tmp_path, PolynomialDegree=SPATIAL_K, GridSize=SPATIAL_NCELLS
         )
     )
     runner.run(T_FINAL)

@@ -1,12 +1,38 @@
-# The `manta` package: a pybind11 extension, python/manta/_manta<abi>.so, plus
-# the parts of the package better written in Python.
+# The `manta` package, assembled in the build tree.
 #
-# The module is built into the SOURCE tree, at python/manta/, rather than into
-# the build directory. That is deliberate and is what the rest of the Python side
-# already assumes: python/Tests/conftest.py puts python/ on sys.path and imports
-# `manta`, pyproject.toml's package-data ships _manta*.so out of that directory,
-# and `pip install .` expects to find it there. Moving it would mean teaching all
-# three about a build directory whose location is the user's choice.
+#   ${MANTA_PYTHON_ROOT}/manta/          what `import manta` finds
+#     __init__.py, cli.py, jax/, ...     symlinks to python/manta/ in the source
+#     _manta<abi>.so                     linked here by this directory
+#
+# MANTA_PYTHON_ROOT is a sys.path entry: the suites, stubgen and mypy are run
+# with PYTHONPATH pointing at it, and so is anything run by hand against this
+# build. Every build directory therefore has a package of its own, and none of
+# them writes into the source tree.
+#
+# Symlinks rather than copies, so an edit to a .py file is seen by the next
+# ctest without a rebuild. Python does not resolve them -- a module's __file__
+# is the path it was found at -- so __pycache__ lands here too. The links are
+# refreshed by manta_package on every build; that is what picks up a file added
+# to or removed from python/manta/ without a reconfigure.
+set(MANTA_PYTHON_ROOT "${PROJECT_BINARY_DIR}/python")
+set(MANTA_PACKAGE_DIR "${MANTA_PYTHON_ROOT}/manta")
+
+add_custom_target(manta_package ALL
+  COMMAND ${CMAKE_COMMAND}
+          -DSOURCE=${PROJECT_SOURCE_DIR}/python/manta
+          -DDEST=${MANTA_PACKAGE_DIR}
+          -P "${PROJECT_SOURCE_DIR}/cmake/MantaStagePackage.cmake"
+  COMMENT "Linking python/manta/ into ${MANTA_PACKAGE_DIR}"
+  VERBATIM)
+
+# Every Python process a target or a test starts against this build gets these:
+# the package, and a bytecode cache in the build tree. PYTHONPYCACHEPREFIX is for
+# the modules imported from the *source* tree -- the test files themselves, and
+# pytest's assertion rewrite of them -- which would otherwise leave __pycache__
+# beside the sources.
+set(MANTA_PYTHON_ENV
+    "PYTHONPATH=${MANTA_PYTHON_ROOT}"
+    "PYTHONPYCACHEPREFIX=${PROJECT_BINARY_DIR}/pycache")
 
 # NO_EXTRAS, and it is not "skip the useful parts". pybind11_add_module sets
 # hidden visibility and the SOABI-correct output name *before* it consults that
@@ -28,101 +54,17 @@ pybind11_add_module(_manta NO_EXTRAS
 target_link_libraries(_manta PRIVATE manta::flags manta::deps)
 target_include_directories(_manta PRIVATE "${PROJECT_SOURCE_DIR}")
 
-set(MANTA_PACKAGE_DIR "${PROJECT_SOURCE_DIR}/python/manta")
 set_target_properties(_manta PROPERTIES
-  LIBRARY_OUTPUT_DIRECTORY "${MANTA_PACKAGE_DIR}")
+  LIBRARY_OUTPUT_DIRECTORY "${MANTA_PACKAGE_DIR}"
+  INSTALL_RPATH_USE_LINK_PATH ON)
 # Multi-config generators append the configuration name to the output directory
-# unless told otherwise, which would put the module somewhere `import manta`
-# cannot see it.
+# unless told otherwise, which would put the module outside the package.
 foreach(_cfg ${CMAKE_CONFIGURATION_TYPES})
   string(TOUPPER "${_cfg}" _CFG)
   set_target_properties(_manta PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY_${_CFG} "${MANTA_PACKAGE_DIR}")
 endforeach()
-
-# Keep this build directory's own module in place at python/manta/.
-#
-# The block above is why there is a problem to solve: every build directory
-# writes the extension to the same path in the *source* tree, because that is
-# where `import manta` has to find it. CMake then calls its own `_manta` up to
-# date whenever the file on disk is newer than that target's objects, and it has
-# no way to ask which build wrote the file -- so a directory happily runs its
-# suites against another directory's module.
-#
-# Both directions were measured on this tree, and both are silent:
-#
-#   * a coverage run whose Python suite imported the *Release* module -- 133s
-#     against 748s for the same tests, PyRunner.cpp.gcda left at the previous
-#     run's timestamp. The report was not visibly wrong only because gcov data
-#     accumulates; from a clean tree the binding layer would have read as
-#     unexercised with nothing saying why.
-#   * `cmake --build build --target _manta` reporting "Built target _manta" and
-#     leaving the 57MB instrumented module exactly where it was. Note what that
-#     means: "rebuild it in build/" is not a workaround, because the rebuild is
-#     the thing that does not happen.
-#
-# So the module is claimed. Each directory records what it linked, and checks
-# that claim before linking again; a module it does not recognise is deleted,
-# which is what makes the link run. See cmake/MantaClaimModule.cmake.
-#
-# The claim has to be an ordering dependency of `_manta` rather than of anything
-# that *uses* the module. add_dependencies on the test or coverage targets would
-# be too late twice over: the dependency is satisfied before those targets' own
-# commands run, and it is satisfied by exactly the stale comparison at fault.
-# Hanging it on `_manta` also covers `ctest --test-dir build-coverage` run
-# straight after a build, rather than only the target that happens to think of it.
-#
-# Cost is one file stat per build, and a relink only when the module really did
-# belong to someone else -- so the common case, building the same directory
-# twice, does no extra work.
-#
-# The path is assembled from the target's properties rather than written
-# $<TARGET_FILE:_manta>: a TARGET_FILE generator expression in a custom command
-# makes that command depend on the target, and this command is a dependency *of*
-# it, so the genex spelling is a dependency cycle CMake refuses to generate.
-
-# get_target_property yields <VAR>-NOTFOUND for a property that was never set,
-# which is false to if() -- so each falls back to what CMake would have used.
-get_target_property(_manta_name   _manta OUTPUT_NAME)
-get_target_property(_manta_prefix _manta PREFIX)
-get_target_property(_manta_suffix _manta SUFFIX)
-if(NOT _manta_name)
-  set(_manta_name "_manta")
-endif()
-if(NOT _manta_prefix)
-  set(_manta_prefix "")
-endif()
-if(NOT _manta_suffix)
-  set(_manta_suffix "${CMAKE_SHARED_MODULE_SUFFIX}")
-endif()
-set(MANTA_MODULE_FILE
-    "${MANTA_PACKAGE_DIR}/${_manta_prefix}${_manta_name}${_manta_suffix}")
-
-set(MANTA_MODULE_STAMP "${CMAKE_CURRENT_BINARY_DIR}/manta_module.stamp")
-set(MANTA_CLAIM_ARGS
-    -DMODULE=${MANTA_MODULE_FILE}
-    -DSTAMP=${MANTA_MODULE_STAMP}
-    -P "${PROJECT_SOURCE_DIR}/cmake/MantaClaimModule.cmake")
-
-add_custom_target(manta_claim_module
-  COMMAND ${CMAKE_COMMAND} ${MANTA_CLAIM_ARGS}
-  COMMENT "Checking python/manta/ holds this build directory's extension"
-  VERBATIM)
-add_dependencies(_manta manta_claim_module)
-
-# EXPECT is what makes the hand-assembled path safe to rely on. A POST_BUILD
-# command belongs to its own target, so $<TARGET_FILE:_manta> is available here
-# where it was a cycle above -- and comparing the two is exact, where a check on
-# the shape of the suffix would not be: if pybind11 ever moved the ABI tag from
-# SUFFIX into OUTPUT_NAME, `.so` would still look like a perfectly good suffix
-# while MANTA_MODULE_FILE named a file that does not exist. The claim would then
-# delete nothing, the module would go stale again, and the only symptom would be
-# the numbers this whole block exists to keep honest. So the first link after any
-# such change fails, loudly, instead.
-add_custom_command(TARGET _manta POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -DRECORD=ON -DEXPECT=$<TARGET_FILE:_manta>
-          ${MANTA_CLAIM_ARGS}
-  VERBATIM)
+add_dependencies(_manta manta_package)
 
 # ---------------------------------------------------------------- XLA FFI --
 #
@@ -168,19 +110,27 @@ endif()
 # signature as fact. The enum-class-locations flag tells stubgen where
 # BoundaryKind lives, which it cannot infer from a repr.
 #
+#   stubs         generate into ${MANTA_STUB_DIR}, in the build tree
+#   stubs-check   fail unless that matches the committed stub (CI runs this)
+#   stubs-update  copy it over the committed stub -- the one target here that
+#                 writes into the source tree, because its whole job is to
+#                 change a tracked file
+#
 # python/manta/__init__.pyi is the other half and IS hand-written; it covers the
 # Python layer, chiefly the hook signatures a case implements. Nothing here
 # touches it.
-set(MANTA_STUB "${MANTA_PACKAGE_DIR}/_manta.pyi")
-set(MANTA_STUBGEN_ARGS -m pybind11_stubgen manta._manta
-                       --enum-class-locations "BoundaryKind:manta._manta")
+set(MANTA_STUB_DIR "${PROJECT_BINARY_DIR}/stubs")
+set(MANTA_STUB_SOURCE "${PROJECT_SOURCE_DIR}/python/manta/_manta.pyi")
+set(MANTA_STUB_GENERATED "${MANTA_STUB_DIR}/manta/_manta.pyi")
 
 add_custom_target(stubs
-  COMMAND ${CMAKE_COMMAND} -E env "PYTHONPATH=${PROJECT_SOURCE_DIR}/python"
-          "${Python3_EXECUTABLE}" ${MANTA_STUBGEN_ARGS} -o "${PROJECT_SOURCE_DIR}/python"
-  COMMAND ${CMAKE_COMMAND} -E echo "Regenerated ${MANTA_STUB}"
-  WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-  COMMENT "Regenerating ${MANTA_STUB} from the built extension"
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "${MANTA_STUB_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E env ${MANTA_PYTHON_ENV}
+          "${Python3_EXECUTABLE}" -m pybind11_stubgen manta._manta
+          --enum-class-locations "BoundaryKind:manta._manta"
+          -o "${MANTA_STUB_DIR}"
+  WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+  COMMENT "Generating ${MANTA_STUB_GENERATED} from the built extension"
   VERBATIM)
 # add_dependencies, not add_custom_target's DEPENDS: that keyword takes *files*
 # and the outputs of add_custom_command, and a target name there is honoured by
@@ -189,21 +139,74 @@ add_dependencies(stubs _manta)
 
 add_custom_target(stubs-check
   COMMAND ${CMAKE_COMMAND}
-          -DPYTHON=${Python3_EXECUTABLE}
-          -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
-          -DSTUB=${MANTA_STUB}
+          -DCOMMITTED=${MANTA_STUB_SOURCE}
+          -DGENERATED=${MANTA_STUB_GENERATED}
           -P "${PROJECT_SOURCE_DIR}/cmake/MantaStubsCheck.cmake"
-  COMMENT "Checking ${MANTA_STUB} against a fresh generation"
+  COMMENT "Checking ${MANTA_STUB_SOURCE} against a fresh generation"
   VERBATIM)
-add_dependencies(stubs-check _manta)
+add_dependencies(stubs-check stubs)
 
-# check_untyped_defs is what makes any of this bite: a physics case is
-# unannotated Python, and mypy skips unannotated defs without it. mypy.ini has it.
+add_custom_target(stubs-update
+  COMMAND ${CMAKE_COMMAND} -E copy "${MANTA_STUB_GENERATED}" "${MANTA_STUB_SOURCE}"
+  COMMAND ${CMAKE_COMMAND} -E echo "Updated ${MANTA_STUB_SOURCE}"
+  VERBATIM)
+add_dependencies(stubs-update stubs)
+
+# Over the package as this build assembled it, with the committed stub -- which
+# is what ships and what stubs-check holds to the extension. check_untyped_defs
+# is what makes any of this bite: a physics case is unannotated Python, and mypy
+# skips unannotated defs without it. mypy.ini has it; the paths here override its
+# `files` and `mypy_path`, which name the source tree for an editor's benefit.
 add_custom_target(typecheck
-  COMMAND "${Python3_EXECUTABLE}" -m mypy --config-file mypy.ini python/manta
-  WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E env ${MANTA_PYTHON_ENV} "MYPYPATH=${MANTA_PYTHON_ROOT}"
+          "${Python3_EXECUTABLE}" -m mypy
+          --config-file "${PROJECT_SOURCE_DIR}/mypy.ini"
+          --cache-dir "${PROJECT_BINARY_DIR}/mypy_cache"
+          -p manta
+  WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
   COMMENT "mypy over the manta package"
   VERBATIM)
-add_dependencies(typecheck stubs)
+add_dependencies(typecheck manta_package)
+
+# ---------------------------------------------------------------- install --
+#
+# The package goes to MANTA_INSTALL_PYTHONDIR under the prefix, from the source
+# tree rather than from the links above, so what is installed is files.
+#
+# The default is the layout CPython itself uses for a prefix, platlibdir and
+# all -- lib64 on Fedora, lib elsewhere -- which is what a venv, a pyenv or a
+# source-built interpreter searches. Debian's system python3 searches
+# /usr/local/lib/python3/dist-packages instead, and a prefix that is a venv
+# wants that venv's site-packages: name either with -DMANTA_INSTALL_PYTHONDIR.
+# `pip install .` remains the other route, and knows where its interpreter looks.
+execute_process(
+  COMMAND "${Python3_EXECUTABLE}" -c
+          "import sys; print(f'{sys.platlibdir}/python{sys.version_info[0]}.{sys.version_info[1]}/site-packages')"
+  OUTPUT_VARIABLE _manta_pydir OUTPUT_STRIP_TRAILING_WHITESPACE)
+set(MANTA_INSTALL_PYTHONDIR "${_manta_pydir}" CACHE STRING
+    "Where the manta package is installed, relative to CMAKE_INSTALL_PREFIX")
+
+install(DIRECTORY "${PROJECT_SOURCE_DIR}/python/manta/"
+        DESTINATION "${MANTA_INSTALL_PYTHONDIR}/manta"
+        COMPONENT python
+        FILES_MATCHING
+          PATTERN "*.py" PATTERN "*.pyi" PATTERN "py.typed"
+          PATTERN "__pycache__" EXCLUDE)
+install(TARGETS _manta
+        LIBRARY DESTINATION "${MANTA_INSTALL_PYTHONDIR}/manta"
+        COMPONENT python)
+
+# The `manta` console script, which pip would otherwise write from pyproject's
+# [project.scripts]. It finds the package relative to itself, so it works under
+# any prefix and needs nothing on PYTHONPATH -- including after a DESTDIR install
+# is moved into place.
+file(RELATIVE_PATH _manta_bin_to_py
+     "/prefix/${CMAKE_INSTALL_BINDIR}" "/prefix/${MANTA_INSTALL_PYTHONDIR}")
+configure_file("${PROJECT_SOURCE_DIR}/cmake/manta-cli.in"
+               "${CMAKE_CURRENT_BINARY_DIR}/manta-cli" @ONLY)
+install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/manta-cli"
+        DESTINATION "${CMAKE_INSTALL_BINDIR}"
+        RENAME manta
+        COMPONENT python)
 
 add_subdirectory(Tests)

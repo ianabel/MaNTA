@@ -90,7 +90,7 @@ Degrees of freedom
 ------------------
 
 Space is divided into cells. On each cell every field is a polynomial of degree
-``Polynomial_degree`` = :math:`k`, expanded in a nodal (Chebyshev-node) basis of
+``PolynomialDegree`` = :math:`k`, expanded in a nodal (Chebyshev-node) basis of
 :math:`k+1` functions. The HDG method adds a *trace* unknown :math:`\lambda`
 living on the cell faces, one value per face per variable, which is what couples
 the cells to one another.
@@ -155,8 +155,123 @@ system is the one for :math:`\lambda`, whose size is (number of faces) ×
    :math:`J \, \delta y = g`, and the ones that measure observed order of
    accuracy. See :doc:`testing`.
 
-The stabilisation parameter :math:`\tau` (config key ``tau``) is a constant.
-Larger values weight the jump penalty between cells more strongly.
+.. _tau-scaling:
+
+The stabilisation parameter
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The numerical flux on a face is :math:`\hat\sigma = \sigma_h + \tau (u_h - \lambda)`,
+and local conservation makes :math:`\hat\sigma` the accurate flux whatever
+:math:`\tau` is. What :math:`\tau` decides is how a mismatch between :math:`u_h`
+and the trace is shared out. At a Dirichlet end, where :math:`\lambda` is the
+datum :math:`u_b`,
+
+.. math::
+
+   \sigma_h - \sigma = -\tau \, (u_h - u_b) + (\hat\sigma - \sigma),
+
+and the last term is small. So where a boundary layer is unresolved, a
+:math:`\tau` much larger than :math:`\kappa/h` pins :math:`u_h` to the wall value
+and pushes :math:`\tau` times the leftover jump into :math:`\sigma_h`, where it
+shows as an oscillation across the last cell; a :math:`\tau` much smaller leaves
+:math:`\sigma_h` accurate and the jump in :math:`u_h`. Neither makes
+:math:`u_h` right, which only resolution does. And too small a :math:`\tau`
+where :math:`\kappa/h` is large degrades the interior instead.
+
+``tauScaling`` chooses between two forms.
+
+``"Constant"`` (the default)
+   :math:`\tau` = ``tau`` on every face, in the units of :math:`\kappa/h`.
+
+``"Diffusive"``
+   One-sided, per variable, on each face :math:`f` of each cell :math:`I`,
+
+   .. math::
+
+      \tau_{I,f} = \texttt{tau} \left( \frac{\kappa(f)}{h_I}
+          + \texttt{tauFloor} \max_{f'} \frac{\kappa(f')}{h_{I'}} \right),
+      \qquad \kappa = \left| \frac{\partial \hat\sigma}{\partial q} \right|,
+
+   with :math:`\kappa` evaluated at the face from the trace (the datum at a
+   Dirichlet end) and the cell's own one-sided :math:`q`. ``tau`` is then a
+   dimensionless multiplier and the floor a fraction of the largest
+   :math:`\kappa/h` on the grid, so neither depends on units. The floor is not
+   optional: where :math:`\kappa` vanishes on a face — a degenerate axis, say —
+   and nothing else in its trace row involves :math:`\lambda`, :math:`\tau` is
+   what determines :math:`\lambda` there. It assumes a layer is not much narrower
+   than a cell, so that :math:`\kappa` at the face is representative of it.
+
+   ``tauUpdate`` says when :math:`\tau` is re-evaluated. Both converge to the
+   same discrete solution; they differ in cost and robustness on the way.
+
+   ``"Residual"`` (the default)
+      On every residual, at that residual's state: one batched
+      ``ComputePhysicsDerivatives`` on the :math:`2 N` face points each time. The
+      Jacobian carries :math:`\partial\tau/\partial y` -- which multiplies the
+      jumps :math:`u_h - \lambda` -- by a finite difference over each component of
+      the face state, one more face-point call per component per Jacobian build.
+      Left out are its dependence on global scalars and field unknowns, and the
+      floor's through the grid maximum.
+
+   ``"ContinuationStep"``
+      Once per pseudo-transient continuation step, from the state the step starts
+      at, and frozen through that step's Newton solve, whose Jacobian is then
+      exact with no extra terms. Convergence is still judged with :math:`\tau` at
+      the current state. Steady solves only: a time march would freeze
+      :math:`\tau` at the initial condition, and is refused.
+
+      This is a fixed-point iteration on :math:`\tau`, and pseudo-time does not
+      damp it: :math:`\tau` depends on :math:`\lambda` and :math:`q`, which are
+      algebraic, so even a vanishing step lets the Newton solve move them onto the
+      frozen-:math:`\tau` equations. From a state where :math:`\tau` is sensitive
+      to them, the re-evaluated residual can exceed the one the step started from
+      on every step, and the continuation stalls. That was seen once, with
+      ``NewtonJacobianReuse`` at its default; with a fresh Jacobian every Newton
+      iteration the same run never reached such a state.
+
+   ``"JacobianBuild"``
+      As ``"ContinuationStep"``, and also at every Jacobian build, so :math:`\tau`
+      is fixed across the Newton iterations that share a Jacobian. The residual
+      evaluated just before a rebuild used the previous :math:`\tau`, so that step
+      is lagged, and it shows: it takes more Newton iterations than either of the
+      other two. Steady solves only.
+
+   Measured on a steady wall-layer problem (5 and 20 cells, uniform and graded,
+   :math:`k = 4`, ten flux exponents), as flux plus derivative point evaluations
+   relative to a constant :math:`\tau` at the same ``NewtonJacobianReuse``:
+
+   .. list-table::
+      :header-rows: 1
+
+      * - ``NewtonJacobianReuse``
+        - ``"Residual"``
+        - ``"ContinuationStep"``
+        - ``"JacobianBuild"``
+      * - 10 (default)
+        - 1.58-1.61x
+        - 1.06-1.09x
+        - 1.14-1.16x
+      * - 1
+        - 1.77-1.78x
+        - 1.07-1.10x
+        - 1.33-1.47x
+
+   Newton iterations are within 1% of a constant :math:`\tau`'s for
+   ``"Residual"`` and ``"ContinuationStep"``; the overhead of ``"Residual"`` is
+   almost all the face-point call in every residual. On this problem
+   ``NewtonJacobianReuse = 1`` was cheaper outright -- about 25% fewer point
+   evaluations than the default for every option -- and was the only setting at
+   which every run converged, constant :math:`\tau` included.
+
+   The choice of :math:`\tau` does not change which cells the estimator
+   :math:`\|u^* - u_h\|_K` ranks worst, but it does change how well that
+   estimate is calibrated. On the same problem its ratio to the true cell error
+   was 0.27-0.54 at a constant :math:`\tau = 1` and 0.95-1.07 under
+   ``"Diffusive"``, on uniform and graded grids alike.
+
+   The adjoint does not carry :math:`\tau`'s dependence on the state and would
+   give a silently wrong gradient, so ``"Diffusive"`` with ``solveAdjoint`` is
+   refused.
 
 Interpolatory HDG
 -----------------

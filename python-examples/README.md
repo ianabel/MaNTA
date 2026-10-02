@@ -10,9 +10,20 @@ are small enough to read in one sitting and are deliberately kept that way. The
 real simulations live in [`../python-physics/`](../python-physics/), which
 follows the same self-contained-directory convention.
 
-Install first, from the repository root:
+Either install the package, from the repository root:
 
     pip install .              # or `pip install .[jax]` for the JAX examples
+
+or use a build's package directory in place, with no install:
+
+    cmake --build $BUILD_DIR --target _manta
+    export PYTHONPATH=$BUILD_DIR/python
+
+The second is the one to use while changing MaNTA itself: the package there is
+the extension that build linked beside links to `python/manta/`, so an edited
+`.py` file is picked up at once and a rebuilt extension on the next import. It
+has no `manta` command, which `pip` writes; `python -m manta.cli` is the same
+program.
 
 | Directory | What it shows | Needs |
 |---|---|---|
@@ -40,7 +51,7 @@ is `testpaths = python/Tests`), so their READMEs carry the measured numbers.
 A config-driven example runs with the `manta` command from inside its own
 directory:
 
-    cd linear-diffusion && manta run.conf
+    cd linear-diffusion && manta run.conf     # or: python -m manta.cli run.conf
 
 Output lands beside the config, named after the config's stem — `run.nc` and
 `run.restart.nc`. The `adjoints/` scripts are not config-driven; they build a

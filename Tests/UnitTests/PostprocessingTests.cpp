@@ -71,14 +71,20 @@ double l2CellError(Interval const &I, std::function<double(double)> a,
                                   { const double d = a(x) - b(x); return d * d; }));
 }
 
-// The two grids every test runs on: uniform, and the strongly non-uniform grid
-// Grid's High_Grid_Boundary option builds. The per-cell matrices scale with h,
-// so a mistake in that scaling is invisible on a uniform grid.
+// The two grids every test runs on: uniform, and a strongly non-uniform one. The
+// per-cell matrices scale with h, so a mistake in that scaling is invisible on a
+// uniform grid.
+//
+// The second used to come from Grid's `highGridBoundary` flag, which is gone; it
+// is now the geometrically graded mesh GradedGridBoundary builds, on a domain that
+// is neither unit nor centred so nothing can assume [0, 1] either. That makes the
+// widths span 0.2/0.3^2 = 22x here rather than the cosine rule's few, so it is a
+// harder test of the h scaling than it was.
 std::vector<Grid> testGrids()
 {
     std::vector<Grid> out;
     out.emplace_back(0.0, 1.0, 5);
-    out.emplace_back(-2.0, 3.0, 9, true, 0.2, 0.2);
+    out.emplace_back(gradedMeshPoints(-2.0, 3.0, 9, 3, 0.2, 0.2, 0.3, GradedEnd::Both));
     return out;
 }
 

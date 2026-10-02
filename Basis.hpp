@@ -361,6 +361,7 @@ class NodalBasis
     private:
         unsigned int k;
         Matrix Vandermonde,Vr,RefMass,RefDerivative; // Matrices for the reference interval
+        Matrix InverseVandermonde;                   // nodal -> modal; see ToModal
         Vector ChebNodes;
         Vector BarycentricWeights;
 
@@ -395,9 +396,12 @@ class NodalBasis
 
             RefMass = ( Vandermonde * Vandermonde.transpose() ).inverse();
 
+            // Shared by RefDerivative below and by ToModal.
+            InverseVandermonde = Vandermonde.inverse();
+
             // Our 'derivative' matrix is the stiffness matrix ( phi_i, phi_j' )
             // So we can use  S = (M Dr) & Dr = Vr * V^-1 from Hesthaven & Warburton p.52
-            RefDerivative = RefMass * ( Vr * Vandermonde.inverse() );
+            RefDerivative = RefMass * ( Vr * InverseVandermonde );
 
             BarycentricWeights.resize( k + 1 );
 
@@ -418,6 +422,30 @@ class NodalBasis
         unsigned int Order() const { return k; };
 
         Vector const& getNodes() const { return ChebNodes; };
+
+        // The Legendre decomposition of one cell's element polynomial.
+        //
+        // This basis is nodal, so a cell's stored coefficients *are* the values
+        // at ChebNodes, and u(xi) = sum_i u_i l_i(xi) = sum_j uhat_j P_j(xi) on
+        // the reference cell. At node i that reads u_i = sum_j uhat_j
+        // P_j(node_i) = (V uhat)_i, so uhat = V^-1 u -- and V(i,j) =
+        // P_j(node_i) is already built above. One shared (k+1)x(k+1) matrix for
+        // every cell, and no quadrature at all.
+        //
+        // Scale-free: the reference map's h/2 is common to both representations
+        // and cancels, so a decomposition on one cell is directly comparable
+        // with one on a cell of a different width. That is what lets a
+        // smoothness sensor built on this be read across a non-uniform mesh.
+        Vector ToModal( Eigen::Ref<const Vector> const &nodalValues ) const
+        {
+            if( k < 1 )
+                throw std::invalid_argument("A degree-0 basis has one mode and no decomposition to take.");
+
+            if( nodalValues.size() != static_cast<Index>( k + 1 ) )
+                throw std::invalid_argument("ToModal needs one value per node of this basis.");
+
+            return InverseVandermonde * nodalValues;
+        };
 
         static NodalBasis getBasis( unsigned int k ) {
             if( singletons.contains( k ) )

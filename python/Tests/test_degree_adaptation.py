@@ -41,8 +41,8 @@ def adaptive_config(tmp_path, **overrides):
     cfg = base_config(tmp_path)
     cfg.update(
         {
-            "Polynomial_degree": 1,
-            "Grid_size": 6,
+            "PolynomialDegree": 1,
+            "GridSize": 6,
             "SteadyStateSolver": "Newton",
             "SteadyStateTolerance": 1.0e-11,
             "Absolute_tolerance": 1.0e-10,
@@ -119,7 +119,7 @@ def test_a_solution_the_space_already_holds_is_not_refined(tmp_path):
     C++ test checks the "after 1 solve" line directly.
     """
     runner = MaNTA.Runner(LinearDiffusion())
-    runner.configure(adaptive_config(tmp_path, Polynomial_degree=2))
+    runner.configure(adaptive_config(tmp_path, PolynomialDegree=2))
     runner.run_ss()
 
     points = np.array([0.15, 0.4, 0.75])
@@ -194,19 +194,28 @@ def test_adaptation_without_steady_termination_is_refused(tmp_path):
     # driven towards the fixed point, and no amount of the first makes up for a
     # loose second.
     #
-    # Measured 3.7e-7 out, against the 1e-8 the same problem reaches when a
-    # tolerance is named. Not a large gap -- ||F|| = 1e-3 is a tighter statement
-    # about u than it looks on this problem -- but a real one, and the guard
-    # below is what keeps this case honest about which of the two it is testing.
+    # This used to measure 3.7e-7 out against the 1e-8 a named tolerance reaches,
+    # with a guard below demanding the gap be *explained* rather than loosened if it
+    # ever closed. It has closed -- the answer is now exact to 2.8e-17 -- so here is
+    # the explanation, and the guard is gone rather than weakened.
+    #
+    # The cause is the weighted steady residual norm. The merit function carries
+    # 1/sqrt(h) on the cell rows now, which makes it 2.4x larger on these 6 cells
+    # than the flat norm it replaced, so SteadyStateTolerance = 1e-3 is a *tighter*
+    # request than it was. The first level's ||F|| = 0.498 no longer sits under it:
+    # before, solveSteadyState's early return fired there and left the initial
+    # condition standing, and now Newton runs and converges in one step to round-off
+    # on this linear problem. Every later level inherits that state.
+    #
+    # The early return is still live and still reached -- at the top level the
+    # transferred state gives ||F|| = 4.3e-4 and the solve correctly declines to do
+    # anything -- so what moved is *which* level it fires at. That is the direction
+    # MESH-REFINEMENT.md section 10 predicted: a larger norm fires the early return
+    # less often, which is the safe way for it to be wrong.
     runner.run_ss()
     got = runner.getSolution(0, [0.5])[0]
     exact = SineSource.exact(np.array([0.5]))[0]
     assert got == pytest.approx(exact, abs=1e-6)
-    assert abs(got - exact) > 1e-8, (
-        "run_ss() without SteadyStateTolerance now converges as tightly as a "
-        "named one; if the fallback changed, say so here rather than loosening "
-        "the assertion above"
-    )
 
 
 @pytest.mark.parametrize(

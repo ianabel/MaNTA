@@ -38,7 +38,11 @@ the regression driver and pytest with that one, where the Makefile relied on
 ``PATH`` and the driver's ``env python3`` shebang. See :doc:`install` for what the
 ``venv`` target does and why it pins a versioned interpreter.
 
-All three run from any working directory.
+All three run from the build tree: CTest starts each in the build directory's
+copy of its source directory, where its output lands, and reads configs,
+references and fixtures from the source tree. The Python suite imports the
+package that build assembled (:ref:`build-tree-package`) and refuses to start if
+``manta`` resolves anywhere else.
 
 Running one test
 ----------------
@@ -47,15 +51,17 @@ Running one test
 
    build/Tests/UnitTests/UnitTests --run_test=solve_jac_tests --log_level=all
    build/Tests/UnitTests/UnitTests --run_test=mms_convergence_tests --log_level=message
-   pytest python/Tests/test_adjoint.py
-   SOLVER=$PWD/build/MaNTA Tests/RegressionTests/TestSolutions.py --tolerance 1e-2
+   build/python/Tests/run-pytest python/Tests/test_adjoint.py -k closed_form
+   build/Tests/RegressionTests/run-regression --tolerance 1e-2
 
 ``--log_level=message`` is what shows ``BOOST_TEST_MESSAGE`` output, which is how
 the convergence tests report measured orders.
 
-``TestSolutions.py`` resolves the solver from ``$SOLVER``, falling back to
-``<repo>/MaNTA`` — which an out-of-source build does not produce, hence the
-variable above. CTest sets it for you.
+``run-pytest`` and ``run-regression`` are generated into the build tree, and they
+are what CTest runs: each carries the environment, the working directory and the
+cache locations that keep the suite out of the source tree, so a test run by hand
+from any directory runs exactly as it would under CTest. ``run-pytest``'s
+arguments are pytest's; with none it runs the whole suite.
 
 New unit-test files must be added to ``MANTA_TEST_SOURCES`` in
 ``Tests/UnitTests/CMakeLists.txt``. That stays an explicit list rather than a
@@ -118,17 +124,6 @@ was one tree that recursed with ``COVERAGE=on``, needed ``env -u CXXFLAGS -u
 LDFLAGS`` to stop the parent's release flags leaking in, and had to end with a
 ``make clean`` or the next ordinary build failed to link with undefined
 references to ``__gcov_init``.
-
-.. warning::
-
-   Both build directories write the Python extension to the same place,
-   ``python/manta/``, because that is where ``import manta`` has to find it.
-   Each build directory records what it linked there and replaces anything it
-   does not recognise, so switching between ``build/`` and ``build-coverage/``
-   needs nothing from you: the first build after the switch relinks the module.
-   The ``coverage`` target additionally refuses to start if the module in place
-   carries no instrumentation, since a suite run against an uninstrumented
-   module passes and simply goes unmeasured.
 
 .. note::
 

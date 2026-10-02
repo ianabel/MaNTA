@@ -157,8 +157,9 @@ def main():
     print("  relaxation is converged at its first iterate and he solves in one")
     print("  pass -- three of Newton's five sweeps are the floor for a method")
     print("  that does not know the problem is linear.")
-    print("  It does not always go this way -- see ../shestakov-nonlinear/, where")
-    print("  continuation costs 2.5x what time marching does.")
+    print("  On the two nonlinear benchmarks the gap is wider still, provided the")
+    print("  Jacobian is rebuilt every Newton iteration (NewtonJacobianReuse = 1,")
+    print("  the default); see PERFORMANCE.md.")
 
 
 if __name__ == "__main__":

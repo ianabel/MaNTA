@@ -1,7 +1,10 @@
 # MaNTA test suites
 
-Three suites, all registered with CTest (`ctest --test-dir build`) and all
-runnable from any working directory.
+Three suites, all registered with CTest (`ctest --test-dir build`), and all run
+from the build tree: each starts in the build directory's copy of its source
+directory, writes its output there, and reads its inputs from here. By hand,
+`build/python/Tests/run-pytest` and `build/Tests/RegressionTests/run-regression`
+are the launchers CTest itself uses, and work from any cwd.
 
 | Test | Suite | Location |
 |---|---|---|
@@ -216,16 +219,12 @@ So: treat the headline as a floor, and judge work on this header by the count of
 *distinct* uncovered lines, not by its percentage.
 
 **And a number is only worth reading if the Python suite ran against the
-instrumented module.** The extension lives at `python/manta/_manta<abi>.so` --
-in the source tree, because that is where `import manta` has to find it -- so
-every build directory writes to the same path, and a run once imported the
-Release module while believing otherwise: 133s against 748s for the same tests,
-with the report still looking right because gcov data accumulates. Each build
-directory now claims the module and replaces one it does not recognise, and the
-`coverage` target refuses to start unless what is in place carries
-instrumentation; `python/CMakeLists.txt` has the full account. Nothing is needed
-from you, but if a binding-layer figure ever looks impossibly low, that is the
-first thing to suspect.
+instrumented module.** Each build directory has a package of its own, at
+`<build>/python/manta/`, and `conftest.py` exits unless `manta` and its extension
+were both imported from the build under test -- an installed `manta` ahead on
+`sys.path` would otherwise give a passing suite and a report that never mentions
+the binding layer. If a binding-layer figure ever looks impossibly low, that
+check is the first thing to suspect.
 
 ## The scalar (Woodbury) path in solveJacEq
 
@@ -755,6 +754,53 @@ it is how the `dAux_Mat` column-layout defect was found. Two things make it work
   quadrature scheme. Give them distinct primes (2, 3, 5, 7, 11, 13, 17) and a
   mis-slotted entry cannot come out right by accident.
 
+## Geometric mesh grading
+
+`gradedMeshPoints` (`gridStructures.hpp`) returns cell boundaries rather than a
+`Grid`, which is what lets the geometry be pinned without constructing anything:
+six cases in `GridTests.cpp` cover it, and six in `ConfigSourceTests.cpp` cover
+the four config keys that reach it. `Grid(std::vector<Position>)` is still where
+the validation of the *result* lives, so a construction that produced an
+out-of-order or zero-width list is caught there.
+
+What the geometry cases pin, and why each is worth a line:
+
+* **The ratio structure, which is the easy thing to get wrong.** It is not a pure
+  geometric progression -- the cell touching the graded end runs all the way to it,
+  so it is `1/(1-r)` wider than continuing the progression would give. The first
+  width ratio inside the layer is `(1-r)/r` and every later one is `1/r`. A pure
+  progression would still look like a graded mesh in a plot, with a different `h0`
+  and so a different answer.
+* **Therefore `h0 = fraction * span * ratio^(cells-1)` in closed form**, checked
+  directly. `MESH-REFINEMENT.md` §8 measures the error on Shestakov's problem as
+  `0.0487 * h0` and as depending on nothing else, so that expression *is* the knob
+  and a test on the widths alone would not pin it.
+* **Uniformity outside the layer**, because the bulk length is measured from the
+  layer's far edge rather than from the domain -- using the domain would leave the
+  first bulk cell the wrong width and nothing else would notice.
+* **Upper-end grading as an exact mirror of lower-end**, which is how it is
+  implemented (reflect, then pin the endpoints, since `Grid::operator==` compares
+  them exactly and the restart round trip rebuilds from what it wrote).
+* **Offset and scale independence**, on `[-3, 5]`, since nothing may assume
+  `[0, 1]`.
+
+One measured limit rather than a gap. **An upper-end grading cannot represent its
+narrowest cell's width to better than about `eps/h0` relative** -- 3.4e-11 for
+`h0 = 6.6e-6` on `[0, 1]`, against 6.0e-12 observed -- because the boundary next to
+`uBound` is a number near `uBound` and the width is a difference of nearly equal
+numbers. That is why
+`grading_the_upper_end_is_the_exact_mirror_of_the_lower` holds `h0` to 1e-10 where
+the lower-end case gets 1e-12. It is not the reflection's doing: building the mesh
+directly as `uBound - layer*ratio^j` has the identical cancellation. It bites only
+at far harder gradings, where the boundary eventually coincides with `uBound` and
+`Grid` rejects the zero-width cell -- which is the right failure and a loud one.
+
+The end-to-end value is verified outside the suite, because it needs a solve on a
+physics case with a closed form: the config keys reproduce the hand-built mesh
+`MESH-REFINEMENT.md` §9 measured, 3.2922e-07 against 4.9080e-03 uniform on the same
+10 cells and 60 DOF. Nothing in `make test` asserts that, so the measurement lives
+in `MESH-REFINEMENT.md` and the suite covers the geometry and the plumbing only.
+
 ## Known gaps
 
 These are deliberate and tracked, not oversights:
@@ -842,6 +888,29 @@ These are deliberate and tracked, not oversights:
   through a real config file -- the unit tests reach `setRestartValues`
   directly, so the config plumbing on both surfaces is covered by inspection
   only.
+
+* **The smoothness sensor has no consumer.** `SmoothnessSensor.{hpp,cpp}` and
+  the `NodalBasis::ToModal` it is built on are covered by
+  `SmoothnessSensorTests.cpp` -- against polynomials whose Legendre
+  coefficients are known exactly, against the `j^-(a+1)` decay theory predicts
+  for `|x|^a`, and end to end over a grid -- but nothing in the solver calls
+  any of it. There is no config key, no output, and no adaptive loop; it is a
+  measurement waiting for step 4 of `MESH-REFINEMENT.md`. So its *unit*
+  coverage is good and its *integration* coverage is nil, and the usual
+  reassurance that the regression suite would catch a mistake does not apply
+  here, because no regression case executes a line of it.
+
+  Two specifics worth knowing. The `DGSoln` overload is only ever exercised on
+  `u`, though it takes any variable index, and the sensor is built for a single
+  cell at a time with no state, so `q` or `sigma` would work identically and
+  are simply not measured. And the whole thing rests on the modal coefficients
+  being separable from round-off: the floor is `(k+1)*eps` of the cell's
+  largest coefficient, a bound on the transform's own error rather than a
+  physical threshold, and the case that pins it
+  (`a_spectrum_with_structural_zeros_is_not_fitted_through_the_gaps`) checks
+  *both* populations -- that the structural zeros are below 1e-14 and the real
+  modes above 1e-3 -- because a fixture whose two populations had drifted
+  together would keep passing while testing nothing.
 
 * **Adjoint *output* is still not verified.** `WriteAdjoints()` is commented
   out at `Solver.cpp:350` (commit `57d2652`, "adjoint writing doesn't work for
@@ -1147,6 +1216,92 @@ These are deliberate and tracked, not oversights:
     asserted alongside, so a fixture that started rejecting steps would report a
     changed solve rather than a broken count.
 
+  And four cover the merit function, which was the largest of the remaining
+  gaps: everything the solve decides is decided by comparing that one number
+  against `steady_state_tol` or against its own previous value, and it used to
+  be a lambda inside `solveSteadyState` that nothing could reach. It is now
+  `SystemSolver::steadyResidualNorm`, and **weighted** rather than flat --
+  `1/sqrt(h_K)` on the rows that are pairings against the basis, 1 on the trace
+  rows and the scalars, from `SystemSolver::residualWeights`.
+
+  * `the_steady_merit_function_is_the_undamped_residual_two_norm` recomputes it
+    from outside -- zero derivative, `residual` at `t0` and `Y`, then the weights
+    **written out by hand** rather than read back from `resScale`, since reusing
+    the solver's own vector would pin the contraction and say nothing about the
+    weights. Exact equality, and separately that the result is neither the flat
+    norm nor an RMS one. Then it sets a distant `uPrev` and `ptcStep = 1e-4` and
+    requires the value not to move while the damped residual KINSOL sees moves by
+    more than 10x. That last half is the part worth having: a merit function that
+    included the damping could be driven to zero by shrinking `dt` without the
+    state going anywhere.
+  * `the_steady_merit_function_does_not_move_with_the_mesh` is the property the
+    weights exist for, and it **replaces a case that asserted the opposite**. Same
+    physics, same `k`, same initial function, 4 / 8 / 16 cells: `‖F‖` is
+    1.11145 / 1.11294 / 1.11344, ratios 1.00134 and 1.00044, where the flat norm
+    gave 0.5557 / 0.3935 / 0.2784 and a ratio of 1/sqrt(2). Held to 1%, which
+    discriminates against the old behaviour by a factor of 300, plus a second
+    assertion that the departure from 1 *shrinks* with `h` -- measured by 3.0 over
+    one refinement, and extended to 64 cells the sequence reaches 1.113613 with
+    departures falling by 3.2, 3.8, 4.8. That is what separates converging on a
+    limit from being close on three meshes; a norm still carrying a fractional
+    power of `h` would hold the ratio constant and could slip through the window
+    alone.
+  * `the_weighted_norm_is_mesh_independent_only_near_a_solution` is the honest
+    limit of that claim, and it is the finding this work turned up. Overwrite `u`
+    with a fixed function and leave `sigma`, `q` and `lambda` stale, and the `q`
+    and `lambda` rows hold the `O(1)` trace and derivative terms of the weak form
+    rather than an `O(h)` pairing -- the `1/h` from `phi'` cancels the `h` from the
+    measure. The flat norm then **grows** like `1/sqrt(h)` (4.275, 6.166, 8.834,
+    12.58, 17.86 on 4 to 64 cells) where the consistent state fell like `sqrt(h)`,
+    and the weighted norm grows like `1/h` (7.495, 14.57, 28.74, ratios 1.94 and
+    1.97). Two mechanisms, opposite signs, and which dominates is a property of
+    the *state* -- so **no fixed row weighting is mesh-independent everywhere**,
+    and this one does not claim to be. What it fixes is the regime the convergence
+    test fires in, which is the one where the residual is small.
+  * `KINSOL_measures_the_same_thing_the_continuation_loop_does` pins the coupling
+    that makes a one-sided fix wrong. `KINSetFuncNormTol` is handed the same
+    `steady_state_tol` and KINSOL's own test is `N_VWL2Norm(fval, fscale)`, so the
+    fix is to hand KINSOL the *same weights* as `f_scale` rather than to normalise
+    one side -- `solveSteadyState` passes `resScale` where it used to pass
+    `kinScale` twice, and the agreement is structural instead of a coincidence
+    that held while both were flat. In `Newton` mode the damping term is
+    identically zero, so the two are the same number: measured bit-identical at
+    1.302e-15. The case asserts `u_scale` is still unit *and* that `f_scale` is
+    not, because those are different vectors -- `u_scale` drives the step-length
+    test and the Newton step clamp -- and a version checking only the first would
+    pass while comparing two flat norms.
+
+  Verified against the two configs in the tree that arm a continuation solve, at
+  `SteadyStateTolerance = 1.0e-11`: the initial `‖F‖` rises by exactly `1/sqrt(h)`
+  -- park-convergence 0.553794 to 1.10759 on 4 cells (2.0000 against 2.0000),
+  jardin-critical-gradient 1.23603 to 3.90868 on 10 (3.1622 against 3.1623) --
+  and **neither run's continuation step count changes**, 3 and 5 respectively,
+  both still converging to round-off. `shestakov-nonlinear` is unaffected because
+  it pins `TimeMarch`, whose stopping test is on `dY/dt` and does not go through
+  this function at all.
+
+  What is still uncovered is the rest of the algorithm -- step rejection, the
+  `KINSetMaxNewtonStep` clamp, and the hard-`KINSol`-failure path (the ordinary
+  exhaustion path above shares its `catch (...)` in `Solver.cpp`, but not the
+  code that reaches it).
+
+  **That gap has now cost something, so it is worth stating what it cost.** Which
+  `KINSol` return codes the loop tolerates is decided in one condition and no test
+  reaches it. `KIN_MXNEWT_5X_EXCEEDED` (-7) was treated as fatal where
+  `KIN_MAXITER_REACHED` was treated as "this dt was too ambitious, damp and retry",
+  and under continuation those are the same signal -- so pseudo-transient
+  continuation appeared to have an intrinsic limitation on `shestakov-nonlinear`
+  that it did not have. `MESH-REFINEMENT.md` §5 recorded that as a property of the
+  method for months; §11 has the retraction and the measurements. The same
+  condition also excluded `KIN_STEP_LT_STPTOL`, which is `+2` and therefore cannot
+  reach a `retval < 0` branch at all -- dead for as long as it had been there.
+
+  Covering it needs a case whose Newton direction genuinely diverges, which
+  `TestDiffusion` cannot supply and none of the registered C++ cases does either.
+  The behaviour is exercised only by `python-examples/shestakov-nonlinear`, which
+  `make python_tests` does not run (`pytest.ini` is `testpaths = python/Tests`), so
+  **nothing in CI would catch a regression here.** That is the honest status.
+
 * **`SpectrumTests.cpp`** -- where the semi-discrete spectrum lies, and what the
   flux has to do to put it there. This exists because the time integrator is
   chosen on a claim about the spectrum: BDF of order three to five are only
@@ -1182,14 +1337,6 @@ These are deliberate and tracked, not oversights:
   Not covered: a state-dependent `D` whose spectrum leaves the sector somewhere
   in the domain but not everywhere, which is the case where the angle would be
   neither constant nor predicted by a single `D`.
-
-  What is still uncovered is the rest of the algorithm -- step rejection, the
-  `KINSetMaxNewtonStep` clamp, and the hard-`KINSol`-failure
-  path (the ordinary exhaustion path above shares its `catch (...)` in
-  `Solver.cpp`, but not the code that reaches it). In particular the flat
-  unweighted `steadyNorm` (`SteadyState.cpp`) is untested, and both the
-  convergence test and the SER ratio read it, so anything that changes how it is
-  normalised changes the stopping test and the step schedule together.
 
   Note also what the fixture cannot show: `TestDiffusion` is *linear*, so each
   inner solve converges in one Newton iteration and Jacobian builds equal

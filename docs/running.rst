@@ -148,10 +148,10 @@ point a config file at it:
    t_initial = 0.5
    t_final = 1.0
 
-The grid comes from the restart file, so ``Grid_size``, ``Grid_points``,
-``Lower_boundary`` and ``Upper_boundary`` are ignored on this path.
+The grid comes from the restart file, so ``GridSize``, ``GridPoints``,
+``LowerBoundary`` and ``UpperBoundary`` are ignored on this path.
 
-``Polynomial_degree`` is **not** ignored. It defaults to the degree the file was
+``PolynomialDegree`` is **not** ignored. It defaults to the degree the file was
 written at, and setting it to something else resumes the run at that degree
 instead, projecting the stored state onto the new space:
 
@@ -159,8 +159,8 @@ instead, projecting the stored state onto the new space:
 
    [configuration]
    restart = true
-   RestartFile = "case7.restart.nc"   # written at Polynomial_degree = 2
-   Polynomial_degree = 3              # resume at 3
+   RestartFile = "case7.restart.nc"   # written at PolynomialDegree = 2
+   PolynomialDegree = 3              # resume at 3
 
 Refining loses nothing — a degree-*k* element polynomial lies inside the
 degree-(*k*\ +1) space, so the projection reproduces it exactly. Coarsening
@@ -589,6 +589,65 @@ transient *is* the answer.
    with more than one steady state, such as a transport model with a barrier
    bifurcation.
 
+.. _steady-merit-function:
+
+What ``SteadyStateTolerance`` is measured against
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+On the two continuation modes the tolerance is compared against a weighted norm
+of the undamped steady residual,
+
+.. math::
+
+   \|F\| = \Bigl[ \sum_i (w_i F_i)^2 \Bigr]^{1/2}, \qquad
+   w_i = \begin{cases} h_K^{-1/2} & \text{row } i \text{ is in cell } K \\
+                       1          & \text{row } i \text{ is a trace or a scalar}
+         \end{cases}
+
+*Undamped* is what makes it a merit function: the residual KINSOL sees carries
+the backward-Euler term, which can be driven to zero by shrinking ``dt`` without
+going anywhere.
+
+The weights are there so that one tolerance means one thing on every mesh. A
+cell row is a pairing against the basis — the assembly forms it through the cell
+mass matrix, so it holds :math:`\langle R, \phi_i \rangle \sim h R(x_i)` for a
+residual density :math:`R`. An unweighted 2-norm over :math:`n_\mathrm{cells}
+(k+1)` such rows therefore goes like :math:`\sqrt{h}`, and dividing by
+:math:`\sqrt{h_K}` recovers the discrete :math:`L^2` norm of the equation
+residual, which is a property of the solution rather than of the discretisation.
+Measured on the unit-test diffusion problem at 4/8/16/32/64 cells, same initial
+function throughout: unweighted 0.5557, 0.3935, 0.2784, 0.1969, 0.1392 — ratios
+converging on :math:`1/\sqrt2` — against weighted 1.11145, 1.11294, 1.11344,
+1.11358, 1.11361, converging on a limit at second order.
+
+The trace rows carry weight 1 because a ``lambda`` row is a flux condition at a
+single face and has no :math:`h` in it; the global scalars are not spatial at
+all. Near a solution the choice makes no measurable difference either way, since
+those rows are the algebraic constraints and the solve has driven them to
+round-off.
+
+.. note::
+
+   "Mesh-independent" holds **near a solution**, which is the regime the
+   convergence test fires in, and not everywhere. Far from one the trace and
+   derivative terms of the weak form dominate the cell rows instead; those are
+   :math:`O(1)` per row, with no :math:`h` to divide out, and the norm then
+   *grows* under refinement. So a reported starting ``||F||`` is not comparable
+   across meshes even though the tolerance is. No fixed choice of :math:`w_i`
+   fixes both, because the two mechanisms scale oppositely and which dominates is
+   a property of the state;
+   ``the_weighted_norm_is_mesh_independent_only_near_a_solution`` pins that.
+
+KINSOL is handed the same weights as its ``f_scale``, so its own stopping test
+and the continuation loop's are the identical quantity rather than two that
+happen to agree — they match bit for bit in ``Newton`` mode, where the damping
+term is identically zero. Its ``u_scale`` stays unit: that one is about the
+solution's units, and it drives the step-length test and the Newton step clamp.
+
+``TimeMarch`` does not use any of this. It compares ``dY/dt`` against the same
+tolerance in the time loop, so a config that switches between the modes is
+changing what the number means.
+
 Measured on the benchmarks under ``python-examples/``, in the units
 ``PERFORMANCE.md`` asks for — evaluations of the physics per point, for an
 answer identical in every digit printed. The resolution is stated because the
@@ -926,12 +985,11 @@ Controlling the inner solve
 
 Four keys reach KINSOL. They apply to ``PseudoTransient`` and ``Newton`` alike —
 pseudo-transient continuation *is* Newton on a damped residual — and not at all
-to ``TimeMarch``, which never builds a KINSOL object. Every default reproduces
-what the code did when these were hardcoded, so an unconfigured run is unchanged.
+to ``TimeMarch``, which never builds a KINSOL object.
 
 ``NewtonJacobianReuse``
    How many Newton iterations may share one Jacobian factorisation (KINSOL's
-   ``msbset``). ``1`` is full Newton; larger is modified Newton. **This is the
+   ``msbset``). ``1``, the default, is full Newton; larger is modified Newton. **This is the
    setting the** ``jac`` **and** ``solves`` **columns above measure**, and the
    section below is about why it is worth setting per case.
 
@@ -984,7 +1042,7 @@ Which side wins is a property of how your flux model is differentiated. **That i
 the whole reason this is configurable**, and it is why there is no default that is
 right for every case.
 
-The default of 10 is KINSOL's. At the cheap-Jacobian end of the range it is
+KINSOL's own default is 10. At the cheap-Jacobian end of the range that is
 conservative — measured on ``AdjointPoster``, an analytic flux, at k = 3, driving
 the residual to 1e-10:
 
@@ -1011,7 +1069,7 @@ the residual to 1e-10:
      - 8
      - 25
      - 36
-   * - 10 (default)
+   * - 10
      - 6.21 s
      - 7
      - 32
@@ -1119,21 +1177,20 @@ described above is real only while the Jacobian is stable enough that a stale on
 still points somewhere useful; on a strongly nonlinear problem it is not, and the
 extra iterations are pure loss.
 
-**At the default, Shestakov does not converge at all**, in either steady mode,
+**At reuse 10, Shestakov does not converge at all**, in either steady mode,
 returning ``KIN_MXNEWT_5X_EXCEEDED``. A Jacobian ten iterations old gives a bad
 enough direction that the step clamp fires five times running. At reuse 1 both
 modes converge, and ``PseudoTransient`` beats ``TimeMarch`` four to one — which
 reverses the note in ``../shestakov-nonlinear/`` that continuation costs 2.5× what
-time marching does. That measurement was taken at the default and is a statement
+time marching does. That measurement was taken at reuse 10 and is a statement
 about ``msbset``, not about pseudo-transient continuation.
 
-So the honest summary is that KINSOL's default of 10 suits neither of MaNTA's
-nonlinear benchmarks, and on one of them it is the difference between converging
-and not. It is left in place only because the cost model above says the opposite
-case exists: a physics case whose Jacobian is finite-differenced from expensive
-flux calls pays far more per assembly than these do, and would rather have the
-iterations. **If a steady solve is slow or will not converge,**
-``NewtonJacobianReuse = 1`` **is the first thing to try.**
+So KINSOL's default of 10 suits neither of MaNTA's nonlinear benchmarks, and on
+one of them it is the difference between converging and not; MaNTA's default is
+therefore 1. The cost model above says the opposite case exists -- a physics case
+whose Jacobian is finite-differenced from expensive flux calls pays far more per
+assembly than these do, and would rather have the iterations -- and that is what
+raising it is for.
 
 .. _degree-adaptation:
 

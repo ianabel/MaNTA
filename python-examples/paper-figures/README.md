@@ -11,13 +11,14 @@ the examples' own cases rather than restating them:
 | `park_fig.py` / `park_fig_ptc.py` | the cost/accuracy sweep for `fig:park`, time-marched and by continuation, over 4/6/10/20 cells at `k = 2..6` |
 | `plot_park.py` | draws `paper/figures/park-frontier.pdf` from the two JSON files |
 
-Run them against a built tree:
+Run them against a build's package directory:
 
-    PYTHONPATH=../../python python3 steady_modes.py
+    PYTHONPATH=$BUILD_DIR/python python3 steady_modes.py
 
 `park_frontier.json` and `park_frontier_ptc.json` are the sweep output as of
 2026-09-21, kept so the figure can be redrawn without a re-run.
 
-**A rebuild relinks `python/manta/_manta*.so` in place**, so a benchmark that
-is running when `cmake --build` reaches the link step dies with `ImportError:
-file too short`. Build first, then measure.
+**A rebuild relinks `$BUILD_DIR/python/manta/_manta*.so` in place**, so a
+benchmark that is running against that build when `cmake --build` reaches the
+link step dies with `ImportError: file too short`. Build first, then measure --
+or measure against a build directory you are not rebuilding.

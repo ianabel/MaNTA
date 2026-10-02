@@ -48,6 +48,21 @@ class TransportSystem;
 // progress; returns 0 when the target is already met.
 unsigned int degreeIncrement(double E, double eps, double base);
 
+// `config` with the pseudo-transient step a finished solve reached as the next
+// solve's first one, for a solve warm-started from that one's state.
+//
+// A cold solve climbs the SER ramp from PseudoTransientInitialStep. A warm one has
+// no ramp to climb -- it starts next to the answer -- and re-climbing is most of
+// what it costs: on the wall-layer case of MESH-REFINEMENT.md section 12, a graded
+// solve warm-started from the uniform sample took 12 continuation steps at the
+// configured 1e-3 and 2 with the sample's final step (~1e6), for the same answer
+// to 1e-10. A tenth or a hundredth of that step measured the same, so the step is
+// carried as it is rather than through a factor nobody could justify.
+//
+// Capped at PseudoTransientMaxStep. Unchanged in Newton mode, where the step is
+// already infinite, or when the previous step is not a finite positive number.
+SolverConfig carriedStepConfig(SolverConfig const &config, SystemSolver const &previous);
+
 // Solve `problem`, adapting the global polynomial degree between solves, and
 // return the solver that produced the final answer.
 //
@@ -70,6 +85,25 @@ unsigned int degreeIncrement(double E, double eps, double base);
 //
 // Only the caller's grid and problem outlive this. The returned solver holds a
 // reference to that grid, so it must not outlive it.
+//
+// `solvedFirstLevel`, when given, *is* level 0: a solver already configured from
+// `config`, built on `grid` at `k0` and run, whose answer the loop measures rather
+// than solving that level again. MeshAdaptation passes the solve it has just made
+// on the mesh it settled on, which is exactly the level this loop would otherwise
+// open with -- same mesh, same degree, from the same initial condition -- so
+// without it every adapted run paid for that solve twice.
+//
+// An overload rather than a defaulted parameter: SystemSolver is incomplete here,
+// and clang instantiates unique_ptr's destructor for a default argument at the
+// declaration, which needs the complete type. gcc defers it, so only the clang
+// legs saw this.
+std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
+                                                TransportSystem &problem,
+                                                AdjointProblem *adjoint,
+                                                Grid const &grid,
+                                                unsigned int k0,
+                                                double tFinal,
+                                                std::unique_ptr<SystemSolver> solvedFirstLevel);
 std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
                                                 TransportSystem &problem,
                                                 AdjointProblem *adjoint,

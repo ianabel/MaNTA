@@ -134,12 +134,26 @@ LevelError measure(SystemSolver &system, SolverConfig const &config,
 }
 } // namespace
 
+SolverConfig carriedStepConfig(SolverConfig const &config, SystemSolver const &previous)
+{
+    SolverConfig carried = config;
+    double dt = previous.getPseudoTransientStep();
+    if (std::isfinite(dt) && dt > 0.0)
+    {
+        if (config.PseudoTransientMaxStep > 0.0)
+            dt = std::min(dt, config.PseudoTransientMaxStep);
+        carried.PseudoTransientInitialStep = dt;
+    }
+    return carried;
+}
+
 std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
                                                 TransportSystem &problem,
                                                 AdjointProblem *adjoint,
                                                 Grid const &grid,
                                                 unsigned int k0,
-                                                double tFinal)
+                                                double tFinal,
+                                                std::unique_ptr<SystemSolver> solvedFirstLevel)
 {
     // Only Python can arm spatial adjoint parameters, so this cannot be caught
     // in loadSolverConfig with the rest. The objection is the one that already
@@ -159,7 +173,7 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
 
     if (k0 > kMax)
         throw std::invalid_argument(
-            "Polynomial_degree already exceeds MaxPolynomialDegree, so degree "
+            "PolynomialDegree already exceeds MaxPolynomialDegree, so degree "
             "adaptation has nothing it is allowed to do.");
 
     std::println("Degree adaptation: starting at k = {}, ceiling {}, relative "
@@ -179,37 +193,83 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
     SystemSolver::SteadyStats runTotal;
     int levels = 0;
 
+    // Each level after the first starts from the previous one's state (below), and
+    // from its final pseudo-transient step: see carriedStepConfig. Reset to
+    // `config` itself if a level fails that way and is retried.
+    SolverConfig levelConfig = config;
+
+    if (solvedFirstLevel != nullptr && solvedFirstLevel->getOrder() != k0)
+        throw std::logic_error(
+            "runAdaptiveDegree was handed a solved first level at a degree other "
+            "than the one it was asked to start from.");
+
     for (int level = 0;; ++level)
     {
-        system = std::make_unique<SystemSolver>(grid, k, &problem);
-        applySolverConfig(config, *system);
+        if (level == 0 && solvedFirstLevel != nullptr)
+        {
+            // Already configured, checked for a steady solve, given the adjoint
+            // problem and run by whoever built it -- so straight to measuring it.
+            system = std::move(solvedFirstLevel);
+        }
+        else
+        {
+            system = std::make_unique<SystemSolver>(grid, k, &problem);
+            applySolverConfig(levelConfig, *system);
 
-        // Checked here, against the solver, because this is the point of truth
-        // and a proxy for it is what let a transient through: loadSolverConfig
-        // refuses SteadyStateSolver = "TimeMarch", but that key defaults to
-        // "PseudoTransient" and the mode is only consulted once termination is
-        // *armed*. A configuration that simply never set SteadyStateTolerance
-        // therefore passed validation and then time-marched every level.
-        //
-        // That is not a scope question, it is a wrong answer. Each level would
-        // take the previous one's state at t_final as its initial condition at
-        // t_initial and integrate the same interval again -- so the run has
-        // evolved twice. Measured on NonlinDiffTest at k = 4: u(0.9) came out
-        // 0.4048 against a plain fixed-degree run's 0.3767, 7.5% apart, where
-        // two runs at the same degree should agree to discretisation error.
-        if (level == 0 && !system->solvesForSteadyState())
-            throw std::invalid_argument(
-                "DegreeAdaptation needs a steady solve, but this configuration "
-                "time-marches: SteadyStateTolerance is absent, so steady-state "
-                "termination is never armed and SteadyStateSolver is not "
-                "consulted. Set SteadyStateTolerance, or call run_ss().");
+            // Checked here, against the solver, because this is the point of truth
+            // and a proxy for it is what let a transient through: loadSolverConfig
+            // refuses SteadyStateSolver = "TimeMarch", but that key defaults to
+            // "PseudoTransient" and the mode is only consulted once termination is
+            // *armed*. A configuration that simply never set SteadyStateTolerance
+            // therefore passed validation and then time-marched every level.
+            //
+            // That is not a scope question, it is a wrong answer. Each level would
+            // take the previous one's state at t_final as its initial condition at
+            // t_initial and integrate the same interval again -- so the run has
+            // evolved twice. Measured on NonlinDiffTest at k = 4: u(0.9) came out
+            // 0.4048 against a plain fixed-degree run's 0.3767, 7.5% apart, where
+            // two runs at the same degree should agree to discretisation error.
+            if (level == 0 && !system->solvesForSteadyState())
+                throw std::invalid_argument(
+                    "DegreeAdaptation needs a steady solve, but this configuration "
+                    "time-marches: SteadyStateTolerance is absent, so steady-state "
+                    "termination is never armed and SteadyStateSolver is not "
+                    "consulted. Set SteadyStateTolerance, or call run_ss().");
 
-        // A fresh solver has no adjoint problem. Forgetting this is silent: the
-        // run completes and the gradients are simply never computed.
-        if (adjoint != nullptr)
-            system->setAdjointProblem(adjoint);
+            // A fresh solver has no adjoint problem. Forgetting this is silent: the
+            // run completes and the gradients are simply never computed.
+            if (adjoint != nullptr)
+                system->setAdjointProblem(adjoint);
 
-        system->runSolver(tFinal);
+            try
+            {
+                system->runSolver(tFinal);
+            }
+            catch (std::invalid_argument const &)
+            {
+                throw;
+            }
+            catch (std::exception const &e)
+            {
+                // Only a level that was given a carried step has anything to fall
+                // back to. It keeps its warm state -- the restart values are still
+                // set -- and starts the ramp from the configured step instead.
+                if (level == 0 || levelConfig.PseudoTransientInitialStep ==
+                                      config.PseudoTransientInitialStep)
+                    throw;
+                logmsg<LOG_LEVEL::WARNING>(
+                    "Degree adaptation: k = {} failed from the carried pseudo-time step "
+                    "({}); retrying it from the configured one.", k, e.what());
+                std::println("  k = {} failed from the carried step; retrying from the "
+                             "configured one", k);
+                system.reset();
+                system = std::make_unique<SystemSolver>(grid, k, &problem);
+                applySolverConfig(config, *system);
+                if (adjoint != nullptr)
+                    system->setAdjointProblem(adjoint);
+                system->runSolver(tFinal);
+            }
+        }
 
         // Read now: `system` is reset at the bottom of the loop, and a level
         // that breaks out leaves the last one alive but the earlier ones gone.
@@ -286,6 +346,7 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
         // two solvers thrash Integrator's cache between them.
         problem.setRestartValues(system->stateVector(), system->derivativeVector(),
                                  grid, k);
+        levelConfig = carriedStepConfig(config, *system);
 
         system.reset();
         k = next;
@@ -320,18 +381,29 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
     return system;
 }
 
+std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
+                                                TransportSystem &problem,
+                                                AdjointProblem *adjoint,
+                                                Grid const &grid,
+                                                unsigned int k0,
+                                                double tFinal)
+{
+    return runAdaptiveDegree(config, problem, adjoint, grid, k0, tFinal, nullptr);
+}
+
 // --- runLadder --------------------------------------------------------------
 
 namespace
 {
-// A rung's mesh, built the way configuredGrid builds the configured one but at
-// this rung's cell count, so the grading of a High_Grid_Boundary mesh is the
-// same on every rung and only the count changes.
+// A rung's mesh, built by configuredGrid itself at this rung's cell count, so
+// the grading of a GradedGridBoundary mesh is the same on every rung and only the
+// count changes.
 Grid ladderGrid(SolverConfig const &config, unsigned int nCells)
 {
-    return Grid(config.Lower_boundary, config.Upper_boundary,
-                static_cast<Index>(nCells), config.High_Grid_Boundary,
-                config.Lower_Boundary_Fraction, config.Upper_Boundary_Fraction);
+    SolverConfig rung = config;
+    rung.GridSize = static_cast<int>(nCells);
+    rung.GridPoints.clear();
+    return *configuredGrid(rung);
 }
 } // namespace
 

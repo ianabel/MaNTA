@@ -1,6 +1,7 @@
 #include "PyRunner.hpp"
 #include "Logging.hpp"
 #include "DegreeAdaptation.hpp"
+#include "MeshAdaptation.hpp"
 #include "PyConfigSource.hpp"
 #include "PyToml.hpp"
 #include <algorithm>
@@ -210,6 +211,18 @@ void PyRunner::configure(const py::dict &config) {
 // configuration against every level it builds.
 void PyRunner::adaptDegree(double tFinal) {
   system.reset();
+
+  if (cfg.MeshAdaptation) {
+    // p -> h -> p. The mesh it settles on has to outlive the solver *and* every
+    // later getSolution call, so the Runner takes ownership of it: `grid` is
+    // replaced by the adapted one, and the old uniform mesh dies with the
+    // assignment -- after `system` was reset above, which is what makes that safe.
+    auto adapted = runAdaptiveMesh(cfg, *pProblem, adjoint.get(), *grid, k, tFinal);
+    grid = std::move(adapted.grid);
+    system = std::move(adapted.solver);
+    return;
+  }
+
   system = runAdaptiveDegree(cfg, *pProblem, adjoint.get(), *grid, k, tFinal);
 }
 
@@ -559,7 +572,7 @@ Vector PyRunner::getPostprocessedSolution(
   Postprocessor const *pp = system->getPostprocessor();
   if (pp == nullptr)
     throw std::runtime_error("No postprocessed solution is available: it "
-                             "requires Polynomial_degree >= 1 and a solver that "
+                             "requires PolynomialDegree >= 1 and a solver that "
                              "has been run at least once");
 
   // computeUStar is what fills the reconstruction, and it is driven by output
@@ -579,4 +592,20 @@ Vector PyRunner::getPostprocessedSolution(
     sol(i) = pp->uStar(var)(p);
   }
   return sol;
+}
+
+std::vector<Position> PyRunner::getCellBoundaries() const {
+  if (grid == nullptr)
+    throw std::runtime_error(
+        "Error: Runner must be configured before its mesh can be read.");
+
+  // Built from the cells rather than kept alongside them, so it cannot disagree
+  // with the grid the solver is using. Each cell's lower edge, then the last
+  // cell's upper edge -- the cells are contiguous, so that is every boundary once.
+  std::vector<Position> out;
+  out.reserve(grid->getNCells() + 1);
+  for (Grid::Index i = 0; i < grid->getNCells(); ++i)
+    out.push_back((*grid)[i].x_l);
+  out.push_back((*grid)[grid->getNCells() - 1].x_u);
+  return out;
 }

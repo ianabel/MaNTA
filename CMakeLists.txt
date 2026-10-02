@@ -69,9 +69,11 @@ set(MANTA_CORE_SOURCES
   FieldModel.cpp
   MaNTA.cpp
   Matrices.cpp
+  MeshAdaptation.cpp
   NetCDFIO.cpp
   PhysicsCases.cpp
   Postprocessing.cpp
+  SmoothnessSensor.cpp
   Solver.cpp
   SolverConfig.cpp
   SteadyState.cpp
@@ -158,11 +160,23 @@ endif()
 
 # --------------------------------------------------------------- install --
 #
-# Enough for a physics case to be built outside this tree: the headers it
-# includes, a shared library with the solver and the registry in it, and a
-# pkg-config file so the case's own build can find both.
+# Everything goes under CMAKE_INSTALL_PREFIX in the GNUInstallDirs layout, and
+# DESTDIR stages it for packaging:
 #
-#     cmake --install build --prefix /where/you/want
+#     cmake --install build --prefix /opt/manta      # or /usr, or $HOME/.local
+#     DESTDIR=/tmp/stage cmake --install build --prefix /usr
+#
+#   bin/MaNTA, bin/manta                  the solver; the Python console script
+#   lib/libmanta.so, lib/pkgconfig/       the solver for embedding, and its .pc
+#   include/manta/                        the headers a physics case includes
+#   <MANTA_INSTALL_PYTHONDIR>/manta/      the Python package (python/CMakeLists.txt)
+#   share/doc/MaNTA/html/                 the docs, if the `docs` target has run
+#
+# Components -- runtime, devel, python, docs -- let a packager split those, e.g.
+# `cmake --install build --component python`.
+#
+# A physics case built outside this tree needs the headers, libmanta and the .pc:
+#
 #     g++ -shared -fPIC $(pkg-config --cflags manta) MyCase.cpp -o libmycase.so
 #
 # and name libmycase.so in the config's PhysicsPlugins array.
@@ -171,6 +185,15 @@ endif()
 # MaNTAConfig.cmake would invite `target_link_libraries(mycase manta)`, and
 # linking libmanta is precisely the mistake that gives a plugin its own copy of
 # the registry. The rule is easier to state when there is no target to link.
+
+# Installed binaries keep the paths to the libraries they were linked against
+# outside the build tree -- SUNDIALS under a prefix of its own, typically. CMake
+# otherwise drops the whole build RPATH on install, and the installed solver
+# cannot find libsundials_ida at startup. System directories are never added.
+# The extension gets the same in python/CMakeLists.txt.
+set_target_properties(MaNTA manta PROPERTIES INSTALL_RPATH_USE_LINK_PATH ON)
+
+install(TARGETS MaNTA RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT runtime)
 
 # Every header a physics case can reach transitively, keeping the directory
 # layout so their quoted includes of each other still resolve.
@@ -209,11 +232,15 @@ set(MANTA_INSTALL_HEADERS
 )
 
 install(FILES ${MANTA_INSTALL_HEADERS}
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/manta")
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/manta"
+        COMPONENT devel)
 install(DIRECTORY util/
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/manta/util"
+        COMPONENT devel
         FILES_MATCHING PATTERN "*.hpp")
-install(TARGETS manta LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+install(TARGETS manta
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        COMPONENT runtime NAMELINK_COMPONENT devel)
 
 set(MANTA_PC_STD "c++${MANTA_CXX_STANDARD}")
 set(MANTA_PC_MARCH "")
@@ -226,7 +253,7 @@ endif()
 configure_file(cmake/manta.pc.in "${PROJECT_BINARY_DIR}/manta.pc" @ONLY)
 configure_file(cmake/MantaInstallPc.cmake.in
                "${PROJECT_BINARY_DIR}/MantaInstallPc.cmake" @ONLY)
-install(SCRIPT "${PROJECT_BINARY_DIR}/MantaInstallPc.cmake")
+install(SCRIPT "${PROJECT_BINARY_DIR}/MantaInstallPc.cmake" COMPONENT devel)
 
 # CMake has no built-in uninstall. This is the conventional install-manifest
 # implementation, kept because `make uninstall` existed and dropping it would be

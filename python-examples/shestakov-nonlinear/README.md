@@ -209,18 +209,22 @@ boundary cell. The observed `h^1` is worse than that, because a local error is
 being amplified into a global one — which is a statement about the scheme's
 treatment of a degenerate flux boundary, not about `n_e`.
 
-## The one benchmark where a steady solve does not pay
+## Steady solves, and the Jacobian reuse that hid their cost
 
 `SteadyStateSolver` defaults to `PseudoTransient`, and this example's `run.conf`
-overrides it back to `TimeMarch`. Measured at 10 cells, `k = 2`, `n(Lx) = 0.01`,
-for the same answer: time marching 283 visits per point, pseudo-transient 705,
-Newton 731 — **2.5× worse**, where Park's benchmark goes 113 → 19.
+overrides it back to `TimeMarch` -- not for speed, but because this case exists to
+document a boundary, and time marching is the path that follows the physics into
+it. On cost, a steady solve wins here as it does elsewhere. Visits per point at 10
+cells, `k = 3` (`python-examples/paper-figures/steady_modes.py`): time marching
+257, pseudo-transient 45, Newton 39.
 
-The reason is the same degeneracy the rest of this file is about. Continuation
-exists to shed the `alpha/dt` mass term, and on a flux of `D0 q^3/u^2` that term
-is doing useful damping: as `dt` grows the inner Newton starts rejecting steps,
-and the continuation spends its iterations backing off rather than converging.
-This is the counter-example that keeps `TimeMarch` in the tree.
+That reverses what this section used to say -- pseudo-transient 705 and Newton 731
+against time marching's 283, 2.5x worse -- and the reversal is entirely
+`NewtonJacobianReuse`. Those numbers were taken at 10, KINSOL's default: on a flux
+of `D0 q^3/u^2` a Jacobian several iterations old points somewhere useless, the
+inner Newton starts rejecting steps as `dt` grows, and the continuation spends its
+iterations backing off. With a fresh Jacobian every iteration -- MaNTA's default
+now -- that does not happen.
 
 ## What would close the remaining gap
 

@@ -138,6 +138,16 @@ public:
   // given a Runner has otherwise no way to ask which of the two it is.
   std::string const &physicsCase() const { return caseName; }
 
+  // The cell boundaries of the mesh the run actually used -- nCells + 1 of them,
+  // ascending, the ends being the domain.
+  //
+  // Needed because the mesh is no longer necessarily the one the caller described:
+  // MeshAdaptation decides whether to grade and at which end, so "what mesh did I
+  // get" became a question a driver can only answer by asking. Uniform spacing in
+  // the answer is how a caller learns the grading decision came back negative,
+  // without parsing the log.
+  std::vector<Position> getCellBoundaries() const;
+
 private:
   // Empty unless constructed from a name. Non-empty is what makes configure()
   // build `pProblem` itself, so it is also the flag distinguishing the two
