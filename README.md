@@ -9,12 +9,13 @@ every configuration key, the output format, the adjoint interface, and how to wr
 Python. The sources live in [`docs/`](docs/index.rst); build them locally with
 
 ```sh
-cmake --build build --target docs      # -> docs/_build/html/index.html
+cmake --build build --target docs      # -> build/docs/html/index.html
+cmake --install build --component docs # ...and copied to docs/_build/html
 ```
 
-which creates `.venv-docs` from `docs/requirements.txt` the first time and reuses it
-after. It builds with `-W`, the same as Read the Docs, so a local build that passes is
-one that will publish.
+which creates `build/venv-docs` from `docs/requirements.txt` the first time and
+reuses it after. It builds with `-W`, the same as Read the Docs, so a local build
+that passes is one that will publish.
 
 Configuration keys are declared once, in `ConfigSchema.cpp`, and read from there by
 both the config file and `Runner.configure`; `build/MaNTA --list-options` prints the
@@ -184,19 +185,39 @@ Everything the old Makefile had a target for still has one, built with
 | Target | What it does |
 |---|---|
 | `MaNTA` | the solver binary, at `build/MaNTA` |
-| `_manta` | the Python extension, into `python/manta/` |
+| `_manta` | the Python extension, into the build's package at `build/python/manta/` |
 | `UnitTests` | the Boost.Test binary, at `build/Tests/UnitTests/UnitTests` |
 | `manta` | `libmanta.so`, for embedding the solver in another program |
 | `unit_tests`, `regression_tests`, `python_tests` | run one suite (`ctest` runs all three) |
-| `stubs`, `stubs-check`, `typecheck` | regenerate / verify `_manta.pyi`, and mypy the package |
-| `docs` | Sphinx, into `docs/_build/html` |
+| `stubs`, `stubs-check`, `typecheck` | generate `_manta.pyi` into `build/stubs/` / diff it against the committed one / mypy the package |
+| `stubs-update` | copy the generated stub over `python/manta/_manta.pyi` |
+| `docs` | Sphinx, into `build/docs/html` |
 | `coverage` | the gcovr reports; needs a `coverage` build directory |
-| `venv` | create `.venv` from `requirements.txt` |
+| `venv` | create `build/venv` from `requirements.txt` |
 | `clean_data`, `clean_coverage` | sweep run output and instrumentation data |
-| `install`, `uninstall` | headers, `libmanta.so` and `manta.pc` under a prefix |
+| `install`, `uninstall` | everything below, under a prefix |
 
 `cmake --build build` with no target builds the solver, the library, the
-extension and the unit tests.
+Python package and the unit tests. **A build writes only into its own build
+directory**, and the suites run from there too; `stubs-update` and the docs
+component of `install` are the two things that write into the checkout, and
+both exist to.
+
+#### Installing
+
+```sh
+cmake --install build --prefix /opt/manta             # or /usr/local (the default), $HOME/.local, ...
+DESTDIR=/tmp/stage cmake --install build --prefix /usr  # staged, for packaging
+```
+
+puts `bin/MaNTA` and `bin/manta`, `lib/libmanta.so` and `lib/pkgconfig/manta.pc`,
+the headers under `include/manta/`, the Python package under
+`lib/python3.X/site-packages/manta/` and, if the `docs` target has been built,
+the HTML under `share/doc/MaNTA/html/`. The installed `manta` command finds its
+package relative to itself, so nothing needs to be on `PYTHONPATH`. A
+distribution Python that searches somewhere else — Debian's reads
+`/usr/local/lib/python3/dist-packages` — takes `-DMANTA_INSTALL_PYTHONDIR=...`.
+`--component runtime|devel|python|docs` installs one part.
 
 ### Testing
 
@@ -212,7 +233,7 @@ ctest --test-dir build --output-on-failure
 |---|---|
 | `unit` | Boost.Test C++ unit tests (`Tests/UnitTests`) |
 | `regression` | Runs the solver over `Tests/RegressionTests/*.conf` and compares against checked-in `.ref.nc` references |
-| `python` | pytest suite for the `manta` package (`python/Tests`); needs the `_manta` target built |
+| `python` | pytest suite for the `manta` package (`python/Tests`) against the build's own package; needs the `_manta` target built |
 
 The regression and Python suites need the Python dependencies. On distributions
 where the system Python is externally managed (Debian, Ubuntu), that means a
@@ -220,15 +241,14 @@ virtualenv, which the `venv` target will build for you:
 
 ```sh
 cmake --build build --target venv
-cmake -B build -DPython3_EXECUTABLE="$PWD/.venv/bin/python"
+cmake -B build -DPython3_EXECUTABLE="$PWD/build/venv/bin/python"
 ```
 
-That installs `requirements.txt` plus `gcovr`, so every target is then runnable.
-There is no need to put it on `PATH`: CMake records which interpreter to use, and
-runs the regression driver and pytest with it — where the Makefile relied on
-`PATH` and the regression driver's `env python3` shebang. A `.venv` in the
-repository root is picked up automatically on a fresh configure, so the second
-line above is only needed if you already configured without one.
+That installs `requirements.txt` plus `gcovr` into `build/venv`, so every target
+is then runnable. There is no need to put it on `PATH`: CMake records which
+interpreter to use, and runs the regression driver and pytest with it. A fresh
+configure picks up `build/venv`, or failing that a `.venv` of your own in the
+repository root, without being told.
 
 It builds the environment with a *versioned* interpreter (`python3.13` by
 default) on purpose: a venv created by plain `python3 -m venv` records the
@@ -237,20 +257,27 @@ new release the environment's packages are stranded in the old
 `lib/python3.X/site-packages` and every import fails. Pick a different one with
 `-DMANTA_VENV_PYTHON=python3.12`, or a different location with `-DMANTA_VENV=...`.
 
-All three suites can be run from any working directory.
+All three run from the build directory — CTest starts each in the build tree's
+copy of its source directory — and write only there. Inputs (configs, reference
+solutions, test fixtures) are read from the source tree.
 
 ### Writing a physics case in Python
 
 A case and the driver that runs it do not have to live in this repository:
 
 ```sh
-cmake --build build --target _manta   # builds python/manta/_manta<abi>.so
+cmake --build build --target _manta   # the package, at build/python/manta
+export PYTHONPATH=$PWD/build/python   # ...and use it in place, or install it:
 pip install .                         # the `manta` package and the `manta` command
 pip install .[jax]                    # ...and manta.jax, for cases written as JAX functions
 ```
 
-`pip install .` runs CMake itself, reusing `build/` if it is already configured,
-so a machine whose SUNDIALS needed naming does not have to name it again here.
+The build's package directory holds the extension beside links to the Python
+sources, so on `PYTHONPATH` it is the editable form — an edit to a `.py` file
+shows at once, and `pip install -e .` is not supported. `pip install .` runs
+CMake itself, reusing `build/` if it is already configured (or the directory
+`MANTA_CMAKE_BUILD_DIR` names), so a machine whose SUNDIALS needed naming does
+not have to name it again here. `cmake --install` is the third route.
 
 A case is then a subclass of `manta.TransportSystem` in your own package, run
 with `manta myrun.conf`. `python-examples/` holds a worked directory per
@@ -280,12 +307,9 @@ suites and writes, under `build-coverage/coverage/`:
 There is no percentage threshold; it fails only if the build or a suite does.
 `clean_coverage` removes the instrumentation data and the reports.
 
-Note that both build directories write the Python extension to the same place,
-`python/manta/`, because that is where `import manta` has to find it. Each build
-directory records what it linked there and replaces anything it does not
-recognise, so switching between `build/` and `build-coverage/` needs nothing from
-you — the first build after the switch relinks the module, and the `coverage`
-target additionally refuses to start if what is in place is not instrumented.
+Each build directory has its own Python package, so the coverage run's Python
+suite measures the instrumented module and nothing else: the suite refuses to
+start if `manta` resolves anywhere but the build under test.
 
 #### Installing SUNDIALS
 

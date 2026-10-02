@@ -9,21 +9,27 @@ import sys
 import os
 import argparse
 import shutil
+import subprocess
 import re
 import scipy
 
-# SOLVER names the solver binary. CTest sets it to the built executable's
-# absolute path, which is what makes an out-of-source build work here: an
-# absolute value discards the earlier components of the join below. The fallback
-# is the repo root, which is where the Makefile used to leave it -- running
-# ./TestSolutions.py by hand against an old in-source build still works, and a
-# missing SOLVER is a clear "no such file" rather than KeyError: 'SOLVER'.
-# Resolve against this script's location, not the caller's cwd.
+# SOLVER names the solver binary; CTest sets it to the built executable. Unset,
+# the MaNTA on PATH is used -- an installed one, say.
+#
+# The inputs -- the .conf files and the .ref.nc references -- are siblings of
+# this script and are read from here. Everything a run writes, including the
+# config variants the restart checks generate, goes to the cwd, which CTest makes
+# the build tree's Tests/RegressionTests. Run by hand, run it from a scratch
+# directory: the solver names its output after the config's stem, so a
+# run from here would write beside the references.
 _here = os.path.dirname(os.path.abspath(__file__))
-manta_file = os.path.join(_here, "..", "..", os.environ.get("SOLVER", "MaNTA"))
-# All the .conf inputs and .ref.nc references are siblings of this script, and
-# the solver writes its output into the cwd -- so anchor there.
-os.chdir(_here)
+manta_file = os.environ.get("SOLVER") or shutil.which("MaNTA")
+if not manta_file:
+    sys.exit("No solver: set SOLVER to the MaNTA binary, or put one on PATH.")
+
+
+def data(name):
+    return os.path.join(_here, name)
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Run the MaNTA regression suite.",
@@ -45,7 +51,7 @@ TOLERANCE = ARGS.tolerance
 
 
 def run_manta( config_file ):
-    code = os.system( manta_file + " " + config_file + " >/dev/null" )
+    code = subprocess.call( [ manta_file, config_file ], stdout = subprocess.DEVNULL )
     if( code != 0 ):
         print("Failed to run test simulation with configuration in " + config_file)
         sys.exit(code)
@@ -211,9 +217,9 @@ def cleanup( prefix ):
 
 def check_ref_case( prefix ):
     print("Checking Reference Solution for "+prefix+".conf")
-    run_manta( prefix + ".conf" )
+    run_manta( data( prefix + ".conf" ) )
     ncFileName = prefix + ".nc"
-    ncRefFile  = prefix + ".ref.nc"
+    ncRefFile  = data( prefix + ".ref.nc" )
     test_ref_soln_l2( ncFileName, ncRefFile, TOLERANCE )
     cleanup( prefix )
     
@@ -223,7 +229,7 @@ def ld_soln( x, t ):
 
 print("Testing Analytic Solutions")
 
-run_manta( "ld.conf" )
+run_manta( data( "ld.conf" ) )
 test_analytic_soln( "ld.nc", ld_soln, TOLERANCE )
 cleanup( "ld" )
 
@@ -233,7 +239,7 @@ def nonlin_soln( x, t ):
     eta = x / np.sqrt( t0 + t )
     return pow( 1 - eta, 1/n )
 
-run_manta( "nonlin.conf" )
+run_manta( data( "nonlin.conf" ) )
 test_analytic_soln( "nonlin.nc", nonlin_soln, TOLERANCE )
 cleanup( "nonlin" )
 
@@ -248,7 +254,7 @@ def nonlin_ss( x ):
     u2 = 1.0/np.sqrt(u1) - G
     return 1.0/(u2**2)
 
-run_manta( "nonlin_ss.conf" )
+run_manta( data( "nonlin_ss.conf" ) )
 test_steady_state( "nonlin_ss.nc", nonlin_ss, TOLERANCE )
 cleanup( "nonlin_ss" )
 
@@ -289,7 +295,7 @@ def config_variant( source_prefix, target_prefix, **overrides ):
     distinct name writes distinct .nc/.dat/.restart.nc files and cannot collide
     with the checked-in references.
     """
-    text = open( source_prefix + ".conf" ).read()
+    text = open( data( source_prefix + ".conf" ) ).read()
 
     # Everything before the first [section] after [configuration] is the general
     # section; keys are inserted there.
@@ -360,7 +366,7 @@ def check_restart_round_trip( prefix, t_split, rtol = 1.0e-6, atol = 1.0e-8 ):
     print( "Checking restart round trip for " + prefix + ".conf (split at t = "
            + str( t_split ) + ")" )
 
-    source = open( prefix + ".conf" ).read()
+    source = open( data( prefix + ".conf" ) ).read()
     t_final = float( re.search( r"^\s*t_final\s*=\s*(\S+)", source, re.MULTILINE ).group( 1 ) )
 
     whole   = prefix + "_restart_whole"

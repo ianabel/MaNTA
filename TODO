@@ -1,3 +1,30 @@
+Move the built documentation out of this repository.
+Raised 2026-09-30, when the build stopped writing into the source tree.
+
+  Every build now writes only into its build directory, docs included: the
+  `docs` target renders into <build>/docs/html. The one exception is
+  `cmake --install`, whose docs component also copies that HTML into the
+  checkout at docs/_build/html (MANTA_DOCS_SOURCE_COPY), because that is where
+  a local copy has always been looked for. It is gitignored, so it is a
+  convenience rather than anything the repository carries.
+
+  The end state is a separate git repository that holds *only* built HTML and
+  exists only to back manta-docs.readthedocs.io: the `docs` component installs
+  into a checkout of it, a commit there is a published version, and this
+  repository holds the sources alone. Read the Docs then serves static HTML
+  instead of running Sphinx itself, which also takes .readthedocs.yaml's pins
+  (the sphinx<8 hold for sphinx-material) and its intersphinx-timeout failure
+  mode out of the publishing path -- the build that publishes is the build that
+  was checked locally with -W.
+
+  To decide: whether RTD is still the right host once it is only serving
+  files (GitHub Pages from that repository would do the same), who pushes to
+  it (a CI job on main, most likely, which is also what would finally put a
+  docs build in CI -- see the entry below), and how versions map to branches or
+  tags there. Once it exists, MANTA_DOCS_SOURCE_COPY defaults to that checkout,
+  or goes, and docs/_build/ leaves .gitignore.
+
+
 SteadyStateTolerance barely affects a TimeMarch run.
 Found 2026-09-23, re-measuring the paper's steady-cost table at a tolerance a
 plasma transport run would actually use.
@@ -102,8 +129,8 @@ Found 2026-08-26, by putting one there.
   referencing it, and the first thing to notice was a Read the Docs build of main
   -- one PR later, and only because the CMake branch happened to build docs.
 
-  The job is cheap: `cmake --build build --target docs` needs the .venv-docs
-  built from docs/requirements.txt and no compiler at all. It is a separate leg
+  The job is cheap: `cmake --build build --target docs` needs the venv-docs
+  it builds from docs/requirements.txt and no compiler at all. It is a separate leg
   rather than a step in an existing one precisely because it needs neither the
   solver nor the matrix, and adding it means adding its context to the protection
   rule -- merge the leg first, then require it, per the ordering rule in

@@ -10,11 +10,20 @@ The build directory is reused if it is already configured, so a checkout whose
 `build/` cache already names SUNDIALS_ROOT (or whatever else this machine needs)
 does not have to repeat it here -- the same role Makefile.local used to play.
 Point MANTA_CMAKE_BUILD_DIR somewhere else to use a different one, and pass extra
-configure arguments through MANTA_CMAKE_ARGS.
+configure arguments through MANTA_CMAKE_ARGS. CMAKE_BUILD_PARALLEL_LEVEL sets the
+build's job count, as it does for any `cmake --build`; unset, it is the core
+count capped at eight, because an LTO link per job is what runs a box out of
+memory.
+
+The package's Python files come from python/manta/ as usual; the extension is
+the one thing taken from the build directory, where CMake links it. An editable
+install (`pip install -e .`) therefore has no extension to find -- the build's
+own package directory, <build>/python on PYTHONPATH, is the editable form.
 """
 
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -23,6 +32,10 @@ from setuptools import setup
 from setuptools.command.build_py import build_py
 
 HERE = Path(__file__).parent.resolve()
+
+
+def _build_dir():
+    return Path(os.environ.get("MANTA_CMAKE_BUILD_DIR", HERE / "build")).resolve()
 
 
 class CMakeBuildPy(build_py):
@@ -35,16 +48,21 @@ class CMakeBuildPy(build_py):
         else:
             self.build_extension()
 
-        built = list((HERE / "python" / "manta").glob("_manta*.so"))
+        package = _build_dir() / "python" / "manta"
+        built = sorted(package.glob("_manta*.so"))
         if not built:
             raise SystemExit(
-                "The CMake build did not produce python/manta/_manta*.so.\n"
+                f"The CMake build did not produce {package}/_manta*.so.\n"
                 "Check the configure output -- see README.md for first-time setup."
             )
         super().run()
+        target = Path(self.build_lib) / "manta"
+        target.mkdir(parents=True, exist_ok=True)
+        for module in built:
+            shutil.copy2(module, target / module.name)
 
     def build_extension(self):
-        build_dir = Path(os.environ.get("MANTA_CMAKE_BUILD_DIR", HERE / "build"))
+        build_dir = _build_dir()
         extra = shlex.split(os.environ.get("MANTA_CMAKE_ARGS", ""))
 
         # Python3_EXECUTABLE is the important one: it makes the module's ABI
@@ -67,12 +85,25 @@ class CMakeBuildPy(build_py):
             # here so a machine with no Boost can still install the package.
             configure += ["-DCMAKE_BUILD_TYPE=Release", "-DMANTA_TESTS=OFF"]
 
+        jobs = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL") or str(
+            min(os.cpu_count() or 1, 8)
+        )
         subprocess.run(configure, cwd=HERE, check=True)
         subprocess.run(
-            ["cmake", "--build", str(build_dir), "--target", "_manta",
-             "-j", str(os.cpu_count() or 1)],
+            ["cmake", "--build", str(build_dir), "--target", "_manta", "-j", jobs],
             cwd=HERE, check=True,
         )
 
 
-setup(cmdclass={"build_py": CMakeBuildPy})
+# setuptools' own scratch -- its build/ and the .egg-info -- would otherwise land in
+# the checkout. They go in the CMake build directory with everything else.
+_scratch = _build_dir() / "setuptools"
+(_scratch / "egg-info").mkdir(parents=True, exist_ok=True)
+
+setup(
+    cmdclass={"build_py": CMakeBuildPy},
+    options={
+        "build": {"build_base": str(_scratch / "build")},
+        "egg_info": {"egg_base": str(_scratch / "egg-info")},
+    },
+)

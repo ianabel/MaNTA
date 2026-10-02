@@ -1,9 +1,8 @@
 # Configuration file for the Sphinx documentation builder.
 #
-# Build locally with:
-#     python3 -m venv /tmp/docsvenv
-#     /tmp/docsvenv/bin/pip install -r docs/requirements.txt
-#     /tmp/docsvenv/bin/sphinx-build -W -j auto -b html docs docs/_build/html
+# Build locally with the `docs` target, which makes its own environment from
+# docs/requirements.txt and renders into the build tree:
+#     cmake --build build --target docs      # -> build/docs/html
 #
 # -W and -j auto both mirror what Read the Docs runs (it adds -W --keep-going for
 # .readthedocs.yaml's fail_on_warning), so a warning here is a failed RTD build.
