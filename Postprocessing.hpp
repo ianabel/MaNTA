@@ -107,6 +107,12 @@ public:
     // cell-major order as DGSoln::getPoints().
     std::vector<Position> const &starPoints() const { return starPoints_; }
 
+    // The same points without building a Postprocessor, for a caller that needs
+    // to know where the superconvergent residual will evaluate before
+    // initialiseMatrices has built one (SystemSolver::evaluationPlan). The
+    // constructor fills starPoints() from this, so the two cannot disagree.
+    static std::vector<Position> starPointsOn(Grid const &grid, unsigned int k);
+
     // Reconstruct u* for every variable from Y. Must be called before uStar()
     // or evalOnStarNodes().
     void computeUStar(DGSoln const &Y);

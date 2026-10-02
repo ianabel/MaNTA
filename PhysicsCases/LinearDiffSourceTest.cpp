@@ -6,7 +6,7 @@ REGISTER_PHYSICS_IMPL(LinearDiffSourceTest);
 SystemSpec LinearDiffSourceTest::buildSpec(toml::value const &config)
 {
     if (config.count("LinearDiffSourceTest") != 1)
-        return {.variables = numberedFields(1)};
+        return {.variables = numberedFields(1), .regrid = RegridPolicy::InPlace};
 
     auto const &InternalConfig = config.at("LinearDiffSourceTest");
     const Index nVars = toml::find_or(InternalConfig, "nVars", 1);
@@ -15,7 +15,7 @@ SystemSpec LinearDiffSourceTest::buildSpec(toml::value const &config)
     const auto lower = toml::find_or(InternalConfig, "LowerBoundaryConditions", std::vector<bool>(nVars, true));
     const auto upper = toml::find_or(InternalConfig, "UpperBoundaryConditions", std::vector<bool>(nVars, true));
 
-    auto spec = SystemSpec{.variables = numberedFields(nVars)};
+    auto spec = SystemSpec{.variables = numberedFields(nVars), .regrid = RegridPolicy::InPlace};
     for (Index i = 0; i < nVars; ++i)
     {
         spec.variables[i].lower = lower[i] ? BoundaryKind::Dirichlet : BoundaryKind::Neumann;
@@ -24,6 +24,9 @@ SystemSpec LinearDiffSourceTest::buildSpec(toml::value const &config)
     return spec;
 }
 
+// RegridPolicy::InPlace: the domain ends are all the constructor takes from its
+// grid, and AutodiffTransportSystem::prepareEvaluation takes them again from
+// each plan.
 LinearDiffSourceTest::LinearDiffSourceTest(toml::value const &config, Grid const &grid)
     : AutodiffTransportSystem(config, grid, buildSpec(config))
 {

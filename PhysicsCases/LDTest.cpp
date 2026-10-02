@@ -8,8 +8,12 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(LDTest);
 
+// RegridPolicy::InPlace: the constructor reads nothing from its grid and the
+// case keeps nothing from an evaluation plan, so a new plan changes nothing it
+// built.
 LDTest::LDTest(toml::value const &config, Grid const& )
-	: TransportSystem({.variables = {{"u", "the diffused quantity", ""}}})
+	: TransportSystem({.variables = {{"u", "the diffused quantity", ""}},
+					   .regrid = RegridPolicy::InPlace})
 {
 	auto const& DiffConfig = config.at( "DiffusionProblem" );
 	kappa = toml::find_or(DiffConfig, "Kappa", 1.0);

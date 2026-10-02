@@ -57,6 +57,11 @@ class WallLayer(manta.TransportSystem):
 
     variables = [manta.Field("u", "", "", lower=manta.Mixed(d=1.0))]
 
+    # InPlace: nothing here depends on where the case is evaluated -- the
+    # counters count calls, whatever the points -- so MeshAdaptation and
+    # DegreeAdaptation may move one instance between meshes and degrees.
+    regrid = manta.Regrid.InPlace
+
     def __init__(self, n):
         super().__init__()
         self.n = n

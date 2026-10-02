@@ -338,6 +338,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(MeshAdaptation, bool);
     READ(MeshAdaptationThreshold, double);
     READ(MeshAdaptationAttempts, unsigned);
+    READ(RebuildPhysicsOnRegrid, bool);
     READ(TransportSystem, std::string);
     READ(PhysicsPlugins, std::vector<std::string>);
     READ(FieldModel, std::string);

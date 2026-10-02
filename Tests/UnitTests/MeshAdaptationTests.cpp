@@ -15,6 +15,7 @@
 
 #include "CapturedOutput.hpp"
 #include "DegreeAdaptation.hpp"
+#include "PhysicsInstance.hpp"
 #include "MeshAdaptation.hpp"
 #include "SmoothnessSensor.hpp"
 #include "SolverConfig.hpp"
@@ -424,7 +425,8 @@ BOOST_AUTO_TEST_CASE(the_driver_refuses_a_low_degree_even_if_the_config_did_not)
     Grid grid(0.0, 1.0, 10);
     TestDiffusion problem(mesh_config);
     SolverConfig cfg{};
-    BOOST_CHECK_THROW(runAdaptiveMesh(cfg, problem, nullptr, grid, 2, 1.0),
+    PhysicsInstance physics(problem, grid);
+    BOOST_CHECK_THROW(runAdaptiveMesh(cfg, physics, grid, 2, 1.0),
                       std::invalid_argument);
 }
 

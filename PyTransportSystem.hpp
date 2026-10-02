@@ -224,6 +224,11 @@ public:
   Value aFn(Index i, Position x) override {
     PYBIND11_OVERRIDE(Value, TransportSystem, aFn, i, x);
   };
+  // Optional in the same way: absent, the base does nothing. The plan crosses
+  // as a copy, so a case may keep it beyond the call.
+  void prepareEvaluation(EvaluationPlan const &plan) override {
+    PYBIND11_OVERRIDE(void, TransportSystem, prepareEvaluation, plan);
+  };
   Value LowerBoundary(Index i, Time t) const override {
     PYBIND11_OVERRIDE(Value, TransportSystem, LowerBoundary, i, t);
   };

@@ -41,9 +41,13 @@ SystemSpec AdjointPlasma::buildSpec(toml::value const &)
     return {.variables = {{"IonEnergy", "ion energy density", "n0 T0",
                            BoundaryKind::Neumann, BoundaryKind::Dirichlet},
                           {"ElectronEnergy", "electron energy density", "n0 T0",
-                           BoundaryKind::Neumann, BoundaryKind::Dirichlet}}};
+                           BoundaryKind::Neumann, BoundaryKind::Dirichlet}},
+            .regrid = RegridPolicy::InPlace};
 }
 
+// RegridPolicy::InPlace: the domain ends are all the constructor takes from its
+// grid, and AutodiffTransportSystem::prepareEvaluation takes them again from
+// each plan.
 AdjointPlasma::AdjointPlasma(toml::value const &config, Grid const &grid)
     : AutodiffTransportSystem(config, grid, buildSpec(config))
 {

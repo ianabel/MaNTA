@@ -7,12 +7,15 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(MatrixDiffusion);
 
+// RegridPolicy::InPlace: the constructor reads nothing from its grid and the
+// case keeps nothing from an evaluation plan, so a new plan changes nothing it
+// built.
 SystemSpec MatrixDiffusion::buildSpec(toml::value const &config)
 {
 	Index nVars = 1;
 	if (config.count("DiffusionProblem") == 1)
 		nVars = toml::find_or(config.at("DiffusionProblem"), "nVars", 1);
-	return {.variables = numberedFields(nVars)};
+	return {.variables = numberedFields(nVars), .regrid = RegridPolicy::InPlace};
 }
 
 MatrixDiffusion::MatrixDiffusion(toml::value const &config, Grid const &)

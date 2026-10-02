@@ -8,6 +8,7 @@
 
 class AdjointProblem;
 class Grid;
+class PhysicsInstance;
 class SystemSolver;
 class TransportSystem;
 
@@ -63,7 +64,7 @@ unsigned int degreeIncrement(double E, double eps, double base);
 // already infinite, or when the previous step is not a finite positive number.
 SolverConfig carriedStepConfig(SolverConfig const &config, SystemSolver const &previous);
 
-// Solve `problem`, adapting the global polynomial degree between solves, and
+// Solve `physics`, adapting the global polynomial degree between solves, and
 // return the solver that produced the final answer.
 //
 // Builds and destroys one SystemSolver per level and is careful never to have
@@ -80,10 +81,17 @@ SolverConfig carriedStepConfig(SolverConfig const &config, SystemSolver const &p
 // *next* run on the same configuration resume from the last level instead of
 // from InitialValue.
 //
-// `adjoint` may be null; when it is not, it is re-attached to each new solver,
-// which a fresh one does not inherit.
+// Each level after the first is a new evaluation plan -- the degree adds nodes
+// and moves the old ones -- and goes through PhysicsInstance::solverFor: a case
+// declaring RegridPolicy::InPlace is handed the new plan; under
+// RebuildPhysicsOnRegrid any other case is replaced by a new instance, which
+// takes over the restart state; and without either the run is refused before
+// its first solve whenever MaxPolynomialDegree leaves room to raise k. The
+// adjoint problem, if there is one, is re-attached to each solver, and
+// re-obtained from each rebuilt case.
 //
-// Only the caller's grid and problem outlive this. The returned solver holds a
+// The case must have been built against `grid`. Only the caller's grid and the
+// case physics holds outlive this. The returned solver holds a
 // reference to that grid, so it must not outlive it.
 //
 // `solvedFirstLevel`, when given, *is* level 0: a solver already configured from
@@ -98,15 +106,13 @@ SolverConfig carriedStepConfig(SolverConfig const &config, SystemSolver const &p
 // declaration, which needs the complete type. gcc defers it, so only the clang
 // legs saw this.
 std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
-                                                TransportSystem &problem,
-                                                AdjointProblem *adjoint,
+                                                PhysicsInstance &physics,
                                                 Grid const &grid,
                                                 unsigned int k0,
                                                 double tFinal,
                                                 std::unique_ptr<SystemSolver> solvedFirstLevel);
 std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
-                                                TransportSystem &problem,
-                                                AdjointProblem *adjoint,
+                                                PhysicsInstance &physics,
                                                 Grid const &grid,
                                                 unsigned int k0,
                                                 double tFinal);
@@ -129,17 +135,16 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
 //
 // The state crosses each rung the way runAdaptiveDegree's does, through
 // setRestartValues, and setInitialConditions then projects across whichever of
-// the mesh and the degree has changed. Note that `problem` is built once, by
-// the caller, against the *final* grid: a case that sizes something from the
-// grid it was constructed with sees that one on every rung, which is the same
-// bargain runAdaptiveDegree already makes with the degree.
+// the mesh and the degree has changed. The case is built by the caller against
+// the *final* grid, and every rung is a different plan from it, so the case
+// follows its RegridPolicy at each rung as runAdaptiveDegree describes -- and a
+// Fixed one is refused before the first.
 //
-// `adjoint` may be null. Only the caller's grid and problem outlive this, and
+// Only the caller's grid and the case physics holds outlive this, and
 // the returned solver is the last rung's, which is built on the caller's grid
 // precisely so it may.
 std::unique_ptr<SystemSolver> runLadder(SolverConfig const &config,
-                                        TransportSystem &problem,
-                                        AdjointProblem *adjoint,
+                                        PhysicsInstance &physics,
                                         Grid const &grid,
                                         unsigned int kFinal,
                                         double tFinal);

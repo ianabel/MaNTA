@@ -29,10 +29,14 @@
 REGISTER_PHYSICS_IMPL(AuxVarTest);
 
 const double AuxNorm = 1.0;
+// RegridPolicy::InPlace: the constructor reads nothing from its grid and the
+// case keeps nothing from an evaluation plan, so a new plan changes nothing it
+// built.
 AuxVarTest::AuxVarTest(toml::value const &config, Grid const &)
     : TransportSystem({.variables = {{"u", "reaction-diffusion variable", ""},
                                      {"v", "plain diffusion variable", ""}},
-                       .aux = {{"a", "the auxiliary a = u * u", ""}}})
+                       .aux = {{"a", "the auxiliary a = u * u", ""}},
+                       .regrid = RegridPolicy::InPlace})
 {
     // Construct your problem from user-specified config
     // throw an exception if you can't. NEVER leave a part-constructed object around

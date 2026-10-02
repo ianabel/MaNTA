@@ -72,6 +72,7 @@ set(MANTA_CORE_SOURCES
   MeshAdaptation.cpp
   NetCDFIO.cpp
   PhysicsCases.cpp
+  PhysicsInstance.cpp
   Postprocessing.cpp
   SmoothnessSensor.cpp
   Solver.cpp
@@ -212,6 +213,7 @@ set(MANTA_INSTALL_HEADERS
   DGApprox.hpp
   DGSoln.hpp
   ErrorChecker.hpp
+  EvaluationPlan.hpp
   FieldModel.hpp
   FieldModelSpec.hpp
   Logging.hpp

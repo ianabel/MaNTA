@@ -19,9 +19,12 @@ SystemSpec NeumannTest::buildSpec(toml::value const &config)
     }
     return {.variables = {{"u", "the diffused quantity", "",
                            lowerNeumann ? BoundaryKind::Neumann : BoundaryKind::Dirichlet,
-                           upperNeumann ? BoundaryKind::Neumann : BoundaryKind::Dirichlet}}};
+                           upperNeumann ? BoundaryKind::Neumann : BoundaryKind::Dirichlet}},
+            .regrid = RegridPolicy::InPlace};
 }
 
+// RegridPolicy::InPlace: the domain ends are all the constructor takes from its
+// grid, and prepareEvaluation takes them again from each plan.
 NeumannTest::NeumannTest(toml::value const &config, Grid const &grid)
     : TransportSystem(buildSpec(config))
 {

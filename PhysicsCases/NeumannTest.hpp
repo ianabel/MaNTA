@@ -37,6 +37,12 @@ public:
     Value InitialValue(Index, Position) const override;
     Value InitialDerivative(Index, Position) const override;
 
+    void prepareEvaluation(EvaluationPlan const &plan) override
+    {
+        xL = plan.grid.lowerBoundary();
+        xR = plan.grid.upperBoundary();
+    }
+
 private:
     static SystemSpec buildSpec(toml::value const &config);
 

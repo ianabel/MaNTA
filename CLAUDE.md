@@ -1120,6 +1120,52 @@ and batched (`SigmaFn(i, GlobalState, positions, t)`). The batched defaults in
 `TransportSystem.hpp` are serial loops over the pointwise version, several under
 `#pragma omp parallel for`; a case may override either level.
 
+**The solver tells a case where it will evaluate it, and the list has to stay
+complete.** `SystemSolver::evaluationPlan()` builds an `EvaluationPlan`
+(`EvaluationPlan.hpp`): one site per kind of evaluation, entry point and cadence,
+with the exact abscissae, plus the grid and `k`. `initialize()` offers it to the
+case in its unconditional part, *before* `initialiseMatrices` -- which calls `aFn`
+on a solver's first run -- through `TransportSystem::deliverEvaluationPlan`, which
+calls `prepareEvaluation` **only if the plan differs from the last one that
+instance was handed**. A case may compile per batch shape against it, so **a
+physics call at a point set the plan does not list is a bug, not a fallback**:
+`EvaluationPlanTests.cpp` records every call a case is handed across a matrix of
+configurations and fails on any outside the plan, and on any announced site never
+used. Adding a physics call means adding its site to `evaluationPlan()`. The
+`TauFaces` sites are keyed off `tauEvaluatesFaces()` and nothing else, so a tau
+that stops evaluating on the faces is a one-line change there.
+
+**A plan depends on the discretisation and configuration, never on the run**, and
+that is load-bearing: `==` is plain defaulted equality, and "nothing changed" is
+what decides whether a case hears anything and whether a reuse is a regrid. So a
+site only some runs reach is listed always, with its count an upper bound --
+`MassMatrix` (a solver's first run only), `InitialProjection` (cold starts only),
+`InitialCondition`'s AssignSigma sweep (skipped on a copied restart). Making a
+site conditional on `initialised`, the restart state or anything else a run
+moves turns every rerun into a spurious regrid.
+
+**A changed plan on an instance that already has one is a regrid, and the case
+decides whether it survives one.** `SystemSpec::regrid` is `RegridPolicy::Fixed`
+by default (a Python attribute cannot be called `None`) or `InPlace`, which takes
+the new plan through `prepareEvaluation`. A `Fixed` case is refused a changed plan
+(`deliverEvaluationPlan`, and `PyRunner::configure` for a reconfigured case object)
+-- unless an adaptation driver may rebuild it. That is the configuration key
+`RebuildPhysicsOnRegrid`, a fallback for cases written before plans:
+`PhysicsInstance` (`PhysicsInstance.hpp`) holds the caller's case and adjoint
+slots and a registry rebuild function, and `solverFor` builds a probe solver,
+compares plans, and if needed destroys the case, re-instantiates it by name for the
+new grid, moves the restart state across (`copyRestartFrom`) and re-obtains the
+adjoint. Order matters: the previous solver must be gone before `solverFor`,
+because a rebuild destroys the case it pointed at, and warm-start restart values
+are set *after* `solverFor`. Only runManta and a `Runner` built from a case *name*
+can rebuild; the drivers refuse a case that can do neither up front, whenever they
+*may* change the plan, before the first solve.
+Every C++ case in the tree declares `InPlace`; those holding `xL`/`xR` take them
+again from each plan (`AutodiffTransportSystem::prepareEvaluation` for the
+autodiff cases), so a case added with grid-dependent state has to do the same or
+stay `Fixed`. The rebuild path is reached only by the `Fixed` fixtures in
+`EvaluationPlanTests.cpp` and `test_evaluation_plan.py`.
+
 ### Self-consistent magnetic fields (`FieldModel`)
 
 A `FieldModel` (`FieldModel.hpp`) contributes `nFieldDOF` unknowns `psi`, one
@@ -1274,6 +1320,17 @@ gives. Four pieces to know:
   initial condition, which happen before there is a `dYdt` to read. A batched
   case therefore tests `.size` rather than indexing it. The pointwise view does
   not have that shape: `s.udot` is always `nVars` long and reads zero.
+* **`prepareEvaluation` is optional, and dispatched with `PYBIND11_OVERRIDE`**
+  like `aFn`, so a case not defining it pays an override lookup per new plan. The
+  plan crosses as a copy, with numpy point sets. `regrid = manta.Regrid.InPlace`
+  is a class attribute that `manta.TransportSystem.__init__` honours on both its
+  paths, copying an explicit spec rather than editing it; the JAX base classes
+  deliberately leave it `Fixed`, since a subclass may cache what the plan says.
+  `Grid` and the plan types are bound *before* `TransportSystem` so the generated
+  stub names them. A case object handed to `Runner(system)` is never told its grid
+  at construction -- `configure()` builds it afterwards -- so the plan is the only
+  place such a case learns the mesh, and reconfiguring one object onto another
+  mesh or degree needs `InPlace`.
 * **`PyRunner`** (`configure(dict)` / `run` / `run_ss` / `getSolution` / `G` /
   `getAdjointGradients`) is the API the optimisation drivers use, and the only
   route supporting repeated configure/run cycles in one process — it works by

@@ -96,6 +96,14 @@ public:
 			pval.get().grad = 0.0;
 	}
 
+	// The domain ends are all an autodiff case takes from its grid, and every
+	// plan carries its grid, so a case keeping nothing else follows a new plan.
+	void prepareEvaluation(EvaluationPlan const &plan) override
+	{
+		xL = plan.grid.lowerBoundary();
+		xR = plan.grid.upperBoundary();
+	}
+
 	Position xR, xL;
 
 protected:

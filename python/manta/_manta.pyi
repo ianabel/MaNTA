@@ -6,7 +6,7 @@ import collections.abc
 import numpy
 import numpy.typing
 import typing
-__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'Field', 'Grid', 'Mixed', 'Neumann', 'Runner', 'Scalar', 'State', 'StateField', 'SteadyOutcome', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'load_physics_plugin', 'numbered_spec', 'physics_cases', 'registerPhysicsCase', 'run']
+__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'EvaluationCadence', 'EvaluationEntry', 'EvaluationKind', 'EvaluationPlan', 'EvaluationSite', 'Field', 'Grid', 'Mixed', 'Neumann', 'Regrid', 'Runner', 'Scalar', 'State', 'StateField', 'SteadyOutcome', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'load_physics_plugin', 'numbered_spec', 'physics_cases', 'registerPhysicsCase', 'run']
 class AdjointProblem:
     spatialParameters: bool
     def __init__(self) -> None:
@@ -117,6 +117,224 @@ class BoundaryKind:
     @property
     def value(self) -> int:
         ...
+class EvaluationCadence:
+    """
+    Members:
+    
+      PerResidual
+    
+      PerJacobianBuild
+    
+      PerContinuationStep
+    
+      PerAdjointSolve
+    
+      OncePerRun
+    
+      OncePerSolver
+    """
+    OncePerRun: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.OncePerRun: 4>
+    OncePerSolver: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.OncePerSolver: 5>
+    PerAdjointSolve: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.PerAdjointSolve: 3>
+    PerContinuationStep: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.PerContinuationStep: 2>
+    PerJacobianBuild: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.PerJacobianBuild: 1>
+    PerResidual: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.PerResidual: 0>
+    __members__: typing.ClassVar[dict[str, EvaluationCadence]]  # value = {'PerResidual': <EvaluationCadence.PerResidual: 0>, 'PerJacobianBuild': <EvaluationCadence.PerJacobianBuild: 1>, 'PerContinuationStep': <EvaluationCadence.PerContinuationStep: 2>, 'PerAdjointSolve': <EvaluationCadence.PerAdjointSolve: 3>, 'OncePerRun': <EvaluationCadence.OncePerRun: 4>, 'OncePerSolver': <EvaluationCadence.OncePerSolver: 5>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class EvaluationEntry:
+    """
+    Members:
+    
+      ComputePhysics
+    
+      ComputePhysicsDerivatives
+    
+      ComputeSourceTimeDerivatives
+    
+      ScalarG
+    
+      ScalarGPrime
+    
+      InitialScalarDerivative
+    
+      Pointwise
+    """
+    ComputePhysics: typing.ClassVar[EvaluationEntry]  # value = <EvaluationEntry.ComputePhysics: 0>
+    ComputePhysicsDerivatives: typing.ClassVar[EvaluationEntry]  # value = <EvaluationEntry.ComputePhysicsDerivatives: 1>
+    ComputeSourceTimeDerivatives: typing.ClassVar[EvaluationEntry]  # value = <EvaluationEntry.ComputeSourceTimeDerivatives: 2>
+    InitialScalarDerivative: typing.ClassVar[EvaluationEntry]  # value = <EvaluationEntry.InitialScalarDerivative: 5>
+    Pointwise: typing.ClassVar[EvaluationEntry]  # value = <EvaluationEntry.Pointwise: 6>
+    ScalarG: typing.ClassVar[EvaluationEntry]  # value = <EvaluationEntry.ScalarG: 3>
+    ScalarGPrime: typing.ClassVar[EvaluationEntry]  # value = <EvaluationEntry.ScalarGPrime: 4>
+    __members__: typing.ClassVar[dict[str, EvaluationEntry]]  # value = {'ComputePhysics': <EvaluationEntry.ComputePhysics: 0>, 'ComputePhysicsDerivatives': <EvaluationEntry.ComputePhysicsDerivatives: 1>, 'ComputeSourceTimeDerivatives': <EvaluationEntry.ComputeSourceTimeDerivatives: 2>, 'ScalarG': <EvaluationEntry.ScalarG: 3>, 'ScalarGPrime': <EvaluationEntry.ScalarGPrime: 4>, 'InitialScalarDerivative': <EvaluationEntry.InitialScalarDerivative: 5>, 'Pointwise': <EvaluationEntry.Pointwise: 6>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class EvaluationKind:
+    """
+    Members:
+    
+      Residual
+    
+      Jacobian
+    
+      InitialCondition
+    
+      TauFaces
+    
+      ScalarConstraint
+    
+      ScalarJacobian
+    
+      ScalarCoupling
+    
+      FieldCoupling
+    
+      Adjoint
+    
+      InitialProjection
+    
+      MassMatrix
+    """
+    Adjoint: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.Adjoint: 8>
+    FieldCoupling: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.FieldCoupling: 7>
+    InitialCondition: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.InitialCondition: 2>
+    InitialProjection: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.InitialProjection: 9>
+    Jacobian: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.Jacobian: 1>
+    MassMatrix: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.MassMatrix: 10>
+    Residual: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.Residual: 0>
+    ScalarConstraint: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.ScalarConstraint: 4>
+    ScalarCoupling: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.ScalarCoupling: 6>
+    ScalarJacobian: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.ScalarJacobian: 5>
+    TauFaces: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.TauFaces: 3>
+    __members__: typing.ClassVar[dict[str, EvaluationKind]]  # value = {'Residual': <EvaluationKind.Residual: 0>, 'Jacobian': <EvaluationKind.Jacobian: 1>, 'InitialCondition': <EvaluationKind.InitialCondition: 2>, 'TauFaces': <EvaluationKind.TauFaces: 3>, 'ScalarConstraint': <EvaluationKind.ScalarConstraint: 4>, 'ScalarJacobian': <EvaluationKind.ScalarJacobian: 5>, 'ScalarCoupling': <EvaluationKind.ScalarCoupling: 6>, 'FieldCoupling': <EvaluationKind.FieldCoupling: 7>, 'Adjoint': <EvaluationKind.Adjoint: 8>, 'InitialProjection': <EvaluationKind.InitialProjection: 9>, 'MassMatrix': <EvaluationKind.MassMatrix: 10>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class EvaluationPlan:
+    def announces(self, entry: EvaluationEntry, points: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex]) -> bool:
+        """
+        Whether a call through `entry` at `points` is one this plan announced. A case may assert it in its own hooks: an unannounced call is a solver bug.
+        """
+    def batchSizes(self, entry: EvaluationEntry) -> list[int]:
+        ...
+    def has(self, kind: EvaluationKind) -> bool:
+        ...
+    def points(self, kind: EvaluationKind) -> numpy.typing.NDArray[numpy.float64]:
+        ...
+    def sitesOf(self, kind: EvaluationKind) -> list[EvaluationSite]:
+        ...
+    @property
+    def grid(self) -> Grid:
+        ...
+    @property
+    def k(self) -> int:
+        ...
+    @property
+    def sites(self) -> list[EvaluationSite]:
+        ...
+    @property
+    def steady(self) -> bool:
+        ...
+    @property
+    def superconvergent(self) -> bool:
+        ...
+class EvaluationSite:
+    def __repr__(self) -> str:
+        ...
+    def batchSize(self) -> int:
+        ...
+    def isBatched(self) -> bool:
+        ...
+    @property
+    def cadence(self) -> EvaluationCadence:
+        ...
+    @property
+    def calls(self) -> int:
+        ...
+    @property
+    def entry(self) -> EvaluationEntry:
+        ...
+    @property
+    def kind(self) -> EvaluationKind:
+        ...
+    @property
+    def points(self) -> numpy.typing.NDArray[numpy.float64]:
+        ...
+    @property
+    def pointsPerCell(self) -> int:
+        ...
 class Field:
     description: str
     lower: BoundaryCondition
@@ -143,7 +361,50 @@ class Grid:
     @typing.overload
     def __init__(self, arg0: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex]) -> None:
         ...
+    def cellBoundaries(self) -> numpy.typing.NDArray[numpy.float64]:
+        ...
     def getNCells(self) -> int:
+        ...
+    def lowerBoundary(self) -> float:
+        ...
+    def upperBoundary(self) -> float:
+        ...
+class Regrid:
+    """
+    Members:
+    
+      Fixed
+    
+      InPlace
+    """
+    Fixed: typing.ClassVar[Regrid]  # value = <Regrid.Fixed: 0>
+    InPlace: typing.ClassVar[Regrid]  # value = <Regrid.InPlace: 1>
+    __members__: typing.ClassVar[dict[str, Regrid]]  # value = {'Fixed': <Regrid.Fixed: 0>, 'InPlace': <Regrid.InPlace: 1>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
         ...
 class Runner:
     def G(self) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
@@ -306,7 +567,7 @@ class SteadyOutcome:
     def value(self) -> int:
         ...
 class SystemSpec:
-    def __init__(self, variables: collections.abc.Sequence[Field], scalars: collections.abc.Sequence[Scalar] = [], aux: collections.abc.Sequence[Aux] = []) -> None:
+    def __init__(self, variables: collections.abc.Sequence[Field], scalars: collections.abc.Sequence[Scalar] = [], aux: collections.abc.Sequence[Aux] = [], regrid: Regrid = ...) -> None:
         ...
     def validate(self) -> None:
         ...
@@ -315,6 +576,14 @@ class SystemSpec:
         ...
     @aux.setter
     def aux(self, arg0: collections.abc.Sequence[Aux]) -> None:
+        ...
+    @property
+    def regrid(self) -> Regrid:
+        """
+        InPlace when the case follows a changed evaluation plan -- a new mesh or degree -- through prepareEvaluation. Fixed, the default, lets it be evaluated by its first plan only.
+        """
+    @regrid.setter
+    def regrid(self, arg0: Regrid) -> None:
         ...
     @property
     def scalars(self) -> list[Scalar]:
@@ -409,6 +678,13 @@ class TransportSystem:
     def isScalarDifferential(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> bool:
         ...
     def isUpperBoundaryDirichlet(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> bool:
+        ...
+    def prepareEvaluation(self, plan: EvaluationPlan) -> None:
+        ...
+    def regridPolicy(self) -> Regrid:
+        ...
+    @property
+    def evaluationPlan(self) -> manta._manta.EvaluationPlan | None:
         ...
     @property
     def nAux(self) -> int:
