@@ -17,39 +17,20 @@
 
 namespace
 {
-// Median of the finite entries, or infinity when there are none.
-//
-// Infinity is the right answer rather than a failure: an all-infinite interior
-// means every interior cell's solution is exactly representable below degree k,
-// which is Jardin's linear steady state, and the ratio it produces (median/rate)
-// is then infinite or NaN for a rough end and 1 for a smooth one. Handled at the
-// ratio rather than here.
-double medianFinite(std::vector<double> v)
+double median(std::vector<double> v)
 {
-    auto end = std::remove_if(v.begin(), v.end(),
-                              [](double x) { return !std::isfinite(x); });
-    v.erase(end, v.end());
-    if (v.empty())
-        return std::numeric_limits<double>::infinity();
-
     std::sort(v.begin(), v.end());
     const size_t n = v.size();
     return (n % 2) ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
 }
 
-// median / rate, guarded at both ends.
-//
-// A rate of zero means the spectrum has no decay at all, which is as rough as the
-// sensor can report and so should always fire; infinity means perfectly smooth and
-// should never. Neither is reachable by division alone.
+// median / rate, both already capped at the measurable ceiling. A rate of zero
+// means the spectrum has no decay at all, which is as rough as the sensor can
+// report and so should always fire, and is not reachable by division.
 double roughness(double median, double rate)
 {
-    if (!std::isfinite(rate))
-        return 0.0;              // this end is smoother than anything measurable
     if (rate <= 0.0)
         return std::numeric_limits<double>::infinity();
-    if (!std::isfinite(median))
-        return std::numeric_limits<double>::infinity(); // interior exact, end is not
     return median / rate;
 }
 
@@ -65,15 +46,14 @@ const char *name(GradingVerdict v)
 }
 } // namespace
 
-GradingDecision gradingDecision(DGSoln const &Y, Index var, double threshold)
+GradingDecision gradingDecision(std::vector<CellSmoothness> const &cells,
+                                unsigned int k, double threshold)
 {
     if (!(threshold > 1.0))
         throw std::invalid_argument(
             "The grading threshold is a factor by which an end must be rougher "
             "than the interior, so it has to exceed 1; at or below it every mesh "
             "is graded, including one whose ends are the smoothest cells it has.");
-
-    auto const cells = cellSmoothness(Y, var);
 
     if (cells.size() < 3)
         throw std::invalid_argument(
@@ -83,15 +63,26 @@ GradingDecision gradingDecision(DGSoln const &Y, Index var, double threshold)
     GradingDecision d;
     d.lowerRate = cells.front().decayRate;
     d.upperRate = cells.back().decayRate;
+    d.rateCeiling = measurableDecayRate(k);
+
+    // Every rate is compared at most at the ceiling, infinite ones included. An
+    // infinite rate and one just under the ceiling are the same measurement -- a
+    // top mode at round-off -- and treating the first as larger than any number
+    // made an end whose top mode sat a hair above the floor "infinitely rougher"
+    // than an interior whose top modes sat a hair below it. That graded Jardin,
+    // whose steady state the space holds outright: an interior median of
+    // infinity against a wall cell at about 30, at a ceiling of 31.5, for a cost
+    // of 1.27x and an answer already at 3.9e-16. Capped, the ratio is 1.05.
+    auto capped = [&](double rate) { return std::min(rate, d.rateCeiling); };
 
     std::vector<double> interior;
     interior.reserve(cells.size() - 2);
     for (size_t i = 1; i + 1 < cells.size(); ++i)
-        interior.push_back(cells[i].decayRate);
+        interior.push_back(capped(cells[i].decayRate));
 
-    d.interiorMedian = medianFinite(std::move(interior));
-    d.lowerRatio = roughness(d.interiorMedian, d.lowerRate);
-    d.upperRatio = roughness(d.interiorMedian, d.upperRate);
+    d.interiorMedian = median(std::move(interior));
+    d.lowerRatio = roughness(d.interiorMedian, capped(d.lowerRate));
+    d.upperRatio = roughness(d.interiorMedian, capped(d.upperRate));
 
     // The rougher end wins if either clears the bar. A tie goes to the lower end,
     // which is arbitrary and only reachable when both ends are equally rough --
@@ -103,6 +94,11 @@ GradingDecision gradingDecision(DGSoln const &Y, Index var, double threshold)
                                                    : GradingVerdict::GradeUpper;
 
     return d;
+}
+
+GradingDecision gradingDecision(DGSoln const &Y, Index var, double threshold)
+{
+    return gradingDecision(cellSmoothness(Y, var), Y.getBasis().Order(), threshold);
 }
 
 std::vector<Grid::Position> gradedMeshFor(GradingDecision const &decision,
@@ -129,6 +125,24 @@ std::vector<Grid::Position> gradedMeshFor(GradingDecision const &decision,
                             decision.verdict == GradingVerdict::GradeLower
                                 ? GradedEnd::Lower
                                 : GradedEnd::Upper);
+}
+
+double gradingLayerFraction(GradingDecision const &decision,
+                            Grid const &sampling,
+                            SolverConfig const &config)
+{
+    if (decision.verdict == GradingVerdict::Uniform)
+        throw std::logic_error(
+            "gradingLayerFraction was asked for a layer from a decision that said "
+            "not to grade.");
+
+    const bool lower = decision.verdict == GradingVerdict::GradeLower;
+    if (lower ? config.LowerBoundaryFractionGiven : config.UpperBoundaryFractionGiven)
+        return lower ? config.LowerBoundaryFraction : config.UpperBoundaryFraction;
+
+    const double span = sampling.upperBoundary() - sampling.lowerBoundary();
+    const Grid::Index end = lower ? 0 : sampling.getNCells() - 1;
+    return sampling[end].h() / span;
 }
 
 namespace
@@ -202,8 +216,8 @@ AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
     auto const &d = result.decision;
 
     std::println("  decay rate: lower end {:.3g}, interior median {:.3g}, upper end "
-                 "{:.3g}",
-                 d.lowerRate, d.interiorMedian, d.upperRate);
+                 "{:.3g}; measurable up to {:.3g}",
+                 d.lowerRate, d.interiorMedian, d.upperRate, d.rateCeiling);
     std::println("  roughness vs interior: lower {:.2f}x, upper {:.2f}x, threshold "
                  "{:.2f}x -> grade {}",
                  d.lowerRatio, d.upperRatio, config.MeshAdaptationThreshold,
@@ -231,14 +245,19 @@ AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
         const SolverConfig warmConfig = carriedStepConfig(config, *sample);
         sample.reset();
 
+        const double layer = gradingLayerFraction(d, uniform, config);
+        std::println("  layer: {:.4g} of the domain{}", layer,
+                     (d.verdict == GradingVerdict::GradeLower ? config.LowerBoundaryFractionGiven
+                                                              : config.UpperBoundaryFractionGiven)
+                         ? "" : ", the sampling mesh's end cell");
+
         double ratio = config.GradingRatio;
         for (unsigned int attempt = 1; attempt <= config.MeshAdaptationAttempts;
              ++attempt)
         {
             auto points = gradedMeshFor(d, uniform,
                                         static_cast<Grid::Index>(config.GradingCells),
-                                        config.LowerBoundaryFraction,
-                                        config.UpperBoundaryFraction, ratio);
+                                        layer, layer, ratio);
             auto graded = std::make_unique<Grid>(points);
 
             const double span = uniform.upperBoundary() - uniform.lowerBoundary();

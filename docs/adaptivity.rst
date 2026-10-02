@@ -141,6 +141,13 @@ Two values are reported rather than fitted, and they are the two ends of the ran
    perfectly smooth. This is the normal answer on a problem whose steady state is
    low-order, such as ``jardin-critical-gradient``.
 
+   It is not larger than every finite rate, though, and the decision rule does not
+   treat it so. The largest rate that can be *measured* at degree :math:`k` is the
+   one whose top mode sits on the floor, :math:`s_{\max} = -\log((k+1)\epsilon) /
+   \log k` — 31.5 at :math:`k = 3`, 24.8 at 4, 16.3 at 8 — and a cell just above
+   the floor fits a rate just under it. Both are round-off, so every rate is
+   compared capped at :math:`s_{\max}`.
+
 ``zero``
    Only the top mode is above round-off, so the spectrum has no decay in it at all.
    As rough as the sensor can report.
@@ -340,6 +347,22 @@ is rougher by ``MeshAdaptationThreshold`` (default 2.0). Comparing against the
 interior rather than a fixed number is what makes the test scale-free and blind to
 a uniform lack of resolution — which is the degree loop's business, not this one's.
 
+Rates are compared capped at :math:`s_{\max}`, the largest measurable at the
+degree. Without the cap a resolved problem gets graded. On Jardin's linear steady state at 10 cells and
+:math:`k = 3`, every interior cell's top mode falls under the round-off floor and
+reports :math:`\infty`, while the wall cell's lands just above it, at about 30. Taken
+at face value that end is infinitely rougher; capped, the ratio is 1.05 and the
+mesh stays uniform.
+
+The regraded layer is **the end cell of the sampling mesh** unless
+``LowerBoundaryFraction`` or ``UpperBoundaryFraction`` is given for that end. That
+cell is the region the sensor judged rough, and keeping its inner face keeps
+whatever the sampling mesh had resolved by putting a face there. Shestakov's
+source switches off at :math:`x = 0.1`, where the uniform 10-cell mesh has a face.
+Grading within the first cell takes the error at :math:`k = 3` from 1.36e-02 to
+1.34e-06. Grading over a fifth of the domain instead moves that face off the
+kink, and the error *rises*, to 1.58e-02.
+
 The regraded mesh keeps ``GridSize`` cells. ``GradingCells = 0`` means *as many as
 the budget allows*, i.e. ``GridSize - 1``, which minimises :math:`h_0`; note this
 differs from what ``GradingCells = 0`` means on the manual ``GradedGridBoundary``
@@ -381,15 +404,17 @@ graded, one more -- and nothing is solved twice.
 
    MeshAdaptationThreshold = 2.0
    GradingRatio = 0.3
-   LowerBoundaryFraction = 0.1   # the layer, if the lower end is chosen
+   # LowerBoundaryFraction = 0.1 # the layer, if the lower end is chosen; by
+                                 # default the first cell of the sampling mesh
 
 A run reports each stage:
 
 .. code-block:: text
 
    Mesh adaptation: sampling at k = 4 on 10 uniform cells
-     decay rate: lower end 2.85, interior median 19.4, upper end 19.2
+     decay rate: lower end 2.85, interior median 19.4, upper end 19.2; measurable up to 24.8
      roughness vs interior: lower 6.80x, upper 1.01x, threshold 2.00x -> grade Lower
+     layer: 0.1 of the domain, the sampling mesh's end cell
      attempt 1: ratio 0.3, narrowest cell 6.561e-06 of the domain
    Mesh adaptation: adapting the degree on the graded mesh
 
@@ -428,8 +453,11 @@ against an interior median of 7.83 and an upper end of 9.63 — 6.51× rougher a
 axis, three times the margin it needed.
 
 And on Shestakov's problem itself, which is where every grading measurement above
-came from: **10 cells at k = 3, relative error 1.99e-02 uniform against 7.60e-05
-adapted — 262×**, again at the same cell count.
+came from — ``python-examples/shestakov-nonlinear`` with :math:`n_b = 0.05`:
+**10 cells at k = 3, relative error 1.36e-02 uniform against 1.34e-06 graded —
+10,000×**, again at the same cell count, for 2.7× the physics evaluations of the
+uniform solve. ``python-examples/paper-figures/adaptivity.py`` reproduces it,
+along with Park and Jardin left uniform at no cost.
 
 .. note::
 

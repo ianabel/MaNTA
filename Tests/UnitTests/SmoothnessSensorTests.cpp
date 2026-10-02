@@ -118,6 +118,41 @@ BOOST_AUTO_TEST_CASE(a_polynomial_below_the_basis_degree_reports_itself_resolved
                "decay rate is " << s.decayRate);
 }
 
+BOOST_AUTO_TEST_CASE(the_rate_ceiling_is_where_the_top_mode_meets_round_off)
+{
+    // A cell whose top mode sits a factor m above the round-off floor fits a rate
+    // under the ceiling by log m / log k, so one just above the floor fits nearly
+    // the ceiling and one just below it is reported infinite. That is the sense in
+    // which the two are the same measurement, and why the grading rule caps at
+    // the ceiling. The formula is pinned at m = 100, because at m = 2 the
+    // round-off *in* the top mode is a tenth of it and moves the rate by 0.2.
+    const unsigned int k = 3;
+    const NodalBasis basis = NodalBasis::getBasis(k);
+    const double floor = (k + 1) * std::numeric_limits<double>::epsilon();
+
+    auto nodal = [&](double top)
+    {
+        return onNodes(basis, [&](double x) { return x + top * LegendreBasis::Evaluate(k, x); });
+    };
+    auto cell = [&](double top) { return cellSmoothness(basis, nodal(top)).decayRate; };
+
+    BOOST_TEST(measurableDecayRate(k) == -std::log(floor) / std::log(3.0));
+
+    // m read back from the modal coefficients rather than assumed, since the
+    // Legendre modes here are normalised and P_1 and P_k carry different factors.
+    const Vector uhat = basis.ToModal(nodal(100.0 * floor));
+    const double m = std::abs(uhat(k)) / (floor * std::abs(uhat(1)));
+    BOOST_TEST(cell(100.0 * floor) == measurableDecayRate(k) - std::log(m) / std::log(3.0),
+               boost::test_tools::tolerance(1e-3));
+
+    const double justAbove = cell(2.0 * floor);
+    BOOST_TEST(std::isfinite(justAbove));
+    BOOST_TEST(justAbove > measurableDecayRate(k) - 1.0);
+    BOOST_TEST(cell(0.5 * floor) == std::numeric_limits<double>::infinity());
+
+    BOOST_CHECK_THROW(measurableDecayRate(1), std::invalid_argument);
+}
+
 BOOST_AUTO_TEST_CASE(a_spectrum_with_structural_zeros_is_not_fitted_through_the_gaps)
 {
     // A function even about the cell centre has every *odd* Legendre
