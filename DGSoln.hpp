@@ -24,17 +24,36 @@ public:
     Index getScalars() const { return nScalars; };
     Index getAux() const { return nAux; };
 
+    // The length of the flat vector this view imposes structure on, from the
+    // problem's shape alone -- no instance needed.
+    //
+    // Static because the formula had five copies: this member, Solver.cpp where
+    // the N_Vector is allocated, NetCDFIO.cpp where a restart file is sized, and
+    // MaNTA.cpp and PyRunner.cpp where a restart file's length is checked against
+    // the case. All five had to agree, and nothing said so. Callers that already
+    // hold a DGSoln keep using the no-argument overload below; the rest ask here.
+    //
+    // 3 = u + q + sigma, each nVars fields of (k+1) coefficients in every cell.
+    // lambda is a trace unknown, so there are nCells+1 of them per variable -- one
+    // per face, both ends included. Scalars carry no spatial discretisation at all.
+    // Auxiliary variables do, so each carries nCells*(k+1) like a field.
+    //
+    // nField is required rather than defaulted: the field model's unknowns go
+    // last, and a copy of this formula that did not know about them once wrote a
+    // short restart file whose recorded length matched the uncoupled formula, so
+    // the truncated file read back as consistent.
+    static constexpr size_t getDoF(Index nVars, Grid::Index nCells, Index k,
+                                   Index nScalars, Index nAux, Index nField)
+    {
+        return nCells * nVars * (k + 1) * 3 + (nCells + 1) * nVars + nScalars +
+               nCells * nAux * (k + 1) + nField;
+    };
+
     size_t getDoF() const
     {
-        // 3 = u + q + sigma
-        // nCells + 1 for lambda because we store values at both ends
-        // and we are carrying nScalar scalar variables
-        // Auxiliary variables depend on space, so each one carries nCells * (k+1) degrees of freedom
         // The field model's unknowns are appended last, so adding them shifts
         // nothing before them.
-        return grid.getNCells() * nVars * (k + 1) * 3 +
-               (grid.getNCells() + 1) * nVars + nScalars + grid.getNCells() * nAux * (k + 1) +
-               nField;
+        return getDoF(nVars, grid.getNCells(), k, nScalars, nAux, nField);
     };
 
     void Map(double *Y)

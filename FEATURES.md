@@ -5,17 +5,33 @@ Lists upcoming features that are in development or being thought about
 
   **Partly done, and not in the shape this entry expected.** `DegreeAdaptation`
   adapts the global *polynomial degree* between steady solves — see
-  `docs/running.rst`. It went first because it is where the measured win is:
-  raising `k` beat adaptive `h` by seven orders on every benchmark in this tree,
-  and h-adaptivity did not pay on any of them once the cost of the extra solves
-  was counted. It covers both steady modes at once, since `SteadyMode::Newton`
-  is the same code with `ptcStep = infinity`.
+  `docs/running.rst`. It went first because that is where the win looked to be,
+  and it covers both steady modes at once, since `SteadyMode::Newton` is the same
+  code with `ptcStep = infinity`.
 
-  Still open, in the order they look worth doing: *h*-adaptivity (needs a
-  transfer between meshes, which is not the same problem as between degrees —
-  the projections stop composing); per-cell degrees (a much larger change, ~320
-  `(k+1)` sites in the core); and TimeMarch, which is still blocked on exactly
-  what this entry says.
+  **The reason it went first has since been half retracted**, and the retraction
+  is the more useful finding. "Raising `k` beat adaptive `h` by seven orders on
+  every benchmark, and h-adaptivity did not pay on any of them" holds only for the
+  *indicator-driven equidistribution loop* that was tried, and only on the smooth
+  problems. A mesh **graded geometrically towards a singularity**, at an unchanged
+  cell count and unchanged DOF, is worth **14900×** on Shestakov — and the reason
+  the earlier loop found 1.5× is that the accuracy indicator cannot see that
+  error, which `MESH-REFINEMENT.md` §3 had already measured without drawing the
+  conclusion. Grading is now a configuration option (`GradedGridBoundary`).
+
+  What the measurements settled, all in `MESH-REFINEMENT.md` §8–§10:
+
+  * the error on a graded mesh is `0.0487 h0` in the width of the cell touching
+    the singularity and in *nothing else* — not the cell count — so the useful
+    move is redistribution at a fixed budget rather than refinement;
+  * the modal decay rate decides whether to grade and at which end, reliably from
+    `k >= 3`, and at `k = 2` the decision is *inverted* rather than merely noisy;
+  * so the order of an hp scheme is forced: **p, then h, then p**;
+  * per-cell degrees are **gated no** — 217 `(k+1)` sites for a few percent of DOF,
+    because the smooth region's degrees were measured to buy nothing.
+
+  Still open: the driver that runs that sequence; and TimeMarch, which is blocked
+  on exactly what this entry says.
 
 - ~~Scope out coupling to a magnetic field solver.~~ **Done, in 1-D.** The
 coupling described here is implemented: a `FieldModel` supplies `nFieldDOF`

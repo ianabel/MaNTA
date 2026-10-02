@@ -22,7 +22,7 @@
 namespace ConfigSchema
 {
 
-enum class Type { Bool, Int, UInt, Double, String, DoubleList, StringList };
+enum class Type { Bool, Int, UInt, Double, String, DoubleList, UIntList, StringList };
 
 // What a key *is*. Not every schema entry is a solver option: TransportSystem
 // selects the physics case and has no dict equivalent, and the PythonModule
@@ -37,7 +37,8 @@ enum class Category { Solver, ProblemSelection, Cli };
 enum class Reader { Toml, Dict };
 
 using Value = std::variant<bool, int, unsigned, double, std::string,
-                           std::vector<double>, std::vector<std::string>>;
+                           std::vector<double>, std::vector<unsigned>,
+                           std::vector<std::string>>;
 
 struct Entry
 {

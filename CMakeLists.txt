@@ -69,9 +69,11 @@ set(MANTA_CORE_SOURCES
   FieldModel.cpp
   MaNTA.cpp
   Matrices.cpp
+  MeshAdaptation.cpp
   NetCDFIO.cpp
   PhysicsCases.cpp
   Postprocessing.cpp
+  SmoothnessSensor.cpp
   Solver.cpp
   SolverConfig.cpp
   SteadyState.cpp

@@ -371,6 +371,41 @@ homogeneous flux condition is unambiguous, but a nonzero :math:`c` with
    problem but an anti-dissipative boundary condition, and the symptom is a run
    that diverges rather than one that is merely inaccurate.
 
+.. warning::
+
+   **The flux has to be diffusive, and the precise condition is a sector
+   condition on** :math:`\partial\hat\sigma_j/\partial q_k` **rather than
+   positive definiteness.** Linearising the flux about a state,
+
+   .. math::
+
+      \hat\sigma_j \simeq V_j(u, q) + D_{jk}\,\delta q_k ,
+      \qquad D_{jk} = \frac{\partial \hat\sigma_j}{\partial q_k} ,
+
+   the eigenvalues of the semi-discrete operator are :math:`-\nu_n \mu_k`, with
+   :math:`\nu_n > 0` the scalar discrete Dirichlet--Laplacian eigenvalues and
+   :math:`\mu_k` the eigenvalues of :math:`D`. So the spectrum sits at angle
+   :math:`\max_k |\arg \mu_k(D)|` from the negative real axis, whatever the mesh
+   or the degree.
+
+   Two things follow. :math:`\operatorname{Re}\mu_k > 0` is needed for the
+   problem to be well posed at all --- reverse the sign and you have the backward
+   heat equation, which diverges because the equation is ill posed and not
+   because the scheme is. And the BDF of order three to five are
+   :math:`A(\alpha)`-stable only for :math:`\alpha = 86.03^\circ`,
+   :math:`73.35^\circ` and :math:`51.84^\circ`, so a :math:`D` that is positive
+   definite but strongly non-symmetric can still sit outside the wedge:
+   :math:`D = \left(\begin{smallmatrix}1 & b\\ -b & 1\end{smallmatrix}\right)`
+   has symmetric part the identity and spectrum at
+   :math:`\arctan b`, which leaves BDF5's wedge at :math:`b = 3`.
+
+   A symmetric positive definite :math:`D` is at angle zero, and so is any
+   :math:`D = SA` with :math:`S` and :math:`A` symmetric positive definite --- an
+   Onsager matrix times a metric, which is the usual structure, and which stays
+   at angle zero however asymmetric :math:`D` itself looks. An antisymmetric part
+   is what tilts the spectrum, and Onsager--Casimir reciprocity in a magnetic
+   field permits one. ``Tests/UnitTests/SpectrumTests.cpp`` measures all of this.
+
 .. note::
 
    A **pure** flux condition (:math:`b = 0`) can leave the boundary gradient only

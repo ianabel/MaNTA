@@ -31,11 +31,13 @@
 
 #include <ida/ida.h>
 #include <netcdf>
+#include <kinsol/kinsol.h>
 
 #include <algorithm>
 #include <cmath>
 #include <exception>
 #include <filesystem>
+#include <format>
 #include <memory>
 #include <numbers>
 #include <print>
@@ -340,7 +342,17 @@ public:
         return TestDiffusion::SigmaFn(i, s, x, t);
     }
 
+    // Counted separately because the two are billed separately: a flux sweep is
+    // ComputePhysics over every node, a derivative sweep is
+    // ComputePhysicsDerivatives, and a solve spends different numbers of each.
+    void dSigmaFn_dq(Index i, VectorRef v, const State &s, Position x, Time t) override
+    {
+        ++derivCalls;
+        TestDiffusion::dSigmaFn_dq(i, v, s, x, t);
+    }
+
     int calls = 0;
+    int derivCalls = 0;
 };
 
 } // namespace
@@ -893,6 +905,55 @@ long idaResidualEvals(SystemSolver &sys)
     return n;
 }
 
+BOOST_AUTO_TEST_CASE(the_reported_dirichlet_trace_follows_the_boundary_datum)
+{
+    // A Dirichlet trace entry is an unknown that appears in no equation: its row
+    // and column in K_global are identically zero, imposeDirichletTraceRows pins
+    // the correction to zero and residual() never writes the row, so nothing in
+    // the integration can move it. It therefore has to be written by whoever
+    // wants it right, and the datum it should hold is a function of time.
+    //
+    // It used to be written once, by setInitialConditions, and then left --
+    // reporting g_D(t0) for the whole run, or on a cold start not even that,
+    // since EvaluateLambda overwrites the datum with {{u}} a few lines after
+    // ApplyDirichletBCs applies it. Measured on Tests/RegressionTests/MatTest,
+    // whose g_D decays like exp(-t pi^2 / 4): at t = 0.5 the restart file's
+    // lower-face trace held 0.99999993 against a datum of 0.29121, with the
+    // first interior trace node at 0.28962 -- discontinuous from its own
+    // neighbour by a factor of three.
+    //
+    // TestDiffusion's boundaries are its exact solution sampled at the two ends,
+    // so they genuinely move; that is checked below rather than assumed, because
+    // every other fixture here has constant boundary data and would pass this
+    // test with the fix removed.
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, "lifecycle_dirichlet_trace");
+
+    const double gLower = problem.LowerBoundary(0, T_FINAL);
+    const double gUpper = problem.UpperBoundary(0, T_FINAL);
+    BOOST_TEST(gLower != problem.LowerBoundary(0, 0.0));
+    BOOST_TEST(gUpper != problem.UpperBoundary(0, 0.0));
+
+    {
+        CapturedOutput quiet;
+        sys.runSolver(T_FINAL);
+    }
+
+    // yJac is what outlives the run and what PyRunner::getSolution reads; it is
+    // filled by captureState() from the same memory the restart file's DOF
+    // vector is written from, so this covers both.
+    BOOST_TEST(sys.yJac.lambda(0)(0) == gLower, boost::test_tools::tolerance(1e-15));
+    BOOST_TEST(sys.yJac.lambda(0)(nCells) == gUpper, boost::test_tools::tolerance(1e-15));
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+    removeOutput("lifecycle_dirichlet_trace");
+}
+
 BOOST_AUTO_TEST_CASE(only_a_time_marching_run_pays_for_calcic)
 {
     // IDACalcIC exists to make the state IDA takes its *first step* from
@@ -1109,9 +1170,24 @@ BOOST_AUTO_TEST_CASE(a_converged_steady_state_leaves_no_stale_derivative)
         sys.initialize();
     }
 
-    // Not vacuous: at t0 the derivative is genuinely nonzero, so zeroing it is a
-    // change rather than a coincidence of this fixture.
-    BOOST_TEST(N_VMaxNorm(sys.dYdt) > 1e-3);
+    // Not vacuous, but no longer for the reason it once was. setInitialConditions
+    // skips solving the initial du/dt out of the u row on a steady solve -- the
+    // derivative reaches nobody there and the sweep that builds it is thrown
+    // away -- so dYdt is already zero here, and a guard asserting otherwise
+    // would now be asserting the waste. What makes the zero below a property of
+    // the steady path rather than of this fixture is that the *same* fixture
+    // time-marched does fill it.
+    BOOST_TEST(N_VMaxNorm(sys.dYdt) == 0.0, boost::test_tools::tolerance(0.0));
+
+    {
+        SystemSolver marching(grid, k, &problem);
+        configure(marching, stem + "_tm");
+        CapturedOutput quiet;
+        marching.initialize();
+        BOOST_TEST(N_VMaxNorm(marching.dYdt) > 1e-3);
+        marching.destroySundials();
+    }
+    removeOutput(stem + "_tm");
 
     {
         CapturedOutput quiet;
@@ -1126,6 +1202,91 @@ BOOST_AUTO_TEST_CASE(a_converged_steady_state_leaves_no_stale_derivative)
         sys.destroySundials();
     }
     removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(a_steady_solve_spends_the_physics_sweeps_it_has_to_and_no_others)
+{
+    // What a steady solve costs an expensive transport model, pinned sweep by
+    // sweep. Two of the sweeps this used to make were duplicates and are gone;
+    // the test exists so they cannot come back unremarked, because nothing else
+    // here would notice -- a duplicate sweep changes no answer, only the bill.
+    //
+    // Newton mode, from a cold start, spends exactly five:
+    //
+    //   1  setInitialConditions, building sigma from the initial u and q
+    //   2  the merit function's ||F|| at the initial state, which is also the
+    //      already-converged test -- the one sweep a warm start may pay alone
+    //   3  KINSOL's system function at the initial iterate, forming the RHS
+    //   4  the Jacobian (a derivative sweep, not a flux one)
+    //   5  KINSOL's system function at the new iterate, the convergence test
+    //
+    // so four flux sweeps and one derivative sweep, and in general
+    // 2 + 2*steps flux sweeps in Newton mode against 2 + 3*steps damped, the
+    // extra one being the merit evaluation a finite dt still has to make.
+    //
+    // Sweep 3 duplicates sweep 2, and there is no KINSOL interface for handing
+    // it a residual it did not compute, so it stays. What went were the initial
+    // du/dt solve -- a sweep whose whole product a steady solve discards -- and
+    // the merit evaluation after KINSol, which at dt = infinity recomputes what
+    // KINSOL's last call already produced at the same state.
+    Grid grid(0.0, 1.0, nCells);
+    CountingDiffusion problem(lifecycle_config);
+    const long nodes = nCells * (k + 1);
+
+    for (auto mode : {SystemSolver::SteadyMode::Newton,
+                      SystemSolver::SteadyMode::PseudoTransient})
+    {
+        const bool newton = mode == SystemSolver::SteadyMode::Newton;
+        const std::string stem =
+            newton ? "lifecycle_sweeps_newton" : "lifecycle_sweeps_ptc";
+
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        sys.setSteadyMode(mode);
+        sys.setSteadyStateTolerance(1e-10);
+        if (!newton)
+            sys.setPseudoTransientInitialStep(1.0);
+
+        problem.calls = problem.derivCalls = 0;
+        {
+            CapturedOutput quiet;
+            sys.initialize();
+            sys.integrate(T_FINAL);
+        }
+
+        // Whole sweeps, or the count means something other than it says.
+        BOOST_TEST(problem.calls % nodes == 0);
+        BOOST_TEST(problem.derivCalls % nodes == 0);
+
+        const long flux = problem.calls / nodes;
+        const long deriv = problem.derivCalls / nodes;
+        const long steps = sys.lastSteadyStats().steps;
+        BOOST_TEST_MESSAGE(std::format("{}: {} continuation steps, {} flux sweeps, "
+                                       "{} derivative sweeps",
+                                       newton ? "Newton" : "PseudoTransient", steps,
+                                       flux, deriv));
+
+        // One derivative sweep per continuation step, which is KINSOL taking a
+        // fresh factorisation each time -- msbset is irrelevant at one Newton
+        // iteration per call, which is what a linear inner problem gives.
+        BOOST_TEST(deriv == steps);
+
+        // Two fixed sweeps -- sigma, and the initial ||F|| -- and then per step
+        // KINSOL's two, plus the merit evaluation afterwards on the damped path
+        // only. At dt = infinity that third one is the duplicate the cache now
+        // serves, which is the whole saving. Newton damps to a finite dt only on
+        // a rejected step, so the count below assumes none; assert it rather
+        // than rely on it, or a fixture that starts rejecting would report a
+        // broken cache instead of a changed solve.
+        BOOST_TEST(sys.lastSteadyStats().rejected == 0);
+        BOOST_TEST(flux == 2 + (newton ? 2 : 3) * steps);
+
+        {
+            CapturedOutput quiet;
+            sys.destroySundials();
+        }
+        removeOutput(stem);
+    }
 }
 
 BOOST_AUTO_TEST_CASE(the_SER_rate_and_floor_change_the_cost_and_not_the_answer)
@@ -1282,6 +1443,13 @@ BOOST_AUTO_TEST_CASE(the_steady_diagnostics_count_the_whole_solve_not_the_last_s
     // those are MaNTA's, not KINSOL's -- so the total strictly exceeds KINSOL's
     // own count by exactly that. Pins the snapshot being taken before the first
     // steadyNorm(), which it was not to begin with.
+    //
+    // PseudoTransient, and the offset is why. At a finite dt the damped
+    // residual KINSOL drives to zero and the steady residual this loop measures
+    // are different functions, so every step pays for both. In Newton mode they
+    // are the same function at the same state, the per-step merit evaluation is
+    // served from what KINSOL already computed, and the offset is 1 rather than
+    // steps + 1 -- a correct solve that would fail this line.
     BOOST_TEST(s.residualEvals == s.kinFuncEvals + s.steps + 1);
 
     // One linear solve per Newton iteration, with a direct solver.
@@ -1619,7 +1787,7 @@ BOOST_AUTO_TEST_CASE(a_failed_steady_solve_still_writes_the_last_state_it_reache
 //
 // A restart used to require the run's discretisation to match the file's
 // exactly, and could not do otherwise: makeGrid reads both CellBoundaries and
-// PolyOrder from the file and ignored Polynomial_degree, so the degrees always
+// PolyOrder from the file and ignored PolynomialDegree, so the degrees always
 // agreed and DGSoln::copy -- which throws on a different order -- was never
 // asked for anything else. The config's degree is honoured now, and
 // setInitialConditions projects rather than copies when it differs.
@@ -2077,6 +2245,320 @@ BOOST_AUTO_TEST_CASE(a_restart_at_the_same_degree_still_takes_the_copy_path)
 
     problem.clearRestart();
     removeOutput(stem);
+}
+
+// ------------------------------------------- the steady merit function ----
+//
+// steadyResidualNorm is what the whole steady solve is measured against: the
+// early return, the convergence test and the SER ratio all read it, and KINSOL
+// is handed the same tolerance against its own norm of the same vector.
+//
+// It used to be a flat 2-norm, which went like sqrt(h) -- so steady_state_tol
+// meant a different thing on every mesh and dt could not be carried across a
+// remesh. It is now weighted by 1/sqrt(h) on the rows that are pairings against
+// the basis, which is the discrete L2 norm of the equation residual. The four
+// below split into what it *is* (a formula, pinned exactly), what it *is not*
+// (damped), what it *does* (does not move with the mesh, and agrees with
+// KINSOL), and where that claim stops holding.
+
+BOOST_AUTO_TEST_CASE(the_steady_merit_function_is_the_undamped_residual_two_norm)
+{
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, "lifecycle_norm_formula");
+
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+    }
+
+    const double norm = sys.steadyResidualNorm();
+
+    // Recomputed from the outside: zero derivative, residual at t0 and Y, then
+    // sum (w_i F_i)^2 with the weights written out here rather than read from the
+    // solver -- 1/sqrt(h) on the cell rows, 1 on the lambda rows and the scalars.
+    // Equal to round-off: the same squares on the same data, summed by two
+    // different pieces of code (see the tolerance on the check below).
+    //
+    // Written out by hand deliberately. Reading resScale back and reusing it
+    // would pin the *contraction* and say nothing about the weights, which are
+    // the whole content of the change; this way a wrong weight fails here.
+    N_Vector zero = N_VClone(sys.Y);
+    N_Vector scratch = N_VClone(sys.Y);
+    N_VConst(0.0, zero);
+    sys.residual(sys.t0, sys.Y, zero, scratch);
+
+    const sunindextype n = N_VGetLength(sys.Y);
+    const Index perCell = 3 * (k + 1); // nVars = 1, nAux = 0
+    const double h = 1.0 / static_cast<double>(nCells);
+
+    double sumsq = 0.0, flat = 0.0;
+    double *data = N_VGetArrayPointer(scratch);
+    for (sunindextype i = 0; i < n; ++i)
+    {
+        const double w = (i < nCells * perCell) ? 1.0 / std::sqrt(h) : 1.0;
+        sumsq += (w * data[i]) * (w * data[i]);
+        flat += data[i] * data[i];
+    }
+
+    // To a few ulps rather than bit for bit. N_VWL2Norm and the loop above sum
+    // the same squares, but not as the same code, and clang 21 contracts one of
+    // them into fused multiply-adds: measured one ulp apart there
+    // (1.1114515388469293 against ...95) and identical under gcc. Still tight
+    // enough to fail on any wrong weight, which moves the norm in the third digit.
+    BOOST_TEST(norm == std::sqrt(sumsq), boost::test_tools::tolerance(1e-15));
+    BOOST_TEST(norm > 0.0, "the initial condition is already a steady state; "
+                           "this fixture cannot say anything about the norm");
+
+    // ...and it is not the flat norm, nor an RMS one. Trivial arithmetic, but it
+    // records which of the three steady_state_tol is quoted in, and a fixture
+    // where they happened to coincide would test nothing. h = 0.25 here, so the
+    // weighted norm is 2x the flat one.
+    BOOST_TEST_MESSAGE("weighted ||F|| = " << norm << "; flat would be " << std::sqrt(flat)
+                       << ", RMS " << std::sqrt(flat / static_cast<double>(n)));
+    BOOST_TEST(norm != std::sqrt(flat));
+    BOOST_TEST(norm != std::sqrt(flat / static_cast<double>(n)));
+
+    // Undamped, whatever the continuation step currently is. steadyResidual --
+    // the one KINSOL calls -- adds id*(u - uPrev)/dt, so setting a small dt and
+    // a distant anchor changes that by a lot and this by nothing at all. Which
+    // is the property that makes it a merit function: the damped residual can
+    // be driven to zero by shrinking dt without going anywhere.
+    N_VConst(-5.0, sys.uPrev);
+    sys.ptcStep = 1e-4;
+    BOOST_TEST(sys.steadyResidualNorm() == norm);
+
+    sys.steadyResidual(sys.Y, scratch);
+    double damped = 0.0;
+    data = N_VGetArrayPointer(scratch);
+    for (sunindextype i = 0; i < n; ++i)
+        damped += data[i] * data[i];
+    BOOST_TEST(std::sqrt(damped) > 10.0 * norm,
+               "the damped residual is " << std::sqrt(damped) << " against an undamped "
+               << norm << "; this fixture is not separating them");
+
+    N_VDestroy(zero);
+    N_VDestroy(scratch);
+    sys.destroySundials();
+    removeOutput("lifecycle_norm_formula");
+}
+
+BOOST_AUTO_TEST_CASE(the_steady_merit_function_does_not_move_with_the_mesh)
+{
+    // The headline property, and the whole object of weighting the norm. Same
+    // physics, same order, same t0, same initial *function* -- only the mesh
+    // differs, and ||F|| must not change. That is what lets steady_state_tol mean
+    // one thing on every mesh and lets dt cross a remesh, since SER's ratio would
+    // otherwise compare two norms measured in different units.
+    //
+    // This case used to assert the opposite, that the ratios were 1/sqrt(2) --
+    // measured 0.70806 and 0.70742 against a flat 2-norm -- and said in its own
+    // comment that it should be rewritten to say this once the norm was
+    // normalised. It has been. The sqrt(h) it recorded is now divided out by
+    // residualWeights().
+    //
+    // Both halves are asserted, because either alone is worthless. That the
+    // states agree is what makes "the same physical state" true; that the norms
+    // agree is then a statement about the operator rather than about the state.
+    auto normOn = [](Index cells, Vector &state)
+    {
+        Grid grid(0.0, 1.0, cells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, "lifecycle_norm_mesh");
+
+        {
+            CapturedOutput quiet;
+            sys.initialize();
+        }
+        const double norm = sys.steadyResidualNorm();
+        state = sample(sys);
+        sys.destroySundials();
+        return norm;
+    };
+
+    Vector coarseState, midState, fineState;
+    const double coarse = normOn(nCells, coarseState);
+    const double mid = normOn(2 * nCells, midState);
+    const double fine = normOn(4 * nCells, fineState);
+
+    BOOST_TEST_MESSAGE("||F|| on " << nCells << "/" << 2 * nCells << "/" << 4 * nCells
+                       << " cells: " << coarse << " / " << mid << " / " << fine
+                       << "; ratios " << mid / coarse << ", " << fine / mid);
+
+    // The same state, to the accuracy the coarse mesh represents it -- these are
+    // L2 projections of one function onto two spaces, corrected by IDACalcIC, so
+    // they agree to discretisation error and not to round-off. Measured worst
+    // case 1.0e-3 relative at k = 2 over 4 against 16 cells.
+    for (Index i = 0; i < coarseState.size(); ++i)
+    {
+        BOOST_TEST(coarseState(i) == midState(i), boost::test_tools::tolerance(5e-3));
+        BOOST_TEST(coarseState(i) == fineState(i), boost::test_tools::tolerance(5e-3));
+    }
+
+    // ...and the same number for it. Measured 1.111452 / 1.112943 / 1.113438 over
+    // a 4x refinement: ratios 1.00134 and 1.00044, i.e. converging on a limit
+    // rather than merely being close. Extended to 64 cells while this was being
+    // written it reaches 1.111452, 1.112943, 1.113438, 1.113577, 1.113613, whose
+    // departures from that last value fall by 3.2, 3.8 then 4.8 -- so the residue
+    // is second-order discretisation error in the state, not a leftover mesh
+    // factor, and the limit is real.
+    //
+    // Held to 1%, which is twenty times tighter than the sqrt(h) it replaced
+    // could pass -- a flat norm gives 0.708 here, so this discriminates by a
+    // factor of 300 against the defect it was written for. Not tightened to the
+    // measured 0.13%, because the residue *is* the state's discretisation error
+    // and a finer or coarser fixture would legitimately differ.
+    BOOST_TEST(mid / coarse == 1.0, boost::test_tools::tolerance(0.01));
+    BOOST_TEST(fine / mid == 1.0, boost::test_tools::tolerance(0.01));
+
+    // The successive departures shrink -- measured by a factor of 3.0 here -- which
+    // is what separates "converging on a limit" from "close on these three
+    // meshes". A norm still carrying a fractional power of h would hold the ratio
+    // constant instead, and the 1% window alone would not always catch that.
+    const double first = std::abs(mid / coarse - 1.0);
+    const double second = std::abs(fine / mid - 1.0);
+    BOOST_TEST_MESSAGE("departures from 1: " << first << " then " << second
+                       << ", shrinking by " << first / second);
+    BOOST_TEST(second < 0.6 * first,
+               "the departure from mesh-independence is not shrinking with h ("
+               << first << " then " << second << "), so what is left is a mesh "
+               "factor rather than discretisation error in the state");
+
+    removeOutput("lifecycle_norm_mesh");
+}
+
+BOOST_AUTO_TEST_CASE(KINSOL_measures_the_same_thing_the_continuation_loop_does)
+{
+    // The coupling that makes normalising steadyResidualNorm alone a mistake.
+    // KINSetFuncNormTol is given steady_state_tol, and KINSOL's own stopping test
+    // is N_VWL2Norm(fval, fscale). So the way to keep the inner and outer tests
+    // measuring one quantity is to hand KINSOL the *same weights* as f_scale
+    // rather than to normalise one side -- which is what solveSteadyState does,
+    // passing resScale where it used to pass kinScale twice. The agreement is
+    // then structural instead of a coincidence that held while both were flat.
+    //
+    // Newton mode is what makes this checkable exactly: dt is infinite, so
+    // steadyResidual's damping term is identically zero and KINSOL's residual
+    // *is* the steady one. Under PseudoTransient the two would differ by the
+    // damping, and any agreement would be a statement about how far dt had
+    // grown rather than about the units.
+    const std::string stem = "lifecycle_norm_units";
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, stem);
+    sys.setSteadyMode(SystemSolver::SteadyMode::Newton);
+    sys.setSteadyStateTolerance(1e-10);
+
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+        sys.solveSteadyState();
+    }
+
+    // The two vectors are different things and both matter. u_scale stays unit --
+    // KINSOL uses it for the step-length test and the Newton step clamp, which are
+    // about the solution's units -- while f_scale carries the residual weights.
+    // Conflating them is the easy mistake here, and the previous version of this
+    // case asserted all-ones on the one vector that then served as both.
+    double *uScale = N_VGetArrayPointer(sys.kinScale);
+    for (sunindextype i = 0; i < N_VGetLength(sys.kinScale); ++i)
+        BOOST_TEST(uScale[i] == 1.0);
+
+    // ...and f_scale is not all ones, or this case would be checking that two flat
+    // norms agree, which they did before the change and would prove nothing about
+    // it. h = 0.25 on this fixture, so the cell rows carry 2.
+    double *fScale = N_VGetArrayPointer(sys.resScale);
+    const Index perCell = 3 * (k + 1);
+    BOOST_TEST(fScale[0] == 2.0);
+    BOOST_TEST(fScale[nCells * perCell] == 1.0); // the first lambda row
+
+    double kinNorm = -1.0;
+    BOOST_TEST(KINGetFuncNorm(sys.kin_mem, &kinNorm) == KIN_SUCCESS);
+
+    const double ourNorm = sys.steadyResidualNorm();
+    BOOST_TEST_MESSAGE("KINSOL's ||F|| = " << kinNorm << "; ours = " << ourNorm);
+
+    // Same vector, same weights, same norm, same point: measured bit-identical.
+    // Held to a relative tolerance rather than to equality only because that
+    // agreement is not something the code promises.
+    //
+    // Both are at round-off because TestDiffusion is linear and Newton reaches
+    // the answer in one step whatever the tolerance says, so this is not a test
+    // that ||F|| is *small*. It is a test of units, and it still discriminates at
+    // round-off: an unweighted KINSOL against a weighted merit function would put
+    // the factor of 2 above between these two.
+    BOOST_TEST(kinNorm == ourNorm, boost::test_tools::tolerance(1e-10));
+
+    sys.destroySundials();
+    removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(the_weighted_norm_is_mesh_independent_only_near_a_solution)
+{
+    // Where the case above stops holding, pinned so that nobody reads
+    // "mesh-independent" as more than it is -- including whoever carries dt across
+    // a remesh on the strength of it.
+    //
+    // The weights turn a pairing <R, phi_i> ~ h R(x_i) back into a density, which
+    // is right for a row that *is* such a pairing. Not every row is. Overwrite u
+    // with a fixed function and leave sigma, q and lambda stale, and the q and
+    // lambda rows hold the trace and derivative terms of the weak form instead --
+    // O(1) per row, with no h to divide out, because the 1/h from phi' cancels the
+    // h from the measure. Then the flat norm *grows* like 1/sqrt(h) and the
+    // weighted one like 1/h, so weighting makes that state worse rather than
+    // better.
+    //
+    // Measured, flat, on 4/8/16/32/64 cells: 4.275, 6.166, 8.834, 12.58, 17.86 --
+    // ratios of sqrt(2) up, against sqrt(2) *down* for the consistent state in the
+    // case above. Two mechanisms, opposite signs, and which dominates is a
+    // property of the state. So no fixed row weighting is mesh-independent
+    // everywhere, and this one is not claimed to be: what it fixes is the regime
+    // the convergence test fires in, which is the one where the residual is small.
+    auto normOn = [](Index cells)
+    {
+        Grid grid(0.0, 1.0, cells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, "lifecycle_norm_farfield");
+
+        {
+            CapturedOutput quiet;
+            sys.initialize();
+        }
+
+        // u alone, so the algebraic rows are left inconsistent. sigma is untouched
+        // by this on purpose and stays satisfied -- TestDiffusion's sigma_hat is
+        // kappa*q, which does not see u -- so what this exercises is the q and
+        // lambda rows specifically.
+        sys.y.AssignU([](Index, Position x) { return 0.1 * std::sin(2.0 * M_PI * x); });
+
+        const double norm = sys.steadyResidualNorm();
+        sys.destroySundials();
+        return norm;
+    };
+
+    const double coarse = normOn(nCells);
+    const double mid = normOn(2 * nCells);
+    const double fine = normOn(4 * nCells);
+
+    BOOST_TEST_MESSAGE("weighted ||F|| far from a solution, "
+                       << nCells << "/" << 2 * nCells << "/" << 4 * nCells
+                       << " cells: " << coarse << " / " << mid << " / " << fine
+                       << "; ratios " << mid / coarse << ", " << fine / mid);
+
+    // Growing, and by about 2 per doubling: the weighted norm goes like 1/h here.
+    // Asserted as a bound rather than as a value, because the exact constant is
+    // this fixture's and the *direction* is the finding.
+    BOOST_TEST(mid > 1.5 * coarse,
+               "the far-field norm is not growing with refinement (" << coarse
+               << " then " << mid << "), so this fixture no longer separates the "
+               "two regimes and the case above is claiming more than is measured");
+    BOOST_TEST(fine > 1.5 * mid);
+
+    removeOutput("lifecycle_norm_farfield");
 }
 
 BOOST_AUTO_TEST_CASE(a_coupled_solver_reused_matches_a_fresh_one_bit_for_bit)

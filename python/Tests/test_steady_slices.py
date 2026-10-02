@@ -29,8 +29,8 @@ def slice_config(tmp_path, **overrides):
     cfg = base_config(tmp_path)
     cfg.update(
         {
-            "Polynomial_degree": 2,
-            "Grid_size": 6,
+            "PolynomialDegree": 2,
+            "GridSize": 6,
             "SteadyStateSolver": "PseudoTransient",
             "SteadyStateTolerance": 1.0e-10,
             "Absolute_tolerance": 1.0e-10,

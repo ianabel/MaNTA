@@ -148,10 +148,10 @@ point a config file at it:
    t_initial = 0.5
    t_final = 1.0
 
-The grid comes from the restart file, so ``Grid_size``, ``Grid_points``,
-``Lower_boundary`` and ``Upper_boundary`` are ignored on this path.
+The grid comes from the restart file, so ``GridSize``, ``GridPoints``,
+``LowerBoundary`` and ``UpperBoundary`` are ignored on this path.
 
-``Polynomial_degree`` is **not** ignored. It defaults to the degree the file was
+``PolynomialDegree`` is **not** ignored. It defaults to the degree the file was
 written at, and setting it to something else resumes the run at that degree
 instead, projecting the stored state onto the new space:
 
@@ -159,8 +159,8 @@ instead, projecting the stored state onto the new space:
 
    [configuration]
    restart = true
-   RestartFile = "case7.restart.nc"   # written at Polynomial_degree = 2
-   Polynomial_degree = 3              # resume at 3
+   RestartFile = "case7.restart.nc"   # written at PolynomialDegree = 2
+   PolynomialDegree = 3              # resume at 3
 
 Refining loses nothing — a degree-*k* element polynomial lies inside the
 degree-(*k*\ +1) space, so the projection reproduces it exactly. Coarsening
@@ -185,6 +185,54 @@ The **field model is not ignored either**: it is named by the config as usual,
 and its declared ``nFieldDOF`` is checked against the ``nField`` the file
 records before anything is read into it. Resuming a coupled run therefore needs
 the same ``FieldModel`` line the original run had.
+
+**A restart may change the mesh as well as the degree.** ``Grid_size``,
+``Grid_points`` and the domain boundaries are honoured on a restart the way
+``Polynomial_degree`` is: an identical mesh keeps the copy path and is bit for
+bit unchanged, while a different one is projected onto — the stored element
+polynomials are evaluated at the new cell nodes — with a warning naming both
+meshes. The trace is rebuilt when the cells move, since ``lambda`` lives on
+faces, where a change of degree alone leaves it transferable verbatim.
+
+.. note::
+
+   ``DegreeLadder`` and ``GridLadder`` express that directly, so it need not be
+   driven by hand::
+
+      Polynomial_degree = 5
+      Grid_size         = 10
+      DegreeLadder      = [1, 2]
+      GridLadder        = [2, 4]
+
+   solves at 2 cells and :math:`k = 1`, then 4 and :math:`k = 2`, then the
+   configured 10 and :math:`k = 5`, each rung warm-starting the next. **The last
+   rung is always the configured resolution**, so a ladder is a route and not a
+   change of destination: remove the keys and the answer is the same, which is
+   what makes it safe to try on a problem you already have an answer for. Either
+   list alone holds the other quantity at its configured value, so a pure
+   :math:`h`- or :math:`k`-ladder needs only one of them; given both, they must
+   be the same length. A ladder needs a steady solve, is refused alongside
+   ``DegreeAdaptation`` — both choose the sequence of discretisations — and is
+   refused inside a sliced steady solve, since each rung replaces the solver.
+
+   **Do not loosen the early rungs.** Solving each rung only to its own
+   discretisation error is the classical nested-iteration advice and it is wrong
+   here, measured: on the Jardin benchmark a ramp from :math:`10^{-2}` costs
+   twice what converging every rung costs, because a *fully* converged coarse
+   rung is what lets every rung above it exit at zero Newton iterations through
+   the already-converged test. On Shestakov it is a wash either way. The coarse
+   rungs of a good ladder are cheap — two cells at :math:`k = 1` is a few per
+   cent of the budget — so there is very little there to save, and the saving
+   they buy above them is large.
+
+   That makes a *ladder* expressible in configuration: solve coarse, restart
+   finer, solve again. On a nonlinear problem started far from its answer this
+   is worth between 1.5x and 7x in transport-model calls, and on a linear one it
+   is a loss, since Newton is exact in one step from any guess and every rung is
+   overhead. ``PERFORMANCE.md`` has the measurements and the two traps — a rung
+   costs a full solve whatever it achieves, so few large jumps beat many small
+   ones; and the boundaries default to 0 and 1, so a restart config that omits
+   them will remesh a run over another domain, which is what the warning is for.
 
 A restart written by a steady solve carries ``dYdt = 0``, which is the defining
 property of the state it holds. It used to carry the ``t_initial`` derivative
@@ -541,6 +589,65 @@ transient *is* the answer.
    with more than one steady state, such as a transport model with a barrier
    bifurcation.
 
+.. _steady-merit-function:
+
+What ``SteadyStateTolerance`` is measured against
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+On the two continuation modes the tolerance is compared against a weighted norm
+of the undamped steady residual,
+
+.. math::
+
+   \|F\| = \Bigl[ \sum_i (w_i F_i)^2 \Bigr]^{1/2}, \qquad
+   w_i = \begin{cases} h_K^{-1/2} & \text{row } i \text{ is in cell } K \\
+                       1          & \text{row } i \text{ is a trace or a scalar}
+         \end{cases}
+
+*Undamped* is what makes it a merit function: the residual KINSOL sees carries
+the backward-Euler term, which can be driven to zero by shrinking ``dt`` without
+going anywhere.
+
+The weights are there so that one tolerance means one thing on every mesh. A
+cell row is a pairing against the basis — the assembly forms it through the cell
+mass matrix, so it holds :math:`\langle R, \phi_i \rangle \sim h R(x_i)` for a
+residual density :math:`R`. An unweighted 2-norm over :math:`n_\mathrm{cells}
+(k+1)` such rows therefore goes like :math:`\sqrt{h}`, and dividing by
+:math:`\sqrt{h_K}` recovers the discrete :math:`L^2` norm of the equation
+residual, which is a property of the solution rather than of the discretisation.
+Measured on the unit-test diffusion problem at 4/8/16/32/64 cells, same initial
+function throughout: unweighted 0.5557, 0.3935, 0.2784, 0.1969, 0.1392 — ratios
+converging on :math:`1/\sqrt2` — against weighted 1.11145, 1.11294, 1.11344,
+1.11358, 1.11361, converging on a limit at second order.
+
+The trace rows carry weight 1 because a ``lambda`` row is a flux condition at a
+single face and has no :math:`h` in it; the global scalars are not spatial at
+all. Near a solution the choice makes no measurable difference either way, since
+those rows are the algebraic constraints and the solve has driven them to
+round-off.
+
+.. note::
+
+   "Mesh-independent" holds **near a solution**, which is the regime the
+   convergence test fires in, and not everywhere. Far from one the trace and
+   derivative terms of the weak form dominate the cell rows instead; those are
+   :math:`O(1)` per row, with no :math:`h` to divide out, and the norm then
+   *grows* under refinement. So a reported starting ``||F||`` is not comparable
+   across meshes even though the tolerance is. No fixed choice of :math:`w_i`
+   fixes both, because the two mechanisms scale oppositely and which dominates is
+   a property of the state;
+   ``the_weighted_norm_is_mesh_independent_only_near_a_solution`` pins that.
+
+KINSOL is handed the same weights as its ``f_scale``, so its own stopping test
+and the continuation loop's are the identical quantity rather than two that
+happen to agree — they match bit for bit in ``Newton`` mode, where the damping
+term is identically zero. Its ``u_scale`` stays unit: that one is about the
+solution's units, and it drives the step-length test and the Newton step clamp.
+
+``TimeMarch`` does not use any of this. It compares ``dY/dt`` against the same
+tolerance in the time loop, so a config that switches between the modes is
+changing what the number means.
+
 Measured on the benchmarks under ``python-examples/``, in the units
 ``PERFORMANCE.md`` asks for — evaluations of the physics per point, for an
 answer identical in every digit printed. The resolution is stated because the
@@ -555,28 +662,44 @@ three at :math:`k = 3`.
      - ``PseudoTransient``
      - ``Newton``
    * - ``park-convergence``
-     - 119
-     - **11**
-     - **7**
+     - 120
+     - **6**
+     - **5**
    * - ``jardin-critical-gradient``
-     - 182
-     - **138**
-     - 163
+     - 183
+     - **116**
+     - 140
    * - ``shestakov-nonlinear``
-     - **256**
-     - 622
-     - 648
+     - **257**
+     - 442
+     - 467
 
-A small, uniform part of those two columns is that a steady solve no longer pays
-for ``IDACalcIC`` (see :ref:`the-run-lifecycle` below). Skipping it took
-``PseudoTransient``/``Newton`` from 15/11 to 11/7 on ``park-convergence``, from
-142/167 to 138/163 on ``jardin-critical-gradient`` and from 657/683 to 622/648 on
-``shestakov-nonlinear`` — every converged answer unchanged bit for bit, and
-``TimeMarch``, which still runs it, untouched. It is a constant few evaluations,
-not the order of magnitude in the first row; that is the algorithm.
+Three things a steady solve does not pay for account for a constant few
+evaluations of those two columns, and none of them for the order of magnitude in
+the first row — that is the algorithm. It does not run ``IDACalcIC`` (see
+:ref:`the-run-lifecycle` below); ``setInitialConditions`` does not solve the
+initial ``du/dt`` out of the u row, a sweep whose whole product a steady solve
+discards; and at ``dt = inf`` the merit function reads the residual norm KINSOL
+already computed rather than evaluating it again. Every converged answer is
+unchanged bit for bit by all three, and ``TimeMarch``, which needs the first two,
+is untouched.
 
-Park's own solver reaches that state in 9–15 iterations, which ``Newton`` now
-matches or beats. The last row is the counter-example and is why ``TimeMarch``
+The budget that leaves is exact: ``2 + 3n`` physics sweeps for ``Newton`` and
+``2 + 4n`` for ``PseudoTransient``, over ``n`` continuation steps. Two are fixed
+— building ``sigma``, and the residual evaluation that tests whether the initial
+state is already converged — and each step costs KINSOL's residual at both ends
+plus a Jacobian, with a fourth sweep at finite ``dt`` where the damped residual
+KINSOL drives to zero and the steady one the step-size rule needs are different
+functions.
+
+Park's own solver reaches a steady state in 9–15 iterations on the nonlinear
+problems he reports, which ``Newton`` matches or beats. On ``park-convergence``
+itself the comparison is not that: the diffusivity there is constant, so his
+relaxation is converged at its first iterate and he solves the linear system in
+one pass over the grid. Three of ``Newton``'s five sweeps are the floor for a
+method that does not know the problem is linear — a residual to form the
+right-hand side, a Jacobian, and a residual to learn the correction was exact —
+and the other two are ``sigma`` and the already-converged test. The last row is the counter-example and is why ``TimeMarch``
 stays: that problem's flux ``D0 q^3/u^2`` is degenerate, the mass term
 continuation exists to shed is what was damping it, and as ``dt`` grows the inner
 solve starts rejecting steps. Its ``run.conf`` therefore pins ``TimeMarch``.
@@ -862,12 +985,11 @@ Controlling the inner solve
 
 Four keys reach KINSOL. They apply to ``PseudoTransient`` and ``Newton`` alike —
 pseudo-transient continuation *is* Newton on a damped residual — and not at all
-to ``TimeMarch``, which never builds a KINSOL object. Every default reproduces
-what the code did when these were hardcoded, so an unconfigured run is unchanged.
+to ``TimeMarch``, which never builds a KINSOL object.
 
 ``NewtonJacobianReuse``
    How many Newton iterations may share one Jacobian factorisation (KINSOL's
-   ``msbset``). ``1`` is full Newton; larger is modified Newton. **This is the
+   ``msbset``). ``1``, the default, is full Newton; larger is modified Newton. **This is the
    setting the** ``jac`` **and** ``solves`` **columns above measure**, and the
    section below is about why it is worth setting per case.
 
@@ -920,7 +1042,7 @@ Which side wins is a property of how your flux model is differentiated. **That i
 the whole reason this is configurable**, and it is why there is no default that is
 right for every case.
 
-The default of 10 is KINSOL's. At the cheap-Jacobian end of the range it is
+KINSOL's own default is 10. At the cheap-Jacobian end of the range that is
 conservative — measured on ``AdjointPoster``, an analytic flux, at k = 3, driving
 the residual to 1e-10:
 
@@ -947,7 +1069,7 @@ the residual to 1e-10:
      - 8
      - 25
      - 36
-   * - 10 (default)
+   * - 10
      - 6.21 s
      - 7
      - 32
@@ -1055,21 +1177,20 @@ described above is real only while the Jacobian is stable enough that a stale on
 still points somewhere useful; on a strongly nonlinear problem it is not, and the
 extra iterations are pure loss.
 
-**At the default, Shestakov does not converge at all**, in either steady mode,
+**At reuse 10, Shestakov does not converge at all**, in either steady mode,
 returning ``KIN_MXNEWT_5X_EXCEEDED``. A Jacobian ten iterations old gives a bad
 enough direction that the step clamp fires five times running. At reuse 1 both
 modes converge, and ``PseudoTransient`` beats ``TimeMarch`` four to one — which
 reverses the note in ``../shestakov-nonlinear/`` that continuation costs 2.5× what
-time marching does. That measurement was taken at the default and is a statement
+time marching does. That measurement was taken at reuse 10 and is a statement
 about ``msbset``, not about pseudo-transient continuation.
 
-So the honest summary is that KINSOL's default of 10 suits neither of MaNTA's
-nonlinear benchmarks, and on one of them it is the difference between converging
-and not. It is left in place only because the cost model above says the opposite
-case exists: a physics case whose Jacobian is finite-differenced from expensive
-flux calls pays far more per assembly than these do, and would rather have the
-iterations. **If a steady solve is slow or will not converge,**
-``NewtonJacobianReuse = 1`` **is the first thing to try.**
+So KINSOL's default of 10 suits neither of MaNTA's nonlinear benchmarks, and on
+one of them it is the difference between converging and not; MaNTA's default is
+therefore 1. The cost model above says the opposite case exists -- a physics case
+whose Jacobian is finite-differenced from expensive flux calls pays far more per
+assembly than these do, and would rather have the iterations -- and that is what
+raising it is for.
 
 .. _degree-adaptation:
 

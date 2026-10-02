@@ -11,10 +11,18 @@
 // applySolverConfig is the single point at which a configuration reaches the
 // solver, so the tests below build a real one and read the settings back.
 #include "SystemSolver.hpp"
+#include "CapturedOutput.hpp"
+#include "DegreeAdaptation.hpp"
 #include "TestDiffusion.hpp"
+
+// SolverConfig.hpp only forward-declares Grid, so that it stays cheap to include
+// and pybind11-free. The graded-mesh cases below inspect the Grid makeGrid built,
+// so they need the definition; taken here rather than by widening that header.
+#include "gridStructures.hpp"
 
 #include <map>
 #include <stdexcept>
+#include <format>
 #include <string>
 
 namespace
@@ -28,12 +36,12 @@ SolverConfig load(std::string const &body)
 
 // The smallest config that satisfies every unconditional requirement.
 const std::string minimal =
-    "Polynomial_degree = 2\n"
-    "Grid_size = 8\n"
+    "PolynomialDegree = 2\n"
+    "GridSize = 8\n"
     "delta_t = 0.1\n"
     "t_final = 1.0\n"
-    "Lower_boundary = 0.0\n"
-    "Upper_boundary = 1.0\n"
+    "LowerBoundary = 0.0\n"
+    "UpperBoundary = 1.0\n"
     "TransportSystem = \"LinearDiffusion\"\n";
 
 // A second ConfigSource over a plain map, standing in for the dict.
@@ -73,8 +81,8 @@ BOOST_AUTO_TEST_CASE(a_minimal_config_loads_with_every_default_applied)
 {
     auto c = load(minimal);
 
-    BOOST_TEST(c.Polynomial_degree == 2u);
-    BOOST_TEST(c.Grid_size == 8);
+    BOOST_TEST(c.PolynomialDegree == 2u);
+    BOOST_TEST(c.GridSize == 8);
     BOOST_TEST(c.tau == 1.0);
     BOOST_TEST(c.Relative_tolerance == 1e-3);
     BOOST_REQUIRE(c.Absolute_tolerance.size() == 1u);
@@ -105,7 +113,7 @@ BOOST_AUTO_TEST_CASE(a_minimal_config_loads_with_every_default_applied)
     BOOST_TEST(c.PseudoTransientSERRate == 1.0);
     BOOST_TEST(c.PseudoTransientSERFloor == 2.0);
     BOOST_TEST(c.NewtonMaxIterations == 20u);
-    BOOST_TEST(c.NewtonJacobianReuse == 10u);
+    BOOST_TEST(c.NewtonJacobianReuse == 1u);
     BOOST_TEST(c.NewtonStepTolerance == 0.0);
     BOOST_TEST(c.NewtonScaling == "Unit");
     BOOST_TEST(c.SteadyStateDiagnostics == false);
@@ -138,12 +146,12 @@ BOOST_AUTO_TEST_CASE(a_missing_required_key_is_an_error_naming_it)
 {
     try
     {
-        load("Grid_size = 8\ndelta_t = 0.1\nTransportSystem = \"X\"\n");
+        load("GridSize = 8\ndelta_t = 0.1\nTransportSystem = \"X\"\n");
         BOOST_FAIL("expected a throw");
     }
     catch (std::invalid_argument const &e)
     {
-        BOOST_TEST(std::string(e.what()).find("Polynomial_degree") != std::string::npos);
+        BOOST_TEST(std::string(e.what()).find("PolynomialDegree") != std::string::npos);
     }
 }
 
@@ -159,8 +167,8 @@ BOOST_AUTO_TEST_CASE(every_missing_required_key_is_reported_at_once)
     catch (std::invalid_argument const &e)
     {
         std::string msg = e.what();
-        BOOST_TEST(msg.find("Polynomial_degree") != std::string::npos);
-        BOOST_TEST(msg.find("Grid_size") != std::string::npos);
+        BOOST_TEST(msg.find("PolynomialDegree") != std::string::npos);
+        BOOST_TEST(msg.find("GridSize") != std::string::npos);
         BOOST_TEST(msg.find("delta_t") != std::string::npos);
     }
 }
@@ -225,8 +233,8 @@ BOOST_AUTO_TEST_CASE(a_problem_selection_key_is_an_error_for_the_dict_reader)
     // failure mode this schema exists to stop.
     MapConfigSource src;
     src.values = {
-        {"Polynomial_degree", 2u}, {"Grid_size", 8}, {"delta_t", 0.1},
-        {"Lower_boundary", 0.0},   {"Upper_boundary", 1.0},
+        {"PolynomialDegree", 2u}, {"GridSize", 8}, {"delta_t", 0.1},
+        {"LowerBoundary", 0.0},   {"UpperBoundary", 1.0},
         {"OutputFilename", std::string("out")},
         {"TransportSystem", std::string("LinearDiffusion")},
     };
@@ -331,16 +339,70 @@ BOOST_AUTO_TEST_CASE(an_unrecognised_field_solve_is_rejected_rather_than_default
     }
 }
 
+BOOST_AUTO_TEST_CASE(apply_solver_config_carries_the_tau_scaling_through)
+{
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
+    SystemSolver sys(grid, 1, &problem);
+
+    applySolverConfig(load(minimal), sys);
+    BOOST_TEST((sys.getTauScaling() == SystemSolver::TauScaling::Constant));
+
+    applySolverConfig(load(minimal + "tauScaling = \"Diffusive\"\ntauFloor = 0.02\n"), sys);
+    BOOST_TEST((sys.getTauScaling() == SystemSolver::TauScaling::Diffusive));
+    BOOST_TEST((sys.getTauUpdate() == SystemSolver::TauUpdate::Residual));
+    BOOST_TEST(sys.tauFloorFraction == 0.02);
+
+    applySolverConfig(load(minimal + "tauScaling = \"Diffusive\"\ntauUpdate = \"ContinuationStep\"\n"), sys);
+    BOOST_TEST((sys.getTauUpdate() == SystemSolver::TauUpdate::ContinuationStep));
+
+    applySolverConfig(load(minimal + "tauScaling = \"Diffusive\"\ntauUpdate = \"JacobianBuild\"\n"), sys);
+    BOOST_TEST((sys.getTauUpdate() == SystemSolver::TauUpdate::JacobianBuild));
+}
+
+BOOST_AUTO_TEST_CASE(bad_tau_scaling_configurations_are_refused_by_name)
+{
+    // An unknown scaling for the reason FieldSolve's is refused; a non-positive
+    // floor because a face with kappa = 0 would leave its trace undetermined;
+    // and Diffusive with the adjoint because the adjoint cannot carry d tau / dy
+    // and the gradient would be wrong with nothing to say so.
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
+    SystemSolver sys(grid, 1, &problem);
+
+    const std::vector<std::pair<std::string, std::string>> cases{
+        {"tauScaling = \"Local\"\n", "Local"},
+        {"tauScaling = \"Diffusive\"\ntauFloor = 0.0\n", "tauFloor"},
+        {"tauScaling = \"Diffusive\"\ntau = -1.0\n", "tau > 0"},
+        {"tauScaling = \"Diffusive\"\nsolveAdjoint = true\n", "solveAdjoint"},
+        {"tauScaling = \"Diffusive\"\ntauUpdate = \"Newton\"\n", "tauUpdate"},
+        {"tauUpdate = \"ContinuationStep\"\n", "Diffusive"},
+    };
+    for (auto const &[extra, needle] : cases)
+    {
+        try
+        {
+            applySolverConfig(load(minimal + extra), sys);
+            BOOST_ERROR("expected a throw for: " << extra);
+        }
+        catch (std::invalid_argument const &e)
+        {
+            BOOST_TEST(std::string(e.what()).find(needle) != std::string::npos,
+                       "message for `" << extra << "` does not name " << needle << ": " << e.what());
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE(boundaries_are_required_unless_grid_points_is_given)
 {
     const std::string noBounds =
-        "Polynomial_degree = 2\nGrid_size = 8\ndelta_t = 0.1\nt_final = 1.0\n"
+        "PolynomialDegree = 2\nGrid_size = 8\ndelta_t = 0.1\nt_final = 1.0\n"
         "TransportSystem = \"X\"\n";
 
     BOOST_CHECK_THROW(load(noBounds), std::invalid_argument);
 
-    auto c = load(noBounds + "Grid_points = [0.0, 0.5, 1.0]\n");
-    BOOST_TEST(c.Grid_points.size() == 3u);
+    auto c = load(noBounds + "GridPoints = [0.0, 0.5, 1.0]\n");
+    BOOST_TEST(c.GridPoints.size() == 3u);
 }
 
 BOOST_AUTO_TEST_CASE(presence_is_recorded_for_the_three_keys_that_need_it)
@@ -426,8 +488,8 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     // `8` and `8u` are not interchangeable here.
     MapConfigSource map_src;
     map_src.values = {
-        {"Polynomial_degree", 2u}, {"Grid_size", 8}, {"delta_t", 0.1},
-        {"t_final", 1.0}, {"Lower_boundary", 0.0}, {"Upper_boundary", 1.0},
+        {"PolynomialDegree", 2u}, {"GridSize", 8}, {"delta_t", 0.1},
+        {"t_final", 1.0}, {"LowerBoundary", 0.0}, {"UpperBoundary", 1.0},
         {"tau", 2.5}, {"Relative_tolerance", 1e-6},
         {"Absolute_tolerance", std::vector<double>{1e-7, 1e-8}},
         {"t_initial", 0.25}, {"OutputPoints", 51},
@@ -449,8 +511,8 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     };
     auto fromMap = loadSolverConfig(map_src, ConfigSchema::Reader::Dict);
 
-    BOOST_TEST(fromToml.Polynomial_degree == fromMap.Polynomial_degree);
-    BOOST_TEST(fromToml.Grid_size == fromMap.Grid_size);
+    BOOST_TEST(fromToml.PolynomialDegree == fromMap.PolynomialDegree);
+    BOOST_TEST(fromToml.GridSize == fromMap.GridSize);
     BOOST_TEST(fromToml.delta_t == fromMap.delta_t);
     BOOST_TEST(fromToml.tau == fromMap.tau);
     BOOST_TEST(fromToml.t_initial == fromMap.t_initial);
@@ -483,8 +545,8 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     BOOST_TEST(fromToml.initialTimestep == fromMap.initialTimestep);
     BOOST_TEST(fromToml.WriteDatFile == fromMap.WriteDatFile);
     BOOST_TEST(fromToml.WriteDebugDatFiles == fromMap.WriteDebugDatFiles);
-    BOOST_TEST(fromToml.Lower_boundary == fromMap.Lower_boundary);
-    BOOST_TEST(fromToml.Upper_boundary == fromMap.Upper_boundary);
+    BOOST_TEST(fromToml.LowerBoundary == fromMap.LowerBoundary);
+    BOOST_TEST(fromToml.UpperBoundary == fromMap.UpperBoundary);
     BOOST_TEST(fromToml.restart == fromMap.restart);
     BOOST_TEST(fromToml.solveAdjoint == fromMap.solveAdjoint);
     BOOST_TEST(fromToml.FieldSolve == fromMap.FieldSolve);
@@ -500,6 +562,473 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     BOOST_REQUIRE(fromToml.t_final.has_value());
     BOOST_REQUIRE(fromMap.t_final.has_value());
     BOOST_TEST(*fromToml.t_final == *fromMap.t_final);
+}
+
+namespace
+{
+// A minimal config with the mesh spelled out, since `minimal` already names a
+// Grid_size and toml refuses a duplicate key.
+std::string meshed(std::string const &mesh, bool restart = true)
+{
+    return std::string("Polynomial_degree = 2\n")
+           + "delta_t = 0.1\n"
+             "t_final = 1.0\n"
+             "TransportSystem = \"LinearDiffusion\"\n"
+           + (restart ? "restart = true\n" : "")
+           + mesh;
+}
+
+} // namespace
+
+// --- the mesh a restarted run is solved on --------------------------------
+//
+// restartRunGrid is to Grid_size what restartRunOrder is to Polynomial_degree.
+// Both keys are required of every config on both readers; both used to be read,
+// validated and then discarded on a restart, because makeGrid took the whole
+// discretisation out of the file. The degree was fixed first; this is the mesh.
+//
+// Why it matters beyond tidiness: a ladder written as "solve coarse, restart
+// finer, solve again" silently re-solved the coarse problem at every rung and
+// reported it converged, which is indistinguishable from success -- resuming a
+// converged state at its own resolution costs one residual evaluation and exits
+// at the already-converged test, exactly as a genuine rung would look.
+
+BOOST_AUTO_TEST_CASE(a_restart_onto_the_same_mesh_keeps_it)
+{
+    // The no-regression half, and the reason the comparison is on the Grid
+    // rather than on Grid_size: an equal mesh has to come back equal so that
+    // setInitialConditions takes the copy path and every existing restart is
+    // bit for bit what it was.
+    auto c = load(meshed("Grid_size = 8\nLower_boundary = 0.0\nUpper_boundary = 1.0\n"));
+    Grid fileGrid(0.0, 1.0, 8);
+
+    auto run = restartRunGrid(c, fileGrid);
+    BOOST_TEST((*run == fileGrid));
+    BOOST_TEST(run->getNCells() == 8);
+}
+
+BOOST_AUTO_TEST_CASE(a_restart_onto_a_different_mesh_honours_the_configuration)
+{
+    auto c = load(meshed("Grid_size = 20\nLower_boundary = 0.0\nUpper_boundary = 1.0\n"));
+    Grid fileGrid(0.0, 1.0, 5);
+
+    CapturedOutput quiet;
+    auto run = restartRunGrid(c, fileGrid);
+    BOOST_TEST(run->getNCells() == 20);
+    BOOST_TEST(!(*run == fileGrid));
+    BOOST_TEST(run->lowerBoundary() == 0.0);
+    BOOST_TEST(run->upperBoundary() == 1.0);
+}
+
+BOOST_AUTO_TEST_CASE(a_restart_onto_a_coarser_mesh_is_allowed_and_is_the_lossy_direction)
+{
+    // Refining puts the stored element polynomials inside the new space;
+    // coarsening is a genuine approximation. Both are permitted -- a ladder may
+    // want either -- and the warning is what distinguishes them, so the test
+    // pins only that coarsening is not refused.
+    auto c = load(meshed("Grid_size = 4\nLower_boundary = 0.0\nUpper_boundary = 1.0\n"));
+    Grid fileGrid(0.0, 1.0, 16);
+
+    CapturedOutput quiet;
+    auto run = restartRunGrid(c, fileGrid);
+    BOOST_TEST(run->getNCells() == 4);
+}
+
+BOOST_AUTO_TEST_CASE(a_restart_onto_a_different_domain_honours_the_configuration)
+{
+    // The mesh is the cell boundaries, not the cell count, so moving the domain
+    // is a mesh change even at the same Grid_size. Worth its own case because
+    // Lower_boundary and Upper_boundary are not required keys and default to 0
+    // and 1: a restart config that omits them and resumes a run over [-1, 1]
+    // will be remeshed onto [0, 1], and the warning is the only thing that says
+    // so.
+    auto c = load(meshed("Grid_size = 8\nLower_boundary = 0.0\nUpper_boundary = 1.0\n"));
+    Grid fileGrid(-1.0, 1.0, 8);
+
+    CapturedOutput quiet;
+    auto run = restartRunGrid(c, fileGrid);
+    BOOST_TEST(run->getNCells() == 8);
+    BOOST_TEST(run->lowerBoundary() == 0.0);
+    BOOST_TEST(!(*run == fileGrid));
+}
+
+BOOST_AUTO_TEST_CASE(grid_points_supersede_grid_size_on_a_restart_too)
+{
+    auto c = load(meshed("Grid_size = 8\nGrid_points = [0.0, 0.25, 0.9, 1.0]\n"));
+    Grid fileGrid(0.0, 1.0, 8);
+
+    CapturedOutput quiet;
+    auto run = restartRunGrid(c, fileGrid);
+    BOOST_TEST(run->getNCells() == 3);
+}
+
+BOOST_AUTO_TEST_CASE(without_restart_the_file_mesh_is_returned_unchanged)
+{
+    // Defensive: the callers only reach this on a restart, but a function that
+    // silently remeshed a cold start would be a bad one to leave lying about.
+    auto c = load(meshed("Grid_size = 20\nLower_boundary = 0.0\nUpper_boundary = 1.0\n", false));
+    Grid fileGrid(0.0, 1.0, 5);
+
+    auto run = restartRunGrid(c, fileGrid);
+    BOOST_TEST((*run == fileGrid));
+}
+
+// --- DegreeLadder / GridLadder --------------------------------------------
+
+BOOST_AUTO_TEST_CASE(a_ladder_reaches_the_same_answer_as_a_direct_solve)
+{
+    // The property the whole design rests on: the last rung is always the
+    // configured resolution, so a ladder is a *route* and not a change of
+    // destination. Remove the key and the numbers must not move -- which is
+    // what makes it safe to try on a problem you already have an answer for.
+    //
+    // Exactly, not approximately. Both solves end at the same steady tolerance
+    // on the same discretisation, so any difference would be a difference in
+    // the state Newton converged from, and the point is that that does not
+    // survive to the answer.
+    const std::string body =
+        "Polynomial_degree = 3\n"
+        "Grid_size = 8\n"
+        "delta_t = 0.1\n"
+        "t_final = 1.0\n"
+        "Lower_boundary = 0.0\n"
+        "Upper_boundary = 1.0\n"
+        "OutputFilename = \"ladder_equal\"\n"
+        "WriteOutput = false\n"
+        "SteadyStateSolver = \"Newton\"\n"
+        "TransportSystem = \"LinearDiffusion\"\n";
+
+    const toml::value diffusion = toml::parse_str(
+        "[DiffusionProblem]\nKappa = 1.0\nCentre = 0.0\n");
+
+    auto solve = [&](std::string const &extra)
+    {
+        auto c = load(body + extra);
+        Grid grid(0.0, 1.0, 8);
+        TestDiffusion problem(diffusion);
+        std::unique_ptr<SystemSolver> sys;
+        {
+            CapturedOutput quiet;
+            if (c.DegreeLadder.empty() && c.GridLadder.empty())
+            {
+                sys = std::make_unique<SystemSolver>(grid, 3, &problem);
+                applySolverConfig(c, *sys);
+                sys->runSolver(*c.t_final);
+            }
+            else
+            {
+                sys = runLadder(c, problem, nullptr, grid, 3, *c.t_final);
+            }
+        }
+        auto Y = sys->stateVector();
+        {
+            CapturedOutput quiet;
+            sys->destroySundials();
+        }
+        return Y;
+    };
+
+    const std::string t = "SteadyStateTolerance = 1.0e-12\n";
+    const auto direct = solve(t);
+    const auto laddered = solve(t + "DegreeLadder = [1, 2]\nGridLadder = [2, 4]\n");
+    BOOST_REQUIRE_EQUAL(direct.size(), laddered.size());
+
+    // Every degree of freedom agrees to round-off, not merely to the steady
+    // tolerance: both end on the same discretisation with the residual driven to
+    // the same place, so it is the same state.
+    //
+    // The two Dirichlet trace entries used to be exceptions, and the reason had
+    // nothing to do with the ladder. A Dirichlet trace row *and column* are
+    // identically zero in K_global, so no solve can move those entries: each
+    // keeps whatever setInitialConditions seeded it with. The cold path seeds
+    // them from EvaluateLambda's {{u}} and the restart path from the boundary
+    // datum, and a ladder ends on a restart -- so the ladder reported 1.0 where
+    // a cold solve reported 0.9999991, a discretisation error apart and
+    // identical at every tolerance from 1e-8 to 1e-14, because neither was
+    // converging to anything.
+    //
+    // The seeds still differ, deliberately -- see TODO -- and this now passes
+    // anyway, because the datum is written back into those entries at every
+    // point the state is reported, writeSteadyState() included. So the whole
+    // vector is in scope here, and keeping it that way is the point of the test:
+    // it is what would notice a reporting path that got missed.
+    double worst = 0.0;
+    for (size_t i = 0; i < direct.size(); ++i)
+        worst = std::max(worst, std::abs(direct[i] - laddered[i]));
+    BOOST_TEST_MESSAGE("ladder against direct: worst |dY| = " << worst);
+    BOOST_TEST(worst < 1e-12);
+
+    // And both hold the datum at the lower face, rather than merely agreeing
+    // with each other on some extrapolation of the interior.
+    const size_t lambda0 = 3 * 4 * 8;
+    BOOST_TEST(direct[lambda0] == 1.0, boost::test_tools::tolerance(1e-14));
+    BOOST_TEST(laddered[lambda0] == 1.0, boost::test_tools::tolerance(1e-14));
+}
+
+BOOST_AUTO_TEST_CASE(the_two_ladders_must_describe_the_same_rungs)
+{
+    BOOST_CHECK_THROW(load(minimal + "DegreeLadder = [1, 2]\nGridLadder = [4]\n"),
+                      std::invalid_argument);
+    // Either alone is fine: it holds the other quantity at its configured value.
+    BOOST_CHECK_NO_THROW(load(minimal + "DegreeLadder = [1, 2]\n"
+                                        "SteadyStateSolve = true\n"));
+    BOOST_CHECK_NO_THROW(load(minimal + "GridLadder = [2, 4]\n"
+                                        "SteadyStateSolve = true\n"));
+}
+
+BOOST_AUTO_TEST_CASE(a_ladder_refuses_what_it_cannot_mean)
+{
+    // Degree zero has no gradient to postprocess and cannot be evaluated off
+    // its node; zero cells is not a mesh.
+    BOOST_CHECK_THROW(load(minimal + "DegreeLadder = [0, 2]\nSteadyStateSolve = true\n"),
+                      std::invalid_argument);
+    BOOST_CHECK_THROW(load(minimal + "GridLadder = [0, 4]\nSteadyStateSolve = true\n"),
+                      std::invalid_argument);
+
+    // Both choose the sequence of discretisations, from different information.
+    BOOST_CHECK_THROW(load(minimal + "DegreeLadder = [1, 2]\nDegreeAdaptation = true\n"
+                                     "SteadyStateSolve = true\n"),
+                      std::invalid_argument);
+
+    // A transient rung would take the previous rung's final state and integrate
+    // the same interval again -- a wrong answer, not a slow one.
+    BOOST_CHECK_THROW(load(minimal + "DegreeLadder = [1, 2]\n"
+                                     "SteadyStateSolver = \"TimeMarch\"\n"
+                                     "SteadyStateSolve = true\n"),
+                      std::invalid_argument);
+
+    // And without a steady solve armed at all, SteadyStateSolver is never
+    // consulted and every rung time-marches regardless of what it says.
+    BOOST_CHECK_THROW(load(minimal + "DegreeLadder = [1, 2]\n"),
+                      std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(a_ladder_is_a_list_of_whole_numbers)
+{
+    // UIntList exists rather than reusing DoubleList because these are counts:
+    // 2.5 cells is a configuration error and not something to round.
+    BOOST_CHECK_THROW(load(minimal + "GridLadder = [2.5]\nSteadyStateSolve = true\n"),
+                      std::invalid_argument);
+    BOOST_CHECK_THROW(load(minimal + "GridLadder = [-2]\nSteadyStateSolve = true\n"),
+                      std::invalid_argument);
+
+    // A bare scalar is a one-rung ladder, matching how DoubleList treats one.
+    auto c = load(minimal + "GridLadder = 4\nSteadyStateSolve = true\n");
+    BOOST_REQUIRE_EQUAL(c.GridLadder.size(), 1u);
+    BOOST_TEST(c.GridLadder[0] == 4u);
+}
+
+// ------------------------------------------- geometric mesh grading ----
+
+BOOST_AUTO_TEST_CASE(graded_grid_defaults_are_off_and_harmless)
+{
+    auto c = load(minimal);
+    BOOST_TEST(c.GradedGridBoundary == false);
+    BOOST_TEST(c.GradingRatio == 0.3);
+    BOOST_TEST(c.GradingCells == 0);      // 0 means "derive from GridSize"
+    BOOST_TEST(c.GradingEnd == "Both");
+
+    // Off, so the count is left as the sentinel rather than resolved -- which is
+    // the property that keeps a plain config bit for bit what it was.
+    unsigned int k = 0;
+    auto grid = makeGrid(c, nullptr, k);
+    BOOST_TEST(grid->getNCells() == 8u);
+    for (Grid::Index i = 0; i < grid->getNCells(); ++i)
+        BOOST_TEST((*grid)[i].h() == 0.125, boost::test_tools::tolerance(1e-12));
+}
+
+BOOST_AUTO_TEST_CASE(a_graded_grid_config_builds_the_mesh_it_describes)
+{
+    // The end-to-end path: keys -> SolverConfig -> makeGrid -> Grid. The layer
+    // width comes from LowerBoundaryFraction, one key for one meaning rather than
+    // a second that would drift from it.
+    auto c = load(minimal +
+                  "GradedGridBoundary = true\n"
+                  "GradingEnd = \"Lower\"\n"
+                  "GradingRatio = 0.5\n"
+                  "GradingCells = 4\n"
+                  "LowerBoundaryFraction = 0.2\n");
+    BOOST_TEST(c.GradedGridBoundary == true);
+    BOOST_TEST(c.GradingCells == 4);
+
+    unsigned int k = 0;
+    auto grid = makeGrid(c, nullptr, k);
+    BOOST_TEST(grid->getNCells() == 8u);
+    BOOST_TEST(grid->lowerBoundary() == 0.0);
+    BOOST_TEST(grid->upperBoundary() == 1.0);
+
+    // h0 = fraction * span * ratio^(cells-1) = 0.2 * 0.5^3
+    BOOST_TEST((*grid)[0].h() == 0.2 * 0.125, boost::test_tools::tolerance(1e-12));
+    // ...and the four uniform cells beyond the layer
+    for (Grid::Index i = 4; i < 8; ++i)
+        BOOST_TEST((*grid)[i].h() == 0.8 / 4.0, boost::test_tools::tolerance(1e-12));
+}
+
+BOOST_AUTO_TEST_CASE(grading_the_upper_end_reads_the_upper_fraction)
+{
+    // Which fraction is read depends on GradingEnd, and getting that backwards
+    // would still produce a graded mesh -- of the wrong layer width, silently.
+    // Distinct fractions here so the two cannot be confused.
+    auto c = load(minimal +
+                  "GradedGridBoundary = true\n"
+                  "GradingEnd = \"Upper\"\n"
+                  "GradingRatio = 0.5\n"
+                  "GradingCells = 4\n"
+                  "LowerBoundaryFraction = 0.4\n"
+                  "UpperBoundaryFraction = 0.2\n");
+
+    unsigned int k = 0;
+    auto grid = makeGrid(c, nullptr, k);
+    BOOST_TEST(grid->getNCells() == 8u);
+
+    // The narrow cell is the last one, and its width is set by 0.2 not 0.4.
+    BOOST_TEST((*grid)[7].h() == 0.2 * 0.125, boost::test_tools::tolerance(1e-10));
+    BOOST_TEST((*grid)[0].h() == 0.8 / 4.0, boost::test_tools::tolerance(1e-12));
+}
+
+BOOST_AUTO_TEST_CASE(grading_both_ends_is_the_default_and_splits_the_grid_in_thirds)
+{
+    // The default, and what High_Grid_Boundary produced: a third of the cells in
+    // each layer. Resolved in loadSolverConfig rather than in the schema, because a
+    // schema default cannot see another key.
+    auto c = load(minimal +
+                  "GradedGridBoundary = true\n"
+                  "GradingRatio = 0.5\n"
+                  "LowerBoundaryFraction = 0.2\n"
+                  "UpperBoundaryFraction = 0.2\n");
+    BOOST_TEST(c.GradingEnd == "Both");
+    BOOST_TEST(c.GradingCells == 2);      // GridSize is 8, so 8/3
+
+    unsigned int k = 0;
+    auto grid = makeGrid(c, nullptr, k);
+    BOOST_TEST(grid->getNCells() == 8u);
+
+    // Narrow at both ends, wide in the middle, and symmetric: 2 graded cells per
+    // layer with h0 = 0.2 * 0.5 = 0.1, then 4 uniform cells across the middle 60%.
+    BOOST_TEST((*grid)[0].h() == 0.1, boost::test_tools::tolerance(1e-12));
+    BOOST_TEST((*grid)[7].h() == 0.1, boost::test_tools::tolerance(1e-10));
+    for (Grid::Index i = 2; i < 6; ++i)
+        BOOST_TEST((*grid)[i].h() == 0.6 / 4.0, boost::test_tools::tolerance(1e-12));
+
+    // Both layers land exactly on the fractions they were given.
+    BOOST_TEST((*grid)[1].x_u == 0.2, boost::test_tools::tolerance(1e-12));
+    BOOST_TEST((*grid)[6].x_l == 0.8, boost::test_tools::tolerance(1e-12));
+}
+
+BOOST_AUTO_TEST_CASE(the_retired_cosine_spelling_still_loads_and_grades_instead)
+{
+    // High_Grid_Boundary is a deprecated alias of GradedGridBoundary now, so an old
+    // config keeps loading -- with two warnings, since both the name *and* the mesh
+    // it builds have changed. The alias is the reason this rename touched no
+    // .conf file and no driver in the tree.
+    auto c = load(minimal + "High_Grid_Boundary = true\n");
+    BOOST_TEST(c.GradedGridBoundary == true);
+    BOOST_TEST(c.GradingEnd == "Both");
+    BOOST_TEST(c.GradingCells == 2);
+
+    unsigned int k = 0;
+    auto grid = makeGrid(c, nullptr, k);
+    BOOST_TEST(grid->getNCells() == 8u);
+
+    // Finer at the walls than in the middle, which is the property the old flag
+    // was for and the only one an old config was entitled to rely on.
+    BOOST_TEST((*grid)[0].h() < (*grid)[4].h());
+    BOOST_TEST((*grid)[7].h() < (*grid)[4].h());
+
+    // ...and giving both spellings at once is refused rather than resolved.
+    BOOST_CHECK_THROW(load(minimal +
+                           "GradedGridBoundary = true\n"
+                           "High_Grid_Boundary = true\n"),
+                      std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(a_graded_grid_config_refuses_geometry_it_cannot_build)
+{
+    BOOST_CHECK_THROW(load(minimal +
+                           "GradedGridBoundary = true\n"
+                           "GradingEnd = \"Sideways\"\n"),
+                      std::invalid_argument);
+
+    // Grading both ends of a 4-cell grid cannot carry two layers of two plus a
+    // cell between them; grading one end of it can.
+    const std::string tiny =
+        "PolynomialDegree = 2\nGridSize = 4\ndelta_t = 0.1\n"
+        "t_final = 1.0\nLowerBoundary = 0.0\nUpperBoundary = 1.0\n"
+        "TransportSystem = \"LinearDiffusion\"\nGradedGridBoundary = true\n";
+    BOOST_CHECK_THROW(load(tiny), std::invalid_argument);
+    BOOST_CHECK_NO_THROW(load(tiny + "GradingEnd = \"Lower\"\n"));
+
+    // The rest is gradedMeshPoints's own validation, reached through makeGrid --
+    // checked here so the config path is known to surface it rather than to
+    // swallow it.
+    auto c = load(minimal + "GradedGridBoundary = true\nGradingRatio = 1.5\n");
+    unsigned int k = 0;
+    BOOST_CHECK_THROW(makeGrid(c, nullptr, k), std::invalid_argument);
+
+    auto c2 = load(minimal + "GradedGridBoundary = true\nGradingCells = 8\n");
+    BOOST_CHECK_THROW(makeGrid(c2, nullptr, k), std::invalid_argument);
+}
+
+// -------------------------------------- explicit boundaries, and the rename --
+
+BOOST_AUTO_TEST_CASE(explicit_grid_points_need_no_grid_size_or_boundaries)
+{
+    // GridPoints supersedes GridSize, LowerBoundary and UpperBoundary outright, so
+    // none of them is required alongside it. GridSize used to be required of every
+    // config regardless, which meant a run driven by explicit boundaries had to
+    // carry a number that was then discarded -- every graded-mesh spike in
+    // MESH-REFINEMENT.md passed a dummy for exactly that reason.
+    auto c = load("PolynomialDegree = 2\ndelta_t = 0.1\nt_final = 1.0\n"
+                  "TransportSystem = \"LinearDiffusion\"\n"
+                  "GridPoints = [0.0, 0.1, 0.3, 0.7, 1.0]\n");
+
+    unsigned int k = 0;
+    auto grid = makeGrid(c, nullptr, k);
+    BOOST_TEST(grid->getNCells() == 4u);
+    BOOST_TEST(grid->lowerBoundary() == 0.0);
+    BOOST_TEST(grid->upperBoundary() == 1.0);
+    BOOST_TEST((*grid)[0].h() == 0.1, boost::test_tools::tolerance(1e-12));
+    BOOST_TEST((*grid)[3].h() == 0.3, boost::test_tools::tolerance(1e-12));
+
+    // ...and without it all three are still demanded, in one message rather than
+    // one at a time. Checked against the *source* rather than the parsed value,
+    // because absent and 0 are the same value and must not be the same diagnosis.
+    BOOST_CHECK_THROW(load("PolynomialDegree = 2\ndelta_t = 0.1\nt_final = 1.0\n"
+                           "TransportSystem = \"LinearDiffusion\"\n"),
+                      std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(the_old_snake_case_grid_spellings_still_work)
+{
+    // The whole point of renaming through aliases: every .conf and every
+    // Runner.configure dict written against the old names keeps working, with a
+    // deprecation warning. That is what kept this rename from touching 35 Python
+    // files and every config in the tree.
+    // Every one of the seven old spellings, in a config that uses no new one --
+    // which is the case a user with an existing file actually has. A blanket
+    // rename over this tree once turned these into the new names, at which point
+    // the test still passed and covered nothing; hence one config, all old.
+    auto c = load("Polynomial_degree = 3\nGrid_size = 6\ndelta_t = 0.1\n"
+                  "t_final = 1.0\nLower_boundary = -1.0\nUpper_boundary = 2.0\n"
+                  "Lower_Boundary_Fraction = 0.3\nUpper_Boundary_Fraction = 0.4\n"
+                  "TransportSystem = \"LinearDiffusion\"\n");
+
+    BOOST_TEST(c.PolynomialDegree == 3u);
+    BOOST_TEST(c.GridSize == 6);
+    BOOST_TEST(c.LowerBoundary == -1.0);
+    BOOST_TEST(c.UpperBoundary == 2.0);
+    BOOST_TEST(c.LowerBoundaryFraction == 0.3);
+    BOOST_TEST(c.UpperBoundaryFraction == 0.4);
+
+    // Grid_points too, which also has to satisfy the conditional rule above under
+    // its old spelling -- so no cell count here at all.
+    auto p = load("Polynomial_degree = 2\ndelta_t = 0.1\nt_final = 1.0\n"
+                  "TransportSystem = \"LinearDiffusion\"\n"
+                  "Grid_points = [0.0, 0.5, 1.0]\n");
+    BOOST_TEST(p.GridPoints.size() == 3u);
+
+    // One spelling at a time. `minimal` carries GridSize, so this adds the alias.
+    BOOST_CHECK_THROW(load(minimal + "Grid_size = 4\n"), std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

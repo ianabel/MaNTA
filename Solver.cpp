@@ -66,6 +66,15 @@ void SystemSolver::initialize()
 	if (fieldModel)
 		fieldModel->resetForRun();
 
+	// A tau frozen per continuation step is set by the continuation loop, and a
+	// time march has none: tau would stay at the initial condition's for the
+	// whole run.
+	if (tauFrozenPerStep() && !solvesForSteadyState())
+		throw std::invalid_argument(
+			"tauUpdate = \"ContinuationStep\" or \"JacobianBuild\" needs a steady solve with "
+			"SteadyStateSolver = \"PseudoTransient\" or \"Newton\"; a time march "
+			"would freeze tau at the initial condition. Use tauUpdate = \"Residual\".");
+
 	// ...and neither do the sweep counts. Here, in the unconditional part of
 	// initialize() and beside resetForRun() for the same reason: a cumulative
 	// count reported as a per-run one is a lie a second run would tell silently.
@@ -90,10 +99,10 @@ void SystemSolver::initialize()
 
 	//-----------------------------Initial conditions-------------------------------
 
-	// Set original vector lengths
+	// Set original vector lengths. The layout is DGSoln's, so the length is too.
 	// The field model's unknowns go last, after the scalars, so nothing before
-	// them moves. nField is zero unless setFieldModel has attached a model.
-	Y = N_VNew_Serial(nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1) + nField, ctx);
+	// them moves; nField is zero unless setFieldModel has attached a model.
+	Y = N_VNew_Serial(DGSoln::getDoF(nVars, nCells, k, nScalars, nAux, nField), ctx);
 	if (ErrorChecker::check_retval((void *)Y, "N_VNew_Serial", 0))
 		throw std::runtime_error("Sundials Initialization Error");
 
@@ -705,6 +714,7 @@ void SystemSolver::integrate(double tFinal)
 			// Stamped STEADY_STATE_TIME like a converged one. Nothing in the
 			// file distinguishes the two; the exception and the exit status do.
 			logmsg<LOG_LEVEL::ERROR>("Steady solve failed; writing the last state reached to the output.");
+			ApplyDirichletBCs(y, t0);
 			if (writeDatFile)
 				print(out0, STEADY_STATE_TIME, nOut, Y, true);
 			if (writeOutput)
@@ -724,6 +734,29 @@ void SystemSolver::integrate(double tFinal)
 		if (tout > tFinal && !TerminateOnSteadyState)
 			tout = tFinal; // Never ask for results beyond tFinal
 		retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
+
+		// Put the boundary datum back into the Dirichlet trace entries before
+		// anything reads Y.
+		//
+		// They are frozen at whatever setInitialConditions seeded: their row and
+		// column in K_global are identically zero and imposeDirichletTraceRows
+		// pins the correction to zero, so no step of the integration can move
+		// them, and with time-dependent Dirichlet data they are stale by the
+		// first output. Measured on MatTest, whose g_D decays like
+		// exp(-t pi^2/4): at t = 0.5 the stored lower-face trace read 0.99999993
+		// against a datum of 0.29121 and a first interior trace node of 0.28962 --
+		// discontinuous from its own neighbour by a factor of three.
+		//
+		// Writing here rather than into the residual keeps this out of the
+		// equations. IDASolve treats Y as an output and continues from its own
+		// internal state, so nothing written between calls reaches the
+		// integration; the cell rows take the datum from RF_cellwise, which
+		// updateBoundaryConditions has always refreshed at the residual's own
+		// time. What changes is only what a reader gets: the netCDF slice, the
+		// .dat files, the restart file's DOF vector and yJac all alias this
+		// memory.
+		ApplyDirichletBCs(y, tret);
+
 		if (ErrorChecker::check_retval(&retval, "IDASolve", 1))
 		{
 			// try to emit final data
@@ -829,6 +862,13 @@ void SystemSolver::integrate(double tFinal)
 // IDAGetNumSteps report -- IDA never ran.
 void SystemSolver::writeSteadyState()
 {
+	// See the call in the time loop. A steady solve evaluates everything at t0,
+	// so that is the time its boundary datum is taken at -- the same one
+	// setInitialConditions used, which is why this only ever differs from the
+	// seed on the cold path, where EvaluateLambda overwrites the datum with
+	// {{u}} a few lines after it is applied.
+	ApplyDirichletBCs(y, t0);
+
 	if (writeDatFile)
 		print(out0, STEADY_STATE_TIME, nOut, Y, true);
 	if (debugDat)
@@ -987,7 +1027,7 @@ void SystemSolver::destroySundials()
 	}
 
 	for (N_Vector *vec : {&Y, &dYdt, &constraints, &id, &res, &absTolVec,
-	                      &uPrev, &ptcDYdt, &kinScale})
+	                      &uPrev, &ptcDYdt, &kinScale, &resScale, &fScaleScratch})
 	{
 		if (*vec)
 		{

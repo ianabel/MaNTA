@@ -161,6 +161,152 @@ stabiliser is designed to change.
 | --- | --- | --- | --- |
 | Computer Physics Communications 179 (2008) 579–585 | https://doi.org/10.1016/j.cpc.2008.05.006 | Pereverzev & Corrigan, *Stable numeric scheme for diffusion equation with a stiff transport* -- the scheme ASTRA-8 Sec 5.4 cites as its [34], and the source for everything above. **What the coefficient should be**: `Dbar > q_eta = dq/d(eta)` pointwise -- the *slope* of the flux-gradient curve, not the diffusivity `D_eff = q/eta`. In a stiff model that distinction is the whole point: in their ITER inductive / GLF23 example `q_eta` runs 20-100 m^2/s while `D_eff` never exceeds 1, and it takes `Dbar >= 50 m^2/s`, fifty times the diffusivity. Below that the instability appears locally wherever `Dbar < q_eta` and then spreads over the grid. They prescribe `Dbar` constant in space and call `Dbar > q_eta` "rather a rough estimate", since the flux depends on more than the gradient. **The error is monitored, not bounded**: the leftover difference source `Sbar_i = (qbar_{i+1/2} - qbar_{i-1/2})/h = O(tau)` is computed each step and compared against the physical sources -- it is a short-scale dipole, so its integral over any few cells is essentially zero and the energy balance is untouched, but where it grows comparable to `S` locally, `Dbar` or `tau` has to come down, or the term is subtracted and iterated away within the step. Their instability sensor is `max_i |Dhat_an - D_an| / D_an <= eps_tol`, with `eps_tol` at 5-10% and no sense in going below 5%. **What it buys**: several orders of magnitude on the time step at steady state -- a factor 1e3 does not yet bring accuracy into play -- and less in a fast transient, where other limits bind first. Transport barriers are the known weak spot, their two variants moving the barrier in opposite directions. **Note also their objection to the alternative**, Kinsey, Staebler & Waltz (Phys. Plasmas 9 (2002) 1678), who take `D_an = dq/d(eta)` exactly: that quantity is discontinuous in space, incomplete, and "requires derivation of the numerically defined flux `q` that is usually the most expensive part of the simulation". MaNTA's answer to the last is that the HDG Jacobian derives it anyway, and never assembles it | PereverzevCorrigan.pdf |
 
+## Reaching a steady state without integrating to one
+
+The theory behind `SteadyState.cpp`. That file attributes pseudo-transient
+continuation to "Kelley & Keyes", which is the 1998 paper below — and the useful
+thing to know is that **the 1998 result does not cover MaNTA**. Its global
+convergence proof is for `u' = -V^{-1} F(u)`, an ODE or a method-of-lines
+semidiscretisation of one. MaNTA is an index-1 DAE: `sigma`, `q`, `phi` and
+`lambda` are algebraic, which is the whole reason IDA is the integrator. The 2003
+paper is the extension of that result to index-1 DAEs, so it is the one that
+actually applies, and it is the house reference for the mode.
+
+Two further things in it are load-bearing here. Its eq. (1.3) is the SER schedule
+`SteadyState.cpp:15` implements, `dt <- dt ||F_prev||/||F_now||`, which it
+attributes to Mulder & van Leer (its ref. [23], J. Comput. Phys. 59 (1985)
+232–246). And its §1 advocates **mesh sequencing** — solve on a coarse mesh,
+interpolate to the next, run Ψtc on each level — as the primary strategy for a
+highly resolved nonlinear problem, calling that combination "particularly
+effective". `FEATURES.md`'s first entry proposes adaptive mesh refinement against
+the PTC solve specifically, so this is prior art for that entry and not only for
+the steady-state mode; its ref. [29] (Smooke & Mattheij, Appl. Numer. Math. 1
+(1985) 463–487) is the mesh-sequencing citation to follow next.
+
+| Reference | URL (doi or arxiv) | Short Description | File Name |
+| --- | --- | --- | --- |
+| SIAM J. Sci. Comput. 25 (2003) 553–569 | https://doi.org/10.1137/S106482750241044X | Coffey, Kelley & Keyes, pseudo-transient continuation for **index-1 DAEs** — global convergence where the 1998 result assumes an ODE, so this is the one covering MaNTA's formulation. Also the source of the SER rule the code uses and of the mesh-sequencing argument. Paywalled, but free as CRSC tech report TR02-18 from crsc.ncsu.edu | PseudoTransientDAE.pdf |
+| SIAM J. Numer. Anal. 35 (1998) 508–523 | https://doi.org/10.1137/S0036142996304796 | Kelley & Keyes, the original convergence analysis of Ψtc, and what `SteadyState.cpp:10` names. Reference [16] of the above, which reviews its results in §1.1 and states its hypotheses — those are ODE ones, so read it alongside the 2003 paper rather than instead of it. Paywalled | PseudoTransientConvergence.pdf |
+
+## Mesh adaptivity
+
+For `FEATURES.md`'s first item, which is in two halves — adapt against the PTC
+steady solve first, then work out whether it can be done during a real
+`TimeMarch` — and so are these. Capasso says *where* to refine; Levý & May say how
+to carry the solution *across* a remesh while time is still being resolved. The
+mesh-sequencing argument in the section above is the third piece, and belongs to
+the steady half.
+
+**The reason to read Capasso first is that MaNTA already computes what its
+indicator is made of.** The strategy is built on the elementwise difference
+between the solution at order `p` and the post-processed solution at order
+`p + 1`, with the latter taken as the reference `u_ref` in `||u_ref - u_h||` over
+each element. That post-processed field is `u*`, and `Postprocessor::computeUStar`
+already produces it on *every* run with `k >= 1` — `SystemSolver.cpp:219` builds
+the postprocessor regardless of the `Superconvergent` flag, and `NetCDFIO.cpp:174`
+writes `u_star` into the output. So the expensive ingredient of the indicator is
+present and tested; what is missing is the mesh machinery that would act on it.
+
+Two caveats on Capasso. It is a 2D unstructured code and MaNTA is 1D on an
+interval, so the indicator transfers and the remeshing does not — refining a 1-D
+`Grid` is a much smaller problem than theirs, and none of their geometry handling
+applies.
+
+The second is sharper, and is the interpolatory question the HDG section is
+already about. The indicator's worth rests on `u*` being a genuinely better
+reference than `u_h`, which is the `k+2` superconvergence the paper cites. MaNTA
+builds `u*` by the same local Neumann problem they do (`Postprocessing.hpp`, paper
+I eqs. (6)–(7)), but **paper I exists because the plain interpolatory HDG scheme
+loses that superconvergence**, and recovering it is exactly what
+`Superconvergent = true` switches on. So with the flag off, `u*` is still computed
+and still written out, and `||u* - u_h||` is still a reasonable smoothness
+sensor — but it is not the `p`-against-`p+1` gap the paper's error analysis
+assumes. Anything calibrated rather than used as a relative ranking should be
+built on a superconvergent run.
+
+**Levý & May integrate with DIRK, and that is exactly the difficulty `FEATURES.md`
+names.** A diagonally implicit Runge–Kutta method is one-step: it carries no
+history, so a remesh has only to move the current state, and their transfer
+operator is complete for their setting. IDA is BDF — multistep — so adapting
+during a real `TimeMarch` has to transfer the *stored history* as well, which is
+the "requires interpolating history … and requires the hooks for that to be in
+SUNDIALS" half of that entry. So this gives the transfer operator and leaves the
+harder question untouched. Two MaNTA-specific pieces come with it: an index-1 DAE
+has to be made *consistent* on the new mesh, not merely interpolated onto it —
+`sigma`, `q`, `phi` and `lambda` are algebraic, so a transfer would be followed by
+something like a fresh `IDACalcIC`, with the failure modes CLAUDE.md catalogues —
+and MaNTA carries auxiliary variables and global scalars that their `(q, w, λ)`
+triple has no analogue for.
+
+**Giorgiani is the one to read first, because measured on MaNTA the degree is by
+far the stronger lever.** On `Tests/RegressionTests/nonlin_ss.conf`
+(`AdjointPoster`, whose steady state is analytic), at a matched ~130 degrees of
+freedom and equal cost in physics evaluations: `k = 3` on 32 cells gives
+3.6e-6, and `k = 10` on 12 cells gives **4.7e-13**. Seven orders. Adaptive
+*h*-refinement at the same budget reached 2.0e-6 — i.e. one degree bump beats
+the entire h-adaptive machinery by seven orders at equal cost.
+
+The counter-case is in the tree too, and it is why this wants to be *hp* rather
+than *p*. Holding 10 cells and raising `k` from 2 to 12, `AdjointPoster` falls
+eleven orders while `python-examples/shestakov-nonlinear` falls 19× and stops —
+its `x^(4/3)` axis behaviour caps the regularity, and 19 is not a coincidence:
+`ANALYSIS.md` fits that benchmark's error to `1.8 h0/(k+1)^2`, and
+`(13/3)^2 = 18.8` against 19.1 measured. So MaNTA has one benchmark on each
+side of the classical hp criterion, and choosing between the two levers needs a
+*smoothness* sensor — which is what Capasso's oscillation indicator (§4.1,
+modal decay) is, and the accuracy indicator is not.
+
+One practical consequence worth recording before any of it is built: **most of
+the p gain here needs no per-cell degree at all.** For a smooth solution the
+best `(k, nCells)` at every budget was a high `k` on few cells, uniformly, so
+simply choosing the *global* `k` by Giorgiani's rule reached 2.8e-9 at 90 DoF
+in two iterations and 3060 physics evaluations — against 2.0e-6 at 128 DoF for
+16672 with adaptive h. Genuine per-cell degrees are a much larger change:
+`DGSolnImpl` holds one `k` and one basis by value, and there are ~320 `(k+1)`
+sites in the core, 200 of them in `SystemSolver.cpp` and 74 in `Matrices.cpp`.
+That is the same single-`k` assumption `TODO` already records as the blocker
+for paper II's HDG+ family.
+
+**Woopen supplies the piece the other three leave out: how to choose between
+the two levers.** Their §4.3 takes Persson & Peraire's modal-decay sensor,
+
+```
+S_K = ( w - w_H , w - w_H )_K / ( w , w )_K
+```
+
+with `w_H` the projection of `w` onto `P_{p-1}`, and switches on a threshold —
+smooth enough, raise `p`; otherwise refine `h`. That is *the same expression*
+as Capasso's eq. (13), which they use to trigger refinement for Newton
+robustness rather than as a switch, so one sensor serves both purposes and
+MaNTA wants it for both.
+
+**It is nearly free here, which is not obvious.** Woopen call the projection
+cheap because they use a hierarchical basis, and MaNTA's is nodal — but
+`NodalBasis` is *built* from `LegendreBasis`: `Basis.hpp:391` fills
+`Vandermonde(i,j) = P_j(x_i)` and keeps it as a member (`:363`). So nodal to
+modal is `V^-1`, truncation to `P_{k-1}` is dropping the top Legendre
+coefficient, and by orthogonality the sensor is a closed-form ratio of modal
+coefficients on the reference cell — one matrix, already built, shared by every
+cell.
+
+Their other half is target-based: a discrete adjoint drives the marking, which
+is interesting for MaNTA because it already *has* an adjoint solver. Two
+caveats are recorded in their §4.2 and both bite. The adjoint has to be
+evaluated in a **richer space** than the primal or the weighted residual
+vanishes by Galerkin orthogonality — MaNTA's `Postprocessor` already produces
+exactly that `k+1` space, but its adjoint solve does not use it. And they
+deliberately **drop the trace adjoint's contribution**, having found that
+including it "overly penalized" interface jumps, noting it "deserves a more
+in-depth analysis". So goal-oriented adaptivity is reachable here but is not
+simply a matter of reusing `G_y`.
+
+| Reference | URL (doi or arxiv) | Short Description | File Name |
+| --- | --- | --- | --- |
+| Int. J. Numer. Methods Eng. 126 (2025) e70107 | https://doi.org/10.1002/nme.70107 | Capasso, Kudashev, Schwander & Serre, h-adaptivity for HDG applied to **fluid transport in a tokamak** — MaNTA's problem class, in SolEdge-HDG's 2D fluid-drift Braginskii setting. The indicator is the order-`p` against post-processed order-`p+1` difference, i.e. `u*`, which MaNTA already builds; it drives coarsening as well as refinement, and their §1 surveys the alternatives (residual-based indicators, a jump sensor on the trace). Open access, CC-BY | HDG-hAdaptivity.pdf |
+| Computers and Fluids 301 (2025) 106792 | https://doi.org/10.1016/j.compfluid.2025.106792 | Levý & May, anisotropic adaptation for HDG on **time-dependent** problems, and the reason to have it is their second contribution rather than the first: a *bounded* solution-transfer operator between meshes. The Galerkin L2 projection over a supermesh is optimal in the norm but overshoots at extrema; theirs preserves local minima and maxima while keeping the order where the solution is smooth. Their §1 is also the short survey of why remeshing every m > 1 steps is not the cheap fix it looks like. Note they integrate with DIRK — see the caveat below. Paywalled | HDG-UnsteadyAdaptivity.pdf |
+| Computers & Fluids 98 (2014) 196–208 | https://doi.org/10.1016/j.compfluid.2014.01.011 | Giorgiani, Fernández-Méndez & Huerta, **degree** adaptivity for HDG. The estimator is the same one as Capasso's — their eq. (8) is `E_i^2 = (1/\|Ω_i\|) ∫ (u* − u)^2`, and they stress the division by the element measure as "crucial for non-uniform meshes" — but the rule it drives is `Δk_i = ceil(log_b(E_i/ε_i))` with `10 ≤ b ≤ 100` (their eq. 10), which assumes **no convergence order at all**. That is the property to steal: the Richardson h-rule needs `u*` to be exactly one order better, which `Tests/README.md:300-330` says is false at `k = 1` with the flag off. Their steady loop is solve → estimate → update degrees → project → repeat, with time-marching used only for the *first* solve and Newton directly thereafter. Paywalled | HDG-pAdaptivity.pdf |
+| Computers & Fluids 98 (2014) 3–16 | https://doi.org/10.1016/j.compfluid.2014.03.023 | Woopen, Balan, May & Schütz, target-based **hp**-adaptation, comparing hybridized against standard DG. Same issue as Giorgiani. Two things to take: their §4.3 is the h-versus-p switch — Persson & Peraire's modal-decay sensor against a threshold — which is the piece the other three papers leave out and which MaNTA can build almost for free from the Vandermonde `NodalBasis` already stores; and their §4.2 is adjoint-based marking, relevant because MaNTA has an adjoint, with the two caveats above. Their headline conclusions match what is measured here: "hp-adaptation proves to be superior to pure h-adaptation if discontinuous or singular flow features are involved", and "in all cases, a higher polynomial degree turns out to be beneficial". Paywalled | HDG-hpAdaptivity.pdf |
+
 ## Coupling to a magnetic field solver
 
 For `FEATURES.md`'s third item. A self-consistent field is, algorithmically, a

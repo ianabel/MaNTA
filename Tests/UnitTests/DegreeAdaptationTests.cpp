@@ -60,12 +60,12 @@ SolverConfig steadyConfig(std::string const &extra, unsigned int k = 2,
                           int cells = 8, bool steadyTolerance = true)
 {
     const std::string body =
-        "Polynomial_degree = " + std::to_string(k) + "\n"
-        "Grid_size = " + std::to_string(cells) + "\n"
+        "PolynomialDegree = " + std::to_string(k) + "\n"
+        "GridSize = " + std::to_string(cells) + "\n"
         "delta_t = 0.05\n"
         "t_final = 1.0\n"
-        "Lower_boundary = 0.0\n"
-        "Upper_boundary = 1.0\n"
+        "LowerBoundary = 0.0\n"
+        "UpperBoundary = 1.0\n"
         "TransportSystem = \"LinearDiffusion\"\n"
         "OutputFilename = \"degree_adaptation_test\"\n"
         "WriteOutput = false\n"

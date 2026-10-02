@@ -494,6 +494,43 @@ slices when each starts over
 driving the phases directly, because `runSolver` frees the state on its way out
 of a failed solve, so `PyRunner::run_ss()` cannot do it.
 
+**What a steady solve spends on physics is counted in whole grid sweeps, and the
+budget is exact rather than approximate**: `2 + 3n` for `Newton` and `2 + 4n`
+for `PseudoTransient`, `n` being continuation steps, pinned by
+`a_steady_solve_spends_the_physics_sweeps_it_has_to_and_no_others`. The two
+fixed sweeps are `AssignSigma` building `sigma` from the initial condition and
+the merit function's `||F||` at the initial state; each step is then KINSOL's
+residual at both ends plus one Jacobian, and a step at *finite* `dt` costs a
+fourth. Two properties keep it there, and both are the kind that would be lost
+silently, since a duplicate sweep changes no answer and only shows up on the
+bill of a case whose flux is expensive:
+
+* **`setInitialConditions` returns early on a steady solve**, before solving the
+  initial `du/dt` out of the u row. That derivative reaches nobody there --
+  `solveSteadyState` damps through its own zeroed `ptcDYdt`, and on convergence
+  it overwrites `dYdt` with zero, since the defining property of the answer is
+  that `dy/dt` vanishes. The gate is `solvesForSteadyState()`, so `TimeMarch`
+  keeps it: that path reaches a steady state through IDA, which wants a
+  consistent `y'` at `t0` like any transient.
+* **`steadyResidual` records its own norm when `dt` is infinite**, and the loop
+  reads that instead of calling `steadyNorm()` again. At `dt = inf` the damping
+  term is identically zero, so the function KINSOL evaluates *is* the steady
+  residual, at the same state -- it is recorded rather than recomputed so the
+  number is bit for bit what `steadyNorm()` would have returned, which is what
+  keeps the SER schedule and every run's step sequence unchanged. A stamp
+  counter guards it: a `KINSol` that made no successful steady-mode evaluation
+  leaves the stamp where the loop's snapshot found it, and the loop evaluates
+  for itself. Never consulted at finite `dt`, where the damped residual is a
+  different function and any small enough `dt` makes it small.
+
+**The residual at the initial state is not one of the removable ones**, despite
+duplicating KINSOL's first evaluation: it is also the already-converged test,
+the early return that makes a warm start cost one sweep rather than a Newton
+solve. And KINSOL offers no way to hand it a residual it did not compute, so
+three sweeps -- two residuals and a Jacobian -- is the floor for a Newton method
+on a problem it does not know is linear. `PERFORMANCE.md` has the comparison
+against a direct solve, which pays one.
+
 Every SUNDIALS handle is a member, not a local, so those three can be split.
 `ctx` is the exception: it belongs to the `SystemSolver`, not to a run, and
 `destroySundials` must not touch it.
@@ -869,10 +906,29 @@ the surfaces: `TomlConfigSource` (in `SolverConfig.cpp`) and `DictConfigSource`
   on raising `RuntimeError`, which is what it always has. "Could not start"
   conditions — no such config file, an unknown `TransportSystem`, an unopenable
   restart file — still make `runManta` log and return 1.
-* **The naming style is deliberately not unified.** `delta_t`, `MinStepSize` and
-  `solveAdjoint` keep their inconsistent spellings; only the two genuine name
-  *conflicts* were resolved, because regularising the rest would churn every
-  config file in the tree for no functional gain.
+* **`UpperCamelCase` is the convention for new configuration keys, and for
+  renames of existing ones.** It is what the schema already mostly is — measured
+  over `--list-options`, 23 keys are `UpperCamel` against 3 `lowerCamel`
+  (`initialTimestep`, `solveAdjoint`, `zeroFlux`), 2 bare lower-case (`restart`,
+  `tau`) and the remaining stragglers with underscores. So a new key should be
+  `MaxDegreeIncrement`, not `max_degree_increment` or `maxDegreeIncrement`.
+
+  **The rest is not being regularised wholesale.** `delta_t`, `t_initial`,
+  `t_final`, `Relative_tolerance` and `Absolute_tolerance` keep their spellings;
+  churning every config file in the tree for no functional gain is a job for
+  never. What is regularised is a group of keys that is being *changed anyway* —
+  the grid keys went `Grid_size` → `GridSize`, `Lower_boundary` →
+  `LowerBoundary`, `Polynomial_degree` → `PolynomialDegree` and so on alongside
+  the graded-mesh work, since editing them for another reason is the one moment
+  the rename is free.
+
+  **A rename is a deprecated alias, never a removal.** The schema's `aliases`
+  field is what makes that a one-line change: `presentSpelling` warns when the
+  old name is used, and refuses a config that gives both. So every existing
+  `.conf` and every `Runner.configure` dict in and out of the tree keeps working
+  untouched, which is what kept the grid rename from touching 35 Python files.
+  Grep `--list-options` before adding a key, because a rename that forgets the
+  alias is silent for anyone whose config predates it.
 
 ### Superconvergence (`Superconvergent = true`)
 
@@ -915,6 +971,45 @@ The reconstruction is built for every run with `k >= 1` regardless of the flag, 
 `u_star` is always in the netCDF output and the `.dat` files; the flag controls
 only whether the *method* uses it. `Tests/README.md` has the measured orders and
 the list of what is not covered.
+
+### Stabilisation (`tauScaling`)
+
+`tau` enters five places — the `D`, `E`, `G`, `H` blocks and the `tau g_D`
+Dirichlet term in `RF_cellwise` — and **all of them are written by
+`assembleTauBlocks`**, reached through `applyResidualTau` (the residual's copies)
+and `applyJacobianTau` (the `MBlocks`/`CEBlocks`/`CG_cellwise` parts and
+`H_jac_cellwise`). `initialiseMatrices` calls both with the constant, with the
+arithmetic in its original order: a `Constant` run is **byte-identical** to the
+tree before the split, checked by `cmp` over every regression config's `.nc` and
+`.restart.nc`. Re-run that check after touching `assembleTauBlocks`.
+
+Under `Diffusive`, `faceTau` evaluates `tau * (kappa/h + floor * max kappa/h)`
+per face, one-sided, from the trace and the cell's own `q`, with one batched
+`ComputePhysicsDerivatives` on the `2 nCells` faces. The residual applies it at
+*its* state, the Jacobian build at `yJac` — which is why `H` is split into
+`H_cellwise` and `H_jac_cellwise`: it is the one tau block both read directly,
+and `solveHDGJac` reads it at *solve* time, long after the residuals of a Newton
+iteration have overwritten the residual's copy. Under
+`tauUpdate = Residual` the Jacobian carries `d tau / dy`
+(`faceTauJacobian`: a forward difference per face-state component, all faces in
+one batched call, so `3 nVars + nAux` extra face calls per build) in the blocks
+`applyJacobianTau` rewrites; what it leaves out is the floor's grid-maximum term,
+and `LocalTauTests.cpp` shows that is *all* it leaves out — the mismatch against a
+finite-differenced residual falls from 3e-7 to 1e-9 when the floor is taken to
+1e-9. Under `ContinuationStep` the continuation loop sets `tau` (`freezeTauAt`),
+the residual and the Jacobian leave it alone, and `steadyNorm` re-evaluates it
+before measuring convergence; a transient run is refused in `initialize()`.
+`JacobianBuild` is `ContinuationStep` plus a refresh in each Jacobian build
+(`tauRefreshedPerJacobian`), so tau is fixed across the Newton iterations sharing
+a Jacobian; KINSOL evaluated the residual before the rebuild with the old tau, so
+that step is lagged and costs Newton iterations. Measured cost, against a
+constant tau at the same `NewtonJacobianReuse`: `Residual` 1.6-1.8x, nearly all
+of it the per-residual face call; `ContinuationStep` 1.07-1.10x; `JacobianBuild`
+1.15-1.47x. `ContinuationStep` is a fixed-point iteration on tau that pseudo-time
+cannot damp (tau reads `lambda` and `q`, which are algebraic); it stalled once,
+under the default Jacobian reuse, and not with `NewtonJacobianReuse = 1`. The adjoint
+would carry neither, so `applySolverConfig` refuses `Diffusive` with
+`solveAdjoint`.
 
 ### Non-owning state views
 
@@ -1647,6 +1742,31 @@ formula, not the operator, if the data cannot tell them apart.
   and the explicit-object-parameter branch failed `std::function`'s `_Callable`
   probe until 14.4. `SystemSolver::setInitialConditions` and `DGSoln::AssignU` use
   lambdas rather than the bind family for that reason — don't reintroduce it.
+
+  **And a second: `std::format` of a `std::vector` needs libstdc++ 15.** P2286's
+  range formatters landed there, so formatting a container whole compiles on a box
+  with g++-15 and is a `static_assert` inside `<format>` on CI's clang legs —
+  *"std::formatter must be specialized for each type being formatted"*, naming
+  `<format>` and `variant` and nothing in this tree. What triggered it was adding
+  `std::vector<unsigned int>` to `ConfigSchema::Value` for the ladders without
+  adding it to the vector branch of `main.cpp`'s `defaultText`, so it fell through
+  to the generic `std::format("{}", x)`. Every vector alternative of that variant
+  has to be named in that branch, which formats element by element. All five gcc
+  legs were green and all five clang legs red, which is the signature — a build
+  error that splits the matrix by compiler is almost always the standard library
+  rather than the compiler.
+
+  **Reproduce it locally before pushing a fix rather than after.** Both halves of
+  CI's configuration are installable here, and the check costs a syntax-only pass:
+
+  ```sh
+  clang++-19 -std=c++23 --gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 \
+      -fsyntax-only -I. -Iextern/toml11/include main.cpp
+  ```
+
+  That gave 4 errors before the fix and 0 after — the same 4 CI reported. Run it
+  *without* the fix too: a clean result from a probe that never reproduced the
+  failure is evidence of nothing.
 * **Third-party includes must be `SYSTEM`.** An imported target's include
   directories are already treated that way; anything added by hand needs
   `target_include_directories(... SYSTEM ...)`, as `manta_vendored` and the netCDF
@@ -1751,10 +1871,12 @@ formula, not the operator, if the data cannot tell them apart.
   solves nothing: measured on a `TestDiffusion` round trip at
   `Absolute_tolerance = 1e-8`, that one call takes the weighted residual from
   2.6e-3 to 556. It is why a restart needed roughly ten times as many residual
-  evaluations inside `IDACalcIC` as a cold start. Note the reordering that went
-  with it: `ApplyDirichletBCs` now runs *after* the trace is settled, since
-  `EvaluateLambda` overwrites every entry including the boundary ones, so in the
-  old order the Dirichlet data was applied and then immediately discarded.
+  evaluations inside `IDACalcIC` as a cold start. What changed is *not* the order
+  of the two calls -- `ApplyDirichletBCs` still runs first, and the comment at the
+  site says why -- but that `EvaluateLambda` became conditional on
+  `!sameDiscretisation && !sameGrid`. So the copy path and a degree projection
+  over the same mesh never reach it and keep the datum, while a restart onto a
+  different mesh still runs it and behaves exactly like a cold start.
 
   **The trace is kept whenever the *mesh* matches, not only the discretisation.**
   `lambda` has no polynomial degree — `DGSoln::Map` gives it `nCells + 1` entries
@@ -1763,6 +1885,37 @@ formula, not the operator, if the data cannot tell them apart.
   because the `q` row carries a `<lambda, v n>` term: on a `LinearDiffusion`
   restart coarsened from `k = 4` to `k = 3` at `atol = 1e-10`, keeping the trace
   takes the `q` block from 7.3e7 to 3.2e-7. Only a genuine remesh rebuilds it.
+* **A Dirichlet trace entry is written by hand or it is wrong, and it has to be
+  rewritten every time the state is reported.** Its row *and column* in
+  `K_global` are identically zero, `imposeDirichletTraceRows` pins the correction
+  to zero and `residual` never writes the row, so it is an unknown appearing in no
+  equation: nothing in the integration can move it, and it keeps whatever was last
+  stored there. `setInitialConditions` seeds it; that used to be the only write, so
+  a run with **time-dependent** Dirichlet data reported `g_D(t0)` for ever. Measured
+  on `MatTest`, whose `g_D` decays like `exp(-t pi^2 / 4)`: at `t = 0.5` the restart
+  file's lower-face trace held 0.99999993 against a datum of 0.29121, with the first
+  interior trace node at 0.28962 -- discontinuous from its own neighbour by a factor
+  of three.
+
+  `ApplyDirichletBCs(y, t)` is therefore called at each point the state is settled
+  and about to be read: after `IDASolve` returns, at the top of `writeSteadyState()`,
+  and on the steady-solve failure path. One call covers every reader, because `y`
+  aliases the `N_Vector` `IDASolve` writes its output into and the netCDF slice, the
+  `.dat` files, the restart file's DOF vector and `yJac` all read that memory. **It
+  reaches no equation**: `IDASolve` treats `Y` as an output and resumes from its own
+  internal state, so a write between calls is discarded, and the cell rows take the
+  datum from `RF_cellwise` as they always have -- `MatTest`'s `.nc` is byte
+  identical across the change, its restart DOF vector bit identical on all 388
+  entries that are not one of the four trace DOFs, at the same 25 residuals and 11
+  Jacobian builds.
+
+  Note the time argument. `ApplyDirichletBCs` used to read the member `t`, which is
+  assigned `t0` in `setInitialConditions` and never moves again, so a call added
+  without it would have written `g_D(t0)` and looked like it worked. Any new
+  reporting path needs the same call; `the_reported_dirichlet_trace_follows_the_
+  boundary_datum` and the ladder equality test are what would notice one that
+  forgot. The two *seeds* still differ between a cold start and a restart, which
+  `TODO` records and which is now invisible to a reader.
 * **`sigma` is loaded on a copy-path restart, not recomputed, and that is a
   measurement too.** `DGSoln::copy` brings `sigma` across with everything else and
   `ApplyDirichletBCs` touches only `lambda`, so `AssignSigma` was rebuilding it
