@@ -48,6 +48,21 @@ class TransportSystem;
 // progress; returns 0 when the target is already met.
 unsigned int degreeIncrement(double E, double eps, double base);
 
+// `config` with the pseudo-transient step a finished solve reached as the next
+// solve's first one, for a solve warm-started from that one's state.
+//
+// A cold solve climbs the SER ramp from PseudoTransientInitialStep. A warm one has
+// no ramp to climb -- it starts next to the answer -- and re-climbing is most of
+// what it costs: on the wall-layer case of MESH-REFINEMENT.md section 12, a graded
+// solve warm-started from the uniform sample took 12 continuation steps at the
+// configured 1e-3 and 2 with the sample's final step (~1e6), for the same answer
+// to 1e-10. A tenth or a hundredth of that step measured the same, so the step is
+// carried as it is rather than through a factor nobody could justify.
+//
+// Capped at PseudoTransientMaxStep. Unchanged in Newton mode, where the step is
+// already infinite, or when the previous step is not a finite positive number.
+SolverConfig carriedStepConfig(SolverConfig const &config, SystemSolver const &previous);
+
 // Solve `problem`, adapting the global polynomial degree between solves, and
 // return the solver that produced the final answer.
 //

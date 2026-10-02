@@ -134,6 +134,19 @@ LevelError measure(SystemSolver &system, SolverConfig const &config,
 }
 } // namespace
 
+SolverConfig carriedStepConfig(SolverConfig const &config, SystemSolver const &previous)
+{
+    SolverConfig carried = config;
+    double dt = previous.getPseudoTransientStep();
+    if (std::isfinite(dt) && dt > 0.0)
+    {
+        if (config.PseudoTransientMaxStep > 0.0)
+            dt = std::min(dt, config.PseudoTransientMaxStep);
+        carried.PseudoTransientInitialStep = dt;
+    }
+    return carried;
+}
+
 std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
                                                 TransportSystem &problem,
                                                 AdjointProblem *adjoint,
@@ -180,6 +193,11 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
     SystemSolver::SteadyStats runTotal;
     int levels = 0;
 
+    // Each level after the first starts from the previous one's state (below), and
+    // from its final pseudo-transient step: see carriedStepConfig. Reset to
+    // `config` itself if a level fails that way and is retried.
+    SolverConfig levelConfig = config;
+
     if (solvedFirstLevel != nullptr && solvedFirstLevel->getOrder() != k0)
         throw std::logic_error(
             "runAdaptiveDegree was handed a solved first level at a degree other "
@@ -196,7 +214,7 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
         else
         {
             system = std::make_unique<SystemSolver>(grid, k, &problem);
-            applySolverConfig(config, *system);
+            applySolverConfig(levelConfig, *system);
 
             // Checked here, against the solver, because this is the point of truth
             // and a proxy for it is what let a transient through: loadSolverConfig
@@ -223,7 +241,34 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
             if (adjoint != nullptr)
                 system->setAdjointProblem(adjoint);
 
-            system->runSolver(tFinal);
+            try
+            {
+                system->runSolver(tFinal);
+            }
+            catch (std::invalid_argument const &)
+            {
+                throw;
+            }
+            catch (std::exception const &e)
+            {
+                // Only a level that was given a carried step has anything to fall
+                // back to. It keeps its warm state -- the restart values are still
+                // set -- and starts the ramp from the configured step instead.
+                if (level == 0 || levelConfig.PseudoTransientInitialStep ==
+                                      config.PseudoTransientInitialStep)
+                    throw;
+                logmsg<LOG_LEVEL::WARNING>(
+                    "Degree adaptation: k = {} failed from the carried pseudo-time step "
+                    "({}); retrying it from the configured one.", k, e.what());
+                std::println("  k = {} failed from the carried step; retrying from the "
+                             "configured one", k);
+                system.reset();
+                system = std::make_unique<SystemSolver>(grid, k, &problem);
+                applySolverConfig(config, *system);
+                if (adjoint != nullptr)
+                    system->setAdjointProblem(adjoint);
+                system->runSolver(tFinal);
+            }
         }
 
         // Read now: `system` is reset at the bottom of the loop, and a level
@@ -301,6 +346,7 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
         // two solvers thrash Integrator's cache between them.
         problem.setRestartValues(system->stateVector(), system->derivativeVector(),
                                  grid, k);
+        levelConfig = carriedStepConfig(config, *system);
 
         system.reset();
         k = next;
