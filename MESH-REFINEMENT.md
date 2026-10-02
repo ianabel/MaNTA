@@ -751,19 +751,96 @@ warns about, at `k = 4` correctly absent.
 
 The regraded 6-cell mesh is `0, 0.8, 0.94, 0.982, 0.9946, 0.99838, 1`: a wall cell
 of 1.6e-3, within a factor of two of the best 6-cell geometric mesh a scan found
-by hand (1e-3, 0.10%). Cost, grading only, at `NewtonJacobianReuse = 1`: 458 visits
-per node against 151 for the one uniform solve -- three solves for 216x the
-accuracy. At the default reuse of 10 both double.
+by hand (1e-3, 0.10%). Cost, grading only, at `NewtonJacobianReuse = 1` (now the
+default): **170 visits per node against 151 for the one uniform solve**, 1.13x, for
+216x the accuracy. That figure is the sample plus a graded solve warm-started from
+it -- the sample's state projected onto the graded mesh, and its final
+pseudo-transient step (~1e6) as the graded solve's first -- which costs 2 steps
+and 5 Newton iterations where a cold one took 19 and 44, for the same answer to
+1e-10. Carrying a tenth or a hundredth of that step measured the same. The full
+p → h → p, which carries the step between degree levels too, is 222 at 5 cells and
+218 at 6.
+
+Before the warm start it was 304, and before the degree loop stopped repeating the
+graded solve 458. Until then `runAdaptiveMesh` discarded the converged solve on the mesh it settled on
+and `runAdaptiveDegree` opened by solving that same mesh at the same degree from
+cold. Every adapted run paid it -- one solve in three when graded, one in two when
+left uniform -- for a bit-identical answer. The full p → h → p went 695 to 541 at 5
+cells and 782 to 628 at 6, the same 154 visits per node each time, which is one
+solve; `test_the_degree_loop_reuses_the_solve_the_mesh_stage_already_made` pins
+that, and `test_the_graded_solve_starts_from_the_sample_rather_than_from_scratch`
+the warm start (1.45x against 1.85x cold on its fixture).
+
+This revisits section 9's "warm starting buys cost, not reach". The cost half
+holds and is the whole of the gain here. Section 9's objection to sequencing was
+the cumulative cost of levels nobody wanted, which does not arise: the sample is
+paid for regardless, because the grading decision is read from it. Its other
+caution, a spline transfer overshooting a singular profile, does not apply to the
+restart path's L2 projection of the element polynomials -- and a failed warm start
+falls back to a cold solve of the same mesh before softening the grading.
 
 Shrinking the layer (`UpperBoundaryFraction = 0.05`) made it worse, 1.5% at 6
-cells: the interior cell then spans 0.95 and carries the error instead. The
-default of 0.2 was the better of the two here, which is consistent with §9's
-law that what matters is `h0` *and* not starving the rest of the domain.
+cells: the interior cell then spans 0.95 and carries the error instead. A layer of
+0.2 was the better of the two here, which is consistent with §9's law that what
+matters is `h0` *and* not starving the rest of the domain. The table above is at
+that 0.2; the layer now defaults to the sampling mesh's end cell instead, for the
+reason in §13, and costs a little here -- see there.
 
 For contrast, splitting the worst cell by the accuracy indicator from 4 uniform
 cells, twice, to 6 -- what one would build without this file -- reached 0.33% at
-best and 7.8% by bisection, for the same three solves. Moving cells beat adding
+best and 7.8% by bisection, for three solves against two here. Moving cells beat adding
 them again.
+
+## 13. The negative controls, and the two rules they changed
+
+Measured 2026-10-02 with `python-examples/paper-figures/adaptivity.py`, which
+runs the three benchmarks at `tab:steady`'s resolutions (Park 4 cells, Jardin and
+Shestakov 10, all `k = 3`) with and without `MeshAdaptation`. Error is the
+relative L1 error of that table; cost is physics evaluations against the one
+uniform solve.
+
+**Jardin was graded, for nothing.** Its steady state is linear, so every interior
+cell's top mode fell under the round-off floor and reported an infinite decay
+rate, while the wall cell's -- whose values are 5% of the field's -- landed just
+above it and fitted 30.2. Against an infinite median that is infinitely rough, so
+the mesh was regraded: 1.27x the cost, for an answer already at 3.9e-16 either
+way. But the largest rate measurable at degree `k` is the one with the top mode
+*on* the floor, `-log((k+1) eps) / log k` = 31.5 at `k = 3`, and 30.2 and infinity
+are the same measurement either side of it. The rule now caps every rate at that
+ceiling before comparing; Jardin's ratio is 1.05 and it stays uniform at 1.00x.
+The cap also changes what the interior median means: infinite cells used to be
+dropped from it, which biased it towards rough, and now count as the smoothest.
+
+Moving the floor to the field's scale instead looked like the direct fix -- the
+wall cell's round-off is the field's size, not its own -- and was rejected on a
+measurement: an assigned linear field carries modal round-off at up to 1.8e-15 of
+its scale, twice the `(k+1) eps` floor, so the field-scale floor would have held
+Jardin by a factor of about two. The cap does not depend on where the noise falls.
+
+**Shestakov's gain depended on a parameter the driver did not choose.** The
+sensor flagged the axis correctly (3.06x), but the layer was a fixed fifth of the
+domain, and Shestakov's source switches off at `x = 0.1`, where the uniform
+10-cell sample has a face. Grading over 0.2 moved that face off the kink and the
+error *rose*, 1.36e-2 to 1.58e-2. The layer now defaults to the flagged end cell
+of the sampling mesh -- the region the sensor actually judged rough -- unless
+`LowerBoundaryFraction` / `UpperBoundaryFraction` is given:
+
+| Shestakov, 10 cells, `k = 3` | error | cost |
+| --- | --- | --- |
+| uniform | 1.358e-2 | 1.00x |
+| graded, layer = first cell (0.1) | **1.340e-6** | 2.73x |
+| graded + p to 1e-8 (k → 7) | 2.252e-7 | 3.26x |
+| graded, layer 0.2 | 1.580e-2 | 2.50x |
+
+Park stays uniform (0.98 / 0.94) at exactly 1.00x, as before.
+
+What the new default costs on §12's wall layer, where no face was aligned with
+anything: at 5 cells nothing, since the end cell *is* 0.2. At 4 and 6 cells the
+layer becomes 0.25 and 0.167, and the worst pointwise error at `n = 2.5` goes
+4.14% against 3.20% at 4 cells and 0.131% against 0.089% at 6 -- the 6-cell body
+cell now spans 0.833 rather than 0.8 and carries more of the error. A factor of
+1.3-1.5 on a problem that wants a wide layer, against four orders on one that
+wants an aligned one, and the aligned one is the case a user cannot see coming.
 
 ## What the measurements changed about the plan
 

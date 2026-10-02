@@ -1,16 +1,16 @@
-"""Make the Python test suite runnable from any working directory.
+"""Run the Python test suite against a build, from outside the source tree.
 
-The tests need three things that used to be supplied implicitly by running
-`pytest` from inside this directory:
+Three things every test relies on:
 
-  * the built pybind11 module, python/manta/_manta<suffix>.so, on sys.path
-  * a cwd of python/Tests, because the .conf inputs name their
-    PythonModuleFile relatively and the solver writes output beside them
-
-Previously test.py and the JAX fixtures each did `sys.path.append("../")`,
-which only resolves correctly when cwd is already python/Tests. With this
-file, `pytest python/Tests` from the repo root works too -- which is what
-the coverage target and CI need.
+  * `manta` importable from a build's package directory, <build>/python. CTest
+    puts that on PYTHONPATH and names it in MANTA_PYTHON_ROOT; run by hand, do
+    the same, or install the package.
+  * this directory on sys.path, for `util` and the case modules the fixtures
+    import by name.
+  * a cwd *outside* this directory. The solver writes its output into the cwd,
+    so every test runs in one scratch directory under pytest's basetemp --
+    <build>/python/Tests/tmp under CTest. Inputs are read from TESTS_DIR, and a
+    config's PythonModuleFile resolves against the config file, not the cwd.
 """
 
 import os
@@ -18,51 +18,60 @@ import sys
 
 import pytest
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_PYTHON_DIR = os.path.dirname(_HERE)
+TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 
-for _p in (_PYTHON_DIR, _HERE):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+if TESTS_DIR not in sys.path:
+    sys.path.insert(0, TESTS_DIR)
 
 
 def _check_extension_built():
-    """Fail loudly and usefully if the pybind11 module has not been built.
+    """Fail loudly and usefully unless `manta` is the build under test.
 
-    The extension now lives inside the `manta` package rather than being a
-    bare `MaNTA` module, which also retires the old trap here: the repo
-    directory is itself named MaNTA, so with its parent on sys.path Python
-    would import *that* as an empty namespace package shadowing the real
-    extension, and the symptom was a baffling AttributeError rather than a
-    clean ImportError.
+    MANTA_PYTHON_ROOT is what makes "the build under test" checkable. Without
+    it a PYTHONPATH that did not take, or one naming another build directory,
+    would quietly run the suite against whichever `manta` came first --
+    an installed one, most likely -- and report on that instead.
     """
     try:
-        import manta as MaNTA
-    except ImportError:
+        import manta
+        import manta._manta
+    except ImportError as err:
         pytest.exit(
-            "manta package not importable. Build it with\n"
-            "    cmake --build build --target _manta",
+            f"manta package not importable ({err}). Build it, then point Python "
+            "at the build's package directory:\n"
+            "    cmake --build <build> --target _manta\n"
+            "    PYTHONPATH=<build>/python pytest python/Tests\n"
+            "or run the suite through CTest: ctest --test-dir <build> -R '^python$'",
             returncode=1,
         )
-    if not hasattr(MaNTA, "TransportSystem"):
-        pytest.exit(
-            "'MaNTA' resolved to "
-            f"{getattr(MaNTA, '__path__', MaNTA.__file__)!r}, which is not the "
-            "compiled extension -- most likely the repo directory imported as a "
-            "namespace package. Build the module with\n"
-            "    cmake --build build --target _manta",
-            returncode=1,
-        )
+
+    expected = os.environ.get("MANTA_PYTHON_ROOT")
+    if expected:
+        expected = os.path.abspath(expected)
+        for what, path in (("manta", manta.__file__),
+                           ("manta._manta", manta._manta.__file__)):
+            if os.path.commonpath([expected, os.path.abspath(path)]) != expected:
+                pytest.exit(
+                    f"{what} was imported from {path}, not from the build under "
+                    f"test at {expected}. Something ahead of PYTHONPATH on "
+                    "sys.path is shadowing it.",
+                    returncode=1,
+                )
 
 
 _check_extension_built()
 
 
+@pytest.fixture(scope="session")
+def _work_dir(tmp_path_factory):
+    return tmp_path_factory.mktemp("cwd", numbered=False)
+
+
 @pytest.fixture(autouse=True)
-def _run_in_tests_dir():
-    """Run every test with cwd = python/Tests, restoring it afterwards."""
+def _run_in_work_dir(_work_dir):
+    """Run every test with cwd = the session's scratch directory."""
     previous = os.getcwd()
-    os.chdir(_HERE)
+    os.chdir(_work_dir)
     try:
         yield
     finally:

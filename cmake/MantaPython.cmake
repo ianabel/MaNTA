@@ -19,21 +19,35 @@
 # a Python script that needs netCDF4, scipy and matplotlib, and picking the
 # interpreter that has them is not something only a Python *build* cares about.
 
-set(MANTA_VENV "${PROJECT_SOURCE_DIR}/.venv" CACHE PATH
-    "Virtualenv to prefer for the Python extension and tooling")
+# Which virtualenv to prefer, when neither -DPython3_EXECUTABLE nor an activated
+# environment says: the one the `venv` target creates in this build tree, and
+# failing that a .venv a developer made in the checkout. Both are only read from
+# here; the build creates nothing outside its own tree.
+set(MANTA_VENV "${PROJECT_BINARY_DIR}/venv" CACHE PATH
+    "Virtualenv the `venv` target creates, and the first one preferred")
 
-if(NOT DEFINED Python3_EXECUTABLE AND NOT DEFINED ENV{VIRTUAL_ENV}
-   AND EXISTS "${MANTA_VENV}/bin/python")
-  set(Python3_EXECUTABLE "${MANTA_VENV}/bin/python" CACHE FILEPATH
-      "Python interpreter MaNTA builds for and runs its tooling with")
-  message(STATUS "Using the repository virtualenv: ${Python3_EXECUTABLE}")
+set(_manta_venvs "${MANTA_VENV}" "${PROJECT_SOURCE_DIR}/.venv")
+if(NOT DEFINED Python3_EXECUTABLE AND NOT DEFINED ENV{VIRTUAL_ENV})
+  foreach(_venv ${_manta_venvs})
+    if(EXISTS "${_venv}/bin/python")
+      set(Python3_EXECUTABLE "${_venv}/bin/python" CACHE FILEPATH
+          "Python interpreter MaNTA builds for and runs its tooling with")
+      message(STATUS "Using the virtualenv ${_venv}")
+      break()
+    endif()
+  endforeach()
 endif()
 
 # FIRST when we or the environment named a virtualenv, so Development.Module is
 # resolved against that prefix rather than against the system interpreter.
-if(DEFINED ENV{VIRTUAL_ENV} OR Python3_EXECUTABLE MATCHES "${MANTA_VENV}")
+if(DEFINED ENV{VIRTUAL_ENV})
   set(Python3_FIND_VIRTUALENV FIRST)
 endif()
+foreach(_venv ${_manta_venvs})
+  if(Python3_EXECUTABLE STREQUAL "${_venv}/bin/python")
+    set(Python3_FIND_VIRTUALENV FIRST)
+  endif()
+endforeach()
 
 if(MANTA_PYTHON)
   find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter Development.Module)

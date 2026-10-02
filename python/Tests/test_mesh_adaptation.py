@@ -218,6 +218,97 @@ def test_a_second_configure_and_run_starts_from_a_uniform_mesh_again(tmp_path):
         assert np.max(np.abs(u - SineSource.exact(x))) < 1e-7
 
 
+class CountingSine(SineSource):
+    """SineSource that counts its flux evaluations, one per point per residual."""
+
+    def __init__(self):
+        super().__init__()
+        self.nFlux = 0
+
+    def SigmaFn(self, i, state, x, t):
+        self.nFlux += 1
+        return super().SigmaFn(i, state, x, t)
+
+
+def test_the_degree_loop_reuses_the_solve_the_mesh_stage_already_made(tmp_path):
+    """MeshAdaptation pays for each (mesh, degree) once.
+
+    On a smooth problem the verdict is uniform, and with a tolerance the first
+    level already meets, the whole sequence is one solve: the sample is the level
+    the degree loop would open with. It used to be discarded and repeated from
+    cold, so this cost exactly twice a fixed-degree solve -- and every graded run
+    paid the same duplicate on the graded mesh. Compared by flux evaluations
+    against that fixed-degree solve, which is exact rather than approximate
+    because the two are the same solve from the same initial condition.
+    """
+    loose = dict(DegreeTolerance=1.0e-2, MaxPolynomialDegree=12)
+
+    adapted = CountingSine()
+    runner = MaNTA.Runner(adapted)
+    runner.configure(mesh_config(tmp_path / "adapted", **loose))
+    runner.run_ss()
+    x = np.linspace(0.0, 1.0, 41)
+    u_adapted = np.asarray(runner.getSolution(0, list(x))).reshape(-1)
+
+    fixed = CountingSine()
+    runner = MaNTA.Runner(fixed)
+    runner.configure(mesh_config(tmp_path / "fixed", MeshAdaptation=False,
+                                 Superconvergent=True, **loose))
+    runner.run_ss()
+    u_fixed = np.asarray(runner.getSolution(0, list(x))).reshape(-1)
+
+    assert adapted.nFlux == fixed.nFlux, (
+        f"MeshAdaptation spent {adapted.nFlux} flux evaluations against "
+        f"{fixed.nFlux} for one solve at the same degree on the same mesh"
+    )
+    assert np.array_equal(u_adapted, u_fixed)
+
+
+class CountingAxis(AxisSingular):
+    def __init__(self):
+        super().__init__()
+        self.nFlux = 0
+
+    def SigmaFn(self, i, state, x, t):
+        self.nFlux += 1
+        return super().SigmaFn(i, state, x, t)
+
+
+def test_the_graded_solve_starts_from_the_sample_rather_than_from_scratch(tmp_path):
+    """The graded solve is warm-started, from the sample's state and its final step.
+
+    Under pseudo-transient continuation a cold solve's cost is mostly the climb up
+    the SER ramp, and a solve started next to its answer has no ramp to climb. So
+    the whole graded run -- sample plus graded solve -- costs well under two cold
+    solves. Measured 1.45x one uniform solve on this fixture, against 1.85x with
+    the graded solve started cold -- which is what the 1.7 bound separates.
+
+    Pseudo-transient on purpose: this fixture is linear, so in Newton mode every
+    solve is one iteration however good its start, and there is no step to carry.
+    """
+    common = dict(SteadyStateSolver="PseudoTransient", DegreeTolerance=1.0e-2,
+                  MaxPolynomialDegree=4)
+
+    adapted = CountingAxis()
+    runner = MaNTA.Runner(adapted)
+    runner.configure(mesh_config(tmp_path / "adapted", **common))
+    runner.run_ss()
+    widths = np.diff(np.asarray(runner.getCellBoundaries()))
+    assert widths.min() / widths.max() < 1e-3, "the fixture was not graded"
+
+    uniform = CountingAxis()
+    runner = MaNTA.Runner(uniform)
+    runner.configure(mesh_config(tmp_path / "uniform", MeshAdaptation=False,
+                                 Superconvergent=True, **common))
+    runner.run_ss()
+
+    ratio = adapted.nFlux / uniform.nFlux
+    assert ratio < 1.7, (
+        f"sample plus graded solve cost {ratio:.2f}x one uniform solve; started from "
+        "the sample it should be well under two"
+    )
+
+
 def test_a_degree_below_three_is_refused(tmp_path):
     """The load-bearing refusal: at k = 2 the grading verdict is reversed."""
     runner = MaNTA.Runner(SineSource())

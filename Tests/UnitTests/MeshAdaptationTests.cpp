@@ -14,13 +14,16 @@
 #include <boost/test/unit_test.hpp>
 
 #include "CapturedOutput.hpp"
+#include "DegreeAdaptation.hpp"
 #include "MeshAdaptation.hpp"
+#include "SmoothnessSensor.hpp"
 #include "SolverConfig.hpp"
 #include "SystemSolver.hpp"
 #include "TestDiffusion.hpp"
 #include "gridStructures.hpp"
 
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -130,6 +133,84 @@ BOOST_AUTO_TEST_CASE(a_function_the_space_holds_exactly_is_left_uniform)
     BOOST_TEST(d.upperRatio < 2.0);
 }
 
+namespace
+{
+// Ten cells' worth of rates: an interior, and the two ends. Synthetic, because the
+// spectra that matter here -- top modes either side of the round-off floor -- are
+// ones a solve produces and an assigned function does not.
+std::vector<CellSmoothness> rates(double lower, double interior, double upper)
+{
+    std::vector<CellSmoothness> cells(10);
+    for (auto &c : cells)
+        c.decayRate = interior;
+    cells.front().decayRate = lower;
+    cells.back().decayRate = upper;
+    return cells;
+}
+
+const double inf = std::numeric_limits<double>::infinity();
+} // namespace
+
+BOOST_AUTO_TEST_CASE(an_end_at_round_off_is_not_rougher_than_an_exact_interior)
+{
+    // Jardin at 10 cells and k = 3, as the solve left it: every interior cell's
+    // top mode under the round-off floor, the wall cell's a hair above it at a
+    // fitted 30.2. Both are the same measurement -- round-off -- and the ceiling
+    // of 31.5 is what says so. Compared uncapped, the ratio was infinite and a
+    // solution already at 3.7e-16 was graded.
+    auto d = gradingDecision(rates(inf, inf, 30.2), 3, 2.0);
+
+    BOOST_TEST_MESSAGE("Jardin: ceiling " << d.rateCeiling << ", median "
+                       << d.interiorMedian << ", ratios " << d.lowerRatio << " / "
+                       << d.upperRatio);
+    BOOST_TEST((d.verdict == GradingVerdict::Uniform));
+    BOOST_TEST(d.interiorMedian == d.rateCeiling);
+    BOOST_TEST(d.upperRatio == d.rateCeiling / 30.2);
+    BOOST_TEST(d.upperRatio < 1.1);
+
+    // The raw rates are still what is reported.
+    BOOST_TEST(d.lowerRate == inf);
+    BOOST_TEST(d.upperRate == 30.2);
+}
+
+BOOST_AUTO_TEST_CASE(a_rough_end_beside_an_exact_interior_is_still_graded)
+{
+    // The cap must not hide real structure: a singular end against an interior
+    // the space holds outright is rougher by the ceiling over its own rate.
+    auto d = gradingDecision(rates(inf, inf, 3.0), 3, 2.0);
+    BOOST_TEST((d.verdict == GradingVerdict::GradeUpper));
+    BOOST_TEST(d.upperRatio == measurableDecayRate(3) / 3.0);
+
+    // And a spectrum with no decay at all is as rough as anything gets.
+    BOOST_TEST((gradingDecision(rates(0.0, inf, inf), 3, 2.0).verdict
+                == GradingVerdict::GradeLower));
+}
+
+BOOST_AUTO_TEST_CASE(infinite_interior_cells_count_as_the_smoothest_not_as_absent)
+{
+    // Half an interior under the floor, half at a genuine rate of 6. The median
+    // sits between them, at (6 + ceiling) / 2, rather than at the 6 a median over
+    // the finite cells alone would give: dropping the smoothest cells biased the
+    // interior towards rough and so made every end look smoother than it is.
+    auto cells = rates(inf, 6.0, inf);
+    for (size_t i = 1; i <= 4; ++i)
+        cells[i].decayRate = inf;
+    auto d = gradingDecision(cells, 3, 2.0);
+    BOOST_TEST(d.interiorMedian == 0.5 * (6.0 + measurableDecayRate(3)));
+}
+
+BOOST_AUTO_TEST_CASE(a_rough_end_beside_an_exactly_representable_interior_is_graded)
+{
+    // The same through the sensor: a linear field with a genuine x^{4/3} layer
+    // in the last cell.
+    Field f(Grid(0.0, 1.0, 10), 3, [](double x)
+            { return 1.0 - 0.95 * x + (x > 0.9 ? 1e-3 * sk(10.0 * (1.0 - x)) : 0.0); });
+    auto d = gradingDecision(f.soln, 0, 2.0);
+    BOOST_TEST_MESSAGE("linear + wall layer: median " << d.interiorMedian << ", upper "
+                       << d.upperRate << ", ratio " << d.upperRatio);
+    BOOST_TEST((d.verdict == GradingVerdict::GradeUpper));
+}
+
 BOOST_AUTO_TEST_CASE(the_verdict_is_stable_across_the_degrees_it_is_allowed_at)
 {
     // The reason MeshAdaptation refuses k < 3 is that the verdict *changes* below
@@ -234,6 +315,32 @@ BOOST_AUTO_TEST_CASE(a_uniform_verdict_cannot_be_asked_for_a_mesh)
     BOOST_CHECK_THROW(gradedMeshFor(d, uniform, 0, 0.2, 0.2, 0.3), std::logic_error);
 }
 
+BOOST_AUTO_TEST_CASE(the_layer_is_the_flagged_end_cell_unless_a_fraction_is_given)
+{
+    // The sampling mesh's end cell, at the end the decision named -- on a
+    // non-uniform mesh, so the two ends cannot be confused.
+    Grid sampling(std::vector<Position>{0.0, 0.1, 0.3, 0.6, 1.0});
+    SolverConfig c{};
+    c.LowerBoundaryFraction = c.UpperBoundaryFraction = 0.2;
+
+    GradingDecision lower, upper;
+    lower.verdict = GradingVerdict::GradeLower;
+    upper.verdict = GradingVerdict::GradeUpper;
+
+    BOOST_TEST(gradingLayerFraction(lower, sampling, c) == 0.1);
+    BOOST_TEST(gradingLayerFraction(upper, sampling, c) == 0.4);
+
+    // A given fraction is honoured, and only at its own end.
+    c.LowerBoundaryFractionGiven = true;
+    c.LowerBoundaryFraction = 0.25;
+    BOOST_TEST(gradingLayerFraction(lower, sampling, c) == 0.25);
+    BOOST_TEST(gradingLayerFraction(upper, sampling, c) == 0.4);
+
+    // As for gradedMeshFor: a uniform verdict asking for a layer is a caller bug.
+    BOOST_CHECK_THROW(gradingLayerFraction(GradingDecision{}, sampling, c),
+                      std::logic_error);
+}
+
 // --------------------------------------------------- the configuration ----
 
 namespace
@@ -320,5 +427,37 @@ BOOST_AUTO_TEST_CASE(the_driver_refuses_a_low_degree_even_if_the_config_did_not)
     BOOST_CHECK_THROW(runAdaptiveMesh(cfg, problem, nullptr, grid, 2, 1.0),
                       std::invalid_argument);
 }
+
+// --- carrying the pseudo-transient step to a warm-started solve -----------
+
+BOOST_AUTO_TEST_CASE(a_warm_started_solve_starts_from_the_step_the_last_one_reached)
+{
+    // What carriedStepConfig is for: a solve started next to the answer should not
+    // climb the SER ramp again from PseudoTransientInitialStep. Three cases, and
+    // the two refusals are the ones that would go wrong silently -- an infinite
+    // step handed on as a finite "initial step", or a cap the configuration set
+    // being overridden by a step the previous solve was allowed to exceed it by.
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(mesh_config);
+    SystemSolver previous(grid, 2, &problem);
+
+    SolverConfig config;
+    config.PseudoTransientInitialStep = 1e-3;
+    config.PseudoTransientMaxStep = 0.0; // uncapped
+
+    previous.ptcStep = 7.5e5;
+    BOOST_TEST(carriedStepConfig(config, previous).PseudoTransientInitialStep == 7.5e5);
+
+    config.PseudoTransientMaxStep = 1e3;
+    BOOST_TEST(carriedStepConfig(config, previous).PseudoTransientInitialStep == 1e3);
+
+    // Newton mode leaves the step infinite; there is nothing to carry.
+    previous.ptcStep = std::numeric_limits<double>::infinity();
+    BOOST_TEST(carriedStepConfig(config, previous).PseudoTransientInitialStep == 1e-3);
+
+    previous.ptcStep = 0.0;
+    BOOST_TEST(carriedStepConfig(config, previous).PseudoTransientInitialStep == 1e-3);
+}
+
 
 BOOST_AUTO_TEST_SUITE_END()

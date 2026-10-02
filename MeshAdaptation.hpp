@@ -12,6 +12,7 @@
 // forward-declared as one -- and gridStructures.hpp above already pulls in enough
 // that taking the definition costs nothing here.
 #include "DGSoln.hpp"
+#include "SmoothnessSensor.hpp"
 
 class AdjointProblem;
 class SystemSolver;
@@ -58,15 +59,21 @@ struct GradingDecision
 {
     GradingVerdict verdict = GradingVerdict::Uniform;
 
-    // The fitted decay rate of the first and last cells, and the median over the
-    // interior. Larger is smoother. Infinity is a real value and means the cell's
+    // The fitted decay rate of the first and last cells, as the sensor reported
+    // them. Larger is smoother. Infinity is a real value and means the cell's
     // solution is exactly representable below degree k.
     double lowerRate = 0.0;
     double upperRate = 0.0;
+
+    // The largest rate measurable at this degree (measurableDecayRate), and the
+    // median over the interior with every rate capped at it -- so finite.
+    double rateCeiling = 0.0;
     double interiorMedian = 0.0;
 
-    // interiorMedian / rate, per end: how much rougher that end is than the body
-    // of the domain. This is the quantity compared against the threshold.
+    // interiorMedian / rate, per end, with the rate capped at the ceiling: how
+    // much rougher that end is than the body of the domain. This is the quantity
+    // compared against the threshold. Infinite only for an end with no decay at
+    // all.
     double lowerRatio = 0.0;
     double upperRatio = 0.0;
 };
@@ -90,6 +97,13 @@ struct GradingDecision
 // k >= 2 from the sensor itself.
 GradingDecision gradingDecision(DGSoln const &Y, Index var, double threshold);
 
+// The same rule over rates already measured, at degree k -- which is what the
+// rule is, and what makes it testable on spectra no assigned function produces.
+// Every rate is compared capped at measurableDecayRate(k): above it nothing is
+// measured, only round-off on one side of the floor or the other.
+GradingDecision gradingDecision(std::vector<CellSmoothness> const &cells,
+                                unsigned int k, double threshold);
+
 // The mesh a decision asks for, at the *same cell count* as the one it was made
 // on -- which is the point, per (1) above.
 //
@@ -105,6 +119,24 @@ std::vector<Grid::Position> gradedMeshFor(GradingDecision const &decision,
                                           double lowerFraction,
                                           double upperFraction,
                                           double ratio);
+
+// How much of the domain the layer a decision grades into covers, as a fraction
+// of the span.
+//
+// The end cell of the sampling mesh -- the cell the sensor flagged -- unless the
+// caller gave LowerBoundaryFraction / UpperBoundaryFraction for that end. A fixed
+// default fraction was wrong whenever the sampling mesh had already put a face
+// somewhere that mattered. Shestakov's source switches off at x = 0.1, and a
+// uniform 10-cell mesh has a face there: grading the default 20% moved that face
+// and the error *rose*, 1.36e-2 to 1.58e-2 at k = 3, where grading within the
+// first cell keeps it and gives 1.34e-6. The sampling mesh is the only
+// information about where the faces should be that the driver has, and its end
+// cell is the region the sensor actually judged rough.
+//
+// Throws std::logic_error for a Uniform decision, as gradedMeshFor does.
+double gradingLayerFraction(GradingDecision const &decision,
+                            Grid const &sampling,
+                            SolverConfig const &config);
 
 // What runAdaptiveMesh produced.
 //

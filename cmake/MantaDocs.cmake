@@ -1,4 +1,5 @@
-# cmake -DDOCS_VENV=... -DDOCS_HTML=... -DVENV_PYTHON=... -DSOURCE_DIR=... -P MantaDocs.cmake
+# cmake -DDOCS_VENV=... -DDOCS_HTML=... -DDOCS_DOCTREES=... -DVENV_PYTHON=... -DSOURCE_DIR=...
+#       -P MantaDocs.cmake
 #
 # The environment is rebuilt when docs/requirements.txt is newer than the
 # sphinx-build in it. The stamp is that executable rather than the directory,
@@ -36,9 +37,10 @@ if(_need_build)
 endif()
 
 # -W, matching .readthedocs.yaml's fail_on_warning, so a docs build that is green
-# here is one that will publish.
+# here is one that will publish. -d keeps the doctree cache beside the HTML's
+# build tree rather than inside the HTML, where an install would copy it.
 execute_process(
-  COMMAND "${_sphinx}" -W -b html "${SOURCE_DIR}/docs" "${DOCS_HTML}"
+  COMMAND "${_sphinx}" -W -b html -d "${DOCS_DOCTREES}" "${SOURCE_DIR}/docs" "${DOCS_HTML}"
   RESULT_VARIABLE _rc)
 if(NOT _rc EQUAL 0)
   message(FATAL_ERROR "sphinx-build failed (${_rc})")

@@ -35,10 +35,12 @@ const std::vector<Entry> &table()
          "\"Upper\"."},
         {"LowerBoundaryFraction", {"Lower_Boundary_Fraction"}, Type::Double, Category::Solver, false, false, 0.2,
          "Fraction of the domain in the dense lower region; read when GradedGridBoundary is "
-         "set and GradingEnd is \"Lower\" or \"Both\"."},
+         "set and GradingEnd is \"Lower\" or \"Both\". MeshAdaptation reads it only when it is "
+         "given, and otherwise grades within the sampling mesh's first cell."},
         {"UpperBoundaryFraction", {"Upper_Boundary_Fraction"}, Type::Double, Category::Solver, false, false, 0.2,
          "Fraction of the domain in the dense upper region; read when GradedGridBoundary is "
-         "set and GradingEnd is \"Upper\" or \"Both\"."},
+         "set and GradingEnd is \"Upper\" or \"Both\". MeshAdaptation reads it only when it is "
+         "given, and otherwise grades within the sampling mesh's last cell."},
         {"PolynomialDegree", {"Polynomial_degree"}, Type::UInt, Category::Solver, true, true, 1u,
          "Degree k of the nodal basis in each cell."},
         {"GridSize", {"Grid_size"}, Type::Int, Category::Solver, false, false, 0,

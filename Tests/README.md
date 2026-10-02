@@ -1,7 +1,10 @@
 # MaNTA test suites
 
-Three suites, all registered with CTest (`ctest --test-dir build`) and all
-runnable from any working directory.
+Three suites, all registered with CTest (`ctest --test-dir build`), and all run
+from the build tree: each starts in the build directory's copy of its source
+directory, writes its output there, and reads its inputs from here. By hand,
+`build/python/Tests/run-pytest` and `build/Tests/RegressionTests/run-regression`
+are the launchers CTest itself uses, and work from any cwd.
 
 | Test | Suite | Location |
 |---|---|---|
@@ -216,16 +219,12 @@ So: treat the headline as a floor, and judge work on this header by the count of
 *distinct* uncovered lines, not by its percentage.
 
 **And a number is only worth reading if the Python suite ran against the
-instrumented module.** The extension lives at `python/manta/_manta<abi>.so` --
-in the source tree, because that is where `import manta` has to find it -- so
-every build directory writes to the same path, and a run once imported the
-Release module while believing otherwise: 133s against 748s for the same tests,
-with the report still looking right because gcov data accumulates. Each build
-directory now claims the module and replaces one it does not recognise, and the
-`coverage` target refuses to start unless what is in place carries
-instrumentation; `python/CMakeLists.txt` has the full account. Nothing is needed
-from you, but if a binding-layer figure ever looks impossibly low, that is the
-first thing to suspect.
+instrumented module.** Each build directory has a package of its own, at
+`<build>/python/manta/`, and `conftest.py` exits unless `manta` and its extension
+were both imported from the build under test -- an installed `manta` ahead on
+`sys.path` would otherwise give a passing suite and a report that never mentions
+the binding layer. If a binding-layer figure ever looks impossibly low, that
+check is the first thing to suspect.
 
 ## The scalar (Woodbury) path in solveJacEq
 

@@ -21,17 +21,11 @@ add_custom_target(clean_data
 # ------------------------------------------------------------ clean_coverage --
 #
 # Three extensions, not two: .gcno is written by the compiler and .gcda by the
-# instrumented run, but gcov also drops a .gcov *report* beside each source, and
-# those were never swept -- 184 of them accumulated in PhysicsCases/ before
-# anyone noticed. They are gitignored, so `git status` says nothing and the only
-# symptom is an unreadable `ls`.
-#
-# An out-of-source build puts all three in the build tree, so that is the main
-# target here; the source tree is swept as well, to tidy what an in-source
-# Makefile build left behind.
+# instrumented run, but gcov also drops a .gcov *report*, and those are the ones
+# that accumulate unnoticed. All three live in this build tree, and so does the
+# report directory.
 add_custom_target(clean_coverage
-  COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
-          -DBINARY_DIR=${PROJECT_BINARY_DIR}
+  COMMAND ${CMAKE_COMMAND} -DBINARY_DIR=${PROJECT_BINARY_DIR}
           -P "${PROJECT_SOURCE_DIR}/cmake/MantaCleanCoverage.cmake"
   COMMENT "Removing coverage instrumentation data and reports"
   VERBATIM)
@@ -82,22 +76,9 @@ if(MANTA_COVERAGE_BUILD)
       --exclude "${PROJECT_SOURCE_DIR}/Tools/"
       --exclude "${PROJECT_SOURCE_DIR}/PhysicsCases/")
 
-    # Running the Python suite here is only worth anything if it imports the
-    # module *this* directory built. python/CMakeLists.txt is what arranges that,
-    # and explains at length how it used to go wrong; this is the independent
-    # check that it did, because the claim is a mechanism that could quietly stop
-    # working and an uninstrumented module gives a *passing* suite and a report
-    # that simply does not mention the binding layer. Ahead of the suites, so a
-    # stale module costs a second rather than twenty-three minutes.
-    set(_cov_check)
-    if(TARGET _manta)
-      set(_cov_check
-        COMMAND ${CMAKE_COMMAND} -DMODULE=$<TARGET_FILE:_manta>
-                -P "${PROJECT_SOURCE_DIR}/cmake/MantaCheckInstrumented.cmake")
-    endif()
-
+    # The Python suite measures this directory's extension because conftest.py
+    # refuses to run against any other -- see python/Tests/CMakeLists.txt.
     add_custom_target(coverage
-      ${_cov_check}
       # A failing suite should still produce a report -- see MantaRunSuites.cmake
       # for why that is a -P script rather than `ctest || true`.
       COMMAND ${CMAKE_COMMAND}
@@ -152,8 +133,9 @@ endif()
 
 # ---------------------------------------------------------------------- venv --
 #
-# The virtualenv the regression and pytest suites need. Not a dependency of
-# anything: it downloads packages, so it stays something you ask for.
+# The virtualenv the regression and pytest suites need, created in this build
+# tree (MANTA_VENV, cmake/MantaPython.cmake). Not a dependency of anything: it
+# downloads packages, so it stays something you ask for.
 #
 # MANTA_VENV_PYTHON is a *versioned* interpreter deliberately. A venv records the
 # interpreter it was built with, and `python3 -m venv` records the unversioned
@@ -184,30 +166,55 @@ add_custom_target(venv
 # ---------------------------------------------------------------------- docs --
 #
 # Sphinx, built with -W to match .readthedocs.yaml's fail_on_warning, so a local
-# build that is green is one that will publish.
+# build that is green is one that will publish. Everything it writes -- the
+# environment, the HTML, Sphinx's doctree cache -- is in this build tree;
+# `cmake --install` is what copies the HTML anywhere else (see below).
 #
 # The dependencies get an environment of their own rather than a place in
 # MANTA_VENV: docs/requirements.txt holds Sphinx below 8 for sphinx-material,
 # unmaintained since 2023, and there is no reason to hold the solver's own suites
 # to a docs constraint. Read the Docs installs the same requirements file, so the
 # pins live in one place.
-#
-# README used to tell you to build this by hand in /tmp/docsvenv: nothing created
-# it, nothing cleaned it, no target knew it existed, and it did not survive a
-# reboot -- so the one documented way to build the docs worked only some of the
-# time.
-set(MANTA_DOCS_VENV "${PROJECT_SOURCE_DIR}/.venv-docs" CACHE PATH
+set(MANTA_DOCS_VENV "${PROJECT_BINARY_DIR}/venv-docs" CACHE PATH
     "Virtualenv holding Sphinx and sphinx-material")
-set(MANTA_DOCS_HTML "${PROJECT_SOURCE_DIR}/docs/_build/html" CACHE PATH
+set(MANTA_DOCS_HTML "${PROJECT_BINARY_DIR}/docs/html" CACHE PATH
     "Where `docs` writes the rendered HTML")
 
 add_custom_target(docs
   COMMAND ${CMAKE_COMMAND}
           -DDOCS_VENV=${MANTA_DOCS_VENV}
           -DDOCS_HTML=${MANTA_DOCS_HTML}
+          -DDOCS_DOCTREES=${PROJECT_BINARY_DIR}/docs/doctrees
           -DVENV_PYTHON=${MANTA_VENV_PYTHON}
           -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
           -P "${PROJECT_SOURCE_DIR}/cmake/MantaDocs.cmake"
   USES_TERMINAL
   COMMENT "Building the Sphinx documentation"
   VERBATIM)
+
+# Installing the docs, which is not the same as building them: `docs` downloads
+# a Sphinx and is not part of `all`, so an install copies whatever HTML a
+# previous `docs` left and says so when there is none.
+#
+#   ${CMAKE_INSTALL_DOCDIR}/html   under the prefix, like everything else
+#   MANTA_DOCS_SOURCE_COPY         docs/_build/html in the checkout, by default
+#
+# The second is the one install destination outside the prefix. It exists
+# because the checkout's docs/_build/html is where people look for a local copy;
+# TODO has the plan to retire it. It is skipped under DESTDIR -- a staged
+# packaging install has no business writing into a checkout -- and is not in
+# install_manifest.txt, so `uninstall` leaves it. Empty turns it off.
+install(DIRECTORY "${MANTA_DOCS_HTML}/"
+        DESTINATION "${CMAKE_INSTALL_DOCDIR}/html"
+        COMPONENT docs
+        OPTIONAL
+        PATTERN ".buildinfo" EXCLUDE)
+set(MANTA_DOCS_SOURCE_COPY "${PROJECT_SOURCE_DIR}/docs/_build/html" CACHE PATH
+    "Where `cmake --install` also copies the built HTML; empty for nowhere")
+if(MANTA_DOCS_SOURCE_COPY)
+  install(CODE "
+    set(MANTA_DOCS_HTML \"${MANTA_DOCS_HTML}\")
+    set(MANTA_DOCS_SOURCE_COPY \"${MANTA_DOCS_SOURCE_COPY}\")
+    include(\"${PROJECT_SOURCE_DIR}/cmake/MantaInstallDocsCopy.cmake\")"
+    COMPONENT docs)
+endif()
