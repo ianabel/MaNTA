@@ -3,6 +3,7 @@ Compiled core of the MaNTA Python package; import `manta` instead.
 """
 from __future__ import annotations
 import collections.abc
+import enum
 import numpy
 import numpy.typing
 import typing
@@ -521,51 +522,28 @@ class StateField:
         ...
     def __setitem__(self, arg0: typing.Any, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
-class SteadyOutcome:
+class SteadyOutcome(enum.IntEnum):
     """
     Why a steady solve, or one slice of one, stopped.
     
-    Members:
+    NotRun: no steady solve has been taken on this solver.
+    Converged: ||F|| fell below SteadyStateTolerance.
+    OutOfSteps: a budget was spent, MaxContinuationSteps or MaxRejectedSteps. Not a failure: the state reached is the last accepted one, and continue_steady() resumes from it and the pseudo-time step.
+    SolverFailed: KINSol failed in a way pseudo-transient damping cannot answer.
     
-      NotRun : No steady solve has been taken on this solver.
-    
-      Converged : ||F|| fell below SteadyStateTolerance.
-    
-      OutOfSteps : A budget was spent: MaxContinuationSteps, or MaxRejectedSteps. Not a failure: the state reached is the last accepted one, and continue_steady() resumes from it and the pseudo-time step.
-    
-      SolverFailed : KINSol failed in a way pseudo-transient damping cannot answer.
+    An IntEnum, so a traced outcome compares with the members under jit: jnp.equal(outcome, SteadyOutcome.Converged).
     """
     Converged: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.Converged: 1>
     NotRun: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.NotRun: 0>
     OutOfSteps: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.OutOfSteps: 2>
     SolverFailed: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.SolverFailed: 3>
-    __members__: typing.ClassVar[dict[str, SteadyOutcome]]  # value = {'NotRun': <SteadyOutcome.NotRun: 0>, 'Converged': <SteadyOutcome.Converged: 1>, 'OutOfSteps': <SteadyOutcome.OutOfSteps: 2>, 'SolverFailed': <SteadyOutcome.SolverFailed: 3>}
-    def __eq__(self, other: typing.Any) -> bool:
+    @classmethod
+    def __new__(cls, value):
         ...
-    def __getstate__(self) -> int:
-        ...
-    def __hash__(self) -> int:
-        ...
-    def __index__(self) -> int:
-        ...
-    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
-        ...
-    def __int__(self) -> int:
-        ...
-    def __ne__(self, other: typing.Any) -> bool:
-        ...
-    def __repr__(self) -> str:
-        ...
-    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
-        ...
-    def __str__(self) -> str:
-        ...
-    @property
-    def name(self) -> str:
-        ...
-    @property
-    def value(self) -> int:
-        ...
+    def __format__(self, format_spec):
+        """
+        Convert to a string according to format_spec.
+        """
 class SystemSpec:
     def __init__(self, variables: collections.abc.Sequence[Field], scalars: collections.abc.Sequence[Scalar] = [], aux: collections.abc.Sequence[Aux] = [], regrid: Regrid = ...) -> None:
         ...

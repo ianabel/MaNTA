@@ -1,5 +1,6 @@
 #include <dlfcn.h> // physics plugins loaded by load_physics_plugin
 #include <pybind11/functional.h>
+#include <pybind11/native_enum.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -659,9 +660,23 @@ PYBIND11_MODULE(_manta, m) {
       "`pkg-config --cflags manta` reports, and do not link it against "
       "-lmanta; see the out-of-tree section of the docs.");
 
-  py::enum_<SystemSolver::SteadyOutcome>(
-      m, "SteadyOutcome",
-      "Why a steady solve, or one slice of one, stopped.")
+  // A real enum.IntEnum, not a py::enum_, so that its members are ints. Under
+  // jit, FFIRunner's slice ops return the outcome as a traced int32 -- a value
+  // the compiled program will produce, which no Python enum object can stand
+  // for -- and a driver tests it with jnp.equal(outcome,
+  // SteadyOutcome.Converged). That needs the member to be a number JAX can read,
+  // which a py::enum_ member is not; eagerly it is the same member as ever.
+  py::native_enum<SystemSolver::SteadyOutcome>(
+      m, "SteadyOutcome", "enum.IntEnum",
+      "Why a steady solve, or one slice of one, stopped.\n\n"
+      "NotRun: no steady solve has been taken on this solver.\n"
+      "Converged: ||F|| fell below SteadyStateTolerance.\n"
+      "OutOfSteps: a budget was spent, MaxContinuationSteps or MaxRejectedSteps. "
+      "Not a failure: the state reached is the last accepted one, and "
+      "continue_steady() resumes from it and the pseudo-time step.\n"
+      "SolverFailed: KINSol failed in a way pseudo-transient damping cannot answer.\n\n"
+      "An IntEnum, so a traced outcome compares with the members under jit: "
+      "jnp.equal(outcome, SteadyOutcome.Converged).")
       .value("NotRun", SystemSolver::SteadyOutcome::NotRun,
              "No steady solve has been taken on this solver.")
       .value("Converged", SystemSolver::SteadyOutcome::Converged,
@@ -671,7 +686,8 @@ PYBIND11_MODULE(_manta, m) {
              "failure: the state reached is the last accepted one, and "
              "continue_steady() resumes from it and the pseudo-time step.")
       .value("SolverFailed", SystemSolver::SteadyOutcome::SolverFailed,
-             "KINSol failed in a way pseudo-transient damping cannot answer.");
+             "KINSol failed in a way pseudo-transient damping cannot answer.")
+      .finalize();
 
   py::class_<PyRunner, py::smart_holder>(m, "Runner")
       .def(py::init<std::shared_ptr<TransportSystem>>())

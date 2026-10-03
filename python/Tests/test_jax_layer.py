@@ -63,10 +63,16 @@ def test_ffi_runner_is_not_imported_eagerly():
     """FFIRunner registers XLA FFI targets at module scope and raises without
     them, and those bindings exist only in an XLA_FFI build (Python.cpp:361).
     An eager import would break `from manta.jax import State` on a default
-    build, so the name is served by a module-level __getattr__ instead."""
+    build, so the name is served by a module-level __getattr__ instead.
+
+    Checked in a fresh interpreter: sys.modules is process-wide, so in this one
+    any earlier test that used FFIRunner -- possible on an XLA_FFI build --
+    would have imported it already."""
+    import subprocess
     import sys
 
-    assert "manta.jax.ffi_runner" not in sys.modules
+    probe = "import sys, manta.jax; assert 'manta.jax.ffi_runner' not in sys.modules"
+    subprocess.run([sys.executable, "-c", probe], check=True)
     with pytest.raises(AttributeError):
         manta.jax.NoSuchName
 
