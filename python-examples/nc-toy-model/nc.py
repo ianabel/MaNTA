@@ -24,6 +24,11 @@ class ncconfig(eqx.Module):
 
 
 class nc_test(VectorizedTransportSystem):
+    # MeshAdaptation moves this one instance from the uniform sample to the
+    # graded mesh and through the degree loop, each a new evaluation plan. It
+    # keeps nothing that depends on the mesh, so it can follow them in place.
+    regrid = manta.Regrid.InPlace
+
     def __init__(self, u_exponent, solver_config):
         # Zero flux at the axis, sigma(0) = 0, rather than u'(0) = 0. The flux
         # 2 x D u^n u' vanishes at x = 0 through its factor of x, and the steady
