@@ -137,6 +137,10 @@ const std::vector<Entry> &table()
          "Run to a steady state using the default tolerance. SteadyStateTolerance "
          "does the same and names the tolerance; either arms it, and giving both "
          "uses the tolerance."},
+        {"MaxRejectedSteps", {}, Type::UInt, Category::Solver, false, false, 100u,
+         "Rejected continuation steps a steady solve may take before it stops. It returns "
+         "the last accepted state, with outcome OutOfSteps -- a spent budget, not a "
+         "failure -- and the run carries on with it."},
         {"DegreeLadder", {}, Type::UIntList, Category::Solver, false, false, std::vector<unsigned>{},
          "Intermediate polynomial degrees to solve at before Polynomial_degree, each rung "
          "warm-starting the next. A route to the configured resolution, not a change of it."},
@@ -169,6 +173,18 @@ const std::vector<Entry> &table()
          "DegreeTolerance. Needs PolynomialDegree >= 3, because at 2 the decision is "
          "reversed rather than merely noisy. Steady solves only; implies "
          "DegreeAdaptation and so Superconvergent. See docs/adaptivity.rst."},
+        {"RebuildPhysicsOnRegrid", {}, Type::Bool, Category::Solver, false, false, false,
+         "Let an adaptation driver (MeshAdaptation, DegreeAdaptation, a ladder) destroy "
+         "the physics case and build a new instance from the registry for each new mesh "
+         "or degree, when the case does not declare that it follows a new evaluation "
+         "plan in place. For cases written before evaluation plans; needs a registered "
+         "case, so a Python case object handed to Runner is refused."},
+        {"PhysicsParallelism", {}, Type::UInt, Category::Solver, false, false, 1u,
+         "How many points the physics can evaluate at once: a batch of M points takes "
+         "ceil(M / PhysicsParallelism) rounds. The adaptation controllers fill each "
+         "level they choose to the largest that costs no more rounds, and a level that "
+         "leaves rounds part empty is warned about. 1 changes nothing. See "
+         "docs/adaptivity.rst."},
         {"MeshAdaptationThreshold", {}, Type::Double, Category::Solver, false, false, 2.0,
          "How much rougher than the interior an end must look before MeshAdaptation "
          "grades it, as a ratio of decay rates. Must exceed 1. Measured on three "

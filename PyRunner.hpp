@@ -14,6 +14,7 @@
 #include "SystemSolver.hpp"
 
 #include "PhysicsCases.hpp"
+#include "PhysicsInstance.hpp"
 
 namespace py = pybind11;
 
@@ -202,6 +203,13 @@ private:
   void adaptDegree(double tFinal);
   void runLadderTo(double tFinal);
   bool hasLadder() const;
+
+  // How an adaptation driver may rebuild the case: empty unless
+  // RebuildPhysicsOnRegrid is set and the case was named.
+  PhysicsInstance::Rebuild rebuildFunction() const;
+
+  // The physics table a named case was built from, kept for rebuilding it.
+  toml::value physicsTable;
 
   // Build the case `caseName` names, from the config dict, against `grid`.
   // Only called when caseName is non-empty, and only from configure(), which

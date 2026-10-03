@@ -2,6 +2,8 @@
 
 #include "AdjointProblem.hpp"
 #include "Logging.hpp"
+#include "ParallelFill.hpp"
+#include "PhysicsInstance.hpp"
 #include "Postprocessing.hpp"
 #include "SystemSolver.hpp"
 #include "TransportSystem.hpp"
@@ -9,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <print>
 #include <stdexcept>
 #include <vector>
@@ -148,13 +151,14 @@ SolverConfig carriedStepConfig(SolverConfig const &config, SystemSolver const &p
 }
 
 std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
-                                                TransportSystem &problem,
-                                                AdjointProblem *adjoint,
+                                                PhysicsInstance &physics,
                                                 Grid const &grid,
                                                 unsigned int k0,
                                                 double tFinal,
                                                 std::unique_ptr<SystemSolver> solvedFirstLevel)
 {
+    AdjointProblem const *adjoint = physics.adjoint();
+
     // Only Python can arm spatial adjoint parameters, so this cannot be caught
     // in loadSolverConfig with the rest. The objection is the one that already
     // makes Superconvergent throw at SystemSolver.cpp: those parameters are
@@ -167,7 +171,7 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
             "the parameter vector is indexed by node, so changing the "
             "polynomial degree changes how many parameters there are.");
 
-    const Index nVars = problem.getNumVars();
+    const Index nVars = physics.problem().getNumVars();
     const unsigned int kMax = config.MaxPolynomialDegree;
     const double eps = config.DegreeTolerance;
 
@@ -175,6 +179,12 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
         throw std::invalid_argument(
             "PolynomialDegree already exceeds MaxPolynomialDegree, so degree "
             "adaptation has nothing it is allowed to do.");
+
+    // Before the first solve, not when the first level wants raising: a level
+    // after the first is a new plan, and a case that can follow none should be
+    // refused while the refusal is still cheap.
+    if (kMax > k0)
+        physics.requireAdaptable("DegreeAdaptation");
 
     std::println("Degree adaptation: starting at k = {}, ceiling {}, relative "
                  "tolerance {:g}, base {:g}",
@@ -213,8 +223,10 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
         }
         else
         {
-            system = std::make_unique<SystemSolver>(grid, k, &problem);
-            applySolverConfig(levelConfig, *system);
+            // A new degree is a new plan: physics may hand back a solver around a
+            // rebuilt case, which takes over the restart state set below.
+            system = physics.solverFor(grid, k, [&](SystemSolver &s)
+                                       { applySolverConfig(levelConfig, s); });
 
             // Checked here, against the solver, because this is the point of truth
             // and a proxy for it is what let a transient through: loadSolverConfig
@@ -235,11 +247,6 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
                     "time-marches: SteadyStateTolerance is absent, so steady-state "
                     "termination is never armed and SteadyStateSolver is not "
                     "consulted. Set SteadyStateTolerance, or call run_ss().");
-
-            // A fresh solver has no adjoint problem. Forgetting this is silent: the
-            // run completes and the gradients are simply never computed.
-            if (adjoint != nullptr)
-                system->setAdjointProblem(adjoint);
 
             try
             {
@@ -263,10 +270,8 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
                 std::println("  k = {} failed from the carried step; retrying from the "
                              "configured one", k);
                 system.reset();
-                system = std::make_unique<SystemSolver>(grid, k, &problem);
-                applySolverConfig(config, *system);
-                if (adjoint != nullptr)
-                    system->setAdjointProblem(adjoint);
+                system = physics.solverFor(grid, k, [&](SystemSolver &s)
+                                           { applySolverConfig(config, s); });
                 system->runSolver(tFinal);
             }
         }
@@ -332,20 +337,31 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
         // it in bounded steps costs solves but each one reports where it got to,
         // which is what makes a run diagnosable.
         const unsigned int capped = std::min(bump, config.MaxDegreeIncrement);
-        const unsigned int next = std::min(k + capped, kMax);
+        const unsigned int chosen = std::min(k + capped, kMax);
 
         if (capped < bump)
             std::println("  raising k from {} to {} (the rule asked for +{}, capped at +{})",
-                         k, next, bump, config.MaxDegreeIncrement);
+                         k, chosen, bump, config.MaxDegreeIncrement);
         else
-            std::println("  raising k from {} to {}", k, next);
+            std::println("  raising k from {} to {}", k, chosen);
+
+        // Then as far beyond that as costs no more rounds of physics, up to the
+        // ceiling but not bound by MaxDegreeIncrement: the cap bounds how far one
+        // estimate may send the loop, and degrees that cost nothing extra to
+        // evaluate are not a bet on the estimate.
+        const unsigned int next = filledDegree(
+            [&](Grid const &g, unsigned int kk) { return system->evaluationPlanFor(g, kk); },
+            grid, chosen, kMax, config.PhysicsParallelism);
+        if (next > chosen)
+            std::println("  filled to k = {}: no more rounds of {} than k = {}", next,
+                         config.PhysicsParallelism, chosen);
 
         // Hand the state on. setRestartValues copies both the vector and the
         // Grid, so nothing here points into the solver about to be destroyed --
         // and the destruction has to come before the next construction, or the
         // two solvers thrash Integrator's cache between them.
-        problem.setRestartValues(system->stateVector(), system->derivativeVector(),
-                                 grid, k);
+        physics.problem().setRestartValues(system->stateVector(), system->derivativeVector(),
+                                           grid, k);
         levelConfig = carriedStepConfig(config, *system);
 
         system.reset();
@@ -357,7 +373,7 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
     // level instead of building an initial condition -- which is the defect
     // test_reconfiguring_without_restart_clears_the_restart_state exists for,
     // one level up.
-    problem.clearRestart();
+    physics.problem().clearRestart();
 
     // Printed unconditionally when the diagnostics are on, even at one level,
     // where it duplicates that level's own block. The duplication is the lesser
@@ -382,13 +398,12 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
 }
 
 std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
-                                                TransportSystem &problem,
-                                                AdjointProblem *adjoint,
+                                                PhysicsInstance &physics,
                                                 Grid const &grid,
                                                 unsigned int k0,
                                                 double tFinal)
 {
-    return runAdaptiveDegree(config, problem, adjoint, grid, k0, tFinal, nullptr);
+    return runAdaptiveDegree(config, physics, grid, k0, tFinal, nullptr);
 }
 
 // --- runLadder --------------------------------------------------------------
@@ -408,8 +423,7 @@ Grid ladderGrid(SolverConfig const &config, unsigned int nCells)
 } // namespace
 
 std::unique_ptr<SystemSolver> runLadder(SolverConfig const &config,
-                                        TransportSystem &problem,
-                                        AdjointProblem *adjoint,
+                                        PhysicsInstance &physics,
                                         Grid const &grid,
                                         unsigned int kFinal,
                                         double tFinal)
@@ -425,19 +439,73 @@ std::unique_ptr<SystemSolver> runLadder(SolverConfig const &config,
     std::unique_ptr<SystemSolver> system;
     std::vector<double> Y, dYdt;
 
+    // Every rung but the last is a different plan from the last, so a case that
+    // can follow no change is refused before the first rung rather than after it.
+    if (intermediate > 0)
+        physics.requireAdaptable("A DegreeLadder or GridLadder");
+
+    // The rungs, filled: each to the largest degree, then the largest cell
+    // count, that costs no more rounds of physics -- along whichever of the two
+    // the ladder steps, and never past the configured resolution. A rung filled
+    // up to the one after it is dropped, since solving a level twice buys
+    // nothing. One configured solver plans them all: a plan depends on the
+    // configuration and the level asked about, not on the level the solver was
+    // built for, and this one evaluates nothing.
+    struct Rung
+    {
+        unsigned int k;
+        unsigned int nCells;
+    };
+    const auto finalCells = static_cast<unsigned int>(grid.getNCells());
+    std::vector<Rung> rungs;
+    for (size_t rung = 0; rung < intermediate; ++rung)
+        rungs.push_back({config.DegreeLadder.empty() ? kFinal : config.DegreeLadder[rung],
+                         config.GridLadder.empty() ? finalCells : config.GridLadder[rung]});
+    if (config.PhysicsParallelism > 1 && intermediate > 0)
+    {
+        const auto planner = physics.plannerFor(grid, kFinal, [&](SystemSolver &s)
+                                                { applySolverConfig(config, s); });
+        const LevelPlan planAt = [&](Grid const &g, unsigned int kk)
+        { return planner->evaluationPlanFor(g, kk); };
+
+        std::vector<Rung> filled;
+        for (Rung const &r : rungs)
+        {
+            Rung f = r;
+            const Grid rungGrid(grid.lowerBoundary(), grid.upperBoundary(), r.nCells);
+            if (!config.DegreeLadder.empty())
+                f.k = filledDegree(planAt, rungGrid, r.k, kFinal, config.PhysicsParallelism);
+            if (!config.GridLadder.empty())
+                f.nCells = static_cast<unsigned int>(filledCellCount(
+                    planAt, rungGrid, f.k, finalCells, config.PhysicsParallelism));
+            if (f.k != r.k || f.nCells != r.nCells)
+                std::println("  rung {} filled from {} cells at k = {} to {} cells at k = {}: "
+                             "no more rounds of {}",
+                             &r - rungs.data(), r.nCells, r.k, f.nCells, f.k,
+                             config.PhysicsParallelism);
+            filled.push_back(f);
+        }
+        rungs.clear();
+        for (size_t i = 0; i < filled.size(); ++i)
+        {
+            const Rung after = i + 1 < filled.size() ? filled[i + 1] : Rung{kFinal, finalCells};
+            if (filled[i].k == after.k && filled[i].nCells == after.nCells)
+                std::println("  rung {} dropped: filled, it is the level after it", i);
+            else
+                rungs.push_back(filled[i]);
+        }
+    }
+    const size_t steps = rungs.size();
+
     // The first rung inherits whatever restart state the caller already put on
     // the problem -- a ladder started from a restart file is a reasonable thing
     // to ask for, and clearing here would silently throw it away. Every rung
     // after the first hands on the one before it.
-    for (size_t rung = 0; rung <= intermediate; ++rung)
+    for (size_t rung = 0; rung <= steps; ++rung)
     {
-        const bool last = rung == intermediate;
-        const unsigned int k =
-            last || config.DegreeLadder.empty() ? kFinal : config.DegreeLadder[rung];
-        const unsigned int nCells =
-            last || config.GridLadder.empty()
-                ? static_cast<unsigned int>(grid.getNCells())
-                : config.GridLadder[rung];
+        const bool last = rung == steps;
+        const unsigned int k = last ? kFinal : rungs[rung].k;
+        const unsigned int nCells = last ? finalCells : rungs[rung].nCells;
 
         // The last rung solves on the *caller's* grid, which is what lets the
         // returned solver outlive this function: it holds a reference to its
@@ -447,13 +515,10 @@ std::unique_ptr<SystemSolver> runLadder(SolverConfig const &config,
 
         std::println("  rung {}: {} cells at k = {}", rung, nCells, k);
 
-        system = std::make_unique<SystemSolver>(last ? grid : rungGrid, k, &problem);
-        applySolverConfig(config, *system);
-
-        // A fresh solver has no adjoint problem, and forgetting this is silent:
-        // the run completes and the gradients are never computed.
-        if (adjoint != nullptr)
-            system->setAdjointProblem(adjoint);
+        // Possibly around a rebuilt case, which takes over the restart state the
+        // rung before set; see PhysicsInstance::solverFor.
+        system = physics.solverFor(last ? grid : rungGrid, k, [&](SystemSolver &s)
+                                   { applySolverConfig(config, s); });
 
         system->runSolver(tFinal);
 
@@ -476,19 +541,19 @@ std::unique_ptr<SystemSolver> runLadder(SolverConfig const &config,
         // construction or the two solvers thrash Integrator's cache.
         Y = system->stateVector();
         dYdt = system->derivativeVector();
-        problem.setRestartValues(Y, dYdt, rungGrid, k);
+        physics.problem().setRestartValues(Y, dYdt, rungGrid, k);
         system.reset();
     }
 
     // Sticky, and set by the loop above. Left armed, the next run on this same
     // configuration would resume from the second-to-last rung instead of
     // building an initial condition.
-    problem.clearRestart();
+    physics.problem().clearRestart();
 
     if (config.SteadyStateDiagnostics)
     {
         std::println("Ladder totals -- {} rung{}, one steady solve each",
-                     intermediate + 1, intermediate == 0 ? "" : "s");
+                     steps + 1, steps == 0 ? "" : "s");
         std::println("  continuation steps      : {}  ({} rejected)",
                      runTotal.steps, runTotal.rejected);
         std::println("  KINSOL Newton iterations: {}", runTotal.newtonIters);

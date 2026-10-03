@@ -9,6 +9,11 @@ Everything here was measured on the benchmarks under ``python-examples/``;
 ``MESH-REFINEMENT.md`` in the repository root carries the numbers, the retractions
 and the failures. Where a claim below has a margin, it is stated.
 
+Every new mesh and every new degree is a new evaluation plan for the physics case,
+so a case adapted this way either declares that it follows one in place or runs
+with ``RebuildPhysicsOnRegrid = true``; otherwise the run is refused before it
+starts. See :ref:`evaluation-plans`.
+
 .. _adaptivity-quantities:
 
 The three quantities
@@ -528,3 +533,73 @@ Restrictions, all refused rather than warned about:
    smooth region's degrees were measured to buy nothing at all.
    ``MESH-REFINEMENT.md`` has that analysis, which stays useful if the question
    returns for another reason.
+
+.. _adaptivity-parallelism:
+
+Machines that evaluate N points at once
+---------------------------------------
+
+``PhysicsParallelism = N`` describes a machine on which a batch of :math:`M`
+physics points takes :math:`\lceil M/N \rceil` rounds whatever :math:`M` is: a
+flux model spread over :math:`N` GPUs or MPI ranks, say. A level whose batches
+leave the last round part empty is paying for evaluations it does not make, so
+every controller **fills** the level it chooses: having chosen it as it always
+has, it takes the largest level beyond it that costs no more rounds. The extra
+accuracy is free in physics time, and it often saves a later level.
+
+What a level costs is read from its evaluation plan (:ref:`evaluation-plans`) —
+the plan a solver at that level would make, not a formula for it. Each batched
+site the run repeats counts as calls × :math:`\lceil \text{batch}/N \rceil`,
+separately for what happens per residual, per Jacobian build and per continuation
+step, and a level fills another only if it costs no more in each. Pointwise hooks
+are not counted, because MaNTA calls them one point at a time; nor is anything
+that happens once per run.
+
+``DegreeAdaptation``
+   After capping the rule's step at ``MaxDegreeIncrement``, raises :math:`k` to the
+   largest degree that costs no more rounds, up to ``MaxPolynomialDegree``. The cap
+   bounds how far one estimate may send the loop; degrees that cost nothing extra
+   to evaluate are not a bet on the estimate, so they are not held to it.
+
+``MeshAdaptation``
+   Grades as many cells as cost no more rounds than the sample's. The extra cells
+   go into the layer at the ratio that keeps the wall cell the sample's count would
+   have had, for as long as that ratio stays at or below 1/2, and the rest into the
+   bulk. At a fixed ratio each added layer cell would shrink the wall cell by the
+   ratio again, which below the layer's own width loses accuracy; past 1/2 the
+   layer's next cell would be narrower than the wall cell. ``GradingCells`` holds
+   the layer where it is, and then every extra cell goes to the bulk.
+
+``DegreeLadder`` / ``GridLadder``
+   Each intermediate rung is filled — in degree, then in cells, along whichever of
+   the two the ladder steps — but never past the configured resolution, and a rung
+   filled up to the level after it is dropped.
+
+The configured level itself is the one no controller chooses, so it is only warned
+about: if a larger ``PolynomialDegree`` (up to ``MaxPolynomialDegree``) or
+``GridSize`` would cost no more rounds, the run says so before it starts.
+
+Measured on the :math:`n = 2.5` wall layer of ``MESH-REFINEMENT.md`` §12 —
+5 cells at :math:`k = 4`, ``DegreeTolerance = 1e-6``:
+
+.. list-table::
+   :header-rows: 1
+
+   * - ``PhysicsParallelism``
+     - graded mesh
+     - degrees solved
+     - relative :math:`L^\infty`
+   * - 1
+     - 5 cells, 4 in the layer at 0.3
+     - 4, 6, 7, 8, 9
+     - 1.8e-5
+   * - 64
+     - 10 cells, 6 in the layer at 0.486
+     - 4, 10
+     - 9.3e-6
+
+Both have the same wall cell, 5.4e-3 of the domain. Note what is *not* free:
+filling raises the per-cell linear algebra, which grows like :math:`k^3`, and the
+number of cells the trace solve spans. It is the right trade when the physics is
+what a run waits for, which is the only situation in which the key is worth
+setting.

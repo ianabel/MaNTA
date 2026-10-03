@@ -139,6 +139,7 @@ class SystemSolver
         };
         long getMaxContinuationSteps() const { return maxContinuationSteps; };
         void setPseudoTransientMaxStep(double dt) { ptcMaxStep = dt; };
+        void setMaxRejectedSteps(unsigned int steps) { maxRejectedSteps = steps; };
 
         // The SER schedule on an accepted step:
         //
@@ -328,10 +329,12 @@ class SystemSolver
         // of its own fixed point, not how far that fixed point is from the
         // continuum, so it compares two runs at one discretisation and nothing
         // else. That is the sweep's question.
-        // Why a steady solve stopped. The loop has three ways out and two of
-        // them throw, so without this a caller that catches has no way to tell a
-        // solve that ran out of continuation steps -- a partial answer, and often
-        // a usable one -- from one KINSol abandoned outright.
+        // Why a steady solve stopped. The loop has four ways out: converged; out
+        // of rejected steps (MaxRejectedSteps), which returns OutOfSteps; out of
+        // continuation steps, which records OutOfSteps and throws; and KINSol
+        // abandoned outright, SolverFailed, which throws. So a caller that
+        // catches can still tell a solve that ran out of budget -- a partial
+        // answer, and often a usable one -- from one that failed.
         enum class SteadyOutcome
         {
             NotRun,
@@ -620,6 +623,22 @@ class SystemSolver
         void destroySundials();
         void runSolver(double tFinal);
 
+        // Where, through which entry point and how often this solver will
+        // evaluate its physics case on its next run: see EvaluationPlan.hpp.
+        // initialize() builds one and offers it to the case before the run's
+        // first physics call; PhysicsInstance builds one ahead of that, to decide
+        // whether the case may be evaluated by it at all. A function of the
+        // discretisation and the configuration and never of the run, so call it
+        // after applySolverConfig, setAdjointProblem and setFieldModel -- every
+        // one of which can add or move a site.
+        EvaluationPlan evaluationPlan() const { return evaluationPlanFor(grid, k); }
+
+        // The plan this solver's configuration would make on another mesh or at
+        // another degree: what the adaptation controllers compare levels by, so
+        // that a candidate level is costed by exactly the sites it would have
+        // rather than by a formula for them.
+        EvaluationPlan evaluationPlanFor(Grid const &grid, unsigned int k) const;
+
         void setAdjointProblem(AdjointProblem *ap) { adjointProblem = ap; };
         void runAdjointSolve();
 
@@ -699,6 +718,10 @@ class SystemSolver
         // changing it means a new solver. That is what runAdaptiveDegree does,
         // and its caller needs this to find out where it landed.
         unsigned int getOrder() const { return k; };
+
+        // The mesh, likewise fixed for the solver's lifetime. A copy of the one
+        // it was constructed with, so it outlives that.
+        Grid const &getGrid() const { return grid; };
 
         // Whether a run will take the steady path rather than the time loop.
         //
@@ -1213,6 +1236,7 @@ class SystemSolver
         // a solve stop early enough to be looked at and then resumed.
         long maxContinuationSteps = 200;
         bool estimateObjectiveOnFinish = true;
+        unsigned int maxRejectedSteps = 100;
         double ptcMaxStep = std::numeric_limits<double>::infinity();
         double ptcStep = 0.0;        // the current dt; infinite in Newton mode
         double ptcSERRate = 1.0;     // exponent on the residual ratio
@@ -1739,6 +1763,11 @@ class SystemSolver
         {
             return tauScaling == TauScaling::Diffusive && tauUpdate == TauUpdate::JacobianBuild;
         }
+        // Whether tau evaluates the physics on the faces (faceStates) at all.
+        // The one predicate the evaluation plan keys the TauFaces sites off, so a
+        // tau that stops evaluating on the faces changes this line and the plan
+        // follows; EvaluationPlanTests.cpp fails if the two ever disagree.
+        bool tauEvaluatesFaces() const { return tauScaling == TauScaling::Diffusive; }
 
         // The state on each of the 2 nCells faces as its cell sees it; see
         // faceTau.

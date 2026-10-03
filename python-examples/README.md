@@ -32,6 +32,7 @@ program.
 | `jax-diffusion/` | `manta.jax.JAXTransportSystem`; derivatives from `jax.grad` | `manta[jax]` |
 | `jax-linear-diffusion/` | The same, with `solveAdjoint = true` | `manta[jax]` |
 | `jax-nonlinear-adjoint/` | `manta.jax.VectorizedTransportSystem`, the batched interface | `manta[jax]` |
+| `nc-parallel/` | A batched JAX case that lays its flux out over N threads from MaNTA's evaluation plan, and what `PhysicsParallelism` buys on such a machine | `manta[jax]` |
 | `adjoints/` | Driving the solver from Python through `manta.Runner`; JVP and spatial adjoints | `manta[jax]`; `jvp.py` also needs an `XLA_FFI` build |
 | `park-convergence/` | Benchmark: spatial accuracy per flux call, against Park's IDO scheme | — |
 | `jardin-critical-gradient/` | Benchmark: the nonlinear solve on a stiff gradient-dependent diffusivity | — |

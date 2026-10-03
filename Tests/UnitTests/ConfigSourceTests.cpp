@@ -13,6 +13,7 @@
 #include "SystemSolver.hpp"
 #include "CapturedOutput.hpp"
 #include "DegreeAdaptation.hpp"
+#include "PhysicsInstance.hpp"
 #include "TestDiffusion.hpp"
 
 // SolverConfig.hpp only forward-declares Grid, so that it stays cheap to include
@@ -717,7 +718,8 @@ BOOST_AUTO_TEST_CASE(a_ladder_reaches_the_same_answer_as_a_direct_solve)
             }
             else
             {
-                sys = runLadder(c, problem, nullptr, grid, 3, *c.t_final);
+                PhysicsInstance physics(problem, grid);
+                sys = runLadder(c, physics, grid, 3, *c.t_final);
             }
         }
         auto Y = sys->stateVector();

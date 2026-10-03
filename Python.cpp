@@ -1,5 +1,6 @@
 #include <dlfcn.h> // physics plugins loaded by load_physics_plugin
 #include <pybind11/functional.h>
+#include <pybind11/native_enum.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -286,19 +287,133 @@ PYBIND11_MODULE(_manta, m) {
       "A SystemSpec using the historical placeholder names (Var0, Scalar0, "
       "AuxVariable0).");
 
+  // Whether a case follows a changed evaluation plan: SystemSpec.hpp. Named
+  // Regrid, the way a case writes it -- `regrid = manta.Regrid.InPlace`.
+  py::enum_<RegridPolicy>(m, "Regrid")
+      .value("Fixed", RegridPolicy::Fixed)
+      .value("InPlace", RegridPolicy::InPlace);
+
   py::class_<SystemSpec>(m, "SystemSpec")
       .def(py::init([](std::vector<FieldSpec> variables,
                        std::vector<ScalarSpec> scalars,
-                       std::vector<AuxSpec> aux) {
+                       std::vector<AuxSpec> aux, RegridPolicy regrid) {
              return SystemSpec{std::move(variables), std::move(scalars),
-                               std::move(aux)};
+                               std::move(aux), regrid};
            }),
            py::arg("variables"), py::arg("scalars") = std::vector<ScalarSpec>{},
-           py::arg("aux") = std::vector<AuxSpec>{})
+           py::arg("aux") = std::vector<AuxSpec>{},
+           py::arg("regrid") = RegridPolicy::Fixed)
       .def_readwrite("variables", &SystemSpec::variables)
       .def_readwrite("scalars", &SystemSpec::scalars)
       .def_readwrite("aux", &SystemSpec::aux)
+      .def_readwrite("regrid", &SystemSpec::regrid,
+                     "InPlace when the case follows a changed evaluation plan -- a "
+                     "new mesh or degree -- through prepareEvaluation. Fixed, the "
+                     "default, lets it be evaluated by its first plan only.")
       .def("validate", &SystemSpec::validate);
+
+  // Before TransportSystem, and in this order, because prepareEvaluation()
+  // names these types: pybind11 renders a signature from the types registered
+  // at the point the method is bound, so binding them later would leave C++
+  // names in the generated stub.
+  py::class_<Grid>(m, "Grid")
+      .def(py::init<>(), py::return_value_policy::reference)
+      .def(py::init<Grid::Position, Grid::Position, Grid::Index>(),
+           py::return_value_policy::reference)
+      // Explicit boundaries, which is how a Python caller reaches a non-uniform
+      // mesh now that the `highGridBoundary` flag on the constructor above is
+      // gone. Configure a Runner with GridPoints for the same thing from a dict.
+      .def(py::init<std::vector<Grid::Position> const &>(),
+           py::return_value_policy::reference)
+      .def("getNCells", &Grid::getNCells)
+      .def("lowerBoundary", &Grid::lowerBoundary)
+      .def("upperBoundary", &Grid::upperBoundary)
+      // The nCells + 1 cell boundaries, for a case rebuilding anything cell by
+      // cell from a plan's grid.
+      .def("cellBoundaries", [](Grid const &g) {
+        std::vector<Position> out;
+        out.reserve(g.getNCells() + 1);
+        for (Grid::Index i = 0; i < g.getNCells(); ++i)
+          out.push_back(g[i].x_l);
+        out.push_back(g.upperBoundary());
+        return py::array_t<double>(static_cast<py::ssize_t>(out.size()), out.data());
+      });
+
+  // The evaluation plan: EvaluationPlan.hpp. Everything is read-only -- a plan
+  // is the solver's statement about itself, and a case that edits its copy
+  // changes nothing -- and every point set crosses as a fresh numpy array.
+  py::enum_<EvaluationKind>(m, "EvaluationKind")
+      .value("Residual", EvaluationKind::Residual)
+      .value("Jacobian", EvaluationKind::Jacobian)
+      .value("InitialCondition", EvaluationKind::InitialCondition)
+      .value("TauFaces", EvaluationKind::TauFaces)
+      .value("ScalarConstraint", EvaluationKind::ScalarConstraint)
+      .value("ScalarJacobian", EvaluationKind::ScalarJacobian)
+      .value("ScalarCoupling", EvaluationKind::ScalarCoupling)
+      .value("FieldCoupling", EvaluationKind::FieldCoupling)
+      .value("Adjoint", EvaluationKind::Adjoint)
+      .value("InitialProjection", EvaluationKind::InitialProjection)
+      .value("MassMatrix", EvaluationKind::MassMatrix);
+
+  py::enum_<EvaluationEntry>(m, "EvaluationEntry")
+      .value("ComputePhysics", EvaluationEntry::ComputePhysics)
+      .value("ComputePhysicsDerivatives", EvaluationEntry::ComputePhysicsDerivatives)
+      .value("ComputeSourceTimeDerivatives",
+             EvaluationEntry::ComputeSourceTimeDerivatives)
+      .value("ScalarG", EvaluationEntry::ScalarG)
+      .value("ScalarGPrime", EvaluationEntry::ScalarGPrime)
+      .value("InitialScalarDerivative", EvaluationEntry::InitialScalarDerivative)
+      .value("Pointwise", EvaluationEntry::Pointwise);
+
+  py::enum_<EvaluationCadence>(m, "EvaluationCadence")
+      .value("PerResidual", EvaluationCadence::PerResidual)
+      .value("PerJacobianBuild", EvaluationCadence::PerJacobianBuild)
+      .value("PerContinuationStep", EvaluationCadence::PerContinuationStep)
+      .value("PerAdjointSolve", EvaluationCadence::PerAdjointSolve)
+      .value("OncePerRun", EvaluationCadence::OncePerRun)
+      .value("OncePerSolver", EvaluationCadence::OncePerSolver);
+
+  auto positions = [](std::vector<Position> const &x) {
+    return py::array_t<double>(static_cast<py::ssize_t>(x.size()), x.data());
+  };
+
+  py::class_<EvaluationSite>(m, "EvaluationSite")
+      .def_readonly("kind", &EvaluationSite::kind)
+      .def_readonly("entry", &EvaluationSite::entry)
+      .def_readonly("cadence", &EvaluationSite::cadence)
+      .def_readonly("calls", &EvaluationSite::calls)
+      .def_readonly("pointsPerCell", &EvaluationSite::pointsPerCell)
+      .def_property_readonly(
+          "points",
+          [positions](EvaluationSite const &s) { return positions(s.points); })
+      .def("batchSize", &EvaluationSite::batchSize)
+      .def("isBatched", &EvaluationSite::isBatched)
+      .def("__repr__", [](EvaluationSite const &s) {
+        return std::string("EvaluationSite(") + toString(s.kind) + ", " +
+               std::to_string(s.batchSize()) + " points, " +
+               std::to_string(s.calls) + " call(s))";
+      });
+
+  py::class_<EvaluationPlan>(m, "EvaluationPlan")
+      .def_readonly("grid", &EvaluationPlan::grid)
+      .def_readonly("k", &EvaluationPlan::k)
+      .def_readonly("superconvergent", &EvaluationPlan::superconvergent)
+      .def_readonly("steady", &EvaluationPlan::steady)
+      .def_readonly("sites", &EvaluationPlan::sites)
+      .def("has", &EvaluationPlan::has, py::arg("kind"))
+      .def("sitesOf", &EvaluationPlan::sitesOf, py::arg("kind"))
+      .def(
+          "points",
+          [positions](EvaluationPlan const &p, EvaluationKind kind) {
+            return positions(p.points(kind));
+          },
+          py::arg("kind"))
+      .def("batchSizes", &EvaluationPlan::batchSizes, py::arg("entry"))
+      .def("announces", &EvaluationPlan::announces, py::arg("entry"),
+           py::arg("points"),
+           "Whether a call through `entry` at `points` is one this plan "
+           "announced. A case may assert it in its own hooks: an unannounced "
+           "call is a solver bug.");
 
   // List all interfaces of the main TransportSystem class which is what has to
   // be derived from in python
@@ -394,6 +509,22 @@ PYBIND11_MODULE(_manta, m) {
       .def("dSources_dScalars", &TransportSystem::dSources_dScalars)
       .def("createAdjointProblem", &TransportSystem::createAdjointProblem)
       .def("isScalarDifferential", &TransportSystem::isScalarDifferential)
+      // Where and how often the solver will evaluate the case, delivered
+      // before the first physics call of a run whose plan is new to this
+      // instance. Optional: the base does nothing, and a case that does not
+      // define it pays one override lookup per new plan.
+      .def("prepareEvaluation", &TransportSystem::prepareEvaluation,
+           py::arg("plan"))
+      .def("regridPolicy", &TransportSystem::regridPolicy)
+      // A copy of the plan prepareEvaluation was last handed, or None before
+      // any run has initialised with this case.
+      .def_property_readonly(
+          "evaluationPlan",
+          [](TransportSystem const &s) -> std::optional<EvaluationPlan> {
+            if (auto const *plan = s.evaluationPlan())
+              return *plan;
+            return std::nullopt;
+          })
       .def_property_readonly("spec", &TransportSystem::spec)
       // Read-only now: these are derived from the spec. Assigning self.nVars
       // in a subclass __init__ is the pattern this replaces, and leaving it
@@ -429,17 +560,6 @@ PYBIND11_MODULE(_manta, m) {
       .def_readwrite("np_boundary", &PyAdjointProblem::np_boundary)
       .def_readwrite("ng", &PyAdjointProblem::ng)
       .def_readwrite("spatialParameters", &PyAdjointProblem::spatialParameters);
-
-  py::class_<Grid>(m, "Grid")
-      .def(py::init<>(), py::return_value_policy::reference)
-      .def(py::init<Grid::Position, Grid::Position, Grid::Index>(),
-           py::return_value_policy::reference)
-      // Explicit boundaries, which is how a Python caller reaches a non-uniform
-      // mesh now that the `highGridBoundary` flag on the constructor above is
-      // gone. Configure a Runner with GridPoints for the same thing from a dict.
-      .def(py::init<std::vector<Grid::Position> const &>(),
-           py::return_value_policy::reference)
-      .def("getNCells", &Grid::getNCells);
 
   py::class_<toml::value>(m, "TomlValue")
       .def(py::init<>())
@@ -540,19 +660,34 @@ PYBIND11_MODULE(_manta, m) {
       "`pkg-config --cflags manta` reports, and do not link it against "
       "-lmanta; see the out-of-tree section of the docs.");
 
-  py::enum_<SystemSolver::SteadyOutcome>(
-      m, "SteadyOutcome",
-      "Why a steady solve, or one slice of one, stopped.")
+  // A real enum.IntEnum, not a py::enum_, so that its members are ints. Under
+  // jit, FFIRunner's slice ops return the outcome as a traced int32 -- a value
+  // the compiled program will produce, which no Python enum object can stand
+  // for -- and a driver tests it with jnp.equal(outcome,
+  // SteadyOutcome.Converged). That needs the member to be a number JAX can read,
+  // which a py::enum_ member is not; eagerly it is the same member as ever.
+  py::native_enum<SystemSolver::SteadyOutcome>(
+      m, "SteadyOutcome", "enum.IntEnum",
+      "Why a steady solve, or one slice of one, stopped.\n\n"
+      "NotRun: no steady solve has been taken on this solver.\n"
+      "Converged: ||F|| fell below SteadyStateTolerance.\n"
+      "OutOfSteps: a budget was spent, MaxContinuationSteps or MaxRejectedSteps. "
+      "Not a failure: the state reached is the last accepted one, and "
+      "continue_steady() resumes from it and the pseudo-time step.\n"
+      "SolverFailed: KINSol failed in a way pseudo-transient damping cannot answer.\n\n"
+      "An IntEnum, so a traced outcome compares with the members under jit: "
+      "jnp.equal(outcome, SteadyOutcome.Converged).")
       .value("NotRun", SystemSolver::SteadyOutcome::NotRun,
              "No steady solve has been taken on this solver.")
       .value("Converged", SystemSolver::SteadyOutcome::Converged,
              "||F|| fell below SteadyStateTolerance.")
       .value("OutOfSteps", SystemSolver::SteadyOutcome::OutOfSteps,
-             "The MaxContinuationSteps budget was spent. Not a failure: the "
-             "state and the pseudo-time step reached are both good, and "
-             "continue_steady() resumes from them.")
+             "A budget was spent: MaxContinuationSteps, or MaxRejectedSteps. Not a "
+             "failure: the state reached is the last accepted one, and "
+             "continue_steady() resumes from it and the pseudo-time step.")
       .value("SolverFailed", SystemSolver::SteadyOutcome::SolverFailed,
-             "KINSol failed in a way pseudo-transient damping cannot answer.");
+             "KINSol failed in a way pseudo-transient damping cannot answer.")
+      .finalize();
 
   py::class_<PyRunner, py::smart_holder>(m, "Runner")
       .def(py::init<std::shared_ptr<TransportSystem>>())

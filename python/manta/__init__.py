@@ -51,10 +51,16 @@ from ._manta import (  # noqa: F401
     BoundaryCondition,
     BoundaryKind,
     Dirichlet,
+    EvaluationCadence,
+    EvaluationEntry,
+    EvaluationKind,
+    EvaluationPlan,
+    EvaluationSite,
     Field,
     Grid,
     Mixed,
     Neumann,
+    Regrid,
     Runner,
     Scalar,
     SteadyOutcome,
@@ -74,10 +80,16 @@ __all__ = [
     "BoundaryCondition",
     "BoundaryKind",
     "Dirichlet",
+    "EvaluationCadence",
+    "EvaluationEntry",
+    "EvaluationKind",
+    "EvaluationPlan",
+    "EvaluationSite",
     "Field",
     "Grid",
     "Mixed",
     "Neumann",
+    "Regrid",
     "Runner",
     "Scalar",
     "SteadyOutcome",
@@ -194,6 +206,17 @@ class TransportSystem(_core.TransportSystem):
 
         super().__init__(manta.numbered_spec(nVars, nAux=1))
         super().__init__(variables=[...], scalars=[...], aux=[...])
+
+    ``prepareEvaluation(plan)``, optional, is told where the solver will
+    evaluate the case -- an :class:`EvaluationPlan` of every point set, batch
+    size and cadence -- before the first physics call of any run whose plan is
+    new to this instance. A *changed* plan, from a new mesh or degree, reaches a
+    case only if it declares ``regrid = manta.Regrid.InPlace``, saying it
+    rebuilds in ``prepareEvaluation`` whatever depended on the old plan (or that
+    nothing did). Without it the case is evaluated by its first plan only, and
+    reusing it elsewhere -- adapting the mesh or degree, or reconfiguring a
+    Runner onto another grid -- is refused. ``regrid`` is honoured on both paths
+    above; an explicit spec need not repeat it.
     """
 
     # Overridden by subclasses. Empty rather than absent so that a case which
@@ -201,22 +224,32 @@ class TransportSystem(_core.TransportSystem):
     variables = ()
     scalars = ()
     aux = ()
+    regrid = Regrid.Fixed
 
     def __init__(self, spec=None, *, variables=None, scalars=None, aux=None):
+        cls = type(self)
         if spec is not None:
             if variables is not None or scalars is not None or aux is not None:
                 raise TypeError(
                     "give TransportSystem.__init__ either a spec or the "
                     "variables/scalars/aux lists, not both"
                 )
+            # A copy rather than an edit, so the caller's spec is left as given.
+            if cls.regrid != Regrid.Fixed and spec.regrid == Regrid.Fixed:
+                spec = SystemSpec(
+                    variables=list(spec.variables),
+                    scalars=list(spec.scalars),
+                    aux=list(spec.aux),
+                    regrid=cls.regrid,
+                )
             super().__init__(spec)
             return
 
-        cls = type(self)
         spec = SystemSpec(
             variables=list(self.variables if variables is None else variables),
             scalars=list(self.scalars if scalars is None else scalars),
             aux=list(self.aux if aux is None else aux),
+            regrid=cls.regrid,
         )
 
         if not spec.variables:

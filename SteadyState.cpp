@@ -485,7 +485,7 @@ void SystemSolver::solveSteadyState(bool resume)
                      "outcome");
 
     int step = 0;
-    int rejected = 0;
+    unsigned int rejected = 0;
     for (; step < maxContinuationSteps; ++step)
     {
         // What this one continuation step costs. MaNTA's counters are monotonic,
@@ -695,6 +695,12 @@ void SystemSolver::solveSteadyState(bool resume)
                 ptcStep *= std::max(growth, ptcSERFloor);
                 if (ptcStep > ptcMaxStep)
                     ptcStep = ptcMaxStep;
+
+                if (writeDatFile)
+                {
+				          print(out0, ptcStep, nOut, true);
+                }
+
             }
             Fprev = Fnow;
         }
@@ -709,6 +715,25 @@ void SystemSolver::solveSteadyState(bool resume)
             tauAtY = false;
             ptcStep = std::isfinite(ptcStep) ? ptcStep * 0.25 : fallback;
             ++rejected;
+            logmsg<LOG_LEVEL::PDEBUG>("Rejected steps: {}, Max rejected steps: {}", rejected, maxRejectedSteps);
+        }
+        // A budget, not a failure: the solve stops and returns OutOfSteps with
+        // the last accepted state in Y, which is often a usable answer -- a
+        // residual stalled just above a tolerance at its round-off floor rejects
+        // step after step without the state being wrong. So it returns rather
+        // than throws, and the run goes on to write that state; a sliced solve
+        // can resume it. This step's record is already closed, so step + 1 of
+        // them were taken.
+        if (rejected > maxRejectedSteps)
+        {
+            finish("stopped: MaxRejectedSteps reached", step + 1, rejected,
+                   SteadyOutcome::OutOfSteps, Fprev);
+            logmsg<LOG_LEVEL::WARNING>(
+                "Steady solve stopped after {} rejected continuation steps "
+                "(MaxRejectedSteps = {}) with ||F|| = {:g} against a tolerance of {:g}; "
+                "the last accepted state is the result.",
+                rejected, maxRejectedSteps, Fprev, steady_state_tol);
+            return;
         }
     }
 

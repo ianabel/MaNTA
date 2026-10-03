@@ -82,6 +82,7 @@ struct SolverConfig
     bool                     SteadyStateDiagnostics;
     bool                     SteadyStateStepDiagnostics;
     bool                     SteadyStateSolve;
+    unsigned int             MaxRejectedSteps;
     // Intermediate rungs to solve at before the configured resolution, each
     // warm-starting the next. Empty means no ladder. Deliberately a route to
     // Polynomial_degree/Grid_size and not a replacement for them, so adding a
@@ -96,6 +97,13 @@ struct SolverConfig
     bool                     MeshAdaptation;
     double                   MeshAdaptationThreshold;
     unsigned int             MeshAdaptationAttempts;
+    // Read by whoever builds the adaptation driver's PhysicsInstance -- runManta
+    // and PyRunner -- not by applySolverConfig: it is about the case, not the
+    // solver.
+    bool                     RebuildPhysicsOnRegrid;
+    // Read by the adaptation controllers, and by runManta and PyRunner for the
+    // starting point's warning; see ParallelFill.hpp.
+    unsigned int             PhysicsParallelism;
     std::string              TransportSystem;
     std::vector<std::string> PhysicsPlugins;
 

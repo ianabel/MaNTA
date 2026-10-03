@@ -327,6 +327,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(SteadyStateDiagnostics, bool);
     READ(SteadyStateStepDiagnostics, bool);
     READ(SteadyStateSolve, bool);
+    READ(MaxRejectedSteps, unsigned);
     READ(DegreeLadder, std::vector<unsigned>);
     READ(GridLadder, std::vector<unsigned>);
     READ(DegreeAdaptation, bool);
@@ -337,6 +338,8 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(MeshAdaptation, bool);
     READ(MeshAdaptationThreshold, double);
     READ(MeshAdaptationAttempts, unsigned);
+    READ(RebuildPhysicsOnRegrid, bool);
+    READ(PhysicsParallelism, unsigned);
     READ(TransportSystem, std::string);
     READ(PhysicsPlugins, std::vector<std::string>);
     READ(FieldModel, std::string);
@@ -474,6 +477,12 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
                 "steady-state termination is never armed and every rung "
                 "time-marches the same interval again.");
     }
+
+    // A machine that evaluates no points at a time has no rounds to count.
+    if (c.PhysicsParallelism < 1)
+        throw std::invalid_argument(
+            "PhysicsParallelism must be at least 1: it is how many points the physics "
+            "evaluates at once, and 1 is a machine with no parallelism.");
 
     // MeshAdaptation *is* the p -> h -> p sequence, and its last stage is the
     // degree loop, so it turns that on rather than requiring the user to ask for
@@ -854,6 +863,8 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         system.setPseudoTransientInitialStep(config.PseudoTransientInitialStep);
     if (config.PseudoTransientMaxStep > 0.0)
         system.setPseudoTransientMaxStep(config.PseudoTransientMaxStep);
+
+    system.setMaxRejectedSteps(config.MaxRejectedSteps);
 
     // Unconditional, unlike the two above: those use 0 as "unset", which works
     // because a zero step is meaningless, but a zero SER *rate* is a legitimate

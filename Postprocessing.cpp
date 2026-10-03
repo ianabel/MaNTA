@@ -11,6 +11,23 @@
  * correspond to matrices from that paper (referred to as paper I below)
  */
 
+std::vector<Position> Postprocessor::starPointsOn(Grid const &grid, unsigned int k)
+{
+    // By value: getBasis returns a copy, and a reference into its nodes would
+    // dangle at the end of this statement.
+    const NodalBasis starBasis = NodalBasis::getBasis(k + 1);
+    Vector const &starNodes = starBasis.getNodes();
+    const Index nCells = grid.getNCells();
+    const Index nStar = k + 2;
+
+    std::vector<Position> points;
+    points.reserve(nCells * nStar);
+    for (Index cell = 0; cell < nCells; ++cell)
+        for (Index m = 0; m < nStar; ++m)
+            points.push_back(grid[cell].fromRef(starNodes(m)));
+    return points;
+}
+
 Postprocessor::Postprocessor(Grid const &Grid_, unsigned int Order, Index n_var,
                              Index Scalars, Index aux)
     : grid(Grid_), k(Order), nVars(n_var), nScalars(Scalars), nAux(aux),
@@ -37,14 +54,11 @@ Postprocessor::Postprocessor(Grid const &Grid_, unsigned int Order, Index n_var,
 
     Vector const &starNodes = starBasis.getNodes();
 
-    starPoints_.reserve(nCells * nStar);
+    starPoints_ = starPointsOn(grid, k);
 
     for (Index cell = 0; cell < nCells; ++cell)
     {
         Interval const &I(grid[cell]);
-
-        for (Index m = 0; m < nStar; ++m)
-            starPoints_.push_back(I.fromRef(starNodes(m)));
 
         // A1 = ( d_x chi_j, d_x chi_i )_K   -- the P_{k+1} stiffness matrix,
         // singular with the constants in its kernel; that is what b1 is for.

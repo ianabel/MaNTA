@@ -365,6 +365,182 @@ void SystemSolver::subtractA1Times(Vector const &dpsi, N_Vector work) const
         w.segment(i * localDOF, localDOF) -= A1_cellwise[i] * dpsi;
 }
 
+// Every site below names the code that makes the evaluation, and has to move
+// with it: EvaluationPlanTests.cpp records what a case is actually handed and
+// requires each call to match a site here, so a new evaluation that is not
+// added to this list fails there rather than surprising a case that compiled
+// for the shapes the plan promised.
+EvaluationPlan SystemSolver::evaluationPlanFor(Grid const &grid, unsigned int kPlan) const
+{
+    using Kind = EvaluationKind;
+    using Entry = EvaluationEntry;
+    using Cadence = EvaluationCadence;
+
+    // `grid` is the parameter, which shadows the member: everything below is
+    // about the level asked for, and nothing about the one this solver was
+    // built for.
+    const Index k = kPlan;
+    const Index nCells = grid.getNCells();
+
+    EvaluationPlan plan;
+    plan.grid = grid;
+    plan.k = k;
+    plan.superconvergent = superconvergent;
+    plan.steady = solvesForSteadyState();
+
+    auto add = [&plan](Kind kind, Entry entry, Cadence cadence, Index calls,
+                       Index perCell, std::vector<Position> const &points)
+    {
+        plan.sites.push_back({kind, entry, cadence, calls, perCell, points});
+    };
+
+    // The physics nodes: the k+2 star nodes under the superconvergent scheme,
+    // the k+1 basis nodes otherwise. residual(), evaluatePhysicsDerivatives()
+    // and the adjoint all choose between them the same way. The scalar and field
+    // rows, and the initial condition, use the basis nodes whatever the flag.
+    std::vector<Position> basisNodes;
+    {
+        // DGSoln::getPoints, for a level this solver's y need not be at. By
+        // value: getBasis returns a copy.
+        const NodalBasis basis = NodalBasis::getBasis(k);
+        Vector const &nodes = basis.getNodes();
+        basisNodes.reserve(nCells * (k + 1));
+        for (Index i = 0; i < nCells; ++i)
+            for (Index j = 0; j < k + 1; ++j)
+                basisNodes.push_back(grid[i].fromRef(nodes(j)));
+    }
+    const std::vector<Position> physicsNodes =
+        superconvergent ? Postprocessor::starPointsOn(grid, k) : basisNodes;
+    const Index physicsPerCell = superconvergent ? k + 2 : k + 1;
+    const Index basisPerCell = k + 1;
+
+    // residual()
+    add(Kind::Residual, Entry::ComputePhysics, Cadence::PerResidual, 1, physicsPerCell,
+        physicsNodes);
+    if (nScalars > 0)
+        add(Kind::ScalarConstraint, Entry::ScalarG, Cadence::PerResidual, nScalars,
+            basisPerCell, basisNodes);
+
+    // updateMatricesForJacSolve(), and checkEffectiveMassMatrix() once at the
+    // start of a run whose sources read du/dt.
+    add(Kind::Jacobian, Entry::ComputePhysicsDerivatives, Cadence::PerJacobianBuild, 1,
+        physicsPerCell, physicsNodes);
+    if (problem->anySourceReadsTimeDerivatives())
+    {
+        add(Kind::Jacobian, Entry::ComputeSourceTimeDerivatives, Cadence::PerJacobianBuild, 1,
+            physicsPerCell, physicsNodes);
+        add(Kind::Jacobian, Entry::ComputePhysicsDerivatives, Cadence::OncePerRun, 1,
+            physicsPerCell, physicsNodes);
+        add(Kind::Jacobian, Entry::ComputeSourceTimeDerivatives, Cadence::OncePerRun, 1,
+            physicsPerCell, physicsNodes);
+    }
+    if (nScalars > 0)
+    {
+        add(Kind::ScalarCoupling, Entry::Pointwise, Cadence::PerJacobianBuild, 1,
+            physicsPerCell, physicsNodes);
+        add(Kind::ScalarJacobian, Entry::ScalarGPrime, Cadence::PerJacobianBuild, 1,
+            basisPerCell, basisNodes);
+    }
+    if (fieldModel)
+        add(Kind::FieldCoupling, Entry::Pointwise, Cadence::PerJacobianBuild, 1,
+            physicsPerCell, physicsNodes);
+
+    // faceStates(): both faces of every cell, one-sided, so each interior face
+    // appears twice -- once as the upper face of the cell below it and once as
+    // the lower face of the cell above.
+    if (tauEvaluatesFaces())
+    {
+        std::vector<Position> faces;
+        faces.reserve(2 * nCells);
+        for (Index i = 0; i < nCells; ++i)
+        {
+            faces.push_back(grid[i].x_l);
+            faces.push_back(grid[i].x_u);
+        }
+
+        if (tauFollowsResidual())
+        {
+            add(Kind::TauFaces, Entry::ComputePhysicsDerivatives, Cadence::PerResidual, 1, 2,
+                faces);
+            // faceKappaOverH once, then once per component of the face state for
+            // faceTauJacobian's forward differences.
+            add(Kind::TauFaces, Entry::ComputePhysicsDerivatives, Cadence::PerJacobianBuild,
+                1 + 3 * nVars + nAux, 2, faces);
+            // setInitialConditions(), for the initial du/dt solve, which a
+            // steady solve skips.
+            if (!plan.steady)
+                add(Kind::TauFaces, Entry::ComputePhysicsDerivatives, Cadence::OncePerRun, 1, 2,
+                    faces);
+        }
+        else
+        {
+            add(Kind::TauFaces, Entry::ComputePhysicsDerivatives, Cadence::PerContinuationStep, 1,
+                2, faces);
+            if (tauRefreshedPerJacobian())
+                add(Kind::TauFaces, Entry::ComputePhysicsDerivatives, Cadence::PerJacobianBuild,
+                    1, 2, faces);
+        }
+    }
+
+    // setInitialConditions(): AssignSigma's ComputePhysics, and the du/dt
+    // solve's unless the run is a steady solve. Listed whether or not a restart
+    // will skip the first -- a plan says nothing about the run, so that a restart
+    // is not a change of plan -- which makes the count an upper bound.
+    add(Kind::InitialCondition, Entry::ComputePhysics, Cadence::OncePerRun,
+        plan.steady ? 1 : 2, basisPerCell, basisNodes);
+
+    // ...and, after the du/dt solve, each differential scalar's initial
+    // derivative.
+    Index differentialScalars = 0;
+    for (Index s = 0; s < nScalars; ++s)
+        if (problem->isScalarDifferential(s))
+            ++differentialScalars;
+    if (!plan.steady && differentialScalars > 0)
+        add(Kind::ScalarConstraint, Entry::InitialScalarDerivative, Cadence::OncePerRun,
+            differentialScalars, basisPerCell, basisNodes);
+
+    // The adjoint operator, one call per objective. Present whenever an adjoint
+    // problem is attached, because a steady solve estimates the objective on its
+    // way out as well as solving for the gradient when solveAdjoint is set.
+    if (adjointProblem != nullptr)
+        add(Kind::Adjoint, Entry::ComputePhysicsDerivatives, Cadence::PerAdjointSolve,
+            adjointProblem->getNg(), physicsPerCell, physicsNodes);
+
+    // The pointwise hooks the L2 projection and the mass matrix integrate, at the
+    // Gauss points of NodalBasis's integrator -- in the order boost's gauss<>
+    // visits them, and computed as it computes them, so these are the positions
+    // the hooks see bit for bit.
+    std::vector<Position> gauss;
+    {
+        auto const &abscissae = NodalBasis::abscissae();
+        gauss.reserve(nCells * 2 * abscissae.size());
+        for (Index i = 0; i < nCells; ++i)
+        {
+            const Position avg = (grid[i].x_l + grid[i].x_u) * 0.5;
+            const Position scale = (grid[i].x_u - grid[i].x_l) * 0.5;
+            for (double a : abscissae)
+            {
+                gauss.push_back(avg + scale * a);
+                gauss.push_back(avg + scale * -a);
+            }
+        }
+    }
+    const Index gaussPerCell = 2 * static_cast<Index>(NodalBasis::abscissae().size());
+
+    // InitialValue, InitialDerivative and InitialAuxValue, on a cold start; each
+    // Gauss point is visited once per basis function it is tested against. A
+    // restart makes none of these calls and is the same plan.
+    add(Kind::InitialProjection, Entry::Pointwise, Cadence::OncePerRun, k + 1, gaussPerCell,
+        gauss);
+
+    // aFn, into XMats: once per pair of basis functions, by the
+    // initialiseMatrices() of a solver's first run and no other.
+    add(Kind::MassMatrix, Entry::Pointwise, Cadence::OncePerSolver, (k + 1) * (k + 1),
+        gaussPerCell, gauss);
+
+    return plan;
+}
+
 void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 {
     logmsg<LOG_LEVEL::INFO>("Setting initial conditions");
@@ -3865,11 +4041,12 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, N_Vector const &
     const size_t sourceStride = superconvergent ? k + 2 : k + 1;
 
     std::vector<DGApproxImpl<NodalBasis>> source_interp;
+    Values zeros = Eigen::VectorXd::Zero(grid.getNCells() * (k + 1));  
     if (printSources)
     {
         for (Index v = 0; v < nVars; ++v)
        {
-          auto& Source_vals = problem->getSourceCache(v);
+          Values Source_vals = problem->getSourceCache(v).value_or(zeros);
           source_interp.emplace_back(grid, sourceBasis, Source_vals.data(), sourceStride);
        }
     }
@@ -3929,11 +4106,12 @@ void SystemSolver::print(std::ostream &out, double t, int nOut, bool printSource
     const size_t sourceStride = superconvergent ? k + 2 : k + 1;
 
     std::vector<DGApproxImpl<NodalBasis>> source_interp;
+    Values zeros = Eigen::VectorXd::Zero(grid.getNCells() * (k + 1));  
     if (printSources)
     {
         for (Index v = 0; v < nVars; ++v)
        {
-          auto& Source_vals = problem->getSourceCache(v);
+          Values Source_vals = problem->getSourceCache(v).value_or(zeros);
           source_interp.emplace_back(grid, sourceBasis, Source_vals.data(), sourceStride);
        }
     }

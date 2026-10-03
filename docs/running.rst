@@ -759,6 +759,13 @@ is reading the initial condition's rate of change; and **nothing in the file
 distinguishes a failed last slice from a converged one** — the exception, the
 logged error and the exit status do.
 
+**Running out of rejected steps is not a failure.** A solve that has had more
+than ``MaxRejectedSteps`` continuation steps rejected stops, logs a warning with
+the residual it reached, and returns ``OutOfSteps`` with its last accepted state —
+which the run then writes and carries on with as its result, adjoint solve
+included. A residual stalled just above the tolerance at its round-off floor is
+the usual cause, and that state is a usable one.
+
 The step budget, and resuming
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -829,8 +836,8 @@ still writes the result; ``abandon()``, and any exception out of the block, ends
 it and writes nothing. ``runner.configure(...)`` while a loop is live abandons it
 the same way.
 
-``OutOfSteps`` is *returned*, not raised — the budget is spent and nothing is
-wrong. A genuine ``SolverFailed`` raises, having written the last state it
+``OutOfSteps`` is *returned*, not raised — a budget, ``MaxContinuationSteps`` or
+``MaxRejectedSteps``, is spent and nothing is wrong. A genuine ``SolverFailed`` raises, having written the last state it
 reached, so a driver tells the two apart without reading a message.
 
 The state between slices is the state reached: each slice refreshes what
@@ -860,10 +867,20 @@ that is what the context manager calls.
 host-side state and touch no device memory, so the inherited ``Runner`` methods
 serve.
 
-CPU only, like ``Run`` and ``Run_ss``. The outcome crosses as a concrete
-``int32``, which forces the sync a Python ``while`` needs — so a slice loop
-belongs in eager code, or inside an ``io_callback``, and cannot be written under
-``jit`` where the outcome would be a tracer.
+CPU only, like ``Run`` and ``Run_ss``. In eager code a slice returns a
+``SteadyOutcome``, which forces the sync a Python ``while`` needs. Under a trace
+— ``jit``, a ``custom_jvp`` — the solve has not run yet, so the outcome is the
+traced ``int32`` it will produce. ``SteadyOutcome`` is an ``enum.IntEnum``, so
+that scalar is tested against its members in the same way:
+
+.. code-block:: python
+
+   outcome = ffi_runner.start_steady()
+   jax.lax.cond(jnp.equal(outcome, manta.SteadyOutcome.Converged),
+                ffi_runner.finish_steady, ffi_runner.abandon_steady)
+
+A *loop* of slices cannot be traced, since how many there are depends on the
+outcomes; it belongs in eager code, or inside an ``io_callback``.
 
 What the solve did
 ~~~~~~~~~~~~~~~~~~
@@ -1245,8 +1262,13 @@ binds, the run says so::
 
    raising k from 2 to 5 (the rule asked for +7, capped at +3)
 
-Four things worth knowing:
+Five things worth knowing:
 
+* **Each level is a new evaluation plan** for the physics case, so the case has to
+  be able to follow one: it declares ``RegridPolicy::InPlace``, or the
+  configuration sets ``RebuildPhysicsOnRegrid = true`` to have a new instance
+  built for each level. Otherwise the run is refused before its first solve.
+  Every case in this tree declares ``InPlace``. See :ref:`evaluation-plans`.
 * **It implies** ``Superconvergent = true``. The whole estimate rests on
   :math:`u^*` being the better of the two approximations, which is only assured
   with the superconvergent scheme on. Setting ``Superconvergent = false``

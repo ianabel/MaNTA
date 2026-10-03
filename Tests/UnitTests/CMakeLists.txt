@@ -42,6 +42,7 @@ set(MANTA_TEST_SOURCES
   DGSolnTests.cpp
   DGTests.cpp
   DegreeAdaptationTests.cpp
+  EvaluationPlanTests.cpp
   FieldAdjointTests.cpp
   FieldDoFLayoutTests.cpp
   FieldJacobianTests.cpp
@@ -52,6 +53,7 @@ set(MANTA_TEST_SOURCES
   IntegratorTest.cpp
   LocalTauTests.cpp
   MeshAdaptationTests.cpp
+  ParallelFillTests.cpp
   MMSAuxScalarTests.cpp
   MMSConvergenceTests.cpp
   MMSFieldTests.cpp

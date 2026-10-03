@@ -2,6 +2,8 @@
 #include "Logging.hpp"
 #include "DegreeAdaptation.hpp"
 #include "MeshAdaptation.hpp"
+#include "ParallelFill.hpp"
+#include "PhysicsInstance.hpp"
 #include "PyConfigSource.hpp"
 #include "PyToml.hpp"
 #include <algorithm>
@@ -55,8 +57,8 @@ void PyRunner::instantiatePhysicsCase(const py::dict &config) {
   pProblem = nullptr;
 
   try {
-    pProblem = PhysicsCases::InstantiateProblem(
-        caseName, physicsConfigFromDict(config), *grid);
+    physicsTable = physicsConfigFromDict(config);
+    pProblem = PhysicsCases::InstantiateProblem(caseName, physicsTable, *grid);
   } catch (std::invalid_argument const &e) {
     // configure() has raised RuntimeError for a bad configuration since it
     // existed, and a case rejecting its own table -- "there should be a
@@ -183,11 +185,51 @@ void PyRunner::configure(const py::dict &config) {
     pProblem->setRestartValues(Y, dYdt, *fileGrid, fileOrder);
   }
 
+  // A case object handed to Runner cannot be rebuilt -- nothing here knows its
+  // constructor's arguments -- so asking for it is a configuration error, and
+  // the remedy is the case's own.
+  if (cfg.RebuildPhysicsOnRegrid && caseName.empty())
+    throw std::runtime_error(
+        "RebuildPhysicsOnRegrid rebuilds a physics case from the registry by name, and "
+        "this Runner was handed a case object, which cannot be rebuilt. Declare "
+        "regrid = manta.Regrid.InPlace on the case and handle each new plan in "
+        "prepareEvaluation instead.");
+
+  // Refused here, at configure(), rather than by the driver, when the run is
+  // one that may evaluate the case on more than one plan. The driver checks
+  // again, for every caller that is not this one.
+  try {
+    PhysicsInstance physics(pProblem, adjoint, *grid, rebuildFunction());
+    if (cfg.MeshAdaptation)
+      physics.requireAdaptable("MeshAdaptation");
+    else if (cfg.DegreeAdaptation && cfg.MaxPolynomialDegree > k)
+      physics.requireAdaptable("DegreeAdaptation");
+    else if (hasLadder())
+      physics.requireAdaptable("A DegreeLadder or GridLadder");
+  } catch (std::invalid_argument const &e) {
+    throw std::runtime_error(e.what());
+  }
+
   system = std::make_unique<SystemSolver>(*grid, k, pProblem.get());
 
   applySolverConfig(cfg, *system);
   if (cfg.solveAdjoint)
     system->setAdjointProblem(adjoint.get());
+
+  // A case *object* outlives configure(), so reconfiguring it onto another mesh
+  // or degree is a new plan for the same instance, which only a case that
+  // follows one in place may be given. A named case is new here and accepts
+  // any plan; an equal plan is no change at all.
+  if (!pProblem->acceptsPlan(system->evaluationPlan()))
+    throw std::runtime_error(TransportSystem::regridRefusal());
+
+  // The configured level is the one place no controller chooses, so it is the
+  // one that is only warned about. See ParallelFill.hpp.
+  if (const std::string w = underuseWarning(
+          [this](Grid const &g, unsigned int kk) { return system->evaluationPlanFor(g, kk); },
+          *grid, k, cfg.MaxPolynomialDegree, cfg.PhysicsParallelism);
+      !w.empty())
+    logmsg<LOG_LEVEL::WARNING>("{}", w);
 
   // run_ss() arms steady-state termination itself, so it needs the value
   // whether or not the key was present. applySolverConfig has already armed it
@@ -211,19 +253,22 @@ void PyRunner::configure(const py::dict &config) {
 // configuration against every level it builds.
 void PyRunner::adaptDegree(double tFinal) {
   system.reset();
+  // It may point into the case a driver is about to rebuild.
+  objectiveOnlyAdjoint = nullptr;
+  PhysicsInstance physics(pProblem, adjoint, *grid, rebuildFunction());
 
   if (cfg.MeshAdaptation) {
     // p -> h -> p. The mesh it settles on has to outlive the solver *and* every
     // later getSolution call, so the Runner takes ownership of it: `grid` is
     // replaced by the adapted one, and the old uniform mesh dies with the
     // assignment -- after `system` was reset above, which is what makes that safe.
-    auto adapted = runAdaptiveMesh(cfg, *pProblem, adjoint.get(), *grid, k, tFinal);
+    auto adapted = runAdaptiveMesh(cfg, physics, *grid, k, tFinal);
     grid = std::move(adapted.grid);
     system = std::move(adapted.solver);
     return;
   }
 
-  system = runAdaptiveDegree(cfg, *pProblem, adjoint.get(), *grid, k, tFinal);
+  system = runAdaptiveDegree(cfg, physics, *grid, k, tFinal);
 }
 
 // And with the one a ladder ends on. Same ownership argument as above: the
@@ -231,7 +276,19 @@ void PyRunner::adaptDegree(double tFinal) {
 // built on `grid` and so the only one that may outlive the call.
 void PyRunner::runLadderTo(double tFinal) {
   system.reset();
-  system = runLadder(cfg, *pProblem, adjoint.get(), *grid, k, tFinal);
+  objectiveOnlyAdjoint = nullptr;
+  PhysicsInstance physics(pProblem, adjoint, *grid, rebuildFunction());
+  system = runLadder(cfg, physics, *grid, k, tFinal);
+}
+
+// The registry, by the name and table configure() built the case from -- and
+// nothing at all for a case object, or when the configuration did not ask.
+PhysicsInstance::Rebuild PyRunner::rebuildFunction() const {
+  if (!cfg.RebuildPhysicsOnRegrid || caseName.empty())
+    return {};
+  return [this](Grid const &g) -> std::shared_ptr<TransportSystem> {
+    return PhysicsCases::InstantiateProblem(caseName, physicsTable, g);
+  };
 }
 
 bool PyRunner::hasLadder() const {

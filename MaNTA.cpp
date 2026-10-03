@@ -10,6 +10,8 @@
 #include "FieldModel.hpp"
 #include "DegreeAdaptation.hpp"
 #include "MeshAdaptation.hpp"
+#include "PhysicsInstance.hpp"
+#include "ParallelFill.hpp"
 
 // Load restart data into vectors. `nField` is filled with how many of the
 // trailing entries of Y are a field model's psi, so the caller can shape the
@@ -137,7 +139,9 @@ int runManta(std::string const &fname)
 	// is registered in the message. Caught here so the standalone binary still
 	// exits 1 with a readable line rather than terminating on an uncaught
 	// exception out of main.
-	std::unique_ptr<TransportSystem> pProblem;
+	// Shared, so that an adaptation driver rebuilding the case can replace it in
+	// place (PhysicsInstance).
+	std::shared_ptr<TransportSystem> pProblem;
 	try
 	{
 		pProblem = PhysicsCases::InstantiateProblem(config.TransportSystem, configFile, *grid);
@@ -227,13 +231,36 @@ int runManta(std::string const &fname)
 			"DegreeAdaptation and MeshAdaptation cannot be combined with a FieldModel: "
 			"the adaptive drivers build a solver per level and cannot carry the field model.");
 
+	// The adaptation drivers solve on several discretisations. Under
+	// RebuildPhysicsOnRegrid a case that cannot follow a new one in place is
+	// rebuilt for each from the registry, by the same name and table it was
+	// first built from; without it there is no way to rebuild, and such a case is
+	// refused.
+	PhysicsInstance::Rebuild rebuild;
+	if (config.RebuildPhysicsOnRegrid)
+		rebuild = [&](Grid const &g) -> std::shared_ptr<TransportSystem>
+		{ return PhysicsCases::InstantiateProblem(config.TransportSystem, configFile, g); };
+	PhysicsInstance physics(pProblem, adjoint, *grid, std::move(rebuild));
+
+	// The configured level is the one place no controller chooses, so it is the
+	// one that is only warned about. See ParallelFill.hpp.
+	if (config.PhysicsParallelism > 1)
+	{
+		const auto planner = physics.plannerFor(*grid, k, [&](SystemSolver &s)
+												{ applySolverConfig(config, s); });
+		if (const std::string w = underuseWarning(
+				[&](Grid const &g, unsigned int kk) { return planner->evaluationPlanFor(g, kk); },
+				*grid, k, config.MaxPolynomialDegree, config.PhysicsParallelism);
+			!w.empty())
+			logmsg<LOG_LEVEL::WARNING>("{}", w);
+	}
+
 	if (config.MeshAdaptation)
 	{
 		// p -> h -> p. Owns the graded mesh it may build, and its solver points
 		// into that, so the whole result is destroyed together and in the right
 		// order (see AdaptiveMeshResult).
-		auto adapted = runAdaptiveMesh(config, *pProblem, adjoint.get(), *grid, k,
-									   *config.t_final);
+		auto adapted = runAdaptiveMesh(config, physics, *grid, k, *config.t_final);
 	}
 	else if (config.DegreeAdaptation)
 	{
@@ -241,14 +268,12 @@ int runManta(std::string const &fname)
 		// applySolverConfig/setAdjointProblem/runSolver sequence below itself --
 		// for each level, which is the point. It returns the last one so the
 		// object survives to be destroyed here in the usual way.
-		auto system = runAdaptiveDegree(config, *pProblem, adjoint.get(), *grid, k,
-										*config.t_final);
+		auto system = runAdaptiveDegree(config, physics, *grid, k, *config.t_final);
 	}
 	else if (!config.DegreeLadder.empty() || !config.GridLadder.empty())
 	{
 		// Same shape, and for the same reason: a solver per rung, built inside.
-		auto system = runLadder(config, *pProblem, adjoint.get(), *grid, k,
-								*config.t_final);
+		auto system = runLadder(config, physics, *grid, k, *config.t_final);
 	}
 	else
 	{

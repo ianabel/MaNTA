@@ -46,6 +46,11 @@ class ParkConvergence(manta.TransportSystem):
     variables = [manta.Field("T", "temperature", "", lower=manta.Neumann,
                              upper=manta.Dirichlet)]
 
+    # InPlace: nothing here depends on where the case is evaluated -- the
+    # counters count calls, whatever the points -- so MeshAdaptation and
+    # DegreeAdaptation may move one instance between meshes and degrees.
+    regrid = manta.Regrid.InPlace
+
     # A registered case is built by the factory as `(config, grid)`; both are
     # defaulted so `benchmark.py` can build one directly for a `manta.Runner`.
     def __init__(self, config=None, grid=None):
