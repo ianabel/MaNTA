@@ -38,6 +38,7 @@
 #include <exception>
 #include <filesystem>
 #include <format>
+#include <limits>
 #include <memory>
 #include <numbers>
 #include <print>
@@ -1725,6 +1726,10 @@ BOOST_AUTO_TEST_CASE(a_failed_steady_solve_still_writes_the_last_state_it_reache
     configure(sys, stem);
     sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     sys.setSteadyStateTolerance(1e-30);
+    // Out of the way: a stalled solve rejects step after step, and the
+    // rejected-step budget would otherwise stop it first -- which returns rather
+    // than throws, and is the next test's subject.
+    sys.setMaxRejectedSteps(std::numeric_limits<unsigned int>::max());
 
     std::string message;
     {
@@ -1778,6 +1783,51 @@ BOOST_AUTO_TEST_CASE(a_failed_steady_solve_still_writes_the_last_state_it_reache
     }
     BOOST_TEST(worst < 1e-6, "last state written is " << worst << " from u = 1 - x");
     BOOST_TEST(spread > 1e-2, "the two timeslices are indistinguishable");
+
+    out.close();
+    removeOutput(stem);
+}
+
+BOOST_AUTO_TEST_CASE(running_out_of_rejected_steps_returns_the_last_accepted_state)
+{
+    // MaxRejectedSteps is a budget, not a failure: the same stalled solve as
+    // above, stopped by it, returns OutOfSteps without throwing, and the run goes
+    // on to write the last accepted state as its result. Its trace is complete:
+    // the step that took the last rejection is recorded and counted.
+    const std::string stem = "lifecycle_steady_rejected";
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, stem);
+    sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    sys.setSteadyStateTolerance(1e-30);
+    sys.setMaxRejectedSteps(5);
+
+    {
+        CapturedOutput quiet;
+        BOOST_CHECK_NO_THROW(sys.runSolver(T_FINAL));
+    }
+
+    BOOST_TEST((sys.lastSteadyOutcome() == SystemSolver::SteadyOutcome::OutOfSteps));
+    BOOST_TEST(sys.lastSteadyStats().rejected == 6);
+    BOOST_TEST(sys.lastSteadyStats().steps < sys.getMaxContinuationSteps());
+    const auto &steps = sys.lastSteadyStepStats();
+    BOOST_TEST(steps.size() == static_cast<size_t>(sys.lastSteadyStats().steps));
+    BOOST_TEST(steps.back().step == sys.lastSteadyStats().steps - 1);
+
+    // Written as the result, near u = 1 - x.
+    netCDF::NcFile out;
+    BOOST_CHECK_NO_THROW(out.open(stem + ".nc", netCDF::NcFile::FileMode::read));
+    const size_t nSlices = out.getDim("t").getSize();
+    const size_t nX = out.getDim("x").getSize();
+    std::vector<double> uOut(nX), x(nX);
+    out.getVar("x").getVar(x.data());
+    out.getGroup(problem.getVariableName(0)).getVar("u").getVar({nSlices - 1, 0}, {1, nX},
+                                                               uOut.data());
+    double worst = 0.0;
+    for (size_t i = 0; i < nX; ++i)
+        worst = std::max(worst, std::abs(uOut[i] - (1.0 - x[i])));
+    BOOST_TEST(worst < 1e-6, "last state written is " << worst << " from u = 1 - x");
 
     out.close();
     removeOutput(stem);

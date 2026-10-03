@@ -329,10 +329,12 @@ class SystemSolver
         // of its own fixed point, not how far that fixed point is from the
         // continuum, so it compares two runs at one discretisation and nothing
         // else. That is the sweep's question.
-        // Why a steady solve stopped. The loop has three ways out and two of
-        // them throw, so without this a caller that catches has no way to tell a
-        // solve that ran out of continuation steps -- a partial answer, and often
-        // a usable one -- from one KINSol abandoned outright.
+        // Why a steady solve stopped. The loop has four ways out: converged; out
+        // of rejected steps (MaxRejectedSteps), which returns OutOfSteps; out of
+        // continuation steps, which records OutOfSteps and throws; and KINSol
+        // abandoned outright, SolverFailed, which throws. So a caller that
+        // catches can still tell a solve that ran out of budget -- a partial
+        // answer, and often a usable one -- from one that failed.
         enum class SteadyOutcome
         {
             NotRun,

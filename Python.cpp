@@ -667,9 +667,9 @@ PYBIND11_MODULE(_manta, m) {
       .value("Converged", SystemSolver::SteadyOutcome::Converged,
              "||F|| fell below SteadyStateTolerance.")
       .value("OutOfSteps", SystemSolver::SteadyOutcome::OutOfSteps,
-             "The MaxContinuationSteps budget was spent. Not a failure: the "
-             "state and the pseudo-time step reached are both good, and "
-             "continue_steady() resumes from them.")
+             "A budget was spent: MaxContinuationSteps, or MaxRejectedSteps. Not a "
+             "failure: the state reached is the last accepted one, and "
+             "continue_steady() resumes from it and the pseudo-time step.")
       .value("SolverFailed", SystemSolver::SteadyOutcome::SolverFailed,
              "KINSol failed in a way pseudo-transient damping cannot answer.");
 

@@ -759,6 +759,13 @@ is reading the initial condition's rate of change; and **nothing in the file
 distinguishes a failed last slice from a converged one** — the exception, the
 logged error and the exit status do.
 
+**Running out of rejected steps is not a failure.** A solve that has had more
+than ``MaxRejectedSteps`` continuation steps rejected stops, logs a warning with
+the residual it reached, and returns ``OutOfSteps`` with its last accepted state —
+which the run then writes and carries on with as its result, adjoint solve
+included. A residual stalled just above the tolerance at its round-off floor is
+the usual cause, and that state is a usable one.
+
 The step budget, and resuming
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -829,8 +836,8 @@ still writes the result; ``abandon()``, and any exception out of the block, ends
 it and writes nothing. ``runner.configure(...)`` while a loop is live abandons it
 the same way.
 
-``OutOfSteps`` is *returned*, not raised — the budget is spent and nothing is
-wrong. A genuine ``SolverFailed`` raises, having written the last state it
+``OutOfSteps`` is *returned*, not raised — a budget, ``MaxContinuationSteps`` or
+``MaxRejectedSteps``, is spent and nothing is wrong. A genuine ``SolverFailed`` raises, having written the last state it
 reached, so a driver tells the two apart without reading a message.
 
 The state between slices is the state reached: each slice refreshes what

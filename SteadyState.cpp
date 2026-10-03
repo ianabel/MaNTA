@@ -717,18 +717,23 @@ void SystemSolver::solveSteadyState(bool resume)
             ++rejected;
             logmsg<LOG_LEVEL::PDEBUG>("Rejected steps: {}, Max rejected steps: {}", rejected, maxRejectedSteps);
         }
-        // Thrown, as the exit below is: a solve that gave up is not a converged
-        // one, and runSolver only writes and reports a failure it is told about.
-        // This step's record is already closed, so step + 1 of them were taken.
+        // A budget, not a failure: the solve stops and returns OutOfSteps with
+        // the last accepted state in Y, which is often a usable answer -- a
+        // residual stalled just above a tolerance at its round-off floor rejects
+        // step after step without the state being wrong. So it returns rather
+        // than throws, and the run goes on to write that state; a sliced solve
+        // can resume it. This step's record is already closed, so step + 1 of
+        // them were taken.
         if (rejected > maxRejectedSteps)
         {
-            finish("FAILED: max rejected steps exceeded", step + 1, rejected,
+            finish("stopped: MaxRejectedSteps reached", step + 1, rejected,
                    SteadyOutcome::OutOfSteps, Fprev);
-            throw std::runtime_error(std::format(
-                "Steady solve did not converge: {} rejected continuation steps, more "
-                "than MaxRejectedSteps = {}, with ||F|| = {:g} against a tolerance of "
-                "{:g} and dt = {:g}.",
-                rejected, maxRejectedSteps, Fprev, steady_state_tol, ptcStep));
+            logmsg<LOG_LEVEL::WARNING>(
+                "Steady solve stopped after {} rejected continuation steps "
+                "(MaxRejectedSteps = {}) with ||F|| = {:g} against a tolerance of {:g}; "
+                "the last accepted state is the result.",
+                rejected, maxRejectedSteps, Fprev, steady_state_tol);
+            return;
         }
     }
 
