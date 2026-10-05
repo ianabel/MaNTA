@@ -24,9 +24,7 @@ try:
     import equinox as _equinox  # noqa: F401
     import jax as _jax  # noqa: F401
 except ImportError as _e:  # pragma: no cover -- depends on the environment
-    raise ImportError(
-        "manta.jax needs the JAX extra: pip install manta[jax]"
-    ) from _e
+    raise ImportError("manta.jax needs the JAX extra: pip install manta[jax]") from _e
 
 from .state import (  # noqa: F401
     InitialScalarDerivative_Decorator,
@@ -41,6 +39,7 @@ from .integrator import Integrator  # noqa: F401
 from .adjoint_problem import JAXAdjointProblem  # noqa: F401
 from .transport_system import JAXTransportSystem  # noqa: F401
 from .vectorized import VectorizedTransportSystem  # noqa: F401
+from .batching import vmap_batched
 
 __all__ = [
     "FFIRunner",
@@ -56,6 +55,7 @@ __all__ = [
     "ShiftedState_Decorator",
     "State",
     "VectorizedTransportSystem",
+    "vmap_batched",
     "register_ffi_cpu",
     "register_ffi_gpu",
 ]

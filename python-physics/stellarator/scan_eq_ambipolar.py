@@ -94,6 +94,7 @@ solver_config = {
     "zeroFlux": True,
     "solveAdjoint": False,
     "SteadyStateSolver": "PseudoTransient",
+    "NewtonJacobianReuse": 4,
     "SteadyStateDiagnostics": True,
     "SteadyStateStepDiagnostics": True,
     "PseudoTransientSERRate": 1.0,
@@ -123,19 +124,19 @@ yancc_res = {"na": 45, "nx": 7}
 # initial pressure is all zeros, can change this if desired
 pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
-eq = desc.examples.get("precise_QH")
-eq = desc.compat.rescale(
-    eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
-)
-# eq = desc.examples.get("W7-X")
-# # # # Reduce the number of modes (not sure if this is a good thing to do)
+eq = desc.examples.get("ARIES-CS")
+# eq = desc.compat.rescale(
+#     eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
+# )
+# # eq = desc.examples.get("W7-X")
+# # # # # Reduce the number of modes (not sure if this is a good thing to do)
+# # # #
+# # eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
 # # #
-# eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
 # #
-#
-# eq = desc.examples.get("reactor_QA")
-eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
-eq.solve(x_scale="ess")[0]
+# # eq = desc.examples.get("reactor_QA")
+# eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
+# eq.solve(x_scale="ess")[0]
 # eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
 # eq = desc.io.load("eq_qa.h5")
 
@@ -146,8 +147,8 @@ yancc_wrapper = yancc_data.from_eq(
     points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
 # with jax.log_compiles(True):
-st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-st.run()
+# st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+# st.run()
 #
 
 
@@ -194,6 +195,7 @@ solver_config = {
     "restart": True,
     "zeroFlux": True,
     "SteadyStateSolver": "Newton",
+    "NewtonJacobianReuse": 4,
     "SteadyStateDiagnostics": True,
     "SteadyStateStepDiagnostics": True,
     "MaxRejectedSteps": 4,
@@ -313,8 +315,8 @@ o1 = ObjectiveFunction(objectives)
 o1.build(use_jit=False)
 obj = ProximalProjection(o1, ObjectiveFunction(constraints), eq)
 obj.build()
-N = 1
-M = 1
+N = 2
+M = 2
 # Get the index of a mode
 idx = eq.surface.R_basis.get_idx(L=0, N=N, M=M)
 v0 = eq.Rb_lmn[idx]
@@ -324,7 +326,7 @@ grads = []
 G = []
 
 # Sweep in the proximity of initial value
-f = 0.2
+f = 0.1
 delta = f * jnp.abs(v0)
 start = v0 - delta
 end = v0 + delta

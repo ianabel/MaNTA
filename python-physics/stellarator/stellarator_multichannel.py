@@ -78,12 +78,12 @@ from yancc_wrapper import yancc_data
 
 # import a simple flux model for testing purposes
 if "TEST_STELLARATOR" in os.environ:
-    from yancc_wrapper import test_flux as compute_dke_sol
-    from yancc_wrapper import test_flux_field_jac as dke_field_jac
+    from dke_sol import test_flux as compute_dke_sol
+    from dke_sol import test_flux_field_jac as dke_field_jac
 
     print("Running stellarator model in test context")
 else:
-    from yancc_wrapper import compute_dke_sol, dke_field_jac
+    from dke_sol import compute_dke_sol, dke_field_jac
 
 
 from manta.jax import State, Physics_Decorator

@@ -1,5 +1,7 @@
 import os
+import sys
 
+sys.path.append("..")
 # uncomment to run test flux
 # os.environ["TEST_STELLARATOR"] = "true"
 from stellarator_multichannel import StellaratorTransport
@@ -39,9 +41,9 @@ import manta as MaNTA
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
-fname = "stellarator_opt_amb"
+fname = "stellarator_opt"
 
-eq_name = "eq_amb5"
+eq_name = "eq"
 #
 # st_config = {
 #     "ParticleSourceCenter": 0.0,
@@ -64,18 +66,18 @@ eq_name = "eq_amb5"
 fac = 1.0
 st_config = {
     "ParticleSourceCenter": 0.0,
-    "ParticleSourceHeight": fac * 1.6e-2,
+    "ParticleSourceHeight": fac * 0.02,
     "ParticleSourceWidth": 0.6,
     "NBICenter": 0.0,
-    "NBIPower": fac * 1.25,
+    "NBIPower": fac * 2.5,
     "NBIWidth": 0.25,
     "ECHCenter": 0.0,
     "ECHPower": fac * 8.76e-2,
     "ECHWidth": 0.26,
     "EdgeTemperature": 0.2,
     "EdgeDensity": 0.2,
-    "n0": 0.5,
-    "T0": 1.0,
+    "n0": 0.2,
+    "T0": 0.2,
     "FusionFactor": 0.01,
     "evolveDensity": True,
     "useBatching": True,
@@ -91,14 +93,18 @@ degree = 3
 # base = 1.5
 # tau = 0.5
 #
-base = 1.5
+base = 1.4
 tau = 0.5
 #
-nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
+# nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
 
-nodes = np.concatenate(
-    ([0, 0.1], nodes, [rho_upper])
-)  # nodes = np.concatenate(([0, 0.1], nodes, [0.98,1]))
+# nodes = np.concatenate(
+#     ([0, 0.1], nodes, [rho_upper])
+# )  # nodes = np.concatenate(([0, 0.1], nodes, [0.98,1]))
+nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 3)
+
+nodes = np.concatenate(([0, 0.1], nodes, [0.99, rho_upper]))
+
 # nodes = np.linspace(0, 1.0, npoints + 1)
 print(nodes)
 # # %%
@@ -173,9 +179,9 @@ desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 # eq = desc.compat.rescale(
 #     eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
 # )
-#
-# # # #
-# # eq.pressure = desc_pressure
+# #
+# # # # #
+# # # eq.pressure = desc_pressure
 # eq = eq.solve(x_scale="ess")[0]
 # eqs = EquilibriaFamily(eq)
 # # # desc_pressure = eq.get_profile('p')
@@ -247,10 +253,10 @@ solver_config = {
     "NewtonJacobianReuse": 4,
     "restart": True,
     "zeroFlux": True,
-    "SteadyStateTolerance": 5e-5,
+    "SteadyStateTolerance": 1e-4,
     "SteadyStateSolver": "Newton",
     "SteadyStateDiagnostics": True,
-    "MaxRejectedSteps": 3,
+    "MaxRejectedSteps": 2,
     "SteadyStateStepDiagnostics": True,
     # "ObjectiveDecreaseTolerance": 0.01,
     "PseudoTransientSERFloor": 2.0,
@@ -261,41 +267,41 @@ config = {
 }
 
 
-eq2 = eq.copy()
-fam2 = EquilibriaFamily(eq2)
-niters = 2
-for k in range(niters):
-    eq2 = eq2.copy()
-
-    fig, ax = plot_1d(eq2, "pressure", label="DESC " + str(k), ax=ax)
-
-    yancc_wrapper = yancc_data.from_eq(
-        points, eq=eq2, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
-    )
-    pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
-    st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-    st.run()
-
-    pi = st.getPressure()
-    pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
-    ax.plot(pressure_rho, pi_manta, label="MANTA" + str(k))
-    eq2.pressure = SplineProfile(pi_manta, pressure_rho)
-    # fit the current profile to a power series, with c_0=c_1=0
-    # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])
-    # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
-    # re-solve the equilibrium
-    eq2, _ = eq2.solve(objective="force", optimizer="lsq-exact", verbose=3)
-    fam2.append(eq2)
-    eqs.append(eq2)
-eq_self_consistent = eq2.copy()
+# eq2 = eq.copy()
+# fam2 = EquilibriaFamily(eq2)
+# niters = 2
+# for k in range(niters):
+#     eq2 = eq2.copy()
 #
-ax.legend()
-fig.savefig("initial_self_consistent_pressure.png")
-# # %%
+#     fig, ax = plot_1d(eq2, "pressure", label="DESC " + str(k), ax=ax)
 #
-plot_comparison(eqs=[eq_init, eq2], labels=["Initial", "self-consistent"])
-# plt.show()
-eq = eq2.copy()
+#     yancc_wrapper = yancc_data.from_eq(
+#         points, eq=eq2, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
+#     )
+#     pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
+#     st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+#     st.run()
+#
+#     pi = st.getPressure()
+#     pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
+#     ax.plot(pressure_rho, pi_manta, label="MANTA" + str(k))
+#     eq2.pressure = SplineProfile(pi_manta, pressure_rho)
+#     # fit the current profile to a power series, with c_0=c_1=0
+#     # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])
+#     # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
+#     # re-solve the equilibrium
+#     eq2, _ = eq2.solve(objective="force", optimizer="lsq-exact", verbose=3)
+#     fam2.append(eq2)
+#     eqs.append(eq2)
+# eq_self_consistent = eq2.copy()
+# #
+# ax.legend()
+# fig.savefig("initial_self_consistent_pressure.png")
+# # # %%
+# #
+# plot_comparison(eqs=[eq_init, eq2], labels=["Initial", "self-consistent"])
+# # plt.show()
+# eq = eq2.copy()
 #
 # # %%
 # # %%
@@ -405,7 +411,7 @@ obj_mirror_ratio = ObjectiveFromUser(
     thing=eq,
     grid=yancc_desc_grid,
     bounds=(0.0, 0.15),
-    weight=5.0,
+    weight=10.0,
     name="my mirror ratio",
 )
 
@@ -423,7 +429,7 @@ stored_energy_weight = 5.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()
-max_it = 30
+max_it = 60
 
 eqfam = EquilibriaFamily(eq)
 # ks = [1, 2, eq.M + 1]
@@ -435,7 +441,7 @@ eqfam = EquilibriaFamily(eq)
 objectives = [
     # AspectRatio(eq=eq, target=6, weight=10),
     obj_mirror_ratio,
-    Volume(eq=eq, target=V0, weight=1.0),
+    Volume(eq=eq, target=V0, weight=10.0),
     # RotationalTransform(eq=eq, target=0.42, weight=10),
     ObjectiveFromUser(
         objective_from_user_fun,
@@ -451,7 +457,7 @@ objectives = [
 objective = ObjectiveFunction(objectives)
 objective.build(use_jit=False)
 
-k = 6
+k = 5
 # #
 R_modes = np.vstack(
     (
@@ -560,4 +566,4 @@ fig, ax = plot_qs_error(eqfam[-1])
 fig.savefig("figs/" + eq_name + "final_qs_error.png")
 plt.show()
 
-# %%
+#
