@@ -1179,6 +1179,14 @@ graded-mesh fill keeps the wall cell and caps the layer's ratio at 1/2 because
 `gradedMeshPoints` puts boundaries at `layer * ratio^j`: past 1/2 the wall cell's
 neighbour is the narrower of the two.
 
+**`MaxPhysicsBatch` is enforced twice, and the second is the one that cannot be
+forgotten.** Every function in `ParallelFill.hpp` that chooses a level takes it as
+`maxBatch`, and `runAdaptiveDegree` lowers its ceiling with `degreeCeiling`; then
+`initialize()` refuses any plan whose `largestRecurringBatch()` exceeds it,
+*before* `deliverEvaluationPlan`, so a new route to a level that forgets the cap
+throws instead of handing the case a batch it was promised it would not get.
+Keep that check ahead of the delivery.
+
 ### Self-consistent magnetic fields (`FieldModel`)
 
 A `FieldModel` (`FieldModel.hpp`) contributes `nFieldDOF` unknowns `psi`, one

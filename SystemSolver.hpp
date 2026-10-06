@@ -707,6 +707,9 @@ class SystemSolver
         // The postprocessed u* is reconstructed and written to the output either
         // way; this flag controls only whether the *method* uses it.
         void setSuperconvergent(bool in) { superconvergent = in; };
+        // The most points a recurring batched call may hand the case; 0 is no cap.
+        // initialize() refuses a level whose plan exceeds it.
+        void setMaxPhysicsBatch(Index n) { maxPhysicsBatch = n; };
         bool isSuperconvergent() const { return superconvergent; };
 
         // Null when k = 0, where the degree-0 NodalBasis cannot be evaluated
@@ -1312,6 +1315,7 @@ class SystemSolver
         // fixed. Non-copyable and holds a reference to `grid`, hence the pointer.
         std::unique_ptr<Postprocessor> postprocessor;
         bool superconvergent = false;
+        Index maxPhysicsBatch = 0;
 
         Matrix G_p; // gradients computed by adjoint state method
 

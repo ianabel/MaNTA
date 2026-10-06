@@ -104,6 +104,9 @@ struct SolverConfig
     // Read by the adaptation controllers, and by runManta and PyRunner for the
     // starting point's warning; see ParallelFill.hpp.
     unsigned int             PhysicsParallelism;
+    // Read by applySolverConfig, which arms the solver's own refusal, and by the
+    // adaptation controllers, which choose no level past it. 0 is no cap.
+    unsigned int             MaxPhysicsBatch;
     std::string              TransportSystem;
     std::vector<std::string> PhysicsPlugins;
 

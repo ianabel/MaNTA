@@ -475,6 +475,13 @@ Adjoints and superconvergence
        choose to the largest that costs no more rounds, and a configured level
        that leaves rounds part empty is warned about. 1 changes nothing. See
        :ref:`adaptivity-parallelism`.
+   * - ``MaxPhysicsBatch``
+     - ``0``
+     - Most points the physics is asked for in one batched call that recurs —
+       per residual, per Jacobian build, per continuation step. The adaptation
+       controllers never choose or fill a level past it, and a configured level
+       past it is refused before its first evaluation. 0 sets no cap. See
+       :ref:`adaptivity-batch-cap`.
 
 Coupling to a magnetic-field model
 ----------------------------------

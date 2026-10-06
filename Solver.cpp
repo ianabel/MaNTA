@@ -6,6 +6,7 @@
 #include <sundials/sundials_types.h>  /* definition of type sunrealtype          */
 #include <toml.hpp>
 #include <exception>
+#include <format>
 #include <fstream>
 #include <limits>
 #include <print>
@@ -93,7 +94,18 @@ void SystemSolver::initialize()
 	// (see TransportSystem::deliverEvaluationPlan). The plan reads no state and
 	// the case's hook writes none of the solver's, so a reused solver stays bit
 	// for bit a fresh one.
-	problem->deliverEvaluationPlan(std::make_shared<const EvaluationPlan>(evaluationPlan()));
+	//
+	// MaxPhysicsBatch is a promise to the case about the largest batch it will be
+	// handed on every residual and Jacobian build, so a level that breaks it is
+	// refused here, before the case hears of it. The adaptation controllers choose
+	// no such level; reaching this means the configured one is too large.
+	auto plan = std::make_shared<const EvaluationPlan>(evaluationPlan());
+	if (maxPhysicsBatch > 0 && plan->largestRecurringBatch() > maxPhysicsBatch)
+		throw std::invalid_argument(std::format(
+			"{} cells at k = {} hand the physics batches of {} points on every residual or "
+			"Jacobian build, past MaxPhysicsBatch = {}. Use fewer cells or a lower degree.",
+			nCells, k, plan->largestRecurringBatch(), maxPhysicsBatch));
+	problem->deliverEvaluationPlan(plan);
 
 	if (!initialised)
 		initialiseMatrices();

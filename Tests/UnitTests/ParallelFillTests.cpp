@@ -290,6 +290,122 @@ BOOST_AUTO_TEST_CASE(a_ladder_rung_filled_into_the_next_level_is_dropped)
     }
 }
 
+BOOST_AUTO_TEST_CASE(the_batch_cap_reads_the_recurring_batches_and_nothing_else)
+{
+    // The cadences roundsOf counts, and the largest batch among them: the 65-point
+    // continuation-step site, not the once-per-run or pointwise thousand.
+    EvaluationPlan plan;
+    plan.sites = {site(EvaluationCadence::PerResidual, 1, 30),
+                  site(EvaluationCadence::PerJacobianBuild, 4, 10),
+                  site(EvaluationCadence::PerContinuationStep, 1, 65),
+                  site(EvaluationCadence::PerResidual, 1, 1000, EvaluationEntry::Pointwise),
+                  site(EvaluationCadence::OncePerRun, 2, 1000),
+                  site(EvaluationCadence::PerAdjointSolve, 1, 1000)};
+
+    BOOST_TEST(plan.largestRecurringBatch() == 65);
+    BOOST_TEST(withinBatchCap(plan, 0));
+    BOOST_TEST(withinBatchCap(plan, 65));
+    BOOST_TEST(!withinBatchCap(plan, 64));
+}
+
+BOOST_AUTO_TEST_CASE(no_level_is_chosen_or_filled_past_the_batch_cap)
+{
+    // Superconvergent: 5 cells at k take 5 (k + 2) points per residual, so a cap
+    // of 50 allows k = 8 and, at k = 4, 8 cells. Both stop short of what 64-wide
+    // rounds alone would fill to (k = 10, 10 cells).
+    const SolverConfig config = configFrom("Superconvergent = true\n");
+    AxisSingular problem;
+    const Grid grid(0.0, 1.0, 5);
+    const auto planner = configured(config, problem, grid, 4);
+    const LevelPlan planAt = [&](Grid const &g, unsigned int k)
+    { return planner->evaluationPlanFor(g, k); };
+
+    BOOST_TEST(degreeCeiling(planAt, grid, 4, 20, 50) == 8u);
+    BOOST_TEST(degreeCeiling(planAt, grid, 4, 7, 50) == 7u);  // MaxPolynomialDegree binds
+    BOOST_TEST(degreeCeiling(planAt, grid, 4, 20, 0) == 20u); // 0 is no cap
+    BOOST_TEST(degreeCeiling(planAt, grid, 4, 20, 29) == 4u); // nothing fits: k itself
+
+    BOOST_TEST(filledDegree(planAt, grid, 4, 20, 64, 50) == 8u);
+    BOOST_TEST(filledDegree(planAt, grid, 4, 20, 64, 0) == 10u);
+    BOOST_TEST(filledCellCount(planAt, grid, 4, 1000, 64, 50) == 8u);
+    BOOST_TEST(filledCellCount(planAt, grid, 4, 1000, 64, 0) == 10u);
+
+    // And a warning does not suggest a level the cap would refuse.
+    const std::string w = underuseWarning(planAt, grid, 4, 20, 64, 50);
+    BOOST_TEST(w.find("PolynomialDegree up to 8") != std::string::npos, w);
+    BOOST_TEST(w.find("GridSize up to 8") != std::string::npos, w);
+}
+
+BOOST_AUTO_TEST_CASE(the_degree_loop_stops_at_the_batch_cap)
+{
+    // The tolerance wants the ceiling and 64-wide rounds would fill to it, but
+    // 40 points per call stops 5 cells at k = 6. Every plan the case is handed
+    // keeps the promise.
+    for (unsigned int width : {1u, 64u})
+    {
+        BOOST_TEST_CONTEXT("width " << width)
+        {
+            const SolverConfig config = configFrom(
+                "DegreeAdaptation = true\nDegreeTolerance = 1e-9\nMaxPolynomialDegree = 10\n"
+                "MaxPhysicsBatch = 40\nPhysicsParallelism = " + std::to_string(width) + "\n");
+            Grid grid(0.0, 1.0, 5);
+            AxisSingular problem;
+            PhysicsInstance physics(problem, grid);
+            {
+                CapturedOutput quiet;
+                auto final = runAdaptiveDegree(config, physics, grid, 4, 1.0);
+            }
+            BOOST_TEST_REQUIRE(!problem.plans.empty());
+            BOOST_TEST(problem.plans.back().k == 6);
+            for (EvaluationPlan const &plan : problem.plans)
+                BOOST_TEST(plan.largestRecurringBatch() <= 40);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(a_graded_mesh_fills_only_as_far_as_the_batch_cap)
+{
+    // 64 wide would grade 10 cells for the sample's one round (see above); 48
+    // points per call allows 8 at k = 4.
+    const SolverConfig config = configFrom(
+        "MeshAdaptation = true\nDegreeTolerance = 1e-2\nMaxPolynomialDegree = 4\n"
+        "PhysicsParallelism = 64\nMaxPhysicsBatch = 48\n");
+    Grid uniform(0.0, 1.0, 5);
+    AxisSingular problem;
+    PhysicsInstance physics(problem, uniform);
+    CapturedOutput quiet;
+    AdaptiveMeshResult r = runAdaptiveMesh(config, physics, uniform, 4, 1.0);
+    BOOST_TEST_REQUIRE((r.decision.verdict == GradingVerdict::GradeLower));
+    BOOST_TEST(r.grid->getNCells() == 8u);
+    for (EvaluationPlan const &plan : problem.plans)
+        BOOST_TEST(plan.largestRecurringBatch() <= 48);
+}
+
+BOOST_AUTO_TEST_CASE(a_configured_level_past_the_batch_cap_is_refused_before_the_case_hears)
+{
+    // 5 cells at k = 4, superconvergent, is 30 points per residual.
+    AxisSingular problem;
+    const Grid grid(0.0, 1.0, 5);
+    {
+        const auto sys = configured(configFrom("Superconvergent = true\nMaxPhysicsBatch = 29\n"),
+                                    problem, grid, 4);
+        CapturedOutput quiet;
+        BOOST_CHECK_THROW(sys->runSolver(1.0), std::invalid_argument);
+    }
+    BOOST_TEST(problem.plans.empty());
+
+    const auto sys = configured(configFrom("Superconvergent = true\nMaxPhysicsBatch = 30\n"),
+                                problem, grid, 4);
+    CapturedOutput quiet;
+    BOOST_CHECK_NO_THROW(sys->runSolver(1.0));
+    BOOST_TEST(problem.plans.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(the_batch_cap_defaults_to_none)
+{
+    BOOST_TEST(configFrom("").MaxPhysicsBatch == 0u);
+}
+
 BOOST_AUTO_TEST_CASE(physics_parallelism_must_be_at_least_one)
 {
     BOOST_CHECK_THROW(configFrom("PhysicsParallelism = 0\n"), std::invalid_argument);
