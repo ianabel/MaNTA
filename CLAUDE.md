@@ -509,7 +509,7 @@ of a failed solve, so `PyRunner::run_ss()` cannot do it.
 budget is exact rather than approximate**: `2 + 3n` for `Newton` and `2 + 4n`
 for `PseudoTransient`, `n` being continuation steps, pinned by
 `a_steady_solve_spends_the_physics_sweeps_it_has_to_and_no_others`. The two
-fixed sweeps are `AssignSigma` building `sigma` from the initial condition and
+fixed sweeps are `assignSigmaFromFlux` building `sigma` from the initial condition and
 the merit function's `||F||` at the initial state; each step is then KINSOL's
 residual at both ends plus one Jacobian, and a step at *finite* `dt` costs a
 fourth. Two properties keep it there, and both are the kind that would be lost
@@ -1140,7 +1140,7 @@ that is load-bearing: `==` is plain defaulted equality, and "nothing changed" is
 what decides whether a case hears anything and whether a reuse is a regrid. So a
 site only some runs reach is listed always, with its count an upper bound --
 `MassMatrix` (a solver's first run only), `InitialProjection` (cold starts only),
-`InitialCondition`'s AssignSigma sweep (skipped on a copied restart). Making a
+`InitialCondition`'s `sigma` sweep (skipped on a copied restart). Making a
 site conditional on `initialised`, the restart state or anything else a run
 moves turns every rerun into a spurious regrid.
 
@@ -1991,7 +1991,7 @@ formula, not the operator, if the data cannot tell them apart.
   `TODO` records and which is now invisible to a reader.
 * **`sigma` is loaded on a copy-path restart, not recomputed, and that is a
   measurement too.** `DGSoln::copy` brings `sigma` across with everything else and
-  `ApplyDirichletBCs` touches only `lambda`, so `AssignSigma` was rebuilding it
+  `ApplyDirichletBCs` touches only `lambda`, so `assignSigmaFromFlux` would rebuild it
   from bit-identical inputs — at the price of a full `ComputePhysics` over every
   node, which is *exactly one residual evaluation's worth of physics*
   (`residual` makes the same call, `SystemSolver.cpp:1329`). It also evaluates

@@ -66,13 +66,13 @@ def test_a_python_case_is_handed_the_plan_before_its_first_evaluation(tmp_path):
     assert plan.k == 3 and plan.superconvergent and not plan.steady
     assert plan.grid.getNCells() == 8
 
-    # Numpy arrays, cell-major: the k+2 star nodes per cell for the residual,
-    # the k+1 basis nodes for the initial condition.
+    # Numpy arrays, cell-major: the k+2 star nodes per cell, for the residual
+    # and the initial condition alike -- one set of cell points per level.
     residual = plan.points(Kind.Residual)
     assert isinstance(residual, np.ndarray) and residual.shape == (8 * 5,)
-    assert plan.points(Kind.InitialCondition).shape == (8 * 4,)
+    assert np.array_equal(plan.points(Kind.InitialCondition), residual)
     assert np.all(np.diff(residual) > 0)
-    assert sorted(plan.batchSizes(Entry.ComputePhysics)) == [32, 40]
+    assert plan.batchSizes(Entry.ComputePhysics) == [40]
 
     site = plan.sitesOf(Kind.Residual)[0]
     assert site.entry == Entry.ComputePhysics

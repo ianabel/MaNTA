@@ -395,9 +395,10 @@ EvaluationPlan SystemSolver::evaluationPlanFor(Grid const &grid, unsigned int kP
     };
 
     // The physics nodes: the k+2 star nodes under the superconvergent scheme,
-    // the k+1 basis nodes otherwise. residual(), evaluatePhysicsDerivatives()
-    // and the adjoint all choose between them the same way. The scalar and field
-    // rows, and the initial condition, use the basis nodes whatever the flag.
+    // the k+1 basis nodes otherwise. residual(), evaluatePhysicsDerivatives(),
+    // the adjoint and the initial condition all choose between them the same way
+    // (physicsNodesAt). The scalar and field rows use the basis nodes whatever
+    // the flag.
     std::vector<Position> basisNodes;
     {
         // DGSoln::getPoints, for a level this solver's y need not be at. By
@@ -482,12 +483,15 @@ EvaluationPlan SystemSolver::evaluationPlanFor(Grid const &grid, unsigned int kP
         }
     }
 
-    // setInitialConditions(): AssignSigma's ComputePhysics, and the du/dt
+    // setInitialConditions(): assignSigmaFromFlux's ComputePhysics, and the du/dt
     // solve's unless the run is a steady solve. Listed whether or not a restart
     // will skip the first -- a plan says nothing about the run, so that a restart
-    // is not a change of plan -- which makes the count an upper bound.
+    // is not a change of plan -- which makes the count an upper bound. On the
+    // physics nodes, like the residual: both sweeps solve rows the residual
+    // defines, so they sample where it samples, and a superconvergent level
+    // asks a case for the k+2 star nodes alone.
     add(Kind::InitialCondition, Entry::ComputePhysics, Cadence::OncePerRun,
-        plan.steady ? 1 : 2, basisPerCell, basisNodes);
+        plan.steady ? 1 : 2, physicsPerCell, physicsNodes);
 
     // ...and, after the du/dt solve, each differential scalar's initial
     // derivative.
@@ -648,9 +652,9 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         // along with u, q, lambda, the scalars and aux -- and nothing between here
         // and there disturbs the inputs it was built from: ApplyDirichletBCs
         // touches lambda only, and u and q are bit for bit the file's. So
-        // AssignSigma would rebuild sigma from exactly the state the file's sigma
-        // was already built from, at the price of a full ComputePhysics over every
-        // node.
+        // assignSigmaFromFlux would rebuild sigma from exactly the state the
+        // file's sigma was already built from, at the price of a full
+        // ComputePhysics over every physics node.
         //
         // That price is the point. ComputePhysics evaluates SigmaFn *and* Sources
         // for every variable and AuxG for every auxiliary one, at every node, and
@@ -664,18 +668,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         // and rebuilding it from the projected u and q is what makes the sigma row
         // exact.
         if (!sameDiscretisation)
-        {
-            GlobalState initialState = y.evalOnNodes(); // only need u and q so this is ok
-            const auto points = y.getPoints();
-            evaluateGeometry(y, points, initialState, t);
-            auto physics_vals = problem->ComputePhysics(initialState, points, t);
-            for (Index var = 0; var < nVars; var++)
-            {
-                // set flux for each variable, casting to a row vector and making sure to remember minus sign
-                initialState.Flux().row(var) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(physics_vals[0][var]);
-            }
-            y.AssignSigma(initialState);
-        }
+            assignSigmaFromFlux(y, t);
 
         // Keep the trace the file carries, on the path where it is meaningful.
         //
@@ -717,9 +710,9 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         //                to satisfy
         //
         // sigma is never the problem, linear flux or not, because it is not
-        // transferred at all on this path: AssignSigma rebuilds it from the
-        // projected u and q by evaluating the physics at the run's own nodes, so
-        // it satisfies its own row by construction. Measured at 1e-18 in every
+        // transferred at all on this path: assignSigmaFromFlux rebuilds it from
+        // the projected u and q by solving its own row, so it satisfies that row
+        // by construction. Measured at 1e-18 in every
         // direction on both LinearDiffusion and NonlinDiffTest.
         //
         // The nonlinearity does show up, but in lambda rather than sigma. On
@@ -793,17 +786,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
 
         // Zero most of dydt, we only have to set it to nonzero values for the differential parts of y
 
-        // Vectorize initial flux calculation
-        GlobalState initialState = y.evalOnNodes(); // only need u and q so this is ok
-        const auto points = y.getPoints();
-        evaluateGeometry(y, points, initialState, t);
-        auto physics_vals = problem->ComputePhysics(initialState, points, t);
-        for (Index var = 0; var < nVars; var++)
-        {
-            // set flux for each variable, casting to a row vector and making sure to remember minus sign
-            initialState.Flux().row(var) = -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(physics_vals[0][var]);
-        }
-        y.AssignSigma(initialState);
+        assignSigmaFromFlux(y, t);
 
         y.EvaluateLambda();
     }
@@ -842,10 +825,11 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     if (tauScaling != TauScaling::Constant)
         updateBoundaryConditions(t0);
 
-    GlobalState sourceStates = y.evalOnNodes();
-    const auto sourcePoints = y.getPoints();
-    evaluateGeometry(y, sourcePoints, sourceStates, t);
-    auto Source_vals = problem->ComputePhysics(sourceStates, sourcePoints, t)[1];
+    // On the residual's own nodes and projected as it projects them, so that the
+    // du/dt solved here is the one the u row reads back at t0.
+    const Index physicsDoF = superconvergent ? k + 2 : k + 1;
+    PhysicsNodes sourceNodes = physicsNodesAt(y, t);
+    auto Source_vals = problem->ComputePhysics(sourceNodes.states, sourceNodes.points, t)[1];
     for (Index var = 0; var < nVars; var++)
     {
         // Solver For dudt with dudt = X^-1( -B*Sig - D*U - E*Lam + F )
@@ -857,9 +841,9 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
             // Evaluate Source Function
             Eigen::VectorXd S_cellwise(k + 1);
 
-            auto ind = Eigen::seq(i * (k + 1), (i + 1) * (k + 1) - 1);
+            auto ind = Eigen::seq(i * physicsDoF, (i + 1) * physicsDoF - 1);
 
-            S_cellwise = y.getBasis().InterpolateOntoBasis( I, Source_vals[var](ind) );
+            S_cellwise = projectOntoTestSpace(i, I, Source_vals[var](ind));
 
             lamCell[0] = y.lambda(var)[i];
             lamCell[1] = y.lambda(var)[i + 1];
@@ -1672,6 +1656,68 @@ Matrix SystemSolver::variableTimeDerivatives(DGSoln const &Ydot) const
     return dotStates.Variable();
 }
 
+SystemSolver::PhysicsNodes SystemSolver::physicsNodesAt(DGSoln const &Y, Time tEval)
+{
+    if (superconvergent)
+        postprocessor->computeUStar(Y);
+
+    PhysicsNodes nodes{superconvergent ? postprocessor->starPoints() : Y.getPoints(),
+                       superconvergent ? postprocessor->evalOnStarNodes(Y) : Y.evalOnNodes()};
+
+    // The metric the physics is about to be evaluated on, from the field model
+    // at this state's psi. A no-op with no model attached, which is what keeps
+    // an uncoupled run bit-for-bit what it was.
+    evaluateGeometry(Y, nodes.points, nodes.states, tEval);
+    return nodes;
+}
+
+Vector SystemSolver::projectOntoTestSpace(Index cell, Interval const &I, Vector const &vals) const
+{
+    if (superconvergent)
+        return postprocessor->A9(cell) * vals;
+    return y.getBasis().InterpolateOntoBasis(I, vals);
+}
+
+void SystemSolver::assignSigmaFromFlux(DGSoln &Y, Time tEval)
+{
+    PhysicsNodes nodes = physicsNodesAt(Y, tEval);
+    auto const physics = problem->ComputePhysics(nodes.states, nodes.points, tEval);
+    std::vector<Values> const &sigmaHat = physics[0];
+
+    // Without the superconvergent scheme the row is A sigma = -A sigma_hat on
+    // the basis nodes -- InterpolateOntoBasis is the cell mass matrix applied to
+    // nodal values -- so its solution is the nodal values themselves, and they
+    // are assigned directly rather than through a solve that would only
+    // reproduce them to round-off. Remember the minus sign: the stored sigma is
+    // -sigma_hat (residual()).
+    if (!superconvergent)
+    {
+        for (Index var = 0; var < nVars; var++)
+            nodes.states.Flux().row(var) =
+                -static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(sigmaHat[var]);
+        Y.AssignSigma(nodes.states);
+        return;
+    }
+
+    // With it, sigma_hat is sampled on the k+2 star nodes and projected by A9,
+    // which no longer reproduces nodal values, so the row is solved: one
+    // (k+1)x(k+1) mass-matrix solve per cell per variable. That is the same
+    // sigma the converged state carries, and it costs no evaluation at the k+1
+    // basis nodes, which nothing else at this level asks the case for.
+    const Index nStar = k + 2;
+    for (Index i = 0; i < nCells; i++)
+    {
+        Interval const &I = grid[i];
+        for (Index var = 0; var < nVars; var++)
+        {
+            const Vector flux = projectOntoTestSpace(
+                i, I, sigmaHat[var](Eigen::seq(i * nStar, (i + 1) * nStar - 1)));
+            Y.sigma(var).getCoeff(i).second =
+                -A_cellwise[i].block(var * (k + 1), var * (k + 1), k + 1, k + 1).llt().solve(flux);
+        }
+    }
+}
+
 // Where and at what state the physics derivatives are evaluated. Shared with the
 // algebraic-derivative solve, which has to make exactly the same choice: a
 // Jacobian consistent with a different residual is the one failure mode this
@@ -1683,18 +1729,12 @@ SystemSolver::evaluatePhysicsDerivatives(DGSoln const &Y, DGSoln const &Ydot, Ti
                                          GlobalStateMatrix &dAux_vals,
                                          GlobalStateMatrix &dSourceDot_vals)
 {
-    // With the superconvergent scheme the derivatives are wanted at the star
-    // nodes and evaluated with u* in place of u_h, exactly as the residual does.
-    if (superconvergent)
-        postprocessor->computeUStar(Y);
-
-    PhysicsNodes nodes{superconvergent ? postprocessor->starPoints() : Y.getPoints(),
-                       superconvergent ? postprocessor->evalOnStarNodes(Y) : Y.evalOnNodes()};
-
-    // Before ComputePhysicsDerivatives, for the same reason residual() fills it
-    // before ComputePhysics: a derivative hook reads State::geom just as its
-    // value hook does, and the two have to see the same metric.
-    evaluateGeometry(Y, nodes.points, nodes.states, tEval);
+    // At the residual's nodes and state -- u* on the star nodes with the
+    // superconvergent scheme -- and with the geometry filled, for the same reason
+    // residual() fills it before ComputePhysics: a derivative hook reads
+    // State::geom just as its value hook does, and the two have to see the same
+    // metric.
+    PhysicsNodes nodes = physicsNodesAt(Y, tEval);
 
     // And the same argument again for the time derivatives: dSources_du on a
     // source that reads udot is a function of udot, so differentiating at a
@@ -2767,21 +2807,12 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
     // halves matter: interpolating a non-polynomial into P_k contributes an
     // O(h^(k+1)) consistency error with no orthogonality against the test space,
     // and that alone caps the rate at k+1. See Postprocessing.hpp.
-    if (superconvergent)
-        postprocessor->computeUStar(Y_h);
-
+    // physicsNodesAt makes that choice of nodes and fills the geometry.
     const Index physicsDoF = superconvergent ? k + 2 : k + 1;
 
-    const std::vector<Position> points =
-        superconvergent ? postprocessor->starPoints() : Y_h.getPoints();
-
-    GlobalState states = superconvergent ? postprocessor->evalOnStarNodes(Y_h)
-                                         : Y_h.evalOnNodes();
-
-    // The metric the physics is about to be evaluated on, from the field model
-    // at this state's psi. A no-op with no model attached, which is what keeps
-    // an uncoupled run bit-for-bit what it was.
-    evaluateGeometry(Y_h, points, states, tres);
+    PhysicsNodes nodes = physicsNodesAt(Y_h, tres);
+    std::vector<Position> const &points = nodes.points;
+    GlobalState &states = nodes.states;
 
     // And the variables' time derivatives, for a source that reads them. Also a
     // no-op -- an empty matrix, costing no allocation and no copy -- unless some
@@ -2791,17 +2822,6 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
     states.setVariableDot(variableTimeDerivatives(dYdt_h));
 
     auto values = problem->ComputePhysics(states, points, tres);
-
-    // ( X, phi_i )_K for a physics value X sampled on the cell's nodes: A9 times
-    // the star-node values with the superconvergent scheme, the interpolatory
-    // mass-matrix form of arXiv:1811.09667 otherwise.
-    auto projectOntoTestSpace = [&](Index cell, Interval const &I,
-                                    auto const &vals) -> Eigen::VectorXd
-    {
-        if (superconvergent)
-            return postprocessor->A9(cell) * vals;
-        return y.getBasis().InterpolateOntoBasis(I, vals);
-    };
 
     std::vector<Values> Sigma_vals = std::move(values[0]);
     std::vector<Values> Source_vals = std::move(values[1]);
@@ -2920,10 +2940,7 @@ void SystemSolver::initializeMatricesForAdjointSolve(Index gIndex)
     // With the superconvergent scheme the objective is a functional of u*, so
     // dG/dy runs through the reconstruction just as the residual's Jacobian does.
     // See the G_y assembly below for why the u and q rows contract with the star
-    // mass matrix rather than with A9.
-    if (superconvergent)
-        postprocessor->computeUStar(y);
-
+    // mass matrix rather than with A9. physicsNodesAt builds u* below.
     const Index derivK = superconvergent ? k + 1 : k;
 
     // Rebuild rather than grow. Every container filled below is appended to, so
@@ -2946,9 +2963,7 @@ void SystemSolver::initializeMatricesForAdjointSolve(Index gIndex)
     // State::geom just as it does in the forward Jacobian -- which is why this
     // is evaluatePhysicsDerivatives' first act too. Without it dSigmaFn_dq on a
     // geometry-dependent case indexes slot 0 of a zero-length vector.
-    PhysicsNodes nodes{superconvergent ? postprocessor->starPoints() : y.getPoints(),
-                       superconvergent ? postprocessor->evalOnStarNodes(y) : y.evalOnNodes()};
-    evaluateGeometry(y, nodes.points, nodes.states, jt);
+    PhysicsNodes nodes = physicsNodesAt(y, jt);
 
     std::vector<Position> const &points = nodes.points;
     GlobalState const &states = nodes.states;
@@ -3776,20 +3791,14 @@ void SystemSolver::accumulateAdjointGradients(Index gIndex)
     GlobalStateMatrix dSourcedp(nVars);
     GlobalStateMatrix dAuxdp(nAux);
 
-    if (superconvergent)
-        postprocessor->computeUStar(y);
-
-    const std::vector<Position> points =
-        superconvergent ? postprocessor->starPoints() : y.getPoints();
-    GlobalState states =
-        superconvergent ? postprocessor->evalOnStarNodes(y) : y.evalOnNodes();
-
     // dF/dp is evaluated at the same state, and with the same geometry, as the
     // residual it differentiates: dSigmaFn_dp on a geometry-dependent case reads
-    // State::geom exactly as SigmaFn does. Without this the adjoint's F_p is the
-    // derivative of a different function from the one the solver converged, and
-    // the symptom is a plausible wrong gradient beside a correct G.
-    evaluateGeometry(y, points, states, jt);
+    // State::geom exactly as SigmaFn does. Without the geometry the adjoint's F_p
+    // is the derivative of a different function from the one the solver
+    // converged, and the symptom is a plausible wrong gradient beside a correct G.
+    PhysicsNodes nodes = physicsNodesAt(y, jt);
+    std::vector<Position> const &points = nodes.points;
+    GlobalState &states = nodes.states;
 
     const Index derivK = superconvergent ? k + 1 : k;
 

@@ -360,6 +360,15 @@ BOOST_AUTO_TEST_CASE(every_call_is_announced_and_every_announced_site_is_used)
             if (run.diffusive)
                 BOOST_TEST(plan.points(EvaluationKind::TauFaces).size() == size_t(2 * nCells));
 
+            // One set of cell points per level: the initial condition samples
+            // where the residual does, so a superconvergent level never asks for
+            // the k+1 basis nodes through ComputePhysics.
+            BOOST_TEST((plan.points(EvaluationKind::InitialCondition) ==
+                        plan.points(EvaluationKind::Residual)));
+            for (Call const &c : problem.calls)
+                if (c.entry == EvaluationEntry::ComputePhysics)
+                    BOOST_TEST((c.points == plan.points(EvaluationKind::Residual)));
+
             checkAgainstPlan(plan, problem);
         }
     }
@@ -468,8 +477,8 @@ BOOST_AUTO_TEST_CASE(a_restart_is_not_a_change_of_plan)
 BOOST_AUTO_TEST_CASE(batch_sizes_are_the_shapes_to_compile_for)
 {
     // What a case compiled per shape asks the plan for. Five cells at k = 4,
-    // superconvergent with a Diffusive tau: the residual and Jacobian on the 30
-    // star nodes, the initial condition on the 25 basis nodes, the faces on 10.
+    // superconvergent with a Diffusive tau: the residual, the Jacobian and the
+    // initial condition on the 30 star nodes, the faces on 10.
     Grid grid(0.0, 1.0, nCells);
     RecordingCase problem;
     SystemSolver sys(grid, k, &problem);
@@ -478,7 +487,7 @@ BOOST_AUTO_TEST_CASE(batch_sizes_are_the_shapes_to_compile_for)
               nullptr);
     const EvaluationPlan plan = sys.evaluationPlan();
 
-    BOOST_TEST((plan.batchSizes(EvaluationEntry::ComputePhysics) == std::vector<Index>{25, 30}));
+    BOOST_TEST((plan.batchSizes(EvaluationEntry::ComputePhysics) == std::vector<Index>{30}));
     BOOST_TEST((plan.batchSizes(EvaluationEntry::ComputePhysicsDerivatives) == std::vector<Index>{10, 30}));
     BOOST_TEST(plan.batchSizes(EvaluationEntry::ScalarG).empty());
 

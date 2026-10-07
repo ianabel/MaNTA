@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <stdexcept>
 #include <string>
 #include <toml.hpp>
@@ -180,9 +181,101 @@ public:
     double auxCoeff = 2.5;
 };
 
+// sigma_hat = (1 + u^2) q with a sinusoidal profile and an exponential source:
+// neither the flux nor the state lies in any basis, so nothing below is exact by
+// accident of representation. Only the value hooks matter -- nothing here builds
+// a Jacobian.
+class NonlinearFluxDiffusion : public TransportSystem
+{
+public:
+    NonlinearFluxDiffusion() : TransportSystem({.variables = numberedFields(1)}) {}
+
+    Value LowerBoundary(Index, Time) const override { return 0.0; }
+    Value UpperBoundary(Index, Time) const override { return 0.0; }
+
+    Value SigmaFn(Index, const State &s, Position, Time) override
+    {
+        return (1.0 + s.u(0) * s.u(0)) * s.q(0);
+    }
+    Value Sources(Index, const State &, Position x, Time) override { return std::exp(x); }
+
+    void dSigmaFn_dq(Index, VectorRef, const State &, Position, Time) override {}
+    void dSigmaFn_du(Index, VectorRef, const State &, Position, Time) override {}
+    void dSources_du(Index, VectorRef, const State &, Position, Time) override {}
+    void dSources_dq(Index, VectorRef, const State &, Position, Time) override {}
+    void dSources_dsigma(Index, VectorRef, const State &, Position, Time) override {}
+
+    Value InitialValue(Index, Position x) const override
+    {
+        return 0.5 * std::sin(std::numbers::pi * x);
+    }
+    Value InitialDerivative(Index, Position x) const override
+    {
+        return 0.5 * std::numbers::pi * std::cos(std::numbers::pi * x);
+    }
+};
+
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(residual_tests)
+
+BOOST_AUTO_TEST_CASE(the_initial_sigma_and_dudt_solve_the_rows_the_residual_defines)
+{
+    // setInitialConditions builds sigma out of the residual's sigma row and du/dt
+    // out of its u row, so both rows hold to round-off at t0 whatever the flux
+    // and the profile -- with the superconvergent scheme too, where the residual
+    // samples on the k+2 star nodes and projects with A9, and the k+1 nodal
+    // values of sigma_hat would miss the row by O(h^(k+1)). Sampling where the
+    // residual samples is also what lets a superconvergent initial condition ask
+    // the case for the star nodes alone; evaluation_plan_tests checks that half.
+    // The q and trace rows are not built from the residual and are not checked.
+    const Index k = 3, nCells = 6;
+    for (bool superconvergent : {false, true})
+    {
+        BOOST_TEST_CONTEXT("superconvergent = " << superconvergent)
+        {
+            Grid grid(0.0, 1.0, nCells);
+            NonlinearFluxDiffusion problem;
+
+            SystemSolver sys(grid, k, &problem);
+            sys.setTau(1.0);
+            sys.setSuperconvergent(superconvergent);
+            sys.resetCoeffs();
+            sys.initialiseMatrices();
+
+            SUNContext ctx;
+            SUNContext_Create(SUN_COMM_NULL, &ctx);
+
+            DGSoln shape(problem.getNumVars(), grid, k);
+            const Index n = shape.getDoF();
+
+            N_Vector Y = N_VNew_Serial(n, ctx), dYdt = N_VClone(Y), res = N_VClone(Y);
+            N_VConst(0.0, Y);
+            N_VConst(0.0, dYdt);
+            sys.setInitialConditions(Y, dYdt);
+            BOOST_TEST_REQUIRE(sys.residual(0.0, Y, dYdt, res) == 0);
+
+            DGSoln r(problem.getNumVars(), grid, k, N_VGetArrayPointer(res));
+            DGSoln y(problem.getNumVars(), grid, k, N_VGetArrayPointer(Y));
+            double sigmaRow = 0.0, uRow = 0.0, sigmaScale = 0.0;
+            for (Index i = 0; i < nCells; ++i)
+            {
+                sigmaRow = std::max(sigmaRow, r.sigma(0).getCoeff(i).second.cwiseAbs().maxCoeff());
+                uRow = std::max(uRow, r.u(0).getCoeff(i).second.cwiseAbs().maxCoeff());
+                sigmaScale = std::max(sigmaScale, y.sigma(0).getCoeff(i).second.cwiseAbs().maxCoeff());
+            }
+
+            BOOST_TEST(sigmaScale > 0.1); // the rows below are not trivially zero
+            BOOST_TEST(sigmaRow < 1e-13, "sigma row " << sigmaRow);
+            BOOST_TEST(uRow < 1e-12, "u row " << uRow);
+
+            N_VDestroy(Y);
+            N_VDestroy(dYdt);
+            N_VDestroy(res);
+            SUNContext_Free(&ctx);
+        }
+    }
+}
 
 BOOST_AUTO_TEST_CASE(residual_vanishes_on_an_exactly_representable_initial_state)
 {
