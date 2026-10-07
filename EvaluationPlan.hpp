@@ -182,6 +182,20 @@ struct EvaluationPlan
                            });
     }
 
+    /// The largest batch a recurring site hands the case -- per residual, per
+    /// Jacobian build or per continuation step, the cadences a run repeats.
+    /// MaxPhysicsBatch bounds this. 0 for a plan with no recurring batched site.
+    Index largestRecurringBatch() const
+    {
+        Index most = 0;
+        for (auto const &s : sites)
+            if (s.isBatched() && (s.cadence == EvaluationCadence::PerResidual ||
+                                  s.cadence == EvaluationCadence::PerJacobianBuild ||
+                                  s.cadence == EvaluationCadence::PerContinuationStep))
+                most = std::max(most, s.batchSize());
+        return most;
+    }
+
     /// The distinct batch sizes an entry is called with, ascending. For a case
     /// compiled per shape, this is the list of shapes to compile for.
     std::vector<Index> batchSizes(EvaluationEntry entry) const

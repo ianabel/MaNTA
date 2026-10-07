@@ -253,7 +253,8 @@ AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
         const Grid::Index sampleCells = uniform.getNCells();
         const Grid::Index gradedCount = filledCellCount(
             [&](Grid const &g, unsigned int kk) { return sample->evaluationPlanFor(g, kk); },
-            uniform, k0, std::numeric_limits<Grid::Index>::max(), config.PhysicsParallelism);
+            uniform, k0, std::numeric_limits<Grid::Index>::max(), config.PhysicsParallelism,
+            config.MaxPhysicsBatch);
         const Grid filledUniform(uniform.lowerBoundary(), uniform.upperBoundary(), gradedCount);
         sample.reset();
 

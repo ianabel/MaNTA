@@ -185,6 +185,12 @@ const std::vector<Entry> &table()
          "level they choose to the largest that costs no more rounds, and a level that "
          "leaves rounds part empty is warned about. 1 changes nothing. See "
          "docs/adaptivity.rst."},
+        {"MaxPhysicsBatch", {}, Type::UInt, Category::Solver, false, false, 0u,
+         "Most points the physics is asked for in one batched call that recurs -- per "
+         "residual, per Jacobian build, per continuation step. The adaptation "
+         "controllers never choose or fill a level past it, and a configured level past "
+         "it is refused before its first evaluation. 0 sets no cap. See "
+         "docs/adaptivity.rst."},
         {"MeshAdaptationThreshold", {}, Type::Double, Category::Solver, false, false, 2.0,
          "How much rougher than the interior an end must look before MeshAdaptation "
          "grades it, as a ratio of decay rates. Must exceed 1. Measured on three "

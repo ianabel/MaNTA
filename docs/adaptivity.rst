@@ -603,3 +603,39 @@ filling raises the per-cell linear algebra, which grows like :math:`k^3`, and th
 number of cells the trace solve spans. It is the right trade when the physics is
 what a run waits for, which is the only situation in which the key is worth
 setting.
+
+.. _adaptivity-batch-cap:
+
+A cap on the batch the physics is handed
+----------------------------------------
+
+``MaxPhysicsBatch = M`` promises the case that no batched call it receives on a
+recurring basis — per residual, per Jacobian build, per continuation step — will
+carry more than :math:`M` points. It is for a model that cannot take an arbitrary
+batch at all: one compiled to a fixed shape, or one whose working memory on an
+accelerator scales with the batch. ``PhysicsParallelism`` says what a batch
+*costs*; this says what a batch may *be*. They are separate limits, because a
+fill never adds rounds but always grows the batches.
+
+What is bounded is the largest batch in the level's evaluation plan
+(:ref:`evaluation-plans`) among the recurring sites. For one variable that is the
+residual's, :math:`N(k+1)` points, or :math:`N(k+2)` superconvergent — so
+``DegreeAdaptation`` and ``MeshAdaptation``, which imply ``Superconvergent``, are
+bounded at :math:`N(k+2) \le M`.
+
+``DegreeAdaptation``
+   The ceiling becomes the highest degree within the cap, if that is below
+   ``MaxPolynomialDegree``. Reaching it warns, naming the cap, and returns the best
+   result available, exactly as reaching ``MaxPolynomialDegree`` does.
+
+``MeshAdaptation``, the fills, ``DegreeLadder`` / ``GridLadder``
+   Every level chosen by filling stops at the cap, and the warning about an
+   underused configured level suggests nothing past it.
+
+The configured level
+   No controller chooses it, so it is checked instead: a solver whose own plan
+   breaks the cap refuses to start, before the case is told the plan or asked
+   for a single point. That is the backstop for every route to a level, adaptive
+   or not.
+
+0, the default, sets no cap.

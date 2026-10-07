@@ -340,6 +340,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(MeshAdaptationAttempts, unsigned);
     READ(RebuildPhysicsOnRegrid, bool);
     READ(PhysicsParallelism, unsigned);
+    READ(MaxPhysicsBatch, unsigned);
     READ(TransportSystem, std::string);
     READ(PhysicsPlugins, std::vector<std::string>);
     READ(FieldModel, std::string);
@@ -762,6 +763,7 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     system.setOutputCadence(config.delta_t);
     system.setTolerances(config.Absolute_tolerance, config.Relative_tolerance);
     system.setTau(config.tau);
+    system.setMaxPhysicsBatch(config.MaxPhysicsBatch);
 
     // Rejected rather than defaulted, as SteadyStateSolver is.
     SystemSolver::TauUpdate tauUpdate;
