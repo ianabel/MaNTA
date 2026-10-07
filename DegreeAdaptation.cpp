@@ -172,13 +172,27 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
             "polynomial degree changes how many parameters there are.");
 
     const Index nVars = physics.problem().getNumVars();
-    const unsigned int kMax = config.MaxPolynomialDegree;
     const double eps = config.DegreeTolerance;
 
-    if (k0 > kMax)
+    if (k0 > config.MaxPolynomialDegree)
         throw std::invalid_argument(
             "PolynomialDegree already exceeds MaxPolynomialDegree, so degree "
             "adaptation has nothing it is allowed to do.");
+
+    // The ceiling is MaxPolynomialDegree, or lower if a degree below it already
+    // hands the physics more points per recurring call than MaxPhysicsBatch
+    // allows. Planned once, on this mesh, since the loop never changes it. A k0
+    // past the cap is left for the first level's initialize() to refuse.
+    unsigned int kMax = config.MaxPolynomialDegree;
+    if (config.MaxPhysicsBatch > 0)
+    {
+        const auto planner = physics.plannerFor(grid, k0, [&](SystemSolver &s)
+                                                { applySolverConfig(config, s); });
+        kMax = degreeCeiling([&](Grid const &g, unsigned int kk)
+                             { return planner->evaluationPlanFor(g, kk); },
+                             grid, k0, config.MaxPolynomialDegree, config.MaxPhysicsBatch);
+    }
+    const bool batchBound = kMax < config.MaxPolynomialDegree;
 
     // Before the first solve, not when the first level wants raising: a level
     // after the first is a new plan, and a case that can follow none should be
@@ -186,9 +200,12 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
     if (kMax > k0)
         physics.requireAdaptable("DegreeAdaptation");
 
-    std::println("Degree adaptation: starting at k = {}, ceiling {}, relative "
+    std::println("Degree adaptation: starting at k = {}, ceiling {}{}, relative "
                  "tolerance {:g}, base {:g}",
-                 k0, kMax, eps, config.DegreeAdaptationBase);
+                 k0, kMax,
+                 batchBound ? std::format(" (MaxPhysicsBatch = {})", config.MaxPhysicsBatch)
+                            : std::string{},
+                 eps, config.DegreeAdaptationBase);
 
     std::unique_ptr<SystemSolver> system;
     unsigned int k = k0;
@@ -322,10 +339,14 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
             // available and the caller can still have it; what must not happen
             // is that the run reports success at a tolerance it never reached.
             logmsg<LOG_LEVEL::WARNING>(
-                "Degree adaptation stopped at the ceiling MaxPolynomialDegree = {} "
-                "with a relative L2 error of {:g} against a tolerance of {:g}. The "
-                "result is the best this degree can do, not a converged one.",
-                kMax, err.relative, eps);
+                "Degree adaptation stopped at the ceiling k = {} ({}) with a relative "
+                "L2 error of {:g} against a tolerance of {:g}. The result is the best "
+                "this degree can do, not a converged one.",
+                kMax,
+                batchBound ? std::format("the highest degree within MaxPhysicsBatch = {}",
+                                         config.MaxPhysicsBatch)
+                           : std::string("MaxPolynomialDegree"),
+                err.relative, eps);
             std::println("  stopped at the ceiling k = {}, tolerance not met", kMax);
             break;
         }
@@ -351,7 +372,7 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
         // evaluate are not a bet on the estimate.
         const unsigned int next = filledDegree(
             [&](Grid const &g, unsigned int kk) { return system->evaluationPlanFor(g, kk); },
-            grid, chosen, kMax, config.PhysicsParallelism);
+            grid, chosen, kMax, config.PhysicsParallelism, config.MaxPhysicsBatch);
         if (next > chosen)
             std::println("  filled to k = {}: no more rounds of {} than k = {}", next,
                          config.PhysicsParallelism, chosen);
@@ -474,10 +495,12 @@ std::unique_ptr<SystemSolver> runLadder(SolverConfig const &config,
             Rung f = r;
             const Grid rungGrid(grid.lowerBoundary(), grid.upperBoundary(), r.nCells);
             if (!config.DegreeLadder.empty())
-                f.k = filledDegree(planAt, rungGrid, r.k, kFinal, config.PhysicsParallelism);
+                f.k = filledDegree(planAt, rungGrid, r.k, kFinal, config.PhysicsParallelism,
+                                   config.MaxPhysicsBatch);
             if (!config.GridLadder.empty())
                 f.nCells = static_cast<unsigned int>(filledCellCount(
-                    planAt, rungGrid, f.k, finalCells, config.PhysicsParallelism));
+                    planAt, rungGrid, f.k, finalCells, config.PhysicsParallelism,
+                    config.MaxPhysicsBatch));
             if (f.k != r.k || f.nCells != r.nCells)
                 std::println("  rung {} filled from {} cells at k = {} to {} cells at k = {}: "
                              "no more rounds of {}",

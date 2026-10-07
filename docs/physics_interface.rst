@@ -600,7 +600,7 @@ The kinds, for :math:`N` cells at degree :math:`k`:
        ``udot``
    * - ``InitialCondition``
      - ``ComputePhysics``
-     - :math:`N(k+1)`
+     - as ``Residual``
      - once per run, at most: once to build ``sigma`` (skipped on a copied
        restart), once for the initial :math:`du/dt` (not on a steady solve)
    * - ``TauFaces``

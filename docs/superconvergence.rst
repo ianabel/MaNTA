@@ -58,6 +58,12 @@ casters are all untouched. **No physics case needs changing** to run under the
 flag, in C++, Python or JAX — the batched hooks loop over however many points they
 are given.
 
+The initial condition is built on the same nodes. :math:`\sigma` is solved out of
+the residual's own :math:`\sigma` row, and the initial :math:`du/dt` out of its
+:math:`u` row, so both hold exactly at :math:`t_0` and the cell physics is never
+sampled anywhere but the :math:`k+2` star nodes: a case that prepares per point
+(see :ref:`evaluation-plans`) has one cell point set per level, not two.
+
 The flag defaults to ``false``, and with it off the discretisation is exactly
 what it was before the option existed.
 

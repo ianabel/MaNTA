@@ -1210,7 +1210,7 @@ These are deliberate and tracked, not oversights:
     and `dSigmaFn_dq` separately. It exists because nothing else here would
     notice a duplicate sweep: it changes no answer, so every other test in this
     file passes with one reinstated, and the only symptom is the bill a case
-    with an expensive flux pays. The two fixed sweeps are `AssignSigma` and the
+    with an expensive flux pays. The two fixed sweeps are `assignSigmaFromFlux` and the
     already-converged test; the extra one per step in the damped column is the
     merit evaluation that a finite `dt` still has to make. `rejected == 0` is
     asserted alongside, so a fixture that started rejecting steps would report a
