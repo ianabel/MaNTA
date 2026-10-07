@@ -37,17 +37,18 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 fac = 1.0
 st_config = {
     "ParticleSourceCenter": 0.0,
-    "ParticleSourceHeight": fac * 1.6e-2,
+    "ParticleSourceHeight": fac * 0.02,
     "ParticleSourceWidth": 0.6,
     "NBICenter": 0.0,
-    "NBIPower": fac * 1.25,
-    "NBIWidth": 0.25,
+    "NBIPower": fac * 5.5,
+    "NBIWidth": 0.15,
     "ECHCenter": 0.0,
     "ECHPower": fac * 8.76e-2,
-    "ECHWidth": 0.26,
+    "ECHWidth": 0.15,
     "EdgeTemperature": 0.2,
     "EdgeDensity": 0.2,
-    "n0": 1.5,
+    "ADCoefficient": 0.0,
+    "n0": 0.5,
     "T0": 1.0,
     "FusionFactor": 0.01,
     "evolveDensity": True,
@@ -55,7 +56,7 @@ st_config = {
 }
 
 
-eq_name = "qh"
+eq_name = "W7-X"
 
 rho_upper = 1.0
 rtol = 1e-2
@@ -66,10 +67,10 @@ degree = 3
 base = 1.5
 tau = 0.5
 #
-# nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 4)
+nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 4)
 
-# nodes = np.concatenate(([0, 0.05, 0.1], nodes, [0.99, rho_upper]))
-nodes = np.concatenate(([0, 0.05, 0.1], jnp.linspace(0.4, 0.99, npoints - 2)))
+nodes = np.concatenate(([0, 0.05, 0.1], nodes, [0.99, rho_upper]))
+# nodes = np.concatenate(([0, 0.05, 0.1], jnp.linspace(0.4, 0.99, npoints - 2)))
 
 # nodes = np
 print(nodes)
@@ -124,19 +125,19 @@ yancc_res = {"na": 45, "nx": 7}
 # initial pressure is all zeros, can change this if desired
 pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
-eq = desc.examples.get("ARIES-CS")
-# eq = desc.compat.rescale(
-#     eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
-# )
-# # eq = desc.examples.get("W7-X")
-# # # # # Reduce the number of modes (not sure if this is a good thing to do)
-# # # #
-# # eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
+eq = desc.examples.get("W7-X")
+eq = desc.compat.rescale(
+    eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
+)
+# eq = desc.examples.get("W7-X")
+# # # # Reduce the number of modes (not sure if this is a good thing to do)
+# # #
+# eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
 # # #
 # #
 # # eq = desc.examples.get("reactor_QA")
-# eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
-# eq.solve(x_scale="ess")[0]
+eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
+eq.solve(x_scale="ess")[0]
 # eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
 # eq = desc.io.load("eq_qa.h5")
 
@@ -147,8 +148,8 @@ yancc_wrapper = yancc_data.from_eq(
     points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
 # with jax.log_compiles(True):
-# st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-# st.run()
+st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+st.run()
 #
 
 

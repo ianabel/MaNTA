@@ -63,21 +63,23 @@ eq_name = "eq"
 #     "useBatching": True,
 # }
 #
+
 fac = 1.0
 st_config = {
     "ParticleSourceCenter": 0.0,
     "ParticleSourceHeight": fac * 0.02,
     "ParticleSourceWidth": 0.6,
     "NBICenter": 0.0,
-    "NBIPower": fac * 2.5,
-    "NBIWidth": 0.25,
+    "NBIPower": fac * 5.5,
+    "NBIWidth": 0.15,
     "ECHCenter": 0.0,
     "ECHPower": fac * 8.76e-2,
-    "ECHWidth": 0.26,
+    "ECHWidth": 0.15,
     "EdgeTemperature": 0.2,
     "EdgeDensity": 0.2,
-    "n0": 0.2,
-    "T0": 0.2,
+    "ADCoefficient": 0.0,
+    "n0": 0.5,
+    "T0": 1.0,
     "FusionFactor": 0.01,
     "evolveDensity": True,
     "useBatching": True,
@@ -93,7 +95,7 @@ degree = 3
 # base = 1.5
 # tau = 0.5
 #
-base = 1.4
+base = 1.8
 tau = 0.5
 #
 # nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
@@ -103,19 +105,19 @@ tau = 0.5
 # )  # nodes = np.concatenate(([0, 0.1], nodes, [0.98,1]))
 nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 3)
 
-nodes = np.concatenate(([0, 0.1], nodes, [0.99, rho_upper]))
+nodes = np.concatenate(([0, 0.1, 0.25], nodes, [rho_upper]))
 
 # nodes = np.linspace(0, 1.0, npoints + 1)
 print(nodes)
 # # %%
 solver_config = {
     "OutputFilename": fname,
-    "Polynomial_degree": degree,
-    "Grid_points": nodes,
-    "Grid_size": len(nodes) - 1,
+    "PolynomialDegree": degree,
+    "GridPoints": nodes,
+    "GridSize": len(nodes) - 1,
     "tau": tau,
-    "Lower_boundary": 0.0,
-    "Upper_boundary": rho_upper,
+    "LowerBoundary": 0.0,
+    "UpperBoundary": rho_upper,
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
@@ -142,11 +144,7 @@ config = {
 }
 
 
-points = MaNTA.getNodes(
-    nodes,
-    solver_config["Polynomial_degree"],
-)
-
+points = 
 yancc_rho = jnp.array(points)
 
 yancc_rho = jnp.array(points)
@@ -185,6 +183,7 @@ desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 # eq = eq.solve(x_scale="ess")[0]
 # eqs = EquilibriaFamily(eq)
 # # # desc_pressure = eq.get_profile('p')
+
 eqs = desc.io.load(eq_name + "_all_equilibria.h5")
 eq = eqs[-1].copy()
 
@@ -201,8 +200,8 @@ yancc_wrapper = yancc_data.from_eq(
 # # # %%
 # with jax.log_compiles(True):
 #
-# st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-# st.run()
+st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+st.run()
 #
 # # %%
 #
@@ -212,12 +211,12 @@ yancc_wrapper = yancc_data.from_eq(
 # solver_config = {
 #     "OutputFilename": fname,
 #     "RestartFile": "stellarator_opt_amb0.restart.nc",
-#     "Polynomial_degree": degree,
-#     "Grid_points": nodes,
-#     "Grid_size": len(nodes) - 1,
+#     "PolynomialDegree": degree,
+#     "GridPoints": nodes,
+#     "GridSize": len(nodes) - 1,
 #     "tau": tau,
-#     "Lower_boundary": 0.0,
-#     "Upper_boundary": rho_upper,
+#     "LowerBoundary": 0.0,
+#     "UpperBoundary": rho_upper,
 #     "Relative_tolerance": rtol,
 #     "Absolute_tolerance": [atol],
 #     "delta_t": 1.0,
@@ -238,12 +237,12 @@ fig, ax = plt.subplots()
 #
 solver_config = {
     "OutputFilename": fname,
-    "Polynomial_degree": degree,
-    "Grid_points": nodes,
-    "Grid_size": len(nodes) - 1,
+    "PolynomialDegree": degree,
+    "GridPoints": nodes,
+    "GridSize": len(nodes) - 1,
     "tau": tau,
-    "Lower_boundary": 0.0,
-    "Upper_boundary": rho_upper,
+    "LowerBoundary": 0.0,
+    "UpperBoundary": rho_upper,
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
@@ -256,7 +255,7 @@ solver_config = {
     "SteadyStateTolerance": 1e-4,
     "SteadyStateSolver": "Newton",
     "SteadyStateDiagnostics": True,
-    "MaxRejectedSteps": 2,
+    "MaxRejectedSteps": 0,
     "SteadyStateStepDiagnostics": True,
     # "ObjectiveDecreaseTolerance": 0.01,
     "PseudoTransientSERFloor": 2.0,
@@ -377,8 +376,8 @@ def objective_from_user_fun(grid, data):
 
 yancc_desc_grid = yancc_wrapper.grid
 
-# domain_boundary_rho = rho_from_normalized_volume(0.9)
-domain_boundary_rho = 1.0
+# domainBoundary_rho = rho_from_normalized_volume(0.9)
+domainBoundary_rho = 1.0
 
 
 def pressure_constraint_fun(params):
@@ -387,7 +386,7 @@ def pressure_constraint_fun(params):
     p_l = params["p_l"]
     dp0 = desc_pressure(Grid(jnp.zeros((1, 3)), jitable=True), p_l, dr=1)
     p1 = desc_pressure(
-        Grid(jnp.zeros((1, 3)).at[0, 0].set(domain_boundary_rho), jitable=True), p_l
+        Grid(jnp.zeros((1, 3)).at[0, 0].set(domainBoundary_rho), jitable=True), p_l
     )
     return jnp.array([dp0, p1]).squeeze()
 
@@ -429,7 +428,7 @@ stored_energy_weight = 5.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()
-max_it = 60
+max_it = 20
 
 eqfam = EquilibriaFamily(eq)
 # ks = [1, 2, eq.M + 1]
@@ -556,7 +555,7 @@ fig.savefig("figs/" + eq_name + "final_comparison.png")
 fig, ax = plot_boundaries(
     eqs=[eq_init, eq, eqfam[-1]], labels=["Initial", "optimized", "self-consistent"]
 )
-fig.savefig("figs/" + eq_name + "final_comparison_boundary.png")
+fig.savefig("figs/" + eq_name + "final_comparisonBoundary.png")
 # %%
 # eq = desc.io.load("../python/eq2optimized_equilibrium.h5")#desc.examples.get("ESTELL")
 # plot_boozer_surface(eq_init, fieldlines=8)

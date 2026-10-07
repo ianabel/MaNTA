@@ -86,7 +86,7 @@ else:
     from dke_sol import compute_dke_sol, dke_field_jac
 
 
-from manta.jax import State, Physics_Decorator
+from manta.jax import State, Physics_Decorator, vmap_batched
 from stellarator_state import (
     StellaratorState,
     StellaratorDecorator,
@@ -99,7 +99,6 @@ from jax.sharding import PartitionSpec, NamedSharding
 from jax.experimental import multihost_utils
 import jax.numpy as jnp
 import equinox as eqx
-from util import VmapWrapper
 
 # os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".4"
 # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -162,40 +161,6 @@ def MaNTA_Decorator(func):
     return wrapper
 
 
-def shard_inputs(func):
-    def wrapper(self, states, positions, *args):
-
-        def _wrap_shard(self, *args):
-            if self.params.config.useSharding:
-                args_s = tuple(
-                    jax.device_put(arg, data_sharding)
-                    if not jnp.isscalar(arg)
-                    else jax.device_put(arg, static_sharding)
-                    for arg in args
-                )
-                return func(self, *args_s)
-            else:
-                return func(self, *args)
-
-        result = _wrap_shard(self, states, positions, *args)
-        return result
-
-    return wrapper
-
-
-def put_on_gpu(tree):
-    #    def map_fn(leaf):
-    #        if not jnp.isscalar(leaf):
-    #            if (jnp.mod(leaf.shape[0], len(devices))==0):
-    #                return jax.device_put(leaf, data_sharding)
-    #            else:
-    #                return jax.device_put(leaf, static_sharding)
-    #        else:
-    #            return jax.device_put(leaf, static_sharding)
-    #    return jax.tree.map(map_fn, tree)
-    return tree
-
-
 # Magic tuple to make vmap work
 vmap_axes = (State.vmap_axes(), 0)
 vmap_axes_wfield = (State.vmap_axes(), 0, None, 0, 0, 0, None, None, None, None)
@@ -254,7 +219,18 @@ def buildSpec(params: StellaratorParams) -> MaNTA.SystemSpec:
     )
 
 
+# The two batched entry points this case serves. Everything else MaNTA calls --
+# InitialValue, the boundary values -- is pointwise and stays on the calling
+# thread.
+BATCHED = (
+    MaNTA.EvaluationEntry.ComputePhysics,
+    MaNTA.EvaluationEntry.ComputePhysicsDerivatives,
+)
+
+
 class StellaratorTransport(MaNTA.TransportSystem):
+    regrid = MaNTA.Regrid.InPlace
+
     def __init__(self, config, yancc_wrapper: yancc_data):
         solver_config = config["Solver"]
         st_config = config["Stellarator"]
@@ -263,32 +239,58 @@ class StellaratorTransport(MaNTA.TransportSystem):
         # local until the base class exists, because until then there is no
         # C++ object behind self to hang attributes on.
 
-        self.xL = solver_config["Lower_boundary"]
-        self.xR = solver_config["Upper_boundary"]
+        self.xL = solver_config["LowerBoundary"]
+        self.xR = solver_config["UpperBoundary"]
 
         config = StellaratorConfig(rhoUpper=self.xR, **st_config)
 
         self.params = StellaratorParams(config, _B0=5.0)
-        if "Superconvergent" in solver_config and solver_config["Superconvergent"]:
-            raise RuntimeError(
-                "Superconvergent is not compatible with this physics case"
-            )
+        # if "Superconvergent" in solver_config and solver_config["Superconvergent"]:
+        #     raise RuntimeError(
+        #         "Superconvergent is not compatible with this physics case"
+        #     )
+
         MaNTA.TransportSystem.__init__(self, buildSpec(self.params))
-        self.batch_size = (
-            len(devices) * 4
-            if self.params.config.useBatching and self.params.config.useSharding
-            else 0
-        )
+        self.batch_size = self.params.config.batch_size
+
         if self.params.config.useSharding:
             print(f"Using batch size {self.batch_size}")
-        # jax.device_put(yancc_wrapper, data_sharding)
+
         self.yancc_wrapper = yancc_wrapper
-        self.points = yancc_wrapper.rho
+        self.points = MaNTA.getNodes(
+            solver_config["GridPoints"],
+            solver_config["PolynomialDegree"],
+        )
+
+        self.nchunks = self.params.config.nchunks
+        self.max_batch = self.nchunks * self.batch_size
 
         self.pnorm = self.params.constants.T0 * self.params.constants.n0
-        self.field, self.vp, self.vpp = self.yancc_wrapper.get_fields()
+        # self.field, self.vp, self.vpp = self.yancc_wrapper.get_fields()
+
+        self.field, self.vp, self.vpp = self.yancc_wrapper.get_fields_at_rho(
+            self.points
+        )
         self.vp_interp = interpax.Akima1DInterpolator(self.points, self.vp, check=False)
         g = [self.StoredEnergy]
+
+        self.levels = []  # (cells, k) of each plan MaNTA handed over
+        if self.params.config.adaptiveGrid:
+            ### for adaptive grid problems ###
+
+            # batch size M -> (rounds, padded Params). Set by prepareEvaluation from
+            # MaNTA's plan; see there.
+            self.layout = {}
+
+            self.rounds = 0  # rounds the machine ran
+
+            solver_config["tauScaling"] = "Diffusive"
+            solver_config["tauUpdate"] = "ContinuationStep"
+            solver_config["MeshAdaptation"] = True
+            solver_config["DegreeTolerance"] = 1e-6
+            solver_config["PhysicsParallelism"] = self.batch_size
+            solver_config["MaxPhysicsBatch"] = self.max_batch
+            solver_config.pop("GridPoints", None)
 
         self.adjointProblem = StellaratorAdjointProblem(
             self, g, self.yancc_wrapper, len(self.points)
@@ -312,26 +314,35 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.runner.Run(tFinal)
             return 0
         else:
-            outcome = self.runner.start_steady()
-            jax.debug.print("MaNTA returned steady-state outcome {val}", val=outcome)
+            if self.params.config.adaptiveGrid:
+                self.runner.Run_ss()
+                return 1
+            else:
+                outcome = self.runner.start_steady()
 
-            with jax.default_device(jax.devices("cpu")[0]):
-
-                def true_fn():
-                    self.runner.finish_steady()
-                    return True
-
-                def false_fn():
-                    self.runner.abandon_steady()
-                    return False
-
-                ec = jax.lax.cond(
-                    jnp.equal(outcome, MaNTA.SteadyOutcome.Converged), true_fn, false_fn
+                jax.debug.print(
+                    "MaNTA returned steady-state outcome {val}", val=outcome
                 )
-                jax.debug.print("ec: {val}", val=ec)
 
-                self._report_objective_estimate()
-                return ec
+                with jax.default_device(jax.devices("cpu")[0]):
+
+                    def true_fn():
+                        self.runner.finish_steady()
+                        return True
+
+                    def false_fn():
+                        self.runner.abandon_steady()
+                        return False
+
+                    ec = jax.lax.cond(
+                        jnp.equal(outcome, MaNTA.SteadyOutcome.Converged),
+                        true_fn,
+                        false_fn,
+                    )
+                    jax.debug.print("ec: {val}", val=ec)
+
+                    self._report_objective_estimate()
+                    return ec
 
     def objectiveEstimate(self):
         """G, its first-order correction to the fixed point, and a bound.
@@ -378,81 +389,6 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     def UpperBoundary(self, index, t):
         return self.InitialValue(index, self.xR)
-
-    @Physics_Decorator
-    def ComputePhysics(self, states, positions, t):
-        nchunks = 0 if self.batch_size == 0 else int(len(self.points) / self.batch_size)
-        dke_data = VmapWrapper(
-            compute_dke_sol,
-            vmap_axes=vmap_axes_wfield,
-            chunk_size=self.batch_size,
-            nchunks=nchunks,
-            sharding=data_sharding,
-        )(
-            states,
-            positions,
-            t,
-            self.field,
-            self.vp,
-            self.vpp,
-            self.yancc_wrapper.pitchgrid,
-            self.yancc_wrapper.speedgrid,
-            self.params,
-            self.params.config.evolveDensity,
-        )
-
-        sources = eqx.filter_jit(
-            eqx.filter_vmap(self.compute_sources, in_axes=vmap_axes_sources)
-        )(
-            states,
-            positions,
-            t,
-            self.field,
-            self.vp,
-            self.vpp,
-            self.params,
-        )
-
-        return [dke_data[0], sources, dke_data[1]]
-
-    @Physics_Decorator
-    def ComputePhysicsDerivatives(self, states, positions, t):
-
-        nchunks = 0 if self.batch_size == 0 else int(len(self.points) / self.batch_size)
-        ddke_data = VmapWrapper(
-            eqx.filter_jacrev(compute_dke_sol),
-            vmap_axes_wfield,
-            chunk_size=self.batch_size,
-            nchunks=nchunks,
-            sharding=data_sharding,
-        )(
-            states,
-            positions,
-            t,
-            self.field,
-            self.vp,
-            self.vpp,
-            self.yancc_wrapper.pitchgrid,
-            self.yancc_wrapper.speedgrid,
-            self.params,
-            self.params.config.evolveDensity,
-        )
-
-        dsources = eqx.filter_jit(
-            eqx.filter_vmap(
-                eqx.filter_jacrev(self.compute_sources), in_axes=vmap_axes_sources
-            )
-        )(
-            states,
-            positions,
-            t,
-            self.field,
-            self.vp,
-            self.vpp,
-            self.params,
-        )
-
-        return [ddke_data[0], dsources, ddke_data[1]]
 
     @StellaratorDecorator
     def compute_sources(
@@ -609,6 +545,142 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def InitialAuxValue(self, index, x):
         return 0.0
 
+    @Physics_Decorator
+    def ComputePhysics(self, states, positions, t):
+        dke_data = self._evaluate(
+            compute_dke_sol,
+            states,
+            positions,
+            t,
+            vmap_axes_wfield,
+            self.yancc_wrapper.pitchgrid,
+            self.yancc_wrapper.speedgrid,
+            self.params,
+            self.params.config.evolveDensity,
+        )
+
+        sources = self._evaluate(
+            self.compute_sources, states, positions, t, vmap_axes_sources, self.params
+        )
+
+        return [dke_data[0], sources, dke_data[1]]
+
+    @Physics_Decorator
+    def ComputePhysicsDerivatives(self, states, positions, t):
+
+        ddke_data = self._evaluate(
+            eqx.filter_jacrev(compute_dke_sol),
+            states,
+            positions,
+            t,
+            vmap_axes_wfield,
+            self.yancc_wrapper.pitchgrid,
+            self.yancc_wrapper.speedgrid,
+            self.params,
+            self.params.config.evolveDensity,
+        )
+
+        dsources = self._evaluate(
+            eqx.filter_jacrev(self.compute_sources),
+            states,
+            positions,
+            t,
+            vmap_axes_sources,
+            self.params,
+        )
+
+        return [ddke_data[0], dsources, ddke_data[1]]
+
+    @staticmethod
+    def _pad_tree(tree, pad_width):
+        """Pads all array leaves of a PyTree along axis 0 by repeating the last entry."""
+        dynamic, static = eqx.partition(tree, eqx.is_array)
+        padded = jax.tree_util.tree_map(
+            lambda leaf: jnp.pad(leaf, ((0, pad_width), (0, 0)), mode="edge"), dynamic
+        )
+        return eqx.combine(padded, static)
+
+    @staticmethod
+    def _unpad_tree(tree, length):
+        """Slices all array leaves of a PyTree back to `length` along axis 0."""
+        dynamic, static = eqx.partition(tree, eqx.is_array)
+        return eqx.combine(
+            jax.tree_util.tree_map(lambda leaf: leaf[:length, ...], dynamic), static
+        )
+
+    def prepareEvaluation(self, plan):
+        # called before physics are evaluated, repopulates field data at new points
+        self.layout = {}
+        points_of = {}
+
+        for site in plan.sites:
+            if site.entry not in BATCHED:
+                continue
+            points = jnp.asarray(site.points).ravel()
+            m = len(points)
+            if m in points_of:
+                if not jnp.array_equal(points_of[m], points):
+                    raise RuntimeError(
+                        f"two batched sites of {m} points at different points; "
+                        "Params cannot be keyed by batch size on this plan"
+                    )
+                continue
+            if m > self.max_batch:
+                raise RuntimeError(
+                    f"the plan announces a batch of {m} points, past the {self.max_batch} "
+                    f"this case holds at once ({self.batch_size / len(jax.devices())} rounds of {self.batch_size})"
+                )
+            points_of[m] = points
+
+            rounds = -(-m // self.batch_size)
+            pad_width = rounds * self.batch_size - m
+            fields_interp, vp_interp, vpp_interp = self.yancc_wrapper.get_fields_at_rho(
+                jnp.pad(points, (0, pad_width), mode="edge")
+            )
+            self.layout[m] = (
+                rounds,
+                fields_interp,
+                vp_interp,
+                vpp_interp,
+            )
+
+        self.levels.append((plan.grid.getNCells(), plan.k))
+
+    def _evaluate(self, func, _states, _positions, t, vmap_axes, *args):
+        m = len(_positions)
+        rounds = self.nchunks
+        if self.params.config.adaptiveGrid:
+            if m not in self.layout:
+                raise RuntimeError(
+                    f"a batch of {m} points that the evaluation plan did not announce"
+                )
+
+            rounds, fields, vp, vpp = self.layout[m]
+            pad = rounds * self.batch_size - m
+            states = self._pad_tree(_states, pad)
+            positions = jnp.pad(_positions, (0, pad), mode="edge")
+
+        else:
+            states = _states
+            positions = _positions
+            fields = self.field
+            vp = self.vp
+            vpp = self.vpp
+
+        out = vmap_batched(
+            func,
+            vmap_axes,
+            chunk_size=self.batch_size,
+            nchunks=rounds,
+            sharding=data_sharding,
+        )(states, positions, t, fields, vp, vpp, *args)
+
+        if self.params.config.adaptiveGrid:
+            self.rounds += rounds
+            return self._unpad_tree(out, m)
+        else:
+            return out
+
     """
     Create the adjoint problem associated with this transport system
     
@@ -695,7 +767,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
     def ComputePhysicsDerivatives(self, states, positions):
 
         nchunks = 0 if self.batch_size == 0 else int(self.npoints / self.batch_size)
-        ddke_data = VmapWrapper(
+        ddke_data = vmap_batched(
             dke_field_jac,
             vmap_axes=vmap_axes_wfield,
             chunk_size=self.batch_size,
@@ -714,18 +786,6 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
             self.params.config.evolveDensity,
         )
 
-        # ddke_data = eqx.filter_jit(
-        #     vmap_chunked(
-        #         HashablePartial(dke_grad), chunk_size=self.batch_size, in_axes=(0, 0, 0)
-        #     )
-        # )(tree_in, states, positions)
-        # ddke_data = eqx.filter_jit(jax.lax.map)(
-        #     dke_grad, (tree_in, states, positions), batch_size=self.batch_size
-        # )
-
-        # ddke_data = eqx.filter_jit(
-        #     eqx.filter_vmap(dke_grad, in_axes=(0, State.vmap_axes(), 0))
-        # )(tree_in, states, positions)
         tree_in = (self.field, self.vp, self.vpp)
 
         def sources(tree, states, x):

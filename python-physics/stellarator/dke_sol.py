@@ -4,6 +4,7 @@ from stellarator_state import StellaratorParams, StellaratorState
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 from yancc.species import LocalMaxwellian, Electron
 from yancc.solve import solve_dke
+import jax
 
 
 # we keep this function pure and not dependent on class data so jax can save it in persistent cache
@@ -86,6 +87,7 @@ def compute_dke_sol(
             verbose=0,
             multigrid_options={"smooth_solver": "banded", "max_grids": 3},
         )
+
         flux = (
             -sol.get("<heat_flux>")[0]
             * vp
@@ -135,12 +137,21 @@ def compute_dke_sol(
             multigrid_options={"smooth_solver": "banded", "max_grids": 2},
         )
 
+        # add a little extra diffusion to the density
+        x0 = 0.9
+        extra_diffusion = params.config.ADCoefficient * jax.lax.cond(
+            jax.lax.ge(x, x0),
+            lambda s: vp * (x - x0) / (1 - x0) * s.dndrho,
+            lambda s: s.dndrho * 0.0,
+            state,
+        )
+
         # particle flux is in units of [m^-2 s^-1], dn/dt is [m^-3 s^-1], so correct normalization is (a / (n_0/t_0))
         particle_flux = (
             -sol.get("<particle_flux>")[1]
             * vp
             * (params.constants.a / params.constants.DensityEquationNormalization())
-        )
+        ) + extra_diffusion
 
         heat_flux = (
             -sol.get("<heat_flux>")

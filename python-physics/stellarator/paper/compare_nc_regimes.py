@@ -19,15 +19,23 @@ data_sharding = NamedSharding(
         "axis",
     ),
 )
-# Magnetic field on a flux surface (here from a BOOZ_XFORM file).
-eq = desc.io.load("../eq_amb5_all_equilibria.h5")
-eq0 = desc.examples.get("precise_QH")
-# eq = desc.examples.get("W7-X")
 
-eq2 = desc.compat.rescale(
-    eq0, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
-)
+
+def load_and_rescale(name):
+    eq = desc.examples.get(name)
+
+    return desc.compat.rescale(
+        eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
+    )
+
+
+# Magnetic field on a flux surface (here from a BOOZ_XFORM file).
+
+eq = desc.io.load("../eq_amb5_all_equilibria.h5")
+eq_qh = load_and_rescale("precise_QH")
+
 eq_aries = desc.examples.get("ARIES-CS")
+eq_w7x = load_and_rescale("W7-X")
 eq0 = eq[0]
 eq1 = eq[-1]
 eq1.solve(x_scale="ess")
@@ -35,7 +43,7 @@ eq1.solve(x_scale="ess")
 species = [
     LocalMaxwellian(
         Electron,
-        temperature=5.0e3,  # eV
+        temperature=15.0e3,  # eV
         density=1.0e20,  # 1/m^3
         dTdrho=-2.0e3,
         dndrho=-0.4e20,
@@ -68,35 +76,40 @@ fun = eqx.filter_jit(
     eqx.filter_vmap(compute_Dij, in_axes=(0, None, None), out_axes=(0, 0))
 )
 
-rhos = [0.5, 0.9]
-names = ["initial", "optimized", "QH", "ARIES-CS"]
-eqs = [eq0, eq1, eq2, eq_aries]
-colors = ["r", "b", "g", "c"]
+rhos = [0.5]
+names = ["initial", "optimized", "QH", "ARIES-CS", "W7-X"]
+eqs = [eq0, eq1, eq_qh, eq_aries, eq_w7x]
+colors = ["r", "b", "g", "c", "m"]
 
 plt.rcParams.update({"font.family": "serif", "font.size": 10})
 fig, ax = plt.subplots(len(rhos), 2, sharex=True)
+ax_flat = ax.flatten()
 for rho, i in zip(rhos, range(0, len(rhos))):
     print(f"Solving at rho={rho}")
     for e, n, c in zip(eqs, names, colors):
+        print(f"Solving mdke for {n}")
         field = Field.from_desc(e, rho, 25, 47)
         d11, d31 = fun(nuhats, field, species)
-        ax[i, 0].loglog(nuhats, d11, label=n, color=c)
-        ax[i, 1].loglog(nuhats, jnp.abs(d31), label=n, color=c)
-        ax[i, 0].axvline(_nustar(species[0], field, 1.0), color=c, linestyle="--")
-        ax[i, 1].axvline(_nustar(species[0], field, 1.0), color=c, linestyle="--")
+        ax[2 * i].loglog(nuhats, d11, label=n, color=c)
+        ax[2 * i + 1].loglog(nuhats, jnp.abs(d31), label=n, color=c)
+        ax[2 * i].axvline(_nustar(species[0], field, 1.0), color=c, linestyle="--")
+        ax[2 * i + 1].axvline(_nustar(species[0], field, 1.0), color=c, linestyle="--")
 print("done")
 
+for i in range(0, len(rhos)):
+    ax[i, 0].set_title(rf"$\rho=${rhos[i]}", loc="right")
 
-for a in ax.flatten():
+
+for a in ax_flat:
     a.legend()
     a.set_box_aspect(1)
-for a in ax[-1, :]:
+for a in ax_flat[-2:]:
     a.set_xlabel(r"$\nu^*$")
-for a in ax[:, 0]:
+for a in ax_flat[0:-1:2]:
     a.set_ylabel(r"$D_{11}$")
-for a in ax[:, 1]:
+for a in ax[1:-1:2]:
     a.set_ylabel(r"$|D_{31}|$")
 
 fig.tight_layout()
-fig.savefig("nc_mdke_compare.png", dpi=500)
+fig.savefig("figs/nc_mdke_compare.png", dpi=500)
 plt.show()

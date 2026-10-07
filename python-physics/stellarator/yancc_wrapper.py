@@ -7,15 +7,19 @@ import yancc
 from yancc.field import Field
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
+import jax
 import jax.numpy as jnp
 from jax.tree_util import tree_map
 import equinox as eqx
+from typing import Optional
+from desc.equilibrium import Equilibrium
 from jaxtyping import ArrayLike, Float
 
 from typing import Optional
 
 
 import desc
+import interpax
 
 
 class yancc_data(eqx.Module):
@@ -29,7 +33,6 @@ class yancc_data(eqx.Module):
         Normalization for density (m^-3)
     Tnorm : float
         Normalization for temperature (eV)
-
     """
 
     fields: eqx.Module
@@ -45,6 +48,12 @@ class yancc_data(eqx.Module):
     nx: int
     na: int
 
+    eq: Optional[Equilibrium]  # used for re-evaluating the field for adaptive mesh runs
+    nt: Optional[int]
+    nz: Optional[int]
+
+    # for scaled tau
+
     def __init__(
         self,
         fields,
@@ -54,6 +63,9 @@ class yancc_data(eqx.Module):
         rho,
         nx: int = 5,
         na: int = 65,
+        eq=None,
+        nt=None,
+        nz=None,
     ):
 
         self.fields = fields
@@ -69,10 +81,37 @@ class yancc_data(eqx.Module):
         self.nx = nx
 
         self.fields_unstacked = desc.backend.tree_unstack(fields)
+        self.eq = eq
+        self.nt = nt
+        self.nz = nz
 
         print(
             f"yancc_wrapper initialized successfully with resolution na={self.na}, nx={self.nx}."
         )
+
+    def get_fields(self):
+        return self.fields, self.Vp, self.Vpp
+
+    # uses interpolation to evaluate the fields at a new grid
+    @jax.jit
+    def get_fields_at_rho(self, _rho):
+        def _interpolate_to_rho(rho_new, rho_old, data):
+            return jnp.apply_along_axis(
+                lambda f_1d: interpax.interp1d(rho_new, rho_old, f_1d, extrap=True),
+                axis=0,
+                arr=data,
+            )
+
+        Vp_interp = interpax.interp1d(_rho, self.rho, self.Vp, extrap=True)
+        Vpp_interp = interpax.interp1d(_rho, self.rho, self.Vpp, extrap=True)
+
+        dynamic, static = eqx.partition(self.fields, eqx.is_array)
+        dynamic_interp = jax.tree.map(
+            lambda leaf: _interpolate_to_rho(_rho, self.rho, leaf), dynamic
+        )
+
+        fields_interp = eqx.combine(dynamic_interp, static)
+        return fields_interp, Vp_interp, Vpp_interp
 
     @classmethod
     def from_eq(
@@ -84,6 +123,7 @@ class yancc_data(eqx.Module):
         nz: Optional[int] = 33,
         eq=None,
         grid=None,
+        cell_boundaries=None,
     ):
 
         print("Initializing yancc wrapper")
@@ -99,11 +139,9 @@ class yancc_data(eqx.Module):
         V_r = grid.compress(desc_data["V_r(r)"]) / V[-1]
         V_rr = grid.compress(desc_data["V_rr(r)"]) / V[-1]
 
-        fields = []
-        for r in rho:
-            fields.append(Field.from_desc(eq, r, nt, nz))
+        fields = jax.vmap(lambda r: Field.from_desc(eq, r, nt, nz))(rho)
 
-        fields = tree_map(lambda *vals: jnp.stack(vals), *fields)
+        # fields = tree_map(lambda *vals: jnp.stack(vals), *fields)
 
         return cls(
             fields=fields,
@@ -113,6 +151,9 @@ class yancc_data(eqx.Module):
             nx=nx,
             na=na,
             rho=rho,
+            eq=eq,
+            nt=nt,
+            nz=nz,
         )
 
     # for constructing from data passed by DESC
@@ -169,17 +210,13 @@ class yancc_data(eqx.Module):
             na=na,
         )
 
+    # for evaluating equilibrium at new rho for adaptive meshing
     @classmethod
-    def from_other(cls, fields_, grid_, other):
-        return cls(
-            fields=fields_,
-            grid=grid_,
-            Vp=other.Vp,
-            Vpp=other.Vpp,
-            rho=other.rho,
-            nx=other.nx,
-            na=other.na,
+    def from_other(cls, rho, other):
+        if other.eq is None:
+            raise RuntimeError(
+                "from_other requires the old object to have an Equilibrium"
+            )
+        return cls.from_eq(
+            rho, other.nx, other.na, other.nt, other.nz, other.eq, other.grid
         )
-
-    def get_fields(self):
-        return self.fields, self.Vp, self.Vpp

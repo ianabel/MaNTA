@@ -35,11 +35,13 @@ st_config = {
     "ECHWidth": 0.26,
     "EdgeTemperature": 0.2,
     "EdgeDensity": 0.2,
-    "n0": 0.5,
-    "T0": 1.0,
+    "n0": 0.2,
+    "T0": 0.2,
     "FusionFactor": 0.01,
     "evolveDensity": True,
     "useBatching": True,
+    "adaptiveGrid": True,
+    "nchunks": 3,
 }
 
 
@@ -55,15 +57,14 @@ tau = 0.5
 nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 4)
 
 nodes = np.concatenate(([0, 0.05, 0.1], nodes, [0.99, rho_upper]))
-print(nodes)
 solver_config = {
     "OutputFilename": fname,
-    "Polynomial_degree": degree,
-    "Grid_points": nodes,
-    "Grid_size": len(nodes) - 1,
+    "PolynomialDegree": degree,
+    "GridPoints": nodes,
+    "GridSize": 6,
     "tau": tau,
-    "Lower_boundary": 0.0,
-    "Upper_boundary": rho_upper,
+    "LowerBoundary": 0.0,
+    "UpperBoundary": rho_upper,
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
@@ -74,7 +75,8 @@ solver_config = {
     "WriteDatFile": True,
     "SteadyStateDiagnostics": True,
     "SteadyStateStepDiagnostics": True,
-    "MaxRejectedSteps": 10,
+    "NewtonJacobianReuse": 4,
+    "MaxRejectedSteps": 2,
     "restart": False,
     "zeroFlux": True,
     "solveAdjoint": False,
@@ -89,26 +91,32 @@ config = {
 }
 
 
-points = MaNTA.getNodes(
-    nodes,
-    solver_config["Polynomial_degree"],
-)
+def cheb_nodes(nCells):
+    nodes = np.ndarray((nCells + 1,))
+    for i in range(0, len(nodes)):
+        nodes[nCells - i] = 0.5 * (1 + np.cos(i * np.pi / nCells))
+    return nodes
 
-yancc_rho = jnp.array(points)
 
-yancc_rho = jnp.array(points)
+yancc_rho = cheb_nodes(100)
+
 yancc_ntheta = 17
 yancc_nzeta = 25
 
 yancc_res = {"na": 45, "nx": 7}
 
-eqs = desc.io.load("eq_random0_all_equilibria.h5")
-eq = eqs[-1].copy()
+# eqs = desc.io.load("eq_random0_all_equilibria.h5")
+# eq = eqs[-1].copy()
+eq = desc.examples.get("ARIES-CS")
+points = MaNTA.getNodes(
+    solver_config["GridPoints"],
+    solver_config["PolynomialDegree"],
+)
 
 
 # yancc_wrapper = yancc_data.from_eq(points, grid = yancc_grid,rho = yancc_rho, Density=Density, eq=eq_init, nt = yancc_ntheta, nz = yancc_nzeta)
 yancc_wrapper = yancc_data.from_eq(
-    points, eq=eq, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
+    yancc_rho, eq=eq, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
 
 st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)

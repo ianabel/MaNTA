@@ -15,6 +15,7 @@ class StellaratorConfig(eqx.Module):
     ECHWidth: float
     EdgeTemperature: float
     EdgeDensity: float
+    ADCoefficient: float
     rhoUpper: float
     n0: float
     T0: float
@@ -22,6 +23,9 @@ class StellaratorConfig(eqx.Module):
     evolveDensity: bool
     useSharding: bool
     useBatching: bool
+    batch_size: int
+    nchunks: int
+    adaptiveGrid: bool
 
     def __init__(
         self,
@@ -36,6 +40,7 @@ class StellaratorConfig(eqx.Module):
         ParticleSourceCenter=0.0,
         ParticleSourceWidth=0.1,
         ParticleSourceHeight=1.0,
+        ADCoefficient=0.0,
         rhoUpper=1.0,
         T0=None,
         n0=None,
@@ -43,6 +48,9 @@ class StellaratorConfig(eqx.Module):
         evolveDensity=False,
         useSharding=True,
         useBatching=False,
+        batch_size=16,
+        nchunks=2,
+        adaptiveGrid=False,
     ):
         self.ParticleSourceCenter = ParticleSourceCenter
         self.ParticleSourceWidth = ParticleSourceWidth
@@ -55,6 +63,7 @@ class StellaratorConfig(eqx.Module):
         self.ECHWidth = ECHWidth
         self.EdgeTemperature = EdgeTemperature
         self.EdgeDensity = EdgeDensity
+        self.ADCoefficient = ADCoefficient
         self.rhoUpper = rhoUpper
         if T0 is None:
             self.T0 = self.EdgeTemperature
@@ -69,6 +78,9 @@ class StellaratorConfig(eqx.Module):
         self.evolveDensity = evolveDensity
         self.useSharding = useSharding
         self.useBatching = useBatching
+        self.batch_size = batch_size
+        self.nchunks = nchunks
+        self.adaptiveGrid = adaptiveGrid
 
 
 class StellaratorParams(eqx.Module):
