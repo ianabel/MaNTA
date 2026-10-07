@@ -52,6 +52,7 @@ struct SolverConfig
     std::string              tauScaling;
     std::string              tauUpdate;
     double                   tauFloor;
+    std::string              TauKappa;
     double                   delta_t;
     double                   t_initial;
     double                   Relative_tolerance;

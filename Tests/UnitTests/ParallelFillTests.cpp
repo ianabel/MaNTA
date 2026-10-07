@@ -129,6 +129,7 @@ BOOST_AUTO_TEST_CASE(a_plan_for_another_level_is_the_plan_a_solver_there_makes)
     for (std::string const &extra :
          {std::string{}, std::string{"Superconvergent = true\n"},
           std::string{"Superconvergent = true\ntauScaling = \"Diffusive\"\n"},
+          std::string{"Superconvergent = true\ntauScaling = \"Diffusive\"\nTauKappa = \"Face\"\n"},
           std::string{"tauScaling = \"Diffusive\"\ntauUpdate = \"ContinuationStep\"\n"}})
     {
         BOOST_TEST_CONTEXT(extra)
@@ -173,26 +174,38 @@ BOOST_AUTO_TEST_CASE(a_level_fills_to_the_largest_that_costs_no_more_rounds)
     BOOST_TEST(filledCellCount(planAt, grid, 4, 1000, 30) == 5u);
 }
 
-BOOST_AUTO_TEST_CASE(the_tau_faces_are_counted_in_a_real_plan)
+BOOST_AUTO_TEST_CASE(the_tau_evaluations_are_counted_in_a_real_plan)
 {
-    // Under a Diffusive tau updated per residual the faces are a second batch
-    // per residual, 2 nCells wide, and 1 + 3 nVars + nAux more per Jacobian
-    // build: at 5 cells, k = 4 and width 64 that is 1 + 1 residual rounds and
-    // 1 + 4 Jacobian ones. (They never bind a fill on their own -- the
-    // residual's n (k + 2) points outgrow their 2n first, and they do not depend
-    // on k -- but they are part of what a level costs.)
-    const SolverConfig config =
-        configFrom("Superconvergent = true\ntauScaling = \"Diffusive\"\ntauUpdate = \"Residual\"\n");
     AxisSingular problem;
     const Grid grid(0.0, 1.0, 5);
-    const auto planner = configured(config, problem, grid, 4);
-    BOOST_TEST((roundsOf(planner->evaluationPlan(), 64) == EvaluationRounds{2, 5, 0}));
+    auto rounds = [&](std::string const &extra)
+    {
+        return roundsOf(configured(configFrom("Superconvergent = true\ntauScaling = \"Diffusive\"\n" +
+                                              extra),
+                                   problem, grid, 4)
+                            ->evaluationPlan(),
+                        64);
+    };
 
-    const auto continuation = configured(
-        configFrom("Superconvergent = true\ntauScaling = \"Diffusive\"\n"
-                   "tauUpdate = \"ContinuationStep\"\n"),
-        problem, grid, 4);
-    BOOST_TEST((roundsOf(continuation->evaluationPlan(), 64) == EvaluationRounds{1, 1, 1}));
+    // Read at the nodes and updated per residual, tau is a second batch per
+    // residual on the residual's own 30 points, and 3 nVars + nAux more per
+    // Jacobian build for d tau / dy -- kappa itself comes off the build's own
+    // derivatives. At width 64 that is 1 + 1 residual rounds and 1 + 3
+    // Jacobian ones.
+    BOOST_TEST((rounds("tauUpdate = \"Residual\"\n") == EvaluationRounds{2, 4, 0}));
+    // Held per continuation step, it reads the last build's derivatives and
+    // recurs nowhere.
+    BOOST_TEST((rounds("tauUpdate = \"ContinuationStep\"\n") == EvaluationRounds{1, 1, 0}));
+
+    // Read at the faces, the faces are a batch of 2 nCells: per residual, and
+    // 1 + 3 nVars + nAux per Jacobian build, so 1 + 1 residual rounds and 1 + 4
+    // Jacobian ones. (They never bind a fill on their own -- the residual's
+    // n (k + 2) points outgrow their 2n first, and they do not depend on k --
+    // but they are part of what a level costs.)
+    BOOST_TEST((rounds("tauUpdate = \"Residual\"\nTauKappa = \"Face\"\n") ==
+                EvaluationRounds{2, 5, 0}));
+    BOOST_TEST((rounds("tauUpdate = \"ContinuationStep\"\nTauKappa = \"Face\"\n") ==
+                EvaluationRounds{1, 1, 1}));
 }
 
 BOOST_AUTO_TEST_CASE(an_underused_configured_level_is_warned_about_and_a_full_one_is_not)

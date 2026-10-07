@@ -8,8 +8,9 @@ The formula and the Jacobian wiring are covered in C++
     tau puts tau * (u_h - u_b) into sigma_h at the wall and a Diffusive one does
     not. The closed form of the steady flux is known, so both are compared
     against it rather than against each other;
-  * a pointwise Python case reaching the face-point derivative call, which goes
-    through the trampoline's per-point dSigmaFn_dq;
+  * both TauKappa sources -- the cell's nodal d sigma_hat / d q extrapolated
+    to its faces, and the face-point derivative call -- each reached by a
+    pointwise Python case through the trampoline's per-point dSigmaFn_dq;
   * tauUpdate = "ContinuationStep" converging to the same steady state as
     "Residual" -- the two differ in how tau is updated on the way, not in the
     equations at the end -- and being refused for a time march;
@@ -100,21 +101,25 @@ def wall_flux_error(stem, **overrides):
     return abs(steady_sigma(stem, **overrides)[-1] - sigma_exact(1.0))
 
 
-def test_diffusive_tau_keeps_the_wall_flux_out_of_the_penalty():
+@pytest.mark.parametrize("kappa", ["Nodal", "Face"])
+def test_diffusive_tau_keeps_the_wall_flux_out_of_the_penalty(kappa):
     # Measured: 2.4e-2 at tau = 1 constant, against a flux of 3.96e-2 -- the
-    # oscillation in sigma_h that the toy model was showing -- and 1.9e-4 with
-    # the same multiplier under Diffusive scaling.
+    # oscillation in sigma_h that the toy model was showing -- and, with the
+    # same multiplier under Diffusive scaling, 1.9e-4 with kappa read at the
+    # faces and 2.4e-4 with it extrapolated from the nodes.
     constant = wall_flux_error("wall_constant", tau=1.0)
-    diffusive = wall_flux_error("wall_diffusive", tau=1.0, tauScaling="Diffusive")
+    diffusive = wall_flux_error("wall_diffusive_" + kappa, tau=1.0, tauScaling="Diffusive",
+                                TauKappa=kappa)
     assert constant > 1e-2, constant
     assert diffusive < 1e-3, diffusive
 
 
+@pytest.mark.parametrize("kappa", ["Nodal", "Face"])
 @pytest.mark.parametrize("update", ["ContinuationStep", "JacobianBuild"])
-def test_a_tau_held_fixed_reaches_the_same_steady_state(update):
-    diffusive = dict(tau=1.0, tauScaling="Diffusive", SteadyStateTolerance=1e-9)
-    every = steady_sigma("wall_every_residual", tauUpdate="Residual", **diffusive)
-    held = steady_sigma("wall_held_" + update, tauUpdate=update, **diffusive)
+def test_a_tau_held_fixed_reaches_the_same_steady_state(update, kappa):
+    diffusive = dict(tau=1.0, tauScaling="Diffusive", TauKappa=kappa, SteadyStateTolerance=1e-9)
+    every = steady_sigma("wall_every_residual_" + kappa, tauUpdate="Residual", **diffusive)
+    held = steady_sigma("wall_held_" + update + "_" + kappa, tauUpdate=update, **diffusive)
     assert np.max(np.abs(every - held)) < 1e-7 * np.max(np.abs(every))
 
 
@@ -131,6 +136,8 @@ def test_a_tau_frozen_per_step_is_refused_for_a_time_march():
     ({"tauScaling": "Diffusive", "tauFloor": 0.0}, "tauFloor"),
     ({"tauScaling": "Diffusive", "tauUpdate": "Newton"}, "tauUpdate"),
     ({"tauUpdate": "ContinuationStep"}, "Diffusive"),
+    ({"tauScaling": "Diffusive", "TauKappa": "Trace"}, "TauKappa"),
+    ({"TauKappa": "Face"}, "Diffusive"),
 ])
 def test_bad_tau_scaling_configurations_are_refused(overrides, needle):
     runner = manta.Runner(WallLayer())

@@ -352,7 +352,11 @@ BOOST_AUTO_TEST_CASE(apply_solver_config_carries_the_tau_scaling_through)
     applySolverConfig(load(minimal + "tauScaling = \"Diffusive\"\ntauFloor = 0.02\n"), sys);
     BOOST_TEST((sys.getTauScaling() == SystemSolver::TauScaling::Diffusive));
     BOOST_TEST((sys.getTauUpdate() == SystemSolver::TauUpdate::Residual));
+    BOOST_TEST((sys.getTauKappa() == SystemSolver::TauKappa::Nodal));
     BOOST_TEST(sys.tauFloorFraction == 0.02);
+
+    applySolverConfig(load(minimal + "tauScaling = \"Diffusive\"\nTauKappa = \"Face\"\n"), sys);
+    BOOST_TEST((sys.getTauKappa() == SystemSolver::TauKappa::Face));
 
     applySolverConfig(load(minimal + "tauScaling = \"Diffusive\"\ntauUpdate = \"ContinuationStep\"\n"), sys);
     BOOST_TEST((sys.getTauUpdate() == SystemSolver::TauUpdate::ContinuationStep));
@@ -378,6 +382,8 @@ BOOST_AUTO_TEST_CASE(bad_tau_scaling_configurations_are_refused_by_name)
         {"tauScaling = \"Diffusive\"\nsolveAdjoint = true\n", "solveAdjoint"},
         {"tauScaling = \"Diffusive\"\ntauUpdate = \"Newton\"\n", "tauUpdate"},
         {"tauUpdate = \"ContinuationStep\"\n", "Diffusive"},
+        {"tauScaling = \"Diffusive\"\nTauKappa = \"Trace\"\n", "TauKappa"},
+        {"TauKappa = \"Face\"\n", "Diffusive"},
     };
     for (auto const &[extra, needle] : cases)
     {

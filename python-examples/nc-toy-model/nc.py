@@ -73,8 +73,8 @@ class nc_test(VectorizedTransportSystem):
 # tau much larger than kappa/h at the wall -- which is what tau = 1 is here once
 # u^n is small -- pushes tau * (u_h - u_upper) into sigma_h, and that is the
 # oscillation in the last cell. "ContinuationStep" re-evaluates tau once per
-# steady continuation step, which costs ~8% over a constant tau where updating it
-# in every residual costs ~75%, for the same answer.
+# steady continuation step, which costs ~7% over a constant tau where updating it
+# in every residual costs ~170%, for the same answer.
 #
 # MeshAdaptation then resolves the layer: it decides from one uniform solve
 # whether an end needs grading (here the wall, from n ~ 1 up), regrades the same
@@ -94,7 +94,7 @@ class nc_test(VectorizedTransportSystem):
 # the less accurate one: on these five graded cells a constant tau gives 0.09%
 # L_inf in u against Diffusive's 0.24% (python-examples/paper-figures/
 # adaptivity.py on main, n = 2.5). What Diffusive buys is the wall flux on a mesh
-# that stays uniform -- 0.4% against 50% at constant tau on five uniform cells --
+# that stays uniform -- 0.6% against 50% at constant tau on five uniform cells --
 # and the sensor does not grade the smallest exponents here. Drop it for the
 # best u on the graded runs.
 solver_config = {

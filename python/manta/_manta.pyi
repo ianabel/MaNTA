@@ -231,6 +231,8 @@ class EvaluationKind:
     
       TauFaces
     
+      TauNodes
+    
       ScalarConstraint
     
       ScalarJacobian
@@ -245,18 +247,19 @@ class EvaluationKind:
     
       MassMatrix
     """
-    Adjoint: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.Adjoint: 8>
-    FieldCoupling: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.FieldCoupling: 7>
+    Adjoint: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.Adjoint: 9>
+    FieldCoupling: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.FieldCoupling: 8>
     InitialCondition: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.InitialCondition: 2>
-    InitialProjection: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.InitialProjection: 9>
+    InitialProjection: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.InitialProjection: 10>
     Jacobian: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.Jacobian: 1>
-    MassMatrix: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.MassMatrix: 10>
+    MassMatrix: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.MassMatrix: 11>
     Residual: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.Residual: 0>
-    ScalarConstraint: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.ScalarConstraint: 4>
-    ScalarCoupling: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.ScalarCoupling: 6>
-    ScalarJacobian: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.ScalarJacobian: 5>
+    ScalarConstraint: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.ScalarConstraint: 5>
+    ScalarCoupling: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.ScalarCoupling: 7>
+    ScalarJacobian: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.ScalarJacobian: 6>
     TauFaces: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.TauFaces: 3>
-    __members__: typing.ClassVar[dict[str, EvaluationKind]]  # value = {'Residual': <EvaluationKind.Residual: 0>, 'Jacobian': <EvaluationKind.Jacobian: 1>, 'InitialCondition': <EvaluationKind.InitialCondition: 2>, 'TauFaces': <EvaluationKind.TauFaces: 3>, 'ScalarConstraint': <EvaluationKind.ScalarConstraint: 4>, 'ScalarJacobian': <EvaluationKind.ScalarJacobian: 5>, 'ScalarCoupling': <EvaluationKind.ScalarCoupling: 6>, 'FieldCoupling': <EvaluationKind.FieldCoupling: 7>, 'Adjoint': <EvaluationKind.Adjoint: 8>, 'InitialProjection': <EvaluationKind.InitialProjection: 9>, 'MassMatrix': <EvaluationKind.MassMatrix: 10>}
+    TauNodes: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.TauNodes: 4>
+    __members__: typing.ClassVar[dict[str, EvaluationKind]]  # value = {'Residual': <EvaluationKind.Residual: 0>, 'Jacobian': <EvaluationKind.Jacobian: 1>, 'InitialCondition': <EvaluationKind.InitialCondition: 2>, 'TauFaces': <EvaluationKind.TauFaces: 3>, 'TauNodes': <EvaluationKind.TauNodes: 4>, 'ScalarConstraint': <EvaluationKind.ScalarConstraint: 5>, 'ScalarJacobian': <EvaluationKind.ScalarJacobian: 6>, 'ScalarCoupling': <EvaluationKind.ScalarCoupling: 7>, 'FieldCoupling': <EvaluationKind.FieldCoupling: 8>, 'Adjoint': <EvaluationKind.Adjoint: 9>, 'InitialProjection': <EvaluationKind.InitialProjection: 10>, 'MassMatrix': <EvaluationKind.MassMatrix: 11>}
     def __eq__(self, other: typing.Any) -> bool:
         ...
     def __getstate__(self) -> int:

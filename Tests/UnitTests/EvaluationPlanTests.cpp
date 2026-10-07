@@ -219,6 +219,7 @@ struct Run
     bool superconvergent = false;
     bool steady = false;
     std::optional<SystemSolver::TauUpdate> diffusive; // empty: a constant tau
+    SystemSolver::TauKappa kappa = SystemSolver::TauKappa::Nodal;
     Shape shape;
     bool adjoint = false;
 };
@@ -237,7 +238,7 @@ void configure(SystemSolver &sys, Run const &run, AdjointProblem *adjoint)
     sys.setTolerances({1e-8}, 1e-6);
     sys.setSuperconvergent(run.superconvergent);
     if (run.diffusive)
-        sys.setTauScaling(SystemSolver::TauScaling::Diffusive, 1e-3, *run.diffusive);
+        sys.setTauScaling(SystemSolver::TauScaling::Diffusive, 1e-3, *run.diffusive, run.kappa);
     if (run.steady)
     {
         sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
@@ -309,19 +310,27 @@ BOOST_AUTO_TEST_SUITE(evaluation_plan_tests)
 BOOST_AUTO_TEST_CASE(every_call_is_announced_and_every_announced_site_is_used)
 {
     using U = SystemSolver::TauUpdate;
+    constexpr auto Face = SystemSolver::TauKappa::Face;
     const std::vector<Run> runs = {
         {.label = "march"},
         {.label = "march_superconvergent", .superconvergent = true},
         {.label = "march_diffusive", .diffusive = U::Residual},
+        {.label = "march_diffusive_face", .diffusive = U::Residual, .kappa = Face},
         {.label = "march_udot", .shape = {.readsUdot = true}},
         {.label = "march_scalar", .shape = {.scalar = true}},
         {.label = "march_adjoint", .adjoint = true},
         {.label = "steady", .steady = true},
         {.label = "steady_superconvergent_diffusive", .superconvergent = true, .steady = true,
          .diffusive = U::Residual},
+        {.label = "steady_superconvergent_diffusive_face", .superconvergent = true, .steady = true,
+         .diffusive = U::Residual, .kappa = Face},
         {.label = "steady_continuation_tau", .steady = true, .diffusive = U::ContinuationStep},
+        {.label = "steady_continuation_tau_face", .steady = true, .diffusive = U::ContinuationStep,
+         .kappa = Face},
         {.label = "steady_jacobian_tau", .superconvergent = true, .steady = true,
          .diffusive = U::JacobianBuild},
+        {.label = "steady_jacobian_tau_face", .superconvergent = true, .steady = true,
+         .diffusive = U::JacobianBuild, .kappa = Face},
         {.label = "steady_scalar_superconvergent", .superconvergent = true, .steady = true,
          .shape = {.scalar = true}},
         {.label = "steady_adjoint_superconvergent", .superconvergent = true, .steady = true,
@@ -356,9 +365,17 @@ BOOST_AUTO_TEST_CASE(every_call_is_announced_and_every_announced_site_is_used)
             const Index perCell = run.superconvergent ? k + 2 : k + 1;
             BOOST_TEST(plan.points(EvaluationKind::Residual).size() == size_t(nCells * perCell));
             BOOST_TEST(plan.points(EvaluationKind::Jacobian).size() == size_t(nCells * perCell));
-            BOOST_TEST(plan.has(EvaluationKind::TauFaces) == run.diffusive.has_value());
-            if (run.diffusive)
+            // A nodal tau reads the physics nodes and adds no point set; a face
+            // tau adds the 2 nCells face points.
+            const bool faceTau = run.diffusive && run.kappa == SystemSolver::TauKappa::Face;
+            const bool nodalTau = run.diffusive && run.kappa == SystemSolver::TauKappa::Nodal;
+            BOOST_TEST(plan.has(EvaluationKind::TauFaces) == faceTau);
+            BOOST_TEST(plan.has(EvaluationKind::TauNodes) == nodalTau);
+            if (faceTau)
                 BOOST_TEST(plan.points(EvaluationKind::TauFaces).size() == size_t(2 * nCells));
+            if (nodalTau)
+                BOOST_TEST((plan.points(EvaluationKind::TauNodes) ==
+                            plan.points(EvaluationKind::Residual)));
 
             // One set of cell points per level: the initial condition samples
             // where the residual does, so a superconvergent level never asks for
@@ -477,13 +494,14 @@ BOOST_AUTO_TEST_CASE(a_restart_is_not_a_change_of_plan)
 BOOST_AUTO_TEST_CASE(batch_sizes_are_the_shapes_to_compile_for)
 {
     // What a case compiled per shape asks the plan for. Five cells at k = 4,
-    // superconvergent with a Diffusive tau: the residual, the Jacobian and the
-    // initial condition on the 30 star nodes, the faces on 10.
+    // superconvergent with a Diffusive tau read at the faces: the residual, the
+    // Jacobian and the initial condition on the 30 star nodes, the faces on 10.
     Grid grid(0.0, 1.0, nCells);
     RecordingCase problem;
     SystemSolver sys(grid, k, &problem);
     configure(sys, {.label = "shapes", .superconvergent = true,
-                    .diffusive = SystemSolver::TauUpdate::Residual},
+                    .diffusive = SystemSolver::TauUpdate::Residual,
+                    .kappa = SystemSolver::TauKappa::Face},
               nullptr);
     const EvaluationPlan plan = sys.evaluationPlan();
 
@@ -501,6 +519,25 @@ BOOST_AUTO_TEST_CASE(batch_sizes_are_the_shapes_to_compile_for)
     BOOST_TEST((faces[1].cadence == EvaluationCadence::PerJacobianBuild));
     BOOST_TEST(faces[1].calls == 4);
     BOOST_TEST((faces[2].cadence == EvaluationCadence::OncePerRun));
+
+    // The same with kappa read at the nodes: one shape, the star nodes, and
+    // the same three cadences -- without the 1 + in the Jacobian build's count,
+    // since kappa there comes off the build's own derivatives.
+    SystemSolver nodal(grid, k, &problem);
+    configure(nodal, {.label = "shapes_nodal", .superconvergent = true,
+                      .diffusive = SystemSolver::TauUpdate::Residual},
+              nullptr);
+    const EvaluationPlan nodalPlan = nodal.evaluationPlan();
+    BOOST_TEST((nodalPlan.batchSizes(EvaluationEntry::ComputePhysicsDerivatives) ==
+                std::vector<Index>{30}));
+    BOOST_TEST(!nodalPlan.has(EvaluationKind::TauFaces));
+    std::vector<EvaluationSite> nodes = nodalPlan.sitesOf(EvaluationKind::TauNodes);
+    BOOST_TEST_REQUIRE(nodes.size() == 3u);
+    BOOST_TEST((nodes[0].cadence == EvaluationCadence::PerResidual));
+    BOOST_TEST(nodes[0].calls == 1);
+    BOOST_TEST((nodes[1].cadence == EvaluationCadence::PerJacobianBuild));
+    BOOST_TEST(nodes[1].calls == 3);
+    BOOST_TEST((nodes[2].cadence == EvaluationCadence::OncePerRun));
 
     // A plan is the solver's statement about itself, and building one has no
     // effect on the solver or the case.
