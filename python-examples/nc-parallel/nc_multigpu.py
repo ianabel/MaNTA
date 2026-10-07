@@ -1,36 +1,66 @@
-"""The nc toy problem on a machine that evaluates the flux N points at a time.
+"""The nc toy problem with its flux spread over every JAX device on the host.
 
     -d/dx[ 2 x D u^n u' ] = H exp(-x^2 / W),   sigma(0) = 0,   u(1) = u_b
 
-has a wall layer at x = 1 about 5e-4 wide at n = 2.5, which MeshAdaptation grades
-towards and the degree loop then resolves.
+has a wall layer at x = 1, which MeshAdaptation grades towards and the degree
+loop then resolves.
 
-The machine here is N worker threads. MaNTA hands the case each batch of M points
-in one call; the case redistributes it across the N workers as N vectorised calls
-of ceil(M / N) points each, so a batch takes ceil(M / N) point-times on the
-longest share -- the cost PhysicsParallelism = N describes. The redistribution is
-the case's own plan, and it is made from MaNTA's: see prepareEvaluation.
+The machine. One *round* is one jitted, vmapped call on WIDTH points, sharded
+across the devices: WIDTH = (number of devices) x EVALS_PER_DEVICE. MaNTA hands
+the case each batch of M points in one call; the case pads it to a whole number
+of rounds and runs ceil(M / WIDTH) of them one after another (manta.jax's
+vmap_batched), so every round has the one compiled shape whatever M is.
 
-The same machine runs the problem twice: once with MaNTA told nothing
-(PhysicsParallelism = 1), once told N, which lets each adaptive level be filled
-to the rounds it already costs.
+Two configuration keys describe that machine to MaNTA, and they answer
+different questions:
 
-    python nc_parallel.py [N]        # N defaults to 64
+  * PhysicsParallelism = WIDTH is what a batch *costs*: ceil(M / WIDTH) rounds.
+    The adaptation controllers fill each level they choose -- more cells for the
+    graded mesh, a higher degree in the degree loop -- up to the rounds that
+    level already pays for, since the padding would be evaluated anyway.
+
+  * MaxPhysicsBatch = MAX_ROUNDS x WIDTH is what a batch may *be*. The case holds
+    a whole batch on the devices at once -- its padded state and parameters, and
+    every round's results, which are concatenated there before they come back --
+    so the device memory one call needs grows with M. MaNTA promises never to
+    hand over a recurring batch (per residual, per Jacobian build, per
+    continuation step) larger than this: the degree loop stops at the highest
+    degree within it, no fill passes it, and a configured level past it is
+    refused before the case is asked for a single point.
+
+The first is advice about cost and the run is correct without it; the second is
+a limit of the case, so it is set on every run.
+
+The same machine runs the problem twice: once with MaNTA told nothing about the
+cost (PhysicsParallelism = 1) and once told WIDTH. Both are capped.
+
+    python nc_multigpu.py
+
+On a host with one device, XLA_FLAGS=--xla_force_host_platform_device_count=8
+gives the CPU eight to shard over.
 """
 
 import math
-import sys
 import time
 
 import jax
-import equinox as eqx
-import jax.numpy as jnp
-import numpy as np
-from jaxtyping import Float, ArrayLike
-from scipy.integrate import quad
 
-import manta
-from manta.jax import State, Physics_Decorator, vmap_batched
+# Off by default, so JAX computes the physics in float32: double precision can
+# cost a lot of throughput on a GPU. The price is that the flux the solver
+# differences and converges to 1e-8 carries single-precision round-off, which
+# can slow Newton or stall a tight SteadyStateTolerance. Uncomment to run the
+# physics in double precision, like the rest of the solve. A driver may set it;
+# manta.jax itself never does.
+# jax.config.update("jax_enable_x64", True)
+
+import equinox as eqx  # noqa: E402
+import jax.numpy as jnp  # noqa: E402
+import numpy as np  # noqa: E402
+from jaxtyping import ArrayLike, Float  # noqa: E402
+from scipy.integrate import quad  # noqa: E402
+
+import manta  # noqa: E402
+from manta.jax import Physics_Decorator, State, vmap_batched  # noqa: E402
 
 # from jax.sharding import PartitionSpec, NamedSharding
 #
@@ -63,10 +93,12 @@ BATCHED = (
     manta.EvaluationEntry.ComputePhysicsDerivatives,
 )
 
-
-MAX_EVALS_PER_GPU = 4
-N_BATCHES = 2
-MAX_WIDTH = N_BATCHES * len(jax.devices()) * MAX_EVALS_PER_GPU
+# Points each device evaluates in one round, and the most rounds one call may
+# take. WIDTH is a multiple of the device count, which sharding needs.
+EVALS_PER_DEVICE = 16
+MAX_ROUNDS = 4
+WIDTH = len(jax.devices()) * EVALS_PER_DEVICE  # -> PhysicsParallelism
+MAX_BATCH = MAX_ROUNDS * WIDTH  # -> MaxPhysicsBatch
 
 
 def source(x, H, W):
@@ -100,31 +132,39 @@ def _compute_physics(state, x, t, p: Params):
     return [[sigma(0, state, x, t, p)], [p.S], []]
 
 
+# Built once rather than per call, so that the jitted round vmap_batched wraps
+# around it is the same function every time and compiles once.
+_compute_physics_derivatives = eqx.filter_jacrev(_compute_physics)
+
+_VMAP_AXES = (State.vmap_axes(), 0, None, Params.vmap_axes())
+
+
 class ParallelNC(manta.TransportSystem):
-    """The nc flux on an N-thread machine.
+    """The nc flux, evaluated WIDTH points a round across the host's devices.
 
     `regrid = InPlace`: this case keeps nothing that depends on the mesh except
-    the distribution below, which prepareEvaluation rebuilds from every new plan.
-    That is exactly what the adaptive drivers need to move one instance from
-    level to level, so it can say so.
+    the per-batch layout below, which prepareEvaluation rebuilds from every new
+    plan. That is exactly what the adaptive drivers need to move one instance
+    from level to level, so it can say so.
     """
 
     regrid = manta.Regrid.InPlace
 
-    def __init__(self, width):
+    def __init__(self):
         # Zero flux on the axis -- sigma(0) = 0 -- rather than u'(0) = 0, which the
         # steady state does not satisfy.
         super().__init__(manta.numbered_spec(1, lower=manta.Mixed(d=1.0)))
-        self.width = width
-        self.points = []
 
-        # batch size M -> share, the points each worker evaluates per call. Set
-        # by prepareEvaluation from MaNTA's plan; see there.
-        self.share = {}
+        # batch size M -> (rounds, padded Params). Set by prepareEvaluation from
+        # MaNTA's plan; see there.
+        self.layout = {}
 
         self.levels = []  # (cells, k) of each plan MaNTA handed over
+        self.rounds = 0  # rounds the machine ran
+        self.points = 0  # points it was asked for
 
-    # --- the physics, written once for one point; the parent vmaps it -----------
+    # --- the boundary and initial values, pointwise --------------------------------
+
     def LowerBoundary(self, index, t):
         return 0.0
 
@@ -140,81 +180,112 @@ class ParallelNC(manta.TransportSystem):
     # --- where this case changes the plan -----------------------------------------
 
     def prepareEvaluation(self, plan):
-        """
-        This should take the new grid and recompute the parameters with padding up to
-        the max width, set by the maximum allowable number of points
-        """
+        """Lay out every batch the plan announces as whole rounds, with its Params.
 
-        cell_boundaries = plan.grid.cellBoundaries()
-        k = plan.k
-        self.points = manta.getNodes(cell_boundaries, k)
-        self.pad_width = 0
-        if len(self.points) < MAX_WIDTH:
-            self.pad_width = MAX_WIDTH - len(self.points)
+        MaNTA calls this before its first evaluation of a run, and again only
+        when the plan changes -- a graded mesh from MeshAdaptation, a new degree
+        from the degree loop.
 
-        self.params = self._pad_tree(Params.make(self.points, **PARAMS), self.pad_width)
+        Params holds one entry per point, and the kernel pairs entry i with the
+        state at position i of the batch -- it never looks at x to find it. So a
+        Params is right only for the exact point set it was built from, and that
+        set has to be the plan's, site by site, not one derived here from the
+        grid and k. MeshAdaptation turns on Superconvergent, and then a level
+        evaluates at two sets:
+
+          * Residual, Jacobian and InitialCondition: the k+2 star nodes of each
+            cell -- the initial sigma and du/dt are solved from the residual's
+            own rows, so they sample where it samples;
+          * TauFaces: both faces of each cell, for the Diffusive tau.
+
+        A batch of M points takes ceil(M / WIDTH) rounds, and its Params are
+        padded to that many rounds' worth here, once per plan, rather than on
+        each of the thousands of calls. MaxPhysicsBatch means MaNTA plans no
+        recurring batch past MAX_ROUNDS rounds; the check below is for the
+        once-per-run sites the key does not cover, which on this case are never
+        larger than the residual's.
+
+        The batches are told apart by their size, which is what ComputePhysics
+        can see cheaply. Two sites of one size at different points (k = 1
+        without Superconvergent makes the nodes and the faces both 2 a cell)
+        would need another key, so that is refused here rather than read with
+        the wrong Params.
+        """
+        self.layout = {}
+        points_of = {}
+        for site in plan.sites:
+            if site.entry not in BATCHED:
+                continue
+            points = np.asarray(site.points).ravel()
+            m = len(points)
+            if m in points_of:
+                if not np.array_equal(points_of[m], points):
+                    raise RuntimeError(
+                        f"two batched sites of {m} points at different points; "
+                        "Params cannot be keyed by batch size on this plan"
+                    )
+                continue
+            if m > MAX_BATCH:
+                raise RuntimeError(
+                    f"the plan announces a batch of {m} points, past the {MAX_BATCH} "
+                    f"this case holds at once ({MAX_ROUNDS} rounds of {WIDTH})"
+                )
+            points_of[m] = points
+            rounds = -(-m // WIDTH)  # ceil(M / WIDTH)
+            self.layout[m] = (
+                rounds,
+                self._pad_tree(Params.make(jnp.asarray(points), **PARAMS), rounds * WIDTH - m),
+            )
 
         self.levels.append((plan.grid.getNCells(), plan.k))
 
     @staticmethod
     def _pad_tree(tree, pad_width):
-        """Pads all leaves of a PyTree along the first axis (axis=0)."""
+        """Pads all array leaves of a PyTree along axis 0 by repeating the last entry."""
         dynamic, static = eqx.partition(tree, eqx.is_array)
-
-        def pad_leaf(leaf):
-            # Construct pad width for axis 0, and no padding for other dimensions
-            return jnp.pad(leaf, (0, pad_width), mode="edge")
-
-        return eqx.combine(jax.tree_util.tree_map(pad_leaf, dynamic), static)
+        padded = jax.tree_util.tree_map(lambda leaf: jnp.pad(leaf, (0, pad_width), mode="edge"), dynamic)
+        return eqx.combine(padded, static)
 
     @staticmethod
-    def _unpad_tree(tree, current_batch_size):
-        """Slices all leaves of a PyTree back to the target length along axis=0."""
-
+    def _unpad_tree(tree, length):
+        """Slices all array leaves of a PyTree back to `length` along axis 0."""
         dynamic, static = eqx.partition(tree, eqx.is_array)
+        return eqx.combine(jax.tree_util.tree_map(lambda leaf: leaf[:length, ...], dynamic), static)
 
-        def unpad_leaf(leaf):
-            return leaf[:current_batch_size, ...]
+    # --- where the layout is carried out -------------------------------------------
 
-        return eqx.combine(jax.tree_util.tree_map(unpad_leaf, tree), static)
+    def _evaluate(self, func, states, positions, t):
+        """One batch from MaNTA as `rounds` jitted calls of WIDTH points each.
+
+        The batch is padded to whole rounds by repeating its last point, so every
+        round has the compiled shape; the padding is dropped on the way back. A
+        batch the plan did not announce is refused, not run.
+        """
+        m = len(positions)
+        if m not in self.layout:
+            raise RuntimeError(f"a batch of {m} points that the evaluation plan did not announce")
+        rounds, params = self.layout[m]
+        pad = rounds * WIDTH - m
+
+        out = vmap_batched(
+            func, _VMAP_AXES, chunk_size=WIDTH, nchunks=rounds, sharding=data_sharding
+        )(
+            self._pad_tree(states, pad),
+            jnp.pad(positions, (0, pad), mode="edge"),
+            t,
+            params,
+        )
+        self.rounds += rounds
+        self.points += m
+        return self._unpad_tree(out, m)
 
     @Physics_Decorator
     def ComputePhysics(self, states, positions, t):
-        pad_width = MAX_WIDTH - len(positions)
-        x_padded = jnp.pad(positions, pad_width=(0, pad_width), mode="edge")
-        out_padded = vmap_batched(
-            _compute_physics,
-            (State.vmap_axes(), 0, None, Params.vmap_axes()),
-            chunk_size=len(jax.devices()) * MAX_EVALS_PER_GPU,
-            nchunks=N_BATCHES,
-            sharding=data_sharding,
-        )(
-            self._pad_tree(states, pad_width),
-            x_padded,
-            t,
-            self.params,
-        )
-
-        return self._unpad_tree(out_padded, len(positions))
+        return self._evaluate(_compute_physics, states, positions, t)
 
     @Physics_Decorator
     def ComputePhysicsDerivatives(self, states, positions, t):
-        pad_width = MAX_WIDTH - len(positions)
-        x_padded = jnp.pad(positions, pad_width=(0, pad_width), mode="edge")
-        out_padded = vmap_batched(
-            eqx.filter_jacrev(_compute_physics),
-            (State.vmap_axes(), 0, None, Params.vmap_axes()),
-            chunk_size=len(jax.devices()) * MAX_EVALS_PER_GPU,
-            nchunks=N_BATCHES,
-            sharding=data_sharding,
-        )(
-            self._pad_tree(states, pad_width),
-            x_padded,
-            t,
-            self.params,
-        )
-
-        return self._unpad_tree(out_padded, len(positions))
+        return self._evaluate(_compute_physics_derivatives, states, positions, t)
 
 
 def u_exact(x):
@@ -226,12 +297,12 @@ def u_exact(x):
     return (u_b ** (n + 1) + (n + 1) / (2 * D) * integral) ** (1 / (n + 1))
 
 
-def run(width, told):
-    case = ParallelNC(width)
+def run(told):
+    case = ParallelNC()
     runner = manta.Runner(case)
     runner.configure(
         {
-            "OutputFilename": "nc_parallel",
+            "OutputFilename": "nc_multigpu",
             "WriteOutput": False,
             "PolynomialDegree": 4,
             "GridSize": 5,
@@ -240,11 +311,17 @@ def run(width, told):
             "tau": 1.0,
             "tauScaling": "Diffusive",
             "tauUpdate": "ContinuationStep",
+            # p -> h -> p: a uniform sample, a graded mesh, then the degree loop.
+            # MaxPolynomialDegree is left at its default: on this machine the
+            # degree loop's real ceiling is the highest k whose N (k + 2) points
+            # fit MaxPhysicsBatch, and the log says when that is what stopped it.
             "MeshAdaptation": True,
             "DegreeTolerance": 1e-3,
-            "MaxPolynomialDegree": 5,
-            # The machine is `width` wide either way; this is whether MaNTA knows.
-            "PhysicsParallelism": 16,
+            # What a batch costs. The machine is WIDTH wide either way; this is
+            # whether MaNTA knows, and so whether it fills the levels it chooses.
+            "PhysicsParallelism": WIDTH if told else 1,
+            # What a batch may be: a limit of the case, so set on both runs.
+            "MaxPhysicsBatch": MAX_BATCH,
             "Relative_tolerance": 1e-6,
             "Absolute_tolerance": [1e-6],
             "initialTimestep": 1e-3,
@@ -268,19 +345,26 @@ def run(width, told):
     ue = u_exact(x)
     return dict(
         levels=case.levels,
+        rounds=case.rounds,
+        occupancy=case.points / (case.rounds * WIDTH),
         linf=float(np.max(np.abs(u - ue)) / np.max(ue)),
         seconds=seconds,
     )
 
 
 if __name__ == "__main__":
-    width = MAX_WIDTH
-    print(f"{width} workers; a batch of M points takes ceil(M/{width}) point-times.\n")
-    print(f"{'MaNTA told':<11} {'levels (cells, k)':<34} {'L_inf':>9} {'wall':>7}")
+    print(
+        f"{len(jax.devices())} device(s): a round is {WIDTH} points, and a call may "
+        f"carry at most {MAX_ROUNDS} rounds ({MAX_BATCH} points).\n"
+    )
+    print(
+        f"{'MaNTA told':<11} {'levels (cells, k)':<34} {'rounds':>7} {'occupied':>9} "
+        f"{'L_inf':>9} {'wall':>7}"
+    )
     for told in (False, True):
-        r = run(width, told)
+        r = run(told)
         levels = " ".join(f"({c},{k})" for c, k in r["levels"])
         print(
-            f"{'N = ' + str(width) if told else 'nothing':<11} {levels:<34} "
-            f"{r['linf']:9.2e} {r['seconds']:6.1f}s"
+            f"{'N = ' + str(WIDTH) if told else 'nothing':<11} {levels:<34} "
+            f"{r['rounds']:7d} {r['occupancy']:8.0%} {r['linf']:9.2e} {r['seconds']:6.1f}s"
         )

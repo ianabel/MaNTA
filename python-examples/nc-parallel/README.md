@@ -85,3 +85,29 @@ then cost six times the rounds the whole unfilled run did (1385 against 231). A 
 higher round-off floor on the residual, and a fill can choose a finer level than
 any the configuration names, so set the tolerance above the floor of the finest
 level a fill might reach -- here 1e-8.
+
+## `nc_multigpu.py`: the same problem on JAX devices, with a batch cap
+
+    python nc_multigpu.py
+    XLA_FLAGS=--xla_force_host_platform_device_count=8 python nc_multigpu.py
+
+Here the machine is every JAX device on the host. One round is one jitted call on
+`WIDTH = devices x EVALS_PER_DEVICE` points (sharded across the devices once
+`data_sharding` is set), and a batch of M points is padded to whole rounds and
+run as `ceil(M / WIDTH)` of them through `manta.jax.vmap_batched`. Two keys
+describe that machine, and the module docstring and the comments in `run()` say
+why each is set the way it is:
+
+* **`PhysicsParallelism = WIDTH`** is what a batch costs. It is advice: the run
+  is right without it, and with it the controllers fill each level to the rounds
+  it already pays for.
+* **`MaxPhysicsBatch = MAX_ROUNDS x WIDTH`** is what a batch may be, because the
+  case holds a whole batch on the devices at once. It is a limit, so it is set on
+  both runs: the degree loop's ceiling becomes the highest degree within it, no
+  fill passes it, and a configured level past it is refused before the case is
+  asked for a point.
+
+`prepareEvaluation` builds each batch's padded parameters from the plan's own
+points, keyed by batch size: under `Superconvergent` the residual, the Jacobian
+and the initial condition share the k+2 star nodes, and the Diffusive tau adds
+the faces.
