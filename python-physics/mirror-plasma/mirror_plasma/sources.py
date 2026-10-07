@@ -182,16 +182,31 @@ def ViscousHeating(state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
 
 
 @register_source(Channel.IonEnergy)
+def PickupIons(state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
+    return (
+        0.5
+        * params.Constants.IonSpecies.IonMass
+        * (params.Constants.a * params.Constants.omega0) ** 2
+        * (state.R * state.omega) ** 2
+        * (ParticleSource(state, x, t, params) + IonizationSource(state, x, t, params))
+        * params.Constants.DensityEquationNormalization()
+    ) / params.Constants.HeatEquationNormalization()
+
+
+@register_source(Channel.IonEnergy)
 def IonPotentialHeating(state: MirrorPlasmaState, x, t, params: MirrorPlasmaParams):
     return (
-        -0.5
+        0.5
         * params.Constants.IonSpecies.IonMass
         * (params.Constants.a * params.Constants.omega0) ** 2
         * (state.R * state.omega) ** 2
         * (
-            ParticleSource(state, x, t, params)
-            + IonizationSource(state, x, t, params)
-            - ParallelParticleLosses(state, x, t, params)
+            (state.dndt)
+            - (
+                ParticleSource(state, x, t, params)
+                + IonizationSource(state, x, t, params)
+                - ParallelParticleLosses(state, x, t, params)
+            )
         )
         * params.Constants.DensityEquationNormalization()
     ) / params.Constants.HeatEquationNormalization()
