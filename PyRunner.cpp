@@ -227,7 +227,7 @@ void PyRunner::configure(const py::dict &config) {
   // one that is only warned about. See ParallelFill.hpp.
   if (const std::string w = underuseWarning(
           [this](Grid const &g, unsigned int kk) { return system->evaluationPlanFor(g, kk); },
-          *grid, k, cfg.MaxPolynomialDegree, cfg.PhysicsParallelism);
+          *grid, k, cfg.MaxPolynomialDegree, cfg.PhysicsParallelism, cfg.MaxPhysicsBatch);
       !w.empty())
     logmsg<LOG_LEVEL::WARNING>("{}", w);
 

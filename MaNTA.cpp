@@ -250,7 +250,8 @@ int runManta(std::string const &fname)
 												{ applySolverConfig(config, s); });
 		if (const std::string w = underuseWarning(
 				[&](Grid const &g, unsigned int kk) { return planner->evaluationPlanFor(g, kk); },
-				*grid, k, config.MaxPolynomialDegree, config.PhysicsParallelism);
+				*grid, k, config.MaxPolynomialDegree, config.PhysicsParallelism,
+				config.MaxPhysicsBatch);
 			!w.empty())
 			logmsg<LOG_LEVEL::WARNING>("{}", w);
 	}

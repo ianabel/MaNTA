@@ -509,7 +509,7 @@ of a failed solve, so `PyRunner::run_ss()` cannot do it.
 budget is exact rather than approximate**: `2 + 3n` for `Newton` and `2 + 4n`
 for `PseudoTransient`, `n` being continuation steps, pinned by
 `a_steady_solve_spends_the_physics_sweeps_it_has_to_and_no_others`. The two
-fixed sweeps are `AssignSigma` building `sigma` from the initial condition and
+fixed sweeps are `assignSigmaFromFlux` building `sigma` from the initial condition and
 the merit function's `||F||` at the initial state; each step is then KINSOL's
 residual at both ends plus one Jacobian, and a step at *finite* `dt` costs a
 fourth. Two properties keep it there, and both are the kind that would be lost
@@ -1140,7 +1140,7 @@ that is load-bearing: `==` is plain defaulted equality, and "nothing changed" is
 what decides whether a case hears anything and whether a reuse is a regrid. So a
 site only some runs reach is listed always, with its count an upper bound --
 `MassMatrix` (a solver's first run only), `InitialProjection` (cold starts only),
-`InitialCondition`'s AssignSigma sweep (skipped on a copied restart). Making a
+`InitialCondition`'s `sigma` sweep (skipped on a copied restart). Making a
 site conditional on `initialised`, the restart state or anything else a run
 moves turns every rerun into a spurious regrid.
 
@@ -1178,6 +1178,14 @@ solver built at that level and is what fails if a site starts reading `y`. The
 graded-mesh fill keeps the wall cell and caps the layer's ratio at 1/2 because
 `gradedMeshPoints` puts boundaries at `layer * ratio^j`: past 1/2 the wall cell's
 neighbour is the narrower of the two.
+
+**`MaxPhysicsBatch` is enforced twice, and the second is the one that cannot be
+forgotten.** Every function in `ParallelFill.hpp` that chooses a level takes it as
+`maxBatch`, and `runAdaptiveDegree` lowers its ceiling with `degreeCeiling`; then
+`initialize()` refuses any plan whose `largestRecurringBatch()` exceeds it,
+*before* `deliverEvaluationPlan`, so a new route to a level that forgets the cap
+throws instead of handing the case a batch it was promised it would not get.
+Keep that check ahead of the delivery.
 
 ### Self-consistent magnetic fields (`FieldModel`)
 
@@ -1991,7 +1999,7 @@ formula, not the operator, if the data cannot tell them apart.
   `TODO` records and which is now invisible to a reader.
 * **`sigma` is loaded on a copy-path restart, not recomputed, and that is a
   measurement too.** `DGSoln::copy` brings `sigma` across with everything else and
-  `ApplyDirichletBCs` touches only `lambda`, so `AssignSigma` was rebuilding it
+  `ApplyDirichletBCs` touches only `lambda`, so `assignSigmaFromFlux` would rebuild it
   from bit-identical inputs — at the price of a full `ComputePhysics` over every
   node, which is *exactly one residual evaluation's worth of physics*
   (`residual` makes the same call, `SystemSolver.cpp:1329`). It also evaluates

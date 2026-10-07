@@ -707,6 +707,9 @@ class SystemSolver
         // The postprocessed u* is reconstructed and written to the output either
         // way; this flag controls only whether the *method* uses it.
         void setSuperconvergent(bool in) { superconvergent = in; };
+        // The most points a recurring batched call may hand the case; 0 is no cap.
+        // initialize() refuses a level whose plan exceeds it.
+        void setMaxPhysicsBatch(Index n) { maxPhysicsBatch = n; };
         bool isSuperconvergent() const { return superconvergent; };
 
         // Null when k = 0, where the degree-0 NodalBasis cannot be evaluated
@@ -1312,6 +1315,7 @@ class SystemSolver
         // fixed. Non-copyable and holds a reference to `grid`, hence the pointer.
         std::unique_ptr<Postprocessor> postprocessor;
         bool superconvergent = false;
+        Index maxPhysicsBatch = 0;
 
         Matrix G_p; // gradients computed by adjoint state method
 
@@ -1325,6 +1329,23 @@ class SystemSolver
             std::vector<Position> points;
             GlobalState states;
         };
+
+        // The cell nodes the physics is evaluated at, and the state there with
+        // its geometry filled: u* on the k+2 star nodes under the superconvergent
+        // scheme, u_h on the k+1 basis nodes otherwise. Every batched cell
+        // evaluation -- the residual, the Jacobian, the adjoint and both sweeps
+        // of the initial condition -- takes its nodes from here, so a case is
+        // handed one set of cell points per level, never two.
+        PhysicsNodes physicsNodesAt(DGSoln const &Y, Time tEval);
+
+        // ( X, phi_i )_K for a physics value X sampled on the cell's physics
+        // nodes: A9 times the star-node values with the superconvergent scheme,
+        // the interpolatory mass-matrix form of arXiv:1811.09667 otherwise.
+        Vector projectOntoTestSpace(Index cell, Interval const &I, Vector const &vals) const;
+
+        // sigma for the u and q that Y holds, as the residual's sigma row defines
+        // it -- A sigma = -( sigma_hat, phi )_K -- so that row holds exactly.
+        void assignSigmaFromFlux(DGSoln &Y, Time tEval);
 
         // The variables' time derivatives sampled on the nodes the physics is
         // evaluated at, or an *empty* matrix when no variable's source reads
