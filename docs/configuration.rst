@@ -337,6 +337,12 @@ Time integration
      - ``1e-3``
      - Under ``"Diffusive"``, the floor on :math:`\kappa/h` as a fraction of its
        largest value on the grid. Must be positive.
+   * - ``TauKappa``
+     - ``"Nodal"``
+     - Under ``"Diffusive"``, where :math:`\kappa` at a face comes from:
+       ``"Nodal"``, the cell's :math:`\partial\hat\sigma/\partial q` at the
+       nodes the physics is already evaluated at, extrapolated to the face; or
+       ``"Face"``, evaluated at the face from the trace. See :ref:`tau-scaling`.
 
 Output
 ------

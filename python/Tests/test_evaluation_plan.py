@@ -84,11 +84,26 @@ def test_a_python_case_is_handed_the_plan_before_its_first_evaluation(tmp_path):
     assert np.array_equal(case.evaluationPlan.points(Kind.Residual), residual)
 
 
-def test_the_diffusive_tau_faces_are_announced(tmp_path):
-    """Both faces of every cell, one-sided, whenever tau is Diffusive."""
+def test_a_nodal_diffusive_tau_is_announced_on_the_residuals_points(tmp_path):
+    """TauKappa = "Nodal", the default: kappa is read off the physics nodes, so
+    the plan gains sites and no point set."""
     case = AnnouncedVectorised()
     runner = MaNTA.Runner(case)
     runner.configure(config(tmp_path, tauScaling="Diffusive"))
+    runner.run(0.5)
+
+    assert case.unannounced == []
+    plan = case.plans[0]
+    assert not plan.has(Kind.TauFaces)
+    assert np.array_equal(plan.points(Kind.TauNodes), plan.points(Kind.Residual))
+    assert plan.batchSizes(Entry.ComputePhysicsDerivatives) == [plan.points(Kind.Residual).size]
+
+
+def test_the_diffusive_tau_faces_are_announced(tmp_path):
+    """Both faces of every cell, one-sided, whenever kappa is read at the faces."""
+    case = AnnouncedVectorised()
+    runner = MaNTA.Runner(case)
+    runner.configure(config(tmp_path, tauScaling="Diffusive", TauKappa="Face"))
     runner.run(0.5)
 
     assert case.unannounced == []

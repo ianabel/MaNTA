@@ -46,6 +46,7 @@ enum class EvaluationKind
     InitialCondition,  // setInitialConditions(): sigma from u and q, and the sources the
                        // initial du/dt is solved from, on the k+1 basis nodes
     TauFaces,          // faceStates(): kappa for the Diffusive tau, on both faces of every cell
+    TauNodes,          // nodalKappaOverH(): kappa for the Diffusive tau, at the physics nodes
     ScalarConstraint,  // ScalarG, and InitialScalarDerivative, on the k+1 basis nodes
     ScalarJacobian,    // ScalarGPrime, on the k+1 basis nodes
     ScalarCoupling,    // dSources_dScalars, pointwise at the physics nodes
@@ -78,8 +79,8 @@ enum class EvaluationCadence
     PerContinuationStep, // every pseudo-transient continuation step of a steady solve
     PerAdjointSolve,     // every adjoint solve, including the objective estimate a
                          // steady solve makes on its way out
-    OncePerRun,          // inside initialize(), at most `calls` times: a restart or a
-                         // steady solve skips some of them
+    OncePerRun,          // at most `calls` times a run, mostly inside initialize(): a
+                         // restart or a steady solve skips some of them
     OncePerSolver,       // the first initialize() of a SystemSolver, at most
 };
 
@@ -218,6 +219,7 @@ inline char const *toString(EvaluationKind kind)
     case EvaluationKind::Jacobian: return "Jacobian";
     case EvaluationKind::InitialCondition: return "InitialCondition";
     case EvaluationKind::TauFaces: return "TauFaces";
+    case EvaluationKind::TauNodes: return "TauNodes";
     case EvaluationKind::ScalarConstraint: return "ScalarConstraint";
     case EvaluationKind::ScalarJacobian: return "ScalarJacobian";
     case EvaluationKind::ScalarCoupling: return "ScalarCoupling";
