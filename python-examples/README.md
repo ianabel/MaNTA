@@ -37,17 +37,24 @@ program.
 | `park-convergence/` | Benchmark: spatial accuracy per flux call, against Park's IDO scheme | — |
 | `jardin-critical-gradient/` | Benchmark: the nonlinear solve on a stiff gradient-dependent diffusivity | — |
 | `shestakov-nonlinear/` | Benchmark: degenerate diffusion, and a boundary MaNTA cannot cross | — |
+| `thermodiffusive-pinch/` | Benchmark: density and temperature coupled through a pinch, with a closed-form steady state | — |
+| `two-temperature-critical-gradient/` | Benchmark: Jardin's stiff problem in two channels, with optional exchange | — |
+| `reference-algorithms/` | The published ASTRA scheme and TGYRO's iteration, run on the benchmarks above against MaNTA | — |
 
-The last three are a different kind of thing and are marked **Benchmark** above.
-They exist to *measure* rather than to demonstrate: each reproduces a problem
-from a paper in [`../refs/`](../refs/Refs.md) that has a closed-form solution,
-and each ships a `benchmark.py` reporting accuracy against the number of calls
-into the `TransportSystem` — the metric [`../PERFORMANCE.md`](../PERFORMANCE.md)
-asks MaNTA to be judged by, and compared against the algorithms it names.
-`shestakov-nonlinear/` is the odd one: the problem as its paper states it is one
-MaNTA cannot integrate, so its `benchmark.py` maps where the tractable region
-ends and identifies what stops it. Nothing in CI runs any of them (`pytest.ini`
-is `testpaths = python/Tests`), so their READMEs carry the measured numbers.
+The entries marked **Benchmark** above are a different kind of thing. They exist
+to *measure* rather than to demonstrate: each poses a problem with a
+closed-form solution and ships a `benchmark.py` reporting accuracy against the
+number of calls into the `TransportSystem` — the metric
+[`../PERFORMANCE.md`](../PERFORMANCE.md) asks MaNTA to be judged by. The first
+three reproduce problems from papers in [`../refs/`](../refs/Refs.md);
+`shestakov-nonlinear/` is the odd one among them: the problem as its paper
+states it is one MaNTA cannot integrate, so its `benchmark.py` maps where the
+tractable region ends and identifies what stops it. The two multi-channel ones
+are new, since none of those papers has a coupled test with a reference
+solution. `reference-algorithms/` implements two other codes' published
+algorithms and runs them on the same problems in the same currency. Nothing in
+CI runs any of them (`pytest.ini` is `testpaths = python/Tests`), so their
+READMEs carry the measured numbers.
 
 A config-driven example runs with the `manta` command from inside its own
 directory:
