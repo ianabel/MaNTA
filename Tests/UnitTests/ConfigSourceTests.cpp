@@ -589,10 +589,9 @@ std::string meshed(std::string const &mesh, bool restart = true)
 
 // --- the mesh a restarted run is solved on --------------------------------
 //
-// restartRunGrid is to Grid_size what restartRunOrder is to Polynomial_degree.
-// Both keys are required of every config on both readers; both used to be read,
-// validated and then discarded on a restart, because makeGrid took the whole
-// discretisation out of the file. The degree was fixed first; this is the mesh.
+// restartRunGrid is to Grid_size what restartRunOrder is to Polynomial_degree:
+// what the configuration says about the discretisation wins over the file, and
+// what it does not say is the file's.
 //
 // Why it matters beyond tidiness: a ladder written as "solve coarse, restart
 // finer, solve again" silently re-solved the coarse problem at every rung and
@@ -612,6 +611,56 @@ BOOST_AUTO_TEST_CASE(a_restart_onto_the_same_mesh_keeps_it)
     auto run = restartRunGrid(c, fileGrid);
     BOOST_TEST((*run == fileGrid));
     BOOST_TEST(run->getNCells() == 8);
+}
+
+BOOST_AUTO_TEST_CASE(a_restart_with_no_cell_count_keeps_the_file_mesh_whatever_its_spacing)
+{
+    // The only way to resume on a mesh no configuration rule produces -- one
+    // MeshAdaptation graded, or GridPoints the restart config does not repeat.
+    // It used to throw "Strictly positive number of cells", from building the
+    // configured mesh out of a GridSize nothing required a restart to give.
+    auto c = load(meshed(""));
+    BOOST_TEST(!c.CellsGiven);
+    const Grid fileGrid(std::vector<Grid::Position>{0.0, 0.16, 0.48, 0.8, 0.94, 0.98, 1.0});
+
+    auto run = restartRunGrid(c, fileGrid);
+    BOOST_TEST((*run == fileGrid));
+}
+
+BOOST_AUTO_TEST_CASE(a_restart_with_a_cell_count_takes_the_ends_it_does_not_give_from_the_file)
+{
+    // "Grid_size = 4" on a restart over [-1, 1] means that domain at 4 cells; the
+    // schema defaults of [0, 1] would move the run onto a domain nobody asked for.
+    CapturedOutput quiet;
+    const Grid fileGrid(-1.0, 1.0, 8);
+
+    auto both = restartRunGrid(load(meshed("Grid_size = 4\n")), fileGrid);
+    BOOST_TEST(both->getNCells() == 4u);
+    BOOST_TEST(both->lowerBoundary() == -1.0);
+    BOOST_TEST(both->upperBoundary() == 1.0);
+
+    auto lower = restartRunGrid(load(meshed("Grid_size = 4\nLower_boundary = 0.0\n")), fileGrid);
+    BOOST_TEST(lower->lowerBoundary() == 0.0);
+    BOOST_TEST(lower->upperBoundary() == 1.0);
+
+    // ...and the same count over the same domain is the file's mesh, copy path.
+    auto same = restartRunGrid(load(meshed("Grid_size = 8\n")), fileGrid);
+    BOOST_TEST((*same == fileGrid));
+}
+
+BOOST_AUTO_TEST_CASE(a_restart_refuses_shaping_a_mesh_it_does_not_count)
+{
+    // Without a cell count the file's mesh is kept, so these would be ignored --
+    // and "remesh" and "keep" are different answers, so the config is asked to say.
+    BOOST_CHECK_THROW(load(meshed("Lower_boundary = 0.0\n")), std::invalid_argument);
+    BOOST_CHECK_THROW(load(meshed("Upper_boundary = 1.0\n")), std::invalid_argument);
+    BOOST_CHECK_THROW(load(meshed("GradedGridBoundary = true\n")), std::invalid_argument);
+    BOOST_CHECK_NO_THROW(load(meshed("Grid_size = 8\nLower_boundary = 0.0\n")));
+    BOOST_CHECK_NO_THROW(load(meshed("Grid_points = [0.0, 0.5, 1.0]\n")));
+
+    // Not a restart, nothing to keep: the ordinary requiredness rules apply.
+    BOOST_CHECK_NO_THROW(load(meshed("Grid_size = 8\nLower_boundary = 0.0\nUpper_boundary = 1.0\n",
+                                     false)));
 }
 
 BOOST_AUTO_TEST_CASE(a_restart_onto_a_different_mesh_honours_the_configuration)
@@ -644,11 +693,8 @@ BOOST_AUTO_TEST_CASE(a_restart_onto_a_coarser_mesh_is_allowed_and_is_the_lossy_d
 BOOST_AUTO_TEST_CASE(a_restart_onto_a_different_domain_honours_the_configuration)
 {
     // The mesh is the cell boundaries, not the cell count, so moving the domain
-    // is a mesh change even at the same Grid_size. Worth its own case because
-    // Lower_boundary and Upper_boundary are not required keys and default to 0
-    // and 1: a restart config that omits them and resumes a run over [-1, 1]
-    // will be remeshed onto [0, 1], and the warning is the only thing that says
-    // so.
+    // is a mesh change even at the same Grid_size. An end the config omits is
+    // the file's (above); one it gives wins, and the warning names both meshes.
     auto c = load(meshed("Grid_size = 8\nLower_boundary = 0.0\nUpper_boundary = 1.0\n"));
     Grid fileGrid(-1.0, 1.0, 8);
 
@@ -811,6 +857,127 @@ BOOST_AUTO_TEST_CASE(a_ladder_refuses_what_it_cannot_mean)
                       std::invalid_argument);
 }
 
+BOOST_AUTO_TEST_CASE(a_grid_ladder_needs_a_mesh_it_can_rescale)
+{
+    // A GridLadder rung's mesh is GridSize's rule at another count. GridPoints is
+    // one mesh at one count and no rule, and nor is a restart file's mesh kept as
+    // it stands, so both are refused -- the rung used to be the uniform
+    // [LowerBoundary, UpperBoundary], i.e. [0, 1] when GridPoints left those out.
+    const std::string steady = "SteadyStateSolve = true\n";
+    BOOST_CHECK_THROW(load(meshed("Grid_points = [0.2, 0.3, 0.6, 2.0]\nGridLadder = [2]\n" + steady,
+                                  false)),
+                      std::invalid_argument);
+    BOOST_CHECK_THROW(load(meshed("GridLadder = [2]\n" + steady)), std::invalid_argument);
+
+    // A DegreeLadder keeps the mesh, so it needs no rule and takes either.
+    BOOST_CHECK_NO_THROW(load(meshed("Grid_points = [0.2, 0.3, 0.6, 2.0]\nDegreeLadder = [1]\n" +
+                                     steady, false)));
+    BOOST_CHECK_NO_THROW(load(meshed("DegreeLadder = [1]\n" + steady)));
+
+    // A graded mesh is a rule, and each rung derives its own default layer count:
+    // 3 per layer at 9 cells would not fit in 5, and 2 does.
+    const std::string graded = "Grid_size = 9\nLower_boundary = 0.0\nUpper_boundary = 1.0\n"
+                               "GradedGridBoundary = true\n" + steady;
+    BOOST_CHECK_NO_THROW(load(meshed(graded + "GridLadder = [5, 7]\n", false)));
+
+    // An explicit GradingCells is the same on every rung, so a rung too small for
+    // it is refused before the ladder starts rather than when it reaches the rung.
+    BOOST_CHECK_THROW(load(meshed(graded + "GradingCells = 3\nGridLadder = [5, 7]\n", false)),
+                      std::invalid_argument);
+    BOOST_CHECK_NO_THROW(load(meshed(graded + "GradingCells = 3\nGridLadder = [7]\n", false)));
+}
+
+namespace
+{
+// A Newton steady solve of TestDiffusion on whatever mesh the config describes,
+// through runLadder when the config has a ladder and directly when it does not.
+// `onGrid` replaces the mesh configuredGrid would build, standing in for a
+// restart's, which the caller works out from the file and hands the driver.
+std::vector<double> ladderOrDirect(std::string const &mesh, std::string const &ladder,
+                                   Grid const *onGrid = nullptr)
+{
+    const std::string body = "Polynomial_degree = 3\ndelta_t = 0.1\nt_final = 1.0\n"
+                             "OutputFilename = \"ladder_mesh\"\nWriteOutput = false\n"
+                             "SteadyStateSolver = \"Newton\"\nSteadyStateTolerance = 1.0e-12\n"
+                             "TransportSystem = \"LinearDiffusion\"\n" + mesh + ladder;
+    const toml::value diffusion = toml::parse_str(
+        "[DiffusionProblem]\nKappa = 1.0\nCentre = 0.0\n");
+
+    auto c = load(body);
+    const auto grid = onGrid ? std::make_unique<Grid>(*onGrid) : configuredGrid(c);
+    TestDiffusion problem(diffusion);
+    std::unique_ptr<SystemSolver> sys;
+    {
+        CapturedOutput quiet;
+        if (ladder.empty())
+        {
+            sys = std::make_unique<SystemSolver>(*grid, 3, &problem);
+            applySolverConfig(c, *sys);
+            sys->runSolver(*c.t_final);
+        }
+        else
+        {
+            PhysicsInstance physics(problem, *grid);
+            sys = runLadder(c, physics, *grid, 3, *c.t_final);
+        }
+    }
+    auto Y = sys->stateVector();
+    {
+        CapturedOutput quiet;
+        sys->destroySundials();
+    }
+    return std::vector<double>(Y.begin(), Y.end());
+}
+
+double worstDifference(std::vector<double> const &a, std::vector<double> const &b)
+{
+    BOOST_REQUIRE_EQUAL(a.size(), b.size());
+    double worst = 0.0;
+    for (size_t i = 0; i < a.size(); ++i)
+        worst = std::max(worst, std::abs(a[i] - b[i]));
+    return worst;
+}
+} // namespace
+
+BOOST_AUTO_TEST_CASE(a_degree_ladder_keeps_an_explicit_mesh_on_every_rung)
+{
+    // Off [0, 1] on purpose: the rungs used to be rebuilt as the uniform
+    // [LowerBoundary, UpperBoundary], which GridPoints leaves at the schema's
+    // [0, 1], and the warm start then failed with "Evaluation outside of grid".
+    // On [0, 1] the same defect solved the rungs on a uniform mesh instead,
+    // silently; the answer is the last rung's either way, so the test that would
+    // see it is this one, where the rung's mesh is not even the right domain.
+    const std::string mesh = "Grid_points = [-0.5, -0.3, 0.0, 0.1, 0.4, 1.0, 1.5]\n";
+    const auto direct = ladderOrDirect(mesh, "");
+    const auto laddered = ladderOrDirect(mesh, "DegreeLadder = [1, 2]\n");
+    BOOST_TEST(worstDifference(direct, laddered) < 1e-12);
+}
+
+BOOST_AUTO_TEST_CASE(a_grid_ladder_rung_spans_the_domain_the_ladder_ends_on)
+{
+    // A restart giving GridSize alone resumes over the file's domain, while
+    // LowerBoundary and UpperBoundary hold the schema's [0, 1]. A rung built from
+    // the keys would sit on [0, 1] and its warm start would miss the final mesh.
+    // The ladder is handed the final mesh, as the restart path would hand it.
+    const Grid fileDomain(-0.5, 1.5, 8);
+    const std::string mesh = "restart = true\nGrid_size = 8\n";
+    const auto direct = ladderOrDirect(mesh, "", &fileDomain);
+    const auto laddered = ladderOrDirect(mesh, "GridLadder = [4]\n", &fileDomain);
+    BOOST_TEST(worstDifference(direct, laddered) < 1e-12);
+}
+
+BOOST_AUTO_TEST_CASE(a_graded_grid_ladder_grades_every_rung_at_its_own_count)
+{
+    // 9 cells graded at both ends default to 3 per layer, which a 5-cell rung
+    // cannot hold; each rung now derives its own. Ended on the configured mesh,
+    // so the answer is the direct solve's.
+    const std::string mesh = "Grid_size = 9\nLower_boundary = 0.0\nUpper_boundary = 1.0\n"
+                             "GradedGridBoundary = true\nGradingRatio = 0.5\n";
+    const auto direct = ladderOrDirect(mesh, "");
+    const auto laddered = ladderOrDirect(mesh, "GridLadder = [5, 7]\n");
+    BOOST_TEST(worstDifference(direct, laddered) < 1e-12);
+}
+
 BOOST_AUTO_TEST_CASE(a_ladder_is_a_list_of_whole_numbers)
 {
     // UIntList exists rather than reusing DoubleList because these are counts:
@@ -925,7 +1092,8 @@ BOOST_AUTO_TEST_CASE(grading_both_ends_is_the_default_and_splits_the_grid_in_thi
                   "LowerBoundaryFraction = 0.2\n"
                   "UpperBoundaryFraction = 0.2\n");
     BOOST_TEST(c.GradingEnd == "Both");
-    BOOST_TEST(c.GradingCells == 2);      // GridSize is 8, so 8/3
+    BOOST_TEST(c.GradingCells == 0);      // left unresolved, so a ladder rung derives its own
+    BOOST_TEST(gradingCellsFor(c) == 2);  // GridSize is 8, so 8/3
 
     unsigned int k = 0;
     auto grid = makeGrid(c, nullptr, k);
@@ -952,7 +1120,7 @@ BOOST_AUTO_TEST_CASE(the_retired_cosine_spelling_still_loads_and_grades_instead)
     auto c = load(minimal + "High_Grid_Boundary = true\n");
     BOOST_TEST(c.GradedGridBoundary == true);
     BOOST_TEST(c.GradingEnd == "Both");
-    BOOST_TEST(c.GradingCells == 2);
+    BOOST_TEST(gradingCellsFor(c) == 2);
 
     unsigned int k = 0;
     auto grid = makeGrid(c, nullptr, k);
@@ -968,6 +1136,33 @@ BOOST_AUTO_TEST_CASE(the_retired_cosine_spelling_still_loads_and_grades_instead)
                            "GradedGridBoundary = true\n"
                            "High_Grid_Boundary = true\n"),
                       std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(the_default_layer_count_builds_at_every_grid_size_the_config_admits)
+{
+    // The fewest cells grading admits is two per layer plus one, and a third of 5
+    // -- or half of 3 -- is 1, which gradedMeshPoints refuses. So the default
+    // never goes below 2, and every admitted GridSize builds.
+    for (const char *end : {"Both", "Lower", "Upper"})
+    {
+        const int least = std::string(end) == "Both" ? 5 : 3;
+        for (int n = least; n <= least + 4; ++n)
+        {
+            auto c = load(meshed(std::format("Grid_size = {}\nLower_boundary = 0.0\n"
+                                             "Upper_boundary = 1.0\nGradedGridBoundary = true\n"
+                                             "GradingEnd = \"{}\"\n", n, end),
+                                 false));
+            BOOST_TEST(gradingCellsFor(c) >= 2);
+            unsigned int k = 0;
+            BOOST_TEST_CONTEXT("GradingEnd = " << end << ", GridSize = " << n)
+            {
+                std::unique_ptr<Grid> grid;
+                BOOST_CHECK_NO_THROW(grid = makeGrid(c, nullptr, k));
+                if (grid)
+                    BOOST_TEST(grid->getNCells() == static_cast<Grid::Index>(n));
+            }
+        }
+    }
 }
 
 BOOST_AUTO_TEST_CASE(a_graded_grid_config_refuses_geometry_it_cannot_build)

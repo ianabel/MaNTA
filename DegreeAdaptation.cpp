@@ -431,14 +431,27 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
 
 namespace
 {
-// A rung's mesh, built by configuredGrid itself at this rung's cell count, so
-// the grading of a GradedGridBoundary mesh is the same on every rung and only the
-// count changes.
-Grid ladderGrid(SolverConfig const &config, unsigned int nCells)
+// A rung's mesh at a cell count other than the final one, built by
+// configuredGrid itself at that count, so a GradedGridBoundary mesh is graded the
+// same way on every rung -- same layer fractions and ratio, its own default
+// GradingCells -- and only the count changes. Only GridSize-described meshes have
+// such a rule: loadSolverConfig refuses a GridLadder over GridPoints or over a
+// restart file's mesh, and a rung at the final count never comes here.
+//
+// The domain is the final mesh's rather than the configuration's, which differ
+// on a restart that gives GridSize without LowerBoundary/UpperBoundary: the
+// final mesh then spans the file's domain (restartRunGrid), and the keys hold
+// the schema's [0, 1].
+Grid ladderGrid(SolverConfig const &config, Grid const &finalGrid, unsigned int nCells)
 {
+    if (!config.GridPoints.empty())
+        throw std::logic_error(
+            "ladderGrid was asked to rescale an explicit GridPoints mesh, which has no "
+            "rule for another cell count; loadSolverConfig should have refused this.");
     SolverConfig rung = config;
     rung.GridSize = static_cast<int>(nCells);
-    rung.GridPoints.clear();
+    rung.LowerBoundary = finalGrid.lowerBoundary();
+    rung.UpperBoundary = finalGrid.upperBoundary();
     return *configuredGrid(rung);
 }
 } // namespace
@@ -534,7 +547,12 @@ std::unique_ptr<SystemSolver> runLadder(SolverConfig const &config,
         // returned solver outlive this function: it holds a reference to its
         // grid, and an intermediate one dies at the bottom of this loop.
         // Declared before the solver so it is destroyed after it.
-        Grid rungGrid = last ? grid : ladderGrid(config, nCells);
+        //
+        // A rung at the final cell count -- every rung of a pure DegreeLadder --
+        // is a copy of the caller's grid rather than one rebuilt from the
+        // configuration, so it is the mesh the run ends on even when no rule
+        // produces it: GridPoints, or a restart file's mesh kept as it stands.
+        Grid rungGrid = (last || nCells == finalCells) ? grid : ladderGrid(config, grid, nCells);
 
         std::println("  rung {}: {} cells at k = {}", rung, nCells, k);
 

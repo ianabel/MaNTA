@@ -197,6 +197,25 @@ AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
             "suppresses. Measured on three problems, the verdict at k = 2 is not "
             "merely noisy but reversed. 4 or more is better still.", k0));
 
+    // The sensor reads each end against the interior's median decay rate, which
+    // compares like with like only when the cells are alike, and the graded mesh
+    // is built from the domain and the count alone -- whatever grading `uniform`
+    // carried would be discarded. loadSolverConfig refuses GridPoints and
+    // GradedGridBoundary; this is the route that check cannot see, a restart
+    // that keeps a non-uniform file mesh.
+    {
+        const double span = uniform.upperBoundary() - uniform.lowerBoundary();
+        const double h = span / static_cast<double>(uniform.getNCells());
+        for (Grid::Index i = 0; i < uniform.getNCells(); ++i)
+            if (std::abs(uniform[i].h() - h) > 1e-12 * span)
+                throw std::invalid_argument(std::format(
+                    "MeshAdaptation samples on a uniform mesh, but the mesh it was "
+                    "given is not: cell {} is {:.3g} wide against {:.3g}. On a restart "
+                    "this is the restart file's mesh, kept because the configuration "
+                    "gives no GridSize -- give GridSize to sample on a uniform one.",
+                    i, uniform[i].h(), h));
+    }
+
     // Grading moves the mesh and the degree loop moves k, so a case that can
     // follow neither is refused now rather than after the sampling solve.
     physics.requireAdaptable("MeshAdaptation");

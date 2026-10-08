@@ -85,7 +85,8 @@ Problem definition
        :math:`k \ge 1`.
    * - ``GridSize``
      - *required*
-     - Number of cells.
+     - Number of cells. Required unless ``GridPoints`` is given or the run is a
+       restart; see :ref:`restarting` for what giving it on a restart does.
    * - ``LowerBoundary``, ``UpperBoundary``
      - *required*
      - The ends of the domain. Required unless ``GridPoints`` is given or the
@@ -132,7 +133,9 @@ Problem definition
      - ``0``
      - Cells in *each* graded layer; at least 2, and few enough to leave one cell
        outside them. ``0`` means a third of ``GridSize`` per layer for ``"Both"``,
-       half for a single end.
+       half for a single end, and never fewer than 2. It is worked out for each
+       mesh built, so each ``GridLadder`` rung gets its own; a nonzero value is
+       the same on every rung.
    * - ``GradingEnd``
      - ``"Both"``
      - Which end ``GradedGridBoundary`` refines into: ``"Both"``, ``"Lower"`` or
@@ -385,6 +388,8 @@ Output lands in the **current working directory** whatever directory
 ``OutputFilename`` names — only the file-name part of it is used, so
 ``OutputFilename = "runs/case7"`` writes ``./case7.nc``. See :doc:`running`.
 
+.. _restarting:
+
 Restarting
 ----------
 
@@ -405,9 +410,23 @@ Restarting
 
 .. note::
 
-   On a restart the grid is read from the restart file, not from the config
-   file — ``GridSize``, ``GridPoints``, ``LowerBoundary`` and
-   ``UpperBoundary`` are ignored on that path.
+   On a restart the mesh is the restart file's unless the configuration gives
+   a cell count:
+
+   * **Neither** ``GridSize`` **nor** ``GridPoints``: the file's mesh, cell for
+     cell, whatever its spacing. This is the way to resume on a mesh no
+     configuration rule produces — one ``MeshAdaptation`` graded, say. Giving
+     ``LowerBoundary``, ``UpperBoundary`` or ``GradedGridBoundary`` without a
+     cell count is refused, since it would otherwise be ignored.
+   * ``GridSize``: that many cells, uniform or graded as the grading keys say,
+     over the file's domain unless ``LowerBoundary`` or ``UpperBoundary`` moves
+     an end.
+   * ``GridPoints``: exactly those boundaries.
+
+   A mesh equal to the file's resumes on the copy path, bit for bit. A
+   different one is projected onto, with a warning naming both meshes —
+   including whether each is uniform, since a uniform remesh of a graded file
+   has the same count and domain.
 
    ``PolynomialDegree`` is honoured. It defaults to the degree the file was
    written at, and a different value resumes at that degree, projecting the
