@@ -861,13 +861,26 @@ BOOST_AUTO_TEST_CASE(a_grid_ladder_needs_a_mesh_it_can_rescale)
 {
     // A GridLadder rung's mesh is GridSize's rule at another count. GridPoints is
     // one mesh at one count and no rule, and nor is a restart file's mesh kept as
-    // it stands, so both are refused -- the rung used to be the uniform
-    // [LowerBoundary, UpperBoundary], i.e. [0, 1] when GridPoints left those out.
+    // it stands, so both are refused unless the map rule is asked for by name --
+    // the rung used to be the uniform [LowerBoundary, UpperBoundary], i.e. [0, 1]
+    // when GridPoints left those out.
     const std::string steady = "SteadyStateSolve = true\n";
-    BOOST_CHECK_THROW(load(meshed("Grid_points = [0.2, 0.3, 0.6, 2.0]\nGridLadder = [2]\n" + steady,
-                                  false)),
+    const std::string points = "Grid_points = [0.2, 0.3, 0.6, 2.0]\n";
+    BOOST_CHECK_THROW(load(meshed(points + "GridLadder = [2]\n" + steady, false)),
                       std::invalid_argument);
     BOOST_CHECK_THROW(load(meshed("GridLadder = [2]\n" + steady)), std::invalid_argument);
+    BOOST_CHECK_THROW(load(meshed(points + "GridLadder = [2]\nGridLadderRescaling = \"None\"\n" +
+                                  steady, false)),
+                      std::invalid_argument);
+
+    // Opted in, both are accepted; anything but the two names is refused.
+    const std::string map = "GridLadderRescaling = \"Map\"\n";
+    BOOST_CHECK_NO_THROW(load(meshed(points + "GridLadder = [2]\n" + map + steady, false)));
+    BOOST_CHECK_NO_THROW(load(meshed("GridLadder = [2]\n" + map + steady)));
+    BOOST_CHECK_THROW(load(meshed(points + "GridLadder = [2]\nGridLadderRescaling = \"map\"\n" +
+                                  steady, false)),
+                      std::invalid_argument);
+    BOOST_TEST(load(minimal).GridLadderRescaling == "None");
 
     // A DegreeLadder keeps the mesh, so it needs no rule and takes either.
     BOOST_CHECK_NO_THROW(load(meshed("Grid_points = [0.2, 0.3, 0.6, 2.0]\nDegreeLadder = [1]\n" +
@@ -963,6 +976,29 @@ BOOST_AUTO_TEST_CASE(a_grid_ladder_rung_spans_the_domain_the_ladder_ends_on)
     const std::string mesh = "restart = true\nGrid_size = 8\n";
     const auto direct = ladderOrDirect(mesh, "", &fileDomain);
     const auto laddered = ladderOrDirect(mesh, "GridLadder = [4]\n", &fileDomain);
+    BOOST_TEST(worstDifference(direct, laddered) < 1e-12);
+}
+
+BOOST_AUTO_TEST_CASE(a_grid_ladder_maps_an_explicit_mesh_when_asked)
+{
+    // Off [0, 1] and non-uniform, at a count the rungs divide (nested: 6 -> 3)
+    // and one they do not (6 -> 4, every interior boundary moved). The answer is
+    // the final rung's either way, so it is the direct solve's.
+    const std::string mesh = "Grid_points = [-0.5, -0.3, 0.0, 0.1, 0.4, 1.0, 1.5]\n"
+                             "GridLadderRescaling = \"Map\"\n";
+    const auto direct = ladderOrDirect(mesh, "");
+    BOOST_TEST(worstDifference(direct, ladderOrDirect(mesh, "GridLadder = [3]\n")) < 1e-12);
+    BOOST_TEST(worstDifference(direct, ladderOrDirect(mesh, "GridLadder = [2, 4]\n")) < 1e-12);
+}
+
+BOOST_AUTO_TEST_CASE(a_grid_ladder_maps_a_kept_restart_mesh_when_asked)
+{
+    // A restart giving no cell count keeps the file's mesh, here a graded one;
+    // the ladder is handed it, as the restart path would hand it.
+    const Grid fileMesh(gradedMeshPoints(0.0, 1.0, 9, 3, 0.2, 0.2, 0.3, GradedEnd::Both));
+    const std::string mesh = "restart = true\nGridLadderRescaling = \"Map\"\n";
+    const auto direct = ladderOrDirect(mesh, "", &fileMesh);
+    const auto laddered = ladderOrDirect(mesh, "GridLadder = [3, 5]\n", &fileMesh);
     BOOST_TEST(worstDifference(direct, laddered) < 1e-12);
 }
 

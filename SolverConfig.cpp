@@ -331,6 +331,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(MaxRejectedSteps, unsigned);
     READ(DegreeLadder, std::vector<unsigned>);
     READ(GridLadder, std::vector<unsigned>);
+    READ(GridLadderRescaling, std::string);
     READ(DegreeAdaptation, bool);
     READ(DegreeTolerance, double);
     READ(MaxPolynomialDegree, unsigned);
@@ -470,22 +471,21 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
         // keys as the final mesh, so the keys have to be a rule that can be
         // asked for any count. GridSize with or without GradedGridBoundary is
         // one; a list of boundaries is not, and nor is a restart file's mesh
-        // kept as it stands. Refused rather than guessed at, because the rung's
-        // mesh would otherwise be the uniform [LowerBoundary, UpperBoundary] --
-        // schema defaults [0, 1] -- whatever the final mesh is.
-        if (!c.GridLadder.empty() && !c.GridPoints.empty())
-            throw std::invalid_argument(
-                "GridLadder needs a mesh at each of its cell counts, but GridPoints "
-                "describes one mesh at one count and no rule for any other. Give "
-                "GridSize (with GradedGridBoundary to grade it) instead, or use "
-                "DegreeLadder alone, which keeps the mesh and steps the degree.");
-
-        if (!c.GridLadder.empty() && c.restart && !c.CellsGiven)
-            throw std::invalid_argument(
-                "GridLadder needs a mesh at each of its cell counts, but this "
-                "restart keeps the restart file's mesh, which is one mesh at one "
-                "count. Give GridSize (and GradedGridBoundary to grade it) to "
-                "describe the mesh the rungs scale, or use DegreeLadder alone.");
+        // kept as it stands. For those the map rule is available, but only by
+        // asking: it keeps the cell density and moves every boundary, and a list
+        // does not say whether its boundaries were placed for the density or for
+        // where they are.
+        if (!c.GridLadder.empty() && meshIsExplicit(c) && c.GridLadderRescaling != "Map")
+            throw std::invalid_argument(std::format(
+                "GridLadder needs a mesh at each of its cell counts, but {} is one "
+                "mesh at one count and no rule for any other. Set GridLadderRescaling "
+                "= \"Map\" to sample it as a map from a uniform mesh -- nested when a "
+                "rung's count divides the final one, and otherwise moving every "
+                "boundary -- or give GridSize instead, or use DegreeLadder alone, "
+                "which keeps the mesh and steps the degree.",
+                c.GridPoints.empty() ? "a restart file's mesh, kept because this "
+                                       "restart gives no GridSize,"
+                                     : "GridPoints"));
 
         // Every rung's graded mesh, checked now rather than when the ladder
         // reaches it after solving the rungs before. The fill can only add
@@ -534,6 +534,18 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
                 "steady-state termination is never armed and every rung "
                 "time-marches the same interval again.");
     }
+
+    if (c.GridLadderRescaling != "None" && c.GridLadderRescaling != "Map")
+        throw std::invalid_argument(
+            "GridLadderRescaling must be \"None\" or \"Map\"; got \"" +
+            c.GridLadderRescaling + "\".");
+
+    // Asked for and then never read is worth saying, since it most likely means
+    // the config expected the mesh to be explicit when it is not.
+    if (c.GridLadderRescaling == "Map" && !c.GridLadder.empty() && !meshIsExplicit(c))
+        logmsg<LOG_LEVEL::WARNING>(
+            "GridLadderRescaling = \"Map\" is ignored: the mesh is described by GridSize, "
+            "and each GridLadder rung is built by that rule at its own count.");
 
     // A machine that evaluates no points at a time has no rounds to count.
     if (c.PhysicsParallelism < 1)
@@ -683,6 +695,11 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
 // restart needs it as well: the file's mesh says how the stored state is laid
 // out, and this says what the run is to be solved on, exactly as fileOrder and
 // restartRunOrder split the two degrees.
+bool meshIsExplicit(SolverConfig const &config)
+{
+    return !config.GridPoints.empty() || (config.restart && !config.CellsGiven);
+}
+
 int gradingCellsFor(SolverConfig const &config)
 {
     if (config.GradingCells != 0)

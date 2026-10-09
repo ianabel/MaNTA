@@ -90,6 +90,7 @@ struct SolverConfig
     // ladder cannot change the answer -- only what it costs to reach it.
     std::vector<unsigned>    DegreeLadder;
     std::vector<unsigned>    GridLadder;
+    std::string              GridLadderRescaling;   // "None" or "Map"
     bool                     DegreeAdaptation;
     double                   DegreeTolerance;
     unsigned int             MaxPolynomialDegree;
@@ -213,6 +214,11 @@ std::unique_ptr<Grid> makeGrid(SolverConfig const &config,
 
 // The mesh the configuration asks for, whether or not this is a restart.
 std::unique_ptr<Grid> configuredGrid(SolverConfig const &config);
+
+// Whether the mesh this configuration runs on is a list of boundaries rather
+// than a recipe that can be asked for another cell count: GridPoints, or a
+// restart that gives no cell count and so keeps its file's mesh.
+bool meshIsExplicit(SolverConfig const &config);
 
 // The cells in each graded layer of a GradedGridBoundary mesh: GradingCells when
 // given, otherwise derived from GridSize -- a third of it per layer when grading

@@ -431,12 +431,13 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
 
 namespace
 {
-// A rung's mesh at a cell count other than the final one, built by
-// configuredGrid itself at that count, so a GradedGridBoundary mesh is graded the
-// same way on every rung -- same layer fractions and ratio, its own default
-// GradingCells -- and only the count changes. Only GridSize-described meshes have
-// such a rule: loadSolverConfig refuses a GridLadder over GridPoints or over a
-// restart file's mesh, and a rung at the final count never comes here.
+// A rung's mesh at a cell count other than the final one. A GridSize mesh is
+// built by configuredGrid itself at that count, so a GradedGridBoundary mesh is
+// graded the same way on every rung -- same layer fractions and ratio, its own
+// default GradingCells -- and only the count changes. A mesh given as boundaries
+// has no such rule, and is sampled by the map rule when the configuration asked
+// for it (GridLadderRescaling = "Map"); loadSolverConfig refuses the ladder when
+// it did not. A rung at the final count never comes here.
 //
 // The domain is the final mesh's rather than the configuration's, which differ
 // on a restart that gives GridSize without LowerBoundary/UpperBoundary: the
@@ -444,10 +445,14 @@ namespace
 // the schema's [0, 1].
 Grid ladderGrid(SolverConfig const &config, Grid const &finalGrid, unsigned int nCells)
 {
-    if (!config.GridPoints.empty())
-        throw std::logic_error(
-            "ladderGrid was asked to rescale an explicit GridPoints mesh, which has no "
-            "rule for another cell count; loadSolverConfig should have refused this.");
+    if (meshIsExplicit(config))
+    {
+        if (config.GridLadderRescaling != "Map")
+            throw std::logic_error(
+                "ladderGrid was asked to rescale a mesh given as boundaries without "
+                "GridLadderRescaling = \"Map\"; loadSolverConfig should have refused this.");
+        return Grid(mappedMeshPoints(finalGrid, nCells));
+    }
     SolverConfig rung = config;
     rung.GridSize = static_cast<int>(nCells);
     rung.LowerBoundary = finalGrid.lowerBoundary();

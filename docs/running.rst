@@ -219,9 +219,22 @@ lives on faces, where a change of degree alone leaves it transferable verbatim.
    — solves on the configured mesh itself, so a :math:`k`-ladder works on any
    mesh: ``GridPoints``, graded, or a restart file's. A rung at another count
    is built by ``GridSize``'s rule at that count, graded the same way under
-   ``GradedGridBoundary`` with its own default ``GradingCells``. ``GridPoints``
-   and a restart file's mesh are one mesh at one count and no rule for any
-   other, so ``GridLadder`` is refused with either. A ladder needs a steady solve, is refused alongside
+   ``GradedGridBoundary`` with its own default ``GradingCells``.
+
+   ``GridPoints`` and a restart file's mesh are one mesh at one count and no
+   rule for any other, so ``GridLadder`` is refused with either unless
+   ``GridLadderRescaling = "Map"`` asks for the map rule. That reads the
+   :math:`N` boundaries as a piecewise-linear map :math:`x(\xi)` with
+   :math:`x(i/N) = x_i` and samples it at :math:`\xi = j/M` for an
+   :math:`M`-cell rung. When :math:`M` divides :math:`N` the rung is every
+   :math:`(N/M)`-th boundary exactly, so it is nested in the final mesh and the
+   warm start passes up without projection error. Otherwise the rung keeps the
+   cell density and moves every interior boundary — including one placed on a
+   coefficient jump or a source edge, which then sits inside a cell on that
+   rung. That is why it is opt-in: a list of boundaries does not say which it
+   was placed for. The last rung is the configured mesh either way, so a poor
+   rung costs Newton iterations and never accuracy; prefer rung counts that
+   divide the final one. A ladder needs a steady solve, is refused alongside
    ``DegreeAdaptation`` — both choose the sequence of discretisations — and is
    refused inside a sliced steady solve, since each rung replaces the solver.
 

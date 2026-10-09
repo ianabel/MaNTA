@@ -155,8 +155,16 @@ const std::vector<Entry> &table()
          "Intermediate cell counts to go with DegreeLadder; same length if both are given. "
          "Either alone holds the other at its configured value. Each rung's mesh is "
          "GridSize's rule at that count, graded like the final one under "
-         "GradedGridBoundary, so it is refused with GridPoints or a restart file's mesh, "
-         "neither of which is a rule."},
+         "GradedGridBoundary. GridPoints and a restart file's mesh are not rules, so "
+         "they need GridLadderRescaling."},
+        {"GridLadderRescaling", {}, Type::String, Category::Solver, false, false, std::string{"None"},
+         "How a GridLadder rescales a mesh given as boundaries -- GridPoints, or a restart "
+         "file's mesh kept as it stands -- to another cell count. \"None\" refuses the "
+         "ladder. \"Map\" reads the boundaries as a piecewise-linear map from a uniform "
+         "mesh and samples it at the rung's count: nested when the count divides the "
+         "final one, and otherwise keeping the cell density but moving every boundary, "
+         "including any on a coefficient jump. Not read for a GridSize mesh, which "
+         "rescales by its own rule."},
         {"DegreeAdaptation", {}, Type::Bool, Category::Solver, false, false, false,
          "Choose the global polynomial degree by solving, estimating the error from "
          "u* - u_h, and re-solving at a higher degree. Steady solves only; implies "
