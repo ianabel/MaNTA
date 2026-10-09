@@ -98,6 +98,7 @@ struct SolverConfig
     double                   DegreeAdaptationBase;
     bool                     MeshAdaptation;
     double                   MeshAdaptationThreshold;
+    double                   MeshAdaptationNeighbourMargin;
     unsigned int             MeshAdaptationAttempts;
     // Read by whoever builds the adaptation driver's PhysicsInstance -- runManta
     // and PyRunner -- not by applySolverConfig: it is about the case, not the
