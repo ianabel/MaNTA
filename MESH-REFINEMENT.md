@@ -842,6 +842,165 @@ cell now spans 0.833 rather than 0.8 and carries more of the error. A factor of
 1.3-1.5 on a problem that wants a wide layer, against four orders on one that
 wants an aligned one, and the aligned one is the case a user cannot see coming.
 
+## 14. Reading a non-uniform mesh: compare an end with cells of its own width
+
+Everything above was decided from a *uniform* sampling mesh. Starting from a
+graded or explicit one needs to know how the sensor behaves when cells differ
+in width. Two facts, exact for assigned functions, and both confirmed on solver
+output:
+
+* **A singular cell's decay rate does not depend on its width.** The spectrum of
+  `x^a` on `[0, h]` is `h^a` times its spectrum on `[0, 1]`. In MaNTA's
+  orthonormal Legendre basis `x^(4/3)` reads `s = 3.98` at `k = 4` at every width.
+  So a singular end stays flagged however hard it is graded: the sensor says
+  *where*, never *when to stop*.
+* **A smooth cell reads smoother the narrower it is.** The pinch profile reads
+  4.30 at `h = 0.2` and 9.75 at `0.01`. On a geometric layer, wall / neighbour
+  for `x^(4/3)` depends on the grading ratio alone: 1.69, 1.42 and 1.16 at
+  ratios 0.5, 0.3 and 0.1, identical at `h0` = 1e-2 and 1e-4.
+
+### The sweep
+
+The sweep was 368 steady solves: Shestakov, Park, the §12 wall layer
+(`WallLayer(2.5)`) and the thermodiffusive pinch (`n` and `T`), on 23 meshes, at
+`k = 3`–6, 10 cells each. The meshes were:
+- uniform;
+- `GradedGridBoundary` Lower, Upper and Both at ratios 0.1, 0.3 and 0.5;
+- geometric layers;
+- three deep gradings to `h0/span` = 1e-5 and 1e-6;
+- two random explicit meshes.
+
+The sensor was ported to numpy and checked against MaNTA's own
+`cellSmoothness`/`gradingDecision` on the same coefficients: 16 sampling solves
+agreed to ≤ 2.1e-7 relative, with every printed decision reproduced.
+
+Three rules for an end, each against a threshold of 2.0, except (c), which
+flags at `ratio > 1 + margin`:
+
+| rule | false positives | false negatives | undecidable |
+|---|---|---|---|
+| (a) median of every interior cell (the uniform rule) | 36 | 8 | — |
+| (b) median of interior cells within 2× of the end's width (≥ 3 of them) | 0 | 0 | every graded end |
+| (c) inward neighbour, end ≥ 1.5× narrower, margin 0.1 | 12 | 4 | — |
+| (c) with guard `s_end < ceiling/2` | 4 | 4 | — |
+| **(b), else guarded (c), else undecidable** | **4** | **0** | 16 rough ends |
+
+**Rule (a)'s failures** are the width effect above, in both directions:
+- **False positives:** the wide end of a mesh graded at the other end. The
+  pinch's upper end reads 2.26–3.25 on a deep lower grading. The 0.8-wide end of
+  the deepest grading reads 3–7 on Park and the pinch.
+- **False negatives:** Shestakov's axis on deep gradings, 1.38–1.86.
+
+On every uniform mesh (b) equals (a) bit for bit.
+
+**Rule (c)'s false negatives** are all one case: Shestakov on a random mesh whose
+inward neighbour holds the source kink at `x = 0.1`, so the neighbour is rough.
+(b) is available there and gets it right, which is why the combined rule has
+none.
+
+**The guard is what makes a margin possible.** Unguarded, smooth graded ends
+reach 1.33 against 1.36 for the mildest singular one, a window of 0.03. Every
+unguarded false positive except the four below had `s_end` between 0.66 and
+0.93 of the ceiling: a top mode just above the round-off floor, §13's Jardin
+mechanism. Singular ends sit at or below 0.18 of the ceiling. Guarded, smooth
+graded ends never exceed 1.00, so any margin in `[0, 0.36)` separates them. The
+default is 0.2.
+
+| neighbour / end width | smallest at a singular end | largest at a smooth end, unguarded | guarded |
+|---|---|---|---|
+| ≈ 9–10 (ratio 0.1) | 1.36 | 1.27 | ≤ 1.00 |
+| 2.33–3.33 (ratio 0.3) | 1.51 | 1.28 | ≤ 1.00 |
+| 2.0 (geometric, ratio 0.5) | 1.69 | 1.33 | ≤ 1.00 |
+
+**The remaining 4 false positives say where the sensor stops.** They are the
+wall layer's smooth axis at `h0/span` = 1e-6, which reads `s` = 2.1–2.6 at every
+`k`. Its modes `j ≥ 2` sit at 3e-9 to 1e-8 of the cell's scale, six orders above
+the floor, and did not move when the solve tolerances were tightened by six
+orders. So they are discretisation error in `u_h`, not round-off and not solve
+noise. Shestakov's singular axis at the same width gives a signal just as small
+(`û_1` = 4e-9 against the wall's 1.1e-7), so nothing reading this cell can tell
+the two apart. At 1e-5 every end read correctly. That matches §9's other two
+walls at the same place, and `runAdaptiveMesh` never makes a wall cell narrower
+than 1e-5 of the domain.
+
+The round-off floor itself is fine: of 179 narrow (`h < 1e-3`) smooth end cells,
+127 read infinite and cap to a ratio of 1.00.
+
+**A graded layer at ratio 0.5 is unjudgeable by construction.**
+`gradedMeshPoints` puts its first face at `f·r^(G−1)`, so the wall cell's
+neighbour is `(1−r)/r` times as wide: 1.0 at ratio 0.5, below the 1.5× gate. Its
+end is left undecided. Only ratios up to about 0.4 can be read.
+
+### End to end: what to do with a rough end of a mesh that was given
+
+`MeshAdaptation` was run on Shestakov, Park, the wall layer and the pinch from 9
+starts each:
+- uniform;
+- graded Lower, Upper and Both at ratio 0.3, plus Lower and Upper at 0.1;
+- two random explicit meshes;
+- a second pass from the first pass's output.
+
+Each was compared with degree adaptation alone and with fixed `k = 4` on the
+same start, at `k0 = 4`, `DegreeTolerance = 1e-9`, `MaxPolynomialDegree = 12`.
+Three rules for a rough end of a graded start were built and measured in turn:
+
+| rule | what moves | outcome |
+|---|---|---|
+| v1: square the ratio, same count | every face of the layer | Shestakov 0.05–0.06× of degree-only on 0.2 layers |
+| v2: move bulk cells into the layer, same ratio | the bulk's faces | wall layer up to 7000× worse than v1 |
+| **v3: split the end cell into the layer's cells** | **nothing; count grows** | **best or tied on every wall start** |
+
+**v1 fails through a face, not through the grading.** Shestakov's source switches
+off at `x = 0.1`. A 0.2 layer at ratio 0.3 already has that point inside
+`[0.06, 0.2]`. Squaring the ratio widened the cell to `[0.018, 0.2]`, and the
+error went from 8.6e-4 under degree-only to 1.65e-2. From starts where `x = 0.1`
+is a face (a 0.1 layer) the same rule won 171×.
+
+**v2 fails through depth.** At the same ratio, cells taken from the bulk deepen
+a layer by `ratio` per cell, and with the bulk keeping half its cells an added
+end got 2 cells. The wall layer's graded-Lower start fell from 1.5e-9 to 1.0e-5.
+
+v3 reaches v1's wall cell exactly: `f r^(G−1)·r^(G−1)`. It moves no face and
+costs `G − 1` cells per split end:
+- **Wall layer:**
+  - graded Lower 0.3 gives 3.1e-10 against 1.66e-4 degree-only;
+  - Both 0.3 gives 4.2e-10;
+  - every start where it acted beat degree-only by 1170× to 5×10⁵.
+- **Shestakov:** a graded start with a 0.1 layer gave 2.7e-7 against 2.2e-5.
+- **Park and the pinch:** the mesh never moved, and the result is bit-identical
+  to degree-only at the same cost.
+- **Second passes** run. An end already under twice the floor is left as it is.
+
+**What it cannot do.** On four Shestakov starts the source edge sits inside a
+cell no end rule touches, and the result is 1.14–1.41× *worse* than degree-only:
+graded Upper 0.3 and 0.1, and both random meshes. The sensor reads only the two
+ends, so an interior feature is invisible to it. Twice, too, the degree loop
+stopped at `k = 8` on v3's mesh, where v1 went on to 12, leaving the answer
+2.1× short of v1's. Its estimate said 5e-10 against a true error of 2.7e-7.
+That is §3's finding: the indicator is blind on Shestakov.
+
+**The split's own limit is the floor.** A narrow end cell needs a larger ratio to
+keep its wall cell above 1e-5 of the span. Past ratio 1/2, though, the cells
+beside the wall come out *narrower* than it (neighbour `H r^(m−2)(1−r)`), and a
+clamp that ignored this produced cells of 1.9e-6. So the split takes the most
+cells whose ratio stays at or below 1/2, and leaves an end cell under twice the
+floor alone.
+
+The uniform start's single redistribution is not held to the floor. §8–9
+measured it, at 6.6e-6 on 10 cells. That is also why a second pass from its
+output finds the end already done.
+
+### A defect found on the way, not fixed here
+
+`SmoothnessSensor.cpp` weights the modal energies by `1/(2j+1)`, which is right
+for coefficients of `P_j`. `ToModal` returns coefficients of the *orthonormal*
+basis, `sqrt((2j+1)/2) P_j`, whose energies need no weight. So
+`modalEnergyFraction` (`S_K`) is mis-weighted. Nothing decides from it, since
+every decision uses the decay rate, but the `S_K` values quoted in §7 are
+affected. The decay rates in this document are MaNTA's own and are unaffected,
+apart from the basis normalisation, which shifts `s` by about +0.4 at `k = 4`
+relative to a `P_j` fit.
+
 ## What the measurements changed about the plan
 
 The approved plan is `~/.claude/plans/add-mnt-c-users-ian-downloads-crsc-tr02-humming-lake.md`.

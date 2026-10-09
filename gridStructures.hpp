@@ -350,3 +350,56 @@ inline std::vector<Grid::Position> mappedMeshPoints(Grid const &mesh, Grid::Inde
 	}
 	return points;
 }
+
+// A mesh with its end cell split into a geometric layer of `cells` cells, every
+// other boundary kept bit for bit. This is how MeshAdaptation refines a mesh
+// given as boundaries -- GridPoints, or a restart file's mesh -- where moving a
+// boundary is not allowed: the list does not say why its faces are where they
+// are, and moving the one at Shestakov's source edge (x = 0.1) raised the error
+// from 1.34e-6 to 1.58e-2 (MESH-REFINEMENT.md section 13). So the count grows by
+// cells - 1 instead of being redistributed.
+//
+// The layer is gradedMeshPoints's inside the end cell of width H: boundaries at
+// H * ratio^j from the end for j = cells-1 .. 1, so the cell touching the end is
+// H * ratio^(cells-1) wide, which is what sets the error. Splitting the end
+// cell of a mesh that was already split this way nests, so repeating it is the
+// "split, repeat" of section 8.
+inline std::vector<Grid::Position> subdividedEndPoints(Grid const &mesh, GradedEnd end,
+                                                       Grid::Index cells, double ratio)
+{
+	if (!(ratio > 0.0) || !(ratio < 1.0))
+		throw std::invalid_argument(std::format(
+			"Splitting an end cell needs a ratio strictly between 0 and 1; got {}.", ratio));
+	if (cells < 2)
+		throw std::invalid_argument(std::format(
+			"Splitting an end cell needs at least 2 cells in its place; got {}.", cells));
+
+	const Grid::Index N = mesh.getNCells();
+	std::vector<Grid::Position> points;
+	points.reserve(N + 1 + 2 * (cells - 1));
+
+	const bool lower = end != GradedEnd::Upper;
+	const bool upper = end != GradedEnd::Lower;
+	if (N == 1 && lower && upper)
+		throw std::invalid_argument(
+			"A one-cell mesh has a single end cell, so it cannot be split towards both ends.");
+
+	points.push_back(mesh[0].x_l);
+	if (lower)
+	{
+		const double x0 = mesh[0].x_l, H = mesh[0].h();
+		for (Grid::Index j = cells - 1; j >= 1; --j)
+			points.push_back(x0 + H * std::pow(ratio, static_cast<double>(j)));
+	}
+	for (Grid::Index i = 0; i + 1 < N; ++i)
+		points.push_back(mesh[i].x_u);
+	if (upper)
+	{
+		const double x1 = mesh[N - 1].x_u, H = mesh[N - 1].h();
+		for (Grid::Index j = 1; j < cells; ++j)
+			points.push_back(x1 - H * std::pow(ratio, static_cast<double>(j)));
+	}
+	points.push_back(mesh[N - 1].x_u);
+	return points;
+}
+
