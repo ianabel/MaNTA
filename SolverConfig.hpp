@@ -41,7 +41,7 @@ struct SolverConfig
     double                   UpperBoundaryFraction;
     bool                     GradedGridBoundary;
     double                   GradingRatio;
-    int                      GradingCells;   // 0 means "derive from GridSize"
+    int                      GradingCells;   // 0 means "derive from GridSize"; see gradingCellsFor
     std::string              GradingEnd;     // "Lower", "Upper" or "Both"
     unsigned                 PolynomialDegree;
     int                      GridSize;
@@ -90,6 +90,7 @@ struct SolverConfig
     // ladder cannot change the answer -- only what it costs to reach it.
     std::vector<unsigned>    DegreeLadder;
     std::vector<unsigned>    GridLadder;
+    std::string              GridLadderRescaling;   // "None" or "Map"
     bool                     DegreeAdaptation;
     double                   DegreeTolerance;
     unsigned int             MaxPolynomialDegree;
@@ -147,6 +148,17 @@ struct SolverConfig
     // to be told apart.
     bool LowerBoundaryFractionGiven = false;
     bool UpperBoundaryFractionGiven = false;
+
+    // Which parts of the mesh the configuration itself describes, for a restart:
+    // there the file already holds a mesh, and only what the configuration says
+    // replaces it. With neither GridSize nor GridPoints the run keeps the file's
+    // mesh, cell for cell, whatever its spacing; with GridSize but no
+    // LowerBoundary or UpperBoundary, the missing end is the file's. Both are
+    // impossible to read off the parsed values, whose schema defaults (0 cells,
+    // the domain [0, 1]) are indistinguishable from a config that wrote them.
+    bool CellsGiven = false;           // GridSize or GridPoints
+    bool LowerBoundaryGiven = false;
+    bool UpperBoundaryGiven = false;
 };
 
 // The one thing that differs between the two surfaces.
@@ -203,6 +215,19 @@ std::unique_ptr<Grid> makeGrid(SolverConfig const &config,
 // The mesh the configuration asks for, whether or not this is a restart.
 std::unique_ptr<Grid> configuredGrid(SolverConfig const &config);
 
+// Whether the mesh this configuration runs on is a list of boundaries rather
+// than a recipe that can be asked for another cell count: GridPoints, or a
+// restart that gives no cell count and so keeps its file's mesh.
+bool meshIsExplicit(SolverConfig const &config);
+
+// The cells in each graded layer of a GradedGridBoundary mesh: GradingCells when
+// given, otherwise derived from GridSize -- a third of it per layer when grading
+// both ends, half when grading one, and never fewer than the 2 a layer needs.
+// Resolved from the configuration at hand rather than once at load, so a ladder
+// rung built at a smaller GridSize derives its own count instead of inheriting
+// one sized for the final mesh.
+int gradingCellsFor(SolverConfig const &config);
+
 // The mesh a restarted run should be solved on, given the mesh its restart file
 // was written on. The counterpart of restartRunOrder, and it exists for the
 // same reason: makeGrid used to return the file's mesh and the run used that,
@@ -210,6 +235,11 @@ std::unique_ptr<Grid> configuredGrid(SolverConfig const &config);
 // and then silently discarded. A ladder written as "solve coarse, restart
 // finer, solve again" therefore re-solved the coarse problem at every rung and
 // reported it converged, which is indistinguishable from success.
+//
+// A configuration that gives neither GridSize nor GridPoints describes no mesh,
+// and the run keeps the file's -- which is the only way a restart can resume on
+// a non-uniform mesh no configuration rule produces. One that gives GridSize
+// without an end of the domain takes that end from the file.
 //
 // An equal mesh returns the file's own, so every existing restart takes the
 // copy path in setInitialConditions and is bit for bit unchanged. A different

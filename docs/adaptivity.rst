@@ -518,6 +518,11 @@ Restrictions, all refused rather than warned about:
   condition and integrate the interval again.
 * Not with ``GridPoints``, and not with ``GradedGridBoundary`` — both of those
   already determine the mesh, so one of them would silently lose.
+* Not from a non-uniform mesh. The sensor reads each end against the median of
+  cells it assumes alike, and the graded mesh is built from the domain and the
+  cell count alone, so a graded start would be misread and then discarded. The
+  configuration cannot see the one route to it — a restart with no ``GridSize``,
+  which keeps the file's mesh — so the driver checks the mesh it is handed.
 
 .. note::
 

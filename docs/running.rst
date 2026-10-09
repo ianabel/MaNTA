@@ -186,13 +186,15 @@ and its declared ``nFieldDOF`` is checked against the ``nField`` the file
 records before anything is read into it. Resuming a coupled run therefore needs
 the same ``FieldModel`` line the original run had.
 
-**A restart may change the mesh as well as the degree.** ``Grid_size``,
-``Grid_points`` and the domain boundaries are honoured on a restart the way
-``Polynomial_degree`` is: an identical mesh keeps the copy path and is bit for
-bit unchanged, while a different one is projected onto — the stored element
-polynomials are evaluated at the new cell nodes — with a warning naming both
-meshes. The trace is rebuilt when the cells move, since ``lambda`` lives on
-faces, where a change of degree alone leaves it transferable verbatim.
+**A restart may change the mesh as well as the degree.** ``GridSize`` and
+``GridPoints`` are honoured on a restart the way ``PolynomialDegree`` is: an
+identical mesh keeps the copy path and is bit for bit unchanged, while a
+different one is projected onto — the stored element polynomials are evaluated
+at the new cell nodes — with a warning naming both meshes. An end of the domain
+the configuration does not give is the file's. Give neither key and the run
+resumes on the file's mesh as it stands, graded or not (see
+:ref:`restarting`). The trace is rebuilt when the cells move, since ``lambda``
+lives on faces, where a change of degree alone leaves it transferable verbatim.
 
 .. note::
 
@@ -211,7 +213,28 @@ faces, where a change of degree alone leaves it transferable verbatim.
    what makes it safe to try on a problem you already have an answer for. Either
    list alone holds the other quantity at its configured value, so a pure
    :math:`h`- or :math:`k`-ladder needs only one of them; given both, they must
-   be the same length. A ladder needs a steady solve, is refused alongside
+   be the same length.
+
+   A rung at the configured cell count — every rung of a pure ``DegreeLadder``
+   — solves on the configured mesh itself, so a :math:`k`-ladder works on any
+   mesh: ``GridPoints``, graded, or a restart file's. A rung at another count
+   is built by ``GridSize``'s rule at that count, graded the same way under
+   ``GradedGridBoundary`` with its own default ``GradingCells``.
+
+   ``GridPoints`` and a restart file's mesh are one mesh at one count and no
+   rule for any other, so ``GridLadder`` is refused with either unless
+   ``GridLadderRescaling = "Map"`` asks for the map rule. That reads the
+   :math:`N` boundaries as a piecewise-linear map :math:`x(\xi)` with
+   :math:`x(i/N) = x_i` and samples it at :math:`\xi = j/M` for an
+   :math:`M`-cell rung. When :math:`M` divides :math:`N` the rung is every
+   :math:`(N/M)`-th boundary exactly, so it is nested in the final mesh and the
+   warm start passes up without projection error. Otherwise the rung keeps the
+   cell density and moves every interior boundary — including one placed on a
+   coefficient jump or a source edge, which then sits inside a cell on that
+   rung. That is why it is opt-in: a list of boundaries does not say which it
+   was placed for. The last rung is the configured mesh either way, so a poor
+   rung costs Newton iterations and never accuracy; prefer rung counts that
+   divide the final one. A ladder needs a steady solve, is refused alongside
    ``DegreeAdaptation`` — both choose the sequence of discretisations — and is
    refused inside a sliced steady solve, since each rung replaces the solver.
 

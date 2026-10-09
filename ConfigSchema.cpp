@@ -29,7 +29,8 @@ const std::vector<Entry> &table()
         {"GradingCells", {}, Type::Int, Category::Solver, false, false, 0,
          "Cells in each graded layer; at least 2, and few enough to leave one cell outside "
          "them. 0 means a third of GridSize per layer when grading both ends, half when "
-         "grading one."},
+         "grading one, and never fewer than 2 -- worked out at each GridLadder rung's own "
+         "count."},
         {"GradingEnd", {}, Type::String, Category::Solver, false, false, std::string{"Both"},
          "Which end GradedGridBoundary refines into: \"Both\" (default), \"Lower\" or "
          "\"Upper\"."},
@@ -44,7 +45,9 @@ const std::vector<Entry> &table()
         {"PolynomialDegree", {"Polynomial_degree"}, Type::UInt, Category::Solver, true, true, 1u,
          "Degree k of the nodal basis in each cell."},
         {"GridSize", {"Grid_size"}, Type::Int, Category::Solver, false, false, 0,
-         "Number of cells; required unless GridPoints is given or the run is a restart."},
+         "Number of cells; required unless GridPoints is given or the run is a restart. "
+         "On a restart, giving neither keeps the restart file's mesh as it stands, and "
+         "giving it remeshes, taking any end of the domain not given from the file."},
         {"GridPoints", {"Grid_points"}, Type::DoubleList, Category::Solver, false, false, std::vector<double>{},
          "Explicit cell boundaries, as an array. Supersedes LowerBoundary/UpperBoundary/"
          "GridSize and every grading key, and is the way to supply a mesh no rule here "
@@ -150,7 +153,18 @@ const std::vector<Entry> &table()
          "warm-starting the next. A route to the configured resolution, not a change of it."},
         {"GridLadder", {}, Type::UIntList, Category::Solver, false, false, std::vector<unsigned>{},
          "Intermediate cell counts to go with DegreeLadder; same length if both are given. "
-         "Either alone holds the other at its configured value."},
+         "Either alone holds the other at its configured value. Each rung's mesh is "
+         "GridSize's rule at that count, graded like the final one under "
+         "GradedGridBoundary. GridPoints and a restart file's mesh are not rules, so "
+         "they need GridLadderRescaling."},
+        {"GridLadderRescaling", {}, Type::String, Category::Solver, false, false, std::string{"None"},
+         "How a GridLadder rescales a mesh given as boundaries -- GridPoints, or a restart "
+         "file's mesh kept as it stands -- to another cell count. \"None\" refuses the "
+         "ladder. \"Map\" reads the boundaries as a piecewise-linear map from a uniform "
+         "mesh and samples it at the rung's count: nested when the count divides the "
+         "final one, and otherwise keeping the cell density but moving every boundary, "
+         "including any on a coefficient jump. Not read for a GridSize mesh, which "
+         "rescales by its own rule."},
         {"DegreeAdaptation", {}, Type::Bool, Category::Solver, false, false, false,
          "Choose the global polynomial degree by solving, estimating the error from "
          "u* - u_h, and re-solving at a higher degree. Steady solves only; implies "
