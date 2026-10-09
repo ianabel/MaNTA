@@ -67,6 +67,10 @@ void SystemSolver::initialize()
 	if (fieldModel)
 		fieldModel->resetForRun();
 
+	// Nor does the kappa a held nodal tau took from the last run's final
+	// Jacobian build.
+	haveJacobianKappa = false;
+
 	// A tau frozen per continuation step is set by the continuation loop, and a
 	// time march has none: tau would stay at the initial condition's for the
 	// whole run.

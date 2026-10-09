@@ -294,7 +294,7 @@ Real AdjointPlasma::qe(RealVector u, RealVector q, Real x, Time t) const
 
     Real GeometricFactor = r * r; // pi * a * Btor * r;
 
-    Real R_LTi_crit = 4 / 3 * (1 + tau) * (1 + 2 * abs(Shear(r)) / SafetyFactor(r));
+    Real R_LTi_crit = 4.0 / 3.0 * (1 + tau) * (1 + 2 * abs(Shear(r)) / SafetyFactor(r));
 
     Real Chi_i = Chi_min;
 
@@ -332,7 +332,7 @@ Real AdjointPlasma::qi(RealVector u, RealVector q, Real x, Time t) const
 
     Real GeometricFactor = r * r; // pi * a * Btor * r;
 
-    Real R_LTi_crit = 4 / 3 * (1 + tau) * (1 + 2 * abs(Shear(r)) / SafetyFactor(r));
+    Real R_LTi_crit = 4.0 / 3.0 * (1 + tau) * (1 + 2 * abs(Shear(r)) / SafetyFactor(r));
 
     Real Chi_i = Chi_min;
 

@@ -603,11 +603,19 @@ The kinds, for :math:`N` cells at degree :math:`k`:
      - as ``Residual``
      - once per run, at most: once to build ``sigma`` (skipped on a copied
        restart), once for the initial :math:`du/dt` (not on a steady solve)
+   * - ``TauNodes``
+     - ``ComputePhysicsDerivatives``
+     - as ``Residual``
+     - only with ``tauScaling = "Diffusive"`` and ``TauKappa = "Nodal"`` (the
+       default): per residual and :math:`3n_{vars} + n_{aux}` per Jacobian build
+       under ``tauUpdate = "Residual"``, plus one for a time march's initial
+       :math:`du/dt`; once per run under the frozen updates, which otherwise read
+       :math:`\kappa` off the Jacobian build's own derivatives
    * - ``TauFaces``
      - ``ComputePhysicsDerivatives``
      - :math:`2N`, both faces of each cell, one-sided
-     - only with ``tauScaling = "Diffusive"``: per residual and
-       :math:`1 + 3n_{vars} + n_{aux}` per Jacobian build under
+     - only with ``tauScaling = "Diffusive"`` and ``TauKappa = "Face"``: per
+       residual and :math:`1 + 3n_{vars} + n_{aux}` per Jacobian build under
        ``tauUpdate = "Residual"``, plus one for a time march's initial
        :math:`du/dt`; per continuation step under the frozen updates, and per
        Jacobian build too under ``"JacobianBuild"``

@@ -12,9 +12,15 @@ increase the number of calls into a `TransportSystem` at low spatial resolution
 only as options, not defaults.
 
 MaNTA's performance should be compared to the algorithms described in
-[`refs/`](refs/Refs.md). The three benchmarks under
+[`refs/`](refs/Refs.md). The five benchmarks under
 [`python-examples/`](python-examples/) do that, each reporting evaluations of the
-physics per point.
+physics per point: Park's, Jardin's and Shestakov's problems, and two
+multi-channel ones with closed-form steady states. Where another code's
+algorithm is published completely enough to run,
+[`python-examples/reference-algorithms/`](python-examples/reference-algorithms/)
+runs it on the same problems in the same currency -- the published ASTRA scheme
+and TGYRO's iteration, at 56-84 and 32-391 visits per point against MaNTA
+Newton's 5-15.
 
 Where only the steady state is wanted, `SteadyStateSolver` chooses how it is
 reached, and the choice is worth an order of magnitude -- but only once

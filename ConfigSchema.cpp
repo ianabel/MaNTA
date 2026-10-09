@@ -64,6 +64,10 @@ const std::vector<Entry> &table()
          "(once per steady continuation step); the last two are for steady solves."},
         {"tauFloor", {}, Type::Double, Category::Solver, false, false, 1e-3,
          "Under tauScaling = Diffusive, the floor on kappa/h as a fraction of its largest value on the grid."},
+        {"TauKappa", {}, Type::String, Category::Solver, false, false, std::string{"Nodal"},
+         "Under tauScaling = Diffusive, where kappa at a face comes from: Nodal (the cell's "
+         "d sigma_hat/d q at the physics nodes, extrapolated to the face) or Face (evaluated at "
+         "the face from the trace)."},
         {"delta_t", {}, Type::Double, Category::Solver, true, true, 0.0,
          "Interval between output timeslices."},
         {"t_initial", {"tZero"}, Type::Double, Category::Solver, false, false, 0.0,

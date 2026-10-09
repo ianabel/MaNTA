@@ -995,32 +995,65 @@ tree before the split, checked by `cmp` over every regression config's `.nc` and
 `.restart.nc`. Re-run that check after touching `assembleTauBlocks`.
 
 Under `Diffusive`, `faceTau` evaluates `tau * (kappa/h + floor * max kappa/h)`
-per face, one-sided, from the trace and the cell's own `q`, with one batched
-`ComputePhysicsDerivatives` on the `2 nCells` faces. The residual applies it at
-*its* state, the Jacobian build at `yJac` — which is why `H` is split into
-`H_cellwise` and `H_jac_cellwise`: it is the one tau block both read directly,
-and `solveHDGJac` reads it at *solve* time, long after the residuals of a Newton
-iteration have overwritten the residual's copy. Under
-`tauUpdate = Residual` the Jacobian carries `d tau / dy`
-(`faceTauJacobian`: a forward difference per face-state component, all faces in
-one batched call, so `3 nVars + nAux` extra face calls per build) in the blocks
-`applyJacobianTau` rewrites; what it leaves out is the floor's grid-maximum term,
-and `LocalTauTests.cpp` shows that is *all* it leaves out — the mismatch against a
-finite-differenced residual falls from 3e-7 to 1e-9 when the floor is taken to
-1e-9. Under `ContinuationStep` the continuation loop sets `tau` (`freezeTauAt`),
-the residual and the Jacobian leave it alone, and `steadyNorm` re-evaluates it
-before measuring convergence; a transient run is refused in `initialize()`.
+per face, one-sided. `TauKappa` says where `kappa` comes from:
+
+* **`Nodal` (the default)** — `nodalKappaOverH` takes the cell's `d sigma_hat /
+  d q` at the physics nodes and extrapolates each cell's interpolant of it to its
+  two faces; where the line goes non-positive and every node is positive it
+  extrapolates `log kappa` instead, and where a node is non-positive the face
+  gets the floor alone. It evaluates the case nowhere the residual does not.
+* **`Face`** — `faceStates` builds the state at each face from the trace (the
+  Dirichlet datum at a Dirichlet end) and the cell's own one-sided `q`, and
+  `faceKappaOverH` makes one batched `ComputePhysicsDerivatives` on the `2 nCells`
+  faces.
+
+The residual applies tau at *its* state, the Jacobian build at `yJac` — which is
+why `H` is split into `H_cellwise` and `H_jac_cellwise`: it is the one tau block
+both read directly, and `solveHDGJac` reads it at *solve* time, long after the
+residuals of a Newton iteration have overwritten the residual's copy.
+
+Under `tauUpdate = Residual` the Jacobian carries `d tau / dy` in the blocks
+`applyJacobianTau` rewrites, by a forward difference per component of the state
+kappa is read from, every point perturbed in one batched call. `faceTauJacobian`
+differences the face state, so `1 + 3 nVars + nAux` face calls per build, and
+reaches `u` through `lambda`. `nodalTauJacobian` differences the nodal state —
+only `3 nVars + nAux` calls, since kappa itself comes off the build's own
+derivatives — and chains it onto the cell's coefficients, so nodal tau has no
+`lambda` column at all; under `Superconvergent` the `u` component goes through
+`B12` *and* `B11`, `u*` reading `q`. What both leave out is the floor's
+grid-maximum term, and `LocalTauTests.cpp` shows that is *all* they leave out —
+the mismatch against a finite-differenced residual falls from 3e-7 to 1e-9 when
+the floor is taken to 1e-9. `the_nodal_dtau_dy_is_chained_through_every_component`
+covers `u`/`q`, aux and the log branch with and without `Superconvergent`;
+dropping the `B11` path moves it from 1e-8 to 3e-3, dropping the aux path to 5e-2.
+
+Under `ContinuationStep` the continuation loop sets `tau` (`freezeTauAt`), the
+residual and the Jacobian leave it alone, and `steadyNorm` refreshes it before
+measuring convergence; a transient run is refused in `initialize()`. Under
+`Face` the refresh evaluates the faces at the current state. Under `Nodal` it
+reads `jacobianKappaOverH`, which every Jacobian build fills from the derivatives
+it has just taken — so a held nodal tau costs no evaluation at all, at the price
+of lagging the state by however many Newton iterations ago that build was. Before
+a run's first build there is none, and `freezeTauAt` evaluates once; the flag is
+cleared in the unconditional part of `initialize()`, which is what keeps a reused
+solver from starting on the previous run's kappa (the `RF_cellwise` trap again).
 `JacobianBuild` is `ContinuationStep` plus a refresh in each Jacobian build
 (`tauRefreshedPerJacobian`), so tau is fixed across the Newton iterations sharing
 a Jacobian; KINSOL evaluated the residual before the rebuild with the old tau, so
-that step is lagged and costs Newton iterations. Measured cost, against a
-constant tau at the same `NewtonJacobianReuse`: `Residual` 1.6-1.8x, nearly all
-of it the per-residual face call; `ContinuationStep` 1.07-1.10x; `JacobianBuild`
-1.15-1.47x. `ContinuationStep` is a fixed-point iteration on tau that pseudo-time
-cannot damp (tau reads `lambda` and `q`, which are algebraic); it stalled once,
-under the default Jacobian reuse, and not with `NewtonJacobianReuse = 1`. The adjoint
-would carry neither, so `applySolverConfig` refuses `Diffusive` with
-`solveAdjoint`.
+that step is lagged and costs Newton iterations.
+
+Measured cost on the wall layer, against a constant tau, `Nodal` / `Face`:
+`Residual` 2.6-2.8x / 1.6-1.7x — nodal pays `N(k+1)` points per residual against
+`2N`, though the same number of *calls*; `ContinuationStep` 1.01-1.13x /
+1.06-1.15x; `JacobianBuild` 1.04-1.31x / 1.27-1.49x. Answers agree to 2% in `u`.
+On Shestakov's degenerate flux `Face` under `Residual` converged to a wrong steady
+state in three runs of twelve and `Nodal` in none, and at a zero Dirichlet value
+the face evaluation is a 0/0 that `Nodal` never makes. `docs/formulation.rst`
+has the tables. `ContinuationStep` is a fixed-point iteration on tau that
+pseudo-time cannot damp (tau reads `q`, and under `Face` `lambda`, which are
+algebraic); it stalled once, under the default Jacobian reuse, and not with
+`NewtonJacobianReuse = 1`. The adjoint would carry neither, so
+`applySolverConfig` refuses `Diffusive` with `solveAdjoint`.
 
 ### Non-owning state views
 
@@ -1132,8 +1165,9 @@ physics call at a point set the plan does not list is a bug, not a fallback**:
 `EvaluationPlanTests.cpp` records every call a case is handed across a matrix of
 configurations and fails on any outside the plan, and on any announced site never
 used. Adding a physics call means adding its site to `evaluationPlan()`. The
-`TauFaces` sites are keyed off `tauEvaluatesFaces()` and nothing else, so a tau
-that stops evaluating on the faces is a one-line change there.
+`TauFaces` and `TauNodes` sites are keyed off `tauEvaluatesFaces()` and
+`tauEvaluatesNodes()` and nothing else, so a change to where tau evaluates is a
+one-line change there.
 
 **A plan depends on the discretisation and configuration, never on the run**, and
 that is load-bearing: `==` is plain defaulted equality, and "nothing changed" is

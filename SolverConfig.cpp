@@ -297,6 +297,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(tauScaling, std::string);
     READ(tauUpdate, std::string);
     READ(tauFloor, double);
+    READ(TauKappa, std::string);
     READ(delta_t, double);
     READ(t_initial, double);
     READ(Relative_tolerance, double);
@@ -778,6 +779,15 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
             "tauUpdate must be \"Residual\", \"ContinuationStep\" or \"JacobianBuild\"; got \"" +
             config.tauUpdate + "\".");
 
+    SystemSolver::TauKappa tauKappa;
+    if (config.TauKappa == "Nodal")
+        tauKappa = SystemSolver::TauKappa::Nodal;
+    else if (config.TauKappa == "Face")
+        tauKappa = SystemSolver::TauKappa::Face;
+    else
+        throw std::invalid_argument("TauKappa must be \"Nodal\" or \"Face\"; got \"" +
+                                    config.TauKappa + "\".");
+
     if (config.tauScaling == "Constant")
     {
         // A key that changes nothing is refused rather than ignored.
@@ -785,6 +795,10 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
             throw std::invalid_argument(
                 "tauUpdate only applies under tauScaling = \"Diffusive\"; a Constant tau "
                 "is never re-evaluated.");
+        if (tauKappa != SystemSolver::TauKappa::Nodal)
+            throw std::invalid_argument(
+                "TauKappa only applies under tauScaling = \"Diffusive\"; a Constant tau "
+                "reads no kappa.");
         system.setTauScaling(SystemSolver::TauScaling::Constant, config.tauFloor);
     }
     else if (config.tauScaling == "Diffusive")
@@ -802,7 +816,8 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
                 "tauScaling = \"Diffusive\" cannot be combined with solveAdjoint: tau "
                 "depends on the state and the adjoint does not carry d tau / dy, so the "
                 "gradients would be silently wrong. Use tauScaling = \"Constant\".");
-        system.setTauScaling(SystemSolver::TauScaling::Diffusive, config.tauFloor, tauUpdate);
+        system.setTauScaling(SystemSolver::TauScaling::Diffusive, config.tauFloor, tauUpdate,
+                             tauKappa);
     }
     else
         throw std::invalid_argument(
