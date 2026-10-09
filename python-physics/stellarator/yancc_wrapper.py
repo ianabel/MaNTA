@@ -85,10 +85,6 @@ class yancc_data(eqx.Module):
         self.nt = nt
         self.nz = nz
 
-        print(
-            f"yancc_wrapper initialized successfully with resolution na={self.na}, nx={self.nx}."
-        )
-
     def get_fields(self):
         return self.fields, self.Vp, self.Vpp
 

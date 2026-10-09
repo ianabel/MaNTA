@@ -41,9 +41,9 @@ import manta as MaNTA
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
-fname = "stellarator_opt"
+eq_name = "eq2"
+fname = "stellarator_opt" + eq_name
 
-eq_name = "eq"
 #
 # st_config = {
 #     "ParticleSourceCenter": 0.0,
@@ -70,16 +70,16 @@ st_config = {
     "ParticleSourceHeight": fac * 0.02,
     "ParticleSourceWidth": 0.6,
     "NBICenter": 0.0,
-    "NBIPower": fac * 5.5,
+    "NBIPower": fac * 10.0,
     "NBIWidth": 0.15,
     "ECHCenter": 0.0,
     "ECHPower": fac * 8.76e-2,
     "ECHWidth": 0.15,
-    "EdgeTemperature": 0.2,
-    "EdgeDensity": 0.2,
+    "EdgeTemperature": 0.4,
+    "EdgeDensity": 0.3,
     "ADCoefficient": 0.0,
-    "n0": 0.5,
-    "T0": 1.0,
+    "n0": 1.0,
+    "T0": 2.0,
     "FusionFactor": 0.01,
     "evolveDensity": True,
     "useBatching": True,
@@ -96,7 +96,7 @@ degree = 3
 # tau = 0.5
 #
 base = 1.8
-tau = 0.5
+tau = 0.2
 #
 # nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
 
@@ -105,7 +105,7 @@ tau = 0.5
 # )  # nodes = np.concatenate(([0, 0.1], nodes, [0.98,1]))
 nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 3)
 
-nodes = np.concatenate(([0, 0.1, 0.25], nodes, [rho_upper]))
+nodes = np.concatenate(([0, 0.1, 0.2], nodes, [rho_upper]))
 
 # nodes = np.linspace(0, 1.0, npoints + 1)
 print(nodes)
@@ -128,6 +128,8 @@ solver_config = {
     "WriteDatFile": True,
     "SteadyStateDiagnostics": True,
     "SteadyStateStepDiagnostics": True,
+    "tauScaling": "Diffusive",
+    "tauUpdate": "ContinuationStep",
     "NewtonJacobianReuse": 4,
     "MaxRejectedSteps": 10,
     "restart": False,
@@ -142,10 +144,11 @@ config = {
     "Stellarator": st_config,
     "Solver": solver_config,
 }
+points = MaNTA.getNodes(
+    solver_config["GridPoints"],
+    solver_config["PolynomialDegree"],
+)
 
-
-points = 
-yancc_rho = jnp.array(points)
 
 yancc_rho = jnp.array(points)
 yancc_ntheta = 17
@@ -191,8 +194,17 @@ eq_init = eq.copy()
 
 V0 = eqs[0].compute("V")["V"]
 # yancc_wrapper = yancc_data.from_eq(points, grid = yancc_grid,rho = yancc_rho, Density=Density, eq=eq_init, nt = yancc_ntheta, nz = yancc_nzeta)
+
+
+def cheb_nodes(nCells):
+    nodes = np.ndarray((nCells + 1,))
+    for i in range(0, len(nodes)):
+        nodes[nCells - i] = 0.5 * (1 + np.cos(i * np.pi / nCells))
+    return nodes
+
+
 yancc_wrapper = yancc_data.from_eq(
-    points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
+    cheb_nodes(100), eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
 ## %%
 
@@ -374,7 +386,10 @@ def objective_from_user_fun(grid, data):
     return 1 / g  # jnp.append(pressure_error, 1 / stored_energy)
 
 
-yancc_desc_grid = yancc_wrapper.grid
+yancc_desc_grid = desc.grid.LinearGrid(
+    rho=yancc_rho, M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP
+)
+# yancc_desc_grid = yancc_wrapper.grid
 
 # domainBoundary_rho = rho_from_normalized_volume(0.9)
 domainBoundary_rho = 1.0
@@ -428,7 +443,7 @@ stored_energy_weight = 5.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()
-max_it = 20
+max_it = 40
 
 eqfam = EquilibriaFamily(eq)
 # ks = [1, 2, eq.M + 1]
@@ -548,14 +563,10 @@ eqs.save(eq_name + "_all_equilibria.h5")
 
 # %%
 
-fig, ax = plot_comparison(
-    eqs=[eq_init, eq, eqfam[-1]], labels=["Initial", "optimized", "self-consistent"]
-)
+fig, ax = plot_comparison(eqs=[eqs[-1], eq], labels=["Initial", "optimized"])
 fig.savefig("figs/" + eq_name + "final_comparison.png")
-fig, ax = plot_boundaries(
-    eqs=[eq_init, eq, eqfam[-1]], labels=["Initial", "optimized", "self-consistent"]
-)
-fig.savefig("figs/" + eq_name + "final_comparisonBoundary.png")
+fig, ax = plot_boundaries(eqs=[eqs[-1], eq], labels=["Initial", "optimized"])
+fig.savefig("figs/" + eq_name + "final_comparison_boundary.png")
 # %%
 # eq = desc.io.load("../python/eq2optimized_equilibrium.h5")#desc.examples.get("ESTELL")
 # plot_boozer_surface(eq_init, fieldlines=8)

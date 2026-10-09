@@ -160,10 +160,8 @@ def compute_dke_sol(
         )
 
         # scale current up for stricter enforcement of ambipolarity
-        aux_g_out = (
-            10.0
-            * sol.get("J_rho")
-            * (params.constants.a / params.constants.CurrentNormalization())
+        aux_g_out = sol.get("J_rho") * (
+            params.constants.a / params.constants.CurrentNormalization()
         )
 
         return [particle_flux, heat_flux[0], heat_flux[1]], [aux_g_out]

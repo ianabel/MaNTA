@@ -82,8 +82,7 @@ from manta.jax import Physics_Decorator, State, vmap_batched  # noqa: E402
 data_sharding = None
 
 
-# works at n0 = 0.5
-PARAMS = dict(n0=2.0, H0=0.1, W0=0.2, D0=0.01, u_b=0.2)
+PARAMS = dict(n0=2.5, H0=0.1, W0=0.2, D0=0.01, u_b=0.2)
 
 # The two batched entry points this case serves. Everything else MaNTA calls --
 # InitialValue, the boundary values -- is pointwise and stays on the calling
@@ -234,7 +233,9 @@ class ParallelNC(manta.TransportSystem):
             rounds = -(-m // WIDTH)  # ceil(M / WIDTH)
             self.layout[m] = (
                 rounds,
-                self._pad_tree(Params.make(jnp.asarray(points), **PARAMS), rounds * WIDTH - m),
+                self._pad_tree(
+                    Params.make(jnp.asarray(points), **PARAMS), rounds * WIDTH - m
+                ),
             )
 
         self.levels.append((plan.grid.getNCells(), plan.k))
@@ -243,14 +244,18 @@ class ParallelNC(manta.TransportSystem):
     def _pad_tree(tree, pad_width):
         """Pads all array leaves of a PyTree along axis 0 by repeating the last entry."""
         dynamic, static = eqx.partition(tree, eqx.is_array)
-        padded = jax.tree_util.tree_map(lambda leaf: jnp.pad(leaf, (0, pad_width), mode="edge"), dynamic)
+        padded = jax.tree_util.tree_map(
+            lambda leaf: jnp.pad(leaf, (0, pad_width), mode="edge"), dynamic
+        )
         return eqx.combine(padded, static)
 
     @staticmethod
     def _unpad_tree(tree, length):
         """Slices all array leaves of a PyTree back to `length` along axis 0."""
         dynamic, static = eqx.partition(tree, eqx.is_array)
-        return eqx.combine(jax.tree_util.tree_map(lambda leaf: leaf[:length, ...], dynamic), static)
+        return eqx.combine(
+            jax.tree_util.tree_map(lambda leaf: leaf[:length, ...], dynamic), static
+        )
 
     # --- where the layout is carried out -------------------------------------------
 
@@ -263,7 +268,9 @@ class ParallelNC(manta.TransportSystem):
         """
         m = len(positions)
         if m not in self.layout:
-            raise RuntimeError(f"a batch of {m} points that the evaluation plan did not announce")
+            raise RuntimeError(
+                f"a batch of {m} points that the evaluation plan did not announce"
+            )
         rounds, params = self.layout[m]
         pad = rounds * WIDTH - m
 
@@ -304,8 +311,8 @@ def run(told):
         {
             "OutputFilename": "nc_multigpu",
             "WriteOutput": False,
-            "PolynomialDegree": 4,
-            "GridSize": 5,
+            "PolynomialDegree": 3,
+            "GridSize": 3,
             "LowerBoundary": 0.0,
             "UpperBoundary": 1.0,
             "tau": 1.0,

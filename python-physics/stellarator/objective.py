@@ -65,7 +65,7 @@ def make_objective(config, yancc_res=None):
         yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp, **yancc_res)
 
         st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-        st2 = StellaratorTransport(time_march_config, yancc_wrapper=yancc_wrapper)
+        # st2 = StellaratorTransport(time_march_config, yancc_wrapper=yancc_wrapper)
         with jax.default_device(jax.devices("cpu")[0]):
             ec = st.run()
 

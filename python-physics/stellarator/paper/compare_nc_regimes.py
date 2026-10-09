@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import jax.numpy as jnp
+from numpy import expand_dims
 from yancc import Field, UniformPitchAngleGrid, solve_mdke
 from yancc.species import Electron, _nustar, _Estar, LocalMaxwellian
 import desc.io
@@ -31,14 +32,25 @@ def load_and_rescale(name):
 
 # Magnetic field on a flux surface (here from a BOOZ_XFORM file).
 
-eq = desc.io.load("../eq_amb5_all_equilibria.h5")
-eq_qh = load_and_rescale("precise_QH")
+eqs_high = desc.io.load("../eq_amb5_all_equilibria.h5")
+eqs_low = desc.io.load("eq_all_equilibria.h5")
 
-eq_aries = desc.examples.get("ARIES-CS")
-eq_w7x = load_and_rescale("W7-X")
-eq0 = eq[0]
-eq1 = eq[-1]
-eq1.solve(x_scale="ess")
+example_equilibria = ["precise_QH", "W7-X"]
+
+# eq_qh = load_and_rescale("precise_QH")
+
+# eq_aries = desc.examples.get("ARIES-CS")
+
+
+# eq_w7x = load_and_rescale("W7-X")
+#
+example_eqs = []
+for name in example_equilibria:
+    example_eqs.append(load_and_rescale(name))
+
+eq0 = eqs_low[0]
+eq_low = eqs_low[-1]
+eq_high = eqs_high[-1]
 
 species = [
     LocalMaxwellian(
@@ -77,8 +89,8 @@ fun = eqx.filter_jit(
 )
 
 rhos = [0.5]
-names = ["initial", "optimized", "QH", "ARIES-CS", "W7-X"]
-eqs = [eq0, eq1, eq_qh, eq_aries, eq_w7x]
+names = ["initial", "low col", "high col"] + example_equilibria
+eqs = [eq0, eq_low, eq_high] + example_eqs
 colors = ["r", "b", "g", "c", "m"]
 
 plt.rcParams.update({"font.family": "serif", "font.size": 10})
@@ -96,8 +108,8 @@ for rho, i in zip(rhos, range(0, len(rhos))):
         ax[2 * i + 1].axvline(_nustar(species[0], field, 1.0), color=c, linestyle="--")
 print("done")
 
-for i in range(0, len(rhos)):
-    ax[i, 0].set_title(rf"$\rho=${rhos[i]}", loc="right")
+# for i in range(0, len(rhos)):
+#     ax[i, 0].set_title(rf"$\rho=${rhos[i]}", loc="right")
 
 
 for a in ax_flat:
@@ -105,11 +117,11 @@ for a in ax_flat:
     a.set_box_aspect(1)
 for a in ax_flat[-2:]:
     a.set_xlabel(r"$\nu^*$")
-for a in ax_flat[0:-1:2]:
-    a.set_ylabel(r"$D_{11}$")
-for a in ax[1:-1:2]:
-    a.set_ylabel(r"$|D_{31}|$")
+for a in ax_flat[0::2]:
+    a.set_ylabel(r"$\hat{D}_{11}$")
+for a in ax_flat[1::2]:
+    a.set_ylabel(r"$|\hat{D}_{31}|$")
 
 fig.tight_layout()
-fig.savefig("figs/nc_mdke_compare.png", dpi=500)
+fig.savefig("figs/nc_mdke_compare.pdf", dpi=500)
 plt.show()

@@ -17,3 +17,23 @@ st_config = {
     "evolveDensity": True,
     "useBatching": True,
 }
+
+st_config1 = {
+    "ParticleSourceCenter": 0.0,
+    "ParticleSourceHeight": fac * 0.02,
+    "ParticleSourceWidth": 0.6,
+    "NBICenter": 0.0,
+    "NBIPower": fac * 5.5,
+    "NBIWidth": 0.15,
+    "ECHCenter": 0.0,
+    "ECHPower": fac * 8.76e-2,
+    "ECHWidth": 0.15,
+    "EdgeTemperature": 0.3,
+    "EdgeDensity": 0.2,
+    "ADCoefficient": 0.0,
+    "n0": 0.5,
+    "T0": 1.0,
+    "FusionFactor": 0.01,
+    "evolveDensity": True,
+    "useBatching": True,
+}

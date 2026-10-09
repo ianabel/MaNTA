@@ -40,53 +40,61 @@ st_config = {
     "ParticleSourceHeight": fac * 0.02,
     "ParticleSourceWidth": 0.6,
     "NBICenter": 0.0,
-    "NBIPower": fac * 5.5,
+    "NBIPower": fac * 8.0,
     "NBIWidth": 0.15,
     "ECHCenter": 0.0,
     "ECHPower": fac * 8.76e-2,
     "ECHWidth": 0.15,
-    "EdgeTemperature": 0.2,
+    "EdgeTemperature": 0.3,
     "EdgeDensity": 0.2,
-    "ADCoefficient": 0.0,
-    "n0": 0.5,
-    "T0": 1.0,
+    "ADCoefficient": 1e-4,
+    "n0": 1.0,
+    "T0": 2.0,
     "FusionFactor": 0.01,
     "evolveDensity": True,
     "useBatching": True,
+    "nchunks": 3,
 }
 
 
-eq_name = "W7-X"
+eq_name = "precise_QH"
 
 rho_upper = 1.0
 rtol = 1e-2
 atol = 1e-10
-npoints = 8
-degree = 3
-
-base = 1.5
+# nodes = [0.0, 0.4, 0.6, 0.75, 0.95, 1.0]
+npoints = 9
+degree = 4
+# base = 1.5
+# tau = 0.5
+#
+base = 2.0
 tau = 0.5
 #
-nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 4)
+# nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
 
-nodes = np.concatenate(([0, 0.05, 0.1], nodes, [0.99, rho_upper]))
-# nodes = np.concatenate(([0, 0.05, 0.1], jnp.linspace(0.4, 0.99, npoints - 2)))
+# nodes = np.concatenate(
+#     ([0, 0.1], nodes, [rho_upper])
+# )  # nodes = np.concatenate(([0, 0.1], nodes, [0.98,1]))
+nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 3)
+
+nodes = np.concatenate(([0, 0.05, 0.25], nodes, [rho_upper]))
 
 # nodes = np
 print(nodes)
 # # %%c
 solver_config = {
     "OutputFilename": "stellarator_" + eq_name,
-    "Polynomial_degree": degree,
-    "Grid_points": nodes,
-    "Grid_size": len(nodes) - 1,
+    "PolynomialDegree": degree,
+    "GridPoints": nodes,
+    "GridSize": len(nodes) - 1,
     "tau": tau,
-    "Lower_boundary": 0.0,
-    "Upper_boundary": rho_upper,
+    "LowerBoundary": 0.0,
+    "UpperBoundary": rho_upper,
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
-    "initialTimestep": 1e-3,
+    "initialTimestep": 0.01,
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 5e-5,
     "AggressiveTimesteps": False,
@@ -94,6 +102,8 @@ solver_config = {
     "restart": False,
     "zeroFlux": True,
     "solveAdjoint": False,
+    "tauScaling": "Diffusive",
+    "tauUpdate": "ContinuationStep",
     "SteadyStateSolver": "PseudoTransient",
     "NewtonJacobianReuse": 4,
     "SteadyStateDiagnostics": True,
@@ -111,7 +121,7 @@ config = {
 
 points = MaNTA.getNodes(
     nodes,
-    solver_config["Polynomial_degree"],
+    solver_config["PolynomialDegree"],
 )
 
 yancc_rho = jnp.array(points)
@@ -125,11 +135,9 @@ yancc_res = {"na": 45, "nx": 7}
 # initial pressure is all zeros, can change this if desired
 pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
-eq = desc.examples.get("W7-X")
-eq = desc.compat.rescale(
-    eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
-)
-# eq = desc.examples.get("W7-X")
+eq = desc.examples.get(eq_name)
+eq = desc.compat.rescale(eq, L=("a", 1.7), B=("<B>", 5.86), copy=True, verbose=1)
+# # eq = desc.examples.get("W7-X")
 # # # # Reduce the number of modes (not sure if this is a good thing to do)
 # # #
 # eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
@@ -144,9 +152,21 @@ eq.solve(x_scale="ess")[0]
 # eq = desc.io.load("eq_omnigenity.h5")
 
 eq_init = eq.copy()
+
+
+def cheb_nodes(nCells):
+    nodes = np.ndarray((nCells + 1,))
+    for i in range(0, len(nodes)):
+        nodes[nCells - i] = 0.5 * (1 + np.cos(i * np.pi / nCells))
+    return nodes
+
+
 yancc_wrapper = yancc_data.from_eq(
-    points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
+    cheb_nodes(100), eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
+## %%
+
+
 # with jax.log_compiles(True):
 st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
 st.run()
@@ -178,12 +198,12 @@ def make_tangent(params, idx, key="Rb_lmn"):
 
 solver_config = {
     "OutputFilename": "stellarator_" + eq_name,
-    "Polynomial_degree": degree,
-    "Grid_points": nodes,
-    "Grid_size": len(nodes) - 1,
+    "PolynomialDegree": degree,
+    "GridPoints": nodes,
+    "GridSize": len(nodes) - 1,
     "tau": tau,
-    "Lower_boundary": 0.0,
-    "Upper_boundary": rho_upper,
+    "LowerBoundary": 0.0,
+    "UpperBoundary": rho_upper,
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
@@ -265,8 +285,9 @@ def objective_from_user_fun(grid, data):
     return 1 / stored_energy
 
 
-yancc_desc_grid = yancc_wrapper.grid
-
+yancc_desc_grid = desc.grid.LinearGrid(
+    rho=yancc_rho, M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP
+)
 # domain_boundary_rho = rho_from_normalized_volume(0.9)
 domain_boundary_rho = 1.0
 

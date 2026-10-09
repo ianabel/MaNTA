@@ -244,7 +244,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         config = StellaratorConfig(rhoUpper=self.xR, **st_config)
 
-        self.params = StellaratorParams(config, _B0=5.0)
+        self.params = StellaratorParams(config, _B0=5.0, _a=1.0)
         # if "Superconvergent" in solver_config and solver_config["Superconvergent"]:
         #     raise RuntimeError(
         #         "Superconvergent is not compatible with this physics case"
@@ -252,9 +252,6 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         MaNTA.TransportSystem.__init__(self, buildSpec(self.params))
         self.batch_size = self.params.config.batch_size
-
-        if self.params.config.useSharding:
-            print(f"Using batch size {self.batch_size}")
 
         self.yancc_wrapper = yancc_wrapper
         self.points = MaNTA.getNodes(
@@ -275,18 +272,19 @@ class StellaratorTransport(MaNTA.TransportSystem):
         g = [self.StoredEnergy]
 
         self.levels = []  # (cells, k) of each plan MaNTA handed over
+        ### for adaptive grid problems ###
+
+        # batch size M -> (rounds, padded Params). Set by prepareEvaluation from
+        # MaNTA's plan; see there.
+        self.layout = {}
+
+        self.rounds = 0  # rounds the machine ran
+
         if self.params.config.adaptiveGrid:
-            ### for adaptive grid problems ###
-
-            # batch size M -> (rounds, padded Params). Set by prepareEvaluation from
-            # MaNTA's plan; see there.
-            self.layout = {}
-
-            self.rounds = 0  # rounds the machine ran
-
             solver_config["tauScaling"] = "Diffusive"
             solver_config["tauUpdate"] = "ContinuationStep"
             solver_config["MeshAdaptation"] = True
+            solver_config["MeshAdaptationThreshold"] = 1.25
             solver_config["DegreeTolerance"] = 1e-6
             solver_config["PhysicsParallelism"] = self.batch_size
             solver_config["MaxPhysicsBatch"] = self.max_batch
@@ -300,10 +298,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self, self.points, 1, self.adjointProblem.np, spatialParameters=True
         )
 
-        print("configuring")
         self.runner.configure(solver_config)
-        # io_callback(lambda : self.runner.configure(solver_config), [], ordered = True)
-        print("Successfully created StellaratorTransport object")
 
     def reconfigure(self, solver_config):
         self.runner.configure(solver_config)
@@ -547,6 +542,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     @Physics_Decorator
     def ComputePhysics(self, states, positions, t):
+
         dke_data = self._evaluate(
             compute_dke_sol,
             states,
@@ -592,7 +588,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return [ddke_data[0], dsources, ddke_data[1]]
 
     @staticmethod
-    def _pad_tree(tree, pad_width):
+    def _pad_state(tree, pad_width):
         """Pads all array leaves of a PyTree along axis 0 by repeating the last entry."""
         dynamic, static = eqx.partition(tree, eqx.is_array)
         padded = jax.tree_util.tree_map(
@@ -601,7 +597,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return eqx.combine(padded, static)
 
     @staticmethod
-    def _unpad_tree(tree, length):
+    def _unpad_state(tree, length):
         """Slices all array leaves of a PyTree back to `length` along axis 0."""
         dynamic, static = eqx.partition(tree, eqx.is_array)
         return eqx.combine(
@@ -609,7 +605,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         )
 
     def prepareEvaluation(self, plan):
-        # called before physics are evaluated, repopulates field data at new points
+        # called before physics are evaluated at a new set of points, generates field data at these points
         self.layout = {}
         points_of = {}
 
@@ -634,6 +630,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
             rounds = -(-m // self.batch_size)
             pad_width = rounds * self.batch_size - m
+
+            # don't pad the field itself, just evaluate at the padded points
             fields_interp, vp_interp, vpp_interp = self.yancc_wrapper.get_fields_at_rho(
                 jnp.pad(points, (0, pad_width), mode="edge")
             )
@@ -647,25 +645,20 @@ class StellaratorTransport(MaNTA.TransportSystem):
         self.levels.append((plan.grid.getNCells(), plan.k))
 
     def _evaluate(self, func, _states, _positions, t, vmap_axes, *args):
+        """
+        Evaluate physics, add padding
+        """
         m = len(_positions)
         rounds = self.nchunks
-        if self.params.config.adaptiveGrid:
-            if m not in self.layout:
-                raise RuntimeError(
-                    f"a batch of {m} points that the evaluation plan did not announce"
-                )
+        if m not in self.layout:
+            raise RuntimeError(
+                f"a batch of {m} points that the evaluation plan did not announce"
+            )
 
-            rounds, fields, vp, vpp = self.layout[m]
-            pad = rounds * self.batch_size - m
-            states = self._pad_tree(_states, pad)
-            positions = jnp.pad(_positions, (0, pad), mode="edge")
-
-        else:
-            states = _states
-            positions = _positions
-            fields = self.field
-            vp = self.vp
-            vpp = self.vpp
+        rounds, fields, vp, vpp = self.layout[m]
+        pad = rounds * self.batch_size - m
+        states = self._pad_state(_states, pad)
+        positions = jnp.pad(_positions, (0, pad), mode="edge")
 
         out = vmap_batched(
             func,
@@ -675,18 +668,15 @@ class StellaratorTransport(MaNTA.TransportSystem):
             sharding=data_sharding,
         )(states, positions, t, fields, vp, vpp, *args)
 
-        if self.params.config.adaptiveGrid:
-            self.rounds += rounds
-            return self._unpad_tree(out, m)
-        else:
-            return out
+        self.rounds += rounds
+        return self._unpad_state(out, m)
 
     """
     Create the adjoint problem associated with this transport system
     
     Returns
     -------
-    JAXAdjointProblem
+    MaNTA.AdjointProblem
         The adjoint problem object
     """
 
