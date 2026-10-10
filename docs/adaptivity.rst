@@ -80,14 +80,18 @@ cell's solution onto :math:`P_{k-1}`,
 
    S_K = \frac{(w - w_H,\, w - w_H)_K}{(w,\, w)_K}
 
-In a Legendre basis that projection just drops the top coefficient, so with
-:math:`\lVert P_j \rVert^2 = 2/(2j+1)` the whole thing collapses to a ratio of
-weighted squares of the modal coefficients :math:`\hat u_j`:
+In a Legendre basis that projection just drops the top coefficient, so the
+whole thing collapses to a ratio of squares of the modal coefficients. MaNTA's
+coefficients :math:`\hat u_j` are those of the *orthonormal* functions
+:math:`\sqrt{(2j+1)/2}\, P_j`, every one of unit norm, so
 
 .. math::
 
-   S_K = \frac{\hat u_k^2 / (2k+1)}
-              {\sum_j \hat u_j^2 / (2j+1)}
+   S_K = \frac{\hat u_k^2}{\sum_j \hat u_j^2}
+
+— which is the familiar :math:`[a_k^2/(2k+1)] / \sum_j a_j^2/(2j+1)` written for
+coefficients :math:`a_j` of :math:`P_j` itself. Applying that weighting to
+orthonormal coefficients counts the norm twice.
 
 No quadrature, and no factor of :math:`\lvert K \rvert` — the :math:`h/2` from the
 reference map cancels — so it is directly comparable across a non-uniform mesh.
@@ -98,8 +102,8 @@ reference map cancels — so it is directly comparable across a non-uniform mesh
    an energy *share*, so it has no fixed scale and any threshold on it is a
    per-degree quantity. Between a smooth benchmark and a singular one the
    separation is **389× at k = 4 and only 2.2× at k = 2**; on one unchanged
-   function :math:`S_K` moves from 3.3e-3 to 3.8e-11 as :math:`k` goes 2 → 6,
-   nearly eight orders, while the decay rate below moves 2.04 → 5.39. Persson &
+   function :math:`S_K` moves from 1.4e-2 to 4.2e-10 as :math:`k` goes 2 → 6,
+   over seven orders, while the decay rate below moves 2.04 → 5.39. Persson &
    Peraire's own :math:`S^* \sim 1/k^4` is a per-degree calibration of exactly this
    kind, and it is tuned for shock capture — it sits orders of magnitude above
    anything seen here. :math:`S_K` is reported by the sensor and is useful for

@@ -26,12 +26,17 @@
  *
  *     S_K = (w - w_H, w - w_H)_K / (w, w)_K
  *
- * In a Legendre basis that projection simply drops the top coefficient, and
- * with ||P_j||^2 = 2/(2j+1) the whole thing collapses to a ratio of weighted
- * squares of the modal coefficients -- no quadrature, and no factor of |K|, so
- * it is comparable across a non-uniform mesh:
+ * In a Legendre basis that projection simply drops the top coefficient, so
+ * the whole thing collapses to a ratio of squares of the modal coefficients --
+ * no quadrature, and no factor of |K|, so it is comparable across a non-uniform
+ * mesh. NodalBasis::ToModal returns coefficients of the *orthonormal* functions
+ * sqrt((2j+1)/2) P_j, in which every mode has unit norm:
  *
- *     S_K = [ uhat_k^2 / (2k+1) ] / sum_j [ uhat_j^2 / (2j+1) ]
+ *     S_K = uhat_k^2 / sum_j uhat_j^2
+ *
+ * The form usually printed, [a_k^2 / (2k+1)] / sum_j [a_j^2 / (2j+1)], is the
+ * same quantity for coefficients a_j of P_j itself. Weighting orthonormal
+ * coefficients that way counts the norm twice.
  *
  * This is the piece all four papers indexed under "Mesh adaptivity" in
  * refs/Refs.md need and only Woopen supplies: an *a priori* statement about how
