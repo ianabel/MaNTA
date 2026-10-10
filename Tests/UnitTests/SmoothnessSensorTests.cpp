@@ -245,6 +245,38 @@ BOOST_AUTO_TEST_CASE(a_cell_with_no_decay_to_measure_says_so_rather_than_reporti
     BOOST_TEST(top.decayRate == 0.0);
 }
 
+BOOST_AUTO_TEST_CASE(the_energy_fraction_is_the_share_of_the_norm_in_the_top_mode)
+{
+    // S_K by its definition, ||w - w_H||^2 / ||w||^2 with w_H the projection
+    // onto P_{k-1}, against a function whose norms are known in closed form:
+    // w = 1 + P_k, so w - w_H = P_k, ||P_k||^2 = 2/(2k+1), ||w||^2 = 2 + 2/(2k+1),
+    // and S_K = 1/(2k+2). Neither of the earlier cases could see the weighting:
+    // a pure top mode is 1 and an empty one 0 under any weights. Weighting
+    // ToModal's orthonormal coefficients by 1/(2j+1) on top gave 1/((2k+1)^2+1),
+    // 1/50 rather than 1/8 at k = 3.
+    for (unsigned int k : {2u, 3u, 4u, 6u, 9u})
+    {
+        const NodalBasis basis = NodalBasis::getBasis(k);
+        const CellSmoothness s = cellSmoothness(basis, onNodes(basis, [k](double x)
+        { return 1.0 + std::legendre(k, x); }));
+        BOOST_TEST_CONTEXT("k = " << k)
+        {
+            BOOST_TEST(s.modalEnergyFraction == 1.0 / (2.0 * k + 2.0),
+                       boost::test_tools::tolerance(1e-12));
+        }
+    }
+
+    // And with a middle mode in the norm as well, which carries a different
+    // weight: w = 1 + 2 P_1 + P_k, ||w||^2 = 2 + 8/3 + 2/(2k+1).
+    const unsigned int k = 5;
+    const NodalBasis basis = NodalBasis::getBasis(k);
+    const CellSmoothness s = cellSmoothness(basis, onNodes(basis, [](double x)
+    { return 1.0 + 2.0 * x + std::legendre(5u, x); }));
+    const double top = 2.0 / (2.0 * k + 1.0);
+    BOOST_TEST(s.modalEnergyFraction == top / (2.0 + 8.0 / 3.0 + top),
+               boost::test_tools::tolerance(1e-12));
+}
+
 BOOST_AUTO_TEST_CASE(too_few_modes_to_fit_is_refused_rather_than_guessed_at)
 {
     // The fit runs over j = 1..k, so k = 1 is a single point and no slope.
@@ -312,7 +344,7 @@ BOOST_AUTO_TEST_CASE(the_energy_fraction_moves_orders_with_degree_where_the_deca
                        << ", s = " << s2.decayRate << " / " << s4.decayRate << " / "
                        << s6.decayRate << " at k = 2 / 4 / 6");
 
-    // Measured 3.3e-3, 8.0e-7, 3.8e-11: nearly eight orders between k = 2 and
+    // Measured 1.4e-2, 6.0e-6, 4.2e-10: over seven orders between k = 2 and
     // k = 6 on one unchanged function, against 2.04, 3.63, 5.39 for the rate.
     // No single S* can be the boundary between smooth and rough at both.
     const bool sixOrdersApart = s2.modalEnergyFraction > 1e6 * s6.modalEnergyFraction;
@@ -332,7 +364,7 @@ BOOST_AUTO_TEST_CASE(the_energy_fraction_moves_orders_with_degree_where_the_deca
     // What neither indicator can do, recorded so it is not discovered later as
     // a surprise: at k = 2 they do not separate these two functions at all, and
     // both get the sign of the answer wrong -- the singular function reads as
-    // *smoother* than exp(x) on both measures (S_K 0.24x, s 3.35 against 2.04).
+    // *smoother* than exp(x) on both measures (S_K 0.22x, s 3.35 against 2.04).
     // Two modes is not enough to see a singularity, whichever quantity is
     // formed from them. MESH-REFINEMENT.md section 7 says the same of S_K, and
     // the honest version is that it applies to both. The separation at k = 6 is

@@ -57,9 +57,14 @@ CellSmoothness cellSmoothness(NodalBasis const &basis,
 
     // ||P_j||^2 = 2/(2j+1) on the reference cell, and the common factor of 2
     // cancels in the ratio, so the weights are 1/(2j+1).
+    // ToModal's coefficients are of the *orthonormal* Legendre functions,
+    // sqrt((2j+1)/2) P_j, so each mode's energy is its coefficient squared, with
+    // no weight. The 1/(2j+1) of the textbook form belongs to coefficients of P_j
+    // itself; applied here it weighted every mode twice, and put S_K 4-21x low on
+    // the functions measured.
     Vector energy(k + 1);
     for (Index j = 0; j <= static_cast<Index>(k); ++j)
-        energy(j) = uhat(j) * uhat(j) / (2.0 * static_cast<double>(j) + 1.0);
+        energy(j) = uhat(j) * uhat(j);
 
     const double total = energy.sum();
 

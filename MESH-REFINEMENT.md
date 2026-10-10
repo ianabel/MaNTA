@@ -990,16 +990,24 @@ The uniform start's single redistribution is not held to the floor. §8–9
 measured it, at 6.6e-6 on 10 cells. That is also why a second pass from its
 output finds the end already done.
 
-### A defect found on the way, not fixed here
+### A weighting defect in the sensor's `S_K`, found and fixed on the way
 
-`SmoothnessSensor.cpp` weights the modal energies by `1/(2j+1)`, which is right
-for coefficients of `P_j`. `ToModal` returns coefficients of the *orthonormal*
-basis, `sqrt((2j+1)/2) P_j`, whose energies need no weight. So
-`modalEnergyFraction` (`S_K`) is mis-weighted. Nothing decides from it, since
-every decision uses the decay rate, but the `S_K` values quoted in §7 are
-affected. The decay rates in this document are MaNTA's own and are unaffected,
-apart from the basis normalisation, which shifts `s` by about +0.4 at `k = 4`
-relative to a `P_j` fit.
+`SmoothnessSensor.cpp` weighted the modal energies by `1/(2j+1)`. That is
+right for coefficients of `P_j`, but `ToModal` returns coefficients of the
+*orthonormal* basis `sqrt((2j+1)/2) P_j`, whose energies need no weight.
+Weighting them counted the norm twice and put `S_K` 4–21× low on the functions
+measured. The sensor now squares and sums. A test pins `S_K` against
+`1 + P_k`, for which `||w − w_H||² / ||w||² = 1/(2k+2)` in closed form, and
+which the old weighting put at `1/((2k+1)² + 1)`.
+
+**§7's `S_K` table was right all along.** It came from the spike, which used
+`P_j` coefficients with the `P_j` weights. Recomputed with the fixed sensor at
+`n_b = 0.01`, its Shestakov column reproduces exactly: 1.94e-5, 1.42e-7 and
+2.74e-10 at `k = 2`, 4 and 10. Only figures measured from the implementation
+were wrong: the `exp(x)` sequence quoted under "If picking this up again",
+corrected there. No decision ever read `S_K`. The decay rates in this document
+are MaNTA's own and are unaffected, apart from the basis normalisation, which
+shifts `s` by about +0.4 at `k = 4` relative to a `P_j` fit.
 
 ## What the measurements changed about the plan
 
@@ -1028,7 +1036,7 @@ Against it:
    * **The floor is `(k+1)·eps`, not `eps`,** and it has to be: each `û_j` is a length-`(k+1)` dot product, so its round-off is bounded by `(k+1)·eps·scale`. At one epsilon exactly one structural zero survived the filter (`û_1/scale = 2.56e-16`) and that one mode caused the whole defect above. The two populations are eleven orders apart, so the exact position in the gap does not matter — but being on the correct side of it does.
    * **§7's caveat about low `k` applies to the decay rate too, not only to `S_K`.** At `k = 2` neither indicator separates `exp(x)` from a singular function, and both get the *sign* wrong — the singular one reads as smoother on both measures. Two modes cannot see a singularity whichever quantity is formed from them. **§10 found the specific mechanism, and it is worse than blindness:** a two-point fit cannot tell a spectral *knee* from slow decay, and a zero-flux axis puts a knee on the first cell of essentially every problem here — so the failure is a systematic false positive at exactly the boundary a driver would be interrogating.
 
-   What does hold, and is the real argument for the rate: on one unchanged function `S_K` runs 3.3e-3 / 8.0e-7 / 3.8e-11 at `k` = 2 / 4 / 6 — nearly eight orders — while `s` runs 2.04 / 3.63 / 5.39. `S_K` is an energy share with no fixed scale, so any threshold on it is a per-degree quantity; `s` is an exponent, so a rule like "`s < 4` is rough" means the same thing at every degree. Persson & Peraire's `S* ~ 1/k^4` is exactly such a per-degree calibration, and for shock capture rather than for this.
+   What does hold, and is the real argument for the rate: on one unchanged function `S_K` runs 1.4e-2 / 6.0e-6 / 4.2e-10 at `k` = 2 / 4 / 6 — over seven orders — while `s` runs 2.04 / 3.63 / 5.39. `S_K` is an energy share with no fixed scale, so any threshold on it is a per-degree quantity; `s` is an exponent, so a rule like "`s < 4` is rough" means the same thing at every degree. Persson & Peraire's `S* ~ 1/k^4` is exactly such a per-degree calibration, and for shock capture rather than for this.
 
    The localisation claim reproduces end to end: `x^{4/3}` on 10 cells at `k = 4` gives decay rates 3.93, 6.73, 7.83, … 10.65 — monotone away from the singular cell, which is cell 0, the one `ANALYSIS.md` §7 identifies.
 4. ~~**Global-`k` selection by Giorgiani's rule**~~ — **built, as #17, on a
