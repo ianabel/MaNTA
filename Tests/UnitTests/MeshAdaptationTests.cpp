@@ -430,6 +430,21 @@ BOOST_AUTO_TEST_CASE(the_driver_refuses_a_low_degree_even_if_the_config_did_not)
                       std::invalid_argument);
 }
 
+BOOST_AUTO_TEST_CASE(the_driver_refuses_a_non_uniform_sampling_mesh)
+{
+    // The configuration refuses GridPoints and GradedGridBoundary, but a restart
+    // that gives no GridSize keeps its file's mesh, which may be graded, and the
+    // config cannot see that. The sensor compares ends with a median over cells
+    // assumed alike, and the regraded mesh is built from the domain and the count
+    // alone, so a graded start would be both misread and thrown away.
+    const Grid graded(std::vector<Grid::Position>{0.0, 0.3, 0.6, 0.8, 0.9, 0.95, 1.0});
+    TestDiffusion problem(mesh_config);
+    SolverConfig cfg{};
+    PhysicsInstance physics(problem, graded);
+    BOOST_CHECK_THROW(runAdaptiveMesh(cfg, physics, graded, 4, 1.0),
+                      std::invalid_argument);
+}
+
 // --- carrying the pseudo-transient step to a warm-started solve -----------
 
 BOOST_AUTO_TEST_CASE(a_warm_started_solve_starts_from_the_step_the_last_one_reached)

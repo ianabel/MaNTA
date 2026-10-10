@@ -302,3 +302,51 @@ inline std::vector<Grid::Position> gradedMeshPoints(
 
 #include "Basis.hpp"
 
+
+// The same mesh at another cell count, by the map rule: read the boundaries of
+// `mesh` as a piecewise-linear map x(xi) with x(i / N) = x_i, and sample it at
+// xi = j / nCells. It is what a GridLadder rung uses for a mesh that is a list of
+// boundaries rather than a recipe -- GridPoints, or a restart file's mesh -- and
+// only when the configuration opts in, because a list does not say which of its
+// properties matter and this keeps some and not others:
+//
+//  * When nCells divides N the result is every (N / nCells)-th boundary, exactly,
+//    so the coarse mesh is nested in the fine one and a warm start passes up the
+//    ladder without projection error. The position index is computed in integer
+//    arithmetic for that reason: j N / nCells is exact, so a nested sample lands
+//    on the stored double rather than near it.
+//  * Otherwise it keeps the *density* -- each cell covers the same share of xi --
+//    and moves every interior boundary. A boundary placed on a coefficient jump
+//    or a source edge is not kept, and a rung that puts the jump inside a cell
+//    converges more slowly. The final rung is the configured mesh, so that costs
+//    Newton iterations, never accuracy.
+//  * It does not keep the width of the wall cell of a graded layer: merging cells
+//    widens it, which a GradedGridBoundary recipe asked for fewer cells does too,
+//    though by a different amount.
+//
+// Monotone by construction, and both ends are the mesh's own.
+inline std::vector<Grid::Position> mappedMeshPoints(Grid const &mesh, Grid::Index nCells)
+{
+	if (nCells == 0)
+		throw std::invalid_argument("A mapped mesh needs at least one cell.");
+
+	const Grid::Index N = mesh.getNCells();
+	auto boundary = [&](Grid::Index i)
+	{ return i < N ? mesh[i].x_l : mesh[N - 1].x_u; };
+
+	std::vector<Grid::Position> points;
+	points.reserve(nCells + 1);
+	for (Grid::Index j = 0; j <= nCells; ++j)
+	{
+		const Grid::Index whole = (j * N) / nCells;
+		const Grid::Index rest = (j * N) % nCells;
+		if (rest == 0)
+			points.push_back(boundary(whole));
+		else
+		{
+			const double t = static_cast<double>(rest) / static_cast<double>(nCells);
+			points.push_back(boundary(whole) + t * (boundary(whole + 1) - boundary(whole)));
+		}
+	}
+	return points;
+}

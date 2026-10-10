@@ -514,4 +514,51 @@ BOOST_AUTO_TEST_CASE(a_graded_mesh_refuses_geometry_that_would_not_grade)
     BOOST_CHECK_THROW(gradedMeshPoints(0.0, 1.0, 5, 5, 0.2, 0.1, 0.3, GradedEnd::Upper), std::invalid_argument);
 }
 
+// --- the map rule a GridLadder uses for a mesh given as boundaries -------
+
+BOOST_AUTO_TEST_CASE(a_mapped_mesh_at_a_divisor_is_nested_in_the_original_exactly)
+{
+    // Every (N / M)-th boundary, as the very doubles the mesh holds, so a warm
+    // start up the ladder is a prolongation rather than a projection.
+    const std::vector<Grid::Position> fine{-0.5, -0.3, 0.0, 0.1, 0.4, 0.45, 1.0, 1.5, 1.6};
+    const Grid mesh(fine);
+    for (Grid::Index M : {1u, 2u, 4u, 8u})
+    {
+        const auto points = mappedMeshPoints(mesh, M);
+        BOOST_REQUIRE_EQUAL(points.size(), M + 1);
+        for (Grid::Index j = 0; j <= M; ++j)
+            BOOST_TEST(points[j] == fine[j * (8 / M)]);   // ==, not a tolerance
+    }
+}
+
+BOOST_AUTO_TEST_CASE(a_mapped_mesh_keeps_the_ends_and_the_order_at_any_count)
+{
+    const Grid mesh(std::vector<Grid::Position>{0.2, 0.21, 0.25, 0.4, 0.9, 2.0});
+    for (Grid::Index M = 1; M <= 13; ++M)
+    {
+        const auto points = mappedMeshPoints(mesh, M);
+        BOOST_REQUIRE_EQUAL(points.size(), M + 1);
+        BOOST_TEST(points.front() == 0.2);
+        BOOST_TEST(points.back() == 2.0);
+        for (Grid::Index j = 0; j < M; ++j)
+            BOOST_TEST(points[j] < points[j + 1]);
+        BOOST_CHECK_NO_THROW(Grid{points});
+    }
+    BOOST_CHECK_THROW(mappedMeshPoints(mesh, 0), std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(a_mapped_mesh_interpolates_between_boundaries_and_keeps_uniform_uniform)
+{
+    // Three cells to two: xi = 1/2 lands halfway through the middle cell.
+    const Grid mesh(std::vector<Grid::Position>{0.0, 0.1, 0.5, 1.0});
+    const auto two = mappedMeshPoints(mesh, 2);
+    BOOST_TEST(two[1] == 0.3, boost::test_tools::tolerance(1e-15));
+
+    // The map of a uniform mesh is the identity, so any count is uniform.
+    const Grid uniform(-1.0, 1.0, 6);
+    const auto five = mappedMeshPoints(uniform, 5);
+    for (Grid::Index j = 0; j <= 5; ++j)
+        BOOST_TEST(five[j] == -1.0 + 0.4 * static_cast<double>(j), boost::test_tools::tolerance(1e-14));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
