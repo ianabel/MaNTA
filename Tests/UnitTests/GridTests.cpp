@@ -561,4 +561,51 @@ BOOST_AUTO_TEST_CASE(a_mapped_mesh_interpolates_between_boundaries_and_keeps_uni
         BOOST_TEST(five[j] == -1.0 + 0.4 * static_cast<double>(j), boost::test_tools::tolerance(1e-14));
 }
 
+// --- splitting an end cell, every other boundary kept -----------------------
+
+BOOST_AUTO_TEST_CASE(splitting_an_end_cell_keeps_every_given_boundary)
+{
+    const std::vector<Grid::Position> given{0.0, 0.08, 0.17, 0.3, 0.45, 0.5, 0.62, 0.8, 0.9, 1.0};
+    const Grid mesh(given);
+
+    for (GradedEnd end : {GradedEnd::Lower, GradedEnd::Upper, GradedEnd::Both})
+    {
+        const auto points = subdividedEndPoints(mesh, end, 4, 0.3);
+        const size_t added = end == GradedEnd::Both ? 6 : 3;
+        BOOST_REQUIRE_EQUAL(points.size(), given.size() + added);
+        for (double b : given)    // bit for bit, not to a tolerance
+            BOOST_TEST(std::count(points.begin(), points.end(), b) == 1);
+        BOOST_CHECK_NO_THROW(Grid{points});
+    }
+
+    // The wall cell is H r^(cells - 1), at each end.
+    const auto lower = subdividedEndPoints(mesh, GradedEnd::Lower, 4, 0.3);
+    BOOST_TEST(lower[1] - lower[0] == 0.08 * 0.027, boost::test_tools::tolerance(1e-14));
+    const auto upper = subdividedEndPoints(mesh, GradedEnd::Upper, 4, 0.3);
+    BOOST_TEST(upper.back() - upper[upper.size() - 2] == 0.1 * 0.027,
+               boost::test_tools::tolerance(1e-12));
+}
+
+BOOST_AUTO_TEST_CASE(splitting_an_end_cell_again_nests)
+{
+    // "Split, repeat": the second split happens inside the first one's wall cell,
+    // so every boundary of the first result survives the second.
+    const Grid mesh(0.0, 1.0, 5);
+    const auto once = subdividedEndPoints(mesh, GradedEnd::Lower, 3, 0.3);
+    const auto twice = subdividedEndPoints(Grid(once), GradedEnd::Lower, 3, 0.3);
+    for (double b : once)
+        BOOST_TEST(std::count(twice.begin(), twice.end(), b) == 1);
+    BOOST_TEST(twice[1] == 0.2 * std::pow(0.3, 4), boost::test_tools::tolerance(1e-14));
+}
+
+BOOST_AUTO_TEST_CASE(splitting_an_end_cell_refuses_what_it_cannot_build)
+{
+    const Grid mesh(0.0, 1.0, 4);
+    BOOST_CHECK_THROW(subdividedEndPoints(mesh, GradedEnd::Lower, 1, 0.3), std::invalid_argument);
+    BOOST_CHECK_THROW(subdividedEndPoints(mesh, GradedEnd::Lower, 4, 1.0), std::invalid_argument);
+    BOOST_CHECK_THROW(subdividedEndPoints(mesh, GradedEnd::Lower, 4, 0.0), std::invalid_argument);
+    BOOST_CHECK_THROW(subdividedEndPoints(Grid(0.0, 1.0, 1), GradedEnd::Both, 3, 0.3),
+                      std::invalid_argument);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

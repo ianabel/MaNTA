@@ -214,6 +214,13 @@ const std::vector<Entry> &table()
          "grades it, as a ratio of decay rates. Must exceed 1. Measured on three "
          "problems at k >= 3: 3.09-6.80 for the one that wants grading against "
          "0.97-1.19 for the two that do not."},
+        {"MeshAdaptationNeighbourMargin", {}, Type::Double, Category::Solver, false, false, 0.2,
+         "How much rougher than its wider neighbour a graded end must read before "
+         "MeshAdaptation grades it further: neighbour / end > 1 + margin. A smooth end "
+         "reads smoother than a wider neighbour (ratio below 1) and a singular one rougher, "
+         "by a factor set by the grading ratio alone. Measured: at most 1.00 for smooth "
+         "ends and at least 1.36 for singular ones, so it must stay below 0.36. See "
+         "docs/adaptivity.rst."},
         {"MeshAdaptationAttempts", {}, Type::UInt, Category::Solver, false, false, 4u,
          "How many graded meshes MeshAdaptation may try before giving up and staying "
          "uniform. A grading that fails to solve is a rejected step: the ratio is "

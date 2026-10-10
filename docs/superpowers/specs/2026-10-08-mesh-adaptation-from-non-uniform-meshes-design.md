@@ -1,6 +1,33 @@
 # MeshAdaptation from non-uniform meshes — design
 
-**Status:** proposed, not built. **Date:** 2026-10-08.
+**Status:** built, all three phases. `docs/adaptivity.rst` describes the
+result and `MESH-REFINEMENT.md` §14 has the measurement. **Date:** 2026-10-08.
+
+The build departs from this design in five places, each forced by that
+measurement:
+- **A graded start is not regraded as a recipe.** Like an explicit start,
+  each rough end cell is split into a layer of the configured size, nothing
+  else moves, and the count grows. Two recipe versions were built and measured
+  first:
+  - Squaring the ratio moved every face of the layer. On Shestakov with a 0.2
+    layer that widened the cell holding the source edge at x = 0.1, and the
+    regrade came out 15–19× worse than degree adaptation alone.
+  - Moving bulk cells into the layer kept the faces but left layers too shallow,
+    up to 7000× worse on the wall layer.
+
+  The split reaches the same wall cell as squaring, without moving anything.
+- **The neighbour test has a guard.** It also needs the end's own rate below
+  half the measurable ceiling. Without it, smooth ends whose top mode sits just
+  above the floor read up to 1.33×, against 1.36× for the mildest singular end,
+  and no margin separates them.
+- **The margin is 0.2, not 0.1.** Guarded, smooth graded ends read at most
+  1.00, so anything in `[0, 0.36)` works.
+- **The wall-cell floor is 1e-5, not 1e-6.** At 1e-6 the sensor cannot tell
+  discretisation error from a singularity.
+- **The exact-function numbers below were fitted to `P_j` coefficients.**
+  MaNTA's basis is orthonormal, which shifts rates by about +0.4 at `k = 4`
+  (3.98, not 3.58). The wall/neighbour ratios become 1.69 / 1.42 / 1.16, not
+  1.77 / 1.47 / 1.18. The conclusions are unchanged.
 
 `MeshAdaptation` runs p → h → p from a *uniform* sampling mesh. It refuses
 `GradedGridBoundary` and `GridPoints`, and since the restart fix on

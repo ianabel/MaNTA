@@ -339,6 +339,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(DegreeAdaptationBase, double);
     READ(MeshAdaptation, bool);
     READ(MeshAdaptationThreshold, double);
+    READ(MeshAdaptationNeighbourMargin, double);
     READ(MeshAdaptationAttempts, unsigned);
     READ(RebuildPhysicsOnRegrid, bool);
     READ(PhysicsParallelism, unsigned);
@@ -589,18 +590,17 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
                 "meshes may be tried, and zero would decide to grade and then never "
                 "attempt it.");
 
-        if (!c.GridPoints.empty())
-            throw std::invalid_argument(
-                "MeshAdaptation builds the mesh itself, at the cell count GridSize "
-                "gives, so it cannot be combined with explicit GridPoints. Drop one "
-                "of the two.");
+        // The margin is the graded-end test's bar, ratio > 1 + margin, and the
+        // mildest singular graded end measured reads 1.36 there.
+        if (!(c.MeshAdaptationNeighbourMargin > 0.0))
+            throw std::invalid_argument(std::format(
+                "MeshAdaptationNeighbourMargin must be positive; got {}. At zero a "
+                "graded end whose neighbour reads a hair rougher would be graded "
+                "again.", c.MeshAdaptationNeighbourMargin));
 
-        if (c.GradedGridBoundary)
-            throw std::invalid_argument(
-                "MeshAdaptation decides whether to grade and at which end, so "
-                "GradedGridBoundary would be deciding the same thing twice and only "
-                "one of them can win. Set GradedGridBoundary to grade a mesh by "
-                "hand, or MeshAdaptation to have it chosen.");
+        // GridPoints and GradedGridBoundary are starting meshes, not rivals:
+        // either keeps every face and has its rough end cells split. See
+        // runAdaptiveMesh.
 
         // A ladder fixes the sequence of discretisations by hand; MeshAdaptation
         // chooses it. Both cannot win.

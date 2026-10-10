@@ -510,19 +510,93 @@ along with Park and Jardin left uniform at no cost.
    5, 8, 12 and 25 cells are all misaligned and all converge, so the kink is
    implicated in those two cases without being the whole rule.
 
+Starting from a graded or an explicit mesh
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``MeshAdaptation`` also starts from a ``GradedGridBoundary`` mesh, from
+``GridPoints``, or from a restart file's mesh (a restart with no ``GridSize``).
+Two things change: how each end is judged, and what is done to a rough one.
+
+**Each end is compared with cells of its own width.** A singular cell's decay
+rate does not depend on its width — the spectrum of :math:`x^a` on
+:math:`[0, h]` is :math:`h^a` times its spectrum on :math:`[0, 1]` — while a
+smooth cell reads smoother the narrower it is. Comparing an end with the median of
+every interior cell therefore measures the mesh as well as the solution: on a
+mesh graded at one end, the narrow layer cells lift the median until the wide
+cell at the *other* end reads rough. Measured on the pinch benchmark's ``n``, that
+false positive gives 2.26–3.25 against a threshold of 2.0. So each end is read
+against one of:
+
+* **Its peers**, the interior cells within a factor 2 of its width, when there
+  are at least three (or every interior cell, on a mesh with fewer). On a uniform
+  mesh every interior cell is a peer and the decision is the one above, bit for
+  bit.
+* **Its inward neighbour**, when the end is at least 1.5× narrower than it — a
+  graded end, which has no peers. A smooth solution reads smoother in the narrower
+  cell, so neighbour / end is below 1. A singular one reads rougher, by a factor
+  set by the grading ratio alone, at every depth of grading. The end is rough when
+  the ratio exceeds ``1 + MeshAdaptationNeighbourMargin`` (default 0.2) **and**
+  its own rate is below half the measurable ceiling. That guard matters: without
+  it, a smooth end whose top mode sits just above the round-off floor reads up to
+  1.33×, against 1.36× for the mildest singular end measured.
+* **Nothing**, otherwise, as for a wide end with no cell of its width. The end is
+  left alone and the log says so. A ``GradedGridBoundary`` layer at ratio 0.5 is
+  one of these: its wall cell's neighbour is no wider than it.
+
+Across 368 solves — Shestakov, Park, the wall layer and the pinch, on uniform,
+graded and random meshes at :math:`k = 3`–6 — this reading made **no false
+negatives**. Its 4 false positives are all at a wall cell of :math:`10^{-6}` of
+the domain, where discretisation error in :math:`u_h` reads as rough as a
+singularity does at that width (``MESH-REFINEMENT.md`` §14). That is why the
+driver never makes a wall cell narrower than :math:`10^{-5}` of the domain.
+
+**A rough end of a graded or explicit mesh has its end cell split, and nothing
+else moves.** The cell becomes a geometric layer of its own at ``GradingRatio``,
+so the cell count grows by one less than the layer's cells:
+
+* **How many cells.** For a ``GradedGridBoundary`` start, as many as the
+  configured layer has. That takes a graded end's wall cell down by
+  ``ratio^(cells - 1)``, and gives an ungraded end the wall cell a configured
+  layer over its end cell would have had. For an explicit start,
+  ``GradingCells``, or 4.
+* **Why nothing else moves.** A mesh that was given says where its faces are,
+  not why, and the sensor reads only the two ends, so a face sitting on an
+  interior feature looks like any other. Shestakov's source edge at
+  :math:`x = 0.1` is the measured case. Regrading its 0.2 layer by squaring the
+  ratio — the same wall cell, but with every face of the layer moved — came out
+  15–19× worse than adapting the degree alone. Taking cells from the bulk
+  instead kept the faces but made each layer too shallow, and was up to 7000×
+  worse on the wall layer than the split.
+* **The floor.** The wall cell never goes below :math:`10^{-5}` of the domain.
+  A narrow end cell gets a larger ratio, but never above 1/2, past which the
+  cells beside the wall would be narrower than it. Failing that, it gets fewer
+  cells. An end cell under twice the floor is left as it is.
+* **Smooth graded ends** keep their grading.
+* **The result is logged as a ``GridPoints`` line.** Running again from the
+  restart file, with no ``GridSize``, splits a still-rough end again, inside
+  the wall cell the last run made.
+* **If a grading fails to solve**, its ratio is softened towards 1/2. The
+  starting mesh is the fallback.
+
+Measured end to end on the four problems from 9 starts each
+(``MESH-REFINEMENT.md`` §14):
+
+* Park and the pinch never had their mesh moved.
+* The wall layer beat degree adaptation alone by 1170× to 5×10⁵ from every start
+  where it acted.
+* Shestakov won wherever :math:`x = 0.1` is a face — 80× from a graded start
+  with a 0.1 layer. Where the edge sits inside a cell no rule here touches, it
+  lost 1.14–1.41× against degree adaptation alone. That is the limit of a
+  sensor that reads only the ends.
+
 Restrictions, all refused rather than warned about:
 
 * ``PolynomialDegree >= 3`` — see above.
 * Steady solves only. Inherited from ``DegreeAdaptation``, and for the same reason:
   each stage would otherwise take the previous stage's final state as its initial
   condition and integrate the interval again.
-* Not with ``GridPoints``, and not with ``GradedGridBoundary`` — both of those
-  already determine the mesh, so one of them would silently lose.
-* Not from a non-uniform mesh. The sensor reads each end against the median of
-  cells it assumes alike, and the graded mesh is built from the domain and the
-  cell count alone, so a graded start would be misread and then discarded. The
-  configuration cannot see the one route to it — a restart with no ``GridSize``,
-  which keeps the file's mesh — so the driver checks the mesh it is handed.
+* Not with ``DegreeLadder`` or ``GridLadder``, which choose the sequence of
+  discretisations by hand where this driver chooses it itself.
 
 .. note::
 

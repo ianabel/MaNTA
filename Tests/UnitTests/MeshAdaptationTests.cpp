@@ -23,7 +23,9 @@
 #include "TestDiffusion.hpp"
 #include "gridStructures.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <random>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -65,6 +67,163 @@ double sk(double x) { return std::pow(std::abs(x), 4.0 / 3.0); }
 BOOST_AUTO_TEST_SUITE(mesh_adaptation_tests, *boost::unit_test::tolerance(1e-9))
 
 // ------------------------------------------------- the grading decision ----
+
+namespace
+{
+// The rule as it stood before widths entered it: every end against the median
+// of every interior cell, capped, threshold on the larger ratio, ties to the
+// lower end. Kept here as the reference a uniform mesh must still reproduce.
+GradingVerdict uniformRule(std::vector<CellSmoothness> const &cells, unsigned int k,
+                           double threshold, double &lowerRatio, double &upperRatio)
+{
+    const double ceiling = measurableDecayRate(k);
+    auto capped = [&](double r) { return std::min(r, ceiling); };
+    std::vector<double> interior;
+    for (size_t i = 1; i + 1 < cells.size(); ++i)
+        interior.push_back(capped(cells[i].decayRate));
+    std::sort(interior.begin(), interior.end());
+    const size_t n = interior.size();
+    const double median = (n % 2) ? interior[n / 2] : 0.5 * (interior[n / 2 - 1] + interior[n / 2]);
+    auto ratio = [&](double r)
+    { return capped(r) <= 0.0 ? std::numeric_limits<double>::infinity() : median / capped(r); };
+    lowerRatio = ratio(cells.front().decayRate);
+    upperRatio = ratio(cells.back().decayRate);
+    if (std::max(lowerRatio, upperRatio) < threshold)
+        return GradingVerdict::Uniform;
+    return lowerRatio >= upperRatio ? GradingVerdict::GradeLower : GradingVerdict::GradeUpper;
+}
+
+std::vector<CellSmoothness> rates(std::vector<double> const &r)
+{
+    std::vector<CellSmoothness> cells(r.size());
+    for (size_t i = 0; i < r.size(); ++i)
+        cells[i].decayRate = r[i];
+    return cells;
+}
+} // namespace
+
+BOOST_AUTO_TEST_CASE(on_a_uniform_mesh_the_width_aware_reading_is_the_old_one)
+{
+    // Every interior cell is a peer of either end on a uniform mesh, so the
+    // decision has to be the old one exactly -- verdict and both ratios, bit for
+    // bit -- over spectra that include the two reported extremes, 0 and infinity,
+    // and rates past the ceiling. Widths carrying round-off, as Grid's do.
+    std::mt19937 gen(20261008);
+    std::uniform_real_distribution<double> rate(0.0, 30.0);
+    const double inf = std::numeric_limits<double>::infinity();
+    for (int trial = 0; trial < 400; ++trial)
+    {
+        const size_t n = 3 + trial % 10;
+        std::vector<double> r(n), widths(n);
+        for (size_t i = 0; i < n; ++i)
+        {
+            const int pick = static_cast<int>(gen() % 12);
+            r[i] = pick == 0 ? 0.0 : pick == 1 ? inf : rate(gen);
+            widths[i] = 0.1 * (1.0 + 1e-15 * static_cast<double>(gen() % 7));
+        }
+        const auto cells = rates(r);
+        for (unsigned int k : {3u, 4u, 6u})
+        {
+            double lower = 0.0, upper = 0.0;
+            const GradingVerdict expected = uniformRule(cells, k, 2.0, lower, upper);
+            const GradingDecision d = gradingDecision(cells, widths, k, 2.0);
+            BOOST_TEST_CONTEXT("trial " << trial << ", k = " << k)
+            {
+                BOOST_TEST((d.verdict == expected));
+                BOOST_TEST(d.lowerRatio == lower, boost::test_tools::tolerance(0.0));
+                BOOST_TEST(d.upperRatio == upper, boost::test_tools::tolerance(0.0));
+                BOOST_TEST((d.lowerEnd.reference == EndReference::Peers));
+                BOOST_TEST((d.upperEnd.reference == EndReference::Peers));
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(width_alone_does_not_make_a_wide_end_rough)
+{
+    // A smooth solution on a mesh graded towards the lower end: the narrow layer
+    // cells read smoother because they are narrow -- 4.30 at h = 0.2 against 9.75
+    // at 0.01 for the pinch profile -- which lifts the median over *every*
+    // interior cell above twice the wide upper end's rate. Compared with its own
+    // width, the upper end is as smooth as its peers.
+    const std::vector<double> widths{0.001, 0.003, 0.01, 0.03, 0.08, 0.076, 0.2, 0.2, 0.2, 0.2};
+    const auto cells = rates({14.0, 12.0, 10.5, 9.5, 9.0, 8.8, 4.4, 4.4, 4.4, 4.3});
+
+    double lower = 0.0, upper = 0.0;
+    BOOST_REQUIRE((uniformRule(cells, 4, 2.0, lower, upper) == GradingVerdict::GradeUpper));
+
+    const GradingDecision d = gradingDecision(cells, widths, 4, 2.0);
+    BOOST_TEST((d.verdict == GradingVerdict::Uniform));
+    BOOST_TEST((d.upperEnd.reference == EndReference::Peers));
+    BOOST_TEST(d.upperEnd.peers == 3u);
+    BOOST_TEST((d.upperEnd.reading == EndReading::Smooth));
+    // The narrow lower end has no peers and reads smoother than its neighbour.
+    BOOST_TEST((d.lowerEnd.reference == EndReference::Neighbour));
+    BOOST_TEST((d.lowerEnd.reading == EndReading::Smooth));
+}
+
+BOOST_AUTO_TEST_CASE(a_graded_singular_end_reads_rough_against_its_neighbour)
+{
+    // x^(4/3) on a geometric layer at ratio 0.3: the wall cell reads 3.58 at
+    // every depth and its neighbour 5.26, a ratio set by the grading ratio alone.
+    const std::vector<double> widths{0.0027, 0.0063, 0.021, 0.07, 0.3, 0.3, 0.3};
+    const auto cells = rates({3.58, 5.26, 5.26, 5.26, 8.0, 8.1, 8.2});
+    const GradingDecision d = gradingDecision(cells, widths, 4, 2.0, 0.1);
+    BOOST_TEST((d.lowerEnd.reference == EndReference::Neighbour));
+    BOOST_TEST(d.lowerEnd.ratio == 5.26 / 3.58);
+    BOOST_TEST((d.lowerEnd.reading == EndReading::Rough));
+    BOOST_TEST((d.verdict == GradingVerdict::GradeLower));
+
+    // ...and the margin is what it is tested against.
+    BOOST_TEST((gradingDecision(cells, widths, 4, 2.0, 0.5).lowerEnd.reading == EndReading::Smooth));
+}
+
+BOOST_AUTO_TEST_CASE(a_graded_end_near_the_ceiling_is_not_read_as_rough)
+{
+    // The guard. A smooth end whose top mode sits just above the round-off floor
+    // reads a rate near the ceiling (24.8 at k = 4), and a neighbour a little
+    // further below it makes the ratio look like a singularity's: 1.33x was
+    // measured on Park. A singular end's own rate is far below half the ceiling.
+    const std::vector<double> widths{0.0027, 0.0063, 0.021, 0.07, 0.3, 0.3, 0.3};
+    const auto cells = rates({18.0, 24.0, 20.0, 15.0, 8.0, 8.1, 8.2});
+    const GradingDecision d = gradingDecision(cells, widths, 4, 2.0, 0.2);
+    BOOST_TEST((d.lowerEnd.reference == EndReference::Neighbour));
+    BOOST_TEST(d.lowerEnd.ratio > 1.2);
+    BOOST_TEST((d.lowerEnd.reading == EndReading::Smooth));
+}
+
+BOOST_AUTO_TEST_CASE(an_end_with_no_fair_comparison_is_left_undecided)
+{
+    // A wide end cell, no interior cell within a factor 2 of it, and a neighbour
+    // no wider: nothing the rate can be fairly compared with.
+    const std::vector<double> widths{0.05, 0.05, 0.05, 0.05, 0.1, 0.7};
+    const auto cells = rates({8.0, 8.0, 8.0, 8.0, 7.0, 2.0});
+    const GradingDecision d = gradingDecision(cells, widths, 4, 2.0);
+    BOOST_TEST((d.upperEnd.reference == EndReference::None));
+    BOOST_TEST((d.upperEnd.reading == EndReading::Undecidable));
+    BOOST_TEST((d.verdict == GradingVerdict::Uniform));
+}
+
+BOOST_AUTO_TEST_CASE(the_real_sensor_reads_a_graded_mesh_fairly)
+{
+    // The same two readings from the sensor itself, on assigned functions over a
+    // mesh graded towards the lower end: the singularity is flagged there and
+    // nowhere else, and a smooth function is flagged nowhere.
+    const Grid graded(gradedMeshPoints(0.0, 1.0, 10, 4, 0.2, 0.2, 0.3, GradedEnd::Lower));
+
+    Field singular(graded, 4, sk);
+    const GradingDecision s = gradingDecision(singular.soln, 0, 2.0);
+    BOOST_TEST((s.lowerEnd.reading == EndReading::Rough));
+    BOOST_TEST((s.upperEnd.reading == EndReading::Smooth));
+    BOOST_TEST((s.verdict == GradingVerdict::GradeLower));
+
+    Field smooth(graded, 4, [](double x) { return std::cos(2.0 * x); });
+    const GradingDecision c = gradingDecision(smooth.soln, 0, 2.0);
+    BOOST_TEST((c.lowerEnd.reading != EndReading::Rough));
+    BOOST_TEST((c.upperEnd.reading != EndReading::Rough));
+    BOOST_TEST((c.verdict == GradingVerdict::Uniform));
+}
+
 
 BOOST_AUTO_TEST_CASE(a_singularity_at_the_lower_end_asks_for_the_lower_end)
 {
@@ -387,11 +546,17 @@ BOOST_AUTO_TEST_CASE(mesh_adaptation_refuses_a_degree_it_cannot_decide_at)
     BOOST_CHECK_NO_THROW(loadMesh("", 3));
 }
 
-BOOST_AUTO_TEST_CASE(mesh_adaptation_refuses_deciding_the_mesh_twice)
+BOOST_AUTO_TEST_CASE(mesh_adaptation_starts_from_a_graded_or_an_explicit_mesh)
 {
-    // Both of these already determine the mesh, so one of them would silently lose.
-    BOOST_CHECK_THROW(loadMesh("GradedGridBoundary = true\n"), std::invalid_argument);
-    BOOST_CHECK_THROW(loadMesh("GridPoints = [0.0, 0.5, 1.0]\n"), std::invalid_argument);
+    // Starting meshes now, not rivals: a recipe is regraded as a recipe, a list
+    // keeps its boundaries. A ladder still chooses the sequence of meshes by
+    // hand, which MeshAdaptation does itself, so that is still refused.
+    BOOST_CHECK_NO_THROW(loadMesh("GradedGridBoundary = true\n"));
+    BOOST_CHECK_NO_THROW(loadMesh("GridPoints = [0.0, 0.1, 0.3, 0.6, 1.0]\n"));
+    BOOST_CHECK_THROW(loadMesh("GridLadder = [5]\n"), std::invalid_argument);
+
+    BOOST_TEST(loadMesh("").MeshAdaptationNeighbourMargin == 0.2);
+    BOOST_CHECK_THROW(loadMesh("MeshAdaptationNeighbourMargin = 0.0\n"), std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_CASE(mesh_adaptation_checks_its_own_bounds)
@@ -427,21 +592,6 @@ BOOST_AUTO_TEST_CASE(the_driver_refuses_a_low_degree_even_if_the_config_did_not)
     SolverConfig cfg{};
     PhysicsInstance physics(problem, grid);
     BOOST_CHECK_THROW(runAdaptiveMesh(cfg, physics, grid, 2, 1.0),
-                      std::invalid_argument);
-}
-
-BOOST_AUTO_TEST_CASE(the_driver_refuses_a_non_uniform_sampling_mesh)
-{
-    // The configuration refuses GridPoints and GradedGridBoundary, but a restart
-    // that gives no GridSize keeps its file's mesh, which may be graded, and the
-    // config cannot see that. The sensor compares ends with a median over cells
-    // assumed alike, and the regraded mesh is built from the domain and the count
-    // alone, so a graded start would be both misread and thrown away.
-    const Grid graded(std::vector<Grid::Position>{0.0, 0.3, 0.6, 0.8, 0.9, 0.95, 1.0});
-    TestDiffusion problem(mesh_config);
-    SolverConfig cfg{};
-    PhysicsInstance physics(problem, graded);
-    BOOST_CHECK_THROW(runAdaptiveMesh(cfg, physics, graded, 4, 1.0),
                       std::invalid_argument);
 }
 
