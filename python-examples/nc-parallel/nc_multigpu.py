@@ -190,13 +190,13 @@ class ParallelNC(manta.TransportSystem):
         state at position i of the batch -- it never looks at x to find it. So a
         Params is right only for the exact point set it was built from, and that
         set has to be the plan's, site by site, not one derived here from the
-        grid and k. MeshAdaptation turns on Superconvergent, and then a level
-        evaluates at two sets:
-
-          * Residual, Jacobian and InitialCondition: the k+2 star nodes of each
-            cell -- the initial sigma and du/dt are solved from the residual's
-            own rows, so they sample where it samples;
-          * TauFaces: both faces of each cell, for the Diffusive tau.
+        grid and k. MeshAdaptation turns on Superconvergent, so the residual,
+        the Jacobian and the initial condition all sample the k+2 star nodes of
+        each cell -- the initial sigma and du/dt are solved from the residual's
+        own rows, so they sample where it samples. The Diffusive tau reads its
+        kappa there too (TauNodes, under the default TauKappa = "Nodal"), so a
+        level has one point set. TauKappa = "Face" would add a second, both
+        faces of each cell (TauFaces).
 
         A batch of M points takes ceil(M / WIDTH) rounds, and its Params are
         padded to that many rounds' worth here, once per plan, rather than on
@@ -206,10 +206,10 @@ class ParallelNC(manta.TransportSystem):
         larger than the residual's.
 
         The batches are told apart by their size, which is what ComputePhysics
-        can see cheaply. Two sites of one size at different points (k = 1
-        without Superconvergent makes the nodes and the faces both 2 a cell)
-        would need another key, so that is refused here rather than read with
-        the wrong Params.
+        can see cheaply. Two sites of one size at different points (a face
+        kappa at k = 1 without Superconvergent makes the nodes and the faces
+        both 2 a cell) would need another key, so that is refused here rather
+        than read with the wrong Params.
         """
         self.layout = {}
         points_of = {}

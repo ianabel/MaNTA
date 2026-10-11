@@ -108,6 +108,6 @@ why each is set the way it is:
   asked for a point.
 
 `prepareEvaluation` builds each batch's padded parameters from the plan's own
-points, keyed by batch size: under `Superconvergent` the residual, the Jacobian
-and the initial condition share the k+2 star nodes, and the Diffusive tau adds
-the faces.
+points, keyed by batch size: under `Superconvergent` the residual, the Jacobian,
+the initial condition and the Diffusive tau's nodal kappa all share the k+2 star
+nodes. `TauKappa = "Face"` would add the faces as a second point set.
