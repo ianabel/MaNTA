@@ -121,9 +121,17 @@ if __name__ == "__main__":
     # The steady state against ExactSteadyState, refining the mesh at k = 3.
     # The error falls as h^(k+1) = h^4. Six cells are 0.17 wide against a
     # source of width sqrt(B) = 0.14, so the coarsest row is under-resolved.
-    x = np.linspace(0.0, 1.0, 401)
-    exact = ExactSteadyState(x)
+    #
+    # The error is sampled at 41 points in every cell, the outer two just
+    # inside its faces. u_h is discontinuous at a face, the error is largest
+    # there, and the two one-sided limits differ, so a point *on* a face
+    # measures whichever cell rounding puts it in. One fixed set of points for
+    # every mesh is worse again: it misses the maximum on the coarse meshes.
     for cells in (6, 12, 24, 48):
+        h = 1.0 / cells
+        s = np.linspace(1e-9, 1.0 - 1e-9, 41)
+        x = np.concatenate([i * h + h * s for i in range(cells)])
+        exact = ExactSteadyState(x)
         runner = manta.Runner(ToyModel())
         runner.configure({
             "OutputFilename": "steady",
