@@ -180,8 +180,12 @@ void SystemSolver::initialiseNetCDF(std::string const &NetcdfOutputFile, size_t 
 	{
 		nc_output.AddGroup(problem->getVariableName(i), problem->getVariableDescription(i));
 		nc_output.AddVariable(problem->getVariableName(i), "u", "Value", problem->getVariableUnits(i), y.u(i));
-		nc_output.AddVariable(problem->getVariableName(i), "q", "Derivative", problem->getVariableUnits(i), y.q(i));
-		nc_output.AddVariable(problem->getVariableName(i), "sigma", "Flux", problem->getVariableUnits(i), y.sigma(i));
+		// No units on q or sigma: the case declares units for u alone, and neither
+		// derived field shares them -- q is u per unit x, and x carries no units
+		// to divide by. An absent attribute says "not recorded"; a copy of u's
+		// would say something false.
+		nc_output.AddVariable(problem->getVariableName(i), "q", "Derivative", "", y.q(i));
+		nc_output.AddVariable(problem->getVariableName(i), "sigma", "Flux", "", y.sigma(i));
 		if (postprocessor)
 			nc_output.AddVariable(problem->getVariableName(i), "u_star",
 								  "Postprocessed value", problem->getVariableUnits(i),
@@ -341,8 +345,9 @@ void SystemSolver::WriteRestartFile(std::string const &fname, N_Vector const &Y,
 	{
 		restart_file.AddGroup(problem->getVariableName(i), problem->getVariableDescription(i));
 		restart_file.AddVariable(problem->getVariableName(i), "u", "Value", problem->getVariableUnits(i), y.u(i));
-		restart_file.AddVariable(problem->getVariableName(i), "q", "Derivative", problem->getVariableUnits(i), y.q(i));
-		restart_file.AddVariable(problem->getVariableName(i), "sigma", "Flux", problem->getVariableUnits(i), y.sigma(i));
+		// No units on q or sigma, for the reason given in initialiseNetCDF.
+		restart_file.AddVariable(problem->getVariableName(i), "q", "Derivative", "", y.q(i));
+		restart_file.AddVariable(problem->getVariableName(i), "sigma", "Flux", "", y.sigma(i));
 		if (postprocessor)
 			restart_file.AddVariable(problem->getVariableName(i), "u_star",
 									 "Postprocessed value", problem->getVariableUnits(i),
