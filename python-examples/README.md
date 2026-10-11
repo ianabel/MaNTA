@@ -28,7 +28,7 @@ program.
 | Directory | What it shows | Needs |
 |---|---|---|
 | `linear-diffusion/` | The smallest hand-written case: one variable, constant kappa, derivatives by hand | — |
-| `toy-model/` | An unfinished sketch, kept for reference | — |
+| `toy-model/` | Nonlinear diffusion with an exact steady state, through the hand-written batched interface (`ComputePhysics`) | — |
 | `jax-diffusion/` | `manta.jax.JAXTransportSystem`; derivatives from `jax.grad` | `manta[jax]` |
 | `jax-linear-diffusion/` | The same, with `solveAdjoint = true` | `manta[jax]` |
 | `jax-nonlinear-adjoint/` | `manta.jax.VectorizedTransportSystem`, the batched interface | `manta[jax]` |
