@@ -496,6 +496,31 @@ def test_output_filename_keeps_only_the_basename(tmp_path):
         _unlink(name + suffix)
 
 
+def test_only_the_value_fields_carry_the_variables_units(tmp_path, monkeypatch):
+    """`units` is the declared one on u and u_star, and absent on q and sigma.
+
+    A case declares units for u alone. q is u per unit x and sigma a flux, so
+    neither shares them, and x carries no units for anything to be derived
+    from. Both files are checked: the restart file is written by a separate
+    function with its own copy of these lines.
+    """
+    from netCDF4 import Dataset
+
+    monkeypatch.chdir(tmp_path)
+    spec = MaNTA.SystemSpec(variables=[MaNTA.Field("n", "density", "m^-3")])
+    runner = MaNTA.Runner(LinearDiffusion(spec=spec))
+    runner.configure(base_config(tmp_path, OutputFilename="units_probe", WriteOutput=True))
+    runner.run(0.05)
+
+    for path in ("units_probe.nc", "units_probe.restart.nc"):
+        with Dataset(path) as nc:
+            fields = nc.groups["n"].variables
+            assert fields["u"].getncattr("units") == "m^-3", path
+            assert fields["u_star"].getncattr("units") == "m^-3", path
+            for derived in ("q", "sigma"):
+                assert "units" not in fields[derived].ncattrs(), (path, derived)
+
+
 def test_a_run_can_be_restarted_from_its_own_output():
     """Run to t1, restart, continue to t2; compare against a single run to t2.
 
